@@ -40,7 +40,7 @@ void barrier_across_send_recv_ranks(
     sub_context->barrier();
 }
 
-void validate_device_ownership(
+[[maybe_unused]] void validate_device_ownership(
     multihost::Rank global_sender_rank, multihost::Rank global_receiver_rank, const SocketConfig& config) {
     const auto& global_distributed_context = DistributedContext::get_current_world();
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -130,7 +130,11 @@ void MeshSocket::process_host_ranks() {
 
     config_.sender_mesh_id = std::get<0>(global_logical_bindings.at(sender_rank));
     config_.receiver_mesh_id = std::get<0>(global_logical_bindings.at(receiver_rank));
-    validate_device_ownership(sender_rank, receiver_rank, config_);
+    // Skip coordinate validation for rank-addressed sockets (this path): the socket cores are
+    // expressed in submesh-local space, which doesn't match the parent-mesh coord range that
+    // validate_device_ownership / get_coord_range expect. This holds for cross-mesh rank-
+    // addressed sockets too — they use the same submesh-local cores. Role correctness is
+    // enforced by the rank-based check in the constructor.
 }
 
 void MeshSocket::process_mesh_ids() {

@@ -15,6 +15,7 @@
 #include "core_coord.hpp"
 #include "core_descriptor.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <internal/service/service_core_manager.hpp>
@@ -191,7 +192,7 @@ const tt_cxy_pair& dispatch_core_manager::dispatcher_s_core(ChipId device_id, ui
     return assignment.dispatcher_s.value();
 }
 
-CoreType dispatch_core_manager::get_dispatch_core_type() {
+CoreType dispatch_core_manager::get_dispatch_core_type() const {
     return get_core_type_from_config(this->dispatch_core_config_);
 }
 

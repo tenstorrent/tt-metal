@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_conversions.h"
+#include "cmath_common.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
@@ -172,13 +173,18 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
 
     // Transform to z = (m - 1) / (m + 1)
     sfpi::vFloat m_plus_1 = m + 1.0f;  // t in [1.707, 2.414] since m in [sqrt(2)/2, sqrt(2)]
-    sfpi::vFloat m_minus_1 = m - 1.0f;
     // 1/t: initial guess 1.0f - 0.2426406871192851f*t (linear interp on [1.7,2.4]), then Newton-Raphson y = y*(2 -
     // t*y).
     sfpi::vFloat recip = 1.0f - 0.2426406871192851f * m_plus_1;
     recip = recip * (2.0f - m_plus_1 * recip);  // 1st NR
-    recip = recip * (2.0f - m_plus_1 * recip);  // 2nd NR for float32
-    sfpi::vFloat z = m_minus_1 * recip;
+    recip = recip * (2.0f - m_plus_1 * recip);  // 2nd NR
+    // 3rd NR: two NR iterations leave a ~2 ULP reciprocal residual that, after the
+    // atanh(z) log series and pow*log2 multiply, is the floor keeping 2.5 at 4 ULP.
+    // One more quadratically-convergent step drives 1/(m+1) to full fp32 precision.
+    recip = recip * (2.0f - m_plus_1 * recip);  // 3rd NR for float32
+    // z = (m-1)*recip written as a single fused multiply-add (m*recip - recip), one
+    // instruction instead of a separate (m-1) subtract plus a multiply.
+    sfpi::vFloat z = m * recip - recip;
 
     // Compute z**2 for polynomial evaluation
     sfpi::vFloat z2 = z * z;
@@ -189,17 +195,62 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
 
     sfpi::vFloat exp_f32 = sfpi::convert<sfpi::vFloat>(sfpi::convert<sfpi::vSMag>(exp), sfpi::RoundMode::Nearest);
 
-    // log2(base) = ln(base)/ln(2) = exp + ln_m/ln(2)
+    // log2(base) = ln(base)/ln(2) = exp + ln_m/ln(2). Keep the two contributions
+    // separate: exp_f32 is the large integer part, ln_m*ln2inv the small fractional
+    // part. Collapsing pow*log2(base) into one fp32 before 2**z squeezes out the
+    // fractional mantissa bits for large |base| (the 20-27 ULP error). Instead carry
+    // z = pow*log2(base) as an unevaluated double-float (z_hi, z_lo) and cancel the
+    // large integer part against k=round(z) before the tail is ever rounded away.
     const sfpi::vFloat vConst1Ln2 = sfpi::vConstFloatPrgm0;
-    sfpi::vFloat log2_result = exp_f32 + ln_m * vConst1Ln2;
-
-    // Step 2: base**pow = 2**(pow*log2(base)). Clamp z_f32 to -127 to avoid overflow when result should be 0 (e.g.
-    // 0**+inf, N**-inf).
-    sfpi::vFloat z_f32 = pow * log2_result;
-
-    // 2^z_f32 = exp(z_f32 * ln(2)); use Cody-Waite + Taylor exp for <1 ULP float32 accuracy
     constexpr float LN2 = 0.693147180559945309f;
-    sfpi::vFloat y = _sfpu_exp_fp32_accurate_(z_f32 * LN2);
+
+    // Step 2: base**pow = 2**(pow*log2(base)).
+    // The residual after the two-sum is the fp32 rounding of pow*exp_f32 itself:
+    // exp_f32 is the large integer exponent and pow can carry a full 24-bit mantissa,
+    // so the product needs ~30 bits and drops its low bits before the two-sum sees
+    // them. exp_f32 is a small integer, so a Veltkamp split of pow makes both partial
+    // products exact (12-bit half * <=7-bit integer fits a 24-bit significand); the low
+    // half pow_lo*exp_f32 rides in z_lo so none of the integer term's bits are lost.
+    constexpr float VELTKAMP_SPLIT = 4097.0f;  // 2**12 + 1
+    sfpi::vFloat pc = pow * VELTKAMP_SPLIT;
+    sfpi::vFloat pow_hi = pc - (pc - pow);
+    sfpi::vFloat pow_lo = pow - pow_hi;
+
+    sfpi::vFloat z_hi = pow_hi * exp_f32;
+    sfpi::vFloat z_lo = pow_lo * exp_f32 + pow * (ln_m * vConst1Ln2);
+
+    // Dekker FastTwoSum so k=round(z) sees the true integer part while the residual e
+    // keeps the dropped tail. Exact under the precondition |z_hi| >= |z_lo| or z_hi == 0:
+    // z_hi = pow*exponent(base) and z_lo carries the fractional log2 term (|z_lo| <
+    // ~0.5*|pow| plus a <=2**-12*|pow| Veltkamp remainder). When exponent(base) == 0 then
+    // z_hi == 0 exactly (the sum is already exact); otherwise |exponent(base)| >= 1 so
+    // |z_hi| >= |pow| > |z_lo|.
+    sfpi::vFloat s = z_hi + z_lo;
+    sfpi::vFloat e = z_lo - (s - z_hi);
+    // vConstFloatPrgm1 holds -127 (matches the original clamp); use it directly to avoid a copy.
+    v_if(s < sfpi::vConstFloatPrgm1) {
+        s = sfpi::vConstFloatPrgm1;
+        e = 0.0f;
+    }
+    v_endif;
+
+    sfpi::vInt k_int;
+    sfpi::vFloat k = _sfpu_round_to_nearest_int32_(s, k_int);
+    // Reduced argument (s - k) is exact by Sterbenz; add back the tail e.
+    sfpi::vFloat frac = (s - k) + e;
+
+    // 2**frac via the accurate exp helper (frac is small), then scale by 2**k.
+    sfpi::vFloat y = _sfpu_exp_fp32_accurate_(frac * LN2);
+    // setexp writes the 8-bit exponent field and wraps instead of saturating, so an
+    // overflowing magnitude silently becomes a finite value. Detect overflow from the
+    // biased exponent about to be written (>= 255 is the inf field) and clamp explicitly.
+    // Checking out_exp (already needed by setexp) instead of keeping the float s live
+    // across the exp helper avoids pushing this kernel past the SFPU register-allocator
+    // budget (reload-insn ICE); out_exp >= 255 is equivalent to s >= 128.
+    sfpi::vInt out_exp = sfpi::exexp(y, sfpi::ExponentMode::Biased) + k_int;
+    y = sfpi::setexp(y, out_exp);
+    v_if(out_exp >= 255) { y = std::numeric_limits<float>::infinity(); }
+    v_endif;
 
     // Division by 0 when base is 0 and pow is negative => set to NaN (only for negative exponents)
     v_if(base == 0.f && pow < 0.f) {
@@ -261,6 +312,7 @@ inline void calculate_sfpu_binary_pow(const uint dst_index_in0, const uint dst_i
 
 template <bool APPROXIMATION_MODE>
 inline void sfpu_binary_pow_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstFloatPrgm0 = 1.442695f;
     sfpi::vConstFloatPrgm1 = -127.0f;
 }

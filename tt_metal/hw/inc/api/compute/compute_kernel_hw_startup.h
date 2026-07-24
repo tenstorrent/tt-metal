@@ -5,35 +5,18 @@
 #pragma once
 
 #include "api/compute/common.h"
+#include "api/compute/src_order.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 
 #ifdef TRISC_UNPACK
 #include "llk_unpack_common_api.h"
 #endif
 
-namespace ckernel {
+#ifdef TRISC_MATH
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#endif
 
-// clang-format off
-/**
- * Describes how the two input circular buffers map onto the source registers (SrcA/SrcB) of the
- * compute engine. This matters because compute_kernel_hw_startup() programs per-source-register
- * state (data formats, tile/face dimensions, tile sizes) and that state must match the operand
- * ordering of the operation that follows.
- *
- *  - SrcOrder::Regular : icb0 -> SrcA, icb1 -> SrcB. This is the natural ordering used by virtually
- *                        every operation (e.g. eltwise binary, where in0 -> SrcA and in1 -> SrcB).
- *  - SrcOrder::Reverse : icb0 -> SrcB, icb1 -> SrcA. The operands are mapped onto the source registers
- *                        in reverse. Matmul is the operation that needs this today: in0 (the "A" /
- *                        activations operand) is loaded into SrcB, while in1 (the "B" / weights operand)
- *                        is loaded into SrcA. Passing this tag lets the kernel keep calling startup with
- *                        the natural (in0, in1) argument order while startup programs the source
- *                        registers in the reversed order such an operation requires.
- */
-// clang-format on
-enum class SrcOrder : uint8_t {
-    Regular = 0,  // icb0 -> SrcA, icb1 -> SrcB
-    Reverse = 1,  // icb0 -> SrcB, icb1 -> SrcA
-};
+namespace ckernel {
 
 // clang-format off
 /**
@@ -94,7 +77,7 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
     MATH((llk_math_pack_sync_init()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(src_a_cb, src_b_cb)));
 
-    PACK((llk_pack_hw_configure(ocb)));
+    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init(ocb)));
     PACK((llk_pack_dest_init()));
 #endif

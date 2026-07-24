@@ -6,6 +6,9 @@
 Gemma-3 + diffusers ``LTX2TextConnectors`` (mirrors the diffusers ``LTX2Pipeline`` text
 path). PCC of the final video (4096) and audio (2048) context embeddings.
 
+``test_prof_gemma_ltx_devicetime`` (same file) is a Tracy per-op device-time profile of the
+encode; it skips unless GEMMA_PROF=1, so it never silently no-ops the default (asserting) suite.
+
 Do NOT run the 2x4 case under TT_METAL_WATCHER — the watcher overflows the active-eth
 fabric-router kernel-config buffer at device open.
 
@@ -26,6 +29,7 @@ from loguru import logger
 from safetensors import safe_open
 
 import ttnn
+from models.tt_dit.encoders.gemma.model_gemma import GemmaEncoderLayer
 from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline
 from models.tt_dit.utils.check import assert_quality
 
@@ -162,6 +166,7 @@ def _encode_prompts_reference(
     ("mesh_device", "device_params"),
     [
         pytest.param((1, 1), {"l1_small_size": 8192}, id="1x1"),
+        pytest.param((1, 8), {"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="1x8"),
         pytest.param((2, 4), {"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="2x4"),
         pytest.param((4, 8), {"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}, id="4x8"),
     ],
@@ -175,8 +180,11 @@ def test_gemma_encoder(*, mesh_device):
     if not ckpt:
         pytest.skip("LTX checkpoint not found")
 
-    # Bare pipeline: checkpoint_name=None skips the heavy transformer/VAE load.
-    pipe = LTXPipeline.create_pipeline(mesh_device, checkpoint_name=None, gemma_path=gemma, mode="av")
+    # Bare pipeline: checkpoint_name=None skips the heavy transformer/VAE load. dynamic_load=False
+    # keeps the encoder resident so the whole-encode trace (default when resident) is exercised.
+    pipe = LTXPipeline.create_pipeline(
+        mesh_device, checkpoint_name=None, gemma_path=gemma, mode="av", dynamic_load=False
+    )
 
     # On-device Gemma encoder (full 48 layers). TP follows the T5 pattern (axis-1 width):
     # TP=1 on 1x1, TP=4 on 2x4 — set inside the loader, no override needed.
@@ -211,7 +219,79 @@ def test_gemma_encoder(*, mesh_device):
     # compare directly — no alignment needed.
     logger.info(f"VIDEO  ref={tuple(v_ref.shape)} dev={tuple(v_dev.shape)}")
     assert_quality(v_ref, v_dev, pcc=0.9995)
-    # Audio rides ~0.9982 — the looser bound reflects the longer connector chain it passes
-    # through, not a regression. Tighten if the audio path is later hardened.
+    # fp32 connector weights (HiFi4) match the host reference, so audio holds ~0.9999 like video.
     logger.info(f"AUDIO  ref={tuple(a_ref.shape)} dev={tuple(a_dev.shape)}")
-    assert_quality(a_ref, a_dev, pcc=0.998)
+    assert_quality(a_ref, a_dev, pcc=0.9995)
+
+
+def _walk(m):
+    yield m
+    for _, c in m.named_children():
+        yield from _walk(c)
+
+
+def _flush_after(mod, mesh_device):
+    """Flush the on-device profiler after each mod.forward so each Tracy zone window stays under
+    the 1000-zone buffer."""
+    orig = mod.forward
+
+    def timed(*a, _orig=orig, **k):
+        r = _orig(*a, **k)
+        ttnn.ReadDeviceProfiler(mesh_device)
+        return r
+
+    mod.forward = timed
+
+
+@pytest.mark.skipif(
+    os.environ.get("GEMMA_PROF") != "1",
+    reason="Tracy profiling harness — run: GEMMA_PROF=1 python -m tracy -p -r -m pytest "
+    "'<file>::test_prof_gemma_ltx_devicetime[2x4]' -s",
+)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
+)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+def test_prof_gemma_ltx_devicetime(mesh_device, device_params):
+    """Tracy per-op device-time profile of the full encode (tokenize -> 48 layers -> feature
+    extractor -> connectors). Per-layer ReadDeviceProfiler flush keeps each zone window under
+    Tracy's 1000-zone buffer; no PCC — pure timing. Sum DEVICE FW DURATION from the CSV vs the
+    printed GEMMA_ENCODE_HOST_WALL_MS — the gap is host dispatch."""
+    gemma = _gemma_path()
+    ckpt = _ltx_ckpt()
+    if not os.path.isdir(gemma):
+        pytest.skip(f"Gemma not found: {gemma}")
+    if not ckpt:
+        pytest.skip("LTX checkpoint not found")
+
+    pipe = LTXPipeline.create_pipeline(mesh_device, checkpoint_name=None, gemma_path=gemma, mode="av")
+    pipe.gemma_encoder_pair.load_gemma_encoder(gemma)
+
+    conn_state = {}
+    with safe_open(ckpt, "pt") as f:
+        for k in f.keys():
+            if k.startswith(CONNECTOR_PREFIXES):
+                conn_state[k] = f.get_tensor(k)
+    pipe.gemma_encoder_pair.load_embeddings_connectors(conn_state, audio_num_blocks=8)
+
+    # Flush after each decoder layer plus the feature extractor and each connector — keeps every
+    # window well under Tracy's 1000-zone buffer.
+    pair = pipe.gemma_encoder_pair
+    for mod in _walk(pair.gemma_encoder):
+        if isinstance(mod, GemmaEncoderLayer):
+            _flush_after(mod, mesh_device)
+    _flush_after(pair.feature_extractor, mesh_device)
+    _flush_after(pair.video_connector, mesh_device)
+    if pair.audio_connector is not None:
+        _flush_after(pair.audio_connector, mesh_device)
+
+    pipe.encode_prompts([PROMPT], use_cache=False)  # warm program cache
+    ttnn.synchronize_device(mesh_device)
+    ttnn.ReadDeviceProfiler(mesh_device)
+
+    t0 = time.perf_counter()
+    pipe.encode_prompts([PROMPT], use_cache=False)
+    ttnn.synchronize_device(mesh_device)
+    host_wall = (time.perf_counter() - t0) * 1000
+    ttnn.ReadDeviceProfiler(mesh_device)
+    print(f"\nGEMMA_ENCODE_HOST_WALL_MS={host_wall:.2f}", flush=True)

@@ -12,7 +12,7 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE kernels hang_device/device/kernels/*)
+file(GLOB_RECURSE kernels hang_device/device/kernels/*.cpp)
 
 target_sources(
     ttnn_op_experimental_test

@@ -144,7 +144,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         {
             ZONE_SCOPED("UNINIT")
-            _llk_unpack_tilize_uninit_(formats.unpack_A_dst, ckernel::tensor_shape_from_num_faces(4 /* num_faces */));
+            _llk_unpack_tilize_uninit_(formats.unpack_A_dst, ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, 4 /* num_faces */));
         }
         return;
     }

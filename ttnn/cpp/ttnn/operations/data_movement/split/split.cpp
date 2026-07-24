@@ -59,12 +59,13 @@ std::vector<ttnn::Tensor> split_with_slice_impl(
     const MemoryConfig& memory_config) {
     const auto& input_shape = input_tensor.logical_shape();
 
-    // torch requires split size to sum to dim size but since we are using slice we can be more permissive.
+    // Callers (both public split overloads) enforce torch-parity: split sizes sum exactly to the
+    // dimension size. This internal check guards against a malformed size list reaching the slicer.
     TT_FATAL(
-        std::accumulate(split_sizes.begin(), split_sizes.end(), 0L) >= input_shape[dim],
-        "Split sizes should sum to at least dimension size. Split sizes: {} dimension {}",
-        split_sizes,
-        input_shape[dim]);
+        std::accumulate(split_sizes.begin(), split_sizes.end(), int64_t{0}) == static_cast<int64_t>(input_shape[dim]),
+        "Split sizes should sum exactly to dimension size {}. Split sizes: {}",
+        input_shape[dim],
+        split_sizes);
 
     const auto num_chunks = static_cast<uint32_t>(split_sizes.size());
 
@@ -113,7 +114,7 @@ std::vector<ttnn::Tensor> split_with_slice_impl(
 
     ends[dim] = 0;
     for (const auto& s : split_sizes) {
-        ends[dim] = std::min(ends[dim] + s, static_cast<int64_t>(input_shape[dim]));
+        ends[dim] += s;
         results.emplace_back(ttnn::slice(input_tensor, sbegins, sends, ssteps, memory_config));
         begins[dim] += s;
     }
@@ -127,6 +128,42 @@ std::vector<ttnn::Tensor> split(
     const ttsl::SmallVector<int64_t>& split_sizes,
     int64_t dim,
     const std::optional<MemoryConfig>& memory_config_arg) {
+    const auto& input_shape = input_tensor.logical_shape();
+
+    // Normalize negative dimension to positive index.
+    const int64_t normalized_dim = input_shape.get_normalized_index(dim);
+    const int64_t dim_size = static_cast<int64_t>(input_shape[normalized_dim]);
+
+    // Validate the requested sizes BEFORE deriving the output memory config: the desired_mem_cfg
+    // lambda dereferences split_sizes[0] and computes padded_dim % split_sizes.size(), which are
+    // undefined behavior / divide-by-zero for an empty list.
+    TT_FATAL(!split_sizes.empty(), "split_sizes must not be empty");
+    TT_FATAL(
+        std::all_of(split_sizes.begin(), split_sizes.end(), [](const auto& x) { return x > 0; }),
+        "split_size should be greater than 0, instead got: {}",
+        split_sizes);
+
+    // Coverage: the sizes must cover the split dim exactly. Subtract each (positive) size from the
+    // remaining extent instead of summing, so an oversized list cannot overflow int64_t; remaining
+    // stays >= 0 because the per-size check rejects any entry that would exceed it.
+    int64_t remaining = dim_size;
+    for (const auto& s : split_sizes) {
+        TT_FATAL(
+            s <= remaining,
+            "split_sizes must sum exactly to the size of dimension {} ({}), but sizes {} over-cover it",
+            normalized_dim,
+            dim_size,
+            split_sizes);
+        remaining -= s;
+    }
+    TT_FATAL(
+        remaining == 0,
+        "split_sizes must sum exactly to the size of dimension {} ({}), but sizes {} under-cover it by {}",
+        normalized_dim,
+        dim_size,
+        split_sizes,
+        remaining);
+
     // Default output MC: mirror input; rescale shard_spec per-chunk; DRAM on rescale fail or L1 overflow.
     const MemoryConfig desired_mem_cfg = [&]() -> MemoryConfig {
         const auto& in_mc = input_tensor.memory_config();
@@ -262,37 +299,40 @@ std::vector<ttnn::Tensor> split(
         return in_mc;
     }();
 
-    TT_FATAL(!split_sizes.empty(), "split_sizes must not be empty");
-    TT_FATAL(
-        std::all_of(split_sizes.begin(), split_sizes.end(), [](const auto& x) { return x > 0; }),
-        "split_size should be greater than 0, instead got: {}",
-        split_sizes);
-
-    // Sharded I/O handled natively by device kernels and slice via TensorAccessor (no de-shard).
-    const Tensor& working_input = input_tensor;
-    const MemoryConfig& op_mem_cfg = desired_mem_cfg;
-
-    const auto& input_shape = working_input.logical_shape();
-    int64_t normalized_dim = input_shape.get_normalized_index(dim);
     std::vector<ttnn::Tensor> results;
 
     const uint32_t num_chunks = static_cast<uint32_t>(split_sizes.size());
 
-    // Equal N-way split fully covering the dim.
+    // True when all requested chunk sizes are equal. The exact-sum check above already
+    // guarantees they cover the full dimension, so no product check is needed here.
     bool is_equal_n_way_split =
-        std::all_of(split_sizes.begin(), split_sizes.end(), [&](auto s) { return s == split_sizes[0]; }) &&
-        split_sizes[0] * static_cast<int64_t>(num_chunks) == static_cast<int64_t>(input_shape[normalized_dim]);
+        std::all_of(split_sizes.begin(), split_sizes.end(), [&](auto s) { return s == split_sizes[0]; });
 
-    // TILE fast path (native N-chunk kernel): equal split on last dim, TILE, rank≥2, ≥2 tiles/dim, N-divisible, fits
-    // grid, shape4d[0]==1 for N>2; else N slice calls.
-    tt::tt_metal::IDevice* device = working_input.device();
+    // ---------------------------------------------------------------------------
+    // Fast path 1: TILE layout, equal N-way split on the last dim.
+    // Uses the native N-chunk TILE device kernel (single-pass, no slice overhead).
+    //
+    // The native TILE kernel is selected only when ALL of the following hold (see
+    // can_use_tile_kernel below); otherwise the split falls back to N independent
+    // ttnn::slice calls (split_with_slice_impl), which handle every other case
+    // (ROW_MAJOR, unequal sizes, non-last-dim, batch>1 for N>2, etc.):
+    //   - equal N-way split that exactly covers the dimension (is_equal_n_way_split)
+    //   - split dim is the last dim (normalized_dim == rank - 1)
+    //   - input is TILE layout, rank >= 2
+    //   - at least 2 tiles in each of the last two dims
+    //   - padded tile count in the split dim is divisible by num_chunks
+    //   - it all fits the core grid: z_4d <= grid_dim_x and num_chunks <= grid_dim_y
+    //   - shape4d[0] == 1 for N>2 (the N==2 path collapses batch via reshape instead)
+    // Sharded input/output are handled natively on both paths (no de-shard step).
+    // ---------------------------------------------------------------------------
+    tt::tt_metal::IDevice* device = input_tensor.device();
     const uint32_t grid_dim_x = device->compute_with_storage_grid_size().x;
     const uint32_t grid_dim_y = device->compute_with_storage_grid_size().y;
 
     // Compute the 4D shape the kernel sees: rank<4 pads with 1s, rank>4 merges leading dims into [0].
     std::array<uint32_t, 4> shape4d = {1, 1, 1, 1};
     if (input_shape.rank() > static_cast<size_t>(detail::RANK_FOUR)) {
-        const auto s4 = ttnn::operations::data_movement::squeeze_shape_to_4D(working_input.logical_shape());
+        const auto s4 = ttnn::operations::data_movement::squeeze_shape_to_4D(input_tensor.logical_shape());
         for (int i = 0; i < 4; i++) {
             shape4d[i] = s4[i];
         }
@@ -306,8 +346,10 @@ std::vector<ttnn::Tensor> split(
     const uint32_t z_4d = (num_chunks == detail::TWO_CHUNKS) ? shape4d[0] * shape4d[1] : shape4d[1];
     bool fits_in_core_grid = input_shape.rank() >= 2 && z_4d < grid_dim_x + 1;
 
-    // Program factory requires padded tile count in split dim divisible by num_chunks.
-    uint32_t padded_tiles_in_split_dim = working_input.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    // The program factory requires the padded tile count in the split dim to be
+    // divisible by num_chunks (otherwise the Y-core grouping doesn't work out).
+    // This is only evaluated when normalized_dim == rank-1, so [-1] is always correct.
+    uint32_t padded_tiles_in_split_dim = input_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
     bool tiles_divisible_by_chunks = (padded_tiles_in_split_dim % num_chunks == 0);
 
     // prim::split hard-requires shape4d[0]==1 for N>2 (N==2 handles batch>1 via reshape).
@@ -317,7 +359,7 @@ std::vector<ttnn::Tensor> split(
     bool chunks_fit_in_y_grid = (num_chunks <= grid_dim_y);
 
     bool can_use_tile_kernel = is_equal_n_way_split && normalized_dim == static_cast<int64_t>(input_shape.rank()) - 1 &&
-                               working_input.layout() == Layout::TILE && input_shape.rank() >= 2 && fits_in_core_grid &&
+                               input_tensor.layout() == Layout::TILE && input_shape.rank() >= 2 && fits_in_core_grid &&
                                input_shape[-2] / tt::constants::TILE_HEIGHT >= 2 &&
                                input_shape[-1] / tt::constants::TILE_WIDTH >= 2 && tiles_divisible_by_chunks &&
                                batch_ok_for_n_gt2 && chunks_fit_in_y_grid;
@@ -325,18 +367,18 @@ std::vector<ttnn::Tensor> split(
     if (can_use_tile_kernel) {
         ttnn::Tensor input_tensor_4d;
         if (input_shape.rank() > detail::RANK_FOUR) {
-            input_tensor_4d = operations::data_movement::squeeze_from_ND_to_4D(working_input);
+            input_tensor_4d = operations::data_movement::squeeze_from_ND_to_4D(input_tensor);
         } else if (input_shape.rank() < detail::RANK_FOUR) {
-            input_tensor_4d = unsqueeze_to_4D(working_input);
+            input_tensor_4d = unsqueeze_to_4D(input_tensor);
         } else {
-            input_tensor_4d = working_input;
+            input_tensor_4d = input_tensor;
         }
         // N>2: prim::split directly. N==2: split_last_dim_two_chunks_tiled handles batch>1 reshape.
         std::vector<Tensor> outputs_4d;
         if (num_chunks == detail::TWO_CHUNKS) {
-            outputs_4d = detail::split_last_dim_two_chunks_tiled(input_tensor_4d, op_mem_cfg);
+            outputs_4d = detail::split_last_dim_two_chunks_tiled(input_tensor_4d, desired_mem_cfg);
         } else {
-            outputs_4d = ttnn::prim::split(input_tensor_4d, static_cast<int>(num_chunks), 3, op_mem_cfg);
+            outputs_4d = ttnn::prim::split(input_tensor_4d, static_cast<int>(num_chunks), 3, desired_mem_cfg);
         }
         results.reserve(num_chunks);
         for (const auto& t : outputs_4d) {
@@ -345,10 +387,14 @@ std::vector<ttnn::Tensor> split(
             results.emplace_back(ttnn::view(t, ttnn::Shape(final_shape)));
         }
     } else {
-        // Slice fallback: if outputs downgraded to DRAM, migrate L1 input too so per-slice CBs don't clash.
-        Tensor slice_input = working_input;
+        // Fallback: unequal splits, ROW_MAJOR, batch>1 for N>2, or anything not
+        // handled by the TILE fast path above. Uses N independent slice calls.
+        //
+        // If the outputs were downgraded to DRAM, migrate an L1 input to DRAM too so the
+        // per-slice CBs (stamped on core [0,0] by each slice call) don't clash in L1.
+        Tensor slice_input = input_tensor;
         if (slice_input.memory_config().buffer_type() == tt::tt_metal::BufferType::L1 &&
-            op_mem_cfg.buffer_type() == tt::tt_metal::BufferType::DRAM && split_sizes.size() > 2) {
+            desired_mem_cfg.buffer_type() == tt::tt_metal::BufferType::DRAM && split_sizes.size() > 2) {
             const MemoryConfig dram_interleaved{
                 tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
             // Padded volume + tile_size(DataFormat) so bfp8_b/bfp4_b exponents are counted.
@@ -364,7 +410,8 @@ std::vector<ttnn::Tensor> split(
             log_warning(tt::LogOp, "ttnn.split: migrating L1 input ({} B) to DRAM before slice fallback.", input_bytes);
             slice_input = ttnn::to_memory_config(slice_input, dram_interleaved, std::nullopt);
         }
-        results = detail::split_with_slice_impl(slice_input, split_sizes, normalized_dim, op_mem_cfg);
+        results = detail::split_with_slice_impl(
+            slice_input, split_sizes, static_cast<int32_t>(normalized_dim), desired_mem_cfg);
     }
 
     return results;
@@ -381,9 +428,18 @@ std::vector<ttnn::Tensor> split(
     const auto& input_shape = input_tensor.logical_shape();
     int64_t normalized_dim = input_shape.get_normalized_index(dim);
 
-    const auto num_chunks = std::ceil(static_cast<float>(input_shape[normalized_dim]) / static_cast<float>(split_size));
+    // ceil(dim_size / split_size) chunks of size split_size, with a smaller final chunk when the
+    // dimension is not evenly divisible. Build the size list so it sums exactly to the dimension
+    // (the last entry holds the remainder), which keeps the list overload's strict sum check
+    // satisfied. Compute the quotient and remainder separately to avoid overflowing
+    // dim_size + split_size for a large split_size.
+    const int64_t dim_size = static_cast<int64_t>(input_shape[normalized_dim]);
+    const int64_t num_chunks = dim_size / split_size + (dim_size % split_size != 0 ? 1 : 0);
 
-    const ttsl::SmallVector<int64_t> split_sizes(num_chunks, split_size);
+    ttsl::SmallVector<int64_t> split_sizes(num_chunks, split_size);
+    if (num_chunks > 0) {
+        split_sizes.back() = dim_size - split_size * (num_chunks - 1);
+    }
     // Pass memory_config_arg directly so the split_sizes overload applies the
     // same sharding-default logic (sharded input → DRAM output when no explicit config).
     return ttnn::split(input_tensor, split_sizes, normalized_dim, memory_config_arg);

@@ -5,7 +5,10 @@
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_attributes.hpp"
 
-namespace tt::tt_metal {
+namespace ttnn {
+
+using tt::tt_metal::TensorSpec;
+using tt::tt_metal::TensorTopology;
 
 TensorAttributes::TensorAttributes(HostStorage storage) : storage_(std::move(storage)) {}
 
@@ -49,4 +52,4 @@ void TensorAttributes::update_tensor_topology(const TensorTopology& tensor_topol
         storage_);
 }
 
-}  // namespace tt::tt_metal
+}  // namespace ttnn

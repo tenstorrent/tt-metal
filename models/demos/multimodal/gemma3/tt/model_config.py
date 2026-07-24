@@ -123,6 +123,10 @@ class ModelArgs(TTModelArgs):
         if not enable_program_trace:
             self._force_sdpa_decode_hifi2_na()
 
+        if self.num_devices == 1:
+            # Turn off fp32_dest_acc_en to not trigger L1 OOM
+            self._force_sdpa_prefill_hifi4_fp16()
+
     def _relax_attention_ops_for_program_trace(self):
         """Lower L1 for prefill+decode attention under program tracing (minimal_matmul / SDPA / linear)."""
         trace_groups = (
@@ -150,6 +154,16 @@ class ModelArgs(TTModelArgs):
             tensor_precision = {key: value for key, value in conf.tensor_dtype_settings.items() if value is not None}
             op_fidelity = dict(conf.op_fidelity_settings)
             op_fidelity[OpGroup.SDPA_DECODE] = MathFidelitySetting.HIFI2_NA
+            fixed_conf = ModelOptimizations({"TensorPrecision": tensor_precision, "OpFidelity": op_fidelity})
+            fixed_conf.__name__ = getattr(conf, "__name__", fixed_conf.__name__)
+            self.optimizations.set_decoder_conf(decoder_id, fixed_conf)
+        self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
+
+    def _force_sdpa_prefill_hifi4_fp16(self):
+        for decoder_id, conf in list(self.optimizations.decoder_optimizations.items()):
+            tensor_precision = {key: value for key, value in conf.tensor_dtype_settings.items() if value is not None}
+            op_fidelity = dict(conf.op_fidelity_settings)
+            op_fidelity[OpGroup.SDPA_PREFILL] = MathFidelitySetting.HIFI4_FP16
             fixed_conf = ModelOptimizations({"TensorPrecision": tensor_precision, "OpFidelity": op_fidelity})
             fixed_conf.__name__ = getattr(conf, "__name__", fixed_conf.__name__)
             self.optimizations.set_decoder_conf(decoder_id, fixed_conf)

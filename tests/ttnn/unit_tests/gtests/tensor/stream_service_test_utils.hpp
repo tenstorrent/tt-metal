@@ -112,7 +112,7 @@ inline tt::tt_metal::TensorSpec make_spec(
 // MeshBuffer "view" over the tensor's existing device allocation: same address, no
 // new allocation, and no const_cast. The view must not outlive the tensor whose
 // memory it points at.
-inline std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> mesh_buffer_view(const tt::tt_metal::Tensor& tensor) {
+inline std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> mesh_buffer_view(const ttnn::Tensor& tensor) {
     const auto& backing = tensor.device_storage().get_mesh_buffer();
     return tt::tt_metal::distributed::MeshBuffer::create(
         backing.global_config(), backing.device_local_config(), backing.device(), backing.address());

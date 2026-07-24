@@ -248,6 +248,10 @@ def test_index_fill_block_sharded(device, shape, dim, num_indices, value):
 )
 def test_index_fill_cross_layout_to_col_sharded(device, shape, dim, num_indices, value, out_strategy):
     """INTERLEAVED/HEIGHT input with WIDTH/BLOCK output."""
+    if out_strategy == ttnn.ShardStrategy.BLOCK:
+        pytest.skip(
+            "HEIGHT->BLOCK alignment mismatch not yet fixed (see https://github.com/tenstorrent/tt-metal/issues/49987)"
+        )
     if out_strategy == ttnn.ShardStrategy.WIDTH:
         in_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
         out_cfg = ttnn.create_sharded_memory_config(

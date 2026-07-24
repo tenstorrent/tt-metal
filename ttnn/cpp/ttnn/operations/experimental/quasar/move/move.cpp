@@ -35,7 +35,7 @@ inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryCo
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     const auto& input_mem_config = input_tensor.memory_config();
     auto input_address = input_tensor.buffer()->address();
-    TensorSpec output_tensor_spec = input_tensor.tensor_spec();
+    tt::tt_metal::TensorSpec output_tensor_spec = input_tensor.tensor_spec();
 
     // Construct a ghost tensor so we can pass an deallocated tensor through the TTNN infrastructure.
     auto ghost_input_tensor = create_ghost_tensor(input_tensor);
@@ -46,7 +46,7 @@ inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryCo
     }
 
     if (mem_config) {
-        output_tensor_spec = TensorSpec(
+        output_tensor_spec = tt::tt_metal::TensorSpec(
             output_tensor_spec.logical_shape(),
             TensorLayout(
                 output_tensor_spec.tensor_layout().get_data_type(),
@@ -140,7 +140,7 @@ inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<Memor
     if (mem_config) {
         TT_FATAL(mem_config->is_sharded(), "Expected output tensor memory config to be sharded");
         auto output_mem_config = MemoryConfig(mem_config->memory_layout(), mem_config->buffer_type(), shard_spec);
-        output_tensor_spec = TensorSpec(
+        output_tensor_spec = tt::tt_metal::TensorSpec(
             output_tensor_spec.logical_shape(),
             TensorLayout(
                 output_tensor_spec.tensor_layout().get_data_type(),

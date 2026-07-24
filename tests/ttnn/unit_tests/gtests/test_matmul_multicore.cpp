@@ -89,8 +89,8 @@ TEST_P(MatmulMulticoreFixture, MatmulMulticoreAccuracy) {
     const ttnn::QueueId cq = ttnn::QueueId(0);
 
     // Create input tensors on device via the host → device path used in other gtests.
-    const Tensor host_a = Tensor::from_vector(data_a, TensorSpec(ttnn::Shape({M, K}), layout));
-    const Tensor host_b = Tensor::from_vector(data_b, TensorSpec(ttnn::Shape({K, N}), layout));
+    const Tensor host_a = Tensor::from_vector(data_a, tt::tt_metal::TensorSpec(ttnn::Shape({M, K}), layout));
+    const Tensor host_b = Tensor::from_vector(data_b, tt::tt_metal::TensorSpec(ttnn::Shape({K, N}), layout));
     const Tensor input_a = host_a.to_device(&device, mem_cfg, cq);
     const Tensor input_b = host_b.to_device(&device, mem_cfg, cq);
 

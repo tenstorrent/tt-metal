@@ -6,7 +6,7 @@
 #include "api/tensor/tensor_accessor.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 // Simple kernel that copies [start_page, end_page) pages from dst to dst.
@@ -15,7 +15,7 @@ void kernel_main() {
     constexpr uint32_t base_idx_cta = args_dst.next_compile_time_args_offset();
     constexpr uint32_t base_idx_crta = args_dst.next_common_runtime_args_offset();
 
-    constexpr uint32_t cb_id = get_compile_time_arg_val(base_idx_cta);
+    constexpr uint32_t dfb_id = get_compile_time_arg_val(base_idx_cta);
     constexpr uint32_t page_size = get_compile_time_arg_val(base_idx_cta + 1);
 
     const uint32_t bank_base_address_dst = get_common_arg_val<uint32_t>(base_idx_crta);
@@ -26,15 +26,15 @@ void kernel_main() {
     auto accessor_dst = TensorAccessor(args_dst, bank_base_address_dst);
 
     Noc noc;
-    CircularBuffer cb(cb_id);
+    DataflowBuffer dfb(dfb_id);
 
     constexpr uint32_t one_tile = 1;
     auto pages = accessor_dst.pages(start_page, end_page);
     for (const auto& page : pages) {
-        cb.wait_front(one_tile);
+        dfb.wait_front(one_tile);
         noc.async_write(
-            cb, accessor_dst, page_size, {.offset_bytes = 0}, {.page_id = page.page_id(), .offset_bytes = 0});
+            dfb, accessor_dst, page_size, {.offset_bytes = 0}, {.page_id = page.page_id(), .offset_bytes = 0});
         noc.async_write_barrier();
-        cb.pop_front(one_tile);
+        dfb.pop_front(one_tile);
     }
 }

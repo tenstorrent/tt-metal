@@ -37,6 +37,7 @@ on:
         type: choice
         options:
           - all
+          - bh-qb2-deepseek-d2d-socket-sync
       build-type:
         required: false
         type: choice
@@ -92,7 +93,7 @@ jobs:
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
   generate-card-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:

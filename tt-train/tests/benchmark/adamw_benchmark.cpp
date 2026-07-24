@@ -44,7 +44,7 @@ void BM_AdamW(benchmark::State& state) {
     const auto dtype = ttnn::DataType::BFLOAT16;
     const ttnn::Shape shape(adamw_shape.shape);
     const uint32_t seed = ttml::benchmark_utils::seed_from_name(adamw_shape.name);
-    const auto tensor_spec = ttnn::TensorSpec(
+    const auto tensor_spec = tt::tt_metal::TensorSpec(
         shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG));
 
     const auto make_random_tensor = [&](float min, float max, uint32_t tensor_seed) {

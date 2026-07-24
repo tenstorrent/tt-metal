@@ -16,10 +16,8 @@
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
 #include "conv_reader_common.hpp"
-#include "api/debug/dprint.h"  // DEBUG: conv2d layer3 hang localization (remove after)
 
 void kernel_main() {
-    DPRINT("RDR start\n");  // DEBUG: conv2d layer3 hang
     constexpr uint32_t dilation_h = get_arg(args::dilation_h);
     constexpr uint32_t dilation_w = get_arg(args::dilation_w);
     constexpr uint32_t stride_w = get_arg(args::stride_w);
@@ -113,7 +111,7 @@ void kernel_main() {
     for (uint32_t bh = 0; bh < act_num_blocks_h; bh++) {
         if constexpr (activation_reuse_enabled) {
             l1_write_addr_act = cb_start_addr;
-            get_local_cb_interface(cb_id_act).fifo_wr_ptr = l1_write_addr_act;
+            cb_act.evil_set_write_ptr(l1_write_addr_act);
         }
         uint32_t reader_offset = act_l1_read_addr;
         for (uint32_t outer = 0; outer < window_outer; outer++) {
@@ -180,5 +178,4 @@ void kernel_main() {
 
     // Drain outstanding NOC reads/writes/atomics before returning (Metal 2.0 FW epilogue does not).
     noc.async_full_barrier();
-    DPRINT("RDR end\n");  // DEBUG: conv2d layer3 hang
 }

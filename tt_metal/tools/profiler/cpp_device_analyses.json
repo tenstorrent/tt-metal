@@ -204,5 +204,71 @@
             "marker_type": "ZONE_END",
             "marker_name_keywords": ["ERISC-KERNEL"]
         }
+    },
+    {
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
+        "results_config": {
+            "analysis_name": "DEVICE QUASAR_DM KERNEL DURATION [ns]",
+            "display_start_and_end_timestamps": true,
+            "start_timestamp_header": "DEVICE QUASAR_DM KERNEL START CYCLE",
+            "end_timestamp_header": "DEVICE QUASAR_DM KERNEL END CYCLE"
+        },
+        "start_config": {
+            "marker_type": "ZONE_START",
+            "marker_name_keywords": ["DM-KERNEL"]
+        },
+        "end_config": {
+            "marker_type": "ZONE_END",
+            "marker_name_keywords": ["DM-KERNEL"]
+        }
+    },
+    {
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
+        "results_config": {
+            "analysis_name": "DEVICE QUASAR_NEO_TRISC KERNEL DURATION [ns]",
+            "display_start_and_end_timestamps": true,
+            "start_timestamp_header": "DEVICE QUASAR_NEO_TRISC KERNEL START CYCLE",
+            "end_timestamp_header": "DEVICE QUASAR_NEO_TRISC KERNEL END CYCLE"
+        },
+        "start_config": {
+            "marker_type": "ZONE_START",
+            "marker_name_keywords": ["TRISC-KERNEL"]
+        },
+        "end_config": {
+            "marker_type": "ZONE_END",
+            "marker_name_keywords": ["TRISC-KERNEL"]
+        }
+    },
+    {
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
+        "results_config": {
+            "analysis_name": "DEVICE DM FW DURATION [ns]"
+        },
+        "start_config": {
+            "marker_type": "ZONE_START",
+            "marker_name_keywords": ["DM-FW"]
+        },
+        "end_config": {
+            "marker_type": "ZONE_END",
+            "marker_name_keywords": ["DM-FW"]
+        }
+    },
+    {
+        "type": "PROGRAM_FIRST_TO_LAST_MARKER",
+        "dimension": "PROGRAM",
+        "results_config": {
+            "analysis_name": "DEVICE TRISC FW DURATION [ns]"
+        },
+        "start_config": {
+            "marker_type": "ZONE_START",
+            "marker_name_keywords": ["TRISC-FW"]
+        },
+        "end_config": {
+            "marker_type": "ZONE_END",
+            "marker_name_keywords": ["TRISC-FW"]
+        }
     }
 ]

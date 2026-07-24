@@ -149,8 +149,8 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
 
     // --- Per-core runtime args ---
     constexpr uint32_t start_offset = 0;  // tensor-args path computes the start offset in-kernel
-    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args;
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
     AdvancedKernelRunArgs reader_run_advanced;
 
     uint32_t num_tiles_written = 0;
@@ -162,9 +162,21 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
             // no-op core
-            reader_node_args.push_back({.node = core, .args = {{"start_id", 0}, {"num_tiles", 0}}});
+            AddRuntimeArgsForNode(
+                reader_node_args,
+                core,
+                {
+                    {"start_id", 0u},
+                    {"num_tiles", 0u},
+                });
             reader_run_advanced.runtime_varargs.emplace(core, std::vector<uint32_t>(num_dims, 0));
-            writer_node_args.push_back({.node = core, .args = {{"num_pages", 0}, {"start_id", 0}}});
+            AddRuntimeArgsForNode(
+                writer_node_args,
+                core,
+                {
+                    {"num_pages", 0u},
+                    {"start_id", 0u},
+                });
             continue;
         }
 
@@ -178,11 +190,22 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
             start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
         }
 
-        reader_node_args.push_back({.node = core, .args = {{"start_id", start_id}, {"num_tiles", num_tiles_per_core}}});
+        AddRuntimeArgsForNode(
+            reader_node_args,
+            core,
+            {
+                {"start_id", start_id},
+                {"num_tiles", num_tiles_per_core},
+            });
         reader_run_advanced.runtime_varargs.emplace(core, std::move(id_per_dim));
 
-        writer_node_args.push_back(
-            {.node = core, .args = {{"num_pages", num_tiles_per_core}, {"start_id", num_tiles_written}}});
+        AddRuntimeArgsForNode(
+            writer_node_args,
+            core,
+            {
+                {"num_pages", num_tiles_per_core},
+                {"start_id", num_tiles_written},
+            });
 
         num_tiles_written += num_tiles_per_core;
     }

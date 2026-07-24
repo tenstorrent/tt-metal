@@ -8,6 +8,7 @@
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_A_api.h"
@@ -39,7 +40,7 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = 
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         0 /*transpose of faces*/, 0 /*transpose within 16x16 face*/, icb)));
 
-    PACK((llk_pack_hw_configure(ocb)));
+    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init(ocb)));
     PACK((llk_pack_dest_init()));
 

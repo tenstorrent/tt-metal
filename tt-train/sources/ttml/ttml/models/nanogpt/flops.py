@@ -33,12 +33,6 @@ def calculate_flops_per_token(config, seq_len: int) -> int:
     E = config.n_embd
     vocab_size = config.vocab_size
 
-    embed_params = vocab_size * E
-
-    pos_embed_params = 0
-    if hasattr(config, "positional_embedding_type") and config.positional_embedding_type == "trainable":
-        pos_embed_params = config.block_size * E
-
     # Per-layer parameter count (from actual layer constructors):
     # Attention weights: qkv_linear(E, 3E) + out_linear(E, E) = 4E²
     # Attention biases (always on): 3E + E = 4E
@@ -52,14 +46,14 @@ def calculate_flops_per_token(config, seq_len: int) -> int:
 
     transformer_params = config.n_layer * params_per_layer
 
+    # Output projection (LM head).
     head_params = vocab_size * E
-    if hasattr(config, "weight_tying") and config.weight_tying.name == "Enabled":
-        head_params = 0
 
     # Final LayerNorm: gamma always, beta only if config.bias
     final_norm_params = E * (2 if config.bias else 1)
 
-    N = embed_params + pos_embed_params + transformer_params + head_params + final_norm_params
+    # Total parameters
+    N = transformer_params + head_params + final_norm_params
 
     L = config.n_layer
     H = config.n_head

@@ -7,8 +7,6 @@ run-name: >-
     github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' && 'ttnn - run sweeps model traced' ||
     github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)' && 'ttnn - run sweeps lead models' ||
     github.event.inputs.sweep_name && format('ttnn - run sweeps ({0})', github.event.inputs.sweep_name) ||
-    github.event.schedule == '30 4 * * 0,1,2,4,5' && 'ttnn - run sweeps nightly (scheduled)' ||
-    github.event.schedule == '0 4 * * 3,6' && 'ttnn - run sweeps comprehensive (scheduled)' ||
     github.event.schedule == '0 3 * * *' && 'ttnn - run sweeps model traced (scheduled)' ||
     github.event.schedule == '0 2 * * *' && 'ttnn - run sweeps lead models (scheduled)' ||
     'ttnn - Run sweeps scheduled'
@@ -661,8 +659,6 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 
   schedule:
-    - cron: "30 4 * * 0,1,2,4,5" # This cron schedule runs the workflow at 4:30 AM UTC on Sun, Mon, Tue, Thu, Fri (nightly runs)
-    - cron: "0 4 * * 3,6" # This cron schedule runs the workflow at 4:00 AM UTC on Wed/Sat (comprehensive run)
     - cron: "0 3 * * *" # This cron schedule runs the workflow at 3:00 AM UTC daily (model traced runs)
     - cron: "0 2 * * *" # This cron schedule runs the workflow at 2:00 AM UTC daily (lead model runs)
 
@@ -673,7 +669,7 @@ jobs:
   # from literal strings/booleans or job outputs.
   resolve-inputs:
     name: Resolve workflow inputs
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       sweep-name: ${{ steps.resolve.outputs.sweep-name }}
       suite-name: ${{ steps.resolve.outputs.suite-name }}
@@ -700,8 +696,6 @@ jobs:
           # Resolve sweep name: map schedule cron to friendly name, or use dispatch input
           if [[ "$IS_SCHEDULED" == "true" ]]; then
             case "${{ github.event.schedule }}" in
-              "30 4 * * 0,1,2,4,5") SWEEP_NAME="ALL SWEEPS (Nightly)" ;;
-              "0 4 * * 3,6")         SWEEP_NAME="ALL SWEEPS (Comprehensive)" ;;
               "0 3 * * *")            SWEEP_NAME="ALL SWEEPS (Model Traced)" ;;
               "0 2 * * *")            SWEEP_NAME="ALL SWEEPS (Lead Models)" ;;
               *)                      SWEEP_NAME="ALL SWEEPS (Nightly)" ;;

@@ -189,7 +189,7 @@ void enqueue_mesh_workload(
     if (tt::tt_metal::experimental::inspector::IsEnabled()) {
         auto operation_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
 
-        std::vector<TensorSpec> spec_copies;
+        std::vector<tt::tt_metal::TensorSpec> spec_copies;
         if (tt::tt_metal::experimental::inspector::ShouldCaptureTensorSpecs()) {
             size_t specs_count = ttsl::reflection::count_object_of_type<Tensor>(tensor_args);
             spec_copies.reserve(specs_count);

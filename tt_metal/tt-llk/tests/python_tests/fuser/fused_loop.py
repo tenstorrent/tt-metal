@@ -185,7 +185,7 @@ class LoopTileByTile(FusedLoop):
                 operation, config, compute_unit, block
             )
         else:
-            code += f"std::uint32_t tile_id = {block.tile_count_x} * ({block.block_y} + tile_y) + ({block.block_x} + tile_x);\n"
+            code += f"[[maybe_unused]] std::uint32_t tile_id = {block.tile_count_x} * ({block.block_y} + tile_y) + ({block.block_x} + tile_x);\n"
             block.tile_id_global = "tile_id"
             block.tile_id_block = f"tile_y * {block.block_tiles_x} + tile_x"
             code += compute_unit.unpacker.unpack(operation, config, compute_unit, block)

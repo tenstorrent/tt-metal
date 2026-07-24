@@ -1,0 +1,18 @@
+# Per-Dockerfile ignore for Dockerfile.disaggregated-prefill-worker (BuildKit picks
+# this up in preference to a root .dockerignore when building with
+# `-f dockerfile/Dockerfile.disaggregated-prefill-worker`). Scoped so it does NOT affect
+# other tt-metal image builds.
+#
+# This image builds tt-metal FROM SOURCE on a bare tt-metalium dev base, so unlike
+# the old prebuilt-base variant it KEEPS .git: the build needs it to fetch the
+# submodules (empty gitlinks in the working tree) at their pinned SHAs and to
+# derive tt-metal's git-describe version. We only drop build outputs and caches —
+# platform-mismatched host artifacts that are regenerated inside the image anyway.
+# NOTE: tt-metal's .git is ~2 GB, so `COPY .` sends a large context (one-time,
+# BuildKit-cached). This is inherent to the from-source approach.
+/build
+/python_env
+**/__pycache__
+**/*.pyc
+**/.cpmcache
+.cache

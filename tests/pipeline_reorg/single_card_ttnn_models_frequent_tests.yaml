@@ -1,0 +1,247 @@
+# This file defines the test matrix for the Fast dispatch frequent model tests pipeline.
+# (Single-card) nightly model tests under tests/nightly/single_card/.
+#
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test ($PYTEST_CMD is set by the impl workflow).
+#   model: Model identifier for filtering (workflow_dispatch models-to-run selection).
+#   skus: A mapping of SKU names to their configuration.
+#     Each SKU entry contains:
+#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+#
+# For max allowed timeout refer to .github/time_budget.yaml
+
+# Standard wormhole frequent model tests
+- name: bge_m3 nightly
+  cmd: $PYTEST_CMD tests/nightly/single_card/bge_m3
+  model: bge_m3
+  skus:
+    wh_n150:
+      timeout: 30
+    wh_n300:
+      timeout: 30
+  owner_id: U082LLYBLSW # Gabriel Tobar (CODEOWNERS @gtobarTT)
+  team: models
+- name: common_models nightly
+  cmd: $PYTEST_CMD tests/nightly/single_card/common_models
+  model: common_models
+  skus:
+    wh_n150:
+      timeout: 30
+    wh_n300:
+      timeout: 30
+  owner_id: U087S3K319A # Austin Ho (CODEOWNERS @tt-aho, models/demos/metal_BERT_large_11)
+  team: models
+- name: resnet50 nightly
+  cmd: $PYTEST_CMD tests/nightly/single_card/resnet50
+  model: resnet50
+  skus:
+    wh_n150:
+      timeout: 30
+    wh_n300:
+      timeout: 30
+  owner_id: U085GDCAZTN # Pavle Josipovic (top contributor; CODEOWNERS team @tenstorrent/metalium-developers-convolutions)
+  team: models
+- name: openpdn_mnist nightly
+  cmd: $PYTEST_CMD tests/nightly/single_card/openpdn_mnist
+  model: openpdn_mnist
+  skus:
+    wh_n150:
+      timeout: 30
+    wh_n300:
+      timeout: 30
+  owner_id: U088413NP0Q # Ashai Reddy Ginuga (CODEOWNERS team @tenstorrent/cse-developer-ttnn)
+  team: models
+- name: vit nightly
+  cmd: |
+    unset HF_HUB_OFFLINE
+    $PYTEST_CMD tests/nightly/single_card/vit
+  model: vit
+  skus:
+    wh_n150:
+      timeout: 30
+    wh_n300:
+      timeout: 30
+  owner_id: U088413NP0Q # Ashai Reddy Ginuga (CODEOWNERS @arginugaTT)
+  team: models
+- name: sentence_bert nightly
+  cmd: $PYTEST_CMD tests/nightly/single_card/sentence_bert
+  model: sentence_bert
+  skus:
+    wh_n150:
+      timeout: 30
+    wh_n300:
+      timeout: 30
+  owner_id: U088413NP0Q # Ashai Reddy Ginuga (CODEOWNERS @arginugaTT)
+  team: models
+- name: swin_s nightly
+  cmd: $PYTEST_CMD tests/nightly/single_card/swin_s
+  model: swin_s
+  skus:
+    wh_n150:
+      timeout: 30
+    wh_n300:
+      timeout: 30
+  owner_id: U088413NP0Q # Ashai Reddy Ginuga (CODEOWNERS @arginugaTT)
+  team: models
+- name: swin_v2 nightly
+  cmd: $PYTEST_CMD tests/nightly/single_card/swin_v2
+  model: swin_v2
+  skus:
+    wh_n150:
+      timeout: 30
+    wh_n300:
+      timeout: 30
+  owner_id: U088413NP0Q # Ashai Reddy Ginuga (CODEOWNERS @arginugaTT)
+  team: models
+- name: mobilenetv2 nightly
+  cmd: $PYTEST_CMD tests/nightly/single_card/mobilenetv2
+  model: mobilenetv2
+  skus:
+    wh_n150:
+      timeout: 30
+    wh_n300:
+      timeout: 30
+  owner_id: U056BK5U81E # Dalar Vartanians (CODEOWNERS @dvartaniansTT)
+  team: models
+- name: mobilenetv3 nightly
+  cmd: $PYTEST_CMD tests/nightly/single_card/mobilenetv3
+  model: mobilenetv3
+  skus:
+    wh_n150:
+      timeout: 30
+    wh_n300:
+      timeout: 30
+  owner_id: U056BK5U81E # Dalar Vartanians (CODEOWNERS @dvartaniansTT)
+  team: models
+- name: segformer nightly
+  cmd: |
+    unset HF_HUB_OFFLINE
+    $PYTEST_CMD tests/nightly/single_card/segformer
+  model: segformer
+  skus:
+    wh_n150:
+      timeout: 30
+    wh_n300:
+      timeout: 30
+  owner_id: U088413NP0Q # Ashai Reddy Ginuga (CODEOWNERS @arginugaTT)
+  team: models
+- name: vgg_unet nightly
+  cmd: $PYTEST_CMD tests/nightly/single_card/vgg_unet
+  model: vgg_unet
+  skus:
+    wh_n150:
+      timeout: 30
+    wh_n300:
+      timeout: 30
+  owner_id: U056BK5U81E # Dalar Vartanians (CODEOWNERS @dvartaniansTT)
+  team: models
+- name: vanilla_unet nightly
+  cmd: $PYTEST_CMD tests/nightly/single_card/vanilla_unet
+  model: vanilla_unet
+  skus:
+    wh_n150:
+      timeout: 30
+    wh_n300:
+      timeout: 30
+  owner_id: U056BK5U81E # Dalar Vartanians (CODEOWNERS @dvartaniansTT)
+  team: models
+- name: efficientnetb0 nightly
+  cmd: $PYTEST_CMD tests/nightly/single_card/efficientnetb0
+  model: efficientnetb0
+  skus:
+    wh_n150:
+      timeout: 30
+    wh_n300:
+      timeout: 30
+  owner_id: U087HGJ455E # (CODEOWNERS @ssinghalTT)
+  team: models
+- name: efficientdetd0 nightly
+  cmd: $PYTEST_CMD tests/nightly/single_card/efficientdetd0
+  model: efficientdetd0
+  skus:
+    wh_n150:
+      timeout: 30
+    wh_n300:
+      timeout: 30
+  owner_id: U056BK5U81E # Dalar Vartanians (CODEOWNERS @dvartaniansTT)
+  team: models
+- name: vovnet nightly
+  cmd: $PYTEST_CMD tests/nightly/single_card/vovnet
+  model: vovnet
+  skus:
+    wh_n150:
+      timeout: 30
+    wh_n300:
+      timeout: 30
+  owner_id: U087HGJ455E # (CODEOWNERS @ssinghalTT)
+  team: models
+- name: ssd512 nightly
+  cmd: $PYTEST_CMD tests/nightly/single_card/ssd512
+  model: ssd512
+  skus:
+    wh_n150:
+      timeout: 30
+    wh_n300:
+      timeout: 30
+  owner_id: U056BK5U81E # Dalar Vartanians (CODEOWNERS @dvartaniansTT)
+  team: models
+- name: yunet nightly
+  cmd: $PYTEST_CMD tests/nightly/single_card/yunet
+  model: yunet
+  skus:
+    wh_n150:
+      timeout: 30
+    wh_n300:
+      timeout: 30
+  owner_id: U0978501V8B # (CODEOWNERS @tvardhineniTT)
+  team: models
+- name: retinanet nightly
+  cmd: $PYTEST_CMD tests/nightly/single_card/retinanet
+  model: retinanet
+  skus:
+    wh_n150:
+      timeout: 30
+    wh_n300:
+      timeout: 30
+  owner_id: U056BK5U81E # Dalar Vartanians (CODEOWNERS @dvartaniansTT)
+  team: models
+- name: ufld_v2 nightly
+  cmd: $PYTEST_CMD tests/nightly/single_card/ufld_v2
+  model: ufld_v2
+  skus:
+    wh_n150:
+      timeout: 30
+    wh_n300:
+      timeout: 30
+  owner_id: U056BK5U81E # Dalar Vartanians (CODEOWNERS @dvartaniansTT)
+  team: models
+
+# Wormhole models with extended timeouts / special commands
+- name: stable_diffusion nightly
+  cmd: |
+    export TT_MM_THROTTLE_PERF=5
+    unset HF_HUB_OFFLINE
+    $PYTEST_CMD tests/nightly/single_card/stable_diffusion
+  model: stable_diffusion
+  skus:
+    wh_n150:
+      timeout: 45
+    wh_n300:
+      timeout: 45
+  owner_id: U06ECNVR0EN # Evan Smal (CODEOWNERS @esmalTT)
+  team: models
+
+# CIv2 wormhole tests
+- name: vadv2 nightly CIv2
+  cmd: $PYTEST_CMD tests/nightly/single_card/vadv2
+  model: vadv2
+  skus:
+    wh_n150_civ2:
+      timeout: 30
+    wh_n300_civ2:
+      timeout: 30
+  owner_id: U088413NP0Q # Ashai Reddy Ginuga
+  team: models

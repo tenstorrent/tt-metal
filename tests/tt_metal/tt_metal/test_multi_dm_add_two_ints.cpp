@@ -94,17 +94,21 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = KERNEL_0,
             .runtime_arg_values =
-                {{experimental::NodeCoord{0, 0}, {{"a", 1}, {"b", 2}}},
-                 {experimental::NodeCoord{1, 0}, {{"a", 1}, {"b", 2}}}}},
+                {{"a", {{experimental::NodeCoord{0, 0}, 1}, {experimental::NodeCoord{1, 0}, 1}}},
+                 {"b", {{experimental::NodeCoord{0, 0}, 2}, {experimental::NodeCoord{1, 0}, 2}}}}},
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = KERNEL_1,
             .runtime_arg_values =
-                {{experimental::NodeCoord{0, 0}, {{"a", 3}, {"b", 4}}},
-                 {experimental::NodeCoord{1, 0}, {{"a", 3}, {"b", 4}}}}},
+                {{"a", {{experimental::NodeCoord{0, 0}, 3}, {experimental::NodeCoord{1, 0}, 3}}},
+                 {"b", {{experimental::NodeCoord{0, 0}, 4}, {experimental::NodeCoord{1, 0}, 4}}}}},
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel = KERNEL_2, .runtime_arg_values = {{experimental::NodeCoord{0, 0}, {{"a", 5}, {"b", 6}}}}},
+            .kernel = KERNEL_2,
+            .runtime_arg_values =
+                experimental::MakeRuntimeArgsForSingleNode(experimental::NodeCoord{0, 0}, {{"a", 5}, {"b", 6}})},
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel = KERNEL_3, .runtime_arg_values = {{experimental::NodeCoord{1, 0}, {{"a", 7}, {"b", 8}}}}},
+            .kernel = KERNEL_3,
+            .runtime_arg_values =
+                experimental::MakeRuntimeArgsForSingleNode(experimental::NodeCoord{1, 0}, {{"a", 7}, {"b", 8}})},
     };
     experimental::SetProgramRunArgs(program, params);
 

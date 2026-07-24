@@ -134,7 +134,7 @@ tt::tt_metal::ProgramDescriptor SliceTileProgramFactory::create_descriptor(
     reader_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     reader_kernel_desc.core_ranges = all_cores;
     reader_kernel_desc.compile_time_args = reader_compile_time_args;
-    reader_kernel_desc.named_compile_time_args = {{"cb_in", src0_cb_index}};
+    reader_kernel_desc.named_compile_time_args = {{"dfb_id_in", src0_cb_index}};
     reader_kernel_desc.runtime_args = std::move(reader_runtime_args);
     tt::tt_metal::KernelDescriptor::RTArgList reader_common;
     reader_common.reserve(1 + (num_dims * 2));
@@ -156,10 +156,12 @@ tt::tt_metal::ProgramDescriptor SliceTileProgramFactory::create_descriptor(
     writer_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel_desc.core_ranges = all_cores;
     writer_kernel_desc.compile_time_args = writer_compile_time_args;
-    writer_kernel_desc.named_compile_time_args = {{"cb_out", src0_cb_index}};
+    writer_kernel_desc.named_compile_time_args = {{"dfb_id_out", src0_cb_index}};
     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 
-    // Writer per-core runtime args: [dst_addr, num_tiles, start_id]
+    // Writer per-core runtime args: [dst_addr, num_tiles, start_id].
+    // dst_buffer is declared as a buffer binding at arg 0, so the framework patches its
+    // base address on program-cache hits instead of rebuilding the descriptor.
     num_tiles_written = 0;
     for (const auto& core : corerange_to_cores(all_cores)) {
         uint32_t num_tiles_per_core;

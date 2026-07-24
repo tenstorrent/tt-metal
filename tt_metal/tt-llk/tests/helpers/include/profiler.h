@@ -90,11 +90,15 @@ constexpr std::uint32_t BUFFERS_START = BUFFERS_END - (NUM_CORES * BUFFER_LENGTH
 constexpr std::uint32_t BARRIER_END   = BUFFERS_START;
 constexpr std::uint32_t BARRIER_START = BARRIER_END - (NUM_CORES * sizeof(std::uint32_t));
 
+constexpr std::uint32_t EPOCH_ADDR = BARRIER_START - sizeof(std::uint32_t);
+
 using barrier_ptr_t = volatile std::uint32_t (*)[NUM_CORES];
 using buffer_ptr_t  = std::uint32_t (*)[BUFFER_LENGTH];
+using epoch_ptr_t   = volatile std::uint32_t*;
 
 extern barrier_ptr_t barrier_ptr;
 extern buffer_ptr_t buffer;
+extern epoch_ptr_t epoch_ptr;
 extern std::uint32_t write_idx;
 extern std::uint32_t open_zone_cnt;
 
@@ -118,12 +122,61 @@ __attribute__((always_inline)) inline void sync_threads()
     }
 }
 
+// Cross-thread actor-release rendezvous used at each zone: all announce arrival, the actor waits for
+// all, runs action() then bumps epoch to release. Actor spins only before action(), so it never lands
+// inside the measured window. Compiler fences at entry/exit keep surrounding work from reordering
+// across the rendezvous.
+template <typename Action>
+__attribute__((always_inline)) inline void sync_point(bool is_actor, Action action)
+{
+    ckernel::fence_compiler();
+
+    auto& barrier = *barrier_ptr;
+
+    // Read epoch BEFORE announcing arrival (else the actor could bump it first and a waiter deadlocks).
+    const std::uint32_t my_epoch = *epoch_ptr;
+
+    const std::uint32_t gen = barrier[TRISC_ID] + 1;
+    barrier[TRISC_ID]       = gen;
+
+    if (is_actor)
+    {
+        for (std::uint32_t i = 0; i < NUM_CORES; ++i)
+        {
+            if (i == TRISC_ID)
+            {
+                continue;
+            }
+            // Lock-step: a peer cannot advance past this generation before the actor releases it, so
+            // wait for exact equality — also wrap-safe if the 32-bit generation ever rolls over.
+            while (barrier[i] != gen)
+            {
+                ckernel::invalidate_data_cache();
+            }
+        }
+        action();                  // arm / freeze / no-op — actor never spins AFTER this
+        *epoch_ptr = my_epoch + 1; // single-writer release
+    }
+    else
+    {
+        while (*epoch_ptr == my_epoch)
+        {
+            ckernel::invalidate_data_cache();
+        }
+    }
+
+    ckernel::fence_compiler();
+}
+
 __attribute__((always_inline)) inline void reset()
 {
     barrier_ptr   = reinterpret_cast<barrier_ptr_t>(BARRIER_START);
     buffer        = reinterpret_cast<buffer_ptr_t>(BUFFERS_START);
+    epoch_ptr     = reinterpret_cast<epoch_ptr_t>(EPOCH_ADDR);
     write_idx     = 0;
     open_zone_cnt = 0;
+
+    *epoch_ptr = 0;
 
     memset(buffer[TRISC_ID], 0, BUFFER_LENGTH * sizeof(buffer[TRISC_ID][0]));
 }

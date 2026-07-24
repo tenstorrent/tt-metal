@@ -305,12 +305,13 @@ ExpRingJointSDPAResultSpec ExpRingJointSDPADeviceOperation::compute_output_specs
     stats_shape[2] = (input.padded_shape()[2] + joint_padded_seq) * 2;
 
     return {
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             input.logical_shape(),
             TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             joint_output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
-        TensorSpec(stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
+        tt::tt_metal::TensorSpec(
+            stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
 }
 
 ExpRingJointSDPAResult ExpRingJointSDPADeviceOperation::create_output_tensors(
@@ -370,6 +371,56 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> ExpRingJointSDPADevi
         B, NQH, cat_Sq, cat_Sk, DH, DV, false, fidelity, grid.x * grid.y);
 
     return operation::OpPerformanceModelGeneral<Tensors>(input_tensors, output_tensors, ideal_cycles);
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> ExpRingJointSDPADeviceOperation::get_dynamic_runtime_args(
+    const ExpRingJointSDPAParams& operation_attributes,
+    const ExpRingJointSDPAInputs& tensor_args,
+    ExpRingJointSDPAResult& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Re-apply the hash-excluded per-link GlobalSemaphore addresses to the cached program on every
+    // cache hit (the non-Buffer analog of the BufferBinding fast path). The factory bakes these same
+    // slots on the cache-miss build; both paths use the shared exp_ring_joint_sdpa_dynamic constants so
+    // the slot layout cannot drift. Semaphore addresses are mesh-uniform, so they are coord-independent
+    // (mesh_dispatch_coordinate is unused).
+    namespace dyn = exp_ring_joint_sdpa_dynamic;
+
+    // Recompute the SDPA worker grid exactly as build_exp_ring_joint_sdpa_program_descriptor() does.
+    auto* mesh_device = tensor_args.input_q.device();
+    const auto device_grid = mesh_device->compute_with_storage_grid_size();
+    const CoreCoord user_grid =
+        operation_attributes.program_config.has_value() ? operation_attributes.program_config->compute_with_storage_grid_size : device_grid;
+    const CoreCoord sdpa_grid = {user_grid.x - 1, user_grid.y};
+    const uint32_t num_sdpa_cores = sdpa_grid.x * sdpa_grid.y;
+
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    dynamic_args.reserve(static_cast<std::size_t>(num_sdpa_cores) * (operation_attributes.num_links + 1));
+    for (uint32_t i = 0; i < num_sdpa_cores; ++i) {
+        const CoreCoord core = {i % sdpa_grid.x, i / sdpa_grid.x};
+
+        // Reader kernel: per-link semaphore addresses on every SDPA core.
+        for (uint32_t lnk = 0; lnk < operation_attributes.num_links; ++lnk) {
+            dynamic_args.push_back(
+                {dyn::kReaderKernelIdx,
+                 core,
+                 dyn::kReaderSemaphoreArgBase + lnk,
+                 static_cast<uint32_t>(operation_attributes.semaphore[lnk].address())});
+        }
+
+        // Fabric-writer kernel: out_ready_sem_addr on the two MUX-writer columns. num_links is
+        // TT_FATAL-fixed to 2 (see validate_on_program_cache_miss), so link_in_range always holds in the
+        // factory and out_ready_sem_addr is present on every MUX-writer core — mirror that here.
+        const bool is_mux_writer = (core.x >= sdpa_grid.x - 2);
+        if (is_mux_writer) {
+            const uint32_t link = (core.x == sdpa_grid.x - 1) ? 1u : 0u;
+            dynamic_args.push_back(
+                {dyn::kWriterFabricKernelIdx,
+                 core,
+                 dyn::kWriterFabricOutReadySemArg,
+                 static_cast<uint32_t>(operation_attributes.semaphore[link].address())});
+        }
+    }
+    return dynamic_args;
 }
 
 }  // namespace ttnn::prim

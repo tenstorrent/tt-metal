@@ -16,11 +16,11 @@ void kernel_main() {
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
     constexpr auto dst_args = TensorAccessorArgs<1>();
 
-    // Get page size from CB interface (works for both TILE and ROW_MAJOR layouts)
-    const uint32_t page_bytes = get_local_cb_interface(cb_id_out).fifo_page_size;
-
     Noc noc;
     DataflowBuffer cb(cb_id_out);
+    // QSR: read page size from the DFB object (get_local_cb_interface().fifo_page_size is stale for Metal-2.0 DFBs);
+    // must be after cb construction
+    const uint32_t page_bytes = cb.get_entry_size();
 
 #ifdef OUT_SHARDED
     cb.wait_front(num_pages);

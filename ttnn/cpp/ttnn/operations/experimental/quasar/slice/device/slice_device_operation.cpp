@@ -27,9 +27,10 @@ inline __attribute__((always_inline)) uint32_t get_upper_dims_compressed(const t
 inline __attribute__((always_inline)) uint32_t
 get_upper_start_offset(const ttnn::Shape& shape, Layout layout, const ttnn::Shape& slice_start) {
     // offset for every dim except last 2
-    uint32_t start_offset = 0;
+    // 64-bit: shape.volume() (element count) overflows uint32 for tensors > 4 GB. (Port of ed33d897725.)
+    uint64_t start_offset = 0;
 
-    uint32_t num_pages = shape.volume();
+    uint64_t num_pages = shape.volume();
     if (layout == Layout::TILE) {
         num_pages /= tt::constants::TILE_HW;
     } else {
@@ -38,13 +39,13 @@ get_upper_start_offset(const ttnn::Shape& shape, Layout layout, const ttnn::Shap
     }
 
     for (uint32_t dim_outer = 0; dim_outer < shape.rank() - 2; dim_outer++) {
-        uint32_t compressed_dims = 1;
+        uint64_t compressed_dims = 1;
         for (uint32_t dim_inner = 0; dim_inner <= dim_outer; dim_inner++) {
             compressed_dims *= shape[dim_inner];
         }
         start_offset += (num_pages / compressed_dims) * slice_start[dim_outer];
     }
-    return start_offset;
+    return static_cast<uint32_t>(start_offset);  // page index, fits uint32
 }
 
 inline __attribute__((always_inline)) uint32_t
@@ -246,7 +247,7 @@ SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_s
             tt::tt_metal::MemoryConfig(output_mem_config.memory_layout(), output_mem_config.buffer_type(), derived);
     }
 
-    return ttnn::TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_tensor_shape,
         tt::tt_metal::TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), output_mem_config));
 }
@@ -292,6 +293,60 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
     }
     // Layout::TILE — TensorAccessor at tile granularity handles all sharded buffer types natively.
     return SliceTileProgramFactory{};
+}
+
+// Port of tt-metal e517beb3f41 (#47602): the default program hash (boost::hash_combine style) has weak
+// distribution for small-integer shape sequences, causing false cache hits when shapes differ but
+// collide -> TT_FATAL on back-to-back slices with differing shapes. Mix in full input/output specs and
+// slice params so distinct invocations get distinct keys.
+ttsl::hash::hash_t SliceDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    auto factory = select_program_factory(operation_attributes, tensor_args);
+    auto hash = tt::tt_metal::operation::hash_operation<SliceDeviceOperation>(
+        operation_attributes.slice_start,
+        operation_attributes.slice_end,
+        operation_attributes.step,
+        operation_attributes.use_tensor_args,
+        operation_attributes.slice_dim,
+        operation_attributes.num_devices,
+        operation_attributes.output_mem_config,
+        operation_attributes.sub_core_grids,
+        factory.index(),
+        tensor_args.start_tensor.has_value());
+
+    const auto& input = tensor_args.input;
+    hash = ttsl::hash::hash_objects(
+        hash,
+        input.logical_shape().rank(),
+        input.logical_shape(),
+        input.padded_shape(),
+        input.layout(),
+        input.dtype(),
+        input.memory_config());
+
+    if (tensor_args.start_tensor.has_value()) {
+        const auto& st = tensor_args.start_tensor.value();
+        hash = ttsl::hash::hash_objects(
+            hash,
+            st.logical_shape().rank(),
+            st.logical_shape(),
+            st.padded_shape(),
+            st.layout(),
+            st.dtype(),
+            st.memory_config());
+    }
+
+    const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    hash = ttsl::hash::hash_objects(
+        hash,
+        output_spec.logical_shape().rank(),
+        output_spec.logical_shape(),
+        output_spec.padded_shape(),
+        output_spec.layout(),
+        output_spec.data_type(),
+        output_spec.memory_config());
+
+    return hash;
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SliceDeviceOperation::tensor_return_value_t>

@@ -9,7 +9,7 @@
 
 namespace shard_builder {
 
-uint32_t get_sharding_core_count(const tt::tt_metal::Tensor& t) {
+uint32_t get_sharding_core_count(const ttnn::Tensor& t) {
     uint32_t core_count = 0;
     const auto core_ranges = t.buffer()->shard_spec().grid().ranges();
     for (const auto& core_range : core_ranges) {
@@ -23,7 +23,7 @@ uint32_t get_sharding_core_count(const tt::tt_metal::Tensor& t) {
     return core_count;
 }
 
-std::vector<CoreCoord> get_shard_cores(const tt::tt_metal::Tensor& t) {
+std::vector<CoreCoord> get_shard_cores(const ttnn::Tensor& t) {
     std::vector<CoreCoord> coordinates;
     const tt::tt_metal::IDevice* device = t.device();
     struct ShardSpec shard_spec = t.shard_spec().value();
@@ -63,7 +63,7 @@ std::vector<CoreCoord> get_shard_cores(const tt::tt_metal::Tensor& t) {
     return coordinates;
 }
 
-std::vector<uint32_t> generate_run_time_args(const tt::tt_metal::Tensor& t) {
+std::vector<uint32_t> generate_run_time_args(const ttnn::Tensor& t) {
     std::vector<uint32_t> args;
     const tt::tt_metal::IDevice* device = t.device();
     struct ShardSpec shard_spec = t.shard_spec().value();
@@ -121,12 +121,12 @@ std::vector<uint32_t> generate_run_time_args(const tt::tt_metal::Tensor& t) {
     return args;
 }
 
-void extend_sharding_run_time_args(const tt::tt_metal::Tensor& t, std::vector<uint32_t>& args) {
+void extend_sharding_run_time_args(const ttnn::Tensor& t, std::vector<uint32_t>& args) {
     const auto& new_args = generate_run_time_args(t);
     std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
 }
 
-std::vector<uint32_t> generate_compile_time_args(const tt::tt_metal::Tensor& t) {
+std::vector<uint32_t> generate_compile_time_args(const ttnn::Tensor& t) {
     std::vector<uint32_t> args;
     TT_ASSERT(t.is_sharded());
     TT_FATAL(
@@ -168,7 +168,7 @@ std::vector<uint32_t> generate_compile_time_args(const tt::tt_metal::Tensor& t) 
     return args;
 }
 
-void extend_sharding_compile_time_args(const tt::tt_metal::Tensor& t, std::vector<uint32_t>& args) {
+void extend_sharding_compile_time_args(const ttnn::Tensor& t, std::vector<uint32_t>& args) {
     const auto& new_args = generate_compile_time_args(t);
     std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
 }

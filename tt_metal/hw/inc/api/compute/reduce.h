@@ -152,9 +152,51 @@ ALWI void reduce_tile(
     MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(icb, icb_scaler, idst)));
     UNPACK((llk_unpack_AB_reduce<reduce_type, reduce_dim>(icb, icb_scaler, itile, itile_scaler)));
 #else
-    MATH((llk_math_reduce(idst)));
+    MATH((llk_math_reduce<reduce_type, reduce_dim>(icb, icb_scaler, idst)));
     UNPACK((llk_unpack_AB_reduce(icb, icb_scaler, itile, itile_scaler)));
 #endif
+}
+
+// clang-format off
+/**
+ * Performs a reduction operation *B = reduce(A)* on `ntiles` consecutive tiles from the input CB, writing each
+ * partial result to a consecutive DST register slot. This is the uniform block entry point for the reduce op
+ * group: its body is a simple loop over `reduce_tile`, so it inherits `reduce_tile`'s semantics and requires the
+ * same initialization (`reduce_init`) to have been called first. The scaling-factor tile (`itile_scaler`) is reused
+ * for every tile in the block. The DST register buffer must be in acquired state via *acquire_dst* call.
+ *
+ * NOTE: The loop implementation is transitional. In the future this for-loop must be folded into a
+ * hardware MOP / REPLAY buffer (as is being done for Quasar) so the whole block issues as a single
+ * packed op; the blocking then lives in llk-lib without changing this signature. Tracked under the
+ * Compute API Split effort (tt-metal#35739); the per-op push-down lands in tt-metal#47478.
+ * NOTE: Before the next operation is initialized, the `reduce_uninit` function must be called to reset the packer
+ * state to default.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name         | Description                                                      | Type      | Valid Range                                    | Required |
+ * |------------|--------------|------------------------------------------------------------------|-----------|------------------------------------------------|----------|
+ * | Template   | reduce_type  | The type of reduce op - sum, average or maximum                  | PoolType  | {SUM, AVG, MAX}                                | True     |
+ * | Template   | reduce_dim   | The dimension of reduce op - row, column or both                 | ReduceDim | {REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR}        | True     |
+ * | Function   | icb          | The identifier of the circular buffer (CB) containing operand A  | uint32_t  | 0 to 31                                        | True     |
+ * | Function   | icb_scaler   | CB holding scaling factors (see reduce_init/reduce_tile)         | uint32_t  | 0 to 31                                        | True     |
+ * | Function   | start_itile  | The index of the first tile within the first CB                  | uint32_t  | Must be less than the size of the CB           | True     |
+ * | Function   | itile_scaler | The index of the tile within the scaling factor CB               | uint32_t  | Must be less than the size of the CB           | True     |
+ * | Function   | start_idst   | The index of the first tile in DST REG for the result            | uint32_t  | Must be less than the acquired size of DST REG | True     |
+ * | Function   | ntiles       | The number of consecutive tiles to reduce                        | uint32_t  | start_idst + ntiles <= acquired DST REG size   | True     |
+ */
+// clang-format on
+template <PoolType reduce_type, ReduceDim reduce_dim>
+ALWI void reduce_block(
+    std::uint32_t icb,
+    std::uint32_t icb_scaler,
+    std::uint32_t start_itile,
+    std::uint32_t itile_scaler,
+    std::uint32_t start_idst,
+    std::uint32_t ntiles) {
+    for (std::uint32_t i = 0; i < ntiles; ++i) {
+        reduce_tile<reduce_type, reduce_dim>(icb, icb_scaler, start_itile + i, itile_scaler, start_idst + i);
+    }
 }
 
 // clang-format off
@@ -195,8 +237,7 @@ ALWI void reduce_tile_math(std::uint32_t idst, std::uint32_t num_faces = 4) {
         (num_faces <= MAX_NUM_FACES_C_DIM) ? static_cast<std::uint8_t>(num_faces) : MAX_NUM_FACES_C_DIM};
     MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(idst, tensor_shape)));
 #else
-    LLK_ASSERT(num_faces == 4, "non-default num_faces not supported on Quasar");
-    MATH((llk_math_reduce(idst)));
+    MATH((llk_math_reduce<reduce_type, reduce_dim>(idst, tensor_shape)));
 #endif
 }
 
@@ -217,13 +258,7 @@ ALWI void reduce_tile_math(std::uint32_t idst, const ckernel::TensorShape& tenso
 #ifndef ARCH_QUASAR
     MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(idst, tensor_shape)));
 #else
-    LLK_ASSERT(
-        tensor_shape.face_r_dim == DEFAULT_TENSOR_SHAPE.face_r_dim &&
-            tensor_shape.face_c_dim == DEFAULT_TENSOR_SHAPE.face_c_dim &&
-            tensor_shape.num_faces_r_dim == DEFAULT_TENSOR_SHAPE.num_faces_r_dim &&
-            tensor_shape.num_faces_c_dim == DEFAULT_TENSOR_SHAPE.num_faces_c_dim,
-        "non-default tensor_shape not supported on Quasar");
-    MATH((llk_math_reduce(idst)));
+    MATH((llk_math_reduce<reduce_type, reduce_dim>(idst, tensor_shape)));
 #endif
 }
 

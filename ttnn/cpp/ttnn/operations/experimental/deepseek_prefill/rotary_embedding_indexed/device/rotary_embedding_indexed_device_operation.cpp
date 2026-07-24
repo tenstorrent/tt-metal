@@ -156,7 +156,7 @@ void RotaryEmbeddingIndexedDeviceOperation::validate_on_program_cache_hit(
 RotaryEmbeddingIndexedDeviceOperation::spec_return_value_t RotaryEmbeddingIndexedDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         input.logical_shape(),
         tt::tt_metal::TensorLayout(input.dtype(), tt::tt_metal::PageConfig(input.layout()), args.output_mem_config));
 }

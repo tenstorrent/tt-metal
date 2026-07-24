@@ -35,7 +35,7 @@ import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Union
+from typing import Generator, Union
 from urllib.parse import urlparse, urlunparse
 
 from loguru import logger
@@ -64,6 +64,91 @@ else:
     )
 
 SUPPORTED_REPORT_VERSION = 1
+
+
+def run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
+    """Pytest fixture for automatic graph capture and report generation.
+
+    This fixture is used to automatically generate the graph report when the
+    `enable_graph_report` or `enable_comparison_mode` configuration options are set.
+
+    This function defines the body of the pytest fixture, but it is not a pytest fixture
+    itself. To be used, it must be returned from a pytest fixture definition that is decorated
+    with `@pytest.fixture`.
+    """
+    import ttnn
+
+    report_path = getattr(ttnn.CONFIG, "report_path", None)
+    report_name = getattr(ttnn.CONFIG, "report_name", None)
+    if report_path is None or not report_name or str(report_name).strip() == "":
+        yield
+        return
+
+    if ttnn.graph.is_graph_capture_active():
+        yield
+        return
+
+    enable_graph_report = getattr(ttnn.CONFIG, "enable_graph_report", False)
+    enable_comparison_mode = getattr(ttnn.CONFIG, "enable_comparison_mode", False)
+    report_path = Path(report_path)
+    enable_detailed_buffer_report = getattr(ttnn.CONFIG, "enable_detailed_buffer_report", False)
+
+    # Ensure we are torn down before device fixtures: request whichever device
+    # the test uses so pytest tears us down first, then the device.
+    if "mesh_device" in request.fixturenames:
+        request.getfixturevalue("mesh_device")
+    if "device" in request.fixturenames:
+        request.getfixturevalue("device")
+
+    if enable_graph_report:
+        if enable_detailed_buffer_report:
+            ttnn.graph.enable_detailed_buffer_tracing()
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+
+    try:
+        yield
+    finally:
+        report_path.mkdir(parents=True, exist_ok=True)
+
+        if enable_graph_report:
+            if not ttnn.graph.is_graph_capture_active():
+                logger.warning("Graph capture was already stopped (device may have been closed); skipping report.")
+            else:
+                if ttnn.distributed_context_is_initialized():
+                    rank = int(ttnn.distributed_context_get_rank())
+                    world_size = int(ttnn.distributed_context_get_size())
+                else:
+                    rank, world_size = 0, 1
+                if world_size > 1:
+                    json_path = report_path / f"graph_capture_{rank+1}_of_{world_size}.json"
+                else:
+                    json_path = report_path / "graph_capture.json"
+                ttnn.graph.end_graph_capture_to_file(str(json_path))
+                if ttnn.distributed_context_is_initialized():
+                    ttnn.distributed_context_barrier()
+                if not ttnn.distributed_context_is_initialized() or int(ttnn.distributed_context_get_rank()) == 0:
+                    import_report(report_path, report_path)
+                    (report_path / "graph_capture.json").unlink(missing_ok=True)
+                    for p in sorted(report_path.glob("graph_capture_*_of_*.json")):
+                        p.unlink(missing_ok=True)
+                if ttnn.distributed_context_is_initialized():
+                    ttnn.distributed_context_barrier()
+
+            if enable_detailed_buffer_report:
+                ttnn.graph.disable_detailed_buffer_tracing()
+        elif enable_comparison_mode and ttnn.graph.has_comparison_records():
+            ttnn.graph.flush_comparison_records_to_db(report_path)
+
+        if ttnn.distributed_context_is_initialized():
+            rank = int(ttnn.distributed_context_get_rank())
+            world_size = int(ttnn.distributed_context_get_size())
+        else:
+            rank, world_size = 0, 1
+        if world_size > 1:
+            config_path = report_path / f"config_{rank+1}_of_{world_size}.json"
+        else:
+            config_path = report_path / "config.json"
+        ttnn.save_config_to_json_file(config_path)
 
 
 def sanitize_git_remote_url(url: str) -> str:

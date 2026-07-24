@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -30,6 +31,9 @@ void kernel_main() {
     uint32_t in1_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
     uint32_t in1_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(15));
     uint32_t in1_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
+    Semaphore<> in1_sender_sem(get_compile_time_arg_val(14));
+    Semaphore<> in1_receiver_sem(get_compile_time_arg_val(15));
+    Semaphore<> in1_valid_sem(get_compile_time_arg_val(16));
     constexpr uint32_t is_output_writer = get_compile_time_arg_val(17);
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
     constexpr uint32_t N_chunks = get_compile_time_arg_val(19);
@@ -164,13 +168,8 @@ void kernel_main() {
     }
 #endif
 
-    volatile tt_l1_ptr uint32_t* in1_valid_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_valid_semaphore_addr);
-    *(in1_valid_semaphore_addr_ptr) = VALID;
-    volatile tt_l1_ptr uint32_t* in1_receiver_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_receiver_semaphore_addr);
-    volatile tt_l1_ptr uint32_t* in1_sender_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_sender_semaphore_addr);
+    in1_valid_sem.set(VALID);
+
     const uint64_t in1_sender_semaphore_noc_addr =
         get_noc_addr(in1_sender_noc_x, in1_sender_noc_y, in1_sender_semaphore_addr);
 
@@ -288,9 +287,9 @@ void kernel_main() {
                         n_tile,
                         n_tile_end);
                 } else {
-                    noc_semaphore_set(in1_receiver_semaphore_addr_ptr, INVALID);
+                    in1_receiver_sem.set(INVALID);
                     noc_semaphore_inc(in1_sender_semaphore_noc_addr, 1);
-                    noc_semaphore_wait(in1_receiver_semaphore_addr_ptr, VALID);
+                    in1_receiver_sem.wait(VALID);
                 }
 
                 // Critical to performance for sender to push data to compute before mcasting
@@ -298,8 +297,8 @@ void kernel_main() {
                 cb_in1.push_back(in1_block_num_tiles);
 
                 if (!is_sink_core) {
-                    noc_semaphore_wait(in1_sender_semaphore_addr_ptr, 1);
-                    noc_semaphore_set(in1_sender_semaphore_addr_ptr, 0);
+                    in1_sender_sem.wait(1);
+                    in1_sender_sem.set(0);
 
                     /**
                      * in1 is K_block_tiles x N_block_tiles. When N block is partial, we don't need to write the

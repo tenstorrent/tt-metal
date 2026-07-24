@@ -4,7 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/bcast.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t onetile = 1;
@@ -12,9 +12,9 @@ void kernel_main() {
     constexpr uint32_t cb_b_id = tt::CBIndex::c_1;
     constexpr uint32_t cb_out_id = tt::CBIndex::c_16;
 
-    CircularBuffer cb_a(cb_a_id);
-    CircularBuffer cb_b(cb_b_id);
-    CircularBuffer cb_out(cb_out_id);
+    DataflowBuffer dfb_a(cb_a_id);
+    DataflowBuffer dfb_b(cb_b_id);
+    DataflowBuffer dfb_out(cb_out_id);
 
     uint32_t B = get_arg_val<uint32_t>(0);
     uint32_t Ht = get_arg_val<uint32_t>(1);
@@ -27,23 +27,23 @@ void kernel_main() {
                 // For this bcast-h op the reader will wrap the RHS source tile around at Wt
                 // so here we just linearly read 2 parallel arrays and apply bcast op per tile
                 // (bcast_h propagates the op down the H dimension, so it can be though of as bcast to H)
-                cb_b.wait_front(onetile);
-                cb_a.wait_front(onetile);
+                dfb_b.wait_front(onetile);
+                dfb_a.wait_front(onetile);
 
                 tile_regs_acquire();
                 BCAST_OP<BroadcastType::ROW>(cb_a_id, cb_b_id, 0, 0, 0);
                 tile_regs_commit();
 
-                cb_a.pop_front(onetile);
-                cb_b.pop_front(onetile);
+                dfb_a.pop_front(onetile);
+                dfb_b.pop_front(onetile);
 
-                cb_out.reserve_back(onetile);
+                dfb_out.reserve_back(onetile);
 
                 tile_regs_wait();
                 pack_tile(0, cb_out_id);
                 tile_regs_release();
 
-                cb_out.push_back(onetile);
+                dfb_out.push_back(onetile);
             }
         }
     }

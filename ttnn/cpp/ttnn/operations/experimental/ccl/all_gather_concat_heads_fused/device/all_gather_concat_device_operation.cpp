@@ -67,7 +67,7 @@ AllGatherConcatDeviceOperation::spec_return_value_t AllGatherConcatDeviceOperati
     auto hidden_dim = num_heads * head_dim;
 
     Shape output_shape({sequence_length, 1, batch, hidden_dim});
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::Layout::TILE, args.output_mem_config));
 }

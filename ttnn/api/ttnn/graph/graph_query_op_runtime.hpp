@@ -42,7 +42,7 @@ static constexpr size_t WARMUP_TRACE_EXECUTIONS = 5;
  */
 template <typename Op, typename... Args>
 auto capture_op_trace(Op op, MeshDevice* device, Args&&... args) {
-    // helper lambda to transform TensorSpec/DistributedTensorSpec to DeviceTensor
+    // helper lambda to transform tt::tt_metal::TensorSpec/DistributedTensorSpec to DeviceTensor
     auto transform_arg = [device](auto&& arg) {
         if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, DistributedTensorSpec>) {
             return create_device_tensor(arg.tensor_spec, device, arg.tensor_topology);
@@ -55,11 +55,11 @@ auto capture_op_trace(Op op, MeshDevice* device, Args&&... args) {
                 return create_device_tensor(item.tensor_spec, device, item.tensor_topology);
             });
             return result;
-        } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, TensorSpec>) {
+        } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, tt::tt_metal::TensorSpec>) {
             return create_device_tensor(arg, device);
-        } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::optional<TensorSpec>>) {
+        } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::optional<tt::tt_metal::TensorSpec>>) {
             return arg ? std::optional<Tensor>(create_device_tensor(*arg, device)) : std::nullopt;
-        } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::vector<TensorSpec>>) {
+        } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::vector<tt::tt_metal::TensorSpec>>) {
             std::vector<Tensor> result(arg.size());
             std::transform(arg.begin(), arg.end(), result.begin(), [device](auto&& item) {
                 return create_device_tensor(item, device);

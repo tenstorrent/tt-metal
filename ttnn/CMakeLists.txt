@@ -96,6 +96,14 @@ add_library(TTNN::Core ALIAS ttnn_core)
 TT_ENABLE_UNITY_BUILD(ttnn_core)
 
 target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
+
+# Descriptor cache-hit fast-path parity check (opt-in via -DENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK).
+# The #ifdef lives in ttnn/api/ttnn/mesh_device_operation_adapter.hpp, so scope the definition to the
+# ttnn target (PUBLIC so header consumers see it consistently) instead of defining it globally.
+if(ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK)
+    target_compile_definitions(ttnn_core PUBLIC TT_DESCRIPTOR_PATCHING_PARITY_CHECK)
+endif()
+
 tt_reuse_precompile_headers(ttnn_core TTNN::PCHFull)
 
 set(TENSOR_FLATBUFFER_SCHEMAS
@@ -207,7 +215,7 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE ttnn_kernels cpp/ttnn/operations/copy/typecast/device/kernels/*)
+file(GLOB_RECURSE ttnn_kernels cpp/ttnn/operations/copy/typecast/device/kernels/*.cpp)
 target_sources(
     ttnncpp
     PUBLIC
@@ -422,8 +430,7 @@ if(WITH_PYTHON_BINDINGS)
         TARGET layer_completion_ext
         POST_BUILD
         COMMAND
-            ${CMAKE_COMMAND} -E copy_if_different
-            "$<TARGET_FILE:layer_completion_ext>"
+            ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:layer_completion_ext>"
             "${PROJECT_SOURCE_DIR}/models/demos/common/prefill/runners/pipelined_prefill/$<TARGET_FILE_NAME:layer_completion_ext>"
     )
 
@@ -432,7 +439,7 @@ if(WITH_PYTHON_BINDINGS)
             layer_completion_ext
         LIBRARY
             DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT ttnn-runtime
+            COMPONENT ttnn-runtime
     )
 
     if(TT_INSTALL)

@@ -223,6 +223,7 @@ FDKernel* FDKernel::Generate(
                 descriptor,
                 dispatch_core_manager,
                 get_control_plane,
+                get_dispatch_query_manager,
                 get_reads_dispatch_cores);
         case RETURN_FABRIC_MUX:
             return new tt::tt_metal::RelayMux(
@@ -236,6 +237,7 @@ FDKernel* FDKernel::Generate(
                 descriptor,
                 dispatch_core_manager,
                 get_control_plane,
+                get_dispatch_query_manager,
                 get_reads_dispatch_cores);
         default: TT_FATAL(false, "Unrecognized dispatch kernel type: {}.", type); return nullptr;
     }

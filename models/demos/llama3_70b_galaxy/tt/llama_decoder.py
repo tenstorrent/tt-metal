@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
+from loguru import logger
 from models.demos.llama3_70b_galaxy.tt.llama_attention import TtLlamaAttention
 from models.demos.llama3_70b_galaxy.tt.llama_mlp import TtLlamaMLP
 from models.common.rmsnorm import RMSNorm
@@ -48,6 +49,7 @@ class TtTransformerBlock(LightweightModule):
         self.prefetcher_setup = prefetcher_setup
         self.tt_ccl = tt_ccl
         self.unfuse_res_add = args.unfuse_res_add
+        self.blackhole_no_prefetcher = args.blackhole_no_prefetcher
 
         self.attention = TtLlamaAttention(
             mesh_device=mesh_device,
@@ -73,6 +75,14 @@ class TtTransformerBlock(LightweightModule):
             prefetcher_setup=prefetcher_setup,
             tt_ccl=tt_ccl,
         )
+        if self.blackhole_no_prefetcher:
+            attn_norm_output_memcfg = (
+                self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"]
+                if layer_num == 0
+                else self.model_config["DECODE_RESIDUAL_MEMCFG"]
+            )
+        else:
+            attn_norm_output_memcfg = self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"]
         self.attention_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
@@ -85,11 +95,12 @@ class TtTransformerBlock(LightweightModule):
                 is_distributed=self.args.is_distributed_norm,
                 sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
-                output_mem_config=self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"],
+                output_mem_config=attn_norm_output_memcfg,
             ),
             args,
             tt_ccl=tt_ccl,
             ccl_topology=self.model_config["CCL_TOPOLOGY"],
+            use_sharded_decode=not self.blackhole_no_prefetcher,
         )
         self.ff_norm = DistributedNorm(
             RMSNorm(
@@ -108,6 +119,7 @@ class TtTransformerBlock(LightweightModule):
             args,
             tt_ccl=tt_ccl,
             ccl_topology=self.model_config["CCL_TOPOLOGY"],
+            use_sharded_decode=not self.blackhole_no_prefetcher,
         )
 
     def prefetch(self, prefetcher_setup, tt_ccl):
@@ -136,9 +148,24 @@ class TtTransformerBlock(LightweightModule):
         # x contains input in layer 0 and ffout of previous layer thereafter, x should be dealocated
         # h contains 0 in layer 0 and h_prev+x_prev+attn_out_prev thereafter, h is persistent
         skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
-        assert (
-            x.memory_config() == skip_mem_cfg
-        ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
+        # On the BH no-prefetch path the residual stream defaults to bf8, so it is re-quantized on
+        # every layer's residual add. Over 64 layers that accumulated bf8 error degrades the final
+        # hidden state (prefill body PCC 0.999 @ 3L -> 0.958 @ 64L), which is too low for the LM-head
+        # argmax to pick coherent tokens. Keep the residual adds in bf16 for both prefill and decode
+        # so the running sum is not re-quantized each layer. The 70B prefetcher path is unchanged
+        # (res_dtype=None -> op default).
+        res_dtype = ttnn.bfloat16 if self.blackhole_no_prefetcher else None
+        if mode == "decode":
+            # In no-prefetcher Blackhole demo runs, layer-0 decode input can remain DRAM/interleaved.
+            # Let downstream norm path handle this instead of hard-failing at the boundary check.
+            if self.args.use_prefetcher:
+                assert (
+                    x.memory_config() == skip_mem_cfg
+                ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
+        else:
+            assert (
+                x.memory_config() == skip_mem_cfg
+            ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
         # Norms take fractured inputs and output replicated across devices
         # attn_in_sharded=norm(x+h), h = x+h happens implicitly
         if self.layer_num == 0 or mode == "prefill":
@@ -151,7 +178,7 @@ class TtTransformerBlock(LightweightModule):
         else:
             # In subsequent Layers we take the h tensor from before and modify it in place
             if self.unfuse_res_add:
-                h = ttnn.add(x, h)
+                h = ttnn.add(x, h, dtype=res_dtype)
                 attn_in_sharded, _ = self.attention_norm(h, None, mode)
             else:
                 attn_in_sharded, _ = self.attention_norm(x, h, mode)
@@ -170,21 +197,39 @@ class TtTransformerBlock(LightweightModule):
             batch_size=batch_size,
         )
         if mode == "prefill":
-            h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)  # bfloat8_b
+            h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=res_dtype)  # bf16 on BH no-prefetch
             x.deallocate(True)
             ff_in_sharded, _ = self.ff_norm(h, None, mode)
         if mode == "decode":
             if self.unfuse_res_add:
-                h = ttnn.add(attn_out, h)
+                if self.args.use_prefetcher:
+                    h = ttnn.add(attn_out, h)
+                else:
+                    # No-prefetcher decode may mix DRAM/interleaved residuals with sharded attn output.
+                    # Align inputs for binary add; if sharded alignment fails, fall back to DRAM add.
+                    try:
+                        if h.memory_config() != attn_out.memory_config():
+                            h = ttnn.to_memory_config(h, attn_out.memory_config())
+                        h = ttnn.add(attn_out, h, dtype=res_dtype)
+                    except RuntimeError as e:
+                        # Only a sharded-layout mismatch is expected here; log so a genuine
+                        # allocation/dispatch/kernel failure is not silently reclassified as one.
+                        logger.warning(f"decode residual add failed on sharded layout, retrying in DRAM: {e}")
+                        if attn_out.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+                            attn_out = ttnn.to_memory_config(attn_out, ttnn.DRAM_MEMORY_CONFIG)
+                        if h.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+                            h = ttnn.to_memory_config(h, ttnn.DRAM_MEMORY_CONFIG)
+                        h = ttnn.add(attn_out, h, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=res_dtype)
                 ff_in_sharded, _ = self.ff_norm(h, None, mode)
             else:
                 ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
-            attn_out.deallocate(True)
+            if h is not attn_out:
+                attn_out.deallocate(True)
 
         # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in_sharded, mode, batch_size=batch_size)
         if self.layer_num == self.n_layers - 1 or mode == "prefill":
-            out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
+            out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg, dtype=res_dtype)
             if mode == "decode":
                 ff_out.deallocate(True)
             if mode == "prefill":

@@ -313,14 +313,26 @@ void write_socket_configs(
     const auto receiver_ids_per_sender = get_receiver_ids_per_sender(config);
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& global_bindings = control_plane.get_global_logical_bindings();
 
     auto get_fabric_node_from_coord = [&](const MeshCoordinate& device_coord,
                                           const std::shared_ptr<MeshDevice>& peer_device,
-                                          tt_fabric::MeshId peer_mesh_id) -> tt_fabric::FabricNodeId {
+                                          tt_fabric::MeshId peer_mesh_id,
+                                          multihost::Rank peer_rank) -> tt_fabric::FabricNodeId {
         if (peer_device) {
             return peer_device->get_fabric_node_id(device_coord);
         }
-        return tt_fabric::FabricNodeId(peer_mesh_id, mesh_graph.coordinate_to_chip(peer_mesh_id, device_coord));
+        // peer_device is null for rank-scoped cross-process sockets, so we can't ask the peer's
+        // MeshDevice directly. Resolve the peer's submesh-local coordinate to its GLOBAL chip via
+        // the peer rank's host binding — without host_rank, coordinate_to_chip assumes host-rank 0
+        // and maps every cross-rank receiver into rank 0's chips (wrong destination -> hang).
+        auto it = global_bindings.find(peer_rank);
+        std::optional<tt_fabric::MeshHostRankId> host_rank;
+        if (it != global_bindings.end()) {
+            host_rank = std::get<1>(it->second);
+        }
+        return tt_fabric::FabricNodeId(
+            peer_mesh_id, mesh_graph.coordinate_to_chip(peer_mesh_id, device_coord, host_rank));
     };
 
     if (is_sender) {
@@ -328,13 +340,17 @@ void write_socket_configs(
         const auto sender_total_size_bytes =
             sender_size.md_size_bytes +
             (max_num_downstreams * (sender_size.ack_size_bytes + sender_size.enc_size_bytes));
-        auto sender_mesh_id = local_descriptor.config.sender_mesh_id.value();
-        auto sender_local_coord_range = control_plane.get_coord_range(sender_mesh_id, tt_fabric::MeshScope::LOCAL);
-
         std::vector<uint32_t> config_data(config_buffer->size() / sizeof(uint32_t), 0);
 
         for (const auto& [device_coord, cores_map] : grouped_connections) {
-            if (!sender_local_coord_range.contains(device_coord)) {
+            // Only program sockets whose sender device is on this host's local mesh. Use
+            // MeshDevice::is_local (the same local-ownership check #44890 introduced and uses
+            // in global_semaphore.cpp): it tests the coordinate against this mesh_device's
+            // own frame, so it works for both full-mesh coordinates (multi-host) and the
+            // submesh-local coordinates used by rank-scoped stage sockets. The previous
+            // get_coord_range(mesh_id, LOCAL).contains(device_coord) check only matched
+            // full-mesh coords and silently skipped submesh-local ones (writing zeros).
+            if (!mesh_device->is_local(device_coord)) {
                 continue;
             }
             if (cores_map.size() > 1) {
@@ -367,14 +383,12 @@ void write_socket_configs(
                     MeshCoordinate recv_device_coord = connection.receiver_core.device_coord;
                     auto recv_virtual_core =
                         mesh_device->worker_core_from_logical_core(connection.receiver_core.core_coord);
-                    tt_fabric::FabricNodeId recv_fabric_node_id =
-                        get_fabric_node_from_coord(recv_device_coord, peer_device, config.receiver_mesh_id.value());
+                    tt_fabric::FabricNodeId recv_fabric_node_id = get_fabric_node_from_coord(
+                        recv_device_coord, peer_device, config.receiver_mesh_id.value(), config.receiver_rank);
                     uint32_t receiver_id = receiver_ids_per_sender.at(connection);
+                    auto sender_node = mesh_device->get_fabric_node_id(sender_core.device_coord);
                     auto [downstream_mesh_id, downstream_chip_id] = get_sender_receiver_chip_fabric_encoding(
-                        mesh_device->get_fabric_node_id(sender_core.device_coord),
-                        recv_fabric_node_id,
-                        fabric_config,
-                        SocketEndpoint::SENDER);
+                        sender_node, recv_fabric_node_id, fabric_config, SocketEndpoint::SENDER);
                     // Write to the correct slot based on receiver ID
                     uint32_t receiver_enc_offset =
                         enc_offset + (receiver_id * (sender_size.enc_size_bytes / sizeof(uint32_t)));
@@ -389,11 +403,12 @@ void write_socket_configs(
     } else {
         std::vector<receiver_socket_md> config_data(
             config_buffer->size() / sizeof(receiver_socket_md), receiver_socket_md());
-        auto receiver_mesh_id = local_descriptor.config.receiver_mesh_id.value();
-        auto receiver_local_coord_range = control_plane.get_coord_range(receiver_mesh_id, tt_fabric::MeshScope::LOCAL);
 
         for (const auto& [device_coord, cores_map] : grouped_connections) {
-            if (!receiver_local_coord_range.contains(device_coord)) {
+            // See the sender branch: use MeshDevice::is_local so submesh-local rank-scoped
+            // socket coords are programmed (get_coord_range(..., LOCAL) only matches full-mesh
+            // coords and skipped them, leaving the receiver config zeroed).
+            if (!mesh_device->is_local(device_coord)) {
                 continue;
             }
 
@@ -403,8 +418,8 @@ void write_socket_configs(
                 MeshCoordinate sender_device_coord = connection.sender_core.device_coord;
                 auto sender_virtual_core =
                     mesh_device->worker_core_from_logical_core(connection.sender_core.core_coord);
-                tt_fabric::FabricNodeId sender_fabric_node_id =
-                    get_fabric_node_from_coord(sender_device_coord, peer_device, config.sender_mesh_id.value());
+                tt_fabric::FabricNodeId sender_fabric_node_id = get_fabric_node_from_coord(
+                    sender_device_coord, peer_device, config.sender_mesh_id.value(), config.sender_rank);
                 MeshCoreCoord recv_core = {device_coord, recv_core_coord};
 
                 auto [upstream_mesh_id, upstream_chip_id] = get_sender_receiver_chip_fabric_encoding(
@@ -652,15 +667,26 @@ std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> g
     const std::shared_ptr<MeshDevice>& sender_device,
     const std::shared_ptr<MeshDevice>& receiver_device) {
     std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> fabric_node_id_map;
-    const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& global_bindings = control_plane.get_global_logical_bindings();
 
     auto resolve_fabric_node_id = [&](const MeshCoordinate& device_coord,
                                       tt_fabric::MeshId mesh_id,
-                                      const std::shared_ptr<MeshDevice>& device) -> tt_fabric::FabricNodeId {
+                                      const std::shared_ptr<MeshDevice>& device,
+                                      multihost::Rank rank) -> tt_fabric::FabricNodeId {
         if (device) {
             return device->get_fabric_node_id(device_coord);
         }
-        return tt_fabric::FabricNodeId(mesh_id, mesh_graph.coordinate_to_chip(mesh_id, device_coord));
+        // No local device handle: resolve the submesh-local coord to its global chip via the
+        // owning rank's host binding (host_rank). Without it, coordinate_to_chip assumes
+        // host-rank 0 and the kernel's fabric routes point at the wrong chip.
+        auto it = global_bindings.find(rank);
+        std::optional<tt_fabric::MeshHostRankId> host_rank;
+        if (it != global_bindings.end()) {
+            host_rank = std::get<1>(it->second);
+        }
+        return tt_fabric::FabricNodeId(mesh_id, mesh_graph.coordinate_to_chip(mesh_id, device_coord, host_rank));
     };
 
     for (uint32_t i = 0; i < config.socket_connection_config.size(); ++i) {
@@ -669,11 +695,15 @@ std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> g
         TT_FATAL(config.receiver_mesh_id.has_value(), "Receiver mesh id is not set.");
         fabric_node_id_map[static_cast<std::underlying_type_t<SocketEndpoint>>(SocketEndpoint::SENDER)].emplace(
             connection.sender_core.device_coord,
-            resolve_fabric_node_id(connection.sender_core.device_coord, config.sender_mesh_id.value(), sender_device));
+            resolve_fabric_node_id(
+                connection.sender_core.device_coord, config.sender_mesh_id.value(), sender_device, config.sender_rank));
         fabric_node_id_map[static_cast<std::underlying_type_t<SocketEndpoint>>(SocketEndpoint::RECEIVER)].emplace(
             connection.receiver_core.device_coord,
             resolve_fabric_node_id(
-                connection.receiver_core.device_coord, config.receiver_mesh_id.value(), receiver_device));
+                connection.receiver_core.device_coord,
+                config.receiver_mesh_id.value(),
+                receiver_device,
+                config.receiver_rank));
     }
     return fabric_node_id_map;
 }

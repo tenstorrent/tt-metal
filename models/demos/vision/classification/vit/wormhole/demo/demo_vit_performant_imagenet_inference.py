@@ -19,7 +19,7 @@ NUM_VALIDATION_IMAGES_IMAGENET = 49920
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 1700000}], indirect=True
+    "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 2_000_000}], indirect=True
 )
 @pytest.mark.parametrize(
     "batch_size_per_device, iterations",
@@ -124,7 +124,7 @@ def test_run_vit_trace_2cqs_inference(
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "trace_region_size": 1700000, "num_command_queues": 2}], indirect=True
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 2_000_000, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize(
     "batch_size_per_device, iterations",

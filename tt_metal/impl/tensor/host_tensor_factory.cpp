@@ -28,8 +28,9 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 template <typename T>
 HostTensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T pad_value) {
     auto buffer_dtype = convert_to_data_type<T>();
-    auto buffer_spec =
-        TensorSpec(spec.logical_shape(), TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config()));
+    auto buffer_spec = TensorSpec(
+        spec.logical_shape(),
+        TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config(), spec.tensor_layout().get_alignment()));
 
     size_t volume = spec.logical_shape().volume();
 
@@ -91,8 +92,9 @@ HostTensor HostTensor::from_vector(std::vector<T>&& buffer, const TensorSpec& sp
     }
 
     auto buffer_dtype = convert_to_data_type<T>();
-    auto buffer_spec =
-        TensorSpec(spec.logical_shape(), TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config()));
+    auto buffer_spec = TensorSpec(
+        spec.logical_shape(),
+        TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config(), spec.tensor_layout().get_alignment()));
 
     auto host_buffer =
         logical_matches_physical(buffer_spec)

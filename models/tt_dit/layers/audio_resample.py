@@ -182,6 +182,9 @@ class UpSample1d(Module):
         else:
             raise ValueError(f"window must be kaiser or hann, got {window!r}")
         self._conv1d_cache: dict = {}
+        self._use_polyphase = (self.kernel_size % ratio) == 0
+        if self._use_polyphase:
+            self._poly_K_sub = self.kernel_size // ratio
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "filter" in state:
@@ -194,25 +197,50 @@ class UpSample1d(Module):
         B, T, C = x_BTC.shape
         sharded = self.parallel_config is not None and self.parallel_config.factor > 1
 
-        # When sharded, halo brings ``pad`` samples from neighbors; replicate makes
-        # boundary chips replicate their own first/last sample.
-        if sharded and self.pad > 0:
+        poly2 = self._use_polyphase and self.ratio == 2
+        # ratio-2 polyphase reads only x_pad[2:T_pad-2]; pad two fewer rows per side when possible.
+        crop = 2 if (poly2 and self.pad >= 2) else 0
+        eff_pad = self.pad - crop
+
+        if sharded and eff_pad > 0:
             x_pad = _t_neighbor_pad(
                 x_BTC,
-                pad_left=self.pad,
-                pad_right=self.pad,
+                pad_left=eff_pad,
+                pad_right=eff_pad,
                 parallel_config=self.parallel_config,
                 ccl_manager=self.ccl_manager,
                 padding_mode="replicate",
             )
         else:
-            x_pad = _replicate_pad_t(x_BTC, self.pad, self.pad, self.mesh_device)
-        # No intermediate deallocate: when sharded, x_pad is a CCL persistent buffer
-        # (from _t_neighbor_pad) that must outlive this call.
+            x_pad = _replicate_pad_t(x_BTC, eff_pad, eff_pad, self.mesh_device)
+
+        if poly2:
+            B_, T_pad, C_ = x_pad.shape
+            # Zero-pad sub-taps (sub0 trailing, sub1 leading) so both phases convolve the same input.
+            if crop:
+                base = x_pad
+            else:
+                base = ttnn.slice(x_pad, [0, 2, 0], [B_, T_pad - 2, C_])
+            scaled_taps = [t * self.ratio for t in self._taps_cpu]
+            sub0 = [scaled_taps[2 * j + 0] for j in range(self._poly_K_sub)] + [0.0]
+            sub1 = [0.0] + [scaled_taps[2 * j + 1] for j in range(self._poly_K_sub)]
+            ph0 = depthwise_tap_filter(
+                base, sub0, 1, mesh_device=self.mesh_device, dtype=self.dtype, cache=self._conv1d_cache
+            )
+            ph1 = depthwise_tap_filter(
+                base, sub1, 1, mesh_device=self.mesh_device, dtype=self.dtype, cache=self._conv1d_cache
+            )
+            if base is not x_pad:
+                ttnn.deallocate(base)
+            T_out = ph0.shape[1]
+            ph0_b = ttnn.reshape(ph0, (B_, T_out, 1, C_))
+            ph1_b = ttnn.reshape(ph1, (B_, T_out, 1, C_))
+            stacked = ttnn.concat([ph0_b, ph1_b], dim=2)
+            return ttnn.reshape(stacked, (B_, T_out * 2, C_))
+
         x_zs = _zero_stuff_t(x_pad, stride=self.stride, mesh_device=self.mesh_device)
         x_padded = _zero_pad_t(x_zs, self.kernel_size - 1, self.kernel_size - 1, self.mesh_device)
 
-        # Fold the ratio scale into the kernel taps.
         y = depthwise_tap_filter(
             x_padded,
             [t * self.ratio for t in self._taps_cpu],
@@ -301,8 +329,6 @@ class Activation1d(Module):
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
         y = self.upsample(x_BTC)
-        # Snake / SnakeBeta upcast to TILE internally; pull back to ROW_MAJOR
-        # for the downsample.
         y = self.act(y)
         if y.layout != ttnn.ROW_MAJOR_LAYOUT:
             y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)

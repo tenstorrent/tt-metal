@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from typing import TYPE_CHECKING
 
@@ -259,10 +260,14 @@ class Conv2d(Module):
                 msg = f"expected input channel dimension to be {expected_c}, but got {c}"
                 raise ValueError(msg)
 
+        # num_slices is a hand-tuned DRAM width-slicing count per (h, w, in, out) conv shape
+        # and mesh shape. Fall back to the documented max for the tile DRAM width
+        # (ceil(w / TILE)) for shapes not in the table — keeps new resolutions / VAEs
+        # working (more slices fit L1; the OOM path below reports if even that is too big).
+        slice_table = self.slice_params.get(tuple(self.mesh_device.shape), self.slice_default)
+        num_slices = slice_table.get((h, w, self.in_channels, self.out_channels), max(1, math.ceil(w / 32)))
         slice_config = ttnn.Conv2dSliceConfig(
-            num_slices=self.slice_params.get(tuple(self.mesh_device.shape), self.slice_default)[
-                (h, w, self.in_channels, self.out_channels)
-            ],
+            num_slices=num_slices,
             slice_type=ttnn.Conv2dDRAMSliceWidth,
         )
 
@@ -280,7 +285,14 @@ class Conv2d(Module):
                 batch_size=b,
                 input_height=h,
                 input_width=w,
-                conv_config=ttnn.Conv2dConfig(act_block_h_override=32),
+                # Large convs (spatial > 1024^2, e.g. VAE decode at 2048px) exhaust the small L1
+                # region: even at max DRAM width-slicing, their halo/reader config tensors don't
+                # fit L1_SMALL and OOM. Spill those config tensors to DRAM for big convs so they
+                # fit; 1024^2 and below keep the faster in-L1 config path unchanged.
+                conv_config=ttnn.Conv2dConfig(
+                    act_block_h_override=32,
+                    config_tensors_in_dram=h * w > 1024 * 1024,
+                ),
                 compute_config=self.compute_config,
                 slice_config=slice_config,
                 return_output_dim=True,

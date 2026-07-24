@@ -73,7 +73,7 @@ Tensor moreh_clip_grad_norm(
     const auto num_iter = (total_num_inputs + max_num_inputs - 1) / max_num_inputs;
     // Store intermediate reduction of Sum[|e|^p]
     auto tmp_pow_sum = create_device_tensor(
-        ttnn::TensorSpec(
+        tt::tt_metal::TensorSpec(
             Shape{static_cast<uint32_t>(inputs.size()), 1, 1},
             tt::tt_metal::TensorLayout(
                 inputs.at(0).dtype(),

@@ -28,7 +28,7 @@ struct MorehDotBackwardOperation {
         const std::vector<std::optional<Tensor>> output_tensors;
     };
 
-    using spec_return_value_t = std::vector<std::optional<ttnn::TensorSpec>>;
+    using spec_return_value_t = std::vector<std::optional<tt::tt_metal::TensorSpec>>;
     using tensor_return_value_t = std::vector<std::optional<Tensor>>;
 
     static tt::tt_metal::ProgramDescriptor create_descriptor(

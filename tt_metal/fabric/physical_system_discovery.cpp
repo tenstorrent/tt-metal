@@ -2,6 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE (please keep): PhysicalSystemDiscovery runs outside of tt-metal as well — it is used by
+// applications that manage their own devices. Do NOT instantiate MetalContext here (e.g.
+// `MetalContext::instance()`): that spins up a MetalContext behind the caller's back and breaks
+// telemetry / explicit device ownership. If runtime options or context are needed, pass them in
+// explicitly as function arguments. For a small piece of config, read the environment variable
+// directly with std::getenv (see get_local_discovery_hostname() below for the mock cluster descriptor).
+
 #include <tt_stl/fmt.hpp>
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
@@ -11,10 +18,12 @@
 
 #include <unistd.h>
 #include <climits>
+#include <cstdlib>
 #include <fstream>
 #include <algorithm>
 #include <set>
 #include <unordered_map>
+#include <filesystem>
 #include <vector>
 
 #include <umd/device/cluster.hpp>
@@ -44,6 +53,20 @@ PortType to_metal_port_type(tt::scaleout_tools::PortType pt) {
         case tt::scaleout_tools::PortType::UNKNOWN: return PortType::UNKNOWN;
     }
     return PortType::UNKNOWN;
+}
+
+// OS hostname for live clusters; mock cluster descriptor filename (basename) per rank in mock mode.
+std::string get_local_discovery_hostname() {
+    // Read the mock cluster descriptor path straight from the environment rather than through
+    // MetalContext (see file-header note: MetalContext must not be instantiated here). This matches how
+    // rtoptions defines "mock enabled" (mock_cluster_desc_path non-empty, set from
+    // TT_METAL_MOCK_CLUSTER_DESC_PATH). In mock mode use the descriptor filename as this rank's hostname
+    // so mock-cluster test runs get stable, matching hostnames; otherwise use the OS hostname.
+    if (const char* mock_cluster_desc_path = std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+        mock_cluster_desc_path != nullptr && mock_cluster_desc_path[0] != '\0') {
+        return std::filesystem::path(mock_cluster_desc_path).filename().string();
+    }
+    return get_host_name();
 }
 
 std::string get_mobo_name() {
@@ -160,7 +183,7 @@ bool resolve_hostname_uniqueness(
     bool all_hostnames_unique = true;
     if (my_rank == controller_rank) {
         std::vector<std::string> hostnames = {};
-        hostnames.push_back(get_host_name());
+        hostnames.push_back(get_local_discovery_hostname());
         for (std::size_t rank = 0; rank < *(distributed_context->size()); rank++) {
             if (rank != controller_rank) {
                 std::size_t peer_hostname_size = 0;
@@ -191,7 +214,7 @@ bool resolve_hostname_uniqueness(
             }
         }
     } else {
-        auto host_name = get_host_name();
+        auto host_name = get_local_discovery_hostname();
         auto serialized_hostname = std::vector<uint8_t>(host_name.begin(), host_name.end());
         std::size_t serialized_hostname_size = serialized_hostname.size();
         distributed_context->send(
@@ -622,11 +645,11 @@ PhysicalSystemDescriptor run_local_discovery(
     auto cross_host_eth_connections = cluster_desc.get_ethernet_connections_to_remote_devices();
 
     auto my_rank = *(distributed_context->rank());
-    auto hostname = get_host_name();
+    auto hostname = get_local_discovery_hostname();
 
-    // When multiple ranks exist and hostnames are not unique (e.g. mock, same machine), use hostname_rank
-    // so each rank gets its own entry during merge. When hostnames are unique (different machines),
-    // use hostname so graph keys match my_host_name() for lookups (e.g. get_host_neighbors).
+    // Cluster descriptor basename (mock) or OS hostname (live). When multiple MPI ranks share the same
+    // discovery hostname (e.g. 64-rank superpod reusing 16 mock descriptors), suffix with MPI rank so
+    // PSD merge keys stay unique and global eth links validate correctly.
     auto hostname_key = (*(distributed_context->size()) > 1 && !all_hostnames_unique)
                             ? (hostname + "_" + std::to_string(my_rank))
                             : hostname;
@@ -769,8 +792,7 @@ PhysicalSystemDescriptor run_physical_system_discovery(
 
     // Set local hostname and rank (friend access)
     auto my_rank = *(distributed_context->rank());
-    auto hostname = get_host_name();
-    psd.set_discovery_data(hostname, my_rank, all_hostnames_unique);
+    psd.set_discovery_data(get_local_discovery_hostname(), my_rank, all_hostnames_unique);
 
     if (run_global_discovery) {
         exchange_metadata(psd, distributed_context, true);

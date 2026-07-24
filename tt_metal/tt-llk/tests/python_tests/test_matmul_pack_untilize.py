@@ -12,6 +12,8 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     MATH_FIDELITY,
+    NUM_BLOCKS,
+    NUM_TILES_IN_BLOCK,
     generate_input_dim,
 )
 from helpers.tilize_untilize import tilize
@@ -64,6 +66,8 @@ def test_matmul_pack_untilize(
         input_A_format=formats.input_format,
         input_B_format=formats.input_format,
     )
+    num_blocks = 32
+    golden_tensor = golden_tensor.repeat(num_blocks)
 
     configuration = TestConfig(
         "sources/matmul_pack_untilize_test.cpp",
@@ -72,7 +76,7 @@ def test_matmul_pack_untilize(
             generate_input_dim(input_dimensions, input_dimensions),
             MATH_FIDELITY(math_fidelity),
         ],
-        runtimes=[],
+        runtimes=[NUM_BLOCKS(num_blocks), NUM_TILES_IN_BLOCK(1)],
         variant_stimuli=StimuliConfig(
             tilize(src_A, formats.input_format),
             formats.input_format,
@@ -81,7 +85,7 @@ def test_matmul_pack_untilize(
             formats.output_format,
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
+            tile_count_res=tile_cnt_A * num_blocks,
         ),
         dest_acc=dest_acc,
     )

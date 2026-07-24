@@ -299,18 +299,14 @@ def compute_ttnn_distributed_norm(
         raise ValueError(f"Unknown norm_type: {norm_type}")
 
     # Step 2: Gather statistics across devices
-    ccl_semaphore_handles = setup_ccl_semaphores(mesh_device)
+    setup_ccl_semaphores(mesh_device)
     ttnn.synchronize_device(mesh_device)
 
-    ttnn_stats_gathered = ttnn.experimental.all_gather_async(
+    ttnn_stats_gathered = ttnn.all_gather(
         ttnn_stats,
         dim=3,
-        multi_device_global_semaphore=ccl_semaphore_handles,
-        num_links=1,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_device=mesh_device,
-        topology=ttnn.Topology.Linear,
         cluster_axis=1,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     # Step 3: Compute normalization

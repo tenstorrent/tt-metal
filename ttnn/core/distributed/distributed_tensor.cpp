@@ -62,14 +62,14 @@ bool increment_indices(const ttsl::SmallVector<int>& limits, ttsl::SmallVector<i
 
 // Computes tensor spec for shards supplied in `xtensor_shards_views`.
 // Note the shapes of all shards must be the same; resulting in a uniform tensor spec.
-TensorSpec compute_tensor_spec_for_shards(
+tt::tt_metal::TensorSpec compute_tensor_spec_for_shards(
     const auto& xtensor_shards_views, const tt::tt_metal::TensorLayout& global_layout) {
     std::optional<Shape> shard_shape;
     for (const auto& [_, xtensor_view] : xtensor_shards_views) {
         if (!xtensor_view.has_value()) {
             continue;
         }
-        auto xtensor_shard_shape = tt::tt_metal::experimental::xtensor::get_shape_from_xarray(xtensor_view->get());
+        auto xtensor_shard_shape = ttnn::experimental::xtensor::get_shape_from_xarray(xtensor_view->get());
         if (shard_shape.has_value()) {
             TT_FATAL(
                 shard_shape.value() == xtensor_shard_shape,
@@ -81,7 +81,7 @@ TensorSpec compute_tensor_spec_for_shards(
         }
     }
     TT_FATAL(shard_shape.has_value(), "No shards were produced");
-    return TensorSpec(*shard_shape, global_layout);
+    return tt::tt_metal::TensorSpec(*shard_shape, global_layout);
 }
 
 // Creates a host buffer from a span, with the following optimizations:
@@ -89,7 +89,10 @@ TensorSpec compute_tensor_spec_for_shards(
 // - Otherwise, a copy of the data is created.
 template <typename T>
 tt::tt_metal::HostBuffer create_host_buffer_from_span(
-    ttsl::Span<T> span, const tt::tt_metal::MemoryPin& buffer_pin, const TensorSpec& tensor_spec, T pad_value) {
+    ttsl::Span<T> span,
+    const tt::tt_metal::MemoryPin& buffer_pin,
+    const tt::tt_metal::TensorSpec& tensor_spec,
+    T pad_value) {
     if constexpr (!std::is_const_v<T>) {
         if (tensor_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
             tensor_spec.physical_shape() == tensor_spec.logical_2d_shape() &&
@@ -150,7 +153,7 @@ public:
     }
 
     Tensor operator()(const Tensor& tensor) const {
-        auto extract_logical_data = [this]<typename T>(const tt::tt_metal::Tensor& tensor) -> Tensor {
+        auto extract_logical_data = [this]<typename T>(const ttnn::Tensor& tensor) -> Tensor {
             const bool data_viewable = tensor.tensor_spec().layout() == tt::tt_metal::Layout::ROW_MAJOR &&
                                        tensor.tensor_spec().physical_shape() == tensor.tensor_spec().logical_2d_shape();
             tt::tt_metal::HostBuffer host_buffer = data_viewable ? tt::tt_metal::host_buffer::get_host_buffer(tensor)
@@ -208,7 +211,7 @@ public:
 
         // Optimize a fully replicated path, which can use the same buffer for all shards.
         if (shard_dims.empty()) {
-            const TensorSpec tensor_spec(shape, layout);
+            const tt::tt_metal::TensorSpec tensor_spec(shape, layout);
             auto replicated_buffer = create_host_buffer_from_span<T>(span, buffer_pin, tensor_spec, pad_value);
 
             auto distributed_buffer = make_distributed_host_buffer();
@@ -229,9 +232,9 @@ public:
 
         // Otherwise, use xtensor to chunk the data into shards.
         auto input_xtensor =
-            tt::tt_metal::experimental::xtensor::adapt(span, std::vector<size_t>(shape.cbegin(), shape.cend()));
+            ttnn::experimental::xtensor::adapt(span, std::vector<size_t>(shape.cbegin(), shape.cend()));
 
-        auto chunks = tt::tt_metal::experimental::xtensor::chunk_ndim(input_xtensor, num_chunks_per_dim, tensor_dims);
+        auto chunks = ttnn::experimental::xtensor::chunk_ndim(input_xtensor, num_chunks_per_dim, tensor_dims);
         TT_FATAL(chunks.size() >= 1, "No chunks were produced");
         TT_FATAL(
             distribution_shape_.dims() == 1 || chunks.size() == sharded_mesh_size,
@@ -240,7 +243,7 @@ public:
             sharded_mesh_size);
 
         using StridedViewRef =
-            std::reference_wrapper<tt::tt_metal::experimental::xtensor::StridedView<decltype(input_xtensor)>>;
+            std::reference_wrapper<ttnn::experimental::xtensor::StridedView<decltype(input_xtensor)>>;
         tt::tt_metal::distributed::MeshContainer<std::optional<StridedViewRef>> sharded_xtensor_views(
             distribution_shape_, std::nullopt);
 
@@ -299,7 +302,7 @@ private:
         T pad_value,
         const tt::tt_metal::MemoryPin& buffer_pin,
         const ttsl::SmallVector<int>& shard_dims) const {
-        const TensorSpec shard_spec = compute_tensor_spec_for_shards(sharded_xtensor_views, layout);
+        const tt::tt_metal::TensorSpec shard_spec = compute_tensor_spec_for_shards(sharded_xtensor_views, layout);
 
         // Determine whether we can borrow directly from the source buffer instead of copying.
         // Requirements:
@@ -460,11 +463,11 @@ public:
         }
 
         // Convert shards into a linear buffer of xtensor views.
-        std::vector<tt::tt_metal::experimental::xtensor::AdaptedView<const T>> xtensor_views;
+        std::vector<ttnn::experimental::xtensor::AdaptedView<const T>> xtensor_views;
         xtensor_views.reserve(distribution_shape_.mesh_size());
         std::vector<size_t> shard_shape(tensor.logical_shape().cbegin(), tensor.logical_shape().cend());
         dst_buffer.apply([&xtensor_views, &shard_shape](const tt::tt_metal::HostBuffer& shard) {
-            xtensor_views.push_back(tt::tt_metal::experimental::xtensor::adapt(shard.view_as<const T>(), shard_shape));
+            xtensor_views.push_back(ttnn::experimental::xtensor::adapt(shard.view_as<const T>(), shard_shape));
         });
 
         ttsl::SmallVector<int> num_chunks;
@@ -485,16 +488,15 @@ public:
             }
         }
 
-        auto xtensor_adapter =
-            tt::tt_metal::experimental::xtensor::concat_ndim(xtensor_views, num_chunks, config_.dims);
-        auto&& shape = tt::tt_metal::experimental::xtensor::get_shape_from_xarray(xtensor_adapter.expr());
+        auto xtensor_adapter = ttnn::experimental::xtensor::concat_ndim(xtensor_views, num_chunks, config_.dims);
+        auto&& shape = ttnn::experimental::xtensor::get_shape_from_xarray(xtensor_adapter.expr());
         return {std::move(xtensor_adapter).data(), std::move(shape)};
     }
 
     Tensor compose(const Tensor& tensor) const {
         auto dispatch_to_concrete = [this]<typename T>(const Tensor& tensor) {
             auto [data, shape] = compose<T>(tensor);
-            TensorSpec spec(shape, tensor.tensor_spec().tensor_layout());
+            tt::tt_metal::TensorSpec spec(shape, tensor.tensor_spec().tensor_layout());
             return Tensor::from_vector(std::move(data), spec);
         };
 
@@ -669,7 +671,7 @@ Tensor distribute_tensor(
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
     std::optional<ttnn::QueueId> cq_id) {
     TT_FATAL(
-        tensor.storage_type() == tt::tt_metal::StorageType::HOST,
+        tensor.storage_type() == ttnn::StorageType::HOST,
         "TensorToMesh only supports host tensors; got storage type: {}",
         tensor.storage_type());
     Tensor output = mapper(tensor);

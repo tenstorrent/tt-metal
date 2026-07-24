@@ -60,6 +60,7 @@ set(TTNNCPP_SRCS
     # FIXME: Move these out to appropriate sub targets
     cpp/ttnn/operations/compute_throttle_utils.cpp
     cpp/ttnn/operations/trace.cpp
+    cpp/ttnn/graph/capture_program_config_registry.cpp
     cpp/ttnn/operations/ccl/sharding_addrgen_helper.cpp
     cpp/ttnn/operations/generic/generic_op.cpp
     cpp/ttnn/operations/generic/device/generic_op_program_factory.cpp
@@ -69,6 +70,9 @@ set(TTNNCPP_SRCS
     cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_device_operation.cpp
     cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_program_factory.cpp
     cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather.cpp
+    cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/dit_fused_distributed_rmsnorm.cpp
+    cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation.cpp
+    cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/combine/combine.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_common.cpp
@@ -189,6 +193,7 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/events.hpp
     api/ttnn/global_circular_buffer.hpp
     api/ttnn/global_semaphore.hpp
+    api/ttnn/graph/capture_program_config.hpp
     api/ttnn/graph/graph_consts.hpp
     api/ttnn/graph/graph_serialization.hpp
     api/ttnn/graph/graph_operation_queries.hpp

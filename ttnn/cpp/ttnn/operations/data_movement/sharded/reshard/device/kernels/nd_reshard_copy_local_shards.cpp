@@ -30,6 +30,9 @@ void kernel_main() {
     constexpr uint32_t src_width = get_compile_time_arg_val(base_idx_cta + 4);
     constexpr uint32_t dst_width = get_compile_time_arg_val(base_idx_cta + 5);
     constexpr uint32_t transfer_size = get_compile_time_arg_val(base_idx_cta + 6);
+    // 1 for tile layout (equal src/dst page size): reshard is a pure page permutation, so copy
+    // page N -> page N. 0 for row-major, which needs the row/col re-strider below.
+    constexpr uint32_t page_to_page = get_compile_time_arg_val(base_idx_cta + 7);
 
     const uint32_t bank_base_address_src = get_common_arg_val<uint32_t>(base_idx_crta);
     const uint32_t bank_base_address_dst = get_common_arg_val<uint32_t>(base_idx_crta + 1);
@@ -45,7 +48,23 @@ void kernel_main() {
 
     for (uint32_t shard_id = first_shard_id; shard_id < num_shards; shard_id += shard_id_stride) {
         if constexpr (is_reader) {
-                auto shard_pages = accessor_src.shard_pages(shard_id);
+            auto shard_pages = accessor_src.shard_pages(shard_id);
+            if constexpr (page_to_page) {
+                // TILE (equal src/dst page size): page N of the source is logically tile N of the
+                // tensor, so write it straight to page N of the destination. The row/col re-strider
+                // below is only for row-major reshards with differing shard widths.
+                for (const auto& src_page : shard_pages) {
+                    const uint32_t src_l1_addr = static_cast<uint32_t>(src_page.noc_addr());
+                    CoreLocalMem<uint32_t> src_mem(src_l1_addr);
+                    noc.async_write(
+                        src_mem,
+                        accessor_dst,
+                        src_page_size,
+                        {.offset_bytes = 0},
+                        {.page_id = src_page.page_id(), .offset_bytes = 0});
+                }
+                noc.async_writes_flushed();
+            } else {
                 for (const auto& src_page : shard_pages) {
                     auto src_page_id = src_page.page_id();
                     // Local shard page: low 32 bits of the noc_addr are the L1 address on this core.
@@ -85,6 +104,7 @@ void kernel_main() {
                     }
                     noc.async_writes_flushed();
                 }
+            }
         } else {
             auto shard_pages = accessor_dst.shard_pages(shard_id);
             for (const auto& page : shard_pages) {

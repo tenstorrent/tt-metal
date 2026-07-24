@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -15,7 +15,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = 0;
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
+    DataflowBuffer dfb_in0(cb_id_in0);
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
@@ -33,9 +33,9 @@ void kernel_main() {
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; ++i) {
 #endif
-        cb_in0.reserve_back(onetile);
-        noc.async_read(s, cb_in0, tile_bytes, {.page_id = i, .offset_bytes = 0}, {.offset_bytes = 0});
+        dfb_in0.reserve_back(onetile);
+        noc.async_read(s, dfb_in0, tile_bytes, {.page_id = i, .offset_bytes = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_in0.push_back(onetile);
+        dfb_in0.push_back(onetile);
     }
 }

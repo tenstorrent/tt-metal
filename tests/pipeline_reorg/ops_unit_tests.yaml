@@ -79,7 +79,7 @@
 
 - name: ttnn nightly experimental tests (wormhole)
   # test_moe_grouped_topk hangs on Wormhole (TODO: file issue + restore). Exclude on WH only.
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance and not test_moe_grouped_topk and not test_h2d_socket_sync" --timeout=600'
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance and not test_moe_grouped_topk" -m "not requires_host_iommu" --timeout=600'
   skus:
     wh_n150_civ2:
       timeout: 65
@@ -90,10 +90,11 @@
   category: experimental
 
 - name: ttnn nightly experimental tests (blackhole)
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance and not test_h2d_socket_sync" --timeout=600'
+  # Host-IOMMU tests are selected by the viommu job below and excluded from these non-IOMMU SKUs.
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance" -m "not requires_host_iommu" --timeout=600'
   skus:
     bh_p100:
-      timeout: 35
+      timeout: 60
     bh_p150b_civ2:
       timeout: 35
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
@@ -101,7 +102,13 @@
   category: experimental
 
 - name: ttnn nightly experimental tests (blackhole - viommu)
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_deepseek_prefill_h2d_socket_sync.py -xv --timeout=600'
+  # Tests opt in with @pytest.mark.requires_host_iommu, allowing operation developers to add IOMMU coverage
+  # without changing this infra-owned command. Keep the search roots aligned with the non-IOMMU suites above.
+  cmd: |
+    pytest \
+      tests/ttnn/nightly/unit_tests/operations/experimental \
+      tests/ttnn/nightly/unit_tests/operations/sdpa \
+      -m requires_host_iommu -xv --timeout=600
   skus:
     bh_p150b_civ2_viommu:
       timeout: 5
@@ -233,13 +240,13 @@
   category: misc
 
 - name: ttnn nightly sdpa tests
-  # MLA decode / prefill stress are split out into the sdpa stress entry below;
-  # this entry runs the rest of the sdpa nightly suite.
+  # MLA decode / prefill stress are split out into the sdpa stress entry below; this entry runs the rest of the
+  # sdpa nightly suite. Host-IOMMU tests are selected by marker in the viommu job above.
   cmd: |
     pytest tests/ttnn/nightly/unit_tests/operations/sdpa \
       --ignore=tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_decode_stress.py \
       --ignore=tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_prefill_stress.py \
-      -xv --timeout=600
+      -m "not requires_host_iommu" -xv --timeout=600
   skus:
     wh_n150_civ2:
       timeout: 90

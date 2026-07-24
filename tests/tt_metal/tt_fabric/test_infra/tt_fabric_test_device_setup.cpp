@@ -13,7 +13,7 @@ namespace tt::tt_fabric::fabric_tests {
 // ====================================
 
 void FabricConnectionManager::register_client(
-    const CoreCoord& core, TestWorkerType worker_type, const ConnectionKey& key, const FabricNodeId& next_hop_dst) {
+    const tt::tt_metal::CoreCoord& core, TestWorkerType worker_type, const ConnectionKey& key, const FabricNodeId& next_hop_dst) {
     auto [it, inserted] = connections_.try_emplace(key);
     auto& conn = it->second;
 
@@ -145,8 +145,8 @@ std::unordered_map<RoutingDirection, std::set<uint32_t>> FabricConnectionManager
 }
 
 std::vector<ConnectionKey> FabricConnectionManager::get_connection_keys_for_core(
-    const CoreCoord& core, TestWorkerType worker_type) const {
-    const auto* map = [&]() -> const std::unordered_map<CoreCoord, std::set<ConnectionKey>>* {
+    const tt::tt_metal::CoreCoord& core, TestWorkerType worker_type) const {
+    const auto* map = [&]() -> const std::unordered_map<tt::tt_metal::CoreCoord, std::set<ConnectionKey>>* {
         switch (worker_type) {
             case TestWorkerType::SENDER: return &sender_core_to_keys_;
             case TestWorkerType::RECEIVER: return &receiver_core_to_keys_;
@@ -165,13 +165,13 @@ std::vector<ConnectionKey> FabricConnectionManager::get_connection_keys_for_core
     return {};
 }
 
-size_t FabricConnectionManager::get_connection_count_for_core(const CoreCoord& core, TestWorkerType worker_type) const {
+size_t FabricConnectionManager::get_connection_count_for_core(const tt::tt_metal::CoreCoord& core, TestWorkerType worker_type) const {
     auto keys = get_connection_keys_for_core(core, worker_type);
     return keys.size();
 }
 
 uint32_t FabricConnectionManager::get_connection_array_index_for_key(
-    const CoreCoord& core, TestWorkerType worker_type, const ConnectionKey& key) const {
+    const tt::tt_metal::CoreCoord& core, TestWorkerType worker_type, const ConnectionKey& key) const {
     auto keys = get_connection_keys_for_core(core, worker_type);
 
     for (size_t i = 0; i < keys.size(); i++) {
@@ -183,12 +183,12 @@ uint32_t FabricConnectionManager::get_connection_array_index_for_key(
     return UINT32_MAX;  // Not found
 }
 
-bool FabricConnectionManager::is_mux_client(const CoreCoord& core) const {
+bool FabricConnectionManager::is_mux_client(const tt::tt_metal::CoreCoord& core) const {
     return all_mux_client_cores_.contains(core);
 }
 
 std::vector<uint32_t> FabricConnectionManager::generate_mux_termination_local_args_for_core(
-    const CoreCoord& core, const std::shared_ptr<IDeviceInfoProvider>& device_info_provider) const {
+    const tt::tt_metal::CoreCoord& core, const std::shared_ptr<IDeviceInfoProvider>& device_info_provider) const {
     // Not a mux client? Return empty vector
     if (!is_mux_client(core)) {
         return {};
@@ -222,7 +222,7 @@ std::vector<uint32_t> FabricConnectionManager::generate_mux_termination_local_ar
 }
 
 std::vector<uint32_t> FabricConnectionManager::generate_connection_args_for_core(
-    const CoreCoord& core,
+    const tt::tt_metal::CoreCoord& core,
     TestWorkerType worker_type,
     const std::shared_ptr<IDeviceInfoProvider>& device_info_provider,
     const FabricNodeId& fabric_node_id,
@@ -260,7 +260,7 @@ std::vector<uint32_t> FabricConnectionManager::generate_connection_args_for_core
                 "Mux core not found for connection dir={} link={}",
                 static_cast<int>(key.direction),
                 key.link_idx);
-            const CoreCoord& mux_core = mux_core_it->second;
+            const tt::tt_metal::CoreCoord& mux_core = mux_core_it->second;
 
             // Get the stored mux config using the mux core as key
             auto mux_config_it = mux_configs_.find(mux_core);
@@ -346,7 +346,7 @@ void FabricConnectionManager::assign_and_validate_channels(Connection& conn, con
 // ====================================
 
 TestWorker::TestWorker(
-    CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
+    tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
     logical_core_(logical_core), test_device_ptr_(test_device_ptr) {
     if (kernel_src.has_value()) {
         this->kernel_src_ = std::string(kernel_src.value());
@@ -399,7 +399,7 @@ void TestWorker::create_kernel(
 // ====================================
 
 TestSender::TestSender(
-    CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
+    tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
     TestWorker(logical_core, test_device_ptr, kernel_src) {
     // TODO: init mem map?
 }
@@ -471,7 +471,7 @@ bool TestSender::validate_results(std::vector<uint32_t>& data) const {
 // ====================================
 
 TestReceiver::TestReceiver(
-    CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
+    tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
     TestWorker(logical_core, test_device_ptr, kernel_src) {
     // TODO: init mem map?
 }
@@ -531,7 +531,7 @@ bool TestReceiver::validate_results(std::vector<uint32_t>& data) const {
 // TestSync Implementation
 // ====================================
 
-TestSync::TestSync(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
+TestSync::TestSync(tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
     TestWorker(logical_core, test_device_ptr, kernel_src) {
     // TODO: init mem map?
 }
@@ -565,7 +565,7 @@ bool TestSync::validate_results(std::vector<uint32_t>& /*data*/) const {
 // TestMux Implementation
 // ====================================
 
-TestMux::TestMux(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
+TestMux::TestMux(tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
     TestWorker(logical_core, test_device_ptr, kernel_src) {}
 
 void TestMux::set_config(FabricMuxConfig* mux_config, ConnectionKey connection_key, FabricNodeId next_hop_dst) {
@@ -598,8 +598,8 @@ tt::tt_metal::Program& TestDevice::get_program_handle() { return this->program_h
 
 const FabricNodeId& TestDevice::get_node_id() const { return this->fabric_node_id_; }
 
-void TestDevice::add_worker(TestWorkerType worker_type, CoreCoord logical_core) {
-    auto core_already_occupied = [this](TestWorkerType worker_type, CoreCoord logical_core) {
+void TestDevice::add_worker(TestWorkerType worker_type, tt::tt_metal::CoreCoord logical_core) {
+    auto core_already_occupied = [this](TestWorkerType worker_type, tt::tt_metal::CoreCoord logical_core) {
         switch (worker_type) {
             case TestWorkerType::SENDER: return senders_.contains(logical_core);
             case TestWorkerType::RECEIVER: return receivers_.contains(logical_core);
@@ -634,7 +634,7 @@ void TestDevice::add_worker(TestWorkerType worker_type, CoreCoord logical_core) 
 }
 
 ConnectionKey TestDevice::register_fabric_connection(
-    CoreCoord logical_core,
+    tt::tt_metal::CoreCoord logical_core,
     TestWorkerType worker_type,
     FabricConnectionManager& connection_mgr,
     RoutingDirection outgoing_direction,
@@ -698,7 +698,7 @@ ConnectionKey TestDevice::register_fabric_connection(
     return connection_key;
 }
 
-void TestDevice::add_sender_traffic_config(CoreCoord logical_core, TestTrafficSenderConfig config) {
+void TestDevice::add_sender_traffic_config(tt::tt_metal::CoreCoord logical_core, TestTrafficSenderConfig config) {
     if (!this->senders_.contains(logical_core)) {
         this->add_worker(TestWorkerType::SENDER, logical_core);
     }
@@ -706,7 +706,7 @@ void TestDevice::add_sender_traffic_config(CoreCoord logical_core, TestTrafficSe
     this->senders_.at(logical_core).add_config(std::move(config));
 }
 
-void TestDevice::add_sender_sync_config(CoreCoord logical_core, TestTrafficSyncConfig sync_config) {
+void TestDevice::add_sender_sync_config(tt::tt_metal::CoreCoord logical_core, TestTrafficSyncConfig sync_config) {
     if (!this->sync_workers_.contains(logical_core)) {
         this->add_worker(TestWorkerType::SYNC, logical_core);
     }
@@ -714,7 +714,7 @@ void TestDevice::add_sender_sync_config(CoreCoord logical_core, TestTrafficSyncC
     this->sync_workers_.at(logical_core).add_config(std::move(sync_config));
 }
 
-void TestDevice::add_receiver_traffic_config(CoreCoord logical_core, const TestTrafficReceiverConfig& config) {
+void TestDevice::add_receiver_traffic_config(tt::tt_metal::CoreCoord logical_core, const TestTrafficReceiverConfig& config) {
     if (!this->receivers_.contains(logical_core)) {
         this->add_worker(TestWorkerType::RECEIVER, logical_core);
     }
@@ -723,7 +723,7 @@ void TestDevice::add_receiver_traffic_config(CoreCoord logical_core, const TestT
 }
 
 void TestDevice::add_mux_worker_config(
-    CoreCoord logical_core, FabricMuxConfig* mux_config, ConnectionKey connection_key, FabricNodeId next_hop_dst) {
+    tt::tt_metal::CoreCoord logical_core, FabricMuxConfig* mux_config, ConnectionKey connection_key, FabricNodeId next_hop_dst) {
     if (!this->muxes_.contains(logical_core)) {
         this->add_worker(TestWorkerType::MUX, logical_core);
     }
@@ -1217,7 +1217,7 @@ TestDevice::ValidationReadOps TestDevice::initiate_results_readback() const {
     ValidationReadOps ops;
 
     // Get sender cores
-    std::vector<CoreCoord> sender_cores;
+    std::vector<tt::tt_metal::CoreCoord> sender_cores;
     sender_cores.reserve(this->senders_.size());
     for (const auto& [core, _] : this->senders_) {
         sender_cores.push_back(core);
@@ -1236,7 +1236,7 @@ TestDevice::ValidationReadOps TestDevice::initiate_results_readback() const {
     }
 
     // Get receiver cores
-    std::vector<CoreCoord> receiver_cores;
+    std::vector<tt::tt_metal::CoreCoord> receiver_cores;
     receiver_cores.reserve(this->receivers_.size());
     for (const auto& [core, _] : this->receivers_) {
         receiver_cores.push_back(core);
@@ -1280,7 +1280,7 @@ void TestDevice::validate_results_after_readback(const ValidationReadOps& ops) c
 }
 
 void TestDevice::validate_sender_results() const {
-    std::vector<CoreCoord> sender_cores;
+    std::vector<tt::tt_metal::CoreCoord> sender_cores;
     sender_cores.reserve(this->senders_.size());
     for (const auto& [core, _] : this->senders_) {
         sender_cores.push_back(core);
@@ -1305,7 +1305,7 @@ void TestDevice::validate_sender_results() const {
 }
 
 void TestDevice::validate_receiver_results() const {
-    std::vector<CoreCoord> receiver_cores;
+    std::vector<tt::tt_metal::CoreCoord> receiver_cores;
     receiver_cores.reserve(this->receivers_.size());
     for (const auto& [core, _] : this->receivers_) {
         receiver_cores.push_back(core);
@@ -1331,7 +1331,7 @@ void TestDevice::validate_receiver_results() const {
 
 void TestDevice::set_local_runtime_args_for_core(
     const MeshCoordinate& device_coord,
-    CoreCoord logical_core,
+    tt::tt_metal::CoreCoord logical_core,
     uint32_t local_args_address,
     const std::vector<uint32_t>& args) const {
     device_info_provider_->write_data_to_core(device_coord, logical_core, local_args_address, args);
@@ -1351,12 +1351,12 @@ size_t TestDevice::get_latency_receive_buffer_address(uint32_t payload_size) con
 }
 
 void TestDevice::create_latency_sender_kernel(
-    CoreCoord core,
+    tt::tt_metal::CoreCoord core,
     FabricNodeId dest_node,
     uint32_t payload_size,
     uint32_t num_samples,
     NocSendType noc_send_type,
-    CoreCoord responder_virtual_core) {
+    tt::tt_metal::CoreCoord responder_virtual_core) {
     log_debug(tt::LogTest, "Creating latency sender kernel on node: {}", fabric_node_id_);
 
     // Use static memory map address for semaphore (same as bandwidth tests)
@@ -1449,14 +1449,14 @@ void TestDevice::create_latency_sender_kernel(
 }
 
 void TestDevice::create_latency_responder_kernel(
-    CoreCoord core,
+    tt::tt_metal::CoreCoord core,
     FabricNodeId sender_node,
     uint32_t payload_size,
     uint32_t num_samples,
     NocSendType noc_send_type,
     uint32_t sender_send_buffer_address,
     uint32_t sender_receive_buffer_address,
-    CoreCoord sender_virtual_core) {
+    tt::tt_metal::CoreCoord sender_virtual_core) {
     log_debug(tt::LogTest, "Creating latency responder kernel on node: {}", fabric_node_id_);
 
     // Use static memory map address for semaphore (same as bandwidth tests)
@@ -1552,14 +1552,14 @@ void TestDevice::create_latency_responder_kernel(
 }
 
 // Set kernel source for specific workers (used by latency tests to override default kernels)
-void TestDevice::set_sender_kernel_src(CoreCoord core, const std::string& kernel_src) {
+void TestDevice::set_sender_kernel_src(tt::tt_metal::CoreCoord core, const std::string& kernel_src) {
     auto it = senders_.find(core);
     if (it != senders_.end()) {
         it->second.set_kernel_src(kernel_src);
     }
 }
 
-void TestDevice::set_receiver_kernel_src(CoreCoord core, const std::string& kernel_src) {
+void TestDevice::set_receiver_kernel_src(tt::tt_metal::CoreCoord core, const std::string& kernel_src) {
     auto it = receivers_.find(core);
     if (it != receivers_.end()) {
         it->second.set_kernel_src(kernel_src);

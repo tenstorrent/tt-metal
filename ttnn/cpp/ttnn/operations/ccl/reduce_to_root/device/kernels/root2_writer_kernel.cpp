@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/common.hpp"
@@ -59,7 +60,8 @@ void kernel_main() {
     const size_t fabric_mux_buffer_index_address = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t fabric_mux_channel_id = get_arg_val<uint32_t>(arg_idx++);
 
-    uint32_t termination_sync_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    uint32_t termination_sync_id = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t termination_sync_address = get_semaphore(termination_sync_id);
     uint32_t local_fabric_mux_status_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     uint32_t local_flow_control_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     uint32_t local_teardown_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
@@ -149,8 +151,8 @@ void kernel_main() {
 
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
     if (is_termination_master) {
-        auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
-        noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
+        Semaphore<> termination_sync(termination_sync_id);
+        termination_sync.wait(num_mux_clients - 1);
         tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
     } else {
         uint64_t dest_addr =
