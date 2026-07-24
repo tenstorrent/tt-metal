@@ -497,8 +497,16 @@ class TestSparseFramesRing:
 
     @_MESH_TOPOLOGY
     @pytest.mark.parametrize(
-        "sparse_frames_enabled",
-        [pytest.param(True, id="sparse"), pytest.param(False, id="dense")],
+        ("sparse_frames_enabled", "force_allow_all"),
+        [
+            pytest.param(True, False, id="sparse"),
+            pytest.param(False, False, id="dense"),
+            # Sparse infrastructure enabled but every (q_frame, k_frame) allowed — no k_chunks
+            # skipped. Isolates whether the deadlock is in the sparse machinery itself (drain
+            # path, per-work-item counters, restore_from_staging bypass) versus in whatever
+            # differs when some k_chunks are actually skipped/drained.
+            pytest.param(True, True, id="sparse_allow_all"),
+        ],
     )
     def test_720p_shape(
         self,
@@ -512,6 +520,7 @@ class TestSparseFramesRing:
         all_gather_topology,
         reset_seeds,
         sparse_frames_enabled,
+        force_allow_all,
     ):
         """720p-scale geometry: fsl=3840, nf_real=21 -> nf_padded=sp_multiple, window=5,
         add_last_frame=True. n_head=40, dim=128 — representative of a real video-DiT workload.
@@ -546,6 +555,7 @@ class TestSparseFramesRing:
             q_chunk_size_tokens=320,  # 320 tokens = 10 tiles; fsl/12 = 3840/12
             k_chunk_size_tokens=384,  # 384 tokens = 12 tiles; fsl/10 = 3840/10
             sparse_frames_enabled=sparse_frames_enabled,
+            force_allow_all=force_allow_all,
         )
 
     @_MESH_TOPOLOGY
