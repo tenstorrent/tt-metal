@@ -119,9 +119,9 @@
 #define kNonceHartZones (1ull << 19) /* P_NONCE bit19: harts emit per-drain zones IN-BAND (+ hart0 inline calib) */
 #define PP_X280_ZONE 2u              /* in-band X280 hart-zone packet (3 words); MUST match prof_packet.h */
 static uint32_t g_hartzones = 0;     /* set in main() from nonce bit19; read by reader_run/relay */
-/* word0 for an X280-zone packet: type | (hart<<1) | is_start */
-static inline uint32_t hz_w0(uint32_t hart, uint32_t is_start) {
-    return (PP_X280_ZONE << 27) | ((hart & 0x3Fu) << 1) | (is_start & 1u);
+/* word0 for an X280-zone packet: type | (hart<<2) | (is_bulk<<1) | is_start */
+static inline uint32_t hz_w0(uint32_t hart, uint32_t is_start, uint32_t is_bulk) {
+    return (PP_X280_ZONE << 27) | ((hart & 0x3Fu) << 2) | ((is_bulk & 1u) << 1) | (is_start & 1u);
 }
 /* socket h config @ base + h*stride. MUST be in the core-readable low mailbox region (between COORDS-end
  * 0x08011570 and HEADS 0x08013000): the X280 core reads 0x0801A000 (the manager's addr) as ZERO -- that
@@ -151,16 +151,17 @@ static inline void hz_stage(
     uint32_t* prodp,
     uint64_t cons_addr,
     uint32_t hart,
+    uint32_t is_bulk,
     uint64_t t0,
     uint64_t t1) {
     while ((uint32_t)(stage_words - (*prodp - r32(cons_addr))) < 6u) {
         cpu_pause();
     }
     uint32_t p = *prodp;
-    w32(sbase + (uint64_t)((p + 0) & swm) * 4, hz_w0(hart, 1));
+    w32(sbase + (uint64_t)((p + 0) & swm) * 4, hz_w0(hart, 1, is_bulk));
     w32(sbase + (uint64_t)((p + 1) & swm) * 4, (uint32_t)t0);
     w32(sbase + (uint64_t)((p + 2) & swm) * 4, (uint32_t)(t0 >> 32));
-    w32(sbase + (uint64_t)((p + 3) & swm) * 4, hz_w0(hart, 0));
+    w32(sbase + (uint64_t)((p + 3) & swm) * 4, hz_w0(hart, 0, is_bulk));
     w32(sbase + (uint64_t)((p + 4) & swm) * 4, (uint32_t)t1);
     w32(sbase + (uint64_t)((p + 5) & swm) * 4, (uint32_t)(t1 >> 32));
     *prodp = p + 6;
@@ -171,7 +172,7 @@ static inline void hz_stage(
  * the data they just copied. Caller publishes bytes_sent after. */
 static inline void hz_fifo(uint64_t fbase, uint32_t fifo_w, uint32_t* bsentp, uint32_t hart, uint64_t t0, uint64_t t1) {
     uint32_t words[6] = {
-        hz_w0(hart, 1), (uint32_t)t0, (uint32_t)(t0 >> 32), hz_w0(hart, 0), (uint32_t)t1, (uint32_t)(t1 >> 32)};
+        hz_w0(hart, 1, 0), (uint32_t)t0, (uint32_t)(t0 >> 32), hz_w0(hart, 0, 0), (uint32_t)t1, (uint32_t)(t1 >> 32)};
     uint32_t dw = (*bsentp / 4u) % fifo_w;
     for (uint32_t k = 0; k < 6u; k++) {
         w32(fbase + (uint64_t)((dw + k) % fifo_w) * 4, words[k]);
@@ -362,8 +363,8 @@ static void reader_run(
                     w32(cbase + r * 4, tails[r]); /* advance heads -> producers unblock */
                 }
                 t_copy += rdcycle() - tc;
-                if (g_hartzones) { /* inject the drain zone BEFORE the publish so it rides out with this core */
-                    hz_stage(sbase, stage_words, swm, &prod, CONS(hartid), (uint32_t)hartid, hz_t, rdcycle());
+                if (g_hartzones) { /* BULK drain zone (is_bulk=1) -- inject BEFORE publish so it rides out */
+                    hz_stage(sbase, stage_words, swm, &prod, CONS(hartid), (uint32_t)hartid, 1u, hz_t, rdcycle());
                 }
                 fence_();                /* frame + raw + zone visible before PROD advances */
                 w32(PROD(hartid), prod); /* ONE publish for the whole core */
@@ -431,8 +432,8 @@ static void reader_run(
                 heads[L] = tail;
                 w32(cbase + r * 4, tail); /* advance worker head -> producer unblocks (kept per-risc) */
             }
-            if (g_hartzones && prod != hz_prod0) { /* this visit drained -> inject the zone before publishing */
-                hz_stage(sbase, stage_words, swm, &prod, CONS(hartid), (uint32_t)hartid, hz_t, rdcycle());
+            if (g_hartzones && prod != hz_prod0) { /* PER-RISC drain zone (is_bulk=0) -- inject before publishing */
+                hz_stage(sbase, stage_words, swm, &prod, CONS(hartid), (uint32_t)hartid, 0u, hz_t, rdcycle());
             }
             if (prod != prod_core0) {    /* published once per core: amortizes the fence across all 5 riscs */
                 fence_();                /* all riscs' data + stickies + zone visible before PROD advances */

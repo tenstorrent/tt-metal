@@ -982,10 +982,14 @@ int main(int argc, char** argv) {
         nc.fl_pages.assign(ndh, 0);  // --socket: total pages the host read from this socket (reliable)
     }
     // --hartzones (option B): X280 hart zones ride IN-BAND in the drain stream (readers inject into STAGE,
-    // relays into the socket). The flusher decodes PP_X280_ZONE packets here and appends their timestamps to
-    // hz_raw[hart] (START,END,START,END... per hart) -- no separate poller, no extra cluster reads. Each hart
-    // is written by exactly one flusher (its drain path), so the per-hart vectors need no lock.
-    std::vector<std::vector<uint64_t>> hz_raw(nharts);
+    // relays into the socket). The flusher decodes PP_X280_ZONE packets here and appends {rdcycle, meta} to
+    // hz_raw[hart] (START,END,START,END... per hart) -- no separate poller, no extra cluster reads. meta =
+    // packet low27 (carries is_start + is_bulk). Each hart is written by one flusher, so no lock needed.
+    struct HZMark {
+        uint64_t rdc;
+        uint32_t meta;
+    };
+    std::vector<std::vector<HZMark>> hz_raw(nharts);
     // Flusher for node nc's socket h: drain ring/FIFO h IN ORDER, demux (dispatch bulk/per-risc) + decode into
     // fully-resolved device records + per-lane seq verify (this socket owns its band's lanes), push record
     // batches to the ONE shared MPMC. Demux MUST live here (sticky-src is in-order per stream); records are
@@ -1191,7 +1195,7 @@ int main(int argc, char** argv) {
                     uint32_t hart = pp_x280_hart(w0);
                     uint64_t rdc = ((uint64_t)buf[p + 2] << 32) | buf[p + 1];
                     if (hart < hz_raw.size()) {
-                        hz_raw[hart].push_back(rdc);  // START,END alternate; teardown pairs (2i,2i+1)
+                        hz_raw[hart].push_back({rdc, pp_low27(w0)});  // START,END alternate; teardown pairs (2i,2i+1)
                     }
                     p += 3;
                 } else {  // 2 words: PROG / marker (emit resolves)
@@ -1688,39 +1692,47 @@ int main(int argc, char** argv) {
             double aiclk_mhz = cluster.get_device_aiclk(device_id);
             auto map_ts = [&](uint64_t x) -> uint64_t { return (uint64_t)(a * (double)(x - x_base) + bb) + t_base; };
             CoreCoord l2t = pz::x280_l2cpu_tile(node[0].l2cpu);
-            printf(
-                "\n=== X280 hart zones (--hartzones; a=%.5f, context X280 (%u,%u)) ===\n",
-                a,
-                (uint32_t)l2t.x,
-                (uint32_t)l2t.y);
+            printf("\n=== X280 hart zones (--hartzones; a=%.5f) ===\n", a);
+            // Each hart is its OWN Tracy context row (named by hart) since the per-lane header is GUI-derived
+            // from the risc bits and can't be set client-side. Distinct per-hart context colors; BULK reader
+            // drains (adaptive-switch tripped) are recolored red so the bulk episodes stand out.
+            static const uint32_t kHartColor[4] = {
+                0xE67E22u /* rd0 orange */,
+                0xF1C40Fu /* rd1 yellow */,
+                0x1ABC9Cu /* relay0 teal */,
+                0x3498DBu /* relay1 blue */};
+            const uint32_t kBulkColor = 0xE74C3Cu;  // red: reader adaptive-switched to BULK
             for (uint64_t h = 0; h < nharts; h++) {
                 const char* role = (h < nread) ? "READ" : "RELAY";
-                // Per-hart zone name so each lane self-identifies by role+index (the lane HEADER itself is
-                // BRISC/NCRISC/TRISC0/1 -- GUI-derived from the risc bits, not settable client-side). Mapping:
-                // BRISC=rd0, NCRISC=rd1, TRISC_0=relay0, TRISC_1=relay1.
                 std::string hname =
-                    (h < nread) ? ("X280-rd" + std::to_string(h)) : ("X280-relay" + std::to_string(h - nread));
-                const std::vector<uint64_t>& mk = hz_raw[h];  // in-band [start,end,start,end,...] rdcycle stamps
+                    (h < nread) ? ("X280 rd" + std::to_string(h)) : ("X280 relay" + std::to_string(h - nread));
+                const std::vector<HZMark>& mk = hz_raw[h];  // in-band {rdcycle,meta} START,END pairs
                 if (mk.empty()) {
                     printf("  hart%llu (%s): 0 zones\n", (unsigned long long)h, role);
                     continue;
                 }
                 uint64_t busy_ns = 0;
-                uint32_t nz = 0;
-                for (size_t i = 0; i + 1 < mk.size(); i += 2) {  // pair consecutive START,END rdcycle stamps
-                    uint64_t ts0 = map_ts(mk[i]), ts1 = map_ts(mk[i + 1]);
+                uint32_t nz = 0, nbulk = 0;
+                for (size_t i = 0; i + 1 < mk.size(); i += 2) {  // pair consecutive START,END
+                    bool bulk = ((mk[i].meta >> 1) & 1u) != 0u;  // is_bulk carried on the START marker
+                    uint64_t ts0 = map_ts(mk[i].rdc), ts1 = map_ts(mk[i + 1].rdc);
                     busy_ns += (uint64_t)((double)(ts1 - ts0) / (aiclk_mhz / 1000.0));
                     nz++;
+                    if (bulk) {
+                        nbulk++;
+                    }
 #if defined(TRACY_ENABLE)
                     if (do_tracy && tracy_handler) {
+                        std::string zn = bulk ? (hname + " BULK") : hname;
                         tt::tt_metal::perf_debug::WorkerZonePacket zp{};
                         zp.chip_id = (uint32_t)device_id;
                         zp.is_x280 = true;
-                        zp.color = 0xE67E22u;  // distinct orange for all X280 hart zones
-                        zp.core_noc0_x = (uint32_t)l2t.x;
-                        zp.core_noc0_y = (uint32_t)l2t.y;
-                        zp.risc = (uint32_t)h;  // hart index -> lane within the X280 context
-                        zp.name = hname;        // per-hart role+index (self-labels the lane's zones)
+                        zp.ctx_name = hname;                               // context row label = hart
+                        zp.color = bulk ? kBulkColor : kHartColor[h & 3];  // per-hart, bulk=red
+                        zp.core_noc0_x = (uint32_t)l2t.x;                  // distinct key per hart:
+                        zp.core_noc0_y = 40u + (uint32_t)h;                // (8, 40+hart), off-grid
+                        zp.risc = 0;                                       // single lane per context
+                        zp.name = zn;
                         zp.timestamp = (ts0 >= x280_ts_base) ? ts0 - x280_ts_base : 0;
                         zp.is_start = true;
                         tracy_handler->HandleWorkerZone(zp);
@@ -1731,10 +1743,12 @@ int main(int argc, char** argv) {
 #endif
                 }
                 printf(
-                    "  hart%llu (%s): %u zones  busy=%llu us\n",
+                    "  hart%llu (%s): %u zones (%u bulk / %u per-risc)  busy=%llu us\n",
                     (unsigned long long)h,
                     role,
                     nz,
+                    nbulk,
+                    nz - nbulk,
                     (unsigned long long)(busy_ns / 1000));
             }
         }

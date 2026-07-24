@@ -102,7 +102,9 @@ void PerfDebugTracyHandler::HandleWorkerZone([[maybe_unused]] const perf_debug::
         zone.chip_id,
         zone.core_noc0_x,
         zone.core_noc0_y,
-        zone.is_x280 ? fmt::format("Device: {} X280 ({},{})", zone.chip_id, zone.core_noc0_x, zone.core_noc0_y)
+        zone.is_x280 ? (zone.ctx_name.empty()
+                            ? fmt::format("Device: {} X280 ({},{})", zone.chip_id, zone.core_noc0_x, zone.core_noc0_y)
+                            : fmt::format("Device: {} {}", zone.chip_id, zone.ctx_name))
                      : fmt::format("Device: {} Physical ({},{})", zone.chip_id, zone.core_noc0_x, zone.core_noc0_y));
     if (!ctx) {
         return;
