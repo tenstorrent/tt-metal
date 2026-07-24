@@ -1,12 +1,19 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Validate FLUX.1 LoRA fuse-in-load on the Kontext pipeline.
+"""Validate FLUX.1 LoRA on the Kontext pipeline (on-device, needs hardware).
 
-Set LORA_PATH (a FLUX.1 LoRA .safetensors) and optionally LORA_SCALE. The LoRA
-is fused into the transformer weights at load time (Flux1Checkpoint), then a
-text-to-image generation is run so the style change is visible. Run with an
-empty LORA_PATH for the no-LoRA baseline (same prompt/seed) to A/B compare.
+Set LORA_PATH (a FLUX.1 LoRA .safetensors) and optionally LORA_SCALE. The
+adapter is loaded through the shared tt-dit LoRA framework — the transformer is
+built with LoRA-aware Linears and the adapter is registered + bound in fuse
+mode, merging the delta into the on-device base weights (Flux1Checkpoint._load_and_bind_lora
+→ experimental/lora/flux_adapter_loader.load_flux_adapter_into). A text-to-image
+generation is then run so the style change is visible; run with an empty
+LORA_PATH for the no-LoRA baseline (same prompt/seed) to A/B compare.
+
+The device-free correctness of the fused-QKV A/B stacking + head-interleave is
+covered separately by
+models/tt_dit/experimental/tests/test_flux_adapter_loader.py.
 """
 
 import os
