@@ -7,6 +7,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux_v2_sender.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
@@ -46,17 +47,9 @@ constexpr uint32_t slice_C = get_named_compile_time_arg_val("slice_C");
 constexpr uint32_t slice_Ht = get_named_compile_time_arg_val("slice_Ht");
 constexpr uint32_t slice_Wt = get_named_compile_time_arg_val("slice_Wt");
 constexpr uint32_t dim = get_named_compile_time_arg_val("dim");
-#ifdef USE_WORKER_MUX
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(0);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(1);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(2);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(3);
-constexpr uint32_t num_mux_clients = get_compile_time_arg_val(4);
-
-constexpr uint32_t num_ct_args = 5;
-#else
+// The V2 fabric mux client (FabricMuxV2Sender) is built entirely from runtime args, so there are no
+// worker-side mux compile-time args in either the mux or the direct-fabric path.
 constexpr uint32_t num_ct_args = 0;
-#endif
 
 // Routing info uses positional args after fabric mux args
 constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
@@ -95,24 +88,11 @@ void kernel_main() {
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
 #ifdef USE_WORKER_MUX
-    const bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
-    const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t fabric_mux_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t fabric_mux_y = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_channel_base_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_connection_info_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_connection_handshake_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_flow_control_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_buffer_index_address = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t fabric_mux_channel_id = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t termination_sync_id = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t termination_sync_address = get_semaphore(termination_sync_id);
-    uint32_t local_fabric_mux_status_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    uint32_t local_flow_control_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    uint32_t local_teardown_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    uint32_t local_buffer_index_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
+    // The V2 mux client args are the last runtime args; FabricMuxV2Sender::build_from_args consumes
+    // exactly what FabricMuxV2Config::append_client_connection_rt_args serialized on the host.
+    size_t mux_arg_idx = arg_idx;
+    auto mux_sender = tt::tt_fabric::FabricMuxV2Sender<>::build_from_args(mux_arg_idx);
+    arg_idx = mux_arg_idx;
 #endif
 
     const auto& unicast_route_info = (direction == 1) ? forward_unicast_route_info : backward_unicast_route_info;
@@ -127,26 +107,7 @@ void kernel_main() {
     constexpr auto output_tensor_args = TensorAccessorArgs<interm_tensor_args.next_compile_time_args_offset()>();
     auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_tensor_address);
 
-#ifdef USE_WORKER_MUX
-    auto mux_connection_handle = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
-        fabric_mux_x,
-        fabric_mux_y,
-        fabric_mux_channel_id,
-        fabric_mux_num_buffers_per_channel,
-        fabric_mux_channel_buffer_size_bytes,
-        fabric_mux_channel_base_address,
-        fabric_mux_connection_info_address,
-        fabric_mux_connection_handshake_address,
-        fabric_mux_flow_control_address,
-        fabric_mux_buffer_index_address,
-        local_flow_control_address,
-        local_teardown_address,
-        local_buffer_index_address);
-
-    // need to wait for fabric mux to be ready to accept connections
-    tt::tt_fabric::wait_for_fabric_endpoint_ready(
-        fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
-#else
+#ifndef USE_WORKER_MUX
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
 #endif
@@ -166,8 +127,9 @@ void kernel_main() {
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_fused_scatter, unicast_route_info);
 
 #ifdef USE_WORKER_MUX
-    tt::tt_fabric::fabric_client_connect(mux_connection_handle);
-    auto* fabric_direction_connection = &mux_connection_handle;
+    // Blocking open: waits for the mux to be READY, then requests the connection.
+    mux_sender.open();
+    auto* fabric_direction_connection = &mux_sender;
 #else
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.open();
@@ -282,6 +244,7 @@ void kernel_main() {
     // semaphore chunk, so packets wider than 2 tiles cannot fuse (caller falls back to send_seminc).
     auto send_write_packet =
         [&](size_t l1_read_addr, uint32_t num_tiles, bool fuse_seminc, uint64_t sem_noc_addr) -> bool {
+
         if (fuse_seminc && num_tiles <= 2) {
             if (num_tiles == 2) {
                 fabric_unicast_noc_fused_scatter_write_atomic_inc_with_state<
@@ -571,17 +534,9 @@ void kernel_main() {
     noc_obj.async_write_barrier();
     noc_obj.async_atomic_barrier();
 #ifdef USE_WORKER_MUX
-    tt::tt_fabric::fabric_client_disconnect(mux_connection_handle);
-    if (is_termination_master) {
-        Semaphore<> termination_sync(termination_sync_id);
-        termination_sync.wait(num_mux_clients - 1);
-        tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
-    } else {
-        uint64_t dest_addr =
-            safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
-        noc_semaphore_inc(dest_addr, 1);
-        noc_obj.async_atomic_barrier();
-    }
+    // Close this client's connection. The V2 mux auto-terminates once all of its clients have closed,
+    // so no termination-master coordination or explicit terminate signal is needed.
+    mux_sender.close();
 #else
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.close();
