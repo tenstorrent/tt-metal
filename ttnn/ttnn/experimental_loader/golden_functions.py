@@ -97,4 +97,6 @@ def _nop_golden_function(input_tensor, *args, **kwargs):
     return input_tensor
 
 
-ttnn.attach_golden_function(ttnn.tilize, _nop_golden_function)
+# tilize may be absent (e.g. nuked for agent-eval regeneration); only attach if present.
+if hasattr(ttnn, "tilize"):
+    ttnn.attach_golden_function(ttnn.tilize, _nop_golden_function)

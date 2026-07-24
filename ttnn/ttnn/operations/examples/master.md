@@ -74,6 +74,23 @@ default fills ≤ 1/K of the grid"); when the gate doesn't trip the default path
 shapes it already handled cannot regress. Same kernels; only the per-core tile rectangle / active-core
 count change.
 
+## ⭐⭐ T2 — [`dram_saturation`](dram_saturation/README.md)
+**Concept:** the core-count sweet spot for a **DRAM-bound** op — achieved bandwidth saturates as you
+add cores, so more cores stop paying; and placement decides where the knee falls.
+**Situation:** you have a data-movement-bound op and reflexively launch on the whole grid. "More cores
+= faster" only holds until the DRAM interface saturates; past that knee the extra cores add no
+bandwidth (wasted) and, if stacked onto shared NoC links, congest.
+**Measured win:** a pure DRAM→DRAM copy (no compute) of 8.4 MB bf16, swept over core count (WH B0):
+`spread` placement rises ~linearly (~21.7 GB/s/core) then **plateaus at ~191–195 GB/s from ~16 cores** —
+**16 → 64 cores (4×) buys only ~1.5%**, and GB/s/core collapses 21.7 → 3.0. Placement moves the knee:
+`stacked` (piled on one column) does **71.8 GB/s at 8 cores vs spread's 146.3**, and needs ~48 cores to
+reach what spread hits at 16. (No hard slower-with-more rollover on this shape — the over-subscription
+cost here is wasted cores, not a slowdown.)
+**Gist:** classify the bound first; if DRAM-bandwidth-bound, don't fill the grid — sweep core count,
+find the bandwidth plateau, and use the **minimum well-placed cores that reach it** (spread across the
+DRAM-facing axis). Cores past the knee add nothing. Only a *non*-bandwidth-bound op (compute/latency, or
+grid not yet full of independent work) keeps paying for more cores — the `width_split` grid-filling regime.
+
 ## ⭐⭐ T2 — [`double_buffer`](double_buffer/README.md)
 **Concept:** keeping bytes in flight on the NoC for a DRAM reader→compute→writer pipeline, via three
 levers — outstanding reads per barrier (`block`), double-buffered CBs, and transfer size (dtype).
@@ -314,8 +331,10 @@ on WH) and `tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerfo
   and maps each DRAM bank to its NoC-optimal worker.
   `get_optimal_worker_cores_for_sharded_tensor()` — `ttnn/core/tensor/tensor_utils.cpp:54`; consumers
   `untilize/device/factories/untilize_multi_core_program_factory.cpp:330`.
-- **A3. Reader adjacent to its DRAM bank; one reader ↔ one bank** *(proposition)* — one NoC hop,
-  disjoint routes. `Saturating_DRAM_bandwidth.md:4-13`.
+- **A3. Reader adjacent to its DRAM bank; one reader ↔ one bank** — one NoC hop, disjoint routes;
+  multiple readers stacked on one axis congest. `Saturating_DRAM_bandwidth.md:4-13`.
+  **→ example: `dram_saturation`** (the `stacked`-vs-`spread` core sweep shows the congestion and the
+  bandwidth-saturation knee).
 - **A4. Cliff-core specialization** *(proposition)* — split into full cores + one remainder core; skip
   the cliff kernel when empty. `work_split.hpp:46`; `untilize_multi_core_program_factory.cpp:132,396-400`.
 
