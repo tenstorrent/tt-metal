@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import weakref
-from dataclasses import FrozenInstanceError
 
 import torch
 
@@ -59,7 +58,6 @@ def test_blocking_read_returns_nested_host_payload_without_retention(monkeypatch
     assert log_probs.cpu_calls == [True]
     assert events == []
     assert synchronized == []
-    assert reader.pending_count == 0
 
 
 def test_synchronized_read_submits_every_copy_then_synchronizes_device_once(monkeypatch):
@@ -75,7 +73,6 @@ def test_synchronized_read_submits_every_copy_then_synchronizes_device_once(monk
     assert output.cpu_calls == [False]
     assert log_probs.cpu_calls == [False]
     assert synchronized == ["mesh"]
-    assert reader.pending_count == 0
 
 
 def test_async_read_retains_destination_and_event_until_completion(monkeypatch):
@@ -90,13 +87,9 @@ def test_async_read_retains_destination_and_event_until_completion(monkeypatch):
     assert pending.events == (events[0][2],)
     assert events[0][:2] == ("mesh", 0)
     assert output.cpu_calls == [False]
-    assert not pending.completed
-    assert reader.pending_reads == (pending,)
 
     assert reader.complete(pending) is output.host_value
     assert synchronized == [events[0][2]]
-    assert pending.completed
-    assert reader.pending_count == 0
 
     assert reader.complete(pending) is output.host_value
     assert synchronized == [events[0][2]]
@@ -110,8 +103,6 @@ def test_async_read_can_be_completed_by_exact_unwrapped_value(monkeypatch):
 
     assert reader.complete(pending.value) is pending.value
     assert synchronized == [events[0][2]]
-    assert pending.completed
-    assert reader.pending_count == 0
 
 
 def test_reader_rejects_another_readers_pending_handle(monkeypatch, expect_error):
@@ -119,12 +110,11 @@ def test_reader_rejects_another_readers_pending_handle(monkeypatch, expect_error
     first_reader = OutputReader("first_mesh")
     second_reader = OutputReader("second_mesh")
     foreign_pending = first_reader.submit(FakeDeviceTensor("first"))
-    own_pending = second_reader.submit(FakeDeviceTensor("second"))
+    second_reader.submit(FakeDeviceTensor("second"))
 
     with expect_error(ValueError, "not owned"):
         second_reader.complete(foreign_pending)
 
-    assert second_reader.pending_reads == (own_pending,)
     first_reader.drain()
     second_reader.drain()
 
@@ -135,7 +125,6 @@ def test_reader_rejects_another_readers_completed_pending_handle(monkeypatch, ex
     second_reader = OutputReader("second_mesh")
     foreign_pending = first_reader.submit(torch.tensor([1]))
 
-    assert foreign_pending.completed
     with expect_error(ValueError, "not owned"):
         second_reader.complete(foreign_pending)
 
@@ -146,15 +135,11 @@ def test_drain_completes_every_pending_read_and_is_idempotent(monkeypatch, expec
     first = reader.submit(FakeDeviceTensor("first"))
     second = reader.submit(FakeDeviceTensor("second"))
 
-    with expect_error(FrozenInstanceError, ""):
-        first.completed = True
-
     reader.drain()
 
     assert synchronized == [events[0][2], events[1][2]]
-    assert first.completed
-    assert second.completed
-    assert reader.pending_count == 0
+    assert reader.complete(first) is first.value
+    assert reader.complete(second) is second.value
 
     reader.drain()
     assert synchronized == [events[0][2], events[1][2]]
@@ -167,11 +152,9 @@ def test_async_host_only_payload_is_already_complete(monkeypatch):
 
     pending = reader.submit((host_tensor, None))
 
-    assert pending.completed
     assert torch.equal(pending.value[0], host_tensor)
     assert pending.value[1] is None
     assert pending.events == ()
-    assert reader.pending_count == 0
     assert reader.complete(pending) is pending.value
     assert events == []
     assert synchronized == []
@@ -203,7 +186,6 @@ def test_record_event_failure_synchronizes_device(monkeypatch):
         raise AssertionError("record_event failure was not propagated")
 
     assert device_synchronizations == ["mesh"]
-    assert reader.pending_count == 0
 
 
 def test_partial_nested_async_copy_failure_synchronizes_while_destinations_are_retained(monkeypatch, expect_error):
@@ -232,4 +214,3 @@ def test_partial_nested_async_copy_failure_synchronizes_while_destinations_are_r
 
     assert failing.cpu_calls == [False]
     assert device_synchronizations == ["mesh"]
-    assert reader.pending_count == 0

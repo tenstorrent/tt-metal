@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -40,12 +40,6 @@ class ProgramKey:
     def from_signature(cls, signature: Any) -> "ProgramKey":
         return cls(signature_digest(_PROGRAM_KEY_DOMAIN, _PROGRAM_KEY_SCHEMA_VERSION, signature))
 
-    @property
-    def short(self) -> str:
-        """Display-only digest prefix; registry identity always uses ``digest``."""
-
-        return self.digest[:12]
-
 
 @dataclass(frozen=True)
 class OutputSpec:
@@ -56,7 +50,10 @@ class OutputSpec:
 
     @classmethod
     def from_value(cls, value: Any) -> "OutputSpec":
-        value = _primary_output(value)
+        if isinstance(value, tuple):
+            if not value:
+                raise ValueError("Cannot derive an output specification from an empty tuple")
+            value = value[0]
         if isinstance(value, torch.Tensor):
             return cls(shape=tuple(value.shape), dtype=value.dtype)
         if isinstance(value, ttnn.Tensor):
@@ -77,7 +74,6 @@ class CompiledProgram:
     key: ProgramKey
     signature: Any
     output_spec: OutputSpec
-    ready: bool = True
 
 
 class ProgramCompiler:
@@ -94,10 +90,6 @@ class ProgramCompiler:
         self._released = False
 
     @property
-    def programs(self) -> Mapping[ProgramKey, CompiledProgram]:
-        return self._programs.copy()
-
-    @property
     def trace_capture_in_progress(self) -> bool:
         return self._trace_capture_in_progress
 
@@ -110,28 +102,12 @@ class ProgramCompiler:
         return len(self._compile_orphans)
 
     def key_for(self, signature: Any) -> ProgramKey:
-        material = _canonical_value(signature_key_material(signature))
+        material = _canonical_value(_signature_key_material(signature))
         key = self._program_keys.get(material)
         if key is None:
             key = ProgramKey.from_signature(signature)
             self._program_keys[material] = key
         return key
-
-    def get(self, key: ProgramKey) -> CompiledProgram | None:
-        return self._programs.get(key)
-
-    def get_for_signature(self, signature: Any) -> CompiledProgram | None:
-        key = self.key_for(signature)
-        program = self._programs.get(key)
-        if program is not None:
-            _ensure_matching_signature(key, program.signature, signature)
-        return program
-
-    def require_bound_cache_context(self) -> Any:
-        context = self._bound_cache_context()
-        if context is None:
-            raise RuntimeError("Paged KV cache must be allocated and bound before compilation")
-        return context
 
     def compile(
         self,
@@ -145,7 +121,8 @@ class ProgramCompiler:
         """Compile one signature and release its transient invocation output."""
 
         self._ensure_live()
-        self._ensure_no_compile_orphans()
+        if self._compile_orphans:
+            raise RuntimeError("Cannot compile while unreleased compile outputs remain; clean up this compiler")
         key = self.key_for(signature)
         existing = self._programs.get(key)
         if existing is not None:
@@ -158,7 +135,9 @@ class ProgramCompiler:
         if self._trace_active:
             raise RuntimeError(f"Cannot compile uncompiled program key {key.digest} after trace activation")
 
-        cache_context = self.require_bound_cache_context()
+        cache_context = self._bound_cache_context()
+        if cache_context is None:
+            raise RuntimeError("Paged KV cache must be allocated and bound before compilation")
         output = invoke(cache_context)
         owned_output = release_output(output)
         try:
@@ -193,7 +172,7 @@ class ProgramCompiler:
     def require_compiled(self, key: ProgramKey, signature: Any | None = None) -> CompiledProgram:
         self._ensure_live()
         program = self._programs.get(key)
-        if program is None or not program.ready:
+        if program is None:
             suffix = " after trace activation" if self._trace_active else ""
             raise RuntimeError(f"Program key {key.digest} was not compiled{suffix}")
         if signature is not None:
@@ -224,8 +203,6 @@ class ProgramCompiler:
             error = RuntimeError(f"Failed to release {len(failures)} compile output resource(s)")
             attach_cleanup_failures(error, failures)
             raise error from failures[0]
-        for program in self._programs.values():
-            program.ready = False
         self._program_keys.clear()
         self._trace_capture_in_progress = False
         self._trace_active = False
@@ -242,12 +219,8 @@ class ProgramCompiler:
         if self._released:
             raise RuntimeError("ProgramCompiler has been released")
 
-    def _ensure_no_compile_orphans(self) -> None:
-        if self._compile_orphans:
-            raise RuntimeError("Cannot compile while unreleased compile outputs remain; clean up this compiler")
 
-
-def signature_key_material(signature: Any) -> tuple[Any, ...]:
+def _signature_key_material(signature: Any) -> tuple[Any, ...]:
     """Return the explicit tagged primitive tuple supplied by a signature."""
 
     try:
@@ -265,7 +238,7 @@ def signature_digest(domain: str, schema_version: int, signature: Any) -> str:
     payload = (
         ("domain", domain),
         ("schema_version", schema_version),
-        ("signature", signature_key_material(signature)),
+        ("signature", _signature_key_material(signature)),
     )
     encoded = json.dumps(_canonical_value(payload), ensure_ascii=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -308,11 +281,3 @@ def validate_sha256_digest(digest: str, domain: str) -> None:
         or any(character not in "0123456789abcdef" for character in digest)
     ):
         raise ValueError(f"{domain} key digest must be a full lowercase SHA-256 hexadecimal digest")
-
-
-def _primary_output(value: Any) -> Any:
-    if isinstance(value, tuple):
-        for item in value:
-            if item is not None:
-                return item
-    return value

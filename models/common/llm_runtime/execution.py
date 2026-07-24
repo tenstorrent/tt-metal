@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Eager execution and trace dispatch by direct composition."""
+"""Concrete eager and traced execution by direct composition."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from models.common.llm_runtime.trace_compiler import InputRefreshPolicy, TraceCa
 
 
 class EagerExecutor:
-    """Single eager semantic path and the fallback target for traced execution."""
+    """Single eager semantic path."""
 
     def __init__(self, *, prefill: PrefillRuntime, decode: DecodeRuntime, program_compiler: ProgramCompiler) -> None:
         if not isinstance(prefill, PrefillRuntime):
@@ -28,10 +28,10 @@ class EagerExecutor:
         self.decode = decode
         self.program_compiler = program_compiler
 
-    def prepare_prefill(self, **kwargs: Any):
+    def _prepare_prefill(self, **kwargs: Any):
         return self.prefill.prepare(**kwargs)
 
-    def compile_prefill_prepared(self, prepared: Any):
+    def _compile_prefill(self, prepared: Any):
         programs = []
         for signature in prepared.program_signatures:
             programs.append(
@@ -44,28 +44,28 @@ class EagerExecutor:
             )
         return tuple(programs)
 
-    def execute_prefill_prepared(self, prepared: Any):
+    def _execute_prefill(self, prepared: Any):
         self._require_ready_after_trace_gate(prepared.program_signatures)
         return self.prefill.invoke(prepared)
 
-    def compile_prefill(self, *, enable_trace: bool | None = None, **kwargs: Any) -> None:
+    def compile_prefill(self, **kwargs: Any) -> None:
         kwargs.pop("kv_cache", None)
-        for prepared in self.prepare_prefill(**kwargs):
-            self.compile_prefill_prepared(prepared)
+        for prepared in self._prepare_prefill(**kwargs):
+            self._compile_prefill(prepared)
 
-    def prefill_forward(self, *, enable_trace: bool | None = None, **kwargs: Any):
-        prepared = self.prepare_prefill(**kwargs)
-        results = tuple((request, self.execute_prefill_prepared(request)) for request in prepared)
+    def prefill_forward(self, **kwargs: Any):
+        prepared = self._prepare_prefill(**kwargs)
+        results = tuple((request, self._execute_prefill(request)) for request in prepared)
         return self.prefill.assemble(
             results,
             batch_size=int(kwargs["tokens"].shape[0]),
             sampling_params=kwargs.get("sampling_params"),
         )
 
-    def prepare_decode(self, **kwargs: Any):
+    def _prepare_decode(self, **kwargs: Any):
         return self.decode.prepare(**kwargs)
 
-    def compile_decode_prepared(self, prepared: Any):
+    def _compile_decode(self, prepared: Any):
         return self.program_compiler.compile(
             self.decode.program_signature(prepared),
             lambda _context: self.decode.invoke(prepared, device_feedback=prepared.device_feedback),
@@ -73,7 +73,7 @@ class EagerExecutor:
             release_output=lambda result: result.owned,
         )
 
-    def execute_decode_prepared(self, prepared: Any, *, read_from_device: bool = True):
+    def _execute_decode(self, prepared: Any, *, read_from_device: bool = True):
         if self._program_gate_active():
             self._require_ready_after_trace_gate((self.decode.program_signature(prepared),))
         result = self.decode.invoke(prepared, device_feedback=False)
@@ -89,23 +89,22 @@ class EagerExecutor:
     def _program_gate_active(self) -> bool:
         return self.program_compiler.trace_capture_in_progress or self.program_compiler.trace_active
 
-    def compile_decode(self, *, enable_trace: bool | None = None, **kwargs: Any) -> None:
+    def compile_decode(self, **kwargs: Any) -> None:
         kwargs.pop("kv_cache", None)
-        self.compile_decode_prepared(self.prepare_decode(**kwargs))
+        self._compile_decode(self._prepare_decode(**kwargs))
 
     def decode_forward(
         self,
         *,
         read_from_device: bool = True,
-        enable_trace: bool | None = None,
         **kwargs: Any,
     ):
-        prepared = self.prepare_decode(**kwargs)
-        return self.execute_decode_prepared(prepared, read_from_device=read_from_device)
+        prepared = self._prepare_decode(**kwargs)
+        return self._execute_decode(prepared, read_from_device=read_from_device)
 
 
 class TracedExecutor:
-    """Trace dispatch that delegates all semantic preparation and fallback to eager."""
+    """Trace-only execution composed with the exact eager semantic owner."""
 
     def __init__(self, *, eager: EagerExecutor, trace_compiler: TraceCompiler) -> None:
         if not isinstance(eager, EagerExecutor):
@@ -114,32 +113,15 @@ class TracedExecutor:
             raise TypeError("trace_compiler must be a TraceCompiler")
         if trace_compiler.program_compiler is not eager.program_compiler:
             raise ValueError("trace_compiler must compose eager.program_compiler")
-        self.eager = eager
+        self.eager_executor = eager
         self.trace_compiler = trace_compiler
 
-    @property
-    def prefill(self) -> PrefillRuntime:
-        return self.eager.prefill
-
-    @property
-    def decode(self) -> DecodeRuntime:
-        return self.eager.decode
-
-    @property
-    def program_compiler(self) -> ProgramCompiler:
-        return self.eager.program_compiler
-
-    def prepare_prefill(self, **kwargs: Any):
-        return self.eager.prepare_prefill(**kwargs)
-
-    def compile_prefill_prepared(self, prepared: Any, *, enable_trace: bool):
-        programs = self.eager.compile_prefill_prepared(prepared)
-        if not enable_trace or not prepared.trace_eligible:
-            return programs
+    def _compile_prefill(self, prepared: Any):
+        programs = self.eager_executor._compile_prefill(prepared)
         for program in programs:
             if self.trace_compiler.trace_key_for_program(program.key) is not None:
                 continue
-            operation_plan = self.prefill.capture_plan(prepared)
+            operation_plan = self.eager_executor.prefill.capture_plan(prepared)
             self.trace_compiler.register_capture_plan(
                 TraceCapturePlan(
                     program_key=program.key,
@@ -152,14 +134,12 @@ class TracedExecutor:
             )
         return programs
 
-    def execute_prefill_prepared(self, prepared: Any, *, enable_trace: bool):
-        if not enable_trace or not prepared.trace_eligible:
-            return self.eager.execute_prefill_prepared(prepared)
+    def _execute_prefill(self, prepared: Any):
         signature = prepared.program_signatures[0]
-        program_key = self.program_compiler.key_for(signature)
+        program_key = self.eager_executor.program_compiler.key_for(signature)
         hidden = self.trace_compiler.replay(
             program_key,
-            lambda artifact, _decision: self.prefill.refresh_trace(
+            lambda artifact, _decision: self.eager_executor.prefill.refresh_trace(
                 prepared,
                 artifact.persistent_inputs.values,
             ),
@@ -169,35 +149,34 @@ class TracedExecutor:
         record = self.trace_compiler.get(trace_key) if trace_key is not None else None
         if record is None or record.artifact is None:
             raise RuntimeError(f"Required prefill trace for program {program_key.digest} is unavailable")
-        return self.prefill.finish_trace(prepared, hidden, record.artifact.persistent_inputs.values)
+        return self.eager_executor.prefill.finish_trace(
+            prepared,
+            hidden,
+            record.artifact.persistent_inputs.values,
+        )
 
-    def compile_prefill(self, *, enable_trace: bool | None = None, **kwargs: Any) -> None:
+    def compile_prefill(self, **kwargs: Any) -> None:
         kwargs.pop("kv_cache", None)
-        trace = _resolve_trace_hint(self.trace_compiler.trace_config, "prefill", enable_trace)
-        for prepared in self.prepare_prefill(**kwargs):
-            self.compile_prefill_prepared(prepared, enable_trace=trace)
+        for prepared in self.eager_executor._prepare_prefill(**kwargs):
+            self._compile_prefill(prepared)
 
-    def prefill_forward(self, *, enable_trace: bool | None = None, **kwargs: Any):
-        trace = _resolve_trace_hint(self.trace_compiler.trace_config, "prefill", enable_trace)
-        prepared = self.prepare_prefill(**kwargs)
-        results = tuple((request, self.execute_prefill_prepared(request, enable_trace=trace)) for request in prepared)
-        return self.prefill.assemble(
+    def prefill_forward(self, **kwargs: Any):
+        prepared = self.eager_executor._prepare_prefill(**kwargs)
+        results = tuple((request, self._execute_prefill(request)) for request in prepared)
+        return self.eager_executor.prefill.assemble(
             results,
             batch_size=int(kwargs["tokens"].shape[0]),
             sampling_params=kwargs.get("sampling_params"),
         )
 
-    def prepare_decode(self, **kwargs: Any):
-        return self.eager.prepare_decode(**kwargs)
-
-    def compile_decode_prepared(self, prepared: Any, *, enable_trace: bool):
-        program = self.eager.compile_decode_prepared(prepared)
-        if enable_trace and self.trace_compiler.trace_key_for_program(program.key) is None:
-            operation_plan = self.decode.capture_plan(prepared)
+    def _compile_decode(self, prepared: Any):
+        program = self.eager_executor._compile_decode(prepared)
+        if self.trace_compiler.trace_key_for_program(program.key) is None:
+            operation_plan = self.eager_executor.decode.capture_plan(prepared)
             self.trace_compiler.register_capture_plan(
                 TraceCapturePlan(
                     program_key=program.key,
-                    trace_signature=self.decode.trace_signature(prepared),
+                    trace_signature=self.eager_executor.decode.trace_signature(prepared),
                     operation="decode",
                     prepare_inputs=operation_plan.prepare_inputs,
                     capture=lambda persistent, plan=operation_plan: plan.capture(persistent.values),
@@ -212,53 +191,37 @@ class TracedExecutor:
             )
         return program
 
-    def execute_decode_prepared(self, prepared: Any, *, enable_trace: bool, read_from_device: bool = True):
-        if not enable_trace:
-            return self.eager.execute_decode_prepared(prepared, read_from_device=read_from_device)
-        program_key = self.program_compiler.key_for(self.decode.program_signature(prepared))
+    def _execute_decode(self, prepared: Any, *, read_from_device: bool = True):
+        decode = self.eager_executor.decode
+        program_key = self.eager_executor.program_compiler.key_for(decode.program_signature(prepared))
         output = self.trace_compiler.replay(
             program_key,
-            lambda artifact, decision: self.decode.refresh_trace(artifact, prepared, decision),
+            lambda artifact, decision: decode.refresh_trace(artifact, prepared, decision),
             reset_batch=prepared.reset_batch,
-            device_feedback_enabled=self.decode.device_feedback_enabled,
+            device_feedback_enabled=decode.device_feedback_enabled,
             feedback_compatible=prepared.device_feedback,
             page_table_changed=prepared.page_table_changed,
         )
-        self.decode.note_submitted(prepared)
+        decode.note_submitted(prepared)
         result = DecodeInvocationResult(
             value=output,
             owned=None,
             is_tokens=prepared.sampling_params is not None,
         )
-        return self.decode.consume(result, read_from_device=read_from_device)
+        return decode.consume(result, read_from_device=read_from_device)
 
-    def compile_decode(self, *, enable_trace: bool | None = None, **kwargs: Any) -> None:
+    def compile_decode(self, **kwargs: Any) -> None:
         kwargs.pop("kv_cache", None)
-        trace = _resolve_trace_hint(self.trace_compiler.trace_config, "decode", enable_trace)
-        self.compile_decode_prepared(self.prepare_decode(**kwargs), enable_trace=trace)
+        self._compile_decode(self.eager_executor._prepare_decode(**kwargs))
 
     def decode_forward(
         self,
         *,
         read_from_device: bool = True,
-        enable_trace: bool | None = None,
         **kwargs: Any,
     ):
-        trace = _resolve_trace_hint(self.trace_compiler.trace_config, "decode", enable_trace)
-        prepared = self.prepare_decode(**kwargs)
-        return self.execute_decode_prepared(
+        prepared = self.eager_executor._prepare_decode(**kwargs)
+        return self._execute_decode(
             prepared,
-            enable_trace=trace,
             read_from_device=read_from_device,
         )
-
-
-def _resolve_trace_hint(trace_config: Any, operation: str, enable_trace: bool | None) -> bool:
-    configured = bool(getattr(trace_config, f"{operation}_enabled"))
-    if enable_trace is None:
-        return configured
-    if not isinstance(enable_trace, bool):
-        raise TypeError("enable_trace must be bool or None")
-    if enable_trace and not configured:
-        raise ValueError(f"enable_trace=True disagrees with static {operation} trace policy")
-    return enable_trace

@@ -120,10 +120,7 @@ def test_paged_kv_config_has_plan_fields_and_resolved_capacity(expect_error):
     ]
     assert unresolved.memory_config == ttnn.DRAM_MEMORY_CONFIG
     assert not unresolved.is_resolved()
-    assert unresolved.capacity_tokens is None
-    assert unresolved.max_capacity_tokens == 32 * 1024
     assert resolved.is_resolved()
-    assert resolved.capacity_tokens == 32 * 512
     with expect_error(FrozenInstanceError, ""):
         resolved.num_blocks = 256
 

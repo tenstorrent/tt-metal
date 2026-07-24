@@ -248,6 +248,5 @@ def test_cleanup_terminalizes_only_program_metadata(monkeypatch, expect_error):
     compiler.cleanup()
     compiler.cleanup()
 
-    assert not program.ready
     with expect_error(RuntimeError, "released"):
         compiler.require_compiled(program.key)

@@ -9,7 +9,7 @@ import torch
 
 import ttnn
 from models.common.llm_runtime.config import PagedKVCacheConfig
-from models.common.llm_runtime.paged_kv_cache import PagedKVCacheManager, PagedKVCacheState, torch_dtype_for_ttnn
+from models.common.llm_runtime.paged_kv_cache import PagedKVCacheManager, torch_dtype_for_ttnn
 
 
 class FakeMesh:
@@ -93,16 +93,11 @@ def fake_allocator(monkeypatch):
 def test_unresolved_config_accepts_one_resolved_replacement(expect_error):
     manager = PagedKVCacheManager(FakeModel(), cache_config())
 
-    assert manager.state == PagedKVCacheState.UNRESOLVED
-    assert manager.capacity_tokens is None
-
     resolved = replace(manager.config, num_blocks=4)
     manager.configure(resolved)
 
-    assert manager.state == PagedKVCacheState.CONFIGURED
     assert manager.config is resolved
-    assert manager.num_blocks == 4
-    assert manager.capacity_tokens == 128
+    assert manager.config.num_blocks == 4
     with expect_error(RuntimeError, "only once"):
         manager.configure(replace(resolved, num_blocks=5))
 
@@ -112,13 +107,11 @@ def test_resolved_replacement_may_change_only_num_blocks(expect_error):
 
     with expect_error(ValueError, "block_size changed"):
         manager.configure(cache_config(block_size=16, num_blocks=4))
-    assert manager.state == PagedKVCacheState.UNRESOLVED
 
 
 def test_pre_resolved_config_starts_configured_and_cannot_be_replaced(expect_error):
     manager = PagedKVCacheManager(FakeModel(), cache_config(num_blocks=4))
 
-    assert manager.state == PagedKVCacheState.CONFIGURED
     with expect_error(RuntimeError, "only once"):
         manager.configure(cache_config(num_blocks=5))
 
@@ -163,11 +156,8 @@ def test_allocate_derives_shapes_and_dtypes_binds_exact_borrowed_handle(fake_all
 
     cache = manager.allocate()
 
-    assert manager.state == PagedKVCacheState.BOUND
-    assert cache is manager.bound_cache
     assert cache is model.bound_cache
     assert manager.cache_shapes == ((4, 4, 32, 16), (4, 4, 32, 16))
-    assert manager.cache_shape == (4, 4, 32, 16)
     assert [entry[0].dtype for entry in allocated] == [
         ttnn.bfloat8_b,
         ttnn.bfloat8_b,
@@ -178,8 +168,6 @@ def test_allocate_derives_shapes_and_dtypes_binds_exact_borrowed_handle(fake_all
     assert len({id(entry[1]) for entry in allocated}) == 1
     assert all(entry[2]["memory_config"] == ttnn.DRAM_MEMORY_CONFIG for entry in allocated)
     assert all(entry[2]["cache_file_name"] is None for entry in allocated)
-    assert manager.allocated_bytes == 2 * (4 * 4 * 32 * 16) * (1 + 2)
-
     manager.validate_borrowed_handle(cache)
     with expect_error(ValueError, "exact manager-owned"):
         manager.validate_borrowed_handle([pair[:] for pair in cache])
@@ -215,32 +203,9 @@ def test_allocate_avoids_cache_file_collision_for_nonuniform_device_dtypes(fake_
     assert all(entry[2]["cache_file_name"] is None for entry in allocated)
 
 
-def test_allocate_accounts_for_packed_device_buffers_without_element_size(monkeypatch):
-    class FakePackedTensor(FakeTensor):
-        def element_size(self):
-            raise ValueError("packed dtype has no datum size")
-
-        def buffer_page_size(self):
-            return 1088
-
-        def buffer_num_pages(self):
-            return self.volume() // 1024
-
-    monkeypatch.setattr(
-        ttnn,
-        "as_tensor",
-        lambda host_tensor, **kwargs: FakePackedTensor(host_tensor.shape, kwargs["dtype"]),
-    )
-    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh: None)
-    manager = PagedKVCacheManager(FakeModel(), cache_config(num_blocks=4))
-
-    manager.allocate()
-
-    assert manager.allocated_bytes == 4 * 1088 * 8
-
-
 def test_allocation_requires_resolved_capacity_and_happens_once(fake_allocator, expect_error):
-    manager = PagedKVCacheManager(FakeModel(), cache_config())
+    model = FakeModel()
+    manager = PagedKVCacheManager(model, cache_config())
     with expect_error(RuntimeError, "must be resolved"):
         manager.allocate()
 
@@ -248,7 +213,7 @@ def test_allocation_requires_resolved_capacity_and_happens_once(fake_allocator, 
     cache = manager.allocate()
     with expect_error(RuntimeError, "already been allocated"):
         manager.allocate()
-    assert cache is manager.bound_cache
+    assert cache is model.bound_cache
 
 
 def test_partial_allocation_failure_deallocates_created_tensors(monkeypatch, expect_error):
@@ -273,8 +238,6 @@ def test_partial_allocation_failure_deallocates_created_tensors(monkeypatch, exp
         manager.allocate()
 
     assert deallocated == [first]
-    assert manager.state == PagedKVCacheState.CONFIGURED
-    assert manager.bound_cache is None
     assert model.set_calls == []
 
 
@@ -288,8 +251,7 @@ def test_bind_failure_unbinds_then_deallocates_all_tensors(fake_allocator, expec
 
     assert model.set_calls[-1] is None
     assert deallocated == [entry[0] for entry in reversed(allocated)]
-    assert manager.state == PagedKVCacheState.CONFIGURED
-    assert manager.bound_cache is None
+    assert model.bound_cache is None
 
 
 def test_release_unbinds_before_deallocating_and_is_idempotent(monkeypatch, expect_error):
@@ -317,10 +279,7 @@ def test_release_unbinds_before_deallocating_and_is_idempotent(monkeypatch, expe
 
     assert operations[0] == ("bind", None)
     assert [operation[1] for operation in operations[1:]] == [tensor for pair in cache for tensor in pair]
-    assert manager.state == PagedKVCacheState.RELEASED
-    assert manager.bound_cache is None
     assert manager.bound_context is None
-    assert manager.allocated_bytes == 0
 
     manager.release()
     assert len(operations) == 5
@@ -345,7 +304,6 @@ def test_borrowed_handle_mutation_cannot_redirect_owned_tensor_release(fake_allo
 
     assert deallocated == owned_tensors
     assert replacement not in deallocated
-    assert manager.state == PagedKVCacheState.RELEASED
 
 
 def test_release_failure_retains_only_failed_tensor_and_retries(monkeypatch, expect_error):
@@ -374,19 +332,14 @@ def test_release_failure_retains_only_failed_tensor_and_retries(monkeypatch, exp
     with expect_error(RuntimeError, "Failed to deallocate 1"):
         manager.release()
 
-    assert manager.state == PagedKVCacheState.BOUND
-    assert manager.bound_cache is None
     assert manager.bound_context is None
     assert model.bound_cache is None
-    assert manager.allocated_bytes == failed_tensor.volume() * failed_tensor.element_size()
     assert attempts == tensors
 
     manager.release()
 
     assert attempts.count(failed_tensor) == 2
     assert all(attempts.count(tensor) == 1 for tensor in tensors[1:])
-    assert manager.state == PagedKVCacheState.RELEASED
-    assert manager.allocated_bytes == 0
 
 
 def test_partial_allocation_cleanup_failure_preserves_tensor_for_release_retry(monkeypatch, expect_error):
@@ -416,21 +369,18 @@ def test_partial_allocation_cleanup_failure_preserves_tensor_for_release_retry(m
         manager.allocate()
 
     assert [str(error) for error in exc_info.value.cleanup_failures] == ["cleanup failed"]
-    assert manager.state == PagedKVCacheState.CONFIGURED
-    assert manager.allocated_bytes == tensor.volume() * tensor.element_size()
-
     manager.release()
 
     assert deallocation_calls == 2
-    assert manager.state == PagedKVCacheState.RELEASED
-    assert manager.allocated_bytes == 0
+    with expect_error(RuntimeError, "terminal"):
+        manager.allocate()
 
 
-def test_release_before_allocation_is_terminal_and_idempotent():
+def test_release_before_allocation_is_terminal_and_idempotent(expect_error):
     manager = PagedKVCacheManager(FakeModel(), cache_config())
 
     manager.release()
     manager.release()
 
-    assert manager.state == PagedKVCacheState.RELEASED
-    assert manager.bound_cache is None
+    with expect_error(RuntimeError, "terminal"):
+        manager.allocate()

@@ -5,7 +5,6 @@ import inspect
 from dataclasses import dataclass
 from types import SimpleNamespace
 
-import pytest
 import torch
 
 import models.common.llm_runtime.execution as execution_module
@@ -42,12 +41,7 @@ def _compiler(monkeypatch):
 
 
 def _trace_compiler(program_compiler, *, mode="all"):
-    trace_config = SimpleNamespace(
-        mode=mode,
-        prefill_enabled=mode == "all",
-        decode_enabled=mode in ("decode_only", "all"),
-    )
-    return TraceCompiler(program_compiler, "mesh", trace_config)
+    return TraceCompiler(program_compiler, "mesh")
 
 
 def _prepared_prefill(*, trace_eligible=True, signatures=None, name="regular"):
@@ -81,10 +75,7 @@ def test_execution_strategies_use_exact_identity_composition_without_type_framew
     assert eager.prefill is prefill
     assert eager.decode is decode
     assert eager.program_compiler is program_compiler
-    assert traced.eager is eager
-    assert traced.prefill is prefill
-    assert traced.decode is decode
-    assert traced.program_compiler is program_compiler
+    assert traced.eager_executor is eager
     assert traced.trace_compiler is trace_compiler
     assert EagerExecutor not in TracedExecutor.__mro__
     assert EagerExecutor.__bases__ == (object,)
@@ -129,11 +120,10 @@ def test_eager_prefill_prepares_once_and_compiles_all_signatures_from_same_objec
 
     assert len(prepare_calls) == 1
     assert prepared_seen == [prepared, prepared]
-    assert len(eager.program_compiler.programs) == 2
 
 
-def test_traced_prefill_compile_registers_capture_from_the_same_prepared_object(monkeypatch):
-    prepared = _prepared_prefill()
+def test_traced_prefill_compile_does_not_interpret_request_eligibility(monkeypatch):
+    prepared = _prepared_prefill(trace_eligible=False)
     identity_events = []
     operation_plan = SimpleNamespace(
         signature=_Signature("prefill-trace", 1),
@@ -160,13 +150,13 @@ def test_traced_prefill_compile_registers_capture_from_the_same_prepared_object(
     assert [event[0] for event in identity_events] == ["prepare", "invoke", "capture_plan"]
     assert all(event[1] is prepared for event in identity_events)
     assert len(registered) == 1
-    assert registered[0].program_key in program_compiler.programs
 
 
 def test_traced_prefill_recompile_reuses_existing_trace_association(monkeypatch):
     prepared = _prepared_prefill()
     prefill = _runtime(
         PrefillRuntime,
+        prepare=lambda **kwargs: (prepared,),
         invoke=lambda request: PrefillInvocationResult(torch.zeros(1), ()),
         capture_plan=lambda request: (_ for _ in ()).throw(AssertionError("capture plan rebuilt")),
     )
@@ -177,13 +167,14 @@ def test_traced_prefill_recompile_reuses_existing_trace_association(monkeypatch)
     trace_compiler.register_capture_plan = lambda plan: (_ for _ in ()).throw(AssertionError("plan registered"))
     traced = TracedExecutor(eager=eager, trace_compiler=trace_compiler)
 
-    traced.compile_prefill_prepared(prepared, enable_trace=True)
+    traced.compile_prefill(tokens=torch.zeros(1, 1))
 
 
 def test_traced_decode_recompile_reuses_existing_trace_association(monkeypatch):
     prepared = _prepared_decode()
     decode = _runtime(
         DecodeRuntime,
+        prepare=lambda **kwargs: prepared,
         program_signature=lambda request: _Signature("decode", 1),
         invoke=lambda request, **kwargs: DecodeInvocationResult(torch.zeros(1), (), False),
         capture_plan=lambda request: (_ for _ in ()).throw(AssertionError("capture plan rebuilt")),
@@ -195,32 +186,10 @@ def test_traced_decode_recompile_reuses_existing_trace_association(monkeypatch):
     trace_compiler.register_capture_plan = lambda plan: (_ for _ in ()).throw(AssertionError("plan registered"))
     traced = TracedExecutor(eager=eager, trace_compiler=trace_compiler)
 
-    traced.compile_decode_prepared(prepared, enable_trace=True)
+    traced.compile_decode(tokens=torch.zeros(1), start_pos=torch.zeros(1), page_table=torch.zeros(1, 1))
 
 
-@pytest.mark.parametrize("name", ["cached-prefill-one-chunk", "multi-chunk-prefill"])
-def test_trace_ineligible_prefill_falls_back_to_eager_exactly_once(monkeypatch, name):
-    prepared = _prepared_prefill(trace_eligible=False, name=name)
-    calls = []
-    prefill = _runtime(
-        PrefillRuntime,
-        prepare=lambda **kwargs: calls.append(("prepare", prepared)) or (prepared,),
-        invoke=lambda request: calls.append(("invoke", request)) or PrefillInvocationResult(name, ()),
-        assemble=lambda results, **kwargs: calls.append(("assemble", results[0][0])) or results[0][1].value,
-    )
-    program_compiler = _compiler(monkeypatch)
-    eager = EagerExecutor(prefill=prefill, decode=_runtime(DecodeRuntime), program_compiler=program_compiler)
-    trace_compiler = _trace_compiler(program_compiler)
-    trace_compiler.replay = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("trace replayed"))
-    traced = TracedExecutor(eager=eager, trace_compiler=trace_compiler)
-
-    result = traced.prefill_forward(tokens=torch.zeros(1, 1))
-
-    assert result == name
-    assert calls == [("prepare", prepared), ("invoke", prepared), ("assemble", prepared)]
-
-
-def test_decode_only_and_explicit_eager_prefill_delegate_without_replay(monkeypatch, expect_error):
+def test_execution_target_selection_is_external_to_traced_prefill(monkeypatch):
     prepared = _prepared_prefill(trace_eligible=True)
     invocations = []
     prefill = _runtime(
@@ -235,17 +204,12 @@ def test_decode_only_and_explicit_eager_prefill_delegate_without_replay(monkeypa
     trace_compiler.replay = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("trace replayed"))
     traced = TracedExecutor(eager=eager, trace_compiler=trace_compiler)
 
-    assert traced.prefill_forward(tokens=torch.zeros(1, 1)) == "eager"
-    with expect_error(ValueError, "disagrees with static prefill trace policy"):
-        traced.prefill_forward(tokens=torch.zeros(1, 1), enable_trace=True)
-
-    trace_compiler.trace_config.prefill_enabled = True
-    assert traced.prefill_forward(tokens=torch.zeros(1, 1), enable_trace=False) == "eager"
-    assert invocations == [prepared, prepared]
+    assert traced.eager_executor.prefill_forward(tokens=torch.zeros(1, 1)) == "eager"
+    assert invocations == [prepared]
 
 
-def test_prefill_replay_refresh_and_finish_use_the_same_prepared_object(monkeypatch):
-    prepared = _prepared_prefill(trace_eligible=True)
+def test_prefill_replay_does_not_interpret_request_eligibility(monkeypatch):
+    prepared = _prepared_prefill(trace_eligible=False)
     persistent = object()
     hidden = object()
     identity_events = []
@@ -281,8 +245,10 @@ def test_prefill_missing_trace_artifact_is_an_error_without_eager_reinvocation(m
     eager_invocations = []
     prefill = _runtime(
         PrefillRuntime,
+        prepare=lambda **kwargs: (prepared,),
         invoke=lambda request: eager_invocations.append(request) or PrefillInvocationResult("eager", ()),
         refresh_trace=lambda request, values: None,
+        assemble=lambda results, **kwargs: results[0][1],
     )
     program_compiler = _compiler(monkeypatch)
     eager = EagerExecutor(prefill=prefill, decode=_runtime(DecodeRuntime), program_compiler=program_compiler)
@@ -294,7 +260,7 @@ def test_prefill_missing_trace_artifact_is_an_error_without_eager_reinvocation(m
     traced = TracedExecutor(eager=eager, trace_compiler=trace_compiler)
 
     with expect_error(RuntimeError, "Required prefill trace"):
-        traced.execute_prefill_prepared(prepared, enable_trace=True)
+        traced.prefill_forward(tokens=torch.zeros(1, 1))
 
     assert eager_invocations == []
 
@@ -343,14 +309,11 @@ def test_explicit_eager_decode_delegates_once_and_execution_objects_do_not_clean
     traced = TracedExecutor(eager=eager, trace_compiler=trace_compiler)
 
     assert (
-        traced.decode_forward(
+        traced.eager_executor.decode_forward(
             tokens=torch.zeros(1, 1),
             start_pos=torch.zeros(1),
             page_table=torch.zeros(1, 1),
-            enable_trace=False,
         )
         == "eager"
     )
     assert calls == [("prepare", prepared), ("invoke", prepared), ("consume", "eager")]
-    assert program_compiler.programs == {}
-    assert trace_compiler.traces == {}

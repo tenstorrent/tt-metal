@@ -5,9 +5,7 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -15,13 +13,6 @@ import torch
 
 import ttnn
 from models.common.llm_runtime.config import PagedKVCacheConfig
-
-
-class PagedKVCacheState(str, Enum):
-    UNRESOLVED = "unresolved"
-    CONFIGURED = "configured"
-    BOUND = "bound"
-    RELEASED = "released"
 
 
 @dataclass(frozen=True)
@@ -69,51 +60,26 @@ class PagedKVCacheManager:
 
     def __init__(self, model: Any, config: PagedKVCacheConfig):
         self._model = model
-        self._mesh_device = _model_mesh_device(model)
-        self._num_devices = _model_num_devices(model, self._mesh_device)
-        self._layer_specs, model_paged_configs = _model_layer_specs(model, self._num_devices)
+        self._mesh_device, self._layer_specs, model_paged_configs = _model_contract(model)
         self._validate_static_model_contract(config, model_paged_configs)
 
         self._config = config
-        self._state = PagedKVCacheState.CONFIGURED if config.is_resolved() else PagedKVCacheState.UNRESOLVED
+        self._state = "configured" if config.is_resolved() else "unresolved"
         self._configuration_replaced = False
         self._bound_cache: list[list[Any]] | None = None
         self._bound_context: PagedKVCacheContext | None = None
         self._owned_tensors: tuple[Any, ...] = ()
         self._release_in_progress = False
-        self._allocated_bytes = 0
 
     @property
     def config(self) -> PagedKVCacheConfig:
         return self._config
 
     @property
-    def state(self) -> PagedKVCacheState:
-        return self._state
-
-    @property
-    def bound_cache(self) -> list[list[Any]] | None:
-        """Return the exact borrowed compatibility handle, if bound."""
-
-        return self._bound_cache
-
-    @property
     def bound_context(self) -> PagedKVCacheContext | None:
         """Return immutable metadata and borrowed tensor references for compile."""
 
         return self._bound_context
-
-    @property
-    def num_blocks(self) -> int | None:
-        return self._config.num_blocks
-
-    @property
-    def capacity_tokens(self) -> int | None:
-        return self._config.capacity_tokens
-
-    @property
-    def max_capacity_tokens(self) -> int:
-        return self._config.max_capacity_tokens
 
     @property
     def per_layer_dtypes(self) -> tuple[ttnn.DataType, ...]:
@@ -133,22 +99,11 @@ class PagedKVCacheManager:
             for spec in self._layer_specs
         )
 
-    @property
-    def cache_shape(self) -> tuple[int, int, int, int] | None:
-        shapes = self.cache_shapes
-        if shapes and all(shape == shapes[0] for shape in shapes[1:]):
-            return shapes[0]
-        return None
-
-    @property
-    def allocated_bytes(self) -> int:
-        return self._allocated_bytes
-
     def configure(self, config: PagedKVCacheConfig) -> None:
         """Install one immutable resolved replacement before allocation."""
 
-        if self._state in (PagedKVCacheState.BOUND, PagedKVCacheState.RELEASED):
-            raise RuntimeError(f"Cannot configure paged KV cache while manager is {self._state.value}")
+        if self._state in ("bound", "released"):
+            raise RuntimeError(f"Cannot configure paged KV cache while manager is {self._state}")
         if self._config.is_resolved() or self._configuration_replaced:
             raise RuntimeError("Paged KV cache configuration can be resolved only once")
         if not config.is_resolved():
@@ -160,7 +115,7 @@ class PagedKVCacheManager:
 
         self._config = config
         self._configuration_replaced = True
-        self._state = PagedKVCacheState.CONFIGURED
+        self._state = "configured"
 
     def validate_vllm_cache_spec(
         self,
@@ -201,11 +156,11 @@ class PagedKVCacheManager:
     def allocate(self) -> list[list[Any]]:
         """Allocate, bind, and return one borrowed physical cache handle."""
 
-        if self._state == PagedKVCacheState.UNRESOLVED:
+        if self._state == "unresolved":
             raise RuntimeError("Paged KV cache capacity must be resolved before allocation")
-        if self._state == PagedKVCacheState.BOUND:
+        if self._state == "bound":
             raise RuntimeError("Paged KV cache has already been allocated")
-        if self._state == PagedKVCacheState.RELEASED:
+        if self._state == "released":
             raise RuntimeError("Paged KV cache manager is released and terminal")
         if self._owned_tensors:
             failures = self._deallocate_owned_tensors()
@@ -217,7 +172,9 @@ class PagedKVCacheManager:
         cache: list[list[Any]] = []
         allocated: list[Any] = []
         host_staging: dict[tuple[tuple[int, int, int, int], torch.dtype], torch.Tensor] = {}
-        cache_path = _model_cache_path(self._model)
+        model_args = getattr(self._model, "model_args", None)
+        cache_path_value = getattr(model_args, "model_cache_path", None)
+        cache_path = Path(cache_path_value) if cache_path_value else None
         dtypes_by_shape: dict[tuple[int, int, int, int], set[ttnn.DataType]] = {}
         for shape, spec in zip(self.cache_shapes, self._layer_specs):
             dtypes_by_shape.setdefault(shape, set()).add(spec.dtype)
@@ -233,17 +190,25 @@ class PagedKVCacheManager:
                     cache_file_name = None
                     if cache_path is not None and len(dtypes_by_shape[shape]) == 1:
                         cache_file_name = cache_path / f"empty_{kv}cache_paged_attention{shape}"
-                    tensor = self._allocate_tensor(host_tensor, spec.dtype, cache_file_name)
+                    tensor = ttnn.as_tensor(
+                        host_tensor,
+                        device=self._mesh_device,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(self._mesh_device),
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=self._config.memory_config,
+                        dtype=spec.dtype,
+                        cache_file_name=cache_file_name,
+                    )
                     allocated.append(tensor)
                     pair.append(tensor)
                 cache.append(pair)
         except BaseException as primary:
-            self._set_owned_tensors(allocated)
+            self._owned_tensors = tuple(allocated)
             cleanup_failures = self._deallocate_owned_tensors(reverse=True)
             _attach_cleanup_failures(primary, cleanup_failures)
             raise
 
-        self._set_owned_tensors(allocated)
+        self._owned_tensors = tuple(allocated)
         context = PagedKVCacheContext(
             config=self._config,
             tensors=tuple(tuple(pair) for pair in cache),
@@ -260,7 +225,7 @@ class PagedKVCacheManager:
                 # so a later release can retry unbinding before deallocation.
                 self._bound_cache = cache
                 self._bound_context = context
-                self._state = PagedKVCacheState.BOUND
+                self._state = "bound"
                 _attach_cleanup_failures(primary, [cleanup_error])
             else:
                 cleanup_failures = self._deallocate_owned_tensors(reverse=True)
@@ -269,11 +234,11 @@ class PagedKVCacheManager:
 
         self._bound_cache = cache
         self._bound_context = context
-        self._state = PagedKVCacheState.BOUND
+        self._state = "bound"
         return cache
 
     def validate_borrowed_handle(self, cache: Any) -> None:
-        if self._state != PagedKVCacheState.BOUND or self._bound_cache is None:
+        if self._state != "bound" or self._bound_cache is None:
             raise RuntimeError("Paged KV cache is not allocated and bound")
         if cache is not self._bound_cache:
             raise ValueError("Request KV cache is not the exact manager-owned borrowed handle")
@@ -289,9 +254,9 @@ class PagedKVCacheManager:
     def release(self) -> None:
         """Unbind then deallocate every owned tensor exactly once."""
 
-        if self._state == PagedKVCacheState.RELEASED:
+        if self._state == "released":
             return
-        if self._state == PagedKVCacheState.BOUND and not self._release_in_progress:
+        if self._state == "bound" and not self._release_in_progress:
             # Never deallocate while the model still retains the installed handles.
             self._model.set_kv_cache(None)
             self._bound_cache = None
@@ -304,11 +269,7 @@ class PagedKVCacheManager:
         self._bound_cache = None
         self._bound_context = None
         self._release_in_progress = False
-        self._state = PagedKVCacheState.RELEASED
-
-    def _set_owned_tensors(self, tensors) -> None:
-        self._owned_tensors = tuple(tensors)
-        self._allocated_bytes = sum(_tensor_nbytes(tensor) for tensor in self._owned_tensors)
+        self._state = "released"
 
     def _deallocate_owned_tensors(self, *, reverse: bool = False) -> list[BaseException]:
         failures = []
@@ -322,19 +283,8 @@ class PagedKVCacheManager:
                 remaining.append(tensor)
         if reverse:
             remaining.reverse()
-        self._set_owned_tensors(remaining)
+        self._owned_tensors = tuple(remaining)
         return failures
-
-    def _allocate_tensor(self, host_tensor: torch.Tensor, dtype: ttnn.DataType, cache_file_name: Path | None):
-        return ttnn.as_tensor(
-            host_tensor,
-            device=self._mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self._mesh_device),
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=self._config.memory_config,
-            dtype=dtype,
-            cache_file_name=cache_file_name,
-        )
 
     def _validate_static_model_contract(self, config, model_paged_configs) -> None:
         for layer, paged in enumerate(model_paged_configs):
@@ -357,32 +307,16 @@ class PagedKVCacheManager:
             )
 
 
-def _model_mesh_device(model: Any):
+def _model_contract(model: Any):
     model_config = getattr(model, "config", None)
     mesh_device = getattr(model_config, "mesh_device", None) or getattr(model, "mesh_device", None)
     if mesh_device is None:
         raise ValueError("Model config must provide mesh_device")
-    return mesh_device
-
-
-def _model_cache_path(model: Any) -> Path | None:
-    model_args = getattr(model, "model_args", None)
-    cache_path = getattr(model_args, "model_cache_path", None)
-    return Path(cache_path) if cache_path else None
-
-
-def _model_num_devices(model: Any, mesh_device: Any) -> int:
-    model_config = getattr(model, "config", None)
     num_devices = getattr(model_config, "num_devices", None) or getattr(model, "num_devices", None)
     if num_devices is None and hasattr(mesh_device, "get_num_devices"):
         num_devices = mesh_device.get_num_devices()
     if not isinstance(num_devices, int) or isinstance(num_devices, bool) or num_devices <= 0:
         raise ValueError("Model config must provide a positive num_devices")
-    return num_devices
-
-
-def _model_layer_specs(model: Any, num_devices: int):
-    model_config = getattr(model, "config", None)
     block_configs = getattr(model_config, "block_configs", None)
     if block_configs is not None:
         attention_configs = [getattr(block, "attention_config", None) for block in block_configs]
@@ -417,17 +351,7 @@ def _model_layer_specs(model: Any, num_devices: int):
             raise ValueError(f"Model layer {layer} must own kv_cache_dtype")
         specs.append(_LayerKVSpec(local_kv_heads=local_kv_heads, head_dim=head_dim, dtype=dtype))
         paged_configs.append(getattr(attention, "paged_attention_config", None))
-    return tuple(specs), tuple(paged_configs)
-
-
-def _tensor_nbytes(tensor: Any) -> int:
-    buffer_page_size = getattr(tensor, "buffer_page_size", None)
-    buffer_num_pages = getattr(tensor, "buffer_num_pages", None)
-    if callable(buffer_page_size) and callable(buffer_num_pages):
-        return int(buffer_page_size()) * int(buffer_num_pages())
-    volume = tensor.volume() if callable(getattr(tensor, "volume", None)) else math.prod(tensor.shape)
-    element_size = tensor.element_size() if callable(getattr(tensor, "element_size", None)) else 0
-    return int(volume) * int(element_size)
+    return mesh_device, tuple(specs), tuple(paged_configs)
 
 
 def _attach_cleanup_failures(primary: BaseException, failures: list[BaseException]) -> None:

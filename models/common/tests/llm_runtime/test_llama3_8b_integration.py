@@ -82,12 +82,17 @@ def test_model_owned_executor_constructs_exact_composition(mode):
     assert executor.eager_executor.prefill is executor.prefill_runtime
     assert executor.eager_executor.decode is executor.decode_runtime
     if mode == "none":
-        assert executor.execution is executor.eager_executor
+        assert executor.eager_execution is executor.eager_executor
+        assert executor.traced_prefill_execution is None
+        assert executor.traced_decode_execution is None
         assert executor.trace_compiler is None
         assert executor.traced_executor is None
     else:
-        assert executor.execution is executor.traced_executor
-        assert executor.traced_executor.eager is executor.eager_executor
+        expected_prefill = executor.traced_executor if mode == "all" else None
+        assert executor.eager_execution is executor.eager_executor
+        assert executor.traced_prefill_execution is expected_prefill
+        assert executor.traced_decode_execution is executor.traced_executor
+        assert executor.traced_executor.eager_executor is executor.eager_executor
         assert executor.traced_executor.trace_compiler is executor.trace_compiler
         assert executor.trace_compiler.program_compiler is executor.program_compiler
 
@@ -276,9 +281,16 @@ class _RecordingTarget:
     mesh_device = object()
     cache_path = "cache"
     already_warmed_up_prefill = False
+    eager_execution = object()
+    traced_prefill_execution = object()
+    traced_decode_execution = object()
 
     def __init__(self):
         self.calls = []
+
+    def can_trace_prefill(self, **kwargs):
+        self.calls.append(("can_trace_prefill", (), kwargs))
+        return True
 
     def __getattr__(self, name):
         if name.startswith("_"):
@@ -299,10 +311,49 @@ def test_generator_delegates_without_concrete_type_checks():
     )
     generator = llama_generator.Llama3Generator(target, adapter=adapter)
 
-    assert generator.prefill_forward("tokens", page_table="pages") == "prefill_forward"
-    assert generator.decode_forward("tokens", "positions", "pages") == "decode_forward"
+    assert generator.prefill_forward("tokens", page_table="pages", enable_trace=True) == "prefill_forward"
+    assert generator.decode_forward("tokens", "positions", "pages", enable_trace=False) == "decode_forward"
     assert generator.cleanup() == "cleanup"
-    assert [name for name, _, _ in target.calls] == ["prefill_forward", "decode_forward", "cleanup"]
+    assert [name for name, _, _ in target.calls] == [
+        "can_trace_prefill",
+        "prefill_forward",
+        "decode_forward",
+        "cleanup",
+    ]
+    assert target.calls[1][2]["execution"] is target.traced_prefill_execution
+    assert target.calls[2][2]["execution"] is target.eager_execution
+
+
+def test_generator_selects_eager_before_trace_ineligible_prefill_enters_execution():
+    target = _RecordingTarget()
+    target.can_trace_prefill = lambda **kwargs: False
+    adapter = SimpleNamespace(
+        normalize_prefill=lambda args, kwargs: {"tokens": args[0], **kwargs},
+    )
+    generator = llama_generator.Llama3Generator(target, adapter=adapter)
+
+    assert generator.prefill_forward("tokens", page_table="pages", enable_trace=True) == "prefill_forward"
+    assert [name for name, _, _ in target.calls] == ["prefill_forward"]
+    assert target.calls[0][2]["execution"] is target.eager_execution
+
+
+def test_generator_rejects_unavailable_traced_execution(expect_error):
+    target = _RecordingTarget()
+    target.traced_decode_execution = None
+    adapter = SimpleNamespace(
+        normalize_decode=lambda args, kwargs: {
+            "tokens": args[0],
+            "start_pos": args[1],
+            "page_table": args[2],
+            **kwargs,
+        },
+    )
+    generator = llama_generator.Llama3Generator(target, adapter=adapter)
+
+    with expect_error(RuntimeError, "unavailable traced decode execution"):
+        generator.decode_forward("tokens", "positions", "pages", enable_trace=True)
+
+    assert target.calls == []
 
 
 def test_demo_uses_model_owned_config_and_order_independent_warmup(monkeypatch):

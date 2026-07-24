@@ -118,6 +118,18 @@ def test_eager_compile_trace_hint_is_allowed_with_static_trace_enabled():
     assert normalized["enable_trace"] is False
 
 
+@pytest.mark.parametrize("hint", [None, "true", 1])
+def test_normalize_requires_an_explicit_boolean_trace_selection(hint, expect_error):
+    adapter = _adapter()
+    kwargs = {} if hint is None else {"enable_trace": hint}
+
+    with expect_error(TypeError, "enable_trace"):
+        adapter.normalize_prefill(
+            (torch.zeros((1, 1)), torch.zeros((1, 1))),
+            kwargs,
+        )
+
+
 def test_normalize_rejects_duplicate_positional_and_keyword_argument(expect_error):
     adapter = _adapter()
 

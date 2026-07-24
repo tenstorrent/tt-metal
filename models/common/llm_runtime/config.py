@@ -94,16 +94,6 @@ class PagedKVCacheConfig:
     def is_resolved(self) -> bool:
         return self.num_blocks is not None
 
-    @property
-    def max_capacity_tokens(self) -> int:
-        return self.block_size * self.max_num_blocks
-
-    @property
-    def capacity_tokens(self) -> int | None:
-        if self.num_blocks is None:
-            return None
-        return self.block_size * self.num_blocks
-
 
 @dataclass(frozen=True)
 class PageTableLayout:

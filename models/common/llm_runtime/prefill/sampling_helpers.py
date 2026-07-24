@@ -11,7 +11,6 @@ from typing import Literal
 import torch
 
 import ttnn
-from models.common.llm_runtime.prefill.plan import _round_up
 from models.common.sampling import format_sampling_params
 
 _TILE_SIZE = 32
@@ -45,8 +44,14 @@ def _slice_sampling_params(sampling_params, source_rows):
 
 
 def _formatted_sampling_values(sampling_params, batch_size):
-    sampling_params = _tensor_sampling_fields_to_python(sampling_params)
-    formatted_size = _round_up(int(batch_size), _TILE_SIZE)
+    updates = {}
+    for field in dataclasses.fields(sampling_params):
+        value = getattr(sampling_params, field.name)
+        if isinstance(value, torch.Tensor):
+            updates[field.name] = value.item() if value.ndim == 0 else value.tolist()
+    if updates:
+        sampling_params = dataclasses.replace(sampling_params, **updates)
+    formatted_size = ((int(batch_size) + _TILE_SIZE - 1) // _TILE_SIZE) * _TILE_SIZE
     formatted = format_sampling_params(sampling_params, formatted_size)
     k = tuple(int(value) for value in formatted.top_k[:batch_size])
     p = tuple(float(value) for value in formatted.top_p[:batch_size])
@@ -55,15 +60,6 @@ def _formatted_sampling_values(sampling_params, batch_size):
         all(value == 1 for value in k) and all(value == 0 for value in p) and all(value == 1 for value in temperature)
     )
     return k, p, temperature, greedy
-
-
-def _tensor_sampling_fields_to_python(sampling_params):
-    updates = {}
-    for field in dataclasses.fields(sampling_params):
-        value = getattr(sampling_params, field.name)
-        if isinstance(value, torch.Tensor):
-            updates[field.name] = value.item() if value.ndim == 0 else value.tolist()
-    return dataclasses.replace(sampling_params, **updates) if updates else sampling_params
 
 
 def _select_sample_log_prob(value, row):

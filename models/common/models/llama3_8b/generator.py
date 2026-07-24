@@ -153,16 +153,38 @@ class Llama3Generator:
         return self.target.allocate_kv_cache()
 
     def compile_prefill(self, *args, **kwargs):
-        return self.target.compile_prefill(**self._adapter.normalize_prefill(args, kwargs))
+        normalized = self._adapter.normalize_prefill(args, kwargs)
+        execution = self._select_prefill_execution(normalized)
+        return self.target.compile_prefill(execution=execution, **normalized)
 
     def compile_decode(self, *args, **kwargs):
-        return self.target.compile_decode(**self._adapter.normalize_decode(args, kwargs))
+        normalized = self._adapter.normalize_decode(args, kwargs)
+        execution = self._select_execution("decode", normalized.pop("enable_trace"))
+        return self.target.compile_decode(execution=execution, **normalized)
 
     def prefill_forward(self, *args, **kwargs):
-        return self.target.prefill_forward(**self._adapter.normalize_prefill(args, kwargs))
+        normalized = self._adapter.normalize_prefill(args, kwargs)
+        execution = self._select_prefill_execution(normalized)
+        return self.target.prefill_forward(execution=execution, **normalized)
 
     def decode_forward(self, *args, **kwargs):
-        return self.target.decode_forward(**self._adapter.normalize_decode(args, kwargs))
+        normalized = self._adapter.normalize_decode(args, kwargs)
+        execution = self._select_execution("decode", normalized.pop("enable_trace"))
+        return self.target.decode_forward(execution=execution, **normalized)
+
+    def _select_prefill_execution(self, normalized: dict[str, Any]):
+        enable_trace = normalized.pop("enable_trace")
+        if enable_trace and not self.target.can_trace_prefill(**normalized):
+            enable_trace = False
+        return self._select_execution("prefill", enable_trace)
+
+    def _select_execution(self, operation: str, enable_trace: bool):
+        if not enable_trace:
+            return self.target.eager_execution
+        execution = getattr(self.target, f"traced_{operation}_execution")
+        if execution is None:
+            raise RuntimeError(f"vLLM requested unavailable traced {operation} execution")
+        return execution
 
     def read_decode_output(self, *args, **kwargs):
         return self.target.read_decode_output(*args, **kwargs)

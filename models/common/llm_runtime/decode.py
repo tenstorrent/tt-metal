@@ -5,17 +5,16 @@
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
+import functools
 from dataclasses import dataclass, field
 from typing import Any
 
 import torch
+from loguru import logger
 
 import ttnn
-from models.common.llm_runtime.module_input_validation import (
-    suspend_module_input_validation,
-    validate_module_input_configs,
-)
 from models.common.llm_runtime.output_reader import OutputReader, PendingRead
 from models.common.llm_runtime.tensor_resources import (
     TensorResourceOrphan,
@@ -113,13 +112,6 @@ class InvocationResult:
 
 
 @dataclass(frozen=True)
-class DecodeRefreshIntent:
-    full: bool
-    page_table: bool
-    reason: str | None = None
-
-
-@dataclass(frozen=True)
 class DecodeRefreshPolicy:
     every_replay: tuple[str, ...] = ("sampling",)
     full_on_batch_reset: bool = True
@@ -186,6 +178,7 @@ class DecodeRuntime:
         self.mesh_device = mesh_device
         self.output_reader = output_reader
         self.lane_capacity = int(lane_capacity)
+        self._cluster_shape = tuple(int(value) for value in mesh_device.shape)
         self.page_table_layout = page_table_layout
         self.device_sampling_enabled = bool(device_sampling_enabled)
         self.force_greedy_top_k = bool(force_greedy_top_k)
@@ -198,19 +191,6 @@ class DecodeRuntime:
         self._external_by_raw_id: dict[int, DecodeOutputLease] = {}
         self._external_by_host_id: dict[int, DecodeOutputLease] = {}
         self._transient_orphans: list[TensorResourceOrphan] = []
-
-    @property
-    def cluster_shape(self) -> list[int]:
-        return list(self.mesh_device.shape)
-
-    @property
-    def previous_page_table(self) -> torch.Tensor | None:
-        value = self._previous_page_table
-        return None if value is None else value.clone()
-
-    @property
-    def external_lease_count(self) -> int:
-        return len(self._external_by_raw_id)
 
     @property
     def transient_orphan_count(self) -> int:
@@ -229,7 +209,9 @@ class DecodeRuntime:
         self._validate_inputs(tokens, start_pos, page_table)
         if sampling_params is not None and not self.device_sampling_enabled:
             raise ValueError("sampling parameters were supplied while device sampling is disabled")
-        feedback = self._use_device_feedback(sampling_params)
+        feedback = (
+            self.device_feedback_enabled and sampling_params is not None and hasattr(self.model, "increment_positions")
+        )
         sampling_values = (
             None if sampling_params is None else _formatted_sampling_values(sampling_params, self.lane_capacity)
         )
@@ -244,7 +226,17 @@ class DecodeRuntime:
             page_table=normalized,
             sampling_params=sampling_params,
             sampling_values=sampling_values,
-            sampling_path=self._sampling_path(sampling_values),
+            sampling_path=(
+                "logits"
+                if sampling_values is None
+                else (
+                    "argmax"
+                    if bool(self.model.sampling.config.allow_force_argmax)
+                    and sampling_values[3]
+                    and not self.force_greedy_top_k
+                    else "topk"
+                )
+            ),
             reset_batch=bool(reset_batch),
             device_feedback=feedback,
             page_table_changed=(
@@ -254,6 +246,9 @@ class DecodeRuntime:
 
     def program_signature(self, prepared: PreparedDecode) -> DecodeProgramSignature:
         self._require_prepared(prepared)
+        return self._program_signature(prepared)
+
+    def _program_signature(self, prepared: PreparedDecode) -> DecodeProgramSignature:
         return DecodeProgramSignature(
             batch_size=self.lane_capacity,
             page_table_width=int(prepared.page_table.shape[-1]),
@@ -262,7 +257,8 @@ class DecodeRuntime:
         )
 
     def trace_signature(self, prepared: PreparedDecode) -> DecodeTraceSignature:
-        program = self.program_signature(prepared)
+        self._require_prepared(prepared)
+        program = self._program_signature(prepared)
         return DecodeTraceSignature(
             batch_size=program.batch_size,
             page_table_width=program.page_table_width,
@@ -277,7 +273,7 @@ class DecodeRuntime:
         device_inputs, kpt = self._stage_inputs_and_kpt(host_inputs, prepared)
         owned = (device_inputs, kpt)
         try:
-            with self._validation_context():
+            with _validate_module_inputs(self.model):
                 output = self._run_body(
                     device_inputs,
                     prepared.sampling_params,
@@ -288,7 +284,7 @@ class DecodeRuntime:
             failures = self._release_or_retain_transient(owned)
             attach_cleanup_failures(primary, failures)
             raise
-        self.note_submitted(prepared)
+        self._note_submitted(prepared)
         return InvocationResult(
             value=output,
             owned=(output, owned),
@@ -306,13 +302,12 @@ class DecodeRuntime:
 
         def capture(persistent: Any) -> Any:
             values = _persistent_values(persistent)
-            with suspend_module_input_validation():
-                return self._run_body(
-                    values.device_inputs,
-                    prepared.sampling_params,
-                    values.kpt,
-                    device_feedback=prepared.device_feedback,
-                )
+            return self._run_body(
+                values.device_inputs,
+                prepared.sampling_params,
+                values.kpt,
+                device_feedback=prepared.device_feedback,
+            )
 
         return DecodeCapturePlan(prepare_inputs=prepare_inputs, capture=capture)
 
@@ -320,7 +315,7 @@ class DecodeRuntime:
         self,
         artifact: Any,
         prepared: PreparedDecode,
-        decision: DecodeRefreshIntent | Any,
+        decision: Any,
     ) -> None:
         self._require_prepared(prepared)
         values = _persistent_values(artifact)
@@ -342,6 +337,9 @@ class DecodeRuntime:
     def note_submitted(self, prepared: PreparedDecode) -> None:
         """Advance feedback comparison state immediately after device submission."""
         self._require_prepared(prepared)
+        self._note_submitted(prepared)
+
+    def _note_submitted(self, prepared: PreparedDecode) -> None:
         self._previous_page_table = prepared.page_table.clone()
 
     def consume(self, result: InvocationResult, *, read_from_device: bool = True) -> Any:
@@ -355,7 +353,7 @@ class DecodeRuntime:
             return result.value
         try:
             host = self.output_reader.read(result.value, blocking=True)
-            normalized = self.normalize_host_output(
+            normalized = self._normalize_host_output(
                 host,
                 is_tokens=result.is_tokens,
             )
@@ -384,19 +382,24 @@ class DecodeRuntime:
     def process_decode_output_host(self, tt_out: Any, is_tokens: bool = False) -> tuple[Any, Any]:
         completed = self.output_reader.complete(tt_out)
         self._release_external_lease(self._external_by_host_id.get(id(tt_out)))
-        return self.normalize_host_output(completed, is_tokens=is_tokens)
+        return self._normalize_host_output(completed, is_tokens=is_tokens)
 
-    def normalize_host_output(self, host_output: Any, *, is_tokens: bool) -> tuple[Any, Any]:
-        output, log_probs = _split_output(host_output)
+    def _normalize_host_output(self, host_output: Any, *, is_tokens: bool) -> tuple[Any, Any]:
+        if isinstance(host_output, tuple):
+            if len(host_output) != 2:
+                raise TypeError("runtime output tuple must contain (output, log_probs)")
+            output, log_probs = host_output
+        else:
+            output, log_probs = host_output, None
         if is_tokens:
-            tokens = _process_output_tokens(output, self.lane_capacity, self.cluster_shape)
+            tokens = _process_output_tokens(output, self.lane_capacity, self._cluster_shape)
             return tokens.to(torch.int64), log_probs
         logits = _process_output_decode_logits(
             output,
             self.lane_capacity,
             int(self.model.vocab_size),
             int(self.model.num_devices),
-            self.cluster_shape,
+            self._cluster_shape,
         )
         return logits, log_probs
 
@@ -414,16 +417,6 @@ class DecodeRuntime:
 
     def cleanup_transients(self) -> None:
         failures = release_orphans(self._transient_orphans)
-        if failures:
-            raise_cleanup_failures(failures)
-
-    def cleanup(self) -> None:
-        failures = []
-        for action in (self.drain_external_outputs, self.cleanup_transients):
-            try:
-                action()
-            except BaseException as error:
-                failures.append(error)
         if failures:
             raise_cleanup_failures(failures)
 
@@ -480,7 +473,7 @@ class DecodeRuntime:
         )
         nonnegative = torch.maximum(prepared.start_pos, torch.zeros_like(prepared.start_pos))
         rotary = self.model.rope_setup.get_rot_idxs(nonnegative, on_host=True)
-        mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.cluster_shape)
+        mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self._cluster_shape)
         positions = ttnn.from_torch(prepared.start_pos, device=None, dtype=ttnn.int32, mesh_mapper=mapper)
         page_table = ttnn.from_torch(prepared.page_table, device=None, dtype=ttnn.int32, mesh_mapper=mapper)
         return DecodeHostInputs(tokens_tt, positions, rotary, page_table)
@@ -563,25 +556,6 @@ class DecodeRuntime:
         if host_kpt is not None:
             _copy_host_to_device(host_kpt, device_kpt)
 
-    def _sampling_path(self, sampling_values):
-        if sampling_values is None:
-            return "logits"
-        if bool(self.model.sampling.config.allow_force_argmax) and sampling_values[3] and not self.force_greedy_top_k:
-            return "argmax"
-        return "topk"
-
-    def _use_device_feedback(self, sampling_params):
-        return (
-            self.device_feedback_enabled and sampling_params is not None and hasattr(self.model, "increment_positions")
-        )
-
-    def _validation_context(self):
-        return validate_module_input_configs(
-            model=self.model,
-            iter_named_modules=lambda model: model.iter_executor_named_modules(),
-            mode="decode",
-        )
-
     def _validate_inputs(self, tokens, start_pos, page_table):
         if not isinstance(tokens, torch.Tensor) or tokens.ndim != 1:
             raise ValueError("decode tokens must be a rank-1 torch.Tensor")
@@ -645,6 +619,44 @@ def _persistent_values(value: Any) -> DecodePersistentInputs:
     raise TypeError("decode persistent inputs have an unsupported representation")
 
 
+@contextlib.contextmanager
+def _validate_module_inputs(model: Any):
+    """Instrument one decode forward pass against declared input memory configs."""
+
+    mismatches = []
+    originals = []
+    for name, module in model.iter_executor_named_modules():
+        config = getattr(module, "config", None)
+        expected = getattr(config, "decode_input_memcfg", None)
+        if expected is None:
+            continue
+        if not hasattr(module, "decode_forward"):
+            raise AttributeError(f"Module {name} has decode_input_memcfg but no decode_forward method")
+        original = module.decode_forward
+        originals.append((module, original))
+
+        def make_wrapper(orig, module_name, expected_memcfg):
+            @functools.wraps(orig)
+            def wrapper(x, *args, **kwargs):
+                if isinstance(x, ttnn.Tensor) and x.is_allocated():
+                    actual = x.spec.memory_config
+                    if actual != expected_memcfg:
+                        mismatches.append((module_name, expected_memcfg, actual))
+                return orig(x, *args, **kwargs)
+
+            return wrapper
+
+        module.decode_forward = make_wrapper(original, name, expected)
+
+    try:
+        yield
+    finally:
+        for module, original in originals:
+            module.decode_forward = original
+        for name, expected, actual in mismatches:
+            logger.warning(f"Config mismatch at {name}: declared {expected}, actual {actual}")
+
+
 def _layout_value(layout: Any, *names: str) -> int:
     for name in names:
         value = getattr(layout, name, None)
@@ -679,7 +691,13 @@ def _copy_host_to_device(host_tensors, device_tensors=None, mesh_device=None):
 
 
 def _formatted_sampling_values(sampling_params, batch_size):
-    sampling_params = _tensor_sampling_fields_to_python(sampling_params)
+    updates = {}
+    for field in dataclasses.fields(sampling_params):
+        value = getattr(sampling_params, field.name)
+        if isinstance(value, torch.Tensor):
+            updates[field.name] = value.item() if value.ndim == 0 else value.tolist()
+    if updates:
+        sampling_params = dataclasses.replace(sampling_params, **updates)
     formatted_size = ((int(batch_size) + 31) // 32) * 32
     formatted = format_sampling_params(sampling_params, formatted_size)
     k = tuple(int(value) for value in formatted.top_k)
@@ -689,23 +707,6 @@ def _formatted_sampling_values(sampling_params, batch_size):
         all(value == 1 for value in k) and all(value == 0 for value in p) and all(value == 1 for value in temperature)
     )
     return k, p, temperature, greedy
-
-
-def _tensor_sampling_fields_to_python(sampling_params):
-    updates = {}
-    for field in dataclasses.fields(sampling_params):
-        value = getattr(sampling_params, field.name)
-        if isinstance(value, torch.Tensor):
-            updates[field.name] = value.item() if value.ndim == 0 else value.tolist()
-    return dataclasses.replace(sampling_params, **updates) if updates else sampling_params
-
-
-def _split_output(value):
-    if isinstance(value, tuple):
-        if len(value) != 2:
-            raise TypeError("runtime output tuple must contain (output, log_probs)")
-        return value
-    return value, None
 
 
 def _concat_host_output(value, cluster_shape):

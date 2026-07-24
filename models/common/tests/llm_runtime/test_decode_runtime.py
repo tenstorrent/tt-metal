@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import contextlib
 from types import SimpleNamespace
 
 import pytest
@@ -169,8 +168,6 @@ def test_sampling_values_are_formatted_once_during_prepare(monkeypatch):
     monkeypatch.setattr(ttnn, "from_torch", lambda value, **kwargs: value)
 
     runtime._make_host_kpt(prepared)
-    runtime._sampling_path(prepared.sampling_values)
-
     assert len(calls) == 1
 
 
@@ -297,7 +294,7 @@ def test_submission_state_tracks_last_table_despite_stale_prepare_change_hint():
     runtime.note_submitted(changed)
     runtime.note_submitted(back_to_baseline)
 
-    assert torch.equal(runtime.previous_page_table, back_to_baseline.page_table)
+    assert not prepare(runtime, page_table=back_to_baseline.page_table).page_table_changed
     assert prepare(
         runtime,
         positions=(0, -1),
@@ -351,7 +348,6 @@ def test_eager_invoke_returns_owned_result_and_advances_submission_state(monkeyp
     calls = []
     monkeypatch.setattr(runtime, "_prepare_inputs_host", lambda request: "host")
     monkeypatch.setattr(runtime, "_stage_inputs_and_kpt", lambda host, request: (device, None))
-    monkeypatch.setattr(runtime, "_validation_context", contextlib.nullcontext)
     monkeypatch.setattr(
         runtime,
         "_run_body",
@@ -365,7 +361,7 @@ def test_eager_invoke_returns_owned_result_and_advances_submission_state(monkeyp
     assert result.owned == (("raw", None), (device, None))
     assert not result.is_tokens
     assert calls == [False]
-    assert torch.equal(runtime.previous_page_table, prepared.page_table)
+    assert not prepare(runtime, page_table=prepared.page_table).page_table_changed
 
 
 def test_blocking_consume_normalizes_logits_and_releases_owned_values(monkeypatch):
@@ -381,7 +377,6 @@ def test_blocking_consume_normalizes_logits_and_releases_owned_values(monkeypatc
     assert logits.shape == (2, 1, 8)
     assert log_probs == "probs"
     assert released == ["owned"]
-    assert runtime.external_lease_count == 0
 
 
 def test_raw_blocking_and_async_leases_release_exact_records(monkeypatch):
@@ -397,7 +392,6 @@ def test_raw_blocking_and_async_leases_release_exact_records(monkeypatch):
     assert runtime.consume(first, read_from_device=False) is first.value
     monkeypatch.setattr(runtime.output_reader, "read", lambda value, *, blocking: "first-host")
     assert runtime.read_decode_output(first.value) == "first-host"
-    assert runtime.external_lease_count == 0
 
     second = InvocationResult(value=object(), owned="second-owned", is_tokens=True)
     runtime.consume(second, read_from_device=False)
@@ -414,7 +408,6 @@ def test_raw_blocking_and_async_leases_release_exact_records(monkeypatch):
     assert tokens.tolist() == [7, 8]
     assert tokens.dtype == torch.int64
     assert log_probs is None
-    assert runtime.external_lease_count == 0
     assert deallocated == [
         (first.value, "first-owned"),
         (second.value, "second-owned"),
@@ -438,14 +431,12 @@ def test_async_trace_lease_never_releases_borrowed_trace_output(monkeypatch):
 
     result = InvocationResult(value=raw, owned=None, is_tokens=True)
     assert runtime.consume(result, read_from_device=False) is raw
-    assert runtime.external_lease_count == 0
     host, events = runtime.read_decode_output(raw, async_read=True)
     assert events == ["event"]
     tokens, log_probs = runtime.process_decode_output_host(host, is_tokens=True)
 
     assert tokens.tolist() == [7, 8]
     assert log_probs is None
-    assert runtime.external_lease_count == 0
     assert deallocated == []
 
 

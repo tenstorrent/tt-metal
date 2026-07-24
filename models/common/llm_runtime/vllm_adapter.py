@@ -51,7 +51,12 @@ class VLLMAdapter:
         self.expected_head_dim = None if expected_head_dim is None else int(expected_head_dim)
         if model_kv_cache_dtype is None:
             raise TypeError("model_kv_cache_dtype must be supplied from model metadata")
-        self._model_kv_cache_dtypes = _as_dtype_tuple(model_kv_cache_dtype)
+        if isinstance(model_kv_cache_dtype, (list, tuple)):
+            if not model_kv_cache_dtype:
+                raise ValueError("model_kv_cache_dtype cannot be empty")
+            self._model_kv_cache_dtypes = tuple(model_kv_cache_dtype)
+        else:
+            self._model_kv_cache_dtypes = (model_kv_cache_dtype,)
 
         if self.expected_num_layers <= 0:
             raise ValueError("expected_num_layers must be positive")
@@ -64,7 +69,10 @@ class VLLMAdapter:
         if len(self._model_kv_cache_dtypes) not in (1, self.expected_num_layers):
             raise ValueError("model_kv_cache_dtype must be uniform or contain one dtype per model layer")
 
-        uniform_model_dtype = _uniform_dtype(self._model_kv_cache_dtypes)
+        first_dtype = self._model_kv_cache_dtypes[0]
+        uniform_model_dtype = (
+            first_dtype if all(dtype == first_dtype for dtype in self._model_kv_cache_dtypes[1:]) else None
+        )
         if uniform_model_dtype is not None and paged_kv_cache_config.dtype != uniform_model_dtype:
             raise ValueError(
                 "PagedKVCacheConfig.dtype does not match the model-owned KV cache dtype: "
@@ -76,7 +84,7 @@ class VLLMAdapter:
 
         normalized = _bind_positional(args, kwargs, ("tokens", "page_table"), "prefill")
         self._drop_ignored_kwargs(normalized)
-        self._validate_trace_hint(normalized, operation="prefill")
+        self._validate_trace_selection(normalized, operation="prefill")
         _require_arguments(normalized, ("tokens", "page_table"), "prefill")
         _normalize_tensor(normalized, "tokens", torch.long)
         _normalize_tensor(normalized, "page_table", torch.int32)
@@ -89,7 +97,7 @@ class VLLMAdapter:
 
         normalized = _bind_positional(args, kwargs, ("tokens", "start_pos", "page_table"), "decode")
         self._drop_ignored_kwargs(normalized)
-        self._validate_trace_hint(normalized, operation="decode")
+        self._validate_trace_selection(normalized, operation="decode")
         _require_arguments(normalized, ("tokens", "start_pos", "page_table"), "decode")
         _normalize_tensor(normalized, "tokens", torch.long)
         _normalize_tensor(normalized, "start_pos", torch.long)
@@ -99,23 +107,6 @@ class VLLMAdapter:
         if tokens.ndim == 2 and tokens.shape[-1] == 1:
             normalized["tokens"] = tokens.reshape(-1)
         return normalized
-
-    def validate_trace_hint(self, operation: str, enable_trace: bool) -> None:
-        """Validate a dynamic trace choice against the static capability ceiling."""
-
-        if not isinstance(enable_trace, bool):
-            raise TypeError("enable_trace must be bool")
-        if operation == "prefill":
-            configured = self.trace_config.prefill_enabled
-        elif operation == "decode":
-            configured = self.trace_config.decode_enabled
-        else:
-            raise ValueError(f"Unknown trace operation {operation!r}")
-        if enable_trace and not configured:
-            raise ValueError(
-                f"enable_trace={enable_trace} for {operation} disagrees with static "
-                f"TraceConfig policy ({configured})"
-            )
 
     def resolve_legacy_kv_cache_config(
         self,
@@ -169,10 +160,23 @@ class VLLMAdapter:
         for key in _IGNORED_VLLM_KWARGS:
             kwargs.pop(key, None)
 
-    def _validate_trace_hint(self, kwargs: dict[str, Any], *, operation: str) -> None:
+    def _validate_trace_selection(self, kwargs: dict[str, Any], *, operation: str) -> None:
         if "enable_trace" not in kwargs:
-            return
-        self.validate_trace_hint(operation, kwargs["enable_trace"])
+            raise TypeError(f"{operation} requires an explicit enable_trace boolean")
+        enable_trace = kwargs["enable_trace"]
+        if not isinstance(enable_trace, bool):
+            raise TypeError("enable_trace must be bool")
+        if operation == "prefill":
+            configured = self.trace_config.prefill_enabled
+        elif operation == "decode":
+            configured = self.trace_config.decode_enabled
+        else:
+            raise ValueError(f"Unknown trace operation {operation!r}")
+        if enable_trace and not configured:
+            raise ValueError(
+                f"enable_trace={enable_trace} for {operation} disagrees with static "
+                f"TraceConfig policy ({configured})"
+            )
 
 
 def _bind_positional(
@@ -207,29 +211,13 @@ def _normalize_tensor(kwargs: dict[str, Any], name: str, dtype: torch.dtype) -> 
         kwargs[name] = torch.as_tensor(value, dtype=dtype)
 
 
-def _as_dtype_tuple(dtype: Any | Sequence[Any]) -> tuple[Any, ...]:
-    if isinstance(dtype, (list, tuple)):
-        if not dtype:
-            raise ValueError("model_kv_cache_dtype cannot be empty")
-        return tuple(dtype)
-    return (dtype,)
-
-
-def _uniform_dtype(dtypes: tuple[Any, ...]) -> Any | None:
-    first = dtypes[0]
-    return first if all(dtype == first for dtype in dtypes[1:]) else None
-
-
-def _torch_surrogate(device_dtype: Any) -> torch.dtype:
-    if isinstance(device_dtype, torch.dtype):
-        return device_dtype
-    return torch_dtype_for_ttnn(device_dtype)
-
-
 def _validate_vllm_torch_dtype(dtype: torch.dtype, model_dtypes: tuple[Any, ...]) -> None:
     if not isinstance(dtype, torch.dtype):
         raise TypeError(f"vLLM KV dtype must be a torch.dtype, got {type(dtype).__name__}")
-    expected = {_torch_surrogate(model_dtype) for model_dtype in model_dtypes}
+    expected = {
+        model_dtype if isinstance(model_dtype, torch.dtype) else torch_dtype_for_ttnn(model_dtype)
+        for model_dtype in model_dtypes
+    }
     if dtype not in expected or len(expected) != 1:
         expected_names = ", ".join(sorted(str(item) for item in expected))
         raise ValueError(f"vLLM KV dtype {dtype} does not match model-owned dtype surrogate {expected_names}")

@@ -48,6 +48,11 @@ class LaneGroupExecutor:
             self.model_args = [getattr(lane, "model_args", None) for lane in self.lanes]
             self.mesh_devices = [getattr(lane, "mesh_device", None) for lane in self.lanes]
             self.mesh_device = tuple(self.mesh_devices) if mesh_device is None else mesh_device
+            self.eager_execution = tuple(getattr(lane, "eager_execution", None) for lane in self.lanes)
+            traced_prefill = tuple(getattr(lane, "traced_prefill_execution", None) for lane in self.lanes)
+            traced_decode = tuple(getattr(lane, "traced_decode_execution", None) for lane in self.lanes)
+            self.traced_prefill_execution = traced_prefill if all(traced_prefill) else None
+            self.traced_decode_execution = traced_decode if all(traced_decode) else None
             self._output_pool = ThreadPoolExecutor(
                 max_workers=self.tt_data_parallel,
                 thread_name_prefix="tttv2-dp-output",
@@ -113,6 +118,33 @@ class LaneGroupExecutor:
         bound = _bind_positional(args, kwargs, ("tokens", "page_table"), "prefill_forward")
         return self._run_guarded(lambda: self._prefill_fanout("prefill_forward", bound))
 
+    def can_trace_prefill(self, *args: Any, **kwargs: Any) -> bool:
+        bound = _bind_positional(args, kwargs, ("tokens", "page_table"), "can_trace_prefill")
+
+        def operation() -> bool:
+            tokens = bound.get("tokens")
+            if not isinstance(tokens, torch.Tensor) or tokens.ndim < 1:
+                raise TypeError("prefill tokens must be a torch.Tensor with a batch dimension")
+            batch_size = int(tokens.shape[0])
+            empty_slots = bound.get("empty_slots")
+            if empty_slots is None:
+                empty_slots = list(range(batch_size))
+            else:
+                empty_slots = list(empty_slots)
+            if len(empty_slots) != batch_size:
+                raise ValueError(f"empty_slots length {len(empty_slots)} must match prefill batch {batch_size}")
+
+            for lane_idx, rows, _ in self._prefill_lane_groups(empty_slots):
+                lane_kwargs = {"tokens": _slice_rows(tokens, rows)}
+                for key in ("prompt_lens", "start_pos"):
+                    if bound.get(key) is not None:
+                        lane_kwargs[key] = _slice_rows(bound[key], rows)
+                if not self.lanes[lane_idx].can_trace_prefill(**lane_kwargs):
+                    return False
+            return True
+
+        return self._run_guarded(operation)
+
     def decode_forward(self, *args: Any, **kwargs: Any) -> Any:
         bound = _bind_positional(args, kwargs, ("tokens", "start_pos", "page_table"), "decode_forward")
         return self._run_guarded(
@@ -173,6 +205,10 @@ class LaneGroupExecutor:
             raise primary
 
     def _prefill_fanout(self, method_name: str, kwargs: dict[str, Any]) -> Any:
+        lane_results = self._prefill_lane_results(method_name, kwargs)
+        return _aggregate_prefill_outputs(lane_results, int(kwargs["tokens"].shape[0]))
+
+    def _prefill_lane_results(self, method_name: str, kwargs: dict[str, Any]) -> list[tuple[list[int], Any]]:
         tokens = kwargs.get("tokens")
         page_table = kwargs.get("page_table")
         if not isinstance(tokens, torch.Tensor) or tokens.ndim < 1:
@@ -204,10 +240,12 @@ class LaneGroupExecutor:
                 lane_kwargs["sampling_params"] = _slice_sampling_params(lane_kwargs["sampling_params"], rows)
             if lane_kwargs.get("kv_cache") is not None:
                 lane_kwargs["kv_cache"] = self._lane_value(lane_kwargs["kv_cache"], lane_idx, "KV caches")
+            if lane_kwargs.get("execution") is not None:
+                lane_kwargs["execution"] = self._lane_value(lane_kwargs["execution"], lane_idx, "executions")
             result = getattr(self.lanes[lane_idx], method_name)(**lane_kwargs)
             lane_results.append((rows, result))
 
-        return _aggregate_prefill_outputs(lane_results, batch_size)
+        return lane_results
 
     def _decode_fanout(self, method_name: str, kwargs: dict[str, Any], *, return_raw: bool) -> Any:
         tokens = kwargs.get("tokens")
@@ -235,6 +273,8 @@ class LaneGroupExecutor:
                 )
             if lane_kwargs.get("kv_cache") is not None:
                 lane_kwargs["kv_cache"] = self._lane_value(lane_kwargs["kv_cache"], lane_idx, "KV caches")
+            if lane_kwargs.get("execution") is not None:
+                lane_kwargs["execution"] = self._lane_value(lane_kwargs["execution"], lane_idx, "executions")
             lane_outputs.append(getattr(self.lanes[lane_idx], method_name)(**lane_kwargs))
 
         if return_raw:

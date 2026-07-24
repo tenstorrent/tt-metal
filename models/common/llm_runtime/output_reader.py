@@ -25,10 +25,6 @@ class PendingRead:
     _owner: Any = field(repr=False, compare=False)
     _completed: bool = field(default=False, repr=False, compare=False)
 
-    @property
-    def completed(self) -> bool:
-        return self._completed
-
 
 class OutputReader:
     """Own pending output-read destinations/events until completion or drain.
@@ -45,16 +41,6 @@ class OutputReader:
         self._owner = object()
         self._lock = threading.Lock()
 
-    @property
-    def pending_count(self) -> int:
-        with self._lock:
-            return len(self._pending)
-
-    @property
-    def pending_reads(self) -> tuple[PendingRead, ...]:
-        with self._lock:
-            return tuple(self._pending.values())
-
     def read(self, value: Any, *, blocking: bool = True) -> Any | PendingRead:
         """Read a nested output payload to host.
 
@@ -63,6 +49,9 @@ class OutputReader:
         the existing vLLM tuple contract while this reader retains ownership.
         """
 
+        return self._read(value, blocking=blocking)
+
+    def _read(self, value: Any, *, blocking: bool) -> Any | PendingRead:
         retained_destinations: list[Any] = []
         try:
             host_value, submitted = _read_to_host(
@@ -101,7 +90,7 @@ class OutputReader:
     def submit(self, value: Any) -> PendingRead:
         """Submit an asynchronous read and retain its resources."""
 
-        result = self.read(value, blocking=False)
+        result = self._read(value, blocking=False)
         assert isinstance(result, PendingRead)
         return result
 
@@ -130,6 +119,9 @@ class OutputReader:
         Completion is idempotent.
         """
 
+        return self._complete_pending(pending_or_value)
+
+    def _complete_pending(self, pending_or_value: PendingRead | Any) -> Any:
         if isinstance(pending_or_value, PendingRead):
             candidate = pending_or_value
             if candidate._owner is not self._owner:
@@ -146,7 +138,7 @@ class OutputReader:
             pending = self._pending.get(sequence)
         if pending is None:
             if candidate is not None:
-                if candidate.completed:
+                if candidate._completed:
                     return candidate.value
                 raise ValueError("PendingRead is not active in this OutputReader")
             return pending_or_value
@@ -174,7 +166,7 @@ class OutputReader:
         failures = []
         for pending in pending_reads:
             try:
-                self.complete(pending)
+                self._complete_pending(pending)
             except BaseException as error:
                 failures.append(error)
         if failures:

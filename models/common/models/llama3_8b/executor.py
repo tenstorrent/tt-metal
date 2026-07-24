@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import torch
 
@@ -20,10 +20,8 @@ from models.common.llm_runtime.program_compiler import ProgramCompiler
 from models.common.llm_runtime.tensor_resources import attach_cleanup_failures
 from models.common.llm_runtime.trace_compiler import TraceCompiler
 from models.common.llm_runtime.warmup import WarmupCoordinator
+from models.common.models.llama3_8b.hf_adaptor import Llama3ForCausalLM
 from models.common.modules.sampling.sampling_1d import Sampling1D
-
-if TYPE_CHECKING:
-    from models.common.models.llama3_8b.hf_adaptor import Llama3ForCausalLM
 
 
 @dataclass(frozen=True)
@@ -116,12 +114,18 @@ class Llama3Executor:
         )
         self.trace_compiler: TraceCompiler | None = None
         self.traced_executor: TracedExecutor | None = None
-        if config.trace.mode == "none":
-            self.execution: EagerExecutor | TracedExecutor = self.eager_executor
-        else:
-            self.trace_compiler = TraceCompiler(self.program_compiler, mesh_device, config.trace)
+        if config.trace.mode != "none":
+            self.trace_compiler = TraceCompiler(self.program_compiler, mesh_device)
             self.traced_executor = TracedExecutor(eager=self.eager_executor, trace_compiler=self.trace_compiler)
-            self.execution = self.traced_executor
+        self.eager_execution = self.eager_executor
+        self.traced_prefill_execution = (
+            self.traced_executor if config.trace.prefill_enabled and self.traced_executor is not None else None
+        )
+        self.traced_decode_execution = (
+            self.traced_executor if config.trace.decode_enabled and self.traced_executor is not None else None
+        )
+        self._prefill_execution = self.traced_prefill_execution or self.eager_executor
+        self._decode_execution = self.traced_decode_execution or self.eager_executor
 
         prefill_sequence_lengths = tuple(
             int(value) for value in (getattr(runtime_config, "trace_prefill_supported_seq_lens", ()) or (128,))
@@ -129,7 +133,7 @@ class Llama3Executor:
         self.warmup = WarmupCoordinator(
             config=config.warmup,
             trace_config=config.trace,
-            execution=self.execution,
+            execution=self.traced_executor or self.eager_executor,
             eager=self.eager_executor,
             trace_compiler=self.trace_compiler,
             model=model,
@@ -176,27 +180,6 @@ class Llama3Executor:
     def device_decode_feedback_enabled(self, value: bool) -> None:
         self.decode_runtime.device_feedback_enabled = bool(value)
 
-    @property
-    def trace_id_prefill(self):
-        if self.trace_compiler is None:
-            return None
-        ids = [
-            record.artifact.trace_id
-            for record in self.trace_compiler.traces.values()
-            if record.operation == "prefill" and record.artifact is not None
-        ]
-        return ids[0] if ids else None
-
-    @property
-    def trace_ids_decode(self) -> list[int]:
-        if self.trace_compiler is None:
-            return []
-        return [
-            record.artifact.trace_id
-            for record in self.trace_compiler.traces.values()
-            if record.operation == "decode" and record.artifact is not None
-        ]
-
     def configure_paged_kv_cache(self, config: PagedKVCacheConfig) -> None:
         self._ensure_active()
         self.kv_cache_manager.configure(config)
@@ -237,17 +220,27 @@ class Llama3Executor:
                 )
         return self.kv_cache_manager.allocate()
 
-    def compile_prefill(self, **kwargs: Any) -> None:
+    def compile_prefill(
+        self,
+        *,
+        execution: EagerExecutor | TracedExecutor | None = None,
+        **kwargs: Any,
+    ) -> None:
         self._ensure_active()
         self._validate_bound_cache(kwargs.get("kv_cache"))
         self._ensure_sampling_for(kwargs.get("sampling_params"))
-        return self.execution.compile_prefill(**kwargs)
+        return (execution or self._prefill_execution).compile_prefill(**kwargs)
 
-    def compile_decode(self, **kwargs: Any) -> None:
+    def compile_decode(
+        self,
+        *,
+        execution: EagerExecutor | TracedExecutor | None = None,
+        **kwargs: Any,
+    ) -> None:
         self._ensure_active()
         self._validate_bound_cache(kwargs.get("kv_cache"))
         self._ensure_sampling_for(kwargs.get("sampling_params"))
-        return self.execution.compile_decode(**kwargs)
+        return (execution or self._decode_execution).compile_decode(**kwargs)
 
     def prefill_forward(
         self,
@@ -258,19 +251,18 @@ class Llama3Executor:
         empty_slots=None,
         sampling_params=None,
         start_pos=None,
-        enable_trace=None,
+        execution: EagerExecutor | TracedExecutor | None = None,
     ):
         self._ensure_active()
         self._validate_bound_cache(kv_cache)
         self._ensure_sampling_for(sampling_params)
-        return self.execution.prefill_forward(
+        return (execution or self._prefill_execution).prefill_forward(
             tokens=tokens,
             page_table=page_table,
             prompt_lens=prompt_lens,
             empty_slots=empty_slots,
             sampling_params=sampling_params,
             start_pos=start_pos,
-            enable_trace=enable_trace,
         )
 
     def decode_forward(
@@ -282,19 +274,34 @@ class Llama3Executor:
         read_from_device=True,
         sampling_params=None,
         reset_batch=False,
-        enable_trace=None,
+        execution: EagerExecutor | TracedExecutor | None = None,
     ):
         self._ensure_active()
         self._validate_bound_cache(kv_cache)
         self._ensure_sampling_for(sampling_params)
-        return self.execution.decode_forward(
+        return (execution or self._decode_execution).decode_forward(
             tokens=tokens,
             start_pos=start_pos,
             page_table=page_table,
             sampling_params=sampling_params,
             reset_batch=reset_batch,
             read_from_device=read_from_device,
-            enable_trace=enable_trace,
+        )
+
+    def can_trace_prefill(
+        self,
+        *,
+        tokens,
+        prompt_lens=None,
+        start_pos=None,
+        **_: Any,
+    ) -> bool:
+        if self.traced_executor is None or not self.config.trace.prefill_enabled:
+            return False
+        return self.prefill_runtime.can_trace(
+            tokens=tokens,
+            prompt_lens=prompt_lens,
+            start_pos=start_pos,
         )
 
     def read_decode_output(self, tt_out: Any, async_read: bool = False) -> Any:
@@ -357,7 +364,6 @@ class Llama3Executor:
     def _refresh_page_table_layout(self) -> None:
         layout = self._resolve_page_table_layout()
         self.page_table_layout = layout
-        self.prefill_runtime.page_table_layout = layout
         self.prefill_runtime.block_size = layout.block_size
         self.prefill_runtime.max_actual_page_table_width = layout.raw_capacity_width
         self.prefill_runtime.canonical_page_table_width = layout.prefill_width

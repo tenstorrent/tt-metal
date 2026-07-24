@@ -391,7 +391,3 @@ def _max_prefill_chunk_size(sequence_length: int, maximum: int) -> int:
 
 def _num_blocks(sequence_length: int, block_size: int) -> int:
     return math.ceil(int(sequence_length) / int(block_size))
-
-
-def _round_up(value: int, alignment: int) -> int:
-    return math.ceil(int(value) / int(alignment)) * int(alignment)

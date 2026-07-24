@@ -29,13 +29,6 @@ class WarmupPlan:
     decode: tuple[WarmupCase, ...]
 
 
-@dataclass(frozen=True)
-class WarmupCoverage:
-    eager: frozenset[WarmupCase]
-    trace_registered: frozenset[WarmupCase]
-    traces_captured: bool
-
-
 class WarmupCoordinator:
     """Own warmup coverage and the compile-all-before-capture barrier."""
 
@@ -72,12 +65,8 @@ class WarmupCoordinator:
         self._prefill_trace_postprocess_primed = False
 
     @property
-    def coverage(self) -> WarmupCoverage:
-        return WarmupCoverage(frozenset(self._eager), frozenset(self._trace_registered), self._captured)
-
-    @property
     def already_warmed_up_prefill(self) -> bool:
-        required = set(self.plan(can_sample_on_device=self.device_sampling_enabled).prefill)
+        required = set(self._plan(can_sample_on_device=self.device_sampling_enabled).prefill)
         if not required.issubset(self._eager):
             return False
         if (
@@ -87,7 +76,7 @@ class WarmupCoordinator:
             return True
         return required.issubset(self._trace_registered) and self._captured
 
-    def plan(self, *, can_sample_on_device: bool) -> WarmupPlan:
+    def _plan(self, *, can_sample_on_device: bool) -> WarmupPlan:
         sampling_paths = ["logits"]
         if can_sample_on_device:
             sampling_paths.append("topk")
@@ -149,7 +138,7 @@ class WarmupCoordinator:
         self._validate_bound_cache(kv_cache)
         if can_sample_on_device:
             self._ensure_sampling_buffers()
-        plan = self.plan(can_sample_on_device=can_sample_on_device)
+        plan = self._plan(can_sample_on_device=can_sample_on_device)
         destination = self._trace_registered if enable_trace else self._eager
         cases = plan.prefill
         if enable_trace and can_sample_on_device:
@@ -188,7 +177,8 @@ class WarmupCoordinator:
                 start_pos = (
                     torch.full((case.batch_size,), case.cached_tokens, dtype=torch.long) if case.cached_tokens else None
                 )
-                self.execution.compile_prefill(
+                compile_target = self.execution if enable_trace and case.cached_tokens == 0 else self.eager
+                compile_target.compile_prefill(
                     tokens=tokens,
                     page_table=page_table,
                     kv_cache=kv_cache,
@@ -196,7 +186,6 @@ class WarmupCoordinator:
                     empty_slots=list(range(case.batch_size)),
                     start_pos=start_pos,
                     sampling_params=sampling,
-                    enable_trace=enable_trace,
                 )
             destination.add(case)
         self._maybe_capture()
@@ -221,7 +210,7 @@ class WarmupCoordinator:
             raise ValueError("decode warmup num_blocks must be positive")
         if can_sample_on_device:
             self._ensure_sampling_buffers()
-        plan = self.plan(can_sample_on_device=can_sample_on_device)
+        plan = self._plan(can_sample_on_device=can_sample_on_device)
         destination = self._trace_registered if enable_trace else self._eager
         for case in plan.decode:
             if case in destination:
@@ -231,13 +220,13 @@ class WarmupCoordinator:
                 sampling = _greedy_sampling_params(lane_batch)
             elif case.sampling_path == "topk":
                 sampling = _topk_sampling_params(lane_batch)
-            self.execution.compile_decode(
+            compile_target = self.execution if enable_trace else self.eager
+            compile_target.compile_decode(
                 tokens=torch.zeros(lane_batch, dtype=torch.long),
                 start_pos=torch.zeros(lane_batch, dtype=torch.long),
                 page_table=torch.zeros((lane_batch, int(num_blocks)), dtype=torch.int32),
                 kv_cache=kv_cache,
                 sampling_params=sampling,
-                enable_trace=enable_trace,
             )
             if not enable_trace:
                 logger.info("Compiled decode")
@@ -249,7 +238,7 @@ class WarmupCoordinator:
     def _maybe_capture(self) -> None:
         if self.trace_compiler is None or self._captured:
             return
-        required = self.plan(can_sample_on_device=self.device_sampling_enabled)
+        required = self._plan(can_sample_on_device=self.device_sampling_enabled)
         required_trace: set[WarmupCase] = set()
         if bool(getattr(self.trace_config, "prefill_enabled", False)):
             prefill_decision = self._trace_decisions.get("prefill")
@@ -291,7 +280,6 @@ class WarmupCoordinator:
             empty_slots=[0],
             start_pos=None,
             sampling_params=_greedy_sampling_params(1),
-            enable_trace=True,
         )
         self._prefill_trace_postprocess_primed = True
 

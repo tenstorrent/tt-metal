@@ -266,6 +266,40 @@ def test_compile_methods_slice_requests_to_lane_executors():
     assert lane1_decode["tokens"].tolist() == [12, 13]
 
 
+def test_concrete_execution_targets_and_trace_classification_fan_out_per_lane():
+    class DispatchLane(_Lane):
+        def __init__(self, lane_idx, *, traceable):
+            super().__init__(lane_idx)
+            self.traceable = traceable
+            self.eager_execution = object()
+            self.traced_prefill_execution = object()
+            self.traced_decode_execution = object()
+
+        def can_trace_prefill(self, **kwargs):
+            self._call("can_trace_prefill", kwargs)
+            return self.traceable
+
+        def prefill_forward(self, **kwargs):
+            self._call("prefill", kwargs)
+            return kwargs["tokens"][:, :1].float().view(-1, 1, 1)
+
+    lanes = [DispatchLane(0, traceable=True), DispatchLane(1, traceable=False)]
+    group = LaneGroupExecutor(lanes)
+    kwargs = {
+        "tokens": torch.tensor([[10], [11]]),
+        "page_table": torch.tensor([[0], [1]], dtype=torch.int32),
+        "empty_slots": [0, 2],
+    }
+
+    assert not group.can_trace_prefill(**kwargs)
+    assert group.prefill_forward(execution=group.eager_execution, **kwargs).flatten().tolist() == [10.0, 11.0]
+    assert group.prefill_forward(execution=group.traced_prefill_execution, **kwargs).flatten().tolist() == [10.0, 11.0]
+    for lane_idx, lane in enumerate(lanes):
+        assert [method for method, _ in lane.calls] == ["can_trace_prefill", "prefill", "prefill"]
+        assert lane.calls[1][1]["execution"] is group.eager_execution[lane_idx]
+        assert lane.calls[2][1]["execution"] is group.traced_prefill_execution[lane_idx]
+
+
 def test_configure_and_allocate_fan_out_with_distinct_lane_configs():
     lanes = [_Lane(0), _Lane(1)]
     group = LaneGroupExecutor(lanes)

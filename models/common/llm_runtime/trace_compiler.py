@@ -5,7 +5,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+import ctypes
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -23,7 +24,6 @@ from models.common.llm_runtime.tensor_resources import (
     attach_cleanup_failures,
     best_effort_deallocate_owned_tensors,
     release_orphans,
-    trim_host_allocator,
 )
 
 _TRACE_KEY_DOMAIN = "tttv2.llm-runtime.trace"
@@ -42,10 +42,6 @@ class TraceKey:
     @classmethod
     def from_signature(cls, signature: Any) -> "TraceKey":
         return cls(signature_digest(_TRACE_KEY_DOMAIN, _TRACE_KEY_SCHEMA_VERSION, signature))
-
-    @property
-    def short(self) -> str:
-        return self.digest[:12]
 
 
 @dataclass
@@ -91,7 +87,6 @@ class TraceCapturePlan:
     prepare_inputs: Callable[[], PersistentInputs | Any]
     capture: Callable[[PersistentInputs], Any]
     refresh_policy: InputRefreshPolicy = InputRefreshPolicy()
-    trace_eligible: bool = True
 
     def __post_init__(self) -> None:
         if self.operation not in ("prefill", "decode"):
@@ -100,9 +95,7 @@ class TraceCapturePlan:
 
 @dataclass
 class TraceRecord:
-    key: TraceKey
     signature: Any
-    source_program_key: ProgramKey
     operation: str
     artifact: TraceArtifact | None = None
 
@@ -110,12 +103,11 @@ class TraceRecord:
 class TraceCompiler:
     """Own trace state while composing the executor's exact ProgramCompiler."""
 
-    def __init__(self, program_compiler: ProgramCompiler, mesh_device: Any, trace_config: Any):
+    def __init__(self, program_compiler: ProgramCompiler, mesh_device: Any):
         if not isinstance(program_compiler, ProgramCompiler):
             raise TypeError("program_compiler must be a ProgramCompiler")
         self.program_compiler = program_compiler
         self.mesh_device = mesh_device
-        self.trace_config = trace_config
         self._traces: dict[TraceKey, TraceRecord] = {}
         self._plans: dict[TraceKey, TraceCapturePlan] = {}
         self._program_to_trace: dict[ProgramKey, TraceKey] = {}
@@ -126,27 +118,8 @@ class TraceCompiler:
         self._previous_replay_key: TraceKey | None = None
 
     @property
-    def traces(self) -> Mapping[TraceKey, TraceRecord]:
-        return self._traces.copy()
-
-    @property
-    def program_to_trace(self) -> Mapping[ProgramKey, TraceKey]:
-        return self._program_to_trace.copy()
-
-    @property
     def trace_active(self) -> bool:
         return self._activated
-
-    @property
-    def capture_in_progress(self) -> bool:
-        return self._capture_in_progress
-
-    @property
-    def rollback_orphan_count(self) -> int:
-        return len(self._rollback_orphans)
-
-    def key_for(self, signature: Any) -> TraceKey:
-        return TraceKey.from_signature(signature)
 
     def get(self, key: TraceKey) -> TraceRecord | None:
         return self._traces.get(key)
@@ -154,17 +127,15 @@ class TraceCompiler:
     def trace_key_for_program(self, program_key: ProgramKey) -> TraceKey | None:
         return self._program_to_trace.get(program_key)
 
-    def register_capture_plan(self, plan: TraceCapturePlan) -> TraceKey | None:
+    def register_capture_plan(self, plan: TraceCapturePlan) -> TraceKey:
         """Validate a compiled source and register one explicit trace association."""
 
         self._ensure_live()
         if self._capture_in_progress or self._activated:
             raise RuntimeError("Cannot register trace capture plans during capture or after trace activation")
         self.program_compiler.require_compiled(plan.program_key)
-        if not plan.trace_eligible or not self._trace_enabled(plan.operation):
-            return None
 
-        trace_key = self.key_for(plan.trace_signature)
+        trace_key = TraceKey.from_signature(plan.trace_signature)
         existing_association = self._program_to_trace.get(plan.program_key)
         if existing_association is not None and existing_association != trace_key:
             raise ValueError(f"Program key {plan.program_key.digest} already has a different trace association")
@@ -172,15 +143,14 @@ class TraceCompiler:
         record = self._traces.get(trace_key)
         if record is None:
             record = TraceRecord(
-                key=trace_key,
                 signature=plan.trace_signature,
-                source_program_key=plan.program_key,
                 operation=plan.operation,
             )
             self._traces[trace_key] = record
             self._plans[trace_key] = plan
         else:
-            self._ensure_matching_signature(trace_key, record.signature, plan.trace_signature)
+            if record.signature != plan.trace_signature:
+                raise RuntimeError(f"Trace key collision for digest {trace_key.digest}: retained signature differs")
             if record.operation != plan.operation:
                 raise RuntimeError(f"Trace key collision for digest {trace_key.digest}: operation differs")
             if self._plans[trace_key].refresh_policy != plan.refresh_policy:
@@ -188,13 +158,10 @@ class TraceCompiler:
         self._program_to_trace[plan.program_key] = trace_key
         return trace_key
 
-    def capture_all(self, plans: tuple[TraceCapturePlan, ...] | list[TraceCapturePlan] | None = None) -> None:
+    def capture_all(self) -> None:
         """Allocate every persistent input before beginning the first capture."""
 
         self._ensure_live()
-        if plans is not None:
-            for plan in plans:
-                self.register_capture_plan(plan)
         if self._activated:
             return
         if self._capture_in_progress:
@@ -252,7 +219,7 @@ class TraceCompiler:
             self.program_compiler.set_trace_capture_in_progress(False)
             self._activated = True
             self.program_compiler.set_trace_active(True)
-            trim_host_allocator()
+            _trim_host_allocator()
         except BaseException as primary:
             cleanup_failures = self._release_trace_resources()
             for trace_key, (persistent, _) in prepared.items():
@@ -357,18 +324,18 @@ class TraceCompiler:
         record.artifact = None
         return []
 
-    def _trace_enabled(self, operation: str) -> bool:
-        if hasattr(self.trace_config, "enables"):
-            return bool(self.trace_config.enables(operation))
-        configured = getattr(self.trace_config, "mode", self.trace_config)
-        configured = getattr(configured, "value", configured)
-        return configured == "all" or configured == "decode_only" and operation == "decode"
-
-    @staticmethod
-    def _ensure_matching_signature(trace_key: TraceKey, retained: Any, candidate: Any) -> None:
-        if retained != candidate:
-            raise RuntimeError(f"Trace key collision for digest {trace_key.digest}: retained signature differs")
-
     def _ensure_live(self) -> None:
         if self._released:
             raise RuntimeError("TraceCompiler has been released")
+
+
+def _trim_host_allocator() -> None:
+    """Return released trace-capture staging arenas to the OS when supported."""
+
+    try:
+        malloc_trim = ctypes.CDLL(None).malloc_trim
+    except (AttributeError, OSError):
+        return
+    malloc_trim.argtypes = (ctypes.c_size_t,)
+    malloc_trim.restype = ctypes.c_int
+    malloc_trim(0)

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from models.common.llm_runtime.config import PageTableLayout, TraceConfig, WarmupConfig
-from models.common.llm_runtime.warmup import WarmupCase, WarmupCoordinator
+from models.common.llm_runtime.warmup import WarmupCoordinator
 
 
 class RecordingExecution:
@@ -76,7 +76,7 @@ def make_coordinator(
         config=warmup_config or WarmupConfig(),
         trace_config=TraceConfig(trace_mode),
         execution=execution,
-        eager=object(),
+        eager=execution,
         trace_compiler=trace_compiler,
         model=SimpleNamespace(
             config=SimpleNamespace(max_batch_size=lane_capacity),
@@ -96,54 +96,21 @@ def make_coordinator(
     return coordinator, execution, trace_compiler, sampling_calls, bound_calls, events
 
 
-def case_tuple(case):
-    return (
-        case.operation,
-        case.batch_size,
-        case.sequence_length,
-        case.sampling_path,
-        case.cached_tokens,
-    )
-
-
-def test_default_case_snapshot_matches_existing_coverage():
-    coordinator, *_ = make_coordinator()
-
-    plan = coordinator.plan(can_sample_on_device=True)
-
-    assert tuple(map(case_tuple, plan.prefill)) == (
-        ("prefill", 1, 128, "logits", 0),
-        ("prefill", 1, 128, "topk", 0),
-        ("prefill", 1, 128, "argmax", 0),
-        ("prefill", 2, 128, "logits", 0),
-        ("prefill", 2, 128, "topk", 0),
-        ("prefill", 4, 128, "logits", 0),
-        ("prefill", 4, 128, "topk", 0),
-        ("prefill", 1, 128, "logits", 32),
-        ("prefill", 1, 128, "topk", 32),
-        ("prefill", 1, 128, "argmax", 32),
-        ("prefill", 1, 1024, "logits", 0),
-        ("prefill", 1, 1024, "topk", 0),
-        ("prefill", 1, 1024, "argmax", 0),
-        ("prefill", 1, 1024, "logits", 32),
-        ("prefill", 1, 1024, "topk", 32),
-        ("prefill", 1, 1024, "argmax", 32),
-    )
-    assert tuple(map(case_tuple, plan.decode)) == (
-        ("decode", 4, None, "logits", 0),
-        ("decode", 4, None, "argmax", 0),
-    )
-
-
 def test_q128_batches_are_capped_by_lane_and_non128_is_batch_one():
     config = WarmupConfig(prefill_batch_sizes=(1, 2, 4, 8, 16, 32))
-    coordinator, *_ = make_coordinator(warmup_config=config, lane_capacity=8)
+    coordinator, execution, *_ = make_coordinator(warmup_config=config, lane_capacity=8)
 
-    plan = coordinator.plan(can_sample_on_device=False)
+    coordinator.warmup_prefill(kv_cache="cache", enable_trace=False, can_sample_on_device=False)
 
-    regular_q128 = [case.batch_size for case in plan.prefill if case.sequence_length == 128 and not case.cached_tokens]
+    regular_q128 = [
+        int(call["tokens"].shape[0])
+        for call in execution.prefill
+        if int(call["tokens"].shape[-1]) == 128 and call["start_pos"] is None
+    ]
     regular_q1024 = [
-        case.batch_size for case in plan.prefill if case.sequence_length == 1024 and not case.cached_tokens
+        int(call["tokens"].shape[0])
+        for call in execution.prefill
+        if int(call["tokens"].shape[-1]) == 1024 and call["start_pos"] is None
     ]
     assert regular_q128 == [1, 2, 4, 8]
     assert regular_q1024 == [1]
@@ -162,11 +129,6 @@ def test_sampling_paths_include_forced_prefill_topk_and_opt_in_true_topk_decode(
         can_sample_on_device=True,
     )
 
-    assert [case.sampling_path for case in coordinator.plan(can_sample_on_device=True).decode] == [
-        "logits",
-        "argmax",
-        "topk",
-    ]
     assert execution.prefill[0]["sampling_params"] is None
     assert execution.prefill[1]["sampling_params"].top_k.tolist() == [32]
     assert execution.decode[0]["sampling_params"] is None
@@ -176,18 +138,15 @@ def test_sampling_paths_include_forced_prefill_topk_and_opt_in_true_topk_decode(
     assert execution.decode[2]["sampling_params"].top_p.tolist() == pytest.approx([0.08, 0.08])
 
 
-def test_q128_single_topk_primes_all_tile_ends_without_expanding_public_plan():
+def test_q128_single_topk_primes_all_tile_ends():
     config = WarmupConfig(prefill_seq_lens=(128,), prefill_batch_sizes=(1,))
     coordinator, execution, *_ = make_coordinator(
         warmup_config=config,
         sequence_lengths=(128,),
         lane_capacity=32,
     )
-    plan_before = coordinator.plan(can_sample_on_device=True)
-
     coordinator.warmup_prefill(kv_cache="cache", enable_trace=False, can_sample_on_device=True)
 
-    assert coordinator.plan(can_sample_on_device=True) == plan_before
     topk_calls = [
         call
         for call in execution.prefill
@@ -205,7 +164,6 @@ def test_q128_single_topk_primes_all_tile_ends_without_expanding_public_plan():
         and call["start_pos"] is None
     ]
     assert [int(call["prompt_lens"][0]) for call in argmax_calls] == [32, 64, 96, 128]
-    assert coordinator.coverage.eager == frozenset(plan_before.prefill)
 
 
 def test_decode_warmup_uses_topk_as_the_platform_greedy_path_when_argmax_is_disabled():
@@ -223,10 +181,6 @@ def test_decode_warmup_uses_topk_as_the_platform_greedy_path_when_argmax_is_disa
         can_sample_on_device=True,
     )
 
-    assert [case.sampling_path for case in coordinator.plan(can_sample_on_device=True).decode] == [
-        "logits",
-        "topk",
-    ]
     assert execution.decode[0]["sampling_params"] is None
     assert execution.decode[1]["sampling_params"].top_k.tolist() == [32, 32]
 
@@ -246,8 +200,6 @@ def test_eager_and_trace_coverage_are_separately_idempotent():
     trace_calls = len(execution.prefill)
     coordinator.warmup_prefill(kv_cache="cache", enable_trace=True, can_sample_on_device=True)
     assert len(execution.prefill) == trace_calls
-    assert coordinator.coverage.eager
-    assert coordinator.coverage.trace_registered
     assert trace_compiler.calls == 0
 
 
@@ -274,7 +226,6 @@ def test_prefill_decode_order_is_independent_and_capture_waits_for_both(order):
     assert trace_compiler.calls == 0
     run(order[1])
     assert trace_compiler.calls == 1
-    assert coordinator.coverage.traces_captured
     run(order[0])
     run(order[1])
     assert trace_compiler.calls == 1
@@ -302,8 +253,6 @@ def test_static_all_can_capture_decode_only_runtime_trace():
     )
 
     assert trace_compiler.calls == 1
-    assert coordinator.coverage.traces_captured
-    assert coordinator.coverage.trace_registered == frozenset(coordinator.plan(can_sample_on_device=True).decode)
     assert not execution.prefill_replays
 
 
@@ -336,7 +285,6 @@ def test_two_phase_static_all_waits_for_phase_two_decode_before_capture():
     )
 
     assert trace_compiler.calls == 1
-    assert coordinator.coverage.traces_captured
 
 
 def test_sampling_buffers_are_materialized_before_first_compile_and_capture():
@@ -384,7 +332,7 @@ def test_failed_case_is_not_marked_complete_and_retry_skips_completed_case(expec
             num_blocks=8,
             can_sample_on_device=True,
         )
-    assert coordinator.coverage.eager == frozenset({WarmupCase("decode", 1, None, "logits")})
+    assert len(execution.decode) == 1
 
     coordinator.warmup_decode(
         kv_cache="cache",
@@ -392,12 +340,6 @@ def test_failed_case_is_not_marked_complete_and_retry_skips_completed_case(expec
         max_batch_size=1,
         num_blocks=8,
         can_sample_on_device=True,
-    )
-    assert coordinator.coverage.eager.issuperset(
-        {
-            WarmupCase("decode", 1, None, "logits"),
-            WarmupCase("decode", 1, None, "argmax"),
-        }
     )
     assert len(execution.decode) == 2
 
