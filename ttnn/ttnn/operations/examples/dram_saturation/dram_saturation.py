@@ -110,6 +110,18 @@ def num_active_cores(device, num_cores):
     return max(1, min(int(num_cores), grid_cores))
 
 
+def sweet_spot_cores(gbps_by_cores, tol=0.03):
+    """Given a measured {core_count: achieved_GB/s} curve, return the **sweet spot**:
+    the SMALLEST core count whose bandwidth is within `tol` of the peak. This is the
+    exploit — a DRAM-bound op saturates here, so any cores beyond it add no bandwidth
+    and are free to spend elsewhere. Pure analysis over a measured sweep; no device."""
+    if not gbps_by_cores:
+        raise ValueError("dram_saturation example: empty measurement curve")
+    peak = max(gbps_by_cores.values())
+    threshold = peak * (1.0 - tol)
+    return min(c for c, g in gbps_by_cores.items() if g >= threshold)
+
+
 def create_program_descriptor(input_tensor, output_tensor, *, variant, num_cores=None, kernel_iters=1, block=BLOCK):
     if variant not in VARIANTS:
         raise ValueError(f"dram_saturation example: variant must be one of {VARIANTS}, got {variant!r}")

@@ -53,6 +53,24 @@ change — so the delta is purely work distribution + NoC contention.
   cores grow here — the over-subscription penalty is wasted cores, not a slowdown. A more contended
   transfer pattern can push the same mechanism into an actual rollover.
 
-**Takeaway:** for a DRAM-bandwidth-bound op, the fastest configuration is the **minimum well-placed
-cores that reach the bandwidth plateau** (~16 spread cores here), not the full grid. Adding cores past
-the knee buys nothing; getting the placement wrong just moves the knee to a higher, wasteful core count.
+## The exploit — cap at the knee, free the rest
+
+The test derives the sweet spot automatically (`sweet_spot_cores`: the smallest core count within 3% of
+peak on the `spread` curve) and quantifies the win:
+
+```
+--- EXPLOIT: cap a DRAM-bound op at the bandwidth knee ---
+sweet spot (spread, within 3% of peak):  16 cores @ 191.9 GB/s
+full grid:                               64 cores @ 192.7 GB/s
+=> same bandwidth at 4.0x fewer cores: 48 cores freed at +0.4% perf cost.
+```
+
+The exploit: a DRAM-bandwidth-bound op **saturates at ~16 well-placed cores**, so pinning it there
+delivers full bandwidth on **1/4 of the grid** and leaves **48 cores free** — at ~0% cost to the op.
+In a real kernel/model those freed cores are the resource: run other work on them, or cut power/heat.
+`sweet_spot_cores()` is reusable on any measured `{cores: GB/s}` sweep.
+
+**Takeaway:** for a DRAM-bandwidth-bound op, the fastest *and cheapest* configuration is the **minimum
+well-placed cores that reach the bandwidth plateau** (~16 spread cores here), not the full grid. Adding
+cores past the knee buys nothing and just spends a resource you could exploit; getting the placement
+wrong (`stacked`) only pushes the knee to a higher, more wasteful core count.

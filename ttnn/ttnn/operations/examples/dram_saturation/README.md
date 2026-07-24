@@ -58,6 +58,23 @@ The measured axis is the **core count**; the variant is the placement.
 
 Full tables + method in [`report.md`](report.md).
 
+## The exploit — cap at the knee, free the rest
+The bench derives the sweet spot automatically (`sweet_spot_cores`: the smallest core count within 3%
+of peak on the `spread` curve) and quantifies the gain:
+
+```
+--- EXPLOIT: cap a DRAM-bound op at the bandwidth knee ---
+sweet spot (spread, within 3% of peak):  16 cores @ 191.9 GB/s
+full grid:                               64 cores @ 192.7 GB/s
+=> same bandwidth at 4.0x fewer cores: 48 cores freed at +0.4% perf cost.
+```
+
+That's the gain you exploit: a DRAM-bandwidth-bound op gets its **full bandwidth on ~1/4 of the grid**,
+so **48 cores come free at ~0% cost** to the op. In a real kernel or model those freed cores are the
+prize — assign them other work, or cut power/heat. The rule is concrete: **measure the curve once, cap
+the op at the knee.** `sweet_spot_cores()` is reusable on any `{cores: GB/s}` sweep, and the placement
+lever below decides how low the knee can go.
+
 ## CLI — measure your own sweep
 ```bash
 python -m ttnn.operations.examples.dram_saturation [--shape 2048x2048]

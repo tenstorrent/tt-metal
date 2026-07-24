@@ -31,7 +31,7 @@ import pytest
 import torch
 
 import ttnn
-from ttnn.operations.examples.dram_saturation import dram_saturation, VARIANTS, num_active_cores
+from ttnn.operations.examples.dram_saturation import dram_saturation, VARIANTS, num_active_cores, sweet_spot_cores
 
 from loguru import logger
 
@@ -157,4 +157,21 @@ def test_dram_saturation_device_perf(device):
                 marker = "  <- slower (rollover)"
             lines.append(f"    {variant:<9}  {cores:>5}  {v:>11.1f}  {gbps:>8.1f}  {gbps / cores:>9.1f}{marker}")
             prev = v
+
+    # --- The exploit: derive the sweet spot from the spread curve; quantify the freed cores ---
+    if "spread" in variants:
+        gbps_spread = {num_active_cores(device, n): bytes_moved / ns[("spread", n)] for n in CORES}
+        knee = sweet_spot_cores(gbps_spread, tol=0.03)
+        full = max(gbps_spread)  # largest core count measured
+        knee_gbps, full_gbps = gbps_spread[knee], gbps_spread[full]
+        freed = full - knee
+        cost = (full_gbps - knee_gbps) / full_gbps * 100.0
+        lines += [
+            "",
+            "  --- EXPLOIT: cap a DRAM-bound op at the bandwidth knee ---",
+            f"  sweet spot (spread, within 3% of peak): {knee:>3} cores @ {knee_gbps:6.1f} GB/s",
+            f"  full grid:                              {full:>3} cores @ {full_gbps:6.1f} GB/s",
+            f"  => same bandwidth at {full / knee:.1f}x fewer cores: {freed} cores freed at {cost:+.1f}% perf cost.",
+            f"     Cap the op at ~{knee} well-placed cores; the freed {freed} are yours to spend elsewhere.",
+        ]
     logger.info("\n".join(lines))

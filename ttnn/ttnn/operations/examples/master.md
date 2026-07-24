@@ -80,12 +80,14 @@ add cores, so more cores stop paying; and placement decides where the knee falls
 **Situation:** you have a data-movement-bound op and reflexively launch on the whole grid. "More cores
 = faster" only holds until the DRAM interface saturates; past that knee the extra cores add no
 bandwidth (wasted) and, if stacked onto shared NoC links, congest.
-**Measured win:** a pure DRAM→DRAM copy (no compute) of 8.4 MB bf16, swept over core count (WH B0):
-`spread` placement rises ~linearly (~21.7 GB/s/core) then **plateaus at ~191–195 GB/s from ~16 cores** —
-**16 → 64 cores (4×) buys only ~1.5%**, and GB/s/core collapses 21.7 → 3.0. Placement moves the knee:
-`stacked` (piled on one column) does **71.8 GB/s at 8 cores vs spread's 146.3**, and needs ~48 cores to
-reach what spread hits at 16. (No hard slower-with-more rollover on this shape — the over-subscription
-cost here is wasted cores, not a slowdown.)
+**Measured win (the exploit):** a pure DRAM→DRAM copy (no compute) of 8.4 MB bf16, swept over core count
+(WH B0): `spread` rises ~linearly (~21.7 GB/s/core) then **plateaus at ~191–195 GB/s from ~16 cores**.
+The exploit: **cap the op at the ~16-core knee → full bandwidth on 1/4 of the grid, ~48 cores freed at
+~0% cost** (16 c @ 191.9 GB/s vs 64 c @ 192.7; `sweet_spot_cores()` derives the knee from the sweep).
+16 → 64 cores is 4× the cores for <2%, and GB/s/core collapses 21.7 → 3.0. Placement moves the knee:
+`stacked` (piled on one column) does **71.8 GB/s at 8 cores vs spread's 146.3**, needing ~48 cores to
+reach what spread hits at 16. (No hard slower-with-more rollover on this shape — the cost of
+over-subscribing here is wasted cores, not a slowdown.)
 **Gist:** classify the bound first; if DRAM-bandwidth-bound, don't fill the grid — sweep core count,
 find the bandwidth plateau, and use the **minimum well-placed cores that reach it** (spread across the
 DRAM-facing axis). Cores past the knee add nothing. Only a *non*-bandwidth-bound op (compute/latency, or
