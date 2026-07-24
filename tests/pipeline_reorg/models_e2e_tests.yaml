@@ -294,7 +294,7 @@
   model_family: Qwen
   skus:
     wh_n300:
-      timeout: 5
+      timeout: 8
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models

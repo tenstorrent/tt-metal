@@ -123,6 +123,9 @@ EXPECTED_METRICS: dict = {
 # lowest 24.0, >= TTTv1 21.5); on_device_topk gate = TTTv2 measured (TTTv1 has no on-device path -> own-gated).
 # Gates sit at/below fresh lowest-observed (5% tol = jitter buffer). ttft = conservative upper bound (batch-1
 # does not batch prefill, so ON == OFF here).
+# RE-MEASURED on the consolidation integration base (main 32c1f0e882b, median of 3): host perf b1 24.6 /
+# acc b1 21.8; odt perf b1 14.4 / acc b1 13.3; same-box TTTv1 host b1 perf 21.58 / acc 21.61. Every gate
+# below still holds with margin (TTTv2 lowest rep > gate x 0.95) — kept best-of, none lowered.
 EXPECTED_METRICS_BATCH1: dict = {
     "host": {
         "performance": {"N300": {"tok_s_u": 23.0, "ttft_ms": 90}},
@@ -162,6 +165,10 @@ EXPECTED_METRICS_BATCH32: dict = {
 # (TTFT ~42ms) — TTTv2 host beats it (+29% perf, +8% acc) with lower TTFT (39 vs 42). Gate best-of{TTTv2,
 # TTTv1}: host perf 24.5 (<= TTTv2 lowest 25.7, >= TTTv1 20.0); on_device_topk gate = TTTv2 (TTTv1 has no
 # on-device path -> own-gated). Gates at/below fresh lowest-observed. Cells not present fall back to EXPECTED_METRICS_BATCH32.
+# RE-MEASURED on the consolidation integration base (main 32c1f0e882b, median of 3): host perf ci-32 25.8 /
+# acc ci-32 21.8; odt perf ci-32 14.4 / acc ci-32 13.1; same-box TTTv1 host ci-32 perf 17.88 / acc 17.74
+# (TTTv1 averages over its full 4096-iter ci-32 decode -> lower steady-state, widening TTTv2's host win).
+# Every gate below still holds with margin — kept best-of, none lowered.
 EXPECTED_METRICS_BATCH32_CI: dict = {
     "host": {
         "performance": {"N300": {"tok_s_u": 24.5, "ttft_ms": 80}},
