@@ -14,6 +14,9 @@
 #include <ttnn/operations/experimental/padded_slice/padded_slice.hpp>
 #include <ttnn/operations/experimental/quasar/slice_write/slice_write.hpp>
 #include <ttnn/operations/experimental/quasar/padded_slice/padded_slice.hpp>
+// [#48552 EXPERIMENT] forced-serialization barrier between sliced sub-ops (TT_METAL_QSR_SLICE_BARRIER)
+#include <cstdlib>
+#include <tt-metalium/distributed.hpp>
 namespace ttnn::operations::op_slicing {
 
 // Compute the rounding value for slice boundaries based on output layout and slice type.
@@ -388,6 +391,20 @@ void run_sliced_op(
     uint32_t slice_index = 0;
     uint32_t output_slice_dim_start = 0;
 
+    // [#48552 EXPERIMENT] TT_METAL_QSR_SLICE_BARRIER=1 forces a full device Synchronize after each sliced
+    // sub-op (padded_slice / conv+matmul / slice_write). Tests whether the split-conv matmul hang is a
+    // cross-program tile-counter race that forced serialization resolves. Off by default (no effect / no perf
+    // impact when unset).
+    const bool qsr_slice_barrier = (std::getenv("TT_METAL_QSR_SLICE_BARRIER") != nullptr);
+    tt::tt_metal::distributed::MeshDevice* qsr_mesh_device =
+        input_tensor.device() != nullptr ? input_tensor.device()->get_mesh_device().get() : nullptr;
+    auto qsr_barrier = [&](const char* where) {
+        if (qsr_slice_barrier && qsr_mesh_device != nullptr) {
+            log_debug(tt::LogOp, "[QSR-SLICE-BARRIER #48552] Synchronize after {} (slice {})", where, slice_index);
+            tt::tt_metal::distributed::Synchronize(qsr_mesh_device, std::nullopt);
+        }
+    };
+
     while ((output_slice_dim_start < output_sliced_dim) && (slice_index < dram_slice_config.num_slices)) {
         const uint32_t output_slice_size =
             slice_rounding_value * (min_output_slice_size + ((slice_index < output_slice_rem) ? 1 : 0));
@@ -497,6 +514,7 @@ void run_sliced_op(
             return ttnn::experimental::padded_slice(
                 input_tensor, begins, ends, step, sliced_input_tensor_memory_config);
         }();
+        qsr_barrier("padded_slice");
 
         auto sliced_output_tensors = op_slice_attr->run_L1_op(
             sliced_input_tensor,
@@ -507,6 +525,7 @@ void run_sliced_op(
             "Number of output tensors from run_L1_op {} does not match the expected number of output tensors {}",
             sliced_output_tensors.size(),
             num_output_tensors);
+        qsr_barrier("run_L1_op(conv+matmul)");
         for (uint32_t output_tensor_index = 0; output_tensor_index < num_output_tensors; output_tensor_index++) {
             auto& sliced_output_tensor = sliced_output_tensors[output_tensor_index];
             auto& output_tensor = output_tensors[output_tensor_index].get();
@@ -541,6 +560,7 @@ void run_sliced_op(
                 ttnn::experimental::slice_write(sliced_output_tensor, output_tensor, sw_begins, sw_ends, sw_step);
             }
         }
+        qsr_barrier("slice_write");
         output_slice_dim_start += output_slice_size;
         slice_index++;
     }
