@@ -81,6 +81,7 @@ RUN if [ -n "${PYTHON_VERSION}" ]; then \
 # Install Python with uv and create relocatable virtual environment with base packages.
 # umask 000 ensures the venv is world-writable for multi-host NFS access.
 # MAKEFLAGS accelerates builds for packages that compile with make.
+# auditwheel/patchelf are needed to repair the in-place-built wheel (bundle transitive libs).
 RUN source /tmp/python-version.env && \
     export MAKEFLAGS="-j$(nproc)" && \
     umask 000 && \
