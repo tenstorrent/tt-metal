@@ -10,6 +10,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "api/remote_circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
@@ -181,7 +182,8 @@ void kernel_main() {
     // keep their natural (unpadded) stride.
     constexpr uint32_t in1_aligned_tile_size_bytes =
         (in1_single_tile_size_bytes + (DRAM_ALIGNMENT - 1)) & ~(DRAM_ALIGNMENT - 1);
-#if !defined(IN1_SHARDED) && !defined(IN1_DRAM_WIDTH_SHARDED) && !defined(IN1_DRAM_HEIGHT_SHARDED)
+#if !defined(IN1_SHARDED) && !defined(IN1_DRAM_WIDTH_SHARDED) && !defined(IN1_DRAM_HEIGHT_SHARDED) && \
+    !defined(ENABLE_GLOBAL_CB)
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_aligned_tile_size_bytes;
 #else
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
@@ -204,11 +206,16 @@ void kernel_main() {
 #ifdef IN1_SHARDED
     cb_in1.reserve_back(in1_block_num_tiles * num_blocks_inner_dim);
     cb_in1.push_back(in1_block_num_tiles * num_blocks_inner_dim);
-#else
+#elif !defined(ENABLE_GLOBAL_CB)
     uint32_t l1_write_addr_in1;
 
     [[maybe_unused]] const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
-#endif  // IN1_SHARDED
+#endif  // IN1_SHARDED / ENABLE_GLOBAL_CB
+
+#ifdef ENABLE_GLOBAL_CB
+    constexpr uint32_t remote_cb_id = tt::CBIndex::c_31;
+    const uint32_t in1_fifo_tiles = get_local_cb_interface(cb_id_in1).fifo_num_pages;
+#endif
 
     //  WRITER
     const auto s = TensorAccessor(out_args, out_tensor_addr);
@@ -294,7 +301,14 @@ void kernel_main() {
                             fused_op_receiver.update_current_block_start_tile_id(
                                 block, in1_tensor_current_inner_dim_block_start_tile_id, in1_batch_tile_id);
                         }
-#if defined(IN1_DRAM_WIDTH_SHARDED)
+#if defined(ENABLE_GLOBAL_CB)
+                        // The tensor prefetcher pushes this receiver's K-blocks in natural order.
+                        // Keep one block of lookahead: publish the current block to compute, then
+                        // wait for the unpack engine to drain the previous block before returning
+                        // its remote-CB credit to the prefetcher.
+                        cb_in1.reserve_back(in1_block_num_tiles);
+                        experimental::remote_cb_wait_front(remote_cb_id, block == 0 ? 1u : 2u);
+#elif defined(IN1_DRAM_WIDTH_SHARDED)
                         // Operand 1 - DRAM width sharded
                         cb_in1.reserve_back(in1_block_num_tiles);
 
@@ -327,9 +341,7 @@ void kernel_main() {
                                 uint32_t l1_read_addr_in1_temp = l1_read_addr_in1;
                                 uint32_t l1_write_addr_in1_temp = l1_write_addr_in1;
                                 for (uint32_t w = 0; w < in1_block_w_dram; ++w) {
-                                    noc.async_read_with_state<
-                                        NocOptions::CUSTOM_VC,
-                                        NOC_MAX_BURST_SIZE>(
+                                    noc.async_read_with_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                                         dram_bank,
                                         CoreLocalMem<uint32_t>(l1_write_addr_in1_temp),
                                         in1_single_tile_size_bytes,
@@ -461,7 +473,23 @@ void kernel_main() {
 #ifndef IN1_SHARDED
                         cb_in1.push_back(in1_block_num_tiles);
 #endif  // IN1_SHARDED
+#ifdef ENABLE_GLOBAL_CB
+                        if (block >= 1) {
+                            while (!cb_in1.pages_reservable_at_back(in1_fifo_tiles - in1_block_num_tiles)) {
+                                invalidate_l1_cache();
+                            }
+                            experimental::remote_cb_pop_front(remote_cb_id, 1);
+                        }
+#endif
                     }
+#ifdef ENABLE_GLOBAL_CB
+                    if (num_blocks_inner_dim > 0) {
+                        while (!cb_in1.pages_reservable_at_back(in1_fifo_tiles)) {
+                            invalidate_l1_cache();
+                        }
+                        experimental::remote_cb_pop_front(remote_cb_id, 1);
+                    }
+#endif
 #ifdef FUSE_BIAS
                     // Only read bias on first batch, or we have multiple output blocks
                     if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
@@ -625,8 +653,7 @@ void kernel_main() {
                                 for (uint32_t w = 0; w < out_subblock_w_; ++w) {
                                     if (bw < num_blocks_w_dim_) {
                                         noc.async_write(
-                                            use<CircularBuffer::AddrSelector::READ_PTR>(
-                                                cb_out),
+                                            use<CircularBuffer::AddrSelector::READ_PTR>(cb_out),
                                             s,
                                             output_single_tile_size_bytes,
                                             {.offset_bytes = out_read_offset},
@@ -688,6 +715,10 @@ void kernel_main() {
 #if OUT_SHARDED
     cb_out.wait_front(
         batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
+#endif
+#ifdef ENABLE_GLOBAL_CB
+    experimental::update_remote_cb_config_in_l1(remote_cb_id);
+    noc.async_atomic_barrier();
 #endif
     noc.async_write_barrier();
 }

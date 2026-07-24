@@ -392,6 +392,24 @@ src = bank_local_base[t]
     + sb  * sub_stride_bytes         // sub_stride_bytes = rows_per_sub * n_per_recv * tile_bytes
 ```
 
+#### Matmul consumer contracts
+
+Receiver-contiguous weights support two 1D matmul consumers:
+
+- **Ring gather-in0:** `block_count = receiver_count`. Batched mode uses no rotation and waits for
+  all blocks. `stream_in1=true` uses an identity rotation request so each receiver sees its
+  ring-rotated K-block sequence and can consume from a two-page GCB window.
+- **Mcast-in0:** `block_count = K_tiles / in0_block_w`. Every receiver sees K-blocks
+  `0..block_count-1` in natural FIFO order, so the request has an empty rotation and
+  `stream_in1=false`. The reader still consumes each page as it arrives, allowing the same
+  two-page GCB window. Initially this mode requires one output block per receiver and one effective
+  activation batch, so each prefetched stream is consumed exactly once.
+
+For both contracts one page contains
+`(K_tiles / block_count) * per_core_N` weight tiles for one receiver. The GCB receiver set must
+exactly match the matmul output workers, and the receiver-contiguous NdShardSpec must provide one
+full-K, `per_core_N`-wide shard per receiver.
+
 #### Fit ladder (receiver-contiguous)
 
 The receiver-contiguous path rotates through three stage slots
