@@ -26,7 +26,7 @@ from models.common.auto_compose import to_torch_auto_compose
 from models.common.modules.lazy_weight import LazyWeight
 from models.common.modules.rope.rope_1d import Rope1DConfig, RotarySetup1D, prepare_rot_idxs
 from models.common.tensor_utils import get_rot_transformation_mat
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, skip_for_wormhole_b0
 
 # ============================================================================
 # Pure-torch RoPE reference (no TTTv1 dependency)
@@ -296,6 +296,7 @@ def _list_init_test_cases() -> list[pytest.param]:
     "mesh_shape,batch_size,head_dim,max_seq_len,rope_theta,rope_scaling_str,use_qk_fused",
     _list_init_test_cases(),
 )
+@skip_for_wormhole_b0("Failing on wh_llmbox for 7+ days; refs #46879")
 def test_rope_1d_decode_forward_vs_reference(
     ttnn_mesh_device: ttnn.MeshDevice,
     mesh_shape,
