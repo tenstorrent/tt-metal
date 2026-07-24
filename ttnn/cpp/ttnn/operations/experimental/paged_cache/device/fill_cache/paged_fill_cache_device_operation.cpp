@@ -29,11 +29,20 @@ void PagedFillCacheDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& page_table_tensor = tensor_args.page_table;
 
-    // Data type validation
+    // paged_fill_cache is a raw tile-copy fill path: it does not convert input
+    // K/V into the cache dtype. Callers must cast prefill K/V to the destination
+    // cache dtype before calling this op.
     TT_FATAL(
-        input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16 ||
+        cache_tensor.dtype() == DataType::FLOAT32 || cache_tensor.dtype() == DataType::BFLOAT16 ||
             cache_tensor.dtype() == DataType::BFLOAT8_B || cache_tensor.dtype() == DataType::BFLOAT4_B,
-        "Data type of input tensor for fill cache must be FLOAT32, BFLOAT16, or BFLOAT8_b");
+        "Data type of cache tensor for paged_fill_cache must be FLOAT32, BFLOAT16, BFLOAT8_B, or BFLOAT4_B and is {}",
+        cache_tensor.dtype());
+    TT_FATAL(
+        input_tensor.dtype() == cache_tensor.dtype(),
+        "Input tensor dtype ({}) must match cache tensor dtype ({}) for paged_fill_cache; cast prefill K/V to the "
+        "cache dtype before filling the paged cache.",
+        input_tensor.dtype(),
+        cache_tensor.dtype());
 
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
