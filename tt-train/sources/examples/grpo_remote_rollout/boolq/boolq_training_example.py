@@ -13,36 +13,23 @@ import gc
 import logging
 import os
 import sys
+import ttnn
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
 from loguru import logger
 from transformers import AutoTokenizer
+from utils.weight_bridge import TTML_RANK, TTT_RANK
 
-logger.remove()
-logger.add(sys.stderr, level="ERROR")
-logging.getLogger().setLevel(logging.ERROR)
-
-sys.stdout.reconfigure(line_buffering=True)
-sys.stderr.reconfigure(line_buffering=True)
-
-# Make ``utils.*`` importable when run directly.
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _EXAMPLE_ROOT = os.path.dirname(_THIS_DIR)
 if _EXAMPLE_ROOT not in sys.path:
     sys.path.insert(0, _EXAMPLE_ROOT)
 
-import ttnn  # noqa: E402
-
 # Pin FABRIC_2D on both ranks before any device opens; otherwise TTT's
 # open_mesh_device auto-escalates to FABRIC_1D and the mismatch deadlocks the
-# cross-rank fabric init. This is the SOLE fabric set: do NOT re-set fabric
-# afterward (e.g. enable_fabric() at device-open) -- a repeat SetFabricConfig
-# forces a peer-less control-plane reinit collective that deadlocks.
+# cross-rank fabric init.
 ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
-
-from utils.weight_bridge import TTML_RANK, TTT_RANK  # noqa: E402
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1b_remote_rollout.yaml"
