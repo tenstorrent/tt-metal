@@ -16,6 +16,7 @@
 #include <functional>
 #include <unordered_set>
 #include <fmt/base.h>
+#include <fmt/ranges.h>
 #include <google/protobuf/text_format.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/caseless_comparison.hpp>
@@ -2550,6 +2551,9 @@ void CablingGenerator::apply_instance_filter(
     std::set<HostId> kept_host_ids;
     std::vector<bool> include_used(includes.size(), false);
     std::vector<bool> exclude_used(excludes.size(), false);
+    // Full instance paths each filter matched (for logging + nested-lineage ambiguity detection).
+    std::vector<std::vector<std::vector<std::string>>> include_matches(includes.size());
+    std::vector<std::vector<std::vector<std::string>>> exclude_matches(excludes.size());
 
     // A suffix-matched filter applies to its instance's whole subtree (carried via
     // included/excluded_by_ancestor). Keep a leaf iff base-selected (or no include) and not excluded.
@@ -2565,12 +2569,14 @@ void CablingGenerator::apply_instance_filter(
             for (size_t i = 0; i < includes.size(); ++i) {
                 if (path_is_suffix(includes[i], prefix)) {
                     include_used[i] = true;
+                    include_matches[i].push_back(prefix);
                     included_here = true;
                 }
             }
             for (size_t i = 0; i < excludes.size(); ++i) {
                 if (path_is_suffix(excludes[i], prefix)) {
                     exclude_used[i] = true;
+                    exclude_matches[i].push_back(prefix);
                     excluded_here = true;
                 }
             }
@@ -2611,6 +2617,53 @@ void CablingGenerator::apply_instance_filter(
     if (kept_host_ids.empty()) {
         throw std::runtime_error("Instance filter selected no nodes");
     }
+
+    // Log each filter's matches, and warn on nested-lineage ambiguity: a name matching both an instance and
+    // a descendant of it (e.g. 'node_0' -> 'sp_0/node_0' and 'sp_0/node_0/node_0'). Fan-out across distinct
+    // parents ('sp_0/node_0' and 'sp_1/node_0') is intended, not ambiguous.
+    auto report_filter = [](const char* kind,
+                            const std::vector<std::vector<std::string>>& filters,
+                            const std::vector<std::vector<std::vector<std::string>>>& matches) {
+        for (size_t i = 0; i < filters.size(); ++i) {
+            std::vector<std::string> joined_paths;
+            for (const auto& path : matches[i]) {
+                joined_paths.push_back(join_instance_path(path));
+            }
+            log_info(
+                tt::LogDistributed,
+                "Instance filter {} '{}' matched {} instance(s): {}",
+                kind,
+                join_instance_path(filters[i]),
+                joined_paths.size(),
+                fmt::join(joined_paths, ", "));
+            // Ambiguous iff one match is a strict path prefix of another (same lineage, name recurs).
+            bool nested = false;
+            for (size_t a = 0; a < matches[i].size() && !nested; ++a) {
+                for (size_t b = 0; b < matches[i].size(); ++b) {
+                    const auto& ancestor = matches[i][a];
+                    const auto& descendant = matches[i][b];
+                    if (a != b && ancestor.size() < descendant.size() &&
+                        std::equal(ancestor.begin(), ancestor.end(), descendant.begin())) {
+                        nested = true;
+                        break;
+                    }
+                }
+            }
+            if (nested) {
+                log_warning(
+                    tt::LogDistributed,
+                    "Instance filter {} '{}' is ambiguous: it matches nested instances on the same path (a match "
+                    "and a descendant of it), so a subtree is selected at more than one depth. Use a longer path "
+                    "to disambiguate. Matches: {}",
+                    kind,
+                    join_instance_path(filters[i]),
+                    fmt::join(joined_paths, ", "));
+            }
+        }
+    };
+    report_filter("include", includes, include_matches);
+    report_filter("exclude", excludes, exclude_matches);
+    log_info(tt::LogDistributed, "Instance filter selected {} node(s)", kept_host_ids.size());
 
     // Prune structure: keep nodes whose host_id survived, and subgraphs with any surviving node.
     auto prune = [&](auto& self, ResolvedGraphInstance& graph) -> bool {
