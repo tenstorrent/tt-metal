@@ -784,3 +784,28 @@
   1043.920 us measured combined time gives 39.55% effective CCL utilization,
   11.728 us short of the 40% target. Retain the 8x8 matmul/two-row Ring
   placement and one worker/link.
+
+
+### 2026-07-24 15:49:24 UTC — Intermediate-storage dtype control
+
+- Hypothesis: establish a fresh all-FP32 control after rebasing onto
+  `origin/main` so subsequent BF16 storage experiments differ only in the
+  prep-to-scan intermediates.
+- Direct Blackhole regression:
+  `scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_chunk_kda.py -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 5/5 in 26.92 s. The four HiFi4 cases produced
+  output PCC `0.999993-0.999994` and state PCC `0.999994-0.999996`; the
+  all-flat HiFi2 case produced output/state PCC `0.999919/0.999918`.
+- Measurement command:
+  `PERF_TRACE=1 PERF_SEQ=640 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 1/1.
+- Report:
+  `generated/profiler/reports/2026_07_24_15_49_24/ops_perf_results_2026_07_24_15_49_24.csv`
+  (SHA-256 `106c501e09f50fc185046b96d0263c7f2107a49fdf446fdc5669a54748293976`).
+  Ten measured replays have a `659.024 us` median slowest-device span
+  (`656.328-660.744 us`), `637.981 us` median collapsed active time, and
+  `637.921 us` collapsed operation-ledger time.
+- Median block times are projection `88.528 us`, convolution `130.005 us`,
+  split `19.064 us`, decay `33.163 us`, layout `9.299 us`, recurrence
+  `183.096 us`, epilogue `19.377 us`, output `152.330 us`, and state
+  `3.059 us`. This is the control for every storage-only comparison below.
