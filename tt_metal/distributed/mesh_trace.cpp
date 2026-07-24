@@ -96,8 +96,8 @@ void MeshTrace::populate_mesh_buffer(
 
     // In dynamic allocation mode, validate that the new trace buffer is outside the replay footprint of every live
     // trace.
-    const DeviceAddr effective_high_water_mark =
-        std::max({dram_allocation_high_water_mark, dram_deletion_high_water_mark, max_live_trace_high_water_mark});
+    trace_buffer->dram_high_water_mark = std::max(dram_allocation_high_water_mark, dram_deletion_high_water_mark);
+    const DeviceAddr effective_high_water_mark = std::max({trace_buffer->dram_high_water_mark, max_live_trace_high_water_mark});
     if (trace_region_size == 0 && effective_high_water_mark > 0) {
         DeviceAddr trace_buffer_address = trace_buffer->mesh_buffer->address();
         if (trace_buffer_address < effective_high_water_mark) {
@@ -107,15 +107,7 @@ void MeshTrace::populate_mesh_buffer(
             bool deletion_overlap =
                 dram_deletion_high_water_mark > 0 && trace_buffer_address < dram_deletion_high_water_mark;
 
-            if (!allocation_overlap && !deletion_overlap) {
-                TT_FATAL(
-                    false,
-                    "Trace buffer at address {} overlaps with DRAM activity captured by another live trace "
-                    "(maximum live trace high water mark: {}). "
-                    "Release the existing trace before capturing this trace or set a non-zero trace_region_size.",
-                    trace_buffer_address,
-                    max_live_trace_high_water_mark);
-            } else if (allocation_overlap && deletion_overlap) {
+            if (allocation_overlap && deletion_overlap) {
                 TT_FATAL(
                     false,
                     "Trace buffer at address {} overlaps with DRAM activity during trace capture. "
@@ -132,7 +124,7 @@ void MeshTrace::populate_mesh_buffer(
                     "Avoid deallocating DRAM buffers during trace capture or set a non-zero trace_region_size.",
                     trace_buffer_address,
                     dram_deletion_high_water_mark);
-            } else {
+            } else if (allocation_overlap) {
                 TT_FATAL(
                     false,
                     "Trace buffer at address {} overlaps with buffers allocated during trace capture "
@@ -140,6 +132,14 @@ void MeshTrace::populate_mesh_buffer(
                     "Reduce allocations during trace capture or set a non-zero trace_region_size.",
                     trace_buffer_address,
                     dram_allocation_high_water_mark);
+            } else {
+                TT_FATAL(
+                    false,
+                    "Trace buffer at address {} overlaps with DRAM activity captured by another live trace "
+                    "(maximum live trace high water mark: {}). "
+                    "Release the existing trace before capturing this trace or set a non-zero trace_region_size.",
+                    trace_buffer_address,
+                    max_live_trace_high_water_mark);
             }
         }
     }
