@@ -6,6 +6,20 @@ description: Centralized perf/accuracy targets for models CI.
 # - TODO: explicit gap placeholder; excluded from normal target resolution and treated as missing/TODO by validator.
 # `prefill_time_to_first_token` values are in milliseconds (ms).
 targets:
+  ace-step-v1.5:
+    aliases: ["ace-step-v1.5", "ACE-Step/Ace-Step1.5", "acestep-v15-turbo"]
+    skus:
+      # p300x2 == bh_quietbox_2 (BH QuietBox 2 / BH_QB mesh)
+      p300x2:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: D0B8130N4BW # Dalar Vartanians
+            team: models
+            note: "Models tier-3 e2e ACE-Step v1.5; populate after first green CI run"
   distil-whisper-large-v3:
     aliases: ["distil-whisper/distil-large-v3"]
     skus:

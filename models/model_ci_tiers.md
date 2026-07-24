@@ -86,6 +86,7 @@ The initial release of the 3-tier model CI includes models owned by the models-t
 | Qwen2.5-VL-32B | WH LLMBox, BH QuietBox 2 |
 | Mamba-2.8B | WH N150 |
 | Phi-3-mini | WH N150 |
+| ACE-Step v1.5 | BH QuietBox 2 |
 | Panoptic-DeepLab | BH P150 |
 | BEVFormer | BH P150 |
 
