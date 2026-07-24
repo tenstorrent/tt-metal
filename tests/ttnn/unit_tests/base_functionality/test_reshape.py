@@ -934,3 +934,52 @@ def test_reshape_rm_interleaved_wide_multi_page(device, input_shape, output_shap
     )
     y = ttnn.reshape(x, output_shape)
     assert_equal(t.reshape(*output_shape), ttnn.to_torch(y))
+
+
+@pytest.mark.parametrize(
+    "input_shape, output_shape, layout",
+    [
+        ((1, 2), (1, 1, 1, 1, 1, 2), ttnn.ROW_MAJOR_LAYOUT),
+        ((1, 32, 64), (1, 1, 32, 64), ttnn.TILE_LAYOUT),
+    ],
+)
+def test_reshape_no_aliasing(device, input_shape, output_shape, layout):
+    """Reshape must return a tensor with independent device memory.
+    Deallocating the original must not invalidate the reshaped tensor."""
+    torch_a = torch.randn(input_shape, dtype=torch.bfloat16)
+    a = ttnn.from_torch(torch_a, device=device, layout=layout)
+
+    b = ttnn.reshape(a, output_shape)
+    assert b.is_allocated()
+
+    ttnn.deallocate(a, force=True)
+    assert not a.is_allocated(), "Original tensor should be deallocated"
+
+    assert b.is_allocated(), "Reshaped tensor must survive original's deallocation"
+
+    result = ttnn.to_torch(b)
+    assert torch.equal(torch_a.reshape(output_shape), result)
+
+
+@pytest.mark.parametrize(
+    "input_shape, layout",
+    [
+        ((2, 4), ttnn.ROW_MAJOR_LAYOUT),
+        ((1, 32, 64), ttnn.TILE_LAYOUT),
+    ],
+)
+def test_reshape_no_aliasing_same_shape(device, input_shape, layout):
+    """Same-shape reshape must also return independent storage (#40547).
+    The early no-op path used to return the input tensor itself."""
+    torch_a = torch.randn(input_shape, dtype=torch.bfloat16)
+    a = ttnn.from_torch(torch_a, device=device, layout=layout)
+
+    b = ttnn.reshape(a, a.shape)
+    assert b.is_allocated()
+
+    ttnn.deallocate(a, force=True)
+    assert not a.is_allocated(), "Original tensor should be deallocated"
+    assert b.is_allocated(), "Same-shape reshape must survive original's deallocation"
+
+    result = ttnn.to_torch(b)
+    assert torch.equal(torch_a, result)

@@ -13,6 +13,7 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "ttnn/operations/experimental/reshape/view.hpp"
 
 #include <numeric>
 
@@ -59,7 +60,20 @@ Tensor pre_sort_transform_tensor(
     }
 
     const Tensor transposed_tensor = reduction_common::perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
-    const Tensor transformed_tensor = reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
+    // Use view (zero-copy) for rank ≤ 4 unsqueeze instead of ttnn::reshape,
+    // which now clones and would pollute the program cache.
+    const Tensor transformed_tensor = [&]() -> Tensor {
+        if (is_rank_le_4d) {
+            if (transposed_tensor.logical_shape().rank() == 4) {
+                return transposed_tensor;
+            }
+            return ttnn::experimental::view(
+                transposed_tensor,
+                transposed_tensor.logical_shape().to_rank(4),
+                transposed_tensor.padded_shape().to_rank(4));
+        }
+        return reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
+    }();
 
     Tensor padded_tensor = transformed_tensor;
     const bool is_row_major = (transformed_tensor.layout() == Layout::ROW_MAJOR);
@@ -159,14 +173,21 @@ std::vector<Tensor> post_sort_transform_tensor(
         }
     }
 
-    // Reshape back to original rank if needed
+    // Reshape back to original rank if needed.
+    // All rank-restoration paths are pure metadata changes (last dim unchanged).
+    // Use ttnn::experimental::view (zero-copy) to avoid the clone cost that
+    // ttnn::reshape now incurs, and to keep the program cache entry count at 1.
     if (orig_rank < 4 && orig_rank > 1) {
-        result[0] = ttnn::squeeze_from_4D(result[0], orig_rank);
-        result[1] = ttnn::squeeze_from_4D(result[1], orig_rank);
+        auto squeezed_shape_0 = result[0].logical_shape().to_rank(orig_rank);
+        auto squeezed_pshape_0 = result[0].padded_shape().to_rank(orig_rank);
+        result[0] = ttnn::experimental::view(result[0], squeezed_shape_0, squeezed_pshape_0);
+        auto squeezed_shape_1 = result[1].logical_shape().to_rank(orig_rank);
+        auto squeezed_pshape_1 = result[1].padded_shape().to_rank(orig_rank);
+        result[1] = ttnn::experimental::view(result[1], squeezed_shape_1, squeezed_pshape_1);
     } else if (orig_rank == 1) {
         const ttsl::SmallVector<uint32_t> result_shape(input_shape.cbegin(), input_shape.cend());
-        result[0] = ttnn::reshape(result[0], ttnn::Shape{result_shape});
-        result[1] = ttnn::reshape(result[1], ttnn::Shape{result_shape});
+        result[0] = ttnn::experimental::view(result[0], ttnn::Shape{result_shape});
+        result[1] = ttnn::experimental::view(result[1], ttnn::Shape{result_shape});
     } else if (orig_rank > 4) {
         // The 4D `result` tensor came from squeeze_from_ND_to_4D applied to the
         // *transposed* high-rank tensor (the sort dim was moved to the last
@@ -174,18 +195,17 @@ std::vector<Tensor> post_sort_transform_tensor(
         // back to the transposed N-D shape — NOT the original — so that the
         // subsequent `transpose` swaps it back to the user's layout.
         //
-        // Targeting the transposed shape keeps the last dim unchanged, which
-        // triggers ttnn::reshape's `this_is_view` fast path (pure metadata via
-        // ttnn::experimental::view) and entirely bypasses the device reshape
-        // kernel.  This is essential for UINT16 indices, which the device
-        // reshape kernel rejects, and avoids the cost of a dtype round-trip.
+        // Targeting the transposed shape keeps the last dim unchanged, so this
+        // is a pure metadata change.  Use ttnn::experimental::view (zero-copy)
+        // to bypass the device reshape kernel — essential for UINT16 indices,
+        // which the device reshape kernel rejects.
         ttsl::SmallVector<uint32_t> reshape_target(input_shape.cbegin(), input_shape.cend());
         if (!is_dim_last_idx) {
             const int normalized = dim < 0 ? orig_rank + dim : dim;
             std::swap(reshape_target[normalized], reshape_target[orig_rank - 1]);
         }
-        result[0] = ttnn::reshape(result[0], ttnn::Shape{reshape_target});
-        result[1] = ttnn::reshape(result[1], ttnn::Shape{reshape_target});
+        result[0] = ttnn::experimental::view(result[0], ttnn::Shape{reshape_target});
+        result[1] = ttnn::experimental::view(result[1], ttnn::Shape{reshape_target});
     }
 
     // Transpose back to original dimension order if needed

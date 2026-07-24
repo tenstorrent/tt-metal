@@ -34,9 +34,12 @@ ttnn::Tensor reshape_shape_vector_wrapper(
 
 void bind_reshape_view_operation(nb::module_& mod) {
     const auto* doc = R"doc(
-            Note: for a 0 cost view, the following conditions must be met:
-                * the last dimension must not change
-                * In Tiled the second last two dimensions must not change OR there is no padding on the second last dimension
+            On device tensors, reshape returns independent storage (not a zero-copy alias
+            of the input).  It is therefore safe to deallocate the input after reshaping.
+            Exception: ND_SHARDED device tensors currently retain zero-copy behavior
+            because CloneOperation does not yet support ND shard specs (tracked as TODO #40547).
+            Host tensors and zero-volume tensors may still be returned without a copy.
+            Use ``ttnn.experimental.view`` when zero-copy aliasing is explicitly desired.
 
             Args:
                 * input_tensor: Input Tensor.
