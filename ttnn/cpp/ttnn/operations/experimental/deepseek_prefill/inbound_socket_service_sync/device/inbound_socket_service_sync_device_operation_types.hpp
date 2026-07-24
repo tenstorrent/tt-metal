@@ -32,12 +32,45 @@ struct InboundSocketServiceSyncParams {
     std::vector<uint32_t> consumed_addrs;  // L1 addr on each coord's service core
     std::vector<uint32_t> service_core_x;  // LOGICAL service-core x per coord
     std::vector<uint32_t> service_core_y;  // LOGICAL service-core y per coord
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "data_ready_sem_addr",
+        "page_size",
+        "num_pages",
+        "scratch_cb_index",
+        "metadata_size_bytes",
+        "metadata_l1_addr",
+        "worker_cores",
+        "mesh_num_cols",
+        "consumed_addrs",
+        "service_core_x",
+        "service_core_y");
+
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            data_ready_sem_addr,
+            page_size,
+            num_pages,
+            scratch_cb_index,
+            metadata_size_bytes,
+            metadata_l1_addr,
+            worker_cores,
+            mesh_num_cols,
+            consumed_addrs,
+            service_core_x,
+            service_core_y);
+    }
 };
 
 struct InboundSocketServiceSyncInputs {
     // The service's persistent backing tensor (read by the kernel). Supplies the
     // mesh device + per-shard spec; the output tensors mirror its spec.
     const Tensor& backing;
+
+    explicit InboundSocketServiceSyncInputs(const Tensor& backing_in) : backing(backing_in) {}
+
+    static constexpr auto attribute_names = std::forward_as_tuple("backing_dtype");
+    auto attribute_values() const { return std::forward_as_tuple(backing.dtype()); }
 };
 
 }  // namespace ttnn::experimental::prim
