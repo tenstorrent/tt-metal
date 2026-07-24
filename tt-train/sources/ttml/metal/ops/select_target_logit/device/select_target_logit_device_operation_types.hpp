@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <tuple>
 
 #include "metal/ttnn_all_includes.hpp"
 
@@ -22,6 +23,11 @@ struct SelectTargetLogitParams {
     uint32_t first_v{0U};
     uint32_t local_V{0U};
     std::optional<uint32_t> cluster_axis{};
+
+    static constexpr auto attribute_names = std::forward_as_tuple();
+    auto attribute_values() const {
+        return std::forward_as_tuple();
+    }
 };
 
 struct SelectTargetLogitInputs {
@@ -29,6 +35,11 @@ struct SelectTargetLogitInputs {
     const ttnn::Tensor& target;  // [N, S]              ROW_MAJOR UINT32  (global indices)
 
     std::optional<ttnn::Tensor> preallocated_output;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("logit_dtype", "logit_logical_shape");
+    auto attribute_values() const {
+        return std::make_tuple(logit.dtype(), std::cref(logit.logical_shape()));
+    }
 };
 
 using operation_attributes_t = SelectTargetLogitParams;
