@@ -1,0 +1,692 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+TTNN Bark Small Pipeline Orchestrator.
+
+Loads HuggingFace suno/bark-small weights and runs the full 3-stage pipeline:
+    Text -> Semantic Tokens -> Coarse Codebooks -> Fine Codebooks -> Audio Waveform
+
+Usage:
+    model = TtBarkModel(device)
+    audio = model.generate("Hello, this is Bark speaking!")
+"""
+
+import time
+
+import numpy as np
+import torch
+from loguru import logger
+
+import ttnn
+from models.demos.wormhole.bark.tt.bark_constants import (
+    COARSE_INFER_TOKEN,
+    COARSE_SEMANTIC_PAD_TOKEN,
+    CODEBOOK_SIZE,
+    N_COARSE_CODEBOOKS,
+    SEMANTIC_INFER_TOKEN,
+    SEMANTIC_PAD_TOKEN,
+    SEMANTIC_VOCAB_SIZE,
+    TEXT_ENCODING_OFFSET,
+)
+from models.demos.wormhole.bark.tt.bark_fine import TtBarkFineModel, preprocess_fine_model_parameters
+from models.demos.wormhole.bark.tt.bark_gpt import BarkConfig, TtBarkGPT, preprocess_model_parameters
+
+
+def sample_top_k(logits_tt, k=50, temperature=1.0, device=None):
+    """On-device top-k sampling with temperature.
+
+    Performs top-k truncation on device to keep only the k most probable tokens,
+    applies temperature scaling, then transfers only the small [1, k] tensor
+    to host for multinomial sampling.
+
+    Args:
+        logits_tt: TTNN tensor of logits [1, 1, 1, vocab_size]
+        k: Number of top candidates to keep
+        temperature: Sampling temperature (1.0 = standard, <1 = more deterministic)
+        device: TTNN device (unused, logits carry device info)
+
+    Returns:
+        token_id: int — the selected token ID
+    """
+    # Apply temperature scaling on-device
+    if temperature != 1.0:
+        logits_tt = ttnn.multiply(logits_tt, 1.0 / temperature)
+
+    # Transfer logits to host for top-k + multinomial
+    # (ttnn.topk availability varies across tt-metal versions;
+    #  host-side top-k on [1, vocab] is <0.1ms and reliable)
+    logits_host = ttnn.to_torch(logits_tt).float().squeeze()  # [vocab_size]
+    top_values, top_indices = torch.topk(logits_host, k)
+    probs = torch.nn.functional.softmax(top_values, dim=-1)
+    idx = torch.multinomial(probs, num_samples=1)
+    return top_indices[idx].item()
+
+
+def _finalize_coarse_output(generated_tokens: list[torch.Tensor]) -> torch.Tensor:
+    """Return remapped coarse tokens with complete interleaved codebook pairs."""
+    if not generated_tokens:
+        return torch.zeros((1, 2), dtype=torch.long)
+
+    if len(generated_tokens) % N_COARSE_CODEBOOKS != 0:
+        # The last token is codebook 0 without its codebook 1 partner.
+        pad_token = torch.tensor([[SEMANTIC_VOCAB_SIZE + CODEBOOK_SIZE]], dtype=torch.long)
+        generated_tokens = generated_tokens + [pad_token]
+
+    coarse_output = torch.cat(generated_tokens, dim=-1)  # [1, n_tokens]
+    return (coarse_output - SEMANTIC_VOCAB_SIZE) % CODEBOOK_SIZE
+
+
+class TtBarkModel:
+    """Complete Bark Small pipeline: text-to-audio on Tenstorrent hardware.
+
+    Stages:
+    1. Text-to-Semantic: tokenized text -> 10k semantic token vocabulary
+    2. Semantic-to-Coarse: semantic tokens -> 2 coarse EnCodec codebooks
+    3. Coarse-to-Fine: 2 codebooks -> 8 codebooks
+    4. EnCodec Decoder: 8 codebooks -> 24kHz mono audio waveform
+    """
+
+    def __init__(self, device, model_name="suno/bark-small"):
+        """Initialize the Bark pipeline by loading HuggingFace weights.
+
+        Args:
+            device: TTNN device
+            model_name: HuggingFace model name (default: suno/bark-small)
+        """
+        self.device = device
+        self.model_name = model_name
+
+        # Sampling configuration (default: greedy for deterministic output)
+        self.sampling_config = {
+            "use_sampling": False,
+            "top_k": 50,
+            "temperature": 1.0,
+        }
+
+        logger.info(f"Loading Bark model from {model_name}...")
+        self._load_model(model_name)
+        logger.info("Bark model loaded successfully!")
+
+    def configure_sampling(self, use_sampling=True, top_k=50, temperature=1.0):
+        """Configure token sampling strategy for generation.
+
+        Args:
+            use_sampling: If True, use top-k sampling. If False, greedy argmax.
+            top_k: Number of top-k candidates (default: 50)
+            temperature: Sampling temperature. <1 = more deterministic, >1 = more random.
+        """
+        self.sampling_config = {
+            "use_sampling": use_sampling,
+            "top_k": max(1, top_k),
+            "temperature": max(0.01, temperature),
+        }
+        logger.info(f"Sampling config: {self.sampling_config}")
+
+    @property
+    def tokenizer(self):
+        return self.processor.tokenizer
+
+    def _load_model(self, model_name):
+        """Load all components from HuggingFace."""
+        from transformers import AutoProcessor, BarkModel
+
+        # Load the full HF model
+        hf_model = BarkModel.from_pretrained(model_name)
+        self.processor = AutoProcessor.from_pretrained(model_name)
+
+        # Store generation configs (compatible with old + new HF versions)
+        gen = hf_model.generation_config
+        self.semantic_generation_config = getattr(gen, "semantic_generation_config", gen)
+        self.coarse_generation_config = getattr(gen, "coarse_generation_config", gen)
+        self.fine_generation_config = getattr(gen, "fine_generation_config", gen)
+
+        # Get device grid size for Stage 3 optimizations
+        compute_grid = self.device.compute_with_storage_grid_size()
+
+        # --- Stage 1: Semantic model ---
+        semantic_config = BarkConfig(
+            hidden_size=hf_model.semantic.config.hidden_size,
+            num_heads=hf_model.semantic.config.num_heads,
+            num_layers=hf_model.semantic.config.num_layers,
+            block_size=hf_model.semantic.config.block_size,
+            input_vocab_size=hf_model.semantic.config.input_vocab_size,
+            output_vocab_size=hf_model.semantic.config.output_vocab_size,
+            bias=getattr(hf_model.semantic.config, "bias", False),
+            use_lofi=False,
+            grid_size=compute_grid,
+        )
+        semantic_params = preprocess_model_parameters(hf_model.semantic, self.device)
+        self.semantic_model = TtBarkGPT(self.device, semantic_params, semantic_config, is_causal=True)
+
+        # --- Stage 2: Coarse model ---
+        coarse_config = BarkConfig(
+            hidden_size=hf_model.coarse_acoustics.config.hidden_size,
+            num_heads=hf_model.coarse_acoustics.config.num_heads,
+            num_layers=hf_model.coarse_acoustics.config.num_layers,
+            block_size=hf_model.coarse_acoustics.config.block_size,
+            input_vocab_size=hf_model.coarse_acoustics.config.input_vocab_size,
+            output_vocab_size=hf_model.coarse_acoustics.config.output_vocab_size,
+            bias=getattr(hf_model.coarse_acoustics.config, "bias", False),
+            use_lofi=False,
+            grid_size=compute_grid,
+        )
+        coarse_params = preprocess_model_parameters(hf_model.coarse_acoustics, self.device)
+        self.coarse_model = TtBarkGPT(self.device, coarse_params, coarse_config, is_causal=True)
+
+        # --- Stage 3: Fine model ---
+        fine_config = BarkConfig(
+            hidden_size=hf_model.fine_acoustics.config.hidden_size,
+            num_heads=hf_model.fine_acoustics.config.num_heads,
+            num_layers=hf_model.fine_acoustics.config.num_layers,
+            block_size=hf_model.fine_acoustics.config.block_size,
+            input_vocab_size=hf_model.fine_acoustics.config.input_vocab_size,
+            output_vocab_size=hf_model.fine_acoustics.config.output_vocab_size,
+            bias=True,  # Fine model uses bias for LayerNorm
+            use_lofi=False,
+            grid_size=compute_grid,
+        )
+        fine_params = preprocess_fine_model_parameters(hf_model.fine_acoustics, self.device)
+        self.fine_model = TtBarkFineModel(
+            self.device,
+            fine_params,
+            fine_config,
+            n_codes_total=hf_model.fine_acoustics.config.n_codes_total,
+            n_codes_given=hf_model.fine_acoustics.config.n_codes_given,
+        )
+
+        # --- EnCodec decoder ---
+        self.codec_model = hf_model.codec_model
+        self.codec_model.eval()
+
+        # --- Defensive: verify hardcoded constants match the loaded checkpoint ---
+        expected_infer = hf_model.semantic.config.input_vocab_size - 1
+        assert expected_infer == SEMANTIC_INFER_TOKEN, (
+            f"SEMANTIC_INFER_TOKEN mismatch: checkpoint has {expected_infer}, " f"code has {SEMANTIC_INFER_TOKEN}"
+        )
+
+        # Clean up full model reference
+        del hf_model
+
+        # --- Pre-create on-device logits masks for host-free decode ---
+        # Semantic mask: suppress vocab indices > SEMANTIC_PAD_TOKEN
+        sem_vocab = self.semantic_model.config.output_vocab_size
+        sem_mask = torch.zeros(1, 1, 1, sem_vocab, dtype=torch.bfloat16)
+        sem_mask[:, :, :, SEMANTIC_PAD_TOKEN + 1 :] = -1e9  # bfloat16-safe -inf
+        self.tt_semantic_mask = ttnn.from_torch(
+            sem_mask,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Coarse masks: two alternating codebook masks (even/odd step)
+        coarse_vocab = self.coarse_model.config.output_vocab_size
+        self.tt_coarse_masks = []
+        for cb_idx in range(N_COARSE_CODEBOOKS):
+            mask = torch.full((1, 1, 1, coarse_vocab), -1e9, dtype=torch.bfloat16)
+            allowed_start = SEMANTIC_VOCAB_SIZE + cb_idx * CODEBOOK_SIZE
+            allowed_end = allowed_start + CODEBOOK_SIZE
+            mask[:, :, :, allowed_start:allowed_end] = 0.0
+            mask[:, :, :, COARSE_SEMANTIC_PAD_TOKEN] = 0.0  # always allow EOS
+            tt_mask = ttnn.from_torch(
+                mask,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self.tt_coarse_masks.append(tt_mask)
+
+    def generate_semantic_tokens(self, text: str, voice_preset=None) -> torch.Tensor:
+        """Stage 1: Generate semantic tokens using optimized TTNN model with KV caching.
+
+        Follows the upstream HF BarkSemanticModel.generate() contract:
+        1. Offsets tokenizer IDs into the semantic embedding range (+TEXT_ENCODING_OFFSET)
+        2. Masks padding positions to TEXT_ENCODING_OFFSET (text_pad_token)
+        3. Appends the SEMANTIC_INFER_TOKEN to the prompt
+        4. Suppresses logits above SEMANTIC_PAD_TOKEN (allows EOS at index 10000)
+        5. Returns only the newly generated semantic tokens (prompt stripped)
+
+        Args:
+            text: Input text string
+            voice_preset: Optional voice preset dict
+
+        Returns:
+            semantic_tokens: [1, seq_len] semantic token IDs in [0, SEMANTIC_VOCAB_SIZE)
+        """
+        inputs = self.processor(text, voice_preset=voice_preset, return_tensors="pt")
+        input_ids = inputs["input_ids"].to(torch.long)
+        attention_mask = inputs.get("attention_mask", None)
+        if input_ids.shape[0] != 1:
+            raise ValueError("Bark TTNN implementation currently only supports batch size 1")
+
+        # --- Upstream contract: offset text IDs and mask padding ---
+        input_ids = input_ids + TEXT_ENCODING_OFFSET
+        if attention_mask is not None:
+            # Mask padding positions back to text_pad_token (= TEXT_ENCODING_OFFSET)
+            input_ids = input_ids.masked_fill((1 - attention_mask).bool(), TEXT_ENCODING_OFFSET)
+
+        # Voice preset: prepend semantic history tokens before infer token
+        history_prompt = inputs.get("history_prompt", None)
+        if history_prompt is not None:
+            semantic_history = history_prompt.get("semantic_prompt", None)
+            if semantic_history is not None:
+                if semantic_history.dim() == 1:
+                    semantic_history = semantic_history.unsqueeze(0)
+                input_ids = torch.cat([input_ids, semantic_history.to(torch.long)], dim=-1)
+
+        infer_token = torch.tensor([[SEMANTIC_INFER_TOKEN]], dtype=torch.long)
+        input_ids = torch.cat([input_ids, infer_token], dim=-1)
+
+        with torch.no_grad():
+            # Initial pre-fill (process entire prompt) — use DRAM to avoid L1 overflow with KV cache
+            gen_mem = ttnn.DRAM_MEMORY_CONFIG
+            logits, layer_past = self.semantic_model(input_ids=input_ids, use_cache=True, memory_config=gen_mem)
+
+            # --- On-device autoregressive loop with batched EOS check ---
+            max_new_tokens = getattr(self.semantic_generation_config, "max_new_tokens", None) or 768
+            host_tokens = []  # Collect token values directly to avoid double-transfer
+            tt_next_token = None
+            eos_check_interval = 4  # Only transfer to host every N steps
+            use_sampling = self.sampling_config.get("use_sampling", False)
+            top_k = self.sampling_config.get("top_k", 50)
+            temperature = self.sampling_config.get("temperature", 1.0)
+
+            for step in range(max_new_tokens):
+                if step == 0:
+                    # Apply mask on-device to prefill logits
+                    # logits shape: [1, 1, seq, vocab] — slice last position
+                    logits_last = logits[:, :, -1:, :]
+                    ttnn.deallocate(logits)
+                else:
+                    logits, layer_past = self.semantic_model(
+                        input_ids=tt_next_token,
+                        layer_past=layer_past,
+                        use_cache=True,
+                        memory_config=gen_mem,
+                    )
+                    ttnn.deallocate(tt_next_token)
+                    logits_last = logits
+                    # logits is already [1, 1, 1, vocab] for decode
+
+                # On-device masking
+                masked_logits = ttnn.add(
+                    logits_last,
+                    self.tt_semantic_mask,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                if logits_last is not logits or step > 0:
+                    ttnn.deallocate(logits_last)
+
+                # Token selection: greedy argmax or top-k sampling
+                if use_sampling:
+                    token_val = sample_top_k(masked_logits, k=top_k, temperature=temperature)
+                    ttnn.deallocate(masked_logits)
+                    if token_val == SEMANTIC_PAD_TOKEN:
+                        break
+                    host_tokens.append(token_val)
+                    # Create device tensor for next model input
+                    tt_next_token = ttnn.from_torch(
+                        torch.tensor([[token_val]], dtype=torch.int32),
+                        dtype=ttnn.uint32,
+                        device=self.device,
+                    )
+                else:
+                    tt_next_token = ttnn.argmax(
+                        masked_logits,
+                        dim=-1,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    ttnn.deallocate(masked_logits)
+
+                    # Batched EOS check: only pull to host periodically
+                    if step % eos_check_interval == 0 or step < 2:
+                        token_val = ttnn.to_torch(tt_next_token).flatten()[0].item()
+                        if token_val == SEMANTIC_PAD_TOKEN:
+                            ttnn.deallocate(tt_next_token)
+                            tt_next_token = None
+                            break
+
+                    # Store token value (transfer only once during EOS check)
+                    if step % eos_check_interval == 0 or step < 2:
+                        host_tokens.append(token_val)
+                    else:
+                        # Deferred: will be read at next EOS check
+                        # Read token value now to avoid losing it
+                        token_val = ttnn.to_torch(tt_next_token).flatten()[0].item()
+                        host_tokens.append(token_val)
+
+                    # Re-shape for next model input: [1, 1]
+                    tt_next_token = ttnn.reshape(tt_next_token, [1, 1])
+
+            if tt_next_token is not None:
+                ttnn.deallocate(tt_next_token)
+
+            # KV cache is pre-allocated and reused; no per-generation deallocation needed.
+
+        if not host_tokens:
+            return torch.empty((1, 0), dtype=torch.long)
+
+        return torch.tensor([host_tokens], dtype=torch.long)
+
+    def generate_coarse_tokens(self, semantic_tokens: torch.Tensor) -> torch.Tensor:
+        """Stage 2: Generate coarse EnCodec tokens using optimized TTNN model with KV caching.
+
+        Follows the upstream HF BarkCoarseModel.generate() contract:
+        1. Offsets semantic tokens by SEMANTIC_VOCAB_SIZE
+        2. Appends COARSE_INFER_TOKEN to the prompt
+        3. Applies alternating-codebook logits masking per step (allows EOS always)
+        4. Generates interleaved codebook0/codebook1 tokens
+        5. Remaps output IDs: (token - SEMANTIC_VOCAB_SIZE) % CODEBOOK_SIZE
+
+        Args:
+            semantic_tokens: [1, seq_len] semantic token IDs from Stage 1
+
+        Returns:
+            coarse_tokens: [1, coarse_seq_len * 2] interleaved, values in [0, CODEBOOK_SIZE)
+        """
+        if semantic_tokens.shape[0] != 1:
+            raise ValueError("Bark TTNN implementation currently only supports batch size 1")
+
+        # Guard: empty semantic tokens → return silence (2 codebooks, 1 frame)
+        if semantic_tokens.numel() == 0:
+            print("WARNING: Empty semantic tokens received. Returning silence tokens.")
+            return torch.zeros((1, 2), dtype=torch.long)
+
+        # --- Upstream contract: offset semantic tokens and append infer token ---
+        input_ids = semantic_tokens.to(torch.long) + SEMANTIC_VOCAB_SIZE
+        infer_token = torch.tensor([[COARSE_INFER_TOKEN]], dtype=torch.long)
+        input_ids = torch.cat([input_ids, infer_token], dim=-1)
+
+        with torch.no_grad():
+            # Initial pre-fill — use DRAM to avoid L1 overflow with KV cache
+            gen_mem = ttnn.DRAM_MEMORY_CONFIG
+            logits, layer_past = self.coarse_model(input_ids=input_ids, use_cache=True, memory_config=gen_mem)
+
+            # --- Unified loop with alternating-codebook logits suppression ---
+            max_new_tokens = getattr(self.coarse_generation_config, "max_new_tokens", None) or 768
+            host_tokens = []  # Collect int values directly
+            tt_next_token = None
+            eos_check_interval = 2  # Coarse checks EOS every 2 steps (codebook pair boundary)
+            use_sampling = self.sampling_config.get("use_sampling", False)
+            top_k = self.sampling_config.get("top_k", 50)
+            temperature = self.sampling_config.get("temperature", 1.0)
+
+            for step in range(max_new_tokens):
+                if step == 0:
+                    logits_last = logits[:, :, -1:, :]
+                    ttnn.deallocate(logits)
+                else:
+                    logits, layer_past = self.coarse_model(
+                        input_ids=tt_next_token,
+                        layer_past=layer_past,
+                        use_cache=True,
+                        memory_config=gen_mem,
+                    )
+                    ttnn.deallocate(tt_next_token)
+                    logits_last = logits
+
+                # On-device alternating codebook mask
+                codebook_idx = step % N_COARSE_CODEBOOKS
+                masked_logits = ttnn.add(
+                    logits_last,
+                    self.tt_coarse_masks[codebook_idx],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                if logits_last is not logits or step > 0:
+                    ttnn.deallocate(logits_last)
+
+                # Token selection: greedy or top-k
+                if use_sampling:
+                    token_val = sample_top_k(masked_logits, k=top_k, temperature=temperature)
+                    ttnn.deallocate(masked_logits)
+                else:
+                    tt_next_token = ttnn.argmax(
+                        masked_logits,
+                        dim=-1,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    ttnn.deallocate(masked_logits)
+                    token_val = ttnn.to_torch(tt_next_token).flatten()[0].item()
+
+                if token_val == COARSE_SEMANTIC_PAD_TOKEN:
+                    # EOS — handle incomplete codebook pairs
+                    if len(host_tokens) > 0 and len(host_tokens) % N_COARSE_CODEBOOKS != 0:
+                        host_tokens.append(SEMANTIC_VOCAB_SIZE + CODEBOOK_SIZE)
+                    if tt_next_token is not None:
+                        ttnn.deallocate(tt_next_token)
+                    tt_next_token = None
+                    break
+
+                host_tokens.append(token_val)
+
+                if use_sampling:
+                    tt_next_token = ttnn.from_torch(
+                        torch.tensor([[token_val]], dtype=torch.int32),
+                        dtype=ttnn.uint32,
+                        device=self.device,
+                    )
+                else:
+                    tt_next_token = ttnn.reshape(tt_next_token, [1, 1])
+
+            if tt_next_token is not None:
+                ttnn.deallocate(tt_next_token)
+
+            # KV cache is pre-allocated and reused; no per-generation deallocation needed.
+
+        if not host_tokens:
+            logger.warning("Coarse generation produced no tokens. Returning silence.")
+            return torch.zeros((1, 2), dtype=torch.long)
+
+        generated_tokens = [torch.tensor([[t]], dtype=torch.long) for t in host_tokens]
+        return _finalize_coarse_output(generated_tokens)
+
+    def generate_fine_tokens(self, coarse_tokens: torch.Tensor) -> torch.Tensor:
+        """Stage 3: Generate fine EnCodec tokens (on-device loop).
+
+        Maintains all codebooks as separate TTNN tensors on the device to avoid
+        repeated data movement between host and device.
+
+        Args:
+            coarse_tokens: [batch, coarse_seq_len * 2] interleaved
+
+        Returns:
+            fine_tokens: [batch, seq_len, 8] all codebooks on host
+        """
+        n_coarse = self.fine_model.n_codes_given  # 2
+        batch_size = coarse_tokens.shape[0]
+
+        # Defensive: truncate trailing incomplete codebook frame to prevent
+        # reshape crash if coarse generation produced an odd token count.
+        n_tokens = coarse_tokens.shape[1]
+        if n_tokens % n_coarse != 0:
+            n_tokens = (n_tokens // n_coarse) * n_coarse
+            coarse_tokens = coarse_tokens[:, :n_tokens]
+
+        coarse_seq_len = n_tokens // n_coarse
+
+        # De-interleave: [batch, seq*2] -> [batch, seq, 2]
+        coarse_tokens_reshaped = coarse_tokens.reshape(batch_size, coarse_seq_len, n_coarse)
+
+        # Move initial 2 codebooks to device as a list
+        tt_codebooks = []
+        for i in range(n_coarse):
+            # Shape: [1, batch, seq, 1]
+            cb_i = ttnn.from_torch(
+                coarse_tokens_reshaped[:, :, i].unsqueeze(0).unsqueeze(-1).to(torch.int32),
+                dtype=ttnn.uint32,
+                device=self.device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            tt_codebooks.append(cb_i)
+
+        # Predict codebooks 2-7 autoregressively on device
+        with torch.no_grad():
+            for codebook_idx in range(n_coarse, self.fine_model.n_codes_total):
+                # Bark training convention: the current codebook slot should contain
+                # a pad token (CODEBOOK_SIZE = 1024) when predicting that codebook.
+                pad_tokens = torch.full((1, 1, coarse_seq_len, 1), CODEBOOK_SIZE, dtype=torch.int32)
+                tt_pad = ttnn.from_torch(
+                    pad_tokens,
+                    dtype=ttnn.uint32,
+                    device=self.device,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+                input_with_pad = tt_codebooks + [tt_pad]
+
+                # logits: [1, batch, seq, vocab]
+                logits = self.fine_model(codebook_idx, input_with_pad)
+
+                # argmax on device: [1, batch, seq, 1]
+                preds = ttnn.argmax(logits, dim=-1)
+                tt_codebooks.append(preds)
+
+                # Optimization: deallocate logits and pad immediately
+                ttnn.deallocate(logits)
+                ttnn.deallocate(tt_pad)
+
+        # Gather all codebooks from device to host
+        # shape [batch, seq, 8]
+        fine_tokens = torch.zeros(batch_size, coarse_seq_len, self.fine_model.n_codes_total, dtype=torch.long)
+        for i, tt_cb in enumerate(tt_codebooks):
+            cb_torch = ttnn.to_torch(tt_cb).squeeze(0).squeeze(-1).to(torch.long)
+            cb_torch = cb_torch.clamp(0, CODEBOOK_SIZE - 1)  # Safety clamp to [0, 1023]
+            fine_tokens[:, :, i] = cb_torch
+            ttnn.deallocate(tt_cb)
+
+        return fine_tokens
+
+    def decode_audio(self, fine_tokens: torch.Tensor) -> np.ndarray:
+        """Stage 4: Decode EnCodec tokens to audio waveform.
+
+        Uses the correct upstream two-step decode path:
+        1. quantizer.decode() to get continuous embeddings from codebook indices
+        2. decoder() to produce audio from embeddings
+
+        Args:
+            fine_tokens: [batch, seq_len, 8] codebook tokens
+
+        Returns:
+            audio: numpy array of 24kHz mono audio
+        """
+        # Transpose to [n_codebooks, batch, seq_len] for quantizer.decode
+        # fine_tokens: [batch, seq, 8] -> [8, batch, seq]
+        fine_output = fine_tokens.transpose(0, 2).transpose(1, 2)  # [8, batch, seq]
+        assert (
+            fine_output.shape[0] == 8 and fine_output.ndim == 3
+        ), f"EnCodec input shape wrong: expected [8, batch, seq], got {fine_output.shape}"
+
+        with torch.no_grad():
+            try:
+                # Primary path: quantizer.decode + decoder (older transformers)
+                emb = self.codec_model.quantizer.decode(fine_output)
+                audio_values = self.codec_model.decoder(emb)
+            except AttributeError:
+                # Fallback: newer transformers restructured the API
+                audio_codes = fine_output.permute(1, 0, 2).unsqueeze(0)  # [1, batch, 8, seq]
+                out = self.codec_model.decode(audio_codes=audio_codes, audio_scales=[None])
+                audio_values = out.audio_values
+
+        # audio_values: [batch, 1, samples] -> squeeze explicit dims (batch-safe)
+        audio = audio_values.squeeze(1).squeeze(0).cpu().numpy()
+        return audio
+
+    def generate(
+        self,
+        text: str,
+        voice_preset=None,
+        verbose: bool = True,
+        use_overlap: bool = False,
+        top_k: int = 0,
+        temperature: float = 1.0,
+    ) -> np.ndarray:
+        """Full text-to-audio pipeline.
+
+        Args:
+            text: Input text string
+            voice_preset: Optional voice preset dict
+            verbose: Print timing info
+            use_overlap: Use chunked coarse→fine pipeline overlap
+            top_k: If > 0, enable top-k sampling with this k value
+            temperature: Sampling temperature (only used if top_k > 0)
+
+        Returns:
+            audio: numpy array of 24kHz mono audio waveform
+        """
+        # Apply sampling config if specified via generate() args
+        if top_k > 0:
+            self.configure_sampling(use_sampling=True, top_k=top_k, temperature=temperature)
+
+        if use_overlap:
+            from models.demos.wormhole.bark.tt.bark_pipeline_overlap import BarkStreamingPipeline
+
+            pipeline = BarkStreamingPipeline(self)
+            return pipeline.generate_streamed(text, verbose=verbose)
+
+        timings = {}
+
+        # Stage 1: Text -> Semantic
+        t0 = time.time()
+        semantic_tokens = self.generate_semantic_tokens(text, voice_preset)
+        timings["semantic"] = time.time() - t0
+        if verbose:
+            sem_elapsed = max(timings["semantic"], 1e-6)
+            print(
+                f"Stage 1 (Semantic): {semantic_tokens.shape[1]} tokens in {timings['semantic']:.2f}s "
+                f"({semantic_tokens.shape[1] / sem_elapsed:.1f} tok/s)"
+            )
+
+        # Stage 2: Semantic -> Coarse
+        t0 = time.time()
+        coarse_tokens = self.generate_coarse_tokens(semantic_tokens)
+        timings["coarse"] = time.time() - t0
+        if verbose:
+            coarse_elapsed = max(timings["coarse"], 1e-6)
+            print(
+                f"Stage 2 (Coarse): {coarse_tokens.shape[1]} tokens in {timings['coarse']:.2f}s "
+                f"({coarse_tokens.shape[1] / coarse_elapsed:.1f} tok/s)"
+            )
+
+        # Stage 3: Coarse -> Fine
+        t0 = time.time()
+        fine_tokens = self.generate_fine_tokens(coarse_tokens)
+        timings["fine"] = time.time() - t0
+        if verbose:
+            # Fine generates 6 new codebooks × seq_len tokens
+            coarse_seq_len = coarse_tokens.shape[1] // 2 if coarse_tokens.shape[1] > 0 else 0
+            fine_new_tokens = 6 * coarse_seq_len
+            fine_tps = fine_new_tokens / timings["fine"] if timings["fine"] > 0 else 0
+            print(
+                f"Stage 3 (Fine): {fine_tokens.shape[1]}x{fine_tokens.shape[2]} codebooks "
+                f"in {timings['fine']:.2f}s ({fine_tps:.1f} tok/s)"
+            )
+
+        # Stage 4: Decode audio
+        t0 = time.time()
+        audio = self.decode_audio(fine_tokens)
+        timings["decode"] = time.time() - t0
+        if verbose:
+            total = sum(timings.values())
+            duration = len(audio) / 24000
+            rtf = total / duration if duration > 0 else float("inf")
+            print(f"Stage 4 (Decode): {duration:.2f}s audio in {timings['decode']:.2f}s")
+            print(f"Total: {total:.2f}s | Audio: {duration:.2f}s | RTF: {rtf:.2f}")
+            # Per-stage breakdown for profiling
+            print(
+                f"  Breakdown: sem={timings['semantic']:.3f}s "
+                f"coarse={timings['coarse']:.3f}s "
+                f"fine={timings['fine']:.3f}s "
+                f"decode={timings['decode']:.3f}s"
+            )
+            if self.sampling_config.get("use_sampling"):
+                print(
+                    f"  Sampling: top_k={self.sampling_config['top_k']}, " f"temp={self.sampling_config['temperature']}"
+                )
+
+        # Reset sampling to greedy if it was set via generate() args
+        if top_k > 0:
+            self.configure_sampling(use_sampling=False)
+
+        return audio
