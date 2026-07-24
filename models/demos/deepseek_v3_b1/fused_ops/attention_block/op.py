@@ -966,7 +966,7 @@ class AttentionBlock:
         mla_ms_in_cb = cb_id_context.get_cb_id(stats_df, TD_8x32)  # Output MS CB for MLA
         mla_out_o_cb = cb_id_context.get_cb_id(stats_df, TD_8x32)  # Output O CB for MLA
         mla_out_ms_cb = cb_id_context.get_cb_id(stats_df, TD_8x32)  # Output MS CB for MLA
-        mla_mask_cb = cb_id_context.get_cb_id(q_df, TD_8x32)  # Mask CB for MLA
+        mla_mask_cb = create_q_heads_receiver_in_cb  # CreateQHeads staging is popped before FlashMLA mask use
         mla_out_final_cb = mla_out_o_cb  # Output final CB for MLA, unused for full fused attention block
 
         # CB indices for CCL broadcast (use separate CBs to avoid conflicts)
@@ -2659,24 +2659,8 @@ class AttentionBlock:
 
         # Position tensor is now height-sharded - no CB needed, read directly from L1
 
-        # cb_mask: Mask input
-        mla_mask_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            mla_mask_cb,
-            ref_sdpa_forwarder_scratch,
-            address_offset=sdpa_forwarder_scratch_running_offset,
-            total_size=q_tile_size,
-            core_ranges=full_device_grid,
-        )
-        mla_mask_cb_descriptor.format_descriptors = [
-            ttnn.CBFormatDescriptor(
-                buffer_index=mla_mask_cb,
-                data_format=q_df,
-                page_size=q_tile_size,
-                tile=q_tile_descriptor,
-            )
-        ]
-        sdpa_forwarder_scratch_running_offset += mla_mask_cb_descriptor.total_size
-        mla_cb_descriptors.append(mla_mask_cb_descriptor)
+        # cb_mask aliases create_q_heads_receiver_in_cb. CreateQHeads drains that staging
+        # CB before FlashMLA optionally reserves one page for the causal mask.
 
         # mla_out_o_cb/mla_interm_out_cb: output O (tiny tile)
         mla_out_o_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
