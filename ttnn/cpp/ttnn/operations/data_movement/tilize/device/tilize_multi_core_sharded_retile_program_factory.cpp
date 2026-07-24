@@ -244,10 +244,14 @@ ProgramDescriptor TilizeMultiCoreShardedRetileProgramFactory::create_descriptor(
             .fp32_dest_acc_en = fp32_llk_acc,
             .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
         };
-        // All shards are the same size, so every core does identical work. num_input_blocks is in
-        // input tile-rows; all rows are real (no grow-case height padding within a shard).
+        // All shards are the same size, so every core does identical work. Each shard is exactly one
+        // fully tile-aligned slice (shard_height divides both tile heights), so there is no
+        // alignment padding: work units start at slice-local 0 and slice_in/out_rows equal the
+        // shard's tile-row counts. Units are output tile-rows when growing, input tile-rows when
+        // shrinking.
+        const uint32_t num_units = shrink ? num_input_tile_rows : num_output_tile_rows;
         for (const auto& core : corerange_to_cores(all_cores)) {
-            compute_desc.emplace_runtime_args(core, {num_input_tile_rows, num_input_tile_rows});
+            compute_desc.emplace_runtime_args(core, {num_units, 0u, num_input_tile_rows, num_output_tile_rows});
         }
         desc.kernels.push_back(std::move(compute_desc));
     }

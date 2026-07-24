@@ -16,6 +16,14 @@
 // (consumer) to avoid a copy, exposed as two aliased CB views because the producer and consumer
 // need different fixed tile/face geometry: mid_cb has the input tile shape, mid_view_cb the output
 // tile shape (its bytes stay in the input data format; conversion happens on the final pack).
+//
+// A tiled tensor is a batch of 2-D matrix slices (all leading dims flattened), each independently
+// padded on its -2 dim to a whole number of tiles. Because the input and output tile heights
+// differ, each slice's height rounds up differently (round_up(S, in_tile_h) vs round_up(S,
+// out_tile_h)), so alignment padding must be applied *per slice*, not once at the end of the
+// flattened tensor. This kernel therefore maps every unit of work back to its slice via the slice
+// geometry (slice_in_rows / slice_out_rows) so the boundary tile of each slice is padded (grow) or
+// truncated (shrink) correctly, independent of how the host split the work across cores.
 
 namespace {
 
@@ -36,9 +44,15 @@ ALWI void fill_zeros_pages(DataflowBuffer& dfb, uint32_t num_pages, uint32_t pag
 }  // namespace
 
 void kernel_main() {
-    const uint32_t num_input_blocks = get_arg_val<uint32_t>(0);
-    const uint32_t num_real_input_rows = get_arg_val<uint32_t>(1);
-    if (num_input_blocks == 0) {
+    // Work is split into "units": one unit is a tile-row of the taller tile — an output tile-row
+    // when growing (out taller) or an input tile-row when shrinking (in taller). `global_unit_start`
+    // is the index of this core's first unit within the flattened tensor, used with the slice
+    // geometry to recover each unit's position inside its slice.
+    const uint32_t num_units = get_arg_val<uint32_t>(0);
+    const uint32_t global_unit_start = get_arg_val<uint32_t>(1);
+    const uint32_t slice_in_rows = get_arg_val<uint32_t>(2);   // input tile-rows per slice
+    const uint32_t slice_out_rows = get_arg_val<uint32_t>(3);  // output tile-rows per slice
+    if (num_units == 0) {
         return;
     }
 
@@ -63,28 +77,46 @@ void kernel_main() {
     constexpr bool shrink = in_tile_height >= out_tile_height;
     constexpr uint32_t ratio = shrink ? (in_tile_height / out_tile_height) : (out_tile_height / in_tile_height);
 
+    // The intermediate block holds one taller-tile-row of row-major data: `ratio` input rows when
+    // growing, one input row when shrinking.
     constexpr uint32_t in_rows_per_iter = shrink ? 1u : ratio;
-    constexpr uint32_t out_rows_per_iter = shrink ? ratio : 1u;
     constexpr uint32_t block_pages = in_rows_per_iter * tiles_per_block;
     constexpr uint32_t words_per_out_tile_row = (tiles_per_block * out_tile_size) >> 4;
-
-    const uint32_t num_iters = num_input_blocks / in_rows_per_iter;
 
     compute_kernel_hw_startup(src_cb, mid_cb);
 
     DataflowBuffer mid(mid_cb);
     DataflowBuffer out_dfb(out_cb);
 
-    for (uint32_t b = 0; b < num_iters; ++b) {
-        // Rows beyond num_real_input_rows are grow-case height padding: they don't exist in DRAM,
-        // so they are zero-filled into the intermediate instead of untilized from the input.
-        const uint32_t block_in_row_start = b * in_rows_per_iter;
-        uint32_t real_rows = 0;
-        if (block_in_row_start < num_real_input_rows) {
-            const uint32_t rem = num_real_input_rows - block_in_row_start;
-            real_rows = rem < in_rows_per_iter ? rem : in_rows_per_iter;
+    for (uint32_t i = 0; i < num_units; ++i) {
+        const uint32_t unit = global_unit_start + i;
+
+        // Resolve this unit's position within its slice, then derive how many input tile-rows are
+        // real (untilized from DRAM) vs. alignment padding (zero-filled), and how many output
+        // tile-rows to emit.
+        uint32_t real_rows;  // input tile-rows to untilize this iteration
+        uint32_t pad_rows;   // zero-filled (grow-boundary) input tile-rows this iteration
+        uint32_t out_count;  // output tile-rows to tilize this iteration
+        if constexpr (shrink) {
+            // One input tile-row → up to `ratio` output tile-rows; the last input row of a slice
+            // may map to fewer real output rows (the extra output rows would be below the slice's
+            // real height and are dropped rather than written).
+            const uint32_t local_in_row = unit % slice_in_rows;
+            const uint32_t out_base = local_in_row * ratio;
+            const uint32_t remaining = slice_out_rows - out_base;
+            out_count = remaining < ratio ? remaining : ratio;
+            real_rows = 1;
+            pad_rows = 0;
+        } else {
+            // `ratio` input tile-rows → one output tile-row; the last output row of a slice may be
+            // formed from fewer real input rows, with the remainder zero-padded within the tile.
+            const uint32_t local_out_row = unit % slice_out_rows;
+            const uint32_t in_base = local_out_row * ratio;
+            const uint32_t remaining = slice_in_rows - in_base;
+            real_rows = remaining < ratio ? remaining : ratio;
+            pad_rows = ratio - real_rows;
+            out_count = 1;
         }
-        const uint32_t pad_rows = in_rows_per_iter - real_rows;
 
         if (real_rows > 0) {
             compute_kernel_lib::untilize<
@@ -112,7 +144,7 @@ void kernel_main() {
         reconfig_data_format_srca(src_cb, mid_view_cb);
         pack_reconfig_data_format(mid_cb, out_cb);
         tilize_init(mid_view_cb, tiles_per_block, out_cb);
-        for (uint32_t r = 0; r < out_rows_per_iter; ++r) {
+        for (uint32_t r = 0; r < out_count; ++r) {
             UNPACK({ get_local_cb_interface(mid_view_cb).fifo_rd_ptr = block_rd_ptr + r * words_per_out_tile_row; })
             out_dfb.reserve_back(tiles_per_block);
             tilize_block(mid_view_cb, tiles_per_block, out_cb);

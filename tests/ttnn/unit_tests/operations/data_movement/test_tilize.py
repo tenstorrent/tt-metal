@@ -999,7 +999,14 @@ def test_tilize_row_major_to_tiny_tile(device, tensor_shape, shard_layout, tile_
         ([1, 1, 128, 256], None),
         ([1, 1, 64, 256], None),
         ([1, 1, 64, 128], None),
-        ([1, 1, 16, 128], None),
+        ([1, 1, 1, 1024], None),
+        # Multi-slice (leading dims > 1) with a -2 dim that is NOT a multiple of 32. Each slice is
+        # padded to a whole number of tiles independently, so growing the tile height (e.g. 16->32)
+        # must pad every slice's boundary tile — not just append zeros once at the end of the
+        # flattened tensor. These cases exercise that per-slice padding/truncation.
+        ([1, 4, 48, 128], None),
+        ([1, 8, 16, 64], None),
+        ([2, 3, 80, 96], None),
         # Sharded input/output (invokes the sharded retile factory).
         ([1, 1, 32, 1024], ttnn.TensorMemoryLayout.WIDTH_SHARDED),
         ([1, 1, 1024, 32], ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
@@ -1016,7 +1023,8 @@ def test_tilize_retile(device, tensor_shape, shard_layout, input_tile_shape, out
 
     if input_tile_shape[0] == output_tile_shape[0]:
         pytest.skip("Input and output tile shapes are the same")
-
+    if dtype == ttnn.bfloat8_b and (input_tile_shape[0] < 16 or output_tile_shape[0] < 16):
+        pytest.skip("bfloat8_b tilize/untilize LLK does not support partial-face tiles (height < 16)")
     # bfloat8_b tilize/untilize LLK does not support partial-face tiles (tile height < 16): the
     # untilize/tilize half of the retile produces garbage (PCC ~0) whenever either the input or
     # output tile has a partial face. This matches the convention in test_tiny_tile.py ("blocked
@@ -1065,3 +1073,17 @@ def test_tilize_retile(device, tensor_shape, shard_layout, input_tile_shape, out
         assert_with_pcc(torch_input, ttnn.to_torch(tt_output), pcc=0.9999)
     else:
         assert_equal(torch_input, ttnn.to_torch(tt_output))
+
+    # When the output tile is taller than the input tile, the logical height may not be a whole
+    # multiple of the output tile height, so the retile pads the output up to whole output tiles.
+    # The real region is checked above (to_torch strips padding); here we additionally verify the
+    # padding rows are exactly zero by inspecting the full physical (padded) output.
+    padded_output = ttnn.from_device(tt_output).to_torch_with_padded_shape()
+    logical_h = tensor_shape[-2]
+    padded_h = padded_output.shape[-2]
+    if output_tile_shape[0] > input_tile_shape[0] and padded_h > logical_h:
+        pad_region = padded_output[..., logical_h:, :]
+        assert torch.all(pad_region == 0), (
+            f"retile height padding must be zero: input_tile={input_tile_shape}, "
+            f"output_tile={output_tile_shape}, logical_h={logical_h}, padded_h={padded_h}"
+        )
