@@ -6,6 +6,7 @@
 #include "groupnorm_program_utils.hpp"
 
 #include <bit>
+#include <cmath>
 #include <map>
 #include <string>
 #include <optional>
@@ -561,11 +562,28 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         };
     }
 
+    // Non-tile-aligned H*W correction (tt-metal #50682). When the real flattened height
+    // (logical_hw) is not a multiple of the tile height the reduction otherwise runs over the
+    // tile-padding rows. Rescale the per-group reduce scaler to divide by the real element count
+    // and pass K = padded_hw/logical_hw - 1 so the compute kernel subtracts the residual variance
+    // bias K*E[x]^2. Byte-identical when logical_hw == padded_hw.
+    const uint32_t logical_hw = static_cast<uint32_t>(a.logical_shape()[2]);
+    const uint32_t padded_hw = static_cast<uint32_t>(a.padded_shape()[2]);
+    const bool has_pad_correction = logical_hw != padded_hw;
+    const uint32_t reduce_factor_w_val = num_rows_per_batch_per_core * num_datum_row_per_group;
+    const float pad_scaler = 1.0f / std::sqrt(static_cast<float>(reduce_factor_w_val) *
+                                              static_cast<float>(logical_hw) / static_cast<float>(padded_hw));
+    const uint32_t pad_scaler_bits = std::bit_cast<uint32_t>(pad_scaler);
+    const uint32_t pad_k_bits = std::bit_cast<uint32_t>(static_cast<float>(padded_hw) / static_cast<float>(logical_hw) - 1.0f);
+
     // writer defines
     std::map<std::string, std::string> writer_defines;
     writer_defines["TILE_HW_VAL"] = std::to_string(tile_hw);
     if (negative_mask.has_value()) {
         writer_defines["FUSE_NEGATIVE_MASK"] = "1";
+    }
+    if (has_pad_correction) {
+        writer_defines["PAD_CORRECTION"] = "1";
     }
     // writer compile time args
     std::vector<uint32_t> writer_mcast_sender_compile_time_args = {
@@ -675,6 +693,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         mcast_sender_compute_compile_time_args.push_back(num_datum_row_per_group);  // num_cols_per_group
     }
     mcast_sender_compute_compile_time_args.push_back(tile_width);
+    mcast_sender_compute_compile_time_args.push_back(logical_hw);  // arg 25
+    mcast_sender_compute_compile_time_args.push_back(padded_hw);   // arg 26
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args = {
         0,
         static_cast<uint32_t>(gamma.has_value()),
@@ -709,6 +729,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         mcast_receiver_compute_compile_time_args.push_back(num_datum_row_per_group);  // num_cols_per_group
     }
     mcast_receiver_compute_compile_time_args.push_back(tile_width);
+    mcast_receiver_compute_compile_time_args.push_back(logical_hw);  // arg 25
+    mcast_receiver_compute_compile_time_args.push_back(padded_hw);   // arg 26
     // compute kernel
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -1104,6 +1126,23 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         }}},
     });
 
+    // Non-tile-aligned H*W correction scalars/scratch (tt-metal #50682): cb_k (c_18) holds the
+    // K scalar written by the writer; cb_msq (c_19) and cb_kmsq (c_20) are single-tile scratch
+    // used by the compute kernel. Only allocated when the flattened height is not tile-aligned.
+    if (has_pad_correction) {
+        for (uint32_t pad_cb_index : {tt::CBIndex::c_18, tt::CBIndex::c_19, tt::CBIndex::c_20}) {
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = single_tile_size,
+                .core_ranges = all_cores,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(pad_cb_index),
+                    .data_format = cb_data_format,
+                    .page_size = single_tile_size,
+                }}},
+            });
+        }
+    }
+
     // Runtime Args
     uint32_t eps_u = std::bit_cast<uint32_t>(eps);
 
@@ -1254,6 +1293,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         writer_mcast_sender_args.push_back(gamma_tile_start_id);
         writer_mcast_sender_args.push_back(beta_tile_start_id);
         writer_mcast_sender_args.push_back(input_mask_tile_start_id);
+        // args 8, 9: non-tile-aligned H*W correction scalars (only read when PAD_CORRECTION).
+        writer_mcast_sender_args.push_back(pad_scaler_bits);
+        writer_mcast_sender_args.push_back(pad_k_bits);
         writer_desc.emplace_runtime_args(core, writer_mcast_sender_args);
 
         if (gamma.has_value()) {

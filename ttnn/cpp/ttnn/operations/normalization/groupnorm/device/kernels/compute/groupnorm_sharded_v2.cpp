@@ -54,6 +54,16 @@ void kernel_main() {
     constexpr uint32_t group_row_offset = get_compile_time_arg_val(23);
     constexpr uint32_t tile_width = get_compile_time_arg_val(24);
 
+    // Non-tile-aligned H*W correction (tt-metal #50682): real vs tile-padded flattened height.
+    // When padded_hw > logical_hw the reduction ran over padded (zero) rows; the writer rescales
+    // the reduce scaler to divide by the real count, and the variance carries a residual bias of
+    // K*E[x]^2 per group (K = padded_hw/logical_hw - 1) which is subtracted at the rsqrt step.
+    // Because the sharded kernel consumes the mean (cb_ex_global) during centering, K*E[x]^2 is
+    // computed up front (before centering) and stashed in cb_kmsq. Skipped when tile-aligned.
+    constexpr uint32_t logical_hw = get_compile_time_arg_val(25);
+    constexpr uint32_t padded_hw = get_compile_time_arg_val(26);
+    constexpr bool has_pad_correction = padded_hw != logical_hw;
+
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
     constexpr uint32_t tile_w_minux_group_size = tile_width - num_cols_per_group;
@@ -82,6 +92,13 @@ void kernel_main() {
     constexpr uint32_t cb_ex_global_id = num_cores_per_mcast_group == 1 ? cb_ex_partial_id : tt::CBIndex::c_15;
     constexpr uint32_t cb_ex2pe_id = tt::CBIndex::c_17;
     constexpr uint32_t cb_ones_id = tt::CBIndex::c_26;
+
+    // Non-tile-aligned H*W correction CBs (only used when has_pad_correction).
+    // cb_k: K scalar (written by the writer). cb_msq: transient E[x]^2 scratch.
+    // cb_kmsq: K*E[x]^2, produced before centering and consumed at the rsqrt step.
+    constexpr uint32_t cb_k_id = tt::CBIndex::c_18;
+    constexpr uint32_t cb_msq_id = tt::CBIndex::c_19;
+    constexpr uint32_t cb_kmsq_id = tt::CBIndex::c_20;
 
     // output cb
     constexpr uint32_t cb_out0_id = tt::CBIndex::c_16;
@@ -168,6 +185,9 @@ void kernel_main() {
     CircularBuffer cb_scaler(cb_scaler_id);
     CircularBuffer cb_scaler_global(cb_scaler_global_id);
     CircularBuffer cb_x(cb_x_id);
+    CircularBuffer cb_k(cb_k_id);
+    CircularBuffer cb_msq(cb_msq_id);
+    CircularBuffer cb_kmsq(cb_kmsq_id);
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
@@ -293,10 +313,39 @@ void kernel_main() {
                 cb_ex.reserve_back(1);
                 cb_ex.push_back(1);
             }
+            cb_ex_global.wait_front(1);
+
+            // Non-tile-aligned H*W (tt-metal #50682): the sharded kernel consumes the mean
+            // (cb_ex_global) during centering below, so compute and stash K*E[x]^2 now, while
+            // cb_ex_global still holds E[x]. It is subtracted from the variance at the rsqrt step.
+            if constexpr (has_pad_correction) {
+                cb_k.wait_front(1);
+                // cb_msq = E[x]^2
+                cb_msq.reserve_back(1);
+                tile_regs_acquire();
+                mul_tiles_init(cb_ex_global_id, cb_ex_global_id);
+                mul_tiles(cb_ex_global_id, cb_ex_global_id, 0, 0, dst0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(dst0, cb_msq_id);
+                tile_regs_release();
+                cb_msq.push_back(1);
+                // cb_kmsq = K * E[x]^2 (persists until the rsqrt step)
+                cb_msq.wait_front(1);
+                cb_kmsq.reserve_back(1);
+                tile_regs_acquire();
+                mul_tiles_init(cb_msq_id, cb_k_id);
+                mul_tiles(cb_msq_id, cb_k_id, 0, 0, dst0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(dst0, cb_kmsq_id);
+                tile_regs_release();
+                cb_msq.pop_front(1);
+                cb_kmsq.push_back(1);
+            }
+
             // x - E[x]
             sub_tiles_bcast_scalar_init_short(cb_x_id, cb_ex_global_id);
-
-            cb_ex_global.wait_front(1);
             for (uint32_t i = 0; i < block_h; i++) {
                 index_subblock_w_offset = 0;
                 for (uint32_t j = 0; j < num_subblocks_w; j++) {
@@ -404,10 +453,28 @@ void kernel_main() {
             cb_ex_global.wait_front(1);
             cb_ex2pe.reserve_back(1);
 
+            // Non-tile-aligned H*W: Var := Var - K*E[x]^2 (staged into cb_msq). Byte-identical
+            // for tile-aligned inputs, where (Var + eps) reads cb_ex_global unchanged.
+            constexpr uint32_t cb_var_src_id = has_pad_correction ? cb_msq_id : cb_ex_global_id;
+            if constexpr (has_pad_correction) {
+                cb_kmsq.wait_front(1);
+                cb_msq.reserve_back(1);
+                tile_regs_acquire();
+                sub_tiles_init(cb_ex_global_id, cb_kmsq_id);
+                sub_tiles(cb_ex_global_id, cb_kmsq_id, 0, 0, dst0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(dst0, cb_msq_id);
+                tile_regs_release();
+                cb_kmsq.pop_front(1);
+                cb_msq.push_back(1);
+                cb_msq.wait_front(1);
+            }
+
             // (Var + eps)
             tile_regs_acquire();
-            add_tiles_init(cb_ex_global_id, cb_eps_id);
-            add_tiles(cb_ex_global_id, cb_eps_id, 0, 0, dst0);
+            add_tiles_init(cb_var_src_id, cb_eps_id);
+            add_tiles(cb_var_src_id, cb_eps_id, 0, 0, dst0);
             // 1/[sqrt(Var + eps)]
             rsqrt_tile_init<true>();
             rsqrt_tile<true>(dst0);
@@ -417,6 +484,9 @@ void kernel_main() {
             tile_regs_release();
             cb_ex2pe.push_back(1);
             cb_ex_global.pop_front(1);
+            if constexpr (has_pad_correction) {
+                cb_msq.pop_front(1);
+            }
             //  (x - Ex) * 1/[sqrt(Var + eps)]
             index_h_offset = 0;
             mul_tiles_bcast_scalar_init_short(cb_x_id, cb_ex2pe_id);
