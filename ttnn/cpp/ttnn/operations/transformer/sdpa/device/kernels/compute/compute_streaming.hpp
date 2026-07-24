@@ -2303,7 +2303,11 @@ void sdpa_ring_v2(
     // 0 maps to GLOBAL Q frame `q_frame_offset`. Compute must use the GLOBAL index when
     // looking up `frame_allow_words` (which is a broadcast global table) and when indexing
     // the per-Q-frame counters above. Zero for non-sharded / non-sparse paths.
-    const uint32_t q_frame_offset = 0) {
+    const uint32_t q_frame_offset = 0,
+    // Reverse-bisection runtime bitmask. See ring_joint_sdpa.cpp for bit meanings.
+    // 0 = all sparse code paths runtime-disabled (dense-equivalent behavior with sparse
+    // binary in place). 0x1F = all enabled (production behavior).
+    const uint32_t sparse_feature_mask = 0x1Fu) {
     init_sdpa_streaming_semaphores();
 
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -2431,6 +2435,10 @@ void sdpa_ring_v2(
     // also skipped and we return true without draining. Otherwise reader pushed → drain.
     auto try_skip_sparse_frames = [&](uint32_t k_chunk, uint32_t q_frame_for_chunk, bool kv_chunk_is_joint) -> bool {
         if constexpr (sparse_frames_enabled) {
+            // Feature bit 2: gate the try_skip lambda body (aggregate check + drain)
+            if (!(sparse_feature_mask & (1u << 2))) {
+                return false;
+            }
             if (kv_chunk_is_joint) {
                 return false;  // joint K is always attended (no frame semantics)
             }
@@ -2528,7 +2536,8 @@ void sdpa_ring_v2(
                 }
             }
             if constexpr (sparse_frames_enabled) {
-                if (!is_joint) {
+                // Feature bit 0: pre-scan bit check
+                if ((sparse_feature_mask & 1u) && !is_joint) {
                     const uint32_t k_global = local_padded_Nt * ring_id + k * Sk_chunk_t;
                     const uint32_t k_frame = k_global / frame_seqlen_tiles;
                     const uint32_t bit_idx = q_frame_for_this_chunk * num_frames_padded_compile + k_frame;
@@ -2555,7 +2564,8 @@ void sdpa_ring_v2(
         // have pushed K/V for chunks this specific Q chunk doesn't attend — we must drain those.
         if constexpr (sparse_frames_enabled) {
             WAYPOINT("CZWC");
-            if (per_q_valid_kv == 0) {
+            // Feature bit 3: gate the zero-work fast path body
+            if ((sparse_feature_mask & (1u << 3)) && per_q_valid_kv == 0) {
                 // Drain any k_chunks reader pushed. Aggregate = union of shard's q_frame rows;
                 // reader pushed if ANY q_frame in shard attends this k_frame. Since this q_chunk
                 // has per_q_valid_kv==0, we drain (not process) every pushed chunk.
@@ -2668,15 +2678,19 @@ void sdpa_ring_v2(
             // (same total for every work item mapping to that frame).
             bool is_first;
             bool is_last_k_of_last_ring_iter;
-            // DEBUG: force dense flags + suppress the counter increment to test whether the
-            // 360-slot on-stack array or its bookkeeping is the deadlock cause. Combined with
-            // the shrunk `q_work_item_processed[1]` in ring_joint_sdpa.cpp, this removes all
-            // stack pressure from the sparse counter path.
             if constexpr (sparse_frames_enabled) {
-                (void)q_work_item_processed;
-                (void)q_frame_total_processed;
-                is_first = is_first_kv_for_this_q && (KV_chunks_processed == 1);
-                is_last_k_of_last_ring_iter = is_last_ring_iter && is_last_k;
+                // Feature bit 4: use counter-based flags (else fall back to dense flags).
+                if (sparse_feature_mask & (1u << 4)) {
+                    q_work_item_processed[q]++;
+                    is_first = (q_work_item_processed[q] == 1);
+                    is_last_k_of_last_ring_iter =
+                        (q_work_item_processed[q] == q_frame_total_processed[q_frame_for_this_chunk]);
+                } else {
+                    (void)q_work_item_processed;
+                    (void)q_frame_total_processed;
+                    is_first = is_first_kv_for_this_q && (KV_chunks_processed == 1);
+                    is_last_k_of_last_ring_iter = is_last_ring_iter && is_last_k;
+                }
             } else {
                 is_first = is_first_kv_for_this_q && (KV_chunks_processed == 1);
                 is_last_k_of_last_ring_iter = is_last_ring_iter && is_last_k;

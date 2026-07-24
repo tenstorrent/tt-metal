@@ -139,6 +139,13 @@ void kernel_main() {
     for (uint32_t w = 0; w < 32; ++w) {
         frame_allow_words[w] = get_arg_val<uint32_t>(argidx++);
     }
+    // Sparse feature bitmask (runtime): reverse-bisection knob. Each bit gates one sparse
+    // code path. bit 0 = pre-scan check, 1 = q_frame_total_processed populate, 2 = try_skip
+    // lambda, 3 = zero-work fast path, 4 = counter-based is_first/is_last (else dense flags).
+    // Set to 0 to get dense-equivalent runtime behavior with sparse binary in place; add
+    // bits to enable pieces one at a time. Default from host: 0x1F (all enabled = current
+    // production behavior).
+    const uint32_t sparse_feature_mask = get_arg_val<uint32_t>(argidx++);
 
     RingSDPAOpIndexer fused_op_indexer(
         ring_size_runtime, ring_index_runtime, forward_writes_expected, backward_writes_expected);
@@ -238,31 +245,26 @@ void kernel_main() {
     // q_work_item_processed is indexed by work-item id (bounded by B * NH * num_q_chunks; all
     // three are compile-time constants above).
     constexpr uint32_t nf_pad_arr = num_frames_padded_compile > 0 ? num_frames_padded_compile : 1;
-    // DEBUG: shrink arrays to test TRISC stack-overflow hypothesis. Combined with the dense-
-    // flag override in compute_streaming.hpp, the counter is never read; the size-1 dummy is
-    // just to keep the pointer non-null and the increment site well-defined. If sparse_allow_all
-    // passes with these shrunk, the deadlock is from stack overflow.
-    constexpr uint32_t work_items_arr = 1;
+    constexpr uint32_t work_items_arr = B * NH * num_q_chunks;
     uint32_t q_frame_total_processed[nf_pad_arr] = {};
     uint32_t q_work_item_processed[work_items_arr] = {};
     uint32_t q_frame_offset = 0;
     if constexpr (sparse_frames_enabled) {
-        // Both divisions are guaranteed non-zero here: sparse_frames_enabled implies frame_seqlen
-        // (tokens) is set and tile-aligned (TT_FATAL in device_operation.cpp), so frame_seqlen_tiles
-        // > 0 and Sk_chunk_t > 0. Left non-constexpr so GCC doesn't parse-time-evaluate the division
-        // in the sparse-disabled build (where frame_seqlen_tiles is 0 as a compile-time arg).
-        const uint32_t q_frames_per_shard = q_local_padded_Nt / frame_seqlen_tiles;
-        q_frame_offset = ring_index * q_frames_per_shard;
-        const uint32_t chunks_per_frame = frame_seqlen_tiles / Sk_chunk_t;
-        for (uint32_t qf = 0; qf < num_frames_padded_compile; ++qf) {
-            uint32_t allowed_k_frames = 0;
-            for (uint32_t kf = 0; kf < num_frames_padded_compile; ++kf) {
-                const uint32_t bit_idx = qf * num_frames_padded_compile + kf;
-                if ((frame_allow_words[bit_idx >> 5] >> (bit_idx & 31)) & 1u) {
-                    allowed_k_frames++;
+        // Feature bit 1: gate the total-array population (nested 24×24 bit scan + writes).
+        if (sparse_feature_mask & (1u << 1)) {
+            const uint32_t q_frames_per_shard = q_local_padded_Nt / frame_seqlen_tiles;
+            q_frame_offset = ring_index * q_frames_per_shard;
+            const uint32_t chunks_per_frame = frame_seqlen_tiles / Sk_chunk_t;
+            for (uint32_t qf = 0; qf < num_frames_padded_compile; ++qf) {
+                uint32_t allowed_k_frames = 0;
+                for (uint32_t kf = 0; kf < num_frames_padded_compile; ++kf) {
+                    const uint32_t bit_idx = qf * num_frames_padded_compile + kf;
+                    if ((frame_allow_words[bit_idx >> 5] >> (bit_idx & 31)) & 1u) {
+                        allowed_k_frames++;
+                    }
                 }
+                q_frame_total_processed[qf] = allowed_k_frames * chunks_per_frame;
             }
-            q_frame_total_processed[qf] = allowed_k_frames * chunks_per_frame;
         }
     }
 
@@ -417,7 +419,8 @@ void kernel_main() {
                 frame_allow_words,
                 q_frame_total_processed,
                 q_work_item_processed,
-                q_frame_offset);
+                q_frame_offset,
+                sparse_feature_mask);
         } else {
             assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();
             sdpa_ring<

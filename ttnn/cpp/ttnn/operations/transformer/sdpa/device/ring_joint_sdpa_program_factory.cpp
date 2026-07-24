@@ -13,6 +13,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 #include <optional>
 #include <cmath>
@@ -2436,6 +2437,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 (sparse_frames_enabled && w < args.frame_allow_packed.size()) ? args.frame_allow_packed[w] : 0u;
             compute_args.push_back(word);
         }
+        // Sparse feature bitmask (reverse-bisection knob). Overridden by env var
+        // TT_SPARSE_FEATURE_MASK if set; default 0x1F (all bits set = production behavior).
+        // Bit 0: pre-scan check; 1: q_frame_total_processed populate; 2: try_skip lambda;
+        // 3: zero-work fast path; 4: counter-based is_first/is_last.
+        uint32_t sparse_feature_mask = 0x1Fu;
+        if (const char* env = std::getenv("TT_SPARSE_FEATURE_MASK")) {
+            sparse_feature_mask = static_cast<uint32_t>(std::strtoul(env, nullptr, 0));
+        }
+        compute_args.push_back(sparse_feature_mask);
         compute_kernel.emplace_runtime_args(core, compute_args.args);
     }
 
