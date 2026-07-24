@@ -17,12 +17,12 @@
 //    if the op needs an init step).
 #include "experimental/ckernel_sfpu_abs.h"
 #include "llk_sfpu/ckernel_sfpu_comp.h"
+#include "llk_sfpu/ckernel_sfpu_exp.h"
 #include "llk_sfpu/ckernel_sfpu_gelu.h"
 #include "llk_sfpu/ckernel_sfpu_negative.h"
 #include "llk_sfpu/ckernel_sfpu_square.h"
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
 #include "llk_sfpu/ckernel_sfpu_typecast.h"
-#include "sfpu/ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_relu.h"
 #include "sfpu/ckernel_sfpu_rsqrt.h"
@@ -73,7 +73,7 @@ inline constexpr bool is_zero_comp_op(SfpuType op)
  * @tparam OPERATION The SFPU operation type (compile-time `SfpuType` constant).
  * @note Pair with @ref call_unary_sfpu_operation_quasar for the calculate step.
  */
-template <SfpuType OPERATION>
+template <SfpuType OPERATION, bool APPROX = false>
 void init_unary_sfpu_operation_quasar()
 {
     if constexpr (OPERATION == SfpuType::gelu)
@@ -160,7 +160,7 @@ void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_fo
  *        @ref call_zero_comp_operation_quasar), float-only ops ignore it.
  * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for the same op.
  */
-template <SfpuType OPERATION, bool is_fp32_dest_acc_en, int ITERATIONS = SFPU_ITERATIONS>
+template <SfpuType OPERATION, bool is_fp32_dest_acc_en, bool APPROX = false, int ITERATIONS = SFPU_ITERATIONS>
 void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_format = DataFormat::Float32)
 {
     if constexpr (OPERATION == SfpuType::abs)
@@ -169,7 +169,8 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     }
     else if constexpr (OPERATION == SfpuType::exponential)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_exp_<true /* APPROX */, ITERATIONS>, dst_index);
+        _llk_math_eltwise_unary_sfpu_params_(
+            calculate_exponential<APPROX, is_fp32_dest_acc_en, false, ITERATIONS>, dst_index, VectorMode::RC, p_sfpu::kCONST_1_FP16B);
     }
     else if constexpr (OPERATION == SfpuType::gelu)
     {

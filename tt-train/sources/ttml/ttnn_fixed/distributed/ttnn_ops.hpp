@@ -13,6 +13,14 @@ ttnn::Tensor all_reduce(const ttnn::Tensor& tensor, const std::optional<uint32_t
 ttnn::Tensor reduce_scatter(
     const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis = std::nullopt);
 
+// Local, communication-free per-device shard extraction along `dim` on `cluster_axis`.
+// Each device slices out its own `size(dim) / axis_size` partition based on its mesh
+// coordinate — the inverse of all_gather with NO collective. Only correct/meaningful
+// when the input is replicated across `cluster_axis`; requires `dim` divisible by the
+// axis size and tile-aligned in TILE layout.
+ttnn::Tensor mesh_partition(
+    const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis = std::nullopt);
+
 /**
  * Direction for ring shift operation.
  */
