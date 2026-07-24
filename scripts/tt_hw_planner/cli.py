@@ -1691,10 +1691,12 @@ def _enforce_backend_match_quality_or_abort(
     model_type = ""
     pipeline_tag = None
     architectures = None
+    is_encoder_decoder = None
     try:
         model_type = str(probe.raw_config.get("model_type") or "")
         pipeline_tag = getattr(probe, "pipeline_tag", None)
         architectures = probe.raw_config.get("architectures") or None
+        is_encoder_decoder = probe.raw_config.get("is_encoder_decoder")
     except Exception:
         pass
     from .sibling_ranker import resolve_backend_with_quality
@@ -1705,6 +1707,7 @@ def _enforce_backend_match_quality_or_abort(
         model_type=model_type,
         pipeline_tag=pipeline_tag,
         architectures=architectures,
+        is_encoder_decoder=is_encoder_decoder,
     )
     try:
         from .family_backends import rank_backends as _rank_backends

@@ -480,6 +480,7 @@ def _plan_demo_folder_scaffold(*, new_model_id: str, probe: Any) -> ScaffoldPlan
         model_type=model_type,
         pipeline_tag=pipeline_tag,
         architectures=architectures,
+        is_encoder_decoder=(probe.raw_config or {}).get("is_encoder_decoder"),
     )
     if backend is None:
         raise ColdStartScaffoldError(

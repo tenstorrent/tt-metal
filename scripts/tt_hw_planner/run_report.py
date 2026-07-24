@@ -279,6 +279,7 @@ def _emit_run_report_impl(
                 top_n=3,
                 use_llm=_use_llm,
                 components=_components,
+                is_encoder_decoder=_bs3.get("is_encoder_decoder"),
             )
             if _ranked:
                 lines.append("## Sibling candidates (ranked)")

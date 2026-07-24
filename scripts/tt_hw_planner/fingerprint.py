@@ -44,16 +44,8 @@ _MODEL_TYPE_FAMILY = {
     "seamless_m4t": ("encoder-decoder transformer", ["conformer", "vocoder"]),
     "seamless_m4t_v2": ("encoder-decoder transformer", ["conformer", "vocoder"]),
     "t5": ("encoder-decoder transformer", []),
-    "mt5": ("encoder-decoder transformer", []),
-    "longt5": ("encoder-decoder transformer", []),
     "bart": ("encoder-decoder transformer", []),
-    "mbart": ("encoder-decoder transformer", []),
-    "pegasus": ("encoder-decoder transformer", []),
-    "marian": ("encoder-decoder transformer", []),
-    "m2m_100": ("encoder-decoder transformer", []),
-    "blenderbot": ("encoder-decoder transformer", []),
     "speecht5": ("encoder-decoder transformer", ["TTS", "vocoder"]),
-    "vits": ("encoder-decoder transformer", ["TTS", "vocoder"]),
     "bert": ("encoder-only transformer", []),
     "roberta": ("encoder-only transformer", []),
     "distilbert": ("encoder-only transformer", []),
@@ -115,7 +107,7 @@ def _backbone_from_text(text: str) -> Optional[str]:
         return "encoder-decoder transformer"
     if any(k in text for k in ("resnet", "convnext", "mobilenet", "conv1d", "conv2d")):
         return "CNN/conv"
-    if any(k in text for k in ("vit", "beit", "deit", "swin", "dino")):
+    if re.search(r"\b(vit|beit|deit|swin|dino|levit|cvt|mvit|pvt|xcit)(v?\d+)?\b", text):
         return "ViT (vision transformer)"
     return None
 
@@ -127,12 +119,19 @@ def arch_descriptor(
     notes: str = "",
     components: Optional[List[dict]] = None,
     pipeline_tag: Optional[str] = None,
+    is_encoder_decoder: Optional[bool] = None,
 ) -> str:
     """Return a compact structural descriptor, e.g. 'decoder-only causal LM [MoE]' or
-    'encoder-decoder transformer [TTS, vocoder]'. Resolution order: exact HF
-    model_type table -> architectures class-name / component / notes inference. The
-    SAME function is called for the target and for every backend, so routing can
-    compare backbone-to-backbone rather than task-label-to-task-label."""
+    'encoder-decoder transformer [TTS, vocoder]'.
+
+    Resolution order is fact-first, not table-first, so a NEVER-SEEN model_type still
+    classifies without a per-model entry: (1) a small anchor table of ubiquitous
+    families (also the only signal available for config-less backends); (2) the
+    authoritative HF config flag ``is_encoder_decoder`` -- True classifies EVERY
+    seq2seq (mbart, pegasus, m2m_100, fsmt, prophetnet, led, ...) with no table
+    growth; (3) architectures class-name / module-tree / notes inference. The SAME
+    function is computed for the target and for every backend, so routing compares
+    backbone-to-backbone rather than task-label-to-task-label."""
     nmt = _norm(model_type)
     backbone: Optional[str] = None
     flags: List[str] = []
@@ -152,6 +151,8 @@ def arch_descriptor(
             ],
         )
     )
+    if backbone is None and is_encoder_decoder is True and "causal" not in text:
+        backbone = "encoder-decoder transformer"
     if backbone is None:
         backbone = _backbone_from_text(text) or "unknown"
 

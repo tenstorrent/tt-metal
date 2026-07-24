@@ -725,7 +725,11 @@ def check_compatibility(model_id: str, cfg: dict) -> CompatReport:
     if is_unknown:
         from .fingerprint import arch_descriptor
 
-        fpr = arch_descriptor(model_type=cfg.get("model_type"), architectures=cfg.get("architectures"))
+        fpr = arch_descriptor(
+            model_type=cfg.get("model_type"),
+            architectures=cfg.get("architectures"),
+            is_encoder_decoder=cfg.get("is_encoder_decoder"),
+        )
         if not fpr.startswith("decoder-only"):
             try:
                 from .discovery import discover_model

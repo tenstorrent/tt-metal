@@ -154,6 +154,7 @@ def rank_backends_llm(
     top_n: int = 3,
     det_hint: Optional[List[Tuple[FamilyBackend, int, str]]] = None,
     components: Optional[List[dict]] = None,
+    is_encoder_decoder: Optional[bool] = None,
     model: str = "sonnet",
     agent_bin: str = "claude",
     timeout_s: int = 120,
@@ -175,6 +176,7 @@ def rank_backends_llm(
         notes=notes,
         components=components,
         pipeline_tag=pipeline_tag,
+        is_encoder_decoder=is_encoder_decoder,
     )
     backend_archs = "\n".join(
         f"  - {b.name}: {arch_descriptor(model_type=(b.model_type_keys or [None])[0], notes=b.notes, pipeline_tag=(b.pipeline_tags or [None])[0])}"
@@ -278,6 +280,7 @@ def rank_siblings(
     top_n: int = 3,
     use_llm: bool = True,
     components: Optional[List[dict]] = None,
+    is_encoder_decoder: Optional[bool] = None,
     model: str = "sonnet",
     agent_bin: str = "claude",
     timeout_s: int = 120,
@@ -310,6 +313,7 @@ def rank_siblings(
             top_n=max(top_n, len(det)),
             det_hint=[t for t in det if t[1] >= 90],
             components=components,
+            is_encoder_decoder=is_encoder_decoder,
             model=model,
             agent_bin=agent_bin,
             timeout_s=timeout_s,
@@ -341,6 +345,7 @@ def resolve_backend_with_quality(
     notes: str = "",
     use_llm: Optional[bool] = None,
     components: Optional[List[dict]] = None,
+    is_encoder_decoder: Optional[bool] = None,
     model: str = "sonnet",
     agent_bin: str = "claude",
     timeout_s: int = 120,
@@ -379,6 +384,7 @@ def resolve_backend_with_quality(
             top_n=3,
             use_llm=True,
             components=components,
+            is_encoder_decoder=is_encoder_decoder,
             model=model,
             agent_bin=agent_bin,
             timeout_s=timeout_s,

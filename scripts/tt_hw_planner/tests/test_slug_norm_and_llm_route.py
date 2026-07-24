@@ -343,15 +343,29 @@ def test_arch_fingerprint_backbone_families():
     # vision transformers (incl. all DINO variants) infer as ViT from class-name text
     assert arch_descriptor(model_type="dinov2", architectures=["Dinov2Model"]).startswith("ViT")
     assert arch_descriptor(model_type="resnet", architectures=["ResNetForImageClassification"]).startswith("CNN")
-    # 'vits' (a TTS model_type) must NOT substring-match the 'vit' vision keyword
-    assert arch_descriptor(model_type="vits", architectures=["VitsModel"]).startswith("encoder-decoder")
+    # 'vits' (a TTS model_type) must NOT substring-match the 'vit' vision keyword;
+    # the vision inference is a delimited-token regex, so vits reads honest 'unknown'
     assert "ViT" not in arch_descriptor(model_type="vits", architectures=["VitsModel"])
-    # real vision transformers still classify as ViT (no regression from the vits guard)
+    # real vision transformers (incl. versioned variants) still classify as ViT
     assert arch_descriptor(model_type="vit", architectures=["ViTForImageClassification"]).startswith("ViT")
     assert arch_descriptor(model_type="swinv2", architectures=["Swinv2Model"]).startswith("ViT")
-    # classic seq2seq model_types classify as encoder-decoder (not bare-suffix 'unknown')
-    for _mt in ("mbart", "pegasus", "m2m_100", "marian", "mt5"):
-        assert arch_descriptor(model_type=_mt).startswith("encoder-decoder"), _mt
+    assert arch_descriptor(model_type="dinov2", architectures=["Dinov2Model"]).startswith("ViT")
+
+
+def test_seq2seq_classified_by_config_fact_not_table():
+    # GENERALIZATION GUARD: seq2seq is classified by the authoritative HF config flag
+    # is_encoder_decoder, NOT a per-model_type table -- so model_types that are NOT in
+    # the anchor table (and ones the tool has never seen) still classify correctly.
+    from scripts.tt_hw_planner.fingerprint import arch_descriptor, _MODEL_TYPE_FAMILY
+
+    for mt in ("mbart", "pegasus", "m2m_100", "marian", "fsmt", "prophetnet", "led", "zzz_new_s2s"):
+        assert mt not in _MODEL_TYPE_FAMILY, f"{mt} should NOT be table-patched"
+        assert arch_descriptor(model_type=mt, is_encoder_decoder=True).startswith("encoder-decoder"), mt
+    # the flag only forces enc-dec on a positive fact; a causal model is untouched
+    assert arch_descriptor(model_type="qwen2", architectures=["Qwen2ForCausalLM"]).startswith("decoder-only")
+    assert arch_descriptor(
+        model_type="newthing", architectures=["NewThingForCausalLM"], is_encoder_decoder=False
+    ).startswith("decoder-only")
 
 
 def test_arch_class_disambiguates_shared_model_type():

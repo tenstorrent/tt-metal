@@ -438,6 +438,7 @@ def _prepare_non_text_family(
         model_type=model_type,
         pipeline_tag=pipeline_tag,
         architectures=architectures,
+        is_encoder_decoder=(probe.raw_config or {}).get("is_encoder_decoder") if probe.raw_config else None,
     )
     if backend is None:
         raise BringupError(
