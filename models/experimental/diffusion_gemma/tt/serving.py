@@ -225,7 +225,12 @@ class BlockDiffusionServingSession:
             )
         if self.gumbel_mode == "host":
             return make_seeded_host_gumbel_noise_fn(
-                mesh_device, batch=1, canvas_len=self.canvas_length, vocab_size=self.vocab_size, seed=gumbel_seed
+                mesh_device,
+                batch=1,
+                canvas_len=self.canvas_length,
+                vocab_size=self.vocab_size,
+                seed=gumbel_seed,
+                num_steps=self.config.max_denoise_steps,
             )
         return make_seeded_gumbel_noise_fn(
             mesh_device,

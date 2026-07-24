@@ -451,7 +451,12 @@ class UpfrontTracedDenoiseController:
                 self._refresh_gumbel(gumbel_noise_fn, step)
                 self._refresh_noise(noise_tokens_fn, step)
             ttnn.execute_trace(self.mesh, trace_id, blocking=False)
-            ttnn.synchronize_device(self.mesh)
+            # No explicit device drain here: read_halt_scalars enqueues its ttnn.to_torch
+            # reads on the same CQ0 after the trace and blocks the host until they land, so
+            # the halt scalars already reflect this step's completed trace, and the next
+            # step's ttnn.copy into gumbel_buf/noise_buf is CQ0-ordered after the trace's
+            # read of those buffers. A per-step synchronize_device is therefore redundant
+            # and only forecloses host/device overlap (host Gumbel prefetch).
             self.execute_trace_calls += 1
             self.halt_checks += 1
             steps_run = step + 1
