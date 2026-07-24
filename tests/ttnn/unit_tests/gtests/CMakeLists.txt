@@ -159,10 +159,12 @@ target_link_libraries(
 )
 
 # unit_tests_ttnn_emitc
-
-add_executable(unit_tests_ttnn_emitc)
-target_sources(unit_tests_ttnn_emitc PRIVATE ${UNIT_TESTS_TTNN_EMITC_SOURCES})
-setup_ttnn_test_target(unit_tests_ttnn_emitc)
+# Disabled on this branch: its only source (emitc/test_sanity.cpp -> emitc.hpp)
+# references nuked ops (conv_transpose2d, permute, slice, softmax). An executable
+# with no sources fails to configure, so the target is removed rather than emptied.
+# add_executable(unit_tests_ttnn_emitc)
+# target_sources(unit_tests_ttnn_emitc PRIVATE ${UNIT_TESTS_TTNN_EMITC_SOURCES})
+# setup_ttnn_test_target(unit_tests_ttnn_emitc)
 
 if(TT_METAL_USE_EMULE)
     target_link_options(unit_tests_ttnn PRIVATE -rdynamic)
