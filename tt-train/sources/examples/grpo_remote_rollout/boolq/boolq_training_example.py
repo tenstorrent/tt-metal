@@ -21,19 +21,19 @@ from loguru import logger
 from transformers import AutoTokenizer
 from utils.weight_bridge import TTML_RANK, TTT_RANK
 
+CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1b_remote_rollout.yaml"
+
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _EXAMPLE_ROOT = os.path.dirname(_THIS_DIR)
 if _EXAMPLE_ROOT not in sys.path:
     sys.path.insert(0, _EXAMPLE_ROOT)
 
+REPO_ROOT = Path(__file__).resolve().parents[5]
+
 # Pin FABRIC_2D on both ranks before any device opens; otherwise TTT's
 # open_mesh_device auto-escalates to FABRIC_1D and the mismatch deadlocks the
 # cross-rank fabric init.
 ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
-
-CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1b_remote_rollout.yaml"
-
-REPO_ROOT = Path(__file__).resolve().parents[5]
 
 
 def _boolq_reward(completions, answer, **kwargs):
