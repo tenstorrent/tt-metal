@@ -35,6 +35,16 @@ HEIGHT_SHARDED_NON_TILE_ALIGNED_SHAPES = [
     (1, 256, 1, 100, 32),  # H*W=100 -> padded 128 (21.9% padding)
 ]
 
+# Block-sharded (v2) non-tile-aligned cases (tt-metal #50682). grid_x splits the padded H*W
+# tile count and must divide it; grid_y splits channels. H*W=100 -> padded 128 = 4 tiles, so
+# grid_x in {1, 2, 4} keeps each M-shard tile-aligned. grid_x > 1 exercises the multi-core
+# M-split, where the tile-padding tail lands on the last M-core only.
+# (N, C, H, W, num_groups, grid_y, grid_x)
+BLOCK_SHARDED_NON_TILE_ALIGNED_CASES = [
+    (1, 256, 1, 100, 32, 2, 1),  # channel split only, single M-core
+    (1, 256, 1, 100, 32, 2, 2),  # multi-core M-split: 4 tiles across 2 x-cores, padding on last
+]
+
 BLOCK_SHARDED_V2_8X4_SHAPES = [
     (1, 1280, 16, 16, 32),
     (1, 320, 1, 8192, 32),
@@ -307,6 +317,82 @@ def test_group_norm_height_sharded_non_tile_aligned(device, N, C, H, W, num_grou
 
     max_abs_err = (output_tensor.float() - torch_output_tensor.float()).abs().max().item()
     logger.info(f"sharded non-tile-aligned H*W={W * H} max_abs_err={max_abs_err}")
+    assert max_abs_err < 0.08, f"max abs error {max_abs_err} too high for non-tile-aligned H*W={W * H} (see #50682)"
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups, grid_y, grid_x", BLOCK_SHARDED_NON_TILE_ALIGNED_CASES)
+def test_group_norm_block_sharded_non_tile_aligned(device, N, C, H, W, num_groups, grid_y, grid_x):
+    # Regression for tt-metal #50682 on the block-sharded two-pass path with a non-tile-aligned
+    # flattened height. grid_x > 1 splits the padded H*W across M-cores (padding tail on the
+    # last M-core), exercising the multi-core sharded correction.
+    torch.manual_seed(0)
+    if device.core_grid.x < grid_x or device.core_grid.y < grid_y:
+        pytest.skip(f"device grid too small for {grid_x}x{grid_y}")
+
+    assert (N * H * W) % 32 != 0, "shape must be non-tile-aligned to exercise the fix"
+    padded_hw = ((N * H * W + 31) // 32) * 32
+    assert (padded_hw // 32) % grid_x == 0, "padded H*W tiles must be divisible by grid_x"
+    grid_size = ttnn.CoreGrid(y=grid_y, x=grid_x)
+
+    torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.group_norm(
+        torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias, eps=1e-12
+    )
+    torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    input_tensor = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    input_tensor = ttnn.tilize_with_zero_padding(input_tensor, use_multicore=True)
+
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y, ttnn.DataType.BFLOAT8_B)
+    input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
+
+    gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, grid_size.y)
+    beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, grid_size.y)
+    gamma_t = ttnn.from_torch(
+        gamma, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    beta_t = ttnn.from_torch(
+        beta, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_shape = padded_hw // grid_size.x, C // grid_size.y
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    input_tensor = ttnn.to_memory_config(input_tensor, sharded_mem_config)
+
+    output_tensor = ttnn.group_norm(
+        input_tensor,
+        num_groups=num_groups,
+        input_mask=input_mask_tensor,
+        weight=gamma_t,
+        bias=beta_t,
+        memory_config=sharded_mem_config,
+        core_grid=grid_size,
+        output_layout=ttnn.TILE_LAYOUT,
+        inplace=False,
+        use_welford=False,
+    )
+    output_tensor = ttnn.to_memory_config(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor))
+
+    max_abs_err = (output_tensor.float() - torch_output_tensor.float()).abs().max().item()
+    logger.info(f"block-sharded non-tile-aligned H*W={W * H} grid={grid_x}x{grid_y} max_abs_err={max_abs_err}")
     assert max_abs_err < 0.08, f"max abs error {max_abs_err} too high for non-tile-aligned H*W={W * H} (see #50682)"
 
 
