@@ -45,6 +45,12 @@ implementation and proof target remain deliberately narrow:
   adjacency, so bare Z identifies one neighbor directly. Parallel physical lanes that realize that
   same logical edge are allowed; routing generation rejects multiple logical express edges or
   neighbors. Future support requires a richer output identity and the extension process in §10.
+- **V1 traffic scope is unicast:** the route oracle, representation, and multicast safety argument
+  below cover both unicast and multicast, but express-enabled meshes ship unicast only in V1. A
+  canonical multicast root may select more than one Y output, so reaching every root subtree
+  requires the worker to hold one fabric connection per canonical root output. That source
+  multi-inject path and the client migration it implies are follow-on work; §9.5 records the
+  boundary. Non-express 2D multicast is unaffected by this scope.
 - **VC scope:** same-mesh cardinal and express traffic uses VC0; no new VC is introduced for express
   routing or multicast. A packet that has crossed an intermesh boundary remains on VC1 while
   traversing cardinal or express links in later meshes. Optional existing VC2 behavior remains
@@ -124,6 +130,7 @@ cardinal destination-vector suffix sweep  validated model result
 [32,4] VC0 domain-effect→sender sweep      required validation; not yet run
 VC0 unicast + multicast reduction          complete paper proof
 ControlPlane / RT-gen route setup, builder, packet, kernel    specified, not implemented
+express multicast source injection         deferred; V1 express traffic scope is unicast (§9.5)
 VC1 current two-link, predominantly linear envelope  retained operational scope; no all-pattern claim
 VC1 arbitrary multi-mesh traffic                    BFC decision and safety proof open
 ```
@@ -147,13 +154,11 @@ Ownership is normative:
   ControlPlane state, setup checks, and handoffs to downstream consumers. It implements this
   assessment's route policy rather than defining another oracle.
 - **`GALAXY_BUILDER_ROUTING_CONFIG_CONTRACT.md`** owns the ControlPlane↔FabricBuilder surface,
-  local-effect derivation, wiring, channel/queue allocation, BFC compile-time flags, and U-turn
-  sender realization.
+  local-effect derivation, wiring, channel/queue allocation, and BFC compile-time flags.
 - **`GALAXY_DEVICE_ROUTE_CODEC_CONTRACT.md`** owns L1/device route artifacts, packet/header ABI,
-  encode/load/decode semantics, multicast encoding, and source fanout/reroot overlay.
+  encode/load/decode semantics, multicast encoding, and source injection requirements.
 - **`GALAXY_DEVICE_ROUTER_KERNEL_CONTRACT.md`** owns ERISC decode/admit/forward dispatch,
-  intermesh-transition execution, header-mutation retirement, sender-step BFC consumption, and
-  controlled same-link return.
+  intermesh-transition execution, header-mutation retirement, and sender-step BFC consumption.
 - **`GALAXY_WORKING_MODEL.md`** owns the physical and current-code baseline context.
 
 If a central summary conflicts with a component contract in that component's area, the component
@@ -852,7 +857,7 @@ The kernel therefore remains unaware of ring identity and does not classify N/S/
 
 The builder-facing routing configuration does not contain a builder-shaped forwarding-arc record,
 software-channel layout, canonical local-transition list, or route-occurrence effect table. The
-builder contract owns the exact local derivation, wiring, allocation, and U-turn realization.
+builder contract owns the exact local derivation, wiring, and allocation.
 
 `ComputeMeshRouterBuilder::compute_sender_channel_injection_flags_for_vc()` currently derives VC0
 turn injection mainly from cardinal axis changes. The target design replaces that heuristic with the
@@ -1548,12 +1553,11 @@ named in the last column remains authoritative for its component surface.
 | Canonical route relation used by codec/host setup | RT-gen-owned canonical logical next-hop relation with Z-visible logical hops, pinned logical coordinates/shape, suffix consistency, and row/column route uniformity from the supported homogeneous topology; ControlPlane exposes a logical next-hop or complete-route query, and may reconstruct complete `R(source,destination)` rather than storing each path | Codec setup derives destination-major vectors and performs its multicast arborescence/legality gates while deriving local-root reverse trees from the same relation | A channel-conditioned current `get_fabric_route` result is not a substitute for the canonical logical relation; a failed suffix or codec check rejects setup, with no V1 representation fallback | This assessment, §§6.5–6.6 and 8–9; `GALAXY_CONTROL_PLANE_ROUTING_GENERATION_CONTRACT.md`, §8; `GALAXY_DEVICE_ROUTE_CODEC_CONTRACT.md`, “Host generator / L1 embed / device loader (target contract)” |
 | Existing host generation / ControlPlane L1-write path | Destination-major Y/X two-bit tables; deployment-wide indexed-2D ABI selection; express feature state; pinned shape and local `(my_x,my_y)`; retained `exit_node_table` and `inter_mesh_direction_table`; per-chip reverse tree after every root passes the mesh-wide arborescence gate | Workers and landing encoders widen routes and construct packet action maps; intermesh setup retains exit/boundary behavior | Any failed root rejects reverse-tree multicast for that mesh/configuration; V1 has no alternate encoder; `intra_mesh_direction_table` becomes removable only after indexed cutover | `GALAXY_DEVICE_ROUTE_CODEC_CONTRACT.md`, “What host must provide (device-facing)” and “Loader responsibilities” |
 | Deployment/FabricContext policy → all 2D producers and consumers | One indexed-2D ABI selection plus route-buffer/header sizing for the supported dimensional bound | Worker, edge, builder, header typedefs, and kernel select one compatible ABI | Cutover is atomic across the 2D deployment; `express_routing_enabled` does not select the packet ABI | `GALAXY_DEVICE_ROUTE_CODEC_CONTRACT.md`, “Host generator / L1 embed / device loader (target contract)” and “Codec implementation checklist” |
-| Fabric connection setup → source encoder/worker | Connection direction identity: manager slot direction tag or retained raw-sender `edm_direction` | Source fanout selects the actual connected root output; reroot fallback selects its inject edge | Direction is connection metadata, not a packet field, canonical-route field, or value inferred from multicast extents | `GALAXY_DEVICE_ROUTE_CODEC_CONTRACT.md`, “Same-mesh 2D express source multi-output injection”; `GALAXY_BUILDER_ROUTING_CONFIG_CONTRACT.md`, “Same-mesh express multicast source fanout” |
-| FabricBuilder → ERISC/kernel | Concrete normal and same-link-return wiring; queue/channel allocation; `SENDER_CH_i_IS_INJECTION`; deadlock-avoidance and header/buffer compile-time arguments | Kernel performs local RX admission and applies the builder-selected BFC guard in sender-step | Every concrete sender has one guard class; capacity or ambiguous-role failure rejects builder setup | `GALAXY_BUILDER_ROUTING_CONFIG_CONTRACT.md`; `GALAXY_DEVICE_ROUTER_KERNEL_CONTRACT.md`, “BFC consumption” |
+| Fabric connection setup → source encoder/worker | Connection direction identity: manager slot direction tag or retained raw-sender `edm_direction` | The source selects its output from the connected direction; a multi-output canonical root requires one connection per root output, which is why V1 express traffic is unicast-only (§9.5) | Direction is connection metadata, not a packet field, canonical-route field, or value inferred from multicast extents | `GALAXY_DEVICE_ROUTE_CODEC_CONTRACT.md`, “Express multicast and worker connections” |
+| FabricBuilder → ERISC/kernel | Concrete wiring; queue/channel allocation; `SENDER_CH_i_IS_INJECTION`; deadlock-avoidance and header/buffer compile-time arguments | Kernel performs local RX admission and applies the builder-selected BFC guard in sender-step | Every concrete sender has one guard class; capacity or ambiguous-role failure rejects builder setup | `GALAXY_BUILDER_ROUTING_CONFIG_CONTRACT.md`; `GALAXY_DEVICE_ROUTER_KERNEL_CONTRACT.md`, “BFC consumption” |
 | Codec/loader → ERISC/kernel | Packet `route_buffer_y` / `route_buffer_x`, retained final destination/anchor and multicast extents, local coordinate indexing, multicast action maps, and packet/header ABI | Kernel decodes, atomically admits, fans out, forwards, and performs capability-aware intermesh transitions without reconstructing routes | Transit maps are immutable; codec owns byte meanings and kernel owns their execution | `GALAXY_DEVICE_ROUTE_CODEC_CONTRACT.md`; `GALAXY_DEVICE_ROUTER_KERNEL_CONTRACT.md` |
-| Intermesh transition → continued intramesh routing on VC1 | Retained final destination/anchor and multicast extents; each router's current mesh identity; retained exit/intermesh-direction state; builder-wired `INTERMESH` egress and ingress capability plus cardinal and express-Z VC1 senders; landing-installed maps | At an exit, current/final mesh inequality plus the selected intermesh egress identifies the boundary hop. After landing, current/final mesh equality distinguishes destination from intermediate behavior: an intermediate installs a unicast-style segment to its next exit, while only the destination installs final unicast or multicast maps; both continue on VC1 | No new packet intermesh mode or boundary-direction field is required. Intermediate meshes must not begin final multicast fanout; there is no VC1→VC0 crossover. The current two-link, predominantly linear operating envelope is retained; arbitrary-pattern VC1 support requires a separate VC1 CDG proof or BFC treatment, including multi-mesh pass-through | This assessment, §5.7.5 and §11; codec and kernel intermesh-transition contracts; builder VC1 contract |
+| Intermesh transition → continued intramesh routing on VC1 | Retained final destination/anchor and multicast extents; each router's current mesh identity; retained exit/intermesh-direction state; builder-wired `INTERMESH` egress and ingress capability plus cardinal and express-Z VC1 senders; landing-installed maps | A chip is this mesh's exit when its edge-facing intramesh router decodes a local-delivery-only action while the final mesh is elsewhere; the egress then comes from the retained intermesh direction table. After landing, current/final mesh equality distinguishes destination from intermediate behavior: an intermediate installs a unicast-style segment to its next exit, while only the destination installs final unicast or multicast maps; both continue on VC1 | No new packet intermesh mode or boundary-direction field is required. Mesh-id inequality alone does not identify the exit chip, since a packet may transit a boundary-capable chip toward a different exit; the codec must guarantee a local-delivery-only action at the exit. Intermediate meshes must not begin final multicast fanout; there is no VC1→VC0 crossover. The current two-link, predominantly linear operating envelope is retained; arbitrary-pattern VC1 support requires a separate VC1 CDG proof or BFC treatment, including multi-mesh pass-through | This assessment, §5.7.5 and §11; codec and kernel intermesh-transition contracts; builder VC1 contract |
 | Builder/kernel queue realization → VC0 proof premises | Role-separated sender guards; five-output atomic local fanout; at least two packet slots in each protected receiver; immediate receiver completion count | Concrete execution preserves the queue graph used by the §5.7 proof | Speedy, trimming, channel remapping, degraded routing, early-ACK credit, or another bypass may not alter the proved wait graph without a new proof | This assessment, §5.7.5; builder and kernel BFC/conformance contracts |
-| Codec + builder + kernel → same-mesh reroot fallback | Codec pre-inject overlay; builder-owned dedicated VC0 same-link sender with worker-mirror guard; kernel-controlled full-packet same-link return | Applies only to same-mesh, worker-originated indexed 2D express multicast with an N/S/Z multi-output root when not every root output has a connection and one canonical root output is connected | It excludes 1D/sparse, intermesh source/landing, and X-only traffic; canonical U-turns remain forbidden; claiming fallback support requires the reverse-tree all-roots gate, full-packet producer boundary, differential execution, queue ordering, capacity, and BFC-role conformance | This assessment, §9.5; all three component contracts in their owned areas |
 | Universal indexed-2D cutover → legacy-path retirement | All 2D producers/consumers stop writing or consuming `hop_index` / `branch_*`; both header-update paths and `UPDATE_PKT_HDR_ON_RX_CH` retire; profiler/debug decoding and host/device header layout move with the ABI | Worker, edge, builder, headers, profiler/debug tooling, and ERISC use only the indexed interpretation | No legacy/indexed pairing is valid; the deployment-wide cutover is one gate and includes non-express 2D configurations | Codec and kernel cutover contracts |
 
 For one configured fabric instance, once the applicable setup checks pass, consumers must not change
@@ -1573,7 +1577,7 @@ implementation detail from becoming a second routing contract:
 | ControlPlane → kernel | No runtime ControlPlane query; kernel receives routing behavior only through codec-installed L1/packet bytes and builder compile-time arguments/wiring | Kernel contract, “Cross-document dependencies” |
 | ControlPlane route state → all consumers | No consumer performs a second route search or changes the ring arrangement; a route, topology, CDG, representation, or physical-mapping failure rejects setup at the owning check | This assessment, §§6.1 and 7.3 |
 | Direction vs capability/effect | N/S/E/W/Z selects an output; cardinal/express/intermesh capability selects transport behavior; protected-domain effect selects BFC; “has Z” alone does not imply intermesh or injection | This assessment, §§2 and 5; builder and kernel contracts |
-| Express enable vs packet ABI | `express_routing_enabled` controls materialized express topology and associated Z/BFC/reroot artifacts; it never selects legacy versus indexed packet interpretation | Codec and builder contracts |
+| Express enable vs packet ABI | `express_routing_enabled` controls materialized express topology and associated Z/BFC artifacts; it never selects legacy versus indexed packet interpretation | Codec and builder contracts |
 | Component-private realization | Builder forwarding maps/queues/channels, codec layouts/bytes, and kernel dispatch mechanics remain owned by their component contracts and are not generic ControlPlane route facts | Authority split in §0.4 and Appendix B |
 
 Appendix A.6 may independently compute route-occurrence effects for regression testing, but that
@@ -1588,13 +1592,9 @@ sender engines:
 
 ```text
 logical sender maxima by VC       = 5 / 4 / 1
-normal logical aggregate          = 5 + 4 + 1 = 10
-required logical-channel ceiling  = 11
-normal margin                     = 11 - 10 = 1
-
-reroot logical maxima by VC       = 6 / 4 / 1
-reroot logical aggregate          = 6 + 4 + 1 = 11
-reroot margin                     = 11 - 11 = 0
+logical sender aggregate          = 5 + 4 + 1 = 10
+required logical-channel ceiling  = 10
+sender margin                     = 10 - 10 = 0
 
 receiver maxima by VC        = 1 / 1 / 1
 receiver aggregate           = 1 + 1 + 1 = 3
@@ -1602,8 +1602,11 @@ receiver ceiling             = 3
 receiver margin              = 3 - 3 = 0
 ```
 
-These are logical array-count results, not concrete allocation proof. Detailed arithmetic, wiring,
-`UTURN_REROOT`, sender/receiver layouts, and queue conformance are owned by the builder contract.
+The required aggregate matches the ceiling that current code already configures, so express routing
+does not by itself raise the global logical sender-channel count. It does change the per-VC split
+and the per-router downstream count; the builder contract owns that arithmetic. These are logical
+array-count results, not concrete allocation proof. Detailed wiring, sender/receiver layouts, and
+queue conformance are owned by the builder contract.
 
 ### 7.3 Setup checks and reference validation
 
@@ -1625,11 +1628,10 @@ Appendix A.6 defines an independent route-occurrence oracle that can compare out
 production route-generation and Builder logic. It does not prescribe a separate validation-only
 implementation path. The oracle compares route-occurrence effects with builder-local derivation and
 projection, requires zero mixed-guard aliases and zero DOR-forbidden connected arcs, and checks the
-normal VC0 maximum of five. The temporary reroot profile raises VC0 capacity to six and has its own
-producer-boundary, worker-mirror-guard, differential-execution, and queue-conformance gate.
+VC0 maximum of five.
 
-The exact builder checks, allocation rules, BFC defines, `UTURN_REROOT` wiring, and local algorithms
-are specified only in `GALAXY_BUILDER_ROUTING_CONFIG_CONTRACT.md`.
+The exact builder checks, allocation rules, BFC defines, and local algorithms are specified only in
+`GALAXY_BUILDER_ROUTING_CONFIG_CONTRACT.md`.
 
 ---
 
@@ -1737,8 +1739,8 @@ The following assessment-era sketches are rejected and are not alternate impleme
   growth, and codec §4.7 owns packet-capacity and current axis-limit work.
 
 `GALAXY_DEVICE_ROUTE_CODEC_CONTRACT.md` is authoritative for action-byte layout, dual maps, exact
-fields, sizes, loading, encode/decode semantics, multicast artifacts, and source fanout/reroot
-overlay. `GALAXY_DEVICE_ROUTER_KERNEL_CONTRACT.md` is authoritative for ERISC execution and
+fields, sizes, loading, encode/decode semantics, multicast artifacts, and source injection
+requirements. `GALAXY_DEVICE_ROUTER_KERNEL_CONTRACT.md` is authoritative for ERISC execution and
 header-mutation retirement.
 
 ---
@@ -1827,18 +1829,49 @@ Appendix A.2 retains the `992/1,984` restricted-codec counterexample result. App
 multi-context-row, and terminal-violation cases. These are assessment model results, not device
 implementation evidence.
 
-### 9.5 Source fanout and reroot boundary
+### 9.5 Source injection boundary and the V1 multicast scope
 
-Connection-manager source multi-inject is preferred when all canonical root outputs are available.
-The temporary pre-inject reroot overlay is transport-only: it does not alter the canonical route
-oracle, and canonical immediate U-turns remain forbidden.
+A transit router fans out atomically because it holds a receiver while it clones. A source worker
+has no receiver: it injects directly into one sender channel and bypasses source RX. When the
+canonical root action at the source selects more than one output, one injection therefore reaches
+only one root subtree.
 
-For the fallback, the controlled same-link return must cross a full-packet producer boundary: child
-RX commits an immutable copy and releases the incoming receiver before the dedicated sender waits on
-remote credit. That sender mirrors the corresponding worker-output BFC guard. Subject to
-differential execution and concrete queue/producer-boundary conformance, these invariants preserve the
-current VC0 proof rather than creating a new route family. Overlay construction and source fanout are
-codec-owned; sender allocation is builder-owned; same-link execution is kernel-owned.
+This is not a corner case. It occurs for one-sided requests as well as two-sided ones, whenever the
+requested extent reaches a row whose canonical route leaves the source on a different edge. From
+`Y=1` with `N=2` the target rows are `{0, 31}`, and:
+
+```text
+R(1,0)  = 1→0        N     0's paired ex4 partner is 1, so no ex4 hop precedes the crossover
+R(1,31) = 1→30→31    Z,S   31's partner is 30; ex4 reverse from position 0 to 15 is one chord hop
+```
+
+The root action is `N|Z` for what the client expressed as a single northward range.
+
+**The only sound resolution is source multi-inject:** the worker holds one fabric connection per
+canonical root output and sends one byte-identical copy through each. Because the canonical
+root-child subtrees are disjoint whenever the reverse-tree arborescence gate passes, the copies need
+no atomicity between them — a worker blocked waiting for the second connection holds no fabric
+receiver, so it cannot participate in a wait cycle. Each copy's first hop is an ordinary source
+injection already covered by §5.7.3.
+
+Single-injection alternatives were considered and rejected. Any scheme that injects on one link and
+still reaches the other root subtrees must traverse that link in both directions, because the
+canonical routes from the connected child back to targets in another subtree run through the source.
+Re-rooting the encoding at the connected child produces the identical physical reversal. Any such
+reversal adds a `e → reverse(e)` arc to the edge-level CDG, which is exactly the arc the §5.7.3
+condensation assumes absent: it either joins the two orientation views of one ring, or turns a
+bottom-stratum attachment into a resource that waits on the ring hanging off it, removing the base
+case of the bottom-up termination argument. A finite intermediate buffer does not repair this,
+because once that buffer fills the incoming protected receiver is held again, and BFC does not help
+because the ring bubble is not adjacent to the blocked packet. A separate VC does not repair it
+either, since the returned copy must cross back to launch the remaining subtrees.
+
+**V1 scope.** Express-enabled meshes therefore ship unicast only. The multicast route oracle,
+representation, and safety argument in §§9.1–9.4 remain in force and are unchanged; what is deferred
+is the source multi-inject path and the client migration that comes with it, since the existing
+single-connection worker adapters cannot express a multi-output root. Non-express 2D multicast is
+unaffected. Codec “Express multicast and worker connections” records the client-visible requirement.
+No canonical route U-turn is legal, in V1 or later.
 
 ---
 
@@ -1889,10 +1922,12 @@ Before claiming support for this target, the implementation must satisfy all of 
    receiver and no unproved trim/speedy/bypass behavior;
 5. before expanding VC1 beyond the current two-link, predominantly linear operating envelope, a
    separate VC1 dependency proof or BFC treatment exists for the broader traffic patterns;
-6. when reroot fallback is enabled, differential execution, full-packet producer-boundary,
-   worker-mirror sender-guard, and queue-ordering checks pass;
-7. one atomic indexed-ABI cutover covers producers, L1 artifacts, edge handling, and kernels—no mixed
-   legacy/indexed deployment.
+6. one atomic indexed-ABI cutover covers producers, L1 artifacts, edge handling, and kernels—no mixed
+   legacy/indexed deployment. Because that cutover is deployment-wide, it includes non-express 2D
+   configurations, so the indexed multicast encoder is required even though express traffic is
+   unicast-only in V1;
+7. express multicast is not enabled until the §9.5 source multi-inject path exists and every
+   participating client holds one connection per canonical root output.
 
 ---
 
@@ -1909,6 +1944,12 @@ legality, A.6 builder projection, and component-contract conformance. Expanding 
 restricted envelope additionally requires the §5.7.5 proof or BFC treatment. Component contracts own
 all detailed builder, codec, and kernel realization; the assessment remains authoritative for the
 route oracle, safety argument, system invariants, and validation cases.
+
+V1 express traffic is unicast. The multicast oracle and safety argument stand, but enabling
+multicast on an express mesh requires the §9.5 source multi-inject path, because a canonical
+multicast root may select more than one output and a single-connection worker cannot reach every
+root subtree. Single-injection workarounds that return a copy over the injected link are rejected:
+they add the one dependency arc the VC0 proof assumes absent.
 
 Opportunistic Z, base-32 transit, multiple express neighbors, adaptive routing, and degraded routing
 remain separate extensions and do not inherit this result.
@@ -2101,25 +2142,19 @@ logical relation by deployment guarantee.
 ### A.5 Primary `[32,4]` logical software-channel budget
 
 Enumerate the ordinary N/S, ordinary E/W, and intramesh-Z output-router variants required by the
-`[32,4]` express+XY fixture, with optional existing VC2 enabled and with/without the temporary
-source-reroot sender. These are logical firmware sender-channel slots, not physical Ethernet channels
-or TX queues. Compare the maximum count in each VC with the required target array ceilings; current
-code's software-channel ceiling 10 is an implementation gap.
+`[32,4]` express+XY fixture, with optional existing VC2 enabled. These are logical firmware
+sender-channel slots, not physical Ethernet channels or TX queues. Compare the maximum count in each
+VC with the required target array ceilings.
 
 Expected result:
 
 ```text
-normal logical maxima by VC    = 5 / 4 / 1
-normal logical-channel count   = 5 + 4 + 1
-                               = 10
+logical maxima by VC       = 5 / 4 / 1
+logical-channel count      = 5 + 4 + 1
+                           = 10
 
-fallback logical maxima by VC    = 6 / 4 / 1
-fallback logical-channel count   = 6 + 4 + 1
-                                 = 11
-
-required logical-channel ceiling = 11
-normal sender margin              = 11 - 10 = 1
-fallback sender margin            = 11 - 11 = 0
+required logical-channel ceiling = 10
+sender margin                    = 10 - 10 = 0
 
 receiver maxima by VC    = 1 / 1 / 1
 aggregate receiver count = 1 + 1 + 1
@@ -2128,6 +2163,10 @@ receiver ceiling         = 3
 receiver margin          = 3 - 3
                          = 0
 ```
+
+The aggregate equals the ceiling current code already configures. The express-specific deltas are
+the per-VC split on a cardinal router (`5 VC0 + 4 VC1` rather than `4 + 4`) and the VC0 downstream
+count, not the global sender-channel array size.
 
 This result proves logical array-count feasibility only. It does not prove that an independent
 route-occurrence oracle agrees with builder-local effect derivation or that the builder maps
@@ -2193,10 +2232,11 @@ For every route occurrence:
    class, and every DOR-forbidden slot to remain unwired;
 10. compare the normal projected per-VC sender/receiver maxima with A.5;
 11. project every forwarding branch emitted by the A.3 multicast action-map sweep and require it to
-    match an existing canonical local transition and the same builder-derived role;
-12. gate the reroot fallback separately: add the dedicated U-turn producer, require the full-packet
-    producer boundary and worker-mirror guard, then verify the fallback VC0 maximum of six and its
-    differential/queue conformance.
+    match an existing canonical local transition and the same builder-derived role.
+
+Step 11 is retained even though V1 express traffic is unicast-only: it checks that the multicast
+action maps introduce no forwarding arc outside the unicast arc set, which is the property §5.7.4
+relies on and which the eventual multicast enablement will inherit.
 
 Required result:
 
@@ -2210,15 +2250,13 @@ sender guard-class aliases                 = 0
 DOR-forbidden connected arcs               = 0
 multicast arcs outside unicast arc set     = 0
 multicast role mismatches                  = 0
-normal projected VC0 sender maximum         = 5
-normal projected VC0 receiver maximum       = 1
-A.5 normal configured maxima by VC          = 5 / 4 / 1
-fallback configured maxima by VC            = 6 / 4 / 1  # separately gated
+projected VC0 sender maximum                = 5
+projected VC0 receiver maximum              = 1
+A.5 configured maxima by VC                 = 5 / 4 / 1
 A.5 configured receiver maxima by VC        = 1 / 1 / 1
 ```
 
-The normal route projection has a VC0 maximum of five. Six is the separately enabled reroot profile,
-not a route-oracle projection result. The regression should also count total forwarding occurrences,
+The route projection has a VC0 maximum of five. The regression should also count total forwarding occurrences,
 unique occurrence keys, unique wired producer keys, unique logical sender keys, per-role counts, and
 per-router-variant maxima. Those observed counters become regression expectations once the first
 conforming enumeration is reviewed.
@@ -2256,11 +2294,11 @@ This assessment is the central system design, not a duplicate implementation con
   MGD/MeshGraph express materialization, runtime ring synthesis, canonical-route generation,
   ControlPlane-owned route/domain facts, physical-plane checks, and pre-builder consumer handoffs.
 - **Builder — `GALAXY_BUILDER_ROUTING_CONFIG_CONTRACT.md`:** CP↔builder surface, local-effect
-  derivation, wiring, allocation, BFC flags, and U-turn sender realization.
+  derivation, wiring, allocation, and BFC flags.
 - **Codec — `GALAXY_DEVICE_ROUTE_CODEC_CONTRACT.md`:** L1/device artifacts, packet/header ABI,
-  encode/load/decode, multicast encoder, and source fanout/reroot overlay.
+  encode/load/decode, multicast encoder, and source injection requirements.
 - **Kernel — `GALAXY_DEVICE_ROUTER_KERNEL_CONTRACT.md`:** ERISC decode/admit/forward dispatch,
-  intermesh execution, header mutation retirement, sender-step BFC, and controlled same-link return.
+  intermesh execution, header mutation retirement, and sender-step BFC.
 - **Baseline — `GALAXY_WORKING_MODEL.md`:** physical/current-code context against which the target is
   assessed.
 - **Decision provenance — `GALAXY_RING_DOMAIN_Z_ROUTING_ASSESSMENT.md`:** historical alternative in

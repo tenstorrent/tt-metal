@@ -869,8 +869,7 @@ For a wired router pair, ControlPlane resolves the ingress neighbor `U` and egre
 the two directions around local node `V`; the semantic turn is `U→V→W`. `continuation_allowed`
 returns only the distinction Builder needs: whether a non-transit protected-ring acquisition is
 allowed. RT-gen may distinguish terminal-only and forbidden transitions internally. Worker source
-injection and the dedicated reroot sender are handled separately and do not use an artificial ingress
-direction.
+injection is handled separately and does not use an artificial ingress direction.
 
 Names and exact signatures remain illustrative. The information split and predicate results are the
 contract. FabricBuilder also continues consuming existing:

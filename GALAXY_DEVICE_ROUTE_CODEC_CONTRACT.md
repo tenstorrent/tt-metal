@@ -19,7 +19,7 @@ Authority split and related documents:
   CT/speedy gates (authoritative for *kernel realization*)
 
 **This file** is the delegated authority for L1/device routing artifacts, the packet/header ABI,
-encode/load/decode, the multicast encoder, and the source fanout/reroot overlay. Its working ABI is
+encode/load/decode, the multicast encoder, and source injection requirements. Its working ABI is
 dual widened Y/X action-byte maps with per-chip reverse-tree multicast as the selected V1 device
 artifact. Prefer the kernel contract for `fabric_erisc_router.cpp` mechanics and admission detail.
 
@@ -55,10 +55,8 @@ by this codec work.
 | **range_anchor** | encode_root *(confused)* | Chip extents are relative to; may differ from trace root |
 | **encode_root** | — | Chip where path tracing begins (src or dest-mesh landing) |
 | **same-header fanout** | clone with different route program | NOC-copy identical maps to each sender |
-| **source multi-inject** | root RX fanout | Worker sends one identical-header packet copy through each connected canonical root output (§7.3.1) |
-| **pre-inject reroot overlay** | replacement canonical route tree | Temporary same-mesh express fallback: edit two action bits before injection so one connected root child returns a copy to launch the other root subtrees; not itself a canonical §5.6 map (§7.3.1) |
-| **same-link U-turn sender** | ordinary route output | Dedicated fallback-only VC0 child-RX→same-link-TX queue (kernel §3.9 / builder §3.7) |
-| **canonical route U-turn** | same-link U-turn sender *(confused)* | A route-generated immediate reversal; remains forbidden and is not legalized by the infrastructure queue |
+| **source multi-inject** | root RX fanout | Worker sends one identical-header packet copy through each canonical root output, one per open direction-tagged connection (§7.3.1) |
+| **multi-output root** | — | A canonical root action with more than one eth bit set; requires one worker connection per output |
 
 Keep **base-32** only when discussing the forbidden full Y-NN deadlock domain (assessment VC0 BFC
 proof and “Alternative and extension decision record”).
@@ -69,7 +67,8 @@ proof and “Alternative and extension decision record”).
 - **Target ABI:** destination-major L1 vectors widened into packet Y/X action maps, with
   facing-aware indexed decode (§4).
 - **Target multicast:** source-reachable action maps; a per-chip reverse tree is the primary encoder
-  when every root passes §5.7.1. Source injection follows §7.3.1.
+  when every root passes §5.7.1. Source injection follows §7.3.1, which also records why express
+  multicast is out of V1 scope while non-express 2D multicast is not.
 - **L1 sizing:** the `[64,4]` 1028-byte vector table fits in L1 (§2.12). The 1160-byte hybrid needs
   an in-struct growth from 2576 B to at least 2608 B after intra-table reclamation, 2704 B if that
   table remains, or external placement (§6.2); the 68-byte packet-map and current axis-limit changes
@@ -92,7 +91,7 @@ RT gen / CP     → finalized canonical routes (annotated N/S/E/W/Z logical edge
 Worker / edge   → unicast: widen dest-major vectors (§7.1)
                   mcast (express primary): reverse-prune T(my_chip) / T(landing) (§5.7.1)
                   V1: one mcast representation per mesh/configuration (setup policy, not packet semantics)
-                  same-mesh source: manager multi-inject or pre-inject reroot overlay (§7.3.1)
+                  same-mesh source: manager multi-inject, one copy per root output (§7.3.1)
                   shared header; no transit per-branch map rewrite
 Transit router  → N/S/Z: if route_buffer_y[local_y] != 0 use it, else route_buffer_x[local_x]
                   E/W: route_buffer_x[local_x] only (never re-enter Y; §4.3 / §5.9)
@@ -576,6 +575,20 @@ exit, the retained `inter_mesh_direction_table` and selected intermesh connectio
 boundary egress. A boundary-facing receiver is identified by `INTERMESH` ingress capability and
 intercepts the arrival before ordinary indexed-map decode.
 
+**Required encoder invariant — exit-chip action.** For any carrier whose final mesh is remote, the
+installed maps must decode at the temporary exit chip to exactly `LOCAL_DELIVER`, with no eth bits
+set. This falls out of building unicast-style maps *to* the exit chip — `route_buffer_y[exit_y]`
+reaches `STOP` and `route_buffer_x[exit_x]` carries the terminal `LOCAL_DELIVER` — but it is a
+requirement, not an accident, because the kernel's exit predicate is exactly "the maps say deliver
+here and the final mesh is elsewhere" (kernel §4.2). A multi-bit action at an exit chip would make
+that predicate ambiguous and is an encoder error. Note that the exit chip does **not** perform local
+delivery: the kernel consumes the `LOCAL_DELIVER` as the exit signal and forwards on the intermesh
+egress instead.
+
+Correspondingly, `LOCAL_DELIVER` in a packet whose final mesh equals the current mesh always means
+ordinary local delivery. The two readings are separated by mesh identity alone; no packet field
+distinguishes them.
+
 **Landing transition:** every boundary arrival is classified as an intermediate- or destination-mesh
 landing by comparing the retained final mesh with the landing router's current mesh:
 
@@ -618,7 +631,7 @@ At universal indexed-2D cutover:
 - worker/edge `fabric_set_route`, `encode_2d_unicast`, and multicast setup stop writing
   `hop_index` / `branch_*`;
 - ERISC stops reading/updating those fields and removes both RX-side and sender-side header-update
-  modes (kernel §3.10);
+  modes (kernel §3.9);
 - event-profiler/debug consumers stop decoding branch offsets;
 - indexed 2D no longer assigns routing semantics to the former four-byte
   `LowLatencyMeshRoutingFields`; retaining it as reserved layout space or reclaiming it is an aligned
@@ -627,8 +640,8 @@ At universal indexed-2D cutover:
 
 The indexed-2D ABI selection is deployment/cutover-wide and applies to **every** 2D producer and
 consumer, including non-express configurations. The concrete CT/FabricContext selector must not be
-`express_routing_enabled`: that flag controls express topology, Z, and associated BFC/reroot
-artifacts, not legacy-vs-indexed packet interpretation.
+`express_routing_enabled`: that flag controls express topology, Z, and associated BFC artifacts, not
+legacy-vs-indexed packet interpretation.
 
 No compatibility interpretation is defined. A legacy producer paired with an indexed kernel (or the
 reverse) is invalid even when the packet happens not to branch. The separate 1D routing fields and
@@ -657,7 +670,7 @@ X: STOP→0, E→bit0, W→bit1
 columns; Y marks a target row only when the encode-root column is also targeted (§5.5). Invalid X
 2-bit `11` must not appear in L1; reject at generation.
 
-At runtime, reserved bits, an ungated self-facing bit, or an all-zero decoded action with no selected
+At runtime, reserved bits, a self-facing bit, or an all-zero decoded action with no selected
 destination follows the kernel contract's assert-and-fail-stop policy. There is no packet recovery
 or retransmission interpretation for invalid state.
 
@@ -1091,7 +1104,8 @@ On intermediate-mesh landing:
 On destination-mesh landing:
     encode_root = landing; range_anchor = dst_start_node_id
     rebuild via T(landing) using retained extents
-    continue through landing RX fanout; do not apply worker source reroot
+    continue through landing RX fanout; the landing is already on RX, so no source-injection
+    handling applies
 
 Worker / same-mesh unicast:
     full widen dest-major vectors (§7.1); or single-hop poke (§7.1.1)
@@ -1110,8 +1124,8 @@ The assessment Appendix A owns the route and indexed-map regression counters. A 
 and reproduced the legal-range execution result recorded in assessment Appendix A.3.
 
 Those results are not production C++ or device evidence and do not cover other topology shapes,
-packing, multiple planes, reroot execution, intermediate landing, or device performance. Every
-deployed mesh/configuration still applies the §5.7.1 all-roots gate.
+packing, multiple planes, intermediate landing, or device performance. Every deployed
+mesh/configuration still applies the §5.7.1 all-roots gate.
 
 ### 5.12 Multicast legality (must hold for encoded trees)
 
@@ -1121,8 +1135,8 @@ per-output `IS_INJECTION`. Codec-specific requirements are:
 1. Every reverse-tree root passes §5.7.1, including exact canonical paths and
    descendants-before-ancestors serialization. Any root failure makes that representation
    unavailable for the mesh/configuration.
-2. The optional §7.3.1 reroot overlay is applied only after the canonical §5.6 map passes validation.
-   Complete direct-inject plus return execution remains a separate implementation check (§11.2).
+2. Source injection follows §7.3.1: every canonical root output is reached exactly once, and the
+   source performs local delivery exactly once.
 
 ---
 
@@ -1137,8 +1151,7 @@ Minimum device-visible artifacts after generation validation:
 2. A **deployment/cutover-wide indexed-2D ABI selection** shared by all 2D producers and consumers,
    including non-express configurations. This is not selected by `express_routing_enabled`.
 3. **`express_routing_enabled`** (or equivalent) for express topology, materialized Z neighbors,
-   express/BFC artifacts, and reroot eligibility (builder contract §4.1); it must not select old vs
-   new packet ABI.
+   express/BFC artifacts (builder contract §4.1); it must not select old vs new packet ABI.
 4. **Local chip’s `(my_x, my_y)`** already implied by `my_device_id` + pinned shape; router setup
    caches both for DOR indexing.
 5. **Intermesh L1 (kept as-is):** `exit_node_table` + `inter_mesh_direction_table` for rewrite-to-exit
@@ -1155,7 +1168,9 @@ Minimum device-visible artifacts after generation validation:
 8. Source-connection direction metadata for §7.3.1: a `RoutingPlaneConnectionManager` slot tag is
    its `eth_chan_directions` identity; a raw `WorkerToFabricEdmSender` retains/exposes the
    `edm_direction` already obtained from its connection-table entry. This is fabric connection
-   metadata, not a new packet field or a value inferred from N/S/E/W multicast extents.
+   metadata, not a new packet field or a value inferred from N/S/E/W multicast extents. For express
+   multicast the host additionally supplies one direction-tagged slot per canonical root output;
+   that is the requirement V1 does not yet meet, which is why express traffic is unicast-only.
 
 ### 6.2 What replaces `compressed_route_2d_t` in the 2D union
 
@@ -1186,7 +1201,7 @@ Transit routers need **neither** persistent table on the hot path if the packet 
 
 | Actor | Unicast | Multicast |
 |---|---|---|
-| Tensix worker | Full unicast widen (§7.1). Single-hop poke (§7.1.1) | Reverse-prune `T(src)` (§5.7.1); then source multi-inject / reroot policy (§7.3.1). Set anchor in `dst_start_node_id`; fill extent-only `mcast_params_64` |
+| Tensix worker | Full unicast widen (§7.1). Single-hop poke (§7.1.1) | Reverse-prune `T(src)` (§5.7.1); then source multi-inject (§7.3.1). Set anchor in `dst_start_node_id`; fill extent-only `mcast_params_64` |
 | Edge / landing encoder | Intermediate landing: widen from landing to the next local exit. Destination landing: widen to final `dst_start_node_id` | Intermediate landing: use the same unicast-style next-exit segment and preserve final anchor/extents. Destination landing only: build `T(landing)`; packet is already on RX, so ordinary atomic RX fanout handles the final multi-output landing root |
 | Transit ERISC | No reload; decode §4.3 | Maps immutable; same-header fanout |
 
@@ -1201,10 +1216,17 @@ capability(edge) == INTRAMESH_EXPRESS  →  Z bit in route_buffer_y; stay on ind
 capability(edge) == INTERMESH          →  boundary egress/landing handling; any direction letter
 ```
 
-The boundary path additionally requires `current_mesh_id != final_dst_mesh_id` at egress. At landing,
-the `INTERMESH` ingress capability triggers map installation before ordinary decode; current versus
-final mesh identity chooses intermediate or destination behavior. **Forbidden:** `NOOP` means Z;
+At egress the boundary path additionally requires `current_mesh_id != final_dst_mesh_id` **and** an
+exit-chip action of `LOCAL_DELIVER` only, per the encoder invariant in §4.5; mesh-id inequality alone
+also holds on chips the packet merely transits toward a different exit. At landing, the `INTERMESH`
+ingress capability triggers map installation before ordinary decode; current versus final mesh
+identity chooses intermediate or destination behavior. **Forbidden:** `NOOP` means Z;
 `direction == Z` alone means intermesh.
+
+Because a same-mesh express edge must be classified `INTRAMESH_EXPRESS` and never `INTERMESH`, an
+express-Z channel stays on the intramesh-facing side of the ControlPlane channel split. Kernel §4.2
+depends on that: the per-channel edge flag that gates the exit check is derived from the same split,
+so a Z router on an exit chip only inherits it when express-Z is intramesh-facing.
 
 ---
 
@@ -1288,14 +1310,23 @@ Outputs: `route_buffer_y` / `route_buffer_x` satisfying §5.6 semantics; `mcast_
 N/S/E/W extents, while `dst_start_node_id` retains `range_anchor`. Intermesh carriers preserve both
 until landing.
 
-### 7.3.1 Same-mesh 2D express source multi-output injection
+### 7.3.1 Express multicast and worker connections
+
+**V1 scope: express-enabled meshes ship unicast only.** This section states the client-visible
+requirement that multicast enablement depends on, and records why no transport-level workaround is
+acceptable. Assessment §9.5 owns the safety argument; non-express 2D multicast is unaffected.
 
 #### Problem and scope
 
 The canonical §5.6 map may contain several eth outputs at `encode_root`. Transit routers can clone
 atomically, but a same-mesh worker injects directly into sender channel 0 on one router and bypasses
-source RX. A raw `WorkerToFabricEdmSender` may expose only one connection, so “build the map” does
-not by itself launch every root-child subtree.
+source RX. A raw `WorkerToFabricEdmSender`, and the forward/backward `FabricConnectionManager`,
+cannot hold a connection per root output, so “build the map” does not by itself launch every
+root-child subtree.
+
+Express routing is 2D-only — Z is an additional adjacency that the 1D line codec cannot represent,
+since `MulticastRoutingCommandHeader` carries only `start_distance_in_hops` and `range_hops` — so 1D
+configurations are unaffected by everything in this section.
 
 This section applies only to **same-mesh worker-originated 2D indexed express multicast**. It does
 not apply to:
@@ -1311,23 +1342,27 @@ produce a mixed Y+X root action:
 - when `N_extent + S_extent > 0`, `target_ys` contains only N/S offsets and excludes the source row;
   §5.5 copies E/W teeth only to those target rows, so the source outputs are a subset of N/S/Z;
 - when `N_extent = S_extent = 0`, the operation is X-only and stays on the existing E/W multicast
-  path. It does not use the express source-reroot fallback.
+  path.
 
-This section's new source-fanout handling is consequently for multi-output **Y roots** introduced by
-express routing. Future E/W express links or a generalized target-set API cross the assessment’s
-“Alternative and extension decision record” boundary and require a separate extension.
+Source fanout is consequently about multi-output **Y roots** introduced by express routing. Future
+E/W express links or a generalized target-set API cross the assessment’s “Alternative and extension
+decision record” boundary and require a separate extension.
 
-First produce the unchanged canonical map by §5.6 / §5.7.1. Then select one of the following
-source-injection realizations. `encode_root` remains the source in both; “reroot” names the transport
-overlay, not a change to the codec root or canonical route relation.
+Multi-output roots are the common case, not a corner case. It is not limited to two-sided ranges: a
+one-sided request produces one whenever the extent reaches a row whose canonical route leaves the
+source on a different edge. From `Y=1` with `N=2`, the target rows are `{0, 31}` and
 
-These realizations require disjoint canonical root-child subtrees, guaranteed when the §5.7.1
-arborescence gate passes. A failed gate rejects source multi-inject/reroot together with the
-reverse-tree representation.
+```text
+R(1,0)  = 1→0        N     0's paired ex4 partner is 1, so no ex4 hop precedes the crossover
+R(1,31) = 1→30→31    Z,S   31's partner is 30; ex4 reverse from position 0 to 15 is one chord hop
+```
 
-#### Preferred: connection-manager source multi-inject
+so `action_y[1] = N|Z` for what the client expressed as a single northward range.
 
-If `RoutingPlaneConnectionManager` has one open slot for every set eth bit in the canonical root
+#### Required realization: connection-manager source multi-inject
+
+First produce the unchanged canonical map by §5.6 / §5.7.1. `encode_root` remains the source. Then,
+if `RoutingPlaneConnectionManager` has one open slot for every set eth bit in the canonical root
 action:
 
 1. Resolve slots by direction tag.
@@ -1336,114 +1371,91 @@ action:
 3. Inject each copy directly into its matching root-child edge. The source action is not consumed.
 4. Deliver locally at the source exactly once in the worker when `LOCAL_DELIVER` is set.
 
-The canonical reverse tree has disjoint root-child subtrees, so each injected copy can reach only
-its selected subtree. Source multi-inject is the worker analogue of same-header fanout, not a set of
-different route programs. Header/payload lifetime must cover every send; a header may not be reused
-while another source copy is in flight.
+The canonical reverse tree has disjoint root-child subtrees — guaranteed when the §5.7.1
+arborescence gate passes — so each injected copy can reach only its selected subtree. Source
+multi-inject is the worker analogue of same-header fanout, not a set of different route programs.
+Header/payload lifetime must cover every send; a header may not be reused while another source copy
+is in flight. A failed arborescence gate rejects source multi-inject together with the reverse-tree
+representation.
 
-#### Temporary fallback: pre-inject reroot overlay
+Unlike a transit RX fanout, the copies need no atomicity between them. A worker blocked waiting for
+a slot on its second connection holds no fabric receiver, so it cannot participate in a dependency
+cycle; each copy's first hop is an ordinary source injection with the worker channel's existing
+`ENTER` guard. Copies may therefore be issued sequentially. Multicast has no cross-branch ordering
+guarantee, so issuing them at different times changes no delivered result.
 
-If not every root output has a connection, select one connected canonical root output:
+#### When the connections are not available
 
-```text
-canonical_root_action = route_buffer_y[encode_root_y]
-inject_dir             = actual connection direction
+If the worker does not hold a connection for every set eth bit in the canonical root action, the
+operation is **not realizable** and express multicast is unsupported for that client. There is no
+transport-level substitute.
 
-assert popcount(canonical_root_action & ETH_BITS) > 1
-assert inject_dir in {N, S, Z}
-assert canonical_root_action & one_hot(inject_dir)
+In particular, returning a copy over the injected link so that it re-enters the source and launches
+the remaining subtrees is rejected. Any single-injection scheme must traverse the injected link in
+both directions, because the canonical routes from the connected child back to targets in another
+subtree run through the source; re-rooting the encoding at that child produces the identical
+reversal. The reversal adds an `e → reverse(e)` arc to the edge-level dependency graph, which
+assessment §5.7.3 assumes absent — it either joins the two orientation views of one protected ring
+or turns a bottom-stratum attachment into a resource that waits on the ring hanging off it. A finite
+staging buffer does not repair this, and neither does a separate VC, since the returned copy must
+cross back to launch the remaining subtrees. Assessment §9.5 owns the full argument.
 
-selected_edge = the canonical reverse-tree root edge whose output == inject_dir
-child         = selected_edge.child
-return_dir    = reverse_on_same_link(inject_dir)  # N↔S; Z uses self-facing Z
+#### V1 status and client requirement
 
-assert !(action[child] & one_hot(return_dir))
-action[encode_root] &= ~one_hot(inject_dir)
-action[child]       |=  one_hot(return_dir)
-```
+Because the existing single-connection worker adapters cannot express a multi-output root, express
+multicast is out of V1 scope. Enabling it requires:
 
-`action[...]` above is always `route_buffer_y[...]`. The selected reverse-tree edge supplies the
-child coordinate, including Z, so the worker does not need a separate express-neighbor step table.
+1. a multicast helper that builds one canonical map and iterates the set eth bits of
+   `route_buffer_y[my_y]`, resolving each to a slot by `ConnectionSlot::tag` — distinct from the
+   existing manager overloads, which build a *different* header per slot rather than splitting one
+   operation across slots;
+2. every participating client to hold a `RoutingPlaneConnectionManager` with one direction-tagged
+   slot per canonical root output, supplied by the host as runtime args; and
+3. migration of the call sites that currently multicast through a bare `WorkerToFabricEdmSender` or
+   the forward/backward `FabricConnectionManager`.
 
-For Z, the bit value remains Z in both directions; it means same-link return only because the
-first-hop receiver has `MY_DIR == Z` and the reroot kernel gate is enabled. It is not an ordinary
-second forward-Z step.
+N/S/Z source fanout fits the current four-slot manager. Nothing in the runtime or host stack
+currently distinguishes unicast from multicast on an express mesh, so this is a scoping statement
+rather than an enforced restriction: express multicast through a single-connection adapter is
+unsupported and is not guaranteed to reach every target. If a cheap guard is wanted later, the
+multicast helper already builds the map and can compare
+`popcount(route_buffer_y[my_y] & ETH_BITS)` against the number of open slots.
 
-Execution is:
+#### Source injection direction
 
-1. The worker injects the original packet directly on `inject_dir`; source RX and the edited source
-   action are bypassed.
-2. At `child`, normal outputs/local delivery execute and a same-header copy takes the explicit
-   same-link return output.
-3. The returning copy reaches `encode_root`, where the edited source action launches every
-   remaining canonical root-child subtree but cannot relaunch the selected one.
-4. Canonical subtree disjointness prevents a remaining subtree from reaching `child` and requesting
-   a second return.
-
-The overlay is applied **once, before injection**. The resulting packet maps are immutable in
-transit. The overlay map by itself is intentionally not bit-identical to §5.6: it removes one
-canonical source bit and adds one non-canonical return bit. Its required equivalence is
-**execution-level**:
-
-```text
-initial direct inject enters selected canonical subtree once
-+ returned copy enters every remaining canonical subtree once
-= canonical target set, with no duplicate delivery
-```
-
-The return output is an infrastructure U-turn, not permission for route generation to use arbitrary
-canonical U-turns. Kernel handling and builder wiring/BFC are owned by the kernel §3.9 and builder
-§3.7 contracts.
-
-The dedicated U-turn queue is a full-packet **producer boundary**. Child RX waits only for local
-queue capacity, commits the complete immutable copy, and releases its RX before the U-turn sender
-waits for remote credit. That sender then applies the same-output worker `IS_INJECTION` rule
-independently. RX's local-queue wait remains the existing atomic-fanout premise, while the incoming
-receiver is not held during the reverse sender's remote-credit wait. Under these invariants the
-assessment's existing VC0 proof remains applicable. Claiming reroot support requires differential
-execution and concrete queue-boundary conformance, not a new reroot CDG/BFC proof.
-
-`inject_dir` comes from connection metadata:
+The injection direction comes from connection metadata:
 
 - `RoutingPlaneConnectionManager::ConnectionSlot::tag`, or
 - retained `WorkerToFabricEdmSender.edm_direction`.
 
 Do not infer it from `mcast_params_64`, N/S/E/W extents, or baseline `if (n) else if (s)` spine
-selection. Reject the fallback if the actual connection direction is not a canonical root output.
-If the canonical root has zero eth outputs, deliver locally only; if it has one, inject directly
-without the overlay through the matching direction connection; reject if that connection is absent.
+selection. If the canonical root has zero eth outputs, deliver locally only. If it has exactly one,
+inject directly through the matching direction connection; reject if that connection is absent.
 
 #### Source local delivery
 
-Source `LOCAL_DELIVER` must execute exactly once:
-
-- direct single-output or manager multi-inject: worker performs source-local delivery because the
-  source action is bypassed;
-- reroot overlay: worker suppresses source-local delivery and leaves `LOCAL_DELIVER` in the edited
-  source action so the returning copy performs it.
-
-All non-source `LOCAL_DELIVER` bits remain unchanged.
+Source `LOCAL_DELIVER` must execute exactly once, performed by the worker, because the source action
+is bypassed by direct injection. This holds for both the single-output and multi-inject cases. All
+non-source `LOCAL_DELIVER` bits remain unchanged.
 
 #### Worked `S|Z` root
 
-For canonical `action_y[2] = S|Z`, a worker connected through S selects edge `2→3`:
+For canonical `action_y[2] = S|Z` with S and Z slots open:
 
 ```text
-before: action_y[2] = S|Z
-        action_y[3] = LOCAL_DELIVER
-
-overlay:
-        action_y[2] = Z
-        action_y[3] = LOCAL_DELIVER|N
+action_y[2] = S|Z
+action_y[3] = LOCAL_DELIVER          # S subtree
+action_y[5] = …                      # Z subtree
 
 execute:
-        worker --S--> 3
-        3 delivers locally and returns one copy --N--> 2
-        2 --Z--> the untouched Z subtree
+        worker --S--> 3      one copy, canonical maps
+        worker --Z--> 5      one copy, byte-identical maps
+        worker delivers locally if action_y[2] has LOCAL_DELIVER
 ```
 
-The same rule supports a Z-connected sender (`Z↔Z`, interpreted as a self-facing Z return) when the
-builder supplies the dedicated same-link return sender.
+The two subtrees are disjoint, so neither copy can reach the other's targets and no target is
+delivered twice. With only one of the two connections open the operation is not realizable; see
+“When the connections are not available”.
 
 ### 7.4 Intermesh decoder
 
@@ -1466,7 +1478,8 @@ intermesh state or line-state machine (§4.2.1) is used.
 - Rewrite maps per E/W fanout branch on transit.
 - Infer same-mesh source injection direction from multicast extents or add it to the packet; use
   connection metadata (§7.3.1).
-- Apply the worker reroot overlay at intermesh landing; landing is already an RX fanout point.
+- Emit a self-facing action bit, or route a copy back over the link it arrived on (§7.3.1).
+- Apply source-injection handling at an intermesh landing; the landing is already an RX fanout point.
 
 ---
 
@@ -1499,7 +1512,7 @@ preserve those codec-visible properties.
 | Per-chip reverse tree `T(root)` | build from finalized `R` + all-roots gate (§5.7.1) | L1 embed; generic route view only if generation is separate | — | reverse-prune mcast | — |
 | Multicast Y + X maps | validate trees mesh-wide | embed with vectors | fanout wiring | §5.7.1 primary (uniform per mesh in V1) | same-hdr fanout / admit |
 | Source connection direction | — | existing connection metadata | retain sender direction / manager tag | select §7.3.1 inject edge | source sender only |
-| Source reroot return | validate execution against canonical root subtrees | — | dedicated VC0 same-link queue + worker-mirror flag | two-bit pre-inject overlay | self bit outside JT (kernel §3.9) |
+| Source multi-inject | disjoint root subtrees via the §5.7.1 gate | — | ordinary worker channel per direction; no new producer class | one identical copy per root output (§7.3.1) | no self-facing action; source bypasses RX |
 | Rejected X / packed-packet paths | — | — | — | **§4.2.1** | **not implemented** |
 | `exit_node_table` | own | **keep as-is** | — | rewrite dst→exit | edge assist |
 | `inter_mesh_direction_table` | own | **keep as-is** | — | intermesh first/boundary hop | edge assist |
@@ -1641,11 +1654,15 @@ Builder sender allocation and kernel queue realization are owned by their compon
       host/device descriptor packing; otherwise the mesh/configuration is rejected.
 - [ ] Runtime decode follows §4.3, maps remain immutable, and action bit 4 represents intramesh Z
       rather than NOOP (§4.6).
-- [ ] Source multi-inject/reroot follows §7.3.1 using connection direction metadata. Differential
-      execution reaches each canonical subtree and local target exactly once; builder/kernel queue
-      checks remain in their own contracts.
+- [ ] Express traffic is unicast in V1. No 2D producer emits a self-facing action bit, and no path
+      routes a copy back over the link it arrived on (§7.3.1).
+- [ ] When express multicast is enabled, source multi-inject follows §7.3.1 using connection
+      direction metadata: one identical copy per canonical root output, each canonical subtree and
+      the source-local target reached exactly once.
 - [ ] Intermesh preserves final fields, uses unicast-style maps on every intermediate mesh, and
       installs final unicast or multicast maps only on destination-mesh landing (§4.5 / §5.10).
+- [ ] Every carrier with a remote final mesh decodes to exactly `LOCAL_DELIVER` at its temporary
+      exit chip, so the kernel exit predicate is unambiguous (§4.5).
 - [ ] L1 regions and packet/header/UDM capacity satisfy §§2.12, 4.7, and 6.2 for the supported
       dimensional bound.
 - [ ] Single-hop helpers follow §7.1.1, and rejected packet paths remain absent (§4.2.1).

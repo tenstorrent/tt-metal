@@ -370,9 +370,9 @@ they are represented or used logically:
 - `GALAXY_BUILDER_ROUTING_CONFIG_CONTRACT.md` owns the target ControlPlane-to-builder surface, local
   effects, wiring/allocation, and BFC compile-time realization.
 - `GALAXY_DEVICE_ROUTE_CODEC_CONTRACT.md` owns target L1/device artifacts, packet/header ABI,
-  encode/load/decode behavior, multicast encoding, and source fanout/reroot.
+  encode/load/decode behavior, multicast encoding, and source injection requirements.
 - `GALAXY_DEVICE_ROUTER_KERNEL_CONTRACT.md` owns target ERISC decode/admit/forward behavior,
-  intermesh execution, BFC consumption, and controlled same-link return.
+  intermesh execution, and BFC consumption.
 
 None of those target requirements should be read back into the current baseline unless the code
 implements them.

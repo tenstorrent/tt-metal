@@ -6,7 +6,7 @@ decode/admit/forward path.
 Authority split:
 
 - `GALAXY_DEVICE_ROUTE_CODEC_CONTRACT.md` owns packet/L1 byte semantics, indexed-map construction,
-  widening, and source-reroot overlay.
+  widening, and source-injection requirements.
 - `GALAXY_BUILDER_ROUTING_CONFIG_CONTRACT.md` owns router wiring, sender allocation, compile-time
   sender roles, and capacity.
 - `GALAXY_CARDINAL_NS_Z_SKIP_ROUTING_ASSESSMENT.md` owns route legality, topology assumptions,
@@ -16,13 +16,13 @@ Authority split:
 - `GALAXY_WORKING_MODEL.md` owns the current physical and software baseline.
 
 This document owns ERISC realization: decode integration, admission, forwarding, dense dispatch,
-intermesh landing order, controlled same-link return, legacy turn/header retirement, sender-step
-BFC consumption, and kernel CT/speedy/trim policy. Codec §8 is only the kernel boundary; the byte
-decoder and action layout are authoritative in codec §4.3 and §4.6.
+intermesh landing order, legacy turn/header retirement, sender-step BFC consumption, and kernel
+CT/speedy/trim policy. Codec §8 is only the kernel boundary; the byte decoder and action layout are
+authoritative in codec §4.3 and §4.6.
 
 Status: target contract plus current-code inventory. Target behavior is not implemented unless
-explicitly identified as current behavior. Arbitrary-pattern VC1 safety/BFC and reroot execution
-conformance remain open; the current two-link, predominantly linear VC1 envelope is retained.
+explicitly identified as current behavior. Arbitrary-pattern VC1 safety/BFC remains open; the
+current two-link, predominantly linear VC1 envelope is retained.
 
 ---
 
@@ -34,14 +34,15 @@ ControlPlane at runtime.
 
 ```text
 Codec   → route_buffer_y/x, retained final destination/range fields, action bytes
-Builder → sender/receiver wiring and edge capability, U-turn allocation, per-sender IS_INJECTION
-Kernel  → decode realization, atomic admit/fanout, JT/U-turn execution, sender-step BFC
+Builder → sender/receiver wiring and edge capability, per-sender IS_INJECTION
+Kernel  → decode realization, atomic admit/fanout, jump-table execution, sender-step BFC
 ```
 
 Required kernel shape:
 
 - default Z-capable builds use a dense 16-way admit and forward jump table;
-- `LOCAL_DELIVER` and the controlled self-bit return stay outside the jump-table key;
+- `LOCAL_DELIVER` stays outside the jump-table key; a self-facing action bit is invalid and fails
+  closed;
 - WH with VC1 keeps its compass-only bit-test admission exception;
 - indexed transit forwards immutable full packets and does not consume hop cursors or branch
   offsets;
@@ -168,16 +169,22 @@ builder-provided ingress capability is `INTERMESH` performs the §4.2 landing in
 this ordinary decoder. That is router context, not packet routing state or an action-byte value.
 Action-bit positions and reserved-bit validation come only from codec §4.6.
 
+The two boundary checks sit on opposite sides of this decoder and must not be confused. The landing
+intercept is keyed on `INTERMESH` **ingress** capability and runs *before* decode, because the maps
+still belong to the previous mesh. The §4.2 exit check is keyed on the decoded action plus mesh
+identity and runs *after* decode, because it needs the action to know that the maps have run out
+here. Only the arriving router evaluates either one.
+
 ### 3.3 Admit/forward dispatch
 
 Default Z-capable builds preserve jump-table dispatch:
 
-1. Extract the self-facing bit before packing; it is valid only for §3.9.
-2. Pack the other four possible eth outputs through fixed `FWD_DIRS[4]` into key `0..15`.
+1. Test the self-facing bit before packing; a set self bit is invalid and fails closed (§3.7).
+2. Pack the four possible eth outputs through fixed `FWD_DIRS[4]` into key `0..15`.
 3. Use hand-written `case 0..15` labels with `admit_combo<KEY>` and `forward_combo<KEY>` bodies.
-4. Keep `LOCAL_DELIVER` and the optional U-turn outside the key.
-5. Admit atomically against local sender queues/U-turn queue/local relay only.
-6. Forward immutable full-packet copies to non-self eth outputs, then the U-turn output, then local.
+4. Keep `LOCAL_DELIVER` outside the key.
+5. Admit atomically against local sender queues and local relay only.
+6. Forward immutable full-packet copies to the selected eth outputs, then deliver locally.
 
 A raw 6-bit/64-way table is not used. `FWD_DIRS[4]` remains fixed for the first implementation;
 live-only packing is a later optimization. `hop_cmd_to_sender_channel_mask` remains outside the hot
@@ -189,7 +196,7 @@ path unless a future trim implementation is made equivalent.
 | Separate admit and forward switches | Preserves the current all-local-capacity-before-copy structure |
 | Template bodies with hand-written labels | Keeps each selected output compile-time visible without a macro-generated ABI |
 | `LOCAL_DELIVER` outside key | Avoids doubling the table and preserves eth-before-local order |
-| Self bit outside key | Adds the gated return without expanding ordinary dispatch |
+| Self bit rejected before packing | Canonical maps never set it; treating it as an output would add a same-link reversal |
 
 Practical WH exception: when `FABRIC_2D_VC1_ACTIVE` is set, keep admission as runtime E/W/N/S
 bit-tests plus explicit local-relay admission. WH has no Z sender, so this path must not emit, test,
@@ -202,8 +209,9 @@ fast path follows the existing fabric fail-stop style:
 
 ```text
 if reserved bits are set
-   or an ungated self bit is set
-   or no eth, U-turn, or LOCAL_DELIVER destination is selected:
+   or the self-facing bit is set
+   or a selected direction has no wired sender on this router
+   or no eth or LOCAL_DELIVER destination is selected:
     ASSERT(false)          # visible when watcher/assert support is enabled
     return false           # commit no copy; retain/stall the parent RX packet
 ```
@@ -230,7 +238,7 @@ u8 pack_fwd(u8 action):
     return key
 
 template<u8 KEY>
-bool admit_combo(bool ld, bool uturn):
+bool admit_combo(bool ld):
     ok = !ld || local_relay_has_space
     if constexpr ((KEY >> 0) & 1):
         ok = ok && sender_for[FWD_DIRS[0]].has_local_slot()
@@ -240,12 +248,10 @@ bool admit_combo(bool ld, bool uturn):
         ok = ok && sender_for[FWD_DIRS[2]].has_local_slot()
     if constexpr ((KEY >> 3) & 1):
         ok = ok && sender_for[FWD_DIRS[3]].has_local_slot()
-    if (uturn):
-        ok = ok && uturn_sender.has_local_slot()
     return ok
 
 template<u8 KEY>
-void forward_combo(packet, bool ld, bool uturn):
+void forward_combo(packet, bool ld):
     if constexpr ((KEY >> 0) & 1):
         forward_full_packet(sender_for[FWD_DIRS[0]], packet)
     if constexpr ((KEY >> 1) & 1):
@@ -254,8 +260,6 @@ void forward_combo(packet, bool ld, bool uturn):
         forward_full_packet(sender_for[FWD_DIRS[2]], packet)
     if constexpr ((KEY >> 3) & 1):
         forward_full_packet(sender_for[FWD_DIRS[3]], packet)
-    if (uturn):
-        forward_full_packet(uturn_sender, packet)
     if (ld):
         local_relay_deliver(packet)
 ```
@@ -264,14 +268,13 @@ void forward_combo(packet, bool ld, bool uturn):
 forwarding without mutate-before-send. Admission must succeed for every selected local destination
 before any copy is committed.
 
-For a selected key, compile-time conditions must remove unselected queue checks and sends. The
-runtime booleans are only `ld` and the gated `uturn`; neither changes the key-to-direction mapping.
-Sender lookup must use the builder-wired compact mapping for the packet's current VC.
+For a selected key, compile-time conditions must remove unselected queue checks and sends. The only
+runtime boolean is `ld`, which does not change the key-to-direction mapping. Sender lookup must use
+the builder-wired compact mapping for the packet's current VC.
 
 Atomicity covers:
 
-- every non-self eth child selected by `KEY`;
-- the dedicated U-turn queue when selected;
+- every eth child selected by `KEY`;
 - local relay when `ld` is set.
 
 A failure at any one destination stalls the parent RX packet without committing another copy.
@@ -284,28 +287,33 @@ action = decode_packet_action(packet)
 if (action & RESERVED_BITS) != 0:
     invalid_action_fail_closed()
 
-ld     = action & LOCAL_DELIVER
-self   = action & one_hot(MY_DIR)
-uturn_capable = ENABLE_MCAST_SOURCE_REROOT && (MY_DIR in {N, S, Z})
-uturn  = uturn_capable && self
+# §4.2 step 2: this chip is the exit when the maps say deliver here but the final mesh is elsewhere.
+if constexpr (is_intramesh_router_on_edge):
+    if (action == LOCAL_DELIVER
+        && packet.dst_start_mesh_id != routing_l1_info.my_mesh_id):
+        take_intermesh_egress(packet)   # §4.2; no local delivery, no map rebuild
+        done
 
-if (self && !uturn_capable):
-    invalid_action_fail_closed()
+ld   = action & LOCAL_DELIVER
+self = action & one_hot(MY_DIR)
 
-key = pack_fwd(action & ~one_hot(MY_DIR))
-if key == 0 && !ld && !uturn:
+if (self):
+    invalid_action_fail_closed()    # canonical maps never set the self bit
+
+key = pack_fwd(action)
+if key == 0 && !ld:
     invalid_action_fail_closed()
 
 switch (key):                       # WH+VC1 uses §3.3 bit-test admission
-    case K: ok = admit_combo<K>(ld, uturn); break
+    case K: ok = admit_combo<K>(ld); break
 if (!ok):
     stall
 
 switch (key):
-    case K: forward_combo<K>(packet, ld, uturn); break
+    case K: forward_combo<K>(packet, ld); break
 ```
 
-The admit and forward switches use the same dense key. A self bit never expands either table.
+The admit and forward switches use the same dense key.
 
 Example for `MY_DIR=NORTH`: with `FWD_DIRS={E,W,S,Z}`, action
 `S|Z|LOCAL_DELIVER` packs to `0b1100`. `forward_combo<12>` copies the full packet to S and Z, then
@@ -313,14 +321,13 @@ performs local delivery. No branch receives a different header.
 
 ### 3.6 Fanout and header behavior
 
-All selected eth outputs receive the same complete packet image. The U-turn output, when selected,
-receives the same immutable packet after non-self eth copies. Local relay runs last.
+All selected eth outputs receive the same complete packet image. Local relay runs last.
 
 | Selected destination | Kernel action |
 |---|---|
 | Non-self eth output | Copy the complete packet to that direction's sender |
-| §3.9 same-link output | Copy the complete packet to the dedicated VC0 U-turn sender |
-| `LOCAL_DELIVER` | Deliver through local relay after eth/U-turn copies |
+| `LOCAL_DELIVER` | Deliver through local relay after eth copies |
+| Self-facing bit | Invalid; assert and fail-stop |
 | No selected destination | Assert when enabled, then fail-stop without committing a copy |
 
 Indexed transit does not call the 2D bodies of `update_packet_header_before_eth_send` or
@@ -334,8 +341,14 @@ fields; an ordinary transit fanout never rewrites maps.
 ### 3.7 Excluded kernel paths
 
 Do not add a line-counter X path, packed two-bit packet decoder, raw 64-way action table,
-own-direction-as-local encoding, general canonical U-turn, per-branch map rewrite, or remote BFC in
-`admit_combo`. Codec §4.2.1 owns the rejected packet representations.
+own-direction-as-local encoding, per-branch map rewrite, or remote BFC in `admit_combo`. Codec
+§4.2.1 owns the rejected packet representations.
+
+**No same-link return path exists.** No producer routes a packet back over the link it arrived on,
+whether as a canonical route turn or as infrastructure. Such an arc is what assessment §5.7.3
+assumes absent: it joins the two orientation views of a protected ring, or turns a bottom-stratum
+attachment into a resource that waits on the ring hanging off it, and neither a BFC flag nor a
+producer-boundary ordering repairs it. A self-facing action bit is therefore always invalid.
 
 ### 3.8 Source injection boundary
 
@@ -350,53 +363,16 @@ worker/codec installs packet state
 ```
 
 There is no source-side kernel root dispatch. The kernel consumes the selected sender and packet
-image; codec §7.3.1 owns source-output selection, source multi-inject, overlay construction, and
-exactly-once source-local-delivery policy. Target unicast widening is codec §7.1 and primary
-multicast reverse-tree construction is codec §5.7.1.
+image; codec §7.3.1 owns source-output selection, source multi-inject, and exactly-once
+source-local-delivery policy. When a canonical multicast root has several outputs, the worker sends
+one copy per output through its own connections — the kernel sees only ordinary independent
+injections and does nothing special. Target unicast widening is codec §7.1 and primary multicast
+reverse-tree construction is codec §5.7.1.
 
 Intermesh source traffic remains a unicast-style send toward the exit. Destination-mesh landing is
-already on RX and uses ordinary atomic fanout after its maps are installed; it does not use the
-source-reroot path.
+already on RX and uses ordinary atomic fanout after its maps are installed.
 
-### 3.9 Controlled same-link return
-
-The only accepted self-facing action is the codec §7.3.1 reroot fallback on an N/S/Z-facing router.
-Canonical maps contain no self bit. With the fallback disabled, or on E/W-facing routers, a self bit
-must fail closed rather than be silently cleared.
-
-The kernel realization is:
-
-- extract the self bit before `pack_fwd`, preserving the 16-arm table;
-- select a dedicated VC0 U-turn sender to the same physical TX link;
-- keep that sender separate from worker channel 0 and `FWD_DIRS[4]`;
-- atomically admit its local queue with every non-self child and local relay;
-- commit one complete immutable packet copy and release RX before sender-step remote-credit wait;
-- apply that sender's own builder-provided `IS_INJECTION` flag in sender-step;
-- interpret self-facing Z as same-link return only under the explicit fallback gate.
-
-The execution order is normative:
-
-1. Validate the self bit against the fallback gate and router facing.
-2. Remove it before forming the dense key.
-3. Include the U-turn local slot in the same atomic admission decision as ordinary outputs.
-4. Commit non-self copies, then the U-turn copy, then local delivery.
-5. Release the incoming RX packet after all local commits.
-6. Let the independent U-turn sender wait for remote credit and transmit.
-
-N/S returns use the same physical link identified by the self-facing direction. For a Z first hop,
-`MY_DIR == Z` plus the fallback gate changes that one self bit into a return request; it must not
-cause another forward-Z step. This is execution of a temporary transport overlay, not permission for
-canonical route U-turns.
-
-The U-turn queue is a full-packet producer boundary. It must not retain the incoming receiver while
-waiting for remote credit. This queue ordering and differential execution against the canonical
-root subtrees remain unresolved conformance requirements; assessment §9.5 owns the proof boundary.
-
-Builder §3.6–§3.7 owns same-link wiring, sender allocation, stream/flat-index assignment, queue
-sizing, and aggregate ceiling arithmetic. The kernel must not duplicate those calculations or
-perform a runtime worker-channel lookup. Builder §4.4 owns the worker-mirror flag derivation.
-
-### 3.10 Legacy turn/header retirement
+### 3.9 Legacy turn/header retirement
 
 The current sender-side dependency chain is:
 
@@ -449,8 +425,7 @@ Retain:
 - 1D header-update overloads;
 - `hop_cmd_to_sender_channel_mask` while trim/resource telemetry still consumes it.
 
-If trim is later enabled for indexed routing, that helper must consume decoded actions and account
-for the optional dedicated U-turn sender.
+If trim is later enabled for indexed routing, that helper must consume decoded actions.
 
 ---
 
@@ -470,9 +445,37 @@ The kernel sequence is:
 
 1. Ordinary indexed maps route to the temporary exit while preserving the final
    `dst_start_mesh_id`.
-2. At that exit, require `routing_l1_info_t::my_mesh_id != dst_start_mesh_id` and select exactly one
-   egress with builder-provided `INTERMESH` capability through the retained intermesh
-   direction/connection metadata. Do not infer this hop from its compass letter.
+2. **Exit detection.** A router recognizes that it is this mesh's exit for the packet when, on an
+   edge-facing intramesh router, the decoded action requests local delivery only and the final mesh
+   is elsewhere:
+
+   ```text
+   if constexpr (is_intramesh_router_on_edge):
+       if (action == LOCAL_DELIVER                                  # no eth bits set
+           && packet.dst_start_mesh_id != routing_l1_info.my_mesh_id):
+           boundary_dir = get_next_hop_router_direction(
+                              packet.dst_start_mesh_id, packet.dst_start_chip_id)
+           forward the packet on the INTERMESH egress in boundary_dir
+           suppress local delivery
+           done
+   ```
+
+   This is the indexed-ABI form of the current `is_intramesh_router_on_edge &&
+   dst_start_mesh_id != my_mesh_id && hop_cmd == FORWARD_<my_direction>` test in
+   `get_cmd_with_mesh_boundary_adjustment()`: "the installed maps say deliver here, but the final
+   mesh is elsewhere, so *here* is the exit." Both conditions are load-bearing. Mesh-id inequality
+   alone is not sufficient, because a packet merely transiting a boundary-capable chip toward a
+   different exit also satisfies it; the local-delivery-only action is what identifies this chip as
+   the selected exit. The CT gate is what keeps interior routers from paying the mesh-id compare on
+   every hop, so it must not be dropped.
+
+   The egress is selected from the retained `inter_mesh_direction_table`, not from a compass letter
+   in the packet, and the selected edge must carry builder-provided `INTERMESH` capability. Unlike
+   the current path, no map rebuild happens at the exit — the packet is forwarded as-is.
+
+   Codec “Packet fields and intermesh landing” guarantees the encoder-side half: an intermesh
+   carrier's installed maps yield exactly `LOCAL_DELIVER` and no eth bits at the exit chip, so the
+   predicate is never ambiguous. A multi-bit action at an exit chip is an encoder error.
 3. On the remote boundary-facing receiver, `INTERMESH` ingress capability intercepts the landing
    before `decode_packet_action` can consume stale source-mesh maps.
 4. Compare the landing router's current mesh with the retained final mesh, then run the landing encode
@@ -491,6 +494,14 @@ The same ordered intercept applies regardless of the physical compass letter use
 edge. Conversely, an intramesh Z output never takes the boundary path merely because its direction is
 Z.
 
+Both edge flags are per-Ethernet-channel and are already derived from the ControlPlane channel split
+(`is_intramesh_router_on_edge` is set for a channel that is intramesh-facing on a chip that also owns
+intermesh channels). An express-Z router on an exit chip therefore inherits the flag with no new
+mechanism, **provided express-Z channels are classified intramesh-facing rather than intermesh**. If
+a same-mesh express channel were still registered as an exit-node direction, a packet arriving at the
+exit chip over a Z chord would decode without the step 2 check and would deliver locally instead of
+crossing the boundary. Builder §4.3 owns that capability classification.
+
 The kernel owns the ordering and carrier continuity, not map construction. Builder §3.5–§3.6 and
 §4.4 own VC1 wiring and concrete sender roles. The assessment §5.7.5 owns the VC1 CDG/BFC decision
 for arbitrary traffic beyond the current two-link, predominantly linear envelope, including
@@ -505,8 +516,8 @@ All kernel BFC rules are centralized here.
 
 ```text
 Stage 1 — RX fanout admission:
-    require local capacity for every selected child sender,
-    the U-turn queue when selected, and local relay when requested
+    require local capacity for every selected child sender
+    and local relay when requested
     commit no copy until all selected local destinations can accept
 
 Stage 2 — each concrete sender step:
@@ -521,7 +532,6 @@ The kernel consumes `SENDER_CH_i_IS_INJECTION`; it does not derive it. It must n
 from direction pairs, Z, decode phase, line state, or the self bit, and it must not apply the remote
 threshold inside RX admission.
 
-The U-turn sender is a distinct VC0 sender and applies its own builder-emitted worker-mirror flag.
 If arbitrary-pattern VC1 BFC is enabled, landed VC1 cardinal/Z senders apply independently derived
 VC1 flags and protected-receiver counts. The current restricted VC1 envelope may retain its existing
 no-bubble behavior.
@@ -542,11 +552,11 @@ fanout proof; assessment §5.7.5 retains the arbitrary-pattern VC1 obligation.
 
 - Cache pinned `local_x/local_y`; use CT `MY_DIR`, `Y_SIZE`, `X_SIZE`, `Y_BASE`, and `X_BASE`.
 - Keep fixed `FWD_DIRS[4]` and dense default dispatch; WH+VC1 uses the §3.3 admission exception.
-- Keep `LOCAL_DELIVER` and the §3.9 self bit outside the packed key.
+- Keep `LOCAL_DELIVER` outside the packed key and reject a set self bit before packing.
 - Disable speedy, super-speedy, trim bypass, and channel remapping for express/protected-ring
   configurations until each preserves the same local admission, concrete sender, remote BFC, and
   queue graph.
-- Do not allocate or execute the U-turn path in 1D or sparse configurations.
+- Allocate no producer that returns a packet over the link it arrived on, in any configuration.
 
 ---
 
@@ -558,12 +568,12 @@ fanout proof; assessment §5.7.5 retains the arbitrary-pattern VC1 obligation.
 | Control overlay and intermesh landing map lifecycle | Codec §4.5 / §5.10 / §6.3 |
 | Target unicast widening | Codec §7.1 |
 | Primary multicast reverse tree | Codec §5.7.1 |
-| Source multi-inject and reroot overlay/selection | Codec §7.3.1 |
-| Sender allocation, same-link wiring, and ceilings | Builder §3.6–§3.7 |
+| Source multi-inject and injection-direction selection | Codec §7.3.1 |
+| Sender allocation and ceilings | Builder §3.6–§3.7 |
 | Per-concrete-sender `IS_INJECTION` | Builder §4.4 |
-| VC0 BFC/atomic-fanout proof and reroot boundary | Assessment §5.7.3–§5.7.4 / §9.5 |
+| VC0 BFC/atomic-fanout proof and source-injection boundary | Assessment §5.7.3–§5.7.4 / §9.5 |
 | Arbitrary-pattern VC1 safety/BFC | Assessment §5.7.5 plus builder realization |
-| ERISC admit, dispatch, fanout, landing order, U-turn execution, BFC use | This document |
+| ERISC admit, dispatch, fanout, landing order, BFC use | This document |
 
 Kernel runtime inputs are codec-installed packet bytes and builder CT arguments. Byte changes begin
 in the codec; sender-role changes begin in the builder. Codec §8 records this boundary but does not
@@ -577,19 +587,21 @@ contain kernel decode snippets.
 - [ ] Realize codec §4.3 decode exactly; reject reserved/invalid action state per codec §4.6.
 - [ ] Handle invalid/self/all-zero actions with the §3.3 assert-and-fail-stop policy; never reinterpret
       them as Z or NOOP.
-- [ ] Use current/final mesh identity plus `INTERMESH` egress/ingress capability to execute and
-      intercept each boundary hop before ordinary landing decode; retain VC1.
+- [ ] Detect the exit chip with the §4.2 predicate — edge-facing intramesh router, local-delivery-only
+      action, and final mesh elsewhere — and take the `INTERMESH` egress from the retained direction
+      table instead of delivering locally; keep the CT gate so interior routers pay nothing.
+- [ ] Intercept each boundary landing on `INTERMESH` ingress capability before ordinary decode;
+      retain VC1.
 - [ ] Remove `NOOP` as both Z and recompute.
 - [ ] Use dense hand-written 16-way admit/forward dispatch on Z-capable default builds.
 - [ ] Keep WH+VC1 admission as compass-only local-capacity bit tests; never add WH Z handling.
-- [ ] Keep local delivery and the gated self bit outside the jump-table key.
+- [ ] Keep local delivery outside the jump-table key and fail closed on a set self bit.
 - [ ] Admit atomically against all selected local queues; forward immutable full packets and deliver
       locally after eth outputs.
-- [ ] Make the U-turn queue a distinct full-packet producer; release RX before its remote-credit wait.
+- [ ] Wire no producer from a receiver back to a sender on the same physical link (§3.7).
 - [ ] Apply remote BFC only in each sender step from that sender's CT flag.
-- [ ] Retire the complete §3.10 2D turn/header-mutation set only at universal indexed cutover.
+- [ ] Retire the complete §3.9 2D turn/header-mutation set only at universal indexed cutover.
 - [ ] Remove `port_direction_table` independently.
 - [ ] Disable speedy/trim paths until admission and queue-graph equivalence is established.
-- [ ] Keep arbitrary-pattern VC1 expansion and reroot differential/queue-ordering conformance gated
-      until their assessment and builder obligations pass; retain the current restricted VC1
-      envelope.
+- [ ] Keep arbitrary-pattern VC1 expansion gated until its assessment and builder obligations pass;
+      retain the current restricted VC1 envelope.

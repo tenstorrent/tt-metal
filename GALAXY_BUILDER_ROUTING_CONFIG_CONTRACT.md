@@ -12,7 +12,7 @@ Authority split:
   materialization, ring synthesis, canonical-route generation, and the ControlPlane-owned facts
   consumed through this document's §4 surface.
 - **This document** owns the CP ↔ builder query surface, builder-local effect derivation, router
-  wiring and allocation, BFC compile-time arguments, and the fallback-only same-link U-turn sender.
+  wiring and allocation, and BFC compile-time arguments.
 - The codec and kernel contracts own device-visible bytes and ERISC realization respectively; this
   document supplies their routing-relevant builder bindings rather than restating either contract.
 
@@ -43,9 +43,7 @@ two-link, predominantly linear envelope.
 | **express** | skip | Intramesh non-nearest-neighbor chord; command **Z** |
 | **cardinal** | base *(for edge capability / commands)* | Ordinary geometric N/S/E/W edge or command |
 | **intermesh** | “Z means boundary” | Cross-mesh edge capability (any command letter) |
-| **source multi-inject** | root RX fanout | Worker sends one canonical-map copy per connected root output |
-| **pre-inject reroot overlay** | replacement canonical route | Codec-only two-bit transport overlay used before a single-connection inject |
-| **same-link U-turn sender** | canonical route U-turn | Dedicated fallback-only VC0 infrastructure queue; ordinary route reversals remain forbidden |
+| **source multi-inject** | root RX fanout | Worker sends one canonical-map copy per connected root output; required for express multicast, which is out of V1 scope |
 
 Builder edge capabilities:
 
@@ -68,7 +66,6 @@ RT gen     → canonical next-hop relation + internal ring/domain derivation;
 ControlPlane → existing connectivity + §4 node/direction predicate surface
 FabricBuilder → total effects on wired producers; capability + static DOR unwiring;
                 trust routes for LAND_ONLY/FORBIDDEN
-             + temporary same-link VC0 return wiring for source reroot
 Kernel     → output direction + static injection flags only
 ```
 
@@ -249,27 +246,20 @@ Current-code cutover:
 - The initial crossover is an intermesh link-endpoint rule: the source side can exit through its VC0
   boundary sender and the remote side lands in a VC1 receiver. It does not add a VC1 worker or a
   local VC0-receiver→VC1-intramesh-sender shortcut.
-- In an express-enabled mesh, the temporary §3.7 fallback adds one dedicated VC0
-  RX→same-physical-TX return sender to every participating N/S/Z router instance. This sender is
-  outside the generic orthogonal/cross producer map and does not legalize canonical route U-turns.
+- No producer is wired from a receiver back to a sender on the same physical link. A canonical route
+  never reverses on the link it arrived on, and an infrastructure producer that did so would add an
+  `e → reverse(e)` arc to the dependency graph that assessment §5.7.3 assumes absent.
 
 ### 3.6 Allocators, intermesh context, lifecycle
 
 All sender/receiver counts in this section are logical firmware channel slots, not physical Ethernet
 links, TX queues, or hardware sender engines.
 
-- VC0 before the temporary reroot fallback: ≤5 senders (one worker + up to four non-self producer
-  slots), 1 receiver.
-- VC0 with the fallback: ≤6 senders (the five above + one dedicated same-link U-turn sender).
+- VC0: ≤5 senders (one worker + up to four non-self producer slots), 1 receiver.
 - VC1: ≤4 senders (no worker; up to four non-self producer slots), 1 receiver when intermesh is
   enabled.
 - VC2: ≤1 sender; ≤1 receiver on configurations that service a VC2 receiver.
-- Aggregate logical sender-channel count without fallback: `5 + 4 + 1 = 10`; required ceiling `11`;
-  margin `1`.
-- Aggregate logical sender-channel count with fallback and no VC2: `6 + 4 + 0 = 10`; required ceiling `11`;
-  margin `1`.
-- Aggregate logical sender-channel count with fallback and VC2: `6 + 4 + 1 = 11`; required ceiling `11`;
-  margin `0`.
+- Aggregate logical sender-channel count: `5 + 4 + 1 = 10`; configured ceiling `10`; margin `0`.
 - Aggregate receiver ceiling: `1 + 1 + 1 = 3`; configured ceiling `3`; margin `0`.
 - Per receiving router, cardinal/express fanout can require four downstream EDMs on VC0 and four on
   VC1: `4 + 4 = 8`; configured aggregate downstream ceiling `8`; margin `0`.
@@ -279,71 +269,52 @@ links, TX queues, or hardware sender engines.
   map requirement that cardinal and express-Z outputs remain realizable after crossover.
 - Production guards: derive one BFC class per concrete sender/VC so VC1 can be enabled independently;
   no undeclared waits; landing rebuild is not acquisition, but its first egress may be.
-- The U-turn queue may use the minimum supported **local** sender slot count through a per-channel
-  allocator override. It must not shrink primary VC0/VC1 queues or the protected remote receiver;
-  an injection-class send still requires remote `free ≥ 2`.
 
-The global `num_max_receiver_channels == 3` and `max_downstream_edms == 8` ceilings remain
-numerically sufficient: the U-turn path adds neither a receiver VC nor a new remote EDM identity.
-The required global `num_max_sender_channels` is **at least 11 logical firmware sender-channel
-slots**. These are not eleven Ethernet links, physical TX queues, or hardware sender engines. Current
-code still sets the software ceiling to 10 and must be raised; excluding VC2 from the express+reroot
-profile is not the target workaround. Independently, an express-aware cardinal router needs
-`5 VC0 + 4 VC1 = 9` logical sender channels before the fallback/optional VC2 (rather than the current
-`4 + 4 = 8`), and VC0 downstream capacity rises from `3` to `4`. Channel mapping places the VC1 flat
-base after the actual VC0 range: five normally, six when the fallback sender is compiled in.
+The global `num_max_sender_channels == 10`, `num_max_receiver_channels == 3`, and
+`max_downstream_edms == 8` ceilings are numerically sufficient for the express profile. Express
+routing does not raise the global logical sender-channel array size; margins on all three are `0`,
+so any later feature that adds a producer, a receiver VC, or a downstream identity must re-derive
+these numbers rather than assume headroom.
 
-The 10→11 change is firmware resource-mapping work, not a physical-fabric fit check or only a host
-constant edit. Extend the hard-coded per-sender firmware CT tables and kernel initialization ranges;
-move VC1/VC2 flat bases after the six-entry VC0 range; assign a non-conflicting free-slot
-stream/counter for the added logical channel; and include its minimal queue plus metadata in L1
-allocation. The current 22–29 sender free-slot stream block and the dual uses of stream IDs 30–31
+What express does change is the per-router shape inside those ceilings. An express-aware cardinal
+router needs `5 VC0 + 4 VC1 = 9` logical sender channels before the optional VC2, rather than the
+current `4 + 4 = 8`, and VC0 downstream capacity rises from `3` to `4`. In current code that means
+`num_sender_channels_2d` moves from `8` to `9` and `num_downstream_edms_2d_vc0` from `3` to `4`,
+with the VC1 flat base placed after the five-entry VC0 range. This is firmware resource-mapping
+work, not only a host constant edit: the hard-coded per-sender firmware CT tables, kernel
+initialization ranges, flat VC bases, free-slot stream/counter assignment, and L1 sizing all move
+together. The current 22–29 sender free-slot stream block and the dual uses of stream IDs 30–31
 require an explicit mapping plan.
 
-### 3.7 Same-mesh express multicast source fanout
+### 3.7 Express multicast source injection (out of V1 scope)
 
-Codec §7.3.1 owns root-output selection and the pre-inject reroot overlay; kernel §3.9 owns its
-execution. The preferred builder path is `RoutingPlaneConnectionManager` source multi-inject when
-all canonical root outputs have open direction-tagged slots. N/S/Z source fanout fits the current
-four-slot manager. A broader persistent N/S/E/W/Z policy requires at least five slots and remains an
-open manager policy requirement.
+Assessment §9.5 and codec “Express multicast and worker connections” own this boundary. The summary
+for builder purposes:
 
-For incomplete source connections, the temporary fallback is gated by
-`express_routing_enabled && source_reroot_fallback_enabled`. Builder must retain the selected
-connection direction (`ConnectionSlot::tag` or raw-sender `edm_direction`), assert that the two
-representations agree when both exist, and emit `ENABLE_MCAST_SOURCE_REROOT` only when its queue is
-present.
+A source worker injects directly into one sender channel and bypasses source RX, so a canonical
+multicast root with more than one output cannot be launched from a single connection. The sound
+realization is `RoutingPlaneConnectionManager` source multi-inject: one direction-tagged slot per
+canonical root output, one byte-identical copy through each. N/S/Z source fanout fits the current
+four-slot manager; a broader persistent N/S/E/W/Z policy would require at least five slots and
+remains an open manager policy question.
 
-Provision one minimal VC0 U-turn sender on **every active N/S/Z router instance in an
-express-enabled 2D mesh**, including cardinal-only first-hop chips:
+Multi-inject needs **no builder support beyond what already exists** — the worker channel on each
+router already carries the correct `ENTER` flag, and the copies are independent source injections
+requiring no atomicity between them. Builder must continue to retain the selected connection
+direction (`ConnectionSlot::tag` or raw-sender `edm_direction`) and assert that the two
+representations agree when both exist.
 
-```text
-same-link eth RX → dedicated local VC0 queue → same physical eth TX
-```
-
-This is a distinct infrastructure producer, not worker channel 0, a generic non-self producer, or a
-canonical route turn. Its per-channel allocator may use the minimum supported local slot count
-without shrinking primary queues. It is a full-packet producer boundary: commit the complete
-immutable copy to the local queue and release RX before the sender waits for remote credit. Builder
-conformance must verify that ordering, queue separation, and a distinct flat sender index.
-
-At build time, the U-turn sender's flat `IS_INJECTION` value mirrors worker channel 0 for that same
-outbound edge:
-
-```text
-uturn_sender.IS_INJECTION = worker_ch0_for_same_output.IS_INJECTION
-```
-
-The builder copies the precomputed worker effect/flag; it does not perform a runtime lookup or infer
-the value from packet state. A mirrored `ENTER` uses `free ≥ 2`; a non-ring return remains ordinary.
-Differential conformance, guard separation, and concrete queue allocation remain required. Remove
-the queue and allocator override when all required source directions are guaranteed.
+Express multicast is out of V1 scope because the existing single-connection worker adapters cannot
+hold a multi-output root, not because of a missing builder mechanism. Builder must not attempt to
+close that gap with a same-link return producer: routing a copy back over the link it arrived on
+adds an `e → reverse(e)` dependency arc that the VC0 proof assumes absent, and no BFC flag or
+producer-boundary ordering repairs it.
 
 ### 3.8 Universal indexed-2D cutover cleanup
 
 At the universal indexed-2D cutover, builder retires the `UPDATE_PKT_HDR_ON_RX_CH` policy, CT
 argument, and plumbing. Do not retire it while any 2D producer still emits the legacy hop program;
-the cutover boundary is codec §4.5.1 and kernel §3.10.
+the cutover boundary is codec §4.5.1 and kernel §3.9.
 
 `SENDER_CH_i_IS_INJECTION` remains required. Replace its current turn heuristic with §4.4 effects,
 but retain per-concrete-sender flags, connection maps, direction mappings, VC wiring, and capability
@@ -403,8 +374,6 @@ If MGD lists express links but they are not materialized as neighbors, setup is 
 (today’s gap: parse as C without Z neighbor materialization).
 
 Express routing *is* the protected-ring regime for the initial cut (with Torus topology retained).
-The temporary §3.7 source-reroot wiring is enabled only under this flag plus its own fallback policy
-switch; ordinary non-express and 1D builds do not allocate it.
 
 ### 4.2 Protected-ring predicate surface
 
@@ -438,8 +407,7 @@ distinction between an allowed protected-ring acquisition and a route-illegal tu
 terminal-only versus fully forbidden policy separate internally.
 
 Worker source injection has no ingress direction and is handled directly as first acquisition when
-its egress is protected. The dedicated reroot sender mirrors that worker result and does not call
-these turn predicates.
+its egress is protected; it does not call these turn predicates.
 
 RT-gen/ControlPlane may internally use opaque ring IDs, orientations, ordered cycles, successor maps,
 `domains_of`, and a richer transition policy. Those are not external Builder API values.
@@ -527,6 +495,22 @@ remote.mesh_id == local.mesh_id
 
 Stop using “has Z” alone as intermesh. Express-Z BFC participates in protected **Y-axis** rings.
 
+**Consequence for the edge-facing CT flags.** `IS_INTERMESH_ROUTER_ON_EDGE` and
+`IS_INTRAMESH_ROUTER_ON_EDGE` are per-Ethernet-channel and are computed from the ControlPlane channel
+split: a channel is intramesh-facing when it appears in the node's direction map and is *not*
+registered as an exit-node direction. A same-mesh express-Z channel must therefore land on the
+intramesh-facing side. Two things depend on it:
+
+- kernel §4.2's exit check is gated by `is_intramesh_router_on_edge`, so a Z router on an exit chip
+  only inherits the gate when express-Z is intramesh-facing. Misclassifying it would make a packet
+  that reaches the exit chip over a Z chord deliver locally instead of crossing the boundary;
+- the VC0/VC1 wiring templates in §3.5 are selected from the same capability, so a misclassified
+  express-Z edge would also receive the intermesh boundary template rather than the shared cardinal
+  and express maps.
+
+No new flag or builder mechanism is required for either; the requirement is that the classification
+is capability-based rather than `direction == Z`.
+
 ### 4.4 Builder derivation (effects → `IS_INJECTION`)
 
 ControlPlane does **not** expose builder-shaped effect rows. Builder derives a **total** effect for
@@ -588,18 +572,10 @@ An `INTERMESH` ingress is a landing/root, not an intramesh X ingress, even if it
 is E or W. This check is static and local; it does not attempt to distinguish route-state-dependent
 misuse of an otherwise legal Y→X producer. Those cases remain RT-gen/encoder validation obligations.
 
-**Infrastructure exception — source-reroot U-turn (§3.7):** generic route U-turns remain outside
-the canonical set and are not added to the table above. The dedicated VC0 U-turn queue is a separate
-producer class generated only for the source-reroot fallback. Its flag is copied from worker
-channel 0 for the same outbound edge rather than classified from an ordinary `U→V→U` route turn:
-
-```text
-effect(UTURN_REROOT, D_out, VC0) = effect(SOURCE_WORKER, D_out, VC0)
-IS_INJECTION(UTURN_REROOT)       = IS_INJECTION(SOURCE_WORKER, D_out, VC0)
-```
-
-It still owns a distinct flat sender index and queue. Keep it in alias/capacity accounting; do not
-let the copy operation alias an ENTER and REMAIN producer onto one physical queue.
+**No same-link producer class exists.** A `U→V→U` turn is outside the canonical route set and is
+not wired, and there is no infrastructure producer that routes a copy back over the link it arrived
+on. Such a producer would add an `e → reverse(e)` dependency arc that assessment §5.7.3 assumes
+absent; see §3.7.
 
 #### Explicit builder algorithm (per chip)
 
@@ -620,10 +596,8 @@ wires producer slots, then classifies each wired `(ingress, egress)`.
      + capability unwiring (intramesh X E/W ↛ express Z)
      + static DOR unwiring (intramesh X E/W ↛ intramesh Y N/S/Z)
      + landing exception (INTERMESH ingress may feed intramesh N/S/Z)
-     + §3.7 UTURN_REROOT VC0 same-link queue when fallback enabled
      each outbound router gets producer slots, e.g. Z-router:
        VC0: worker + wired non-self VC0 producers
-            + dedicated UTURN_REROOT sender (fallback build only)
        VC1: wired non-self VC1 producers; no worker
        …
 
@@ -632,8 +606,6 @@ wires producer slots, then classifies each wired `(ingress, egress)`.
      for each wired producer slot i:
        if VC0 worker:
          effect = is_protected_ring_edge(V, D_out) ? ENTER : NON_RING
-       else if UTURN_REROOT:
-         copy effect/IS_INJECTION from VC0 worker for D_out; continue
        else:
          assert !is_static_dor_forbidden(D_in, ingress_capability, D_out, egress_capability)
          effect = classify(V, D_in, D_out)  // node/direction predicates below
@@ -701,7 +673,7 @@ ControlPlane
 FabricBuilder
   reads §§4.1–4.4; derives total effects on wired producers;
   generic maps + capability/static-DOR unwiring
-  retains connection directions; optionally adds §3.7 UTURN_REROOT queue + worker-mirror flag
+  retains connection directions
 ```
 
 | Builder need | CP provides | Builder derives |
@@ -717,7 +689,6 @@ FabricBuilder
 | Terminal-only / forbidden turn | `continuation_allowed == false` | NON_CANONICAL if wired |
 | Capability | mesh ids + dirs + flag (§4.3) | EXPRESS / CARDINAL / INTERMESH |
 | Source inject direction | existing connection-table `edm_direction`; manager tags | retain/expose on sender; tag-direction consistency assert |
-| Reroot U-turn flag | — | copy same-output VC0 worker effect/flag (§3.7 / §4.4) |
 
 ### 4.6 Explicitly not on the builder production path
 
@@ -737,12 +708,12 @@ Open requirements:
 - Decide and complete the system-level VC1 CDG/BFC treatment before supporting arbitrary cross-mesh
   traffic beyond the current two-link, predominantly linear envelope. It must either confirm that §4
   supplies all required builder inputs or define additional VC1 domain/guard facts.
-- Close source-reroot differential conformance, full-packet producer-boundary ordering, guard
-  separation, and concrete queue allocation.
-- Implement `num_max_sender_channels ≥ 11` logical firmware sender-channel slots across CT tables,
-  stream/counter assignment, flat VC bases, initialization ranges, and L1 sizing.
-- Decide the broader manager policy: persistent N/S/E/W/Z provisioning needs at least five slots;
-  the current four slots are sufficient for the N/S/Z source-fanout requirement.
+- Implement the per-router shape change inside the existing ceilings: `num_sender_channels_2d`
+  `8 → 9`, `num_downstream_edms_2d_vc0` `3 → 4`, VC1 flat base after the five-entry VC0 range, and
+  the matching CT tables, stream/counter assignment, initialization ranges, and L1 sizing.
+- Decide the broader manager policy before express multicast is enabled: persistent N/S/E/W/Z
+  provisioning needs at least five slots; the current four are sufficient for the N/S/Z source
+  multi-inject requirement in §3.7.
 
 Builder implementation checklist:
 
@@ -753,9 +724,8 @@ Builder implementation checklist:
 3. Classify every wired concrete producer with §4.4; emit exact per-VC `IS_INJECTION`, per-router
    deadlock-avoidance enable, and independent first-level ACK flags.
 4. Apply the §3.6 sender/receiver/downstream ceilings and protected-receiver slot requirements.
-5. If reroot fallback is enabled, provision the uniform same-link VC0 queue, direction consistency
-   assertion, allocator override, CT gate, and worker-flag mirror from §3.7.
-6. Retire `UPDATE_PKT_HDR_ON_RX_CH` only at the codec §4.5.1 / kernel §3.10 indexed-2D cutover.
+5. Wire no producer from a receiver back to a sender on the same physical link (§3.7).
+6. Retire `UPDATE_PKT_HDR_ON_RX_CH` only at the codec §4.5.1 / kernel §3.9 indexed-2D cutover.
 7. Regress builder derivation and projection against assessment Appendix A.6; require zero effect
    mismatches, mixed-role aliases, unmapped/multiply mapped transitions, and connected
    DOR-forbidden arcs.
@@ -766,10 +736,9 @@ Builder verification:
   emitted `IS_INJECTION`, and concrete receiver.
 - Check that no capability-illegal or static intramesh-X→Y connection survives mapping.
 - Check VC0 and VC1 CT flags and first-level ACK settings independently.
-- Check flat VC bases, streams/counters, L1 queue bytes, receiver slots, and downstream counts for
-  no-fallback, fallback-without-VC2, and fallback-with-VC2 profiles.
-- For fallback builds, check uniform distinct queues, direction-tag agreement, worker-flag equality,
-  and RX release before remote-credit wait.
+- Check flat VC bases, streams/counters, L1 queue bytes, receiver slots, and downstream counts with
+  and without VC2.
+- Check that no producer connects a receiver to a sender on the same physical link.
 - At indexed cutover, check that no remaining 2D producer depends on `UPDATE_PKT_HDR_ON_RX_CH`.
 
 ---
@@ -800,7 +769,6 @@ cardinal but not members of `D_ex4`.
 ```text
 VC0 output: worker + each wired VC0 ingress
 VC1 output: each wired VC1 ingress; no worker; carrier remains VC1
-fallback:  distinct VC0 UTURN_REROOT sender after ordinary VC0 producers
 ```
 
 Tables below show VC0 for compactness. A realized VC1 turn receives the same physical effect but an
@@ -832,7 +800,7 @@ Z-face=`e(5→2)`. Builder keys off the ingress edge/port, not only the wire com
 | source worker | ENTER `(D_ex4,FWD)` | 1 | `free(Q(2→5)) ≥ 2` |
 | N-face `e(1→2)` | REMAIN `(D_ex4,FWD)` | 0 | `free(Q(2→5)) ≥ 1` |
 | S-face `e(3→2)` from leaf | ENTER `(D_ex4,FWD)` | 1 | `free(Q(2→5)) ≥ 2` |
-| Z-face | — | — | canonical U-turn absent; fallback uses its distinct §3.7 sender |
+| Z-face | — | — | same-link reversal is not wired (§3.7) |
 | intramesh E/W-face | — | — | static X→Y unwiring |
 
 The reverse-domain cardinal output `e(2→1)` has the symmetric distinction: source or leaf
@@ -844,7 +812,7 @@ attachment enters `(D_ex4,REV)`, while Z-face transit remains in it.
 |---|---|---|
 | source or N/S/Z-face after Y completes | ENTER `(D_x@Y2,FWD)` | 1 |
 | W-face X transit | REMAIN `(D_x@Y2,FWD)` | 0 |
-| E-face | canonical U-turn absent | — |
+| E-face | same-link reversal is not wired (§3.7) | — |
 
 W egress is symmetric with `REV`. A route-state-dependent Y→X misuse may be
 `NON_CANONICAL`; static intramesh X→Y is unwired.
@@ -945,27 +913,25 @@ Required realization checks:
 
 ---
 
-### 6.5 Worked source reroot: canonical `S|Z`, one S connection
+### 6.5 Worked multi-output source root: canonical `S|Z` at Y=2
 
-Suppose source Y=2 has canonical root action `S|Z`, but its worker owns only the S connection.
-Codec §7.3.1 owns the overlay bytes and kernel §3.9 owns execution. The builder-visible result is:
+Suppose source Y=2 has canonical root action `S|Z`. With S and Z manager slots open, the worker
+injects one byte-identical canonical-map copy on each edge. The builder-visible result is two
+ordinary worker-channel producers, classified independently:
 
 | Concrete producer | Builder effect | `IS_INJECTION` |
 |---|---|---|
-| Y=3 dedicated N-output `UTURN_REROOT` queue | mirror Y=3 N-output worker: NON_RING | 0 |
-| Y=2 ordinary S-face→Z producer after return | ENTER `(D_ex4,FWD)` | 1; require `free(Q(2→5)) ≥ 2` |
+| Y=2 worker → S output `e(2→3)` | NON_RING (leaf attachment) | 0 |
+| Y=2 worker → Z output `e(2→5)` | ENTER `(D_ex4,FWD)` | 1; require `free(Q(2→5)) ≥ 2` |
 
-This illustrates why the U-turn flag mirrors the **worker for its own same-link output**, not the
-eventual remaining source branch. The return `3→2` is a non-ring attachment; the protected-ring
-acquisition occurs later on the ordinary `S-face→Z` sender at Y=2.
+Each copy is an independent source injection, so no atomicity is required between them and neither
+producer holds a fabric receiver while the other waits.
 
-The N-facing router at leaf Y=3 receives the fallback queue because builder provisioning is uniform
-across all participating N/S/Z router instances.
-
-With S and Z manager slots, the preferred path instead injects one canonical-map copy on each edge
-and does not use the return (the queue may remain uniformly provisioned in a fallback-enabled
-build). With a Z-only raw sender, the same algorithm uses self-facing `Z↔Z`; the Z-facing child
-U-turn sender mirrors the worker classification for its reverse express output.
+If the worker owns only one of the two connections, the operation is not realizable: the unconnected
+root subtree is unreachable. Builder does not close that gap — routing a copy back over the injected
+link would add the dependency arc described in §3.7. Express multicast is therefore out of V1 scope
+until every participating client holds one connection per canonical root output; see assessment
+§9.5.
 
 ### 6.6 Tie-back to §4
 
