@@ -53,8 +53,8 @@ def test_split_preprocess_only_for_multi_device():
     assert ace_step_needs_split_device("BH_LB")
 
 
-def test_unknown_mesh_sku_raises():
-    with pytest.raises(ValueError, match="Unknown ACE-Step mesh SKU"):
+def test_unknown_mesh_sku_raises(expect_error):
+    with expect_error(ValueError, "Unknown ACE-Step mesh SKU"):
         resolve_ace_step_mesh_sku(cli_value="NOT_A_SKU")
 
 
