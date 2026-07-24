@@ -631,8 +631,9 @@ class TTSampling(LightweightModule):
                 output_tensor=tt_out_tok,
                 keepdim=False,
             )
-            # Argmax path: logprobs not supported (force-argmax is disabled
-            # when logprobs are enabled via format_sampling_params guard).
+            # Argmax fast-path does not compute logprobs (it never runs a softmax over
+            # the vocab). On single-chip, on-device logprobs are unsupported anyway
+            # (LogProbsCalculator._is_supported requires num_devices in (8, 32)).
             self.tt_log_probs = None
             return tt_out_tok, self.tt_log_probs
 
