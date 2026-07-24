@@ -77,7 +77,10 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     const std::optional<ttnn::Tensor>& eye = std::nullopt,
     const std::optional<ttnn::Tensor>& tril = std::nullopt,
     const std::optional<ttnn::Tensor>& ones = std::nullopt,
-    const std::optional<ttnn::Tensor>& masks = std::nullopt);
+    const std::optional<ttnn::Tensor>& masks = std::nullopt,
+    const std::optional<ttnn::Tensor>& rms_gate = std::nullopt,
+    const std::optional<ttnn::Tensor>& rms_weight = std::nullopt,
+    float rms_epsilon = 1e-5f);
 
 /** Fused per-head RMSNorm and sigmoid gate for tile-aligned KDA prefill. */
 ttnn::Tensor kda_gated_rms_norm(

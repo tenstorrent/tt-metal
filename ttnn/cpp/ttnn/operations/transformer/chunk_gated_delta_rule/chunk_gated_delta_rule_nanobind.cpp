@@ -99,7 +99,10 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("eye") = nb::none(),
         nb::arg("tril") = nb::none(),
         nb::arg("ones") = nb::none(),
-        nb::arg("masks") = nb::none());
+        nb::arg("masks") = nb::none(),
+        nb::arg("rms_gate") = nb::none(),
+        nb::arg("rms_weight") = nb::none(),
+        nb::arg("rms_epsilon") = 1e-5f);
 
     ttnn::bind_function<"kda_gated_rms_norm", "ttnn.transformer.">(
         mod,

@@ -207,6 +207,20 @@ void ChunkGdnScanOperation::validate_on_program_cache_miss(
     TT_FATAL(attrs.chunk_size % TILE_HEIGHT == 0, "chunk_size must be a multiple of 32");
     TT_FATAL(attrs.key_dim % TILE_WIDTH == 0, "key_dim must be a multiple of 32");
     TT_FATAL(attrs.val_dim % TILE_WIDTH == 0, "val_dim must be a multiple of 32");
+    TT_FATAL(in.rms_gate.has_value() == in.rms_weight.has_value(), "fused RMS requires both gate and weight");
+    if (in.rms_gate.has_value()) {
+        check(*in.rms_gate, "rms_gate", DataType::BFLOAT16);
+        check(*in.rms_weight, "rms_weight", DataType::BFLOAT16);
+        TT_FATAL(
+            attrs.vector_gate && attrs.num_heads > 0 && attrs.BH % attrs.num_heads == 0,
+            "fused RMS requires KDA heads");
+        const auto& gs = in.rms_gate->logical_shape();
+        TT_FATAL(
+            gs.rank() == 3 && gs[0] == attrs.BH / attrs.num_heads && gs[1] == attrs.num_chunks * attrs.chunk_size &&
+                gs[2] == attrs.num_heads * attrs.val_dim,
+            "fused RMS gate shape mismatch");
+        TT_FATAL(in.rms_weight->logical_volume() == attrs.val_dim, "fused RMS weight width mismatch");
+    }
 }
 
 ChunkGdnScanOperation::spec_return_value_t ChunkGdnScanOperation::compute_output_specs(
@@ -219,7 +233,15 @@ ChunkGdnScanOperation::spec_return_value_t ChunkGdnScanOperation::compute_output
     ttnn::Shape o_shape = attrs.state_only ? ttnn::Shape({1, 1, 32, 32})
                                            : ttnn::Shape({attrs.BH, attrs.num_chunks, attrs.chunk_size, attrs.val_dim});
     ttnn::Shape s_shape({attrs.BH, attrs.key_dim, attrs.val_dim});
-    return {tt::tt_metal::TensorSpec(o_shape, o_layout), tt::tt_metal::TensorSpec(s_shape, s_layout)};
+    std::vector<tt::tt_metal::TensorSpec> specs{
+        tt::tt_metal::TensorSpec(o_shape, o_layout), tt::tt_metal::TensorSpec(s_shape, s_layout)};
+    if (attrs.fused_rms) {
+        specs.emplace_back(
+            ttnn::Shape(
+                {attrs.BH / attrs.num_heads, attrs.num_chunks * attrs.chunk_size, attrs.num_heads * attrs.val_dim}),
+            o_layout);
+    }
+    return specs;
 }
 
 ChunkGdnScanOperation::tensor_return_value_t ChunkGdnScanOperation::create_output_tensors(
@@ -249,7 +271,11 @@ std::vector<Tensor> chunk_gdn_scan(
     const DeviceComputeKernelConfig& compute_kernel_config,
     bool vector_gate,
     bool state_only,
-    const std::optional<Tensor>& identity_tile) {
+    const std::optional<Tensor>& identity_tile,
+    const std::optional<Tensor>& rms_gate,
+    const std::optional<Tensor>& rms_weight,
+    uint32_t num_heads,
+    float rms_epsilon) {
     const auto& vb_shape = v_beta.logical_shape();  // [BH, NC, C, V]
     const auto& kd_shape = kd.logical_shape();      // [BH, NC, C, K]
     auto attrs = ChunkGdnScanOperation::operation_attributes_t{
@@ -263,6 +289,9 @@ std::vector<Tensor> chunk_gdn_scan(
         .output_final_state = output_final_state,
         .state_only = state_only,
         .vector_gate = vector_gate,
+        .fused_rms = rms_gate.has_value(),
+        .num_heads = num_heads,
+        .rms_epsilon = rms_epsilon,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
     };
@@ -275,7 +304,9 @@ std::vector<Tensor> chunk_gdn_scan(
         .dl = dl,
         .t_inv = t_inv,
         .initial_state = initial_state,
-        .identity_tile = identity_tile};
+        .identity_tile = identity_tile,
+        .rms_gate = rms_gate,
+        .rms_weight = rms_weight};
     return ttnn::device_operation::launch<ChunkGdnScanOperation>(attrs, tensor_args);
 }
 

@@ -465,7 +465,10 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     const std::optional<ttnn::Tensor>& eye,
     const std::optional<ttnn::Tensor>& tril,
     const std::optional<ttnn::Tensor>& ones,
-    const std::optional<ttnn::Tensor>& masks) {
+    const std::optional<ttnn::Tensor>& masks,
+    const std::optional<ttnn::Tensor>& rms_gate,
+    const std::optional<ttnn::Tensor>& rms_weight,
+    float rms_epsilon) {
     const auto& qs = q_in.logical_shape();
     const auto& vs = v_in.logical_shape();
     const auto& gs = g_in.logical_shape();
@@ -705,7 +708,25 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
         scan = *grouped_scan;
     } else {
         scan = ttnn::prim::chunk_gdn_scan(
-            prep[0], prep[1], prep[2], prep[3], prep[4], prep[5], prep[6], s0, C, true, out_mem, kernel_cfg, true);
+            prep[0],
+            prep[1],
+            prep[2],
+            prep[3],
+            prep[4],
+            prep[5],
+            prep[6],
+            s0,
+            C,
+            true,
+            out_mem,
+            kernel_cfg,
+            true,
+            false,
+            std::nullopt,
+            rms_gate,
+            rms_weight,
+            H,
+            rms_epsilon);
     }
 
     std::optional<ttnn::Tensor> final_state;
@@ -713,6 +734,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
         final_state = ttnn::reshape(scan[1], ttnn::Shape({B, H, K, V}));
     }
     if (output_head_major && pad == 0) {
+        if (rms_gate.has_value()) {
+            return {scan[2], final_state};
+        }
         return {ttnn::reshape(scan[0], ttnn::Shape({BH, T, V})), final_state};
     }
 

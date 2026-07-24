@@ -1711,3 +1711,37 @@
   `0.999958/0.999912/0.999997`.
 - Verdict: reject and fully restore source. Revisit only after MMRS exposes an
   independent matmul-output/persistent-buffer dtype contract.
+
+
+### 2026-07-24 23:37 UTC — Retain bounded scan-to-gated-RMS pipeline
+
+- Hypothesis: preserve the 16 scan producers and use the other 94 Tensix cores
+  as gated-RMS consumers in the same program. Fine-grained readiness should
+  overlap most of the standalone `83.557 us` RMS stage with the serial scan.
+- Implementation: each scan producer writes one FP32 V-block to the existing
+  recurrence output, completes its NOC barrier, and signals the cyclically
+  assigned RMS consumer. A consumer waits for all four V-block signals for its
+  `(head, chunk)` item, reads the complete row plus gate/weight, and writes the
+  token-major gated output. T=5,120 distributes 640 items as six or seven per
+  consumer; T=672 distributes 84 items across the first 84 consumers.
+- Host build: `./build_metal.sh --build-tests --build-type Release` -> PASS.
+- Correctness: `KDA_TP_TEST_SEQ=672 scripts/run_safe_pytest.sh --run-all
+  models/experimental/kimi_delta_attention/tests/test_tp_weights.py::test_tp_layer_pcc
+  -q -s` -> PASS at output/recurrent/convolution PCC
+  `0.999958/0.999912/0.999997`. The identical T=5,120 command also passed at
+  `0.999958/0.999890/0.999997`.
+- Performance: `PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10
+  scripts/run_safe_pytest.sh --profile
+  models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py
+  -q -s` -> PASS. CSV
+  `generated/profiler/reports/2026_07_24_23_36_58/ops_perf_results_2026_07_24_23_36_58.csv`,
+  SHA-256 `94c235956f94bcfa0995f185521be47f8d9fce90d177065034e7cdc9808c6086`.
+- Result: calls/device/replay fell `21 -> 20`. Slowest-device replay spans for
+  sessions 2-11 were `[3265.436, 3258.931, 3256.424, 3261.347, 3261.990,
+  3267.553, 3265.654, 3266.059, 3265.044, 3267.196] us`, median `3265.240 us`.
+  Against the retained `3330.328 us` endpoint, wall improves `65.088 us`
+  (`1.954%`). The combined scan program median is `514.395 us`, so the overlap
+  hides about 78% of the former RMS stage.
+- Verdict: retain. This proves the bounded producer/consumer schedule and
+  synchronization. It does not yet eliminate the intermediate FP32 DRAM
+  write/read; direct producer-to-consumer L1 transfer is the next experiment.

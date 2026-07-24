@@ -369,11 +369,21 @@ class KimiDeltaAttention:
         )
 
         assert self.recurrent_state is not None
+        fuse_scan_rms = head_major and mode != "recurrent" and sequence > 640
         if mode == "recurrent":
             output, new_recurrent_state = fused_kda_recurrence(q, k, v, gate, beta, self.recurrent_state)
         else:
             output, new_recurrent_state = chunk_kda_recurrence(
-                q, k, v, gate, beta, self.recurrent_state, self.chunk_const_tiles
+                q,
+                k,
+                v,
+                gate,
+                beta,
+                self.recurrent_state,
+                self.chunk_const_tiles,
+                rms_gate=output_gate_rank if fuse_scan_rms else None,
+                rms_weight=weights.norm if fuse_scan_rms else None,
+                rms_epsilon=config.norm_eps,
             )
         if new_recurrent_state.dtype != config.recurrent_state_dtype:
             new_recurrent_state = ttnn.typecast(new_recurrent_state, config.recurrent_state_dtype)
@@ -387,7 +397,7 @@ class KimiDeltaAttention:
                 compute_kernel_config=self.compute_config,
             )
             output_gate = ttnn.reshape(output_gate, (batch, sequence, config.num_heads, config.head_v_dim))
-        if head_major:
+        if head_major and not fuse_scan_rms:
             output = ttnn.transformer.kda_gated_rms_norm(
                 output,
                 output_gate,
@@ -397,7 +407,7 @@ class KimiDeltaAttention:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_config,
             )
-        else:
+        elif not head_major:
             output = ttnn.rms_norm(
                 output,
                 weight=weights.norm,

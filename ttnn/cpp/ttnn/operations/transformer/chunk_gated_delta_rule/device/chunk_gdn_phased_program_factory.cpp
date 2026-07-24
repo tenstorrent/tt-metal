@@ -238,6 +238,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     add_cb(pcb::stmp, kv);
     add_cb(pcb::final_s, kv);
     add_cb(pcb::scr1, scr);
+
     add_cb(pcb::scr2, scr);
     add_cb(pcb::scr3, scr);
     add_cb(pcb::s3, kv, 2);
@@ -377,6 +378,21 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     const uint32_t Vt = sdist.Vtl;  // per-core V-block width; CBs/compute use this
     const uint32_t n_used = static_cast<uint32_t>(sdist.cores.size());
 
+    std::vector<CoreCoord> rms_cores;
+    std::set<CoreRange> rms_ranges;
+    if (attrs.fused_rms) {
+        const auto grid = device->compute_with_storage_grid_size();
+        for (uint32_t i = 0; i < grid.x * grid.y; ++i) {
+            const CoreCoord core{i % grid.x, i / grid.x};
+            if (std::find(sdist.cores.begin(), sdist.cores.end(), core) == sdist.cores.end()) {
+                rms_cores.push_back(core);
+                rms_ranges.insert(CoreRange{core, core});
+            }
+        }
+        TT_FATAL(!rms_cores.empty(), "fused RMS requires non-scan consumer cores");
+    }
+    const CoreRangeSet rms_core_set{rms_ranges};
+
     // V-independent tensors (kd, q_decay, intra, k_dec_t, T_inv, dl) are read in FULL; only the
     // V-dependent CBs (v_beta/state/out/scratch) shrink to the per-core V-block width Vt(=Vtl).
     const uint32_t cc = Ct * Ct, ck = Ct * Kt, cv = Ct * Vt, kv = Kt * Vt, kc = Kt * Ct;
@@ -417,6 +433,35 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     add_cb(pcb::stmp, kv);
     add_cb(pcb::scr1, scr);
 
+    if (attrs.fused_rms) {
+        auto add_rms_cb = [&](uint32_t idx, uint32_t tiles, tt::DataFormat format, uint32_t buffers = 1) {
+            const uint32_t tile_size = tt::tile_size(format);
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = tiles * buffers * tile_size,
+                .core_ranges = rms_core_set,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(idx), .data_format = format, .page_size = tile_size}}}});
+        };
+        add_rms_cb(0, Vt_full, tt::DataFormat::Float32);
+        add_rms_cb(1, Vt_full, tt::DataFormat::Float16_b);
+        add_rms_cb(2, Vt_full, tt::DataFormat::Float16_b);
+        add_rms_cb(3, Vt_full, tt::DataFormat::Float32);
+        add_rms_cb(4, 1, tt::DataFormat::Float32);
+        add_rms_cb(5, 1, tt::DataFormat::Float32);
+        add_rms_cb(6, Vt_full, tt::DataFormat::Float32);
+        add_rms_cb(7, Vt_full, tt::DataFormat::Float32, 2);
+        add_rms_cb(8, 1, tt::DataFormat::Float32);
+    }
+
+    const uint32_t ready_semaphore_id = static_cast<uint32_t>(desc.semaphores.size());
+    if (attrs.fused_rms) {
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = ready_semaphore_id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = rms_core_set,
+            .initial_value = 0});
+    }
+
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/";
     // ct arg 2 = per-core Vt(=Vtl); arg 4 = Vt_full (full V in tiles) for the readers'/writer's
     // V-slice row stride. Compute reads only args 0..2 (Ct, Kt, Vt) so the extra arg is harmless.
@@ -447,7 +492,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     reader.runtime_args.reserve(n_used);
 
     KernelDescriptor writer;
-    writer.kernel_source = kdir + "dataflow/writer_chunk_gdn_scan.cpp";
+    writer.kernel_source =
+        kdir + (attrs.fused_rms ? "dataflow/writer_chunk_gdn_scan_rms.cpp" : "dataflow/writer_chunk_gdn_scan.cpp");
     writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer.core_ranges = cores;
     writer.compile_time_args = writer_ct;
@@ -480,8 +526,73 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
         const uint32_t vb = sdist.vblk[i];
         reader.emplace_runtime_args(
             core, {h, vb, NC, vb_buf, kd_buf, qd_buf, it_buf, kdec_buf, dl_buf, ti_buf, s0_buf, identity_buf});
-        writer.emplace_runtime_args(core, {h, vb, NC, o_buf, fs_buf});
+        if (attrs.fused_rms) {
+            std::vector<std::variant<uint32_t, Buffer*>> writer_args{
+                h, vb, NC, o_buf, fs_buf, static_cast<uint32_t>(rms_cores.size()), ready_semaphore_id};
+            for (const auto& rms_core : rms_cores) {
+                const auto physical = device->worker_core_from_logical_core(rms_core);
+                writer_args.emplace_back(static_cast<uint32_t>(physical.x));
+                writer_args.emplace_back(static_cast<uint32_t>(physical.y));
+            }
+            writer.emplace_runtime_args(core, std::move(writer_args));
+        } else {
+            writer.emplace_runtime_args(core, {h, vb, NC, o_buf, fs_buf});
+        }
         compute.emplace_runtime_args(core, {NC});
+    }
+
+    if (attrs.fused_rms) {
+        uint32_t eps_bits = 0;
+        uint32_t inv_v_bits = 0;
+        const float inv_v = 1.0f / static_cast<float>(attrs.val_dim);
+        std::memcpy(&eps_bits, &attrs.rms_epsilon, sizeof(float));
+        std::memcpy(&inv_v_bits, &inv_v, sizeof(float));
+        const uint32_t total = attrs.BH * NC;
+        const uint32_t consumer_count = static_cast<uint32_t>(rms_cores.size());
+        const uint32_t producer_count = Vt_full / Vt;
+
+        std::vector<uint32_t> rms_reader_ct{Vt_full, attrs.num_heads, NC};
+        TensorAccessorArgs(*outputs[0].buffer()).append_to(rms_reader_ct);
+        TensorAccessorArgs(*in.rms_gate->buffer()).append_to(rms_reader_ct);
+        TensorAccessorArgs(*in.rms_weight->buffer()).append_to(rms_reader_ct);
+        std::vector<uint32_t> rms_writer_ct{Vt_full, attrs.num_heads, NC};
+        TensorAccessorArgs(*outputs[2].buffer()).append_to(rms_writer_ct);
+
+        KernelDescriptor rms_reader;
+        rms_reader.kernel_source = kdir + "dataflow/reader_kda_gated_rms_stream.cpp";
+        rms_reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        rms_reader.core_ranges = rms_core_set;
+        rms_reader.compile_time_args = rms_reader_ct;
+        rms_reader.config = ReaderConfigDescriptor{};
+
+        KernelDescriptor rms_writer;
+        rms_writer.kernel_source = kdir + "dataflow/writer_kda_gated_rms_stream.cpp";
+        rms_writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        rms_writer.core_ranges = rms_core_set;
+        rms_writer.compile_time_args = rms_writer_ct;
+        rms_writer.config = WriterConfigDescriptor{};
+
+        KernelDescriptor rms_compute;
+        rms_compute.kernel_source = kdir + "compute/kda_gated_rms.cpp";
+        rms_compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        rms_compute.core_ranges = rms_core_set;
+        rms_compute.compile_time_args = {Vt_full, eps_bits, inv_v_bits};
+        rms_compute.config = compute_cfg(device->arch(), attrs.compute_kernel_config);
+
+        auto* gate_buf = in.rms_gate->buffer();
+        auto* weight_buf = in.rms_weight->buffer();
+        auto* rms_out_buf = outputs[2].buffer();
+        for (uint32_t i = 0; i < consumer_count; ++i) {
+            const uint32_t count = i < total ? tt::div_up(total - i, consumer_count) : 0;
+            const auto& core = rms_cores[i];
+            rms_reader.emplace_runtime_args(
+                core, {i, count, o_buf, gate_buf, weight_buf, consumer_count, producer_count, ready_semaphore_id});
+            rms_writer.emplace_runtime_args(core, {i, count, rms_out_buf, consumer_count});
+            rms_compute.emplace_runtime_args(core, {count});
+        }
+        desc.kernels.push_back(std::move(rms_reader));
+        desc.kernels.push_back(std::move(rms_writer));
+        desc.kernels.push_back(std::move(rms_compute));
     }
 
     desc.kernels.push_back(std::move(reader));
