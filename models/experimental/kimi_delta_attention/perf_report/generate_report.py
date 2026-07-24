@@ -20,16 +20,16 @@ import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_CSVS = {
-    "t640": Path("generated/profiler/reports/2026_07_24_16_17_28/ops_perf_results_2026_07_24_16_17_28.csv"),
-    "t5120": Path("generated/profiler/reports/2026_07_24_16_24_06/ops_perf_results_2026_07_24_16_24_06.csv"),
+    "t640": Path("generated/profiler/reports/2026_07_24_18_44_22/ops_perf_results_2026_07_24_18_44_22.csv"),
+    "t5120": Path("generated/profiler/reports/2026_07_24_18_46_01/ops_perf_results_2026_07_24_18_46_01.csv"),
 }
 CONTROL_CSVS = {
     "t640": Path("generated/profiler/reports/2026_07_24_15_49_24/ops_perf_results_2026_07_24_15_49_24.csv"),
     "t5120": Path("generated/profiler/reports/2026_07_24_16_22_50/ops_perf_results_2026_07_24_16_22_50.csv"),
 }
 EXPECTED_SHA256 = {
-    "t640": "09d6eebffdd8a38346e3c35bb65d4061f05d9a438aebc5d3052df42979adb873",
-    "t5120": "b3fd2c8ff3df64fecdb5d2b977858fb56c12a8cc58271b0ce37e7fe687f98a02",
+    "t640": "d00e2c212d8778b6fabc90dd80d3c583adaf8027f89aac38ea44b824d006f2eb",
+    "t5120": "e4aced4133c9897beaffbb783051215141e5dcf2894bc815940ccda16cfa257c",
 }
 CONTROL_SHA256 = {
     "t640": "106c501e09f50fc185046b96d0263c7f2107a49fdf446fdc5669a54748293976",
@@ -348,7 +348,7 @@ def build_payload(traces: dict[str, Trace], controls: dict[str, Trace]) -> dict[
     return {
         "title": "Kimi Linear KDA · mixed-storage performance dossier",
         "branch": "mvasilijevic/codex/kimi-linear-kda",
-        "profile_commit": "b60f25012aafd10ac0d0800e4751a40ef65ec88d",
+        "profile_commit": "43acf8af714",
         "profile_tree_clean": False,
         "profile_date": "2026-07-24",
         "hardware": "LoudBox · 8× Blackhole · 1×8 mesh · FABRIC_1D",

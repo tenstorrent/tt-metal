@@ -81,7 +81,7 @@ footer{margin-top:60px;border-top:1px solid var(--line);padding:22px 0;color:var
   </div>
   <div class="meta">
     <div><b>Branch</b>mvasilijevic/codex/kimi-linear-kda</div>
-    <div><b>Source-equivalent commit</b>b60f25012aaf · mixed storage 0x26</div>
+    <div><b>Source-equivalent commit</b>43acf8af714 · mixed storage 0x26 + BF16 prefill gate</div>
     <div><b>Control</b>matched FP32 storage · mask 0</div>
     <div><b>Hardware</b>LoudBox · 8× Blackhole · 1×8 mesh · FABRIC_1D</div>
     <div><b>Fresh profile</b>2026-07-24 · ten measured replays after warm-up</div>
@@ -108,7 +108,7 @@ footer{margin-top:60px;border-top:1px solid var(--line);padding:22px 0;color:var
   <div class="pipeline">
     <article class="stage"><span class="n">01</span><h3>Fused projection</h3><p>One TP-local GEMM emits Q, K, V, decay rank, direct output gate, and β. For aligned prefill, <code>g_b@g_a</code> is precomposed offline.</p><span class="shape">[1,T,2304] × [2304,2180]<br>→ [1,T,2180] BF16</span><a href="tt-metal.worktrees/kimi-linear-kda/models/experimental/kimi_delta_attention/tt/layer.py#L273">layer.py:273</a></article>
     <article class="stage"><span class="n">02</span><h3>Native QKV convolution</h3><p>QKV and the three-token carry stay row-major through depthwise Conv1d. T&gt;640 switches to DRAM width slicing to fit L1.</p><span class="shape">carry [1,3,1536]<br>QKV [1,T,1536]</span><a href="tt-metal.worktrees/kimi-linear-kda/models/experimental/kimi_delta_attention/tt/layer.py#L163">layer.py:163</a></article>
-    <article class="stage"><span class="n">03</span><h3>Direct slices + decay</h3><p>Aligned Q/K/V remain flat. β gets sigmoid; the rank-128 decay projection folds bias, Softplus and negative exponential scale into its consuming FP32 multiply.</p><span class="shape">g = −exp(Alog) · softplus(r+b)<br>[1,T,512] FP32</span><a href="tt-metal.worktrees/kimi-linear-kda/models/experimental/kimi_delta_attention/tt/layer.py#L302">layer.py:302</a></article>
+    <article class="stage"><span class="n">03</span><h3>Direct slices + decay</h3><p>Aligned Q/K/V remain flat. β gets sigmoid; the rank-128 decay projection folds bias, Softplus and negative exponential scale into its consuming FP32 multiply.</p><span class="shape">g = −exp(Alog) · softplus(r+b)<br>[1,T,512] BF16</span><a href="tt-metal.worktrees/kimi-linear-kda/models/experimental/kimi_delta_attention/tt/layer.py#L302">layer.py:302</a></article>
     <article class="stage"><span class="n">04</span><h3>Chunk preparation</h3><p>For every head×32-token chunk, the kernel normalizes flat Q/K, builds decay-weighted K/V, A<sub>kk</sub>, A<sub>qk</sub>, and an exact causal inverse.</p><span class="shape">T⁻¹: [32,32] FP32<br>kd · q_decay · dl BF16<br>other prepared tensors FP32</span><a href="tt-metal.worktrees/kimi-linear-kda/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_kda_prep.cpp#L374">chunk_kda_prep.cpp:374</a></article>
     <article class="stage"><span class="n">05</span><h3>Exact doubling inverse</h3><p>The inverse is not the 128×128 recurrent state. Nilpotence reduces the 32×32 unit-triangular solve from 30 serial products to eight tile matmuls.</p><span class="shape">(I−N)⁻¹ = Πₚ(I+N²ᵖ)<br>p = 0…4</span><a href="tt-metal.worktrees/kimi-linear-kda/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_kda_prep.cpp#L209">chunk_kda_prep.cpp:209</a></article>
     <article class="stage"><span class="n">06</span><h3>Ordered chunk scan</h3><p>Each scan worker walks all chunks in order, applying the inverse after <code>vβ − kd·S</code>, emitting output, and carrying the full FP32 state forward.</p><span class="shape">S [4,128,128] / chip<br>FP32, no collective</span><a href="tt-metal.worktrees/kimi-linear-kda/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_kda_scan.cpp#L125">chunk_kda_scan.cpp:125</a></article>
@@ -130,6 +130,7 @@ Sout = Diag(dl) · Sin + kdecᵀ · Vnew</div>
       <div class="correction"><b>Layout:</b> aligned Q/K/V stay flat; the prep reader addresses heads and chunks directly.</div>
       <div class="correction"><b>β dtype:</b> sigmoid emits BF16; <code>chunk_kda</code> converts it to FP32 at the recurrence boundary.</div>
       <div class="correction"><b>Prepared storage:</b> arithmetic stays FP32, but the selected prep→scan boundary stores <code>kd</code>, <code>q_decay</code>, and <code>dl</code> in BF16. Sensitive <code>v_beta</code>, <code>k_dec_t</code>, <code>intra</code>, <code>t_inv</code>, state, and outputs remain FP32.</div>
+      <div class="correction"><b>Gate storage:</b> aligned chunk prefill stores the transformed decay gate in BF16; recurrent/decode and all gate-consuming arithmetic remain FP32.</div>
       <div class="correction"><b>Routing:</b> there is no automatic T threshold. The caller selects <code>mode</code>; fused recurrent accepts exactly T=1.</div>
     </div>
   </div>
@@ -294,10 +295,11 @@ against the measured effective two-link roofline used by the branch analysis.</p
 <script id="report-data" type="application/json">
 {
   "scenarios":{
-    "t640":{"label":"T=640","tokens":640,"wall_us":643.623,"control_wall_us":659.024,"active_us":621.755,"graph_us":622.095,"compute":8.63,"control_compute":8.43,"ccl":35.05,"flops":67.594,"mmrs_us":147.238,"prep_items":80,"prep_cores":80,"prep_us":81.266,"scan_us":86.358,"recurrence_us":167.623,"control_recurrence_us":183.096,"rms_us":19.716,"chunks":20},
-    "t5120":{"label":"T=5,120","tokens":5120,"wall_us":3584.949,"control_wall_us":3681.529,"active_us":3573.748,"graph_us":3572.772,"compute":12.40,"control_compute":12.07,"ccl":39.79,"flops":540.752,"mmrs_us":1037.557,"prep_items":640,"prep_cores":110,"prep_us":314.663,"scan_us":606.168,"recurrence_us":920.831,"control_recurrence_us":1023.411,"rms_us":87.236,"chunks":160}
+    "t640":{"label":"T=640","tokens":640,"wall_us":619.594,"control_wall_us":659.024,"active_us":586.404,"graph_us":586.404,"compute":8.97,"control_compute":8.43,"ccl":34.90,"flops":67.594,"mmrs_us":147.864,"prep_items":80,"prep_cores":80,"prep_us":75.868,"scan_us":67.765,"recurrence_us":143.633,"control_recurrence_us":183.096,"rms_us":19.255,"chunks":20},
+    "t5120":{"label":"T=5,120","tokens":5120,"wall_us":3385.003,"control_wall_us":3681.529,"active_us":3377.191,"graph_us":3377.191,"compute":13.13,"control_compute":12.07,"ccl":39.66,"flops":540.752,"mmrs_us":1040.965,"prep_items":640,"prep_cores":110,"prep_us":306.496,"scan_us":500.685,"recurrence_us":807.181,"control_recurrence_us":1023.411,"rms_us":87.405,"chunks":160}
   },
   "decisions":[
+    {"status":"retain","scope":"Gate","name":"BF16 transformed prefill gate","result":"T640 622.564 → 619.594 µs; T5120 3474.029 → 3385.003 µs","delta":-2.56,"reason":"Halved transformed-gate storage traffic; the decay block fell 46.1% with TP PCC 0.999965/0.999910/0.999997 and 27/27 tests passing.","tier":"fresh matched trace + correctness"},
     {"status":"retain","scope":"Storage","name":"kd + q_decay + dl BF16","result":"T640 659.024 → 643.623 µs; T5120 3681.529 → 3584.949 µs","delta":-2.62,"reason":"Halved selected prep-write and repeated scan-read traffic; recurrence fell 10.02% at T5120 with unchanged TP PCC.","tier":"fresh matched trace"},
     {"status":"retain","scope":"Storage","name":"q_decay BF16","result":"659.024 → 653.435 µs","delta":-0.85,"reason":"Read-heavy decay storage reduced scan traffic with control-equivalent TP PCC.","tier":"fresh matched trace"},
     {"status":"reject","scope":"Storage","name":"v_beta BF16","result":"659.024 → 660.214 µs","delta":0.18,"reason":"Passed PCC but did not improve wall latency; the added conversion path erased the byte saving.","tier":"fresh matched trace"},
