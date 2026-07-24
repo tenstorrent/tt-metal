@@ -41,7 +41,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
-from models.demos.common.prefill.runners.migration import publish_table_and_wait_ready, serialize_device_map
+from models.demos.common.prefill.runners.migration import export_migration_files, serialize_device_map
 from models.demos.common.prefill.runners.runner_utils import (
     activation_global_spec,
     build_h2d_service,
@@ -661,7 +661,10 @@ def _print_config() -> None:
             "PREFILL_MIGRATION_TABLE_PATH",
             os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb"),
         ),
-        ("PREFILL_MIGRATION_WAIT_READY_MS", os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000")),
+        (
+            "PREFILL_MIGRATION_DEVICE_MAP_PATH",
+            os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill-device-map.txt"),
+        ),
         ("MIGRATION_DONE_FILE", os.environ.get("MIGRATION_DONE_FILE", "/tmp/migration_done.sentinel")),
     ]
     sep = "=" * 70
@@ -831,18 +834,17 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 os.remove(_done_file)
 
             # Full migration bring-up: the runtime builds the model-specific KV chunk table from
-            # its device cache layout; the runner publishes it (+ device map) to the worker and blocks
-            # on WORKER_READY before the request loop opens (the worker gates on SetTable + AssignDevMap).
+            # its device cache layout and exports it with the device map for the migration worker.
             # A sparse model's KvCaches carries its index cache too, so the table describes BOTH caches
             # in one (merged); a dense model's is a single-config table.
             table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
-            wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
+            device_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill-device-map.txt")
             runtime.build_kv_chunk_table(kv_caches, path=table_path)
-            publish_table_and_wait_ready(
+            export_migration_files(
                 mesh_device=mesh_device,
                 mesh_shape=GLOBAL_MESH_SHAPE,
                 table_path=table_path,
-                wait_ready_timeout_ms=wait_ready_ms,
+                device_map_path=device_map_path,
             )
         elif os.environ.get("PREFILL_MOCK_MIGRATION", "0") == "1":
             # Mock integration (prefill_producer.py): serialize the KV chunk table so an external

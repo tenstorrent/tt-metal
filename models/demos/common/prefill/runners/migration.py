@@ -184,6 +184,23 @@ def serialize_device_map(mesh_device, path: str) -> str:
     return path
 
 
+def export_migration_files(*, mesh_device, mesh_shape, table_path: str, device_map_path: str) -> None:
+    """Export the migration inputs for an external migration worker."""
+    if not os.path.isfile(table_path):
+        raise FileNotFoundError(f"[migration] KV chunk table was not serialized to {table_path}")
+
+    device_map = _build_device_map(mesh_device, mesh_shape)
+    tmp = f"{device_map_path}.tmp"
+    with open(tmp, "w") as map_file:
+        map_file.writelines(f"{mesh_id} {chip_id} {umd_id}\n" for mesh_id, chip_id, umd_id in device_map)
+    os.replace(tmp, device_map_path)
+
+    logger.info(
+        f"[migration] exported KV chunk table {table_path} and device map "
+        f"({len(device_map)} chips) {device_map_path}"
+    )
+
+
 def publish_table_and_wait_ready(
     *, mesh_device, mesh_shape, table_path: str, wait_ready_timeout_ms: int = 120_000
 ) -> None:
