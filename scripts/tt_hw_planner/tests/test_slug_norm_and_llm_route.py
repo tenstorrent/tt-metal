@@ -187,6 +187,43 @@ def test_bytes_per_param_from_safetensors_header(monkeypatch):
     assert pr._bytes_per_param_from_safetensors("m", []) == (None, False, None)
 
 
+def test_scaffold_hard_stops_on_composite(monkeypatch):
+    # issue #5: a composite / multi-submodel repo must HARD-STOP, not fall through to a
+    # wrong family template and report success.
+    from scripts.tt_hw_planner import scaffold as sc
+
+    class _P:
+        raw_config = {"model_type": "longcat_video"}
+        is_composite = True
+        submodels = ["dit", "text_encoder", "vae"]
+        category = "Video"
+
+    monkeypatch.setattr(sc, "probe_model", lambda mid: _P())
+    raised = None
+    try:
+        sc.plan_scaffold("x/longcat")
+    except sc.CompositeScaffoldError as e:
+        raised = e
+    except Exception as e:  # any other error is a FAIL for this test
+        raised = ("other", repr(e))
+    assert isinstance(raised, sc.CompositeScaffoldError), raised
+    assert "COMPOSITE" in str(raised) and "dit" in str(raised)
+
+    # non-composite must NOT raise CompositeScaffoldError (it proceeds; other errors ok here)
+    class _Q(_P):
+        is_composite = False
+        submodels = []
+        category = "LLM"
+
+    monkeypatch.setattr(sc, "probe_model", lambda mid: _Q())
+    try:
+        sc.plan_scaffold("x/qwen")
+    except sc.CompositeScaffoldError:
+        raise AssertionError("non-composite must not raise CompositeScaffoldError")
+    except Exception:
+        pass  # unrelated downstream error is fine for this assertion
+
+
 def test_compat_no_llm_blocks_for_non_llm_unknown():
     # issue #6: an unknown NON-LLM arch (DiT) must NOT get the generic LLM decoder block
     # list; an LLM-like unknown still gets the fallback.

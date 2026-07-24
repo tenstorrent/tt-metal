@@ -73,6 +73,24 @@ class ColdStartScaffoldError(ScaffoldError):
         super().__init__(reason + suffix)
 
 
+class CompositeScaffoldError(ScaffoldError):
+    """Issue #5: the repo is a COMPOSITE / multi-submodel pipeline (e.g. LongCat-Video
+    with dit/ text_encoder/ vae/; ACE-Step with 4 submodels). A single family template
+    cannot represent it, so scaffold HARD-STOPS here instead of falling through to a
+    wrong sibling template and reporting success. Bring up each submodel/subfolder
+    explicitly as its own model, or bring up per-component."""
+
+    def __init__(self, model_id: str, submodels: Optional[List[str]] = None):
+        self.model_id = model_id
+        self.submodels = list(submodels or [])
+        subs = ", ".join(self.submodels) or "multiple submodels"
+        super().__init__(
+            f"{model_id} is a COMPOSITE / multi-submodel pipeline ({subs}) — a single family "
+            f"template does not fit. Target each submodel explicitly (bring up its subfolder as its "
+            f"own model), or bring up per-component; NOT scaffolding from a sibling template."
+        )
+
+
 @dataclass
 class ScaffoldChange:
     kind: str
@@ -157,6 +175,9 @@ def plan_scaffold(new_model_id: str, *, force_already_supported: bool = False) -
     probe = probe_model(new_model_id)
     if not probe.raw_config:
         raise ScaffoldError(f"could not load config.json for {new_model_id} — set HF_TOKEN for gated repos")
+
+    if getattr(probe, "is_composite", False):
+        raise CompositeScaffoldError(new_model_id, getattr(probe, "submodels", []))
 
     if probe.category not in {"LLM", "VLM"}:
         return _plan_demo_folder_scaffold(new_model_id=new_model_id, probe=probe)
