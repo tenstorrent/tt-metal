@@ -11,16 +11,87 @@ instead of capturing outer scope variables.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import Any
 
 import ttnn
 from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig
 
+# Down proj tuning: 32 cores, per_core_N=2, out_subblock_w=2 (avoids subblock_h*w==1 penalty).
+_DOWN_MATMUL_NUM_CORES = 32
+_DOWN_OUT_SUBBLOCK_W = 2
+
+# w_o decode tuning: 32 cores, per_core_N=2, out_subblock_w=2, WIDTH_SHARDED L1 output.
+_WO_NUM_CORES = 32  # total cores for 1D multicast; 32 → per_core_N=2 for N=2048
+_WO_PER_CORE_N = 2  # N=2048 → 64 N-tiles / 32 cores
+_WO_PER_CORE_M = 1  # M=32 → 1 M-tile (decode batch fits in one tile row)
+_WO_IN0_BLOCK_W = 4  # K=5120 → 160 K-tiles; 160 % 4 == 0 ✓
+_WO_OUT_SUBBLOCK_H = 1
+_WO_OUT_SUBBLOCK_W = 2  # avoids out_subblock_h * out_subblock_w == 1 penalty
+_WO_MCAST_IN0 = True  # broadcast 1-tile activation to all cores (weight-stationary)
+_WO_ACT_IN_L1 = True  # move v to L1 interleaved before matmul; eliminates DRAM read
+
+
+@dataclass(frozen=True)
+class Matmul1dProgOverrides:
+    """Optional overrides for ``compute_1d_prog_cfg`` (``None`` = auto)."""
+
+    in0_block_w: int | None = None
+    per_core_M: int | None = None
+    per_core_N: int | None = None
+    out_subblock_w: int | None = None
+    out_subblock_h: int | None = None
+
+
+# LM-head 1D multicast tuning (edit in source; ``None`` = auto heuristics).
+LM_HEAD_MATMUL_OVERRIDES = Matmul1dProgOverrides(
+    in0_block_w=None,
+    per_core_M=None,
+    per_core_N=None,
+    out_subblock_w=None,
+    out_subblock_h=None,
+)
+
+
+def _auto_in0_block_w(k_tiles: int) -> int:
+    for candidate in (4, 3, 2):
+        if k_tiles % candidate == 0:
+            return candidate
+    return 1
+
+
+def _auto_out_subblock_w(*, per_core_N: int, per_core_M: int, fp32_dest_acc_en: bool) -> tuple[int, int]:
+    """Pick output subblock geometry (h, w) within DST register limits."""
+    out_subblock_h = 1
+    max_subblock_w = 2 if fp32_dest_acc_en else 4
+    out_subblock_w = 1
+    for cand in range(min(max_subblock_w, per_core_N), 0, -1):
+        if per_core_N % cand == 0:
+            out_subblock_w = cand
+            break
+    if per_core_M > 1:
+        for cand in range(min(max_subblock_w, per_core_M), 0, -1):
+            if per_core_M % cand == 0:
+                out_subblock_h = cand
+                break
+    return out_subblock_h, out_subblock_w
+
 
 def compute_1d_prog_cfg(
-    device: Any, b_weight: ttnn.Tensor, m_total: int
+    device: Any,
+    b_weight: ttnn.Tensor,
+    m_total: int,
+    *,
+    fp32_dest_acc_en: bool = False,
+    overrides: Matmul1dProgOverrides | None = None,
 ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
-    """Compute 1D multicast program config for decode matmuls (M <= 1 tile)."""
+    """Compute 1D multicast program config for decode-sized matmuls.
+
+    Heuristics target bandwidth-bound ops (e.g. LM head ``32 x 2048 x 154880``):
+    ``in0_block_w`` up to 4 when ``k_tiles`` allows, and ``out_subblock_w`` up to 4
+    when ``per_core_N`` divides evenly (perf report: avoid ``out_subblock_h * w == 1``).
+    """
+    ov = overrides or Matmul1dProgOverrides()
     K = int(b_weight.shape[-2])
     N = int(b_weight.shape[-1])
     m_tiles = max(1, (m_total + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE)
@@ -34,7 +105,123 @@ def compute_1d_prog_cfg(
         grid_y = max(1, n_tiles // grid_x)
         num_cores = grid_x * grid_y
 
-    per_core_N = max(1, math.ceil(n_tiles / num_cores))
+    if ov.per_core_N is not None:
+        per_core_N = int(ov.per_core_N)
+        if per_core_N <= 0:
+            raise ValueError(f"per_core_N must be positive, got {per_core_N}")
+    else:
+        per_core_N = max(1, math.ceil(n_tiles / num_cores))
+
+    per_core_M = int(ov.per_core_M) if ov.per_core_M is not None else m_tiles
+
+    if ov.in0_block_w is not None:
+        in0_bw = int(ov.in0_block_w)
+        if k_tiles % in0_bw != 0:
+            raise ValueError(f"in0_block_w={in0_bw} must divide k_tiles={k_tiles}")
+    else:
+        in0_bw = _auto_in0_block_w(k_tiles)
+
+    if ov.out_subblock_w is not None:
+        out_subblock_h = int(ov.out_subblock_h) if ov.out_subblock_h is not None else 1
+        out_subblock_w = int(ov.out_subblock_w)
+    else:
+        out_subblock_h, out_subblock_w = _auto_out_subblock_w(
+            per_core_N=per_core_N, per_core_M=per_core_M, fp32_dest_acc_en=fp32_dest_acc_en
+        )
+
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(grid_x, grid_y),
+        in0_block_w=in0_bw,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
+def lm_head_linear(
+    a: ttnn.Tensor,
+    b: ttnn.Tensor,
+    *,
+    device: Any,
+    memory_config: ttnn.MemoryConfig | None = None,
+    overrides: Matmul1dProgOverrides | None = None,
+) -> ttnn.Tensor:
+    """LM head: interleaved activations + weights with tuned 1D multicast program config.
+
+    Setting ``program_config`` flips ttnn.linear's implicit fidelity default from HiFi2 to LoFi
+    (matmul_device_operation.cpp::create_matmul_attributes). For the LM-head reduction
+    over hidden_size that drop is enough to flip top-1 token selection and produce
+    template-style drift, so we pin an explicit HiFi4 + fp32 DST accumulation kernel config
+    here. ``fp32_dest_acc_en`` is also threaded into ``compute_1d_prog_cfg`` so the
+    out-subblock heuristic respects the smaller (4-tile) DST budget.
+    """
+    m_total = 1
+    for i in range(len(a.shape) - 1):
+        m_total *= int(a.shape[i])
+    kwargs: dict[str, object] = {
+        "program_config": compute_1d_prog_cfg(
+            device,
+            b,
+            m_total,
+            overrides=overrides or LM_HEAD_MATMUL_OVERRIDES,
+            fp32_dest_acc_en=True,
+        ),
+        "compute_kernel_config": _lm_head_compute_kernel_config(),
+    }
+    if memory_config is not None:
+        kwargs["memory_config"] = memory_config
+    return ttnn.linear(a, b, **kwargs)
+
+
+def _lm_head_compute_kernel_config() -> ttnn.WormholeComputeKernelConfig:
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+
+def compute_1d_mlp_down_prog_cfg(
+    device: Any, b_weight: ttnn.Tensor, m_total: int
+) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+    """1D multicast program config for MLP down projections (K=intermediate, N=hidden).
+
+    Uses exactly 32 cores with per_core_N=2 and out_subblock_w=2 when N-tiles are
+    divisible by 32 (2048 hidden => 64 tiles). Falls back to compute_1d_prog_cfg otherwise.
+    """
+    K = int(b_weight.shape[-2])
+    N = int(b_weight.shape[-1])
+    m_tiles = max(1, (m_total + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE)
+    k_tiles = (K + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+    n_tiles = (N + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+    num_cores = _DOWN_MATMUL_NUM_CORES
+
+    if n_tiles % num_cores != 0:
+        return compute_1d_prog_cfg(device, b_weight, m_total)
+
+    per_core_N = n_tiles // num_cores
+    if per_core_N % _DOWN_OUT_SUBBLOCK_W != 0:
+        return compute_1d_prog_cfg(device, b_weight, m_total)
+
+    grid = device.compute_with_storage_grid_size()
+    max_x, max_y = int(grid.x), int(grid.y)
+    core_x, core_y = max_x, max_y
+    found = False
+    for gx in range(min(max_x, num_cores), 0, -1):
+        if num_cores % gx != 0:
+            continue
+        gy = num_cores // gx
+        if gy <= max_y:
+            core_x, core_y = gx, gy
+            found = True
+            break
+    if not found:
+        return compute_1d_prog_cfg(device, b_weight, m_total)
 
     in0_bw = 1
     for candidate in (4, 3, 2):
@@ -43,10 +230,12 @@ def compute_1d_prog_cfg(
             break
 
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(grid_x, grid_y),
+        compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
         in0_block_w=in0_bw,
         out_subblock_h=1,
-        out_subblock_w=1,
+        out_subblock_w=_DOWN_OUT_SUBBLOCK_W,
+        out_block_h=1,
+        out_block_w=_DOWN_OUT_SUBBLOCK_W,
         per_core_M=m_tiles,
         per_core_N=per_core_N,
         fuse_batch=True,
@@ -82,7 +271,29 @@ def mlp_linear(
         for i in range(len(b.shape) - 2):
             b_batch *= int(b.shape[i])
         if m_total <= ttnn.TILE_SIZE and b_batch == 1:
-            kwargs["program_config"] = compute_1d_prog_cfg(device, b, m_total)
+            # Thread fp32-DST into the subblock heuristic so out_subblock_w respects the 4-tile DST budget.
+            kwargs["program_config"] = compute_1d_prog_cfg(device, b, m_total, fp32_dest_acc_en=cfg.moe_fp32_acc)
+    return ttnn.linear(a, b, **kwargs)
+
+
+def mlp_down_linear(
+    a: ttnn.Tensor,
+    b: ttnn.Tensor,
+    *,
+    device: Any,
+    cfg: Glm4RuntimeConfig,
+    memory_config: ttnn.MemoryConfig | None = None,
+) -> ttnn.Tensor:
+    """Linear for MLP down projections with a fixed 32-core / out_subblock_w=2 program config."""
+    kwargs: dict[str, object] = {}
+    mc = memory_config if memory_config is not None else cfg.decode_act_mc
+    if mc is not None:
+        kwargs["memory_config"] = mc
+    kwargs["compute_kernel_config"] = cfg.mlp_compute_kernel_config()
+    m_total = 1
+    for i in range(len(a.shape) - 1):
+        m_total *= int(a.shape[i])
+    kwargs["program_config"] = compute_1d_mlp_down_prog_cfg(device, b, m_total)
     return ttnn.linear(a, b, **kwargs)
 
 
@@ -274,6 +485,110 @@ def dram_sharded_mlp(
     return result_dram
 
 
+# Gate/up decode tuning: per_core_N=2, out_subblock_w=2, WIDTH_SHARDED L1 output.
+_GATE_UP_PER_CORE_N = 2
+_GATE_UP_OUT_SUBBLOCK_W = 2
+
+
+def mlp_gate_up_linear(
+    a: ttnn.Tensor,
+    b: ttnn.Tensor,
+    *,
+    device: Any,
+    cfg: Glm4RuntimeConfig,
+    memory_config: ttnn.MemoryConfig | None = None,
+) -> ttnn.Tensor:
+    """Gate/up projection linear, optimized for decode (M <= TILE_SIZE).
+
+    When M <= TILE_SIZE, N-tiles divisible by _GATE_UP_PER_CORE_N, and the
+    resulting core count fits the physical grid: runs with per_core_N=2,
+    out_subblock_w=2, mcast_in0=True, and WIDTH_SHARDED L1 output.
+    Each compute core writes its output shard to its own L1 bank (no NOC
+    hop during the matmul); one to_memory_config then gathers the shards
+    to the downstream format.  Falls back to mlp_linear if any constraint
+    is not satisfied (prefill, large N, or grid too small).
+    """
+    m_total = 1
+    for i in range(len(a.shape) - 1):
+        m_total *= int(a.shape[i])
+    b_batch = 1
+    for i in range(len(b.shape) - 2):
+        b_batch *= int(b.shape[i])
+
+    N = int(b.shape[-1])
+    K = int(b.shape[-2])
+    n_tiles = (N + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+    k_tiles = (K + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+    m_tiles = max(1, (m_total + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE)
+
+    if (
+        m_total > ttnn.TILE_SIZE
+        or b_batch != 1
+        or n_tiles % _GATE_UP_PER_CORE_N != 0
+        or _GATE_UP_PER_CORE_N % _GATE_UP_OUT_SUBBLOCK_W != 0
+    ):
+        return mlp_linear(a, b, device=device, cfg=cfg, memory_config=memory_config)
+
+    num_cores = n_tiles // _GATE_UP_PER_CORE_N
+    grid = device.compute_with_storage_grid_size()
+    max_x, max_y = int(grid.x), int(grid.y)
+    core_x, core_y = None, None
+    for gx in range(min(max_x, num_cores), 0, -1):
+        if num_cores % gx != 0:
+            continue
+        gy = num_cores // gx
+        if gy <= max_y:
+            core_x, core_y = gx, gy
+            break
+
+    if core_x is None:
+        return mlp_linear(a, b, device=device, cfg=cfg, memory_config=memory_config)
+
+    in0_bw = 1
+    for candidate in (4, 3, 2):
+        if k_tiles % candidate == 0:
+            in0_bw = candidate
+            break
+
+    prog_cfg = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+        in0_block_w=in0_bw,
+        out_subblock_h=1,
+        out_subblock_w=_GATE_UP_OUT_SUBBLOCK_W,
+        out_block_h=1,
+        out_block_w=_GATE_UP_OUT_SUBBLOCK_W,
+        per_core_M=m_tiles,
+        per_core_N=_GATE_UP_PER_CORE_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+    # WIDTH_SHARDED output: each core writes its result shard to local L1; to_memory_config gathers downstream.
+    out_shard_h = m_tiles * ttnn.TILE_SIZE
+    out_shard_w = _GATE_UP_PER_CORE_N * ttnn.TILE_SIZE
+    out_mc = ttnn.create_sharded_memory_config(
+        shape=(out_shard_h, out_shard_w),
+        core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_x - 1, core_y - 1))]),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    out_sharded = ttnn.linear(
+        a,
+        b,
+        program_config=prog_cfg,
+        compute_kernel_config=cfg.mlp_compute_kernel_config(),
+        memory_config=out_mc,
+    )
+
+    downstream_mc = memory_config if memory_config is not None else (cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
+    out = ttnn.to_memory_config(out_sharded, downstream_mc)
+    ttnn.deallocate(out_sharded, force=False)
+    return out
+
+
 def attn_linear(
     a: ttnn.Tensor,
     b: ttnn.Tensor,
@@ -308,3 +623,193 @@ def attn_linear(
             return tp_row_parallel_linear(a, b, device=device, cfg=cfg)
         else:
             return mlp_linear(a, b, device=device, cfg=cfg)
+
+
+# w_kv_a decode tuning: 21 cores (7×3), per_core_N=2, out_subblock_w=2, WIDTH_SHARDED L1 output.
+_KVA_NUM_CORES = 21  # N=1344 → 42 N-tiles / per_core_N=2 = 21 cores
+_KVA_PER_CORE_N = 2  # N-tiles per core; must divide n_tiles (42 % 2 == 0)
+_KVA_PER_CORE_M = 1  # M=32 → 1 M-tile (decode batch fits in one tile row)
+_KVA_IN0_BLOCK_W = 4  # K=2048 → 64 k-tiles; 64 % 4 == 0 ✓
+_KVA_OUT_SUBBLOCK_H = 1
+_KVA_OUT_SUBBLOCK_W = 2  # avoids out_subblock_h * out_subblock_w == 1 penalty
+_KVA_MCAST_IN0 = True  # broadcast activation to all cores (weight-stationary)
+
+
+def attn_kva_linear(
+    a: ttnn.Tensor,
+    b: ttnn.Tensor,
+    *,
+    device: Any,
+    cfg: Glm4RuntimeConfig,
+    force_no_tp: bool = False,
+) -> ttnn.Tensor:
+    """w_kv_a / w_q_kv_a decode linear: M=32, K=2048, N=1344.
+
+    21-core 1D multicast (7×3 grid), per_core_N=2, out_subblock_w=2,
+    WIDTH_SHARDED L1 output.  Avoids the per_core_N=1 / out_subblock_h*w==1
+    SLOW penalty from the default 64-core heuristic.
+
+    Output is gathered to the downstream interleaved format via a single
+    to_memory_config call so that downstream ttnn.slice remains unchanged.
+
+    DRAM-sharded, TP, and prefill (M > TILE_SIZE) routes fall back to their
+    existing helpers.  If _KVA_NUM_CORES does not fit the physical grid the
+    function also falls back gracefully.
+    """
+    if cfg.dram_sharded_attn:
+        if cfg.tp_enabled and not force_no_tp:
+            a_tp = ttnn.mesh_partition(a, dim=3, cluster_axis=cfg.tp_axis)
+            out = dram_sharded_linear(a_tp, b, device=device, cfg=cfg)
+            ttnn.deallocate(a_tp, force=False)
+            out_reduced = ttnn.all_reduce(
+                out,
+                num_links=cfg.ccl_num_links,
+                topology=cfg.ccl_topology,
+                cluster_axis=cfg.tp_axis,
+                memory_config=cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(out, force=False)
+            return out_reduced
+        return dram_sharded_linear(a, b, device=device, cfg=cfg)
+
+    if cfg.tp_enabled and not force_no_tp:
+        return tp_row_parallel_linear(a, b, device=device, cfg=cfg)
+
+    # Decode heuristic: only optimize for M fitting in a single tile row.
+    m_total = 1
+    for i in range(len(a.shape) - 1):
+        m_total *= int(a.shape[i])
+    if m_total > ttnn.TILE_SIZE:
+        return mlp_linear(a, b, device=device, cfg=cfg)
+
+    # Fit _KVA_NUM_CORES into the physical grid.
+    grid = device.compute_with_storage_grid_size()
+    max_x, max_y = int(grid.x), int(grid.y)
+    core_x, core_y = max_x, max_y
+    found = False
+    for gx in range(min(max_x, _KVA_NUM_CORES), 0, -1):
+        if _KVA_NUM_CORES % gx != 0:
+            continue
+        gy = _KVA_NUM_CORES // gx
+        if gy <= max_y:
+            core_x, core_y = gx, gy
+            found = True
+            break
+    if not found:
+        return mlp_linear(a, b, device=device, cfg=cfg)
+
+    prog_cfg = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(core_x, core_y),
+        in0_block_w=_KVA_IN0_BLOCK_W,
+        out_subblock_h=_KVA_OUT_SUBBLOCK_H,
+        out_subblock_w=_KVA_OUT_SUBBLOCK_W,
+        per_core_M=_KVA_PER_CORE_M,
+        per_core_N=_KVA_PER_CORE_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=_KVA_MCAST_IN0,
+    )
+
+    # WIDTH_SHARDED output: each core stores its [32×64] result in local L1 (no NOC hop).
+    out_shard_h = _KVA_PER_CORE_M * ttnn.TILE_SIZE
+    out_shard_w = _KVA_PER_CORE_N * ttnn.TILE_SIZE
+    out_mc = ttnn.create_sharded_memory_config(
+        shape=(out_shard_h, out_shard_w),
+        core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_x - 1, core_y - 1))]),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    out_sharded = ttnn.linear(
+        a,
+        b,
+        program_config=prog_cfg,
+        compute_kernel_config=cfg.mlp_compute_kernel_config(),
+        memory_config=out_mc,
+    )
+
+    # Gather WIDTH_SHARDED L1 shards to interleaved; avoids DRAM round-trip before nope/rope splits.
+    out = ttnn.to_memory_config(out_sharded, cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(out_sharded, force=False)
+    return out
+
+
+def attn_wo_linear(
+    a: ttnn.Tensor,
+    b: ttnn.Tensor,
+    *,
+    device: Any,
+    cfg: Glm4RuntimeConfig,
+) -> ttnn.Tensor:
+    """Tuned w_o output projection for MLA decode: M=32, K=5120, N=2048.
+
+    Program config: 32-core 1D multicast, per_core_N=2, out_subblock_w=2
+    (see _WO_* constants), avoiding the out_subblock_h*w==1 SLOW penalty.
+
+    Output layout: WIDTH_SHARDED across the same 32-core compute grid.
+    Each core stores its [32 × 64] (= per_core_M*TILE × per_core_N*TILE) result
+    in its own L1 — a core-local write with no NOC hop, replacing the previous
+    cross-NOC DRAM writes.  One to_memory_config call afterwards materializes the
+    32 L1 shards into the downstream interleaved format.
+
+    Activation (in0) is NOT width-sharded; mcast_in0=True multicasts the full
+    [32 × 5120] activation from L1 to all 32 cores unchanged.
+
+    DRAM-sharded and TP execution modes route to their existing helpers.
+    """
+    if cfg.dram_sharded_attn:
+        return dram_sharded_linear(a, b, device=device, cfg=cfg)
+    if cfg.tp_enabled and not cfg.attn_dp:
+        return tp_row_parallel_linear(a, b, device=device, cfg=cfg)
+
+    # Resolve compute grid: fit _WO_NUM_CORES into the physical grid dimensions.
+    grid = device.compute_with_storage_grid_size()
+    max_x, max_y = int(grid.x), int(grid.y)
+    core_x, core_y = max_x, max_y
+    for gx in range(min(max_x, _WO_NUM_CORES), 0, -1):
+        if _WO_NUM_CORES % gx != 0:
+            continue
+        gy = _WO_NUM_CORES // gx
+        if gy <= max_y:
+            core_x, core_y = gx, gy
+            break
+
+    prog_cfg = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(core_x, core_y),
+        in0_block_w=_WO_IN0_BLOCK_W,
+        out_subblock_h=_WO_OUT_SUBBLOCK_H,
+        out_subblock_w=_WO_OUT_SUBBLOCK_W,
+        per_core_M=_WO_PER_CORE_M,
+        per_core_N=_WO_PER_CORE_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=_WO_MCAST_IN0,
+    )
+
+    # WIDTH_SHARDED output: shard [32, 64], core grid matches compute grid, distributes along N.
+    out_shard_h = _WO_PER_CORE_M * ttnn.TILE_SIZE  # 32 rows
+    out_shard_w = _WO_PER_CORE_N * ttnn.TILE_SIZE  # 64 cols
+    out_mc = ttnn.create_sharded_memory_config(
+        shape=(out_shard_h, out_shard_w),
+        core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_x - 1, core_y - 1))]),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    act = ttnn.to_memory_config(a, ttnn.L1_MEMORY_CONFIG) if _WO_ACT_IN_L1 else a
+    out_sharded = ttnn.linear(
+        act,
+        b,
+        program_config=prog_cfg,
+        compute_kernel_config=cfg.mlp_compute_kernel_config(),
+        memory_config=out_mc,
+    )
+    if _WO_ACT_IN_L1:
+        ttnn.deallocate(act, force=False)
+
+    # Gather WIDTH_SHARDED L1 output to downstream interleaved (cheaper than per-core NOC→DRAM writes).
+    out = ttnn.to_memory_config(out_sharded, cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(out_sharded, force=False)
+    return out
