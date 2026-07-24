@@ -373,11 +373,8 @@ void kernel_main() {
                 }
             }
         }
-        // out_ready_sem is NOT reset per batch: the upstream writer's fabric atomic-inc
-        // accumulates monotonically and a local reset here races that inbound inc (lost
-        // signal). Keep out_ready_sem_target growing across batches and reset only once at
-        // kernel exit, matching the strided_all_gather reader. Overflow is not a concern for
-        // realistic batch counts.
+        // No per-batch reset: a local reset races the writer's monotonic fabric atomic-inc
+        // (lost signal). Target grows across batches; reset once at kernel exit. See #50793.
 
 #ifdef FUSE_MM_OP_SIGNALER
         mm_op_ready_sem.set(0);
