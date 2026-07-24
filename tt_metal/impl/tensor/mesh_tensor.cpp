@@ -5,6 +5,7 @@
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 
 #include "mesh_tensor_impl.hpp"
 
@@ -86,14 +87,14 @@ void MeshTensor::update_tensor_topology(TensorTopology tensor_topology) {
 
 MeshTensor MeshTensor::allocate_on_device(
     distributed::MeshDevice& mesh_device, const TensorSpec& spec, const TensorTopology& topology) {
-    // Catch-all guard: FP8_E4M3 is only supported on Blackhole. Op-level validators may also
-    // check this, but we enforce it here at the device-binding boundary so any path that
-    // produces an FP8 tensor on unsupported hardware fails loudly rather than silently
-    // generating programs that misbehave later.
+    // Catch-all guard enforced at the device-binding boundary so any path that produces an FP8 tensor on
+    // unsupported hardware fails loudly rather than silently generating programs that misbehave later.
+    // Gate on the data-format capability (the same predicate used in data_format.cpp / program_spec.cpp)
+    // rather than an arch list, so this stays correct as arches are added or drop FP8 support.
     if (spec.data_type() == DataType::FP8_E4M3) {
         TT_FATAL(
-            mesh_device.arch() == tt::ARCH::BLACKHOLE,
-            "FP8_E4M3 is only supported on Blackhole hardware (got arch {})",
+            tt::is_data_format_supported(tt::DataFormat::Fp8_e4m3, mesh_device.arch()),
+            "FP8_E4M3 is not supported on arch {}",
             mesh_device.arch());
     }
     auto mesh_buffer = tensor_impl::allocate_device_buffer(&mesh_device, spec);

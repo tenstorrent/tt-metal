@@ -183,8 +183,10 @@ tt::tt_metal::ProgramDescriptor ConcatS2STiledProgramFactory::create_descriptor(
     const uint32_t input0_stride = stride_tile_size * num_tiles_for_each_input_shard[0].second / groups;
     const uint32_t input1_stride = stride_tile_size * num_tiles_for_each_input_shard[1].second / groups;
 
-    // NOC_MAX_BURST_SIZE from noc_parameters.h: Wormhole = 8192, Blackhole = 16384
-    const uint32_t noc_max_burst_size = (input_tensors[0].device()->arch() == tt::ARCH::BLACKHOLE) ? 16384 : 8192;
+    // NOC_MAX_BURST_SIZE from noc_parameters.h: Wormhole = 8192, Blackhole = 16384, Quasar = 65536
+    const uint32_t noc_max_burst_size = (input_tensors[0].device()->arch() == tt::ARCH::BLACKHOLE) ? 16384
+                                        : (input_tensors[0].device()->arch() == tt::ARCH::QUASAR)  ? 65536
+                                                                                                   : 8192;
     const bool use_single_packet_read = (input0_stride <= noc_max_burst_size && input1_stride <= noc_max_burst_size);
 
     KernelDescriptor::CompileTimeArgs compile_time_args = {

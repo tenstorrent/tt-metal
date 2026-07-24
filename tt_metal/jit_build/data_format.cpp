@@ -231,7 +231,10 @@ DataFormat get_single_pack_src_format(
     bool int_fpu_en,
     tt::ARCH arch) {
     if (data_format == DataFormat::Fp8_e4m3) {
-        TT_FATAL(arch == tt::ARCH::BLACKHOLE, "Fp8 E4M3 mode only available in Blackhole");
+        TT_FATAL(
+            tt::is_data_format_supported(DataFormat::Fp8_e4m3, arch),
+            "Fp8 E4M3 mode not supported on arch {}",
+            arch);
     }
 
     DataFormat pack_src_format;
