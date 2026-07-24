@@ -282,7 +282,7 @@ def test_reduce_scatter_async_quad_host_mesh(
     ids=["linear", "ring"],
 )
 @pytest.mark.parametrize("dim", [0, 3], ids=["dim0", "dim3"])
-@pytest.mark.parametrize("batch", [1, 2], ids=["batch1", "batch2"])
+@pytest.mark.parametrize("batch", [1, 3], ids=["batch1", "batch3"])
 @pytest.mark.parametrize("use_barrier_semaphore", [False, True], ids=["no_barrier_sem", "barrier_sem"])
 def test_reduce_scatter_on_reshaped_submesh(
     *,
