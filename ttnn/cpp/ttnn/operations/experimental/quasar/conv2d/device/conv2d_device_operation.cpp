@@ -50,9 +50,18 @@ TensorSpec Conv2dDeviceOperation::compute_output_specs(
     // window row = in_ch*kw/32; on Quasar full_inner_dim does NOT collapse K into act_block_w). This matches the
     // prepared weights' K-height [full_K, N] so Program B's plain matmul works, and matches the OUT DFB the
     // factory sizes for the split path (num_entries = M * full_K tiles).
+    // Tilize-only detection MUST match the factory's split_program_tilize_only gate, which keys on the INPUT
+    // activation's layout (a.memory_config().memory_layout() == HEIGHT_SHARDED, conv2d_op_sharded_program_
+    // factory.cpp:331), NOT the op's OUTPUT memory_config. In the DRAM-sliced path the per-slice op's output
+    // config is interleaved (the slice is slice_written to DRAM), so gating on args.memory_config here
+    // mis-detected tilize-only and sized the output as the conv result [M,N] while the factory tilized
+    // [M,full_K] -> the borrowed-OUT reserve_back(M*full_K) exceeded its M*N capacity (RBFAIL #48552). Key on
+    // the INPUT, and emit the tilized-activation output as HEIGHT_SHARDED L1 on the input's grid (the tilized
+    // act lives on the same cores as the gather, and feeds Program B's matmul).
+    const auto& in_mem = tensor_args.a.memory_config();
     if (((std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") != nullptr) ||
          (std::getenv("TT_METAL_QSR_CONV_UNPACK_TILIZE") != nullptr)) &&
-        args.memory_config.is_sharded() && args.memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+        in_mem.is_sharded() && in_mem.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
         const uint32_t m_ntiles = args.parallelization_config.per_core_out_matrix_height_ntile;
         // FULL im2col K, in tiles = the PREPARED weights' K-height (b.padded_shape()[2] / TILE_HEIGHT). This is
         // EXACTLY what the factory uses for full_k_ntiles (weight_matrix_height / TILE_HEIGHT), so the output
@@ -69,11 +78,10 @@ TensorSpec Conv2dDeviceOperation::compute_output_specs(
         // and the +1 shard row broke the strict emulator sharded readback. Shard = exact M x full_K.
         std::array<uint32_t, 2> shard_shape = {
             m_ntiles * tt::constants::TILE_HEIGHT, k_ntiles * tt::constants::TILE_WIDTH};
-        auto shard_grid = args.memory_config.shard_spec().value().grid;
-        auto shard_spec =
-            tt::tt_metal::ShardSpec{shard_grid, shard_shape, args.memory_config.shard_spec().value().orientation};
-        auto mem_config = tt::tt_metal::MemoryConfig(
-            args.memory_config.memory_layout(), args.memory_config.buffer_type(), shard_spec);
+        auto shard_grid = in_mem.shard_spec().value().grid;
+        auto shard_spec = tt::tt_metal::ShardSpec{shard_grid, shard_shape, in_mem.shard_spec().value().orientation};
+        auto mem_config =
+            tt::tt_metal::MemoryConfig(TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, shard_spec);
         return TensorSpec(
             tilized_shape,
             tt::tt_metal::TensorLayout(
