@@ -6,7 +6,6 @@ from typing import Optional, AsyncIterator, Iterator, TextIO
 from dataclasses import dataclass, asdict
 from argparse import ArgumentParser
 from asyncio import StreamReader
-from dateutil import parser
 from enum import Enum, auto
 from sys import stdout
 import fileinput
@@ -384,6 +383,11 @@ async def main():
     # pprint.pp(bdfs)
     # print(runs_to_json(runs, sort_keys=True, indent=4))
 
+    exit_status = 0
+    for r in runs:
+        if r.status != "OK":
+            exit_status = 1
+
     if not opts.n:
         print_results(runs, bdfs)
 
@@ -394,6 +398,8 @@ async def main():
 
     if logf:
         logf.close()
+
+    exit(exit_status)
 
 
 if __name__ == "__main__":
