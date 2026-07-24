@@ -554,6 +554,20 @@ def test_slice_irregular_shapes_sharded(shape, begins, ends, step, shard_factory
     )
 
 
+# RM HEIGHT-sh in + interleaved out: routes SliceRmProgramFactory whose reader uses
+# noc_async_read_sharded — the fast-path enabled by #47299 for sub-NoC-aligned sticks (W·E % 16 ≠ 0).
+@pytest.mark.parametrize(
+    "shape, begins, ends, step, dtype",
+    [
+        pytest.param((1, 1, 32, 97), (0, 0, 0, 0), (1, 1, 32, 49), (1, 1, 1, 1), ttnn.bfloat16, id="bf16_W97"),
+        pytest.param((1, 1, 32, 49), (0, 0, 0, 0), (1, 1, 32, 33), (1, 1, 1, 1), ttnn.float32, id="f32_W49"),
+    ],
+)
+def test_slice_rm_height_sharded_sub_noc_aligned_stick(shape, begins, ends, step, dtype, device):
+    in_mc = _height_sharded(shape, device, num_cores=4, layout=ttnn.ROW_MAJOR_LAYOUT)
+    _run_slice(shape, begins, ends, step, ttnn.ROW_MAJOR_LAYOUT, in_mc, L1_INTERLEAVED, dtype, device)
+
+
 # ────────────────────────────────────────────────────────────────────────────────
 # Group F: Sharded inputs with explicit grids/shapes — irregular logical dims, uneven splits.
 # ────────────────────────────────────────────────────────────────────────────────

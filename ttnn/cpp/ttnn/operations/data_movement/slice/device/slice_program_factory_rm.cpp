@@ -82,17 +82,6 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     uint32_t unpadded_row_size_bytes_offset = tt::round_up(unpadded_row_size_bytes, alignment);
     uint32_t start_addr = input_tensor.buffer()->address();
 
-    // shard_W * elem_size for B/W-sharded (splits row across shards); full row otherwise.
-    // Fallback is padded for the reader tensor, unpadded for the writer tensor.
-    const auto per_shard_page_size_bytes = [&](const Tensor& t, uint32_t row_bytes) -> uint32_t {
-        const auto& mc = t.memory_config();
-        if (mc.is_sharded() && (mc.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
-                                mc.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED)) {
-            const auto& spec = mc.shard_spec().value();
-            return spec.shape[1] * t.element_size();
-        }
-        return row_bytes;
-    };
     const uint32_t reader_page_size = per_shard_page_size_bytes(input_tensor, padded_row_size_bytes);
 
     std::vector<uint32_t> common_reader_kernel_args = {

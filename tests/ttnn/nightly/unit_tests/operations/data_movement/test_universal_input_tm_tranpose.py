@@ -511,6 +511,8 @@ _IRREGULAR_SHAPES = [
     ((1, 13, 47, 64), 1, 2),
     ((1, 7, 33, 96), 1, 2),
     ((3, 5, 32, 64), 0, 1),
+    # Sub-NoC-aligned stick (W·E % 16 != 0) — guards HEIGHT-sh RM native path (#47299).
+    ((1, 1, 32, 97), 2, 3),
 ]
 
 
@@ -538,6 +540,20 @@ def test_transpose_irregular_shapes_sharded(shape, dim0, dim1, shard_factory, in
         device,
         input_layout=input_layout,
         input_mem_config=shard_factory(shape, device, layout=input_layout),
+    )
+
+
+# f32 sibling for the newly-native RM HEIGHT-sh sub-NoC-aligned stick (#47299).
+def test_transpose_rm_height_sharded_sub_noc_aligned_stick_float32(device):
+    shape = (1, 1, 32, 49)  # W·E = 49·4 = 196 bytes → 196 % 16 = 4
+    run_transpose_test(
+        shape,
+        2,
+        3,
+        device,
+        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        input_mem_config=_height_shard_config(shape, device, layout=ttnn.ROW_MAJOR_LAYOUT),
+        dtype=ttnn.float32,
     )
 
 
