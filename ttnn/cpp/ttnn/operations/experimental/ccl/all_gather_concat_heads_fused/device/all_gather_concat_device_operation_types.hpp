@@ -9,6 +9,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include <optional>
+#include <tuple>
 #include <vector>
 
 namespace ttnn::experimental::prim {
@@ -61,6 +62,29 @@ struct AllGatherConcatParams {
         attrs.emplace_back("use_noc1_only", use_noc1_only);
         attrs.emplace_back("cluster_axis", cluster_axis);
         return attrs;
+    }
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "dim",
+        "num_links",
+        "ring_size",
+        "output_mem_config",
+        "topology",
+        "num_heads",
+        "use_noc1_only",
+        "cluster_axis",
+        "sub_device_id");
+    auto attribute_values() const {
+        return std::make_tuple(
+            dim,
+            num_links,
+            ring_size,
+            output_mem_config,
+            topology,
+            num_heads,
+            use_noc1_only,
+            cluster_axis,
+            sub_device_id);
     }
 };
 
