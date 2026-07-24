@@ -270,11 +270,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     uint32_t ex_CB_size = ex_partial_CB_size;
     uint32_t ex_global_CB_size = ex_partial_CB_size;
     uint32_t ex_external_CB_size = tt::div_up(Kt, block_wt) * single_tile_size;
-    // cb_stats is globally allocated onto the caller-provided stats buffer, so it must be sized
-    // from the stats tensor's own dtype (matching cb_to_allgather_writer), NOT the compute
-    // accumulation format. Using single_tile_size here would over/under-size the CB relative to
-    // the backing buffer (e.g. FLOAT32 compute acc vs a BFLOAT16 stats buffer -> CB > bank size).
-    uint32_t stats_cb_size = post_all_gather_stats_block_tiles * stats_single_tile_size;
+    uint32_t stats_cb_size = post_all_gather_stats_block_tiles * single_tile_size;
     uint32_t stats_reduced_cb_size = single_tile_size;
     // output buffer size
     uint32_t out_CB_size;
@@ -595,8 +591,8 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     // cb_stats
     uint32_t cb_stats_index = tt::CBIndex::c_19;
     tt::tt_metal::CircularBufferConfig stats_cb_config =
-        tt::tt_metal::CircularBufferConfig(stats_cb_size, {{cb_stats_index, stats_data_format}})
-            .set_page_size(cb_stats_index, stats_single_tile_size)
+        tt::tt_metal::CircularBufferConfig(stats_cb_size, {{cb_stats_index, cb_data_format}})
+            .set_page_size(cb_stats_index, single_tile_size)
             .set_globally_allocated_address(*stats.value().buffer());
     auto cb_stats = tt::tt_metal::CreateCircularBuffer(program, sender_cores, stats_cb_config);
     uint32_t signaling_cb = tt::CBIndex::c_20;

@@ -35,13 +35,10 @@ void bind_fused_rms_minimal(nb::module_& mod) {
               BFLOAT16. Passing weight=None is not supported.
             - stats: required. A pre-allocated tiled, width-sharded tensor of shape
               (1, 1, 32, num_devices) that backs the op's internal all-gather circular buffer.
-              Passing stats=None is not supported. Its dtype sets the precision at which the per-device
-              partial statistics are stored and gathered across devices (the backing circular buffer
-              follows the stats dtype), independently of the compute accumulation precision: BFLOAT16 and
-              FLOAT32 are both accepted regardless of fp32_dest_acc_en. The cross-device accumulation is
-              always done at the compute config's precision, so BFLOAT16 stats simply gather lower-precision
-              partials (analogous to a matmul that accumulates in FP32 over BFLOAT16 operands); pass FLOAT32
-              stats when full-precision partials are required.
+              Passing stats=None is not supported, and its dtype MUST match the compute accumulation format:
+              FLOAT32 when fp32_dest_acc_en is enabled, otherwise BFLOAT16. This tensor backs the compute
+              pipeline's stats circular buffer, which is shared with the cross-device all-gather, so a mismatch
+              (e.g. BFLOAT16 stats with fp32_dest_acc_en=True) is rejected at validation with a clear error.
             - memory_config (output): must be a sharded config whose buffer type and memory layout
               match the input's. Interleaved output configs are not accepted; reshard the result
               afterward if a downstream consumer needs interleaved/DRAM.
