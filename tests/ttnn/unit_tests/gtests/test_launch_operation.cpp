@@ -182,6 +182,32 @@ struct DescriptorAndSpecFactory {
 static_assert(ttnn::device_operation::ProgramSpecFactoryConcept<DescriptorAndSpecFactory>);
 static_assert(!ttnn::device_operation::ProgramDescriptorFactoryConcept<DescriptorAndSpecFactory>);
 
+// Same, but the spec factory is the CUSTOM variant (ProgramRunArgs-returning override_runtime_arguments):
+// it must classify as CustomProgramSpecFactoryConcept only — descriptor excluded (has
+// create_program_artifacts), base spec excluded (has the override).
+struct DescriptorAndCustomSpecFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const OperationAttributes& /*attrs*/, const Tensor& /*tensor_args*/, Tensor& /*tensor_return_value*/) {
+        return {};
+    }
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const OperationAttributes& /*attrs*/, const Tensor& /*tensor_args*/, Tensor& /*tensor_return_value*/) {
+        return ttnn::device_operation::ProgramArtifacts{};
+    }
+    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+        const OperationAttributes& /*attrs*/,
+        const Tensor& /*tensor_args*/,
+        Tensor& /*tensor_return_value*/,
+        const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/ = std::nullopt) {
+        return {};
+    }
+};
+static_assert(ttnn::device_operation::CustomProgramSpecFactoryConcept<DescriptorAndCustomSpecFactory>);
+static_assert(!ttnn::device_operation::ProgramSpecFactoryConcept<DescriptorAndCustomSpecFactory>);
+static_assert(!ttnn::device_operation::ProgramDescriptorFactoryConcept<DescriptorAndCustomSpecFactory>);
+static_assert(!ttnn::device_operation::ProgramFactoryConcept<DescriptorAndCustomSpecFactory>);
+static_assert(!ttnn::device_operation::MeshWorkloadFactoryConcept<DescriptorAndCustomSpecFactory>);
+
 // Compile-coverage: taking the adapter methods' addresses ODR-uses them, forcing
 // the (otherwise un-instantiated) bodies to compile. Never dispatched.
 TEST(LaunchOperationTest, ProgramSpecAdapterCompiles) {
