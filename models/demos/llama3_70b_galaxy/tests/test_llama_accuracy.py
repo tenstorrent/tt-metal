@@ -13,7 +13,6 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.common.sampling.tt_sampling import TTSampling
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs, LlamaOptimizations
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from tqdm import tqdm
 
 
@@ -119,7 +118,7 @@ def test_tt_model_acc(
         mesh_device, optimizations=optimizations, max_batch_size=batch_size, max_seq_len=max_seq_len, instruct=True
     )
 
-    tokenizer = Tokenizer(model_args.tokenizer_path)
+    tokenizer = model_args.create_tokenizer()
 
     # Load state_dict for TT model
     logger.info("Loading weights...")
@@ -142,7 +141,7 @@ def test_tt_model_acc(
         #     text = f.read()
         text = "This is a test. It's important to conduct tests to ensure everything is functioning correctly. Whether it's a new software application, a scientific experiment, or a simple task, testing helps us identify any issues and make improvements. When we test, we learn about the strengths and weaknesses of what we're working with, allowing us to make necessary adjustments. In the end, testing leads to better outcomes and higher quality results. So, let's proceed with this test and see what we discover. Remember, every test is a step towards perfection. In academic and professional settings, tests and assessments are crucial for validating knowledge and skills. They offer insights into areas that require further development and help establish benchmarks for progress. From standardized tests in education to quality assurance in manufacturing, the principle of testing spans across various fields, underlining"
         # Encode text to tokens
-        encoded_tokens = tokenizer.encode(text, bos=True, eos=False)
+        encoded_tokens = model_args.encode_prompt(text, instruct=False)
         total_length = prefill_len + decode_len + 1
         reference_tokens = torch.tensor(encoded_tokens[:total_length]).unsqueeze(0)
         top5_tokens = None  # Will be computed during inference

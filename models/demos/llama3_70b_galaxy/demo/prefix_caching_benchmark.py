@@ -12,7 +12,6 @@ import ttnn
 from models.demos.llama3_70b_galaxy.demo.text_demo import create_tt_model
 from models.demos.llama3_70b_galaxy.tt.generator import Generator, SamplingParams
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
@@ -120,7 +119,7 @@ def test_prefill_prefix_caching_benchmark(mesh_device):
         use_paged_kv_cache=True,
         prefill_profile=False,
     )
-    model_args.tokenizer = Tokenizer(model_args.tokenizer_path)
+    model_args.tokenizer = model_args.create_tokenizer()
     generator = Generator(model, model_args, mesh_device, tokenizer=model_args.tokenizer)
     vocab_size = model_args.vocab_size
 

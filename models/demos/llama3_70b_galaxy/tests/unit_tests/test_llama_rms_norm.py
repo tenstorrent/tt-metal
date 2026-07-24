@@ -7,7 +7,6 @@ from loguru import logger
 import ttnn
 from models.common.rmsnorm import RMSNorm as TtRMSNorm
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import RMSNorm as RefRMSNorm
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -94,7 +93,7 @@ def test_llama_rms_norm_inference(
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
-    reference_model = RefRMSNorm(dim=model_args.dim, eps=model_args.norm_eps)
+    reference_model = model_args.reference_rms_norm()
     reference_model.load_state_dict(partial_state_dict)
 
     input = torch.rand(1, 1, 32, model_args.dim)
