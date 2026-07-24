@@ -76,6 +76,7 @@ termination_check() is the SOLE authority on whether more optimization is needed
 LOOP:
   git_head -> termination_check -> read next_target.
   REUSE-FIRST: call recall_knobs(next_target.op_class, next_target.grid, next_target.bound_by) and APPLY/ADAPT any matching catalogued knob (heed its negative knowledge) BEFORE improvising one.
+  WARM-START (matmul fidelity/dtype): a matmul_sweep.json may exist in the model directory (Glob for it once) — a pre-pass table of PCC-verified best (fidelity, dtype) per matmul shape, measured EAGER so treat each entry as a STARTING GUESS, not a verdict. When next_target is a matmul on the knob:fidelity or knob:dtype rung, look up next_target's shape (m,k,n) in that table and APPLY its recommended fidelity/dtype FIRST, then check_pcc + measure_candidate + check_lever_coverage and commit/revert AS USUAL (the eager guess still must pass the trace-mode verify). If the file is missing or the shape is absent, proceed normally.
   Do EXACTLY next_target.rung on next_target.op:
     knob:grid  -> full-grid program_config. check_pcc; measure_candidate; commit a real win else revert. record_kernel_attempt(op,'grid',measured_ms,beat_baseline).
     knob:fidelity -> lower math fidelity (HiFi4->HiFi2->LoFi) on this compute-bound op. check_pcc; measure_candidate; commit a win else revert. record_kernel_attempt(op,'fidelity',measured_ms,beat_baseline) EVEN IF pcc forced a revert (that marks the knob tried).

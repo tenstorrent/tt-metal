@@ -79,6 +79,22 @@ def test_summarize_reports_speedup_vs_full_precision_baseline():
     assert seed["baseline_ms"] == 1.0 and seed["best_ms"] == 0.4 and seed["speedup"] == 2.5
 
 
+def test_optimize_prompt_warm_starts_from_sweep_table():
+    # #1 integration: the cc optimize agent must be told to consult matmul_sweep.json as a warm-start
+    # for a matmul's fidelity/dtype rung, and that the eager guess STILL passes the normal verify.
+    run_path = Path(__file__).resolve().parents[1] / "cc_optimize" / "run.py"
+    spec = importlib.util.spec_from_file_location("cc_optimize_run", str(run_path))
+    run = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(run)  # run.py is stdlib-only, safe to import
+    prompt = run._PROMPT
+    assert "matmul_sweep.json" in prompt
+    assert "fidelity" in prompt and "dtype" in prompt
+    # must preserve the verify gate (a warm-start guess is not a free commit)
+    assert "check_pcc" in prompt and "measure_candidate" in prompt
+    # the hitl prompt inherits it too
+    assert "matmul_sweep.json" in run._HITL_PROMPT
+
+
 def test_standalone_has_cli_and_does_not_import_perf_mcp():
     # the pre-pass must be SELF-CONTAINED: it exposes a CLI (main/run_prepass) and must NOT reach into
     # the optimize tool's internals (perf_mcp / the loop) -- that is the whole point of a separate flag.
