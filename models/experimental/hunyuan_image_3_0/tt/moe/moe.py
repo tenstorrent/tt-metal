@@ -92,8 +92,9 @@ class HunyuanTtMoE(LightweightModule):
             # can actually free them.
             self.state_dict = None
         else:
-            # Keep expert tensors only (gate/shared already uploaded). Single-layer
-            # PCC fits; multi-layer stacks must call bind_expert_loader().
+            # Keep expert tensors only (gate/shared already uploaded). bf16 shrink
+            # happens in HunyuanTtModel after construct; optional bind_expert_loader
+            # drops these for disk streaming (HY_MOE_DISK_STREAM=1).
             expert_pfx = f"{prefix}.experts."
             self.state_dict = {k: v for k, v in state_dict.items() if k.startswith(expert_pfx)}
 

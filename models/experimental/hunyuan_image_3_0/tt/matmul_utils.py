@@ -186,9 +186,9 @@ def _width_shard_specs_match(a: ttnn.MemoryConfig, b: ttnn.MemoryConfig) -> bool
         return False
     try:
         sa, sb = a.shard_spec, b.shard_spec
-        return sa is not None and sb is not None and sa == sb
-    except Exception:
+    except AttributeError:
         return False
+    return sa is not None and sb is not None and sa == sb
 
 
 def _pad_m_to_tile(x: ttnn.Tensor, m_dim: int) -> ttnn.Tensor:

@@ -28,6 +28,7 @@ import ttnn
 
 from models.experimental.hunyuan_image_3_0.ref.vision.preprocess import (
     IMAGE_TOKEN_ID,
+    build_cond_image_processor,  # noqa: F401 — re-export for I2I callers
     vit_process_image,
 )
 from models.experimental.hunyuan_image_3_0.ref.weights import MODEL_DIR

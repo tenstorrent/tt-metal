@@ -299,8 +299,8 @@ class HunyuanTtAttention(LightweightModule):
         # Under SP the queries are sequence-sharded, so a plain causal SDPA (which
         # assumes query i attends keys 0..i) would be wrong for non-first shards.
         # The image-gen path always supplies an explicit (sharded) mask; require it.
-        if self.sp_factor > 1:
-            assert attention_mask is not None, "SP attention requires an explicit (query-sharded) mask"
+        if self.sp_factor > 1 and attention_mask is None:
+            raise ValueError("SP attention requires an explicit (query-sharded) mask")
 
         # Attention intermediates run on the per-device (sp-sharded) sequence x.shape[1].
         # Keep them L1-resident up to the measured CB-clash bound, else DRAM — same gate

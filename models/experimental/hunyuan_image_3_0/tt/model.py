@@ -17,11 +17,11 @@
 # match the image-gen call site).
 #
 # Memory: with stream_experts=True each MoE rebuilds experts from host weights
-# every forward. Retaining those tensors for all 32 layers pins ~150–200GB and
-# gets OOM-killed mid-load; HunyuanTtModel therefore binds an on-demand disk
-# expert loader per layer and drops the retained host tensors after upload of
-# gate/shared/attention weights. `layer_loader(i)` returns the state_dict for
-# layer i, keyed `model.layers.{i}.*`.
+# every forward (device DRAM stays ~one expert). Retaining fp32 packs for all 32
+# layers is ~300GB host; we keep bf16 packs (~150GB) by default so AR decode does
+# not re-hit safetensors every token. Set HY_MOE_DISK_STREAM=1 to drop host packs
+# and reload each expert from disk when host RAM is tight.
+# `layer_loader(i)` returns the state_dict for layer i, keyed `model.layers.{i}.*`.
 
 import gc
 import os
@@ -215,11 +215,20 @@ class HunyuanTtModel(LightweightModule):
                 sp_factor=sp_factor,
                 weight_cache_path=self.weight_cache_path,
             )
-            # Single-device streaming MoE: drop ~layer-sized host expert pack and
-            # reload one expert at a time from disk on forward (avoids ~200GB RSS).
+            # Single-device streaming MoE:
+            # - Default: keep expert weights on host as bf16 and H2D one expert at
+            #   a time (fast AR; ~150GB host for 32L).
+            # - HY_MOE_DISK_STREAM=1: drop host packs and reload from safetensors
+            #   each expert (slow AR; low host RSS).
             if stream_experts and ccl_manager is None and hasattr(layer.mlp, "bind_expert_loader"):
-                moe_prefix = f"model.layers.{i}.mlp"
-                layer.mlp.bind_expert_loader(_disk_expert_loader(i, moe_prefix, model_dir))
+                if os.environ.get("HY_MOE_DISK_STREAM", "0") == "1":
+                    moe_prefix = f"model.layers.{i}.mlp"
+                    layer.mlp.bind_expert_loader(_disk_expert_loader(i, moe_prefix, model_dir))
+                elif getattr(layer.mlp, "state_dict", None) is not None:
+                    layer.mlp.state_dict = {
+                        k: (v if v.dtype == torch.bfloat16 else v.to(torch.bfloat16).contiguous())
+                        for k, v in layer.mlp.state_dict.items()
+                    }
             self.layers.append(layer)
             del sd
             gc.collect()
