@@ -52,7 +52,7 @@ jobs:
           export CHIP_ARCH=quasar
           echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
 
-          pytest -q --compile-producer -n 40 \
+          pytest -q --compile-producer -n 8 \
             -m "perf and quasar" \
             --override-ini="log_cli=false" --tb=short --timeout=60 \
             --junitxml=pytest-report-${CHIP_ARCH}-compile.xml \
