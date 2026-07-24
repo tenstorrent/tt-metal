@@ -391,17 +391,21 @@ def invalid_trace_flag_error():
     return None
 
 
-def _run_matmul_sweep_prepass(args, run_root: Path, run_demo: Path) -> None:
-    """Optional --matmul-sweep pre-pass for `optimize`: BEFORE the cc engine runs, sweep each distinct
-    matmul (fidelity x dtype, PCC-gated) and write matmul_sweep.json as a warm-start table. Loads the
+def _run_matmul_sweep_prepass(args, run_root: Path, run_demo: Path, node: str = None, case: str = None) -> None:
+    """Optional --matmul-sweep pre-pass: BEFORE the cc engine runs, sweep each distinct matmul
+    (fidelity x dtype, PCC-gated) and write matmul_sweep.json as a warm-start table. Loads the
     standalone perf_automation cc_optimize/matmul_sweep.py by PATH (like the cc runner) so nothing in
-    the optimize engine is imported or changed. Needs --perf-test (the node to sweep); if absent it
-    warns and skips. Any failure is reported and swallowed so the optimize run still proceeds."""
-    node = getattr(args, "perf_test", None)
+    the optimize engine is imported or changed.
+
+    ``node``/``case`` override the enumeration node: the full-pipeline path passes None and falls back
+    to --perf-test; the per-module path passes each module's own PCC test node (which runs that
+    module's forward, so its matmuls are what get swept). If no node can be resolved it warns and
+    skips. Any failure is reported and swallowed so the optimize run still proceeds."""
+    node = node or getattr(args, "perf_test", None)
+    case = case if node else getattr(args, "case", None)
     if not node:
-        print("  [optimize/matmul-sweep] --matmul-sweep needs --perf-test (the node to sweep); skipping sweep")
+        print("  [optimize/matmul-sweep] no node to sweep (need --perf-test or a per-module PCC node); skipping")
         return
-    case = getattr(args, "case", None)
     out = str(Path(run_demo) / "matmul_sweep.json")
     sweep_path = Path(run_root) / PERF_DIR / "cc_optimize" / "matmul_sweep.py"
     if not sweep_path.is_file():

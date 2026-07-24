@@ -172,8 +172,7 @@ def run_module_level_optimize(args, demo_dir, repo_root, run_cc) -> int:
         for _m in mods:
             try:
                 (
-                    Path(tempfile.gettempdir())
-                    / ("perf_mcp_orig_baseline_%s_%s.json" % (Path(demo_dir).name, _m))
+                    Path(tempfile.gettempdir()) / ("perf_mcp_orig_baseline_%s_%s.json" % (Path(demo_dir).name, _m))
                 ).unlink()
             except OSError:
                 pass
@@ -221,6 +220,10 @@ def run_module_level_optimize(args, demo_dir, repo_root, run_cc) -> int:
         if _tp <= 1:
             _tp = int(os.environ.get("TT_PERF_MESH_COLS") or os.environ.get("TT_HW_PLANNER_SHARD_TP") or "1")
         os.environ["TT_PERF_SHARD_DEGREE"] = str(_tp if (_shard_snap.is_file() and _tp > 1) else 1)
+        if getattr(args, "matmul_sweep", False):
+            from .optimize import _run_matmul_sweep_prepass
+
+            _run_matmul_sweep_prepass(args, repo_root, demo_dir, node=node)
         try:
             result = run_cc(
                 demo_dir,
