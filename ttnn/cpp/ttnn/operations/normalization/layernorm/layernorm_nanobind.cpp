@@ -5,6 +5,7 @@
 #include "layernorm_nanobind.hpp"
 
 #include <optional>
+#include <variant>
 
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
@@ -313,6 +314,66 @@ void bind_normalization_layernorm_device_operation(nb::module_& mod) {
             Returns:
                 Union[LayerNormMultiCoreProgramFactory, LayerNormShardedProgramFactory]:
                     The appropriate program factory for the input tensor.
+            )doc")
+        // ── Metal 2.0 migration façade ──────────────────────────────────────
+        // Stable, framework-version-agnostic surface for the experimental fusion
+        // framework (models/experimental/ops/descriptors/). Fusion code depends on
+        // these three methods instead of reaching into compute_program_hash,
+        // select_program_factory, the per-factory create_descriptor bindings, or
+        // LayerNormMultiCoreProgramFactory::default_core_range — all of which the
+        // Metal 2.0 port removes or reshapes. After the port, only the C++ body of
+        // these methods changes; the Python fusion callers are untouched.
+        .def_static(
+            "program_cache_key",
+            [](const ttnn::prim::LayerNormParams& attrs, const ttnn::prim::LayerNormInputs& tensors) {
+                return ttnn::device_operation::detail::compute_program_hash<ttnn::prim::LayerNormDeviceOperation>(
+                    attrs, tensors);
+            },
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            R"doc(
+            Stable program-identity key for the fusion build cache.
+
+            Today this mirrors compute_program_hash; after the Metal 2.0 port it
+            becomes the ProgramSpec-derived key. Fusion code should depend on this
+            rather than on compute_program_hash directly.
+            )doc")
+        .def_static(
+            "create_fused_program_descriptor",
+            [](const ttnn::prim::LayerNormParams& operation_attributes,
+               const ttnn::prim::LayerNormInputs& tensor_args,
+               Tensor& tensor_return_value,
+               const std::optional<CoreRangeSet>& core_range_set) {
+                auto factory =
+                    ttnn::prim::LayerNormDeviceOperation::select_program_factory(operation_attributes, tensor_args);
+                return std::visit(
+                    [&](auto&& f) {
+                        return f.create_descriptor(
+                            operation_attributes, tensor_args, tensor_return_value, core_range_set);
+                    },
+                    factory);
+            },
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            nb::arg("tensor_return_value"),
+            nb::arg("core_range_set") = std::nullopt,
+            R"doc(
+            Build the ProgramDescriptor for this op, hiding factory selection.
+
+            Façade over select_program_factory + the chosen factory's
+            create_descriptor. Fusion code should call this instead of reaching
+            into the per-factory create_descriptor bindings, which the Metal 2.0
+            port removes.
+            )doc")
+        .def_static(
+            "default_core_range",
+            &ttnn::prim::LayerNormMultiCoreProgramFactory::default_core_range,
+            nb::arg("device"),
+            R"doc(
+            Default core range for non-sharded LayerNorm (device compute grid).
+
+            Device-op-level façade so fusion code need not name the program
+            factory class, which the Metal 2.0 port removes.
             )doc");
 }
 

@@ -41,7 +41,7 @@ def _create_layernorm_op_descriptor(
         if input_tensor.is_sharded():
             core_range_set = input_tensor.memory_config().shard_spec.grid
         else:
-            core_range_set = ttnn.LayerNormMultiCoreProgramFactory.default_core_range(device)
+            core_range_set = ttnn.LayerNormDeviceOperation.default_core_range(device)
 
     if compute_kernel_config is None:
         raise ValueError("compute_kernel_config is required")
@@ -79,7 +79,7 @@ def _create_layernorm_op_descriptor(
     if recip_tensor is not None:
         tensor_args.recip_tensor = recip_tensor
 
-    h = ttnn.LayerNormDeviceOperation.compute_program_hash(operation_params, tensor_args)
+    h = ttnn.LayerNormDeviceOperation.program_cache_key(operation_params, tensor_args)
     base_key = int(h) & ((1 << 64) - 1)
     if input_tensor.is_sharded():
         program_cache_key = base_key
@@ -105,8 +105,7 @@ def _create_layernorm_op_descriptor(
 
     def _run_factory():
         out = outputs[0]
-        factory = ttnn.LayerNormDeviceOperation.select_program_factory(operation_params, tensor_args)
-        return factory.create_descriptor(operation_params, tensor_args, out, cr_arg)
+        return ttnn.LayerNormDeviceOperation.create_fused_program_descriptor(operation_params, tensor_args, out, cr_arg)
 
     return OpDescriptor(
         factory_fn=_run_factory,
