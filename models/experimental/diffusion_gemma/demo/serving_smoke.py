@@ -201,7 +201,6 @@ def run(args) -> dict:
             "resolved_selfcond_prechunk": self_conditioning_embedding_prechunk_enabled(),
             "DG_SELFCOND_LOGITS_L1": os.environ.get("DG_SELFCOND_LOGITS_L1", "<unset>"),
             "resolved_selfcond_logits_l1": self_conditioning_logits_l1_mode(),
-            "DG_DENOISE_TRACED": os.environ.get("DG_DENOISE_TRACED", "<unset>"),
             "DG_TRACE_REGION_SIZE": os.environ.get("DG_TRACE_REGION_SIZE", "<unset>"),
             "TT_METAL_WATCHER": os.environ.get("TT_METAL_WATCHER", "<unset>"),
             "prompt_len": prompt_len,

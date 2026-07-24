@@ -8,7 +8,7 @@ Covers the control-flow the recapture fix depends on, without a device:
     `__call__` always reads p_max rows regardless of the growing committed `prompt_len`
     (this constant read shape is what makes the trace capture-once/replay-many).
   - `set_prompt_len` still enforces monotonic + tile-aligned + `<= read_span`.
-  - `reveal_mask_enabled` / `_resolve_reveal_pmax` / `_prepare_reveal_if_enabled` control flow.
+  - the up-front controller's fixed reveal-buffer preparation and p_max validation.
 """
 
 from __future__ import annotations
@@ -69,15 +69,6 @@ def test_set_read_span_requires_tile_alignment_and_not_below_committed(expect_er
         reader.set_read_span(128)  # below committed 256
 
 
-def test_reveal_mask_enabled_env(monkeypatch):
-    monkeypatch.delenv("DG_DENOISE_REVEAL_MASK", raising=False)
-    assert TD.reveal_mask_enabled() is False
-    monkeypatch.setenv("DG_DENOISE_REVEAL_MASK", "1")
-    assert TD.reveal_mask_enabled() is True
-    # denoise_forward's copy reads the same env
-    assert DF.reveal_mask_enabled() is True
-
-
 class _FakeKCache:
     def __init__(self, seq):
         self.shape = [1, 8, seq, 128]
@@ -95,6 +86,7 @@ class _FakeAdapter:
         self.tt_model = _FakeModel(cache_seq)
         self.prompt_len = prompt_len
         self.calls = []
+        self.use_reveal_mask = False
         self.prompt_hidden_by_layer = self  # acts as the reader too
 
     # reader surface
@@ -104,34 +96,30 @@ class _FakeAdapter:
     # adapter reveal surface
     def prepare_reveal_mask_buffers(self, *, canvas_len, p_max, prompt_len, enforce_window=False):
         self.calls.append(("prepare", canvas_len, p_max, prompt_len))
+        self.use_reveal_mask = True
 
     def update_reveal_mask_buffer(self, prompt_len):
         self.calls.append(("update", prompt_len))
 
 
-def test_resolve_pmax_from_cache_and_override(monkeypatch):
+def test_resolve_pmax_requires_explicit_aligned_value(monkeypatch, expect_error):
     a = _FakeAdapter(cache_seq=8192, prompt_len=256)
     monkeypatch.delenv("DG_DENOISE_REVEAL_PMAX", raising=False)
-    assert TD._resolve_reveal_pmax(a) == 8192
+    with expect_error(RuntimeError, match="explicit bounded DG_DENOISE_REVEAL_PMAX"):
+        TD._resolve_reveal_pmax(a)
+
     monkeypatch.setenv("DG_DENOISE_REVEAL_PMAX", "4096")
     assert TD._resolve_reveal_pmax(a) == 4096
-    # non-tile-aligned override rounds up
+
     monkeypatch.setenv("DG_DENOISE_REVEAL_PMAX", "4097")
-    assert TD._resolve_reveal_pmax(a) == 4096 + TILE
+    with expect_error(RuntimeError, match="positive 32-token multiple"):
+        TD._resolve_reveal_pmax(a)
 
 
-def test_prepare_reveal_if_enabled_wires_read_span_and_mask(monkeypatch):
-    monkeypatch.setenv("DG_DENOISE_REVEAL_MASK", "1")
+def test_prepare_fixed_reveal_wires_read_span_and_mask(monkeypatch):
     monkeypatch.setenv("DG_DENOISE_REVEAL_PMAX", "4096")
     a = _FakeAdapter(cache_seq=8192, prompt_len=256)
-    TD._prepare_reveal_if_enabled(a, canvas_len=256, start_pos=256)
+    assert TD._prepare_fixed_reveal(a, canvas_len=256) == 4096
     assert ("set_read_span", 4096) in a.calls
     assert ("prepare", 256, 4096, 256) in a.calls
     assert ("update", 256) in a.calls
-
-
-def test_prepare_reveal_if_enabled_noop_when_disabled(monkeypatch):
-    monkeypatch.delenv("DG_DENOISE_REVEAL_MASK", raising=False)
-    a = _FakeAdapter(cache_seq=8192, prompt_len=256)
-    TD._prepare_reveal_if_enabled(a, canvas_len=256, start_pos=256)
-    assert a.calls == []

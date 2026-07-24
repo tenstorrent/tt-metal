@@ -31,18 +31,19 @@ Do not advertise async decode or vLLM APC until their block-granular contracts
 are implemented and tested. The local `DG_PREFIX_CACHE` prototype is not vLLM
 APC.
 
-## Current launch contract (2026-07-17)
+## Current launch contract (2026-07-22)
 
 Never benchmark or judge quality from an implicit launch:
 
-- Set `DG_SPARSE_MOE=1`; it defaults off and otherwise denoise computes the dense 128-expert path.
-- Set `DG_DEDUP_ARGMAX=1` for argmax controls; it defaults off.
-- Set `DG_VLLM_MAX_DENOISE_STEPS` explicitly; unset means K=48.
-- Set `DG_VLLM_GUMBEL_MODE` explicitly. `argmax` is a fast/RUN control. `chunked` is the
-  bounded-memory 256K path but its current QB2 1024-wide RNG is distribution-biased; use
-  `host` for IID official sampling semantics at smaller validated contexts such as GPQA/4096.
-- Set `DG_VLLM_TRACE` explicitly. Unset is eager. Trace block 0 is capture-inclusive and current
-  growing contiguous-prefix shapes recapture across blocks.
+- There is exactly one Metal denoise trace path: model-lifetime up-front capture with reveal
+  masking, IID host Gumbel, K=48, and one-step/window early halt. Eager is the only fallback.
+- Set `DG_UPFRONT_CAPTURE=1`, `DG_UPFRONT_PREFILL_WARMUP_LENS` to every admitted aligned prompt
+  length, explicit positive tile-aligned `DG_DENOISE_REVEAL_PMAX`, validated positive
+  `DG_TRACE_REGION_SIZE`, `DG_VLLM_GUMBEL_MODE=host`, and `DG_VLLM_MAX_DENOISE_STEPS=48`.
+- Reveal masking, non-lazy startup capture, and window-1 early halt are intrinsic. Do not set
+  legacy selector flags.
+- Every admitted prefill shape must compile before capture. Reject unseen runtime shapes rather
+  than compiling while traces are resident.
 - Pass `--generation-config vllm`; otherwise checkpoint config caps output at one 256-token block.
 - Pass `--max-num-batched-tokens >= largest whole prompt`; TT chunked prefill is not scheduler
   admission and oversized prompts otherwise remain waiting.
@@ -159,11 +160,14 @@ skill.
 
 ## Trace and performance
 
-Serving reuses the generator's traced denoise controller. Verify trace sets are keyed by the
-visible frozen-prefix shape. The current contiguous-cache path must release/recapture after each
-commit grows the prefix; same-ID cross-block replay is valid only after paged/fixed-shape prefix
-inputs land. Verify no recapture within a fixed-shape denoise block and no stale prompt-only replay
-after committed KV becomes visible.
+Serving uses the startup-captured model-lifetime reveal controller. Verify one capture at startup,
+safe in-place rebind across requests, no request-time capture/compilation, and idempotent release at
+model teardown. The fixed reveal span is bounded by `DG_DENOISE_REVEAL_PMAX`; never substitute a
+prompt-only/frozen-prefix trace.
+
+Fixed-budget, grouped/multistep, frozen-prefix, per-request, argmax, and growing-prefix recapture
+results under `doc/` are historical evidence only. Their executable drivers and selector knobs are
+not part of the current contract.
 
 Report:
 
@@ -194,7 +198,7 @@ Maintain:
 - `doc/vllm_integration/README.md` and `work_log.md`;
 - `serving_test_suite.json` and `live_vllm_serving.json`;
 - reduced and full-depth `serving_smoke_*.json`;
-- traced-serving artifacts;
+- up-front traced-serving artifacts (legacy traced-serving artifacts remain historical);
 - plugin registration/model-runner/scheduler patches;
 - exact fork revision and server command.
 

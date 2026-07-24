@@ -4,15 +4,33 @@
   "hf_model_type": "diffusion_gemma",
   "tt_vllm_architecture": "TTDiffusionGemmaForBlockDiffusion",
   "tt_vllm_adapter": "models.experimental.diffusion_gemma.tt.generator_vllm:DiffusionGemmaForCausalLM",
-  "current_execution_contract_20260717": {
+  "current_execution_contract_20260722": {
     "authoritative_status": "plan.md Part 0 current execution contract",
-    "plain_vllm_defaults": {
-      "DG_SPARSE_MOE": "off",
-      "DG_DEDUP_ARGMAX": "off",
-      "DG_VLLM_TRACE": "off",
-      "DG_VLLM_MAX_DENOISE_STEPS": 48,
-      "DG_VLLM_GUMBEL_MODE": "argmax"
+    "denoise_execution_modes": {
+      "metal_trace": "Exactly one supported path: model-lifetime startup capture with reveal masking, IID host Gumbel, K=48, and one-step/window early halt. The controller is rebound across requests and released at model teardown.",
+      "eager_fallback": "Leave DG_UPFRONT_CAPTURE unset/zero. Eager is supported for ordinary diagnostics but is not optimized traced-serving evidence."
     },
+    "upfront_model_environment": {
+      "DG_UPFRONT_CAPTURE": "1",
+      "DG_UPFRONT_PREFILL_WARMUP_LENS": "every aligned prompt length the server will admit",
+      "DG_DENOISE_REVEAL_PMAX": "explicit positive 32-token multiple bounding served prompt + generated",
+      "DG_TRACE_REGION_SIZE": "explicit validated positive byte reservation",
+      "DG_VLLM_GUMBEL_MODE": "host",
+      "DG_VLLM_MAX_DENOISE_STEPS": 48
+    },
+    "intrinsic_trace_behavior": "Reveal masking, non-lazy startup capture, and window-1 early halt are intrinsic and have no selector flags.",
+    "removed_legacy_trace_knobs": [
+      "DG_VLLM_TRACE",
+      "DG_DENOISE_TRACED",
+      "DG_DENOISE_TRACED_MULTISTEP",
+      "DG_DENOISE_MULTISTEP_GROUP",
+      "DG_DENOISE_EARLY_HALT",
+      "DG_DENOISE_EARLY_HALT_WINDOW",
+      "DG_DENOISE_FROZEN_PREFIX",
+      "DG_DENOISE_REVEAL_MASK",
+      "DG_DENOISE_LAZY_CAPTURE"
+    ],
+    "non_metal_diagnostic": "DG_DENOISE_DEVICE_LOOP remains an optional eager/device-resident diagnostic and is not a traced-serving mode.",
     "required_server_flags": [
       "--generation-config vllm",
       "--max-num-batched-tokens >= largest whole prompt",
@@ -23,7 +41,7 @@
     "eos": "ignore_eos=true is a transport stress control that exposes the physical post-EOS canvas tail; never use it for a quality verdict.",
     "metrics": "Use DG_VLLM_METRIC prefill/denoise/commit/block fields and 256/block_latency. API completion_tokens/wall_time includes EOS trimming and queueing.",
     "prefill": "DG_PREFILL_RAGGED_LONG defaults on and processes prompts above 4096 in 4096-token ragged top-8 slices. Current pure-prefill evidence is doc/optimize_perf/context_window_prefill_only_chunkedlong_20260713_msl65536.json at 233b88276ab; the artifact without chunkedlong is the superseded dense-fallback control.",
-    "trace": "Growing contiguous-prefix shapes recapture across blocks. July-10 same-ID rows used prompt-only prefix visibility and are historical.",
+    "trace": "All admitted aligned prefill shapes compile before startup capture. An unseen runtime shape fails loudly. July-09-15 fixed/multistep/frozen/per-request trace rows are historical only.",
     "served_context": "HF advertises 262144. Standalone model-owned 256K fit evidence exists, but current live vLLM serving is not validated end-to-end at 262144; do not advertise a live served ceiling from allocation evidence alone."
   },
   "max_model_len": 262144,
@@ -86,7 +104,7 @@
         184549376
       ],
       "failure": "reserving enough trace space removes the contiguous 128 MiB buffer needed by token_entropy exp_shifted/expected_terms; exact allocator OOMs are recorded in doc/optimize_perf/selfcond_prechunk.md",
-      "contract": "The advertised 256K model capability is freshly proven with the eager production memory-bounded chunked-Gumbel sampler for the full 48-step budget. Production chunked-Gumbel Metal Trace is independently verified on the full 30-layer 1024-allocation path at K=48 across two growing-prefix blocks: 48 traces per prefix shape, 96 captured/96 executed total, 1.42 output tok/s including block-1 recapture. This does not remove the recorded traced-256K allocator conflict; no max_model_len reduction was made."
+      "contract": "The advertised 256K model capability is proven with the eager production memory-bounded chunked-Gumbel sampler for the full 48-step budget. The full 30-layer 1024-allocation growing-prefix Metal Trace result (48 traces per prefix shape, 96 captured/96 executed, 1.42 output tok/s including block-1 recapture) is historical legacy-path evidence, not the current executable trace contract. The recorded traced-256K allocator conflict remains historical capacity evidence; no max_model_len reduction was made."
     }
   },
   "self_conditioning_logits_placement": {
@@ -117,14 +135,14 @@
     "max_num_seqs_note": "Batch-1 single-user latency is the headline target. Larger batch/concurrency (up to 32) is bounded by the 256K-KV per-request footprint; the block-diffusion per-step canvas K/V scratch (#47474 storage class ii) is additional per-request memory. Record the largest tested max_num_seqs in the serving evidence."
   },
   "sampling": {
-    "mode": "on-device canvas sampling (sample_on_device_mode=all). No full-logits readback. The eager diagnostic loop can read compact per-step decision tensors ([B,L] argmax/entropy/sampled/accept); traced argmax/materialized/chunked-Gumbel paths keep canvas feedback device-resident and read only the final clean commit candidate.",
+    "mode": "on-device canvas sampling (sample_on_device_mode=all). No full-logits readback. The eager diagnostic loop can read compact per-step decision tensors ([B,L] argmax/entropy/sampled/accept); the sole up-front host-Gumbel trace keeps canvas feedback device-resident and reads only halt scalars plus the final clean commit candidate.",
     "procedure": "Per denoise step: temperature-scale (linear 0.8->0.4) -> Gumbel-max argmax(logits/T + gumbel) -> entropy-budget acceptance (sort/cumsum/scatter) -> renoise rejected positions to random tokens. Commit = clean argmax. RUN-first: --argmax-sampling routes clean argmax (gumbel_noise=None) to avoid full-vocab noise allocation at 256K.",
     "eos_token_ids": [
       1,
       106,
       50
     ],
-    "optimize_perf_47465": "Terminal decision path is trace-safe and optimized (decisions unchanged): argmax over the 262144 vocab uses ROW_MAJOR multi-core; accept/renoise constants are preallocated outside capture; the fixed <=48-step trace keeps canvas feedback on device. The ~4176 ms step / ~232 s block values in the original #47465 evidence are historical. The earlier selected-default RUN-first argmax evidence in selfcond_logits_l1_e2e.json held the prefix at the initial prompt and is performance provenance only. Production chunked-Gumbel tracing uses a persistent device seed plus one reusable 1024-vocab uniform buffer and is validated full-depth at K=48/max_seq_len=1024 with correct growing-prefix visibility: block 1 including recapture is 180.816 s / 1.416 output tok/s. Dynamic Gumbel requires one-step trace windows; eliminating per-block prefix recapture requires paged/fixed-shape inputs; traced 256K remains separately blocked by the recorded allocator conflict."
+    "optimize_perf_47465": "The terminal decision path remains trace-safe and optimized: argmax over the 262144 vocab uses ROW_MAJOR multi-core and accept/renoise constants are preallocated. The ~4176 ms step, ~232 s block, fixed-step, argmax, chunked-Gumbel growing-prefix, and recapture results are historical legacy-path evidence only. Current optimized traced serving uses the model-lifetime up-front reveal+host+window1 path described above; eager is the fallback."
   },
   "generation_config": {
     "max_denoise_steps": 48,

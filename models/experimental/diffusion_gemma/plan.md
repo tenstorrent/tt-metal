@@ -10,7 +10,7 @@ Single source of truth for the DiffusionGemma bring-up branch. **This file merge
 > **TL;DR.** The text backbone is identical to the in-repo **Gemma-4 26B-A4B MoE** (`models/demos/gemma4/`). The real work is the **generation procedure**, not the backbone: a block-autoregressive multi-canvas *text-diffusion* loop with **bidirectional canvas attention**, a **three-phase KV-cache state machine**, **entropy-budget acceptance sampling**, and **self-conditioning**. Bring up text-first on QB2.
 
 **How this document is organized:**
-- **Part 0 — Current execution contract + dated status history** — the 2026-07-17 launch,
+- **Part 0 — Current execution contract + dated status history** — the 2026-07-22 launch,
   metric, quality, and prefill contract is authoritative; older RUN-first/two-gap narratives are
   retained below as history. **Read first.**
 - **Part I — The plan** — goals, model summary, reuse-vs-build, milestones, the issue-level dependency graph, per-issue workstreams, validation strategy, the risk register, serving notes, and references.
@@ -23,39 +23,43 @@ Single source of truth for the DiffusionGemma bring-up branch. **This file merge
 ---
 
 ## Part 0 — Current status & roadmap
-### Current execution contract (2026-07-17 — authoritative)
+### Current execution contract (2026-07-22 — authoritative)
 
 Read this section before using any older status table or benchmark below. Dated July-02/10/13
 sections are retained as history and do not define the current serving launch or performance
 baseline.
 
-**vLLM launch requirements**
+**Exactly two denoise execution modes**
 
-- The TT adapter defaults are conservative, not performant: `DG_SPARSE_MOE` defaults OFF,
-  `DG_DEDUP_ARGMAX` defaults OFF, `DG_VLLM_TRACE` defaults OFF, and
-  `DG_VLLM_MAX_DENOISE_STEPS` defaults to the released K=48 budget. A server that does not set
-  these explicitly runs dense-128 eager denoise.
-- Always pass `--generation-config vllm` for requests beyond one 256-token canvas. Without it,
-  checkpoint `generation_config.json` overrides `max_tokens` to 256; `max_tokens=1024` still emits
-  block 0 only and no `decode_forward` rows.
-- Set `--max-num-batched-tokens` at least as large as the largest whole prompt scheduled by the TT
-  backend. Chunked prefill is not a scheduler feature on this path; otherwise long requests can sit
-  in `Waiting` without entering the model.
-- `ignore_eos=true` is a transport stress control only. It exposes all physical canvas tokens,
-  including the tail after the first EOS; do not use that tail for a quality verdict.
-- HTTP `temperature`, `top_p`, `top_k`, and per-request seed are not currently consumed by the
-  DiffusionGemma denoise loop. Sampling mode/step budget are process-level DG settings.
+1. **Metal trace:** one model-lifetime, startup-captured path:
+   `DG_UPFRONT_CAPTURE=1`, reveal masking with explicit tile-aligned
+   `DG_DENOISE_REVEAL_PMAX`, IID host Gumbel, K=48, and one-step/window early halt. The reveal,
+   non-lazy capture, and window-1 early-halt behavior is intrinsic; it is not selected by additional
+   environment flags. The startup trace/controller is rebound across requests and released only at
+   model teardown.
+2. **Eager fallback:** leave `DG_UPFRONT_CAPTURE` unset/zero. Eager remains available for ordinary
+   demos and diagnostics, but it is not optimized traced-serving evidence.
 
-**Use an explicit profile**
+There is no supported fixed-budget, grouped/multistep, frozen-prefix, per-request, or argmax Metal
+trace variant. The removed legacy knobs are `DG_VLLM_TRACE`, `DG_DENOISE_TRACED`,
+`DG_DENOISE_TRACED_MULTISTEP`, `DG_DENOISE_MULTISTEP_GROUP`, `DG_DENOISE_EARLY_HALT`,
+`DG_DENOISE_EARLY_HALT_WINDOW`, `DG_DENOISE_FROZEN_PREFIX`, `DG_DENOISE_REVEAL_MASK`, and
+`DG_DENOISE_LAZY_CAPTURE`. `DG_DENOISE_DEVICE_LOOP` remains a non-Metal eager diagnostic and is
+not an additional trace type.
 
-- Correctness / production-sampler control: `DG_SPARSE_MOE=1`,
-  `DG_SPARSE_MOE_TUNED=1`, `DG_VLLM_GUMBEL_MODE=chunked`, K=48. Keep normal EOS handling.
-- Fast functional/transport control: `DG_SPARSE_MOE=1`, `DG_SPARSE_MOE_TUNED=1`,
-  `DG_DEDUP_ARGMAX=1`, `DG_VLLM_GUMBEL_MODE=argmax`, and an explicitly labeled reduced K such as
-  12. This is not the production-sampler quality gate.
-- Trace benchmark only: additionally set `DG_VLLM_TRACE=1` and a validated
-  `DG_TRACE_REGION_SIZE`. Report capture-inclusive block 0 separately. Growing contiguous-prefix
-  shapes still require recapture; historical same-ID cross-block rows used a prompt-only prefix.
+**Up-front vLLM launch requirements**
+
+- Set only the model-level contract values: `DG_UPFRONT_CAPTURE=1`,
+  `DG_UPFRONT_PREFILL_WARMUP_LENS=<all admitted aligned prompt lengths>`,
+  `DG_DENOISE_REVEAL_PMAX=<positive tile-aligned served prompt+generated cap>`,
+  `DG_TRACE_REGION_SIZE=<validated positive reservation>`, `DG_VLLM_GUMBEL_MODE=host`, and
+  `DG_VLLM_MAX_DENOISE_STEPS=48`.
+- Every admitted aligned prefill length must be known and compiled before capture. An unseen runtime
+  shape is rejected rather than compiled while traces are resident.
+- Always pass `--generation-config vllm`, set `--max-num-batched-tokens` at least as large as the
+  largest whole prompt, and keep `--max-num-seqs 1` / `--block-size 64`.
+- `ignore_eos=true` is a transport stress control only. HTTP `temperature`, `top_p`, `top_k`, and
+  per-request seed are not consumed by the model-owned denoise sampler.
 
 **Metric contract**
 
@@ -63,8 +67,8 @@ baseline.
   `denoise_steps`, denoise/commit/block latency, and `256 / block_latency` output tok/s.
 - API-visible `completion_tokens / wall_time` depends on EOS trimming and queueing and is not a
   device throughput metric. With `max_num_seqs=1`, curl wall time may include another request.
-- The July-10 18 tok/s tables are historical warmed same-shape trace replay, not first-request TTFT
-  and not current growing-prefix multi-block throughput.
+- The July-09–15 fixed/multistep/frozen/per-request trace tables are historical evidence only, not
+  executable current-path guidance or current serving throughput.
 
 **Current qualitative interpretation**
 
@@ -76,6 +80,8 @@ baseline.
 
 - Distinguish pure `prefill_prompt_tokens` timing from serving TTFT and from
   `BlockDiffusionServingSession.prefill`, which also constructs generation state.
+- For up-front vLLM, exact startup prefill warmups are a correctness requirement, not a benchmark
+  convenience. A variable-context harness that discovers tokenized lengths after startup is invalid.
 - `tt/prefill_moe.py` defaults `DG_PREFILL_RAGGED_LONG=1`: every multi-token prefill uses ragged
   top-8 expert execution, and sequences above 4096 are processed in 4096-token slices. The
   4K→16K dense-MoE cliff belongs to the pre-fix `ec5b64b4891` control only. Current pure-prefill
@@ -192,7 +198,7 @@ sign-off).**
   bit-identical, `6edc78938f4`). These are explicit tuned trace rows, not plain-server defaults or
   growing-prefix serving throughput. Step time is MoE-machinery-dominated; the fused MoE
   dispatch kernel landed (`DG_MOE_DISPATCH_FUSED2`, default off); decode opts
-  (`DG_SPARSE_MOE`/`DG_DENOISE_TRACED`) stay opt-in pending PCC + t/s validation.
+  legacy sparse/trace selectors stayed opt-in pending PCC + t/s validation in that dated state.
 
 ### Where we are (2026-06-26)
 

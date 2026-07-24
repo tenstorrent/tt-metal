@@ -193,12 +193,11 @@ def main(argv=None) -> int:
     )
     args = ap.parse_args(argv)
 
-    # engage flags for the model-faithful stacked path (sparse MoE + dedup + tuned), eager (no traced).
+    # Engage the model-faithful stacked path while keeping this diagnostic eager.
     os.environ["DG_SPARSE_MOE"] = "1"
     os.environ["DG_DEDUP_ARGMAX"] = "1"
     os.environ["DG_SPARSE_MOE_TUNED"] = "1"
-    for k in ("DG_DENOISE_TRACED", "DG_DENOISE_TRACED_MULTISTEP", "DG_DENOISE_DEVICE_LOOP"):
-        os.environ.pop(k, None)
+    os.environ.pop("DG_UPFRONT_CAPTURE", None)
 
     TS.token_entropy = _patched_token_entropy  # patch the sampling module (denoise_loop uses TS.token_entropy)
     holder, orig_db = _instrument_trajectory()

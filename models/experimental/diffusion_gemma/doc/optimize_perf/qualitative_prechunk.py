@@ -24,7 +24,6 @@ from models.experimental.diffusion_gemma.checkpoint import build_tt_model_from_c
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.demo.serving_smoke import _DeviceGenLike
 from models.experimental.diffusion_gemma.demo.text_demo import _close_mesh_device, _open_mesh_device
-from models.experimental.diffusion_gemma.doc.optimize_perf.sweep_serving import _release_controller
 from models.experimental.diffusion_gemma.tt.generate import decode_generation, tokenize_prompt
 from models.experimental.diffusion_gemma.tt.self_conditioning import (
     self_conditioning_embedding_prechunk_enabled,
@@ -96,7 +95,6 @@ def _run_prompt(
             "text": text_str,
         }
     finally:
-        _release_controller(session)
         session.reset()
 
 
@@ -224,7 +222,6 @@ def main(argv=None) -> int:
             "rendering_method": "tokenizer.apply_chat_template(add_generation_prompt=True)",
             "prompt_source": "qualitative_prechunk.py::PROMPTS",
             "gumbel_mode": args.gumbel_mode,
-            "DG_DENOISE_TRACED": os.environ.get("DG_DENOISE_TRACED", "<unset>"),
             "seed": args.seed,
             "canvas_length": args.canvas_length,
             "max_denoise_steps": args.steps,

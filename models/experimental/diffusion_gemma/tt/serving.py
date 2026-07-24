@@ -165,11 +165,8 @@ class BlockDiffusionServingSession:
         self.page_tables_per_layer = page_tables_per_layer
         self.gumbel_mode = gumbel_mode
         self.gumbel_vocab_chunk_size = gumbel_vocab_chunk_size
-        # Explicit denoise-loop selection for the traced serving decode path. None ⇒ the
-        # env-gated dispatcher (``generate._resolve_default_denoise_block_fn`` — the current
-        # default, eager unless a DG_DENOISE_* flag is set). The vLLM adapter passes the traced
-        # fn here when it honors ``enable_trace``, so the persistent session's logits fn caches
-        # ONE traced controller (captured on block 0, ``execute_trace``-replayed every block).
+        # ``None`` selects ordinary eager denoise. The vLLM wrapper passes only the
+        # up-front model-lifetime denoise function when DG_UPFRONT_CAPTURE is enabled.
         self._denoise_block_fn = denoise_block_fn
         # Frozen prompt-prefix KV reuse (APC prototype, #47466). Off unless a
         # PrefixKVCache is attached AND DG_PREFIX_CACHE is set; the paged frozen
@@ -419,39 +416,18 @@ class BlockDiffusionServingSession:
         )
 
     def trace_stats(self) -> list[dict]:
-        """Snapshot any per-request traced-controller counters before reset."""
+        """Snapshot model-lifetime up-front controller counters before detach."""
         if self._logits_fn is None:
             return []
-        stats = []
-        for attr in (
-            "_traced_denoise_controller",
-            "_traced_denoise_multistep_controller",
-            "_traced_early_halt_controller",
-        ):
-            controller = getattr(self._logits_fn, attr, None)
-            if controller is not None and hasattr(controller, "stats"):
-                stats.append(controller.stats())
-        return stats
+        controller = getattr(self._logits_fn, "_upfront_traced_denoise_controller", None)
+        return [controller.stats()] if controller is not None and hasattr(controller, "stats") else []
 
     def reset(self) -> None:
-        """Release per-request Metal traces, buffers, and logits state."""
+        """Release eager logits state or detach a borrowed persistent adapter."""
         logits_fn = self._logits_fn
         persistent = logits_fn is not None and logits_fn is getattr(self, "_persistent_adapter", None)
         try:
             if logits_fn is not None and not persistent:
-                for attr in (
-                    "_traced_denoise_controller",
-                    "_traced_denoise_multistep_controller",
-                    "_traced_early_halt_controller",
-                ):
-                    controller = getattr(logits_fn, attr, None)
-                    if controller is not None:
-                        try:
-                            controller.release()
-                        except BaseException as cleanup_error:
-                            logger.error(f"failed to release serving controller {attr}: {cleanup_error}")
-                        finally:
-                            delattr(logits_fn, attr)
                 if hasattr(logits_fn, "reset"):
                     try:
                         logits_fn.reset()

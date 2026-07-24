@@ -70,20 +70,13 @@ from loguru import logger
 import ttnn
 from models.experimental.diffusion_gemma.checkpoint import build_tt_model_from_checkpoint_dir
 from models.experimental.diffusion_gemma.config import DiffusionConfig
-from models.experimental.diffusion_gemma.tt.generate import (
-    denoise_flags_select_traced,
-    prefill_prompt_tokens,
-    select_traced_denoise_block_fn,
-)
+from models.experimental.diffusion_gemma.tt.generate import prefill_prompt_tokens
 from models.experimental.diffusion_gemma.tt.prefix_cache import PrefixKVCache
 from models.experimental.diffusion_gemma.tt.serving import BlockDiffusionServingSession
 from models.experimental.diffusion_gemma.tt.traced_denoise import (
-    early_halt_window,
-    reveal_mask_enabled,
-    traced_denoise_block,
-    traced_early_halt_block,
-    traced_early_halt_enabled,
+    UPFRONT_DENOISE_STEPS,
     upfront_capture_enabled,
+    upfront_traced_denoise_block,
 )
 from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
 
@@ -116,18 +109,23 @@ def _with_vllm_max_denoise_steps(config: DiffusionConfig) -> DiffusionConfig:
     return replace(config, max_denoise_steps=steps)
 
 
-def _validate_upfront_capture_configuration(*, trace_enabled: bool, canvas_length: int) -> int:
+def _validate_upfront_capture_configuration(
+    *,
+    canvas_length: int,
+    max_denoise_steps: int,
+    gumbel_mode: str,
+) -> int:
     """Validate the fail-loud startup contract and return the explicit fixed prefix span."""
-    if not reveal_mask_enabled():
-        raise RuntimeError("DG_UPFRONT_CAPTURE requires DG_DENOISE_REVEAL_MASK=1")
-    if not trace_enabled:
-        raise RuntimeError("DG_UPFRONT_CAPTURE requires DG_VLLM_TRACE=1 or an explicit DG_DENOISE_* trace")
-    if os.environ.get("DG_DENOISE_LAZY_CAPTURE", "0").lower() in ("1", "true", "yes", "on"):
+    if max_denoise_steps != UPFRONT_DENOISE_STEPS:
         raise RuntimeError(
-            "DG_UPFRONT_CAPTURE requires DG_DENOISE_LAZY_CAPTURE=0; all trace windows must be captured at startup"
+            f"DG_UPFRONT_CAPTURE requires max_denoise_steps={UPFRONT_DENOISE_STEPS}, " f"got {max_denoise_steps}"
         )
+    if gumbel_mode != "host":
+        raise RuntimeError("DG_UPFRONT_CAPTURE requires DG_VLLM_GUMBEL_MODE=host; " f"got {gumbel_mode!r}")
 
     raw_trace_region = os.environ.get("DG_TRACE_REGION_SIZE", "").strip()
+    if not raw_trace_region:
+        raise RuntimeError("DG_UPFRONT_CAPTURE requires an explicit integer DG_TRACE_REGION_SIZE > 0")
     try:
         trace_region_size = int(raw_trace_region)
     except ValueError as exc:
@@ -219,26 +217,19 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         # one active sequence today (see module docstring); the dict is keyed by
         # row so output formatting never assumes batch size 1.
         self._sessions: dict[int, BlockDiffusionServingSession] = {}
-        # Traced serving decode (Metal TRACE capture/replay in the decode path). The serving
-        # session reuses the generator's env-gated dispatcher; when trace is requested here we
-        # pass the traced loop explicitly so the PERSISTENT session's logits fn caches ONE
-        # controller (captured on block 0 in prefill_forward) and ``execute_trace``-replays it
-        # every decode_forward block — NOT re-captured per block. Argmax can use any selected
-        # traced variant; dynamic Gumbel modes force single-step replay (chunked uses a persistent
-        # device seed + bounded uniform chunk buffer, host/device use a persistent full-noise
-        # input). The path needs a sized ``DG_TRACE_REGION_SIZE`` at mesh open. Default follows the
-        # env dispatcher (eager unless a ``DG_DENOISE_*`` flag is set) so a plain launch is
-        # unchanged; ``DG_VLLM_TRACE=1`` opts this path into trace without the internal flag and
-        # ``DG_VLLM_TRACE=0`` forces eager. See doc/vllm_integration/README.md (traced serving).
-        self._trace_enabled = self._resolve_trace_pref()
+        # Model-level denoise has exactly two paths. DG_UPFRONT_CAPTURE owns one
+        # startup-captured adapter/controller for the model lifetime; otherwise each
+        # request uses the ordinary eager denoise loop. The TT vLLM ``trace_mode=all``
+        # setting remains only the runner's compile/capture warmup phase signal.
         self._upfront = upfront_capture_enabled()
         self._persistent_adapter = None
         self._upfront_compile_phase_seen = False
         self._upfront_prefill_warmup_lens = frozenset()
         self._upfront_pmax = (
             _validate_upfront_capture_configuration(
-                trace_enabled=self._trace_enabled,
                 canvas_length=self.canvas_length,
+                max_denoise_steps=self._config.max_denoise_steps,
+                gumbel_mode=self._gumbel_mode,
             )
             if self._upfront
             else None
@@ -438,8 +429,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
     def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False):
         del kv_cache, can_sample_on_device, greedy_only
         if not self._upfront:
-            # The default path remains lazy and per-request exactly as before.
-            logger.info("[DiffusionGemma vLLM] warmup is a no-op; block-diffusion warms on first prefill/decode")
+            logger.info("[DiffusionGemma vLLM] warmup is a no-op for eager block diffusion")
             return
         if not enable_trace:
             # The TT vLLM runner performs a compile-only phase before its trace-capture phase.
@@ -469,6 +459,11 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                 ttnn.synchronize_device(self.model[0].mesh_device)
             logger.info("[DiffusionGemma vLLM] deferring up-front denoise capture to trace warmup phase")
             return
+        if not self._upfront_compile_phase_seen:
+            raise RuntimeError(
+                "DG_UPFRONT_CAPTURE requires the startup compile warmup phase before capture; "
+                "enable vLLM model warmup with TT trace_mode=all"
+            )
         if not getattr(self, "_upfront_prefill_warmup_lens", ()):
             raise RuntimeError(
                 "DG_UPFRONT_CAPTURE requires a compile-only warmup with DG_UPFRONT_PREFILL_WARMUP_LENS; "
@@ -479,8 +474,9 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             return
 
         p_max = _validate_upfront_capture_configuration(
-            trace_enabled=self._trace_enabled,
             canvas_length=self.canvas_length,
+            max_denoise_steps=self._config.max_denoise_steps,
+            gumbel_mode=self._gumbel_mode,
         )
         cache_span = min(int(k_cache.shape[-2]) for k_cache, _v_cache in self.model[0].tt_kv_cache)
         if p_max > cache_span:
@@ -497,21 +493,18 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         mock_tokens = torch.tensor([[int(mock_token_id)]], dtype=torch.long)
 
         session = self._make_session()
+        adapter = None
         try:
             cache_len = session.prefill(mock_tokens)
-            emission = session.decode_block()
             adapter = session._logits_fn
-            controllers = [
-                getattr(adapter, attr, None)
-                for attr in (
-                    "_traced_denoise_controller",
-                    "_traced_denoise_multistep_controller",
-                    "_traced_early_halt_controller",
-                )
-            ]
-            controllers = [controller for controller in controllers if controller is not None]
-            if not controllers or not all(getattr(controller, "captured", False) for controller in controllers):
-                raise RuntimeError("startup denoise did not leave a fully captured traced controller")
+            adapter._upfront_capture_phase = True
+            try:
+                emission = session.decode_block()
+            finally:
+                delattr(adapter, "_upfront_capture_phase")
+            controller = getattr(adapter, "_upfront_traced_denoise_controller", None)
+            if controller is None or not getattr(controller, "captured", False):
+                raise RuntimeError("startup denoise did not leave a fully captured up-front controller")
             if not getattr(adapter, "use_reveal_mask", False):
                 raise RuntimeError("startup denoise trace was not captured with a persistent reveal mask")
 
@@ -521,6 +514,17 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             session.reset()
             self._persistent_adapter = adapter
         except BaseException:
+            if adapter is None:
+                adapter = session._logits_fn
+            controller_attr = "_upfront_traced_denoise_controller"
+            controller = getattr(adapter, controller_attr, None) if adapter is not None else None
+            if controller is not None:
+                try:
+                    controller.release()
+                except BaseException as cleanup_error:
+                    logger.error(f"failed to release aborted up-front controller: {cleanup_error}")
+                finally:
+                    delattr(adapter, controller_attr)
             session.reset()
             logger.error(
                 "[DiffusionGemma vLLM] up-front denoise capture failed; startup is aborted. "
@@ -543,52 +547,18 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         )
 
     def warmup_model_decode(self, *args, **kwargs):
-        """No-op: DiffusionGemma captures its complete block-denoise path in prefill warmup."""
+        """No-op: model-level denoise needs no separate decode warmup."""
         del args, kwargs
-        logger.info("[DiffusionGemma vLLM] decode warmup is covered by up-front block-denoise capture")
+        if self._upfront:
+            logger.info("[DiffusionGemma vLLM] decode warmup is covered by up-front block-denoise capture")
+        else:
+            logger.info("[DiffusionGemma vLLM] decode warmup is a no-op for eager block diffusion")
 
     # ── block-granular forward ──────────────────────────────────────────
     def _prompt_tokens_for_row(self, tokens, prompt_lens, row):
         length = int(prompt_lens[row]) if prompt_lens is not None else tokens.shape[1]
         ids = tokens[row, :length].reshape(1, length).to(torch.long)
         return ids
-
-    def _resolve_trace_pref(self) -> bool:
-        """Decide whether the serving decode path traces (Metal capture/replay).
-
-        Resolved ONCE at construction because block 0 (captured inside ``prefill_forward``) fixes
-        the trace, so vLLM's per-decode ``enable_trace`` maps here. Explicit ``DG_VLLM_TRACE``
-        wins; otherwise follow the env dispatcher (``DG_DENOISE_*`` flags). Argmax,
-        injected/materialized host/device Gumbel, and bounded-memory chunked Gumbel can trace.
-        """
-        raw = os.environ.get("DG_VLLM_TRACE")
-        want = raw.strip().lower() in ("1", "true", "yes", "on") if raw is not None else denoise_flags_select_traced()
-        if want:
-            logger.info(
-                "[DiffusionGemma vLLM] traced serving decode ENABLED (Metal capture/replay); "
-                "ensure DG_TRACE_REGION_SIZE is set at mesh open"
-            )
-        return want
-
-    def _select_session_denoise_block_fn(self):
-        if not self._trace_enabled:
-            return None
-        if self._gumbel_mode in ("host", "device", "chunked"):
-            # Dynamic Gumbel refreshes a full-noise input (host/device) or a device seed
-            # (chunked) between replays. The early-halt controller supports this when its
-            # trace window is exactly one step: refresh seed/noise, replay one step, then
-            # read the halt scalar. Grouped dynamic-Gumbel traces remain invalid because
-            # they cannot refresh the stochastic input between steps inside the window.
-            if traced_early_halt_enabled():
-                window = early_halt_window()
-                if window != 1:
-                    raise ValueError(
-                        "dynamic Gumbel with traced early halt requires "
-                        f"DG_DENOISE_EARLY_HALT_WINDOW=1, got {window}"
-                    )
-                return traced_early_halt_block
-            return traced_denoise_block
-        return select_traced_denoise_block_fn()
 
     def _make_session(self, seed: int = 0) -> BlockDiffusionServingSession:
         # Serving contract: vLLM owns the stop decision (EOS / stop strings /
@@ -600,11 +570,11 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         # the whole 256-token committed canvas to vLLM, which trims at its own
         # stop point (block-diffusion #47488 scheduler-half contract). The
         # standalone ``serving_smoke`` driver keeps its own session-level stop.
-        denoise_block_fn = self._select_session_denoise_block_fn()
+        denoise_block_fn = upfront_traced_denoise_block if self._upfront else None
         _metric(
             "session_create",
-            trace_enabled=self._trace_enabled,
-            denoise_path=getattr(denoise_block_fn, "__name__", "env_dispatch"),
+            upfront_capture=self._upfront,
+            denoise_path=getattr(denoise_block_fn, "__name__", "denoise_block"),
             gumbel_mode=self._gumbel_mode,
             canvas_length=self.canvas_length,
             max_denoise_steps=self._config.max_denoise_steps,
@@ -742,11 +712,8 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         per-step [B,L] decision tensors are read back — the [B,L,vocab] logits stay
         on device).
 
-        ``enable_trace`` is honored at CONSTRUCTION (``self._trace_enabled``), not per call:
-        the denoise trace is captured on block 0 inside ``prefill_forward`` and
-        ``execute_trace``-replayed here, so the traced-vs-eager decision cannot change
-        mid-sequence. The session created in ``prefill_forward`` already carries the traced
-        (or eager) ``denoise_block_fn``; this call just drives one more block through it.
+        ``enable_trace`` is a TT-runner transport argument only. Model-level tracing
+        is selected once by ``DG_UPFRONT_CAPTURE`` and cannot change mid-sequence.
         """
         del tokens, start_pos, page_table, kv_cache, enable_trace, read_from_device
         del sampling_params, page_tables_per_layer, reset_batch, slot_remap
@@ -773,8 +740,8 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             try:
                 emission = session.decode_block()
             except BaseException:
-                # A replay/device failure must release every trace and remove the row
-                # before the runner can attempt another request.
+                # Detach the failed request. A model-lifetime up-front capture remains
+                # owned by the wrapper and is released only at terminal shutdown.
                 self.release_request(row)
                 raise
             logger.info(
@@ -836,19 +803,15 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         if adapter is None:
             return
 
-        for attr in (
-            "_traced_denoise_controller",
-            "_traced_denoise_multistep_controller",
-            "_traced_early_halt_controller",
-        ):
-            controller = getattr(adapter, attr, None)
-            if controller is not None:
-                try:
-                    controller.release()
-                except BaseException as cleanup_error:
-                    logger.error(f"failed to release persistent serving controller {attr}: {cleanup_error}")
-                finally:
-                    delattr(adapter, attr)
+        attr = "_upfront_traced_denoise_controller"
+        controller = getattr(adapter, attr, None)
+        if controller is not None:
+            try:
+                controller.release()
+            except BaseException as cleanup_error:
+                logger.error(f"failed to release persistent serving controller {attr}: {cleanup_error}")
+            finally:
+                delattr(adapter, attr)
         if hasattr(adapter, "reset"):
             try:
                 adapter.reset()

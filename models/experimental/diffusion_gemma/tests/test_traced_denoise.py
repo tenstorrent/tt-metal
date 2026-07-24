@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""CPU contract tests for DiffusionGemma traced-denoise input lifetimes."""
+"""CPU contracts for the accepted up-front-only denoise trace architecture."""
 
 from types import SimpleNamespace
 
@@ -9,7 +9,6 @@ import pytest
 import torch
 
 from models.experimental.diffusion_gemma.config import DiffusionConfig
-from models.experimental.diffusion_gemma.tt import sampling as TS
 from models.experimental.diffusion_gemma.tt import traced_denoise as TD
 
 
@@ -31,9 +30,6 @@ class _FakeTensor:
 
 class _FakeTtnn:
     TILE_SIZE = 32
-    uint32 = object()
-    TILE_LAYOUT = object()
-    DRAM_MEMORY_CONFIG = object()
     copies = []
     executions = []
     syncs = 0
@@ -53,11 +49,6 @@ class _FakeTtnn:
     @staticmethod
     def clone(tensor):
         return _FakeTensor(f"clone({tensor.name})")
-
-    @staticmethod
-    def from_torch(host, **kwargs):
-        del kwargs
-        return _FakeTensor(f"seed-{int(host[0, 0, 0, 0])}")
 
     @classmethod
     def copy(cls, source, destination):
@@ -98,8 +89,28 @@ def _fake_ttnn(monkeypatch):
     monkeypatch.setattr(TD, "ttnn", _FakeTtnn)
 
 
-def _controller(steps=3):
-    return TD.TracedDenoiseController("mesh", DiffusionConfig(canvas_length=32, max_denoise_steps=steps))
+def _config(**overrides):
+    values = {
+        "canvas_length": 32,
+        "max_denoise_steps": TD.UPFRONT_DENOISE_STEPS,
+        "stable_steps_to_halt": 1,
+    }
+    values.update(overrides)
+    return DiffusionConfig(**values)
+
+
+def _controller():
+    return TD.UpfrontTracedDenoiseController("mesh", _config())
+
+
+def test_controller_accepts_only_released_48_step_schedule(expect_error):
+    controller = _controller()
+    assert controller.config.max_denoise_steps == 48
+
+    with expect_error(ValueError, match="released 48-step schedule"):
+        TD.UpfrontTracedDenoiseController("mesh", _config(max_denoise_steps=47))
+    with expect_error(ValueError, match="stable_steps_to_halt=1"):
+        TD.UpfrontTracedDenoiseController("mesh", _config(stable_steps_to_halt=2))
 
 
 def test_trace_capture_guard_ends_and_releases_aborted_trace(expect_error):
@@ -121,296 +132,190 @@ def test_trace_capture_guard_releases_when_finalization_fails(expect_error):
         with TD._trace_capture_guard("mesh", cq_id=0):
             pass
 
-    assert _FakeTtnn.trace_events == [
-        ("begin", "mesh", 0),
-        ("end", "mesh", "trace-id", 0),
-        ("release", "mesh", "trace-id"),
-    ]
+    assert _FakeTtnn.trace_events[-1] == ("release", "mesh", "trace-id")
 
 
-def test_materialized_gumbel_uses_stable_buffer_and_consumes_source():
+def test_materialized_gumbel_uses_stable_buffer_and_consumes_sources():
     controller = _controller()
-    fresh = _FakeTensor("gumbel-0")
+    first = _FakeTensor("gumbel-0")
+    controller._initialize_gumbel(lambda step: first)
 
-    controller._initialize_gumbel_buffer_from(lambda step: fresh)
-
-    assert controller.gumbel_mode == "materialized"
     assert controller.gumbel_buf.name == "clone(gumbel-0)"
+    assert first.deallocated
+
+    fresh = _FakeTensor("gumbel-7")
+    assert controller._refresh_gumbel(lambda step: fresh, 7) is controller.gumbel_buf
+    assert _FakeTtnn.copies == [("gumbel-7", "clone(gumbel-0)")]
     assert fresh.deallocated
 
 
-def test_materialized_gumbel_refreshes_in_place_and_rejects_mode_change(expect_error):
+@pytest.mark.parametrize("value", [None, object()])
+def test_materialized_gumbel_rejects_non_tensor_descriptors(value, expect_error):
     controller = _controller()
-    controller._initialize_gumbel_buffer_from(lambda step: _FakeTensor("gumbel-0"))
-    fresh = _FakeTensor("gumbel-2")
+    with expect_error(ValueError, match="requires materialized host noise"):
+        controller._initialize_gumbel(lambda step: value)
 
-    assert controller._refresh_gumbel_buffer_from(lambda step: fresh, 2) is controller.gumbel_buf
-    assert _FakeTtnn.copies == [("gumbel-2", "clone(gumbel-0)")]
+
+def test_materialized_renoise_uses_one_stable_buffer_and_consumes_only_requested_steps():
+    controller = _controller()
+    first = _FakeTensor("noise-0")
+    controller._initialize_noise(lambda step: first)
+    assert controller.noise_buf.name == "clone(noise-0)"
+    assert first.deallocated
+
+    fresh = _FakeTensor("noise-7")
+    assert controller._refresh_noise(lambda step: fresh, 7) is controller.noise_buf
+    assert _FakeTtnn.copies == [("noise-7", "clone(noise-0)")]
     assert fresh.deallocated
 
-    with expect_error(ValueError, match="changed mode"):
-        controller._refresh_gumbel_buffer_from(lambda step: None, 3)
 
-
-def test_chunked_gumbel_builds_trace_dynamic_seed_schedule():
+def test_replay_reuses_reveal_buffers_and_stops_on_materialized_halt(monkeypatch):
     controller = _controller()
+    controller.captured = True
+    controller.reveal_pmax = 1024
+    controller._last_prompt_len = 32
+    controller.traces = [f"trace-{step}" for step in range(48)]
+    controller.canvas_buf = _FakeTensor("canvas-buf")
+    controller.committed_buf = _FakeTensor("committed-buf")
+    controller.gumbel_buf = _FakeTensor("gumbel-buf")
+    controller.noise_buf = _FakeTensor("noise-buf")
+    controller.halt_bufs = SimpleNamespace()
 
-    controller._initialize_gumbel_buffer_from(lambda step: TS.ChunkedGumbelNoise(seed=17 + step, vocab_chunk_size=1024))
-
-    assert controller.gumbel_mode == "chunked"
-    assert controller.gumbel_chunked_seeds == (17, 18, 19)
-    assert controller.gumbel_chunked_state.seed_tensor.name == "seed-17"
-    assert [value.seed_offset for value in controller.gumbel_step_inputs] == [0, 0, 0]
-
-    controller._refresh_chunked_gumbel_seed_from(
-        lambda step: TS.ChunkedGumbelNoise(seed=101 + step, vocab_chunk_size=1024)
+    events = []
+    monkeypatch.setattr(
+        controller,
+        "_refresh_noise",
+        lambda fn, step: events.append(("noise", step)),
     )
-    controller._refresh_chunked_gumbel_seed_for_step(0)
-    assert _FakeTtnn.copies == [("seed-101", "seed-17")]
+    monkeypatch.setattr(
+        controller,
+        "_refresh_gumbel",
+        lambda fn, step: events.append(("gumbel", step)),
+    )
+    monkeypatch.setattr(TD, "_ids_to_torch", lambda tensor: torch.tensor([[19]], dtype=torch.long))
+    halt_values = iter([(1.0, 1.0), (0.1, 0.0)])
+    monkeypatch.setattr(TD, "read_halt_scalars", lambda buffers: next(halt_values))
+    monkeypatch.setattr(
+        TD,
+        "eval_halt",
+        lambda mean, mismatch, step, **kwargs: step == 1,
+    )
+
+    adapter = SimpleNamespace(
+        prompt_len=64,
+        q_rope_offset=64,
+        update_canvas_rope_buffers=lambda start: events.append(("rope", start)),
+        update_reveal_mask_buffer=lambda prompt: events.append(("reveal", prompt)),
+        reset_signal_buffer=lambda: events.append("signal-reset"),
+    )
+    init_canvas = _FakeTensor("init-canvas")
+
+    trajectory = controller.denoise_block(
+        adapter,
+        init_canvas,
+        controller.config,
+        gumbel_noise_fn=lambda step: _FakeTensor(f"unused-gumbel-{step}"),
+        noise_tokens_fn=lambda step: _FakeTensor(f"unused-noise-{step}"),
+    )
+
+    assert trajectory.num_steps == 2
+    assert trajectory.halted is True
+    assert torch.equal(trajectory.committed, torch.tensor([[19]]))
+    assert _FakeTtnn.executions == ["trace-0", "trace-1"]
+    assert controller.capture_events == 0
+    assert controller.traces_captured == 0
+    assert controller.adapter_rebinds == 1
+    assert ("reveal", 64) in events
+    assert [event for event in events if isinstance(event, tuple) and event[0] == "gumbel"] == [
+        ("gumbel", 0),
+        ("gumbel", 1),
+    ]
+    assert [event for event in events if isinstance(event, tuple) and event[0] == "noise"] == [
+        ("noise", 0),
+        ("noise", 1),
+    ]
+    assert init_canvas.deallocated
 
 
-def test_chunked_gumbel_rejects_cross_block_signature_change(expect_error):
-    controller = _controller()
-    controller._initialize_gumbel_buffer_from(lambda step: TS.ChunkedGumbelNoise(seed=17 + step, vocab_chunk_size=1024))
-
-    with expect_error(ValueError, match="signature changed"):
-        controller._refresh_chunked_gumbel_seed_from(
-            lambda step: TS.ChunkedGumbelNoise(seed=101 + step, vocab_chunk_size=512)
-        )
-
-
-def test_argmax_gumbel_rejects_mixed_step_and_cross_block_modes(expect_error):
-    controller = _controller()
-    mixed = _FakeTensor("mixed-step")
-
-    with expect_error(ValueError, match="within the denoise step schedule"):
-        controller._initialize_gumbel_buffer_from(lambda step: None if step == 0 else mixed)
-    assert mixed.deallocated
-
-    controller = _controller()
-    controller._initialize_gumbel_buffer_from(lambda step: None)
-    changed = _FakeTensor("changed-block")
-    with expect_error(ValueError, match="changed from argmax"):
-        controller._validate_argmax_gumbel_from(lambda step: changed if step == 1 else None)
-    assert changed.deallocated
-
-
-def test_grouped_trace_rejects_single_shared_materialized_gumbel_buffer(expect_error):
-    controller = _controller()
-    controller._initialize_gumbel_buffer_from(lambda step: _FakeTensor("gumbel-0"))
-    buffer = controller.gumbel_buf
-
-    with expect_error(NotImplementedError, match="one-step trace windows"):
-        controller._reject_grouped_dynamic_gumbel(2)
-
-    assert buffer.deallocated
-    assert controller.gumbel_buf is None
-    assert controller.gumbel_mode is None
-
-
-def test_controller_release_is_best_effort_and_clears_state():
+def test_controller_release_is_best_effort_idempotent_and_clears_state():
     controller = _controller()
     _FakeTtnn.release_errors = {"trace-0"}
     bad = _FakeTensor("bad-buffer", deallocate_error=RuntimeError("injected buffer failure"))
     good = _FakeTensor("good-buffer")
-    chunk_release_attempted = []
-
-    def fail_chunk_release():
-        chunk_release_attempted.append(True)
-        raise RuntimeError("injected chunk-state failure")
-
     controller.traces = ["trace-0", "trace-1"]
     controller.canvas_buf = bad
     controller.committed_buf = good
-    controller.gumbel_chunked_state = SimpleNamespace(release=fail_chunk_release)
-    controller.gumbel_mode = "chunked"
+    controller.gumbel_buf = _FakeTensor("gumbel")
+    controller.noise_buf = _FakeTensor("noise")
     controller.captured = True
 
+    controller.release()
     controller.release()
 
     assert ("release", "mesh", "trace-0") in _FakeTtnn.trace_events
     assert ("release", "mesh", "trace-1") in _FakeTtnn.trace_events
     assert bad.deallocate_attempted
     assert good.deallocated
-    assert chunk_release_attempted == [True]
     assert controller.traces == []
     assert controller.canvas_buf is None
     assert controller.committed_buf is None
-    assert controller.gumbel_chunked_state is None
-    assert controller.gumbel_mode is None
+    assert controller.gumbel_buf is None
+    assert controller.noise_buf is None
     assert controller.captured is False
+    assert controller.released is True
 
 
-def test_steady_replay_refreshes_each_materialized_gumbel_before_trace(monkeypatch):
-    controller = _controller(steps=3)
-    controller.captured = True
-    controller.traces = ["trace-0", "trace-1", "trace-2"]
-    controller.canvas_buf = _FakeTensor("canvas-buf")
-    controller.committed_buf = _FakeTensor("committed-buf")
-    controller.gumbel_buf = _FakeTensor("gumbel-buf")
-    controller.gumbel_mode = "materialized"
-    controller.noise_bufs = [_FakeTensor(f"noise-{step}") for step in range(3)]
-    monkeypatch.setattr(controller, "_refresh_noise_buffers_from", lambda fn: None)
-    monkeypatch.setattr(TD, "_ids_to_torch", lambda tensor: torch.tensor([[7]], dtype=torch.long))
+def test_upfront_block_reuses_the_single_controller_attribute(monkeypatch):
+    instances = []
 
-    adapter = SimpleNamespace(
-        q_rope_offset=64,
-        update_canvas_rope_buffers=lambda start_pos: None,
-        reset_signal_buffer=lambda: None,
+    class _Controller:
+        def __init__(self, mesh, config):
+            self.calls = []
+            instances.append(self)
+
+        def denoise_block(self, logits_fn, init_canvas, config, **kwargs):
+            self.calls.append((logits_fn, init_canvas, config, kwargs))
+            return len(self.calls)
+
+    monkeypatch.setattr(TD, "UpfrontTracedDenoiseController", _Controller)
+    logits_fn = SimpleNamespace(
+        tt_model=SimpleNamespace(mesh_device="mesh"),
+        _upfront_capture_phase=True,
     )
-    calls = []
+    config = _config()
 
-    def gumbel_for_step(step):
-        calls.append(step)
-        return _FakeTensor(f"gumbel-{step}")
-
-    init_canvas = _FakeTensor("init-canvas")
-    trajectory = controller.denoise_block(
-        adapter,
-        init_canvas,
-        controller.config,
-        gumbel_noise_fn=gumbel_for_step,
-        noise_tokens_fn=lambda step: _FakeTensor(f"unused-noise-{step}"),
+    assert (
+        TD.upfront_traced_denoise_block(
+            logits_fn,
+            "canvas-0",
+            config,
+            gumbel_noise_fn="gumbel",
+            noise_tokens_fn="noise",
+        )
+        == 1
     )
-
-    assert calls == [0, 1, 2]
-    assert _FakeTtnn.copies == [
-        ("init-canvas", "canvas-buf"),
-        ("gumbel-0", "gumbel-buf"),
-        ("gumbel-1", "gumbel-buf"),
-        ("gumbel-2", "gumbel-buf"),
-    ]
-    assert _FakeTtnn.executions == ["trace-0", "trace-1", "trace-2"]
-    assert init_canvas.deallocated
-    assert torch.equal(trajectory.committed, torch.tensor([[7]]))
-
-
-def test_capture_block_reuses_prepared_step_zero_gumbel(monkeypatch):
-    controller = _controller(steps=3)
-    controller.canvas_buf = _FakeTensor("canvas-buf")
-    controller.committed_buf = _FakeTensor("committed-buf")
-    controller.noise_bufs = [_FakeTensor(f"noise-{step}") for step in range(3)]
-    monkeypatch.setattr(controller, "_refresh_noise_buffers_from", lambda fn: None)
-    monkeypatch.setattr(TD, "_ids_to_torch", lambda tensor: torch.tensor([[9]], dtype=torch.long))
-
-    calls = []
-
-    def gumbel_for_step(step):
-        calls.append(step)
-        return _FakeTensor(f"gumbel-{step}")
-
-    def fake_capture(adapter, init_canvas, gumbel_noise_fn, noise_tokens_fn, start_pos):
-        del adapter, init_canvas, noise_tokens_fn, start_pos
-        controller._initialize_gumbel_buffer_from(gumbel_noise_fn)
-        controller.traces = ["trace-0", "trace-1", "trace-2"]
-        controller.captured = True
-
-    monkeypatch.setattr(controller, "_capture", fake_capture)
-    adapter = SimpleNamespace(
-        q_rope_offset=32,
-        update_canvas_rope_buffers=lambda start_pos: None,
-        reset_signal_buffer=lambda: None,
+    assert (
+        TD.upfront_traced_denoise_block(
+            logits_fn,
+            "canvas-1",
+            config,
+            gumbel_noise_fn="gumbel",
+            noise_tokens_fn="noise",
+        )
+        == 2
     )
 
-    controller.denoise_block(
-        adapter,
-        _FakeTensor("init-canvas"),
-        controller.config,
-        gumbel_noise_fn=gumbel_for_step,
-        noise_tokens_fn=lambda step: _FakeTensor(f"unused-noise-{step}"),
-    )
-
-    # Step 0 initializes the stable buffer and is not regenerated before its first replay.
-    assert calls == [0, 1, 2]
+    assert len(instances) == 1
+    assert logits_fn._upfront_traced_denoise_controller is instances[0]
 
 
-def test_prefix_growth_invalidates_and_recaptures_trace(monkeypatch):
-    controller = _controller(steps=1)
-    controller.captured = True
-    controller.captured_prefix_len = 32
-    controller.traces = ["old-trace"]
-    controller.canvas_buf = _FakeTensor("old-canvas")
-    controller.committed_buf = _FakeTensor("old-commit")
-    events = []
-
-    def fake_release():
-        events.append("release-old")
-        controller.captured = False
-        controller.captured_prefix_len = None
-        controller.traces = []
-        controller.canvas_buf = None
-        controller.committed_buf = None
-        controller.gumbel_mode = None
-
-    def fake_capture(adapter, init_canvas, gumbel_noise_fn, noise_tokens_fn, start_pos):
-        del init_canvas, gumbel_noise_fn, noise_tokens_fn, start_pos
-        events.append(("capture-new", adapter.prompt_len))
-        controller.captured = True
-        controller.captured_prefix_len = adapter.prompt_len
-        controller.traces = ["new-trace"]
-        controller.canvas_buf = _FakeTensor("new-canvas")
-        controller.committed_buf = _FakeTensor("new-commit")
-        controller.gumbel_mode = "argmax"
-
-    monkeypatch.setattr(controller, "release", fake_release)
-    monkeypatch.setattr(controller, "_capture", fake_capture)
-    monkeypatch.setattr(TD, "_ids_to_torch", lambda tensor: torch.tensor([[11]], dtype=torch.long))
-    adapter = SimpleNamespace(
-        prompt_len=288,
-        q_rope_offset=288,
-        update_canvas_rope_buffers=lambda start_pos: None,
-        reset_signal_buffer=lambda: None,
-    )
-
-    trajectory = controller.denoise_block(
-        adapter,
-        _FakeTensor("init-canvas"),
-        controller.config,
-        gumbel_noise_fn=lambda step: None,
-        noise_tokens_fn=lambda step: _FakeTensor("noise"),
-    )
-
-    assert events == ["release-old", ("capture-new", 288)]
-    assert _FakeTtnn.executions == ["new-trace"]
-    assert controller.captured_prefix_len == 288
-    assert torch.equal(trajectory.committed, torch.tensor([[11]]))
-
-
-def test_frozen_prefix_reuses_block0_trace_without_recapture(monkeypatch):
-    # DG_DENOISE_FROZEN_PREFIX: capture-once/replay-many — prefix growth must NOT recapture;
-    # the block-0 trace is reused (restores the pre-recapture steady serving speed).
-    monkeypatch.setenv("DG_DENOISE_FROZEN_PREFIX", "1")
-    controller = _controller(steps=1)
-    controller.captured = True
-    controller.captured_prefix_len = 32
-    controller.traces = ["block0-trace"]
-    controller.canvas_buf = _FakeTensor("canvas-buf")
-    controller.committed_buf = _FakeTensor("committed-buf")
-    controller.gumbel_mode = "argmax"
-    events = []
-    monkeypatch.setattr(controller, "release", lambda: events.append("release"))
-    monkeypatch.setattr(controller, "_capture", lambda *a, **k: events.append("capture"))
-    monkeypatch.setattr(controller, "_refresh_noise_buffers_from", lambda fn: None)
-    monkeypatch.setattr(controller, "_refresh_chunked_gumbel_seed_from", lambda fn: None)
-    monkeypatch.setattr(controller, "_validate_argmax_gumbel_from", lambda fn: None)
-    monkeypatch.setattr(TD, "_ids_to_torch", lambda tensor: torch.tensor([[13]], dtype=torch.long))
-    adapter = SimpleNamespace(
-        prompt_len=288,  # prefix grew 32 -> 288
-        q_rope_offset=288,
-        update_canvas_rope_buffers=lambda start_pos: None,
-        reset_signal_buffer=lambda: None,
-    )
-
-    trajectory = controller.denoise_block(
-        adapter,
-        _FakeTensor("init-canvas"),
-        controller.config,
-        gumbel_noise_fn=lambda step: None,
-        noise_tokens_fn=lambda step: _FakeTensor("noise"),
-    )
-
-    # No release, no recapture; the frozen block-0 trace replays and captured_prefix_len is unchanged.
-    assert events == []
-    assert controller.captured_prefix_len == 32
-    assert _FakeTtnn.executions == ["block0-trace"]
-    assert torch.equal(trajectory.committed, torch.tensor([[13]]))
+def test_upfront_block_rejects_on_demand_capture_outside_startup(expect_error):
+    logits_fn = SimpleNamespace(tt_model=SimpleNamespace(mesh_device="mesh"))
+    with expect_error(RuntimeError, match="startup trace warmup"):
+        TD.upfront_traced_denoise_block(
+            logits_fn,
+            "canvas",
+            _config(),
+            gumbel_noise_fn="gumbel",
+            noise_tokens_fn="noise",
+        )

@@ -1,15 +1,23 @@
 # DiffusionGemma — optimize-perf stage (#47465)
 
-> **CURRENT READING ORDER — 2026-07-17.** Use `plan.md` Part 0 for launch/metric defaults,
-> then the newest entries in `perf_campaign_worklog.md`. Every July-10 headline below is dated
-> evidence, not an implicit current serving configuration.
+> **CURRENT CONTRACT — 2026-07-22.** Use `plan.md` Part 0 first. There is exactly one supported
+> Metal denoise trace path: model-lifetime up-front capture with reveal masking, IID host Gumbel,
+> K=48, and one-step/window early halt. Ordinary eager execution is the only fallback. All
+> fixed-budget, grouped/multistep, frozen-prefix, per-request, and argmax trace results below are
+> historical evidence, not executable current-path guidance.
 
 Current guardrails:
 
-- `DG_SPARSE_MOE`, `DG_DEDUP_ARGMAX`, and `DG_VLLM_TRACE` default off; K defaults to 48. A plain
-  server is dense eager K=48, not the tuned trace benchmark.
-- The historical 18.844 t/s row is warmed same-shape argmax trace replay with prompt-only prefix
-  visibility. Do not use it as first-request TTFT or growing-prefix multi-block throughput.
+- Up-front trace launches set `DG_UPFRONT_CAPTURE=1`,
+  `DG_UPFRONT_PREFILL_WARMUP_LENS=<every admitted aligned prefill length>`,
+  `DG_DENOISE_REVEAL_PMAX=<positive tile-aligned served cap>`,
+  `DG_TRACE_REGION_SIZE=<validated positive reservation>`, `DG_VLLM_GUMBEL_MODE=host`, and
+  `DG_VLLM_MAX_DENOISE_STEPS=48`.
+- Reveal masking, non-lazy startup capture, and window-1 early halt are intrinsic. Do not add legacy
+  selector flags for them. Every admitted prefill shape must compile before capture; unseen runtime
+  shapes fail loudly.
+- The historical 18.844 t/s row is warmed same-shape argmax replay with prompt-only prefix
+  visibility. It is not first-request TTFT or current multi-request throughput.
 - Pure prefill, serving prefill, and prefill+block-0 TTFT are different metrics.
 - `DG_PREFILL_RAGGED_LONG` defaults on. Every multi-token prefill uses the ragged top-8 path;
   sequences above 4096 are processed in 4096-token slices. Setting it to `0` is a diagnostic
@@ -23,19 +31,19 @@ Current guardrails:
 - The July-15 fidelity control shows coherent TT output at the intrinsic bf16 floor. Persistent
   serving garbage is not an accepted performance tradeoff.
 
-## Up-front denoise capture (2026-07-22)
+## Up-front denoise capture (accepted path, 2026-07-22)
 
-`DG_UPFRONT_CAPTURE=1` now captures the reveal-mask denoise trace during
+`DG_UPFRONT_CAPTURE=1` captures the reveal-mask denoise trace during
 `warmup_model_prefill` and retains its adapter/controller for the model lifetime. Each request
 prefills the model-owned KV cache, rebinds the fixed-span adapter in place, replays the startup
 trace, and detaches without releasing it. The default-OFF path retains per-request construction
-and teardown. The wrapper destructor invokes the idempotent persistent-release path before inherited
-model/mesh teardown.
+and teardown as the eager fallback; it does not select another trace implementation. The wrapper
+destructor invokes the idempotent persistent-release path before inherited model/mesh teardown.
 
-The mode fails at startup unless reveal masking and tracing are enabled, `DG_TRACE_REGION_SIZE`
-is positive, and `DG_DENOISE_REVEAL_PMAX` is explicit, positive, and tile aligned. Lazy capture is
-rejected because it could capture a previously unreached early-halt window during a later request.
-The fixed `p_max` is also enforced as the served `prompt + generated` cap before denoise/commit.
+The mode fails at startup unless `DG_TRACE_REGION_SIZE` is positive and
+`DG_DENOISE_REVEAL_PMAX` is explicit, positive, and tile aligned. Reveal masking, non-lazy startup
+capture, and one-step/window early halt are intrinsic. The fixed `p_max` is also enforced as the
+served `prompt + generated` cap before denoise/commit.
 Under vLLM, `DG_UPFRONT_PREFILL_WARMUP_LENS` must list every aligned prefill length the server will
 admit. Those shapes compile before denoise capture; an unseen runtime length fails loudly because
 compiling a new prefill program while traces are active can corrupt trace/CCL state.
@@ -61,6 +69,16 @@ Full 30-layer QB2 evidence:
 
 These are direct wrapper/session runs on 4× Blackhole p300c; no Tracy or live-server profiling was
 used. Commands and the initial untuned timeout control are recorded in `work_log.md`.
+
+### Removed legacy executable paths
+
+The old fixed-step, grouped/multistep, frozen-prefix, per-request, and argmax trace drivers were
+deleted. Their Markdown and JSON results remain unchanged as historical evidence. Removed legacy
+knobs may still appear in those dated artifacts: `DG_VLLM_TRACE`, `DG_DENOISE_TRACED`,
+`DG_DENOISE_TRACED_MULTISTEP`, `DG_DENOISE_MULTISTEP_GROUP`, `DG_DENOISE_EARLY_HALT`,
+`DG_DENOISE_EARLY_HALT_WINDOW`, `DG_DENOISE_FROZEN_PREFIX`, `DG_DENOISE_REVEAL_MASK`, and
+`DG_DENOISE_LAZY_CAPTURE`. `DG_DENOISE_DEVICE_LOOP` remains a non-Metal eager diagnostic and is
+not a traced-serving mode.
 
 > **Historical dg-08 snapshot.** The 4175.7 ms/step, 137.55 ms/layer, and
 > sequential-commit numbers below predate true-sparse MoE, OPT-004, batched
@@ -170,8 +188,8 @@ The optimized loop runs a **fixed `max_denoise_steps` (≤48)** count with the a
 step→step **on device** (no host readback of the argmax/entropy/cutoff, no `torch.equal` halt).
 Early-halt is data-dependent and cannot shorten a static trace, so the trace-safe shape runs the
 full budget; the entropy-budget cutoff stays a device tensor and the sorted scatter indices are
-device-valued (`entropy_budget_accept`). Verified by `verify_trace_safe_loop.py` (traced replay ==
-eager, device canvas feedback).
+device-valued (`entropy_budget_accept`). The retired fixed-step verifier recorded traced replay ==
+eager with device canvas feedback; its result is historical and the executable was removed.
 
 ## Artifacts
 
@@ -180,7 +198,8 @@ eager, device canvas feedback).
 - `bench_sampling_step.py` — traced terminal-step microbench (variants).
 - `prof_denoise_step.py` — reduced-layer traced denoise step + prefill(TTFT) + commit profiling.
 - `diag_sampling_ops.py`, `diag_argmax_alt.py`, `diag_accept_placement.py` — eager op diagnostics.
-- `verify_trace_safe_loop.py` — trace-safe fixed-step loop correctness (device canvas feedback).
+- Historical fixed-step trace-safety evidence — retained in this README/work log; its obsolete
+  executable verifier was removed.
 - `selfcond_prechunk.md` / `selfcond_prechunk_summary.json` — underlying embedding-prechunk A/B,
   synchronized component timing, final default reproduction, 256K capacity, and watcher evidence.
 - `selfcond_prechunk_e2e.json` — exact 10 GiB trace-region provenance, TTFT, all block latencies,

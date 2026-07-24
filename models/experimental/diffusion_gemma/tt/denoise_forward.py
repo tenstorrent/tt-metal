@@ -97,20 +97,6 @@ def build_device_canvas_denoise_mask(
     )
 
 
-def reveal_mask_enabled() -> bool:
-    """True when the fixed-max prefix + reveal-mask capture-once path is opted in.
-
-    ``DG_DENOISE_REVEAL_MASK`` (default OFF). This is Phase-1 of the paged-prefix plan
-    (``doc/optimize_perf/paged_prefix_denoise_design.md``): the denoise prefix K/V is read
-    at a CONSTANT ``p_max`` span so the traced graph is shape-invariant across blocks
-    (capture-once/replay-many), and the growing committed prefix is exposed purely through
-    a persistent reveal mask that hides the uncommitted tail ``[prompt_len:p_max]``. Unlike
-    ``DG_DENOISE_FROZEN_PREFIX`` it is multi-block CORRECT (later blocks re-read the mutated
-    cache and attend all earlier-committed KV).
-    """
-    return os.environ.get("DG_DENOISE_REVEAL_MASK", "0").lower() in ("1", "true", "yes", "on")
-
-
 def build_device_canvas_reveal_mask(
     mesh_device,
     *,
@@ -1386,7 +1372,7 @@ class DenoiseLogitsAdapter:
         because it would silently replay another request's prompt.
         """
         if not getattr(self, "use_reveal_mask", False):
-            raise RuntimeError("prompt rebind requires a captured DG_DENOISE_REVEAL_MASK adapter")
+            raise RuntimeError("prompt rebind requires a captured up-front reveal-mask adapter")
         resetter = getattr(self.prompt_hidden_by_layer, "reset_prompt_len", None)
         if not callable(resetter):
             raise RuntimeError("prompt rebind requires a MutablePrefixKVReader prefix source")
@@ -1412,9 +1398,6 @@ class DenoiseLogitsAdapter:
         Returns ``True`` for the mutable contiguous-cache reader used by generation
         and serving. Static prompt-hidden test adapters return ``False``.
         """
-        if os.environ.get("DG_FROZEN_PREFIX_CONTROL", "0").lower() in ("1", "true", "yes", "on"):
-            logger.warning("[DiffusionGemma] DG_FROZEN_PREFIX_CONTROL keeps the initial prompt-only KV span")
-            return False
         setter = getattr(self.prompt_hidden_by_layer, "set_prompt_len", None)
         if not callable(setter):
             return False

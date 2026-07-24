@@ -28,15 +28,6 @@ from models.experimental.diffusion_gemma.tt.denoise_forward import (
 )
 from models.experimental.diffusion_gemma.tt.denoise_loop import denoise_block as tt_denoise_block
 from models.experimental.diffusion_gemma.tt.denoise_loop import device_loop_denoise_block
-from models.experimental.diffusion_gemma.tt.traced_denoise import (
-    traced_denoise_block,
-    early_halt_explicitly_on,
-    traced_denoise_enabled,
-    traced_denoise_multistep_block,
-    traced_denoise_multistep_enabled,
-    traced_early_halt_block,
-    traced_early_halt_enabled,
-)
 from models.experimental.diffusion_gemma.tt import sampling as TS
 
 
@@ -804,108 +795,15 @@ def _resolve_default_commit_fn(page_table=None, page_tables_per_layer=None) -> C
 
 
 def _resolve_default_denoise_block_fn() -> Callable[..., DenoiseTrajectory]:
-    """Pick the denoise loop: traced single-step loop or device-only loop when opted in, else eager.
-
-    ``DG_DENOISE_TRACED_MULTISTEP`` selects the multi-step trace-batching loop
-    (:func:`traced_denoise_multistep_block`) — a WINDOW of ``G`` denoise steps captured into ONE
-    Metal trace (default ``G = max_denoise_steps`` ⇒ the whole fixed-K block in ONE capture + ONE
-    replay), so a block does ``ceil(K/G)`` replays instead of ``K``. It removes the per-replay
-    dispatch bubbles that make the single-step ``block(K) ≈ 0.275·K + 1.09 s`` fixed term scale
-    with ``K``, so 100 t/s (``block ≤ 2.56 s``) holds at a higher, quality-safe step budget rather
-    than only at ~5 steps. Bit-exact to the ``K`` single-step replays (same committed decisions;
-    see :class:`~...tt.traced_denoise.MultiStepTracedDenoiseController`). ``DG_DENOISE_MULTISTEP_GROUP=G``
-    bounds the window / trace-region memory. Materialized and chunked Gumbel require ``G=1`` because
-    their full-noise/device-seed input is refreshed between replays. Same contiguous-cache + large
-    ``DG_TRACE_REGION_SIZE`` prerequisites as the single-step traced path. Takes precedence over
-    ``DG_DENOISE_TRACED`` when both are set.
-
-    ``DG_DENOISE_TRACED`` selects the traced single-step loop
-    (:func:`traced_denoise_block`) — one Metal trace per denoise step, replayed once per
-    step, cross-step state (canvas + self-cond signal) in persistent buffers and per-block
-    canvas RoPE refreshed outside the trace. Removes the ~137 ms/step host-dispatch tax that
-    masks the sparse-MoE compute win: 257.93 ms/step traced vs ~777 ms/step eager at 30L →
-    58.1 t/s @12, 33.2 @24 (both > 30), verified bit-exact to the eager committed argmax
-    (perf_progress.md session 8). Supports argmax, injected/materialized Gumbel via a persistent
-    full-noise replay input, and bounded-memory chunked Gumbel via a persistent device seed plus
-    reusable chunk buffer. Contiguous cache only; needs a large trace region (set
-    ``DG_TRACE_REGION_SIZE`` at mesh open).
-
-    ``DG_DENOISE_DEVICE_LOOP`` selects :func:`device_loop_denoise_block` — the device-resident
-    fixed-step loop with no per-step host readback (removes the 5 readbacks + the
-    ``torch.equal`` halt check the eager :func:`denoise_block` pays every step). Behaviourally
-    identical to the eager loop whenever early-halt does not fire (RUN-first under #48291), but
-    it discards the per-step trajectory records and cannot early-halt.
-
-    ``DG_DENOISE_EARLY_HALT`` selects :func:`traced_early_halt_block` — the traced loop with
-    data-dependent early-halt (dg-08 lever 8). It captures a fixed K-step window
-    (``DG_DENOISE_EARLY_HALT_WINDOW=K``; 1 = scheme A per-step, K>1 = scheme B chunked-halt),
-    replays one window at a time, and after each replay reads ONE tiny on-device halt scalar
-    (mean entropy + argmax-stability mismatch) and branches continue/stop on the host — keeping
-    the traced dispatch savings while recovering the eager StableAndConfident early-halt. When
-    halt does NOT fire it runs the full budget and commits the byte-identical argmax of the
-    fixed-48 traced path (Guard 1). Dynamic Gumbel requires a one-step halt window; contiguous-cache
-    only, same as the traced paths. It is the DEFAULT traced variant (``DG_DENOISE_EARLY_HALT``
-    default ON; set ``=0`` for the fixed budget): post the tanh-GELU decision-fidelity fix the
-    coherent trajectory converges, so the 0.005 gate now clears and early-halt fires well before the
-    full budget (device-verified [9,17,2]/48, bit-exact) — see ``doc/optimize_perf/early_halt.md``.
-
-    Early-halt being the default *variant* does NOT force tracing: the eager loop stays the default
-    unless a traced path is selected (``DG_DENOISE_TRACED``/``_MULTISTEP``, the serving trace pref,
-    or an EXPLICIT ``DG_DENOISE_EARLY_HALT=1``). Pair with ``DG_DENOISE_FROZEN_PREFIX=1`` for the
-    capture-once steady-serving speedup (the recapture cost otherwise dominates).
-    """
-    # Early-halt is the DEFAULT traced variant (bit-exact, converges post tanh-fix) but does NOT
-    # itself force tracing: it only wins once a traced path is otherwise selected, or when it is
-    # EXPLICITLY opted in. The eager loop stays the default when no traced signal is present.
-    if traced_denoise_multistep_enabled():
-        return traced_early_halt_block if traced_early_halt_enabled() else traced_denoise_multistep_block
-    if traced_denoise_enabled():
-        return traced_early_halt_block if traced_early_halt_enabled() else traced_denoise_block
-    if early_halt_explicitly_on():
-        return traced_early_halt_block
+    """Pick eager denoise, or the optional non-Metal device-only loop."""
     if os.environ.get("DG_DENOISE_DEVICE_LOOP", "0").lower() in ("1", "true", "yes", "on"):
         return device_loop_denoise_block
     return tt_denoise_block
 
 
 def select_denoise_block_fn() -> Callable[..., DenoiseTrajectory]:
-    """Public entry to the env-gated denoise-loop dispatcher.
-
-    Serving (``tt.serving.BlockDiffusionServingSession``) and the vLLM adapter reuse this so the
-    SAME ``DG_DENOISE_TRACED{,_MULTISTEP}`` / ``DG_DENOISE_EARLY_HALT`` selection the generator
-    uses drives the serving decode path — rather than hard-calling a specific loop. Returns the
-    eager :func:`~...tt.denoise_loop.denoise_block` when no traced flag is set (the default), so
-    serving behavior is unchanged unless a flag opts in.
-    """
+    """Public eager/device-loop selector; Metal tracing is not dispatched here."""
     return _resolve_default_denoise_block_fn()
-
-
-def denoise_flags_select_traced() -> bool:
-    """True when an EXPLICIT DG_DENOISE_* traced flag forces a traced loop.
-
-    Uses ``early_halt_explicitly_on`` (not the default-on ``traced_early_halt_enabled``) so that
-    early-halt being the DEFAULT *variant* does not by itself make callers (e.g. the vLLM
-    ``_resolve_trace_pref`` fallback) auto-enable tracing — tracing is still an explicit opt-in.
-    """
-    return early_halt_explicitly_on() or traced_denoise_multistep_enabled() or traced_denoise_enabled()
-
-
-def select_traced_denoise_block_fn() -> Callable[..., DenoiseTrajectory]:
-    """Return the traced denoise-loop fn for an explicitly trace-enabled serving path.
-
-    Honors the traced-variant precedence (early-halt > multistep > single-step traced), but —
-    unlike :func:`select_denoise_block_fn` — falls back to the single-step :func:`traced_denoise_block`
-    when NO specific traced flag is set, so a caller that has decided to trace (e.g. the vLLM adapter
-    honoring ``enable_trace`` with a sized ``DG_TRACE_REGION_SIZE``) gets a traced loop without also
-    having to set a per-variant env flag. Argmax, materialized Gumbel, and chunked Gumbel are
-    supported by the single-step controller. Contiguous cache only, same prerequisites as the
-    traced paths.
-    """
-    if traced_early_halt_enabled():
-        return traced_early_halt_block
-    if traced_denoise_multistep_enabled():
-        return traced_denoise_multistep_block
-    return traced_denoise_block
 
 
 def denoise_and_commit_block(
@@ -974,28 +872,24 @@ def denoise_and_commit_block(
 
 
 def _release_generation_logits_state(logits_fn) -> None:
-    """Best-effort teardown for direct generator-owned trace/adapter state."""
-    for attr in (
-        "_traced_denoise_controller",
-        "_traced_denoise_multistep_controller",
-        "_traced_early_halt_controller",
-    ):
-        controller = getattr(logits_fn, attr, None)
-        if controller is not None:
+    """Best-effort teardown for direct generator-owned adapter state."""
+    attr = "_upfront_traced_denoise_controller"
+    controller = getattr(logits_fn, attr, None)
+    if controller is not None:
+        try:
+            controller.release()
+        except BaseException as cleanup_error:
+            logger.error(f"failed to release generator controller {attr}: {cleanup_error}")
+        finally:
             try:
-                controller.release()
-            except BaseException as cleanup_error:
-                logger.error(f"failed to release generator controller {attr}: {cleanup_error}")
-            finally:
+                delattr(logits_fn, attr)
+            except AttributeError:
+                # A test double or proxy may expose the controller via its class;
+                # shadow it so this request cannot reuse the released state.
                 try:
-                    delattr(logits_fn, attr)
-                except AttributeError:
-                    # A test double or proxy may expose the controller via its class;
-                    # shadow it so this request cannot reuse the released state.
-                    try:
-                        setattr(logits_fn, attr, None)
-                    except BaseException as cleanup_error:
-                        logger.error(f"failed to clear generator controller {attr}: {cleanup_error}")
+                    setattr(logits_fn, attr, None)
+                except BaseException as cleanup_error:
+                    logger.error(f"failed to clear generator controller {attr}: {cleanup_error}")
     reset = getattr(logits_fn, "reset", None)
     if callable(reset):
         try:

@@ -317,7 +317,7 @@ def test_generate_blocks_deallocates_init_canvas_if_block_fails(expect_error):
     assert init_canvas.deallocated is True
 
 
-def test_generate_blocks_failure_releases_all_controller_and_adapter_state(expect_error):
+def test_generate_blocks_failure_releases_upfront_controller_and_adapter_state(expect_error):
     events = []
 
     def fail(name):
@@ -329,8 +329,7 @@ def test_generate_blocks_failure_releases_all_controller_and_adapter_state(expec
 
     class _Logits:
         def __init__(self):
-            self._traced_denoise_controller = SimpleNamespace(release=fail("controller-0"))
-            self._traced_denoise_multistep_controller = SimpleNamespace(release=lambda: events.append("controller-1"))
+            self._upfront_traced_denoise_controller = SimpleNamespace(release=fail("controller"))
 
         def reset(self):
             events.append("adapter-reset")
@@ -348,9 +347,8 @@ def test_generate_blocks_failure_releases_all_controller_and_adapter_state(expec
             block_fn=lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("injected replay failure")),
         )
 
-    assert events == ["controller-0", "controller-1", "adapter-reset"]
-    assert not hasattr(logits, "_traced_denoise_controller")
-    assert not hasattr(logits, "_traced_denoise_multistep_controller")
+    assert events == ["controller", "adapter-reset"]
+    assert not hasattr(logits, "_upfront_traced_denoise_controller")
 
 
 def test_generate_blocks_rejects_negative_num_blocks(expect_error):

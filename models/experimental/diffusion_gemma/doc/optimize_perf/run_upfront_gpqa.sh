@@ -20,8 +20,8 @@ Useful overrides:
   DG_CKPT=/home/zni/dg_models/diffusiongemma-26B-A4B-it
   HOST=127.0.0.1 PORT=8010
   MAX_MODEL_LEN=4096 MAX_GEN_TOKS=1536
-  THINKING_MODE=1                 # inject the checkpoint's <|think|> system token
-  OUTPUT_ROOT=/tmp/dg-upfront-gpqa-<timestamp>
+  THINKING_MODE=1                 # enable the checkpoint's server-side thinking template
+  OUTPUT_ROOT=/home/zni/dg_runs/diffusion_gemma/upfront_gpqa/<timestamp>
   RESET_BEFORE=1 RESET_AFTER=1
 
 The default prefill whitelist is exact for the current 198-sample
@@ -64,11 +64,16 @@ READY_TIMEOUT_S="${READY_TIMEOUT_S:-900}"
 
 case "${THINKING_MODE}" in
     1)
-        # Exact aligned lengths after adding a system turn containing <|think|>.
-        DEFAULT_PREFILL_WARMUP_LENS="128,160,192,224,256,288,320,352,384,416,448,480,512,544,576,608,672,832,2432"
+        # Exact aligned lengths with server-side enable_thinking=true.
+        DEFAULT_PREFILL_WARMUP_LENS="128,160,192,224,256,288,320,352,384,416,448,480,512,544,608,672,832,2432"
+        SERVER_CHAT_ARGS=(
+            --default-chat-template-kwargs '{"enable_thinking":true}'
+            --reasoning-parser diffusion_gemma
+        )
         ;;
     0)
         DEFAULT_PREFILL_WARMUP_LENS="96,128,160,192,224,256,288,320,352,384,416,448,480,512,544,608,640,832,2432"
+        SERVER_CHAT_ARGS=()
         ;;
     *)
         echo "ERROR: THINKING_MODE must be 0 or 1, got '${THINKING_MODE}'" >&2
@@ -78,7 +83,7 @@ esac
 PREFILL_WARMUP_LENS="${PREFILL_WARMUP_LENS:-${DEFAULT_PREFILL_WARMUP_LENS}}"
 
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-OUTPUT_ROOT="${OUTPUT_ROOT:-/tmp/dg-upfront-gpqa-${TIMESTAMP}}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-/home/zni/dg_runs/diffusion_gemma/upfront_gpqa/${TIMESTAMP}}"
 SERVER_LOG="${OUTPUT_ROOT}/server.log"
 SMOKE_OUTPUT="${OUTPUT_ROOT}/smoke"
 FULL_OUTPUT="${OUTPUT_ROOT}/full"
@@ -166,10 +171,12 @@ echo "  max_gen_toks: ${MAX_GEN_TOKS}"
 echo "  thinking mode: ${THINKING_MODE}"
 echo "  prefill whitelist: ${PREFILL_WARMUP_LENS}"
 
-# The host mode generates IID full-vocabulary Gumbel noise with torch, then keeps
-# sampling/denoise on device. DiffusionConfig supplies the checkpoint's released
-# T=0.8->0.4 schedule, entropy bound 0.1, and early-halt thresholds. Do not replace
-# this with chunked: QB2's current 1024-wide RNG has a known distribution bias.
+# This is the complete model-level launch contract. Up-front capture intrinsically
+# uses reveal masking, eager startup capture, and one-step/window early halt.
+# Host mode generates IID full-vocabulary Gumbel noise with torch, then keeps
+# sampling/denoise on device. DiffusionConfig supplies the released temperature,
+# entropy, and halt settings. Do not replace host mode with chunked: QB2's current
+# 1024-wide RNG has a known distribution bias.
 setsid env \
     TT_METAL_HOME="${TT_METAL_ROOT}" \
     TT_METAL_RUNTIME_ROOT="${TT_METAL_ROOT}" \
@@ -178,18 +185,10 @@ setsid env \
     DG_CKPT="${DG_CKPT}" \
     DG_UPFRONT_CAPTURE=1 \
     DG_UPFRONT_PREFILL_WARMUP_LENS="${PREFILL_WARMUP_LENS}" \
-    DG_DENOISE_REVEAL_MASK=1 \
     DG_DENOISE_REVEAL_PMAX="${MAX_MODEL_LEN}" \
-    DG_DENOISE_LAZY_CAPTURE=0 \
-    DG_DENOISE_EARLY_HALT=1 \
-    DG_DENOISE_EARLY_HALT_WINDOW=1 \
     DG_VLLM_GUMBEL_MODE=host \
-    DG_VLLM_TRACE=1 \
     DG_TRACE_REGION_SIZE="${TRACE_REGION_SIZE}" \
     DG_VLLM_MAX_DENOISE_STEPS=48 \
-    DG_SPARSE_MOE=1 \
-    DG_SPARSE_MOE_TUNED=1 \
-    DG_DEDUP_ARGMAX=1 \
     VLLM_RPC_TIMEOUT=1800000 \
     VLLM_ENABLE_V1_MULTIPROCESSING=0 \
     HF_HUB_OFFLINE=1 \
@@ -204,6 +203,7 @@ setsid env \
     --max-num-seqs 1 \
     --block-size 64 \
     --additional-config "${TT_CONFIG}" \
+    "${SERVER_CHAT_ARGS[@]}" \
     --host "${HOST}" \
     --port "${PORT}" \
     >"${SERVER_LOG}" 2>&1 &
@@ -250,11 +250,6 @@ COMMON_EVAL_ARGS=(
     --trust_remote_code
     --confirm_run_unsafe_code
 )
-if [[ "${THINKING_MODE}" == "1" ]]; then
-    # The model card's recommended reasoning mode is enabled by putting this
-    # control token at the start of the system prompt.
-    COMMON_EVAL_ARGS+=(--system_instruction "<|think|>")
-fi
 
 echo "Running two-sample smoke..."
 SMOKE_SAMPLES='{"r1_gpqa_diamond":[0,1]}'
@@ -265,9 +260,19 @@ SMOKE_SAMPLES='{"r1_gpqa_diamond":[0,1]}'
     2>&1 | tee "${OUTPUT_ROOT}/smoke.log"
 
 if [[ "${MODE}" == "full" ]]; then
-    echo "Running all 198 GPQA-Diamond samples..."
+    SEL_ARGS=()
+    if [[ -n "${SAMPLES:-}" ]]; then
+        SEL_ARGS=(--samples "${SAMPLES}")
+        echo "Running specific GPQA-Diamond samples: ${SAMPLES}"
+    elif [[ "${LIMIT:-0}" -gt 0 ]]; then
+        SEL_ARGS=(--limit "${LIMIT}")
+        echo "Running a ${LIMIT}-sample subset of GPQA-Diamond (LIMIT=${LIMIT})..."
+    else
+        echo "Running all 198 GPQA-Diamond samples..."
+    fi
     "${LM_EVAL}" \
         "${COMMON_EVAL_ARGS[@]}" \
+        "${SEL_ARGS[@]}" \
         --output_path "${FULL_OUTPUT}" \
         2>&1 | tee "${OUTPUT_ROOT}/full.log"
 fi

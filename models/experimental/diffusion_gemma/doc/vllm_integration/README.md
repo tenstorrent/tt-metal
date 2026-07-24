@@ -1,33 +1,31 @@
 # DiffusionGemma — vLLM serving integration (#47466 / #47488)
 
-> **CURRENT CONTRACT — 2026-07-17.** This section supersedes older “live”, trace-speed,
+> **CURRENT CONTRACT — 2026-07-22.** This section supersedes older “live”, trace-speed,
 > RUN-first-quality, and launch text below. Older sections remain reproducibility history.
 
 ### Required launch and request semantics
 
-The adapter's safe defaults are intentionally not the fast path:
+There are exactly two denoise execution modes:
 
-```text
-DG_SPARSE_MOE defaults 0       -> dense 128-expert denoise
-DG_DEDUP_ARGMAX defaults 0     -> duplicate argmax work in argmax mode
-DG_VLLM_TRACE defaults off     -> eager Python/TTNN dispatch
-DG_VLLM_MAX_DENOISE_STEPS defaults 48
-DG_VLLM_GUMBEL_MODE defaults argmax
-```
+1. **Metal trace:** one model-lifetime trace/controller captured during startup with reveal masking,
+   IID host Gumbel, K=48, and one-step/window early halt.
+2. **Eager fallback:** `DG_UPFRONT_CAPTURE` unset/zero. Eager is valid for diagnostics but is not
+   optimized traced-serving evidence.
 
-Always choose and record an explicit profile. A fast functional transport control is:
+The complete model-level trace environment is:
 
 ```bash
-export DG_SPARSE_MOE=1
-export DG_SPARSE_MOE_TUNED=1
-export DG_DEDUP_ARGMAX=1
-export DG_VLLM_GUMBEL_MODE=argmax
-export DG_VLLM_MAX_DENOISE_STEPS=12   # reduced-K diagnostic, not production quality
-export DG_VLLM_TRACE=0                # lower first-request TTFT; trace is a separate benchmark
+export DG_UPFRONT_CAPTURE=1
+export DG_UPFRONT_PREFILL_WARMUP_LENS=<all-admitted-aligned-prompt-lengths>
+export DG_DENOISE_REVEAL_PMAX=<positive-tile-aligned-served-cap>
+export DG_TRACE_REGION_SIZE=<validated-positive-reservation>
+export DG_VLLM_GUMBEL_MODE=host
+export DG_VLLM_MAX_DENOISE_STEPS=48
 ```
 
-A production-sampler control uses `DG_VLLM_GUMBEL_MODE=chunked` and K=48. It is slower and must not
-be compared with reduced-K argmax as if they were the same workload.
+Reveal masking, non-lazy startup capture, and window-1 early halt are intrinsic. Every aligned
+prefill length the server can admit must be listed and compiled before denoise capture; an unseen
+runtime shape fails instead of compiling with resident traces.
 
 Server command requirements:
 
@@ -61,24 +59,26 @@ python -m vllm.entrypoints.openai.api_server \
   serving TTFT or scheduler-chunking result.
 - API `completion_tokens / wall_time` includes EOS trimming and queueing. With `max_num_seqs=1`, curl
   wall time may contain a previous request and is not a device throughput measurement.
-- `DG_VLLM_TRACE=1` captures a fresh controller per request. Block 0 is capture-inclusive, and
-  growing contiguous-prefix shapes recapture on later blocks. July-10 18 tok/s same-ID rows used a
-  prompt-only prefix and are historical same-shape replay provenance.
+- The accepted up-front path captures once at startup, rebinds the fixed-span reveal adapter across
+  requests, and releases it at model teardown. Per-request capture and growing-prefix recapture
+  results below are historical only.
 - The July-15 decision-fidelity control shows coherent TT output at the intrinsic bf16 diffusion
   floor. Persistent garbage under `/v1/chat/completions` is not a blanket expected outcome; check
-  argmax-vs-chunked mode, K, EOS-tail exposure, prompt format, and adapter state.
+  host-sampler setup, K=48, EOS-tail exposure, prompt format, and adapter state.
 
-Known bad plain-launch signature observed 2026-07-17:
+### Removed legacy executable paths
 
-```text
-session_create: denoise_path=env_dispatch, trace_enabled=false, gumbel_mode=argmax, K=48
-short-prompt block: prefill < 1 s, denoise ≈ 202 s, commit ≈ 4.4 s
-```
+Fixed-budget, grouped/multistep, frozen-prefix, per-request, argmax, and variable-context trace
+drivers were deleted. Their Markdown and JSON outputs remain unchanged as historical evidence.
+Removed legacy knobs may therefore still appear in dated artifacts: `DG_VLLM_TRACE`,
+`DG_DENOISE_TRACED`, `DG_DENOISE_TRACED_MULTISTEP`, `DG_DENOISE_MULTISTEP_GROUP`,
+`DG_DENOISE_EARLY_HALT`, `DG_DENOISE_EARLY_HALT_WINDOW`, `DG_DENOISE_FROZEN_PREFIX`,
+`DG_DENOISE_REVEAL_MASK`, and `DG_DENOISE_LAZY_CAPTURE`. `DG_DENOISE_DEVICE_LOOP` remains a
+non-Metal eager diagnostic; vLLM traced serving never selects it.
 
-That is dense eager denoise, not “slow prefill”. With `max_num_seqs=1`, a curl wall time of 353 s
-was ~146 s waiting behind another request plus ~207 s for its own block. The same launch omitted
-`--generation-config vllm`, so `max_tokens=1024` was capped at 256 and produced no `decode_forward`
-rows. Treat this signature as a configuration failure, not a current performance baseline.
+The retired live context sweep also accepted arbitrary prompt text whose aligned token length was
+known only after server startup. That cannot satisfy the exact up-front prefill warmup contract, so
+the executable was removed rather than silently allowing unsafe first-use compilation.
 
 ## Historical status and bring-up evidence (July 3–13)
 
@@ -135,10 +135,10 @@ block-diffusion, so `1000/mean_tpot_ms` is intentionally not reported.
 Metal TRACE capture/replay is now wired into the serving decode path (`serving.py` explicit
 `denoise_block_fn`; `generator_vllm.py` honors `enable_trace`). Full-depth 30L @48 on the serving
 session (the exact path the vLLM adapter delegates to), msl=4096: **eager 6.86 t/s → traced 17.93 t/s
-(2.61×), byte-identical commit** (`8f015a49e4e31a63`, = the generator's committed argmax). Realized
-early-halt over a 5-prompt set (`DG_DENOISE_EARLY_HALT`, seed 0, threshold 0.005): **avg 48.0 steps,
-0/5 halted** — a measured no-op under #48291. Default stays fixed-48 traced. See `traced_serving.md`
-+ `bench_vllm_traced.py` + `vllmtraced_msl{4096,32768}.json`.
+(2.61×), byte-identical commit** (`8f015a49e4e31a63`, = the generator's committed argmax). Its
+legacy opt-in early-halt control over five prompts (seed 0, threshold 0.005): **avg 48.0 steps,
+0/5 halted** — a measured no-op under #48291. This is historical. See `traced_serving.md` and
+`vllmtraced_msl{4096,32768}.json`; the obsolete benchmark driver was removed.
 
 The July-09/10 capture-once multi-block rows held the denoise prefix at the initial prompt length.
 They remain same-shape performance provenance, not correct block-autoregressive growing-prefix
