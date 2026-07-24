@@ -31,12 +31,12 @@ Tensix cores contain five hardware performance counter banks. Every bank exposes
 
 Every test source under `tests/sources/*_perf.cpp` is compiled twice from the same C++ file. The build is selected by two preprocessor flags:
 
-| Build | `LLK_PROFILER` | `PERF_COUNTERS_COMPILED` | Active half of `START_PERF_MEASURE` | What it measures |
+| Build | `LLK_PROFILER` | `PERF_COUNTERS_COMPILED` | Active half(s) of `START_PERF_MEASURE` | What it measures |
 |-------|----------------|--------------------------|--------------------------------------|------------------|
-| NC (no counters) | defined | undefined | `ZONE_SCOPED` | Per-zone wall-clock cycles (`RISCV_DEBUG_REG_WALL_CLOCK_L`) |
-| WC (with counters) | defined | defined | `MEASURE_PERF_COUNTERS` | Per-zone HW counter snapshot |
+| NC (no counters) | defined | undefined | `ZONE_SCOPED` (timing) + `MEASURE_PERF_COUNTERS` (barrier only) | Per-zone wall-clock cycles (`RISCV_DEBUG_REG_WALL_CLOCK_L`) |
+| WC (with counters) | defined | defined | `MEASURE_PERF_COUNTERS` **and** `ZONE_SCOPED` | Per-zone HW counter snapshot **and** wall-clock cycles |
 
-`START_PERF_MEASURE(name)` expands to `MEASURE_PERF_COUNTERS(name)` + `ZONE_SCOPED(name)`. The two halves are mutually exclusive — only one of them is non-empty in any given build, so wall-clock and counter measurements are never taken simultaneously and cannot perturb each other. The single name keeps NC wall-clock data and WC counter data joinable by zone name in the host driver; the driver runs whichever build is needed and merges the resulting DataFrames on that name.
+`START_PERF_MEASURE(name)` expands to `MEASURE_PERF_COUNTERS(name)` + `ZONE_SCOPED(name)`. In the NC build, `MEASURE_PERF_COUNTERS` performs a no-op cross-thread rendezvous and `ZONE_SCOPED` records the per-zone wall-clock timestamps. In the WC build **both** are live: the counter scope performs the rendezvous *and* arms/freezes the HW counters, while `ZONE_SCOPED` records the per-zone wall-clock timestamps without adding another rendezvous. A single WC run therefore yields both counter and wall-clock data per zone under the same name; the host driver keys everything by `(test_variant, zone)` and can merge NC and WC results (or use the WC wall-clock directly).
 
 Source-side, this is the pattern:
 
@@ -60,52 +60,54 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 Each zone is registered once at its first encounter (the counter half is RAII-scoped and assigns a stable zone id by hashing the name), so placing `START_PERF_MEASURE` **outside** the loop is preferred — counter start is not a no-op and would dominate per-iteration cost if done on every tile.
 
-### `PerfRunType` and the split arm/freeze model
+### `PerfRunType` and the single-thread arm/freeze model
 
-Each LLK perf test is associated with a `PerfRunType` (declared in `perf.h`):
+Each LLK perf test is associated with a `PerfRunType` (declared in `perf.h`): `L1_TO_L1` and `L1_CONGESTION` run the full unpack → math → pack pipeline; `UNPACK_ISOLATE` / `MATH_ISOLATE` / `PACK_ISOLATE` exercise a single stage. The run type only selects which thread(s) do real work inside `TILE_LOOP`.
 
-| Run type | Purpose | Arm thread | Freeze thread |
-|----------|---------|-----------|---------------|
-| `L1_TO_L1` | End-to-end pipeline cycles, unpack → math → pack | UNPACK | PACK |
-| `L1_CONGESTION` | Pipeline cycles under L1 traffic contention, unpack → pack | UNPACK | PACK |
-| `UNPACK_ISOLATE` | Unpack-only kernels (no math/pack) | UNPACK | UNPACK |
-| `MATH_ISOLATE` | Math/SFPU-only kernels (no unpack/pack) | MATH | MATH |
-| `PACK_ISOLATE` | Pack-only kernels (no unpack/math) | PACK | PACK |
+**A single fixed thread — pack — arms and freezes the counters for every run type.** `is_perf_actor_thread()` in `counters.h` returns true only on pack. This is run-type-independent and correct because:
 
-The arm thread runs first in the natural pipeline, the freeze thread runs last. For end-to-end measurements (`L1_TO_L1`, `L1_CONGESTION`) the window opens when unpack starts producing and closes when pack stops consuming. For single-thread isolate modes the same thread arms and freezes — the other two threads are idle for the run type and only participate in the entry/exit barrier.
+- The perf counters are **global hardware** driven by shared debug registers (`PERF_CNT_ALL` and the per-bank `*2` command registers), so any RISC can arm/freeze them — the identity of the issuing thread does not change what is counted.
+- The rendezvous is an **actor-wait barrier** (`sync_point`, see below): the arm thread waits for *all* threads to arrive before arming, and the freeze thread waits for *all* threads to finish before freezing. So the counter window brackets every thread's work regardless of which thread issues the arm/freeze — verified across all perf tests, including `L1_CONGESTION`, where the last-exiting thread is workload-dependent.
 
-The arm/freeze split is determined at compile time by `is_arm_thread<run_type>()` and `is_freeze_thread<run_type>()` in `counters.h`.
+Pack is chosen because a measurement sweep found it is the actual last-exiting thread in the majority of cases, minimising the (out-of-window) idle spin before the freeze. An earlier revision used a per-run-type source/sink split (unpack arms, pack freezes for pipeline modes); the barrier makes that distinction unnecessary, so it was collapsed to one fixed thread.
 
 ### The `MEASURE_PERF_COUNTERS` macro
 
-Expands to a `perf_counter_scoped<PERF_RUN_TYPE>` RAII object. Its constructor and destructor execute the following sequence (only on the WC build):
+Expands to a `perf_counter_scoped` RAII object. Its constructor and destructor execute the following sequence (only on the WC build):
 
-1. **Constructor (zone entry).** The **arm thread** writes the rising-edge start bit to `PERF_CNT_ALL` (FPU + INSTRN), `PERF_CNT_TDMA_UNPACK2`, `PERF_CNT_L1_2`, and `PERF_CNT_TDMA_PACK2`, clearing all banks and starting the count. It then posts the entry semaphore (`pc_buf` slot `FPU_SFPU`) twice. The two non-arm threads spinwait on that semaphore, then `semaphore_get` it. The barrier guarantees no thread is inside the measured scope before the arm thread has armed the HW.
+1. **Constructor (zone entry).** Calls `sync_point(is_perf_actor_thread(), arm_all_counters)`. All three threads rendezvous; the **actor thread (pack)** then writes the rising-edge start bit to `PERF_CNT_ALL` (FPU + INSTRN), `PERF_CNT_TDMA_UNPACK2`, `PERF_CNT_L1_2`, and `PERF_CNT_TDMA_PACK2` — clearing all banks and starting the count — and releases the others.
 
 2. **Body.** All three threads run the work inside the scope. Counters tick continuously on the shared backend.
 
-3. **Destructor (zone exit).** The **freeze thread** writes the rising-edge stop bit to the same four registers, then walks the shared 200-word config buffer at `0x169000` and reads every valid slot. For each slot it programs the bank's mode register with the `counter_sel`, reads `OUT_H` (the event count), and stores the value in the per-zone data area. The bank's elapsed-cycles value (`OUT_L`) is sampled once per bank from the first slot. After all slots are read it posts the exit semaphore (`pc_buf` slot `UNPACK_TO_DEST`) twice. The two non-freeze threads spinwait then `semaphore_get` the exit semaphore.
+3. **Destructor (zone exit).** Calls `sync_point(is_perf_actor_thread(), freeze_and_read_all_counters)`. Every thread has already drained its backend (`PROFILER_SYNC`/`tensix_sync`) and written its `ZONE_END` before arriving. The **actor thread (pack)** writes the rising-edge stop bit to the same four registers, then walks the shared 200-word config buffer at `0x169000` and reads every valid slot: for each it programs the bank's mode register with the `counter_sel`, reads `OUT_H` (the event count), and stores it in the per-zone data area (`OUT_L`, the elapsed cycles, is sampled once per bank). It then sets the zone's `SYNC_ZONE_COMPLETE` flag and releases the others.
 
 Each zone gets its own data block in L1 (see [L1 Layout](#l1-layout-and-zone-buffers)) so multiple measurement scopes in the same kernel produce independent snapshots. The kernel may contain up to `PERF_COUNTERS_MAX_ZONES = 8` distinct zone names; identical names share a zone.
 
-The `pc_buf` semaphores are the cheapest synchronisation primitive available on Tensix — they're consumed by the backend without involving the FPU or unpacker pipelines, so the barrier itself contributes negligible cycles to the measured window.
+#### The `sync_point` rendezvous
+
+The barrier is `llk_profiler::sync_point` — the **same epoch barrier the NC (profiler) build uses at each zone entry**, so both builds share one synchronization primitive. It is an *actor-release* barrier on the profiler's L1 array: every thread announces arrival on its per-thread generation slot; the designated actor (the arm or freeze thread) waits for all arrivals, runs its action (arm / freeze+read / no-op), then bumps a shared `epoch` word to release the waiters. Because the actor's only spin is the arrival wait — *before* its action — it never spins inside the counter window, so the barrier cannot pollute the measurement. It uses only plain L1 loads/stores plus `invalidate_data_cache` (no atomics, no scarce semaphores). An earlier revision used `pc_buf` semaphores for the WC arm/freeze handshake; `sync_point` replaced them so NC and WC use one mechanism.
 
 ### Configure-once from BRISC
 
 Before any TRISC kernel runs, BRISC executes `configure_and_arm_from_brisc()` once (called from `brisc.cpp` when the WC build flag is set). This:
 
-- Writes the per-architecture `BUILTIN_COUNTER_CONFIG` (130 slots on WH, 169 on BH) into the shared L1 config buffer at `0x169000`.
+- Writes the per-architecture `BUILTIN_COUNTER_CONFIG` (130 slots on WH, 169 on BH) into the shared L1 config buffer at `0x169000`. That array is built at compile time from the canonical metal inventory — see [Counter inventory single source](#counter-inventory-single-source).
 - Clears every per-zone data area and sync word.
+- Clears `DBG_FEATURE_DISABLE` to `0` — see [DBG_FEATURE_DISABLE scrub](#dbg_feature_disable-scrub) below.
 - Programs each bank's reference-period and mode registers, sets `PERF_CNT_MUX_CTRL` for L1, and does an initial global arm (later overridden by the first `MEASURE_PERF_COUNTERS` zone).
 
 After BRISC releases the TRISCs, the shared config is read-only for the rest of the run.
+
+##### `DBG_FEATURE_DISABLE` scrub
+
+`DBG_FEATURE_DISABLE` is a 16-bit debug/chicken-bit register whose bits toggle low-level behaviors — notably randomized L1 arbitration (`DBG_FEAT_L1_ARB_LFSR_EN`, `0x8`), L1 atomic serialization, and L1 read-enable override. It resets to `0` (all normal), but HW register state **leaks between tests** run back-to-back on an un-reset device, so a prior test that set one of these bits would silently perturb — and make nondeterministic — the ~80 L1 counters. BRISC writes `0` here to guarantee a clean baseline regardless of leaked state; the blanket write (rather than clearing one bit) is deliberate because any of the bits, not just LFSR, would skew the measurement. Verified: with a leaked `0x8` present, the L1 metrics jitter 40–98 % run-to-run without this scrub and are byte-identical with it. Note this scrub is WC-only (it lives in the counter path); the NC path has no equivalent.
 
 ### Reading results from host
 
 After the kernel completes:
 
 1. The host process reads the per-zone data area back from device L1.
-2. `read_counters()` decodes each 32-bit config word (bit 31 valid, bits 7:0 bank, bits 16:8 `counter_sel`, bits 19:17 `l1_mux`), looks up the human-readable counter name from the per-architecture inventory, and pairs every event count with that zone's bank cycle count.
+2. `read_counters()` decodes each 32-bit config word (bit 31 valid, bits 7:0 bank, bits 16:8 `counter_sel`, bits 19:17 `l1_mux`), looks up the human-readable counter name (parsed at import from the same `hw_counters.h` — see [Counter inventory single source](#counter-inventory-single-source)), and pairs every event count with that zone's bank cycle count.
 3. The result is a long-format DataFrame: one row per `(zone, bank, counter_id, l1_mux)` tuple with columns `cycles`, `count`, and (optionally) derived metrics from `compute_metrics()`.
 
 Because both wall-clock cycles (NC build, `ZONE_SCOPED` start/end timestamps from `RISCV_DEBUG_REG_WALL_CLOCK_L`) and HW counter cycles (WC build, `OUT_L`) are tagged with the same zone name, the test driver merges them by `(test_variant, zone)`.
@@ -176,7 +178,16 @@ The NC build emits per-zone wall-clock cycle counts in the same results DataFram
 - WH: shared stall reasons (SRCA/B clear/valid) are replicated three times each (counters 27–38), then per-thread stall reasons occupy counters 39–65.
 - BH: shared stall reasons occupy single slots (27–30), per-thread stall reasons occupy 31–57.
 
-Bit-8-extended counters 256/264/272 expose `THREAD_INSTRUCTIONS_{0,1,2}` (one per per-thread instance), and 283 exposes `ANY_THREAD_STALL`. The full per-arch inventory is in `BUILTIN_COUNTER_CONFIG[]` inside `counters.h`.
+Bit-8-extended counters 256/264/272 expose `THREAD_INSTRUCTIONS_{0,1,2}` (one per per-thread instance), and 283 exposes `ANY_THREAD_STALL`.
+
+### Counter inventory single source
+
+The counter id↔name inventory is **defined once**, in metal's canonical `tt_metal/hw/inc/internal/tt-1xx/<arch>/hw_counters.h` — grouped `{PerfCounterType, id}` arrays per bank (`instrn_counters`, `fpu_counters`, `unpack_counters`, `pack_counters`, `l1_0..4_counters`). Both sides of the perf infra derive from it, so the list is never hand-maintained twice:
+
+- **Device (`counters.h`)** `#include`s `hw_counters.h` (with the `PerfCounterType` enum from `perf_counters.hpp`) and builds `BUILTIN_COUNTER_CONFIG[]` from those arrays at compile time — a `constexpr` concatenation in the fixed bank order the readout expects (INSTRN, FPU, TDMA_UNPACK, TDMA_PACK, then L1 by ascending mux).
+- **Host (`counters.py`)** parses the same `hw_counters.h` at import to recover the id→name tables used for decoding.
+
+Adding or removing a counter in `hw_counters.h` therefore propagates to both automatically; the only pieces still mirrored by hand are the config-word bit layout (`PERF_CFG_*`) and the bank-id↔name mapping, which are this test infra's own L1 ABI rather than part of the HW inventory.
 
 ## L1 Layout and Zone Buffers
 
@@ -204,9 +215,9 @@ Counter state lives at a fixed L1 address determined entirely at compile time. N
          +────────────────────────────────────────────+
 ```
 
-The layout is bounded by a `static_assert` to stay below `0x16AFF4` (the profiler region boundary). Each zone reserves `PERF_COUNTERS_ZONE_SIZE = (5 + 200) × 4 + 40 = 860` bytes, supporting up to `PERF_COUNTERS_MAX_ZONES = 8` zones per kernel.
+The layout is bounded by a `static_assert` to stay below `0x16AFF0` (the profiler region boundary). Each zone reserves `PERF_COUNTERS_ZONE_SIZE = (5 + 200) × 4 + 40 = 860` bytes, supporting up to `PERF_COUNTERS_MAX_ZONES = 8` zones per kernel.
 
-The 200-word shared config supplies a single source of truth for which counters are recorded for every zone. There is no per-zone configuration — every zone records the same set of counters but stores its own snapshot.
+The 200-word shared config is the authoritative runtime record of which counters are recorded for every zone (the host reads it back to decode). There is no per-zone configuration — every zone records the same set of counters but stores its own snapshot.
 
 ## Hardware Register Reference
 
@@ -1245,9 +1256,14 @@ Packer Engine N Util = PACKER_BUSY_N / TDMA_PACK_OUT_L * 100
 
 ## Notes and Caveats
 
-- **NC vs WC are mutually exclusive.** A given pytest invocation produces one build, so wall-clock and counter data come from separate runs. Merge them off-line by `(test_variant, zone)`.
-- **The arm/freeze split shifts zone boundaries slightly.** For `L1_TO_L1` and `L1_CONGESTION`, the measurement window opens when unpack arms (before unpack issues its first instruction inside the scope) and closes when pack freezes (after pack issues its last). Counter values from these run types are not directly comparable to a hypothetical "all three threads start and stop simultaneously" baseline.
+- **A pytest invocation compiles one build.** `--enable-perf-counters` selects WC, otherwise NC — a single invocation cannot produce both. The WC build records wall-clock (`ZONE_SCOPED`) *alongside* the counters, so it is self-contained; the NC build is run separately only when a counter-overhead-free timing baseline is wanted. Results merge off-line by `(test_variant, zone)`.
+- **The window is `[all threads armed … all threads finished]`.** The `sync_point` barrier arms after every thread has entered and freezes after every thread has finished, so the window brackets the full cross-thread span. The window boundary is the `sync_point` release, which each thread then stamps with its own wall-clock read — those reads serialize on the single shared clock, so the per-thread zone starts differ by ~12–40 cyc (irreducible on BH; not a bug).
 - **`PERF_COUNTERS_MAX_ZONES = 8` per kernel.** Adding a 9th distinct `MEASURE_PERF_COUNTERS("...")` name silently reuses zone 0. Reuse the same name across multiple call sites if you want them in the same bucket.
 - **L1 mux mutual exclusion is handled inside `MEASURE_PERF_COUNTERS`.** The freeze path re-programs `PERF_CNT_MUX_CTRL` before each L1 slot read, so a single zone snapshot contains counters from multiple mux positions without per-zone configuration changes.
 - **BRISC compile flag.** When `--enable-perf-counters` is set, BRISC is rebuilt with `-DPERF_COUNTERS_COMPILED`. Otherwise BRISC does not touch the counter HW at all — this keeps the NC build free of any counter-armed monitoring overhead.
 - **Test isolation.** As with every LLK test, counter state at kernel entry is whatever the previous test left behind. The BRISC reset path clears the shared config and zone buffers, so each test starts from a known L1 state, but HW counter registers themselves may carry residual values until the first `MEASURE_PERF_COUNTERS` rising-edge clear.
+- **NC/WC bit-identity is fragile.** The goal is that the WC counter code doesn't perturb the measured timing, which requires WC codegen to match NC outside the counter parts. `get_counter_base_addr` uses a `volatile` index cast specifically to stop GCC from emitting a `CSWTCH` jump table (it would shift GP-relative offsets and break that bit-identity), and `freeze_and_read` uses `#pragma GCC unroll 0`. Measured counters are sensitive to BRISC boot *timing* at the ~0.1 % level, so avoid reshaping the BRISC boot path (e.g. the config scan) even when it looks logically equivalent.
+- **The BRISC boot arm is redundant but retained.** RTL (`tt_perf_cnt.sv`) confirms a rising-edge start both *clears* and starts the counters, so the per-zone `arm_all_counters` fully resets them from any prior state — the boot-time `arm_hardware()` measures a window nobody reads. It is kept only because removing it changes boot timing (see previous point). The essential BRISC work is `configure_hardware` (period/mode) + the `DBG_FEATURE_DISABLE` scrub.
+- **L1 layout must stay below the profiler region.** `PERF_COUNTERS_LAYOUT_END` must not overlap the profiler's lowest L1 address (`llk_profiler::EPOCH_ADDR`). Two `static_assert`s enforce this — a literal one in the always-compiled section (BRISC has no `llk_profiler` namespace) and a symbolic one in the `LLK_PROFILER` section that tracks the profiler layout automatically.
+- **Small-count ratio noise.** On tiny workloads (e.g. a single-tile variant, ~400 cyc) the derived L1 *ratio* metrics can swing wildly run-to-run because their denominators are only a few events, so one event of genuine cycle-level L1-arbitration variance is a large percentage. The `mean` timing metric stays stable, and on realistically-sized workloads (e.g. 64 tiles) the ratios are byte-identical run-to-run. Note the residual `L1_TO_L1` run-to-run jitter is addressed by the `sync_point` per-zone re-alignment (which the NC path also uses), not by the WC-only `DBG_FEATURE_DISABLE` scrub.
+- **The single-inventory source couples the perf build to two metal headers.** `counters.h` `#include`s `perf_counters.hpp` (`PerfCounterType` enum, reached via `-I…/tools/profiler`) and the arch `hw_counters.h`; the host `counters.py` parses the same `hw_counters.h` at import. This removes the hand-duplicated inventory, at the cost that if those headers move or the enum/array shape changes, the LLK perf build and decoder must follow. The config-word bit layout (`PERF_CFG_*`) and bank-id↔name mapping are still mirrored between `counters.h` and `counters.py` — they are this infra's own L1 ABI, not part of `hw_counters.h`.

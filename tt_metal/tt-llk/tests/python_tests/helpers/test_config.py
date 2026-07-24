@@ -202,7 +202,6 @@ class TestConfig:
     # === Addresses ===
     RUNTIME_ADDRESS_NON_COVERAGE: ClassVar[int] = 0x20000
     RUNTIME_ADDRESS_COVERAGE: ClassVar[int] = 0x6E000
-    TRISC_PROFILER_BARRIER_ADDRESS: ClassVar[int] = 0x16AFF4
     TRISC_START_ADDRS: ClassVar[list[int]] = [0x16DFF0, 0x16DFF4, 0x16DFF8]
     THREAD_PERFORMANCE_DATA_BUFFER_LENGTH = 0x400
     THREAD_PERFORMANCE_DATA_BUFFER = [
@@ -216,7 +215,7 @@ class TestConfig:
     # Shared config + per-zone data layout (must match counters.h).
     # Shared config (200 words = 800 B) at base; per-zone data (5 bank-cycle
     # words + 200 counter-count words + sync = 860 B) follows.
-    # 8 zones × 860 + 800 = 7680 B, fits below profiler region at 0x16AFF4.
+    # 8 zones × 860 + 800 = 7680 B, fits below profiler region at 0x16AFF0.
     PERF_COUNTERS_BASE_ADDR: ClassVar[int] = 0x169000
     PERF_COUNTERS_MAX_ZONES: ClassVar[int] = 8  # Max zones (must match counters.h)
     _PERF_COUNTERS_CONFIG_WORDS: ClassVar[int] = 200
@@ -236,28 +235,6 @@ class TestConfig:
 
     # Size of one full zone block (data + sync/pad)
     PERF_COUNTERS_ZONE_SIZE: ClassVar[int] = _PERF_COUNTERS_ZONE_DATA_BYTES + 40
-
-    # Zone-0 flat addresses (kept for legacy callers; prefer zone_*_addr helpers below).
-    PERF_COUNTERS_DATA_ADDR: ClassVar[int] = PERF_COUNTERS_ZONES_BASE
-    PERF_COUNTERS_SYNC_CTRL_ADDR: ClassVar[int] = (
-        PERF_COUNTERS_ZONES_BASE + _PERF_COUNTERS_ZONE_DATA_BYTES
-    )
-
-    # Trailing metadata written by PerfCounterManager (must match counters.h):
-    # enabled_flag (4 B) + bank_mask (4 B) + valid_count[MAX_ZONES] (4 B each).
-    _PERF_COUNTERS_TRAILING_METADATA_BYTES: ClassVar[int] = (
-        4 + 4 + PERF_COUNTERS_MAX_ZONES * 4
-    )
-
-    # Total L1 reservation: shared config + per-zone blocks + trailing metadata.
-    PERF_COUNTERS_SIZE: ClassVar[int] = (
-        _PERF_COUNTERS_CONFIG_WORDS * 4
-        + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE
-        + _PERF_COUNTERS_TRAILING_METADATA_BYTES
-    )
-
-    # Legacy alias — sums per-zone bytes for back-compat with old callers
-    _PERF_COUNTERS_BUFFER_SIZE: ClassVar[int] = _PERF_COUNTERS_ZONE_DATA_BYTES
 
     # Device print buffer. It sits above loaders, and under RUNTIME_ARGS_START.
     # Coverage builds extend TRISC sections past this address; device print
@@ -358,9 +335,6 @@ class TestConfig:
                     0x16D000,  # Pack
                     0x16E000,  # SFPU
                 ]
-                TestConfig.TRISC_PROFILER_BARRIER_ADDRESS = (
-                    0x16AFF0  # BARRIER_START for 4 cores
-                )
             case _:
                 raise ValueError(
                     "Must provide CHIP_ARCH environment variable (wormhole / blackhole / quasar)"
@@ -518,6 +492,7 @@ class TestConfig:
             "-Ifirmware/riscv/common",
             "-Ihelpers/include",
             "-I../../hostdevcommon/api",
+            "-I../../tools/profiler",  # perf_counters.hpp: PerfCounterType enum for hw_counters.h
         ] + hw_specific_includes
 
     @staticmethod
