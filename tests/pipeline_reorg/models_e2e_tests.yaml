@@ -822,7 +822,7 @@
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
-  
+
 # ── HunyuanImage-3.0 ───────────────────────────────────────────────
 # Base prompt-only text-to-image on a 2x2 mesh using the resident BF8 32-layer
 # MoE backbone and on-device VAE decode. CI uses 8 denoise steps (HY_STEPS).
@@ -838,7 +838,7 @@
   model: hunyuan-image-3.0
   skus:
     bh_quietbox_2:
-      timeout: 180
+      timeout: 35
       tier: 3
   owner_id: D0B8130N4BW # Dalar Vartanians
   team: models
