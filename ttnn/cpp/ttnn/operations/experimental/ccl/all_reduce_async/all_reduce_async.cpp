@@ -455,7 +455,8 @@ ttnn::Tensor all_reduce_async(
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
     bool use_noc1_only,
-    bool use_optimal_ccl_for_llama) {
+    bool use_optimal_ccl_for_llama,
+    bool fp32_dest_acc) {
     topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     ttnn::MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
 
@@ -472,7 +473,8 @@ ttnn::Tensor all_reduce_async(
         num_preferred_links,
         worker_subdevice_id_opt,
         use_noc1_only,
-        use_optimal_ccl_for_llama);
+        use_optimal_ccl_for_llama,
+        fp32_dest_acc);
 }
 
 std::vector<ttnn::Tensor> all_reduce_async(

@@ -813,6 +813,9 @@ class TT_CCL:
                 subdevice_id=self.worker_sub_device_id,
                 use_noc1_only=use_noc1_only,
                 use_optimal_ccl_for_llama=use_optimal_ccl_for_llama,
+                # fp32 dest accumulation for the LM-head all_reduce only: its bf16 cross-device sum was
+                # order-dependent (ETH ring arrival order) -> per-row logit non-determinism -> greedy flips.
+                fp32_dest_acc=lm_head,
             )
             if lm_head:
                 persistent_buffer.deallocate(True)
