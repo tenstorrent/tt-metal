@@ -1,4 +1,5 @@
-# Two-chip DDP Llama-3.2-1B GRPO (one N300 board).
+# Two-rank Llama-3.2-1B GRPO for the remote-rollout example: 2 TTML training
+# chips + 2 TTT rollout chips (4 chips total on one host).
 
 training_config:
   model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/llama3_2_1B.yaml"
@@ -31,3 +32,9 @@ device_config:
   enable_ddp: true
   mesh_shape: [1, 2]
   device_ids: [0, 1]
+
+# TTT rollout-rank settings (mesh, batch, seq-len for the generation worker).
+remote_rollout_config:
+  mesh_shape: [1, 2]
+  max_batch_size: 32
+  max_seq_len: 2048
