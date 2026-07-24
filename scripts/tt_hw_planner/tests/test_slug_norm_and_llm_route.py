@@ -395,6 +395,23 @@ def test_llm_category_fallback_only_on_residual(monkeypatch):
     assert P._llm_resolve_category("kyutai/mimi", cfg, "feature-extraction") is None
 
 
+def test_no_hand_maintained_model_type_lists():
+    # ANTI-TREADMILL guard: category classification must run on self-maintaining signals
+    # (transformers registry + config facts + arch suffix + LLM residual), NOT hand-kept
+    # per-model_type lists that never converge. These lists were deleted; keep them gone.
+    from scripts.tt_hw_planner import probe as P
+
+    assert not hasattr(P, "VISION_ONLY_MODEL_TYPES"), "hand-maintained vision list re-introduced"
+    assert not hasattr(P, "AUDIO_ONLY_MODEL_TYPES"), "hand-maintained audio list re-introduced"
+    # _category_from_model_type must be a pure delegate to the self-updating registry:
+    # a model_type the installed transformers does not know returns None (no hardcoded hit),
+    # so it flows to the fact/fingerprint/LLM layers instead of a rotting table entry.
+    assert P._category_from_model_type("zzz_not_a_real_model_type_9000") is None
+    # and a registry-known type still classifies (self-maintaining, no hand entry needed)
+    assert P._category_from_model_type("llama") == "LLM"
+    assert P._category_from_model_type("vit") == "CNN"
+
+
 def test_fingerprint_to_category_bridge():
     # when the deterministic tag/model_type path is Unknown but the STRUCTURAL fingerprint
     # identifies a backbone, the category is derived from it (Janus MultiModalityCausalLM ->

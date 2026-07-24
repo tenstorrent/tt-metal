@@ -83,54 +83,18 @@ def _is_low_confidence_category(
     return bool(pipeline_tag in _AMBIGUOUS_PIPELINE_TAGS and not model_type_category and not arch_changed)
 
 
-VISION_ONLY_MODEL_TYPES = {
-    "sam",
-    "sam2",
-    "sam2_video",
-    "sam_hiera",
-    "clip",
-    "siglip",
-    "vit",
-    "dinov2",
-    "swin",
-    "yolos",
-    "detr",
-    "deformable_detr",
-    "segformer",
-    "maskformer",
-    "mask2former",
-    "upernet",
-    "beit",
-    "convnext",
-    "mobilenet_v2",
-    "mobilenet_v1",
-    "resnet",
-    "owlvit",
-}
-
-
-AUDIO_ONLY_MODEL_TYPES = {
-    "whisper",
-    "wav2vec2",
-    "hubert",
-    "wavlm",
-    "sew",
-    "unispeech",
-    "audio_spectrogram_transformer",
-    "clap",
-}
-
-
 def _category_from_model_type(model_type: str) -> Optional[str]:
+    """Classify a model_type via the installed transformers library's task registries
+    ONLY -- a self-maintaining signal (a model_type new to this venv's transformers
+    version is picked up without a tool edit; the venv tracks upstream via
+    registry_sync). No hand-maintained per-model lists: those never converge (every
+    unlisted model is a fresh miss) and were ~75% redundant with this registry anyway.
+    Whatever the registry cannot place falls through to the arch-suffix / fingerprint
+    layers and finally the LLM residual -- so a brand-new architecture just works
+    without a code change. Returns a category or None; never raises."""
     mt = (model_type or "").lower()
     if not mt:
         return None
-    if mt in VISION_ONLY_MODEL_TYPES:
-        return "CNN"
-    if mt in AUDIO_ONLY_MODEL_TYPES:
-        return "STT"
-    if mt in {"llava", "blip-2", "blip2", "idefics", "paligemma", "qwen2_5_vl", "qwen2_vl"}:
-        return "VLM"
     return _category_from_transformers_registry(mt)
 
 
@@ -277,9 +241,14 @@ def _llm_resolve_category(model_id: str, cfg: dict, pipeline_tag: Optional[str],
             "Classify this Hugging Face model into exactly ONE hardware bring-up category.\n"
             f"Allowed categories: {', '.join(_VALID_CATEGORIES)}.\n"
             "Definitions: LLM=text-only generative language model; VLM=vision+language; "
-            "Image/Video=visual generation; STT=speech->text; TTS/audio synthesis or neural "
+            "Image/Video=visual generation; STT=speech->text; TTS=audio synthesis or neural "
             "audio codec; Embed=text embedding/retrieval; CNN=vision classification/detection/"
             "segmentation; NLP=encoder-only text understanding; Unknown=cannot tell.\n"
+            "IMPORTANT: pick a GENERATION category (Image/Video/TTS) ONLY if the model actually "
+            "SYNTHESIZES that modality as output. A contrastive / dual-encoder / retrieval / "
+            "matching / zero-shot-classification model (CLIP / ALIGN / CLAP style, which produces "
+            "embeddings to MATCH inputs, not to generate) is Embed -- or CNN if its task is vision "
+            "classification/detection. Never label such a model Image or TTS.\n"
             f"model_id: {model_id}\n"
             f"pipeline_tag: {pipeline_tag}\n"
             f"config (salient keys): {json.dumps(key_cfg)[:1500]}\n"
