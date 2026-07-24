@@ -174,7 +174,7 @@ public:
         {
             is_opened = true;
             write_entry(EntryType::ZONE_START, id16);
-            ++open_zone_cnt;
+            open_zone_cnt += 2;
         }
         ckernel::fence_compiler();
     }
@@ -185,7 +185,7 @@ public:
         if (is_opened)
         {
             write_entry(EntryType::ZONE_END, id16);
-            --open_zone_cnt;
+            open_zone_cnt -= 2;
         }
         ckernel::fence_compiler();
     }
