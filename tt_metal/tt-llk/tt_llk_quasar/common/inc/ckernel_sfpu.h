@@ -44,11 +44,13 @@ inline void _sfpu_configure_addrmod_()
 
 /**
  * @brief Sets up starting index of SFPU, Stalls till all FPU operations are done
+ * @tparam TILE_SHAPE: Destination tile shape used to calculate the write address
  * @param tile_index: Use to index to a tile in Destination register
  */
+template <trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
 inline void _llk_math_sfpu_start_(const std::uint32_t tile_index)
 {
-    _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_index);
+    _set_dst_write_addr_<TILE_SHAPE>(tile_index);
     TTI_STALLWAIT(p_stall::STALL_SFPU, 0, 0, p_stall::MATH);
 }
 

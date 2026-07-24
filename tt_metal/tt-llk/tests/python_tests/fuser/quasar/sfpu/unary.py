@@ -98,11 +98,12 @@ class UnarySfpu(Sfpu):
         block: BlockData,
     ) -> str:
         op = f"SfpuType::{self.operation.cpp_enum_value}"
+        dest_sync = operation.dest_sync.cpp_enum_value
         en_32bit_dest = config.dest_acc.cpp_enum_value
         sfpu_format = config.sentinel._math_format.cpp_enum_value
         return (
             f"    test_utils::call_unary_sfpu_operation_quasar<"
-            f"{op}, {en_32bit_dest}, {self.iterations}"
+            f"{op}, {dest_sync}, {en_32bit_dest}, {self.iterations}"
             f">({self.dest_idx}, {sfpu_format});\n"
         )
 

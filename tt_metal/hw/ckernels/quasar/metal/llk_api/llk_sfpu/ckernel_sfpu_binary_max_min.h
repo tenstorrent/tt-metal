@@ -61,10 +61,15 @@ inline void _init_binary_max_min_() {
 // @tparam FMT           Math-side DataFormat.
 // @tparam IS_MAX_OP     true → store max(in0, in1); false → store min.
 // @tparam ITERATIONS    Number of SFP-row pairs per face (8 for a 32×16 face).
+// @tparam TILE_SHAPE    Destination tile shape used to calculate operand offsets.
 // @param dst_index_in0  Dest tile index of input 0 (in tile units, relative to DST_INDEX).
 // @param dst_index_in1  Dest tile index of input 1 (in tile units, relative to DST_INDEX).
 // @param dst_index_out  Dest tile index where the result is written (in tile units, relative to DST_INDEX).
-template <DataFormat FMT, bool IS_MAX_OP = true, int ITERATIONS = 8>
+template <
+    DataFormat FMT,
+    bool IS_MAX_OP = true,
+    int ITERATIONS = 8,
+    trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
 inline void calculate_binary_max_min(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(
@@ -77,9 +82,10 @@ inline void calculate_binary_max_min(
 
     // Tile-base offsets relative to the dest counter start set by _llk_math_eltwise_binary_sfpu_params_.
     // Per-row stride comes from ADDR_MOD_6's dest.incr=2 on SFPSTORE, not from these offsets.
-    const std::uint32_t offset0 = (dst_index_in0 * 32) << 1;
-    const std::uint32_t offset1 = (dst_index_in1 * 32) << 1;
-    const std::uint32_t offset2 = (dst_index_out * 32) << 1;
+    constexpr std::uint32_t tile_stride = 1U << ckernel::to_underlying(TILE_SHAPE);
+    const std::uint32_t offset0 = dst_index_in0 * tile_stride;
+    const std::uint32_t offset1 = dst_index_in1 * tile_stride;
+    const std::uint32_t offset2 = dst_index_out * tile_stride;
 
     lltt::record(0, BINARY_MAX_MIN_REPLAY_LEN);
     TT_SFPLOAD(p_sfpu::LREG0, SFPMEM_MODE, ADDR_MOD_7, 0 /* done */, offset0);

@@ -142,9 +142,8 @@ inline void _inc_dst_addr_()
 template <ckernel::trisc::DstTileShape TILE_SHAPE>
 inline void _set_dst_write_addr_(const std::uint32_t tile_index)
 {
-    const std::uint32_t tile_shape_idx =
-        (TILE_SHAPE == ckernel::trisc::DstTileShape::Tile32x32) ? 6 : ((TILE_SHAPE == ckernel::trisc::DstTileShape::Tile32x16) ? 5 : 4);
-    const std::uint32_t dst_index = (tile_index << tile_shape_idx) + ckernel::trisc::_get_dest_buffer_base_();
+    constexpr std::uint32_t tile_shape_idx = ckernel::to_underlying(TILE_SHAPE);
+    const std::uint32_t dst_index          = (tile_index << tile_shape_idx) + ckernel::trisc::_get_dest_buffer_base_();
     ckernel::trisc::_set_dest_section_base_<TRISC_ID>(dst_index);
 }
 
