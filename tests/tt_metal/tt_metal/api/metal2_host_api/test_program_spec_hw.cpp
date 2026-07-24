@@ -1095,18 +1095,18 @@ void kernel_main() {
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = kScratchpadBytes}};
-    // enqueue_invariant so the UPDATE phase may omit it (retaining its bound tensor) — exercises the
-    // "invariant tensor retained across partial update" path. dynamic_tensor_shape widens the binding to
+    // The UPDATE phase omits this tensor (retaining its bound tensor) — exercises the
+    // "omitted tensor retained across partial update" path. dynamic_tensor_shape widens the binding to
     // two CRTA words (base + aligned_page_size) — the multi-word binding this test exists to stress.
     spec.tensor_parameters = {TensorParameter{
         .unique_id = TensorParamName{"io"},
         .spec = tensor_spec,
-        .advanced_options = TensorParameterAdvancedOptions{.enqueue_invariant = true, .dynamic_tensor_shape = true}}};
+        .advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true}}};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"producer", "consumer"})};
 
     Program program = MakeProgramFromSpec(*mesh_device, spec);
 
-    // Consumer's per-node RTAs (re-supplied on every set/update — they are not enqueue-invariant).
+    // Consumer's per-node RTAs (re-supplied on every set/update in this test).
     auto consumer_args = [&]() {
         return ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"consumer"},
@@ -1177,7 +1177,7 @@ void kernel_main() {
         << "partial update: vararg 0 landed at the wrong offset — the vararg base must be "
            "named + tensor-binding(2 words) + scratchpad section words (the A1 sum with a multi-word binding).";
     EXPECT_EQ(u[5], kVararg1Upd) << "partial update: vararg 1 landed at the wrong offset";
-    // Not touched by this update — the invariant tensor's binding (both words) and the scratchpad must survive.
+    // Not touched by this update — the omitted tensor's binding (both words) and the scratchpad must survive.
     EXPECT_EQ(u[2], tensor_base) << "tensor-binding base slot was clobbered by the named/vararg partial update";
     EXPECT_EQ(u[6], kExpectedPageSize) << "tensor-binding page-size slot was clobbered by the partial update";
     EXPECT_EQ(u[3], scratch_base) << "scratchpad slot was clobbered by the named/vararg partial update";
