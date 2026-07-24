@@ -159,7 +159,7 @@ class SineGen(nn.Module):
     harmonic_num: number of harmonic overtones (default 0)
     sine_amp: amplitude of sine-wavefrom (default 0.1)
     noise_std: std of Gaussian noise (default 0.003)
-    voiced_thoreshold: F0 threshold for U/V classification (default 0)
+    voiced_threshold: F0 threshold for U/V classification (default 0)
     flag_for_pulse: this SinGen is used inside PulseGen (default False)
     Note: when flag_for_pulse is True, the first time step of a voiced
         segment is always sin(torch.pi) or cos(0)
@@ -194,14 +194,14 @@ class SineGen(nn.Module):
         """f0_values: (batchsize, length, dim)
         where dim indicates fundamental tone and overtones
         """
-        # convert to F0 in rad. The interger part n can be ignored
+        # convert to F0 in rad. The integer part n can be ignored
         # because 2 * torch.pi * n doesn't affect phase
         rad_values = (f0_values / self.sampling_rate) % 1
         # initial phase noise (no noise for fundamental component)
         rand_ini = torch.rand(f0_values.shape[0], f0_values.shape[2], device=f0_values.device)
         rand_ini[:, 0] = 0
         rad_values[:, 0, :] = rad_values[:, 0, :] + rand_ini
-        # instantanouse phase sine[t] = sin(2*pi \sum_i=1 ^{t} rad)
+        # instantaneous phase sine[t] = sin(2*pi \sum_i=1 ^{t} rad)
         if not self.flag_for_pulse:
             rad_values = F.interpolate(
                 rad_values.transpose(1, 2), scale_factor=1 / self.upsample_scale, mode="linear"
@@ -220,7 +220,7 @@ class SineGen(nn.Module):
             uv_1 = torch.roll(uv, shifts=-1, dims=1)
             uv_1[:, -1, :] = 1
             u_loc = (uv < 1) * (uv_1 > 0)
-            # get the instantanouse phase
+            # get the instantaneous phase
             tmp_cumsum = torch.cumsum(rad_values, dim=1)
             # different batch needs to be processed differently
             for idx in range(f0_values.shape[0]):
@@ -244,14 +244,11 @@ class SineGen(nn.Module):
         output sine_tensor: tensor(batchsize=1, length, dim)
         output uv: tensor(batchsize=1, length, 1)
         """
-        f0_buf = torch.zeros(f0.shape[0], f0.shape[1], self.dim, device=f0.device)
         # fundamental component
         fn = torch.multiply(f0, torch.FloatTensor([[range(1, self.harmonic_num + 2)]]).to(f0.device))
         # generate sine waveforms
         sine_waves = self._f02sine(fn) * self.sine_amp
         # generate uv signal
-        # uv = torch.ones(f0.shape)
-        # uv = uv * (f0 > self.voiced_threshold)
         uv = self._f02uv(f0)
         # noise: for unvoiced should be similar to sine_amp
         #        std = self.sine_amp/3 -> max value ~ self.sine_amp
@@ -267,14 +264,14 @@ class SineGen(nn.Module):
 class SourceModuleHnNSF(nn.Module):
     """SourceModule for hn-nsf
     SourceModule(sampling_rate, harmonic_num=0, sine_amp=0.1,
-                 add_noise_std=0.003, voiced_threshod=0)
+                 add_noise_std=0.003, voiced_threshold=0)
     sampling_rate: sampling_rate in Hz
     harmonic_num: number of harmonic above F0 (default: 0)
     sine_amp: amplitude of sine source signal (default: 0.1)
     add_noise_std: std of additive Gaussian noise (default: 0.003)
         note that amplitude of noise in unvoiced is decided
         by sine_amp
-    voiced_threshold: threhold to set U/V given F0 (default: 0)
+    voiced_threshold: threshold to set U/V given F0 (default: 0)
     Sine_source, noise_source = SourceModuleHnNSF(F0_sampled)
     F0_sampled (batchsize, length, 1)
     Sine_source (batchsize, length, 1)
@@ -283,13 +280,13 @@ class SourceModuleHnNSF(nn.Module):
     """
 
     def __init__(
-        self, sampling_rate, upsample_scale, harmonic_num=0, sine_amp=0.1, add_noise_std=0.003, voiced_threshod=0
+        self, sampling_rate, upsample_scale, harmonic_num=0, sine_amp=0.1, add_noise_std=0.003, voiced_threshold=0
     ):
         super(SourceModuleHnNSF, self).__init__()
         self.sine_amp = sine_amp
         self.noise_std = add_noise_std
         # to produce sine waveforms
-        self.l_sin_gen = SineGen(sampling_rate, upsample_scale, harmonic_num, sine_amp, add_noise_std, voiced_threshod)
+        self.l_sin_gen = SineGen(sampling_rate, upsample_scale, harmonic_num, sine_amp, add_noise_std, voiced_threshold)
         # to merge source harmonics into a single excitation
         self.l_linear = nn.Linear(harmonic_num + 1, 1)
         self.l_tanh = nn.Tanh()
@@ -330,7 +327,7 @@ class Generator(nn.Module):
             sampling_rate=24000,
             upsample_scale=math.prod(upsample_rates) * gen_istft_hop_size,
             harmonic_num=8,
-            voiced_threshod=10,
+            voiced_threshold=10,
         )
         self.f0_upsamp = nn.Upsample(scale_factor=math.prod(upsample_rates) * gen_istft_hop_size)
         self.noise_convs = nn.ModuleList()

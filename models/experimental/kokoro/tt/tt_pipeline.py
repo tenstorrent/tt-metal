@@ -200,7 +200,14 @@ class TTPipeline:
 
             # --- voice pack style selection (only torch op in inference path) ---
             # pack shape: [N_styles, style_dim]; select row for this phoneme count.
-            ref_s = pack[len(ps) - 1].cpu().float()
+            style_idx = len(ps) - 1
+            if not 0 <= style_idx < len(pack):
+                raise ValueError(
+                    f"Voice pack {voice!r} has {len(pack)} style rows but this chunk has {len(ps)} "
+                    f"phonemes (needs row index {style_idx}); the G2P split should keep chunks within "
+                    f"the pack size — tighten split_pattern or shorten the input."
+                )
+            ref_s = pack[style_idx].cpu().float()
             if ref_s.dim() == 1:
                 ref_s = ref_s.unsqueeze(0)
 

@@ -89,7 +89,7 @@ def _make_ref(*, sampling_rate, upsample_scale, harmonic_num, sine_amp=0.1, nois
         harmonic_num=harmonic_num,
         sine_amp=sine_amp,
         add_noise_std=noise_std,
-        voiced_threshod=voiced_threshold,
+        voiced_threshold=voiced_threshold,
     ).eval()
 
 

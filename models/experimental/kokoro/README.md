@@ -171,8 +171,9 @@ pip install -r models/experimental/kokoro/requirements.txt
 # espeak-ng must be on PATH for grapheme-to-phoneme (G2P)
 ```
 
-Place a local `kokoro-v1_0.pth` checkpoint or let `KModel` download from HuggingFace; override
-auto-detection with `--checkpoint /path/to/kokoro-v1_0.pth`.
+Place a local `kokoro-v1_0.pth` checkpoint or let `KModel` download from HuggingFace. Checkpoint
+resolution order: `--checkpoint /path/to/kokoro-v1_0.pth` → the `KOKORO_CHECKPOINT` env var (a file
+or a directory to scan) → the HuggingFace hub cache → download from HuggingFace.
 
 ## Sequence-length support
 
@@ -200,9 +201,9 @@ loop; the program cache (`device.enable_program_cache()`) removes cold host-side
 
 ### ISL sweep (Blackhole, `af_heart`, seed 0, deterministic)
 
-Measured by `perf/isl_sweep.py` (`KOKORO_ISL_TRACE=1`, capture→release per length). **`warm (s)`** is the
-metal-trace **replay** latency — the steady-state per-chunk cost once the trace is captured; **`cold (s)`**
-is the one-time first-forward capture (kernel compile + eager warmup + host prosody loop).
+Measured latency by input phoneme length (one trace captured then released per length). **`warm (s)`**
+is the metal-trace **replay** latency — the steady-state per-chunk cost once the trace is captured;
+**`cold (s)`** is the one-time first-forward capture (kernel compile + eager warmup + host prosody loop).
 
 | phonemes | audio (s) | warm-replay (s) | RTF (warm) | cold-capture (s) | trace speedup |
 |:--------:|:---------:|:---------------:|:----------:|:----------------:|:-------------:|
@@ -284,7 +285,7 @@ Known exceptions (documented, not regressions) are listed under [Limitations](#l
 | `test_tt_torch_stft_pcc.py` | STFT (torch formulation) fwd/inverse/round-trip | > 0.99 (recon) |
 | `test_tt_custom_stft_pcc.py` | on-device CustomSTFT (conv2d/conv_transpose2d) | > 0.99 (recon) |
 | `test_tt_kokoro_reference_math_pcc.py` | math-decomposed ops with Kokoro weights | > 0.99 |
-| `test_tt_kmodel_trace_e2e.py` / `_two_trace_e2e.py` / `_two_trace_faithful.py` | E2E trace orchestration & eager parity | equal |
+| `test_tt_kmodel_trace_e2e.py` / `_two_trace_e2e.py` | E2E trace orchestration & eager parity | equal |
 | `test_tt_trace_manager.py` | TraceManager capture-once / replay-new-inputs | equal |
 | `test_tt_kmodel_pcc_degradation.py` | proof: deficit needs CPU fallbacks (phase dominant) | assertions |
 | `test_sinegen_phase_fallback_proof.py` | proof: phase fallback required at Kokoro scale | assertions |
@@ -370,6 +371,19 @@ in the ~0.97–0.99 band (matching the quality table).
 - **On-device STFT** — `--disable-complex` / `use_custom_stft` runs a pure conv2d/conv_transpose2d
   STFT (`tt/tt_custom_stft.py`) with no fallback anywhere.
 - **Deterministic RNG** — tracing forces the deterministic source-noise path so replays are exact.
+
+## Environment variables
+
+| variable | scope | values (default) | effect |
+|----------|-------|------------------|--------|
+| `KOKORO_CHECKPOINT` | demo | path or dir (unset) | checkpoint auto-detect override — a `kokoro-v1_0.pth` file or a directory to scan; see [Installation](#installation) |
+| `KOKORO_TRACE_A` | runtime (`TTKModel`) | `1` (unset = off) | enable the two-trace path (Trace A prosody+ASR on CQ0 + decoder Trace B on CQ1); requires `trace=True` and a 2-command-queue device |
+| `KOKORO_STFT_PHASE_ZERO_FLOOR` | runtime (`TTTorchSTFT`) | float (`1e-8`) | magnitude floor below which a near-zero STFT bin's (ill-conditioned) phase is treated as zero |
+| `KOKORO_TRACE_DEBUG` | runtime (`TraceManager`) | `1` (unset = off) | print `[TM]` trace capture/replay debug lines |
+| `KOKORO_GEN_L1` | tests | `1` (unset = off) | keep the generator upsample/resblock loop L1-resident in the generator/decoder/trace tests (test analog of the demo's `--l1-activations`) |
+| `KOKORO_PROSODY_DIMS` | tests | `small` (default) / `prod` | `test_tt_prosody_predictor_pcc`: `prod` uses the real Kokoro-82M dims instead of small bring-up dims |
+| `KOKORO_PCC_DEBUG_MODE` | tests | unset / `stft` / `phase` / `both` / `full` | `test_tt_kmodel_pcc`: after the no-fallback assertion, run one extra PCC with the named CPU fallback(s) enabled (degradation debugging) |
+| `KOKORO_TRACE_WAV` | tests | `1` / `0` / path (test-dependent) | trace E2E tests: write the replay audio to WAV; `0` disables, a path sets the output location |
 
 ## Numerical accuracy & CPU fallbacks
 

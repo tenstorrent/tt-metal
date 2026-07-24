@@ -902,6 +902,7 @@ def tt_bilstm_nlc(
             program_config=recur_pc,
             out_dtype=out_dtype_step,
         )
+        ttnn.deallocate(gxt)  # gate row consumed by the step (bias/add); not read again
         # Forward padding is a *suffix* (t >= length): once a row is padded it never returns to a
         # valid position, and batch rows don't mix (per-row recurrence). So a padded row's evolving
         # state is never read by any valid output — the state needs no freeze; only the output at
@@ -914,6 +915,7 @@ def tt_bilstm_nlc(
             outs_f.append(ttnn.multiply(vt_b1, h_new, memory_config=step_mc))
         else:
             outs_f.append(h_f)
+    ttnn.deallocate(c_f)  # final forward cell state — not read after the loop (h_f lives in outs_f)
 
     h_b = h0
     c_b = c0
@@ -931,6 +933,7 @@ def tt_bilstm_nlc(
             program_config=recur_pc,
             out_dtype=out_dtype_step,
         )
+        ttnn.deallocate(gxt)  # gate row consumed by the step; not read again
         if valid_all is not None and t >= min_len:
             # Reverse hits the suffix padding *first*, so the recurrent state is still 0 across the
             # whole padded region (it starts at 0 and each padded step multiplies it back to 0).
@@ -950,6 +953,9 @@ def tt_bilstm_nlc(
         ttnn.deallocate(valid_all)
     ttnn.deallocate(gx_fwd)
     ttnn.deallocate(gx_rev)
+    ttnn.deallocate(c_b)  # final reverse cell state — not read after the loop (h_b lives in outs_b_rev)
+    ttnn.deallocate(h0)  # initial states consumed by BOTH passes; free now that both loops are done
+    ttnn.deallocate(c0)
     for _w in l1_weights:  # free the transient L1 w_h copies (no persistent L1 footprint leaks)
         ttnn.deallocate(_w)
 
@@ -962,7 +968,11 @@ def tt_bilstm_nlc(
     # drops the trailing permute too. Pure data movement (bit-identical).
     def _stack_time(outs):
         cat = ttnn.concat(outs, dim=-1)  # [B, L*H]
-        return ttnn.reshape(cat, [B, L, H], memory_config=memory_config)  # [B, L, H]
+        hs = ttnn.reshape(cat, [B, L, H], memory_config=memory_config)  # [B, L, H]
+        ttnn.deallocate(cat)  # concat copied the data; the intermediate is dead after the reshape
+        for _o in outs:  # per-timestep outputs are now owned by hs — free the L step tensors
+            ttnn.deallocate(_o)
+        return hs
 
     hs_f = _stack_time(outs_f)
     hs_b = _stack_time(outs_b)

@@ -203,13 +203,6 @@ def maybe_to_memory_config(x: ttnn.Tensor, mc: ttnn.MemoryConfig) -> tuple[ttnn.
     return out, out is not x
 
 
-def activation_interleaved_mc(activ_mc: ttnn.MemoryConfig) -> ttnn.MemoryConfig:
-    """Interleaved counterpart of an activation memory config (typecast requires matching layout)."""
-    if activ_mc.buffer_type == ttnn.BufferType.L1:
-        return ttnn.L1_MEMORY_CONFIG
-    return ttnn.DRAM_MEMORY_CONFIG
-
-
 def maybe_reshard_to_caller(x: ttnn.Tensor, caller_mc: ttnn.MemoryConfig) -> ttnn.Tensor:
     """Convert a one-shot width-sharded matmul result back to the caller layout."""
     cur = x.memory_config()

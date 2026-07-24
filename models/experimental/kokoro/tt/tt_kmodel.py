@@ -357,10 +357,13 @@ class TTKModel:
         deterministic: bool = False,
     ) -> "TTKModel.Output":
         input_ids_list = list(filter(lambda i: i is not None, map(lambda p: self.vocab.get(p), phonemes)))
-        assert len(input_ids_list) + 2 <= self.context_length, (
-            len(input_ids_list) + 2,
-            self.context_length,
-        )
+        n_tokens = len(input_ids_list) + 2  # + BOS/EOS
+        if n_tokens > self.context_length:
+            raise ValueError(
+                f"Input too long: {n_tokens} tokens (incl. BOS/EOS) exceed the model context length "
+                f"{self.context_length}; use at most {self.context_length - 2} in-vocab phonemes per "
+                f"chunk (chunk the text at sentence boundaries)."
+            )
         input_ids = torch.LongTensor([[0, *input_ids_list, 0]])
 
         ref_s = ref_s.cpu()
@@ -399,11 +402,23 @@ class TTKModel:
     __call__ = forward
 
     def release_traces(self) -> None:
-        """Release captured metal traces + persistent buffers. Call before closing the device."""
+        """Release captured metal traces + persistent buffers AND the per-bucket decoder cache.
+
+        Call before closing the device, or periodically in a long-lived service to reclaim memory:
+        ``_decoder_cache`` holds one full ``TTDecoder`` (device weights) per distinct mel-length bucket
+        seen, so it grows with input-length variety and must be reclaimable.
+
+        Order matters — traces are released FIRST: a captured decoder trace reads its decoder's weights
+        at fixed device addresses, and ``TraceManager.release()`` also clears the trace-prep weight cache
+        that holds the prepared conv-weight copies. Only once both are gone is it safe to drop the
+        decoder references, at which point ttnn frees each weight buffer on ``__del__`` (refcount).
+        """
         if self._trace_mgr is not None:
             self._trace_mgr.release()
         if self._trace_mgr_a is not None:
             self._trace_mgr_a.release()
+        # Drop the per-bucket decoders; buffers free via refcount now that no trace references them.
+        self._decoder_cache.clear()
 
     # ------------------------------------------------------------------
     # Internal on-device forward

@@ -87,8 +87,12 @@ def _strip_weight_norm(m: nn.Module) -> None:
         return
     try:
         nn.utils.remove_weight_norm(m, "weight")
-    except ValueError:
-        pass
+    except ValueError as e:
+        # remove_weight_norm raises ValueError only when no weight_norm hook is registered (the
+        # module simply isn't weight-normed) — that case is expected and skippable. Re-raise any
+        # other ValueError so a malformed checkpoint surfaces instead of being silently swallowed.
+        if "not found" not in str(e):
+            raise
 
 
 def _conv1d_to_tt_params(conv: nn.Conv1d, *, weights_dtype) -> TTConv1dParams:

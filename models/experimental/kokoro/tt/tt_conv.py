@@ -35,13 +35,10 @@ import ttnn
 # (verified PCC = 1.0 for both conv1d and conv_transpose2d), so this changes only *where* the weight
 # prep happens, never the math.  Default OFF: every existing (non-traced) caller is untouched.
 #
-# The enable flag + cache are shared across Kokoro modules (see tt_trace_prep); re-exported here so
-# existing ``from tt_conv import set_trace_weight_prep`` call sites keep working.
+# The enable flag + cache are shared across Kokoro modules (see tt_trace_prep).
 from .tt_trace_prep import (  # noqa: E402
-    clear_trace_weight_prep_cache,
     prep_cache_get as _prep_cache_get,
     prep_cache_set as _prep_cache_set,
-    set_trace_weight_prep,
     trace_weight_prep_enabled as _trace_weight_prep_enabled,
     traced_zeros as _traced_zeros,
 )

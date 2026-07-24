@@ -13,6 +13,7 @@ Run from the ``tt-metal`` repo root with this tree's venv (matches the local ``t
 from __future__ import annotations
 
 import argparse
+import os
 import time
 from pathlib import Path
 
@@ -24,10 +25,17 @@ import ttnn
 
 
 def _find_local_checkpoint() -> Path | None:
-    candidates = (
-        Path("/home/ubuntu/ign-tt/kokoro/examples/checkpoints/kokoro-v1_0.pth"),
-        Path.home() / ".cache/huggingface/hub/models--hexgrad--Kokoro-82M/snapshots",
-    )
+    """Locate a local ``kokoro-v1_0.pth`` without hardcoding a machine-specific path.
+
+    Search order: the ``KOKORO_CHECKPOINT`` env var (a file, or a directory to scan), then the
+    HuggingFace hub cache. Returns ``None`` if nothing is found, in which case ``KModel`` downloads
+    from HuggingFace. Use ``--checkpoint`` to point at an explicit path.
+    """
+    candidates: list[Path] = []
+    env_ckpt = os.environ.get("KOKORO_CHECKPOINT")
+    if env_ckpt:
+        candidates.append(Path(env_ckpt).expanduser())
+    candidates.append(Path.home() / ".cache/huggingface/hub/models--hexgrad--Kokoro-82M/snapshots")
     for path in candidates:
         if path.is_file():
             return path
@@ -149,12 +157,12 @@ def main() -> int:
         l1_small_size=int(args.l1_small_size),
         trace_region_size=int(args.trace_region_size) if args.trace else 0,
     )
-    # Reuse compiled programs across identical-shape op calls (the prosody LSTM alone dispatches
-    # the same gate matmuls ~T_tokens times per direction). Without this every call rebuilds the
-    # program host-side — a large slice of cold latency. Safe/standard; identical numerics.
-    device.enable_program_cache()
     model = None
     try:
+        # Reuse compiled programs across identical-shape op calls (the prosody LSTM alone dispatches
+        # the same gate matmuls ~T_tokens times per direction). Without this every call rebuilds the
+        # program host-side — a large slice of cold latency. Safe/standard; identical numerics.
+        device.enable_program_cache()
         checkpoint = Path(args.checkpoint).expanduser() if args.checkpoint else _find_local_checkpoint()
         if args.checkpoint and (checkpoint is None or not checkpoint.is_file()):
             logger.error(f"Checkpoint not found: {args.checkpoint}")

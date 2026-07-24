@@ -136,15 +136,3 @@ class KModel(torch.nn.Module):
         pred_dur = pred_dur.cpu() if pred_dur is not None else None
         logger.debug(f"pred_dur: {pred_dur}")
         return self.Output(audio=audio, pred_dur=pred_dur) if return_output else audio
-
-
-class KModelForONNX(torch.nn.Module):
-    def __init__(self, kmodel: KModel):
-        super().__init__()
-        self.kmodel = kmodel
-
-    def forward(
-        self, input_ids: torch.LongTensor, ref_s: torch.FloatTensor, speed: float = 1
-    ) -> tuple[torch.FloatTensor, torch.LongTensor]:
-        waveform, duration = self.kmodel.forward_with_tokens(input_ids, ref_s, speed)
-        return waveform, duration

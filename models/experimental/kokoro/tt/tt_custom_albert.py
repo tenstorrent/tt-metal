@@ -119,45 +119,6 @@ _T64_LINEAR_TUNING: dict[str, tuple[tuple[int, int], int]] = {
 }
 
 
-def _grids_for_cores(cores: int, gx_max: int, gy_max: int) -> list[tuple[int, int]]:
-    out: list[tuple[int, int]] = []
-    for gx in range(1, gx_max + 1):
-        if cores % gx:
-            continue
-        gy = cores // gx
-        if gy <= gy_max:
-            out.append((gx, gy))
-    return out
-
-
-def _pick_1d_in0_grid(
-    device: ttnn.Device,
-    *,
-    n: int,
-    preferred: tuple[int, int] | None,
-) -> tuple[int, int]:
-    """Divisor-legal (gx, gy) for 1D_in0 (cores must divide N-tiles)."""
-    tile = ttnn.TILE_SIZE
-    nt = n // tile
-    grid = device.compute_with_storage_grid_size()
-    gx_max, gy_max = int(grid.x), int(grid.y)
-    max_cores = gx_max * gy_max
-
-    if preferred is not None:
-        px, py = preferred
-        if px <= gx_max and py <= gy_max and px * py <= max_cores and nt % (px * py) == 0:
-            return preferred
-
-    cands: set[tuple[int, int]] = set()
-    for c in range(min(nt, max_cores), 0, -1):
-        if nt % c:
-            continue
-        cands.update(_grids_for_cores(c, gx_max, gy_max))
-    if not cands:
-        return 1, 1
-    return max(cands, key=lambda g: (g[0] * g[1], g[0]))
-
-
 def _ws_out_mem_config() -> ttnn.MemoryConfig:
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
 
