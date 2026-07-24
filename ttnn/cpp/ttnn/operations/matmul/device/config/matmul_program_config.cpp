@@ -30,7 +30,7 @@ bool is_narrow_shape(uint32_t height, uint32_t width, bool all_dram) {
     uint32_t height_width_ratio = (height > width) ? height / width : width / height;
 
     // Check if tensor is actually narrow and will benefit from 1D config
-    if (height_width_ratio > NARROW_SHAPE_RATIO_THRESHOLD) {
+    if (height_width_ratio >= NARROW_SHAPE_RATIO_THRESHOLD) {
         return true;
     }
 
