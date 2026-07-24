@@ -376,6 +376,17 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                     // before we publish tc_init_done.
                     while (overlay::llk_intf_get_capacity(tensix_id, tc_id) != init_ptr->capacity) {
                     }
+                    // [#48552 DEBUG] Pair with RBFAIL. Prints the GLOBAL dfb id + the PHYSICAL (tensix,tc) this
+                    // program's init wrote + the confirmed read-back capacity. If DFBINIT shows gid=0 (cb_in0)
+                    // -> (0,0)=224 yet RBFAIL then reads (0,0)=28, some OTHER program overwrote (0,0) after
+                    // init (cross-program race). If DFBINIT maps cb_in0 to a DIFFERENT (tensix,tc) than the
+                    // reader's (0,0), the g_dfb_interface tc mapping is wrong (config vs interface mismatch).
+                    DPRINT(
+                        "DFBINIT gid={} tensix={} tc={} cap={}\n",
+                        (uint32_t)init_ptr->logical_id,
+                        (uint32_t)tensix_id,
+                        (uint32_t)tc_id,
+                        (uint32_t)overlay::llk_intf_get_capacity(tensix_id, tc_id));
 #endif
                 }
                 // [#48552 FIX] The tile-counter capacity is written just above via overlay MMIO register
