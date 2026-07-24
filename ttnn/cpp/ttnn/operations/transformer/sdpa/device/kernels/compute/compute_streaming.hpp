@@ -2501,6 +2501,16 @@ void sdpa_ring_v2(
         // writer/reader use to flatten (batch, head, q_chunk) — see ring_joint_sdpa.cpp.
         uint32_t q_chunk = remap_q_index(q, num_q_chunks, use_zigzag_balancing) % num_q_chunks;
 
+        // Debug (iter 0 only): emit compute's RAW sparse_feature_mask + q_work_bitmap word.
+        // Encoding: 0xBB <mask8> <q_chunk8> <bitmap8>. Compare against the writer's 0x88 marker.
+        if constexpr (sparse_frames_enabled) {
+            if (ring_iter == 0) {
+                SPARSE_DBG_PUSH(
+                    0xBB000000u | ((sparse_feature_mask & 0xFFu) << 16) | ((q_chunk & 0xFFu) << 8) |
+                    (q_work_bitmap[q_chunk] & 0xFFu));
+            }
+        }
+
         // Causal K-chunk limit and Q start tile for this Q chunk
         uint32_t causal_k_limit = num_kv_chunks;
         uint32_t q_start_tile = 0;

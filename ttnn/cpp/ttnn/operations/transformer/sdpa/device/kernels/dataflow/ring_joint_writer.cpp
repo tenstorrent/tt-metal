@@ -499,9 +499,15 @@ void kernel_main() {
     // chunk has zero attended K chunks — otherwise compute's zero-work fast path (which skips
     // consuming cb_prev_out and skips pushing cb_out) leaves the writer stuck on cb_reserve_back
     // (restore-side) or cb_wait_front (save-side).
-    constexpr uint32_t sparse_frames_enabled = get_compile_time_arg_val(cb_arg_offset + 15);
-    constexpr uint32_t sparse_frame_seqlen_tiles = get_compile_time_arg_val(cb_arg_offset + 16);
-    constexpr uint32_t sparse_num_frames_padded = get_compile_time_arg_val(cb_arg_offset + 17);
+    // The host appends the full 23-entry CB compile-time-arg block (cb_q_in .. cb_exp_max_diff)
+    // before the sparse flags, so these live at cb_arg_offset + 23/24/25 — matching the compute
+    // kernel (get_compile_time_arg_val(72..74) with its cb_arg_offset of 49). The writer only
+    // *reads* the first 15 CB slots it needs, but the block still occupies 23 slots; reading the
+    // sparse flags at +15 (the old value) returned cb_qk_im's CB id (!= 1) as sparse_frames_enabled,
+    // silently compiling the writer's dense path so it ignored q_work_bitmap and deadlocked.
+    constexpr uint32_t sparse_frames_enabled = get_compile_time_arg_val(cb_arg_offset + 23);
+    constexpr uint32_t sparse_frame_seqlen_tiles = get_compile_time_arg_val(cb_arg_offset + 24);
+    constexpr uint32_t sparse_num_frames_padded = get_compile_time_arg_val(cb_arg_offset + 25);
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t stats_tile_bytes = get_tile_size(cb_max_in);
@@ -785,6 +791,18 @@ void kernel_main() {
                 const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
                 const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
                 const uint32_t q_chunk = global_q_chunk % num_q_chunks;
+
+                // Debug (iter 0 only): emit the writer's RAW sparse_feature_mask + q_work_bitmap word.
+                // Encoding: 0x88 <mask8> <q_chunk8> <bitmap8>. If this differs from compute's 0xBB
+                // marker, the writer's runtime args are still misaligned; if they match but the bitmap
+                // byte is "all active iters", the host bitmap is over-marking (dense).
+                if constexpr (sparse_frames_enabled == 1) {
+                    if (ring_iter == 0) {
+                        WATCHER_RING_BUFFER_PUSH(
+                            0x88000000u | ((sparse_feature_mask & 0xFFu) << 16) | ((q_chunk & 0xFFu) << 8) |
+                            (q_work_bitmap[q_chunk] & 0xFFu));
+                    }
+                }
 
                 const bool balanced_skip_q = q_chunk < half_sequence && is_balanced && ring_index < ring_id;
 
