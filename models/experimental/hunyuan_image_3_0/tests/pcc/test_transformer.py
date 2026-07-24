@@ -45,9 +45,9 @@ from models.experimental.hunyuan_image_3_0.ref.weights import (
     load_prefixed_state_dict,
     resolve_base_model_dir,
 )
-from models.experimental.hunyuan_image_3_0.tt.cache import cache_dir_is_set, transformer_cache_dir
-from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel
-from models.experimental.hunyuan_image_3_0.tt.transformer_layer import HunyuanTtDecoderLayer
+from models.experimental.hunyuan_image_3_0.ttnn.cache import cache_dir_is_set, transformer_cache_dir
+from models.experimental.hunyuan_image_3_0.ttnn.model import HunyuanTtModel
+from models.experimental.hunyuan_image_3_0.ttnn.transformer_layer import HunyuanTtDecoderLayer
 from models.tt_dit.parallel.manager import CCLManager
 from mesh_helpers import (
     build_mesh_model,
@@ -478,7 +478,7 @@ def test_decoder_layer_isl_sweep_table(device, tmp_path):
 @pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
 def test_mesh_reshard_roundtrip(mesh_device):
     """sp_shard then sp_gather round-trip == identity."""
-    from models.experimental.hunyuan_image_3_0.tt.parallel_utils import sp_gather, sp_shard
+    from models.experimental.hunyuan_image_3_0.ttnn.parallel_utils import sp_gather, sp_shard
 
     mesh_device.enable_program_cache()
     ccl = mesh_ccl(mesh_device)

@@ -9,10 +9,10 @@ from __future__ import annotations
 import torch
 import ttnn
 
-from models.experimental.hunyuan_image_3_0.tt.image_gen.patch_embed import HunyuanTtUNetDown
-from models.experimental.hunyuan_image_3_0.tt.image_gen.sequence_scatter import mask_to_spans, scatter_token_spans
-from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
-from models.experimental.hunyuan_image_3_0.tt.vae.cond_posterior import latent_bthwc_to_patch_input
+from models.experimental.hunyuan_image_3_0.ttnn.image_gen.patch_embed import HunyuanTtUNetDown
+from models.experimental.hunyuan_image_3_0.ttnn.image_gen.sequence_scatter import mask_to_spans, scatter_token_spans
+from models.experimental.hunyuan_image_3_0.ttnn.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
+from models.experimental.hunyuan_image_3_0.ttnn.vae.cond_posterior import latent_bthwc_to_patch_input
 
 
 def _mask_row(mask, row: int) -> list:

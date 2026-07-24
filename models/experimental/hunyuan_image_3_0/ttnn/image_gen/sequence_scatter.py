@@ -36,7 +36,7 @@ def scatter_token_spans(
 ) -> ttnn.Tensor:
     """Inject ``(slice, [B,n,H])`` token blocks into ``hidden`` ``[B,S,H]`` on device."""
     # Deferred: avoids circular import with cond_instantiate / vision.i2i_bundle.
-    from models.experimental.hunyuan_image_3_0.tt.vision.inject import (
+    from models.experimental.hunyuan_image_3_0.ttnn.vision.inject import (
         scatter_cond_vision_embeddings_multi,
     )
 

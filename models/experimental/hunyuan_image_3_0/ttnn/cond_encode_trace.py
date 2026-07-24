@@ -13,10 +13,10 @@ import time
 import torch
 import ttnn
 
-from models.experimental.hunyuan_image_3_0.tt.ar_dual_cq import COMPUTE_CQ
-from models.experimental.hunyuan_image_3_0.tt.stage_trace import Trace2CQIO
-from models.experimental.hunyuan_image_3_0.tt.trace_config import cond_encode_trace_enabled
-from models.experimental.hunyuan_image_3_0.tt.vision.siglip2 import (
+from models.experimental.hunyuan_image_3_0.ttnn.ar_dual_cq import COMPUTE_CQ
+from models.experimental.hunyuan_image_3_0.ttnn.stage_trace import Trace2CQIO
+from models.experimental.hunyuan_image_3_0.ttnn.trace_config import cond_encode_trace_enabled
+from models.experimental.hunyuan_image_3_0.ttnn.vision.siglip2 import (
     Siglip2VisionInputs,
     build_siglip2_attention_mask,
     forward_vision_with_aligner,

@@ -17,10 +17,10 @@ import ttnn
 from models.experimental.hunyuan_image_3_0.ref.attention.mask import build_attention_mask, to_additive
 from models.experimental.hunyuan_image_3_0.ref.image_gen.timestep_embedder import TimestepEmbedder as RefTimeEmbed
 from models.experimental.hunyuan_image_3_0.ref.weights import ensure_base_weights
-from models.experimental.hunyuan_image_3_0.tt.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
-from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
-from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel
-from models.experimental.hunyuan_image_3_0.tt.pipeline import HunyuanTtDenoiseStep
+from models.experimental.hunyuan_image_3_0.ttnn.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
+from models.experimental.hunyuan_image_3_0.ttnn.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
+from models.experimental.hunyuan_image_3_0.ttnn.model import HunyuanTtModel
+from models.experimental.hunyuan_image_3_0.ttnn.pipeline import HunyuanTtDenoiseStep
 from models.tt_dit.parallel.manager import CCLManager
 
 REGION_SIGNPOSTS: dict[str, tuple[str, str]] = {

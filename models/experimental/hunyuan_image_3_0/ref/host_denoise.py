@@ -17,7 +17,7 @@ from models.experimental.hunyuan_image_3_0.ref.image_gen.patch_embed import UNet
 from models.experimental.hunyuan_image_3_0.ref.image_gen.timestep_embedder import TimestepEmbedder as RefTimeEmbed
 from models.experimental.hunyuan_image_3_0.ref.tokenizer.gen_image_inputs import scatter_distill_step_embeds
 from models.experimental.hunyuan_image_3_0.ref.transformer_layer import HunyuanImage3DecoderLayer as RefLayer
-from models.experimental.hunyuan_image_3_0.tt.scheduler import HunyuanTtScheduler
+from models.experimental.hunyuan_image_3_0.ttnn.scheduler import HunyuanTtScheduler
 
 
 def _model_cfg(model_dir: Path) -> dict[str, Any]:

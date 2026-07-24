@@ -42,10 +42,10 @@ from models.experimental.hunyuan_image_3_0.ref.attention.rope_2d import (
     build_batch_2d_rope,
 )
 from models.experimental.hunyuan_image_3_0.ref.weights import load_tensors, resolve_base_model_dir
-from models.experimental.hunyuan_image_3_0.tt.attention.attention import HunyuanTtAttention
-from models.experimental.hunyuan_image_3_0.tt.attention.mask import _NEG, build_attention_mask_tt
-from models.experimental.hunyuan_image_3_0.tt.attention.rms_norm import HunyuanTtRMSNorm
-from models.experimental.hunyuan_image_3_0.tt.attention.rope_2d import HunyuanTtRoPE2D
+from models.experimental.hunyuan_image_3_0.ttnn.attention.attention import HunyuanTtAttention
+from models.experimental.hunyuan_image_3_0.ttnn.attention.mask import _NEG, build_attention_mask_tt
+from models.experimental.hunyuan_image_3_0.ttnn.attention.rms_norm import HunyuanTtRMSNorm
+from models.experimental.hunyuan_image_3_0.ttnn.attention.rope_2d import HunyuanTtRoPE2D
 from pcc_common import (
     BATCH_CASE,
     LEAN_ISL_CASES,

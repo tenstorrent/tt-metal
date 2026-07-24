@@ -10,7 +10,7 @@ from typing import Any
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.experimental.hunyuan_image_3_0.ref.vae.decoder import LATENT_H, LATENT_T, LATENT_W
-from models.experimental.hunyuan_image_3_0.tt.vae.conv3d_blockings import register_hunyuan_conv3d_blockings
+from models.experimental.hunyuan_image_3_0.ttnn.vae.conv3d_blockings import register_hunyuan_conv3d_blockings
 from models.tt_dit.layers.audio_ops import prepare_conv3d_weight_state
 from models.tt_dit.layers.module import Module, Parameter
 from models.tt_dit.utils.conv3d import (

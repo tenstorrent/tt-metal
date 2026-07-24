@@ -69,7 +69,7 @@ from models.experimental.hunyuan_image_3_0.tests.pcc.vae_helpers import (
     upload_bcthw,
     upload_bcthw_spatial,
 )
-from models.experimental.hunyuan_image_3_0.tt.vae.encoder import VAEEncoderTTNN
+from models.experimental.hunyuan_image_3_0.ttnn.vae.encoder import VAEEncoderTTNN
 
 
 def _env_int(name: str, default: int) -> int:
@@ -186,7 +186,7 @@ def _profile_encoder_forward(
 
     mesh_device.enable_program_cache()
 
-    from models.experimental.hunyuan_image_3_0.tt.vae.spatial import encoder_w_spatial_enabled
+    from models.experimental.hunyuan_image_3_0.ttnn.vae.spatial import encoder_w_spatial_enabled
     from models.tt_dit.parallel.manager import CCLManager
 
     w_spatial = encoder_w_spatial_enabled()

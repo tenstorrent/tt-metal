@@ -12,7 +12,7 @@ from models.experimental.hunyuan_image_3_0.ref.vae.encoder import (
     load_encoder_head,
     load_mid as load_encoder_mid,
 )
-from models.experimental.hunyuan_image_3_0.tt.vae.decoder_weights import (
+from models.experimental.hunyuan_image_3_0.ttnn.vae.decoder_weights import (
     _load_gn,
     load_attn_block,
     load_resnet_block,

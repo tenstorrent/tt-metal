@@ -35,10 +35,10 @@ from models.experimental.hunyuan_image_3_0.ref.weights import (
     load_tensors,
     resolve_base_model_dir,
 )
-from models.experimental.hunyuan_image_3_0.tt.moe.gate import HunyuanTtTopKGate
-from models.experimental.hunyuan_image_3_0.tt.moe.mlp import HunyuanTtMLP
-from models.experimental.hunyuan_image_3_0.tt.moe.moe import HunyuanTtMoE
-from models.experimental.hunyuan_image_3_0.tt.moe.moe_parallel import HunyuanTtMoEParallel
+from models.experimental.hunyuan_image_3_0.ttnn.moe.gate import HunyuanTtTopKGate
+from models.experimental.hunyuan_image_3_0.ttnn.moe.mlp import HunyuanTtMLP
+from models.experimental.hunyuan_image_3_0.ttnn.moe.moe import HunyuanTtMoE
+from models.experimental.hunyuan_image_3_0.ttnn.moe.moe_parallel import HunyuanTtMoEParallel
 from models.tt_dit.parallel.manager import CCLManager
 from pcc_common import (
     MOE_ISL_FAST,

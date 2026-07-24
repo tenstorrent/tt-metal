@@ -22,7 +22,7 @@ from models.experimental.hunyuan_image_3_0.ref.generate import (  # noqa: F401
 
 import ttnn
 
-from models.experimental.hunyuan_image_3_0.tt.device_sampling import (  # noqa: E402
+from models.experimental.hunyuan_image_3_0.ttnn.device_sampling import (  # noqa: E402
     StageForceController,
     append_token_ids_tt,
     can_use_device_sampling,
@@ -53,11 +53,11 @@ __all__ = [
     "device_sampling_enabled",
 ]
 
-from models.experimental.hunyuan_image_3_0.tt.ar_dual_cq import (  # noqa: E402
+from models.experimental.hunyuan_image_3_0.ttnn.ar_dual_cq import (  # noqa: E402
     ArDualCQCoordinator,
     recaption_2cq_enabled,
 )
-from models.experimental.hunyuan_image_3_0.tt.ar_trace import (  # noqa: E402
+from models.experimental.hunyuan_image_3_0.ttnn.ar_trace import (  # noqa: E402
     RecaptionDecodeTracer,
     recaption_trace_enabled,
 )
@@ -212,7 +212,7 @@ def make_recaption_logits_fn(
         build_attention_mask_query_row,
         to_additive,
     )
-    from models.experimental.hunyuan_image_3_0.tt.kv_cache import HunyuanTtKvCache
+    from models.experimental.hunyuan_image_3_0.ttnn.kv_cache import HunyuanTtKvCache
 
     def _mask_has_image_spans(slices) -> bool:
         """True if any batch item has a bidirectional (image) span."""
@@ -250,12 +250,12 @@ def make_recaption_logits_fn(
     need_wte = use_trace or use_device_logits_tracer or prefix_input_ids is not None
     if need_wte and wte_tt is None:
         if getattr(model, "embed_weight", None) is not None:
-            from models.experimental.hunyuan_image_3_0.tt.wte import BackboneWteAdapter
+            from models.experimental.hunyuan_image_3_0.ttnn.wte import BackboneWteAdapter
 
             wte_tt = BackboneWteAdapter(model)
             print("[recaption] trace: reusing backbone embed_weight (no duplicate wte upload)", flush=True)
         elif wte_weight is not None:
-            from models.experimental.hunyuan_image_3_0.tt.wte import HunyuanTtWte
+            from models.experimental.hunyuan_image_3_0.ttnn.wte import HunyuanTtWte
 
             mesh_mapper = None
             if hasattr(device, "get_num_devices") and device.get_num_devices() > 1:
@@ -484,7 +484,7 @@ def generate_text(
     import torch
     import ttnn
 
-    from models.experimental.hunyuan_image_3_0.tt.device_sampling import ttnn_sampling_op_enabled
+    from models.experimental.hunyuan_image_3_0.ttnn.device_sampling import ttnn_sampling_op_enabled
 
     config = config or SamplingConfig()
     use_device = can_use_device_sampling(

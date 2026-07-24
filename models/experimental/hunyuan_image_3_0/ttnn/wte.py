@@ -10,7 +10,7 @@ import torch
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.hunyuan_image_3_0.tt.parallel_utils import resid_mem_config
+from models.experimental.hunyuan_image_3_0.ttnn.parallel_utils import resid_mem_config
 
 
 class HunyuanTtWte(LightweightModule):

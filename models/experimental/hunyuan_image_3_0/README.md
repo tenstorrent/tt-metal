@@ -82,26 +82,26 @@ hunyuan_image_3_0/
 
 ## Model Modules
 
-The device port lives under `tt/`. Each block mirrors the PyTorch reference under `ref/`
+The device port lives under `ttnn/`. Each block mirrors the PyTorch reference under `ref/`
 and is gated by a PCC test under `tests/`.
 
 ### Transformer backbone
 
 | Module | File path | Description |
 |--------|-----------|-------------|
-| RMSNorm | `tt/attention/rms_norm.py` | Root-mean-square layer normalization |
-| 2D RoPE | `tt/attention/rope_2d.py` | 2D rotary position embedding for image tokens |
-| Attention (GQA, qk-norm) | `tt/attention/attention.py` | Grouped-query attention with q/k normalization |
-| Attention mask | `tt/attention/mask.py` | Causal text + bidirectional image-span mask |
-| MoE router / gate | `tt/moe/gate.py` | Top-8 expert routing / gating over 64 experts |
-| MoE expert MLP | `tt/moe/mlp.py` | Per-expert feed-forward network |
-| MoE block | `tt/moe/moe.py` | Mixture-of-Experts block (dense/sparse routing) |
-| MoE tensor-parallel helpers | `tt/moe/moe_parallel.py` | Expert sharding across the mesh |
-| Decoder layer | `tt/transformer_layer.py` | One transformer block (attention + MoE) |
-| Full backbone | `tt/model.py` | Full 32-layer MoE transformer stack |
-| Word-token embedding (WTE) | `tt/wte.py` | Token-id → hidden embedding lookup |
-| LM head | `tt/lm_head.py` | Hidden state → vocabulary logits projection |
-| KV cache | `tt/kv_cache.py`, `tt/cache.py` | Incremental key/value cache for decode |
+| RMSNorm | `ttnn/attention/rms_norm.py` | Root-mean-square layer normalization |
+| 2D RoPE | `ttnn/attention/rope_2d.py` | 2D rotary position embedding for image tokens |
+| Attention (GQA, qk-norm) | `ttnn/attention/attention.py` | Grouped-query attention with q/k normalization |
+| Attention mask | `ttnn/attention/mask.py` | Causal text + bidirectional image-span mask |
+| MoE router / gate | `ttnn/moe/gate.py` | Top-8 expert routing / gating over 64 experts |
+| MoE expert MLP | `ttnn/moe/mlp.py` | Per-expert feed-forward network |
+| MoE block | `ttnn/moe/moe.py` | Mixture-of-Experts block (dense/sparse routing) |
+| MoE tensor-parallel helpers | `ttnn/moe/moe_parallel.py` | Expert sharding across the mesh |
+| Decoder layer | `ttnn/transformer_layer.py` | One transformer block (attention + MoE) |
+| Full backbone | `ttnn/model.py` | Full 32-layer MoE transformer stack |
+| Word-token embedding (WTE) | `ttnn/wte.py` | Token-id → hidden embedding lookup |
+| LM head | `ttnn/lm_head.py` | Hidden state → vocabulary logits projection |
+| KV cache | `ttnn/kv_cache.py`, `ttnn/cache.py` | Incremental key/value cache for decode |
 
 The **transformer decoder** (backbone + attention/MoE layers) is shared by **AR recaption**
 (prefill and decode) and **denoise**. AR prefill and the decoder path are **optimized for
@@ -112,54 +112,54 @@ full sequence length**, targeting the default **1024×1024** image size (product
 
 | Module | File path | Description |
 |--------|-----------|-------------|
-| Patch embed / final layer | `tt/image_gen/patch_embed.py` | `UNetDown` patchify / `UNetUp` unpatchify |
-| Patch-embed conv configs | `tt/image_gen/patch_embed_conv_configs.py` | Conv program configs for patch embed |
-| Timestep embedder | `tt/image_gen/timestep_embedder.py` | Diffusion timestep → embedding |
-| Sequence scatter | `tt/image_gen/sequence_scatter.py` | Scatter image latent into the token sequence |
-| Input / cond instantiation | `tt/image_gen/input_instantiate.py`, `tt/image_gen/cond_instantiate.py` | Build gen-image / cond input tensors |
-| Flow-matching scheduler | `tt/scheduler.py` | Euler flow-matching denoise scheduler |
-| Init-noise sampling | `tt/noise.py` | On-device `ttnn.randn` initial latent noise |
-| Denoise pipeline | `tt/pipeline.py` | Single denoise step + multi-step `denoise_loop` |
+| Patch embed / final layer | `ttnn/image_gen/patch_embed.py` | `UNetDown` patchify / `UNetUp` unpatchify |
+| Patch-embed conv configs | `ttnn/image_gen/patch_embed_conv_configs.py` | Conv program configs for patch embed |
+| Timestep embedder | `ttnn/image_gen/timestep_embedder.py` | Diffusion timestep → embedding |
+| Sequence scatter | `ttnn/image_gen/sequence_scatter.py` | Scatter image latent into the token sequence |
+| Input / cond instantiation | `ttnn/image_gen/input_instantiate.py`, `ttnn/image_gen/cond_instantiate.py` | Build gen-image / cond input tensors |
+| Flow-matching scheduler | `ttnn/scheduler.py` | Euler flow-matching denoise scheduler |
+| Init-noise sampling | `ttnn/noise.py` | On-device `ttnn.randn` initial latent noise |
+| Denoise pipeline | `ttnn/pipeline.py` | Single denoise step + multi-step `denoise_loop` |
 
 ### VAE
 
 | Module | File path | Description |
 |--------|-----------|-------------|
-| Conv3D primitive | `tt/vae/conv3d.py`, `tt/vae/conv3d_blockings.py` | 3D convolution + blocking/tiling configs |
-| Encoder | `tt/vae/encoder.py`, `tt/vae/encoder_weights.py` | VAE encoder blocks + weight loading |
-| Decoder | `tt/vae/decoder.py`, `tt/vae/decoder_weights.py` | VAE decoder blocks + weight loading |
-| ResNet conv / pointwise | `tt/vae/resnet_conv.py`, `tt/vae/pointwise.py` | ResNet conv and pointwise conv helpers |
-| Spatial-parallel decode | `tt/vae/spatial.py` | Full-res H/W-spatial-parallel decode across mesh |
-| Cond posterior | `tt/vae/cond_posterior.py` | I2I conditioning latent encode (posterior) |
+| Conv3D primitive | `ttnn/vae/conv3d.py`, `ttnn/vae/conv3d_blockings.py` | 3D convolution + blocking/tiling configs |
+| Encoder | `ttnn/vae/encoder.py`, `ttnn/vae/encoder_weights.py` | VAE encoder blocks + weight loading |
+| Decoder | `ttnn/vae/decoder.py`, `ttnn/vae/decoder_weights.py` | VAE decoder blocks + weight loading |
+| ResNet conv / pointwise | `ttnn/vae/resnet_conv.py`, `ttnn/vae/pointwise.py` | ResNet conv and pointwise conv helpers |
+| Spatial-parallel decode | `ttnn/vae/spatial.py` | Full-res H/W-spatial-parallel decode across mesh |
+| Cond posterior | `ttnn/vae/cond_posterior.py` | I2I conditioning latent encode (posterior) |
 
 ### Vision (Instruct I2I)
 
 | Module | File path | Description |
 |--------|-----------|-------------|
-| SigLIP2 vision encoder | `tt/vision/siglip2.py` | SigLIP2 encoder + vision→4096 aligner |
-| Cond-vision injection | `tt/vision/inject.py` | Scatter vision embeddings into the sequence |
-| Image preprocess / bridge | `tt/vision/preprocess.py` | Device bridge + `<img>` span lookup |
-| I2I pipeline assembly | `tt/vision/i2i.py`, `tt/vision/i2i_bundle.py` | Assemble image→encode→inject→forward |
+| SigLIP2 vision encoder | `ttnn/vision/siglip2.py` | SigLIP2 encoder + vision→4096 aligner |
+| Cond-vision injection | `ttnn/vision/inject.py` | Scatter vision embeddings into the sequence |
+| Image preprocess / bridge | `ttnn/vision/preprocess.py` | Device bridge + `<img>` span lookup |
+| I2I pipeline assembly | `ttnn/vision/i2i.py`, `ttnn/vision/i2i_bundle.py` | Assemble image→encode→inject→forward |
 
 ### Generation, sampling & recaption
 
 | Module | File path | Description |
 |--------|-----------|-------------|
-| AR sampling loop | `tt/generate.py` | Token sampling loop + stage forcing |
-| Device sampling | `tt/device_sampling.py` | On-device `topk` / `sampling` ops |
-| AR prefill | `tt/ar_prefill.py` | Chunked KV prefill for long prefixes |
-| Recaption orchestration | `tt/recaption.py` | Host recaption/think orchestration |
+| AR sampling loop | `ttnn/generate.py` | Token sampling loop + stage forcing |
+| Device sampling | `ttnn/device_sampling.py` | On-device `topk` / `sampling` ops |
+| AR prefill | `ttnn/ar_prefill.py` | Chunked KV prefill for long prefixes |
+| Recaption orchestration | `ttnn/recaption.py` | Host recaption/think orchestration |
 
 ### Trace, dual-CQ & parallelism
 
 | Module | File path | Description |
 |--------|-----------|-------------|
-| Stage trace | `tt/stage_trace.py`, `tt/trace_config.py` | CQ0 `execute_trace` for denoise / VAE + config |
-| Denoise dual-CQ | `tt/denoise_dual_cq.py` | 2CQ async latent D2H for denoise |
-| VAE dual-CQ | `tt/vae_dual_cq.py` | 2CQ async RGB D2H for VAE decode |
-| AR dual-CQ / trace | `tt/ar_dual_cq.py`, `tt/ar_trace.py` | 2CQ async logits D2H + AR decode trace |
-| Cond-encode trace | `tt/cond_encode_trace.py` | Trace for I2I cond VAE + ViT encode |
-| Mesh / parallel utilities | `tt/parallel_utils.py`, `tt/matmul_utils.py` | Mesh sharding + matmul program-config helpers |
+| Stage trace | `ttnn/stage_trace.py`, `ttnn/trace_config.py` | CQ0 `execute_trace` for denoise / VAE + config |
+| Denoise dual-CQ | `ttnn/denoise_dual_cq.py` | 2CQ async latent D2H for denoise |
+| VAE dual-CQ | `ttnn/vae_dual_cq.py` | 2CQ async RGB D2H for VAE decode |
+| AR dual-CQ / trace | `ttnn/ar_dual_cq.py`, `ttnn/ar_trace.py` | 2CQ async logits D2H + AR decode trace |
+| Cond-encode trace | `ttnn/cond_encode_trace.py` | Trace for I2I cond VAE + ViT encode |
+| Mesh / parallel utilities | `ttnn/parallel_utils.py`, `ttnn/matmul_utils.py` | Mesh sharding + matmul program-config helpers |
 
 ## Tokenizer
 
@@ -376,7 +376,7 @@ Base T2I defaults to **50 denoise steps** and **CFG 5.0**, matching HF
 `diff_guidance_scale=5.0`). Override with `HY_STEPS` / `HY_GUIDANCE`. Matches upstream
 `generate_image` with `bot_task=image`: **no recaption** by default (prompt used verbatim).
 Optional AR recaption (`HY_RECAPTION=1`) rewrites the prompt via the text-sampling loop
-(`ref/generate.py`, re-exported by `tt/generate.py`) before the gen-image block.
+(`ref/generate.py`, re-exported by `ttnn/generate.py`) before the gen-image block.
 
 All demo/runtime environment variables are documented in the [Flags](#flags) section below.
 

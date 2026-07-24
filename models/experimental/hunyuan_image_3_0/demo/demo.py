@@ -78,23 +78,23 @@ from models.experimental.hunyuan_image_3_0.ref.recaption import (
     system_prompt_for_bot_task,
 )
 from models.experimental.hunyuan_image_3_0.ref.system_prompt import get_system_prompt
-from models.experimental.hunyuan_image_3_0.tt.attention.mask import (
+from models.experimental.hunyuan_image_3_0.ttnn.attention.mask import (
     build_attention_mask_tt,
     build_attention_mask_tt_sp_sharded,
 )
-from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel, default_bf16_layers
-from models.experimental.hunyuan_image_3_0.tt.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
-from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
-from models.experimental.hunyuan_image_3_0.tt.lm_head import HunyuanTtLMHead
-from models.experimental.hunyuan_image_3_0.tt.pipeline import HunyuanTtDenoiseStep, denoise_loop, decode_latent
-from models.experimental.hunyuan_image_3_0.tt.trace_config import (
+from models.experimental.hunyuan_image_3_0.ttnn.model import HunyuanTtModel, default_bf16_layers
+from models.experimental.hunyuan_image_3_0.ttnn.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
+from models.experimental.hunyuan_image_3_0.ttnn.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
+from models.experimental.hunyuan_image_3_0.ttnn.lm_head import HunyuanTtLMHead
+from models.experimental.hunyuan_image_3_0.ttnn.pipeline import HunyuanTtDenoiseStep, denoise_loop, decode_latent
+from models.experimental.hunyuan_image_3_0.ttnn.trace_config import (
     open_pipeline_mesh,
     print_trace_policy,
     release_stage_resources,
 )
-from models.experimental.hunyuan_image_3_0.tt.recaption import run_recaption_on_device
-from models.experimental.hunyuan_image_3_0.tt.scheduler import HunyuanTtScheduler
-from models.experimental.hunyuan_image_3_0.tt.wte import HunyuanTtWte, BackboneWteAdapter
+from models.experimental.hunyuan_image_3_0.ttnn.recaption import run_recaption_on_device
+from models.experimental.hunyuan_image_3_0.ttnn.scheduler import HunyuanTtScheduler
+from models.experimental.hunyuan_image_3_0.ttnn.wte import HunyuanTtWte, BackboneWteAdapter
 
 # Prompt precedence: HY_PROMPT_FILE (read whole file) > argv[1] > HY_PROMPT > default.
 # HY_PROMPT_FILE is handy for max-text-dimension tests (e.g. /tmp/long_prompt.txt).
@@ -325,7 +325,7 @@ def _base_layer_loader(i: int):
 
 def _recaption_sampling_config() -> SamplingConfig:
     """Match demo_i2i: HF generation_config defaults with optional HY_* overrides."""
-    from models.experimental.hunyuan_image_3_0.tt.device_sampling import resolve_hy_top_k
+    from models.experimental.hunyuan_image_3_0.ttnn.device_sampling import resolve_hy_top_k
 
     cfg = replace(_SAMPLE_DEFAULTS, max_new_tokens=MAX_NEW_TOKENS)
     if os.environ.get("HY_DO_SAMPLE") is not None:
@@ -470,7 +470,7 @@ def _run_recaption_on_device_maybe_retry_host_sample(
 
     Set ``HY_RECAPTION_HOST_RETRY=1`` to restore the old echo→host-multinomial retry.
     """
-    from models.experimental.hunyuan_image_3_0.tt.device_sampling import device_sampling_enabled
+    from models.experimental.hunyuan_image_3_0.ttnn.device_sampling import device_sampling_enabled
 
     recap_result = run_recaption_on_device(
         backbone,

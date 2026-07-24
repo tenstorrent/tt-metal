@@ -32,7 +32,7 @@ from models.experimental.hunyuan_image_3_0.ref.vision.preprocess import (
     vit_process_image,
 )
 from models.experimental.hunyuan_image_3_0.ref.weights import MODEL_DIR
-from models.experimental.hunyuan_image_3_0.tt.vision.siglip2 import Siglip2VisionInputs
+from models.experimental.hunyuan_image_3_0.ttnn.vision.siglip2 import Siglip2VisionInputs
 
 
 def process_cond_image(processor, image, model_dir=MODEL_DIR):
