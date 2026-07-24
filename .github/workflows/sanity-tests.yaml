@@ -352,3 +352,73 @@ jobs:
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enabled-skus: "sim_wormhole_b0,sim_blackhole,sim_wormhole_b0_galaxy,sim_blackhole_galaxy"
       ref: ${{ inputs.ref || github.sha }}
+
+  # ── AI run summary ────────────────────────────────────────────────
+  # Aggregates the per-leg ai-job-summary artifacts from every sanity impl into
+  # one run-level report. expected-jobs is the union of each impl's matrix, so a
+  # leg whose runner died (no artifact) is reported as an infra failure rather
+  # than silently dropped. Impls that were skipped expose a null/empty matrix
+  # and are filtered out before aggregation.
+  ai-run-summary:
+    needs:
+      - ttnn-sanity-tests
+      - t3000-apc-fast-tests
+      - ops-sanity-tests
+      - ttsim-sanity-tests
+      - runtime-sim-sanity-tests
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Aggregate child matrices and results
+        id: aggregate
+        env:
+          # toJSON(needs) is one object keyed by child job name, each with
+          # `result` and `outputs.matrix`; aggregating from it keeps this
+          # data-driven as impls are added or removed from the `needs` list.
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          EXPECTED=$(jq -cn --argjson n "$NEEDS" '
+            [$n[] | .outputs.matrix | select(. != null and . != "") | fromjson] | add // []')
+          echo "expected-jobs=$EXPECTED" >> "$GITHUB_OUTPUT"
+          echo "Merged $(echo "$EXPECTED" | jq 'length') expected legs"
+
+          # Most-severe-wins precedence: failure > cancelled > success > skipped.
+          RESULT=$(jq -rn --argjson n "$NEEDS" '
+            [$n[].result] as $r |
+            if   any($r[]; . == "failure")   then "failure"
+            elif any($r[]; . == "cancelled") then "cancelled"
+            elif any($r[]; . == "success")   then "success"
+            else                                  "skipped"
+            end')
+          echo "run-result=$RESULT" >> "$GITHUB_OUTPUT"
+          echo "Combined run-result: $RESULT"
+      - id: ai-run-summary
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE",
+              "input_dir": "ai_job_summaries",
+              "output_dir": "ai_run_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          expected-jobs: ${{ steps.aggregate.outputs.expected-jobs }}
+          run-result: ${{ steps.aggregate.outputs.run-result }}
+      - name: Show report
+        if: always() && steps.ai-run-summary.outputs.report-file != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          REPORT_FILE: ${{ steps.ai-run-summary.outputs.report-file }}
+        run: |
+          if [ -f "$REPORT_FILE" ]; then
+            cat "$REPORT_FILE"
+            cat "$REPORT_FILE" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Report file not found: $REPORT_FILE"
+          fi
