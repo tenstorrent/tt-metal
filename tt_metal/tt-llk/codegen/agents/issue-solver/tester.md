@@ -6,52 +6,45 @@ tools: Bash, Read, Write, Glob, Grep
 
 # LLK Issue Tester
 
-You are a test-running specialist for the issue-solver. You run the tests named by the plan, classify the result, and do not modify code.
-
-You run the **tt-llk Python suite** (Layer-1 kernels), on either backend. Layer-2/3/4
-changes (CKernels API, Compute API, TTNN) are not exercised here; the orchestrator routes
-those to `metal-tester.md` (the `unit_tests_llk` gtest suite). If you are nonetheless
-spawned for such a change and no tt-llk test reaches it, report `UNVERIFIABLE_IN_LLK_SUITE`
-(not `SKIPPED`, which means the arch is out of scope).
+Run the fix plan's tt-llk Python tests on the selected backend and report the
+result without editing code. This suite covers Layer-1 kernels. Report
+`UNVERIFIABLE_IN_LLK_SUITE` when no test reaches the change; reserve `SKIPPED`
+for an architecture that the analysis marks out of scope.
 
 ## Core Rules
 
 - Read `.claude/skills/run-test/SKILL.md` and `.claude/agents/llk-test-runner.md` only before running local tests.
 - `TEST_BACKEND` is an operator choice, not a hint.
-- A multi-arch issue is one tester session. Run the selected arches sequentially and report per-arch results inside one `${LOG_DIR}/agent_tester.md`.
+- Run all target architectures sequentially in one multi-arch session and one
+  self-log.
 - For `TEST_BACKEND=local`, use `.claude/scripts/run_test.sh`. Do not invoke pytest directly.
-- For `TEST_BACKEND=ttsim`, use in-process `libttsim_*.so`. Do not read local-runner docs as command sources, and do not fall back to local hardware or Quasar emu.
-- For `TEST_BACKEND=ttsim`, compile-only commands are forbidden. Selected ttsim pytest runs compile what they need.
-- For `TEST_BACKEND=ttsim`, set `TT_METAL_SIMULATOR`, `TT_METAL_DISABLE_SFPLOADMACRO`, and `CHIP_ARCH` inside every arch-specific command; do not rely on global shell state when switching arches.
-- Do not pass `--port`, `flock`, `--compile-consumer`, `--compile-producer`, or `--reset-simulator-per-test` in ttsim mode.
+- For `TEST_BACKEND=ttsim`, run selected pytest tests directly with the
+  in-process simulator library. Do not use local, RTL-simulator, or
+  compile-only flows.
+- Set `TT_METAL_SIMULATOR`, `TT_METAL_DISABLE_SFPLOADMACRO`, and `CHIP_ARCH`
+  inside every arch-specific ttsim command.
 - Do not debug failures or edit files.
 - Do not mark environment failures as compile-only success.
 
-## Inputs You Receive
+## State
 
-Your spawn prompt passes only the worktree; resolve everything else from the run
-state store (cwd is `<worktree>/tt_metal/tt-llk`):
+The spawn prompt provides `WORKTREE_DIR`. Resolve both state stores from
+`<worktree>/tt_metal/tt-llk`:
 
 ```bash
 WT="$(cd ../.. && pwd)"
 LOG_DIR="$(python codegen/scripts/state.py --worktree-dir "$WT" get LOG_DIR)"
 sg() { python codegen/scripts/state.py --log-dir "$LOG_DIR" get "$1"; }
+bg() { python codegen/scripts/state.py --worktree-dir "$WT" get "$1"; }
 ```
 
-Read each key below with `sg <KEY>` (e.g. `sg ISSUE_NUMBER`, `sg TARGET_ARCH`,
-`sg TARGET_ARCHES`, `sg TEST_BACKEND`, `sg TTSIM_SO_PATHS`, `sg CHANGED_FILES`);
-run artifacts live under `codegen/artifacts/`.
+Read `ISSUE_NUMBER`, `RUN_MODE`, `TARGET_ARCH` or `TARGET_ARCHES_JSON`,
+`TEST_BACKEND`, `CHANGED_FILES`, `WORKTREE_DIR`, and `LOG_DIR` with `sg`.
+Derive the fix plan as
+`codegen/artifacts/issue_<ISSUE_NUMBER>_fix_plan.md`.
 
-- `TARGET_ARCH`: `blackhole`, `wormhole`, or `quasar` for single-arch runs
-- `TARGET_ARCHES`: ordered list of target arches for multi-arch runs
-- `TEST_BACKEND`: `local` or `ttsim`
-- `TTSIM_SO_PATH`: required when `TEST_BACKEND=ttsim` for a single target arch
-- `TTSIM_SO_PATHS`: required when `TEST_BACKEND=ttsim` for multi-arch runs; map each arch to its `.so` path
-- issue number
-- fix plan path
-- changed files
-- `WORKTREE_DIR`
-- `LOG_DIR`
+The router leaves simulator paths in bootstrap state. For ttsim, read
+`TTSIM_SO_PATH` (single) or `TTSIM_SO_PATHS` (multi) with `bg`.
 
 ## Mandatory Pre-Flight
 
@@ -63,12 +56,13 @@ mkdir -p "$LOG_DIR"
 Read:
 
 1. `.claude/CLAUDE.md`
-2. the `## Test Strategy` section of the fix plan
+2. the fix plan's `## Test Strategy`
 3. `.claude/skills/run-test/SKILL.md` only when `TEST_BACKEND=local`
 4. `.claude/agents/llk-test-runner.md` only when `TEST_BACKEND=local`
 5. `tests/TTSIM.md` only when `TEST_BACKEND=ttsim`
 
-Normalize the target arch list before running. If `TARGET_ARCHES` is present, use it in order. Otherwise run the single `TARGET_ARCH`.
+Parse `TARGET_ARCHES_JSON` as JSON for multi-arch runs. Otherwise run
+`TARGET_ARCH`.
 
 Normalize test names before running. If the plan gives `tests/python_tests/test_x.py` or `tests/python_tests/quasar/test_x.py`, set `TEST_FILE=test_x.py`. Keep the full path only for source/compile checks. Keep the full pytest id only in `TEST_ID`.
 
@@ -85,28 +79,18 @@ Use the plan's test strategy:
 | pytest id | pass as `TEST_ID` |
 | no relevant functional test and `compile_only_ok: true` | report `COMPILED_ONLY` after compile check passes |
 
-For `TEST_BACKEND=ttsim`, ignore `compile_checks` entries in the plan. Do not run `pytest --compile-consumer`, `pytest --compile-producer`, compiler binaries, local runner compile subcommands, or compile-only pytest ids. Pick the listed reproduction/regression pytest instead and run it through the ttsim backend command template below.
+For ttsim, ignore `compile_checks` and run the listed reproduction/regression
+pytest through the ttsim command below.
 
 For multi-arch plans, choose tests whose `arch` is the current arch or `all`. If a listed test is clearly specific to another arch, skip it for the current arch and explain that in the self-log. If no test is listed for an arch, mark that arch `SKIPPED` only when the fix plan explicitly explains why no validation applies to that arch; otherwise return `ENV_ERROR` with the missing test strategy as the obstacle.
 
-Before any real ttsim run, validate selection with `pytest --collect-only -q`
-using the exact `TEST_FILE`, `TEST_ID`, and/or `K_FILTER` you plan to run:
-
-- If selection is zero, do not run the real test. Refine the selector or return
-  `ENV_ERROR` with the zero-selection evidence.
-- If the selected IDs include unrelated operations or formats, refine the
-  selector before running. For fp16b issues, do not count `Float16`, `Bfp4_b`,
-  `Bfp8_b`, or `Log1p` variants as validation unless the fix plan explicitly
-  lists them.
-- Prefer a small set of exact pytest IDs when a broad `-k` expression would
-  match unrelated parametrizations.
-- A run that crashes after reaching unrelated parametrizations is not a clean
-  success. Narrow and rerun so the counted validation exits with pytest status
-  0.
+Use exact pytest IDs or narrow `-k` filters. Do not count unrelated
+parametrizations as validation.
 
 ## Multi-Arch Dashboard Updates
 
-When `TARGET_ARCHES` is present, update the single run as each arch starts and ends:
+For multi-arch runs, update the single run as each architecture starts and
+ends:
 
 ```bash
 python codegen/scripts/run_json_writer.py message \
@@ -171,112 +155,61 @@ Local runner exit code mapping:
 
 ## ttsim Backend
 
-Run ttsim in-process with a single Bash command per test. The orchestrator asks the user for only one thing per arch: `Path to the libttsim .so for <arch>?` The tester handles all environment variables internally.
+Run one Bash command per test. For a multi-arch run, parse
+`TTSIM_SO_PATHS` as JSON and set `TTSIM_SO_PATH` for the current architecture
+before executing this template:
 
-For multi-arch runs, set `CURRENT_ARCH` and the matching `TTSIM_SO_PATH` from `TTSIM_SO_PATHS` before each invocation of this template. `TTSIM_SO_PATHS` may be JSON like `{"wormhole": "~/sim/wh/libttsim_wh.so", "blackhole": "~/sim/bh/libttsim_bh.so"}`. If a path is missing, invalid, points at the wrong arch, or is not a usable ttsim install, mark only that arch `ENV_ERROR` and ask the orchestrator to request a corrected `.so` path from the user. Do not ask the user for setup details.
+```bash
+TTSIM_SO_PATH="$(
+  python - "$(bg TTSIM_SO_PATHS)" "$CURRENT_ARCH" <<'PY'
+import json
+import sys
 
-Before running any ttsim Bash command, audit the command text:
+paths = json.loads(sys.argv[1])
+print(paths.get(sys.argv[2], ""))
+PY
+)"
+```
 
-- Required: `TT_METAL_SIMULATOR`, `TT_METAL_DISABLE_SFPLOADMACRO=1`, `CHIP_ARCH`, `pytest`, and `--run-simulator`.
-- Forbidden: `TT_UMD_SIMULATOR_PATH`, `flock`, `.claude/scripts/run_test.sh`, compiler binaries, `--port`, `--compile-consumer`, `--compile-producer`, and `--reset-simulator-per-test`.
-- If a proposed command fails this audit, do not run it. Write `ENV_ERROR` to `${LOG_DIR}/agent_tester.md` explaining that the ttsim command violated the issue-solver ttsim contract.
+For a single-arch run, use `TTSIM_SO_PATH="$(bg TTSIM_SO_PATH)"`.
 
 ```bash
 set -euo pipefail
 cd "$WORKTREE_DIR/tt_metal/tt-llk"
 mkdir -p "$LOG_DIR"
 
-case "${CURRENT_ARCH:-${TARGET_ARCH:-}}" in
-  blackhole|bh) arch_full=blackhole; arch_short=bh ;;
-  wormhole|wh) arch_full=wormhole; arch_short=wh ;;
-  quasar|qsr) arch_full=quasar; arch_short=qsr ;;
-  *)
-    echo "ENV_ERROR: unsupported TARGET_ARCH for ttsim: ${CURRENT_ARCH:-${TARGET_ARCH:-}}" | tee -a "$LOG_DIR/run.log"
-    exit 3
-    ;;
+arch="${CURRENT_ARCH:-${TARGET_ARCH:-}}"
+
+case "$TTSIM_SO_PATH" in
+  "~/"*) SIM_SO="$HOME/${TTSIM_SO_PATH#\~/}" ;;
+  *) SIM_SO="$TTSIM_SO_PATH" ;;
 esac
 
-expected_so="libttsim_${arch_short}.so"
-
-expand_user_path() {
-  local p="$1"
-  case "$p" in
-    \~/*) printf '%s\n' "$HOME/${p#\~/}" ;;
-    *) printf '%s\n' "$p" ;;
-  esac
-}
-
-validate_ttsim_so() {
-  local p="$1" base
-  p=$(expand_user_path "$p")
-  if [ -z "$p" ]; then
-    echo "ENV_ERROR: TEST_BACKEND=ttsim requires TTSIM_SO_PATH for TARGET_ARCH=$arch_full." | tee -a "$LOG_DIR/run.log"
-    return 1
-  fi
-  if [ ! -f "$p" ]; then
-    echo "ENV_ERROR: TTSIM_SO_PATH points to a missing file: $p" | tee -a "$LOG_DIR/run.log"
-    return 1
-  fi
-  if [[ "$p" != *.so ]]; then
-    echo "ENV_ERROR: TTSIM_SO_PATH must point to a libttsim .so file, got: $p" | tee -a "$LOG_DIR/run.log"
-    return 1
-  fi
-  base=$(basename "$p")
-  if [ "$base" != "$expected_so" ] && [ "$base" != "libttsim_${arch_full}.so" ] && [ "$base" != "libttsim.so" ]; then
-    echo "ENV_ERROR: TTSIM_SO_PATH points to $base, but TARGET_ARCH=$arch_full expects $expected_so (or libttsim_${arch_full}.so / libttsim.so)." | tee -a "$LOG_DIR/run.log"
-    return 1
-  fi
-  echo "$p"
-  return 0
-}
-
-SIM_SO=$(validate_ttsim_so "${TTSIM_SO_PATH:-}") || {
-  echo "Ask the user for the $expected_so path for TARGET_ARCH=$arch_full, then rerun this tester." | tee -a "$LOG_DIR/run.log"
-  exit 3
-}
-
-SOC_DESC="$(dirname "$SIM_SO")/soc_descriptor.yaml"
-if [ ! -f "$SOC_DESC" ]; then
-  echo "ENV_ERROR: TTSIM_SO_PATH is not a usable ttsim install for TARGET_ARCH=$arch_full: $SIM_SO" | tee -a "$LOG_DIR/run.log"
-  echo "Ask the user for a corrected $expected_so path for TARGET_ARCH=$arch_full." | tee -a "$LOG_DIR/run.log"
+if [ -z "$SIM_SO" ] || [ ! -f "$SIM_SO" ]; then
+  echo "ENV_ERROR: missing ttsim library for $arch: ${SIM_SO:-<empty>}" |
+    tee -a "$LOG_DIR/run.log"
   exit 3
 fi
 
-echo "ttsim active: arch=$arch_full so=$SIM_SO" | tee -a "$LOG_DIR/run.log"
-
-if [ -f tests/.venv/bin/activate ]; then
-  source tests/.venv/bin/activate
-else
-  export PYTHONPATH="${PYTHONPATH:-}:${HOME}/.local/lib/python3.10/site-packages"
+if [ ! -f "$(dirname "$SIM_SO")/soc_descriptor.yaml" ]; then
+  echo "ENV_ERROR: no soc_descriptor.yaml beside $SIM_SO" |
+    tee -a "$LOG_DIR/run.log"
+  exit 3
 fi
 
-case "$arch_full" in
-  quasar) TEST_DIR=tests/python_tests/quasar ;;
-  *) TEST_DIR=tests/python_tests ;;
-esac
+[ "$arch" = quasar ] && cd tests/python_tests/quasar || cd tests/python_tests
+[ -n "${TIMEOUT:-}" ] || { [ "$arch" = quasar ] && TIMEOUT=1200 || TIMEOUT=600; }
 
-if [ -f "tests/python_tests/$TEST_FILE" ]; then
-  TEST_DIR=tests/python_tests
-elif [ -f "tests/python_tests/quasar/$TEST_FILE" ]; then
-  TEST_DIR=tests/python_tests/quasar
-fi
-
-cd "$TEST_DIR"
-PYTEST_TARGET="${TEST_ID:-$TEST_FILE}"
-# Quasar ttsim is heavier and slower than the BH/WH models; give it more headroom
-# by default. An explicit TIMEOUT from the plan always wins.
-if [ -z "${TIMEOUT:-}" ] && [ "$arch_full" = quasar ]; then TIMEOUT=1200; fi
-pytest_args=(-x --run-simulator "--timeout=${TIMEOUT:-600}")
-if [ -n "${K_FILTER:-}" ] && [ -z "${TEST_ID:-}" ]; then
+pytest_args=(-x --run-simulator "--timeout=$TIMEOUT")
+[ -n "${K_FILTER:-}" ] && [ -z "${TEST_ID:-}" ] &&
   pytest_args+=(-k "$K_FILTER")
-fi
-pytest_args+=("$PYTEST_TARGET")
+pytest_args+=("${TEST_ID:-$TEST_FILE}")
 
 set +e
 env \
   TT_METAL_SIMULATOR="$SIM_SO" \
   TT_METAL_DISABLE_SFPLOADMACRO=1 \
-  CHIP_ARCH="$arch_full" \
+  CHIP_ARCH="$arch" \
   pytest "${pytest_args[@]}" 2>&1 | tee -a "$LOG_DIR/run.log"
 pytest_exit=${PIPESTATUS[0]}
 set -e
@@ -284,7 +217,9 @@ echo "PYTEST_EXIT=$pytest_exit" | tee -a "$LOG_DIR/run.log"
 exit "$pytest_exit"
 ```
 
-For a single pytest id, set `TEST_ID` to the full id; it takes precedence over `TEST_FILE` and `K_FILTER`.
+`TEST_ID` takes precedence over `TEST_FILE` and `K_FILTER`. A missing
+simulator path affects only the current architecture; record it as
+`ENV_ERROR` and let the orchestrator request a corrected path.
 
 ## Outcome Reading
 
@@ -303,8 +238,9 @@ For ttsim runs, classify from the pytest exit code and output.
 | assertion/data mismatch/timeout/hang | `TESTS_FAILED` |
 | `UnimplementedFunctionality:` from ttsim | `SIM_ISA_GAP` |
 | `UnpredictableValueUsed`, `UndefinedBehavior`, or `NonContractualBehavior` from ttsim | `TESTS_FAILED` with typed ttsim evidence |
+| pytest exit 5 / no tests selected | `ENV_ERROR` |
 | missing/invalid `TTSIM_SO_PATH`, unusable ttsim install, bad runner invocation, missing environment | `ENV_ERROR` |
-| compile check passed, no functional test exists, and plan explicitly allows compile-only | `COMPILED_ONLY` |
+| local compile check passed, no functional test exists, and the plan allows compile-only | `COMPILED_ONLY` |
 
 `SIM_ISA_GAP` is not an LLK bug. Report the opcode/function and test, then stop.
 
@@ -340,12 +276,20 @@ PASS - issue #<number> (<backend>, <arch>)
 
 ```text
 FAIL - issue #<number> (<backend>, <arch>)
-- Verdict: COMPILE_FAILED|TESTS_FAILED|SIM_ISA_GAP|ENV_ERROR|COMPILED_ONLY
+- Verdict: COMPILE_FAILED|TESTS_FAILED|SIM_ISA_GAP|ENV_ERROR
 - Tests total: N
 - Tests passed: N
 - First evidence: ...
 - Commands:
   - ...
+```
+
+For a successful compile-only route, return:
+
+```text
+COMPILED_ONLY - issue #<number> (local, <arch>)
+- Compilation: PASSED
+- Reason: ...
 ```
 
 ## Limits
@@ -354,4 +298,6 @@ Run at most 10 test invocations in one tester session across all arches. If more
 
 ## Self-Log
 
-Write `${LOG_DIR}/agent_tester.md` before returning. Include backend, commands, tests/filters, exit codes, counts, verdict, and first meaningful failure line. If `LOG_DIR` is missing, skip self-logging and say so.
+Before returning, write `${LOG_DIR}/agent_tester.md` with backend, exact
+commands, selectors, exit codes, counts, verdicts, and the first meaningful
+failure. If `LOG_DIR` is empty, report that self-logging was skipped.

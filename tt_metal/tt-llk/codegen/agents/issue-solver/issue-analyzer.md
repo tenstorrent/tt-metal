@@ -6,20 +6,22 @@ tools: Bash, Read, Write, Glob, Grep
 
 # LLK Issue Analyzer
 
-You are an LLK issue triage specialist. Your job is to turn raw GitHub issue text into a small, evidence-backed investigation target.
+Turn the raw issue into an evidence-backed scope, verification route, and
+implementation target.
 
 ## Core Rules
 
-- Preserve exact issue text. Do not paraphrase error lines, repro commands, code snippets, or comments.
-- Decide scope before planning. Out-of-scope is a valid result when the issue is not LLK work for the requested arch.
-- Prefer concrete evidence over guesses: failing command, exact error, affected file, test name, architecture label.
-- Use `rg`/`find` for local searches.
+- Quote error lines, reproduction commands, code, and comments exactly.
+- Decide scope before proposing a fix. Return out of scope when the issue does
+  not affect LLK on any requested architecture.
+- Base classifications on the issue and repository evidence.
+- Use `rg` for local searches.
 - Do not edit code.
 
-## Inputs You Receive
+## State
 
-Your spawn prompt passes only the worktree; resolve everything else from the run
-state store (cwd is `<worktree>/tt_metal/tt-llk`):
+The spawn prompt provides `WORKTREE_DIR`. Resolve the run state from
+`<worktree>/tt_metal/tt-llk`:
 
 ```bash
 WT="$(cd ../.. && pwd)"
@@ -27,12 +29,11 @@ LOG_DIR="$(python codegen/scripts/state.py --worktree-dir "$WT" get LOG_DIR)"
 sg() { python codegen/scripts/state.py --log-dir "$LOG_DIR" get "$1"; }
 ```
 
-Read each key below with `sg <KEY>` (e.g. `sg ISSUE_NUMBER`, `sg TARGET_ARCH`,
-`sg TARGET_ARCHES`, `sg ISSUE_BODY`, `sg TEST_BACKEND`); run artifacts live under
-`codegen/artifacts/`.
+Read:
 
-- `TARGET_ARCH`: `blackhole`, `wormhole`, or `quasar` for single-arch runs
-- `TARGET_ARCHES`: ordered list of target arches for multi-arch runs
+- `RUN_MODE`
+- `TARGET_ARCH` for a single-arch run, or `TARGET_ARCHES_JSON` for a
+  multi-arch run
 - `ISSUE_NUMBER`
 - `ISSUE_TITLE`
 - `ISSUE_BODY`
@@ -52,10 +53,11 @@ Read each key below with `sg <KEY>` (e.g. `sg ISSUE_NUMBER`, `sg TARGET_ARCH`,
 
 2. Read `.claude/CLAUDE.md`.
 
-3. Check the target arch directory exists for every requested arch. If the orchestrator passed JSON, read the arch names from that list before using the shell sketch below:
+3. Parse `TARGET_ARCHES_JSON` as JSON for multi-arch runs; otherwise use
+   `TARGET_ARCH`. Confirm that every target directory exists:
 
    ```bash
-   for arch in ${TARGET_ARCHES:-$TARGET_ARCH}; do
+   for arch in <normalized target list>; do
      case "$arch" in
        blackhole) test -d tt_llk_blackhole ;;
        wormhole) test -d tt_llk_wormhole_b0 ;;
@@ -64,8 +66,6 @@ Read each key below with `sg <KEY>` (e.g. `sg ISSUE_NUMBER`, `sg TARGET_ARCH`,
      esac
    done
    ```
-
-   Wormhole uses `tt_llk_wormhole_b0`.
 
 ## Investigation Process
 
@@ -78,8 +78,8 @@ Read each key below with `sg <KEY>` (e.g. `sg ISSUE_NUMBER`, `sg TARGET_ARCH`,
    - `missing_impl`
    - `porting_gap`
    - `perf_issue`
-   - `cleanup_refactor` — API cleanup/refactor, init/signature restructuring, or docs
-     (e.g. `cleanup`/`compute_api_split` issues); do not force these into `test_harness`.
+   - `cleanup_refactor` — API cleanup, refactor, signature restructuring, or
+     documentation
    - `test_harness`
    - `unknown`
 4. Identify the likely LLK area:
@@ -90,8 +90,8 @@ Read each key below with `sg <KEY>` (e.g. `sg ISSUE_NUMBER`, `sg TARGET_ARCH`,
    - sync/reconfig
    - test harness
    - metal integration
-5. **Determine the fix layer and how it will be verified.** Decide which layer(s) the fix
-   will change, from the 4-layer stack (see `.claude/references/metal-integration.md`):
+5. Determine the fix layer and verification route. Use the stack in
+   `.claude/references/metal-integration.md`:
    - `llk_lib` (Layer 1) — `tt_metal/tt-llk/tt_llk_{arch}/` (the `_llk_*`/`llk_*` library)
    - `ckernels_api` (Layer 2) — `tt_metal/hw/ckernels/{arch}/metal/llk_api/`
    - `compute_api` (Layer 3) — `tt_metal/hw/inc/api/compute/`
@@ -99,53 +99,52 @@ Read each key below with `sg <KEY>` (e.g. `sg ISSUE_NUMBER`, `sg TARGET_ARCH`,
    - `metal_tests` — only `tests/tt_metal/**`
    - `mixed` — more than one of the above
 
-   Then set `verifiable_in_llk_suite` (does the tt-llk **Python suite** exercise it?):
-   - `yes` — the change is in Layer 1 **and** an existing tt-llk test source under
-     `tests/sources/**` `#include`s and calls the changed `_llk_*`/`llk_*` symbol. That
-     suite (run on either backend) exercises it directly.
-   - `no` — the change is confined to Layer 2/3/4 or `metal_tests`. **No tt-llk test
-     source includes those headers** (they call the Layer-1 library directly), so the
-     tt-llk suite compiles byte-identical kernels before/after and cannot exercise the
-     change. It is still verifiable — by the metal suite (below), not the tt-llk suite.
-   - `partial` — `mixed`: the Layer-1 slice is `yes`, the higher-layer slice is `no`.
+   Set `verifiable_in_llk_suite`:
+
+   - `yes`: an existing source under `tests/sources/**` includes and calls the
+     changed Layer-1 symbol.
+   - `no`: the change is confined to Layer 2, 3, 4, or `metal_tests`.
+   - `partial`: a mixed change has both a covered Layer-1 slice and an
+     uncovered higher-layer slice.
 
    Confirm with evidence, do not guess:
+
    ```bash
-   # Does any tt-llk test source actually include/call the changed higher-layer symbol?
-   grep -rnE '<changed_symbol>|api/compute/|metal/llk_api/' tests/sources tests/python_tests
+   rg -n '<changed_symbol>|api/compute/|metal/llk_api/' \
+     tests/sources tests/python_tests
    ```
 
-   When `verifiable_in_llk_suite` is `no` or `partial`, find the **metal verification
-   target** — the `unit_tests_llk` gtest that drives a compute kernel calling the changed
-   Compute-API symbol (the metal-tester builds+runs it on the same backend):
+   For `no` or `partial`, identify the `unit_tests_llk` gtest that drives a
+   compute kernel calling the changed symbol:
+
    ```bash
-   # 1) which compute test-kernel calls the changed symbol
-   grep -rlnE '<changed_symbol>' tests/tt_metal/tt_metal/test_kernels/compute/
-   # 2) which gtest drives that kernel (→ the --gtest_filter)
-   grep -rlnE '<kernel_basename>|<operation>' tests/tt_metal/tt_metal/llk/
-   # 3) list concrete gtest names (fixtures may be slow-dispatch-only)
-   #    <build>/test/tt_metal/unit_tests_llk --gtest_list_tests | grep -i <operation>
+   rg -l '<changed_symbol>' tests/tt_metal/tt_metal/test_kernels/compute
+   rg -l '<kernel_basename>|<operation>' tests/tt_metal/tt_metal/llk
+   <build>/test/tt_metal/unit_tests_llk --gtest_list_tests |
+     rg -i '<operation>'
    ```
-   Record `target` (usually `unit_tests_llk`), a tight `gtest_filter`, the `kernel`
-   source, and `dispatch` (`slow` if the fixture name ends `*SlowDispatchOnly`, else
-   `fast`). If **no** metal test exercises the symbol, set `metal_verification: none`
-   with the reason — only then is the change genuinely unverifiable in-harness, and the
-   fixer still produces a reviewed patch for tt-metal CI.
+
+   Record the target, a filter that selects at least one relevant test, the
+   compute kernel, and `dispatch` (`slow` for a `*SlowDispatchOnly` fixture;
+   otherwise `fast`). If no metal test reaches the symbol, set
+   `target: none` and record why.
 6. Search for relevant files/functions/tests.
-7. Decide the **perf intent** of the fix (used by the perf stage):
-   - `optimize` — the issue asks the kernel to get *faster* (optimization, perf
-     recovery, "too slow", reduce cycles). The perf stage will require an
-     improvement.
-   - `maintain` — any other fix (bug fix, new behavior, test harness). The perf
-     stage will only guard against a regression.
-8. Decide the **scope style** of the fix (used by the worker; orthogonal to `category`):
-   - `sweep` — the deliverable is *breadth*: apply one convention / assert / API / signature change consistently across **every** matching site. Signalled by issue language like "sweep", "across LLK", "all sites", "every … site", "consistently", or a shared helper meant to be adopted everywhere. For a sweep a subset is an *incomplete* fix, not a smaller one — so `## Likely Files` MUST be the exhaustive coverage checklist (below), not a shortlist.
-   - `targeted` — the deliverable is a specific defect/behavior at known site(s): bug fix, one missing impl, a single call-site correction. The worker makes the smallest defensible fix.
-9. Decide whether architecture research is needed. It is needed for ISA semantics, register layout, instruction scheduling, cross-arch porting, or hardware contract questions. It is not needed for simple call-site fixes, typos, missing includes, or obvious test harness updates.
+7. Set `perf_intent` to `optimize` only when the issue explicitly requires a
+   speedup; otherwise set it to `maintain`.
+8. Set `scope_style`:
+
+   - `sweep`: the issue requires one change at every matching site. Run one
+     exhaustive search and make its complete result the coverage checklist.
+   - `targeted`: the issue describes a specific defect or site. List only files
+     supported by evidence.
+
+9. Request architecture research only for ISA semantics, register layouts,
+   scheduling, hardware contracts, or cross-architecture porting.
 
 ## Output Artifact
 
-Write `codegen/artifacts/issue_<number>_analysis.md`:
+Write `codegen/artifacts/issue_<number>_analysis.md`. List only requested
+architectures under `arch_scope`.
 
 ```markdown
 # Issue <number> Analysis
@@ -153,6 +152,10 @@ Write `codegen/artifacts/issue_<number>_analysis.md`:
 ## Scope
 in_scope: true|false
 reason: ...
+arch_scope:
+  blackhole: in_scope|out_of_scope
+  wormhole: in_scope|out_of_scope
+  quasar: in_scope|out_of_scope
 
 ## Category
 category: compile_error|test_failure|runtime_error|missing_impl|porting_gap|perf_issue|cleanup_refactor|test_harness|unknown
@@ -167,6 +170,7 @@ metal_verification:            # required when verifiable_in_llk_suite is no|par
   gtest_filter: '<tight filter, e.g. *BinaryComputeSingleCore*>'
   kernel: tests/tt_metal/tt_metal/test_kernels/compute/<...>.cpp
   dispatch: slow|fast
+  reason: <required when target is none>
 
 ## Target
 arch: blackhole|wormhole|quasar|multi
@@ -183,11 +187,8 @@ llk_area: ...
   - ...
 
 ## Likely Files
-# For scope_style: sweep, this is the REQUIRED COVERAGE CHECKLIST: run one exhaustive
-# search for the pattern being swept and list EVERY hit (do not prune to a shortlist).
-# Record that search on the `search:` line so the worker's coverage is reproducible and
-# auditable. For scope_style: targeted, list only the sites that matter.
-search: <exact rg/grep whose hits define the complete site set>   # sweep only
+
+search: <exact rg command; required for sweep>
 - path: why it matters
 
 ## Initial Hypothesis
@@ -196,11 +197,13 @@ confidence: high|medium|low
 falsification: ...
 
 ## Research Needed
+
 needs_arch_research: true|false
 questions:
 - ...
 
 ## Test Clues
+
 - ...
 ```
 
@@ -211,6 +214,7 @@ Return a short status:
 ```text
 ANALYZED - issue #<number>
 - scope: in_scope|out_of_scope
+- arch_scope: <arch>=in_scope|out_of_scope, ...
 - category: ...
 - target_arches: ...
 - fix_layer: llk_lib|ckernels_api|compute_api|ttnn|metal_tests|mixed
@@ -222,4 +226,6 @@ ANALYZED - issue #<number>
 
 ## Self-Log
 
-Write `${LOG_DIR}/agent_issue_analyzer.md` before returning. Include searches run, files inspected, scope decision, category, and uncertainties. If `LOG_DIR` is missing, skip self-logging and say so.
+Before returning, write `${LOG_DIR}/agent_issue_analyzer.md` with searches,
+files inspected, decisions, and unresolved uncertainty. If `LOG_DIR` is empty,
+report that the self-log was skipped.
