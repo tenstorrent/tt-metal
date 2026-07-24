@@ -996,6 +996,47 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
+# ----------------------------------------------------------------------------
+# WAN 2.2 multihost quad-galaxy tests (bh_sc4)
+# ----------------------------------------------------------------------------
+- name: TT-DiT Wan2.2-T2V-A14B multihost quad tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
+    TTRUN_DIR=/etc/ttop
+    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" \
+      --tcp-interface ens5f0np0 \
+      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
+      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
+      python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "bh_4x32 and 720p and t2v"
+  model: wan-2.2-t2v
+  skus:
+    bh_sc4-mgd:
+      timeout: 60
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT Wan2.2-I2V-A14B multihost quad tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
+    TTRUN_DIR=/etc/ttop
+    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+    python3 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" \
+      --tcp-interface ens5f0np0 \
+      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
+      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
+      python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "bh_4x32 and 720p and i2v"
+  model: wan-2.2-i2v
+  skus:
+    bh_sc4-mgd:
+      timeout: 60
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
 - name: panoptic-deeplab unit tests
   cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/tests/pcc/ --timeout=420
   model: panoptic-deeplab

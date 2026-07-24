@@ -59,12 +59,16 @@ def assert_vbench_quality(
     for metric, score in scores.items():
         logger.info(f"VBench {metric} = {score:.4f}")
 
+    # report all failures at once -- otherwise each (expensive) run surfaces only the first miss.
+    failures = []
     for metric, minimum in thresholds.items():
         if metric not in scores:
             # A requested threshold with no returned score is an ungated dimension, not a pass.
-            raise AssertionError(f"VBench returned no score for requested metric {metric!r}")
-        if scores[metric] < minimum:
-            msg = f"VBench {metric} = {scores[metric]:.4f} < {minimum:.4f}"
-            raise AssertionError(msg)
+            failures.append(f"{metric}: no score returned (ungated dimension)")
+        elif scores[metric] < minimum:
+            failures.append(f"{metric} = {scores[metric]:.4f} < {minimum:.4f}")
+
+    if failures:
+        raise AssertionError("VBench quality gate failed:\n  " + "\n  ".join(failures))
 
     return scores
