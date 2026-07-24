@@ -227,13 +227,39 @@ def _agent_classify_category(model_id: str, cfg: dict, card_text: str = "") -> O
             f"model card (excerpt): {card_text[:3000]}\n"
             'When done, output ONLY compact JSON on the final line: {"category": "<one allowed>"}'
         )
-        raw = invoke_llm_agent(prompt, agent_bin=resolve_claude_bin() or "claude", model="sonnet", timeout_s=240)
-        parsed = extract_json_from_llm_output(raw) or {}
-        cand = str(parsed.get("category") or "").strip()
-        for c in _VALID_CATEGORIES:
-            if cand.lower() == c.lower():
-                result = c
-                break
+        _bin = resolve_claude_bin() or "claude"
+
+        def _one_vote(_i: int) -> Optional[str]:
+            try:
+                raw = invoke_llm_agent(prompt, agent_bin=_bin, model="sonnet", timeout_s=240)
+                parsed = extract_json_from_llm_output(raw) or {}
+                cand = str(parsed.get("category") or "").strip()
+                for c in _VALID_CATEGORIES:
+                    if cand.lower() == c.lower():
+                        return c
+            except Exception:
+                return None
+            return None
+
+        try:
+            votes = max(1, int(os.environ.get("TT_HW_PLANNER_AGENT_VOTES", "3")))
+        except (TypeError, ValueError):
+            votes = 3
+        # self-consistency: run the agent N times CONCURRENTLY (~same wall-clock) and take the
+        # majority, so a single flaky run can't decide the category. None votes are ignored.
+        if votes <= 1:
+            picks = [_one_vote(0)]
+        else:
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=votes) as _ex:
+                picks = list(_ex.map(_one_vote, range(votes)))
+        tally: dict = {}
+        for p in picks:
+            if p:
+                tally[p] = tally.get(p, 0) + 1
+        if tally:
+            result = max(tally, key=lambda k: (tally[k], k != "Unknown"))
     except Exception:
         result = None
     _AGENT_CATEGORY_CACHE[model_id] = result
