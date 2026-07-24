@@ -338,6 +338,30 @@ def invoke_llm_cli_one_shot(
     return proc.stdout or ""
 
 
+def invoke_llm_agent(
+    prompt: str,
+    *,
+    agent_bin: str = "claude",
+    model: str = "sonnet",
+    allowed_tools: tuple = ("WebFetch", "Bash", "Read"),
+    timeout_s: int = 240,
+) -> str:
+    """Agentic invocation: ``claude -p`` WITH tools, so the model can INVESTIGATE (fetch a
+    model card, read a config, look up an architecture on the hub) and VERIFY before it
+    answers -- a real agent, not the one-shot guess of :func:`invoke_llm_cli_one_shot`.
+    Returns final stdout text. Raises RuntimeError on missing binary / timeout / non-zero."""
+    cmd = [agent_bin, "-p", prompt, "--allowedTools", *allowed_tools, "--output-format", "text", "--model", model]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"agent binary not found: {agent_bin!r}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"agent timed out after {timeout_s}s") from exc
+    if proc.returncode != 0:
+        raise RuntimeError(f"agent call failed (exit {proc.returncode}): stderr={proc.stderr[:500]!r}")
+    return proc.stdout or ""
+
+
 def extract_json_from_llm_output(text: str) -> Optional[Dict[str, Any]]:
     """Best-effort JSON extraction from LLM output.
 

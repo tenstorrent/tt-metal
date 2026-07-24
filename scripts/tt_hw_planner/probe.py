@@ -175,6 +175,67 @@ def _arch_override_category(category: str, cfg: dict) -> str:
 
 _VALID_CATEGORIES = ("LLM", "VLM", "Image", "Video", "STT", "TTS", "Embed", "CNN", "NLP", "Unknown")
 _LLM_CATEGORY_CACHE: dict = {}
+_AGENT_CATEGORY_CACHE: dict = {}
+
+
+def _agent_classify_category(model_id: str, cfg: dict, card_text: str = "") -> Optional[str]:
+    """Classify a model's bring-up category with a REAL AGENT (claude -p + tools), not a
+    one-shot guess: it is handed the config + card as a starting point and may INVESTIGATE
+    further (WebFetch the HF page, read files) and VERIFY before answering. This is the
+    generalizing path -- it reasons about any model the way a human would, so no per-model
+    table or rule is needed. Gated by ``TT_HW_PLANNER_AGENT_CLASSIFY`` (default on); cached
+    per model; returns a validated category or None (caller falls back). Never raises."""
+    if os.environ.get("TT_HW_PLANNER_AGENT_CLASSIFY", "1") == "0":
+        return None
+    if model_id in _AGENT_CATEGORY_CACHE:
+        return _AGENT_CATEGORY_CACHE[model_id]
+    result: Optional[str] = None
+    try:
+        from ._cli_helpers.agent import resolve_claude_bin
+        from .llm_synth import extract_json_from_llm_output, invoke_llm_agent
+
+        salient = {
+            k: cfg.get(k)
+            for k in (
+                "model_type",
+                "architectures",
+                "is_encoder_decoder",
+                "pipeline_tag",
+                "vision_config",
+                "audio_config",
+                "text_config",
+                "sampling_rate",
+                "codebook_size",
+            )
+            if k in cfg
+        }
+        prompt = (
+            "You are categorizing a Hugging Face model for hardware bring-up on Tenstorrent "
+            "accelerators. Investigate the model (you MAY use WebFetch on its Hugging Face page "
+            f"https://huggingface.co/{model_id} or read its files) and decide its PRIMARY role, "
+            "then answer with exactly one category.\n"
+            f"Allowed categories: {', '.join(_VALID_CATEGORIES)}.\n"
+            "Guidance: classify by the model's PRIMARY input->output. VLM needs BOTH vision and "
+            "language; a vision-only model (classification/detection/segmentation/depth) is CNN; a "
+            "text-only embedder/retriever/reranker is Embed; Image/Video/TTS are for models that "
+            "SYNTHESIZE that media (not analyze it); a model that is not a text/vision/audio deep "
+            "network (tabular, time-series, RL/robotics, graph, molecular) is Unknown.\n"
+            f"model_id: {model_id}\n"
+            f"config (salient keys): {json.dumps(salient)[:1500]}\n"
+            f"model card (excerpt): {card_text[:3000]}\n"
+            'When done, output ONLY compact JSON on the final line: {"category": "<one allowed>"}'
+        )
+        raw = invoke_llm_agent(prompt, agent_bin=resolve_claude_bin() or "claude", model="sonnet", timeout_s=240)
+        parsed = extract_json_from_llm_output(raw) or {}
+        cand = str(parsed.get("category") or "").strip()
+        for c in _VALID_CATEGORIES:
+            if cand.lower() == c.lower():
+                result = c
+                break
+    except Exception:
+        result = None
+    _AGENT_CATEGORY_CACHE[model_id] = result
+    return result
 
 
 def _fetch_model_card_text(model_id: str) -> str:
@@ -710,13 +771,20 @@ def _probe_local_model(model_id: str) -> ModelProbe:
     )
     if category == "Unknown":
         category = _category_from_fingerprint(_fpr) or category
-    _resid = _is_category_residual(model_type_category, _fpr)
-    if _resid and _is_dual_encoder_contrastive(cfg) and category in {"Unknown", "Embed"}:
-        category = "Embed"
-    elif _resid and (category == "Unknown" or (category == "Embed" and _has_audio_markers(cfg))):
-        _llm_cat = _llm_resolve_category(model_id, cfg, pipeline_tag)
-        if _llm_cat:
-            category = _llm_cat
+    # PRIMARY: a real agent reads the model (config + card, may investigate further) and decides.
+    # The deterministic chain above is the offline fallback used only when the agent is disabled
+    # or unavailable -- so a brand-new model is classified by reasoning, not a table.
+    _agent_cat = _agent_classify_category(model_id, cfg, _fetch_model_card_text(model_id))
+    if _agent_cat:
+        category = _agent_cat
+    else:
+        _resid = _is_category_residual(model_type_category, _fpr)
+        if _resid and _is_dual_encoder_contrastive(cfg) and category in {"Unknown", "Embed"}:
+            category = "Embed"
+        elif _resid and (category == "Unknown" or (category == "Embed" and _has_audio_markers(cfg))):
+            _llm_cat = _llm_resolve_category(model_id, cfg, pipeline_tag)
+            if _llm_cat:
+                category = _llm_cat
 
     _td = str(cfg.get("torch_dtype") or "").lower().replace("torch.", "").strip()
     _bpp = _TORCH_DTYPE_BYTES.get(_td)
@@ -886,25 +954,27 @@ def probe_model(model_id: str) -> ModelProbe:
         if _fp_cat:
             probe.flags.append(f"Category Unknown -> {_fp_cat!r} via structural fingerprint {_fpr!r}")
             probe.category = _fp_cat
-    _resid = _is_category_residual(model_type_category, _fpr)
-    if _resid and _is_dual_encoder_contrastive(cfg) and probe.category in {"Unknown", "Embed"}:
-        if probe.category != "Embed":
-            probe.flags.append(
-                "Category -> 'Embed' via dual-encoder contrastive fact (text_config + vision/audio_config)"
-            )
-            probe.category = "Embed"
-    elif _resid and (probe.category == "Unknown" or (probe.category == "Embed" and _has_audio_markers(cfg))):
-        # LLM resolves ONLY a genuinely unplaced (Unknown) category, or an Embed that audio
-        # structure contradicts (feature-extraction mislabeling an audio codec). A category a
-        # pipeline_tag / registry / fact already assigned is TRUSTED -- the LLM never overrides it
-        # (overriding flipped real text embedders to CNN/VLM). Reserves the LLM for the true tail.
-        _llm_cat = _llm_resolve_category(model_id, cfg, probe.pipeline_tag)
-        if _llm_cat and _llm_cat != probe.category:
-            probe.flags.append(
-                f"Category {probe.category!r} -> {_llm_cat!r} by LLM fallback (genuine residual / "
-                f"audio-marked feature-extraction)."
-            )
-            probe.category = _llm_cat
+    # PRIMARY: a real agent reads the model (config + card, may investigate the hub) and decides
+    # its category by REASONING -- the generalizing path. The deterministic chain above / below is
+    # the offline fallback, used only when the agent is disabled or unavailable.
+    _agent_cat = _agent_classify_category(model_id, cfg, _fetch_model_card_text(model_id))
+    if _agent_cat:
+        if _agent_cat != probe.category:
+            probe.flags.append(f"Category {probe.category!r} -> {_agent_cat!r} by agent (read card+config, verified)")
+            probe.category = _agent_cat
+    else:
+        _resid = _is_category_residual(model_type_category, _fpr)
+        if _resid and _is_dual_encoder_contrastive(cfg) and probe.category in {"Unknown", "Embed"}:
+            if probe.category != "Embed":
+                probe.flags.append(
+                    "Category -> 'Embed' via dual-encoder contrastive fact (text_config + vision/audio_config)"
+                )
+                probe.category = "Embed"
+        elif _resid and (probe.category == "Unknown" or (probe.category == "Embed" and _has_audio_markers(cfg))):
+            _llm_cat = _llm_resolve_category(model_id, cfg, probe.pipeline_tag)
+            if _llm_cat and _llm_cat != probe.category:
+                probe.flags.append(f"Category {probe.category!r} -> {_llm_cat!r} by LLM one-shot fallback.")
+                probe.category = _llm_cat
 
     if _is_low_confidence_category(probe.pipeline_tag, model_type_category, _arch_changed):
         probe.flags.append(
