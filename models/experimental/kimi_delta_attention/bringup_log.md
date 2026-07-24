@@ -1109,3 +1109,28 @@
 - Verdict: accept and make L1 prep residency the default. The capacity
   hypothesis is confirmed through T=5,120; no numerical regression was
   observed. Static multicast of V-independent scan inputs is next.
+
+
+### 2026-07-24 17:48:13 UTC — Reject one-tensor `k_dec_t` multicast
+
+- Hypothesis: one sender per head can read and multicast the 16 KiB `k_dec_t`
+  block to its three V-worker peers more cheaply than four independent reads.
+  Four-worker groups were row-aligned; one ready/valid semaphore pair was
+  reused once per chunk. The path was opt-in with
+  `QWEN_KDA_SCAN_SHARE_KDEC=1`.
+- Host build: `./build_metal.sh --build-tests --build-type Release` -> exit 0.
+- Target-shape correctness:
+  `QWEN_KDA_SCAN_SHARE_KDEC=1 scripts/run_safe_pytest.sh --run-all test_chunk_kda.py::test_chunk_kda_pcc[...] -q -s`
+  -> PASS; output/state PCC `0.999993/0.999995`.
+- T=640 profile:
+  `QWEN_KDA_SCAN_SHARE_KDEC=1 PERF_TRACE=1 PERF_SEQ=640 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s`
+  -> PASS. CSV `generated/profiler/reports/2026_07_24_17_48_10/ops_perf_results_2026_07_24_17_48_10.csv`
+  (SHA-256 `c3a0a020eff19f618310c082d2f8199e43b18e1783ada94b0b4e86da6f5ac220`).
+- Result: median wall regresses `622.564 -> 630.371 us` (`+7.807 us`,
+  `+1.25%`) and recurrence regresses `144.945 -> 154.716 us` (`+6.74%`).
+  Projection and convolution are unchanged (`88.462 -> 88.459 us`,
+  `129.866 -> 129.866 us`), localizing the regression to scan sharing.
+- Verdict: reject one-tensor sharing and remove its code. The evidence supports
+  fixed per-chunk synchronization cost exceeding the saved `k_dec_t` reads.
+  A single handshake amortized across all six common inputs remains a distinct
+  hypothesis and is the next experiment.

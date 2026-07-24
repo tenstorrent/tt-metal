@@ -96,6 +96,12 @@ dependency-ordered NOC barrier batching and selective double buffering.
   `97.387 -> 145.942 us`; the new design must avoid runtime fan-out barriers.
 - First proof: multicast one immutable tensor per head with compile-time
   destinations and no per-chunk semaphore handshake.
+- Experiment result, 2026-07-24: a static `k_dec_t` sender with one batched
+  ready/valid handshake per chunk was correct but regressed T=640 wall
+  `622.564 -> 630.371 us` (`+1.25%`) and recurrence
+  `144.945 -> 154.716 us` (`+6.74%`). Do not retain one-tensor sharing.
+- Retained hypothesis: amortize the same one handshake across all six common
+  tensors before rejecting static multicast as a class.
 
 ## Execution order
 
