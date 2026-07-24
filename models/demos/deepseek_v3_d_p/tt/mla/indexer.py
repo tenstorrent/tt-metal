@@ -145,25 +145,29 @@ class TtIndexer:
 
         mem = ttnn.DRAM_MEMORY_CONFIG if device else None
 
-        def repl(t, short, transpose=False):  # replicate across TP (transpose=True: host [out,in] -> device [in,out])
+        def repl(
+            t, short, transpose=False, dtype=ttnn.bfloat16
+        ):  # replicate across TP (transpose=True: host [out,in] -> device [in,out])
             return ttnn.as_tensor(
                 (t.T if transpose else t).contiguous().to(torch.bfloat16),
                 device=device,
                 layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
+                dtype=dtype,
                 memory_config=mem,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                 cache_file_name=_cache_name(short),
             )
 
-        def shard(t, axis, short):  # host [out, in] -> device [in, out], dim `axis` sharded across tp
+        def shard(
+            t, axis, short, dtype=ttnn.bfloat16
+        ):  # host [out, in] -> device [in, out], dim `axis` sharded across tp
             dims = [None, None]
             dims[tp_axis] = axis
             return ttnn.as_tensor(
                 t.T.contiguous().to(torch.bfloat16),
                 device=device,
                 layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
+                dtype=dtype,
                 memory_config=mem,
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
                 cache_file_name=_cache_name(short),
@@ -174,11 +178,14 @@ class TtIndexer:
         # matmul/score compute bump for dropping the ~end_pos-wide 2-CCL logit all-reduce.) Cache name
         # "wq_b_repl" (not "wq_b") so a stale col-sharded tensorbin can never alias this layout. wk /
         # weights_proj contract over hidden (TP-sharded) → upload transposed+sharded, reduced by _tp_rs_ag.
+        # wq_b/wk (Q/K projections) are bf8: the k_norm L2-normalization downstream absorbs the rounding,
+        # so bf8 tracks bf16 within noise while halving their DRAM read. weights_proj (per-head gate) stays
+        # bf16 — the gate is precision-sensitive.
         result = {
             "wq_b": repl(
-                wq_b, cls._cache_short_name("indexer.wq_b"), transpose=True
+                wq_b, cls._cache_short_name("indexer.wq_b"), transpose=True, dtype=ttnn.bfloat8_b
             ),  # [q_lora_rank, H_idx*D_idx] replicated (all heads)
-            "wk": shard(wk, 0, "wk"),  # [dim, D_idx] sharded on dim
+            "wk": shard(wk, 0, "wk", dtype=ttnn.bfloat8_b),  # [dim, D_idx] sharded on dim
             "weights_proj": shard(wproj, 0, "weights_proj"),  # [dim, H_idx] sharded on dim
             "k_norm": repl(knorm, "k_norm"),  # [D_idx]
             "k_norm_bias": repl(knorm_b, "k_norm_bias"),  # [D_idx]
