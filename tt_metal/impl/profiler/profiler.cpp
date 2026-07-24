@@ -122,6 +122,8 @@ NOCDebugEvent make_noc_debug_event(
     int8_t src_x = static_cast<int8_t>(src_core.x);
     int8_t src_y = static_cast<int8_t>(src_core.y);
     switch (event.noc_xfer_type) {
+        case EMD::NocEventType::READ_WITH_STATE: [[fallthrough]];
+        case EMD::NocEventType::READ_WITH_STATE_AND_TRID: [[fallthrough]];
         case EMD::NocEventType::READ:
             return NOCDebugEvent(NocReadEvent{
                 trailer.getDstAddr(),
@@ -134,6 +136,9 @@ NOCDebugEvent make_noc_debug_event(
                 src_y,
                 event.noc_type == EMD::NocType::NOC_1});
         case EMD::NocEventType::WRITE_: [[fallthrough]];
+        case EMD::NocEventType::WRITE_WITH_TRID: [[fallthrough]];
+        case EMD::NocEventType::WRITE_WITH_STATE: [[fallthrough]];
+        case EMD::NocEventType::WRITE_WITH_TRID_WITH_STATE: [[fallthrough]];
         case EMD::NocEventType::WRITE_MULTICAST: [[fallthrough]];
         case EMD::NocEventType::SEMAPHORE_SET_MULTICAST: [[fallthrough]];
         case EMD::NocEventType::SEMAPHORE_SET_REMOTE: {
@@ -157,15 +162,72 @@ NOCDebugEvent make_noc_debug_event(
                 event.mcast_end_dst_x,
                 event.mcast_end_dst_y});
         }
+        case EMD::NocEventType::WRITE_INLINE:
+            // An inline dword write: a small write whose value is an immediate register, so it carries no L1
+            // source buffer. Modeled as a write (tracked for the unflushed-at-end and write-to-locked checks and
+            // released by a write barrier) but with has_source_buffer=false so the source-reuse and
+            // counter-monotonicity checks are skipped (there is no source data, and no usable counter snapshot).
+            return NOCDebugEvent(NocWriteEvent{
+                trailer.getSrcAddr(),
+                trailer.getDstAddr(),
+                event.getNumBytes(),
+                static_cast<uint32_t>(trailer.counter_value),
+                src_x,
+                src_y,
+                event.dst_x,
+                event.dst_y,
+                static_cast<bool>(event.posted),
+                event.noc_type == EMD::NocType::NOC_1,
+                /*is_semaphore=*/false,
+                /*is_mcast=*/false,
+                event.mcast_end_dst_x,
+                event.mcast_end_dst_y,
+                /*has_source_buffer=*/false});
         case EMD::NocEventType::READ_BARRIER_END:
             return NOCDebugEvent(NocReadBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
-        case EMD::NocEventType::WRITE_BARRIER_END: [[fallthrough]];
+        case EMD::NocEventType::READ_BARRIER_WITH_TRID:
+            // Kept as its own case (not folded into READ_BARRIER_END) so a future per-trid model can treat
+            // it differently. For now the debug model tracks reads by address, not trid, so a trid read
+            // barrier is treated as a full read barrier (may under-report a same-address read racing across
+            // different trids, but never false-positives).
+            return NOCDebugEvent(NocReadBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
+        case EMD::NocEventType::WRITE_BARRIER_END:
+            // A regular write barrier waits for outstanding non-posted writes only.
+            TT_ASSERT(!event.posted);
+            return NOCDebugEvent(
+                NocWriteFlushEvent{src_x, src_y, /*posted=*/false, event.noc_type == EMD::NocType::NOC_1});
         case EMD::NocEventType::WRITE_FLUSH:
-            // This event is only being emitted from noc_async_writes_flushed which is non posted
-            // event.posted should always be false; if true, data was corrupted during read
+            // A write flush: non-posted (noc_async_writes_flushed) clears the non-posted pending set; posted
+            // (noc_async_posted_writes_flushed) clears the posted pending set. The posted flag selects which.
+            return NOCDebugEvent(NocWriteFlushEvent{
+                src_x, src_y, static_cast<bool>(event.posted), event.noc_type == EMD::NocType::NOC_1});
+        case EMD::NocEventType::WRITE_FLUSH_WITH_TRID: [[fallthrough]];
+        case EMD::NocEventType::WRITE_BARRIER_WITH_TRID:
             TT_ASSERT(!event.posted);
             return NOCDebugEvent(NocWriteFlushEvent{
                 src_x, src_y, static_cast<bool>(event.posted), event.noc_type == EMD::NocType::NOC_1});
+        case EMD::NocEventType::FULL_BARRIER:
+            return NOCDebugEvent(NocFullBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
+        case EMD::NocEventType::SEMAPHORE_INC: [[fallthrough]];
+        case EMD::NocEventType::SEMAPHORE_INC_MULTICAST: {
+            // A remote atomic increment (unicast or multicast). It has no source buffer (immediate increment value)
+            // and does not advance the NIU write counter, so it is modeled distinctly from a write. For the
+            // multicast variant dst_x/dst_y are the rectangle start and mcast_end_dst_x/y the end.
+            bool is_mcast = event.noc_xfer_type == EMD::NocEventType::SEMAPHORE_INC_MULTICAST;
+            return NOCDebugEvent(NocSemaphoreIncEvent{
+                trailer.getDstAddr(),
+                src_x,
+                src_y,
+                event.dst_x,
+                event.dst_y,
+                static_cast<bool>(event.posted),
+                event.noc_type == EMD::NocType::NOC_1,
+                is_mcast,
+                event.mcast_end_dst_x,
+                event.mcast_end_dst_y});
+        }
+        case EMD::NocEventType::ATOMIC_BARRIER:
+            return NOCDebugEvent(NocAtomicBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
         default: return NOCDebugEvent(UnknownNocEvent{});
     }
 }
@@ -1969,6 +2031,7 @@ void DeviceProfiler::readTsData16BMarkerData(
     ZoneScoped;
 
     nlohmann::json meta_data;
+    [[maybe_unused]] std::optional<NOCDebugEvent> noc_debug_event;
 #if defined(TRACY_ENABLE)
     if ((timer_id & kernel_profiler::PROFILER_TIMER_STATIC_ID_MASK) == kernel_profiler::NOC_TRACING_STATIC_ID) {
         using EMD = KernelProfilerNocEventMetadata;
@@ -2005,11 +2068,8 @@ void DeviceProfiler::readTsData16BMarkerData(
             const CoreCoord virtual_core =
                 soc_desc.translate_coord_to(physical_core, CoordSystem::NOC0, CoordSystem::TRANSLATED);
             // NOLINTEND
-            noc_debug_state->push_event(
-                device_id,
-                timestamp,
-                get_processor_id(risc_type),
-                make_noc_debug_event(virtual_core, local_noc_event, trailer_metadata.getLocalNocEventDstTrailer()));
+            noc_debug_event =
+                make_noc_debug_event(virtual_core, local_noc_event, trailer_metadata.getLocalNocEventDstTrailer());
         }
     }
 #endif
@@ -2045,6 +2105,19 @@ void DeviceProfiler::readTsData16BMarkerData(
     device_tracy_contexts.try_emplace({device_id, physical_core}, nullptr);
 
     updateFirstTimestamp(timestamp);
+
+#if defined(TRACY_ENABLE)
+    // Emit the NOC-debug event exactly once per genuine device event. The profiler re-parses undrained profiler
+    // buffers many times per run (periodic debug-dump polls + force reads + the Tracy marker pass); the persistent
+    // marker set (device_markers_per_core_risc_map) deduplicates those re-reads, so pushing only when the marker was
+    // newly inserted guarantees each event reaches the NOCDebugState once. This mirrors how readDeviceMarkerData
+    // handles scoped-lock events (its push sits after the same new_marker_inserted early-out).
+    if (noc_debug_event) {
+        MetalContext::instance(context_id)
+            .noc_debug_state()
+            ->push_event(device_id, timestamp, get_processor_id(risc_type), *noc_debug_event);
+    }
+#endif
 }
 
 struct DispatchMetaData {

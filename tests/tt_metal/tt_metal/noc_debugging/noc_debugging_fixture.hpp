@@ -78,6 +78,17 @@ public:
                 NOCDebugIssueType(NOCDebugIssueBaseType::UNFLUSHED_WRITE_AT_END, /*mcast=*/true, /*semaphore=*/true));
     }
 
+    bool has_unflushed_semaphore_issue(ChipId chip_id, CoreCoord virtual_core, int processor_id) const {
+        auto& noc_debug_state = tt::tt_metal::MetalContext::instance().noc_debug_state();
+        if (!noc_debug_state) {
+            return false;
+        }
+        tt_cxy_pair core{chip_id, {virtual_core.x, virtual_core.y}};
+        return noc_debug_state->get_issues(core, processor_id)
+            .has_issue(
+                NOCDebugIssueType(NOCDebugIssueBaseType::UNFLUSHED_WRITE_AT_END, /*mcast=*/false, /*semaphore=*/true));
+    }
+
     bool has_unflushed_write_mcast_issue(ChipId chip_id, CoreCoord virtual_core, int processor_id) const {
         auto& noc_debug_state = tt::tt_metal::MetalContext::instance().noc_debug_state();
         if (!noc_debug_state) {
@@ -87,6 +98,17 @@ public:
         return noc_debug_state->get_issues(core, processor_id)
             .has_issue(
                 NOCDebugIssueType(NOCDebugIssueBaseType::UNFLUSHED_WRITE_AT_END, /*mcast=*/true, /*semaphore=*/false));
+    }
+
+    bool has_unflushed_write_issue(ChipId chip_id, CoreCoord virtual_core, int processor_id) const {
+        auto& noc_debug_state = tt::tt_metal::MetalContext::instance().noc_debug_state();
+        if (!noc_debug_state) {
+            return false;
+        }
+        tt_cxy_pair core{chip_id, {virtual_core.x, virtual_core.y}};
+        return noc_debug_state->get_issues(core, processor_id)
+            .has_issue(
+                NOCDebugIssueType(NOCDebugIssueBaseType::UNFLUSHED_WRITE_AT_END, /*mcast=*/false, /*semaphore=*/false));
     }
 
     bool has_write_to_locked_issue(ChipId chip_id, CoreCoord virtual_core, int processor_id) const {
