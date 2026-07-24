@@ -422,7 +422,7 @@ def test_sparse_sdpa_indexed_addr_change_on_hit(device):
         tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
         keep_alive += [tt_q, tt_kv, tt_idx]
         tt_out = ttnn.transformer.sparse_sdpa(
-            tt_q, tt_kv, tt_idx, V_DIM, scale=scale, k_chunk_size=kc, cache_batch_idx=cb
+            tt_q, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, scale=scale, k_chunk_size=kc, cache_batch_idx=cb
         )
         p = pcc(ttnn.to_torch(tt_out), golden(q, kv_full[cb : cb + 1], indices, scale, V_DIM))
         assert p >= 0.99, f"PCC {p:.5f} (cache_batch_idx={cb}, reallocated buffers)"
