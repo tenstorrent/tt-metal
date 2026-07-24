@@ -52,14 +52,19 @@ class OpSpec:
             op; the validator checks these are present. These are exactly the
             extra ``params`` a given op (like ``Conv2d``) reads at runtime.
         uses_weight: Whether the op always carries a weight artifact (``w_path``);
-            enforced by ``shared_validate_record``. (Bias is intentionally not
-            modelled here: it is optional per-op, e.g. ``Conv2d(bias=False)``.)
+            enforced by ``shared_validate_record``.
+        uses_bias: Whether the op always carries a bias artifact (``b_path``);
+            enforced by ``shared_validate_record``. Defaults to ``False`` because
+            for the currently modelled ops bias is optional (e.g.
+            ``Conv2d(bias=False)``), so none of them set it -- but the enforcement
+            logic is in place for kinds that do require a bias.
         runnable: Whether ``tracer_test_harness`` can replay this kind on device.
     """
 
     kind: str
     required_params: Tuple[str, ...] = ()
     uses_weight: bool = False
+    uses_bias: bool = False
     runnable: bool = False
 
 
@@ -257,7 +262,8 @@ def shared_validate_record(record: Record) -> List[str]:
       * ``in_shape`` / ``out_shape`` are well-formed 4D positive-int shapes.
       * the op's required ``params`` (e.g. ``Conv2d``'s kernel/stride/...) are
         present.
-      * ops that always carry a weight (``uses_weight``) reference a ``w_path``.
+      * ops that always carry a weight/bias (``uses_weight`` / ``uses_bias``)
+        reference a ``w_path`` / ``b_path``.
 
     Returns human-readable error messages (no context prefix); empty means valid.
     """
@@ -275,10 +281,13 @@ def shared_validate_record(record: Record) -> List[str]:
     if missing:
         errors.append(f"{record.kind} 'params' missing {missing}")
 
-    # Ops that always carry a weight must reference a weight artifact, so the
-    # validator (not just the harness) catches a manifest missing ``w_path``.
+    # Ops that always carry a weight/bias must reference that artifact, so the
+    # validator (not just the harness) catches a manifest missing ``w_path`` /
+    # ``b_path``.
     if spec is not None and spec.uses_weight and not record.w_path:
         errors.append(f"{record.kind} requires a weight artifact but 'w_path' is missing")
+    if spec is not None and spec.uses_bias and not record.b_path:
+        errors.append(f"{record.kind} requires a bias artifact but 'b_path' is missing")
 
     if record.kind == "Conv2d":
         errors.extend(_validate_conv2d_consistency(record))
