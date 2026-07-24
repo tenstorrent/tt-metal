@@ -59,7 +59,11 @@ void ChunkGdnPrepOperation::validate_on_program_cache_miss(
             qsf[2] == attrs.Hk * attrs.key_dim, "qk_flat width {} != Hk*K ({}*{})", qsf[2], attrs.Hk, attrs.key_dim);
         TT_FATAL(attrs.qk_norm, "qk_flat requires qk_norm (flat q/k are unnormalized; norm is in-kernel)");
     }
-    check(in.g, "g", DataType::FLOAT32);
+    if (attrs.vector_gate) {
+        check_intermediate(in.g, "g", true);
+    } else {
+        check(in.g, "g", DataType::FLOAT32);
+    }
     if (attrs.g_flat) {
         TT_FATAL(attrs.vector_gate && attrs.HV > 0, "g_flat requires vector_gate and HV > 0");
         const auto& gs = in.g.logical_shape();

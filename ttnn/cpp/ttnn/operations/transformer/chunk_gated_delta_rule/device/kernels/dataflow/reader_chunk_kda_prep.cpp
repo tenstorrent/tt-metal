@@ -52,13 +52,14 @@ void kernel_main() {
     const uint32_t HV = get_arg_val<uint32_t>(12);
     const uint32_t Hk = get_arg_val<uint32_t>(13);
 
-    // Mixed precision: q/k/v are bf16; g/beta and the constants are fp32.
+    // Mixed precision: q/k/v are BF16; vector g may be BF16; beta and constants are FP32.
     const uint32_t tb_io = get_tile_size(cb_q);
-    const uint32_t tb_f = get_tile_size(cb_g);
+    const uint32_t tb_g = get_tile_size(cb_g);
+    const uint32_t tb_f = get_tile_size(cb_beta);
     const auto q_acc = TensorAccessor(q_a, q_addr, tb_io);
     const auto k_acc = TensorAccessor(k_a, k_addr, tb_io);
     const auto v_acc = TensorAccessor(v_a, v_addr, tb_io);
-    const auto g_acc = TensorAccessor(g_a, g_addr, tb_f);
+    const auto g_acc = TensorAccessor(g_a, g_addr, tb_g);
     const auto b_acc = TensorAccessor(b_a, b_addr, tb_f);
     const auto eye_acc = TensorAccessor(eye_a, eye_addr, tb_f);
     const auto tril_acc = TensorAccessor(tril_a, tril_addr, tb_f);
@@ -148,7 +149,7 @@ void kernel_main() {
         for (uint32_t rt = 0; rt < Ct; rt++) {
             for (uint32_t kt = 0; kt < Kt; kt++) {
                 const uint32_t page = batch_base + (c * Ct + rt) * row_stride + hv * Kt + kt;
-                noc.async_read(g_acc, cbg, tb_f, {.page_id = page}, {.offset_bytes = (rt * Kt + kt) * tb_f});
+                noc.async_read(g_acc, cbg, tb_g, {.page_id = page}, {.offset_bytes = (rt * Kt + kt) * tb_g});
             }
         }
         noc.async_read_barrier();
@@ -172,7 +173,7 @@ void kernel_main() {
         if constexpr (G_FLAT) {
             read_g_flat(hc);
         } else {
-            read_into(g_acc, cb_g, hc * ck, ck, tb_f);
+            read_into(g_acc, cb_g, hc * ck, ck, tb_g);
         }
         read_into(b_acc, cb_beta, hc * Ct, Ct, tb_f);
     }

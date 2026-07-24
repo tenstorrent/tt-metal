@@ -348,7 +348,7 @@ class KimiDeltaAttention:
             decay_scale,
             gate,
             input_tensor_b_activations=gate_activations,
-            dtype=ttnn.float32,
+            dtype=ttnn.bfloat16 if head_major else ttnn.float32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 

@@ -209,7 +209,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     add_cb(pcb::q, ck, 1, df_io);
     add_cb(pcb::k, ck, 1, df_io);
     add_cb(pcb::v, cv, 1, df_io);
-    add_cb(pcb::g, attrs.vector_gate ? ck : Ct);
+    add_cb(pcb::g, attrs.vector_gate ? ck : Ct, 1, tt::tt_metal::datatype_to_dataformat_converter(in.g.dtype()));
     add_cb(pcb::beta, Ct);
     add_cb(pcb::eye, cc);
     add_cb(pcb::tril, cc);

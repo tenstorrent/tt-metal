@@ -450,8 +450,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     ttnn::Tensor k = flat_qk ? as_bf16(k_in) : head_split_tile(k_in, B, T, H, K);
     ttnn::Tensor v = flat_v ? (v_in.dtype() == DataType::BFLOAT16 ? v_in : ttnn::typecast(v_in, DataType::BFLOAT16))
                             : head_split_tile(v_in, B, T, H, V);
-    ttnn::Tensor g = flat_g ? (g_in.dtype() == DataType::FLOAT32 ? g_in : ttnn::typecast(g_in, DataType::FLOAT32))
-                            : head_split_float_tile(g_in, B, T, H, K);
+    ttnn::Tensor g = flat_g ? g_in : head_split_float_tile(g_in, B, T, H, K);
     ttnn::Tensor beta = headvec_split_tile(beta_in, B, T, H);
     TT_FATAL(!flat_qk || pad == 0, "chunk_kda flat q/k requires T to be divisible by chunk_size");
     TT_FATAL(!flat_v || pad == 0, "chunk_kda flat v requires T to be divisible by chunk_size");

@@ -10,18 +10,22 @@ keeps failed experiments visible so they are not repeated unchanged.
 - Selected storage policy: mask `0x26`; `kd`, `q_decay`, and `dl` cross the
   prep-to-scan boundary in BF16. Arithmetic, `v_beta`, `k_dec_t`, `intra`,
   `t_inv`, recurrent state, and public outputs remain FP32.
+- The transformed decay gate is stored in BF16 for tile-aligned chunk prefill;
+  recurrent/decode gate storage remains FP32. Mixed-format prep arithmetic and
+  recurrent state remain FP32.
 - Prepared tensors now remain interleaved in distributed L1 between prep and
   scan. `QWEN_KDA_PREP_DRAM=1` preserves the measured DRAM control.
-- T=640 wall: `643.623 -> 622.564 us` (`-3.27%`).
-- T=5,120 wall: `3681.529 -> 3474.029 us` (`-5.64%` versus the matched FP32
+- T=640 wall: `643.623 -> 619.594 us` (`-3.73%`).
+- T=5,120 wall: `3681.529 -> 3385.003 us` (`-8.05%` versus the matched FP32
   DRAM control).
-- T=5,120 recurrence: `1023.411 -> 809.704 us` (`-20.88%` versus control).
+- T=5,120 recurrence: `1023.411 -> 807.181 us` (`-21.13%` versus control).
 - T=5,120 selected block times: projection `524.798 us`, convolution
-  `601.588 us`, recurrence `809.704 us`, and output/CCL `1069.975 us`.
-- Estimated T=5,120 compute utilization: `12.80%`.
+  `601.588 us`, decay transform `108.106 us`, recurrence `807.181 us`, and
+  output/CCL `1069.975 us`.
+- Estimated T=5,120 compute utilization: `13.14%`.
 - Estimated T=5,120 CCL utilization: `39.79%` against the 40% aspiration.
 - Final correctness gate: 27/27 tests passed; focused TP output/recurrent
-  state/convolution PCC was `0.999964/0.999903/0.999997`.
+  state/convolution PCC was `0.999965/0.999910/0.999997`.
 
 The complete evidence is in `bringup_log.md`, `ROOFLINE.md`, and
 `perf_report/codex-kda_perf_report.html`.
@@ -163,6 +167,14 @@ For local scan changes, retain an experiment only when:
 14. Overlap final-state writes with the last output tiles.
 
 ### B. Additional precision and storage
+
+Retained experiment, 2026-07-24: store the transformed decay gate in BF16
+for tile-aligned chunk prefill. Focused TP output/state/conv PCC was
+`0.999965/0.999910/0.999997`; the full suite passed 27/27. T=640 wall
+improved `622.564 -> 619.594 us` (`-0.48%`). T=5,120 wall improved
+`3474.029 -> 3385.003 us` (`-2.56%`), while the decay block fell
+`200.638 -> 108.106 us` (`-46.1%`) and recurrence improved
+`809.704 -> 807.181 us` (`-0.31%`). Recurrent/decode remains FP32.
 
 15. Store `k_dec_t` as scaled BF16.
 16. Store `k_dec_t` as BF16 plus a compressed residual.
