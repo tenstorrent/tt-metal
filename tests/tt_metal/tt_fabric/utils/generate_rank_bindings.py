@@ -188,11 +188,25 @@ DEVICES_PER_SLICE = 8
 # The quad layout (8x4x4z) instead splits the outer slices across adjacent ring
 # hosts -- see build_quad_split_rank_table / resolve_quad_split_rank_table.
 FABRIC_TEST_SLICE_MAPPINGS = {
+    # Single 4x4 subtorus mesh: only the center/inner 4x4 (slices {1,2}) is
+    # instantiated, as one mesh (mesh 0). No outer pair and no Z link -- this is
+    # the 2x4x4z inner mesh on its own (see single_bh_galaxy_4x4_subtorus).
+    "4x4": {0: [1, 2]},
     "2x4x4z": {0: [1, 2], 1: [0, 3]},
 }
-# CLI choices for --slice-config: single-host plus the quad split layout.
+# CLI choices for --slice-config: single-mesh subtorus, single-host dual mesh,
+# plus the quad split layout.
 
-SLICE_CONFIG_CHOICES = ["2x4x4z", "8x4x4z"]
+SLICE_CONFIG_CHOICES = ["4x4", "2x4x4z", "8x4x4z"]
+
+# Single 4x4 subtorus: unlike 2x4x4z/8x4x4z (which only print devices for
+# run_fabric_tests.sh), this one writes a ready-to-use rank-binding YAML, like
+# the default (no-arg) run. It is always single-host / single-mesh, so it
+# self-discovers locally (mpirun --np 1, no --host) and needs no --hosts.
+SINGLE_4X4_SUBTORUS_MGD = (
+    "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_4x4_subtorus_graph_descriptor.textproto"
+)
+SINGLE_4X4_SUBTORUS_RANK_BINDING = "bh_4x4_subtorus_rank_binding.yaml"
 
 
 def generate_slice_to_pcie_device_mapping(hosts, mpi_if=None, work_dir=None, mapping_file=SLICE_MAPPING_FILE):
@@ -407,6 +421,78 @@ def resolve_quad_split_rank_table(hosts, mpi_if=None, run_discovery=True, work_d
     return rank_table
 
 
+def resolve_local_slice_devices(slice_ids, run_discovery=True, work_dir=None, mapping_file=SLICE_MAPPING_FILE):
+    """Resolve the given slice ids to an ordered device list on the local host.
+
+    Runs the 2x4 slice discovery as a single LOCAL rank (mpirun --np 1, no
+    --host => no ssh), then reads back the one host entry. Used by single-host
+    configs that don't need cross-host enumeration.
+    """
+    cwd = Path(work_dir) if work_dir else Path.cwd()
+    mapping_path = cwd / mapping_file
+
+    if run_discovery:
+        generate_slice_to_pcie_device_mapping(None, work_dir=cwd, mapping_file=mapping_file)
+    elif not mapping_path.exists():
+        logger.error(f"{mapping_path} not found (run discovery or generate it first)")
+        sys.exit(1)
+
+    with open(mapping_path, "r") as f:
+        slice_mapping = yaml.safe_load(f)
+    device_mapping = slice_mapping.get("device_mapping", {})
+    if not device_mapping:
+        logger.error(f"No device_mapping found in {mapping_path}")
+        sys.exit(1)
+
+    # Single LOCAL discovery yields exactly one host entry.
+    reference_slices = next(iter(device_mapping.values()))
+    devices = []
+    for slice_id in slice_ids:
+        if slice_id not in reference_slices:
+            logger.error(f"Slice {slice_id} not found in {mapping_path}")
+            sys.exit(1)
+        slice_devices = sorted(reference_slices[slice_id])
+        if len(slice_devices) != DEVICES_PER_SLICE:
+            logger.error(f"Slice {slice_id} resolved to {len(slice_devices)} devices, expected {DEVICES_PER_SLICE}")
+            sys.exit(1)
+        devices.extend(slice_devices)
+    return devices
+
+
+def generate_single_4x4_subtorus_rank_binding(run_discovery=True, work_dir=None):
+    """Write a single-rank rank-binding YAML for the inner 4x4 subtorus mesh.
+
+    The mesh is the center/inner 4x4 of the galaxy (slices {1,2}), instantiated
+    on its own as a single mesh (mesh 0) -> one MPI rank on one host. Discovery
+    is local (no --hosts), and the output is a complete rank_binding file (with
+    TT_VISIBLE_DEVICES populated) pointing at the 4x4 subtorus MGD, ready to use
+    like the default no-arg run.
+    """
+    slice_ids = FABRIC_TEST_SLICE_MAPPINGS["4x4"][0]  # [1, 2]
+    devices = resolve_local_slice_devices(slice_ids, run_discovery=run_discovery, work_dir=work_dir)
+
+    rank_bindings = [
+        {
+            "rank": 0,
+            "mesh_id": 0,
+            "mesh_host_rank": 0,
+            "env_overrides": {"TT_VISIBLE_DEVICES": ",".join(map(str, devices))},
+        }
+    ]
+    rank_config = {
+        "rank_bindings": rank_bindings,
+        "mesh_graph_desc_path": SINGLE_4X4_SUBTORUS_MGD,
+    }
+
+    cwd = Path(work_dir) if work_dir else Path.cwd()
+    output_path = cwd / SINGLE_4X4_SUBTORUS_RANK_BINDING
+    with open(output_path, "w") as f:
+        yaml.dump(rank_config, f, default_flow_style=False, sort_keys=False)
+
+    logger.info(f"Generated rank configuration file: {output_path}")
+    return rank_config
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate rank bindings from tray discovery")
     parser.add_argument(
@@ -417,7 +503,11 @@ def parse_args():
     parser.add_argument(
         "--slice-config",
         choices=SLICE_CONFIG_CHOICES,
-        help="Slice-based fabric test layout (used by run_fabric_tests.sh 2x4x4z/8x4x4z)",
+        help=(
+            "Slice-based fabric test layout. 2x4x4z/8x4x4z print devices for run_fabric_tests.sh; "
+            "4x4 instead writes a ready-to-use single-mesh rank binding "
+            f"({SINGLE_4X4_SUBTORUS_RANK_BINDING}) via local discovery (no --hosts needed)"
+        ),
     )
     parser.add_argument(
         "--hosts",
@@ -442,7 +532,8 @@ def parse_args():
     parser.add_argument(
         "--no-discovery",
         action="store_true",
-        help="With --fabric-config: use existing tray_to_pcie_device_mapping.yaml in cwd",
+        help="With --fabric-config: use existing tray_to_pcie_device_mapping.yaml in cwd; "
+        "with --slice-config 4x4: use existing slice_to_pcie_device_mapping.yaml in cwd",
     )
     parser.add_argument(
         "--work-dir",
@@ -757,7 +848,14 @@ def generate_supported_rank_bindings():
 
 if __name__ == "__main__":
     args = parse_args()
-    if args.slice_config == "8x4x4z":
+    if args.slice_config == "4x4":
+        # Single-host, single-mesh: write a ready-to-use rank binding (like the
+        # default run), self-discovering locally. No --hosts / --print-devices.
+        generate_single_4x4_subtorus_rank_binding(
+            run_discovery=not args.no_discovery,
+            work_dir=args.work_dir,
+        )
+    elif args.slice_config == "8x4x4z":
         hosts = [h for h in args.hosts.split(",") if h]
         rank_table = resolve_quad_split_rank_table(
             hosts,
