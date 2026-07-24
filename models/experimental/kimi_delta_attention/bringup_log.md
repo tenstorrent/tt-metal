@@ -809,3 +809,35 @@
   split `19.064 us`, decay `33.163 us`, layout `9.299 us`, recurrence
   `183.096 us`, epilogue `19.377 us`, output `152.330 us`, and state
   `3.059 us`. This is the control for every storage-only comparison below.
+
+
+### 2026-07-24 15:59:40 UTC — Store q_decay in BF16
+
+- Hypothesis: `q_decay` is read-only scan input with no role in the persistent
+  state update; halving its prep write and four-way scan read traffic should
+  reduce recurrence latency without exposing the state to BF16 rounding.
+- Added a private `QWEN_KDA_PREP_BF16_MASK` experiment path. It changes only
+  selected prep-to-scan DRAM tensors and matching CB formats/page sizes; scan
+  still unpacks into FP32-destination math. Public APIs, `intra`, `t_inv`,
+  recurrent state, recurrence output, and final output remain FP32. Mask bit 2
+  (`0x4`) selects `q_decay`.
+- Build: `./build_metal.sh --build-tests --build-type Release` -> exit 0, 52
+  incremental targets and install completed.
+- Direct correctness:
+  `QWEN_KDA_PREP_BF16_MASK=0x4 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_chunk_kda.py -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 5/5 in 21.96 s. Every printed output/state PCC
+  matches the FP32 control to six decimals.
+- TP=8 layer correctness:
+  `QWEN_KDA_PREP_BF16_MASK=0x4 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_tp_weights.py::test_tp_layer_pcc -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 1/1 in 34.58 s; output/recurrent/convolution
+  PCC is `0.999964/0.999903/0.999997`.
+- Measurement command:
+  `QWEN_KDA_PREP_BF16_MASK=0x4 PERF_TRACE=1 PERF_SEQ=640 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 1/1.
+- Report:
+  `generated/profiler/reports/2026_07_24_15_59_40/ops_perf_results_2026_07_24_15_59_40.csv`
+  (SHA-256 `cfbbdadab83d8d9c80e9911e8ff50042483ab853389f4a4a87ca6c8aef5471f1`).
+  Against the fresh FP32 control, median wall latency improves
+  `659.024 -> 653.435 us` (`-5.590 us`, `-0.85%`), active time improves
+  `637.981 -> 631.362 us`, and recurrence improves `183.096 -> 176.869 us`.
+  Retain `q_decay` as the first accepted BF16-storage candidate.

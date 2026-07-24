@@ -219,18 +219,21 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     add_cb(pcb::decay_exp, attrs.vector_gate ? ck : Ct);
     add_cb(pcb::decayfac, attrs.vector_gate ? ck : Ct);
     add_cb(pcb::lmask, cc);
-    add_cb(pcb::Tinv, cc);
-    add_cb(pcb::vbeta, cv);
+    const auto output_df = [&](uint32_t index) {
+        return tt::tt_metal::datatype_to_dataformat_converter(outputs[index].dtype());
+    };
+    add_cb(pcb::Tinv, cc, 1, output_df(6));
+    add_cb(pcb::vbeta, cv, 1, output_df(0));
     add_cb(pcb::kbeta, ck);
     add_cb(pcb::out, cv, 2, df_io);
     add_cb(pcb::u, std::max(cv, 3u));  // startup pacing tiles; then unused scratch
-    add_cb(pcb::w, ck);
-    add_cb(pcb::qdecay, ck);
-    add_cb(pcb::intra, cc);
+    add_cb(pcb::w, ck, 1, output_df(1));
+    add_cb(pcb::qdecay, ck, 1, output_df(2));
+    add_cb(pcb::intra, cc, 1, output_df(3));
     add_cb(pcb::s2, kv, 2);
-    add_cb(pcb::vnew, attrs.vector_gate ? std::max(cv, Kt) : cv);  // aliased as cb_dl
+    add_cb(pcb::vnew, attrs.vector_gate ? std::max(cv, Kt) : cv, 1, output_df(5));  // aliased as cb_dl
     add_cb(pcb::ointer, cv);
-    add_cb(pcb::kdec_t, kc);
+    add_cb(pcb::kdec_t, kc, 1, output_df(4));
     add_cb(pcb::supd, kv);
     add_cb(pcb::stmp, kv);
     add_cb(pcb::final_s, kv);
@@ -389,13 +392,16 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     };
 
     // Per-chunk inputs (streamed from DRAM). u-slot holds v_beta, w-slot holds kd. nbuf=1.
-    add_cb(pcb::u, cv, 1);  // v_beta
-    add_cb(pcb::w, ck, 1);  // kd
-    add_cb(pcb::qdecay, ck, 1);
-    add_cb(pcb::intra, cc, 1);
-    add_cb(pcb::kdec_t, kc, 1);
-    add_cb(pcb::dl, attrs.vector_gate ? Kt : 1, 1);
-    add_cb(pcb::Tinv, cc, 1);  // t_inv (WY inverse)
+    const auto input_df = [](const Tensor& tensor) {
+        return tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
+    };
+    add_cb(pcb::u, cv, 1, input_df(in.v_beta));  // v_beta
+    add_cb(pcb::w, ck, 1, input_df(in.kd));      // kd
+    add_cb(pcb::qdecay, ck, 1, input_df(in.q_decay));
+    add_cb(pcb::intra, cc, 1, input_df(in.intra));
+    add_cb(pcb::kdec_t, kc, 1, input_df(in.k_dec_t));
+    add_cb(pcb::dl, attrs.vector_gate ? Kt : 1, 1, input_df(in.dl));
+    add_cb(pcb::Tinv, cc, 1, input_df(in.t_inv));  // t_inv (WY inverse)
     // State: cb_S is reader-produced (chunk 0 only); s2/s3 are compute-only ping-pong.
     add_cb(pcb::S, kv);
     add_cb(pcb::s2, kv);

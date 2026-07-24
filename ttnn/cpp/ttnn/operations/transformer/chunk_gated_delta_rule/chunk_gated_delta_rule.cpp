@@ -510,6 +510,15 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false);
+    uint32_t prep_bf16_mask = 0;
+    if (const char* env = std::getenv("QWEN_KDA_PREP_BF16_MASK")) {
+        char* end = nullptr;
+        const auto parsed = std::strtoul(env, &end, 0);
+        TT_FATAL(
+            end != env && *end == '\0' && parsed <= 0xFFFFFFFFUL, "QWEN_KDA_PREP_BF16_MASK must be a uint32 integer");
+        prep_bf16_mask = static_cast<uint32_t>(parsed);
+    }
+    TT_FATAL((prep_bf16_mask & ~0x37u) == 0, "unsupported KDA prep BF16 mask 0x{:x}", prep_bf16_mask);
     auto prep = ttnn::prim::chunk_gdn_prep(
         q,
         k,
@@ -530,7 +539,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
         flat_qk,
         H,
         flat_g,
-        true);
+        true,
+        prep_bf16_mask);
     auto scan = ttnn::prim::chunk_gdn_scan(
         prep[0], prep[1], prep[2], prep[3], prep[4], prep[5], prep[6], s0, C, true, out_mem, kernel_cfg, true);
 

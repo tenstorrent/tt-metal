@@ -49,6 +49,8 @@ struct ChunkGdnPrepParams {
     bool qk_norm = false;
     float scale = 1.0f;
     bool vector_gate = false;
+    // Private KDA experiment: bit i stores prep output i as BF16 in DRAM.
+    uint32_t output_bf16_mask = 0;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
@@ -83,8 +85,8 @@ struct ChunkGdnPrepOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-// Returns {v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv} (all fp32, per-chunk DRAM tensors).
-// (WY hand-off is un-premultiplied: the scan applies t_inv AFTER the v_beta - kd@S subtraction,
+// Returns {v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv} (FP32 by default; selected KDA intermediates may use BF16
+// storage). (WY hand-off is un-premultiplied: the scan applies t_inv AFTER the v_beta - kd@S subtraction,
 //  so the inverse's fp error is not amplified by the cancellation.)
 std::vector<Tensor> chunk_gdn_prep(
     const Tensor& q,
@@ -106,7 +108,8 @@ std::vector<Tensor> chunk_gdn_prep(
     bool qk_flat = false,
     uint32_t Hk = 0,
     bool g_flat = false,
-    bool vector_gate = false);
+    bool vector_gate = false,
+    uint32_t output_bf16_mask = 0);
 
 // ---------------------------------------------------------------------------
 // SCAN
@@ -125,12 +128,12 @@ struct ChunkGdnScanParams {
 };
 
 struct ChunkGdnScanInputs {
-    Tensor v_beta;                        // [BH, NC, C, V] fp32  (= v * beta)
-    Tensor kd;                            // [BH, NC, C, K] fp32  (= k_beta * decay_exp)
-    Tensor q_decay;                       // [BH, NC, C, K] fp32
+    Tensor v_beta;                        // [BH, NC, C, V] fp32 or bf16  (= v * beta)
+    Tensor kd;                            // [BH, NC, C, K] fp32 or bf16  (= k_beta * decay_exp)
+    Tensor q_decay;                       // [BH, NC, C, K] fp32 or bf16
     Tensor intra;                         // [BH, NC, C, C] fp32
-    Tensor k_dec_t;                       // [BH, NC, K, C] fp32
-    Tensor dl;                            // [BH, NC, 1|K, 1] fp32 (scalar GDN or vector KDA decay)
+    Tensor k_dec_t;                       // [BH, NC, K, C] fp32 or bf16
+    Tensor dl;                            // [BH, NC, 1|K, 1] fp32 or bf16 (scalar GDN or vector KDA decay)
     Tensor t_inv;                         // [BH, NC, C, C] fp32  (WY inverse)
     std::optional<Tensor> initial_state;  // [BH, K, V] fp32 or absent (zeros)
 };

@@ -19,6 +19,16 @@ void check(const Tensor& t, const char* name, DataType dt) {
     TT_FATAL(t.dtype() == dt, "chunk_gdn: {} has wrong dtype", name);
     TT_FATAL(t.buffer() != nullptr, "chunk_gdn: {} must be on device", name);
 }
+
+void check_intermediate(const Tensor& t, const char* name, bool allow_bf16) {
+    TT_FATAL(t.layout() == Layout::TILE, "chunk_gdn: {} must be TILE layout", name);
+    TT_FATAL(
+        t.dtype() == DataType::FLOAT32 || (allow_bf16 && t.dtype() == DataType::BFLOAT16),
+        "chunk_gdn: {} must be FLOAT32{}",
+        name,
+        allow_bf16 ? " or BFLOAT16" : "");
+    TT_FATAL(t.buffer() != nullptr, "chunk_gdn: {} must be on device", name);
+}
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -68,19 +78,24 @@ void ChunkGdnPrepOperation::validate_on_program_cache_miss(
 
 ChunkGdnPrepOperation::spec_return_value_t ChunkGdnPrepOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t&) {
-    const auto f32 = [&](const ttnn::Shape& s) {
-        return tt::tt_metal::TensorSpec(
-            s, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config));
+    constexpr uint32_t allowed_bf16_mask = 0x37;  // v_beta, kd, q_decay, k_dec_t, dl
+    TT_FATAL(
+        (attrs.output_bf16_mask & ~allowed_bf16_mask) == 0,
+        "unsupported KDA prep BF16 mask 0x{:x}",
+        attrs.output_bf16_mask);
+    const auto spec = [&](const ttnn::Shape& s, uint32_t output_index) {
+        const auto dtype = (attrs.output_bf16_mask & (1u << output_index)) ? DataType::BFLOAT16 : DataType::FLOAT32;
+        return tt::tt_metal::TensorSpec(s, TensorLayout(dtype, PageConfig(Layout::TILE), attrs.output_mem_config));
     };
     const uint32_t BH = attrs.BH, NC = attrs.num_chunks, C = attrs.chunk_size, K = attrs.key_dim, V = attrs.val_dim;
     return {
-        f32(ttnn::Shape({BH, NC, C, V})),                          // v_beta
-        f32(ttnn::Shape({BH, NC, C, K})),                          // kd
-        f32(ttnn::Shape({BH, NC, C, K})),                          // q_decay
-        f32(ttnn::Shape({BH, NC, C, C})),                          // intra
-        f32(ttnn::Shape({BH, NC, K, C})),                          // k_dec_t
-        f32(ttnn::Shape({BH, NC, attrs.vector_gate ? K : 1, 1})),  // dl
-        f32(ttnn::Shape({BH, NC, C, C})),                          // t_inv
+        spec(ttnn::Shape({BH, NC, C, V}), 0),                          // v_beta
+        spec(ttnn::Shape({BH, NC, C, K}), 1),                          // kd
+        spec(ttnn::Shape({BH, NC, C, K}), 2),                          // q_decay
+        spec(ttnn::Shape({BH, NC, C, C}), 3),                          // intra
+        spec(ttnn::Shape({BH, NC, K, C}), 4),                          // k_dec_t
+        spec(ttnn::Shape({BH, NC, attrs.vector_gate ? K : 1, 1}), 5),  // dl
+        spec(ttnn::Shape({BH, NC, C, C}), 6),                          // t_inv
     };
 }
 
@@ -116,7 +131,8 @@ std::vector<Tensor> chunk_gdn_prep(
     bool qk_flat,
     uint32_t Hk,
     bool g_flat,
-    bool vector_gate) {
+    bool vector_gate,
+    uint32_t output_bf16_mask) {
     const auto& q_shape = q.logical_shape();  // [BH,NC,C,K] head-major, or flat [B,T,Hk*K] when qk_flat
     const auto& v_shape = v.logical_shape();  // [BH,NC,C,V] head-major, or flat [B,T,HV*V] when v_flat
     // Derive dims. Head-major q gives BH/NC/K directly; flat q [B,T,Hk*K] gives B/T, so BH=B*HV,
@@ -139,6 +155,7 @@ std::vector<Tensor> chunk_gdn_prep(
         .qk_norm = qk_norm,
         .scale = scale,
         .vector_gate = vector_gate,
+        .output_bf16_mask = output_bf16_mask,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
     };
@@ -166,12 +183,12 @@ ChunkGdnScanOperation::program_factory_t ChunkGdnScanOperation::select_program_f
 void ChunkGdnScanOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     using namespace tt::constants;
-    check(in.v_beta, "v_beta", DataType::FLOAT32);
-    check(in.kd, "kd", DataType::FLOAT32);
-    check(in.q_decay, "q_decay", DataType::FLOAT32);
+    check_intermediate(in.v_beta, "v_beta", attrs.vector_gate);
+    check_intermediate(in.kd, "kd", attrs.vector_gate);
+    check_intermediate(in.q_decay, "q_decay", attrs.vector_gate);
     check(in.intra, "intra", DataType::FLOAT32);
-    check(in.k_dec_t, "k_dec_t", DataType::FLOAT32);
-    check(in.dl, "dl", DataType::FLOAT32);
+    check_intermediate(in.k_dec_t, "k_dec_t", attrs.vector_gate);
+    check_intermediate(in.dl, "dl", attrs.vector_gate);
     check(in.t_inv, "t_inv", DataType::FLOAT32);
     if (in.initial_state.has_value()) {
         check(*in.initial_state, "initial_state", DataType::FLOAT32);

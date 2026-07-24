@@ -3,8 +3,8 @@
 //
 // KDA prep writer: per chunk, drain the 7 state-independent intermediates to DRAM.
 //   v_beta [C,V], kd [C,K], q_decay [C,K], intra [C,C], k_dec_t [K,C], dl [K,1], t_inv [C,C].
-// All fp32. Each DRAM tensor is [BH, NC, R, Col] TILE, so head h chunk c starts at
-// tile (h*NC + c) * (tiles-per-chunk).
+// FP32 by default; selected storage-only experiments use BF16. Each DRAM tensor is [BH, NC, R, Col] TILE, so head h
+// chunk c starts at tile (h*NC + c) * (tiles-per-chunk).
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -41,14 +41,20 @@ void kernel_main() {
     const uint32_t dl_addr = get_arg_val<uint32_t>(7);
     const uint32_t ti_addr = get_arg_val<uint32_t>(8);
 
-    const uint32_t tb = get_tile_size(cb_vbeta);  // all outputs are fp32 -> same tile size
-    const auto vb_acc = TensorAccessor(vb_a, vb_addr, tb);
-    const auto kd_acc = TensorAccessor(kd_a, kd_addr, tb);
-    const auto qd_acc = TensorAccessor(qd_a, qd_addr, tb);
-    const auto it_acc = TensorAccessor(it_a, it_addr, tb);
-    const auto kc_acc = TensorAccessor(kc_a, kc_addr, tb);
-    const auto dl_acc = TensorAccessor(dl_a, dl_addr, tb);
-    const auto ti_acc = TensorAccessor(ti_a, ti_addr, tb);
+    const uint32_t vb_tb = get_tile_size(cb_vbeta);
+    const uint32_t kd_tb = get_tile_size(cb_kd);
+    const uint32_t qd_tb = get_tile_size(cb_qdecay);
+    const uint32_t it_tb = get_tile_size(cb_intra);
+    const uint32_t kc_tb = get_tile_size(cb_kdec_t);
+    const uint32_t dl_tb = get_tile_size(cb_dl);
+    const uint32_t ti_tb = get_tile_size(cb_Tinv);
+    const auto vb_acc = TensorAccessor(vb_a, vb_addr, vb_tb);
+    const auto kd_acc = TensorAccessor(kd_a, kd_addr, kd_tb);
+    const auto qd_acc = TensorAccessor(qd_a, qd_addr, qd_tb);
+    const auto it_acc = TensorAccessor(it_a, it_addr, it_tb);
+    const auto kc_acc = TensorAccessor(kc_a, kc_addr, kc_tb);
+    const auto dl_acc = TensorAccessor(dl_a, dl_addr, dl_tb);
+    const auto ti_acc = TensorAccessor(ti_a, ti_addr, ti_tb);
 
     constexpr uint32_t cc = Ct * Ct;
     constexpr uint32_t ck = Ct * Kt;
@@ -57,12 +63,12 @@ void kernel_main() {
 
     Noc noc;
 
-    auto drain = [&](uint32_t cb_id, const auto& acc, uint32_t n, uint32_t chunk_base) {
+    auto drain = [&](uint32_t cb_id, const auto& acc, uint32_t tile_bytes, uint32_t n, uint32_t chunk_base) {
         CircularBuffer cb(cb_id);
         cb.wait_front(n);
         auto src = use<CircularBuffer::AddrSelector::READ_PTR>(cb);
         for (uint32_t t = 0; t < n; t++) {
-            noc.async_write(src, acc, tb, {.offset_bytes = t * tb}, {.page_id = chunk_base + t});
+            noc.async_write(src, acc, tile_bytes, {.offset_bytes = t * tile_bytes}, {.page_id = chunk_base + t});
         }
         noc.async_write_barrier();
         cb.pop_front(n);
@@ -71,12 +77,12 @@ void kernel_main() {
     // Drain roughly in the compute's push order (v_beta, t_inv, kd, intra, q_decay, k_dec_t, dl).
     for (uint32_t i = 0; i < wi_count; i++) {
         const uint32_t hc = wi_start + i;  // flat (head, chunk) index
-        drain(cb_vbeta, vb_acc, cv, hc * cv);
-        drain(cb_Tinv, ti_acc, cc, hc * cc);
-        drain(cb_kd, kd_acc, ck, hc * ck);
-        drain(cb_intra, it_acc, cc, hc * cc);
-        drain(cb_qdecay, qd_acc, ck, hc * ck);
-        drain(cb_kdec_t, kc_acc, kc, hc * kc);
-        drain(cb_dl, dl_acc, Kt, hc * Kt);
+        drain(cb_vbeta, vb_acc, vb_tb, cv, hc * cv);
+        drain(cb_Tinv, ti_acc, ti_tb, cc, hc * cc);
+        drain(cb_kd, kd_acc, kd_tb, ck, hc * ck);
+        drain(cb_intra, it_acc, it_tb, cc, hc * cc);
+        drain(cb_qdecay, qd_acc, qd_tb, ck, hc * ck);
+        drain(cb_kdec_t, kc_acc, kc_tb, kc, hc * kc);
+        drain(cb_dl, dl_acc, dl_tb, Kt, hc * Kt);
     }
 }
