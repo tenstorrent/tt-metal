@@ -27,10 +27,18 @@ which handle non-tile-aligned W (row_bytes) and H (partial last block) and the
 per-core start-row offset natively — no host-side pad/slice.
 """
 
+import os
 import struct
 from pathlib import Path
 
 import ttnn
+
+# ---- Perf 1 fast-path master switch (debug/A-B knob; default ON) ----
+# The Perf-1 tournament compute levers (PASS1_FUSED, PASS2_RECONFIG_SKIP) are predicate-guarded
+# fast paths. This env knob force-disables BOTH so a same-session baseline-vs-graduated A/B can
+# be measured (RMS_PERF1_FASTPATH=0 -> the byte-identical R6f/R6g compute path everywhere). It
+# does NOT change which cells are supported; it is a measurement/debug aid only. Default: ON.
+_PERF1_FASTPATH = os.environ.get("RMS_PERF1_FASTPATH", "1") != "0"
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 TILE_DIM = 32
@@ -1331,6 +1339,28 @@ def _assemble_xcore_kernels(
         batch_rows = max(1, min(Ht_local, STAT_BATCH_ROWS, c_max_l1))
     C = batch_rows
 
+    # ---- Perf 1: pass-1 fused square-DEST-accumulate reduce + pass-2 reconfig-skip ----
+    # Two compute-side per-call-overhead levers on the cross-core compute floor (Perf-1
+    # tournament, measured isolated + end-to-end on Blackhole; see changelog "## Perf 1").
+    # Both are predicate-guarded fast paths WIDENED to their measured winning domain — every
+    # case outside the predicate keeps the byte-identical R6f/R6g path (no regression):
+    #   * PASS1_FUSED (1.48× on pass 1 @per_w_t=4): fuse the square INTO an FPU DEST-accumulate
+    #     (the vwt x-tiles collapse into ONE summed x² tile in DEST, packed once to cb_xsq),
+    #     then a SINGLE REDUCE_ROW over that 1 tile — vs the streaming square(vwt)+matmul-
+    #     reduce(vwt). Winning domain: the tiled path (not RM), NO partial W (full scaler), and
+    #     2 <= per_w_t <= 4. Lower bound 2: per_w_t=1 is measured FLAT (nothing to collapse).
+    #     Upper bound 4: bounds the bf16-DEST accumulation error above the 0.9995 soft-PCC gate
+    #     under fp32_dest_acc_en=False (PCC 0.99984 @vwt4; ~0.9992 @vwt8 -> excluded).
+    #   * PASS2_RECONFIG_SKIP (byte-identical; wins on MULTI-ROW pass-2): drop the per-chain
+    #     srcA/pack data-format reconfigs in pass 2 that are provably constant (input/output
+    #     dtype), establishing them once at pass-2 entry. Winning domain: the non-RM batched
+    #     path with gamma present, no partial W (so the pad-copy path is not interleaved), AND
+    #     C > 1 (multi-tile-row rounds — the entry reconfig amortizes over C·2 chains/call).
+    #     At C=1 (single-row WIDTH/decode) there is nothing to amortize and the entry reconfig
+    #     is a net ~1-2% LOSS (measured), so those stay on the byte-identical per-chain path.
+    pass1_fused = _PERF1_FASTPATH and (not is_rm) and (not has_partial_w) and (2 <= per_w_t <= 4)
+    pass2_reconfig_skip = _PERF1_FASTPATH and pass2_batch and has_gamma and (not has_partial_w) and (C > 1)
+
     # ---- R6c two-stage (hierarchical) gather topology ----
     # `masters` maps each group's master (mx,my) -> master core; derived once here (single
     # source of truth), reused by the two-stage topology and the mcast-segment plan below.
@@ -1653,6 +1683,8 @@ def _assemble_xcore_kernels(
         1 if two_phase else 0,  # TWO_PHASE_FOLD (R6e; idx 14)
         num_folders,  # NUM_FOLDERS (R6e; idx 15)
         1 if pass2_batch else 0,  # PASS2_BATCH (R6g lever 1; idx 16)
+        1 if pass1_fused else 0,  # PASS1_FUSED (Perf 1; idx 17)
+        1 if pass2_reconfig_skip else 0,  # PASS2_RECONFIG_SKIP (Perf 1; idx 18)
     ]
     compute_rt = ttnn.RuntimeArgs()
     for c, slice_index, _m, is_partial_holder, _wts, vwt in entries:

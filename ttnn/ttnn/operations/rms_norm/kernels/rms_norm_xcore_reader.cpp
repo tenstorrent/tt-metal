@@ -31,6 +31,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 namespace {
 constexpr uint32_t cb_x_sticks = 0;  // RM input: tile-padded sticks (loopback repack) -> compute tilize
@@ -162,6 +163,7 @@ void kernel_main() {
     // barrier. The ragged last core's padding slots [vwt, per_w_t) are left un-read
     // (pass 1 reads only vwt; pass-2 padding output is not written back).
     if constexpr (X_FROM_DRAM) {
+        MaybeDeviceZoneScope("xc_rd_x");
         const auto in_accessor = TensorAccessor(in_args, in_addr, in_page);
         const uint32_t tile_bytes = get_tile_size(cb_x_in);
         const uint32_t shard_tiles = HT_LOCAL * PER_W_T;
@@ -179,6 +181,7 @@ void kernel_main() {
     }
 
     if constexpr (HAS_GAMMA) {
+        MaybeDeviceZoneScope("xc_rd_gamma");
         const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr, gamma_page);
         if constexpr (GAMMA_IS_RM) {
             // gamma (1,1,1,W) is one row -> page 0. Read this core's W-slice one

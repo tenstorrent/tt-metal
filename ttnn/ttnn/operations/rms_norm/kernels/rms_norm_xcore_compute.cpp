@@ -44,6 +44,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/streaming_reduce_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -140,6 +141,25 @@ void kernel_main() {
     // (rms_norm_compute.cpp block_shape): Block-walk x + Col rstd for x·rstd; Scalar(front-walked
     // by Streaming pops) norm + Row gamma for ·gamma.
     constexpr bool PASS2_BATCH = get_compile_time_arg_val(16) != 0;
+    // PASS1_FUSED (Perf 1): fuse pass-1's square INTO an FPU DEST-accumulate — BinaryFpu<Mul,
+    // DestAccumulation::Enabled> collapses the vwt x-tiles into ONE summed x² tile in DEST (packed
+    // once to cb_xsq[0]), then a single REDUCE_ROW over that 1 tile yields the per-row Σx²·(1/W).
+    // This kills the vwt-wide cb_xsq round-trip AND runs the matmul-reduce datapath ONCE instead of
+    // vwt times (measured 1.51× on pass 1 at vwt=4, isolated Blackhole bench; see changelog Perf 1).
+    // Host-gated to the tiled cross-core path with NO partial W (full scaler only) and vwt<=4, which
+    // bounds the bf16-DEST accumulation error above the 0.9995 soft-PCC gate under fp32_dest_acc_en=
+    // False (PCC 0.99984 @vwt4). PASS1_FUSED=0 is byte-identical to the R6f streaming square+reduce.
+    constexpr bool PASS1_FUSED = get_compile_time_arg_val(17) != 0;
+    // PASS2_RECONFIG_SKIP (Perf 1): drop the per-chain data-format reconfigs in pass 2 that are
+    // provably constant across the loop. srcA (cb_x_in / cb_norm) and the pack target (cb_norm /
+    // cb_out) are all the input/output dtype (constant), so their reconfig is wasted MMIO — one
+    // reconfig_data_format(cb_x_in)+pack_reconfig_data_format(cb_out) at pass-2 ENTRY establishes
+    // them, then every chain uses BinaryDataFormatReconfig::SrcB (srcB genuinely alternates fp32
+    // rstd <-> gamma) + PackTileReconfig::None. Numerically byte-identical (same ops); measured
+    // 1.44× on pass 2 (isolated Blackhole bench; see changelog Perf 1). Host-gated to the non-RM
+    // tiled cross-core path with gamma present and NO partial W (so the pad-copy path — which does
+    // its own reconfig — is not interleaved). PASS2_RECONFIG_SKIP=0 is byte-identical to R6g.
+    constexpr bool PASS2_RECONFIG_SKIP = get_compile_time_arg_val(18) != 0;
 
     const uint32_t vwt = get_arg_val<uint32_t>(0);  // valid W-tiles (<= PER_W_T)
     const uint32_t is_partial_holder = get_arg_val<uint32_t>(1);
@@ -169,39 +189,46 @@ void kernel_main() {
         for (uint32_t t = 0; t < HT_LOCAL; ++t) {
             // Tilize this tile-row's PER_W_T padded tiles (reader loopback-filled
             // cb_x_sticks) into cb_x_in; held across both passes of this tile-row.
-            ckl::tilize<PER_W_T, cb_x_sticks, cb_x_in>(1);
-            cb_wait_front(cb_x_in, PER_W_T);
+            {
+                MaybeDeviceZoneScope("xc_rm_tilize");
+                ckl::tilize<PER_W_T, cb_x_sticks, cb_x_in>(1);
+                cb_wait_front(cb_x_in, PER_W_T);
+            }
 
             // ---------- Pass 1: local partial Σ_slice x²·(1/W) over vwt reduce-tiles ----------
-            for (uint32_t w = 0; w < vwt; ++w) {
-                ckl::eltwise_chain(
-                    one_tile,
-                    ckl::BinaryFpu<
-                        cb_x_in,
-                        cb_x_in,
-                        ckl::BinaryFpuOp::Mul,
-                        ckl::BroadcastDim::None,
-                        ckl::InputLifecycle::CallerManaged,
-                        ckl::InputLifecycle::CallerManaged,
-                        ckl::BinaryDataFormatReconfig::Input,
-                        ckl::Dst::D0,
-                        ckl::OperandKind::Block,
-                        ckl::OperandKind::Block,
-                        ckl::TileOffset::Set,
-                        ckl::TileOffset::Set>{w, w},
-                    ckl::PackTile<cb_xsq, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+            {
+                MaybeDeviceZoneScope("xc_pass1");
+                for (uint32_t w = 0; w < vwt; ++w) {
+                    ckl::eltwise_chain(
+                        one_tile,
+                        ckl::BinaryFpu<
+                            cb_x_in,
+                            cb_x_in,
+                            ckl::BinaryFpuOp::Mul,
+                            ckl::BroadcastDim::None,
+                            ckl::InputLifecycle::CallerManaged,
+                            ckl::InputLifecycle::CallerManaged,
+                            ckl::BinaryDataFormatReconfig::Input,
+                            ckl::Dst::D0,
+                            ckl::OperandKind::Block,
+                            ckl::OperandKind::Block,
+                            ckl::TileOffset::Set,
+                            ckl::TileOffset::Set>{w, w},
+                        ckl::PackTile<cb_xsq, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+                }
+                const ckl::ReducePartialScaler ps =
+                    is_partial_holder ? partial_scaler_sel : ckl::ReducePartialScaler::none();
+                ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, cb_xsq, cb_scaler, cb_stat_local>(
+                    ckl::ReduceInputBlockShape::of(1, vwt, 1),
+                    ckl::ReduceInputMemoryLayout::contiguous(),
+                    ckl::Accumulate::at(cb_stat_local, 0),
+                    ckl::NoOp{},
+                    ps);
             }
-            const ckl::ReducePartialScaler ps =
-                is_partial_holder ? partial_scaler_sel : ckl::ReducePartialScaler::none();
-            ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, cb_xsq, cb_scaler, cb_stat_local>(
-                ckl::ReduceInputBlockShape::of(1, vwt, 1),
-                ckl::ReduceInputMemoryLayout::contiguous(),
-                ckl::Accumulate::at(cb_stat_local, 0),
-                ckl::NoOp{},
-                ps);
 
             // ---------- Master: fold K partials -> mean; (+eps, rsqrt) -> 1/RMS ----------
             if (is_master) {
+                MaybeDeviceZoneScope("xc_fold");
                 cb_wait_front(cb_gather, K);
                 cb_reserve_back(cb_stat_handoff, 1);
                 reconfig_data_format(cb_gather, cb_gather);
@@ -232,6 +259,7 @@ void kernel_main() {
             }
 
             // ---------- Pass 2: x·rstd·gamma over the whole PER_W_T-tile W-slice ----------
+            MaybeDeviceZoneScope("xc_pass2");
             cb_wait_front(cb_stat_global, 1);
             for (uint32_t w = 0; w < PER_W_T; ++w) {
                 ckl::eltwise_chain(
@@ -326,8 +354,47 @@ void kernel_main() {
     // round/compute pipeline (R6b lever 2) can issue the NEXT round's pass 1 before the current
     // round's fold/pass 2 — overlapping this compute with the writer's synchronous transport.
     auto do_pass1 = [&](uint32_t base_t, uint32_t C_this) {
+        MaybeDeviceZoneScope("xc_pass1");
         for (uint32_t cc = 0; cc < C_this; ++cc) {
             const uint32_t t = base_t + cc;
+            if constexpr (PASS1_FUSED) {
+                // ---- Perf 1: fused square-DEST-accumulate reduce (host-gated: !HAS_PARTIAL_W, vwt<=4) ----
+                // BinaryFpu<Mul, DestAccumulation::Enabled> squares each of the vwt tiles (A==B==cb_x_in
+                // tile w, Block-walk from t*PER_W_T) and ACCUMULATES x² into ONE DEST tile; the summed
+                // tile is packed once to cb_xsq[0]. The matmul REDUCE_ROW then runs over that SINGLE tile
+                // (×1/W scaler) — the vwt-wide reduce becomes a 1-tile reduce and the cb_xsq round-trip
+                // shrinks from vwt tiles to 1. Same Σx²·(1/W) partial into cb_stat_local. No partial
+                // scaler on this path (gated to full-scaler W); vwt<=4 keeps bf16-DEST accum above the
+                // soft-PCC gate. This is the isolated-bench "fused_fpu" winner (1.51× on pass 1).
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::tiles(vwt),
+                    ckl::BinaryFpu<
+                        cb_x_in,
+                        cb_x_in,
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::BroadcastDim::None,
+                        ckl::InputLifecycle::CallerManaged,
+                        ckl::InputLifecycle::CallerManaged,
+                        ckl::BinaryDataFormatReconfig::Input,
+                        ckl::Dst::D0,
+                        ckl::OperandKind::Block,
+                        ckl::OperandKind::Block,
+                        ckl::TileOffset::Set,
+                        ckl::TileOffset::Set,
+                        ckl::DestAccumulation::Enabled>{t * PER_W_T, t * PER_W_T},
+                    ckl::PackTile<
+                        cb_xsq,
+                        ckl::OutputLifecycle::DestAccumulation,
+                        ckl::PackTileReconfig::Output,
+                        ckl::Dst::D0>{});
+                ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, cb_xsq, cb_scaler, cb_stat_local>(
+                    ckl::ReduceInputBlockShape::of(1, 1, 1),
+                    ckl::ReduceInputMemoryLayout::contiguous(),
+                    ckl::Accumulate::at(cb_stat_local, 0),
+                    ckl::NoOp{},
+                    ckl::ReducePartialScaler::none());
+                continue;
+            }
             // Refinement 6f lever 3: square the whole vwt-tile block in ONE chain (Block-walk
             // from the tile-row's resident base t*PER_W_T) instead of vwt one-tile chains, so the
             // per-call eltwise-chain init/reconfig is amortized over the block — the R3 resident
@@ -363,6 +430,7 @@ void kernel_main() {
 
     // ---------- Master: fold K partials -> mean; (+eps, rsqrt) -> 1/RMS, per row ----------
     auto do_fold = [&](uint32_t C_this) {
+        MaybeDeviceZoneScope("xc_fold");
         cb_wait_front(cb_gather, K * C_this);  // writer gathered K partials × C_this rows
         cb_reserve_back(cb_stat_handoff, C_this);
         // Raw-LLK fold needs the data-format reconfig the helpers do implicitly: pass 1 left
@@ -412,7 +480,22 @@ void kernel_main() {
     // index stays cc), same ·gamma over the vwt valid tiles, same copy on the trailing pad tiles.
     // PASS2_BATCH=0 keeps the R4/R6f per-tile pass 2 (byte-identical).
     auto do_pass2 = [&](uint32_t base_t, uint32_t C_this) {
+        MaybeDeviceZoneScope("xc_pass2");
         cb_wait_front(cb_stat_global, C_this);  // C_this 1/RMS tiles (broadcast landed)
+        // ---- Perf 1: reconfig-skip (host-gated: non-RM tiled path, gamma present, !HAS_PARTIAL_W) ----
+        // srcA (cb_x_in / cb_norm) and the pack target (cb_norm / cb_out) are all the input/output
+        // dtype (constant across pass 2), so establish them ONCE here — the preceding pass-1 / fold
+        // leaves srcA=cb_xsq/cb_gather and pack=cb_stat_local/handoff (fp32), so this fixup is needed
+        // — then every batched chain below uses BinaryDataFormatReconfig::SrcB (srcB genuinely
+        // alternates fp32 rstd <-> gamma) + PackTileReconfig::None, dropping ~2 wasted reconfigs/chain.
+        // Numerically byte-identical (same ops). PASS2_RECONFIG_SKIP=0 keeps per-chain Input/Output.
+        if constexpr (PASS2_RECONFIG_SKIP) {
+            reconfig_data_format(cb_x_in, cb_x_in);
+            pack_reconfig_data_format(cb_out);
+        }
+        constexpr auto P2_RC =
+            PASS2_RECONFIG_SKIP ? ckl::BinaryDataFormatReconfig::SrcB : ckl::BinaryDataFormatReconfig::Input;
+        constexpr auto P2_PRC = PASS2_RECONFIG_SKIP ? ckl::PackTileReconfig::None : ckl::PackTileReconfig::Output;
         for (uint32_t cc = 0; cc < C_this; ++cc) {
             const uint32_t t = base_t + cc;
             if constexpr (PASS2_BATCH) {
@@ -428,13 +511,13 @@ void kernel_main() {
                         ckl::BroadcastDim::Col,
                         ckl::InputLifecycle::CallerManaged,
                         ckl::InputLifecycle::CallerManaged,
-                        ckl::BinaryDataFormatReconfig::Input,
+                        P2_RC,
                         ckl::Dst::D0,
                         ckl::OperandKind::Block,
                         ckl::OperandKind::Col,
                         ckl::TileOffset::Set,
                         ckl::TileOffset::Set>{t * PER_W_T, cc},
-                    ckl::PackTile<cb_norm, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+                    ckl::PackTile<cb_norm, ckl::OutputLifecycle::Streaming, P2_PRC>{});
 
                 if (HAS_GAMMA) {
                     if (vwt > 0) {
@@ -451,13 +534,13 @@ void kernel_main() {
                                 ckl::BroadcastDim::Row,
                                 ckl::InputLifecycle::Streaming,
                                 ckl::InputLifecycle::CallerManaged,
-                                ckl::BinaryDataFormatReconfig::Input,
+                                P2_RC,
                                 ckl::Dst::D0,
                                 ckl::OperandKind::Scalar,
                                 ckl::OperandKind::Row,
                                 ckl::TileOffset::Unset,
                                 ckl::TileOffset::Set>{0, 0},
-                            ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+                            ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, P2_PRC>{});
                     }
                     // trailing all-pad tiles (w >= vwt): plain copy (output discarded on write-back).
                     for (uint32_t w = vwt; w < PER_W_T; ++w) {
@@ -524,6 +607,7 @@ void kernel_main() {
     // flat do_fold / streaming transform_in_place. Stage 1 (row-leader): fold NX, no finalize ->
     // cb_rowpartial. Stage 2 (root): fold NY, finalize -> cb_stat_handoff. C=1 (single round).
     auto fold_tiles = [&](uint32_t in_cb, uint32_t out_cb, uint32_t count, bool finalize) {
+        MaybeDeviceZoneScope("xc_fold");
         cb_wait_front(in_cb, count);
         cb_reserve_back(out_cb, 1);
         reconfig_data_format(in_cb, in_cb);
@@ -585,6 +669,7 @@ void kernel_main() {
     // do_pass2 are byte-identical to the flat path — only the fold is distributed off the master.
     if constexpr (TWO_PHASE_FOLD) {
         auto do_fold_owned = [&](uint32_t owned) {
+            MaybeDeviceZoneScope("xc_fold");
             cb_wait_front(cb_gather, owned * K);  // writer gathered owned rows × K partials
             cb_reserve_back(cb_rowpartial, owned);
             reconfig_data_format(cb_gather, cb_gather);

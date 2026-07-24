@@ -22,6 +22,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 namespace {
 constexpr uint32_t cb_shard_out = 9;  // RM output: zero-copy alias of the resident RM W-slice (stick pages)
@@ -177,6 +178,7 @@ void kernel_main() {
         constexpr uint32_t FOLDER_COORDS_BASE = 29;
         const uint32_t num_rounds = (HT_LOCAL + C_ROWS - 1) / C_ROWS;
         for (uint32_t r = 0; r < num_rounds; ++r) {
+            MaybeDeviceZoneScope("xc_wr_round");
             const uint32_t base_t = r * C_ROWS;
             uint32_t C_this = HT_LOCAL - base_t;
             if (C_this > C_ROWS) {
@@ -287,6 +289,7 @@ void kernel_main() {
     // transport. Compaction (G_OFF*/G_LEN*) applies to BOTH gather legs; the broadcast leg
     // moves the full stat tile (reuses the R6/R6a segmented mcast unchanged).
     if constexpr (TWO_STAGE) {
+        MaybeDeviceZoneScope("xc_wr_round");
         cb_wait_front(cb_stat_local, 1);  // compute produced this core's local partial
         const uint32_t local_src = get_read_ptr(cb_stat_local);
 
@@ -415,6 +418,7 @@ void kernel_main() {
 
     const uint32_t num_rounds = (HT_LOCAL + C_ROWS - 1) / C_ROWS;
     for (uint32_t r = 0; r < num_rounds; ++r) {
+        MaybeDeviceZoneScope("xc_wr_round");
         const uint32_t base_t = r * C_ROWS;
         uint32_t C_this = HT_LOCAL - base_t;
         if (C_this > C_ROWS) {
