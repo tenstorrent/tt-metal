@@ -10,6 +10,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.model_config import MathFidelitySetting, OpGroup
 
 
 class LMHead(LightweightModule):
@@ -132,12 +133,26 @@ class LMHead(LightweightModule):
                         )
                     )
 
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
+        # LM-head compute fidelity is config-driven via the LI_LM_HEAD OpGroup.
+        # The config's HiFi2 kernel (math_approx_mode=True, fp32_dest_acc_en=True) differs
+        # from the LM-head's original hardcoded HiFi2 (both False), so only take the
+        # config value when it actually differs from the default HiFi2 setting (i.e. the
+        # performance-mode LoFi override). Otherwise preserve the exact original config to
+        # avoid silently changing accuracy/default behavior for all other models.
+        lm_head_fidelity = args.decoders_optimizations.decoder_optimizations[0].op_fidelity_settings.get(
+            OpGroup.LI_LM_HEAD, MathFidelitySetting.HIFI2
         )
+        if lm_head_fidelity == MathFidelitySetting.HIFI2:
+            self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+        else:
+            self.compute_kernel_config = args.decoders_optimizations.get_math_fidelity(
+                decoder_id=0, op=OpGroup.LI_LM_HEAD, configuration=args
+            )
 
     def forward(self, x: ttnn.Tensor, debug_input_torch=None, debug_weight_torch=None):
         outputs = []
