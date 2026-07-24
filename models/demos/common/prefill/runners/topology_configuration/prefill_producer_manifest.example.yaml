@@ -68,5 +68,6 @@ migration:
 # field of their own:
 env:
   PREFILL_SEND_SHUTDOWN: "0"            # (default: 0) "1" => close the stream with an all -1 sentinel so the
-                                        #   runner drains + tears down after the run (sent last, after KV read).
+                                        # runner drains + tears down after the run (sent last, after KV read).
+                                        # Set to "1" for runner-side migration validation unless shutdown is external.
   PREFILL_STANDALONE_CHUNKED_PCC: "0.93" # (default: 0.93) producer-side check_pcc pass/fail threshold.
