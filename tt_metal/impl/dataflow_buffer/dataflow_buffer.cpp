@@ -8,8 +8,9 @@
 
 #include <algorithm>
 #include <array>
-#include <cstdlib>  // std::getenv (TT_METAL_QSR_TC_ISOLATE #48552 prototype)
+#include <cstdlib>  // std::getenv (TT_METAL_QSR_TC_ISOLATE #48552)
 #include <limits>
+#include <mutex>  // lifetime-aware tile-counter pool (#48552)
 #include <tuple>
 #include <unordered_map>
 #include <utility>
@@ -109,59 +110,102 @@ void BindDataflowBufferToProducerConsumerKernels(Program& program, uint32_t dfb_
 
 namespace detail {
 
+namespace {
+// [#48552] Process-global physical tile-counter pool for the lifetime-aware allocator (single-device
+// emulator; keyed by CoreCoord). For each (core, tensix) it holds a bitmask of USED counter ids — bit i set
+// means physical counter i is currently held by some live program. Counters 0..NUM_TENSIX_TILE_COUNTERS_FOR_DM
+// are the DM-visible pool; NUM_TENSIX_TILE_COUNTERS_FOR_DM..NUM_TILE_COUNTERS_PER_TENSIX are the Tensix-only
+// pool (both < 32, so one uint32_t mask per (core, tensix) covers all of them). A counter is marked used at
+// allocate() and cleared when the owning TileCounterAllocator (a ProgramImpl member) is destroyed, so only
+// concurrently-LIVE programs ever hold a given physical counter: no reuse-while-live, no wrap-around.
+struct PhysicalTileCounterPool {
+    std::mutex mu;
+    std::unordered_map<CoreCoord, std::array<uint32_t, ::dfb::NUM_TENSIX>> used_mask;
+};
+PhysicalTileCounterPool& physical_tc_pool() {
+    static PhysicalTileCounterPool pool;
+    return pool;
+}
+bool tc_lifetime_isolation_enabled() {
+    static const bool v = (std::getenv("TT_METAL_QSR_TC_ISOLATE") != nullptr);
+    return v;
+}
+static_assert(::dfb::NUM_TILE_COUNTERS_PER_TENSIX <= 32, "used_mask uint32_t covers < 32 counters per tensix");
+}  // namespace
+
 ::dfb::PackedTileCounter TileCounterAllocator::allocate(
     const CoreCoord& core, uint8_t tensix_id, bool use_t6_only) {
     TT_FATAL(tensix_id < ::dfb::NUM_TENSIX, "Invalid tensix_id: {}", tensix_id);
+
+    if (tc_lifetime_isolation_enabled()) {
+        // LIFETIME-AWARE: reserve the lowest FREE physical counter in the requested pool from the global pool
+        // and hold it until this allocator (program) is destroyed. During a run programs are cached and not
+        // destroyed, so this only ever hands out fresh, never-reused counters (no settling race); on program
+        // teardown the counters are returned for later reuse. Never wraps — exhaustion FATALs.
+        const uint8_t lo = use_t6_only ? ::dfb::TC_TENSIX_POOL_START : 0;
+        const uint8_t hi = use_t6_only ? ::dfb::NUM_TILE_COUNTERS_PER_TENSIX : ::dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM;
+        auto& pool = physical_tc_pool();
+        std::lock_guard<std::mutex> lk(pool.mu);
+        uint32_t& mask = pool.used_mask[core][tensix_id];
+        uint8_t tc_id = 0xFF;
+        for (uint8_t t = lo; t < hi; ++t) {
+            if ((mask & (1u << t)) == 0u) {
+                tc_id = t;
+                break;
+            }
+        }
+        TT_FATAL(
+            tc_id != 0xFF,
+            "Lifetime-aware tile-counter pool exhausted: all {} {} counters on core ({},{}) tensix {} are held "
+            "by concurrently-live programs. This does NOT wrap around (by design); it needs counters freed on "
+            "program completion or spread across tensixes.",
+            hi - lo,
+            use_t6_only ? "Tensix-only" : "DM-visible",
+            core.x,
+            core.y,
+            tensix_id);
+        mask |= (1u << tc_id);
+        owned_physical_tcs_.push_back(OwnedTc{core, tensix_id, tc_id});
+        return static_cast<::dfb::PackedTileCounter>((tensix_id << ::dfb::PACKED_TC_COUNTER_ID_BITS) | tc_id);
+    }
+
+    // --- default (unchanged): per-program monotonic allocation, restarts at tc_id 0 each program ---
     auto& counters = next_tc_id_[core];
-
-    // [#48552 PROTOTYPE] Physical tile counters are a shared HW resource, and this allocator is a
-    // per-ProgramImpl member that restarts at tc_id 0 for every program. So every program's first DFB
-    // deterministically lands on the same physical (tensix, tc_id=0); back-to-back programs then reuse the
-    // same counter (e.g. a split-conv matmul's cb_in0 = (0,0)=224 followed by the neighbouring slice_write's
-    // DFB0 = (0,0)=28), and one program reads a neighbour's stale capacity -> reserve_back hang (#48552).
-    // With TT_METAL_QSR_TC_ISOLATE=1, draw tc_id from a PERSISTENT per-(core,tensix,pool) rotating counter
-    // that carries ACROSS programs, so consecutive programs get DISJOINT physical counters (until the pool
-    // wraps) — removing the shared-counter race entirely, independent of the exact corruption path. Each
-    // program is still finalized once and keeps a self-consistent assignment (init writes what it reads).
-    // NOTE: prototype — process-global static, assumes single-threaded finalize; wraps at pool size so a
-    // program using > pool DFBs on one (core,tensix) would self-collide (not the case here).
-    static const bool isolate = (std::getenv("TT_METAL_QSR_TC_ISOLATE") != nullptr);
-    static std::unordered_map<CoreCoord, std::array<uint8_t, ::dfb::NUM_TENSIX>> g_dm_rot;
-    static std::unordered_map<CoreCoord, std::array<uint8_t, ::dfb::NUM_TENSIX>> g_t6_rot;
-
     uint8_t tc_id;
     if (use_t6_only) {
-        if (isolate) {
-            constexpr uint8_t kT6Slots = ::dfb::NUM_TILE_COUNTERS_PER_TENSIX - ::dfb::TC_TENSIX_POOL_START;
-            uint8_t& rot = g_t6_rot[core][tensix_id];
-            tc_id = ::dfb::TC_TENSIX_POOL_START + (rot % kT6Slots);
-            rot = static_cast<uint8_t>((rot + 1) % kT6Slots);
-        } else {
-            TT_FATAL(
-                ::dfb::TC_TENSIX_POOL_START + counters.t6_only_next[tensix_id] < ::dfb::NUM_TILE_COUNTERS_PER_TENSIX,
-                "Out of Tensix-only tile counters for tensix {} on core ({}, {})",
-                tensix_id,
-                core.x,
-                core.y);
-            tc_id = ::dfb::TC_TENSIX_POOL_START + counters.t6_only_next[tensix_id]++;
-        }
+        TT_FATAL(
+            ::dfb::TC_TENSIX_POOL_START + counters.t6_only_next[tensix_id] < ::dfb::NUM_TILE_COUNTERS_PER_TENSIX,
+            "Out of Tensix-only tile counters for tensix {} on core ({}, {})",
+            tensix_id,
+            core.x,
+            core.y);
+        tc_id = ::dfb::TC_TENSIX_POOL_START + counters.t6_only_next[tensix_id]++;
     } else {
-        if (isolate) {
-            uint8_t& rot = g_dm_rot[core][tensix_id];
-            tc_id = rot % ::dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM;
-            rot = static_cast<uint8_t>((rot + 1) % ::dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM);
-        } else {
-            TT_FATAL(
-                counters.dm_next[tensix_id] < ::dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM,
-                "Out of DM-visible tile counters for tensix {} on core ({}, {})",
-                tensix_id,
-                core.x,
-                core.y);
-            tc_id = counters.dm_next[tensix_id]++;
-        }
+        TT_FATAL(
+            counters.dm_next[tensix_id] < ::dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM,
+            "Out of DM-visible tile counters for tensix {} on core ({}, {})",
+            tensix_id,
+            core.x,
+            core.y);
+        tc_id = counters.dm_next[tensix_id]++;
     }
     return static_cast<::dfb::PackedTileCounter>(
         (tensix_id << ::dfb::PACKED_TC_COUNTER_ID_BITS) | tc_id);
+}
+
+TileCounterAllocator::~TileCounterAllocator() {
+    if (owned_physical_tcs_.empty()) {
+        return;
+    }
+    // Return this program's physical counters to the global pool so later programs can reuse them.
+    auto& pool = physical_tc_pool();
+    std::lock_guard<std::mutex> lk(pool.mu);
+    for (const auto& owned : owned_physical_tcs_) {
+        auto it = pool.used_mask.find(owned.core);
+        if (it != pool.used_mask.end()) {
+            it->second[owned.tensix_id] &= ~(1u << owned.tc_id);
+        }
+    }
 }
 
 uint8_t RemapperIndexAllocator::allocate(const CoreCoord& core_coord) {
@@ -1346,6 +1390,18 @@ void ProgramImpl::finalize_single_dfb_config(
                         tc_slot,
                         tensix_id,
                         tc_slot);
+                    // [#48552 DEBUG] cover the DM-DM path too (slice_write's dfb::in0 is DM producer ->
+                    // DM consumer). Shows which PHYSICAL (tensix,tc) it landed on so we can see if the
+                    // isolation rotation WRAPPED and slice_write collides with a still-live counter.
+                    log_warning(
+                        tt::LogMetal,
+                        "[QSR-DFBTC #48552] DFB {} core=({},{}) ALL-DMDM: shared_tc=(tensix={},tc={}) num_entries={}",
+                        dfb->id,
+                        core.x,
+                        core.y,
+                        (uint32_t)::dfb::get_tensix_id(group.producer_tc),
+                        (uint32_t)::dfb::get_counter_id(group.producer_tc),
+                        config.num_entries);
                 } else {
                     // Tensix-involved ALL: use remapper for 1-to-many
                     uint8_t producer_tensix_id = producer_risc_ids[producer_idx] % 4;
