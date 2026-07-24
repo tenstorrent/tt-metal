@@ -345,8 +345,8 @@ enum class Operation : std::uint32_t
     UnpackUntilize = OperationUtil::make(OperationUtil::ExecutionUnit::UNPACK, OperationUtil::NativeThread::TRISC0, OperationUtil::ExpectUninit::Yes, 3),
 
     // MATH EXU (TRISC1)
-    EltwiseUnaryDatacopy = OperationUtil::make(OperationUtil::ExecutionUnit::MATH, OperationUtil::NativeThread::TRISC1, OperationUtil::ExpectUninit::No, 1),
-    Matmul               = OperationUtil::make(OperationUtil::ExecutionUnit::MATH, OperationUtil::NativeThread::TRISC1, OperationUtil::ExpectUninit::No, 2),
+    FpuEltwiseUnaryDatacopy = OperationUtil::make(OperationUtil::ExecutionUnit::MATH, OperationUtil::NativeThread::TRISC1, OperationUtil::ExpectUninit::No, 1),
+    Matmul                  = OperationUtil::make(OperationUtil::ExecutionUnit::MATH, OperationUtil::NativeThread::TRISC1, OperationUtil::ExpectUninit::No, 2),
 
     // PACK EXU (TRISC2)
 
