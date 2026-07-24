@@ -21,10 +21,11 @@
 #include "llk_sfpu/ckernel_sfpu_exp.h"
 #include "llk_sfpu/ckernel_sfpu_gelu.h"
 #include "llk_sfpu/ckernel_sfpu_negative.h"
+#include "llk_sfpu/ckernel_sfpu_recip.h"
+#include "llk_sfpu/ckernel_sfpu_softplus.h"
 #include "llk_sfpu/ckernel_sfpu_square.h"
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
 #include "llk_sfpu/ckernel_sfpu_typecast.h"
-#include "sfpu/ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_relu.h"
 #include "sfpu/ckernel_sfpu_rsqrt.h"
 #include "sfpu/ckernel_sfpu_sigmoid.h"
@@ -84,6 +85,10 @@ void init_unary_sfpu_operation_quasar()
     else if constexpr (OPERATION == SfpuType::square)
     {
         init_square();
+    }
+    else if constexpr (OPERATION == SfpuType::reciprocal)
+    {
+        _init_reciprocal_<APPROX>();
     }
     else if constexpr (is_zero_comp_op(OPERATION))
     {
@@ -183,7 +188,7 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     }
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_reciprocal_<true /* APPROX */, ITERATIONS>, dst_index);
+        _llk_math_eltwise_unary_sfpu_params_(calculate_reciprocal<APPROX, is_fp32_dest_acc_en, ITERATIONS>, dst_index);
     }
     else if constexpr (OPERATION == SfpuType::sqrt)
     {
@@ -212,6 +217,18 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     else if constexpr (OPERATION == SfpuType::negative)
     {
         _llk_math_eltwise_unary_sfpu_params_(_calculate_negative_<false, ITERATIONS>, dst_index);
+    }
+    else if constexpr (OPERATION == SfpuType::softplus)
+    {
+        // Softplus params beta / (1/beta) / threshold as fp32 bit patterns, matching the
+        // UnarySFPUGolden._softplus reference defaults (beta = 1.0, threshold = 20.0).
+        _llk_math_eltwise_unary_sfpu_params_(
+            calculate_softplus<false, is_fp32_dest_acc_en, ITERATIONS>,
+            dst_index,
+            VectorMode::RC,
+            static_cast<std::uint32_t>(0x3F800000),  // beta = 1.0 (fp32)
+            static_cast<std::uint32_t>(0x3F800000),  // 1/beta = 1.0 (fp32)
+            static_cast<std::uint32_t>(0x41A00000)); // threshold = 20.0 (fp32)
     }
     else if constexpr (OPERATION == SfpuType::clamp)
     {
