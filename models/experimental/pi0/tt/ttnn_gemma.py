@@ -30,6 +30,7 @@ import torch
 import ttnn
 
 from models.experimental.pi0.common.configs import GemmaConfig
+from models.experimental.pi0.tt.ttnn_common import sdpa_prefill_chunk_sizes
 
 
 # ============================================================================
@@ -191,6 +192,11 @@ class GemmaAttentionTTNN:
         self.layer_idx = layer_idx
         self.device = device
 
+        # Query device grid to use all available cores (P150: up to 13x10, N150: 8x8)
+        device_grid = device.compute_with_storage_grid_size()
+        self.grid_size = (device_grid.x, device_grid.y)
+        self.core_grid = ttnn.CoreGrid(y=device_grid.y, x=device_grid.x)
+
         # OPTIMIZATION: Use fused QKV weight (single linear instead of 3)
         self.wqkv = weights["self_attn.wqkv"]
         self.o_proj = weights["self_attn.o_proj.weight"]
@@ -219,6 +225,14 @@ class GemmaAttentionTTNN:
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
+        )
+
+        # SDPA compute config - HiFi2 sufficient for attention (matches tt_transformers)
+        self.compute_kernel_config_sdpa = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
         )
 
     def forward(
@@ -261,17 +275,14 @@ class GemmaAttentionTTNN:
         # OPTIMIZATION 1: Single fused QKV linear (instead of 3 separate)
         # Output: [batch, 1, seq, Q_dim + K_dim + V_dim]
 
-        # Use WIDTH_SHARDED L1 memory config
         xqkv = ttnn.linear(
             hidden_states,
             self.wqkv,
             dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi2,
+            core_grid=self.core_grid,
         )
-
-        # Convert back to interleaved for nlp_create_qkv_heads
-        xqkv = ttnn.to_memory_config(xqkv, ttnn.L1_MEMORY_CONFIG)
 
         # OPTIMIZATION 2: Native TTNN head splitting (no PyTorch transfers!)
         # This splits the fused QKV into separate Q, K, V with proper head layout
@@ -316,14 +327,26 @@ class GemmaAttentionTTNN:
 
         new_cache = (k_rope, v) if use_cache else None
 
-        # Use TTNN scaled dot product attention
+        # SDPA chunk sizes aligned with models/tt_transformers/tt/model_config.py prefill defaults
+        kv_seq_len = k_rope.shape[2]
+        q_chunk, k_chunk = sdpa_prefill_chunk_sizes(seq_len, kv_seq_len)
+
+        sdpa_cfg = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.grid_size,
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
+            exp_approx_mode=False,
+        )
+
         attn_output = ttnn.transformer.scaled_dot_product_attention(
             q_rope,
             k_rope,
             v,
             attn_mask=attention_mask,
-            is_causal=False,  # Mask handles causality
+            is_causal=False,
             scale=self.scale,
+            program_config=sdpa_cfg,
+            compute_kernel_config=self.compute_kernel_config_sdpa,
         )
 
         # OPTIMIZATION 4: Native TTNN head concatenation (no PyTorch transfers!)
@@ -340,6 +363,7 @@ class GemmaAttentionTTNN:
             dtype=ttnn.bfloat8_b,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
+            core_grid=self.core_grid,
         )
 
         # Reshape back to 3D: [batch, 1, seq, hidden] -> [batch, seq, hidden]
@@ -384,12 +408,12 @@ class GemmaMLPTTNN:
         self.config = config
         self.device = device
 
-        # Convert weights to TTNN if they're PyTorch tensors
+        # Convert weights to TTNN as BF8_B for 2x DRAM bandwidth savings
         def to_ttnn(w):
             if isinstance(w, torch.Tensor):
                 return ttnn.from_torch(
-                    w.T.contiguous(),  # Transpose for linear
-                    dtype=ttnn.bfloat16,
+                    w.T.contiguous(),
+                    dtype=ttnn.bfloat8_b,
                     layout=ttnn.TILE_LAYOUT,
                     device=device,
                 )
@@ -399,11 +423,20 @@ class GemmaMLPTTNN:
         self.up_proj = to_ttnn(weights["mlp.up_proj.weight"])
         self.down_proj = to_ttnn(weights["mlp.down_proj.weight"])
 
-        # Chunk size must be tile-aligned (multiple of 32)
-        # 256 = 32 × 8, optimal for 64-core auto-sharding (4 tokens/core)
-        # 256 tokens × 16384 mlp_dim × 1 byte = ~4MB total
-        # With auto-sharding across 64 cores = ~64KB per core (fits L1)
-        self.chunk_size = 256
+        # Query device grid to size chunks for available cores
+        device_grid = device.compute_with_storage_grid_size()
+        self.grid_size = (device_grid.x, device_grid.y)
+        self.core_grid = ttnn.CoreGrid(y=device_grid.y, x=device_grid.x)
+        num_cores = device_grid.x * device_grid.y
+
+        # Chunk size must be tile-aligned (multiple of 32).
+        # Scale chunk size with core count: more cores can process larger chunks
+        # in parallel. P150 (~130 cores) uses 544 (full seq, no chunking needed),
+        # N150 (64 cores) uses 256.
+        if num_cores >= 100:
+            self.chunk_size = 544
+        else:
+            self.chunk_size = 256
 
     def forward(self, x) -> ttnn.Tensor:
         """
@@ -464,24 +497,36 @@ class GemmaMLPTTNN:
                 x_chunk = ttnn.to_memory_config(x_chunk, ttnn.DRAM_MEMORY_CONFIG)
                 x_chunk = ttnn.pad(x_chunk, padding=((0, 0), (0, 0), (0, pad_amount), (0, 0)), value=0.0)
 
-            # Gate and up projections - use bfloat8_b for 2x memory savings
-            # Use L1 interleaved (WIDTH_SHARDED incompatible with MLP dimensions)
-            gate = ttnn.linear(x_chunk, self.gate_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
-            up = ttnn.linear(x_chunk, self.up_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+            # Gate projection with fused GELU activation (single kernel launch)
+            gate_activated = ttnn.linear(
+                x_chunk,
+                self.gate_proj,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                core_grid=self.core_grid,
+                activation="gelu",
+            )
+            up = ttnn.linear(
+                x_chunk,
+                self.up_proj,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                core_grid=self.core_grid,
+            )
             ttnn.deallocate(x_chunk)
 
-            # GELU activation - inherits sharding and dtype
-            gate_activated = ttnn.gelu(gate)
-            ttnn.deallocate(gate)
-
-            # Element-wise multiply - inherits sharding from inputs
+            # Element-wise multiply
             hidden_out = ttnn.multiply(gate_activated, up)
             ttnn.deallocate(gate_activated)
             ttnn.deallocate(up)
 
-            # Down projection - keep in L1 interleaved (simpler, avoids conversion overhead)
+            # Down projection
             output_chunk = ttnn.linear(
-                hidden_out, self.down_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG
+                hidden_out,
+                self.down_proj,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                core_grid=self.core_grid,
             )
             ttnn.deallocate(hidden_out)
 
@@ -499,9 +544,6 @@ class GemmaMLPTTNN:
             for i in range(1, len(output_chunks)):
                 output = ttnn.concat([output, output_chunks[i]], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
                 ttnn.deallocate(output_chunks[i])
-
-        # Move final output to L1
-        output = ttnn.to_memory_config(output, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Reshape back to 3D if input was 3D
         if was_3d:
@@ -601,9 +643,6 @@ class GemmaBlockTTNN:
         )
         hidden_states = ttnn.add(hidden_states, attn_output)
         ttnn.deallocate(attn_output)
-        ttnn.ReadDeviceProfiler(
-            self.device
-        )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
 
         # Pre-MLP norm
         normed = rms_norm_ttnn(
@@ -617,9 +656,6 @@ class GemmaBlockTTNN:
         ttnn.deallocate(normed)
         hidden_states = ttnn.add(hidden_states, mlp_output)
         ttnn.deallocate(mlp_output)
-        ttnn.ReadDeviceProfiler(
-            self.device
-        )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
 
         return hidden_states, new_cache
 
