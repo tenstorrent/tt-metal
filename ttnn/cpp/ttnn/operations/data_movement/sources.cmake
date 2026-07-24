@@ -66,6 +66,9 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     pad/device/pad_rm_sharded_width_only_program_factory.cpp
     pad/device/pad_tile_multicore_program_factory.cpp
     pad/device/pad_tile_program_factory.cpp
+    pad/codegen/pad_codegen_device_operation.cpp
+    pad/codegen/pad_codegen_program_factory.cpp
+    pad/codegen/pad_codegen_supported.cpp
     pad/pad.cpp
     permute/device/permute_device_operation.cpp
     permute/device/permute_rm_program_factory.cpp
