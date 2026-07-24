@@ -99,7 +99,6 @@ from models.experimental.hunyuan_image_3_0.ref.recaption import (
     extract_recaption_written_prompt,
     extract_think_prose,
     is_meager_recaption_cot,
-    prompt_fallback_recaption_cot,
     run_recaption,
     system_prompt_for_bot_task,
 )
@@ -123,6 +122,10 @@ from models.experimental.hunyuan_image_3_0.ref.model_config import (
     VIT_CONFIG,
     load_config,
     transformer_cfg,
+)
+from models.experimental.hunyuan_image_3_0.tt.attention.mask import (
+    build_attention_mask_tt,
+    build_attention_mask_tt_sp_sharded,
 )
 from models.experimental.hunyuan_image_3_0.tt.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
 from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
@@ -454,16 +457,80 @@ def _run_recaption_on_device_maybe_retry_host_sample(
 
 
 def _finalize_recaption_cot(tok, prompt: str, cot_text: str, image_size):
-    """String prompt-fallback when AR has no rewrite (torch-free by default)."""
+    """Choose cot for denoise injection.
+
+    Empty/echo AR output must NOT be wrapped as ``<recaption>{full user prompt}`` —
+    the user prompt is already in the chat template, so re-injecting it doubles
+    seq_len (e.g. ~17k → ~34k) and exceeds ``max_position_embeddings``.
+    """
     if not _recaption_is_echo_or_meager(tok, cot_text, prompt):
         return cot_text, image_size
     print(
-        "[demo_i2i] device recaption produced no rewritten prose " f"(got {cot_text!r}); recovering ...",
+        "[demo_i2i] device recaption empty/echo; skipping cot injection for denoise "
+        "(user prompt already in the template — re-wrapping would double seq_len)",
         flush=True,
     )
-    cot_text = prompt_fallback_recaption_cot(tok, prompt)
-    print(f"[demo_i2i] using prompt fallback cot_text: {cot_text!r}", flush=True)
-    return cot_text, image_size
+    return None, image_size
+
+
+def _fit_cot_for_max_seq(
+    tok,
+    prompt: str,
+    cond_images,
+    *,
+    image_size,
+    system_prompt: str | None,
+    cot_text: str | None,
+    max_seq: int,
+) -> str | None:
+    """Truncate or drop ``cot_text`` so ``prepare_i2i_inputs`` stays ≤ ``max_seq``."""
+    if not cot_text:
+        return None
+    trial = prepare_i2i_inputs(
+        tok,
+        prompt,
+        cond_images,
+        image_size=image_size,
+        sequence_template="instruct",
+        system_prompt=system_prompt,
+        cot_text=cot_text,
+    )
+    if trial.seq_len <= max_seq:
+        return cot_text
+
+    base = prepare_i2i_inputs(
+        tok,
+        prompt,
+        cond_images,
+        image_size=image_size,
+        sequence_template="instruct",
+        system_prompt=system_prompt,
+        cot_text=None,
+    )
+    budget = int(max_seq) - int(base.seq_len)
+    if budget <= 0:
+        print(
+            f"[demo_i2i] base seq_len={base.seq_len} already ≥ max_seq={max_seq}; " "dropping cot for denoise",
+            flush=True,
+        )
+        return None
+
+    cot_ids = tok.encode(cot_text)
+    if len(cot_ids) <= budget:
+        # Length came from template interaction; drop cot rather than guess.
+        print(
+            f"[demo_i2i] cot seq_len={trial.seq_len} > max_seq={max_seq}; dropping cot",
+            flush=True,
+        )
+        return None
+
+    clipped = tok.decode(cot_ids[:budget], skip_special_tokens=False)
+    print(
+        f"[demo_i2i] truncating cot {len(cot_ids)} → {budget} tokens "
+        f"(trial seq_len={trial.seq_len} > max_seq={max_seq})",
+        flush=True,
+    )
+    return clipped
 
 
 def _cfg(model_dir: Path):
@@ -874,14 +941,15 @@ def main():
             )
             del lm_head, recap_bundle
             _record_ar_metrics("recaption", recap_result)
-            cot_text, image_size = _finalize_recaption_cot(
-                tok, args.prompt, recap_result.cot_text[0], recap_result.image_size
-            )
-            _print_recaption_summary(tok, cot_text, user_prompt=args.prompt, image_size=image_size)
+            raw_cot = recap_result.cot_text[0]
+            _print_recaption_summary(tok, raw_cot, user_prompt=args.prompt, image_size=recap_result.image_size)
+            cot_text, image_size = _finalize_recaption_cot(tok, args.prompt, raw_cot, recap_result.image_size)
 
             if keep_backbone:
                 # Denoise path does not apply ln_f; keep MoE stack resident.
                 backbone.apply_final_norm = False
+                # AR KV / traces must not linger — denoise needs DRAM for [S,S] masks.
+                release_stage_resources(mesh_device)
                 print(
                     "[demo_i2i] keeping resident backbone for denoise "
                     "(cond embeds reused from host cache; skip VAE/ViT reload) ...",
@@ -898,6 +966,24 @@ def main():
                 release_stage_resources(mesh_device)
                 invalidate_cond_encode_traces(mesh_device)
             t = _mark("2_recaption_ar", t)
+
+        # Clamp / drop cot so denoise seq_len stays within max_position_embeddings.
+        # Echo fallback used to re-wrap the full user prompt and double seq_len.
+        if cot_text:
+            cot_text = _fit_cot_for_max_seq(
+                tok,
+                args.prompt,
+                cond_for_bundle,
+                image_size=image_size,
+                system_prompt=denoise_system,
+                cot_text=cot_text if not _recaption_is_echo_or_meager(tok, cot_text, args.prompt) else None,
+                max_seq=int(c["MAX_SEQ"]),
+            )
+            if cot_text is None and args.bot_task != "image":
+                print(
+                    "[demo_i2i] denoise will use user prompt only (no cot injection)",
+                    flush=True,
+                )
 
         # 1) I2I denoise bundle — from cond cache (keepalive) or second TT encode.
         if keep_backbone and cond_cache is not None:
@@ -957,7 +1043,45 @@ def main():
         img_slice = cond_row["gen_slice"]
         grid = cond_row["gen_hw"]
         seq_len = bundle.seq_len
-        print(f"[demo_i2i] seq_len={seq_len} gen_span={img_slice} grid={grid}")
+        print(
+            f"[demo_i2i] seq_len={seq_len} gen_span={img_slice} grid={grid}  "
+            f"(max_position_embeddings={c['MAX_SEQ']})",
+            flush=True,
+        )
+        if seq_len > c["MAX_SEQ"]:
+            # Last resort: rebuild without cot (user prompt already carries the edit text).
+            print(
+                f"[demo_i2i] seq_len {seq_len} > max_seq {c['MAX_SEQ']}; " "rebuilding denoise bundle without cot ...",
+                flush=True,
+            )
+            if keep_backbone and cond_cache is not None:
+                bundle = prepare_i2i_inputs(
+                    tok,
+                    args.prompt,
+                    cond_for_bundle,
+                    image_size=image_size,
+                    sequence_template="instruct",
+                    system_prompt=denoise_system,
+                    cot_text=None,
+                )
+                bundle = apply_cond_encode_cache(bundle, wte, cond_cache)
+                bundle = enrich_bundle_attention(bundle, proc)
+            else:
+                raise RuntimeError(
+                    f"seq_len {seq_len} exceeds max_position_embeddings {c['MAX_SEQ']} "
+                    "(trim HY_PROMPT / HY_MAX_NEW_TOKENS)"
+                )
+            cond_row, uncond_row = build_i2i_cfg_conds(bundle, wte, proc)
+            img_slice = cond_row["gen_slice"]
+            grid = cond_row["gen_hw"]
+            seq_len = bundle.seq_len
+            print(
+                f"[demo_i2i] rebuilt seq_len={seq_len} gen_span={img_slice} grid={grid}",
+                flush=True,
+            )
+        assert (
+            seq_len <= c["MAX_SEQ"]
+        ), f"seq_len {seq_len} exceeds max_position_embeddings {c['MAX_SEQ']} (trim HY_PROMPT)"
         t = _mark("3_build_i2i_bundle", t)
 
         torch.manual_seed(SEED + 1)
@@ -998,10 +1122,10 @@ def main():
             _record_denoise_metrics("denoise(host)", time.time() - t0, steps)
             t = _mark("5_denoise_loop", t)
         else:
-            # Build [S,S] attention masks BEFORE the backbone fills DRAM. At I2I
-            # seq_len the bf16 mask is ~400MB; after a resident backbone there is
-            # often <150MB free. Packed dtypes (bf4/bf8) are not usable: SP pad
-            # rejects them. Skipping unused denoise wte frees the headroom.
+            # Attention masks are [B,1,S,S] bf16 (~2·S² bytes). At long I2I seq_len a
+            # full replicated mask cannot sit next to a resident sp=1 backbone
+            # (DRAM already ~full). Prefer SP query-sharded upload (same as demo.py)
+            # and, when needed, drop keepalive to rebuild denoise with sp=2.
             def _span_key(spans):
                 out = []
                 for s in spans or []:
@@ -1011,17 +1135,52 @@ def main():
                         out.append((int(s[0]), int(s[1])))
                 return tuple(out)
 
+            denoise_sp = int(getattr(backbone, "sp_factor", shared_sp if keep_backbone else 2))
+            full_mask_bytes = int(seq_len) * int(seq_len) * 2  # bf16
+            # ~400 MiB: beyond this, full [S,S] next to resident sp=1 MoE OOMs.
+            _FULL_MASK_OOM_BYTES = 400 << 20
+            if backbone is not None and denoise_sp <= 1 and full_mask_bytes > _FULL_MASK_OOM_BYTES:
+                print(
+                    f"[demo_i2i] seq_len={seq_len} full mask≈{full_mask_bytes / (1 << 30):.2f} GiB; "
+                    "releasing sp=1 backbone to rebuild with sp=2 + SP-sharded mask ...",
+                    flush=True,
+                )
+                del backbone
+                backbone = None
+                release_stage_resources(mesh_device)
+                denoise_sp = 2
+
+            use_sharded_mask = os.environ.get("HY_SHARDED_MASK", "1") == "1" and denoise_sp > 1
             print(
-                "[demo_i2i] building cond/uncond attention masks (bf16, before backbone) ...",
+                f"[demo_i2i] building cond/uncond attention masks "
+                f"({'SP-sharded' if use_sharded_mask else 'full'} bf16, sp={denoise_sp}) ...",
                 flush=True,
             )
             cond_slices = bundle.full_attn_slices[0] if bundle.full_attn_slices else None
+            bsz = int(cond_row.get("batch", 1))
+            if use_sharded_mask:
+                mask_tt = build_attention_mask_tt_sp_sharded(
+                    mesh_device,
+                    seq_len,
+                    image_slices=cond_slices,
+                    bsz=bsz,
+                    sp_factor=denoise_sp,
+                    dtype=ttnn.bfloat16,
+                )
+            else:
+                mask_tt = build_attention_mask_tt(
+                    mesh_device,
+                    seq_len,
+                    image_slices=cond_slices,
+                    bsz=bsz,
+                    dtype=ttnn.bfloat16,
+                )
             cond_tt = upload_denoise_cond_mesh(
                 cond_row,
                 seq_len=seq_len,
                 mesh_device=mesh_device,
                 replicate_fn=rep,
-                full_attn_slices=cond_slices,
+                attention_mask=mask_tt,
             )
             uncond_tt = None
             if uncond_row is not None:
@@ -1036,12 +1195,29 @@ def main():
                     )
                     print("[demo_i2i] CFG uncond shares cond attention_mask", flush=True)
                 else:
+                    if use_sharded_mask:
+                        uncond_mask = build_attention_mask_tt_sp_sharded(
+                            mesh_device,
+                            seq_len,
+                            image_slices=uncond_slices,
+                            bsz=int(uncond_row.get("batch", 1)),
+                            sp_factor=denoise_sp,
+                            dtype=ttnn.bfloat16,
+                        )
+                    else:
+                        uncond_mask = build_attention_mask_tt(
+                            mesh_device,
+                            seq_len,
+                            image_slices=uncond_slices,
+                            bsz=int(uncond_row.get("batch", 1)),
+                            dtype=ttnn.bfloat16,
+                        )
                     uncond_tt = upload_denoise_cond_mesh(
                         uncond_row,
                         seq_len=seq_len,
                         mesh_device=mesh_device,
                         replicate_fn=rep,
-                        full_attn_slices=uncond_slices,
+                        attention_mask=uncond_mask,
                     )
 
             print("[demo_i2i] building patch_embed + final_layer ...", flush=True)
@@ -1060,7 +1236,10 @@ def main():
                 out_channels=LATENT,
             )
             if backbone is None:
-                print(f"[demo_i2i] building denoise backbone ({NUM_LAYERS} layers) ...", flush=True)
+                print(
+                    f"[demo_i2i] building denoise backbone ({NUM_LAYERS} layers, sp={denoise_sp}) ...",
+                    flush=True,
+                )
                 t0 = time.time()
                 backbone = _build_backbone(
                     mesh_device,
@@ -1069,7 +1248,7 @@ def main():
                     weights,
                     num_layers=NUM_LAYERS,
                     apply_final_norm=False,
-                    sp_factor=shared_sp if keep_backbone else 2,
+                    sp_factor=denoise_sp,
                     model_cache_name=model_cache_name,
                 )
                 print(f"[demo_i2i] denoise backbone ready ({time.time() - t0:.0f}s)", flush=True)
