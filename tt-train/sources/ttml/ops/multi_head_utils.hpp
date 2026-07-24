@@ -4,12 +4,14 @@
 
 #pragma once
 
+#include <optional>
+
 #include "autograd/tensor.hpp"
 
 namespace ttml::ops {
 
 std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> heads_creation(
-    const autograd::TensorPtr& qkv, uint32_t num_heads);
+    const autograd::TensorPtr& qkv, uint32_t num_heads, std::optional<uint32_t> num_groups = std::nullopt);
 
 autograd::TensorPtr heads_fusion(const autograd::TensorPtr& x);
 
