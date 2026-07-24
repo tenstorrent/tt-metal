@@ -375,6 +375,7 @@ jobs:
           retention-days: 14
           path: |
             ${{ env.PIPELINE_DIR }}/launch.log
+            ${{ env.PIPELINE_DIR }}/launch-phase1.log
             ${{ env.PIPELINE_DIR }}/ranklogs/
             /ci/tt-metal/generated/ttrun/
 
