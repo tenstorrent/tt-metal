@@ -43,8 +43,7 @@ DECOMPRESS_OP = "PerTokenCastBackDeviceOperation"
 _COMPRESS_EXPECTED_NS = 56_700
 _DECOMPRESS_EXPECTED_NS = 65_450
 
-# Perf tolerance. 5% (not the dispatch/combine 3%) because these ops are small
-# enough that normal run-to-run jitter exceeds 3%.
+# Perf tolerance. 5%
 _MARGIN = 0.05
 
 
@@ -53,7 +52,6 @@ _MARGIN = 0.05
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.use_module_device
 @pytest.mark.timeout(0)
 def test_run_compression(device):
     """Worker: one per_token_cast_to_fp8 invocation."""
@@ -98,7 +96,6 @@ def test_device_perf_compression():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.use_module_device
 @pytest.mark.timeout(0)
 def test_run_decompression(device):
     """Worker: one per_token_cast_back invocation."""
