@@ -8,6 +8,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import inplace_copy
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import Mode
 
@@ -139,34 +140,13 @@ class LMHead(LightweightModule):
             packer_l1_acc=True,
         )
 
-    @staticmethod
-    def _inplace_copy(src: ttnn.Tensor, dst: ttnn.Tensor, target_dtype) -> None:
-        """Convert ``src`` to ``dst``'s layout/dtype/shape/memcfg, then
-        ``ttnn.copy`` it into ``dst``. Mirrors ``Attention._inplace_copy``.
-        """
-        converted = src
-
-        if converted.layout != dst.layout:
-            converted = ttnn.to_layout(converted, layout=dst.layout)
-
-        if converted.dtype != target_dtype:
-            converted = ttnn.typecast(converted, dtype=target_dtype)
-
-        if tuple(converted.shape) != tuple(dst.shape):
-            converted = ttnn.reshape(converted, list(dst.shape))
-
-        if converted.memory_config() != dst.memory_config():
-            converted = ttnn.to_memory_config(converted, dst.memory_config())
-
-        ttnn.copy(input_a=converted, input_b=dst)
-
     def _update_output_weights_dram_sharded(self, weight: ttnn.Tensor) -> None:
         """In-place replace every chunk of ``self.output_weights_dram_sharded``
         on device (``weight`` is HF ``(1, 1, V, H)``, replicated, TILE, bf16,
         DRAM-interleaved). Mirrors the constructor's host-side pad+transpose+split
         but on device: optional ``ttnn.pad`` to ``padded_vocab_size``,
         ``ttnn.transpose``, contiguous per-chunk ``ttnn.slice``, then
-        ``_inplace_copy`` reshards into the DRAM-sharded dest (preserving
+        ``inplace_copy`` reshards into the DRAM-sharded dest (preserving
         addresses). Single-device only; multi-device per-device gather not
         implemented.
 
@@ -197,7 +177,7 @@ class LMHead(LightweightModule):
         for i, split_size in enumerate(self.split_sizes_dram_sharded):
             end = start + split_size
             chunk = ttnn.slice(permuted, (0, 0, 0, start), (1, 1, self.args.dim, end))
-            self._inplace_copy(chunk, self.output_weights_dram_sharded[i], self.dtype)
+            inplace_copy(chunk, self.output_weights_dram_sharded[i], self.dtype)
             start = end
 
     def _update_output_weights_ring_mm(self, weight: ttnn.Tensor) -> None:

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import inplace_copy
 from models.tt_transformers.tt.common import Mode
 
 TILE = 32
@@ -119,35 +120,13 @@ class RMSNorm(LightweightModule):
             packer_l1_acc=True,
         )
 
-    @staticmethod
-    def _inplace_copy(src: ttnn.Tensor, dst: ttnn.Tensor, target_dtype) -> None:
-        """Convert ``src`` to ``dst``'s layout/dtype/shape/memcfg, then
-        ``ttnn.copy`` it into ``dst``. ``dst``'s device buffer is
-        preserved. Mirrors ``Attention._inplace_copy``.
-        """
-        converted = src
-
-        if converted.layout != dst.layout:
-            converted = ttnn.to_layout(converted, layout=dst.layout)
-
-        if converted.dtype != target_dtype:
-            converted = ttnn.typecast(converted, dtype=target_dtype)
-
-        if tuple(converted.shape) != tuple(dst.shape):
-            converted = ttnn.reshape(converted, list(dst.shape))
-
-        if converted.memory_config() != dst.memory_config():
-            converted = ttnn.to_memory_config(converted, dst.memory_config())
-
-        ttnn.copy(input_a=converted, input_b=dst)
-
     def update(self, *, weight: ttnn.Tensor) -> None:
         """In-place replace the RMSNorm gamma via ``ttnn.copy``.
 
         HF-format input: ``weight`` is HF ``...norm.weight``, shape
         ``(1, 1, 1, dim)``, bf16, TILE, DRAM-interleaved, replicated.
 
-        ``_inplace_copy`` reshapes to the storage shape
+        ``inplace_copy`` reshapes to the storage shape
         ``(1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT)`` and TILE -> ROW_MAJOR to
         match ``self.weight``. No ``add_unit_offset`` here: the constructor's
         offset is baked into the cached weights once, and ``.update`` ships in
@@ -160,7 +139,7 @@ class RMSNorm(LightweightModule):
         and ``ttnn.copy`` into it. Both buffers keep their address, so captured
         traces and the prefetcher's recorded addresses stay valid.
         """
-        self._inplace_copy(weight, self.weight, self.weight.dtype)
+        inplace_copy(weight, self.weight, self.weight.dtype)
 
         if getattr(self, "weight_distributed", None) is not None:
             partitioned = ttnn.mesh_partition(
@@ -169,7 +148,7 @@ class RMSNorm(LightweightModule):
                 dim=2,
                 cluster_axis=1,
             )
-            self._inplace_copy(partitioned, self.weight_distributed, self.weight_distributed.dtype)
+            inplace_copy(partitioned, self.weight_distributed, self.weight_distributed.dtype)
 
     def forward(
         self,

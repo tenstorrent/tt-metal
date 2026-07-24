@@ -4,6 +4,7 @@
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import inplace_copy
 
 
 class Embedding(LightweightModule):
@@ -35,28 +36,6 @@ class Embedding(LightweightModule):
             cache_file_name=cache_name,
         )
 
-    @staticmethod
-    def _inplace_copy(src: ttnn.Tensor, dst: ttnn.Tensor, target_dtype) -> None:
-        """Convert ``src`` to ``dst``'s layout/dtype/shape/memcfg, then
-        ``ttnn.copy`` it into ``dst``. ``dst``'s device buffer is preserved
-        (no reallocation) so any captured trace remains valid.
-        """
-        converted = src
-
-        if converted.layout != dst.layout:
-            converted = ttnn.to_layout(converted, layout=dst.layout)
-
-        if converted.dtype != target_dtype:
-            converted = ttnn.typecast(converted, dtype=target_dtype)
-
-        if tuple(converted.shape) != tuple(dst.shape):
-            converted = ttnn.reshape(converted, list(dst.shape))
-
-        if converted.memory_config() != dst.memory_config():
-            converted = ttnn.to_memory_config(converted, dst.memory_config())
-
-        ttnn.copy(input_a=converted, input_b=dst)
-
     def update(self, *, embed_tokens: ttnn.Tensor) -> None:
         """In-place replace the embedding table via ``ttnn.copy``.
 
@@ -78,7 +57,7 @@ class Embedding(LightweightModule):
             "padding the embedding table is not yet supported."
         )
 
-        self._inplace_copy(embed_tokens, self.weights, self._dtype)
+        inplace_copy(embed_tokens, self.weights, self._dtype)
 
     def forward(self, x: ttnn.Tensor, memory_config=None) -> ttnn.Tensor:
         x = ttnn.embedding(x, self.weights, layout=ttnn.TILE_LAYOUT, memory_config=memory_config)

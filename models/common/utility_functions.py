@@ -1243,3 +1243,26 @@ def hf_empty_encoder_decoder_cache():
     if hasattr(EncoderDecoderCache, "from_legacy_cache"):  # transformers < 5.x
         return EncoderDecoderCache.from_legacy_cache(None)
     return EncoderDecoderCache(DynamicCache(), DynamicCache())  # transformers >= 5.x
+
+
+def inplace_copy(src: "ttnn.Tensor", dst: "ttnn.Tensor", target_dtype) -> None:
+    """Convert ``src`` to ``dst``'s layout/dtype/shape/memcfg, then ``ttnn.copy``
+    it into ``dst``. ``dst``'s device buffer is preserved (no reallocation) so
+    any captured trace and the DRAM prefetcher's recorded buffer addresses
+    remain valid.
+    """
+    converted = src
+
+    if converted.layout != dst.layout:
+        converted = ttnn.to_layout(converted, layout=dst.layout)
+
+    if converted.dtype != target_dtype:
+        converted = ttnn.typecast(converted, dtype=target_dtype)
+
+    if tuple(converted.shape) != tuple(dst.shape):
+        converted = ttnn.reshape(converted, list(dst.shape))
+
+    if converted.memory_config() != dst.memory_config():
+        converted = ttnn.to_memory_config(converted, dst.memory_config())
+
+    ttnn.copy(input_a=converted, input_b=dst)

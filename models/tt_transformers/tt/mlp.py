@@ -6,6 +6,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import inplace_copy
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import Mode, pad_to_size
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
@@ -115,49 +116,26 @@ class MLP(LightweightModule):
 
             self.prefetcher.register_callback(register_weights)
 
-    @staticmethod
-    def _inplace_copy(src: ttnn.Tensor, dst: ttnn.Tensor, target_dtype) -> None:
-        """Convert ``src`` to ``dst``'s layout/dtype/shape/memcfg, then
-        ``ttnn.copy`` into ``dst``. ``dst``'s device buffer is preserved so any
-        captured trace and the prefetcher's recorded addresses remain valid.
-        Mirrors ``Attention._inplace_copy``.
-        """
-        converted = src
-
-        if converted.layout != dst.layout:
-            converted = ttnn.to_layout(converted, layout=dst.layout)
-
-        if converted.dtype != target_dtype:
-            converted = ttnn.typecast(converted, dtype=target_dtype)
-
-        if tuple(converted.shape) != tuple(dst.shape):
-            converted = ttnn.reshape(converted, list(dst.shape))
-
-        if converted.memory_config() != dst.memory_config():
-            converted = ttnn.to_memory_config(converted, dst.memory_config())
-
-        ttnn.copy(input_a=converted, input_b=dst)
-
     def _update_w1(self, tensor: ttnn.Tensor) -> None:
         """In-place replace ``self.w1`` (gate_proj) via ``ttnn.copy``. Caller must
         match the constructor's ``self.w1``: shape ``(1, 1, dim, hidden_dim)``
         (transposed from HF), TILE, same ``ShardTensor2dMesh`` dims and memcfg.
         """
-        self._inplace_copy(tensor, self.w1, self.ff1_3_dtype)
+        inplace_copy(tensor, self.w1, self.ff1_3_dtype)
 
     def _update_w2(self, tensor: ttnn.Tensor) -> None:
         """In-place replace ``self.w2`` (down_proj) via ``ttnn.copy``. Shape
         ``(1, 1, hidden_dim, dim)`` (transposed from HF), TILE, same
         ``ShardTensor2dMesh`` dims and memcfg as constructed.
         """
-        self._inplace_copy(tensor, self.w2, self.ff2_dtype)
+        inplace_copy(tensor, self.w2, self.ff2_dtype)
 
     def _update_w3(self, tensor: ttnn.Tensor) -> None:
         """In-place replace ``self.w3`` (up_proj) via ``ttnn.copy``.
 
         Same shape/layout/memcfg constraints as ``_update_w1``.
         """
-        self._inplace_copy(tensor, self.w3, self.ff1_3_dtype)
+        inplace_copy(tensor, self.w3, self.ff1_3_dtype)
 
     def update(
         self,
@@ -175,7 +153,7 @@ class MLP(LightweightModule):
 
         Internal storage is the HF weight transposed; ``update`` transposes each
         input on device (mirroring the constructor's ``torch.transpose``) then
-        ``_inplace_copy``s into the existing buffers, preserving addresses (so
+        ``inplace_copy``s into the existing buffers, preserving addresses (so
         captured traces and the prefetcher's recorded addresses stay valid).
 
         Caveats: hidden-dim padding is not handled (asserted off for
