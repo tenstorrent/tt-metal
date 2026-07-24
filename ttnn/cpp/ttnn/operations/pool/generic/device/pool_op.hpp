@@ -36,6 +36,31 @@ struct Pool2D {
         bool return_indices_{};
         uint32_t memory_used{};
         bool config_tensor_in_dram{};
+
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "sliding_window_config",
+            "pool_type",
+            "output_dtype",
+            "output_layout",
+            "memory_config",
+            "compute_kernel_config",
+            "count_include_pad",
+            "divisor_override",
+            "return_indices",
+            "config_tensor_in_dram");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                sliding_window_config_,
+                pool_type_,
+                output_dtype_,
+                output_layout_,
+                memory_config_,
+                compute_kernel_config_,
+                count_include_pad_,
+                divisor_override_,
+                return_indices_,
+                config_tensor_in_dram);
+        }
     };
 
     struct tensor_args_t {
@@ -65,7 +90,6 @@ struct Pool2D {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 };
