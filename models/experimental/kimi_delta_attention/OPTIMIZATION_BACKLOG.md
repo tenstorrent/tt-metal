@@ -30,16 +30,41 @@ keeps failed experiments visible so they are not repeated unchanged.
 The complete evidence is in `bringup_log.md`, `ROOFLINE.md`, and
 `perf_report/codex-kda_perf_report.html`.
 
-## Current ranked queue
+## Top three by maximum plausible reward
 
-1. Selectively double-buffer early scan inputs.
+This is a gross-upside ranking, not the implementation order. Percentages use
+the retained T=5,120 wall of `3385.003 us`; ceilings are not forecasts and
+overlap, so they must not be added.
+
+1. **Distributed-L1 two-level affine prefix scan.** The serial scan costs
+   `500.685 us`, giving a `14.79%` whole-layer gross ceiling. This is the
+   largest remaining single dependency-chain target, but also the highest-risk
+   idea: a DRAM-backed version is already ruled out by its traffic floor.
+2. **Bounded persistent prep-to-scan producer/consumer pipeline.** Prep costs
+   `306.496 us` and scan costs `500.685 us`. Perfect overlap could hide at most
+   the smaller phase, a `9.05%` wall ceiling. The retained distributed-L1
+   endpoint proves residency is useful; it does not yet prove that ordered
+   consumers can avoid starvation and backpressure.
+3. **Direct tiled projection-to-convolution-to-Q/K/V program.** The retained
+   route spends `86.093 us` cropping QKV, `95.591 us` untilizing it, and about
+   `94.533 us` on three post-convolution Q/K/V slices. Consuming projected
+   tiles by offset and writing Q/K/V plus the three-row carry directly can
+   remove up to `276.217 us`, an `8.16%` traffic/launch ceiling before custom
+   kernel overhead. The row-major-input prototype proved correctness but not
+   speed; the tiled-input boundary is the active experiment.
+
+## Current execution queue
+
+1. Finish the direct tiled projection-to-convolution experiment because it has
+   the strongest evidence-to-risk ratio and directly fixes the measured
+   failure mode of the row-major prototype.
 2. Fuse prep and scan into a bounded producer/consumer pipeline.
-3. Distributed-L1 affine prefix scan.
+3. Prototype the distributed-L1 two-level affine prefix only if its explicit
+   L1 and NOC traffic model beats the `500.685 us` serial scan.
 
 The affine-prefix experiment proved the algebra and FP32 numerics, but rejected
 a DRAM-backed implementation: its estimated memory floor exceeds the current
-serial scan. It remains third only if transforms and tree levels stay in
-distributed L1.
+serial scan.
 
 ## Initial top three by potential reward
 
