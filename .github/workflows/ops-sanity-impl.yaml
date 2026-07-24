@@ -129,9 +129,9 @@ jobs:
           # quoted heredoc rather than inline `bash -c` to keep quotes intact.
           run: |
             export TRACY_NO_INVARIANT_CHECK=1
-            _TEST_CMD=$(cat <<'RWL_CMD_EOF'
+            _TEST_CMD=$(cat <<'TEST_CMD_EOF'
             ${{ matrix.test-group.cmd }}
-            RWL_CMD_EOF
+            TEST_CMD_EOF
             )
             if [ "${{ matrix.test-group.slow_dispatch }}" = "true" ]; then
               export TT_METAL_SLOW_DISPATCH_MODE=1

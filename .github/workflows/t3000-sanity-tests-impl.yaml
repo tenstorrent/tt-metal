@@ -137,9 +137,9 @@ jobs:
           # `bash -c` inline — keeps embedded quotes intact.
           run: |
             mkdir -p generated/test_reports
-            _TEST_CMD=$(cat <<'RWL_CMD_EOF'
+            _TEST_CMD=$(cat <<'TEST_CMD_EOF'
             ${{ matrix.test-group.cmd }}
-            RWL_CMD_EOF
+            TEST_CMD_EOF
             )
             python3 tools/tt-power-sidecar/tt_power_sidecar.py \
               --backend sysfs \

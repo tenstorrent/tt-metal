@@ -331,9 +331,9 @@ jobs:
             PERF_READY="${{ steps.perf-probe.outputs.perf_ready }}"
             PERF_SAMPLE_FREQUENCY="${{ inputs.perf-sample-frequency }}"
             TEST_GROUP_NAME="${{ matrix.test-group.name }}"
-            TEST_GROUP_CMD=$(cat <<'RWL_CMD_EOF'
+            TEST_GROUP_CMD=$(cat <<'TEST_CMD_EOF'
             ${{ matrix.test-group.cmd }}
-            RWL_CMD_EOF
+            TEST_CMD_EOF
             )
             # Non-profiled path (default): run the group cmd directly under the power sidecar.
             # Profiled path (experiment): wrap the group cmd in `perf record -g -F <freq> -o <out>`,
