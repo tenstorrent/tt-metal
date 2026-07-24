@@ -1381,7 +1381,7 @@ std::string QuasarComputeKernel::config_hash() const {
     }
 
     return fmt::format(
-        "{}_{}_{}_{}_{}_{}_{}_{}_{}",
+        "{}_{}_{}_{}_{}_{}_{}_{}",
         fmt::join(compute_processors_, "_"),
         enchantum::to_string(config_.math_fidelity),
         config_.fp32_dest_acc_en,
@@ -1389,7 +1389,6 @@ std::string QuasarComputeKernel::config_hash() const {
         config_.dst_full_sync_en,
         config_.bfp8_pack_precise,
         config_.enable_2x_src_format,
-        config_.unpack_to_dest_en,
         unpack_mode_descriptor);
 }
 
@@ -1405,7 +1404,6 @@ void QuasarComputeKernel::set_build_options(JitBuildOptions& build_options) cons
     build_options.unpack_to_dest_mode = this->config_.unpack_to_dest_mode;
     build_options.bfp8_pack_precise = this->config_.bfp8_pack_precise;
     build_options.enable_2x_src_format = this->config_.enable_2x_src_format;
-    build_options.unpack_to_dest_en = this->config_.unpack_to_dest_en;
 }
 
 }  // namespace experimental::quasar
