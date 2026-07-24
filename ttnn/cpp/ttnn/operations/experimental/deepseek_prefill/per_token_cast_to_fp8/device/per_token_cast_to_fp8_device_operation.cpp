@@ -148,22 +148,6 @@ PerTokenCastToFp8DeviceOperation::tensor_return_value_t PerTokenCastToFp8DeviceO
     return {create_device_tensor(output_e4m3_spec, device), create_device_tensor(scale_spec, device)};
 }
 
-ttsl::hash::hash_t PerTokenCastToFp8DeviceOperation::compute_program_hash(
-    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    const auto& input = tensor_args.input_tensor;
-    const auto tile_shape = input.tensor_spec().tile().get_tile_shape();
-    const auto face_shape = input.tensor_spec().tile().get_face_shape();
-    return tt::tt_metal::operation::hash_operation<PerTokenCastToFp8DeviceOperation>(
-        attrs,
-        input.dtype(),
-        input.memory_config(),
-        input.logical_shape(),
-        tile_shape[0],
-        tile_shape[1],
-        face_shape[0],
-        face_shape[1]);
-}
-
 }  // namespace ttnn::experimental::prim::per_token_cast_to_fp8
 
 namespace ttnn::prim {
