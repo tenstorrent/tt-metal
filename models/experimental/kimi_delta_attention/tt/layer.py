@@ -276,29 +276,40 @@ class KimiDeltaAttention:
             memory_config=memory_config,
             compute_kernel_config=self.compute_config,
         )
-        qkv = _slice_width(projected, 0, self._convolution_width)
         output_gate_width = config.v_dim if head_major else config.head_v_dim
         auxiliary_start = self._convolution_width
-        if mode == "chunk" and batch == 1 and sequence >= ttnn.TILE_SIZE:
-            qkv, new_convolution_state = self._causal_conv1d_prefill(qkv, sequence)
-        else:
-            convolution_state = self.convolution_state
-            if convolution_state.layout != ttnn.TILE_LAYOUT:
-                convolution_state = ttnn.to_layout(
-                    convolution_state,
-                    ttnn.TILE_LAYOUT,
-                    memory_config=memory_config,
-                )
-            qkv, new_convolution_state = _causal_conv1d_fir(
-                qkv,
-                None,
-                None,
-                config.conv_kernel_size,
-                self.device,
-                memory_config=memory_config,
-                conv_state=convolution_state,
-                weight_taps=weights.convolution_taps,
+        if mode == "chunk" and batch == 1 and sequence > 640:
+            assert self.convolution_state is not None
+            qkv, new_convolution_state = ttnn.transformer.kda_tiled_causal_conv1d(
+                projected,
+                self.convolution_state,
+                *weights.convolution_taps,
+                self._convolution_width,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_config,
             )
+        else:
+            qkv = _slice_width(projected, 0, self._convolution_width)
+            if mode == "chunk" and batch == 1 and sequence >= ttnn.TILE_SIZE:
+                qkv, new_convolution_state = self._causal_conv1d_prefill(qkv, sequence)
+            else:
+                convolution_state = self.convolution_state
+                if convolution_state.layout != ttnn.TILE_LAYOUT:
+                    convolution_state = ttnn.to_layout(
+                        convolution_state,
+                        ttnn.TILE_LAYOUT,
+                        memory_config=memory_config,
+                    )
+                qkv, new_convolution_state = _causal_conv1d_fir(
+                    qkv,
+                    None,
+                    None,
+                    config.conv_kernel_size,
+                    self.device,
+                    memory_config=memory_config,
+                    conv_state=convolution_state,
+                    weight_taps=weights.convolution_taps,
+                )
         q = _slice_width(qkv, 0, config.q_dim)
         k = _slice_width(qkv, config.q_dim, config.q_dim + config.k_dim)
         if mode == "recurrent" or sequence % ttnn.TILE_SIZE != 0:

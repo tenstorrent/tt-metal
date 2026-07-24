@@ -15,13 +15,13 @@ keeps failed experiments visible so they are not repeated unchanged.
   recurrent state remain FP32.
 - Prepared tensors now remain interleaved in distributed L1 between prep and
   scan. `QWEN_KDA_PREP_DRAM=1` preserves the measured DRAM control.
-- T=640 wall: `643.623 -> 619.594 us` (`-3.73%`).
-- T=5,120 wall: `3681.529 -> 3385.003 us` (`-8.05%` versus the matched FP32
-  DRAM control).
+- T=640 wall: `643.623 -> 618.507 us` (`-3.90%`).
+- T=5,120 wall: `3681.529 -> 3204.486 us` (`-12.96%` versus the matched FP32
+  DRAM control, `-5.33%` versus the previous retained endpoint).
 - T=5,120 recurrence: `1023.411 -> 807.181 us` (`-21.13%` versus control).
-- T=5,120 selected block times: projection `524.798 us`, convolution
-  `601.588 us`, decay transform `108.106 us`, recurrence `807.181 us`, and
-  output/CCL `1069.975 us`.
+- T=5,120 selected block times: projection `524.896 us`, tiled convolution
+  `376.236 us`, decay transform `107.751 us`, recurrence `807.089 us`, and
+  output/CCL `1073.919 us`.
 - Estimated T=5,120 compute utilization: `13.14%`.
 - Estimated T=5,120 CCL utilization: `39.79%` against the 40% aspiration.
 - Final correctness gate: 27/27 tests passed; focused TP output/recurrent
@@ -33,34 +33,29 @@ The complete evidence is in `bringup_log.md`, `ROOFLINE.md`, and
 ## Top three by maximum plausible reward
 
 This is a gross-upside ranking, not the implementation order. Percentages use
-the retained T=5,120 wall of `3385.003 us`; ceilings are not forecasts and
+the retained T=5,120 wall of `3204.486 us`; ceilings are not forecasts and
 overlap, so they must not be added.
 
 1. **Distributed-L1 two-level affine prefix scan.** The serial scan costs
-   `500.685 us`, giving a `14.79%` whole-layer gross ceiling. This is the
+   `500.740 us`, giving a `15.63%` whole-layer gross ceiling. This is the
    largest remaining single dependency-chain target, but also the highest-risk
    idea: a DRAM-backed version is already ruled out by its traffic floor.
 2. **Bounded persistent prep-to-scan producer/consumer pipeline.** Prep costs
-   `306.496 us` and scan costs `500.685 us`. Perfect overlap could hide at most
-   the smaller phase, a `9.05%` wall ceiling. The retained distributed-L1
+   `306.349 us` and scan costs `500.740 us`. Perfect overlap could hide at most
+   the smaller phase, a `9.56%` wall ceiling. The retained distributed-L1
    endpoint proves residency is useful; it does not yet prove that ordered
    consumers can avoid starvation and backpressure.
-3. **Direct tiled projection-to-convolution-to-Q/K/V program.** The retained
-   route spends `86.093 us` cropping QKV, `95.591 us` untilizing it, and about
-   `94.533 us` on three post-convolution Q/K/V slices. Consuming projected
-   tiles by offset and writing Q/K/V plus the three-row carry directly can
-   remove up to `276.217 us`, an `8.16%` traffic/launch ceiling before custom
-   kernel overhead. The row-major-input prototype proved correctness but not
-   speed; the tiled-input boundary is the active experiment.
+3. **Write Q/K/V directly from the retained tiled convolution.** The three
+   post-convolution slices cost `93.694 us`. Routing contiguous output tiles
+   to three tensors in the existing writer can remove that traffic and three
+   launches, a `2.92%` wall ceiling, without changing convolution arithmetic.
 
 ## Current execution queue
 
-1. Finish the direct tiled projection-to-convolution experiment because it has
-   the strongest evidence-to-risk ratio and directly fixes the measured
-   failure mode of the row-major prototype.
-2. Fuse prep and scan into a bounded producer/consumer pipeline.
-3. Prototype the distributed-L1 two-level affine prefix only if its explicit
-   L1 and NOC traffic model beats the `500.685 us` serial scan.
+1. Extend the retained tiled convolution writer to emit Q/K/V directly.
+2. Prototype the distributed-L1 two-level affine prefix only if its explicit
+   L1 and NOC traffic model beats the `500.740 us` serial scan.
+3. Fuse prep and scan into a bounded producer/consumer pipeline.
 
 The affine-prefix experiment proved the algebra and FP32 numerics, but rejected
 a DRAM-backed implementation: its estimated memory floor exceeds the current
@@ -279,6 +274,15 @@ improved `622.564 -> 619.594 us` (`-0.48%`). T=5,120 wall improved
       `426.786 us`; retained QKV crop plus external untilize still cost
       `181.952 us`. Reject this boundary. The next viable version must consume
       tiled projection output directly and eliminate those two prep programs.
+    - Tiled-input result, 2026-07-24: retain for `T > 640`. The first revision
+      gathered every tile-face row separately and measured `1170.134 us`;
+      reading full tiles once and untilizing locally reduced the custom program
+      to `376.236 us`. T=5,120 wall improved `3385.003 -> 3204.486 us`
+      (`-5.33%`), convolution improved `606.271 -> 376.236 us` (`-37.94%`),
+      and calls fell `35 -> 21`. TP output/state/convolution PCC was
+      `0.999955/0.999905/0.999997`. Applying it at T=640 regressed wall
+      `619.594 -> 638.442 us`, so the implementation is deliberately localized
+      to long sequences; the retained native T=640 path measures `618.507 us`.
 45. Reduce T=5,120 DRAM slicing overhead.
 46. Implement numerically exact SiLU in the convolution output kernel.
     - Experiment result, 2026-07-24: `Conv1dConfig.activation=SILU` is ignored
