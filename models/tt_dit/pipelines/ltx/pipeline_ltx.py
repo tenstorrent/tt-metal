@@ -45,11 +45,11 @@ from ...utils.video import Audio
 
 LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
 
-# Default DiT-linear quant preset. bf8 weights are the shipped 1080p tier: the perf targets and the
-# VBench floors are calibrated against it. LTX_QUANT="" opts back to the bf16 baseline; LTX_QUANT
-# names any other QuantConfig preset. _maybe_apply_quant_config resolves this once and threads the
-# tag into the transformer cache name, so the quantized cache stays separate from the bf16 baseline.
-LTX_QUANT_DEFAULT = "all_bf8_lofi"
+# Default DiT-linear quant preset. Empty selects the bf16 baseline (the default); set
+# LTX_QUANT=all_bf8_lofi to opt into the bf8 1080p tier (its perf/VBench floors are calibrated against
+# it), or LTX_QUANT to any other QuantConfig preset. _maybe_apply_quant_config resolves this once and
+# threads the tag into the transformer cache name, so a quantized cache stays separate from the baseline.
+LTX_QUANT_DEFAULT = ""
 
 DEFAULT_NEGATIVE_PROMPT = (
     "blurry, out of focus, overexposed, underexposed, low contrast, washed out colors, excessive noise, "
