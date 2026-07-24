@@ -43,8 +43,6 @@ struct MaybeProfileScope<true, timer_id> : kernel_profiler::profileScope<timer_i
 #define MaybeDeviceZoneScopedN(ENABLED, name)
 #endif
 
-// sdpa_pack_tile_ooo lives in sdpa_pack_utils.hpp (shared with compute_common.hpp).
-
 static __attribute__((noinline, noclone)) void sdpa_cb_push_back_out_of_line(uint32_t cb_id, uint32_t num_tiles) {
     CircularBuffer(cb_id).push_back(num_tiles);
 }
