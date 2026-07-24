@@ -436,6 +436,146 @@ class Attention(LightweightModule):
             for k_or_v in [cache_k, cache_v]
         ]
 
+    @staticmethod
+    def _inplace_copy(src: ttnn.Tensor, dst: ttnn.Tensor, target_dtype) -> None:
+        """Convert ``src`` to ``dst``'s layout/dtype/shape/memcfg, then
+        ``ttnn.copy`` into ``dst``. ``dst``'s device buffer is preserved (no
+        reallocation) so any captured trace and the DRAM prefetcher's recorded
+        buffer addresses remain valid.
+        """
+        converted = src
+
+        if converted.layout != dst.layout:
+            converted = ttnn.to_layout(converted, layout=dst.layout)
+
+        if converted.dtype != target_dtype:
+            converted = ttnn.typecast(converted, dtype=target_dtype)
+
+        if tuple(converted.shape) != tuple(dst.shape):
+            converted = ttnn.reshape(converted, list(dst.shape))
+
+        if converted.memory_config() != dst.memory_config():
+            converted = ttnn.to_memory_config(converted, dst.memory_config())
+
+        ttnn.copy(input_a=converted, input_b=dst)
+
+    def _update_wqkv(self, tensor: ttnn.Tensor) -> None:
+        """In-place replace ``self.wqkv`` via ``ttnn.copy``. Caller must match
+        the constructor's ``self.wqkv``: shape ``(1, 1, H, qkv_size_per_device)``,
+        TILE, ``ShardTensor2dMesh(dims=(2, 3))`` (or ``(3, 2)`` on TG).
+        """
+        self._inplace_copy(tensor, self.wqkv, self.wqkv_dtype)
+
+    def _update_wo(self, tensor: ttnn.Tensor) -> None:
+        """In-place replace ``self.wo`` (and ``self.wo_sharded_ring`` when the
+        prefetcher is enabled) via ``ttnn.copy``. Both must stay in sync: the
+        decode path reads ``wo_sharded_ring`` instead of ``wo`` when
+        ``self.prefetcher is not None``.
+        """
+        self._inplace_copy(tensor, self.wo, self.wo_dtype)
+        wo_sharded_ring = getattr(self, "wo_sharded_ring", None)
+        if wo_sharded_ring is not None:
+            self._inplace_copy(tensor, wo_sharded_ring, self.wo_dtype)
+
+    def _update_wqkv_bias(
+        self,
+        q_proj_bias: ttnn.Tensor,
+        k_proj_bias: ttnn.Tensor,
+        v_proj_bias: ttnn.Tensor,
+    ) -> None:
+        """In-place replace ``self.wqkv_bias_prefill`` and ``self.wqkv_bias_decode``
+        from separate HF Q/K/V biases. Not yet implemented (needs the
+        constructor's per-device slice+concat and decode batch broadcast).
+        """
+        raise NotImplementedError("wqkv_bias update is not yet implemented")
+
+    def _update_qk_norm(self, which: str, weight: ttnn.Tensor) -> None:
+        """In-place replace the optional Q-/K-RMSNorm gamma. Not yet implemented:
+        ``self.q_norm``/``self.k_norm`` are lambdas closing over an internal
+        ``RMSNorm`` not exposed on ``self``, so we can't delegate to
+        ``RMSNorm.update`` without a small refactor.
+        """
+        raise NotImplementedError(f"{which} update is not yet implemented")
+
+    def update(
+        self,
+        *,
+        q_proj: ttnn.Tensor,
+        k_proj: ttnn.Tensor,
+        v_proj: ttnn.Tensor,
+        o_proj: ttnn.Tensor,
+        q_proj_bias: ttnn.Tensor | None = None,
+        k_proj_bias: ttnn.Tensor | None = None,
+        v_proj_bias: ttnn.Tensor | None = None,
+        q_norm: ttnn.Tensor | None = None,
+        k_norm: ttnn.Tensor | None = None,
+        hf_rope: bool = False,
+    ) -> None:
+        """In-place replace the on-device attention weights via ``ttnn.copy``.
+
+        HF-format input contract (see ``LLAMA_WEIGHT_TRANSFER.md``): required
+        ``self_attn.{q,k,v,o}_proj.weight`` plus optional biases/QK-norm gammas,
+        as HF Linear shapes wrapped in two leading unit dims, bf16, TILE,
+        DRAM-interleaved, replicated.
+
+        ``hf_rope`` (default ``False``): whether Q/K rows are in HF split-half
+        rotary order or already in this model's convention. ``False`` is right
+        for the ttml -> tt-transformers transfer (both store Meta-permuted Q/K
+        for Llama-3.2-1B-Instruct). When it disagrees with ``self.use_hf_rope``
+        an HF<->Meta row permutation is required; not implemented (raises).
+
+        Conversion (single-device only): transpose each proj (mirrors the
+        constructor's ``torch.transpose``), concat Q/K/V along the output dim,
+        then ``_update_wqkv``/``_update_wo`` ``ttnn.copy`` into existing buffers,
+        preserving buffer addresses (so captured traces and the prefetcher's
+        recorded addresses stay valid). The multi-device per-device
+        chunk-transpose-concat is not yet implemented.
+
+        Raises ``ValueError`` when optional inputs don't match construction-time
+        presence (e.g. biases passed but the module has no QKV bias).
+        """
+        if hf_rope != self.use_hf_rope:
+            raise NotImplementedError(
+                "Attention.update: HF<->Meta Q/K row permutation is not yet "
+                f"implemented (hf_rope={hf_rope}, self.use_hf_rope={self.use_hf_rope}). "
+                "Permute Q/K rows on the caller side, or extend update() with the "
+                "on-device row-permutation kernel."
+            )
+        if self.num_devices_per_group != 1:
+            raise NotImplementedError(
+                "Attention.update for num_devices_per_group > 1 is not yet "
+                "implemented; the multi-device path needs the constructor's "
+                "per-device chunk-transpose-concat (see __init__'s qkv_list loop)."
+            )
+
+        q_t = ttnn.transpose(q_proj, -2, -1)
+        k_t = ttnn.transpose(k_proj, -2, -1)
+        v_t = ttnn.transpose(v_proj, -2, -1)
+        wqkv_fused = ttnn.concat([q_t, k_t, v_t], dim=-1)
+        self._update_wqkv(wqkv_fused)
+
+        wo_internal = ttnn.transpose(o_proj, -2, -1)
+        self._update_wo(wo_internal)
+
+        bias_present = (q_proj_bias is not None) or (k_proj_bias is not None) or (v_proj_bias is not None)
+        if bias_present and self.wqkv_bias_prefill is None:
+            raise ValueError(
+                "Q/K/V projection biases were supplied but Attention was " "constructed without a QKV bias."
+            )
+        if (not bias_present) and self.wqkv_bias_prefill is not None:
+            raise ValueError(
+                "Attention was constructed with a QKV bias but Q/K/V " "projection biases were not supplied."
+            )
+        if bias_present:
+            if q_proj_bias is None or k_proj_bias is None or v_proj_bias is None:
+                raise ValueError("Q/K/V projection biases must all be supplied together.")
+            self._update_wqkv_bias(q_proj_bias, k_proj_bias, v_proj_bias)
+
+        if q_norm is not None:
+            self._update_qk_norm("q_norm", q_norm)
+        if k_norm is not None:
+            self._update_qk_norm("k_norm", k_norm)
+
     def to_qk_fused_memory_config(self, q_tensor: ttnn.Tensor, k_tensor: ttnn.Tensor):
         """
         Convert Q and K tensors to height-sharded memory layouts suitable for

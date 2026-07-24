@@ -1,0 +1,16 @@
+# Pins each rank to a disjoint N300 board via TT_VISIBLE_DEVICES (PCIe board ids).
+# Rank 0 = TTML sender (board 0); rank 1 = TTT receiver (board 1).
+
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0"
+  - rank: 1
+    mesh_id: 1
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "1"
+
+mesh_graph_desc_path: "configurations/local2/mgd.textproto"

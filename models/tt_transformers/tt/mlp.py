@@ -87,18 +87,18 @@ class MLP(LightweightModule):
 
         self.decoders_optimizations = self.args.decoders_optimizations
 
-        ff1_3_dtype = self.decoders_optimizations.get_tensor_dtype(
+        self.ff1_3_dtype = self.decoders_optimizations.get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.FF1_FF3, prefetcher=use_prefetcher
         )
-        ff2_dtype = self.decoders_optimizations.get_tensor_dtype(
+        self.ff2_dtype = self.decoders_optimizations.get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.FF2, prefetcher=use_prefetcher
         )
 
         self.w1 = as_sharded_tensor(
-            "w1_sharded", ff1_3_dtype, dims=w1_dims
+            "w1_sharded", self.ff1_3_dtype, dims=w1_dims
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
-        self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims)
-        self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
+        self.w2 = as_sharded_tensor("w2_sharded", self.ff2_dtype, dims=w2_dims)
+        self.w3 = as_sharded_tensor("w3_sharded", self.ff1_3_dtype, dims=w1_dims)
 
         # Default activation is SILU
         self.activation_type = (
@@ -114,6 +114,88 @@ class MLP(LightweightModule):
                 self.prefetcher.insert_tensor(self.w2)
 
             self.prefetcher.register_callback(register_weights)
+
+    @staticmethod
+    def _inplace_copy(src: ttnn.Tensor, dst: ttnn.Tensor, target_dtype) -> None:
+        """Convert ``src`` to ``dst``'s layout/dtype/shape/memcfg, then
+        ``ttnn.copy`` into ``dst``. ``dst``'s device buffer is preserved so any
+        captured trace and the prefetcher's recorded addresses remain valid.
+        Mirrors ``Attention._inplace_copy``.
+        """
+        converted = src
+
+        if converted.layout != dst.layout:
+            converted = ttnn.to_layout(converted, layout=dst.layout)
+
+        if converted.dtype != target_dtype:
+            converted = ttnn.typecast(converted, dtype=target_dtype)
+
+        if tuple(converted.shape) != tuple(dst.shape):
+            converted = ttnn.reshape(converted, list(dst.shape))
+
+        if converted.memory_config() != dst.memory_config():
+            converted = ttnn.to_memory_config(converted, dst.memory_config())
+
+        ttnn.copy(input_a=converted, input_b=dst)
+
+    def _update_w1(self, tensor: ttnn.Tensor) -> None:
+        """In-place replace ``self.w1`` (gate_proj) via ``ttnn.copy``. Caller must
+        match the constructor's ``self.w1``: shape ``(1, 1, dim, hidden_dim)``
+        (transposed from HF), TILE, same ``ShardTensor2dMesh`` dims and memcfg.
+        """
+        self._inplace_copy(tensor, self.w1, self.ff1_3_dtype)
+
+    def _update_w2(self, tensor: ttnn.Tensor) -> None:
+        """In-place replace ``self.w2`` (down_proj) via ``ttnn.copy``. Shape
+        ``(1, 1, hidden_dim, dim)`` (transposed from HF), TILE, same
+        ``ShardTensor2dMesh`` dims and memcfg as constructed.
+        """
+        self._inplace_copy(tensor, self.w2, self.ff2_dtype)
+
+    def _update_w3(self, tensor: ttnn.Tensor) -> None:
+        """In-place replace ``self.w3`` (up_proj) via ``ttnn.copy``.
+
+        Same shape/layout/memcfg constraints as ``_update_w1``.
+        """
+        self._inplace_copy(tensor, self.w3, self.ff1_3_dtype)
+
+    def update(
+        self,
+        *,
+        gate_proj: ttnn.Tensor,
+        up_proj: ttnn.Tensor,
+        down_proj: ttnn.Tensor,
+    ) -> None:
+        """In-place replace the on-device MLP weights via ``ttnn.copy``.
+
+        HF-format input (see ``LLAMA_WEIGHT_TRANSFER.md``): ``gate_proj``,
+        ``up_proj`` are ``(1, 1, I, H)`` and ``down_proj`` is ``(1, 1, H, I)``
+        (HF Linear wrapped in two unit dims; ``H=args.dim``, ``I=hidden_dim``),
+        bf16, TILE, DRAM-interleaved, replicated.
+
+        Internal storage is the HF weight transposed; ``update`` transposes each
+        input on device (mirroring the constructor's ``torch.transpose``) then
+        ``_inplace_copy``s into the existing buffers, preserving addresses (so
+        captured traces and the prefetcher's recorded addresses stay valid).
+
+        Caveats: hidden-dim padding is not handled (asserted off for
+        Llama-3.2-1B-Instruct); the multi-chip replicated -> 2D-sharded mesh
+        projection is not inserted (a no-op on the 1x1 transfer case).
+        """
+        assert self.args.hidden_dim == self.args.unpadded_hidden_dim, (
+            f"MLP.update does not yet support hidden_dim padding "
+            f"(hidden_dim={self.args.hidden_dim}, "
+            f"unpadded_hidden_dim={self.args.unpadded_hidden_dim}); pad on the "
+            "caller side or extend update() with an on-device ttnn.pad."
+        )
+
+        w1_internal = ttnn.transpose(gate_proj, -2, -1)
+        w3_internal = ttnn.transpose(up_proj, -2, -1)
+        w2_internal = ttnn.transpose(down_proj, -2, -1)
+
+        self._update_w1(w1_internal)
+        self._update_w3(w3_internal)
+        self._update_w2(w2_internal)
 
     def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
         """
