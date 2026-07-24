@@ -357,7 +357,7 @@ def prepare_inputs_for_operation(
         # Span both signs and past the linear threshold (20) so the kernel's polynomial region, the
         # negative saturation region, and the linear passthrough (t > threshold -> softplus ~= x) are
         # all covered (mirrors sfpu_domains' Softplus spec).
-        min_val = -5.0
+        min_val = -8.0
         max_val = 30.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
