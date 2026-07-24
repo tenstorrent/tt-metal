@@ -16,8 +16,8 @@ keeps failed experiments visible so they are not repeated unchanged.
 - Prepared tensors now remain interleaved in distributed L1 between prep and
   scan. `QWEN_KDA_PREP_DRAM=1` preserves the measured DRAM control.
 - T=640 wall: `643.623 -> 619.594 us` (`-3.73%`).
-- T=5,120 wall: `3681.529 -> 3334.239 us` (`-9.43%` versus the matched FP32
-  DRAM control; direct-output convolution endpoint).
+- T=5,120 wall: `3681.529 -> 3330.328 us` (`-9.54%` versus the matched FP32
+  DRAM control; 107-core gated-RMS endpoint).
 - T=5,120 recurrence: `1023.411 -> 807.181 us` (`-21.13%` versus control).
 - T=5,120 selected block times: projection `524.798 us`, convolution
   `601.588 us`, decay transform `108.106 us`, recurrence `807.181 us`, and
@@ -421,6 +421,11 @@ improved `622.564 -> 619.594 us` (`-0.48%`). T=5,120 wall improved
       fused MMRS is CCL-bound, so compressed weights do not improve it.
 53. Fold additional auxiliary projection work into the grouped projection.
 54. Tune gated-RMS core mapping separately for short and long sequences.
+    - Retained result, 2026-07-24: choose the fewest cores that preserve the
+      all-core maximum work items per worker. At T=5,120 this maps 640 items to
+      107 rather than 110 cores while retaining six items/worker. Gated-RMS
+      kernel time improved `86.339 -> 83.557 us`; matched wall improved
+      `3334.239 -> 3330.328 us` (`-0.117%`).
 55. Evaluate lower-precision gated-RMS output only at the projection boundary.
 56. Fuse gated-RMS output packing with output-projection input staging.
 

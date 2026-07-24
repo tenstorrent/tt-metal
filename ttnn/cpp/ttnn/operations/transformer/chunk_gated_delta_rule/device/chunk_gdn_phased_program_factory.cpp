@@ -495,7 +495,11 @@ tt::tt_metal::ProgramDescriptor KdaGatedRmsProgramFactory::create_descriptor(
     const uint32_t Mt = attrs.sequence / TILE_HEIGHT;
     const uint32_t Vt = attrs.value_dim / TILE_WIDTH;
     const uint32_t total = attrs.batch * attrs.num_heads * Mt;
-    auto dist = distribute_prep(in.input.device()->compute_with_storage_grid_size(), total, ~0u);
+    // Use the fewest workers that preserve the all-core maximum items/worker.
+    const auto grid = in.input.device()->compute_with_storage_grid_size();
+    const uint32_t max_items_per_core = tt::div_up(total, grid.x * grid.y);
+    const uint32_t rms_core_limit = tt::div_up(total, max_items_per_core);
+    auto dist = distribute_prep(in.input.device()->compute_with_storage_grid_size(), total, rms_core_limit);
     const auto& cores = dist.core_set;
 
     ProgramDescriptor desc;

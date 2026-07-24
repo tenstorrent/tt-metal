@@ -1660,3 +1660,28 @@
   control, wall improves `46.405 us` (`1.37%`).
 - Verdict: retain. This validates direct multi-output production but not tiled
   projection consumption; the input QKV crop/untilize boundary remains.
+
+
+### 2026-07-24 23:17 UTC — Retain minimal-core gated-RMS mapping
+
+- Hypothesis: T=5,120 has 640 independent `(head,32-token-block)` RMS items.
+  Mapping them to 107 cores preserves the all-core critical load of six items
+  per worker while avoiding three underfilled workers.
+- Implementation: derive the all-core ceiling, then select the smallest worker
+  count that preserves it. This remains shape-generic rather than hard-coding
+  the T=5,120 core count.
+- Host build: `./build_metal.sh --build-tests --build-type Release` -> PASS.
+- Performance: `PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10
+  scripts/run_safe_pytest.sh --profile
+  models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py
+  -q -s` -> PASS. CSV
+  `generated/profiler/reports/2026_07_24_23_16_12/ops_perf_results_2026_07_24_23_16_12.csv`,
+  SHA-256 `317912b3cf9378a719fbd8d3cef2df91235009b9f66817c794f8fe165769b14f`.
+- Result: gated-RMS kernel median improved `86.339 -> 83.557 us`; slowest-
+  device replay spans were `[3330.481, 3324.707, 3329.104, 3327.917,
+  3330.619, 3333.578, 3332.932, 3330.176, 3332.660, 3329.805] us`, median
+  `3330.328 us`. Matched wall improves `3.911 us` (`0.117%`).
+- Long correctness: `KDA_TP_TEST_SEQ=5120 ...::test_tp_layer_pcc -q -s` ->
+  PASS at output/recurrent/convolution PCC `0.999958/0.999890/0.999997`.
+- Verdict: retain. The critical load, not maximum physical core occupancy, is
+  the correct mapping objective for this epilogue.

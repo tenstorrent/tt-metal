@@ -325,3 +325,11 @@ preserving TP=8 whole-head ownership and requiring no inter-chip communication.
 The writer partitions the completed width into Q/K/V DRAM tile ranges directly.
 This map reduces matched wall `3380.644 -> 3334.239 us` and calls `24 -> 21`;
 retain it. It does not validate the rejected cross-core tiled-prefix input map.
+
+
+Gated RMS now selects the smallest worker set that preserves the all-core
+maximum items per worker. At T=5,120, 640 row items map to 107 cores at six
+items/core maximum rather than 110 cores with the same maximum. The reduced
+underfilled tail improves gated-RMS `86.339 -> 83.557 us` and layer wall
+`3334.239 -> 3330.328 us`. This distribution rule is shape-derived and does
+not alter scan, TP, or CCL placement.
