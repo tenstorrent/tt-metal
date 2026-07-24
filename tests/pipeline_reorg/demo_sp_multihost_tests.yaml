@@ -134,8 +134,8 @@
     # PRTE map-by requires rankfile under mpirun cwd (no ../../../ci/... rewrite).
     mkdir -p "${TT_METAL_HOME}/generated/ttrun"
     rm -rf "${LOCAL_CACHE}"
-    cp -a "${NFS_CACHE}" "${LOCAL_CACHE}"
-    mpirun --pernode bash -lc "mkdir -p '${TT_METAL_HOME}/generated/ttrun' && rm -rf '${LOCAL_CACHE}' && cp -a '${NFS_CACHE}' '${LOCAL_CACHE}'"
+    cp -r "${NFS_CACHE}" "${LOCAL_CACHE}"
+    mpirun --pernode bash -lc "mkdir -p '${TT_METAL_HOME}/generated/ttrun' && rm -rf '${LOCAL_CACHE}' && cp -r '${NFS_CACHE}' '${LOCAL_CACHE}'"
 
     # Phase 2: local tree only (ORIGINAL_CWD == TT_METAL_HOME == --wdir).
     cd "${TT_METAL_HOME}"
@@ -188,8 +188,8 @@
     test -f "${NFS_CACHE}/rank_bindings.yaml" && test -f "${NFS_CACHE}/rankfile"
     mkdir -p "${TT_METAL_HOME}/generated/ttrun"
     rm -rf "${LOCAL_CACHE}"
-    cp -a "${NFS_CACHE}" "${LOCAL_CACHE}"
-    mpirun --pernode bash -lc "mkdir -p '${TT_METAL_HOME}/generated/ttrun' && rm -rf '${LOCAL_CACHE}' && cp -a '${NFS_CACHE}' '${LOCAL_CACHE}'"
+    cp -r "${NFS_CACHE}" "${LOCAL_CACHE}"
+    mpirun --pernode bash -lc "mkdir -p '${TT_METAL_HOME}/generated/ttrun' && rm -rf '${LOCAL_CACHE}' && cp -r '${NFS_CACHE}' '${LOCAL_CACHE}'"
 
     cd "${TT_METAL_HOME}"
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
@@ -240,8 +240,8 @@
     test -f "${NFS_CACHE}/rank_bindings.yaml" && test -f "${NFS_CACHE}/rankfile"
     mkdir -p "${TT_METAL_HOME}/generated/ttrun"
     rm -rf "${LOCAL_CACHE}"
-    cp -a "${NFS_CACHE}" "${LOCAL_CACHE}"
-    mpirun --pernode bash -lc "mkdir -p '${TT_METAL_HOME}/generated/ttrun' && rm -rf '${LOCAL_CACHE}' && cp -a '${NFS_CACHE}' '${LOCAL_CACHE}'"
+    cp -r "${NFS_CACHE}" "${LOCAL_CACHE}"
+    mpirun --pernode bash -lc "mkdir -p '${TT_METAL_HOME}/generated/ttrun' && rm -rf '${LOCAL_CACHE}' && cp -r '${NFS_CACHE}' '${LOCAL_CACHE}'"
 
     cd "${TT_METAL_HOME}"
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
