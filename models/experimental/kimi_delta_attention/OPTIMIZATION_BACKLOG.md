@@ -238,6 +238,11 @@ improved `622.564 -> 619.594 us` (`-0.48%`). T=5,120 wall improved
       cannot eliminate the `106 us` unary pass.
 47. Update convolution carry inside the convolution writer.
 48. Tune DRAM slice width and count explicitly.
+    - Experiment result, 2026-07-24: reject finer slicing. Auto selects two
+      slices and measures `3385.003 us` wall with 35 calls per replay. Four
+      slices measured `3467.099 us` (`+2.43%`, 45 calls); eight measured
+      `3712.531 us` (`+9.68%`, 65 calls). Five extra device ops per added
+      slice make orchestration cost dominate; retain auto/two-slice routing.
 49. Pipeline convolution slice reads, compute, and writes.
 50. Produce tiled Q/K/V directly when that avoids a later layout conversion.
 

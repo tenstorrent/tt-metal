@@ -1355,3 +1355,13 @@
 - Diagnostic control: restore standalone `ttnn.silu` while leaving the configured epilogue enabled, then repeat the same command -> PASS with output/recurrent/convolution PCC `0.999965/0.999910/0.999997`, exactly matching the retained endpoint.
 - Diagnosis: this depthwise Conv1d implementation ignores `Conv1dConfig.activation`; the failed output was the raw convolution, not a lower-accuracy fused SiLU. The control rules out double activation because it is numerically identical to the single-activation endpoint.
 - Verdict: reject the public configuration route and restore source. A custom SiLU in the convolution output kernel remains a distinct implementation, with a measured upper bound of `106 us` or `3.13%` of current T=5,120 wall latency.
+
+
+### 2026-07-24 18:58:10 UTC — Reject finer DRAM width slicing for 5K convolution
+
+- Hypothesis: the auto-selected two-slice width partition may leave insufficient parallelism or an oversized working set; explicit four or eight slices could reduce the `601.588 us` convolution block.
+- Existing-pattern survey: Conv1d unit coverage explicitly supports manual `num_slices` values 4 and 8; the retained KDA report identifies auto routing as two DRAM width slices at T=5,120.
+- Four-slice command: `QWEN_KDA_CONV_SLICES=4 PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s` -> PASS. CSV `generated/profiler/reports/2026_07_24_18_55_45/ops_perf_results_2026_07_24_18_55_45.csv` (SHA-256 `9f9010da731e5728131d6d763775b36143520334f504cf2bc8c056cf1852ce65`). Median wall was `3467.099 us`, `+2.43%` versus retained `3385.003 us`.
+- Eight-slice command: `QWEN_KDA_CONV_SLICES=8 PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s` -> PASS. CSV `generated/profiler/reports/2026_07_24_18_57_05/ops_perf_results_2026_07_24_18_57_05.csv` (SHA-256 `1805cf58061585c1bf5e73d2c024e1fd40e12e47c14a33309b2aa3e241b1b157`). Median wall was `3712.531 us`, `+9.68%`.
+- Diagnosis: calls per device/replay increase from 35 at two slices to 45 at four and 65 at eight, exactly five additional device ops per added slice. The monotonic regression supports fixed slicing/orchestration cost as dominant and rules out insufficient slice parallelism.
+- Verdict: reject explicit four/eight-slice routing, restore `num_slices=0`, and retain the auto-selected two-slice path.
