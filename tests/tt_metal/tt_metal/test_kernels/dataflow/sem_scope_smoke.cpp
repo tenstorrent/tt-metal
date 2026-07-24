@@ -23,6 +23,12 @@ void kernel_main() {
     const uint32_t report_addr = get_arg(args::report_addr);
     const uint32_t increment_times = get_arg(args::increment_times);
 
+#ifdef SEM_HAS_DM_CACHED
+    // DM_LOCAL_CACHED sems live in a cached-only pool the dispatcher never writes; seed it from
+    // the ring-carried init value before any up(). Emitted only for cached programs; no-op else.
+    sem::init_dm_cached();
+#endif
+
     Semaphore s(sem::counter);  // CTAD deduces the host-baked scope
     for (uint32_t i = 0; i < increment_times; i++) {
         s.up(1);
