@@ -798,10 +798,28 @@ def warmup_gemma4_model_prefill(
     if chunk > 0 and get_padded_prefill_len(chunk) > max_seq:
         chunk = 1 << max(max_seq.bit_length() - 1, 11)
         chunk = min(chunk, max_seq)
-    lengths = []
-    for length in (128, chunk):
-        if length > 0 and length <= max_seq and length not in lengths:
-            lengths.append(length)
+    # GEMMA4_TRACE_PREFILL_SEQ_LENS historically only trimmed the *traced* bucket
+    # set. PLI / full-ISL single-chunk boots take this eager path instead, and
+    # would otherwise warm max_prefill_chunk_size (== max_seq_len, e.g. 131072)
+    # which exceeds practical server boot timeouts. Honor the same override here
+    # so nightly's GEMMA4_TRACE_PREFILL_SEQ_LENS=128 actually shortens boot.
+    override = os.environ.get("GEMMA4_TRACE_PREFILL_SEQ_LENS")
+    if override is not None:
+        lengths = []
+        for raw in override.split(","):
+            raw = raw.strip()
+            if not raw:
+                continue
+            length = int(raw)
+            if length > 0 and length <= max_seq and length not in lengths:
+                lengths.append(length)
+        if not lengths:
+            lengths = [min(128, max_seq)]
+    else:
+        lengths = []
+        for length in (128, chunk):
+            if length > 0 and length <= max_seq and length not in lengths:
+                lengths.append(length)
 
     sampling_params_short = None
     if can_sample_on_device:

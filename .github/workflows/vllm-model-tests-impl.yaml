@@ -325,12 +325,13 @@ jobs:
             google/gemma-4-*)
               export TT_LEAN_DECODE_WARMUP=1
               export GEMMA4_TRACE_PREFILL_SEQ_LENS=128
-              # 31B: with hybrid KV groups disabled every layer allocates a
-              # full-length KV buffer, and the default all-user pool OOMs DRAM
-              # on QB2/T3K. Cap the pool (the real DRAM lever, distinct from
-              # --max_model_len). See tt-metal #49257 / #49083.
-              if [ "$HF_MODEL" = "google/gemma-4-31B-it" ]; then
-                export GEMMA4_MAX_TOKENS_ALL_USERS=32768
+              # 31B/12B: serve 256k with policy multi-chunk (demo parity on QB2/LB).
+              # See tt-metal #49257 / #49083. 31B QB2 uses chunk 2048 @ ≥128k bounded.
+              if [ "$HF_MODEL" = "google/gemma-4-31B-it" ] || [ "$HF_MODEL" = "google/gemma-4-12B-it" ]; then
+                export GEMMA4_MAX_TOKENS_ALL_USERS=262144
+                export GEMMA4_VLLM_SINGLE_CHUNK=0
+                export GEMMA4_DEMO_SINGLE_CHUNK=0
+                export GEMMA4_CHUNKED_PREFILL_TRACE=1
               fi
               ;;
           esac
