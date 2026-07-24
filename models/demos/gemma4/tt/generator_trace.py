@@ -90,7 +90,14 @@ GEMMA4_DEFAULT_PREFILL_CHUNK = 4096
 #   chunked_bounded_isl_min:  bounded AND max_seq_len >= this → auto multi-chunk
 #                             (single-chunk scratch OOM). Between bounded_isl_min
 #                             and this: bounded + single-chunk.
-#   prefill_chunk:            generator chunk size on the chunked path.
+#   prefill_chunk:            default generator / vLLM scheduler chunk size.
+#   prefill_chunk_by_isl:     optional list of {isl_min, chunk, require_bounded?}
+#                             overrides. Highest matching isl_min wins when
+#                             max_seq_len >= isl_min (and bounded_sliding if
+#                             require_bounded). Demo + vLLM share this table so
+#                             server specs can keep max_num_batched_tokens /
+#                             long_prefill_token_threshold aligned with the
+#                             resolved chunk for that max_context.
 #   source:                   "measured" | "inferred" | "placeholder"
 #
 # Env overrides still win: GEMMA4_BOUNDED_SLIDING, GEMMA4_GEN_PREFILL_CHUNK,
@@ -111,11 +118,11 @@ GEMMA4_LONG_CONTEXT_POLICY = {
             "unbounded_isl_max": 65536,  # demo ran ~65k unbounded; vLLM serve ~49k
             "bounded_isl_min": 65536,  # auto bounded at 64k+
             "chunked_bounded_isl_min": 262144,  # single-chunk ~5.6GB OOM at 256k
+            # Default 4096; at ISL>=128k + bounded, 2048 (4096 → token-0 garbage).
             "prefill_chunk": _CHUNK,
-            # Bounded multi-chunk @ 128k: chunk=4096 → token-0 garbage on QB2;
-            # 2048 is coherent. Do not apply at 64k (unnecessary).
-            "bounded_prefill_chunk": 2048,
-            "bounded_prefill_chunk_isl_min": 131072,
+            "prefill_chunk_by_isl": [
+                {"isl_min": 131072, "chunk": 2048, "require_bounded": True},
+            ],
             "source": "measured",
         },
         # P150x8 (isl_sweep_logs/p150x8_bg_lb): unbounded allocates through 128k
@@ -284,7 +291,9 @@ def _canonical_device_name(device: str | None) -> str | None:
 def get_gemma4_long_context_policy(mesh_device=None, model_name_or_path=None) -> dict:
     """Return long-context policy for ``(model_key, device)``."""
     model_key = normalize_gemma4_model_key(model_name_or_path)
-    device = _canonical_device_name(_device_name(mesh_device)) or _QB2
+    # Prefer live mesh; fall back to MESH_DEVICE so server/vLLM config-time
+    # resolution (before mesh open) still picks the right board entry.
+    device = _canonical_device_name(_device_name(mesh_device) or os.environ.get("MESH_DEVICE")) or _QB2
     by_model = GEMMA4_LONG_CONTEXT_POLICY.get(model_key)
     if by_model is not None:
         if device in by_model:
@@ -321,7 +330,21 @@ def should_auto_enable_chunked_bounded(
 
 def _is_qb2(mesh_device) -> bool:
     """True only for the QB2 board (P150x4 or P300x2, 1x4 Blackhole)."""
-    return _device_name(mesh_device) in _QB2_ALIASES
+    name = _device_name(mesh_device) or os.environ.get("MESH_DEVICE")
+    return name in _QB2_ALIASES or _canonical_device_name(name) == _QB2
+
+
+def _prefill_chunk_isl_tiers(policy: dict) -> list[dict]:
+    """Normalize ``prefill_chunk_by_isl`` (plus legacy bounded_* keys)."""
+    tiers = policy.get("prefill_chunk_by_isl")
+    if tiers:
+        return [dict(t) for t in tiers]
+    # Legacy keys from earlier QB2 128k coherency wiring.
+    bchunk = policy.get("bounded_prefill_chunk")
+    bmin = policy.get("bounded_prefill_chunk_isl_min")
+    if bchunk is not None and bmin is not None:
+        return [{"isl_min": int(bmin), "chunk": int(bchunk), "require_bounded": True}]
+    return []
 
 
 def resolve_gemma4_prefill_chunk_size(
@@ -335,14 +358,16 @@ def resolve_gemma4_prefill_chunk_size(
     """Generator-level prefill chunk size for demo + vLLM serving.
 
     ``GEMMA4_GEN_PREFILL_CHUNK`` (a 2048-multiple) overrides on any board.
-    Otherwise the per-(model, device) ``prefill_chunk`` applies when the policy
-    is measured (incl. P150x8) or the board is QB2. Other boards keep
+    Otherwise the per-(model, device) ``prefill_chunk`` default applies when the
+    policy is measured (incl. P150x8) or the board is QB2, then
+    ``prefill_chunk_by_isl`` may select a smaller chunk for high ISL (e.g. QB2
+    31B bounded @ ≥128k → 2048 for coherency). Other boards keep
     ``non_qb2_default`` (often ``max_seq_len``) so unvalidated configs stay
     single-chunk unless the caller passes 4096.
 
-    When ``bounded_sliding`` and the policy defines ``bounded_prefill_chunk`` /
-    ``bounded_prefill_chunk_isl_min`` (31B QB2 @ 128k+), cap the chunk so
-    bounded multi-chunk stays coherent (4096 → token-0 garbage).
+    Server specs should set vLLM ``max_num_batched_tokens`` /
+    ``long_prefill_token_threshold`` to this same resolved value for the
+    configured ``max_context``.
 
     P150x8 / 31B / 128k unbounded (prefill_chunk_ab.tsv): chunk=4096 ~31s TTFT
     vs full-ISL single ~60s; quality OK.
@@ -354,11 +379,17 @@ def resolve_gemma4_prefill_chunk_size(
     source = str(policy.get("source", ""))
     if _is_qb2(mesh_device) or source.startswith("measured"):
         chunk = int(policy["prefill_chunk"])
-        if bounded_sliding:
-            bchunk = policy.get("bounded_prefill_chunk")
-            bmin = policy.get("bounded_prefill_chunk_isl_min")
-            if bchunk is not None and bmin is not None and max_seq_len >= int(bmin):
-                chunk = min(chunk, int(bchunk))
+        for tier in sorted(
+            _prefill_chunk_isl_tiers(policy),
+            key=lambda t: int(t["isl_min"]),
+            reverse=True,
+        ):
+            if max_seq_len < int(tier["isl_min"]):
+                continue
+            if tier.get("require_bounded", False) and not bounded_sliding:
+                continue
+            chunk = int(tier["chunk"])
+            break
         return min(chunk, max_seq_len)
     return non_qb2_default if non_qb2_default is not None else max_seq_len
 
@@ -711,7 +742,11 @@ def warmup_gemma4_model_prefill(
             greedy_only=greedy_only,
             prefill_forward_fn=prefill_forward_fn,
         )
-        if chunked_prefill_trace_enabled():
+        # Once-only: tt_transformers calls warmup_model_prefill on *every*
+        # prefill (warmup_prefill=True). The batched helper early-returns via
+        # already_warmed_up_prefill, but this 8192 sp1 capture used to re-run
+        # and add ~1.4s to every request TTFT.
+        if chunked_prefill_trace_enabled() and not getattr(generator, "_warmed_chunked_prefill_sp1", False):
             chunk = int(getattr(generator.model_args[0], "max_prefill_chunk_size", GEMMA4_DEFAULT_PREFILL_CHUNK))
             chunk = min(chunk, GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN)
             if chunk > 0:
@@ -734,6 +769,7 @@ def warmup_gemma4_model_prefill(
                     sampling_params=None,
                     warmup_prefill=False,
                 )
+            generator._warmed_chunked_prefill_sp1 = True
         return
 
     # Eager (non-traced) warmup for long-ISL demos (prefill trace gated off).
@@ -753,9 +789,18 @@ def warmup_gemma4_model_prefill(
     generator.already_warmed_up_prefill = True
 
     chunk = int(getattr(generator.model_args[0], "max_prefill_chunk_size", GEMMA4_DEFAULT_PREFILL_CHUNK))
+    max_seq = int(getattr(generator.model_args[0], "max_seq_len", chunk) or chunk)
+    # Never warm a length whose padded prefill bucket exceeds max_seq_len.
+    # e.g. chunk=49152 → get_padded_prefill_len=65536 > pool → RoPE slice FATAL.
+    from models.tt_transformers.tt.common import get_padded_prefill_len
+
+    chunk = min(chunk, max_seq)
+    if chunk > 0 and get_padded_prefill_len(chunk) > max_seq:
+        chunk = 1 << max(max_seq.bit_length() - 1, 11)
+        chunk = min(chunk, max_seq)
     lengths = []
     for length in (128, chunk):
-        if length > 0 and length not in lengths:
+        if length > 0 and length <= max_seq and length not in lengths:
             lengths.append(length)
 
     sampling_params_short = None
