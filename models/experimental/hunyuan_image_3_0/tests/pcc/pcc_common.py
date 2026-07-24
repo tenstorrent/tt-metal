@@ -34,6 +34,8 @@ PCC_BLOCK = 0.99
 PCC_PIPELINE = 0.98
 PCC_CHAINED = 0.86
 PCC_DECODE_STACK = 0.96  # wte+N layers+ln_f at S=1 (single-token smoke)
+# 32L free-running backbone at production ISL S=4160 measures ~0.97 (bf16/MoE drift).
+PCC_BACKBONE_32L = 0.96
 # Per-layer teacher-forced PCC at S=1 (decode). A single token's top-k MoE routing
 # can flip on a bf16 tie-break: the router input is the bf16 post-attention-layernorm
 # output (~1e-2 off fp32), which is enough to reverse a near-tie between experts whose
