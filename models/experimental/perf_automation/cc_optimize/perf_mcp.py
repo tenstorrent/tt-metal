@@ -251,6 +251,8 @@ def _material_gap_ms(device_ms: float) -> float:
     if _MATERIAL_GAP_ENV_SET:
         return _MATERIAL_GAP_MS
     return min(_MATERIAL_GAP_MS, max(_MATERIAL_GAP_FLOOR, _MATERIAL_GAP_FRAC * float(device_ms or 0.0)))
+
+
 _TRACE_SAFE_HINT = (
     "custom generic_op/ttl kernels ARE trace-capturable on this build — verified on device: a "
     "cached-descriptor + persistent-buffer generic_op traces clean at PCC 1.0. A wedge or wrong-PCC-on-"
@@ -427,6 +429,14 @@ def _original_baseline_path():
     return Path(tempfile.gettempdir()) / ("perf_mcp_orig_baseline_%s_%s.json" % (model, task))
 
 
+def _throughput_path():
+    """Per-(model, task) path for the STATIC roofline-target snapshot the report renders. Keyed like
+    the baseline path so a per-module run never reads another module's target."""
+    model = _MODEL_ROOT.name if _MODEL_ROOT else "model"
+    task = os.environ.get("PERF_MCP_TASK", "main")
+    return Path(tempfile.gettempdir()) / ("perf_mcp_throughput_%s_%s.json" % (model, task))
+
+
 def _report_original_baseline_ms():
     try:
         p = _original_baseline_path()
@@ -487,6 +497,7 @@ def _rebuild_optimize_report(model_root=None) -> None:
             metric=os.environ.get("PERF_MCP_METRIC", "device_ms"),
             perf_test=perf_test,
             baseline_profile=_read_baseline_profile(),
+            throughput=_read_throughput(),
             finalized=False,
         )
         when = (
@@ -1022,6 +1033,7 @@ def profile_model() -> dict:
             {"op": o.get("op_code") or o.get("bucket"), "gap_ms": o.get("gap_ms"), "bound_by": o.get("bound_by")}
             for o in (rep.get("open_ops") or [])[:8]
         ]
+        _persist_throughput(rep)  # fresh static target for the RUN_REPORT roofline table (non-stale)
     except Exception:
         pass
     # OBJECTIVE termination signal: you are NOT done while residual_gap is material and open_ops remain.
@@ -2187,20 +2199,56 @@ def _perf_target_status(rep: dict, dev: float) -> dict | None:
     if os.environ.get("PERF_MCP_TARGET_BAND") != "1":
         return None
     try:
-        module_level = os.environ.get("TT_PERF_MODULE_LEVEL") == "1"
-        target, measured_ms = None, None
-        if not module_level:
-            mf = _load_perf_target_inputs()
-            if mf:
-                tp = int(os.environ.get("TT_PERF_MESH_COLS", "1") or "1")
-                target = perf_target.compute_target(mf, _ENV, tp_degree=tp)
-                measured_ms = _reliable_forward_ms(dev)
-        if target is None:
-            target = perf_target.target_from_floor_ms(rep.get("modeled_floor_ms"))
-            measured_ms = dev
+        target, scope, is_llm = _select_perf_target(rep)
+        measured_ms = _reliable_forward_ms(dev) if is_llm else dev
         s = perf_target.score(target, measured_ms)
-        s["scope"] = "module" if module_level else "model"
+        s["scope"] = scope
         return s
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _select_perf_target(rep: dict):
+    """Pick the roofline target for this pipeline, STATIC (no measurement mixed in). Returns
+    ``(target, scope, is_llm_decode)``. Model-level config ceiling (compute_target, per-token tok/s)
+    when perf_target_inputs.json exists and this is not a per-module run; otherwise the per-profile
+    roofline floor (target_from_floor_ms). Shared by the stop gate and the report snapshot so both
+    agree on the target."""
+    module_level = os.environ.get("TT_PERF_MODULE_LEVEL") == "1"
+    if not module_level:
+        mf = _load_perf_target_inputs()
+        if mf:
+            tp = int(os.environ.get("TT_PERF_MESH_COLS", "1") or "1")
+            return perf_target.compute_target(mf, _ENV, tp_degree=tp), "model", True
+    return perf_target.target_from_floor_ms(rep.get("modeled_floor_ms")), ("module" if module_level else "model"), False
+
+
+def _persist_throughput(rep: dict) -> None:
+    """Write a FRESH static roofline-target snapshot (theoretical ceiling / band / active_bytes /
+    peak BW / floor) each time we profile. Deliberately stores NO measured number — the report
+    computes measured tok/s + utilization from the exact ms it is reporting, so a stale measured can
+    never leak in (this is the fix for the old '+0.0%'-style stale readout). Best-effort; never raises."""
+    try:
+        target, scope, is_llm = _select_perf_target(rep)
+        snap = {
+            "scope": scope,
+            "is_llm_decode": bool(is_llm),
+            "theoretical_tok_s": target.theoretical_tok_s,
+            "band": [target.band[0], target.band[1]],
+            "active_bytes": target.active_bytes,
+            "peak_bw_gbps": float((_ENV or {}).get("dram_bw_gbps", 0.0)),
+            "tp_degree": target.tp_degree,
+            "modeled_floor_ms": rep.get("modeled_floor_ms"),
+        }
+        _throughput_path().write_text(json.dumps(snap))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _read_throughput() -> dict | None:
+    try:
+        p = _throughput_path()
+        return json.loads(p.read_text()) if p.exists() else None
     except Exception:  # noqa: BLE001
         return None
 

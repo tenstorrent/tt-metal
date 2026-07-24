@@ -5,6 +5,7 @@ Reads the per-op kernel-attempts log + the baseline profile and renders a table 
 at each ladder level (grid / dtype / tt-lang / cpp / host) per op, the best device_ms reached, and the
 overall old->new runtime with the percentage speedup. Pure stdlib; additive (touches no opt logic).
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -123,6 +124,59 @@ def _stage_table_lines(stages: list) -> list:
     return out
 
 
+def _roofline_lines(throughput: dict | None, forward_ms: float | None) -> list:
+    """The adaptive 'Roofline & utilization' table. MEASURED values (tok/s, mem BW, utilization,
+    at-floor) are computed HERE from the ms actually being reported (`forward_ms`) against the STATIC
+    target snapshot in `throughput` — so a stale measured can never leak in, and any missing/zero
+    input renders 'n/a' rather than a fake 0.0 (the fix for the old '+0.0%' readout). LLM-decode
+    pipelines get the tok/s/u form; everything else gets the roofline-floor (ms) form."""
+    if not isinstance(throughput, dict):
+        return []
+    fm = forward_ms if (isinstance(forward_ms, (int, float)) and forward_ms > 0) else None
+    theo = throughput.get("theoretical_tok_s")
+    out = ["Roofline & utilization"]
+    if throughput.get("is_llm_decode") and isinstance(theo, (int, float)) and theo > 0:
+        band = throughput.get("band") or [None, None]
+        active_bytes = throughput.get("active_bytes") or 0
+        tp = max(1, int(throughput.get("tp_degree") or 1))
+        per_dev_bytes = (active_bytes / tp) if active_bytes else 0
+        measured = (1000.0 / fm) if fm else None
+        util = (measured / theo) if measured else None
+        bw_gbps = ((per_dev_bytes / (fm / 1000.0)) / 1e9) if (per_dev_bytes and fm) else None
+        out.append(f"  theoretical ceiling : {theo:.1f} tok/s/u")
+        if band[0] is not None:
+            out.append(f"  achievable (60-80%) : {band[0]:.1f} - {band[1]:.1f} tok/s/u")
+        out.append(
+            f"  measured            : {measured:.1f} tok/s/u   (1000 / {fm:.2f} ms)"
+            if measured
+            else "  measured            : n/a (no valid forward ms)"
+        )
+        if bw_gbps is not None:
+            out.append(f"  measured mem BW     : {bw_gbps:.0f} GB/s   ({per_dev_bytes / 1e9:.2f} GB / {fm:.2f} ms)")
+        out.append(
+            f"  utilization         : {util * 100:.0f}%   (measured / ceiling)"
+            if util is not None
+            else "  utilization         : n/a"
+        )
+    else:
+        floor = throughput.get("modeled_floor_ms")
+        out.append(
+            f"  modeled floor       : {floor:.2f} ms   (Σ per-op roofline floors)"
+            if isinstance(floor, (int, float)) and floor > 0
+            else "  modeled floor       : n/a"
+        )
+        out.append(
+            f"  measured            : {fm:.2f} ms" if fm else "  measured            : n/a (no valid forward ms)"
+        )
+        if isinstance(floor, (int, float)) and floor > 0 and fm:
+            out.append(
+                f"  at-floor            : {floor / fm * 100:.0f}%   ({max(0.0, fm - floor):.2f} ms reachable headroom)"
+            )
+        out.append("  (tok/s/u — N/A: not an LLM decode pipeline)")
+    out.append("")
+    return out
+
+
 def _baseline_bucket_lines(baseline_profile: dict | None, report_csv: str = "") -> list:
     """Render the baseline op-class breakdown (device time per op class, ranked) so an operator can
     read WHAT to target directly from RUN_REPORT.md instead of the terminal/CSV. Sourced from the
@@ -170,6 +224,7 @@ def render_summary(
     finalized: bool = True,
     original_baseline_ms: float | None = None,
     final_override_ms: float | None = None,
+    throughput: dict | None = None,
 ) -> str:
     """Return a markdown summary. Degrades gracefully when data is partial."""
     attempts = _read_json(kernel_log_path) or []
@@ -239,6 +294,7 @@ def render_summary(
         lines.append(f"trace+2CQ {_trace_scope}:  before {before_ms:.2f} ms  ->  (after not measured)")
     lines.append("")
 
+    lines.extend(_roofline_lines(throughput, final_ms))
     lines.extend(_baseline_bucket_lines(baseline_profile, report_csv))
 
     _st = next((a for a in reversed(attempts) if isinstance(a, dict) and a.get("stages")), None)

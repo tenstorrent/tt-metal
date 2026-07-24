@@ -1611,6 +1611,15 @@ def _emit_summary(
         render_kernel = kernel_log
     _lc = _last_committed_ms(render_kernel)
     _cur_ms = _lc if _lc is not None else _baseline_ms()
+    _throughput = None
+    try:
+        import tempfile as _tf
+
+        _tp = Path(_tf.gettempdir()) / ("perf_mcp_throughput_%s_%s.json" % (model_name, task))
+        if _tp.exists():
+            _throughput = json.loads(_tp.read_text())
+    except Exception:  # noqa: BLE001
+        _throughput = None
     text = mod.render_summary(
         render_kernel,
         _cur_ms,
@@ -1632,6 +1641,7 @@ def _emit_summary(
         finalized=True,
         original_baseline_ms=_original_baseline_ms(model_name, task),
         final_override_ms=_cur_ms,
+        throughput=_throughput,
     )
     print("\n" + text + "\n")
     md = _latest_manifest(repo_root / PERF_DIR)
