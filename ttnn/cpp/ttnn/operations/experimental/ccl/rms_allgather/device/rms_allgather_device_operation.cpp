@@ -23,10 +23,27 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
     const auto& b = tensor_args.residual_input_tensor;
     const auto& gamma = tensor_args.weight;
 
+    // stats is always populated by the time we get here: either the caller supplied one, or
+    // ttnn::prim::rms_allgather allocated an op-managed transient scratch when stats == nullopt
+    // (see the stats-scratch block below). It backs the globally-allocated cb_stats circular
+    // buffer, so it must still be present.
     TT_FATAL(
         tensor_args.stats.has_value(),
-        "fused_rms_minimal requires a pre-allocated stats tensor; passing stats=None is not supported. It backs "
-        "an internal globally-allocated circular buffer.");
+        "fused_rms_minimal internal error: the stats scratch tensor was not populated before launch.");
+    // The op gathers exactly one E(x^2) partial tile per device on the cluster axis (ring_size of
+    // them) into the stats buffer and averages them. The number of tiles the buffer holds must
+    // therefore equal ring_size; otherwise the AVG reduce would divide by the wrong device count
+    // (a stats buffer that is 1 tile wide silently collapses to num_distributed_devices == 1 and
+    // each device normalizes by its own E(x^2) instead of the mesh mean). Fail loudly on mismatch.
+    const uint32_t stats_tiles_wide = tensor_args.stats.value().padded_shape()[-1] / TILE_WIDTH;
+    TT_FATAL(
+        stats_tiles_wide == args.ring_size,
+        "fused_rms_minimal: the stats buffer must be exactly ring_size ({}) tiles wide (padded width "
+        "{} -> {} tiles). A caller-provided stats buffer must be replicated across the mesh and sized "
+        "(32, ring_size * 32); a width of 1 tile silently disables cross-device averaging.",
+        args.ring_size,
+        tensor_args.stats.value().padded_shape()[-1],
+        stats_tiles_wide);
 
     {
         const bool fp32_dest_acc_en =
@@ -358,11 +375,51 @@ ttnn::experimental::prim::RMSAllGatherDeviceOperation::tensor_return_value_t rms
         cluster_axis,
         use_noc1_only);
 
+    // Stats scratch. The op all-gathers each device's E(x^2) partial (one tile per device on the
+    // cluster axis, num_devices == ring_size of them) into this buffer and averages it to obtain
+    // the global E(x^2). It MUST be single-core width-sharded in L1 (the writer fabric-mcasts each
+    // partial into the peers' L1 stats buffers, and the compute reads it back through a globally
+    // allocated CB), and it must live on the input shard grid's first core (where cb_stats is
+    // placed).
+    //
+    // Historically the caller had to build and pass this buffer, which forced it to be persistent
+    // for the whole program (a host-side allocation cannot live inside a trace body, and reusing
+    // one buffer across every norm keeps it resident in L1 for the entire decode). When the caller
+    // does not supply one, allocate it here as a normal op-managed transient device tensor: it is
+    // freed when this Tensor goes out of scope after launch (the deallocation is ordered on the
+    // command queue after the program that uses it) and is trace-native. Every tile of it is
+    // overwritten by the gather before the reduce reads it (semaphore-synced), so it does not need
+    // to be zero-initialized.
+    std::optional<const ttnn::Tensor> stats_scratch = stats;
+    if (!stats_scratch.has_value()) {
+        auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+            get_compute_kernel_config_args(arch, kernel_config_val);
+        // The globally-allocated cb_stats CB (program factory) is mapped directly onto this buffer
+        // and its page size follows cb_data_format = fp32_dest_acc_en ? Float32 : Float16_b, so the
+        // buffer's tile size must match. Default is bf16 (matches production and halves the L1).
+        const DataType stats_dtype = fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16;
+        const uint32_t stats_width = static_cast<uint32_t>(num_devices) * TILE_WIDTH;
+        TT_FATAL(
+            input_tensor.shard_spec().has_value(),
+            "fused_rms_minimal requires a sharded input to place the internal stats scratch.");
+        const CoreCoord stats_core = input_tensor.shard_spec().value().grid.bounding_box().start_coord;
+        const ShardSpec stats_shard_spec(
+            CoreRangeSet(CoreRange(stats_core, stats_core)), {TILE_HEIGHT, stats_width}, ShardOrientation::ROW_MAJOR);
+        const MemoryConfig stats_mem_config(TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, stats_shard_spec);
+        const TensorSpec stats_spec(
+            ttnn::Shape({1, 1, TILE_HEIGHT, stats_width}),
+            TensorLayout(stats_dtype, PageConfig(Layout::TILE), stats_mem_config));
+        // emplace (construct in place), not assign: std::optional<const Tensor> has a deleted
+        // copy-assignment operator (const Tensor is not assignable), so `stats_scratch = ...` fails
+        // to compile. emplace constructs the contained value directly, which is allowed.
+        stats_scratch.emplace(create_device_tensor(stats_spec, input_tensor.device()));
+    }
+
     auto tensor_args = OperationType::tensor_args_t{
         .input = input_tensor,
         .residual_input_tensor = residual_input_tensor,
         .weight = weight,
-        .stats = stats,
+        .stats = stats_scratch,
         .preallocated_output = persistent_output_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

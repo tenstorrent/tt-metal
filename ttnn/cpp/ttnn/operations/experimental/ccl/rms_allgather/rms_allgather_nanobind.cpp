@@ -33,10 +33,14 @@ void bind_fused_rms_minimal(nb::module_& mod) {
               Blackhole DRAM is unsupported.
             - weight (gamma): required. ROW_MAJOR layout with 2-D shape (N/32, 32); dtype FLOAT32 or
               BFLOAT16. Passing weight=None is not supported.
-            - stats: required. A pre-allocated tiled, width-sharded tensor of shape
-              (1, 1, 32, num_devices) that backs the op's internal all-gather circular buffer.
-              Passing stats=None is not supported, and its dtype MUST match the compute accumulation format:
-              FLOAT32 when fp32_dest_acc_en is enabled, otherwise BFLOAT16.
+            - stats: optional. Backs the op's internal all-gather circular buffer. When omitted
+              (the default), the op allocates its own transient, trace-native L1 scratch sized to
+              the number of devices on ``cluster_axis`` -- prefer this. If provided, it must be a
+              tiled, width-sharded L1 tensor replicated across the mesh with per-device shape
+              (1, 1, 32, num_devices_on_cluster_axis * 32) on a single core, and its dtype MUST match 
+              the compute accumulation format: FLOAT32 when fp32_dest_acc_en is enabled, otherwise 
+              BFLOAT16. A stats buffer whose tile width does not equal the cluster-axis device count 
+              is rejected.
             - memory_config (output): must be a sharded config whose buffer type and memory layout
               match the input's. Interleaved output configs are not accepted; reshard the result
               afterward if a downstream consumer needs interleaved/DRAM.
