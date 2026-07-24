@@ -169,7 +169,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     }
     // Get worker cores
     // 2 sender (forward/backward, each with a reader/writer)
-    uint32_t num_senders_per_link = 2;
+    uint32_t num_senders_per_link =
+        ttnn::experimental::prim::ring_attention_all_gather_async_dynamic::kNumSendersPerLink;
     const auto [sender_worker_core_range, sender_worker_cores] = ttnn::ccl::choose_worker_cores(
         num_links,
         num_senders_per_link,
@@ -496,8 +497,11 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         KernelDescriptor::RTArgList reader_forward_rt_args;
         reader_forward_rt_args.push_back(static_cast<uint32_t>(dim));  // dim to gather on
         reader_forward_rt_args.push_back(ring_size);                   // ring_size
-        reader_forward_rt_args.push_back(
-            static_cast<uint32_t>(semaphore.at(1).address()));  // out_ready_semaphore_backward
+        // out_ready semaphore address; re-applied every dispatch by override_runtime_arguments (see .hpp).
+        reader_forward_rt_args.push_back(static_cast<uint32_t>(
+            semaphore.at(ttnn::experimental::prim::ring_attention_all_gather_async_dynamic::kForwardSemaphoreIdx)
+                .address()));  // smuggled-rta-ok: hash-excluded global-semaphore address, re-applied every dispatch via
+                               // RingAttentionAllGatherAsyncDeviceOperation::override_runtime_arguments
         reader_forward_rt_args.append(tensor_descriptor_args);
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             reader_forward_rt_args.push_back(input_tensor[input_idx].buffer());
@@ -516,8 +520,11 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         KernelDescriptor::RTArgList reader_backward_rt_args;
         reader_backward_rt_args.push_back(static_cast<uint32_t>(dim));  // dim to gather on
         reader_backward_rt_args.push_back(ring_size);                   // ring_size
-        reader_backward_rt_args.push_back(
-            static_cast<uint32_t>(semaphore.at(0).address()));  // out_ready_semaphore_backward
+        // out_ready semaphore address; re-applied every dispatch by override_runtime_arguments (see .hpp).
+        reader_backward_rt_args.push_back(static_cast<uint32_t>(
+            semaphore.at(ttnn::experimental::prim::ring_attention_all_gather_async_dynamic::kBackwardSemaphoreIdx)
+                .address()));  // smuggled-rta-ok: hash-excluded global-semaphore address, re-applied every dispatch via
+                               // RingAttentionAllGatherAsyncDeviceOperation::override_runtime_arguments
         reader_backward_rt_args.append(tensor_descriptor_args);
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             reader_backward_rt_args.push_back(input_tensor[input_idx].buffer());
@@ -544,8 +551,11 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         writer_forward_rt_args.push_back(static_cast<uint32_t>(sender_forward_worker_core.x));  // out_ready_sem_noc0_x
         writer_forward_rt_args.push_back(static_cast<uint32_t>(sender_forward_worker_core.y));  // out_ready_sem_noc0_y
         writer_forward_rt_args.push_back(ring_size);                                            // ring_size
-        writer_forward_rt_args.push_back(
-            static_cast<uint32_t>(semaphore.at(1).address()));  // out_ready_semaphore_backward
+        // out_ready semaphore address; re-applied every dispatch by override_runtime_arguments (see .hpp).
+        writer_forward_rt_args.push_back(static_cast<uint32_t>(
+            semaphore.at(ttnn::experimental::prim::ring_attention_all_gather_async_dynamic::kForwardSemaphoreIdx)
+                .address()));  // smuggled-rta-ok: hash-excluded global-semaphore address, re-applied every dispatch via
+                               // RingAttentionAllGatherAsyncDeviceOperation::override_runtime_arguments
         writer_forward_rt_args.append(tensor_descriptor_args);
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             writer_forward_rt_args.push_back(output_tensor[input_idx].buffer());
@@ -580,8 +590,11 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         writer_backward_rt_args.push_back(
             static_cast<uint32_t>(sender_backward_worker_core.y));  // out_ready_sem_noc0_y
         writer_backward_rt_args.push_back(ring_size);               // ring_size
-        writer_backward_rt_args.push_back(
-            static_cast<uint32_t>(semaphore.at(0).address()));  // out_ready_semaphore_backward
+        // out_ready semaphore address; re-applied every dispatch by override_runtime_arguments (see .hpp).
+        writer_backward_rt_args.push_back(static_cast<uint32_t>(
+            semaphore.at(ttnn::experimental::prim::ring_attention_all_gather_async_dynamic::kBackwardSemaphoreIdx)
+                .address()));  // smuggled-rta-ok: hash-excluded global-semaphore address, re-applied every dispatch via
+                               // RingAttentionAllGatherAsyncDeviceOperation::override_runtime_arguments
         writer_backward_rt_args.append(tensor_descriptor_args);
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             writer_backward_rt_args.push_back(output_tensor[input_idx].buffer());

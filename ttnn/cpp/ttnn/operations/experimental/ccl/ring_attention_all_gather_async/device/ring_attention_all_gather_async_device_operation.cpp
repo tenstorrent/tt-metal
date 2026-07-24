@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ring_attention_all_gather_async_device_operation.hpp"
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/global_semaphore.hpp"
@@ -201,6 +202,70 @@ ring_attention_all_gather_async_build_operation_args(
         },
         RingAttentionAllGatherAsyncInputs{
             .input_tensor = input_tensors, .persistent_output_buffer = optional_output_tensors}};
+}
+
+void RingAttentionAllGatherAsyncDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Re-apply the hash-excluded out_ready GlobalSemaphore L1 addresses to the cached program on every
+    // dispatch (the non-Buffer analog of the BufferBinding fast path). RingAttentionAllGatherAsyncParams
+    // excludes `semaphore` from the program-cache key (see attribute_values), so a cache hit with a
+    // different / reallocated GlobalSemaphore set would otherwise reuse the address baked at the first
+    // miss. The factory bakes these same four slots on the cache-miss build; both paths use the shared
+    // ring_attention_all_gather_async_dynamic constants so the slot layout cannot drift. The addresses
+    // are mesh-uniform, so they are coord-independent (mesh_dispatch_coordinate is unused) and this
+    // per-coord call re-emits an identical arg set for each program in the workload.
+    namespace dyn = ring_attention_all_gather_async_dynamic;
+
+    const auto& semaphore = operation_attributes.semaphore;
+    // Mirror the cache-miss build, which dereferences semaphore.at(kForwardSemaphoreIdx /
+    // kBackwardSemaphoreIdx) unconditionally: a cache hit is only reachable if that miss succeeded, so both
+    // indices must be present. Use .at() so a violated invariant is a hard bounds-check failure rather than
+    // a silent skip — returning {} here would re-freeze the stale semaphore address this hook exists to
+    // re-apply, reintroducing the exact frozen-runtime-arg bug on the cache-hit path.
+    const auto forward_sem_addr = static_cast<uint32_t>(semaphore.at(dyn::kForwardSemaphoreIdx).address());
+    const auto backward_sem_addr = static_cast<uint32_t>(semaphore.at(dyn::kBackwardSemaphoreIdx).address());
+
+    // Re-derive the sender worker cores exactly as build_ring_attention_all_gather_program_descriptor()
+    // does: it calls ring_attention_all_gather_async_multi_core_with_workers_helper without a
+    // core_grid_offset or core_allocation_strategy, so choose_worker_cores runs with CoreCoord(0, 0) and
+    // ROW_MAJOR. All inputs are hashed structural params (num_links, sub_device_id) or the device, so the
+    // core set is stable across cache hits (no freeze hazard).
+    auto* mesh_device = tensor_args.input_tensor[0].device();
+    [[maybe_unused]] const auto& [sender_worker_core_range, sender_worker_cores] = ttnn::ccl::choose_worker_cores(
+        operation_attributes.num_links,
+        dyn::kNumSendersPerLink,
+        mesh_device,
+        operation_attributes.sub_device_id,
+        CoreCoord(0, 0),
+        std::nullopt,
+        ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR);
+
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    dynamic_args.reserve(static_cast<std::size_t>(operation_attributes.num_links) * dyn::kNumSendersPerLink * 2);
+    for (uint32_t link = 0; link < operation_attributes.num_links; ++link) {
+        // Mirror the factory's per-link core assignment: pair slot 1 == forward sender, slot 0 == backward.
+        const CoreCoord forward_core = sender_worker_cores[(link * dyn::kNumSendersPerLink) + 1];
+        const CoreCoord backward_core = sender_worker_cores[link * dyn::kNumSendersPerLink];
+
+        // Forward reader + writer bake semaphore[kForwardSemaphoreIdx].
+        dynamic_args.push_back(
+            {dyn::kReaderForwardKernelIdx, forward_core, dyn::kReaderSemaphoreArg, forward_sem_addr});
+        dynamic_args.push_back(
+            {dyn::kWriterForwardKernelIdx, forward_core, dyn::kWriterSemaphoreArg, forward_sem_addr});
+        // Backward reader + writer bake semaphore[kBackwardSemaphoreIdx].
+        dynamic_args.push_back(
+            {dyn::kReaderBackwardKernelIdx, backward_core, dyn::kReaderSemaphoreArg, backward_sem_addr});
+        dynamic_args.push_back(
+            {dyn::kWriterBackwardKernelIdx, backward_core, dyn::kWriterSemaphoreArg, backward_sem_addr});
+    }
+    // WorkloadDescriptor override: resolve_bindings covers tensor addresses; this re-applies the
+    // hash-excluded semaphore addresses to the cached program (no create_workload_descriptor rebuild,
+    // so no GlobalSemaphore/MeshBuffer realloc).
+    tt::tt_metal::apply_dynamic_runtime_args(program, dynamic_args);
 }
 
 }  // namespace ttnn::experimental::prim

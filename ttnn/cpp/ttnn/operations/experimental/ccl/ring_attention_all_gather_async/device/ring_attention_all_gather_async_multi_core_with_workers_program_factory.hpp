@@ -15,6 +15,42 @@
 
 namespace ttnn::experimental::prim {
 
+// Single source of truth for the DYNAMIC (hash-excluded) out_ready GlobalSemaphore-address runtime
+// args.
+//
+// The per-direction GlobalSemaphore L1 addresses are excluded from the program-cache key
+// (RingAttentionAllGatherAsyncParams::attribute_values omits `semaphore`), so two calls that differ
+// only in which GlobalSemaphores they pass still cache-hit. That makes the addresses dynamic: the
+// factory bakes them for the cache-miss build, and
+// RingAttentionAllGatherAsyncDeviceOperation::override_runtime_arguments() re-applies them on every
+// dispatch — otherwise a cache hit with a different / reallocated semaphore set would silently reuse
+// the address frozen at the first miss (the frozen-runtime-arg bug). A GlobalSemaphore address is not
+// a tensor Buffer* (it exposes no public Buffer accessor), so it cannot be a BufferBinding.
+//
+// The kernel indices and per-core arg slots below are the shared reference for BOTH the factory's
+// cache-miss bake (build_ring_attention_all_gather_program_descriptor via the worker helper) and the
+// cache-hit patch (override_runtime_arguments); reorder the runtime args or the desc.kernels push order
+// in the factory and these constants (and thus the re-apply targets) must be updated in lockstep.
+namespace ring_attention_all_gather_async_dynamic {
+// Two senders per link (forward + backward), each with its own reader and writer kernel. Also the
+// stride used to index sender_worker_cores: pair slot 0 == backward core, pair slot 1 == forward core.
+inline constexpr uint32_t kNumSendersPerLink = 2;
+// Kernel indices — must match the desc.kernels push order in the factory
+// (reader_forward, writer_forward, reader_backward, writer_backward).
+inline constexpr uint32_t kReaderForwardKernelIdx = 0;
+inline constexpr uint32_t kWriterForwardKernelIdx = 1;
+inline constexpr uint32_t kReaderBackwardKernelIdx = 2;
+inline constexpr uint32_t kWriterBackwardKernelIdx = 3;
+// Per-core runtime-arg slot of the out_ready semaphore L1 address.
+// Reader layout: [0]=dim, [1]=ring_size, [2]=semaphore_addr, ...
+inline constexpr uint32_t kReaderSemaphoreArg = 2;
+// Writer layout: [0]=dim, [1]=sem_noc0_x, [2]=sem_noc0_y, [3]=ring_size, [4]=semaphore_addr, ...
+inline constexpr uint32_t kWriterSemaphoreArg = 4;
+// Forward kernels bake semaphore[1]; backward kernels bake semaphore[0].
+inline constexpr uint32_t kForwardSemaphoreIdx = 1;
+inline constexpr uint32_t kBackwardSemaphoreIdx = 0;
+}  // namespace ring_attention_all_gather_async_dynamic
+
 struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
     using operation_attributes_t = RingAttentionAllGatherAsyncParams;
 
