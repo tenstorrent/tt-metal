@@ -61,24 +61,25 @@ The grouped-affine oracle has now validated the algorithm and isolated the
 remaining cost. The next three experiments, ranked by maximum plausible reward,
 are:
 
-1. **Persistent point-to-point affine-prefix kernel.** Keep one `(A, B)` group
-   summary per worker, compose five Hillis-Steele stages in CB-local ping-pong
-   storage, and transfer only the dependency pair over NOC. Replacing the
-   measured `500.140 us` serial scan with `176.147 us` summary construction,
-   a prefix below `241.403 us`, and the measured `88.898 us` grouped final scan
-   is the first path with a demonstrated whole-layer win. The generic-op oracle
-   proves correctness but its 62 materializing operations cost `3120.528 us`.
-2. **Fuse summary construction with the persistent prefix.** The retained
+1. **Fuse summary construction with a distributed prefix owner.** The retained
    two-scan summary construction costs `176.147 us` and writes/reads 80 affine
    pairs. A dedicated producer that forms each eight-chunk summary directly in
-   the prefix worker can remove the second recurrence pass, subtraction launch,
-   and summary handoff. Gross measured ceiling: `176.147 us`, or `5.21%` of the
-   matched `3380.644 us` layer wall.
-3. **Fuse prefix correction with the grouped final recurrence.** The prefix
+   the eventual prefix owner can remove the second recurrence pass, subtraction
+   launch, and summary handoff. Gross measured ceiling: `176.147 us`, or
+   `5.21%` of the matched `3380.644 us` layer wall. This must not reuse the
+   rejected sender-owned ping-pong/ACK protocol.
+2. **Fuse prefix correction with the grouped final recurrence.** The prefix
    currently materializes 80 group-entry states before launching the eight-
    chunk recurrence. Retaining each corrected entry state in its owner core
    can remove that write/read boundary and one program launch. Its reward is
    smaller than summary fusion but compounds with the same 80-core placement.
+3. **Receiver-owned or framework-native distributed prefix.** The one-group/core
+   point-to-point prototype proved FP32 numerics through three stages but
+   deadlocked at four stages because sender-owned state could not be retained
+   safely within target L1. Three slots fixed four-stage execution; four/five
+   slots exceeded L1, and all tested reverse ACK protocols deadlocked. Revisit
+   only with receiver-owned stage storage or an existing point-to-point
+   primitive whose synchronization is already validated.
 
 After these, resume the broader queue:
 
