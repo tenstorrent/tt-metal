@@ -1392,3 +1392,13 @@
 - Exact device error: DRAM auto slicing tried up to 160 width slices for output dimension 5120 but could not find a valid configuration with `1,434,496 bytes` available L1.
 - Diagnosis: doubled activation CB capacity, not dispatch or timeout, is the proven blocker. Maximum slicing rules out recovering enough L1 by shrinking the sequence working set.
 - Verdict: reject and restore source. The native Conv1d path has now rejected finer slicing, activation reuse, forced split reading, and activation double buffering; further gain requires a custom tiled depthwise reader/compute/writer path.
+
+
+### 2026-07-24 19:10:20 UTC — Reject generic tiled FIR as the long-convolution replacement
+
+- Hypothesis: reuse `_causal_conv1d_fir`, the existing tiled four-tap path used by non-native cases, to bypass native Conv1d row-major conversion and sliced-convolution plumbing.
+- Focused TP command: `QWEN_KDA_TILED_FIR=1 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_tp_weights.py::test_tp_layer_pcc -q -s` -> PASS. Output/recurrent/convolution PCC was `0.999959/0.999913/0.999997`.
+- T=5,120 command: `QWEN_KDA_TILED_FIR=1 PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s` -> PASS. CSV `generated/profiler/reports/2026_07_24_19_10_08/ops_perf_results_2026_07_24_19_10_08.csv` (SHA-256 `0ac5b6b23ae37affdd03a4755b1c57a4617ca72218ec90fccfffa5ffa57d9844`).
+- Result: median wall regressed `3385.003 -> 4837.313 us` (`+42.9%`). The convolution region expands from 15 calls in the native path to 23 calls, repeatedly running untilize, shifted slice, tilize, and ternary MAC operations per tap.
+- Diagnosis: avoiding native Conv1d does not avoid layout traffic when expressed through generic TTNN slices; it multiplies that traffic by the four taps. Correctness rules out mathematical differences as the regression source.
+- Verdict: reject and restore native Conv1d. A custom single device program remains the supported path: directly read shifted tiled rows, apply all four depthwise taps, fuse SiLU, and write tiled output/state.

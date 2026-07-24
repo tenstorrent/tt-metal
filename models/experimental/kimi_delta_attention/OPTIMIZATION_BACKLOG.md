@@ -228,6 +228,12 @@ improved `622.564 -> 619.594 us` (`-0.48%`). T=5,120 wall improved
 
 44. Replace the long-sequence untilize/tilize path with a tiled depthwise
     convolution reader.
+    - Reuse control, 2026-07-24: the existing generic tiled four-tap FIR is
+      correct (`0.999959/0.999913/0.999997` PCC) but regresses T=5,120 wall
+      `3385.003 -> 4837.313 us` (`+42.9%`). It expands convolution from 15 to
+      23 calls and repeats untilize/slice/tilize/ternary work per tap. Retain
+      the custom single-program reader/compute/SiLU design; do not compose it
+      from generic TTNN operations.
 45. Reduce T=5,120 DRAM slicing overhead.
 46. Implement numerically exact SiLU in the convolution output kernel.
     - Experiment result, 2026-07-24: `Conv1dConfig.activation=SILU` is ignored
