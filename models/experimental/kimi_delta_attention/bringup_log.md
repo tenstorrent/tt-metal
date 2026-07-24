@@ -996,3 +996,40 @@
   time improves `637.981 -> 621.755 us`, and recurrence improves
   `183.096 -> 167.623 us`. This beats the `0x6` pair by `3.161 us` wall with
   unchanged TP PCC, so retain `0x26` as the selected storage policy.
+
+
+### 2026-07-24 16:24:06 UTC — Select mixed storage as the KDA default
+
+- Decision: make mask `0x26` the KDA default. `kd`, `q_decay`, and `dl` cross
+  the prep/scan boundary in BF16; `v_beta`, `k_dec_t`, `intra`, `t_inv`,
+  recurrent state, and public outputs remain FP32. The private
+  `QWEN_KDA_PREP_BF16_MASK` override remains available for exact FP32 replay
+  (`0`) and controlled experiments.
+- Host build:
+  `./build_metal.sh --build-tests --build-type Release`
+  -> exit 0; 52 targets installed.
+- Final correctness gate:
+  `scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_chunk_kda.py models/experimental/kimi_delta_attention/tests/test_factory.py models/experimental/kimi_delta_attention/tests/test_kda_recurrent.py models/experimental/kimi_delta_attention/tests/test_reference.py models/experimental/kimi_delta_attention/tests/test_tp_weights.py models/experimental/kimi_delta_attention/tests/test_ttnn_layer.py -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 27/27 in 74.95 s. This covers direct KDA,
+  program-cache reuse, TP=8 weight/layout and layer PCC, composed decode and
+  prefill, cache continuity, and FP32/BF16 external-state updates.
+- Matched long-context control:
+  `QWEN_KDA_PREP_BF16_MASK=0 PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 1/1. CSV
+  `generated/profiler/reports/2026_07_24_16_22_50/ops_perf_results_2026_07_24_16_22_50.csv`
+  (SHA-256 `25759170be81e5186552a43dc7f531c13223b16c6307a29880c3886d1a3ac2c3`).
+- Matched long-context selected default:
+  `PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 1/1. CSV
+  `generated/profiler/reports/2026_07_24_16_24_06/ops_perf_results_2026_07_24_16_24_06.csv`
+  (SHA-256 `b3fd2c8ff3df64fecdb5d2b977858fb56c12a8cc58271b0ce37e7fe687f98a02`).
+- Ten-replay medians at T=5,120: wall latency improves
+  `3681.529 -> 3584.949 us` (`-96.581 us`, `-2.62%`), active time improves
+  `3679.696 -> 3573.748 us`, and recurrence improves
+  `1023.411 -> 920.831 us` (`-102.581 us`, `-10.02%`). The fixed-work roofline
+  utilization estimate consequently rises `12.07% -> 12.40%`.
+- Attribution: projection is `524.704 -> 524.619 us`, convolution is
+  `602.371 -> 601.621 us`, and fused output/CCL is
+  `1069.479 -> 1067.788 us`; these are effectively unchanged. The measured
+  gain is localized to recurrence storage traffic and does not alter the
+  TP=8 distribution or CCL algorithm.

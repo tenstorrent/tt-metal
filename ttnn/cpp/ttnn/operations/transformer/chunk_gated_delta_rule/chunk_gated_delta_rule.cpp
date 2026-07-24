@@ -510,7 +510,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false);
-    uint32_t prep_bf16_mask = 0;
+    // Selected by the storage sweep; the private env override preserves FP32 and A/B replay.
+    uint32_t prep_bf16_mask = 0x26;
     if (const char* env = std::getenv("QWEN_KDA_PREP_BF16_MASK")) {
         char* end = nullptr;
         const auto parsed = std::strtoul(env, &end, 0);
