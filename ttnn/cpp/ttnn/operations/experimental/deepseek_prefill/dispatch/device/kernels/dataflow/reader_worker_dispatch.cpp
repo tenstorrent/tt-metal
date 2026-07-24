@@ -363,7 +363,6 @@ void kernel_main() {
             // dispatch core (after the ownership / mapping / capacity filters below).
             for (uint32_t k = 0; k < num_experts_per_tok; k++) {
                 int32_t routed_expert = indices_t[k];
-
                 int32_t expert_chip_og = expert_dispatch_table[routed_expert];
                 if (expert_chip_og == -1) {
                     continue;
@@ -381,12 +380,14 @@ void kernel_main() {
                     continue;
                 }
 
-                // Allocate this token's destination DRAM page from the expert's counter. offsets[e]
-                // grows left-to-right: shared within a group via the baton, and replicated identically
-                // across groups (every core walks all remote experts), so a token lands on the same
-                // page no matter which core sends it.
+                // Destination page in the expert's dispatch buffer, from offsets[e] (one per token:
+                // offset++). Both sender groups process the same entries in the same order, so their
+                // offsets[e] stay identical with no runtime sync — every core computes the SAME page
+                // for a given token. The send-split below then picks the one sender that forwards it,
+                // so the token is sent exactly once (no double-send). (Within a group, its workers
+                // share one offsets[] copy via the baton.)
                 // If the dispatch buffer for this expert is full, still bump the counter
-                // (so capacity accounting stays consistent across cores) but drop the token — no entry.
+                // (so capacity accounting stays consistent) but drop the token — no entry.
                 uint32_t& offset = offsets[routed_expert];
                 if (offset >= max_dispatch_buffer_token_size) {
                     offset++;
@@ -394,11 +395,10 @@ void kernel_main() {
                 }
                 uint32_t page_idx = offset++;
 
-                // Remote tokens: emit only this core's slice. offset was already advanced above (full
-                // walk on every core) so the page assignment is identical no matter who sends it.
+                // Calculate the target fabric link for the token that needs to be sent via fabric.
                 if (!expert_lives_on_this_chip) {
-                    // Round-robin each fabric send across the links: 0,1,…,L-1,0,… — an exact even
-                    // split, since every core advances the same counter over the same remote entries.
+                    // Decision whether the token will be forwarded via this link is in round-robin
+                    // fashion, in order for fabric links to be better balanced.
                     uint32_t target_fabric_link = fabric_sends_seen++ % num_sender_cores;
                     if (target_fabric_link != sender_core_idx) {
                         continue;
