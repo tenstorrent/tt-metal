@@ -225,6 +225,7 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
             static_cast<std::uint32_t>(0x3F800000),  // beta = 1.0 (fp32)
             static_cast<std::uint32_t>(0x3F800000),  // 1/beta = 1.0 (fp32)
             static_cast<std::uint32_t>(0x41A00000)); // threshold = 20.0 (fp32)
+    }
     else if constexpr (OPERATION == SfpuType::clamp)
     {
         // Clamp bounds fixed to [-1.0, +1.0] as fp32 bit patterns (matching the UnarySFPUGolden._clamp
