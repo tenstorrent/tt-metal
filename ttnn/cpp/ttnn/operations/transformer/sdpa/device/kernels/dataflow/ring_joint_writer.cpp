@@ -8,6 +8,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/debug/waypoint.h"
+#include "api/debug/ring_buffer.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
@@ -811,6 +812,15 @@ void kernel_main() {
                     (sparse_frames_enabled == 1) && (sparse_feature_mask & (1u << 6)) && q_has_work_this_iter
                         ? (ring_iter == q_first_work_iter(q_chunk))
                         : is_first_active_iter;
+
+                // Debug marker: writer's per-q view for this (q_chunk, ring_iter). Encoding mirrors
+                // compute's 0xC0 markers (no-op unless watcher enabled): 0x77<ring_iter><q_chunk><flags>.
+                // flags: 0x40 has_work, 0x20 is_first_work_iter, 0x10 is_last_work_iter. The first
+                // (ring_iter, q_chunk) whose flags differ from compute's is the divergence.
+                WATCHER_RING_BUFFER_PUSH(
+                    0x77000000u | ((ring_iter & 0xFu) << 20) | ((q_chunk & 0xFFFu) << 8) |
+                    (q_has_work_this_iter ? 0x40u : 0u) | (is_first_work_iter_for_q ? 0x20u : 0u) |
+                    (is_last_work_iter_for_q ? 0x10u : 0u));
 
                 const auto qi = get_q_chunk_info<has_joint_q>(
                     q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, q_local_padded_Nt);

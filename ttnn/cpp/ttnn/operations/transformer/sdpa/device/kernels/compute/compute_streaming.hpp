@@ -21,6 +21,17 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/debug/waypoint.h"
+#include "api/debug/ring_buffer.h"
+
+// Sparse-frames debug: push a per-(q_chunk, ring_iter) decision marker to the watcher ring buffer
+// (no-op unless watcher is enabled). Emitted only on the MATH thread so the trisc1 ring buffer holds
+// one record per q_chunk. Encoding: 0xC0<ring_iter><q_chunk><flags>. flags: 0x40 has_work,
+// 0x20 is_first_work_iter, 0x10 is_last_work_iter. Compare against the writer's 0x77 markers.
+#ifdef TRISC_MATH
+#define SPARSE_DBG_PUSH(v) WATCHER_RING_BUFFER_PUSH(v)
+#else
+#define SPARSE_DBG_PUSH(v)
+#endif
 #include "tools/profiler/kernel_profiler.hpp"
 
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
@@ -2570,6 +2581,8 @@ void sdpa_ring_v2(
             WAYPOINT("CZWC");
             // Feature bit 3: gate the zero-work fast path body
             if ((sparse_feature_mask & (1u << 3)) && per_q_valid_kv == 0) {
+                // Debug marker: this q_chunk is zero-work this iter (has_work bit clear).
+                SPARSE_DBG_PUSH(0xC0000000u | ((ring_iter & 0xFu) << 20) | ((q_chunk & 0xFFFu) << 8));
                 // Drain any k_chunks reader pushed. Aggregate = union of shard's q_frame rows;
                 // reader pushed if ANY q_frame in shard attends this k_frame. Since this q_chunk
                 // has per_q_valid_kv==0, we drain (not process) every pushed chunk.
@@ -2682,6 +2695,12 @@ void sdpa_ring_v2(
         if (restore_from_staging) {
             q_prev = {cb_sum_in, cb_max_in, cb_prev_out};
         }
+
+        // Debug marker: this q_chunk HAS work this iter. Encodes compute's per-q view
+        // (has_work=1, is_first_work_iter, is_last_work_iter) for comparison with the writer.
+        SPARSE_DBG_PUSH(
+            0xC0000000u | ((ring_iter & 0xFu) << 20) | ((q_chunk & 0xFFFu) << 8) | 0x40u |
+            (is_this_first_work_iter_for_q ? 0x20u : 0u) | (is_this_last_work_iter_for_q ? 0x10u : 0u));
 
         uint32_t KV_chunks_processed = 0;
 
