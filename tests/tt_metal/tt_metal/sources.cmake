@@ -5,6 +5,7 @@ set(UNIT_TESTS_LEGACY_SRC
     test_add_two_ints.cpp
     test_bcast.cpp
     test_bfp8_conversion.cpp
+    test_bfp_host_tilizer.cpp
     test_bmm.cpp
     test_compile_program.cpp
     test_compile_sets_kernel_binaries.cpp
