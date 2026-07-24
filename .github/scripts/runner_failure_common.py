@@ -22,7 +22,7 @@ except ModuleNotFoundError:  # pragma: no cover - handled in load_config
     yaml = None
 
 
-SIGNATURE_VERSION = "runner-failure-signatures-2026-07-14-v1"
+SIGNATURE_VERSION = "runner-failure-signatures-2026-07-24-v1"
 UNKNOWN_RUNNER = "(unknown runner)"
 
 OSC_SEQUENCE_RE = re.compile(r"\x1b\].*?\x1b\\")
@@ -130,6 +130,12 @@ ERROR_SIGNATURES = (
             r"disk\s+usage\s+is\s+(?:9\d|100)\s*%|"
             r"disk\s+usage\s+is\s+high)"
         ),
+        case_sensitive=False,
+    ),
+    ErrorSignature(
+        key="FAILED_RESET_FOUND",
+        label="Failed reset",
+        needle="Unable to reset board successfully",
         case_sensitive=False,
     ),
 )
@@ -589,6 +595,56 @@ def result_to_dict(result: JobScanResult) -> dict[str, Any]:
         }
     )
     return value
+
+
+def job_from_dict(value: dict[str, Any]) -> RecentJob:
+    return RecentJob(
+        owner_repo=str(value.get("owner_repo") or ""),
+        workflow=str(value.get("workflow") or ""),
+        workflow_id=str(value.get("workflow_id") or ""),
+        run_id=str(value.get("run_id") or ""),
+        run_attempt=str(value.get("run_attempt") or ""),
+        run_url=str(value.get("run_url") or ""),
+        job_id=str(value.get("job_id") or ""),
+        name=str(value.get("name") or ""),
+        runner_name=str(value.get("runner_name") or ""),
+        status=str(value.get("status") or ""),
+        conclusion=str(value.get("conclusion") or ""),
+        html_url=str(value.get("html_url") or ""),
+        started_at=str(value.get("started_at") or ""),
+        completed_at=str(value.get("completed_at") or ""),
+    )
+
+
+def scan_result_from_dict(value: dict[str, Any]) -> JobScanResult:
+    raw_signatures = value.get("signatures")
+    signatures: tuple[str, ...] = ()
+    if isinstance(raw_signatures, list):
+        signatures = tuple(str(item) for item in raw_signatures if item)
+    return JobScanResult(
+        job=job_from_dict(value),
+        log_status=str(value.get("log_status") or ""),
+        log_checked=bool(value.get("log_checked")),
+        signature_labels=signatures,
+        fabric_missing_links=str(value.get("fabric_missing_links") or ""),
+    )
+
+
+def load_triggering_failures_json(path: Path | None) -> list[JobScanResult]:
+    if path is None:
+        return []
+
+    try:
+        raw_values = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise RuntimeError(f"Unable to read triggering failures JSON {path}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Unable to parse triggering failures JSON {path}: {exc}") from exc
+
+    if not isinstance(raw_values, list):
+        raise RuntimeError(f"Triggering failures JSON {path} must contain a list.")
+
+    return [scan_result_from_dict(value) for value in raw_values if isinstance(value, dict)]
 
 
 def signature_counts(results: list[JobScanResult]) -> dict[str, int]:
