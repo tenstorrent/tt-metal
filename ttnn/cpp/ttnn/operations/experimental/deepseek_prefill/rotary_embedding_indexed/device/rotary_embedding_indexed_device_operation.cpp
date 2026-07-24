@@ -167,30 +167,6 @@ RotaryEmbeddingIndexedDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-ttsl::hash::hash_t RotaryEmbeddingIndexedDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // kv_actual_global is a runtime arg read by the reader kernel and intentionally NOT hashed, so
-    // successive chunks reuse the cached program. cluster_axis stays IN (structural -- governs which
-    // mesh dim is SP and thus the per-device sharding).
-    // Hash the full padded shapes, not just their volumes: the descriptor derives seq/head tile
-    // counts, the work split and CB sizing from specific dimensions, so two differently-shaped
-    // tensors that happen to share a volume must NOT collide onto the same cached program.
-    const auto& input = tensor_args.input;
-    const auto& cos = tensor_args.cos;
-    // args.kv_actual_global (the per-call scalar) is intentionally NOT hashed -- it is a common
-    // runtime arg patched on cache hits, so successive chunks with different KV lengths reuse one
-    // cached program.
-    return tt::tt_metal::operation::hash_operation<RotaryEmbeddingIndexedDeviceOperation>(
-        args.cluster_axis,
-        args.compute_kernel_config,
-        input.dtype(),
-        input.memory_config(),
-        input.padded_shape(),
-        cos.dtype(),
-        cos.memory_config(),
-        cos.padded_shape());
-}
-
 tt::tt_metal::ProgramDescriptor RotaryEmbeddingIndexedDeviceOperation::ProgramFactory::create_descriptor(
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
