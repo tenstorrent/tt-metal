@@ -83,6 +83,9 @@ struct TestConfig {
     // controlled with this flag:
     bool fp32_dest_acc_en = false;
     bool fast_tilize = false;
+    // UntilizeType::PACK only: use fast_untilize_* (api/compute/experimental/fast_untilize.h) instead of
+    // plain pack_untilize_*.
+    bool fast_untilize = false;
     // UNPACK_A tilize only: tilize the whole block with a nonzero input_tile_index per tile-row
     // (via tilize_across_tile_rows.cpp) so the cross-tile-row stride in llk_unpack_tilize_block is
     // exercised, instead of the default tilize.cpp which uses input_tile_index=0 + pop_front.
@@ -186,18 +189,19 @@ static void validate_result(
     log_info(
         tt::LogTest,
         "Done running test with: num_tiles_r = {}, num_tiles_c = {}, FP32_DestAcc = {}, DstSyncFull = {}, "
-        "FastTilize = {}, pass = {}",
+        "FastTilize = {}, FastUntilize = {}, pass = {}",
         test_config.num_tiles_r,
         test_config.num_tiles_c,
         test_config.fp32_dest_acc_en,
         test_config.dst_full_sync_en,
         test_config.fast_tilize,
+        test_config.fast_untilize,
         pass);
     ASSERT_TRUE(pass);
 }
 
 // Metal 2.0 single-core helper covering all migrated tilize/untilize kernels:
-//   - UntilizeType::PACK / DST (compute kernels: pack_untilize / dst_untilize)
+//   - UntilizeType::PACK / DST (compute kernels: pack_untilize (optionally with FAST_UNTILIZE) / dst_untilize)
 //   - TilizeType::UNPACK_A (compute kernel: tilize.cpp, optionally with FAST_TILIZE)
 void run_single_core_tilize_program(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TestConfig& test_config) {
@@ -338,6 +342,9 @@ void run_single_core_tilize_program(
     }
     if (test_config.fast_tilize) {
         compute_defines.emplace("FAST_TILIZE", "1");
+    }
+    if (test_config.fast_untilize) {
+        compute_defines.emplace("FAST_UNTILIZE", "1");
     }
 
     experimental::ComputeHardwareConfig compute_hw_config;
@@ -1336,6 +1343,27 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstInt32) 
     }
 }
 
+// Quasar fast untilize: no dedicated fast-untilize LLK on Quasar, so fast_untilize_* (api/compute/experimental/
+// fast_untilize.h) forwards to the plain pack_untilize path -- this exercises that forwarding on real Quasar
+// single-card CI.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeFastUntilize) {
+    vector<vector<std::uint32_t>> num_tiles = {{1, 1}, {1, 4}, {2, 2}};
+    for (auto num_tile : num_tiles) {
+        unit_tests::compute::tilize::TestConfig test_config = {
+            .dst_full_sync_en = false,
+            .fp32_dest_acc_en = false,
+            .fast_untilize = true,
+            .input_single_tile_size = 2 * 1024,
+            .output_single_tile_size = 2 * 1024,
+            .num_tiles_r = num_tile[0],
+            .num_tiles_c = num_tile[1],
+            .untilize_type = unit_tests::compute::tilize::UntilizeType::PACK,
+            .output_fmt = tt::DataFormat::Float16_b,
+            .golden_function = ::unit_tests::compute::gold_standard_untilize};
+        unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+    }
+}
+
 // Quasar fast tilize: no dedicated fast-tilize LLK on Quasar, so fast_tilize_* forwards to the plain
 // unpack_tilize path (tilize.h) -- this exercises that forwarding on real Quasar single-card CI.
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeFastTilize) {
@@ -1400,6 +1428,24 @@ TEST_F(LLKMeshDeviceFixture, TensixComputePackUntilizeDst) {
                 .golden_function = ::unit_tests::compute::gold_standard_untilize};
             unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
         }
+    }
+}
+
+TEST_F(LLKMeshDeviceFixture, TensixComputeFastUntilize) {
+    vector<vector<std::uint32_t>> num_tiles = {{1, 1}, {1, 4}, {2, 2}};
+    for (auto num_tile : num_tiles) {
+        unit_tests::compute::tilize::TestConfig test_config = {
+            .dst_full_sync_en = false,
+            .fp32_dest_acc_en = false,
+            .fast_untilize = true,
+            .input_single_tile_size = 2 * 1024,
+            .output_single_tile_size = 2 * 1024,
+            .num_tiles_r = num_tile[0],
+            .num_tiles_c = num_tile[1],
+            .untilize_type = unit_tests::compute::tilize::UntilizeType::PACK,
+            .output_fmt = tt::DataFormat::Float16_b,
+            .golden_function = ::unit_tests::compute::gold_standard_untilize};
+        unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
     }
 }
 
