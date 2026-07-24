@@ -279,6 +279,12 @@ def run_recaption_on_device(
         print(f"[recaption] trace replay steps={tracer.replay_steps}", flush=True)
         tracer.release()
 
+    # Drop AR KV so denoise can reclaim DRAM for the [S,S] attention mask.
+    kv = getattr(forward_logits_fn, "kv_cache", None)
+    if kv is not None and hasattr(kv, "clear"):
+        kv.clear()
+        print("[recaption] cleared AR KV cache (free DRAM for denoise mask)", flush=True)
+
     ttft = _step_times[0] if _step_times else None
     decode_steps = _step_times[1:]
     tps = (len(decode_steps) / sum(decode_steps)) if decode_steps and sum(decode_steps) > 0 else None
