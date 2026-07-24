@@ -217,6 +217,11 @@ void enqueue_mesh_workload(
         tensor_args,
         tensor_return_value,
         program_cache_hit);
+
+    // Dump device profiler data
+    if (tt::tt_metal::op_profiler::is_per_op_dump_env_var_set()) {
+        tt::tt_metal::ReadMeshDeviceProfilerResults(*mesh_device);
+    }
 }
 
 // Dispatches `fn` to `program_factory` through either the `MeshWorkloadFactoryConcept` directly, or through the adapted
