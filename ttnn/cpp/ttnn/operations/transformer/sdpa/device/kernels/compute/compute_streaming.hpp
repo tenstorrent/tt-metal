@@ -13,6 +13,7 @@
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_streaming_qktv.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa_pack_utils.hpp"
 
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 #include "api/compute/experimental/matmul_custom.h"
@@ -42,28 +43,7 @@ struct MaybeProfileScope<true, timer_id> : kernel_profiler::profileScope<timer_i
 #define MaybeDeviceZoneScopedN(ENABLED, name)
 #endif
 
-// --- Outlined out-of-order pack (code-size) ---
-// pack_tile<true>() (absolute-address pack) inlines the full
-// llk_pack -> program_packer_destination GPR->FLOP address-programming sequence at every
-// call site. That inlined sequence is the single largest contributor to the PACK-thread
-// (TRISC2) text and overflows the TENSIX kernel-config buffer under watcher on Wormhole.
-// Outlining to one noinline copy trades a jal/ret per pack for a large code-size reduction.
-//
-// The jal/ret is NOT free on the hot inner loop. Empirically (wan2_2 BH perf check), the
-// softmax-exp pack in sub_exp_block_bcast_cols is the only perf-critical site: outlining it
-// alone caused the full regression (~70% -> ~66% math util), and re-inlining only it fully
-// recovers perf. So we keep that one site inlined via pack_tile<true>() directly and outline
-// everything else (output/SV drain, salad correction/sum, mask L1-accumulate) through this
-// wrapper. That keeps almost all of the Wormhole code-size win (only the exp pack's ~few
-// static copies return) with no measurable BH perf cost. On MATH/UNPACK threads pack_tile is
-// a no-op, so the outlined wrapper collapses to an empty inline function (zero overhead).
-#ifdef TRISC_PACK
-__attribute__((noinline, noclone)) static void sdpa_pack_tile_ooo(uint32_t dst, uint32_t cb, uint32_t idx) {
-    llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(dst, cb, idx);
-}
-#else
-ALWI void sdpa_pack_tile_ooo(uint32_t, uint32_t, uint32_t) {}
-#endif
+// sdpa_pack_tile_ooo lives in sdpa_pack_utils.hpp (shared with compute_common.hpp).
 
 static __attribute__((noinline, noclone)) void sdpa_cb_push_back_out_of_line(uint32_t cb_id, uint32_t num_tiles) {
     CircularBuffer(cb_id).push_back(num_tiles);
@@ -833,7 +813,7 @@ static inline void l1_acc_tile_run(
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t j = 0; j < batch; j++) {
-            pack_tile<true>(j, out_cb, out_base + i + j);
+            sdpa_pack_tile_ooo(j, out_cb, out_base + i + j);
         }
         tile_regs_release();
     }

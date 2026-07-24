@@ -27,6 +27,7 @@
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
 #include "cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa_pack_utils.hpp"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "experimental/llk_sfpu/ckernel_sfpu_sdpa.h"
 #endif
@@ -179,7 +180,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
         pack_reconfig_data_format(out_cb);
         for (uint32_t i = 0; i < dst_tiles; i++) {
             const uint32_t cur_max_dst_idx = i;
-            pack_tile<true>(cur_max_dst_idx, out_cb, (row_start_idx + i));
+            sdpa_pack_tile_ooo(cur_max_dst_idx, out_cb, (row_start_idx + i));
         }
         tile_regs_release();
 
@@ -1045,7 +1046,7 @@ ALWI void matmul_blocks(
             for (uint32_t r = 0; r < subblock_h; r++) {
                 uint32_t out_row_offset = r * N;
                 for (uint32_t c = 0; c < subblock_w; c++) {
-                    pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset + c);
+                    sdpa_pack_tile_ooo(dst_idx, out_cb, out_row_offset + out_col_offset + c);
                     dst_idx++;
                 }
             }
@@ -1135,7 +1136,7 @@ void stamp_tile_range_l1_acc(
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t i = 0; i < batch; i++) {
-            pack_tile<true>(i, out_cb, out_offset + base + i);
+            sdpa_pack_tile_ooo(i, out_cb, out_offset + base + i);
         }
         tile_regs_release();
     }
@@ -1194,7 +1195,7 @@ void apply_partial_mask_lightweight(
         copy_tile(mask_cb, partial_tile_idx, 0);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile<true>(0, out_cb, (row_base + row) * num_cols + boundary_col);
+        sdpa_pack_tile_ooo(0, out_cb, (row_base + row) * num_cols + boundary_col);
         tile_regs_release();
     }
 
@@ -1243,7 +1244,7 @@ void apply_causal_mask_lightweight(
                 copy_tile(mask_cb, diag_idx, 0);
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile<true>(0, out_cb, row_offset + static_cast<uint32_t>(diag_col));
+                sdpa_pack_tile_ooo(0, out_cb, row_offset + static_cast<uint32_t>(diag_col));
                 tile_regs_release();
 
                 // Stamp neginf tiles to the right of diagonal
@@ -1269,7 +1270,7 @@ void apply_causal_mask_lightweight(
                     copy_tile(mask_cb, diag_idx, 0);
                     tile_regs_commit();
                     tile_regs_wait();
-                    pack_tile<true>(0, out_cb, row_offset + col);
+                    sdpa_pack_tile_ooo(0, out_cb, row_offset + col);
                     tile_regs_release();
                 }
             }
