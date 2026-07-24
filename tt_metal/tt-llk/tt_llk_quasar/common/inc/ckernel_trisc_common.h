@@ -176,17 +176,25 @@ enum class DstTileShape : std::uint8_t
 /**
  * @brief Calculates the maximum number of tiles that fit in the math destination region.
  *
- * DstTileShape values encode the log2 destination-address footprint of each
- * supported tile shape.
+ * Destination addressing uses a minimum 16-row footprint for tile shapes smaller
+ * than 32x16.
+ *
+ * @tparam SYNC_MODE: Destination synchronization mode, values = <SyncHalf/SyncFull>
+ * @tparam ACCUM_MODE: Accumulation mode, true for 32-bit and false for 16-bit
+ * @tparam TILE_SHAPE: Destination tile shape
+ * @return Maximum number of destination tiles.
  */
 template <ckernel::DstSync SYNC_MODE, bool ACCUM_MODE, DstTileShape TILE_SHAPE>
 constexpr std::uint32_t get_dest_max_tiles()
 {
-    constexpr std::uint32_t DEST_REGISTER_SIZE = SYNC_MODE == ckernel::DstSync::SyncHalf
-                                                     ? (ACCUM_MODE ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE)
-                                                     : (ACCUM_MODE ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
+    constexpr std::uint32_t DEST_REGISTER_SIZE  = SYNC_MODE == ckernel::DstSync::SyncHalf
+                                                      ? (ACCUM_MODE ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE)
+                                                      : (ACCUM_MODE ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
+    constexpr std::uint32_t DEST_TILE_SIZE_LOG2 = ckernel::to_underlying(TILE_SHAPE) < ckernel::to_underlying(DstTileShape::Tile32x8)
+                                                      ? ckernel::to_underlying(DstTileShape::Tile32x8)
+                                                      : ckernel::to_underlying(TILE_SHAPE);
 
-    return DEST_REGISTER_SIZE >> ckernel::to_underlying(TILE_SHAPE);
+    return DEST_REGISTER_SIZE >> DEST_TILE_SIZE_LOG2;
 }
 
 /**
