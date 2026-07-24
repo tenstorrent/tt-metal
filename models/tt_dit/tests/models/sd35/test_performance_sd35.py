@@ -8,7 +8,7 @@ import pytest
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 from ....parallel.config import DiTParallelConfig
@@ -107,6 +107,10 @@ def test_sd35_new_pipeline_performance(
                 ml_model_name="empty_run",
             )
         pytest.skip("4U is not supported for this test")
+
+    # Temporarily skip the 2x4 (T3K) Wormhole B0 configuration due to performance regression, refs #47937
+    if is_wormhole_b0() and tuple(mesh_device.shape) == (2, 4):
+        pytest.skip("Skipping 2x4 T3K Wormhole B0 perf test due to performance regression, refs #47937")
 
     logger.info(f"  Image size: {image_w}x{image_h}")
     logger.info(f"  Guidance scale: {guidance_scale}")
