@@ -230,6 +230,12 @@ improved `622.564 -> 619.594 us` (`-0.48%`). T=5,120 wall improved
     convolution reader.
 45. Reduce T=5,120 DRAM slicing overhead.
 46. Implement numerically exact SiLU in the convolution output kernel.
+    - Experiment result, 2026-07-24: `Conv1dConfig.activation=SILU` is ignored
+      by the native depthwise Conv1d path. Removing the standalone unary reduced
+      output PCC to `0.884282`; restoring it while leaving the epilogue configured
+      restored the exact retained `0.999965/0.999910/0.999997` PCC tuple. A
+      custom writer/compute epilogue remains viable, but the public config knob
+      cannot eliminate the `106 us` unary pass.
 47. Update convolution carry inside the convolution writer.
 48. Tune DRAM slice width and count explicitly.
 49. Pipeline convolution slice reads, compute, and writes.
