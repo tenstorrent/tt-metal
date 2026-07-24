@@ -67,6 +67,7 @@ Tensor sparse_sdpa(
     const Tensor& indices,
     float scale,
     uint32_t v_dim,
+    transformer::SparseKVFormat kv_format,
     uint32_t k_chunk_size,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
