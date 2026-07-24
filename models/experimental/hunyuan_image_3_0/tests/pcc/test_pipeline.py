@@ -67,6 +67,7 @@ from models.tt_dit.parallel.manager import CCLManager
 from denoise_helpers import _forward_ref_layers, clear_ref_layer_cache
 from pcc_common import (
     LEAN_ISL_CASES,
+    PCC_BACKBONE_32L,
     PCC_BLOCK,
     PCC_DECODE_STACK,
     PIPELINE_LAYOUT_FAST,
@@ -425,8 +426,8 @@ def test_denoise_step_production_pcc(device, tag, layout):
 def test_backbone_production_32l_pcc(device):
     """32-layer backbone hidden PCC at production ISL S=4160 (real weights, full HF width)."""
     p, d = _backbone_run(device, PRODUCTION_SEQ, num_layers=NUM_LAYERS_PRODUCTION)
-    print(f"backbone production 32L S={PRODUCTION_SEQ}: PCC={p:.8f}  max|diff|={d:.6f}  thr={PCC_BLOCK}")
-    assert p >= PCC_BLOCK
+    print(f"backbone production 32L S={PRODUCTION_SEQ}: PCC={p:.8f}  max|diff|={d:.6f}  thr={PCC_BACKBONE_32L}")
+    assert p >= PCC_BACKBONE_32L
 
 
 @pytest.mark.slow
