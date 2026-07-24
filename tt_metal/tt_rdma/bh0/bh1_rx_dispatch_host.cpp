@@ -36,6 +36,7 @@ int main(int argc, char** argv) {
     const bool want_ext = (std::strcmp(eth_sel, "ext") == 0);
     const size_t eth_idx = want_ext ? 0 : (size_t)std::atoi(eth_sel);
     const int hold_s = (argc > 3) ? std::atoi(argv[3]) : 20;
+    const uint32_t wrap = (argc > 4) ? std::strtoul(argv[4], nullptr, 0) : 1u;  // 1 = BUF_WRAP streaming (Stage 2a)
 
     // MR slot 0: rkey top byte = slot = 0. The BF3 sender must use this exact rkey.
     const uint32_t kRkey = 0x00CAFE42u;               // (slot=0)<<24 | (rand=0xCAFE)<<8 | (gen=0x42)
@@ -74,6 +75,7 @@ int main(int argc, char** argv) {
     std::cout << "BH.2-RX: dev " << device_id << " core (" << eth_logical.x << "," << eth_logical.y << ") phys ("
               << eth_phys.x << "," << eth_phys.y << ")  RXQ=" << TT_RDMA_RX_QUEUE << "  rx ring @ 0x" << std::hex
               << TT_RDMA_RX_RING_ADDR << "  MR[0].target @ 0x" << kMrTarget << "  rkey=0x" << kRkey << std::dec
+              << "  wrap=" << wrap
               << "\n  BF3: sudo tt_rdma_bf3_send <if> <n> 02:00:00:00:00:02 0x1af6 0x10 <plen> 0x00CAFE42 0\n";
 
     // Program MR slot 0 (tt_rdma_mr_entry_t, 8 u32).
@@ -98,7 +100,8 @@ int main(int argc, char** argv) {
          (uint32_t)stats_addr,
          TT_RDMA_RX_RING_ADDR,
          TT_RDMA_RX_RING_SIZE,
-         TT_RDMA_MR_TABLE_ADDR});
+         TT_RDMA_MR_TABLE_ADDR,
+         wrap});
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
@@ -110,7 +113,7 @@ int main(int argc, char** argv) {
     for (int s = 0; s < hold_s; ++s) {
         auto st = cluster.read_core<uint32_t>(device->id(), eth_phys, (uint32_t)stats_addr, 8 * sizeof(uint32_t));
         std::printf(
-            "  t=%2ds  total=%u send=%u write=%u write_ok=%u unknown=%u bad=%u last_op=0x%02x read_off=%u\n",
+            "  t=%2ds  total=%u send=%u write=%u write_ok=%u unknown=%u bad=%u last_op=0x%02x read_pos=%u\n",
             s,
             st[0],
             st[1],
