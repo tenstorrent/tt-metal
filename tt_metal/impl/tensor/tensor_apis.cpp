@@ -970,28 +970,17 @@ HostTensor pad_impl(
         tile = tensor.tensor_spec().tile();
     }
 
-    auto output_spec = TensorSpec(
-        tensor.logical_shape(),
-        TensorLayout::fromPaddedShape(
-            tensor.dtype(),
-            PageConfig(tensor.layout(), tile),
-            tensor.memory_config(),
+    return HostTensor::from_buffer(
+        std::move(transformed_buffer),
+        TensorSpec(
             tensor.logical_shape(),
-            output_padded_shape));
-
-    const size_t expected_shard_size = output_spec.compute_packed_buffer_size_bytes();
-    for (const auto& coord : transformed_buffer.shard_coords()) {
-        auto shard = transformed_buffer.get_shard(coord);
-        if (shard) {
-            TT_FATAL(
-                shard->view_bytes().size() == expected_shard_size,
-                "pad shard size mismatch after conversion: actual {} != expected {}",
-                shard->view_bytes().size(),
-                expected_shard_size);
-        }
-    }
-
-    return HostTensor::from_buffer(std::move(transformed_buffer), output_spec, tensor.tensor_topology());
+            TensorLayout::fromPaddedShape(
+                tensor.dtype(),
+                PageConfig(tensor.layout(), tile),
+                MemoryConfig{},
+                tensor.logical_shape(),
+                output_padded_shape)),
+        tensor.tensor_topology());
 }
 
 template <>
@@ -1067,35 +1056,15 @@ HostTensor unpad_impl(
     auto transformed_buffer = tensor.buffer().transform(
         [&](const HostBuffer& buffer) { return HostBuffer(unpad(buffer)); },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
-
-    // Exact authorship: padded == logical == cropped buffer. Do not re-apply source alignment.
-    const auto output_tensor_shape = tt::tt_metal::Shape(output_shape);
-    auto tile = tt::tt_metal::Tile();
-    if (tensor.layout() == Layout::TILE) {
-        tile = tensor.tensor_spec().tile();
-    }
-    auto output_spec = TensorSpec(
-        output_tensor_shape,
-        TensorLayout::fromPaddedShape(
-            tensor.dtype(),
-            PageConfig(tensor.layout(), tile),
-            tensor.memory_config(),
-            output_tensor_shape,
-            output_tensor_shape));
-
-    const size_t expected_shard_size = output_spec.compute_packed_buffer_size_bytes();
-    for (const auto& coord : transformed_buffer.shard_coords()) {
-        auto shard = transformed_buffer.get_shard(coord);
-        if (shard) {
-            TT_FATAL(
-                shard->view_bytes().size() == expected_shard_size,
-                "unpad shard size mismatch after conversion: actual {} != expected {}",
-                shard->view_bytes().size(),
-                expected_shard_size);
-        }
-    }
-
-    return HostTensor::from_buffer(std::move(transformed_buffer), output_spec, tensor.tensor_topology());
+    return HostTensor::from_buffer(
+        std::move(transformed_buffer),
+        TensorSpec(
+            tt::tt_metal::Shape(output_shape),
+            tt::tt_metal::TensorLayout(
+                tensor.dtype(),
+                tt::tt_metal::PageConfig(tensor.layout(), tensor.tensor_spec().tile()),
+                tt::tt_metal::MemoryConfig{})),
+        tensor.tensor_topology());
 }
 
 template <>
@@ -1129,11 +1098,6 @@ HostTensor pad(
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value) {
     TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Tensor layout must be ROW_MAJOR for padding");
-    TT_FATAL(
-        !tensor.memory_config().is_sharded(),
-        "pad: sharded host tensors are not supported (legacy and ND). "
-        "legacyShapeToAlignment short-circuits on shard_spec and ignores output_padded_shape for convertible ND; "
-        "rederiving shard geometry under pad is out of scope.");
     return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
         return CMAKE_UNIQUE_NAMESPACE::pad_impl<T>(tensor, output_padded_shape, input_tensor_start, pad_value);
     });
@@ -1170,11 +1134,6 @@ HostTensor unpad(
     const tt::tt_metal::Shape& output_tensor_start,
     const tt::tt_metal::Shape& output_tensor_end) {
     TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Tensor layout must be ROW_MAJOR for unpadding");
-    TT_FATAL(
-        !tensor.memory_config().is_sharded(),
-        "unpad: sharded host tensors are not supported (legacy and ND). "
-        "legacyShapeToAlignment short-circuits on shard_spec and ignores cropped geometry for convertible ND; "
-        "rederiving shard geometry under unpad is out of scope.");
     return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
         return CMAKE_UNIQUE_NAMESPACE::unpad_impl<T>(tensor, output_tensor_start, output_tensor_end);
     });

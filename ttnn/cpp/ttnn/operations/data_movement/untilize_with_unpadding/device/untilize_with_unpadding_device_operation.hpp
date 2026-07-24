@@ -8,7 +8,6 @@
 #include "factories/untilize_with_unpadding_single_core_program_factory.hpp"
 #include "factories/untilize_with_unpadding_multi_core_interleaved_program_factory.hpp"
 #include "factories/untilize_with_unpadding_multi_core_sharded_program_factory.hpp"
-#include "factories/untilize_with_unpadding_multi_core_col_interleaved_program_factory.hpp"
 #include "factories/untilize_with_unpadding_multi_core_block_interleaved_program_factory.hpp"
 #include "factories/untilize_with_unpadding_multi_core_nd_sharded_program_factory.hpp"
 #include <variant>
@@ -26,7 +25,6 @@ struct UntilizeWithUnpaddingDeviceOperation {
         UntilizeWithUnpaddingSingleCoreProgramFactory,
         UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory,
         UntilizeWithUnpaddingMultiCoreShardedProgramFactory,
-        UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory,
         UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory,
         UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory>;
 

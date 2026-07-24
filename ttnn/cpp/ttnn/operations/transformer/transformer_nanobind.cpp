@@ -5,6 +5,7 @@
 #include "transformer_nanobind.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <tt_stl/reflection.hpp>
 
@@ -25,7 +26,13 @@ namespace ttnn::operations::transformer {
 void py_module(nb::module_& mod) {
     nb::class_<SDPAProgramConfig>(mod, "SDPAProgramConfig")
         .def(
-            nb::init<tt::tt_metal::CoreCoord, std::optional<CoreRangeSet>, std::size_t, std::size_t, std::optional<bool>, uint32_t>(),
+            nb::init<
+                tt::tt_metal::CoreCoord,
+                std::optional<CoreRangeSet>,
+                std::size_t,
+                std::size_t,
+                std::optional<bool>,
+                uint32_t>(),
             nb::kw_only(),
             nb::arg("compute_with_storage_grid_size"),
             nb::arg("sub_core_grids") = nb::none(),
@@ -49,6 +56,17 @@ void py_module(nb::module_& mod) {
                 config.k_chunk_size,
                 config.exp_approx_mode,
                 config.max_cores_per_head_batch);
+        });
+
+    nb::class_<PagedCacheGeometryOverride>(mod, "PagedCacheGeometryOverride")
+        .def(nb::init<>())
+        .def(nb::init<uint32_t, uint32_t>(), nb::kw_only(), nb::arg("block_size") = 0, nb::arg("num_kv_heads") = 0)
+        .def_rw("block_size", &PagedCacheGeometryOverride::block_size)
+        .def_rw("num_kv_heads", &PagedCacheGeometryOverride::num_kv_heads)
+        .def("active", &PagedCacheGeometryOverride::active)
+        .def("__repr__", [](const PagedCacheGeometryOverride& geo) {
+            return fmt::format(
+                "PagedCacheGeometryOverride(block_size={}, num_kv_heads={})", geo.block_size, geo.num_kv_heads);
         });
 
     bind_attention_softmax(mod);
