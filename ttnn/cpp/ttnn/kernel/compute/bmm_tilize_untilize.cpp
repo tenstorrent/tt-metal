@@ -135,7 +135,7 @@ void kernel_main() {
     uint32_t bias_ntiles_w = get_compile_time_arg_val(16);
     constexpr uint32_t bias_cb_id = tt::CBIndex::c_2;
     constexpr uint32_t out_for_bias_cb_id = tt::CBIndex::c_28;
-    init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(out_for_bias_cb_id, bias_cb_id, out_cb_id);
+    init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW, out_for_bias_cb_id, bias_cb_id, out_cb_id>();
 #endif
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, out_cb_id);

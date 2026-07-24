@@ -41,7 +41,7 @@ void kernel_main() {
     CircularBuffer scalar_cb(scalar_cb_index);
     CircularBuffer output_cb(output_cb_index);
 
-    init_bcast<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(input_cb_index, scalar_cb_index, output_cb_index);
+    init_bcast<EltwiseBinaryType::ELWMUL, BroadcastType::COL, input_cb_index, scalar_cb_index, output_cb_index>();
 
     for (uint32_t out = 0; out < num_output_tiles; ++out) {
         // Reserve one output tile slot; we accumulate into it via L1 acc.

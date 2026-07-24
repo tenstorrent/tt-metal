@@ -336,6 +336,27 @@ void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_line =
 #endif
 }
 
+// clang-format off
+/**
+ * Compile-time circular-buffer overload of *init_bcast*. The input and output circular-buffer
+ * identifiers are supplied as non-type template parameters instead of runtime arguments, so they
+ * are constant-folded at the call site. Forwards to the runtime overload above; behaviour is
+ * otherwise identical.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                   | Type          | Valid Range | Required |
+ * |----------------|---------------------------------------------------------------|---------------|-------------|----------|
+ * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t      | 0 to 31     | True     |
+ * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t      | 0 to 31     | True     |
+ * | ocb            | The identifier of the circular buffer (CB) containing output  | uint32_t      | 0 to 31     | False    |
+ */
+// clang-format on
+template <EltwiseBinaryType tBcastOp, BroadcastType tBcastDim, uint32_t icb0, uint32_t icb1, uint32_t ocb>
+void init_bcast(uint32_t call_line = __builtin_LINE()) {
+    init_bcast<tBcastOp, tBcastDim>(icb0, icb1, ocb, call_line);
+}
+
 /*
 Internal helper function for all broadcast ops
 */
