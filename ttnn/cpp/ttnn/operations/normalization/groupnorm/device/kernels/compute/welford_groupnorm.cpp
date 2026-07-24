@@ -375,7 +375,7 @@ void kernel_main() {
 
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile_block(mean_dst, cb_ex_partial_id, 2);
+        pack_block(mean_dst, cb_ex_partial_id, 2);
         tile_regs_release();
         cb_ex_partial.push_back(2);
         // End Statistics Aggregation

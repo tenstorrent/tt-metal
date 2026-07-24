@@ -168,7 +168,7 @@ FORCE_INLINE void matmul_phase(
                 tile_regs_commit();
                 partials_cb.reserve_back(out_subblock_num_tiles);
                 tile_regs_wait();
-                pack_tile_block(0, partials_cb_id, out_subblock_num_tiles);
+                pack_block(0, partials_cb_id, out_subblock_num_tiles);
                 tile_regs_release();
                 partials_cb.push_back(out_subblock_num_tiles);
 
