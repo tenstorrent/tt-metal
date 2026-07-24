@@ -189,6 +189,12 @@ For local scan changes, retain an experiment only when:
 ### D. Layer-level memory and launch reduction
 
 33. Remove or alias the post-MMRS clone.
+    - Experiment result, 2026-07-24: an unsafe borrowed `rs` alias measured
+      T=640 wall `622.564 -> 616.505 us` (`-0.97%`) and T=5,120
+      `3474.029 -> 3446.590 us` (`-0.79%`). Returning cached `out_buf` under
+      normal caller deallocation hung the trace and forced an 8-device reset.
+      Do not remove the clone without an explicit pipeline-owned destination or
+      borrowed-output lifetime contract; default Tensor refcounting is not safe.
 34. Replace recurrent-state copies with buffer swapping.
 35. Replace convolution-state copies with buffer swapping.
 36. Fuse state updates into producing writers.
@@ -240,7 +246,8 @@ For local scan changes, retain an experiment only when:
 CCL is lower priority because its estimated utilization is already `39.79%`
 against the 40% aspiration.
 
-57. Remove the output clone.
+57. Remove the output clone. See item 33: measured ceiling `0.79%` at
+    T=5,120, but both implicit ownership strategies are unsafe.
 58. Overlap one layer's fused MMRS with independent work from another layer.
 59. Reserve CCL cores across layer boundaries rather than within one layer.
 60. Stream output tiles into reduce-scatter earlier.

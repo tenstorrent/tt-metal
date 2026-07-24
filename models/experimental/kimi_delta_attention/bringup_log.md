@@ -1302,3 +1302,34 @@
   reducing weight bytes does not shorten its critical path. The small short
   gain does not generalize, while output PCC is lower than the BF16 endpoint.
 - Verdict: reject and remove.
+
+
+### 2026-07-24 18:40:00 UTC — Measure and reject implicit post-MMRS clone removal
+
+- Hypothesis: eliminate the clone of the persistent fused-MMRS output. The
+  measured clone is 30.560 us at T=5,120, but ownership must remain safe when
+  callers deallocate their returned tensor.
+- Ceiling experiment returned the op `rs` alias and suppressed deallocation in
+  the perf harness only. T=640 CSV
+  `generated/profiler/reports/2026_07_24_18_33_57/ops_perf_results_2026_07_24_18_33_57.csv`
+  (SHA-256 `56bb2c1b60b032b4e5ec7b0ec09251782c957b3b524334be9031a7b47364b56f`):
+  29 calls/device/replay and wall `622.564 -> 616.505 us` (`-0.97%`).
+- T=5,120 CSV
+  `generated/profiler/reports/2026_07_24_18_35_37/ops_perf_results_2026_07_24_18_35_37.csv`
+  (SHA-256 `d6da062ea7da7bda9491a48396deb71bea1da007c0f139506e8ab34aa810d1fa`):
+  34 calls/device/replay and wall `3474.029 -> 3446.590 us` (`-0.79%`,
+  `-27.439 us`). This is a theoretical/unsafe ceiling, not a retained result.
+- Ownership hypothesis: return cached `out_buf` instead of `rs`; the cache
+  should hold a shared tensor reference so default `deallocate(false)` cannot
+  free persistent storage. The unmodified perf harness then deallocated the
+  warm output normally.
+- Result: traced T=640 hung, triggered the 5 s device timeout, and required the
+  safe wrapper to reset all eight devices (`SAFE_PYTEST_RESULT: HANG`). This
+  proves the MMRS output/cache aliases do not share ownership in the way
+  required by `Tensor::deallocate`.
+- Recovery: restored the clone, then
+  `PERF_SEQ=64 PERF_REPS=1 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s`
+  -> PASS, confirming all eight devices recovered.
+- Verdict: retain the clone. Its 0.79% long-context ceiling justifies future
+  work only with an explicit pipeline-owned destination or explicit borrowed
+  lifetime contract; implicit aliasing is unsafe.
