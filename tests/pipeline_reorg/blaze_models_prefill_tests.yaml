@@ -466,14 +466,14 @@
 # MiniMax-M3 full-model real-weights prefill + per-layer KV PCC (standalone harness, not pytest).
 # Requires staged mounts (same layout as models/demos/minimax_m3/scripts/README_golden_kv.md):
 #   HF_MODEL          -> /mnt/models/MiniMaxAI/MiniMax-M3-ref/
-#   PREFILL_TRACE_DIR -> /mnt/models/minimax-m3-cache/golden/longbook_full
+#   PREFILL_TRACE_DIR -> /mnt/models/MiniMaxAI/MiniMax-M3-ref/golden
 #   TT_CACHE_PATH     -> optional; defaults under HF_MODEL. Prefill the tilized
 #                       tensor_cache_bfp8_{MeshShape(8,4)} there or CI will cold-build for hours.
 - name: "Blaze - MiniMax-M3 Prefill KV PCC"
   cmd: |
     export LOGURU_LEVEL=INFO
     export HF_MODEL=/mnt/models/MiniMaxAI/MiniMax-M3-ref/
-    export PREFILL_TRACE_DIR=/mnt/models/minimax-m3-cache/golden/longbook_full
+    export PREFILL_TRACE_DIR=/mnt/models/MiniMaxAI/MiniMax-M3-ref/golden
     export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
     export EXPERT_DTYPE=bf4
     export PREFILL_CHUNKED=0
