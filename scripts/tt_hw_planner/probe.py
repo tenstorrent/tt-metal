@@ -43,6 +43,7 @@ PIPELINE_CATEGORY = {
     "image-text-to-text": "VLM",
     "visual-question-answering": "VLM",
     "image-to-text": "VLM",
+    "any-to-any": "VLM",
     "text-to-image": "Image",
     "image-to-image": "Image",
     "text-to-video": "Video",
@@ -156,7 +157,11 @@ def _arch_override_category(category: str, cfg: dict) -> str:
     is in the speech family (or Unknown) let the architecture suffix correct it.
     Suffix-matched, not model-name-matched."""
     archs = " ".join(cfg.get("architectures") or [])
-    if category in {"Image", "Video", "Unknown"}:
+    # a *ForCausalLM / *ForCausalMM trunk is a generative LM; a single-modality task tag
+    # (e.g. Phi-4-multimodal tagged automatic-speech-recognition, arch Phi4MMForCausalLM)
+    # must not override it. Genuine STT uses ConditionalGeneration/CTC, never ForCausalLM,
+    # so promoting STT here is safe. TTS is excluded (some AR-TTS legitimately use ForCausalLM).
+    if category in {"Image", "Video", "Unknown", "STT"}:
         if re.search(r"ForCausal(LM|MM)\b", archs):
             return "LLM"
     if category in {"TTS", "STT", "Unknown"}:
@@ -288,6 +293,11 @@ def _llm_resolve_category(model_id: str, cfg: dict, pipeline_tag: Optional[str],
             "A contrastive / dual-encoder / retrieval / matching / zero-shot model (CLIP / ALIGN / "
             "CLAP style, which produces embeddings to MATCH inputs) is Embed -- or CNN for a vision "
             "task. Never label an analysis, segmentation, or matching model Image / Video / TTS.\n"
+            "For a UNIFIED / OMNI / any-to-any / multimodal model (handles or emits several "
+            "modalities, e.g. Qwen-Omni's text+audio+image+video), classify by its CORE trunk: VLM "
+            "if it processes vision+language, else LLM. Do NOT reduce it to one secondary output "
+            "(never call an omni multimodal model TTS just because it can also speak, or Image just "
+            "because it can also draw).\n"
             f"model_id: {model_id}\n"
             f"pipeline_tag: {pipeline_tag}\n"
             f"config (salient keys): {json.dumps(key_cfg)[:1500]}\n"

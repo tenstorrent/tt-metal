@@ -434,6 +434,14 @@ def test_no_hand_maintained_model_type_lists():
     assert P._category_from_model_type("vit") == "CNN"
 
 
+def test_any_to_any_tag_maps_to_vlm():
+    # 'any-to-any' is an official HF pipeline tag (unified multimodal, e.g. omni models);
+    # it belongs in the stable tag vocab -> VLM, not an Unknown that forces the LLM residual.
+    from scripts.tt_hw_planner.probe import _classify_category
+
+    assert _classify_category("any-to-any", [], None) == "VLM"
+
+
 def test_fingerprint_to_category_bridge():
     # when the deterministic tag/model_type path is Unknown but the STRUCTURAL fingerprint
     # identifies a backbone, the category is derived from it (Janus MultiModalityCausalLM ->
@@ -475,6 +483,11 @@ def test_arch_class_disambiguates_shared_model_type():
     assert _arch_override_category("STT", {"architectures": ["SpeechT5ForTextToSpeech"]}) == "TTS"
     assert _arch_override_category("STT", {"architectures": ["SpeechT5ForSpeechToText"]}) == "STT"
     assert _arch_override_category("STT", {"architectures": ["Wav2Vec2ForCTC"]}) == "STT"
+    # a *ForCausalLM trunk mis-tagged with a single modality (Phi-4-multimodal tagged ASR) is
+    # a generative LM, not STT -- promote it. Genuine ASR (CondGen/CTC) is untouched above.
+    assert _arch_override_category("STT", {"architectures": ["Phi4MMForCausalLM"]}) == "LLM"
+    # but an autoregressive TTS on a ForCausalLM trunk is NOT flipped (TTS excluded from promote)
+    assert _arch_override_category("TTS", {"architectures": ["SomeTTSForCausalLM"]}) == "TTS"
     # same authority rule as #3: a text-to-image tag on a causal-MM arch is still LLM
     assert _arch_override_category("Image", {"architectures": ["HunyuanImage3ForCausalMM"]}) == "LLM"
     # the speech rule is scoped: it never flips a non-speech category
