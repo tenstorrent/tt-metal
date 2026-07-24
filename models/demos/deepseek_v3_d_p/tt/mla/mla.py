@@ -569,25 +569,28 @@ class ttMLA:
         consume-time point is more cohesive than splitting head/q_lora filtering into the config and
         leaving chunked here.
         """
-        cfg = self.mm_configs[weight_name].get(seq_len_local) if is_blackhole() else None
-        # Some tuned configs are head-count specific (the chunked-prefill 640 set was tuned for Kimi's
-        # 64 heads; several program_configs overflow the grid at DeepSeek's 128). A config may declare
-        # the num_heads it was tuned for; when it doesn't match this model, fall back so a different
-        # variant at the same seq_len_local doesn't pick up a dimensionally-invalid program_config.
-        if cfg is not None and cfg.get("num_heads") not in (None, self.num_heads):
-            cfg = None
-        # Some of those configs are additionally q_lora_rank-specific: the 640 set's program_configs are
-        # dimensionally valid at Kimi's q_lora_rank (1536) but overflow the grid at GLM-5.1's (2048), even
-        # though both have 64 heads. When a config declares a q_lora_rank that doesn't match this model,
-        # fall back so a same-heads/same-seq variant doesn't pick up an invalid program_config.
-        if cfg is not None and cfg.get("q_lora_rank") not in (None, self.q_lora_rank):
-            cfg = None
-        # The chunked-prefill 640 set is only dimensionally valid in chunked mode (e.g. wkv_b1/wkv_b2
-        # are true batched per-head matmuls over the per-head SDPA output; the single-shot path applies
-        # them to a batch=1 latent). Fall back to defaults when this ttMLA was not built for chunked.
-        if cfg is not None and cfg.get("chunked_only") and not self.is_chunked:
-            cfg = None
-        return cfg
+        entry = self.mm_configs[weight_name].get(seq_len_local) if is_blackhole() else None
+        if entry is None:
+            return None
+        # A seq_len slot may hold a single config (dict) or, when multiple model variants share the
+        # same seq_len_local, a list of candidates disambiguated by the gating tags below. The 640
+        # (chunked) slot carries both the Kimi (64 heads, q_lora 1536) and GLM-5.2 (64 heads, q_lora
+        # 2048) sets, so pick the first candidate that matches this ttMLA. Gating tags:
+        #   num_heads    — several program_configs overflow the grid at DeepSeek's 128 heads.
+        #   q_lora_rank  — the 640 program_configs are valid at Kimi's 1536 but overflow at GLM's 2048.
+        #   chunked_only — the 640 set is only dimensionally valid in chunked mode (wkv_b1/wkv_b2 are
+        #                  true batched per-head matmuls over the per-head SDPA output; single-shot
+        #                  applies them to a batch=1 latent).
+        candidates = entry if isinstance(entry, list) else [entry]
+        for cfg in candidates:
+            if cfg.get("num_heads") not in (None, self.num_heads):
+                continue
+            if cfg.get("q_lora_rank") not in (None, self.q_lora_rank):
+                continue
+            if cfg.get("chunked_only") and not self.is_chunked:
+                continue
+            return cfg
+        return None
 
     def _get_act_mem_config(self, weight_name: str, seq_len_local: int) -> ttnn.MemoryConfig:
         """Memory config for the activation (in0) feeding this weight's matmul, as tuned in the mm
