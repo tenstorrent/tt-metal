@@ -376,29 +376,6 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                     // before we publish tc_init_done.
                     while (overlay::llk_intf_get_capacity(tensix_id, tc_id) != init_ptr->capacity) {
                     }
-                    // [#48552 EXPERIMENT — non-durable settling; bring-up only, perf-agnostic] The stale
-                    // capacity/credits that deadlock a reused counter are a PREVIOUS program's overlay write
-                    // arriving LATE via the other port (Track B scoping: no drain primitive exists, and a
-                    // fence/single read-back cannot order a cross-port cross-program straggler). As a
-                    // throwaway workaround, FIGHT the straggler: repeatedly re-assert reset + capacity and
-                    // require the capacity to stay == our value across a large busy-delay window (a straggler
-                    // landing mid-window is overwritten and re-checked; the counter is quiescent for a full
-                    // window before we proceed). If this makes the reuse hang disappear, it confirms the
-                    // straggler-retirement diagnosis -> overlay-RTL feature request. Remove before merge.
-                    {
-                        uint32_t qsr_settle_stable = 0;
-                        while (qsr_settle_stable < 4u) {
-                            overlay::llk_intf_reset(tensix_id, tc_id);
-                            overlay::llk_intf_set_capacity(tensix_id, tc_id, init_ptr->capacity);
-                            for (volatile uint32_t qsr_settle_d = 0; qsr_settle_d < 500000u; ++qsr_settle_d) {
-                            }
-                            if (overlay::llk_intf_get_capacity(tensix_id, tc_id) == init_ptr->capacity) {
-                                ++qsr_settle_stable;  // stable for another full window
-                            } else {
-                                qsr_settle_stable = 0;  // a straggler landed; re-assert and restart the window count
-                            }
-                        }
-                    }
                     // [#48552 DEBUG] Pair with RBFAIL. Prints the GLOBAL dfb id + the PHYSICAL (tensix,tc) this
                     // program's init wrote + the confirmed read-back capacity. If DFBINIT shows gid=0 (cb_in0)
                     // -> (0,0)=224 yet RBFAIL then reads (0,0)=28, some OTHER program overwrote (0,0) after
