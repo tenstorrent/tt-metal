@@ -1365,3 +1365,12 @@
 - Eight-slice command: `QWEN_KDA_CONV_SLICES=8 PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s` -> PASS. CSV `generated/profiler/reports/2026_07_24_18_57_05/ops_perf_results_2026_07_24_18_57_05.csv` (SHA-256 `1805cf58061585c1bf5e73d2c024e1fd40e12e47c14a33309b2aa3e241b1b157`). Median wall was `3712.531 us`, `+9.68%`.
 - Diagnosis: calls per device/replay increase from 35 at two slices to 45 at four and 65 at eight, exactly five additional device ops per added slice. The monotonic regression supports fixed slicing/orchestration cost as dominant and rules out insufficient slice parallelism.
 - Verdict: reject explicit four/eight-slice routing, restore `num_slices=0`, and retain the auto-selected two-slice path.
+
+
+### 2026-07-24 19:00:20 UTC — Reject Conv1d activation reuse for KDA geometry
+
+- Hypothesis: `enable_activation_reuse` could read each convolution activation slice once across output blocks and automatically use the split reader, reducing repeated movement without extra slice launches.
+- T=32 correctness control: `QWEN_KDA_CONV_ACT_REUSE=1 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_tp_weights.py::test_tp_layer_pcc -q -s` -> FAIL before execution: activation block height 1 must be greater than output width 1 tile.
+- Long-context localization enabled reuse only for `sequence > 640`. Command: `QWEN_KDA_CONV_ACT_REUSE=1 PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s`. Pytest failed before trace capture: activation block height 2 must be greater than output width 160 tiles. The profiler wrapper produced only a partial failure CSV; no performance metric is valid.
+- Diagnosis: activation reuse is designed for block-height-dominant convolution. KDA is width-dominant: satisfying the guard at T=5,120 requires an activation block of at least 161 tiles instead of 2, incompatible with the current L1 geometry. Both short and long controls rule out sequence-local applicability.
+- Verdict: reject and restore source. Ordinary DRAM width-slice streaming remains the compatible native path.

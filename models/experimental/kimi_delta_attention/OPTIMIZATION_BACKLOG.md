@@ -244,6 +244,10 @@ improved `622.564 -> 619.594 us` (`-0.48%`). T=5,120 wall improved
       `3712.531 us` (`+9.68%`, 65 calls). Five extra device ops per added
       slice make orchestration cost dominate; retain auto/two-slice routing.
 49. Pipeline convolution slice reads, compute, and writes.
+    - Activation-reuse control, 2026-07-24: not applicable to this geometry.
+      The kernel requires activation block height greater than output width;
+      KDA has `1 vs 1` tiles at T=32 and `2 vs 160` at T=5,120. Both fail
+      validation before execution. Retain ordinary slice streaming.
 50. Produce tiled Q/K/V directly when that avoids a later layout conversion.
 
 ### F. Projection and epilogue
