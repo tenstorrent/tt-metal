@@ -54,8 +54,15 @@ class TtLatentUpsampler(LightweightModule):
             m1 = build_linear_interp_matrix(length_in, LATENT_SCALE)  # [4T, T]
             m2 = build_linear_interp_matrix(m1.shape[0], SR_SCALE)  # [L_out, 4T]
             matrix = m2 @ m1  # [L_out, T]
+            # Keep this small per-length constant resident in L1 (it is matmul in0; the profiler
+            # flagged it as DRAM-interleaved). Cached once per length and reused, so the L1 cost is
+            # paid once and every upsample matmul then reads in0 from L1 instead of DRAM.
             self._matrix_cache[length_in] = ttnn.from_torch(
-                matrix, layout=ttnn.TILE_LAYOUT, device=self.device, dtype=ttnn.float32
+                matrix,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                dtype=ttnn.float32,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
         return self._matrix_cache[length_in]
 
