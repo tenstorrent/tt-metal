@@ -76,7 +76,8 @@ constexpr std::uint32_t TRISC_ID = 3;
 #error "Profiler can only be used on TRISC cores"
 #endif
 
-constexpr std::uint32_t BUFFER_LENGTH = 0x400; // 1024 entries per core
+constexpr std::uint32_t BUFFER_LENGTH  = 0x400; // 1024 entries per core
+constexpr std::uint32_t ZONE_END_WORDS = 2;     // words written per ZONE_END on scope exit
 // Quasar: 4 TRISCs (UNPACK, MATH, PACK, SFPU); Wormhole/Blackhole: 3 TRISCs
 #if defined(ARCH_QUASAR)
 constexpr std::uint32_t NUM_CORES   = 4;
@@ -96,7 +97,7 @@ using buffer_ptr_t  = std::uint32_t (*)[BUFFER_LENGTH];
 extern barrier_ptr_t barrier_ptr;
 extern buffer_ptr_t buffer;
 extern std::uint32_t write_idx;
-extern std::uint32_t open_zone_cnt;
+extern std::uint32_t reserved_zone_end_words;
 
 __attribute__((always_inline)) inline void sync_threads()
 {
@@ -120,10 +121,10 @@ __attribute__((always_inline)) inline void sync_threads()
 
 __attribute__((always_inline)) inline void reset()
 {
-    barrier_ptr   = reinterpret_cast<barrier_ptr_t>(BARRIER_START);
-    buffer        = reinterpret_cast<buffer_ptr_t>(BUFFERS_START);
-    write_idx     = 0;
-    open_zone_cnt = 0;
+    barrier_ptr             = reinterpret_cast<barrier_ptr_t>(BARRIER_START);
+    buffer                  = reinterpret_cast<buffer_ptr_t>(BUFFERS_START);
+    write_idx               = 0;
+    reserved_zone_end_words = 0;
 
     memset(buffer[TRISC_ID], 0, BUFFER_LENGTH * sizeof(buffer[TRISC_ID][0]));
 }
@@ -134,7 +135,7 @@ __attribute__((always_inline)) inline bool is_buffer_full()
     // - timestamp with data (TIMESTAMP_DATA_ENTRY) (size = 16B)
     // - new zone (ZONE_START_ENTRY + ZONE_END_ENTRY) (size = 16B)
     // after closing all of the currently open zones
-    return (BUFFER_LENGTH - (write_idx + open_zone_cnt)) < 4;
+    return (BUFFER_LENGTH - (write_idx + reserved_zone_end_words)) < 4;
 }
 
 __attribute__((always_inline)) inline void write_entry(EntryType type, std::uint16_t id16)
@@ -174,7 +175,7 @@ public:
         {
             is_opened = true;
             write_entry(EntryType::ZONE_START, id16);
-            open_zone_cnt += 2;
+            reserved_zone_end_words += ZONE_END_WORDS;
         }
         ckernel::fence_compiler();
     }
@@ -185,7 +186,7 @@ public:
         if (is_opened)
         {
             write_entry(EntryType::ZONE_END, id16);
-            open_zone_cnt -= 2;
+            reserved_zone_end_words -= ZONE_END_WORDS;
         }
         ckernel::fence_compiler();
     }

@@ -20,6 +20,7 @@ def test_profiler_buffer_overrun_into_neighbor():
     config.generate_variant_hash()
     config.build_elfs()
     config.run_elf_files()
+    config.wait_for_tensix_operations_finished()
 
     # reading unpack's buffer over the NoC flushes its data cache to L1, so any spill is
     # visible when we read the math buffer next.
@@ -65,6 +66,7 @@ def test_profiler_overrun_crashes_normal_read():
     config.generate_variant_hash()
     config.build_elfs()
     config.run_elf_files()
+    config.wait_for_tensix_operations_finished()
 
     runtime = Profiler.get_data(
         config.test_name, config.variant_id, TestConfig.TENSIX_LOCATION
