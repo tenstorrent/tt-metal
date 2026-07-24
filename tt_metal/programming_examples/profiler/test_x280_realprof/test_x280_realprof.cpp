@@ -178,7 +178,10 @@ struct BatchQ {
     }
     bool pop(Batch& out) {
         std::unique_lock<std::mutex> lk(m);
-        cv_pop.wait(lk, [&] { return !q.empty() || closed; });
+        if (q.empty() && !closed) {
+            ZoneScopedNC("mq-pop-wait", 0x7F8C8D);  // gray: consumer starved, waiting for a batch (flusher behind)
+            cv_pop.wait(lk, [&] { return !q.empty() || closed; });
+        }
         if (q.empty()) {
             return false;  // closed and drained
         }
