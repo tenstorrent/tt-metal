@@ -139,14 +139,19 @@ static inline uint32_t pp_packet_words(uint32_t w0) {
     return 2u;
 }
 
-/* ----- X280_ZONE (in-band hart zone) ----- low27 = (hart<<2) | (is_bulk<<1) | is_start ----- */
-static inline uint32_t pp_x280_w0(uint32_t hart, uint32_t is_start, uint32_t is_bulk) {
-    return pp_word0(PP_X280_ZONE, ((hart & 0x3Fu) << 2) | ((is_bulk & 1u) << 1) | (is_start & 1u));
+/* ----- X280_ZONE (in-band hart zone) ----- low27 = (hart<<3) | (kind<<1) | is_start -----
+ * kind: 0=DRAIN (reader per-risc / relay copy), 1=BULK (reader adaptive bulk drain), 2=HOSTWAIT (relay
+ * blocked on a full socket FIFO -- emitted with backdated [wait_start,wait_end] once room returns). */
+#define PP_X280_DRAIN 0u
+#define PP_X280_BULK 1u
+#define PP_X280_HOSTWAIT 2u
+static inline uint32_t pp_x280_w0(uint32_t hart, uint32_t is_start, uint32_t kind) {
+    return pp_word0(PP_X280_ZONE, ((hart & 0x3Fu) << 3) | ((kind & 3u) << 1) | (is_start & 1u));
 }
 static inline int pp_is_x280(uint32_t w0) { return pp_type(w0) == PP_X280_ZONE; }
-static inline uint32_t pp_x280_hart(uint32_t w0) { return (pp_low27(w0) >> 2) & 0x3Fu; }
+static inline uint32_t pp_x280_hart(uint32_t w0) { return (pp_low27(w0) >> 3) & 0x3Fu; }
 static inline uint32_t pp_x280_is_start(uint32_t w0) { return pp_low27(w0) & 1u; }
-static inline uint32_t pp_x280_is_bulk(uint32_t w0) { return (pp_low27(w0) >> 1) & 1u; }
+static inline uint32_t pp_x280_kind(uint32_t w0) { return (pp_low27(w0) >> 1) & 3u; }
 
 /* reader-injected source sticky: lane_id = core*NRISC + risc, carried in both words. */
 static inline uint32_t pp_src_w0(uint32_t lane_id) { return pp_word0(PP_STICKY_SRC, lane_id); }
