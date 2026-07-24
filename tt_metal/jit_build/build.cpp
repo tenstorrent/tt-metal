@@ -17,6 +17,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <exception>
 #include <iostream>
 #include <iterator>
 #include <map>
@@ -920,8 +921,25 @@ void launch_build_step(const std::function<void()>& build_func, std::vector<std:
 }
 
 void sync_build_steps(std::vector<std::shared_future<void>>& events) {
+    // Wait for EVERY launched build step to finish before returning or propagating an
+    // exception, even if one of them throws. The naive `for (event) event.get();`
+    // returns on the FIRST exception, which abandons the remaining in-flight async
+    // tasks. Those tasks' lambdas hold references (notably `device`) into the
+    // compile() stack frame that is now unwinding -- reading them is a use-after-free
+    // and segfaults on a worker thread (device vtable read as 0). Drain all events,
+    // remember the first exception, then rethrow it.
+    std::exception_ptr first_exc;
     for (auto& event : events) {
-        event.get();
+        try {
+            event.get();
+        } catch (...) {
+            if (!first_exc) {
+                first_exc = std::current_exception();
+            }
+        }
+    }
+    if (first_exc) {
+        std::rethrow_exception(first_exc);
     }
 }
 
