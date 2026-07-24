@@ -173,6 +173,7 @@ __attribute__((always_inline)) inline void reset()
 {
     barrier_ptr          = reinterpret_cast<barrier_ptr_t>(BARRIER_START);
     buffer               = reinterpret_cast<buffer_ptr_t>(BUFFERS_START);
+    epoch_ptr            = reinterpret_cast<epoch_ptr_t>(EPOCH_ADDR);
     write_idx            = 0;
     reserved_words_count = 0;
 
