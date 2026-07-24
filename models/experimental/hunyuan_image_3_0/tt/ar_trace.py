@@ -211,10 +211,7 @@ class RecaptionDecodeTracer:
         return ttnn.from_torch(torch_data.contiguous(), **kwargs)
 
     def _copy_trace_buffer(self, torch_data: torch.Tensor, device_tt: ttnn.Tensor, *, dtype, layout) -> None:
-        if self.replicate_to_mesh is not None and dtype == ttnn.bfloat16 and layout == ttnn.TILE_LAYOUT:
-            host_tt = ttnn.from_torch(torch_data.contiguous(), dtype=dtype, layout=layout)
-        else:
-            host_tt = ttnn.from_torch(torch_data.contiguous(), dtype=dtype, layout=layout)
+        host_tt = ttnn.from_torch(torch_data.contiguous(), dtype=dtype, layout=layout)
         ttnn.copy_host_to_device_tensor(host_tt, device_tt)
 
     def _init_trace_buffers(self, token_id: int, query_pos: int) -> None:

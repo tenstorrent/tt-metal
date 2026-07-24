@@ -20,9 +20,6 @@ from models.experimental.hunyuan_image_3_0.ref.generate import (  # noqa: F401
     top_k_top_p_filter,
 )
 
-_apply_repetition_penalty = apply_repetition_penalty
-_top_k_top_p_filter = top_k_top_p_filter
-
 import ttnn
 
 from models.experimental.hunyuan_image_3_0.tt.device_sampling import (  # noqa: E402
