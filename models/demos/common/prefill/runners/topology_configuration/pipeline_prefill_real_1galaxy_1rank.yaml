@@ -27,6 +27,10 @@ rank_bindings:
 mesh_graph_desc_path: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_x_graph_descriptor.textproto
 
 global_env:
+  # Default to INFO so ttnn per-op DEBUG logging stays off the host dispatch path. Must live in
+  # global_env (ttrun forwards it to every rank before loguru is imported), not the manifest
+  # (applied at runtime, after loguru has already read its level).
+  LOGURU_LEVEL: "INFO"
   PREFILL_STANDALONE: "1"   # merged runner: standalone (bring-up/pipeline) mode, not the production request loop
   # Per-rank KV-cache PCC gate against the golden trace.
   PREFILL_STANDALONE_PCC: "1"
