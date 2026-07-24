@@ -1033,3 +1033,34 @@
   `1069.479 -> 1067.788 us`; these are effectively unchanged. The measured
   gain is localized to recurrence storage traffic and does not alter the
   TP=8 distribution or CCL algorithm.
+
+
+### 2026-07-24 17:22:41 UTC — Affine-prefix feasibility and cost experiment
+
+- Hypothesis: each KDA chunk can be represented as
+  `S_out = A_chunk @ S_in + B_chunk`, allowing chunk states to be computed by
+  an associative parallel-prefix scan instead of the serial 160-chunk loop.
+- Algebra:
+  `(A2, B2) compose (A1, B1) = (A2 @ A1, A2 @ B1 + B2)`.
+  Once the exclusive chunk prefixes produce each `S_in`, token outputs inside
+  every chunk can be reconstructed independently.
+- Reproducible CPU test:
+  `python_env/bin/pytest models/experimental/kimi_delta_attention/tests/test_affine_prefix.py -q -s`
+  -> 3/3 passed in 1.56 s. The tests prove associativity in FP64, reproduce
+  chunk-entry states and outputs, and compare a balanced FP32 prefix with the
+  serial token recurrence.
+- Target-shape numerical study: K=V=128, C=32, 160 chunks, four heads/chip.
+  The FP32 balanced prefix produced PCC `1.000000000`, maximum absolute error
+  `3.874302e-7`, and RMSE `5.075655e-8` against the serial recurrence.
+- Target-shape cost model: padding 160 chunks to 256 requires 510 Blelloch
+  compositions. Each head performs `4.278 GFLOP` of prefix composition;
+  four heads perform `17.11 GFLOP/chip`. Storing A+B in FP32 requires
+  `80 MiB/chip`.
+- DRAM verdict: reject. Reading four matrices and writing two for each
+  composition produces approximately `780 MiB/chip` of level traffic, whose
+  512 GB/s lower bound is at least `1.5 ms`. That already exceeds the measured
+  `606.168 us` serial scan before constructing chunk outputs.
+- Retained direction: a distributed-L1 prefix remains mathematically viable,
+  but is deferred until a storage and level-traffic design demonstrates a
+  lower bound below the serial scan. Direct prep-to-scan streaming and static
+  common-input multicast now rank above it.

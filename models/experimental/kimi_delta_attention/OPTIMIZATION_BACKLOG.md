@@ -24,7 +24,18 @@ keeps failed experiments visible so they are not repeated unchanged.
 The complete evidence is in `bringup_log.md`, `ROOFLINE.md`, and
 `perf_report/codex-kda_perf_report.html`.
 
-## Top three by potential reward
+## Current ranked queue
+
+1. Direct prep-to-scan producer/consumer pipeline.
+2. Remove duplicated scan reads with static multicast.
+3. Distributed-L1 affine prefix scan.
+
+The affine-prefix experiment proved the algebra and FP32 numerics, but rejected
+a DRAM-backed implementation: its estimated memory floor exceeds the current
+serial scan. It remains third only if transforms and tree levels stay in
+distributed L1.
+
+## Initial top three by potential reward
 
 ### 1. Associative affine prefix scan across chunks
 
@@ -39,6 +50,17 @@ transforms with a parallel prefix scan.
   control intermediate growth, and preserve state PCC.
 - First proof: implement a host/PyTorch affine-composition reference and prove
   equivalence against the existing recurrence before writing a device kernel.
+- Experiment result, 2026-07-24: the proof passed. At K=V=128, C=32, and 160
+  chunks, the FP32 balanced prefix matched the serial recurrence with PCC
+  `1.000000000`, maximum absolute error `3.874302e-7`, and RMSE
+  `5.075655e-8`.
+- Cost verdict: reject a DRAM-backed prefix. Padding 160 chunks to 256 requires
+  510 affine compositions, `4.278 GFLOP/head` (`17.11 GFLOP/chip`) and
+  `80 MiB/chip` merely to store A+B for four heads. Approximately `780 MiB`
+  of level traffic implies a DRAM floor of at least `1.5 ms`, already above
+  the measured `606.168 us` serial scan before output reconstruction.
+- Retained research path: distributed-L1 storage and execution only. Do not
+  start a general DRAM implementation.
 
 ### 2. Direct prep-to-scan producer/consumer pipeline
 
@@ -72,13 +94,14 @@ dependency-ordered NOC barrier batching and selective double buffering.
 Potential reward and implementation order are different. The recommended
 experimental sequence is:
 
-1. Dependency-ordered reader batching.
-2. Selective double buffering.
-3. Static multicast of one common input.
+1. Direct prep-to-scan streaming prototype for one prepared tensor.
+2. Full direct prep-to-scan pipeline if the prototype wins.
+3. Static multicast of one common scan input.
 4. Full common-input multicast.
-5. Direct prep-to-scan streaming prototype.
-6. Affine-prefix mathematical proof and numerical study.
-7. Affine-prefix device prototype.
+5. Dependency-ordered reader batching.
+6. Selective double buffering.
+7. Distributed-L1 affine-prefix device prototype only if its storage and
+   level-traffic model beats the measured serial scan.
 
 For local scan changes, retain an experiment only when:
 
