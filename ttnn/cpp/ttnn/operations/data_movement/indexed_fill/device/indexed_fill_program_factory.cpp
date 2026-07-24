@@ -30,7 +30,6 @@ constexpr uint32_t MODE_SHARD_LOCAL_INTERLEAVED_B = 2;
 constexpr uint32_t MODE_SHARD_LOCAL_SHARDED_B = 3;
 
 // Metal 2.0 spec resource names. Prefixed to stay distinct under unity builds
-// (Pattern: Unity-build hygiene for anonymous-namespace symbols).
 const KernelSpecName IF_READER{"if_reader"};
 const KernelSpecName IF_WRITER{"if_writer"};
 const DFBSpecName IF_DATA_DFB{"if_data"};
