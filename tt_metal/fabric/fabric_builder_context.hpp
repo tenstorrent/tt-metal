@@ -165,9 +165,13 @@ public:
     }
 
     // ============ Channel Trimming Overrides ============
-    const std::optional<ChannelTrimmingOverrideMap>& get_channel_trimming_overrides() const {
-        return channel_trimming_overrides_;
-    }
+    // Returns the loaded trimming profile, or an empty optional when the profile is STALE relative
+    // to the live fabric topology (its captured active-channel set differs from the current one,
+    // e.g. after eth link retrain). Applying a stale profile trims per-router from data that no
+    // longer matches the fabric, producing a globally-inconsistent (deadlocking) trimmed fabric,
+    // so we disable trimming in that case. Validated lazily on first use (once routing tables are
+    // configured and get_active_fabric_eth_channels() is meaningful) and cached.
+    const std::optional<ChannelTrimmingOverrideMap>& get_channel_trimming_overrides() const;
     const ChannelTrimmingGlobalOverrides& get_channel_trimming_global_overrides() const {
         return channel_trimming_global_overrides_;
     }
@@ -182,6 +186,11 @@ public:
 private:
 
     IntermeshVCConfig compute_intermesh_vc_config() const;
+
+    // True if the loaded trimming profile's per-chip active-channel set matches the live fabric.
+    // Computed once (lazily, when the live topology is available) and cached.
+    bool channel_trimming_profile_matches_live_topology() const;
+    mutable std::optional<bool> channel_trimming_topology_valid_;
 
     friend class FabricContext;
 

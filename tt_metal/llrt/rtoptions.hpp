@@ -324,6 +324,17 @@ class RunTimeOptions {
     // When capturing, stamp `preserve_vc0_forwarding: true` into the exported capture YAML
     bool preserve_vc0_forwarding_in_capture = false;
 
+    // When a trimming profile/override is applied on a multi-mesh fabric, never trim the inter-mesh
+    // VC (VC1, and VC2 when active) on any router. That VC carries cross-mesh traffic which routes
+    // through interior intra-mesh routers, not just boundary chips; a single capture under-observes
+    // its footprint, so trimming it deadlocks the D2D MeshSocket / cross-mesh CCL at serve.
+    // Defaults to true (preserve); set the env var to a falsy value to trim it (e.g. to measure).
+    bool preserve_intermesh_channels = true;
+
+    // Experimental: derive channel trimming from the fabric routing (downstream masks) instead of a
+    // captured usage profile. Sound by construction; replaces profile-based trimming when set. Opt-in.
+    bool route_derived_trimming = false;
+
     // Enable fabric VC2 (neighbour exchange, single-hop)
     bool enable_fabric_vc2 = false;
 
@@ -783,6 +794,14 @@ public:
     // When true, a channel trimming capture export stamps `preserve_vc0_forwarding: true`
     bool get_preserve_vc0_forwarding_in_capture() const { return preserve_vc0_forwarding_in_capture; }
     void set_preserve_vc0_forwarding_in_capture(bool enable) { preserve_vc0_forwarding_in_capture = enable; }
+
+    // When true (default), the inter-mesh VC (VC1/VC2) is never trimmed by an applied profile/override
+    bool get_preserve_intermesh_channels() const { return preserve_intermesh_channels; }
+    void set_preserve_intermesh_channels(bool enable) { preserve_intermesh_channels = enable; }
+
+    // Experimental routing-derived (capture-free) channel trimming
+    bool get_route_derived_trimming() const { return route_derived_trimming; }
+    void set_route_derived_trimming(bool enable) { route_derived_trimming = enable; }
 
     // Fabric VC2 enable
     bool get_enable_fabric_vc2() const { return enable_fabric_vc2; }

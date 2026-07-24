@@ -102,6 +102,8 @@ enum class EnvVarID {
     TT_METAL_FABRIC_TRIMMING_PROFILE,                  // Path to channel trimming profile YAML for import
     TT_METAL_FABRIC_TRIMMING_OVERRIDE,                 // Path to channel trimming global override YAML
     TT_METAL_FABRIC_TRIMMING_PRESERVE_VC0_FORWARDING,  // Stamp preserve_vc0_forwarding into captured profile
+    TT_METAL_FABRIC_TRIMMING_PRESERVE_INTERMESH,       // Preserve inter-mesh VC (VC1/VC2) from an applied profile
+    TT_METAL_FABRIC_TRIMMING_ROUTE_DERIVED,            // Capture-free routing-derived channel trimming (experimental)
     TT_METAL_ENABLE_FABRIC_VC2,                        // Enable fabric VC2 (neighbour exchange)
     TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH,          // Enable experimental VC1 inter-mesh pass-through
     TT_METAL_FORCE_REINIT,                             // Force context reinitialization
@@ -701,6 +703,33 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_FABRIC_TRIMMING_PRESERVE_VC0_FORWARDING:
             this->preserve_vc0_forwarding_in_capture = true;
             break;
+
+        // TT_METAL_FABRIC_TRIMMING_PRESERVE_INTERMESH
+        // When a channel-trimming profile and/or override is applied (TT_METAL_FABRIC_TRIMMING_PROFILE
+        // and/or TT_METAL_FABRIC_TRIMMING_OVERRIDE) on a multi-mesh fabric, never trim the inter-mesh
+        // VC (VC1, and VC2 when active) on any router. That VC carries cross-mesh traffic that routes
+        // through interior intra-mesh routers (not just boundary chips); a single capture under-observes
+        // its footprint, so trimming it deadlocks the D2D MeshSocket / cross-mesh CCL at serve.
+        // Default: true (preserve). Set to a falsy value (0/false/off/no) to trim the inter-mesh VC
+        // anyway (e.g. to measure); any other value keeps the default preserve behavior.
+        // Usage: export TT_METAL_FABRIC_TRIMMING_PRESERVE_INTERMESH=0
+        case EnvVarID::TT_METAL_FABRIC_TRIMMING_PRESERVE_INTERMESH: {
+            const std::string v = to_lower_copy(trim_copy(value != nullptr ? std::string(value) : std::string()));
+            this->preserve_intermesh_channels = !(v == "0" || v == "false" || v == "off" || v == "no");
+            break;
+        }
+
+        // TT_METAL_FABRIC_TRIMMING_ROUTE_DERIVED
+        // Experimental: trim fabric channels from the ROUTING (downstream-adapter per-VC masks) instead
+        // of from a captured usage profile. Sound by construction (only trims channels with no route),
+        // so it does not deadlock collectives the way observed-usage trimming does. Replaces
+        // profile/capture-based trimming when enabled. Default: off (opt-in for perf evaluation).
+        // Usage: export TT_METAL_FABRIC_TRIMMING_ROUTE_DERIVED=1
+        case EnvVarID::TT_METAL_FABRIC_TRIMMING_ROUTE_DERIVED: {
+            const std::string v = to_lower_copy(trim_copy(value != nullptr ? std::string(value) : std::string()));
+            this->route_derived_trimming = (v == "1" || v == "true" || v == "on" || v == "yes" || v.empty());
+            break;
+        }
 
         // TT_METAL_ENABLE_FABRIC_VC2
         // Enables the third virtual channel (VC2) for single-hop neighbour exchange traffic.

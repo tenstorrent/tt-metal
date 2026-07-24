@@ -850,6 +850,15 @@ void ComputeMeshRouterBuilder::compile_ancillary_kernels(tt::tt_metal::Program& 
 }
 
 void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, const KernelCreationContext& ctx) {
+    // Route-derived (capture-free) channel trimming. Applied here rather than in the EDM builder
+    // constructor because it derives its keep-set from the downstream-adapter per-VC connection
+    // masks, which are only populated once establish_connections_to_router() has run. By create_kernel
+    // time all connections are wired, so the masks are final. Runs once per router, before the RT/CT
+    // args (get_runtime_args / get_compile_time_args below) consume is_sender_channel_serviced_.
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_route_derived_trimming()) {
+        erisc_builder_->apply_route_derived_trimming();
+    }
+
     // Build defines
     std::map<std::string, std::string> defines = {};
     if (ctx.is_2D_routing) {

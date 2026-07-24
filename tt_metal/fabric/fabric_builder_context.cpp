@@ -10,9 +10,14 @@
 #include "tt_metal/fabric/channel_trimming_report.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
+
+#include <cstdint>
+#include <set>
+#include <unordered_map>
 
 namespace tt::tt_fabric {
 
@@ -104,6 +109,31 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
     }
 
     this->intermesh_vc_config_ = this->compute_intermesh_vc_config();
+
+    // Preserve the inter-mesh VC(s) from trimming. VC1 (inter-mesh pass-through) — and VC2
+    // (neighbour exchange) when active — carry cross-mesh traffic that routes through interior
+    // intra-mesh routers on the way to the boundary link, not just the boundary chips. A single
+    // capture under-observes that footprint (data-dependent, exactly like the VC0 case above), so
+    // trimming VC1/VC2 from one run deadlocks the D2D MeshSocket / cross-mesh CCL at serve (observed
+    // hanging at MoE routing-setup on an intra-mesh router). When the fabric has an inter-mesh VC
+    // active and a profile/override is being applied, force-enable all VC1 (+VC2) sender+receiver
+    // channels regardless of capture. Trimming still optimizes the well-covered VC0 intra-mesh path.
+    // Opt out with TT_METAL_FABRIC_TRIMMING_PRESERVE_INTERMESH=0 (e.g. to measure inter-mesh trimming).
+    const bool trimming_active = rtoptions.has_fabric_trimming_profile() || rtoptions.has_fabric_trimming_override();
+    if (trimming_active && rtoptions.get_preserve_intermesh_channels() && intermesh_vc_config_.requires_vc1) {
+        log_info(
+            tt::LogFabric,
+            "Preserving inter-mesh VC channels from trimming: VC1{}",
+            intermesh_vc_config_.requires_vc2 ? " + VC2" : "");
+        auto& vc1 = channel_trimming_global_overrides_.per_vc[1];
+        vc1.force_enable_all_sender_channels = true;
+        vc1.force_enable_all_receiver_channels = true;
+        if (intermesh_vc_config_.requires_vc2) {
+            auto& vc2 = channel_trimming_global_overrides_.per_vc[2];
+            vc2.force_enable_all_sender_channels = true;
+            vc2.force_enable_all_receiver_channels = true;
+        }
+    }
 
     // Log trimming report after intermesh config is known (VC1 affects expected channel counts)
     if (rtoptions.has_fabric_trimming_profile()) {
@@ -251,6 +281,78 @@ void FabricBuilderContext::initialize_tensix_config() {
         // configure_routing_tables_for_fabric_ethernet_channels() has already run
         tensix_config_ = std::make_unique<FabricTensixDatamoverConfig>();
     }
+}
+
+const std::optional<ChannelTrimmingOverrideMap>& FabricBuilderContext::get_channel_trimming_overrides() const {
+    static const std::optional<ChannelTrimmingOverrideMap> kNoOverrides = std::nullopt;
+    if (channel_trimming_overrides_.has_value() && !channel_trimming_profile_matches_live_topology()) {
+        return kNoOverrides;
+    }
+    return channel_trimming_overrides_;
+}
+
+bool FabricBuilderContext::channel_trimming_profile_matches_live_topology() const {
+    if (!channel_trimming_overrides_.has_value()) {
+        return true;  // no profile → nothing to validate
+    }
+    if (channel_trimming_topology_valid_.has_value()) {
+        return *channel_trimming_topology_valid_;  // cached
+    }
+
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+
+    // Live active fabric eth channels per physical chip (current topology).
+    std::unordered_map<uint32_t, std::set<chan_id_t>> live;
+    std::size_t live_total = 0;
+    for (const auto& mesh_id : control_plane.get_local_mesh_id_bindings()) {
+        for (const auto& mesh_coord : control_plane.get_coord_range(mesh_id, MeshScope::LOCAL)) {
+            auto fabric_chip_id = mesh_graph.coordinate_to_chip(mesh_id, mesh_coord);
+            FabricNodeId fabric_node_id(mesh_id, fabric_chip_id);
+            auto phys = static_cast<uint32_t>(control_plane.get_physical_chip_id_from_fabric_node_id(fabric_node_id));
+            for (const auto& chan_and_dir : control_plane.get_active_fabric_eth_channels(fabric_node_id)) {
+                if (live[phys].insert(chan_and_dir.first).second) {
+                    ++live_total;
+                }
+            }
+        }
+    }
+
+    // Routing tables may not be configured yet (get_active_* empty). Defer without caching so a
+    // later call (once the live topology exists) makes the real decision.
+    if (live_total == 0) {
+        return true;
+    }
+
+    // Profile's captured active-channel set per physical chip (decode the packed override keys).
+    std::unordered_map<uint32_t, std::set<chan_id_t>> profiled;
+    for (const auto& kv : *channel_trimming_overrides_) {
+        const uint64_t key = kv.first;
+        profiled[static_cast<uint32_t>(key >> 32)].insert(static_cast<chan_id_t>(key & 0xFFFFFFFFull));
+    }
+
+    std::size_t mismatched_chips = 0;
+    static const std::set<chan_id_t> kEmpty;
+    for (const auto& [phys, live_chans] : live) {
+        auto it = profiled.find(phys);
+        const auto& prof_chans = (it != profiled.end()) ? it->second : kEmpty;
+        if (prof_chans != live_chans) {
+            ++mismatched_chips;
+        }
+    }
+
+    const bool match = (mismatched_chips == 0);
+    if (!match) {
+        log_warning(
+            tt::LogFabric,
+            "Channel trimming profile is STALE vs the live fabric topology: {} of {} local chips have a "
+            "different active fabric eth-channel set than was captured (e.g. eth link retrain since capture). "
+            "Disabling channel trimming for this run to avoid a globally-inconsistent (deadlocking) trimmed fabric.",
+            mismatched_chips,
+            live.size());
+    }
+    channel_trimming_topology_valid_ = match;
+    return match;
 }
 
 IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {

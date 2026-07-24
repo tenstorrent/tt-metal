@@ -771,8 +771,11 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         }
     }
 
+    // Route-derived trimming replaces capture/profile-based trimming when selected.
+    const bool route_derived_trimming = tt::tt_metal::MetalContext::instance().rtoptions().get_route_derived_trimming();
+
     // Apply channel trimming overrides (from imported profile) after normal initialization
-    if (channel_trimming_overrides.has_value()) {
+    if (channel_trimming_overrides.has_value() && !route_derived_trimming) {
         apply_channel_trimming_overrides(channel_trimming_overrides.value());
     }
 
@@ -801,6 +804,11 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         downstream_vcs_sender_channel_buffer_index_semaphore_id[vc2_flat] =
             sender_channels_buffer_index_semaphore_id[vc2_flat];
     }
+
+    // Route-derived trimming (capture-free) is NOT applied here: at construction the downstream
+    // adapter exists but has no connections yet (its per-VC masks are still 0), so trimming would
+    // read empty masks and drop every forwarding channel. It is deferred to create_kernel(), which
+    // runs after establish_connections_to_router() has populated the adapter masks.
 
     // Add this log right at the beginning of the constructor body
     log_debug(
@@ -1817,5 +1825,68 @@ void FabricEriscDatamoverBuilder::apply_channel_trimming_overrides(const Channel
         "Applied channel trimming overrides: sender_used=0x{:04X} rx_fwd=0x{:04X}",
         overrides.sender_channel_used_bitfield_by_vc,
         overrides.receiver_channel_data_forwarded_bitfield_by_vc);
+}
+
+void FabricEriscDatamoverBuilder::apply_route_derived_trimming() {
+    // Route-derived (capture-free) channel trimming. Keep-set is derived from the fabric ROUTING
+    // (the downstream-adapter per-VC connection masks), never from observed traffic — so it is sound
+    // by construction: a channel is trimmed only if the routing has no downstream for it, which means
+    // no route can ever use it. Unlike observed-usage trimming, it cannot disable a routing-required
+    // channel, so it cannot deadlock a collective.
+    //
+    // Channel↔direction correspondence (verified against the device servicing loop and the compact
+    // sizing of the downstream-interface arrays, calc_array_size_from_mask = highest_set_bit+1):
+    //   - Adapter mask bit c == compact direction index c (get_receiver_channel_compact_index).
+    //   - VC0 flat layout: [0]=worker (always kept), [1+c]=forwarding for compact direction c.
+    //   - VC1 flat layout: [vc1_base + c]=forwarding for compact direction c (no worker).
+    //   - VC2 is a worker channel when active (kept). Receivers of active VCs are kept.
+    TT_FATAL(
+        this->receiver_channel_to_downstream_adapter != nullptr,
+        "Route-derived trimming requires the downstream adapter to be constructed first.");
+    auto* static_alloc = dynamic_cast<FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
+    TT_FATAL(static_alloc != nullptr, "Route-derived trimming requires a FabricStaticSizedChannelsAllocator.");
+
+    const size_t nvc0 = static_alloc->get_num_sender_channels(0);
+    const size_t nvc1 = static_alloc->get_num_sender_channels(1);
+    const size_t vc1_base = nvc0;
+    const size_t vc1_end = nvc0 + nvc1;
+    const size_t worker_channel = get_worker_connected_sender_channel();
+    const uint32_t mask_vc0 = this->receiver_channel_to_downstream_adapter->get_downstream_edm_mask_for_vc(0);
+    const uint32_t mask_vc1 =
+        (nvc1 > 0) ? this->receiver_channel_to_downstream_adapter->get_downstream_edm_mask_for_vc(1) : 0;
+
+    // Only trim SENDER channels; receivers of active VCs are always required (they always receive).
+    for (auto& risc_channels : this->is_sender_channel_serviced_) {
+        for (size_t ch = 0; ch < risc_channels.size(); ++ch) {
+            if (!risc_channels[ch]) {
+                continue;  // already unserviced
+            }
+            bool keep = true;
+            if (ch < nvc0) {
+                // VC0 block: worker always kept; forwarding channel 1+c kept iff routed to compact c.
+                if (ch != worker_channel) {
+                    const size_t compact = ch - 1;  // worker is at flat 0
+                    keep = ((mask_vc0 >> compact) & 1u) != 0;
+                }
+            } else if (ch < vc1_end) {
+                // VC1 block: all forwarding (no worker); channel vc1_base+c kept iff routed to compact c.
+                const size_t compact = ch - vc1_base;
+                keep = ((mask_vc1 >> compact) & 1u) != 0;
+            }
+            // ch >= vc1_end: VC2 worker channel(s) -> keep.
+            if (!keep) {
+                risc_channels[ch] = false;
+            }
+        }
+    }
+    log_info(
+        tt::LogFabric,
+        "Applied route-derived trimming: vc0_downstream_mask=0x{:X} vc1_downstream_mask=0x{:X} "
+        "(nvc0={} nvc1={} worker_ch={})",
+        mask_vc0,
+        mask_vc1,
+        nvc0,
+        nvc1,
+        worker_channel);
 }
 }  // namespace tt::tt_fabric

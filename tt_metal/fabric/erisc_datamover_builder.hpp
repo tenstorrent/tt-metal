@@ -657,6 +657,13 @@ private:
     // and stores overrides for compile-time arg generation (RX forwarding disable flags).
     void apply_channel_trimming_overrides(const ChannelTrimmingOverrides& overrides);
 
+    // Route-derived (capture-free) trimming: disables forwarding sender channels with no routing
+    // downstream (per the downstream-adapter per-VC masks). Sound by construction. Must be called
+    // AFTER the downstream connections have been established (establish_connections_to_router), i.e.
+    // after the adapter masks are populated -- not at construction, when the masks are still empty.
+    // ComputeMeshRouterBuilder::create_kernel() is the designated call site.
+    void apply_route_derived_trimming();
+
     // Channel trimming overrides (from imported profile)
     std::optional<ChannelTrimmingOverrides> channel_trimming_overrides_;
 
