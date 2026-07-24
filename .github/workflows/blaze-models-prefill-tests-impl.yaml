@@ -339,6 +339,11 @@ jobs:
             test -r /mnt/models
           '
 
+      # Start clean so publish/upload only ever see this run's files, even if the runner's /ci PVC is
+      # reused and a prior run was killed before its end-cleanup.
+      - name: 🧹 Reset prefill summaries dir
+        run: '[ -n "$PREFILL_SUMMARIES" ] && rm -rf "$PREFILL_SUMMARIES"'
+
       - name: ${{ matrix.test-group.name }}
         id: run-test
         timeout-minutes: ${{ matrix.test-group.timeout }}
@@ -371,6 +376,22 @@ jobs:
             printf '\n' >> "$GITHUB_STEP_SUMMARY"
           done
           echo "Published ${#files[@]} prefill summary file(s) to the job summary"
+
+      # Keep the raw .md files for cross-run perf-trend analysis. Uploaded before cleanup; unique name per
+      # matrix job so v7 (no auto-merge) doesn't collide when the whole suite runs.
+      - name: ⬆️ Upload prefill summaries
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: prefill-summaries-${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          path: /ci/prefill_summaries/**/*.md
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: 🧹 Clean prefill summaries
+        if: always()
+        run: '[ -n "$PREFILL_SUMMARIES" ] && rm -rf "$PREFILL_SUMMARIES"'
 
       - name: 🤖 AI job summary
         if: always() && !cancelled()
