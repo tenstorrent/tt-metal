@@ -97,10 +97,10 @@
 # =============================================================================
 # BH SC16 Multihost Pipeline Tests (4 connected SC4 = 16 galaxies)
 # =============================================================================
-# Count allocation: Phase 1 automapper cwd=/ci/tt-metal (NFS bindings); Phase 2 from
-# TT_METAL_HOME=/home/user/tt-metal only (--rank-binding + rankfile on NFS). Mixing
-# /ci and /home in one tt-run makes JIT -I both trees -> header redefinition errors.
-# No --rank-binding/--host in Phase 1 mpi-args; --bind-to none (not hwt).
+# Count allocation: Phase 1 automapper cwd=/ci/tt-metal (NFS). Copy generated/ttrun/<id>
+# into TT_METAL_HOME on runner+workers, then Phase 2 from /home/user/tt-metal with
+# in-tree relative --rank-binding / rankfile paths. PRTE misparses map-by paths that
+# leave cwd (relative paths starting with ../ into /ci). --bind-to none (not hwt).
 # Runner OOM: per-rank bash -c redirect to NFS (not MPI --output-filename).
 # Quiet ranks: LOGURU_LEVEL=ERROR (-x), TT_LOGGER_LEVEL=error.
 
@@ -127,17 +127,22 @@
       /bin/true \
       > "${PIPELINE_DIR}/launch-phase1.log" 2>&1
 
-    CACHE_DIR=$(ls -dt /ci/tt-metal/generated/ttrun/*/ | head -1)
-    RANK_BINDINGS="${CACHE_DIR}rank_bindings.yaml"
-    RANKFILE="${CACHE_DIR}rankfile"
-    test -f "${RANK_BINDINGS}" && test -f "${RANKFILE}"
+    CACHE_ID=$(basename "$(ls -dt /ci/tt-metal/generated/ttrun/*/ | head -1)")
+    NFS_CACHE="/ci/tt-metal/generated/ttrun/${CACHE_ID}"
+    LOCAL_CACHE="${TT_METAL_HOME}/generated/ttrun/${CACHE_ID}"
+    test -f "${NFS_CACHE}/rank_bindings.yaml" && test -f "${NFS_CACHE}/rankfile"
+    # PRTE map-by requires rankfile under mpirun cwd (no ../../../ci/... rewrite).
+    mkdir -p "${TT_METAL_HOME}/generated/ttrun"
+    rm -rf "${LOCAL_CACHE}"
+    cp -a "${NFS_CACHE}" "${LOCAL_CACHE}"
+    mpirun --pernode bash -lc "mkdir -p '${TT_METAL_HOME}/generated/ttrun' && rm -rf '${LOCAL_CACHE}' && cp -a '${NFS_CACHE}' '${LOCAL_CACHE}'"
 
     # Phase 2: local tree only (ORIGINAL_CWD == TT_METAL_HOME == --wdir).
     cd "${TT_METAL_HOME}"
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
-      --rank-binding "${RANK_BINDINGS}" \
-      --mpi-args "--bind-to none --wdir ${TT_METAL_HOME} --map-by rankfile:file=${RANKFILE} -x LOGURU_LEVEL=ERROR" \
+      --rank-binding "generated/ttrun/${CACHE_ID}/rank_bindings.yaml" \
+      --mpi-args "--bind-to none --wdir ${TT_METAL_HOME} --map-by rankfile:file=generated/ttrun/${CACHE_ID}/rankfile -x LOGURU_LEVEL=ERROR" \
       bash -c "python3 -m models.demos.deepseek_v3_b1.demo.teacher_forced \
         --weights real \
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
@@ -177,16 +182,20 @@
       /bin/true \
       > "${PIPELINE_DIR}/launch-phase1.log" 2>&1
 
-    CACHE_DIR=$(ls -dt /ci/tt-metal/generated/ttrun/*/ | head -1)
-    RANK_BINDINGS="${CACHE_DIR}rank_bindings.yaml"
-    RANKFILE="${CACHE_DIR}rankfile"
-    test -f "${RANK_BINDINGS}" && test -f "${RANKFILE}"
+    CACHE_ID=$(basename "$(ls -dt /ci/tt-metal/generated/ttrun/*/ | head -1)")
+    NFS_CACHE="/ci/tt-metal/generated/ttrun/${CACHE_ID}"
+    LOCAL_CACHE="${TT_METAL_HOME}/generated/ttrun/${CACHE_ID}"
+    test -f "${NFS_CACHE}/rank_bindings.yaml" && test -f "${NFS_CACHE}/rankfile"
+    mkdir -p "${TT_METAL_HOME}/generated/ttrun"
+    rm -rf "${LOCAL_CACHE}"
+    cp -a "${NFS_CACHE}" "${LOCAL_CACHE}"
+    mpirun --pernode bash -lc "mkdir -p '${TT_METAL_HOME}/generated/ttrun' && rm -rf '${LOCAL_CACHE}' && cp -a '${NFS_CACHE}' '${LOCAL_CACHE}'"
 
     cd "${TT_METAL_HOME}"
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
-      --rank-binding "${RANK_BINDINGS}" \
-      --mpi-args "--bind-to none --wdir ${TT_METAL_HOME} --map-by rankfile:file=${RANKFILE} -x LOGURU_LEVEL=ERROR" \
+      --rank-binding "generated/ttrun/${CACHE_ID}/rank_bindings.yaml" \
+      --mpi-args "--bind-to none --wdir ${TT_METAL_HOME} --map-by rankfile:file=generated/ttrun/${CACHE_ID}/rankfile -x LOGURU_LEVEL=ERROR" \
       bash -c "python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 4096 \
         --no-stop-at-eos \
@@ -225,16 +234,20 @@
       /bin/true \
       > "${PIPELINE_DIR}/launch-phase1.log" 2>&1
 
-    CACHE_DIR=$(ls -dt /ci/tt-metal/generated/ttrun/*/ | head -1)
-    RANK_BINDINGS="${CACHE_DIR}rank_bindings.yaml"
-    RANKFILE="${CACHE_DIR}rankfile"
-    test -f "${RANK_BINDINGS}" && test -f "${RANKFILE}"
+    CACHE_ID=$(basename "$(ls -dt /ci/tt-metal/generated/ttrun/*/ | head -1)")
+    NFS_CACHE="/ci/tt-metal/generated/ttrun/${CACHE_ID}"
+    LOCAL_CACHE="${TT_METAL_HOME}/generated/ttrun/${CACHE_ID}"
+    test -f "${NFS_CACHE}/rank_bindings.yaml" && test -f "${NFS_CACHE}/rankfile"
+    mkdir -p "${TT_METAL_HOME}/generated/ttrun"
+    rm -rf "${LOCAL_CACHE}"
+    cp -a "${NFS_CACHE}" "${LOCAL_CACHE}"
+    mpirun --pernode bash -lc "mkdir -p '${TT_METAL_HOME}/generated/ttrun' && rm -rf '${LOCAL_CACHE}' && cp -a '${NFS_CACHE}' '${LOCAL_CACHE}'"
 
     cd "${TT_METAL_HOME}"
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
-      --rank-binding "${RANK_BINDINGS}" \
-      --mpi-args "--bind-to none --wdir ${TT_METAL_HOME} --map-by rankfile:file=${RANKFILE} -x LOGURU_LEVEL=ERROR" \
+      --rank-binding "generated/ttrun/${CACHE_ID}/rank_bindings.yaml" \
+      --mpi-args "--bind-to none --wdir ${TT_METAL_HOME} --map-by rankfile:file=generated/ttrun/${CACHE_ID}/rankfile -x LOGURU_LEVEL=ERROR" \
       bash -c "python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 128000 \
         --repeat-generations 2 \
