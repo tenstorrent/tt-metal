@@ -231,6 +231,9 @@ class RunTimeOptions {
     // should remain the same size as normal, unlike with null_kernels.
     bool kernels_early_return = false;
 
+    // Temporary: rdcycle DFB init timing in device firmware. Deprecate once profiler covers this.
+    bool measure_dfb_init_time_enabled = false;
+
     bool clear_l1 = false;
     bool clear_dram = false;
 
@@ -593,10 +596,11 @@ public:
     }
     std::string get_compile_hash_string() const {
         std::string compile_hash_str = fmt::format(
-            "{}_{}_{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}_{}_{}",
             get_watcher_hash(),
             get_sanitizer_hash(),
             get_kernels_early_return(),
+            get_measure_dfb_init_time_enabled(),
             get_erisc_iram_enabled(),
             get_enable_2_erisc_mode(),
             get_disable_fabric_2_erisc_mode());
@@ -645,6 +649,8 @@ public:
 
     void set_kernels_early_return(bool v) { kernels_early_return = v; }
     bool get_kernels_early_return() const { return kernels_early_return; }
+
+    bool get_measure_dfb_init_time_enabled() const { return measure_dfb_init_time_enabled; }
 
     bool get_clear_l1() const { return clear_l1; }
     void set_clear_l1(bool clear) { clear_l1 = clear; }

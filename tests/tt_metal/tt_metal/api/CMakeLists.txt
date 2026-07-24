@@ -97,6 +97,32 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
 
+# Quasar-only DFB init timing benchmarks (standalone; not linked into unit_tests_api).
+add_executable(dfb_init_timing_bench dataflow_buffer/dfb_init_timing_bench.cpp)
+target_include_directories(
+    dfb_init_timing_bench
+    BEFORE
+    PRIVATE
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/common
+)
+target_link_libraries(
+    dfb_init_timing_bench
+    PRIVATE
+        test_metal_common_libs
+        Boost::smart_ptr
+)
+target_precompile_headers(dfb_init_timing_bench REUSE_FROM metal_common_pch)
+set_target_properties(
+    dfb_init_timing_bench
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal
+)
+
 if(TT_METAL_USE_EMULE)
     target_link_options(unit_tests_api PRIVATE -rdynamic)
 

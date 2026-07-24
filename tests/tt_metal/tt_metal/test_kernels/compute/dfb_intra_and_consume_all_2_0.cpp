@@ -78,6 +78,7 @@ void kernel_main() {
 
         acquire_dst();
         dfb_intra.wait_front(1);
+        copy_tile(dfb_intra.get_id(), 0, 0);  // UNPACR -> satisfies pop_front read-done
 #ifdef UCK_CHLKC_UNPACK
         if (trisc_id == 0) {
             volatile uint32_t* entry = reinterpret_cast<volatile uint32_t*>(dfb_intra.get_read_ptr() << 4);
@@ -86,7 +87,6 @@ void kernel_main() {
             }
         }
 #endif
-        copy_tile(dfb_intra.get_id(), 0, 0);  // UNPACR -> satisfies pop_front read-done
         dfb_intra.pop_front(1);
         release_dst();
     }

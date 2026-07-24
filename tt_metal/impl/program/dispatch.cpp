@@ -1377,24 +1377,20 @@ public:
             const CoreCoord logical_representative = core_range.start_coord;
 
             size_t max_byte_end = 0;
-            size_t sequential_byte_offset = 0;
-            for (const auto& dfb : dfbs_on_corerange) {
-                size_t dfb_byte_offset = 0;
-                if (!hal.has_tile_counter_registers()) {
-                    // WH/BH: DFBs reuse the CB slot format; slot N starts at N * 4 words.
-                    dfb_byte_offset =
+            if (!hal.has_tile_counter_registers()) {
+                // WH/BH: DFBs reuse the CB slot format; slot N starts at N * 4 words.
+                for (const auto& dfb : dfbs_on_corerange) {
+                    size_t dfb_byte_offset =
                         static_cast<size_t>(dfb->id) * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
-                } else {
-                    // Quasar: DFBs are laid out sequentially in the dfb config region.
-                    dfb_byte_offset = sequential_byte_offset;
-                    sequential_byte_offset += dfb->serialized_size();
+                    auto serialized = dfb->serialize_for_core(logical_representative);
+                    TT_ASSERT(dfb_byte_offset + serialized.size() <= payload.size());
+                    std::copy(serialized.begin(), serialized.end(), payload.begin() + dfb_byte_offset);
+                    max_byte_end = std::max(max_byte_end, dfb_byte_offset + serialized.size());
                 }
-
-                auto serialized = dfb->serialize_for_core(logical_representative);
-                TT_ASSERT(serialized.size() == dfb->serialized_size());
-                TT_ASSERT(dfb_byte_offset + serialized.size() <= payload.size());
-                std::copy(serialized.begin(), serialized.end(), payload.begin() + dfb_byte_offset);
-                max_byte_end = std::max(max_byte_end, dfb_byte_offset + serialized.size());
+            } else {
+                max_byte_end = tt::tt_metal::experimental::dfb::detail::serialize_dfb_config_for_core(
+                    logical_representative, dfbs_on_corerange, payload);
+                TT_ASSERT(max_byte_end <= payload.size());
             }
 
             CoreRange virtual_range(virtual_start, virtual_end);

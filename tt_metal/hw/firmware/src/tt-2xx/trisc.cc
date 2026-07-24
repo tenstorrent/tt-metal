@@ -56,6 +56,10 @@ thread_local uint8_t g_dfb_logical_to_compact[dfb::NUM_DFBS] __attribute__((used
 thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
 #endif
 #endif
+// Defined for all TRISC types (including math) so kernels that include dataflow_buffer headers link cleanly.
+// For math TRISC, setup_local_dfb_interfaces is not called, so this stays 0; dfb_ensure_ready
+// returns immediately for any DFB math TRISC is not a participant in (expected_signal == 0).
+thread_local uintptr_t g_dfb_config_base_addr __attribute__((used));
 
 namespace ckernel {
 
@@ -158,7 +162,7 @@ extern "C" uint32_t _start1() {
             uintptr_t kernel_config_base = launch_msg->kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
 
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
-            uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
+            uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base +
                                                                     launch_msg->kernel_config.local_cb_offset);
             uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
             setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
