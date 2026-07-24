@@ -161,25 +161,9 @@ std::map<std::string, std::string> initialize_device_kernel_defines(const JitDev
     return device_kernel_defines;
 }
 
-uint64_t compute_build_key(const JitDeviceConfig& config, const llrt::RunTimeOptions& rtoptions) {
-    // Collect all the parameters that affect the build configuration
+uint64_t compute_build_key(const JitDeviceConfig& /*config*/, const llrt::RunTimeOptions& rtoptions) {
     StableHasher hasher;
-
-    hasher.update(static_cast<uint32_t>(config.dispatch_core_type));
-    hasher.update(static_cast<uint32_t>(config.dispatch_core_axis));
-
-    // Hash the number of hardware command queues
-    hasher.update(static_cast<uint32_t>(config.num_hw_cqs));
-
-    // Hash the harvesting configuration based on whether coordinate virtualization is enabled
-    if (!config.coordinate_virtualization_enabled) {
-        // Coordinate virtualization is not enabled. For a single program, its associated binaries will vary across
-        // devices with different cores harvested.
-        hasher.update(config.harvesting_mask);
-    }
-
     hasher.update(rtoptions.get_compile_hash_string());
-
     return hasher.digest();
 }
 
