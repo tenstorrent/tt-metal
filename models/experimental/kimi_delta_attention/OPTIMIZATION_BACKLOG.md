@@ -245,6 +245,15 @@ improved `622.564 -> 619.594 us` (`-0.48%`). T=5,120 wall improved
       23 calls and repeats untilize/slice/tilize/ternary work per tap. Retain
       the custom single-program reader/compute/SiLU design; do not compose it
       from generic TTNN operations.
+    - Custom-program result, 2026-07-24: a 110-core 32-token-block reader,
+      four-tap FPU depthwise compute, row-broadcast tap weights, and fused SiLU
+      passed direct identity PCC `0.999998` and full TP output/state/conv PCC
+      `0.999955/0.999905/0.999997`. At T=5,120 it reduced calls `35 -> 24`,
+      but convolution active time regressed `606.271 -> 609.761 us` and wall
+      regressed `3385.003 -> 3390.084 us` (`+0.150%`). The custom kernel costs
+      `426.786 us`; retained QKV crop plus external untilize still cost
+      `181.952 us`. Reject this boundary. The next viable version must consume
+      tiled projection output directly and eliminate those two prep programs.
 45. Reduce T=5,120 DRAM slicing overhead.
 46. Implement numerically exact SiLU in the convolution output kernel.
     - Experiment result, 2026-07-24: `Conv1dConfig.activation=SILU` is ignored
