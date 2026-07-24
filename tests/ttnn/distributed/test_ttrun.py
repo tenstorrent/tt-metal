@@ -318,7 +318,7 @@ class TestPhase2Helpers:
         np_idx = cmd.index("-np")
         assert cmd[np_idx + 1] == "4"
 
-    def test_build_generate_rank_bindings_mpi_cmd_no_hosts_no_mock(self, temp_dir):
+    def test_build_generate_rank_bindings_mpi_cmd_no_hosts_no_mock(self, temp_dir, expect_error):
         """Test build_generate_rank_bindings_mpi_cmd raises ValueError if neither hosts nor mock provided."""
         executable = temp_dir / "generate_rank_bindings"
         executable.touch()
@@ -326,7 +326,7 @@ class TestPhase2Helpers:
         mgd_path.touch()
         output_dir = temp_dir / "output"
 
-        with pytest.raises(ValueError, match="Either hosts or mock_rank_to_desc must be provided"):
+        with expect_error(ValueError, "Either hosts or mock_rank_to_desc must be provided"):
             build_generate_rank_bindings_mpi_cmd(executable, mgd_path, None, output_dir, None)
 
     def test_legacy_mode_ignores_hosts(self, runner, sample_rank_binding_yaml):
@@ -362,7 +362,7 @@ class TestYAMLParsing:
         assert config.global_env["GLOBAL_VAR"] == "global_value"
         assert config.mesh_graph_desc_path.exists()
 
-    def test_invalid_rank_binding_duplicate_ranks(self, temp_dir):
+    def test_invalid_rank_binding_duplicate_ranks(self, temp_dir, expect_error):
         """Test that duplicate ranks are rejected."""
         yaml_content = {
             "rank_bindings": [
@@ -378,7 +378,7 @@ class TestYAMLParsing:
         with open(yaml_file, "w") as f:
             yaml.dump(yaml_content, f)
 
-        with pytest.raises(ValueError, match="Duplicate ranks"):
+        with expect_error(ValueError, "Duplicate ranks"):
             parse_binding_config(yaml_file)
 
 
@@ -394,9 +394,9 @@ class TestPathResolution:
         assert resolved.is_absolute()
         assert resolved.exists()
 
-    def test_resolve_path_not_found(self, temp_dir):
+    def test_resolve_path_not_found(self, temp_dir, expect_error):
         """Test that missing paths raise ValueError."""
-        with pytest.raises(ValueError, match="not found"):
+        with expect_error(ValueError, "not found"):
             resolve_path(temp_dir / "nonexistent.txt", must_exist=True)
 
 
@@ -454,6 +454,23 @@ class TestMPICommandBuilding:
         assert "mpirun" in cmd[0] or cmd[0].endswith("mpirun")
         assert "--tag-output" in cmd
         assert "--bind-to" in cmd
+
+    def test_build_mpi_command_skips_tag_output_with_output_filename(self, sample_rank_binding_yaml, temp_dir):
+        """--output-filename implies per-rank files; do not force --tag-output (HNP OOM risk)."""
+        config = parse_binding_config(sample_rank_binding_yaml)
+        program = ["echo", "hello"]
+        out = temp_dir / "rank"
+        cmd = build_mpi_command(config, program, ["--output-filename", str(out)])
+        assert "--tag-output" not in cmd
+        assert "--output-filename" in cmd
+
+    def test_build_mpi_command_keeps_explicit_tag_output_with_output_filename(self, sample_rank_binding_yaml, temp_dir):
+        """User can still force tagging with --output-filename by passing --tag-output."""
+        config = parse_binding_config(sample_rank_binding_yaml)
+        program = ["echo", "hello"]
+        out = temp_dir / "rank"
+        cmd = build_mpi_command(config, program, ["--tag-output", "--output-filename", str(out)])
+        assert cmd.count("--tag-output") == 1
 
     def test_build_mpi_command_skips_bind_to_none_with_rankfile(self, sample_rank_binding_yaml, temp_dir):
         """Rankfile / map-by rankfile must not get default --bind-to none (Open MPI 5 + PRRTE conflict)."""
@@ -582,7 +599,7 @@ class TestRankfileInjection:
         assert args[0] == "--rankfile"
         assert args[1] == os.path.relpath("/other/path/rankfile", str(temp_dir.resolve()))
 
-    def test_build_rankfile_args_invalid_syntax(self, temp_dir):
+    def test_build_rankfile_args_invalid_syntax(self, temp_dir, expect_error):
         """Test build_rankfile_args raises ValueError for invalid syntax."""
         rankfile = temp_dir / "rankfile"
         rankfile.touch()
@@ -593,7 +610,7 @@ class TestRankfileInjection:
 
         fake_syntax = FakeSyntax()
 
-        with pytest.raises(ValueError, match="Unknown rankfile syntax"):
+        with expect_error(ValueError, "Unknown rankfile syntax"):
             build_rankfile_args(fake_syntax, rankfile, cwd=temp_dir)  # type: ignore
 
     def test_inject_rankfile_mpi_args(self, temp_dir):
@@ -828,7 +845,7 @@ class TestRunPhase1GenerateRankBindings:
         assert result_rank_bindings == rank_bindings_path
         assert result_rankfile == rankfile_path
 
-    def test_run_phase1_generate_rank_bindings_failure(self, temp_dir):
+    def test_run_phase1_generate_rank_bindings_failure(self, temp_dir, expect_error):
         """Test Phase 1 failure handling."""
         from unittest.mock import MagicMock
 
@@ -843,9 +860,8 @@ class TestRunPhase1GenerateRankBindings:
             mock_result.returncode = 1
             return mock_result
 
-        with pytest.raises(RuntimeError) as exc_info:
+        with expect_error(RuntimeError, "generate_rank_bindings failed"):
             run_phase1_generate_rank_bindings(mgd_path, hosts, output_dir, subprocess_run=mock_run)
-        assert "generate_rank_bindings failed" in str(exc_info.value)
 
 
 class TestNewModeFlow:

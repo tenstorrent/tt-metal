@@ -242,6 +242,35 @@ def mpi_args_specify_bind_to(mpi_args: Optional[List[str]]) -> bool:
     return False
 
 
+def mpi_args_contain_flag(mpi_args: Optional[List[str]], *flag_names: str) -> bool:
+    """True if ``mpi_args`` contains any of ``flag_names`` (exact token or ``name=...`` form)."""
+    if not mpi_args:
+        return False
+    equals_prefixes = tuple(f"{name}=" for name in flag_names)
+    for arg in mpi_args:
+        if arg in flag_names or arg.startswith(equals_prefixes):
+            return True
+    return False
+
+
+def should_inject_tag_output(mpi_args: Optional[List[str]]) -> bool:
+    """Whether tt-run should add ``--tag-output`` to the mpirun command.
+
+    Default is on for multi-rank debugging. Skip when:
+    - the user already passed ``--tag-output`` (avoid duplicates), or
+    - ``--output-filename`` is set: rank I/O goes to per-rank files, and tagging
+      still forces the HNP (``prterun``) to process every line — which can OOM
+      small CI runners (e.g. multihost-with-nfs at 4Gi with 64 ranks).
+    Pass ``--tag-output`` explicitly in ``--mpi-args`` to force tagging with
+    ``--output-filename``.
+    """
+    if mpi_args_contain_flag(mpi_args, "--tag-output", "-tag-output"):
+        return False
+    if mpi_args_contain_flag(mpi_args, "--output-filename", "-output-filename"):
+        return False
+    return True
+
+
 def mpi_args_contain_rankfile_options(mpi_args: Optional[List[str]]) -> bool:
     """True if ``mpi_args`` already specifies rankfile placement (token-aware, not substring-joined).
 
@@ -774,8 +803,9 @@ def build_generate_rank_bindings_mpi_cmd(
     mpi_launcher = get_mpi_launcher()
     cmd = [mpi_launcher]
 
-    # Always enable tagged output for easier debugging (prefixes output with rank info)
-    cmd.extend(["--tag-output"])
+    if should_inject_tag_output(mpi_args):
+        # Prefixes each line with rank info; skipped when --output-filename is set (see helper).
+        cmd.extend(["--tag-output"])
 
     parent_env_prefix = _parent_env_prefix_from_environ()
 
@@ -1829,8 +1859,9 @@ def build_mpi_command(
             f"{TT_RUN_PREFIX} Skipping default --bind-to none because rankfile placement is present in MPI args"
         )
 
-    # Always enable tagged output for easier debugging (prefixes output with rank info)
-    cmd.extend(["--tag-output"])
+    if should_inject_tag_output(effective_mpi_args):
+        # Prefixes each line with rank info; skipped when --output-filename is set (see helper).
+        cmd.extend(["--tag-output"])
 
     if effective_mpi_args:
         cmd.extend(effective_mpi_args)
@@ -2144,9 +2175,12 @@ def legacy_flow(
 
     \b
     Tagged Output:
-        tt-run always enables --tag-output, which prefixes each output line with rank
-        information (e.g., [1,0]<stdout>:). This makes it easier to identify which rank
-        produced each line of output when debugging distributed applications.
+        tt-run enables --tag-output by default (prefixes each line with rank info,
+        e.g. [1,0]<stdout>:). It is not injected when --mpi-args already contains
+        --tag-output or --output-filename. With --output-filename, per-rank files
+        already identify the source rank; skipping --tag-output avoids HNP
+        (prterun) buffering that can OOM small CI runners. Pass --tag-output
+        explicitly alongside --output-filename to keep tagged lines in those files.
 
     \b
     Multi-Host MPI Settings (default):
