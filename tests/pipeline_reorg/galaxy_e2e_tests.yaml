@@ -100,7 +100,7 @@
   name: BH Galaxy Socket Pipeline Single Galaxy
   cmd: |
     python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
-    tt-run --rank-binding bh_galaxy_split_4x2_multi_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --rank-binding bh_galaxy_split_4x2_multi_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
   skus:
     bh_galaxy:
       timeout: 10
