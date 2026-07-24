@@ -230,6 +230,10 @@ NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
 # Real KV migration issued by the producer (opt-in). See the module docstring's migration env block.
 ISSUE_MIGRATION = os.environ.get("PREFILL_PRODUCER_ISSUE_MIGRATION", "0") == "1"
 MIGRATION_DEST_ENDPOINT_ID = int(os.environ.get("PREFILL_MIGRATION_DEST_ENDPOINT_ID", "1"))
+# The producer's OWN endpoint id (prefill side). dest == src => loopback (src/dst share one table);
+# dest != src => cross-endpoint P->D (dst lives in the remote decode table). Drives which mapping
+# invariants apply in _resolve_migration_pairs.
+MIGRATION_SRC_ENDPOINT_ID = int(os.environ.get("PREFILL_MIGRATION_SRC_ENDPOINT_ID", "1"))
 MIGRATION_TIMEOUT_MS = int(os.environ.get("PREFILL_MIGRATION_TIMEOUT_MS", "3600000"))
 
 ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
@@ -958,7 +962,9 @@ def _attach_migration_client():
     return ml
 
 
-def _resolve_migration_pairs(stats: "RunStats", *, dst_slot_offset: int, num_slots: int = None) -> list:
+def _resolve_migration_pairs(
+    stats: "RunStats", *, dst_slot_offset: int, num_slots: int = None, cross_endpoint: bool = False
+) -> list:
     """Resolve the concrete ``(src_slot, dst_slot, real_len)`` migrations to perform, ONE list shared by
     both the migrate step and the DONE sentinel so the two can never drift apart.
 
@@ -981,7 +987,10 @@ def _resolve_migration_pairs(stats: "RunStats", *, dst_slot_offset: int, num_slo
     def check_dst(src: int, dst: int) -> None:
         if dst < 0:
             raise ValueError(f"migration dst slot {dst} (src {src}) is negative")
-        if num_slots is not None and dst >= num_slots:
+        # The bound below is the PREFILL table's slot count -- only meaningful for loopback (dst lives in
+        # this same table). Cross-endpoint dst lives in the DECODE table, whose size the producer doesn't
+        # know, so skip it there (a too-large dst still fails clearly device-side at migrate time).
+        if not cross_endpoint and num_slots is not None and dst >= num_slots:
             raise ValueError(
                 f"migration dst slot {dst} (src {src}) is out of range: the KV table has {num_slots} "
                 f"slot(s) [0,{num_slots}). Grow PREFILL_NUM_USERS or pick a smaller dst."
@@ -1033,8 +1042,11 @@ def _resolve_migration_pairs(stats: "RunStats", *, dst_slot_offset: int, num_slo
             f"migration has duplicate dst slot(s) {dup_dsts}: multiple pairs target the same slot, so only "
             f"the last survives while every pair would be validated. Give each migration a distinct dst."
         )
+    # src/dst overlap corrupts KV ONLY in loopback, where src and dst share one table so an earlier
+    # migration can overwrite a slot a later pair still reads. Cross-endpoint src (this prefill table) and
+    # dst (the decode table) are independent address spaces, so src N -> dst N is the normal case there.
     overlap = sorted(set(srcs) & set(dsts))
-    if overlap:
+    if overlap and not cross_endpoint:
         raise ValueError(
             f"migration src/dst overlap on slot(s) {overlap}: a slot is both a source and a destination, so "
             f"sequential migration would overwrite a slot a later pair still reads (e.g. swap 0:1,1:0 or "
@@ -1044,35 +1056,49 @@ def _resolve_migration_pairs(stats: "RunStats", *, dst_slot_offset: int, num_slo
     return triples
 
 
-def _issue_migrations(ml, triples: list, *, dest_endpoint_id: int, timeout_ms: int) -> int:
+def _issue_migrations(
+    ml, triples: list, *, dest_endpoint_id: int, timeout_ms: int, migration_layers: list = None
+) -> int:
     """Migrate each resolved ``(src_slot, dst_slot, real_len)`` triple's KV, blocking on completion.
 
-    Issues one single-shot migrate() over the whole [0, NUM_LAYERS) rectangle per pair. (The C++
-    PrefillScheduler streams per-layer migrations into a burst as each layer-ack lands, overlapping
-    prefill; the Python client binds no burst API, so this runs after the ack drain instead.)
+    ``migration_layers`` selects which layer rows move:
+      * None (default): one single-shot migrate() over the whole ``[0, NUM_LAYERS)`` layer range per
+        pair -- correct when the dest table is contiguous 0..N (loopback, or a full decode).
+      * A list (PREFILL_MIGRATION_LAYERS, e.g. [0, 3]): one migrate() PER listed layer, range
+        ``[L, L+1)``. Because migrate()'s layer range is symmetric (src row == dst row), this EXTRACTS
+        specific layers from the full contiguous SOURCE table (row i = layer i) into the SAME rows of a
+        layer-id-indexed dest -- the cross-endpoint P->D case where a reduced decode holds only {0,3}.
+        The list MUST match the decode side's gathered layer ids.
 
     dest_endpoint_id == the endpoint's own id => loopback (internal B worker); a different id =>
     cross-endpoint (needs the pairing/connect out of band). Must run while the runner is alive (before
     any SHUTDOWN sentinel): the endpoint reads source KV from device DRAM. Returns the number of pairs
     migrated."""
+    layer_ranges = [(int(l), int(l) + 1) for l in migration_layers] if migration_layers else [(0, NUM_LAYERS)]
     migrated = 0
     next_uuid = 1
     for src_slot, dst_slot, real_len in triples:
-        logger.info(f"[producer] MIGRATE slot {src_slot} -> {dst_slot} ep={dest_endpoint_id} pos=[0,{real_len})")
-        uuid = next_uuid
-        next_uuid += 1
-        token = ml.migrate(
-            uuid=uuid,
-            remote_endpoint_id=dest_endpoint_id,
-            src_slot=src_slot,
-            dst_slot=dst_slot,
-            layer_start=0,
-            layer_end_exclusive=NUM_LAYERS,
-            pos_start=0,
-            pos_end_exclusive=real_len,
+        for layer_start, layer_end in layer_ranges:
+            logger.info(
+                f"[producer] MIGRATE slot {src_slot} -> {dst_slot} ep={dest_endpoint_id} "
+                f"layers=[{layer_start},{layer_end}) pos=[0,{real_len})"
+            )
+            uuid = next_uuid
+            next_uuid += 1
+            token = ml.migrate(
+                uuid=uuid,
+                remote_endpoint_id=dest_endpoint_id,
+                src_slot=src_slot,
+                dst_slot=dst_slot,
+                layer_start=layer_start,
+                layer_end_exclusive=layer_end,
+                pos_start=0,
+                pos_end_exclusive=real_len,
+            )
+            ml.wait_complete(token, timeout_ms)  # self-polls when no poll thread is running
+        logger.success(
+            f"[producer] MIGRATE slot {src_slot} -> {dst_slot} complete ({len(layer_ranges)} layer range(s))"
         )
-        ml.wait_complete(token, timeout_ms)  # self-polls when no poll thread is running
-        logger.success(f"[producer] MIGRATE slot {src_slot} -> {dst_slot} complete")
         migrated += 1
     logger.info(f"[producer] migrations complete: {migrated} pair(s)")
     return migrated
@@ -1094,6 +1120,37 @@ def _write_migration_done_sentinel(triples: list) -> list:
             f.write(f"{s} {d}\n")
     logger.success(f"[producer] wrote migration DONE sentinel {done_file} ({len(pairs)} pair(s)): {pairs}")
     return pairs
+
+
+def _write_migration_handoff(triples: list, slot_traces: dict, pools_by_trace: dict) -> None:
+    """Write the JSON handoff the DECODE-side consumer reads (blaze run_decode_from_migrated): one entry
+    per migrated pair as ``{"slots": [{dst_slot, prompt_len, last_prompt_token}, ...]}``. ``first_token``
+    is intentionally omitted -- the decode side derives it from the migrated KV.
+
+    This exists for CROSS-ENDPOINT P->D: unlike loopback (where the prefill-side runner validates the KV
+    on-device and needs no prompt metadata), the destination galaxy has no way to know each slot's prompt
+    length / last token, so it cannot pick the decode start position without this sidecar. ``real_len``
+    (element 2 of each triple) is exactly the resident prompt length that was migrated, and the src slot's
+    last prompt token is ``pool[real_len - 1]`` of the trace the producer already loaded.
+
+    Gated on ``PREFILL_MIGRATION_HANDOFF_PATH``: unset => skip entirely, so the loopback / runner-validation
+    flow is byte-for-byte unaffected. Written atomically (tmp + os.replace) and BEFORE the DONE sentinel
+    (see the call site) so a consumer that wakes on DONE always finds a complete handoff."""
+    import json
+
+    handoff_path = os.environ.get("PREFILL_MIGRATION_HANDOFF_PATH", "")
+    if not handoff_path:
+        return
+    slots = []
+    for src, dst, real_len in triples:
+        pool = pools_by_trace[slot_traces[src]]
+        last_tok = int(pool[real_len - 1]) if 1 <= real_len <= len(pool) else int(pool[-1])
+        slots.append({"dst_slot": int(dst), "prompt_len": int(real_len), "last_prompt_token": last_tok})
+    tmp = handoff_path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({"slots": slots}, f)
+    os.replace(tmp, handoff_path)  # atomic: the decode side never reads a half-written handoff
+    logger.success(f"[producer] wrote migration handoff {handoff_path} ({len(slots)} slot(s)): {slots}")
 
 
 def main() -> None:
@@ -1144,6 +1201,24 @@ def main() -> None:
     ml = _attach_migration_client() if ISSUE_MIGRATION else None
     dst_slot_offset = int(os.environ.get("PREFILL_MIGRATION_DST_SLOT_OFFSET", str(cfg.num_users)))
 
+    # CROSS-ENDPOINT pairing (P->D): pair this prefill endpoint with the decode endpoint NOW -- right
+    # after attach, BEFORE the long prefill -- so the decode's PUBLISHER connect_to (which blocks
+    # waiting for us) rendezvous's promptly instead of risking a connect timeout during prefill.
+    # Without this, both endpoints self-loopback and migrate() aborts "No remote table found for
+    # destination". Convention matches the decode side + smoke test: lower id = PUBLISHER (accepts),
+    # higher = CONNECTOR (initiates); both sides derive ONE service_name from the id pair.
+    if ml is not None and MIGRATION_DEST_ENDPOINT_ID != MIGRATION_SRC_ENDPOINT_ID:
+        _pub = min(MIGRATION_SRC_ENDPOINT_ID, MIGRATION_DEST_ENDPOINT_ID)
+        _con = max(MIGRATION_SRC_ENDPOINT_ID, MIGRATION_DEST_ENDPOINT_ID)
+        _svc = f"pd-migration-ep{_pub}-ep{_con}"
+        _role = "PUBLISHER" if MIGRATION_SRC_ENDPOINT_ID == _pub else "CONNECTOR"
+        logger.info(
+            f"[producer] cross-endpoint pairing: connect_to(remote_ep={MIGRATION_DEST_ENDPOINT_ID}, "
+            f"role={_role}, service={_svc}) own_ep={MIGRATION_SRC_ENDPOINT_ID}"
+        )
+        ml.connect_to(remote_endpoint_id=MIGRATION_DEST_ENDPOINT_ID, role=_role, service_name=_svc)
+        logger.success(f"[producer] cross-endpoint pairing established with remote_ep={MIGRATION_DEST_ENDPOINT_ID}")
+
     # Per-slot prompts: each slot pushes tokens from (and is PCC'd against) its own trace. With no
     # PREFILL_PRODUCER_SLOT_TRACES this is one shared trace for all slots (unchanged behavior).
     slot_traces, slot_lengths, pools_by_trace = _resolve_slot_prompts(cfg)
@@ -1182,8 +1257,27 @@ def main() -> None:
     # (PREFILL_MIGRATION_PAIRS / --migrations) or, absent that, every resident src -> src+dst_slot_offset.
     if ml is not None:
         num_slots = kv_table.config().num_slots if kv_table is not None else None
-        triples = _resolve_migration_pairs(stats, dst_slot_offset=dst_slot_offset, num_slots=num_slots)
-        _issue_migrations(ml, triples, dest_endpoint_id=MIGRATION_DEST_ENDPOINT_ID, timeout_ms=MIGRATION_TIMEOUT_MS)
+        cross_endpoint = MIGRATION_DEST_ENDPOINT_ID != MIGRATION_SRC_ENDPOINT_ID
+        triples = _resolve_migration_pairs(
+            stats, dst_slot_offset=dst_slot_offset, num_slots=num_slots, cross_endpoint=cross_endpoint
+        )
+        # PREFILL_MIGRATION_LAYERS="0,3" => extract only those layers (one migrate per layer) into a
+        # layer-id-indexed decode table; unset => migrate the whole [0,NUM_LAYERS) range in one shot.
+        _ml_spec = os.environ.get("PREFILL_MIGRATION_LAYERS", "").strip()
+        migration_layers = [int(x) for x in _ml_spec.split(",") if x.strip()] if _ml_spec else None
+        if migration_layers:
+            logger.info(f"[producer] migrating layer subset {migration_layers} (one migrate per layer)")
+        _issue_migrations(
+            ml,
+            triples,
+            dest_endpoint_id=MIGRATION_DEST_ENDPOINT_ID,
+            timeout_ms=MIGRATION_TIMEOUT_MS,
+            migration_layers=migration_layers,
+        )
+        # Cross-endpoint P->D: write the decode-side JSON handoff (dst_slot/prompt_len/last_prompt_token)
+        # BEFORE the DONE sentinel, so a consumer that wakes on DONE always finds a complete handoff.
+        # No-op unless PREFILL_MIGRATION_HANDOFF_PATH is set => loopback/runner-validation flow unchanged.
+        _write_migration_handoff(triples, slot_traces, pools_by_trace)
         # Same handshake the llm-engine driver used: write the (src, dst) pairs; the runner validates.
         _write_migration_done_sentinel(triples)
 
