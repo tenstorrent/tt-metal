@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>KDA implementation field report</title>
+<style>
+:root{
+  --bg:#0a0d12;--panel:#10151d;--panel2:#151c26;--ink:#edf3f8;--muted:#95a3b3;
+  --line:#263241;--cyan:#41d9d1;--blue:#6da7ff;--green:#71df9c;--amber:#ffca72;
+  --red:#ff7676;--violet:#bc9cff;--idle:#202936;--paper:#dfe9f2;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,sans-serif}
+a{color:var(--cyan);text-decoration:none}a:hover{text-decoration:underline}
+button{font:inherit}
+.wrap{max-width:1480px;margin:auto;padding:28px}
+.eyebrow,.kicker{font:750 11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;letter-spacing:.14em;color:var(--cyan)}
+header{display:grid;grid-template-columns:1.35fr .65fr;gap:38px;border-top:5px solid var(--cyan);padding:28px 0 10px}
+h1{font:800 clamp(42px,7vw,96px)/.88 ui-sans-serif,system-ui;margin:12px 0 20px;letter-spacing:-.055em;max-width:950px}
+.lede{font-size:18px;max-width:860px;color:#c4d0dc}
+.meta{border-left:1px solid var(--line);padding-left:24px}
+.meta div{padding:9px 0;border-bottom:1px solid var(--line)}
+.meta b{display:block;color:var(--muted);font:700 10px/1.2 ui-monospace,monospace;text-transform:uppercase;letter-spacing:.1em}
+.guide-link{display:inline-flex;gap:8px;align-items:center;margin-top:14px;padding:9px 12px;border:1px solid var(--cyan);border-radius:4px}
+.controls{position:sticky;top:0;z-index:10;background:rgba(10,13,18,.94);backdrop-filter:blur(10px);display:flex;justify-content:space-between;gap:16px;align-items:center;border-block:1px solid var(--line);padding:11px 0;margin:24px 0 34px}
+.seg{display:flex;gap:5px;flex-wrap:wrap}.seg button,.filter button{color:var(--paper);background:transparent;border:1px solid #455367;padding:7px 11px;border-radius:3px;cursor:pointer}
+.seg button[aria-pressed=true],.filter button[aria-pressed=true]{background:var(--cyan);border-color:var(--cyan);color:#071012;font-weight:800}
+.fresh{color:var(--green)}.historical{color:var(--amber)}.correctness{color:var(--red)}
+.verdict{border:1px solid var(--line);background:linear-gradient(120deg,#101821,#10151d 60%);padding:22px;margin-bottom:18px;display:grid;grid-template-columns:140px 1fr;gap:20px}
+.verdict strong{font-size:18px}.verdict p{margin:5px 0 0;color:#b7c5d3}
+.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.card{background:var(--panel);border:1px solid var(--line);padding:17px;min-height:145px}
+.card .label{color:var(--muted);font:700 10px/1.2 ui-monospace,monospace;text-transform:uppercase;letter-spacing:.09em}
+.card .value{font-size:31px;font-weight:800;letter-spacing:-.04em;margin:14px 0 5px}
+.card .sub{color:#afbdca;font-size:12px}.meter{height:6px;background:#222d3a;margin-top:14px}.meter i{height:100%;display:block;background:var(--cyan)}
+section{margin:54px 0}h2{font-size:30px;letter-spacing:-.03em;margin:0 0 8px}h3{font-size:17px;margin:0 0 10px}
+.section-lede{color:#afbdca;max-width:930px;margin:0 0 22px}
+.panel{background:var(--panel);border:1px solid var(--line);padding:19px}
+.split{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.thirds{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.pipeline{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.stage{position:relative;background:var(--panel);border:1px solid var(--line);padding:15px;min-height:180px}
+.stage:not(:nth-child(4n))::after{content:"→";position:absolute;right:-13px;top:48%;z-index:2;color:var(--cyan);font-size:20px}
+.stage .n{color:var(--cyan);font:700 11px ui-monospace,monospace}.stage h3{margin-top:9px}.stage p{color:#aebdcc;font-size:12px}
+.shape{display:block;color:#d6e1eb;font:11px/1.45 ui-monospace,monospace;border-top:1px solid var(--line);padding-top:9px}
+.correction{border-left:4px solid var(--amber);background:#18181a;padding:13px 15px;margin:9px 0}.correction b{color:var(--amber)}
+.equation{font:15px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;background:#090c10;border:1px solid var(--line);padding:15px;overflow:auto;color:#dce7f1}
+.core-panels{display:grid;grid-template-columns:1fr 1fr;gap:16px}.core-panel{background:var(--panel);border:1px solid var(--line);padding:17px}
+.core-grid{display:grid;grid-template-columns:repeat(11,1fr);gap:3px;margin:16px 0}.core{aspect-ratio:1;border-radius:2px;background:var(--idle);display:grid;place-items:center;color:#061013;font:700 9px ui-monospace,monospace;min-width:13px}.core.prep{background:var(--cyan)}.core.scan{background:var(--violet);color:#0c0713}.core.mm{background:var(--blue)}.core.rs{background:var(--amber)}.core.idle{color:#6e7c8b}
+.legend{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:11px}.swatch{display:inline-block;width:9px;height:9px;margin-right:5px;border-radius:2px}
+.ownership{width:100%;border-collapse:collapse}.ownership th,.ownership td{padding:10px;border-bottom:1px solid var(--line);text-align:left}.ownership th{color:var(--muted);font:700 10px ui-monospace,monospace;text-transform:uppercase}.ownership code{color:#d7e2ed}
+.ribbon{display:grid;grid-template-columns:1fr auto 1.2fr auto 1.25fr;align-items:center;gap:10px;margin-top:16px}.ribbon .box{border:1px solid var(--line);background:var(--panel2);padding:14px;text-align:center}.arrow{color:var(--cyan);font-size:22px}
+.filter{display:flex;gap:6px;flex-wrap:wrap;margin:15px 0}
+.table-shell{overflow:auto;border:1px solid var(--line);max-height:620px}
+table.ledger{width:100%;border-collapse:collapse;background:var(--panel);min-width:1050px}
+.ledger th,.ledger td{padding:9px 10px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+.ledger th{position:sticky;top:0;background:#1b2430;color:#b5c3d1;z-index:2;cursor:pointer;font:700 10px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.05em}
+.ledger tr:hover td{background:#151d27}.badge{display:inline-block;border-radius:99px;padding:3px 7px;font:750 10px ui-monospace,monospace;text-transform:uppercase}.badge.retain{background:#153623;color:var(--green)}.badge.reject{background:#3a1d20;color:var(--red)}.badge.defer{background:#382e18;color:var(--amber)}
+.evidence{font:10px ui-monospace,monospace;color:var(--muted)}.num{text-align:right!important;white-space:nowrap}
+.chart{width:100%;height:auto;min-height:300px}.axis{stroke:#526173;stroke-width:1}.gridline{stroke:#263241;stroke-width:1;stroke-dasharray:3 4}.tick{fill:#91a0af;font:10px ui-monospace,monospace}.axis-label{fill:#b8c4d0;font:700 10px ui-monospace,monospace;text-transform:uppercase}.roofline{stroke:var(--cyan);stroke-width:3;fill:none}.roof-ceil{stroke:var(--red);stroke-width:2;stroke-dasharray:5 4}.point{cursor:crosshair;outline:none}.point circle{stroke:#071014;stroke-width:2}.point:hover circle,.point:focus circle{r:8}.tip{opacity:0;pointer-events:none}.point:hover .tip,.point:focus .tip{opacity:1}.tip rect{fill:#020407;stroke:#647489}.tip text{fill:white;font:10px ui-monospace,monospace;text-anchor:middle}
+.barrow{display:grid;grid-template-columns:145px 1fr 88px;gap:10px;align-items:center;margin:12px 0}.hbar{height:13px;background:#25303e}.hbar i{display:block;height:100%;background:var(--cyan)}.barrow strong{text-align:right}
+.callout{border:1px solid var(--line);padding:15px;background:#0c1118}.callout.good{border-left:4px solid var(--green)}.callout.warn{border-left:4px solid var(--amber)}.callout.bad{border-left:4px solid var(--red)}
+details{border-top:1px solid var(--line);padding:13px 0}summary{cursor:pointer;font-weight:750}pre{white-space:pre-wrap;background:#070a0e;border:1px solid #202a36;padding:14px;overflow:auto;color:#cdd9e4;font:11px/1.45 ui-monospace,monospace}
+.footnote{color:var(--muted);font-size:11px}.source-list li{margin:8px 0}
+footer{margin-top:60px;border-top:1px solid var(--line);padding:22px 0;color:var(--muted)}
+@media(max-width:1000px){header,.split,.core-panels{grid-template-columns:1fr}.cards,.pipeline{grid-template-columns:repeat(2,1fr)}.thirds{grid-template-columns:1fr}.stage:nth-child(2n)::after{display:none}.stage:not(:nth-child(2n))::after{display:block}.ribbon{grid-template-columns:1fr}.arrow{transform:rotate(90deg);text-align:center}}
+@media(max-width:600px){.wrap{padding:16px}.cards,.pipeline{grid-template-columns:1fr}.stage::after{display:none!important}.verdict{grid-template-columns:1fr}.core-grid{gap:2px}.core{font-size:0}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<main class="wrap">
+<header>
+  <div>
+    <div class="eyebrow">Implementation companion · source verified · Tracy backed</div>
+    <h1>KDA, from equations to silicon</h1>
+    <p class="lede">What the retained Kimi Linear KDA layer actually executes, why its physical distribution looks the way it does, which experiments earned their place, and what the rooflines say is still limiting it.</p>
+    <a class="guide-link" href="kda_standalone_technical_guide.html">← Open the standalone theory guide</a>
+  </div>
+  <div class="meta">
+    <div><b>Branch</b>mvasilijevic/codex/kimi-linear-kda</div>
+    <div><b>Profiled commit</b>491dddde4fc7 · clean tree</div>
+    <div><b>Current source audit</b>c1f53d7fa289 · runtime paths byte-identical</div>
+    <div><b>Hardware</b>LoudBox · 8× Blackhole · 1×8 mesh · FABRIC_1D</div>
+    <div><b>Fresh profile</b>2026-07-23 · ten measured replays after warm-up</div>
+  </div>
+</header>
+
+<div class="controls">
+  <div><span class="kicker">Scenario</span></div>
+  <div class="seg" id="scenario">
+    <button data-s="t640" aria-pressed="true">T = 640</button>
+    <button data-s="t5120" aria-pressed="false">T = 5,120</button>
+  </div>
+</div>
+
+<section id="verdict">
+  <div class="verdict"><div class="kicker">Verdict</div><div><strong>Head tensor-parallelism is the right outer decomposition; the ordered scan is the irreducible serial axis.</strong><p>Each of eight chips owns four complete heads and their FP32 state. Prep and epilogue fan out over head×chunk work. Scan uses four V-block workers per head. Only the final row-parallel output projection communicates.</p></div></div>
+  <div class="cards" id="cards"></div>
+</section>
+
+<section id="walkthrough">
+  <div class="kicker">01 · retained implementation</div>
+  <h2>The forward path that exists in source</h2>
+  <p class="section-lede">The theory guide derives the recurrence. This is the optimized execution contract, including the places where the implementation deliberately differs from the guide’s pedagogical path.</p>
+  <div class="pipeline">
+    <article class="stage"><span class="n">01</span><h3>Fused projection</h3><p>One TP-local GEMM emits Q, K, V, decay rank, direct output gate, and β. For aligned prefill, <code>g_b@g_a</code> is precomposed offline.</p><span class="shape">[1,T,2304] × [2304,2180]<br>→ [1,T,2180] BF16</span><a href="tt-metal.worktrees/kimi-linear-kda/models/experimental/kimi_delta_attention/tt/layer.py#L273">layer.py:273</a></article>
+    <article class="stage"><span class="n">02</span><h3>Native QKV convolution</h3><p>QKV and the three-token carry stay row-major through depthwise Conv1d. T&gt;640 switches to DRAM width slicing to fit L1.</p><span class="shape">carry [1,3,1536]<br>QKV [1,T,1536]</span><a href="tt-metal.worktrees/kimi-linear-kda/models/experimental/kimi_delta_attention/tt/layer.py#L163">layer.py:163</a></article>
+    <article class="stage"><span class="n">03</span><h3>Direct slices + decay</h3><p>Aligned Q/K/V remain flat. β gets sigmoid; the rank-128 decay projection folds bias, Softplus and negative exponential scale into its consuming FP32 multiply.</p><span class="shape">g = −exp(Alog) · softplus(r+b)<br>[1,T,512] FP32</span><a href="tt-metal.worktrees/kimi-linear-kda/models/experimental/kimi_delta_attention/tt/layer.py#L302">layer.py:302</a></article>
+    <article class="stage"><span class="n">04</span><h3>Chunk preparation</h3><p>For every head×32-token chunk, the kernel normalizes flat Q/K, builds decay-weighted K/V, A<sub>kk</sub>, A<sub>qk</sub>, and an exact causal inverse.</p><span class="shape">T⁻¹: [32,32] FP32<br>7 prepared tensors in DRAM</span><a href="tt-metal.worktrees/kimi-linear-kda/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_kda_prep.cpp#L374">chunk_kda_prep.cpp:374</a></article>
+    <article class="stage"><span class="n">05</span><h3>Exact doubling inverse</h3><p>The inverse is not the 128×128 recurrent state. Nilpotence reduces the 32×32 unit-triangular solve from 30 serial products to eight tile matmuls.</p><span class="shape">(I−N)⁻¹ = Πₚ(I+N²ᵖ)<br>p = 0…4</span><a href="tt-metal.worktrees/kimi-linear-kda/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_kda_prep.cpp#L209">chunk_kda_prep.cpp:209</a></article>
+    <article class="stage"><span class="n">06</span><h3>Ordered chunk scan</h3><p>Each scan worker walks all chunks in order, applying the inverse after <code>vβ − kd·S</code>, emitting output, and carrying the full FP32 state forward.</p><span class="shape">S [4,128,128] / chip<br>FP32, no collective</span><a href="tt-metal.worktrees/kimi-linear-kda/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_kda_scan.cpp#L125">chunk_kda_scan.cpp:125</a></article>
+    <article class="stage"><span class="n">07</span><h3>Fused gated RMS</h3><p>A dedicated kernel performs per-head RMS normalization, SiLU gate, multiply, and flat head concatenation in one program.</p><span class="shape">[4,T,128] FP32 + gate BF16<br>→ [1,T,512] FP32</span><a href="tt-metal.worktrees/kimi-linear-kda/models/experimental/kimi_delta_attention/tt/layer.py#L364">layer.py:364</a></article>
+    <article class="stage"><span class="n">08</span><h3>Matmul + reduce-scatter</h3><p>The row-parallel output GEMM overlaps a Ring reduce-scatter. An 8×8 matmul grid leaves rows 8–9 available; four sender workers begin at (0,8).</p><span class="shape">local [1,T,512] × [512,2304]<br>→ [1,T,288] / chip</span><a href="tt-metal.worktrees/kimi-linear-kda/models/experimental/kimi_delta_attention/tt/layer.py#L398">layer.py:398</a></article>
+  </div>
+
+  <div class="split" style="margin-top:18px">
+    <div class="panel">
+      <h3>The scan is the guide’s recurrence, factored</h3>
+      <div class="equation">Vnew = T⁻¹ · (vβ − kd · Sin)
+O    = qd · Sin + Aqk · Vnew
+Sout = Diag(dl) · Sin + kdecᵀ · Vnew</div>
+      <p class="footnote">The correction term is evaluated against the decayed incoming state, matching the token-ordered reference.</p>
+    </div>
+    <div class="panel">
+      <h3>Four guide-to-source corrections</h3>
+      <div class="correction"><b>Projection:</b> retained prefill uses one fused GEMM, not independent Q/K/V linears.</div>
+      <div class="correction"><b>Layout:</b> aligned Q/K/V stay flat; the prep reader addresses heads and chunks directly.</div>
+      <div class="correction"><b>β dtype:</b> sigmoid emits BF16; <code>chunk_kda</code> converts it to FP32 at the recurrence boundary.</div>
+      <div class="correction"><b>Routing:</b> there is no automatic T threshold. The caller selects <code>mode</code>; fused recurrent accepts exactly T=1.</div>
+    </div>
+  </div>
+</section>
+
+<section id="distribution">
+  <div class="kicker">02 · physical distribution</div>
+  <h2>Who owns what, and where it runs</h2>
+  <p class="section-lede">Sequence is replicated because splitting it would insert an ordered state handoff at every partition. Whole-head TP keeps recurrence and persistent state communication-free.</p>
+  <div class="ribbon">
+    <div class="box"><b>Replicated input</b><br><code>[1,T,2304]</code></div><div class="arrow">→</div>
+    <div class="box"><b>8 chips × 4 whole heads</b><br><code>Q/K/V [1,T,512]</code><br><code>S [1,4,128,128] FP32</code></div><div class="arrow">→</div>
+    <div class="box"><b>One communication boundary</b><br>row-parallel output GEMM + Ring RS<br><code>[1,T,288] / chip</code></div>
+  </div>
+  <div class="core-panels" style="margin-top:16px">
+    <article class="core-panel"><h3>Prep and gated RMS</h3><p id="prepText"></p><div class="core-grid" id="prepGrid"></div><div class="legend"><span><i class="swatch" style="background:var(--cyan)"></i>head×chunk item</span><span><i class="swatch" style="background:var(--idle)"></i>idle</span></div></article>
+    <article class="core-panel"><h3>Ordered scan</h3><p id="scanText"></p><div class="core-grid" id="scanGrid"></div><div class="legend"><span><i class="swatch" style="background:var(--violet)"></i>(head,V-block) worker</span><span><i class="swatch" style="background:var(--idle)"></i>idle</span></div></article>
+    <article class="core-panel"><h3>Output matmul</h3><p>8×8 compute grid. The extra physical rows are not “free compute”: they preserve overlap with the collective.</p><div class="core-grid" id="mmGrid"></div><div class="legend"><span><i class="swatch" style="background:var(--blue)"></i>matmul</span><span><i class="swatch" style="background:var(--idle)"></i>unused here</span></div></article>
+    <article class="core-panel"><h3>Ring reduce-scatter</h3><p>Two links × two ring directions × one sender each = four workers, allocated row-major from (0,8). Rows 8–9 are available to CCL; FP32 partials are mandatory.</p><div class="core-grid" id="rsGrid"></div><div class="legend"><span><i class="swatch" style="background:var(--amber)"></i>active RS sender</span><span><i class="swatch" style="background:var(--idle)"></i>not an RS sender</span></div></article>
+  </div>
+  <div class="panel" style="margin-top:16px">
+    <table class="ownership">
+      <thead><tr><th>Axis</th><th>Retained mapping</th><th>Why</th><th>Rejected alternative</th></tr></thead>
+      <tbody>
+        <tr><td>Heads</td><td>32 → 4 whole heads/chip</td><td>Independent recurrence and full local state</td><td>None needed</td></tr>
+        <tr><td>Sequence</td><td>Replicated on all 8 chips</td><td>No cross-partition state handoff</td><td>Sequence parallel: architecturally serializes scan boundaries</td></tr>
+        <tr><td>Prep / RMS</td><td id="prepMap"></td><td>Independent head×chunk work saturates available cores</td><td>Subdivide 32-token item: requires a K reduction; unmeasured</td></tr>
+        <tr><td>Scan</td><td>4 V blocks/head × 4 heads = 16 cores</td><td>H=4 is below measured mapping crossover</td><td>Full V/head: 148.009 µs vs 96.132 µs</td></tr>
+        <tr><td>Output</td><td>8×8 MM + 4 RS senders from (0,8)</td><td>Best measured compute/CCL overlap</td><td>Smaller MM grids and extra RS workers regress</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="decisions">
+  <div class="kicker">03 · optimization evidence</div>
+  <h2>What worked, what did not</h2>
+  <p class="section-lede">Fresh clean traces define the current endpoint. Historical A/B values are useful causal evidence but lack immutable manifests; correctness-only failures are never presented as timing comparisons.</p>
+  <div class="filter" id="statusFilter">
+    <button data-status="all" aria-pressed="true">All</button>
+    <button data-status="retain" aria-pressed="false">Retained</button>
+    <button data-status="reject" aria-pressed="false">Rejected</button>
+    <button data-status="defer" aria-pressed="false">Deferred</button>
+  </div>
+  <div class="table-shell">
+    <table class="ledger"><thead><tr><th data-sort="status">Verdict</th><th data-sort="scope">Scope</th><th data-sort="name">Experiment</th><th>Measured result</th><th data-sort="delta">Delta</th><th>Diagnosis</th><th>Evidence tier</th></tr></thead><tbody id="decisionRows"></tbody></table>
+  </div>
+</section>
+
+<section id="roofline">
+  <div class="kicker">04 · roofline diagnosis</div>
+  <h2>The target is mixed: compute is far away; CCL is essentially there</h2>
+  <p class="section-lede">Blackhole HiFi4 peak is 152.064 TFLOP/s per chip; DRAM is 512 GB/s, giving a 297 FLOP/byte ridge. The whole-layer compute percentage uses the 8-chip mesh peak and executed FLOPs. CCL uses the effective two-link payload roofline.</p>
+  <div class="split">
+    <article class="panel">
+      <h3>Kernel arithmetic-intensity roofline</h3>
+      <svg class="chart" viewBox="0 0 680 360" role="img" aria-label="Log roofline chart with arithmetic intensity on x axis and achieved teraflops per second on y axis">
+        <line x1="70" y1="300" x2="650" y2="300" class="axis"/><line x1="70" y1="300" x2="70" y2="25" class="axis"/>
+        <line x1="70" y1="240" x2="650" y2="240" class="gridline"/><line x1="70" y1="180" x2="650" y2="180" class="gridline"/><line x1="70" y1="120" x2="650" y2="120" class="gridline"/><line x1="70" y1="60" x2="650" y2="60" class="gridline"/>
+        <text x="63" y="304" class="tick" text-anchor="end">0.1</text><text x="63" y="244" class="tick" text-anchor="end">1</text><text x="63" y="184" class="tick" text-anchor="end">10</text><text x="63" y="124" class="tick" text-anchor="end">100</text><text x="63" y="64" class="tick" text-anchor="end">1000</text>
+        <text x="70" y="319" class="tick">1</text><text x="263" y="319" class="tick">10</text><text x="456" y="319" class="tick">100</text><text x="635" y="319" class="tick">1000</text>
+        <text x="355" y="348" class="axis-label" text-anchor="middle">Arithmetic intensity · FLOP / byte (log)</text><text x="15" y="165" class="axis-label" transform="rotate(-90 15 165)" text-anchor="middle">Performance · TFLOP/s (log)</text>
+        <polyline points="70,258 263,198 456,138 547,110 650,110" class="roofline"/>
+        <line x1="70" y1="110" x2="650" y2="110" class="roof-ceil"/>
+        <text x="505" y="101" class="tick">152.064 TF/s compute ceiling</text><text x="410" y="153" class="tick">512 GB/s memory roof</text><text x="535" y="132" class="tick">ridge ≈ 297 FLOP/B</text>
+        <g class="point" tabindex="0"><circle cx="273" cy="210" r="6" fill="var(--amber)"/><text x="282" y="205" class="tick">prep</text><g class="tip"><rect x="205" y="222" width="166" height="38" rx="3"/><text x="288" y="238">11.28 FLOP/B · 3.13 TF/s</text><text x="288" y="251">54.25% of DRAM roof</text></g></g>
+        <g class="point" tabindex="0"><circle cx="372" cy="174" r="6" fill="var(--violet)"/><text x="381" y="169" class="tick">scan</text><g class="tip"><rect x="294" y="187" width="179" height="38" rx="3"/><text x="383" y="203">32.46 FLOP/B · 12.92 TF/s</text><text x="383" y="216">77.73% of DRAM roof</text></g></g>
+      </svg>
+      <p class="footnote">Prep and scan sit far left of the ridge: more matrix-FPU peak does not move their roof. The useful levers are bytes, layout programs, state traffic, and parallel scheduling.</p>
+    </article>
+    <article class="panel">
+      <h3>Fresh whole-layer target utilization</h3>
+      <div id="utilBars"></div>
+      <div class="callout warn" style="margin-top:18px"><b>Interpretation.</b> At T=5,120, CCL is 39.74% against the 40% aspiration—within 0.26 percentage points. Compute is 12.06% against 60%, but that does not mean the layer is simply an inefficient GEMM: recurrence prep/scan are DRAM-bound, output is communication-bound, and the ordered scan cannot fan out across chunks.</div>
+      <div class="callout good" style="margin-top:10px"><b>Distribution consequence.</b> Preserve the 8×8 output matmul grid and two RS rows. Attempts to donate matmul cores to CCL made the fused boundary slower. On recurrence, keep 16 scan cores at H=4; adding synchronization to share reads also lost badly.</div>
+    </article>
+  </div>
+  <div class="thirds" style="margin-top:16px">
+    <div class="callout good"><h3>Compute target</h3><p>Executed work scales 8× from 67.594 to 540.752 GFLOP, while wall grows 5.59×. Utilization rises from 8.43% to 12.06%, so longer sequence amortizes fixed/layout overhead but does not change the memory-bound recurrence roof.</p></div>
+    <div class="callout good"><h3>CCL target</h3><p>Effective two-link utilization rises from 34.88% to 39.74%. The T=5,120 output boundary is the closest part of the layer to its aspirational target.</p></div>
+    <div class="callout warn"><h3>Serial axis</h3><p>Prep grows from 80 independent items to 640 and fills all 110 cores. Scan stays at 16 workers, each walking 20→160 chunks; its latency grows almost linearly with sequence.</p></div>
+  </div>
+</section>
+
+<section id="evidence">
+  <div class="kicker">05 · evidence and limits</div>
+  <h2>What is measured, what is inferred</h2>
+  <div class="split">
+    <div class="panel">
+      <h3>Fresh clean-trace authority</h3>
+      <ul class="source-list">
+        <li>T=640 CSV: 2,400 rows · SHA-256 <code>30b5d929…934cf1</code></li>
+        <li>T=5,120 CSV: 2,800 rows · SHA-256 <code>a8762fd8…96cba4</code></li>
+        <li>Ten measured replays, sessions 2–11; session 1 is warm-up.</li>
+        <li>Wall = slowest-device firmware span. Active = slowest-device active sum. Fused MMRS = device mean.</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>Validation boundary</h3>
+      <ul class="source-list">
+        <li>Recorded functional suite: <b>27/27 pass</b>.</li>
+        <li>Focused TP output / state / conv PCC: <b>0.999964 / 0.999903 / 0.999997</b>.</li>
+        <li>Flat T=64 chunk output / state PCC: <b>0.999994 / 0.999995</b>.</li>
+        <li>This report task was read-only with respect to kernels; hardware tests were not rerun.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="panel" style="margin-top:16px">
+    <details><summary>Trace commands and exact artifacts</summary><pre>PERF_TRACE=1 PERF_SEQ=640 PERF_REPS=10 python_env/bin/python3 -m tracy -p -r \
+  -o /tmp/kda_perf_report_491dddde4fc_t640_r10 --check-exit-code \
+  --op-support-count 10000 -t 5007 -a device_kernel_duration \
+  -m "pytest models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s"
+
+/tmp/kda_perf_report_491dddde4fc_t640_r10/reports/2026_07_23_14_08_30/
+  ops_perf_results_2026_07_23_14_08_30.csv
+
+PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 python_env/bin/python3 -m tracy -p -r \
+  -o /tmp/kda_perf_report_491dddde4fc_t5120_r10 --check-exit-code \
+  --op-support-count 10000 -t 5007 -a device_kernel_duration \
+  -m "pytest models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s"
+
+/tmp/kda_perf_report_491dddde4fc_t5120_r10/reports/2026_07_23_14_09_48/
+  ops_perf_results_2026_07_23_14_09_48.csv</pre></details>
+    <details><summary>Roofline assumptions</summary><pre>Per-chip HiFi4 compute peak:
+110 cores × 4,096 FLOP/cycle ÷ 4 × 1.35 GHz = 152.064 TFLOP/s
+
+DRAM roof: 512 GB/s
+Ridge point: 152.064 TFLOP/s ÷ 0.512 TB/s = 297 FLOP/byte
+
+Whole-mesh compute utilization:
+T640:  67.594 GFLOP / 659.459 µs / (8 × 152.064 TFLOP/s) = 8.43%
+T5120: 540.752 GFLOP / 3,686.650 µs / (8 × 152.064 TFLOP/s) = 12.06%
+
+CCL utilization uses payload bytes divided by typical-device fused MMRS duration,
+against the measured effective two-link roofline used by the branch analysis.</pre></details>
+    <details><summary>Important source caveat</summary><p>The comment at <a href="tt-metal.worktrees/kimi-linear-kda/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/chunk_gdn_phased_program_factory.cpp#L122">chunk_gdn_phased_program_factory.cpp:122</a> is stale: it says full-V is faster, but executable selection at lines 137–149 and the newer measured crossover retain V splitting for local head count ≤8. This report follows executable logic and measured data.</p></details>
+    <details><summary>Primary source index</summary>
+      <ul class="source-list">
+        <li><a href="tt-metal.worktrees/kimi-linear-kda/models/experimental/kimi_delta_attention/tt/layer.py#L258">Layer forward and state: layer.py:258–448</a></li>
+        <li><a href="tt-metal.worktrees/kimi-linear-kda/models/experimental/kimi_delta_attention/tt/weights.py#L75">Weight fusion and TP placement: weights.py:75–171</a></li>
+        <li><a href="tt-metal.worktrees/kimi-linear-kda/models/experimental/kimi_delta_attention/tt/recurrence.py#L115">Chunk adapter: recurrence.py:115–149</a></li>
+        <li><a href="tt-metal.worktrees/kimi-linear-kda/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_kda_prep.cpp#L209">WY prep and doubling inverse: chunk_kda_prep.cpp:209–508</a></li>
+        <li><a href="tt-metal.worktrees/kimi-linear-kda/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_kda_scan.cpp#L125">Ordered scan: chunk_kda_scan.cpp:125–181</a></li>
+        <li><a href="tt-metal.worktrees/kimi-linear-kda/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/chunk_gdn_phased_program_factory.cpp#L80">Core distribution: factory.cpp:80–167</a></li>
+        <li><a href="tt-metal.worktrees/kimi-linear-kda/models/demos/blackhole/qwen36/tt/tp_common.py#L434">Fused matmul/reduce-scatter: tp_common.py:434–481</a></li>
+      </ul>
+    </details>
+  </div>
+</section>
+
+<footer>Generated as a companion to <a href="kda_standalone_technical_guide.html">kda_standalone_technical_guide.html</a>. Headline latency is measured wall time, not a theoretical limit.</footer>
+</main>
+
+<script id="report-data" type="application/json">
+{
+  "scenarios":{
+    "t640":{"label":"T=640","tokens":640,"wall_us":659.459,"active_us":638.203,"graph_us":637.810,"compute":8.43,"ccl":34.88,"flops":67.594,"mmrs_us":147.966,"prep_items":80,"prep_cores":80,"prep_us":84.488,"scan_us":98.981,"rms_us":19.349,"chunks":20},
+    "t5120":{"label":"T=5,120","tokens":5120,"wall_us":3686.650,"active_us":3683.999,"graph_us":3679.658,"compute":12.06,"ccl":39.74,"flops":540.752,"mmrs_us":1039.042,"prep_items":640,"prep_cores":110,"prep_us":345.335,"scan_us":681.950,"rms_us":86.616,"chunks":160}
+  },
+  "decisions":[
+    {"status":"retain","scope":"Layer","name":"Trace + persistent constants","result":"5.749 → 1.263 ms","delta":-78.03,"reason":"Active kernels were already ≈1.21 ms; eager loss was host dispatch. Persistent tiles removed trace-time uploads.","tier":"historical measured"},
+    {"status":"retain","scope":"Conv","name":"Native depthwise Conv1d","result":"1.263 → 0.987 ms","delta":-21.85,"reason":"Removed shifted-window layout traffic and ≈274 µs active time/device.","tier":"historical measured"},
+    {"status":"retain","scope":"Layout","name":"Head-major output + flat gate","result":"0.987 → 0.689 ms","delta":-30.21,"reason":"Removed large transpose/reshape programs around recurrence and gating.","tier":"historical measured"},
+    {"status":"retain","scope":"Prep","name":"Exact doubling inverse","result":"688.842 → 640.889 µs","delta":-6.96,"reason":"Nilpotent factorization cut the 32×32 causal inverse from 30 to eight tile matmuls.","tier":"historical measured"},
+    {"status":"retain","scope":"Scan","name":"Adaptive V split at local H=4","result":"148.009 → 96.132 µs","delta":-35.05,"reason":"Four V-block workers/head win below the measured H8↔H16 crossover.","tier":"historical measured"},
+    {"status":"retain","scope":"Projection","name":"Fused input projection","result":"0.890 → 0.874 ms","delta":-1.76,"reason":"One grouped GEMM removed a launch and 51.3 µs of matmul; direct slices contain the wider result.","tier":"historical measured"},
+    {"status":"retain","scope":"Conv","name":"Row-major convolution flow/cache","result":"0.840 → 0.699 ms","delta":-16.85,"reason":"Removed internal untilize/tilize round trips; kept three-token carry row-major.","tier":"historical measured"},
+    {"status":"retain","scope":"Gate","name":"Precompose g_b@g_a","result":"698.758 → 690.719 µs","delta":-1.15,"reason":"Trading +8.389 GFLOP for a wider, better-utilized fused input GEMM beat the skinny rank-128 gate GEMM.","tier":"historical measured"},
+    {"status":"retain","scope":"Epilogue","name":"Fused gated RMS","result":"679.336 → 667.330 µs","delta":-1.77,"reason":"One local program replaced RMSNorm, gate multiply, head concat, and layout conversion.","tier":"historical measured"},
+    {"status":"retain","scope":"Decay","name":"Fused Softplus-scale multiply","result":"667.330 → 658.960 µs","delta":-1.25,"reason":"Removed one serialized unary program while retaining FP32 decay output.","tier":"historical measured"},
+    {"status":"retain","scope":"Long seq","name":"DRAM width-sliced Conv1d","result":"L1 failure → 3.687 ms","delta":0,"reason":"T5120 requested 2,470,848 B/core against 1,572,864 B available; slicing is an enabling correctness/capacity fix.","tier":"fresh clean trace"},
+    {"status":"reject","scope":"Prep","name":"Remove startup reader burst","result":"328.830 → 359.624 µs","delta":9.37,"reason":"The apparently redundant reads pace the reader burst; removing them worsened prep.","tier":"historical measured"},
+    {"status":"reject","scope":"Fidelity","name":"HiFi2 / LoFi","result":"647.907 → 663.605 µs; LoFi PCC 0.998563","delta":2.42,"reason":"HiFi2 was slower; LoFi missed the 0.999 accuracy threshold. HiFi4 retained.","tier":"historical + correctness"},
+    {"status":"reject","scope":"Prep","name":"Fast TF32 row reducer","result":"315.826 → 325.847 µs","delta":3.17,"reason":"The nominally faster reducer lost on this small FP32 row reduction.","tier":"historical measured"},
+    {"status":"reject","scope":"Scan","name":"Share common inputs across V workers","result":"97.387 → 145.942 µs","delta":49.86,"reason":"Semaphore synchronization and L1 fan-out cost more than four independent DRAM readers/head.","tier":"historical measured"},
+    {"status":"reject","scope":"Output","name":"Smaller matmul grids","result":"8×8 166.069; 8×7 172.950; 8×6 192.304 µs","delta":4.14,"reason":"Lost matmul parallelism outweighed improved CCL worker placement.","tier":"historical measured"},
+    {"status":"reject","scope":"Output","name":"1×3 output subblock","result":"146.778 → 147.706 µs","delta":0.63,"reason":"Wider subblocks desynchronized matmul/reduce-scatter overlap.","tier":"historical measured"},
+    {"status":"reject","scope":"Output","name":"BF16 partials","result":"PCC 0.004862 < 0.98","delta":0,"reason":"Traffic reduction was numerically unusable; no valid perf comparison exists.","tier":"correctness-only rejection"},
+    {"status":"reject","scope":"CCL","name":"Two workers per link","result":"151.333 → 166.374 µs","delta":9.94,"reason":"Four CCL rows forced an 8×6 matmul grid; compute loss exceeded CCL gain.","tier":"historical measured"},
+    {"status":"reject","scope":"Conv","name":"Fuse SiLU in Conv1d packer","result":"PCC 0.884267","delta":0,"reason":"Generic packer activation was not numerically equivalent in this path; restored standalone SiLU passed.","tier":"correctness-only rejection"},
+    {"status":"reject","scope":"β","name":"Fuse sigmoid/typecast","result":"658.960 → 690.497 µs","delta":4.79,"reason":"Active time stayed flat; a ≈31 µs serialized scheduling gap appeared.","tier":"historical measured"},
+    {"status":"defer","scope":"Prep","name":"Split one 32-token work item","result":"Not measured","delta":0,"reason":"Could use T640’s 30 idle cores but requires a K reduction inside each item.","tier":"architectural hypothesis"},
+    {"status":"defer","scope":"CCL","name":"Dedicated CCL reservation","result":"Not measured end-to-end","delta":0,"reason":"Reserve cores only after demonstrating useful overlap across adjacent layer boundaries.","tier":"architectural hypothesis"},
+    {"status":"reject","scope":"TP","name":"Sequence parallel recurrence","result":"Architecturally rejected","delta":0,"reason":"Every sequence partition needs ordered FP32 state handoff; head TP avoids recurrence collectives.","tier":"source-derived"}
+  ]
+}
+</script>
+<script>
+const DATA=JSON.parse(document.getElementById("report-data").textContent);
+let scenario="t640", status="all", sortKey="status", sortAsc=true;
+const $=id=>document.getElementById(id);
+const fmt=n=>n.toLocaleString(undefined,{maximumFractionDigits:3});
+function card(label,value,sub,pct=0){return `<div class="card"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div><div class="meter"><i style="width:${Math.min(100,pct)}%"></i></div></div>`}
+function renderCards(){
+  const d=DATA.scenarios[scenario];
+  $("cards").innerHTML=
+    card("Measured wall latency",`${fmt(d.wall_us)} µs`,`slowest-device firmware span`,d.wall_us/40)+
+    card("Mesh compute",`${d.compute.toFixed(2)}%`,`target 60% · ${fmt(d.flops)} GFLOP executed`,d.compute/60*100)+
+    card("Effective CCL",`${d.ccl.toFixed(2)}%`,`target 40% · fused MMRS ${fmt(d.mmrs_us)} µs`,d.ccl/40*100)+
+    card("Active / wall",`${(d.active_us/d.wall_us*100).toFixed(2)}%`,`active ${fmt(d.active_us)} µs · ledger ${fmt(d.graph_us)} µs`,d.active_us/d.wall_us*100);
+}
+function grid(id,kind,count,labelFn){
+  const el=$(id);el.innerHTML="";
+  for(let i=0;i<110;i++){const c=document.createElement("div");c.className=`core ${i<count?kind:"idle"}`;c.title=i<count?labelFn(i):`core ${i}: idle for this phase`;c.textContent=i<count?(labelFn(i).match(/\d+/)||[""])[0]:"";el.appendChild(c)}
+}
+function physicalGrid(id,kind,predicate,labelFn){
+  const el=$(id);el.innerHTML="";
+  for(let y=0;y<10;y++)for(let x=0;x<11;x++){
+    const active=predicate(x,y),c=document.createElement("div");
+    c.className=`core ${active?kind:"idle"}`;c.title=active?labelFn(x,y):`core (${x},${y}): inactive for this phase`;
+    c.textContent=active?(kind==="rs"?"R":""):"";el.appendChild(c);
+  }
+}
+function renderDistribution(){
+  const d=DATA.scenarios[scenario];
+  grid("prepGrid","prep",d.prep_cores,i=>d.prep_items<=110?`core ${i}: 1 work item`:`core ${i}: ${i<90?6:5} work items`);
+  grid("scanGrid","scan",16,i=>`core ${i}: head ${Math.floor(i/4)}, V block ${i%4}, scans ${d.chunks} chunks`);
+  physicalGrid("mmGrid","mm",(x,y)=>x<8&&y<8,(x,y)=>`core (${x},${y}): 8×8 matmul worker`);
+  physicalGrid("rsGrid","rs",(x,y)=>y===8&&x<4,(x,y)=>`core (${x},${y}): Ring RS sender`);
+  $("prepText").textContent=d.prep_items<=110?`${d.prep_items} independent head×chunk items map one-per-core; 30 cores are idle in this phase.`:`${d.prep_items} items fill 110 cores: the first 90 take six each, the last 20 take five.`;
+  $("scanText").textContent=`16 workers remain fixed: four V blocks × four heads. Each worker walks all ${d.chunks} chunks in order.`;
+  $("prepMap").textContent=d.prep_items<=110?"80 items → 80 cores":"640 items → 110 cores (90×6 + 20×5)";
+}
+function renderUtil(){
+  const d=DATA.scenarios[scenario];
+  $("utilBars").innerHTML=[
+    ["Compute",d.compute,60],
+    ["CCL",d.ccl,40],
+    ["Active/wall",d.active_us/d.wall_us*100,100]
+  ].map(([n,v,t])=>`<div class="barrow"><span>${n}</span><div class="hbar"><i style="width:${Math.min(100,v/t*100)}%"></i></div><strong>${v.toFixed(2)} / ${t}%</strong></div>`).join("");
+}
+function renderDecisions(){
+  const rank={retain:0,reject:1,defer:2};
+  let rows=DATA.decisions.filter(d=>status==="all"||d.status===status);
+  rows=[...rows].sort((a,b)=>{
+    let av=sortKey==="status"?rank[a.status]:a[sortKey],bv=sortKey==="status"?rank[b.status]:b[sortKey];
+    if(typeof av==="string")return (sortAsc?1:-1)*av.localeCompare(bv);
+    return (sortAsc?1:-1)*(av-bv);
+  });
+  $("decisionRows").innerHTML=rows.map(d=>`<tr><td><span class="badge ${d.status}">${d.status}</span></td><td>${d.scope}</td><td><b>${d.name}</b></td><td>${d.result}</td><td class="num">${d.delta===0?"—":`${d.delta>0?"+":""}${d.delta.toFixed(2)}%`}</td><td>${d.reason}</td><td class="evidence ${d.tier.startsWith("fresh")?"fresh":d.tier.startsWith("correctness")?"correctness":"historical"}">${d.tier}</td></tr>`).join("");
+}
+function renderAll(){renderCards();renderDistribution();renderUtil();renderDecisions()}
+document.querySelectorAll("#scenario button").forEach(b=>b.onclick=()=>{
+  scenario=b.dataset.s;document.querySelectorAll("#scenario button").forEach(x=>x.setAttribute("aria-pressed",x===b));renderAll();
+});
+document.querySelectorAll("#statusFilter button").forEach(b=>b.onclick=()=>{
+  status=b.dataset.status;document.querySelectorAll("#statusFilter button").forEach(x=>x.setAttribute("aria-pressed",x===b));renderDecisions();
+});
+document.querySelectorAll(".ledger th[data-sort]").forEach(h=>h.onclick=()=>{
+  if(sortKey===h.dataset.sort)sortAsc=!sortAsc;else{sortKey=h.dataset.sort;sortAsc=true}renderDecisions();
+});
+renderAll();
+</script>
+</body>
+</html>
