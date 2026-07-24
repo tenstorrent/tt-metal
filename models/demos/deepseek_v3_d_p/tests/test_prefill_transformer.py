@@ -511,7 +511,7 @@ def run_model(
             torch.manual_seed(0)
             first_token_id, _, tt_intermediates = transformer(
                 tt_tokens,
-                tt_kvpe_cache.storage,
+                tt_kvpe_cache,
                 actual_isl=number_of_non_padded_tokens,
                 return_intermediates=True,
                 read_profiler=False,
