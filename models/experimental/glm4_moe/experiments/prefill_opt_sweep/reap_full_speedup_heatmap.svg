@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="420" viewBox="0 0 720 420">
+  <rect width="720" height="420" fill="#fafafa"/>
+  <text x="360" y="28" text-anchor="middle" font-family="DejaVu Sans,Helvetica,Arial" font-size="15" font-weight="700">Speedup (old/new)  REAP batched</text>
+  <text x="360" y="48" text-anchor="middle" font-family="DejaVu Sans,Helvetica,Arial" font-size="11" fill="#555">blank = missing old or OOM new</text>
+  <!-- cells: rows ISL 128,512,1024,2048,4096 ; cols B 4,8,16,32 -->
+  <!-- values: 5.62,5.58,11.94,34.03 / 15.83,35.92,72.79, / 34.82,74.53,153.72, / 74.22,155.51,,OOM / ,,OOM,OOM -->
+  <g font-family="DejaVu Sans,Helvetica,Arial" font-size="11">
+    <text x="200" y="78" text-anchor="middle">B=4</text>
+    <text x="320" y="78" text-anchor="middle">B=8</text>
+    <text x="440" y="78" text-anchor="middle">B=16</text>
+    <text x="560" y="78" text-anchor="middle">B=32</text>
+    <text x="120" y="120" text-anchor="end">ISL 128</text>
+    <text x="120" y="180" text-anchor="end">512</text>
+    <text x="120" y="240" text-anchor="end">1024</text>
+    <text x="120" y="300" text-anchor="end">2048</text>
+    <text x="120" y="360" text-anchor="end">4096</text>
+  </g>
+  <!-- row 128 -->
+  <rect x="140" y="90" width="110" height="50" fill="#3b6e8f"/><text x="195" y="120" text-anchor="middle" fill="#fff" font-family="DejaVu Sans,Helvetica,Arial" font-size="13">5.6×</text>
+  <rect x="260" y="90" width="110" height="50" fill="#3b6e8f"/><text x="315" y="120" text-anchor="middle" fill="#fff" font-family="DejaVu Sans,Helvetica,Arial" font-size="13">5.6×</text>
+  <rect x="380" y="90" width="110" height="50" fill="#2f7a5b"/><text x="435" y="120" text-anchor="middle" fill="#fff" font-family="DejaVu Sans,Helvetica,Arial" font-size="13">11.9×</text>
+  <rect x="500" y="90" width="110" height="50" fill="#1f8a4c"/><text x="555" y="120" text-anchor="middle" fill="#fff" font-family="DejaVu Sans,Helvetica,Arial" font-size="13">34.0×</text>
+  <!-- row 512 -->
+  <rect x="140" y="150" width="110" height="50" fill="#2a8a62"/><text x="195" y="180" text-anchor="middle" fill="#fff" font-family="DejaVu Sans,Helvetica,Arial" font-size="13">15.8×</text>
+  <rect x="260" y="150" width="110" height="50" fill="#1f8a4c"/><text x="315" y="180" text-anchor="middle" fill="#fff" font-family="DejaVu Sans,Helvetica,Arial" font-size="13">35.9×</text>
+  <rect x="380" y="150" width="110" height="50" fill="#148a3a"/><text x="435" y="180" text-anchor="middle" fill="#fff" font-family="DejaVu Sans,Helvetica,Arial" font-size="13">72.8×</text>
+  <rect x="500" y="150" width="110" height="50" fill="#e8e8e8"/><text x="555" y="180" text-anchor="middle" fill="#666" font-family="DejaVu Sans,Helvetica,Arial" font-size="12">new only</text>
+  <!-- row 1024 -->
+  <rect x="140" y="210" width="110" height="50" fill="#1f8a4c"/><text x="195" y="240" text-anchor="middle" fill="#fff" font-family="DejaVu Sans,Helvetica,Arial" font-size="13">34.8×</text>
+  <rect x="260" y="210" width="110" height="50" fill="#148a3a"/><text x="315" y="240" text-anchor="middle" fill="#fff" font-family="DejaVu Sans,Helvetica,Arial" font-size="13">74.5×</text>
+  <rect x="380" y="210" width="110" height="50" fill="#0d7a28"/><text x="435" y="240" text-anchor="middle" fill="#fff" font-family="DejaVu Sans,Helvetica,Arial" font-size="13">153.7×</text>
+  <rect x="500" y="210" width="110" height="50" fill="#e8e8e8"/><text x="555" y="240" text-anchor="middle" fill="#666" font-family="DejaVu Sans,Helvetica,Arial" font-size="12">new only</text>
+  <!-- row 2048 -->
+  <rect x="140" y="270" width="110" height="50" fill="#148a3a"/><text x="195" y="300" text-anchor="middle" fill="#fff" font-family="DejaVu Sans,Helvetica,Arial" font-size="13">74.2×</text>
+  <rect x="260" y="270" width="110" height="50" fill="#0d7a28"/><text x="315" y="300" text-anchor="middle" fill="#fff" font-family="DejaVu Sans,Helvetica,Arial" font-size="13">155.5×</text>
+  <rect x="380" y="270" width="110" height="50" fill="#e8e8e8"/><text x="435" y="300" text-anchor="middle" fill="#666" font-family="DejaVu Sans,Helvetica,Arial" font-size="12">new only</text>
+  <rect x="500" y="270" width="110" height="50" fill="#f0c0c0"/><text x="555" y="300" text-anchor="middle" fill="#922" font-family="DejaVu Sans,Helvetica,Arial" font-size="12">OOM</text>
+  <!-- row 4096 -->
+  <rect x="140" y="330" width="110" height="50" fill="#e8e8e8"/><text x="195" y="360" text-anchor="middle" fill="#666" font-family="DejaVu Sans,Helvetica,Arial" font-size="12">new only</text>
+  <rect x="260" y="330" width="110" height="50" fill="#e8e8e8"/><text x="315" y="360" text-anchor="middle" fill="#666" font-family="DejaVu Sans,Helvetica,Arial" font-size="12">new only</text>
+  <rect x="380" y="330" width="110" height="50" fill="#f0c0c0"/><text x="435" y="360" text-anchor="middle" fill="#922" font-family="DejaVu Sans,Helvetica,Arial" font-size="12">OOM</text>
+  <rect x="500" y="330" width="110" height="50" fill="#f0c0c0"/><text x="555" y="360" text-anchor="middle" fill="#922" font-family="DejaVu Sans,Helvetica,Arial" font-size="12">OOM</text>
+</svg>
