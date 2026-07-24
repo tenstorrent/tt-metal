@@ -16,8 +16,7 @@ _SDPA_Q_CHUNK_MAIN = 128
 _SDPA_K_CANDIDATES_MAIN = (256, 128)
 _SDPA_Q_CHUNKS_FLEX = (256, 128, 64, 32)
 _SDPA_K_CHUNKS_FLEX = (256, 128, 64, 32)
-# B1/S512 sweep (k_chunk x grid) showed q=32, k=512, grid=8x8 is the winner:
-# 38.7 us/call vs prod (q=128, k=128, grid=11x10) ~43 us/call -- 10% faster.
+# B1/S512 SDPA chunking.
 _SDPA_B1S512_Q_CHUNK = 64
 _SDPA_B1S512_K_CHUNK = 512
 
@@ -150,6 +149,153 @@ class BgeM3Attention(LightweightModule):
         self.load_device_weights()
 
         batch_size, _, seq_len, _ = hidden_states.shape
+
+        assert seq_len > 0, "seq_len must be positive"
+        assert seq_len % 32 == 0, "seq_len must be divisible by 32 (tile height)"
+        if seq_len > 128:
+            assert seq_len % 128 == 0, "seq_len must be divisible by 128 when seq_len > 128"
+
+        qkv_core_grid = None if self.config.qkv_prg_config is not None else self.config.core_grid
+        output_core_grid = None if self.config.output_prg_config is not None else self.config.core_grid
+
+        if seq_len > _MAX_QKV_MM_CHUNK_SEQ_LEN:
+            if seq_len % _MAX_QKV_MM_CHUNK_SEQ_LEN != 0:
+                raise ValueError(f"seq_len {seq_len} must be divisible by {_MAX_QKV_MM_CHUNK_SEQ_LEN}")
+            hidden_states = ttnn.reshape(
+                hidden_states,
+                [batch_size, seq_len // _MAX_QKV_MM_CHUNK_SEQ_LEN, _MAX_QKV_MM_CHUNK_SEQ_LEN, -1],
+            )
+
+        # Stage 1: fused QKV projection
+        qkv_fused = ttnn.linear(
+            hidden_states,
+            self.wqkv,
+            memory_config=self.config.qkv_memcfg,
+            dtype=self.config.qkv_dtype,
+            bias=self.bqkv,
+            program_config=self.config.qkv_prg_config,
+            compute_kernel_config=self.config.qkv_compute_kernel_cfg,
+            core_grid=qkv_core_grid,
+        )
+        if seq_len > _MAX_QKV_MM_CHUNK_SEQ_LEN:
+            qkv_fused = ttnn.reshape(qkv_fused, [batch_size, 1, seq_len, -1])
+
+        # Stage 2: split Q/K/V heads (fused head-split kernel on the S512 shapes).
+        if self.config.max_batch_size in (1, 8, 16, 32) and self.config.max_seq_len == 512:
+            from models.demos.wormhole.bge_m3.tt.custom_ops.fused_qkv_heads.op import bge_qkv_heads_headsplit
+
+            head_groups = 4 if self.config.max_batch_size in (8, 16, 32) else self.config.num_heads
+            q, k, v = bge_qkv_heads_headsplit(
+                qkv_fused,
+                num_heads=self.config.num_heads,
+                head_groups=head_groups,
+                out_memcfg=self.config.create_heads_memcfg,
+            )
+        else:
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                qkv_fused,
+                num_heads=self.config.num_heads,
+                num_kv_heads=self.config.num_heads,
+                transpose_k_heads=False,
+                memory_config=self.config.create_heads_memcfg,
+            )
+        ttnn.deallocate(qkv_fused)
+
+        # Stage 3: optional cast to score dtype
+        if self.config.score_dtype is not None and q.dtype != self.config.score_dtype:
+            q_cast = ttnn.typecast(q, dtype=self.config.score_dtype)
+            ttnn.deallocate(q)
+            q = q_cast
+        if self.config.score_dtype is not None and k.dtype != self.config.score_dtype:
+            k_cast = ttnn.typecast(k, dtype=self.config.score_dtype)
+            ttnn.deallocate(k)
+            k = k_cast
+        if self.config.score_dtype is not None and v.dtype != self.config.score_dtype:
+            v_cast = ttnn.typecast(v, dtype=self.config.score_dtype)
+            ttnn.deallocate(v)
+            v = v_cast
+
+        # Stage 3b: mask preparation (dense [B, 1, S, S])
+        sdpa_mask = attention_mask
+        if sdpa_mask is not None:
+            if len(sdpa_mask.shape) != 4:
+                raise ValueError(f"attention_mask must have rank 4 [B, 1, S, S], got shape={sdpa_mask.shape}")
+            if (
+                sdpa_mask.shape[0] != batch_size
+                or sdpa_mask.shape[1] != 1
+                or sdpa_mask.shape[2] != seq_len
+                or sdpa_mask.shape[3] != seq_len
+            ):
+                raise ValueError(
+                    f"attention_mask shape must be [{batch_size}, 1, {seq_len}, {seq_len}], got {sdpa_mask.shape}"
+                )
+            if self.config.score_dtype is not None and sdpa_mask.dtype != self.config.score_dtype:
+                sdpa_mask = ttnn.typecast(sdpa_mask, dtype=self.config.score_dtype)
+            if sdpa_mask.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+                sdpa_mask = ttnn.to_memory_config(sdpa_mask, ttnn.DRAM_MEMORY_CONFIG)
+
+        # Stage 4: SDPA (chunk sizes depend on runtime seq_len)
+        sdpa_program_config = _sdpa_program_config(seq_len, self.config.mesh_device, batch_size=batch_size)
+        context = ttnn.transformer.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            is_causal=False,
+            attn_mask=sdpa_mask,
+            scale=self.config.attention_scale,
+            program_config=sdpa_program_config,
+            compute_kernel_config=self.config.score_compute_kernel_cfg,
+            memory_config=self.config.score_memcfg,
+        )
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
+
+        # Stage 5: concat heads
+        if self.config.max_batch_size in (1, 8, 16, 32) and self.config.max_seq_len == 512:
+            from models.demos.wormhole.bge_m3.tt.custom_ops.fused_concat_heads.op import bge_concat_heads_headsplit
+
+            concat_head_groups = 16 if self.config.max_batch_size in (8, 16) else 4
+            context = bge_concat_heads_headsplit(
+                context, head_groups=concat_head_groups, out_memcfg=self.config.output_memcfg
+            )
+        else:
+            context = ttnn.experimental.nlp_concat_heads(context, memory_config=self.config.output_memcfg)
+
+        if seq_len > _MAX_WO_MM_CHUNK_SEQ_LEN:
+            if seq_len % _MAX_WO_MM_CHUNK_SEQ_LEN != 0:
+                raise ValueError(f"seq_len {seq_len} must be divisible by {_MAX_WO_MM_CHUNK_SEQ_LEN}")
+            context = ttnn.reshape(
+                context, [batch_size, seq_len // _MAX_WO_MM_CHUNK_SEQ_LEN, _MAX_WO_MM_CHUNK_SEQ_LEN, -1]
+            )
+
+        # Stage 6: output projection
+        output = ttnn.linear(
+            context,
+            self.wo_weight,
+            memory_config=self.config.output_memcfg,
+            dtype=self.config.output_dtype,
+            bias=self.wo_bias,
+            program_config=self.config.output_prg_config,
+            compute_kernel_config=self.config.output_compute_kernel_cfg,
+            core_grid=output_core_grid,
+        )
+        ttnn.deallocate(context)
+
+        if seq_len > _MAX_WO_MM_CHUNK_SEQ_LEN:
+            output = ttnn.reshape(output, [batch_size, 1, seq_len, -1])
+
+        return output
+
+
+class BgeM3AttentionJit(BgeM3Attention):
+    """DP S8192 serving attention: QKV scatter, encoder SDPA, query head-fold,
+    BF4 K/V, and compact valid-length masking."""
+
+    def forward(self, hidden_states: ttnn.Tensor, attention_mask: ttnn.Tensor | None = None) -> ttnn.Tensor:
+        self.load_device_weights()
+
+        batch_size, _, seq_len, _ = hidden_states.shape
         has_compact_valid_lengths = (
             attention_mask is not None and len(attention_mask.shape) == 2 and attention_mask.shape[1] == 1
         )
@@ -201,8 +347,7 @@ class BgeM3Attention(LightweightModule):
                 self.wqkv,
                 bias_tensor=self.bqkv,
                 memory_config=self.config.create_heads_memcfg,
-                # Evaluation candidate: emit Q directly as BF4 to halve the
-                # QKV-scatter write. It is cast back to score_dtype before SDPA.
+                # Emit Q as BF4 to halve the QKV-scatter write.
                 dtype=ttnn.bfloat4_b,
             )
         else:
@@ -343,21 +488,15 @@ class BgeM3Attention(LightweightModule):
         # SDPA chunk sizing keys off the full (key) sequence length. In
         # sequence-parallel mode queries are local (S/tp) but keys span full S.
         sdpa_seq_len = k.shape[2]
-        # DP query head-fold trick: SDPA throughput is set by Sq (query length),
-        # not total work (measured: Sq8192=29 vs Sq4096=44 TFLOP/s). Fold
-        # DP_HEAD_FOLD query-chunks into the HEAD dim so SDPA sees Sq/G queries
-        # per head; K/V stay unchanged and SDPA's GQA head-broadcast makes each
-        # query head attend to the FULL sequence via its parent kv head. Exact
-        # (PCC=1.0), needs NO K/V replicate. q [B,H,S,DH] -> [B, H*G, S/G, DH]
-        # with head h*G+j = head h's j-th seq chunk.
+        # DP query head-fold: SDPA throughput is set by query length, so fold
+        # _DP_HEAD_FOLD query-chunks into the head dim (Sq/G queries per head).
+        # K/V are unchanged; GQA head-broadcast keeps each query head attending
+        # to the full sequence. Exact: q [B,H,S,DH] -> [B, H*G, S/G, DH].
         head_fold = self.config.data_parallel and sdpa_mask is None and seq_len == 8192
         if head_fold:
             b0, h0, s0, dh0 = q.shape
             q = ttnn.reshape(q, [b0, h0 * _DP_HEAD_FOLD, s0 // _DP_HEAD_FOLD, dh0])
-            # K is already bfloat4_b (emitted directly by the fused head-split):
-            # halves K read bandwidth in SDPA. PCC 0.9422 (clears the 0.94
-            # preferred gate) with the q128/k2048 chunking; V stays bf8. If some
-            # other path left K non-BF4, convert here as a fallback.
+            # K is emitted as BF4 by the fused head-split; convert as a fallback.
             if fast_eligible and k.dtype != ttnn.bfloat4_b:
                 k_bf4 = ttnn.typecast(k, dtype=ttnn.bfloat4_b)
                 ttnn.deallocate(k)
@@ -394,13 +533,8 @@ class BgeM3Attention(LightweightModule):
                 bge_encoder_sdpa_experimental,
             )
 
-            # Non-FP32-dest / half-sync (DEST=8), q128/k2048, BF16 score.
-            # Validated: -57ms wall, PCC 0.9548 (gate), comparable-to-stock across
-            # seeds. BF8 score CB was ablated and CONCLUSIVELY breaks full-model
-            # PCC (0.31 at q128 AND q256) despite standalone PCC 1.0 on peaked
-            # random softmax — real activations have flatter softmax that BF8
-            # score quantization destroys. q256/k2048 hits 21.48ms/call but only
-            # via BF8 score (bf16-score q256 OOMs), so it is not shippable.
+            # Serving config: q256/k2048 with direct concat-heads and BF4 K/V.
+            # High-precision masked config: q128/k512, FP32 dest.
             # batch = runtime local batch (q.shape[0]); work-split is batch-general
             # so the JIT SDPA fires for any DP batch (e.g. B3/chip in 4-chip DP),
             # not just B6. Fixes the stock B3 chunking anomaly (804->~565ms).
@@ -522,22 +656,12 @@ class BgeM3Attention(LightweightModule):
 
 def _sdpa_chunks_for_seq_len(seq_len, batch_size=None, sequence_parallel=False, data_parallel=False):
     if seq_len % 128 == 0:
-        # N300 B12/S8192: q256/k256 wins IN-MODEL (4056ms). Standalone sweep is
-        # unreliable for SDPA (see sweep_sdpa_b12_s8192.py warning); tuned by
-        # direct perf.py runs. Tested in-model: q512/k128=4489, q256/k256=4056(best),
-        # q256/k128=4596. k_chunk=256 is the sweet spot.
         if seq_len == 8192:
             if sequence_parallel:
-                # Sequence-parallel: local Sq=4096, gathered Sk=8192. Lower L1
-                # pressure (halved Sq) lets k_chunk=512 fit, halving the number
-                # of k-passes and the online-softmax rescaling overhead.
+                # Local Sq=4096, gathered Sk=8192; k_chunk=512 fits the lower L1.
                 return 512, 512
             if data_parallel:
-                # Data-parallel + query head-fold: SDPA sees Sq=4096, Sk=8192, B6.
-                # q128/k2048 keeps the 256-score-tile footprint (4x64) while
-                # cutting k-chunks to 4 (fewer online-softmax merges). With
-                # bfloat4_b K it runs 30.1ms->28.9ms/op and holds PCC 0.9422
-                # (clears the 0.94 preferred gate). (DP autoresearch #216.)
+                # Query head-fold: Sq=4096, Sk=8192, B6. q128/k2048 uses 4 k-chunks.
                 return 128, 2048
             # Dense-mask S8192 needs the lower-L1 k256 configuration.
             return 512, 256
@@ -583,9 +707,7 @@ def _sdpa_program_config(seq_len, mesh_device, batch_size=None, sequence_paralle
         seq_len, batch_size=batch_size, sequence_parallel=sequence_parallel, data_parallel=data_parallel
     )
     grid = _sdpa_compute_grid(mesh_device)
-    # B1/S512 on Blackhole: 8x8=64 cores beats the default 11x10=110 grid.
-    # Sweep showed ~10% lower SDPA device time at smaller grid (less dispatch
-    # overhead vs. number of head-batch pairs).
+    # B1/S512 on Blackhole: an 8x8 grid beats the default 11x10.
     if seq_len == 512 and batch_size == 1 and mesh_device is not None and ttnn_is_blackhole(mesh_device):
         grid = ttnn.CoreCoord(8, 8)
     kwargs = {

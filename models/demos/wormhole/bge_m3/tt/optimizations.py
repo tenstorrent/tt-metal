@@ -107,101 +107,11 @@ class Optimizations:
         core_grid = _matmul_core_grid(mesh_device, max_seq_len, max_batch)
         act_mem = _linear_activation_memory_config(max_seq_len, max_batch)
 
-        # ── MLP ──────────────────────────────────────────────────────────
-
-        wi_minimal = _mlp_wi_minimal_matmul_config(
-            mesh_device,
-            max_seq_len,
-            max_batch,
-            hidden_size=hidden_size,
-            intermediate_size=intermediate_size,
+        mlp_opts = _build_mlp_optimizations(
+            mesh_device, max_seq_len, max_batch, dtype, hidden_size, intermediate_size, core_grid, act_mem
         )
-        wi_prg = (
-            None
-            if wi_minimal is not None
-            else _mlp_wi_program_config(
-                mesh_device,
-                max_seq_len,
-                max_batch,
-                hidden_size=hidden_size,
-                intermediate_size=intermediate_size,
-            )
-        )
-
-        # B1/S512 tuned matmul configs for AttnOut and MLPwo (Sweep 4.2).
-        tuned_b1 = max_seq_len == 512 and max_batch == 1
-        tuned_b16 = max_seq_len == 512 and max_batch == 16
-        if tuned_b1:
-            wo_prg_tuned = _tuned_mlp_wo_program_config(
-                mesh_device, hidden_size=hidden_size, intermediate_size=intermediate_size
-            )
-        elif tuned_b16:
-            wo_prg_tuned = _b16_tuned_mlp_wo_program_config(
-                mesh_device, hidden_size=hidden_size, intermediate_size=intermediate_size
-            )
-        else:
-            wo_prg_tuned = None
-        wo_minimal = _mlp_wo_minimal_matmul_config(
-            mesh_device,
-            max_seq_len,
-            max_batch,
-            hidden_size=hidden_size,
-            intermediate_size=intermediate_size,
-        )
-
-        mlp_opts = MLPOptimizations(
-            wi_compute_kernel_cfg=mlp_wi_compute_kernel_config(mesh_device, max_seq_len, max_batch, dtype=dtype),
-            wo_compute_kernel_cfg=mlp_wo_compute_kernel_config(mesh_device, max_seq_len, max_batch, dtype=dtype),
-            wi_memcfg=_mlp_wi_output_memory_config(max_seq_len, max_batch, mesh_device),
-            wo_memcfg=_mlp_wo_output_memory_config(max_seq_len, max_batch, mesh_device),
-            activation_memcfg=act_mem,
-            core_grid=core_grid,
-            wi_prg_config=wi_prg,
-            wo_prg_config=None if wo_minimal is not None else wo_prg_tuned,
-            wi_minimal_config=wi_minimal,
-            wo_minimal_config=wo_minimal,
-        )
-
-        # ── Attention ────────────────────────────────────────────────────
-
-        qkv_out_dim = 3 * hidden_size
-        qkv_minimal = _attention_qkv_minimal_matmul_config(mesh_device, max_seq_len, max_batch, hidden_size=hidden_size)
-        out_minimal = _attention_output_minimal_matmul_config(
-            mesh_device, max_seq_len, max_batch, hidden_size=hidden_size
-        )
-        attn_opts = AttentionOptimizations(
-            qkv_compute_kernel_cfg=attention_qkv_compute_kernel_config(
-                mesh_device, max_seq_len, max_batch, dtype=dtype
-            ),
-            output_compute_kernel_cfg=attention_output_compute_kernel_config(
-                mesh_device, max_seq_len, max_batch, dtype=dtype
-            ),
-            score_compute_kernel_cfg=sdpa_compute_kernel_config(mesh_device, max_seq_len, max_batch, dtype=dtype),
-            qkv_memcfg=act_mem,
-            create_heads_memcfg=_create_heads_output_memory_config(max_seq_len, max_batch, mesh_device),
-            score_memcfg=act_mem,
-            output_memcfg=_attention_output_memory_config(max_seq_len, max_batch, mesh_device),
-            core_grid=core_grid,
-            qkv_prg_config=(
-                None
-                if qkv_minimal is not None
-                else _qkv_program_config(max_seq_len, max_batch, hidden_size, qkv_out_dim, mesh_device)
-            ),
-            qkv_minimal_config=qkv_minimal,
-            output_minimal_config=out_minimal,
-            output_prg_config=(
-                None
-                if out_minimal is not None
-                else (
-                    _tuned_attention_output_program_config(mesh_device, hidden_size=hidden_size)
-                    if tuned_b1
-                    else (
-                        _b16_tuned_attention_output_program_config(mesh_device, hidden_size=hidden_size)
-                        if tuned_b16
-                        else _attention_output_program_config(max_seq_len, max_batch, hidden_size, mesh_device)
-                    )
-                )
-            ),
+        attn_opts = _build_attention_optimizations(
+            mesh_device, max_seq_len, max_batch, dtype, hidden_size, core_grid, act_mem
         )
 
         # ── Norm ─────────────────────────────────────────────────────────
@@ -229,6 +139,94 @@ class Optimizations:
             attention=attn_opts,
             norm=norm_opts,
         )
+
+
+def _build_mlp_optimizations(
+    mesh_device, max_seq_len, max_batch, dtype, hidden_size, intermediate_size, core_grid, act_mem
+):
+    """MLP program/memory configs. The S8192 (JiT) shape resolves minimal_matmul
+    configs for Wi/Wo; other shapes use tuned or default program configs."""
+    wi_minimal = _mlp_wi_minimal_matmul_config(
+        mesh_device, max_seq_len, max_batch, hidden_size=hidden_size, intermediate_size=intermediate_size
+    )
+    wi_prg = (
+        None
+        if wi_minimal is not None
+        else _mlp_wi_program_config(
+            mesh_device, max_seq_len, max_batch, hidden_size=hidden_size, intermediate_size=intermediate_size
+        )
+    )
+
+    tuned_b1 = max_seq_len == 512 and max_batch == 1
+    tuned_b16 = max_seq_len == 512 and max_batch == 16
+    if tuned_b1:
+        wo_prg_tuned = _tuned_mlp_wo_program_config(
+            mesh_device, hidden_size=hidden_size, intermediate_size=intermediate_size
+        )
+    elif tuned_b16:
+        wo_prg_tuned = _b16_tuned_mlp_wo_program_config(
+            mesh_device, hidden_size=hidden_size, intermediate_size=intermediate_size
+        )
+    else:
+        wo_prg_tuned = None
+    wo_minimal = _mlp_wo_minimal_matmul_config(
+        mesh_device, max_seq_len, max_batch, hidden_size=hidden_size, intermediate_size=intermediate_size
+    )
+
+    return MLPOptimizations(
+        wi_compute_kernel_cfg=mlp_wi_compute_kernel_config(mesh_device, max_seq_len, max_batch, dtype=dtype),
+        wo_compute_kernel_cfg=mlp_wo_compute_kernel_config(mesh_device, max_seq_len, max_batch, dtype=dtype),
+        wi_memcfg=_mlp_wi_output_memory_config(max_seq_len, max_batch, mesh_device),
+        wo_memcfg=_mlp_wo_output_memory_config(max_seq_len, max_batch, mesh_device),
+        activation_memcfg=act_mem,
+        core_grid=core_grid,
+        wi_prg_config=wi_prg,
+        wo_prg_config=None if wo_minimal is not None else wo_prg_tuned,
+        wi_minimal_config=wi_minimal,
+        wo_minimal_config=wo_minimal,
+    )
+
+
+def _build_attention_optimizations(mesh_device, max_seq_len, max_batch, dtype, hidden_size, core_grid, act_mem):
+    """Attention program/memory configs. The S8192 (JiT) shape resolves
+    minimal_matmul configs for QKV/output; other shapes use tuned or defaults."""
+    qkv_out_dim = 3 * hidden_size
+    tuned_b1 = max_seq_len == 512 and max_batch == 1
+    tuned_b16 = max_seq_len == 512 and max_batch == 16
+    qkv_minimal = _attention_qkv_minimal_matmul_config(mesh_device, max_seq_len, max_batch, hidden_size=hidden_size)
+    out_minimal = _attention_output_minimal_matmul_config(mesh_device, max_seq_len, max_batch, hidden_size=hidden_size)
+    return AttentionOptimizations(
+        qkv_compute_kernel_cfg=attention_qkv_compute_kernel_config(mesh_device, max_seq_len, max_batch, dtype=dtype),
+        output_compute_kernel_cfg=attention_output_compute_kernel_config(
+            mesh_device, max_seq_len, max_batch, dtype=dtype
+        ),
+        score_compute_kernel_cfg=sdpa_compute_kernel_config(mesh_device, max_seq_len, max_batch, dtype=dtype),
+        qkv_memcfg=act_mem,
+        create_heads_memcfg=_create_heads_output_memory_config(max_seq_len, max_batch, mesh_device),
+        score_memcfg=act_mem,
+        output_memcfg=_attention_output_memory_config(max_seq_len, max_batch, mesh_device),
+        core_grid=core_grid,
+        qkv_prg_config=(
+            None
+            if qkv_minimal is not None
+            else _qkv_program_config(max_seq_len, max_batch, hidden_size, qkv_out_dim, mesh_device)
+        ),
+        qkv_minimal_config=qkv_minimal,
+        output_minimal_config=out_minimal,
+        output_prg_config=(
+            None
+            if out_minimal is not None
+            else (
+                _tuned_attention_output_program_config(mesh_device, hidden_size=hidden_size)
+                if tuned_b1
+                else (
+                    _b16_tuned_attention_output_program_config(mesh_device, hidden_size=hidden_size)
+                    if tuned_b16
+                    else _attention_output_program_config(max_seq_len, max_batch, hidden_size, mesh_device)
+                )
+            )
+        ),
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════

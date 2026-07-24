@@ -61,11 +61,17 @@ class ModelArgs:
                 f"got seq_len={self.max_seq_len}, shape={tuple(mesh_device.shape) if mesh_device else None}"
             )
         self.data_parallel = data_parallel
-        # Opt-in model-local JIT encoder SDPA (DP S8192 path only). Runs the
-        # non-FP32-dest / half-sync configuration (DEST=8), measured -2.3ms/SDPA
-        # call and -57ms full-model wall vs stock, with equal-or-better PCC.
-        # Only takes effect on the exact head-folded DP S8192 contract; any
-        # deviation falls back to stock SDPA (see attention.py guard).
+        # The B12/S8192 DP shape maps to the JiT serving modules (QKV scatter,
+        # encoder SDPA, minimal-matmul MLP). Enabling it here means callers do
+        # not have to pass the individual knobs; encoder.py reads use_jit to
+        # select BgeM3AttentionJit / BgeM3MLPJit.
+        self.use_jit = data_parallel and self.max_seq_len == 8192 and int(self.max_batch_size) == 12
+        if self.use_jit:
+            use_experimental_encoder_sdpa = True
+            encoder_sdpa_q256_vbf4 = not quality_mode
+            use_qkv_scatter_matmul = not quality_mode
+            if mlp_wi_output_dtype is None:
+                mlp_wi_output_dtype = ttnn.bfloat8_b if quality_mode else ttnn.bfloat4_b
         self.use_experimental_encoder_sdpa = use_experimental_encoder_sdpa
         self.mlp_wi_output_dtype = mlp_wi_output_dtype
         self.encoder_sdpa_q256_vbf4 = encoder_sdpa_q256_vbf4

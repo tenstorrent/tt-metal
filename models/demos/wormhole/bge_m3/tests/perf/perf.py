@@ -1513,3 +1513,127 @@ def test_dispatch_submesh_prototype(mesh_device):
         mn, p50, avg, mx = _stats(t)
         logger.info(f"  {name:<25} | {mn:>10.3f} | {p50:>10.3f} | {avg:>10.3f} | {mx:>10.3f}")
     logger.info("=" * 100)
+
+
+# ==============================================================================
+# N300 data-parallel (DP=2) wall-clock benchmark
+# ==============================================================================
+
+
+def _n300_dp_batchshard(torch_inputs, mesh_device, *, on_device):
+    """Shard input_ids / token_type / position on the batch dim across the mesh."""
+    mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    kwargs = {"mesh_mapper": mapper}
+    if on_device:
+        kwargs.update(device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    def convert(tensor):
+        return ttnn.from_torch(tensor.int(), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, **kwargs)
+
+    tensors = {
+        "input_ids": convert(torch_inputs["input_ids"]),
+        "token_type_ids": convert(torch_inputs["token_type_ids"]),
+        "position_ids": convert(torch_inputs["position_ids"]),
+    }
+    if torch_inputs.get("valid_lengths") is not None:
+        tensors["attention_mask"] = convert(torch_inputs["valid_lengths"])
+    return tensors
+
+
+def _n300_dp_inputs(pad_token_id, batch, valid_len):
+    """Build B x 8192 inputs. valid_len < 8192 -> pad the tail and pass a compact
+    [B, 1] valid-length mask; valid_len == 8192 -> no mask (full attention)."""
+    seq_len = 8192
+    input_ids = torch.full((batch, seq_len), pad_token_id, dtype=torch.long)
+    input_ids[:, :valid_len] = torch.randint(1, 1000, (batch, valid_len), dtype=torch.long)
+    token_type_ids = torch.zeros(batch, seq_len, dtype=torch.long)
+    nonpad = (input_ids != pad_token_id).to(torch.int64)
+    position_ids = torch.cumsum(nonpad, dim=1) * nonpad + pad_token_id
+    valid_lengths = None
+    if valid_len < seq_len:
+        valid_lengths = torch.full((batch, 1), valid_len, dtype=torch.long)
+    return {
+        "input_ids": input_ids,
+        "token_type_ids": token_type_ids,
+        "position_ids": position_ids,
+        "valid_lengths": valid_lengths,
+    }
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 1)], indirect=True, ids=["dp2_n300"])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"trace_region_size": 50_000_000, "num_command_queues": 1, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+@pytest.mark.parametrize("masked", [False, True], ids=["nomask", "masked"])
+def test_n300_dp(mesh_device, masked):
+    """Wall-clock trace-replay benchmark for the B12/S8192 DP=2 serving shape.
+
+    nomask: full 8192-token attention (the headline latency).
+    masked: compact valid-length masking swept over 128/512/1024/2048/4096 to
+    show that a short request finishes faster than the full 8192 pass.
+    """
+    assert tuple(mesh_device.shape) == (2, 1)
+    assert mesh_device.get_num_devices() == 2
+
+    batch = 12
+    args, model, _ = create_tt_model(
+        mesh_device=mesh_device,
+        max_batch_size=batch,
+        max_seq_len=8192,
+        dtype=ttnn.bfloat8_b,
+        data_parallel=True,
+    )
+    assert model._data_parallel, "DP mode not active"
+
+    valid_lengths = [128, 512, 1024, 2048, 4096] if masked else [8192]
+    pad = args.pad_token_id
+
+    for valid_len in valid_lengths:
+        inputs = _n300_dp_inputs(pad, batch, valid_len)
+        device_tensors = _n300_dp_batchshard(inputs, mesh_device, on_device=True)
+
+        out = model.forward(**device_tensors)
+        ttnn.synchronize_device(mesh_device)
+        ttnn.deallocate(out)
+
+        model.capture_trace(**device_tensors, mesh_device=mesh_device, cq_id=0)
+        for _ in range(3):
+            model.execute_trace(blocking=True)
+
+        times = []
+        for _ in range(NUM_ITERATIONS):
+            t0 = time.perf_counter()
+            model.execute_trace(blocking=True)
+            times.append((time.perf_counter() - t0) * 1000.0)
+        model.release_trace()
+
+        times.sort()
+        avg_ms = sum(times) / len(times)
+        best_ms = times[0]
+        total_tokens = batch * valid_len
+
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info(f"  BGE-M3 N300 DP=2  ({'masked' if masked else 'nomask'})")
+        logger.info("=" * 60)
+        logger.info(f"  Batch size:           {batch}")
+        if masked:
+            logger.info(f"  Seq length:           {valid_len}")
+            logger.info(f"  Seq length (padded):  8192")
+        else:
+            logger.info(f"  Seq length:           8192")
+        logger.info(f"  Valid tokens/seq:     {valid_len}")
+        logger.info(f"  Total valid tokens:   {total_tokens}")
+        logger.info(f"  Iterations:           {NUM_ITERATIONS}")
+        logger.info("-" * 60)
+        logger.info(f"  Avg latency:          {avg_ms:.3f} ms")
+        logger.info(f"  Best latency:         {best_ms:.3f} ms")
+        logger.info(f"  Avg embeddings/s:     {batch / (avg_ms / 1000):.1f}")
+        logger.info(f"  Best embeddings/s:    {batch / (best_ms / 1000):.1f}")
+        logger.info(f"  Avg tokens/s:         {total_tokens / (avg_ms / 1000):.0f}")
+        logger.info(f"  Best tokens/s:        {total_tokens / (best_ms / 1000):.0f}")
+        logger.info(f"  Avg requests/s:       {1.0 / (avg_ms / 1000):.3f}")
+        logger.info(f"  Best requests/s:      {1.0 / (best_ms / 1000):.3f}")
+        logger.info("=" * 60)

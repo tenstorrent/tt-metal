@@ -127,7 +127,7 @@ def _aliased_kv_cb_descriptor(
     ctor requires total_size divisible by EACH page_size, hence total_size must be
     a multiple of LCM(576,1088). Safety against K/V mutual clobber is NOT provided
     by the CB machinery here — it is enforced entirely by the kernel-side
-    K_CONSUMED/V_CONSUMED handshakes (see f4_alias_cadence_sim.py).
+    K_CONSUMED/V_CONSUMED handshakes.
     """
     return ttnn.CBDescriptor(
         total_size=total_size,

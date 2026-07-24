@@ -16,8 +16,7 @@ sequence length (ISL) **8192**, weights and activations in **bfloat8_b**.
   exactly one device — do **not** set `TT_VISIBLE_DEVICES` to more than one id).
 - **Model weights:** `BAAI/bge-m3` (downloaded automatically from HuggingFace
   on first run, or point to a local checkout via `hf_model_name`).
-- **Data type:** `ttnn.bfloat8_b` (holds the 0.94 hidden-state PCC gate at
-  B12/S8192 — measured 0.961).
+- **Data type:** `ttnn.bfloat8_b`.
 - **Device launch parameters** (must match across demo + perf tests):
   - `trace_region_size = 50_000_000` (holds the captured 24-layer encoder program)
   - `num_command_queues = 1`
@@ -38,36 +37,87 @@ Output is the encoder hidden state `[12, 1, 8192, 1024]` plus one pooled
 
 ### Measure prefill performance (`perf.py`)
 
-Trace-capture latency/throughput for B12/S8192. Each iteration copies fresh
-random inputs to device and times only the trace replay (device compute);
-reports avg / best ms, embeddings/s, and tokens/s:
+`test_n300_dp` captures the trace and times only the trace replay
+(`execute_trace(blocking=True)`), reporting avg / best ms and embeddings/s for
+the B12/S8192 DP=2 shape on one N300. It has two variants:
 
 ```bash
-TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/perf.py -k "b12_s8192" -s
+# Full 8192-token attention (headline wall-clock latency)
+TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/perf.py::test_n300_dp -k nomask -s
+
+# Masked serving: compact valid-length masking swept over
+# 128 / 512 / 1024 / 2048 / 4096 tokens (padded to 8192). A short request
+# skips the all-padding key blocks and finishes faster than the full pass.
+TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/perf.py::test_n300_dp -k masked -s
+
+# Both variants
+TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/perf.py::test_n300_dp -s
+```
+
+### Run MTEB evaluation (`mteb_eval_minimal.py`)
+
+Evaluates the B12/S8192 DP=2 model against the HF/CPU reference on MTEB
+retrieval tasks. `--mode both` scores HF and TT and prints the delta; `hf` or
+`tt` run a single backend.
+
+```bash
+# HF vs TT on STSBenchmark (full set)
+TT_VISIBLE_DEVICES=0 python models/demos/wormhole/bge_m3/demo/mteb_eval_minimal.py \
+  --mode both --task STSBenchmark --output-dir ./mteb_eval_results
+
+# TT only, quick smoke over a few samples
+TT_VISIBLE_DEVICES=0 python models/demos/wormhole/bge_m3/demo/mteb_eval_minimal.py \
+  --mode tt --task STSBenchmark --smoke-samples 50
+```
+
+Install the eval dependencies once inside `python_env`:
+
+```bash
+uv pip install --python python_env/bin/python -r models/demos/wormhole/bge_m3/demo/requirements_mteb.txt
 ```
 
 ### Kernel-level profiling (`tracy_perf.py`)
 
-Runs a single forward pass (no trace capture — Tracy needs the individual
-device ops) inside Tracy signposts. Requires `TT_METAL_DEVICE_PROFILER=1`:
+`test_n300_dp_tracy` runs a single B12/S8192 DP=2 forward (no trace capture —
+Tracy needs the individual device ops) inside Tracy signposts. Requires
+`TT_METAL_DEVICE_PROFILER=1`:
 
 ```bash
 TT_VISIBLE_DEVICES=0 TT_METAL_DEVICE_PROFILER=1 python -m tracy -p -r \
   --no-runtime-analysis -v -m pytest \
   models/demos/wormhole/bge_m3/tests/perf/tracy_perf.py \
-  -k "b12_s8192" -sv
+  -k "n300_dp_tracy" -sv
 ```
 
 Reports are saved to
 `generated/profiler/reports/<timestamp>/ops_perf_results_<timestamp>.csv`. Then
 summarize the CSV with `tt-perf-report` (install it once with
-`uv pip install tt-perf-report` inside `python_env`; see the
-**`tracy_perf.py` — Kernel-level profiling** section below for details):
+`uv pip install --python python_env/bin/python tt-perf-report`; the console
+script lands in `python_env/bin/`):
 
 ```bash
-tt-perf-report generated/profiler/reports/<timestamp>/ops_perf_results_<timestamp>.csv \
-  --start-signpost start --end-signpost stop 2>&1 | tee bge_m3_b12_s8192_tracy_report.log
+python_env/bin/tt-perf-report generated/profiler/reports/<timestamp>/ops_perf_results_<timestamp>.csv \
+  --start-signpost start --end-signpost stop 2>&1 | tee bge_m3_n300_dp_tracy_report.log
 ```
+
+The stacked report at the end gives the total device kernel time per chip (both
+DP replicas run the same program concurrently, so per-chip sets the wall). A
+reference run produced:
+
+| Total % | Op | Device time sum |
+|--------:|----|----------------:|
+| 76.7 % | GenericOpDeviceOperation (encoder SDPA + head-split + concat-heads) | 667.8 ms |
+| 18.5 % | MinimalMatmulDeviceOperation (QKV, Wi, Wo, attention output) | 160.6 ms |
+|  4.6 % | LayerNormDeviceOperation | 39.9 ms |
+|  0.2 % | EmbeddingsDeviceOperation | 2.0 ms |
+| **100 %** | **Total device kernel time** | **≈ 870 ms** |
+
+This is the untraced forward (pure device-kernel time), so it sits just under
+the traced wall time from `test_n300_dp` (≈ 985 ms); the difference is host
+dispatch overhead that trace replay hides. Attention (the `GenericOp` path)
+dominates at ~77 %. `tt-perf-report` prints "Unclassified operation" warnings
+for the model-local `GenericOp`/`MinimalMatmul` ops — cosmetic, totals are
+unaffected.
 
 ## Low-level model creation
 
@@ -232,14 +282,13 @@ Reports are saved to `generated/profiler/reports/<timestamp>/ops_perf_results_<t
 To generate a human-readable summary from the CSV report, first install `tt-perf-report` if you haven't already:
 
 ```bash
-source python_env/bin/activate
-uv pip install tt-perf-report
+uv pip install --python python_env/bin/python tt-perf-report
 ```
 
 Then run:
 
 ```bash
-tt-perf-report generated/profiler/reports/<timestamp>/ops_perf_results_<timestamp>.csv --start-signpost start --end-signpost stop 2>&1 | tee bge_m3_tracy_report.log
+python_env/bin/tt-perf-report generated/profiler/reports/<timestamp>/ops_perf_results_<timestamp>.csv --start-signpost start --end-signpost stop 2>&1 | tee bge_m3_tracy_report.log
 ```
 
 ## Galaxy multi-chip measurement (data parallel)

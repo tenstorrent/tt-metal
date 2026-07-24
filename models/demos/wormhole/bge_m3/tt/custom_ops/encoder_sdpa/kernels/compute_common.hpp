@@ -1530,7 +1530,7 @@ template <
     // set, K and V share one L1 allocation; after QK pops K and after PV pops V,
     // compute (a) pops the residual pages so each single-slot ring wraps to base
     // (K to kv_k_capacity, V to kv_v_capacity) and (b) pushes one sync token so
-    // the reader may safely overwrite the shared bytes. See f4_alias_cadence_sim.
+    // the reader may safely overwrite the shared bytes.
     bool kv_alias = false,
     uint32_t kv_cb_sync = 0,
     uint32_t kv_k_capacity_tiles = 0,

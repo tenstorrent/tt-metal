@@ -76,8 +76,8 @@ class EncoderSDPAConfig:
     # serialize fill-K -> QK -> fill-V -> PV. Requires k/v_buffer_depth=1.
     # Shared alloc = kv_alias_lcm_multiple * LCM(576,1088)=9792 so both page
     # sizes divide it exactly and full-capacity push/pop (255 K / 135 V pages)
-    # wraps each ring to base. See f4_alias_cadence_sim.py for the proven
-    # protocol. Only valid at the exact q256/k2048 non-fp32 single-buffer shape.
+    # wraps each ring to base. Only valid at the exact q256/k2048 non-fp32
+    # single-buffer shape.
     kv_alias: bool = False
     kv_alias_lcm_multiple: int = 15  # 15 * 9792 = 146,880 B shared allocation
 

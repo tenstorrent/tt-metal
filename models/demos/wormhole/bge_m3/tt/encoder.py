@@ -5,8 +5,8 @@ from dataclasses import replace
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.wormhole.bge_m3.tt.attention import BgeM3Attention, BgeM3AttentionConfig
-from models.demos.wormhole.bge_m3.tt.mlp import BgeM3MLP, BgeM3MLPConfig
+from models.demos.wormhole.bge_m3.tt.attention import BgeM3Attention, BgeM3AttentionConfig, BgeM3AttentionJit
+from models.demos.wormhole.bge_m3.tt.mlp import BgeM3MLP, BgeM3MLPConfig, BgeM3MLPJit
 from models.demos.wormhole.bge_m3.tt.norm import LayerNorm1D, LayerNorm1DConfig
 from models.demos.wormhole.bge_m3.tt.weight_adapter import LayerNormWeights, build_attention_weights, build_mlp_weights
 
@@ -35,7 +35,10 @@ class BgeM3TransformerBlock(LightweightModule):
         attention_weights = build_attention_weights(state_dict, layer_num, dtype, ttnn.bfloat16, q_scale=q_scale)
         mlp_weights = build_mlp_weights(state_dict, layer_num, dtype, ttnn.bfloat16)
 
-        self.attention = BgeM3Attention.from_config(
+        attention_cls = BgeM3AttentionJit if args.use_jit else BgeM3Attention
+        mlp_cls = BgeM3MLPJit if args.use_jit else BgeM3MLP
+
+        self.attention = attention_cls.from_config(
             _build_attention_config(
                 args, attention_weights, mesh_device, dtype, max_seq_len, max_batch_size, optimizations
             )
@@ -49,7 +52,7 @@ class BgeM3TransformerBlock(LightweightModule):
             optimizations=optimizations,
         )
 
-        self.feed_forward = BgeM3MLP.from_config(
+        self.feed_forward = mlp_cls.from_config(
             _build_mlp_config(args, mlp_weights, mesh_device, dtype, max_seq_len, max_batch_size, optimizations)
         )
         self.feed_forward_norm = _build_optional_layer_norm(
@@ -209,10 +212,10 @@ def _build_attention_config(args, attention_weights, mesh_device, dtype, max_seq
         # S8192 folds the attention scale into the Q weight at build time.
         qkv_scale_prefolded=(max_seq_len == 8192),
         # Opt-in JIT encoder SDPA (DP S8192 only), from the explicit model arg.
-        use_experimental_encoder_sdpa=bool(getattr(args, "use_experimental_encoder_sdpa", False)),
-        encoder_sdpa_q256_vbf4=bool(getattr(args, "encoder_sdpa_q256_vbf4", False)),
-        use_qkv_scatter_matmul=bool(getattr(args, "use_qkv_scatter_matmul", False)),
-        mask_hifi=bool(getattr(args, "quality_mode", False)),
+        use_experimental_encoder_sdpa=args.use_experimental_encoder_sdpa,
+        encoder_sdpa_q256_vbf4=args.encoder_sdpa_q256_vbf4,
+        use_qkv_scatter_matmul=args.use_qkv_scatter_matmul,
+        mask_hifi=args.quality_mode,
     )
     if optimizations is not None and optimizations.attention is not None:
         attn_opts = optimizations.attention
@@ -245,7 +248,7 @@ def _build_mlp_config(args, mlp_weights, mesh_device, dtype, max_seq_len, max_ba
         intermediate_size=args.intermediate_size,
         mesh_device=mesh_device,
         wi_dtype=dtype,
-        wi_output_dtype=getattr(args, "mlp_wi_output_dtype", None) or dtype,
+        wi_output_dtype=args.mlp_wi_output_dtype or dtype,
         wo_dtype=dtype,
         activation_dtype=ttnn.bfloat16,
         max_seq_len=max_seq_len,

@@ -58,16 +58,15 @@ def _ids_to_batchsharded(input_ids, mesh_device):
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
-def test_model_dp2_b12_s8192(mesh_device, model_artifacts, reset_seeds):
+def test_model_dp_2(mesh_device, model_artifacts, reset_seeds):
     """End-to-end HF-vs-TT PCC for the DP=2 B12/S8192 shape on a 1x2 N300."""
     assert tuple(mesh_device.shape) == (2, 1), "DP=2 test requires a (2, 1) mesh"
     assert mesh_device.get_num_devices() == 2, "DP=2 test requires exactly 2 chips"
 
-    import os
-
-    _QUALITY = os.environ.get("BGE_QUALITY", "0") == "1"
     backbone, state_dict, model_id_or_path = model_artifacts
 
+    # B12/S8192 DP maps to the JiT serving modules inside ModelArgs, so only
+    # data_parallel needs to be requested here.
     model_args, tt_model, _ = create_tt_model(
         mesh_device=mesh_device,
         max_batch_size=DP_BATCH_SIZE,
@@ -76,11 +75,6 @@ def test_model_dp2_b12_s8192(mesh_device, model_artifacts, reset_seeds):
         state_dict=state_dict,
         hf_model_name=model_id_or_path,
         data_parallel=True,
-        use_experimental_encoder_sdpa=True,
-        encoder_sdpa_q256_vbf4=not _QUALITY,
-        use_qkv_scatter_matmul=not _QUALITY,
-        mlp_wi_output_dtype=ttnn.bfloat8_b if _QUALITY else ttnn.bfloat4_b,
-        quality_mode=_QUALITY,
     )
     assert tt_model._data_parallel, "DP mode not active"
 
@@ -139,22 +133,15 @@ def test_model_dp2_b12_s8192(mesh_device, model_artifacts, reset_seeds):
 )
 def test_model_dp2_compact_lengths_cls_pcc(mesh_device, model_artifacts, reset_seeds):
     """Validate compact valid-length masking against HF on CLS embeddings."""
-    import os
-
-    quality_dtype = ttnn.bfloat16 if os.environ.get("BGE_QUALITY_BF16", "0") == "1" else ttnn.bfloat8_b
     backbone, state_dict, model_id_or_path = model_artifacts
     model_args, tt_model, _ = create_tt_model(
         mesh_device=mesh_device,
         max_batch_size=DP_BATCH_SIZE,
         max_seq_len=DP_SEQ_LEN,
-        dtype=quality_dtype,
+        dtype=ttnn.bfloat8_b,
         state_dict=state_dict,
         hf_model_name=model_id_or_path,
         data_parallel=True,
-        use_experimental_encoder_sdpa=True,
-        encoder_sdpa_q256_vbf4=True,
-        use_qkv_scatter_matmul=True,
-        mlp_wi_output_dtype=quality_dtype,
         quality_mode=True,
         pooling="cls",
     )
