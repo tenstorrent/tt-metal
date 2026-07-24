@@ -1710,6 +1710,22 @@ void sdpa_inner_loop(
 
             KV_chunks_processed_in_iter++;
 
+            // Runtime-length skip (STANDARD + compact valid lengths): a k_chunk
+            // entirely beyond this request's valid region is all padding, so
+            // every score would be -inf (exp = 0) and it contributes nothing to
+            // the online softmax. Skip QK/mask/PV and just pop the K/V the reader
+            // pushed (mirrors the RING causal skip) to keep the CBs balanced.
+            // This makes short masked requests attend only over their real keys.
+            if constexpr (use_runtime_lengths && sdpa_type == STANDARD && !kv_alias) {
+                if (k_chunk > runtime_boundary_chunk) {
+                    cb_k_in_obj.wait_front(k_chunk_tiles);
+                    cb_v_in_obj.wait_front(v_chunk_tiles);
+                    cb_k_in_obj.pop_front(k_chunk_tiles);
+                    cb_v_in_obj.pop_front(v_chunk_tiles);
+                    continue;
+                }
+            }
+
             // Chunked-prefill: never take this skip (local-frame causal_k_limit doesn't apply —
             // the diag stamp uses absolute coords every k_chunk instead).
             if (sdpa_type == RING && !chunked_enabled && k_chunk >= causal_k_limit && is_causal) {

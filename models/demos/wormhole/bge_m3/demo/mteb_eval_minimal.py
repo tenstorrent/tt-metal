@@ -113,8 +113,8 @@ class TTDP2Embedder:
             use_experimental_encoder_sdpa=True,
             encoder_sdpa_q256_vbf4=True,
             use_qkv_scatter_matmul=True,
-            mlp_wi_output_dtype=ttnn.bfloat8_b,
-            quality_mode=True,
+            mlp_wi_output_dtype=ttnn.bfloat4_b,
+            quality_mode=False,
             pooling="cls",
         )
         assert self.model._data_parallel, "DP=2 model was not activated"

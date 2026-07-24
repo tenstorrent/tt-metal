@@ -30,6 +30,7 @@ class ModelArgs:
         mlp_wi_output_dtype=None,
         encoder_sdpa_q256_vbf4=False,
         use_qkv_scatter_matmul=False,
+        quality_mode=False,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -69,6 +70,9 @@ class ModelArgs:
         self.mlp_wi_output_dtype = mlp_wi_output_dtype
         self.encoder_sdpa_q256_vbf4 = encoder_sdpa_q256_vbf4
         self.use_qkv_scatter_matmul = use_qkv_scatter_matmul
+        # Opt-in high-precision masked attention (disables the BF4 serving
+        # kernels for compact-valid-length requests). Serving default False.
+        self.quality_mode = quality_mode
         self.attention_mask_dtype = (
             dtype if self.max_seq_len == 512 and max(1, int(self.max_batch_size)) in (1, 32) else ttnn.bfloat16
         )

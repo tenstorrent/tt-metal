@@ -40,6 +40,7 @@ def create_tt_model(
         mlp_wi_output_dtype=mlp_wi_output_dtype,
         encoder_sdpa_q256_vbf4=encoder_sdpa_q256_vbf4,
         use_qkv_scatter_matmul=use_qkv_scatter_matmul,
+        quality_mode=quality_mode,
     )
 
     if not state_dict:

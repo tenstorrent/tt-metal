@@ -212,6 +212,7 @@ def _build_attention_config(args, attention_weights, mesh_device, dtype, max_seq
         use_experimental_encoder_sdpa=bool(getattr(args, "use_experimental_encoder_sdpa", False)),
         encoder_sdpa_q256_vbf4=bool(getattr(args, "encoder_sdpa_q256_vbf4", False)),
         use_qkv_scatter_matmul=bool(getattr(args, "use_qkv_scatter_matmul", False)),
+        mask_hifi=bool(getattr(args, "quality_mode", False)),
     )
     if optimizations is not None and optimizations.attention is not None:
         attn_opts = optimizations.attention

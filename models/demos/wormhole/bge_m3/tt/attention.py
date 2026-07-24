@@ -90,6 +90,10 @@ class BgeM3AttentionConfig:
     # Exact B6/S8192 DP path: fuse QKV MinimalMatmul, head scatter, and K/V
     # BF4 conversion into one model-local ProgramDescriptor.
     use_qkv_scatter_matmul: bool = False
+    # When True, compact-valid-length (masked) requests use the high-precision
+    # attention kernels instead of the BF4 serving path. Serving default False
+    # so masked requests keep the sub-second BF4 kernels + runtime-length mask.
+    mask_hifi: bool = False
 
     @property
     def qkv_out_dim(self) -> int:
@@ -149,6 +153,11 @@ class BgeM3Attention(LightweightModule):
         has_compact_valid_lengths = (
             attention_mask is not None and len(attention_mask.shape) == 2 and attention_mask.shape[1] == 1
         )
+        # The BF4 serving kernels (direct scatter, BF4 K/V, q256/k2048 direct
+        # concat) run for unmasked requests and for compact-valid-length
+        # (masked) requests unless high-precision masked attention is requested.
+        # The compact runtime-length mask is applied on top of the BF4 kernels.
+        fast_eligible = attention_mask is None or (has_compact_valid_lengths and not self.config.mask_hifi)
 
         assert seq_len > 0, "seq_len must be positive"
         assert seq_len % 32 == 0, "seq_len must be divisible by 32 (tile height)"
@@ -167,14 +176,14 @@ class BgeM3Attention(LightweightModule):
                 [batch_size, seq_len // _MAX_QKV_MM_CHUNK_SEQ_LEN, _MAX_QKV_MM_CHUNK_SEQ_LEN, -1],
             )
 
-        # Direct scatter emits BF4 Q and is retained for the unmasked serving
-        # benchmark. Short masked requests need the BF8-Q projection path to
-        # preserve embedding quality.
-        use_qkv_scatter = self.config.use_qkv_scatter_matmul and not has_compact_valid_lengths
+        # Direct scatter emits BF4 Q for the BF4 serving path (unmasked or
+        # compact-mask serving). High-precision masked attention takes the
+        # projection path instead.
+        use_qkv_scatter = self.config.use_qkv_scatter_matmul and fast_eligible
         if use_qkv_scatter:
             if not (
                 self.config.data_parallel
-                and (attention_mask is None or has_compact_valid_lengths)
+                and fast_eligible
                 and seq_len == 8192
                 and batch_size == 6
                 and self.config.num_heads == 16
@@ -234,16 +243,14 @@ class BgeM3Attention(LightweightModule):
                     if self.config.max_batch_size in (8, 16, 32) or self.config.max_seq_len == 8192
                     else self.config.num_heads
                 )
-                fuse_kbf4 = self.config.data_parallel and attention_mask is None and seq_len == 8192
+                fuse_kbf4 = self.config.data_parallel and fast_eligible and seq_len == 8192
                 q, k, v = bge_qkv_heads_headsplit(
                     qkv_fused,
                     num_heads=self.config.num_heads,
                     head_groups=head_groups,
                     out_memcfg=self.config.create_heads_memcfg,
                     k_out_dtype=ttnn.bfloat4_b if fuse_kbf4 else None,
-                    v_out_dtype=(
-                        ttnn.bfloat4_b if self.config.encoder_sdpa_q256_vbf4 and not has_compact_valid_lengths else None
-                    ),
+                    v_out_dtype=(ttnn.bfloat4_b if self.config.encoder_sdpa_q256_vbf4 and fast_eligible else None),
                 )
             else:
                 q, k, v = ttnn.experimental.nlp_create_qkv_heads(
@@ -260,7 +267,7 @@ class BgeM3Attention(LightweightModule):
         preserve_bf4_q = (
             self.config.data_parallel
             and self.config.encoder_sdpa_q256_vbf4
-            and (attention_mask is None or has_compact_valid_lengths)
+            and fast_eligible
             and seq_len == 8192
             and q.dtype == ttnn.bfloat4_b
         )
@@ -351,11 +358,11 @@ class BgeM3Attention(LightweightModule):
             # halves K read bandwidth in SDPA. PCC 0.9422 (clears the 0.94
             # preferred gate) with the q128/k2048 chunking; V stays bf8. If some
             # other path left K non-BF4, convert here as a fallback.
-            if not has_compact_valid_lengths and k.dtype != ttnn.bfloat4_b:
+            if fast_eligible and k.dtype != ttnn.bfloat4_b:
                 k_bf4 = ttnn.typecast(k, dtype=ttnn.bfloat4_b)
                 ttnn.deallocate(k)
                 k = k_bf4
-        if self.config.encoder_sdpa_q256_vbf4 and not has_compact_valid_lengths:
+        if self.config.encoder_sdpa_q256_vbf4 and fast_eligible:
             assert v.dtype == ttnn.bfloat4_b, f"expected fused BF4 V, got {v.dtype}"
         sdpa_program_config = _sdpa_program_config(
             sdpa_seq_len,
@@ -397,7 +404,7 @@ class BgeM3Attention(LightweightModule):
             # batch = runtime local batch (q.shape[0]); work-split is batch-general
             # so the JIT SDPA fires for any DP batch (e.g. B3/chip in 4-chip DP),
             # not just B6. Fixes the stock B3 chunking anomaly (804->~565ms).
-            if self.config.encoder_sdpa_q256_vbf4 and not has_compact_valid_lengths:
+            if self.config.encoder_sdpa_q256_vbf4 and fast_eligible:
                 _ecfg = EncoderSDPAConfig(
                     batch=int(q.shape[0]),
                     q_chunk_size=256,
