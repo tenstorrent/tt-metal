@@ -204,17 +204,6 @@ Tensor PagedFillCacheDeviceOperation::create_output_tensors(
     return tensor_args.cache_tensor;
 }
 
-ttsl::hash::hash_t PagedFillCacheDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto program_factory = select_program_factory(args, tensor_args);
-
-    // Exclude batch_idx_fallback and noop (runtime-only).
-    // Include mesh_coords (affects program factory selection).
-    // Include block_size_override and cache_position_modulo (enter compile-time args).
-    return operation::hash_operation<PagedFillCacheDeviceOperation>(
-        args.mesh_coords, args.block_size_override, args.cache_position_modulo, tensor_args, program_factory.index());
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

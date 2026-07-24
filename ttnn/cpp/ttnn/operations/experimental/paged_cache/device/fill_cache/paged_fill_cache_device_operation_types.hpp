@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tt_stl/reflection.hpp>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -24,6 +26,12 @@ struct PagedFillCacheParams {
     // Must be a multiple of the effective block_size. See
     // PagedUpdateCacheParams::cache_position_modulo for the companion decode-side kwarg.
     const std::optional<uint32_t> cache_position_modulo = std::nullopt;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("mesh_coords", "block_size_override", "cache_position_modulo");
+    auto attribute_values() const {
+        return std::forward_as_tuple(mesh_coords, block_size_override, cache_position_modulo);
+    }
 };
 
 struct PagedFillCacheInputs {
