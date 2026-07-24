@@ -27,7 +27,7 @@ FORCE_INLINE volatile tt_l1_ptr uint32_t* addr_to_l1_ptr(uint32_t addr) {
 }
 
 /**
- * @brief Create NOC source/destination args for a local L1 address on this core
+ * @brief Create NOC source args for a local L1 address on this core
  *
  * @param addr L1 memory address
  * @param noc_id NOC index (defaults to the current core's noc_index)
