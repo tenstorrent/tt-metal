@@ -722,59 +722,9 @@ void py_module_types(nb::module_& mod) {
                tt::tt_metal::KernelDescriptor::Defines defines,
                tt::tt_metal::KernelDescriptor::RuntimeArgs runtime_args,
                tt::tt_metal::KernelDescriptor::CommonRuntimeArgs common_runtime_args,
-               const nb::list& named_common_runtime_args,
-               const nb::list& named_per_core_runtime_args,
-               const nb::list& named_common_runtime_arg_arrays,
-               const nb::list& named_per_core_runtime_arg_arrays,
                std::optional<tt::tt_metal::KernelBuildOptLevel> opt_level,
                tt::tt_metal::KernelDescriptor::ConfigDescriptor config,
                tt::tt_metal::KernelDescriptor::IncludePaths compiler_include_paths) {
-                using namespace tt::tt_metal::experimental::blaze;
-                NamedCommonRuntimeArgs ncra;
-                for (auto item : named_common_runtime_args) {
-                    auto tup = nb::cast<nb::tuple>(item);
-                    ncra.push_back({nb::cast<std::string>(tup[0]), nb::cast<uint32_t>(tup[1])});
-                }
-                NamedPerCoreRuntimeArgs npcra;
-                for (auto item : named_per_core_runtime_args) {
-                    auto tup = nb::cast<nb::tuple>(item);
-                    auto name = nb::cast<std::string>(tup[0]);
-                    auto dict = nb::cast<nb::dict>(tup[1]);
-                    std::vector<std::pair<CoreCoord, uint32_t>> core_values;
-                    for (const auto& [k, v] : dict) {
-                        core_values.emplace_back(nb::cast<CoreCoord>(k), nb::cast<uint32_t>(v));
-                    }
-                    npcra.push_back({std::move(name), std::move(core_values)});
-                }
-                // Array variant: (name, [val0, val1, ...])
-                NamedCommonRuntimeArgArrays ncraa;
-                for (auto item : named_common_runtime_arg_arrays) {
-                    auto tup = nb::cast<nb::tuple>(item);
-                    auto name = nb::cast<std::string>(tup[0]);
-                    auto values_list = nb::cast<nb::list>(tup[1]);
-                    std::vector<uint32_t> values;
-                    for (auto v : values_list) {
-                        values.push_back(nb::cast<uint32_t>(v));
-                    }
-                    ncraa.push_back({std::move(name), std::move(values)});
-                }
-                // Per-core array variant: (name, {CoreCoord: [val0, val1, ...]})
-                NamedPerCoreRuntimeArgArrays npcraa;
-                for (auto item : named_per_core_runtime_arg_arrays) {
-                    auto tup = nb::cast<nb::tuple>(item);
-                    auto name = nb::cast<std::string>(tup[0]);
-                    auto dict = nb::cast<nb::dict>(tup[1]);
-                    std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> core_values;
-                    for (const auto& [k, v] : dict) {
-                        auto values_list = nb::cast<nb::list>(v);
-                        std::vector<uint32_t> values;
-                        for (auto val : values_list) {
-                            values.push_back(nb::cast<uint32_t>(val));
-                        }
-                        core_values.emplace_back(nb::cast<CoreCoord>(k), std::move(values));
-                    }
-                    npcraa.push_back({std::move(name), std::move(core_values)});
-                }
                 new (self) tt::tt_metal::KernelDescriptor{
                     kernel_source,
                     source_type,
@@ -784,7 +734,14 @@ void py_module_types(nb::module_& mod) {
                     std::move(defines),
                     std::move(runtime_args),
                     std::move(common_runtime_args),
-                    NamedKernelArgs{std::move(ncra), std::move(npcra), std::move(ncraa), std::move(npcraa)},
+                    ////////////////////////////////////////////////////////////
+                    // Blaze-only experimental named args
+                    // Removal is tracked by issue #50953
+                    // Deliberately constructed EMPTY here: the Blaze named-arg surface is kept
+                    // OUT of the Python __init__ signature. It is settable ONLY post-construction
+                    // via the blaze_named_* def_prop_rw setters below (experimental / temporary).
+                    tt::tt_metal::experimental::blaze::NamedKernelArgs{},
+                    ////////////////////////////////////////////////////////////
                     opt_level,
                     std::move(config),
                     std::move(compiler_include_paths),
@@ -798,10 +755,6 @@ void py_module_types(nb::module_& mod) {
             nb::arg("defines") = nb::cast(tt::tt_metal::KernelDescriptor::Defines()),
             nb::arg("runtime_args") = nb::cast(tt::tt_metal::KernelDescriptor::RuntimeArgs()),
             nb::arg("common_runtime_args") = tt::tt_metal::KernelDescriptor::CommonRuntimeArgs(),
-            nb::arg("named_common_runtime_args") = nb::list(),
-            nb::arg("named_per_core_runtime_args") = nb::list(),
-            nb::arg("named_common_runtime_arg_arrays") = nb::list(),
-            nb::arg("named_per_core_runtime_arg_arrays") = nb::list(),
             nb::arg("opt_level") = nb::none(),
             nb::arg("config"),
             nb::arg("compiler_include_paths") = nb::cast(tt::tt_metal::KernelDescriptor::IncludePaths()),
@@ -817,8 +770,6 @@ void py_module_types(nb::module_& mod) {
                     defines: Preprocessor definitions for kernel compilation
                     runtime_args: Arguments provided at runtime
                     common_runtime_args: Common runtime arguments shared across kernels
-                    named_common_runtime_args: Ordered (name, value) pairs for generated header
-                    named_per_core_runtime_args: List of (name, {CoreCoord: value}) pairs
                     opt_level: Optimization level for kernel compilation
                     config: Configuration descriptor for the kernel
                     compiler_include_paths: Additional include paths passed to the kernel compiler as -I flags
@@ -879,9 +830,15 @@ void py_module_types(nb::module_& mod) {
             "common_runtime_args",
             &tt::tt_metal::KernelDescriptor::common_runtime_args,
             "Common runtime arguments shared across all cores")
-        // EXPERIMENTAL: named kernel args
+        ////////////////////////////////////////////////////////////
+        // Blaze-only experimental named args
+        // Removal is tracked by issue #50953
+        //
+        // These 4 def_prop_rw setters are the ENTIRE Python surface for the temporary,
+        // Blaze-only named runtime args. They are intentionally kept off __init__ and
+        // loudly marked so they acquire no new users before deletion (issue #50953).
         .def_prop_rw(
-            "named_common_runtime_args",
+            "blaze_named_common_runtime_args",
             [](const tt::tt_metal::KernelDescriptor& self) {
                 nb::list result;
                 for (const auto& arg : self.blaze_named_args.named_common_runtime_args) {
@@ -897,9 +854,10 @@ void py_module_types(nb::module_& mod) {
                         {nb::cast<std::string>(tup[0]), nb::cast<uint32_t>(tup[1])});
                 }
             },
-            "Named common runtime arguments: ordered (name, value) pairs for generated header")
+            "[EXPERIMENTAL, BLAZE-ONLY, TEMPORARY - WILL BE DELETED, see issue #50953] Do NOT build new "
+            "code on this API. Named common runtime arguments: ordered (name, value) pairs.")
         .def_prop_rw(
-            "named_per_core_runtime_args",
+            "blaze_named_per_core_runtime_args",
             [](const tt::tt_metal::KernelDescriptor& self) {
                 nb::list result;
                 for (const auto& arg : self.blaze_named_args.named_per_core_runtime_args) {
@@ -925,9 +883,10 @@ void py_module_types(nb::module_& mod) {
                         {std::move(name), std::move(core_values)});
                 }
             },
-            "Named per-core runtime args: list of (name, {CoreCoord: value}) pairs")
+            "[EXPERIMENTAL, BLAZE-ONLY, TEMPORARY - WILL BE DELETED, see issue #50953] Do NOT build new "
+            "code on this API. Named per-core runtime args: list of (name, {CoreCoord: value}) pairs.")
         .def_prop_rw(
-            "named_common_runtime_arg_arrays",
+            "blaze_named_common_runtime_arg_arrays",
             [](const tt::tt_metal::KernelDescriptor& self) {
                 nb::list result;
                 for (const auto& arg : self.blaze_named_args.named_common_runtime_arg_arrays) {
@@ -953,9 +912,10 @@ void py_module_types(nb::module_& mod) {
                         {std::move(name), std::move(values)});
                 }
             },
-            "Named common runtime arg arrays: list of (name, [values]) pairs")
+            "[EXPERIMENTAL, BLAZE-ONLY, TEMPORARY - WILL BE DELETED, see issue #50953] Do NOT build new "
+            "code on this API. Named common runtime arg arrays: list of (name, [values]) pairs.")
         .def_prop_rw(
-            "named_per_core_runtime_arg_arrays",
+            "blaze_named_per_core_runtime_arg_arrays",
             [](const tt::tt_metal::KernelDescriptor& self) {
                 nb::list result;
                 for (const auto& arg : self.blaze_named_args.named_per_core_runtime_arg_arrays) {
@@ -990,7 +950,9 @@ void py_module_types(nb::module_& mod) {
                         {std::move(name), std::move(core_values)});
                 }
             },
-            "Named per-core runtime arg arrays: list of (name, {CoreCoord: [values]}) pairs")
+            "[EXPERIMENTAL, BLAZE-ONLY, TEMPORARY - WILL BE DELETED, see issue #50953] Do NOT build new "
+            "code on this API. Named per-core runtime arg arrays: list of (name, {CoreCoord: [values]}) pairs.")
+        ////////////////////////////////////////////////////////////
         .def_rw("config", &tt::tt_metal::KernelDescriptor::config, "Configuration descriptor for the kernel")
         .def_rw(
             "compiler_include_paths",
