@@ -249,14 +249,6 @@ jobs:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       dev-docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
 
-  resolve-docker-pull-refs-llk:
-    if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
-    needs: [check-harbor, docker-images]
-    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
-    with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      llk-ci-docker-image: ${{ needs.docker-images.outputs.llk-ci-tag }}
-
   # ===========================================================================
   # Team: runtime
   # test list: runtime_validation_merge_gate_tests.yaml,
@@ -463,6 +455,14 @@ jobs:
   # SKU coverage is narrowed via sku-allowlist from find-changes. L2 nightly uses
   # tests/pipeline_reorg/llk_unit_tests.yaml. merge_group prio routing is via
   # prepare_test_matrix --event + sku_config merge_queue_sku.
+  resolve-docker-pull-refs-llk:
+    if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
+    needs: [check-harbor, docker-images]
+    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      llk-ci-docker-image: ${{ needs.docker-images.outputs.llk-ci-tag }}
+
   llk-build-quasar-perf:
     name: Build Quasar Perf
     needs: [docker-images, resolve-docker-pull-refs-llk, find-changes]
