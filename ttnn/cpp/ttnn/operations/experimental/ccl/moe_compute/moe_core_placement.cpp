@@ -105,6 +105,60 @@ std::vector<tt::tt_metal::CoreCoord> pick_combine_cores_from_strip(const CoreRan
     return corerange_to_cores(strip_range_set, num_cores, /*row_wise=*/true);
 }
 
+// Search for any dense width x height rectangle that fits below the tilize rows. Used when the
+// legacy 2-wide eastern strip is too tall for short harvested grids (e.g. WH 7x9 + 16 combine
+// cores needs 8 rows at width 2, but only 7 rows are available below tilize).
+std::optional<CoreRange> find_dense_combine_rectangle_avoiding(
+    const CoreCoordPairSet& avoid, const tt::tt_metal::CoreCoord& worker_grid, uint32_t num_cores, uint32_t max_y_inclusive) {
+    if (num_cores == 0) {
+        return std::nullopt;
+    }
+
+    const uint32_t y_limit = std::min(max_y_inclusive + 1, static_cast<uint32_t>(worker_grid.y));
+
+    std::vector<std::pair<uint32_t, uint32_t>> factorizations;
+    for (uint32_t width = 1; width <= num_cores; ++width) {
+        if (num_cores % width != 0) {
+            continue;
+        }
+        const uint32_t height = num_cores / width;
+        factorizations.emplace_back(width, height);
+    }
+    // Prefer wider rectangles first (legacy combine was 2-wide; 4x4 beats 1x16 on short grids).
+    std::sort(factorizations.begin(), factorizations.end(), [](const auto& a, const auto& b) {
+        if (a.first != b.first) {
+            return a.first > b.first;
+        }
+        return a.second < b.second;
+    });
+
+    for (const auto& [rect_width, rect_height] : factorizations) {
+        if (rect_width > worker_grid.x || rect_height == 0 || rect_height > y_limit) {
+            continue;
+        }
+
+        // Prefer eastern columns (legacy pool was x=5,6 on WH).
+        for (int sx = static_cast<int>(worker_grid.x) - static_cast<int>(rect_width); sx >= 0; --sx) {
+            for (uint32_t sy = 0; sy + rect_height <= y_limit; ++sy) {
+                bool valid = true;
+                for (uint32_t dy = 0; dy < rect_height && valid; ++dy) {
+                    for (uint32_t dx = 0; dx < rect_width && valid; ++dx) {
+                        if (avoid.contains({static_cast<uint32_t>(sx) + dx, sy + dy})) {
+                            valid = false;
+                        }
+                    }
+                }
+                if (valid) {
+                    return CoreRange(
+                        {static_cast<uint32_t>(sx), sy},
+                        {static_cast<uint32_t>(sx) + rect_width - 1, sy + rect_height - 1});
+                }
+            }
+        }
+    }
+    return std::nullopt;
+}
+
 std::optional<CoreRange> find_tilize_2x2_block_avoiding(const CoreCoordPairSet& avoid, const tt::tt_metal::CoreCoord& worker_grid) {
     constexpr uint32_t kTilizeBlockWidth = 2;
     constexpr uint32_t kTilizeBlockHeight = 2;
@@ -180,11 +234,11 @@ void add_bbox_cells(CoreCoordPairSet& avoid, const CoreRange& bbox) {
     }
 }
 
-// Matmul ring placement. The base set is the optimal DRAM-bank -> worker assignment (WH: 12 == ring
-// size; BH: 8 banks). When the ring is larger than the bank count (BH N=12/16), pad with extra cores
-// INSIDE the base bounding box so the bbox does not grow (keeping room for tilize/combine elsewhere).
-// Extras prefer the existing DRAM-adjacent columns (better locality for dm0's weight reads), then any
-// free cell inside the bbox; extras route around mux cells when possible.
+// Matmul ring placement. The base set is the optimal DRAM-bank -> worker assignment. On Blackhole
+// the live bank count is 7 or 8 (up to one bank may be fused off); on Wormhole it is always 12. The
+// ring size is required to equal this count, so the preferred path simply returns the base set. The
+// padding logic below is retained for robustness against direct prim callers that may pass a larger
+// ring size, but it is not exercised by the public API.
 //
 // This builds the PREFERRED (DRAM-bank-adjacent) ring. dm0's weight reads are DRAM-bank-id based
 // (get_noc_addr_from_bank_id), so the ring is functionally correct from any cores, but this placement
@@ -324,7 +378,14 @@ std::optional<PlacedWorkers> place_combine_and_tilize(
     if (combine_strip_opt.has_value()) {
         combine_cores = pick_combine_cores_from_strip(combine_strip_opt.value(), num_combine_cores);
     } else {
-        combine_cores = pick_worker_cores_row_major_avoiding(base_avoid, worker_grid, num_combine_cores, combine_max_y);
+        const auto combine_rect_opt =
+            find_dense_combine_rectangle_avoiding(base_avoid, worker_grid, num_combine_cores, combine_max_y);
+        if (combine_rect_opt.has_value()) {
+            combine_cores = pick_combine_cores_from_strip(combine_rect_opt.value(), num_combine_cores);
+        } else {
+            combine_cores =
+                pick_worker_cores_row_major_avoiding(base_avoid, worker_grid, num_combine_cores, combine_max_y);
+        }
     }
     if (combine_cores.size() != num_combine_cores) {
         return std::nullopt;
@@ -423,12 +484,15 @@ MoEComputeCoreSelection select_moe_compute_cores(
     const uint32_t hidden_tiles = hidden_size / tile_width;
 
     const uint32_t ring_size = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? bh_ring_size : 12u;
-    if (mesh_device->arch() == tt::ARCH::BLACKHOLE) {
-        TT_FATAL(
-            ring_size == 8 || ring_size == 12 || ring_size == 16,
-            "moe_compute: unsupported BH ring size N={}, supported values are {{8, 12, 16}}",
-            ring_size);
-    }
+    const uint32_t num_dram_banks =
+        mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default).size();
+    // On Blackhole the ring size must equal the live DRAM-bank count (7 or 8). Wormhole has no
+    // DRAM-bank harvesting, so ring_size is always 12 and num_dram_banks is always 12 here.
+    TT_FATAL(
+        ring_size == num_dram_banks,
+        "moe_compute: ring_size must match the live DRAM-bank count ({}), got {}",
+        num_dram_banks,
+        ring_size);
 
     const tt::tt_metal::CoreCoord worker_grid = mesh_device->compute_with_storage_grid_size();
     const uint32_t num_combine_cores = combine_token_parallel_cores * combine_data_parallel_cores;

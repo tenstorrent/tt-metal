@@ -32,6 +32,11 @@ struct SelectiveReduceCombineParams {
     ttnn::MemoryConfig output_memory_config;
     std::optional<GlobalSemaphore> optional_cross_device_semaphore;
 
+    // When true, the combine runs as a single-device local reduction with no fabric/mux
+    // setup. Used by moe_compute's FullLocal path on a 1x1 mesh. The axis/topology/num_links
+    // /mux_core_range_set/optional_cross_device_semaphore fields are ignored in this mode.
+    bool local_combine = false;
+
     auto attributes() const {
         using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
@@ -47,6 +52,7 @@ struct SelectiveReduceCombineParams {
         attrs.emplace_back("mux_core_range_set", mux_core_range_set);
         attrs.emplace_back("output_memory_config", output_memory_config);
         attrs.emplace_back("optional_cross_device_semaphore", optional_cross_device_semaphore);
+        attrs.emplace_back("local_combine", local_combine);
 
         return attrs;
     }
