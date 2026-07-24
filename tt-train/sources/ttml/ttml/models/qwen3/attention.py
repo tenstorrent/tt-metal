@@ -97,7 +97,8 @@ class Qwen3Attention(AbstractModuleBase):
         position_offset: int = 0,
     ):
         q = self.q_proj(hidden_states)
-        # Single fused KV matmul produces the [K | V] tensor directly        kvs = self.kv_proj(hidden_states)
+        # Single fused KV matmul produces the [K | V] tensor directly
+        kvs = self.kv_proj(hidden_states)
 
         query_heads, key_heads, value_heads = ttml.ops.multi_head_utils.grouped_heads_creation(
             q,

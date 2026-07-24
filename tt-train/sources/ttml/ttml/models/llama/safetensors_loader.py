@@ -96,6 +96,29 @@ def _make_tp_mapper(shard_type):
     return ttml.mesh().axis_mapper("tp", tdim=dim)
 
 
+def _orient_kv(k: np.ndarray, v: np.ndarray, kv_out: int, hidden: int):
+    """Orient K/V to ``[kv_out, hidden]`` (rows = output features).
+
+    HF stores ``k_proj``/``v_proj`` as ``[kv_out, hidden]``; the transpose branch
+    only fires for a genuinely ``[hidden, kv_out]`` layout. The first branch must
+    POSITIVELY match the already-correct shape (``k.shape[0] == kv_out``): for a
+    multi-head (non-GQA) checkpoint ``kv_out == hidden``, so K is square and a
+    ``!=``-based test would wrongly fall through to the transpose branch and
+    silently corrupt K/V. Raises on any other shape rather than mis-orienting.
+
+    Returns ``(k, v)`` oriented as ``[kv_out, hidden]``.
+    """
+    if k.shape[0] == kv_out and k.shape[1] == hidden:
+        return k, v  # already [kv_out, hidden]
+    if k.shape[0] == hidden and k.shape[1] == kv_out:
+        return k.T, v.T  # stored transposed [hidden, kv_out]
+    raise RuntimeError(
+        f"Unexpected k_proj shape {tuple(k.shape)}: expected [kv_out, hidden] = "
+        f"[{kv_out}, {hidden}] (or its transpose). Check that the LlamaConfig "
+        f"matches the checkpoint."
+    )
+
+
 def load_from_safetensors(
     model: ttml.modules.AbstractModuleBase,
     safetensors_path: str | os.PathLike,
@@ -165,13 +188,12 @@ def load_from_safetensors(
         v = v_staged.pop(layer_idx)
 
         # Orient K/V to [kv_out, hidden] (rows = output features) so the shard axis
-        # (rows / dim 2) matches ColumnParallelLinear.
-        if k.shape[0] != full_rows // 2 and k.shape[1] == full_cols:
-            # already [kv_out, hidden]
-            pass
-        elif k.shape[1] == full_rows // 2 and k.shape[0] == full_cols:
-            k = k.T
-            v = v.T
+        # (rows / dim 2) matches ColumnParallelLinear. full_rows is the fused
+        # kv_linear row count (2*kv_out), so full_rows // 2 == kv_out.
+        try:
+            k, v = _orient_kv(k, v, kv_out=full_rows // 2, hidden=full_cols)
+        except RuntimeError as e:
+            raise RuntimeError(f"layer {layer_idx}: {e}") from e
 
         # Fused KV layout under ColumnParallel TP: the kv_linear output rows are
         # sharded CONTIGUOUSLY across tp devices, and per device grouped_heads_creation
