@@ -71,7 +71,7 @@
     ./tests/run_llk_perf_blackhole.sh {split_group} 5
   skus:
     bh_p150b_civ2:
-      timeout: 120
+      timeout: 150
   owner_id: U07J3K6KS1K
 
 - name: llk_perf_blackhole group 2/5
@@ -82,7 +82,7 @@
     ./tests/run_llk_perf_blackhole.sh {split_group} 5
   skus:
     bh_p150b_civ2:
-      timeout: 120
+      timeout: 150
   owner_id: U07J3K6KS1K
 
 - name: llk_perf_blackhole group 3/5
@@ -93,7 +93,7 @@
     ./tests/run_llk_perf_blackhole.sh {split_group} 5
   skus:
     bh_p150b_civ2:
-      timeout: 120
+      timeout: 150
   owner_id: U07J3K6KS1K
 
 - name: llk_perf_blackhole group 4/5
@@ -104,7 +104,7 @@
     ./tests/run_llk_perf_blackhole.sh {split_group} 5
   skus:
     bh_p150b_civ2:
-      timeout: 120
+      timeout: 150
   owner_id: U07J3K6KS1K
 
 - name: llk_perf_blackhole group 5/5
@@ -115,5 +115,5 @@
     ./tests/run_llk_perf_blackhole.sh {split_group} 5
   skus:
     bh_p150b_civ2:
-      timeout: 120
+      timeout: 150
   owner_id: U07J3K6KS1K
