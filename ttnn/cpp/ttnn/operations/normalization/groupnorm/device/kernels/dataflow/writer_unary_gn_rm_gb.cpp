@@ -44,6 +44,19 @@ void kernel_main() {
 
     constexpr uint32_t use_welford = get_named_compile_time_arg_val("groupnorm_mode") > 0;
 
+    // Non-tile-aligned H*W correction (tt-metal #50682): when padded_hw > logical_hw the
+    // reduce scaler must divide by the real element count, so scale the per-core reduce
+    // scaler by sqrt(padded_hw / logical_hw); the K = padded_hw/logical_hw - 1 scalar used
+    // by the compute kernel's variance correction is written into cb_k below.
+    constexpr uint32_t logical_hw = get_named_compile_time_arg_val("logical_hw");
+    constexpr uint32_t padded_hw = get_named_compile_time_arg_val("padded_hw");
+    constexpr bool has_pad_correction = padded_hw != logical_hw;
+    constexpr uint32_t cb_k_id = tt::CBIndex::c_1;
+    // Float bits (host-precomputed) of the corrected per-group reduce scaler and of
+    // K = padded_hw/logical_hw - 1. Only meaningful when has_pad_correction.
+    constexpr uint32_t pad_scaler_bits = get_named_compile_time_arg_val("pad_scaler_bits");
+    constexpr uint32_t pad_k_bits = get_named_compile_time_arg_val("pad_k_bits");
+
     constexpr auto out_args = TensorAccessorArgs<0>();
     constexpr auto gamma_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
@@ -132,12 +145,26 @@ void kernel_main() {
             if (i == 0 and b == 0) {
                 if constexpr (!use_welford) {
                     constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
-                    constexpr uint32_t reduce_factor_w = get_named_compile_time_arg_val("reduce_factor_w");
-                    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                        cb_in_2,
-                        ckernel::PoolType::AVG,
-                        ckernel::ReduceDim::REDUCE_SCALAR,
-                        reduce_factor_w>();
+                    if constexpr (has_pad_correction) {
+                        // Non-tile-aligned H*W: use the host-precomputed corrected scaler
+                        // (= 1 / sqrt(reduce_factor_w * logical_hw / padded_hw)) so the mean and
+                        // variance reductions divide by the real element count instead of the
+                        // tile-padded one. Precomputed on host to avoid a device-side sqrt.
+                        const float pad_corrected_scaler = __builtin_bit_cast(float, pad_scaler_bits);
+                        dataflow_kernel_lib::prepare_reduce_scaler<
+                            cb_in_2,
+                            ckernel::PoolType::AVG,
+                            ckernel::ReduceDim::REDUCE_SCALAR>(pad_corrected_scaler);
+                        // K = padded_hw/logical_hw - 1 for the compute kernel's variance correction.
+                        generate_bcast_col_scalar(CircularBuffer(cb_k_id), pad_k_bits);
+                    } else {
+                        constexpr uint32_t reduce_factor_w = get_named_compile_time_arg_val("reduce_factor_w");
+                        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                            cb_in_2,
+                            ckernel::PoolType::AVG,
+                            ckernel::ReduceDim::REDUCE_SCALAR,
+                            reduce_factor_w>();
+                    }
                 }
 
                 if constexpr (!use_welford && is_mcast_sender) {

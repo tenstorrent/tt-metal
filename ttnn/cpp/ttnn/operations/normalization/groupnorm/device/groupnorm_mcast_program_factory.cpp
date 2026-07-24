@@ -514,6 +514,19 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         .noc = reader_noc,
     };
 
+    // Non-tile-aligned H*W correction (tt-metal #50682): rescale the per-group reduce scaler
+    // to divide by the real element count and pass K = padded_hw/logical_hw - 1 for the
+    // compute kernel's variance-bias subtraction. Byte-identical when logical_hw == padded_hw.
+    const uint32_t logical_hw = static_cast<uint32_t>(a.logical_shape()[2]);
+    const uint32_t padded_hw = static_cast<uint32_t>(a.padded_shape()[2]);
+    const float pad_k = static_cast<float>(padded_hw) / static_cast<float>(logical_hw) - 1.0f;
+    const uint32_t pad_k_bits = std::bit_cast<uint32_t>(pad_k);
+    auto pad_scaler_bits = [&](uint32_t reduce_factor_w) {
+        const float sc = 1.0f / std::sqrt(static_cast<float>(reduce_factor_w) *
+                                          static_cast<float>(logical_hw) / static_cast<float>(padded_hw));
+        return std::bit_cast<uint32_t>(sc);
+    };
+
     std::vector<uint32_t> writer_mcast_sender_compile_time_args_group_1 = {};
     std::unordered_map<std::string, uint32_t> writer_named_compile_time_args_group_1 = {
         {"is_mcast_sender", 1},
@@ -542,6 +555,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"TILE_HW", tile_hw},
         {"reduce_factor_w", num_rows_per_batch_per_core_group_1 * num_channels_per_group},
         {"reduce_factor_c", num_cores_per_batch * num_cores_per_group},
+        {"logical_hw", logical_hw},
+        {"padded_hw", padded_hw},
+        {"pad_scaler_bits", pad_scaler_bits(num_rows_per_batch_per_core_group_1 * num_channels_per_group)},
+        {"pad_k_bits", pad_k_bits},
     };
 
     if (gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR) {
@@ -622,6 +639,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"num_rows_per_group", num_rows_per_batch_per_core_group_1},
         {"reciprocal_size", num_reciprocals},
         {"TILE_WIDTH", tile_width},
+        {"logical_hw", logical_hw},
+        {"padded_hw", padded_hw},
     };
 
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args_group_1 = {};
@@ -656,6 +675,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"num_rows_per_group", num_rows_per_batch_per_core_group_1},
         {"reciprocal_size", num_reciprocals},
         {"TILE_WIDTH", tile_width},
+        {"logical_hw", logical_hw},
+        {"padded_hw", padded_hw},
     };
 
     eltwise_binary_defines["FP32_DEST_ACC"] = fp32_dest_acc_en ? "true" : "false";
@@ -831,6 +852,24 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
             .page_size = single_tile_size,
         }}},
     });
+
+    // Non-tile-aligned H*W correction scalars/scratch (tt-metal #50682): cb_k (c_1) holds the
+    // K scalar written by the writer; cb_msq (c_7) and cb_kmsq (c_11) are single-tile scratch
+    // used by the compute kernel. Only allocated when the flattened height is not tile-aligned
+    // (two-pass path only; Welford is separate).
+    if (!use_welford && logical_hw != padded_hw) {
+        for (uint32_t pad_cb_index : {tt::CBIndex::c_1, tt::CBIndex::c_7, tt::CBIndex::c_11}) {
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = single_tile_size,
+                .core_ranges = all_cores,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(pad_cb_index),
+                    .data_format = cb_data_format,
+                    .page_size = single_tile_size,
+                }}},
+            });
+        }
+    }
 
     if (gamma.has_value()) {
         constexpr uint32_t in5_cb_index = tt::CBIndex::c_5;
