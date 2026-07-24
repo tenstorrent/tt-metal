@@ -216,6 +216,24 @@ Tensor group_norm(
         nhw,
         ttnn::types::TILE_SIZE);
 
+    // Non-tile-aligned H*W correction (tt-metal #50682) is implemented for the two-pass
+    // kernels but not for the Welford kernels (their transposed-tile layout and tile-unit
+    // sample count make the padding rows hard to exclude). Route a non-tile-aligned Welford
+    // request to the (now-correct) two-pass path so results match torch; the optional
+    // reciprocals LUT is Welford-only, so drop it as well.
+    std::optional<Tensor> effective_reciprocals = reciprocals;
+    const uint32_t tile_height_align = input_tensor.tensor_spec().tile().get_height();
+    if (use_welford && (input_shape[2] % tile_height_align != 0)) {
+        log_warning(
+            tt::LogOp,
+            "group_norm: use_welford is not supported for non-tile-aligned H*W ({} % {} != 0); "
+            "falling back to the two-pass path, which handles this case correctly (#50682).",
+            input_shape[2],
+            tile_height_align);
+        use_welford = false;
+        effective_reciprocals = std::nullopt;
+    }
+
     // For 0V tensors
     if (input_tensor.logical_volume() == 0) [[unlikely]] {
         return ttnn::clone(input_tensor, /*dtype=*/std::nullopt, memory_config, /*compute_kernel_config=*/std::nullopt);
@@ -384,7 +402,7 @@ Tensor group_norm(
             beta,
             mask,
             negative_mask,
-            reciprocals);
+            effective_reciprocals);
     }
     // When the user did not pin a core grid, defer num_out_blocks to the program
     // factory's heuristic via the -1 sentinel (see GroupNormMultiCoreProgramConfig).
@@ -408,7 +426,7 @@ Tensor group_norm(
         beta,
         mask,
         negative_mask,
-        reciprocals);
+        effective_reciprocals);
 }
 
 }  // namespace ttnn
