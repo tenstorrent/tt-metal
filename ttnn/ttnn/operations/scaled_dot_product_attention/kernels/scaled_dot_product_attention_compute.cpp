@@ -29,7 +29,11 @@
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
-#include "api/compute/pack.h"  // pack_reconfig_l1_acc (fused O-accumulate reset)
+#include "api/compute/pack.h"                  // pack_tile, pack_reconfig_l1_acc, pack_reconfig_data_format
+#include "api/compute/bcast.h"                 // sub_tiles_bcast_cols, sub_bcast_cols_init_short (fused dual-pack)
+#include "api/compute/eltwise_unary/exp.h"     // exp_tile, exp_tile_init (fused dual-pack)
+#include "api/compute/reconfig_data_format.h"  // reconfig_data_format (fused dual-pack)
+#include "api/compute/reg_api.h"               // tile_regs_acquire/commit/wait/release (fused dual-pack)
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
@@ -55,6 +59,7 @@ constexpr uint32_t cb_m = 25;        // running max (in place)
 constexpr uint32_t cb_max_cur = 26;  // this block's m_cur (scratch)
 constexpr uint32_t cb_max_new = 27;  // this block's rowmax (scratch)
 constexpr uint32_t cb_l = 28;        // running sum (in place)
+constexpr uint32_t cb_exp = 29;      // Fusion #2: P = exp(...) target (separate from scores, for the dual-pack)
 constexpr uint32_t cb_sum_new = 30;  // this block's rowsum (scratch)
 constexpr uint32_t cb_exp_max_diff = 31;
 constexpr uint32_t cb_o = 6;            // running output accumulator (in place)
@@ -68,6 +73,81 @@ struct MMParams {
     uint32_t pv_in0_sb, pv_in1_sb, pv_sb_h, pv_sb_w;
     uint32_t ablate;  // /perf-measure ablation gate: 0=normal, 1=matmul-stub, 2=+reduce-stub, 3=+exp/rescale-stub
 };
+
+// Fusion #2 — fused exp + partial-row-sum dual-pack (raw LLK). Ported from run_804's
+// `fused_exp_dual_pack`, ADAPTED for our scale-folding convention.
+//
+// Replaces phase 4 (P = exp((S - m)*scale)) + phase 5 (dedicated reduce<SUM,REDUCE_ROW>).
+// In one DEST window per query-row it computes P = exp((scores - m_cur)*scale) and packs it
+// to cb_exp (row-major, for the PV matmul) AND, over the SAME DEST tiles, L1-accumulates the
+// element-wise partial row-sum across this chunk's sk key-tiles into cb_sum_new[i] (rows x 32
+// cols, un-reduced) via pack_tile<true> + pack_reconfig_l1_acc. The dedicated per-block reduce
+// then disappears; the running sum l is kept in this partial form across the KV loop and
+// collapsed to a scalar ONCE after the loop (a single reduce<SUM,REDUCE_ROW> before normalize).
+//
+// WHY RAW LLK (helper limitation, not a shortcut): the kernel_lib eltwise chain is
+// single-terminal — it cannot co-pack a normal cb_exp AND an L1-accumulating cb_sum_new from
+// one DEST window. So the dual-pack is not expressible with helpers and is hand-written here.
+//
+// SCALE (deviation from 804, which pre-scales Q so its exp is scale-free): our exp folds the
+// attention scale via a MulUnary(scale_bits) BEFORE Exp. The DEST window therefore does
+// sub_tiles_bcast_cols -> mul_unary_tile(scale_bits) -> exp_tile, mirroring the non-fused
+// eltwise_chain's lowering (BinaryFpu<Sub,Col> -> MulUnary -> Exp<Fast> -> PackTile) exactly.
+//
+// EXP FLAVOR: matches ckl::Exp<Approx::Fast> == exp_tile<true> (approx, ClampToNegative, default
+// scale=1.0). ClampToNegative (the safe clamp) is used — NOT 804's InputClamping::None — so no
+// packer ZERO_RELU is needed (very-negative inputs clamp to ~0 in the SFPU, not to garbage).
+//
+// LIGHTWEIGHT reconfig, NOT full init_bcast: reconfig unpack/math src formats to (scores, m_cur),
+// switch math/unpack to sub-bcast-col, init the scalar-mul + fast exp, reconfig ONLY the pack
+// DATA FORMAT to cb_exp. A full init_bcast would re-init the packer and clobber the boot-time
+// matmul_block_init packer state the per-KV-chunk matmul's InitMode::Short relies on. cb_exp and
+// cb_sum_new share interm_format (bf16 in the fuse_rowsum regime), so the two pack targets need
+// no pack_reconfig_data_format between them. Reached only when fp32_dest_acc_en=False, so DEST
+// holds 8 bf16 tiles and sk (<= K_CHUNK <= 8) fits one acquire section.
+FORCE_INLINE void fused_exp_dual_pack(uint32_t sq, uint32_t sk, uint32_t scale_bits) {
+    const uint32_t sq_sk = sq * sk;
+    cb_wait_front(cb_qk_scores, sq_sk);
+    cb_wait_front(cb_max_cur, sq);  // m_cur (held; NOT popped by this phase — the copy to cb_m pops it)
+    cb_reserve_back(cb_exp, sq_sk);
+    cb_reserve_back(cb_sum_new, sq);
+
+    ckernel::reconfig_data_format(cb_qk_scores, cb_max_cur);
+    ckernel::sub_bcast_cols_init_short(cb_qk_scores, cb_max_cur);
+    ckernel::binop_with_scalar_tile_init();  // mul_unary (scale fold)
+    ckernel::exp_tile_init<true>();          // fast exp, ClampToNegative (matches ckl::Exp<Fast>)
+    ckernel::pack_reconfig_data_format(cb_exp);
+    ckernel::pack_reconfig_l1_acc(0);
+
+    for (uint32_t i = 0; i < sq; ++i) {
+        ckernel::tile_regs_acquire();
+        for (uint32_t j = 0; j < sk; ++j) {
+            // DEST[j] = exp((scores[i,j] - m[i]) * scale)  (m col-broadcast across the 32 cols)
+            ckernel::sub_tiles_bcast_cols(cb_qk_scores, cb_max_cur, i * sk + j, i, j);
+            ckernel::mul_unary_tile(j, scale_bits);
+            ckernel::exp_tile<true>(j);
+        }
+        ckernel::tile_regs_commit();
+        ckernel::tile_regs_wait();
+        // (a) normal pack: exp -> cb_exp[i*sk + j]  (l1_acc still 0)
+        for (uint32_t j = 0; j < sk; ++j) {
+            ckernel::pack_tile<true>(j, cb_exp, i * sk + j);
+        }
+        // (b) L1-accumulate the row's sk key-tiles into cb_sum_new[i] (partial row-sum): seed
+        // with the first tile (l1_acc=0 => overwrite), accumulate the rest (l1_acc=1). DEST is
+        // unchanged by the (a) packs, so it is re-read here.
+        ckernel::pack_tile<true>(0, cb_sum_new, i);
+        ckernel::pack_reconfig_l1_acc(1);
+        for (uint32_t j = 1; j < sk; ++j) {
+            ckernel::pack_tile<true>(j, cb_sum_new, i);
+        }
+        ckernel::pack_reconfig_l1_acc(0);  // reset before next row / downstream ops
+        ckernel::tile_regs_release();
+    }
+    cb_push_back(cb_exp, sq_sk);
+    cb_push_back(cb_sum_new, sq);
+    cb_pop_front(cb_qk_scores, sq_sk);
+}
 
 // One online-softmax KV-step, updating the running (m,l,O) CBs in place.
 //
@@ -94,7 +174,7 @@ struct MMParams {
 // (the reader generates + pushes cb_mask_in exactly for those); fully-past blocks
 // carry no mask and skip the add — the reader pushes nothing for them, so the CB
 // balance holds. For mask_mode=none it is always false.
-template <ckl::Approx CorrExpMode, ckl::Approx PExpMode, bool Fuse>
+template <ckl::Approx CorrExpMode, ckl::Approx PExpMode, bool Fuse, bool FuseRowsum>
 void kv_step(bool first, bool apply_mask, const MMParams& p) {
     const uint32_t sq = p.sq, sk = p.sk, dht = p.dht;
 
@@ -167,39 +247,49 @@ void kv_step(bool first, bool apply_mask, const MMParams& p) {
             ckl::PackTile<ckl::output(cb_exp_max_diff)>{});
     }
 
-    // ---- 4. P = exp((S - m_cur)·scale)  (in place, m_cur col-broadcast) ----
-    // ablate>=3: skip the exp chain (the dominant per-KV-block SFPU op over the whole
-    // sq×sk score block) to isolate its cost. cb_qk_scores is left as the matmul-stub
-    // pushed it (sq·sk tiles present) and popped by the PV matmul-stub → CB balance holds.
-    if (p.ablate < 3) {
-        ckl::eltwise_chain(
-            ckl::EltwiseShape::grid(sq, sk),
-            ckl::BinaryFpu<
-                ckl::input(cb_qk_scores),
-                ckl::input(cb_max_cur, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Col),
-                ckl::BinaryFpuOp::Sub,
-                ckl::BroadcastDim::Col>{},
-            ckl::MulUnary<>{p.scale_bits},
-            ckl::Exp<PExpMode>{},
-            ckl::PackTile<ckl::output(cb_qk_scores)>{});
-    }
-
-    // m_cur -> running max cb_m (cb_m was popped above for !first; freshly filled for first).
-    ckl::copy<ckl::input(cb_max_cur), ckl::output(cb_m)>(ckl::EltwiseShape::tiles(sq));
-
-    // ---- 5. rowsum(P) → cb_sum_new  (keep P resident for PV matmul) ----
-    if (p.ablate >= 2) {
-        // reduce-stub: keep CB scaffolding, no reduce.
-        cb_reserve_back(cb_sum_new, sq);
-        cb_push_back(cb_sum_new, sq);
+    if constexpr (FuseRowsum) {
+        // ---- 4+5 (FUSED, Fusion #2). P = exp((S - m_cur)·scale) -> cb_exp AND the partial
+        // (rows × 32-col, un-reduced) row-sum -> cb_sum_new, from ONE exp DEST window. The
+        // dedicated per-block reduce<SUM> is eliminated (collapsed once post-loop). cb_qk_scores
+        // is popped inside; cb_max_cur is held (the copy below pops it). ----
+        fused_exp_dual_pack(sq, sk, p.scale_bits);
+        // m_cur -> running max cb_m (cb_m was popped above for !first; freshly filled for first).
+        ckl::copy<ckl::input(cb_max_cur), ckl::output(cb_m)>(ckl::EltwiseShape::tiles(sq));
     } else {
-        ckl::reduce<
-            ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_ROW,
-            cb_qk_scores,
-            cb_scaler_sum,
-            cb_sum_new,
-            ckl::ReduceInputPolicy::WaitUpfrontNoPop>(ckl::ReduceInputBlockShape::of(sq, sk));
+        // ---- 4. P = exp((S - m_cur)·scale)  (in place, m_cur col-broadcast) ----
+        // ablate>=3: skip the exp chain (the dominant per-KV-block SFPU op over the whole
+        // sq×sk score block) to isolate its cost. cb_qk_scores is left as the matmul-stub
+        // pushed it (sq·sk tiles present) and popped by the PV matmul-stub → CB balance holds.
+        if (p.ablate < 3) {
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::grid(sq, sk),
+                ckl::BinaryFpu<
+                    ckl::input(cb_qk_scores),
+                    ckl::input(cb_max_cur, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Col),
+                    ckl::BinaryFpuOp::Sub,
+                    ckl::BroadcastDim::Col>{},
+                ckl::MulUnary<>{p.scale_bits},
+                ckl::Exp<PExpMode>{},
+                ckl::PackTile<ckl::output(cb_qk_scores)>{});
+        }
+
+        // m_cur -> running max cb_m (cb_m was popped above for !first; freshly filled for first).
+        ckl::copy<ckl::input(cb_max_cur), ckl::output(cb_m)>(ckl::EltwiseShape::tiles(sq));
+
+        // ---- 5. rowsum(P) → cb_sum_new  (keep P resident for PV matmul) ----
+        if (p.ablate >= 2) {
+            // reduce-stub: keep CB scaffolding, no reduce.
+            cb_reserve_back(cb_sum_new, sq);
+            cb_push_back(cb_sum_new, sq);
+        } else {
+            ckl::reduce<
+                ckernel::PoolType::SUM,
+                ckernel::ReduceDim::REDUCE_ROW,
+                cb_qk_scores,
+                cb_scaler_sum,
+                cb_sum_new,
+                ckl::ReduceInputPolicy::WaitUpfrontNoPop>(ckl::ReduceInputBlockShape::of(sq, sk));
+        }
     }
 
     if constexpr (Fuse) {
@@ -211,10 +301,29 @@ void kv_step(bool first, bool apply_mask, const MMParams& p) {
         // matmul adds onto. Requires full q-chunks (cb_o a single-block full ring), gated
         // host-side by fuse_oaccum = (sqt % sq_chunk_t == 0).
 
-        // -- running l update (unchanged from the non-fused path; corr held for O rescale) --
+        // Fusion #2: the PV matmul reads P from cb_exp (dual-pack target) in the fuse_rowsum
+        // regime, or from cb_qk_scores (in-place exp) otherwise.
+        constexpr uint32_t cb_p = FuseRowsum ? cb_exp : cb_qk_scores;
+
+        // -- running l update (corr held for O rescale) --
         if (first) {
-            // l = rowsum(P)
+            // l = rowsum(P) (partial 32-col form under FuseRowsum; scalar otherwise — same CB shape).
             ckl::copy<ckl::input(cb_sum_new), ckl::output(cb_l)>(ckl::EltwiseShape::tiles(sq));
+        } else if constexpr (FuseRowsum) {
+            // Fusion #2: l kept PARTIAL. l_partial = corr·l_partial (corr col-vector bcast across
+            // the 32 cols; corr held for the O rescale) + chunk_partial_sum. Collapsed post-loop.
+            ckl::mul<
+                ckl::input(cb_l),
+                ckl::input(cb_exp_max_diff, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Col),
+                ckl::output(cb_l),
+                ckl::BroadcastDim::Col>(ckl::EltwiseShape::grid(sq, 1));
+            ckl::add<ckl::input(cb_l), ckl::input(cb_sum_new), ckl::output(cb_l)>(ckl::EltwiseShape::tiles(sq));
+            // O_prev *= corr in place (corr col-broadcast across DHT; consumes corr).
+            ckl::mul<
+                ckl::input(cb_o),
+                ckl::input(cb_exp_max_diff, ckl::InputLifecycle::Bulk, ckl::OperandKind::Col),
+                ckl::output(cb_o),
+                ckl::BroadcastDim::Col>(ckl::EltwiseShape::grid(sq, dht));
         } else {
             // l = corr·l_prev + rowsum(P)   (cb_l updated in place; corr HELD)
             ckl::mul<
@@ -234,8 +343,8 @@ void kv_step(bool first, bool apply_mask, const MMParams& p) {
         // -- O += P·V — PV matmul packs directly onto cb_o (caller-owned, in place) --
         if (p.ablate >= 1) {
             // matmul-stub: mirror the real path's CB ops exactly, no FPU work.
-            cb_wait_front(cb_qk_scores, sq * sk);
-            cb_pop_front(cb_qk_scores, sq * sk);
+            cb_wait_front(cb_p, sq * sk);
+            cb_pop_front(cb_p, sq * sk);
             cb_wait_front(cb_v_in, sk * dht);
             cb_pop_front(cb_v_in, sk * dht);
             if (first) {
@@ -248,7 +357,7 @@ void kv_step(bool first, bool apply_mask, const MMParams& p) {
                 cb_push_back(cb_o, sq * dht);
             }
         } else {
-            CircularBuffer p_buf(cb_qk_scores), v_buf(cb_v_in), o_buf(cb_o);
+            CircularBuffer p_buf(cb_p), v_buf(cb_v_in), o_buf(cb_o);
             const auto pv_shape = ckl::MatmulBlockShape::of(p.pv_in0_sb, p.pv_in1_sb, p.pv_sb_h, p.pv_sb_w, sk, 1);
             if (first) {
                 // Seed: block 0 overwrites (accumulate_output=false). cb_o empty → reserve/push.
@@ -389,6 +498,13 @@ void kernel_main() {
     // Host gates this on full q-chunks (sqt % sq_chunk_t == 0), so cb_o is a single-block
     // full ring the packer can accumulate onto in place.
     constexpr uint32_t fuse_oaccum = get_compile_time_arg_val(16);
+    // Fusion #2 — fused exp + partial-row-sum dual-pack. When set, phase 4 (exp) and phase 5
+    // (dedicated reduce<SUM,REDUCE_ROW>) are replaced by one raw-LLK DEST window that packs
+    // P to cb_exp AND L1-accumulates the partial row-sum into cb_sum_new; the running sum l is
+    // kept partial across the KV loop and collapsed to a scalar once after it. Host-gated to the
+    // fp32_dest_acc_en=False throughput regime (implies fuse_oaccum), so the max-precision path
+    // stays byte-identical. Env TTNN_SDPA_NO_FUSE_ROWSUM forces it off for same-build A/B.
+    constexpr uint32_t fuse_rowsum = get_compile_time_arg_val(17);
 
     const uint32_t q_count = get_arg_val<uint32_t>(0);
     const uint32_t k_num_chunks = get_arg_val<uint32_t>(1);
@@ -427,21 +543,44 @@ void kernel_main() {
             // exp_mode is a compile-time constant → the two unused kv_step
             // instantiations are dead-code-eliminated (no binary bloat).
             if constexpr (exp_mode == 1u) {
-                kv_step<ckl::Approx::Fast, ckl::Approx::Fast, fuse_oaccum != 0u>(k == 0, apply_mask, p);
+                kv_step<ckl::Approx::Fast, ckl::Approx::Fast, fuse_oaccum != 0u, fuse_rowsum != 0u>(
+                    k == 0, apply_mask, p);
             } else if constexpr (exp_mode == 2u) {
-                kv_step<ckl::Approx::Exact, ckl::Approx::Fast, fuse_oaccum != 0u>(k == 0, apply_mask, p);
+                kv_step<ckl::Approx::Exact, ckl::Approx::Fast, fuse_oaccum != 0u, fuse_rowsum != 0u>(
+                    k == 0, apply_mask, p);
             } else {
-                kv_step<ckl::Approx::Exact, ckl::Approx::Exact, fuse_oaccum != 0u>(k == 0, apply_mask, p);
+                kv_step<ckl::Approx::Exact, ckl::Approx::Exact, fuse_oaccum != 0u, fuse_rowsum != 0u>(
+                    k == 0, apply_mask, p);
             }
         }
 
-        // O /= l, per row (recip in place on cb_l, then O·(1/l) → cb_out).
-        ckl::unary<ckl::Recip<>, ckl::input(cb_l), ckl::output(cb_l)>(ckl::EltwiseShape::tiles(sq));
-        ckl::mul<
-            ckl::input(cb_o),
-            ckl::input(cb_l, ckl::InputLifecycle::Bulk, ckl::OperandKind::Col),
-            ckl::output(cb_out),
-            ckl::BroadcastDim::Col>(ckl::EltwiseShape::grid(sq, dht));
+        // O /= l, per row.
+        if constexpr (fuse_rowsum != 0u) {
+            // Fusion #2: collapse the partial (32-col) running sum to the scalar denominator l
+            // ONCE per q-chunk — a single reduce<SUM,REDUCE_ROW> (amortized over the whole KV
+            // loop instead of one reduce per block) -> cb_sum_new (free after the loop; pops cb_l).
+            ckl::reduce<
+                ckernel::PoolType::SUM,
+                ckernel::ReduceDim::REDUCE_ROW,
+                cb_l,
+                cb_scaler_sum,
+                cb_sum_new,
+                ckl::ReduceInputPolicy::BulkWaitBulkPop>(ckl::ReduceInputBlockShape::of(1, 1, sq));
+            ckl::unary<ckl::Recip<>, ckl::input(cb_sum_new), ckl::output(cb_sum_new)>(ckl::EltwiseShape::tiles(sq));
+            ckl::mul<
+                ckl::input(cb_o),
+                ckl::input(cb_sum_new, ckl::InputLifecycle::Bulk, ckl::OperandKind::Col),
+                ckl::output(cb_out),
+                ckl::BroadcastDim::Col>(ckl::EltwiseShape::grid(sq, dht));
+        } else {
+            // recip in place on cb_l, then O·(1/l) → cb_out.
+            ckl::unary<ckl::Recip<>, ckl::input(cb_l), ckl::output(cb_l)>(ckl::EltwiseShape::tiles(sq));
+            ckl::mul<
+                ckl::input(cb_o),
+                ckl::input(cb_l, ckl::InputLifecycle::Bulk, ckl::OperandKind::Col),
+                ckl::output(cb_out),
+                ckl::BroadcastDim::Col>(ckl::EltwiseShape::grid(sq, dht));
+        }
 
         // Release the leftover running max (never consumed) and the retained Q.
         cb_pop_front(cb_m, sq);

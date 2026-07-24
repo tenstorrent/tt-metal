@@ -87,6 +87,9 @@ CB_MAX_B = 26
 CB_MAX_NEW = 27
 CB_SUM_A = 28
 CB_SUM_B = 29
+CB_EXP = (
+    29  # Fusion #2: P = exp(...) dual-pack target (reuses the freed CB_SUM_B slot; only allocated when fuse_rowsum)
+)
 CB_SUM_NEW = 30
 CB_EXP_MAX_DIFF = 31
 CB_OUT_A = 6
@@ -134,7 +137,7 @@ def _divisors_leq(n, cap):
     return [d for d in range(1, min(n, cap) + 1) if n % d == 0]
 
 
-def _cb_specs(sq, sk, dht, needs_mask, in_df, out_df, interm_df, scaler_df, mask_df):
+def _cb_specs(sq, sk, dht, needs_mask, in_df, out_df, interm_df, scaler_df, mask_df, fuse_rowsum=False):
     """(index, num_pages, data_format) for every CB — the SINGLE source of truth
     shared by the L1-footprint budget calc and the actual CB build below. Page
     counts are functions of the block factors sq/sk and DHt (never the full S).
@@ -166,6 +169,10 @@ def _cb_specs(sq, sk, dht, needs_mask, in_df, out_df, interm_df, scaler_df, mask
         (CB_OUT_NEW, o_tiles, interm_df),
         (CB_OUT_SCALED, o_tiles, interm_df),
     ]
+    if fuse_rowsum:
+        # Fusion #2: P = exp(...) dual-pack target (separate from cb_qk_scores so pack_tile<true>
+        # writes only into reserved space). Same bf16 interm format as cb_sum_new.
+        specs.append((CB_EXP, qk_tiles, interm_df))
     if needs_mask:
         specs.append((CB_MASK_IN, qk_tiles * KV_BUFFER_FACTOR, mask_df))
     return specs
@@ -175,14 +182,18 @@ def _cb_footprint_bytes(specs):
     return sum(num_pages * ttnn.tile_size(df) for _, num_pages, df in specs)
 
 
-def _fits_l1(sq, sk, dht, needs_mask, in_df, out_df, interm_df, scaler_df, mask_df):
+def _fits_l1(sq, sk, dht, needs_mask, in_df, out_df, interm_df, scaler_df, mask_df, fuse_rowsum=False):
     return (
-        _cb_footprint_bytes(_cb_specs(sq, sk, dht, needs_mask, in_df, out_df, interm_df, scaler_df, mask_df))
+        _cb_footprint_bytes(
+            _cb_specs(sq, sk, dht, needs_mask, in_df, out_df, interm_df, scaler_df, mask_df, fuse_rowsum)
+        )
         <= L1_CB_BUDGET
     )
 
 
-def _pick_chunks(sqt, skvt, dht, needs_mask, in_df, out_df, interm_df, scaler_df, mask_df, bh=1, num_cores=1):
+def _pick_chunks(
+    sqt, skvt, dht, needs_mask, in_df, out_df, interm_df, scaler_df, mask_df, bh=1, num_cores=1, fuse_rowsum=False
+):
     """Block-factor pair (sq_chunk_t, sk_chunk_t) for this shape.
 
     Refinement 3b — compute-side amortization: FIRST try the coarse pair
@@ -199,7 +210,7 @@ def _pick_chunks(sqt, skvt, dht, needs_mask, in_df, out_df, interm_df, scaler_df
     <= (Q_CHUNK_TILES, K_CHUNK_TILES) whose per-core CB footprint fits L1 (D<=256
     keep (4,4); large head_dim shrinks to fit). Falls back to (1,1) if even that OOMs.
     """
-    fits = lambda sq, sk: _fits_l1(sq, sk, dht, needs_mask, in_df, out_df, interm_df, scaler_df, mask_df)
+    fits = lambda sq, sk: _fits_l1(sq, sk, dht, needs_mask, in_df, out_df, interm_df, scaler_df, mask_df, fuse_rowsum)
 
     cq, ck = Q_CHUNK_COARSE, K_CHUNK_COARSE
     if sqt % cq == 0 and skvt % ck == 0 and fits(cq, ck) and bh * (sqt // cq) >= num_cores:
@@ -208,7 +219,9 @@ def _pick_chunks(sqt, skvt, dht, needs_mask, in_df, out_df, interm_df, scaler_df
     best = None  # (footprint, sq, sk)
     for sq in _divisors_leq(sqt, Q_CHUNK_TILES):
         for sk in _divisors_leq(skvt, K_CHUNK_TILES):
-            fp = _cb_footprint_bytes(_cb_specs(sq, sk, dht, needs_mask, in_df, out_df, interm_df, scaler_df, mask_df))
+            fp = _cb_footprint_bytes(
+                _cb_specs(sq, sk, dht, needs_mask, in_df, out_df, interm_df, scaler_df, mask_df, fuse_rowsum)
+            )
             if fp <= L1_CB_BUDGET and (best is None or fp > best[0]):
                 best = (fp, sq, sk)
     if best is None:
@@ -274,6 +287,15 @@ def create_program_descriptor(
     fp32_dest_acc_en = bool(getattr(compute_kernel_config, "fp32_dest_acc_en", True))
     dst_limit = 4 if fp32_dest_acc_en else 8
 
+    # Fusion #2 gate (fuse_rowsum): fuse the per-KV-block exp + row-sum reduce into a single
+    # raw-LLK dual-pack DEST window (P -> cb_exp AND the partial row-sum L1-accumulated into
+    # cb_sum_new), keeping the running sum l partial across the loop and collapsing it once at the
+    # end. Host-gated to the fp32_dest_acc_en=False throughput regime (bf16 softmax intermediates,
+    # matching 804's precondition; the fp32-DEST max-precision path stays byte-identical) and,
+    # below, to full q-chunks (implies fuse_oaccum). Env TTNN_SDPA_NO_FUSE_ROWSUM forces it off for
+    # same-source A/B. Drives cb_exp allocation so non-qualifying shapes are byte-identical.
+    fuse_rowsum_regime = (not fp32_dest_acc_en) and not os.environ.get("TTNN_SDPA_NO_FUSE_ROWSUM")
+
     # ---- Circular-buffer formats (dtype-derived; single source per role) ----
     # (resolved here — before the block-factor pick — because the CB footprint,
     #  hence the L1-budget cap on sq_chunk_t/sk_chunk_t, depends on the tile bytes
@@ -316,6 +338,7 @@ def create_program_descriptor(
         mask_df,
         bh=b * h_q,
         num_cores=num_cores,
+        fuse_rowsum=fuse_rowsum_regime,
     )
     q_num_chunks = sqt // sq_chunk_t
     k_num_chunks = skvt // sk_chunk_t
@@ -439,7 +462,7 @@ def create_program_descriptor(
     cbs = [
         cb(index, num_pages, data_format)
         for index, num_pages, data_format in _cb_specs(
-            sq_chunk_t, sk_chunk_t, dht, needs_mask_cb, in_df, out_df, interm_df, scaler_df, mask_df
+            sq_chunk_t, sk_chunk_t, dht, needs_mask_cb, in_df, out_df, interm_df, scaler_df, mask_df, fuse_rowsum_regime
         )
     ]
 
@@ -509,6 +532,13 @@ def create_program_descriptor(
     )
 
     # ---- Compute kernel ----
+    # Fusion #1 / #2 gates (compute CT args 16 / 17). fuse_oaccum requires full q-chunks (always
+    # true here — sq_chunk_t divides sqt). fuse_rowsum additionally requires the throughput regime
+    # (fuse_rowsum_regime) AND is gated to imply fuse_oaccum (the kernel's fused-rowsum path always
+    # L1-accumulates PV onto cb_o): if O-accumulate is env-disabled, row-sum fusion is off too.
+    fuse_oaccum = 0 if os.environ.get("TTNN_SDPA_NO_FUSE_OACCUM") else (1 if (sqt % sq_chunk_t == 0) else 0)
+    fuse_rowsum = 1 if (fuse_oaccum and fuse_rowsum_regime and (sqt % sq_chunk_t == 0)) else 0
+
     # k_num_chunks is a RUNTIME arg (not CT): a constexpr loop bound would let
     # the compiler fully unroll the large kv_step body per KV-block, blowing the
     # kernel-config buffer for long sequences. Keeping it runtime keeps the loop
@@ -552,7 +582,13 @@ def create_program_descriptor(
         # caller-owned Interm target), eliminating the separate cb_out_new PV target and
         # the O += PV add pass. The full-q-chunk gate guarantees cb_o is a single-block
         # full ring the packer can accumulate onto in place.
-        0 if os.environ.get("TTNN_SDPA_NO_FUSE_OACCUM") else (1 if (sqt % sq_chunk_t == 0) else 0),
+        fuse_oaccum,
+        # Fusion #2 — fused exp + partial-row-sum dual-pack. Enabled only when fuse_oaccum is
+        # (so FuseRowsum ⇒ Fuse in the kernel — the fused-rowsum path always L1-accumulates PV
+        # onto cb_o and reads P from cb_exp) AND the throughput regime holds (fp32_dest_acc_en
+        # =False, env not disabling). The full-q-chunk requirement is already carried by
+        # fuse_oaccum. Non-qualifying shapes get 0 and take the byte-identical non-fused fallback.
+        fuse_rowsum,
     ]
     # Rebuild the compute config with the dtype-correct fidelity (never pass a
     # HiFi4 + fp32-DEST + bf16 combo through — issue #38306). fp32_dest_acc_en
