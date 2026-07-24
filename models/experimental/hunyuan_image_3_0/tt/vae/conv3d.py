@@ -1,0 +1,449 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+"""Shared VAE Conv3d layer (weight prep uses tt_dit Module hook; kept separate from model logic)."""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from typing import Any
+
+import ttnn
+from models.common.utility_functions import is_blackhole
+from models.experimental.hunyuan_image_3_0.ref.vae.decoder import LATENT_H, LATENT_T, LATENT_W
+from models.experimental.hunyuan_image_3_0.tt.vae.conv3d_blockings import register_hunyuan_conv3d_blockings
+from models.tt_dit.layers.audio_ops import prepare_conv3d_weight_state
+from models.tt_dit.layers.module import Module, Parameter
+from models.tt_dit.utils.conv3d import (
+    _BLOCKINGS,
+    _DEFAULT_BLOCKINGS,
+    _ntuple,
+    aligned_channels,
+    get_conv3d_config,
+)
+
+register_hunyuan_conv3d_blockings()
+
+# Max im2col elements (in_ch*T*H*W*kernel_vol) before a conv3d chunks over H.
+# The conv3d op's internal buffers are addressed with 32 bits, so a single buffer
+# above ~4 GB (2^31 bf16 elems) faults with a "non-existent physical address" bus
+# error. Cap the per-conv im2col well under that (~1 GB elems => ~2 GB bf16) so a
+# chunk always fits; GRID<=64 stays below this and is unaffected (no chunking).
+_CONV3D_CHUNK_ELEMS = 1024 * 1024 * 1024
+
+# Decoder tail conv_out pins this cap via ``_h_chunk_override`` so a higher global
+# threshold cannot coalesce its H-chunks (1280M regressed tail ~3.3 ms/chunk vs ~1.3).
+_TAIL_CONV_OUT_CHUNK_ELEMS = _CONV3D_CHUNK_ELEMS
+
+_KERNEL_VOLUME = 3 * 3 * 3
+_KERNEL_H = 3
+
+# The decoder blocking sweep tunes valid-conv strips at H=130 input (128 output) and its
+# multiples (258/386 -> 256/384). A chunk whose output height is NOT a multiple of this
+# misses every tuned key and resolves to a generic fallback blocking that is catastrophic:
+# the u3 256->512 upsample conv measured 283 ms at a 129-input (127-output) strip vs 17.5 ms
+# on the aligned 130-input (128-output) strip. So snap valid-conv chunk heights to 128.
+_TUNED_H_STRIP = 128
+
+
+def conv3d_valid_input_h_chunk(output_h_chunk: int) -> int:
+    """Input-H strip height matching a valid-conv output strip (kH=3)."""
+    return output_h_chunk + (_KERNEL_H - 1)
+
+
+def _strip_fits_cap(out_h_strip: int, *, in_channels: int, t: int, w: int, chunk_elems: int) -> bool:
+    """Does a valid-conv output strip of height ``out_h_strip`` keep im2col under the cap?"""
+    return in_channels * t * (out_h_strip + (_KERNEL_H - 1)) * w * _KERNEL_VOLUME <= chunk_elems
+
+
+def conv3d_h_chunk_size(
+    *,
+    t: int,
+    h: int,
+    w: int,
+    in_channels: int,
+    valid_conv: bool,
+    chunk_elems: int = _CONV3D_CHUNK_ELEMS,
+) -> int | None:
+    """Output-H strip height for im2col chunking, or None if a single conv fits."""
+    im2col_elems = in_channels * t * h * w * _KERNEL_VOLUME
+    if im2col_elems <= chunk_elems:
+        return None
+    h_span = h - (_KERNEL_H - 1) if valid_conv else h
+    n_chunks = (im2col_elems + chunk_elems - 1) // chunk_elems
+    hc = (h_span + n_chunks - 1) // n_chunks
+    if valid_conv:
+        # Snap to the tuned strip granularity (multiple of _TUNED_H_STRIP) so every strip
+        # hits a swept blocking. Round down to a tuned multiple (smaller strips only shrink
+        # im2col, so the cap still holds); floor at one strip when that strip fits the cap.
+        aligned = (hc // _TUNED_H_STRIP) * _TUNED_H_STRIP
+        if aligned < _TUNED_H_STRIP and _strip_fits_cap(
+            _TUNED_H_STRIP, in_channels=in_channels, t=t, w=w, chunk_elems=chunk_elems
+        ):
+            aligned = _TUNED_H_STRIP
+        if aligned >= _TUNED_H_STRIP:
+            hc = aligned
+    return hc
+
+
+def conv3d_h_chunk_size_for_conv(
+    conv: HunyuanSymmetricConv3d,
+    *,
+    t: int,
+    h: int,
+    w: int,
+    chunk_elems: int = _CONV3D_CHUNK_ELEMS,
+) -> int | None:
+    """Tail conv_out only: plan H-chunk strips using post-pad spatial geometry."""
+    pH, pW = conv.padding[1], conv.padding[2]
+    if conv.spatial_sharded:
+        if conv.h_mesh_axis is not None and pH > 0:
+            h += 2 * pH
+        if conv.w_mesh_axis is not None and pW > 0:
+            w += 2 * pW
+    return conv3d_h_chunk_size(
+        t=t,
+        h=h,
+        w=w,
+        in_channels=conv.in_channels,
+        valid_conv=conv.spatial_sharded,
+        chunk_elems=chunk_elems,
+    )
+
+
+def promote_conv3d_fallback_to_exact(
+    *,
+    h_factor: int,
+    w_factor: int,
+    in_channels: int,
+    out_channels: int,
+    kernel_size: tuple[int, int, int],
+    t: int,
+    h: int,
+    w: int,
+) -> None:
+    """Copy a channel-keyed fallback blocking into the exact table for this shape."""
+    blocking_key = (h_factor, w_factor, in_channels, out_channels, kernel_size, t, h, w)
+    if blocking_key in _BLOCKINGS:
+        return
+    channel_key = (in_channels, out_channels, kernel_size)
+    fallback = _DEFAULT_BLOCKINGS.get(channel_key)
+    if fallback is not None:
+        _BLOCKINGS[blocking_key] = fallback
+
+
+class HunyuanSymmetricConv3d(Module):
+    """Conv3d with symmetric padding on T, H, W. Input/output layout: BTHWC ROW_MAJOR."""
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        *,
+        kernel_size: Sequence[int] | int = 3,
+        stride: Sequence[int] | int = 1,
+        padding: Sequence[int] | int = 1,
+        mesh_device: ttnn.MeshDevice,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+        t: int = LATENT_T,
+        h: int = LATENT_H,
+        w: int = LATENT_W,
+        ccl_manager=None,
+        h_mesh_axis: int | None = None,
+        w_mesh_axis: int | None = None,
+    ) -> None:
+        super().__init__()
+
+        self.unpadded_in_channels = in_channels
+        self.in_channels = aligned_channels(in_channels)
+        self.unpadded_out_channels = out_channels
+        self.out_channels = out_channels
+
+        self.kernel_size = _ntuple(kernel_size, 3)
+        self.stride = _ntuple(stride, 3)
+        self.padding = _ntuple(padding, 3)
+        self.mesh_device = mesh_device
+
+        # Spatial (H/W) parallel: when a CCLManager + mesh axes are given, the input
+        # arrives sharded on H (h_mesh_axis) and/or W (w_mesh_axis). The conv then
+        # neighbor-pads the shard boundary (halo = padding) across the mesh and runs
+        # with internal H/W padding disabled — see _forward_sharded.
+        self.ccl = ccl_manager
+        self.h_mesh_axis = h_mesh_axis
+        self.w_mesh_axis = w_mesh_axis
+        self.spatial_sharded = ccl_manager is not None and (h_mesh_axis is not None or w_mesh_axis is not None)
+        self.dtype = dtype
+
+        promote_conv3d_fallback_to_exact(
+            h_factor=1,
+            w_factor=1,
+            in_channels=self.in_channels,
+            out_channels=self.out_channels,
+            kernel_size=self.kernel_size,
+            t=t,
+            h=h,
+            w=w,
+        )
+        self.conv_config = get_conv3d_config(
+            self.in_channels,
+            self.out_channels,
+            self.kernel_size,
+            dtype,
+            grid_size=mesh_device.compute_with_storage_grid_size(),
+            h_factor=1,
+            w_factor=1,
+            T=t,
+            H=h,
+            W=w,
+        )
+
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2
+            if (is_blackhole() and dtype == ttnn.float32)
+            else ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
+        weight_elems = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
+        self.weight = Parameter(
+            total_shape=[weight_elems, self.out_channels],
+            device=mesh_device,
+            pad_value=0,
+            dtype=dtype,
+        )
+        self.bias = Parameter(
+            total_shape=[1, self.out_channels],
+            device=mesh_device,
+            pad_value=0,
+            dtype=dtype,
+        )
+
+    def _prepare_torch_state(self, state: dict[str, Any]) -> None:
+        if "weight" in state:
+            prepare_conv3d_weight_state(
+                state,
+                state["weight"],
+                conv_config=self.conv_config,
+                mesh_device=self.mesh_device,
+                dtype=self.dtype,
+                unpadded_out=self.unpadded_out_channels,
+                out_channels=self.out_channels,
+                unpadded_in=self.unpadded_in_channels,
+                in_channels=self.in_channels,
+            )
+        if "bias" in state:
+            state["bias"] = state["bias"].reshape(1, -1)
+
+    def _conv(self, x_bthwc, padding, config):
+        return ttnn.experimental.conv3d(
+            input_tensor=x_bthwc,
+            weight_tensor=self.weight.data,
+            bias_tensor=self.bias.data,
+            device=self.mesh_device,
+            config=config,
+            output_channels=self.out_channels,
+            kernel_size=self.kernel_size,
+            stride=self.stride,
+            padding=padding,
+            padding_mode="zeros",
+            dtype=self.dtype,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+
+    def _forward_sharded(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
+        """Spatially-sharded conv: neighbor-pad the H/W shard boundary (cross-mesh
+        halo) then conv with internal H/W padding disabled. Output stays sharded.
+
+        Each device holds [b, t, h_local, w_local, c]. neighbor_pad adds `padding`
+        rows/cols on each side — true zeros at the global image edge, real neighbor
+        data at interior shard boundaries — so the kernel sees the same receptive
+        field it would in the replicated conv. With padding=(kH-1)/2 etc., conv with
+        H/W padding 0 returns the original local spatial size.
+        """
+        from models.tt_dit.parallel.config import neighbor_pad_safe_num_links, vae_neighbor_pad
+
+        pT, pH, pW = self.padding
+        x = x_bthwc
+        need_w = self.w_mesh_axis is not None and pW > 0
+        need_h = self.h_mesh_axis is not None and pH > 0
+        if need_w and need_h:
+            # Both axes sharded: one fused neighbor_pad_async dispatch instead of two
+            # sequential ones. neighbor_pad_async natively supports "fused 2D padding"
+            # when the two dims differ (H=dim2, W=dim3 always do), halving the op's
+            # dispatch count for this halo exchange.
+            # Clamp links per pad dim: H-pad (dim=2) on [B,T,H,W,C] with B=T=1 only
+            # allows num_links=1 (TT_FATAL outer_dim_size >= num_links).
+            sem_h = self.ccl.get_np_ping_pong_semaphore(self.h_mesh_axis)
+            sem_w = self.ccl.get_np_ping_pong_semaphore(self.w_mesh_axis)
+            barrier_semaphore = self.ccl.get_barrier_semaphore(self.h_mesh_axis)
+            n_h = neighbor_pad_safe_num_links(x, 2, self.ccl.num_links)
+            n_w = neighbor_pad_safe_num_links(x, 3, self.ccl.num_links)
+            x = ttnn.experimental.neighbor_pad_async(
+                x,
+                [2, 3],
+                [pH, pW],
+                [pH, pW],
+                "zeros",
+                [self.h_mesh_axis, self.w_mesh_axis],
+                [sem_h, sem_w],
+                [barrier_semaphore],
+                num_links=[n_h, n_w],
+                topology=ttnn.Topology.Linear,
+            )
+        elif need_w:
+            x = vae_neighbor_pad(
+                self.ccl,
+                x,
+                cluster_axis=self.w_mesh_axis,
+                dim=3,
+                padding_left=pW,
+                padding_right=pW,
+                padding_mode="zeros",
+            )
+        elif need_h:
+            xp = vae_neighbor_pad(
+                self.ccl,
+                x,
+                cluster_axis=self.h_mesh_axis,
+                dim=2,
+                padding_left=pH,
+                padding_right=pH,
+                padding_mode="zeros",
+            )
+            x = xp
+        # x now carries the halo on any sharded axis, so the conv runs with H/W padding
+        # disabled on those axes. An axis that is NOT sharded keeps its normal padding.
+        conv_pH = 0 if (self.h_mesh_axis is not None and pH > 0) else pH
+        conv_pW = 0 if (self.w_mesh_axis is not None and pW > 0) else pW
+        out = self._conv_valid_h(x, pT, conv_pH, conv_pW)
+        if x is not x_bthwc:
+            ttnn.deallocate(x)
+        return out
+
+    def _conv_valid_h(self, x_bthwc: ttnn.Tensor, pT: int, conv_pH: int, conv_pW: int) -> ttnn.Tensor:
+        """Run the conv, chunking over output H when the im2col buffer would exceed the
+        32-bit addressing cap (_CONV3D_CHUNK_ELEMS). Requires the H halo to already be in
+        x (conv_pH == 0) so each output strip [o:oe] is produced from input rows
+        [o : oe + kH-1] with padding_h=0 — bit-identical to the single-shot conv."""
+        b, t, h, w, c = x_bthwc.shape
+        kT, kH, kW = self.kernel_size
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        cfg_full = get_conv3d_config(
+            self.in_channels,
+            self.out_channels,
+            self.kernel_size,
+            self.dtype,
+            grid_size=grid,
+            h_factor=1,
+            w_factor=1,
+            T=t,
+            H=h,
+            W=w,
+        )
+        im2col_elems = self.in_channels * t * h * w * kT * kH * kW
+        h_chunk_override = getattr(self, "_h_chunk_override", None)
+        # Only the valid-conv (halo-padded, conv_pH==0) case can be chunked cleanly.
+        if (im2col_elems <= _CONV3D_CHUNK_ELEMS and h_chunk_override is None) or conv_pH != 0 or h <= kH:
+            return self._conv(x_bthwc, (pT, conv_pH, conv_pW), cfg_full)
+
+        h_out = h - (kH - 1)  # valid-conv output height (padding_h == 0)
+        if h_chunk_override is not None:
+            hc = h_chunk_override
+        else:
+            n_chunks = (im2col_elems + _CONV3D_CHUNK_ELEMS - 1) // _CONV3D_CHUNK_ELEMS
+            hc = (h_out + n_chunks - 1) // n_chunks
+        outs = []
+        for o in range(0, h_out, hc):
+            oe = min(h_out, o + hc)
+            in_slice = ttnn.slice(x_bthwc, [0, 0, o, 0, 0], [b, t, oe + (kH - 1), w, c])
+            cfg = get_conv3d_config(
+                self.in_channels,
+                self.out_channels,
+                self.kernel_size,
+                self.dtype,
+                grid_size=grid,
+                h_factor=1,
+                w_factor=1,
+                T=t,
+                H=in_slice.shape[2],
+                W=w,
+            )
+            outs.append(self._conv(in_slice, (pT, 0, conv_pW), cfg))
+            ttnn.deallocate(in_slice)
+        out = ttnn.concat(outs, dim=2)
+        for o_t in outs:
+            ttnn.deallocate(o_t)
+        return out
+
+    def _cached_h_pad_zeros(self, b: int, t: int, pH: int, w: int, last: int, dtype) -> ttnn.Tensor:
+        """Cached H-boundary zero pad — ``ttnn.zeros`` H2D is illegal during trace capture."""
+        cache = getattr(self, "_h_pad_zeros_cache", None)
+        if cache is None:
+            cache = {}
+            self._h_pad_zeros_cache = cache
+        key = (b, t, pH, w, last, dtype)
+        if key not in cache:
+            cache[key] = ttnn.zeros(
+                [b, t, pH, w, last], dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh_device
+            )
+        return cache[key]
+
+    def forward(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
+        assert (
+            x_bthwc.layout == ttnn.ROW_MAJOR_LAYOUT
+        ), f"HunyuanSymmetricConv3d expects ROW_MAJOR, got {x_bthwc.layout}"
+
+        if self.spatial_sharded:
+            return self._forward_sharded(x_bthwc)
+
+        b, t, h, w, _ = x_bthwc.shape
+        kT, kH, kW = self.kernel_size
+        pT, pH, pW = self.padding
+        im2col_elems = self.in_channels * t * h * w * kT * kH * kW
+        h_chunk_override = getattr(self, "_h_chunk_override", None)
+        if (
+            (im2col_elems <= _CONV3D_CHUNK_ELEMS and h_chunk_override is None)
+            or h <= 1
+            or self.stride[1] != 1
+            or pH == 0
+        ):
+            return self._conv(x_bthwc, self.padding, self.conv_config)
+
+        # Chunk over H to bound the conv's ~im2col DRAM buffer. Zero-pad H by pH
+        # (true-boundary padding), then conv overlapping strips with padding_h=0;
+        # interior strips read real neighbor rows from the padded tensor (halo).
+        if h_chunk_override is not None:
+            hc = h_chunk_override
+        else:
+            n_chunks = (im2col_elems + _CONV3D_CHUNK_ELEMS - 1) // _CONV3D_CHUNK_ELEMS
+            hc = (h + n_chunks - 1) // n_chunks
+        last = x_bthwc.shape[-1]
+        zpad = self._cached_h_pad_zeros(b, t, pH, w, last, x_bthwc.dtype)
+        x_pad = ttnn.concat([zpad, x_bthwc, zpad], dim=2)
+        h_pad = x_pad.shape[2]
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        outs = []
+        for o in range(0, h, hc):
+            oe = min(h, o + hc)
+            in_slice = ttnn.slice(x_pad, [0, 0, o, 0, 0], [b, t, min(oe + 2 * pH, h_pad), w, last])
+            cfg = get_conv3d_config(
+                self.in_channels,
+                self.out_channels,
+                self.kernel_size,
+                self.dtype,
+                grid_size=grid,
+                h_factor=1,
+                w_factor=1,
+                T=t,
+                H=in_slice.shape[2],
+                W=w,
+            )
+            outs.append(self._conv(in_slice, (pT, 0, pW), cfg))
+            ttnn.deallocate(in_slice)
+        ttnn.deallocate(x_pad)
+        out = ttnn.concat(outs, dim=2)
+        for o_t in outs:
+            ttnn.deallocate(o_t)
+        return out

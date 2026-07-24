@@ -823,6 +823,26 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
+# ── HunyuanImage-3.0 ───────────────────────────────────────────────
+# Base prompt-only text-to-image on a 2x2 mesh using the resident BF8 32-layer
+# MoE backbone and on-device VAE decode. CI uses 8 denoise steps (HY_STEPS).
+# First run: ensure_base_weights() snapshot_downloads into HUNYUAN_MODEL_DIR
+# (~160 GB) when the tree is missing/incomplete; later runs reuse the NAS path.
+# Do not set HY_SKIP_WEIGHT_DOWNLOAD=1 here or the first populate will fail.
+- name: HunyuanImage-3.0 T2I e2e tests
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface HUNYUAN_MODEL_DIR=/mnt/MLPerf/huggingface/tencent/HunyuanImage-3.0
+    export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_cache/tencent/HunyuanImage-3.0
+    export HY_STEPS=8
+    pytest --timeout 10800 -s models/experimental/hunyuan_image_3_0/demo/test_demo.py
+  model: hunyuan-image-3.0
+  skus:
+    bh_quietbox_2:
+      timeout: 35
+      tier: 3
+  owner_id: D0B8130N4BW # Dalar Vartanians
+  team: models
+
 # ── Panoptic DeepLab ───────────────────────────────────────────────
 - name: panoptic-deeplab e2e tests
   cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo_pipeline --timeout=1020
