@@ -2,8 +2,8 @@
 
 `boot` = `--worktree-dir` file · `run` = `--log-dir "$LOG_DIR"` file.
 `★` = agent must write those keys back into `run`.
-`SKIP_TESTER` (boolean, from router; default `false`): when true the writer validates the kernel against its existing tests in a 5-run fix loop and writes the `★` tester counts itself; the orchestrator skips the tester and refiner and routes the writer's PASSED/FAILED straight to optimizer / failed.
-`HIDE_EXISTING_KERNEL` (boolean, from router; default `false`): when true, `execute_step_hide_existing_kernel` (Step 2b) git-removes and commits the target op's existing files on the worktree branch before the analyzer runs, so the pipeline regenerates blind. `execute_step_setup_run` mirrors it from `boot` into `run` exactly like `SKIP_TESTER`.
+`LOCK_TESTS` (boolean, from router; default `false`): when true the tester runs test-locked — it treats the existing test as the immutable source of truth, authors or modifies no test, and only runs it and debugs the kernel; the writer→tester→refiner loop is otherwise unchanged.
+`HIDE_EXISTING_KERNEL` (boolean, from router; default `false`): when true, `execute_step_hide_existing_kernel` (Step 2b) git-removes and commits the target op's existing files on the worktree branch before the analyzer runs, so the pipeline regenerates blind. `execute_step_setup_run` mirrors it from `boot` into `run` exactly like `LOCK_TESTS`.
 
 ## Orchestrator ⇄ agents
 
@@ -11,11 +11,11 @@ Left box into an agent = what it consumes · right box out = what it produces.
 
 ```mermaid
 flowchart LR
-  ROUTER["router (begin_setup → run.json step=setup, pre-worktree)"] --> RB["KERNEL_NAME, TARGET_ARCH, SFPI_MODE, SKIP_TESTER, HIDE_EXISTING_KERNEL,<br/>WORKTREE_BRANCH, LOG_DIR_BASE,<br/>LOG_DIR, RUN_ID, START_TIME (from begin_setup)"] --> ORCH(["orchestrator"])
+  ROUTER["router (begin_setup → run.json step=setup, pre-worktree)"] --> RB["KERNEL_NAME, TARGET_ARCH, SFPI_MODE, LOCK_TESTS, HIDE_EXISTING_KERNEL,<br/>WORKTREE_BRANCH, LOG_DIR_BASE,<br/>LOG_DIR, RUN_ID, START_TIME (from begin_setup)"] --> ORCH(["orchestrator"])
 
   ORCH --> aI["kernel identity"] --> ANA["analyzer"] --> aO["analysis.md,<br/>error line"] --> ORCH
-  ORCH --> wI["analysis, CYCLE,<br/>GENERATED_KERNEL, SKIP_TESTER"] --> WR["writer"] --> wO["PASSED / FAILED, error line, compile count<br/>(SKIP_TESTER: also TESTS_TOTAL, TESTS_PASSED,<br/>TESTER_COMPILE_COUNT, PHASE_DEBUGS)"] --> ORCH
-  ORCH --> tI["compiled kernel,<br/>CYCLE, LOG_DIR"] --> TST["tester ★"] --> tO["PASS / STUCK / ENV_ERROR,<br/>TESTS_TOTAL, TESTS_PASSED, TESTS_GENERATED,<br/>TESTER_COMPILE_COUNT, PHASE_DEBUGS,<br/>FORMATS_TESTED_JSON, FORMATS_EXCLUDED_JSON"] --> ORCH
+  ORCH --> wI["analysis, CYCLE,<br/>GENERATED_KERNEL"] --> WR["writer"] --> wO["PASSED / FAILED, error line, compile count"] --> ORCH
+  ORCH --> tI["compiled kernel,<br/>CYCLE, LOG_DIR, LOCK_TESTS"] --> TST["tester ★"] --> tO["PASS / STUCK / ENV_ERROR,<br/>TESTS_TOTAL, TESTS_PASSED, TESTS_GENERATED,<br/>TESTER_COMPILE_COUNT, PHASE_DEBUGS,<br/>FORMATS_TESTED_JSON, FORMATS_EXCLUDED_JSON"] --> ORCH
   ORCH --> rI["PREV_RESULT,<br/>failure summary, CYCLE"] --> RE["refiner"] --> rO["REFINED / ESCALATE,<br/>reason"] --> ORCH
   ORCH --> oI["passing kernel,<br/>SFPI_MODE"] --> OP["optimizer ★"] --> oO["OPTIMIZED,<br/>OPTIMIZATION_TYPE"] --> ORCH
   ORCH --> fI["kernel"] --> FM["format"] --> ORCH

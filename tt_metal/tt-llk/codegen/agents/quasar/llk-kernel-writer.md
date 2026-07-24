@@ -23,7 +23,6 @@ TARGET_ARCH="$($ST      --log-dir "$LOG_DIR" get TARGET_ARCH)"
 GENERATED_KERNEL="$($ST --log-dir "$LOG_DIR" get GENERATED_KERNEL)"
 SFPI_MODE="$($ST        --log-dir "$LOG_DIR" get SFPI_MODE)"
 SKIP_WRITER="$($ST      --log-dir "$LOG_DIR" get SKIP_WRITER)"
-SKIP_TESTER="$($ST      --log-dir "$LOG_DIR" get SKIP_TESTER)"
 ```
 
 The analysis doc is `codegen/artifacts/{KERNEL_NAME}_analysis.md`. It already contains everything you need: function shape (§6a), full pseudocode per function (§6b), risks (§6e), the Available Instructions and Semantic → Instruction Mapping tables, Instruction Encoding Constraints, and Format Applicability. Trust these sections — do NOT re-derive them from sibling kernels or the test harness. Open an existing file only if the analysis cites it as a pattern source and you need a detail it did not quote. Never reconstruct the target op's own prior implementation from git (`git show HEAD/origin/main:<path>`, history, or a deleted file) — if it is not on the branch it does not exist; build purely from the analysis.
@@ -49,9 +48,7 @@ Do this even when the user asked for an "SFPI version." You still produce the re
 
 ### Step 0: Already-copied kernel (`SKIP_WRITER`)
 
-If `SKIP_WRITER` is `true` (resolved in Inputs), the analyzer already placed a verbatim SFPI kernel at `$WORKTREE_DIR/$GENERATED_KERNEL`. Do **NOT** generate or overwrite it.
-- If `SKIP_TESTER` is also `true`, do **not** report yet — go to **Step 4b** and validate the copied kernel against its existing tests, then report from there.
-- Otherwise report success and stop (the tester compiles and runs it):
+If `SKIP_WRITER` is `true` (resolved in Inputs), the analyzer already placed a verbatim SFPI kernel at `$WORKTREE_DIR/$GENERATED_KERNEL`. Do **NOT** generate or overwrite it. Report success and stop (the tester compiles and runs it):
 ```
 Kernel Type: {type}
 Generated: {GENERATED_KERNEL} (verbatim SFPI copy — writer skipped)
@@ -134,18 +131,7 @@ CHIP_ARCH={TARGET_ARCH} python scripts/compiler.py {path_to_test_source} \
 ```
 For parameter selection, see **Compiler Parameters** below.
 
-Do NOT iterate on errors yourself — if the compile fails, report `FAILED` and let the orchestrator route it (to the refiner). (Exception: `SKIP_TESTER` mode — see Step 4b.)
-
-### Step 4b: Validate against existing tests (`SKIP_TESTER` only)
-
-If `SKIP_TESTER` is not `true`, skip this step — the compile-check is your last action.
-
-If `SKIP_TESTER` is `true`, do not stop at the compile-check. Validate the kernel against its **existing** test — do NOT author, extend, register, or modify any test:
-1. Locate the existing test: the unified SFPU category test (from the analysis `## SFPU Category`) or the sibling test for math/pack/unpack.
-2. Run it via `run_test.sh` as `llk-tester` does — `compile` then `simulate`, foreground (Bash `timeout: 600000` backstop, `dangerouslyDisableSandbox: true`, one blocking call, no resume loop), `--maxfail 0`, with the category-correct `--k` token (lowercase op for unary, UPPERCASE id for binary, `where` for ternary). First confirm it selects variants (`run_test.sh count ... --k "{K}"` must be > 0). `dangerouslyDisableSandbox: true` is required on every `run_test.sh` call (emulator network + `/tmp` build-cache writes); it is a no-op when already un-sandboxed.
-3. On a runtime failure, diagnose and fix the **kernel** (never the test), then re-run. Cap at **5 simulator runs** (compile-step failures excluded). If `run_test.sh` reports `ENV_ERROR` (exit 3 / `RUN_LLK_TESTS_VERDICT === ENV_ERROR`, e.g. the emulator never became ready), the environment is broken, not the kernel: stop now — do not count it against the 5 runs, do not modify the kernel, do not re-run — and report `ENV_ERROR` (Step 5).
-4. Before reporting, record the counts as `llk-tester` does on pass: `TESTS_TOTAL`, `TESTS_PASSED`, `TESTER_COMPILE_COUNT`, `PHASE_DEBUGS`.
-5. If it passes, report the Step 5 success block. On the 5th runtime failure, report the Step 5 failure block with the last failure signature as the Error summary.
+Iterate here until the kernel compiles clean — however many attempts it takes, there is no cap: fix each compile error and re-run this command, staying faithful to §6b — fix includes, parameter types, and signatures to match the harness; never invent an instruction sequence not in §6b. Report `FAILED` **only** when the kernel cannot compile without deviating from §6b (an analysis error, not a mechanical fix); put the deviation in the Error summary and the orchestrator routes it to the refiner. Never run the kernel on the simulator; the compile is your last action and the tester runs it.
 
 ### Step 5: Report
 
@@ -163,15 +149,8 @@ Kernel Type: {type}
 Generated: {path}
 Final compiled: FAILED
 Error summary: [brief description]
+Compile attempts: {N}
 Ready for: llk-analysis-refiner agent
-```
-
-On environment error (emulator/infra unavailable — kernel not implicated, no retry):
-```
-Kernel Type: {type}
-Generated: {path}
-Final compiled: ENV_ERROR
-Diagnosis: [run_test.sh verdict / why the emulator was unavailable]
 ```
 
 ---

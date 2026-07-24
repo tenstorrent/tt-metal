@@ -330,22 +330,17 @@ Agent tool:
 - Now WAIT for AGENT completion!
 - THEN writer returns `PASSED` / `FAILED` on its final compile check.
 
-**If `SKIP_TESTER` is true** (read it: `python codegen/scripts/state.py --log-dir "$(python codegen/scripts/state.py --worktree-dir "$WORKTREE_DIR" get LOG_DIR)" get SKIP_TESTER`): the writer already validated against the existing tests. Do **not** spawn the tester (Step 5b) or the refiner (Step 5c).
-- Writer `PASSED` → EXECUTE `execute_step_tester_passed` (it records success from the counts the writer wrote), then go to Step 6.
-- Writer `FAILED` → EXECUTE `execute_step_mark_status failed test_failure`, then jump to Step 8.
-- Writer `ENV_ERROR` (emulator/infra unavailable — kernel not implicated) → EXECUTE `execute_step_tester_env_error "{writer's Diagnosis line}"`, then jump to Step 8. Do **not** invoke the refiner or optimizer.
 
-Otherwise (normal flow):
 
 **If writer reports PASSED**: go to Step 5b.
 
-**If writer reports FAILED** (compile broken): pass the first meaningful line
-from the writer's "Error summary" and the compile count `1` (the writer runs a
-single compile-check). The step records the error, updates the compile counters,
+**If writer reports FAILED** (kernel can't compile without deviating from §6b — an analysis error): pass the first
+meaningful line from the writer's "Error summary" and the writer's reported
+"Compile attempts" count. The step records the error, updates the compile counters,
 writes the failure + phase-end, and refreshes cost:
 ```bash
 source codegen/scripts/quasar/orchestrator_steps.sh
-execute_step_writer_failed "{first meaningful line from the writer's Error summary}" 1
+execute_step_writer_failed "{first meaningful line from the writer's Error summary}" {compile attempts}
 ```
 
 If the step printed `AT_CAP=yes` (cycle 3): EXECUTE the following, then jump to Step 8:
@@ -375,6 +370,11 @@ Agent tool:
     (compile-time failures are excluded from the cap). Each run = compile-producer
     + simulator-consumer. Diagnose and fix between runs. On attempt 5's failure,
     return STUCK — the orchestrator will route to the refiner.
+
+    If LOCK_TESTS=true (read it from state), run in test-locked mode per your
+    playbook: treat the existing test as the immutable source of truth — never
+    author, extend, register, or modify any test, golden, or input-prep; only run
+    the existing test and debug the kernel.
 ```
 
 - WAIT for the Tester finish and return `PASS`, `STUCK`, or `ENV_ERROR`.
