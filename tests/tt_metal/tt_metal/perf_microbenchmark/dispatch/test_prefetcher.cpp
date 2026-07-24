@@ -777,7 +777,7 @@ private:
         const std::chrono::duration<double> elapsed = end - start;
         log_info(tt::LogTest, "Ran in {:.3f} ms (for {} iterations)", elapsed.count() * 1000.0, num_iterations);
 
-        // On the Quasar simulator the completion queue is DRAM-backed; sync the host staging mirror before validating.
+        // DRAM-backed Quasar CQs require a host staging-buffer refresh before validation.
         fixture.refresh_completion_data();
 
         // Validate results
@@ -2645,9 +2645,8 @@ public:
 
         this->init_params(this->GetParam());
 
-        // On Quasar simulator, the issue queue is fixed at QUASAR_SIMULATION_ISSUE_QUEUE_BASE. If the exec_buf base
-        // address would overlap the issue queue, skip the test rather than overrun the CQ region.
-        if (Common::is_quasar_sim() &&
+        // DRAM-backed Quasar queues use a fixed issue region. Skip only when the exec buffer would collide with it.
+        if (Common::is_quasar_cq_dram_backed() &&
             this->compute_exec_buf_base_addr() >= Common::QUASAR_SIMULATION_ISSUE_QUEUE_BASE) {
             GTEST_SKIP() << "exec_buf base " << this->compute_exec_buf_base_addr()
                          << " reaches the Quasar simulator issue queue at "
@@ -2702,13 +2701,11 @@ public:
         const uint32_t dispatch_telemetry_addr =
             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY, cq_id);
 
-        // Hugepage addressing
-        // WH/BH stage commands in the PCIe hugepage (same region the FD runtime uses for the issue
-        // queue; safe since SD mode never runs the FD runtime concurrently). Quasar simulator has no PCIe
-        // hugepage — commands are staged in DRAM at QUASAR_SIMULATION_ISSUE_QUEUE_BASE instead.
+        // Queue backing. WH/BH and Quasar with TT_METAL_DRAM_BACKED_CQ=0 stage commands in the mapped
+        // host region. DRAM-backed Quasar uses the fixed physical-DRAM queue window instead.
         uint32_t dev_hugepage_base = 0;
         void* host_hugepage_base = nullptr;
-        if (!Common::is_quasar_sim()) {
+        if (!Common::is_quasar_cq_dram_backed()) {
             dev_hugepage_base = memmap.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
             const ChipId mmio_id =
                 tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_->id());
@@ -2756,14 +2753,14 @@ public:
 
         const uint32_t host_align = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
 
-        // write_prefetcher_cmd: streaming-store cmd to hugepage (WH/BH) or DRAM (Quasar simulator), then write one
-        // FetchQ entry via TLB. cmd_size_bytes must be a multiple of 64 (host alignment) and cmd_size_entry is the
-        // pre-computed FetchQ value (may have MSB stall flag set for exec_buf).
+        // write_prefetcher_cmd stages commands in the configured queue backing, then writes one FetchQ entry via TLB.
+        // cmd_size_bytes must be a multiple of 64 (host alignment) and cmd_size_entry is the pre-computed FetchQ
+        // value (which may have the MSB stall flag set for exec_buf).
         auto write_prefetcher_cmd = [&](const uint32_t* src, uint32_t cmd_size_bytes, uint32_t cmd_size_entry) {
-            if (Common::is_quasar_sim()) {
+            if (Common::is_quasar_cq_dram_backed()) {
                 TT_FATAL(
-                    dram_write_offset + cmd_size_bytes <= Common::QUASAR_SIMULATION_ISSUE_QUEUE_SIZE,
-                    "SD prefetch: command stream exceeds QUASAR_SIMULATION_ISSUE_QUEUE_SIZE");
+                    dram_write_offset + cmd_size_bytes <= this->sd_issue_queue_size(),
+                    "SD prefetch: command stream exceeds DRAM-backed issue queue");
                 tt::tt_metal::detail::WriteToDeviceDRAMChannel(
                     this->device_,
                     0,
@@ -2814,16 +2811,15 @@ public:
         write_cmd(CommandBuilder::build_dispatch_terminate(/*include_dispatch_s*/ false));
         write_cmd(CommandBuilder::build_prefetch_terminate());
 
-        if (Common::is_quasar_sim()) {
+        if (Common::is_quasar_cq_dram_backed()) {
             // Flush all DRAM command writes so the kernel sees them when it starts.
             cluster.dram_barrier(this->device_->id());
             // Pre-fill the completion DRAM with the dirty pattern so page padding matches
             // HOST_DATA_DIRTY_PATTERN validation in DeviceData::validate().
             static constexpr uint32_t kChunkBytes = 64 * 1024;
             std::vector<uint32_t> chunk(kChunkBytes / sizeof(uint32_t), this->HOST_DATA_DIRTY_PATTERN);
-            for (uint32_t offset = 0; offset < Common::QUASAR_SIMULATION_COMPLETION_QUEUE_SIZE; offset += kChunkBytes) {
-                const uint32_t chunk_bytes =
-                    std::min(kChunkBytes, Common::QUASAR_SIMULATION_COMPLETION_QUEUE_SIZE - offset);
+            for (uint32_t offset = 0; offset < this->sd_completion_queue_size(); offset += kChunkBytes) {
+                const uint32_t chunk_bytes = std::min(kChunkBytes, this->sd_completion_queue_size() - offset);
                 tt::tt_metal::detail::WriteToDeviceDRAMChannel(
                     this->device_,
                     0,
@@ -2958,9 +2954,8 @@ public:
         tt_metal::detail::LaunchProgram(this->device_, program);
         // Ensure host CPU sees any PCIe-written completion queue data before validating.
         tt_driver_atomics::mfence();
-        // On the Quasar simulator the completion queue lives in DRAM (host hugepages are unavailable);
-        // read it back into the host staging buffer before validate() (which reads from
-        // get_completion_queue_buffer()).
+        // DRAM-backed Quasar CQs need a staging-buffer readback before validation; host-backed queues are
+        // directly readable.
         this->refresh_completion_data();
         EXPECT_TRUE(device_data.validate(this->device_)) << "SD prefetch test failed validation";
     }
@@ -2999,12 +2994,11 @@ public:
     // we set up ourselves (dev_hugepage_base + sd_issue_queue_size()), not to a
     // runtime-managed FDMeshCommandQueue completion queue.
     //
-    // WH/BH: points into the host-mapped hugepage at dev_hugepage_base + issue_queue_size.
-    // Quasar simulator: points into a host-side staging buffer; refresh_completion_data() fills it from DRAM at
-    // QUASAR_SIMULATION_COMPLETION_QUEUE_BASE before validate() is called.
+    // Host-backed queues point into the mapped host region at dev_hugepage_base + issue_queue_size.
+    // DRAM-backed Quasar queues use a host-side staging buffer populated before validation.
     void* get_completion_queue_buffer() override {
-        if (Common::is_quasar_sim()) {
-            quasar_completion_buf_.resize(Common::QUASAR_SIMULATION_COMPLETION_QUEUE_SIZE);
+        if (Common::is_quasar_cq_dram_backed()) {
+            quasar_completion_buf_.resize(this->sd_completion_queue_size());
             return quasar_completion_buf_.data();
         }
         const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
@@ -3021,7 +3015,7 @@ public:
     uint32_t get_completion_queue_buffer_size() override { return this->sd_completion_queue_size(); }
 
     void refresh_completion_data() override {
-        if (Common::is_quasar_sim()) {
+        if (Common::is_quasar_cq_dram_backed()) {
             // Read the dispatch kernel's DRAM completion writes into the host staging buffer so device_data.validate()
             // sees the correct data.
             const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
@@ -3045,10 +3039,10 @@ public:
             }
             const uint32_t bytes_written = (wr_ptr_16B - completion_base_16B) * 16;
             TT_FATAL(
-                bytes_written <= Common::QUASAR_SIMULATION_COMPLETION_QUEUE_SIZE,
+                bytes_written <= this->sd_completion_queue_size(),
                 "Quasar simulator completion readback exceeds queue size ({} > {})",
                 bytes_written,
-                Common::QUASAR_SIMULATION_COMPLETION_QUEUE_SIZE);
+                this->sd_completion_queue_size());
 
             tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
                 this->device_,
@@ -3073,9 +3067,14 @@ class PrefetcherLinearPackedReadQuasarSimulatorTestFixture
     : public Common::QuasarSimulatorVariant<PrefetcherLinearPackedReadTestFixture> {};
 class PrefetcherHostQuasarSimulatorTestFixture : public Common::QuasarSimulatorVariant<PrefetcherHostTestFixture> {
 public:
-    // On the Quasar simulator the completion queue is DRAM-backed. Validate against a host-side staging
-    // buffer that refresh_completion_data() fills from DRAM before validate().
+    // On the Quasar simulator the completion queue is DRAM-backed by default (no host hugepages). Validate
+    // against a host-side staging buffer that refresh_completion_data() fills from DRAM before validate().
+    // An explicit TT_METAL_DRAM_BACKED_CQ=0 opts out of DRAM-backed CQs; in that case defer to the base
+    // (hugepage-backed) completion-buffer behavior so the test matches the runtime CQ configuration.
     void* get_completion_queue_buffer() override {
+        if (!mgr_->is_dram_backed()) {
+            return PrefetcherHostTestFixture::get_completion_queue_buffer();
+        }
         quasar_completion_buf_.resize(this->get_completion_queue_buffer_size());
         return quasar_completion_buf_.data();
     }
@@ -3084,6 +3083,9 @@ public:
     // dispatcher writes into. On the Quasar simulator that memory is DRAM, so dirty there too.
     void dirty_host_completion_buffer(void* completion_queue_buffer, uint32_t size_bytes) override {
         PrefetcherHostTestFixture::dirty_host_completion_buffer(completion_queue_buffer, size_bytes);
+        if (!mgr_->is_dram_backed()) {
+            return;
+        }
         std::vector<uint32_t> dirty(size_bytes / sizeof(uint32_t), HOST_DATA_DIRTY_PATTERN);
         tt::tt_metal::MetalContext::instance().get_cluster().write_dram_vec(
             dirty.data(), size_bytes, this->device_->id(), completion_dram_channel(), completion_dram_addr());
@@ -3091,7 +3093,12 @@ public:
 
     // Read the dispatcher-written prefix of the DRAM completion queue into the staging buffer so
     // device_data.validate() sees real data. Padding past the written span keeps its dirty fill.
+    // Skipped when DRAM-backed CQs are explicitly disabled (TT_METAL_DRAM_BACKED_CQ=0); the base
+    // (hugepage-backed) completion buffer is directly readable, so no DRAM readback is needed.
     void refresh_completion_data() override {
+        if (!mgr_->is_dram_backed()) {
+            return;
+        }
         const uint8_t cq_id = fdcq_->id();
         std::atomic<bool> exit_condition{false};
         const uint32_t write_ptr_bytes = (mgr_->completion_queue_wait_front(cq_id, exit_condition) & 0x7fffffff) << 4;
