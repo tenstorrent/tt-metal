@@ -3,7 +3,7 @@
 GRPO fine-tuning of `meta-llama/Llama-3.2-1B-Instruct` on
 `google/boolq`, with a Yes/No correctness reward. The training loop
 itself is the generic `GRPOTrainer` from `ttml.trainers` (see
-`[tt-train/docs/GRPO_TRAINER.md](../../../../docs/GRPO_TRAINER.md)`);
+[`tt-train/docs/GRPO_TRAINER.md`](../../../../docs/GRPO_TRAINER.md));
 this directory only adds the deployment-level wiring needed to run it
 across two MPI ranks.
 
@@ -59,7 +59,7 @@ specific to this two-rank deployment.
 | `MPIRolloutClient`            | TTML | MPI client + `WeightBridge` owner. Constructed before the completer; its constructor blocks until the peer's server is up.                                                                                                     |
 | `MPIRolloutServer`            | TTT  | Dispatches `OP_GENERATE` / `OP_TRANSFER` / `OP_SHUTDOWN` to user-supplied callbacks. Blocks in `serve_forever()` until shutdown.                                                                                               |
 | `TttGenerationWorker`         | TTT  | Hosts the `tt-transformers.Transformer` and a captured decode trace. Exposes `generate` and `update_weights` callbacks.                                                                                                        |
-| `WeightBridge`                | both | Replicated-tensor transport (ABC). `HostWeightBridge` moves each weight to host via MPI and re-uploads it to each receiver submesh. Wire-format spec: `[LLAMA_WEIGHT_TRANSFER.md](../../../../docs/LLAMA_WEIGHT_TRANSFER.md)`. |
+| `WeightBridge`                | both | Replicated-tensor transport (ABC). `HostWeightBridge` moves each weight to host via MPI and re-uploads it to each receiver submesh. Wire-format spec: [`LLAMA_WEIGHT_TRANSFER.md`](../../../../docs/LLAMA_WEIGHT_TRANSFER.md). |
 | `WeightSyncCallback`          | TTML | `TrainerCallback` that calls `completer.push_weights()` every `every` optimizer steps. Opt-in.                                                                                                                                 |
 
 
@@ -232,7 +232,7 @@ server.serve_forever()                    # blocks until rank 0 sends OP_SHUTDOW
 ## Single-file dispatch
 
 Both ranks live in the same Python file
-(`[boolq_training_example.py](boolq_training_example.py)`) and are
+([`boolq_training_example.py`](boolq_training_example.py)) and are
 dispatched on the MPI rank set by `mpirun` / `tt-run`:
 
 ```python
@@ -241,6 +241,43 @@ if int(os.environ["OMPI_COMM_WORLD_RANK"]) == 0:
 else:
     ttt_main()
 ```
+
+---
+
+
+
+## Configuration
+
+Everything runtime-tunable lives in a single training YAML,
+[`grpo_boolq_llama_1b_remote_rollout.yaml`](../../../../configs/training_configs/grpo_boolq_llama_1b_remote_rollout.yaml).
+Both ranks load it: the TTML rank consumes `training_config` /
+`device_config` (standard `GRPOTrainer` inputs, described in the
+[trainer doc](../../../../docs/GRPO_TRAINER.md)); the TTT rank
+consumes `remote_rollout_config` plus the same `grpo_config.temperature`
+so both sides bake in matching sampling.
+
+### `remote_rollout_config` — TTT rollout-rank knobs
+
+Consumed only by the TTT rank (`_ttt_main` in
+[`boolq_training_example.py`](boolq_training_example.py)) when it
+opens the rollout mesh and constructs `TttGenerationWorker`.
+
+| Field            | Type        | Default      | Description                                                                                                                                                                                                                    |
+| ---------------- | ----------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `mesh_shape`     | `list[int]` | `[1, 2]`     | Shape of the TTT parent mesh `[rows, cols]`. The worker splits it into `rows * cols` `[1, 1]` submeshes; each hosts one `tt-transformers.Transformer` copy and generation runs data-parallel across them.                     |
+| `max_batch_size` | `int`       | `32`         | Per-submesh concurrent decode capacity. Global generation batch = `max_batch_size * num_submeshes`. Sets the paged KV-cache block budget on each submesh — over-sizing costs L1 / DRAM; under-sizing rejects large requests. |
+| `max_seq_len`    | `int`       | `2048`       | Max prompt + completion length. Sets the KV-cache page-table depth: `max_num_blocks_per_user = ceil(max_seq_len / block_size)`. Must fit the longest prompt (post chat-template) plus `grpo_config.max_completion_length`.    |
+
+### Top-level knobs
+
+| Field               | Type   | Default                                | Description                                                                                                              |
+| ------------------- | ------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `model_id`          | `str`  | `"meta-llama/Llama-3.2-1B-Instruct"`   | HF repo path. TTML rank uses it for tokenizer + `LlamaCompleterRemoteRollout`; TTT rank uses it for `llama_stop_and_pad` and `TttGenerationWorker.model_source`. |
+| `weight_sync_every` | `int`  | `1`                                    | Cadence (in optimizer steps) at which `WeightSyncCallback` pushes fresh policy weights from the TTML rank to the TTT worker. |
+
+`training_config` (GRPO / optimizer knobs) and `device_config`
+(trainer-mesh shape / DDP) are the standard `GRPOTrainer` blocks —
+see [`tt-train/docs/GRPO_TRAINER.md`](../../../../docs/GRPO_TRAINER.md).
 
 ---
 
@@ -334,8 +371,8 @@ is what keeps the inference worker in sync with the trainer.
 
 ## See also
 
-- `[tt-train/docs/GRPO_TRAINER.md](../../../../docs/GRPO_TRAINER.md)`
-— generic trainer API (rank- and model-agnostic).
-- `[tt-train/docs/LLAMA_WEIGHT_TRANSFER.md](../../../../docs/LLAMA_WEIGHT_TRANSFER.md)`
-— wire format used by `WeightBridge` to ship policy weights from
-the TTML rank to the TTT rank.
+- [`tt-train/docs/GRPO_TRAINER.md`](../../../../docs/GRPO_TRAINER.md)
+  — generic trainer API (rank- and model-agnostic).
+- [`tt-train/docs/LLAMA_WEIGHT_TRANSFER.md`](../../../../docs/LLAMA_WEIGHT_TRANSFER.md)
+  — wire format used by `WeightBridge` to ship policy weights from
+  the TTML rank to the TTT rank.
