@@ -1309,16 +1309,10 @@ int main(int argc, char** argv) {
     if (do_tracy) {
         printf("[tracy] device aiclk = %.4f GHz (cyc/ns)\n", tracy_freq);
         tracy_handler = std::make_unique<tt::tt_metal::PerfDebugTracyHandler>();
-        // host_start must be in TRACY's clock domain (tracy::Profiler::GetTime()), NOT system_clock epoch --
-        // otherwise the device zones land on a bogus multi-hour timeline. Provisional here; the first marker
-        // re-anchors (CalibrateDevice) so device-first-ts maps to tracy-now with exact relative spacing.
-        tracy_handler->AddDevice((uint32_t)device_id, tracy::Profiler::GetTime(), 0.0, tracy_freq);
-        std::vector<std::pair<uint32_t, uint32_t>> worker_noc0;
-        worker_noc0.reserve(num_cores);
-        for (uint32_t c = 0; c < num_cores; c++) {
-            worker_noc0.emplace_back(noc0x[c], noc0y[c]);
-        }
-        tracy_handler->PreCreateContexts((uint32_t)device_id, worker_noc0);
+        // NOTE: AddDevice (the host<->device anchor) + PreCreateContexts are DEFERRED to just before the
+        // workload launch (see below). host_start = GetTime() must be captured then, NOT here: all the setup
+        // between here and the launch (boot/calibrate/socket/JIT ~hundreds of ms) would otherwise shift the
+        // whole device timeline that far EARLIER than the host CPU-zone activity -> they don't overlap.
         // Zone-name resolution deferred with the clean cut (Yusuf's generateZoneSourceLocationsHashes is
         // profiler.cpp-internal); unknown hashes fall back to "Zone_0x<hash>" below.
         zone_names[0x7FFFu] = "X280-STALL";  // PROFILER_STALL_ZONE_ID
@@ -1576,6 +1570,21 @@ int main(int argc, char** argv) {
         (unsigned long long)nmarkers,
         prod_delay,
         prog_id);
+#if defined(TRACY_ENABLE)
+    if (do_tracy && tracy_handler) {
+        // Anchor the device timeline HERE, right before the workload produces its first marker -- so the
+        // device zones' host_start (gpuTime=0) lines up with the host CPU zones' real Tracy time. Anchoring at
+        // tracy setup (hundreds of ms of boot/calibrate/JIT earlier) shifted the whole device timeline that far
+        // before the host activity, so they didn't overlap.
+        tracy_handler->AddDevice((uint32_t)device_id, tracy::Profiler::GetTime(), 0.0, tracy_freq);
+        std::vector<std::pair<uint32_t, uint32_t>> worker_noc0;
+        worker_noc0.reserve(num_cores);
+        for (uint32_t c = 0; c < num_cores; c++) {
+            worker_noc0.emplace_back(noc0x[c], noc0y[c]);
+        }
+        tracy_handler->PreCreateContexts((uint32_t)device_id, worker_noc0);
+    }
+#endif
     // wall clock spanning the concurrent producer+drain window; used only for the aggregate BW report (nodes>1).
     auto wall_start = std::chrono::steady_clock::now();
     distributed::EnqueueMeshWorkload(mesh->mesh_command_queue(), wl, /*blocking=*/true);
