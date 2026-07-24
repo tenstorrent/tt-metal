@@ -96,6 +96,24 @@ struct CollectedSpecData {
     };
     std::unordered_map<DFBSpecName, DFBEndpointInfo> dfb_endpoints;
 
+    // Semaphore binder census (derived from kernel semaphore bindings). Drives the AUTO scope
+    // classifier (ResolveSemaphoreScope): writer bindings (INCREMENT/CONSUME/SET) count toward
+    // concurrency; OBSERVE readers do not. Keyed by SemaphoreSpecName.
+    struct SemaphoreBinderInfo {
+        struct BinderRecord {
+            const KernelSpec* kernel = nullptr;
+            const SemaphoreBinding* binding = nullptr;
+        };
+        std::vector<BinderRecord> writers;  // INCREMENT + CONSUME + SET bindings
+        std::vector<BinderRecord> readers;  // OBSERVE bindings
+        // Derived in Pass 2 (needs kernel_node_set): sum over writers of
+        // num_cores(kernel_node_set) * num_threads = the count of concurrent writer instances.
+        uint32_t writer_instance_count = 0;
+        uint32_t consuming_instance_count = 0;  // CONSUME writers only (multi-consumer down() is unsafe)
+        uint32_t setting_instance_count = 0;    // SET writers only (set() races any concurrent writer)
+    };
+    std::unordered_map<SemaphoreSpecName, SemaphoreBinderInfo> semaphore_endpoints;
+
     // WorkUnit membership: a kernel may belong to multiple WorkUnitSpecs.
     std::unordered_map<KernelSpecName, std::vector<const WorkUnitSpec*>> kernel_work_units;
 
@@ -463,6 +481,15 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 "Kernel '{}' references unknown semaphore '{}'",
                 kernel.unique_id,
                 binding.semaphore_spec_name);
+
+            // Census for the AUTO scope classifier: a writer (INCREMENT/CONSUME/SET) or a reader
+            // (OBSERVE). Instance counts are derived in Pass 2, once kernel node sets exist.
+            auto& sem_info = collected.semaphore_endpoints[binding.semaphore_spec_name];
+            if (binding.access_type == SemaphoreAccessType::OBSERVE) {
+                sem_info.readers.push_back({&kernel, &binding});
+            } else {
+                sem_info.writers.push_back({&kernel, &binding});
+            }
         }
     }
 
@@ -664,6 +691,22 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
             node_set = node_set.merge(to_node_range_set(work_unit->target_nodes));
         }
         collected.kernel_node_set[kernel_name] = node_set;
+    }
+
+    // Derive per-semaphore writer-instance counts (needs kernel_node_set above). A writer binding's
+    // instance count = num_cores(its kernel's node set) * num_threads; these drive the AUTO scope
+    // classifier (writer_instance_count) and the honesty FATALs (consuming/setting counts).
+    for (auto& [sem_name, sem_info] : collected.semaphore_endpoints) {
+        for (const auto& rec : sem_info.writers) {
+            const uint32_t instances =
+                collected.kernel_node_set.at(rec.kernel->unique_id).num_cores() * rec.kernel->num_threads;
+            sem_info.writer_instance_count += instances;
+            if (rec.binding->access_type == SemaphoreAccessType::CONSUME) {
+                sem_info.consuming_instance_count += instances;
+            } else if (rec.binding->access_type == SemaphoreAccessType::SET) {
+                sem_info.setting_instance_count += instances;
+            }
+        }
     }
 
     // Derive each local DFB's allocation node set: union of binding-kernels' node sets.
