@@ -270,8 +270,8 @@
 
 - name: Qwen2.5-7B e2e tests
   cmd: |
-    export HF_MODEL=Qwen/Qwen2.5-7B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-7B-Instruct
-    pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    export HF_MODEL=Qwen/Qwen2.5-7B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen2.5-7B-Instruct MESH_DEVICE=N300
+    pytest --timeout 420 models/common/tests/demos/qwen25_7b/demo.py -k "token-accuracy and performance"
   model: qwen2.5-7b
   model_family: Qwen
   skus:
