@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from math import lcm
+from math import lcm, sqrt
 from typing import Optional
 
 import ttnn
@@ -212,6 +212,12 @@ class Llama(AbstractModuleBase):
             rope_scaling_params,
         )
 
+        # Depth-scaled init for the residual-writing projections (attention out-proj,
+        # MLP down-proj): every block adds into the residual stream, so its variance
+        # grows ~linearly with depth (std ~sqrt(num_layers)). Scale the projection std
+        # by 1/sqrt(num_layers) to keep the residual-stream variance depth-independent.
+        residual_proj_init = ttml.init.normal(0.0, 1.0 / sqrt(config.hidden_size * config.num_hidden_layers))
+
         # Transformer blocks (ModuleList auto-registers all blocks)
         self.blocks = ModuleList(
             [
@@ -225,6 +231,7 @@ class Llama(AbstractModuleBase):
                     intermediate_size=config.intermediate_size,
                     attention_bias=config.attention_bias,
                     use_tp=config.use_tp,
+                    residual_proj_init=residual_proj_init,
                 )
                 for _ in range(config.num_hidden_layers)
             ]

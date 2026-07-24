@@ -3,40 +3,56 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Tokenizes a text dataset using a pre-trained tokenizer
-and saves the tokenized data as a flat list in MessagePack or CSV format using space delimiter.
-This helps to avoid a pretty long starting times for the nano_gpt example.
-Tokenizing is done in 128 splits to avoid memory issues.
+Tokenizes a UTF-8 text corpus with a Hugging Face fast tokenizer into a flat uint32 token
+stream, framed with the tokenizer's BOS/EOS special tokens, and writes it as YAML
+(`tokens`, `tokenizer_vocab_size`, `data_length`) for the C++ examples/nano_gpt and the Python examples/train.
+Pre-tokenizing here avoids long start-up times for those examples.
 """
 
 import os
 import argparse
 import yaml
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
 
-def load_text_data(text_file):
+def load_text_data(text_file) -> str:
+    """Reads a UTF-8 text file verbatim (newlines and structure preserved)."""
+    with open(text_file, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def load_tokenizer(spec):
     """
-    Reads a text file line by line and returns the content as a single string.
+    Resolve a fast tokenizer from a directory, a single *.json tokenizer file, or a
+    Hugging Face hub id (mirrors ttml/common/data.py). The hub-id branch preserves the
+    existing behaviour for automation (e.g. TinyLlama/Qwen are downloaded as before).
     """
-    with open(text_file, "r", encoding="utf-8") as file:
-        return " ".join([line.strip() for line in file.readlines()])
+    if os.path.isdir(spec):
+        return AutoTokenizer.from_pretrained(spec, local_files_only=True)
+    if os.path.isfile(spec) and spec.endswith(".json"):
+        return PreTrainedTokenizerFast(tokenizer_file=spec)
+    return AutoTokenizer.from_pretrained(spec)
 
 
-def tokenize_text_data(tokenizer_file, text_data):
+def frame_with_special_tokens(tokenizer, ids):
     """
-    Tokenizes the text data using a pre-trained tokenizer and returns a flat list of tokens (integers).
+    Prepend BOS and append EOS when the tokenizer defines them.
+    No-op for ids the tokenizer leaves as None -- note a bare
+    tokenizer.json carries no special-token metadata, so use the hub id or a tokenizer
+    directory if you need BOS/EOS.
     """
-    from tokenizers import Tokenizer
-
-    tokenizer = Tokenizer.from_file(tokenizer_file)
-    tokenized_data = tokenizer.encode(text_data).ids
-    return tokenized_data
+    bos, eos = tokenizer.bos_token_id, tokenizer.eos_token_id
+    framed = list(ids)
+    if eos is not None:
+        framed.append(eos)
+    if bos is not None:
+        framed.insert(0, bos)
+    return framed
 
 
 def save_to_yaml(data_list, vocab_size, output_file):
     """
-    Saves the tokenized data as a single space-separated line + data length in a YAML file.
+    Writes the tokens plus metadata (vocab size, data length) as flow-style YAML.
     """
 
     yaml_data = {
@@ -55,8 +71,9 @@ def tokenize_string(hf_tokenizer, text):
     """
     Tokenizes a single string and returns comma-separated token IDs.
     """
-    tokenizer = AutoTokenizer.from_pretrained(hf_tokenizer)
-    tokenized_data = tokenizer.encode(text)
+    tokenizer = load_tokenizer(hf_tokenizer)
+    ids = tokenizer.encode(text, add_special_tokens=False)
+    tokenized_data = frame_with_special_tokens(tokenizer, ids)
     return ",".join(map(str, tokenized_data))
 
 
@@ -64,7 +81,7 @@ def decode_tokens(hf_tokenizer, tokens_str):
     """
     Decodes comma-separated token IDs back to text.
     """
-    tokenizer = AutoTokenizer.from_pretrained(hf_tokenizer)
+    tokenizer = load_tokenizer(hf_tokenizer)
     # Parse comma-separated token IDs
     token_ids = [int(token.strip()) for token in tokens_str.split(",")]
     decoded_text = tokenizer.decode(token_ids)
@@ -100,7 +117,7 @@ def main():
         "--output_file",
         type=str,
         default=f"{os.environ.get('TT_METAL_HOME', '~/tt-metal')}/tt-train/data/tokenized_data",
-        help="Base path to save the tokenized data (extension will be added based on format).",
+        help="Path to save the tokenized data (.yaml is appended unless the path already ends in .yaml/.yml).",
     )
 
     args = parser.parse_args()
@@ -129,19 +146,18 @@ def main():
     print(f"Loading text data from {args.text_file}...")
     text_data = load_text_data(args.text_file)
 
-    tokenizer = AutoTokenizer.from_pretrained(args.hf_tokenizer)
-    print(f"Tokenizing data using Hugging Face tokenizer {args.hf_tokenizer}...")
-    splits_num = 128
-    tokenized_data = []
-    for i in range(splits_num):
-        text_data_split = text_data[
-            i * len(text_data) // splits_num : (i + 1) * len(text_data) // splits_num
-        ]
-        tokenized_data_split = tokenizer.encode(text_data_split)
-        tokenized_data.extend(tokenized_data_split)
+    tokenizer = load_tokenizer(args.hf_tokenizer)
+    print(f"Tokenizing data using {args.hf_tokenizer}...")
+    # Encode without the tokenizer's implicit post-processor so special tokens are fully
+    # under our control (a single call avoids broken BPE merges and spurious BOS tokens).
+    ids = tokenizer.encode(text_data, add_special_tokens=False)
+    tokenized_data = frame_with_special_tokens(tokenizer, ids)
 
     # Save tokenized data
-    save_to_yaml(tokenized_data, tokenizer.vocab_size, f"{args.output_file}.yaml")
+    output_file = args.output_file
+    if os.path.splitext(output_file)[1].lower() not in (".yaml", ".yml"):
+        output_file += ".yaml"
+    save_to_yaml(tokenized_data, tokenizer.vocab_size, output_file)
 
 
 if __name__ == "__main__":

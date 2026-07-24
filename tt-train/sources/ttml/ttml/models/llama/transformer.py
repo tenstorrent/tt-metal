@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Callable, Optional
 
 import ttml
 from ttml.modules import AbstractModuleBase, Parameter, RunMode, LinearLayer, ColumnParallelLinear, RowParallelLinear
@@ -68,6 +68,7 @@ class LlamaMLP(AbstractModuleBase):
         intermediate_size: Optional[int] = None,
         dropout: float = 0.0,
         use_tp: bool = False,
+        down_proj_init: Optional[Callable] = None,
     ) -> None:
         super().__init__()
 
@@ -100,6 +101,7 @@ class LlamaMLP(AbstractModuleBase):
                 intermediate_size,
                 embedding_size,
                 has_bias=False,
+                weight_init=down_proj_init,
                 input_is_parallel=True,
                 axis_name="tp",
             )
@@ -118,6 +120,7 @@ class LlamaMLP(AbstractModuleBase):
                 intermediate_size,
                 embedding_size,
                 False,
+                weight_init=down_proj_init,
             )
 
     def forward(self, input: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
@@ -166,6 +169,7 @@ class LlamaBlock(AbstractModuleBase):
         intermediate_size: Optional[int] = None,
         attention_bias: bool = False,
         use_tp: bool = False,
+        residual_proj_init: Optional[Callable] = None,
     ) -> None:
         super().__init__()
 
@@ -174,6 +178,7 @@ class LlamaBlock(AbstractModuleBase):
             intermediate_size,
             mlp_dropout,
             use_tp=use_tp,
+            down_proj_init=residual_proj_init,
         )
         self.attention_norm = RMSNormLayer(hidden_size)
         self.mlp_norm = RMSNormLayer(hidden_size)
@@ -185,6 +190,7 @@ class LlamaBlock(AbstractModuleBase):
             rope_params=rope_params,
             bias_linears=attention_bias,
             use_tp=use_tp,
+            out_proj_init=residual_proj_init,
         )
 
     def forward(
