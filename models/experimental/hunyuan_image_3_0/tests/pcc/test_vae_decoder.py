@@ -31,7 +31,7 @@ from models.experimental.hunyuan_image_3_0.tt.vae.decoder_weights import (
     load_norm_out as load_tt_norm_out,
     load_up_block as load_tt_up_block,
 )
-from models.experimental.hunyuan_image_3_0.tests.vae.test_utils import run_bcthw_module
+from models.experimental.hunyuan_image_3_0.tests.pcc.vae_helpers import run_bcthw_module
 from models.experimental.hunyuan_image_3_0.tt.vae.decoder import (
     ConvInTTNN,
     ConvOutTTNN,

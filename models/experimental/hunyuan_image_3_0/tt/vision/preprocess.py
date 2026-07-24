@@ -52,7 +52,7 @@ def process_cond_image(processor, image, model_dir=MODEL_DIR):
 def to_vision_inputs(device, pixel_values, spatial_shapes_hw, pixel_attention_mask) -> Siglip2VisionInputs:
     """Upload host processor outputs into an on-device `Siglip2VisionInputs` bundle.
 
-    Mirrors the upload pattern in `tests/vision/conftest.py` (bf16 TILE on DRAM); the
+    Mirrors the upload pattern in `tests/pcc/siglip2_helpers.py` (bf16 TILE on DRAM); the
     4D additive attention mask is built on device inside the vision tower.
     Accepts either batched ``[B, S, ...]`` / ``((h, w), ...)`` or a single-image
     unbatched ``[S, ...]`` / ``(h, w)`` and normalizes to batched form.
