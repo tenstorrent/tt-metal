@@ -413,6 +413,7 @@ tests/tt_eager/python_api_testing/unit_testing/misc/test_update_cache.py @tensto
 
 tests/ttnn/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT @tenstorrent/codeowner-bypass
 tests/ttnn/**/*realtime_profiler* @tenstorrent/metalium-developers-ttnn-core @mo-tenstorrent @yusufbashiTT @razorback3 @dongjin-na @bbradelTT @tenstorrent/codeowner-bypass
+tests/ttnn/tracy/ @tenstorrent/metalium-developers-ttnn-core @mo-tenstorrent @yusufbashiTT @razorback3 @dongjin-na @bbradelTT @tenstorrent/codeowner-bypass
 tests/ttnn/**/CMakeLists.txt @tenstorrent/metalium-developers-ttnn-core @tenstorrent/metalium-developers-infra
 tests/ttnn/multidevice_perf_tests/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/nightly/t3000/ccl/test_all_reduce.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
