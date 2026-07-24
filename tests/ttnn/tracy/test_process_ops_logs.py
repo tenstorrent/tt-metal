@@ -5,11 +5,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import csv
+import json
 from pathlib import Path
 
 import pytest
 
 from tracy import process_ops_logs
+from tracy.visualizer_run import TT_METAL_RUN_ID_ENV
 
 
 # class for mocking creation of npe data
@@ -200,6 +202,65 @@ def test_generate_reports_writes_multicast_noc_util_column(tmp_path):
         row = next(reader)
         assert "MULTICAST NOC UTIL (%)" in reader.fieldnames
         assert row["MULTICAST NOC UTIL (%)"] == "25.0"
+
+
+def _minimal_host_ops():
+    return {
+        1: {
+            "global_call_count": 1,
+            "device_id": 0,
+            "host_time": {"ns_since_start": 10, "exec_time_ns": 20},
+            "metal_trace_id": None,
+            "input_tensors": [],
+            "output_tensors": [],
+        }
+    }
+
+
+def test_generate_reports_writes_manifest_when_run_id_set(monkeypatch, tmp_path):
+    monkeypatch.setenv(TT_METAL_RUN_ID_ENV, "fixed-run-id")
+    log_folder = tmp_path / "logs"
+    report_folder = tmp_path / "reports"
+    log_folder.mkdir(parents=True, exist_ok=True)
+
+    process_ops_logs.generate_reports(
+        ops=_minimal_host_ops(),
+        deviceOps={},
+        traceOps={},
+        signposts={},
+        logFolder=log_folder,
+        outputFolder=report_folder,
+        date=False,
+        nameAppend=None,
+    )
+
+    manifest_path = Path(report_folder) / "manifest.json"
+    assert manifest_path.is_file()
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert payload["run_id"] == "fixed-run-id"
+    assert payload["ops_csv"] == "ops_perf_results.csv"
+    assert not Path(payload["ops_csv"]).is_absolute()
+
+
+def test_generate_reports_skips_manifest_without_run_id(monkeypatch, tmp_path):
+    monkeypatch.delenv(TT_METAL_RUN_ID_ENV, raising=False)
+    log_folder = tmp_path / "logs"
+    report_folder = tmp_path / "reports"
+    log_folder.mkdir(parents=True, exist_ok=True)
+
+    process_ops_logs.generate_reports(
+        ops=_minimal_host_ops(),
+        deviceOps={},
+        traceOps={},
+        signposts={},
+        logFolder=log_folder,
+        outputFolder=report_folder,
+        date=False,
+        nameAppend=None,
+    )
+
+    assert (Path(report_folder) / "ops_perf_results.csv").is_file()
+    assert not (Path(report_folder) / "manifest.json").exists()
 
 
 def test_get_device_data_generate_report_returns_none_without_device_logs(tmp_path):
