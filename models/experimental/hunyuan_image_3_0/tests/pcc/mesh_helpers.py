@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from models.experimental.hunyuan_image_3_0.ref.weights import load_prefixed_state_dict, resolve_base_model_dir
-from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel
+from models.experimental.hunyuan_image_3_0.ttnn.model import HunyuanTtModel
 from models.tt_dit.parallel.manager import CCLManager
 from pcc_common import transformer_cfg
 

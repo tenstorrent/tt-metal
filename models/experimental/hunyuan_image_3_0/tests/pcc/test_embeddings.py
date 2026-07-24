@@ -40,9 +40,9 @@ from models.experimental.hunyuan_image_3_0.ref.weights import (
     load_tensors,
     resolve_base_model_dir,
 )
-from models.experimental.hunyuan_image_3_0.tt.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
-from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
-from models.experimental.hunyuan_image_3_0.tt.wte import HunyuanTtWte
+from models.experimental.hunyuan_image_3_0.ttnn.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
+from models.experimental.hunyuan_image_3_0.ttnn.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
+from models.experimental.hunyuan_image_3_0.ttnn.wte import HunyuanTtWte
 from pcc_common import (
     PATCH_GRID_FAST,
     PATCH_GRID_SLOW,

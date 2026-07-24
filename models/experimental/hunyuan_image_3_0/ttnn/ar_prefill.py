@@ -12,7 +12,7 @@ import torch
 import ttnn
 
 from models.experimental.hunyuan_image_3_0.ref.attention.mask import build_attention_mask, to_additive
-from models.experimental.hunyuan_image_3_0.tt.ar_dual_cq import COMPUTE_CQ
+from models.experimental.hunyuan_image_3_0.ttnn.ar_dual_cq import COMPUTE_CQ
 
 
 def prefill_chunk_size() -> int:
@@ -27,7 +27,7 @@ def recaption_trace_prefill_enabled() -> bool:
     wraps a full prefill forward. Decode trace is OK (fixed KV buffers + ``paged_update_cache``).
     Chunked eager prefill remains available via ``HY_RECAPTION_PREFILL_CHUNK``.
     """
-    from models.experimental.hunyuan_image_3_0.tt.trace_config import hy_trace_enabled
+    from models.experimental.hunyuan_image_3_0.ttnn.trace_config import hy_trace_enabled
 
     if not hy_trace_enabled():
         return False

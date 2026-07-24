@@ -17,16 +17,19 @@ from models.experimental.hunyuan_image_3_0.ref.vae.encoder import (
     encoder_down_level_specs,
     encoder_head_shape,
 )
-from models.experimental.hunyuan_image_3_0.tt.vae.conv3d import HunyuanSymmetricConv3d, promote_conv3d_fallback_to_exact
-from models.experimental.hunyuan_image_3_0.tt.vae.decoder import (
+from models.experimental.hunyuan_image_3_0.ttnn.vae.conv3d import (
+    HunyuanSymmetricConv3d,
+    promote_conv3d_fallback_to_exact,
+)
+from models.experimental.hunyuan_image_3_0.ttnn.vae.decoder import (
     AttnBlockTTNN,
     ResnetBlockTTNN,
     dcae_down_shortcut_bthwc,
     dcae_space_to_depth_bthwc,
     encoder_head_shortcut_bthwc,
 )
-from models.experimental.hunyuan_image_3_0.tt.vae.spatial import norm_sharded
-from models.experimental.hunyuan_image_3_0.tt.vae.encoder_weights import (
+from models.experimental.hunyuan_image_3_0.ttnn.vae.spatial import norm_sharded
+from models.experimental.hunyuan_image_3_0.ttnn.vae.encoder_weights import (
     init_encoder_conv_in as init_encoder_conv_in_weights,
     init_encoder_down as init_encoder_down_weights,
     init_encoder_head as init_encoder_head_weights,
@@ -340,7 +343,7 @@ class VAEEncoderTTNN(Module):
         self.pixel_h = pixel_h
         self.pixel_w = pixel_w
 
-        from models.experimental.hunyuan_image_3_0.tt.vae.spatial import enable_vae_spatial, encoder_w_spatial_enabled
+        from models.experimental.hunyuan_image_3_0.ttnn.vae.spatial import enable_vae_spatial, encoder_w_spatial_enabled
 
         if encoder_w_spatial_enabled():
             if h_mesh_axis is None:

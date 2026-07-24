@@ -31,7 +31,7 @@ from models.experimental.hunyuan_image_3_0.ref.weights import INSTRUCT_MODEL_DIR
 from models.experimental.hunyuan_image_3_0.tests.pcc import i2i_helpers as h
 from models.experimental.hunyuan_image_3_0.tests.pcc.kv_cache_pcc_common import HF_MAX_ISL, _pad_ids_to
 from models.experimental.hunyuan_image_3_0.ref.tokenizer import HunyuanTokenizer, prepare_recaption_inputs
-from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel
+from models.experimental.hunyuan_image_3_0.ttnn.model import HunyuanTtModel
 
 NUM_LAYERS = int(os.environ.get("HY_NUM_LAYERS", "2"))
 MAX_ISL = min(int(os.environ.get("HY_MAX_ISL", "512")), HF_MAX_ISL)

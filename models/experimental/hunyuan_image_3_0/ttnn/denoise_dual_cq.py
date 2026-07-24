@@ -14,7 +14,7 @@ from __future__ import annotations
 import torch
 import ttnn
 
-from models.experimental.hunyuan_image_3_0.tt.ar_dual_cq import (
+from models.experimental.hunyuan_image_3_0.ttnn.ar_dual_cq import (
     COMPUTE_CQ,
     IO_CQ,
     device_num_command_queues,
@@ -22,14 +22,14 @@ from models.experimental.hunyuan_image_3_0.tt.ar_dual_cq import (
 
 
 def denoise_2cq_enabled(device) -> bool:
-    from models.experimental.hunyuan_image_3_0.tt.trace_config import denoise_2cq_enabled as _denoise_2cq
+    from models.experimental.hunyuan_image_3_0.ttnn.trace_config import denoise_2cq_enabled as _denoise_2cq
 
     return _denoise_2cq(device)
 
 
 def open_denoise_mesh(mesh_shape, *, l1_small_size: int = 32768, enable_2cq: bool | None = None):
     """Open a mesh for DiT denoise with optional two command queues."""
-    from models.experimental.hunyuan_image_3_0.tt.trace_config import hy_trace_enabled, open_traced_mesh
+    from models.experimental.hunyuan_image_3_0.ttnn.trace_config import hy_trace_enabled, open_traced_mesh
 
     if enable_2cq is None:
         enable_2cq = hy_trace_enabled()

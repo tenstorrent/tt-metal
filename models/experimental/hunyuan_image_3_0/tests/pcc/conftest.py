@@ -66,7 +66,7 @@ def vision_inputs():
 
 @pytest.fixture
 def tt_vision_inputs(device, vision_inputs):
-    from models.experimental.hunyuan_image_3_0.tt.vision.siglip2 import Siglip2VisionInputs
+    from models.experimental.hunyuan_image_3_0.ttnn.vision.siglip2 import Siglip2VisionInputs
     from models.experimental.hunyuan_image_3_0.tests.pcc.siglip2_helpers import (
         spatial_shapes_to_hw,
         upload_attention_mask,

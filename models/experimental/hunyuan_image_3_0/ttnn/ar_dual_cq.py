@@ -19,7 +19,7 @@ import ttnn
 COMPUTE_CQ = 0
 IO_CQ = 1
 
-from models.experimental.hunyuan_image_3_0.tt.trace_config import (
+from models.experimental.hunyuan_image_3_0.ttnn.trace_config import (
     hy_trace_enabled,
     recaption_2cq_enabled as _recaption_2cq_enabled,
     trace_region_size,

@@ -20,18 +20,20 @@ from models.experimental.hunyuan_image_3_0.ref.attention.mask import (
     build_attention_mask_query_row,
     to_additive,
 )
-from models.experimental.hunyuan_image_3_0.tt.ar_dual_cq import (
+from models.experimental.hunyuan_image_3_0.ttnn.ar_dual_cq import (
     COMPUTE_CQ,
     ArDualCQCoordinator,
     logits_host_to_torch,
 )
-from models.experimental.hunyuan_image_3_0.tt.ar_prefill import (
+from models.experimental.hunyuan_image_3_0.ttnn.ar_prefill import (
     recaption_trace_prefill_enabled,
     run_kv_prefill,
 )
 
 
-from models.experimental.hunyuan_image_3_0.tt.trace_config import recaption_trace_enabled as _hy_recaption_trace_enabled
+from models.experimental.hunyuan_image_3_0.ttnn.trace_config import (
+    recaption_trace_enabled as _hy_recaption_trace_enabled,
+)
 
 
 def recaption_trace_enabled(device, *, sp_factor: int = 1, use_kv_cache: bool = True) -> bool:

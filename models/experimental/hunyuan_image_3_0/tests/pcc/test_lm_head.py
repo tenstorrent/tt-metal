@@ -21,7 +21,7 @@ from loguru import logger
 from models.common.utility_functions import comp_pcc
 from models.experimental.hunyuan_image_3_0.ref.lm_head import lm_head_logits
 from models.experimental.hunyuan_image_3_0.ref.weights import MODEL_DIR, load_tensors
-from models.experimental.hunyuan_image_3_0.tt.lm_head import HunyuanTtLMHead
+from models.experimental.hunyuan_image_3_0.ttnn.lm_head import HunyuanTtLMHead
 from pcc_common import PCC_STRICT, PRODUCTION_SEQ
 
 H = 4096

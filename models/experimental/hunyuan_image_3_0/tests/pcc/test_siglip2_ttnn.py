@@ -23,7 +23,7 @@ from models.experimental.hunyuan_image_3_0.ref.vision.siglip2 import (
     VIT_CONFIG,
     prepare_4d_attention_mask,
 )
-from models.experimental.hunyuan_image_3_0.tt.vision.siglip2 import (
+from models.experimental.hunyuan_image_3_0.ttnn.vision.siglip2 import (
     HunyuanTtLightProjector,
     HunyuanTtSiglip2Attention,
     HunyuanTtSiglip2EncoderLayer,
@@ -193,7 +193,7 @@ def test_vision_pcc_no_mask(device, ref_vision, vision_inputs, vision_state_dict
     with torch.no_grad():
         pt_out = ref_vision(pixel_values, None, spatial_shapes)
 
-    from models.experimental.hunyuan_image_3_0.tt.vision.siglip2 import Siglip2VisionInputs
+    from models.experimental.hunyuan_image_3_0.ttnn.vision.siglip2 import Siglip2VisionInputs
 
     tt_mod = HunyuanTtSiglip2Vision(device, vision_state_dict, num_layers=NUM_LAYERS)
     tt_mod.prewarm_pos_geometries([(8, 8, S)])

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import ttnn
 
-from models.experimental.hunyuan_image_3_0.tt.vae.conv3d import HunyuanSymmetricConv3d, conv3d_h_chunk_size
+from models.experimental.hunyuan_image_3_0.ttnn.vae.conv3d import HunyuanSymmetricConv3d, conv3d_h_chunk_size
 from models.tt_dit.layers.module import Module
 
 
