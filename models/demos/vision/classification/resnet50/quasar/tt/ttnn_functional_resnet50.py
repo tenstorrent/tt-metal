@@ -95,10 +95,13 @@ def fit_width_sharded_cores(width_elems, desired_cores, device):
 # Only the bottleneck conv2 (3x3) slices/deadlocks; conv1/conv3/downsample are 1x1 (mm_conv) and run on
 # device. conv1 and conv2 are wired through _conv2d_or_host below (they share the 3-tuple return); to bypass
 # the 1x1s too, wrap their calls the same way (conv3 uses return_output_dim=False -> a 2-tuple return).
-# Full-model triage: host-bypass EVERY conv (all False) so the split-conv tile-counter reuse limitation
-# (#48552) can't stall the run, and the NON-conv device ops (maxpool, residual add, fc matmul, ...) still
-# execute and stay numerically correct. Flip any single entry to True to put just that conv back on device.
-_CONV_ON_DEVICE = {"stem": False, "conv1": False, "conv2": False, "conv3": False, "downsample": False}
+# Full-model triage: host-bypass ONLY the SLICING convs — the stem (4x4) and bottleneck conv2 (3x3) are the
+# ones that route through the split-conv/DRAM-slicing path and hit the tile-counter reuse limitation (#48552).
+# conv1/conv3/downsample are 1x1 mm_conv (plain matmuls, no slicing), so keep them ON DEVICE: their outputs
+# stay height/block-sharded L1, which keeps the residual `add` on the ported Metal-V2 binary_ng factory
+# (a host-bypassed 1x1 uploads INTERLEAVED DRAM -> the add falls to the unported legacy ProgramFactory ->
+# "DataMovementKernel not supported on Quasar"). Flip any entry to change a single conv.
+_CONV_ON_DEVICE = {"stem": False, "conv1": True, "conv2": False, "conv3": True, "downsample": True}
 
 
 def _host_conv2d(
