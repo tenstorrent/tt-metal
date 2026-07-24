@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import pytest
 from conftest import skip_for_coverage, skip_for_quasar
+from helpers.param_config import parametrize
 from helpers.perf import PerfConfig
 from helpers.profiler import EntryType, Profiler
 from helpers.test_config import BuildMode, TestConfig
@@ -15,30 +16,40 @@ from ttexalens.tt_exalens_lib import read_words_from_device
 
 @dataclass
 class OVERRUN_FILL(TemplateParameter):
-    """Fill level for the overrun reproducer, injected as #defines into build.h."""
+    """Fill level for the overrun reproducer, injected as constexprs into build.h."""
 
     filler_count: int = 501
     nest_depth: int = 20
 
     def convert_to_cpp(self) -> str:
-        return f"#define FILLER_COUNT {self.filler_count}\n#define NEST_DEPTH {self.nest_depth}"
+        return (
+            f"constexpr std::uint32_t FILLER_COUNT = {self.filler_count};\n"
+            f"constexpr std::uint32_t NEST_DEPTH = {self.nest_depth};"
+        )
+
+
+def _compile_and_run(config):
+    config.generate_variant_hash()
+    if TestConfig.BUILD_MODE in (BuildMode.PRODUCE, BuildMode.DEFAULT):
+        config.build_elfs()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip()
+    config.run_elf_files()
+    config.wait_for_tensix_operations_finished()
 
 
 @skip_for_coverage
 @skip_for_quasar
-@pytest.mark.parametrize("filler_count, nest_depth", [(501, 20), (400, 40)])
+@parametrize(
+    filler_count=[501, 400],
+    nest_depth=lambda filler_count: 20 if filler_count == 501 else 40,
+)
 def test_profiler_buffer_overrun_into_neighbor(filler_count, nest_depth):
-    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
-        pytest.skip()
-
     config = PerfConfig(
         "sources/profiler_stress_overrun_test.cpp",
         templates=[OVERRUN_FILL(filler_count, nest_depth)],
     )
-    config.generate_variant_hash()
-    config.build_elfs()
-    config.run_elf_files()
-    config.wait_for_tensix_operations_finished()
+    _compile_and_run(config)
 
     # reading unpack's buffer over the NoC flushes its data cache to L1, so any spill is
     # visible when we read the math buffer next.
@@ -76,18 +87,12 @@ def test_profiler_buffer_overrun_into_neighbor(filler_count, nest_depth):
 
 @skip_for_coverage
 @skip_for_quasar
-def test_profiler_overrun_crashes_normal_read():
-    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
-        pytest.skip()
-
+def test_profiler_overrun_absent_from_math_read():
     config = PerfConfig(
         "sources/profiler_stress_overrun_test.cpp",
         templates=[OVERRUN_FILL()],
     )
-    config.generate_variant_hash()
-    config.build_elfs()
-    config.run_elf_files()
-    config.wait_for_tensix_operations_finished()
+    _compile_and_run(config)
 
     runtime = Profiler.get_data(
         config.test_name, config.variant_id, TestConfig.TENSIX_LOCATION

@@ -16,13 +16,7 @@
 //   closes (plus the enclosing kernel zone) drove write_idx to ~1030 -> 6 words spilled into
 //   the math buffer.
 //
-// FILLER_COUNT / NEST_DEPTH default here but are overridable from the Python test (OVERRUN_FILL).
-#ifndef FILLER_COUNT
-#define FILLER_COUNT 501
-#endif
-#ifndef NEST_DEPTH
-#define NEST_DEPTH 20
-#endif
+// FILLER_COUNT / NEST_DEPTH are injected from the Python test (OVERRUN_FILL) via build.h.
 
 #ifdef LLK_TRISC_UNPACK
 

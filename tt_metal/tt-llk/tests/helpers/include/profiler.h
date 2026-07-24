@@ -97,7 +97,7 @@ using buffer_ptr_t  = std::uint32_t (*)[BUFFER_LENGTH];
 extern barrier_ptr_t barrier_ptr;
 extern buffer_ptr_t buffer;
 extern std::uint32_t write_idx;
-extern std::uint32_t reserved_zone_end_words;
+extern std::uint32_t reserved_words_count;
 
 __attribute__((always_inline)) inline void sync_threads()
 {
@@ -121,10 +121,10 @@ __attribute__((always_inline)) inline void sync_threads()
 
 __attribute__((always_inline)) inline void reset()
 {
-    barrier_ptr             = reinterpret_cast<barrier_ptr_t>(BARRIER_START);
-    buffer                  = reinterpret_cast<buffer_ptr_t>(BUFFERS_START);
-    write_idx               = 0;
-    reserved_zone_end_words = 0;
+    barrier_ptr          = reinterpret_cast<barrier_ptr_t>(BARRIER_START);
+    buffer               = reinterpret_cast<buffer_ptr_t>(BUFFERS_START);
+    write_idx            = 0;
+    reserved_words_count = 0;
 
     memset(buffer[TRISC_ID], 0, BUFFER_LENGTH * sizeof(buffer[TRISC_ID][0]));
 }
@@ -135,7 +135,7 @@ __attribute__((always_inline)) inline bool is_buffer_full()
     // - timestamp with data (TIMESTAMP_DATA_ENTRY) (size = 16B)
     // - new zone (ZONE_START_ENTRY + ZONE_END_ENTRY) (size = 16B)
     // after closing all of the currently open zones
-    return (BUFFER_LENGTH - (write_idx + reserved_zone_end_words)) < 4;
+    return (BUFFER_LENGTH - (write_idx + reserved_words_count)) < 4;
 }
 
 __attribute__((always_inline)) inline void write_entry(EntryType type, std::uint16_t id16)
@@ -175,7 +175,7 @@ public:
         {
             is_opened = true;
             write_entry(EntryType::ZONE_START, id16);
-            reserved_zone_end_words += ZONE_END_WORDS;
+            reserved_words_count += ZONE_END_WORDS;
         }
         ckernel::fence_compiler();
     }
@@ -186,7 +186,7 @@ public:
         if (is_opened)
         {
             write_entry(EntryType::ZONE_END, id16);
-            reserved_zone_end_words -= ZONE_END_WORDS;
+            reserved_words_count -= ZONE_END_WORDS;
         }
         ckernel::fence_compiler();
     }
