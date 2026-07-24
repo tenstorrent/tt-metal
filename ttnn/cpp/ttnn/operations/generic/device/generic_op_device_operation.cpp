@@ -108,16 +108,6 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
     return hash;
 }
 
-ttsl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
-    size_t hash = 0;
-    for (const auto& [mesh_coord_range, program_descriptor] : operation_attributes.mesh_programs) {
-        ttsl::hash::hash_combine(hash, mesh_coord_range);
-        ttsl::hash::hash_combine(hash, compute_program_descriptor_hash(program_descriptor));
-    }
-    return hash;
-}
-
 }  // namespace ttnn::operations::generic
 
 namespace ttnn::prim {
