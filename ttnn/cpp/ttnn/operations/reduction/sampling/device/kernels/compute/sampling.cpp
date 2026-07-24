@@ -256,7 +256,9 @@ void top_k() {
             transpose_tile(index_cb_index, 1, 3);
 
             // llk_topk_sort -> inplace
-            ckernel::topk_local_sort(0, (int)ascending, logk - 1);
+            // stable_sort=true: on equal values, keep ascending (lowest) global index so the
+            // greedy tie-break is deterministic and placement/geometry-independent (matches host argmax).
+            ckernel::topk_local_sort<true>(0, (int)ascending, logk - 1);
 
             tile_regs_commit();
 
@@ -302,9 +304,9 @@ void top_k() {
                 copy_tile(index_transposed_cb_index, right_ind, index_dest_end);
 
                 // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
-                ckernel::topk_merge(0, m_iter, K);
+                ckernel::topk_merge<false, true>(0, m_iter, K);
                 // sort within the larger 32 values
-                ckernel::topk_rebuild(0, (uint32_t)a, m_iter, K, logk, true);
+                ckernel::topk_rebuild<true>(0, (uint32_t)a, m_iter, K, logk, true);
 
                 tile_regs_commit();
                 tile_regs_wait();

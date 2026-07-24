@@ -45,7 +45,8 @@ void process_and_sort_tiles(
             transpose_tile(index_cb_index, 1, 3);
         }
         // llk_topk_sort -> inplace
-        ckernel::topk_local_sort(0, (int)ascending, end_phase);
+        // stable_sort=true: equal values keep ascending (lowest) index -> deterministic lowest-index tie-break.
+        ckernel::topk_local_sort<true>(0, (int)ascending, end_phase);
         tile_regs_commit();
 
         input_cb.pop_front(tiles_to_wait);
@@ -103,7 +104,7 @@ void process_tile_pair(
 
     // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
     // sort within the larger 32 values
-    ckernel::topk_rebuild(0, (uint32_t)ascending, m_iter, K, logk, target_tiles_is_one);
+    ckernel::topk_rebuild<true>(0, (uint32_t)ascending, m_iter, K, logk, target_tiles_is_one);
 
     tile_regs_commit();
     tile_regs_wait();
@@ -165,9 +166,9 @@ void process_tiles(
 
             // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
             if (largest) {
-                ckernel::topk_merge<false>(0, m_iter, K);
+                ckernel::topk_merge<false, true>(0, m_iter, K);
             } else {
-                ckernel::topk_merge<true>(0, m_iter, K);
+                ckernel::topk_merge<true, true>(0, m_iter, K);
             }
 
             // ckernel::topk_merge(0, m_iter, K);
