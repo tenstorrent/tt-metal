@@ -216,6 +216,7 @@
     pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/perf/test_mla_perf.py -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/perf/test_prefill_block_perf.py -k "block_2x4" -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/perf/test_fp_compression_decompression_perf.py -m models_device_performance_bare_metal -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
     bh_loudbox:
