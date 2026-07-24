@@ -44,7 +44,7 @@ void kernel_main() {
     constexpr uint32_t tiles_per_block = block_w / tile_w;
     constexpr uint32_t face_elems = face_h * face_w;                // fp32 per face
     constexpr uint32_t faces_per_row = tile_w / face_w;             // face columns per tile
-    constexpr uint32_t FACE_ROWS = tile_h / face_h;                                         // face rows per tile
+    constexpr uint32_t FACE_ROWS = tile_h / face_h;                 // face rows per tile
     constexpr uint32_t FACE_ROW_STRIDE_BYTES = faces_per_row * face_elems * sizeof(float);  // per face row
     constexpr uint32_t FACE_W_BYTES = face_w * sizeof(float);                               // per in-face row
 
