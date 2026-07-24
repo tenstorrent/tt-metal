@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <tuple>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -26,6 +27,33 @@ struct StridedAllGatherAsyncParams {
     const std::optional<uint32_t> mm_cores_y;
     const std::optional<uint32_t> mm_block_ht;
     const std::optional<uint32_t> mm_block_wt;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "dim",
+        "num_links",
+        "ring_size",
+        "output_mem_config",
+        "topology",
+        "cluster_axis",
+        "num_workers_per_link",
+        "num_buffers_per_channel",
+        "mm_cores_y",
+        "mm_block_ht",
+        "mm_block_wt");
+    auto attribute_values() const {
+        return std::make_tuple(
+            dim,
+            num_links,
+            ring_size,
+            std::cref(output_mem_config),
+            topology,
+            std::cref(cluster_axis),
+            std::cref(num_workers_per_link),
+            std::cref(num_buffers_per_channel),
+            std::cref(mm_cores_y),
+            std::cref(mm_block_ht),
+            std::cref(mm_block_wt));
+    }
 };
 
 struct StridedAllGatherAsyncInputs {
