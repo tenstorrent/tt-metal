@@ -77,7 +77,7 @@ std::vector<T> arange(int64_t start, int64_t end, int64_t step, std::optional<in
 template <typename T>
 class VectorConversionTest : public ::testing::Test {};
 
-using TestTypes = ::testing::Types<float, bfloat16, uint8_t, uint16_t, uint32_t, int32_t>;
+using TestTypes = ::testing::Types<float, bfloat16, uint8_t, uint16_t, uint32_t, int32_t, int8_t>;
 TYPED_TEST_SUITE(VectorConversionTest, TestTypes);
 
 TYPED_TEST(VectorConversionTest, InvalidSize) {
@@ -291,6 +291,30 @@ TEST_F(DeviceVectorConversionTest, RoundtripWithMemoryConfig) {
     auto readback = enqueue_read_tensor(mesh_device_->mesh_command_queue(), mesh);
 
     EXPECT_THAT(readback.to_vector<float>(), Pointwise(Eq(), input));
+}
+
+TEST_F(DeviceVectorConversionTest, RoundtripInt8) {
+    Shape shape{128, 128};
+
+    auto input = arange<int8_t>(0, shape.volume(), 1);
+
+    input[0] = -128;
+    input[1] = 127;
+
+    TensorSpec spec(
+        shape,
+        TensorLayout(DataType::INT8, Layout::ROW_MAJOR, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1}));
+    MemoryConfig mem_cfg{TensorMemoryLayout::INTERLEAVED, BufferType::L1};
+
+    auto host = HostTensor::from_vector(input, spec);
+    auto mesh = enqueue_write_tensor(mesh_device_->mesh_command_queue(), host, *mesh_device_, mem_cfg);
+
+    EXPECT_TRUE(mesh.memory_config().is_l1());
+    EXPECT_EQ(mesh.dtype(), DataType::INT8);
+
+    auto readback = enqueue_read_tensor(mesh_device_->mesh_command_queue(), mesh);
+
+    EXPECT_THAT(readback.to_vector<int8_t>(), Pointwise(Eq(), input));
 }
 
 bool exact_spec_match(const TensorSpec& a, const TensorSpec& b) {

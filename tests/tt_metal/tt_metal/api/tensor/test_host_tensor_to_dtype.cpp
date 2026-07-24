@@ -368,5 +368,93 @@ TEST(HostTensorToDtype, RowMajorToBfpPhysicalMismatchThrows) {
     EXPECT_ANY_THROW(to_dtype(source, DataType::BFLOAT8_B));
 }
 
+TEST(HostTensorToDtype, Float32ToInt8RowMajorValueCheck) {
+    const Shape shape{32, 64};
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
+
+    for (size_t i = 0; i < data.size(); ++i) {
+        data[i] = static_cast<float>(static_cast<int8_t>(static_cast<int>(data[i])));
+    }
+    auto memory_config = MemoryConfig{
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        BufferType::L1,
+        ShardSpec{CoreRangeSet({CoreRange({0, 0}, {0, 1})}), {16, 64}, ShardOrientation::ROW_MAJOR}};
+    experimental::per_core_allocation::set_per_core_allocation(memory_config, true);
+
+    auto source_spec = TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config));
+    auto source = HostTensor::from_vector<float>(data, source_spec);
+
+    auto result = to_dtype(source, DataType::INT8);
+
+    auto expected_spec = TensorSpec(shape, TensorLayout(DataType::INT8, PageConfig(Layout::ROW_MAJOR), memory_config));
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
+    EXPECT_EQ(result.dtype(), DataType::INT8);
+    EXPECT_EQ(result.layout(), Layout::ROW_MAJOR);
+
+    auto result_data = result.to_vector<int8_t>();
+    EXPECT_EQ(result_data.size(), data.size());
+    for (size_t i = 0; i < data.size(); ++i) {
+        EXPECT_EQ(result_data[i], static_cast<int8_t>(data[i]));
+    }
+}
+
+TEST(HostTensorToDtype, Int8ToInt32RowMajorValueCheck) {
+    const Shape shape{32, 64};
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<int8_t>(shape.volume());
+    data[0] = -128;
+    data[1] = 127;
+    auto memory_config = MemoryConfig{
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        BufferType::L1,
+        ShardSpec{CoreRangeSet({CoreRange({0, 0}, {0, 1})}), {16, 64}, ShardOrientation::ROW_MAJOR}};
+    experimental::per_core_allocation::set_per_core_allocation(memory_config, true);
+
+    auto source_spec = TensorSpec(shape, TensorLayout(DataType::INT8, PageConfig(Layout::ROW_MAJOR), memory_config));
+    auto source = HostTensor::from_vector<int8_t>(data, source_spec);
+
+    auto result = to_dtype(source, DataType::INT32);
+
+    auto expected_spec = TensorSpec(shape, TensorLayout(DataType::INT32, PageConfig(Layout::ROW_MAJOR), memory_config));
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
+    EXPECT_EQ(result.dtype(), DataType::INT32);
+    EXPECT_EQ(result.layout(), Layout::ROW_MAJOR);
+
+    auto result_data = result.to_vector<int32_t>();
+    EXPECT_EQ(result_data.size(), data.size());
+    for (size_t i = 0; i < data.size(); ++i) {
+        EXPECT_EQ(result_data[i], static_cast<int32_t>(data[i]));
+    }
+}
+
+TEST(HostTensorToDtype, Int32ToInt8RowMajorValueCheck) {
+    const Shape shape{32, 64};
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<int32_t>(shape.volume());
+
+    for (size_t i = 0; i < data.size(); ++i) {
+        data[i] = static_cast<int32_t>(static_cast<int8_t>(data[i]));
+    }
+    auto memory_config = MemoryConfig{
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        BufferType::L1,
+        ShardSpec{CoreRangeSet({CoreRange({0, 0}, {0, 1})}), {16, 64}, ShardOrientation::ROW_MAJOR}};
+    experimental::per_core_allocation::set_per_core_allocation(memory_config, true);
+
+    auto source_spec = TensorSpec(shape, TensorLayout(DataType::INT32, PageConfig(Layout::ROW_MAJOR), memory_config));
+    auto source = HostTensor::from_vector<int32_t>(data, source_spec);
+
+    auto result = to_dtype(source, DataType::INT8);
+
+    auto expected_spec = TensorSpec(shape, TensorLayout(DataType::INT8, PageConfig(Layout::ROW_MAJOR), memory_config));
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
+    EXPECT_EQ(result.dtype(), DataType::INT8);
+    EXPECT_EQ(result.layout(), Layout::ROW_MAJOR);
+
+    auto result_data = result.to_vector<int8_t>();
+    EXPECT_EQ(result_data.size(), data.size());
+    for (size_t i = 0; i < data.size(); ++i) {
+        EXPECT_EQ(result_data[i], static_cast<int8_t>(data[i]));
+    }
+}
+
 }  // namespace
 }  // namespace tt::tt_metal

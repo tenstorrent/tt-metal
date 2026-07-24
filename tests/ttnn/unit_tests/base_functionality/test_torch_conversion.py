@@ -115,6 +115,7 @@ def create_from_torch_test_tensors(
         ttnn.bfloat16,
         ttnn.float32,
         ttnn.uint8,
+        ttnn.int8,
         ttnn.uint16,
         ttnn.uint32,
         ttnn.int32,
@@ -128,6 +129,7 @@ def create_from_torch_test_tensors(
         torch.float32,
         torch.float64,
         torch.uint8,
+        torch.int8,
         torch.int16,
         torch.int32,
         torch.int64,
@@ -169,6 +171,7 @@ def test_from_torch_conversion(device, shape, ttnn_dtype, torch_dtype, ttnn_layo
         ttnn.bfloat16,
         ttnn.float32,
         ttnn.uint8,
+        ttnn.int8,
         ttnn.uint16,
         ttnn.uint32,
         ttnn.int32,
@@ -182,6 +185,7 @@ def test_from_torch_conversion(device, shape, ttnn_dtype, torch_dtype, ttnn_layo
         torch.float32,
         torch.float64,
         torch.uint8,
+        torch.int8,
         torch.int16,
         torch.int32,
         torch.int64,
@@ -190,7 +194,7 @@ def test_from_torch_conversion(device, shape, ttnn_dtype, torch_dtype, ttnn_layo
 @pytest.mark.parametrize("ttnn_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("convert_with_device", [True, False])
 def test_to_torch_conversion(device, shape, ttnn_dtype, torch_dtype, ttnn_layout, convert_with_device):
-    ttnn_dtype_has_random = ttnn_dtype not in [ttnn.uint8, ttnn.int32]
+    ttnn_dtype_has_random = ttnn_dtype not in [ttnn.uint8, ttnn.int8, ttnn.int32]
     if ttnn_dtype_has_random:
         for store_input_on_device in [True, False]:
             ttnn_input_tensor = ttnn.rand(
@@ -379,6 +383,7 @@ def create_from_numpy_test_tensors(
         ttnn.bfloat4_b,
         ttnn.float32,
         ttnn.uint8,
+        ttnn.int8,
         ttnn.uint16,
         ttnn.uint32,
         ttnn.int32,

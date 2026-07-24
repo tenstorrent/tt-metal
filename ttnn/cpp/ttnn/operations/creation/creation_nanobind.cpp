@@ -509,6 +509,10 @@ Tensor from_buffer_impl(
             auto cpp_buffer = nb::cast<std::vector<uint8_t>>(buffer);
             return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
         }
+        case DataType::INT8: {
+            auto cpp_buffer = nb::cast<std::vector<int8_t>>(buffer);
+            return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
+        }
         case DataType::UINT16: {
             auto cpp_buffer = nb::cast<std::vector<uint16_t>>(buffer);
             return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
