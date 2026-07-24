@@ -227,6 +227,7 @@ CoreType Kernel::get_kernel_core_type() const {
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH: return CoreType::ETH;
         case HalProgrammableCoreType::DRAM: return CoreType::DRAM;
+        case HalProgrammableCoreType::DISPATCH: return CoreType::DISPATCH;
         case HalProgrammableCoreType::COUNT: TT_THROW("Bad programmable core type!");
     }
     TT_THROW("Unreachable");
@@ -651,6 +652,7 @@ void Kernel::validate_runtime_args_size(
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH:
         case HalProgrammableCoreType::DRAM:
+        case HalProgrammableCoreType::DISPATCH:
             expected_max_rt_args = MetalContext::instance().hal().get_dev_size(
                                        this->get_kernel_programmable_core_type(), HalL1MemAddrType::KERNEL_CONFIG) /
                                    sizeof(uint32_t);
@@ -1079,6 +1081,87 @@ bool DramKernel::configure(
 
     return true;
 }
+
+uint32_t experimental::quasar::DispatchEngineKernel::get_kernel_processor_type(int index) const {
+    TT_ASSERT(index == 0, "index out of bounds");
+    return enchantum::to_underlying(this->dm_processors_[0]);
+}
+
+void experimental::quasar::DispatchEngineKernel::generate_binaries(IDevice* device, JitBuildOptions&) const {
+    jit_build_genfiles_kernel_include(
+        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_env,
+        *this,
+        this->kernel_src_);
+    const uint32_t dispatch_core_type =
+        MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
+    const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
+    const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_processors_[0]);
+    jit_build(
+        BuildEnvManager::get_instance(extract_context_id(device))
+            .get_kernel_build_state(device->build_id(), dispatch_core_type, dm_class_idx, riscv_id),
+        this);
+}
+
+void experimental::quasar::DispatchEngineKernel::read_binaries(IDevice* device, const std::string& binary_root) {
+    TT_ASSERT(this->binaries_exist_on_disk(device, binary_root));
+    const uint32_t dispatch_core_type =
+        MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
+    const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
+    const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_processors_[0]);
+    auto load_type = MetalContext::instance()
+                         .hal()
+                         .get_jit_build_config(dispatch_core_type, dm_class_idx, riscv_id)
+                         .memory_load;
+    const auto binary_path = BuildEnvManager::get_instance(extract_context_id(device)).get_kernel_binary_path(
+        device->build_id(), dispatch_core_type, dm_class_idx, riscv_id, binary_root, this->kernel_full_name_);
+    const ll_api::memory& binary_mem = llrt::get_risc_binary(binary_path, load_type);
+    std::vector<const ll_api::memory*> binaries = {&binary_mem};
+    this->set_binaries(
+        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_key(),
+        std::move(binaries));
+}
+
+void experimental::quasar::DispatchEngineKernel::process_defines(
+    const std::function<void(const std::string& define, const std::string& value)> callback) const {
+    Kernel::process_defines(callback);
+    callback("NOC_INDEX", std::to_string(NOC::NOC_0));
+    callback("NOC_MODE", std::to_string(NOC_MODE::DM_DEDICATED_NOC));
+}
+
+bool experimental::quasar::DispatchEngineKernel::configure(
+    IDevice* device,
+    const CoreCoord& logical_core,
+    [[maybe_unused]] uint32_t base_address,
+    [[maybe_unused]] const uint32_t offsets[]) const {
+    TT_FATAL(is_on_logical_core(logical_core), "Cannot configure kernel because it is not on core {}", logical_core.str());
+    const auto& hal = MetalContext::instance().hal();
+    const ChipId device_id = device->id();
+    const CoreCoord dispatch_core = device->virtual_core_from_logical_core(logical_core, CoreType::DISPATCH);
+    const ll_api::memory& binary_mem = *this->binaries(BuildEnvManager::get_instance(extract_context_id(device))
+                                                           .get_device_build_env(device->build_id())
+                                                           .build_key())[0];
+    const uint32_t dispatch_core_type_index =
+        hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
+    const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
+    const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_processors_[0]);
+    tt::llrt::test_load_write_read_risc_binary(
+        binary_mem, device_id, dispatch_core, dispatch_core_type_index, dm_class_idx, riscv_id);
+    return true;
+}
+
+std::string_view experimental::quasar::DispatchEngineKernel::get_compiler_opt_level() const {
+    return enchantum::to_string(this->config_.opt_level);
+}
+
+std::string_view experimental::quasar::DispatchEngineKernel::get_linker_opt_level() const {
+    return this->get_compiler_opt_level();
+}
+
+std::string experimental::quasar::DispatchEngineKernel::config_hash() const {
+    return fmt::format("dispatch_{}", enchantum::to_string(this->dm_processors_[0]));
+}
+
+uint8_t experimental::quasar::DispatchEngineKernel::expected_num_binaries() const { return 1; }
 
 bool ComputeKernel::configure(
     IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const {

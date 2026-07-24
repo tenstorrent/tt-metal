@@ -388,6 +388,7 @@ public:
     bool is_worker_core(const tt::tt_metal::CoreCoord& core, ChipId chip_id) const;
     bool is_ethernet_core(const tt::tt_metal::CoreCoord& core, ChipId chip_id) const;
     bool is_dram_core(const tt::tt_metal::CoreCoord& core, ChipId chip_id) const;
+    bool is_dispatch_core(const tt::tt_metal::CoreCoord& core, ChipId chip_id) const;
     tt::tt_metal::CoreCoord get_logical_ethernet_core_from_virtual(ChipId chip, tt::tt_metal::CoreCoord core) const;
 
     // These two functions should be removed in favor of direct translation.
@@ -461,6 +462,7 @@ private:
     // Data Structures Tracking Virtual Coordinates
     std::unordered_map<tt_cxy_pair, tt_cxy_pair> virtual_to_umd_coord_mapping_;
     std::unordered_map<ChipId, std::unordered_set<tt::tt_metal::CoreCoord>> virtual_worker_cores_;
+    std::unordered_map<ChipId, std::unordered_set<tt::tt_metal::CoreCoord>> virtual_dispatch_cores_;
     std::unordered_map<ChipId, std::unordered_set<tt::tt_metal::CoreCoord>> virtual_eth_cores_;
     std::unordered_map<ChipId, std::unordered_set<tt::tt_metal::CoreCoord>> virtual_dram_cores_;
     std::unordered_map<ChipId, std::unordered_set<tt::tt_metal::CoreCoord>> virtual_dram_hw_cores_;

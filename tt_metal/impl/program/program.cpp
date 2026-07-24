@@ -45,6 +45,7 @@
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
 #include "impl/context/metal_context.hpp"
+#include "context/metal_env_accessor.hpp"
 #include "impl/context/context_types.hpp"
 #include "hal_types.hpp"
 #include "impl/device/device_impl.hpp"
@@ -110,7 +111,7 @@ size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable
     return MetalContext::instance().hal().get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 }
 
-void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel> kernel, tt::ChipId device_id) {
+void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel> kernel, tt::ChipId physical_chip_id) {
     // Placement rules:
     //  Fast dispatch (tensix):
     //      - tensix kernels cannot be on dispatch cores
@@ -119,7 +120,8 @@ void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel>
     bool slow_dispatch = !(MetalContext::instance().rtoptions().get_fast_dispatch());
 
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    tt::CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
+    tt::CoreType dispatch_core_type =
+        resolve_dispatch_core_type(MetalEnvAccessor(MetalContext::instance().get_env()).impl(), physical_chip_id, dispatch_core_config);
 
     // Kernels used to implement fast dispatch can be placed on dispatch cores
     if (not slow_dispatch and not force_slow_dispatch) {
@@ -129,12 +131,12 @@ void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel>
         bool on_dispatch_core = std::any_of(
             dispatch_cores.begin(),
             dispatch_cores.end(),
-            [&kernel, &dispatch_core_type, &service_claims, device_id](const CoreCoord& dispatch_core) {
+            [&kernel, &dispatch_core_type, &service_claims, physical_chip_id](const CoreCoord& dispatch_core) {
                 if (kernel->get_kernel_core_type() != dispatch_core_type) {
                     return false;
                 }
                 // Claimed service cores are permitted to run user kernels in FD mode.
-                if (service_claims.is_service_core(device_id, dispatch_core)) {
+                if (service_claims.is_service_core(physical_chip_id, dispatch_core)) {
                     return false;
                 }
                 return kernel->is_on_logical_core(dispatch_core);
@@ -2430,7 +2432,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
-                validate_kernel_placement(force_slow_dispatch, kernel, device->id());
+                validate_kernel_placement(force_slow_dispatch, kernel, device->build_id());
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
                 // Skip the remote round-trip when the ELF is already validly cached locally.
                 if (!remote_kernel_cached(device, kernel)) {
@@ -2466,7 +2468,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         // Local path: parallel build via thread pool.
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
-                validate_kernel_placement(force_slow_dispatch, kernel, device->id());
+                validate_kernel_placement(force_slow_dispatch, kernel, device->build_id());
                 launch_build_step(
                     [&, kernel] {
                         auto [build_options, kernel_hash] = prep_kernel(kernel);

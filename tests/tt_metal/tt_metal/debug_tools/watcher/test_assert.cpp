@@ -29,6 +29,8 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "internal/tt-2xx/quasar/error_handling.h"
 #include "impl/debug/debug_helpers.hpp"
+#include "impl/dispatch/dispatch_engine_cores.hpp"
+#include "host_api/temp_quasar_api.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -179,6 +181,35 @@ static void RunTest(
             risc = "drisc";
             break;
         }
+        case HalProgrammableCoreType::DISPATCH: {
+            if (!hal.has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
+                log_info(LogTest, "Skipping: dispatch-engine programmable cores not available on this architecture.");
+                GTEST_SKIP();
+            }
+            if (tt::tt_metal::detail::sd_cq_kernel_tests_should_skip(device)) {
+                log_info(LogTest, "Skipping: soc descriptor has no dispatch-engine cores.");
+                GTEST_SKIP();
+            }
+            if (MetalContext::instance().rtoptions().get_use_quasar_tensix_dispatch_cores()) {
+                log_info(
+                    LogTest,
+                    "Skipping: dispatch-engine watcher test requires default dispatch-engine path (unset "
+                    "TT_METAL_TENSIX_DISPATCH_CORES).");
+                GTEST_SKIP();
+            }
+            logical_core = tt::tt_metal::detail::dispatch_engine_core(device, 0);
+            virtual_core = tt::tt_metal::detail::dispatch_engine_virtual_core(device, 0);
+            const auto dm_processor = static_cast<DataMovementProcessor>(processor.processor_type);
+            assert_kernel = tt::tt_metal::detail::CreateDispatchEngineKernel(
+                program,
+                kernel,
+                logical_core,
+                dm_processor,
+                experimental::quasar::QuasarDataMovementConfig{
+                    .num_threads_per_cluster = 1,
+                    .is_legacy_kernel = true});
+            break;
+        }
         case HalProgrammableCoreType::COUNT: TT_THROW("Unsupported programmable core type");
     }
     log_info(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, virtual_core);
@@ -246,6 +277,7 @@ static void RunTest(
         case HalProgrammableCoreType::ACTIVE_ETH: core_str = "acteth"; break;
         case HalProgrammableCoreType::IDLE_ETH: core_str = "idleth"; break;
         case HalProgrammableCoreType::DRAM: core_str = "dram"; break;
+        case HalProgrammableCoreType::DISPATCH: core_str = "dispatch"; break;
         default: core_str = "worker";
     }
 
@@ -362,6 +394,7 @@ TEST_P(WatcherAssertTest, TestWatcherAssert) {
     // - TENSIX/ACTIVE_ETH cores: SD only used for Quasar watcher tests (TODO: Remove once FD enabled on Quasar)
     bool is_idle_eth = (params.processor.core_type == HalProgrammableCoreType::IDLE_ETH);
     bool is_dram = (params.processor.core_type == HalProgrammableCoreType::DRAM);
+    bool is_dispatch = (params.processor.core_type == HalProgrammableCoreType::DISPATCH);
     bool is_quasar = (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR);
     bool using_slow_dispatch = this->IsSlowDispatch();
 
@@ -370,14 +403,20 @@ TEST_P(WatcherAssertTest, TestWatcherAssert) {
         params.processor.processor_class == HalProcessorClassType::DM && params.processor.processor_type < 2) {
         GTEST_SKIP() << "DM0/DM1 are reserved for internal use on Quasar";
     }
+    if (is_quasar && is_dispatch && params.processor.processor_class == HalProcessorClassType::DM &&
+        params.processor.processor_type < 2) {
+        GTEST_SKIP() << "DM0/DM1 are reserved for internal use on dispatch-engine cores";
+    }
 
-    if ((is_idle_eth || is_dram) && !using_slow_dispatch) {
+    if ((is_idle_eth || is_dram || is_dispatch) && !using_slow_dispatch) {
         log_info(
-            tt::LogTest, "{} requires Slow Dispatch (Fast Dispatch not yet supported).", is_dram ? "DRAM" : "IDLE_ETH");
+            tt::LogTest,
+            "{} requires Slow Dispatch (Fast Dispatch not yet supported).",
+            is_dram ? "DRAM" : (is_dispatch ? "DISPATCH" : "IDLE_ETH"));
         GTEST_SKIP();
     }
-    if (using_slow_dispatch && !is_quasar && !is_idle_eth && !is_dram) {
-        GTEST_SKIP() << "Slow Dispatch tests only run on Quasar, IDLE_ETH, or DRAM cores";
+    if (using_slow_dispatch && !is_quasar && !is_idle_eth && !is_dram && !is_dispatch) {
+        GTEST_SKIP() << "Slow Dispatch tests only run on Quasar, IDLE_ETH, DRAM, or DISPATCH cores";
     }
     if (!is_quasar && params.assert_type == dev_msgs::DebugAssertHwFault) {
         GTEST_SKIP() << "HW Fault tests only run on Quasar";
@@ -413,7 +452,8 @@ INSTANTIATE_TEST_SUITE_P(
         WatcherTestParams{"Trisc3", {TENSIX, COMPUTE, 3}},  // Trisc3 only Runs on Quasar
         WatcherTestParams{"Erisc", {ACTIVE_ETH, DM, 0}},
         WatcherTestParams{"IErisc", {IDLE_ETH, DM, 0}},
-        WatcherTestParams{"Drisc", {DRAM, DM, 0}}),
+        WatcherTestParams{"Drisc", {DRAM, DM, 0}},
+        WatcherTestParams{"DispatchDM2", {DISPATCH, DM, 2}}),
     [](const ::testing::TestParamInfo<WatcherTestParams>& info) { return info.param.test_name; });
 
 INSTANTIATE_TEST_SUITE_P(
@@ -466,7 +506,8 @@ INSTANTIATE_TEST_SUITE_P(
             "Trisc3", {TENSIX, COMPUTE, 3}, dev_msgs::DebugAssertRtaOutOfBounds},  // Trisc3 only Runs on Quasar
         WatcherTestParams{"Erisc", {ACTIVE_ETH, DM, 0}, dev_msgs::DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped},
         WatcherTestParams{"IErisc", {IDLE_ETH, DM, 0}, dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped},
-        WatcherTestParams{"Drisc", {DRAM, DM, 0}, dev_msgs::DebugAssertTripped}),
+        WatcherTestParams{"Drisc", {DRAM, DM, 0}, dev_msgs::DebugAssertTripped},
+        WatcherTestParams{"DispatchDM2", {DISPATCH, DM, 2}, dev_msgs::DebugAssertTripped}),
     [](const ::testing::TestParamInfo<WatcherTestParams>& info) { return info.param.test_name; });
 
 }  // namespace

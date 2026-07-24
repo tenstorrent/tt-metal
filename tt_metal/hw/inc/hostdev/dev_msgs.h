@@ -156,6 +156,7 @@ struct kernel_config_msg_t {
     // Ring buffer of kernel configuration data
     volatile uint32_t kernel_config_base[ProgrammableCoreType::COUNT];
     volatile uint16_t sem_offset[ProgrammableCoreType::COUNT];
+    volatile uint8_t pad_sem_offset[(ProgrammableCoreType::COUNT % 2) * 2];  // CODEGEN:skip
     volatile uint16_t local_cb_offset;
     volatile uint16_t remote_cb_offset;
     rta_offset_t rta_offset[MaxProcessorsPerCoreType];
@@ -179,7 +180,7 @@ struct kernel_config_msg_t {
 
     volatile uint8_t sub_device_origin_x;  // Logical X coordinate of the sub device origin
     volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
-    volatile uint8_t pad3[1 + ((1 - MaxProcessorsPerCoreType % 2) * 2) + 4];  // CODEGEN:skip
+    volatile uint8_t pad3[1 + ((1 - MaxProcessorsPerCoreType % 2) * 10) + 4];  // CODEGEN:skip
 
     // Per-processor kernel thread info (Quasar: num threads for kernel on this processor; thread_id in that kernel;
     // values fit in 8 bits) The array sizes are rounded up to a multiple of 8 bytes for alignment (i.e. a multiple of
@@ -353,8 +354,9 @@ enum class AddressableCoreType : uint8_t {
     PCIE = 2,
     DRAM = 3,
     HARVESTED = 4,
-    UNKNOWN = 5,
-    COUNT = 6,
+    DISPATCH = 5,
+    UNKNOWN = 6,
+    COUNT = 7,
 };
 
 struct addressable_core_t {
@@ -380,6 +382,7 @@ enum class CoreMagicNumber : uint32_t {
     ACTIVE_ETH = 0xc63050d1,
     IDLE_ETH = 0x837b6cae,
     DRAM = 0x4d92f8e1,
+    DISPATCH = 0x4021fa16,
 };
 struct core_info_msg_t {
     volatile uint64_t noc_pcie_addr_base;

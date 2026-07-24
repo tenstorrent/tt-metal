@@ -19,6 +19,7 @@
 #include "dispatch/command_queue_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
+#include "impl/dispatch/dispatch_core_manager.hpp"
 #include "hal_types.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/strong_type.hpp>

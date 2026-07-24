@@ -165,7 +165,7 @@ uint64_t compute_build_key(const JitDeviceConfig& config, const llrt::RunTimeOpt
     // Collect all the parameters that affect the build configuration
     StableHasher hasher;
 
-    hasher.update(static_cast<uint32_t>(config.dispatch_core_type));
+    hasher.update(static_cast<uint32_t>(config.resolved_dispatch_core_type));
     hasher.update(static_cast<uint32_t>(config.dispatch_core_axis));
 
     // Hash the number of hardware command queues

@@ -19,6 +19,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <internal/service/service_core_manager.hpp>
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -184,6 +185,9 @@ const tt_cxy_pair& dispatch_core_manager::dispatcher_s_core(ChipId device_id, ui
             // dispatch_s is on the same tensix as dispatch_d
             dispatcher_s_coord = this->dispatcher_d_core_locked(device_id, channel, cq_id);
         }
+    } else if (this->get_dispatch_core_type() == CoreType::DISPATCH) {
+        // Dispatch-engine 1CQ FD: prefetch (DM0), dispatch (DM1), and dispatch_s (DM2) share one tile.
+        dispatcher_s_coord = this->dispatcher_core_locked(device_id, channel, cq_id);
     } else {
         dispatcher_s_coord = this->get_next_available_dispatch_core(device_id);
     }
@@ -193,7 +197,12 @@ const tt_cxy_pair& dispatch_core_manager::dispatcher_s_core(ChipId device_id, ui
 }
 
 CoreType dispatch_core_manager::get_dispatch_core_type() const {
-    return get_core_type_from_config(this->dispatch_core_config_);
+    const auto& cluster = env_.get_cluster();
+    if (cluster.all_chip_ids().empty()) {
+        return get_core_type_from_config(this->dispatch_core_config_);
+    }
+    const ChipId device_id = *cluster.all_chip_ids().begin();
+    return resolve_dispatch_core_type(env_, device_id, this->dispatch_core_config_);
 }
 
 DispatchCoreConfig dispatch_core_manager::get_dispatch_core_config() { return this->dispatch_core_config_; }
@@ -240,6 +249,11 @@ void dispatch_core_manager::reset_dispatch_core_manager(
     this->reserved_realtime_profiler_core_by_device_.clear();
     this->dispatch_core_config_ = dispatch_core_config;
     for (ChipId device_id : env.get_cluster().all_chip_ids()) {
+        if (env.get_cluster().arch() == tt::ARCH::QUASAR && env.get_rtoptions().get_fast_dispatch()) {
+            tt::tt_metal::detail::validate_quasar_dispatch_cores_for_fd(
+                env, device_id, num_hw_cqs, dispatch_core_config);
+        }
+
         std::list<CoreCoord>& logical_dispatch_cores = this->available_dispatch_cores_by_device[device_id];
         for (const CoreCoord& logical_dispatch_core :
              tt::get_logical_dispatch_cores(env, device_id, MAX_NUM_HW_CQS, dispatch_core_config)) {
@@ -251,7 +265,7 @@ void dispatch_core_manager::reset_dispatch_core_manager(
         // When running Multiple CQs using Ethernet Dispatch, we may need more dispatch cores than those allocated in
         // the core descriptor (ex: 2 CQs on N300 need 10 dispatch cores and the core descriptor only allocates 6).
         // Infer the remaining dispatch cores from the idle eth core list (this is device dependent).
-        if (get_core_type_from_config(dispatch_core_config) == CoreType::ETH) {
+        if (resolve_dispatch_core_type(env, device_id, dispatch_core_config) == CoreType::ETH) {
             for (const auto& idle_eth_core : env_.get_control_plane().get_inactive_ethernet_cores(device_id)) {
                 add_dispatch_core_to_device_locked(device_id, idle_eth_core);
             }
@@ -269,7 +283,7 @@ void dispatch_core_manager::reset_dispatch_core_manager(
         const bool fabric_tensix_datamover_enabled =
             env.get_fabric_tensix_config() != tt_fabric::FabricTensixConfig::DISABLED;
         const bool is_quasar = env.get_cluster().arch() == tt::ARCH::QUASAR;
-        if (is_mmio && get_core_type_from_config(dispatch_core_config) == CoreType::WORKER &&
+        if (is_mmio && resolve_dispatch_core_type(env, device_id, dispatch_core_config) == CoreType::WORKER &&
             !fabric_tensix_datamover_enabled && !is_quasar && !logical_dispatch_cores.empty()) {
             CoreCoord rt_core = logical_dispatch_cores.back();
             logical_dispatch_cores.pop_back();

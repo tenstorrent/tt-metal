@@ -112,7 +112,9 @@ struct dp_top_callstack_t {
 #if DEVICE_PRINT_IS_KERNEL
         const std::uint32_t launch_index = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
         const auto config = GET_MAILBOX_ADDRESS_DEV(launch[launch_index])->kernel_config;
-        kernel_offset = config.kernel_config_base[ProgrammableCoreType::TENSIX] +
+        // kernel_config_base[] is indexed by ProgrammableCoreType. PROGRAMMABLE_CORE_TYPE is set by
+        // the HAL JIT defines from the build's HalProgrammableCoreType.
+        kernel_offset = config.kernel_config_base[PROGRAMMABLE_CORE_TYPE] +
                         config.kernel_text_offset[internal_::get_hw_thread_idx()];
 #endif
 

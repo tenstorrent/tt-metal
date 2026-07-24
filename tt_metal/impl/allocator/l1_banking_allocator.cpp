@@ -211,7 +211,7 @@ AllocatorConfig L1BankingAllocator::generate_config(
     const auto& hal = env.get_hal();
     const metal_SocDescriptor& soc_desc = cluster.get_soc_desc(device_id);
     const auto& dispatch_core_config = dispatch_core_manager.get_dispatch_core_config();
-    CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
+    CoreType dispatch_core_type = resolve_dispatch_core_type(env, device_id, dispatch_core_config);
     // Construct allocator config from soc_desc
     // Take max alignment to satisfy NoC rd/wr constraints
     // Tensix/Eth -> PCIe/DRAM src and dst addrs must be L1_ALIGNMENT aligned

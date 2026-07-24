@@ -34,6 +34,7 @@
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include "hostdevcommon/dispatch_telemetry_types.hpp"
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 
 using namespace tt::tt_metal;
 
@@ -148,9 +149,9 @@ void PrefetchKernel::GenerateStaticConfigs() {
         uint32_t dispatch_s_buffer_base = 0xff;
         if (get_dispatch_query_manager_ref().dispatch_s_enabled()) {
             uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base(cq_id_);
-            if (GetCoreType() == CoreType::WORKER) {
-                // dispatch_s (and on Quasar, prefetch itself) shares a Tensix core with dispatch_d.
-                // Place dispatch_s CB immediately after dispatch_d's CB within the shared L1.
+            if (GetCoreType() == CoreType::WORKER || GetCoreType() == CoreType::DISPATCH) {
+                // dispatch_s (and on Quasar, prefetch itself) shares a core with dispatch_d
+                // (Tensix WORKER or Quasar DE). Place dispatch_s CB immediately after dispatch_d's CB.
                 dispatch_s_buffer_base =
                     dispatch_buffer_base + (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
                                                my_dispatch_constants.dispatch_buffer_pages();
@@ -244,9 +245,9 @@ void PrefetchKernel::GenerateStaticConfigs() {
         uint32_t dispatch_s_buffer_base = 0xff;
         {  // Just to make it match previous implementation
             uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base(cq_id_);
-            if (GetCoreType() == CoreType::WORKER) {
-                // dispatch_s (and on Quasar, prefetch itself) shares a Tensix core with dispatch_d.
-                // Place dispatch_s CB immediately after dispatch_d's CB within the shared L1.
+            if (GetCoreType() == CoreType::WORKER || GetCoreType() == CoreType::DISPATCH) {
+                // dispatch_s (and on Quasar, prefetch itself) shares a core with dispatch_d
+                // (Tensix WORKER or Quasar DE). Place dispatch_s CB immediately after dispatch_d's CB.
                 dispatch_s_buffer_base =
                     dispatch_buffer_base + (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
                                                my_dispatch_constants.dispatch_buffer_pages();

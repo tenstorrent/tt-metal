@@ -33,6 +33,7 @@
 #include <dispatch/dispatch_query_manager.hpp>
 #include <dispatch/dispatch_mem_map.hpp>
 #include "hostdevcommon/dispatch_telemetry_types.hpp"
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 
 using namespace tt::tt_metal;
 
