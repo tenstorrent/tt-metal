@@ -24,10 +24,6 @@ def _l1_sharded_matmul_enabled() -> bool:
     return os.environ.get("HY_L1_SHARDED_MATMUL", "1") != "0"
 
 
-def _roundup(a: int, b: int) -> int:
-    return b * math.ceil(a / b)
-
-
 def _get_out_subblock_w(per_core_n: int, out_subblock_h: int) -> int:
     for w in range(min(per_core_n, 4 // out_subblock_h), 0, -1):
         if per_core_n % w == 0:
@@ -49,18 +45,6 @@ def infer_matmul_mkn(x: ttnn.Tensor, weight: ttnn.Tensor) -> tuple[int, int, int
     for d in x_shape[:-1]:
         m *= int(d)
     return m, k, n
-
-
-def dram_width_sharded_weight_mem_config(device, k: int, n: int) -> ttnn.MemoryConfig:
-    """WIDTH_SHARDED DRAM config for a [k, n] linear weight (device dram grid)."""
-    dram_gs = device.dram_grid_size()
-    dram_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_gs.x - 1, dram_gs.y - 1))})
-    padded_n = _roundup(n, TILE_SIZE * dram_gs.x)
-    return ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.DRAM,
-        ttnn.ShardSpec(dram_grid, (k, padded_n // dram_gs.x), ttnn.ShardOrientation.ROW_MAJOR),
-    )
 
 
 def width_sharded_act_mem_config(k: int) -> tuple[ttnn.MemoryConfig, ttnn.CoreGrid, int]:
@@ -156,22 +140,6 @@ def _width_sharded_output_mem_config(m: int, n: int, grid_size: tuple[int, int])
     num_cores = grid_size[0] * grid_size[1]
     return ttnn.create_sharded_memory_config_(
         [nearest_32(m), n // num_cores],
-        ttnn.CoreGrid(x=grid_size[0], y=grid_size[1]),
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.ShardOrientation.ROW_MAJOR,
-        tile_layout=True,
-        use_height_and_width_as_shard_shape=True,
-    )
-
-
-def _width_sharded_act_mem_config_from_tensor(x: ttnn.Tensor, grid_size: tuple[int, int]) -> ttnn.MemoryConfig:
-    """Build L1 WIDTH_SHARDED input memcfg (resnet50-linear / create_sharded_memory_config_)."""
-    shape = list(x.shape)
-    m = int(shape[-2])
-    k = int(shape[-1])
-    num_cores = grid_size[0] * grid_size[1]
-    return ttnn.create_sharded_memory_config_(
-        [nearest_32(m), k // num_cores],
         ttnn.CoreGrid(x=grid_size[0], y=grid_size[1]),
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.ShardOrientation.ROW_MAJOR,
