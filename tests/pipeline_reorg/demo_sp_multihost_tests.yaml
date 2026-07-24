@@ -97,23 +97,11 @@
 # ============================================================================
 # BH SC16 Multihost Pipeline Tests (4 connected SC4 = 16 galaxies)
 # ============================================================================
-# bh_sc16 uses Count allocation (no ttop rankfile / rank_bindings.yaml). Launch via
-# tt-run automapper (--mesh-graph-descriptor + --hosts); Phase-1 generate_rank_bindings
-# writes bindings under <cwd>/generated/ttrun/<cache_id>/. cwd MUST be NFS-shared
-# (/ci/tt-metal): /home/user/tt-metal is node-local, so Phase 1 rank 0 writes there
-# on a worker and the runner never sees rank_bindings.yaml ("Phase 1 output not
-# found"). Keep TT_METAL_HOME=/home/user/tt-metal for the binary + Phase 2 --wdir
-# (built tree is unpacked there per node). Do not pass --rank-binding, --map-by
-# rankfile, or --host in --mpi-args. Use --bind-to none (not hwt): Phase 1 has no
-# rankfile, and hwt mapping fails on worker cpusets.
-#
-# Log control (runner OOM): multihost-with-nfs runners are capped at 4Gi.
-# tt-run always injects --tag-output; without --output-filename, prterun buffers
-# all 64 ranks of tagged stdout in anon RSS (~2Gi+) and OOMKills the runner
-# (exit 137). Same pattern as kimi-decode-ladder:
-#   PIPELINE_DIR (job env) on NFS -> --output-filename + launch.log
-#   upload-artifact, then rm -rf PIPELINE_DIR (see demo-sp-multihost-impl.yaml).
-# Do not stream ranks into the Actions pipe (no tee to stdout).
+# Count allocation: tt-run automapper (--mesh-graph-descriptor + --hosts), cwd=/ci/tt-metal
+# (NFS) for Phase 1; TT_METAL_HOME=/home/user/tt-metal for binary + --wdir. No --rank-binding /
+# --map-by rankfile / --host; --bind-to none (not hwt).
+# Runner OOM (4Gi): --output-filename + launch.log under PIPELINE_DIR (uploaded then rm'd).
+# Quiet ranks: LOGURU_LEVEL=ERROR (-x; not TT_*), TT_LOGGER_LEVEL=error.
 
 - name: "Teacher Forcing Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
   cmd: |
@@ -124,15 +112,17 @@
     MGD=models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto
     PIPELINE_DIR="${PIPELINE_DIR:?PIPELINE_DIR must be set (NFS staging for ranklogs)}"
     mkdir -p "${PIPELINE_DIR}/ranklogs"
+    export LOGURU_LEVEL=ERROR
+    export TT_LOGGER_LEVEL=error
 
     # Automapper Phase 1 outputs must land on NFS (same pattern as kimi-decode-ladder).
     cd /ci/tt-metal
 
-    TT_LOGGER_LEVEL=warn TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
       --mesh-graph-descriptor "$MGD" \
       --hosts "$PIPELINE_HOSTS" \
-      --mpi-args "--bind-to none --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs/rank -x LOGURU_LEVEL=WARNING" \
+      --mpi-args "--bind-to none --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs/rank -x LOGURU_LEVEL=ERROR" \
       python3 -m models.demos.deepseek_v3_b1.demo.teacher_forced \
         --weights real \
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
@@ -158,14 +148,16 @@
     MGD=models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto
     PIPELINE_DIR="${PIPELINE_DIR:?PIPELINE_DIR must be set (NFS staging for ranklogs)}"
     mkdir -p "${PIPELINE_DIR}/ranklogs"
+    export LOGURU_LEVEL=ERROR
+    export TT_LOGGER_LEVEL=error
 
     cd /ci/tt-metal
 
-    TT_LOGGER_LEVEL=warn TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
       --mesh-graph-descriptor "$MGD" \
       --hosts "$PIPELINE_HOSTS" \
-      --mpi-args "--bind-to none --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs/rank -x LOGURU_LEVEL=WARNING" \
+      --mpi-args "--bind-to none --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs/rank -x LOGURU_LEVEL=ERROR" \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 4096 \
         --no-stop-at-eos \
@@ -190,14 +182,16 @@
     MGD=models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto
     PIPELINE_DIR="${PIPELINE_DIR:?PIPELINE_DIR must be set (NFS staging for ranklogs)}"
     mkdir -p "${PIPELINE_DIR}/ranklogs"
+    export LOGURU_LEVEL=ERROR
+    export TT_LOGGER_LEVEL=error
 
     cd /ci/tt-metal
 
-    TT_LOGGER_LEVEL=warn TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
       --mesh-graph-descriptor "$MGD" \
       --hosts "$PIPELINE_HOSTS" \
-      --mpi-args "--bind-to none --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs/rank -x LOGURU_LEVEL=WARNING" \
+      --mpi-args "--bind-to none --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs/rank -x LOGURU_LEVEL=ERROR" \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 128000 \
         --repeat-generations 2 \
