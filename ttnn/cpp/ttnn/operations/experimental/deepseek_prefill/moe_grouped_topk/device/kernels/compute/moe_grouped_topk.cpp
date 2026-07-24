@@ -11,6 +11,8 @@ void kernel_main() {
     // Circular buffer indices
     constexpr uint32_t cb_in_scores = get_named_compile_time_arg_val("cb_in_scores");
     constexpr uint32_t cb_in_bias = get_named_compile_time_arg_val("cb_in_bias");
+    constexpr uint32_t cb_scores_fp32 = get_named_compile_time_arg_val("cb_scores_fp32");
+    constexpr uint32_t cb_bias_fp32 = get_named_compile_time_arg_val("cb_bias_fp32");
     constexpr uint32_t cb_sigmoid_scores = get_named_compile_time_arg_val("cb_sigmoid_scores");
     constexpr uint32_t cb_biased_scores = get_named_compile_time_arg_val("cb_biased_scores");
     constexpr uint32_t cb_out_weights = get_named_compile_time_arg_val("cb_out_weights");
@@ -55,13 +57,18 @@ void kernel_main() {
 
     const uint32_t start_height_tile = get_arg_val<uint32_t>(0);
     const uint32_t end_height_tile = get_arg_val<uint32_t>(1);
-    binary_op_init_common(cb_in_scores, cb_in_bias, cb_biased_scores);
+    binary_op_init_common(cb_scores_fp32, cb_bias_fp32, cb_biased_scores);
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
-        blocks::apply_score_func<score_func>(cb_in_scores, cb_sigmoid_scores, width_tiles);
+        // Upcast the raw (possibly bf16) logits and bias to fp32 so the rest of the gate runs entirely
+        // in fp32 (the two-operand ops below require a single operand format). Identity when fp32 in.
+        blocks::upcast_tiles(cb_in_scores, cb_scores_fp32, width_tiles);
+        blocks::upcast_tiles(cb_in_bias, cb_bias_fp32, width_tiles);
+
+        blocks::apply_score_func<score_func>(cb_scores_fp32, cb_sigmoid_scores, width_tiles);
 
         // Perform add bias on activated scores
-        blocks::add_bias(cb_sigmoid_scores, cb_in_bias, cb_biased_scores, width_tiles);
+        blocks::add_bias(cb_sigmoid_scores, cb_bias_fp32, cb_biased_scores, width_tiles);
         // Note: cb_sigmoid_scores is NOT popped here - writer will pop it after gather
 
         if constexpr (n_groups == 1) {
