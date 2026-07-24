@@ -200,7 +200,7 @@ def _agent_classify_category(model_id: str, cfg: dict, card_text: str = "") -> O
             if k in cfg
         }
         # crisp presence FLAGS for the big nested sub-configs -- dumping the full dicts buried the
-        # signal and got truncated, so the agent missed the vision tower (e.g. Ornith VLM -> LLM).
+        # signal and got truncated, so the agent missed the vision tower (a reasoning-heavy VLM whose card downplays vision).
         salient["has_vision_tower"] = (
             ("vision_config" in cfg) or ("image_token_id" in cfg) or ("vision_start_token_id" in cfg)
         )
@@ -217,24 +217,24 @@ def _agent_classify_category(model_id: str, cfg: dict, card_text: str = "") -> O
             "text-only embedder/retriever/reranker is Embed; Image/Video/TTS are for models that "
             "SYNTHESIZE that media (not analyze it); a model that is not a text/vision/audio deep "
             "network (tabular, classical non-neural ML like trees/boosting, time-series forecasting, "
-            "graph, or a pure control/RL policy) is Unknown -- BUT a Vision-Language-Action (VLA) "
-            "robot model built on a vision+language transformer backbone is VLM (classify by that "
-            "backbone). A protein/DNA/biological SEQUENCE model (a transformer over sequences, e.g. "
-            "ESM) is treated like a text model: Embed if it outputs embeddings/representations, else "
-            "NLP/LLM. STT is the AUDIO-INPUT bucket: speech->text AND any model that "
+            "graph, or a pure control/RL policy) is Unknown -- BUT a vision-language-action (robot "
+            "policy) model built on a vision+language transformer backbone is VLM (classify by that "
+            "backbone). A biological-SEQUENCE model (a transformer over protein/DNA/amino-acid "
+            "sequences) is treated like a text model: Embed if it outputs embeddings/representations, "
+            "else NLP/LLM. STT is the AUDIO-INPUT bucket: speech->text AND any model that "
             "analyzes/classifies/tags audio (events, emotion, speaker, music -- including spectrogram "
-            "transformers like AST) map to STT, not CNN, even though a spectrogram looks image-like. "
-            "STT requires AUDIO input. Reading text FROM IMAGES or documents "
-            "(OCR, e.g. a VisionEncoderDecoder) is VLM, never STT. If the config declares a vision "
-            "tower (vision_config / image_token / vision_start_token) AND the model GENERATES text, "
-            "it is a VLM even when the description stresses reasoning or text -- the vision tower "
-            "means it accepts images (this does NOT apply to a bare contrastive dual-encoder, which "
-            "stays Embed). CRITICAL (autoregressive generators): a model whose TRUNK is a causal LM "
-            "(architectures ending in *ForCausalLM / *ForCausalMM) that produces images or audio by "
-            "emitting TOKENS -- e.g. HunyuanImage, Emu3, Chameleon -- is NOT Image/TTS; it is LLM (or "
-            "VLM if it also has a vision ENCODER). Image/Video/TTS are ONLY for diffusion/GAN media "
-            "synthesizers that have NO causal-LM trunk. A *ForCausalLM model tagged text-to-image is "
-            "still LLM -- classify by the transformer trunk, never send it to a diffusion path.\n"
+            "transformers) map to STT, not CNN, even though a spectrogram looks image-like. STT "
+            "requires AUDIO input. Reading text FROM IMAGES or documents (OCR, e.g. a vision-encoder-"
+            "decoder) is VLM, never STT. If the config declares a vision ENCODER (a vision_config "
+            "sub-config) AND the model GENERATES text, it is a VLM even when the description stresses "
+            "reasoning or text -- the encoder means it accepts images (this does NOT apply to a bare "
+            "contrastive dual-encoder, which stays Embed). CRITICAL (autoregressive token generators): "
+            "a model whose architecture ends in *ForCausalLM / *ForCausalMM (a causal / autoregressive "
+            "LM trunk) that produces images or audio by emitting TOKENS is classified by that trunk -- "
+            "LLM (or VLM if it also has a vision ENCODER) -- never Image/TTS. Image/Video/TTS are ONLY "
+            "for diffusion / GAN media synthesizers that have NO autoregressive LM trunk. So a "
+            "*ForCausalLM model tagged text-to-image is still LLM: classify by the transformer trunk, "
+            "never send it to a diffusion path.\n"
             f"model_id: {model_id}\n"
             f"config (salient keys): {json.dumps(salient)[:1500]}\n"
             f"model card (excerpt): {card_text[:3000]}\n"
@@ -353,7 +353,7 @@ def _has_generative_vlm_fact(cfg: dict) -> bool:
     """DEFINITIVE fact: the config declares a real vision ENCODER (``vision_config``) AND a
     generative arch (*ForCausalLM / *ForCausalMM / *ForConditionalGeneration) -> the model accepts
     images and emits text -> VLM. AUTHORITATIVE (the agent over-weights a text-heavy card and can
-    miss the vision tower, e.g. Ornith). CRITICAL: require ``vision_config`` (the encoder), NOT a
+    miss the vision tower). CRITICAL: require ``vision_config`` (the encoder), NOT a
     bare ``image_token_id``/``vision_start_token_id`` -- image GENERATORS (HunyuanImage, Emu3) carry
     image-token ids to EMIT image tokens but have no vision encoder; they are LLM-trunk generators
     (issue #3), not VLMs. A bare contrastive dual-encoder (CLIP: vision_config but a *Model class,
@@ -1026,7 +1026,7 @@ def probe_model(model_id: str) -> ModelProbe:
             probe.category = _fp_cat
     # PRIMARY + VERIFIED: the Claude Code agent (3-vote majority, TT_HW_PLANNER_AGENT_VOTES) decides
     # EVERY model by reasoning over its card+config -- including vision models. The majority vote
-    # removes the single-run flakiness that once mis-called a VLM (Ornith), so no unverified
+    # removes the single-run flakiness that once mis-called a VLM, so no unverified
     # authoritative fact override is needed; the agent's own answer is the (self-consistent) verdict.
     # The deterministic facts below are the OFFLINE FALLBACK, used only if the agent is unavailable.
     _agent_cat = _agent_classify_category(model_id, cfg, _fetch_model_card_text(model_id))

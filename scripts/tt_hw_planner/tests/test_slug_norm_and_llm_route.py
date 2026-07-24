@@ -419,8 +419,13 @@ def test_issue3_ar_image_llm_handled_by_agent_guidance():
     from scripts.tt_hw_planner import probe as P
 
     src = inspect.getsource(P._agent_classify_category)
-    assert "ForCausalLM" in src and "diffusion" in src.lower(), "agent prompt missing #3 AR-gen principle"
-    assert "HunyuanImage" in src or "Emu3" in src, "agent prompt missing AR-generator examples"
+    # the STRUCTURAL principle must be present (arch-based, not example-based)
+    assert "ForCausalLM" in src and "diffusion" in src.lower() and "token" in src.lower()
+    # GENERALIZATION guard: the classifier must NOT name specific models -- the rule is structural
+    # so it applies to any AR-image-LLM, named or not (verified live: Lumina-mGPT, Janus classify
+    # correctly though never mentioned).
+    for _name in ("HunyuanImage", "Emu3", "Chameleon", "Ornith", "Llava", "SigLIP", "Qwen"):
+        assert _name not in src, f"agent classifier names a model ({_name}) -- keep it structural"
     # image generator (image_token_id, no vision_config) is NOT the VLM fact
     assert P._has_generative_vlm_fact({"architectures": ["HunyuanImage3ForCausalMM"], "image_token_id": 5}) is False
     # a real VLM (vision_config) still is
