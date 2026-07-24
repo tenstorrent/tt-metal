@@ -123,6 +123,13 @@ ttnn.attach_golden_function(
     golden_function=_golden_function,
 )
 
+# Route the public matmul / linear entrypoints through measured auto-configuration.
+# The selector, tuning, caching, and wrapper installation all live in the
+# experimental auto_config package, so this module stays a thin integration point.
+from ttnn._experimental.auto_config import install_public_wrappers
+
+install_public_wrappers()
+
 ttnn.Tensor.__matmul__ = lambda self, *args, **kwargs: ttnn.matmul(self, *args, **kwargs)
 
 
