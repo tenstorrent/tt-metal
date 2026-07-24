@@ -22,6 +22,13 @@ struct RecvAsyncH2DParams {
 
     explicit RecvAsyncH2DParams(const tt::tt_metal::distributed::H2DSocket& h2d_socket) : h2d_socket(&h2d_socket) {}
 
+    static constexpr auto attribute_names = std::forward_as_tuple("h2d_config_buffer_address", "h2d_mode");
+    auto attribute_values() const {
+        TT_FATAL(h2d_socket != nullptr, "recv_async_h2d: H2DSocket pointer is null");
+        return std::forward_as_tuple(
+            h2d_socket->get_config_buffer_address(), static_cast<uint8_t>(h2d_socket->get_h2d_mode()));
+    }
+
     // Reflection: surface a small set of stable, hashable properties of the H2D socket.
     // These uniquely identify the socket from a program-cache perspective: same device,
     // same config buffer address and same mode produces the same program.
