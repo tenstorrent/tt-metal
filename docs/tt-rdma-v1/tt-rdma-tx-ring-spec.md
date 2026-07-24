@@ -223,10 +223,18 @@ First cut of the ring drainer (`bh_rdma_tx_ring.cpp` + `bh1_tx_ring`). Findings:
   on silicon: bigger messages scale straight to line rate at constant RISC cost. (At equal paced arm
   rate a 4 KB message gave identical ~51 Gbps goodput for jumbo vs 1500-split — jumbo just uses 1/3 the
   wire frames; the throughput lever is message size per arm, not chunk size.)
+- **BH.2b DONE — 397.6 Gbps aggregate across both external rails (2 x 200 G links).** `bh1_tx_ring`
+  with `eth_sel="ext"` now dispatches a drainer to every external rail in one MeshWorkload. Both rails
+  (idx2 (0,6) -> enp193s0f0np0, idx5 (0,4) -> enp193s0f1np1) ran concurrently at 198.8 Gbps each,
+  **0 CRC errors**, each RISC1 arming ~1.5 M msg/s (3.02 M total), host off the datapath. TX frame
+  count == BF3 RX frame count on both — lossless on the wire; the only loss is ~40 ppm
+  `rx_discards_phy` at the BF3 from no RX consumer + no PFC (BH.6). Note: **3-TXQ can't raise a single
+  rail past its 200 G link** (wire-bound) — it's only a small-message arm-rate lever; the >200 G win is
+  the second *rail* (second physical link), not more queues on one rail.
 - **Remaining follow-ups:** (a) persist the BF3 tt-port MTU 9000 (`tt_metal/tt_rdma/bh0/set_tt_rail_mtu.sh`,
-  both rails; not reboot-persistent); (b) 3-TXQ (BH.2b) + 2nd rail for aggregate > 200 G; (c) the `pace`
-  is now just a safety throttle — with accept-ahead confirmed, characterize the unpaced max and whether
-  the old over-arming wedge is gone now that TX actually egresses.
+  both rails; not reboot-persistent); (b) the `pace` is now just a safety throttle — with accept-ahead
+  confirmed, characterize the unpaced max and whether the old over-arming wedge is gone now that TX
+  egresses; (c) PFC-lossless (BH.6) to zero the BF3-side discards; (d) BH.2c real DMA/NoC-pull producer.
 - **CAUTION logged:** an early diagnostic touched `payload_base + 128 KB`, which from a high base
   overruns past `0x70000` into the link-bricking base-FW region. Any payload staging must stay within
   the RDMA L1 window; validate `TT_RDMA_L1_BASE`/size vs `MEM_SYSENG_RESERVED_BASE`.
