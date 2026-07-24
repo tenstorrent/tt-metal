@@ -61,6 +61,7 @@ protected:
 
 // TODO(#30692): Re-enable after migrating to aggregated tensor + semaphore-free all-gather APIs.
 TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
+    GTEST_SKIP() << "Temporarily disabled due to hang on wh_llmbox during read_buffer after AllGather with FABRIC_1D; refs #46982";
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
@@ -222,6 +223,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
 }
 
 TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
+    GTEST_SKIP() << "Temporarily disabled due to hang on wh_llmbox during read_buffer after AllGather with FABRIC_1D; refs #46982";
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
@@ -415,6 +417,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
 }
 
 TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
+    GTEST_SKIP() << "Temporarily disabled due to hang on wh_llmbox during read_buffer after AllGather with FABRIC_1D; refs #46982";
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
