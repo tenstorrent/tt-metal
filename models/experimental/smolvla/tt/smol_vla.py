@@ -403,7 +403,7 @@ def smolvla_patch_embeddings_tt(
 
     # Reshape for fold operation
     pixel_values = ttnn.reshape(pixel_values, (batch_size, img_h, img_w // patch_size, 4 * patch_size))
-    pixel_values = ttnn.fold(pixel_values, stride_h, stride_w)
+    pixel_values = ttnn.fold(pixel_values, stride_h, stride_w, collapse_output=True)
     pixel_values = ttnn.to_layout(pixel_values, layout=ttnn.TILE_LAYOUT)
 
     # Linear projection
@@ -1340,7 +1340,7 @@ class SmolVLAVisionEncoder(nn.Module):
 
         # Fold the image into patches
         pixel_values = ttnn.reshape(pixel_values, (batch_size, img_h, img_h // patch_size, 4 * patch_size))
-        pixel_values = ttnn.fold(pixel_values, stride_h=patch_size, stride_w=1)
+        pixel_values = ttnn.fold(pixel_values, stride_h=patch_size, stride_w=1, collapse_output=True)
         pixel_values = ttnn.to_layout(pixel_values, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
 
         # Linear projection

@@ -145,10 +145,7 @@ def run(
 
     torch_output_tensor = fold_torch(_golden_input, stride_h, stride_w)
 
-    # ttnn.fold outputs in TTNN format [1, 1, N*H'*W', C'] — reshape golden to match
-    if torch_output_tensor.ndim == 4:
-        N_out, H_out, W_out, C_out = torch_output_tensor.shape
-        torch_output_tensor = torch_output_tensor.reshape(1, 1, N_out * H_out * W_out, C_out)
+    # ttnn.fold returns folded_4d (N, H', W', C*sh*sw) — same shape as the golden.
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
@@ -186,15 +183,10 @@ def run(
     # fold expects stride_h and stride_w as positional args
     output_tensor = ttnn.fold(input_tensor_a, stride_h, stride_w, **op_kwargs)
     if _permuted and is_mesh_device:
-        # The re-laid-out NHWC input was replicated across the mesh (a Shard
-        # placement is materialized replicated on this device), so each chip holds
-        # the full fold result — read one device instead of concatenating (which
-        # would multiply the batch by the mesh factor). The DRAM fold returns a 4D
-        # [N, H', W', C']; flatten to the [1, 1, N*H'*W', C'] form the golden uses.
+        # Replicated placement — read one device instead of concatenating (which
+        # would multiply the batch by the mesh factor). Fold now returns folded_4d
+        # (N, H', W', C*sh*sw), matching the golden shape.
         output_tensor = mesh_tensor_to_torch(output_tensor, device, force_single_device=True)
-        if output_tensor.ndim == 4:
-            _n, _h, _w, _c = output_tensor.shape
-            output_tensor = output_tensor.reshape(1, 1, _n * _h * _w, _c)
     else:
         mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
         output_tensor = mesh_tensor_to_torch(

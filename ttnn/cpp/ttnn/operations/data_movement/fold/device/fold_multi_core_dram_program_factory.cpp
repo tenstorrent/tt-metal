@@ -30,6 +30,8 @@ using namespace tt::tt_metal;
 
 namespace {
 
+// TILE-native factory (unreachable): tile-index math only correct for (N,32,32,C≤32); composite untilizes before
+// dispatch. Rewrite would remove the untilize hop.
 ProgramDescriptor fold_multi_core_tiled_interleaved(
     const Tensor& input_tensor, const Tensor& output, const uint32_t stride_h, const uint32_t stride_w) {
     auto* device = input_tensor.device();
@@ -150,8 +152,7 @@ ProgramDescriptor fold_multi_core_tiled_interleaved(
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.config = WriterConfigDescriptor{};
 
-    // Compute kernel arguments — main grid and (optional) cliff grid handle the
-    // last core when the work doesn't divide evenly.
+    // Compute kernel args; main grid + optional cliff grid handle non-evenly-divisible work.
     std::vector<uint32_t> compute_compile_time_args = {
         nblocks_per_core * tiles_per_width_dim,
         tiles_per_channel_dim,
@@ -274,16 +275,21 @@ ProgramDescriptor fold_multi_core_row_major_interleaved(
     log_debug(tt::LogOp, "output_tensor_shape: {}", output.padded_shape());
 
     uint32_t patches_per_core = tt::div_up(total_patches, num_cores_total);
+    // Only launch on cores that actually hold work; per-core work is a runtime arg so the cliff core carries a partial
+    // tail.
+    uint32_t num_active_cores = tt::div_up(total_patches, patches_per_core);
 
     log_debug(
         tt::LogOp,
-        "total_patches: {}, num_cores_total: {}, patches_per_core: {}",
+        "total_patches: {}, num_cores_total: {}, patches_per_core: {}, num_active_cores: {}",
         total_patches,
         num_cores_total,
-        patches_per_core);
+        patches_per_core,
+        num_active_cores);
 
-    CoreRangeSet all_cores{CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1})};
-    auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, true);
+    CoreRangeSet active_cores =
+        tt::tt_metal::num_cores_to_corerangeset(num_active_cores, compute_grid_size, /*row_wise=*/true);
+    auto cores = grid_to_cores(num_active_cores, num_cores_x, num_cores_y, /*row_wise=*/true);
 
     const uint32_t cb_src0_index = tt::CBIndex::c_0;
 
@@ -304,7 +310,7 @@ ProgramDescriptor fold_multi_core_row_major_interleaved(
     {
         CBDescriptor cb;
         cb.total_size = double_buffer * aligned_stick_nbytes * stride_w * stride_h;
-        cb.core_ranges = all_cores;
+        cb.core_ranges = active_cores;
         cb.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(cb_src0_index),
             .data_format = cb_data_format,
@@ -321,7 +327,7 @@ ProgramDescriptor fold_multi_core_row_major_interleaved(
         log_debug(tt::LogOp, "Using intermediate L1 scratch buffer for src1");
         CBDescriptor cb;
         cb.total_size = stick_nbytes * stride_w * stride_h;
-        cb.core_ranges = all_cores;
+        cb.core_ranges = active_cores;
         cb.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(cb_src1_index),
             .data_format = cb_data_format,
@@ -330,7 +336,7 @@ ProgramDescriptor fold_multi_core_row_major_interleaved(
         desc.cbs.push_back(std::move(cb));
     }
 
-    // Common compile-time args shared by reader and writer (indices 0..8)
+    // Common compile-time args shared by reader and writer. work_per_core is a runtime arg now.
     std::vector<uint32_t> common_compile_time_args(
         {stick_nbytes,
          cb_src0_index,
@@ -338,7 +344,6 @@ ProgramDescriptor fold_multi_core_row_major_interleaved(
          stride_h,
          stride_w,
          input_width,
-         patches_per_core,
          cb_src1_index,
          is_l1_aligned});
 
@@ -349,7 +354,7 @@ ProgramDescriptor fold_multi_core_row_major_interleaved(
     reader_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/reader_dram2cb_for_rm_input.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
+    reader_desc.core_ranges = active_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.config = ReaderConfigDescriptor{};
 
@@ -360,7 +365,7 @@ ProgramDescriptor fold_multi_core_row_major_interleaved(
     writer_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2dram_for_rm_input.cpp";
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
+    writer_desc.core_ranges = active_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.config = WriterConfigDescriptor{};
 
@@ -369,31 +374,23 @@ ProgramDescriptor fold_multi_core_row_major_interleaved(
     const uint32_t output_width = input_width / stride_w;
     const uint32_t patch_size = stride_h * stride_w;
     const uint32_t output_hw = output_height * output_width;
-    uint32_t curr_patches = 0;
-    uint32_t src_idx = 0;
-    uint32_t dst_idx = 0;
-    uint32_t src_col_offset = 0;
     for (uint32_t i = 0; i < cores.size(); i++) {
         CoreCoord core = cores[i];
+        const uint32_t output_offset = i * patches_per_core;
+        const uint32_t patches_this_core =
+            (output_offset + patches_per_core <= total_patches) ? patches_per_core : (total_patches - output_offset);
+        const uint32_t batch_idx = output_offset / output_hw;
+        const uint32_t batch_offset = output_offset % output_hw;
+        const uint32_t out_height = batch_offset / output_width;
+        const uint32_t out_width = batch_offset % output_width;
 
-        if (curr_patches < total_patches) {
-            uint32_t output_offset = i * patches_per_core;
-            uint32_t batch_idx = output_offset / output_hw;
-            uint32_t batch_offset = output_offset % output_hw;
-            uint32_t out_height = batch_offset / output_width;
-            uint32_t out_width = batch_offset % output_width;
+        const uint32_t src_batch_offset = batch_idx * output_height * output_width * patch_size;
+        const uint32_t src_row_offset = out_height * stride_h * input_width;
+        const uint32_t src_col_offset = out_width * stride_w;
+        const uint32_t src_idx = src_batch_offset + src_row_offset + src_col_offset;
 
-            uint32_t src_batch_offset = batch_idx * output_height * output_width * patch_size;
-            uint32_t src_row_offset = out_height * stride_h * input_width;
-            src_col_offset = out_width * stride_w;
-
-            src_idx = src_batch_offset + src_row_offset + src_col_offset;
-            dst_idx = output_offset;
-        }
-
-        curr_patches += patches_per_core;
-        reader_desc.emplace_runtime_args(core, {src0_buffer, src_idx, src_col_offset});
-        writer_desc.emplace_runtime_args(core, {dst_buffer, dst_idx});
+        reader_desc.emplace_runtime_args(core, {src0_buffer, patches_this_core, src_idx, src_col_offset});
+        writer_desc.emplace_runtime_args(core, {dst_buffer, patches_this_core, output_offset});
     }
 
     desc.kernels.push_back(std::move(reader_desc));
@@ -408,6 +405,7 @@ ProgramDescriptor Fold::MultiCoreDRAMFold::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
+    // TILE branch unreachable — composite untilizes first; see comment above the factory.
     if (tensor_args.input_tensor.layout() == Layout::TILE) {
         log_debug(tt::LogOp, "Fold operation with DRAM tiled input");
         return fold_multi_core_tiled_interleaved(
