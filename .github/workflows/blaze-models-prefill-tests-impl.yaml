@@ -368,7 +368,8 @@ jobs:
             exit 0
           fi
           for f in "${files[@]}"; do
-            cat "$f" >> "$GITHUB_STEP_SUMMARY"
+            # tee so the table shows in this step's log too, not only on the job-summary page.
+            cat "$f" | tee -a "$GITHUB_STEP_SUMMARY"
             printf '\n' >> "$GITHUB_STEP_SUMMARY"
           done
           echo "Published ${#files[@]} prefill summary file(s) to the job summary"
