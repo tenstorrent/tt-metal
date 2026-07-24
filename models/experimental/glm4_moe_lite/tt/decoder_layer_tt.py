@@ -22,6 +22,56 @@ if _SIGNPOST_ENABLED:
     from tracy import signpost
 
 
+_SHARDED_NORM = os.environ.get("GLM4_MOE_LITE_SHARDED_NORM", "1").strip() != "0"
+_NORM_L1 = os.environ.get("GLM4_MOE_LITE_NORM_L1", "1").strip() == "1"
+
+
+def _maybe_sharded_norm(x, norm_module, mode: str, hidden_size: int, num_cores: int = 8):
+    """Width-sharded multi-core RMSNorm for decode (speed play; ported from glm4_moe/REAP).
+
+    Flash's hidden_size fits single-core, so this is opt-in via GLM4_MOE_LITE_SHARDED_NORM=1
+    (default off -> the module's normal single-core path, unchanged behaviour). Spreads the
+    norm across `num_cores` to parallelise, at the cost of a shard/unshard round trip.
+    """
+    if not _SHARDED_NORM:
+        return norm_module(x, mode=mode)
+    input_shape = [int(d) for d in x.shape]
+    h_logical = int(x.shape[-2])
+    h = ((h_logical + 31) // 32) * 32
+    tiles_w_total = hidden_size // 32
+    while num_cores > 1 and tiles_w_total % num_cores != 0:
+        num_cores -= 1
+    tile_h = h // 32
+    tiles_per_core = tiles_w_total // num_cores
+    subblock_w = 4
+    while subblock_w > 1 and tiles_per_core % subblock_w != 0:
+        subblock_w -= 1
+    shard_w = hidden_size // num_cores
+    core_range = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))])
+    shard_spec = ttnn.ShardSpec(core_range, [h, shard_w], ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+    program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[num_cores, 1],
+        subblock_w=subblock_w,
+        block_h=tile_h,
+        block_w=tiles_per_core,
+        inplace=False,
+    )
+    x_sharded = ttnn.to_memory_config(x, sharded_mem_cfg)
+    result = ttnn.rms_norm(
+        x_sharded,
+        epsilon=norm_module.eps,
+        weight=norm_module.weight,
+        program_config=program_config,
+        compute_kernel_config=norm_module.compute_kernel_config_hifi2,
+    )
+    ttnn.deallocate(x_sharded, force=False)
+    result = ttnn.to_memory_config(result, ttnn.L1_MEMORY_CONFIG if _NORM_L1 else ttnn.DRAM_MEMORY_CONFIG)
+    if int(result.shape[-2]) != h_logical:
+        result = ttnn.slice(result, [0, 0, 0, 0], input_shape)
+    return result
+
+
 def _profile_add(profile: dict[str, float] | None, key: str, elapsed_s: float) -> None:
     if profile is None:
         return
@@ -435,7 +485,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         signpost(f"L{layer_idx}_attn-start")
     residual = x_embed_tok
     t0 = time.perf_counter() if profile is not None else 0.0
-    x = w.input_layernorm(x_embed_tok, mode="decode")
+    x = _maybe_sharded_norm(x_embed_tok, w.input_layernorm, "decode", int(hparams.hidden_size))
     _profile_add(profile, "norm_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     # ---- KV Cache Update ----
@@ -526,7 +576,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         signpost(f"L{layer_idx}_moe-start")
     residual = x_attn_out
     t0 = time.perf_counter() if profile is not None else 0.0
-    x = w.post_attention_layernorm(x_attn_out, mode="decode")
+    x = _maybe_sharded_norm(x_attn_out, w.post_attention_layernorm, "decode", int(hparams.hidden_size))
     _profile_add(profile, "mlp_norm_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     use_moe = moe_runtime is not None and getattr(w, "moe", None) is not None
