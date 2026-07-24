@@ -77,6 +77,8 @@ def test_llama_attention_inference(
     }
     reference_model = model_args.reference_attention()
     reference_model.load_state_dict(partial_state_dict)
+    # HF reference weights load as bf16 (torch_dtype="auto"); torch inputs are fp32, so match the reference to fp32.
+    reference_model.attention.to(torch.float32)
 
     # pre-compute the rotational embedding matrix and send to device
     rot_mats = get_prefill_rot_mat(
