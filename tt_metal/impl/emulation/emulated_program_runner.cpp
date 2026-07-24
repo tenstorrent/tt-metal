@@ -1673,13 +1673,16 @@ static void collect_kernels(
             Metal2BindingsSnapshot bindings = build_metal2_snapshot(*kernel);
             const std::string metal2_key_suffix = bindings.cache_key_suffix();
 
-            // COMPILE_FOR_{TRISC,BRISC,NCRISC} defines — silicon's per-RISC
-            // kernel build sets exactly one of these. Kernel-author API
-            // headers use them to pick the right include chain and to define
-            // `is_brisc` / `is_ncrisc` / `is_trisc` constexpr bools; without
-            // them, `SelectByRISCV<>` aliases fail to resolve. Emule runs all
-            // RISCs in one unified thread, so we set the corresponding macro
-            // based on the kernel's processor class.
+            // GENERAL emule fix — intentionally NOT part of the Blaze named-args feature and NOT
+            // fenced: it is required by any compute or data-movement kernel built under emule and
+            // must remain in place after the named-args feature is deleted (issue #50953). It is
+            // grouped here only because it shares this per-kernel `defines` map.
+            //
+            // COMPILE_FOR_{TRISC,BRISC,NCRISC} defines — silicon's per-RISC kernel build sets
+            // exactly one of these. Kernel-author API headers use them to pick the right include
+            // chain and to define `is_brisc` / `is_ncrisc` / `is_trisc` constexpr bools; without
+            // them, `SelectByRISCV<>` aliases fail to resolve. Emule runs all RISCs in one unified
+            // thread, so we set the corresponding macro based on the kernel's processor class.
             if (is_tensix) {
                 defines["COMPILE_FOR_TRISC"] = "1";
             } else if (auto* dm_kernel = dynamic_cast<DataMovementKernel*>(kernel.get()); dm_kernel != nullptr) {
