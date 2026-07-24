@@ -2668,11 +2668,15 @@ void sdpa_ring_v2(
             // (same total for every work item mapping to that frame).
             bool is_first;
             bool is_last_k_of_last_ring_iter;
+            // DEBUG: force dense flags + suppress the counter increment to test whether the
+            // 360-slot on-stack array or its bookkeeping is the deadlock cause. Combined with
+            // the shrunk `q_work_item_processed[1]` in ring_joint_sdpa.cpp, this removes all
+            // stack pressure from the sparse counter path.
             if constexpr (sparse_frames_enabled) {
-                q_work_item_processed[q]++;
-                is_first = (q_work_item_processed[q] == 1);
-                is_last_k_of_last_ring_iter =
-                    (q_work_item_processed[q] == q_frame_total_processed[q_frame_for_this_chunk]);
+                (void)q_work_item_processed;
+                (void)q_frame_total_processed;
+                is_first = is_first_kv_for_this_q && (KV_chunks_processed == 1);
+                is_last_k_of_last_ring_iter = is_last_ring_iter && is_last_k;
             } else {
                 is_first = is_first_kv_for_this_q && (KV_chunks_processed == 1);
                 is_last_k_of_last_ring_iter = is_last_ring_iter && is_last_k;

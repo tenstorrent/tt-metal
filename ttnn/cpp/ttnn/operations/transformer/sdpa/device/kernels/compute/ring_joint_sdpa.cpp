@@ -238,7 +238,11 @@ void kernel_main() {
     // q_work_item_processed is indexed by work-item id (bounded by B * NH * num_q_chunks; all
     // three are compile-time constants above).
     constexpr uint32_t nf_pad_arr = num_frames_padded_compile > 0 ? num_frames_padded_compile : 1;
-    constexpr uint32_t work_items_arr = B * NH * num_q_chunks;
+    // DEBUG: shrink arrays to test TRISC stack-overflow hypothesis. Combined with the dense-
+    // flag override in compute_streaming.hpp, the counter is never read; the size-1 dummy is
+    // just to keep the pointer non-null and the increment site well-defined. If sparse_allow_all
+    // passes with these shrunk, the deadlock is from stack overflow.
+    constexpr uint32_t work_items_arr = 1;
     uint32_t q_frame_total_processed[nf_pad_arr] = {};
     uint32_t q_work_item_processed[work_items_arr] = {};
     uint32_t q_frame_offset = 0;
