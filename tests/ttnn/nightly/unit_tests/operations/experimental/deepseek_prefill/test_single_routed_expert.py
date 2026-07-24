@@ -204,13 +204,10 @@ def _xfail_blackhole(request, silicon_arch_name):
 # first `active_tokens` holding real data; the rest is zero padding.
 _ISL_ALLOCATED_TOKENS = 5120
 
-# Functional sweep: a few active-token counts across every model, on both WH and BH. Two off-tile-
-# boundary primes (one below 256, one above 3K) plus a round 1K.
-_ISL_FUNCTIONAL_SWEEP = [251, 1024, 3001]
+# Functional sweep: a few active-token counts across every model
+_ISL_FUNCTIONAL_SWEEP = [251, 768, 3001]
 
-# Exhaustive sweep: the full fill range from empty to fully-packed, restricted to the two largest
-# models to keep runtime bounded. Blackhole-only, since active < allocated exercises device-side
-# count-aware sparsity (skipping matmuls on the inactive padding rows), which is a Blackhole feature.
+# Exhaustive sweep: the full range from empty to fully-packed
 _ISL_EXHAUSTIVE_SWEEP = [0, 128, 256, 512, 1024, 2048, 4096, 5120]
 _ISL_EXHAUSTIVE_MODELS = ("kimi_k26", "glm_51")
 
