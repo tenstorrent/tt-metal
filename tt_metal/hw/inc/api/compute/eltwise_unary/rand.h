@@ -29,7 +29,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void rand_tile(uint32_t idst, uint32_t from, uint32_t scale) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, rand, (APPROX), idst, VectorMode::RC, from, scale));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, rand, (APPROX, DST_ACCUM_MODE), idst, VectorMode::RC, from, scale));
 }
 
 /**

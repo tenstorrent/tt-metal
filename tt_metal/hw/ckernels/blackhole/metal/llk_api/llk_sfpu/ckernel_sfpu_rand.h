@@ -17,7 +17,7 @@ inline void rand_init(uint32_t seed) {
     init_prng_seed(seed);
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void rand(uint32_t from, uint32_t scale) {
     // Load scale param to lreg1
     TT_SFPLOADI(p_sfpu::LREG1, 10, scale & 0xFFFF);
@@ -46,7 +46,25 @@ inline void rand(uint32_t from, uint32_t scale) {
         // lreg0 = lreg0 * scale + from
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG0, 0);
 
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_7, 0);
+        if constexpr (!is_fp32_dest_acc_en) {
+            // LRegs hold fp32. A 16-bit Dest SFPSTORE truncates the mantissa
+            // toward zero; round-to-nearest (half to even) fp32 -> bf16 first to
+            // avoid the truncation bias (fewer distinct samples / range skew).
+            TTI_SFP_STOCH_RND(
+                sfpi::SFPSTOCHRND_RND_EVEN,
+                0,
+                p_sfpu::LREG0,
+                p_sfpu::LREG0,
+                p_sfpu::LREG0,
+                sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+        }
+
+        // InstrModLoadStore::DEFAULT stores in the Dest's configured width (fp32
+        // under fp32_dest_acc_en, else 16-bit), filling the whole tile in both
+        // modes. A fixed FP16B store wrote only the 16-bit Dest view (half a
+        // 32-bit-Dest tile); a fixed FP32 store into a 16-bit Dest is the mirror
+        // corruption.
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
         dst_reg++;
     }
 }
