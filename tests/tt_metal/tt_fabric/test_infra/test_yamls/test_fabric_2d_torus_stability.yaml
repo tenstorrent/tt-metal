@@ -1,0 +1,194 @@
+# Fabric 2D-torus stability suite.
+#
+# HW-config intent: the cluster is brought up as an XY 2D torus (wraparound on both X and Y).
+# This is a separate suite from test_fabric_stability.yaml (generic Linear+Mesh stress). The file
+# name encodes the HW/system story; the _short / _long test names encode CI time budget only -- any
+# system can run either (or both):
+#   - short time budget (health, exabox, upstream vanilla):  --filter 'name.*_short'
+#   - long  time budget (e2e):                               run the whole file with no filter
+#
+# Notes:
+#   - num_links: max resolves to the platform maximum (2 on a BH Galaxy) instead of a hardcoded 2.
+#   - Deterministic all_to_all stability uses a single loop dimension (top_level_iterations).
+#     Pattern-level `iterations` is for randomized patterns and would double-loop here, so it is
+#     omitted; short=1 / long=10 mirror today's `iterations: 1` vs `10`.
+#   - SequentialNeighborExchangeLatency is short-only (matches today's health-only extra).
+Tests:
+
+# ================================================
+# Fabric 2D Tests (Mesh and Torus)
+# ================================================
+
+  - name: "AllToAllMesh_short"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      num_links: max
+
+    top_level_iterations: 1
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      size: [2048, 4096]
+
+    defaults:
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+
+  - name: "AllToAllMesh_long"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      num_links: max
+
+    top_level_iterations: 10
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      size: [2048, 4096]
+
+    defaults:
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+
+  - name: "AllToAll2DTorus_short"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+      num_links: max
+
+    top_level_iterations: 1
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      size: [2048, 4096]
+
+    defaults:
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+
+  - name: "AllToAll2DTorus_long"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+      num_links: max
+
+    top_level_iterations: 10
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      size: [2048, 4096]
+
+    defaults:
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+
+  - name: "SequentialNeighborExchangeLatency_short"
+    latency_test_mode: true
+
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 128
+
+    patterns:
+      - type: sequential_neighbor_exchange
+
+# ================================================
+# Fabric 1D Tests (Line and Ring)
+# ================================================
+
+  - name: "AllToAllLinear_short"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Linear
+      num_links: max
+
+    top_level_iterations: 1
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      size: [2048, 4096]
+
+    defaults:
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+
+  - name: "AllToAllLinear_long"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Linear
+      num_links: max
+
+    top_level_iterations: 10
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      size: [2048, 4096]
+
+    defaults:
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+
+  - name: "AllToAllRing_short"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Ring
+      num_links: max
+
+    top_level_iterations: 1
+
+    parametrization_params:
+      ftype: [mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      size: [2048, 4096]
+
+    defaults:
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+
+  - name: "AllToAllRing_long"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Ring
+      num_links: max
+
+    top_level_iterations: 10
+
+    parametrization_params:
+      ftype: [mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      size: [2048, 4096]
+
+    defaults:
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all

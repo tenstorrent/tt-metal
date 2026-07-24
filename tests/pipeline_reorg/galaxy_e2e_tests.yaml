@@ -89,7 +89,7 @@
 
 - id: bh-galaxy-fabric-torus-stability
   name: BH Galaxy Fabric Torus Stability Tests
-  cmd: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_2d_torus_stability.yaml
+  cmd: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_2d_torus_stability.yaml
   skus:
     bh_galaxy:
       timeout: 20
