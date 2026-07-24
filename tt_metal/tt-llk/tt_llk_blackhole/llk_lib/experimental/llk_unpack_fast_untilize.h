@@ -99,8 +99,9 @@ inline void _llk_unpack_fast_untilize_block_(const std::uint32_t address, const 
 
 inline void _llk_unpack_fast_untilize_bfp_block_(const std::uint32_t address, const std::uint32_t tile_stride_16B, const std::uint32_t unit_dim)
 {
-    LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
-    LLK_ASSERT(is_valid_L1_address(address + tile_stride_16B * (unit_dim - 1)), "L1 address must be in valid L1 memory region");
+    // Faces of the unit_dim tiles are read from address + k * tile_stride_16B for k in [0, unit_dim);
+    // validate the whole strided span, not just the base.
+    LLK_ASSERT_L1_RANGE_BASE_LAST(address, address + tile_stride_16B * (unit_dim - 1), "L1 address range must be in valid L1 memory region");
     LLK_ASSERT(tile_stride_16B > 0, "fast_untilize BFP tile stride must be greater than zero");
     LLK_ASSERT(unit_dim >= 2 && unit_dim <= 4, "fast_untilize BFP unpack supports unit_dim 2, 3, or 4");
 
