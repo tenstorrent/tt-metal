@@ -28,7 +28,7 @@ The complete evidence is in `bringup_log.md`, `ROOFLINE.md`, and
 
 ## Current ranked queue
 
-1. Remove duplicated scan reads with static multicast.
+1. Batch dependency-compatible scan reads behind fewer barriers.
 2. Fuse prep and scan into a bounded producer/consumer pipeline.
 3. Distributed-L1 affine prefix scan.
 
@@ -105,18 +105,20 @@ dependency-ordered NOC barrier batching and selective double buffering.
 - Diagnostic result: row-aligned placement alone measured `621.223 us` wall
   and `145.140 us` recurrence versus `622.564/144.945 us`; it is neutral and
   cannot explain the one-tensor multicast regression.
+- Batched result: sharing all six common inputs behind one handshake regressed
+  T=640 wall `622.564 -> 657.290 us` (`+5.58%`) and recurrence
+  `144.945 -> 181.216 us` (`+25.02%`). Reject runtime fan-out/multicast; do
+  not repeat without a synchronization-free producer-consumer protocol.
 
 ## Execution order
 
 Potential reward and implementation order are different. The recommended
 experimental sequence is:
 
-1. Static multicast of one common scan input.
-2. Full common-input multicast.
-3. Dependency-ordered reader batching.
-4. Selective double buffering.
-5. Bounded prep-to-scan producer/consumer fusion.
-6. Distributed-L1 affine-prefix device prototype only if its storage and
+1. Dependency-ordered reader batching.
+2. Selective double buffering.
+3. Bounded prep-to-scan producer/consumer fusion.
+4. Distributed-L1 affine-prefix device prototype only if its storage and
    level-traffic model beats the measured serial scan.
 
 For local scan changes, retain an experiment only when:

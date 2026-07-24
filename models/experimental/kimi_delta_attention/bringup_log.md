@@ -1147,3 +1147,22 @@
 - Verdict: reject placement-only change because it misses the 1% wall gate.
   It also rules out placement as the source of the prior `+9.77 us` recurrence
   regression, supporting per-chunk synchronization as the cause.
+
+
+### 2026-07-24 17:56:15 UTC — Reject batched common-input multicast
+
+- Hypothesis: one ready/valid handshake can be amortized across all six
+  V-independent inputs (48 KiB per head/chunk), unlike the failed 16 KiB
+  `k_dec_t`-only prototype. The sender issued all source reads, then six linked
+  multicasts; receivers reserved all six CBs before one readiness signal.
+- Build: `./build_metal.sh --build-tests --build-type Release` -> exit 0.
+- Target correctness with `QWEN_KDA_SCAN_SHARE_COMMON=1` -> PASS; output/state
+  PCC `0.999993/0.999995`.
+- Profile command: `QWEN_KDA_SCAN_SHARE_COMMON=1 PERF_TRACE=1 PERF_SEQ=640 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s` -> PASS.
+- CSV: `generated/profiler/reports/2026_07_24_17_56_12/ops_perf_results_2026_07_24_17_56_12.csv` (SHA-256 `2022582aa393c14ff8d417359bc09b66a08c913a801c4ae4d160c44b9062540a`).
+- Result: wall regresses `622.564 -> 657.290 us` (`+34.726 us`, `+5.58%`);
+  recurrence regresses `144.945 -> 181.216 us` (`+25.02%`).
+- Verdict: reject and remove the prototype. Row alignment was previously shown
+  neutral, so sender serialization plus runtime synchronization/fan-out is
+  the supported cause. Static multicast leaves the ranked queue; barrier
+  batching without inter-core synchronization is next.
