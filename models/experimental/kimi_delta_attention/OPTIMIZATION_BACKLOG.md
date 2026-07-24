@@ -51,9 +51,12 @@ overlap, so they must not be added.
    tiles by offset and writing Q/K/V plus the three-row carry directly can
    remove up to `276.217 us`, an `8.16%` traffic/launch ceiling before custom
    kernel overhead. The row-major-input prototype proved correctness but not
-   speed. The first tiled-input boundary was fast but incorrect at multi-block
-   lengths, so any retry must first prove padded-stride and cross-core prefix
-   semantics with the permanent long-sequence PCC gate.
+   speed. The T=672 row oracle localized every error to rows 0-2 of each
+   32-token block. Correcting padded stride was necessary but insufficient;
+   alternate face ordering remained wrong, and full previous-tile staging with
+   either separate or reused untilize CBs deadlocked. Do not retry partial-row
+   tiled-prefix gathers. The viable lower-ceiling follow-up is the correct
+   row-major custom kernel writing Q/K/V directly.
 
 ## Current execution queue
 

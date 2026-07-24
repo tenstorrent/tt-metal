@@ -1588,3 +1588,37 @@
   distinct hypothesis, but this disjoint static-core design is rejected.
 - Verdict: reject and fully restore source. No experimental kernel remains in
   the worktree.
+
+
+### 2026-07-24 22:48 UTC — Reject tiled-input convolution prefix variants
+
+- Hypothesis: the withdrawn tiled convolution can be recovered by first fixing
+  its proven projected-width stride error, then replacing its three-row
+  cross-block prefix gather without changing the correct four-tap compute body.
+- Reproduction: restored the private historical program, changed projected tile
+  stride from floor to ceiling division, and ran `QWEN_KDA_TILED_CONV=1
+  KDA_TP_TEST_SEQ=672 scripts/run_safe_pytest.sh --run-all
+  models/experimental/kimi_delta_attention/tests/test_tp_weights.py::test_tp_layer_pcc
+  -q -s`. It reproduced the historical output/recurrent/convolution PCC exactly:
+  `0.951851/0.999912/0.999997`.
+- Row oracle: a focused primitive comparison against host depthwise convolution
+  showed RMSE around `8e-4` to `1e-3` on ordinary rows, but `0.084-0.185` on
+  exactly rows `32-34`, `64-66`, ..., `640-642`. This proves the four-tap
+  compute body and ordinary current-tile path are correct and isolates failure
+  to each core first-block prefix.
+- Full-tile staging variant 1 added separate previous-tile tiled/row-major CBs
+  and a hardware untilize before the current tile. The T=672 row oracle hung
+  with broad BRISC stalls and required the prescribed eight-device reset.
+- Full-tile staging variant 2 reused the existing projected tiled/row-major CB
+  pair sequentially to remove the new-CB protocol. It hung identically and also
+  required reset, isolating the additional untilize phase as the common failed
+  mechanism rather than CB identity.
+- Face-order diagnostic restored the single-untilize program and tested the
+  alternate bottom-left/right physical offsets. It completed but preserved the
+  same three-row periodic error and worsened peak row RMSE `0.185 -> 0.201`;
+  reject that layout hypothesis.
+- Verdict: reject and fully restore all tiled-input variants. Partial face-row
+  prefix reads are not a validated boundary, and a second untilize deadlocks.
+  Preserve the already-correct row-major custom convolution as the viable next
+  route; make its writer emit Q/K/V directly so the measured `~94.5 us` three-
+  slice boundary is eliminated before reassessing wall latency.
