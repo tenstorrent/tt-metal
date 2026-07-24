@@ -1276,7 +1276,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             self.mode = Mode.DECODE
             mode_switched = True
 
-        # Switch to decode mode for prefetcher to reintialize sub devices
+        # Switch to decode mode for prefetcher to reinitialize sub devices
         for i in range(len(self.model)):
             self.model[i].switch_mode(Mode.DECODE)
 
