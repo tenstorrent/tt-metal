@@ -1130,7 +1130,7 @@ class TestConfig:
 
         if self.formats_config is None:
             header_content.append(
-                f"constexpr bool is_fp32_dest_acc_en = {self.dest_acc.value};"
+                f"constexpr bool is_fp32_dest_acc_en = {self.dest_acc.cpp_enum_value};"
             )
         else:
             header_content.append(
