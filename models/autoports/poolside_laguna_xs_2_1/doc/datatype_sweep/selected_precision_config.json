@@ -1,0 +1,92 @@
+{
+  "config_id": "C0_baseline",
+  "selected_reason": "Fastest evaluated config that satisfies the accuracy gate on trace-verified decode. Decode is dominated by the already-BFP4 routed-expert matmuls, so every lower-precision/lower-fidelity move on the remaining (smaller) groups left token-out decode inside a +/-0.7% measurement-noise band (29.98-30.38 t/s/u) while several cost top-1 (attn->BFP4 0.94, LM-head->BFP4 0.93, all-HiFi2 0.92). Baseline has the best accuracy (top1 0.95, top5 1.00, top100 1.00), sits at the fastest tier on BOTH the mandated teacher-forcing metric and the tight token-out metric, and is the simplest/safest per the skill's noise tie-break. No lower-precision config passed FASTER, so the baseline is kept.",
+  "acceptance_thresholds": {
+    "top1_min": 0.9,
+    "top5_min": 0.98,
+    "top100_expected": 1.0
+  },
+  "selected_accuracy": {
+    "top1": 0.95,
+    "top5": 1.0,
+    "top100": 1.0,
+    "reference": "AIME24[0] chat-template, 192 prompt + 100 gen, top-100 (readiness_aime24_chat.refpt)"
+  },
+  "consumed_by": "LagunaModel.from_pretrained loads this file's 'policy' block by default via load_selected_precision_policy() (TT_LAGUNA_PRECISION_CONFIG env overrides the path); build_generator and the future vLLM adapter therefore construct exactly this weight/activation/CCL/KV/compute-fidelity policy. Consumption is proved field-by-field in doc/datatype_sweep/post_selection.json (propagation_built_vs_selected == this policy, propagation_ok true).",
+  "policy": {
+    "attn_qkv": "bfp8",
+    "attn_o": "bfp8",
+    "attn_gate": "bfp8",
+    "dense_ff13": "bfp8",
+    "dense_ff2": "bfp8",
+    "moe_ff13": "bfp4",
+    "moe_ff2": "bfp4",
+    "shared_ff13": "bfp8",
+    "shared_ff2": "bfp8",
+    "router": "bf16",
+    "qk_norm": "bf16",
+    "lm_head": "bfp8",
+    "kv_cache": "bfp8",
+    "ccl": "bf16",
+    "activation": "bf16",
+    "logits": "bf16",
+    "fid_attn_qkv": "LoFi",
+    "fid_attn_o": "LoFi",
+    "fid_attn_gate": "HiFi2",
+    "fid_dense": "LoFi",
+    "fid_shared": "LoFi",
+    "fid_router": "HiFi2",
+    "fid_moe": "LoFi"
+  },
+  "weight_dtype_groups": {
+    "attention_qkv (packed WQKV, per-layer, TP col-parallel)": "bfloat8_b (LoFi)",
+    "attention_o (WO, per-layer, TP row-parallel)": "bfloat8_b (LoFi)",
+    "attention_gate (softplus g_proj)": "bfloat8_b (HiFi2)",
+    "attention_qk_norm": "bfloat16",
+    "dense_mlp_gate_up / dense_mlp_down (LAYER 0 only)": "bfloat8_b (LoFi)",
+    "routed_expert_gate_up (packed, layers 1-39, EP)": "bfloat4_b (LoFi)",
+    "routed_expert_down (layers 1-39, EP)": "bfloat4_b (LoFi)",
+    "shared_expert_gate_up / shared_expert_down (layers 1-39)": "bfloat8_b (LoFi)",
+    "router (mlp.gate)": "bfloat16 (HiFi2)",
+    "lm_head (column-sharded terminal)": "bfloat8_b (LoFi)",
+    "token_embedding / final_norm / layernorms": "bfloat16"
+  },
+  "layer_exceptions": {
+    "layer_0": "dense SwiGLU MLP (no experts): dense_ff13/dense_ff2 = BFP8 (there is no BFP4 expert group in layer 0)",
+    "layers_1_39": "EP-sharded routed MoE (256 experts, 64 local/device, top-8) with BFP4 experts + BFP8 shared expert",
+    "attention_and_norms": "uniform across all 40 layers (no per-layer dtype exception)",
+    "terminal": "LM head BFP8 (column-sharded), final RMSNorm BF16/HiFi4 \u2014 not a decoder layer"
+  },
+  "compute_fidelities": {
+    "attn_qkv": "LoFi",
+    "attn_o": "LoFi",
+    "attn_gate": "HiFi2",
+    "dense_mlp": "LoFi",
+    "shared_expert": "LoFi",
+    "routed_experts(moe)": "LoFi",
+    "router": "HiFi2",
+    "lm_head": "LoFi (fixed; fastest fidelity, _lm_ck=_ck_lofi in model.py; C10 is the BFP4+LoFi lm-head candidate)",
+    "rms_norms": "HiFi4 (fp32 acc)",
+    "sdpa": "HiFi4 (fp32 acc, exp_approx_mode=False)",
+    "note": "RMSNorm + SDPA fidelities are fixed precise (HiFi4) for long-context accuracy and are NOT swept. LM-head fidelity is fixed LoFi (already the fastest)."
+  },
+  "activation_residual_dtype": {
+    "activation": "bfloat16",
+    "inter_layer_residual": "bfloat16 (replicated, no inter-layer collective)"
+  },
+  "ccl_dtype": {
+    "all_reduce_payload": "bfloat16",
+    "note": "2 ring all_reduce/layer; BFP8 CCL swept (C8) and rejected (batch-1 payload is one row, typecast overhead made it slightly slower: 29.98 vs 30.33 t/s/u; no accuracy change)."
+  },
+  "kv_cache_dtype": {
+    "dtype": "bfloat8_b",
+    "note": "prefill fill tensors cast to BFP8 before paged_fill_cache; decode paged_update_cache inputs stay BF16 (dest BFP8). BF16 KV swept (C1): identical accuracy 0.95 and speed, 2x the memory -> BFP8 kept. Context capacity 262144 preserved (see context_contract.json datatype_sweep section)."
+  },
+  "logits_sampling_dtype": {
+    "lm_head_output_logits": "bfloat16 (matmul output)",
+    "sampling": "Sampling1D greedy top-k(k=1); k uint32, p/temp bfloat16; all-gather of only the 4x32 candidate value/index set (NOT the 100352-wide vocab); on-device token feedback into tt_out_tok"
+  },
+  "safe_baseline_override": "This selected config IS the safe baseline. A more conservative policy (e.g. BF16 KV, HiFi2 projections, BF16 attention weights) can be built by writing a different JSON here or passing precision_config_path=/precision_policy= to build_generator / LagunaModel.from_pretrained, or TT_LAGUNA_PRECISION_CONFIG=<path>.",
+  "hardware": "4x Blackhole p300c (P150x4), 1x4 mesh, FABRIC_1D_RING, KMD 2.10.0, fw 19.11.0",
+  "branch": "agentic-research/hous/laguna-xs-2.1"
+}
