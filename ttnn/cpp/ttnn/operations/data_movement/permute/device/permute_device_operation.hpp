@@ -4,8 +4,9 @@
 
 #pragma once
 
-#include <variant>
 #include <optional>
+#include <tuple>
+#include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
@@ -22,6 +23,9 @@ struct PermuteDeviceOperation {
         const ttsl::SmallVector<uint32_t> dims;
         const MemoryConfig output_mem_config;
         const float pad_value = 0.0f;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("dims", "output_mem_config", "pad_value");
+        auto attribute_values() const { return std::forward_as_tuple(dims, std::cref(output_mem_config), pad_value); }
     };
     struct tensor_args_t {
         const Tensor& input_tensor;
