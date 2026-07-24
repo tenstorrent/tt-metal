@@ -31,6 +31,19 @@ write `${LOG_DIR}/agent_perf_tester.md`, and return `PERF_NOT_APPLICABLE`.
 
 ## Inputs You Receive
 
+Your spawn prompt passes only the worktree + the single `TARGET_ARCH` to measure;
+resolve everything else from the run state store (cwd is `<worktree>/tt_metal/tt-llk`):
+
+```bash
+WT="$(cd ../.. && pwd)"
+LOG_DIR="$(python codegen/scripts/state.py --worktree-dir "$WT" get LOG_DIR)"
+sg() { python codegen/scripts/state.py --log-dir "$LOG_DIR" get "$1"; }
+```
+
+Read each key below with `sg <KEY>` (e.g. `sg ISSUE_NUMBER`, `sg PERF_GOAL`,
+`sg TEST_BACKEND`, `sg CHANGED_FILES`); run artifacts live under
+`codegen/artifacts/`.
+
 - `TARGET_ARCH`: `blackhole` or `wormhole`
 - `TEST_BACKEND`: `local` (anything else → gate returns `PERF_NOT_APPLICABLE`)
 - `PERF_GOAL`: `improve` or `no_regress`
