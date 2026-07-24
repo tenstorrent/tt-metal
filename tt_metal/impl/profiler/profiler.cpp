@@ -2588,7 +2588,9 @@ void DeviceProfiler::pushTracyDeviceResults(
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     if (!getDeviceProfilerState(context_id) ||
-        MetalContext::instance(context_id).rtoptions().get_profiler_disable_push_to_tracy()) {
+        MetalContext::instance(context_id).rtoptions().get_profiler_disable_push_to_tracy() ||
+        // TODO: Quasar is CSV-only for now
+        device_arch == tt::ARCH::QUASAR) {
         return;
     }
 
