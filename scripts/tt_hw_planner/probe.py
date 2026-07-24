@@ -238,9 +238,18 @@ def _agent_classify_category(model_id: str, cfg: dict, card_text: str = "") -> O
                 for c in _VALID_CATEGORIES:
                     if cand.lower() == c.lower():
                         return c
+                # lenient fallback: the agent reasoned but didn't emit clean JSON. Take the LAST
+                # category token that appears in its answer (the conclusion comes last). Prevents a
+                # correct-but-unparsed answer from becoming a None (general, not model-specific).
+                low = (raw or "").lower()
+                best_c, best_i = None, -1
+                for c in _VALID_CATEGORIES:
+                    j = low.rfind(c.lower())
+                    if j > best_i:
+                        best_c, best_i = c, j
+                return best_c
             except Exception:
                 return None
-            return None
 
         try:
             votes = max(1, int(os.environ.get("TT_HW_PLANNER_AGENT_VOTES", "3")))
