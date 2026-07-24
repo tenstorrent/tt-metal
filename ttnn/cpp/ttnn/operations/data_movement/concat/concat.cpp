@@ -11,14 +11,12 @@
 #include "ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 // TODO(nuked-op): removed include of deleted slicing op header
 // TODO(nuked-op): removed include of deleted slicing op header
 
@@ -125,8 +123,8 @@ MassagedConcat build_untilize_rm_retilize_concat(
         .post_transform = [&logical_output_shape](const ttnn::Tensor& output) -> ttnn::Tensor {
             // now we have a rm tensor, so we need to re-tilize it
             if (output.layout() != ttnn::TILE_LAYOUT) {
-                return ttnn::tilize_with_val_padding(
-                    output, compute_padded_shape(output.padded_shape()), 0.0f, output.memory_config());
+                // TODO(nuked-op tilize): restore real call
+                return output;
             }
             concat_db_print(true, "[DEBUG] already tilized");
             return output;

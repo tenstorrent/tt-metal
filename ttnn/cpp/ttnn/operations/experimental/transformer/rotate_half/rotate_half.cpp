@@ -6,7 +6,6 @@
 
 #include "device/rotate_half_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 
 namespace ttnn::experimental {
 
@@ -26,8 +25,8 @@ Tensor rotate_half(const Tensor& input_tensor, const std::optional<MemoryConfig>
         TILE_WIDTH * 2);
 
     auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
-    Tensor formatted_input =
-        ttnn::tilize_with_val_padding(input_tensor, padded_shape, PadValue(0.0f), input_tensor.memory_config());
+    // TODO(nuked-op tilize): restore real call
+    Tensor formatted_input = input_tensor;
     return ttnn::prim::rotate_half(formatted_input, memory_config.value_or(input_tensor.memory_config()));
 }
 

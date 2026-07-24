@@ -7,7 +7,6 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 // TODO(nuked-op): removed include of deleted slicing op header
 // TODO(nuked-op): removed include of deleted slicing op header
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
@@ -130,8 +129,8 @@ ttnn::Tensor composite_reduce_scatter(
         /*nuked-op*/ {input_tensor};
     if (is_row_major) {
         for (uint32_t i = 0; i < num_devices; ++i) {
-            split_tensors[i] =
-                ttnn::tilize_with_zero_padding(split_tensors[i], split_tensors[i].memory_config(), std::nullopt, true);
+            // TODO(nuked-op tilize): restore real call
+            // (passthrough — split_tensors[i] left unchanged)
         }
     }
 

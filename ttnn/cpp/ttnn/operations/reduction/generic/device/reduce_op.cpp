@@ -11,7 +11,6 @@
 
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace reduce_op_utils {
@@ -53,14 +52,8 @@ Tensor reduce_min(
         input.storage_type() == tt::tt_metal::StorageType::DEVICE) {
         // Changing layout to TILE with +inf padding
         auto pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input.padded_shape());
-        input = ttnn::tilize_with_val_padding(
-            input,
-            pad_shape,
-            std::numeric_limits<float>::infinity(),
-            output_mem_config,
-            std::nullopt,
-            true,
-            sub_core_grids);
+        // TODO(nuked-op tilize): restore real call
+        input = input_tensor;
     }
     return detail::reduce(
         input,
@@ -92,7 +85,8 @@ Tensor reduce(
 
     auto parallelization_strategy = ttnn::prim::get_parallelization_strategy(input_tensor, reduce_dim);
     auto is_multicore_hw = parallelization_strategy == tt::tt_metal::ReduceOpParallelizationStrategy::MULTI_CORE_HW;
-    float pad_value = reduce_math == tt::tt_metal::ReduceOpMath::MAX ? -std::numeric_limits<float>::infinity() : 0;
+    [[maybe_unused]] float pad_value =
+        reduce_math == tt::tt_metal::ReduceOpMath::MAX ? -std::numeric_limits<float>::infinity() : 0;
 
     TT_FATAL(input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "Expected input tensor to be on device");
     TT_FATAL(
@@ -158,8 +152,8 @@ Tensor reduce(
     Tensor tilized_input = input_tensor;
     if (!use_rm_dense) {
         auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
-        tilized_input = ttnn::tilize_with_val_padding(
-            input_tensor, padded_shape, pad_value, input_tensor.memory_config(), std::nullopt, true, sub_core_grids);
+        // TODO(nuked-op tilize): restore real call
+        tilized_input = input_tensor;
     }
 
     // A non-unity scalar is applied after the reduction (see requires_post_mul() in common.hpp):

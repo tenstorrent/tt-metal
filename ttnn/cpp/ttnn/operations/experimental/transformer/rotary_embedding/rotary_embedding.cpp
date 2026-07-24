@@ -6,7 +6,6 @@
 
 #include "ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 
 namespace ttnn::experimental {
 
@@ -79,12 +78,10 @@ ttnn::Tensor rotary_embedding(
     auto padded_shape_input = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
     auto padded_shape_cos = ttnn::operations::data_movement::pad_to_tile_shape(cos_cache.padded_shape());
     auto padded_shape_sin = ttnn::operations::data_movement::pad_to_tile_shape(sin_cache.padded_shape());
-    Tensor formatted_input =
-        ttnn::tilize_with_val_padding(input_tensor, padded_shape_input, PadValue(0.0f), input_tensor.memory_config());
-    Tensor formatted_cos =
-        ttnn::tilize_with_val_padding(cos_cache, padded_shape_cos, PadValue(0.0f), cos_cache.memory_config());
-    Tensor formatted_sin =
-        ttnn::tilize_with_val_padding(sin_cache, padded_shape_sin, PadValue(0.0f), sin_cache.memory_config());
+    // TODO(nuked-op tilize): restore real call
+    Tensor formatted_input = input_tensor;
+    Tensor formatted_cos = cos_cache;
+    Tensor formatted_sin = sin_cache;
 
     return ttnn::prim::rotary_embedding(
         formatted_input,

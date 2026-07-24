@@ -90,19 +90,6 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     sharded/sharded_common.cpp
     squeeze/squeeze.cpp
     stack/stack.cpp
-    tilize/device/tilize_device_operation.cpp
-    tilize/device/tilize_multi_core_default_program_factory.cpp
-    tilize/device/tilize_multi_core_block_program_factory.cpp
-    tilize/device/tilize_single_core_program_factory.cpp
-    tilize/device/tilize_multi_core_sharded_program_factory.cpp
-    tilize/tilize.cpp
-    tilize_with_val_padding/device/tilize_with_val_padding_device_operation.cpp
-    tilize_with_val_padding/device/factories/tilize_with_val_padding_single_core_program_factory.cpp
-    tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_block_interleaved_program_factory.cpp
-    tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_default_program_factory.cpp
-    tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_sharded_program_factory.cpp
-    tilize_with_val_padding/device/factories/tilize_with_val_padding_factory_helper.cpp
-    tilize_with_val_padding/tilize_with_val_padding.cpp
     transpose/device/transpose_device_operation.cpp
     transpose/device/transpose_cn_program_factory.cpp
     transpose/device/transpose_hc_rm_program_factory.cpp
@@ -160,8 +147,6 @@ set(TTNN_OP_DATA_MOVEMENT_API_HEADERS
     repeat/repeat.hpp
     reshape_view/reshape.hpp
     reshape_view/reshape_common.hpp
-    tilize_with_val_padding/tilize_with_val_padding.hpp
-    tilize_with_val_padding/device/tilize_with_val_padding_device_operation.hpp
     transpose/transpose.hpp
     untilize/untilize.hpp
     untilize_with_unpadding/untilize_with_unpadding.hpp
@@ -201,8 +186,6 @@ set(TTNN_OP_DATA_MOVEMENT_NANOBIND_SRCS
     scatter/tosa_scatter_nanobind.cpp
     squeeze/squeeze_nanobind.cpp
     stack/stack_nanobind.cpp
-    tilize/tilize_nanobind.cpp
-    tilize_with_val_padding/tilize_with_val_padding_nanobind.cpp
     transpose/transpose_nanobind.cpp
     unsqueeze/unsqueeze_nanobind.cpp
     untilize/untilize_nanobind.cpp

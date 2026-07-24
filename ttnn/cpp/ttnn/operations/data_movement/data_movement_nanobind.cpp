@@ -30,8 +30,6 @@
 #include "ttnn/operations/data_movement/scatter/tosa_scatter_nanobind.hpp"
 #include "ttnn/operations/data_movement/squeeze/squeeze_nanobind.hpp"
 #include "ttnn/operations/data_movement/stack/stack_nanobind.hpp"
-#include "ttnn/operations/data_movement/tilize/tilize_nanobind.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding_nanobind.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose_nanobind.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze_nanobind.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize_nanobind.hpp"
@@ -52,9 +50,6 @@ void py_module(nb::module_& mod) {
     detail::bind_indexed_fill(mod);
     detail::bind_pad(mod);
     detail::bind_repeat_interleave(mod);
-    detail::bind_tilize(mod);
-    detail::bind_tilize_with_val_padding(mod);
-    detail::bind_tilize_with_zero_padding(mod);
     detail::bind_transpose(mod);
     detail::bind_untilize(mod);
     detail::bind_untilize_with_unpadding(mod);

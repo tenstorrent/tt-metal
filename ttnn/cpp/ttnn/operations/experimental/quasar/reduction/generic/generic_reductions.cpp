@@ -13,7 +13,6 @@
 #include "ttnn/operations/experimental/quasar/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/experimental/quasar/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/experimental/quasar/reduction/generic/device/welford_reduce_device_operation.hpp"
 // TODO(nuked-op permute): permute nuked for agent eval; identity stub used below.
