@@ -599,11 +599,16 @@ void py_module(nb::module_& mod) {
         "__init__",
         [](MeshMapperConfig* t,
            ttsl::SmallVector<MeshMapperConfig::Placement> placements,
-           const std::optional<MeshShape>& mesh_shape_override) {
-            new (t) MeshMapperConfig{.placements = std::move(placements), .mesh_shape_override = mesh_shape_override};
+           const std::optional<MeshShape>& mesh_shape_override,
+           const std::optional<MeshCoordinate>& mesh_shape_offset) {
+            new (t) MeshMapperConfig{
+                .placements = std::move(placements),
+                .mesh_shape_override = mesh_shape_override,
+                .mesh_shape_offset = mesh_shape_offset};
         },
         nb::arg("placements"),
         nb::arg("mesh_shape_override") = nb::none(),
+        nb::arg("mesh_shape_offset") = nb::none(),
         R"doc(
            Creates a MeshMapperConfig object with the given placements and mesh shape override.
 
@@ -613,6 +618,10 @@ void py_module(nb::module_& mod) {
                Used for distributing a tensor over ND shape that doesn't match the shape of the mesh device:
                when the shape fits within a mesh device, the tensor shards are distributed within the submesh
                region. Otherwise, the tensor shards are distributed across mesh in row-major order.
+               mesh_shape_offset (MeshCoordinate): If provided (with mesh_shape_override, in submesh mode),
+               the submesh region is placed at this coordinate offset on the mesh device instead of the origin.
+               Lets a (rows, cols/2) distribution be pinned to a column band of a larger mesh (e.g. cols 2-3 of a 4x4),
+               keeping shards on their real mesh coordinates.
            )doc");
 
     using mmc_dim_t = decltype(MeshMapperConfig::Shard::dim);

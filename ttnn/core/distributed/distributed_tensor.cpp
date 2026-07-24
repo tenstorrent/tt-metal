@@ -38,11 +38,27 @@ namespace {
 
 // Returns a function that remaps a mesh coordinates from the mesh mapper / composer distribution shape to the device
 // shape. `global_range` must outlive the use of the returned function.
-auto get_remap_fn(DistributionMode distribution_mode, const MeshCoordinateRange* global_range) {
-    return [distribution_mode, row_major_dst = global_range->begin()](const MeshCoordinate& src_coord) mutable {
+auto get_remap_fn(
+    DistributionMode distribution_mode,
+    const MeshCoordinateRange* global_range,
+    const std::optional<MeshCoordinate>& submesh_offset = std::nullopt) {
+    return [distribution_mode, submesh_offset, row_major_dst = global_range->begin()](
+               const MeshCoordinate& src_coord) mutable {
         switch (distribution_mode) {
             case DistributionMode::ROW_MAJOR: return *(row_major_dst++);
-            case DistributionMode::SUBMESH: return src_coord;
+            case DistributionMode::SUBMESH: {
+                if (!submesh_offset.has_value()) {
+                    return src_coord;
+                }
+                // Shift the submesh coordinate by the offset so the distribution lands on a specific
+                // region of the mesh (e.g. cols 2-3 of a 4x4) instead of the origin.
+                ttsl::SmallVector<uint32_t> shifted(src_coord.coords().begin(), src_coord.coords().end());
+                const auto& off = *submesh_offset;
+                for (size_t i = 0; i < shifted.size(); ++i) {
+                    shifted[i] += off[static_cast<int32_t>(i)];
+                }
+                return MeshCoordinate(shifted);
+            }
         }
         TT_THROW("Unreachable");
     };
@@ -183,7 +199,7 @@ public:
             auto replicated_buffer = create_host_buffer_from_span<T>(span, buffer_pin, tensor_spec, pad_value);
 
             auto distributed_buffer = tt::tt_metal::DistributedHostBuffer::create(mesh_device_view_);
-            auto remap_fn = get_remap_fn(distribution_mode_, &global_range_);
+            auto remap_fn = get_remap_fn(distribution_mode_, &global_range_, config_.mesh_shape_offset);
             std::vector<MeshCoordinate> buffer_coords;
             for (const auto& coord : MeshCoordinateRange(distribution_shape_)) {
                 const auto mapped_coord = remap_fn(coord);
@@ -308,7 +324,7 @@ private:
         }();
 
         auto distributed_buffer = tt::tt_metal::DistributedHostBuffer::create(mesh_device_view_);
-        auto remap_fn = get_remap_fn(distribution_mode_, &global_range_);
+        auto remap_fn = get_remap_fn(distribution_mode_, &global_range_, config_.mesh_shape_offset);
 
         // Deduplicate processing of replicated buffers, by keeping a cache of already converted buffers.
         using XTensorViewKey = decltype(&sharded_xtensor_views.values().front()->get());
@@ -521,6 +537,26 @@ TensorToMesh TensorToMesh::create(const MeshDevice& mesh_device, const MeshMappe
         "number of placements in the config {}",
         distributed_shape,
         config);
+
+    if (config.mesh_shape_offset.has_value()) {
+        const auto& off = *config.mesh_shape_offset;
+        const auto& device_shape = mesh_device.shape();
+        TT_FATAL(
+            off.coords().size() == distributed_shape.dims(),
+            "mesh_shape_offset has {} dims but the distribution shape {} has {} dims",
+            off.coords().size(),
+            distributed_shape,
+            distributed_shape.dims());
+        for (size_t i = 0; i < distributed_shape.dims(); ++i) {
+            TT_FATAL(
+                off[static_cast<int32_t>(i)] + distributed_shape[i] <= device_shape[i],
+                "mesh_shape_offset {} + distribution shape {} does not fit within device shape {} on dim {}",
+                off,
+                distributed_shape,
+                device_shape,
+                i);
+        }
+    }
 
     return TensorToMesh(std::make_unique<TensorToMesh::Impl>(
         mesh_device,

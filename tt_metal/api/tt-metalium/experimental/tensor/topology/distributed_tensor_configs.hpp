@@ -69,6 +69,12 @@ struct MeshMapperConfig {
     // either row-major order, or preserving the original coordinates (if the shape fits within the mesh device
     // entirely).
     std::optional<tt::tt_metal::distributed::MeshShape> mesh_shape_override = std::nullopt;
+
+    // If provided (only meaningful in SUBMESH mode, i.e. when `mesh_shape_override` fits within the mesh device),
+    // the submesh region is placed at this coordinate offset on the mesh device instead of the origin. This lets a
+    // (rows, cols/2) distribution be pinned to a specific column band of a larger mesh (e.g. cols 2-3 of a 4x4)
+    // while keeping every shard on its real mesh coordinate. No effect in ROW_MAJOR mode.
+    std::optional<tt::tt_metal::distributed::MeshCoordinate> mesh_shape_offset = std::nullopt;
 };
 
 bool operator==(const MeshMapperConfig::Placement& lhs, const MeshMapperConfig::Placement& rhs);
