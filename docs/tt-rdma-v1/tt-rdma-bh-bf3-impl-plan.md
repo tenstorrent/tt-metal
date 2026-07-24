@@ -443,3 +443,41 @@ both sides build against identical bytes from day one — the spec is executable
 - Rig: `tt-rdma-eswitch-bypass.md`, `tt-rdma-pfc-lossless.md`
 - BH ETH SS: `bh-erisc` `docs/eth_arch_spec.md` · Physical link: `bh-erisc-fpga` (`topology-config`)
 - DOCA: RDMA / Eth / Flow / DPA samples under `/opt/mellanox/doca/samples/`
+
+---
+
+## §14. Performance mandate — max BW + min latency, RISC-V OFF the datapath (2026-07-23)
+
+**Standing design principle for every part of this spec:** design for maximum bandwidth AND minimum
+latency, and keep the RISC-V eth cores (and the host CPU) OUT of the per-packet datapath. Data
+movement is a job for hardware / programmable datapath engines; the RISC-V FW and host only set up
+rings + descriptors and manage control/completions.
+
+**Why (measured + spec-grounded):**
+- Raw-mode ethernet is NOT inherently low-BW/high-latency (same MAC/SerDes as TT-link; lower latency
+  — no seq/ACK handshake). Measured raw TX on the BF3 rail: 0.86 Gbps @78 B → **43 Gbps aggregate
+  @4 KB (2 rails)**. Raw CAN go fast.
+- BUT a RISC-driven send loop caps at the RISC command rate (~650k cmd/s/rail). Per-frame at 4 KB =
+  ~21 Gbps/rail = ~11% of 200 G. A per-command "burst" attempt (one big START_RAW, HW auto-split via
+  ETH_TXQ_MAX_PKT_SIZE_BYTES @TXQ+0x0C) regressed — the RISC-in-the-loop busy-wait per big command
+  serializes. **The ceiling is RISC-on-the-datapath, not raw mode and not the wire.**
+- How stock TT-TT hits 400 G line rate (tt-isa EthernetTile + bh-erisc-orig-1.12.0): the NoC-overlay
+  stream engine tunnels data over the eth link autonomously (RISC programs the stream once/phase),
+  and TT-link packet mode does HW seq#/resend + accept-ahead. **The RISC is not in the inner loop.**
+  This path is TT-proprietary (needs a TT peer) → unavailable to a BF3 gateway.
+
+**Datapath architecture (both ends off the CPU/RISC per-packet path):**
+- **TT (chip) side:** RISC1 owns a descriptor/WQE ring + control only. Payload is streamed into the
+  eth TX buffer by a DMA/overlay producer; the eth TXQ drains to the wire. Use accept-ahead
+  (multiple outstanding), MAX_PKT auto-split, jumbo frames, all 3 TXQ, and all 14 ETH SS in
+  parallel. The RISC never busy-waits a transfer to completion in the fast path.
+- **BF3 (gateway) side:** **DOCA DPA is the datapath engine** — the RoCEv2 ↔ TT-RDMA-v1 translation
+  (BTH parse, per-packet seq/rkey stamp, MR lookup, reorder) runs on the DPA's programmable cores at
+  line rate, NOT on the BF3 Arm CPU and NOT on the host. Arm/host only manage QP/MR tables + control.
+  This is the plan's T3 tier promoted to the DEFAULT target (T1 Arm-software is a bring-up crutch).
+- **Reliability without HW resend (raw mode):** lossless via PFC on the direct-attach link (no
+  drops in steady state) + a lightweight DPA/SW ARQ for the rare loss — not a per-packet CPU tax.
+
+**Consequence:** the gateway BW target is "best RISC-off-datapath raw pipeline + DPA translation,"
+not TT-TT's HW-tunnel number. Every milestone (BH.2+ TX ring, gateway G.x) is specced to keep both
+CPUs off the per-packet path from the start.

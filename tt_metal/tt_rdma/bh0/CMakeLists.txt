@@ -33,3 +33,8 @@ target_link_libraries(bh0_heartbeat PRIVATE test_metal_common_libs)
 add_executable(bh1_send_probe bh1_send_probe_host.cpp)
 target_include_directories(bh1_send_probe PRIVATE ${PROJECT_SOURCE_DIR})
 target_link_libraries(bh1_send_probe PRIVATE test_metal_common_libs)
+
+# BH.1 / M-1b — receive an 0x1af6 frame FROM the BF3 (loads bh_rdma_recv_probe.cpp).
+add_executable(bh1_recv_probe bh1_recv_probe_host.cpp)
+target_include_directories(bh1_recv_probe PRIVATE ${PROJECT_SOURCE_DIR})
+target_link_libraries(bh1_recv_probe PRIVATE test_metal_common_libs)

@@ -85,23 +85,40 @@ int main(int argc, char** argv) {
         IDevice* dev = md->get_devices()[0];
         const auto act = dev->get_active_ethernet_cores(/*skip_reserved=*/true);
         std::vector<CoreCoord> cs(act.begin(), act.end());
+        // Read the FW external-endpoint tag per core (eth_status.spare[0] @ 0x7CC10) — the same flag
+        // UMD reads. A tagged core is a NIC/EXTERNAL rail (target these for a BF3 PROBE); untagged is
+        // a TT-TT link. This both labels the BF3 rail AND confirms the FW is setting the tag.
+        constexpr uint64_t kEthStatusSpare0 = 0x7CC00u + 0x10u;  // BOOT_RESULTS_ADDR + offsetof(eth_status,spare)
+        constexpr uint32_t kExternalMagic = 0x1AF6E471u;
         std::cout << "device " << dev_id << ": " << cs.size() << " active ethernet core(s):\n";
         for (size_t i = 0; i < cs.size(); ++i) {
             const CoreCoord p = dev->ethernet_core_from_logical_core(cs[i]);
+            auto spare = tt::tt_metal::MetalContext::instance().get_cluster().read_core<uint32_t>(
+                dev->id(), p, kEthStatusSpare0, sizeof(uint32_t));
+            const bool ext = (!spare.empty() && spare[0] == kExternalMagic);
             std::cout << "  eth_idx " << i << ": logical=(" << cs[i].x << "," << cs[i].y << ")  physical/NOC=(" << p.x
-                      << "," << p.y << ")\n";
+                      << "," << p.y << ")  " << (ext ? "[EXTERNAL/NIC rail <- target this]" : "[TT-TT]") << "\n";
         }
         std::cout.flush();
         return 0;
     }
 
-    // argv: [device_id] [eth_idx] [dst_mac] [count] [spin] [hold_s]
+    // argv: [device_id] [eth_idx|"ext"] [dst_mac] [count] [spin] [hold_s]
+    //   eth_idx = index into active cores, OR "ext" = ALL external/NIC rails at once (one workload).
     const int device_id = (argc > 1) ? std::atoi(argv[1]) : 0;
-    const size_t eth_idx = (argc > 2) ? std::atoi(argv[2]) : 0;
+    const char* eth_sel = (argc > 2) ? argv[2] : "0";
+    const bool all_ext = (std::strcmp(eth_sel, "ext") == 0);
+    const size_t eth_idx = all_ext ? 0 : (size_t)std::atoi(eth_sel);
     const char* dst_mac_s = (argc > 3) ? argv[3] : "ff:ff:ff:ff:ff:ff";           // broadcast default
     const uint32_t count = (argc > 4) ? std::strtoul(argv[4], nullptr, 0) : 16u;  // bounded by default
     const uint32_t spin = (argc > 5) ? std::strtoul(argv[5], nullptr, 0) : 2000000u;
     const int hold_s = (argc > 6) ? std::atoi(argv[6]) : 10;  // only used when count==0
+    // payload bytes after the 32-B header; wire frame = 14 (L2) + 32 + payload. Default 32 (tiny).
+    const uint32_t payload_len = (argc > 7) ? std::strtoul(argv[7], nullptr, 0) : 32u;
+    // burst_bytes>0 => BURST mode: one big raw transfer/command from the 128 KB WQE region, HW
+    // auto-splits into max_pkt-sized frames (raw-mode bandwidth path). max_pkt default 4080.
+    const uint32_t burst_bytes = (argc > 8) ? std::strtoul(argv[8], nullptr, 0) : 0u;
+    const uint32_t max_pkt = (argc > 9) ? std::strtoul(argv[9], nullptr, 0) : 4080u;
 
     if (!golden_self_test()) {
         return 2;  // frame builder is wrong — do not put bad bytes on the wire
@@ -118,41 +135,74 @@ int main(int argc, char** argv) {
     const auto active = device->get_active_ethernet_cores(/*skip_reserved=*/true);
     std::vector<CoreCoord> cores(active.begin(), active.end());
     TT_FATAL(!cores.empty(), "no active ethernet cores on device {}", device_id);
-    TT_FATAL(eth_idx < cores.size(), "eth_idx {} >= {} active cores", eth_idx, cores.size());
-    const CoreCoord eth_logical = cores[eth_idx];
-    const CoreCoord eth_phys = device->ethernet_core_from_logical_core(eth_logical);
-    std::cout << "BH.1: device " << device_id << " eth core logical=(" << eth_logical.x << "," << eth_logical.y
-              << ")  physical/NOC=(" << eth_phys.x << "," << eth_phys.y << ")\n";
-    std::cout << "BH.1: PROBE -> " << dst_mac_s << " ethertype 0x" << std::hex << TT_RDMA_ETHERTYPE << std::dec
-              << ", count=" << count << " (0=until stop), queue=" << TT_RDMA_TX_QUEUE << "\n";
 
+    // Build the target core list. "ext" => every external/NIC rail (read the FW tag, same as --list);
+    // otherwise the single core at eth_idx.
+    constexpr uint64_t kEthStatusSpare0 = 0x7CC00u + 0x10u;  // BOOT_RESULTS_ADDR + offsetof(eth_status,spare)
+    constexpr uint32_t kExternalMagic = 0x1AF6E471u;
+    std::vector<CoreCoord> targets;
+    if (all_ext) {
+        for (const auto& c : cores) {
+            const CoreCoord p = device->ethernet_core_from_logical_core(c);
+            auto spare = tt::tt_metal::MetalContext::instance().get_cluster().read_core<uint32_t>(
+                device->id(), p, kEthStatusSpare0, sizeof(uint32_t));
+            if (!spare.empty() && spare[0] == kExternalMagic) {
+                targets.push_back(c);
+            }
+        }
+        TT_FATAL(!targets.empty(), "no EXTERNAL/NIC rails found on device {} (need the tagged-endpoint FW)", device_id);
+    } else {
+        TT_FATAL(eth_idx < cores.size(), "eth_idx {} >= {} active cores", eth_idx, cores.size());
+        targets.push_back(cores[eth_idx]);
+    }
+
+    if (all_ext && count == 0) {
+        // Multi-core persistent + graceful-stop-all is fine, but bounded is the safe default for a
+        // quick "run both" eval (self-terminates, no orphan risk). Warn but allow.
+        std::cout << "BH.1: note — ext mode with count=0 (persistent); will hold " << hold_s
+                  << "s then stop-flag ALL rails.\n";
+    }
+
+    // One program, one kernel per target core (each eth core has its own L1 + eth-SS regs, so the
+    // per-core TXPKT/queue config and HB/STOP slots don't collide).
     Program program = CreateProgram();
     const EthernetConfig cfg{.noc = NOC::NOC_1, .processor = DataMovementProcessor::RISCV_1};
-    const KernelHandle k =
-        CreateKernel(program, "tt_metal/tt_rdma/bh0/kernels/bh_rdma_send_probe.cpp", eth_logical, cfg);
-    SetRuntimeArgs(
-        program,
-        k,
-        eth_logical,
-        {TT_RDMA_HB_ADDR, TT_RDMA_STOP_ADDR, count, spin, dmac_hi, dmac_lo, /*payload_len=*/32u});
+    for (const CoreCoord& t : targets) {
+        const CoreCoord tp = device->ethernet_core_from_logical_core(t);
+        std::cout << "BH.1: target eth core logical=(" << t.x << "," << t.y << ")  physical/NOC=(" << tp.x << ","
+                  << tp.y << ")\n";
+        const KernelHandle k = CreateKernel(program, "tt_metal/tt_rdma/bh0/kernels/bh_rdma_send_probe.cpp", t, cfg);
+        SetRuntimeArgs(
+            program,
+            k,
+            t,
+            {TT_RDMA_HB_ADDR, TT_RDMA_STOP_ADDR, count, spin, dmac_hi, dmac_lo, payload_len, burst_bytes, max_pkt});
+    }
+    std::cout << "BH.1: PROBE -> " << dst_mac_s << " ethertype 0x" << std::hex << TT_RDMA_ETHERTYPE << std::dec
+              << ", count=" << count << " (0=until stop), queue=" << TT_RDMA_TX_QUEUE << ", rails=" << targets.size()
+              << "\n";
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
-    std::cout << "BH.1: kernel dispatched to RISC1. On the BF3:  tcpdump -i <ttport> ether proto 0x1af6 -xx"
+    std::cout << "BH.1: " << targets.size()
+              << " kernel(s) dispatched to RISC1. On the BF3:  "
+                 "tcpdump -i <ttport> ether proto 0x1af6 -xx"
               << std::endl;
 
     if (count == 0) {
-        // Persistent: hold for observation, then graceful-stop (BH.0 pattern).
+        // Persistent: hold for observation, then graceful-stop EVERY rail (BH.0 pattern).
         std::this_thread::sleep_for(std::chrono::seconds(hold_s));
         const std::vector<uint32_t> stop_val{1u};
-        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-            device->id(), device->ethernet_core_from_logical_core(eth_logical), stop_val, TT_RDMA_STOP_ADDR);
-        std::cout << "BH.1: hold elapsed -> stop flag set." << std::endl;
+        for (const CoreCoord& t : targets) {
+            tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                device->id(), device->ethernet_core_from_logical_core(t), stop_val, TT_RDMA_STOP_ADDR);
+        }
+        std::cout << "BH.1: hold elapsed -> stop flag set on all rails." << std::endl;
     }
-    distributed::Finish(cq);  // bounded: waits for `count` frames; persistent: waits for the stop
-    std::cout << "BH.1: done; kernel reaped, RISC1 idle. Clean shutdown." << std::endl;
+    distributed::Finish(cq);  // bounded: waits for `count` frames on every rail; persistent: waits for the stops
+    std::cout << "BH.1: done; kernel(s) reaped, RISC1 idle. Clean shutdown." << std::endl;
     return 0;
 }

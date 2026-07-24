@@ -88,6 +88,10 @@
 #ifndef TT_RDMA_TX_QUEUE
 #define TT_RDMA_TX_QUEUE 2u
 #endif
+// RXQ the on-core RDMA kernel receives on. Base FW routes unicast->RXQ2; keep symmetric with TX.
+#ifndef TT_RDMA_RX_QUEUE
+#define TT_RDMA_RX_QUEUE 2u
+#endif
 
 // NOTE: the SEND landing ring (RxWqeRing) is NOT in L1 — it is DMA-pushed to a host hugepage
 // at +128 KB (reverse of the TX DMA-pull). See tt-rdma-fw-arch-rx.md / host-sdk.md.

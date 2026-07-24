@@ -39,6 +39,11 @@ void kernel_main() {
     if (payload_len == 0) {
         payload_len = 32u;  // 32 B hdr + 32 B payload = 64 B >= Ethernet min, 16-B aligned
     }
+    // arg7 = burst_bytes: if >0, BURST mode — one big raw transfer per command from the WQE region,
+    //        which the HW auto-splits into <= arg8 (max_pkt) frames. This removes the per-frame
+    //        register-write overhead (the ~650k-fps ceiling) and is the raw-mode bandwidth path.
+    const uint32_t burst_bytes = get_arg_val<uint32_t>(7);
+    const uint32_t max_pkt = get_arg_val<uint32_t>(8);
 
     volatile tt_l1_ptr uint32_t* hb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hb_addr);
     volatile tt_l1_ptr uint32_t* stop =
@@ -50,6 +55,36 @@ void kernel_main() {
     // Configure our dedicated TXPKT row once: BF3 dest MAC + ethertype 0x1AF6.
     const uint64_t dst_mac = ((uint64_t)dmac_hi << 32) | (uint64_t)dmac_lo;
     tt_rdma_txpkt_config(TT_RDMA_TX_QUEUE, dst_mac, (uint16_t)TT_RDMA_ETHERTYPE);
+
+    // ---- BURST mode: one big raw transfer per command; HW auto-splits into max_pkt frames. ----
+    if (burst_bytes != 0) {
+        tt_rdma_set_max_pkt_size(TT_RDMA_TX_QUEUE, max_pkt);
+        // Fill the large source region (WQE payload, up to 128 KB) once; a spec PROBE header sits at
+        // the very start so frame[0] is still recognizable on the wire.
+        volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(TT_RDMA_WQE_PAYLOAD_ADDR);
+        for (uint32_t i = 0; i < (burst_bytes >> 2); ++i) {
+            src[i] = 0xAA55AA55u;
+        }
+        tt_rdma_hdr_t h0;
+        tt_rdma_build_hdr(&h0, TT_OP_PROBE, TT_RDMA_VERSION, (uint16_t)0x50B, burst_bytes, 1u, 0u, 0u, 0u);
+        const uint32_t* hw0 = reinterpret_cast<const uint32_t*>(&h0);
+        for (uint32_t w = 0; w < (TT_RDMA_HDR_BYTES >> 2); ++w) {
+            src[w] = hw0[w];
+        }
+        for (uint32_t burst = 1;; ++burst) {
+            tt_rdma_send_raw(TT_RDMA_TX_QUEUE, TT_RDMA_WQE_PAYLOAD_ADDR, burst_bytes);
+            *hb = burst;  // counts BURSTS (each = burst_bytes / max_pkt frames)
+            if (num_frames != 0 && burst >= num_frames) {
+                break;
+            }
+            if (stop != nullptr && *stop != 0) {
+                break;
+            }
+            for (volatile uint32_t i = 0; i < spin; ++i) {
+            }
+        }
+        return;
+    }
 
     // The frame body lives in the RDMA TX buffer: [32-B header][payload].
     volatile tt_l1_ptr uint32_t* tx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(TT_RDMA_TX_BUF0_ADDR);

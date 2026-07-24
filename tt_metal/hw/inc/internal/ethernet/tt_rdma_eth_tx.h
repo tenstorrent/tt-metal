@@ -28,6 +28,7 @@
 #define TT_ETH_TXQ_CTRL 0x00u
 #define TT_ETH_TXQ_CMD 0x04u                  // bit0 = transfer_start_raw
 #define TT_ETH_TXQ_STATUS 0x08u               // bit16 = cmd_ongoing (busy)
+#define TT_ETH_TXQ_MAX_PKT_SIZE_BYTES 0x0Cu   // >0: HW auto-splits one transfer into <= this per frame
 #define TT_ETH_TXQ_TRANSFER_START_ADDR 0x14u  // L1 byte address of the frame body
 #define TT_ETH_TXQ_TRANSFER_SIZE_BYTES 0x18u  // frame body byte count (hdr + payload)
 #define TT_ETH_TXQ_TXPKT_CFG_SEL_SW 0x80u     // which TXPKT_CFG row this queue emits with
@@ -61,7 +62,12 @@ static inline void tt_rdma_txpkt_config(uint32_t q, uint64_t dst_mac, uint16_t e
     const uint32_t row = TT_ETH_TXPKT_CFG0_BASE + q * TT_ETH_TXPKT_CFG_STRIDE;
     TT_ETH_REG32(row + TT_ETH_TXPKT_MAC_DA_HI) = (uint32_t)(dst_mac >> 32);
     TT_ETH_REG32(row + TT_ETH_TXPKT_MAC_DA_LO) = (uint32_t)(dst_mac & 0xFFFFFFFFu);
-    TT_ETH_REG32(row + TT_ETH_TXPKT_ETHERTYPE) = (uint32_t)ethertype;
+    // ETHERTYPE reg (eth_core_a_reg.h ETH_TXPKT_CFG_ETHERTYPE_reg_t): bit0 = use_eth_type ENABLE,
+    // bits[31:16] = eth_type. WITHOUT use_eth_type=1 the MAC does NOT insert the configured
+    // ethertype — the frame still transmits + reaches the peer, but the on-wire ethertype becomes
+    // the first payload bytes, so `tcpdump ether proto 0x1af6` never matches. Matches the working
+    // protocol_packet.cpp path (ereg.f.use_eth_type=1; ereg.f.eth_type=...).
+    TT_ETH_REG32(row + TT_ETH_TXPKT_ETHERTYPE) = ((uint32_t)ethertype << 16) | 0x1u;
     TT_ETH_REG32(row + TT_ETH_TXPKT_INSERT_CTL) = 0u;  // raw L2: [DA][SA][ethertype][payload]
     TT_ETH_REG32(TT_ETH_TXQ0_BASE + q * TT_ETH_TXQ_STRIDE + TT_ETH_TXQ_TXPKT_CFG_SEL_SW) = q;
 }
@@ -69,6 +75,15 @@ static inline void tt_rdma_txpkt_config(uint32_t q, uint64_t dst_mac, uint16_t e
 // Fire one raw L2 frame: body = [32-B TT-RDMA header][payload] already in L1 at
 // l1_src_byte_addr, nbytes total. Blocks until the queue is idle first. The
 // MAC/ethertype are prepended by the TXPKT row configured above.
+// Set the per-queue max packet size. When a transfer's SIZE exceeds this, the HW automatically
+// splits it into multiple frames — one command emits many MTU frames (removes per-frame SW overhead,
+// the key to raw-mode bandwidth). 0 leaves the HW default. Set once before the send loop.
+static inline void tt_rdma_set_max_pkt_size(uint32_t q, uint32_t max_pkt_bytes) {
+    if (max_pkt_bytes != 0) {
+        TT_ETH_REG32(TT_ETH_TXQ0_BASE + q * TT_ETH_TXQ_STRIDE + TT_ETH_TXQ_MAX_PKT_SIZE_BYTES) = max_pkt_bytes;
+    }
+}
+
 static inline void tt_rdma_send_raw(uint32_t q, uint32_t l1_src_byte_addr, uint32_t nbytes) {
     const uint32_t qb = TT_ETH_TXQ0_BASE + q * TT_ETH_TXQ_STRIDE;
     while (TT_ETH_REG32(qb + TT_ETH_TXQ_STATUS) & TT_ETH_TXQ_STATUS_CMD_ONGOING) {
