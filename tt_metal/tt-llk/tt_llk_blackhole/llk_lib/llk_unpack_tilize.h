@@ -595,15 +595,26 @@ inline void _llk_unpack_tilizeA_B_(
 /**
  * @brief Restore unpacker state after a tilize-A-with-unpack-B operation.
  *
- * Reverts the SrcA Y counter and rewrites the unpack config and tile X-dim back to the default
- * 16x16 face layout. x-start/x-end is transient and reprogrammed by the next operation's init
+ * Reverts the SrcA Y counter, rewrites the unpack config, restores operand A's Tile_x_dim to the
+ * canonical face_r_dim-aware baseline programmed by configure_unpack_AB, and restores the canonical
+ * SrcA Y-stride. x-start/x-end is transient and reprogrammed by the next operation's init
  * (see tt-llk#1036), so it is not restored here.
  *
+ * The previous FACE_DIM_16x16 GPR restore was correct only for face_r_dim == 16; for tiny tiles
+ * (face_r_dim < 16) it overwrote Tile_x_dim with a 16-row value, leaking a wrong tile geometry into
+ * the next operand (the same class of teardown gap as tt-llk#1161). Threading the operand's
+ * TensorShape lets the restore match the operand baseline. The tile-descriptor Y/Z dims are
+ * intentionally NOT rewritten here: tilizeA_B does not mutate them, and hardcoding shared descriptor
+ * fields an op never touched is exactly what caused the #1161 / #45179 regressions.
+ *
  * @param unpack_dst_format: Destination data format to restore in the unpack config.
+ * @param tensor_shape: Operand A tile geometry; face_r_dim restores the canonical Tile_x_dim.
  * @note Call @ref _llk_unpack_tilizeA_B_init_ before this function.
  */
-inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format)
+inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    const std::uint32_t face_r_dim = tensor_shape.face_r_dim;
+
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
 
     // _llk_unpack_tilizeA_B uses y-stride and updates y counter
@@ -618,8 +629,10 @@ inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format)
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     // Load unpack config[0]
     TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG2_Out_data_format_ADDR32);
-    // GPR preloaded with  16 | (16 << 16)}
-    TTI_WRCFG(p_gpr_unpack::FACE_DIM_16x16, 0, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
+    // Restore Tile_x_dim_cntx0 to the canonical face_dim-derived value. The previous
+    // FACE_DIM_16x16 GPR was correct only for face_r_dim=16; tiny tiles need a
+    // face_r_dim-aware value to match the baseline programmed by configure_unpack_AB.
+    cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xffffffff>(canonical_unpA_tile_x_dim_cntx(face_r_dim));
     // Restore canonical srcA Y-stride. _llk_unpack_tilizeA_B_init_ mutates it to a per-op
     // value (SCALE_DATUM_SIZE(unpack_dst_format, FACE_C_DIM)); restoring the baseline
     // programmed by configure_unpack_AB keeps this op from leaking Y-stride to the next op.
