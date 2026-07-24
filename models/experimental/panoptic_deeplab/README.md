@@ -25,7 +25,7 @@ The model supports both optimized 20-core (5x4 grid) and all-core (11x10 grid) c
 - **20 cores (optimized)**: Set `TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3"`
 - **110 cores P150**: Set `TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9"`
 
-**Note**: December 2025 - P150 currently has core grid 13x10 but the plan is to have 2 rows harvested (11x10) so in order to prepare for that change, we are setting this env var.
+**Note**: As of firmware v19.5.0 (January 2026), all P150 cards are unified to 120 enabled Tensix cores (12x10), i.e. an 11x10 = 110 core compute grid; this env var selects that grid. (Before v19.5.0, P150 exposed a 13x10 grid, and this override was added to prepare for the 11x10 layout.)
 
 
 ### Run the Full Model Test
