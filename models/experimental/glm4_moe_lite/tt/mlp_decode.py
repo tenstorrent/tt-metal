@@ -17,7 +17,12 @@ from typing import Any
 
 import ttnn
 from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
-from models.experimental.glm4_moe_lite.tt.linear_helpers import _DS_BATCH, dram_sharded_mlp, mlp_linear
+from models.experimental.glm4_moe_lite.tt.linear_helpers import (
+    _DS_BATCH,
+    compute_1d_prog_cfg,
+    dram_sharded_mlp,
+    mlp_linear,
+)
 from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig, mesh_shape
 
 _SIGNPOST_ENABLED = os.environ.get("GLM4_MOE_LITE_SIGNPOST", "").strip() == "1"
@@ -169,13 +174,12 @@ def moe_mlp_forward(
             or cfg.tp_enabled
             or cfg.moe_experts_impl != "sparse"
             or dispatch_impl != "reduce"
-            or tokens > 32
             or use_dense_decode
             or use_dense_prefill
             or use_packed_prefill
         ):
             # The fused MoE collective path only supports 4x8 mesh, TP=0, sparse
-            # reduce dispatch, tokens<=32, and a threaded residual. These flags are
+            # reduce dispatch and a threaded residual. These flags are
             # ON by default, so on any unsupported config we fall back to the safe
             # gather/reduce + standalone adds rather than crashing.
             use_collective_epilogue = False
@@ -241,11 +245,21 @@ def moe_mlp_forward(
     if cfg.moe_router_impl == "cpu":
         topk_weights, topk_indices = moe_topk_cpu_reference(device=device, x=x, moe_w=w.moe, hparams=hparams)
     else:
+        router_program_config = None
+        if cfg.explicit_prog_cfg and int(x.shape[2]) <= int(ttnn.TILE_SIZE):
+            router_in0_block_w = int(os.environ.get("GLM4_MOE_LITE_ROUTER_IN0_BLOCK_W", "16").strip() or "16")
+            router_program_config = compute_1d_prog_cfg(
+                device,
+                w.moe.w_gate,
+                int(x.shape[2]),
+                in0_block_w=router_in0_block_w or None,
+            )
         topk_weights, topk_indices = moe_topk_tt(
             x=x,
             moe_w=w.moe,
             hparams=hparams,
             compute_kernel_config=mlp_compute_kernel_config,
+            program_config=router_program_config,
         )
     _profile_add(profile, "moe_router_s", time.perf_counter() - t0 if profile is not None else 0.0)
     if use_signpost:

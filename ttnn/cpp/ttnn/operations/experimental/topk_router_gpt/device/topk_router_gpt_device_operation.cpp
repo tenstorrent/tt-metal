@@ -22,8 +22,8 @@ void TopkRouterGptDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(attrs.k >= 1 && attrs.k <= 32, "topk_router_gpt requires k in range [1, 32], got {}", attrs.k);
 
     TT_FATAL(
-        attrs.num_experts == 128,
-        "topk_router_gpt only supports num_experts=128 (hardcoded 4-group architecture), got {}",
+        attrs.num_experts == 64 || attrs.num_experts == 128,
+        "topk_router_gpt supports num_experts=64 or 128, got {}",
         attrs.num_experts);
 
     // Validate input tensor properties
@@ -53,37 +53,43 @@ void TopkRouterGptDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(bias.layout() == Layout::TILE, "Bias tensor must have TILE layout, got {}", bias.layout());
     TT_FATAL(bias.dtype() == DataType::BFLOAT16, "Bias tensor must have BFLOAT16 dtype, got {}", bias.dtype());
 
-    // Validate input shape: [B, hidden_dim] with B=32
+    // Validate input shape. GPT uses [32, hidden_dim]; GLM decode uses
+    // [1, 1, tokens, hidden_dim] with one physical tile of token rows.
     auto input_shape = input.logical_shape();
-    TT_FATAL(input_shape.rank() == 2, "Input tensor must be rank 2, got rank {}", input_shape.rank());
-    auto B = input_shape[0];
-    auto hidden_dim = input_shape[1];
-    TT_FATAL(B == 32, "topk_router_gpt only supports batch_size=32 (hardcoded for decode mode), got {}", B);
+    TT_FATAL(input_shape.rank() >= 2, "Input tensor must have rank >= 2, got rank {}", input_shape.rank());
+    auto tokens = input_shape[-2];
+    auto hidden_dim = input_shape[-1];
+    TT_FATAL(
+        (attrs.num_experts == 128 && input_shape.rank() == 2 && tokens == 32) ||
+            (attrs.num_experts == 64 && tokens >= 1 && tokens <= 32),
+        "Unsupported input shape {} for num_experts={}",
+        input_shape,
+        attrs.num_experts);
     TT_FATAL(hidden_dim % 32 == 0, "Input hidden_dim must be divisible by 32 (tile size), got {}", hidden_dim);
 
-    // Validate weight shape: [hidden_dim, num_experts]
+    // Validate weight's final two dimensions: [hidden_dim, num_experts].
     auto weight_shape = weight.logical_shape();
-    TT_FATAL(weight_shape.rank() == 2, "Weight tensor must be rank 2, got rank {}", weight_shape.rank());
+    TT_FATAL(weight_shape.rank() >= 2, "Weight tensor must have rank >= 2, got rank {}", weight_shape.rank());
     TT_FATAL(
-        weight_shape[0] == hidden_dim,
+        weight_shape[-2] == hidden_dim,
         "Weight tensor dim 0 must match input hidden_dim {}, got {}",
         hidden_dim,
-        weight_shape[0]);
+        weight_shape[-2]);
     TT_FATAL(
-        weight_shape[1] == attrs.num_experts,
+        weight_shape[-1] == attrs.num_experts,
         "Weight tensor dim 1 must match num_experts {}, got {}",
         attrs.num_experts,
-        weight_shape[1]);
+        weight_shape[-1]);
 
-    // Validate bias shape: [B, num_experts] (pre-broadcast)
+    // Validate bias's final dimensions. Its token dimension may be one because
+    // TILE padding physically broadcasts the correction-bias row for GLM B1.
     auto bias_shape = bias.logical_shape();
-    TT_FATAL(bias_shape.rank() == 2, "Bias tensor must be rank 2, got rank {}", bias_shape.rank());
-    TT_FATAL(bias_shape[0] == B, "Bias tensor dim 0 must match batch size {}, got {}", B, bias_shape[0]);
+    TT_FATAL(bias_shape.rank() >= 2, "Bias tensor must have rank >= 2, got rank {}", bias_shape.rank());
     TT_FATAL(
-        bias_shape[1] == attrs.num_experts,
+        bias_shape[-1] == attrs.num_experts,
         "Bias tensor dim 1 must match num_experts {}, got {}",
         attrs.num_experts,
-        bias_shape[1]);
+        bias_shape[-1]);
 
     // Validate all tensors are on the same device
     TT_FATAL(weight.device() == input.device(), "All tensors must be on the same device");
@@ -93,20 +99,29 @@ void TopkRouterGptDeviceOperation::validate_on_program_cache_miss(
 spec_return_value_t TopkRouterGptDeviceOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     auto input_shape = tensor_args.input_tensor.logical_shape();
-    auto B = input_shape[0];
-    auto dram_rm = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto dram = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+
+    if (attrs.num_experts == 64) {
+        auto tokens = input_shape[-2];
+        auto output_shape = ttnn::Shape({1, 1, tokens, attrs.k});
+        auto idx_spec = TensorSpec(
+            output_shape, tt::tt_metal::TensorLayout(DataType::UINT16, tt::tt_metal::PageConfig(Layout::TILE), dram));
+        auto wgt_spec = TensorSpec(
+            output_shape, tt::tt_metal::TensorLayout(DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::TILE), dram));
+        return {idx_spec, wgt_spec};
+    }
 
     uint32_t k_padded = tt::round_up(attrs.k, 8);
-
+    auto B = input_shape[0];
     // Slot 0: indices_rm [B, k_padded] uint16 RM
     auto idx_spec = TensorSpec(
         ttnn::Shape({B, k_padded}),
-        tt::tt_metal::TensorLayout(DataType::UINT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), dram_rm));
+        tt::tt_metal::TensorLayout(DataType::UINT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), dram));
 
     // Slot 1: weights_rm [B, k_padded] bf16 RM
     auto wgt_spec = TensorSpec(
         ttnn::Shape({B, k_padded}),
-        tt::tt_metal::TensorLayout(DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), dram_rm));
+        tt::tt_metal::TensorLayout(DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), dram));
 
     return {idx_spec, wgt_spec};
 }

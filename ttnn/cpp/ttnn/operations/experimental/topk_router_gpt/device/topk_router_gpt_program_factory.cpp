@@ -27,22 +27,22 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
     // Get the cores for the program
     const auto dram_bank2core_coords =
         device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
-    const uint32_t num_cores = dram_bank2core_coords.size();
-    auto all_cores = tt::tt_metal::CoreRangeSet(dram_bank2core_coords);
+    const uint32_t available_num_cores = dram_bank2core_coords.size();
 
-    constexpr uint32_t num_groups = 4;
+    const uint32_t num_experts = operation_attributes.num_experts;
+    const uint32_t num_groups = num_experts / tt::constants::TILE_WIDTH;
     constexpr uint32_t cores_per_group = 3;
-    constexpr uint32_t required_cores = num_groups * cores_per_group;
+    const uint32_t required_cores = num_groups * cores_per_group;
     TT_FATAL(
-        num_cores >= required_cores,
+        available_num_cores >= required_cores,
         "topk_router_gpt requires at least {} DRAM-aligned cores, got {}",
         required_cores,
-        num_cores);
+        available_num_cores);
 
     // Tensor shapes
     const auto& input_shape = tensor_args.input_tensor.logical_shape();
-    const uint32_t hidden_dim = input_shape[1];
-    const uint32_t num_experts = operation_attributes.num_experts;
+    const uint32_t hidden_dim = input_shape[-1];
+    const bool glm_mode = operation_attributes.num_experts == 64;
     constexpr uint32_t tile_hw = 32;
 
     const uint32_t total_k_tiles = hidden_dim / tile_hw;
@@ -81,7 +81,7 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
 
     // Create optimal ring ordering for NOC1 to minimize traffic conflicts
     // NOC1 routes: decreasing y (top) first, then decreasing x (left)
-    std::vector<uint32_t> ring_pos2bank_id(num_cores);
+    std::vector<uint32_t> ring_pos2bank_id(available_num_cores);
     std::iota(ring_pos2bank_id.begin(), ring_pos2bank_id.end(), 0);
 
     std::sort(
@@ -95,6 +95,13 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
             }
             return pa.x > pb.x;
         });
+
+    std::vector<CoreCoord> active_cores;
+    active_cores.reserve(required_cores);
+    for (uint32_t ring_pos = 0; ring_pos < required_cores; ring_pos++) {
+        active_cores.push_back(dram_bank2core_coords[ring_pos2bank_id[ring_pos]]);
+    }
+    auto all_cores = tt::tt_metal::CoreRangeSet(active_cores);
 
     // Map ring positions to group roles
     const uint32_t collector_ring_pos = 2;
@@ -162,6 +169,7 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
         {"cb_reduce_scalar", tt::CBIndex::c_14, tt::DataFormat::Float16_b, true, 1},
         {"cb_bcast_scaler", tt::CBIndex::c_15, tt::DataFormat::Float16_b, true, 1},
         {"cb_final_out", tt::CBIndex::c_16, tt::DataFormat::Float16_b, true, 2},
+        {"cb_glm_values", tt::CBIndex::c_17, tt::DataFormat::Float16_b, true, 1},
     };
 
     for (const auto& [name, index, data_format, is_tile, tiles_per_cb] : collector_cb_specs) {
@@ -173,7 +181,8 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
 
     // CB19: Dispatch scratch (collector only, non-tile)
     uint32_t k_padded = tt::round_up(operation_attributes.k, 8);
-    uint32_t dispatch_scratch_size = 2 * tile_hw * k_padded * 2;
+    uint32_t dispatch_scratch_size =
+        glm_mode ? 4 * tt::tile_size(tt::DataFormat::Float16_b) : 2 * tile_hw * k_padded * sizeof(uint16_t);
     {
         const auto cb_config =
             tt::tt_metal::CircularBufferConfig(dispatch_scratch_size, {{tt::CBIndex::c_19, tt::DataFormat::Float16_b}})
@@ -196,7 +205,7 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
     const uint32_t tile_size_bf16 = tt::tile_size(tt::DataFormat::Float16_b);
 
     std::unordered_map<std::string, uint32_t> named_compile_time_args = {
-        {"num_cores", num_cores},
+        {"num_cores", required_cores},
         {"num_groups", num_groups},
         {"cores_per_group", cores_per_group},
         {"collector_physical_x", collector_physical.x},
@@ -204,6 +213,8 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
         {"topk_k", operation_attributes.k},
         {"k_padded", k_padded},
         {"n_tiles", n_tiles},
+        {"glm_mode", glm_mode ? 1u : 0u},
+        {"glm_routed_scale_bf16", static_cast<uint32_t>(0x3FE6)},
         {"tile_size_bf16", tile_size_bf16},
     };
 
@@ -233,11 +244,11 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
         "ttnn/cpp/ttnn/operations/experimental/topk_router_gpt/device/kernels/compute.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi2,
-            .fp32_dest_acc_en = true,
+            .math_fidelity = glm_mode ? MathFidelity::LoFi : MathFidelity::HiFi2,
+            .fp32_dest_acc_en = !glm_mode,
             .dst_full_sync_en = false,
             .bfp8_pack_precise = false,
-            .math_approx_mode = false,
+            .math_approx_mode = glm_mode,
             .compile_args = compile_args,
             .named_compile_args = named_compile_time_args});
 
@@ -247,7 +258,7 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
 
     // VChannel computation with conflict avoidance
     std::vector<uint32_t> vchannels;
-    for (uint32_t bank_id = 0; bank_id < num_cores; bank_id++) {
+    for (uint32_t bank_id = 0; bank_id < available_num_cores; bank_id++) {
         uint32_t vchannel = bank_id & 0x3;
         auto it = std::find_if(
             dram_bank2core_coords.begin(), dram_bank2core_coords.begin() + bank_id, [&](const auto& core_prev) {

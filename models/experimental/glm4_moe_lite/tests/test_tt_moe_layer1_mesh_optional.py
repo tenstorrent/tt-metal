@@ -73,8 +73,9 @@ def _set_galaxy_fabric() -> None:
 @pytest.mark.parametrize("num_links", [1, 3, 4])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear, ttnn.Topology.Ring], ids=["linear", "ring"])
 @pytest.mark.parametrize("buffered", [False, True], ids=["gather_reduce", "buffered_all_reduce"])
+@pytest.mark.parametrize("tokens", [1, 64, 128], ids=["b1", "b64", "b128"])
 def test_collective_epilogue_matches_existing_path_on_galaxy(
-    num_links: int, topology: ttnn.Topology, buffered: bool
+    num_links: int, topology: ttnn.Topology, buffered: bool, tokens: int
 ) -> None:
     mesh_rows, mesh_cols = _mesh_shape_from_env(default=(4, 8))
     if (mesh_rows, mesh_cols) != (4, 8):
@@ -88,7 +89,7 @@ def test_collective_epilogue_matches_existing_path_on_galaxy(
     tensors: list[ttnn.Tensor] = []
     try:
         torch.manual_seed(2026)
-        routed = torch.randn((1, 1, 1, 2048), dtype=torch.bfloat16)
+        routed = torch.randn((1, 1, tokens, 2048), dtype=torch.bfloat16)
         shared = torch.randn_like(routed)
         residual = torch.randn_like(routed)
         mapper = ttnn.ReplicateTensorToMesh(mesh_device)
@@ -135,7 +136,11 @@ def test_collective_epilogue_matches_existing_path_on_galaxy(
         fused_shards = [ttnn.to_torch(tensor).float() for tensor in ttnn.get_device_tensors(fused)]
         assert len(fused_shards) == mesh_rows * mesh_cols
         for baseline_shard, fused_shard in zip(baseline_shards, fused_shards):
-            ok, msg = comp_pcc(baseline_shard[:, :, :1, :], fused_shard[:, :, :1, :], pcc=0.9999)
+            ok, msg = comp_pcc(
+                baseline_shard[:, :, :tokens, :],
+                fused_shard[:, :, :tokens, :],
+                pcc=0.9999,
+            )
             assert ok, msg
             assert torch.allclose(fused_shard, fused_shards[0], rtol=0.0, atol=0.0)
     finally:
@@ -165,10 +170,12 @@ def test_collective_epilogue_matches_existing_path_on_galaxy(
     [(False, False), (True, False), (True, True)],
     ids=["baseline", "fused_epilogue", "buffered_fused_epilogue"],
 )
+@pytest.mark.parametrize("tokens", [32, 64, 128], ids=["b32", "b64", "b128"])
 def test_layer1_routed_experts_mesh_matches_reference_given_reference_routing(
     monkeypatch: pytest.MonkeyPatch,
     fused_epilogue: bool,
     buffered: bool,
+    tokens: int,
 ) -> None:
     """Validate local-expert sharding + all-reduce aggregation on a real mesh."""
     snap = resolve_best_effort_snapshot_dir("zai-org/GLM-4.7-Flash")
@@ -181,7 +188,6 @@ def test_layer1_routed_experts_mesh_matches_reference_given_reference_routing(
 
     hparams = _load_hparams(Path(snap))
     layer_idx = 1
-    tokens = 32  # sparse kernel requires multiple of 32
     hidden = int(hparams.hidden_size)
 
     torch.manual_seed(0)

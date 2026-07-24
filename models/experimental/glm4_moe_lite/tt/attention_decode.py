@@ -367,10 +367,12 @@ def flash_mla_and_output(
     )
     compute_kernel_config = cfg.mla_compute_kernel_config()
     flash_mla_memcfg = ttnn.DRAM_MEMORY_CONFIG
+    grid_size = device.compute_with_storage_grid_size()
+    max_sdpa_users = int(grid_size.x) * int(grid_size.y)
+    q_is_sharded = False
 
     # Optional Q sharding
-    if cfg.shard_q:
-        grid_size = device.compute_with_storage_grid_size()
+    if cfg.shard_q and batch <= max_sdpa_users:
         num_cores = int(grid_size.x) * int(grid_size.y)
         height = batch * num_heads
         tiles_h = max(1, (height + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE)
@@ -400,6 +402,7 @@ def flash_mla_and_output(
             ttnn.deallocate(q_for_decode, force=False)
             q_for_decode = q_sharded
         flash_mla_memcfg = flash_mla_out_memcfg
+        q_is_sharded = True
 
     # Run FlashMLA
     t0 = time.perf_counter() if profile is not None else 0.0
@@ -415,42 +418,74 @@ def flash_mla_and_output(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mapper,
         )
-    elif cfg.use_v_cache_slice:
-        v_cache = ttnn.slice(
-            kvpe_cache, [0, 0, 0, 0], [int(kvpe_cache.shape[0]), 1, int(kvpe_cache.shape[2]), int(hparams.kv_lora_rank)]
-        )
-        attn_latent = ttnn.transformer.paged_flash_multi_latent_attention_decode(
-            q_for_decode,
-            kvpe_cache,
-            v_cache,
-            head_dim_v=int(hparams.kv_lora_rank),
-            page_table_tensor=page_table_tt,
-            cur_pos_tensor=tt_positions,
-            scale=scale,
-            program_config=sdpa_program_config,
-            compute_kernel_config=compute_kernel_config,
-            memory_config=flash_mla_memcfg,
-        )
-        ttnn.deallocate(v_cache, force=False)
     else:
-        attn_latent = ttnn.transformer.paged_flash_multi_latent_attention_decode(
-            q_for_decode,
-            kvpe_cache,
-            head_dim_v=int(hparams.kv_lora_rank),
-            page_table_tensor=page_table_tt,
-            cur_pos_tensor=tt_positions,
-            scale=scale,
-            program_config=sdpa_program_config,
-            compute_kernel_config=compute_kernel_config,
-            memory_config=flash_mla_memcfg,
-        )
+        v_cache = None
+        if cfg.use_v_cache_slice:
+            v_cache = ttnn.slice(
+                kvpe_cache,
+                [0, 0, 0, 0],
+                [int(kvpe_cache.shape[0]), 1, int(kvpe_cache.shape[2]), int(hparams.kv_lora_rank)],
+            )
+
+        def run_sdpa(q_tensor, page_table_tensor, positions_tensor):
+            if v_cache is not None:
+                return ttnn.transformer.paged_flash_multi_latent_attention_decode(
+                    q_tensor,
+                    kvpe_cache,
+                    v_cache,
+                    head_dim_v=int(hparams.kv_lora_rank),
+                    page_table_tensor=page_table_tensor,
+                    cur_pos_tensor=positions_tensor,
+                    scale=scale,
+                    program_config=sdpa_program_config,
+                    compute_kernel_config=compute_kernel_config,
+                    memory_config=flash_mla_memcfg,
+                )
+            return ttnn.transformer.paged_flash_multi_latent_attention_decode(
+                q_tensor,
+                kvpe_cache,
+                head_dim_v=int(hparams.kv_lora_rank),
+                page_table_tensor=page_table_tensor,
+                cur_pos_tensor=positions_tensor,
+                scale=scale,
+                program_config=sdpa_program_config,
+                compute_kernel_config=compute_kernel_config,
+                memory_config=flash_mla_memcfg,
+            )
+
+        if batch <= max_sdpa_users:
+            attn_latent = run_sdpa(q_for_decode, page_table_tt, tt_positions)
+        else:
+            # SDPA decode maps one user to one core. Split only that operation
+            # into tile-aligned groups; all projections and MoE remain B=128.
+            cap = min(64, max_sdpa_users)
+            page_table_width = int(page_table_tt.shape[1])
+            chunks = []
+            for start in range(0, batch, cap):
+                end = min(start + cap, batch)
+                q_chunk = ttnn.slice(
+                    q_for_decode,
+                    [0, start, 0, 0],
+                    [1, end, num_heads, kvpe_dim],
+                )
+                page_table_chunk = ttnn.slice(page_table_tt, [start, 0], [end, page_table_width])
+                positions_chunk = ttnn.slice(tt_positions, [start], [end])
+                chunks.append(run_sdpa(q_chunk, page_table_chunk, positions_chunk))
+                ttnn.deallocate(q_chunk, force=False)
+                ttnn.deallocate(page_table_chunk, force=False)
+                ttnn.deallocate(positions_chunk, force=False)
+            attn_latent = ttnn.concat(chunks, dim=1)
+            for chunk in chunks:
+                ttnn.deallocate(chunk, force=False)
+        if v_cache is not None:
+            ttnn.deallocate(v_cache, force=False)
     ttnn.deallocate(q_for_decode, force=False)
     if q_kvpe is not None:
         ttnn.deallocate(q_kvpe, force=False)
     _profile_add(profile, "flash_mla_decode_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     # Reshard from L1 to DRAM if Q was sharded
-    if cfg.shard_q and not cfg.disable_flash_mla_decode:
+    if q_is_sharded and not cfg.disable_flash_mla_decode:
         if cfg.skip_defensive_clones:
             attn_latent = ttnn.to_memory_config(attn_latent, memory_config=cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
         else:

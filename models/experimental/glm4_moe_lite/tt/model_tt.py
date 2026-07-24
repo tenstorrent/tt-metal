@@ -57,6 +57,10 @@ class _DecodeTraceSamplingState:
     trans_matrix_tt: ttnn.Tensor | None = None
     page_table_tt: ttnn.Tensor | None = None
     rope_sharded_mem_config: Any | None = None
+    wide_rope_cos_batches: list[ttnn.Tensor] | None = None
+    wide_rope_sin_batches: list[ttnn.Tensor] | None = None
+    wide_rope_trans_matrix_tt: ttnn.Tensor | None = None
+    wide_rope_sharded_mem_config: Any | None = None
     rot_idxs_padded_batch: int = 0
     # Batch-expansion serial cache update: two position tensors with alternating -1 masks
     positions_main_tt: ttnn.Tensor | None = None  # [B] int32 - draft lanes = -1
@@ -1374,7 +1378,11 @@ class Glm4MoeLiteDenseOnlyTT:
         # Decode-mode RoPE is faster but has been observed to be brittle during
         # bring-up. Default to the non-decode rotary kernel for correctness,
         # and only enable decode-mode when tracing (or explicitly requested).
-        use_decode_rope = enable_trace or os.environ.get("GLM4_MOE_LITE_USE_DECODE_ROPE", "").strip() == "1"
+        grid_size = self.device.compute_with_storage_grid_size()
+        max_decode_rope_users = int(grid_size.x) * int(grid_size.y)
+        use_decode_rope = (
+            enable_trace or os.environ.get("GLM4_MOE_LITE_USE_DECODE_ROPE", "").strip() == "1"
+        ) and active <= max_decode_rope_users
         cos_decode = sin_decode = trans_decode = rope_sharded_cfg = None
         if use_decode_rope:
             (
@@ -1921,16 +1929,32 @@ class Glm4MoeLiteDenseOnlyTT:
         if page_table_width <= 0:
             raise ValueError("trace page_table_width must be > 0")
 
+        grid_size = self.device.compute_with_storage_grid_size()
+        max_decode_rope_users = int(grid_size.x) * int(grid_size.y)
+        wide_rope = batch > max_decode_rope_users
         state = self._decode_trace_states.get(batch)
+        rope_state_ready = state is not None and (
+            (
+                not wide_rope
+                and state.cos_batch_tt is not None
+                and state.sin_batch_tt is not None
+                and state.trans_matrix_tt is not None
+                and state.rope_sharded_mem_config is not None
+            )
+            or (
+                wide_rope
+                and state.wide_rope_cos_batches is not None
+                and state.wide_rope_sin_batches is not None
+                and state.wide_rope_trans_matrix_tt is not None
+                and state.wide_rope_sharded_mem_config is not None
+            )
+        )
         if (
             state is not None
             and state.tokens_tt is not None
             and state.positions_tt is not None
             and state.rot_idxs_tt is not None
-            and state.cos_batch_tt is not None
-            and state.sin_batch_tt is not None
-            and state.trans_matrix_tt is not None
-            and state.rope_sharded_mem_config is not None
+            and rope_state_ready
             and state.page_table_tt is not None
             and int(state.page_table_width) == page_table_width
         ):
@@ -1976,6 +2000,12 @@ class Glm4MoeLiteDenseOnlyTT:
 
         # Free old persistent inputs if they exist.
         if state is not None:
+            for chunks in (state.wide_rope_cos_batches, state.wide_rope_sin_batches):
+                for tensor in chunks or []:
+                    try:
+                        ttnn.deallocate(tensor, force=False)
+                    except Exception:
+                        pass
             for t in (
                 state.tokens_tt,
                 state.positions_tt,
@@ -1983,6 +2013,7 @@ class Glm4MoeLiteDenseOnlyTT:
                 state.cos_batch_tt,
                 state.sin_batch_tt,
                 state.trans_matrix_tt,
+                state.wide_rope_trans_matrix_tt,
                 state.page_table_tt,
                 # Batch-expansion serial cache update
                 state.positions_main_tt,
@@ -2035,47 +2066,102 @@ class Glm4MoeLiteDenseOnlyTT:
         state.rot_idxs_padded_batch = int(padded_batch)
 
         grid_size = self.device.compute_with_storage_grid_size()
-        user_grid = ttnn.num_cores_to_corerangeset(int(batch), grid_size, row_wise=True)
-        state.rope_sharded_mem_config = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, int(rope_dim)),
-            core_grid=user_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-        state.cos_batch_tt = ttnn.from_torch(
-            torch.zeros((1, batch, 1, rope_dim), dtype=torch.bfloat16),
-            device=self.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=state.rope_sharded_mem_config,
-            mesh_mapper=mapper,
-        )
-        state.sin_batch_tt = ttnn.from_torch(
-            torch.zeros((1, batch, 1, rope_dim), dtype=torch.bfloat16),
-            device=self.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=state.rope_sharded_mem_config,
-            mesh_mapper=mapper,
-        )
-        trans_mat_mem_config = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
-            core_grid=user_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-        trans_mat_torch = _rot_transformation_mat_torch().to(dtype=torch.bfloat16)
-        trans_mat_torch = trans_mat_torch.repeat(1, 1, int(batch), 1).contiguous()
-        state.trans_matrix_tt = ttnn.from_torch(
-            trans_mat_torch,
-            device=self.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=trans_mat_mem_config,
-            mesh_mapper=mapper,
-        )
+        max_decode_rope_users = int(grid_size.x) * int(grid_size.y)
+        if batch <= max_decode_rope_users:
+            user_grid = ttnn.num_cores_to_corerangeset(int(batch), grid_size, row_wise=True)
+            state.rope_sharded_mem_config = ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, int(rope_dim)),
+                core_grid=user_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            state.cos_batch_tt = ttnn.from_torch(
+                torch.zeros((1, batch, 1, rope_dim), dtype=torch.bfloat16),
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=state.rope_sharded_mem_config,
+                mesh_mapper=mapper,
+            )
+            state.sin_batch_tt = ttnn.from_torch(
+                torch.zeros((1, batch, 1, rope_dim), dtype=torch.bfloat16),
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=state.rope_sharded_mem_config,
+                mesh_mapper=mapper,
+            )
+            trans_mat_mem_config = ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
+                core_grid=user_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            trans_mat_torch = _rot_transformation_mat_torch().to(dtype=torch.bfloat16)
+            trans_mat_torch = trans_mat_torch.repeat(1, 1, int(batch), 1).contiguous()
+            state.trans_matrix_tt = ttnn.from_torch(
+                trans_mat_torch,
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=trans_mat_mem_config,
+                mesh_mapper=mapper,
+            )
+        else:
+            rope_chunk = min(64, max_decode_rope_users)
+            if batch % rope_chunk != 0:
+                raise ValueError(f"wide-batch traced RoPE requires batch divisible by {rope_chunk}, got {batch}")
+            chunk_grid = ttnn.num_cores_to_corerangeset(rope_chunk, grid_size, row_wise=True)
+            state.wide_rope_sharded_mem_config = ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, int(rope_dim)),
+                core_grid=chunk_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            num_chunks = batch // rope_chunk
+            state.wide_rope_cos_batches = []
+            state.wide_rope_sin_batches = []
+            for _ in range(num_chunks):
+                state.wide_rope_cos_batches.append(
+                    ttnn.from_torch(
+                        torch.zeros((1, rope_chunk, 1, rope_dim), dtype=torch.bfloat16),
+                        device=self.device,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=state.wide_rope_sharded_mem_config,
+                        mesh_mapper=mapper,
+                    )
+                )
+                state.wide_rope_sin_batches.append(
+                    ttnn.from_torch(
+                        torch.zeros((1, rope_chunk, 1, rope_dim), dtype=torch.bfloat16),
+                        device=self.device,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=state.wide_rope_sharded_mem_config,
+                        mesh_mapper=mapper,
+                    )
+                )
+            trans_mat_torch = _rot_transformation_mat_torch().to(dtype=torch.bfloat16)
+            trans_mat_torch = trans_mat_torch.repeat(1, 1, rope_chunk, 1).contiguous()
+            wide_trans_mem_config = ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
+                core_grid=chunk_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            state.wide_rope_trans_matrix_tt = ttnn.from_torch(
+                trans_mat_torch,
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=wide_trans_mem_config,
+                mesh_mapper=mapper,
+            )
         state.page_table_tt = ttnn.from_torch(
             torch.zeros((batch, page_table_width), dtype=torch.int32),
             device=self.device,
@@ -2174,9 +2260,6 @@ class Glm4MoeLiteDenseOnlyTT:
             state.tokens_tt is None
             or state.positions_tt is None
             or state.rot_idxs_tt is None
-            or state.cos_batch_tt is None
-            or state.sin_batch_tt is None
-            or state.trans_matrix_tt is None
             or state.page_table_tt is None
         ):
             raise RuntimeError("trace inputs not allocated")
@@ -2542,13 +2625,22 @@ class Glm4MoeLiteDenseOnlyTT:
         assert state.tokens_tt is not None
         assert state.positions_tt is not None
         assert state.rot_idxs_tt is not None
-        assert state.cos_batch_tt is not None
-        assert state.sin_batch_tt is not None
-        assert state.trans_matrix_tt is not None
-        assert state.rope_sharded_mem_config is not None
         assert state.page_table_tt is not None
 
         batch = int(state.batch)
+        grid_size = self.device.compute_with_storage_grid_size()
+        wide_rope = batch > int(grid_size.x) * int(grid_size.y)
+        use_decode_rope = True
+        if not wide_rope:
+            assert state.cos_batch_tt is not None
+            assert state.sin_batch_tt is not None
+            assert state.trans_matrix_tt is not None
+            assert state.rope_sharded_mem_config is not None
+        else:
+            assert state.wide_rope_cos_batches is not None
+            assert state.wide_rope_sin_batches is not None
+            assert state.wide_rope_trans_matrix_tt is not None
+            assert state.wide_rope_sharded_mem_config is not None
 
         # Generate RoPE cos/sin inside the trace from rot_idxs, then shard into
         # the decode layout expected by rotary_embedding_llama(is_decode_mode=True).
@@ -2563,15 +2655,31 @@ class Glm4MoeLiteDenseOnlyTT:
             sin_batch_view = ttnn.slice(sin_batch_view, [0, 0, 0, 0], [1, 1, batch, rope_dim])
         cos_batch_rm = ttnn.clone(cos_batch_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         sin_batch_rm = ttnn.clone(sin_batch_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        cos_decode = ttnn.transpose(cos_batch_rm, 1, 2)  # [1,B,1,D]
-        sin_decode = ttnn.transpose(sin_batch_rm, 1, 2)  # [1,B,1,D]
-        cos_decode_sharded = ttnn.interleaved_to_sharded(cos_decode, state.rope_sharded_mem_config)
-        sin_decode_sharded = ttnn.interleaved_to_sharded(sin_decode, state.rope_sharded_mem_config)
-        ttnn.copy(cos_decode_sharded, state.cos_batch_tt)
-        ttnn.copy(sin_decode_sharded, state.sin_batch_tt)
-        cos_batch = state.cos_batch_tt
-        sin_batch = state.sin_batch_tt
-        trans_matrix = state.trans_matrix_tt
+        if not wide_rope:
+            cos_decode = ttnn.transpose(cos_batch_rm, 1, 2)  # [1,B,1,D]
+            sin_decode = ttnn.transpose(sin_batch_rm, 1, 2)  # [1,B,1,D]
+            cos_decode_sharded = ttnn.interleaved_to_sharded(cos_decode, state.rope_sharded_mem_config)
+            sin_decode_sharded = ttnn.interleaved_to_sharded(sin_decode, state.rope_sharded_mem_config)
+            ttnn.copy(cos_decode_sharded, state.cos_batch_tt)
+            ttnn.copy(sin_decode_sharded, state.sin_batch_tt)
+            cos_batch = state.cos_batch_tt
+            sin_batch = state.sin_batch_tt
+            trans_matrix = state.trans_matrix_tt
+        else:
+            cos_decode = ttnn.transpose(cos_batch_rm, 1, 2)  # [1,B,1,D]
+            sin_decode = ttnn.transpose(sin_batch_rm, 1, 2)
+            rope_chunk = 64
+            for chunk_idx, start in enumerate(range(0, batch, rope_chunk)):
+                end = start + rope_chunk
+                cos_chunk = ttnn.slice(cos_decode, [0, start, 0, 0], [1, end, 1, rope_dim])
+                sin_chunk = ttnn.slice(sin_decode, [0, start, 0, 0], [1, end, 1, rope_dim])
+                cos_sharded = ttnn.interleaved_to_sharded(cos_chunk, state.wide_rope_sharded_mem_config)
+                sin_sharded = ttnn.interleaved_to_sharded(sin_chunk, state.wide_rope_sharded_mem_config)
+                ttnn.copy(cos_sharded, state.wide_rope_cos_batches[chunk_idx])
+                ttnn.copy(sin_sharded, state.wide_rope_sin_batches[chunk_idx])
+            cos_batch = state.wide_rope_cos_batches
+            sin_batch = state.wide_rope_sin_batches
+            trans_matrix = state.wide_rope_trans_matrix_tt
         hidden = int(self.hparams.hidden_size)
         # Match DeepSeek trace pattern: embed tokens *inside* the trace graph.
         # This avoids device allocations outside trace replay and keeps input
@@ -2614,12 +2722,12 @@ class Glm4MoeLiteDenseOnlyTT:
                 cos_decode=cos_batch,
                 sin_decode=sin_batch,
                 trans_decode=trans_matrix,
-                rope_sharded_cfg=state.rope_sharded_mem_config,
+                rope_sharded_cfg=(state.wide_rope_sharded_mem_config if wide_rope else state.rope_sharded_mem_config),
                 w=w,
                 hparams=self.hparams,
                 moe_runtime=self.moe_runtime,
                 profile=None,
-                use_decode_rope=True,
+                use_decode_rope=use_decode_rope,
                 positions_main_tt=state.positions_main_tt,
                 positions_draft_tt=state.positions_draft_tt,
                 layer_idx=layer_idx,

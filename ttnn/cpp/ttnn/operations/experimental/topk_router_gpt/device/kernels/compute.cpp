@@ -29,6 +29,7 @@ void kernel_main() {
     // Compile-time args
     constexpr uint32_t num_groups = get_named_compile_time_arg_val("num_groups");
     constexpr uint32_t topk_k = get_named_compile_time_arg_val("topk_k");
+    constexpr bool glm_mode = get_named_compile_time_arg_val("glm_mode") != 0;
 
     // Run-time arguments (shared layout with dm0 and dm1)
     uint32_t argidx = 0;
@@ -70,15 +71,12 @@ void kernel_main() {
     constexpr auto cb_reduce_scalar = tt::CBIndex::c_14;
     constexpr auto cb_bcast_scaler = tt::CBIndex::c_15;
     constexpr auto cb_final_out = tt::CBIndex::c_16;
-
-    // =====================================================================
-    // PHASE 1: Partial Matmul (all cores) — block-by-block
-    // =====================================================================
-    constexpr uint32_t BLOCK_SIZE = 2;
+    constexpr auto cb_glm_values = tt::CBIndex::c_17;
 
     // NOTE: dst_full_sync_en = false (half-sync mode). We use tile_regs_*
     // consistently throughout the kernel for correctness. acquire_dst/release_dst
     // must NOT be mixed with tile_regs_* in half-sync mode.
+    constexpr uint32_t BLOCK_SIZE = 2;
     mm_block_init(
         cb_input,
         cb_weight,
@@ -88,6 +86,7 @@ void kernel_main() {
         /*rt_dim=*/1,
         /*kt_dim=*/1);
     tile_regs_acquire();
+    MATH(TTI_ZEROACC(p_zeroacc::CLR_ALL, ADDR_MOD_1, 0));
 
     uint32_t tiles_done = 0;
     while (tiles_done < num_k_tiles) {
@@ -95,10 +94,8 @@ void kernel_main() {
         if (block > BLOCK_SIZE) {
             block = BLOCK_SIZE;
         }
-
         cb_wait_front(cb_input, block);
         cb_wait_front(cb_weight, block);
-
         for (uint32_t k = 0; k < block; k++) {
             matmul_block(
                 cb_input,
@@ -111,17 +108,12 @@ void kernel_main() {
                 /*rt_dim=*/1,
                 /*kt_dim=*/1);
         }
-
         cb_pop_front(cb_input, block);
         cb_pop_front(cb_weight, block);
-
         tiles_done += block;
     }
 
     if (is_sender) {
-        // =================================================================
-        // SENDER: pack partial and exit (DM1 sends it to worker)
-        // =================================================================
         tile_regs_commit();
         cb_reserve_back(cb_local_out, 1);
         tile_regs_wait();
@@ -131,16 +123,17 @@ void kernel_main() {
         return;
     }
 
-    // =====================================================================
-    // WORKER PATH: add sender partials + bias → pack logit tile
-    // =====================================================================
     cb_wait_front(cb_partial_recv, 2);
-
     binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_partial_recv);
     binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_partial_recv, 0, 0);
     binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_partial_recv, 1, 0);
-
     cb_pop_front(cb_partial_recv, 2);
+
+    if constexpr (glm_mode) {
+        // GLM chooses experts using sigmoid(logits) + correction_bias.
+        sigmoid_tile_init();
+        sigmoid_tile(0);
+    }
 
     // Add bias
     cb_wait_front(cb_bias, 1);
@@ -184,19 +177,23 @@ void kernel_main() {
     ckernel::topk_local_sort(0, /*idir=*/0, /*i_end_phase=*/4);
     ckernel::topk_merge(0, /*idir=*/0, /*k=*/32);
 
-    // Insert tile 2
-    transpose_wh_tile(cb_gathered_val, 2, 1);
-    transpose_wh_tile(cb_gathered_ind, 2, 3);
+    if constexpr (num_groups > 2) {
+        // Insert tile 2.
+        transpose_wh_tile(cb_gathered_val, 2, 1);
+        transpose_wh_tile(cb_gathered_ind, 2, 3);
 
-    ckernel::topk_local_sort(0, /*idir=*/0, /*i_end_phase=*/4);
-    ckernel::topk_merge(0, /*idir=*/0, /*k=*/32);
+        ckernel::topk_local_sort(0, /*idir=*/0, /*i_end_phase=*/4);
+        ckernel::topk_merge(0, /*idir=*/0, /*k=*/32);
+    }
 
-    // Insert tile 3
-    transpose_wh_tile(cb_gathered_val, 3, 1);
-    transpose_wh_tile(cb_gathered_ind, 3, 3);
+    if constexpr (num_groups > 3) {
+        // Insert tile 3.
+        transpose_wh_tile(cb_gathered_val, 3, 1);
+        transpose_wh_tile(cb_gathered_ind, 3, 3);
 
-    ckernel::topk_local_sort(0, /*idir=*/0, /*i_end_phase=*/4);
-    ckernel::topk_merge(0, /*idir=*/0, /*k=*/32);
+        ckernel::topk_local_sort(0, /*idir=*/0, /*i_end_phase=*/4);
+        ckernel::topk_merge(0, /*idir=*/0, /*k=*/32);
+    }
 
     // Rebuild final sorted order
     ckernel::topk_rebuild(0, /*idir=*/0, /*m_iter=*/0, /*k=*/32, /*logk=*/5, /*skip_second=*/true);
@@ -237,13 +234,51 @@ void kernel_main() {
     cb_pop_front(cb_intermed_ind, 1);
     cb_reserve_back(cb_softmax_tmp, 1);
     cb_reserve_back(cb_intermed_val, 1);
+    if constexpr (glm_mode) {
+        cb_reserve_back(cb_glm_values, 1);
+    }
 
     tile_regs_wait();
     pack_tile(0, cb_softmax_tmp);
     pack_tile(1, cb_intermed_val);
+    if constexpr (glm_mode) {
+        // Preserve selected adjusted scores. DM1 subtracts the selected
+        // correction bias to recover unbiased sigmoid scores exactly.
+        pack_tile(0, cb_glm_values);
+    }
     tile_regs_release();
     cb_push_back(cb_softmax_tmp, 1);
     cb_push_back(cb_intermed_val, 1);
+    if constexpr (glm_mode) {
+        cb_push_back(cb_glm_values, 1);
+    }
+
+    if constexpr (glm_mode) {
+        // DM1 computes GLM's unbiased normalization. Forward the selected
+        // indices directly and provide a placeholder first tile.
+        cb_wait_front(cb_softmax_tmp, 1);
+        cb_wait_front(cb_intermed_val, 1);
+        cb_reserve_back(cb_final_out, 2);
+
+        tile_regs_acquire();
+        copy_tile_to_dst_init_short(cb_softmax_tmp);
+        copy_tile(cb_softmax_tmp, 0, 0);
+        copy_tile_to_dst_init_short(cb_intermed_val);
+        copy_tile(cb_intermed_val, 0, 1);
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile(0, cb_final_out);
+        pack_tile(1, cb_final_out);
+        tile_regs_release();
+        cb_push_back(cb_final_out, 2);
+
+        cb_pop_front(cb_softmax_tmp, 1);
+        cb_pop_front(cb_intermed_val, 1);
+        cb_pop_front(cb_softmax_mask, 1);
+        cb_pop_front(cb_bcast_scaler, 1);
+        return;
+    }
 
     // =====================================================================
     // PHASE 4: Softmax on masked top-K values (collector only)
@@ -288,9 +323,9 @@ void kernel_main() {
     cb_reserve_back(cb_reduce_scalar, 1);
 
     tile_regs_acquire();
-    reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW, true>(cb_softmax_tmp, cb_bcast_scaler, cb_reduce_scalar);
+    reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW, !glm_mode>(cb_softmax_tmp, cb_bcast_scaler, cb_reduce_scalar);
     reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_softmax_tmp, cb_bcast_scaler, 0, 0, 0);
-    reduce_uninit<true>(cb_reduce_scalar);
+    reduce_uninit<!glm_mode>(cb_reduce_scalar);
     recip_tile_init();
     recip_tile(0);
     tile_regs_commit();

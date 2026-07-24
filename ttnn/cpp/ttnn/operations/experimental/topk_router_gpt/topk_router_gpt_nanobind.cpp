@@ -33,7 +33,7 @@ void bind_topk_router_gpt(nb::module_& mod) {
         Fused multi-core matmul for GPT-OSS MoE router.
 
         Parallelizes the router linear layer ([B, hidden] x [hidden, num_experts])
-        across 12 DRAM-aligned cores for maximum DRAM read bandwidth.
+        across DRAM-aligned core groups for maximum DRAM read bandwidth.
 
         Args:
             input_tensor: [B, hidden_dim] bf16 input hidden states

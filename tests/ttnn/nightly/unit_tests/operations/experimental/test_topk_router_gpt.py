@@ -22,10 +22,11 @@ from models.common.utility_functions import comp_pcc
 PCC_THRESHOLD = 0.95
 
 # (B, K=hidden_dim, N=num_experts, TOP_K)
-# B=32 and N=128 are hardcoded requirements of the fused op.
+# B=32 and N in {64, 128} are requirements of the fused op.
 # K must be divisible by 32 (tile size).
 TEST_SHAPES = [
     (32, 2880, 128, 4),  # production shape
+    (32, 2048, 64, 4),  # GLM-4.7-Flash router shape
     (32, 64, 128, 4),  # small hidden_dim edge case
     (32, 4096, 128, 4),  # large hidden_dim
 ]
@@ -46,8 +47,8 @@ def run_fused_op(device, torch_input, torch_weight, torch_bias, B, K, N, k=4):
         num_experts=N,
     )
 
-    indices = ttnn.to_torch(indices_rm)[:B, :k].long()
-    weights = ttnn.to_torch(weights_rm)[:B, :k].float()
+    indices = ttnn.to_torch(indices_rm).reshape(B, -1)[:B, :k].long()
+    weights = ttnn.to_torch(weights_rm).reshape(B, -1)[:B, :k].float()
     return weights, indices
 
 
@@ -79,9 +80,15 @@ def test_topk_router_gpt_deterministic(device, B, K, N, TOP_K):
 
     weights_tt, indices_tt = run_fused_op(device, torch_input, torch_weight, torch_bias, B, K, N, TOP_K)
 
-    ref_logits = torch_bias.float().expand(B, N)
-    ref_vals, ref_idxs = torch.topk(ref_logits, TOP_K, dim=-1)
-    ref_weights = F.softmax(ref_vals, dim=-1)
+    if N == 64:
+        ref_scores = torch.sigmoid(torch.zeros(B, N))
+        _, ref_idxs = torch.topk(ref_scores + torch_bias.float(), TOP_K, dim=-1)
+        ref_weights = torch.gather(ref_scores, -1, ref_idxs)
+        ref_weights = 1.8 * ref_weights / ref_weights.sum(dim=-1, keepdim=True)
+    else:
+        ref_logits = torch_bias.float().expand(B, N)
+        ref_vals, ref_idxs = torch.topk(ref_logits, TOP_K, dim=-1)
+        ref_weights = F.softmax(ref_vals, dim=-1)
 
     logger.info(f"  Expected indices row 0: {ref_idxs[0].tolist()}")
     logger.info(f"  TT       indices row 0: {indices_tt[0].tolist()}")
@@ -121,9 +128,15 @@ def test_topk_router_gpt_random_matmul(device, B, K, N, TOP_K, seed):
 
     weights_tt, indices_tt = run_fused_op(device, torch_input, torch_weight, torch_bias, B, K, N, TOP_K)
 
-    ref_logits = (torch_input.float() @ torch_weight.float() + torch_bias.float()).to(torch.bfloat16).float()
-    ref_vals, ref_idxs = torch.topk(ref_logits, TOP_K, dim=-1)
-    ref_weights = F.softmax(ref_vals, dim=-1)
+    if N == 64:
+        ref_scores = torch.sigmoid(torch_input.float() @ torch_weight.float()).to(torch.bfloat16).float()
+        _, ref_idxs = torch.topk(ref_scores + torch_bias.float(), TOP_K, dim=-1)
+        ref_weights = torch.gather(ref_scores, -1, ref_idxs)
+        ref_weights = 1.8 * ref_weights / ref_weights.sum(dim=-1, keepdim=True)
+    else:
+        ref_logits = (torch_input.float() @ torch_weight.float() + torch_bias.float()).to(torch.bfloat16).float()
+        ref_vals, ref_idxs = torch.topk(ref_logits, TOP_K, dim=-1)
+        ref_weights = F.softmax(ref_vals, dim=-1)
 
     logger.info(f"  Ref indices row 0: {ref_idxs[0].tolist()}")
     logger.info(f"  TT  indices row 0: {indices_tt[0].tolist()}")

@@ -176,8 +176,9 @@ class Glm4RuntimeConfig:
             dram_sharded_attn=dram_sharded and _env_bool("GLM4_MOE_LITE_DRAM_SHARDED_ATTN"),
             dram_sharded_mlp=dram_sharded_mlp_val,
             sharded_mlp=sharded_mlp_standalone,
-            # Matmul config
-            explicit_prog_cfg=_env_bool("GLM4_MOE_LITE_EXPLICIT_PROG_CFG"),
+            # Matmul config. The helper only applies this to one-tile, non-batched
+            # matmuls; validated on Galaxy B1 at 58.1 -> 54.2 ms/token.
+            explicit_prog_cfg=_env_bool("GLM4_MOE_LITE_EXPLICIT_PROG_CFG", default=True),
             # Attention
             concat_heads=_env_bool("GLM4_MOE_LITE_CONCAT_HEADS"),
             attn_dp=_env_bool("GLM4_MOE_LITE_ATTN_DP"),

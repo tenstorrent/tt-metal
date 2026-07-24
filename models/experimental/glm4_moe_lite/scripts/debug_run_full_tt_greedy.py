@@ -40,6 +40,14 @@ for _default_key, _default_val in {
     "GLM4_MOE_LITE_BUFFERED_MOE_ALL_REDUCE": "1",
     "GLM4_MOE_LITE_FUSE_DOWN_ROUTING_SCALE": "1",
     "GLM4_MOE_LITE_SHARDED_NORM": "1",
+    "GLM4_MOE_LITE_EXPLICIT_PROG_CFG": "1",
+    # Fused router (topk_router_gpt op) is the one winning flag whose *code* default
+    # is off, so set it explicitly here. The others below are already code-default-on;
+    # listed for visibility so the harness default matches the validated run command.
+    "GLM4_MOE_LITE_FUSED_ROUTER": "1",
+    "GLM4_MOE_LITE_EXPERTS_TT_DTYPE": "bf8",
+    "GLM4_MOE_LITE_ROUTER_L1": "1",
+    "GLM4_MOE_LITE_NORM_L1": "1",
 }.items():
     os.environ.setdefault(_default_key, _default_val)
 

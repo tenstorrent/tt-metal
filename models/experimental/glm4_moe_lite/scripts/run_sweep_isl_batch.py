@@ -24,19 +24,27 @@ import sys
 from pathlib import Path
 
 # ISL (input sequence length) in tokens - replicate prompt to reach these
-ISL_VALUES = [2000, 4000, 8000, 16000, 32000, 64000, 128000]
-BATCH_SIZES = [1, 2, 4, 8, 16, 20, 24, 28, 30, 32]
+ISL_VALUES = [128, 512, 1024, 2048, 4096, 8192]
+B1_EXTRA_ISL_VALUES = [16384, 32768, 65536]
+BATCH_SIZES = [1, 4, 8, 16, 32, 64, 128]
 
 # Short prompt; script will use --simulate-context-len to repeat to target ISL
 BASE_PROMPT = "Summarize the following document. "
-MAX_NEW_TOKENS = 128
+MAX_NEW_TOKENS = 24
 MESH_ROWS = 4
 MESH_COLS = 8
 PREFILL_CHUNK_SIZE = 32768
 SCRIPT_PATH = "models/experimental/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py"
 
 
-def run_one(isl: int, batch_size: int, repo_root: Path, dry_run: bool, timeout_s: int) -> dict:
+def run_one(
+    isl: int,
+    batch_size: int,
+    repo_root: Path,
+    dry_run: bool,
+    timeout_s: int,
+    kv_cache_dtype: str = "bf16",
+) -> dict:
     """Run one (ISL, batch_size) combination; return metrics or error."""
     min_cache = isl + MAX_NEW_TOKENS
     cmd = [
@@ -57,7 +65,7 @@ def run_one(isl: int, batch_size: int, repo_root: Path, dry_run: bool, timeout_s
         "--mesh-cols",
         str(MESH_COLS),
         "--kv-cache-dtype",
-        "bf16",
+        kv_cache_dtype,
         "--phase",
         "both",
         "--enable-trace",
@@ -88,6 +96,19 @@ def run_one(isl: int, batch_size: int, repo_root: Path, dry_run: bool, timeout_s
     env["GLM4_MOE_LITE_BUFFERED_MOE_ALL_REDUCE"] = "1"
     env["GLM4_MOE_LITE_FUSE_DOWN_ROUTING_SCALE"] = "1"
     env["GLM4_MOE_LITE_SHARDED_NORM"] = "1"
+    env["GLM4_MOE_LITE_NORM_L1"] = "1"
+    env["GLM4_MOE_LITE_ROUTER_L1"] = "1"
+    # Validated B1-only fused router. Unsupported batch sizes automatically
+    # retain the standard router path.
+    env["GLM4_MOE_LITE_FUSED_ROUTER"] = "1"
+    # Keep known regressions/incorrect paths explicitly disabled so a caller's
+    # inherited environment cannot contaminate the winning sweep.
+    env["GLM4_MOE_LITE_FUSED_KV_BRANCH"] = "0"
+    env["GLM4_MOE_LITE_TRACE_2CQ"] = "0"
+    env["GLM4_MOE_LITE_LMHEAD_SHARD"] = "0"
+    env["GLM4_MOE_LITE_TP"] = "0"
+    env["GLM4_MOE_LITE_DRAM_SHARDED_WEIGHTS"] = "0"
+    env["GLM4_MOE_LITE_DRAM_SHARDED_ATTN"] = "0"
 
     result = {
         "isl": isl,
@@ -453,6 +474,260 @@ def plot_graphs(results: list[dict], out_dir: Path) -> None:
     fig3.savefig(out_dir / "sweep_agg_tps_vs_batch.png", dpi=120, bbox_inches="tight")
     plt.close()
 
+    # Presentation plot for the shortest-context batch scaling result. Use one
+    # color per batch, with point labels matching the B1 summary style.
+    isl_128_rows = [by_key[(128, batch)] for batch in batches if (128, batch) in by_key]
+    if isl_128_rows:
+        plot_batches = [int(row["batch_size"]) for row in isl_128_rows]
+        plot_values = [float(row["agg_tok_s"]) for row in isl_128_rows]
+        x = list(range(len(plot_batches)))
+        colors = plt.get_cmap("tab10").colors
+        fig_128, ax = plt.subplots(figsize=(11, 6))
+        ax.plot(x, plot_values, color="#6b7280", linewidth=2, zorder=1)
+        for idx, (batch, value) in enumerate(zip(plot_batches, plot_values)):
+            color = colors[idx % len(colors)]
+            ax.scatter(idx, value, color=color, s=75, zorder=2, label=f"batch={batch}")
+            ax.annotate(
+                f"{value:.1f}",
+                (idx, value),
+                xytext=(0, 9),
+                textcoords="offset points",
+                ha="center",
+                fontsize=9,
+                fontweight="bold",
+                color=color,
+            )
+        ax.set_xticks(x)
+        ax.set_xticklabels([str(batch) for batch in plot_batches])
+        ax.set_xlabel("Batch size")
+        ax.set_ylabel("Aggregate tokens / second")
+        ax.set_title("GLM-4.7-Flash — Aggregate throughput by batch size (ISL=128)")
+        ax.legend(ncol=4)
+        ax.grid(True, alpha=0.3)
+        fig_128.tight_layout()
+        fig_128.savefig(out_dir / "sweep_isl128_agg_tps_by_batch.png", dpi=160, bbox_inches="tight")
+        plt.close()
+
+        # Historical g1_multilink_4_ring_isl_sweep comparison at ISL=128.
+        # B1 comes from the documented 74.8 ms/token Galaxy baseline.
+        baseline_by_batch = {1: 1000.0 / 74.8, 4: 53.6913, 8: 107.0950, 16: 200.2503, 32: 344.0860}
+        fig_128_cmp, ax = plt.subplots(figsize=(11, 6))
+        ax.plot(
+            x,
+            plot_values,
+            marker="o",
+            linewidth=2.5,
+            color="#2a6fdb",
+            label="optimized_v1",
+        )
+        baseline_x = [plot_batches.index(batch) for batch in plot_batches if batch in baseline_by_batch]
+        baseline_values = [baseline_by_batch[plot_batches[idx]] for idx in baseline_x]
+        ax.plot(
+            baseline_x,
+            baseline_values,
+            marker="s",
+            linewidth=2.5,
+            color="#d17a00",
+            label="last baseline",
+        )
+        for px, value in zip(x, plot_values):
+            ax.annotate(
+                f"{value:.1f}",
+                (px, value),
+                xytext=(0, 8),
+                textcoords="offset points",
+                ha="center",
+                fontsize=8,
+                color="#2a6fdb",
+            )
+        for px, value in zip(baseline_x, baseline_values):
+            ax.annotate(
+                f"{value:.1f}",
+                (px, value),
+                xytext=(0, -14),
+                textcoords="offset points",
+                ha="center",
+                fontsize=8,
+                color="#d17a00",
+            )
+            optimized_value = plot_values[px]
+            improvement = (optimized_value / value - 1.0) * 100.0
+            ax.annotate(
+                f"+{improvement:.1f}%",
+                (px, (optimized_value + value) / 2.0),
+                ha="center",
+                va="center",
+                fontsize=7,
+                fontweight="bold",
+                color="#16835d",
+                bbox={"boxstyle": "round,pad=0.18", "facecolor": "white", "edgecolor": "#16835d", "alpha": 0.9},
+            )
+        ax.set_xticks(x)
+        ax.set_xticklabels([str(batch) for batch in plot_batches])
+        ax.set_xlabel("Batch size")
+        ax.set_ylabel("Aggregate tokens / second")
+        ax.set_title("GLM-4.7-Flash — Aggregate throughput by batch size (ISL=128)")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        fig_128_cmp.tight_layout()
+        fig_128_cmp.savefig(
+            out_dir / "sweep_isl128_agg_tps_by_batch_baseline_comparison.png",
+            dpi=160,
+            bbox_inches="tight",
+        )
+        plt.close()
+
+    # Line plot matching the published comparison: aggregate TPS vs ISL, one
+    # series per batch. Failed/OOM points are omitted rather than connected.
+    # Keep this comparison to ISLs covered by multiple batches. B1-only long
+    # context points are shown in the dedicated B1 summary below.
+    comparison_isls = [
+        isl
+        for isl in isls
+        if sum(1 for batch in batches if by_key.get((isl, batch), {}).get("agg_tok_s") is not None) > 1
+    ]
+    fig_isl, ax = plt.subplots(figsize=(12, 6))
+    x_positions = list(range(len(comparison_isls)))
+    for batch in batches:
+        xs = []
+        ys = []
+        for x_pos, isl in zip(x_positions, comparison_isls):
+            result = by_key.get((isl, batch))
+            if result and result.get("agg_tok_s") is not None:
+                xs.append(x_pos)
+                ys.append(result["agg_tok_s"])
+        if xs:
+            ax.plot(xs, ys, marker="o", linewidth=2, label=f"batch={batch}")
+            for x_pos, value in zip(xs, ys):
+                ax.annotate(
+                    f"{value:.1f}", (x_pos, value), xytext=(0, 7), textcoords="offset points", ha="center", fontsize=7
+                )
+    isl_labels = [f"{isl // 1024}k" if isl >= 1024 and isl % 1024 == 0 else str(isl) for isl in comparison_isls]
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels(isl_labels)
+    ax.set_xlabel("ISL (tokens)")
+    ax.set_ylabel("Aggregate tokens / second")
+    ax.set_title("GLM-4.7-Flash — Aggregate tok/s vs ISL by batch")
+    ax.legend(ncol=2)
+    ax.grid(True, alpha=0.3)
+    fig_isl.tight_layout()
+    fig_isl.savefig(out_dir / "sweep_agg_tps_vs_isl_by_batch.png", dpi=120, bbox_inches="tight")
+    plt.close()
+
+    # B1 long-context summary matching the requested four-panel presentation.
+    b1_rows = [by_key[(isl, 1)] for isl in isls if (isl, 1) in by_key]
+    if b1_rows:
+        b1_isls = [int(r["isl"]) for r in b1_rows]
+        b1_labels = [f"{isl // 1024}k" if isl >= 1024 and isl % 1024 == 0 else str(isl) for isl in b1_isls]
+        x = list(range(len(b1_rows)))
+        fig_b1, axes_b1 = plt.subplots(2, 2, figsize=(12, 8))
+        series = [
+            ("agg_tok_s", "Decode throughput (agg tok/s)", "Tokens / second", "#2a6fdb"),
+            ("decode_mean_ms", "Decode latency mean (ms)", "Milliseconds", "#159570"),
+            ("prefill_s", "Prefill time (s)", "Seconds", "#d17a00"),
+            ("ttft_ms", "TTFT (s)", "Seconds", "#d62728"),
+        ]
+        for ax_b1, (key, title, ylabel, color) in zip(axes_b1.flat, series):
+            raw_values = [r.get(key) for r in b1_rows]
+            values = [(v / 1000.0 if key == "ttft_ms" and v is not None else v) for v in raw_values]
+            valid = [(idx, value) for idx, value in enumerate(values) if value is not None]
+            if valid:
+                xs, ys = zip(*valid)
+                ax_b1.plot(xs, ys, marker="o", color=color)
+                for px, value in valid:
+                    ax_b1.annotate(
+                        f"{value:.2f}" if value < 20 else f"{value:.1f}",
+                        (px, value),
+                        xytext=(0, 6),
+                        textcoords="offset points",
+                        ha="center",
+                        fontsize=7,
+                        color=color,
+                    )
+            ax_b1.set_xticks(x)
+            ax_b1.set_xticklabels(b1_labels)
+            ax_b1.set_xlabel("ISL (tokens)")
+            ax_b1.set_ylabel(ylabel)
+            ax_b1.set_title(title)
+            ax_b1.grid(True, alpha=0.3)
+        fig_b1.suptitle("GLM-4.7-Flash — ISL sweep (batch=1)", fontsize=14, fontweight="bold")
+        fig_b1.tight_layout()
+        fig_b1.savefig(out_dir / "sweep_b1_isl_summary.png", dpi=120, bbox_inches="tight")
+        plt.close()
+
+        # Decode-throughput comparison against the previous B1 sweep.
+        baseline_b1_tps = {
+            128: 1000.0 / 74.8,
+            512: 13.55,
+            1024: 13.39,
+            2048: 13.32,
+            4096: 13.11,
+            8192: 12.74,
+            16384: 12.06,
+            32768: 10.93,
+            65536: 9.17,
+        }
+        optimized_values = [float(r["agg_tok_s"]) for r in b1_rows]
+        baseline_values = [baseline_b1_tps.get(isl) for isl in b1_isls]
+        fig_b1_cmp, ax = plt.subplots(figsize=(11, 6))
+        ax.plot(x, optimized_values, marker="o", linewidth=2.5, color="#2a6fdb", label="optimized_v1")
+        valid_baseline = [(idx, value) for idx, value in enumerate(baseline_values) if value is not None]
+        baseline_x, baseline_y = zip(*valid_baseline)
+        ax.plot(
+            baseline_x,
+            baseline_y,
+            marker="s",
+            linewidth=2.5,
+            color="#d17a00",
+            label="last baseline",
+        )
+        for px, value in zip(x, optimized_values):
+            ax.annotate(
+                f"{value:.2f}",
+                (px, value),
+                xytext=(0, 7),
+                textcoords="offset points",
+                ha="center",
+                fontsize=8,
+                color="#2a6fdb",
+            )
+        for px, value in valid_baseline:
+            ax.annotate(
+                f"{value:.2f}",
+                (px, value),
+                xytext=(0, -14),
+                textcoords="offset points",
+                ha="center",
+                fontsize=8,
+                color="#d17a00",
+            )
+            optimized_value = optimized_values[px]
+            improvement = (optimized_value / value - 1.0) * 100.0
+            ax.annotate(
+                f"+{improvement:.1f}%",
+                (px, (optimized_value + value) / 2.0),
+                ha="center",
+                va="center",
+                fontsize=7,
+                fontweight="bold",
+                color="#16835d",
+                bbox={"boxstyle": "round,pad=0.18", "facecolor": "white", "edgecolor": "#16835d", "alpha": 0.9},
+            )
+        ax.set_xticks(x)
+        ax.set_xticklabels(b1_labels)
+        ax.set_xlabel("ISL (tokens)")
+        ax.set_ylabel("Aggregate tokens / second")
+        ax.set_title("GLM-4.7-Flash — Decode throughput comparison (batch=1)")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        fig_b1_cmp.tight_layout()
+        fig_b1_cmp.savefig(
+            out_dir / "sweep_b1_decode_tps_baseline_comparison.png",
+            dpi=160,
+            bbox_inches="tight",
+        )
+        plt.close()
+
     # TTFT vs batch for each ISL
     fig4, ax = plt.subplots(figsize=(10, 6))
     for isl in isls:
@@ -562,6 +837,25 @@ def main() -> int:
         default=BATCH_SIZES,
         help="Batch sizes to sweep",
     )
+    ap.add_argument(
+        "--kv-cache-dtype",
+        choices=("bf16", "bf8"),
+        default="bf16",
+        help="KV cache dtype (default: bf16)",
+    )
+    ap.add_argument(
+        "--b1-extra-isl",
+        type=int,
+        nargs="*",
+        default=[],
+        help="Additional ISLs to run only at batch=1 (avoids a full cross-product)",
+    )
+    ap.add_argument(
+        "--oom-from",
+        type=Path,
+        metavar="CSV",
+        help="Run only cases marked OOM in an existing sweep CSV",
+    )
     args = ap.parse_args()
 
     if args.recover_from_log is not None:
@@ -596,7 +890,16 @@ def main() -> int:
     args.out_dir.mkdir(parents=True, exist_ok=True)
     isls = sorted(args.isl)
     batches = sorted(args.batch)
-    total = len(isls) * len(batches)
+    if args.oom_from is not None:
+        source_rows = load_existing_csv(args.oom_from)
+        cases = sorted(key for key, row in source_rows.items() if row.get("status") == "OOM")
+        if not cases:
+            print(f"No OOM cases found in {args.oom_from}", file=sys.stderr)
+            return 1
+    else:
+        cases = [(isl, batch) for isl in isls for batch in batches]
+        cases.extend((isl, 1) for isl in sorted(set(args.b1_extra_isl)) if (isl, 1) not in cases)
+    total = len(cases)
     start_from = max(1, int(args.start_from))
     csv_path = args.out_dir / "sweep_results.csv"
     existing = load_existing_csv(csv_path) if start_from > 1 else {}
@@ -605,46 +908,62 @@ def main() -> int:
     print(f"Sweep: ISL={isls}, batch={batches} -> {total} runs (dry_run={args.dry_run})", flush=True)
 
     results = []
-    for i, isl in enumerate(isls):
-        for j, batch_size in enumerate(batches):
-            idx = i * len(batches) + j + 1
-            if idx < start_from:
-                # Use existing result for this (isl, batch) or placeholder
-                r = existing.get((isl, batch_size))
-                if r is None:
-                    r = {
-                        "isl": isl,
-                        "batch_size": batch_size,
-                        "prefill_s": None,
-                        "agg_tok_s": None,
-                        "per_user_tok_s": None,
-                        "ttft_ms": None,
-                        "first_token_decode_ms": None,
-                        "status": "skipped",
-                    }
-                results.append(r)
-                continue
-            print(f"[{idx}/{total}] ISL={isl} batch={batch_size} ...", flush=True)
-            r = run_one(isl, batch_size, repo_root, args.dry_run, args.timeout)
+    for idx, (isl, batch_size) in enumerate(cases, start=1):
+        if idx < start_from:
+            # Use existing result for this (isl, batch) or placeholder
+            r = existing.get((isl, batch_size))
+            if r is None:
+                r = {
+                    "isl": isl,
+                    "batch_size": batch_size,
+                    "prefill_s": None,
+                    "agg_tok_s": None,
+                    "per_user_tok_s": None,
+                    "ttft_ms": None,
+                    "first_token_decode_ms": None,
+                    "status": "skipped",
+                }
             results.append(r)
-            # Write CSV after each run so partial results survive if the process is killed
+            continue
+        smaller_isl_oom = args.oom_from is not None and any(
+            int(previous["batch_size"]) == batch_size and int(previous["isl"]) < isl and previous.get("status") == "OOM"
+            for previous in results
+        )
+        if smaller_isl_oom:
+            r = {
+                "isl": isl,
+                "batch_size": batch_size,
+                "status": "skipped_after_smaller_isl_oom",
+                "oom_detail": "A smaller ISL already OOMed for this batch size",
+            }
+            results.append(r)
             write_csv(results, csv_path)
-            if not args.dry_run and r["status"] == "ok":
-                pu = (
-                    r.get("per_user_steady_tok_s")
-                    if r.get("per_user_steady_tok_s") is not None
-                    else r["per_user_tok_s"]
-                )
-                decode_info = ""
-                if r.get("decode_mean_ms") is not None:
-                    decode_info = f" decode_ms(mean={r['decode_mean_ms']:.1f} min={r['decode_min_ms']:.1f} max={r['decode_max_ms']:.1f})"
-                print(
-                    f"    prefill_s={r['prefill_s']:.1f} agg_tok_s={r['agg_tok_s']:.2f} "
-                    f"per_user_tok_s={pu:.2f} ttft_ms={r['ttft_ms']:.0f}{decode_info}",
-                    flush=True,
-                )
-            else:
-                print(f"    status={r['status']}", flush=True)
+            print(f"[{idx}/{total}] ISL={isl} batch={batch_size} skipped (smaller ISL OOM)", flush=True)
+            continue
+        print(f"[{idx}/{total}] ISL={isl} batch={batch_size} ...", flush=True)
+        r = run_one(
+            isl,
+            batch_size,
+            repo_root,
+            args.dry_run,
+            args.timeout,
+            kv_cache_dtype=args.kv_cache_dtype,
+        )
+        results.append(r)
+        # Write CSV after each run so partial results survive if the process is killed
+        write_csv(results, csv_path)
+        if not args.dry_run and r["status"] == "ok":
+            pu = r.get("per_user_steady_tok_s") if r.get("per_user_steady_tok_s") is not None else r["per_user_tok_s"]
+            decode_info = ""
+            if r.get("decode_mean_ms") is not None:
+                decode_info = f" decode_ms(mean={r['decode_mean_ms']:.1f} min={r['decode_min_ms']:.1f} max={r['decode_max_ms']:.1f})"
+            print(
+                f"    prefill_s={r['prefill_s']:.1f} agg_tok_s={r['agg_tok_s']:.2f} "
+                f"per_user_tok_s={pu:.2f} ttft_ms={r['ttft_ms']:.0f}{decode_info}",
+                flush=True,
+            )
+        else:
+            print(f"    status={r['status']}", flush=True)
 
     print(f"Wrote {csv_path}", flush=True)
 

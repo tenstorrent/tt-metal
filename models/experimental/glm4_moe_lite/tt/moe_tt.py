@@ -16,6 +16,7 @@ from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 from models.experimental.glm4_moe_lite.tt.layer_weights import MoELayerTTWeights
 
 _SCATTER_ZERO_CACHE: dict[tuple[int, int, int], ttnn.Tensor] = {}
+_FUSED_ROUTER_IDENTITY_CACHE: dict[int, ttnn.Tensor] = {}
 
 
 def _get_scatter_zero_tensor(*, device: Any, tokens_per_device: int, num_experts: int) -> ttnn.Tensor:
@@ -58,6 +59,24 @@ def _get_scatter_zero_tensor(*, device: Any, tokens_per_device: int, num_experts
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
     _SCATTER_ZERO_CACHE[key] = out
+    return out
+
+
+def _get_fused_router_identity(device: Any) -> ttnn.Tensor:
+    cached = _FUSED_ROUTER_IDENTITY_CACHE.get(id(device))
+    if cached is not None:
+        return cached
+    host = torch.eye(64, dtype=torch.bfloat16).reshape(1, 1, 64, 64)
+    out = ttnn.as_tensor(
+        host,
+        device=device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device) if device.__class__.__name__ == "MeshDevice" else None,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cache_file_name=None,
+    )
+    _FUSED_ROUTER_IDENTITY_CACHE[id(device)] = out
     return out
 
 
@@ -199,7 +218,7 @@ class _BufferedMoeAllReduceState:
     semaphore_indices: list[int]
 
 
-_BUFFERED_MOE_ALL_REDUCE_CACHE: dict[tuple[int, int, Any], _BufferedMoeAllReduceState] = {}
+_BUFFERED_MOE_ALL_REDUCE_CACHE: dict[tuple[int, int, int, Any], _BufferedMoeAllReduceState] = {}
 
 
 def _get_galaxy_ccl(device: Any) -> tuple[int, ttnn.Topology]:
@@ -210,8 +229,13 @@ def _get_galaxy_ccl(device: Any) -> tuple[int, ttnn.Topology]:
     return _GALAXY_CCL_CACHE[dev_id]
 
 
-def _get_buffered_moe_all_reduce_state(*, device: Any, hidden_size: int, dtype: Any) -> _BufferedMoeAllReduceState:
-    key = (id(device), int(hidden_size), dtype)
+def _get_buffered_moe_all_reduce_state(
+    *, device: Any, token_height: int, hidden_size: int, dtype: Any
+) -> _BufferedMoeAllReduceState:
+    token_height = int(token_height)
+    if token_height <= 0 or token_height % ttnn.TILE_SIZE != 0:
+        raise ValueError(f"Buffered MoE all-reduce requires tile-aligned token height, got {token_height}")
+    key = (id(device), token_height, int(hidden_size), dtype)
     cached = _BUFFERED_MOE_ALL_REDUCE_CACHE.get(key)
     if cached is not None and cached.device is device:
         return cached
@@ -231,7 +255,7 @@ def _get_buffered_moe_all_reduce_state(*, device: Any, hidden_size: int, dtype: 
     output_memory_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
-        ttnn.ShardSpec(output_cores, [ttnn.TILE_SIZE, shard_width], ttnn.ShardOrientation.ROW_MAJOR),
+        ttnn.ShardSpec(output_cores, [token_height, shard_width], ttnn.ShardOrientation.ROW_MAJOR),
     )
 
     buffers: dict[int, ttnn.Tensor] = {}
@@ -244,12 +268,12 @@ def _get_buffered_moe_all_reduce_state(*, device: Any, hidden_size: int, dtype: 
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
                 output_cores,
-                [ttnn.TILE_SIZE, shard_width * axis_size],
+                [token_height, shard_width * axis_size],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
         buffers[axis] = ttnn.from_torch(
-            torch.zeros((1, 1, ttnn.TILE_SIZE, hidden_size * axis_size), dtype=torch_dtype),
+            torch.zeros((1, 1, token_height, hidden_size * axis_size), dtype=torch_dtype),
             device=device,
             mesh_mapper=mapper,
             dtype=dtype,
@@ -292,7 +316,12 @@ def _buffered_moe_all_reduce_across_mesh(
     epilogue_input_b: ttnn.Tensor | None,
 ) -> ttnn.Tensor:
     """Two-axis Llama-style buffered all-reduce with an optional final epilogue."""
-    state = _get_buffered_moe_all_reduce_state(device=device, hidden_size=int(tensor.shape[-1]), dtype=tensor.dtype)
+    state = _get_buffered_moe_all_reduce_state(
+        device=device,
+        token_height=int(tensor.padded_shape[-2]),
+        hidden_size=int(tensor.shape[-1]),
+        dtype=tensor.dtype,
+    )
 
     if tensor.memory_config() != state.output_memory_config:
         sharded = ttnn.to_memory_config(tensor, state.output_memory_config)
@@ -642,6 +671,7 @@ def moe_topk_tt(
     moe_w: MoELayerTTWeights,
     hparams: Glm4MoeLiteHParams,
     compute_kernel_config: Any | None = None,
+    program_config: Any | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Return (topk_weights, topk_indices) for routed experts.
 
@@ -653,17 +683,39 @@ def moe_topk_tt(
     routed_scaling_factor = float(getattr(hparams, "routed_scaling_factor", 1.8))
     norm_topk_prob = bool(getattr(hparams, "norm_topk_prob", True))
 
+    use_fused_router = (
+        os.environ.get("GLM4_MOE_LITE_FUSED_ROUTER", "0").strip() == "1"
+        and int(hparams.n_routed_experts) == 64
+        and k == 4
+        and norm_topk_prob
+        and abs(routed_scaling_factor - 1.8) < 1.0e-6
+        and int(x.shape[2]) == 1
+        and moe_w.e_score_correction_bias_tile is not None
+    )
+
     # For decode (T<=32), keep all intermediates in L1 to avoid DRAM round-trips.
     # Tensors are tiny ([1,1,T,64] and [1,1,T,4]) so they easily fit.
     use_l1 = os.environ.get("GLM4_MOE_LITE_ROUTER_L1", "1").strip() == "1" and int(x.shape[2]) <= 32
     mc = ttnn.L1_MEMORY_CONFIG if use_l1 else None
 
-    if compute_kernel_config is None:
-        logits = ttnn.linear(x, moe_w.w_gate, memory_config=mc)  # [1,1,T,E]
-    else:
-        logits = ttnn.linear(
-            x, moe_w.w_gate, compute_kernel_config=compute_kernel_config, memory_config=mc
-        )  # [1,1,T,E]
+    linear_kwargs: dict[str, Any] = {"memory_config": mc}
+    if compute_kernel_config is not None:
+        linear_kwargs["compute_kernel_config"] = compute_kernel_config
+    if program_config is not None:
+        linear_kwargs["program_config"] = program_config
+    logits = ttnn.linear(x, moe_w.w_gate, **linear_kwargs)  # [1,1,T,E]
+
+    if use_fused_router:
+        topk_indices, topk_weights = ttnn.experimental.topk_router_gpt(
+            logits,
+            weight_tensor=_get_fused_router_identity(logits.device()),
+            bias_tensor=moe_w.e_score_correction_bias_tile,
+            k=k,
+            num_experts=64,
+        )
+        ttnn.deallocate(logits, force=False)
+        return topk_weights, topk_indices
+
     scores = ttnn.sigmoid(logits, memory_config=mc)
     ttnn.deallocate(logits, force=False)
 
@@ -2013,9 +2065,7 @@ def moe_sparse_experts_forward_tt(
     # separate hidden-width multiply. Decode is enabled first because for
     # num_blocks > 1 the scale needs a block-major reorder.
     fuse_down_route_scale = (
-        os.environ.get("GLM4_MOE_LITE_FUSE_DOWN_ROUTING_SCALE", "1").strip() != "0"
-        and not use_all_to_all
-        and num_blocks == 1
+        os.environ.get("GLM4_MOE_LITE_FUSE_DOWN_ROUTING_SCALE", "1").strip() != "0" and not use_all_to_all
     )
     down_post_scale = None
     if fuse_down_route_scale:
@@ -2023,13 +2073,21 @@ def moe_sparse_experts_forward_tt(
         if local_weights_rm.layout != ttnn.ROW_MAJOR_LAYOUT:
             local_weights_rm = ttnn.to_layout(local_weights_rm, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(local_weights, force=False)
-        local_weights_rm = ttnn.permute(local_weights_rm, (3, 1, 2, 0))  # [E,1,T,1]
-        down_post_scale = ttnn.to_layout(local_weights_rm, ttnn.TILE_LAYOUT)
-        ttnn.deallocate(local_weights_rm, force=False)
-        down_post_scale = ttnn.reshape(
-            down_post_scale,
-            (num_blocks, int(rt.num_experts_per_device), block, 1),
+        # [1,1,T,E] -> [B,block,E,1] -> [B,E,block,1].  The intermediate
+        # reshape is required for B>1: directly permuting to [E,1,T,1] and
+        # reshaping would preserve expert-major order instead of the
+        # block-major order consumed by sparse_matmul.
+        local_weights_blocked = ttnn.reshape(
+            local_weights_rm,
+            (num_blocks, block, int(rt.num_experts_per_device), 1),
         )
+        local_weights_blocked = ttnn.permute(
+            local_weights_blocked,
+            (0, 2, 1, 3),
+        )
+        ttnn.deallocate(local_weights_rm, force=False)
+        down_post_scale = ttnn.to_layout(local_weights_blocked, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(local_weights_blocked, force=False)
 
     expert_output_sparse = ttnn.sparse_matmul(
         x_ff,
@@ -2153,7 +2211,10 @@ def moe_sparse_experts_forward_tt(
     reduction_memory_config = memory_config
     if use_buffered_all_reduce:
         reduction_memory_config = _get_buffered_moe_all_reduce_state(
-            device=device, hidden_size=hidden_size, dtype=weighted.dtype
+            device=device,
+            token_height=int(weighted.padded_shape[-2]),
+            hidden_size=hidden_size,
+            dtype=weighted.dtype,
         ).output_memory_config
     output = ttnn.sum(weighted, dim=0, keepdim=True, memory_config=reduction_memory_config)
     ttnn.deallocate(weighted, force=False)

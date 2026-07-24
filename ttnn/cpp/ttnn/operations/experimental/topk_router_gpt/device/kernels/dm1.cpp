@@ -64,6 +64,9 @@ void kernel_main() {
     constexpr uint32_t num_groups = get_named_compile_time_arg_val("num_groups");
     constexpr uint32_t topk_k = get_named_compile_time_arg_val("topk_k");
     constexpr uint32_t k_padded = get_named_compile_time_arg_val("k_padded");
+    constexpr bool glm_mode = get_named_compile_time_arg_val("glm_mode") != 0;
+    constexpr uint16_t glm_routed_scale_bf16 =
+        static_cast<uint16_t>(get_named_compile_time_arg_val("glm_routed_scale_bf16"));
     constexpr uint32_t collector_phys_x = get_named_compile_time_arg_val("collector_physical_x");
     constexpr uint32_t collector_phys_y = get_named_compile_time_arg_val("collector_physical_y");
 
@@ -108,6 +111,7 @@ void kernel_main() {
     constexpr auto cb_softmax_mask = tt::CBIndex::c_12;
     constexpr auto cb_bcast_scaler = tt::CBIndex::c_15;
     constexpr auto cb_final_out = tt::CBIndex::c_16;
+    constexpr auto cb_glm_values = tt::CBIndex::c_17;
     constexpr auto cb_dispatch = tt::CBIndex::c_19;
 
     constexpr uint32_t tile_u32 = tile_size / sizeof(uint32_t);
@@ -191,15 +195,12 @@ void kernel_main() {
         cb_push_back(cb_bcast_scaler, 1);
     }
 
-    // 2. Reserve space in CB2 for the 2 incoming partial tiles
+    // Reserve space in CB2 and expose both sender partials to compute.
     cb_reserve_back(cb_partial_recv, 2);
-
-    // Wait for both senders' partials to arrive
     volatile tt_l1_ptr uint32_t* partial_sem =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_partial_ready));
     noc_semaphore_wait(partial_sem, 2);
     noc_semaphore_set(partial_sem, 0);
-
     cb_push_back(cb_partial_recv, 2);
 
     // 3. Wait for compute to produce logit output (cb_topk_val).
@@ -276,6 +277,76 @@ void kernel_main() {
     // 6. Wait for compute to produce final output (2 tiles in cb_final_out)
     cb_wait_front(cb_final_out, 2);
     uint32_t final_out_l1 = get_read_ptr(cb_final_out);
+
+    if constexpr (glm_mode) {
+        // GLM selects with sigmoid(logits) + correction bias but scales the
+        // corresponding unbiased sigmoid scores.
+        cb_wait_front(cb_glm_values, 1);
+        uint32_t adjusted_l1 = get_read_ptr(cb_glm_values);
+
+        cb_reserve_back(cb_dispatch, 1);
+        uint32_t scratch = get_write_ptr(cb_dispatch);
+        uint32_t idx_base = scratch;
+        uint32_t wgt_base = scratch + tile_size;
+        uint32_t bias_base = scratch + 2 * tile_size;
+
+        volatile tt_l1_ptr uint32_t* idx32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_base);
+        volatile tt_l1_ptr uint32_t* wgt32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wgt_base);
+        for (uint32_t i = 0; i < tile_u32; i++) {
+            idx32[i] = 0;
+            wgt32[i] = 0;
+        }
+
+        volatile tt_l1_ptr uint16_t* idx_buf = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(idx_base);
+        volatile tt_l1_ptr uint16_t* wgt_buf = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(wgt_base);
+        volatile tt_l1_ptr uint16_t* selected_indices =
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(final_out_l1 + tile_size);
+        volatile tt_l1_ptr uint16_t* adjusted_scores = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(adjusted_l1);
+        const float routed_scale = bf16_to_f32(glm_routed_scale_bf16);
+
+        const auto bias_ag = TensorAccessor(bias_accessor_args, bias_addr, tile_size);
+        for (uint32_t tile = 0; tile < num_groups; tile++) {
+            noc_async_read_tile(tile, bias_ag, bias_base + tile * tile_size);
+        }
+        noc_async_read_barrier();
+
+        for (uint32_t row = 0; row < 32; row++) {
+            float denom = 0.0f;
+            for (uint32_t col = 0; col < topk_k; col++) {
+                uint32_t fi = tile_elem_idx(row, col);
+                uint32_t expert = static_cast<uint32_t>(bf16_to_f32(selected_indices[fi]));
+                volatile tt_l1_ptr uint16_t* bias_tile =
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(bias_base + (expert / 32) * tile_size);
+                float unbiased =
+                    bf16_to_f32(adjusted_scores[fi]) - bf16_to_f32(bias_tile[tile_elem_idx(row, expert % 32)]);
+                denom += unbiased;
+            }
+            float inv_denom = routed_scale / (denom + 1.0e-20f);
+            for (uint32_t col = 0; col < topk_k; col++) {
+                uint32_t fi = tile_elem_idx(row, col);
+                uint32_t expert = static_cast<uint32_t>(bf16_to_f32(selected_indices[fi]));
+                volatile tt_l1_ptr uint16_t* bias_tile =
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(bias_base + (expert / 32) * tile_size);
+                float unbiased =
+                    bf16_to_f32(adjusted_scores[fi]) - bf16_to_f32(bias_tile[tile_elem_idx(row, expert % 32)]);
+                idx_buf[fi] = static_cast<uint16_t>(expert);
+                wgt_buf[fi] = f32_to_bf16(unbiased * inv_denom);
+            }
+        }
+
+        const auto idx_ag = TensorAccessor(indices_rm_accessor_args, indices_rm_addr, tile_size);
+        const auto wgt_ag = TensorAccessor(weights_rm_accessor_args, weights_rm_addr, tile_size);
+        noc_async_write_tile(0, idx_ag, idx_base);
+        noc_async_write_tile(0, wgt_ag, wgt_base);
+        noc_async_write_barrier();
+
+        cb_push_back(cb_dispatch, 1);
+        cb_wait_front(cb_dispatch, 1);
+        cb_pop_front(cb_dispatch, 1);
+        cb_pop_front(cb_glm_values, 1);
+        cb_pop_front(cb_final_out, 2);
+        return;
+    }
 
     // 7. Produce dispatch outputs: indices (uint16 RM) + weights (bf16 RM)
     constexpr uint32_t data_size = k_padded * 2;

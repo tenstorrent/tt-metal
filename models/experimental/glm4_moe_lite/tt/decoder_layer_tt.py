@@ -470,7 +470,8 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             if cos_decode is None or sin_decode is None or trans_decode is None:
                 raise ValueError("cos_decode, sin_decode, and trans_decode must be provided together")
             if rope_sharded_cfg is None:
-                rope_sharded_cfg = cos_decode.memory_config()
+                first_cos = cos_decode[0] if isinstance(cos_decode, (list, tuple)) else cos_decode
+                rope_sharded_cfg = first_cos.memory_config()
         else:
             (
                 cos_decode,
@@ -495,13 +496,44 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             t = ttnn.permute(t, (0, 2, 1, 3))
             heads = int(heads)
             pad_h = ttnn.TILE_SIZE - heads
-            if pad_h:
-                t = ttnn.pad(t, [(0, 0), (0, 0), (0, pad_h), (0, 0)], 0)
-            t = ttnn.to_memory_config(t, rope_sharded_cfg)
-            t = ttnn.experimental.rotary_embedding_llama(t, cos_decode, sin_decode, trans_decode, is_decode_mode=True)
-            t = ttnn.to_memory_config(t, memory_config=cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
-            if pad_h:
-                t = ttnn.slice(t, [0, 0, 0, 0], [1, batch, heads, rope_dim])
+            if isinstance(cos_decode, (list, tuple)):
+                if not isinstance(sin_decode, (list, tuple)) or len(cos_decode) != len(sin_decode):
+                    raise ValueError("wide-batch decode RoPE requires matching cos/sin chunk lists")
+                chunk_size = int(cos_decode[0].shape[1])
+                chunks = []
+                for chunk_idx, start in enumerate(range(0, batch, chunk_size)):
+                    end = min(start + chunk_size, batch)
+                    chunk = ttnn.slice(t, [0, start, 0, 0], [1, end, heads, rope_dim])
+                    if pad_h:
+                        chunk = ttnn.pad(chunk, [(0, 0), (0, 0), (0, pad_h), (0, 0)], 0)
+                    chunk = ttnn.to_memory_config(chunk, rope_sharded_cfg)
+                    chunk = ttnn.experimental.rotary_embedding_llama(
+                        chunk,
+                        cos_decode[chunk_idx],
+                        sin_decode[chunk_idx],
+                        trans_decode,
+                        is_decode_mode=True,
+                    )
+                    chunk = ttnn.to_memory_config(
+                        chunk,
+                        memory_config=cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    if pad_h:
+                        chunk = ttnn.slice(chunk, [0, 0, 0, 0], [1, end - start, heads, rope_dim])
+                    chunks.append(chunk)
+                t = ttnn.concat(chunks, dim=1)
+                for chunk in chunks:
+                    ttnn.deallocate(chunk, force=False)
+            else:
+                if pad_h:
+                    t = ttnn.pad(t, [(0, 0), (0, 0), (0, pad_h), (0, 0)], 0)
+                t = ttnn.to_memory_config(t, rope_sharded_cfg)
+                t = ttnn.experimental.rotary_embedding_llama(
+                    t, cos_decode, sin_decode, trans_decode, is_decode_mode=True
+                )
+                t = ttnn.to_memory_config(t, memory_config=cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
+                if pad_h:
+                    t = ttnn.slice(t, [0, 0, 0, 0], [1, batch, heads, rope_dim])
             t = ttnn.permute(t, (0, 2, 1, 3))
             return t
 

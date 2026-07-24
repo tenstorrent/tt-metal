@@ -11,6 +11,7 @@ instead of capturing outer scope variables.
 from __future__ import annotations
 
 import math
+import os
 from typing import Any
 
 import ttnn
@@ -18,7 +19,11 @@ from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfi
 
 
 def compute_1d_prog_cfg(
-    device: Any, b_weight: ttnn.Tensor, m_total: int
+    device: Any,
+    b_weight: ttnn.Tensor,
+    m_total: int,
+    *,
+    in0_block_w: int | None = None,
 ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
     """Compute 1D multicast program config for decode matmuls (M <= 1 tile)."""
     K = int(b_weight.shape[-2])
@@ -30,14 +35,26 @@ def compute_1d_prog_cfg(
     grid_x, grid_y = int(grid.x), int(grid.y)
     num_cores = grid_x * grid_y
 
-    if n_tiles < num_cores:
+    if n_tiles < grid_x:
+        grid_x = n_tiles
+        grid_y = 1
+        num_cores = n_tiles
+    elif n_tiles < num_cores:
         grid_y = max(1, n_tiles // grid_x)
         num_cores = grid_x * grid_y
 
     per_core_N = max(1, math.ceil(n_tiles / num_cores))
 
     in0_bw = 1
-    for candidate in (4, 3, 2):
+    requested_in0_bw = (
+        int(in0_block_w)
+        if in0_block_w is not None
+        else int(os.environ.get("GLM4_MOE_LITE_EXPLICIT_IN0_BLOCK_W", "0").strip() or "0")
+    )
+    # All current GLM decode projection K dimensions are divisible by 8. This
+    # block width measured 54.2 -> 53.4 ms/token on Galaxy B1 versus width 4.
+    candidates = (requested_in0_bw,) if requested_in0_bw > 0 else (8, 4, 3, 2)
+    for candidate in candidates:
         if k_tiles % candidate == 0:
             in0_bw = candidate
             break

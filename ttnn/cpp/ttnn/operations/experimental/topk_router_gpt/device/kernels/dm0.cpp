@@ -54,7 +54,6 @@ void kernel_main() {
     // Push tiles in blocks so compute can start matmul before all tiles arrive.
     constexpr uint32_t BLOCK_SIZE = 2;
     uint32_t tiles_done = 0;
-
     while (tiles_done < num_k_tiles) {
         uint32_t block = num_k_tiles - tiles_done;
         if (block > BLOCK_SIZE) {
@@ -74,7 +73,6 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_input, block);
         cb_push_back(cb_weight, block);
-
         tiles_done += block;
     }
 
