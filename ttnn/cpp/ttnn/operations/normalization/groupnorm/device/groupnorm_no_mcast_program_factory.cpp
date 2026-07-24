@@ -659,6 +659,23 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     uint32_t reduce_factor_w_group_2 = std::max(1u, num_rows_per_batch_per_core_group_2 * num_channels_per_group);
     uint32_t reduce_factor_c_group_2 = std::max(1u, num_cores_per_batch * num_cores_per_group);
 
+    // Non-tile-aligned H*W correction (tt-metal #50682). When the real flattened height
+    // (logical_hw) is not a multiple of the tile height it is padded to padded_hw, and the
+    // reduction otherwise runs over the padded (zero) rows. We (a) rescale the per-group c_2
+    // reduce scaler so the mean/variance divide by the real element count, and (b) pass
+    // K = padded_hw/logical_hw - 1 so the compute kernel can subtract the residual variance
+    // bias K*E[x]^2. Both are passed as float bits in named compile args; when logical_hw ==
+    // padded_hw the writer keeps the original compile-time scaler path (byte-identical).
+    const uint32_t logical_hw = static_cast<uint32_t>(a.logical_shape()[2]);
+    const uint32_t padded_hw = static_cast<uint32_t>(a.padded_shape()[2]);
+    const float pad_k = static_cast<float>(padded_hw) / static_cast<float>(logical_hw) - 1.0f;
+    const uint32_t pad_k_bits = std::bit_cast<uint32_t>(pad_k);
+    auto pad_scaler_bits = [&](uint32_t reduce_factor_w) {
+        const float sc = 1.0f / std::sqrt(static_cast<float>(reduce_factor_w) *
+                                          static_cast<float>(logical_hw) / static_cast<float>(padded_hw));
+        return std::bit_cast<uint32_t>(sc);
+    };
+
     std::unordered_map<std::string, uint32_t> writer_named_compile_time_args_group_1 = {
         {"is_mcast_sender", 1},
         {"fuse_gamma", static_cast<uint32_t>(gamma.has_value())},
@@ -686,6 +703,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"groupnorm_mode", groupnorm_mode},
         {"reduce_factor_w", reduce_factor_w_group_1},
         {"reduce_factor_c", reduce_factor_c_group_1},
+        {"logical_hw", logical_hw},
+        {"padded_hw", padded_hw},
+        {"pad_scaler_bits", pad_scaler_bits(reduce_factor_w_group_1)},
+        {"pad_k_bits", pad_k_bits},
     };
 
     std::unordered_map<std::string, uint32_t> writer_named_compile_time_args_group_2 = {
@@ -715,6 +736,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"groupnorm_mode", groupnorm_mode},
         {"reduce_factor_w", reduce_factor_w_group_2},
         {"reduce_factor_c", reduce_factor_c_group_2},
+        {"logical_hw", logical_hw},
+        {"padded_hw", padded_hw},
+        {"pad_scaler_bits", pad_scaler_bits(reduce_factor_w_group_2)},
+        {"pad_k_bits", pad_k_bits},
     };
 
     if (gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR) {
@@ -806,6 +831,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"num_rows_per_group", num_rows_per_batch_per_core_group_1},
         {"TILE_WIDTH", tile_width},
         {"reciprocal_size", num_reciprocals},
+        {"logical_hw", logical_hw},
+        {"padded_hw", padded_hw},
     };
 
     std::unordered_map<std::string, uint32_t> mcast_sender_compute_named_compile_time_args_group_2 = {
@@ -839,6 +866,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"num_rows_per_group", num_rows_per_batch_per_core_group_2},
         {"TILE_WIDTH", tile_width},
         {"reciprocal_size", num_reciprocals},
+        {"logical_hw", logical_hw},
+        {"padded_hw", padded_hw},
     };
 
     eltwise_binary_defines["FP32_DEST_ACC"] = fp32_dest_acc_en ? "true" : "false";
@@ -1062,6 +1091,24 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             .page_size = single_tile_size,
         }}},
     });
+
+    // Non-tile-aligned H*W correction scalars/scratch (tt-metal #50682): cb_k (c_1) holds the
+    // K scalar written by the writer; cb_msq (c_7) and cb_kmsq (c_11) are single-tile scratch
+    // used by the compute kernel to form E[x]^2 and the corrected variance. Only allocated
+    // when the flattened height is not tile-aligned (two-pass path only; Welford is separate).
+    if (!use_welford && logical_hw != padded_hw) {
+        for (uint32_t pad_cb_index : {tt::CBIndex::c_1, tt::CBIndex::c_7, tt::CBIndex::c_11}) {
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = single_tile_size,
+                .core_ranges = all_cores,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(pad_cb_index),
+                    .data_format = cb_data_format,
+                    .page_size = single_tile_size,
+                }}},
+            });
+        }
+    }
 
     if (gamma.has_value()) {
         constexpr uint32_t in5_cb_index = tt::CBIndex::c_5;
