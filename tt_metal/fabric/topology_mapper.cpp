@@ -16,6 +16,7 @@
 #include <map>
 
 #include <tt-logger/tt-logger.hpp>
+#include <enchantum/enchantum.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -1634,7 +1635,7 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
     tt::tt_fabric::FabricConfig fabric_config,
     tt::tt_fabric::FabricReliabilityMode reliability_mode) {
     // Come up with the biggest mesh that can be formed by the physical system descriptor based on number of chips
-    FabricType fabric_type = get_fabric_type(fabric_config, cluster.is_ubb_galaxy());
+    const FabricType requested_fabric_type = get_fabric_type(fabric_config, cluster.is_ubb_galaxy());
 
     // Detect the number of connections per direction using the psd
     const auto number_of_connections = get_num_connections_per_direction(cluster, physical_system_descriptor);
@@ -1661,16 +1662,18 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
     // Generate possible mesh shapes
     std::vector<MeshShape> mesh_shapes_to_try = generate_possible_cluster_shapes(total_number_of_chips);
 
-    // Try all possible mesh shapes
     const MeshId mesh_id{0};
-    for (const auto& mesh_shape : mesh_shapes_to_try) {
+
+    // Attempt to map a single (fabric_type, mesh_shape) candidate onto the physical adjacency.
+    // Returns the mapped MeshGraph on success, std::nullopt otherwise.
+    auto try_map_shape = [&](FabricType fabric_type, const MeshShape& mesh_shape) -> std::optional<MeshGraph> {
         auto mesh_graph = MeshGraph::generate_mesh_graph_of_shape(
             mesh_shape, fabric_type, reliability_mode, cluster.arch(), number_of_connections);
         auto logical_adjacency_matrix = tt::tt_fabric::build_adjacency_graph_logical(mesh_graph);
 
         // Extract adjacency maps for this mesh_id
         if (!logical_adjacency_matrix.contains(mesh_id) || !physical_adjacency_matrix.contains(mesh_id)) {
-            continue;
+            return std::nullopt;
         }
 
         const auto& logical_adj = logical_adjacency_matrix.at(mesh_id);
@@ -1697,9 +1700,59 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
 
         auto solver_result =
             solve_topology_mapping(logical_adj, physical_adj, constraints, ConnectionValidationMode::RELAXED, true);
+        if (!solver_result.success) {
+            return std::nullopt;
+        }
+        return mesh_graph;
+    };
 
-        // Return mesh_graph if mapping is successful
-        if (solver_result.success) {
+    // get_fabric_type() optimistically returns TORUS_XY for *any* UBB galaxy, but a galaxy whose
+    // cabling only wraps one axis (e.g. WH galaxy with a Y wrap but no X wrap) - or none at all -
+    // cannot realize that torus. Build an ordered list of fabric types from the requested (most
+    // connected) down to MESH so we can fall back to the most-connected topology the hardware can
+    // actually support, instead of silently dropping chips to satisfy an impossible torus.
+    std::vector<FabricType> fabric_type_candidates;
+    fabric_type_candidates.push_back(requested_fabric_type);
+    if (has_flag(requested_fabric_type, FabricType::TORUS_XY)) {
+        // TORUS_XY -> try the single-axis toruses before plain MESH.
+        fabric_type_candidates.push_back(FabricType::TORUS_Y);
+        fabric_type_candidates.push_back(FabricType::TORUS_X);
+    }
+    if (requested_fabric_type != FabricType::MESH) {
+        fabric_type_candidates.push_back(FabricType::MESH);
+    }
+
+    // First pass: prefer a full-coverage mapping while keeping the natural (most 2D-balanced) shape
+    // ordering of mesh_shapes_to_try - 1D shapes are deliberately last. For each candidate shape we
+    // try fabric types from most to least connected, so we keep as much torus connectivity as the
+    // hardware actually supports without dropping chips or collapsing to a degenerate 1D mesh (e.g.
+    // returning an 8x4 TORUS_Y rather than a 32x1 ring on a galaxy that only wraps one axis).
+    for (const auto& mesh_shape : mesh_shapes_to_try) {
+        if (mesh_shape.mesh_size() != total_number_of_chips) {
+            continue;  // only consider full-coverage shapes in this pass
+        }
+        for (const auto& fabric_type : fabric_type_candidates) {
+            if (auto mesh_graph = try_map_shape(fabric_type, mesh_shape)) {
+                if (fabric_type != requested_fabric_type) {
+                    log_warning(
+                        tt::LogFabric,
+                        "TopologyMapper auto-discovery: requested fabric type {} could not be realized on the "
+                        "discovered physical topology; using {} which maps all {} physical chips. This is expected "
+                        "on galaxies that do not have wrap-around (torus) cabling on every axis.",
+                        enchantum::to_string(requested_fabric_type),
+                        enchantum::to_string(fabric_type),
+                        total_number_of_chips);
+                }
+                return std::move(*mesh_graph);
+            }
+        }
+    }
+
+    // Second pass (fallback): no fabric type can map all chips. Preserve the original best-effort
+    // behavior using the requested fabric type, accepting the first shape that maps even if some
+    // physical chips are left unused.
+    for (const auto& mesh_shape : mesh_shapes_to_try) {
+        if (auto mesh_graph = try_map_shape(requested_fabric_type, mesh_shape)) {
             // Check if the final mesh size doesn't match the number of physical chips
             size_t final_mesh_size = mesh_shape.mesh_size();
             if (final_mesh_size < total_number_of_chips) {
@@ -1723,7 +1776,7 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
                     final_mesh_size,
                     total_number_of_chips);
             }
-            return mesh_graph;
+            return std::move(*mesh_graph);
         }
     }
     // Throw if no possible mesh shape is found to match, this means there are no devices! This should never happen
