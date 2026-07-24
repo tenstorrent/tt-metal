@@ -867,3 +867,31 @@
   `659.024 -> 660.214 us` (`+1.189 us`, `+0.18%`) and active time is unchanged
   (`637.981 -> 637.933 us`). The small local saving is not a layer-level win;
   do not retain standalone BF16 `v_beta`.
+
+
+### 2026-07-24 16:05:53 UTC — Reject BF16 k_dec_t on state fidelity
+
+- Hypothesis: `k_dec_t` has the same tile volume as `q_decay`, so BF16 storage
+  should give a comparable bandwidth win, but its direct contribution to the
+  persistent state update makes numerical drift the deciding risk. Mask bit 4
+  (`0x10`) selects `k_dec_t` only.
+- Direct correctness:
+  `QWEN_KDA_PREP_BF16_MASK=0x10 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_chunk_kda.py -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 5/5 in 19.79 s. HiFi4 output PCC is
+  `0.999993-0.999994` and state PCC is `0.999993-0.999995`; the HiFi2 case
+  improves slightly versus control to `0.999921/0.999922`.
+- TP=8 layer correctness:
+  `QWEN_KDA_PREP_BF16_MASK=0x10 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_tp_weights.py::test_tp_layer_pcc -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 1/1 in 6.22 s; output/recurrent/convolution
+  PCC is `0.999964/0.999899/0.999997`. The recurrent-state result crosses below
+  the `0.999900` retention guard despite passing the repository test threshold.
+- Measurement command:
+  `QWEN_KDA_PREP_BF16_MASK=0x10 PERF_TRACE=1 PERF_SEQ=640 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 1/1.
+- Report:
+  `generated/profiler/reports/2026_07_24_16_05_53/ops_perf_results_2026_07_24_16_05_53.csv`
+  (SHA-256 `6eb6e45c802a9da732244c4fafa323d60464e18b0c367da4ab84c4242e6519fd`).
+  Median wall improves `659.024 -> 653.832 us` (`-5.192 us`, `-0.79%`), active
+  time improves `637.981 -> 633.222 us`, and recurrence improves
+  `183.096 -> 178.550 us`. Reject as a retained default because this bandwidth
+  win changes the persistent state beyond the selected fidelity guard.
