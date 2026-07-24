@@ -12,7 +12,7 @@ using namespace tt::tt_metal;
 
 ttnn::Shape squeeze_vector_shape(ttnn::Shape output_shape) {
     if (output_shape.rank() > 4) {
-        ttsl::SmallVector<uint32_t> output_shape_4d(output_shape.rank());
+        ttsl::SmallVector<uint32_t> output_shape_4d(4);
         output_shape_4d[0] = 1;
         int extra_rank = output_shape.size() - 4;
         for (int i = extra_rank; i >= 0; i--) {
