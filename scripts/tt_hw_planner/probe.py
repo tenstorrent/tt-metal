@@ -51,6 +51,7 @@ PIPELINE_CATEGORY = {
     "video-to-video": "Video",
     "automatic-speech-recognition": "STT",
     "audio-to-audio": "STT",
+    "audio-classification": "STT",
     "text-to-speech": "TTS",
     "text-to-audio": "TTS",
     "feature-extraction": "Embed",
@@ -850,11 +851,17 @@ def probe_model(model_id: str) -> ModelProbe:
 
     model_type_category = _category_from_model_type(str(cfg.get("model_type", "")))
     if model_type_category and probe.category in {"LLM", "VLM"} and model_type_category != probe.category:
-        probe.flags.append(
-            f"Reclassified from {probe.category} to {model_type_category} via "
-            f"config.model_type={cfg.get('model_type')!r}"
-        )
-        probe.category = model_type_category
+        # Between LLM and VLM, VLM (the vision-inclusive superset) WINS in either direction: a
+        # visual-question-answering / image-text-to-text tag reveals vision even when model_type is
+        # the text backbone (llama-based VLM), and a VLM model_type reveals vision under a plain
+        # text-generation tag. Never erase the vision signal by demoting VLM->LLM.
+        _reconciled = "VLM" if "VLM" in {probe.category, model_type_category} else model_type_category
+        if _reconciled != probe.category:
+            probe.flags.append(
+                f"Reclassified from {probe.category} to {_reconciled} (LLM/VLM reconcile; VLM wins) "
+                f"via config.model_type={cfg.get('model_type')!r}"
+            )
+            probe.category = _reconciled
     elif model_type_category and probe.category == "Unknown":
         probe.category = model_type_category
 

@@ -460,6 +460,14 @@ def test_audio_markers_distinguish_codec_from_text_embedder():
     assert H({"hidden_size": 768, "vocab_size": 30000}) is False  # text embedder: no audio markers
 
 
+def test_audio_classification_tag_maps_to_stt():
+    # audio-classification is an official HF tag (audio analysis, NOT synthesis) -- it belongs in
+    # the stable tag vocab -> STT (audio-encoder family), not Unknown->LLM->wrongly TTS.
+    from scripts.tt_hw_planner.probe import _classify_category
+
+    assert _classify_category("audio-classification", [], None) == "STT"
+
+
 def test_any_to_any_tag_maps_to_vlm():
     # 'any-to-any' is an official HF pipeline tag (unified multimodal, e.g. omni models);
     # it belongs in the stable tag vocab -> VLM, not an Unknown that forces the LLM residual.
