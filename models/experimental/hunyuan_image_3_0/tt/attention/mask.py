@@ -3,10 +3,17 @@
 #
 # TTNN custom attention mask for HunyuanImage-3.0 (text=causal, image=bidirectional).
 #
-# Built entirely with TTNN ops (no torch): a causal lower-triangular keep-mask,
-# OR'd with a bidirectional block for each image span, then converted to an
-# additive mask (0 = attend, large-negative = masked). Pattern matches the
-# verified reference HunyuanImage3ForCausalMM._prepare_attention_mask_for_generation.
+# A causal lower-triangular keep-mask, OR'd with a bidirectional block for each
+# image span, then converted to an additive mask (0 = attend, large-negative =
+# masked). Pattern matches the verified reference
+# HunyuanImage3ForCausalMM._prepare_attention_mask_for_generation.
+#
+# The mask is built on host (torch) and uploaded once. At long I2I sequence
+# lengths the dense ``[bsz,1,S,S]`` mask is multiple GiB (e.g. ~2.4 GiB bf16 at
+# S≈34.7k); an on-device build via ``ttnn.ones``/``tril``/``matmul`` would hold
+# several such tensors live at once and OOM DRAM next to a resident backbone.
+# Building host-side and doing a single ``from_torch`` upload keeps the device
+# peak to exactly one mask.
 
 import torch
 import ttnn
@@ -32,7 +39,8 @@ def build_attention_mask_tt(
     """Additive attention mask on device, shape [bsz, 1, S, S].
 
     0.0 where a query may attend to a key, `_NEG` where masked. Causal base with
-    every image span made bidirectional. Built with TTNN ops only.
+    every image span made bidirectional. Built on host (torch) and uploaded once
+    (replicated across the mesh) to keep the device peak to a single mask.
 
     Args:
         device:       TTNN device.
@@ -45,10 +53,10 @@ def build_attention_mask_tt(
                       Prefer bf16: SP ``ttnn.pad`` rejects packed dtypes.
 
     Note:
-        Per-batch-distinct spans are supported by passing a list-of-lists; the
-        device path builds each batch row and stacks them.
+        Per-batch-distinct spans are supported by passing a list-of-lists; each
+        batch row is built on host and concatenated before upload.
     """
-    S = seq_len
+    S = int(seq_len)
 
     # Normalise to per-batch span lists.
     if image_slices and isinstance(image_slices[0], list):
@@ -56,9 +64,22 @@ def build_attention_mask_tt(
     else:
         per_batch = [image_slices or []] * bsz
 
-    rows = [_build_one(device, S, spans, dtype) for spans in per_batch]  # each [1,1,S,S]
-    mask = rows[0] if len(rows) == 1 else ttnn.concat(rows, dim=0)
-    return mask
+    # Build the whole additive mask on host, then a single device upload. See the
+    # module header: an on-device ttnn.ones/tril/matmul build holds several
+    # ``[bsz,1,S,S]`` tensors live at once and OOMs at long I2I sequence lengths.
+    host_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    rows = [_build_one_host(S, spans, host_dtype) for spans in per_batch]  # each [1,1,S,S]
+    host = rows[0] if len(rows) == 1 else torch.cat(rows, dim=0)
+
+    multi = hasattr(device, "get_num_devices") and device.get_num_devices() > 1
+    return ttnn.from_torch(
+        host,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device) if multi else None,
+    )
 
 
 def build_attention_mask_tt_sp_sharded(
@@ -138,71 +159,33 @@ def build_attention_mask_tt_sp_sharded(
     )
 
 
-def _build_one(device, S, spans, dtype):
-    """Additive mask for a single batch item -> [1, 1, S, S].
+def _build_one_host(S, spans, host_dtype):
+    """Additive mask for a single batch item -> torch ``[1, 1, S, S]`` on host.
 
-    The dense ``[1,1,S,S]`` working tensors (``ones``/``keep``/``block``/``logical_or``
-    output) are built directly in ``dtype`` — bf16 by default. Since the mask holds only
-    the values ``{0, 1}`` (exact in bf16) and finally ``{0, _NEG}`` (``_NEG`` is chosen to
-    be representable in bf16), this is numerically identical to an fp32 build but halves
-    peak DRAM, which at long S is what OOMs. Index arithmetic stays fp32 because bf16
-    represents integers exactly only up to 256, and token positions here reach tens of
-    thousands — a bf16 ``arange`` would alias positions and corrupt the span membership.
+    ``keep[i,j] = 1`` where query ``i`` may attend key ``j``: causal lower-triangle
+    (``j <= i``) OR'd with a bidirectional block for each image span. Each span is
+    made bidirectional WITHIN itself only — distinct spans must not become mutually
+    visible, so membership is AND'd per span (``q_in & k_in``) rather than combining
+    all spans into one indicator (which would wrongly link a token in span A to one
+    in span B). The result is the additive mask ``{0 where keep, _NEG where masked}``.
+
+    Index arithmetic uses int64 ``arange`` so token positions (tens of thousands) are
+    exact; only the final ``{0, _NEG}`` values are cast to ``host_dtype``. ``_NEG`` is
+    chosen to be representable in bf16.
     """
-    # Big tensors are floating point; if a non-float dtype is requested, build in bf16
-    # and let the final typecast convert.
-    build_dtype = dtype if dtype in (ttnn.bfloat16, ttnn.float32) else ttnn.bfloat16
+    q = torch.arange(S).unsqueeze(1)  # [S,1] query positions
+    keys = torch.arange(S).unsqueeze(0)  # [1,S] key positions
+    keep = keys <= q  # causal base [S,S]
 
-    # Causal keep (1.0 lower-tri incl. diagonal, 0.0 above), built in build_dtype.
-    ones = ttnn.ones([1, 1, S, S], dtype=build_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    keep = ttnn.tril(ones, diagonal=0)
-    ttnn.deallocate(ones)
+    for span in spans or []:
+        s, e = _as_start_stop(span)
+        q_in = (q >= s) & (q < e)  # [S,1]
+        k_in = (keys >= s) & (keys < e)  # [1,S]
+        keep |= q_in & k_in  # bidirectional only within this image span
 
-    if spans:
-        # Each image span is made bidirectional WITHIN itself only — distinct
-        # spans must not become mutually visible. So OR a separate within-span
-        # block per span: block_s[i,j] = v_s[i] * v_s[j], where v_s indicates
-        # membership in span s. (A single combined indicator would wrongly link
-        # token i in span A to token j in span B.)
-        # Index math in fp32 so positions (up to tens of thousands) are exact.
-        idx = ttnn.arange(0, S, 1, dtype=ttnn.float32, device=device)  # [S]
-        idx = ttnn.to_layout(ttnn.reshape(idx, [1, 1, 1, S]), ttnn.TILE_LAYOUT)
-        for span in spans:
-            s, e = _as_start_stop(span)
-            ge = ttnn.ge(idx, float(s))
-            lt = ttnn.lt(idx, float(e))
-            v_s = ttnn.logical_and(ge, lt)  # [1,1,1,S] membership in this span
-            ttnn.deallocate(ge)
-            ttnn.deallocate(lt)
-            # Cast the tiny membership vector to build_dtype so the S×S block (and its
-            # matmul) stay in the low-memory dtype.
-            if v_s.get_dtype() != build_dtype:
-                v_cast = ttnn.typecast(v_s, build_dtype)
-                ttnn.deallocate(v_s)
-                v_s = v_cast
-
-            v_col = ttnn.reshape(v_s, [1, 1, S, 1])
-            # Outer product [S,1]@[1,S] -> [S,S]. Use DRAM: the result is up to
-            # seq_len^2 and must not steal L1 from resident model / emb buffers
-            # (L1-sharded matmul CBs clash once the backbone is loaded).
-            block = ttnn.matmul(v_col, v_s, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(v_col)
-            ttnn.deallocate(v_s)
-
-            new_keep = ttnn.logical_or(keep, block)
-            ttnn.deallocate(keep)
-            ttnn.deallocate(block)
-            keep = new_keep
-        ttnn.deallocate(idx)
-
-    # additive = (1 - keep) * _NEG  ->  0 where keep, _NEG where masked.
-    inv = ttnn.rsub(keep, 1.0)
-    ttnn.deallocate(keep)
-    add = ttnn.multiply(inv, _NEG)
-    ttnn.deallocate(inv)
-
-    if add.get_dtype() != dtype:
-        out = ttnn.typecast(add, dtype)
-        ttnn.deallocate(add)
-        add = out
-    return add
+    add = torch.where(
+        keep,
+        torch.zeros((), dtype=torch.float32),
+        torch.full((), _NEG, dtype=torch.float32),
+    )
+    return add.to(host_dtype).reshape(1, 1, S, S)

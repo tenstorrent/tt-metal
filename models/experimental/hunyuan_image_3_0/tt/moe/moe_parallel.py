@@ -254,6 +254,14 @@ class HunyuanTtMoEParallel(LightweightModule):
         self._expert_torch_weights = None  # free host copy (if any)
 
     def _num_links(self):
+        # Prefer the demo CCLManager link count (usually 1). get_num_links() returns 2 on
+        # BH P300-class meshes; MoE dispatch/combine with 2 links while the rest of the
+        # pipeline uses 1 has left fabric/NOC state that hangs the *next* process in
+        # prefill_combine's CreateGlobalSemaphore (wait_for_outstanding_reads) until a
+        # device reset. Keep MoE on the same link budget as attention/VAE CCL.
+        n = getattr(self.ccl, "num_links", None)
+        if n is not None:
+            return max(1, int(n))
         from models.common.modules.tt_ccl import get_num_links
 
         return max(1, get_num_links(self.mesh_device))
@@ -386,12 +394,18 @@ class HunyuanTtMoEParallel(LightweightModule):
         )
 
         buf, meta = m["dispatch"](xs, scores3, idx3, offsets, m["tt_edt"])
+        # Drain fabric dispatch before the fused expert. unified_routed_expert_moe still
+        # issues NoC-1 DRAM traffic (UP_SPLIT); overlapping that with in-flight fabric CCL
+        # wedges the CQ so the subsequent combine CreateGlobalSemaphore blocks forever in
+        # wait_for_outstanding_reads (cleared only by device reset).
+        ttnn.synchronize_device(md)
         buf_tiled = ttnn.to_layout(ttnn.squeeze(ttnn.squeeze(buf, 0), 0), ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(buf)
         if buf_tiled.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
             buf_tiled = ttnn.to_memory_config(buf_tiled, ttnn.DRAM_MEMORY_CONFIG)  # fused op requires DRAM-interleaved
         self.routed_expert.max_tokens = m["max_tok"]  # per-prefill capacity for the fused op
         eo = self.routed_expert(buf_tiled, counts, region_offsets)
+        ttnn.synchronize_device(md)  # finish expert before combine allocates barrier GlobalSemaphores
         eo = ttnn.unsqueeze(ttnn.unsqueeze(eo, 0), 0)
         comb = m["combine"](eo, meta, counts, region_offsets)
         routed = m["reduce"](comb, weights=scores3, indices=idx3, expert_dispatch_table=m["tt_edt"])

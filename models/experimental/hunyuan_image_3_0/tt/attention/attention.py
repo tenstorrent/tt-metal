@@ -48,7 +48,7 @@ _SDPA_CAUSAL_Q_CHUNK = int(os.environ.get("HY_SDPA_CAUSAL_Q_CHUNK", "512"))
 
 from ..cache import cache_file
 from ..matmul_utils import l1_sharded_linear, to_interleaved_if_sharded
-from ..parallel_utils import resid_mem_config
+from ..parallel_utils import RESID_L1_MAX_SEQ, resid_mem_config
 from .rms_norm import HunyuanTtRMSNorm
 from .rope_2d import HunyuanTtRoPE2D
 
@@ -315,6 +315,13 @@ class HunyuanTtAttention(LightweightModule):
             if _past_k is not None:
                 chunked_kv_continuation = True
                 attn_mc = ttnn.DRAM_MEMORY_CONFIG
+        # Decode: the query is a single row, so resid_mem_config(x.shape[1]=1) always
+        # picks L1 no matter how long the *context* has grown. At long recaption contexts
+        # the L1-resident intermediates + nlp_concat_heads' static CBs overflow core (0,0)
+        # (CB-clash TT_THROW). Gate on the context (KV) length — the mask's last dim — so
+        # we spill to DRAM past the same bound the prefill path uses.
+        elif decode_step and attention_mask is not None and int(attention_mask.shape[-1]) >= RESID_L1_MAX_SEQ:
+            attn_mc = ttnn.DRAM_MEMORY_CONFIG
 
         # ---- 1. Fused QKV projection ----------------------------------------
         # x: [B, S, H]  →  xqkv: [B, S, Q_dim + 2*KV_dim]
