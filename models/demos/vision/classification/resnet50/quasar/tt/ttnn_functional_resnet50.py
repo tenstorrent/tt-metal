@@ -95,7 +95,10 @@ def fit_width_sharded_cores(width_elems, desired_cores, device):
 # Only the bottleneck conv2 (3x3) slices/deadlocks; conv1/conv3/downsample are 1x1 (mm_conv) and run on
 # device. conv1 and conv2 are wired through _conv2d_or_host below (they share the 3-tuple return); to bypass
 # the 1x1s too, wrap their calls the same way (conv3 uses return_output_dim=False -> a 2-tuple return).
-_CONV_ON_DEVICE = {"conv1": True, "conv2": False}
+# Full-model triage: host-bypass EVERY conv (all False) so the split-conv tile-counter reuse limitation
+# (#48552) can't stall the run, and the NON-conv device ops (maxpool, residual add, fc matmul, ...) still
+# execute and stay numerically correct. Flip any single entry to True to put just that conv back on device.
+_CONV_ON_DEVICE = {"stem": False, "conv1": False, "conv2": False, "conv3": False, "downsample": False}
 
 
 def _host_conv2d(
@@ -390,19 +393,19 @@ class resnet50Bottleneck:
                 ),
             }
 
-            ds_out, [self.ds_conv_weight_tensor, self.ds_conv_bias_tensor] = ttnn.experimental.quasar.conv2d(
+            ds_out, _, [self.ds_conv_weight_tensor, self.ds_conv_bias_tensor] = _conv2d_or_host(
+                _CONV_ON_DEVICE["downsample"],
+                "downsample",
                 input_tensor=x,
                 weight_tensor=self.ds_conv_weight_tensor,
                 bias_tensor=self.ds_conv_bias_tensor,
-                **conv_kwargs,
                 compute_config=ttnn.init_device_compute_kernel_config(
                     device.arch(),
                     math_fidelity=self.model_config["MATH_FIDELITY"],
                     packer_l1_acc=packer_l1_accum_enabled,
                 ),
-                return_output_dim=False,
-                return_weights_and_bias=True,
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
+                **conv_kwargs,
             )
             # Mirror the large variant: free the residual input and defragment the
             # downsample output so the following convs have contiguous L1.
@@ -579,19 +582,19 @@ class resnet50Bottleneck:
             ),
         }
 
-        out, [self.conv3_weight_tensor, self.conv3_bias_tensor] = ttnn.experimental.quasar.conv2d(
+        out, _, [self.conv3_weight_tensor, self.conv3_bias_tensor] = _conv2d_or_host(
+            _CONV_ON_DEVICE["conv3"],
+            f"{layer_module}.conv3",
             input_tensor=out,
             weight_tensor=self.conv3_weight_tensor,
             bias_tensor=self.conv3_bias_tensor,
-            **conv_kwargs_3,
             compute_config=ttnn.init_device_compute_kernel_config(
                 device.arch(),
                 math_fidelity=self.model_config["MATH_FIDELITY"],
                 packer_l1_acc=packer_l1_acc,
             ),
-            return_output_dim=False,
-            return_weights_and_bias=True,
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
+            **conv_kwargs_3,
         )
         out = _log_op(f"{layer_module}.conv3", out)
 
@@ -979,7 +982,7 @@ class resnet50:
         # folded 4x4/s1/p0 conv on HOST from the REAL device input + weights so maxpool and all downstream
         # layers still run and stay numerically correct. Flip this bool to go back and forth. Restore to True
         # once the LLK MATH_PACK program-boundary fence lands.
-        on_device = True
+        on_device = _CONV_ON_DEVICE["stem"]
         if on_device:
             (
                 x,
