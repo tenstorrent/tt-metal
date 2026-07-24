@@ -1505,6 +1505,171 @@ def test_issue_42753_regression(device, input_shape, begins, ends, step):
     assert_with_pcc(torch_output, tt_output_torch, 0.99)
 
 
+def test_issue_47602_program_cache_collision_on_shape_change(device):
+    """Back-to-back slice calls with different input shapes must produce correct
+    outputs for both ROW_MAJOR and TILE layouts when the program cache is enabled.
+    """
+    torch.manual_seed(47602)
+
+    def _to_tt(t, layout, device):
+        return ttnn.from_torch(
+            t,
+            dtype=ttnn.bfloat16,
+            layout=layout,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    # ── ROW_MAJOR path ──────────────────────────────────────────────────────
+    small_rm = torch.rand(1, 1, 32, 64, dtype=torch.bfloat16)
+    large_rm = torch.rand(1, 4, 512, 512, dtype=torch.bfloat16)
+
+    tt_small_rm = _to_tt(small_rm, ttnn.ROW_MAJOR_LAYOUT, device)
+    tt_large_rm = _to_tt(large_rm, ttnn.ROW_MAJOR_LAYOUT, device)
+
+    tt_out_small_rm = ttnn.slice(tt_small_rm, [0, 0, 0, 0], [1, 1, 32, 32], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    entries_after_small_rm = device.num_program_cache_entries()
+
+    tt_out_large_rm = ttnn.slice(tt_large_rm, [0, 0, 0, 0], [1, 4, 256, 256], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    entries_after_large_rm = device.num_program_cache_entries()
+
+    assert entries_after_large_rm > entries_after_small_rm, "large RM slice must be a cache-miss, not a hit"
+    assert_with_pcc(small_rm[:, :, :, :32], ttnn.to_torch(tt_out_small_rm), 0.9999)
+    assert_with_pcc(large_rm[:, :, :256, :256], ttnn.to_torch(tt_out_large_rm), 0.9999)
+
+    # ── TILE path ───────────────────────────────────────────────────────────
+    small_tile = torch.rand(1, 1, 32, 64, dtype=torch.bfloat16)
+    large_tile = torch.rand(1, 4, 512, 512, dtype=torch.bfloat16)
+
+    tt_small_tile = _to_tt(small_tile, ttnn.TILE_LAYOUT, device)
+    tt_large_tile = _to_tt(large_tile, ttnn.TILE_LAYOUT, device)
+
+    tt_out_small_tile = ttnn.slice(tt_small_tile, [0, 0, 0, 0], [1, 1, 32, 32], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    entries_after_small_tile = device.num_program_cache_entries()
+
+    tt_out_large_tile = ttnn.slice(tt_large_tile, [0, 0, 0, 0], [1, 4, 256, 256], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    entries_after_large_tile = device.num_program_cache_entries()
+
+    assert entries_after_large_tile > entries_after_small_tile, "large TILE slice must be a cache-miss, not a hit"
+    assert_with_pcc(small_tile[:, :, :, :32], ttnn.to_torch(tt_out_small_tile), 0.9999)
+    assert_with_pcc(large_tile[:, :, :256, :256], ttnn.to_torch(tt_out_large_tile), 0.9999)
+
+
+def test_issue_47602_same_shape_reuses_cache_entry(device):
+    """Same shape called twice must be a cache hit (entry count must not grow).
+
+    Verifies the hash is not over-aggressive: repeated slices with identical
+    inputs, shapes, and slice params reuse the same program rather than
+    compiling a new one each time.
+    """
+    torch.manual_seed(47602)
+
+    torch_input = torch.rand(1, 4, 128, 128, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    ttnn.slice(tt_input, [0, 0, 0, 0], [1, 4, 64, 64], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    entries_after_first = device.num_program_cache_entries()
+
+    ttnn.slice(tt_input, [0, 0, 0, 0], [1, 4, 64, 64], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    entries_after_second = device.num_program_cache_entries()
+
+    assert entries_after_second == entries_after_first, "identical slice must be a cache hit, not a miss"
+
+
+def _run_slice_override_addr_change(device, layout, in_mem_config, out_mem_config, shape, slice_start, slice_end):
+    """Cache-hit hook (override_runtime_arguments) correctness: buffer addresses are excluded from the
+    slice hash, so a second identical-shape slice at a DIFFERENT input address must hit the cache and
+    still produce correct output (re-derived addresses / re-patched sharded CB bases), not stale data."""
+    torch.manual_seed(47828)
+
+    def _make():
+        t = torch.rand(shape, dtype=torch.bfloat16)
+        return t, ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=in_mem_config)
+
+    def _ref(t):
+        return t[
+            slice_start[0] : slice_end[0],
+            slice_start[1] : slice_end[1],
+            slice_start[2] : slice_end[2],
+            slice_start[3] : slice_end[3],
+        ]
+
+    torch_a, tt_a = _make()
+    tt_out_a = ttnn.slice(tt_a, slice_start, slice_end, memory_config=out_mem_config)
+    entries_after_first = device.num_program_cache_entries()
+    assert_with_pcc(_ref(torch_a), ttnn.to_torch(tt_out_a), 0.9999)
+
+    # Keep A alive so B is forced to a different buffer address; the second slice must be a cache HIT.
+    torch_b, tt_b = _make()
+    assert tt_b.buffer_address() != tt_a.buffer_address(), "second input must land at a different address"
+    tt_out_b = ttnn.slice(tt_b, slice_start, slice_end, memory_config=out_mem_config)
+    assert device.num_program_cache_entries() == entries_after_first, "identical-shape slice must be a cache hit"
+    assert_with_pcc(_ref(torch_b), ttnn.to_torch(tt_out_b), 0.9999)
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+    ids=["rm", "tile"],
+)
+def test_slice_override_addr_change_interleaved(device, layout):
+    """override_runtime_arguments re-derives input/output buffer addresses on a cache hit (RM + TILE)."""
+    _run_slice_override_addr_change(
+        device,
+        layout,
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.DRAM_MEMORY_CONFIG,
+        (1, 4, 128, 128),
+        [0, 0, 0, 0],
+        [1, 4, 64, 64],
+    )
+
+
+def test_slice_override_addr_change_rm_height_sharded(device):
+    """override_runtime_arguments re-patches the sharded CB base addresses on a cache hit for the
+    CB-bound height-sharded RM factory (the factory the removed get_dynamic_runtime_args special-cased)."""
+    n, c, h, w = 16, 128, 128, 16
+    num_cores_x, num_cores_y = 8, 7
+    ncores = num_cores_x * num_cores_y
+    grid_coord = ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    c_out, h_out = 115, 115
+
+    def _make():
+        t = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+        in_shard = ttnn.ShardSpec(shard_grid, ((n * c * h + ncores - 1) // ncores, w), ttnn.ShardOrientation.ROW_MAJOR)
+        in_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in_shard)
+        tt = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_cfg)
+        return t, tt
+
+    out_shard = ttnn.ShardSpec(
+        shard_grid, ((n * c_out * h_out + ncores - 1) // ncores, w), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    out_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, out_shard)
+
+    torch_a, tt_a = _make()
+    tt_out_a = ttnn.slice(tt_a, (0, 0, 0, 0), (n, c_out, h_out, w), memory_config=out_cfg)
+    entries_after_first = device.num_program_cache_entries()
+    assert_equal(torch_a[:n, :c_out, :h_out, :], ttnn.to_torch(ttnn.to_memory_config(tt_out_a, ttnn.L1_MEMORY_CONFIG)))
+
+    torch_b, tt_b = _make()  # A kept alive → B at a different L1 address
+    assert tt_b.buffer_address() != tt_a.buffer_address(), "second input must land at a different address"
+    tt_out_b = ttnn.slice(tt_b, (0, 0, 0, 0), (n, c_out, h_out, w), memory_config=out_cfg)
+    # Correctness on the re-allocated (different-address) input is what matters here. The RM
+    # height-sharded factory may re-key on the new address (pre-existing over-keying, unrelated to this
+    # migration, which does not change compute_program_hash); allow bounded growth rather than assert a hit.
+    assert (
+        device.num_program_cache_entries() <= entries_after_first + 1
+    ), "sharded slice cache entries grew unexpectedly"
+    assert_equal(torch_b[:n, :c_out, :h_out, :], ttnn.to_torch(ttnn.to_memory_config(tt_out_b, ttnn.L1_MEMORY_CONFIG)))
+
+
 @pytest.mark.parametrize(
     "shape, slice_start, slice_end",
     [
@@ -1534,3 +1699,26 @@ def test_slice_rm_nd_misaligned_last_dim(device, shape, slice_start, slice_end):
         slice_start[4] : slice_end[4],
     ]
     assert_with_pcc(torch_expected, ttnn.to_torch(tt_output), 0.9999)
+
+
+# 258112 exercises last_chunk_size < chunk_size (256 B tail); 262144 exercises the exact-divisor branch (last_chunk_size == chunk_size).
+@pytest.mark.parametrize("last_dim", [258112, 262144])
+def test_slice_rm_wide_row_chunking(device, last_dim):
+    """RM slice with a last-dim row wider than the double-buffered CB L1 budget."""
+    begins = [0, 2, 0]
+    ends = [6, 3, last_dim]
+    step = [1, 1, 1]
+
+    torch_input = torch.rand([6, 3, last_dim], dtype=torch.float32)
+    torch_output = torch_input[0:6, 2:3, 0:last_dim]
+
+    ttnn_input = ttnn.from_torch(
+        torch_input,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.float32,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn_output = ttnn.slice(ttnn_input, begins, ends, step, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    assert torch.equal(torch_output, ttnn.to_torch(ttnn_output))

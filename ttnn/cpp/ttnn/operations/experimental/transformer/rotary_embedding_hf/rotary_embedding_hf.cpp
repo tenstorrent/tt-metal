@@ -8,10 +8,10 @@
 
 namespace ttnn::prim {
 
-tt::tt_metal::Tensor rotary_embedding_hf(
-    const tt::tt_metal::Tensor& input,
-    const tt::tt_metal::Tensor& cos,
-    const tt::tt_metal::Tensor& sin,
+ttnn::Tensor rotary_embedding_hf(
+    const ttnn::Tensor& input,
+    const ttnn::Tensor& cos,
+    const ttnn::Tensor& sin,
     bool is_decode_mode,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     ttnn::DeviceComputeKernelConfig compute_kernel_config);

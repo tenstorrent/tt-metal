@@ -4,7 +4,7 @@
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -65,14 +65,17 @@ void kernel_main() {
         uint32_t u;
     } one;
     one.f = 1.0f;
-    fill_cb_with_value(cb_id_one, one.u);
+    DataflowBuffer dfb_one(cb_id_one);
+    fill_cb_with_value(dfb_one, one.u);
 
     if (do_mask_h) {
-        generate_mask_h(cb_id_mask_h, mask_h);
+        DataflowBuffer dfb_mask_h(cb_id_mask_h);
+        generate_mask_h(dfb_mask_h, mask_h);
     }
 
     if (do_mask_w) {
-        generate_mask_w(cb_id_mask_w, mask_w);
+        DataflowBuffer dfb_mask_w(cb_id_mask_w);
+        generate_mask_w(dfb_mask_w, mask_w);
     }
 
     // output_grad
@@ -88,18 +91,18 @@ void kernel_main() {
     const auto rstd_addrg = TensorAccessor(rstd_args, rstd_addr);
 
     Noc noc;
-    CircularBuffer cb_output_grad(cb_id_output_grad);
-    CircularBuffer cb_input(cb_id_input);
-    CircularBuffer cb_mean(cb_id_mean);
-    CircularBuffer cb_rstd(cb_id_rstd);
+    DataflowBuffer dfb_output_grad(cb_id_output_grad);
+    DataflowBuffer dfb_input(cb_id_input);
+    DataflowBuffer dfb_mean(cb_id_mean);
+    DataflowBuffer dfb_rstd(cb_id_rstd);
 
     const auto output_grad_tile_bytes = get_tile_size(cb_id_output_grad);
     const auto input_tile_bytes = get_tile_size(cb_id_input);
     const auto mean_tile_bytes = get_tile_size(cb_id_mean);
     const auto rstd_tile_bytes = get_tile_size(cb_id_rstd);
 
-    const auto mean_l1_write_ptr = cb_mean.get_write_ptr();
-    const auto rstd_l1_write_ptr = cb_rstd.get_write_ptr();
+    const auto mean_l1_write_ptr = dfb_mean.get_write_ptr();
+    const auto rstd_l1_write_ptr = dfb_rstd.get_write_ptr();
 
     uint32_t mean_rstd_n_idx, mean_rstd_g_idx;
     uint32_t mean_rstd_tile_h_idx, mean_rstd_tile_w_idx;
@@ -116,24 +119,24 @@ void kernel_main() {
 
             // output_grad (N, C, H, W)
             output_grad_tile_idx = n_idx * CHtWt + c_idx * HtWt + htwt_idx + tile_offset;
-            cb_output_grad.reserve_back(onetile);
+            dfb_output_grad.reserve_back(onetile);
             noc.async_read(
                 output_grad_addrg,
-                cb_output_grad,
+                dfb_output_grad,
                 output_grad_tile_bytes,
                 {.page_id = output_grad_tile_idx},
                 {.offset_bytes = 0});
             noc.async_read_barrier();
-            cb_output_grad.push_back(onetile);
+            dfb_output_grad.push_back(onetile);
 
             if (gamma_grad_has_value) {
                 // input (N, C, H, W)
                 input_tile_idx = output_grad_tile_idx;
-                cb_input.reserve_back(onetile);
+                dfb_input.reserve_back(onetile);
                 noc.async_read(
-                    input_addrg, cb_input, input_tile_bytes, {.page_id = input_tile_idx}, {.offset_bytes = 0});
+                    input_addrg, dfb_input, input_tile_bytes, {.page_id = input_tile_idx}, {.offset_bytes = 0});
                 noc.async_read_barrier();
-                cb_input.push_back(onetile);
+                dfb_input.push_back(onetile);
 
                 // mean, rstd (1, 1, N, num_groups)
                 // mean_rstd_idx = n * num_groups + g
@@ -154,26 +157,26 @@ void kernel_main() {
                     get_tilized_idx(mean_rstd_h_idx_in_tile, mean_rstd_w_idx_in_tile, TILE_H, TILE_W);
 
                 // mean (1, 1, N, num_groups)
-                cb_mean.reserve_back(onetile);
+                dfb_mean.reserve_back(onetile);
                 noc.async_read(
-                    mean_addrg, cb_mean, mean_tile_bytes, {.page_id = mean_rstd_tile_idx}, {.offset_bytes = 0});
+                    mean_addrg, dfb_mean, mean_tile_bytes, {.page_id = mean_rstd_tile_idx}, {.offset_bytes = 0});
                 noc.async_read_barrier();
                 if (tilized_mean_rstd_idx_in_tile != 0) {
                     CoreLocalMem<uint16_t> mean_ptr(mean_l1_write_ptr);
                     mean_ptr[0] = mean_ptr[tilized_mean_rstd_idx_in_tile];
                 }
-                cb_mean.push_back(onetile);
+                dfb_mean.push_back(onetile);
 
                 // rstd (1, 1, N, num_groups)
-                cb_rstd.reserve_back(onetile);
+                dfb_rstd.reserve_back(onetile);
                 noc.async_read(
-                    rstd_addrg, cb_rstd, rstd_tile_bytes, {.page_id = mean_rstd_tile_idx}, {.offset_bytes = 0});
+                    rstd_addrg, dfb_rstd, rstd_tile_bytes, {.page_id = mean_rstd_tile_idx}, {.offset_bytes = 0});
                 noc.async_read_barrier();
                 if (tilized_mean_rstd_idx_in_tile != 0) {
                     CoreLocalMem<uint16_t> rstd_ptr(rstd_l1_write_ptr);
                     rstd_ptr[0] = rstd_ptr[tilized_mean_rstd_idx_in_tile];
                 }
-                cb_rstd.push_back(onetile);
+                dfb_rstd.push_back(onetile);
             }  // gamma_grad_has_value
 
         }  // inner_idx loop

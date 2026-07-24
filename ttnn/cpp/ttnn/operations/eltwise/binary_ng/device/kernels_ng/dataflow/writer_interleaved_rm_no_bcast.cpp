@@ -6,10 +6,8 @@
 #include "api/alignment.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
-#include "api/core_local_mem.h"
-
 void kernel_main() {
     uint32_t index = 0;
     const uint32_t dst_addr = get_arg_val<uint32_t>(index++);
@@ -33,7 +31,7 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<0>();
 
     Noc noc;
-    CircularBuffer cb_out(cb_id_out);
+    DataflowBuffer dfb_out(cb_id_out);
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_id_out);
     constexpr uint32_t tile_hw = get_tile_hw(cb_id_out);
@@ -77,22 +75,20 @@ void kernel_main() {
                                 (stride_size_bytes < bytes_left_in_row) ? stride_size_bytes : bytes_left_in_row;
                             const uint32_t current_write_len = align(current_chunk_bytes, alignment);
 
-                            cb_out.wait_front(1);
+                            dfb_out.wait_front(1);
 
-                            uint32_t l1_read_addr = cb_out.get_read_ptr();
                             for (uint32_t row = 0; row < limit; ++row) {
                                 const uint32_t row_abs_idx = row_block_base_row + row;
                                 noc.async_write(
-                                    CoreLocalMem<uint32_t>(l1_read_addr),
+                                    dfb_out,
                                     dst,
                                     current_write_len,
-                                    {},
+                                    {.offset_bytes = row * current_chunk_bytes},
                                     {.page_id = row_abs_idx, .offset_bytes = current_chunk_offset});
-                                l1_read_addr += current_chunk_bytes;
                             }
 
                             noc.async_write_barrier();
-                            cb_out.pop_front(1);
+                            dfb_out.pop_front(1);
                         }
 
                         row_blocks_written++;

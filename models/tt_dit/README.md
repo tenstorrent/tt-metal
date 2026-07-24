@@ -10,6 +10,7 @@ For detailed information about each model including performance metrics, usage i
 - **[Flux 1](models/Flux1.md)** - Text-to-image generation (schnell & dev variants)
 - **[Motif](models/Motif.md)** - Text-to-image generation model
 - **[Qwen-Image](models/QwenImage.md)** - Text-to-image generation model
+- **[Ideogram 4.0](models/Ideogram4.md)** - Text-to-image generation model (best-in-class typography; Blackhole)
 - **[Mochi-1](models/Mochi_1.md)** - Video generation model
 - **[Wan2.2-T2V-A14B](models/Wan2_2.md)** - Text-to-video generation model
 - See **[experimental/](experimental/)** for in-progress model variants (AniSora, Wan2.2-Distill, LoRA adapters)
@@ -121,7 +122,8 @@ python -m pytest models/tt_dit/tests/models/motif/test_pipeline_motif.py -v
 python -m pytest models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py -v
 python -m pytest models/tt_dit/tests/models/mochi/test_pipeline_mochi.py -v
 python -m pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -v
-python -m pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx.py -v
+python -m pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py -v
+python -m pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_two_stages.py -v
 ```
 
 ## Key Features

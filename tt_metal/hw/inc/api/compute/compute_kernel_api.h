@@ -55,11 +55,13 @@
 #include "ckernel_sfpu_sigmoid.h"
 #include "ckernel_sfpu_silu.h"
 #include "ckernel_sfpu_tanh.h"
+#include "ckernel_sfpu_square.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
-#include "llk_math_eltwise_binary_sfpu_binop.h"
+#include "ckernel_sfpu_binary.h"
 #include "llk_math_eltwise_binary_sfpu_add_int.h"
 #include "llk_math_eltwise_binary_sfpu_mul_int.h"
 #include "llk_math_eltwise_binary_sfpu_binary_comp.h"
+#include "ckernel_sfpu_topk.h"
 #endif
 #define MATH(...) __VA_ARGS__
 #else
@@ -222,6 +224,39 @@ ALWI void tanh_tile(uint32_t idst) {
 #else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_tanh, (8 /* ITERATIONS */), idst, ::ckernel::VectorMode::RC));
+#endif
+}
+
+// clang-format off
+/**
+ * Performs element-wise computation of square value on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void square_tile(uint32_t idst) {
+#ifndef ARCH_QUASAR
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (APPROX), idst, VectorMode::RC));
+#else
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (SFPU_ITERATIONS), idst, VectorMode::RC));
+#endif
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void square_tile_init() {
+#ifndef ARCH_QUASAR
+    MATH(SFPU_UNARY_INIT(square));
+#else
+    MATH(SFPU_UNARY_INIT(square, sfpu::init_square));
 #endif
 }
 
@@ -454,29 +489,6 @@ ALWI void sign_tile_init() { MATH(SFPU_UNARY_INIT(sign)); }
 
 // clang-format off
 /**
- * Performs element-wise computation of square value on each element of a tile
- * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
- * available on the compute engine.
- *
- * Return value: None
- *
- * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
- * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- */
-// clang-format on
-ALWI void square_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (APPROX), idst, VectorMode::RC));
-}
-
-/**
- * Please refer to documentation for any_init.
- */
-ALWI void square_tile_init() { MATH(SFPU_UNARY_INIT(square)); }
-
-// clang-format off
-/**
  * Performs element-wise multiplication on each row of a tile.
  * The DST register buffer must be in
  * acquired state via *acquire_dst* call. This call is blocking and is only
@@ -656,6 +668,8 @@ ALWI void silu_tile_pack(uint32_t idst) {
 }
 ALWI void silu_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (APPROX))); }
 
+#endif  // !ARCH_QUASAR — TopK below is all-arch
+
 // topK local sort
 // clang-format off
 /**
@@ -810,6 +824,8 @@ ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, in
  * Please refer to documentation for any_init.
  */
 ALWI void topk_tile_init() { MATH(SFPU_UNARY_INIT_FN(topk_local_sort, sfpu::topk_init, (true /* APPROXIMATE */))); }
+
+#ifndef ARCH_QUASAR  // BH/WH-only ops below
 
 // clang-format off
 /**

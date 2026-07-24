@@ -28,8 +28,9 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 template <typename T>
 HostTensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T pad_value) {
     auto buffer_dtype = convert_to_data_type<T>();
-    auto buffer_spec =
-        TensorSpec(spec.logical_shape(), TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config()));
+    auto buffer_spec = TensorSpec(
+        spec.logical_shape(),
+        TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config(), spec.tensor_layout().get_alignment()));
 
     size_t volume = spec.logical_shape().volume();
 
@@ -43,9 +44,9 @@ HostTensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T p
         TT_FATAL(spec.layout() == Layout::TILE, "Block float types are only supported in TILE layout");
     }
 
-    auto host_buffer = HostBuffer(tensor_impl::encode_tensor_data(tt::stl::make_const_span(buffer), spec, pad_value));
+    auto host_buffer = HostBuffer(tensor_impl::encode_tensor_data(ttsl::make_const_span(buffer), spec, pad_value));
 
-    auto res = HostTensor(std::move(host_buffer), buffer_spec, TensorTopology{});
+    auto res = HostTensor::from_buffer(std::move(host_buffer), buffer_spec, TensorTopology{});
     return to_dtype(res, spec.data_type());
 }
 
@@ -73,7 +74,7 @@ HostTensor HostTensor::from_borrowed_data(
     auto buffer_dtype = convert_to_data_type<T>();
     TensorSpec tensor_spec(shape, TensorLayout(buffer_dtype, PageConfig(Layout::ROW_MAJOR, tile), MemoryConfig{}));
 
-    return HostTensor(std::move(host_buffer), std::move(tensor_spec), TensorTopology{});
+    return HostTensor::from_buffer(std::move(host_buffer), std::move(tensor_spec), TensorTopology{});
 }
 
 template <typename T>
@@ -91,15 +92,16 @@ HostTensor HostTensor::from_vector(std::vector<T>&& buffer, const TensorSpec& sp
     }
 
     auto buffer_dtype = convert_to_data_type<T>();
-    auto buffer_spec =
-        TensorSpec(spec.logical_shape(), TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config()));
+    auto buffer_spec = TensorSpec(
+        spec.logical_shape(),
+        TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config(), spec.tensor_layout().get_alignment()));
 
     auto host_buffer =
         logical_matches_physical(buffer_spec)
             ? HostBuffer(std::move(buffer))
             : HostBuffer(tensor_impl::encode_tensor_data(ttsl::make_const_span(buffer), spec, pad_value));
 
-    auto res = HostTensor(std::move(host_buffer), buffer_spec, TensorTopology{});
+    auto res = HostTensor::from_buffer(std::move(host_buffer), buffer_spec, TensorTopology{});
     return to_dtype(res, spec.data_type());
 }
 

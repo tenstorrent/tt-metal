@@ -15,7 +15,7 @@ jobs:
     # Skip for PRs from forks — the GITHUB_TOKEN lacks write access to the
     # base repo's pull requests in that context, causing a 403 on pulls.update.
     if: github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - name: Update PR Description
         uses: actions/github-script@v7
@@ -37,7 +37,7 @@ jobs:
             const pipelines = [
               { name: "Sanity tests",                  workflow: "sanity-tests.yaml",               optional: false },
               { name: "(Runtime) Sanity tests",         workflow: "runtime-sanity-tests.yaml",     optional: false },
-              { name: "Blackhole post-commit",          workflow: "blackhole-post-commit.yaml",      optional: false },
+              { name: "Blackhole Sanity tests",        workflow: "blackhole-sanity-tests.yaml",     optional: false },
               { name: "L2 Nightly",                    workflow: "tt-metal-l2-nightly.yaml",        optional: false },
               { name: "All Model Tests",               workflow: "all-model-tests.yaml",            optional: true  },
               { name: "(Single) Choose your pipeline", workflow: "pipeline-select.yaml",            optional: true  },

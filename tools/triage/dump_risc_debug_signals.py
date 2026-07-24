@@ -73,7 +73,7 @@ def collect_debug_bus_signals(
     location: OnChipCoordinate, failed_riscs: list[str], dispatcher_data: DispatcherData, elfs_cache: ElfsCache
 ) -> dict | None:
     """Collect debug bus signals for a block with known broken RISC cores."""
-    noc_block = location._device.get_block(location)
+    noc_block = location.device.get_block(location)
 
     debug_bus = noc_block.debug_bus
     assert debug_bus is not None, "Block does not have a debug bus"

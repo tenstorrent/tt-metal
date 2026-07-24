@@ -5,7 +5,7 @@
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 inline uint32_t get_read_tile_id(uint32_t output_tile_id, uint32_t reduce_tile_size, uint32_t inner_tile_size) {
@@ -37,16 +37,16 @@ void kernel_main() {
     const auto input_addrg = TensorAccessor(input_args, input_addr);
 
     Noc noc;
-    CircularBuffer cb_in0_obj(cb_id_in0);
+    DataflowBuffer dfb_in0_obj(cb_id_in0);
     const auto in0_tile_bytes = get_tile_size(cb_id_in0);
 
     for (uint32_t i = start_id; i < start_id + num_output_tiles; i++) {
         auto read_tile_id = (dim == 0) ? (i) : (get_read_tile_id(i, reduce_tile_size, inner_tile_size));
         for (uint32_t j = 0; j < num_input_tiles; ++j) {
-            cb_in0_obj.reserve_back(onetile);
-            noc.async_read(input_addrg, cb_in0_obj, in0_tile_bytes, {.page_id = read_tile_id}, {.offset_bytes = 0});
+            dfb_in0_obj.reserve_back(onetile);
+            noc.async_read(input_addrg, dfb_in0_obj, in0_tile_bytes, {.page_id = read_tile_id}, {.offset_bytes = 0});
             noc.async_read_barrier();
-            cb_in0_obj.push_back(onetile);
+            dfb_in0_obj.push_back(onetile);
             read_tile_id += inner_tile_size;
         }
     }

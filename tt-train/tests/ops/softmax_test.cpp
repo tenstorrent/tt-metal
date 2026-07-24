@@ -51,14 +51,14 @@ TEST_F(SoftmaxTest, DISABLED_SoftmaxTest_Batch) {
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     xt::xarray<float> input_tensor =
-        ttml::test_utils::make_uniform_xarray<float, shape_type, true>(shape, -10.0F, 10.0F, seed);
+        ttml::test_utils::make_uniform_xarray<float, shape_type>(shape, -10.0F, 10.0F, seed);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
 
     ttnn::Tensor ttml_softmax = ttml::metal::softmax(input, dim);
     auto ttml_softmax_xtensor = core::to_xtensor(ttml_softmax);
 
-    tt::tt_metal::Tensor ttnn_softmax = ttnn_fixed::softmax(input, dim);
+    ttnn::Tensor ttnn_softmax = ttnn_fixed::softmax(input, dim);
     auto ttnn_softmax_xtensor = core::to_xtensor(ttnn_softmax);
 
     // Host side reference using FP32 and xtensor
@@ -109,7 +109,7 @@ TEST_F(SoftmaxTest, NIGHTLY_SoftmaxTest_Huge_Batch) {
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     xt::xarray<float> input_tensor =
-        ttml::test_utils::make_uniform_xarray<float, shape_type, true>(shape, -10.0F, 10.0F, seed);
+        ttml::test_utils::make_uniform_xarray<float, shape_type>(shape, -10.0F, 10.0F, seed);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
 
@@ -172,7 +172,7 @@ TEST_F(SoftmaxTest, SoftmaxTest_Large_Values) {
     ttnn::Tensor ttml_softmax = ttml::metal::softmax(input, dim);
     auto ttml_softmax_xtensor = core::to_xtensor(ttml_softmax);
 
-    tt::tt_metal::Tensor ttnn_softmax = ttnn_fixed::softmax(input, dim);
+    ttnn::Tensor ttnn_softmax = ttnn_fixed::softmax(input, dim);
     auto ttnn_softmax_xtensor = core::to_xtensor(ttnn_softmax);
 
     // Host side reference using FP32 and xtensor

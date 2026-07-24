@@ -117,12 +117,12 @@ RingAttentionAllGatherAsyncDeviceOperation::compute_output_specs(
     const auto& input_tensors = tensor_args.input_tensor;
     const auto& input_tensor = input_tensors[0];
     auto shape = input_tensor.logical_shape();
-    std::vector<ttnn::TensorSpec> output_specs;
+    std::vector<tt::tt_metal::TensorSpec> output_specs;
     output_specs.reserve(input_tensors.size());
     for (const auto& input_item : input_tensors) {
         auto shape = input_item.logical_shape();
         shape[operation_attributes.dim] *= operation_attributes.ring_size;
-        output_specs.push_back(TensorSpec(
+        output_specs.push_back(tt::tt_metal::TensorSpec(
             shape,
             TensorLayout(
                 input_tensor.dtype(),
@@ -152,25 +152,6 @@ RingAttentionAllGatherAsyncDeviceOperation::create_output_tensors(
         output_tensors.emplace_back(create_device_tensor(output_spec, input_tensors[0].device()));
     }
     return output_tensors;
-}
-
-ttsl::hash::hash_t RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash is called");
-
-    auto subdevice_id = operation_attributes.sub_device_id;
-    auto* mesh_device = tensor_args.input_tensor.at(0).device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    return tt::tt_metal::operation::hash_operation<RingAttentionAllGatherAsyncDeviceOperation>(
-        operation_attributes.dim,
-        operation_attributes.num_links,
-        operation_attributes.ring_size,
-        operation_attributes.output_mem_config,
-        operation_attributes.topology,
-        operation_attributes.cluster_axis,
-        subdevice_core_range_set,
-        tensor_args);
 }
 
 std::tuple<RingAttentionAllGatherAsyncParams, RingAttentionAllGatherAsyncInputs>

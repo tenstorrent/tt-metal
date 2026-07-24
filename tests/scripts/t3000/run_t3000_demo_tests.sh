@@ -68,29 +68,12 @@ run_t3000_sd35large_tests() {
   run_t3000_dit_tests "models/tt_dit/tests/models/sd35/test_pipeline_sd35.py -k 2x4cfg1sp0tp1"
 }
 
-run_t3000_flux1_tests() {
-  run_t3000_dit_tests "models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k 2x4sp0tp1-dev"
-}
-
 run_t3000_motif_tests() {
   run_t3000_dit_tests "models/tt_dit/tests/models/motif/test_pipeline_motif.py -k 2x4cfg0sp0tp1"
 }
 
 run_t3000_qwenimage_tests() {
   run_t3000_dit_tests "models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py -k 2x4"
-}
-
-run_t3000_qwen3_vl_tests() {
-  # install qwen3_vl requirements
-  uv pip install -r models/demos/qwen3_vl/requirements.txt
-
-  # export PYTEST_ADDOPTS for concise pytest output
-  export PYTEST_ADDOPTS="--tb=short"
-
-  # Qwen3-VL-32B
-  qwen3_vl_32b=Qwen/Qwen3-VL-32B-Instruct
-  tt_cache_32b=$TT_CACHE_HOME/$qwen3_vl_32b
-  MESH_DEVICE=T3K HF_MODEL=$qwen3_vl_32b TT_CACHE_PATH=$tt_cache_32b pytest models/demos/qwen3_vl/demo/demo.py --timeout 600
 }
 
 run_t3000_wan22_tests() {
@@ -100,7 +83,7 @@ run_t3000_wan22_tests() {
 
   echo "LOG_METAL: Running run_t3000_wan22_tests"
 
-  export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+  export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE" VBENCH_CACHE_DIR="/mnt/MLPerf/vbench" TORCH_HOME="/mnt/MLPerf/vbench/torch_hub"
   NO_PROMPT=1 pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "2x4sp0tp1 and resolution_480p and not bf8_lofi" --timeout 1500; fail+=$?
 
   # Record the end time
@@ -145,9 +128,6 @@ run_t3000_tests() {
 
   # Run sd35_large tests
   run_t3000_sd35large_tests
-
-  # Run flux1 tests
-  run_t3000_flux1_tests
 
   # Run motif tests
   run_t3000_motif_tests

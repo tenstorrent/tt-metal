@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include <api/dataflow/dataflow_api.h>
+#include "api/dataflow/dataflow_buffer.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
@@ -30,7 +31,7 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<8>();
     const auto s0 = TensorAccessor(dst_args, dst_addr);
 
-    experimental::CB out_cb(cb_id_out0);
+    DataflowBuffer out_dfb(cb_id_out0);
     Noc noc;
 
     constexpr uint32_t in_width = width / scale_w;
@@ -42,7 +43,7 @@ void kernel_main() {
     uint32_t current_stick = block_height * start_block_id;
 
     for (uint32_t b = start_block_id; b < end_block_id; b++) {
-        out_cb.wait_front(num_tiles_per_block_row);
+        out_dfb.wait_front(num_tiles_per_block_row);
 
         for (uint32_t in_block_row = 0; in_block_row < block_height; ++in_block_row) {
             uint32_t curr_index = current_stick % (in_width * in_height);
@@ -62,12 +63,16 @@ void kernel_main() {
                     uint32_t offset = j * width + k;
 
                     noc.async_write(
-                        out_cb, s0, output_page_size, {.offset_bytes = read_offset}, {.page_id = start_index + offset});
+                        out_dfb,
+                        s0,
+                        output_page_size,
+                        {.offset_bytes = read_offset},
+                        {.page_id = start_index + offset});
                 }
             }
             current_stick++;
         }
         noc.async_write_barrier();
-        out_cb.pop_front(num_tiles_per_block_row);
+        out_dfb.pop_front(num_tiles_per_block_row);
     }
 }

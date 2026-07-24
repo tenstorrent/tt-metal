@@ -6,7 +6,10 @@ Utilities for KVPE cache initialization and management.
 """
 
 import socket
+from dataclasses import dataclass
+from enum import Enum
 
+import torch
 from loguru import logger
 
 import ttnn
@@ -19,6 +22,213 @@ NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
 # disaggregation address-table striding must both use the device's actual count to stay consistent.
 BH_NUM_DRAM_BANKS = 8
 PREFILL_CHUNK_OUTPUT_TOKENS = 5 * 1024
+
+
+class MlaKvCacheFormat(str, Enum):
+    """Physical encodings supported by the persistent MLA cache."""
+
+    BFP8_TILE = "bfp8_tile"
+    BF16_RM = "bf16_rm"
+    SCALED_FP8 = "scaled_fp8"
+
+    @property
+    def storage_dtype(self):
+        return {
+            MlaKvCacheFormat.BFP8_TILE: ttnn.bfloat8_b,
+            MlaKvCacheFormat.BF16_RM: ttnn.bfloat16,
+            MlaKvCacheFormat.SCALED_FP8: ttnn.fp8_e4m3,
+        }[self]
+
+    @property
+    def storage_layout(self):
+        return ttnn.TILE_LAYOUT if self == MlaKvCacheFormat.BFP8_TILE else ttnn.ROW_MAJOR_LAYOUT
+
+    def storage_width(self, geometry: "MlaKvCacheGeometry") -> int:
+        return geometry.packed_row_bytes if self == MlaKvCacheFormat.SCALED_FP8 else geometry.logical_width
+
+    @property
+    def sparse_sdpa_format(self):
+        try:
+            return {
+                MlaKvCacheFormat.BF16_RM: ttnn.transformer.SparseKVFormat.BF16,
+                MlaKvCacheFormat.SCALED_FP8: ttnn.transformer.SparseKVFormat.SCALED_FP8,
+            }[self]
+        except KeyError as error:
+            raise ValueError(f"{self} is not a sparse-SDPA cache format") from error
+
+
+@dataclass(frozen=True)
+class MlaKvCacheGeometry:
+    """Logical MLA dimensions and the packed scaled-FP8 row they imply."""
+
+    latent_dim: int
+    rope_dim: int
+
+    SCALE_BLOCK_SIZE = 128
+    SCALE_ELEMENT_BYTES = 4
+    ROPE_ELEMENT_BYTES = 2
+    PACKED_FIELD_ADDRESS_UNIT_BYTES = 16
+
+    @classmethod
+    def from_config(cls, config) -> "MlaKvCacheGeometry":
+        return cls(latent_dim=config.kv_lora_rank, rope_dim=config.qk_rope_head_dim)
+
+    def __post_init__(self) -> None:
+        if self.latent_dim <= 0 or self.rope_dim <= 0:
+            raise ValueError("MLA KV cache dimensions must be positive")
+
+    @property
+    def logical_width(self) -> int:
+        return self.latent_dim + self.rope_dim
+
+    @property
+    def num_scales(self) -> int:
+        block_size = self.SCALE_BLOCK_SIZE
+        if self.latent_dim % block_size != 0:
+            raise ValueError(f"scaled MLA KV latent dimension {self.latent_dim} must be a multiple of {block_size}")
+        return self.latent_dim // block_size
+
+    @property
+    def scale_bytes(self) -> int:
+        return self.num_scales * self.SCALE_ELEMENT_BYTES
+
+    @property
+    def rope_offset_bytes(self) -> int:
+        return self.latent_dim + self.scale_bytes
+
+    @property
+    def packed_row_bytes(self) -> int:
+        return self.rope_offset_bytes + self.rope_dim * self.ROPE_ELEMENT_BYTES
+
+    def validate_scaled(self) -> None:
+        if self.rope_offset_bytes % self.PACKED_FIELD_ADDRESS_UNIT_BYTES != 0:
+            raise ValueError(
+                f"scaled MLA KV RoPE offset {self.rope_offset_bytes} must be "
+                f"{self.PACKED_FIELD_ADDRESS_UNIT_BYTES}-byte aligned"
+            )
+
+
+@dataclass(frozen=True)
+class MlaKvCache:
+    """Persistent storage paired with the encoding of its physical rows.
+
+    Logical MLA values are ``[latent || RoPE]``. Homogeneous formats store that
+    row directly; scaled FP8 stores latent bytes, FP32 scales, and BF16 RoPE in
+    one mixed-format row. Physical operations use ``storage`` as a bare tensor.
+    """
+
+    format: MlaKvCacheFormat
+    storage: ttnn.Tensor
+    geometry: MlaKvCacheGeometry
+
+    def __post_init__(self) -> None:
+        if self.format == MlaKvCacheFormat.SCALED_FP8:
+            self.geometry.validate_scaled()
+        dtype = self.format.storage_dtype
+        layout = self.format.storage_layout
+        width = self.format.storage_width(self.geometry)
+        if self.storage.dtype != dtype:
+            raise ValueError(f"{self.format} cache must use {dtype}, got {self.storage.dtype}")
+        if self.storage.layout != layout:
+            raise ValueError(f"{self.format} cache must use {layout}, got {self.storage.layout}")
+        if self.storage.shape[-1] != width:
+            raise ValueError(f"{self.format} cache width must be {width}, got {self.storage.shape[-1]}")
+
+    def pack(
+        self,
+        latent: ttnn.Tensor,
+        rope: ttnn.Tensor,
+        *,
+        intermediates: dict[str, ttnn.Tensor] | None = None,
+    ) -> ttnn.Tensor:
+        """Encode logical values for a physical cache write without mutating storage."""
+        if latent.shape[-1] != self.geometry.latent_dim or rope.shape[-1] != self.geometry.rope_dim:
+            raise ValueError(
+                f"MLA KV inputs must be latent width {self.geometry.latent_dim} and RoPE width "
+                f"{self.geometry.rope_dim}, got {latent.shape[-1]} and {rope.shape[-1]}"
+            )
+        if self.format == MlaKvCacheFormat.SCALED_FP8:
+            return self._pack_scaled_fp8(latent, rope, intermediates=intermediates)
+        packed = ttnn.concat([latent, rope], dim=-1)
+        if packed.layout != self.storage.layout:
+            converted = ttnn.to_layout(packed, self.storage.layout)
+            ttnn.deallocate(packed)
+            packed = converted
+        if packed.dtype != self.storage.dtype:
+            converted = ttnn.typecast(packed, self.storage.dtype)
+            ttnn.deallocate(packed)
+            packed = converted
+        if intermediates is not None:
+            intermediates["tt_kvpe"] = ttnn.clone(packed)
+        return packed
+
+    def _pack_scaled_fp8(
+        self, latent: ttnn.Tensor, rope: ttnn.Tensor, *, intermediates: dict[str, ttnn.Tensor] | None
+    ) -> ttnn.Tensor:
+        latent_rm = ttnn.to_layout(latent, ttnn.ROW_MAJOR_LAYOUT)
+        latent_fp8, scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+            latent_rm, round_scale_to_power_of_two=True
+        )
+        if latent_rm is not latent:
+            ttnn.deallocate(latent_rm)
+        rope_rm = ttnn.to_layout(rope, ttnn.ROW_MAJOR_LAYOUT)
+        packed = ttnn.experimental.deepseek_prefill.pack_scaled_fp8_kv_cache(latent_fp8, scales, rope_rm)
+        if intermediates is not None:
+            reconstructed = ttnn.experimental.deepseek_prefill.per_token_cast_back(
+                latent_fp8, scales, output_dtype=ttnn.bfloat16
+            )
+            intermediates["tt_kvpe"] = ttnn.concat([reconstructed, rope_rm], dim=-1)
+            ttnn.deallocate(reconstructed)
+            intermediates["tt_kvpe_latent"] = ttnn.clone(latent_fp8)
+            intermediates["tt_kvpe_scales"] = ttnn.clone(scales)
+            intermediates["tt_kvpe_rope"] = ttnn.clone(rope_rm)
+            intermediates["tt_kvpe_packed"] = ttnn.clone(packed)
+        ttnn.deallocate(latent_fp8)
+        ttnn.deallocate(scales)
+        if rope_rm is not rope:
+            ttnn.deallocate(rope_rm)
+        return packed
+
+    def unpack_host(self, physical: torch.Tensor) -> torch.Tensor:
+        """Decode host physical rows into logical BF16 [latent || RoPE] values."""
+        if self.format == MlaKvCacheFormat.SCALED_FP8:
+            return reconstruct_scaled_fp8_kv_cache(physical, self.geometry)
+        return physical.to(torch.bfloat16)
+
+
+def unpack_scaled_fp8_kv_cache(
+    packed: torch.Tensor, geometry: MlaKvCacheGeometry
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Decode a host copy of the packed sparse-MLA cache without interpreting its mixed fields as FP8.
+
+    ``ttnn.to_torch`` preserves the packed tensor's FP8 bytes. Re-viewing that storage as uint8 lets the
+    scale and RoPE fields be reconstructed using their native dtypes. Returns FP8 latent values widened
+    to float32, FP32 scales, and BF16 RoPE values.
+    """
+    geometry.validate_scaled()
+    if packed.shape[-1] != geometry.packed_row_bytes:
+        raise ValueError(f"packed sparse KV width must be {geometry.packed_row_bytes}, got {packed.shape[-1]}")
+
+    prefix = packed.shape[:-1]
+    raw = packed.contiguous().view(torch.uint8)
+    latent = (
+        raw[..., : geometry.latent_dim].contiguous().view(packed.dtype).reshape(*prefix, geometry.latent_dim).float()
+    )
+    scales = (
+        raw[..., geometry.latent_dim : geometry.rope_offset_bytes]
+        .contiguous()
+        .view(torch.float32)
+        .reshape(*prefix, geometry.num_scales)
+    )
+    rope = raw[..., geometry.rope_offset_bytes :].contiguous().view(torch.bfloat16).reshape(*prefix, geometry.rope_dim)
+    return latent, scales, rope
+
+
+def reconstruct_scaled_fp8_kv_cache(packed: torch.Tensor, geometry: MlaKvCacheGeometry) -> torch.Tensor:
+    """Reconstruct the logical BF16 ``[scaled latent || RoPE]`` cache from packed host bytes."""
+    latent, scales, rope = unpack_scaled_fp8_kv_cache(packed, geometry)
+    scaled = latent * scales.repeat_interleave(geometry.SCALE_BLOCK_SIZE, dim=-1)
+    return torch.cat((scaled.to(torch.bfloat16), rope), dim=-1)
 
 
 def get_num_dram_banks(mesh_device):
@@ -136,7 +346,7 @@ def create_kv_chunk_address_table_ds(
         logger.debug(
             f"Rank: {rank} Populating device_group_index: {group_idx} with positions: {device_position_indices_low_strip[row]} and {device_position_indices_high_strip[row]}"
         )
-        (current_position, max_position) = device_position_indices_low_strip[row]
+        current_position, max_position = device_position_indices_low_strip[row]
         for layer in range(num_layers):
             layer_current_position = current_position
             layer_max_position = max_position
@@ -162,7 +372,7 @@ def create_kv_chunk_address_table_ds(
                     assert (
                         layer_current_position == layer_max_position + 1
                     ), f"Missmatch in position calculation. Expected layer current_position to be {layer_max_position + 1}, but it is: {layer_current_position}."
-                    (layer_current_position, layer_max_position) = device_position_indices_high_strip[row]
+                    layer_current_position, layer_max_position = device_position_indices_high_strip[row]
 
     return lookup_table
 
@@ -187,6 +397,51 @@ def create_kv_chunk_address_table_kimi(
         lookup_table: Populated KvChunkAddressTable
     """
     lookup_table = ttnn.experimental.disaggregation.KvChunkAddressTable(config)
+    return populate_kv_chunk_address_table_kimi(
+        lookup_table=lookup_table,
+        config=config,
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        seq_len=seq_len,
+        sp_axis=sp_axis,
+        tt_kvpe_cache=tt_kvpe_cache,
+        chunk_size_bytes=chunk_size_bytes,
+        num_users=num_users,
+        config_id=0,
+    )
+
+
+def populate_kv_chunk_address_table_kimi(
+    lookup_table,
+    config,
+    mesh_device,
+    mesh_shape,
+    seq_len,
+    sp_axis,
+    tt_kvpe_cache,
+    chunk_size_bytes,
+    num_users=1,
+    config_id=0,
+):
+    """
+    Populate ONE config (``config_id``) of an existing KvChunkAddressTable from a device cache tensor.
+
+    Factored out of create_kv_chunk_address_table_kimi so a single multi-config table can hold several
+    caches at once (the serving convention is config 0 = the MLA KVPE cache, config 1 = the block-cyclic
+    index-key cache); each config carries its own grid + chunk_size_bytes and is addressed by config_id.
+    The device-group
+    side table and fabric-node host map are SHARED across configs — re-registering them here per config is
+    safe (add_device_group dedups identical replica sets; set_fabric_node_host is idempotent).
+
+    Args:
+        lookup_table: an existing KvChunkAddressTable (single- or multi-config).
+        config: the KvChunkAddressTableConfig for THIS config_id (read for num_layers).
+        config_id: which config of the table to populate (default 0, the single-config case).
+        (remaining args as in create_kv_chunk_address_table_kimi)
+
+    Returns:
+        lookup_table: the same table, with config_id populated.
+    """
     host_name = socket.gethostname()
 
     rank = ttnn.distributed_context_get_rank()
@@ -249,7 +504,7 @@ def create_kv_chunk_address_table_kimi(
                         location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
                         location.size_bytes = chunk_size_bytes
                         location.device_group_index = group_idx
-                        lookup_table.set(layer, position, slot, location)
+                        lookup_table.set(layer, position, slot, location, config_id)
 
                         curr_bank_id = (curr_bank_id + 1) % num_dram_banks
                         if curr_bank_id == 0:
@@ -314,22 +569,14 @@ def init_kvpe_cache(
     # num_users; a device kernel zeros it instead with no host transfer. Allocating
     # directly in the requested dtype/layout also sidesteps the mesh-mapper from_torch
     # path that forces TILE for fp8_e4m3 (so fp8 rides on ROW_MAJOR).
-    #
-    # fp8_e4m3 can't be DRAMZeroFill'd directly: its compute kernel needs fp32_dest_acc_en
-    # whenever an 8-bit-float CB is on-core (Blackhole TT_FATAL), so for fp8 we allocate +
-    # zero in bf16 and typecast on device (still no host transfer; typecast keeps the
-    # ROW_MAJOR layout and the ND shard spec).
-    is_fp8 = dtype == ttnn.fp8_e4m3
     tt_kvpe_cache = ttnn.allocate_tensor_on_device(
         ttnn.Shape([num_users * num_layers, 1, seq_len_local, kvpe_cache_head_dim]),
-        ttnn.bfloat16 if is_fp8 else dtype,
+        dtype,
         layout,
         mesh_device,
         kv_mem_config,
     )
     DRAMZeroFill.op(tt_kvpe_cache)
-    if is_fp8:
-        tt_kvpe_cache = ttnn.typecast(tt_kvpe_cache, ttnn.fp8_e4m3)
 
     # allocate_tensor_on_device assigns a default 2D fully-replicated topology, but the rest
     # of the model produces replicated tensors via ReplicateTensorToMesh, which is a 1D
@@ -344,3 +591,60 @@ def init_kvpe_cache(
     tt_kvpe_cache.update_tensor_topology(ttnn.TensorTopology(dist_shape, placements, coords))
 
     return tt_kvpe_cache
+
+
+def init_mla_kv_cache(
+    *,
+    cache_format: MlaKvCacheFormat,
+    hf_config,
+    mesh_device,
+    seq_len,
+    mesh_shape,
+    sp_axis,
+    num_kvpe_cache_layers,
+    num_users=1,
+) -> MlaKvCache:
+    """Allocate and zero a persistent MLA cache in the selected physical format.
+
+    Homogeneous formats store the config-derived logical row directly. Scaled FP8 owns one
+    ND-sharded mixed-format row per token. Physical DRAM usage is derived from the tensor's
+    aligned page size, not the logical row width.
+    """
+    cache_format = MlaKvCacheFormat(cache_format)
+    geometry = MlaKvCacheGeometry.from_config(hf_config)
+    if cache_format == MlaKvCacheFormat.SCALED_FP8:
+        geometry.validate_scaled()
+    storage = init_kvpe_cache(
+        kvpe_cache_head_dim=cache_format.storage_width(geometry),
+        dtype=cache_format.storage_dtype,
+        layout=cache_format.storage_layout,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=num_kvpe_cache_layers,
+        num_users=num_users,
+    )
+    return MlaKvCache(format=cache_format, storage=storage, geometry=geometry)
+
+
+def allocate_mla_kvpe_cache(
+    *, mesh_device, hf_config, max_seq_len, mesh_shape, sp_axis, num_layers, num_users
+) -> MlaKvCache:
+    """Allocate the MLA KVPE cache for one runtime from the HF config.
+
+    The MLA per-token cache row is ``qk_rope_head_dim + kv_lora_rank`` wide; ONE
+    shared cache holds ``num_users * num_layers`` user-major slots of
+    ``max_seq_len`` each. Shared by ``TtPrefillRuntime`` (its default allocator)
+    and the MLA model adapter, so the MLA KV layout has one definition.
+    """
+    return init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
+        hf_config=hf_config,
+        mesh_device=mesh_device,
+        seq_len=max_seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=num_layers,
+        num_users=num_users,
+    )

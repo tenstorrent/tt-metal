@@ -5,8 +5,8 @@
 from typing import List
 
 from fuser.block_data import BlockData
+from fuser.fpu_node import FpuNode
 from fuser.fused_loop import FusedLoop, LoopBlock
-from fuser.fused_math import ComputeNode
 from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
 
@@ -28,12 +28,12 @@ class MatmulNoMopFpu(MatmulFpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         stage = operation.stage_id
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
-        transpose = "true" if compute_unit.unpack_transpose_faces.value else "false"
+        transpose = compute_unit.unpack_transpose_faces.cpp_enum_value
         rt_dim = block.block_tiles_y
         ct_dim = block.block_tiles_x
 
@@ -54,7 +54,7 @@ class MatmulNoMopFpu(MatmulFpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
@@ -74,7 +74,7 @@ class MatmulNoMopFpu(MatmulFpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         return "_llk_math_matmul_uninit_no_mop_();\n"

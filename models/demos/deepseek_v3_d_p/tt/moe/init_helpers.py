@@ -211,8 +211,12 @@ class ExpertMapping:
             num_dispatch_groups: Number of parallel dispatch groups
 
         Returns:
-            expert_dispatch_table: Shape (num_dispatch_groups, num_routed_experts)
-                Values are logical chip IDs (0 to dispatch_group_size-1) or -1 if not present
+            expert_dispatch_table: Shape (num_dispatch_groups, num_routed_experts + 1)
+                Values are logical chip IDs (0 to dispatch_group_size-1) or -1 if not present.
+                The trailing sentinel column (index num_routed_experts) is always -1: padding-aware
+                routing sentinel-marks padded tokens with expert id == num_routed_experts, so the
+                dispatch reader's unguarded table[idx] lookup maps them to -1 (skip). masked_bincount
+                only reads indices < num_routed_experts, so the extra column is harmless there.
 
         Example:
             # num_chips=8, dispatch_group_size=4, num_dispatch_groups=2, num_routed_experts=16
@@ -228,7 +232,10 @@ class ExpertMapping:
         experts_per_group = num_routed_experts // num_dispatch_groups
         experts_per_chip = experts_per_group // dispatch_group_size  # Experts per chip within each group
 
-        table = torch.full((num_dispatch_groups, num_routed_experts), -1, dtype=torch.int32)
+        # Width is num_routed_experts + 1: the extra trailing column is the padding sentinel
+        # (always -1). Padded tokens carry expert id == num_routed_experts and the dispatch reader
+        # looks them up unguarded, so they map to -1 and are skipped.
+        table = torch.full((num_dispatch_groups, num_routed_experts + 1), -1, dtype=torch.int32)
         for group in range(num_dispatch_groups):
             group_start = group * experts_per_group
             group_end = group_start + experts_per_group
@@ -336,7 +343,9 @@ def get_gate_outputs(
         seq_len_per_chip: Sequence length per chip
         num_experts_per_tok: Number of experts each token routes to
         expert_dispatch_table: Expert to chip mapping table
-            Shape: (num_dispatch_groups, num_routed_experts). If None, computed internally.
+            Shape: (num_dispatch_groups, num_routed_experts) or, with padding awareness,
+            (num_dispatch_groups, num_routed_experts + 1) where the trailing sentinel column
+            (index num_routed_experts, always -1) is ignored here. If None, computed internally.
 
     Returns:
         expert_offsets: Base offset for each expert from each chip (sparse per group)
@@ -359,6 +368,10 @@ def get_gate_outputs(
             dispatch_group_size=dispatch_group_size,
             num_dispatch_groups=num_dispatch_groups,
         )
+
+    # Drop the padding sentinel column (index num_routed_experts, always -1) if present, so the
+    # rest of the body operates at width num_routed_experts and matches expert_counter_dense.
+    expert_dispatch_table = expert_dispatch_table[:, :num_routed_experts]
 
     # Count tokens per expert per chip (dense)
     expert_counter_dense = torch.zeros((dispatch_group_size, num_routed_experts), dtype=torch.int32)
@@ -426,6 +439,8 @@ def compute_constants(
     dispatch_group_size,
     dispatch_buffer_capacity_factor,
     experts_per_chip_override: int | None = None,
+    emb_dim: int | None = None,
+    fp8_scaled_input: bool = False,
 ):
     """
     Compute derived constants for MoE configuration.
@@ -445,6 +460,10 @@ def compute_constants(
             Required when simulating one Galaxy column on a single-column LB
             mesh: the table indexes 256 global expert IDs but only 8 of them
             physically live on each chip (not 256/8=32).
+        emb_dim: Embedding (hidden) dimension. Only required when fp8_scaled_input
+            is True, to size the per-token fp32 scale tail in the metadata.
+        fp8_scaled_input: If True, each token appends its emb_dim/128 fp32 scales
+            (bit-cast int32) after the 3 routing fields, growing metadata_len.
 
     Returns:
         experts_per_chip: Number of experts per chip
@@ -463,7 +482,11 @@ def compute_constants(
         experts_per_chip = experts_per_chip_override
     else:
         experts_per_chip = num_routed_experts // num_devices
-    metadata_len = 5  # chip, token, topk_idx, routed_expert, weight
+    metadata_len = 3  # chip, token, topk_idx
+    if fp8_scaled_input:
+        # Each token appends its emb_dim/128 fp32 scales (bit-cast int32) after the 3 routing fields.
+        assert emb_dim is not None, "emb_dim is required when fp8_scaled_input is True"
+        metadata_len += emb_dim // 128
 
     # TODO: For now, we are ignoring the num_experts_per_tok, but it will be needed once
     # we support replicated experts (See Issue #41293)

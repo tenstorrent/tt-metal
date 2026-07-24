@@ -2,7 +2,7 @@ name: "[internal] ops sanity tests impl"
 
 # Runs the ops-team sanity bucket. Invoked from PR/sanity-stage gates
 # (sanity-tests.yaml) and the blackhole nightly debug path
-# (blackhole-post-commit.yaml). Reads
+# (blackhole-sanity-tests.yaml). Reads
 # tests/pipeline_reorg/ops_sanity_tests.yaml and budgets under
 # ops.sanity.<sku>.
 
@@ -42,7 +42,7 @@ on:
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:

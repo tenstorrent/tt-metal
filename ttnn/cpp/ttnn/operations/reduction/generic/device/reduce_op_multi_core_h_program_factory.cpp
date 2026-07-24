@@ -83,11 +83,10 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     // reduction via SFPU mul_unary_tile inside the compute kernel.
     const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
 
-    // Int32 max/min use the SFPU reduce path (GMPOOL has no Int32 support).
-    // The host already lowers reduce_min to math_op=MAX + negate=true (see reduce_op.cpp::reduce_min),
-    // so this single check covers both MAX and MIN.
-    const bool use_sfpu_reduce_path = a.dtype() == DataType::INT32 && operation_attributes.math_op == ReduceOpMath::MAX;
-    const bool use_fpu_negate = operation_attributes.negate && !use_sfpu_reduce_path;
+    // Int32 max/min/sum use the SFPU reduce path; fp32 SUM only for the accurate mean opt-in.
+    const bool is_sfpu_reduce =
+        use_sfpu_reduce_path(a.dtype(), operation_attributes.math_op, operation_attributes.use_sfpu_reduce);
+    const bool use_fpu_negate = operation_attributes.negate && !is_sfpu_reduce;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto num_cols = NC * Wt;
@@ -354,8 +353,14 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     if (use_post_mul) {
         reduce_defines["REDUCE_POST_MUL"] = "1";
     }
+    // Accurate fp32 mean: route Float32 SUM through the SFPU (needs 32-bit DEST)
+    const bool fp32_sfpu_reduce = is_sfpu_reduce && a.dtype() == DataType::FLOAT32 && fp32_dest_acc_en;
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    // UnpackToDestFp32 unpacks c_0 straight into the fp32 DEST, bypassing the SrcA tf32 truncation.
+    if (fp32_sfpu_reduce) {
+        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    }
 
     KernelDescriptor reader_desc;
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -372,7 +377,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         reader_desc.compile_time_args = reader_compile_time_args;
         reader_desc.defines = {reduce_defines.begin(), reduce_defines.end()};
     } else if (use_width_sharding) {
-        std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, src1_cb_index, scaler_cb_index, scaler_bits};
+        std::vector<uint32_t> reader_compile_time_args = {
+            src0_cb_index, src1_cb_index, scaler_cb_index, scaler_bits, fp32_sfpu_reduce ? 1u : 0u};
         std::map<std::string, std::string> reader_defines;
         reader_defines["REDUCE_SCALER"] = "1";
         // Pass DEST config so reader can compute DEST_AUTO_LIMIT
@@ -385,7 +391,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         reader_desc.compile_time_args = reader_compile_time_args;
         reader_desc.defines = {reader_defines.begin(), reader_defines.end()};
     } else {
-        std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, scaler_bits, /*use_welford=*/0};
+        std::vector<uint32_t> reader_compile_time_args = {
+            Ht, Wt, HtWt, scaler_bits, /*use_welford=*/0, fp32_sfpu_reduce ? 1u : 0u};
         TensorAccessorArgs(a).append_to(reader_compile_time_args);
 
         // Pass DEST config so reader can compute DEST_AUTO_LIMIT
@@ -441,10 +448,11 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         compute_kernel_args_group_1 = build_rm_compute_ct_args(plan, plan.Ht_rm, post_mul_scaler_bits);
     } else {
         compute_kernel_args_group_1 = {
-            Ht,                    // Ht
-            compute_Wt,            // Wt
-            compute_NC,            // NC
-            post_mul_scaler_bits,  // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
+            Ht,                          // Ht
+            compute_Wt,                  // Wt
+            compute_NC,                  // NC
+            post_mul_scaler_bits,        // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
+            fp32_sfpu_reduce ? 1u : 0u,  // enable_fp32_sfpu: route Float32 SUM through the SFPU
         };
     }
 
@@ -478,10 +486,11 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
                 use_width_sharding ? (num_cols_per_core_group_2 / NC) : num_cols_per_core_group_2;
             uint32_t compute_NC_group_2 = use_width_sharding ? NC : 1;
             compute_kernel_args_group_2 = {
-                Ht,                    // Ht
-                compute_Wt_group_2,    // Wt
-                compute_NC_group_2,    // NC
-                post_mul_scaler_bits,  // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
+                Ht,                          // Ht
+                compute_Wt_group_2,          // Wt
+                compute_NC_group_2,          // NC
+                post_mul_scaler_bits,        // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
+                fp32_sfpu_reduce ? 1u : 0u,  // enable_fp32_sfpu: route Float32 SUM through the SFPU
             };
         }
 

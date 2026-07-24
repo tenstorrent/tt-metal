@@ -143,7 +143,7 @@ HostMemDeviceCommand build_packed_large_write_command(
     HostMemDeviceCommand cmd(command_size_bytes);
 
     // Build data spans pointing to the generated payloads
-    std::vector<tt::stl::Span<const uint8_t>> data_spans;
+    std::vector<ttsl::Span<const uint8_t>> data_spans;
     data_spans.reserve(payloads.size());
 
     for (const auto& payload : payloads) {
@@ -178,7 +178,7 @@ HostMemDeviceCommand build_packed_large_unicast_write_command(
     HostMemDeviceCommand cmd(command_size_bytes);
 
     // Build data spans pointing to the generated payloads
-    std::vector<tt::stl::Span<const uint8_t>> data_spans;
+    std::vector<ttsl::Span<const uint8_t>> data_spans;
     data_spans.reserve(payloads.size());
 
     for (const auto& payload : payloads) {
@@ -1121,7 +1121,8 @@ public:
         }
 
         const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
-        const uint32_t l1_buf_base = memmap.dispatch_buffer_base();
+        // CQ0: this is a slow-dispatch (SD) test with no real command queue.
+        const uint32_t l1_buf_base = memmap.dispatch_buffer_base(/*cq_id=*/0);
         const uint32_t dispatch_buffer_pages = memmap.dispatch_buffer_pages();
         const uint32_t dispatch_buffer_size = dispatch_buffer_pages * page_size;
 

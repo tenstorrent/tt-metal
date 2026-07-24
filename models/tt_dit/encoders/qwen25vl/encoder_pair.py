@@ -108,6 +108,7 @@ class Qwen25VlTokenizerEncoderPair:
             subfolder=subfolder if subfolder is not None else "",
             parallel_config=self._parallel_config,
             mesh_shape=tuple(self._device.shape),
+            mesh_device=self._device,
             is_fsdp=self._is_fsdp,
         )
 
@@ -129,6 +130,7 @@ class Qwen25VlTokenizerEncoderPair:
             subfolder=self._encoder_subfolder if self._encoder_subfolder is not None else "",
             parallel_config=self._parallel_config,
             mesh_shape=tuple(self._device.shape),
+            mesh_device=self._device,
             is_fsdp=self._is_fsdp,
         )
 

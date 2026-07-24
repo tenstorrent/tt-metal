@@ -4,7 +4,7 @@
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -49,41 +49,42 @@ void kernel_main() {
     auto momentum_in = TensorAccessor(momentum_in_args, momentum_in_addr);
 #endif
 
-    fill_cb_with_value(cb_scalar_args, lr);
-    fill_cb_with_value(cb_scalar_args, momentum);
-    fill_cb_with_value(cb_scalar_args, dampening);
-    fill_cb_with_value(cb_scalar_args, weight_decay);
-    fill_cb_with_value(cb_scalar_args, one);
+    DataflowBuffer dfb_scalar_args_obj(cb_scalar_args);
+    fill_cb_with_value(dfb_scalar_args_obj, lr);
+    fill_cb_with_value(dfb_scalar_args_obj, momentum);
+    fill_cb_with_value(dfb_scalar_args_obj, dampening);
+    fill_cb_with_value(dfb_scalar_args_obj, weight_decay);
+    fill_cb_with_value(dfb_scalar_args_obj, one);
 
     Noc noc;
-    CircularBuffer cb_param_in_obj(cb_param_in);
-    CircularBuffer cb_grad_obj(cb_grad);
+    DataflowBuffer dfb_param_in_obj(cb_param_in);
+    DataflowBuffer dfb_grad_obj(cb_grad);
     const auto param_in_tile_bytes = get_tile_size(cb_param_in);
     const auto grad_tile_bytes = get_tile_size(cb_grad);
 #if defined(MOMENTUM) && defined(MOMENTUM_INITIALIZED)
-    CircularBuffer cb_momentum_in_obj(cb_momentum_in);
+    DataflowBuffer dfb_momentum_in_obj(cb_momentum_in);
     const auto momentum_in_tile_bytes = get_tile_size(cb_momentum_in);
 #endif
 
     uint32_t curr_tile = tile_offset;
 
     for (uint32_t i = 0; i < num_tiles; i += onetile) {
-        cb_param_in_obj.reserve_back(onetile);
-        noc.async_read(param_in, cb_param_in_obj, param_in_tile_bytes, {.page_id = curr_tile}, {.offset_bytes = 0});
+        dfb_param_in_obj.reserve_back(onetile);
+        noc.async_read(param_in, dfb_param_in_obj, param_in_tile_bytes, {.page_id = curr_tile}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_param_in_obj.push_back(onetile);
+        dfb_param_in_obj.push_back(onetile);
 
-        cb_grad_obj.reserve_back(onetile);
-        noc.async_read(grad, cb_grad_obj, grad_tile_bytes, {.page_id = curr_tile}, {.offset_bytes = 0});
+        dfb_grad_obj.reserve_back(onetile);
+        noc.async_read(grad, dfb_grad_obj, grad_tile_bytes, {.page_id = curr_tile}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_grad_obj.push_back(onetile);
+        dfb_grad_obj.push_back(onetile);
 
 #if defined(MOMENTUM) && defined(MOMENTUM_INITIALIZED)
-        cb_momentum_in_obj.reserve_back(onetile);
+        dfb_momentum_in_obj.reserve_back(onetile);
         noc.async_read(
-            momentum_in, cb_momentum_in_obj, momentum_in_tile_bytes, {.page_id = curr_tile}, {.offset_bytes = 0});
+            momentum_in, dfb_momentum_in_obj, momentum_in_tile_bytes, {.page_id = curr_tile}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_momentum_in_obj.push_back(onetile);
+        dfb_momentum_in_obj.push_back(onetile);
 #endif
         curr_tile++;
     }

@@ -43,11 +43,22 @@ jobs:
     permissions:
       pull-requests: write
       contents: write # to allow posting inline PR review suggestions and auto-closing conversations
+    env:
+      CCACHE_S3_BUCKET: ccache
+      CCACHE_S3_PREFIX: tt-metal
+      CCACHE_S3_READONLY: "false"
+      CCACHE_S3_DEBUG: "false"
     container:
       image: ${{ inputs.ci-build-docker-image }}
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
+        CCACHE_COMPRESS: "true"
+        CCACHE_COMPRESSLEVEL: "3"
+        # Log ccache operations to a file so remote storage errors are visible in CI.
+        # Errors (storage helper failures, S3 timeouts) would otherwise be silent.
+        CCACHE_LOGFILE: /tmp/ccache.log
+        CCACHE_BASEDIR: /work
       volumes:
         - ${{ github.workspace }}:/work
         # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
@@ -62,31 +73,61 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: Check Redis credentials
+      - name: Configure S3 ccache storage
         # Failing internal jobs draws attention immediately so we can fix them and make them fast.
         # Forks will never have secrets; don't fail the job for them, they'll just run slower
         if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
-          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
-            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
+          if [ -z "${{ secrets.GARAGE_S3_ACCESS_KEY }}" ] || [ -z "${{ secrets.GARAGE_S3_SECRET_KEY }}" ]; then
+            echo "Garage S3 credentials are missing. Did you forget 'secrets: inherit'?"
             exit 1
           fi
-          # Conditionally set this here so that it remains unset on forks,
-          # otherwise it resolves an invalid URL and the job fails
-          REDIS_USER="${{ vars.REDIS_USER }}"
-          REDIS_PASSWORD="${{ secrets.REDIS_PASSWORD }}"
-          REDIS_HOST="${{ vars.REDIS_HOST }}"
-          REDIS_PORT="${{ vars.REDIS_PORT }}"
-          # ccache 4.13 bug: read-only is std::optional<bool>; the write gate checks
-          # `if (entry.config.read_only)` which is true whenever the optional HAS a value —
-          # including when that value is false.  Omit the property entirely unless we
-          # actually want read-only mode; ccache's default when absent is writable.
-          CCACHE_REMOTE_STORAGE="redis://${REDIS_USER}:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}"
-          if [ "${{ vars.REDIS_IS_READONLY }}" = "true" ]; then
+          echo "AWS_ACCESS_KEY_ID=${{ secrets.GARAGE_S3_ACCESS_KEY }}" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.GARAGE_S3_SECRET_KEY }}" >> $GITHUB_ENV
+          echo "AWS_DEFAULT_REGION=garage" >> $GITHUB_ENV
+          CCACHE_REMOTE_STORAGE="s3://${CCACHE_S3_BUCKET}|region=garage|prefix=${CCACHE_S3_PREFIX}|endpoint_url=http://garage.garage.svc.cluster.local:3900"
+          if [ "${CCACHE_S3_READONLY}" = "true" ]; then
             CCACHE_REMOTE_STORAGE="${CCACHE_REMOTE_STORAGE}|read-only=true"
           fi
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
+          if [ "${CCACHE_S3_DEBUG}" = "true" ]; then
+            echo "CRSH_LOGFILE=/tmp/ccache-storage-s3.log" >> $GITHUB_ENV
+          fi
+          echo "AWS_ENDPOINT_URL_S3=http://garage.garage.svc.cluster.local:3900" >> $GITHUB_ENV
+
+      - name: Verify S3 connectivity (write / read-back / delete)
+        # NOTE: this probe is intentionally NON-FATAL. ccache treats the remote
+        # cache as a soft dependency (remote errors degrade to local misses), so a
+        # transient Garage hiccup must not turn into a hard build failure. We warn
+        # and continue rather than `exit 1`. The probe is purely diagnostic.
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        run: |
+          # Use a per-job unique key so concurrent jobs (this is a reusable workflow
+          # invoked by many pipelines against the same bucket/prefix) don't clobber
+          # each other's PUT/GET/DELETE windows and cause spurious 404 read-backs.
+          KEY=".s3-connectivity-test-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${RANDOM}"
+          BASE="http://garage.garage.svc.cluster.local:3900/${CCACHE_S3_BUCKET}/${CCACHE_S3_PREFIX}/${KEY}"
+          PAYLOAD="ccache-s3-connectivity-ok"
+          SIGV4="aws:amz:garage:s3"
+          CREDS="${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}"
+          probe() {
+            # PUT
+            echo "${PAYLOAD}" | curl -fsS -X PUT --aws-sigv4 "${SIGV4}" --user "${CREDS}" \
+              "${BASE}" --data-binary @- -o /dev/null || return 1
+            # GET and verify
+            local result
+            result=$(curl -fsS --aws-sigv4 "${SIGV4}" --user "${CREDS}" "${BASE}") || return 1
+            [ "${result}" = "${PAYLOAD}" ] || { echo "Read-back mismatch: got '${result}'"; return 1; }
+            # DELETE (best effort cleanup)
+            curl -fsS -X DELETE --aws-sigv4 "${SIGV4}" --user "${CREDS}" "${BASE}" -o /dev/null || true
+            return 0
+          }
+          if probe; then
+            echo "S3 connectivity verified: write/read-back/delete all OK"
+          else
+            echo "::warning::S3 connectivity probe failed; ccache will degrade remote misses to local. Continuing."
+          fi
 
       - name: Configure ctcache
         # Same fork gate as ccache: forks have no secrets so skip silently.
@@ -109,7 +150,7 @@ jobs:
             echo "AWS_ACCESS_KEY_ID=${{ secrets.GARAGE_S3_ACCESS_KEY }}"
             echo "AWS_SECRET_ACCESS_KEY=${{ secrets.GARAGE_S3_SECRET_KEY }}"
             echo "AWS_ENDPOINT_URL=http://garage.garage.svc.cluster.local:3900"
-            echo "AWS_DEFAULT_REGION=us-east-1"
+            echo "AWS_DEFAULT_REGION=garage"
             echo "HTTP_PROXY=http://proxy.restricted-proxy.svc.cluster.local:3128"
             echo "HTTPS_PROXY=http://proxy.restricted-proxy.svc.cluster.local:3128"
           } >> "$GITHUB_ENV"
@@ -130,7 +171,7 @@ jobs:
           AWS_ACCESS_KEY_ID="${{ secrets.GARAGE_S3_ACCESS_KEY }}" \
           AWS_SECRET_ACCESS_KEY="${{ secrets.GARAGE_S3_SECRET_KEY }}" \
           AWS_ENDPOINT_URL="http://garage.garage.svc.cluster.local:3900" \
-          AWS_DEFAULT_REGION="us-east-1" \
+          AWS_DEFAULT_REGION="garage" \
           HTTP_PROXY="http://proxy.restricted-proxy.svc.cluster.local:3128" \
           HTTPS_PROXY="http://proxy.restricted-proxy.svc.cluster.local:3128" \
           python3 - << 'PYEOF'
@@ -186,6 +227,8 @@ jobs:
 
       - name: 🔧 CMake configure
         run: |
+          # --warnings-as-errors=* turns each clang-tidy diagnostic into a failing
+          # compile edge; the build preset's -k0 keeps going so all fixes still export.
           cmake --preset clang-tidy-fix-parallel \
             -DCMAKE_CXX_CLANG_TIDY="$(pwd)/cmake/clang-tidy-export-fixes-wrapper.sh;$(pwd)/.build/clang-tidy/fixes;--warnings-as-errors=*" \
             -DCMAKE_C_CLANG_TIDY="$(pwd)/cmake/clang-tidy-export-fixes-wrapper.sh;$(pwd)/.build/clang-tidy/fixes;--warnings-as-errors=*"
@@ -218,24 +261,35 @@ jobs:
       - name: 🔍 Analyze code with clang-tidy
         timeout-minutes: 120
         run: |
-          # For PR suggestion jobs: allow clang-tidy violations (they become inline comments).
-          # For all other jobs: violations fail the build.
-          _ALLOW_VIOLATIONS="${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' }}"
-          if [ -n "${{ inputs.scan-targets }}" ]; then
-            echo "Scanning specific targets: ${{ inputs.scan-targets }}"
-            for target in ${{ inputs.scan-targets }}; do
-              echo "Scanning target: $target"
-              cmake --build --preset clang-tidy-fix-parallel --target "$target" \
-                || [ "$_ALLOW_VIOLATIONS" = "true" ]
-            done
-          else
-            echo "Scanning all targets"
-            cmake --build --preset clang-tidy-fix-parallel \
-              || [ "$_ALLOW_VIOLATIONS" = "true" ]
-          fi
+          # Record the exit code rather than failing here: violations fail compile
+          # edges but still export, so the gate below decides pass/fail from counts.
+          targets=()
+          for target in ${{ inputs.scan-targets }}; do
+            targets+=(--target "$target")
+          done
+          echo "Scanning ${{ inputs.scan-targets || 'all targets' }}"
+          build_exit=0
+          cmake --build --preset clang-tidy-fix-parallel "${targets[@]}" || build_exit=$?
+          echo "cmake --build exited with code ${build_exit}"
+          echo "CLANG_TIDY_BUILD_EXIT=${build_exit}" >> "$GITHUB_ENV"
+
+      - name: Count clang-tidy violations
+        run: |
+          FIXES_DIR=".build/clang-tidy/fixes"
+          # Each diagnostic is one "- DiagnosticName:" list item; nested notes are not.
+          VIOLATIONS=$(cat "$FIXES_DIR"/*.yaml 2>/dev/null \
+            | grep -cE '^[[:space:]]*-[[:space:]]+DiagnosticName:' || true)
+          VIOLATIONS=${VIOLATIONS:-0}
+          echo "CLANG_TIDY_VIOLATIONS=${VIOLATIONS}" >> "$GITHUB_ENV"
+          echo "clang-tidy found ${VIOLATIONS} violation(s)"
+          {
+            echo '## Clang-Tidy Violations'
+            echo "Found **${VIOLATIONS}** violation(s)."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Apply clang-tidy fixes to working tree
-        if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' && !cancelled() }}
+        # success() so a genuine build failure (partial YAMLs) doesn't post misleading fixes.
+        if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' && success() }}
         run: |
           FIXES_DIR=".build/clang-tidy/fixes"
           if ls "$FIXES_DIR"/*.yaml 2>/dev/null | grep -q .; then
@@ -249,7 +303,7 @@ jobs:
           fi
 
       - name: Post inline clang-tidy suggestions on PR
-        if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false && !cancelled() }}
+        if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false && success() }}
         env:
           REVIEWDOG_GITHUB_API_TOKEN: ${{ github.token }}
         run: |
@@ -265,13 +319,57 @@ jobs:
             -fail-level none \
             -fail-on-error false
 
+      - name: Fail on clang-tidy violations
+        # !cancelled() so it still gates when posting steps are skipped (non-PR runs).
+        if: ${{ !cancelled() }}
+        run: |
+          VIOLATIONS="${CLANG_TIDY_VIOLATIONS:-0}"
+          BUILD_EXIT="${CLANG_TIDY_BUILD_EXIT:-0}"
+          if [ "$VIOLATIONS" -gt 0 ]; then
+            echo "::error::clang-tidy found ${VIOLATIONS} violation(s)"
+            exit 1
+          fi
+          # No violations but the build failed: a real compile/link error, not a diagnostic.
+          if [ "$BUILD_EXIT" -ne 0 ]; then
+            echo "::error::clang-tidy build failed (exit ${BUILD_EXIT}) with no violations"
+            exit 1
+          fi
+          echo "clang-tidy found no violations"
+
       - name: Publish Ccache summary
         if: always()
         run: |
+          # -sv (verbose) prints the local/remote storage breakdown and the
+          # uncacheable-reason table; plain -s hides remote Hits/Misses/Errors.
+          CCACHE_STATS=$(ccache -sv)
+          echo "$CCACHE_STATS"
           echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          ccache -s >> $GITHUB_STEP_SUMMARY
+          echo "$CCACHE_STATS" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+
+          # Surface remote storage stats and errors from the ccache log.
+          # Uses a filter script to avoid overflowing the 1024k step summary limit.
+          if [ -f /tmp/ccache.log ]; then
+            echo '## CCache Remote Storage' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            .github/scripts/ccache_log_filter.sh /tmp/ccache.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Helper debug log — only written when CCACHE_S3_DEBUG=true enables CRSH_LOGFILE.
+          if [ -f /tmp/ccache-storage-s3.log ]; then
+            echo "=== ccache-storage-s3 log (first 30 lines) ==="
+            head -30 /tmp/ccache-storage-s3.log
+            echo "=== ccache-storage-s3 log (last 80 lines) ==="
+            tail -80 /tmp/ccache-storage-s3.log
+            echo '## CCache Storage Helper Log' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            head -30 /tmp/ccache-storage-s3.log >> $GITHUB_STEP_SUMMARY
+            echo '--- (last 200 lines) ---' >> $GITHUB_STEP_SUMMARY
+            tail -200 /tmp/ccache-storage-s3.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Publish ctcache summary
         if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}

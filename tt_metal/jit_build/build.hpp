@@ -11,6 +11,7 @@
 #include <future>
 #include <map>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <tt-metalium/hal_types.hpp>
@@ -30,7 +31,7 @@ class Hal;
 static constexpr uint32_t CACHE_LINE_ALIGNMENT = 64;
 
 template <typename T>
-using vector_cache_aligned = std::vector<T, tt::stl::aligned_allocator<T, CACHE_LINE_ALIGNMENT>>;
+using vector_cache_aligned = std::vector<T, ttsl::aligned_allocator<T, CACHE_LINE_ALIGNMENT>>;
 
 class JitBuildSettings;
 
@@ -148,7 +149,6 @@ protected:
     static constexpr size_t kMaxBuildBitset = 64;
 
     bool build_state_matches(const std::string& out_dir) const;
-    void write_build_state_hash(const std::string& out_dir) const;
 
     bool need_compile(const std::string& out_dir, const std::string& obj) const;
     std::bitset<kMaxBuildBitset> compile(
@@ -175,6 +175,25 @@ public:
     // kernel-specific settings.  Replaces the PoC pattern of exposing
     // individual getters for every internal field.
     tt::jit_build::TargetRecipe export_target_recipe(const JitBuildSettings* settings) const;
+
+    // Write the effective-recipe hash to a ".build_state" file in out_dir. Callers producing a
+    // reusable cache (preprocess-and-ship) stamp this with the real recipe so a later local build
+    // detects recipe changes not reflected in the kernel-hash path.
+    void write_build_state_hash(const std::string& out_dir) const;
+
+    // True if a warmed preprocess-and-ship ELF for `kernel_name` is present and still valid: the
+    // ".build_state" recipe stamp matches and the source-complete FULL_DEPHASH_SUFFIX sidecar is up
+    // to date, so compile+link (local build) or the remote round-trip can be skipped and the cached
+    // ELF loaded directly. Validates only this build state's single ELF; callers loop over a kernel's
+    // per-processor build states. Ordinary local builds never write the sidecar, so this returns
+    // false for them.
+    bool warmed_elf_reusable(std::string_view kernel_name) const;
+
+    // Write the preprocess-and-ship reuse cache (FULL_DEPHASH_SUFFIX sidecar + ".build_state") for
+    // this build state's ELF, from the .d files the -E step left in the target dir plus the link
+    // inputs. Call only after the remote compile succeeds and the ELF is on disk, so the cache never
+    // points at a missing or stale ELF. Validates on the next run via warmed_elf_reusable.
+    void write_reuse_cache(std::string_view kernel_name) const;
     const std::string& get_weakened_firmware_name() const { return weakened_firmware_name_; }
     bool get_firmware_is_kernel_object() const { return firmware_is_kernel_object_; }
 };

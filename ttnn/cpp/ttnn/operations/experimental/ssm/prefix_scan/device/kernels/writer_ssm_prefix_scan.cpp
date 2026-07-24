@@ -6,6 +6,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 
 constexpr uint32_t NUM_TILES_IN_TILIZED_CHUNK = 32;
@@ -30,11 +31,19 @@ void kernel_main() {
 
     cb_out_obj.wait_front(num_tiles_per_core);
 
-    // Write accumulated hidden state back to the h_prev shard (in-place update)
-    uint32_t src_addr = cb_h_acc_obj.get_read_ptr();
-    uint64_t dst_addr = get_noc_addr(h_shard_l1_addr);
-    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
-    noc_async_write(src_addr, dst_addr, hidden_state_len_bytes);
+    // Write accumulated hidden state back to the h_prev shard (in-place update).
+    // The shard lives in this core's own L1, so the write is a NOC unicast to the local
+    // core's coordinates (mirrors the reader's UnicastEndpoint read of the same shard).
+    const uint32_t local_noc_x = my_x[noc.get_noc_id()];
+    const uint32_t local_noc_y = my_y[noc.get_noc_id()];
+    CoreLocalMem<uint32_t> h_acc_src(cb_h_acc_obj.get_read_ptr());
+    UnicastEndpoint h_shard_dst;
+    noc.async_write(
+        h_acc_src,
+        h_shard_dst,
+        hidden_state_len_bytes,
+        {},
+        {.noc_x = local_noc_x, .noc_y = local_noc_y, .addr = h_shard_l1_addr});
     noc.async_write_barrier();
 
     // cb_out is waited only as an output-ready handshake (the write above sources from cb_h_acc);

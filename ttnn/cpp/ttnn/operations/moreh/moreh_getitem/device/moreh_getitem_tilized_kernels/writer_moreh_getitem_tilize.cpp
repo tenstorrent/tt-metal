@@ -5,7 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -36,11 +36,11 @@ void kernel_main() {
     const auto s0 = TensorAccessor(dst_args, dst_addr);
 
     Noc noc;
-    CircularBuffer cb_out_obj(cb_id_out);
+    DataflowBuffer dfb_out_obj(cb_id_out);
 
     uint32_t end_id = start_id + num_sticks;
     for (uint32_t i = start_id; i < end_id; ++i) {
-        cb_out_obj.wait_front(1);
+        dfb_out_obj.wait_front(1);
 
         uint32_t stick_idx = i;
 
@@ -59,8 +59,8 @@ void kernel_main() {
         uint32_t noc_offset = get_noc_offset_in_tile(stick_index_5d.h, stick_index_5d.w, tile_index_5d.h, element_size);
 
         noc.async_write(
-            cb_out_obj, s0, stick_size, {.offset_bytes = 0}, {.page_id = noc_id, .offset_bytes = noc_offset});
+            dfb_out_obj, s0, stick_size, {.offset_bytes = 0}, {.page_id = noc_id, .offset_bytes = noc_offset});
         noc.async_write_barrier();
-        cb_out_obj.pop_front(1);
+        dfb_out_obj.pop_front(1);
     }
 }

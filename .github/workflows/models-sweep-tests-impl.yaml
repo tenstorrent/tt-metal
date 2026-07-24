@@ -35,7 +35,7 @@ on:
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.apply-filters.outputs.matrix }}
     env:
@@ -66,17 +66,18 @@ jobs:
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml \
-            ./.github/blackhole_demo_systems.yaml
+            ./.github/sku_config.yaml
       - name: Apply tier and model filters
         id: apply-filters
         run: |
           MATRIX='${{ steps.build-matrix.outputs.matrix }}'
           # Filter by tier
           FILTERED=$(echo "$MATRIX" | jq -c --argjson tier ${{ inputs.tier }} '[.[] | select(.tier == $tier)]')
-          # Filter by model (substring match, case-insensitive)
+          # Filter by model (substring match, case-insensitive; comma-separated OR-list)
           if [ "${{ inputs.model }}" != "all" ]; then
-            FILTERED=$(echo "$FILTERED" | jq -c --arg m "${{ inputs.model }}" '[.[] | select(.model | test($m; "i"))]')
+            FILTERED=$(echo "$FILTERED" | jq -c --arg m "${{ inputs.model }}" '
+              ($m | ascii_downcase | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $toks
+              | [ .[] | select((.model | ascii_downcase) as $mm | any($toks[]; . as $t | $mm | contains($t))) ]')
           fi
           if [ "$FILTERED" = "[]" ]; then
             echo "::warning::No tests found for tier=${{ inputs.tier }}, model=${{ inputs.model }}. Pipeline will be skipped."
@@ -118,7 +119,7 @@ jobs:
         # Mount the HF / tt_cache root so it always appears inside the container
         # at /mnt/MLPerf/huggingface, regardless of which BH cache mode the
         # runner uses. Host source comes from matrix.test-group['weights-cache-mode']
-        # (populated from .github/blackhole_demo_systems.yaml by prepare_test_matrix.py):
+        # (populated from the weights-cache-mode field in .github/sku_config.yaml by prepare_test_matrix.py):
         #   cloud-mlperf            → host /mnt/MLPerf/huggingface (shared NFS)
         #   local-disk / lfc        → host /localdev/blackhole_demos/huggingface_data (per-runner)
         #   yyz4-mnt-models         → host /mnt/models/huggingface (YYZ4 Exabox nfs storage mount)

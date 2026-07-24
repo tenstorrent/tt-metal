@@ -8,6 +8,7 @@
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tuple>
 namespace ttnn::prim {
 
 struct BroadcastParams {
@@ -46,6 +47,13 @@ struct BroadcastParams {
         attrs.emplace_back("topology", topology);
         attrs.emplace_back("cluster_axis", cluster_axis);
         return attrs;
+    }
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "sender_coord", "num_links", "ring_size", "output_mem_config", "topology", "cluster_axis", "sub_device_id");
+    auto attribute_values() const {
+        return std::make_tuple(
+            sender_coord, num_links, ring_size, output_mem_config, topology, cluster_axis, sub_device_id);
     }
 };
 

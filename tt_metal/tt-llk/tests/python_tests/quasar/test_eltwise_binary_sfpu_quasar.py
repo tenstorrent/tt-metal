@@ -25,6 +25,7 @@ from helpers.param_config import (
     input_output_formats,
     is_invalid_quasar_sfpu_format_combination,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
@@ -45,6 +46,7 @@ from helpers.test_variant_parameters import (
     SFPU_TILE_INDICES,
     TEST_FACE_DIMS,
     TILE_COUNT,
+    TYPECAST_FORMATS,
     UNPACKER_ENGINE_SEL,
 )
 from helpers.tile_constants import MAX_NUM_FACES, MAX_TILE_ELEMENTS
@@ -123,6 +125,10 @@ def _run_sfpu_binary_llk_golden(
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
             DEST_SYNC(),
+            # The shared unary-SFPU dispatch in sfpu_operations_quasar.h has a typecast
+            # branch that references the non-dependent globals TYPECAST_IN_FORMAT /
+            # TYPECAST_OUT_FORMAT, so every build that includes it must define them.
+            TYPECAST_FORMATS(),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),
@@ -220,7 +226,8 @@ def test_eltwise_binary_sfpu_int_quasar(
 
 
 # ===========================================================================
-# Family 2 — float ops (mul, div). Ported from test_sfpu_binary_float_quasar.py.
+# Family 2 — float ops (add, sub, mul, div). Ported from test_sfpu_binary_float_quasar.py.
+# add/sub route the SFPU calculate_sfpu_binary ADD/SUB path (tenstorrent/tt-metal#49883).
 # Operand/result tile-index variants exercise result-over-operand aliasing.
 # ===========================================================================
 # Crafted lanes in face 0 exercising the div special-case branches.
@@ -249,7 +256,7 @@ def _get_valid_float_formats_dest_acc():
 
 def _prepare_float_inputs(src_A, data_format, src0_idx, src1_idx, mathop):
     """Map [0,1) uniform stimuli into op-appropriate ranges (div: ±[0.25,4] + special
-    lanes; mul: ±250)."""
+    lanes; add/sub/mul: ±250)."""
     torch_format = format_dict[data_format]
     if mathop == MathOperation.SfpuElwdiv:
         scaled = (src_A.to(torch.float32) - 0.5) * 8.0
@@ -261,14 +268,14 @@ def _prepare_float_inputs(src_A, data_format, src0_idx, src1_idx, mathop):
             flat[src0_idx * MAX_TILE_ELEMENTS + lane] = dividend
             flat[src1_idx * MAX_TILE_ELEMENTS + lane] = divisor
         return flat.reshape(scaled.shape)
-    # SfpuElwmul
+    # SfpuElwadd / SfpuElwsub / SfpuElwmul — symmetric ±250 range.
     scaled = ((src_A.to(torch.float32) - 0.5) * 500.0).to(torch_format)
     return scaled.flatten().reshape(scaled.shape)
 
 
 def _prepare_float_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop):
     """Float stimuli: uniform [0,1) mapped to op-appropriate ranges by
-    _prepare_float_inputs (div: ±[0.25,4] + special lanes; mul: ±250)."""
+    _prepare_float_inputs (div: ±[0.25,4] + special lanes; add/sub/mul: ±250)."""
     spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -297,6 +304,8 @@ def _check_div_special_cases(res_tensor):
 
 
 _FLOAT_OPS = [
+    ("ADD", MathOperation.SfpuElwadd),
+    ("SUB", MathOperation.SfpuElwsub),
     ("MUL", MathOperation.SfpuElwmul),
     ("DIV", MathOperation.SfpuElwdiv),
 ]
@@ -311,12 +320,12 @@ _FLOAT_OPS = [
     implied_math_format=lambda formats_dest_acc: _get_valid_implied_math_formats(
         formats_dest_acc[0]
     ),
-    tile_indices=_TILE_INDEX_VARIANTS,
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_float_quasar(
     formats_dest_acc, implied_math_format, tile_indices, binary_op, mathop
 ):
-    """Binary SFPU float ops (mul, div)."""
+    """Binary SFPU float ops (add, sub, mul, div)."""
     formats, dest_acc = formats_dest_acc
     post_check = (
         _check_div_special_cases if mathop == MathOperation.SfpuElwdiv else None
@@ -518,6 +527,10 @@ def _run_max_min(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
             DEST_SYNC(),
+            # The shared unary-SFPU dispatch in sfpu_operations_quasar.h has a typecast
+            # branch that references the non-dependent globals TYPECAST_IN_FORMAT /
+            # TYPECAST_OUT_FORMAT, so every build that includes it must define them.
+            TYPECAST_FORMATS(),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt),
@@ -562,7 +575,7 @@ def _run_max_min(
             else (DestAccumulation.No,)
         ),
     ),
-    tile_indices=_TILE_INDEX_VARIANTS,
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_max_min_float_quasar(
     formats_dest_acc_implied_math_is_max_input_dims,
@@ -592,7 +605,7 @@ def test_eltwise_binary_sfpu_max_min_float_quasar(
         dest_acc_for_format=lambda fmt: (DestAccumulation.Yes,),
         implied_math_formats=(ImpliedMathFormat.No,),
     ),
-    tile_indices=_TILE_INDEX_VARIANTS,
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_max_min_int32_quasar(
     formats_dest_acc_implied_math_is_max_input_dims,

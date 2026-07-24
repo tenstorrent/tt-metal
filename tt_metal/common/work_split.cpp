@@ -14,7 +14,7 @@
 #include <utility>
 #include <vector>
 
-#include "tracy/Tracy.hpp"
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
 namespace tt::tt_metal {
@@ -152,6 +152,7 @@ CoreRangeSet num_cores_to_corerangeset_in_subcoregrids(
     const uint32_t target_num_cores,
     const CoreRangeSet& sub_core_grids,
     const bool row_wise = false) {
+    TTZoneScopedD(MISC);
     TT_FATAL(target_num_cores > 0, "Target number of cores must be greater than 0");
     TT_FATAL(
         target_num_cores <= sub_core_grids.num_cores(),
@@ -313,6 +314,7 @@ CoreRangeSet num_cores_to_corerangeset_in_subcoregrids(
 
 std::tuple<std::vector<uint32_t>, CoreRangeSet> split_work_to_cores_even_multiples(
     const CoreCoord& core_grid, const uint32_t units_to_divide, const uint32_t multiple, const bool row_wise) {
+    TTZoneScopedD(MISC);
     const uint32_t batches_to_divide = std::ceil(units_to_divide / multiple), max_num_cores = core_grid.x * core_grid.y;
     const uint32_t target_num_cores = (batches_to_divide >= max_num_cores) ? max_num_cores : batches_to_divide;
 
@@ -336,6 +338,7 @@ std::tuple<std::vector<uint32_t>, CoreRangeSet> split_work_to_cores_even_multipl
 
 std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(
     const CoreCoord grid_size, const uint32_t units_to_divide, const bool row_wise) {
+    TTZoneScopedD(MISC);
     if (units_to_divide == 0) {
         return std::make_tuple(0, CoreRangeSet(), CoreRangeSet(), CoreRangeSet(), 0, 0);
     }

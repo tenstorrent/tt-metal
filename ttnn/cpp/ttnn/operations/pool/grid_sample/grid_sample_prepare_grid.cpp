@@ -190,7 +190,7 @@ Tensor convert_grid_tensor(
             input_tensor, output_shape, mode, align_corners, tensor_input_shape);
     };
 
-    const TensorSpec output_spec(
+    const tt::tt_metal::TensorSpec output_spec(
         output_shape,
         tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
 
@@ -198,7 +198,8 @@ Tensor convert_grid_tensor(
 
     auto transformed_buffer = input_tensor.host_storage().buffer().transform(
         compute, tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
-    return Tensor(tt::tt_metal::HostTensor(std::move(transformed_buffer), output_spec, input_tensor.tensor_topology()));
+    return Tensor(tt::tt_metal::HostTensor::from_buffer(
+        std::move(transformed_buffer), output_spec, input_tensor.tensor_topology()));
 }
 
 }  // anonymous namespace

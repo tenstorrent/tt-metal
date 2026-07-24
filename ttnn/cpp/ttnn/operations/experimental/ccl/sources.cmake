@@ -88,6 +88,7 @@ set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
     all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_device_operation.cpp
     all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_program_factory.cpp
     moe_compute/moe_compute.cpp
+    moe_compute/moe_core_placement.cpp
     moe_compute/moe_compute_utils.cpp
     moe_compute/device/moe_compute_device_operation.cpp
     moe_compute/device/moe_compute_program_factory.cpp
@@ -110,4 +111,43 @@ set(TTNN_OP_EXPERIMENTAL_CCL_API_HEADERS
     reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp
     reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp
     reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp
+)
+
+# Registered on the shared `ttnn` Python module target from
+# ttnn/cpp/ttnn/operations/experimental/ccl/CMakeLists.txt (see the
+# `if(TARGET ttnn)` block there). Listed here rather than inline in
+# CMakeLists.txt so that add/remove/rename doesn't touch a file with
+# metalium-developers-infra as a required co-owner.
+set(TTNN_OP_EXPERIMENTAL_CCL_NANOBIND_SRCS
+    ccl_experimental_nanobind.cpp
+    llama_all_gather_matmul_async/llama_all_gather_matmul_async_nanobind.cpp
+    all_gather_async/all_gather_async_nanobind.cpp
+    strided_all_gather_async/strided_all_gather_async_nanobind.cpp
+    all_gather_concat_heads_fused/all_gather_concat_nanobind.cpp
+    llama_reduce_scatter_matmul/rs_matmul_nanobind.cpp
+    all_reduce_async/all_reduce_async_nanobind.cpp
+    rms_allgather/rms_allgather_nanobind.cpp
+    dit_fused_distributed_rmsnorm/dit_fused_distributed_rmsnorm_nanobind.cpp
+    llama_reduce_scatter/llama_reduce_scatter_nanobind.cpp
+    llama_reduce_scatter_create_heads/llama_reduce_scatter_create_heads_nanobind.cpp
+    all_to_all_async/all_to_all_async_nanobind.cpp
+    all_to_all_async_generic/all_to_all_async_generic_nanobind.cpp
+    reduce_scatter_minimal_async/reduce_scatter_minimal_async_nanobind.cpp
+    strided_reduce_scatter_async/strided_reduce_scatter_async_nanobind.cpp
+    minimal_matmul_strided_reduce_scatter_async/minimal_matmul_strided_reduce_scatter_async_nanobind.cpp
+    all_gather_matmul_async/all_gather_matmul_async_nanobind.cpp
+    strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async_nanobind.cpp
+    all_gather_minimal_matmul_async/all_gather_minimal_matmul_async_nanobind.cpp
+    matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp
+    ring_attention_all_gather_async/ring_attention_all_gather_async_nanobind.cpp
+    send_recv_async/send_async/send_async_nanobind.cpp
+    send_recv_async/recv_async/recv_async_nanobind.cpp
+    send_recv_async/recv_async_h2d/recv_async_h2d_nanobind.cpp
+    send_recv_async/send_async_d2h/send_async_d2h_nanobind.cpp
+    neighbor_pad_async/neighbor_pad_async_nanobind.cpp
+    slice_reshard_async/slice_reshard_async_nanobind.cpp
+    deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter_nanobind.cpp
+    all_to_all_dispatch_metadata/all_to_all_dispatch_metadata_nanobind.cpp
+    moe_compute/moe_compute_nanobind.cpp
+    moe/selective_reduce_combine/selective_reduce_combine_nanobind.cpp
 )

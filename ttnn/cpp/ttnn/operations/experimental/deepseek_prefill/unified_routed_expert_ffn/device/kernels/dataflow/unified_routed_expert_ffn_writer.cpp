@@ -37,11 +37,17 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
 #include "api/debug/assert.h"
 
 constexpr uint32_t TILE_HEIGHT = 32;
 
 void kernel_main() {
+    Noc noc;
+
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
     const uint32_t my_mt = get_arg_val<uint32_t>(1);
     const uint32_t my_nt_d = get_arg_val<uint32_t>(2);
@@ -98,13 +104,18 @@ void kernel_main() {
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t g_in1_block_num_tiles = per_core_N_gu * in0_block_w_gu;
 
+    CircularBuffer cb_out_buf(cb_out);
+    CircularBuffer cb_counts_scratch_buf(cb_counts_scratch);
+    CircularBuffer cb_idx_scratch_buf(cb_idx_scratch);
+    CircularBuffer cb_start_scratch_buf(cb_start_scratch);
+
     // Accessor compile-arg stream order (host appends in this exact order):
     // out, then start (direct-write), then up (UP_SPLIT). The accessors are
     // constructed unconditionally; start_acc is used only when direct_write,
     // up_acc only when writer_split_up.
     constexpr uint32_t out_accessor_offset = 24;
     constexpr auto out_args = TensorAccessorArgs<out_accessor_offset>();
-    const auto out_acc = TensorAccessor(out_args, output_addr, get_tile_size(cb_out));
+    const auto out_acc = TensorAccessor(out_args, output_addr, cb_out_buf.get_tile_size());
 
     constexpr uint32_t start_accessor_offset = out_args.next_compile_time_args_offset();
     constexpr auto start_args = TensorAccessorArgs<start_accessor_offset>();
@@ -114,18 +125,18 @@ void kernel_main() {
     constexpr auto up_args = TensorAccessorArgs<up_accessor_offset>();
     const auto up_acc = TensorAccessor(up_args, up_addr, get_tile_size(cb_in1_up));
 
-    const uint32_t out_tile_bytes = get_tile_size(cb_out);
+    const uint32_t out_tile_bytes = cb_out_buf.get_tile_size();
 
     // Wait for the reader's counts/idx push and compute effective_chunks =
     // ceil(count / chunk_M_tiles). The writer drains cb_out per chunk;
     // bounding the loop here is required because the reader and compute
     // bound theirs too — without this, the writer would wait forever on
     // cb_out for chunks the compute never pushes.
-    cb_wait_front(cb_counts_scratch, 1);
-    cb_wait_front(cb_idx_scratch, 1);
+    cb_counts_scratch_buf.wait_front(1);
+    cb_idx_scratch_buf.wait_front(1);
     const volatile tt_l1_ptr uint32_t* counts_ptr =
-        reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_counts_scratch));
-    const uint32_t idx_l1 = get_read_ptr(cb_idx_scratch);
+        reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(cb_counts_scratch_buf.get_read_ptr());
+    const uint32_t idx_l1 = cb_idx_scratch_buf.get_read_ptr();
     const volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1);
     const uint32_t global_expert_id = idx_ptr[local_expert_id];
     const uint32_t count_value = counts_ptr[global_expert_id];
@@ -139,26 +150,25 @@ void kernel_main() {
     // Mirrors ttnn::insert's writer: start_tile_row = start_value / TILE.
     uint32_t row_offset_tiles = 0;
     if constexpr (direct_write != 0) {
-        const uint32_t start_l1 = get_write_ptr(cb_start_scratch);
-        noc_async_read_page(0, start_acc, start_l1);
-        noc_async_read_barrier();
+        const uint32_t start_l1 = cb_start_scratch_buf.get_write_ptr();
+        const uint32_t start_page_size = start_acc.get_aligned_page_size();
+        noc.async_read(start_acc, CoreLocalMem<uint32_t>(start_l1), start_page_size, {.page_id = 0}, {});
+        noc.async_read_barrier();
         const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(start_l1);
         const uint32_t start_value = start_ptr[global_expert_id];
         row_offset_tiles = start_value / TILE_HEIGHT;
     }
 
     // ---- UP_SPLIT up-weight read setup ----
-    // The writer reads `up` from DRAM on NoC 1 (kUpNoc) concurrent with the
+    // The writer reads `up` from DRAM on NoC 1 concurrent with the
     // reader's NoC-0 `gate` read, into the gy=0 sender's cb_in1_up slot; the
     // reader multicasts it on NoC 0. A local same-core (BRISC reader <-> NCRISC
     // writer) handshake orders the two: up_go (reader: slot reserved) and
     // up_done (writer: up landed in L1), monotonic counters.
-    constexpr uint8_t kUpNoc = 1;
+    Noc noc_up(1);
     const uint32_t up_tile_bytes = get_tile_size(cb_in1_up);
-    volatile tt_l1_ptr uint32_t* up_go_local =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(up_go_sem_id));
-    volatile tt_l1_ptr uint32_t* up_done_local =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(up_done_sem_id));
+    Semaphore<> up_go_sem(up_go_sem_id);
+    Semaphore<> up_done_sem(up_done_sem_id);
     uint32_t up_seq = 0;
 
     for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
@@ -177,11 +187,12 @@ void kernel_main() {
                 // reader's cadence: cb_in1_up is double-buffered, one push per
                 // K-block, so the live slot is base + (up_seq-1)%2 * slot.
                 constexpr uint32_t kUpNumSlots = 2;
-                const uint32_t up_cb_base = get_write_ptr(cb_in1_up);
+                CircularBuffer cb_in1_up_buf(cb_in1_up);
+                const uint32_t up_cb_base = cb_in1_up_buf.get_write_ptr();
                 const uint32_t up_slot_bytes = g_in1_block_num_tiles * up_tile_bytes;
                 for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
                     ++up_seq;
-                    noc_semaphore_wait_min(up_go_local, up_seq);
+                    up_go_sem.wait_min(up_seq);
                     uint32_t l1_w_up = up_cb_base + ((up_seq - 1) % kUpNumSlots) * up_slot_bytes;
                     for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
                         for (uint32_t n = 0; n < per_core_N_gu; ++n) {
@@ -189,7 +200,8 @@ void kernel_main() {
                             const uint32_t col = my_nt_gu * per_core_N_gu + n;
                             if (col < N_gate_tiles_full) {
                                 const uint32_t tile_idx = row * N_gate_tiles_full + col;
-                                noc_async_read_page(tile_idx, up_acc, l1_w_up, /*offset=*/0, kUpNoc);
+                                noc_up.async_read(
+                                    up_acc, CoreLocalMem<uint32_t>(l1_w_up), up_tile_bytes, {.page_id = tile_idx}, {});
                             } else {
                                 volatile tt_l1_ptr uint64_t* p =
                                     reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_up);
@@ -200,8 +212,8 @@ void kernel_main() {
                             l1_w_up += up_tile_bytes;
                         }
                     }
-                    noc_async_read_barrier(kUpNoc);
-                    *up_done_local = up_seq;
+                    noc_up.async_read_barrier();
+                    up_done_sem.set(up_seq);
                 }
             }
         }
@@ -211,8 +223,8 @@ void kernel_main() {
         const uint32_t col0 = my_nt_d * per_core_N_d;
         for (uint32_t sb_m = 0; sb_m < d_in1_num_subblocks_M; ++sb_m) {
             for (uint32_t sb_n = 0; sb_n < d_in1_num_subblocks_N; ++sb_n) {
-                cb_wait_front(cb_out, d_out_subblock_num_tiles);
-                uint32_t l1_read = get_read_ptr(cb_out);
+                cb_out_buf.wait_front(d_out_subblock_num_tiles);
+                uint32_t subblock_tile_offset = 0;
                 for (uint32_t i = 0; i < d_out_subblock_h; ++i) {
                     for (uint32_t j = 0; j < d_out_subblock_w; ++j) {
                         const uint32_t row = row0 + sb_m * d_out_subblock_h + i;
@@ -244,24 +256,29 @@ void kernel_main() {
                             ASSERT(dst_row < dst_M_tiles);
                             if (dst_row < dst_M_tiles) {
                                 const uint32_t tile_idx = dst_row * N_down_tiles_full + col;
-                                noc_async_write_page(tile_idx, out_acc, l1_read);
+                                noc.async_write(
+                                    cb_out_buf,
+                                    out_acc,
+                                    out_tile_bytes,
+                                    {.offset_bytes = subblock_tile_offset},
+                                    {.page_id = tile_idx});
                             }
                         }
-                        l1_read += out_tile_bytes;
+                        subblock_tile_offset += out_tile_bytes;
                     }
                 }
                 // Wait for the writes to LEAVE this core (departed sender);
                 // doesn't wait for the DRAM round-trip. Safe to reuse the L1
                 // slot now — the NoC has captured the data. ~10x faster than
                 // noc_async_write_barrier per subblock at small per_core_M.
-                noc_async_writes_flushed();
-                cb_pop_front(cb_out, d_out_subblock_num_tiles);
+                noc.async_writes_flushed();
+                cb_out_buf.pop_front(d_out_subblock_num_tiles);
             }
         }
     }
     // Ensure all outstanding writes complete at the destination before the
     // kernel returns (the next dispatched op may read this output).
-    noc_async_write_barrier();
+    noc.async_write_barrier();
     // UP_SPLIT issues only per-K-block-barriered NoC-1 `up` reads (no NoC-1
     // worker multicast and no NoC-1 atomics), so no extra NoC-1 drain is needed
     // here — which is exactly why it is safe beside the fabric CCL ops.

@@ -102,7 +102,7 @@ bool run_sfpu_test(const std::string& sfpu_name, int tile_factor = 1, bool use_D
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::Program program = tt_metal::CreateProgram();
 
-        CoreCoord core = {0, 0};
+        tt::tt_metal::CoreCoord core = {0, 0};
 
         uint32_t single_tile_size = 2 * 1024;
         uint32_t num_tiles = 1;
@@ -162,7 +162,7 @@ bool run_sfpu_test(const std::string& sfpu_name, int tile_factor = 1, bool use_D
         auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
             multibank ? "tests/tt_eager/kernels/dataflow/writer_unary_8bank.cpp"
-                      : "tt_metal/kernels/dataflow/writer_unary.cpp",
+                      : "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
             core,
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,

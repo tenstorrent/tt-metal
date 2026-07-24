@@ -50,12 +50,14 @@ void kernel_main() {
     uint32_t tiles_to_read = start_tiles_to_read;
     while (tiles_read < tiles_to_read) {
         uint32_t normalized_page_id = slice_row_offset + intra_slice_offset;
-        uint64_t noc_addr = output_slice_tensor_accessors[slice_id].get_noc_addr(normalized_page_id);
 
         cb_compute_output.wait_front(one_tile);
-        uint32_t l1_read_addr = cb_compute_output.get_read_ptr();
-        // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
-        noc_async_write(l1_read_addr, noc_addr, page_size);
+        noc.async_write(
+            cb_compute_output,
+            output_slice_tensor_accessors[slice_id],
+            page_size,
+            {.offset_bytes = 0},
+            {.page_id = normalized_page_id});
         noc.async_writes_flushed();
         cb_compute_output.pop_front(one_tile);
 

@@ -14,6 +14,7 @@
  *
  * @brief Initialize unpack for unpack reduce operations, which unpacks one tile for srcA and one face for srcB
  *
+ * @tparam pool_type: Type of reduce pool op, values = [MAX, SUM, AVG]
  * @tparam reduce_dim: Sets the reduce dimension, values = [REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR]
  * @param operandA: The srcA operand DFB identifier
  * @param operandB: The srcB operand DFB identifier
@@ -22,13 +23,13 @@
  * and UNPACKER1 to unpack a single face from the input DFB to srcB, with specified reduce dimension.
  *
  */
-template <ReduceDim reduce_dim>
+template <PoolType pool_type, ReduceDim reduce_dim>
 inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::uint32_t operandB) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
 
-    _llk_unpack_reduce_init_<reduce_dim>(operandA_id, operandB_id, tensor_shape);
+    _llk_unpack_reduce_init_<pool_type, reduce_dim>(operandA_id, operandB_id, tensor_shape);
 }
 
 /**
@@ -51,6 +52,7 @@ inline void llk_unpack_AB_reduce(
     const std::uint32_t tile_index_b) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
 
     const LocalDFBInterface& local_dfb_interface_a = get_local_dfb_interface(operandA_id);
     const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
@@ -61,6 +63,6 @@ inline void llk_unpack_AB_reduce(
         local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].rd_entry_idx + tile_index_b;
 
     WAYPOINT("UABW");
-    _llk_unpack_reduce_(l1_tile_index_a, l1_tile_index_b);
+    _llk_unpack_reduce_(l1_tile_index_a, l1_tile_index_b, tensor_shape);
     WAYPOINT("UABD");
 }

@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-// Per-batch route plan shared between the dispatch untilize reader and writer kernels.
+// Per-batch route plan shared between the dispatch worker reader and writer kernels.
 // The reader builds one plan page per batch; the writer drains it. Both sides view the
 // same L1 page through these structs (no magic offsets / hand-packed bit fields).
 //

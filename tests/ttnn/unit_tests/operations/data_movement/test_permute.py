@@ -2,15 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
+import itertools
 
+import pytest
 import torch
 
 import ttnn
-import itertools
-
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 from models.common.utility_functions import is_blackhole
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 
 
 def random_torch_tensor(dtype, shape):
@@ -65,16 +64,16 @@ def test_transpose(device, h, w, dtype):
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
-def test_permute_on_4D_tensor_with_smaller_tuple_size(device, h, w, dtype):
+def test_permute_on_4D_tensor_with_smaller_tuple_size(device, h, w, dtype, expect_error):
     torch.manual_seed(2005)
     shape = (1, 1, h, w)
     torch_input_tensor = random_torch_tensor(dtype, shape)
     input_tensor = ttnn.from_torch(torch_input_tensor)
     input_tensor = ttnn.to_device(input_tensor, device)
-    with pytest.raises(
+    with expect_error(
         RuntimeError,
-        match="The number of dimensions in the tensor input does not match the length of the desired ordering",
-    ) as exception:
+        "The number of dimensions in the tensor input does not match the length of the desired ordering",
+    ):
         ttnn.permute(input_tensor, (0, 1, 2))
 
 
@@ -646,7 +645,7 @@ def test_permute_5d_wyh(device, shape, perm, dtype):
 @pytest.mark.parametrize("shape", [[1, 1, 32, 64], [2, 3, 32, 32], [1, 1, 64, 96], [1, 8, 96, 32]])
 def test_transpose_wh_tiled_uint32(device, shape):
     # ttnn.transpose(-2,-1) on TILE_LAYOUT → prim::TransposeWH → transpose_wh_program_factory
-    # compute/transpose_wh.cpp → transpose_wh_tile() → MOVD2B dest_32b_lo=1
+    # compute/transpose_wh.cpp → transpose_tile() → MOVD2B dest_32b_lo=1
     # Unlike ttnn.permute({0,1,3,2}), ttnn.transpose dispatches to transpose_wh_program_factory
     # directly (not permute_tiled_program_factory), so a dedicated test is needed.
     torch.manual_seed(2005)
@@ -693,3 +692,123 @@ def test_permute_sharded(device, shape, perm, dtype, layout, input_sharding, out
     torch_output = torch.permute(torch_tensor, perm)
 
     assert_equal(torch_output, output_tensor)
+
+
+# =============================================================================
+# Program-cache regression tests for ttnn.permute (PermuteDeviceOperation)
+#
+# Pin the program-cache keying granularity so it can be verified BEFORE and AFTER
+# removing PermuteDeviceOperation::compute_program_hash and falling back to the
+# framework default hash. The default hashes the full operation_attributes (dims,
+# output_mem_config, pad_value) plus each input tensor's TensorSpec (logical_shape
+# + tensor_layout), so it must produce exactly the same number of cache entries:
+#   - Same config -> reuse (1 entry). Different data alone must NOT re-key.
+#   - Different dims / shape / dtype -> distinct entries.
+#   - Two permutations selecting DIFFERENT program factories -> distinct entries,
+#     even though the default hash does NOT fold factory.index() (the custom hash
+#     did): select_program_factory is a pure function of dims + layout, which the
+#     default already hashes.
+# =============================================================================
+
+
+@pytest.fixture
+def isolate_program_cache(device):
+    """Ensure each test starts with an empty program cache and cleans up after."""
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    yield
+    device.disable_and_clear_program_cache()
+
+
+def run_permute(device, shape, dims, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, seed=0):
+    """Run ttnn.permute inside the cache counter; return (torch_ref, tt_out)."""
+    torch.manual_seed(seed)
+    torch_input = torch.rand(shape, dtype=torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32)
+    torch_ref = torch.permute(torch_input, dims)
+
+    tt_input = ttnn.from_torch(torch_input, layout=layout, dtype=dtype, device=device)
+    with device.cache_entries_counter.measure():
+        tt_out = ttnn.permute(tt_input, dims)
+    tt_out = ttnn.to_torch(tt_out)
+    return torch_ref, tt_out
+
+
+# =============================================================================
+# Cache reuse (fields correctly NOT keyed)
+# =============================================================================
+
+
+def test_permute_cache_reuse_same_config(device, isolate_program_cache):
+    """Same shape/dims/dtype run twice with different data -> 1 entry, different outputs."""
+    shape = (1, 1, 32, 64)
+    dims = (0, 1, 3, 2)
+
+    ref1, out1 = run_permute(device, shape, dims, seed=0)
+    assert_with_pcc(ref1, out1, 0.9999)
+    ref2, out2 = run_permute(device, shape, dims, seed=42)
+    assert_with_pcc(ref2, out2, 0.9999)
+
+    assert device.cache_entries_counter.total == 1
+    assert not torch.equal(out1, out2)
+
+
+# =============================================================================
+# Cache miss (fields correctly keyed)
+# =============================================================================
+
+
+def test_permute_cache_miss_different_dims(device, isolate_program_cache):
+    """Different permutations (different program factories) -> 2 entries.
+
+    (0,1,3,2) selects MultiCoreTileInvariant; (0,2,1,3) selects
+    MultiCoreTileRowInvariant. Distinct despite no factory.index() in the hash.
+    """
+    shape = (1, 1, 32, 64)
+
+    ref1, out1 = run_permute(device, shape, (0, 1, 3, 2))
+    assert_with_pcc(ref1, out1, 0.9999)
+    ref2, out2 = run_permute(device, shape, (0, 2, 1, 3))
+    assert_with_pcc(ref2, out2, 0.9999)
+
+    assert device.cache_entries_counter.total == 2
+
+
+def test_permute_cache_miss_different_shape(device, isolate_program_cache):
+    """Same dims, different input shape -> 2 entries."""
+    dims = (0, 1, 3, 2)
+
+    ref1, out1 = run_permute(device, (1, 1, 32, 64), dims)
+    assert_with_pcc(ref1, out1, 0.9999)
+    ref2, out2 = run_permute(device, (1, 1, 64, 96), dims)
+    assert_with_pcc(ref2, out2, 0.9999)
+
+    assert device.cache_entries_counter.total == 2
+
+
+def test_permute_cache_miss_different_dtype(device, isolate_program_cache):
+    """Same dims/shape, different dtype -> 2 entries."""
+    shape = (1, 1, 32, 64)
+    dims = (0, 1, 3, 2)
+
+    ref1, out1 = run_permute(device, shape, dims, dtype=ttnn.bfloat16)
+    assert_with_pcc(ref1, out1, 0.9999)
+    ref2, out2 = run_permute(device, shape, dims, dtype=ttnn.float32)
+    assert_with_pcc(ref2, out2, 0.9999)
+
+    assert device.cache_entries_counter.total == 2
+
+
+def test_permute_cache_miss_different_factory_row_major(device, isolate_program_cache):
+    """Row-major permutations selecting different factories -> 2 entries.
+
+    (1,0,2,3) keeps the last dim (MultiCoreRowInvariant); (0,1,3,2) moves it
+    (MultiCoreBlockedGeneric). The default hash distinguishes them via dims.
+    """
+    shape = (2, 3, 32, 64)
+
+    ref1, out1 = run_permute(device, shape, (1, 0, 2, 3), layout=ttnn.ROW_MAJOR_LAYOUT)
+    assert_with_pcc(ref1, out1, 0.9999)
+    ref2, out2 = run_permute(device, shape, (0, 1, 3, 2), layout=ttnn.ROW_MAJOR_LAYOUT)
+    assert_with_pcc(ref2, out2, 0.9999)
+
+    assert device.cache_entries_counter.total == 2

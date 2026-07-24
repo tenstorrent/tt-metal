@@ -9,7 +9,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 ALWI void process_tile(
     uint32_t cb_in0_id,
@@ -22,44 +22,44 @@ ALWI void process_tile(
     uint32_t scalar_arg) {
     using namespace ckernel;
 
-    CircularBuffer cb_in0(cb_in0_id);
-    CircularBuffer cb_in1(cb_in1_id);
-    CircularBuffer cb_in2(cb_in2_id);
-    CircularBuffer cb_out(cb_out_id);
+    DataflowBuffer dfb_in0(cb_in0_id);
+    DataflowBuffer dfb_in1(cb_in1_id);
+    DataflowBuffer dfb_in2(cb_in2_id);
+    DataflowBuffer dfb_out(cb_out_id);
 
     const bool scalar_is_not_1 = scalar_arg != 1u;
     // 3-tensor broadcast-aware synchronization - wait for broadcast CBs outside loop
 #if BCAST_A
-    cb_in0.wait_front(num_tiles_per_cycle);  // input_a is broadcast
+    dfb_in0.wait_front(num_tiles_per_cycle);  // input_a is broadcast
 #endif
 #if BCAST_B
-    cb_in1.wait_front(num_tiles_per_cycle);  // input_b is broadcast
+    dfb_in1.wait_front(num_tiles_per_cycle);  // input_b is broadcast
 #endif
 #if BCAST_C
-    cb_in2.wait_front(num_tiles_per_cycle);  // input_c is broadcast
+    dfb_in2.wait_front(num_tiles_per_cycle);  // input_c is broadcast
 #endif
 
     for (uint32_t j = tile_start; j < freq; ++j) {
         // Wait for non-broadcast CBs inside loop
 #if !BCAST_B
-        cb_in1.wait_front(num_tiles_per_cycle);
+        dfb_in1.wait_front(num_tiles_per_cycle);
 #endif
 #if !BCAST_C
-        cb_in2.wait_front(num_tiles_per_cycle);
+        dfb_in2.wait_front(num_tiles_per_cycle);
 #endif
 
         tile_regs_acquire();
 
         // (input_b * input_c)
-        mul_tiles_init(cb_in1.get_cb_id(), cb_in2.get_cb_id());
-        mul_tiles(cb_in1.get_cb_id(), cb_in2.get_cb_id(), 0, 0, 0);
+        mul_tiles_init(dfb_in1.get_id(), dfb_in2.get_id());
+        mul_tiles(dfb_in1.get_id(), dfb_in2.get_id(), 0, 0, 0);
 
-        // Done with cb_in1 and cb_in2, pop them early for pipeline efficiency
+        // Done with dfb_in1 and dfb_in2, pop them early for pipeline efficiency
 #if !BCAST_B
-        cb_in1.pop_front(num_tiles_per_cycle);
+        dfb_in1.pop_front(num_tiles_per_cycle);
 #endif
 #if !BCAST_C
-        cb_in2.pop_front(num_tiles_per_cycle);
+        dfb_in2.pop_front(num_tiles_per_cycle);
 #endif
 
         // (input_b * input_c) * value -> DST[0]
@@ -70,43 +70,43 @@ ALWI void process_tile(
 
 // Now wait for input_a
 #if !BCAST_A
-        cb_in0.wait_front(num_tiles_per_cycle);
+        dfb_in0.wait_front(num_tiles_per_cycle);
 #endif
 
-        // Step 3: Load A and add with result DST[0] + cb_in0 -> DST[0]
+        // Step 3: Load A and add with result DST[0] + dfb_in0 -> DST[0]
         binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-            cb_in0.get_cb_id());
+            dfb_in0.get_id());
         binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-            cb_in0.get_cb_id(), 0, 0);
+            dfb_in0.get_id(), 0, 0);
 
         tile_regs_commit();
         tile_regs_wait();
 
         // Reserve output buffer
-        cb_out.reserve_back(num_tiles_per_cycle);
+        dfb_out.reserve_back(num_tiles_per_cycle);
 
         // Pack the result from DST[0] to output
-        pack_tile(0, cb_out.get_cb_id());
+        pack_tile(0, dfb_out.get_id());
 
         tile_regs_release();
 
-        cb_out.push_back(num_tiles_per_cycle);
+        dfb_out.push_back(num_tiles_per_cycle);
 
         // Pop non-broadcast CBs inside loop
 #if !BCAST_A
-        cb_in0.pop_front(num_tiles_per_cycle);
+        dfb_in0.pop_front(num_tiles_per_cycle);
 #endif
     }
 
     // Pop broadcast CBs outside loop
 #if BCAST_A
-    cb_in0.pop_front(num_tiles_per_cycle);
+    dfb_in0.pop_front(num_tiles_per_cycle);
 #endif
 #if BCAST_B
-    cb_in1.pop_front(num_tiles_per_cycle);
+    dfb_in1.pop_front(num_tiles_per_cycle);
 #endif
 #if BCAST_C
-    cb_in2.pop_front(num_tiles_per_cycle);
+    dfb_in2.pop_front(num_tiles_per_cycle);
 #endif
 }
 

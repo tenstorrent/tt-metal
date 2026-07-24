@@ -296,15 +296,6 @@
   team: models
   model-name: sd35_large
 
-- name: t3k_flux1-dev_tests
-  cmd: run_t3000_flux1_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 12
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-  model-name: flux1-dev
-
 - name: t3k_wan2.2_tests
   cmd: run_t3000_wan22_tests
   skus:
@@ -341,15 +332,6 @@
   team: models
   model-name: qwenimage
 
-- name: t3k_qwen3_vl_tests
-  cmd: run_t3000_qwen3_vl_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 12
-  owner_id: U08H31YMN4Q # Sanjay Sanjay
-  team: models
-  model-name: qwen3_vl
-
 # ============================================================================
 # Galaxy Wormhole tests
 # ============================================================================
@@ -379,7 +361,7 @@
 - name: Galaxy Flux.1-dev demo tests
   cmd: |
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache NO_PROMPT=1 TT_MM_THROTTLE_PERF=5
-    pytest models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k "4x8sp0tp1-dev" --timeout 1200
+    pytest models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k "4x8sp0tp1-flux_dev" --timeout 1200
   model-name: flux1
   skus:
     wh_galaxy:
@@ -389,7 +371,7 @@
 
 - name: Galaxy Wan2.2 demo tests
   cmd: |
-    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1 VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
     pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "wh_4x8sp1tp0 and resolution_720p" --timeout 1500
   model-name: wan22
   skus:
@@ -486,11 +468,11 @@
 - name: Galaxy Qwen3-32B e2e tests
   cmd: |
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
-    pytest --timeout 1000 models/demos/llama3_70b_galaxy/tests/test_qwen_accuracy.py
+    pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "ci-token-matching"
   model-name: qwen3-32b-galaxy
   skus:
     wh_galaxy:
-      timeout: 10
+      timeout: 30
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
@@ -510,16 +492,6 @@
 # ============================================================================
 
 # P150 Single-card tests
-- name: whisper P150 performance
-  cmd: |
-    pytest models/demos/audio/whisper/demo/demo.py --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
-  skus:
-    bh_p150_perf:
-      timeout: 84
-  owner_id: U05RWH3QUPM # Salar Hosseini
-  team: models
-  model-name: whisper
-
 - name: unet-shallow P150 performance
   cmd: |
     pytest -sv models/experimental/functional_unet/tests/test_unet_perf.py -k "test_unet_trace_perf and not test_unet_trace_perf_multi_device"

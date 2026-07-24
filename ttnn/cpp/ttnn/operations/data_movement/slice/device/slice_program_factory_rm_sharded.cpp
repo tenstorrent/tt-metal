@@ -9,6 +9,7 @@
 #include <optional>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
 using namespace tt::constants;
@@ -318,6 +319,23 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
     desc.kernels.push_back(std::move(reader_desc));
 
     return desc;
+}
+
+void SliceDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Re-derive the descriptor from the SAME factory the miss path picks (single source of truth), then
+    // re-apply its rt-args + tensor-backed CB addresses to the cached program. No rebuild (still a hit).
+    auto desc = std::visit(
+        [&](auto&& factory) {
+            return std::decay_t<decltype(factory)>::create_descriptor(
+                operation_attributes, tensor_args, tensor_return_value);
+        },
+        select_program_factory(operation_attributes, tensor_args));
+    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 
 }  // namespace ttnn::prim

@@ -122,6 +122,7 @@ def test_perf_eltwise_binary_sfpu_float(
         ),
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
+        compile_time_formats=True,
     )
 
     configuration.run(perf_report)
@@ -142,6 +143,8 @@ def test_perf_eltwise_binary_sfpu_float(
         MathOperation.SfpuElwRightShift,
         MathOperation.SfpuElwLeftShift,
         MathOperation.SfpuElwLogicalRightShift,
+        MathOperation.SfpuElwadd,
+        MathOperation.SfpuElwsub,
     ],
     dest_acc=lambda formats: get_dest_accum_modes(formats),
     loop_factor=[
@@ -206,6 +209,7 @@ def test_perf_eltwise_binary_sfpu_int(
         ),
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
+        compile_time_formats=True,
     )
 
     configuration.run(perf_report)
@@ -302,6 +306,7 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
         ),
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
+        compile_time_formats=True,
     )
 
     configuration.run(perf_report)

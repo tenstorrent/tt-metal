@@ -68,4 +68,5 @@ void kernel_main() {
         DeviceTimestampedData("Subordinate Grid Size Y", sub_grid_size_y);
     }
     DeviceTimestampedData("Number of subordinates", num_subordinates);
+    DeviceTimestampedData("Loopback", loopback ? 1 : 0);
 }

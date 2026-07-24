@@ -108,7 +108,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             params.num_faces * params.TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
         for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
         {
-            _llk_math_eltwise_unary_datacopy_(params.num_faces * params.TEST_FACE_R_DIM /*num_rows_per_tile*/, i);
+            _llk_math_eltwise_unary_datacopy_(i);
         }
         _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
     }
@@ -145,7 +145,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ckernel::trisc::construct_tdma_desc(tensor_shape_A, L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst, buf_desc_id, formats.pack_src);
 
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
-    _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc, ckernel::ReluConfig::none());
     _llk_pack_init_(buf_desc_id, tensor_shape_A, num_tiles_per_pack);
     _llk_pack_(0, 0, tensor_shape_A);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();

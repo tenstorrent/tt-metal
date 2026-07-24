@@ -68,7 +68,7 @@ void py_module(nb::module_& m) {
         py_tensor.def(nb::init<>());
         py_tensor.def(nb::init<const Tensor&>());
         py_tensor.def(nb::init<Tensor&&>());
-        py_tensor.def(nb::init<const tt::tt_metal::Tensor&, bool>());
+        py_tensor.def(nb::init<const ttnn::Tensor&, bool>());
         py_tensor.def_prop_ro(
             "tensor",
             [](const TensorPtr& self) -> TensorPtr { return self; },
@@ -222,6 +222,13 @@ void py_module(nb::module_& m) {
         py_auto_context.def("set_seed", &AutoContext::set_seed, nb::arg("seed"), "Set seed");
         py_auto_context.def("get_seed", &AutoContext::get_seed, "Get seed");
         py_auto_context.def(
+            "get_generator_state", &AutoContext::get_generator_state, "Serialize the RNG generator state");
+        py_auto_context.def(
+            "set_generator_state",
+            &AutoContext::set_generator_state,
+            nb::arg("state"),
+            "Restore the RNG generator state");
+        py_auto_context.def(
             "add_backward_node",
             [](AutoContext& self, GradFunction grad_function, std::optional<nb::list> links_obj) {
                 // Handle empty list case where nanobind can't infer element type
@@ -353,12 +360,10 @@ void py_module(nb::module_& m) {
     // Module-level create_tensor functions for creating autograd tensors
     m.def(
         "create_tensor",
-        [](const tt::tt_metal::Tensor& value, bool requires_grad) -> TensorPtr {
-            return create_tensor(value, requires_grad);
-        },
+        [](const ttnn::Tensor& value, bool requires_grad) -> TensorPtr { return create_tensor(value, requires_grad); },
         nb::arg("value"),
         nb::arg("requires_grad") = true,
-        "Create an autograd Tensor from a tt::tt_metal::Tensor");
+        "Create an autograd Tensor from a ttnn::Tensor");
 
     m.def("create_tensor", []() -> TensorPtr { return create_tensor(); }, "Create an empty autograd Tensor");
 

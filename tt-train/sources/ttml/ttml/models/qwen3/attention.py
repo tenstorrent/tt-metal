@@ -19,11 +19,11 @@ from typing import Optional
 import ttml
 from ttml.modules import AbstractModuleBase, LinearLayer, Parameter
 
-from .autograd_ops import ConcatLastDim, RMSNormFunction
+from .autograd_ops import ConcatLastDim
 
 
 class _QKNorm(AbstractModuleBase):
-    """RMSNorm for QK normalization (per-head, on head_dim)."""
+    """RMSNorm for QK normalization (per-head, on head_dim), fused device op."""
 
     def __init__(self, hidden_size: int, eps: float = 1e-6):
         super().__init__()
@@ -31,7 +31,7 @@ class _QKNorm(AbstractModuleBase):
         self.weight = Parameter(ttml.init.ones()((1, 1, 1, hidden_size)))
 
     def forward(self, hidden_states):
-        return RMSNormFunction.apply(hidden_states, self.weight.tensor, self.eps)
+        return ttml.ops.rmsnorm.rmsnorm(hidden_states, self.weight.tensor, self.eps)
 
 
 class Qwen3Attention(AbstractModuleBase):
@@ -104,18 +104,6 @@ class Qwen3Attention(AbstractModuleBase):
         k = self.k_proj(hidden_states)
         v = self.v_proj(hidden_states)
 
-        q_shape = q.shape()
-        k_shape = k.shape()
-        B, S = q_shape[0], q_shape[2]
-
-        # Reshape to (B, 1, S*num_heads, head_dim) for per-head QK-Norm
-        q = ttml.ops.reshape.reshape(q, [B, 1, S * self.num_heads, self.head_dim])
-        k = ttml.ops.reshape.reshape(k, [B, 1, S * self.num_kv_heads, self.head_dim])
-        q = self.q_norm(q)
-        k = self.k_norm(k)
-        q = ttml.ops.reshape.reshape(q, q_shape)
-        k = ttml.ops.reshape.reshape(k, k_shape)
-
         kvs = ConcatLastDim.apply(k, v)
 
         query_heads, key_heads, value_heads = ttml.ops.multi_head_utils.grouped_heads_creation(
@@ -124,6 +112,10 @@ class Qwen3Attention(AbstractModuleBase):
             self.num_heads,
             self.num_kv_heads,
         )
+
+        # Per-head QK-Norm, before RoPE (matches HF Qwen3 ordering). V is left unnormed.
+        query_heads = self.q_norm(query_heads)
+        key_heads = self.k_norm(key_heads)
 
         query_heads = ttml.ops.rope.rope(query_heads, self.rope_params, position_offset)
         key_heads = ttml.ops.rope.rope(key_heads, self.rope_params, position_offset)

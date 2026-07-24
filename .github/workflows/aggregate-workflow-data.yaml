@@ -62,7 +62,7 @@ jobs:
           workflow_ids: |
             [
               ".github/workflows/sanity-tests.yaml",
-              ".github/workflows/blackhole-post-commit.yaml",
+              ".github/workflows/blackhole-sanity-tests.yaml",
               ".github/workflows/blackhole-e2e-tests.yaml",
               ".github/workflows/blackhole-demo-tests.yaml",
               ".github/workflows/galaxy-profiler-tests.yaml",
@@ -94,7 +94,7 @@ jobs:
 
               ".github/workflows/perf-device-models.yaml",
               ".github/workflows/perf-models.yaml",
-              ".github/workflows/fast-dispatch-full-regressions-and-models.yaml",
+              ".github/workflows/single-card-ttnn-models-frequent-tests.yaml",
               ".github/workflows/single-card-demo-tests.yaml",
               ".github/workflows/tt-metal-l2-nightly.yaml",
               ".github/workflows/ttnn-run-sweeps.yaml",

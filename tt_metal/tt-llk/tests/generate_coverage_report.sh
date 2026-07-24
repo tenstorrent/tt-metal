@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 
-if [ ! -f "/tmp/tt-llk-build/merged_coverage.info" ]; then
-    echo "Error: Coverage file /tmp/tt-llk-build/merged_coverage.info not found." >&2
+ARTEFACTS_DIR="${RUNNER_TEMP:-/tmp}/tt-llk-build"
+COVERAGE_INFO="${ARTEFACTS_DIR}/merged_coverage.info"
+
+if [ ! -f "$COVERAGE_INFO" ]; then
+    echo "Error: Coverage file $COVERAGE_INFO not found." >&2
     echo "Ensure coverage artefcats was generated!" >&2
     exit 1
 fi
-genhtml /tmp/tt-llk-build/merged_coverage.info --output-directory ../../coverage_report
+genhtml "$COVERAGE_INFO" --output-directory ../../coverage_report

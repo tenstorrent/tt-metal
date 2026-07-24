@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "ckernel_ops.h"
+#include "cmath_common.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -43,7 +44,7 @@ inline void calculate_dropout(uint probability, uint scale) {
         ////////////////////////
         // Drop samples
         // v_if (rand < probability)
-        //   dst_reg[0] = vConst0;
+        //   dst_reg[0] = 0.0f;
         ///////////////////////
         TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG3, 10);
         TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
@@ -56,6 +57,7 @@ inline void calculate_dropout(uint probability, uint scale) {
 
 template <bool APPROXIMATION_MODE>
 inline void dropout_init(const uint seed) {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     init_prng_seed(seed);
 }
 

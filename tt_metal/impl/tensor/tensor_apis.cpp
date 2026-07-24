@@ -3,15 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <functional>
+#include <limits>
+#include <string_view>
+#include <type_traits>
 #include <unordered_set>
 
 #include "host_tensor_impl.hpp"
 #include "mesh_tensor_impl.hpp"
 
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
+#include <tt-metalium/experimental/tensor/tensor_types.hpp>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
@@ -19,7 +25,9 @@
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "tt_metal/distributed/mesh_device_view_impl.hpp"
 #include <tt_stl/concepts.hpp>
+#include <tt_stl/reflection.hpp>
 #include <tt_stl/small_vector.hpp>
+#include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {
 
@@ -78,7 +86,8 @@ HostTensor enqueue_read_tensor(distributed::MeshCommandQueue& cq, const MeshTens
 
     cq.enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
 
-    return HostTensor(std::move(distributed_host_buffer), device_tensor.tensor_spec(), device_tensor.tensor_topology());
+    return HostTensor::from_buffer(
+        std::move(distributed_host_buffer), device_tensor.tensor_spec(), device_tensor.tensor_topology());
 }
 
 MeshTensor enqueue_write_tensor(
@@ -93,8 +102,13 @@ MeshTensor enqueue_write_tensor(
     std::optional<TensorSpec> tensor_spec_overriden_memory_config;
     if (memory_config) {
         const auto& old_spec = host_tensor.tensor_spec();
-        tensor_spec_overriden_memory_config =
-            TensorSpec(old_spec.logical_shape(), old_spec.tensor_layout().with_memory_config(*memory_config));
+        tensor_spec_overriden_memory_config = TensorSpec(
+            old_spec.logical_shape(),
+            TensorLayout(
+                old_spec.tensor_layout().get_data_type(),
+                old_spec.tensor_layout().get_page_config(),
+                *memory_config,
+                old_spec.tensor_layout().get_alignment()));
     }
 
     const auto* tensor_spec = tensor_spec_overriden_memory_config.has_value()
@@ -215,11 +229,15 @@ void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& h
         cq.enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
     }
 
-    device_tensor = MeshTensor(
-        mesh_buffer,
+    device_tensor = MeshTensor::from_buffer(
+        std::move(*mesh_buffer),
         TensorSpec(
             host_tensor.tensor_spec().logical_shape(),
-            host_tensor.tensor_spec().tensor_layout().with_memory_config(device_tensor.memory_config())),
+            TensorLayout(
+                host_tensor.tensor_spec().tensor_layout().get_data_type(),
+                host_tensor.tensor_spec().tensor_layout().get_page_config(),
+                device_tensor.memory_config(),
+                host_tensor.tensor_spec().tensor_layout().get_alignment())),
         host_tensor.tensor_topology());
 }
 
@@ -273,7 +291,8 @@ HostTensor enqueue_read_tensor(
         },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
-    HostTensor result(std::move(distributed_host_buffer), device_tensor.tensor_spec(), device_tensor.tensor_topology());
+    auto result = HostTensor::from_buffer(
+        std::move(distributed_host_buffer), device_tensor.tensor_spec(), device_tensor.tensor_topology());
     enqueue_read_tensor(cq, device_tensor, result, coords, blocking);
     return result;
 }
@@ -317,7 +336,7 @@ void enqueue_read_tensor(
     std::unordered_set<distributed::MeshCoordinate> shard_set(coords.begin(), coords.end());
     cq.enqueue_read(device_tensor.impl().raw_mesh_buffer(), dst_distributed_host_buffer, shard_set, blocking);
 
-    host_tensor = HostTensor(
+    host_tensor = HostTensor::from_buffer(
         std::move(dst_distributed_host_buffer), device_tensor.tensor_spec(), device_tensor.tensor_topology());
 }
 
@@ -329,8 +348,13 @@ std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> enqueue_write_te
     std::optional<TensorSpec> tensor_spec_overriden_memory_config;
     if (memory_config) {
         const auto& old_spec = host_tensor.tensor_spec();
-        tensor_spec_overriden_memory_config =
-            TensorSpec(old_spec.logical_shape(), old_spec.tensor_layout().with_memory_config(*memory_config));
+        tensor_spec_overriden_memory_config = TensorSpec(
+            old_spec.logical_shape(),
+            TensorLayout(
+                old_spec.tensor_layout().get_data_type(),
+                old_spec.tensor_layout().get_page_config(),
+                *memory_config,
+                old_spec.tensor_layout().get_alignment()));
     }
 
     const auto* tensor_spec = tensor_spec_overriden_memory_config.has_value()
@@ -403,10 +427,15 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
     const auto& mesh_device_shape = mesh_buffer->device()->shape();
     auto topology = TensorTopology::create_fully_replicated_tensor_topology(mesh_device_shape);
     const auto& old_spec = host_tensor.tensor_spec();
-    device_tensor = MeshTensor(
-        mesh_buffer,
+    device_tensor = MeshTensor::from_buffer(
+        std::move(*mesh_buffer),
         TensorSpec(
-            old_spec.logical_shape(), old_spec.tensor_layout().with_memory_config(device_tensor.memory_config())),
+            old_spec.logical_shape(),
+            TensorLayout(
+                old_spec.tensor_layout().get_data_type(),
+                old_spec.tensor_layout().get_page_config(),
+                device_tensor.memory_config(),
+                old_spec.tensor_layout().get_alignment())),
         topology);
 }
 
@@ -502,10 +531,15 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
     std::copy(shard_coords.begin(), shard_coords.end(), std::back_inserter(coords));
 
     const auto& old_spec = host_tensor.tensor_spec();
-    device_tensor = MeshTensor(
-        mesh_buffer,
+    device_tensor = MeshTensor::from_buffer(
+        std::move(*mesh_buffer),
         TensorSpec(
-            old_spec.logical_shape(), old_spec.tensor_layout().with_memory_config(device_tensor.memory_config())),
+            old_spec.logical_shape(),
+            TensorLayout(
+                old_spec.tensor_layout().get_data_type(),
+                old_spec.tensor_layout().get_page_config(),
+                device_tensor.memory_config(),
+                old_spec.tensor_layout().get_alignment())),
         host_tensor.tensor_topology());
 
     return coords;
@@ -520,96 +554,155 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
+void assert_host_shards_match_packed_size(
+    const DistributedHostBuffer& buffer, const TensorSpec& spec, std::string_view op_name) {
+    const size_t expected_shard_size = spec.compute_packed_buffer_size_bytes();
+    for (const auto& coord : buffer.shard_coords()) {
+        auto shard = buffer.get_shard(coord);
+        if (shard) {
+            TT_FATAL(
+                shard->view_bytes().size() == expected_shard_size,
+                "{} shard size mismatch after conversion: actual {} != expected {}",
+                op_name,
+                shard->view_bytes().size(),
+                expected_shard_size);
+        }
+    }
+}
+
 template <typename T>
-HostTensor to_layout_impl(const HostTensor& tensor, Layout target_layout) {
-    if (tensor.layout() == target_layout) {
+HostTensor to_row_major_layout_impl(const HostTensor& tensor) {
+    if (tensor.layout() == Layout::ROW_MAJOR) {
         return tensor;
     }
 
-    auto source_layout = tensor.layout();
-    auto tile = tt::tt_metal::Tile();
-    if (tensor.layout() == Layout::TILE) {
-        tile = tensor.tensor_spec().tile();
-    }
+    TT_FATAL(tensor.layout() == Layout::TILE, "Converting from {} to Row Major is unsupported.", tensor.layout());
+
+    // Do not pass a non-default tile into ROW_MAJOR PageConfig (deprecation #18536).
+    auto output_spec = TensorSpec(
+        tensor.logical_shape(),
+        TensorLayout(
+            tensor.dtype(),
+            PageConfig(Layout::ROW_MAJOR),
+            tensor.memory_config(),
+            tensor.tensor_spec().tensor_layout().get_alignment()));
+
+    TT_FATAL(
+        output_spec.physical_shape() == tensor.tensor_spec().physical_shape(),
+        "to_layout: Converting layout to {} implicitly changed physical shape from {} to {} due to alignment "
+        "constraints. This is currently unsupported. Please pad the tensor explicitly before conversion.",
+        Layout::ROW_MAJOR,
+        tensor.tensor_spec().physical_shape(),
+        output_spec.physical_shape());
+
+    auto tile = tensor.tensor_spec().tile();
     auto physical_shape = tensor.tensor_spec().physical_shape();
-    auto convert =
-        [tile, &physical_shape, source_layout, target_layout](const HostBuffer& input_host_buffer) -> std::vector<T> {
-        const auto input_data = input_host_buffer.view_as<T>();
-        switch (source_layout) {
-            case Layout::ROW_MAJOR:
-                TT_FATAL(target_layout == Layout::TILE, "Unsupported layout conversion");
-                return tensor_impl::to_tile_major_layout(physical_shape, tile, input_data);
-            case Layout::TILE:
-                TT_FATAL(target_layout == Layout::ROW_MAJOR, "Unsupported layout conversion");
-                return tensor_impl::to_row_major_layout(physical_shape, tile, input_data);
-            case Layout::INVALID: TT_THROW("Invalid layout");
-        }
-        TT_THROW("Unreachable");
-    };
 
     auto transformed_buffer = tensor.buffer().transform(
-        [&](const HostBuffer& buffer) { return HostBuffer(convert(buffer)); },
+        [&](const HostBuffer& buffer) {
+            auto input_data = buffer.view_as<T>();
+            auto rm_data = tensor_impl::to_row_major_layout(physical_shape, tile, input_data);
+            return HostBuffer(std::move(rm_data));
+        },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
-    return HostTensor(
-        std::move(transformed_buffer),
-        TensorSpec(
-            tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
-                tensor.dtype(),
-                PageConfig(target_layout, tile),
-                MemoryConfig{},
-                tensor.logical_shape(),
-                tensor.padded_shape())),
-        tensor.tensor_topology());
+
+    assert_host_shards_match_packed_size(transformed_buffer, output_spec, "to_row_major_layout");
+
+    return HostTensor::from_buffer(std::move(transformed_buffer), output_spec, tensor.tensor_topology());
 }
 
 template <typename T>
-HostTensor to_layout_bfloat_impl(const HostTensor& tensor, Layout target_layout) {
-    static_assert(
-        std::is_same_v<T, tensor_impl::bfloat8_b> || std::is_same_v<T, tensor_impl::bfloat4_b>, "Invalid type T");
-    // TODO(#43763):
-    // Flipping this assert to TT_FATAL triggers multiple failures in **sanity** test suite.
-    // This silent fail has a high impact area and should be studied and addressed asap.
-    //
-    // Original comment:
-    // TODO: Flip to assert when we remove use cases in python and c++
-    if (tensor.layout() != target_layout or tensor.layout() != Layout::TILE) {
-        log_warning(
-            tt::LogAlways,
-            "Tensor layout must be Layout::TILE for bfloat8_b or bfloat4_b! Conversion from {} to {} was not executed!",
-            tensor.layout(),
-            target_layout);
-    }
-    return tensor;
-}
-
-template <>
-HostTensor to_layout_impl<tensor_impl::bfloat8_b>(const HostTensor& tensor, Layout target_layout) {
-    return to_layout_bfloat_impl<tensor_impl::bfloat8_b>(tensor, target_layout);
-}
-
-template <>
-HostTensor to_layout_impl<tensor_impl::bfloat4_b>(const HostTensor& tensor, Layout target_layout) {
-    return to_layout_bfloat_impl<tensor_impl::bfloat4_b>(tensor, target_layout);
-}
-
-template <>
-HostTensor to_layout_impl<float8_e4m3>(const HostTensor& tensor, Layout target_layout) {
-    // FP8_E4M3 is constrained to ROW_MAJOR layout in tensor_spec.cpp, so the source tensor
-    // is already ROW_MAJOR by construction. The only legal call is therefore ROW_MAJOR ->
-    // ROW_MAJOR (a no-op); any other target layout is a caller error.
-    if (target_layout == Layout::ROW_MAJOR) {
+HostTensor to_tile_layout_impl(const HostTensor& tensor, Tile tile) {
+    if (tensor.layout() == Layout::TILE) {
         return tensor;
     }
-    TT_THROW("to_layout: FP8_E4M3 only supports ROW_MAJOR layout (got target {})", target_layout);
+
+    if constexpr (std::is_same_v<T, float8_e4m3>) {
+        // FP8_E4M3 is constrained to ROW_MAJOR, so tilizing it is a caller error.
+        TT_THROW("to_layout: FP8_E4M3 only supports ROW_MAJOR layout (got target {})", Layout::TILE);
+    } else {
+        TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Converting from {} to Tile is unsupported.", tensor.layout());
+
+        auto output_spec = TensorSpec(
+            tensor.logical_shape(),
+            TensorLayout(
+                tensor.dtype(),
+                PageConfig(Layout::TILE, tile),
+                tensor.memory_config(),
+                tensor.tensor_spec().tensor_layout().get_alignment()));
+
+        TT_FATAL(
+            output_spec.physical_shape() == tensor.tensor_spec().physical_shape(),
+            "to_layout: Converting layout to {} implicitly changed physical shape from {} to {} due to alignment "
+            "constraints. This is currently unsupported. Please pad the tensor explicitly before conversion.",
+            Layout::TILE,
+            tensor.tensor_spec().physical_shape(),
+            output_spec.physical_shape());
+
+        auto physical_shape = tensor.tensor_spec().physical_shape();
+
+        auto transformed_buffer = tensor.buffer().transform(
+            [&](const HostBuffer& buffer) {
+                auto input_data = buffer.view_as<T>();
+                auto tilized_data = tensor_impl::to_tile_major_layout(physical_shape, tile, input_data);
+                return HostBuffer(std::move(tilized_data));
+            },
+            DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+
+        assert_host_shards_match_packed_size(transformed_buffer, output_spec, "to_tile_layout");
+
+        return HostTensor::from_buffer(std::move(transformed_buffer), output_spec, tensor.tensor_topology());
+    }
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
+HostTensor to_row_major_layout(const HostTensor& tensor) {
+    return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
+        if constexpr (
+            std::is_same_v<T, tensor_impl::bfloat4_b> || std::is_same_v<T, tensor_impl::bfloat8_b> ||
+            std::is_same_v<T, float8_e4m3>) {
+            // bfloat4_b / bfloat8_b: TODO(#43763):
+            // Flipping this assert to TT_FATAL triggers multiple failures in **sanity** test suite.
+            // This silent fail has a high impact area and should be studied and addressed asap.
+            //
+            // Original comment:
+            // TODO: Flip to assert when we remove use cases in python and c++
+            //
+            // FP8_E4M3 is constrained to ROW_MAJOR at construction, so it is already row-major.
+            return tensor;
+        } else {
+            return CMAKE_UNIQUE_NAMESPACE::to_row_major_layout_impl<T>(tensor);
+        }
+    });
+}
+
+HostTensor to_tile_layout(const HostTensor& tensor, const Tile& tile) {
+    // Reject mismatched retile before dtype dispatch so BFP cannot silently identity-return.
+    if (tensor.layout() == Layout::TILE) {
+        TT_FATAL(
+            tile == tensor.tensor_spec().tile(),
+            "to_tile_layout: requested tile {} does not match input tile {}. Retile is not supported.",
+            tile,
+            tensor.tensor_spec().tile());
+    }
+    return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
+        if constexpr (std::is_same_v<T, tensor_impl::bfloat4_b> || std::is_same_v<T, tensor_impl::bfloat8_b>) {
+            // Block-float formats are natively TILE — no conversion needed.
+            return tensor;
+        } else {
+            return CMAKE_UNIQUE_NAMESPACE::to_tile_layout_impl<T>(tensor, tile);
+        }
+    });
+}
+
 HostTensor to_layout(const HostTensor& tensor, Layout target_layout) {
-    return tensor_impl::dispatch(
-        tensor.dtype(), [&]<typename T>() { return CMAKE_UNIQUE_NAMESPACE::to_layout_impl<T>(tensor, target_layout); });
+    switch (target_layout) {
+        case Layout::ROW_MAJOR: return to_row_major_layout(tensor);
+        case Layout::TILE: return to_tile_layout(tensor, tensor.tensor_spec().tile());
+        default: TT_THROW("Target layout {} is not supported", target_layout);
+    }
 }
 
 // ======================================================================================
@@ -633,7 +726,7 @@ HostTensor pad_bfloat8_b(
         unpack_bfp8_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
 
     auto input_float_buffer = HostBuffer(std::move(input_float_data));
-    auto intermediate = HostTensor(
+    auto intermediate = HostTensor::from_buffer(
         std::move(input_float_buffer),
         TensorSpec(
             tensor.logical_shape(),
@@ -659,7 +752,7 @@ HostTensor pad_bfloat8_b(
             MemoryConfig{},
             float_tensor.logical_shape(),
             float_tensor.padded_shape()));
-    return HostTensor(std::move(output_uint32_buffer), output_spec, tensor.tensor_topology());
+    return HostTensor::from_buffer(std::move(output_uint32_buffer), output_spec, tensor.tensor_topology());
 }
 
 HostTensor unpad_bfloat8_b(
@@ -675,7 +768,7 @@ HostTensor unpad_bfloat8_b(
         unpack_bfp8_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
     auto input_float_buffer = HostBuffer(std::move(input_float_data));
 
-    HostTensor intermediate(
+    auto intermediate = HostTensor::from_buffer(
         std::move(input_float_buffer),
         TensorSpec(
             tensor.logical_shape(),
@@ -693,7 +786,7 @@ HostTensor unpad_bfloat8_b(
     auto output_packed_data =
         pack_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
     auto output_uint32_buffer = HostBuffer(std::move(output_packed_data));
-    return HostTensor(
+    return HostTensor::from_buffer(
         std::move(output_uint32_buffer),
         TensorSpec(
             float_tensor.logical_shape(),
@@ -719,7 +812,7 @@ HostTensor pad_bfloat4_b(
     auto input_float_data =
         unpack_bfp4_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
     auto input_float_buffer = HostBuffer(std::move(input_float_data));
-    auto intermediate = HostTensor(
+    auto intermediate = HostTensor::from_buffer(
         std::move(input_float_buffer),
         TensorSpec(
             tensor.logical_shape(),
@@ -745,7 +838,7 @@ HostTensor pad_bfloat4_b(
             MemoryConfig{},
             float_tensor.logical_shape(),
             float_tensor.padded_shape()));
-    return HostTensor(std::move(output_uint32_buffer), output_spec, tensor.tensor_topology());
+    return HostTensor::from_buffer(std::move(output_uint32_buffer), output_spec, tensor.tensor_topology());
 }
 
 HostTensor unpad_bfloat4_b(
@@ -760,7 +853,7 @@ HostTensor unpad_bfloat4_b(
     auto input_float_data =
         unpack_bfp4_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
     auto input_float_buffer = HostBuffer(std::move(input_float_data));
-    auto intermediate = HostTensor(
+    auto intermediate = HostTensor::from_buffer(
         std::move(input_float_buffer),
         TensorSpec(
             tensor.logical_shape(),
@@ -778,7 +871,7 @@ HostTensor unpad_bfloat4_b(
     auto output_packed_data =
         pack_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
     auto output_uint32_buffer = HostBuffer(std::move(output_packed_data));
-    return HostTensor(
+    return HostTensor::from_buffer(
         std::move(output_uint32_buffer),
         TensorSpec(
             float_tensor.logical_shape(),
@@ -877,7 +970,7 @@ HostTensor pad_impl(
         tile = tensor.tensor_spec().tile();
     }
 
-    return HostTensor(
+    return HostTensor::from_buffer(
         std::move(transformed_buffer),
         TensorSpec(
             tensor.logical_shape(),
@@ -963,7 +1056,7 @@ HostTensor unpad_impl(
     auto transformed_buffer = tensor.buffer().transform(
         [&](const HostBuffer& buffer) { return HostBuffer(unpad(buffer)); },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
-    return HostTensor(
+    return HostTensor::from_buffer(
         std::move(transformed_buffer),
         TensorSpec(
             tt::tt_metal::Shape(output_shape),
@@ -1080,21 +1173,23 @@ struct bfloat8_tag {};
 
 // Preprocess the storage to unpack the bfloat8/4 tiles into float32.
 tt::tt_metal::DistributedHostBuffer preprocess_buffers(
-    const tt::tt_metal::DistributedHostBuffer& input_storage, const DataType input_dtype) {
+    const tt::tt_metal::DistributedHostBuffer& input_storage,
+    const DataType input_dtype,
+    const tt::tt_metal::Tile& tile) {
     constexpr bool row_major_output = false;
     constexpr bool is_exp_a = false;
 
     if (input_dtype == DataType::BFLOAT8_B) {
         return input_storage.transform([&](const tt::tt_metal::HostBuffer& buffer) {
             ttsl::Span<const uint32_t> uint32_data = buffer.view_as<const uint32_t>();
-            auto float_unpacked_data = unpack_bfp8_tiles_into_float_vec(uint32_data, row_major_output, is_exp_a);
+            auto float_unpacked_data = unpack_bfp8_tiles_into_float_vec(uint32_data, row_major_output, is_exp_a, tile);
             return tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
         });
     }
     if (input_dtype == DataType::BFLOAT4_B) {
         return input_storage.transform([&](const tt::tt_metal::HostBuffer& buffer) {
             ttsl::Span<const uint32_t> uint32_data = buffer.view_as<const uint32_t>();
-            auto float_unpacked_data = unpack_bfp4_tiles_into_float_vec(uint32_data, row_major_output, is_exp_a);
+            auto float_unpacked_data = unpack_bfp4_tiles_into_float_vec(uint32_data, row_major_output, is_exp_a, tile);
             return tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
         });
     }
@@ -1103,7 +1198,9 @@ tt::tt_metal::DistributedHostBuffer preprocess_buffers(
 
 template <typename SrcType, typename DstType>
 tt::tt_metal::DistributedHostBuffer transform_buffers(
-    const tt::tt_metal::TensorSpec& input_tensor_spec, const tt::tt_metal::DistributedHostBuffer& input_buffer) {
+    const tt::tt_metal::TensorSpec& input_tensor_spec,
+    const tt::tt_metal::TensorSpec& output_spec,
+    const tt::tt_metal::DistributedHostBuffer& input_buffer) {
     if constexpr (std::is_same_v<SrcType, DstType>) {
         return input_buffer;
     } else if constexpr (std::is_same_v<SrcType, float8_e4m3> || std::is_same_v<DstType, float8_e4m3>) {
@@ -1132,8 +1229,8 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
             ttsl::Span<const SrcType> data = buffer.view_as<const SrcType>();
             std::vector<SrcType> tilized_data;  // empty if `data` is already in tile layout.
             if (input_tensor_spec.layout() == Layout::ROW_MAJOR) {
-                tilized_data = tensor_impl::to_tile_major_layout(
-                    input_tensor_spec.physical_shape(), input_tensor_spec.tile(), data);
+                tilized_data =
+                    tensor_impl::to_tile_major_layout(output_spec.physical_shape(), output_spec.tile(), data);
                 data = ttsl::make_const_span(tilized_data);
             }
 
@@ -1141,9 +1238,9 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
                 constexpr bool row_major_input = false;
                 constexpr bool is_exp_a = false;
                 if constexpr (std::is_same_v<DstType, bfloat8_tag>) {
-                    return pack_as_bfp8_tiles(data, row_major_input, is_exp_a, input_tensor_spec.tile());
+                    return pack_as_bfp8_tiles(data, row_major_input, is_exp_a, output_spec.tile());
                 } else if constexpr (std::is_same_v<DstType, bfloat4_tag>) {
-                    return pack_as_bfp4_tiles(data, row_major_input, is_exp_a, input_tensor_spec.tile());
+                    return pack_as_bfp4_tiles(data, row_major_input, is_exp_a, output_spec.tile());
                 } else {
                     static_assert(ttsl::concepts::always_false_v<DstType>, "Unsupported data type");
                 }
@@ -1175,12 +1272,46 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
         return input_tensor;
     }
 
-    auto input_buffer = CMAKE_UNIQUE_NAMESPACE::preprocess_buffers(input_tensor.buffer(), src_type);
+    const size_t expected_input_shard_size = input_tensor.tensor_spec().compute_packed_buffer_size_bytes();
+    for (const auto& coord : input_tensor.buffer().shard_coords()) {
+        auto shard = input_tensor.buffer().get_shard(coord);
+        if (shard) {
+            TT_FATAL(
+                shard->view_bytes().size() == expected_input_shard_size,
+                "to_dtype input shard size mismatch before conversion: actual {} != expected {}",
+                shard->view_bytes().size(),
+                expected_input_shard_size);
+        }
+    }
 
-    auto output_storage = [src_type, dst_type = dtype, &input_tensor, &input_buffer]() {
+    auto input_buffer =
+        CMAKE_UNIQUE_NAMESPACE::preprocess_buffers(input_tensor.buffer(), src_type, input_tensor.tensor_spec().tile());
+
+    const auto layout =
+        (dtype == DataType::BFLOAT4_B || dtype == DataType::BFLOAT8_B) ? Layout::TILE : input_tensor.layout();
+
+    tt::tt_metal::PageConfig page_config(layout, input_tensor.tensor_spec().tile());
+
+    auto output_spec = TensorSpec(
+        input_tensor.logical_shape(),
+        tt::tt_metal::TensorLayout(
+            dtype,
+            page_config,
+            input_tensor.tensor_spec().memory_config(),
+            input_tensor.tensor_spec().tensor_layout().get_alignment()));
+
+    TT_FATAL(
+        input_tensor.tensor_spec().physical_shape() == output_spec.physical_shape(),
+        "to_dtype: Converting layout to {} implicitly changed physical shape from {} to {} due to alignment "
+        "constraints. This is currently unsupported. Please pad the tensor explicitly before conversion.",
+        layout,
+        input_tensor.tensor_spec().physical_shape(),
+        output_spec.physical_shape());
+
+    auto output_storage = [src_type, dst_type = dtype, &input_tensor, &input_buffer, &output_spec]() {
         auto with_src_and_dst = [&]<typename SrcType, typename DstType>() {
             return CMAKE_UNIQUE_NAMESPACE::transform_buffers<SrcType, DstType>(
-                input_tensor.tensor_spec(), input_buffer);
+                input_tensor.tensor_spec(), output_spec, input_buffer);
         };
 
         auto with_src = [dst_type, &with_src_and_dst]<typename SrcType>() {
@@ -1216,25 +1347,172 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
         TT_THROW("Unreachable");
     }();
 
-    const auto layout =
-        (dtype == DataType::BFLOAT4_B || dtype == DataType::BFLOAT8_B) ? Layout::TILE : input_tensor.layout();
-
-    tt::tt_metal::PageConfig page_config(layout);
-    if (input_tensor.layout() == Layout::TILE) {
-        page_config = tt::tt_metal::PageConfig(layout, input_tensor.tensor_spec().tile());
+    auto result_buffer = std::move(output_storage);
+    const size_t expected_shard_size = output_spec.compute_packed_buffer_size_bytes();
+    for (const auto& coord : result_buffer.shard_coords()) {
+        auto shard = result_buffer.get_shard(coord);
+        if (shard) {
+            TT_FATAL(
+                shard->view_bytes().size() == expected_shard_size,
+                "to_dtype shard size mismatch after conversion: actual {} != expected {}",
+                shard->view_bytes().size(),
+                expected_shard_size);
+        }
     }
 
-    auto output_spec = TensorSpec(
-        input_tensor.logical_shape(),
-        tt::tt_metal::TensorLayout::fromPaddedShape(
-            dtype,
-            page_config,
-            input_tensor.tensor_spec().memory_config(),
-            input_tensor.logical_shape(),
-            input_tensor.padded_shape()));
-
-    return HostTensor(std::move(output_storage), output_spec, input_tensor.tensor_topology());
+    return HostTensor::from_buffer(std::move(result_buffer), output_spec, input_tensor.tensor_topology());
 }
+
+// ======================================================================================
+//                                  .to_tensor_spec()
+// ======================================================================================
+
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+bool exact_spec_match(const TensorSpec& a, const TensorSpec& b) {
+    return a == b && experimental::per_core_allocation::is_per_core_allocation(a.memory_config()) ==
+                         experimental::per_core_allocation::is_per_core_allocation(b.memory_config());
+}
+
+bool is_bfp_dtype(DataType dtype) { return dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B; }
+
+bool is_integral_dtype(DataType dtype) {
+    return dtype == DataType::UINT8 || dtype == DataType::UINT16 || dtype == DataType::UINT32 ||
+           dtype == DataType::INT32;
+}
+
+template <typename DestInt, typename PadT>
+void validate_float_pad_against_integral(PadT pad_value) {
+    const double pad_as_double = static_cast<double>(static_cast<float>(pad_value));
+    TT_FATAL(
+        std::isfinite(pad_as_double),
+        "to_tensor_spec: floating pad_value must be finite when destination dtype is integral (got {})",
+        pad_as_double);
+    const double lo = static_cast<double>(std::numeric_limits<DestInt>::lowest());
+    const double hi = static_cast<double>(std::numeric_limits<DestInt>::max());
+    TT_FATAL(
+        pad_as_double >= lo && pad_as_double <= hi,
+        "to_tensor_spec: floating pad_value {} is out of range for integral destination [{}, {}]",
+        pad_as_double,
+        lo,
+        hi);
+}
+
+template <typename PadT>
+void validate_pad_for_integral_dest(PadT pad_value, DataType dest_dtype) {
+    if constexpr (!(std::is_same_v<PadT, float> || std::is_same_v<PadT, bfloat16>)) {
+        return;
+    }
+    switch (dest_dtype) {
+        case DataType::UINT8: validate_float_pad_against_integral<uint8_t>(pad_value); break;
+        case DataType::UINT16: validate_float_pad_against_integral<uint16_t>(pad_value); break;
+        case DataType::UINT32: validate_float_pad_against_integral<uint32_t>(pad_value); break;
+        case DataType::INT32: validate_float_pad_against_integral<int32_t>(pad_value); break;
+        default: break;
+    }
+}
+
+void assert_packed_shard_sizes(const DistributedHostBuffer& buffer, const TensorSpec& spec) {
+    const size_t expected_shard_size = spec.compute_packed_buffer_size_bytes();
+    for (const auto& coord : buffer.shard_coords()) {
+        auto shard = buffer.get_shard(coord);
+        if (shard) {
+            TT_FATAL(
+                shard->view_bytes().size() == expected_shard_size,
+                "to_tensor_spec shard size mismatch: actual {} != expected {}",
+                shard->view_bytes().size(),
+                expected_shard_size);
+        }
+    }
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
+template <typename T>
+HostTensor to_tensor_spec(const HostTensor& tensor, const TensorSpec& dest_spec, T pad_value) {
+    TT_FATAL(
+        tensor.logical_shape().rank() > 0,
+        "to_tensor_spec: rank-0 tensors are unsupported (got rank {})",
+        tensor.logical_shape().rank());
+    TT_FATAL(
+        tensor.logical_shape() == dest_spec.logical_shape(),
+        "to_tensor_spec: logical shapes must match (src {}, dest {})",
+        tensor.logical_shape(),
+        dest_spec.logical_shape());
+    TT_FATAL(
+        tensor.dtype() != DataType::FP8_E4M3 && dest_spec.data_type() != DataType::FP8_E4M3,
+        "to_tensor_spec: FP8_E4M3 source/destination is unsupported in v1");
+
+    const bool bfp_src = CMAKE_UNIQUE_NAMESPACE::is_bfp_dtype(tensor.dtype());
+    const bool bfp_dst = CMAKE_UNIQUE_NAMESPACE::is_bfp_dtype(dest_spec.data_type());
+    const DataType working_encode_dtype = (bfp_src || bfp_dst) ? DataType::FLOAT32 : tensor.dtype();
+    const auto pad_dtype = convert_to_data_type<T>();
+    TT_FATAL(
+        pad_dtype == working_encode_dtype,
+        "to_tensor_spec: pad/encode type {} must match working encode dtype {} "
+        "(BFP paths require float; otherwise T must match the post-decode source dtype)",
+        pad_dtype,
+        working_encode_dtype);
+
+    if (CMAKE_UNIQUE_NAMESPACE::exact_spec_match(tensor.tensor_spec(), dest_spec)) {
+        return tensor;
+    }
+
+    HostTensor source_for_decode = tensor;
+    if (working_encode_dtype == DataType::FLOAT32 && tensor.dtype() != DataType::FLOAT32) {
+        // Mandatory BFP staging (and BFP-dest float pivot): convert to FLOAT32 before decode.
+        source_for_decode = to_dtype(tensor, DataType::FLOAT32);
+    }
+
+    const TensorSpec& decode_spec = source_for_decode.tensor_spec();
+    const TensorSpec working_spec(
+        dest_spec.logical_shape(),
+        TensorLayout(
+            working_encode_dtype,
+            dest_spec.page_config(),
+            dest_spec.memory_config(),
+            dest_spec.tensor_layout().get_alignment()));
+
+    // If floating pad will land in padded regions that a later integral to_dtype casts, reject bad pads first.
+    if (CMAKE_UNIQUE_NAMESPACE::is_integral_dtype(dest_spec.data_type()) &&
+        working_spec.logical_2d_shape() != working_spec.physical_shape()) {
+        CMAKE_UNIQUE_NAMESPACE::validate_pad_for_integral_dest(pad_value, dest_spec.data_type());
+    }
+
+    auto transformed_buffer = source_for_decode.buffer().transform(
+        [&](const HostBuffer& buffer) {
+            auto physical = buffer.view_as<const T>();
+            auto logical = tensor_impl::decode_tensor_data(physical, decode_spec);
+            auto encoded = tensor_impl::encode_tensor_data(ttsl::make_const_span(logical), working_spec, pad_value);
+            return HostBuffer(std::move(encoded));
+        },
+        DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+
+    CMAKE_UNIQUE_NAMESPACE::assert_packed_shard_sizes(transformed_buffer, working_spec);
+
+    HostTensor result = HostTensor::from_buffer(std::move(transformed_buffer), working_spec, tensor.tensor_topology());
+
+    if (result.dtype() != dest_spec.data_type()) {
+        result = to_dtype(result, dest_spec.data_type());
+    }
+
+    TT_FATAL(
+        CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), dest_spec),
+        "to_tensor_spec: result does not satisfy exact-spec predicate against dest_spec");
+    CMAKE_UNIQUE_NAMESPACE::assert_packed_shard_sizes(result.buffer(), dest_spec);
+    TT_FATAL(result.tensor_topology() == tensor.tensor_topology(), "to_tensor_spec: topology must be preserved");
+
+    return result;
+}
+
+template HostTensor to_tensor_spec<float>(const HostTensor&, const TensorSpec&, float);
+template HostTensor to_tensor_spec<bfloat16>(const HostTensor&, const TensorSpec&, bfloat16);
+template HostTensor to_tensor_spec<int32_t>(const HostTensor&, const TensorSpec&, int32_t);
+template HostTensor to_tensor_spec<uint32_t>(const HostTensor&, const TensorSpec&, uint32_t);
+template HostTensor to_tensor_spec<uint16_t>(const HostTensor&, const TensorSpec&, uint16_t);
+template HostTensor to_tensor_spec<uint8_t>(const HostTensor&, const TensorSpec&, uint8_t);
 
 // ======================================================================================
 //                                  Utility functions

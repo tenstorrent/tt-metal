@@ -16,7 +16,6 @@ from loguru import logger
 
 import ttnn._ttnn
 
-
 Config = ttnn._ttnn.core.Config
 CONFIG = ttnn._ttnn.CONFIG
 CONFIG_PATH = None
@@ -174,10 +173,16 @@ from ttnn._ttnn.fabric import (
     get_fabric_config,
     get_tt_fabric_packet_header_size_bytes,
     get_tt_fabric_max_payload_size_bytes,
+    get_physical_mesh_shapes,
+    get_eth_forwarding_direction,
+    get_all_fabric_mesh_ids,
     MeshId,
     FabricNodeId,
     setup_fabric_connection,
     setup_routing_plane_connection,
+    get_fabric_kernel_defines,
+    fabric_connection_rt_args,
+    compute_fabric_connection_rt_args,
 )
 
 # Import cluster functions and types
@@ -336,7 +341,6 @@ from ttnn.device import (
     ReadDeviceProfiler,
     SetDefaultDevice,
     GetDefaultDevice,
-    pad_to_tile_shape,
     SubDevice,
     SubDeviceId,
     SubDeviceManagerId,
@@ -380,7 +384,6 @@ tile_size = ttnn._ttnn.tensor.tile_size
 element_size = ttnn._ttnn.tensor.element_size
 
 import ttnn.reflection
-import ttnn.database
 
 from ttnn.decorators import (
     attach_golden_function,
@@ -440,7 +443,7 @@ if "ttnn.experimental" in sys.modules:
                 sub_submodule = importlib.import_module(full_internal_name)
                 sys.modules[full_external_name] = sub_submodule
 
-from ttnn.operations.unary import SigmoidMode
+from ttnn.operations.unary import SigmoidMode, GeluVariant
 
 divide = ttnn.div
 sub = ttnn.subtract
@@ -519,7 +522,7 @@ from ttnn.operations.reduction import (
     ReduceType,
 )
 
-from ttnn.operations.ccl import Topology, DispatchAlgorithm, WorkerMode
+from ttnn.operations.ccl import Topology, get_usable_topology, DispatchAlgorithm, WorkerMode
 
 from ttnn.operations.conv2d import (
     Conv2dConfig,
@@ -549,13 +552,16 @@ from ttnn.operations.pool import (
 from ttnn._ttnn.operations.experimental import Conv3dConfig
 from ttnn._ttnn.operations.experimental import disaggregation
 from ttnn._ttnn.operations.experimental import MinimalMatmulConfig
+from ttnn._ttnn.operations.experimental import RoutedExpertActivation
 
 # Expose disaggregation in experimental namespace
 experimental.disaggregation = disaggregation
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
-from ttnn.operations.transformer import SDPAProgramConfig
+from ttnn.operations.transformer import SDPAProgramConfig, PagedCacheGeometryOverride, SparseKVFormat
+
+transformer.SparseKVFormat = SparseKVFormat
 
 IndexerScoreProgramConfig = ttnn._ttnn.operations.experimental.IndexerScoreProgramConfig
 

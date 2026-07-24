@@ -135,7 +135,7 @@ def test_dram_group_norm_vae_welford_reciprocal_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 1516464  # Measured: 1.52ms for GroupNorm VAE welford_reciprocal
+    expected_duration_ns = 1331396  # Measured: 1.33ms for GroupNorm VAE welford_reciprocal
 
     # Log the performance result
     print(
@@ -283,7 +283,9 @@ def test_conv2d_block_sharded_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 1025500  # Updated 2026-05-06: op is ~1.6% faster (~1.025ms), see gh#43750
+    expected_duration_ns = (
+        993500  # Updated 2026-07-09: ~3% faster (~0.9935ms) after CircularBuffer->DataflowBuffer kernel port
+    )
 
     # Log the performance result
     print(

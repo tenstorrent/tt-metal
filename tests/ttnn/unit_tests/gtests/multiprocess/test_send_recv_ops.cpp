@@ -17,6 +17,7 @@
 #include "tests/ttnn/unit_tests/gtests/ccl/send_recv_op_utils.hpp"
 
 namespace tt::tt_metal {
+using ttnn::Tensor;
 
 class MeshDeviceDual2x4SendRecvFixture : public tt::tt_fabric::fabric_router_tests::MeshDeviceDual2x4Fixture,
                                          public testing::WithParamInterface<SocketTestArgs> {};
@@ -98,11 +99,11 @@ void test_send_recv_async_(
         auto input_data = ttnn::distributed::aggregate_tensor(input_tensor, *composer).to_vector<T>();
         // Send test results to the receiver host
         distributed_context->send(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(input_data.data()), input_data.size() * sizeof(T)),
+            ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(input_data.data()), input_data.size() * sizeof(T)),
             receiver_rank,  // send to receiver host
             tag             // exchange test results over tag 0
         );
-        auto output_tensor = tt::tt_metal::create_device_tensor(
+        auto output_tensor = ttnn::create_device_tensor(
             TensorSpec(input_shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(layout), memory_config)),
             mesh_device.get());
         ttnn::experimental::recv_async(output_tensor, backward_socket);
@@ -110,14 +111,14 @@ void test_send_recv_async_(
         auto output_data = ttnn::distributed::aggregate_tensor(output_tensor, *composer).to_vector<T>();
         std::vector<T> inc_output_data(output_data.size());
         distributed_context->recv(
-            tt::stl::Span<std::byte>(
+            ttsl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(inc_output_data.data()), inc_output_data.size() * sizeof(T)),
             receiver_rank,  // recv from receiver host
             tag             // exchange test results over tag 0
         );
         EXPECT_EQ(output_data, inc_output_data);
     } else {
-        auto output_tensor = tt::tt_metal::create_device_tensor(
+        auto output_tensor = ttnn::create_device_tensor(
             TensorSpec(input_shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(layout), memory_config)),
             mesh_device.get());
         ttnn::experimental::recv_async(output_tensor, forward_socket);
@@ -126,7 +127,7 @@ void test_send_recv_async_(
         auto output_data = ttnn::distributed::aggregate_tensor(output_tensor, *composer).to_vector<T>();
         std::vector<T> input_data(output_data.size());
         distributed_context->recv(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(input_data.data()), input_data.size() * sizeof(T)),
+            ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(input_data.data()), input_data.size() * sizeof(T)),
             sender_rank,  // recv from sender host
             tag           // exchange test results over tag 0
         );
@@ -136,7 +137,7 @@ void test_send_recv_async_(
         distributed::Synchronize(mesh_device.get(), std::nullopt);
         auto inc_output_data = ttnn::distributed::aggregate_tensor(inc_output_tensor, *composer).to_vector<T>();
         distributed_context->send(
-            tt::stl::Span<std::byte>(
+            ttsl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(inc_output_data.data()), inc_output_data.size() * sizeof(T)),
             sender_rank,  // send to sender host
             tag           // exchange test results over tag 0

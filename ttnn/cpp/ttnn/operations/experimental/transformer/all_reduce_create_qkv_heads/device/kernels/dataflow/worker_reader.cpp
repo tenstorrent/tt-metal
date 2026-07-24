@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 #include <tt-metalium/buffer_types.hpp>
 #include <cstdint>
 #include <utility>
@@ -18,6 +21,7 @@ constexpr uint32_t cb0_id = get_compile_time_arg_val(1);
 constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(2);
 
 void kernel_main() {
+    Noc noc;
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
@@ -43,10 +47,14 @@ void kernel_main() {
             std::min(num_tiles_per_core - shard_tile_id, num_tiles_to_read - tiles_read);
         cb_reserve_back(cb0_id, num_tiles_to_read_this_core);
         const uint32_t l1_write_addr = get_write_ptr(cb0_id);
-        uint64_t read_addr = get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0);
-        read_addr += shard_tile_id * tensor0_page_size;
+        uint32_t read_addr = tensor_address0 + shard_tile_id * tensor0_page_size;
 
-        noc_async_read(read_addr, l1_write_addr, num_tiles_to_read_this_core * tensor0_page_size);
+        noc.async_read(
+            UnicastEndpoint{},
+            CoreLocalMem<uint32_t>(l1_write_addr),
+            num_tiles_to_read_this_core * tensor0_page_size,
+            {.noc_x = core_noc_x[core_id], .noc_y = core_noc_y[core_id], .addr = read_addr},
+            {});
         noc_async_read_barrier();
 
         cb_push_back(cb0_id, num_tiles_to_read_this_core);

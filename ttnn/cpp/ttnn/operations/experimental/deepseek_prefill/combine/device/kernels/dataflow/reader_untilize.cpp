@@ -30,6 +30,9 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "api/debug/dprint.h"
 
 #define ENABLE_COMBINE_DEBUG 0
@@ -65,10 +68,12 @@ void kernel_main() {
     //                                              used for cb_reserve_back / cb_push_back / cb_wait_front
     //  18+: TensorAccessorArgs for dispatched_buffer, then TensorAccessorArgs for dispatched_metadata
     constexpr uint32_t cb_experts_tok_counter_id = get_compile_time_arg_val(0);
+    CircularBuffer cb_experts_tok_counter(cb_experts_tok_counter_id);
     constexpr uint32_t experts_tok_counter_pages = get_compile_time_arg_val(1);
     constexpr uint32_t experts_per_chip = get_compile_time_arg_val(2);
     constexpr uint32_t counter_offset = get_compile_time_arg_val(3);
     constexpr uint32_t cb_dispatched_buffer_id = get_compile_time_arg_val(4);
+    CircularBuffer cb_dispatched_buffer(cb_dispatched_buffer_id);
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(5);
     constexpr uint32_t hidden_size = get_compile_time_arg_val(6);
     constexpr uint32_t read_batch_size = get_compile_time_arg_val(7);
@@ -79,9 +84,12 @@ void kernel_main() {
     constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(12);
     constexpr uint32_t aligned_experts_tok_counter_page_size = get_compile_time_arg_val(13);
     constexpr uint32_t cb_metadata_batch_id = get_compile_time_arg_val(14);
+    CircularBuffer cb_metadata_batch(cb_metadata_batch_id);
     constexpr uint32_t aligned_dispatched_metadata_page_size = get_compile_time_arg_val(15);
     constexpr uint32_t block_ct_dim = get_compile_time_arg_val(16);
     constexpr uint32_t cb_counter_total_pages = get_compile_time_arg_val(17);
+
+    Noc noc;
     constexpr auto dispatched_buffer_args = TensorAccessorArgs<18>();
     constexpr auto dispatched_metadata_args =
         TensorAccessorArgs<dispatched_buffer_args.next_compile_time_args_offset()>();
@@ -115,19 +123,18 @@ void kernel_main() {
     // Note: don't reset counter_ready_sem — writer_untilize on this same core also waits on it
     // to read the sender's receive_buf_addr from c_1. Since neither kernel re-uses the sem within
     // a single invocation, leaving it latched at >=1 is safe.
-    cb_reserve_back(cb_experts_tok_counter_id, cb_counter_total_pages);
+    cb_experts_tok_counter.reserve_back(cb_counter_total_pages);
 
-    volatile tt_l1_ptr uint32_t* counter_ready_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(counter_ready_semaphore_id));
-    noc_semaphore_wait(counter_ready_sem_ptr, 1);
+    Semaphore<> counter_ready_sem(counter_ready_semaphore_id);
+    counter_ready_sem.wait(1);
 
-    cb_push_back(cb_experts_tok_counter_id, cb_counter_total_pages);
+    cb_experts_tok_counter.push_back(cb_counter_total_pages);
 
     // ===== Step 2: Read per-expert token counts =====
     // writer_untilize independently reads the sender's receive_buf_addr from c_1 at offset
     // experts_tok_counter_pages * aligned_experts_tok_counter_page_size (same L1 layout).
-    cb_wait_front(cb_experts_tok_counter_id, cb_counter_total_pages);
-    uint32_t token_counter_base = get_read_ptr(cb_experts_tok_counter_id);
+    cb_experts_tok_counter.wait_front(cb_counter_total_pages);
+    uint32_t token_counter_base = cb_experts_tok_counter.get_read_ptr();
     const volatile tt_l1_ptr uint32_t* counter_l1_src =
         reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(token_counter_base) + counter_offset;
     uint32_t local_expert_counts[experts_per_chip];
@@ -196,19 +203,20 @@ void kernel_main() {
                 // wrap).  Only the first batch_count pages contain valid metadata read from
                 // DRAM; the trailing (read_batch_size - batch_count) pages are unused and
                 // will not be read by the consumer.
-                cb_reserve_back(cb_metadata_batch_id, read_batch_size);
-                uint32_t metadata_base = get_write_ptr(cb_metadata_batch_id);
+                cb_metadata_batch.reserve_back(read_batch_size);
                 {
                     // DeviceZoneScopedN("METADATA-read");
                     for (uint32_t t = 0; t < batch_count; t++) {
-                        noc_async_read_page(
-                            metadata_batch_start + t,
+                        noc.async_read(
                             dispatched_metadata_addr_gen,
-                            metadata_base + t * aligned_dispatched_metadata_page_size);
+                            cb_metadata_batch,
+                            aligned_dispatched_metadata_page_size,
+                            {.page_id = metadata_batch_start + t},
+                            {.offset_bytes = t * aligned_dispatched_metadata_page_size});
                     }
-                    noc_async_read_barrier();
+                    noc.async_read_barrier();
                 }
-                cb_push_back(cb_metadata_batch_id, read_batch_size);
+                cb_metadata_batch.push_back(read_batch_size);
             }
 
 #if IS_TILE_LAYOUT
@@ -222,19 +230,20 @@ void kernel_main() {
                 constexpr uint32_t num_blocks = tiles_per_batch / block_ct_dim;
                 for (uint32_t cnt = 0; cnt < num_blocks; cnt++) {
                     uint32_t batch_tile = batch_tile_start + cnt * block_ct_dim;
-                    cb_reserve_back(cb_dispatched_buffer_id, block_ct_dim);
-                    uint32_t buffer_base = get_write_ptr(cb_dispatched_buffer_id);
+                    cb_dispatched_buffer.reserve_back(block_ct_dim);
                     {
                         // DeviceZoneScopedN("DISPATCHED-BUFFER-read");
                         for (uint32_t t = 0; t < block_ct_dim; t++) {
-                            noc_async_read_page(
-                                batch_tile + t,
+                            noc.async_read(
                                 dispatched_buffer_addr_gen,
-                                buffer_base + t * aligned_dispatched_buffer_page_size);
+                                cb_dispatched_buffer,
+                                aligned_dispatched_buffer_page_size,
+                                {.page_id = batch_tile + t},
+                                {.offset_bytes = t * aligned_dispatched_buffer_page_size});
                         }
-                        noc_async_read_barrier();
+                        noc.async_read_barrier();
                     }
-                    cb_push_back(cb_dispatched_buffer_id, block_ct_dim);
+                    cb_dispatched_buffer.push_back(block_ct_dim);
                 }
                 // Steps 3-7 (wait for untilize, wait for sender's send signal, NOC-write to
                 // sender, signal sender, pop untilize CB) now run on writer_untilize.

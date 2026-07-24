@@ -116,7 +116,7 @@ class WanTransformerBlock(Module):
         self.ffn = ParallelFeedForward(
             dim,
             inner_dim=ffn_dim,
-            activation_fn="gelu",
+            activation_fn="gelu_tanh",
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
@@ -669,7 +669,7 @@ class WanTransformer3DModel(Module):
         rope_sin_1HND: ttnn.Tensor,
         trans_mat: ttnn.Tensor,
         timestep: ttnn.Tensor,
-        guidance_scale: float,
+        guidance_scale: ttnn.Tensor,
         *,
         gather_output: bool = True,
     ) -> ttnn.Tensor:
@@ -774,5 +774,6 @@ class WanCheckpoint:
             subfolder=self._subfolder,
             parallel_config=parallel_config,
             mesh_shape=tuple(mesh_device.shape),
+            mesh_device=mesh_device,
             is_fsdp=is_fsdp,
         )

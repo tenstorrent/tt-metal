@@ -17,15 +17,15 @@ namespace sfpu {
  *
  * Programs ADDR_MOD_6 with a dest increment of 2 (one SFPU pass writes 2 rows on Quasar).
  *
- * @note Call this before @ref _calculate_square_ to set up the address mode it relies on.
+ * @note Call this before @ref calculate_square to set up the address mode it relies on.
  */
-inline void _init_square_() {
+inline void init_square() {
     addr_mod_t{
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
         .dest = {.incr = 2},
     }
-        .set(ADDR_MOD_6, csr_read<CSR::TRISC_ID>());
+        .set(ADDR_MOD_6);
 }
 
 /**
@@ -34,10 +34,10 @@ inline void _init_square_() {
  * Loads x from dest, multiplies it by itself, and stores the result back to dest using
  * ADDR_MOD_6 to advance to the next pair of rows.
  *
- * @note ADDR_MOD_6 must already be programmed by @ref _init_square_.
+ * @note ADDR_MOD_6 must already be programmed by @ref init_square.
  */
 inline void _calculate_square_sfp_rows_() {
-    sfpi::vFloat v = sfpi::dst_reg[0];  // load x from dest (SFPLOAD)
+    sfpi::vFloat v = sfpi::dst_reg[0];                     // load x from dest (SFPLOAD)
     sfpi::dst_reg[0].mode<>(ckernel::ADDR_MOD_6) = v * v;  // x * x via SFPMUL, store back to dest (SFPSTORE)
 }
 
@@ -45,10 +45,10 @@ inline void _calculate_square_sfp_rows_() {
  * @brief Square a full Dest tile in place: dest = x * x.
  *
  * @tparam ITERATIONS: Number of SFPU passes (each covers 2 rows) needed to span the tile.
- * @note Call @ref _init_square_ before this to program the address mode it depends on.
+ * @note Call @ref init_square before this to program the address mode it depends on.
  */
 template <int ITERATIONS = SFPU_ITERATIONS>
-inline void _calculate_square_() {
+inline void calculate_square() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         _calculate_square_sfp_rows_();

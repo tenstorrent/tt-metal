@@ -119,7 +119,7 @@ void PadDeviceOperation::validate_on_program_cache_miss(
     auto padded_rank = input_tensor.padded_shape().rank();
     TT_FATAL(logical_rank == padded_rank, "ttnn.pad: logical and padded shapes must have the same rank");
     TT_FATAL(input_tensor.logical_shape().rank() <= 4, "ttnn.pad: input tensor rank currently must be 4 or less");
-    TT_FATAL(input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "Operand to pad needs to be on device!");
+    TT_FATAL(input_tensor.storage_type() == ttnn::StorageType::DEVICE, "Operand to pad needs to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
     TT_FATAL(
         input_tensor.layout() == tt::tt_metal::Layout::TILE || input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
@@ -210,10 +210,10 @@ void PadDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-ttnn::TensorSpec PadDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec PadDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         operation_attributes.output_logical_shape,
         TensorLayout::fromPaddedShape(
             input_tensor.dtype(),
@@ -230,6 +230,22 @@ Tensor PadDeviceOperation::create_output_tensors(
     }
     const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
     return create_device_tensor(output_spec, tensor_args.input.device());
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> PadDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Height-sharded RM factory is CB-bound (addresses ride on the sharded CBs; no Buffer* rt-arg). Re-apply
+    // writer arg0 (= output shard height, unchanged) on the first core to trip the fast-path, so the
+    // framework re-patches the sharded CB base addresses instead of rebuilding create_descriptor. (#48928)
+    if (!std::holds_alternative<PadRmShardedHeightOnlyProgramFactory>(
+            select_program_factory(operation_attributes, tensor_args))) {
+        return {};
+    }
+    const auto shard = tensor_return_value.shard_spec().value();  // writer kernel is index 1
+    return {tt::tt_metal::DynamicRuntimeArg{1, shard.grid.bounding_box().start_coord, 0, shard.shape[0]}};
 }
 
 PadDeviceOperation::tensor_return_value_t pad(

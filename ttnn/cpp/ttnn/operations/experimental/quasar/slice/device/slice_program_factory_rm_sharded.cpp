@@ -12,6 +12,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -230,31 +231,16 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     // Resource names
-    const DFBSpecName C0{"c0"};    // resident input shard (legacy CB c_0)
-    const DFBSpecName C16{"c16"};  // resident output shard (legacy CB c_16)
     const TensorParamName INPUT{"input"};
     const TensorParamName OUTPUT{"output"};
     const KernelSpecName READER{"reader"};
 
-    // --- Borrowed-memory DataflowBuffers ---
-    // Both CBs are address-only resident shards (no real FIFO partner): the reader reads the input
-    // shard's L1 base by pointer (cross-core NoC source) and writes the sliced result into the
-    // output shard's L1 base. Self-loop (PRODUCER+CONSUMER on the single reader) satisfies the
-    // validator's producer-and-consumer requirement for each borrowed-memory DFB.
-    DataflowBufferSpec c0_dfb{
-        .unique_id = C0,
-        .entry_size = static_cast<uint32_t>(stick_size_padded),
-        .num_entries = shard_height_padded,
-        .data_format_metadata = cb_data_format,
-        .borrowed_from = INPUT,
-    };
-    DataflowBufferSpec c16_dfb{
-        .unique_id = C16,
-        .entry_size = static_cast<uint32_t>(stick_size_unpadded),
-        .num_entries = shard_height_unpadded,
-        .data_format_metadata = dst_cb_data_format,
-        .borrowed_from = OUTPUT,
-    };
+    // Both shards are address-only resident buffers: the reader reads the input shard's L1 base
+    // (cross-core NoC source) and writes the sliced result into the output shard's L1 base. Both are
+    // reached via local TensorAccessors (tensor::input / tensor::output) in the kernel, so there are no
+    // borrowed self-loop DFBs (which DM kernels may no longer bind as PRODUCER+CONSUMER).
+    (void)cb_data_format;
+    (void)dst_cb_data_format;
 
     // --- Per-core runtime varargs ---
     auto all_runtime_varargs = ttnn::operations::experimental::quasar::get_slice_runtime_varargs_rm_sharded(
@@ -282,17 +268,13 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
         .source =
             "ttnn/cpp/ttnn/operations/experimental/quasar/slice/device/kernels/dataflow/"
             "slice_reader_unary_unpad_dims_rm_sharded.cpp",
-        .compiler_options = {},
-        .dfb_bindings =
-            {DFBBinding{.dfb_spec_name = C0, .accessor_name = "cb_in", .endpoint_type = DFBEndpointType::PRODUCER},
-             DFBBinding{.dfb_spec_name = C0, .accessor_name = "cb_in", .endpoint_type = DFBEndpointType::CONSUMER},
-             DFBBinding{.dfb_spec_name = C16, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::PRODUCER},
-             DFBBinding{.dfb_spec_name = C16, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .tensor_bindings =
+            {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"},
+             TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
         .compile_time_args =
             {{"stick_size_padded", static_cast<uint32_t>(stick_size_padded)},
-             {"stick_size_unpadded", static_cast<uint32_t>(stick_size_unpadded)},
-             {"num_sticks_unpadded", shard_height_unpadded}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+             {"stick_size_unpadded", static_cast<uint32_t>(stick_size_unpadded)}},
+        .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch()),
         .advanced_options = {.num_runtime_varargs = max_varargs},
     };
 
@@ -322,7 +304,6 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
     ProgramSpec spec;
     spec.name = "slice_rm_sharded";
     spec.kernels = {reader};
-    spec.dataflow_buffers = {c0_dfb, c16_dfb};
     spec.tensor_parameters = {input_param, output_param};
     spec.work_units = {WorkUnitSpec{
         .name = "slice_rm_sharded_wu",

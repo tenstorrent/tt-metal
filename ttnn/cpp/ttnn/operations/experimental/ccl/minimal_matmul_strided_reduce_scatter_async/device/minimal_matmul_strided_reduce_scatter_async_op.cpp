@@ -148,7 +148,7 @@ MinimalMatmulStridedReduceScatterAsync::spec_return_value_t
 MinimalMatmulStridedReduceScatterAsync::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // Output tensor[0]: MM output spec (= RS input)
-    ttnn::TensorSpec mm_output_spec = matmul_device_operation_t::compute_output_specs(
+    tt::tt_metal::TensorSpec mm_output_spec = matmul_device_operation_t::compute_output_specs(
         attributes.matmul_struct, {tensor_args.input_tensor, tensor_args.weight_tensor})[0];
 
     // Derive RS intermediate and output specs from the MM output shape
@@ -158,7 +158,7 @@ MinimalMatmulStridedReduceScatterAsync::compute_output_specs(
     MemoryConfig rs_intermediate_mem_config =
         attributes.rs_intermediate_mem_config.value_or(mm_output_spec.memory_config());
 
-    ttnn::TensorSpec rs_intermediate_spec(
+    tt::tt_metal::TensorSpec rs_intermediate_spec(
         mm_output_shape,
         tt::tt_metal::TensorLayout(
             mm_output_spec.data_type(), mm_output_spec.page_config(), rs_intermediate_mem_config));
@@ -167,7 +167,7 @@ MinimalMatmulStridedReduceScatterAsync::compute_output_specs(
     auto rs_output_shape = mm_output_shape;
     rs_output_shape[attributes.dim] /= attributes.ring_size;
 
-    ttnn::TensorSpec rs_output_spec(
+    tt::tt_metal::TensorSpec rs_output_spec(
         rs_output_shape,
         tt::tt_metal::TensorLayout(
             mm_output_spec.data_type(), mm_output_spec.page_config(), attributes.rs_output_mem_config));
@@ -195,43 +195,6 @@ MinimalMatmulStridedReduceScatterAsync::create_output_tensors(
                                         : create_device_tensor(tensor_specs[2], tensor_args.input_tensor.device());
 
     return {mm_output_tensor, rs_intermediate_tensor, rs_output_tensor};
-}
-
-tt::tt_metal::operation::Hash MinimalMatmulStridedReduceScatterAsync::compute_program_hash(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "MinimalMatmulStridedReduceScatterAsync::compute_program_hash is called");
-
-    auto program_factory = select_program_factory(attributes, tensor_args);
-
-    return tt::tt_metal::operation::hash_operation<MinimalMatmulStridedReduceScatterAsync>(
-        // RS params
-        attributes.dim,
-        attributes.num_links,
-        attributes.ring_size,
-        attributes.rs_output_mem_config,
-        attributes.rs_intermediate_mem_config,
-        attributes.topology,
-        attributes.barrier_semaphore.has_value(),
-        attributes.using_persistent_buffers,
-        attributes.sub_device_id.has_value(),
-        attributes.cluster_axis,
-        attributes.num_workers_per_link,
-        attributes.num_buffers_per_channel,
-        attributes.chunk_width_in_mm_blocks,
-        attributes.reduce_scatter_core_grid_offset,
-        // MM params
-        attributes.matmul_struct,
-        // Tensor info
-        tensor_args.input_tensor.logical_shape(),
-        tensor_args.input_tensor.padded_shape(),
-        tensor_args.input_tensor.tensor_spec().page_config(),
-        tensor_args.input_tensor.dtype(),
-        tensor_args.input_tensor.layout(),
-        tensor_args.input_tensor.memory_config(),
-        tensor_args.weight_tensor.logical_shape(),
-        tensor_args.weight_tensor.padded_shape(),
-        tensor_args.weight_tensor.memory_config(),
-        program_factory.index());
 }
 
 }  // namespace ttnn::experimental::prim

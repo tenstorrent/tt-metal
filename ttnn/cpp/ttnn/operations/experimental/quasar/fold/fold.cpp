@@ -10,6 +10,7 @@
 #include "ttnn/operations/experimental/quasar/slice/slice.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/experimental/quasar/pad/pad.hpp"
+#include "ttnn/operations/experimental/quasar/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
@@ -22,6 +23,7 @@
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/experimental/quasar/fold/device/fold_device_op.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
 
 #include "fold.hpp"
 
@@ -63,14 +65,13 @@ std::vector<Tensor> fold_with_transpose_(
     log_debug(tt::LogOp, "input: {}", input.logical_shape());
 
     // pad input tensor
-    tt::tt_metal::Array4D padded_shape = {n, padded_c, padded_h32, padded_w32};
-    auto pad_output =
-        ttnn::operations::experimental::quasar::pad(input, padded_shape, tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
+    ttnn::Array4D padded_shape = {n, padded_c, padded_h32, padded_w32};
+    auto pad_output = ttnn::operations::experimental::quasar::pad(input, padded_shape, ttnn::Array4D({0, 0, 0, 0}), 0);
 
     log_debug(tt::LogOp, "pad_output: {}", pad_output.logical_shape());
 
     auto transpose_hc_output = ttnn::prim::permute(
-        pad_output, ttnn::SmallVector<uint32_t>({0, 3, 1, 2}), std::make_optional(L1_mem_config), std::nullopt);
+        pad_output, ttsl::SmallVector<uint32_t>({0, 3, 1, 2}), std::make_optional(L1_mem_config), std::nullopt);
 
     log_debug(tt::LogOp, "transpose_hc_output: {}", transpose_hc_output.logical_shape());
 
@@ -107,9 +108,9 @@ std::vector<Tensor> fold_with_transpose_(
         // slice
         n = output_shape.value()[0], w = output_shape.value()[1], h = output_shape.value()[2],
         c = output_shape.value()[3];
-        tt::tt_metal::Array4D slice_output_tensor_start = {0, 0, 0, 0};
-        tt::tt_metal::Array4D slice_output_tensor_end = {n, w, h, c};
-        tt::tt_metal::Array4D step = {1, 1, 1, 1};
+        ttnn::Array4D slice_output_tensor_start = {0, 0, 0, 0};
+        ttnn::Array4D slice_output_tensor_end = {n, w, h, c};
+        ttnn::Array4D step = {1, 1, 1, 1};
         auto slice_output = ttnn::operations::experimental::quasar::slice(
             transpose_hc_output2, slice_output_tensor_start, slice_output_tensor_end, step, L1_mem_config);
 
@@ -140,7 +141,7 @@ ttnn::MemoryConfig create_sharded_memory_config(
     uint32_t shard_width = tensor_width;
 
     auto sharded_memory_config = ttnn::MemoryConfig{
-        ttnn::TensorMemoryLayout::HEIGHT_SHARDED,
+        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
         ttnn::BufferType::L1,
         tt::tt_metal::ShardSpec{grid_size, {shard_height, shard_width}, orientation}};
 
@@ -177,7 +178,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     auto target_h = padded_h / stride_h;
     auto target_w = padded_w / stride_w;
     auto target_c = padded_c * stride_h * stride_w;
-    tt::tt_metal::Array4D slice_output_shape = {n, target_h, target_w, target_c};
+    ttnn::Array4D slice_output_shape = {n, target_h, target_w, target_c};
 
     log_debug(tt::LogOp, "padded_c: {}", padded_c);
     log_debug(tt::LogOp, "padded_h: {}", padded_h);
@@ -190,10 +191,10 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     auto shard_spec = input.shard_spec().value();
 
     // pad input tensor
-    tt::tt_metal::Array4D padded_shape = {n, padded_c, padded_h32, w};
+    ttnn::Array4D padded_shape = {n, padded_c, padded_h32, w};
     auto pad_mem_config = create_sharded_memory_config(ttnn::Shape(padded_shape), grid_size, shard_spec.orientation);
     auto tt_output_tensor = ttnn::operations::experimental::quasar::pad(
-        input, padded_shape, tt::tt_metal::Array4D({0, 0, pad_h, 0}), 0, /*use_multicore*/ false, pad_mem_config);
+        input, padded_shape, ttnn::Array4D({0, 0, pad_h, 0}), 0, /*use_multicore*/ false, pad_mem_config);
 
     log_debug(tt::LogOp, "pad_output: {}", tt_output_tensor.logical_shape());
 
@@ -203,12 +204,12 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     log_debug(tt::LogOp, "transpose_hw_output: {}", tt_output_tensor.logical_shape());
 
     // pad tensor W dim
-    tt::tt_metal::Array4D padded_shape2 = {n, padded_c, padded_h32, padded_w32};
+    ttnn::Array4D padded_shape2 = {n, padded_c, padded_h32, padded_w32};
     auto pad_mem_config2 = create_sharded_memory_config(ttnn::Shape(padded_shape2), grid_size, shard_spec.orientation);
     tt_output_tensor = ttnn::operations::experimental::quasar::pad(
         tt_output_tensor,
         padded_shape2,
-        tt::tt_metal::Array4D({0, 0, pad_w, 0}),
+        ttnn::Array4D({0, 0, pad_w, 0}),
         0,
         /*use_multicore*/ false,
         pad_mem_config2);
@@ -246,13 +247,13 @@ std::vector<Tensor> fold_with_transpose_sharded_(
 
     std::vector<Tensor> output_tensors;
     // override output shape
-    auto steps = tt::tt_metal::Array4D({1, 1, 1, 1});
+    auto steps = ttnn::Array4D({1, 1, 1, 1});
     if (output_shape.has_value()) {
         // slice
         n = output_shape.value()[0], h = output_shape.value()[1], w = output_shape.value()[2],
         c = output_shape.value()[3];
-        tt::tt_metal::Array4D slice_output_tensor_start = {0, 0, 0, 0};
-        tt::tt_metal::Array4D slice_output_tensor_end = {n, h, w, c};
+        ttnn::Array4D slice_output_tensor_start = {0, 0, 0, 0};
+        ttnn::Array4D slice_output_tensor_end = {n, h, w, c};
         auto slice_mem_config = create_sharded_memory_config(
             ttnn::Shape({n, h, w, c}), grid_size, shard_spec.orientation, override_memory_config);
         tt_output_tensor = ttnn::operations::experimental::quasar::slice(
@@ -264,8 +265,8 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     } else {
         // slice
         n = slice_output_shape[0], h = slice_output_shape[1], w = slice_output_shape[2], c = slice_output_shape[3];
-        tt::tt_metal::Array4D slice_output_tensor_start = {0, 0, 0, 0};
-        tt::tt_metal::Array4D slice_output_tensor_end = {n, h, w, c};
+        ttnn::Array4D slice_output_tensor_start = {0, 0, 0, 0};
+        ttnn::Array4D slice_output_tensor_end = {n, h, w, c};
         auto slice_mem_config = create_sharded_memory_config(
             ttnn::Shape({n, h, w, c}), grid_size, shard_spec.orientation, override_memory_config);
         tt_output_tensor = ttnn::operations::experimental::quasar::slice(
@@ -328,7 +329,7 @@ static Tensor apply_halo_padding(
         .snap_to_tile = false};
 
     ttnn::Shape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
-    auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
+    auto reshaped_tensor = ttnn::operations::experimental::quasar::reshape(input_tensor, new_shape);
 
     const auto compute_kernel_config = ttnn::init_device_compute_kernel_config(
         tt::tt_metal::hal::get_arch(),
@@ -343,7 +344,7 @@ static Tensor apply_halo_padding(
     // Reshape back to padded original dimensions
     ::ttnn::Shape padded_shape(
         {input_shape[0], input_shape[1] + pad_top + pad_bottom, input_shape[2] + pad_left + pad_right, input_shape[3]});
-    return ttnn::reshape(halo_output, padded_shape);
+    return ttnn::operations::experimental::quasar::reshape(halo_output, padded_shape);
 }
 
 // Each core needs to process multiple of (stride_h * input_width) rows to ensure that
@@ -450,18 +451,18 @@ Tensor fold(
         // Apply channel padding separately if needed
         if (has_c_padding) {
             const auto current_shape = processed_tensor.logical_shape();
-            const tt::tt_metal::Array4D padded_shape = {
+            const ttnn::Array4D padded_shape = {
                 static_cast<uint32_t>(current_shape[0]),
                 static_cast<uint32_t>(current_shape[1]),
                 static_cast<uint32_t>(current_shape[2]),
                 static_cast<uint32_t>(current_shape[3] + pad_c_front + pad_c_back)};
             processed_tensor = ::ttnn::operations::experimental::quasar::pad(
-                processed_tensor, padded_shape, tt::tt_metal::Array4D({0, 0, 0, pad_c_front}), 0);
+                processed_tensor, padded_shape, ttnn::Array4D({0, 0, 0, pad_c_front}), 0);
         }
 
         // If processed tensor is tiled, convert to row-major.
         if (processed_tensor.layout() == Layout::TILE) {
-            processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
+            processed_tensor = ttnn::operations::experimental::quasar::to_layout(processed_tensor, Layout::ROW_MAJOR);
         }
         // Reshard if needed for optimal fold computation
         processed_tensor = operations::experimental::quasar::reshard_if_needed(processed_tensor, stride_h, stride_w);
@@ -473,7 +474,7 @@ Tensor fold(
 
     // Apply padding if needed
     if (has_hw_padding || has_c_padding) {
-        ttnn::SmallVector<ttnn::operations::experimental::quasar::PadSpecDim> padding_spec;
+        ttsl::SmallVector<ttnn::operations::experimental::quasar::PadSpecDim> padding_spec;
         padding_spec.push_back({0, 0});                     // N dimension
         padding_spec.push_back({pad_top, pad_bottom});      // H dimension
         padding_spec.push_back({pad_left, pad_right});      // W dimension
@@ -492,7 +493,7 @@ Tensor fold(
 
     // The interleaved fold kernels operate on row-major data, so untilize first.
     if (was_tiled) {
-        processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
+        processed_tensor = ttnn::operations::experimental::quasar::to_layout(processed_tensor, Layout::ROW_MAJOR);
     }
 
     auto output_tensor = ttnn::prim::qsr::fold(processed_tensor, stride_h, stride_w);
@@ -501,7 +502,7 @@ Tensor fold(
     if (was_tiled) {
         const ttnn::Shape final_shape(
             {batch_size, input_height / stride_h, input_width / stride_w, in_channels * stride_h * stride_w});
-        return ttnn::reshape(output_tensor, final_shape);
+        return ttnn::operations::experimental::quasar::reshape(output_tensor, final_shape);
     }
 
     return output_tensor;

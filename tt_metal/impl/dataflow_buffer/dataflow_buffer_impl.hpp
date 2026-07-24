@@ -146,14 +146,16 @@ private:
     std::unordered_map<CoreCoord, uint8_t> next_index_;
 };
 
-// Allocates hardware transaction IDs. Valid range: [0, 31]
+// Allocates hardware transaction IDs. Valid range: [1, 31].
+// Txn id 0 is reserved for NoC transactions that do not stamp an explicit txn id.
+// DFBs must not assign it.
 class TxnIdAllocator {
 public:
     std::vector<uint8_t> allocate(uint8_t count);
-    void reset() { next_id_ = 0; }
+    void reset() { next_id_ = 1; }
 
 private:
-    uint8_t next_id_ = 0;
+    uint8_t next_id_ = 1;
 };
 
 // Allocates Remapper clientTypes for ALL consumer mode.

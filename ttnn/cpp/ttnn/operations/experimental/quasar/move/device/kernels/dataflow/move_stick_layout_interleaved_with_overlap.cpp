@@ -7,7 +7,6 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
-#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -42,7 +41,6 @@ void kernel_main() {
     DataflowBuffer cb(dfb::scratch);
 
     const auto src_addrgen = TensorAccessor(tensor::input);
-    const auto dst_addrgen = TensorAccessor(tensor::output);
 
     // if controller core then this local address will be incremented by remote cores,
     // otherwise controller core will set this to signal that write to dst can be done once controller core sees
@@ -51,14 +49,15 @@ void kernel_main() {
 
     // read a ublock of tiles from src to CB
     cb.reserve_back(num_pages);
-    uint32_t l1_write_addr = cb.get_write_ptr();
     for (uint32_t i = start_id; i < start_id + num_pages; ++i) {
-        CoreLocalMem<uint32_t> dst(l1_write_addr);
-        noc.async_read(src_addrgen, dst, page_size, {.page_id = i, .offset_bytes = 0}, {.offset_bytes = 0});
+        noc.async_read(
+            src_addrgen,
+            cb,
+            page_size,
+            {.page_id = i, .offset_bytes = 0},
+            {.offset_bytes = (i - start_id) * aligned_page_size});
         noc.async_read_barrier();
-        l1_write_addr += aligned_page_size;
     }
-    cb.push_back(num_pages);
 
     if (is_controller) {
         sem.wait(control_value);
@@ -79,13 +78,10 @@ void kernel_main() {
         sem.wait(control_value);
     }
 
-    cb.wait_front(num_pages);
-    uint32_t l1_read_addr = cb.get_read_ptr();
-    for (uint32_t i = start_id; i < start_id + num_pages; ++i) {
-        CoreLocalMem<uint32_t> src(l1_read_addr);
-        noc.async_write(src, dst_addrgen, page_size, {.offset_bytes = 0}, {.page_id = i, .offset_bytes = 0});
-        noc.async_write_barrier();
-        l1_read_addr += aligned_page_size;
-    }
-    cb.pop_front(num_pages);
+    // Publish the staged data to the writer kernel only AFTER the read barriers and the all-cores
+    // handshake above, so the writer's wait_front(dfb::scratch) cannot drain CB -> dst until every
+    // core has finished reading src (the overlap-safety invariant). Then drain the handshake's NoC
+    // writes/atomics before returning (the Metal 2.0 FW epilogue does not).
+    cb.push_back(num_pages);
+    noc.async_full_barrier();
 }

@@ -5,7 +5,10 @@ sizes:
     aliases: ["Llama-3.1-8B", "meta-llama/Llama-3.1-8B-Instruct"]
     skus:
       wh_n150:
-        trace_region_size: 25000000
+        # 0 = dynamic runtime allocation. The fixed 25000000 was sized for the
+        # greedy performance-ci-eval-32 path but is too small for the traced
+        # performance-batch-32 demo (full sampling op captured). See #48636.
+        trace_region_size: 0
       wh_n300:
         trace_region_size: 38000000
       wh_llmbox_perf:
@@ -390,7 +393,7 @@ sizes:
       wh_n300:
         trace_region_size: 30000000
       wh_llmbox_perf:
-        trace_region_size: 30000000
+        trace_region_size: 30100000
       wh_galaxy_perf:
         trace_region_size: 30000000
       bh_p150:

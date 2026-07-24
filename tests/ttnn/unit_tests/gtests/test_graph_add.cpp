@@ -64,7 +64,7 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
             ttnn::zeros(params.b_Shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_, params.memory_config);
 
         auto call = [&] {
-            constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+            constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
             const auto output_tensor =
                 ttnn::add(input_tensor_a, input_tensor_b, std::nullopt, std::nullopt, std::nullopt, none, none, none);
             return output_tensor;
@@ -108,8 +108,8 @@ INSTANTIATE_TEST_SUITE_P(
         ::testing::Values(
             // AddOpGraphTestParam instances for different test cases
             AddOpGraphTestParam{
-                .a_Shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
-                .b_Shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
+                .a_Shape = ttnn::Shape(ttnn::Array4D{1, 3, 32, 32}),
+                .b_Shape = ttnn::Shape(ttnn::Array4D{1, 3, 32, 32}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
                 .expected_calltrace =
                     {"BinaryNgDeviceOperation", "tt::tt_metal::create_device_tensor", "Tensor::deallocate"},
@@ -119,12 +119,12 @@ INSTANTIATE_TEST_SUITE_P(
                 .expected_l1_output_per_core = 2048,
                 .expected_l1_peak_per_core = 2048,
                 .expected_output_info = {graph::TensorInfo{
-                    .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
+                    .shape = ttnn::Shape(ttnn::Array4D{1, 3, 32, 32}),
                     .size = 6144,
                     .type = tt::tt_metal::BufferType::L1}}},
             AddOpGraphTestParam{
-                .a_Shape = ttnn::Shape(tt::tt_metal::Array4D{4, 3, 32, 32}),
-                .b_Shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
+                .a_Shape = ttnn::Shape(ttnn::Array4D{4, 3, 32, 32}),
+                .b_Shape = ttnn::Shape(ttnn::Array4D{1, 3, 32, 32}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
                 .expected_calltrace =
                     {"BinaryNgDeviceOperation", "tt::tt_metal::create_device_tensor", "Tensor::deallocate"},
@@ -134,13 +134,13 @@ INSTANTIATE_TEST_SUITE_P(
                 .expected_l1_output_per_core = 2048,
                 .expected_l1_peak_per_core = 2048,
                 .expected_output_info = {graph::TensorInfo{
-                    .shape = ttnn::Shape(tt::tt_metal::Array4D{4, 3, 32, 32}),
+                    .shape = ttnn::Shape(ttnn::Array4D{4, 3, 32, 32}),
                     .size = 24576,
                     .type = tt::tt_metal::BufferType::L1}},
             },
             AddOpGraphTestParam{
-                .a_Shape = ttnn::Shape(tt::tt_metal::Array4D{3, 1, 32 * 32, 32 * 32}),
-                .b_Shape = ttnn::Shape(tt::tt_metal::Array4D{3, 1, 32 * 32, 32 * 32}),
+                .a_Shape = ttnn::Shape(ttnn::Array4D{3, 1, 32 * 32, 32 * 32}),
+                .b_Shape = ttnn::Shape(ttnn::Array4D{3, 1, 32 * 32, 32 * 32}),
                 .memory_config =
                     tt::tt_metal::MemoryConfig{
                         tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
@@ -157,7 +157,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .expected_l1_output_per_core = 2 * (3 * 32 * 32 * 32 * 32) / 16,
                 .expected_l1_peak_per_core = 2 * (3 * 32 * 32 * 32 * 32) / 16,
                 .expected_output_info = {graph::TensorInfo{
-                    .shape = ttnn::Shape(tt::tt_metal::Array4D{3, 1, 32 * 32, 32 * 32}),
+                    .shape = ttnn::Shape(ttnn::Array4D{3, 1, 32 * 32, 32 * 32}),
                     .size = 2 * (3 * 32 * 32 * 32 * 32),
                     .type = tt::tt_metal::BufferType::L1}}}),
         ::testing::Values(

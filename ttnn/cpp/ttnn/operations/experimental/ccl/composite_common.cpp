@@ -138,7 +138,7 @@ ttnn::Tensor composite_reduce_scatter(
     // insert the internal padding (only pad on the dim we're scattering on)
     auto logical_shape = split_tensors[0].logical_shape();
     auto padded_shape = split_tensors[0].padded_shape();
-    ttnn::SmallVector<std::array<uint32_t, 2>> padding = {
+    ttsl::SmallVector<std::array<uint32_t, 2>> padding = {
         {0, padded_shape[-2] - logical_shape[-2]}, {0, padded_shape[-1] - logical_shape[-1]}};
     for (uint32_t i = 0; i < num_devices; ++i) {
         split_tensors[i] = ttnn::pad(split_tensors[i], padding, 0, true, split_tensors[i].memory_config());
@@ -177,8 +177,8 @@ ttnn::Tensor composite_reduce_scatter(
         rs_output_tensor =
             ttnn::untilize_with_unpadding(padded_native_rs_output_tensor, ends, native_rs_output_memory_config);
     } else {
-        const ttnn::SmallVector<int32_t> steps(output_shape.rank(), 1);
-        ttnn::SmallVector<int32_t> begins(output_shape.rank(), 0), ends(output_shape.cbegin(), output_shape.cend());
+        const ttsl::SmallVector<int32_t> steps(output_shape.rank(), 1);
+        ttsl::SmallVector<int32_t> begins(output_shape.rank(), 0), ends(output_shape.cbegin(), output_shape.cend());
         const ttsl::Span<const int32_t> sbegins(begins), ssteps(steps), sends(ends);
         rs_output_tensor =
             ttnn::slice(padded_native_rs_output_tensor, sbegins, sends, ssteps, native_rs_output_memory_config);
@@ -236,8 +236,8 @@ bool use_all_gather_async_llama_sharded(const ttnn::Tensor& input_tensor, const 
         if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&
             input_tensor_shape[3] == 960 && input_tensor_memory_config.buffer_type() == ttnn::BufferType::L1 &&
             output_mem_config.buffer_type() == ttnn::BufferType::L1 &&
-            input_tensor_memory_config.memory_layout() == ttnn::TensorMemoryLayout::WIDTH_SHARDED &&
-            output_mem_config.memory_layout() == ttnn::TensorMemoryLayout::WIDTH_SHARDED &&
+            input_tensor_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED &&
+            output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED &&
             input_tensor_memory_config.shard_spec()->shape[0] == 32 &&
             input_tensor_memory_config.shard_spec()->shape[1] == 32 && output_mem_config.shard_spec()->shape[0] == 32 &&
             output_mem_config.shard_spec()->shape[1] == 160 && input_shard_num_cores == 30 &&
@@ -252,8 +252,8 @@ bool use_all_gather_async_llama_sharded(const ttnn::Tensor& input_tensor, const 
         if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 8 && input_tensor_shape[2] == 32 &&
             input_tensor_shape[3] == 128 && input_tensor_memory_config.buffer_type() == ttnn::BufferType::L1 &&
             output_mem_config.buffer_type() == ttnn::BufferType::L1 &&
-            input_tensor_memory_config.memory_layout() == ttnn::TensorMemoryLayout::HEIGHT_SHARDED &&
-            output_mem_config.memory_layout() == ttnn::TensorMemoryLayout::HEIGHT_SHARDED &&
+            input_tensor_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
+            output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
             input_tensor_memory_config.shard_spec()->shape[0] == 32 &&
             input_tensor_memory_config.shard_spec()->shape[1] == 128 &&
             output_mem_config.shard_spec()->shape[0] == 32 && output_mem_config.shard_spec()->shape[1] == 128 &&
@@ -266,8 +266,8 @@ bool use_all_gather_async_llama_sharded(const ttnn::Tensor& input_tensor, const 
         if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&
             input_tensor_shape[3] == 32 && input_tensor_memory_config.buffer_type() == ttnn::BufferType::L1 &&
             output_mem_config.buffer_type() == ttnn::BufferType::L1 &&
-            input_tensor_memory_config.memory_layout() == ttnn::TensorMemoryLayout::WIDTH_SHARDED &&
-            output_mem_config.memory_layout() == ttnn::TensorMemoryLayout::WIDTH_SHARDED &&
+            input_tensor_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED &&
+            output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED &&
             input_tensor_memory_config.shard_spec()->shape[0] == 32 &&
             input_tensor_memory_config.shard_spec()->shape[1] == 32 && output_mem_config.shard_spec()->shape[0] == 32 &&
             output_mem_config.shard_spec()->shape[1] == 128 && input_shard_num_cores == 1 &&
@@ -333,9 +333,9 @@ bool use_composite_all_to_all(
     bool use_native =
         (input_tensor.layout() == ttnn::Layout::TILE &&
          input_tensor.buffer()->buffer_type() == ttnn::BufferType::DRAM &&
-         input_tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED &&
+         input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
          (!memory_config.has_value() ||
-          memory_config.value().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED) &&
+          memory_config.value().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) &&
          is_tiled_and_tile_aligned);
 
     return !use_native;

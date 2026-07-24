@@ -11,7 +11,7 @@
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
 #include "api/compute/bcast.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 ALWI void process_tile(
     tt::CBIndex cb_in0,
@@ -23,7 +23,7 @@ ALWI void process_tile(
     uint32_t tile_start,
     uint32_t num_tiles_per_cycle) {
     using namespace ckernel;
-    CircularBuffer exp_cb_out(cb_out);
+    DataflowBuffer exp_dfb_out(cb_out);
 
 #if BCAST_INPUT  // ROW_A_COL_B
                  // BCAST_INPUT == 1 : input B ( true or false tensor) is broadcasted
@@ -41,18 +41,18 @@ ALWI void process_tile(
     constexpr auto cb_right = tt::CBIndex::c_6;
 #endif
 
-    CircularBuffer exp_cb_bcast(CB_BCAST);
-    CircularBuffer exp_cb_other(CB_OTHER);
-    CircularBuffer exp_cb_llk_post(cb_llk_post);
+    DataflowBuffer exp_dfb_bcast(CB_BCAST);
+    DataflowBuffer exp_dfb_other(CB_OTHER);
+    DataflowBuffer exp_dfb_llk_post(cb_llk_post);
 
     unary_op_init_common(cb_left, cb_out);
     BINARY_SFPU_INIT
 
-    exp_cb_bcast.wait_front(num_tiles_per_cycle);
+    exp_dfb_bcast.wait_front(num_tiles_per_cycle);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
-        exp_cb_other.wait_front(num_tiles_per_cycle);
-        exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
+        exp_dfb_other.wait_front(num_tiles_per_cycle);
+        exp_dfb_llk_post.reserve_back(num_tiles_per_cycle);
         pack_reconfig_data_format(cb_out, cb_llk_post);
         unary_bcast_init<BroadcastType::ROW>(CB_OTHER, cb_llk_post);
 
@@ -62,16 +62,16 @@ ALWI void process_tile(
 
         tile_regs_wait();
         pack_tile(0, cb_llk_post);
-        exp_cb_llk_post.push_back(num_tiles_per_cycle);
+        exp_dfb_llk_post.push_back(num_tiles_per_cycle);
         tile_regs_release();
 
-        exp_cb_other.pop_front(num_tiles_per_cycle);
+        exp_dfb_other.pop_front(num_tiles_per_cycle);
         // unary_bcast_uninit<BroadcastType::ROW>(CB_OTHER);
         pack_reconfig_data_format(cb_llk_post, cb_out);
         PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
 
-        exp_cb_out.reserve_back(num_tiles_per_cycle);
-        exp_cb_llk_post.wait_front(num_tiles_per_cycle);
+        exp_dfb_out.reserve_back(num_tiles_per_cycle);
+        exp_dfb_llk_post.wait_front(num_tiles_per_cycle);
 
         tile_regs_acquire();
 
@@ -118,10 +118,10 @@ ALWI void process_tile(
         }
         tile_regs_release();
 
-        exp_cb_out.push_back(num_tiles_per_cycle);
-        exp_cb_llk_post.pop_front(num_tiles_per_cycle);
+        exp_dfb_out.push_back(num_tiles_per_cycle);
+        exp_dfb_llk_post.pop_front(num_tiles_per_cycle);
     }
-    exp_cb_bcast.pop_front(num_tiles_per_cycle);
+    exp_dfb_bcast.pop_front(num_tiles_per_cycle);
 }
 
 void kernel_main() {

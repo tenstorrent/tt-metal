@@ -102,10 +102,8 @@ uint32_t get_linearized_index(const ttnn::MeshCoordinate& mesh_coordinate, const
     return (mesh_coordinate[0] * mesh_view.num_cols()) + mesh_coordinate[1];
 }
 
-// TODO: once #27196 is fixed we can remove the is_mesh_mmio_capable check
 size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, std::optional<size_t> cluster_axis) {
     auto mesh_range = tt::tt_metal::distributed::MeshCoordinateRange(mesh_device.shape());
-    auto mesh_range_set = tt::tt_metal::distributed::MeshCoordinateRangeSet(mesh_range);
     const auto& mesh_view = mesh_device.get_view();
     auto mesh_shape = mesh_view.shape();
     auto topology = tt::tt_fabric::get_fabric_topology();
@@ -114,7 +112,7 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
         {{tt::tt_fabric::RoutingDirection::N, tt::tt_fabric::RoutingDirection::S},
          {tt::tt_fabric::RoutingDirection::W, tt::tt_fabric::RoutingDirection::E}}};
 
-    ttnn::SmallVector<size_t> cluster_axes;
+    ttsl::SmallVector<size_t> cluster_axes;
     if (cluster_axis.has_value()) {
         cluster_axes = {cluster_axis.value()};
     } else {
@@ -124,14 +122,9 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
     auto positive_direction = [&](tt::tt_fabric::RoutingDirection direction) {
         return direction == tt::tt_fabric::RoutingDirection::E || direction == tt::tt_fabric::RoutingDirection::S;
     };
-    [[maybe_unused]] auto negative_direction = [&](tt::tt_fabric::RoutingDirection direction) {
-        return direction == tt::tt_fabric::RoutingDirection::W || direction == tt::tt_fabric::RoutingDirection::N;
-    };
 
-    auto applicable_to_coord = [&](const MeshCoordinate& coord,
-                                   size_t cluster_axis,
-                                   size_t /*axis_size*/,
-                                   tt::tt_fabric::RoutingDirection direction) -> bool {
+    auto applicable_to_coord =
+        [&](const MeshCoordinate& coord, size_t cluster_axis, tt::tt_fabric::RoutingDirection direction) -> bool {
         auto boundary_mode = detail::get_boundary_mode(topology);
         int offset = positive_direction(direction) ? 1 : -1;
         auto neighbor = coord.get_neighbor(mesh_shape, offset, cluster_axis, boundary_mode);
@@ -139,42 +132,35 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
     };
 
     size_t num_available_routing_planes = std::numeric_limits<size_t>::max();
-    bool is_mesh_mmio_capable = true;
-    for (const auto& coord : mesh_range_set.coords()) {
-        // TODO: remove usage of get_device, need api to return correct routing planes accounting for fast dispatch
-        // usage should only be active for T3K
-        if (mesh_device.is_local(coord)) {
-            auto* device = mesh_device.get_device(coord);
-            bool is_mmio_capable = device->is_mmio_capable();
-            is_mesh_mmio_capable &= is_mmio_capable;
-            log_debug(tt::LogOp, "mesh_coordinate: {}, is_mmio_capable: {}", coord, is_mmio_capable);
-        }
+    for (const auto& coord : mesh_range) {
         const auto fabric_node_id = mesh_device.get_fabric_node_id(coord);
 
         for (const auto axis : cluster_axes) {
             for (const auto direction : directions[axis]) {
-                if (applicable_to_coord(coord, axis, mesh_shape[axis], direction)) {
-                    auto planes_in_direction =
-                        tt::tt_fabric::get_num_available_routing_planes_in_direction(fabric_node_id, direction);
-                    // if the device is not mmio capable then one link on some axis will be unavailable
-                    // ideally we only subtract if we're targeting that cluster axis, but we don't have access to that
-                    // information here to be safe, we subtract 1 regardless of the axis when the axis is not available
+                if (applicable_to_coord(coord, axis, direction)) {
+                    auto planes_in_direction = tt::tt_fabric::get_num_usable_routing_planes(fabric_node_id, direction);
                     log_debug(
                         tt::LogOp,
                         "fabric_node_id: {}, direction: {}, planes_in_direction: {}",
                         fabric_node_id,
                         direction,
                         planes_in_direction);
-                    num_available_routing_planes = std::min(num_available_routing_planes, planes_in_direction);
+                    // Skip over planes_in_direction=0 to avoid collapsing the running min to 0.
+                    // This can happen when, for example, there's only 1 or 2 devices, a wrap-around can detect a
+                    // neighbor though there's no fabric link.
+                    if (planes_in_direction > 0) {
+                        num_available_routing_planes = std::min(num_available_routing_planes, planes_in_direction);
+                    }
                 }
             }
         }
     }
-    if (!is_mesh_mmio_capable && num_available_routing_planes > 1) {
-        num_available_routing_planes -= 1;
+    log_debug(tt::LogOp, "num_available_routing_planes: {}", num_available_routing_planes);
+    if (num_available_routing_planes <= 0 || num_available_routing_planes == std::numeric_limits<size_t>::max()) {
+        log_warning(tt::LogOp, "Failed to discover available ethernet links; falling back to 1 link");
+        num_available_routing_planes = 1;
     }
-    log_debug(tt::LogOp, "num_available_routing_planes without max logic: {}", num_available_routing_planes);
-    return std::max(num_available_routing_planes, 1ul);
+    return num_available_routing_planes;
 }
 
 }  // namespace ttnn::operations::ccl::common

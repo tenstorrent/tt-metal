@@ -31,10 +31,10 @@ from ttml.common.utils import (
     round_up_to_tile,
     initialize_device,
     build_logits_mask,
+    build_causal_mask,
     no_grad,
     get_tt_metal_runtime_root,
 )
-from ttml.common.data import build_causal_mask
 from ttml.datasets import Batch, InMemoryDataloader
 from ttml.trainers import SFTConfig, SFTTrainer
 

@@ -3,7 +3,7 @@
 
 import math
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Optional
 
 import torch
 from loguru import logger
@@ -12,8 +12,16 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
+    NullIndexer,
+    ReuseIndexer,
+    TtIndexer,
+    indexer_layer_is_reused,
+    resolve_has_indexer,
+)
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat, MlaKvCacheGeometry
 
 
 class ttMLA:
@@ -29,14 +37,21 @@ class ttMLA:
     ]
 
     @staticmethod
-    def check_cache_complete(cache_path: Path, cache_name_prefix: str) -> bool:
-        """Check if all 8 MLA weight cache files exist."""
+    def check_cache_complete(cache_path: Path, cache_name_prefix: str, has_indexer: bool = False) -> bool:
+        """Check that the dense MLA weight cache files exist, plus the indexer tensorbins when sparse.
+
+        Dense by default (preserves existing callers). When ``has_indexer=True`` the indexer cache
+        (``{prefix}.indexer_*``) must also be complete — a disjoint prefix space from the dense MLA
+        names, so the dense loop here never matches indexer files and vice versa
+        (see ``TtIndexer.check_cache_complete``)."""
         from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
 
         for name in ttMLA.MLA_WEIGHT_NAMES:
             if not pattern_exists(f"{cache_name_prefix}.{name}*.tensorbin", "MLA"):
                 logger.debug(f"TTNN cache missing: {cache_name_prefix}.{name}")
                 return False
+        if has_indexer and not TtIndexer.check_cache_complete(cache_path, cache_name_prefix):
+            return False
         return True
 
     @staticmethod
@@ -210,15 +225,31 @@ class ttMLA:
         sp_axis: int = 0,
         tp_axis: int = 1,
         kv_only: bool = False,
+        has_indexer: bool | None = None,
     ):
-        """Build TTNN cache for MLA weights using device=None (no device copy)."""
+        """Build TTNN cache for MLA weights using device=None (no device copy). For DSA-sparse
+        variants also writes the indexer tensorbins. Fails fast if sparse mode is resolved but the
+        host indexer weights are missing — never silently builds a dense-only cache for a sparse layer."""
         ttMLA._convert_and_cache_weights(
             state_dict, mesh_device, config, layer_idx, sp_axis, tp_axis, cache_path, device=None, kv_only=kv_only
         )
+        # GLM-5.2 shared layers are sparse but own no indexer weights (they reuse a prior full layer's
+        # top-k) -> build the MLA cache only, skip the indexer tensorbins.
+        resolved_has_indexer = resolve_has_indexer(config, state_dict=state_dict, explicit=has_indexer)
+        if resolved_has_indexer and not indexer_layer_is_reused(config, layer_idx):
+            if not TtIndexer.has_host_weights(state_dict):
+                raise ValueError(
+                    f"Sparse MLA cache build for layer {layer_idx} resolved has_indexer=True but the "
+                    f"state dict is missing indexer weights {TtIndexer.WEIGHT_NAMES}. Provide them or "
+                    f"pass has_indexer=False."
+                )
+            TtIndexer.build_ttnn_cache(
+                TtIndexer.extract_host_weights(state_dict), cache_path, mesh_device, config, layer_idx, sp_axis, tp_axis
+            )
 
     def __init__(
         self,
-        config: PretrainedConfig,
+        config: PretrainedConfig,  # TODO: figure out how to use this for GLM and DSv32
         state_dict: dict[str, torch.Tensor],
         mesh_device: ttnn.MeshDevice,
         layer_idx: int = 0,
@@ -232,7 +263,15 @@ class ttMLA:
         slot_num: int = 1,
         layer_num: int = 61,
         kv_only: bool = False,
+        has_indexer: bool | None = None,
+        sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
     ):
+        # DSA indexer weights (v3.2 / GLM): extract NON-mutating, so the caller's state_dict survives
+        # repeated construction / cache build+load (the old pop() emptied it on the first pass). Dense
+        # v3.1 has none. Sparse capability is resolved below via resolve_has_indexer (config DSA fields /
+        # host weights / complete cache) — never from the mere presence of these keys — so cache-only
+        # construction stays sparse instead of silently going dense.
+        idx_host = TtIndexer.extract_host_weights(state_dict)
         self.config = config
         self.mesh_device = mesh_device
         self.layer_idx = layer_idx
@@ -242,10 +281,25 @@ class ttMLA:
         self.is_chunked = is_chunked
         self.slot_num = slot_num
         self.layer_num = layer_num
+        self.sparse_kv_cache_format = MlaKvCacheFormat(sparse_kv_cache_format or MlaKvCacheFormat.BF16_RM)
+        self.kv_cache_geometry = MlaKvCacheGeometry.from_config(config)
 
-        # The RoPE op is fixed by the configured mode: chunked prefill uses the indexed op,
-        # single-shot uses rotary_embedding_llama. Bind once here so forward doesn't re-decide.
-        self._apply_rope = self._apply_rope_padded if is_chunked else self._apply_rope_one_shot
+        # DSA indexer (v3.2 / GLM): resolve sparse mode EXPLICITLY — config DSA fields, then live host
+        # weights, then a complete indexer cache — never from bool(idx_host), which silently went dense
+        # for cache-only construction. Resolved here (before buffer alloc + rope/attention binding) so all
+        # three can key off it. Inert for dense v3.1.
+        self._has_indexer = resolve_has_indexer(
+            config,
+            state_dict=state_dict,
+            explicit=has_indexer,
+            weight_cache_path=self.weight_cache_path,
+            cache_name_prefix=f"layer_{layer_idx}.mla",
+        )
+
+        # The RoPE op is fixed by the configured mode. It is bound AFTER self._has_indexer is resolved
+        # (below), because sparse always runs the block-cyclic path (single-shot is one full-seq chunk at
+        # offset 0) and so needs the indexed op even when not chunked. Dense keeps: chunked -> indexed,
+        # single-shot -> rotary_embedding_llama.
 
         self.sp_axis = sp_axis
         self.tp_axis = tp_axis
@@ -307,8 +361,22 @@ class ttMLA:
         self.tp_factor = mesh_device.shape[self.tp_axis]
         self.sp_factor = mesh_device.shape[self.sp_axis]
 
-        self.ccl_num_links = 2 if is_blackhole() else 1
-        self.ccl_topology = topology
+        self.ccl_num_links = 2 if is_blackhole() else 1  # Blackhole trains 2 fabric routing planes, others 1
+        # Per-axis CCL topology, named symmetrically by axis. The q/kv/wo collectives run on the TP
+        # axis (cluster_axis=tp_axis) and use tp_ccl_topology; the ring-attention SDPA (ring_mla /
+        # ring_joint_sdpa) runs on the SP axis (cluster_axis=sp_axis) and MUST use sp_ccl_topology.
+        # Conflating them deadlocks the SDPA when the two axes differ: e.g. under FABRIC_2D_TORUS_X the
+        # TP axis is Ring but the SP axis has no physical wrap, so a TP-Ring topology on the SP-axis
+        # SDPA waits forever on a missing wrap link. A scalar applies to both axes (preserves 1D-ring /
+        # non-torus behavior).
+        if isinstance(topology, tuple):
+            # The tuple is (dim0, dim1); unpacking as (sp, tp) is only correct when sp_axis=0/tp_axis=1.
+            # Guard it so a future sp_axis/tp_axis swap fails loudly here instead of silently cross-
+            # wiring Ring onto the wrong axis (a runtime deadlock). Mirrors the sparse-path assert below.
+            assert self.sp_axis == 0 and self.tp_axis == 1, "per-axis topology tuple assumes sp_axis=0, tp_axis=1"
+            self.sp_ccl_topology, self.tp_ccl_topology = topology  # (sp_axis_0, tp_axis_1)
+        else:
+            self.sp_ccl_topology = self.tp_ccl_topology = topology
 
         # Ring-attention persistent buffers. Chunked prefill (ring_mla) and the standard ring
         # joint SDPA use disjoint buffer sets, so allocate only the one the configured mode needs --
@@ -316,8 +384,10 @@ class ttMLA:
         # every layer's MLA (uniform across layers, scratch / no per-layer state) instead of
         # re-allocated per layer.
         #
-        # kv_only (last layer) never reaches SDPA, so it needs no ring/gather buffers at all.
-        if kv_only:
+        # kv_only (last layer) never reaches SDPA, so it needs no ring/gather buffers. Sparse (DSA) uses
+        # sparse_sdpa + the transient _gather_kvpe_prefix gather — neither the ring_mla chunked scratch nor
+        # the ring-joint-SDPA buffers — so it allocates none of these regardless of is_chunked.
+        if kv_only or self._has_indexer:
             pass
         elif self.is_chunked:
             # Single combined gathered-KV scratch buffer for ring_mla: K and V both come from the
@@ -375,11 +445,73 @@ class ttMLA:
             self.o_proj_weight = weights["o_proj"]
         logger.info(f"Loaded {len(weights)} weights in MLA layer {layer_idx} (kv_only={kv_only})")
 
+        # DSA indexer (v3.2 / GLM): self._has_indexer was resolved above (before the buffer alloc). The
+        # TtIndexer owns the indexer stems / RoPE tables / device key-cache and reuses this MLA's q_a stem
+        # + collectives. Inert for dense v3.1.
+        # DSA *family* (config carries the indexer fields), independent of whether the indexer is active
+        # this layer. V3.1's dense config lacks them; V3.2's config has them even when a benchmark forces
+        # the attention dense (has_indexer=False). Dense-path tuning gates that must tell V3.1 from a
+        # dense-run V3.2 key on this, not _has_indexer (see _get_sdpa_program_config).
+        self._is_dsa_family = TtIndexer.matches_config(config)
+        # GLM-5.2 indexer reuse: a "shared" layer is sparse but owns no indexer weights — it reuses the
+        # most recent "full" layer's top-k indices, injected at forward, and binds a weight-less
+        # ReuseIndexer (never computes). Absent indexer_types (v3.1 / v3.2 / GLM-5.1) every layer is
+        # "full" -> current behavior, unchanged.
+        self._indexer_reuse = indexer_layer_is_reused(config, layer_idx)
+        if self._has_indexer:
+            # The indexer assumes natural-order SP sharding (contiguous per-chip query blocks: its
+            # device RoPE and the indexer_score per-device causal offset both index positions as
+            # start_pos + sp_rank*S_local). The balanced chunk reorder breaks that, so guard it.
+            assert not self.is_balanced, "DSA indexer requires is_balanced=False (natural-order SP sharding)"
+            if self._indexer_reuse:
+                self._indexer = ReuseIndexer()  # shared layer: reused indices injected at forward
+            else:
+                # TtIndexer warns (does not raise) if given neither host weights nor a complete cache —
+                # mirroring dense MLA's lenient placeholder load, but loudly. The layer still stays sparse
+                # (binds TtIndexer), so it never silently falls back to dense.
+                self._indexer = TtIndexer(
+                    idx_host if idx_host else None,  # None → TtIndexer loads cache-only placeholders
+                    config=config,
+                    mesh_device=self.mesh_device,
+                    sp_axis=self.sp_axis,
+                    tp_axis=self.tp_axis,
+                    default_compute_kernel_config=self.default_compute_kernel_config,
+                    hifi4_fp32_compute_kernel_config=self.hifi4_fp32_compute_kernel_config,
+                    weight_cache_path=self.weight_cache_path,
+                    layer_idx=self.layer_idx,
+                    tt_ccl=self.tt_ccl,
+                    ccl_num_links=self.ccl_num_links,
+                    sp_ccl_topology=self.sp_ccl_topology,
+                    tp_ccl_topology=self.tp_ccl_topology,
+                    seq_len=seq_len,
+                    slot_num=slot_num,
+                    layer_num=self.layer_num,
+                )
+        else:
+            self._indexer = NullIndexer()  # dense v3.1: forward calls .forward() -> None (dense path)
+            self._indexer_reuse = False
+
+        # Bind the RoPE op now that self._has_indexer is known: sparse always uses the indexed
+        # (block-cyclic) op — single-shot is folded onto the block-cyclic path as one full-seq chunk at
+        # offset 0 — so its key cache persists layer-stacked (migratable to decode). Dense: chunked ->
+        # indexed, single-shot -> rotary_embedding_llama.
+        self._apply_rope = (
+            self._apply_rope_padded if (self.is_chunked or self._has_indexer) else self._apply_rope_one_shot
+        )
+
+        # Bind the attention core once, by config. Sparse ALWAYS uses the block-cyclic
+        # _sparse_chunked_attn (single-shot = one full-seq chunk); dense splits by chunking. forward()
+        # then calls self._attention(...) with no mode ladder: the decision is made here, not per call.
+        if self._has_indexer:
+            self._attention = self._sparse_chunked_attn
+        else:
+            self._attention = self._dense_chunked_attn if self.is_chunked else self._dense_single_attn
+
     @staticmethod
-    def kv_cache_to_host(kvpe_cache: ttnn.Tensor, mesh_device: ttnn.MeshDevice, sp_axis: int = 0):
-        """Read KVPE cache from device to host tensor [1, 1, seq_total, kv_lora_rank + qk_rope_head_dim]."""
-        return ttnn.to_torch(
-            kvpe_cache,
+    def kv_cache_to_host(kvpe_cache: MlaKvCache, mesh_device: ttnn.MeshDevice, sp_axis: int = 0):
+        """Read and decode the logical KVPE cache in natural SP order."""
+        host = ttnn.to_torch(
+            kvpe_cache.storage,
             mesh_composer=ttnn.create_mesh_composer(
                 mesh_device,
                 config=ttnn.MeshComposerConfig(
@@ -390,7 +522,8 @@ class ttMLA:
                     ),
                 ),
             ),
-        ).to(torch.bfloat16)
+        )
+        return kvpe_cache.unpack_host(host)
 
     def get_weight_shapes(self) -> dict[str, tuple]:
         shapes = {
@@ -430,6 +563,13 @@ class ttMLA:
     def _resolve_mm_cfg(self, weight_name: str, seq_len_local: int) -> dict | None:
         """Resolve the tuned matmul config for this weight/seq_len, applying head-count and
         chunked-mode gating. Returns None when no tuned config applies (caller falls back to defaults).
+
+        The gating *tags* (num_heads / q_lora_rank / chunked_only) are declared in the config
+        (mla_config.py); only the *match* is resolved here at runtime, because it depends on this live
+        ttMLA. chunked_only in particular is a per-instance property (single-shot vs chunked runner) that
+        the static, shared config can't know — so keeping all three checks together at this single
+        consume-time point is more cohesive than splitting head/q_lora filtering into the config and
+        leaving chunked here.
         """
         cfg = self.mm_configs[weight_name].get(seq_len_local) if is_blackhole() else None
         # Some tuned configs are head-count specific (the chunked-prefill 640 set was tuned for Kimi's
@@ -437,6 +577,12 @@ class ttMLA:
         # the num_heads it was tuned for; when it doesn't match this model, fall back so a different
         # variant at the same seq_len_local doesn't pick up a dimensionally-invalid program_config.
         if cfg is not None and cfg.get("num_heads") not in (None, self.num_heads):
+            cfg = None
+        # Some of those configs are additionally q_lora_rank-specific: the 640 set's program_configs are
+        # dimensionally valid at Kimi's q_lora_rank (1536) but overflow the grid at GLM-5.1's (2048), even
+        # though both have 64 heads. When a config declares a q_lora_rank that doesn't match this model,
+        # fall back so a same-heads/same-seq variant doesn't pick up an invalid program_config.
+        if cfg is not None and cfg.get("q_lora_rank") not in (None, self.q_lora_rank):
             cfg = None
         # The chunked-prefill 640 set is only dimensionally valid in chunked mode (e.g. wkv_b1/wkv_b2
         # are true batched per-head matmuls over the per-head SDPA output; the single-shot path applies
@@ -516,6 +662,17 @@ class ttMLA:
         # was tuned for Kimi's 64 heads). Fall back to defaults when it doesn't match this model.
         if cfg is not None and cfg.get("num_heads") not in (None, self.num_heads):
             cfg = None
+        # The 640 tiling's shape is head-agnostic, but its dense-path L1 footprint (full-context K over
+        # every head) only fits large head counts for the DSA family. This config is consumed ONLY on
+        # the dense path (ring_mla / ring_joint SDPA); sparse V3.2/GLM go through sparse_sdpa and never
+        # reach here. The dense consumers are pure-dense V3.1 (128 heads) and Kimi (64), plus a
+        # dense-run V3.2 benchmark (128 heads, DSA family). V3.1 and V3.2 are dimensionally identical,
+        # so num_heads can't separate them — key on the DSA family. Above dense_head_cap_non_dsa,
+        # non-DSA models (V3.1) OOM L1 at k=640, so fall back to the k=32 default; DSA-family V3.2 is
+        # exempt (validated dense) and Kimi stays under the cap.
+        cap = cfg.get("dense_head_cap_non_dsa") if cfg is not None else None
+        if cap is not None and self.num_heads > cap and not self._is_dsa_family:
+            cfg = None
         # The 640 chunk tiling drives ring joint attention and is only valid in chunked mode.
         if cfg is not None and cfg.get("chunked_only") and not self.is_chunked:
             cfg = None
@@ -560,14 +717,12 @@ class ttMLA:
         *,
         tt_q: ttnn.Tensor,
         tt_kvpe: ttnn.Tensor,
-        kvpe_cache: ttnn.Tensor,
+        kvpe_cache: MlaKvCache,
         kv_actual_isl: int,
-        actual_end: Optional[int],
         cache_batch_idx: int,
         cache_layer_idx: int,
         cache_user_id: int,
         seq_len_local: int,
-        on_layer_complete: Optional[Callable[[int], None]],
     ) -> ttnn.Tensor:
         """Chunked-prefill attention via update_padded_kv_cache + ring_mla.
 
@@ -591,7 +746,7 @@ class ttMLA:
         # Write this chunk into the cache. update_padded_kv_cache derives each chip's local write
         # offset on-device from kv_actual_global (chunk-aligned kv_actual -> uniform per-chip write).
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            kvpe_cache,
+            kvpe_cache.storage,
             tt_kvpe,
             slot_idx=cache_user_id,
             layer_idx=cache_layer_idx,
@@ -600,33 +755,12 @@ class ttMLA:
             cluster_axis=self.sp_axis,
         )
 
-        # Migration-gated: update_padded_kv_cache wrote full 32-row tiles, so the tokens between the
-        # last real token (actual_end) and the next 128-boundary hold stale data. Zero that pad window
-        # so the decode side reads clean zeros, then fire the per-layer ack. The op handles the window
-        # spilling across a chip border (block-cyclic layout).
-        if on_layer_complete is not None:
-            assert actual_end is not None, "actual_end required when on_layer_complete is set"
-            ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
-                kvpe_cache,
-                cache_user_id,
-                cache_layer_idx,
-                self.layer_num,
-                actual_end,
-                chunk_size_global,
-                self.sp_axis,
-            )
-            # on_layer_complete hands this layer's KV to the migration worker, which reads the cache
-            # over NoC out-of-band from the ttnn command queue. Flush the (async) zero op to device
-            # first, else the worker can copy pre-zero (stale pad) data.
-            ttnn.synchronize_device(self.mesh_device)
-            on_layer_complete(self.layer_idx)
-
         # K and V are the single latent kvpe cache (V = first kv_lora_rank columns, materialized
         # in-op). logical_n = prior valid length + this chunk; cache_batch_idx selects this
         # user/layer's slot; kv_actual_isl drives the on-device rotation/causality offset.
         attn_out, _ = ttnn.transformer.ring_mla(
             tt_q,
-            kvpe_cache,
+            kvpe_cache.storage,
             persistent_output_buffer_kv=self._chunked_kv_buf,
             head_dim_v=self.kv_lora_rank,
             logical_n=kv_actual_isl + chunk_size_global,
@@ -638,7 +772,7 @@ class ttMLA:
             num_links=self.ccl_num_links,
             cluster_axis=self.sp_axis,
             mesh_device=self.mesh_device,
-            topology=self.ccl_topology,
+            topology=self.sp_ccl_topology,
             ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
             use_column_major_ccl=True,
             is_balanced=self.is_balanced,
@@ -659,54 +793,14 @@ class ttMLA:
         )
         return attn_out
 
-    # Expects ativation in form of:
-    # [1, batch_size == 1, seq_len // sp_factor, hidden_size // tp_factor]
-    def forward(
-        self,
-        hidden_states: ttnn.Tensor,
-        rope_tensors: dict,
-        kvpe_cache: ttnn.Tensor,
-        cache_layer_idx: int = 0,
-        on_layer_complete: Optional[Callable[[int], None]] = None,
-        actual_start: Optional[int] = None,
-        actual_end: Optional[int] = None,
-        cache_user_id: int = 0,
-        return_kv_intermediates: bool = False,
+    def _q_a_latent(
+        self, hidden_states: ttnn.Tensor, seq_len_local: int, norm_memory_config: ttnn.MemoryConfig
     ) -> ttnn.Tensor:
-        if self.kv_only:
-            return self._forward_kv_only(
-                hidden_states,
-                rope_tensors,
-                kvpe_cache,
-                cache_layer_idx,
-                on_layer_complete,
-                kv_actual_isl=actual_start,
-                actual_end=actual_end,
-                cache_user_id=cache_user_id,
-            )
-
-        signpost(header="MLA_START")
-        num_heads_local = self.num_heads // self.tp_factor
-        seq_len_local = hidden_states.shape[2]
-
-        # Chunked-prefill mode is fixed at construction: self.is_chunked drives buffer allocation in
-        # __init__ and the rope variant, and forward honors that flag — it does not infer the mode from
-        # the arguments. actual_start/actual_end are the chunk parameters, supplied iff chunked:
-        # actual_start is the absolute KV position of this chunk's first real token (cumulative valid
-        # count before it; 0 for the first chunk) — the cache write + rotation offset (the internal
-        # kv_actual_isl); actual_end is the absolute position past the chunk's last real token — the
-        # migration pad-zero boundary. The single-shot and chunked paths share the Q/KV projection +
-        # rope prologue and the nlp_concat_heads + o_proj epilogue; they differ only in cache write,
-        # attention op, and where wkv_b2 is applied. See _chunked_attn for the unified chunked impl.
-        kv_actual_isl = actual_start
-        assert (actual_start is not None) == self.is_chunked, (
-            f"actual_start ({'set' if actual_start is not None else 'None'}) does not match construction "
-            f"(self.is_chunked={self.is_chunked}); pass actual_start/actual_end iff built with is_chunked=True"
-        )
-
-        # q_projection
+        """q_a projection + TP all-reduce + q_a_layernorm → the q_a latent (qr). Computed once per
+        layer and shared: _q_stem consumes it for q_b_proj, and (when present) TtIndexer.forward reads
+        it for the indexer queries — so the sparse path no longer recomputes the q_a stem."""
         # NOTE: input is ideally L1 for chunked, but hidden states memory config is set outside the module
-        tt_q = ttnn.linear(
+        qr = ttnn.linear(
             hidden_states,
             self.q_a_proj_weight,
             compute_kernel_config=self.default_compute_kernel_config,
@@ -715,42 +809,53 @@ class ttMLA:
 
         # All reduce (skip for single-device TP)
         if self.tp_factor > 1:
-            tt_q = ttnn.experimental.reduce_scatter_minimal_async(
-                tt_q,
+            qr = ttnn.experimental.reduce_scatter_minimal_async(
+                qr,
                 persistent_output_buffers=None,
                 dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
                 num_links=self.ccl_num_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.ccl_topology,
+                topology=self.tp_ccl_topology,
                 cluster_axis=self.tp_axis,
             )
-            tt_q = ttnn.experimental.all_gather_async(
-                tt_q,
+            qr = ttnn.experimental.all_gather_async(
+                qr,
                 dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
                 num_links=self.ccl_num_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.ccl_topology,
+                topology=self.tp_ccl_topology,
                 cluster_axis=self.tp_axis,
             )
 
-        # rmsnorm
-        tt_q = ttnn.rms_norm(
-            tt_q,
+        return ttnn.rms_norm(
+            qr,
             weight=self.q_a_layernorm_weight,
             epsilon=self.config.rms_norm_eps,
-            memory_config=self._get_act_mem_config("q_b_proj", seq_len_local),
+            memory_config=norm_memory_config,
             compute_kernel_config=self.default_compute_kernel_config,
         )
+
+    def _q_stem(
+        self,
+        qr: ttnn.Tensor,
+        rope_tensors: dict,
+        kv_actual_isl: Optional[int],
+        seq_len_local: int,
+    ) -> ttnn.Tensor:
+        """Absorbed-Q stem from the q_a latent: q_b_proj → heads → split → wkv_b1(nope) → RoPE(rope)
+        → concat. Consumes qr (the indexer, if any, has already read it by this point)."""
+        num_heads_local = self.num_heads // self.tp_factor
         tt_q = ttnn.linear(
-            tt_q,
+            qr,
             self.q_b_proj_weight,
             compute_kernel_config=self.default_compute_kernel_config,
             **self._get_mm_kwargs("q_b_proj", seq_len_local),
         )
+        ttnn.deallocate(qr)
 
         # convert to
         # [batch (1), num_heads_local, seq_len_local, qk_head_dim]
@@ -782,8 +887,22 @@ class ttMLA:
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
         ttnn.deallocate(tt_q_nope)
         ttnn.deallocate(tt_q_rope)
+        return tt_q
 
-        # kv
+    def _kv_stem(
+        self,
+        hidden_states: ttnn.Tensor,
+        rope_tensors: dict,
+        kv_actual_isl: Optional[int],
+        seq_len_local: int,
+        return_kv_intermediates: bool,
+        kvpe_cache: MlaKvCache,
+    ) -> tuple[ttnn.Tensor, Optional[ttnn.Tensor], dict | None]:
+        """Shared KV stem.
+
+        Returns tt_kvpe in the persistent cache representation. The returned value is both written to the
+        cache and consumed by attention without a decode/re-encode round trip.
+        """
         # NOTE: input is ideally L1 for chunked, but hidden states memory config is set outside the module
         tt_kv = ttnn.linear(
             hidden_states,
@@ -801,7 +920,7 @@ class ttMLA:
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
                 num_links=self.ccl_num_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.ccl_topology,
+                topology=self.tp_ccl_topology,
                 cluster_axis=self.tp_axis,
             )
             tt_kv = ttnn.experimental.fast_reduce_nc(
@@ -833,74 +952,58 @@ class ttMLA:
             kv_intermediates["tt_kv_nope"] = ttnn.clone(tt_kv_nope)
             kv_intermediates["tt_kv_rope"] = ttnn.clone(tt_kv_rope)
 
-        # TODO: concat rope and nope, workaround remove with ttnn.narrow or fusion
-        tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
+        tt_kvpe = kvpe_cache.pack(tt_kv_nope, tt_kv_rope, intermediates=kv_intermediates)
         ttnn.deallocate(tt_kv_rope)
-        tt_kvpe = ttnn.typecast(tt_kvpe, dtype=ttnn.bfloat8_b)
+        if self._has_indexer:
+            # Sparse attention reads latent V from the cache; only dense attention needs this standalone tensor.
+            ttnn.deallocate(tt_kv_nope)
+            tt_kv_nope = None
 
-        if return_kv_intermediates:
-            # post-transform concat ([.., 576], bf8) — what actually gets written to the cache.
-            kv_intermediates["tt_kvpe"] = ttnn.clone(tt_kvpe)
+        return tt_kvpe, tt_kv_nope, kv_intermediates
 
-        if not self.is_chunked:
-            # === single-shot prefill: fill the whole local slot, run on-device ring SDPA with a
-            # materialized V (wkv_b2 applied before attention). Unchanged from the original path. ===
-            ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, cache_layer_idx)
+    def _apply_wkv_b2(self, t: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
+        return ttnn.linear(
+            t,
+            self.wkv_b2_weight,
+            compute_kernel_config=self.default_compute_kernel_config,
+            **self._get_mm_kwargs("wkv_b2", seq_len_local),
+        )
 
-            tt_v_embedding = ttnn.linear(
-                tt_kv_nope,
-                self.wkv_b2_weight,
-                compute_kernel_config=self.default_compute_kernel_config,
-                **self._get_mm_kwargs("wkv_b2", seq_len_local),
-            )
+    def _write_kvpe(self, kvpe_cache: MlaKvCache, tt_kvpe: ttnn.Tensor, cache_layer_idx: int) -> None:
+        """DENSE single-shot cache fill: write this layer's whole kvpe slot (bf8/TILE, already in the
+        cache's dtype/layout via MlaKvCache.pack). Chunked modes (dense + sparse) and sparse single-shot
+        write through update_padded_kv_cache instead; only dense single-shot still uses this TILE-only
+        fill_cache_for_user_ primitive.
 
-            attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
-                tt_q,
-                tt_kvpe,
-                tt_v_embedding,
-                self.joint_q,
-                self.joint_kv,
-                self.joint_v,
-                persistent_output_buffer_k=self.persistent_k_output_buffer,
-                persistent_output_buffer_v=self.persistent_v_output_buffer,
-                joint_strategy="rear",
-                logical_n=seq_len_local * self.sp_factor,
-                program_config=self._get_sdpa_program_config(seq_len_local),
-                compute_kernel_config=self.default_compute_kernel_config,
-                dim=2,
-                multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles,
-                num_links=self.ccl_num_links,
-                cluster_axis=self.sp_axis,
-                mesh_device=self.mesh_device,
-                topology=self.ccl_topology,
-                ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
-                use_column_major_ccl=True,
-                is_causal=True,
-                scale=self.scale,
-                is_balanced=self.is_balanced,
-            )
-        else:
-            # === chunked prefill: write this chunk into the cache at its per-chip offset, then run
-            # ring_mla over the populated prefix with V materialized in-op from the latent KV. wkv_b2
-            # is applied to the compact attention output afterwards (see _chunked_attn). ===
-            # Cache batch dim is user-major: each user reserves self.layer_num contiguous slots, so the
-            # flat slot is cache_user_id * layer_num + cache_layer_idx. Computed here (chunked-only) so
-            # the non-chunked path never multiplies by layer_num (None unless built for chunked prefill).
-            assert cache_user_id < self.slot_num, f"cache_user_id {cache_user_id} >= slot_num {self.slot_num}"
-            cache_batch_idx = cache_user_id * self.layer_num + cache_layer_idx
-            attn_out = self._chunked_attn(
-                tt_q=tt_q,
-                tt_kvpe=tt_kvpe,
-                kvpe_cache=kvpe_cache,
-                kv_actual_isl=kv_actual_isl,
-                actual_end=actual_end,
-                cache_batch_idx=cache_batch_idx,
-                cache_layer_idx=cache_layer_idx,
-                cache_user_id=cache_user_id,
-                seq_len_local=seq_len_local,
-                on_layer_complete=on_layer_complete,
-            )
+        TODO: unify dense single-shot onto update_padded_kv_cache too (one write op model-wide, drop this
+        helper). Blocked on the single-chip case: test_prefill_block_loop[mesh-1x1] runs dense single-shot
+        on a (1,1) mesh, where fill_cache_for_user_ is mesh-agnostic but update_padded_kv_cache's SP
+        cluster_axis / block-cyclic / tile-aligned-kv_actual_global path is not yet validated. Confirm
+        update_padded handles 1x1 (and sp=1), then switch _dense_single_attn onto it too (the sparse path
+        already folded its single-shot onto the block-cyclic update_padded write)."""
+        ttnn.kv_cache.fill_cache_for_user_(kvpe_cache.storage, tt_kvpe, cache_layer_idx)
 
+    def _update_kv_cache(
+        self,
+        cache: MlaKvCache,
+        values: ttnn.Tensor,
+        *,
+        cache_user_id: int,
+        cache_layer_idx: int,
+        kv_actual_isl: int,
+    ) -> None:
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            cache.storage,
+            values,
+            slot_idx=cache_user_id,
+            layer_idx=cache_layer_idx,
+            num_layers=self.layer_num,
+            kv_actual_global=kv_actual_isl,
+            cluster_axis=self.sp_axis,
+        )
+
+    def _o_proj_epilogue(self, attn_out: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
+        """Shared nlp_concat_heads -> o_proj -> TP reduce-scatter epilogue."""
         v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         v_out = ttnn.linear(
             v_out,
@@ -909,115 +1012,487 @@ class ttMLA:
             **self._get_mm_kwargs("o_proj", seq_len_local),
         )
         if self.tp_factor > 1:
-            out = ttnn.experimental.reduce_scatter_minimal_async(
+            return ttnn.experimental.reduce_scatter_minimal_async(
                 v_out,
                 dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
                 num_links=self.ccl_num_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.ccl_topology,
+                topology=self.tp_ccl_topology,
                 cluster_axis=self.tp_axis,
             )
-        else:
-            out = v_out
+        return v_out
+
+    # Expects activation in form of:
+    # [1, batch_size == 1, seq_len // sp_factor, hidden_size // tp_factor]
+    def forward(
+        self,
+        hidden_states: ttnn.Tensor,
+        rope_tensors: dict,
+        kvpe_cache: MlaKvCache,
+        cache_layer_idx: int = 0,
+        actual_start: Optional[int] = None,
+        cache_user_id: int = 0,
+        return_kv_intermediates: bool = False,
+        index_kv_cache: Optional[ttnn.Tensor] = None,
+        indexer_indices: Optional[ttnn.Tensor] = None,
+        return_indexer_indices: bool = False,
+    ) -> "ttnn.Tensor | tuple[ttnn.Tensor, Optional[dict]]":
+        # Chunked-prefill mode is fixed at construction: self.is_chunked drives buffer allocation in
+        # __init__ and the rope variant, and forward honors that flag -- it does not infer the mode from
+        # the arguments. actual_start is the chunk parameter, supplied iff chunked.
+        assert (actual_start is not None) == self.is_chunked, (
+            f"actual_start ({'set' if actual_start is not None else 'None'}) does not match construction "
+            f"(self.is_chunked={self.is_chunked}); pass actual_start iff built with is_chunked=True"
+        )
+        if kvpe_cache.geometry != self.kv_cache_geometry:
+            raise ValueError(f"MLA configured for KV geometry {self.kv_cache_geometry}, got {kvpe_cache.geometry}")
+
+        if self.kv_only:
+            return self._forward_kv_only(
+                hidden_states,
+                rope_tensors,
+                kvpe_cache,
+                cache_layer_idx,
+                kv_actual_isl=actual_start or 0,
+                cache_user_id=cache_user_id,
+                index_kv_cache=index_kv_cache,
+            )
+
+        seq_len_local = hidden_states.shape[2]
+        kv_actual_isl = actual_start
+
+        # Sparse always runs the block-cyclic path (indexed rope + kvpe cache read-back), which treats
+        # single-shot as one full-seq chunk at offset 0. Coerce the None single-shot offset to 0 so the
+        # indexed rope op, the cache write, and the indexer all get a concrete kv_actual_global.
+        if self._has_indexer and kv_actual_isl is None:
+            kv_actual_isl = 0
+
+        if self._has_indexer:
+            assert (
+                kvpe_cache.format == self.sparse_kv_cache_format
+            ), f"MLA configured for {self.sparse_kv_cache_format}, got {kvpe_cache.format} cache"
+
+        signpost(header="MLA_START")
+
+        # q-norm output uses the tuned activation memory_config in every mode (dense and sparse);
+        # the next op (q_b_proj) is the same matmul regardless of attention path.
+        q_norm_mem_config = self._get_act_mem_config("q_b_proj", seq_len_local)
+        # Compute the q_a latent once and share it: the DSA indexer reads it for its queries, then
+        # _q_stem consumes it for q_b_proj — so the sparse path does not recompute the q_a stem.
+        qr = self._q_a_latent(hidden_states, seq_len_local, q_norm_mem_config)
+
+        # DSA dispatch (v3.2 / GLM): the op graph is fixed by CONFIG — self._indexer and self._attention
+        # are bound once at construction (sparsity × chunking), never by the runtime sequence length — so
+        # a single recorded op trace replays identically for any input. (At seq_len <= index_topk the
+        # indexer top-k simply selects all available causal keys, so sparse is numerically equal to dense
+        # there.) The indexer's forward also writes its K-cache (a no-op on the dense null-indexer), so no
+        # separate warm-up write is needed.
+        # GLM-5.2 reuse: a shared layer receives a prior full layer's top-k indices and skips its own
+        # indexer (its ReuseIndexer.forward would raise). Absent injection -> compute as usual.
+        indices = (
+            indexer_indices
+            if indexer_indices is not None
+            else self._indexer.forward(
+                hidden_states,
+                qr,
+                seq_len_local,
+                start_pos=kv_actual_isl or 0,
+                rope_tensors=rope_tensors,
+                cache_user_id=cache_user_id,
+                cache_layer_idx=cache_layer_idx,
+                index_kv_cache=index_kv_cache,
+            )
+        )
+
+        tt_q = self._q_stem(qr, rope_tensors, kv_actual_isl, seq_len_local)
+        tt_kvpe, tt_kv_nope, kv_intermediates = self._kv_stem(
+            hidden_states,
+            rope_tensors,
+            kv_actual_isl,
+            seq_len_local,
+            return_kv_intermediates,
+            kvpe_cache,
+        )
+
+        attn_out = self._attention(
+            tt_q=tt_q,
+            tt_kvpe=tt_kvpe,
+            tt_kv_nope=tt_kv_nope,
+            indices=indices,
+            kvpe_cache=kvpe_cache,
+            cache_layer_idx=cache_layer_idx,
+            cache_user_id=cache_user_id,
+            seq_len_local=seq_len_local,
+            kv_actual_isl=kv_actual_isl,
+        )
+
+        out = self._o_proj_epilogue(attn_out, seq_len_local)
         signpost(header="MLA_END")
+        # ``indices`` survives _sparse_mla (it deallocs only re-sharded copies), so it is safe to return
+        # for a "full" layer to hand to downstream "shared" layers (GLM-5.2 reuse).
+        if return_kv_intermediates and return_indexer_indices:
+            return out, kv_intermediates, indices
         if return_kv_intermediates:
             return out, kv_intermediates
+        if return_indexer_indices:
+            return out, indices
         return out
+
+    # Attention core variants, one bound to self._attention at construction (sparsity × chunking).
+    # All four share the forward() call signature and ignore the kwargs they don't need (**_), so the
+    # bound name can be invoked uniformly. Bodies are the former mode-ladder branches, unchanged.
+
+    def _dense_single_attn(self, *, tt_q, tt_kvpe, tt_kv_nope, kvpe_cache, cache_layer_idx, seq_len_local, **_):
+        # Single-shot prefill: materialize V before causal ring SDPA.
+        self._write_kvpe(kvpe_cache, tt_kvpe, cache_layer_idx)
+        tt_v_embedding = self._apply_wkv_b2(tt_kv_nope, seq_len_local)
+        attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            tt_q,
+            tt_kvpe,
+            tt_v_embedding,
+            self.joint_q,
+            self.joint_kv,
+            self.joint_v,
+            persistent_output_buffer_k=self.persistent_k_output_buffer,
+            persistent_output_buffer_v=self.persistent_v_output_buffer,
+            joint_strategy="rear",
+            logical_n=seq_len_local * self.sp_factor,
+            program_config=self._get_sdpa_program_config(seq_len_local),
+            compute_kernel_config=self.default_compute_kernel_config,
+            dim=2,
+            multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles,
+            num_links=self.ccl_num_links,
+            cluster_axis=self.sp_axis,
+            mesh_device=self.mesh_device,
+            topology=self.sp_ccl_topology,
+            ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
+            use_column_major_ccl=True,
+            is_causal=True,
+            scale=self.scale,
+            is_balanced=self.is_balanced,
+        )
+        return attn_out
+
+    def _cache_batch_idx(self, cache_user_id: int, cache_layer_idx: int) -> int:
+        """Flat KVPE-cache slot for (user, layer). The cache batch dim is user-major: each user reserves
+        self.layer_num contiguous slots, so the flat slot is cache_user_id * layer_num + cache_layer_idx.
+        Shared by the dense (ring_mla) and sparse (sparse_sdpa) chunked paths."""
+        assert cache_user_id < self.slot_num, f"cache_user_id {cache_user_id} >= slot_num {self.slot_num}"
+        return cache_user_id * self.layer_num + cache_layer_idx
+
+    def _dense_chunked_attn(
+        self,
+        *,
+        tt_q,
+        tt_kvpe,
+        kvpe_cache,
+        kv_actual_isl,
+        cache_layer_idx,
+        cache_user_id,
+        seq_len_local,
+        **_,
+    ):
+        cache_batch_idx = self._cache_batch_idx(cache_user_id, cache_layer_idx)
+        return self._chunked_attn(
+            tt_q=tt_q,
+            tt_kvpe=tt_kvpe,
+            kvpe_cache=kvpe_cache,
+            kv_actual_isl=kv_actual_isl,
+            cache_batch_idx=cache_batch_idx,
+            cache_layer_idx=cache_layer_idx,
+            cache_user_id=cache_user_id,
+            seq_len_local=seq_len_local,
+        )
+
+    def _sparse_chunked_attn(
+        self,
+        *,
+        tt_q,
+        tt_kvpe,
+        indices,
+        kvpe_cache,
+        kv_actual_isl,
+        cache_layer_idx,
+        cache_user_id,
+        seq_len_local,
+        **_,
+    ):
+        assert indices is not None, "sparse MLA forward requires indexer top-k indices"
+
+        cache_batch_idx = self._cache_batch_idx(cache_user_id, cache_layer_idx)
+
+        # Chunked: the prefix lives in the BLOCK-CYCLIC cache. Slice this (user, layer) slot out and
+        # gather ONLY that slot on device, then hand it to sparse_sdpa still block-cyclic — the op remaps
+        # the natural top-k indices to physical pages in-kernel (block_cyclic_chunk_local = per-shard
+        # chunk = seq_len_local), so no host reorder. Slicing the slot BEFORE the gather keeps the
+        # all-gather to one physical-cache slot (gathering the whole B=num_users*num_layers cache OOMs
+        # at 78 layers). The gathered kv is batch-1, so cache_batch_idx is unset (None) below.
+        self._update_kv_cache(
+            kvpe_cache,
+            tt_kvpe,
+            cache_user_id=cache_user_id,
+            cache_layer_idx=cache_layer_idx,
+            kv_actual_isl=kv_actual_isl,
+        )
+        # After the write above, KV is populated up to [0, kv_actual_isl + chunk_size_global); the gather
+        # only needs that populated prefix (top-k indices never address the unwritten suffix).
+        populated_global = kv_actual_isl + seq_len_local * self.sp_factor
+        kvpe_dev = self._gather_kvpe_prefix(
+            kvpe_cache, cache_batch_idx, populated_global=populated_global, chunk_local=seq_len_local
+        )
+        ttnn.deallocate(tt_kvpe)
+
+        # Sparse attention runs over latent V; project to v_head_dim afterwards. The prefix is already
+        # sliced to this slot (batch-1), so no cache_batch_idx.
+        attn_out = self._sparse_mla(
+            tt_q, kvpe_dev, indices, block_cyclic_chunk_local=seq_len_local, cache_batch_idx=None
+        )
+        ttnn.deallocate(kvpe_dev.storage)
+        ttnn.deallocate(tt_q)
+        return self._apply_wkv_b2(attn_out, seq_len_local)
 
     def _forward_kv_only(
         self,
         hidden_states: ttnn.Tensor,
         rope_tensors: dict,
-        kvpe_cache: ttnn.Tensor,
+        kvpe_cache: MlaKvCache,
         cache_layer_idx: int,
-        on_layer_complete: Optional[Callable[[int], None]],
         kv_actual_isl: int,
-        actual_end: Optional[int],
         cache_user_id: int,
+        index_kv_cache: Optional[ttnn.Tensor],
     ) -> None:
-        """Last-layer fast path: fill the KV cache (which migration consumes) and fire the
-        migration callback, then stop. Skips Q / SDPA / output projection entirely; the
-        block also skips FFN/MoE/norm/LM head, so no first-token output is produced.
+        """Last-layer fast path: fill the migratable KVPE cache, then stop before query/attention/output.
+
+        A sparse full-indexer layer also writes its index-key chunk to the caller-owned ``index_kv_cache``;
+        a shared/reuse-indexer layer deliberately skips that write because it owns no indexer state. The
+        enclosing block skips FFN/MoE/norm/LM head as well, so this path produces no first-token output.
         """
         signpost(header="MLA_START")
         seq_len_local = hidden_states.shape[2]
 
-        tt_kv = ttnn.linear(
+        # Sparse decode needs the index key cache for every full-indexer layer even though this fast path
+        # skips query construction and scoring. Shared-indexer layers reuse a prior layer's selection and
+        # intentionally own no indexer weights/cache write.
+        if self._has_indexer and not self._indexer_reuse:
+            assert index_kv_cache is not None, "sparse kv_only requires the caller-owned index key cache"
+            self._indexer.write_k(
+                hidden_states,
+                seq_len_local,
+                kv_actual_isl,
+                rope_tensors=rope_tensors,
+                cache_user_id=cache_user_id,
+                cache_layer_idx=cache_layer_idx,
+                index_kbuf=index_kv_cache,
+            )
+
+        # Reuse the regular KV stem so kv_only and full attention cannot drift in normalization,
+        # RoPE, quantization, or cache packing behavior.
+        tt_kvpe, tt_kv_nope, _ = self._kv_stem(
             hidden_states,
-            self.kv_a_proj_with_mqa_weight,
-            compute_kernel_config=self.default_compute_kernel_config,
-            **self._get_mm_kwargs("kv_a_proj_with_mqa", seq_len_local),
+            rope_tensors,
+            kv_actual_isl,
+            seq_len_local,
+            return_kv_intermediates=False,
+            kvpe_cache=kvpe_cache,
         )
-
-        if self.tp_factor > 1:
-            tt_kv = ttnn.experimental.all_gather_async(
-                tt_kv,
-                dim=1,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
-                num_links=self.ccl_num_links,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.ccl_topology,
-                cluster_axis=self.tp_axis,
-            )
-            tt_kv = ttnn.experimental.fast_reduce_nc(
-                tt_kv, dims=[1], output=None, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
-            )
-
-        # TODO: split rope and nope, workaround remove with ttnn.narrow or fusion
-        tt_kv_nope = ttnn.slice(tt_kv, [0, 0, 0, 0], [1, 1, seq_len_local, self.kv_lora_rank])
-        tt_kv_rope = ttnn.slice(
-            tt_kv, [0, 0, 0, self.kv_lora_rank], [1, 1, seq_len_local, self.kv_lora_rank + self.qk_rope_head_dim]
-        )
-        ttnn.deallocate(tt_kv)
-
-        tt_kv_nope = ttnn.rms_norm(
-            tt_kv_nope,
-            weight=self.kv_a_layernorm_weight,
-            epsilon=self.config.rms_norm_eps,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.default_compute_kernel_config,
-        )
-
-        # Same rope as the full chunked path (indexed/padded when chunked, single-shot otherwise) so
-        # the KV written to the cache carries the correct per-chunk positional offset.
-        tt_kv_rope = self._apply_rope(tt_kv_rope, rope_tensors, kv_actual_isl)
-
-        # TODO: concat rope and nope, workaround remove with ttnn.narrow or fusion
-        tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
-        ttnn.deallocate(tt_kv_rope)
-        tt_kvpe = ttnn.typecast(tt_kvpe, dtype=ttnn.bfloat8_b)
+        if tt_kv_nope is not None:
+            ttnn.deallocate(tt_kv_nope)
 
         # Write the chunk via the SAME chunked path as _chunked_attn (not a single-shot fill):
         # update_padded_kv_cache writes at the per-chip offset derived from kv_actual_global.
-        chunk_size_global = seq_len_local * self.sp_factor
-        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+        self._update_kv_cache(
             kvpe_cache,
             tt_kvpe,
-            slot_idx=cache_user_id,
-            layer_idx=cache_layer_idx,
-            num_layers=self.layer_num,
-            kv_actual_global=kv_actual_isl,
-            cluster_axis=self.sp_axis,
+            cache_user_id=cache_user_id,
+            cache_layer_idx=cache_layer_idx,
+            kv_actual_isl=kv_actual_isl,
         )
-
-        # Migration-gated: zero the pad window past actual_end so the decode side reads clean zeros,
-        # then fire the per-layer ack (the populated cache is the only output of a kv-only last layer).
-        if on_layer_complete is not None:
-            assert actual_end is not None, "actual_end required when on_layer_complete is set"
-            ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
-                kvpe_cache,
-                cache_user_id,
-                cache_layer_idx,
-                self.layer_num,
-                actual_end,
-                chunk_size_global,
-                self.sp_axis,
-            )
-            ttnn.synchronize_device(self.mesh_device)
-            on_layer_complete(self.layer_idx)
+        ttnn.deallocate(tt_kvpe)
 
         signpost(header="MLA_END")
         return None
+
+    # ----------------------------------------------------------------------------------------
+    # DSA indexer + sparse attention (v3.2 / GLM). Inert unless _has_indexer (dense v3.1 path
+    # never reaches these). The full forward above shares the dense/sparse Q/KV stem and epilogue;
+    # only sparse-specific gather/attention helpers live below.
+    # ----------------------------------------------------------------------------------------
+
+    def _all_gather(self, t, dim, cluster_axis):
+        """All-gather across a mesh cluster axis → replicated on that axis. factor==1: no-op.
+        cluster_axis picks SP (sequence) or TP; the guard reads the matching mesh factor."""
+        factor = self.sp_factor if cluster_axis == self.sp_axis else self.tp_factor
+        if factor == 1:
+            return t
+        # Per-axis topology: match the ring/line topology to the axis this gather rides.
+        topology = self.sp_ccl_topology if cluster_axis == self.sp_axis else self.tp_ccl_topology
+        return ttnn.experimental.all_gather_async(
+            t,
+            dim=dim,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=cluster_axis),
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=cluster_axis),
+            num_links=self.ccl_num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=topology,
+            cluster_axis=cluster_axis,
+        )
+
+    @property
+    def _needs_head_to_seq_reshard(self) -> bool:
+        """True when the per-chip MLA head shard is too thin for sparse_sdpa (needs H % 32 == 0 and
+        H >= 32). When the TP head shard is too thin (e.g. GLM's 64 heads at tp=4 → 16), _sparse_mla
+        transposes the TP sharding axis heads → sequence for the duration of the attention."""
+        heads_local = self.num_heads // self.tp_factor
+        return self.tp_factor > 1 and (heads_local < 32 or heads_local % 32 != 0)
+
+    def _sparse_mla(
+        self,
+        q: ttnn.Tensor,
+        kvpe: MlaKvCache,
+        indices: ttnn.Tensor,
+        block_cyclic_chunk_local: Optional[int] = None,
+        cache_batch_idx: Optional[int] = None,
+    ) -> ttnn.Tensor:
+        """Absorbed MQA over the top-k selected latents (FlashMLA sparse contract: no causal mask —
+        ``indices`` already encode it via the 0xFFFFFFFF sentinel). Invoked SPMD on the SP×TP mesh:
+        each chip runs the single-chip ``ttnn.transformer.sparse_sdpa`` over its own q shard, so q's
+        distribution is preserved — q SP-sharded on seq (dim2), TP-sharded on heads (dim1), out the same.
+
+        q is absorbed ``[1, H/tp, S/sp, geometry.logical_width]`` TILE bf16. ``kvpe`` carries one
+        replicated ROW_MAJOR physical cache row per token; its width depends on the explicit cache format.
+        Indices are ``[1, 1, S_global, k]`` uint32, re-sharded onto SP (dim2) to match q when needed.
+
+        block_cyclic_chunk_local: when set, ``kvpe`` is the KVPE cache in its native BLOCK-CYCLIC SP layout
+        (not natural order) and ``indices`` are natural positions; sparse_sdpa remaps each index to its
+        physical page in-kernel (invP) over the SP mesh axis, so the host reorder is eliminated. It is the
+        per-shard chunk length (chunk_size_global / sp). None → natural-order kvpe (single-shot path).
+
+        cache_batch_idx: when set, ``kvpe`` is the whole multi-user physical cache [B, 1, T, row_width] (B =
+        num_users*num_layers user-major slots) and this selects the slot to attend — the op offsets its
+        gather page ids by cache_batch_idx * T in-kernel, so no host slot-slice. None → ``kvpe`` is a
+        single [1, 1, T, row_width] slot (single-shot path)."""
+        assert self.sp_axis == 0 and self.tp_axis == 1, "sparse_mla assumes sp_axis=0 (outer), tp_axis=1"
+        sp = self.sp_factor
+        seq_len_local = q.shape[2]  # per-chip query rows == S / sp
+
+        # sparse_sdpa requires per-chip heads H % 32 == 0 and H >= 32. When the TP head shard is too
+        # thin (e.g. GLM's 64 heads at tp=4 → 16), transpose the TP sharding axis from heads to sequence
+        # for the duration of the attention: all-gather q's heads over TP (each chip regains all H heads),
+        # then re-shard the sequence over TP so every chip attends a DISTINCT seq slice in parallel at full
+        # H. After the op we invert it (gather seq, re-shard heads) to restore the head-sharded layout the
+        # wkv_b2 / o_proj epilogue expects. No padded/wasted heads; tp=1 and already-fat shards are untouched.
+        # The SP indexer emits S/sp indices; we split them over TP below to match the resharded q rows.
+        transpose_head_to_seq = self._needs_head_to_seq_reshard
+
+        q_seq_sharded = q
+        if transpose_head_to_seq:
+            q_all_heads = self._all_gather(q, dim=1, cluster_axis=self.tp_axis)  # [1, H, S/sp, 576] repl on TP
+            q_seq_sharded = ttnn.mesh_partition(q_all_heads, dim=2, cluster_axis=self.tp_axis)  # [1,H,S/(sp·tp),576]
+            ttnn.deallocate(q_all_heads)
+
+        q_rm = ttnn.to_layout(q_seq_sharded, ttnn.ROW_MAJOR_LAYOUT)  # the op is ROW_MAJOR-only; q comes in TILE
+        if q_seq_sharded is not q:
+            ttnn.deallocate(q_seq_sharded)
+
+        # indices must match q_rm's seq sharding. Incoming is replicated full-glob [1,1,S_global,k] or
+        # SP-sharded [1,1,S/sp,k]; under reshard the row count must drop to S/(sp·tp), so split over TP.
+        idx = indices
+        if sp > 1 and indices.shape[2] == seq_len_local * sp:
+            # Replicated full-glob indices → reshard rows onto the SP axis (inverse of all_gather).
+            idx = ttnn.mesh_partition(indices, dim=2, cluster_axis=self.sp_axis)
+        if transpose_head_to_seq and idx.shape[2] != q_rm.shape[2]:
+            idx_seq_sharded = ttnn.mesh_partition(
+                idx, dim=2, cluster_axis=self.tp_axis
+            )  # split seq across TP to match q
+            if idx is not indices:
+                ttnn.deallocate(idx)
+            idx = idx_seq_sharded
+        # k_chunk_size must be a multiple of 32 that divides TOPK (prod TOPK=2048 → 128).
+        k_chunk = next((c for c in (128, 64, 32) if idx.shape[-1] % c == 0), 32)
+        out = ttnn.transformer.sparse_sdpa(
+            q_rm,
+            kvpe.storage,
+            idx,
+            v_dim=self.kv_lora_rank,
+            kv_format=kvpe.format.sparse_sdpa_format,
+            scale=self.scale,
+            k_chunk_size=k_chunk,
+            block_cyclic_sp_axis=self.sp_axis if block_cyclic_chunk_local is not None else None,
+            block_cyclic_chunk_local=block_cyclic_chunk_local,
+            cache_batch_idx=cache_batch_idx,
+        )
+        ttnn.deallocate(q_rm)
+        if idx is not indices:
+            ttnn.deallocate(idx)
+        ret = ttnn.to_layout(out, ttnn.TILE_LAYOUT)  # back to TILE for the downstream wkv_b2 linear
+        ttnn.deallocate(out)
+
+        if transpose_head_to_seq:
+            # Invert the transpose: gather the per-TP seq slices back to S/sp, then re-shard heads onto TP
+            # so the result matches the head-sharded [1, H/tp, S/sp, v_dim] the epilogue consumes.
+            out_all_heads = self._all_gather(ret, dim=2, cluster_axis=self.tp_axis)  # [1, H, S/sp, v_dim] repl on TP
+            ttnn.deallocate(ret)
+            ret = ttnn.mesh_partition(out_all_heads, dim=1, cluster_axis=self.tp_axis)  # [1, H/tp, S/sp, v_dim]
+            ttnn.deallocate(out_all_heads)
+        return ret
+
+    def _gather_kvpe_prefix(
+        self, kvpe_cache: MlaKvCache, cache_batch_idx, populated_global=None, chunk_local=None
+    ) -> MlaKvCache:
+        """On-device read-back of the chunked KVPE prefix for sparse attention. The cache is
+        ND-sharded / block-cyclic across SP, in the op's format (BF16 or packed scaled FP8, ROW_MAJOR).
+        sparse_sdpa consumes it replicated and remaps the
+        natural-position indices to physical block-cyclic pages in-kernel (invP), so the buffer is
+        LEFT in block-cyclic order — no host reorder.
+
+        SLOT SELECT BEFORE THE GATHER: the persistent cache's per-chip shape is [B, 1, seq_len_local,
+        row_width], B = num_users*num_layers (user-major slots), seq_len_local = seq_len_cache / sp. Slice the
+        active (user, layer) slot out of dim 0 FIRST, then all-gather only that single slot over SP (→
+        [1, 1, seq_len_cache, row_width]) — NOT the whole B-slot cache. At 78 layers the full-cache gather is
+        ~5 GB (×2 in-flight → OOM against the near-full 78-layer weights); the single-slot gather is B×
+        smaller. The gathered kv is then batch-1, so sparse_sdpa needs NO cache_batch_idx (the op
+        requires B==1 when cache_batch_idx is unset). This mirrors the dense ring_mla single-slot gather
+        (kv_cache_batch_idx → batch-1 scratch).
+
+        POPULATED-WIDTH TRIM (``populated_global`` = written KV depth after this chunk, ``chunk_local`` =
+        per-chip slab width): trim the per-chip seq dim to only the populated SLABS BEFORE the gather
+        instead of gathering the full allocated cache width. The per-chip cache is slab-major (slab s at
+        local rows [s*chunk_local, (s+1)*chunk_local)) and ``populated_global`` can end mid-slab (padded /
+        rotated ``kv_actual_isl``). A partial boundary slab holds a NON-uniform valid-row count across
+        chips (low chips full, high chips none), and the block-cyclic index remap needs an integer slab
+        count -- so a uniform ``populated_global / sp`` width would drop valid rows on low chips AND slice
+        a fractional slab. Round the touched depth UP to a whole chunk: every valid slab is kept intact
+        and the pad tail is present but never addressed (top-k indices stay < valid). It shrinks the SP
+        all-gather (and the downstream sparse_sdpa buffer) to the populated slab count.
+
+        Pipeline (all on device): ND→interleaved, slot + populated-width slice (no-op for a single-slot,
+        full-width cache), SP all-gather (no-op at sp==1). The cache is already in the op format, so there
+        is NO read-back dtype/layout conversion."""
+
+        storage = ttnn.to_memory_config(kvpe_cache.storage, ttnn.DRAM_MEMORY_CONFIG)
+        slot_lo = cache_batch_idx if storage.shape[0] > 1 else 0
+        seq_hi = storage.shape[2]
+        if populated_global is not None and chunk_local is not None:
+            chunk_size_global = chunk_local * self.sp_factor
+            num_slabs = -(-populated_global // chunk_size_global)
+            seq_hi = min(num_slabs * chunk_local, seq_hi)
+
+        if storage.shape[0] > 1 or seq_hi != storage.shape[2]:
+            selected = ttnn.slice(
+                storage,
+                [slot_lo, 0, 0, 0],
+                [slot_lo + 1, 1, seq_hi, storage.shape[3]],
+            )
+            ttnn.deallocate(storage)
+            storage = selected
+        gathered = self._all_gather(storage, dim=2, cluster_axis=self.sp_axis)
+        if self.sp_factor > 1:
+            ttnn.deallocate(storage)
+
+        return MlaKvCache(
+            format=kvpe_cache.format,
+            storage=gathered,
+            geometry=kvpe_cache.geometry,
+        )

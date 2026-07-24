@@ -43,7 +43,7 @@ from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1DConfig
 from models.common.modules.tt_ccl import TT_CCL
 from models.common.tensor_utils import get_rot_transformation_mat, zeros_like_kv_cache, zeros_like_paged_cache
 from models.common.tests.utils import stable_model_seed
-from models.common.utility_functions import comp_allclose, comp_pcc, is_wormhole_b0, nearest_32
+from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
 
 # =============================================================================
 # RoPE Helper Functions (replaces TTTv1 rope imports)
@@ -403,11 +403,29 @@ def get_attention_weights_from_ref_model(
     Returns:
         (wqkv, wo, q_norm, k_norm, wqkv_bias) tensors in TTNN layout
     """
-    # Get raw weights from HF module
-    wq_raw = reference_attn.q_proj.weight  # (n_heads * head_dim, dim)
-    wk_raw = reference_attn.k_proj.weight  # (n_kv_heads * head_dim, dim)
-    wv_raw = reference_attn.v_proj.weight  # (n_kv_heads * head_dim, dim)
-    wo_raw = reference_attn.o_proj.weight  # (dim, n_heads * head_dim)
+    # Phi-3 / Phi-4 ship a FUSED qkv_proj (single Linear) instead of separate q/k/v projections.
+    # Split it into Q/K/V rows here so the rest of the pipeline is architecture-agnostic.
+    fused_qkv = hasattr(reference_attn, "qkv_proj") and not hasattr(reference_attn, "q_proj")
+    if fused_qkv:
+        cfg = reference_attn.config
+        _n_heads = cfg.num_attention_heads
+        _n_kv = getattr(cfg, "num_key_value_heads", _n_heads)
+        _hd = (
+            getattr(reference_attn, "head_dim", None) or getattr(cfg, "head_dim", None) or (cfg.hidden_size // _n_heads)
+        )
+        _q = _n_heads * _hd
+        _kv = _n_kv * _hd
+        qkv_w = reference_attn.qkv_proj.weight  # (n_heads*hd + 2*n_kv*hd, dim), order Q|K|V
+        wq_raw = qkv_w[:_q]  # (n_heads * head_dim, dim)
+        wk_raw = qkv_w[_q : _q + _kv]  # (n_kv_heads * head_dim, dim)
+        wv_raw = qkv_w[_q + _kv : _q + 2 * _kv]  # (n_kv_heads * head_dim, dim)
+        wo_raw = reference_attn.o_proj.weight  # (dim, n_heads * head_dim)
+    else:
+        # Get raw weights from HF module
+        wq_raw = reference_attn.q_proj.weight  # (n_heads * head_dim, dim)
+        wk_raw = reference_attn.k_proj.weight  # (n_kv_heads * head_dim, dim)
+        wv_raw = reference_attn.v_proj.weight  # (n_kv_heads * head_dim, dim)
+        wo_raw = reference_attn.o_proj.weight  # (dim, n_heads * head_dim)
 
     # Compute head_dim from weight shapes
     dim = wq_raw.shape[1]
@@ -470,7 +488,7 @@ def get_attention_weights_from_ref_model(
     # QKV bias (optional, e.g., for Qwen2/Qwen2.5 models)
     # Bias also needs the same chunking/concat pattern as weights
     wqkv_bias = None
-    if hasattr(reference_attn.q_proj, "bias") and reference_attn.q_proj.bias is not None:
+    if not fused_qkv and hasattr(reference_attn.q_proj, "bias") and reference_attn.q_proj.bias is not None:
         bq_raw = reference_attn.q_proj.bias  # (n_heads * head_dim,)
         bk_raw = reference_attn.k_proj.bias  # (n_kv_heads * head_dim,)
         bv_raw = reference_attn.v_proj.bias  # (n_kv_heads * head_dim,)
@@ -738,72 +756,6 @@ def test_attention_1d_resolve_requires_head_dim(expect_error):
         _resolve_attention1d_config(config)
 
 
-def test_attention_1d_resolve_validates_token_budget(expect_error):
-    """Test that _resolve_attention1d_config raises ValueError when token budget is exceeded."""
-    mock_source = MagicMock()
-    mock_source.shape = (4096, 1536)
-
-    mock_wqkv = MagicMock(spec=LazyWeight)
-    mock_wqkv.source = mock_source
-    mock_wqkv.device = None
-
-    # 32 batch × 8192 seq = 262,144 tokens > 128K limit
-    config = Attention1DConfig(
-        wqkv=mock_wqkv,
-        wo=MagicMock(spec=LazyWeight),
-        n_heads=32,
-        n_kv_heads=8,
-        head_dim=128,
-        max_batch_size=32,
-        max_seq_len=8192,  # 32 × 8192 = 262K > 128K
-    )
-
-    with expect_error(ValueError, "Total token budget exceeded"):
-        _resolve_attention1d_config(config)
-
-
-def test_attention_1d_resolve_validates_token_budget_edge_case(expect_error):
-    """Test that exactly 128K tokens is allowed but 128K+1 is not."""
-    mock_source = MagicMock()
-    mock_source.shape = (4096, 1536)
-
-    mock_wqkv = MagicMock(spec=LazyWeight)
-    mock_wqkv.source = mock_source
-    mock_wqkv.device = None
-
-    # Exactly 128K tokens should be allowed (boundary case)
-    # 32 batch × 4096 seq = 131,072 tokens = 128K (should pass token budget check)
-    config_ok = Attention1DConfig(
-        wqkv=mock_wqkv,
-        wo=MagicMock(spec=LazyWeight),
-        n_heads=32,
-        n_kv_heads=8,
-        head_dim=128,
-        max_batch_size=32,
-        max_seq_len=4096,  # 32 × 4096 = 131,072 = 128K exactly
-    )
-    # Should not raise token budget error (may fail later due to missing device)
-    try:
-        _resolve_attention1d_config(config_ok)
-    except (ValueError, AssertionError) as e:
-        # Token budget errors should NOT occur - only device-related errors are acceptable
-        assert "Total token budget exceeded" not in str(e), f"Unexpected token budget error: {e}"
-
-    # 128K + 1 token should fail with token budget error
-    config_fail = Attention1DConfig(
-        wqkv=mock_wqkv,
-        wo=MagicMock(spec=LazyWeight),
-        n_heads=32,
-        n_kv_heads=8,
-        head_dim=128,
-        max_batch_size=1,
-        max_seq_len=128 * 1024 + 1,  # 128K + 1 tokens
-    )
-
-    with expect_error(ValueError, "Total token budget exceeded"):
-        _resolve_attention1d_config(config_fail)
-
-
 def test_attention_1d_resolve_kv_cache_tensor_passthrough():
     """Test that _resolve_attention1d_config passes through raw ttnn.Tensor KV cache entries."""
     mock_source = MagicMock()
@@ -885,6 +837,7 @@ QWEN25_72B = "Qwen/Qwen2.5-72B-Instruct"
 QWEN25_CODER_32B = "Qwen/Qwen2.5-Coder-32B-Instruct"
 DEEPSEEK_R1_14B = "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"
 QWEN3_32B = "Qwen/Qwen3-32B"
+PHI4 = "microsoft/phi-4"  # Phi3 architecture: fused qkv_proj, no bias, no q/k norm, GQA 40/10
 
 _slow = pytest.mark.slow
 
@@ -996,6 +949,13 @@ def _list_test_cases() -> list[pytest.param]:
         pytest.param((1, 2), 2048, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x2-prefill-2048-Mistral-7B", marks=_slow),
         pytest.param((1, 2), 4096, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x2-prefill-4096-Mistral-7B", marks=_slow),
         pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x2-decode-32-Mistral-7B", marks=_slow),
+
+        # --- Phi-4 on N300 (1x2) --- fused qkv_proj split, GQA 40/10, head_dim 128, no bias/qk-norm.
+        # decode-32 is validated on N300 for both standard and paged SDPA-decode (the earlier
+        # num_output_cores limit for Phi-4's 10 KV heads no longer trips); batch-1 decode is
+        # additionally covered end-to-end by the M5 token-accuracy demo (97-99% top-1).
+        pytest.param((1, 2), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, PHI4, 0.99, id="1x2-prefill-128-Phi-4", marks=_slow),
+        pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, PHI4, 0.99, id="1x2-decode-32-Phi-4", marks=_slow),
 
         # --- Qwen2-7B on N300 (1x2) ---
         # NOTE: Qwen2-7B has Q/K biases causing numerical precision issues
@@ -1186,11 +1146,6 @@ def test_attention_1d_vs_reference(
     test_attention_1d_vs_reference_from_model_args which uses existing infrastructure
     that handles HF API differences.
     """
-    # WH B0 multi-device: reduce_scatter output topology generates duplicate shard dims
-    # causing TT_FATAL @ partition.cpp:152. Single-device (1x1) is unaffected. Refs #46878.
-    if is_wormhole_b0() and ttnn_mesh_device.get_num_devices() > 1:
-        pytest.skip("WH B0 multi-device: TT_FATAL duplicate dims in partition.cpp (refs #46878)")
-
     # Skip if mesh_shape doesn't match device
     device_shape = (ttnn_mesh_device.shape[0], ttnn_mesh_device.shape[1])
     if device_shape != mesh_shape:

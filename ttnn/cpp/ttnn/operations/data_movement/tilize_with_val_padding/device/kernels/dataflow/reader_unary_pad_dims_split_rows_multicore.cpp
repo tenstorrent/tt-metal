@@ -6,7 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -22,8 +22,9 @@
 // uint32_t 'val'. Ex: two bfloat16 vals in upper 16 bits and lower 16 bits.
 template <uint32_t val_size>
 FORCE_INLINE void fill_with_val(uint32_t start_addr, uint32_t n_bytes, uint32_t val) {
-    static_assert(val_size == 2 || val_size == 4, "Unsupported val_size");
-    using IntType = std::conditional_t<(val_size == 2), uint16_t, uint32_t>;
+    static_assert(val_size == 1 || val_size == 2 || val_size == 4, "Unsupported val_size");
+    using IntType =
+        std::conditional_t<(val_size == 1), uint8_t, std::conditional_t<(val_size == 2), uint16_t, uint32_t>>;
 
     uint32_t end_addr = start_addr + n_bytes;
     uint32_t start_addr_4B = (start_addr + 0x3) & 0xFFFFFFFC;  // ceil(address aligned to 4Bytes)
@@ -60,7 +61,7 @@ FORCE_INLINE void fill_with_val(uint32_t start_addr, uint32_t n_bytes, uint32_t 
 }
 
 void kernel_main() {
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t dfb_id_in0 = 0;
     constexpr uint32_t tile_height = 32;
 
     constexpr uint32_t tile_row_shift_bits = get_compile_time_arg_val(0);
@@ -82,15 +83,15 @@ void kernel_main() {
 
     const auto s = TensorAccessor(src_args, src_addr);
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
+    DataflowBuffer dfb_in0(dfb_id_in0);
 
     auto pad_blocks = [&](uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {
-            cb_in0.reserve_back(num_tiles_per_row);
-            uint32_t l1_write_addr = cb_in0.get_write_ptr();
+            dfb_in0.reserve_back(num_tiles_per_row);
+            uint32_t l1_write_addr = dfb_in0.get_write_ptr();
             // pad the tile by reading values from zero buffer in L1
             fill_with_val<elem_size>(l1_write_addr, padded_X_size << 5, pad_value);  // "<< 5" = "* tile_height"
-            cb_in0.push_back(num_tiles_per_row);
+            dfb_in0.push_back(num_tiles_per_row);
         }
     };
 
@@ -98,8 +99,8 @@ void kernel_main() {
         uint32_t padding_rows = (tile_height - num_rows) & 31;
         bool has_rows = (num_rows + padding_rows) > 0;
 
-        cb_in0.reserve_back(num_tiles_per_row * has_rows);
-        uint32_t l1_write_addr = cb_in0.get_write_ptr();
+        dfb_in0.reserve_back(num_tiles_per_row * has_rows);
+        uint32_t l1_write_addr = dfb_in0.get_write_ptr();
         for (uint32_t k = 0; k < num_rows; k++) {
             uint32_t start_of_row_l1_write_addr = l1_write_addr;
             for (uint32_t i = 0; i < num_pages_in_row - 1; i++) {
@@ -127,7 +128,7 @@ void kernel_main() {
 
         fill_with_val<elem_size>(l1_write_addr, padding_rows * padded_X_size, pad_value);
         noc.async_read_barrier();
-        cb_in0.push_back(num_tiles_per_row * has_rows);
+        dfb_in0.push_back(num_tiles_per_row * has_rows);
     };
 
     uint32_t page_id = start_page_id;

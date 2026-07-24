@@ -48,7 +48,7 @@ uint32_t estimate_interm_tile_size(
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     tt::tt_metal::DataType output_dtype);
 
-uint32_t get_max_l1_space(const tt::tt_metal::Tensor& input_tensor_a);
+uint32_t get_max_l1_space(const ttnn::Tensor& input_tensor_a);
 
 bool is_input_batched(const ttnn::Shape& shape);
 
@@ -203,6 +203,7 @@ inline KernelActivation get_activation_type(ttnn::operations::unary::UnaryOpType
     using ttnn::operations::unary::UnaryOpType;
     switch (opType) {
         case UnaryOpType::GELU: return KernelActivation::GELU;
+        case UnaryOpType::GELU_TANH: return KernelActivation::GELU_TANH;
         case UnaryOpType::TANH: return KernelActivation::TANH;
         case UnaryOpType::SILU: return KernelActivation::SILU;
         case UnaryOpType::RELU6: return KernelActivation::RELU6;
@@ -254,6 +255,11 @@ inline ActivationParams get_activation_params(const ttnn::operations::unary::Una
             result.type = KernelActivation::GELU;
             // param0 is vector mode (0=RC, 1=R, 2=C) or fast mode
             result.param0 = has_first ? static_cast<uint32_t>(params[0]) : 0;
+            break;
+
+        case UnaryOpType::GELU_TANH:
+            result.type = KernelActivation::GELU_TANH;
+            // No parameters
             break;
 
         case UnaryOpType::TANH:
@@ -352,11 +358,11 @@ tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const tt
 void get_max_page_size_and_num_pages(
     tt::tt_metal::IDevice* device, uint32_t num_tiles, uint32_t tile_size, uint32_t& page_size, uint32_t& num_pages);
 
-void move_common_entries(std::vector<CoreCoord>& v1, std::vector<CoreCoord>& v2, std::vector<CoreCoord>& commons);
+void move_common_entries(std::vector<tt::tt_metal::CoreCoord>& v1, std::vector<tt::tt_metal::CoreCoord>& v2, std::vector<tt::tt_metal::CoreCoord>& commons);
 
 void get_optimal_dram_bank_to_reader_assignment(
     tt::tt_metal::IDevice* device,
-    std::vector<CoreCoord>& all_worker_cores_ordered,
+    std::vector<tt::tt_metal::CoreCoord>& all_worker_cores_ordered,
     CoreRangeSet& all_worker_cores,
     tt::tt_metal::NOC noc);
 

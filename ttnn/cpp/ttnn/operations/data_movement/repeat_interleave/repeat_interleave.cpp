@@ -26,20 +26,29 @@ ttnn::Tensor repeat_interleave(
     uint32_t input_rank = input_a_shape.rank();
     uint32_t normalized_dim = input_a_shape.get_normalized_index(dim);
     if (normalized_dim == input_rank - 1) {
-        auto transposed_input = ttnn::transpose(input_a, -1, -2, mem_config);
+        ttnn::Tensor transpose_input = input_a;
+        bool typecast = input_a.dtype() == DataType::UINT8;
+        if (typecast) {
+            transpose_input = ttnn::typecast(transpose_input, DataType::BFLOAT16, mem_config);
+        }
+        auto transposed_input = ttnn::transpose(transpose_input, -1, -2, mem_config);
         auto repeated_input = ttnn::repeat_interleave(transposed_input, repeat, -2, mem_config);
-        return ttnn::transpose(repeated_input, -1, -2, mem_config);
+        auto result = ttnn::transpose(repeated_input, -1, -2, mem_config);
+        return typecast ? ttnn::typecast(result, input_a.dtype(), mem_config) : result;
     }
 
     ttnn::Tensor rm_input = input_a;
-    bool typecast = input_a.dtype() != DataType::BFLOAT16;
+    bool typecast =
+        input_a.dtype() == DataType::BFLOAT8_B ||
+        input_a.dtype() == DataType::BFLOAT4_B ||
+        input_a.dtype() == DataType::UINT8;
     if (typecast) {
         rm_input = ttnn::typecast(rm_input, DataType::BFLOAT16, mem_config);
     }
 
     rm_input = ttnn::to_layout(rm_input, Layout::ROW_MAJOR);
     const auto& rm_input_shape = rm_input.logical_shape();
-    SmallVector<uint32_t> final_shape;
+    ttsl::SmallVector<uint32_t> final_shape;
     final_shape.reserve(input_rank);
     for (uint32_t i = 0; i < rm_input_shape.rank(); i++) {
         final_shape.push_back(rm_input_shape[i]);
@@ -65,7 +74,8 @@ ttnn::Tensor repeat_interleave(
     auto concatenated_tensor = ttnn::concat(combined_tensors, normalized_dim + 1);
     auto reshaped_tensor = ttnn::reshape(concatenated_tensor, ttnn::Shape(final_shape));
     auto original_layout = ttnn::to_layout(reshaped_tensor, input_a.layout());
-    return typecast ? ttnn::typecast(original_layout, input_a.dtype(), mem_config) : original_layout;
+    return typecast ? ttnn::typecast(original_layout, input_a.dtype(), mem_config)
+                    : ttnn::to_memory_config(original_layout, mem_config);
 }
 
 }  // namespace ttnn

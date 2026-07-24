@@ -81,3 +81,15 @@ def pytest_addoption(parser):
         default=False,
         help="Whether to use HF-style rope, if not passed, the default mllama will be used",
     )
+    parser.addoption(
+        "--skip_perf_report",
+        action="store_true",
+        default=False,
+        help=(
+            "Skip writing the perf benchmark JSON and the CI perf-target check for this run. "
+            "Use when the same test is run in more than one configuration and only one of them "
+            "should report/validate perf (e.g. Llama-8B runs ci-eval-32 both without the prefetcher "
+            "for repeat-batch coverage and with the prefetcher on a single batch for perf; only the "
+            "latter should report perf). See issue #47820."
+        ),
+    )
