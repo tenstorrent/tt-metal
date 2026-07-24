@@ -159,6 +159,36 @@ jobs:
               "owner_id": "U08TJ70UFRT"
             },
             {
+              "name": "[BH-QB-2] Gemma4-12B (chunked-prefill)",
+              "model": "google/gemma-4-12B-it",
+              "coherence-test": true,
+              "server-timeout": 20,
+              "benchmark-timeout": 10,
+              "runner-label": "BH-Quietbox-2",
+              "arch": "arch-blackhole",
+              "mesh-device": "P150x4",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 400000000}",
+              "additional-server-args": "--max_model_len 131072 --max_num_batched_tokens 1024 --max_num_seqs 1 --async-scheduling",
+              "additional-benchmark-args": "--random-input-len 4096",
+              "multimodal": false,
+              "owner_id": "U08TJ70UFRT"
+            },
+            {
+              "name": "[BH-QB-2] Gemma4-12B (chunked-prefill DP=2)",
+              "model": "google/gemma-4-12B-it",
+              "coherence-test": true,
+              "server-timeout": 25,
+              "benchmark-timeout": 10,
+              "runner-label": "BH-Quietbox-2",
+              "arch": "arch-blackhole",
+              "mesh-device": "P150x4",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 400000000}",
+              "additional-server-args": "--max_model_len 131072 --max_num_batched_tokens 1024 --max_num_seqs 4 --data_parallel_size 2 --async-scheduling",
+              "additional-benchmark-args": "--random-input-len 4096",
+              "multimodal": false,
+              "owner_id": "U08TJ70UFRT"
+            },
+            {
               "name": "[BH-QB-2] Gemma4-26B-A4B",
               "model": "google/gemma-4-26B-A4B-it",
               "coherence-test": true,
