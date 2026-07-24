@@ -567,21 +567,22 @@ def mesh_device(request, silicon_arch_name, device_params):
         grid_dims = param
         assert len(grid_dims) == 2, "Device mesh grid shape should have exactly two elements."
         num_devices_requested = grid_dims[0] * grid_dims[1]
-        # This is a workaround to support skipping tests where configuring mesh devices whose size does not match the physical
-        # number of devices causes the runtime to crash. Theoretically the runtime should support mesh devices smaller than the
-        # number of physical devices, but that hasn't been the case when testing. TODO remove when such behavior is more widely supported.
+        available_num_devices = (
+            ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
+            if ttnn.using_distributed_env()
+            else ttnn.get_num_devices()
+        )
         if (
             device_params.get("require_exact_physical_num_devices", False)
-            and not ttnn.using_distributed_env()  # otherwise it only sees the local host's chips
-            and num_devices_requested != ttnn.get_num_devices()
+            and num_devices_requested != available_num_devices
         ):
             pytest.skip(
-                f"Test requires exact match of requested num devices ({num_devices_requested}) to available physical num devices ({ttnn.get_num_devices()})."
+                f"Test requires exact match of requested num devices ({num_devices_requested}) to available physical num devices ({available_num_devices})."
             )
 
-        if not ttnn.using_distributed_env() and num_devices_requested > ttnn.get_num_devices():
+        if num_devices_requested > available_num_devices:
             pytest.skip(
-                f"Requested more devices ({num_devices_requested}) than available ({ttnn.get_num_devices()}). Test not applicable for machine"
+                f"Requested more devices ({num_devices_requested}) than available ({available_num_devices}). Test not applicable for machine"
             )
         mesh_shape = ttnn.MeshShape(*grid_dims)
     else:

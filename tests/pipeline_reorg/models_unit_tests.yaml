@@ -957,7 +957,7 @@
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     HOSTS=$(awk 'NF {print $1}' /etc/ttop/hostfile | paste -sd,)
-    tt-run --mesh-graph-descriptor "${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/scaleout_configs/quad_galaxy/mesh_graph_descriptor.textproto" \
+    tt-run --mesh-graph-descriptor "${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto" \
       --hosts "${HOSTS}" \
       python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "bh_4x32 and 720p and t2v"
   model: wan-2.2-t2v
@@ -973,7 +973,7 @@
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     HOSTS=$(awk 'NF {print $1}' /etc/ttop/hostfile | paste -sd,)
-    tt-run --mesh-graph-descriptor "${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/scaleout_configs/quad_galaxy/mesh_graph_descriptor.textproto" \
+    tt-run --mesh-graph-descriptor "${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto" \
       --hosts "${HOSTS}" \
       python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "bh_4x32 and 720p and i2v"
   model: wan-2.2-i2v

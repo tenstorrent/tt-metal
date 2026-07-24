@@ -408,6 +408,7 @@ def test_pipeline_performance(
             (2, 2): "BH_QB",
             (2, 4): "BH_LB" if is_blackhole() else "WH_T3K",
             (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
+            (4, 32): "BH_QG",  # quad galaxy (bh_sc4)
         }
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
