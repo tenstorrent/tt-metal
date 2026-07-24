@@ -119,8 +119,25 @@ sfpi_inline void _calculate_softplus_body_(const float beta, const float beta_re
     sfpi::dst_reg++;
 }
 
-// Calculates SOFTPLUS over a full tile; beta/beta_reciprocal/threshold are beta, 1/beta, threshold as
-// fp32 bit patterns. APPROXIMATION_MODE ignored (exact op).
+/**
+ * @brief Compute softplus (1/beta * ln(1 + exp(beta * x))) in-place over a Dest tile.
+ *
+ * Uses the abs(x) symmetry: with f(a) = ln(1 + exp(-a)) and t = beta * x,
+ * softplus(x) = 1/beta * (t + f(t)) for t >= 0 and 1/beta * f(-t) for t < 0. Above `threshold` the op
+ * is linear (returns x). is_fp32_dest_acc_en selects a degree-8 polynomial on [0, 5] plus an exp
+ * Taylor tail (32-bit Dest) or a bf16-accurate degree-6 polynomial with the tail dropped (16-bit
+ * Dest). APPROXIMATION_MODE is accepted for ABI parity but ignored (softplus is exact).
+ *
+ * @tparam APPROXIMATION_MODE: Accepted for ABI parity; ignored (softplus has no approximate variant).
+ * @tparam is_fp32_dest_acc_en: Select the fp32 (degree-8 + exp tail) vs bf16 (degree-6) residual path.
+ * @tparam ITERATIONS: Number of SFPU loop iterations over the Dest tile.
+ * @param beta: Sharpness parameter beta, as an fp32 bit pattern.
+ * @param beta_reciprocal: 1/beta, as an fp32 bit pattern.
+ * @param threshold: Linear-region threshold on beta*x above which softplus(x) = x, as an fp32 bit pattern.
+ * @note The fp32 tail calls @ref _sfpu_exp_fp32_accurate_. The `t < threshold` compare relies on
+ *       vConstNeg1/LREG11 == -1.0, re-established per launch by @ref _init_sfpu_config_reg_, so there
+ *       is no op-specific init step to pair with.
+ */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_softplus(std::uint32_t beta, std::uint32_t beta_reciprocal, std::uint32_t threshold)
 {
