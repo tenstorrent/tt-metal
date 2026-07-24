@@ -75,6 +75,10 @@ def test_pipeline_inference(
     quant_config_name,
     no_prompt,
 ):
+    # Temporarily skip the wh_4x8sp1tp0 + resolution_720p combination on Wormhole Galaxy
+    # due to TLB allocation failure (tt_tlb_alloc error -12). refs #47184
+    if mesh_shape == (4, 8) and sp_axis == 1 and tp_axis == 0 and topology == ttnn.Topology.Ring and is_fsdp and height == 720:
+        pytest.skip("Skipping wh_4x8sp1tp0 resolution_720p on Wormhole Galaxy: TLB allocation failure, refs #47184")
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
