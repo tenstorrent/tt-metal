@@ -30,14 +30,14 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
-#include "api/debug/dprint.h"  // TEMP: config dump
+#include "api/debug/assert.h"
 
 void kernel_main() {
     // -------------------------- runtime args ------------------------------
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
-    const uint32_t gate_addr = get_arg_val<uint32_t>(1);
-    const uint32_t up_addr = get_arg_val<uint32_t>(2);
-    const uint32_t down_addr = get_arg_val<uint32_t>(3);
+    // Args 1..3 hold expert-0's gate/up/down base addresses (kept for arg-layout
+    // stability); the per-expert weight-address arrays after `start` are used
+    // instead, so these single slots are intentionally not read here.
     const uint32_t counts_addr = get_arg_val<uint32_t>(4);
     const uint32_t idx_table_addr = get_arg_val<uint32_t>(5);
 
@@ -98,7 +98,7 @@ void kernel_main() {
     constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(5);
     constexpr uint32_t cb_idx_scratch = get_compile_time_arg_val(6);
 
-    constexpr uint32_t local_expert_id = get_compile_time_arg_val(7);
+    constexpr uint32_t experts_per_chip = get_compile_time_arg_val(7);
     constexpr uint32_t per_core_M = get_compile_time_arg_val(8);
     constexpr uint32_t per_core_N_gu = get_compile_time_arg_val(9);
     constexpr uint32_t per_core_N_d = get_compile_time_arg_val(10);
@@ -119,20 +119,17 @@ void kernel_main() {
     // NoC 1 into cb_in1_up); both 0 = UP_WRITER_MCAST, reader skips up.
     constexpr uint32_t reader_reads_up = get_compile_time_arg_val(23);
     constexpr uint32_t reader_mcasts_up = get_compile_time_arg_val(24);
-    // read_x_at_offset: x is a shared buffer; offset x reads by this expert's
-    // region start (start[global_id]/TILE tile-rows). 0 => x is per-expert,
-    // reads start at row 0. cb_start_scratch holds the fetched `start` page.
-    constexpr uint32_t read_x_at_offset = get_compile_time_arg_val(25);
-    constexpr uint32_t cb_start_scratch = get_compile_time_arg_val(26);
+    // cb_start_scratch holds the fetched `start` page.
+    constexpr uint32_t cb_start_scratch = get_compile_time_arg_val(25);
     // x_is_row_major: x is ROW_MAJOR bf16 — stream sticks into cb_x_rm for the
     // compute kernel to tilize. 0 => x is TILE bf8_b, read directly.
-    constexpr uint32_t x_is_row_major = get_compile_time_arg_val(27);
-    constexpr uint32_t cb_x_rm = get_compile_time_arg_val(28);
+    constexpr uint32_t x_is_row_major = get_compile_time_arg_val(26);
+    constexpr uint32_t cb_x_rm = get_compile_time_arg_val(27);
     // Tile height: rows (token-row sticks) per tile-row. Used to size row-major
     // reads and to convert token counts to tile-rows.
-    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(29);
+    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(28);
     // Byte size of one row-major x element: x is bf16 in the row-major path.
-    constexpr uint32_t X_RM_ELEM_BYTES = get_compile_time_arg_val(30);
+    constexpr uint32_t X_RM_ELEM_BYTES = get_compile_time_arg_val(29);
     // UP_SPLIT iff the reader multicasts up but does not read it from DRAM.
     constexpr bool up_split = (reader_mcasts_up != 0) && (reader_reads_up == 0);
 
@@ -143,7 +140,7 @@ void kernel_main() {
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t num_blocks_d = K_down_tiles_padded / in0_block_w_d;
 
-    constexpr uint32_t x_accessor_offset = 31;
+    constexpr uint32_t x_accessor_offset = 30;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
     // Row-major x accessor (x_is_row_major): x is a ROW_MAJOR bf16 buffer whose
@@ -154,17 +151,17 @@ void kernel_main() {
     constexpr uint32_t x_rm_stick_bytes = K_gate_tiles * TILE_HEIGHT * X_RM_ELEM_BYTES;
     const auto x_acc_rm = TensorAccessor(x_args, x_addr, x_rm_stick_bytes);
 
+    // gate/up/down accessor LAYOUT descriptors (compile-time). All experts share
+    // one layout; the per-expert accessor is built inside the expert loop from
+    // the descriptor + that expert's base address (runtime args).
     constexpr uint32_t gate_accessor_offset = x_args.next_compile_time_args_offset();
     constexpr auto gate_args = TensorAccessorArgs<gate_accessor_offset>();
-    const auto gate_acc = TensorAccessor(gate_args, gate_addr, get_tile_size(cb_in1_gate));
 
     constexpr uint32_t up_accessor_offset = gate_args.next_compile_time_args_offset();
     constexpr auto up_args = TensorAccessorArgs<up_accessor_offset>();
-    const auto up_acc = TensorAccessor(up_args, up_addr, get_tile_size(cb_in1_up));
 
     constexpr uint32_t down_accessor_offset = up_args.next_compile_time_args_offset();
     constexpr auto down_args = TensorAccessorArgs<down_accessor_offset>();
-    const auto down_acc = TensorAccessor(down_args, down_addr, get_tile_size(cb_in1_down));
 
     constexpr uint32_t counts_accessor_offset = down_args.next_compile_time_args_offset();
     constexpr auto counts_args = TensorAccessorArgs<counts_accessor_offset>();
@@ -175,33 +172,35 @@ void kernel_main() {
     const auto idx_acc = TensorAccessor(idx_args, idx_table_addr);
 
     // `start` (= expert_region_offsets) accessor. Appended last in the reader's
-    // accessor stream; read only when read_x_at_offset. start_addr is the final
-    // runtime arg, after the GRID_X-pair M-row NoC table at M_ROW_NOC_RT_OFFSET.
+    // accessor stream. start_addr is the runtime arg after the GRID_X-pair M-row
+    // NoC table at M_ROW_NOC_RT_OFFSET.
     const uint32_t start_addr = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * GRID_X_NOC);
     constexpr uint32_t start_accessor_offset = idx_args.next_compile_time_args_offset();
     constexpr auto start_args = TensorAccessorArgs<start_accessor_offset>();
     const auto start_acc = TensorAccessor(start_args, start_addr);
 
+    // Per-expert weight base addresses follow start_addr in three contiguous
+    // runtime-arg blocks of experts_per_chip each: gate[0..N), up[0..N),
+    // down[0..N). gate_addr(e) = arg[WEIGHTS_RT + e], etc.
+    constexpr uint32_t WEIGHTS_RT = M_ROW_NOC_RT_OFFSET + 2 * GRID_X_NOC + 1;
+
 #ifdef FUSE_BIAS
-    // gpt-oss expert biases. RT addrs immediately follow start_addr; CT bias CB
-    // ids + accessors follow the start accessor. Read once (below), added by the
-    // compute kernel (gate/up before the activation, down after the down matmul).
-    const uint32_t gate_bias_addr = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * GRID_X_NOC + 1);
-    const uint32_t up_bias_addr = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * GRID_X_NOC + 2);
-    const uint32_t down_bias_addr = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * GRID_X_NOC + 3);
+    // gpt-oss expert biases. CT bias CB ids + accessor descriptors follow the
+    // start accessor; per-expert bias base addresses follow the weight blocks in
+    // three further runtime-arg blocks (gate_bias[0..N), up_bias, down_bias)
+    // starting at BIAS_RT. Read per expert in the loop, added by the compute
+    // kernel (gate/up before the activation, down after the down matmul).
+    constexpr uint32_t BIAS_RT = WEIGHTS_RT + 3 * experts_per_chip;
     constexpr uint32_t bias_cb_offset = start_args.next_compile_time_args_offset();
     constexpr uint32_t cb_gate_bias = get_compile_time_arg_val(bias_cb_offset + 0);
     constexpr uint32_t cb_up_bias = get_compile_time_arg_val(bias_cb_offset + 1);
     constexpr uint32_t cb_down_bias = get_compile_time_arg_val(bias_cb_offset + 2);
     constexpr uint32_t gate_bias_accessor_offset = bias_cb_offset + 3;
     constexpr auto gate_bias_args = TensorAccessorArgs<gate_bias_accessor_offset>();
-    const auto gate_bias_acc = TensorAccessor(gate_bias_args, gate_bias_addr, get_tile_size(cb_gate_bias));
     constexpr uint32_t up_bias_accessor_offset = gate_bias_args.next_compile_time_args_offset();
     constexpr auto up_bias_args = TensorAccessorArgs<up_bias_accessor_offset>();
-    const auto up_bias_acc = TensorAccessor(up_bias_args, up_bias_addr, get_tile_size(cb_up_bias));
     constexpr uint32_t down_bias_accessor_offset = up_bias_args.next_compile_time_args_offset();
     constexpr auto down_bias_args = TensorAccessorArgs<down_bias_accessor_offset>();
-    const auto down_bias_acc = TensorAccessor(down_bias_args, down_bias_addr, get_tile_size(cb_down_bias));
     CircularBuffer cb_gate_bias_obj(cb_gate_bias);
     CircularBuffer cb_up_bias_obj(cb_up_bias);
     CircularBuffer cb_down_bias_obj(cb_down_bias);
@@ -269,141 +268,117 @@ void kernel_main() {
 
     const volatile tt_l1_ptr uint32_t* counts_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counts_l1);
     const volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
-    const uint32_t global_expert_id = idx_ptr[local_expert_id];
-    const uint32_t count_value = counts_ptr[global_expert_id];
-    // count_value is in TOKEN rows. Convert to tile rows (ceil) then to chunks.
-    // For count=0 the loop is empty (no chunks processed). For count > 0 we
-    // process ceil(count_tiles / chunk_M_tiles) chunks; the remaining chunks
-    // (if any) are skipped — no DRAM reads, no mcasts, no compute.
-    const uint32_t count_tiles = (count_value + TILE_HEIGHT - 1) / TILE_HEIGHT;
-    const uint32_t effective_chunks_runtime = (count_tiles + chunk_M_tiles - 1) / chunk_M_tiles;
-    // Clamp to compile-time num_chunks just in case (defensive against bad input).
-    const uint32_t effective_chunks = effective_chunks_runtime < num_chunks ? effective_chunks_runtime : num_chunks;
 
-    // TEMP config dump (one core): understand RM vs TILE blocking difference.
-    if (is_in0_sender && my_mt == 0 && my_nt_gu == 0) {
-        DPRINT(
-            "CFG rm="
-            "{}"
-            " ibw_gu={} per_core_M={} chunk_M={} num_chunks={} eff={} K_gate={}\n",
-            (uint32_t)x_is_row_major,
-            in0_block_w_gu,
-            per_core_M,
-            chunk_M_tiles,
-            num_chunks,
-            effective_chunks,
-            K_gate_tiles);
-    }
-
-    // x-read row offset. Zero unless read_x_at_offset: then x is a shared buffer
-    // and this expert's rows begin at start[global_id]. Fetch the start page and
-    // convert the token row to a tile-page offset (row_tile * K_gate_tiles), the
-    // exact source rebase ttnn::extract used to perform. Must agree with the
-    // writer's row_offset_tiles so x is read and y is written to the same region.
-    uint32_t x_start_tile_idx = 0;
-    // Row-major stick (token-row) base for this expert's region. TILE mode uses
-    // x_start_tile_idx (tile-page offset); row-major mode uses x_start_stick to
-    // offset the token-row stick page. Both derive from start[global_id] (a
-    // tile-aligned token row) and must agree with the writer's row_offset_tiles.
-    uint32_t x_start_stick = 0;
-    if constexpr (read_x_at_offset != 0) {
-        cb_start_scratch_obj.reserve_back(1);
-        const uint32_t start_l1 = cb_start_scratch_obj.get_write_ptr();
-        noc_read.async_read(
-            start_acc, CoreLocalMem<uint32_t>(start_l1), start_acc.get_aligned_page_size(), {.page_id = 0}, {});
-        noc_read.async_read_barrier();
-        cb_start_scratch_obj.push_back(1);
-        const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_l1);
-        const uint32_t start_value = start_ptr[global_expert_id];
-        x_start_tile_idx = (start_value / TILE_HEIGHT) * K_gate_tiles;
-        x_start_stick = start_value;
-    }
-
-    // Per-chunk pre-zero bookkeeping. For each chunk we decide whether
-    // THIS core (as in0 sender) needs to zero its cb_in0_x slots before
-    // starting the K-loop: it does iff some of the chunk's per_core_M rows
-    // are past min(count_tiles, M_tiles_full). The K-loop then SKIPS writes
-    // for invalid rows; the pre-zero ensures the slot's invalid-row L1
-    // regions are zero across all K-blocks (the K-loop only overwrites
-    // valid rows). One pre-zero per chunk replaces the prior per-K-block
-    // memset (~14× savings on RISC-V CPU stores).
-    //
-    // Need to re-pre-zero per chunk because: the L1 carries content from
-    // the previous chunk's K-blocks. Multi-chunk cases (e.g. 3.2k with
-    // chunk_M=56 num_chunks=2: chunk 0 all-valid, chunk 1 has invalid
-    // rows) would otherwise leave chunk 1's invalid rows holding chunk 0's
-    // real data — matmul wastes cycles on the garbage even if writer
-    // skips the OOB output writes downstream.
-    const uint32_t M_bound = (count_tiles < M_tiles_full) ? count_tiles : M_tiles_full;
+    // Read the `start` (= expert_region_offsets) page ONCE into resident L1. x
+    // is the shared dispatched buffer; each expert's rows begin at
+    // start[global_id]. Indexed per expert in the loop below (must agree with
+    // the writer's row_offset_tiles so x is read and y is written to the same
+    // region).
+    cb_start_scratch_obj.reserve_back(1);
+    const uint32_t start_l1 = cb_start_scratch_obj.get_write_ptr();
+    noc_read.async_read(
+        start_acc, CoreLocalMem<uint32_t>(start_l1), start_acc.get_aligned_page_size(), {.page_id = 0}, {});
+    noc_read.async_read_barrier();
+    cb_start_scratch_obj.push_back(1);
+    const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_l1);
 
     const uint32_t x_tile_bytes = get_tile_size(cb_in0_x);
     const uint32_t gate_tile_bytes = get_tile_size(cb_in1_gate);
     const uint32_t up_tile_bytes = get_tile_size(cb_in1_up);
     const uint32_t down_tile_bytes = get_tile_size(cb_in1_down);
 
-    // Weight-multicast helper. For each in1 K-block:
-    //   * Sender (gy=0): wait for all GRID_Y-1 receivers to inc the local
-    //     ready_sem. Reset ready_sem. Read in1 from DRAM into local cb_in1.
-    //     Multicast the L1 region to receivers. Multicast valid_sem=1.
-    //   * Receiver: reserve cb space. Reset local valid_sem=0. Increment
-    //     sender's ready_sem at sender's NoC coord. Wait local valid_sem=1.
-    //
-    // Both sender and receiver finish with the K-block of in1 in their own
-    // cb_in1 L1, ready for cb_push_back/compute.
+    // Weight-multicast handshake constants (see the K-block loops below).
     constexpr uint32_t IN1_VALID = 1;
     constexpr uint32_t IN0_VALID = 1;
 
-    // UP_SPLIT handshake counter, kept in lockstep with the writer's.
+    // UP_SPLIT handshake counter, kept in lockstep with the writer's ACROSS all
+    // experts: both kernels loop experts in the same order with the same
+    // per-expert effective_chunks, so the per-K-block increments stay matched.
     uint32_t up_seq = 0;
 
+    // ======================= per-local-expert loop =======================
+    // Per expert we resolve its global id (idx_table[e]), token count
+    // (counts[global_id]), region offset (start[global_id]) and per-expert
+    // weight base addresses, then drive the same chunked matmul pipeline.
+    for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
+        // Per-expert weight accessors, built from the shared layout descriptors
+        // and this expert's base addresses (runtime-arg arrays after start).
+        const uint32_t gate_addr_e = get_arg_val<uint32_t>(WEIGHTS_RT + 0 * experts_per_chip + local_expert_id);
+        const uint32_t up_addr_e = get_arg_val<uint32_t>(WEIGHTS_RT + 1 * experts_per_chip + local_expert_id);
+        const uint32_t down_addr_e = get_arg_val<uint32_t>(WEIGHTS_RT + 2 * experts_per_chip + local_expert_id);
+        const auto gate_acc = TensorAccessor(gate_args, gate_addr_e, gate_tile_bytes);
+        const auto up_acc = TensorAccessor(up_args, up_addr_e, up_tile_bytes);
+        const auto down_acc = TensorAccessor(down_args, down_addr_e, down_tile_bytes);
+
+        const uint32_t global_expert_id = idx_ptr[local_expert_id];
+        const uint32_t count_value = counts_ptr[global_expert_id];
+        const uint32_t count_tiles = (count_value + TILE_HEIGHT - 1) / TILE_HEIGHT;
+        const uint32_t effective_chunks = (count_tiles + chunk_M_tiles - 1) / chunk_M_tiles;
+        ASSERT(effective_chunks <= num_chunks);
+
+        // x-read row offset: this expert's rows begin at start[global_id].
+        // Convert the token row to a tile-page offset (row_tile * K_gate_tiles)
+        // for the TILE path; the row-major path offsets the token-row stick.
+        const uint32_t start_value = start_ptr[global_expert_id];
+        const uint32_t x_start_tile_idx = (start_value / TILE_HEIGHT) * K_gate_tiles;
+        const uint32_t x_start_stick = start_value;
+
+        // Pre-zero bound: rows past min(count_tiles, M_tiles_full) are invalid
+        // and must feed zeros to the matmul (see the per-chunk pre-zero below).
+        const uint32_t M_bound = (count_tiles < M_tiles_full) ? count_tiles : M_tiles_full;
+
 #ifdef FUSE_BIAS
-    // Read this core's N-column slice of the (1, N) biases ONCE (constant across
-    // chunks; the compute kernel wait_fronts without popping). Bias is a single
-    // tile-row tensor, so the DRAM page index == tile column. Phantom columns
-    // (col >= actual N) are zero-filled — their output columns are dropped by
-    // the writer / are already zero.
-    {
-        const uint32_t gbias_tb = get_tile_size(cb_gate_bias);
-        cb_gate_bias_obj.reserve_back(per_core_N_gu);
-        cb_up_bias_obj.reserve_back(per_core_N_gu);
-        uint32_t lg = cb_gate_bias_obj.get_write_ptr();
-        uint32_t lu = cb_up_bias_obj.get_write_ptr();
-        for (uint32_t n = 0; n < per_core_N_gu; ++n) {
-            const uint32_t col = my_nt_gu * per_core_N_gu + n;
-            if (col < N_gate_tiles_full) {
-                noc_read.async_read(gate_bias_acc, CoreLocalMem<uint32_t>(lg), gbias_tb, {.page_id = col}, {});
-                noc_read.async_read(up_bias_acc, CoreLocalMem<uint32_t>(lu), gbias_tb, {.page_id = col}, {});
-            } else {
-                volatile tt_l1_ptr uint64_t* pg = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(lg);
-                volatile tt_l1_ptr uint64_t* pu = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(lu);
-                for (uint32_t i = 0; i < gbias_tb / 8; ++i) {
-                    pg[i] = 0;
-                    pu[i] = 0;
+        // This expert's N-column slice of its (1, N) biases. The compute
+        // kernel wait_fronts then pops at the end of this expert so the next
+        // expert can reuse the single-buffered bias CBs.
+        {
+            const uint32_t gbias_addr = get_arg_val<uint32_t>(BIAS_RT + 0 * experts_per_chip + local_expert_id);
+            const uint32_t ubias_addr = get_arg_val<uint32_t>(BIAS_RT + 1 * experts_per_chip + local_expert_id);
+            const uint32_t dbias_addr = get_arg_val<uint32_t>(BIAS_RT + 2 * experts_per_chip + local_expert_id);
+            const auto gate_bias_acc = TensorAccessor(gate_bias_args, gbias_addr, get_tile_size(cb_gate_bias));
+            const auto up_bias_acc = TensorAccessor(up_bias_args, ubias_addr, get_tile_size(cb_up_bias));
+            const auto down_bias_acc = TensorAccessor(down_bias_args, dbias_addr, get_tile_size(cb_down_bias));
+            const uint32_t gbias_tb = get_tile_size(cb_gate_bias);
+            cb_gate_bias_obj.reserve_back(per_core_N_gu);
+            cb_up_bias_obj.reserve_back(per_core_N_gu);
+            uint32_t lg = cb_gate_bias_obj.get_write_ptr();
+            uint32_t lu = cb_up_bias_obj.get_write_ptr();
+            for (uint32_t n = 0; n < per_core_N_gu; ++n) {
+                const uint32_t col = my_nt_gu * per_core_N_gu + n;
+                if (col < N_gate_tiles_full) {
+                    noc_read.async_read(gate_bias_acc, CoreLocalMem<uint32_t>(lg), gbias_tb, {.page_id = col}, {});
+                    noc_read.async_read(up_bias_acc, CoreLocalMem<uint32_t>(lu), gbias_tb, {.page_id = col}, {});
+                } else {
+                    volatile tt_l1_ptr uint64_t* pg = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(lg);
+                    volatile tt_l1_ptr uint64_t* pu = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(lu);
+                    for (uint32_t i = 0; i < gbias_tb / 8; ++i) {
+                        pg[i] = 0;
+                        pu[i] = 0;
+                    }
                 }
+                lg += gbias_tb;
+                lu += gbias_tb;
             }
-            lg += gbias_tb;
-            lu += gbias_tb;
-        }
-        const uint32_t dbias_tb = get_tile_size(cb_down_bias);
-        cb_down_bias_obj.reserve_back(per_core_N_d);
-        uint32_t ld = cb_down_bias_obj.get_write_ptr();
-        for (uint32_t n = 0; n < per_core_N_d; ++n) {
-            const uint32_t col = my_nt_d * per_core_N_d + n;
-            if (col < N_down_tiles_full) {
-                noc_read.async_read(down_bias_acc, CoreLocalMem<uint32_t>(ld), dbias_tb, {.page_id = col}, {});
-            } else {
-                volatile tt_l1_ptr uint64_t* pd = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(ld);
-                for (uint32_t i = 0; i < dbias_tb / 8; ++i) {
-                    pd[i] = 0;
+            const uint32_t dbias_tb = get_tile_size(cb_down_bias);
+            cb_down_bias_obj.reserve_back(per_core_N_d);
+            uint32_t ld = cb_down_bias_obj.get_write_ptr();
+            for (uint32_t n = 0; n < per_core_N_d; ++n) {
+                const uint32_t col = my_nt_d * per_core_N_d + n;
+                if (col < N_down_tiles_full) {
+                    noc_read.async_read(down_bias_acc, CoreLocalMem<uint32_t>(ld), dbias_tb, {.page_id = col}, {});
+                } else {
+                    volatile tt_l1_ptr uint64_t* pd = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(ld);
+                    for (uint32_t i = 0; i < dbias_tb / 8; ++i) {
+                        pd[i] = 0;
+                    }
                 }
+                ld += dbias_tb;
             }
-            ld += dbias_tb;
+            noc_read.async_read_barrier();
+            cb_gate_bias_obj.push_back(per_core_N_gu);
+            cb_up_bias_obj.push_back(per_core_N_gu);
+            cb_down_bias_obj.push_back(per_core_N_d);
         }
-        noc_read.async_read_barrier();
-        cb_gate_bias_obj.push_back(per_core_N_gu);
-        cb_up_bias_obj.push_back(per_core_N_gu);
-        cb_down_bias_obj.push_back(per_core_N_d);
-    }
 #endif
 
     // Bound the chunk loop by effective_chunks (= ceil_div(count, chunk_M_tiles))
@@ -877,6 +852,7 @@ void kernel_main() {
             cb_in1_down_obj.push_back(d_in1_block_num_tiles);
         }
     }  // end chunk loop
+    }  // end per-local-expert loop
 
     // The last in-flight Semaphore<>::set_multicast (act_valid / in1_valid)
     // is a posted atomic; without an explicit barrier it can still be in

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <tuple>
+#include <vector>
 
 #include <tt-metalium/constants.hpp>
 
@@ -42,33 +43,22 @@ enum class RoutedExpertActivation : uint8_t {
 
 // Attributes (the constants known at host time).
 struct UnifiedRoutedExpertFfnParams {
-    // The compute kernel chunks the M axis into pieces of this many tiles so a
-    // single matmul fits in per-core L1. 64 (= 2048 tokens) is the maximum that
-    // keeps DeepSeek V3 routed-expert dims inside Blackhole L1.
-    uint32_t chunk_M_tiles = 64;
-
-    // This expert's M dimension in tiles — the row count the matmul grid,
-    // chunk loop, and CB sizes are built for. Decoupled from x's shape so x
-    // may be a shared buffer larger than one expert's region: the reader/writer
-    // index into it at the region offset while the op still sizes its work to a
-    // single expert. When x IS the per-expert tensor this equals x_padded[-2]/TILE.
+    // Per-expert M dimension in tiles — the row count the matmul grid, chunk
+    // loop, and CB sizes are built for. Every local expert shares this value
+    // (= max_dispatched_tokens_per_expert / TILE), and x is the shared
+    // dispatched buffer wider than one expert's region: the reader/writer index
+    // into it at each expert's region offset while the op sizes its per-expert
+    // work to this M.
     uint32_t m_tiles = 0;
 
-    // Local expert id used to index `global_expert_idx_table` at runtime
-    // (kernel reads global_id = idx_table[local_expert_id], then count =
-    // counts[global_id]).
-    uint32_t local_expert_id = 0;
-
-    // When true, x is a shared buffer and the reader offsets its x reads by this
-    // expert's region start (expert_region_offsets[global_id]) — fusing what
-    // ttnn::extract did. Requires expert_region_offsets. False => x is per-expert.
-    bool read_x_at_offset = false;
+    // Number of local experts this chip owns. The reader/compute/writer kernels
+    // loop over local_expert in [0, experts_per_chip).
+    uint32_t experts_per_chip = 1;
 
     // When true, x is a ROW_MAJOR bf16 buffer: the reader streams row-major
     // sticks and the compute kernel tilizes them (bf16 -> bf8_b) before the
     // gate/up matmul, fusing the standalone to_layout. False => x is already
-    // TILE bf8_b (the reader reads tile pages directly). Off preserves the
-    // pre-fusion path for standalone / Wormhole callers.
+    // TILE bf8_b (the reader reads tile pages directly).
     bool x_is_row_major = false;
 
     // Per-expert FFN activation variant. Baked into the compute kernel as a
@@ -85,56 +75,56 @@ struct UnifiedRoutedExpertFfnParams {
 
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
-    static constexpr auto attribute_names = std::forward_as_tuple(
-        "chunk_M_tiles",
-        "m_tiles",
-        "local_expert_id",
-        "read_x_at_offset",
-        "x_is_row_major",
-        "activation",
-        "fuse_bias");
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("m_tiles", "experts_per_chip", "x_is_row_major", "activation", "fuse_bias");
     auto attribute_values() const {
-        return std::forward_as_tuple(
-            chunk_M_tiles, m_tiles, local_expert_id, read_x_at_offset, x_is_row_major, activation, fuse_bias);
+        return std::forward_as_tuple(m_tiles, experts_per_chip, x_is_row_major, activation, fuse_bias);
     }
 };
 
 // Tensors fed into the op.
 //
-// x is the (M_max, K=emb) per-expert token buffer for this expert. Only the
-// first `counts[global_expert_idx_table[local_expert_id]]` rows are valid;
-// the rest is padding the FFN kernels must skip. Reader/writer always start
-// at tile row 0 — the FFN op operates on an already-extracted per-expert
-// tensor; a separate ttnn::extract / ttnn::insert pair handles slicing into
-// / out of any shared dispatched buffer.
+// x is the (M_max, K=emb) shared dispatched buffer holding every local
+// expert's tokens back to back. Expert `local_expert`'s rows begin at
+// expert_region_offsets[global_id] and only its first counts[global_id] rows
+// are valid; the kernels read each expert's slice at its region offset.
 //
-// gate_proj/up_proj/down_proj are the (K=emb, N=hidden), (K=emb, N=hidden),
-// and (K=hidden, N=emb) weight tensors.
+// gate_projs/up_projs/down_projs are per-local-expert weight lists (one entry
+// per expert, all identical shape): (K=emb, N=hidden), (K=emb, N=hidden), and
+// (K=hidden, N=emb). Each expert has its own DRAM buffer; the program factory
+// passes every buffer's base address as a runtime-arg array and the kernels
+// build a fresh accessor per expert from one shared layout descriptor.
 //
-// counts/global_expert_idx_table are the device-side count buffers; the
-// kernel reads them at runtime to skip unused chunks.
+// counts / global_expert_idx_table / expert_region_offsets are the device-side
+// per-global-expert vectors; the kernels index them per local expert at
+// runtime to size each expert's chunk loop and place its output.
+//
+// output is the shared destination buffer; each expert's result is written
+// directly into its region at expert_region_offsets[global_id]/TILE tile-rows.
 struct UnifiedRoutedExpertFfnInputs {
     Tensor x;
-    Tensor gate_proj;
-    Tensor up_proj;
-    Tensor down_proj;
+    std::vector<Tensor> gate_projs;
+    std::vector<Tensor> up_projs;
+    std::vector<Tensor> down_projs;
     Tensor counts;
     Tensor global_expert_idx_table;
-    std::optional<Tensor> optional_output;
-    // Direct-write mode: per-global-expert region start offsets (UINT32, the
-    // same `start` tensor ttnn::insert consumes). When present, the writer
-    // places this expert's output directly into `optional_output` (the shared
-    // buffer) at start[global_id]/TILE tile-rows, fusing the ttnn::insert step.
-    // Requires optional_output to also be set.
+    // Caller-provided shared destination buffer (always provided). Each expert
+    // writes its region at expert_region_offsets[global_id]. Whether it aliases
+    // x (in-place) is the caller's choice — the op just writes into it.
+    Tensor output;
+    // Per-global-expert region start offsets (UINT32, the same `start` tensor
+    // ttnn::insert consumes). Required: the reader offsets each expert's x reads
+    // and the writer places each expert's output at start[global_id]/TILE.
     std::optional<Tensor> expert_region_offsets;
-    // Optional per-expert projection biases (gpt-oss). All three are present or
-    // all absent (validated host-side). gate_bias/up_bias are (1, N=hidden);
-    // down_bias is (1, N=emb). When set, the fused kernel adds gate/up bias
-    // before the activation and down bias after the down matmul. Absent for the
-    // bias-free DeepSeek / MiniMax-M3 path (byte-identical).
-    std::optional<Tensor> gate_bias;
-    std::optional<Tensor> up_bias;
-    std::optional<Tensor> down_bias;
+    // Optional per-local-expert projection biases (gpt-oss). Either all three
+    // lists are populated (one bias per local expert, same length/order as the
+    // weight lists) or all three are empty. gate/up bias: (1, N=hidden); down
+    // bias: (1, N=emb). When set, the fused kernel adds gate/up bias before the
+    // activation and down bias after the down matmul. Empty for the bias-free
+    // DeepSeek / MiniMax-M3 path (byte-identical).
+    std::vector<Tensor> gate_biases;
+    std::vector<Tensor> up_biases;
+    std::vector<Tensor> down_biases;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
