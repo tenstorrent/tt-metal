@@ -135,13 +135,39 @@ def _row_int(row: Dict[str, str], key: str) -> Optional[int]:
     return int(raw) if raw is not None else None
 
 
+_PADDED_LOGICAL_RE = re.compile(r"^\s*(-?\d+(?:\.\d+)?)\s*(?:\[\s*-?\d+(?:\.\d+)?\s*\])?\s*$")
+
+
+def _parse_padded_logical(value: Optional[str]) -> Optional[float]:
+    """Parse a '<padded>[<logical>]' cell (e.g. '50176[50176]') into the padded value.
+
+    Falls back to plain float parsing for cells with no bracket suffix.
+    """
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    m = _PADDED_LOGICAL_RE.match(value)
+    if not m:
+        return None
+    try:
+        return float(m.group(1))
+    except (ValueError, TypeError):
+        return None
+
+
 def _shape_signature_from_expanded(row: Dict[str, str], io_type: str, index: int = 0) -> Optional[List[int]]:
-    """Recover a shape from the expanded per-tensor CSV columns (INPUT_0_W_PAD[LOGICAL] ...)."""
+    """Recover a shape from the expanded per-tensor CSV columns (INPUT_0_W_PAD[LOGICAL] ...).
+
+    Cell values are '<padded>[<logical>]' (e.g. '50176[50176]'), not bare numbers -- the
+    padded value is used since that's the actual physical/allocated shape moved on-device.
+    """
     dims = []
     found = False
     for field in ("W", "Z", "Y", "X"):
         col = f"{io_type}_{index}_{field}_PAD[LOGICAL]"
-        val = _to_float(row.get(col))
+        val = _parse_padded_logical(row.get(col))
         if val is not None:
             found = True
             dims.append(int(val))
