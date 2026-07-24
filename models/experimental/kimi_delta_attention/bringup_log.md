@@ -971,3 +971,28 @@
   time improves `637.981 -> 626.043 us`, and recurrence improves
   `183.096 -> 171.047 us`. The result is approximately additive and becomes
   the leading retained candidate.
+
+
+### 2026-07-24 16:17:28 UTC — Add BF16 dl to the retained pair
+
+- Hypothesis: adding the numerically clean `dl` storage change to the leading
+  `kd + q_decay` pair may recover its small standalone saving without a state
+  penalty. Mask `0x26` selects `kd`, `q_decay`, and `dl`.
+- Direct correctness:
+  `QWEN_KDA_PREP_BF16_MASK=0x26 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_chunk_kda.py -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 5/5 in 20.07 s. HiFi4 output/state PCC is
+  `0.999993-0.999996`; the HiFi2 case is `0.999921/0.999919`.
+- TP=8 layer correctness:
+  `QWEN_KDA_PREP_BF16_MASK=0x26 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_tp_weights.py::test_tp_layer_pcc -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 1/1 in 6.58 s; a concise confirmation rerun
+  reports output/recurrent/convolution PCC `0.999964/0.999903/0.999997`.
+- Measurement command:
+  `QWEN_KDA_PREP_BF16_MASK=0x26 PERF_TRACE=1 PERF_SEQ=640 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 1/1.
+- Report:
+  `generated/profiler/reports/2026_07_24_16_17_28/ops_perf_results_2026_07_24_16_17_28.csv`
+  (SHA-256 `09d6eebffdd8a38346e3c35bb65d4061f05d9a438aebc5d3052df42979adb873`).
+  Median wall improves `659.024 -> 643.623 us` (`-15.401 us`, `-2.34%`), active
+  time improves `637.981 -> 621.755 us`, and recurrence improves
+  `183.096 -> 167.623 us`. This beats the `0x6` pair by `3.161 us` wall with
+  unchanged TP PCC, so retain `0x26` as the selected storage policy.
