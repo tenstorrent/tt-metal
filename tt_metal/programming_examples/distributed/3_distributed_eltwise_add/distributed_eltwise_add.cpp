@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <functional>
+#include <iostream>
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/bfloat16.hpp>
@@ -98,6 +99,12 @@ Program CreateEltwiseAddProgram(
 // The example showcases TT-Metalium's ability to abstract away the complexity
 // of distributed memory management and compute.
 int main() {
+    constexpr size_t required_devices = 8;
+    if (tt::tt_metal::GetNumAvailableDevices() < required_devices) {
+        std::cout << "distributed_eltwise_add requires " << required_devices << " devices, skipping\n";
+        return 0;
+    }
+
     auto mesh_device = MeshDevice::create(MeshDeviceConfig(MeshShape(2, 4)));
 
     // Define the global buffer shape and shard shape for distributed buffers
