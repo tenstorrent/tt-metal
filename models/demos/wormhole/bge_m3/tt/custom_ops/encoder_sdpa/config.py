@@ -32,6 +32,10 @@ class EncoderSDPAConfig:
     grid_x: int = 8
     grid_y: int = 8
     scale: float = 1.0
+    # Compact padding mask: a runtime uint32 valid-token count per batch row.
+    # The kernels synthesize a small L1 tile palette instead of reading a dense
+    # [B,1,S,S] additive mask.
+    use_runtime_lengths: bool = False
     # Opt-in: use the production compute_streaming.hpp pipeline (block-streamed
     # QK/softmax/PV, exp_packthread) instead of the legacy standard compute.
     # Host factory normally gates this OFF for fp32 dest; static audit found no
@@ -411,12 +415,12 @@ def validate_encoder_sdpa_inputs(
         raise ValueError(f"expected V shape {config.kv_shape}, got {_shape_tuple(v)}")
     if q.layout != ttnn.TILE_LAYOUT or k.layout != ttnn.TILE_LAYOUT or v.layout != ttnn.TILE_LAYOUT:
         raise ValueError("encoder SDPA requires TILE_LAYOUT Q/K/V")
-    if q.dtype not in (ttnn.bfloat8_b, ttnn.bfloat4_b):
-        raise ValueError(f"expected BF8 or BF4 Q, got {q.dtype}")
-    if k.dtype != ttnn.bfloat4_b:
-        raise ValueError(f"expected BF4 K, got {k.dtype}")
-    if v.dtype not in (ttnn.bfloat8_b, ttnn.bfloat4_b):
-        raise ValueError(f"expected BF8 or BF4 V, got {v.dtype}")
+    if q.dtype not in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b):
+        raise ValueError(f"expected BF16/BF8/BF4 Q, got {q.dtype}")
+    if k.dtype not in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b):
+        raise ValueError(f"expected BF16/BF8/BF4 K, got {k.dtype}")
+    if v.dtype not in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b):
+        raise ValueError(f"expected BF16/BF8/BF4 V, got {v.dtype}")
     if q.device() != k.device() or q.device() != v.device():
         raise ValueError("Q/K/V must be on the same device")
 

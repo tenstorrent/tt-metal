@@ -201,6 +201,8 @@ void kernel_main() {
     // F4 aliased-K/V handshake: kv_alias flag + compute->reader sync-token CB.
     constexpr bool kv_alias = get_compile_time_arg_val(cb_arg_offset + 8) == 1;
     constexpr uint32_t cb_kv_sync = get_compile_time_arg_val(cb_arg_offset + 9);
+    constexpr bool use_runtime_lengths = get_compile_time_arg_val(cb_arg_offset + 10) == 1;
+    constexpr uint32_t cb_valid_lengths = get_compile_time_arg_val(cb_arg_offset + 11);
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
@@ -217,6 +219,25 @@ void kernel_main() {
 
     const auto q_reader = TensorAccessor(q_args, q_addr);
     const auto k_reader = TensorAccessor(k_args, k_addr);
+
+    // Compact mask metadata: the local valid lengths are provided as a single
+    // [1, B] uint32 stick (one interleaved page of B*4 bytes), mirroring the
+    // proven sdpa_decode cur_pos load. The compute kernel then indexes element
+    // nb within this page. Reading per-batch pages is WRONG: a [1, B] tensor has
+    // exactly one page, so only page 0 is valid.
+    if constexpr (use_runtime_lengths) {
+        const auto lengths_reader = TensorAccessor(mask_args, mask_addr);
+        CircularBuffer lengths_cb(cb_valid_lengths);
+        lengths_cb.reserve_back(1);
+        noc.async_read(
+            lengths_reader,
+            CoreLocalMem<uint32_t>(lengths_cb.get_write_ptr()),
+            B * sizeof(uint32_t),
+            {.page_id = 0},
+            {});
+        noc.async_read_barrier();
+        lengths_cb.push_back(1);
+    }
     const auto v_reader = TensorAccessor(v_args, v_addr);
     const auto mask_reader = TensorAccessor(mask_args, mask_addr);
     const auto attention_sink_reader = TensorAccessor(attention_sink_args, attention_sink_addr);

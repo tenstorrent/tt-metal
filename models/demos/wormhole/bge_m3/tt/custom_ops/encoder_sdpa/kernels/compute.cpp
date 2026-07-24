@@ -97,6 +97,9 @@ void kernel_main() {
     // F4 aliased-K/V handshake args (constexpr-off unless kv_alias).
     constexpr bool kv_alias = get_compile_time_arg_val(cb_arg_offset + 18) == 1;
     constexpr uint32_t cb_kv_sync = get_compile_time_arg_val(cb_arg_offset + 19);
+    constexpr bool use_runtime_lengths = get_compile_time_arg_val(cb_arg_offset + 20) == 1;
+    constexpr uint32_t cb_valid_lengths = get_compile_time_arg_val(cb_arg_offset + 21);
+    constexpr uint32_t cb_runtime_mask = get_compile_time_arg_val(cb_arg_offset + 22);
     // Aliased single-slot ring capacities in TILES: shared alloc / tile bytes.
     // K bf4 = 576B, V bf8 = 1088B. Shared alloc = 146,880B => K 255, V 135.
     constexpr uint32_t kv_shared_bytes = 146880;
@@ -105,7 +108,17 @@ void kernel_main() {
     uint32_t chunked_q_chunk_offset = 0;
     CircularBuffer cb_chunk_start_idx_obj(cb_chunk_start_idx);
     CircularBuffer cb_identity_scale_in_obj(cb_identity_scale_in);
-    CircularBuffer cb_mask_in_obj(cb_mask_in);
+    CircularBuffer cb_mask_in_obj(use_runtime_lengths ? cb_runtime_mask : cb_mask_in);
+    uint32_t runtime_lengths_storage[B] = {};
+    const uint32_t* runtime_lengths = nullptr;
+    if constexpr (use_runtime_lengths) {
+        ckernel::cb_wait_front(cb_valid_lengths, 1);
+        for (uint32_t nb = 0; nb < B; ++nb) {
+            runtime_lengths_storage[nb] = ckernel::read_tile_value(cb_valid_lengths, 0, nb);
+        }
+        runtime_lengths = runtime_lengths_storage;
+        cb_mask_in_obj.wait_front(3);
+    }
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_out);
     matmul_init(cb_q_in, cb_k_in);
 
@@ -247,7 +260,8 @@ void kernel_main() {
                 kv_alias,
                 cb_kv_sync,
                 kv_k_capacity_tiles,
-                kv_v_capacity_tiles>(
+                kv_v_capacity_tiles,
+                use_runtime_lengths>(
                 Skt,
                 qk_in0_block_w,
                 qk_subblock_w,
@@ -275,7 +289,7 @@ void kernel_main() {
                 cb_q_in,
                 cb_k_in,
                 cb_v_in,
-                cb_mask_in,
+                use_runtime_lengths ? cb_runtime_mask : cb_mask_in,
                 cb_col_identity,
                 cb_out_im_A,
                 cb_out_im_B,
@@ -286,7 +300,9 @@ void kernel_main() {
                 cb_exp_max_diff,
                 cb_out,
                 lw_mask,
-                use_zigzag_balancing);
+                use_zigzag_balancing,
+                NQH,
+                runtime_lengths);
         }
     }
 }

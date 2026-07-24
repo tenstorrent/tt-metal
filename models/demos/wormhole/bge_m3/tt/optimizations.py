@@ -100,6 +100,7 @@ class Optimizations:
         hidden_size: int = 1024,
         intermediate_size: int = 4096,
         data_parallel: bool = False,
+        quality_mode: bool = False,
     ) -> "Optimizations":
         """Build fully-resolved optimizations for the given shape and device."""
         max_batch = max(1, max_batch_size)
@@ -208,7 +209,11 @@ class Optimizations:
         norm_prg, norm_sharded_mem = _layernorm_sharded_config(max_seq_len, max_batch)
         norm_opts = NormOptimizations(
             compute_kernel_config=layernorm_compute_kernel_config(
-                mesh_device, max_seq_len, max_batch, data_parallel=data_parallel
+                mesh_device,
+                max_seq_len,
+                max_batch,
+                data_parallel=data_parallel,
+                quality_mode=quality_mode,
             ),
             output_memcfg=_linear_activation_memory_config(max_seq_len, max_batch),
             program_config=norm_prg,
@@ -417,7 +422,14 @@ def sdpa_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=Non
     return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi4, max_seq_len, max_batch_size)
 
 
-def layernorm_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None, *, data_parallel=False):
+def layernorm_compute_kernel_config(
+    mesh_device,
+    max_seq_len=None,
+    max_batch_size=None,
+    *,
+    data_parallel=False,
+    quality_mode=False,
+):
     # B1/S512: HiFi2 (LoFi regressed test_model PCC 1.0 -> 0.906).
     # bf8b precision at B1/S512 is protected by the bf8b->bf16 fused reshard
     # in norm.py (interleaved_to_sharded with output_dtype=bf16).
@@ -434,6 +446,18 @@ def layernorm_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_siz
     # pass. Gated to DP so the SP/single-chip PCC-tighter paths keep fp32.
     if max_seq_len == 8192:
         if data_parallel:
+            if quality_mode:
+                # Short masked inputs are substantially more precision-sensitive
+                # than the full-sequence PCC workload. Use the conservative
+                # normalization configuration for embedding evaluation.
+                return _make_compute_kernel(
+                    mesh_device,
+                    ttnn.MathFidelity.HiFi4,
+                    max_seq_len,
+                    max_batch_size,
+                    fp32_dest_acc_en=True,
+                    math_approx_mode=False,
+                )
             return _make_compute_kernel(
                 mesh_device,
                 ttnn.MathFidelity.LoFi,

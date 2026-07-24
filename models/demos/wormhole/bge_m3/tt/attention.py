@@ -146,6 +146,9 @@ class BgeM3Attention(LightweightModule):
         self.load_device_weights()
 
         batch_size, _, seq_len, _ = hidden_states.shape
+        has_compact_valid_lengths = (
+            attention_mask is not None and len(attention_mask.shape) == 2 and attention_mask.shape[1] == 1
+        )
 
         assert seq_len > 0, "seq_len must be positive"
         assert seq_len % 32 == 0, "seq_len must be divisible by 32 (tile height)"
@@ -164,11 +167,14 @@ class BgeM3Attention(LightweightModule):
                 [batch_size, seq_len // _MAX_QKV_MM_CHUNK_SEQ_LEN, _MAX_QKV_MM_CHUNK_SEQ_LEN, -1],
             )
 
-        use_qkv_scatter = self.config.use_qkv_scatter_matmul
+        # Direct scatter emits BF4 Q and is retained for the unmasked serving
+        # benchmark. Short masked requests need the BF8-Q projection path to
+        # preserve embedding quality.
+        use_qkv_scatter = self.config.use_qkv_scatter_matmul and not has_compact_valid_lengths
         if use_qkv_scatter:
             if not (
                 self.config.data_parallel
-                and attention_mask is None
+                and (attention_mask is None or has_compact_valid_lengths)
                 and seq_len == 8192
                 and batch_size == 6
                 and self.config.num_heads == 16
@@ -235,7 +241,9 @@ class BgeM3Attention(LightweightModule):
                     head_groups=head_groups,
                     out_memcfg=self.config.create_heads_memcfg,
                     k_out_dtype=ttnn.bfloat4_b if fuse_kbf4 else None,
-                    v_out_dtype=ttnn.bfloat4_b if self.config.encoder_sdpa_q256_vbf4 else None,
+                    v_out_dtype=(
+                        ttnn.bfloat4_b if self.config.encoder_sdpa_q256_vbf4 and not has_compact_valid_lengths else None
+                    ),
                 )
             else:
                 q, k, v = ttnn.experimental.nlp_create_qkv_heads(
@@ -252,7 +260,7 @@ class BgeM3Attention(LightweightModule):
         preserve_bf4_q = (
             self.config.data_parallel
             and self.config.encoder_sdpa_q256_vbf4
-            and attention_mask is None
+            and (attention_mask is None or has_compact_valid_lengths)
             and seq_len == 8192
             and q.dtype == ttnn.bfloat4_b
         )
@@ -286,8 +294,14 @@ class BgeM3Attention(LightweightModule):
             ttnn.deallocate(v)
             v = v_full
 
-        # Stage 3b: mask preparation
-        sdpa_mask = attention_mask
+        # Stage 3b: mask preparation. DP S8192 accepts compact uint32 [B, 1]
+        # valid lengths; the custom SDPA synthesizes only the boundary mask tiles.
+        compact_valid_lengths = None
+        if has_compact_valid_lengths:
+            compact_valid_lengths = attention_mask
+            sdpa_mask = None
+        else:
+            sdpa_mask = attention_mask
         if sdpa_mask is not None:
             if len(sdpa_mask.shape) != 4:
                 raise ValueError(f"attention_mask must have rank 4 [B, 1, S, S], got shape={sdpa_mask.shape}")
@@ -337,11 +351,11 @@ class BgeM3Attention(LightweightModule):
             # halves K read bandwidth in SDPA. PCC 0.9422 (clears the 0.94
             # preferred gate) with the q128/k2048 chunking; V stays bf8. If some
             # other path left K non-BF4, convert here as a fallback.
-            if k.dtype != ttnn.bfloat4_b:
+            if not has_compact_valid_lengths and k.dtype != ttnn.bfloat4_b:
                 k_bf4 = ttnn.typecast(k, dtype=ttnn.bfloat4_b)
                 ttnn.deallocate(k)
                 k = k_bf4
-        if self.config.encoder_sdpa_q256_vbf4:
+        if self.config.encoder_sdpa_q256_vbf4 and not has_compact_valid_lengths:
             assert v.dtype == ttnn.bfloat4_b, f"expected fused BF4 V, got {v.dtype}"
         sdpa_program_config = _sdpa_program_config(
             sdpa_seq_len,
@@ -362,9 +376,9 @@ class BgeM3Attention(LightweightModule):
             and tuple(k.shape)[1:] == (16, 8192, 64)
             and tuple(v.shape)[1:] == (16, 8192, 64)
             and tuple(q.shape)[0] == tuple(k.shape)[0] == tuple(v.shape)[0]
-            and q.dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b)
-            and k.dtype == ttnn.bfloat4_b
-            and v.dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b)
+            and q.dtype in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b)
+            and k.dtype in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b)
+            and v.dtype in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b)
         )
         sdpa_direct_concat = False
         if use_encoder_sdpa:
@@ -383,7 +397,7 @@ class BgeM3Attention(LightweightModule):
             # batch = runtime local batch (q.shape[0]); work-split is batch-general
             # so the JIT SDPA fires for any DP batch (e.g. B3/chip in 4-chip DP),
             # not just B6. Fixes the stock B3 chunking anomaly (804->~565ms).
-            if self.config.encoder_sdpa_q256_vbf4:
+            if self.config.encoder_sdpa_q256_vbf4 and not has_compact_valid_lengths:
                 _ecfg = EncoderSDPAConfig(
                     batch=int(q.shape[0]),
                     q_chunk_size=256,
@@ -394,11 +408,28 @@ class BgeM3Attention(LightweightModule):
                     fp32_dest_acc_en=False,
                     direct_concat_heads=True,
                     reuse_prev_max_for_exp=True,
+                    use_runtime_lengths=compact_valid_lengths is not None,
                 )
             else:
-                _ecfg = EncoderSDPAConfig(batch=int(q.shape[0]), fp32_dest_acc_en=False)
+                _ecfg = EncoderSDPAConfig(
+                    batch=int(q.shape[0]),
+                    q_chunk_size=128,
+                    k_chunk_size=512,
+                    q_buffer_depth=2,
+                    k_buffer_depth=2,
+                    v_buffer_depth=2,
+                    fp32_dest_acc_en=True,
+                    use_runtime_lengths=compact_valid_lengths is not None,
+                )
             sdpa_direct_concat = _ecfg.direct_concat_heads
-            context = bge_encoder_sdpa_experimental(q, k, v, output_mem_config=self.config.score_memcfg, config=_ecfg)
+            context = bge_encoder_sdpa_experimental(
+                q,
+                k,
+                v,
+                valid_lengths=compact_valid_lengths,
+                output_mem_config=self.config.score_memcfg,
+                config=_ecfg,
+            )
         else:
             context = ttnn.transformer.scaled_dot_product_attention(
                 q,

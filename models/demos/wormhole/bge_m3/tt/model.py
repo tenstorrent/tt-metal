@@ -242,10 +242,14 @@ class BgeM3Model(LightweightModule):
                 past_key_values_length=0,
             )
 
-        # Sequence-parallel and data-parallel serving skip the dense pad mask
-        # (unpadded serving shape). DP runs exact full attention per replica.
-        if self._sequence_parallel or self._data_parallel:
+        # Sequence-parallel cannot consume a global dense mask. Data-parallel
+        # serving remains on the no-mask fast path unless the caller explicitly
+        # supplies a keep/additive mask (for example, fixed-shape MTEB batches).
+        if self._sequence_parallel or (self._data_parallel and attention_mask is None):
             prepared_attention_mask = None
+        elif self._data_parallel and len(attention_mask.shape) == 2 and attention_mask.shape[1] == 1:
+            # Compact per-request valid lengths for fixed-shape DP serving.
+            prepared_attention_mask = attention_mask
         else:
             prepared_attention_mask = self._prepare_attention_mask(input_ids=input_ids, attention_mask=attention_mask)
 

@@ -18,6 +18,7 @@ def create_tt_model(
     mlp_wi_output_dtype=None,
     encoder_sdpa_q256_vbf4=False,
     use_qkv_scatter_matmul=False,
+    quality_mode=False,
 ):
     """
     BGE-M3 version of create_tt_model that matches tt_transformers interface.
@@ -52,6 +53,7 @@ def create_tt_model(
         hidden_size=bge_m3_model_args.dim,
         intermediate_size=bge_m3_model_args.intermediate_size,
         data_parallel=bge_m3_model_args.data_parallel,
+        quality_mode=quality_mode,
     )
 
     model = BgeM3Model(

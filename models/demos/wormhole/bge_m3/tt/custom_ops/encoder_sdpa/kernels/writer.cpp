@@ -16,6 +16,27 @@
 #include "dataflow_common.hpp"
 #include "windowed_mask_gen.hpp"
 
+template <bool enabled, uint32_t B, uint32_t NQH, uint32_t q_num_chunks, uint32_t cb_mask_in, uint32_t cb_valid_lengths>
+FORCE_INLINE void generate_runtime_length_masks(Noc noc, uint32_t global_q_start) {
+    if constexpr (enabled) {
+        constexpr uint32_t mask_tile_bytes = get_tile_size(cb_mask_in);
+        constexpr uint32_t q_work_per_batch = NQH * q_num_chunks;
+        CircularBuffer lengths_cb(cb_valid_lengths);
+        lengths_cb.wait_front(1);
+        auto lengths = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(lengths_cb.get_read_ptr());
+        CircularBuffer mask_cb(cb_mask_in);
+        mask_cb.reserve_back(3);
+        fill_neginf_tile<mask_tile_bytes>(cb_mask_in, 0);
+        const uint32_t first_batch = global_q_start / q_work_per_batch;
+        const uint32_t second_batch = std::min(first_batch + 1, B - 1);
+        const uint32_t first_partial_col = lengths[first_batch] % tt::constants::TILE_WIDTH;
+        const uint32_t second_partial_col = lengths[second_batch] % tt::constants::TILE_WIDTH;
+        fill_vertical_tile_bf16<mask_tile_bytes>(noc, cb_mask_in, 1, first_partial_col);
+        fill_vertical_tile_bf16<mask_tile_bytes>(noc, cb_mask_in, 2, second_partial_col);
+        mask_cb.push_back(3);
+    }
+}
+
 void kernel_main() {
     Noc noc;
 
@@ -47,9 +68,10 @@ void kernel_main() {
     // Windowed (block-diagonal) mask generation flags. Fixed scalar slots BEFORE the tensor-accessor
     // block so the accessor offset chain stays intact for all configs.
     constexpr bool use_windowed_mask = get_compile_time_arg_val(25) == 1;
+    constexpr bool use_runtime_lengths = get_compile_time_arg_val(26) == 1;
 
     // out accessor, then the cu_window accessor chained immediately after it (before the CB-id block).
-    constexpr auto out_args = TensorAccessorArgs<26>();
+    constexpr auto out_args = TensorAccessorArgs<27>();
     constexpr auto cu_window_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
@@ -82,6 +104,7 @@ void kernel_main() {
     constexpr uint32_t cb_out = get_compile_time_arg_val(cb_arg_offset + 4);
     // cu_window CB id lives in the CB-id block (appended by CBIds for windowed mode; inactive otherwise).
     constexpr uint32_t cb_cu_window_in = get_compile_time_arg_val(cb_arg_offset + 5);
+    constexpr uint32_t cb_valid_lengths = get_compile_time_arg_val(cb_arg_offset + 6);
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
 
@@ -97,6 +120,13 @@ void kernel_main() {
         ckernel::ReduceDim::REDUCE_ROW,
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
     generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
+
+    // Runtime padding mask palette: one all--inf tile plus the at-most-two
+    // batch rows touched by this core's contiguous global-Q range. Keep
+    // generation in a template so the unmasked specialization never
+    // instantiates get_tile_size(INACTIVE_CB).
+    generate_runtime_length_masks<use_runtime_lengths, B, NQH, q_num_chunks, cb_mask_in, cb_valid_lengths>(
+        noc, global_q_start);
 
     // Lightweight mask: generate template tiles once, leave permanently fronted.
     // Sliding layout: [neginf, trailing_primary, leading_prev, leading_current, trailing_next, k_partial?].

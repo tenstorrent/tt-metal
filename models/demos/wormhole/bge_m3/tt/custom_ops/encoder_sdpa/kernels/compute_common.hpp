@@ -1534,7 +1534,8 @@ template <
     bool kv_alias = false,
     uint32_t kv_cb_sync = 0,
     uint32_t kv_k_capacity_tiles = 0,
-    uint32_t kv_v_capacity_tiles = 0>
+    uint32_t kv_v_capacity_tiles = 0,
+    bool use_runtime_lengths = false>
 void sdpa_inner_loop(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -1595,7 +1596,9 @@ void sdpa_inner_loop(
     const bool is_balanced = false,
     const bool use_zigzag_balancing = false,
     const bool is_last_ring_iter = true,
-    const ChunkedContext& chunked = {}) {
+    const ChunkedContext& chunked = {},
+    const uint32_t num_q_heads = 1,
+    const uint32_t* runtime_lengths = nullptr) {
     // Parameter-stable CB locals. Aliases (cb_sum_A/B, cb_max_A/B, cb_out_im_A/B) are
     // std::swap-mutated below, so they use inline CircularBuffer(alias).method() at the call
     // sites instead. cb_out is constructed conditionally near its consumer (cur.out target).
@@ -1666,6 +1669,26 @@ void sdpa_inner_loop(
         }
 
         uint32_t processed_k_chunks = 0;
+
+        // Compact per-request padding metadata. The flat Q scheduler is ordered
+        // [batch, head, q_chunk], so recover the local batch row from its index.
+        uint32_t runtime_valid_tokens = 0;
+        uint32_t runtime_boundary_chunk = 0;
+        uint32_t runtime_valid_tiles_in_boundary = 0;
+        uint32_t runtime_partial_col = 0;
+        uint32_t runtime_batch = 0;
+        uint32_t runtime_palette_batch_start = 0;
+        if constexpr (use_runtime_lengths) {
+            const uint32_t q_work_per_batch = num_q_heads * q_num_chunks;
+            const uint32_t linear_q_chunk = local_q_start + (q_iter - iter_q_start);
+            runtime_batch = linear_q_chunk / q_work_per_batch;
+            runtime_palette_batch_start = local_q_start / q_work_per_batch;
+            runtime_valid_tokens = runtime_lengths[runtime_batch];
+            const uint32_t runtime_valid_tiles = (runtime_valid_tokens + TILE_WIDTH - 1) / TILE_WIDTH;
+            runtime_boundary_chunk = runtime_valid_tiles == 0 ? 0 : (runtime_valid_tiles - 1) / Sk_chunk_t;
+            runtime_valid_tiles_in_boundary = runtime_valid_tiles - runtime_boundary_chunk * Sk_chunk_t;
+            runtime_partial_col = runtime_valid_tokens % TILE_WIDTH;
+        }
 
         for (uint32_t k_chunk = iter_k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
             uint32_t kv_global_start_tile = 0;  // RING only: abs K-tile index of this k_chunk's start
@@ -1773,6 +1796,8 @@ void sdpa_inner_loop(
                 apply_mask = (q_start_tile < k_high_idx) || (sliding_window_size > 0) || needs_padding_mask;
             } else if constexpr (use_provided_mask) {
                 apply_mask = true;
+            } else if constexpr (use_runtime_lengths) {
+                apply_mask = k_chunk >= runtime_boundary_chunk;
             } else if constexpr (use_padded_mask) {
                 // Apply mask only on the last K chunk
                 apply_mask = (k_chunk == iter_k_chunk_end - 1);
@@ -1784,7 +1809,7 @@ void sdpa_inner_loop(
             if (apply_mask) {
                 /* QK += MASK */
                 reconfig_data_format(cb_qk_im, cb_mask_in);
-                if constexpr (lightweight_mask_enabled) {
+                if constexpr (lightweight_mask_enabled || use_runtime_lengths) {
                     // Re-enter reserved state on cb_qk_im so the lightweight mask can be stamped in-place.
                     // matmul_blocks above already pushed the QK tiles, so tiles_received has been bumped;
                     // without the pop+push cycle below, reduce_c's wait-front would return immediately
@@ -1822,17 +1847,33 @@ void sdpa_inner_loop(
                     } else {
                         k_start_tile_for_mask = k_chunk * Sk_chunk_t;
                     }
-                    lw_mask.template apply<dst_size>(
+                    LightweightMaskContext active_mask = lw_mask;
+                    bool runtime_mask_active = false;
+                    uint32_t runtime_mask_chunk = 0;
+                    if constexpr (use_runtime_lengths) {
+                        runtime_mask_active = true;
+                        runtime_mask_chunk = k_chunk;
+                        active_mask.neginf_tile_idx = 0;
+                        active_mask.global_n_partial_tile_idx = runtime_batch - runtime_palette_batch_start + 1;
+                        if (k_chunk == runtime_boundary_chunk) {
+                            active_mask.global_n_padded_tiles = Sk_chunk_t - runtime_valid_tiles_in_boundary;
+                            active_mask.global_n_partial_col = runtime_partial_col;
+                        } else {
+                            active_mask.global_n_padded_tiles = Sk_chunk_t;
+                            active_mask.global_n_partial_col = 0;
+                        }
+                    }
+                    active_mask.template apply<dst_size>(
                         cb_mask_in,
                         cb_qk_im,
                         Sk_chunk_t,
                         Sq_chunk_t,
                         k_chunk,
                         num_local_k_chunks,
-                        ring_iter_needs_global_n_mask,
+                        ring_iter_needs_global_n_mask || runtime_mask_active,
                         ring_iter_needs_joint_n_mask,
                         local_n_needs_masking,
-                        global_n_mask_chunk_id,
+                        runtime_mask_active ? runtime_mask_chunk : global_n_mask_chunk_id,
                         local_n_mask_chunk_id,
                         joint_n_mask_chunk_id,
                         q_start_tile,
@@ -2127,7 +2168,8 @@ template <
     bool kv_alias = false,
     uint32_t kv_cb_sync = 0,
     uint32_t kv_k_capacity_tiles = 0,
-    uint32_t kv_v_capacity_tiles = 0>
+    uint32_t kv_v_capacity_tiles = 0,
+    bool use_runtime_lengths = false>
 void sdpa_standard(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -2167,7 +2209,9 @@ void sdpa_standard(
     const uint32_t cb_exp_max_diff,
     const uint32_t cb_out,
     const LightweightMaskContext& lw_mask = {},
-    const bool use_zigzag_balancing = false) {
+    const bool use_zigzag_balancing = false,
+    const uint32_t num_q_heads = 1,
+    const uint32_t* runtime_lengths = nullptr) {
     sdpa_inner_loop<
         STANDARD,
         cb_qk_im,
@@ -2193,7 +2237,8 @@ void sdpa_standard(
         kv_alias,
         kv_cb_sync,
         kv_k_capacity_tiles,
-        kv_v_capacity_tiles>(
+        kv_v_capacity_tiles,
+        use_runtime_lengths>(
         Skt,
         qk_in0_block_w,
         qk_subblock_w,
@@ -2251,7 +2296,11 @@ void sdpa_standard(
         lw_mask,
         is_causal,
         false,  // is_balanced (not used)
-        use_zigzag_balancing);
+        use_zigzag_balancing,
+        true,  // is_last_ring_iter
+        {},    // chunked context
+        num_q_heads,
+        runtime_lengths);
 }
 
 /**

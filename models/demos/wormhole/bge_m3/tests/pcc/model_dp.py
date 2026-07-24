@@ -63,6 +63,9 @@ def test_model_dp2_b12_s8192(mesh_device, model_artifacts, reset_seeds):
     assert tuple(mesh_device.shape) == (2, 1), "DP=2 test requires a (2, 1) mesh"
     assert mesh_device.get_num_devices() == 2, "DP=2 test requires exactly 2 chips"
 
+    import os
+
+    _QUALITY = os.environ.get("BGE_QUALITY", "0") == "1"
     backbone, state_dict, model_id_or_path = model_artifacts
 
     model_args, tt_model, _ = create_tt_model(
@@ -74,9 +77,10 @@ def test_model_dp2_b12_s8192(mesh_device, model_artifacts, reset_seeds):
         hf_model_name=model_id_or_path,
         data_parallel=True,
         use_experimental_encoder_sdpa=True,
-        encoder_sdpa_q256_vbf4=True,
-        use_qkv_scatter_matmul=True,
-        mlp_wi_output_dtype=ttnn.bfloat4_b,
+        encoder_sdpa_q256_vbf4=not _QUALITY,
+        use_qkv_scatter_matmul=not _QUALITY,
+        mlp_wi_output_dtype=ttnn.bfloat8_b if _QUALITY else ttnn.bfloat4_b,
+        quality_mode=_QUALITY,
     )
     assert tt_model._data_parallel, "DP mode not active"
 
@@ -125,3 +129,79 @@ def test_model_dp2_b12_s8192(mesh_device, model_artifacts, reset_seeds):
     pcc = float(msg)
     print(f"GATE_PCC_DP2 bf8 B{DP_BATCH_SIZE} S{DP_SEQ_LEN} = {pcc}")
     assert pcc > PCC_THRESHOLD, f"DP=2 PCC must be strictly > {PCC_THRESHOLD}, got {pcc}"
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 1)], indirect=True, ids=["dp2_n300"])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+def test_model_dp2_compact_lengths_cls_pcc(mesh_device, model_artifacts, reset_seeds):
+    """Validate compact valid-length masking against HF on CLS embeddings."""
+    import os
+
+    quality_dtype = ttnn.bfloat16 if os.environ.get("BGE_QUALITY_BF16", "0") == "1" else ttnn.bfloat8_b
+    backbone, state_dict, model_id_or_path = model_artifacts
+    model_args, tt_model, _ = create_tt_model(
+        mesh_device=mesh_device,
+        max_batch_size=DP_BATCH_SIZE,
+        max_seq_len=DP_SEQ_LEN,
+        dtype=quality_dtype,
+        state_dict=state_dict,
+        hf_model_name=model_id_or_path,
+        data_parallel=True,
+        use_experimental_encoder_sdpa=True,
+        encoder_sdpa_q256_vbf4=True,
+        use_qkv_scatter_matmul=True,
+        mlp_wi_output_dtype=quality_dtype,
+        quality_mode=True,
+        pooling="cls",
+    )
+
+    torch.manual_seed(42)
+    pad = int(model_args.pad_token_id)
+    input_ids = torch.full((DP_BATCH_SIZE, DP_SEQ_LEN), pad, dtype=torch.long)
+    valid_lengths = torch.tensor([5, 16, 31, 32, 33, 63, 64, 65, 127, 128, 129, 257], dtype=torch.long)
+    for batch, length in enumerate(valid_lengths.tolist()):
+        tokens = torch.randint(2, model_args.vocab_size, (length,), dtype=torch.long)
+        tokens[tokens == pad] = (pad + 1) % model_args.vocab_size
+        input_ids[batch, :length] = tokens
+    attention_mask = torch.arange(DP_SEQ_LEN).unsqueeze(0) < valid_lengths.unsqueeze(1)
+    token_type_ids = torch.zeros_like(input_ids)
+    nonpad = attention_mask.to(torch.long)
+    position_ids = torch.cumsum(nonpad, dim=1) * nonpad + pad
+
+    with torch.no_grad():
+        reference_cls = (
+            backbone(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
+                position_ids=None,
+                return_dict=True,
+            )
+            .last_hidden_state[:, 0, :]
+            .to(torch.float32)
+        )
+
+    tt_output = tt_model.forward(
+        input_ids=_ids_to_batchsharded(input_ids, mesh_device),
+        attention_mask=_ids_to_batchsharded(valid_lengths[:, None], mesh_device),
+        token_type_ids=_ids_to_batchsharded(token_type_ids, mesh_device),
+        position_ids=_ids_to_batchsharded(position_ids, mesh_device),
+    )
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 3), mesh_shape=(2, 1))
+    tt_cls = ttnn.to_torch(tt_output, mesh_composer=composer).reshape(DP_BATCH_SIZE, -1, model_args.dim)[:, 0]
+    tt_cls = tt_cls.to(torch.float32)
+
+    reference_nonfinite = int((~torch.isfinite(reference_cls)).sum().item())
+    tt_nonfinite = int((~torch.isfinite(tt_cls)).sum().item())
+    print(f"GATE_FINITE_DP2_COMPACT reference={reference_nonfinite} tt={tt_nonfinite}")
+    assert reference_nonfinite == 0
+    assert tt_nonfinite == 0
+
+    _, msg = comp_pcc(reference_cls, tt_cls, PCC_THRESHOLD)
+    pcc = float(msg)
+    print(f"GATE_PCC_DP2_COMPACT_CLS B{DP_BATCH_SIZE} S{DP_SEQ_LEN} = {pcc}")
+    assert pcc > PCC_THRESHOLD, f"compact-mask CLS PCC must be strictly > {PCC_THRESHOLD}, got {pcc}"

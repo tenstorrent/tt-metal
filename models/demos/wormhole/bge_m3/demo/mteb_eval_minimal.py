@@ -1,23 +1,28 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Minimal MTEB evaluation: HF reference vs TT create_tt_model side-by-side.
+"""MTEB STS evaluation for HF/CPU and the optimized BGE-M3 DP2 path.
 
-Runs STSBenchmark from the official MTEB(eng, v1) benchmark and compares:
-  1. HuggingFace model (via mteb.get_model / sentence-transformers) — gold reference
-  2. TT model via create_tt_model + trace capture — our on-device implementation
+The TT model always runs B12/S8192 on one N300 (DP=2, B6/device), captures one
+trace, and replays it for every batch. Short final batches are padded with empty
+requests; those synthetic rows are removed before MTEB scoring. The model's CLS
+slice is captured in the trace, so only [B, 1, 1, D] is copied back to the host.
 
-Usage (from tt-metal root):
-    TT_VISIBLE_DEVICES=0 python models/demos/wormhole/bge_m3/demo/mteb_eval_minimal.py
+Examples from the tt-metal root:
 
-    # Custom batch/seq:
+    # Ten examples per dataset, both HF and TT:
     TT_VISIBLE_DEVICES=0 python models/demos/wormhole/bge_m3/demo/mteb_eval_minimal.py \
-        --batch-size 1 --max-seq-len 512
+        --smoke-samples 10 --output-dir mteb_eval_results/smoke
+
+    # Full STSBenchmark and SICK-R evaluation:
+    TT_VISIBLE_DEVICES=0 python models/demos/wormhole/bge_m3/demo/mteb_eval_minimal.py \
+        --output-dir mteb_eval_results/full
 """
 
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import math
 from pathlib import Path
@@ -28,8 +33,10 @@ try:
 except ImportError:
     raise ImportError(
         "mteb is required for this evaluation script.\n"
-        "Install with: uv pip install -r models/demos/wormhole/bge_m3/demo/requirements_mteb.txt"
+        "Install with: uv pip install --python python_env/bin/python "
+        "-r models/demos/wormhole/bge_m3/demo/requirements_mteb.txt"
     )
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -39,385 +46,255 @@ from tqdm import tqdm
 import ttnn
 
 MODEL_NAME = "BAAI/bge-m3"
-ALL_TASKS = ["STSBenchmark", "SICK-R", "ArguAna"]
-DEFAULT_TASKS = ALL_TASKS
+TASKS = ["STSBenchmark", "SICK-R"]
+BATCH_SIZE = 12
+SEQ_LEN = 8192
+MESH_SHAPE = (2, 1)
 
 
-# ─── TT Embedder using trace capture for repeated forwards ───────────────────
+def _prepare_torch_inputs(tokenizer, texts: list[str], pad_token_id: int) -> dict[str, torch.Tensor]:
+    encoded = tokenizer(
+        texts,
+        truncation=True,
+        max_length=SEQ_LEN,
+        padding="max_length",
+        return_tensors="pt",
+    )
+    input_ids = encoded["input_ids"]
+    token_type_ids = encoded.get("token_type_ids", torch.zeros_like(input_ids))
+    nonpad = input_ids.ne(pad_token_id).to(torch.long)
+    position_ids = torch.cumsum(nonpad, dim=1) * nonpad + pad_token_id
+    return {
+        "input_ids": input_ids,
+        # Compact uint32 [B,1] valid lengths; custom SDPA expands only mask tiles in L1.
+        "attention_mask": encoded["attention_mask"].sum(dim=1, keepdim=True),
+        "token_type_ids": token_type_ids,
+        "position_ids": position_ids,
+    }
 
 
-def _pool_and_normalize(last_hidden_state: torch.Tensor) -> torch.Tensor:
-    if last_hidden_state.dim() == 4 and last_hidden_state.shape[1] == 1:
-        last_hidden_state = last_hidden_state.squeeze(1)
-    cls_embeddings = last_hidden_state[:, 0, :].to(torch.float32)
-    return F.normalize(cls_embeddings, p=2, dim=-1)
+def _to_batch_sharded(inputs: dict[str, torch.Tensor], mesh_device, *, device: bool) -> dict[str, ttnn.Tensor]:
+    mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    kwargs = {"mesh_mapper": mapper}
+    if device:
+        kwargs.update(device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    return {
+        key: ttnn.from_torch(value.int(), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, **kwargs)
+        for key, value in inputs.items()
+    }
 
 
-class TTEmbedder:
-    """MTEB adapter for the BGE-M3 TT model."""
+def _copy_inputs(host_inputs: dict[str, ttnn.Tensor], device_inputs: dict[str, ttnn.Tensor]) -> None:
+    for key in host_inputs:
+        ttnn.copy_host_to_device_tensor(host_inputs[key], device_inputs[key])
 
-    def __init__(self, device, batch_size: int = 32, max_seq_len: int = 512):
-        from models.common.auto_compose import to_torch_auto_compose
+
+def _normalize_cls(cls_output: torch.Tensor) -> torch.Tensor:
+    cls_output = cls_output.reshape(cls_output.shape[0], -1, cls_output.shape[-1])[:, 0, :].to(torch.float32)
+    return F.normalize(cls_output, p=2, dim=-1)
+
+
+class TTDP2Embedder:
+    """MTEB adapter for fixed B12/S8192 DP2 trace replay."""
+
+    def __init__(self, mesh_device):
         from models.demos.wormhole.bge_m3.tt.common import create_tt_model
 
-        logger.info(f"Loading TT model: {MODEL_NAME} (batch={batch_size}, seq={max_seq_len})")
-        self.device = device
-        self.batch_size = batch_size
-        self.max_seq_len = max_seq_len
-        self.to_torch = to_torch_auto_compose
-
+        self.mesh_device = mesh_device
+        logger.info(f"Loading TT model: {MODEL_NAME} (DP=2, B{BATCH_SIZE}, S{SEQ_LEN})")
         self.model_args, self.model, _ = create_tt_model(
-            mesh_device=device,
-            max_batch_size=batch_size,
-            max_seq_len=max_seq_len,
+            mesh_device=mesh_device,
+            max_batch_size=BATCH_SIZE,
+            max_seq_len=SEQ_LEN,
             dtype=ttnn.bfloat8_b,
             hf_model_name=MODEL_NAME,
+            data_parallel=True,
+            use_experimental_encoder_sdpa=True,
+            encoder_sdpa_q256_vbf4=True,
+            use_qkv_scatter_matmul=True,
+            mlp_wi_output_dtype=ttnn.bfloat8_b,
+            quality_mode=True,
+            pooling="cls",
         )
-
-        self._mteb_meta = ModelMeta.create_empty(overwrites={"name": f"tt-{MODEL_NAME}", "revision": None})
+        assert self.model._data_parallel, "DP=2 model was not activated"
+        self.pad_token_id = int(self.model_args.pad_token_id)
+        self.composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 3), mesh_shape=MESH_SHAPE)
+        self._mteb_meta = ModelMeta.create_empty(overwrites={"name": f"tt-dp2-{MODEL_NAME}", "revision": None})
         self._build_inputs_and_capture()
-        logger.info("TT model ready (trace captured).")
+        logger.info("TT model ready; B12/S8192 trace captured")
 
     @property
     def mteb_model_meta(self):
         return self._mteb_meta
 
-    def _build_inputs_and_capture(self):
-        warmup_texts = ["warmup sentence"] * self.batch_size
-        encoded = self.model_args.encode_prompts(warmup_texts, prompt_length=self.max_seq_len)
-        staged = encoded["model_inputs"]
-        self.input_ids_dev = staged["input_ids"]
-        self.attention_mask_dev = staged["attention_mask"]
-        self.token_type_ids_dev = staged["token_type_ids"]
-        self.position_ids_dev = staged["position_ids"]
+    def _build_inputs_and_capture(self) -> None:
+        torch_inputs = _prepare_torch_inputs(
+            self.model_args.tokenizer,
+            ["warmup sentence"] * BATCH_SIZE,
+            self.pad_token_id,
+        )
+        self.host_inputs = _to_batch_sharded(torch_inputs, self.mesh_device, device=False)
+        self.device_inputs = _to_batch_sharded(torch_inputs, self.mesh_device, device=True)
 
-        logger.info("Running warmup forward...")
-        warmup_output = self.model(**staged)
-        ttnn.synchronize_device(self.device)
+        logger.info("Compiling DP2 forward")
+        warmup_output = self.model.forward(**self.device_inputs)
+        ttnn.synchronize_device(self.mesh_device)
         ttnn.deallocate(warmup_output)
 
-        logger.info("Capturing trace...")
-        self.output_dev = self.model.capture_trace(
-            input_ids=self.input_ids_dev,
-            attention_mask=self.attention_mask_dev,
-            token_type_ids=self.token_type_ids_dev,
-            position_ids=self.position_ids_dev,
-            mesh_device=self.device,
-            cq_id=0,
-        )
+        logger.info("Capturing DP2 trace")
+        self.output_dev = self.model.capture_trace(**self.device_inputs, mesh_device=self.mesh_device, cq_id=0)
 
-    def _update_inputs(self, texts: list[str]):
-        encoded = self.model_args.encode_prompts(texts, prompt_length=self.max_seq_len)
-
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(encoded["input_ids"].int(), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
-            self.input_ids_dev,
-        )
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(
-                encoded["attention_mask"].bfloat16(),
-                dtype=self.model_args.attention_mask_dtype,
-                layout=ttnn.TILE_LAYOUT,
-            ),
-            self.attention_mask_dev,
-        )
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(encoded["token_type_ids"].int(), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
-            self.token_type_ids_dev,
-        )
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(encoded["position_ids"].int(), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
-            self.position_ids_dev,
-        )
+    def _update_inputs(self, texts: list[str]) -> None:
+        torch_inputs = _prepare_torch_inputs(self.model_args.tokenizer, texts, self.pad_token_id)
+        host_inputs = _to_batch_sharded(torch_inputs, self.mesh_device, device=False)
+        _copy_inputs(host_inputs, self.device_inputs)
 
     def encode(self, inputs, *, task_metadata=None, hf_split=None, hf_subset=None, prompt_type=None, **kwargs):
-        all_texts = []
+        all_texts: list[str] = []
         for batch in inputs:
             all_texts.extend(batch["text"])
 
-        num_batches = math.ceil(len(all_texts) / self.batch_size)
         all_embeddings = []
-        for start in tqdm(range(0, len(all_texts), self.batch_size), total=num_batches, desc="TT encode"):
-            batch_texts = all_texts[start : start + self.batch_size]
+        num_batches = math.ceil(len(all_texts) / BATCH_SIZE)
+        for start in tqdm(range(0, len(all_texts), BATCH_SIZE), total=num_batches, desc="TT DP2 encode"):
+            batch_texts = list(all_texts[start : start + BATCH_SIZE])
             actual_batch_size = len(batch_texts)
-
-            while len(batch_texts) < self.batch_size:
-                batch_texts.append("")
+            batch_texts.extend([""] * (BATCH_SIZE - actual_batch_size))
 
             self._update_inputs(batch_texts)
             self.model.execute_trace(blocking=True)
-
-            hidden_states = self.to_torch(self.output_dev, device=self.device)
-            hidden_states = hidden_states[:actual_batch_size]
-            normalized = _pool_and_normalize(hidden_states)
-            all_embeddings.append(normalized.cpu().numpy())
+            cls_output = ttnn.to_torch(self.output_dev, mesh_composer=self.composer)
+            cls_output = cls_output[:actual_batch_size]
+            if not torch.isfinite(cls_output).all():
+                raise RuntimeError("TT embedding output contains non-finite values")
+            all_embeddings.append(_normalize_cls(cls_output).cpu().numpy())
 
         return np.concatenate(all_embeddings, axis=0)
 
     def similarity(self, embeddings1, embeddings2):
-        if isinstance(embeddings1, np.ndarray):
-            embeddings1 = torch.from_numpy(embeddings1)
-        if isinstance(embeddings2, np.ndarray):
-            embeddings2 = torch.from_numpy(embeddings2)
+        embeddings1 = torch.from_numpy(embeddings1) if isinstance(embeddings1, np.ndarray) else embeddings1
+        embeddings2 = torch.from_numpy(embeddings2) if isinstance(embeddings2, np.ndarray) else embeddings2
         return torch.mm(embeddings1, embeddings2.t())
 
     def similarity_pairwise(self, embeddings1, embeddings2):
-        if isinstance(embeddings1, np.ndarray):
-            embeddings1 = torch.from_numpy(embeddings1)
-        if isinstance(embeddings2, np.ndarray):
-            embeddings2 = torch.from_numpy(embeddings2)
+        embeddings1 = torch.from_numpy(embeddings1) if isinstance(embeddings1, np.ndarray) else embeddings1
+        embeddings2 = torch.from_numpy(embeddings2) if isinstance(embeddings2, np.ndarray) else embeddings2
         return (embeddings1 * embeddings2).sum(dim=1)
 
-    def release(self):
+    def release(self) -> None:
         self.model.release_trace()
 
 
-class TTEmbedderNoTrace:
-    """MTEB adapter for BGE-M3 without trace capture.
-
-    Handles variable sequence lengths (needed for retrieval tasks like ArguAna
-    where texts exceed 512 tokens). Runs batch-32 forwards with per-batch
-    padded sequence length. Slower than TTEmbedder but supports full seq range.
-    """
-
-    def __init__(self, device, batch_size: int = 32, max_seq_len: int = 2048):
-        from models.common.auto_compose import to_torch_auto_compose
-        from models.demos.wormhole.bge_m3.tt.common import create_tt_model
-
-        logger.info(f"Loading TT model (no-trace): {MODEL_NAME} (batch={batch_size}, seq={max_seq_len})")
-        self.device = device
-        self.batch_size = batch_size
-        self.max_seq_len = max_seq_len
-        self.to_torch = to_torch_auto_compose
-
-        self.model_args, self.model, _ = create_tt_model(
-            mesh_device=device,
-            max_batch_size=batch_size,
-            max_seq_len=max_seq_len,
-            dtype=ttnn.bfloat8_b,
-            hf_model_name=MODEL_NAME,
-        )
-
-        self._mteb_meta = ModelMeta.create_empty(overwrites={"name": f"tt-{MODEL_NAME}", "revision": None})
-
-        # Warmup
-        logger.info("Running warmup forward...")
-        enc = self.model_args.encode_prompts(["warmup"] * batch_size)
-        out = self.model(**enc["model_inputs"])
-        ttnn.synchronize_device(device)
-        ttnn.deallocate(out)
-        for v in enc["model_inputs"].values():
-            if hasattr(v, "deallocate"):
-                ttnn.deallocate(v)
-        logger.info("TT model ready (no-trace).")
-
-    @property
-    def mteb_model_meta(self):
-        return self._mteb_meta
-
-    def encode(self, inputs, *, task_metadata=None, hf_split=None, hf_subset=None, prompt_type=None, **kwargs):
-        all_texts = []
-        for batch in inputs:
-            all_texts.extend(batch["text"])
-
-        num_batches = math.ceil(len(all_texts) / self.batch_size)
-        all_embeddings = []
-        for start in tqdm(range(0, len(all_texts), self.batch_size), total=num_batches, desc="TT encode (no-trace)"):
-            batch_texts = all_texts[start : start + self.batch_size]
-            actual_batch_size = len(batch_texts)
-
-            # Pad to fixed batch size
-            while len(batch_texts) < self.batch_size:
-                batch_texts.append("")
-
-            enc = self.model_args.encode_prompts(batch_texts)
-            out = self.model(**enc["model_inputs"])
-            ttnn.synchronize_device(self.device)
-
-            hidden_states = self.to_torch(out, device=self.device)
-            hidden_states = hidden_states[:actual_batch_size]
-            normalized = _pool_and_normalize(hidden_states)
-            all_embeddings.append(normalized.cpu().numpy())
-
-            ttnn.deallocate(out)
-            for v in enc["model_inputs"].values():
-                if hasattr(v, "deallocate"):
-                    ttnn.deallocate(v)
-
-        return np.concatenate(all_embeddings, axis=0)
-
-    def similarity(self, embeddings1, embeddings2):
-        if isinstance(embeddings1, np.ndarray):
-            embeddings1 = torch.from_numpy(embeddings1)
-        if isinstance(embeddings2, np.ndarray):
-            embeddings2 = torch.from_numpy(embeddings2)
-        return torch.mm(embeddings1, embeddings2.t())
-
-    def similarity_pairwise(self, embeddings1, embeddings2):
-        if isinstance(embeddings1, np.ndarray):
-            embeddings1 = torch.from_numpy(embeddings1)
-        if isinstance(embeddings2, np.ndarray):
-            embeddings2 = torch.from_numpy(embeddings2)
-        return (embeddings1 * embeddings2).sum(dim=1)
-
-    def release(self):
-        pass
+def _limit_tasks(tasks, sample_limit: int | None) -> None:
+    if sample_limit is None:
+        return
+    for task in tasks:
+        task.load_data()
+        if "test" not in task.dataset:
+            raise RuntimeError(f"{task.metadata.name} has no test split")
+        count = min(sample_limit, len(task.dataset["test"]))
+        task.dataset["test"] = task.dataset["test"].select(range(count))
+        logger.info(f"Smoke subset: {task.metadata.name} test={count}")
 
 
-# Tasks that need variable seq lengths (texts > 512 tokens)
-_RETRIEVAL_TASKS = {"ArguAna"}
-
-
-# ─── Evaluation runner ────────────────────────────────────────────────────────
-
-
-def run_eval(model, task_names: list[str], output_dir: str, label: str) -> dict:
+def run_eval(model, task_names: list[str], output_dir: Path, label: str, sample_limit: int | None) -> dict[str, float]:
     tasks = mteb.get_tasks(tasks=task_names)
-    if not tasks:
-        logger.error(f"No tasks found for: {task_names}")
-        return {}
+    _limit_tasks(tasks, sample_limit)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"[{label}] Running: {[task.metadata.name for task in tasks]}")
 
-    logger.info(f"[{label}] Running MTEB on {len(tasks)} tasks: {[t.metadata.name for t in tasks]}")
-    evaluation = mteb.MTEB(tasks=tasks)
-    results = evaluation.run(
+    results = mteb.MTEB(tasks=tasks).run(
         model,
-        output_folder=output_dir,
+        output_folder=str(output_dir),
         eval_splits=["test"],
         overwrite_results=True,
-        encode_kwargs={"show_progress_bar": True},
+        encode_kwargs={"batch_size": BATCH_SIZE, "show_progress_bar": True},
     )
 
-    parsed = {}
+    parsed: dict[str, float] = {}
     for task_result in results:
-        task_name = task_result.task_name
         main_score = None
-        for split_name, split_scores in task_result.scores.items():
+        for split_scores in task_result.scores.values():
             for subset_scores in split_scores:
                 if main_score is None:
                     main_score = subset_scores.get("main_score")
-        parsed[task_name] = main_score
-        logger.info(f"[{label}] {task_name}: {main_score:.4f}" if main_score else f"[{label}] {task_name}: N/A")
+        if main_score is not None:
+            parsed[task_result.task_name] = float(main_score)
+            logger.info(f"[{label}] {task_result.task_name}: {main_score:.6f}")
 
+    with open(output_dir / "scores_summary.json", "w") as f:
+        json.dump(parsed, f, indent=2)
     return parsed
 
 
-def print_comparison(hf_results: dict, tt_results: dict):
-    all_tasks = sorted(set(list(hf_results.keys()) + list(tt_results.keys())))
-    if not all_tasks:
-        return
-
-    header = f"{'Task':<30s} {'HF Score':>10s} {'TT Score':>10s} {'Delta':>10s}"
-    sep = "-" * len(header)
-    lines = [sep, "MTEB Evaluation: HF vs TT Comparison", sep, header, sep]
-
-    hf_scores, tt_scores, deltas = [], [], []
-    for task in all_tasks:
-        hf_s = hf_results.get(task)
-        tt_s = tt_results.get(task)
-        hf_str = f"{hf_s:.4f}" if hf_s is not None else "N/A"
-        tt_str = f"{tt_s:.4f}" if tt_s is not None else "N/A"
-        if hf_s is not None and tt_s is not None:
-            d = tt_s - hf_s
-            delta_str = f"{d:+.4f}"
-            deltas.append(d)
-            hf_scores.append(hf_s)
-            tt_scores.append(tt_s)
+def _save_comparison(output_base: Path, hf_results: dict[str, float], tt_results: dict[str, float]) -> None:
+    comparison = {}
+    for task in sorted(set(hf_results) | set(tt_results)):
+        hf_score = hf_results.get(task)
+        tt_score = tt_results.get(task)
+        delta = tt_score - hf_score if hf_score is not None and tt_score is not None else None
+        relative_delta_pct = 100.0 * delta / hf_score if delta is not None and hf_score else None
+        comparison[task] = {
+            "hf": hf_score,
+            "tt": tt_score,
+            "delta": delta,
+            "relative_delta_pct": relative_delta_pct,
+        }
+        if hf_score is not None and tt_score is not None:
+            logger.info(
+                f"[COMPARE] {task}: HF={hf_score:.6f} TT={tt_score:.6f} "
+                f"delta={delta:+.6f} ({relative_delta_pct:+.2f}%)"
+            )
         else:
-            delta_str = "N/A"
-        lines.append(f"{task:<30s} {hf_str:>10s} {tt_str:>10s} {delta_str:>10s}")
+            logger.info(f"[COMPARE] {task}: HF={hf_score} TT={tt_score}")
 
-    lines.append(sep)
-    if hf_scores and tt_scores:
-        hf_avg = sum(hf_scores) / len(hf_scores)
-        tt_avg = sum(tt_scores) / len(tt_scores)
-        avg_d = sum(deltas) / len(deltas)
-        lines.append(f"{'Average':<30s} {hf_avg:>10.4f} {tt_avg:>10.4f} {avg_d:>+10.4f}")
-    lines.append(sep)
-
-    for line in lines:
-        logger.info(line)
+    with open(output_base / "comparison.json", "w") as f:
+        json.dump({"hf": hf_results, "tt": tt_results, "comparison": comparison}, f, indent=2)
+    logger.info(f"Scoring saved under {output_base}")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument(
-        "--task",
-        choices=["all"] + ALL_TASKS,
-        default="STSBenchmark",
-        help="Which MTEB task to run (default: STSBenchmark)",
-    )
-    parser.add_argument(
-        "--mode", choices=["both", "hf", "tt"], default="both", help="Which models to evaluate (default: both)"
-    )
-    parser.add_argument("--batch-size", type=int, default=32, help="TT model batch size")
-    parser.add_argument("--max-seq-len", type=int, default=512, help="TT model max sequence length")
-    parser.add_argument("--output-dir", default="./mteb_eval_results", help="Output directory")
-    parser.add_argument("--device-id", type=int, default=0, help="TT device ID")
+    parser.add_argument("--task", choices=["all"] + TASKS, default="all")
+    parser.add_argument("--mode", choices=["both", "hf", "tt"], default="both")
+    parser.add_argument("--smoke-samples", type=int, default=None, help="Limit each test split for a smoke run")
+    parser.add_argument("--output-dir", default="./mteb_eval_results")
     args = parser.parse_args()
 
-    tasks = ALL_TASKS if args.task == "all" else [args.task]
-
+    if args.smoke_samples is not None and args.smoke_samples <= 0:
+        parser.error("--smoke-samples must be positive")
+    task_names = TASKS if args.task == "all" else [args.task]
     output_base = Path(args.output_dir)
     output_base.mkdir(parents=True, exist_ok=True)
 
-    hf_results = {}
-    tt_results = {}
+    hf_results: dict[str, float] = {}
+    tt_results: dict[str, float] = {}
 
-    # ── HF ──
     if args.mode in ("both", "hf"):
-        logger.info("=" * 60)
-        logger.info("Running HF reference evaluation")
-        logger.info("=" * 60)
-        hf_model = mteb.get_model(MODEL_NAME)
-        hf_results = run_eval(hf_model, tasks, str(output_base / "hf"), "HF")
+        logger.info("Loading HF reference model on CPU")
+        hf_model = mteb.get_model(MODEL_NAME, device="cpu")
+        hf_results = run_eval(hf_model, task_names, output_base / "hf", "HF/CPU", args.smoke_samples)
         del hf_model
+        gc.collect()
 
-    # ── TT ──
     if args.mode in ("both", "tt"):
-        logger.info("=" * 60)
-        logger.info("Running TT evaluation")
-        logger.info("=" * 60)
-
-        # Split tasks: trace-based (fixed seq, fast) vs no-trace (variable seq, slow)
-        trace_tasks = [t for t in tasks if t not in _RETRIEVAL_TASKS]
-        notrace_tasks = [t for t in tasks if t in _RETRIEVAL_TASKS]
-
-        if trace_tasks:
-            device = ttnn.open_device(
-                device_id=args.device_id,
+        logger.info("Opening one N300 as a 2x1 mesh")
+        mesh_device = None
+        try:
+            mesh_device = ttnn.open_mesh_device(
+                mesh_shape=ttnn.MeshShape(*MESH_SHAPE),
                 trace_region_size=50_000_000,
                 num_command_queues=1,
             )
-            try:
-                tt_model = TTEmbedder(device=device, batch_size=args.batch_size, max_seq_len=args.max_seq_len)
-                tt_results.update(run_eval(tt_model, trace_tasks, str(output_base / "tt"), "TT"))
-                tt_model.release()
-            finally:
-                ttnn.close_device(device)
+            tt_model = TTDP2Embedder(mesh_device)
+            tt_results = run_eval(tt_model, task_names, output_base / "tt", "TT/DP2", args.smoke_samples)
+            tt_model.release()
+        finally:
+            if mesh_device is not None:
+                ttnn.close_mesh_device(mesh_device)
 
-        if notrace_tasks:
-            device = ttnn.open_device(device_id=args.device_id)
-            try:
-                tt_model = TTEmbedderNoTrace(device=device, batch_size=args.batch_size, max_seq_len=2048)
-                tt_results.update(run_eval(tt_model, notrace_tasks, str(output_base / "tt"), "TT (no-trace)"))
-                tt_model.release()
-            finally:
-                ttnn.close_device(device)
-
-    # ── Compare ──
-    if hf_results and tt_results:
-        print_comparison(hf_results, tt_results)
-    elif hf_results:
-        for task, score in hf_results.items():
-            logger.info(f"[HF] {task}: {score:.4f}" if score else f"[HF] {task}: N/A")
-    elif tt_results:
-        for task, score in tt_results.items():
-            logger.info(f"[TT] {task}: {score:.4f}" if score else f"[TT] {task}: N/A")
-
-    results_file = output_base / "comparison.json"
-    with open(results_file, "w") as f:
-        json.dump({"hf": hf_results, "tt": tt_results}, f, indent=2)
-    logger.info(f"Results saved to {results_file}")
+    _save_comparison(output_base, hf_results, tt_results)
 
 
 if __name__ == "__main__":

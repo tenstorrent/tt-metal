@@ -65,6 +65,8 @@ CB_RECIP_SCRATCH = 14  # streaming-only: 1-tile recip scratch for normalize_row_
 # pops one before writing V (into the shared bytes) and one before writing the
 # next K. 32-byte allocation (one token page).
 CB_KV_SYNC = 15
+CB_VALID_LENGTHS = 16
+CB_RUNTIME_MASK = 17
 KV_SYNC_BYTES = 32
 
 
@@ -167,6 +169,7 @@ def _reader_compile_args(
     q: ttnn.Tensor,
     k: ttnn.Tensor,
     v: ttnn.Tensor,
+    valid_lengths: ttnn.Tensor | None,
     plan: EncoderSDPAPlan,
 ) -> list[int]:
     c = plan.config
@@ -209,14 +212,21 @@ def _reader_compile_args(
     args.extend(_accessor_args(q))
     args.extend(_accessor_args(k))
     args.extend(_accessor_args(v))
-    # Production passes null TensorAccessorArgs for optional inputs.  Reusing a
-    # valid interleaved accessor layout preserves the compile-time offset chain;
-    # runtime addresses remain zero and all corresponding paths are constexpr-off.
-    for _ in range(4):  # mask, page table, attention sink, chunk-start tensor
+    # Reuse the optional mask accessor for compact runtime lengths. Other
+    # optional accessors remain inactive placeholders.
+    args.extend(_accessor_args(valid_lengths if valid_lengths is not None else q))
+    for _ in range(3):  # page table, attention sink, chunk-start tensor
         args.extend(_accessor_args(q))
     args.extend([CB_Q, CB_K, CB_V, INACTIVE_CB, INACTIVE_CB, INACTIVE_CB, INACTIVE_CB, INACTIVE_CB])
-    # F4 handshake (constexpr-off unless kv_alias): sync-token CB id + flag.
-    args.extend([int(plan.config.kv_alias), CB_KV_SYNC if plan.config.kv_alias else INACTIVE_CB])
+    # F4 handshake followed by compact-length metadata.
+    args.extend(
+        [
+            int(plan.config.kv_alias),
+            CB_KV_SYNC if plan.config.kv_alias else INACTIVE_CB,
+            int(plan.config.use_runtime_lengths),
+            CB_VALID_LENGTHS if plan.config.use_runtime_lengths else INACTIVE_CB,
+        ]
+    )
     return args
 
 
@@ -250,10 +260,21 @@ def _writer_compile_args(output: ttnn.Tensor, plan: EncoderSDPAPlan) -> list[int
         0,  # k_partial_col
         0,  # use_zigzag_balancing
         0,  # use_windowed_mask
+        int(plan.config.use_runtime_lengths),
     ]
     args.extend(_accessor_args(output))
     args.extend(_accessor_args(output))  # inactive cu_window accessor placeholder
-    args.extend([INACTIVE_CB, CB_IDENTITY, CB_COL_IDENTITY, INACTIVE_CB, CB_OUT, CB_Q])
+    args.extend(
+        [
+            CB_RUNTIME_MASK if plan.config.use_runtime_lengths else INACTIVE_CB,
+            CB_IDENTITY,
+            CB_COL_IDENTITY,
+            INACTIVE_CB,
+            CB_OUT,
+            CB_Q,
+            CB_VALID_LENGTHS if plan.config.use_runtime_lengths else INACTIVE_CB,
+        ]
+    )
     return args
 
 
@@ -315,6 +336,9 @@ def _compute_compile_args(output: ttnn.Tensor, plan: EncoderSDPAPlan) -> list[in
         # F4 handshake (constexpr-off unless kv_alias): flag + sync-token CB id.
         int(plan.config.kv_alias),
         CB_KV_SYNC if plan.config.kv_alias else INACTIVE_CB,
+        int(plan.config.use_runtime_lengths),
+        CB_VALID_LENGTHS if plan.config.use_runtime_lengths else INACTIVE_CB,
+        CB_RUNTIME_MASK if plan.config.use_runtime_lengths else INACTIVE_CB,
     ]
     args.extend(_accessor_args(output))
     return args
@@ -324,6 +348,7 @@ def _runtime_args(
     q: ttnn.Tensor,
     k: ttnn.Tensor,
     v: ttnn.Tensor,
+    valid_lengths: ttnn.Tensor | None,
     output: ttnn.Tensor,
     plan: EncoderSDPAPlan,
 ) -> tuple[list, list, list]:
@@ -348,7 +373,7 @@ def _runtime_args(
                     q.buffer_address(),
                     k.buffer_address(),
                     v.buffer_address(),
-                    0,  # mask
+                    valid_lengths.buffer_address() if valid_lengths is not None else 0,
                     0,  # page table
                     0,  # attention sink
                     0,  # chunk-start tensor
@@ -403,6 +428,7 @@ def build_encoder_sdpa_descriptor(
     k: ttnn.Tensor,
     v: ttnn.Tensor,
     *,
+    valid_lengths: ttnn.Tensor | None = None,
     config: EncoderSDPAConfig = EncoderSDPAConfig(),
     output_mem_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> EncoderSDPABuild:
@@ -415,6 +441,18 @@ def build_encoder_sdpa_descriptor(
     integration.
     """
     plan = validate_encoder_sdpa_inputs(q, k, v, config)
+    if config.use_runtime_lengths:
+        if valid_lengths is None:
+            raise ValueError("use_runtime_lengths requires a valid_lengths tensor")
+        if valid_lengths.dtype != ttnn.uint32 or valid_lengths.layout != ttnn.ROW_MAJOR_LAYOUT:
+            raise ValueError("valid_lengths must be uint32 row-major")
+        # The reader loads all B lengths as ONE interleaved page (page 0) and the
+        # compute kernel indexes element nb within it. A [B, 1] tensor is B
+        # separate 1-element pages (only page 0 readable); flatten to a single
+        # [1, B] stick so every batch row's length is in page 0.
+        valid_lengths = ttnn.reshape(valid_lengths, [1, config.batch])
+    elif valid_lengths is not None:
+        raise ValueError("valid_lengths requires use_runtime_lengths=True")
     device = q.device()
     # Keep the established BF8 output contract even when Q arrives packed as
     # BF4; only the redundant input typecast is being removed.
@@ -448,7 +486,7 @@ def build_encoder_sdpa_descriptor(
                 _cb_descriptor(
                     CB_K,
                     plan.config.k_buffer_depth * plan.k_chunk_tiles * plan.head_dim_tiles,
-                    ttnn.bfloat4_b,
+                    k.dtype,
                     core_grid,
                 ),
                 _cb_descriptor(
@@ -492,6 +530,23 @@ def build_encoder_sdpa_descriptor(
     if plan.config.use_streaming:
         # Streaming-only 1-tile recip scratch (im_df = Float16_b in the factory).
         cbs.append(_cb_descriptor(CB_RECIP_SCRATCH, 1, ttnn.bfloat16, core_grid))
+    if plan.config.use_runtime_lengths:
+        cbs.append(
+            ttnn.CBDescriptor(
+                total_size=KV_SYNC_BYTES,
+                core_ranges=core_grid,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=CB_VALID_LENGTHS,
+                        data_format=ttnn.uint32,
+                        page_size=KV_SYNC_BYTES,
+                    )
+                ],
+            )
+        )
+        # A contiguous per-core work range touches at most two batch rows:
+        # one -inf template plus two partial-column templates.
+        cbs.append(_cb_descriptor(CB_RUNTIME_MASK, 3, ttnn.bfloat16, core_grid))
     if plan.config.kv_alias:
         # F4 compute->reader token CB (32B). Depth 2 so compute can push both the
         # post-K and post-V tokens without blocking on the reader draining the
@@ -510,14 +565,14 @@ def build_encoder_sdpa_descriptor(
             )
         )
 
-    reader_rt, writer_rt, compute_rt = _runtime_args(q, k, v, output, plan)
+    reader_rt, writer_rt, compute_rt = _runtime_args(q, k, v, valid_lengths, output, plan)
     defines = _compile_defines(plan)
 
     reader = ttnn.KernelDescriptor(
         kernel_source=READER_KERNEL,
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=core_grid,
-        compile_time_args=_reader_compile_args(q, k, v, plan),
+        compile_time_args=_reader_compile_args(q, k, v, valid_lengths, plan),
         runtime_args=reader_rt,
         defines=defines,
         config=ttnn.ReaderConfigDescriptor(),
@@ -553,7 +608,7 @@ def build_encoder_sdpa_descriptor(
     return EncoderSDPABuild(
         descriptor=descriptor,
         output=output,
-        io_tensors=[q, k, v, output],
+        io_tensors=[q, k, v, output] + ([valid_lengths] if valid_lengths is not None else []),
         plan=plan,
     )
 
@@ -563,6 +618,7 @@ def bge_encoder_sdpa_experimental(
     k: ttnn.Tensor,
     v: ttnn.Tensor,
     *,
+    valid_lengths: ttnn.Tensor | None = None,
     config: EncoderSDPAConfig = EncoderSDPAConfig(),
     output_mem_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
@@ -588,6 +644,7 @@ def bge_encoder_sdpa_experimental(
         q,
         k,
         v,
+        valid_lengths=valid_lengths,
         config=config,
         output_mem_config=output_mem_config,
     )
