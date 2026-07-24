@@ -1184,3 +1184,16 @@
   until every later read completes, eliminating reader/compute streaming.
 - Verdict: reject and remove. Preserve per-input publication; test read ordering
   that matches compute consumption next.
+
+
+### 2026-07-24 18:04:08 UTC — Reject compute-ordered scan reads
+
+- Hypothesis: publish scan CBs in compute order (`kd`, `v_beta`, `t_inv`,
+  `q_decay`, `intra`, `k_dec_t`, `dl`) so compute starts early and does not
+  stall on `t_inv`, which the original reader published last.
+- Target correctness -> PASS; output/state PCC `0.999993/0.999995`.
+- T=640 CSV: `generated/profiler/reports/2026_07_24_18_02_33/ops_perf_results_2026_07_24_18_02_33.csv` (SHA-256 `dedb4fab18f4362fbbb80bd7a484c7089f7ab9a9f2c365a53c1d27172b6a3318`). Wall improves `622.564 -> 618.123 us` (`-0.71%`); recurrence improves `144.945 -> 141.990 us` (`-2.04%`).
+- T=5,120 command: `PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s` -> PASS.
+- T=5,120 CSV: `generated/profiler/reports/2026_07_24_18_04_04/ops_perf_results_2026_07_24_18_04_04.csv` (SHA-256 `88385afab9ab560420ab195b90c297d6ad1e12202238f673c8080c50335fe217`). Wall regresses `3474.029 -> 3483.748 us` (`+0.28%`); recurrence improves only `809.704 -> 807.320 us` (`-0.29%`).
+- Verdict: reject and remove. The short-context overlap benefit does not
+  generalize to 160 chunks and misses both long-context retention gates.

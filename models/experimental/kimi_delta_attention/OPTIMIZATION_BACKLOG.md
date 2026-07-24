@@ -28,7 +28,7 @@ The complete evidence is in `bringup_log.md`, `ROOFLINE.md`, and
 
 ## Current ranked queue
 
-1. Reorder scan reads into compute-consumption order.
+1. Selectively double-buffer early scan inputs.
 2. Fuse prep and scan into a bounded producer/consumer pipeline.
 3. Distributed-L1 affine prefix scan.
 
@@ -115,8 +115,7 @@ dependency-ordered NOC barrier batching and selective double buffering.
 Potential reward and implementation order are different. The recommended
 experimental sequence is:
 
-1. Read tensors in compute-consumption order.
-2. Selective double buffering.
+1. Selective double buffering.
 3. Bounded prep-to-scan producer/consumer fusion.
 4. Distributed-L1 affine-prefix device prototype only if its storage and
    level-traffic model beats the measured serial scan.
@@ -139,6 +138,10 @@ For local scan changes, retain an experiment only when:
      recurrence `144.945 -> 163.298 us` (`+12.66%`). It withholds all CBs
      until the slowest read and destroys reader/compute streaming. Reject.
 2. Read tensors in compute-consumption order rather than declaration order.
+   - Experiment result, 2026-07-24: T=640 improved wall `-0.71%` and
+     recurrence `-2.04%`, but T=5,120 wall regressed `+0.28%` while recurrence
+     improved only `-0.29%`. Reject because it does not generalize and misses
+     both long-context gates.
 3. Double-buffer BF16 `kd`, `q_decay`, and `dl`.
 4. Extend double buffering to other inputs only after measuring L1 headroom.
 5. Pack prepared inputs into one or two contiguous DRAM records per chunk.
