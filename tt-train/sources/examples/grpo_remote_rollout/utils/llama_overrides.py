@@ -148,7 +148,7 @@ class LlamaCompositeKV(Llama):
 
         params = self.parameters()
 
-        def t(name: str) -> ttnn.Tensor:
+        def get(name: str) -> ttnn.Tensor:
             if name not in params:
                 raise RuntimeError(
                     f"ttml parameter {name!r} not found; available keys (first 10): " f"{sorted(params.keys())[:10]}"
@@ -158,21 +158,21 @@ class LlamaCompositeKV(Llama):
         out: dict[str, ttnn.Tensor] = {}
 
         # Tied: same handle exposed under both HF keys.
-        fc = t("Llama/fc/weight")
+        fc = get("Llama/fc/weight")
         out["model.embed_tokens.weight"] = fc
         out["lm_head.weight"] = fc
-        out["model.norm.weight"] = t("Llama/ln_fc/gamma")
+        out["model.norm.weight"] = get("Llama/ln_fc/gamma")
 
         for i in range(len(self.blocks)):
             p = f"Llama/blocks/{i}"
 
-            out[f"model.layers.{i}.input_layernorm.weight"] = t(f"{p}/attention_norm/gamma")
-            out[f"model.layers.{i}.post_attention_layernorm.weight"] = t(f"{p}/mlp_norm/gamma")
+            out[f"model.layers.{i}.input_layernorm.weight"] = get(f"{p}/attention_norm/gamma")
+            out[f"model.layers.{i}.post_attention_layernorm.weight"] = get(f"{p}/mlp_norm/gamma")
 
-            out[f"model.layers.{i}.self_attn.q_proj.weight"] = t(f"{p}/attention/q_linear/weight")
-            out[f"model.layers.{i}.self_attn.o_proj.weight"] = t(f"{p}/attention/out_linear/weight")
+            out[f"model.layers.{i}.self_attn.q_proj.weight"] = get(f"{p}/attention/q_linear/weight")
+            out[f"model.layers.{i}.self_attn.o_proj.weight"] = get(f"{p}/attention/out_linear/weight")
 
-            kv = t(f"{p}/attention/kv_linear/weight")
+            kv = get(f"{p}/attention/kv_linear/weight")
             kv_shape = tuple(kv.shape)
             assert kv_shape == (1, 1, 2 * kv_dim, H), (
                 f"kv_linear shape mismatch at layer {i}: got {kv_shape}, " f"expected (1, 1, {2 * kv_dim}, {H})"
@@ -180,8 +180,8 @@ class LlamaCompositeKV(Llama):
             out[f"model.layers.{i}.self_attn.k_proj.weight"] = ttnn.slice(kv, [0, 0, 0, 0], [1, 1, kv_dim, H])
             out[f"model.layers.{i}.self_attn.v_proj.weight"] = ttnn.slice(kv, [0, 0, kv_dim, 0], [1, 1, 2 * kv_dim, H])
 
-            out[f"model.layers.{i}.mlp.gate_proj.weight"] = t(f"{p}/mlp/w1/weight")
-            out[f"model.layers.{i}.mlp.up_proj.weight"] = t(f"{p}/mlp/w3/weight")
-            out[f"model.layers.{i}.mlp.down_proj.weight"] = t(f"{p}/mlp/w2/weight")
+            out[f"model.layers.{i}.mlp.gate_proj.weight"] = get(f"{p}/mlp/w1/weight")
+            out[f"model.layers.{i}.mlp.up_proj.weight"] = get(f"{p}/mlp/w3/weight")
+            out[f"model.layers.{i}.mlp.down_proj.weight"] = get(f"{p}/mlp/w2/weight")
 
         return out
