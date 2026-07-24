@@ -1074,6 +1074,7 @@ void py_module(nb::module_& mod) {
             core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
+            indices (ttnn.Tensor, optional): enables INDEXED/GATHER mode. A ROW_MAJOR ``UINT16`` tensor listing the ``num_active`` sparse-group ids to compute (e.g. the top-k expert ids). When provided, the kernels iterate ONLY those ids (``bB = indices[i]``) instead of scanning every sparse group, and the output's group axis becomes COMPACT with length ``num_active`` (``output_shape[-3] = num_active``) rather than the full group count ``E``. ``num_active`` (the number of elements in ``indices``) must be <= the total number of sparse groups. Defaults to `None` (the group axis is scanned densely). Use this when only a few groups are active per call to avoid the full-group multicast cost.
 
         Returns:
             ttnn.Tensor: the output tensor with sparse results.
@@ -1184,7 +1185,8 @@ void py_module(nb::module_& mod) {
             nb::arg("output_tile") = nb::none(),
             nb::arg("optional_output_tensor") = nb::none(),
             nb::arg("global_cb") = nb::none(),
-            nb::arg("sub_device_id") = nb::none()));
+            nb::arg("sub_device_id") = nb::none(),
+            nb::arg("indices") = nb::none()));
 
     // Bind MatmulParams for descriptor-based operations
     nb::class_<ttnn::prim::MatmulParams>(mod, "MatmulParams")
