@@ -16,6 +16,31 @@ user_invocable: true
 >
 > **Persisting results — single writer, incremental.** Agents only **return** their findings; they never write a shared file (no concurrent-write clobbering). If findings are persisted to a file, the orchestrator/caller is the **sole writer** and **appends each wave's returns as they arrive** — incremental, never only-at-the-end — so an interrupt preserves every completed wave's findings.
 
+## Recall preflight — run the `llk-audit` tool first (augmentor, not a verdict)
+Before manual analysis, get the deterministic candidate list from the recall tool
+(it enumerates every cfg/GPR MMIO write soundly, incl. macro-expanded and
+wrapper-hidden ones a grep misses):
+
+    cd .claude/tools/llk-audit && ./run.sh <wormhole|blackhole|quasar> --checks mmio-race
+    # For a PR/branch-scoped audit, add --changed [BASE] (BASE defaults to main):
+    #   ./run.sh <arch> --checks mmio-race --changed        # only findings touching files changed vs main
+    # candidates: out/audit.<arch>.json -> .checks["mmio-race"].findings
+
+Treat `findings[]` as your **pre-enumerated worklist** so you never re-do the
+enumeration. Hints are recall buckets, **not verdicts**: `NO_LOCAL_ORDERING` =
+triage priority (any ordering must come from a *caller* — follow the call graph);
+`LOCALLY_ORDERED` = a guard is present, verify it actually covers the consumer;
+`AUTOTTSYNC_ORDERED` (Quasar only) = the per-RISC TTSync HW-orders the write, so
+it's not a race candidate there (confirm the AutoTTSync model per the arch note).
+Then **widen for what the tool cannot see** (its `blind_spots`: interprocedural
+ordering; Quasar AutoTTSync — incl. its RQ-consumer-exception over-clear (a CFG/GPR write
+consumed by MOP_CFG/REPLAY/RESOURCEDECL is not RQ-tracked; the non-CFG/GPR replay-unit
+MMIO arm is now excluded upstream by the tool, not over-cleared); the curated-partial CONSUMER_MATH
+set that can mis-credit a guard (false-negative); writes in SFPU files that failed to
+parse) using the
+method below. The tool never clears a site — you decide. If it is unbuilt, proceed
+manually; do **not** read its absence as "no findings".
+
 ## The bug class (precise)
 A RISC-V baby core writes a Tensix CONFIG or GPR register via **MMIO** — a direct memory-mapped store from the RISC core, NOT an instruction issued to the Tensix coprocessor. That store does **not** pass through the Tensix wait gate, so a `STALLWAIT` cannot order or hold it back. If a later **Tensix instruction / MOP run / replay execution** depends on that register, you can get:
 - **write-too-late**: the consumer reads the stale value (MMIO not landed yet), or
@@ -27,14 +52,14 @@ Especially dangerous when a MOP/replay runs, an MMIO write changes a register it
 - `cfg[...] = ...` via `get_cfg_pointer()` / `get_cfg16_pointer()`
 - `reg_write(addr, data)`
 - `cfg_rmw(...)` / `cfg_rmw_gpr(...)`  (do `cfg_regs[addr] = ...` internally)
-- `regfile[idx] = ...`  (raw GPR MMIO store — **easy to miss in greps**)
+- `regfile[idx] = ...` via `get_regfile_pointer()`  (raw GPR MMIO store — **easy to miss in greps**)
 - `addr_mod_*::set(...)` / `rv_wrcfg` when implemented as a raw `volatile cfg[...] =` (true on **Quasar**; on WH/BH `addr_mod_t::set` uses the ordered `TTI_SETC16` and is SAFE)
 - any raw `volatile T* p = reinterpret_cast<...>(BASE); p[i] = ...` to cfg/GPR/MOP-cfg/TDMA register space (`cfg_write()`, `xmov_*`, `mop_cfg[]=`)
 
 ## SAFE (ordered in the thread stream — not the bug)
-- `cfg_reg_rmw_tensix<>` (emits `TT_RMWCIB`), `TTI_REG2FLOP`, `TTI_WRCFG`, `TTI_SETC16`, `TTI_RMWCIB*`, `TTI_SETADC*`, `TTI_SETDMAREG` — Tensix instructions, in-order through the config unit.
+- `cfg_reg_rmw_tensix<>` (emits `TT_RMWCIB`), `TTI?_REG2FLOP`, `TTI?_WRCFG`, `TTI?_SETC16`, `TTI?_RMWCIB*`, `TTI?_SETADC*`, `TTI?_SETDMAREG` (`TTI?_` = both the `TTI_` and Quasar `TT_` prefix) — Tensix instructions, in-order through the config unit.
 - `sync_regfile_write(idx)` after a `regfile[]` block — a read-back fence that retires the GPR store before dependent instructions issue. (Syncing the LAST index drains all prior regfile writes in the block.)
-- A `TTI_STALLWAIT` whose **condition operand** includes `p_stall::TRISC_CFG` (ISA condition C13 = "this thread has a RISC cfg/GPR write emitted but not yet processed") placed BEFORE the consumer. NOTE: a *trailing* `TRISC_CFG` stall only orders the write before the NEXT run — it does **not** protect a *prior* in-flight consumer.
+- A `TTI_STALLWAIT` whose **condition operand** includes `p_stall::TRISC_CFG` (the "this thread has a RISC cfg/GPR write emitted but not yet processed" condition — **encoded per-arch**: WH = C13, BH = bit 10 / `0x400`, QSR = index 21; the checkers match by token NAME, not value, for this reason) placed BEFORE the consumer. NOTE: a *trailing* `TRISC_CFG` stall only orders the write before the NEXT run — it does **not** protect a *prior* in-flight consumer.
 - The consuming unit is provably idle when the write lands (context-acquire / semaphore handshake), with no consumer before the function returns or a sync.
 - **RISC-blocking drains** — `mop_sync()` (read-back of `pc_buf_base[2]`: stalls the RISC core until in-flight **MOPs** complete) and `tensix_sync()` (read-back of `pc_buf_base[1]`: stalls the RISC core until the **whole Tensix thread** is idle). Unlike a `STALLWAIT` (which stalls the Tensix stream at the Wait Gate), these stall the *RISC core* until the Tensix side catches up, so they DO order a subsequent RISC MMIO write after the drained work. **Canonical use:** `mop_sync()` before reprogramming `TENSIX_MOP_CFG_BASE` (`ckernel_template::program()` on WH/BH/QSR) — without it the RISC overwrites the MOP template while a prior MOP is still expanding. Count these as SAFE **only when the drain provably covers the consumer at the site** (right primitive, on every path, including the cross-call window); when unproven, keep the flag. See the perf caveat below — recognizing them as SAFE does **not** mean endorsing their use.
 
@@ -46,7 +71,7 @@ Especially dangerous when a MOP/replay runs, an MMIO write changes a register it
 1. **Enumerate** every MMIO write (across all three arches), including the easy-to-miss classes:
    ```bash
    cd tt_metal/tt-llk
-   grep -rInE "\bcfg[0-9_]*\[[^]]+\]\s*=[^=]|reg_write\(|\bcfg_rmw(_gpr)?\(|\bregfile\s*\[[^]]+\]\s*=[^=]|get_cfg_pointer|get_cfg16_pointer|rv_wrcfg|\.set\(ADDR_MOD|cfg_write\(|XMOV_(L1_BASE|CMD)\s*\[" \
+   grep -rInE "\b(mop_)?cfg[0-9_]*\[[^=]+\]\s*=[^=]|reg_write\(|\bcfg_rmw(_gpr)?\(|\bregfile\s*\[[^=]+\]\s*=[^=]|get_cfg_pointer|get_cfg16_pointer|get_regfile_pointer|rv_wrcfg|\.set\(ADDR_MOD|cfg_write\(|XMOV_(L1_BASE|CMD)\s*\[" \
      tt_llk_* --include=*.h | grep -v /tests/
    ```
    Exclude non-bug-class targets: `pc_buf_base[]=`, `mailbox_base[]=` (semaphore/mailbox, not a register a Tensix instruction reads). **But** the `pc_buf_base[1]`/`pc_buf_base[2]` *read-backs* inside `tensix_sync()`/`mop_sync()` ARE ordering primitives — enumerate them too, both as guards (SAFE list) and as perf targets (below): `grep -rInE "\b(tensix_sync|mop_sync)\s*\(" tt_llk_* --include=*.h | grep -v /tests/`.

@@ -17,12 +17,157 @@ The nine sub-audits span **four synchronization surfaces** (not just cross-threa
   - `srcreg-bank-sync-audit` — SrcA/SrcB `AllowedClient`+bank-flip handshake (unpacker↔Matrix Unit) and shared-once Dst/LReg overwrite.
 - **RISC↔Tensix ordering:**
   - `mmio-race-audit` — RISC MMIO write vs Tensix-instruction/MOP/replay ordering; also `mop_sync`/`tensix_sync` drains (incl. OVER-SYNC/REDUNDANT perf findings).
-  - `mailbox-sync-audit` — RISC↔RISC mailbox FIFO handshakes (push/pop balance, call-count symmetry, fence=nop ordering).
+  - `mailbox-sync-audit` — RISC↔RISC mailbox FIFO handshakes (push/pop balance, call-count symmetry, fence ordering caveat).
 - **Cross-core (NoC):**
   - `dataflow-cb-sync-audit` — circular-buffer producer/consumer credits (reserve/push/wait/pop balance, data-before-credit ordering, capacity, remote CBs).
   - `noc-sync-audit` — raw `noc_semaphore_*` + barrier data-before-signal ordering and multicast fan-out (the non-CB half of dataflow).
 - **Intra-thread (micro-architectural):**
   - `instruction-latency-audit` — pipeline result-latency / NOP padding on hand-written instruction sequences (compiler-grounded, arch-divergent).
+
+## Recall preflight — run the `llk-audit` tool once, up front (augmentor, not a verdict)
+Before fanning out, run the deterministic recall tool for all its checks in one
+parse pass; it feeds every sub-audit a complete known-pattern worklist over one
+shared fact base (which is also what makes the JOIN a lookup rather than a
+schema reconciliation):
+
+    cd .claude/tools/llk-audit && ./run.sh <wormhole|blackhole|quasar>
+    # PR-scoped sweep: add --changed [BASE] (default main) to scope every check to files changed vs BASE.
+    # out/audit.<arch>.json -> .checks[{mmio-race, cfg-word-overlap,
+    #                                    semaphore-handshake, reconfig-stall,
+    #                                    srcreg-bank, mailbox-sync, cb-sync, noc-sync,
+    #                              noc-atomic-exit, noc-read-barrier, noc-l1-invalidate}]
+    #   (cb-sync/noc-sync are committed + deterministic but need a KERNEL fact base
+    #    to yield findings — over tt-llk they are trivially empty; see kernel tier.)
+
+Hand each sub-audit agent its check's `findings[]` as the pre-enumerated worklist,
+and instruct it to **widen beyond the tool** per that check's `blind_spots` (the
+tool recalls KNOWN patterns only — the agents must still hunt the unknown). The
+tool ships committed deterministic checkers for **8 of the 9** classes — all but
+`instruction-latency` (its surface is the SFPU files clang can't parse + its
+verdict needs the out-of-tree pinned `sfpi-gcc` latency table → fully LLM-driven).
+Of the 8, **`cb-sync` / `noc-sync`** only produce findings when fed a **kernel
+fact base** (the committed kernel tier's capture — see *Full-audit kernel tier*
+below); over the tt-llk fact base they are trivially empty, and without a capture
+run their kernel surface stays LLM-driven (each skill's ttnn-widened grep).
+`srcreg-bank` recalls only the dvalid control points + the raw-`SETDVALID`-on-BH
+flag (not the bank-flip lockstep verdict), and `mailbox-sync` recalls only the
+IN-TREE mailbox surface — mailbox use in ttnn/models kernels (one-to-one channels
+and fan-outs) is covered by the skill's ttnn-widened grep unless a kernel capture
+is run — so both still need heavy LLM widening per their `blind_spots`. The tool
+is **advisory**: it never clears a class, and its silence is "no new
+*known-pattern* instance," not "no bug".
+
+**Coverage caveat — attend to `parse_errors` (a per-run partial-coverage signal).**
+The envelope's `parse_errors` is `>0` on a normal run: the SFPU-heavy files that use
+`sfpi::` types don't fully parse (expected — see `out/parse.log`), so writes in those
+files are ABSENT from the fact base. That is a *known, expected* partial-coverage
+bound, NOT a clean full-coverage guarantee — treat any class whose real surface is
+SFPU-side as tool-under-covered there and widen manually. **But before trusting a
+low/zero finding count, scan `out/parse.log` for a header that should NOT fail (a
+NON-SFPU file):** an unexpected parse failure there is a silent coverage hole (that
+class's writes in that file were never analyzed → its "0" is meaningless). This is
+the consuming-side half of the never-false-all-clear contract.
+
+**Tool-drift contract — detect a stale registry, surface it, offer the fix (do NOT silently edit).**
+The deterministic tier is only as complete as `llkaudit/registry.py`'s name→meaning
+tables. When the codebase adds a sync-relevant API the registry doesn't yet know —
+a new `CircularBuffer`/`Noc` method, a `noc_async_*`/`noc_semaphore_*` variant, a
+new cfg-write helper or `TTI_*` cfg instruction, a new mailbox call — the checkers
+**under-recall silently**: fewer findings, no error, exit 0. A stale registry does
+not look broken; it looks *clean*. So during any audit (especially a full sweep)
+treat these as **tool-drift tells** and act on them:
+- an `UNRESOLVED` bucket rising sharply in the checks that HAVE one — cfg-word
+  (`UNRESOLVED`) and mailbox (`UNRESOLVED_ENDPOINT`) surface inputs they couldn't
+  key; a jump means a new write/endpoint shape the registry doesn't classify;
+- the kernel-tier **coverage ledger** showing TUs it could not translate/parse
+  (`EMPTY-OUT` / `PARSE-FAIL` / `SKIP-*`) — a *capture* hole (the checkers never
+  saw those kernels), distinct from a classification gap but equally a silent miss;
+- **the LLM tier finding a real sync site the deterministic worklist omitted** —
+  the cleanest tell, and the ONLY one for **cb-sync / noc-sync**, which have no
+  `UNRESOLVED` bucket (a CB/NoC object has many non-flow-control methods, so an
+  unknown method can't be flagged deterministically without over-firing) — so a
+  new `CircularBuffer`/`Noc`/`Semaphore` flow-control method shows up only as a
+  site the LLM found that the tool's candidate list didn't.
+
+On any such observation, **name the stale entry** (which `registry.py` table +
+which checker under-recalls, and the concrete API missed), tell the user the
+deterministic tier is drifting, and **offer to add it**. Apply the enhancement
+**only if the user allows** — never silently. The fix is almost always a one-line
+`registry.py` table entry (the single declarative edit point) plus a hermetic test
+in `tests/test_checks.py`; rarely a checker change; **never** the C++ extractor
+unless a genuinely new fact family is needed. Ground the new entry against the
+authoritative header (e.g. `circular_buffer.h`, `noc.h`, `dataflow_api.h`,
+`ckernel_ops.h`) per the source ladder, keep the ground-truth counts fresh, and
+follow the commit-twice pre-commit discipline. Then re-run recall so the sweep
+reflects the widened tables. This keeps the tool a living superset of the codebase
+instead of decaying into a false all-clear as the APIs move.
+
+## Full-audit kernel tier (opt-in) — the committed JIT capture for cb-sync / noc-sync / noc-atomic-exit / noc-read-barrier / noc-l1-invalidate / mailbox-sync
+The `cb-sync`, `noc-sync`, `noc-atomic-exit`, `noc-read-barrier`, `noc-l1-invalidate`, and `mailbox-sync` **checkers are committed and
+deterministic** — but their kernel surface lives in **JIT-compiled kernels OUTSIDE
+tt-llk** (`ttnn/`, `models/`, `tt_metal/hw/inc/api`), which have no static compile
+database the in-tree fixed-flags parse can reach. So the checkers are always
+present; what's missing at rest is a **kernel fact base** for them to run over.
+The `kernel_tier/` module (committed in-tree) produces that fact base; the only
+runtime-dependent step is the capture RUN itself.
+
+> **What is durable vs runtime-dependent (the clean split):**
+> - **DURABLE (committed, in the tool):** the `cb-sync` / `noc-sync` / `noc-atomic-exit` / `noc-read-barrier` / `noc-l1-invalidate` / `mailbox-sync`
+>   checkers themselves — plain Python over a fact base, unit-tested, no JIT hook —
+>   AND `kernel_tier/{capture.py,bootstrap.sh,MANIFEST}`, the capture pipeline.
+>   Over the tt-llk fact base **cb-sync / noc-sync are trivially empty** (no cb/noc
+>   sites there) while **mailbox-sync yields its small in-tree surface** (the
+>   MATH→UNPACK dst_index pair + debug endpoints); fed a kernel fact base all three
+>   emit real candidates over the outside-tt-llk kernels.
+> - **RUNTIME-DEPENDENT (each sweep):** the capture RUN — producing a build log
+>   that carries the JIT compile commands, then translating each RISC-V-GCC command
+>   to clang. This needs a build log or a live runtime, and the GCC→clang
+>   translation is the fragile part — isolated in `capture.py` with an honest
+>   coverage ledger (untranslatable TUs are listed, never silently dropped). No
+>   `ccwrap` / compiler-wrapper and no `jit_build` patch: capture is just a log scrape.
+
+**CURRENT STATE:** the module is **committed and in-tree**. `run.sh
+--kernel-tier-status` prints **`available`**, and `run.sh --full-jit` runs the
+in-tree audit **and then** `kernel_tier/bootstrap.sh`. It never captures silently:
+bootstrap needs either a pre-captured log (`LLK_KT_LOG`) or permission to run a
+workload (`LLK_KT_WORKLOAD` [+ `LLK_KT_CLEAR_CACHE=1`], which needs a device/sim).
+
+**When to offer it — gate on BOTH conditions:**
+1. **Mode:** the user asked for a **full / exhaustive** sweep (NOT a diff/PR-scoped
+   `--changed` run). A diff/PR run **never** prompts — the fast path stays clean.
+2. **Runtime:** the capture needs a build log or a device/sim. If neither is
+   available, do **NOT** silently improvise. Proceed with the in-tree sweep and
+   **tell the user precisely what that means for cb-sync / noc-sync / noc-atomic-exit / noc-read-barrier / noc-l1-invalidate / mailbox: they
+   are NOT tool-recalled *over kernels* this run, but they are STILL AUDITED —
+   LLM-driven via each skill's (ttnn-widened) grep + reasoning + ISA docs. "Not
+   tool-recalled" ≠ "left out."** The only thing forgone is the extra deterministic
+   candidate list (grep-fidelity recall, so macro-wrapped/aliased calls and
+   cross-kernel pairing may be missed — state that as the coverage bound).
+
+**Cost honesty before running it:** capturing by running a workload needs a
+**runtime** (hw/sim), runs a workload build (minutes, and `LLK_KT_CLEAR_CACHE=1`
+forces op-kernel recompilation), and gives **periodic-sweep-grade** coverage that
+is **complete only over the kernel variants actually exercised** (a clean result
+must never read as "all kernels covered").
+
+**How to run the capture** (the module is already committed — you only RUN it):
+1. **Get a build log** carrying the JIT compile commands — either
+   `TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1 <workload> > build.log 2>&1` captured on
+   hardware once (then audit offline), or let bootstrap run the workload for you.
+2. **Run the tier:** `LLK_KT_LOG=build.log ./run.sh <arch> --full-jit` (log path),
+   or `LLK_KT_CLEAR_CACHE=1 LLK_KT_WORKLOAD='<cmd>' ./run.sh <arch> --full-jit`
+   (run-a-workload path). bootstrap → `capture.py` (scrape → GCC→clang translate →
+   `llk_extract` per kernel → merged fact base) → cb/noc/read/atomic/l1/mailbox over it.
+3. **Coverage is emitted automatically:** `kernel_coverage.<arch>.txt` lists every
+   TU as parsed / `EMPTY-OUT` / `PARSE-FAIL` / `SKIP-*` (no silent caps); an empty
+   fact base makes bootstrap exit non-zero rather than emit a false all-clear.
+4. **Merge:** merge/dedup the kernel-tier candidates with the in-tree findings.
+
+Everything lives **inside tt-llk** (`.claude/tools/llk-audit/`), so there is zero
+permanent footprint outside tt-llk. Whatever the kernel tier surfaces is
+**candidates** (augmentor) — the data-before-credit ordering, cross-kernel
+producer↔consumer pairing, and mailbox call-count-symmetry/ordering **verdicts
+stay with the sub-audit skills**.
 
 ## The monotonic contract (non-negotiable — this is what makes the sweep a true superset)
 A naive "run them + concatenate" can catch *less* than the audits alone (summarization loss, dedup collapse, over-resolution). To prevent that, the JOIN is **additive-only**:
@@ -42,11 +187,11 @@ A naive "run them + concatenate" can catch *less* than the audits alone (summari
    | `mmio-race`: MMIO config write SAFE | "a semaphore / STALLWAIT(TRISC_CFG) orders it before the consumer" | `semaphore-handshake` shows that semaphore is balanced+init'd AND the MMIO store is sequenced relative to the post; or the stall's condition actually covers the consumer |
    | `reconfig-stall`: per-thread drain present (e.g. `STALLWAIT(STALL_CFG, PACK)`) | (drains *this* thread's unit only) | does another **thread** write the same word? → hand to `cfg-word-overlap`; a per-thread drain never excludes a cross-thread writer |
    | `semaphore-handshake`: semaphore protocol SAFE | (verifies counting, not payload) | which config words/dest/src rely on this semaphore for mutual exclusion? → confirm each such write is actually inside the ordered window |
-   | `mailbox-sync`: mailbox handshake SAFE | "the memory the mailbox value refers to is ready, and all threads reach the broadcast equally" | the referenced memory (L1 tile, dest offset) is ordered-ready — `fence`=nop means the mailbox write does NOT imply a prior store landed, so cross with `mmio-race`/memory-ordering AND hand the "is the CB page ready?" half to `dataflow-cb-sync`; and the call-count symmetry holds on every branch (same control-flow that `semaphore-handshake` balance depends on) |
-   | `dataflow-cb-sync`: CB credit SAFE | "the page write is ordered before the credit, and reserve/wait gates the access" | the data-before-credit barrier (NOC flush before `cb_push_back`) is present → cross with `mmio-race`/NOC ordering; the address `mailbox-sync` broadcasts derives from `fifo_rd_ptr` gated by this `cb_wait_front`; and `tile_regs_*` interleaving is `semaphore-handshake`'s `MATH_PACK` |
+   | `mailbox-sync`: mailbox handshake SAFE | "the memory the mailbox value refers to is ready, and all threads reach the mailbox handshake equally (including hand-written mailbox_write in ttnn/models kernels)" | the referenced memory (L1 tile, dest offset) is ordered-ready — a plain `fence` does NOT order a mailbox write against a prior store to a different region (a no-op on WH; on BH it drains the store queue but not to *processed*), so cross with `mmio-race`/memory-ordering AND hand the "is the CB page ready?" half to `dataflow-cb-sync`; and the call-count symmetry holds on every branch (same control-flow that `semaphore-handshake` balance depends on) |
+   | `dataflow-cb-sync`: CB credit SAFE | "the page write is ordered before the credit, and reserve/wait gates the access" | the data-before-credit barrier (NOC flush before `cb_push_back`) is present → cross with `mmio-race`/NOC ordering; the address `mailbox-sync` sends (over its directed tile-address channel) derives from `fifo_rd_ptr` gated by this `cb_wait_front`; and `tile_regs_*` interleaving is `semaphore-handshake`'s `MATH_PACK` |
    | `mmio-race`: MMIO-vs-MOP write SAFE | "a `mop_sync()`/`tensix_sync()` drains it" | the drain provably covers the consumer at the site (right primitive, every path, cross-call window). ALSO: is the drain heavier than needed (OVER-SYNC) or unnecessary (REDUNDANT)? → perf finding, never suppresses the race verdict |
    | `srcreg-bank-sync`: SrcA/SrcB bank handoff SAFE | "the FPU op waits for `AllowedClient`, and Dst/LReg is ordered" | bank-flip is lockstep on both sides; the Dst/LReg half rides `MATH_PACK`/`mutex::SFPU` → hand that half to `semaphore-handshake`; single-thread ownership of the bank state holds |
-   | `noc-sync`: cross-core credit SAFE | "the remote write is flushed before the credit, and the wait count matches the fan-out" | the `noc_async_write_barrier`/`writes_flushed` sits before the `noc_semaphore_inc`; cross with `dataflow-cb-sync` when the same buffer is also a CB page |
+   | `noc-sync`: cross-core credit SAFE | "the remote write is flushed before the credit, and the wait count matches the fan-out" | a WRITE credit (`set`/`set_multicast`/`relay_*`) same-NoC/VC/dest is ordered by issue-order; an ATOMIC credit (`noc_semaphore_inc`/`inc_multicast`/remote `up`) needs the payload write **committed** — `noc_async_write_barrier` (ACK), not a bare `writes_flushed` (departure only, per `data_movement_doc/general/posted_writes.md`). Do NOT clear a flush-only atomic (the checker tags it `FLUSH_NOT_BARRIER`) as safe on a same-VC-unicast assumption — confirm against `<arch>/NoC/Ordering.md` + `posted_writes.md`. Cross with `dataflow-cb-sync` when the same buffer is also a CB page |
    | `instruction-latency`: sequence SAFE | "the compiler scheduled the NOPs" / "Blackhole HW scoreboards it" | the code is actually sfpi-compiled (provenance lens), not raw `TTI_*`; and for BH the consuming insn is NOT in the freshly-derived `xtt_dynamic_bug` errata set — re-derive from the pinned `sfpi-gcc`, never a baked list |
    | any: "value-invariant / unit-idle / single-thread" | (assumption about another class's state) | re-confirm the assumption at the site with the other audit's lens |
 
@@ -68,7 +213,7 @@ Any instruction list / latency number / errata set appearing in a sub-skill is a
 
 **Ground-truth source ladder (a SUPERSET of the sage agents' corpus; `assembly.yaml` deliberately excluded) — use every applicable source each run and combine them:**
 Authority is **per audit-class × arch**; never skip a source because it lacked coverage last time. HW facts are confirmed against an authoritative source, never extrapolated.
-**In-repo code is a first-class living source, but only for facts that ARE the code** (applies to every arch below): instruction existence/encoding — `tt_metal/tt-llk/tt_llk_<arch>/common/inc/ckernel_ops.h` (a `TT_OP_*`/`TTI_*` with an opcode = valid on that arch, regardless of ISA-doc coverage), and *what a call actually issues* — VC / cmd-buf / posted / barrier — `tt_metal/hw/inc/api/dataflow/dataflow_api.h` + the per-arch `tt_metal/hw/inc/internal/{tt-1xx/<arch>,tt-2xx/quasar}/noc_nonblocking_api.h`. Code is **NOT** authoritative for HW *semantics* — whether HW then orders/latches those transactions, latency, sampled registers, errata — that is the ISA doc's domain, and existence-in-a-header is never a reason to skip it; **nor** for the correctness of the audited kernel (self-certification is circular). A code **comment** is only an author's belief, never ground truth (issue #48480's `#ifdef ARCH_BLACKHOLE` comment asserting BH reorders was wrong).
+**In-repo code is a first-class living source, but only for facts that ARE the code** (applies to every arch below): instruction existence/encoding — `tt_metal/tt-llk/tt_llk_<arch>/common/inc/ckernel_ops.h` (a `TT_OP_*`/`TTI_*` with an opcode = valid on that arch, regardless of ISA-doc coverage), and *what a call actually issues* — VC / cmd-buf / posted / barrier — `tt_metal/hw/inc/api/dataflow/dataflow_api.h` + the per-arch `tt_metal/hw/inc/internal/{tt-1xx/<arch>,tt-2xx/quasar}/noc_nonblocking_api.h`. Code is **NOT** authoritative for HW *semantics* — whether HW then orders/latches those transactions, latency, sampled registers, errata — that is the ISA doc's domain, and existence-in-a-header is never a reason to skip it; **nor** for the correctness of the audited kernel (self-certification is circular). A code **comment** is only an author's belief, never ground truth (e.g. an in-repo `#ifdef ARCH_BLACKHOLE` comment asserting BH reorders across cmd buffers was wrong — BH is `noc2axi`-ordered; ground ordering in `<arch>/NoC/Ordering.md`, not the comment).
 - **HW-semantics audits** (mmio, reconfig, cfg-word, semaphore, mailbox, srcreg, noc, dataflow-cb):
   - **WH B0 / BH A0:** **tt-isa-docs MCP** *or* **DeepWiki** — both serve the same `tenstorrent/tt-isa-documentation` corpus, either is fine — as primary ISA; **code** (per the code principle above) to cross-verify. **Fetch ISA pages by EXACT path (code-search / raw GitHub), NOT semantic search** — semantic search silently misses real pages (a prior audit wrongly concluded `<arch>/NoC/Ordering.md` "did not exist" and inferred a race from the gap). **WH/BH Confluence:** one canonical pointer — `1001357404` → **noc / dataflow-cb** HW-bug workarounds (WH/BH); open at audit (opaque ID, don't transcribe).
   - **Quasar:** **tt-isa-docs MCP** — *queried every run* (empty for QSR today, but coverage is expected; promote to primary the moment it lands; do **not** use DeepWiki for QSR — it has none); **Quasar Confluence HW pages** (internal/authenticated only) as the de-facto primary today — **don't rely on naïve CQL search; anchor to these canonical pages** (seed list, not exhaustive; run a freshness check before citing any — pages older than ~3 months get a staleness caveat, >9 months or undated must be re-verified against code/HW).
@@ -84,13 +229,13 @@ Authority is **per audit-class × arch**; never skip a source because it lacked 
 
     Search beyond these when a topic isn't covered, but start here. If a seeded ID returns 404 (page deleted/recreated), re-find the page in Confluence by topic and update the ID. **BH-inference** only as a caveated last resort (never grounds or overturns a verdict). Where two sources carry a fact, cross-check and surface conflicts.
 - **instruction-latency (all archs):** the pinned **`sfpi-gcc` source** (`rvtt.md` / `sfpu-ops-{wh,bh,qsr}.h` / `rtl-rvtt-schedule.cc`) — **fetch it at the pin**; the compiled toolchain / a compile experiment is not a substitute. Secondary: tt-isa-docs `VectorUnit` (WH/BH HW latency) and the Quasar SFPU uArch Confluence page (QSR HW context). (Instruction existence/validity → `ckernel_ops.h` per the code principle above, never ISA-doc coverage.)
-- **dataflow-cb / noc:** the **dataflow API source** (per the code principle above — authoritative for *what a call issues*: VC / cmd-buf / posted / barrier) plus the per-arch ISA sources above. **NoC transaction ordering** grounds on the ISA `<arch>/NoC/Ordering.md` page (fetch by exact path per the WH/BH note; the WH page carries the same-source/dest/NoC/VC in-order rule, write→atomic having *no* ordering rule, and response/ack always reorderable). **Blackhole (re-check every run — a 404 is point-in-time, not permanent):** fetch `BlackholeA0/NoC/Ordering.md` each run; the moment it exists it becomes the authority and supersedes the fallback below. While it is absent (404 at time of writing), ground BH ordering on code + `1001357404` + the `noc2axi` fact SOC-confirmed on issue #48480, marked a coverage caveat. Secondary OP-writer-level tier: the `tenstorrent/tt-low-level-documentation` repo `data_movement_doc/` (barrier taxonomy, posted-vs-nonposted, VC-vs-credit tension). Quasar adds the tile-counter / global-semaphore Confluence pages.
+- **dataflow-cb / noc:** the **dataflow API source** (per the code principle above — authoritative for *what a call issues*: VC / cmd-buf / posted / barrier) plus the per-arch ISA sources above. **NoC transaction ordering** grounds on the ISA `<arch>/NoC/Ordering.md` page (fetch by exact path per the WH/BH note; the WH page carries the same-source/dest/NoC/VC in-order rule, write→atomic having *no* ordering rule, and response/ack always reorderable). **Blackhole (re-check every run — a 404 is point-in-time, not permanent):** fetch `BlackholeA0/NoC/Ordering.md` each run; the moment it exists it becomes the authority and supersedes the fallback below. While it is absent (404 at time of writing), ground BH ordering on code + `1001357404` + the `noc2axi` ordering fact confirmed by the SOC/NoC team, marked a coverage caveat. Secondary OP-writer-level tier: the `tenstorrent/tt-low-level-documentation` repo `data_movement_doc/` (barrier taxonomy, posted-vs-nonposted, VC-vs-credit tension). Quasar adds the tile-counter / global-semaphore Confluence pages.
 
 **Ground-or-abstain (this is what makes a re-run a superset of any prior run):** ground each verdict against the *applicable* authorities at full strength; if **none** is reachable, **emit no verdict** for that point (label the coverage hole, e.g. `[Quasar: code-only]`) — never substitute a weaker basis (WH/BH extrapolation, a code comment, a compile experiment) for a verdict, and never let a weaker-grounded result overturn a stronger-grounded one.
 
-**Never infer a NEGATIVE from a missing doc (guards against the dominant false-positive class).** A missing ISA-doc page means *undocumented*, never *absent/invalid/unordered* — the corpus is an explicitly incomplete living document. So doc-silence must NOT become a confirmed `RACE`/`INVALID` verdict, and equally must NOT become `SAFE`. Before asserting any negative ("instruction invalid on arch Y", "ordering not guaranteed → race"): (1) first try to *resolve* it against the applicable authority in the ladder above (e.g. instruction existence → `ckernel_ops.h`; HW ordering → `<arch>/NoC/Ordering.md`) and take the resolved verdict if found; (2) if no reachable source resolves it, emit **UNCERTAIN — needs HW/owner confirmation** (a surfaced, non-closed finding), *not* a confirmed race and *not* safe. This is not a relaxation of conservatism: the item is still raised for confirmation (nothing escapes), it is only labeled by true confidence. A fabricated mechanism filed as "confirmed" (e.g. issue #48480: "BH reorders cross-cmd-buffer → RACE", refuted by SOC as `noc2axi`-ordered) is *anti*-conservative — each refuted confirmed-flag trains owners to dismiss the auditor, so real races later get waved off. **Record** which source + revision (ISA-doc rev / DeepWiki, Confluence page + date + freshness, sfpi-gcc commit) each verdict was grounded against, so runs are reproducible and comparable. (A stateless run cannot *recall* a prior one — to be a superset of a **specific** prior run, supply that run's report as an input and reconcile against it monotonically.)
+**Never infer a NEGATIVE from a missing doc (guards against the dominant false-positive class).** A missing ISA-doc page means *undocumented*, never *absent/invalid/unordered* — the corpus is an explicitly incomplete living document. So doc-silence must NOT become a confirmed `RACE`/`INVALID` verdict, and equally must NOT become `SAFE`. Before asserting any negative ("instruction invalid on arch Y", "ordering not guaranteed → race"): (1) first try to *resolve* it against the applicable authority in the ladder above (e.g. instruction existence → `ckernel_ops.h`; HW ordering → `<arch>/NoC/Ordering.md`) and take the resolved verdict if found; (2) if no reachable source resolves it, emit **UNCERTAIN — needs HW/owner confirmation** (a surfaced, non-closed finding), *not* a confirmed race and *not* safe. This is not a relaxation of conservatism: the item is still raised for confirmation (nothing escapes), it is only labeled by true confidence. A fabricated mechanism filed as "confirmed" (e.g. a "BH reorders cross-cmd-buffer → RACE" claim later refuted by the SOC team as `noc2axi`-ordered) is *anti*-conservative — each refuted confirmed-flag trains owners to dismiss the auditor, so real races later get waved off. **Record** which source + revision (ISA-doc rev / DeepWiki, Confluence page + date + freshness, sfpi-gcc commit) each verdict was grounded against, so runs are reproducible and comparable. (A stateless run cannot *recall* a prior one — to be a superset of a **specific** prior run, supply that run's report as an input and reconcile against it monotonically.)
 
-**Confirm reachability before flagging a value-gated race/deadlock (a positive verdict needs grounding just as much as a negative).** When a hazard depends on a specific runtime value — a loop count of 0, a dimension of 0, an empty-range iteration, an `== N` branch — the code path being statically present is NOT sufficient. Verify the triggering value is actually reachable given the op's **host-side invariants**: the **program factory** (compile-arg derivation, grid/shape math), the **device-op validation** (`TT_FATAL`, layout requirements — e.g. a TILE-layout requirement forces tile-aligned dims ≥ 32), and compile-time constants (`constexpr`). If a repo invariant makes the triggering value impossible, the finding is a FALSE POSITIVE (unreachable) — or at most a latent "if this invariant is ever relaxed" note — never a confirmed race. A kernel cannot be audited in isolation from the factory that launches it; this is the same ground-in-the-authoritative-source discipline, with the factory + device-op validation as the source. Examples: issue #48486 (a `Ht==0` deadlock ruled unreachable — the op `TT_FATAL`s TILE layout, so `Ht ≥ 1`); issue #48488 (an off-by-`start_core_id` loop bound that is correct because `start_core_id` is `constexpr 0`).
+**Confirm reachability before flagging a value-gated race/deadlock (a positive verdict needs grounding just as much as a negative).** When a hazard depends on a specific runtime value — a loop count of 0, a dimension of 0, an empty-range iteration, an `== N` branch — the code path being statically present is NOT sufficient. Verify the triggering value is actually reachable given the op's **host-side invariants**: the **program factory** (compile-arg derivation, grid/shape math), the **device-op validation** (`TT_FATAL`, layout requirements — e.g. a TILE-layout requirement forces tile-aligned dims ≥ 32), and compile-time constants (`constexpr`). If a repo invariant makes the triggering value impossible, the finding is a FALSE POSITIVE (unreachable) — or at most a latent "if this invariant is ever relaxed" note — never a confirmed race. A kernel cannot be audited in isolation from the factory that launches it; this is the same ground-in-the-authoritative-source discipline, with the factory + device-op validation as the source. Examples: a `Ht==0` deadlock ruled unreachable because the op `TT_FATAL`s TILE layout (so `Ht ≥ 1`); an off-by-`start_core_id` loop bound that is correct because `start_core_id` is `constexpr 0`.
 
 **Source preflight — emit this FIRST, before any audit work, and PAUSE for the user.**
 Before running any sub-audit, build a **source manifest** from the ladder above and **probe each source's reachability**, then present it and let the user decide. Render a table — *source · tier/role · arch+class served · reachable? (✓ / ✗ / N-A) · note* — covering at least:

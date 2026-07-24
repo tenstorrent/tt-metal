@@ -16,6 +16,21 @@ user_invocable: true
 >
 > **Persisting results — single writer, incremental.** Agents only **return** their findings; they never write a shared file (no concurrent-write clobbering). If findings are persisted to a file, the orchestrator/caller is the **sole writer** and **appends each wave's returns as they arrive** — incremental, never only-at-the-end — so an interrupt preserves every completed wave's findings.
 
+## Recall preflight — run the tool first (augmentor, not a verdict)
+Before enumerating, run the deterministic `cb-sync` checker for a complete
+known-pattern worklist (reserve/push & wait/pop credit balance per CB):
+```bash
+cd .claude/tools/llk-audit && ./run.sh <arch> --full-jit    # cb-sync runs in the kernel tier
+```
+`cb-sync` is **empty over the tt-llk headers** — CBs live in JIT-compiled kernels
+(ttnn/models), so it only emits findings when fed a KERNEL fact base via `--full-jit`
+(the on-request capture; runbook in `race-audit-all`). Treat `findings[]` as a **floor,
+not a ceiling** — widen per its `blind_spots`: it checks WITHIN-function call-count
+balance only, so it MISSES cross-kernel balance, a loop-multiplier imbalance (reserve
+in a loop vs push outside → equal static counts), and the data-before-credit NOC-flush
+ordering (that is noc-sync's join). If the kernel tier isn't built, cb-sync reports
+nothing and you audit the CB surface by reasoning — that is NOT "no findings".
+
 ## The bug class (precise)
 CBs are the credit-based FIFOs connecting **producers** (a reader on RISCV B, or the packer on T2) to **consumers** (compute on T0/T1, or a writer on NC). Flow control is two L1 counters per CB: `tiles_received` (a.k.a. `pages_received`, bumped by the producer in `cb_push_back`) and `tiles_acked` (`pages_acked`, bumped by the consumer in `cb_pop_front`). Misuse → **data corruption** (consumer reads a page before the producer finished writing it, or producer overwrites a page the consumer hasn't read) or **deadlock** (a wait whose credit never arrives). This is the dataflow layer the `mailbox-sync` / `cfg-word-overlap` "is the referenced data ready?" question hands off to.
 
@@ -27,7 +42,7 @@ CBs are the credit-based FIFOs connecting **producers** (a reader on RISCV B, or
 - Remote/sharded CBs: `RemoteSenderCBInterface` / `RemoteReceiverCBInterface` (`circular_buffer_interface.h`) propagate credits **across cores via NOC** atomic-increments / semaphore writes.
 
 ## What to check
-1. **Ordering — data fully written/flushed BEFORE the credit (the main race).** Producer must complete the page write before `cb_push_back`. For pages filled by NOC reads, a `noc_async_read_barrier` must precede `cb_push_back`; for cross-core credit (remote CB), the data NOC write must be **flushed before** the credit NOC write. Otherwise the consumer's `cb_wait_front` sees the page and reads stale/partial data. Symmetric on the consumer: finish reading before `cb_pop_front` (else the producer reuses the page). This is the CB analog of the `mailbox`/`fence=nop` ordering caveat.
+1. **Ordering — data fully written/flushed BEFORE the credit (the main race).** Producer must complete the page write before `cb_push_back`. For pages filled by NOC reads, a `noc_async_read_barrier` must precede `cb_push_back`; for cross-core credit (remote CB), the data NOC write must be ordered before the credit — and RemoteCB credits are **NOC atomic-increments**, which need the payload write **committed** (landed): `noc_async_write_barrier` (ACK), not a bare `noc_async_writes_flushed()` which only guarantees *departure* (`data_movement_doc/general/posted_writes.md`). Do not assume a flush-only atomic is safe even same-VC unicast — confirm against `<arch>/NoC/Ordering.md` + `posted_writes.md` (see noc-sync). Otherwise the consumer's `cb_wait_front` sees the page and reads stale/partial data. Symmetric on the consumer: finish reading before `cb_pop_front` (else the producer reuses the page). This is the CB analog of the `mailbox` fence ordering caveat.
 2. **Credit balance.** Every `cb_reserve_back(n)` is matched by a `cb_push_back(n)` with the **same n**; every `cb_wait_front(n)` by a `cb_pop_front(n)`. Pushing more than reserved (or popping more than waited) drifts the counters → producer overruns unread data / consumer consumes unwritten. Walk every branch and early-return.
 3. **Reserve-before-write / wait-before-read.** A write to the CB region without a preceding `cb_reserve_back`, or a read without `cb_wait_front`, touches an unsynchronized page.
 4. **Capacity.** `n <= fifo_num_pages` for every reserve/wait — asking for more pages than the CB holds can never be satisfied → deadlock.
@@ -38,9 +53,19 @@ CBs are the credit-based FIFOs connecting **producers** (a reader on RISCV B, or
 ## Method
 1. Enumerate CB sites:
    ```bash
-   cd tt_metal && grep -rInE '\bcb_(reserve_back|push_back|wait_front|pop_front)\b|pages_(received|acked)|fifo_(rd|wr)_ptr|Remote(Sender|Receiver)CBInterface' \
+   # from the repo root (ttnn/ and models/ are siblings of tt_metal/, NOT under it)
+   grep -rInE '\bcb_(reserve_back|push_back(_hold_wr_ptr)?|wait_fronts?|pop_front)\b|\bremote_cb_(reserve_back|push_back_and_write_pages|wait_front|pop_front)\b|\.(reserve_back|push_back|wait_front|pop_front)[[:space:]]*\(|pages_(received|acked)|fifo_(rd|wr)_ptr|Remote(Sender|Receiver)CBInterface' \
      tt_metal/hw/inc/api ttnn/cpp models --include=*.h --include=*.cpp | grep -v '/tests/'
    ```
+   **Both API forms.** Modern ttnn kernels use the OBJECT form
+   `cb_in.wait_front(1)` / `cb_out.reserve_back(1)` (the deterministic tool recalls
+   it via `registry.cb_classify`), NOT only the free `cb_reserve_back(...)` — the
+   second alternation above catches it. Caveat: `.push_back(` also matches an
+   unrelated receiver (e.g. `std::vector::push_back`), so when classifying, keep
+   only receivers typed `CircularBuffer`/`CBInterface`/`DataflowBuffer`/`DFBInterface`
+   (mirror the tool's `_CB_RECV_TYPES`; `DataflowBuffer` is the Metal 2.0 CB object with
+   the same reserve_back/push_back/wait_front/pop_front quartet); the other three method
+   names are CB-specific.
    **Exhaustive run — no sampling.** That grep yields the full kernel set (typically ~150–200 files across the CCL/dataflow families — all_gather, reduce_scatter, all_to_all, llama, moe, deepseek, broadcast, sdpa, matmul, prefetcher, unary/binary readers-writers). Enumerate them **all** into the run's coverage ledger and fan out (≥) one cell per kernel-family; **do not sample** — "sampled 6 of 186" is a blocking incompleteness per `race-audit-all`, not a caveat. This class is **in scope** (frontmatter): "the CB races live above tt-llk, run it separately" is not a valid skip — audit them here, now.
 2. Per CB (per kernel pair), pair the producer (`reserve_back`+`push_back`) with the consumer (`wait_front`+`pop_front`) — they live in **different kernels** (reader↔compute, compute↔writer), so trace across the kernel set of the op.
 3. Run checks 1–7. For ordering, confirm a NOC/read barrier sits between the data fill and `cb_push_back` (and between the read and `cb_pop_front`).
@@ -53,7 +78,7 @@ CBs are the credit-based FIFOs connecting **producers** (a reader on RISCV B, or
 - **Risk only in a specific op's kernel set, library primitives correct** → LATENT/author-level — name the kernel.
 
 ## Architecture note
-The CB API is arch-agnostic (one copy in `tt_metal/hw/inc/api`); roles map as reader→RISCV B, writer→RISCV NC, compute→T0/T1/T2. Mechanism is the same across WH/BH/Quasar at this layer; the **ordering** primitives differ per NoC/arch — verify the barrier used matches the transfer type.
+The CB API is arch-agnostic (one copy in `tt_metal/hw/inc/api`); roles map as reader→RISCV B, writer→RISCV NC, compute→T0/T1/T2. Mechanism is the same across WH/BH/Quasar at this layer; the **ordering** primitives differ per NoC/arch — verify the barrier used matches the transfer type. **Quasar caveat:** under `ARCH_QUASAR` the *local* CB backing is a `LocalDFBInterface` (`tc_slots` / `rd_offset` / `stride_size`), NOT `LocalCBInterface` / `fifo_rd_ptr` — the `fifo_rd_ptr`/`fifo_page_size` pointer reasoning here is WH/BH; on Quasar the per-tile spacing is `stride_size`.
 
 ## Verified ground truth (don't re-derive)
 - `cb_reserve_back`/`cb_wait_front`/`cb_push_back`/`cb_pop_front` semantics above are from `dataflow_api.h` (credit math, uncached counter read, 16-bit wrap). Canonical compute pattern (e.g. `eltwise_bw_gelu_poly.cpp`): `cb_reserve_back(out)` + `cb_wait_front(in)` → per-tile `tile_regs_acquire/commit/wait` + `pack_tile` → `cb_pop_front(in)` + `cb_push_back(out)`. The `tile_regs_*` half is `MATH_PACK` (defer to `semaphore-handshake-audit`); this audit owns the `cb_*` half.
