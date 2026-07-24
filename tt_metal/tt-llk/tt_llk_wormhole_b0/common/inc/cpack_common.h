@@ -519,7 +519,7 @@ inline void set_packer_config(
     }
 
     // Round to 10 bit mantissa from fp32 dest
-    if (is_fp32_dest_acc_en && (pack_src_format == to_underlying(DataFormat::Float16)))
+    if (is_fp32_dest_acc_en && (pack_src_format != to_underlying(DataFormat::Float32)))
     {
         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
     }
@@ -684,7 +684,7 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_unsigned = 1;
     }
     // Round to 10 bit mantissa from fp32 dest
-    if (is_fp32_dest_acc_en && (pack_src_format == to_underlying(DataFormat::Float16)))
+    if (is_fp32_dest_acc_en && (pack_src_format != to_underlying(DataFormat::Float32)))
     {
         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
     }
