@@ -43,7 +43,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_route
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     ABC_1K_PATH,
     PROMPT_5K_PATH,
@@ -365,9 +365,9 @@ def run_model(
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
     rope_tensors = rope_setup.get_rope_tensors(isl_total)
 
-    kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_cache_head_dim,
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=isl_total,
         mesh_shape=mesh_shape,
@@ -586,6 +586,41 @@ def run_model(
             id="torus-y-8x4",
         ),
         pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            },
+            1,
+            # FABRIC_2D_TORUS_X wraps ONLY the TP axis (dim 1) into a ring → Ring for the TP-axis
+            # collectives (RMS-norm, MLA, dense-FFN, shared-expert, gate); the SP axis (dim 0) stays
+            # a line → Linear for the SP-axis MoE dispatch/combine. Production full-galaxy X-ring
+            # case (matches the [LINE,RING] pipeline descriptors); no sub-torus carve needed.
+            (ttnn.Topology.Linear, ttnn.Topology.Ring),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-x-8x4",
+        ),
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            },
+            1,
+            # FABRIC_2D_TORUS_XY wraps BOTH axes: SP (dim 0) and TP (dim 1) are each a ring. The
+            # SP-axis MoE dispatch/combine + ring-attention SDPA ride the SP ring (the path #48225's
+            # ring-aware dispatch/combine kernels support), and the TP-axis collectives ring on dim 1.
+            (ttnn.Topology.Ring, ttnn.Topology.Ring),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+        pytest.param(
             (4, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
@@ -617,6 +652,25 @@ def run_model(
             (ttnn.Topology.Ring, ttnn.Topology.Ring),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="torus-xy-4x4",
+        ),
+        pytest.param(
+            (4, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            },
+            2,
+            # 4x4 sub-torus: Ring-4 on the TP/X axis (dim 1), Linear on the SP/Y axis (dim 0). Only
+            # the TP axis is physically wrapped, so TP-axis collectives (RMS-norm, MLA, dense-FFN,
+            # shared-expert, gate) ring while the SP-axis MoE dispatch/combine stay a line — a scalar
+            # Ring here would deadlock dispatch/combine on a non-existent row wrap link.
+            # Run with TT_VISIBLE_DEVICES (16 chips) + TT_MESH_GRAPH_DESC_PATH=...subtorus_x4...
+            (ttnn.Topology.Linear, ttnn.Topology.Ring),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -996,15 +1050,14 @@ def test_glm_prefill_block(
         # num_layers=layer_num) gets a valid count, not the None default.
         layer_num=1,
     )
-    kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
+    kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BF16_RM,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=seq_len,
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
     # Sparse (DSA) MLA single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0):
     # it uses the indexed rope tables and a caller-owned indexer key cache, exactly like the chunked path.

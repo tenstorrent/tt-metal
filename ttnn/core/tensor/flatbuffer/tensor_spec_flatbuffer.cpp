@@ -10,7 +10,7 @@ CoreRangeSet from_flatbuffer(const flatbuffer::CoreRangeSet* core_range_set) {
     std::vector<CoreRange> ranges;
     for (const auto* range : *core_range_set->ranges()) {
         ranges.emplace_back(
-            CoreCoord{range->start()->x(), range->start()->y()}, CoreCoord{range->end()->x(), range->end()->y()});
+            tt::tt_metal::CoreCoord{range->start()->x(), range->start()->y()}, tt::tt_metal::CoreCoord{range->end()->x(), range->end()->y()});
     }
     return CoreRangeSet{ranges};
 }

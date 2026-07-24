@@ -17,8 +17,8 @@
 namespace ttnn::experimental::core_subset_write {
 
 void copy_to_device_filtered(
-    const tt::tt_metal::Tensor& host_tensor,
-    tt::tt_metal::Tensor& device_tensor,
+    const ttnn::Tensor& host_tensor,
+    ttnn::Tensor& device_tensor,
     const tt::tt_metal::CoreRangeSet& logical_core_filter,
     std::optional<tt::tt_metal::QueueId> cq_id) {
     tt::tt_metal::GraphTracker::instance().track_function_start(
@@ -29,7 +29,7 @@ void copy_to_device_filtered(
         "copy_to_device_filtered does not support non-uniform host->device writes.");
     tt::tt_metal::experimental::core_subset_write::enqueue_write_tensor(
         cq, host_tensor.host_tensor(), device_tensor.device_storage().get_mesh_tensor(), logical_core_filter);
-    device_tensor = tt::tt_metal::set_tensor_id(device_tensor);
+    device_tensor = ttnn::set_tensor_id(device_tensor);
     tt::tt_metal::GraphTracker::instance().track_function_end(device_tensor);
 }
 

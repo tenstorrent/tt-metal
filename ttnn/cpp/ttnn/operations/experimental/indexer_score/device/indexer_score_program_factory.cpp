@@ -60,7 +60,7 @@ constexpr uint32_t writer_straddle_jump_tiles = 1 + 9;
 //       (chunk_global - chunk_local) tiles at q-row (chunk_local - offset).
 // The linear form only misses (a) when boundary_chip != 0 -- exactly the mid-slab, non-chip-0-start case
 // (e.g. the multi-turn rotated prefill). Chunk-aligned (offset == 0, boundary_chip == 0) reduces to linear.
-// No block_cyclic -> plain linear. The both-axes case (cluster_axis unset, block_cyclic_chunk_local == tp*Sq)
+// No block_cyclic -> plain linear. The both-axes case (seq_shard_axes=[], block_cyclic_chunk_local == tp*Sq)
 // keeps the prior linear+straddle form. Shared by create_at (device_index from the coordinate) and override
 // (stored device_index).
 struct DeviceCausalGeometry {
@@ -83,10 +83,10 @@ inline DeviceCausalGeometry device_causal_geometry(
     const uint32_t chunk_local = args.block_cyclic->chunk_local;  // cache per-shard slab width (elements)
     const uint32_t chunk_global = sp * chunk_local;
 
-    if (args.cluster_axis.has_value()) {
+    if (args.sp_axis().has_value()) {
         TT_FATAL(
             device_index < sp,
-            "indexer_score: device_index {} out of range for block-cyclic sp={} (check cluster_axis vs "
+            "indexer_score: device_index {} out of range for block-cyclic sp={} (check seq_shard_axes[0] vs "
             "block_cyclic_sp_axis)",
             device_index,
             sp);
@@ -112,7 +112,7 @@ inline DeviceCausalGeometry device_causal_geometry(
         return {logical_start / TW, straddle_q_tile, straddle_jump_tiles};
     }
 
-    // Both-axes (cluster_axis unset): prior linear + within-block straddle geometry.
+    // Both-axes (seq_shard_axes=[], SP axis unset): prior linear + within-block straddle geometry.
     const uint32_t chunk_start = args.chunk_start_idx + device_index * Sq;
     const uint32_t offset = chunk_start % chunk_local;
     uint32_t straddle_q_tile = 0, straddle_jump_tiles = 0;
@@ -129,7 +129,7 @@ inline uint32_t device_index_for(
     if (q.device_storage().get_coords().size() <= 1) {
         return 0;
     }
-    return ttnn::ccl::get_linearized_index_from_physical_coord(q, coord, args.cluster_axis);
+    return ttnn::ccl::get_linearized_index_from_physical_coord(q, coord, args.sp_axis());
 }
 
 // Patch one runtime-arg slot on a program-cache hit, asserting the slot exists.
@@ -175,13 +175,12 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     const uint32_t T = k.logical_shape()[2];
 
     // This device's SP-ring index and chunk_start (tiles), from the coordinate. chunk_t is a compute RUNTIME
-    // arg, so the binary is identical across coords and steps. tp_index = its rank along seq_subshard_axis
-    // (the 2D SP×TP query sub-shard); 0 when not sub-sharded or single-device.
+    // arg, so the binary is identical across coords and steps. tp_index = its rank along the TP axis
+    // (seq_shard_axes[1], the 2D SP×TP query sub-shard); 0 when not sub-sharded or single-device.
     const uint32_t device_index = device_index_for(args, coord, q);
-    const uint32_t tp_index =
-        (args.seq_subshard_axis.has_value() && q.device_storage().get_coords().size() > 1)
-            ? ttnn::ccl::get_linearized_index_from_physical_coord(q, coord, args.seq_subshard_axis)
-            : 0u;
+    const uint32_t tp_index = (args.tp_axis().has_value() && q.device_storage().get_coords().size() > 1)
+                                  ? ttnn::ccl::get_linearized_index_from_physical_coord(q, coord, args.tp_axis())
+                                  : 0u;
     const auto geom = device_causal_geometry(args, device_index, tp_index, Sq);
     const uint32_t chunk_t = geom.chunk_start_tiles;
 

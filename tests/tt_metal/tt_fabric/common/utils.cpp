@@ -19,8 +19,10 @@
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <optional>
 #include <set>
@@ -530,6 +532,134 @@ void check_asic_mapping_against_golden(const std::string& test_name, const std::
     if (!comparison_result) {
         FAIL() << "ASIC mapping file mismatch detected on rank " << rank
                << ". Test must fail when mappings don't match golden reference.";
+    }
+}
+
+bool compare_intermesh_port_assignment_files(
+    const std::filesystem::path& generated_file, const std::filesystem::path& golden_file) {
+    if (!std::filesystem::exists(generated_file) || !std::filesystem::exists(golden_file)) {
+        return false;
+    }
+    try {
+        // Both files are pre-sorted and host-independent, so a canonical YAML re-emit + string compare is
+        // sufficient (and robust to insignificant whitespace differences).
+        YAML::Emitter gen_emitter;
+        gen_emitter << YAML::LoadFile(generated_file.string());
+        YAML::Emitter gold_emitter;
+        gold_emitter << YAML::LoadFile(golden_file.string());
+        return std::string(gen_emitter.c_str()) == std::string(gold_emitter.c_str());
+    } catch (const std::exception& e) {
+        log_error(tt::LogTest, "Failed to compare inter-mesh port assignment files: {}", e.what());
+        return false;
+    }
+}
+
+void check_intermesh_port_assignment_against_golden(const std::string& golden_name) {
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    // Only compare in mock tests (real-device port assignment is hardware-specific).
+    if (!rtoptions.get_mock_enabled()) {
+        return;
+    }
+    const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    int world_size = *distributed_context->size();
+    int rank = *distributed_context->rank();
+
+    std::filesystem::path root_dir = rtoptions.get_root_dir();
+    std::filesystem::path fabric_dir = root_dir / "generated" / "fabric";
+
+    // Each rank writes only its own local mesh's channels. Wait for every rank to finish before rank 0
+    // aggregates the per-rank files into the complete, all-mesh assignment (mock runs place all ranks on one
+    // node, so rank 0 can read every sibling file).
+    distributed_context->barrier();
+    if (rank != 0) {
+        return;
+    }
+
+    // Merge every per-rank file into one all-mesh map, covering both the inter-mesh port assignment and (if
+    // present) the intra-mesh channel assignment. A single mesh can span multiple host ranks, and each such rank
+    // writes the same "M{a}->M{b}" key holding only its own chips' ports. Overwriting on collision would keep just
+    // the last file read and silently drop every other rank's ports, so concatenate the inner sequences instead,
+    // then sort + dedup for a deterministic result independent of file-read order.
+    auto merge_seq_into = [](YAML::Node& dst_map, const std::string& key, const YAML::Node& src_seq) {
+        if (!src_seq.IsSequence()) {
+            return;
+        }
+        std::vector<std::string> entries;
+        if (YAML::Node existing = dst_map[key]; existing && existing.IsSequence()) {
+            for (const auto& e : existing) {
+                entries.push_back(e.as<std::string>());
+            }
+        }
+        for (const auto& e : src_seq) {
+            entries.push_back(e.as<std::string>());
+        }
+        std::sort(entries.begin(), entries.end());
+        entries.erase(std::unique(entries.begin(), entries.end()), entries.end());
+        YAML::Node merged(YAML::NodeType::Sequence);
+        // Match the per-rank writer's flow style so the merged/regoldened file stays byte-stable.
+        merged.SetStyle(YAML::EmitterStyle::Flow);
+        for (const auto& e : entries) {
+            merged.push_back(e);
+        }
+        dst_map[key] = merged;
+    };
+
+    YAML::Node merged_intermesh(YAML::NodeType::Map);
+    YAML::Node merged_intramesh(YAML::NodeType::Map);
+    for (int r = 1; r <= world_size; ++r) {
+        std::filesystem::path f = fabric_dir / ("intermesh_port_assignment_rank_" + std::to_string(r) + "_of_" +
+                                                std::to_string(world_size) + ".yaml");
+        if (!std::filesystem::exists(f)) {
+            continue;
+        }
+        YAML::Node doc = YAML::LoadFile(f.string());
+        if (YAML::Node inter = doc["intermesh_port_assignment"]; inter && inter.IsMap()) {
+            for (auto it = inter.begin(); it != inter.end(); ++it) {
+                merge_seq_into(merged_intermesh, it->first.as<std::string>(), it->second);
+            }
+        }
+        if (YAML::Node intra = doc["intramesh_channel_assignment"]; intra && intra.IsMap()) {
+            for (auto it = intra.begin(); it != intra.end(); ++it) {
+                merge_seq_into(merged_intramesh, it->first.as<std::string>(), it->second);
+            }
+        }
+    }
+    YAML::Node combined(YAML::NodeType::Map);
+    combined["intermesh_port_assignment"] = merged_intermesh;
+    if (merged_intramesh.size() > 0) {
+        combined["intramesh_channel_assignment"] = merged_intramesh;
+    }
+    std::filesystem::path combined_file =
+        fabric_dir / ("intermesh_port_assignment_ALL_of_" + std::to_string(world_size) + ".yaml");
+    {
+        YAML::Emitter em;
+        em << combined;
+        std::ofstream o(combined_file);
+        o << em.c_str();
+    }
+
+    std::filesystem::path golden_file =
+        root_dir / "tests" / "tt_metal" / "tt_fabric" / "golden_mapping_files" / (golden_name + ".yaml");
+
+    // Regolden mode (TT_METAL_REGOLDEN=1): overwrite the golden with this run's merged all-mesh assignment.
+    if (const char* regolden_env = std::getenv("TT_METAL_REGOLDEN");
+        regolden_env != nullptr && regolden_env[0] != '\0') {
+        std::filesystem::create_directories(golden_file.parent_path());
+        std::filesystem::copy_file(combined_file, golden_file, std::filesystem::copy_options::overwrite_existing);
+        log_info(tt::LogTest, "Regoldened {} -> {}", combined_file.string(), golden_file.string());
+        return;
+    }
+
+    if (!std::filesystem::exists(golden_file)) {
+        FAIL() << "Golden inter-mesh port assignment file does not exist: " << golden_file.string()
+               << ". See tests/tt_metal/tt_fabric/golden_mapping_files/README.md.";
+    }
+    bool comparison_result = compare_intermesh_port_assignment_files(combined_file, golden_file);
+    EXPECT_TRUE(comparison_result) << "Inter-mesh port assignment mismatch vs golden " << golden_name
+                                   << ". This usually means the port-determination result changed (or became "
+                                      "host-dependent).";
+    if (!comparison_result) {
+        FAIL() << "Inter-mesh port assignment mismatch detected (golden: " << golden_name << ").";
     }
 }
 

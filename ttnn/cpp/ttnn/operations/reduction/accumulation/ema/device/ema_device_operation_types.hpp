@@ -12,7 +12,7 @@ namespace ttnn::prim {
 
 struct EmaParams {
     float alpha{};
-    CoreCoord grid_size;
+    tt::tt_metal::CoreCoord grid_size;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };

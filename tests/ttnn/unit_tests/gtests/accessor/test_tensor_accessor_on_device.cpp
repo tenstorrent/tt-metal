@@ -49,8 +49,9 @@ static void test_single_core_reshard(
                                          ? MemoryConfig(params.output_buffer_type, params.output_shard_spec)
                                          : MemoryConfig(TensorMemoryLayout::INTERLEAVED, params.output_buffer_type);
 
-    TensorSpec input_spec(params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), input_mem_config));
-    TensorSpec output_spec(
+    tt::tt_metal::TensorSpec input_spec(
+        params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), input_mem_config));
+    tt::tt_metal::TensorSpec output_spec(
         params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), output_mem_config));
 
     const auto src = tt::test_utils::generate_uniform_random_vector<T>(0, UINT8_MAX, params.tensor_shape.volume());
@@ -146,7 +147,8 @@ static void test_multi_core_copy(
     const std::string& kernel_path,
     const std::map<std::string, std::string>& defines = {}) {
     MemoryConfig input_mem_config = MemoryConfig(params.buffer_type, params.input_shard_spec);
-    TensorSpec input_spec(params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), input_mem_config));
+    tt::tt_metal::TensorSpec input_spec(
+        params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), input_mem_config));
 
     const auto src = tt::test_utils::generate_uniform_random_vector<T>(0, UINT8_MAX, params.tensor_shape.volume());
 
@@ -214,7 +216,8 @@ static void test_multi_core_interleaved_copy(
     const std::map<std::string, std::string>& defines = {}) {
     // Create interleaved memory config
     MemoryConfig mem_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, params.buffer_type);
-    TensorSpec tensor_spec(params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), mem_config));
+    tt::tt_metal::TensorSpec tensor_spec(
+        params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), mem_config));
 
     const auto src = tt::test_utils::generate_uniform_random_vector<T>(0, UINT8_MAX, params.tensor_shape.volume());
 
@@ -319,7 +322,8 @@ static void test_single_core_copy(
     // Create memory config based on whether it's interleaved or sharded
     MemoryConfig mem_config = is_interleaved ? MemoryConfig(TensorMemoryLayout::INTERLEAVED, params.buffer_type)
                                              : MemoryConfig(params.buffer_type, params.input_shard_spec);
-    TensorSpec tensor_spec(params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), mem_config));
+    tt::tt_metal::TensorSpec tensor_spec(
+        params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), mem_config));
 
     const auto src = tt::test_utils::generate_uniform_random_vector<T>(0, UINT8_MAX, params.tensor_shape.volume());
 
@@ -410,7 +414,8 @@ template <typename T>
 static void test_single_core_copy_abstract_wrapper(
     const CopyParams& params, tt::tt_metal::distributed::MeshDevice* mesh_device) {
     MemoryConfig mem_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, params.buffer_type);
-    TensorSpec tensor_spec(params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), mem_config));
+    tt::tt_metal::TensorSpec tensor_spec(
+        params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), mem_config));
 
     const auto src = tt::test_utils::generate_uniform_random_vector<T>(0, UINT8_MAX, params.tensor_shape.volume());
 
@@ -1227,7 +1232,7 @@ TEST_F(TensorAccessorArgsConstructorTests, MeshTensorConstructorEquivalentToMesh
         tt::tt_metal::Shape{64, 64},
         tt::tt_metal::TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config));
 
-    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec, TensorTopology());
+    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec, tt::tt_metal::TensorTopology());
 
     const auto args_from_mesh_tensor = TensorAccessorArgs(mesh_tensor);
     const auto args_from_mesh_buffer = TensorAccessorArgs(mesh_tensor.mesh_buffer());
@@ -1243,7 +1248,7 @@ TEST_F(TensorAccessorArgsConstructorTests, MeshTensorConstructorEquivalentToMesh
         tt::tt_metal::Shape{64, 128},
         tt::tt_metal::TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config));
 
-    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec, TensorTopology());
+    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec, tt::tt_metal::TensorTopology());
 
     const auto args_from_mesh_tensor = TensorAccessorArgs(mesh_tensor);
     const auto args_from_mesh_buffer = TensorAccessorArgs(mesh_tensor.mesh_buffer());
@@ -1265,7 +1270,7 @@ TEST_F(TensorAccessorArgsConstructorTests, MeshTensorConstructorEquivalentToMesh
         tt::tt_metal::Shape{4, 6, 64, 64},
         tt::tt_metal::TensorLayout(DataType::UINT16, PageConfig(Layout::TILE), mem_config));
 
-    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec, TensorTopology());
+    auto mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec, tt::tt_metal::TensorTopology());
 
     const auto args_from_mesh_tensor = TensorAccessorArgs(mesh_tensor);
     const auto args_from_mesh_buffer = TensorAccessorArgs(mesh_tensor.mesh_buffer());

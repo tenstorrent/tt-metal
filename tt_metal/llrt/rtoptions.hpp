@@ -80,7 +80,7 @@ extern const char* RunTimeDebugClassNames[RunTimeDebugClassCount];
 // TargetSelection stores the targets for a given debug feature. I.e. for which chips, cores, harts
 // to enable the feature.
 struct TargetSelection {
-    std::map<CoreType, std::vector<CoreCoord>> cores;
+    std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>> cores;
     std::map<CoreType, int> all_cores;
     bool enabled{};
     std::vector<int> chip_ids;
@@ -254,6 +254,9 @@ class RunTimeOptions {
     bool enable_hw_cache_invalidation = false;
 
     tt_metal::DispatchCoreType dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
+
+    // Quasar interim path: dispatch cores from core descriptor YAML (Tensix grid) instead of soc dispatch-engine tiles.
+    bool use_quasar_tensix_dispatch_cores = false;
 
     std::filesystem::path simulator_path = "";
 
@@ -505,10 +508,10 @@ public:
     bool get_feature_enabled(RunTimeDebugFeatures feature) const { return feature_targets[feature].enabled; }
     void set_feature_enabled(RunTimeDebugFeatures feature, bool enabled) { feature_targets[feature].enabled = enabled; }
     // Note: dprint cores are logical
-    const std::map<CoreType, std::vector<CoreCoord>>& get_feature_cores(RunTimeDebugFeatures feature) const {
+    const std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>>& get_feature_cores(RunTimeDebugFeatures feature) const {
         return feature_targets[feature].cores;
     }
-    void set_feature_cores(RunTimeDebugFeatures feature, std::map<CoreType, std::vector<CoreCoord>> cores) {
+    void set_feature_cores(RunTimeDebugFeatures feature, std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>> cores) {
         feature_targets[feature].cores = std::move(cores);
     }
     // An alternative to setting cores by range, a flag to enable all.
@@ -519,8 +522,8 @@ public:
         return feature_targets[feature].all_cores.at(core_type);
     }
     // Note: core range is inclusive
-    void set_feature_core_range(RunTimeDebugFeatures feature, CoreCoord start, CoreCoord end, CoreType core_type) {
-        feature_targets[feature].cores[core_type] = std::vector<CoreCoord>();
+    void set_feature_core_range(RunTimeDebugFeatures feature, tt::tt_metal::CoreCoord start, tt::tt_metal::CoreCoord end, CoreType core_type) {
+        feature_targets[feature].cores[core_type] = std::vector<tt::tt_metal::CoreCoord>();
         for (uint32_t x = start.x; x <= end.x; x++) {
             for (uint32_t y = start.y; y <= end.y; y++) {
                 feature_targets[feature].cores[core_type].push_back({x, y});
@@ -697,6 +700,9 @@ public:
     bool get_fast_dispatch() const { return fast_dispatch; }
 
     void set_fast_dispatch(bool enable) { fast_dispatch = enable; }
+
+    // If this fallback is removed, should also remove dispatch_cores entry from core descriptor YAML files.
+    bool get_use_quasar_tensix_dispatch_cores() const { return use_quasar_tensix_dispatch_cores; }
 
     bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
 

@@ -251,7 +251,7 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
             shard_cores, {1, per_expert_total_tokens_row_elements}, tt::tt_metal::ShardOrientation::ROW_MAJOR),
     };
 
-    auto tilize_per_expert_total_tokens_spec = TensorSpec(
+    auto tilize_per_expert_total_tokens_spec = tt::tt_metal::TensorSpec(
         tilize_per_expert_total_tokens_shape,
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
@@ -266,7 +266,7 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
     uint32_t activation_row_bytes = tt::align(activation_row_elements * sizeof(uint32_t), l1_alignment);
     uint32_t activation_total_bytes = total_tokens * activation_row_bytes;
     auto tilize_expert_activation_shape = ttnn::Shape({1, activation_total_bytes / sizeof(uint32_t)});
-    auto tilize_expert_activation_spec = TensorSpec(
+    auto tilize_expert_activation_spec = tt::tt_metal::TensorSpec(
         tilize_expert_activation_shape,
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
@@ -280,7 +280,7 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
     uint32_t e_t_row_bytes = (total_tokens + 1) * tt::align(sizeof(uint32_t), l1_alignment);
     uint32_t e_t_row_elements = e_t_row_bytes / sizeof(uint32_t);
     auto tilize_e_t_shape = ttnn::Shape({experts_per_device, e_t_row_elements});
-    auto tilize_e_t_spec = TensorSpec(
+    auto tilize_e_t_spec = tt::tt_metal::TensorSpec(
         Shape(tilize_e_t_shape),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
@@ -306,7 +306,7 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
 
     auto tilize_output_shape =
         ttnn::Shape({shard_cores.num_cores(), detail::DOUBLE_BUFFER_SIZE, detail::TOKEN_SIZE, hidden_size});
-    auto tilize_output_spec = TensorSpec(
+    auto tilize_output_spec = tt::tt_metal::TensorSpec(
         Shape(tilize_output_shape),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
@@ -325,7 +325,7 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
     const auto& tilize_output_layout = tilize_output_spec.tensor_layout();
     const tt::tt_metal::TensorLayout matmul_output_layout(
         tilize_output_layout.get_data_type(), ROW_MAJOR_LAYOUT, tilize_output_layout.get_memory_config());
-    const auto matmul_output_spec = TensorSpec(tilize_output_shape, matmul_output_layout);
+    const auto matmul_output_spec = tt::tt_metal::TensorSpec(tilize_output_shape, matmul_output_layout);
 
     //-------------------------------------------------------------------------
     // a2a combine output
@@ -365,13 +365,13 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
 
 MoEComputeDeviceOperation::tensor_return_value_t MoEComputeDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const std::vector<ttnn::TensorSpec>& output_specs = compute_output_specs(args, tensor_args);
+    const std::vector<tt::tt_metal::TensorSpec>& output_specs = compute_output_specs(args, tensor_args);
 
     const auto tilize_output_tensor = create_device_tensor(output_specs[3], tensor_args.tilize_input_tensor.device());
 
     // re-percieve tilize output tensor as RM for output
     const auto matmul_output_tensor =
-        tt::tt_metal::unchecked_reinterpret_layout(tilize_output_tensor, tt::tt_metal::Layout::ROW_MAJOR);
+        ttnn::unchecked_reinterpret_layout(tilize_output_tensor, tt::tt_metal::Layout::ROW_MAJOR);
     TT_FATAL(
         matmul_output_tensor.tensor_spec() == output_specs[4],
         "Reinterpreted tensor spec does not match expected output_specs[4]");

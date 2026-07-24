@@ -59,8 +59,8 @@ void bind_pad(nb::module_& mod) {
         ttnn::overload_t(
             nb::overload_cast<
                 const ttnn::Tensor&,
-                const tt::tt_metal::Array4D&,
-                const tt::tt_metal::Array4D&,
+                const ttnn::Array4D&,
+                const ttnn::Array4D&,
                 float,
                 bool,
                 const std::optional<MemoryConfig>&,

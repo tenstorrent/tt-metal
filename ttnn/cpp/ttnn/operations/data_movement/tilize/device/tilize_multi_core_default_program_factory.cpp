@@ -22,11 +22,13 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
     const auto& a = tensor_args.input_tensor;
     const Tensor& output = tensor_return_value;
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
+    const uint32_t tile_width = operation_attributes.tile.get_width();
+    const uint32_t tile_height = operation_attributes.tile.get_height();
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
+    uint32_t input_single_tile_size = operation_attributes.tile.get_tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t output_single_tile_size = operation_attributes.tile.get_tile_size(output_cb_data_format);
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
                         output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
 
@@ -36,7 +38,7 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
 
     auto logical_shape = a.logical_shape();
     uint32_t logical_width = logical_shape[-1];
-    uint32_t ntiles_per_block = tt::div_up(logical_width, TILE_WIDTH);
+    uint32_t ntiles_per_block = tt::div_up(logical_width, tile_width);
     uint32_t ntiles = dst_buffer->num_pages();
     uint32_t nblocks = tt::div_up(ntiles, ntiles_per_block);
     auto* device = a.device();
@@ -53,6 +55,8 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
 
     ProgramDescriptor desc;
 
+    const TileDescriptor tile_descriptor(operation_attributes.tile);
+
     desc.cbs.push_back(CBDescriptor{
         .total_size = ntiles_per_block * input_single_tile_size,
         .core_ranges = all_cores,
@@ -60,6 +64,7 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
+            .tile = tile_descriptor,
         }}},
     });
 
@@ -70,13 +75,13 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(output_cb_index),
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
+            .tile = tile_descriptor,
         }}},
     });
 
     /** reader
      */
     uint32_t page_size = src0_buffer->page_size();
-    uint32_t aligned_page_size = src0_buffer->aligned_page_size();
     uint32_t num_pages_in_row = 1;
     uint32_t size_of_valid_data_in_last_page_in_row = page_size;
     if (a.is_sharded()) {
@@ -89,8 +94,7 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
             (a.logical_shape()[-1] * a.element_size());  // Compute padding size for the last page in the row.
         size_of_valid_data_in_last_page_in_row = page_size - padding_size;
     }
-    std::vector<uint32_t> reader_ct_args = {
-        aligned_page_size, num_pages_in_row, size_of_valid_data_in_last_page_in_row};
+    std::vector<uint32_t> reader_ct_args = {tile_height, num_pages_in_row, size_of_valid_data_in_last_page_in_row};
     TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
 
     KernelDescriptor reader_desc;
@@ -168,7 +172,7 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
         reader_desc.emplace_runtime_args(
             core,
             {src0_buffer,
-             nblocks_per_core * TILE_HEIGHT,
+             nblocks_per_core * tile_height,
              page_size,
              ntiles_per_block,
              page_size,
@@ -185,7 +189,7 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
              tile_start_id});                      // start id
 
         tile_start_id += ntiles_per_block * nblocks_per_core;
-        page_start_id += TILE_HEIGHT * nblocks_per_core * num_pages_in_row;
+        page_start_id += tile_height * nblocks_per_core * num_pages_in_row;
     }
     if (has_cliff) {
         // the last core is a cliff core with nblocks_per_core_cliff blocks
@@ -195,7 +199,7 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
         reader_desc.emplace_runtime_args(
             core,
             {src0_buffer,
-             nblocks_per_core_cliff * TILE_HEIGHT,
+             nblocks_per_core_cliff * tile_height,
              page_size,
              ntiles_per_block,
              page_size,

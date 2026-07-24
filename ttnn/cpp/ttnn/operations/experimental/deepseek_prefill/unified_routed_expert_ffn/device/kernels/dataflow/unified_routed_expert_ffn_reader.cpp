@@ -182,6 +182,31 @@ void kernel_main() {
     constexpr auto start_args = TensorAccessorArgs<start_accessor_offset>();
     const auto start_acc = TensorAccessor(start_args, start_addr);
 
+#ifdef FUSE_BIAS
+    // gpt-oss expert biases. RT addrs immediately follow start_addr; CT bias CB
+    // ids + accessors follow the start accessor. Read once (below), added by the
+    // compute kernel (gate/up before the activation, down after the down matmul).
+    const uint32_t gate_bias_addr = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * GRID_X_NOC + 1);
+    const uint32_t up_bias_addr = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * GRID_X_NOC + 2);
+    const uint32_t down_bias_addr = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * GRID_X_NOC + 3);
+    constexpr uint32_t bias_cb_offset = start_args.next_compile_time_args_offset();
+    constexpr uint32_t cb_gate_bias = get_compile_time_arg_val(bias_cb_offset + 0);
+    constexpr uint32_t cb_up_bias = get_compile_time_arg_val(bias_cb_offset + 1);
+    constexpr uint32_t cb_down_bias = get_compile_time_arg_val(bias_cb_offset + 2);
+    constexpr uint32_t gate_bias_accessor_offset = bias_cb_offset + 3;
+    constexpr auto gate_bias_args = TensorAccessorArgs<gate_bias_accessor_offset>();
+    const auto gate_bias_acc = TensorAccessor(gate_bias_args, gate_bias_addr, get_tile_size(cb_gate_bias));
+    constexpr uint32_t up_bias_accessor_offset = gate_bias_args.next_compile_time_args_offset();
+    constexpr auto up_bias_args = TensorAccessorArgs<up_bias_accessor_offset>();
+    const auto up_bias_acc = TensorAccessor(up_bias_args, up_bias_addr, get_tile_size(cb_up_bias));
+    constexpr uint32_t down_bias_accessor_offset = up_bias_args.next_compile_time_args_offset();
+    constexpr auto down_bias_args = TensorAccessorArgs<down_bias_accessor_offset>();
+    const auto down_bias_acc = TensorAccessor(down_bias_args, down_bias_addr, get_tile_size(cb_down_bias));
+    CircularBuffer cb_gate_bias_obj(cb_gate_bias);
+    CircularBuffer cb_up_bias_obj(cb_up_bias);
+    CircularBuffer cb_down_bias_obj(cb_down_bias);
+#endif
+
     // D2.0 NoC handles. `noc` uses default noc_index for mcasts/sem ops.
     // `noc_read` forces NoC 0 for DRAM weight/page reads — the kernel issues
     // those concurrently with mcast traffic on the kernel's default NoC for
@@ -330,6 +355,56 @@ void kernel_main() {
 
     // UP_SPLIT handshake counter, kept in lockstep with the writer's.
     uint32_t up_seq = 0;
+
+#ifdef FUSE_BIAS
+    // Read this core's N-column slice of the (1, N) biases ONCE (constant across
+    // chunks; the compute kernel wait_fronts without popping). Bias is a single
+    // tile-row tensor, so the DRAM page index == tile column. Phantom columns
+    // (col >= actual N) are zero-filled — their output columns are dropped by
+    // the writer / are already zero.
+    {
+        const uint32_t gbias_tb = get_tile_size(cb_gate_bias);
+        cb_gate_bias_obj.reserve_back(per_core_N_gu);
+        cb_up_bias_obj.reserve_back(per_core_N_gu);
+        uint32_t lg = cb_gate_bias_obj.get_write_ptr();
+        uint32_t lu = cb_up_bias_obj.get_write_ptr();
+        for (uint32_t n = 0; n < per_core_N_gu; ++n) {
+            const uint32_t col = my_nt_gu * per_core_N_gu + n;
+            if (col < N_gate_tiles_full) {
+                noc_read.async_read(gate_bias_acc, CoreLocalMem<uint32_t>(lg), gbias_tb, {.page_id = col}, {});
+                noc_read.async_read(up_bias_acc, CoreLocalMem<uint32_t>(lu), gbias_tb, {.page_id = col}, {});
+            } else {
+                volatile tt_l1_ptr uint64_t* pg = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(lg);
+                volatile tt_l1_ptr uint64_t* pu = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(lu);
+                for (uint32_t i = 0; i < gbias_tb / 8; ++i) {
+                    pg[i] = 0;
+                    pu[i] = 0;
+                }
+            }
+            lg += gbias_tb;
+            lu += gbias_tb;
+        }
+        const uint32_t dbias_tb = get_tile_size(cb_down_bias);
+        cb_down_bias_obj.reserve_back(per_core_N_d);
+        uint32_t ld = cb_down_bias_obj.get_write_ptr();
+        for (uint32_t n = 0; n < per_core_N_d; ++n) {
+            const uint32_t col = my_nt_d * per_core_N_d + n;
+            if (col < N_down_tiles_full) {
+                noc_read.async_read(down_bias_acc, CoreLocalMem<uint32_t>(ld), dbias_tb, {.page_id = col}, {});
+            } else {
+                volatile tt_l1_ptr uint64_t* pd = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(ld);
+                for (uint32_t i = 0; i < dbias_tb / 8; ++i) {
+                    pd[i] = 0;
+                }
+            }
+            ld += dbias_tb;
+        }
+        noc_read.async_read_barrier();
+        cb_gate_bias_obj.push_back(per_core_N_gu);
+        cb_up_bias_obj.push_back(per_core_N_gu);
+        cb_down_bias_obj.push_back(per_core_N_d);
+    }
+#endif
 
     // Bound the chunk loop by effective_chunks (= ceil_div(count, chunk_M_tiles))
     // so this expert only does work proportional to its actual token count,

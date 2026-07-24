@@ -90,7 +90,7 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec UnaryDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.output_tensor.has_value()) {
         return tensor_args.output_tensor->tensor_spec();
@@ -116,7 +116,7 @@ TensorSpec UnaryDeviceOperation::compute_output_specs(
             }
         }
 
-        return TensorSpec(
+        return tt::tt_metal::TensorSpec(
             output_shape,
             TensorLayout(
                 args.output_dtype,
@@ -125,7 +125,7 @@ TensorSpec UnaryDeviceOperation::compute_output_specs(
     }
 
     const auto output_layout = tensor_args.input.layout();
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout::fromPaddedShape(
             args.output_dtype,
@@ -146,8 +146,7 @@ Tensor UnaryDeviceOperation::create_output_tensors(
 ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    TT_FATAL(
-        tt::tt_metal::is_device_tensor(input_tensor), "Unary: Unexpected tensor type {}", input_tensor.storage_type());
+    TT_FATAL(ttnn::is_device_tensor(input_tensor), "Unary: Unexpected tensor type {}", input_tensor.storage_type());
 
     const auto output_spec = compute_output_specs(attributes, tensor_args);
     const auto shard_specs = get_shard_specs(input_tensor.tensor_spec(), output_spec);

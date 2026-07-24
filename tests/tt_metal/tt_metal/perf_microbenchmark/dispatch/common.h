@@ -35,6 +35,8 @@
 #include "tt_metal/impl/dispatch/system_memory_manager.hpp"
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "impl/dispatch/dispatch_engine_cores.hpp"
+#include "host_api/temp_quasar_api.hpp"
 
 namespace tt::tt_metal::tt_dispatch_tests::Common {
 
@@ -957,7 +959,86 @@ static_assert(SD_PREFETCHER_PAGE_BATCH_SIZE == 1);
 static constexpr uint32_t SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
 static constexpr uint32_t SD_PREFETCH_CMDDAT_PAGE_SIZE = 1u << SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE;
 static constexpr uint32_t SD_PREFETCH_CMDDAT_BLOCKS = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
-inline constexpr CoreCoord sd_prefetch_core = {0, 0};  // combined prefetch_hd
+inline CoreCoord sd_prefetch_core(const tt_metal::IDevice* device) {
+    return tt::tt_metal::detail::sd_cq_prefetch_core(device);
+}
+
+inline CoreCoord sd_spoof_prefetch_core(const tt_metal::IDevice* device) { return sd_prefetch_core(device); }
+
+inline CoreCoord sd_dispatch_core(const tt_metal::IDevice* device) {
+    return tt::tt_metal::detail::sd_cq_dispatch_core(device);
+}
+
+inline CoreCoord dispatch_core(const tt_metal::IDevice* device) { return sd_dispatch_core(device); }
+
+inline CoreCoord sd_virtual_core(const tt_metal::IDevice* device, const CoreCoord& logical_core) {
+    return tt::tt_metal::detail::sd_cq_virtual_core(device, logical_core);
+}
+
+inline tt::CoreType sd_cq_kernel_core_type(const tt_metal::IDevice* device) {
+    return tt::tt_metal::detail::resolve_sd_cq_kernel_core_type(device);
+}
+
+inline tt_metal::DataMovementProcessor prefetch_dm() {
+    return tt::tt_metal::detail::prefetch_dm_processor();
+}
+
+inline tt_metal::DataMovementProcessor dispatch_dm() {
+    return tt::tt_metal::detail::dispatch_dm_processor();
+}
+
+inline const tt_metal::DispatchMemMap& sd_dispatch_mem_map(const tt_metal::IDevice* device) {
+    return tt_metal::MetalContext::instance().dispatch_mem_map(sd_cq_kernel_core_type(device));
+}
+
+inline tt_metal::KernelHandle create_sd_cq_kernel(
+    tt_metal::Program& program,
+    tt_metal::IDevice* device,
+    const std::string& kernel_path,
+    const CoreCoord& logical_core,
+    [[maybe_unused]] tt_metal::DataMovementProcessor dm_processor,
+    const std::map<std::string, std::string>& defines,
+    const std::vector<uint32_t>& compile_args = {}) {
+    const tt::CoreType core_type = sd_cq_kernel_core_type(device);
+    if (core_type == tt::CoreType::DISPATCH) {
+        // Auto-assign free DMs by creation order (prefetch first -> DM0, dispatch -> DM1), matching
+        // the Quasar Tensix interim path. dm_processor is not used here.
+        return tt::tt_metal::detail::CreateDispatchEngineKernel(
+            program,
+            kernel_path,
+            logical_core,
+            tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1,
+                .compile_args = compile_args,
+                .defines = defines,
+                .is_legacy_kernel = true});
+    }
+    if (device->arch() == tt::ARCH::QUASAR) {
+        // Quasar interim Tensix path (TT_METAL_TENSIX_DISPATCH_CORES=1): the experimental API
+        // auto-assigns DMs by creation order (prefetch first -> DM0, dispatch -> DM1), matching the
+        // legacy behavior. dm_processor is not used here.
+        return tt::tt_metal::experimental::quasar::CreateKernel(
+            program,
+            kernel_path,
+            logical_core,
+            tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1,
+                .compile_args = compile_args,
+                .defines = defines,
+                .is_legacy_kernel = true});
+    }
+    // WH/BH: the legacy SD path placed every cq kernel on RISCV_0 / NOC_0 (prefetch and dispatch
+    // live on separate cores, so there is no contention). dm_processor is ignored here.
+    return tt_metal::CreateKernel(
+        program,
+        kernel_path,
+        {logical_core},
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::NOC_0,
+            .compile_args = compile_args,
+            .defines = defines});
+}
 
 // Quasar simulator exposes only 64 MB as physical DRAM memory; addresses above this alias back into the same physical
 // space even though the bank is configured as 1 GB. Code that places data in DRAM on Quasar must keep it within this 64
@@ -1238,7 +1319,7 @@ protected:
         // between test fixtures possibly because the previously issued commands
         // are not completed before next firmware launch
         HostMemDeviceCommand cmd(cmd_calc.write_offset_bytes());
-        cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+        cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, 0);
         dc.add_data(cmd.data(), cmd.size_bytes(), cmd.size_bytes());
         entry_sizes.push_back(cmd.size_bytes());
 
@@ -1285,13 +1366,6 @@ protected:
         }
     }
 };
-
-// Fixed core layout used by the SD spoof-prefetch execution path
-inline constexpr CoreCoord sd_spoof_prefetch_core = {0, 0};
-
-inline CoreCoord dispatch_core(const tt_metal::IDevice* device) {
-    return (device->arch() == tt::ARCH::QUASAR) ? CoreCoord{0, 0} : CoreCoord{4, 0};
-}
 
 // Builds the compile-time defines required by cq_dispatch.cpp for the SD (spoof-prefetch) path.
 // SD drives only the core dispatch fields; all fabric-mux, multi-CQ, go-signal, and downstream
@@ -1357,19 +1431,26 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
         {"HOST_COMPLETION_Q_WR_PTR",
          std::to_string(memmap.get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR))},
         {"DEV_COMPLETION_Q_WR_PTR",
-         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR))},
+         std::to_string(
+             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR, /*cq_id=*/0))},
         {"DEV_COMPLETION_Q_RD_PTR",
-         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD))},
+         std::to_string(
+             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD, /*cq_id=*/0))},
         {"DEV_DISPATCH_PROGRESS_PTR",
-         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS))},
+         std::to_string(
+             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS, /*cq_id=*/0))},
         {"REALTIME_PROFILER_MSG_ADDR",
-         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG))},
+         std::to_string(
+             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG, /*cq_id=*/0))},
         {"DISPATCH_TELEMETRY_ADDR",
-         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY))},
+         std::to_string(
+             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY, /*cq_id=*/0))},
         {"DISPATCH_TELEMETRY_CONTROL_ADDR",
-         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL))},
+         std::to_string(memmap.get_device_command_queue_addr(
+             CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL, /*cq_id=*/0))},
         {"DISPATCH_TELEMETRY_DISABLED", "1"},
         {"FIRST_STREAM_USED", std::to_string(memmap.get_dispatch_stream_index(0))},
+        {"COMPLETION_COUNTER_OFFSET", "0"},
         {"VIRTUALIZE_UNICAST_CORES", "0"},
         {"NUM_VIRTUAL_UNICAST_CORES", "0"},
         {"NUM_PHYSICAL_UNICAST_CORES", "0"},
@@ -1410,7 +1491,6 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual.y)},
         {"DOWNSTREAM_SUBORDINATE_NOC_X", "255"},
         {"DOWNSTREAM_SUBORDINATE_NOC_Y", "255"},
-        {"FD_CORE_TYPE", "0"},
         {"IS_D_VARIANT", "1"},
         {"IS_H_VARIANT", "1"},
     };
@@ -1440,11 +1520,11 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
     uint32_t downstream_cb_sem_id,
     uint32_t downstream_sync_sem_id,
     uint32_t entry_size,
+    uint32_t dispatch_telemetry_addr,
     const CoreCoord& phys_prefetch,
     const CoreCoord& phys_dispatch) {
     const auto my_virtual = device->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_prefetch);
     const auto downstream_virtual = device->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_dispatch);
-    const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map();
     return {
         {"MY_NOC_X", std::to_string(my_virtual.x)},
         {"MY_NOC_Y", std::to_string(my_virtual.y)},
@@ -1490,8 +1570,7 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"FABRIC_HEADER_RB_BASE", "0"},
         {"FABRIC_HEADER_RB_ENTRIES", "0"},
         {"MY_FABRIC_SYNC_STATUS_ADDR", "0"},
-        {"DISPATCH_TELEMETRY_ADDR",
-         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY))},
+        {"DISPATCH_TELEMETRY_ADDR", std::to_string(dispatch_telemetry_addr)},
         {"DISPATCH_TELEMETRY_DISABLED", "1"},
         {"FABRIC_MUX_X", "0"},
         {"FABRIC_MUX_Y", "0"},
@@ -1517,7 +1596,7 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"OFFSETOF_MY_DEV_ID", "0"},
         {"OFFSETOF_TO_DEV_ID", "1"},
         {"OFFSETOF_ROUTER_DIRECTION", "2"},
-        {"FD_CORE_TYPE", "0"},
+        {"DISPATCH_KERNEL", "1"},
         {"PREFETCH_Q_ENTRY_BITS", std::to_string(entry_size * 8)},
         // FABRIC_RELAY intentionally omitted - must be undefined for #if defined(FABRIC_RELAY) to be false
     };

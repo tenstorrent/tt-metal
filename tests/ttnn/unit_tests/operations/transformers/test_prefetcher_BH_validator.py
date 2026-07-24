@@ -117,8 +117,8 @@ def _setup_weight_and_gcb_dram_sender(device, K, N, dtype, recv_per_bank, num_la
         for b in range(num_dram_banks)
     ]
     gcb_size = _GCB_DEPTH_PAGES * push_page_size
-    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
-        device, bank_to_receivers, gcb_size, dual_senders_per_bank=dual_senders
+    gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(
+        device, bank_to_receivers, gcb_size, support_multi_receiver_shards=not dual_senders
     )
 
     num_iters_total = num_layers * ring_size
@@ -386,8 +386,8 @@ def _setup_weight_and_gcb_recv_contig(
             for b in range(num_dram_banks)
         ]
     gcb_size = _GCB_DEPTH_PAGES * push_page_size
-    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
-        device, bank_to_receivers, gcb_size, dual_senders_per_bank=dual_senders
+    gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(
+        device, bank_to_receivers, gcb_size, support_multi_receiver_shards=not dual_senders
     )
     num_iters_total = num_layers * ring_size
     return tt_weight, gcb, num_iters_total, push_page_size, ring_size
@@ -438,7 +438,7 @@ def test_validator_dram_sender_recv_contig(device, K, N, dtype, recv_per_bank, n
 
 @pytest.mark.parametrize("K,N,dtype,num_layers", [(448, 1792, ttnn.bfloat16, 2)])
 def test_validator_dram_sender_dual_single_receiver_bank(device, K, N, dtype, num_layers):
-    """dual_senders_per_bank=True with a single receiver per bank (recv_per_bank=1).
+    """support_multi_receiver_shards=False (dual senders) with a single receiver per bank (recv_per_bank=1).
 
     A single receiver cannot split across two senders, so every bank falls back to its
     primary sender and the mapping is identical to a single-sender GCB — previously this
@@ -550,7 +550,7 @@ def test_validator_dram_sender_recv_contig_page_size_switch(device):
     assert (ring_size * page_a) % page_b != 0
 
     gcb_size = ring_size * max(page_a, page_b)
-    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
+    gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(device, bank_to_receivers, gcb_size)
 
     with tensor_prefetcher_session(device):
         ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight_a, ring_size)], global_cb=gcb)

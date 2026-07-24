@@ -125,3 +125,54 @@ VERSION_CHECK_CMD
         "${mpi_extra_args[@]}" \
         bash -c "$version_check_cmd" _ "$TT_SMI_MIN_VERSION" "$KMD_MIN_VERSION" "$FW_MIN_VERSION"
 }
+
+# Runs check_cluster_versions and prints standard status messages, deciding whether the caller
+# should proceed. Distinguishes two failure modes from the check output:
+#   - a version below the required minimum  -> hard failure (return 1: caller should abort)
+#   - versions could not be read at all     -> can't verify, but don't block (yellow warning, return 0)
+# This keeps recovery/validation running when e.g. tt_fw_bundle_ver is transiently unreadable
+# (device busy) instead of failing the whole procedure. Returns 0 to proceed, 1 to abort.
+#
+# Usage: run_version_check_gate "$HOSTS" "$MPI_IF" [mpi_extra_args...]
+run_version_check_gate() {
+    local hosts="$1"
+    local mpi_if="$2"
+    shift 2
+    local mpi_extra_args=("$@")
+
+    local yellow=$'\033[1;33m'
+    local reset=$'\033[0m'
+
+    echo "Checking tt-smi/KMD/firmware versions on all hosts..."
+
+    local out rc
+    out=$(check_cluster_versions "$hosts" "$mpi_if" "${mpi_extra_args[@]}" 2>&1)
+    rc=$?
+    printf '%s\n' "$out"
+
+    # A genuine version-below-minimum is always a hard failure. Use a bash pattern match rather than
+    # a `... | grep -q` pipeline: under `set -o pipefail`, grep can close the pipe on an early match,
+    # the upstream printf gets SIGPIPE, and the pipeline returns non-zero, masking the match.
+    if [[ "$out" == *"< required"* ]]; then
+        echo ""
+        echo "Error: version check failed on one or more hosts (see above)."
+        echo "       Required: tt-smi >= $TT_SMI_MIN_VERSION, KMD >= $KMD_MIN_VERSION, firmware >= $FW_MIN_VERSION."
+        echo "       Re-run with --skip-version-check to bypass."
+        return 1
+    fi
+
+    # Otherwise a non-zero result means some version could not be read (e.g. tt_fw_bundle_ver busy).
+    # We can't verify the versions, but don't block the run — warn (yellow) and continue.
+    if [[ $rc -ne 0 ]]; then
+        printf '%s\n' ""
+        printf '%sWarning: could not read tool/driver/firmware versions on one or more hosts (see above).%s\n' "$yellow" "$reset"
+        printf '%s         Skipping the version check and continuing to the tests.%s\n' "$yellow" "$reset"
+        printf '%s         Pass --skip-version-check to skip this check explicitly.%s\n' "$yellow" "$reset"
+        printf '%s\n' ""
+        return 0
+    fi
+
+    echo "Version check passed on all hosts."
+    echo ""
+    return 0
+}

@@ -35,6 +35,8 @@ class Qwen36ModelArgs(ModelArgs):
             offline = os.getenv("HF_HUB_OFFLINE") == "1" or os.getenv("CI") == "true"
             os.environ["HF_MODEL"] = snapshot_download(hf_model, local_files_only=offline)
         super().__init__(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len, **kwargs)
+        if mesh_device is not None:
+            self.model_config["SAMPLING_AG_CONFIG"]["allow_force_argmax"] = True
 
         # Mirror CKPT_DIR -> checkpoint_dir for weight_cache_path / load_state_dict.
         self.checkpoint_dir = self.CKPT_DIR

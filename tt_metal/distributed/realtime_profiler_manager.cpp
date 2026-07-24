@@ -308,15 +308,15 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
     // HAL offsets are the same for all devices (same arch).
     const auto& hal = MetalContext::instance(context_id_).hal();
     const auto& factory = hal.get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX);
-    // realtime_profiler_msg_t lives in the REALTIME_PROFILER_MSG dispatch-core-local L1 region (reachable on dispatch
-    // cores and the reserved RT tensix).
+    // TODO: When realtime profiler is supported on Quasar, we'll need to pass in the command queue id(s) here.
     const auto& dispatch_mem_map = MetalContext::instance(context_id_).dispatch_mem_map();
+    // TODO: When realtime profiler is supported on Quasar, we'll need to pass in the command queue id(s).
     const uint32_t realtime_profiler_base_addr =
-        dispatch_mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG);
+        dispatch_mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG, /*cq_id=*/0);
     // RealtimeProfilerCoreL1 (ring + D2H sender config) sits past the dispatch carve-outs; the core is off the L1 bank
     // table so the allocator never lands here.
     const uint32_t rt_profiler_core_l1_base =
-        dispatch_mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+        dispatch_mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED, /*cq_id=*/0);
     const auto rt_profiler_core_l1_addrs = compute_rt_profiler_core_l1_addrs(rt_profiler_core_l1_base);
 
     // RT_PROFILER_SOCKET_CONFIG_SIZE has headroom over today's SocketSenderSize, but assert
