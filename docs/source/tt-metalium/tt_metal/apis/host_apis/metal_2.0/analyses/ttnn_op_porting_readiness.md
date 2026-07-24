@@ -53,7 +53,8 @@ One row per **(op, DeviceOperation, ProgramFactory variant)** — an op with sev
 - **`Device operation`** / **`Factory (variant)`** — which DeviceOperation and ProgramFactory the row describes.
 - **`Concept`** — the factory's *current* concept: `descriptor`, `WorkloadDescriptor`, `legacy device-op`, or `MetalV2` (already ported).
 - **`Custom hash (…)`** — declares a custom `compute_program_hash`?
-- **`Runtime-args update (…)`** — has the `get_dynamic_runtime_args` hook? (Possible only on `descriptor` / `WorkloadDescriptor` concepts — a cross-column invariant.)
+- **`Runtime-args update (get_dynamic_runtime_args)`** — has the deprecated `get_dynamic_runtime_args` hook? (Possible only on `descriptor` / `WorkloadDescriptor` concepts — a cross-column invariant.) A gate conjunct in `Is able to port?`, routed to **TTNN** (the hook is being retired). The hook lives on the *device-op* and may fire for only some of its factories — see the [audit cross-check](../ai/audit/metal2_audit.md#ttnn-factory-concept-prerequisite).
+- **`Override runtime args method? (PD and legacy)`** — has an `override_runtime_arguments` method (PD- or legacy-style)? A **separate** gate conjunct in `Is able to port?`: on a `descriptor`/PD op it blocks the port because Metal 2.0's `FactoryConcept` + this recipe don't support it yet, routed to the **Metal 2.0 side**. Distinct from the `get_dynamic_runtime_args` column above — the two are TTNN's successive runtime-arg-update mechanisms, gate for different reasons, and route to different owners.
 - **`Pybind descriptor (…)`** — pybinds factory / device-op internals (`create_descriptor`)?
 - **`Smuggled pointer (…)`** — an un-annotated pointer argument (a PD-migration bug); feeds `Is safe to port?`.
 - **`Is safe to port?`** — Diego's correctness call (`yes` / `no` / `warning` / blank): did the prior PD migration introduce a bug?
