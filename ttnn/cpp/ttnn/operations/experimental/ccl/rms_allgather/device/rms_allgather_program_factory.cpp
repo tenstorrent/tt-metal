@@ -247,13 +247,21 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     ////////////////////////////////////////////////////////////////////////////
     // block size for in0 (tensor a)
     uint32_t in0_block_tiles = block_wt;
-    // post_all_gather_stats_block_tiles
-    uint32_t post_all_gather_stats_block_tiles = 1;
-    uint32_t num_distributed_devices = 1;
-    if (stats.has_value()) {
-        post_all_gather_stats_block_tiles = stats.value().padded_shape()[-1] / TILE_WIDTH;
-        num_distributed_devices = post_all_gather_stats_block_tiles;
-    }
+    // Number of per-device E(x^2) partials averaged across the cluster axis. This is authoritative
+    // from ring_size (the device count on cluster_axis, from the mesh view), NOT inferred from the
+    // stats buffer width: reading it off the buffer silently collapses to 1 when the buffer is a
+    // single tile wide, disabling cross-device averaging (see validate_on_program_cache_miss, which
+    // asserts the buffer is exactly ring_size tiles wide).
+    uint32_t num_distributed_devices = ring_size;
+    // post_all_gather_stats_block_tiles sizes the globally-allocated cb_stats CB, which is mapped
+    // directly onto the stats buffer, so it must match the buffer's tile count. Validation
+    // guarantees that count equals ring_size.
+    uint32_t post_all_gather_stats_block_tiles = stats.value().padded_shape()[-1] / TILE_WIDTH;
+    TT_FATAL(
+        post_all_gather_stats_block_tiles == num_distributed_devices,
+        "fused_rms_minimal: stats buffer holds {} tiles but ring_size is {}; they must match.",
+        post_all_gather_stats_block_tiles,
+        num_distributed_devices);
 
     uint32_t in0_CB_size = in0_block_tiles * in_single_tile_size;
     // block size for in1 (tensor b)
