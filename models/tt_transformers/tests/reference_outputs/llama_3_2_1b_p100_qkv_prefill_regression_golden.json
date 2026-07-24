@@ -1,0 +1,15 @@
+{
+  "prompt": "Question: Is the sky blue? Answer with yes or no and give one short reason.",
+  "prompt_len": 53,
+  "tokens": [
+    9642,
+    271,
+    791,
+    13180,
+    8111,
+    6437,
+    1606,
+    315
+  ],
+  "decoded": "Yes\n\nThe sky appears blue because of"
+}
