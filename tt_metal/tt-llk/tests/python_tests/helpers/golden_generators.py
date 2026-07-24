@@ -3044,6 +3044,11 @@ class UnarySFPUGolden:
             reduced_tile = torch.sum(x, dim=0)
         elif reduce_pool == ReducePool.Average:
             reduced_tile = torch.sum(x, dim=0) / x.shape[0]
+        elif reduce_pool == ReducePool.Product:
+            # The device runs the product tree in fp32 LREGs (SFPLOAD widens the operands) and only
+            # the final store rounds to the output format, so accumulate the golden in fp32 too — a
+            # bf16 torch.prod would round at every multiply and diverge from the hardware.
+            reduced_tile = torch.prod(x.to(torch.float32), dim=0)
         else:
             raise ValueError(f"Unsupported reduce pool type: {reduce_pool}")
 
@@ -3062,6 +3067,10 @@ class UnarySFPUGolden:
             reduced_tile = torch.sum(x, dim=1)
         elif reduce_pool == ReducePool.Average:
             reduced_tile = torch.sum(x, dim=1) / x.shape[1]
+        elif reduce_pool == ReducePool.Product:
+            # Accumulate in fp32 to match the device product tree (SFPLOAD widens to fp32; only the
+            # final store rounds to the output format). See _reduce_columns for the rationale.
+            reduced_tile = torch.prod(x.to(torch.float32), dim=1)
         else:
             raise ValueError(
                 f"Unsupported reduce pool type for row reduction: {reduce_pool}"
