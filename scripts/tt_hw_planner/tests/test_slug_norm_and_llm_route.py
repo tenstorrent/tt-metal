@@ -394,17 +394,33 @@ def test_llm_category_fallback_only_on_residual(monkeypatch):
     assert P._llm_resolve_category("kyutai/mimi", cfg, "feature-extraction") is None
 
 
-def test_generative_vlm_fact_is_authoritative():
-    # a generative model with a vision tower is provably a VLM (Ornith: text-heavy card but
-    # vision_config present). This FACT is authoritative -- the agent cannot override it to LLM.
+def test_generative_vlm_fact_requires_vision_encoder():
+    # a generative model with a vision ENCODER (vision_config) is a VLM (Ornith). Authoritative.
     from scripts.tt_hw_planner.probe import _has_generative_vlm_fact as F
 
     assert F({"vision_config": {}, "architectures": ["Qwen3_5ForConditionalGeneration"]}) is True
-    assert F({"image_token_id": 5, "architectures": ["FooForCausalLM"]}) is True
+    # issue #3: an image GENERATOR carries image_token_id to EMIT tokens but has NO vision encoder
+    # -> it is an LLM-trunk generator, NOT a VLM. Requiring vision_config keeps HunyuanImage/Emu3
+    # out of the VLM/SD path.
+    assert F({"image_token_id": 5, "architectures": ["HunyuanImage3ForCausalMM"]}) is False
     # a bare contrastive dual-encoder (CLIP) has vision_config but no generative head -> NOT this fact
     assert F({"vision_config": {}, "text_config": {}, "architectures": ["CLIPModel"]}) is False
-    # text-only LLM -> no vision tower -> False
     assert F({"architectures": ["LlamaForCausalLM"]}) is False
+
+
+def test_causal_lm_arch_beats_text_to_image_tag_issue3():
+    # issue #3 (regression guard): a *ForCausalLM/MM trunk is a generative LM, never diffusion/Image
+    # -- even tagged text-to-image and even if the agent guesses Image (it emits image tokens). The
+    # arch is authoritative; the probe corrects an Image/Video verdict -> LLM for such archs.
+    from scripts.tt_hw_planner.probe import _is_causal_lm_arch, _has_generative_vlm_fact
+
+    hy = {"architectures": ["HunyuanImage3ForCausalMM"], "image_token_id": 5}
+    assert _is_causal_lm_arch(hy) is True and _has_generative_vlm_fact(hy) is False
+    assert _is_causal_lm_arch({"architectures": ["Emu3ForCausalLM"]}) is True
+    # a genuine diffusion image model is NOT causal -> stays Image (not corrected)
+    assert _is_causal_lm_arch({"architectures": ["FluxTransformer2DModel"]}) is False
+    # a real VLM (vision_config) is caught by the vlm fact, not the causal correction
+    assert _has_generative_vlm_fact({"vision_config": {}, "architectures": ["LlavaForConditionalGeneration"]}) is True
 
 
 def test_dual_encoder_contrastive_is_a_fact_not_llm():

@@ -229,7 +229,12 @@ def _agent_classify_category(model_id: str, cfg: dict, card_text: str = "") -> O
             "tower (vision_config / image_token / vision_start_token) AND the model GENERATES text, "
             "it is a VLM even when the description stresses reasoning or text -- the vision tower "
             "means it accepts images (this does NOT apply to a bare contrastive dual-encoder, which "
-            "stays Embed).\n"
+            "stays Embed). CRITICAL (autoregressive generators): a model whose TRUNK is a causal LM "
+            "(architectures ending in *ForCausalLM / *ForCausalMM) that produces images or audio by "
+            "emitting TOKENS -- e.g. HunyuanImage, Emu3, Chameleon -- is NOT Image/TTS; it is LLM (or "
+            "VLM if it also has a vision ENCODER). Image/Video/TTS are ONLY for diffusion/GAN media "
+            "synthesizers that have NO causal-LM trunk. A *ForCausalLM model tagged text-to-image is "
+            "still LLM -- classify by the transformer trunk, never send it to a diffusion path.\n"
             f"model_id: {model_id}\n"
             f"config (salient keys): {json.dumps(salient)[:1500]}\n"
             f"model card (excerpt): {card_text[:3000]}\n"
@@ -344,19 +349,30 @@ def _is_dual_encoder_contrastive(cfg: dict) -> bool:
     return has_text and has_other and not task_head
 
 
+def _is_causal_lm_arch(cfg: dict) -> bool:
+    """The architecture is a decoder-only generative LM (*ForCausalLM / *ForCausalMM). This is a
+    definitive structural signal: such a model's trunk is a causal LM, so it is LLM (or VLM if it
+    also has a vision ENCODER) and must NEVER be routed to a diffusion/Image backend -- even when
+    it is tagged text-to-image because it emits image tokens (issue #3: HunyuanImage3ForCausalMM).
+    Authoritative over the agent (the agent reads 'generates images' and mislabels it Image)."""
+    archs = " ".join((cfg or {}).get("architectures") or [])
+    return bool(re.search(r"ForCausal(LM|MM)\b", archs))
+
+
 def _has_generative_vlm_fact(cfg: dict) -> bool:
-    """DEFINITIVE fact: the config declares a vision tower (vision_config / image_token /
-    vision_start_token) AND the architecture GENERATES text (*ForCausalLM / *ForCausalMM /
-    *ForConditionalGeneration). Such a model provably accepts images and emits text -> VLM.
-    This is a structural fact, not a per-model rule, and it is AUTHORITATIVE: the agent must
-    not override it (LLMs over-weight a text-heavy card and miss the vision tower, e.g. Ornith).
-    A bare contrastive dual-encoder (CLIP: vision_config but a *Model class, no generative head)
-    is excluded -- it stays Embed."""
+    """DEFINITIVE fact: the config declares a real vision ENCODER (``vision_config``) AND a
+    generative arch (*ForCausalLM / *ForCausalMM / *ForConditionalGeneration) -> the model accepts
+    images and emits text -> VLM. AUTHORITATIVE (the agent over-weights a text-heavy card and can
+    miss the vision tower, e.g. Ornith). CRITICAL: require ``vision_config`` (the encoder), NOT a
+    bare ``image_token_id``/``vision_start_token_id`` -- image GENERATORS (HunyuanImage, Emu3) carry
+    image-token ids to EMIT image tokens but have no vision encoder; they are LLM-trunk generators
+    (issue #3), not VLMs. A bare contrastive dual-encoder (CLIP: vision_config but a *Model class,
+    no generative head) is excluded -- it stays Embed."""
     keys = set(cfg or {})
-    has_vision = bool(keys & {"vision_config", "image_token_id", "vision_start_token_id", "image_token_index"})
+    has_vision_encoder = "vision_config" in keys
     archs = " ".join((cfg or {}).get("architectures") or [])
     generative = re.search(r"For(Causal(LM|MM)|ConditionalGeneration)\b", archs)
-    return has_vision and bool(generative)
+    return has_vision_encoder and bool(generative)
 
 
 def _has_audio_markers(cfg: dict) -> bool:
@@ -849,6 +865,10 @@ def _probe_local_model(model_id: str) -> ModelProbe:
             _resid = _is_category_residual(model_type_category, _fpr)
             if _resid and _is_dual_encoder_contrastive(cfg) and category in {"Unknown", "Embed"}:
                 category = "Embed"
+    # AUTHORITATIVE arch correction (issue #3): *ForCausalLM/MM trunk -> LLM, never Image/Video,
+    # even if tagged text-to-image and the agent guessed Image (HunyuanImage emits image tokens).
+    if category in {"Image", "Video"} and _is_causal_lm_arch(cfg):
+        category = "LLM"
 
     _td = str(cfg.get("torch_dtype") or "").lower().replace("torch.", "").strip()
     _bpp = _TORCH_DTYPE_BYTES.get(_td)
@@ -1040,6 +1060,15 @@ def probe_model(model_id: str) -> ModelProbe:
                         "Category -> 'Embed' via dual-encoder contrastive fact (text_config + vision/audio_config)"
                     )
                     probe.category = "Embed"
+    # AUTHORITATIVE arch correction (issue #3): a *ForCausalLM/MM trunk is a generative LM, NOT a
+    # diffusion/Image model -- even when tagged text-to-image and the agent guessed Image because it
+    # EMITS image tokens (HunyuanImage3ForCausalMM). The architecture wins; keep it out of the SD path.
+    if probe.category in {"Image", "Video"} and _is_causal_lm_arch(cfg):
+        probe.flags.append(
+            f"Category {probe.category!r} -> 'LLM' (arch is *ForCausalLM/MM: AR generator on an LLM "
+            f"trunk, not diffusion -- issue #3)"
+        )
+        probe.category = "LLM"
 
     if _is_low_confidence_category(probe.pipeline_tag, model_type_category, _arch_changed):
         probe.flags.append(
