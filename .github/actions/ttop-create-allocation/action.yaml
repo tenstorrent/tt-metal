@@ -18,6 +18,10 @@ inputs:
     description: 'Max seconds to keep retrying for allocation before failing.'
     required: false
     default: '59940'
+  retries:
+    description: 'Number of retries minting the OIDC in one attempt before giving up'
+    required: false
+    default: '3'
 
 runs:
   using: 'composite'
@@ -64,3 +68,4 @@ runs:
         jsonpath: '{.status.phase}'
         expected: Allocated
         timeoutSeconds: ${{ inputs.timeoutSeconds }}
+        retries: ${{ inputs.retries }}
