@@ -26,7 +26,8 @@
 // the reader gates each band on ONLY the SP-shards that band's tiles land in (fine-grained overlap, see the
 // per-band gate in kernel_main) so scoring of already-arrived shards runs while farther slabs are in flight.
 // Reuses the ring-joint-SDPA receiver so the crossed direction-index swap + asymmetric thresholds stay identical.
-#include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_receiver.hpp"
+// Relative path (not "ttnn/operations/...") so ring_utils.hpp's ../../ring_id_sequencer.hpp resolves in the wheel.
+#include "../../../../transformer/sdpa/device/kernels/dataflow/fused_op_receiver.hpp"
 
 constexpr uint32_t q_tile_bytes = get_tile_size(cb_q);     // q: bf16 or bfp8_b (smaller tile)
 constexpr uint32_t bf16_tile_bytes = get_tile_size(cb_w);  // w / mask: always bf16
