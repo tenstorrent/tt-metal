@@ -105,7 +105,13 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
     uint32_t num_tiles_per_row = output.padded_shape()[-1] / tile_width;
 
     uint32_t num_blocks = (output.padded_shape()[-1] * output.padded_shape()[-2]) / tile_hw;
-    uint32_t cb_block_size_limit = max_l1_size / (input_single_tile_size + output_single_tile_size);
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    // Fold push_cb_pair's c_1 staging (bytes/tile + fixed) into the limit or the region overruns L1.
+    uint32_t staging_bytes_per_tile = input_single_tile_size / tile_height;
+    uint32_t fixed_staging_bytes = 2 * dram_alignment;
+    uint32_t budget_for_tiles = (max_l1_size > fixed_staging_bytes) ? (max_l1_size - fixed_staging_bytes) : 0;
+    uint32_t bytes_per_tile_pair = input_single_tile_size + output_single_tile_size + staging_bytes_per_tile;
+    uint32_t cb_block_size_limit = (bytes_per_tile_pair == 0) ? 0 : budget_for_tiles / bytes_per_tile_pair;
 
     auto
         [ncores,
@@ -138,8 +144,6 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
 
     const TileDescriptor tile_descriptor(operation_attributes.tile);
 
