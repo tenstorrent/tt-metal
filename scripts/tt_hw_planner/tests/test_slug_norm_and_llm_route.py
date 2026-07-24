@@ -343,6 +343,15 @@ def test_arch_fingerprint_backbone_families():
     # vision transformers (incl. all DINO variants) infer as ViT from class-name text
     assert arch_descriptor(model_type="dinov2", architectures=["Dinov2Model"]).startswith("ViT")
     assert arch_descriptor(model_type="resnet", architectures=["ResNetForImageClassification"]).startswith("CNN")
+    # 'vits' (a TTS model_type) must NOT substring-match the 'vit' vision keyword
+    assert arch_descriptor(model_type="vits", architectures=["VitsModel"]).startswith("encoder-decoder")
+    assert "ViT" not in arch_descriptor(model_type="vits", architectures=["VitsModel"])
+    # real vision transformers still classify as ViT (no regression from the vits guard)
+    assert arch_descriptor(model_type="vit", architectures=["ViTForImageClassification"]).startswith("ViT")
+    assert arch_descriptor(model_type="swinv2", architectures=["Swinv2Model"]).startswith("ViT")
+    # classic seq2seq model_types classify as encoder-decoder (not bare-suffix 'unknown')
+    for _mt in ("mbart", "pegasus", "m2m_100", "marian", "mt5"):
+        assert arch_descriptor(model_type=_mt).startswith("encoder-decoder"), _mt
 
 
 def test_arch_class_disambiguates_shared_model_type():
