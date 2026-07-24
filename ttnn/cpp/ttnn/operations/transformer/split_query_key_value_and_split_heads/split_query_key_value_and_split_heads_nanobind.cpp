@@ -5,7 +5,6 @@
 #include "split_query_key_value_and_split_heads_nanobind.hpp"
 
 #include <cstdint>
-#include <optional>
 #include <tuple>
 
 #include <nanobind/nanobind.h>
@@ -14,12 +13,14 @@
 
 #include "tt_stl/assert.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
+#include "ttnn-nanobind/export_enum.hpp"
 
 #include "split_query_key_value_and_split_heads.hpp"
 
 namespace ttnn::operations::transformer {
 
 void bind_split_query_key_value_and_split_heads(nb::module_& mod) {
+    export_enum<ttnn::transformer::QkvLayout>(mod);
     const auto* const doc =
         R"doc(
             Splits :attr:`input_tensor` of shape ``[batch_size, sequence_size, 3 * hidden_size]`` into 3 tensors (Query, Key, Value) of shape ``[batch_size, sequence_size, hidden_size]``.
@@ -72,6 +73,12 @@ void bind_split_query_key_value_and_split_heads(nb::module_& mod) {
                 transpose_key (bool): Whether to transpose the Key tensor on the last two dimensions. Defaults to `true`
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 use_falcon7b_backend (bool): Whether to use the specialized Falcon7B backend for splitting QKV heads. Defaults to `false`.
+                qkv_layout (ttnn.transformer.QkvLayout): Input layout. AUTO (the default) infers GROUPED for
+                    sharded inputs and CONCATENATED for interleaved inputs (matches the pre-#41718 implicit
+                    convention; existing callers do not need to change). Pass CONCATENATED or GROUPED explicitly
+                    to make the layout convention part of the call site. Mismatched combinations (e.g.
+                    CONCATENATED + sharded, the cause of the original bug from #41526) are rejected with a
+                    clear ``TT_FATAL``.
 
             Returns:
                Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: the output tensor.
@@ -89,7 +96,8 @@ void bind_split_query_key_value_and_split_heads(nb::module_& mod) {
         nb::arg("num_kv_heads") = nb::none(),
         nb::arg("transpose_key") = true,
         nb::arg("memory_config") = nb::none(),
-        nb::arg("use_falcon7b_backend") = false);
+        nb::arg("use_falcon7b_backend") = false,
+        nb::arg("qkv_layout") = ttnn::transformer::QkvLayout::AUTO);
 }
 
 }  // namespace ttnn::operations::transformer
