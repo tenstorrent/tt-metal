@@ -99,11 +99,12 @@ numerical-drift term, not an algebraic one.
   path uses. `start_pos = cache_len + N·256` is a multiple of 32 (prompt padded to 32, canvas
   256), so all seq bounds are tile-aligned.
 - **Layout.** Both write the same contiguous per-layer cache tensor
-  `[1, num_local_kv_heads, max_seq, head_dim]` (`tt_kv_cache[i]`) via the same non-paged
-  `paged_update_cache`. A single-sequence (batch-1) contiguous cache addresses one seq position
-  per non-paged update, so the default `write_batch=1` = one op per position = provably the same
-  write as sequential. `write_batch>1` is an opt-in fast write (1-block-paged trick) to be
-  device-validated before default.
+  `[1, num_local_kv_heads, max_seq, head_dim]` (`tt_kv_cache[i]`). Originally both used the
+  same non-paged `paged_update_cache`, one op per seq position (a batch-1 contiguous cache
+  addresses one position per non-paged update) — provably the same write as sequential. The
+  default is now ONE tile-aligned `ttnn.fill_cache` per K/V per layer, device-verified
+  bit-identical to that per-position write over the whole cache (see "Opt A" below); the
+  per-position write remains available as `DG_COMMIT_KV_WRITE=position`.
 - **KV-sharing.** `write-then-read-from-cache`: a non-shared layer writes its canvas K/V, then the
   SDPA reads `cache[0 : start_pos+C]`. A KV-shared layer (`kv_shared_layer_map[i]`, E2B/E4B) skips
   its write; its earlier **source** layer already wrote the shared cache tensor, so the shared
@@ -134,8 +135,9 @@ before/after.
   hybrid-cache commit still uses the sequential path; the batched SDPA-read for paged caches is
   intentionally `NotImplemented` (batched paged decode is #47557 / #47488).
 - **Sliding-window edge** unproven where the window bites (> ~768 committed tokens).
-- **`write_batch>1`** (fast contiguous write) unproven on device; default is the per-position
-  write that matches the sequential op exactly.
+- ~~**`write_batch>1`** (fast contiguous write) unproven on device~~ — resolved: batching
+  `paged_update_cache` is racy by construction and the knob was **removed**; the fast write is
+  now one tile-aligned `ttnn.fill_cache` per K/V, device-verified bit-identical (see "Opt A").
 
 ## Device verification results (2026-07-04, QB2 1x4) — **NOT bit-equivalent → stays opt-in**
 
@@ -256,3 +258,170 @@ DG_CKPT=/path/to/diffusiongemma-26B-A4B-it \
   python models/experimental/diffusion_gemma/doc/optimize_perf/verify_commit_batching.py \
   --mesh 1x4 --num-layers 30 --max-seq-len 1024 --prompt "The capital of France is"
 ```
+
+---
+
+# Opt A — the KV write is half the commit; one `fill_cache` removes it (2026-07-24)
+
+## Where the commit time actually goes
+
+Splitting the batched commit on device (backbone = fwd + cache read + SDPA + MoE, vs the
+per-layer KV write) at two depths:
+
+| L  | full commit | backbone | KV write | write share |
+|----|-------------|----------|----------|-------------|
+| 8  | 266.1 ms    | 123.2 ms | 142.9 ms | 53.7%       |
+| 16 | 495.1 ms    | 241.9 ms | 253.2 ms | 51.1%       |
+
+Per layer: write ≈ 13.8 ms, backbone ≈ 14.9 ms. Extrapolated to 30L the write is
+~0.4–0.5 s of a ~0.96 s commit. It is almost **pure host dispatch**: the write was 256
+per-position iterations × (2 `slice` + 2 reshard + 2 `paged_update_cache`) ≈ 1536 tiny
+`[1,1,nkv,hd]` ops per layer, with essentially no arithmetic.
+
+## The fix: `ttnn.fill_cache(cache, canvas, 0, update_idx=start_pos)`
+
+The commit's write span is tile-aligned by construction (`start_pos % 32 == 0` and
+`canvas_len = 256`, both now validated in `commit_canvas_tokens_batched`), so the whole
+canvas is a **tile-granular copy** — no read-modify-write of a partial tile is needed.
+`ttnn.fill_cache` takes exactly that: a tile-aligned seq-dim offset `update_idx`
+(exposed by #44827). One op per K/V per layer, i.e. **2 dispatches instead of ~1536**.
+
+* `update_idx` becomes `update_idxt = update_idx/32` folded into the per-core destination
+  page id `batch_idx*C*Ht*Wt + h*cache_HtWt + (update_idxt + j)*Wt`
+  (`fill_cache_multi_core_program_factory.cpp`), i.e. head-major with the **cache's** seq
+  stride — the same positions the per-position loop writes.
+* FILL is pure data movement: reader → CB → `writer_unary_interleaved`, **no compute
+  kernel** (unlike the UPDATE path's untilize/patch/tilize), so bf16 values cannot be
+  perturbed. It also never touches the frozen prefix `[0, start_pos)` or the tail.
+* No transpose (the `[1, C, nkv, hd]` permute existed only to satisfy
+  `paged_update_cache`'s user-dim contract), no reshard, no per-call host tensor.
+* Precedent: DG's own *prompt* prefill already fills this same contiguous cache with
+  `ttnn.fill_cache` (`gemma4/tt/attention/prefill.py`); the only delta is `update_idx != 0`.
+
+### Measured (QB2 Blackhole, 11x10 grid, nkv=2 hd=256 C=256, 20 warm reps)
+
+| write mode                | per layer (K+V) |
+|---------------------------|-----------------|
+| per-position (256 × 6 ops)| 9.591 ms        |
+| one `fill_cache` per K/V  | **0.012 ms**    |
+
+The ~52% write share collapses to ~0.1% of the commit.
+
+### Real-backbone gate — PASS (2026-07-24, QB2 1x4, full 30L 26B-A4B)
+
+`verify_commit_kv_write.py --num-layers 30 --max-seq-len 1024` (batched commit run twice
+from the identical pre-commit cache, once per write mode, warmed):
+
+```
+commit_ms  per-position =     905.1   one-op fill =     464.0   speedup =  1.95x
+whole-cache max_abs_diff (position vs fill) = 0.0000e+00   (must be 0.0)
+layers = 30  shards/layer = 4  start_pos = 32
+RESULT: PASS — one-op fill KV write is bit-identical to the per-position write
+```
+
+Bit-identical over the **whole** cache (30 layers × K/V × 4 device shards, every position,
+not just the written region), and the frozen prefix `[0, start_pos)` matched the
+pre-commit snapshot under both modes — three runs, all `max_abs_diff = 0.0`.
+
+The speedup is what the ~52% write share predicts (0.91 s − ~0.44 s ≈ 0.46 s). Across three
+30L runs of the same geometry: **1.85x–1.95x** (905.1→464.0 and 882.4→478.2 warmed;
+970.7→520.8 without the warm-up, where the first-timed mode absorbs the cold program-cache
+cost) — so the ratio is neither a warm-up artifact nor tighter than ~±0.05x run to run.
+
+## Why the *original* Opt A (batch `paged_update_cache`) is not the fix
+
+The plan was to reshard the batched `[1, n, nkv, hd]` slice to satisfy
+`paged_update_cache`'s multi-user contract (`num_cores == num_users`). That reshard makes
+the op *run*, and then it **silently corrupts the cache**: `paged_update_cache` is a
+per-TILE read-modify-write (reader loads the whole 32-row tile-row, compute untilizes,
+writer patches one row and writes the tile-row back), and `n` consecutive canvas positions
+share ONE 32-row tile, so all `n` cores compute the identical `cache_id` and the RMWs
+collide — last-writer-wins. This is the same failure `gemma4/tt/attention/decode.py`
+serializes around (`sequential_kv_write`, #44923); the only serialization the op has
+(`in0_sequential_mode` semaphores) is wired for `share_cache`, which is a hard `TT_FATAL`
+in paged mode. A race-free repair exists (stride-32 grouping so each user is in a
+different tile) but caps at 8 users for a 256-token canvas → ≥258 dispatches/layer and
+zero DRAM-traffic reduction. `fill_cache` makes it moot.
+
+**The branch and its `write_batch` / `DG_COMMIT_WRITE_BATCH` knob are therefore DELETED**,
+not left behind an env var: its whole failure mode is that the one missing piece (a shard
+spec) converts a loud `is_sharded()` assert into silent KV loss, which is a poor thing to
+leave lying around for the next person who reads "opt-in fast write" in a docstring. A
+stale `DG_COMMIT_WRITE_BATCH` export is now ignored with a warning (it used to select the
+mechanism, so silently honoring it would restore the 1536-dispatch path). The dead end is
+recorded here and in a "do not reintroduce" note on `_write_canvas_kv_contiguous`; the
+per-position write survives as `DG_COMMIT_KV_WRITE=position`, which is a *different*
+mechanism (one op per position, no batching, no race).
+
+## One ttnn hazard this change had to guard
+
+`fill_cache`'s interleaved path splits `nkv * (S/32)` tile-rows over the core grid and each
+core writes its rows **contiguously** from a single `cache_start_id`, assuming no core's
+range crosses a kv-head boundary ("assume that work doesn't spill over to next head" —
+`fill_cache_multi_core_program_factory.cpp`). **No validator enforces it.** Once the rows
+exceed the core count (and the input does not span the whole cache) the op silently writes
+rows into the wrong head. Device-confirmed on QB2: `nkv=8, C=1024, max_seq=2048` (256 rows
+> 110 cores) → **49106 wrong elements**; the same geometry with `C == max_seq` is fine
+(the destination is then one contiguous run, which is why the existing whole-prompt
+prefill callers never hit this).
+
+DiffusionGemma is far inside the safe region (`nkv_local ≤ 2`, `C = 256` ⇒ ≤ 16 rows vs
+110 cores; `split_work_to_cores` gives exactly 1 row/core whenever rows ≤ cores), but
+`_fill_write_unsupported_reason` checks it explicitly, along with dtype equality (FILL
+refuses to convert, unlike `paged_update_cache`), head/head_dim match, tile alignment,
+span bounds and cache batch. Any failed precondition logs once and falls back to the
+per-position write — correct, just slow — so a geometry the op cannot serve never raises
+mid-layer-loop and never leaves a half-written cache.
+
+Upstream follow-ups worth filing: (a) `fill_cache` should `TT_FATAL` on the head-boundary
+spill instead of silently corrupting; (b) gemma4's long **non-paged** prompt prefill
+(`nkv=2, S ≥ 8192` at `S < max_seq`) can cross the same threshold.
+
+## Knobs / verification
+
+```bash
+# Default is the one-op fill. Force a mechanism:
+DG_COMMIT_KV_WRITE=fill|position   # position = the proven per-position reference
+# DG_COMMIT_WRITE_BATCH is OBSOLETE (the racy 1-block-paged write it selected was deleted).
+# It is now ignored with a warning rather than silently restoring the 1536-dispatch path.
+
+# Op-level gate, checkpoint-free, ~4 s — bit-identity of the two mechanisms over the WHOLE
+# cache (so a disturbed frozen prefix/tail fails), + torch oracle, + the spill guard:
+DG_RUN_DEVICE=1 pytest models/experimental/diffusion_gemma/tests/test_device_commit_kv_write.py
+
+# Real-backbone gate — batched commit with fill vs with per-position, whole-cache exact:
+DG_CKPT=/home/zni/dg_models/diffusiongemma-26B-A4B-it \
+  python models/experimental/diffusion_gemma/doc/optimize_perf/verify_commit_kv_write.py \
+  --mesh 1x4 --num-layers 30 --max-seq-len 1024 --prompt "The capital of France is"
+```
+
+Both write modes are now selectable per call (`write_mode=`), not only per process, so a
+single process can A/B them against the identical pre-commit cache — which is what makes
+an exact (`max_abs_diff == 0`) gate possible. Note `verify_commit_batching.py` /
+`probe_attn_only.py` gained a `--kv-write` flag but still default to `position`, so their
+existing (batched-vs-sequential) comparisons keep using the proven write.
+
+## Pre-existing bug fixed in passing: the last block could free the KV cache
+
+`_read_cache_kv` reads `[0, start_pos+C)` back out of the cache for the causal SDPA, and
+`_commit_attention_batched` deallocates that result. When the committed block ends exactly
+at `max_seq` the read is a **full-span** slice (all starts 0, all ends max), which ttnn
+short-circuits to an **alias** of the input — `slice.cpp`:
+`if (no_step && starts_zero && ends_max) return finalize_into_preallocated(ret_adjustment(input_tensor));`
+with `ret_adjustment`'s no-op `to_memory_config`/`to_layout` passing the tensor straight
+through. Deallocating it therefore frees the **KV cache itself**. `_read_cache_kv` now
+`ttnn.clone`s at that boundary so the caller always owns a distinct buffer
+(`test_device_commit_kv_write.py::test_cache_read_at_max_seq_does_not_alias_the_cache`).
+Latent since the batched commit landed, independent of the write mode, and the same
+ttnn aliasing gotcha the traced-denoise reveal-mask work hit.
+
+Two guard-design notes worth keeping:
+* **cache batch > 1 must not fall back to the per-position write.** `fill_cache` with
+  `batch_idx=0` is legal on a multi-slot cache; the per-position path is not (non-paged
+  `paged_update_cache` asserts `num_users == cache batch`), so a blanket fallback would
+  turn a working write into a `TT_FATAL`. The fill guard ignores cache batch; the position
+  branch raises its own clear error.
+* **A ragged span is a contract violation, not a fallback.** `start_pos % 32` and
+  `canvas_len % 32` now both raise in `commit_canvas_tokens_batched`, before any device
+  work — a ragged `canvas_len` would otherwise push tile-pad K/V past `start_pos+canvas_len`
+  and only `_read_cache_kv`'s `end_pos` check would notice, with the cache already dirty.

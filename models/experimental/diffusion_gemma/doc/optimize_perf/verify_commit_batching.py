@@ -161,10 +161,15 @@ def main() -> int:
         help="pad the prompt so start_pos exceeds (sliding_window - canvas_len), exercising the sliding-window mask edge",
     )
     ap.add_argument(
-        "--write-batch",
-        type=int,
-        default=1,
-        help="batched-commit contiguous KV write granularity (1 = per-position, proven)",
+        "--kv-write",
+        choices=("fill", "position"),
+        default="position",
+        help=(
+            "batched-commit contiguous KV-write mechanism: fill = one ttnn.fill_cache per "
+            "K/V per layer (the shipped default); position = the per-position "
+            "paged_update_cache reference. Defaults to position here so this A/B keeps "
+            "comparing against the proven write."
+        ),
     )
     args = ap.parse_args()
 
@@ -173,8 +178,9 @@ def main() -> int:
         logger.error("set DG_CKPT to the diffusiongemma-26B-A4B-it checkpoint dir")
         return 2
 
-    # Force the batched-write granularity requested (opt-in fast write is >1).
-    os.environ["DG_COMMIT_WRITE_BATCH"] = str(args.write_batch)
+    # Force the requested write mechanism before commit_batched is imported (it resolves
+    # its default from the environment at import time).
+    os.environ["DG_COMMIT_KV_WRITE"] = args.kv_write
 
     from models.experimental.diffusion_gemma.checkpoint import (
         build_tt_model_from_checkpoint_dir,

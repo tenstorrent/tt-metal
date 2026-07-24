@@ -24,7 +24,9 @@ changes vs the read-only bidirectional denoise pass:
 Design: **write-then-read-from-cache**, per layer, in layer order:
   * compute canvas Q (per-head norm + RoPE at ``start_pos``);
   * for a non-shared layer, compute canvas K/V (per-head norm + RoPE), and write it
-    into ``tt_kv_cache[i]`` at seq positions ``start_pos .. start_pos+C-1``;
+    into ``tt_kv_cache[i]`` at seq positions ``start_pos .. start_pos+C-1`` with ONE
+    ``ttnn.fill_cache`` per K/V (the write span is tile-aligned, so it is a pure tile
+    copy — see :func:`_write_canvas_kv_contiguous`);
   * read the full ``[0 : start_pos+C]`` K/V back from the cache (= frozen prefix ++
     freshly-written canvas) and run a causal-masked SDPA;
   * the MLP / MoE / norm tail is byte-identical to the denoise layer body.
@@ -34,11 +36,12 @@ register copy) means cross-layer **KV-sharing** is handled for free: a shared
 layer skips its own K/V write, and its earlier source layer has already written
 the canvas K/V into the shared cache tensor by the time the shared layer runs.
 
-This path is **opt-in and guarded** (``DG_COMMIT_BATCHED`` / ``commit_fn``); the
-sequential path stays the default until this is validated on device
-(``doc/optimize_perf/verify_commit_batching.py``). It never edits shared
-``models/demos/gemma4`` code — it composes over the importable Gemma4 ops, exactly
-like ``tt/commit_decode.py`` and ``tt/diffusion_attention.py``.
+This path is the **default** (``DG_COMMIT_BATCHED``, see :func:`batched_commit_enabled`)
+— it is both faster and more correct than the sequential decode-append commit, whose
+decode-MoE kernel is defective. It never edits shared ``models/demos/gemma4`` code — it
+composes over the importable Gemma4 ops, exactly like ``tt/commit_decode.py`` and
+``tt/diffusion_attention.py``. See ``doc/optimize_perf/commit_batching.md`` for the
+equivalence argument, the device results and the verify harnesses.
 """
 
 from __future__ import annotations
@@ -74,12 +77,43 @@ from models.experimental.diffusion_gemma.tt.diffusion_attention import (
 
 NEG = -1.0e9
 
-# Default KV-write granularity for the contiguous (page_table=None) cache. 1 =
-# per-position writes with the exact op the sequential path uses (proven; the
-# safe default while this path is device-unvalidated). >1 uses the batched
-# 1-block-paged write (see ``_write_canvas_kv_contiguous``); opt in with
-# ``DG_COMMIT_WRITE_BATCH`` once device-validated.
-_DEFAULT_WRITE_BATCH = int(os.environ.get("DG_COMMIT_WRITE_BATCH", "1"))
+# KV-write mechanism for the contiguous (page_table=None) cache.
+#   "fill"     — DEFAULT: ONE ``ttnn.fill_cache`` per K/V per layer writes the whole
+#                canvas at the tile-aligned seq offset ``start_pos``. 2 ops/layer.
+#   "position" — the legacy per-position write: 256 x (2 slice + 2 reshard + 2
+#                ``paged_update_cache``) = ~1536 tiny dispatches/layer. Device-proven,
+#                kept as the reference the "fill" path is verified bit-identical
+#                against (``tests/test_device_commit_kv_write.py``) and as the
+#                automatic fallback when a "fill" precondition does not hold.
+_KV_WRITE_FILL = "fill"
+_KV_WRITE_POSITION = "position"
+_KV_WRITE_MODES = (_KV_WRITE_FILL, _KV_WRITE_POSITION)
+
+
+def _default_kv_write_mode() -> str:
+    """Resolve the default write mechanism from ``DG_COMMIT_KV_WRITE`` (default fill)."""
+    if os.environ.get("DG_COMMIT_WRITE_BATCH"):
+        # Removed knob: it selected a 1-block-paged batched write that was racy by
+        # construction (see the note in ``_write_canvas_kv_contiguous``). Warn instead of
+        # ignoring it silently, so a stale runbook export is visible.
+        logger.warning(
+            "[commit] DG_COMMIT_WRITE_BATCH is obsolete and ignored — the 1-block-paged batched "
+            "KV write it selected was removed (racy per-tile RMW). Use DG_COMMIT_KV_WRITE="
+            f"{'|'.join(_KV_WRITE_MODES)}."
+        )
+    mode = os.environ.get("DG_COMMIT_KV_WRITE")
+    if mode:
+        mode = mode.strip().lower()
+        if mode not in _KV_WRITE_MODES:
+            raise ValueError(f"DG_COMMIT_KV_WRITE must be one of {_KV_WRITE_MODES}, got {mode!r}")
+        return mode
+    return _KV_WRITE_FILL
+
+
+_DEFAULT_KV_WRITE_MODE = _default_kv_write_mode()
+
+_FILL_FALLBACK_WARNED: set[str] = set()
+_LOGGED_KV_WRITE_MODES: set[str] = set()
 
 
 def _replicate_mapper(mesh_device):
@@ -150,10 +184,103 @@ def _read_cache_kv(kv_cache, *, end_pos: int):
     starts = [0, 0, 0, 0]
     k_ends = [k_cache.shape[0], k_cache.shape[1], end_pos, k_cache.shape[3]]
     v_ends = [v_cache.shape[0], v_cache.shape[1], end_pos, v_cache.shape[3]]
-    return (
-        ttnn.slice(k_cache, starts, k_ends, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-        ttnn.slice(v_cache, starts, v_ends, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-    )
+
+    def read(cache, ends):
+        # A full-span slice (all starts 0, all ends max) short-circuits in ttnn to an
+        # ALIAS of the input (``slice.cpp``: `if (no_step && starts_zero && ends_max)`
+        # returns the tensor itself once the no-op to_memory_config/to_layout pass
+        # through). The caller deallocates what we return, which would free the KV
+        # CACHE ITSELF — reachable whenever the committed block ends exactly at
+        # max_seq. Clone in that case so the caller always owns a distinct buffer.
+        if end_pos == cache.shape[2]:
+            return ttnn.clone(cache, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.slice(cache, starts, ends, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    return read(k_cache, k_ends), read(v_cache, v_ends)
+
+
+def _fill_write_unsupported_reason(
+    k_cache,
+    v_cache,
+    canvas_k,
+    canvas_v,
+    *,
+    start_pos: int,
+    canvas_len: int,
+    mesh_device,
+) -> str | None:
+    """Why one ``ttnn.fill_cache`` cannot write this canvas (``None`` ⇒ it can).
+
+    Checked in Python, before any device work, so a geometry the op does not support
+    degrades to the per-position write instead of raising mid-layer and leaving a
+    half-written cache. The checks mirror the FILL validator
+    (``ttnn/cpp/ttnn/operations/kv_cache/device/update_cache_device_operation.cpp``)
+    plus one guard the op does NOT enforce itself (the head-boundary spill below).
+    """
+    tile = ttnn.TILE_SIZE
+    if start_pos % tile != 0:
+        return f"start_pos {start_pos} is not a multiple of {tile}"
+    if canvas_len % tile != 0:
+        return f"canvas_len {canvas_len} is not a multiple of {tile}"
+    # NB: cache batch > 1 is deliberately NOT a fallback reason. ``batch_idx=0`` into a
+    # multi-slot cache is legal for FILL (the op only requires batch_idx < cache batch)
+    # and correct for this single-user commit, whereas the per-position fallback would
+    # TT_FATAL on it (non-paged paged_update_cache asserts num_users == cache batch).
+    # Falling back there would turn a working write into a crash; the position branch
+    # raises its own clear error instead.
+    for name, cache, canvas in (("k", k_cache, canvas_k), ("v", v_cache, canvas_v)):
+        if canvas.dtype != cache.dtype:
+            # FILL is a pure copy and refuses to convert (unlike paged_update_cache).
+            return f"{name} dtype mismatch: canvas {canvas.dtype} vs cache {cache.dtype}"
+        if canvas.layout != ttnn.TILE_LAYOUT or cache.layout != ttnn.TILE_LAYOUT:
+            return f"{name} not TILE_LAYOUT (canvas {canvas.layout}, cache {cache.layout})"
+        if canvas.shape[0] != 1:
+            return f"{name} canvas batch {canvas.shape[0]} != 1"
+        if canvas.shape[1] != cache.shape[1]:
+            return f"{name} kv-head mismatch: canvas {canvas.shape[1]} vs cache {cache.shape[1]}"
+        if canvas.shape[3] != cache.shape[3]:
+            return f"{name} head_dim mismatch: canvas {canvas.shape[3]} vs cache {cache.shape[3]}"
+        if canvas.shape[3] % tile != 0:
+            return f"{name} head_dim {canvas.shape[3]} is not a multiple of {tile}"
+        if canvas.shape[2] != canvas_len:
+            return f"{name} canvas seq {canvas.shape[2]} != canvas_len {canvas_len}"
+        if start_pos + canvas_len > cache.shape[2]:
+            return f"{name} write span [{start_pos}, {start_pos + canvas_len}) exceeds cache seq {cache.shape[2]}"
+        if cache.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+            return f"{name} cache is not INTERLEAVED ({cache.memory_config().memory_layout})"
+        if canvas.is_sharded():
+            # The sharded-input branch of the factory splits work by shard height; only
+            # the interleaved split is audited here.
+            return f"{name} canvas is sharded; fill path expects an interleaved canvas"
+    # Head-boundary spill: the FILL program factory splits (nkv * C/32) tile-rows over
+    # the core grid and each core writes its rows CONTIGUOUSLY from one cache_start_id,
+    # assuming no core's range crosses a kv-head boundary ("assume that work doesn't
+    # spill over to next head" — fill_cache_multi_core_program_factory.cpp). That holds
+    # whenever every core gets exactly one row, i.e. rows <= cores (split_work_to_cores:
+    # units < max_cores ⇒ target_num_cores = units), and trivially when the input spans
+    # the whole cache (C == max_seq ⇒ the destination is one contiguous run). Above that
+    # the op silently writes some rows to the wrong head — device-confirmed with
+    # nkv=8, C=1024, max_seq=2048 (49106 wrong elements). DiffusionGemma is far inside
+    # the safe region (nkv <= 8, C = 256 ⇒ <= 64 rows vs 110 Blackhole cores), so this
+    # only guards future geometries.
+    rows = canvas_k.shape[1] * (canvas_len // tile)
+    grid = mesh_device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    if canvas_len != k_cache.shape[2] and rows > num_cores:
+        return (
+            f"fill would spill across kv-head boundaries: {rows} tile-rows "
+            f"(nkv={canvas_k.shape[1]} x C/{tile}={canvas_len // tile}) > {num_cores} cores"
+        )
+    return None
+
+
+def _warn_fill_fallback_once(reason: str) -> None:
+    if reason not in _FILL_FALLBACK_WARNED:
+        _FILL_FALLBACK_WARNED.add(reason)
+        logger.warning(
+            f"[commit] one-op fill KV write unavailable ({reason}); falling back to the "
+            "per-position write (correct, ~800x more dispatch per layer)"
+        )
 
 
 def _write_canvas_kv_contiguous(
@@ -165,87 +292,130 @@ def _write_canvas_kv_contiguous(
     start_pos: int,
     canvas_len: int,
     mesh_device,
-    write_batch: int = _DEFAULT_WRITE_BATCH,
+    write_mode: str | None = None,
 ):
     """Write canvas K/V ``[1, nkv, C, hd]`` into a contiguous cache at ``start_pos``.
 
-    ``write_batch == 1`` (default, safe): one ``paged_update_cache`` per committed
-    position — the exact non-paged decode-append op the sequential path uses, so
-    the write positions and cache layout are provably identical. A single-sequence
-    contiguous cache (batch 1) can only address one seq position per non-paged
-    update, so this is the only single-op-count option there.
+    ``write_mode="fill"`` (**default**): ONE ``ttnn.fill_cache`` per K/V writes the whole
+    canvas at the tile-aligned seq offset ``update_idx=start_pos``. The commit's write
+    span is tile-aligned by construction (``start_pos % 32 == 0`` is validated in
+    :func:`commit_canvas_tokens_batched`, ``canvas_len`` is 256), so no read-modify-write
+    of a partial tile is needed and FILL is a pure tile copy (reader → CB → writer, no
+    compute kernel) — it writes exactly the ``[start_pos, start_pos+C)`` tile-rows of each
+    kv head and touches neither the frozen prefix nor the tail. Device-verified
+    bit-identical to the per-position path over the whole cache
+    (``tests/test_device_commit_kv_write.py``): 2 ops/layer instead of ~1536, 9.59 ms →
+    0.012 ms per layer-write at the 26B-A4B geometry. Falls back to ``"position"`` (with a
+    warning) if any precondition fails — see :func:`_fill_write_unsupported_reason`.
 
-    ``write_batch > 1`` (opt-in, device-unvalidated): treat the contiguous cache
-    ``[1, nkv, max_seq, hd]`` as a 1-block paged cache (``block_size = max_seq``) and
-    write ``write_batch`` positions per op — each "user" maps to one canvas slot of
-    block 0 via ``page_table`` all-zeros and ``update_idxs = start_pos + slot``.
-    Fewer dispatches; the semantics (multiple users → distinct slots of one block)
-    must be confirmed on device before making this the default.
+    Trace caveat (applies to BOTH write modes, so this is not a regression): ``start_pos``
+    lives in the op's runtime args and is excluded from the program-cache hash, so a
+    commit captured into a metal trace would replay the offset it was captured at. The
+    commit runs eagerly today (``traced_denoise.py`` traces the denoise loop only); tracing
+    it later needs a per-block re-capture or a device-side index tensor.
+
+    ``write_mode="position"``: one ``paged_update_cache`` per committed position — the
+    exact non-paged decode-append op the sequential path uses, so the write positions and
+    cache layout are provably identical. A single-sequence contiguous cache (batch 1) can
+    only address one seq position per non-paged update, hence the 256-iteration loop.
+    This is the reference the fill path is verified against.
+
+    **Do not reintroduce a batched** ``paged_update_cache`` **here.** The obvious-looking
+    speedup for the per-position loop — view the contiguous cache as a 1-block paged cache
+    (``block_size = max_seq``, all-zero ``page_table``) and write ``n`` positions per op as
+    ``n`` "users" — is racy by construction, and the reshard that makes it *run* is what
+    makes it dangerous. ``paged_update_cache`` is a per-TILE read-modify-write, and ``n``
+    consecutive positions share ONE 32-row cache tile, so all ``n`` cores compute the same
+    ``cache_id`` and last-writer-wins: the same failure ``gemma4/tt/attention/decode.py``
+    serializes around (``sequential_kv_write``, issue #44923), with no rescue here because
+    the op's only serialization (``in0_sequential_mode``) is wired for ``share_cache``,
+    which paged mode rejects outright. Without the reshard it fails loudly on the op's
+    ``is_sharded()`` assert; with it, the cache corrupts silently. A race-free variant
+    (stride-32 grouping, one user per tile) caps at 8 users for a 256-token canvas →
+    ≥258 dispatches/layer and no DRAM saving. The fill write makes all of it moot; the
+    experiment is written up in ``doc/optimize_perf/commit_batching.md``.
     """
+    mode = _DEFAULT_KV_WRITE_MODE if write_mode is None else write_mode.strip().lower()
+    if mode not in _KV_WRITE_MODES:
+        raise ValueError(f"write_mode must be one of {_KV_WRITE_MODES}, got {mode!r}")
+    if mode not in _LOGGED_KV_WRITE_MODES:
+        _LOGGED_KV_WRITE_MODES.add(mode)
+        logger.info(f'[commit] contiguous KV write mode = "{mode}"')
+
+    if mode == _KV_WRITE_FILL:
+        reason = _fill_write_unsupported_reason(
+            k_cache,
+            v_cache,
+            canvas_k,
+            canvas_v,
+            start_pos=start_pos,
+            canvas_len=canvas_len,
+            mesh_device=mesh_device,
+        )
+        if reason is None:
+            # Whole canvas, one op per K/V. No transpose (the [1, C, nkv, hd] permute
+            # below only exists to satisfy paged_update_cache's user-dim contract), no
+            # reshard, and no per-call host tensors.
+            ttnn.fill_cache(k_cache, canvas_k, 0, update_idx=start_pos)
+            ttnn.fill_cache(v_cache, canvas_v, 0, update_idx=start_pos)
+            return
+        _warn_fill_fallback_once(reason)
+        mode = _KV_WRITE_POSITION
+
+    # ── per-position write (explicit, or the fill path's fallback) ───────────────
+    # Still before any device work: the per-position write is NOT a universal safe harbor,
+    # so name the two geometries it cannot serve (both of which FILL can) rather than
+    # letting them TT_FATAL deep inside the op — or, when we got here by falling back,
+    # rather than turning a working write into a crash.
+    if k_cache.shape[0] != 1 or v_cache.shape[0] != 1:
+        # Non-paged ``paged_update_cache`` asserts num_users == cache batch, and this loop
+        # writes one user at a time.
+        raise ValueError(
+            f"the per-position KV write needs a batch-1 cache (got k={k_cache.shape[0]}, "
+            f"v={v_cache.shape[0]}); use write_mode={_KV_WRITE_FILL!r}"
+        )
+    if canvas_k.dtype not in (ttnn.bfloat16, ttnn.float32) or canvas_v.dtype not in (
+        ttnn.bfloat16,
+        ttnn.float32,
+    ):
+        # ``paged_update_cache`` accepts only fp32/bf16 inputs — e.g. a bfloat8_b canvas
+        # that FILL would copy happily would TT_FATAL here.
+        raise ValueError(
+            f"the per-position KV write needs a bfloat16/float32 canvas (got k={canvas_k.dtype}, "
+            f"v={canvas_v.dtype}); use write_mode={_KV_WRITE_FILL!r}"
+        )
+
     nkv = canvas_k.shape[1]
     hd = canvas_k.shape[3]
     # [1, nkv, C, hd] -> [1, C, nkv, hd] so slot dim is the update-cache batch dim.
     k_perm = ttnn.transpose(canvas_k, 1, 2)
     v_perm = ttnn.transpose(canvas_v, 1, 2)
 
-    if write_batch <= 1:
-        # ``paged_update_cache`` requires the update tensor to be HEIGHT_SHARDED with
-        # one core per user (batch), shard width == head_dim, ROW_MAJOR — the exact
-        # contract the proven decode single-user write uses
-        # (``gemma4/tt/attention/decode.py`` ``sequential_kv_write``:
-        # ``single_user_mem`` = 1 core, shard shape ``[TILE, head_dim]``). Our
-        # per-position slice is ``[1, 1, nkv, hd]`` (num_users=1), so reshard it onto
-        # one core with the tile-padded nkv height before the write; a bare
-        # DRAM-interleaved slice trips the op's ``is_sharded()`` assert.
-        shard_h = ((nkv + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-        one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
-        single_user_mem = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(one_core, [shard_h, hd], ttnn.ShardOrientation.ROW_MAJOR),
-        )
-        for t in range(canvas_len):
-            kb = ttnn.slice(k_perm, [0, t, 0, 0], [1, t + 1, nkv, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            vb = ttnn.slice(v_perm, [0, t, 0, 0], [1, t + 1, nkv, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            kb_s = ttnn.to_memory_config(kb, single_user_mem)
-            vb_s = ttnn.to_memory_config(vb, single_user_mem)
-            ttnn.experimental.paged_update_cache(k_cache, kb_s, update_idxs=[start_pos + t])
-            ttnn.experimental.paged_update_cache(v_cache, vb_s, update_idxs=[start_pos + t])
-            kb.deallocate(True)
-            vb.deallocate(True)
-            kb_s.deallocate(True)
-            vb_s.deallocate(True)
-        k_perm.deallocate(True)
-        v_perm.deallocate(True)
-        return
-
-    max_seq = k_cache.shape[2]
-    for c0 in range(0, canvas_len, write_batch):
-        c1 = min(c0 + write_batch, canvas_len)
-        n = c1 - c0
-        kb = ttnn.slice(k_perm, [0, c0, 0, 0], [1, c1, nkv, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        vb = ttnn.slice(v_perm, [0, c0, 0, 0], [1, c1, nkv, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        idxs = ttnn.from_torch(
-            torch.arange(start_pos + c0, start_pos + c1, dtype=torch.int32),
-            device=mesh_device,
-            dtype=ttnn.int32,
-            mesh_mapper=_replicate_mapper(mesh_device),
-        )
-        page_table = ttnn.from_torch(
-            torch.zeros((n, 1), dtype=torch.int32),
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.int32,
-            mesh_mapper=_replicate_mapper(mesh_device),
-        )
-        ttnn.experimental.paged_update_cache(
-            k_cache, kb, update_idxs_tensor=idxs, page_table=page_table, block_size=max_seq
-        )
-        ttnn.experimental.paged_update_cache(
-            v_cache, vb, update_idxs_tensor=idxs, page_table=page_table, block_size=max_seq
-        )
-        for tensor in (kb, vb, idxs, page_table):
-            tensor.deallocate(True)
+    # ``paged_update_cache`` requires the update tensor to be HEIGHT_SHARDED with one core
+    # per user (batch), shard width == head_dim, ROW_MAJOR — the exact contract the proven
+    # decode single-user write uses (``gemma4/tt/attention/decode.py``
+    # ``sequential_kv_write``: ``single_user_mem`` = 1 core, shard shape
+    # ``[TILE, head_dim]``). Our per-position slice is ``[1, 1, nkv, hd]`` (num_users=1),
+    # so reshard it onto one core with the tile-padded nkv height before the write; a bare
+    # DRAM-interleaved slice trips the op's ``is_sharded()`` assert.
+    shard_h = ((nkv + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    single_user_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(one_core, [shard_h, hd], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    for t in range(canvas_len):
+        kb = ttnn.slice(k_perm, [0, t, 0, 0], [1, t + 1, nkv, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        vb = ttnn.slice(v_perm, [0, t, 0, 0], [1, t + 1, nkv, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        kb_s = ttnn.to_memory_config(kb, single_user_mem)
+        vb_s = ttnn.to_memory_config(vb, single_user_mem)
+        ttnn.experimental.paged_update_cache(k_cache, kb_s, update_idxs=[start_pos + t])
+        ttnn.experimental.paged_update_cache(v_cache, vb_s, update_idxs=[start_pos + t])
+        kb.deallocate(True)
+        vb.deallocate(True)
+        kb_s.deallocate(True)
+        vb_s.deallocate(True)
     k_perm.deallocate(True)
     v_perm.deallocate(True)
 
@@ -391,7 +561,7 @@ def _commit_attention_batched(
     is_kv_shared: bool,
     mesh_device,
     page_table=None,
-    write_batch: int = _DEFAULT_WRITE_BATCH,
+    write_mode: str | None = None,
 ):
     """Causal masked prefix+canvas attention for one commit layer (writes K/V).
 
@@ -445,7 +615,7 @@ def _commit_attention_batched(
             start_pos=start_pos,
             canvas_len=canvas_len,
             mesh_device=mesh_device,
-            write_batch=write_batch,
+            write_mode=write_mode,
         )
         tt_k.deallocate(True)
         tt_v.deallocate(True)
@@ -486,7 +656,7 @@ def _commit_layer_forward_batched(
     canvas_len: int,
     is_kv_shared: bool,
     page_table=None,
-    write_batch: int = _DEFAULT_WRITE_BATCH,
+    write_mode: str | None = None,
 ):
     """One commit layer: causal attention (writes K/V) + the denoise MLP/MoE tail.
 
@@ -508,7 +678,7 @@ def _commit_layer_forward_batched(
         is_kv_shared=is_kv_shared,
         mesh_device=tt_model.mesh_device,
         page_table=page_table,
-        write_batch=write_batch,
+        write_mode=write_mode,
     )
     normed.deallocate(True)
 
@@ -558,7 +728,7 @@ def commit_hidden_forward_batched(
     start_pos: int,
     kv_caches=None,
     page_table=None,
-    write_batch: int = _DEFAULT_WRITE_BATCH,
+    write_mode: str | None = None,
 ):
     """Run the full batched commit backbone: append every layer's canvas K/V.
 
@@ -602,7 +772,7 @@ def commit_hidden_forward_batched(
                 canvas_len=canvas_len,
                 is_kv_shared=layer_idx in kv_shared_map,
                 page_table=page_table,
-                write_batch=write_batch,
+                write_mode=write_mode,
             )
         finally:
             attn_mask.deallocate(True)
@@ -616,7 +786,7 @@ def commit_canvas_tokens_batched(
     start_pos: int,
     page_table=None,
     page_tables_per_layer=None,
-    write_batch: int = _DEFAULT_WRITE_BATCH,
+    write_mode: str | None = None,
 ) -> None:
     """Append committed canvas token ids to the KV cache in ONE causal prefill.
 
@@ -626,9 +796,10 @@ def commit_canvas_tokens_batched(
     embeds all ``canvas_len`` committed tokens and runs one causal masked prefill
     that writes every layer's K/V at positions ``start_pos .. start_pos+C-1``.
 
-    See the module docstring and ``doc/optimize_perf/`` for the bit-exactness
-    argument and the device verify harness. Guarded / opt-in: the sequential path
-    stays the default until this is validated on device.
+    Each layer's K/V append is one ``ttnn.fill_cache`` per K/V by default; pass
+    ``write_mode="position"`` (or ``DG_COMMIT_KV_WRITE=position``) for the per-position
+    reference write. See the module docstring and ``doc/optimize_perf/commit_batching.md``
+    for the equivalence argument and the device verify harnesses.
     """
     # Local imports to avoid an import cycle (generate imports this module lazily).
     from models.experimental.diffusion_gemma.tt.generate import (
@@ -651,6 +822,16 @@ def commit_canvas_tokens_batched(
             f"batched commit requires start_pos ({start_pos}) to be a multiple of {TILE_SIZE}; "
             "cache_len is padded to 32 and canvas_len is 256, so this holds for the standard run"
         )
+    if canvas_len % TILE_SIZE != 0:
+        # Both ends of the write span must be tile-aligned. Reject here rather than
+        # after the writes: the KV write is tile-granular, so a ragged canvas_len would
+        # push tile-pad K/V (computed from the zero-padded embedding tail, i.e. not
+        # zeros) into the cache past start_pos+canvas_len — and only then would
+        # ``_read_cache_kv``'s end_pos check fire, with the cache already dirty.
+        raise ValueError(
+            f"batched commit requires canvas_len ({canvas_len}) to be a multiple of {TILE_SIZE}; "
+            "the standard canvas is 256"
+        )
     if page_table is not None or page_tables_per_layer is not None:
         raise NotImplementedError(
             "batched commit supports only the contiguous model-owned cache (page_table=None); "
@@ -665,7 +846,7 @@ def commit_canvas_tokens_batched(
         canvas_hidden,
         start_pos=start_pos,
         page_table=page_table,
-        write_batch=write_batch,
+        write_mode=write_mode,
     )
     hidden.deallocate(True)
 
