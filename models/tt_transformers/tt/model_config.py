@@ -2412,6 +2412,7 @@ class ModelArgs:
                 "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Phi-4": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Mistral-Small-3.1-24B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Devstral-Small-2-24B": {"P150": 8, "P150x4": 128},
                 "gemma-3-1b": {"N150": 32, "N300": 32, "T3K": 32, "TG": 32, "P150x4": 32},
                 "gemma-3-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "medgemma-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
@@ -3535,11 +3536,15 @@ class ModelArgs:
             "Llama-3.2-90B": "meta-llama/Llama-3.2-90B-Vision-Instruct",
             "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
             "Mistral-Small-3.1-24B": "mistralai/Mistral-Small-3.1-24B-Instruct-2503",
+            "Devstral-Small-2-24B": "mistralai/Devstral-Small-2-24B-Instruct-2512",
             "Phi-3-mini-128k-instruct": "microsoft/Phi-3-mini-128k-instruct",
             "gemma-3-4b": "google/gemma-3-4b-it",
             "gemma-3-27b": "google/gemma-3-27b-it",
             "Qwen3.6-27B": "Qwen/Qwen3.6-27B",
         }
+        hf_cache_dir = os.getenv("HF_TOKENIZER_CACHE") or os.getenv("HF_HUB_CACHE") or None
+        local_tokenizer_files_only = os.getenv("CI") == "true" and self.base_model_name != "Devstral-Small-2-24B"
+        hf_token = os.getenv("HF_TOKEN") or None
 
         logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
         logger.info(f"Model name: {self.model_name}")
@@ -3551,7 +3556,9 @@ class ModelArgs:
             # If there is no Processor, it will return Tokenizer (useful for multimodal models)
             tokenizer = AutoTokenizer.from_pretrained(
                 self.TOKENIZER_PATH,
-                local_files_only=os.getenv("CI") == "true",
+                cache_dir=hf_cache_dir,
+                local_files_only=local_tokenizer_files_only,
+                token=hf_token,
                 trust_remote_code=self.trust_remote_code_hf,
             )
             logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
@@ -3594,6 +3601,8 @@ class ModelArgs:
                     fallback_tokenizer_path = "mistralai/Mistral-7B-Instruct-v0.3"
                 elif "mistral" in model_name_lower and "small" in model_name_lower and "24b" in model_name_lower:
                     fallback_tokenizer_path = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
+                elif "devstral" in model_name_lower and "small" in model_name_lower and "24b" in model_name_lower:
+                    fallback_tokenizer_path = "mistralai/Devstral-Small-2-24B-Instruct-2512"
                 elif "phi-3-mini" in model_name_lower and "128k" in model_name_lower and "instruct" in model_name_lower:
                     fallback_tokenizer_path = "microsoft/Phi-3-mini-128k-instruct"
 
@@ -3601,7 +3610,10 @@ class ModelArgs:
                 logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
                 try:
                     tokenizer = AutoTokenizer.from_pretrained(
-                        fallback_tokenizer_path, local_files_only=os.getenv("CI") == "true"
+                        fallback_tokenizer_path,
+                        cache_dir=hf_cache_dir,
+                        local_files_only=local_tokenizer_files_only,
+                        token=hf_token,
                     )
                     logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
                 except Exception as fallback_e:

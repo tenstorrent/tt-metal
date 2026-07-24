@@ -15,13 +15,35 @@
 # mix of diffusion / vision demos plus a few model e2e tests. The Llama / Qwen
 # LLM e2e, data-parallel, and device-perf entries have been migrated out.
 
-# All entries that read HF model checkpoints / tt_cache use the canonical HF_HOME convention
+# Entries that read HF model checkpoints use the canonical HF_HOME convention
 # (matches tests/pipeline_reorg/models_e2e_tests.yaml on the Wormhole side):
 #   HF_HOME=/localdev/blackhole_demos/huggingface_data
 #   HF_MODEL=<org>/<model>                                    # hub id, not a path
-#   TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/<org>--<model>
+#   TT_CACHE_PATH=<writable tt tensor cache path>
 # Exceptions: bh_p300 (LFC) entries keep file-path / HF_HUB_CACHE form because the LFC
 # server hosts checkpoints in a layout that does not match the canonical hub cache.
+
+# ─── devstral-small-2-24b ───────────────────────────────────────────────────
+
+- name: devstral-small-2-24b pipeline tests
+  cmd: |
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    export HF_HUB_CACHE=${HF_HOME}/hub
+    export HF_MODEL=mistralai/Devstral-Small-2-24B-Instruct-2512
+    export HF_TOKENIZER_CACHE=/tmp/devstral_hf_tokenizer_cache
+    export TT_CACHE_PATH=/tmp/devstral_tt_cache/mistralai--Devstral-Small-2-24B-Instruct-2512
+    export MESH_DEVICE=P150x4
+    uv pip install -r models/experimental/devstral2_small/requirements.txt
+    pytest models/experimental/devstral2_small/tests/pipeline_tests &&
+    pytest -p models.experimental.devstral2_small.demo.tt_image_demo models/experimental/devstral2_small/demo/tt_image_demo.py --backend tt --image models/experimental/devstral2_small/resource/sample.jpeg --vision-square-pixels 1540 --mesh-width 4 --max-new-tokens 100 &&
+    pytest -p models.experimental.devstral2_small.demo.tt_text_demo models/experimental/devstral2_small/demo/tt_text_demo.py --mesh-width 4
+  skus:
+    bh_quietbox_2:
+      timeout: 120
+  owner_id: U088413NP0Q # Ashai Reddy Ginuga
+  team: models
+  model-name: devstral-small-2-24b
 
 # ─── mistral-small-3.1-24b ──────────────────────────────────────────────────
 
