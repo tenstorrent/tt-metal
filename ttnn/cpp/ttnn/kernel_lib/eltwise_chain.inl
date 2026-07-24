@@ -153,7 +153,7 @@ struct InputSpecConfig {
     using WaitField = ConfigField<WaitPolicy, first_config_bit, WaitPolicy::Cumulative>;
     using PopField = ConfigField<PopPolicy, WaitField::end, PopPolicy::AtEnd>;
     using IndexField = ConfigField<OperandKind, PopField::end, OperandKind::Scalar>;
-    using OffsetField = ConfigField<TileOffset, IndexField::end, TileOffset::Set>;
+    using OffsetField = ConfigField<TileOffset, IndexField::end, TileOffset::Strided>;
     using ReconfigField = ConfigField<DataFormatReconfig, OffsetField::end, DataFormatReconfig::Enabled>;
 
     static constexpr uint32_t used_bits = ReconfigField::end;
@@ -177,7 +177,7 @@ struct OutputSpecConfig {
     using ReluField = ConfigField<PackRelu, ReconfigField::end, PackRelu::Zero>;
     using L1AccumulationField = ConfigField<L1Accumulation, ReluField::end, L1Accumulation::SeedFirst>;
     using DestAccumulationField = ConfigField<DestAccumulation, L1AccumulationField::end, DestAccumulation::Enabled>;
-    using OffsetField = ConfigField<TileOffset, DestAccumulationField::end, TileOffset::Set>;
+    using OffsetField = ConfigField<TileOffset, DestAccumulationField::end, TileOffset::Strided>;
 
     static constexpr uint32_t used_bits = OffsetField::end;
     static constexpr uint32_t storage_mask = low_bits_mask(used_bits);
@@ -679,17 +679,29 @@ namespace detail {
 template <OperandKind M>
 inline constexpr bool is_bcast_mode_v = is_one_of_v<M, OperandKind::Row, OperandKind::Col>;
 
-template <OperandKind M>
+template <OperandKind M, TileOffset Offset>
 ALWI constexpr uint32_t idx(
-    [[maybe_unused]] uint32_t i_flat, [[maybe_unused]] uint32_t ht, [[maybe_unused]] uint32_t wt) noexcept {
+    [[maybe_unused]] uint32_t flat_index,
+    [[maybe_unused]] uint32_t row,
+    [[maybe_unused]] uint32_t column,
+    [[maybe_unused]] uint32_t row_stride) noexcept {
     if constexpr (M == OperandKind::Scalar) {
         return 0;
-    } else if constexpr (M == OperandKind::Block) {
-        return i_flat;
     } else if constexpr (M == OperandKind::Row) {
-        return wt;
+        return column;
+    } else if constexpr (M == OperandKind::Col) {
+        if constexpr (Offset == TileOffset::Strided) {
+            return row * row_stride;
+        } else {
+            return row;
+        }
     } else {
-        return ht;  // Col
+        static_assert(M == OperandKind::Block);
+        if constexpr (Offset == TileOffset::Strided) {
+            return row * row_stride + column;
+        } else {
+            return flat_index;
+        }
     }
 }
 
@@ -842,16 +854,22 @@ constexpr bool chain_requests_no_reconfig() {
 
 struct InputStream {
     uint32_t tile_base = 0;
+    uint32_t row_stride = 0;
 
     constexpr InputStream() noexcept = default;
     constexpr explicit InputStream(uint32_t base) noexcept : tile_base(base) {}
+    constexpr explicit InputStream(StridedTileRange range) noexcept :
+        tile_base(range.base), row_stride(range.row_stride) {}
 };
 
 struct OutputStream {
     uint32_t tile_base = 0;
+    uint32_t row_stride = 0;
 
     constexpr OutputStream() noexcept = default;
     constexpr explicit OutputStream(uint32_t base) noexcept : tile_base(base) {}
+    constexpr explicit OutputStream(StridedTileRange range) noexcept :
+        tile_base(range.base), row_stride(range.row_stride) {}
 };
 
 // =============================================================================
@@ -895,6 +913,9 @@ struct detail::CopyTileImpl : InputStream, CopyTileTag {
         "CopyTile: TileOffset::Set requires InputLifecycle::Bulk-family or InputLifecycle::CallerManaged lifecycle "
         "(InputLifecycle::Bulk / InputLifecycle::HeldBulk / InputLifecycle::DeferredPop / InputLifecycle::BulkDrain / "
         "InputLifecycle::CallerManaged)");
+    static_assert(
+        Offset != TileOffset::Strided || Policy == InputLifecycle::CallerManaged,
+        "CopyTile: TileOffset::Strided requires InputLifecycle::CallerManaged");
 
     static constexpr uint32_t dfb = Cb;
     static constexpr uint32_t dfb_a_id() { return Cb; }
@@ -909,12 +930,14 @@ struct detail::CopyTileImpl : InputStream, CopyTileTag {
 
     constexpr CopyTileImpl() noexcept = default;
     constexpr explicit CopyTileImpl(uint32_t base) noexcept : Base(base) {}
+    constexpr explicit CopyTileImpl(StridedTileRange range) noexcept : Base(range) {}
 
     // ---- chain pipeline hooks ----
     static ALWI void init() { copy_tile_init(Cb); }
 
     ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
-        const uint32_t in_idx = tile_base_value<Offset>(tile_base) + detail::idx<IndexMode>(i_flat, ht, wt);
+        const uint32_t in_idx =
+            tile_base_value<Offset>(tile_base) + detail::idx<IndexMode, Offset>(i_flat, ht, wt, row_stride);
         copy_tile(Cb, in_idx, to_u32(DstSlot) + slot_offset);
     }
 
@@ -977,6 +1000,9 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
         Offset == TileOffset::Unset || is_legal_output_lifecycle_with_base(Policy),
         "PackTile: TileOffset::Set requires InputLifecycle::Bulk-family or OutputLifecycle::CallerManaged lifecycle "
         "(OutputLifecycle::Bulk / OutputLifecycle::ReserveNonePushEnd / OutputLifecycle::CallerManaged)");
+    static_assert(
+        Offset != TileOffset::Strided || Policy == OutputLifecycle::CallerManaged,
+        "PackTile: TileOffset::Strided requires OutputLifecycle::CallerManaged");
 
     static constexpr uint32_t dfb = Cb;
     static constexpr uint32_t pack_dfb_id() { return Cb; }
@@ -999,6 +1025,7 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
 
     constexpr PackTileImpl() noexcept = default;
     constexpr explicit PackTileImpl(uint32_t base) noexcept : Base(base) {}
+    constexpr explicit PackTileImpl(StridedTileRange range) noexcept : Base(range) {}
 
     static ALWI void configure_relu() {
         if constexpr (Relu == PackRelu::Zero) {
@@ -1021,13 +1048,18 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
     // base). L1 accumulation also has to stay pinned to one output tile. Both cases use
     // `pack_tile<true>`, which honors `out_idx`
     // (addr = fifo_wr_ptr + page_size*out_idx - 1) without advancing the internal counter — exactly
-    // matching the explicit `base + i_flat` we pass each iteration. Unset keeps the proven
+    // matching the explicit tile index we pass each iteration. Unset keeps the proven
     // sequential path with zero behavior change.
-    ALWI void exec(uint32_t i_flat, uint32_t /*ht*/, uint32_t /*wt*/, uint32_t slot_offset) const {
+    ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
         const uint32_t base = tile_base_value<Offset>(tile_base);
-        const uint32_t out_idx = walk ? (base + i_flat) : base;
+        uint32_t out_idx;
+        if constexpr (Offset == TileOffset::Strided) {
+            out_idx = base + detail::idx<OperandKind::Block, TileOffset::Strided>(i_flat, ht, wt, row_stride);
+        } else {
+            out_idx = walk ? (base + i_flat) : base;
+        }
         pack_tile<
-            /*out_of_order_output=*/Offset == TileOffset::Set || L1AccumulationMode != L1Accumulation::Disabled>(
+            /*out_of_order_output=*/Offset != TileOffset::Unset || L1AccumulationMode != L1Accumulation::Disabled>(
             to_u32(DstSlot) + slot_offset, Cb, out_idx);
     }
 
@@ -1100,6 +1132,12 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
     static_assert(
         OffsetB == TileOffset::Unset || is_legal_input_lifecycle_with_base(BPolicy),
         "BinaryFpu: OffsetB Set requires BPolicy to be InputLifecycle::Bulk-family or InputLifecycle::CallerManaged");
+    static_assert(
+        OffsetA != TileOffset::Strided || APolicy == InputLifecycle::CallerManaged,
+        "BinaryFpu: strided A input requires InputLifecycle::CallerManaged");
+    static_assert(
+        OffsetB != TileOffset::Strided || BPolicy == InputLifecycle::CallerManaged,
+        "BinaryFpu: strided B input requires InputLifecycle::CallerManaged");
     // Per-block streaming uses chunk-local CB front. When the two sides use
     // DIFFERENT regimes (one per-block → chunk-local index `j`; the other upfront /
     // caller-managed → absolute index `base_tile + j`), the chain dispatcher
@@ -1142,6 +1180,10 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
     constexpr BinaryFpuImpl() noexcept = default;
     constexpr BinaryFpuImpl(uint32_t base_a, uint32_t base_b) noexcept : a(base_a), b(base_b) {}
     constexpr explicit BinaryFpuImpl(uint32_t base_a) noexcept : a(base_a) {}
+    constexpr BinaryFpuImpl(StridedTileRange range_a, StridedTileRange range_b) noexcept : a(range_a), b(range_b) {}
+    constexpr BinaryFpuImpl(StridedTileRange range_a, uint32_t base_b) noexcept : a(range_a), b(base_b) {}
+    constexpr BinaryFpuImpl(uint32_t base_a, StridedTileRange range_b) noexcept : a(base_a), b(range_b) {}
+    constexpr explicit BinaryFpuImpl(StridedTileRange range_a) noexcept : a(range_a) {}
 
     // Lifecycle fan-out lives in the chain driver. When same_dfb, it emits one
     // physical wait/pop and uses max(base_a, base_b) for the shared window.
@@ -1206,8 +1248,10 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
         const uint32_t b_flat = b_uses_local_idx ? i_flat_local : i_flat_abs;
         const uint32_t a_wt = a_uses_local_idx ? wt_local : wt_abs;
         const uint32_t b_wt = b_uses_local_idx ? wt_local : wt_abs;
-        const uint32_t a_idx = tile_base_value<OffsetA>(a.tile_base) + detail::idx<AIndex>(a_flat, ht, a_wt);
-        const uint32_t b_idx = tile_base_value<OffsetB>(b.tile_base) + detail::idx<BIndex>(b_flat, ht, b_wt);
+        const uint32_t a_idx =
+            tile_base_value<OffsetA>(a.tile_base) + detail::idx<AIndex, OffsetA>(a_flat, ht, a_wt, a.row_stride);
+        const uint32_t b_idx =
+            tile_base_value<OffsetB>(b.tile_base) + detail::idx<BIndex, OffsetB>(b_flat, ht, b_wt, b.row_stride);
         const uint32_t dst =
             Accumulation == DestAccumulation::Enabled ? to_u32(DstSlot) : to_u32(DstSlot) + slot_offset;
         if constexpr (Bcast == BroadcastDim::None) {
@@ -1268,6 +1312,9 @@ struct detail::DestReuseBinaryImpl : InputStream, DestReuseBinaryTag {
         Offset == TileOffset::Unset || is_legal_input_lifecycle_with_base(Policy),
         "DestReuseBinary: TileOffset::Set requires InputLifecycle::Bulk-family or InputLifecycle::CallerManaged "
         "lifecycle");
+    static_assert(
+        Offset != TileOffset::Strided || Policy == InputLifecycle::CallerManaged,
+        "DestReuseBinary: TileOffset::Strided requires InputLifecycle::CallerManaged");
 
     // The one CB feeds the src that DEST is NOT routed to: DEST_TO_SRCB -> CB on srcA (dfb_a),
     // DEST_TO_SRCA -> CB on srcB (dfb_b). The other side is the DEST register, not a CB (INVALID_DFB).
@@ -1291,6 +1338,7 @@ struct detail::DestReuseBinaryImpl : InputStream, DestReuseBinaryTag {
 
     constexpr DestReuseBinaryImpl() noexcept = default;
     constexpr explicit DestReuseBinaryImpl(uint32_t base) noexcept : Base(base) {}
+    constexpr explicit DestReuseBinaryImpl(StridedTileRange range) noexcept : Base(range) {}
 
     // srca / srcb reconfig is fold-driven; init() programs only the per-op
     // LLK shape.
@@ -1311,7 +1359,8 @@ struct detail::DestReuseBinaryImpl : InputStream, DestReuseBinaryTag {
         constexpr auto reuse = (ReuseType == DestReuseType::DEST_TO_SRCA)
                                    ? ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCA
                                    : ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB;
-        const uint32_t in_idx = tile_base_value<Offset>(tile_base) + detail::idx<IndexMode>(i_flat, ht, wt);
+        const uint32_t in_idx =
+            tile_base_value<Offset>(tile_base) + detail::idx<IndexMode, Offset>(i_flat, ht, wt, row_stride);
         binary_dest_reuse_tiles<et, reuse>(Cb, in_idx, to_u32(DstIn) + slot_offset);
     }
 

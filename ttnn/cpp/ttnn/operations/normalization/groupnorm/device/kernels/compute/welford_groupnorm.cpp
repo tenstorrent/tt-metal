@@ -128,6 +128,11 @@ void kernel_main() {
     // its own buffer index configured with unpack_to_dest_mode=UnpackToDestFp32
     // cb_in0 is in Default mode so the final-stage sub_tiles_bcast_scalar (FPU on SrcA) keeps working.
     constexpr uint32_t cb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
+#ifdef TILIZE_IN
+    constexpr uint32_t cb_welford_in_id = cb_in_id;
+#else
+    constexpr uint32_t cb_welford_in_id = cb_in0_welford_id;
+#endif
     // Boolean indicating whether the welford kernel uses the alias CB.
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
     // True when the welford intake CB is configured with UnpackToDestFp32, i.e. the FP32
@@ -184,6 +189,17 @@ void kernel_main() {
     constexpr int cb_outbeta_id = cb_out0_id;
 #endif
 
+    constexpr auto offset_scalar_input = [](uint32_t cb, ckl::InputLifecycle lifecycle) {
+        return ckl::input(
+            cb, lifecycle, ckl::OperandKind::Scalar, ckl::DataFormatReconfig::Disabled, ckl::TileOffset::Set);
+    };
+    constexpr auto streaming_input = [](uint32_t cb) {
+        return ckl::input(cb, ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled);
+    };
+    constexpr auto streaming_output = [](uint32_t cb) {
+        return ckl::output(cb, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled);
+    };
+
     CircularBuffer cb_beta(cb_beta_id);
     CircularBuffer cb_eps(cb_eps_id);
     CircularBuffer cb_ex2pe(cb_ex2pe_id);
@@ -229,11 +245,7 @@ void kernel_main() {
     if constexpr (welford_unpack_fp32_active) {
         // Reconfigure the transpose op for the welford intake CB. The factory marks this CB
         // with UnpackToDestFp32: c_29 in the TILIZE_IN branch, c_19 in the non-TILIZE_IN alias branch.
-#ifdef TILIZE_IN
-        transpose_init(cb_in_id);
-#else
-        transpose_init(cb_in0_welford_id);
-#endif
+        transpose_init(cb_welford_in_id);
     }
 
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
@@ -269,8 +281,10 @@ void kernel_main() {
 
         for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
             uint32_t out_block_h_actual = out_block_h_normal;
-            if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
-                out_block_h_actual = out_block_h_last;
+            if constexpr (extra_out_block) {
+                if (out_block_index == (num_out_blocks_padded - 1)) {
+                    out_block_h_actual = out_block_h_last;
+                }
             }
 
             for (uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
@@ -300,13 +314,8 @@ void kernel_main() {
                         // second before transpose_tile reads via the alias below.
                         cb_in0_welford.wait_front(1);
                     }
-#ifdef TILIZE_IN
-                    transpose_init(cb_in_id);
-                    transpose_tile(cb_in_id, 0, input_dst);
-#else
-                    transpose_init(cb_in0_welford_id);
-                    transpose_tile(cb_in0_welford_id, 0, input_dst);
-#endif
+                    transpose_init(cb_welford_in_id);
+                    transpose_tile(cb_welford_in_id, 0, input_dst);
 
                     // Re-establish the welford SFPU replay buffer state. When transpose_tile
                     // takes the unpack-to-DEST fp32 path, transpose_tile calls
@@ -383,23 +392,18 @@ void kernel_main() {
         // Start Normalization Factor Calculation
         // Wait for final welford values in cb_ex_global_id
         cb_ex_global.wait_front(2 * num_groups);
-        cb_ex2pe.reserve_back(num_groups);
-        // (Var + eps)
-        add_tiles_init(cb_ex_global_id, cb_eps_id);
         reconfig_data_format_srcb(cb_eps_id);
         for (uint32_t g = 0; g < num_groups; ++g) {
-            tile_regs_acquire();
-            add_tiles(cb_ex_global_id, cb_eps_id, 1 + (g << 1), 0, dst0);
-
-            // 1/[sqrt(Var + eps)]
-            rsqrt_tile_init<true>();
-            rsqrt_tile<true>(dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_ex2pe_id);
-            tile_regs_release();
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::single(),
+                ckl::BinaryFpu<
+                    offset_scalar_input(cb_ex_global_id, ckl::InputLifecycle::CallerManaged),
+                    ckl::input(cb_eps_id, ckl::InputLifecycle::CallerManaged, ckl::DataFormatReconfig::Disabled),
+                    ckl::BinaryFpuOp::Add,
+                    ckl::BroadcastDim::None>{1 + (g << 1), 0u},
+                ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::On, ckl::Dst::D0>{},
+                ckl::PackTile<streaming_output(cb_ex2pe_id)>{});
         }
-        cb_ex2pe.push_back(num_groups);
         // End Normalization Factor Calculation
 
         cb_ex2pe.wait_front(num_groups);
@@ -407,8 +411,10 @@ void kernel_main() {
         // Start Final Normalization
         for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
             uint32_t out_block_h_actual = out_block_h_normal;
-            if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
-                out_block_h_actual = out_block_h_last;
+            if constexpr (extra_out_block) {
+                if (out_block_index == (num_out_blocks_padded - 1)) {
+                    out_block_h_actual = out_block_h_last;
+                }
             }
 
             for (uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
@@ -440,80 +446,47 @@ void kernel_main() {
 
                     uint32_t group_offset = 0;
                     for (uint32_t g = min_group; g < num_groups; ++g) {
-                        cb_xmm.reserve_back(2);
-
-                        // // Now let us do the actual computation for the current group here
-                        // // a. x-u
-                        sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
                         reconfig_data_format_srcb(cb_eps_id, cb_ex_global_id);
+                        ckl::eltwise_chain(
+                            ckl::EltwiseShape::single(),
+                            ckl::BinaryFpu<
+                                offset_scalar_input(cb_in0_id, ckl::InputLifecycle::CallerManaged),
+                                offset_scalar_input(cb_ex_global_id, ckl::InputLifecycle::CallerManaged),
+                                ckl::BinaryFpuOp::Sub,
+                                ckl::BroadcastDim::Scalar>{0u, g << 1},
+                            ckl::PackTile<streaming_output(cb_xmm_id)>{});
 
-                        tile_regs_acquire();
-                        sub_tiles_bcast_scalar(cb_in0_id, cb_ex_global_id, 0, 0 + (g << 1), dst0);
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        pack_tile(dst0, cb_xmm_id);
-                        tile_regs_release();
-
-                        // // b. 1/[sqrt(Var + eps)] * mask
                         const uint32_t mask_offset = g * block_w;
                         const uint32_t mask_index = mask_offset + block_w_index;
-
-                        mul_tiles_bcast_scalar_init_short(cb_input_mask_id, cb_ex2pe_id);
                         reconfig_data_format_srcb(cb_ex_global_id, cb_ex2pe_id);
-                        tile_regs_acquire();
-                        mul_tiles_bcast_scalar(cb_input_mask_id, cb_ex2pe_id, mask_index, g, dst0);
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        pack_tile(dst0, cb_xmm_id);
-                        tile_regs_release();
-                        cb_xmm.push_back(2);
+                        ckl::eltwise_chain(
+                            ckl::EltwiseShape::single(),
+                            ckl::BinaryFpu<
+                                offset_scalar_input(cb_input_mask_id, ckl::InputLifecycle::CallerManaged),
+                                offset_scalar_input(cb_ex2pe_id, ckl::InputLifecycle::CallerManaged),
+                                ckl::BinaryFpuOp::Mul,
+                                ckl::BroadcastDim::Scalar>{mask_index, g},
+                            ckl::PackTile<streaming_output(cb_xmm_id)>{});
 
-                        // // c. a * b
-                        cb_xmm.wait_front(2);
-                        mul_tiles_init(cb_xmm_id, cb_xmm_id);
+                        // Normalize the centered input.
                         reconfig_data_format_srcb(cb_ex2pe_id, cb_xmm_id);
-                        tile_regs_acquire();
-                        mul_tiles(cb_xmm_id, cb_xmm_id, 0, 1, dst0);
-                        tile_regs_commit();
-                        cb_xmm.pop_front(2);
-                        cb_xmm.reserve_back(1);
-                        tile_regs_wait();
-                        pack_tile(dst0, cb_xmm_id);
-                        tile_regs_release();
-                        cb_xmm.push_back(1);
+                        ckl::eltwise_chain(
+                            ckl::EltwiseShape::single(),
+                            ckl::BinaryFpu<
+                                offset_scalar_input(cb_xmm_id, ckl::InputLifecycle::Bulk),
+                                offset_scalar_input(cb_xmm_id, ckl::InputLifecycle::Bulk),
+                                ckl::BinaryFpuOp::Mul,
+                                ckl::BroadcastDim::None>{0u, 1u},
+                            ckl::PackTile<streaming_output(cb_xmm_id)>{});
 
-                        // // d. Add to cb_xmm_id (accumulate results)
-                        // // First we get the result in dst0
+                        // Accumulate contributions when a tile spans multiple groups.
                         if (group_offset == 0) {
-                            // When group_offset is 0, this is the first group for this tile,
-                            // so we can copy the results to cb_x_id without needing to add them
-                            copy_tile_init(cb_xmm_id);
-
-                            cb_xmm.wait_front(1);
-                            tile_regs_acquire();
-                            copy_tile(cb_xmm_id, 0, dst0);
-                            tile_regs_commit();
-                            cb_xmm.pop_front(1);
+                            ckl::copy<streaming_input(cb_xmm_id), streaming_output(cb_x_id)>(
+                                ckl::EltwiseShape::single());
                         } else {
-                            // This is not the first group for this tile, so we need to add
-                            // the results over what is already in cb_x_id
-                            add_tiles_init(cb_x_id, cb_xmm_id);
-
-                            cb_xmm.wait_front(1);
-                            cb_x.wait_front(1);
-                            tile_regs_acquire();
-                            add_tiles(cb_x_id, cb_xmm_id, 0, 0, dst0);
-                            tile_regs_commit();
-                            cb_xmm.pop_front(1);
-                            cb_x.pop_front(1);
+                            ckl::add<streaming_input(cb_x_id), streaming_input(cb_xmm_id), streaming_output(cb_x_id)>(
+                                ckl::EltwiseShape::single());
                         }
-
-                        // Then we pack the result into cb_x_id
-                        cb_x.reserve_back(1);
-                        tile_regs_wait();
-                        pack_tile(dst0, cb_x_id);
-                        tile_regs_release();
-                        cb_x.push_back(1);
 
                         uint32_t cols_available = tile_width - group_offset;
                         uint32_t cols_consumed = std::min(cols_available, channels_left);
@@ -548,43 +521,31 @@ void kernel_main() {
                     }
 
                     if constexpr (do_gamma) {
+                        reconfig_data_format_srcb(cb_xmm_id, cb_gamma_id);
                         ckl::eltwise_chain(
                             ckl::EltwiseShape::single(),
                             ckl::BinaryFpu<
-                                ckl::input(cb_x_id, ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
-                                ckl::input(
-                                    cb_gamma_id,
-                                    ckl::InputLifecycle::CallerManaged,
-                                    ckl::OperandKind::Scalar,
-                                    ckl::DataFormatReconfig::Enabled,
-                                    ckl::TileOffset::Set),
+                                streaming_input(cb_x_id),
+                                offset_scalar_input(cb_gamma_id, ckl::InputLifecycle::CallerManaged),
                                 ckl::BinaryFpuOp::Mul,
                                 ckl::BroadcastDim::Row>{0u, nt},
-                            ckl::PackTile<ckl::output(
-                                cb_x_id, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+                            ckl::PackTile<streaming_output(cb_x_id)>{});
                     }
 
                     if constexpr (do_beta) {
+                        reconfig_data_format_srcb(do_gamma ? cb_gamma_id : cb_xmm_id, cb_beta_id);
                         ckl::eltwise_chain(
                             ckl::EltwiseShape::single(),
                             ckl::BinaryFpu<
-                                ckl::input(cb_x_id, ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
-                                ckl::input(
-                                    cb_beta_id,
-                                    ckl::InputLifecycle::CallerManaged,
-                                    ckl::OperandKind::Scalar,
-                                    ckl::DataFormatReconfig::Enabled,
-                                    ckl::TileOffset::Set),
+                                streaming_input(cb_x_id),
+                                offset_scalar_input(cb_beta_id, ckl::InputLifecycle::CallerManaged),
                                 ckl::BinaryFpuOp::Add,
                                 ckl::BroadcastDim::Row>{0u, nt},
-                            ckl::PackTile<ckl::output(
-                                cb_x_id, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+                            ckl::PackTile<streaming_output(cb_x_id)>{});
                     }
 
-                    ckl::copy<
-                        ckl::input(cb_x_id),
-                        ckl::output(cb_out_id, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
-                        ckl::EltwiseShape::single());
+                    reconfig_data_format_srcb(do_beta ? cb_beta_id : cb_xmm_id, cb_x_id);
+                    ckl::copy<streaming_input(cb_x_id), streaming_output(cb_out_id)>(ckl::EltwiseShape::single());
                 }
             }
 

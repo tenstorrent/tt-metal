@@ -232,7 +232,7 @@ enum class OperandKind : uint8_t {
 };
 
 // =============================================================================
-// 1d. TileOffset — orthogonal tile-index offset (present / absent)
+// 1d. TileOffset — orthogonal tile-index addressing
 // =============================================================================
 //
 // Composes with `OperandKind`: `tile_id = base + derived_from_kind(r, c)`, where
@@ -241,14 +241,25 @@ enum class OperandKind : uint8_t {
 //     are compile-time-elided.
 //   - `Set`: offset present; its value comes from the element's constructor (runtime, or
 //     a compile-time constant that constant-propagates into the address add).
+//   - `Strided`: base and row stride come from a `StridedTileRange`. Block maps to
+//     `base + r * row_stride + c`, Col to `base + r * row_stride`, while Row and
+//     Scalar retain their ordinary column/pinned behavior.
 //
 // `Set` is restricted to Bulk-family / CallerManaged lifecycles (single upfront wait,
 // single end pop or none). Iter-dependent counts (Streaming / Chunked / Cumulative /
 // Held{Stream,Cumulative} / NoWaitPop) can't compose with a runtime base. Caller must
 // size the CB for `base + window`; the chain inflates its wait/reserve/pop/push counts
 // by `base` at runtime.
+//
+// `Strided` is restricted to CallerManaged lifecycles: a gapped window cannot be
+// represented by a single wait/pop/reserve/push count, so the enclosing kernel owns it.
 
-enum class TileOffset : bool { Unset = false, Set = true };
+enum class TileOffset : uint8_t { Unset, Set, Strided };
+
+struct StridedTileRange {
+    uint32_t base;
+    uint32_t row_stride;
+};
 
 /// Whether the chain updates the data format for an operand.
 enum class DataFormatReconfig : bool { Disabled = false, Enabled = true };

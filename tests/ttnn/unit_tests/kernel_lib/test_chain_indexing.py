@@ -25,6 +25,7 @@ import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
 
 OFFSET_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/axes/tile_offset.cpp"
 INDEX_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/axes/index_2d.cpp"
+STRIDED_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/axes/strided_tile_range.cpp"
 MODE = {"row": 2, "col": 1}
 
 
@@ -114,3 +115,38 @@ def test_index_2d_axes_are_distinct(device):
     ok_cross, msg = comp_pcc(col_golden, row_out, 0.99)
     logger.info(f"index cross-check: ROW-out vs COL-golden (expect low) | {msg}")
     assert not ok_cross, "ROW-index output matched COL golden — a Row<->Col index swap would slip through."
+
+
+def test_strided_tile_range(device):
+    Ht, Wt = 2, 2
+    input_stride, output_stride = 4, 5
+    input_base, output_base = 1, 2
+    dt = ttnn.bfloat16
+    core_grid = lib.single_core_grid()
+
+    in_shape = [1, 1, 32 * Ht, 32 * input_stride]
+    out_shape = [1, 1, 32 * Ht, 32 * output_stride]
+    torch_in, tt_in = lib.make_input(in_shape, dt, device, seed=421)
+    tt_out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(out_shape), dt, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    cbs = [
+        lib.cb_descriptor(0, dt, Ht * input_stride, core_grid),
+        lib.cb_descriptor(16, dt, Ht * output_stride, core_grid),
+    ]
+    reader = lib.build_reader_kernel([tt_in], Ht * input_stride, core_grid)
+    writer = lib.build_writer_1out_kernel(tt_out, Ht * output_stride, core_grid)
+    compute = lib.build_compute_kernel(
+        STRIDED_KERNEL, [Ht, Wt, input_stride, output_stride, input_base, output_base], core_grid
+    )
+
+    program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
+    output = ttnn.generic_op([tt_in, tt_out], program)
+    out = ttnn.to_torch(output).to(torch.float32)
+
+    golden_region = torch_in.to(torch.float32)[:, :, :, 32 * input_base : 32 * (input_base + Wt)]
+    output_region = out[:, :, :, 32 * output_base : 32 * (output_base + Wt)]
+    pcc_ok, msg = comp_pcc(golden_region, output_region, lib.pcc_threshold([dt]))
+    logger.info(f"strided tile range | {msg}")
+    assert pcc_ok, msg
