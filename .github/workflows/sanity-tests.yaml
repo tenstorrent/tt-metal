@@ -18,6 +18,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      build-inplace-wheel:
+        required: false
+        type: boolean
+        default: true
+        description: "Use the fast in-place wheel (no 2nd compile). Nightly canary passes false to build the real manylinux wheel."
       with-retries:
         required: false
         type: boolean
@@ -113,6 +118,11 @@ on:
         default: false
         type: boolean
         description: "Enable Link Time Optimization (LTO)"
+      build-inplace-wheel:
+        required: false
+        default: true
+        type: boolean
+        description: "Use the fast in-place wheel (no 2nd compile). Nightly canary passes false to build the real manylinux wheel."
       run-ttnn-sanity-tests:
         required: false
         default: true
@@ -182,7 +192,10 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
-      build-inplace-wheel: true
+      # In-place wheel by default; nightly canary passes build-inplace-wheel:false for the real manylinux wheel.
+      # Direct push has no inputs, so treat it as in-place too.
+      build-inplace-wheel: ${{ inputs.build-inplace-wheel || github.event_name == 'push' }}
+      build-wheel: ${{ !inputs.build-inplace-wheel && github.event_name != 'push' }}
       tracy: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       skip-tt-train: false
