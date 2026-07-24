@@ -178,6 +178,7 @@ float sfpu_function(const std::string& op_name, float input) {
     }
     if (op_name == "softplus") {
         return (input > 20.0f) ? input : std::log1p(std::exp(input));
+    }
     if (op_name == "clamp") {
         return std::clamp(input, -1.0f, 1.0f);
     }
