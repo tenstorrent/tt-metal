@@ -250,13 +250,19 @@ inline void llk_math_eltwise_unary_sfpu_init() {
 }
 
 // Callback init entry point (SFPU_UNARY_INIT_FN / _FN_ARGS / two-arg SFPU_UNARY_INIT). The per-op common init
-// (config reg + ADDR_MOD_7 + counter reset) runs first, then the op-specific init_func. Consolidated per-op
-// (#50381) rather than hoisted: re-asserting the shared SFPU config/addrmod state on every init -- on both the
-// MATH and PACK threads -- keeps the exp(PACK)/fp32-reciprocal(MATH) shared macro/replay programming from
-// interleaving destructively, which was the #50381 fp32 SDPA accuracy regression.
+// (config reg + ADDR_MOD_7 + counter reset) runs first, then the op-specific init_func.
+//
+// EXCEPTION -- exponential and reciprocal must run as a SINGLE self-contained sfpu::<op>_init() with no separate
+// generic prefix, so the sanitizer's per-op operation_init hook sees exactly one LLK init. Their init_func
+// already inlines the common init, and the shared SFPLOADMACRO macro slots + Load-Macro-Control Misc (the
+// exp-on-PACK / fp32-recip-on-MATH #50381 collision) are serialized with mutex::SFPU at the consume site rather
+// than masked by re-asserting config here. So the prefix is skipped for these two ops. All other callback ops
+// keep the prefix + init_func split.
 template <SfpuType sfpu_op, class F, class... ARGS>
 inline void llk_math_eltwise_unary_sfpu_init(F&& init_func, ARGS&&... args) {
-    _llk_math_eltwise_unary_sfpu_init_<sfpu_op>();
+    if constexpr (sfpu_op != SfpuType::exponential && sfpu_op != SfpuType::reciprocal) {
+        _llk_math_eltwise_unary_sfpu_init_<sfpu_op>();
+    }
     init_func(std::forward<ARGS>(args)...);
 }
 
