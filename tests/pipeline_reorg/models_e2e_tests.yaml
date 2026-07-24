@@ -1174,7 +1174,7 @@
   model: hunyuan-image-3.0
   skus:
     bh_quietbox_2:
-      timeout: 180
+      timeout: 35
       tier: 3
   owner_id: D0B8130N4BW # Dalar Vartanians
   team: models
