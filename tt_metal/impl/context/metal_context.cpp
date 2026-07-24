@@ -22,6 +22,7 @@
 #include "context/metal_env_accessor.hpp"
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include "dispatch_core_common.hpp"
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "metal_env_impl.hpp"
 #include "context_descriptor.hpp"
@@ -233,12 +234,16 @@ void MetalContext::initialize(
     dispatch_query_manager_ =
         std::make_unique<DispatchQueryManager>(*this->env_, *dispatch_core_manager_, dispatch_core_config_, num_hw_cqs);
     const bool is_galaxy_cluster = get_cluster().is_galaxy_cluster();
-    for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
+    std::vector<CoreType> core_types{CoreType::WORKER, CoreType::ETH};
+    if (hal().has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
+        core_types.push_back(CoreType::DISPATCH);
+    }
+    for (CoreType core_type : core_types) {
         const CommandQueueDispatchLayout& cq_dispatch_layout = dispatch_query_manager_->cq_dispatch_layout(core_type);
         dispatch_mem_map_[enchantum::to_underlying(core_type)] = std::make_unique<DispatchMemMap>(
             core_type, num_hw_cqs, hal(), is_galaxy_cluster, cq_dispatch_layout, rtoptions());
     }
-    // Initialize debug servers. Attaching individual devices done below
+// Initialize debug servers. Attaching individual devices done below
     rtoptions().resolve_fabric_node_ids_to_chip_ids(this->get_control_plane());
     rtoptions().resolve_mesh_coords_to_chip_ids(this->get_system_mesh());
     if (rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
@@ -577,6 +582,12 @@ DispatchQueryManager& MetalContext::get_dispatch_query_manager() {
 }
 
 const DispatchMemMap& MetalContext::dispatch_mem_map() const {
+    const auto& cluster = get_cluster();
+    if (env_ != nullptr && cluster.arch() == tt::ARCH::QUASAR && !cluster.all_chip_ids().empty()) {
+        const ChipId device_id = *cluster.all_chip_ids().begin();
+        return dispatch_mem_map(
+            resolve_dispatch_core_type(MetalEnvAccessor(*env_).impl(), device_id, dispatch_core_config_));
+    }
     return dispatch_mem_map(get_core_type_from_config(dispatch_core_config_));
 }
 
@@ -764,7 +775,7 @@ bool MetalContext::is_coord_in_range(CoreCoord coord, CoreType core_type) {
 
     CoreCoord virtual_coord = get_cluster().get_virtual_coordinate_from_logical_coordinates(id, coord, core_type);
     return get_cluster().is_ethernet_core(virtual_coord, id) || get_cluster().is_worker_core(virtual_coord, id) ||
-           get_cluster().is_dram_core(virtual_coord, id);
+           get_cluster().is_dram_core(virtual_coord, id) || get_cluster().is_dispatch_core(virtual_coord, id);
 }
 
 void MetalContext::on_dispatch_timeout_detected() {
