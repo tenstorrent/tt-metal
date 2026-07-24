@@ -357,18 +357,10 @@ jobs:
           TEST_PATH: ${{ matrix.test_path }}
           EXTRA_ARGS: ${{ matrix.extra_args }}
           # Opt-in device profiling (single-card only). Kept as a plain true/false flag; the
-          # actual TT_METAL_DEVICE_PROFILER env var is exported below ONLY when this is true.
-          # tt-metal's rtoptions treats a *present* TT_METAL_DEVICE_PROFILER on a non-Tracy
-          # build as a fatal error, so it must stay entirely unset in the default path.
+          # cmd is only wrapped in the Tracy profiler below when this is true, so the
+          # default path is byte-identical to before.
           RESHARD_PROFILE: ${{ inputs.run-reshard-analysis && (inputs.runner-label == 'N150' || inputs.runner-label == 'N300' || inputs.runner-label == 'P100a' || inputs.runner-label == 'P150b') }}
         run: |
-          # Enable device profiling so the pytest-driven tracer also emits ops_perf_results*.csv.
-          # Only exported when opted in on a single-card runner; otherwise the var is never set
-          # and the run below is identical to the pre-existing behavior.
-          if [[ "$RESHARD_PROFILE" == "true" ]]; then
-            export TT_METAL_DEVICE_PROFILER=1
-          fi
-
           TRACER_OUTPUT_DIR="model_tracer/traced_operations"
 
           # Reject extra_args that override output directory
@@ -384,6 +376,19 @@ jobs:
               python3 -c 'import os, shlex, sys; [sys.stdout.write(a + "\0") for a in shlex.split(os.environ["EXTRA_ARGS"])]'
             )
             cmd+=("${extra[@]}")
+          fi
+
+          # A bare TT_METAL_DEVICE_PROFILER=1 only turns on device-side capture; nothing
+          # converts that into ops_perf_results*.csv unless something explicitly runs the
+          # report-generation step. `python -m tracy -r` is that step (see
+          # tools/tracy/__main__.py's generate_report call and scripts/run_safe_pytest.sh's
+          # --profile mode, which uses the same pattern for a plain pytest invocation) --
+          # it launches the target as a child process (setting TT_METAL_DEVICE_PROFILER=1
+          # itself), waits for it to finish, and then runs process_ops_logs to write the CSV.
+          # --check-exit-code makes sure a real tracer failure still fails this step instead
+          # of being masked by the wrapper.
+          if [[ "$RESHARD_PROFILE" == "true" ]]; then
+            cmd=(python3 -m tracy -p -r --check-exit-code "${cmd[@]:1}")
           fi
 
           "${cmd[@]}"
