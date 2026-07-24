@@ -1306,9 +1306,13 @@ int main(int argc, char** argv) {
     if (tracy_freq <= 0.0) {
         tracy_freq = 1.0;
     }
+    int64_t t_tracy_setup_ns = 0;  // DIAG: tracy-time at handler setup; delta to launch = the anchor shift fixed
     if (do_tracy) {
         printf("[tracy] device aiclk = %.4f GHz (cyc/ns)\n", tracy_freq);
         tracy_handler = std::make_unique<tt::tt_metal::PerfDebugTracyHandler>();
+#if defined(TRACY_ENABLE)
+        t_tracy_setup_ns = tracy::Profiler::GetTime();
+#endif
         // NOTE: AddDevice (the host<->device anchor) + PreCreateContexts are DEFERRED to just before the
         // workload launch (see below). host_start = GetTime() must be captured then, NOT here: all the setup
         // between here and the launch (boot/calibrate/socket/JIT ~hundreds of ms) would otherwise shift the
@@ -1319,7 +1323,9 @@ int main(int argc, char** argv) {
         printf(
             "[tracy] handler up: %zu cores pre-created, %zu zone names loaded\n", (size_t)num_cores, zone_names.size());
     }
-    uint64_t x280_ts_base = 0;  // shared rebase origin (first RISC marker ts); X280 hart zones rebase identically
+    uint64_t x280_ts_base = 0;    // shared rebase origin (first RISC marker ts); X280 hart zones rebase identically
+    uint64_t x280_ts_max = 0;     // diag: max RISC marker ts seen -> device timeline span
+    int64_t launch_tracy_ns = 0;  // tracy-time captured just before EnqueueMeshWorkload (diag: delay to 1st marker)
     auto tracy_consumer = [&]() {
         tracy::SetThreadName("x280-consume");  // host thread row: where device zones get pushed into Tracy
         Batch b;
@@ -1349,8 +1355,20 @@ int main(int argc, char** argv) {
                     continue;
                 }
                 if (!anchored) {
-                    ts_base = r.ts;   // rebase origin. NOTE: no CalibrateDevice -- GPU drift-calibration is
-                    anchored = true;  // intentionally off (it scaled durations ~9x); the AddDevice anchor
+                    ts_base = r.ts;  // rebase origin: this FIRST decoded marker -> device gpuTime 0
+                    anchored = true;
+                    // Anchor host_start = NOW (real Tracy time of the first marker's arrival). This is the
+                    // closest cheap proxy for "the device started producing", so device zones land on the same
+                    // host timeline as the host CPU zones (flusher/consumer) instead of ~590 ms before them
+                    // (EnqueueMeshWorkload JIT+dispatch delayed the first marker that far past launch). Must run
+                    // BEFORE the first HandleWorkerZone below (it creates the context with this anchor). The
+                    // X280-hart zones (pushed at teardown) share ts_base + this anchor, so they align too.
+                    int64_t now_ns = tracy::Profiler::GetTime();
+                    tracy_handler->AddDevice((uint32_t)device_id, now_ns, 0.0, tracy_freq);
+                    printf(
+                        "[tracy] first device marker consumed %.1f ms after launch (JIT+dispatch+pipeline) -- "
+                        "device zones anchored here to align with host CPU zones\n",
+                        (double)(now_ns - launch_tracy_ns) / 1e6);
                 }  // (gpuTime=0 <-> host_start) + this rebase give correct placement.
                 auto it = zone_names.find(r.zone);
                 if (it == zone_names.end()) {  // unnamed hash -> stable fallback string
@@ -1370,10 +1388,20 @@ int main(int argc, char** argv) {
                 zp.timestamp = (r.ts >= ts_base) ? (r.ts - ts_base) : 0;  // rebased to capture origin (clamp)
                 zp.is_start = (r.type == PP_ZONE_START);
                 tracy_handler->HandleWorkerZone(zp);
+                if (r.ts > x280_ts_max) {
+                    x280_ts_max = r.ts;
+                }
                 cnt++;
             }
         }
         consumed.fetch_add(cnt);
+        printf(
+            "[tracy] device timeline span = %.1f ms (%llu tensix cyc @ %.3f GHz); host processing wall from "
+            "first-marker = %.1f ms\n",
+            (double)(x280_ts_max - x280_ts_base) / (tracy_freq * 1e6),
+            (unsigned long long)(x280_ts_max - x280_ts_base),
+            tracy_freq,
+            (double)(tracy::Profiler::GetTime() - launch_tracy_ns) / 1e6);
     };
 #endif
 
@@ -1570,21 +1598,16 @@ int main(int argc, char** argv) {
         (unsigned long long)nmarkers,
         prod_delay,
         prog_id);
+    (void)t_tracy_setup_ns;  // (anchor delta diagnostic removed -- see the consumer's first-marker AddDevice)
 #if defined(TRACY_ENABLE)
-    if (do_tracy && tracy_handler) {
-        // Anchor the device timeline HERE, right before the workload produces its first marker -- so the
-        // device zones' host_start (gpuTime=0) lines up with the host CPU zones' real Tracy time. Anchoring at
-        // tracy setup (hundreds of ms of boot/calibrate/JIT earlier) shifted the whole device timeline that far
-        // before the host activity, so they didn't overlap.
-        tracy_handler->AddDevice((uint32_t)device_id, tracy::Profiler::GetTime(), 0.0, tracy_freq);
-        std::vector<std::pair<uint32_t, uint32_t>> worker_noc0;
-        worker_noc0.reserve(num_cores);
-        for (uint32_t c = 0; c < num_cores; c++) {
-            worker_noc0.emplace_back(noc0x[c], noc0y[c]);
-        }
-        tracy_handler->PreCreateContexts((uint32_t)device_id, worker_noc0);
+    if (do_tracy) {
+        launch_tracy_ns = tracy::Profiler::GetTime();  // for the "delay to first marker" diagnostic in the consumer
     }
 #endif
+    // NOTE: the device anchor (AddDevice) is set even later -- when the tracy_consumer decodes the FIRST marker
+    // -- NOT here. EnqueueMeshWorkload below JIT-compiles + dispatches the kernels (~hundreds of ms) before the
+    // device produces anything, so anchoring pre-launch is still that far too early. First-marker-consume is
+    // the closest cheap proxy for "device started producing", so device zones land on the host timeline.
     // wall clock spanning the concurrent producer+drain window; used only for the aggregate BW report (nodes>1).
     auto wall_start = std::chrono::steady_clock::now();
     distributed::EnqueueMeshWorkload(mesh->mesh_command_queue(), wl, /*blocking=*/true);
