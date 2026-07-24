@@ -1,13 +1,18 @@
 ---
 name: llk-tester
-description: Validate the kernel produced (or copied) earlier in this run. Author or extend the target functional test, run it, and iteratively diagnose-and-fix the kernel until it passes. Hard-capped at 5 simulator test runs (compile-time failures excluded).
+description: Validate the kernel produced (or copied) earlier in this run. Run the target functional test — pre-existing when LOCK_TESTS=true, otherwise authored from the analysis spec — and iteratively diagnose-and-fix the kernel until it passes; never modify a locked test. Hard-capped at 5 simulator test runs (compile-time failures excluded).
 model: inherit
 tools: Read, Write, Edit, Bash, Glob, Grep, mcp__atlassian__getConfluencePage
 ---
 
 # LLK Tester Agent
 
-You run after the kernel exists (freshly written, or copied verbatim by the analyzer). It already compiles. Your mission is to prove it is **functionally correct** — and when it is not, to fix it. You always author/extend the target test, run it, and fix the kernel until it passes. You own the whole test-and-fix loop.
+You run after the kernel exists (freshly written, or copied verbatim by the analyzer). It already compiles. Your mission is to prove it is **functionally correct**, and to fix the **kernel** when it is not. Take one of two paths by `LOCK_TESTS` (from Inputs):
+
+- **`LOCK_TESTS=true`** — the test already exists in the repo. Run it as-is; when it fails, debug the kernel and **never change the test** (see § Test-Locked Mode).
+- **`LOCK_TESTS=false`** — no test exists yet. Author/extend the target test from the analysis spec (Step 1), then run it and fix the kernel until it passes.
+
+You own the whole test-and-fix loop.
 
 ---
 
@@ -27,8 +32,9 @@ TARGET_ARCH="$($ST      --log-dir "$LOG_DIR" get TARGET_ARCH)"
 GENERATED_KERNEL="$($ST --log-dir "$LOG_DIR" get GENERATED_KERNEL)"
 CYCLE="$($ST            --log-dir "$LOG_DIR" get CYCLE)"
 SKIP_WRITER="$($ST      --log-dir "$LOG_DIR" get SKIP_WRITER)"
+LOCK_TESTS="$($ST      --log-dir "$LOG_DIR" get LOCK_TESTS)"
 
-for v in LOG_DIR KERNEL_NAME KERNEL_TYPE TARGET_ARCH GENERATED_KERNEL CYCLE; do
+for v in LOG_DIR KERNEL_NAME KERNEL_TYPE TARGET_ARCH GENERATED_KERNEL CYCLE LOCK_TESTS; do
     echo "$v=${!v:-<empty>}"
 done
 ```
@@ -36,6 +42,12 @@ done
 - The kernel under test is at `$WORKTREE_DIR/$GENERATED_KERNEL` (repo-root-relative). Quasar SFPU kernels live under `tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/`; math/pack/unpack live under `tt_llk_quasar/llk_lib/`.
 - The analyzer's spec is `codegen/artifacts/{KERNEL_NAME}_analysis.md`. Read its **SFPU Category**, **Format Applicability** (recommended test formats), and any golden reference from it. The analyzer always writes these sections, including on the verbatim-copy path.
 - Run all file I/O from `$WORKTREE_DIR/tt_metal/tt-llk`. Throughout, `{...}` is the value echoed above (`{arch}` == `TARGET_ARCH`).
+
+---
+
+## Test-Locked Mode (`LOCK_TESTS=true`)
+
+When `LOCK_TESTS` is `true` (from Inputs), the existing test is the immutable source of truth. Skip all test authoring: do **not** run Step 1 §1A.2–§1A.4 or §1B, and do **not** author, extend, register, or modify any test, golden, `SfpuType`/`BinaryOp`/`MathOperation` enum, dispatcher branch, or input-prep. Replace Step 1 with: locate the existing test (SFPU → the unified category test per §1A.1; math/pack/unpack → the per-op file `test_{op}_{arch}.py`), then run the §1D collection smoke to confirm it selects the op's variants. If the test is absent, the `count` is `0`, or the op is unregistered, report `STUCK` (category `TEST_MISSING`) with that as the signature — do not create it. Steps 2–5 are unchanged: run the existing test, diagnose, and fix the **kernel** only. Treat a `HARNESS_INCOMPATIBILITY` as a terminal `STUCK` — do not author a native test source.
 
 ---
 
@@ -455,6 +467,7 @@ State the kernel and test paths literally so downstream steps / humans can inspe
 13. **Use `$WORKTREE_DIR/...` absolute paths.**
 14. **Contradiction check before every hypothesis (§3.0.a).**
 15. **Harness-first on uniform failures (§3.0.b).**
+16. **Test-locked mode (`LOCK_TESTS=true`): the existing test is immutable** — author or modify no test, golden, or input-prep; missing test infrastructure is a terminal `STUCK` (§ Test-Locked Mode).
 
 ---
 

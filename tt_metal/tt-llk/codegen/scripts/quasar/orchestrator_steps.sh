@@ -206,14 +206,14 @@ execute_step_setup_run() {
     local S="$_ORCH_SCRIPTS" wt
     wt="$(_wt)"
 
-    local START_TIME KERNEL_NAME TARGET_ARCH WORKTREE_BRANCH SFPI_MODE SKIP_TESTER HIDE_EXISTING_KERNEL LOG_DIR_BASE
+    local START_TIME KERNEL_NAME TARGET_ARCH WORKTREE_BRANCH SFPI_MODE LOCK_TESTS HIDE_EXISTING_KERNEL LOG_DIR_BASE
     local RUN_ID LOG_DIR GIT_COMMIT CODEGEN_VERSION PROMPT BATCH_ID MODEL RUN_TYPE
     START_TIME="$(python "$S/state.py" --worktree-dir "$wt" get START_TIME)"; START_TIME="${START_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
     KERNEL_NAME="$(python "$S/state.py" --worktree-dir "$wt" get KERNEL_NAME)"
     TARGET_ARCH="$(python "$S/state.py" --worktree-dir "$wt" get TARGET_ARCH)"
     WORKTREE_BRANCH="$(python "$S/state.py" --worktree-dir "$wt" get WORKTREE_BRANCH)"
     SFPI_MODE="$(python "$S/state.py" --worktree-dir "$wt" get SFPI_MODE)"
-    SKIP_TESTER="$(python "$S/state.py" --worktree-dir "$wt" get SKIP_TESTER)"; SKIP_TESTER="${SKIP_TESTER:-false}"
+    LOCK_TESTS="$(python "$S/state.py" --worktree-dir "$wt" get LOCK_TESTS)"; LOCK_TESTS="${LOCK_TESTS:-false}"
     HIDE_EXISTING_KERNEL="$(python "$S/state.py" --worktree-dir "$wt" get HIDE_EXISTING_KERNEL)"; HIDE_EXISTING_KERNEL="${HIDE_EXISTING_KERNEL:-false}"
     LOG_DIR_BASE="$(python "$S/state.py" --worktree-dir "$wt" get LOG_DIR_BASE)"
     # Reuse begin_setup's identity if the router threaded it into worktree state;
@@ -244,7 +244,7 @@ execute_step_setup_run() {
     ss TARGET_ARCH     "$TARGET_ARCH"
     ss WORKTREE_BRANCH "$WORKTREE_BRANCH"
     ss SFPI_MODE       "$SFPI_MODE" --json
-    ss SKIP_TESTER     "$SKIP_TESTER" --json
+    ss LOCK_TESTS     "$LOCK_TESTS" --json
     ss HIDE_EXISTING_KERNEL "$HIDE_EXISTING_KERNEL" --json
     ss RUN_ID          "$RUN_ID"
     ss START_TIME      "$START_TIME"
