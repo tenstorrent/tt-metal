@@ -1,21 +1,19 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-
 import os
 
+from ttnn.device import is_blackhole as ttnn_is_blackhole
+from ttnn.device import is_wormhole_b0 as ttnn_is_wormhole_b0
+
 import ttnn
-from models.common.utility_functions import is_blackhole, is_wormhole_b0
 
 
 class ModelArgs:
     """
-    BGE-M3 TTv2 model loading contract.
+    BGE-M3 model loading contract (HF checkpoint, tokenizer, and tensor layout).
 
-    Canonical flow:
-        args = ModelArgsTTv2(...)
-        state_dict = args.load_state_dict()
-        model = args.load_model(state_dict=state_dict)
+    Typical usage passes this object into the TT encoder after ``load_state_dict``.
     """
 
     def __init__(
@@ -26,6 +24,7 @@ class ModelArgs:
         max_seq_len=8192,
         cache_hf=False,
         hf_model_name=None,
+        dtype=ttnn.bfloat16,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -40,7 +39,11 @@ class ModelArgs:
         self.tile_size = 32
         self.max_batch_size = max_batch_size
         self.max_seq_len = max_seq_len
-        self.prefill_len_cutoff = 512 if is_blackhole() else 1024
+        self.dtype = dtype
+        self.attention_mask_dtype = (
+            dtype if self.max_seq_len == 512 and max(1, int(self.max_batch_size)) in (1, 32) else ttnn.bfloat16
+        )
+        self.prefill_len_cutoff = 512 if ttnn_is_blackhole(mesh_device) else 1024
 
         self.dummy_weights = dummy_weights
         self.cache_hf = cache_hf
@@ -195,7 +198,36 @@ class ModelArgs:
             ttnn.CoreCoord(num_x - 1, num_y - 1),
         )
 
-    def encode_prompts(self, prompts: list[str] | str) -> ttnn.Tensor:
+    def encode_prompts(
+        self,
+        prompts: list[str] | str,
+        prompt_length: int | None = None,
+        *,
+        attention_mask_4d: bool = True,
+        inputs_mesh_mapper: ttnn.TensorToMesh | None = None,
+    ) -> ttnn.Tensor:
+        """Tokenize ``prompts`` and build BGE-M3 model inputs.
+
+        ``attention_mask_4d`` (default True) controls the shape of the
+        returned ``attention_mask``:
+          * True — SDPA-ready 4D additive mask ``[B, 1, S, S]`` (model
+            consumes it directly without rebuilding from a 2D keep-mask).
+          * False — raw 2D boolean keep-mask ``[B, S]`` (HF convention,
+            same as ``tokenizer_attention_mask``). Use this when callers
+            expect a 2D mask, e.g. ``BgeM3ForEmbedding._pad_inputs`` /
+            pooling helpers.
+
+        ``tokenizer_attention_mask`` is always populated with the raw 2D
+        keep-mask regardless of this flag.
+
+        ``inputs_mesh_mapper`` (default None) controls how device inputs are
+        distributed across a multi-device mesh:
+          * None — ttnn default (replicate to every chip). Use for single
+            device or when every chip processes the same batch.
+          * ``ttnn.ShardTensorToMesh(mesh_device, dim=0)`` — shard the global
+            batch along dim 0 across the mesh (data parallel). Built via
+            ``models.demos.utils.common_demo_utils.get_mesh_mappers(device)``.
+        """
         if isinstance(prompts, str):
             prompts = [prompts]
 
@@ -205,7 +237,15 @@ class ModelArgs:
             max_length=self.max_seq_len,
         )
         max_prompt_length = max(len(prompt_input_ids) for prompt_input_ids in tokenized["input_ids"])
-        padded_length = get_padded_sequence_length(max_prompt_length)
+        padded_length = (
+            int(prompt_length) if prompt_length is not None else get_padded_sequence_length(max_prompt_length)
+        )
+
+        if padded_length < max_prompt_length:
+            raise ValueError(
+                f"prompt_length={padded_length} is shorter than tokenized prompt length {max_prompt_length}. "
+                "Increase prompt_length or use a shorter prompt."
+            )
 
         if padded_length > self.max_seq_len:
             raise ValueError(
@@ -213,20 +253,80 @@ class ModelArgs:
                 "Increase max_seq_len or use shorter prompts."
             )
 
-        return self.tokenizer.pad(
+        encoded = self.tokenizer.pad(
             tokenized,
             padding="max_length",
             max_length=padded_length,
             return_tensors="pt",
         )
+        input_ids = encoded["input_ids"]
+        if "token_type_ids" not in encoded:
+            encoded["token_type_ids"] = input_ids.new_zeros(input_ids.shape)
+        encoded["tokenizer_attention_mask"] = encoded["attention_mask"]
+
+        if attention_mask_4d:
+            keep = encoded["tokenizer_attention_mask"].bfloat16()
+            additive = (1.0 - keep) * -100000.0
+            encoded["attention_mask"] = (
+                additive.unsqueeze(1).unsqueeze(1).expand(-1, -1, padded_length, -1).contiguous()
+            )
+
+        mask = input_ids.ne(int(self.pad_token_id)).to(dtype=input_ids.dtype)
+        incremental_indices = mask.cumsum(dim=1) * mask
+        encoded["position_ids"] = (incremental_indices + int(self.pad_token_id)).to(dtype=input_ids.dtype)
+
+        if self.mesh_device is not None:
+            encoded["model_inputs"] = {
+                "input_ids": ttnn.from_torch(
+                    encoded["input_ids"].int(),
+                    device=self.mesh_device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=inputs_mesh_mapper,
+                ),
+                "attention_mask": (
+                    ttnn.from_torch(
+                        encoded["attention_mask"].bfloat16(),
+                        device=self.mesh_device,
+                        dtype=self.attention_mask_dtype,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=inputs_mesh_mapper,
+                    )
+                    if attention_mask_4d
+                    else ttnn.from_torch(
+                        encoded["attention_mask"].int(),
+                        device=self.mesh_device,
+                        dtype=ttnn.uint32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        mesh_mapper=inputs_mesh_mapper,
+                    )
+                ),
+                "token_type_ids": ttnn.from_torch(
+                    encoded["token_type_ids"].int(),
+                    device=self.mesh_device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=inputs_mesh_mapper,
+                ),
+                "position_ids": ttnn.from_torch(
+                    encoded["position_ids"].int(),
+                    device=self.mesh_device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=inputs_mesh_mapper,
+                ),
+            }
+        return encoded
 
 
 def get_padded_sequence_length(seq_len: int) -> int:
-    # Attention accepts 128-wide tiles for short sequences, but the long-sequence
-    # output projection path requires 1024 alignment and the QKV path requires
-    # 2048 alignment once those kernels are used.
+    # Attention requires seq_len % 32 (tile height); for seq_len > 128 it must be % 128
+    # (see ``BgeM3Attention.forward``). Padding **≤128** to 32-token steps avoids forcing
+    # e.g. 32→128 (4× wasted device work) while keeping alignment; above 128, keep 128-wide steps.
+    # Long-sequence paths: 1024 / 2048 alignment for large kernels.
     if seq_len <= 1024:
-        pad_multiple = 128
+        pad_multiple = 32 if seq_len <= 128 else 128
     elif seq_len <= 2048:
         pad_multiple = 1024
     else:
@@ -264,14 +364,15 @@ def determine_device_name(mesh_device):
     if num_devices == 0:
         return "CPU", num_devices
 
-    if is_blackhole():
+    if ttnn_is_blackhole(mesh_device):
         dict_device_names = {
             1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",  # P100 DRAM grid is 7x1, P150 is 8x1
             2: "P300",
             4: "P150x4",
             8: "P150x8",
+            32: "P150x32",  # Blackhole Galaxy
         }
-    elif is_wormhole_b0():
+    elif ttnn_is_wormhole_b0(mesh_device):
         dict_device_names = {
             1: "N150",
             2: "N300",

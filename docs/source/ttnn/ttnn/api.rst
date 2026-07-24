@@ -75,6 +75,7 @@ Core
 
    ttnn.as_tensor
    ttnn.copy_device_to_host_tensor
+   ttnn.copy_device_to_torch
    ttnn.copy_host_to_device_tensor
    ttnn.copy_host_to_device_tensor_partial
    ttnn.deallocate
