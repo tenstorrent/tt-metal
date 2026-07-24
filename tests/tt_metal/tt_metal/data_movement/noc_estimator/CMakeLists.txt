@@ -37,7 +37,7 @@ set_target_properties(
 )
 
 # CLI wrapper around the estimator: query the measured NoC model from the shell, emit JSON.
-# Backs the perf-roofline-dm skill. Located via .claude/skills/perf-roofline-dm/noc_estimate.sh.
+# Backs the perf-ceiling-dm skill. Located via .claude/skills/perf-ceiling-dm/noc_estimate.sh.
 add_executable(noc_estimate ${CMAKE_CURRENT_SOURCE_DIR}/tools/noc_estimate.cpp)
 
 target_link_libraries(
