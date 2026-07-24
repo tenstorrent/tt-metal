@@ -109,7 +109,7 @@ tt_metal/api/tt-metalium/experimental/disaggregation/ @SeanNijjar @ubcheema @ten
 tt_metal/api/tt-metalium/experimental/fabric @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @tenstorrent/codeowner-bypass # fabric experimental APIs
 tt_metal/api/tt-metalium/experimental/noc_estimator/ @nstamatovicTT @atatuzunerTT @tenstorrent/codeowner-bypass
 tt_metal/api/tt-metalium/experimental/udm/ @yugaoTT @SeanNijjar @tenstorrent/codeowner-bypass
-tt_metal/api/tt-metalium/internal/disaggregation/ @SeanNijjar @ubcheema @tenstorrent/codeowner-bypass # disaggregation internal APIs (moved from experimental in #48638)
+tt_metal/api/internal/disaggregation/ @SeanNijjar @ubcheema @tenstorrent/codeowner-bypass # disaggregation internal APIs (moved from experimental in #48638)
 tt_metal/common/ @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/codeowner-bypass
 tt_metal/common/**/CMakeLists.txt @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tt_metal/common/broadcast_ring.hpp @yusufbashiTT @mo-tenstorrent @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/codeowner-bypass
