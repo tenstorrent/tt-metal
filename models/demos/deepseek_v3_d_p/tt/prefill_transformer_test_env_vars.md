@@ -163,9 +163,10 @@ Where InfiniteBench prompt subsets are cached (only relevant when `input_source`
 If `TG`/`GALAXY`, the code treats the device as a Galaxy (`is_tg` in `perf_utils.py`).
 
 ### `PREFILL_SUMMARIES`
-Root dir for CI summary files, one per-kind subdir: `PREFILL_SUMMARIES/pcc` (per-run PCC markdown/plots),
+Root dir for CI summary files, one per-kind subdir: `PREFILL_SUMMARIES/pcc` (per-run PCC markdown),
 `PREFILL_SUMMARIES/perf` (chunk-timing tables). One file per parameterized run; a CI step globs a subdir
-and concatenates into `$GITHUB_STEP_SUMMARY`. Default `/tmp/prefill_summaries_<user>`.
+and concatenates into `$GITHUB_STEP_SUMMARY`. Default `/tmp/prefill_summaries_<user>`. (PCC PNG plots are
+separate and still go to the trace dir, not here.)
 
 ### `<NAME>_OUTPUT_DIR`
 Per-stage dump dir for `save_intermediate_output` — e.g. `NORM_OUTPUT_DIR`,

@@ -46,7 +46,7 @@ def render_table(headers: list[str], rows: list[list[str]]) -> list[str]:
     return [sep, render_row(headers), sep, *[render_row(r) for r in rows], sep]
 
 
-def _is_primary_rank() -> bool:
+def is_primary_rank() -> bool:
     """True on MPI rank 0 (or a non-MPI run). Under `mpirun --pernode` every node runs the whole test,
     so without this every rank would race-write the same file on the shared volume."""
     for var in ("OMPI_COMM_WORLD_RANK", "PMIX_RANK", "PMI_RANK"):
@@ -61,7 +61,7 @@ def emit_summary(kind: str, run_name: str, title: str, lines: list[str]) -> Path
     stdout (not loguru, which is stderr-bound here) so the block lands in the captured `-s` output. The
     file fences the block so it renders monospaced when a CI step concatenates these into
     $GITHUB_STEP_SUMMARY. Returns None on non-primary ranks (nothing written)."""
-    if not _is_primary_rank():
+    if not is_primary_rank():
         return None
     body = "\n".join(lines)
     print(f"{title}\n{body}", flush=True)

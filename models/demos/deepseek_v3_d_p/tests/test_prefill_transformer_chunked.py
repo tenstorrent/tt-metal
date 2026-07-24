@@ -1110,10 +1110,11 @@ def run_chunked_transformer_no_pcc(
     def format_duration(seconds: float) -> str:
         return f"{seconds:7.3f}s"
 
-    def print_duration_table(iteration_chunk_times: list[list[float]]) -> list[str]:
+    def print_duration_table(iteration_chunk_times: list[list[float]]) -> tuple[list[str], list[str]]:
         """Log the per-chunk median/stddev table (and, when a baseline is set, the tolerance band +
-        PASS/FAIL). Returns the list of human-readable failure messages (empty if all chunks pass or if
-        there is no baseline) so the caller can assert after the table has been printed."""
+        PASS/FAIL). Returns (failures, table_lines): failures are the human-readable out-of-band messages
+        (empty if all chunks pass or there is no baseline) so the caller can assert after the table is
+        printed; table_lines is the rendered table for the caller to emit as a summary."""
         # Iteration 0 includes compile/JIT effects; exclude it from perf stats.
         samples = iteration_chunk_times[1:]
         if not samples:
