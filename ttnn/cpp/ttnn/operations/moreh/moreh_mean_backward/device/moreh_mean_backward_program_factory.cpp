@@ -15,6 +15,7 @@
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 
 using namespace tt::tt_metal;
+using ttnn::Tensor;
 
 void get_tensor_dim(ttsl::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) {
     const auto rank = shape.rank();

@@ -14,8 +14,8 @@ void MoeGroupedTopkDeviceOperation::validate_on_program_cache_miss(
     const auto& bias = tensor_args.bias;
     const auto& padding_config = tensor_args.padding_config;
 
-    TT_FATAL(scores.storage_type() == tt::tt_metal::StorageType::DEVICE, "Scores tensor must be on device");
-    TT_FATAL(bias.storage_type() == tt::tt_metal::StorageType::DEVICE, "Bias tensor must be on device");
+    TT_FATAL(scores.storage_type() == ttnn::StorageType::DEVICE, "Scores tensor must be on device");
+    TT_FATAL(bias.storage_type() == ttnn::StorageType::DEVICE, "Bias tensor must be on device");
     TT_FATAL(scores.buffer() != nullptr, "Scores tensor must be allocated");
     TT_FATAL(bias.buffer() != nullptr, "Bias tensor must be allocated");
 
@@ -28,8 +28,7 @@ void MoeGroupedTopkDeviceOperation::validate_on_program_cache_miss(
     // Optional per-device [num_real_tokens, pad_side] config used to sentinel-mark padded token rows.
     if (padding_config.has_value()) {
         TT_FATAL(
-            padding_config->storage_type() == tt::tt_metal::StorageType::DEVICE,
-            "Padding config tensor must be on device");
+            padding_config->storage_type() == ttnn::StorageType::DEVICE, "Padding config tensor must be on device");
         TT_FATAL(padding_config->buffer() != nullptr, "Padding config tensor must be allocated");
         TT_FATAL(
             padding_config->dtype() == tt::tt_metal::DataType::UINT32, "Padding config tensor must be UINT32");
@@ -86,14 +85,14 @@ MoeGroupedTopkDeviceOperation::spec_return_value_t MoeGroupedTopkDeviceOperation
     auto output_shape = shape;
     output_shape[-1] = attributes.n_activated_experts;
 
-    return std::array<TensorSpec, 2>{
-        TensorSpec(
+    return std::array<tt::tt_metal::TensorSpec, 2>{
+        tt::tt_metal::TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(scores.layout()),
                 attributes.output_mem_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::UINT16,

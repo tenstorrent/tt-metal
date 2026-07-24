@@ -240,7 +240,7 @@ ProgramArtifacts create_no_bcast_artifacts(
     // path is correct for any layout mix; borrowing is a throughput optimization for the fully co-resident
     // case (a block-sharded residual add). ---
     const auto shard_volumes =
-        get_shard_volumes(a.tensor_spec(), std::optional<TensorSpec>{b.tensor_spec()}, c.tensor_spec());
+        get_shard_volumes(a.tensor_spec(), std::optional<tt::tt_metal::TensorSpec>{b.tensor_spec()}, c.tensor_spec());
     const bool native = shard_volumes.has_value();
     const bool a_sharded = native && shard_volumes->a_shard_volume.has_value();
     const bool b_sharded = native && shard_volumes->b_shard_volume.has_value();

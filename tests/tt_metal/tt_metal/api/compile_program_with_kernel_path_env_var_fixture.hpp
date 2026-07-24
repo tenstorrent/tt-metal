@@ -33,7 +33,7 @@ protected:
     }
 
     void create_kernel(const std::string& kernel_file) {
-        CoreCoord core(0, 0);
+        tt::tt_metal::CoreCoord core(0, 0);
         tt::tt_metal::CreateKernel(
             this->program_,
             kernel_file,

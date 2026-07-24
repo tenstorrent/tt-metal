@@ -165,7 +165,7 @@ CopyDeviceOperation::spec_return_value_t CopyDeviceOperation::compute_output_spe
     auto output_padded_shape = output_layout.compute_padded_shape(
         input_tensor.logical_shape());  // We need to account for the fact that the output tensor may have a different
                                         // padded_shape due to having a different shard_spec.
-    return {TensorSpec(
+    return {tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout::fromPaddedShape(
             operation_attributes.output_dtype,

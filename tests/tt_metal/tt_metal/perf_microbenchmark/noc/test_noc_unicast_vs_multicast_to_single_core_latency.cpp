@@ -29,9 +29,9 @@ void measure_latency(const std::string& kernel_name) {
 
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
-    CoreCoord producer_logical_core =
+    tt::tt_metal::CoreCoord producer_logical_core =
         tt_metal::MetalContext::instance().get_dispatch_core_manager().prefetcher_core(device->id(), channel, 0);
-    CoreCoord consumer_logical_core =
+    tt::tt_metal::CoreCoord consumer_logical_core =
         tt_metal::MetalContext::instance().get_dispatch_core_manager().dispatcher_core(device->id(), channel, 0);
 
     TT_FATAL(
