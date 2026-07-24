@@ -105,6 +105,59 @@ constexpr uint64_t kStartupRaceSlackCycles = 100'000;
 // (rate ≈ 0.025%); 1% gives ~40x headroom over the observed baseline.
 constexpr double kMaxBadTimestampFraction = 0.01;
 
+// How often the long-running tests emit an in-progress stats line.
+constexpr auto kStressReportInterval = std::chrono::seconds(10);
+
+// Record-weighted histogram of per-record clock-sync uncertainty (clock_sync.sync_error_ns) so the stress tests can
+// report p50/p90/p99/max sync accuracy without retaining every record. Updated lock-free from the consumer callback
+// (one atomic add per record); read from the main thread for the periodic and final reports.
+// Named distinctly (Stress*) because this file shares a Unity build TU with test_realtime_profiler_sanity.cpp.
+struct StressSyncErrorHistogram {
+    static constexpr uint64_t kBucketNs = 50;
+    static constexpr size_t kNumBuckets = 8192;  // covers [0, 409.6us); larger errors fall into overflow
+
+    std::array<std::atomic<uint64_t>, kNumBuckets> buckets{};
+    std::atomic<uint64_t> overflow{0};
+    std::atomic<uint64_t> total{0};
+    std::atomic<uint64_t> max_ns{0};
+
+    void add(uint64_t sync_error_ns) {
+        total.fetch_add(1, std::memory_order_relaxed);
+        uint64_t prev_max = max_ns.load(std::memory_order_relaxed);
+        while (sync_error_ns > prev_max &&
+               !max_ns.compare_exchange_weak(prev_max, sync_error_ns, std::memory_order_relaxed)) {
+        }
+        const size_t bucket = sync_error_ns / kBucketNs;
+        if (bucket < kNumBuckets) {
+            buckets[bucket].fetch_add(1, std::memory_order_relaxed);
+        } else {
+            overflow.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
+    // Approximate percentile in us (upper edge of the containing bucket). p in [0,1].
+    double percentile_us(double p) const {
+        const uint64_t n = total.load(std::memory_order_relaxed);
+        if (n == 0) {
+            return 0.0;
+        }
+        const uint64_t rank = static_cast<uint64_t>(std::ceil(p * static_cast<double>(n)));
+        const uint64_t observed_max = max_ns.load(std::memory_order_relaxed);
+        uint64_t cum = 0;
+        for (size_t i = 0; i < kNumBuckets; ++i) {
+            cum += buckets[i].load(std::memory_order_relaxed);
+            if (cum >= rank) {
+                // Report the bucket's upper edge, but never above the exact observed max (which the tightly-clustered
+                // case would otherwise exceed, printing p99 > max).
+                return static_cast<double>(std::min((i + 1) * kBucketNs, observed_max)) / 1000.0;
+            }
+        }
+        return static_cast<double>(observed_max) / 1000.0;
+    }
+
+    double max_us() const { return static_cast<double>(max_ns.load(std::memory_order_relaxed)) / 1000.0; }
+};
+
 distributed::MeshWorkload build_blank_kernel_workload(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     Program program = CreateProgram();
 
@@ -172,6 +225,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     uint64_t implausible_duration = 0;
     int64_t worst_negative_delta = 0;
     uint64_t max_callback_batch = 0;
+    StressSyncErrorHistogram sync_hist;
     ProgramRealtimeProfilerCallbackHandle handle =
         RegisterProgramRealtimeProfilerCallback([&](const ProgramRealtimeRecordBatch& batch) {
             max_callback_batch = std::max<uint64_t>(max_callback_batch, batch.records.size());
@@ -180,6 +234,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
                     continue;
                 }
                 ++stress_records;
+                sync_hist.add(rec.clock_sync.sync_error_ns);
                 if (rec.end_timestamp < rec.start_timestamp) {
                     const uint64_t neg_delta = rec.start_timestamp - rec.end_timestamp;
                     if (neg_delta <= kStartupRaceSlackCycles) {
@@ -223,11 +278,37 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     const std::chrono::seconds replay_window(
         tt::parse_env<std::uint32_t>("TT_RT_PROFILER_SATURATION_SECONDS", kDefaultStressReplaySeconds));
     uint64_t num_replays = 0;
-    const auto replay_deadline = std::chrono::steady_clock::now() + replay_window;
-    do {
+    const auto replay_start = std::chrono::steady_clock::now();
+    const auto replay_deadline = replay_start + replay_window;
+    auto last_report = replay_start;
+    for (;;) {
         mesh_device->replay_mesh_trace(cq.id(), trace_id, true);
         ++num_replays;
-    } while (std::chrono::steady_clock::now() < replay_deadline);
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last_report >= kStressReportInterval) {
+            const uint64_t pub_batches = rt->num_published_batches();
+            const double mean_batch =
+                pub_batches ? static_cast<double>(rt->num_published_records()) / pub_batches : 0.0;
+            log_info(
+                tt::LogTest,
+                "[RT profiler stress] t={}s replays={} published={} peak_fifo={}/{} pages mean_batch={:.1f} | "
+                "sync error us: p50={:.2f} p90={:.2f} p99={:.2f} max={:.2f}",
+                std::chrono::duration_cast<std::chrono::seconds>(now - replay_start).count(),
+                num_replays,
+                rt->num_published_records(),
+                rt->peak_fifo_pages(),
+                rt->host_fifo_capacity_pages(),
+                mean_batch,
+                sync_hist.percentile_us(0.50),
+                sync_hist.percentile_us(0.90),
+                sync_hist.percentile_us(0.99),
+                sync_hist.max_us());
+            last_report = now;
+        }
+        if (now >= replay_deadline) {
+            break;
+        }
+    }
 
     mesh_device->quiesce_devices();
     std::this_thread::sleep_for(kPostQuiesceDrain);
@@ -247,7 +328,8 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
         tt::LogTest,
         "[RT profiler stress] {} stress records across {} active device(s) over {} replays, max_callback_batch={}, "
         "mean_publish_batch={:.1f}, peak_fifo={}/{} pages, ring_full_waits={}, {} startup-race skips, {} "
-        "large-negative-delta skips (worst delta = {} cycles), {} bad-frequency, {} implausible-duration",
+        "large-negative-delta skips (worst delta = {} cycles), {} bad-frequency, {} implausible-duration; "
+        "sync error us: p50={:.2f} p90={:.2f} p99={:.2f} max={:.2f}",
         stress_records,
         num_active_devices,
         num_replays,
@@ -260,7 +342,11 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
         large_negative_skips,
         worst_negative_delta,
         bad_frequency,
-        implausible_duration);
+        implausible_duration,
+        sync_hist.percentile_us(0.50),
+        sync_hist.percentile_us(0.90),
+        sync_hist.percentile_us(0.99),
+        sync_hist.max_us());
 
     ASSERT_GE(stress_records, expected_stress_records)
         << "expected one record per program run: " << kNumProgramsInTrace << " programs per replay x " << num_replays
@@ -509,35 +595,68 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
     Counters keeps_up;
     Counters borderline;
     Counters slow;
+    StressSyncErrorHistogram sync_hist;
 
-    auto make_consumer = [](Counters& c, std::chrono::nanoseconds per_record) {
-        return [&c, per_record, start = std::chrono::steady_clock::time_point{}, paced = uint64_t{0}](
-                   const ProgramRealtimeRecordBatch& batch) mutable {
-            c.received.fetch_add(batch.records.size(), std::memory_order_relaxed);
-            c.dropped.fetch_add(batch.dropped, std::memory_order_relaxed);
-            if (per_record == std::chrono::nanoseconds::zero()) {
-                return;
-            }
-            if (paced == 0) {
-                start = std::chrono::steady_clock::now();
-            }
-            paced += batch.records.size();
-            const auto deadline = start + per_record * paced;
-            while (std::chrono::steady_clock::now() < deadline) {
-            }
+    auto make_consumer =
+        [](Counters& c, std::chrono::nanoseconds per_record, StressSyncErrorHistogram* hist = nullptr) {
+            return [&c, per_record, hist, start = std::chrono::steady_clock::time_point{}, paced = uint64_t{0}](
+                       const ProgramRealtimeRecordBatch& batch) mutable {
+                c.received.fetch_add(batch.records.size(), std::memory_order_relaxed);
+                c.dropped.fetch_add(batch.dropped, std::memory_order_relaxed);
+                if (hist != nullptr) {
+                    for (const auto& rec : batch.records) {
+                        hist->add(rec.clock_sync.sync_error_ns);
+                    }
+                }
+                if (per_record == std::chrono::nanoseconds::zero()) {
+                    return;
+                }
+                if (paced == 0) {
+                    start = std::chrono::steady_clock::now();
+                }
+                paced += batch.records.size();
+                const auto deadline = start + per_record * paced;
+                while (std::chrono::steady_clock::now() < deadline) {
+                }
+            };
         };
-    };
 
     ProgramRealtimeProfilerCallbackHandle h_keeps_up =
-        RegisterProgramRealtimeProfilerCallback(make_consumer(keeps_up, std::chrono::nanoseconds::zero()));
+        RegisterProgramRealtimeProfilerCallback(make_consumer(keeps_up, std::chrono::nanoseconds::zero(), &sync_hist));
     ProgramRealtimeProfilerCallbackHandle h_borderline =
         RegisterProgramRealtimeProfilerCallback(make_consumer(borderline, borderline_per_record));
     ProgramRealtimeProfilerCallbackHandle h_slow =
         RegisterProgramRealtimeProfilerCallback(make_consumer(slow, slow_per_record));
 
-    const auto run_deadline = std::chrono::steady_clock::now() + run_window;
-    while (std::chrono::steady_clock::now() < run_deadline) {
+    const auto run_start = std::chrono::steady_clock::now();
+    const auto run_deadline = run_start + run_window;
+    auto last_report = run_start;
+    for (;;) {
         mesh_device->replay_mesh_trace(cq.id(), trace_id, true);
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last_report >= kStressReportInterval) {
+            log_info(
+                tt::LogTest,
+                "[RT profiler stress] t={}s keeps_up: recv={} drop={} | borderline: recv={} drop={} | slow: recv={} "
+                "drop={} | peak_fifo={}/{} pages | sync error us: p50={:.2f} p90={:.2f} p99={:.2f} max={:.2f}",
+                std::chrono::duration_cast<std::chrono::seconds>(now - run_start).count(),
+                keeps_up.received.load(),
+                keeps_up.dropped.load(),
+                borderline.received.load(),
+                borderline.dropped.load(),
+                slow.received.load(),
+                slow.dropped.load(),
+                rt->peak_fifo_pages(),
+                rt->host_fifo_capacity_pages(),
+                sync_hist.percentile_us(0.50),
+                sync_hist.percentile_us(0.90),
+                sync_hist.percentile_us(0.99),
+                sync_hist.max_us());
+            last_report = now;
+        }
+        if (now >= run_deadline) {
+            break;
+        }
     }
 
     mesh_device->quiesce_devices();
@@ -576,7 +695,8 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
     log_info(
         tt::LogTest,
         "[RT profiler stress] devices={} total={} peak_fifo={}/{} pages mean_publish_batch={:.1f} | "
-        "borderline: recv={} drop={} sum={} | slow: recv={} drop={} sum={}",
+        "borderline: recv={} drop={} sum={} | slow: recv={} drop={} sum={} | "
+        "sync error us: p50={:.2f} p90={:.2f} p99={:.2f} max={:.2f}",
         num_devices,
         keeps_up_received,
         peak_fifo_pages,
@@ -587,7 +707,11 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
         borderline_total,
         slow_received,
         slow_dropped,
-        slow_total);
+        slow_total,
+        sync_hist.percentile_us(0.50),
+        sync_hist.percentile_us(0.90),
+        sync_hist.percentile_us(0.99),
+        sync_hist.max_us());
 
     UnregisterProgramRealtimeProfilerCallback(h_keeps_up);
     UnregisterProgramRealtimeProfilerCallback(h_borderline);

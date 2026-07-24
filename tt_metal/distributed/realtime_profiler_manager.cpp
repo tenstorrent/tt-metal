@@ -742,30 +742,8 @@ uint64_t RealtimeProfilerManager::run_receiver_loop() {
     uint64_t num_pages_received = 0;
     auto last_servo_tick = std::chrono::steady_clock::now();
 #if defined(TRACY_ENABLE) && TT_TRACY_CATEGORY_RT_PROFILER
-    uint64_t last_diagnostics_records = 0;
-    // Emit the RT-profiler plots (no-op without a live Tracy server). Primed here so the init-sync values show from the
-    // first frame; then refreshed on each servo tick.
-    auto emit_diagnostics_plots = [&]() {
-        if (!TTTracyConnected()) {
-            return;
-        }
-        constexpr double kServoSecs = std::chrono::duration<double>(kServoPumpInterval).count();
-        const uint64_t records = num_published_records_.load(std::memory_order_relaxed);
-        TTTracyPlotD(
-            RT_PROFILER,
-            "RT profiler publish rate (rec/s)",
-            static_cast<double>(records - last_diagnostics_records) / kServoSecs);
-        TTTracyPlotD(RT_PROFILER, "RT profiler D2H FIFO pages", static_cast<double>(fifo_pages_window_max_));
-        fifo_pages_window_max_ = 0;
-        int64_t worst_sync_error_ns = 0;
-        for (const auto& dev_state : devices_) {
-            worst_sync_error_ns =
-                std::max(worst_sync_error_ns, static_cast<int64_t>(dev_state.clock_sync.mapping().sync_error_ns));
-        }
-        TTTracyPlotD(RT_PROFILER, "RT sync error (us)", static_cast<double>(worst_sync_error_ns) / 1000.0);
-        last_diagnostics_records = records;
-    };
-    emit_diagnostics_plots();
+    constexpr auto kFifoPlotInterval = std::chrono::milliseconds(10);
+    auto last_fifo_plot = std::chrono::steady_clock::now();
 #endif
     while (!stop_.load(std::memory_order_acquire)) {
         const auto now = std::chrono::steady_clock::now();
@@ -779,8 +757,19 @@ uint64_t RealtimeProfilerManager::run_receiver_loop() {
             service_offset_servo(now);
         }
 #if defined(TRACY_ENABLE) && TT_TRACY_CATEGORY_RT_PROFILER
-        if (servo_ticked) {
-            emit_diagnostics_plots();
+        if (now - last_fifo_plot >= kFifoPlotInterval) {
+            TTTracyPlotD(
+                RT_PROFILER,
+                "RT profiler D2H FIFO high-water mark (pages)",
+                static_cast<int64_t>(fifo_pages_window_max_));
+            fifo_pages_window_max_ = 0;
+            int64_t worst_sync_error_ns = 0;
+            for (const auto& dev_state : devices_) {
+                worst_sync_error_ns =
+                    std::max(worst_sync_error_ns, static_cast<int64_t>(dev_state.clock_sync.mapping().sync_error_ns));
+            }
+            TTTracyPlotD(RT_PROFILER, "RT sync error (us)", static_cast<double>(worst_sync_error_ns) / 1000.0);
+            last_fifo_plot = now;
         }
 #endif
         if (num_pages > 0) {

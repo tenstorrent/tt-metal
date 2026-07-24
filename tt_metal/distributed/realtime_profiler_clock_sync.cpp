@@ -62,6 +62,10 @@ constexpr auto kMaxReanchorStaleness = std::chrono::seconds(2);
 
 constexpr auto kRtProfilerMinSyncInterval = std::chrono::seconds(60);
 
+// An overloaded host times out the round-trip probe every servo tick (kServoInterval) on every device at once, so
+// warn at most this often per device and fold the rest into a suppressed count.
+constexpr auto kProbeTimeoutWarnInterval = std::chrono::seconds(30);
+
 // Host ACK buffer, 32-bit words: [token, device_time_lo, device_time_hi]. device_time is word 1 (offset 4) so its L1
 // source is 4-mod-16: NOC PCIe writes require src/dst to share the low 4 bits, and the token source is 16-aligned.
 constexpr uint32_t kSyncAckWords = 3;
@@ -415,12 +419,28 @@ void RealtimeProfilerClockSync::service_servo(std::chrono::steady_clock::time_po
     try {
         const auto p = probe();
         if (!p.has_value()) {
-            log_warning(
-                tt::LogMetal,
-                "[Real-time profiler] Device {} sync round-trip probe timed out; keeping previous mapping",
-                chip_id_);
+            if (now - last_probe_timeout_warn_ >= kProbeTimeoutWarnInterval) {
+                if (suppressed_probe_timeouts_ > 0) {
+                    log_warning(
+                        tt::LogMetal,
+                        "[Real-time profiler] Device {} sync round-trip probe timed out; keeping previous mapping "
+                        "({} further probe timeouts suppressed)",
+                        chip_id_,
+                        suppressed_probe_timeouts_);
+                } else {
+                    log_warning(
+                        tt::LogMetal,
+                        "[Real-time profiler] Device {} sync round-trip probe timed out; keeping previous mapping",
+                        chip_id_);
+                }
+                last_probe_timeout_warn_ = now;
+                suppressed_probe_timeouts_ = 0;
+            } else {
+                ++suppressed_probe_timeouts_;
+            }
             return;
         }
+        suppressed_probe_timeouts_ = 0;
         const bool prev_anchor_fresh =
             last_reanchor_at_.has_value() && now - *last_reanchor_at_ < kMaxReanchorStaleness;
         if (p->rtt_ticks / 2 > kMaxReanchorHalfRttNs && prev_anchor_fresh) {

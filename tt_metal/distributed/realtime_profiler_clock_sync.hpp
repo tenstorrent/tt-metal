@@ -128,6 +128,9 @@ private:
     int64_t device_cycle_offset_ = 0;  // device_cycle = frequency * host_ns + offset
     int64_t rtt_ticks_ = 0;            // most recent accepted handshake RTT; half is the reported sync uncertainty
     std::optional<std::chrono::steady_clock::time_point> last_reanchor_at_;
+
+    std::chrono::steady_clock::time_point last_probe_timeout_warn_{};  // probe-timeout warning throttle
+    uint32_t suppressed_probe_timeouts_ = 0;                           // timeouts folded into the count since last warn
 };
 
 }  // namespace tt::tt_metal::distributed
