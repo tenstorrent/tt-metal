@@ -52,10 +52,24 @@ class Semaphore {
     // the uncached alias; DM cores are mutually coherent on the cached alias).
     static constexpr bool kUseUncachedLocalView = (Scope != SemScope::DM_LOCAL_CACHED);
 
+    // Physical L1 offset of semaphore `id` for THIS scope. DM_LOCAL_CACHED semaphores live in
+    // the dedicated cached-only pool (MEM_DM_CACHED_SEM_BASE, disjoint from the NoC-written
+    // kernel_config ring by construction); every other scope uses the normal ring region
+    // (sem_l1_base + id*L1_ALIGNMENT via get_semaphore). MEM_L1_BASE == 0, so the returned
+    // offset is also the cached-alias address.
+    static uintptr_t sem_l1_offset(uint32_t id) {
+#ifdef ARCH_QUASAR
+        if constexpr (Scope == SemScope::DM_LOCAL_CACHED) {
+            return static_cast<uintptr_t>(MEM_DM_CACHED_SEM_BASE) + id * L1_ALIGNMENT;
+        }
+#endif
+        return get_semaphore<core_type>(id);
+    }
+
 public:
     // l1_offset_ holds the physical L1 offset of the semaphore word (the cached-alias
     // address; MEM_L1_BASE == 0). Local views and NoC addresses are derived from it.
-    explicit Semaphore(uint32_t semaphore_id) : l1_offset_(get_semaphore<core_type>(semaphore_id)) {}
+    explicit Semaphore(uint32_t semaphore_id) : l1_offset_(sem_l1_offset(semaphore_id)) {}
 
     // Construct from a host-baked sem:: accessor token (Phase-2). The Scope comes from
     // the token via CTAD (deduction guide after the class), so `Semaphore s(sem::x);`
@@ -63,7 +77,7 @@ public:
     // mismatch case: an explicit `Semaphore<..., WrongScope>(sem::x)` fails to compile
     // instead of silently overriding the baked scope.
     template <uint32_t Id, SemScope TokenScope>
-    explicit Semaphore(SemAccessor<Id, TokenScope>) : l1_offset_(get_semaphore<core_type>(Id)) {
+    explicit Semaphore(SemAccessor<Id, TokenScope>) : l1_offset_(sem_l1_offset(Id)) {
         static_assert(
             TokenScope == Scope,
             "The sem:: accessor's baked SemScope does not match this Semaphore's Scope. Write "
