@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 from .model import KModel
 from dataclasses import dataclass
 from huggingface_hub import hf_hub_download

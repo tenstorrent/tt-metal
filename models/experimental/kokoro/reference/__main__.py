@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Kokoro TTS CLI
 Example usage:
 python3 -m kokoro --text "The sky above the port was the color of television, tuned to a dead channel." -o file.wav --debug
