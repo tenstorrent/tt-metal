@@ -127,6 +127,10 @@ _apply_manifest_env()
 SYNC_WORKER_CORES = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
 METADATA_SIZE_BYTES = 12
 
+# LayerAck D2H FIFO. Records are METADATA_SIZE_BYTES (12 B) each; 4 KB is a PCIe-aligned
+# one-page buffer with generous headroom for in-flight records.
+LAYER_ACK_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_LAYER_ACK_FIFO_BYTES", 4 * 1024))
+
 # End-of-stream sentinel: the producer/scheduler closes the request stream with one final push whose
 # PrefillMetadata words are all -1 (0xFFFFFFFF on the wire). -1 is out of range for slot_id and both KV
 # positions, so it can't collide with a real chunk. On receipt a rank forwards it to the next rank
@@ -300,15 +304,16 @@ def _is_shutdown_sentinel(meta: dict) -> bool:
 
 
 def _socket_next(h2d_service) -> tuple:
-    """Block on the next producer push: returns (tt_tokens, {slot_id, actual_start, actual_end})
-    decoded from the 12-byte PrefillMetadata. Used only by the unbounded request loop (rank 0 input)."""
+    """Block on the next producer push: returns (tt_tokens, {slot_id, actual_start, actual_end},
+    tt_metadata). The device metadata tensor is returned (not discarded) so it can be propagated into
+    the model's per-layer ack send. Used only by the unbounded request loop (rank 0 input)."""
     import torch
 
     tt_tokens, tt_metadata = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
         h2d_service, metadata_size_bytes=METADATA_SIZE_BYTES
     )
     m = ttnn.to_torch(ttnn.get_device_tensors(tt_metadata)[0]).view(torch.int32).flatten()
-    return tt_tokens, {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
+    return tt_tokens, {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}, tt_metadata
 
 
 def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_size: int, hidden_size: int):
@@ -365,16 +370,16 @@ def _d2d_recv(inbound) -> tuple:
     import torch
 
     t0 = time.perf_counter()
-    act, md = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
+    act, metadata_device = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
         inbound, metadata_size_bytes=METADATA_SIZE_BYTES
     )
-    m = ttnn.to_torch(ttnn.get_device_tensors(md)[0]).view(torch.int32).flatten()
+    m = ttnn.to_torch(ttnn.get_device_tensors(metadata_device)[0]).view(torch.int32).flatten()
     meta = {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
     logger.info(
         f"[pp] RECV-d2d [{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']} "
         f"[xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms"
     )
-    return act, meta
+    return act, meta, metadata_device
 
 
 def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict) -> None:
@@ -445,8 +450,10 @@ def _lease_reclaim(d2d_in, d2d_out) -> None:
         d2d_in.release_fabric_links()
 
 
-def _compute_and_send(runtime, kv_caches, rank: int, c: int, inp, meta: dict, d2d_out) -> float:
-    """Run one chunk: prefill into the engine-owned kv_caches, forward the output downstream (non-last
+def _compute_and_send(
+    runtime, kv_cache, rank: int, c: int, inp, meta: dict, d2d_out, d2h_service=None, record_dev=None
+) -> float:
+    """Run one chunk: prefill into the engine-owned kv_cache, forward the output downstream (non-last
     rank) and grant the outbound sender so it ships over fabric. Returns the compute-start epoch
     (NTP-comparable). CHUNK_START is logged BEFORE the forward, with this chunk's metadata, so the
     slot/KV-range is visible per rank even if prefill_chunk hangs. The trailing metadata is kept after
@@ -457,7 +464,13 @@ def _compute_and_send(runtime, kv_caches, rank: int, c: int, inp, meta: dict, d2
         f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
     )
     out = runtime.prefill_chunk(
-        inp, kv_caches, slot_id=meta["slot_id"], actual_start=meta["actual_start"], actual_end=meta["actual_end"]
+        inp,
+        kv_cache,
+        slot_id=meta["slot_id"],
+        actual_start=meta["actual_start"],
+        actual_end=meta["actual_end"],
+        d2h_service=d2h_service,
+        record_dev=record_dev,
     )
     if SYNC_PER_CHUNK:
         # Block on device completion so the delta is this rank's forward alone, not the downstream-start
@@ -485,8 +498,17 @@ def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done:
 
 
 def run_request_loop(
-    runtime, kv_caches, rank: int, num_ranks: int, *, hidden_size: int, h2d_service=None, d2d_in=None, d2d_out=None
-):
+    runtime,
+    kv_cache,
+    rank: int,
+    num_ranks: int,
+    *,
+    hidden_size: int,
+    h2d_service=None,
+    d2d_in=None,
+    d2d_out=None,
+    d2h_service=None,
+) -> None:
     """Production serving loop — UNBOUNDED. rank 0 reads each chunk from the H2D socket (the external
     producer decides the count); downstream ranks read from D2D. Runs until the producer/scheduler
     closes the stream with the all -1 shutdown sentinel (each rank forwards it and exits gracefully) or,
@@ -520,21 +542,24 @@ def run_request_loop(
     while not _shutdown:
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
-            inp, meta = _socket_next(h2d_service)  # slot/start/end from the producer
+            inp, meta, metadata_device = _socket_next(h2d_service)  # slot/start/end from the producer
         else:
-            inp, meta = _d2d_recv(d2d_in)
+            inp, meta, metadata_device = _d2d_recv(d2d_in)
         if _is_shutdown_sentinel(meta):
-            # End of stream: drop the throwaway payload, hand the sentinel to the next rank so it too
-            # unblocks and exits, then fall through to the graceful drain below.
+            # End of stream: drop the throwaway payload + its metadata tensor, hand the sentinel to the
+            # next rank so it too unblocks and exits, then fall through to the graceful drain below.
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
             ttnn.deallocate(inp)
+            ttnn.deallocate(metadata_device)
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, hidden_size)
             break
         slot = meta["slot_id"]
         chunks_per_slot[slot] = chunks_per_slot.get(slot, 0) + 1
         real_end_per_slot[slot] = max(real_end_per_slot.get(slot, 0), meta["actual_end"])
-        t = _compute_and_send(runtime, kv_caches, rank, c, inp, meta, d2d_out)
+        t = _compute_and_send(
+            runtime, kv_cache, rank, c, inp, meta, d2d_out, d2h_service=d2h_service, record_dev=metadata_device
+        )
         if first is None:
             first = t
         c += 1
@@ -583,10 +608,11 @@ def run_standalone_loop(runtime, kv_caches, rank: int, num_ranks: int, *, d2d_in
             kv_actual = c * cfg.chunk_size
             inp = _first_rank_chunk_tokens(runtime, token_ids, kv_actual)
             meta = {"slot_id": slot_id, "actual_start": kv_actual, "actual_end": kv_actual + cfg.chunk_size}
+            metadata_device = None
         else:
-            inp, meta = _d2d_recv(d2d_in)
+            inp, meta, metadata_device = _d2d_recv(d2d_in)
             slot_id = meta["slot_id"]
-        t = _compute_and_send(runtime, kv_caches, rank, c, inp, meta, d2d_out)
+        t = _compute_and_send(runtime, kv_caches, rank, c, inp, meta, d2d_out, record_dev=metadata_device)
         if first is None:
             first = t
     # Every rank must finish receiving + forwarding the final chunk before any rank reclaims its
@@ -822,6 +848,8 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
     # Migration KV-chunk-table + LayerAck: single-rank only (disabled for the pipeline for now).
     ack_channel = None
+    d2h_service = None
+    layer_ack_service = None
     if single_rank:
         service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
         if os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1":
@@ -870,8 +898,18 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             logger.warning(f"[migration] removing stale LayerAck shm {_stale_ack_shm} from a prior run")
             os.remove(_stale_ack_shm)
         ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
-        runtime.set_layer_ack_channel(ack_channel)
-        logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
+        d2h_service = ttnn.D2HStreamService(
+            mesh_device,
+            global_spec=None,
+            fifo_size_bytes=LAYER_ACK_FIFO_SIZE_BYTES,
+            worker_cores=SYNC_WORKER_CORES,
+            metadata_size_bytes=METADATA_SIZE_BYTES,
+        )
+        layer_ack_service = ttnn.LayerAckService(d2h_service, ack_channel)
+        layer_ack_service.start()
+        logger.info(
+            f"[migration] LayerAck channel ready at {ack_shm_name}; reader thread emits one ack per device record"
+        )
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
     chunks_per_slot, real_end_per_slot, total_chunks = run_request_loop(
@@ -883,6 +921,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         h2d_service=h2d_service,
         d2d_in=d2d_in,
         d2d_out=d2d_out,
+        d2h_service=d2h_service,
     )
 
     # Post-loop KV validation (bring-up / migration accuracy; never in production serving). Single-rank
@@ -904,7 +943,10 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     # queue and service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).
     import gc
 
-    h2d_service = d2d_in = d2d_out = None
+    if layer_ack_service is not None:
+        layer_ack_service.stop()  # join the reader thread before its D2H service / channel drop
+        layer_ack_service = None
+    h2d_service = d2d_in = d2d_out = d2h_service = None
     gc.collect()
     if ack_channel is not None:
         ack_channel.shutdown()  # munmap + shm_unlink

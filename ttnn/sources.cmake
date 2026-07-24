@@ -43,6 +43,7 @@ set(TTNN_CORE_SRCS
     core/tensor/tensor_ops.cpp
     core/services/h2d_socket_service.cpp
     core/services/d2h_socket_service.cpp
+    core/services/layer_ack_service.cpp
     core/tensor/d2d_stream_service.cpp
     cpp/ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.cpp
     core/tensor/tensor_utils.cpp
@@ -120,6 +121,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/h2d_stream_service.cpp
     cpp/ttnn-nanobind/d2h_stream_service.cpp
     cpp/ttnn-nanobind/counter_channel.cpp
+    cpp/ttnn-nanobind/layer_ack_service.cpp
     cpp/ttnn-nanobind/mesh_socket.cpp
     cpp/ttnn-nanobind/profiler.cpp
     cpp/ttnn-nanobind/program_descriptors.cpp
