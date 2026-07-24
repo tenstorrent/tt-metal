@@ -22,6 +22,7 @@ from models.experimental.pi0_5.tt.tile_config import ACT_DTYPE, TILE_HEIGHT, TIL
 from models.experimental.pi0_5.tt._ttnn_compat import (
     concat_heads_matmul,
     decode_all_supported,
+    kv_sdpa,
     nlp_create_qkv_heads_rope,
 )
 
@@ -186,51 +187,29 @@ def _matmul_decode_pws(a, b_pws, n_blocks, device, out_dtype=ttnn.bfloat16, inte
 
 
 def _gated_residual(residual, gate, x):
-    """``residual + gate * x`` (adaRMS gated residual). Equivalent to ``ttnn.addcmul`` but preserves
-    the activation tile geometry -- ``addcmul`` always emits a 32-row tile, which breaks the tiny-tile
-    (16x32) residual stream; the binary mul/add keep the input tile."""
-    scaled = ttnn.multiply(gate, x, memory_config=_L1)
-    out = ttnn.add(residual, scaled, memory_config=_L1)
-    ttnn.deallocate(scaled)
-    return out
+    """``residual + gate * x`` (adaRMS gated residual) via the fused ternary ``ttnn.addcmul``."""
+    return ttnn.addcmul(residual, gate, x, memory_config=_L1)
 
 
 def _to_tile32_bf8(x):
-    """Retile a tiny (16-row) TILE activation up to a bf8 32x32 tile, zero-padding the sequence
-    (dim -2) to a multiple of 32. A bf8 tiny tile cannot be detiled directly (untilize corrupts it
-    and upcasts to bf16), and untilize also requires a 32-aligned height, so: cast to bf16, pad the
-    sequence to a multiple of 32 with a TILE-layout concat, untilize, then tilize back to bf8 32x32."""
-    import torch
-
-    b16 = ttnn.typecast(x, ttnn.bfloat16)
-    s = b16.shape[-2]
-    s32 = ((s + 31) // 32) * 32
-    if s32 != s:
-        shp = list(b16.shape)
-        shp[-2] = s32 - s
-        z = from_torch_pi05(torch.zeros(*shp), dtype=ttnn.bfloat16, device=x.device(), memory_config=_L1)
-        padded = ttnn.concat([b16, z], dim=2, memory_config=_L1)
-        ttnn.deallocate(b16)
-        ttnn.deallocate(z)
-        b16 = padded
-    rm = ttnn.to_layout(b16, ttnn.ROW_MAJOR_LAYOUT)
-    ttnn.deallocate(b16)
-    out = ttnn.tilize(rm, tile=ttnn.Tile((32, 32)), dtype=ttnn.bfloat8_b, memory_config=_L1)
-    ttnn.deallocate(rm)
-    return out
+    """Retile a bf8 TILE activation up to a 32x32 tile via the tilize retile op (which re-lays an
+    already-tiled bf8 input into a new tile shape). A no-op when x is already tile-32. Growing a
+    16-row tile packs two tiles into one 32-row tile; the retile op pads each slice's boundary tile
+    up to the 32-row output tile internally, so no explicit height padding is needed here."""
+    in_tile = x.get_tile()
+    if in_tile.tile_shape[0] >= 32:
+        return x
+    return ttnn.tilize(x, tile=ttnn.Tile((32, 32)), dtype=ttnn.bfloat8_b, memory_config=_L1)
 
 
 def _to_tile16_bf8(x, seq):
-    """Bring a 32x32-tile activation back down to the model bf8 16x32 tile, keeping the first
-    ``seq`` rows (drops the tile-32 sequence padding)."""
-    b16 = ttnn.typecast(x, ttnn.bfloat16)
-    rm = ttnn.to_layout(b16, ttnn.ROW_MAJOR_LAYOUT)
-    ttnn.deallocate(b16)
-    sliced = ttnn.slice(rm, [0, 0, 0, 0], [rm.shape[0], rm.shape[1], seq, rm.shape[-1]])
-    ttnn.deallocate(rm)
-    out = ttnn.tilize(sliced, tile=ttnn.Tile((TILE_HEIGHT, TILE_WIDTH)), dtype=ttnn.bfloat8_b, memory_config=_L1)
-    ttnn.deallocate(sliced)
-    return out
+    """Bring a 32x32-tile activation back down to the model tile (TILE_HEIGHT) via the tilize retile
+    op and trim to the first ``seq`` rows. A no-op when x already matches the model tile and length."""
+    if x.get_tile().tile_shape[0] != TILE_HEIGHT:
+        x = ttnn.tilize(x, tile=ttnn.Tile((TILE_HEIGHT, TILE_WIDTH)), dtype=ttnn.bfloat8_b, memory_config=_L1)
+    if x.shape[-2] != seq:
+        x = ttnn.slice(x, [0, 0, 0, 0], [x.shape[0], x.shape[1], seq, x.shape[-1]])
+    return x
 
 
 def _build_fused_gate_ws(device, gate, w, n_blocks=_MLP_N_BLOCKS):
@@ -336,30 +315,76 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
         q = _to_tile32_bf8(q)
         k = _to_tile32_bf8(k)
         v = _to_tile32_bf8(v)
-        if past_key_value is not None:
-            past_k, past_v = past_key_value
-            k = ttnn.concat([past_k, k], dim=2, memory_config=_L1)
-            v = ttnn.concat([past_v, v], dim=2, memory_config=_L1)
-        new_cache = (k, v) if use_cache else None
-        kv_seq = k.shape[-2]
-        _sdpa_kwargs = {"memory_config": _L1}
-        _sdpa_cores = min(_g.x, self.num_heads * ((q.shape[-2] + 31) // 32))
-        _spc = _denoise_sdpa_pcfg(q.shape[-2], kv_seq, _sdpa_cores, 1)
-        if _spc is not None:
-            _sdpa_kwargs["program_config"] = _spc
         # This decode-expert SDPA is non-causal full attention over prefix+suffix KV, so the
         # attention_mask is an all-zero no-op (the flash kernel masks its own KV padding). It is
         # dropped: SDPA corrupts its output when q/k/v are bfloat8_b but the mask is bfloat16 (see
         # tests/test_tiny_tile_ttnn_bugs.py::test_sdpa_bf8_mask_corrupts).
-        attn_out = ttnn.transformer.scaled_dot_product_attention(
-            q,
-            k,
-            v,
-            is_causal=False,
-            scale=self.scale,
-            compute_kernel_config=get_sdpa_compute_kernel_config(),
-            **_sdpa_kwargs,
+        #
+        # kv_sdpa is a specialized fused-flash op (Sq == 1 tile / single KV head / non-causal). When
+        # available and the shape matches, route the expert SDPA through it. _KV_FOLD additionally
+        # folds the resident prefix-KV (past_k/past_v) into kv_sdpa's reader as a two-range read, so
+        # the two per-layer ttnn.concat ops (and the [prefix+suffix] tensor) are eliminated. The fold
+        # only applies when not returning a cache (use_cache == False), since a returned cache needs
+        # the materialized [prefix+suffix] tensor.
+        _use_kv_sdpa = hasattr(ttnn, "kv_sdpa") and int(self.num_kv_heads) == 1
+        print("q.shape:", q.shape, "self.num_kv_heads:", self.num_kv_heads)
+        print("Has KV SDPA:", hasattr(ttnn, "kv_sdpa"))
+        print(
+            "Using KV SDPA:",
+            _use_kv_sdpa,
+            "KV Fold:",
+            _KV_FOLD,
+            "Past Key Value:",
+            past_key_value is not None,
+            "Use Cache:",
+            use_cache,
         )
+        _kv_fold = _KV_FOLD and _use_kv_sdpa and (past_key_value is not None) and (not use_cache)
+        if _kv_fold:
+            print("Using KV Fold SDPA")
+            past_k, past_v = past_key_value
+            attn_out = kv_sdpa(
+                q,
+                k,
+                v,
+                attn_mask=None,
+                scale=self.scale,
+                past_k=past_k,
+                past_v=past_v,
+                compute_kernel_config=get_sdpa_compute_kernel_config(),
+            )
+            new_cache = None
+        else:
+            if past_key_value is not None:
+                past_k, past_v = past_key_value
+                k = ttnn.concat([past_k, k], dim=2, memory_config=_L1)
+                v = ttnn.concat([past_v, v], dim=2, memory_config=_L1)
+            new_cache = (k, v) if use_cache else None
+            if _use_kv_sdpa:
+                attn_out = kv_sdpa(
+                    q,
+                    k,
+                    v,
+                    attn_mask=None,
+                    scale=self.scale,
+                    compute_kernel_config=get_sdpa_compute_kernel_config(),
+                )
+            else:
+                kv_seq = k.shape[-2]
+                _sdpa_kwargs = {"memory_config": _L1}
+                _sdpa_cores = min(_g.x, self.num_heads * ((q.shape[-2] + 31) // 32))
+                _spc = _denoise_sdpa_pcfg(q.shape[-2], kv_seq, _sdpa_cores, 1)
+                if _spc is not None:
+                    _sdpa_kwargs["program_config"] = _spc
+                attn_out = ttnn.transformer.scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    is_causal=False,
+                    scale=self.scale,
+                    compute_kernel_config=get_sdpa_compute_kernel_config(),
+                    **_sdpa_kwargs,
+                )
         ttnn.deallocate(q)
         attn_out = _to_tile16_bf8(attn_out, suffix_sq)
 
