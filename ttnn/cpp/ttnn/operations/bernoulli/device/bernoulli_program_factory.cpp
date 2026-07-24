@@ -23,7 +23,7 @@ std::mt19937 rng(std::time(nullptr));
 std::uniform_int_distribution<uint32_t> dist(1, 1 << 20);
 uint32_t get_random_seed() { return dist(rng); }
 
-// Work split shared by create_descriptor (cache miss) and get_dynamic_runtime_args (cache hit).
+// Work split used by create_descriptor (cache miss and, via override_runtime_arguments, cache hit).
 struct BernoulliWorkSplit {
     uint32_t num_cores = 0;
     CoreRangeSet all_cores;
@@ -182,8 +182,8 @@ ProgramDescriptor BernoulliDeviceOperation::create_descriptor(
         // cache-hit path (the framework patches their addresses each dispatch).
         reader_desc.emplace_runtime_args(core, {input.buffer(), tile_offset, units_per_core});
 
-        // seed is DYNAMIC (excluded from compute_program_hash): baked here for the cache-miss
-        // build, re-applied on every cache hit via get_dynamic_runtime_args().
+        // seed is DYNAMIC (excluded from compute_program_hash): derived here from attrs on every
+        // build and re-applied on each cache hit via override_runtime_arguments().
         uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
         compute_desc.runtime_args.emplace_back(
             core, KernelDescriptor::CoreRuntimeArgs{seed, tile_offset, units_per_core});
@@ -200,23 +200,16 @@ ProgramDescriptor BernoulliDeviceOperation::create_descriptor(
     return desc;
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> BernoulliDeviceOperation::get_dynamic_runtime_args(
+void BernoulliDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
-    const tensor_args_t& /*tensor_args*/,
-    tensor_return_value_t& output,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // compute is kernel 2 (reader 0, writer 1); its args are {seed, tile_offset, units_per_core}.
-    // Only the per-call seed is re-applied.
-    constexpr uint32_t kComputeKernelIdx = 2;
-    auto cores = bernoulli_work_split(output).cores;
-
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    dynamic_args.reserve(cores.size());
-    for (int i = 0; i < static_cast<int>(cores.size()); ++i) {
-        const uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
-        dynamic_args.push_back({kComputeKernelIdx, cores[i], 0, seed});
-    }
-    return dynamic_args;
+    // Re-derive ALL per-dispatch state (incl. the hash-excluded seed) from create_descriptor for the
+    // current tensors and re-apply it to the cached program. No rebuild; supersedes get_dynamic.
+    auto desc = create_descriptor(operation_attributes, tensor_args, tensor_return_value);
+    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 
 }  // namespace ttnn::operations::bernoulli
