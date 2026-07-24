@@ -37,7 +37,8 @@ void fusion_dispatch_op_with_address_refresh(
     auto& desc_copy = mesh_program_descriptor.mesh_programs.back().second;
     patch_stale_descriptor(desc_copy, io_tensors, address_slots);
 
-    (void)ttnn::prim::fusion_dispatch_op(io_tensors, mesh_program_descriptor);
+    (void)ttnn::prim::fusion_dispatch_op(
+        io_tensors, fusion_dispatch_operation_attributes_t{std::move(mesh_program_descriptor)});
 }
 
 void dispatch_patched(
@@ -61,7 +62,8 @@ void dispatch_patched(
     auto& desc_copy = mesh_program_descriptor.mesh_programs.back().second;
     patch_stale_descriptor(desc_copy, io_tensors, address_slots);
 
-    (void)ttnn::prim::fusion_dispatch_op(io_tensors, mesh_program_descriptor);
+    (void)ttnn::prim::fusion_dispatch_op(
+        io_tensors, fusion_dispatch_operation_attributes_t{std::move(mesh_program_descriptor)});
 }
 
 std::vector<Tensor> allocate_outputs(
@@ -144,7 +146,7 @@ public:
             patch_semaphore_addresses(desc, address_slots_.sem_rt_arg_slots, sem_addresses);
         }
         patch_stale_descriptor(desc, io_tensors, address_slots_);
-        (void)ttnn::prim::fusion_dispatch_op(io_tensors, mesh_desc_);
+        (void)ttnn::prim::fusion_dispatch_op(io_tensors, fusion_dispatch_operation_attributes_t{mesh_desc_});
 
         if (!result_reorder_.empty()) {
             std::vector<Tensor> reordered;
