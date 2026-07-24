@@ -219,7 +219,15 @@ bool nodes_intersect(const Nodes& a, const Nodes& b) {
 //   DM_LOCAL_CACHED -> DM_LOCAL_CACHED, but only if the semaphore lives on exactly one node
 //                      (a cached-alias AMO must never race a NoC atomic).
 //   LOCAL_NONATOMIC -> LOCAL_NONATOMIC (explicit legacy escape hatch).
-SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem) {
+// Defaulted lookup of a semaphore's binder census (an unbound sem has no entry => all-zero counts).
+const CollectedSpecData::SemaphoreBinderInfo& SemaphoreBinders(
+    const CollectedSpecData& collected, const SemaphoreSpecName& name) {
+    static const CollectedSpecData::SemaphoreBinderInfo kEmpty{};
+    const auto it = collected.semaphore_endpoints.find(name);
+    return it != collected.semaphore_endpoints.end() ? it->second : kEmpty;
+}
+
+SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData::SemaphoreBinderInfo& binders) {
     switch (sem.scope) {
         case SemaphoreScope::EXTERNAL: return SemScope::EXTERNAL;
         case SemaphoreScope::DM_LOCAL_CACHED: {
@@ -234,7 +242,36 @@ SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem) {
         }
         case SemaphoreScope::LOCAL_NONATOMIC: return SemScope::LOCAL_NONATOMIC;
         case SemaphoreScope::AUTO:
-        default: return SemScope::LOCAL_NONATOMIC;
+        default: {
+            // AUTO: pick the CHEAPEST CORRECT mechanism. NEVER DM_LOCAL_CACHED (unsound to auto-select
+            // through the raw-coordinate back doors; it stays user-forced). LOCAL_NONATOMIC (cheap,
+            // non-atomic uncached RMW) is safe ONLY when no concurrent RMW can exist: at most one writer
+            // instance AND the sem is a single L1 cell. Otherwise EXTERNAL (self-targeted NoC atomic,
+            // which serializes local + remote writers at one NIU). Strict improvement over today's
+            // blanket LOCAL_NONATOMIC: LOCAL_NONATOMIC == today; EXTERNAL is more atomic, never less.
+            const bool single_writer = binders.writer_instance_count <= 1;
+            const bool single_node = to_node_range_set(sem.target_nodes).num_cores() == 1;
+            if (single_writer && single_node) {
+                return SemScope::LOCAL_NONATOMIC;
+            }
+            // EXTERNAL pick. Honesty: EXTERNAL's up()/inc is fully atomic, but it CANNOT make a
+            // concurrent down() or a racing set() atomic -- fail loud rather than silently promise it.
+            TT_FATAL(
+                binders.consuming_instance_count < 2,
+                "SemaphoreSpec '{}' resolves AUTO->EXTERNAL but has {} concurrent CONSUME (down()) "
+                "instances; EXTERNAL atomizes the decrement step, but check-then-decrement is "
+                "single-consumer-only. Use a single consumer, host-guard the drain, or force an explicit scope.",
+                sem.unique_id,
+                binders.consuming_instance_count);
+            TT_FATAL(
+                !(binders.setting_instance_count >= 1 && binders.writer_instance_count >= 2),
+                "SemaphoreSpec '{}' resolves AUTO->EXTERNAL but a SET (set()/set_multicast()) races {} "
+                "total writer instance(s); set() is a non-atomic destructive store under ALL scopes. Use "
+                "set() only for init/reset with no concurrent writer, or serialize it.",
+                sem.unique_id,
+                binders.writer_instance_count);
+            return SemScope::EXTERNAL;
+        }
     }
 }
 
@@ -1816,10 +1853,11 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 sem.unique_id,
                 init_value);
         }
-        // Resolve + validate the physical-path scope (FATALs on a contradiction, e.g. a
-        // forced DM_LOCAL_CACHED semaphore that spans multiple nodes). Phase-2 S2b will
-        // thread the resolved SemScope into the kernel's baked accessor.
-        (void)ResolveSemaphoreScope(sem);
+        // Resolve + validate the physical-path scope at validate time (FATALs on a contradiction,
+        // e.g. a forced DM_LOCAL_CACHED spanning multiple nodes, or an AUTO->EXTERNAL sem with a
+        // multi-consumer down()/racing set()). Same `collected` as the build-time call below, so the
+        // decision is identical (no census drift) and any honesty FATAL surfaces here first.
+        (void)ResolveSemaphoreScope(sem, SemaphoreBinders(collected, sem.unique_id));
     }
 
     //////////////////////////////
@@ -3147,10 +3185,12 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
             to_node_range_set(semaphore_spec.target_nodes), init_value, CoreType::WORKER);
         program_impl->register_semaphore_spec_name(semaphore_name.get(), sem_id);
         semaphore_name_to_id[semaphore_name] = sem_id;
-        // Resolve the host intent (SemaphoreSpec.scope) to a device SemScope now, so it can be
-        // baked into every kernel that binds this semaphore. Contradictions already FATALed in
-        // ValidateProgramSpec; this call is the authoritative resolution.
-        semaphore_name_to_scope[semaphore_name] = ResolveSemaphoreScope(semaphore_spec);
+        // Resolve the host intent (SemaphoreSpec.scope) to a device SemScope now, so it can be baked
+        // into every kernel that binds this semaphore. For AUTO this consults the who-touches census
+        // (single-writer single-node -> cheap LOCAL_NONATOMIC, else atomic EXTERNAL; never
+        // DM_LOCAL_CACHED). Contradictions/honesty violations already FATALed in ValidateProgramSpec.
+        semaphore_name_to_scope[semaphore_name] =
+            ResolveSemaphoreScope(semaphore_spec, SemaphoreBinders(collected, semaphore_name));
     }
 
     // Create Kernels (arch-specific)
