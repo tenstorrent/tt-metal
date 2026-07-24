@@ -27,8 +27,10 @@ import os
 # Pinned identity for this single-model demo directory (matches the demo/test module tops).
 os.environ.setdefault("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
 
+import torch
+
 from models.demos.llama3_1_8b_p150.demo.simple_text_demo import prepare_generator_args
-from models.demos.llama3_1_8b_p150.tt.generator import Generator
+from models.demos.llama3_1_8b_p150.tt.generator import Generator, SamplingParams
 from models.demos.llama3_1_8b_p150.tt.model_config import DecodersPrecision
 
 HF_MODEL_ID = "meta-llama/Llama-3.1-8B-Instruct"
@@ -110,4 +112,105 @@ def build_pipeline(
     generator.local_data_parallel = local_data_parallel
     generator.local_submesh_indices = local_submesh_indices
 
+    _attach_decode_contract(generator)
+
     return generator
+
+
+def _normalize_prompt_ids(generator, input_ids) -> torch.Tensor:
+    """Coerce ``input_ids`` into a ``[batch, seq]`` int64 prompt tensor.
+
+    Accepts an already-encoded token tensor / list of ids, a batch of such
+    lists, or a raw prompt string (encoded here with the instruct template).
+    """
+    if isinstance(input_ids, str):
+        input_ids = generator.model_args[0].encode_prompt(input_ids, instruct=True)
+    if isinstance(input_ids, torch.Tensor):
+        toks = input_ids.to(torch.int64)
+        return toks.unsqueeze(0) if toks.dim() == 1 else toks
+    if len(input_ids) > 0 and isinstance(input_ids[0], (list, tuple, torch.Tensor)):
+        rows = [torch.as_tensor(list(r), dtype=torch.int64) for r in input_ids]
+        return torch.stack(rows, dim=0)
+    return torch.as_tensor(list(input_ids), dtype=torch.int64).unsqueeze(0)
+
+
+def _greedy_sampling_params(generator):
+    """Build the on-device greedy (temperature=0 argmax) sampling params, or
+    ``None`` when this model cannot sample on device (host argmax fallback)."""
+    supports = getattr(generator.model[0], "_supports_on_device_sampling", False) and (
+        getattr(generator.model[0], "sampling", None) is not None
+    )
+    if not supports:
+        return None
+    return SamplingParams(temperature=0, top_k=32, top_p=0.08)
+
+
+def _attach_decode_contract(generator) -> None:
+    """Bind the standard DECODE CONTRACT (decode_prefill / decode_step) onto the
+    resident ``Generator``.
+
+    The Generator already owns its decode trace capture (``trace_ids_decode``)
+    and on-device sampling, and ``decode_forward(enable_trace=True)`` does the
+    host<->device I/O plus ``execute_trace`` internally -- the persistent-buffer,
+    vLLM-style decode. So this pipeline is ``self_traced``: ``decode_step`` drives
+    exactly one traced token the same way ``simple_text_demo`` does, and the
+    harness times the native step rather than wrapping it in its own capture.
+    """
+
+    def decode_prefill(input_ids):
+        prompt = _normalize_prompt_ids(generator, input_ids)
+        batch_size, _ = prompt.shape
+        sampling_params = _greedy_sampling_params(generator)
+        decoding_pos = [int(prompt.shape[1])] * batch_size
+
+        prefill_out = generator.prefill_forward_text(
+            prompt,
+            page_table=generator.page_table,
+            kv_cache=generator.tt_kv_cache,
+            prompt_lens=decoding_pos,
+            sampling_params=sampling_params,
+            warmup_prefill=True,
+            enable_trace=True,
+        )
+        if sampling_params is not None and isinstance(prefill_out, tuple):
+            prefilled_token, _ = prefill_out
+        else:
+            prefilled_token = torch.argmax(prefill_out, dim=-1)
+
+        return {
+            "out_tok": prefilled_token,
+            "current_pos": torch.tensor(decoding_pos),
+            "prompt_tokens": prompt,
+            "sampling_params": sampling_params,
+            "iteration": 0,
+            "generated": [],
+        }
+
+    def decode_step(state):
+        out = generator.decode_forward(
+            state["out_tok"],
+            state["current_pos"],
+            enable_trace=True,
+            page_table=generator.page_table,
+            kv_cache=generator.tt_kv_cache,
+            reset_batch=(state["iteration"] == 0),
+            sampling_params=state["sampling_params"],
+            prompt_tokens=state["prompt_tokens"],
+            output_tokens=state["out_tok"],
+        )
+        if state["sampling_params"] is not None:
+            logits, _ = out
+            state["out_tok"] = logits.unsqueeze(1)
+        else:
+            state["out_tok"] = torch.argmax(out, dim=-1)
+        state["current_pos"] = state["current_pos"] + 1
+        state["iteration"] += 1
+        return state
+
+    def trace_path():
+        return "trace+1cq"
+
+    generator.decode_prefill = decode_prefill
+    generator.decode_step = decode_step
+    generator.trace_path = trace_path
+    generator.self_traced = True

@@ -170,7 +170,7 @@ class MLP(LightweightModule):
 
         ff1_3_out_mem_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if full_grid_ff1_3 else ff1_3_input_mem_config
 
-        x_sharded = ttnn.to_memory_config(x, ff1_3_input_mem_config) if mode == Mode.DECODE else x
+        x_sharded = ttnn.to_memory_config(x, ff1_3_input_mem_config) if (mode == Mode.DECODE and full_grid_ff1_3) else x
 
         w1_out = ttnn.linear(
             x_sharded,
@@ -199,7 +199,7 @@ class MLP(LightweightModule):
             else None,
         )
         ttnn.deallocate(x)
-        if mode == Mode.DECODE:
+        if mode == Mode.DECODE and full_grid_ff1_3:
             ttnn.deallocate(x_sharded)
 
         if TG:
@@ -305,7 +305,7 @@ class MLP(LightweightModule):
         )
 
         ff2_input_mem_config = self.args.get_mlp_ff2_mem_config(mode, self.prefetcher)
-        w2_in_sharded = ttnn.to_memory_config(w2_in, ff2_input_mem_config) if mode == Mode.DECODE else w2_in
+        w2_in_sharded = w2_in
 
         if seq_len > 128 and mode != Mode.DECODE:
             w2_out = ttnn.experimental.minimal_matmul(
@@ -328,8 +328,6 @@ class MLP(LightweightModule):
                 if self.prefetcher is not None and mode == Mode.DECODE
                 else None,
             )
-        if mode == Mode.DECODE:
-            ttnn.deallocate(w2_in_sharded)
         ttnn.deallocate(w2_in)
 
         w2_out_reduced = tt_all_reduce(
