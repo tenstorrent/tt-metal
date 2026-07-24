@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <utility>
+#include <vector>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -35,6 +36,9 @@ constexpr auto kComputeKernelPath =
 constexpr auto kWriterKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/zero_padded_kv_cache/device/kernels/dataflow/"
     "writer_zero_padded_kv_cache.cpp";
+constexpr auto kRowMajorWriterKernelPath =
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/zero_padded_kv_cache/device/kernels/dataflow/"
+    "writer_zero_padded_kv_cache_row_major.cpp";
 
 constexpr uint32_t kSrcCbIndex = 0;   // partial tile read from cache (cache dtype)
 constexpr uint32_t kMaskCbIndex = 1;  // row-mask tile built in the reader (bf16)
@@ -105,7 +109,19 @@ void ZeroPaddedKvCacheDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& cache = tensor_args.cache;
     TT_FATAL(cache.storage_type() == StorageType::DEVICE, "cache must be on device");
-    TT_FATAL(cache.layout() == Layout::TILE, "cache must be TILE layout");
+    TT_FATAL(cache.buffer()->buffer_type() == BufferType::DRAM, "zero_padded_kv_cache requires a DRAM-backed cache");
+    TT_FATAL(
+        cache.layout() == Layout::TILE || cache.layout() == Layout::ROW_MAJOR,
+        "cache layout must be TILE or ROW_MAJOR");
+    if (cache.layout() == Layout::ROW_MAJOR) {
+        TT_FATAL(
+            cache.dtype() == DataType::BFLOAT16 || cache.dtype() == DataType::FP8_E4M3,
+            "ROW_MAJOR zero_padded_kv_cache supports bfloat16 or fp8_e4m3 (got {})",
+            cache.dtype());
+    }
+    if (cache.dtype() == DataType::FP8_E4M3) {
+        TT_FATAL(cache.layout() == Layout::ROW_MAJOR, "fp8_e4m3 cache must be ROW_MAJOR");
+    }
     const auto& cache_shape = cache.padded_shape();
     TT_FATAL(cache_shape.rank() == 4, "cache must be 4D (got rank {})", cache_shape.rank());
     TT_FATAL(cache_shape[1] == 1, "cache num-heads dim must be 1 (got {})", cache_shape[1]);
@@ -150,6 +166,7 @@ ttsl::hash::hash_t ZeroPaddedKvCacheDeviceOperation::compute_program_hash(
         args.chunk_size_global,
         args.pad_align,
         cache.dtype(),
+        cache.layout(),
         cache.memory_config(),
         cache.padded_shape());
 }
@@ -167,13 +184,10 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
     const auto& cache_shape = cache.padded_shape();
 
     const tt::DataFormat cache_format = datatype_to_dataformat_converter(cache.dtype());
-    const uint32_t cache_tile_size = tt::tile_size(cache_format);
-    const tt::DataFormat mask_format = tt::DataFormat::Float16_b;
-    const uint32_t mask_tile_size = tt::tile_size(mask_format);
-
-    const uint32_t Wt = cache_shape[-1] / TILE_WIDTH;
-    const uint32_t cache_HtWt = cache_shape[-2] * Wt / TILE_HEIGHT;
-    const uint32_t cache_CHtWt = cache_shape[1] * cache_HtWt;
+    const bool is_row_major = cache.layout() == Layout::ROW_MAJOR;
+    const uint32_t Wt = is_row_major ? 1 : cache_shape[-1] / TILE_WIDTH;
+    const uint32_t cache_H_pages = is_row_major ? cache_shape[-2] : cache_shape[-2] * Wt / TILE_HEIGHT;
+    const uint32_t cache_CH_pages = cache_shape[1] * cache_H_pages;
 
     const auto& mesh_view = device->get_view();
     const uint32_t sp_factor = (args.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
@@ -184,6 +198,52 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
     CoreRangeSet all_cores(CoreRange({0, 0}, {0, 0}));
 
     tt::tt_metal::ProgramDescriptor desc;
+
+    // Keep one common-argument layout for both descriptors. Page units are native to the layout:
+    // width-tiles for TILE, one complete token row for ROW_MAJOR.
+    const std::vector<uint32_t> common_runtime_args = {
+        my_sp_coord,
+        sp_factor,
+        chunk_local,
+        args.valid_global,
+        args.pad_align,
+        args.layer_idx,
+        args.num_layers,
+        Wt,
+        cache_CH_pages,
+        args.slot_idx,
+    };
+
+    if (is_row_major) {
+        // A row is one opaque DRAM page. Use a dataflow-only zero writer so FP8 never enters the
+        // unpack/compute engine (and therefore needs no fp32 destination accumulator setting).
+        const uint32_t row_page_size = cache.buffer()->aligned_page_size();
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = row_page_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = kZeroCbIndex,
+                .data_format = cache_format,
+                .page_size = row_page_size,
+            }}},
+        });
+
+        KernelDescriptor writer;
+        writer.kernel_source = kRowMajorWriterKernelPath;
+        writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        writer.core_ranges = all_cores;
+        writer.compile_time_args = {kZeroCbIndex, row_page_size};
+        TensorAccessorArgs(cache.buffer()).append_to(writer.compile_time_args);
+        writer.config = WriterConfigDescriptor{};
+        writer.common_runtime_args = common_runtime_args;
+        writer.emplace_runtime_args(CoreCoord{0, 0}, {cache.buffer()});
+        desc.kernels.push_back(std::move(writer));
+        return desc;
+    }
+
+    const uint32_t cache_tile_size = tt::tile_size(cache_format);
+    const tt::DataFormat mask_format = tt::DataFormat::Float16_b;
+    const uint32_t mask_tile_size = tt::tile_size(mask_format);
 
     // CBs: src (partial tile read), mask (bf16 row-mask), out (masked partial), zero (write scratch).
     auto add_cb = [&](uint32_t index, tt::DataFormat fmt, uint32_t page, uint32_t npages) {
@@ -198,23 +258,6 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
     add_cb(kOutCbIndex, cache_format, cache_tile_size, Wt);
     add_cb(kZeroCbIndex, cache_format, cache_tile_size, 1);
 
-    // Common runtime args, shared layout across all three kernels (each recomputes its share of the
-    // window from these). Index 3 = valid_global, 9 = slot_idx are the per-call scalars patched on
-    // cache hits by override_runtime_arguments.
-    // Layout: 0 my_sp_coord, 1 sp_factor, 2 chunk_local(tokens), 3 valid_global, 4 pad_align,
-    //         5 layer_idx, 6 num_layers, 7 Wt, 8 cache_CHtWt, 9 slot_idx.
-#define ZP_COMMON_ARGS  \
-    {my_sp_coord,       \
-     sp_factor,         \
-     chunk_local,       \
-     args.valid_global, \
-     args.pad_align,    \
-     args.layer_idx,    \
-     args.num_layers,   \
-     Wt,                \
-     cache_CHtWt,       \
-     args.slot_idx}
-
     // Reader: reads cache (TensorAccessor) + builds mask.
     KernelDescriptor reader;
     reader.kernel_source = kReaderKernelPath;
@@ -223,7 +266,7 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
     reader.compile_time_args = {kSrcCbIndex, kMaskCbIndex, cache_tile_size};
     TensorAccessorArgs(cache.buffer()).append_to(reader.compile_time_args);
     reader.config = ReaderConfigDescriptor{};
-    reader.emplace_common_runtime_args(ZP_COMMON_ARGS);
+    reader.common_runtime_args = common_runtime_args;
     reader.emplace_runtime_args(CoreCoord{0, 0}, {cache.buffer()});
 
     // Compute: partial x mask -> out.
@@ -233,7 +276,7 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
     compute.core_ranges = all_cores;
     compute.compile_time_args = {kSrcCbIndex, kMaskCbIndex, kOutCbIndex};
     compute.config = ComputeConfigDescriptor{};
-    compute.emplace_common_runtime_args(ZP_COMMON_ARGS);
+    compute.common_runtime_args = common_runtime_args;
     compute.emplace_runtime_args(CoreCoord{0, 0}, {0u});  // compute reads only common args; dummy per-core arg
 
     // Writer: masked partial back + zero full tiles from the zero scratch.
@@ -244,10 +287,8 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
     writer.compile_time_args = {kOutCbIndex, kZeroCbIndex, cache_tile_size};
     TensorAccessorArgs(cache.buffer()).append_to(writer.compile_time_args);
     writer.config = WriterConfigDescriptor{};
-    writer.emplace_common_runtime_args(ZP_COMMON_ARGS);
+    writer.common_runtime_args = common_runtime_args;
     writer.emplace_runtime_args(CoreCoord{0, 0}, {cache.buffer()});
-#undef ZP_COMMON_ARGS
-
     desc.kernels.push_back(std::move(reader));
     desc.kernels.push_back(std::move(compute));
     desc.kernels.push_back(std::move(writer));
@@ -269,10 +310,11 @@ void ZeroPaddedKvCacheDeviceOperation::MeshWorkloadFactory::override_runtime_arg
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, output);
-    // Patch the per-call valid_global/slot_idx scalars in the reader (kernel 0) and writer (kernel 2)
-    // common args; the compute (kernel 1) also reads them. Same value on every program (chip).
+    // TILE has reader/compute/writer; ROW_MAJOR is a dataflow-only writer. Patch every kernel in the
+    // selected descriptor without assuming one fixed kernel count.
+    const uint32_t num_kernels = tensor_args.cache.layout() == Layout::ROW_MAJOR ? 1u : 3u;
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        for (uint32_t kernel_handle : {0u, 1u, 2u}) {
+        for (uint32_t kernel_handle = 0; kernel_handle < num_kernels; ++kernel_handle) {
             auto& common = GetCommonRuntimeArgs(program, kernel_handle);
             TT_FATAL(kSlotIdxCommonArgIdx < common.size(), "zero_padded_kv_cache kernel missing per-call common args");
             common[kValidGlobalCommonArgIdx] = args.valid_global;

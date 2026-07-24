@@ -51,7 +51,9 @@ void kernel_main() {
         constexpr uint32_t trid_base = 1;
 
         cb_in1.reserve_back(num_trids);
-        uint32_t scratch_cb_page_size = get_local_cb_interface(dfb::in1).fifo_page_size;
+        // QSR: read page size from the DFB object (get_local_cb_interface().fifo_page_size is stale for Metal-2.0
+        // DFBs); cb_in1 constructed above
+        uint32_t scratch_cb_page_size = cb_in1.get_entry_size();
         SlotState slot_states[num_trids];
         uint32_t dest_offsets[num_trids];
         uint32_t scratch_offsets[num_trids];

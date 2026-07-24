@@ -176,8 +176,13 @@ inline void setup_remote_cb_interfaces(
         uint32_t config_addr = circular_buffer_config_addr[0];
         uint32_t page_size = circular_buffer_config_addr[1];
         circular_buffer_config_addr += UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG;
-        // Skip unconfigured remote CBs - config_addr will be 0 if no remote CB was configured at this index
+        // Unconfigured remote CB at this index on this core (config_addr == 0). Zero the interface's
+        // fifo_start_addr so a stale value from a prior program can't be picked up: the align define is
+        // emitted per-kernel and may run align_local_cbs_to_remote_cb for this index on a core that
+        // doesn't own the CB, which treats fifo_start_addr == 0 as "not present" (a real remote CB start
+        // is an L1 buffer address, never 0). sender and receiver views alias the same interface word.
         if (config_addr == 0) {
+            get_remote_receiver_cb_interface(cb_id).fifo_start_addr = 0;
             continue;
         }
         volatile tt_l1_ptr uint32_t* l1_remote_cb_config_addr =

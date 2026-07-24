@@ -244,9 +244,15 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
     // ------------------------------------------------------------------
     const auto build_kernel_run_args = [&](const char* name, const std::vector<SameWidthPerNodeArgs>& per_node) {
         KernelRunArgs run_args{.kernel = KernelSpecName{name}};
+        KernelRunArgs::RuntimeArgValues& run_args_rtas = run_args.runtime_arg_values;
         for (const auto& pa : per_node) {
-            run_args.runtime_arg_values.push_back(
-                {pa.node, {{off_name, pa.local_offset}, {count_name, pa.num_transfers}}});
+            AddRuntimeArgsForNode(
+                run_args_rtas,
+                pa.node,
+                {
+                    {off_name, pa.local_offset},
+                    {count_name, pa.num_transfers},
+                });
             AdvancedKernelRunArgs::Varargs varargs(num_varargs, 0u);
             std::copy(pa.tail.begin(), pa.tail.end(), varargs.begin());
             run_args.advanced_options.runtime_varargs.emplace(pa.node, std::move(varargs));

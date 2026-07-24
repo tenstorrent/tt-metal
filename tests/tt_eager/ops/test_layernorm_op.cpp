@@ -22,6 +22,7 @@ class IDevice;
 
 using namespace tt;
 using namespace tt::tt_metal;
+using ttnn::Tensor;
 using namespace constants;
 
 //////////////////////////////////////////////////////////////////////////////////////////

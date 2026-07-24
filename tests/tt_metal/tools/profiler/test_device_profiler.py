@@ -235,6 +235,26 @@ def test_multi_op_buffer_overflow():
         ), "Wrong Marker Repeat count"
 
 
+EXPECTED_KERNEL_RISCS = {
+    "wormhole_b0": ["BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"],
+    "blackhole": ["BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"],
+    "quasar": [f"QUASAR_DM{i}" for i in range(2, 8)] + [f"QUASAR_NEO{n}_TRISC{t}" for n in range(4) for t in range(4)],
+}
+
+
+def _assert_kernel_cycle_counts(devicesData, ref_min, ref_max):
+    arch = devicesData["data"]["deviceInfo"]["arch"]
+    assert arch in EXPECTED_KERNEL_RISCS, f"Unhandled arch '{arch}' for custom cycle count test"
+    stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
+
+    for risc in EXPECTED_KERNEL_RISCS[arch]:
+        statName = f"{risc} KERNEL_START->KERNEL_END"
+        assert statName in stats, f"Missing device analysis for {statName}"
+        avg = stats[statName]["stats"]["Average"]
+        assert avg < ref_max, f"{statName}: cycle count too high ({avg} >= {ref_max})"
+        assert avg > ref_min, f"{statName}: cycle count too low ({avg} <= {ref_min})"
+
+
 def test_custom_cycle_count_slow_dispatch():
     REF_CYCLE_COUNT_PER_LOOP = 52
     LOOP_COUNT = 2000
@@ -247,14 +267,7 @@ def test_custom_cycle_count_slow_dispatch():
 
     devicesData = run_device_profiler_test(setupAutoExtract=True, slowDispatch=True)
 
-    stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
-
-    for risc in ["BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"]:
-        statName = f"{risc} KERNEL_START->KERNEL_END"
-
-        assert statName in stats.keys(), "Wrong device analysis format"
-        assert stats[statName]["stats"]["Average"] < REF_CYCLE_COUNT_MAX, "Wrong cycle count, too high"
-        assert stats[statName]["stats"]["Average"] > REF_CYCLE_COUNT_MIN, "Wrong cycle count, too low"
+    _assert_kernel_cycle_counts(devicesData, REF_CYCLE_COUNT_MIN, REF_CYCLE_COUNT_MAX)
 
 
 def test_custom_cycle_count():
@@ -269,14 +282,7 @@ def test_custom_cycle_count():
 
     devicesData = run_device_profiler_test(setupAutoExtract=True)
 
-    stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
-
-    for risc in ["BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"]:
-        statName = f"{risc} KERNEL_START->KERNEL_END"
-
-        assert statName in stats.keys(), "Wrong device analysis format"
-        assert stats[statName]["stats"]["Average"] < REF_CYCLE_COUNT_MAX, "Wrong cycle count, too high"
-        assert stats[statName]["stats"]["Average"] > REF_CYCLE_COUNT_MIN, "Wrong cycle count, too low"
+    _assert_kernel_cycle_counts(devicesData, REF_CYCLE_COUNT_MIN, REF_CYCLE_COUNT_MAX)
 
 
 @pytest.mark.skip_post_commit

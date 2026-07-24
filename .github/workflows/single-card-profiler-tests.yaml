@@ -50,7 +50,7 @@ on:
 
 jobs:
   compute-skus:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       enabled-skus: ${{ steps.build.outputs.value }}
     steps:

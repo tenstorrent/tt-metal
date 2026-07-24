@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import threading
+
 import pytest
 import torch
 import ttnn
@@ -638,7 +640,7 @@ def test_fp32_non_last_dim_index_validation(shape, dim, device):
     assert_allclose(gathered.float(), ref_vals.float(), rtol=1e-2, atol=1e-2)
 
 
-def test_fp32_input_uint16_preallocated_index_rejected(device):
+def test_fp32_input_uint16_preallocated_index_rejected(device, expect_error):
     shape = [TILE_HEIGHT, 2 * TILE_WIDTH]
     t = torch.randn(shape, dtype=torch.float32)
     x = ttnn.from_torch(
@@ -651,7 +653,7 @@ def test_fp32_input_uint16_preallocated_index_rejected(device):
         shape, dtype=ttnn.uint16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
-    with pytest.raises((RuntimeError, Exception)):
+    with expect_error(RuntimeError, "must be UINT32 when input dtype is FLOAT32"):
         ttnn.sort(x, dim=-1, out=(out_v, out_i))
 
 
@@ -673,6 +675,83 @@ def test_width_sharded(layout, device):
     ), f"values mismatch max_diff={(out - ref_vals.float()).abs().max():.4f}"
     gathered = torch.gather(t, -1, ttnn.to_torch(i).to(torch.int64))
     assert torch.allclose(gathered.float(), ref_vals.float(), rtol=1e-2, atol=1e-2), "index gather mismatch"
+
+
+def _next_pow2(n):
+    p = 1
+    while p < n:
+        p <<= 1
+    return p
+
+
+@pytest.mark.timeout(600, method="thread")
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_multi_row_multi_core_no_deadlock(descending, device):
+    """
+    Guard for the DRAM multi-core sort path (SortProgramFactorySingleRowMultiCore).
+
+    The coordinator core collects two logically distinct worker signals -- the reader's
+    per-row "ready" and the writer's per-pair "done" -- on two separate cores->coordinator
+    semaphores, one producer signal each.  They are kept separate so each coordinator wait
+    has an exact, monotonic per-producer target: were both folded onto one shared counter,
+    at a tile-row boundary (Ht >= 2) a fast reader's next-row "ready" increment could push
+    the counter past the "done" target an exact-match wait is looking for, stranding the
+    wait and deadlocking the op.
+
+    This exercises the multi-core Ht >= 2 path -- otherwise only covered at Ht == 1 -- and
+    checks it runs to completion with correct output.  It is not a deterministic deadlock
+    reproducer: the mismatch a shared counter would cause is timing-dependent (the exact-match
+    poll normally out-races the NoC atomics), so it needs timing pressure to surface.
+
+    The worker-thread watchdog + pytest-timeout are a best-effort regression guard,
+    not a clean recovery mechanism: a genuine deadlock wedges the device (which needs
+    a reset regardless), so the join times out and the assertion below fires, but the
+    function-scoped `device` fixture teardown (close_device) may then block until the
+    process-level pytest-timeout terminates the run.  The guarantee is only that a
+    regression surfaces as a CI *failure* (never a silent pass); cleanly isolating a
+    hang from teardown would require running the op in a killable subprocess.
+
+    The multi-core factory is only selected when the (power-of-two padded) tile width
+    exceeds total_cores * 128, so the width is sized from the device grid.
+    """
+    torch.manual_seed(0)
+
+    grid = device.compute_with_storage_grid_size()
+    total_cores = grid.x * grid.y
+    wt = _next_pow2(total_cores * 128 + 1)  # smallest pow2 Wt on the DRAM multi-core path
+    shape = [1, 1, 2 * TILE_HEIGHT, wt * TILE_WIDTH]  # Ht = 2
+
+    input_t = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(input_t, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+
+    result = {}
+
+    def _run():
+        try:
+            values, indices = ttnn.sort(ttnn_input, dim=-1, descending=descending)
+            ttnn.synchronize_device(device)
+            result["values"] = values
+            result["indices"] = indices
+        except Exception as exc:  # surface device/compile errors to the main thread
+            result["error"] = exc
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+    worker.join(timeout=300.0)
+
+    assert not worker.is_alive(), (
+        "ttnn.sort did not complete on the DRAM multi-core path (Ht=2): the coordinator's "
+        "cores->coordinator wait was starved -- likely a regression of the ready/done "
+        "semaphore split."
+    )
+    if "error" in result:
+        raise result["error"]
+
+    torch_values, _ = torch.sort(input_t, dim=-1, descending=descending)
+    assert list(result["values"].shape) == shape
+    assert_equal(torch_values, ttnn.to_torch(result["values"]))
+    ttnn_gathered = torch.gather(input_t, -1, ttnn.to_torch(result["indices"]).to(torch.int64))
+    assert_equal(torch_values, ttnn_gathered)
 
 
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])

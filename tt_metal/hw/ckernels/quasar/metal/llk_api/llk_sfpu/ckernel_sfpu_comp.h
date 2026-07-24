@@ -162,7 +162,7 @@ inline void init_zero_comp() {
         .srcb = {.incr = 0},
         .dest = {.incr = 2},
     }
-        .set(ADDR_MOD_6, csr_read<CSR::TRISC_ID>());
+        .set(ADDR_MOD_6);
 }
 
 /**

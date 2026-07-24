@@ -327,6 +327,7 @@ class LTXLatentUpsampler(Module):
             subfolder=subfolder,
             parallel_config=self._dit_parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
             get_torch_state_dict=_state_provider,
         )
         logger.info("Loaded TTNN latent upsampler")

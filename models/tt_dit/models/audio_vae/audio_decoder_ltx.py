@@ -261,6 +261,7 @@ class LTXAudioDecoderAdapter:
                 subfolder=dec_subfolder,
                 parallel_config=self._dit_parallel_config,
                 mesh_shape=tuple(self._mesh_device.shape),
+                mesh_device=self._mesh_device,
                 get_torch_state_dict=self._audio_decoder_state_provider,
             )
 
@@ -271,6 +272,7 @@ class LTXAudioDecoderAdapter:
                 subfolder=voc_subfolder,
                 parallel_config=self._dit_parallel_config,
                 mesh_shape=tuple(self._mesh_device.shape),
+                mesh_device=self._mesh_device,
                 get_torch_state_dict=self._vocoder_state_provider,
             )
 

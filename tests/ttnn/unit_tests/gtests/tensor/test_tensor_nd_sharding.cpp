@@ -28,7 +28,7 @@ TEST_P(NdShardingOpCompatTests, TestAdd) {
     MemoryConfig memory_config{BufferType::L1, nd_shard_spec};
     // NOTE: currently binary op does not support interger data types with uneven shard size, so we use float32
     TensorLayout tensor_layout(DataType::FLOAT32, PageConfig(Layout::TILE), memory_config);
-    TensorSpec tensor_spec(params.shape, tensor_layout);
+    tt::tt_metal::TensorSpec tensor_spec(params.shape, tensor_layout);
 
     size_t volume = params.shape.volume();
     std::vector<float> data(volume);

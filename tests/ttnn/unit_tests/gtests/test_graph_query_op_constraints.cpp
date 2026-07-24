@@ -106,8 +106,8 @@ static std::ostream& operator<<(std::ostream& os, const ttnn::Shape& shape) {
 // Test data
 // ============================================================================
 
-const auto g_height_shard_3_1_1024_1024_tiled_to_16_cores = ttnn::TensorSpec(
-    ttnn::Shape(tt::tt_metal::Array4D{3, 1, 32 * 32, 32 * 32}),
+const auto g_height_shard_3_1_1024_1024_tiled_to_16_cores = tt::tt_metal::TensorSpec(
+    ttnn::Shape(ttnn::Array4D{3, 1, 32 * 32, 32 * 32}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -119,8 +119,8 @@ const auto g_height_shard_3_1_1024_1024_tiled_to_16_cores = ttnn::TensorSpec(
                 {6 * 32, 32 * 32},
                 ShardOrientation::ROW_MAJOR}}));
 
-const auto g_height_shard_1_1_1024_32_tiled_to_32_cores = ttnn::TensorSpec(
-    ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32 * 32, 64}),
+const auto g_height_shard_1_1_1024_32_tiled_to_32_cores = tt::tt_metal::TensorSpec(
+    ttnn::Shape(ttnn::Array4D{1, 1, 32 * 32, 64}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -132,50 +132,50 @@ const auto g_height_shard_1_1_1024_32_tiled_to_32_cores = ttnn::TensorSpec(
                 {32, 64},
                 ShardOrientation::ROW_MAJOR}}));
 
-const auto g_interleaved_1_1_1024_1024_tiled = ttnn::TensorSpec(
-    ttnn::Shape(tt::tt_metal::Array4D{1, 1, 64, 128}),
+const auto g_interleaved_1_1_1024_1024_tiled = tt::tt_metal::TensorSpec(
+    ttnn::Shape(ttnn::Array4D{1, 1, 64, 128}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
         ttnn::L1_MEMORY_CONFIG));
 
-const auto g_interleave_4_2_160_244_tiled = ttnn::TensorSpec(
-    ttnn::Shape(tt::tt_metal::Array4D{4, 2, 5 * 32, 7 * 32}),
+const auto g_interleave_4_2_160_244_tiled = tt::tt_metal::TensorSpec(
+    ttnn::Shape(ttnn::Array4D{4, 2, 5 * 32, 7 * 32}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
         ttnn::L1_MEMORY_CONFIG));
 
-const auto g_interleave_1_2_160_244_tiled = ttnn::TensorSpec(
-    ttnn::Shape(tt::tt_metal::Array4D{1, 1, 5 * 32, 7 * 32}),
+const auto g_interleave_1_2_160_244_tiled = tt::tt_metal::TensorSpec(
+    ttnn::Shape(ttnn::Array4D{1, 1, 5 * 32, 7 * 32}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
         ttnn::L1_MEMORY_CONFIG));
 
-const auto g_interleave_1_1_160_244_tiled = ttnn::TensorSpec(
-    ttnn::Shape(tt::tt_metal::Array4D{1, 1, 5 * 32, 7 * 32}),
+const auto g_interleave_1_1_160_244_tiled = tt::tt_metal::TensorSpec(
+    ttnn::Shape(ttnn::Array4D{1, 1, 5 * 32, 7 * 32}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
         ttnn::L1_MEMORY_CONFIG));
 
-const auto g_interleaved_1_1_2048_64_tiled = ttnn::TensorSpec(
-    ttnn::Shape(tt::tt_metal::Array4D{1, 1, 2048, 64}),
+const auto g_interleaved_1_1_2048_64_tiled = tt::tt_metal::TensorSpec(
+    ttnn::Shape(ttnn::Array4D{1, 1, 2048, 64}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
         ttnn::L1_MEMORY_CONFIG));
 
-const auto g_interleaved_1_1_245_1024_tiled = ttnn::TensorSpec(
-    ttnn::Shape(tt::tt_metal::Array4D{1, 1, 256, 1024}),
+const auto g_interleaved_1_1_245_1024_tiled = tt::tt_metal::TensorSpec(
+    ttnn::Shape(ttnn::Array4D{1, 1, 256, 1024}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
         ttnn::L1_MEMORY_CONFIG));
 
-const auto g_width_shard_1_1_64_2048_tiled_to_32_cores = ttnn::TensorSpec(
-    ttnn::Shape(tt::tt_metal::Array4D{1, 1, 64, 2048}),
+const auto g_width_shard_1_1_64_2048_tiled_to_32_cores = tt::tt_metal::TensorSpec(
+    ttnn::Shape(ttnn::Array4D{1, 1, 64, 2048}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -187,8 +187,8 @@ const auto g_width_shard_1_1_64_2048_tiled_to_32_cores = ttnn::TensorSpec(
                 {64, 64},
                 ShardOrientation::ROW_MAJOR}}));
 
-const auto g_block_shard_1_1_1600_256_tiled_to_32_cores = ttnn::TensorSpec(
-    ttnn::Shape(tt::tt_metal::Array4D{1, 1, 1600, 256}),
+const auto g_block_shard_1_1_1600_256_tiled_to_32_cores = tt::tt_metal::TensorSpec(
+    ttnn::Shape(ttnn::Array4D{1, 1, 1600, 256}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -205,10 +205,10 @@ const auto g_block_shard_1_1_1600_256_tiled_to_32_cores = ttnn::TensorSpec(
 // ============================================================================
 
 class EltwiseUnaryOpIfTest : public TTNNFixtureWithSuiteDevice<EltwiseUnaryOpIfTest>,
-                             public testing::WithParamInterface<std::tuple<ttnn::TensorSpec>> {};
+                             public testing::WithParamInterface<std::tuple<tt::tt_metal::TensorSpec>> {};
 
 TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
-    const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
+    const auto& input_spec = std::get<tt::tt_metal::TensorSpec>(GetParam());
     const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
     // TODO: Enable BH when ready (#25088)
     if (board_type != tt::BoardType::N300) {
@@ -237,7 +237,7 @@ TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
 }
 
 TEST_P(EltwiseUnaryOpIfTest, Sqrt) {
-    const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
+    const auto& input_spec = std::get<tt::tt_metal::TensorSpec>(GetParam());
     const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
     if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
@@ -266,7 +266,7 @@ TEST_P(EltwiseUnaryOpIfTest, Sqrt) {
 }
 
 TEST_P(EltwiseUnaryOpIfTest, Sigmoid) {
-    const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
+    const auto& input_spec = std::get<tt::tt_metal::TensorSpec>(GetParam());
     const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
     if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
@@ -298,7 +298,7 @@ TEST_P(EltwiseUnaryOpIfTest, Sigmoid) {
 }
 
 TEST_P(EltwiseUnaryOpIfTest, ClampScalar) {
-    const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
+    const auto& input_spec = std::get<tt::tt_metal::TensorSpec>(GetParam());
     const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
     if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
@@ -332,7 +332,7 @@ TEST_P(EltwiseUnaryOpIfTest, ClampScalar) {
 }
 
 TEST_P(EltwiseUnaryOpIfTest, Reciprocal) {
-    const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
+    const auto& input_spec = std::get<tt::tt_metal::TensorSpec>(GetParam());
     const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
     if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
@@ -360,7 +360,7 @@ TEST_P(EltwiseUnaryOpIfTest, Reciprocal) {
 }
 
 TEST_P(EltwiseUnaryOpIfTest, Sin) {
-    const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
+    const auto& input_spec = std::get<tt::tt_metal::TensorSpec>(GetParam());
     const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
     if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
@@ -388,7 +388,7 @@ TEST_P(EltwiseUnaryOpIfTest, Sin) {
 }
 
 TEST_P(EltwiseUnaryOpIfTest, Cos) {
-    const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
+    const auto& input_spec = std::get<tt::tt_metal::TensorSpec>(GetParam());
     const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
     if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
@@ -421,7 +421,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         std::make_tuple(g_height_shard_3_1_1024_1024_tiled_to_16_cores),
         std::make_tuple(g_interleave_4_2_160_244_tiled)),
-    [](const testing::TestParamInfo<std::tuple<ttnn::TensorSpec>>& info) {
+    [](const testing::TestParamInfo<std::tuple<tt::tt_metal::TensorSpec>>& info) {
         std::stringstream ss;
 
         // print unique id for each test case
@@ -430,11 +430,11 @@ INSTANTIATE_TEST_SUITE_P(
 
         // print tensor layout
         using detail::operator<<;
-        ss << "_" << std::get<ttnn::TensorSpec>(info.param).tensor_layout();
+        ss << "_" << std::get<tt::tt_metal::TensorSpec>(info.param).tensor_layout();
 
         // print tensor shape; operator<< exists but is too long to be used here
         ss << "_";
-        detail::operator<<(ss, std::get<ttnn::TensorSpec>(info.param).logical_shape());
+        detail::operator<<(ss, std::get<tt::tt_metal::TensorSpec>(info.param).logical_shape());
         return ss.str();
     });
 
@@ -443,10 +443,10 @@ INSTANTIATE_TEST_SUITE_P(
 // ============================================================================
 
 class SoftmaxOpIfTest : public TTNNFixtureWithSuiteDevice<SoftmaxOpIfTest>,
-                        public testing::WithParamInterface<std::tuple<ttnn::TensorSpec, int>> {};
+                        public testing::WithParamInterface<std::tuple<tt::tt_metal::TensorSpec, int>> {};
 
 TEST_P(SoftmaxOpIfTest, Softmax) {
-    const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
+    const auto& input_spec = std::get<tt::tt_metal::TensorSpec>(GetParam());
     const auto& dim_arg = std::get<int>(GetParam());
     const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
     if (board_type != tt::BoardType::N300) {
@@ -483,7 +483,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         std::make_tuple(g_height_shard_3_1_1024_1024_tiled_to_16_cores, -1),
         std::make_tuple(g_interleave_4_2_160_244_tiled, -1)),
-    [](const testing::TestParamInfo<std::tuple<ttnn::TensorSpec, int>>& info) {
+    [](const testing::TestParamInfo<std::tuple<tt::tt_metal::TensorSpec, int>>& info) {
         std::stringstream ss;
 
         // print unique id for each test case
@@ -492,11 +492,11 @@ INSTANTIATE_TEST_SUITE_P(
 
         // print tensor layout
         using detail::operator<<;
-        ss << "_" << std::get<ttnn::TensorSpec>(info.param).tensor_layout();
+        ss << "_" << std::get<tt::tt_metal::TensorSpec>(info.param).tensor_layout();
 
         // print tensor shape; operator<< exists but is too long to be used here
         ss << "_";
-        detail::operator<<(ss, std::get<ttnn::TensorSpec>(info.param).logical_shape());
+        detail::operator<<(ss, std::get<tt::tt_metal::TensorSpec>(info.param).logical_shape());
         return ss.str();
     });
 
@@ -504,8 +504,9 @@ INSTANTIATE_TEST_SUITE_P(
 // Binary tests
 // ============================================================================
 
-class EltwiseBinaryOpIfTest : public TTNNFixtureWithSuiteDevice<EltwiseBinaryOpIfTest>,
-                              public testing::WithParamInterface<std::tuple<ttnn::TensorSpec, ttnn::TensorSpec>> {};
+class EltwiseBinaryOpIfTest
+    : public TTNNFixtureWithSuiteDevice<EltwiseBinaryOpIfTest>,
+      public testing::WithParamInterface<std::tuple<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec>> {};
 
 TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
     const auto& input_spec_a = std::get<0>(GetParam());
@@ -693,7 +694,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(  // broadcast
             g_interleave_4_2_160_244_tiled,
             g_interleave_1_2_160_244_tiled)),
-    [](const testing::TestParamInfo<std::tuple<ttnn::TensorSpec, ttnn::TensorSpec>>& info) {
+    [](const testing::TestParamInfo<std::tuple<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec>>& info) {
         std::stringstream ss;
 
         // print unique id for each test case
@@ -725,12 +726,11 @@ INSTANTIATE_TEST_SUITE_P(
 // Matmul tests
 // ============================================================================
 
-class MatmulOpIfTest
-    : public TTNNFixtureWithSuiteDevice<MatmulOpIfTest>,
-      public testing::WithParamInterface<
-          std::
-              tuple<ttnn::TensorSpec, ttnn::TensorSpec, std::optional<ttnn::operations::matmul::MatmulProgramConfig>>> {
-};
+class MatmulOpIfTest : public TTNNFixtureWithSuiteDevice<MatmulOpIfTest>,
+                       public testing::WithParamInterface<std::tuple<
+                           tt::tt_metal::TensorSpec,
+                           tt::tt_metal::TensorSpec,
+                           std::optional<ttnn::operations::matmul::MatmulProgramConfig>>> {};
 
 TEST_P(MatmulOpIfTest, Matmul) {
     const auto& input_spec_a = std::get<0>(GetParam());
@@ -746,8 +746,8 @@ TEST_P(MatmulOpIfTest, Matmul) {
     {
         tt::tt_metal::distributed::MeshDevice* device = device_;
 
-        const auto output_spec = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array4D{
+        const auto output_spec = tt::tt_metal::TensorSpec(
+            ttnn::Shape(ttnn::Array4D{
                 input_spec_a.logical_shape()[0],
                 input_spec_a.logical_shape()[1],
                 input_spec_a.logical_shape()[-2],
@@ -841,19 +841,19 @@ class Conv2dOpIfTest : public ttnn::TTNNFixtureWithSuiteDevice<Conv2dOpIfTest>,
 TEST_P(Conv2dOpIfTest, Conv2d) {
     const auto& conv2d_config = GetParam();
 
-    const auto input_spec = ttnn::TensorSpec(
+    const auto input_spec = tt::tt_metal::TensorSpec(
         ttnn::Shape{1, 1, 50176, 3},
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
             ttnn::L1_MEMORY_CONFIG));
-    const auto weight_spec = ttnn::TensorSpec(
+    const auto weight_spec = tt::tt_metal::TensorSpec(
         ttnn::Shape{1, 1, 1568, 64},
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
             ttnn::DRAM_MEMORY_CONFIG));
-    const auto output_spec = ttnn::TensorSpec(
+    const auto output_spec = tt::tt_metal::TensorSpec(
         ttnn::Shape{1, 1, 12544, 64},
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
@@ -923,7 +923,7 @@ INSTANTIATE_TEST_SUITE_P(
 class SplitQKVAndSplitHeadsOpIfTest : public ttnn::TTNNFixtureWithDevice {};
 
 TEST_F(SplitQKVAndSplitHeadsOpIfTest, SplitQueryKeyValueAndSplitHeads) {
-    const auto& input_spec = ttnn::TensorSpec(
+    const auto& input_spec = tt::tt_metal::TensorSpec(
         ttnn::Shape{1, 1024, 768},
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
@@ -946,7 +946,7 @@ TEST_F(SplitQKVAndSplitHeadsOpIfTest, SplitQueryKeyValueAndSplitHeads) {
             },
             device,
             input_spec,
-            std::optional<ttnn::TensorSpec>{},  // input_tensor_kv
+            std::optional<tt::tt_metal::TensorSpec>{},  // input_tensor_kv
             num_heads,
             std::nullopt,
             true,                                  // transpose_key
@@ -1079,7 +1079,8 @@ TYPED_TEST_SUITE(DistributedTensorOpIfTest, DistributedTensorFixtures);
 
 TYPED_TEST(DistributedTensorOpIfTest, UnaryReluWithShardedTopology) {
     const auto& input_spec = g_interleave_4_2_160_244_tiled;
-    auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
+    auto sharded_topology =
+        tt::tt_metal::TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
     ttnn::graph::DistributedTensorSpec dist_input{input_spec, sharded_topology};
 
     auto query = ttnn::graph::query_op_constraints(
@@ -1097,7 +1098,8 @@ TYPED_TEST(DistributedTensorOpIfTest, UnaryReluWithShardedTopology) {
 
 TYPED_TEST(DistributedTensorOpIfTest, UnaryReluWithReplicatedTopology) {
     const auto& input_spec = g_interleave_4_2_160_244_tiled;
-    auto replicated_topology = TensorTopology::create_fully_replicated_tensor_topology(this->device_->shape());
+    auto replicated_topology =
+        tt::tt_metal::TensorTopology::create_fully_replicated_tensor_topology(this->device_->shape());
     ttnn::graph::DistributedTensorSpec dist_input{input_spec, replicated_topology};
 
     auto query = ttnn::graph::query_op_constraints(
@@ -1116,7 +1118,8 @@ TYPED_TEST(DistributedTensorOpIfTest, UnaryReluWithReplicatedTopology) {
 
 TYPED_TEST(DistributedTensorOpIfTest, BinaryAddWithShardedTopology) {
     const auto& input_spec = g_interleave_4_2_160_244_tiled;
-    auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
+    auto sharded_topology =
+        tt::tt_metal::TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
     ttnn::graph::DistributedTensorSpec dist_input_a{input_spec, sharded_topology};
     ttnn::graph::DistributedTensorSpec dist_input_b{input_spec, sharded_topology};
 
@@ -1142,7 +1145,8 @@ TYPED_TEST(DistributedTensorOpIfTest, BinaryAddWithShardedTopology) {
 
 TYPED_TEST(DistributedTensorOpIfTest, AllGatherWithShardedTopology) {
     const auto& input_spec = g_interleave_4_2_160_244_tiled;
-    auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
+    auto sharded_topology =
+        tt::tt_metal::TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
     ttnn::graph::DistributedTensorSpec dist_input{input_spec, sharded_topology};
 
     // cluster_axis=1 selects the column dimension of the mesh
@@ -1151,12 +1155,7 @@ TYPED_TEST(DistributedTensorOpIfTest, AllGatherWithShardedTopology) {
         this->device_,
         dist_input,
         /*dim=*/3,
-        /*cluster_axis=*/std::optional<uint32_t>(1),
-        /*subdevice_id=*/std::optional<tt::tt_metal::SubDeviceId>{},
-        /*memory_config=*/std::optional<ttnn::MemoryConfig>{},
-        /*optional_output_tensor=*/std::optional<Tensor>{},
-        /*num_links=*/std::optional<uint32_t>(1),
-        /*topology=*/std::optional<tt::tt_fabric::Topology>(tt::tt_fabric::Topology::Linear));
+        /*cluster_axis=*/std::optional<uint32_t>(1));
 
     if (query.status == ttnn::graph::ExecutionStatus::Error) {
         GTEST_LOG_(INFO) << "all_gather query error: " << query.error_message.value_or("unknown");
@@ -1172,7 +1171,8 @@ TYPED_TEST(DistributedTensorOpIfTest, AllGatherWithShardedTopology) {
 
 TYPED_TEST(DistributedTensorOpIfTest, ReduceScatterWithShardedTopology) {
     const auto& input_spec = g_interleave_4_2_160_244_tiled;
-    auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
+    auto sharded_topology =
+        tt::tt_metal::TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
     ttnn::graph::DistributedTensorSpec dist_input{input_spec, sharded_topology};
 
     // cluster_axis=1 selects the column dimension of the mesh
@@ -1203,7 +1203,8 @@ TYPED_TEST(DistributedTensorOpIfTest, ReduceScatterWithShardedTopology) {
 
 TYPED_TEST(DistributedTensorOpIfTest, AllReduceWithShardedTopology) {
     const auto& input_spec = g_interleave_4_2_160_244_tiled;
-    auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
+    auto sharded_topology =
+        tt::tt_metal::TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
     ttnn::graph::DistributedTensorSpec dist_input{input_spec, sharded_topology};
 
     // cluster_axis=1 selects the column dimension of the mesh
@@ -1231,7 +1232,8 @@ TYPED_TEST(DistributedTensorOpIfTest, AllReduceWithShardedTopology) {
 
 TYPED_TEST(DistributedTensorOpIfTest, AllBroadcastWithShardedTopology) {
     const auto& input_spec = g_interleave_4_2_160_244_tiled;
-    auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
+    auto sharded_topology =
+        tt::tt_metal::TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
     ttnn::graph::DistributedTensorSpec dist_input{input_spec, sharded_topology};
 
     // cluster_axis=1 selects the column dimension of the mesh
@@ -1259,7 +1261,8 @@ TYPED_TEST(DistributedTensorOpIfTest, AllBroadcastWithShardedTopology) {
 
 TYPED_TEST(DistributedTensorOpIfTest, BroadcastWithShardedTopology) {
     const auto& input_spec = g_interleave_4_2_160_244_tiled;
-    auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
+    auto sharded_topology =
+        tt::tt_metal::TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
     ttnn::graph::DistributedTensorSpec dist_input{input_spec, sharded_topology};
 
     // Send from device at mesh coordinate {0, 0}, cluster_axis=1 selects the column dimension
@@ -1321,20 +1324,21 @@ TYPED_TEST(DistributedTensorOpIfTest, FusedRmsMinimalWithShardedTopology) {
         ShardOrientation::ROW_MAJOR};
     const tt::tt_metal::MemoryConfig shard_mem_cfg{TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, shard_spec};
 
-    const auto input_spec = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array4D{1, 1, kTileHeight, kN}),
+    const auto input_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, kTileHeight, kN}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), shard_mem_cfg));
 
     // Sharded topology to match fused_rms_minimal distributed execution assumptions.
     // cluster_axis=1 and the test requires a 1x8 mesh, so shard along mesh dim 1.
-    auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/1);
+    auto sharded_topology =
+        tt::tt_metal::TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/1);
     ttnn::graph::DistributedTensorSpec dist_input{input_spec, sharded_topology};
 
     // Weight: ROW_MAJOR, padded_shape[-1]==32 (tile width), volume==N.
     // Shape (1,1,N/32,32): padded[-1]=32, volume=N
-    const auto weight_spec = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array4D{1, 1, kN / kTileWidth, kTileWidth}),
+    const auto weight_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, kN / kTileWidth, kTileWidth}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
@@ -1348,8 +1352,8 @@ TYPED_TEST(DistributedTensorOpIfTest, FusedRmsMinimalWithShardedTopology) {
     const tt::tt_metal::ShardSpec stats_shard_spec{
         CoreRangeSet{CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}}}, {kTileHeight, kN}, ShardOrientation::ROW_MAJOR};
     const tt::tt_metal::MemoryConfig stats_mem_cfg{TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, stats_shard_spec};
-    const auto stats_spec = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array4D{1, 1, kTileHeight, kN}),
+    const auto stats_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, kTileHeight, kN}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), stats_mem_cfg));
 

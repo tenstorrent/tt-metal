@@ -400,23 +400,27 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
         const auto& reader_args = all_runtime_args[i].first;
         const auto& writer_args = all_runtime_args[i].second;
 
-        reader_run.runtime_arg_values.push_back({node, {{"num_cores_read", reader_args[0]}}});
+        reader_run.runtime_arg_values["num_cores_read"][node] = reader_args[0];
         std::vector<uint32_t> reader_varargs(reader_args.begin() + 1, reader_args.end());
         reader_varargs.resize(max_reader_varargs, 0);
         reader_run.advanced_options.runtime_varargs[node] = std::move(reader_varargs);
 
         // writer_args = {num_sticks_per_core, start_id, front_pad_n, front_pad_c, front_pad_h,
         //                start_dim_offset[0..3]} (start_dim_offset is always 4 elements: {0,h,c,n}).
-        writer_run.runtime_arg_values.push_back(
-            {node,
-             {{"num_sticks_per_core", writer_args[0]},
-              {"start_id", writer_args[1]},
-              {"front_pad_n", writer_args[2]},
-              {"front_pad_c", writer_args[3]},
-              {"front_pad_h", writer_args[4]},
-              {"start_dim_h", writer_args[6]},
-              {"start_dim_c", writer_args[7]},
-              {"start_dim_n", writer_args[8]}}});
+        KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
+        AddRuntimeArgsForNode(
+            writer_rtas,
+            node,
+            {
+                {"num_sticks_per_core", writer_args[0]},
+                {"start_id", writer_args[1]},
+                {"front_pad_n", writer_args[2]},
+                {"front_pad_c", writer_args[3]},
+                {"front_pad_h", writer_args[4]},
+                {"start_dim_h", writer_args[6]},
+                {"start_dim_c", writer_args[7]},
+                {"start_dim_n", writer_args[8]},
+            });
     }
 
     WorkUnitSpec wu{

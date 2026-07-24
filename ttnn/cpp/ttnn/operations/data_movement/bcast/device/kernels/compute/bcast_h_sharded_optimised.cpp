@@ -4,7 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/bcast.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t onetile = 1;
@@ -12,9 +12,9 @@ void kernel_main() {
     constexpr uint32_t cb_b_id = tt::CBIndex::c_1;
     constexpr uint32_t cb_out_id = tt::CBIndex::c_16;
 
-    CircularBuffer cb_a(cb_a_id);
-    CircularBuffer cb_b(cb_b_id);
-    CircularBuffer cb_out(cb_out_id);
+    DataflowBuffer dfb_a(cb_a_id);
+    DataflowBuffer dfb_b(cb_b_id);
+    DataflowBuffer dfb_out(cb_out_id);
 
     uint32_t NC = get_arg_val<uint32_t>(0);
     uint32_t Ht = get_arg_val<uint32_t>(1);
@@ -25,12 +25,12 @@ void kernel_main() {
 
     init_bcast<BCAST_LLKOP, BCAST_DIM>(cb_a_id, cb_b_id, cb_out_id);
 
-    cb_a.wait_front(Wt * Ht);
-    cb_out.reserve_back(Wt * Ht);
+    dfb_a.wait_front(Wt * Ht);
+    dfb_out.reserve_back(Wt * Ht);
     uint32_t b_offset = 0;
     for (uint32_t bn = 0; bn < batch_b; bn++) {
         for (uint32_t wt = 0; wt < Wt; wt++) {
-            cb_b.wait_front(onetile);
+            dfb_b.wait_front(onetile);
             for (uint32_t ht = 0; ht < Ht_per_batch_b; ht += h_blk) {
                 tile_regs_acquire();
                 for (uint32_t htr = 0; htr < h_blk; htr++) {
@@ -46,10 +46,10 @@ void kernel_main() {
                 }
                 tile_regs_release();
             }
-            cb_b.pop_front(onetile);
+            dfb_b.pop_front(onetile);
         }
         b_offset += Ht_per_batch_b * Wt;
     }
-    cb_a.pop_front(Wt * Ht);
-    cb_out.push_back(Wt * Ht);
+    dfb_a.pop_front(Wt * Ht);
+    dfb_out.push_back(Wt * Ht);
 }

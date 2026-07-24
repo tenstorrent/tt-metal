@@ -123,8 +123,8 @@ inline void _llk_stall_cfg_on_()
  * old base to drain, and (3) reprogram its per-TRISC dest section base before
  * the next op issues. This helper performs those three steps in order.
  *
- * @tparam TRISC_ID       The calling thread (ckernel::math::TRISC_ID,
- *                        ckernel::pack::TRISC_ID, or ckernel::unpack::TRISC_ID).
+ * @tparam TRISC_ID       The calling thread's id (ckernel::TRISC_ID = COMPILE_FOR_TRISC:
+ *                        0=unpack, 1=math, 2=pack, 3=isolate-SFPU).
  * @tparam EN_32BIT_DEST  True if the math destination register is in
  *                        Float32/Int32 (32-bit) mode, false for 16-bit.
  * @tparam DrainRes0      Primary stall resource to drain before reprogramming

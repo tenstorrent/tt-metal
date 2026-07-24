@@ -145,7 +145,7 @@ std::vector<uint32_t> build_rm_compute_ct_args(const RmPlan& plan, uint32_t Ht_a
 }
 
 tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
-    const tt::tt_metal::Tensor& input_tensor, tt::tt_metal::ReduceOpDim reduce_dim) {
+    const ttnn::Tensor& input_tensor, tt::tt_metal::ReduceOpDim reduce_dim) {
     uint32_t num_tiles = input_tensor.physical_volume() / input_tensor.tensor_spec().tile().get_tile_hw();
     if (reduce_dim == tt::tt_metal::ReduceOpDim::H) {
         return tt::tt_metal::ReduceOpParallelizationStrategy::MULTI_CORE_H;
@@ -171,7 +171,7 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
     tt::tt_metal::Layout output_layout) {
     using namespace tt::tt_metal;
 
-    TensorSpec tensor_spec(
+    tt::tt_metal::TensorSpec tensor_spec(
         output_shape,
         TensorLayout(output_dtype, PageConfig(output_layout), MemoryConfig(output_mem_config.buffer_type())));
 
@@ -208,7 +208,7 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
 
         // For width/height/block sharding modes, the output shard shape is fully determined
         // by the output physical shape and the core grid. Just delegate to the
-        // appropriate TensorSpec builder.
+        // appropriate tt::tt_metal::TensorSpec builder.
         if (mem_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             return tensor_spec.width_sharded(grid, orientation);
         }
@@ -239,7 +239,8 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
             nd_shard_spec_copy.shard_shape.rank() > 1) {
             nd_shard_spec_copy.shard_shape[-2] = 1;
         }
-        return tensor_spec.sharded(std::move(nd_shard_spec_copy), TensorSpec::ShardShapeAlignment::REQUIRED);
+        return tensor_spec.sharded(
+            std::move(nd_shard_spec_copy), tt::tt_metal::TensorSpec::ShardShapeAlignment::REQUIRED);
     }
 
     // Guard against unexpected new memory layouts.
@@ -267,15 +268,15 @@ void validate_reduce_sharded_buffer_types(
 }
 
 bool h_reduce_negate_fits_in_l1(
-    const tt::tt_metal::Tensor& input_tensor, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    const ttnn::Tensor& input_tensor, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
     using namespace tt::tt_metal;
 
-    // The quasar Metal 2.0 ReduceMultiCoreH factory does not yet implement the fused in-kernel negate
-    // path (reduce_h_neg.cpp, which uses self-loop acc/ineg CBs). Force the host to take the
-    // external-negate fallback instead — min(x) == -reduce(MAX, H, -x) computed via the regular
-    // (negate=false) reduce kernel, which IS on Metal 2.0 — so a MIN H-reduce never reaches the
-    // unported fused-negate path. Flip this to `true` (and delete the early return) once reduce_h_neg
-    // is ported to Metal 2.0.
+    // The quasar Metal 2.0 ReduceMultiCoreH factory does not implement a fused in-kernel negate path
+    // (the negative_tile LLK it would need is unported on Quasar, and the negate compute kernels were
+    // removed). Force the host to take the external-negate fallback instead — min(x) == -reduce(MAX, H,
+    // -x) computed via the regular (negate=false) reduce kernel, which IS on Metal 2.0 — so a MIN
+    // H-reduce never reaches the (rejected) fused-negate path. Keep this `false` while negative_tile
+    // stays unported.
     constexpr bool kFusedHNegateSupportedOnMetal2 = false;
     if (!kFusedHNegateSupportedOnMetal2) {
         return false;

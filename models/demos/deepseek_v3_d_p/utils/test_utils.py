@@ -9,12 +9,69 @@ from typing import Any, Optional, Union
 
 import torch
 from loguru import logger
+from safetensors import safe_open
 
 import ttnn
 from models.demos.deepseek_v3.utils.hf_model_utils import dequantize_state_dict as _fp8_dequantize_state_dict
 
 # Wormhole B0 worker-L1 override for ring MLA tests. On Blackhole we use the platform default.
 WH_WORKER_L1_SIZE = 1344544
+
+
+def read_sharded_rows(tensor_dir: Path, key: str, start: int, end: int) -> torch.Tensor:
+    """Read rows [start:end] of `key` from a chunked_group_a_v1 shard directory, concatenating the
+    rows_<s>_<e>.safetensors shards that overlap the range (partial read, natural order)."""
+    parts = []
+    for shard in sorted(tensor_dir.glob("rows_*.safetensors")):
+        s, e = (int(x) for x in shard.stem.split("_")[1:3])
+        if e <= start or s >= end:
+            continue
+        with safe_open(shard, framework="pt") as f:
+            parts.append(f.get_slice(key)[max(start, s) - s : min(end, e) - s].to(torch.float32))
+    assert parts, f"no shards overlap rows [{start}:{end}] in {tensor_dir}"
+    return torch.cat(parts, dim=0)
+
+
+def interleave_pe(pe: torch.Tensor) -> torch.Tensor:
+    """HF half-split k_pe basis -> device Meta-interleaved basis. pe: [N, d]."""
+    d = pe.shape[-1]
+    return torch.stack([pe[:, : d // 2], pe[:, d // 2 :]], dim=-1).reshape(-1, d)
+
+
+def gather_cache_tp0(tt_cache, mesh_device) -> torch.Tensor:
+    """Gather a caller-owned KV/indexer cache (SP-sharded on dim 2, TP-replicated) to host float32, keeping
+    TP replica 0. Returns [num_slots, seq_len_cache, head_dim] (still block-cyclic rotated)."""
+    cache_full = ttnn.to_torch(
+        tt_cache,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+    ).to(torch.float32)[
+        :, :1
+    ]  # [num_slots, 1, seq_len_cache, head_dim]
+    return cache_full[:, 0]
+
+
+def unrotate_cache_layer(cache_slot: torch.Tensor, positions: torch.Tensor, total_len: int) -> torch.Tensor:
+    """Un-rotate one slot's block-cyclic cache rows [seq_len_cache, head_dim] to natural order and slice the
+    valid region. `positions` = blockcyclic_positions(sp, chunk, seq_len_cache)."""
+    nat = torch.empty_like(cache_slot)
+    nat[positions] = cache_slot
+    return nat[:total_len]
+
+
+def cache_half_pccs(golden: torch.Tensor, dev: torch.Tensor, split: int, pe_interleave: bool) -> tuple[float, float]:
+    """PCC the two halves of a [N, head_dim] cache block vs golden, returning (pcc_first, pcc_second). The
+    first `split` columns compare directly; the rest compare directly unless `pe_interleave`, where the
+    golden's HF half-split RoPE is re-based to the device Meta interleave. This is the single home for the
+    cache-compare convention: KVPE = [nope | pe] (split=kv_lora, pe_interleave=True); indexer-K =
+    [rope | nope] (split=index_head_dim//2, pe_interleave=False -- GLM indexer RoPE is natively interleaved)."""
+    from tests.ttnn.utils_for_testing import comp_pcc
+
+    _, pcc_first = comp_pcc(golden[:, :split], dev[:, :split])
+    ref_second = golden[:, split:]
+    if pe_interleave:
+        ref_second = interleave_pe(ref_second)
+    _, pcc_second = comp_pcc(ref_second, dev[:, split:])
+    return pcc_first, pcc_second
 
 
 def print_buffers(device, name, buffer_type):

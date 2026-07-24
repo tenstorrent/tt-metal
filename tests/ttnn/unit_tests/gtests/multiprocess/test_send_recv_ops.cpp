@@ -17,6 +17,7 @@
 #include "tests/ttnn/unit_tests/gtests/ccl/send_recv_op_utils.hpp"
 
 namespace tt::tt_metal {
+using ttnn::Tensor;
 
 class MeshDeviceDual2x4SendRecvFixture : public tt::tt_fabric::fabric_router_tests::MeshDeviceDual2x4Fixture,
                                          public testing::WithParamInterface<SocketTestArgs> {};
@@ -102,7 +103,7 @@ void test_send_recv_async_(
             receiver_rank,  // send to receiver host
             tag             // exchange test results over tag 0
         );
-        auto output_tensor = tt::tt_metal::create_device_tensor(
+        auto output_tensor = ttnn::create_device_tensor(
             TensorSpec(input_shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(layout), memory_config)),
             mesh_device.get());
         ttnn::experimental::recv_async(output_tensor, backward_socket);
@@ -117,7 +118,7 @@ void test_send_recv_async_(
         );
         EXPECT_EQ(output_data, inc_output_data);
     } else {
-        auto output_tensor = tt::tt_metal::create_device_tensor(
+        auto output_tensor = ttnn::create_device_tensor(
             TensorSpec(input_shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(layout), memory_config)),
             mesh_device.get());
         ttnn::experimental::recv_async(output_tensor, forward_socket);

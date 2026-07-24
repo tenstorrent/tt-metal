@@ -21,12 +21,86 @@ namespace ttnn::prim {
 
 using namespace tt::constants;
 
-ProgramDescriptor FillCacheMultiCoreProgramFactory::create_descriptor(
-    const KvCacheParams& operation_attributes, const KvCacheInputs& tensor_args, Tensor& /*tensor_return_value*/) {
+std::vector<std::pair<CoreCoord, uint32_t>> compute_fill_cache_start_ids(
+    const KvCacheParams& operation_attributes, const KvCacheInputs& tensor_args) {
     const auto& cache_tensor = tensor_args.cache;
     const auto& input_tensor = tensor_args.input;
     const auto batch_idx = operation_attributes.batch_idx;
     const auto update_idx = operation_attributes.update_idx;
+
+    // Mirror the shape-derived geometry and work-split from create_descriptor exactly so the
+    // per-core cache_start_id values (and the core ordering) are identical on cache miss and hit.
+    uint32_t num_blocks_of_work = input_tensor.padded_shape()[1] * input_tensor.padded_shape()[-2] / TILE_HEIGHT;
+
+    uint32_t Wt = cache_tensor.padded_shape()[-1] / TILE_WIDTH;
+    uint32_t input_Ht = input_tensor.padded_shape()[-2] / TILE_HEIGHT;  // seq_len
+    uint32_t cache_HtWt = cache_tensor.padded_shape()[-2] * Wt / TILE_HEIGHT;
+    uint32_t cache_CHtWt = cache_tensor.padded_shape()[1] * cache_HtWt;
+    uint32_t update_idxt = update_idx / TILE_HEIGHT;
+    uint32_t start_idx = (batch_idx * cache_CHtWt) + (update_idxt * Wt);
+    tt::tt_metal::IDevice* device = input_tensor.device();
+
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+
+    bool row_major;
+    uint32_t num_cores, num_blocks_per_core_group_1, num_blocks_per_core_group_2;
+
+    CoreRangeSet all_cores, core_group_1, core_group_2;
+
+    const std::optional<ShardSpec>& shard_spec = input_tensor.shard_spec();
+
+    if (shard_spec.has_value()) {
+        row_major = shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
+        all_cores = shard_spec.value().grid;
+        num_cores = all_cores.num_cores();
+        core_group_1 = all_cores;
+        core_group_2 = CoreRangeSet();
+        num_blocks_per_core_group_1 = shard_spec.value().shape[0] / TILE_HEIGHT;
+        num_blocks_per_core_group_2 = 0;
+        auto bbox = all_cores.bounding_box();
+        num_cores_x = bbox.end_coord.x + 1;
+        num_cores_y = bbox.end_coord.y + 1;
+    } else {
+        row_major = true;
+        std::tie(
+            num_cores,
+            all_cores,
+            core_group_1,
+            core_group_2,
+            num_blocks_per_core_group_1,
+            num_blocks_per_core_group_2) =
+            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks_of_work, row_major);
+    }
+
+    uint32_t g1_numcores = core_group_1.num_cores();
+    const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
+
+    std::vector<std::pair<CoreCoord, uint32_t>> start_ids;
+    start_ids.reserve(num_cores);
+    for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
+        const CoreCoord& core = cores.at(i);
+        uint32_t num_blocks_per_core = 0;
+        if (i < g1_numcores) {
+            num_blocks_per_core = num_blocks_per_core_group_1;
+        } else {
+            num_blocks_per_core = num_blocks_per_core_group_2;
+        }
+
+        const uint32_t cache_start_id = start_idx                                       // user batch start
+                                        + (num_blocks_written / input_Ht * cache_HtWt)  // cache head offset
+                                        + ((num_blocks_written % input_Ht) * Wt);       // seq_len offset
+        start_ids.emplace_back(core, cache_start_id);
+        num_blocks_written += num_blocks_per_core;
+    }
+    return start_ids;
+}
+
+ProgramDescriptor FillCacheMultiCoreProgramFactory::create_descriptor(
+    const KvCacheParams& operation_attributes, const KvCacheInputs& tensor_args, Tensor& /*tensor_return_value*/) {
+    const auto& cache_tensor = tensor_args.cache;
+    const auto& input_tensor = tensor_args.input;
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
@@ -37,12 +111,10 @@ ProgramDescriptor FillCacheMultiCoreProgramFactory::create_descriptor(
     // reader/writer
     uint32_t num_blocks_of_work = input_tensor.padded_shape()[1] * input_tensor.padded_shape()[-2] / TILE_HEIGHT;
 
+    // Wt is the only shape-derived geometry create_descriptor still needs directly; the
+    // batch_idx/update_idx-dependent cache_start_id lives in compute_fill_cache_start_ids so the
+    // cache-miss and cache-hit (get_dynamic_runtime_args) paths share one source of truth.
     uint32_t Wt = cache_tensor.padded_shape()[-1] / TILE_WIDTH;
-    uint32_t input_Ht = input_tensor.padded_shape()[-2] / TILE_HEIGHT;  // seq_len
-    uint32_t cache_HtWt = cache_tensor.padded_shape()[-2] * Wt / TILE_HEIGHT;
-    uint32_t cache_CHtWt = cache_tensor.padded_shape()[1] * cache_HtWt;
-    uint32_t update_idxt = update_idx / TILE_HEIGHT;
-    uint32_t start_idx = (batch_idx * cache_CHtWt) + (update_idxt * Wt);
     tt::tt_metal::IDevice* device = input_tensor.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -144,12 +216,14 @@ ProgramDescriptor FillCacheMultiCoreProgramFactory::create_descriptor(
 
     const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
-    // Per-core runtime args. We push raw buffer addresses (uint32_t) rather than Buffer*
-    // because the per-core cache_start_id derives from operation_attributes (batch_idx,
-    // update_idx) which UpdateKVCacheOperation::compute_program_hash deliberately excludes
-    // from the program-cache key. With buffer_bindings empty the framework uses the
-    // descriptor-rebuild slow path on cache hits, which correctly re-derives
-    // cache_start_id every dispatch.
+    // Per-core runtime args. src/dst base addresses are declared as Buffer* bindings so the
+    // framework patches the (possibly reallocated) addresses directly on cache hits (fast path).
+    // The per-core writer cache_start_id derives from operation_attributes (batch_idx, update_idx)
+    // which UpdateKVCacheOperation::compute_program_hash deliberately excludes from the
+    // program-cache key, so it is NOT stable across cache hits: it is re-patched every dispatch by
+    // UpdateKVCacheOperation::get_dynamic_runtime_args. compute_fill_cache_start_ids is the shared
+    // single source of truth for the work-split and cache_start_id formula so the two paths agree.
+    const auto start_ids = compute_fill_cache_start_ids(operation_attributes, tensor_args);
     for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
         const CoreCoord& core = cores.at(i);
         uint32_t num_blocks_per_core = 0;
@@ -162,19 +236,17 @@ ProgramDescriptor FillCacheMultiCoreProgramFactory::create_descriptor(
         reader_desc.emplace_runtime_args(
             core,
             {
-                src_buffer->address(),
+                src_buffer,
                 num_blocks_per_core * Wt,
                 num_blocks_written * Wt,
             });
 
-        const uint32_t cache_start_id = start_idx                                       // user batch start
-                                        + (num_blocks_written / input_Ht * cache_HtWt)  // cache head offset
-                                        + ((num_blocks_written % input_Ht) * Wt);       // seq_len offset
+        const uint32_t cache_start_id = start_ids.at(i).second;
 
         writer_desc.emplace_runtime_args(
             core,
             {
-                dst_buffer->address(),
+                dst_buffer,
                 num_blocks_per_core * Wt,
                 cache_start_id,
             });

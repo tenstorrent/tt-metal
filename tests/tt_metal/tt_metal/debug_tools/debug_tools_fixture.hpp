@@ -252,9 +252,18 @@ protected:
 
 class DevicePrintFixture : public DebugToolsMeshFixture {
 protected:
-    int memfd_;
+    int memfd_ = -1;
+    tt::llrt::TargetSelection dprint_previous_targets_{};
+    bool test_mode_previous_{};
 
     void SetUp() override {
+        // Save previous DPRINT / test-mode state so TearDown can restore it. TearDown runs even
+        // when SetUp skips or fails later, so capture before mutating rtoptions.
+        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        dprint_previous_targets_ = rtoptions.get_feature_targets(tt::llrt::RunTimeDebugFeatureDprint);
+        test_mode_previous_ = rtoptions.get_test_mode_enabled();
+        watcher_previous_enabled = rtoptions.get_watcher_enabled();
+
         const testing::TestInfo* test_info = testing::UnitTest::GetInstance()->current_test_info();
         std::string test_desc =
             fmt::format("dprint_{}_{}_{}", getpid(), test_info->test_suite_name(), test_info->name());
@@ -266,28 +275,21 @@ protected:
         // Use /proc/self/fd path which works transparently with ofstream/ifstream
         dprint_file_name = fmt::format("/proc/self/fd/{}", memfd_);
 
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_enabled(
-            tt::llrt::RunTimeDebugFeatureDprint, true);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
-            tt::llrt::RunTimeDebugFeatureDprint, false);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
+        rtoptions.set_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint, true);
+        rtoptions.set_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint, false);
+        rtoptions.set_feature_all_cores(
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::WORKER, tt::llrt::RunTimeDebugClassWorker);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
+        rtoptions.set_feature_all_cores(
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::ETH, tt::llrt::RunTimeDebugClassWorker);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
+        rtoptions.set_feature_all_cores(
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::DRAM, tt::llrt::RunTimeDebugClassWorker);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_chips(
-            tt::llrt::RunTimeDebugFeatureDprint, true);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_mesh_coords(
-            tt::llrt::RunTimeDebugFeatureDprint, {});
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_chip_ids(
-            tt::llrt::RunTimeDebugFeatureDprint, {});
+        rtoptions.set_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint, true);
+        rtoptions.set_feature_mesh_coords(tt::llrt::RunTimeDebugFeatureDprint, {});
+        rtoptions.set_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint, {});
         // Send output to a file so the test can check after program is run.
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_file_name(
-            tt::llrt::RunTimeDebugFeatureDprint, dprint_file_name);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(true);
-        watcher_previous_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled();
-        tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(false);
+        rtoptions.set_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint, dprint_file_name);
+        rtoptions.set_test_mode_enabled(true);
+        rtoptions.set_watcher_enabled(false);
 
         ExtraSetUp();
 
@@ -300,7 +302,15 @@ protected:
         DebugToolsMeshFixture::TearDown();
         ExtraTearDown();
 
-        tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(watcher_previous_enabled);
+        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        rtoptions.set_feature_targets(tt::llrt::RunTimeDebugFeatureDprint, dprint_previous_targets_);
+        rtoptions.set_test_mode_enabled(test_mode_previous_);
+        rtoptions.set_watcher_enabled(watcher_previous_enabled);
+
+        if (memfd_ >= 0) {
+            close(memfd_);
+            memfd_ = -1;
+        }
     }
 
     // Override this function in child classes for additional setup commands between DPRINT setup

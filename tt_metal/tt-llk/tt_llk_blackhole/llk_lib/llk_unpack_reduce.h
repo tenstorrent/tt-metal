@@ -66,7 +66,6 @@ inline void _llk_unpack_reduce_init_(
     const std::uint32_t unpB_src_format, const std::uint32_t unpB_dst_format, const std::uint32_t within_face_16x16_transpose = 0)
 {
     // Configure SrcB format registers
-    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG1_SrcB_RMW>(unpB_dst_format);
     cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 0, 0xf>(unpB_src_format);
 
     // Set FP8 E4M3 mode for SrcB; selects the e4m3 (vs e5m2) exponent layout and clears any stale 4b-exp setting.

@@ -258,7 +258,7 @@ int main(int argc, char** argv) {
         uint32_t host_write_ptr = 0;
 
         uint32_t prefetch_q_base = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
-            CommandQueueDeviceAddrType::UNRESERVED);
+            CommandQueueDeviceAddrType::UNRESERVED, device->mesh_command_queue().id());
 
         uint32_t reg_addr = prefetch_q_base;
         uint32_t num_reg_entries = 128;

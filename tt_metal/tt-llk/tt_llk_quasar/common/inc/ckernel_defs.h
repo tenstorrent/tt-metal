@@ -25,6 +25,13 @@ constexpr auto to_underlying(T t) noexcept
     return static_cast<std::underlying_type_t<T>>(t);
 }
 
+enum Srcs
+{
+    SrcA = 0,
+    SrcB = 1,
+    SrcC = 2
+};
+
 enum register_space_e
 {
     TDMA_REGS     = 0x0,

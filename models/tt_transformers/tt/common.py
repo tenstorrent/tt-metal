@@ -306,9 +306,24 @@ def preprocess_inputs_prefill(
                 model_args[idx % len(model_args)].encode_prompt(prompt, instruct=instruct)
                 for idx, prompt in enumerate(shortened)
             ]
+            # Instruct re-tokenization can drift by a few tokens vs the overhead
+            # estimate (seen on Gemma4-26B-A4B: 65337 vs 65336). Re-trim / accept
+            # slightly-short prompts rather than hard-failing the demo.
+            trimmed = []
+            for e in encoded_prompts:
+                if len(e) > max_prefill_len:
+                    e = e[-max_prefill_len:]
+                trimmed.append(e)
+            encoded_prompts = trimmed
+            lens = [len(e) for e in encoded_prompts]
             assert all(
-                len(e) == max_prefill_len for e in encoded_prompts
-            ), f"Clipped prompts are not of the correct length, expected {max_prefill_len} but got {[len(e) for e in encoded_prompts]}"
+                0 < n <= max_prefill_len for n in lens
+            ), f"Clipped prompts are not of the correct length, expected <= {max_prefill_len} but got {lens}"
+            if any(n != max_prefill_len for n in lens):
+                logger.warning(
+                    f"Instruct re-clip lengths {lens} != target {max_prefill_len}; "
+                    f"continuing with trimmed/short prompts"
+                )
         else:
             encoded_prompts = [encod[-max_prefill_len:] for encod in encoded_prompts]
 

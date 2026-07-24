@@ -219,13 +219,13 @@ void run_borrowed_memory_dfb_program(
     // -----------------------------------------------------------------------
     // Build and apply run params
     // -----------------------------------------------------------------------
-    using NodeRuntimeArgs = decltype(ProgramRunArgs::KernelRunArgs::runtime_arg_values)::value_type;
-    const NodeRuntimeArgs dm_rtas{node, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}};
+    const KernelRunArgs::RuntimeArgValues dm_rtas =
+        MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}});
 
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
         .kernel = experimental::KernelSpecName{"producer"},
-        .runtime_arg_values = {dm_rtas},
+        .runtime_arg_values = dm_rtas,
     });
     if (cfg.tensix_consumer) {
         params.kernel_run_args.push_back(
@@ -233,7 +233,7 @@ void run_borrowed_memory_dfb_program(
     } else {
         params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
             .kernel = experimental::KernelSpecName{"consumer"},
-            .runtime_arg_values = {dm_rtas},
+            .runtime_arg_values = dm_rtas,
         });
     }
     params.tensor_args.emplace(experimental::TensorParamName{"src_tensor"}, TensorArgument{src_tensor});
@@ -383,8 +383,8 @@ void run_update_address_test(
     ASSERT_NE(ring_tensor_a.address(), ring_tensor_b.address())
         << "Test pre-condition: two separate L1 allocations must have distinct addresses";
 
-    using NodeRuntimeArgs = decltype(ProgramRunArgs::KernelRunArgs::runtime_arg_values)::value_type;
-    const NodeRuntimeArgs dm_rtas{node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}};
+    const KernelRunArgs::RuntimeArgValues dm_rtas =
+        MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}});
 
     // --- Run 1: ring at ring_tensor_a ---
     std::vector<uint32_t> input_a(total_words);
@@ -395,11 +395,11 @@ void run_update_address_test(
     params1.kernel_run_args = {
         ProgramRunArgs::KernelRunArgs{
             .kernel = experimental::KernelSpecName{"producer"},
-            .runtime_arg_values = {dm_rtas},
+            .runtime_arg_values = dm_rtas,
         },
         ProgramRunArgs::KernelRunArgs{
             .kernel = experimental::KernelSpecName{"consumer"},
-            .runtime_arg_values = {dm_rtas},
+            .runtime_arg_values = dm_rtas,
         },
     };
     params1.tensor_args = {
@@ -431,11 +431,12 @@ void run_update_address_test(
         // Combined re-bind + resize in ONE SetProgramRunArgs: point the borrowed ring at a different
         // L1 tensor AND override num_entries together (the sharded program-cache-hit analog). The
         // per-bank fit check in AttachBorrowedDFBBuffers validates the new size against ring_tensor_b.
-        const NodeRuntimeArgs dm_rtas2{node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}};
+        const KernelRunArgs::RuntimeArgValues dm_rtas2 =
+            MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}});
         ProgramRunArgs params2;
         params2.kernel_run_args = {
-            {.kernel = experimental::KernelSpecName{"producer"}, .runtime_arg_values = {dm_rtas2}},
-            {.kernel = experimental::KernelSpecName{"consumer"}, .runtime_arg_values = {dm_rtas2}},
+            {.kernel = experimental::KernelSpecName{"producer"}, .runtime_arg_values = dm_rtas2},
+            {.kernel = experimental::KernelSpecName{"consumer"}, .runtime_arg_values = dm_rtas2},
         };
         params2.tensor_args = {
             {experimental::TensorParamName{"src_tensor"}, TensorArgument{src_tensor}},

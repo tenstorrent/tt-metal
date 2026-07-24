@@ -94,6 +94,10 @@ MetalEnvImpl::~MetalEnvImpl() {
         std::lock_guard<std::mutex> lock(s_registry_mutex_);
         s_registry_.erase(this);
     }
+    // NOTE: the env-owned context (see ensure_context_registered) is intentionally torn down earlier, in
+    // MetalEnv::~MetalEnv(), before the MetalEnv::impl_ unique_ptr is reset. MetalContext::teardown()
+    // routes get_cluster()/rtoptions() back through *env_ (the outer MetalEnv), whose impl_ is already
+    // nullptr by the time ~MetalEnvImpl runs, so destroying it here would dereference that null impl_.
     check_use_count_zero();
     teardown_fabric_objects();
     cluster_.reset();
@@ -376,6 +380,20 @@ bool MetalEnvImpl::consume_force_reinit() {
 
 // ─── Control plane ────────────────────────────────────────────────────────────
 
+int MetalEnvImpl::ensure_context_registered(MetalEnv& env) {
+    if (!registered_context_id_.has_value()) {
+        registered_context_id_ = MetalContext::create_instance(env).get();
+    }
+    return *registered_context_id_;
+}
+
+void MetalEnvImpl::teardown_registered_context() {
+    if (registered_context_id_.has_value()) {
+        MetalContext::destroy_instance(/*check_device_count=*/false, ContextId{*registered_context_id_});
+        registered_context_id_.reset();
+    }
+}
+
 tt::tt_fabric::ControlPlane& MetalEnvImpl::get_control_plane() {
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
     if (!control_plane_) {
@@ -591,7 +609,13 @@ void MetalEnvImpl::teardown_fabric_objects() {
 
 MetalEnv::MetalEnv(MetalEnvDescriptor descriptor) : impl_(std::make_unique<MetalEnvImpl>(std::move(descriptor))) {}
 
-MetalEnv::~MetalEnv() { this->impl_.reset(); }
+MetalEnv::~MetalEnv() {
+    // Destroy the env-owned MetalContext (if any) while impl_ is still valid: MetalContext::teardown()
+    // reaches back through *env_ -> MetalEnv::impl_, which unique_ptr::reset() nulls before running
+    // ~MetalEnvImpl. See ensure_context_registered / teardown_registered_context.
+    impl_->teardown_registered_context();
+    this->impl_.reset();
+}
 
 const MetalEnvDescriptor& MetalEnv::get_descriptor() const { return impl_->get_descriptor(); }
 
@@ -614,8 +638,14 @@ float MetalEnv::get_eps() const { return impl_->get_hal().get_eps(); }
 float MetalEnv::get_nan() const { return impl_->get_hal().get_nan(); }
 float MetalEnv::get_inf() const { return impl_->get_hal().get_inf(); }
 
-tt::tt_fabric::ControlPlane& MetalEnv::get_control_plane() { return impl_->get_control_plane(); }
-distributed::SystemMesh& MetalEnv::get_system_mesh() { return impl_->get_system_mesh(); }
+tt::tt_fabric::ControlPlane& MetalEnv::get_control_plane() {
+    impl_->ensure_context_registered(*this);
+    return impl_->get_control_plane();
+}
+distributed::SystemMesh& MetalEnv::get_system_mesh() {
+    impl_->ensure_context_registered(*this);
+    return impl_->get_system_mesh();
+}
 std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
     const distributed::MeshDeviceConfig& config,
     size_t l1_small_size,
@@ -626,7 +656,12 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
     size_t worker_l1_size) {
     // Associate a context ID for the mesh device's dependencies to easily access the MetalContext::instance(contextId)
     // TODO: Remove this and directly pass in the MetalEnv reference
-    ContextId context_id = MetalContext::create_instance(*this);
+    // If the control plane / system mesh was already accessed, the env owns a registered context; reuse it
+    // (its lifetime is tied to the env). Otherwise create one here and let the mesh device tear it down on
+    // close, preserving the legacy create_mesh_device-only behavior.
+    const bool env_owns_context = impl_->has_registered_context();
+    ContextId context_id =
+        env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
     auto mesh_device = distributed::MeshDeviceImpl::create(
         context_id,
         config,
@@ -636,7 +671,9 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
         dispatch_core_config,
         l1_bank_remap,
         worker_l1_size);
-    mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
+    if (!env_owns_context) {
+        mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
+    }
     return mesh_device;
 }
 
@@ -648,7 +685,9 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh_device(
     const DispatchCoreConfig& dispatch_core_config,
     ttsl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
-    ContextId context_id = MetalContext::create_instance(*this);
+    const bool env_owns_context = impl_->has_registered_context();
+    ContextId context_id =
+        env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
     auto mesh_device = distributed::MeshDeviceImpl::create_unit_mesh(
         context_id,
         device_id,
@@ -658,7 +697,9 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh_device(
         dispatch_core_config,
         l1_bank_remap,
         worker_l1_size);
-    mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
+    if (!env_owns_context) {
+        mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
+    }
     return mesh_device;
 }
 
@@ -670,7 +711,9 @@ std::map<int, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_me
     const DispatchCoreConfig& dispatch_core_config,
     ttsl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
-    ContextId context_id = MetalContext::create_instance(*this);
+    const bool env_owns_context = impl_->has_registered_context();
+    ContextId context_id =
+        env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
     auto result = distributed::MeshDeviceImpl::create_unit_meshes(
         context_id,
         device_ids,
@@ -680,7 +723,7 @@ std::map<int, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_me
         dispatch_core_config,
         l1_bank_remap,
         worker_l1_size);
-    if (!result.empty()) {
+    if (!env_owns_context && !result.empty()) {
         const auto& parent = result.begin()->second->get_parent_mesh();
         if (parent) {
             parent->impl().set_destroy_metal_context_instance_on_close(true);

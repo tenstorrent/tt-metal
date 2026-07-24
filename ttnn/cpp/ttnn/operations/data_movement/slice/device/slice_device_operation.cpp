@@ -247,7 +247,7 @@ SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_s
             tt::tt_metal::MemoryConfig(output_mem_config.memory_layout(), output_mem_config.buffer_type(), derived);
     }
 
-    return ttnn::TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_tensor_shape,
         tt::tt_metal::TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), output_mem_config));
 }

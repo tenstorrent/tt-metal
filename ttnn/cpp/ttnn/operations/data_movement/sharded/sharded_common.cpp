@@ -31,8 +31,8 @@ std::tuple<std::vector<std::vector<WidthShardingReshardSegment>>, uint32_t, uint
 compute_width_sharding_reshard_segments(
     const std::array<uint32_t, 2>& local_shard_shape,
     const std::array<uint32_t, 2>& remote_shard_shape,
-    const std::vector<CoreCoord>& local_cores,
-    const std::vector<CoreCoord>& remote_cores,
+    const std::vector<tt::tt_metal::CoreCoord>& local_cores,
+    const std::vector<tt::tt_metal::CoreCoord>& remote_cores,
     const tt::tt_metal::BufferType& remote_buffer_type,
     const tt::CoreType& /*remote_core_type*/,
     tt::tt_metal::IDevice* device,

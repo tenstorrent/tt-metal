@@ -29,8 +29,7 @@ RepeatDeviceOperation::program_factory_t RepeatDeviceOperation::select_program_f
 void RepeatDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const Tensor& input_tensor_a = tensor_args.input;
-    TT_FATAL(
-        input_tensor_a.storage_type() == tt::tt_metal::StorageType::DEVICE, "Operands to repeat need to be on device!");
+    TT_FATAL(input_tensor_a.storage_type() == ttnn::StorageType::DEVICE, "Operands to repeat need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
 
     if (operation_attributes.m_tile_page_size_bytes > 0) {
@@ -84,7 +83,7 @@ RepeatDeviceOperation::spec_return_value_t RepeatDeviceOperation::compute_output
             }
         }
     }
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             input_tensor_a.dtype(), tt::tt_metal::PageConfig(input_tensor_a.layout()), mem_config));

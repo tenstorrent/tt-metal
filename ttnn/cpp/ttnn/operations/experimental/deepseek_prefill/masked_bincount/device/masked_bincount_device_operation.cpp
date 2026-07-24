@@ -48,7 +48,7 @@ void MaskedBincountDeviceOperation::validate_on_program_cache_miss(
 MaskedBincountDeviceOperation::spec_return_value_t MaskedBincountDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     ttnn::Shape output_shape({args.n_routed_experts});
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,

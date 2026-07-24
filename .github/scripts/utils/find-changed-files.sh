@@ -37,7 +37,7 @@ WORKFLOWS_CHANGED=false
 
 while IFS= read -r FILE; do
     case "$FILE" in
-        CMakeLists.txt|**/CMakeLists.txt|**/*.cmake|CMakePresets.json)
+        CMakeLists.txt|**/CMakeLists.txt|**/*.cmake|*.cmake.in|**/*.cmake.in|CMakePresets.json)
             CMAKE_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
@@ -97,7 +97,7 @@ while IFS= read -r FILE; do
         # LLK engine submodule's pytest suite. Must come before the generic
         # tests/tt_metal/**/*.{h,hpp,c,cpp,py} catch-all so the narrower flag is set; we
         # also raise the broader TTMETALIUM_TESTS_CHANGED here so existing test gates
-        # (e.g. metalium-smoke-tests) keep firing for these changes.
+        # (e.g. runtime-smoke-tests) keep firing for these changes.
         tests/tt_metal/tt_metal/llk/**)
             LLK_UNIT_TESTS_CHANGED=true
             TTMETALIUM_TESTS_CHANGED=true

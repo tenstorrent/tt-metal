@@ -1,5 +1,4 @@
-# This workflow can be run between 3 and 7 AM UTC
-name: "Fabric Test on a BH Quad"
+name: "(SC4) Health check & Fabric Test"
 
 on:
   schedule:
@@ -47,7 +46,7 @@ jobs:
           pip3 install PyYAML
           {
             echo "allocation_spec<<EOF"
-            python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_sp1-mgd"
+            python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_sc4-mgd"
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
@@ -66,20 +65,9 @@ jobs:
       group: exabox
       labels: exabox-multihost-with-nfs
     env:
-      OMPI_MCA_btl_tcp_if_include: ens5f0np0
-      PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
-      PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
-      PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
-      PRTE_MCA_prte_default_hostfile: /etc/ttop/hostfile
-      PRTE_MCA_prte_fwd_environment: "true"
       PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       VIRTUAL_ENV: /opt/venv
       HOME: /home/user
-      PIP_CACHE_DIR: /home/user/.cache/pip
-      LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
-      TT_METAL_HOME: /home/user/tt-metal
-      TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
-      TT_METAL_CACHE: /home/user/.cache
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -148,13 +136,11 @@ jobs:
           BUILD_ARCHIVE="${build_archives[0]}"
           echo "Using build archive: ${BUILD_ARCHIVE}"
 
-          # Unpack build artifact locally as well. Pipeline config generation runs on the runner
-          # and expects test binaries under /ci/tt-metal/build/test.
-          tar --zstd -xf "${BUILD_ARCHIVE}" -C /ci/tt-metal
           sudo rm -rf /home/user/tt-metal
-          sudo mkdir -p /home/user
-          sudo chown "$(id -u):$(id -g)" /home/user
-          cp -r /ci/tt-metal /home/user/
+          sudo mkdir -p /home/user/tt-metal
+          sudo chown "$(id -u):$(id -g)" /home/user/tt-metal
+          tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
+
           mpirun --pernode bash -lc 'rm -rf /home/user/tt-metal && cp -r /ci/tt-metal /home/user/'
           mpirun --pernode git -C /home/user/tt-metal submodule update --init --recursive
 

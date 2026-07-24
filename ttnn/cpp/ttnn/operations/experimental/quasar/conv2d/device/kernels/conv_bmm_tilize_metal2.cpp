@@ -10,8 +10,9 @@
 //   - remaining positional CTAs -> get_arg(args::name)
 //   - the check_skip_compute RTA -> get_arg(args::skip_compute)
 //   - experimental::CB -> DataflowBuffer (kernel_main + helper signatures)
-//   - in-place matmul-partials accumulate keeps its raw get_local_cb_interface(dfb::matmul_partials)
-//     fifo-pointer rewind (the borrowed DFB aliases the OUTPUT buffer; dfb:: converts to the CB id).
+//   - in-place matmul-partials accumulate: on WH/BH it rewinds the partials CB's fifo_rd_ptr/fifo_wr_ptr
+//     to re-accumulate in the same L1; on Quasar (no cb_interface) it snapshots/restores the equivalent
+//     g_dfb_interface ring position (see the PARTIALS_* macros below).
 //
 // This fork is bound by the Metal 2.0 width-sharded factory and the non-overlap paths of the
 // sharded factory (height-sharded; block-sharded without split_reader_cb_shared).  The split-reader
@@ -29,29 +30,88 @@
 #include "api/compute/tilize.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
-#include "api/debug/ring_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
-#include "api/debug/dprint.h"  // DEBUG: conv2d block-sharded hang localization (remove after)
-// DEBUG [#47797]: per-thread progress trace. The block-sharded conv deadlocks at the h=0->h=1
-// boundary; these tag each compute thread (U=unpack, M=math, P=pack) with its current height-block /
-// inner-block so the last line per thread in each core's dprint file shows exactly where it parked.
-// Encoded (h,k) = in0_block_h_i, in0_block_w_i. Run with DPRINT on.
-#define CC_U(tag, h, k) UNPACK(DPRINT("U " tag " h={} k={}\n", (uint32_t)(h), (uint32_t)(k)))
-#define CC_M(tag, h, k) MATH(DPRINT("M " tag " h={} k={}\n", (uint32_t)(h), (uint32_t)(k)))
-#define CC_P(tag, h, k) PACK(DPRINT("P " tag " h={} k={}\n", (uint32_t)(h), (uint32_t)(k)))
 
-// DEBUG: deadlock localization via watcher ring buffer (safe, unlike DPRINT). Push only from the MATH
-// thread to avoid a 3-TRISC race on the ring pointer. Marker: 0xCP_IIII, P=phase,
-// IIII=(in1_block_w_i<<12)|(in0_block_h_i<<8)|in0_block_w_i.
-#include "api/debug/ring_buffer.h"
-#define RB_CMP(phase, w, h, k)                                                                                   \
-    MATH(WATCHER_RING_BUFFER_PUSH(                                                                               \
-        0xC0000000u | ((uint32_t)(phase) << 24) | (((uint32_t)(w) & 0xf) << 12) | (((uint32_t)(h) & 0xf) << 8) | \
-        ((uint32_t)(k) & 0xff)))
-
-#define DEBUG_PRINT 0
+// In-place matmul-partials accumulate: re-accumulate each inner-K block into the SAME L1 region by
+// "rewinding" the partials buffer's producer/consumer position back to the start of the output block.
+//
+// On WH/BH that is a save/restore of the partials CB's fifo_rd_ptr/fifo_wr_ptr. Quasar compute has no
+// cb_interface (it tracks DFB state in g_dfb_interface), so the equivalent position is the DFB ring
+// state: tc_slots[].wr_entry_idx/wr_offset + wr_entry_ptr for the packer, tc_slots[].rd_entry_idx/
+// rd_offset for the unpacker. Those advance only via dfb_advance_slot() on push_back/pop_front, so
+// snapshotting and restoring them reproduces the rewind exactly. The PARTIALS_* macros below abstract
+// the two arches; the *_WR/_RD variants are only ever expanded inside PACK()/UNPACK(), so the wr_*/rd_*
+// fields they touch only compile on the matching TRISC.
+#ifdef ARCH_QUASAR
+struct QsrDfbRingPos {
+    uint16_t entry_idx[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
+    uint16_t offset[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
+    uint16_t entry_ptr;  // packer in-order tile offset (wr_entry_ptr); unused on the read side
+    uint8_t tc_idx;
+};
+using PartialsRingPos = QsrDfbRingPos;
+// Quasar has no evil_set_*; snapshot/restore the DFB ring via get_local_dfb_interface.
+// Macros take a DataflowBuffer so call sites match the WH/BH evil_* path.
+#define QSR_SNAPSHOT_WR(pos, dfb)                                  \
+    do {                                                           \
+        LocalDFBInterface& _qd = get_local_dfb_interface((dfb).get_id()); \
+        for (uint8_t _qi = 0; _qi < _qd.num_tcs_to_rr; ++_qi) {    \
+            (pos).entry_idx[_qi] = _qd.tc_slots[_qi].wr_entry_idx; \
+            (pos).offset[_qi] = _qd.tc_slots[_qi].wr_offset;       \
+        }                                                          \
+        (pos).entry_ptr = _qd.wr_entry_ptr;                        \
+        (pos).tc_idx = _qd.tc_idx;                                 \
+    } while (0)
+#define QSR_RESTORE_WR(pos, dfb)                                   \
+    do {                                                           \
+        LocalDFBInterface& _qd = get_local_dfb_interface((dfb).get_id()); \
+        for (uint8_t _qi = 0; _qi < _qd.num_tcs_to_rr; ++_qi) {    \
+            _qd.tc_slots[_qi].wr_entry_idx = (pos).entry_idx[_qi]; \
+            _qd.tc_slots[_qi].wr_offset = (pos).offset[_qi];       \
+        }                                                          \
+        _qd.wr_entry_ptr = (pos).entry_ptr;                        \
+        _qd.tc_idx = (pos).tc_idx;                                 \
+    } while (0)
+#define QSR_SNAPSHOT_RD(pos, dfb)                                  \
+    do {                                                           \
+        LocalDFBInterface& _qd = get_local_dfb_interface((dfb).get_id()); \
+        for (uint8_t _qi = 0; _qi < _qd.num_tcs_to_rr; ++_qi) {    \
+            (pos).entry_idx[_qi] = _qd.tc_slots[_qi].rd_entry_idx; \
+            (pos).offset[_qi] = _qd.tc_slots[_qi].rd_offset;       \
+        }                                                          \
+        (pos).tc_idx = _qd.tc_idx;                                 \
+    } while (0)
+#define QSR_RESTORE_RD(pos, dfb)                                   \
+    do {                                                           \
+        LocalDFBInterface& _qd = get_local_dfb_interface((dfb).get_id()); \
+        for (uint8_t _qi = 0; _qi < _qd.num_tcs_to_rr; ++_qi) {    \
+            _qd.tc_slots[_qi].rd_entry_idx = (pos).entry_idx[_qi]; \
+            _qd.tc_slots[_qi].rd_offset = (pos).offset[_qi];       \
+        }                                                          \
+        _qd.tc_idx = (pos).tc_idx;                                 \
+    } while (0)
+#define SAVE_PARTIALS_WR(var, dfb) \
+    PartialsRingPos var;           \
+    QSR_SNAPSHOT_WR(var, dfb)
+#define SAVE_PARTIALS_RD(var, dfb) \
+    PartialsRingPos var;           \
+    QSR_SNAPSHOT_RD(var, dfb)
+#define RESAVE_PARTIALS_WR(var, dfb) QSR_SNAPSHOT_WR(var, dfb)
+#define RESAVE_PARTIALS_RD(var, dfb) QSR_SNAPSHOT_RD(var, dfb)
+#define RESTORE_PARTIALS_WR(var, dfb) QSR_RESTORE_WR(var, dfb)
+#define RESTORE_PARTIALS_RD(var, dfb) QSR_RESTORE_RD(var, dfb)
+#else
+// WH/BH: rewind via DataflowBuffer get_*/evil_set_* (do not poke local_cb_interface directly).
+using PartialsRingPos = uint32_t;
+#define SAVE_PARTIALS_WR(var, dfb) uint32_t var = (dfb).get_write_ptr()
+#define SAVE_PARTIALS_RD(var, dfb) uint32_t var = (dfb).get_read_ptr()
+#define RESAVE_PARTIALS_WR(var, dfb) var = (dfb).get_write_ptr()
+#define RESAVE_PARTIALS_RD(var, dfb) var = (dfb).get_read_ptr()
+#define RESTORE_PARTIALS_WR(var, dfb) (dfb).evil_set_write_ptr(var)
+#define RESTORE_PARTIALS_RD(var, dfb) (dfb).evil_set_read_ptr(var)
+#endif
 
 #ifdef SPLIT_READER
 template <
@@ -93,21 +153,30 @@ void tilize_in(
 }  // tilize_in()
 
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id>
-inline void tilize_single_block(DataflowBuffer in_cb) {
+inline void tilize_single_block(DataflowBuffer& in_cb) {
     in_cb.wait_front(in_block_w);
+#ifndef ARCH_QUASAR  // Quasar has no fast tilize; these helpers are only reached on the split_reader/
+                     // activation_reuse path, which the resnet conv factories force OFF. Guard the
+                     // raw fast_tilize_* names out so the template body parses on Quasar (dead there).
     fast_tilize_block(in_cb_id, in_block_w, out_cb_id);
+#endif
     in_cb.pop_front(in_block_w);
 }
 
-template <uint32_t in_cb_id, uint32_t window_reuse_offset>
-inline uint32_t update_in_cb(uint32_t in_cb_addr) {
-    UNPACK((get_local_cb_interface(in_cb_id).fifo_rd_ptr = in_cb_addr));
+template <uint32_t window_reuse_offset>
+inline uint32_t update_in_cb(DataflowBuffer& in_cb, uint32_t in_cb_addr) {
+#ifndef ARCH_QUASAR  // activation_reuse/split_reader path is off for resnet; dead on Quasar (no cb_interface)
+    UNPACK((in_cb.evil_set_read_ptr(in_cb_addr)));
+#endif
     return in_cb_addr + window_reuse_offset;
 }
 
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id, uint32_t tilized_cb_row_offset>
-inline void tilize_single_block_with_out_cb_update(DataflowBuffer in_cb, uint32_t& out_cb_addr) {
-    PACK((get_local_cb_interface(out_cb_id).fifo_wr_ptr = out_cb_addr));
+inline void tilize_single_block_with_out_cb_update(
+    DataflowBuffer& in_cb, DataflowBuffer& out_cb, uint32_t& out_cb_addr) {
+#ifndef ARCH_QUASAR  // activation_reuse/split_reader path is off for resnet; dead on Quasar (no cb_interface)
+    PACK((out_cb.evil_set_write_ptr(out_cb_addr)));
+#endif
     PACK((out_cb_addr += tilized_cb_row_offset));
     tilize_single_block<in_cb_id, in_block_w, out_cb_id>(in_cb);
 }
@@ -125,19 +194,23 @@ template <
     uint32_t tilized_cb_second_reader_offset,
     uint32_t image_width_in_tiles>
 inline void tilize_in_reuse_split_reader(
-    DataflowBuffer in1_cb,
-    DataflowBuffer in2_cb,
-    DataflowBuffer out_cb,
+    DataflowBuffer& in1_cb,
+    DataflowBuffer& in2_cb,
+    DataflowBuffer& out_cb,
     uint32_t act_cb_start_address,
     uint32_t act_cb_second_reader_start_address) {
     out_cb.reserve_back(out_cb_tiles);
+#ifndef ARCH_QUASAR  // Quasar has no fast tilize (split_reader/activation_reuse path, off for resnet)
     fast_tilize_init_with_dt(in1_cb_id, in_block_w, out_cb_id);
+#endif
 
     uint32_t in1_cb_addr = act_cb_start_address;
     uint32_t in2_cb_addr = act_cb_second_reader_start_address;
 
-    uint32_t out_cb_addr, out_cb_addr_second_reader, out_cb_addr_init;
-    PACK((out_cb_addr_init = get_local_cb_interface(out_cb_id).fifo_wr_ptr));
+    uint32_t out_cb_addr, out_cb_addr_second_reader, out_cb_addr_init = 0;
+#ifndef ARCH_QUASAR  // activation_reuse/split_reader path is off for resnet; dead on Quasar (no cb_interface)
+    PACK((out_cb_addr_init = out_cb.get_write_ptr()));
+#endif
     PACK((out_cb_addr = out_cb_addr_init));
     PACK((out_cb_addr_second_reader = out_cb_addr_init + tilized_cb_second_reader_offset));
 
@@ -149,47 +222,51 @@ inline void tilize_in_reuse_split_reader(
     constexpr uint32_t max_leftover = leftover_in1 > leftover_in2 ? leftover_in1 : leftover_in2;
 
     for (uint32_t image_row = 0; image_row < min_num_image_rows; ++image_row) {
-        in1_cb_addr = update_in_cb<in1_cb_id, window_reuse_offset>(in1_cb_addr);
-        in2_cb_addr = update_in_cb<in2_cb_id, window_reuse_offset>(in2_cb_addr);
+        in1_cb_addr = update_in_cb<window_reuse_offset>(in1_cb, in1_cb_addr);
+        in2_cb_addr = update_in_cb<window_reuse_offset>(in2_cb, in2_cb_addr);
         for (uint32_t image_col = 0; image_col < image_width_in_tiles; ++image_col) {
             tilize_single_block_with_out_cb_update<in1_cb_id, in_block_w, out_cb_id, tilized_cb_row_offset>(
-                in1_cb, out_cb_addr);
+                in1_cb, out_cb, out_cb_addr);
             tilize_single_block_with_out_cb_update<in2_cb_id, in_block_w, out_cb_id, tilized_cb_row_offset>(
-                in2_cb, out_cb_addr_second_reader);
+                in2_cb, out_cb, out_cb_addr_second_reader);
         }
     }
 
-    in1_cb_addr = update_in_cb<in1_cb_id, window_reuse_offset>(in1_cb_addr);
-    in2_cb_addr = update_in_cb<in2_cb_id, window_reuse_offset>(in2_cb_addr);
+    in1_cb_addr = update_in_cb<window_reuse_offset>(in1_cb, in1_cb_addr);
+    in2_cb_addr = update_in_cb<window_reuse_offset>(in2_cb, in2_cb_addr);
     for (uint32_t image_col = 0; image_col < max_leftover; ++image_col) {
         if (image_col < leftover_in1) {
             tilize_single_block_with_out_cb_update<in1_cb_id, in_block_w, out_cb_id, tilized_cb_row_offset>(
-                in1_cb, out_cb_addr);
+                in1_cb, out_cb, out_cb_addr);
 
             if (image_col == image_width_in_tiles - 1) {
-                in1_cb_addr = update_in_cb<in1_cb_id, window_reuse_offset>(in1_cb_addr);
+                in1_cb_addr = update_in_cb<window_reuse_offset>(in1_cb, in1_cb_addr);
             }
         }
 
         if (image_col < leftover_in2) {
             tilize_single_block_with_out_cb_update<in2_cb_id, in_block_w, out_cb_id, tilized_cb_row_offset>(
-                in2_cb, out_cb_addr_second_reader);
+                in2_cb, out_cb, out_cb_addr_second_reader);
 
             if (image_col == image_width_in_tiles - 1) {
-                in2_cb_addr = update_in_cb<in2_cb_id, window_reuse_offset>(in2_cb_addr);
+                in2_cb_addr = update_in_cb<window_reuse_offset>(in2_cb, in2_cb_addr);
             }
         }
     }
 
-    PACK((get_local_cb_interface(out_cb_id).fifo_wr_ptr = out_cb_addr_init));
+#ifndef ARCH_QUASAR  // activation_reuse/split_reader path is off for resnet; dead on Quasar (no cb_interface)
+    PACK((out_cb.evil_set_write_ptr(out_cb_addr_init)));
+#endif
     out_cb.push_back(out_cb_tiles);
+#ifndef ARCH_QUASAR  // Quasar has no fast tilize (split_reader/activation_reuse path, off for resnet)
     fast_tilize_uninit(in2_cb_id, out_cb_id, in_block_w);
+#endif
 }
 
 template <uint32_t out_subblock_w, uint32_t out_block_w>
 inline void reblock_and_untilize(
-    DataflowBuffer interm_cb,
-    DataflowBuffer out_cb,
+    DataflowBuffer& interm_cb,
+    DataflowBuffer& out_cb,
     uint32_t num_out_subblocks_in_col,
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_h) {
@@ -220,7 +297,6 @@ inline void reblock_and_untilize(
 }
 
 void kernel_main() {
-    DPRINT("CMP start\n");  // DEBUG: conv2d layer3 hang
     constexpr uint32_t in0_block_w = get_arg(args::in0_block_w);
     constexpr uint32_t in0_num_subblocks = get_arg(args::in0_num_subblocks);
     constexpr uint32_t in0_block_num_tiles = get_arg(args::in0_block_num_tiles);
@@ -274,6 +350,15 @@ void kernel_main() {
     constexpr uint32_t out_block_w = in1_block_w;
     constexpr bool spill = in0_num_blocks_w > 1;
 
+    // QSR matmul-partials accumulation uses the SAME per-K-block idiom as WH/BH (reserve/pack/push per
+    // subblock, then wait_front/pop_front(out_block) + RESTORE the ring each non-last K-block). The tested
+    // Quasar L1-acc spill/reload kernel (#43990 multi_block_compute.cpp) proves this idiom works on Quasar:
+    // it is credit-BALANCED per block (pop frees the slot before the next reserve, so credit never
+    // over-posts), pop_front does not clear L1 (so pack_reconfig_l1_acc keeps summing into the same tiles),
+    // and the RESTORE only rewinds the L1 ring position (not credit) so accumulation re-targets the aliased
+    // output block. The earlier posted=392/acked=0 deadlock was the craq-sim sub-tile credit bug (since
+    // fixed), not a fundamental "no credit-rewind" limit, so no Quasar-specific partials path is needed.
+
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? matmul_partials_cb : out_cb_id;
 
     [[maybe_unused]] uint32_t bias_block_offset = 0;
@@ -288,21 +373,6 @@ void kernel_main() {
     constexpr uint32_t in0_num_subblocks_read_last =
         (split_reader && !split_reader_cb_shared) ? reader_num_h_subblocks / 2 : 0;
     constexpr uint32_t in0_num_subblocks_read = reader_num_h_subblocks - in0_num_subblocks_read_last;
-
-    [[maybe_unused]] uint32_t act_cb_start_address =
-        activation_reuse ? get_local_cb_interface(in0_cb_id).fifo_rd_ptr : 0;
-    [[maybe_unused]] const uint32_t out_cb_tiles =
-        activation_reuse ? in0_block_w * (in0_num_subblocks_read + in0_num_subblocks_read_last) : 0;
-    [[maybe_unused]] const uint32_t tilized_cb_start_address =
-        activation_reuse ? get_local_cb_interface(tilized_in0_cb_id).fifo_wr_ptr : 0;
-#ifdef SPLIT_READER
-    [[maybe_unused]] const uint32_t act_cb_second_reader_start_address =
-        activation_reuse ? get_local_cb_interface(in0_cb_second_reader_id).fifo_rd_ptr : 0;
-#endif
-
-#ifdef CHECK_SKIP_COMPUTE
-    bool skip_compute = (bool)get_arg(args::skip_compute);
-#endif
 
     DataflowBuffer cb_in0(in0_cb_id);
 #ifdef SPLIT_READER
@@ -319,31 +389,51 @@ void kernel_main() {
 #endif
     DataflowBuffer cb_untilize_mode_out(untilize_mode_out_cb_id);
 
-    mm_block_init(mm_in0_cb_id, in1_cb_id, out_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+    [[maybe_unused]] const uint32_t out_cb_tiles =
+        activation_reuse ? in0_block_w * (in0_num_subblocks_read + in0_num_subblocks_read_last) : 0;
+    // activation_reuse base addresses (used only on the split_reader activation_reuse path, off for
+    // resnet). Quasar has no evil_set_*; the path is dead here, so source them as 0.
+#ifdef ARCH_QUASAR
+    [[maybe_unused]] uint32_t act_cb_start_address = 0;
+    [[maybe_unused]] const uint32_t tilized_cb_start_address = 0;
+#ifdef SPLIT_READER
+    [[maybe_unused]] const uint32_t act_cb_second_reader_start_address = 0;
+#endif
+#else
+    [[maybe_unused]] uint32_t act_cb_start_address = activation_reuse ? cb_in0.get_read_ptr() : 0;
+    [[maybe_unused]] const uint32_t tilized_cb_start_address =
+        activation_reuse ? cb_tilized_in0.get_write_ptr() : 0;
+#ifdef SPLIT_READER
+    [[maybe_unused]] const uint32_t act_cb_second_reader_start_address =
+        activation_reuse ? cb_in0_second_reader.get_read_ptr() : 0;
+#endif
+#endif
+
+#ifdef CHECK_SKIP_COMPUTE
+    bool skip_compute = (bool)get_arg(args::skip_compute);
+#endif
+
+    compute_kernel_hw_startup<SrcOrder::Reverse>(mm_in0_cb_id, in1_cb_id, out_cb_id);
+    matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
-    UNPACK(uint32_t partials_cb_read_ptr = get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr;)
-    PACK(uint32_t partials_cb_write_ptr = get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr;)
+    UNPACK(SAVE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials);)
+    PACK(SAVE_PARTIALS_WR(partials_cb_write_ptr, cb_matmul_partials);)
     for (uint32_t in1_block_w_i = 0; in1_block_w_i < in1_num_blocks_w; ++in1_block_w_i) {
         for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
-            DPRINT("CMP blk {} {}\n", in1_block_w_i, in0_block_h_i);  // DEBUG: conv2d layer3 hang
             bool enable_reload = false;
 
             if constexpr (pack_relu) {
                 PACK((llk_pack_relu_config(ReluConfig::none())));
             }
             if constexpr (partials_cb_uses_output) {
-                UNPACK(partials_cb_read_ptr = get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr;)
-                PACK(partials_cb_write_ptr = get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr;)
+                UNPACK(RESAVE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials);)
+                PACK(RESAVE_PARTIALS_WR(partials_cb_write_ptr, cb_matmul_partials);)
             }
             uint32_t curr_matmul_out_cb = matmul_partials_cb;
             for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
                 bool last_inner_dim_block = (in0_block_w_i == in0_num_blocks_w - 1);
-                CC_U("blk", in0_block_h_i, in0_block_w_i);  // DEBUG: inner-block enter (per thread)
-                CC_M("blk", in0_block_h_i, in0_block_w_i);
-                CC_P("blk", in0_block_h_i, in0_block_w_i);
-                RB_CMP(1, in1_block_w_i, in0_block_h_i, in0_block_w_i);  // DEBUG: inner-block start (pre-tilize)
                 if constexpr (!height_sharded) {
                     if (in0_block_w_i % in0_nblocks_w_tilize == 0) {
                         if constexpr (pack_relu && !fuse_bias) {
@@ -355,10 +445,6 @@ void kernel_main() {
                             pack_reconfig_data_format(curr_matmul_out_cb, tilized_in0_cb_id);
                             pack_reconfig_l1_acc(0);
                         }
-                        if (in1_block_w_i == 0 && in0_block_h_i == 0 && in0_block_w_i == 0) {
-                            DPRINT("CC pre_tilize (bs)\n");  // DEBUG (remove after)
-                        }
-                        RB_CMP(7, in1_block_w_i, in0_block_h_i, in0_block_w_i);  // DEBUG: pre tilize_in (bs)
                         tilize_in<
                             in0_block_w,
                             in0_pretilize_cb_id,
@@ -366,11 +452,6 @@ void kernel_main() {
                             true,
                             !split_reader || split_reader_cb_shared,
                             compute_kernel_lib::tilize_config::RemapMode::Configure>(in0_num_subblocks_read);
-                        RB_CMP(
-                            6,
-                            in1_block_w_i,
-                            in0_block_h_i,
-                            in0_block_w_i);  // DEBUG: post tilize_in (ACT_TILIZED pushed)
 
 #ifdef SPLIT_READER
                         if constexpr (split_reader && !split_reader_cb_shared) {
@@ -378,15 +459,8 @@ void kernel_main() {
                                 in0_num_subblocks_read_last);
                         }
 #endif
-                        mm_block_init_short_with_both_dt(
-                            in0_cb_id,
-                            in1_cb_id,
-                            in0_pretilize_cb_id,
-                            in0_pretilize_cb_id,
-                            false,
-                            out_subblock_w,
-                            out_subblock_h,
-                            in0_block_w);
+                        reconfig_data_format(in0_pretilize_cb_id, in1_cb_id, in0_pretilize_cb_id, in0_cb_id);
+                        matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                     }
                 } else {
                     if constexpr (pack_relu && !fuse_bias) {
@@ -410,7 +484,9 @@ void kernel_main() {
                             tilize_in<in0_block_w, in0_cb_second_reader_id, tilized_in0_cb_id, false, true>(
                                 in0_num_subblocks_read_last);
                         } else {
-                            PACK((get_local_cb_interface(tilized_in0_cb_id).fifo_wr_ptr = tilized_cb_start_address));
+#ifndef ARCH_QUASAR  // activation_reuse path is off for resnet; dead on Quasar (no evil_set_*)
+                            PACK((cb_tilized_in0.evil_set_write_ptr(tilized_cb_start_address)));
+#endif
                             tilize_in_reuse_split_reader<
                                 in0_cb_id,
                                 in0_cb_second_reader_id,
@@ -432,22 +508,11 @@ void kernel_main() {
                     }
 #endif
 
-                    mm_block_init_short_with_both_dt(
-                        mm_in0_cb_id,
-                        in1_cb_id,
-                        in0_cb_id,
-                        in0_cb_id,
-                        false,
-                        out_subblock_w,
-                        out_subblock_h,
-                        in0_block_w);
+                    reconfig_data_format(in0_cb_id, in1_cb_id, in0_cb_id, mm_in0_cb_id);
+                    matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                 }
 
-                RB_CMP(2, in1_block_w_i, in0_block_h_i, in0_block_w_i);  // DEBUG: post-tilize, pre wait mcast-act
-                CC_U("Wact", in0_block_h_i, in0_block_w_i);              // DEBUG: pre wait cb_act (mcast result)
                 cb_mm_in0.wait_front(in0_block_num_tiles);
-                CC_U("Gact", in0_block_h_i, in0_block_w_i);              // DEBUG: got cb_act
-                RB_CMP(3, in1_block_w_i, in0_block_h_i, in0_block_w_i);  // DEBUG: got mcast-act, pre wait weights
 
                 uint32_t in0_index_subblock_offset = 0;
 #ifdef CHECK_SKIP_COMPUTE
@@ -457,10 +522,7 @@ void kernel_main() {
                 }
 #endif
 
-                CC_U("Wwt", in0_block_h_i, in0_block_w_i);  // DEBUG: pre wait cb_weight
                 cb_in1.wait_front(in1_block_num_tiles);
-                CC_U("Gwt", in0_block_h_i, in0_block_w_i);               // DEBUG: got cb_weight
-                RB_CMP(4, in1_block_w_i, in0_block_h_i, in0_block_w_i);  // DEBUG: got weights, pre matmul
 
                 if (last_inner_dim_block) {
                     if constexpr (!fuse_bias) {
@@ -478,7 +540,14 @@ void kernel_main() {
                     uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
                         if (enable_reload) {
+#ifndef ARCH_QUASAR
                             copy_tile_to_dst_init_short_with_dt(in1_cb_id, matmul_partials_cb);
+#else
+                            // QSR: copy_tile_to_dst_init_short_with_dt is WH/BH-only; expand it into its
+                            // two constituent steps (identical reconfig + copy init) on Quasar.
+                            reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
+                            copy_tile_to_dst_init_short(matmul_partials_cb);
+#endif
                             cb_matmul_partials.wait_front(out_subblock_num_tiles);
                             tile_regs_acquire();
 
@@ -488,14 +557,9 @@ void kernel_main() {
                                 matmul_partials_cb, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
                             cb_matmul_partials.pop_front(out_subblock_num_tiles);
-                            mm_block_init_short_with_dt(
-                                mm_in0_cb_id,
-                                in1_cb_id,
-                                matmul_partials_cb,
-                                false,
-                                out_subblock_w,
-                                out_subblock_h,
-                                in0_block_w);
+                            reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
+                            matmul_block_init(
+                                mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                         } else {
                             tile_regs_acquire();
                         }
@@ -528,26 +592,28 @@ void kernel_main() {
                         }
 #endif
                         tile_regs_commit();
-                        DataflowBuffer curr_out_cb =
-                            curr_matmul_out_cb == matmul_partials_cb ? cb_matmul_partials : cb_mm_out;
-                        curr_out_cb.reserve_back(out_subblock_num_tiles);
-                        tile_regs_wait();
+                        {
+                            DataflowBuffer curr_out_cb =
+                                curr_matmul_out_cb == matmul_partials_cb ? cb_matmul_partials : cb_mm_out;
+                            curr_out_cb.reserve_back(out_subblock_num_tiles);
+                            tile_regs_wait();
 
-                        if constexpr (packer_l1_acc) {
-                            if (in0_block_w_i == 0) {
-                                pack_reconfig_l1_acc(0);
-                            } else if (last_inner_dim_block) {
-                                pack_reconfig_l1_acc(fuse_bias ? 1 : 0);
-                            } else {
-                                pack_reconfig_l1_acc(1);
+                            if constexpr (packer_l1_acc) {
+                                if (in0_block_w_i == 0) {
+                                    pack_reconfig_l1_acc(0);
+                                } else if (last_inner_dim_block) {
+                                    pack_reconfig_l1_acc(fuse_bias ? 1 : 0);
+                                } else {
+                                    pack_reconfig_l1_acc(1);
+                                }
                             }
+
+                            uint32_t start_dst_index = 0;
+                            pack_tile_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
+
+                            tile_regs_release();
+                            curr_out_cb.push_back(out_subblock_num_tiles);
                         }
-
-                        uint32_t start_dst_index = 0;
-                        pack_tile_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
-
-                        tile_regs_release();
-                        curr_out_cb.push_back(out_subblock_num_tiles);
 
                         in1_index_subblock_offset += out_subblock_w;
                     }  // for in1_num_subblocks
@@ -555,8 +621,8 @@ void kernel_main() {
                 }
                 if (curr_matmul_out_cb == matmul_partials_cb) {
                     if constexpr (!partials_cb_uses_output) {
-                        UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr;)
-                        PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr;)
+                        UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials);)
+                        PACK(RESTORE_PARTIALS_WR(partials_cb_write_ptr, cb_matmul_partials);)
                     }
                 }
                 if constexpr (packer_l1_acc) {
@@ -565,8 +631,8 @@ void kernel_main() {
                             cb_matmul_partials.wait_front(out_block_num_tiles);
                             cb_matmul_partials.pop_front(out_block_num_tiles);
                             if constexpr (spill) {
-                                UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
-                                PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr);
+                                UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials));
+                                PACK(RESTORE_PARTIALS_WR(partials_cb_write_ptr, cb_matmul_partials));
                             }
                         }
                         enable_reload = false;
@@ -575,8 +641,8 @@ void kernel_main() {
                             cb_matmul_partials.wait_front(out_block_num_tiles);
                             cb_matmul_partials.pop_front(out_block_num_tiles);
                             if constexpr (spill) {
-                                UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
-                                PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr);
+                                UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials));
+                                PACK(RESTORE_PARTIALS_WR(partials_cb_write_ptr, cb_matmul_partials));
                             }
                         }
                         if (in0_block_w_i == in0_num_blocks_w - 2) {
@@ -589,15 +655,15 @@ void kernel_main() {
 
                         if constexpr (fuse_bias) {
                             if (!last_inner_dim_block) {
-                                UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
-                                PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr);
+                                UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials));
+                                PACK(RESTORE_PARTIALS_WR(partials_cb_write_ptr, cb_matmul_partials));
                             }
                         } else {
                             if (!last_inner_dim_block) {
-                                UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
+                                UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials));
                             }
                             if (in0_block_w_i < in0_num_blocks_w - 2) {
-                                PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr);
+                                PACK(RESTORE_PARTIALS_WR(partials_cb_write_ptr, cb_matmul_partials));
                             }
                         }
                     }
@@ -605,10 +671,9 @@ void kernel_main() {
 
                 cb_mm_in0.pop_front(in0_block_num_tiles);
                 cb_in1.pop_front(in1_block_num_tiles);
-                RB_CMP(5, in1_block_w_i, in0_block_h_i, in0_block_w_i);  // DEBUG: inner-block matmul done, popped
             }  // for in0_num_blocks_w
             if constexpr (matmul_partials_cb == mm_out_cb_id && partials_cb_uses_output) {
-                UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
+                UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials));
             }
 #ifdef CHECK_SKIP_COMPUTE
             if (skip_compute) {
@@ -627,10 +692,8 @@ void kernel_main() {
                 reconfig_data_format(in1_cb_id, matmul_partials_cb, mm_in0_cb_id, bias_cb_id);
                 add_bcast_rows_init_short(matmul_partials_cb, bias_cb_id);
 
-                CC_U("Obias", in0_block_h_i, 0);  // DEBUG: output bias-add, pre wait bias/partials
                 cb_bias.wait_front(bias_ntiles_w);
                 cb_matmul_partials.wait_front(out_block_num_tiles);
-                CC_P("Oout", in0_block_h_i, 0);  // DEBUG: output bias-add, got inputs, packing to out
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
@@ -665,8 +728,8 @@ void kernel_main() {
                     }  // for in1_num_subblocks
                 }  // in0_num_subblocks
                 if constexpr (untilize_out) {
-                    UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
-                    PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr);
+                    UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials));
+                    PACK(RESTORE_PARTIALS_WR(partials_cb_write_ptr, cb_matmul_partials));
                 }
             }
 #endif  // FUSE_BIAS
@@ -718,5 +781,4 @@ void kernel_main() {
         }
 #endif
     }  // for in1_num_blocks_w
-    DPRINT("CMP end\n");  // DEBUG: conv2d layer3 hang
 }  // void kernel_main()

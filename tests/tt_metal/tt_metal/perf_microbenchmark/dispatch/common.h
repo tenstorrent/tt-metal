@@ -1238,7 +1238,7 @@ protected:
         // between test fixtures possibly because the previously issued commands
         // are not completed before next firmware launch
         HostMemDeviceCommand cmd(cmd_calc.write_offset_bytes());
-        cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+        cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, 0);
         dc.add_data(cmd.data(), cmd.size_bytes(), cmd.size_bytes());
         entry_sizes.push_back(cmd.size_bytes());
 
@@ -1357,19 +1357,26 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
         {"HOST_COMPLETION_Q_WR_PTR",
          std::to_string(memmap.get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR))},
         {"DEV_COMPLETION_Q_WR_PTR",
-         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR))},
+         std::to_string(
+             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR, /*cq_id=*/0))},
         {"DEV_COMPLETION_Q_RD_PTR",
-         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD))},
+         std::to_string(
+             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD, /*cq_id=*/0))},
         {"DEV_DISPATCH_PROGRESS_PTR",
-         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS))},
+         std::to_string(
+             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS, /*cq_id=*/0))},
         {"REALTIME_PROFILER_MSG_ADDR",
-         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG))},
+         std::to_string(
+             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG, /*cq_id=*/0))},
         {"DISPATCH_TELEMETRY_ADDR",
-         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY))},
+         std::to_string(
+             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY, /*cq_id=*/0))},
         {"DISPATCH_TELEMETRY_CONTROL_ADDR",
-         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL))},
+         std::to_string(memmap.get_device_command_queue_addr(
+             CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL, /*cq_id=*/0))},
         {"DISPATCH_TELEMETRY_DISABLED", "1"},
         {"FIRST_STREAM_USED", std::to_string(memmap.get_dispatch_stream_index(0))},
+        {"COMPLETION_COUNTER_OFFSET", "0"},
         {"VIRTUALIZE_UNICAST_CORES", "0"},
         {"NUM_VIRTUAL_UNICAST_CORES", "0"},
         {"NUM_PHYSICAL_UNICAST_CORES", "0"},
@@ -1440,11 +1447,11 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
     uint32_t downstream_cb_sem_id,
     uint32_t downstream_sync_sem_id,
     uint32_t entry_size,
+    uint32_t dispatch_telemetry_addr,
     const CoreCoord& phys_prefetch,
     const CoreCoord& phys_dispatch) {
     const auto my_virtual = device->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_prefetch);
     const auto downstream_virtual = device->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_dispatch);
-    const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map();
     return {
         {"MY_NOC_X", std::to_string(my_virtual.x)},
         {"MY_NOC_Y", std::to_string(my_virtual.y)},
@@ -1490,8 +1497,7 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"FABRIC_HEADER_RB_BASE", "0"},
         {"FABRIC_HEADER_RB_ENTRIES", "0"},
         {"MY_FABRIC_SYNC_STATUS_ADDR", "0"},
-        {"DISPATCH_TELEMETRY_ADDR",
-         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY))},
+        {"DISPATCH_TELEMETRY_ADDR", std::to_string(dispatch_telemetry_addr)},
         {"DISPATCH_TELEMETRY_DISABLED", "1"},
         {"FABRIC_MUX_X", "0"},
         {"FABRIC_MUX_Y", "0"},

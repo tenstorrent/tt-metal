@@ -106,8 +106,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedProgramFactory::c
         .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_llk_acc};
     ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(input.device()->arch(), compute_config);
     if (fp32_llk_acc) {
-        std::visit(
-            [&](auto& c) { c.unpack_to_dest_mode.emplace(INPUT_DFB, UnpackToDestMode::UnpackToDestFp32); }, compute_hw);
+        std::visit([&](auto& c) { c.unpack_modes.emplace(INPUT_DFB, UnpackMode::UnpackToDest); }, compute_hw);
     }
     KernelSpec compute{
         .unique_id = COMPUTE_KERNEL,
@@ -141,10 +140,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedProgramFactory::c
     KernelRunArgs reader_run{.kernel = READER_KERNEL};
     KernelRunArgs writer_run{.kernel = WRITER_KERNEL};
     for (const auto& core : corerange_to_cores(all_cores)) {
-        reader_run.runtime_arg_values.push_back(
-            KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"num_tiles_per_core", num_tiles_per_shard}}});
-        writer_run.runtime_arg_values.push_back(
-            KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"num_units", num_tiles_per_shard}}});
+        reader_run.runtime_arg_values["num_tiles_per_core"][core] = num_tiles_per_shard;
+        writer_run.runtime_arg_values["num_units"][core] = num_tiles_per_shard;
     }
     run_args.kernel_run_args = {reader_run, writer_run};
     run_args.tensor_args = {

@@ -122,7 +122,7 @@ auto dispatch_conversion(
 
 // Helper: Create tensor from numpy data span (common logic for both overloads)
 template <typename NumpyType, typename MetalType>
-tt::tt_metal::Tensor create_tensor_from_span(
+ttnn::Tensor create_tensor_from_span(
     std::span<const NumpyType> numpy_data_span,
     const tt::tt_metal::ShapeBase::Container& shape_container,
     tt::tt_metal::DataType tensor_data_type,
@@ -143,7 +143,7 @@ tt::tt_metal::Tensor create_tensor_from_span(
         auto row_major_tensor = (mapper != nullptr)
                                     ? ttnn::distributed::create_distributed_tensor(
                                           ttsl::make_const_span(converted_data), tensor_shape, tensor_layout, *mapper)
-                                    : tt::tt_metal::Tensor::from_vector(converted_data, tensor_spec, device);
+                                    : ttnn::Tensor::from_vector(converted_data, tensor_spec, device);
 
         if (mapper != nullptr) {
             row_major_tensor = ttnn::to_device(row_major_tensor, device, tt::tt_metal::MemoryConfig{});
@@ -157,7 +157,7 @@ tt::tt_metal::Tensor create_tensor_from_span(
         auto row_major_tensor = (mapper != nullptr)
                                     ? ttnn::distributed::create_distributed_tensor(
                                           ttsl::make_const_span(numpy_data_span), tensor_shape, tensor_layout, *mapper)
-                                    : tt::tt_metal::Tensor::from_span(numpy_data_span, tensor_spec, device);
+                                    : ttnn::Tensor::from_span(numpy_data_span, tensor_spec, device);
 
         if (mapper != nullptr) {
             row_major_tensor = ttnn::to_device(row_major_tensor, device, tt::tt_metal::MemoryConfig{});
@@ -189,7 +189,7 @@ tt::tt_metal::Tensor create_tensor_from_span(
 }
 
 nb::object make_numpy_tensor(
-    const tt::tt_metal::Tensor& t,
+    const ttnn::Tensor& t,
     std::optional<tt::tt_metal::DataType> new_type,
     const ttnn::distributed::MeshToTensor* composer) {
     // Get ml_dtypes.bfloat16 dtype for bfloat16 arrays
@@ -276,7 +276,7 @@ nb::object make_numpy_tensor(
             nb::dtype<NumpyType>()));
     };
 
-    const auto convert_to_row_major = [](const tt::tt_metal::Tensor& tensor) {
+    const auto convert_to_row_major = [](const ttnn::Tensor& tensor) {
         tt::tt_metal::Shape output_tensor_end(ttsl::SmallVector<uint32_t>(tensor.logical_shape().rank(), 0));
         int logical_rank = tensor.logical_shape().rank();
         for (int index = -1; index >= -logical_rank; --index) {
@@ -288,7 +288,7 @@ nb::object make_numpy_tensor(
 
     const auto impl = [&make_numpy_tensor_from_data,
                        &convert_to_row_major,
-                       composer]<typename MetalType, typename NumpyType>(const tt::tt_metal::Tensor& tensor) {
+                       composer]<typename MetalType, typename NumpyType>(const ttnn::Tensor& tensor) {
         if (tensor.storage_type() == ttnn::types::StorageType::HOST) {
             if (tensor.layout() != tt::tt_metal::Layout::ROW_MAJOR) {
                 const auto row_major_tensor = convert_to_row_major(tensor);
@@ -336,7 +336,7 @@ nb::object make_numpy_tensor(
 }
 
 // Fast path: standard NumPy dtypes validated by nanobind
-tt::tt_metal::Tensor make_metal_tensor(
+ttnn::Tensor make_metal_tensor(
     nb::ndarray<nb::numpy> numpy_data,
     tt::tt_metal::Layout target_layout,
     std::optional<tt::tt_metal::DataType> new_type,
@@ -431,7 +431,7 @@ tt::tt_metal::Tensor make_metal_tensor(
 
 // Custom dtype handler: only accepts custom dtypes (like ml_dtypes.bfloat16)
 // Standard dtypes should use the fast path nb::ndarray<nb::numpy> overload
-tt::tt_metal::Tensor make_metal_tensor(
+ttnn::Tensor make_metal_tensor(
     nb::object numpy_data_obj,
     tt::tt_metal::Layout target_layout,
     std::optional<tt::tt_metal::DataType> new_type,

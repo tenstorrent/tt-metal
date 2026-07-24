@@ -136,7 +136,7 @@ std::vector<BufferPageInfo> get_buffer_pages(const std::vector<tt::tt_metal::dis
                 uint32_t bank_id = 0;
                 for (uint32_t page_index = 0; page_index < num_pages; page_index++) {
                     auto page_address = buffer->page_address(bank_id, page_index);
-                    CoreCoord core = buffer->allocator()->get_logical_core_from_bank_id(bank_id);
+                    tt::tt_metal::CoreCoord core = buffer->allocator()->get_logical_core_from_bank_id(bank_id);
                     bank_id = (bank_id + 1) % num_banks;
 
                     buffer_page_infos.push_back(BufferPageInfo{

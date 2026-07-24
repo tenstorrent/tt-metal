@@ -14,6 +14,7 @@
 #include <tracy/Tracy.hpp>
 
 using namespace tt::tt_metal;
+using ttnn::Tensor;
 
 namespace {
 auto get_datatype_tile_size(DataType dtype) { return tt::tile_size(datatype_to_dataformat_converter(dtype)); }
@@ -91,8 +92,9 @@ bool can_construct_on_single_device(
     }
 
     // Logical shape must match physical shape for the tensor to be constructed on the device(no padding
-    // required). TensorSpec creation must follow after memory_config.is_sharded() check to avoid fatal error
-    if (!tt::tt_metal::logical_matches_physical(TensorSpec(tensor_shape, src_tensor_layout))) {
+    // required). tt::tt_metal::TensorSpec creation must follow after memory_config.is_sharded() check to avoid fatal
+    // error
+    if (!tt::tt_metal::logical_matches_physical(tt::tt_metal::TensorSpec(tensor_shape, src_tensor_layout))) {
         return false;
     }
 
@@ -138,7 +140,7 @@ bool has_sufficient_device_memory(
     auto num_banks = device->allocator()->get_num_banks(buffer_type);
     auto bank_size = device->allocator()->get_bank_size(buffer_type);
 
-    TensorSpec src_rm_spec(tensor_shape, src_tensor_layout);
+    tt::tt_metal::TensorSpec src_rm_spec(tensor_shape, src_tensor_layout);
     auto src_rm_per_bank = src_rm_spec.compute_consumed_memory_bytes_per_bank(alignment, num_banks);
 
     size_t peak_per_bank = src_rm_per_bank;
@@ -146,11 +148,11 @@ bool has_sufficient_device_memory(
     if (src_dtype != dst_dtype) {
         // Typecast requires TILE layout, so the path always goes through tilize → typecast,
         // regardless of the target layout.
-        TensorSpec src_tile_spec(
+        tt::tt_metal::TensorSpec src_tile_spec(
             tensor_shape, TensorLayout(src_dtype, PageConfig(Layout::TILE, optional_tile), memory_config));
         auto src_tile_per_bank = src_tile_spec.compute_consumed_memory_bytes_per_bank(alignment, num_banks);
 
-        TensorSpec dst_tile_spec(
+        tt::tt_metal::TensorSpec dst_tile_spec(
             tensor_shape, TensorLayout(dst_dtype, PageConfig(Layout::TILE, optional_tile), memory_config));
         auto dst_tile_per_bank = dst_tile_spec.compute_consumed_memory_bytes_per_bank(alignment, num_banks);
 
@@ -160,14 +162,15 @@ bool has_sufficient_device_memory(
 
         if (target_layout == Layout::ROW_MAJOR) {
             // Untilize: TILE(dst) + RM(dst) coexist.
-            TensorSpec dst_rm_spec(tensor_shape, TensorLayout(dst_dtype, PageConfig(Layout::ROW_MAJOR), memory_config));
+            tt::tt_metal::TensorSpec dst_rm_spec(
+                tensor_shape, TensorLayout(dst_dtype, PageConfig(Layout::ROW_MAJOR), memory_config));
             auto dst_rm_per_bank = dst_rm_spec.compute_consumed_memory_bytes_per_bank(alignment, num_banks);
             peak_per_bank = std::max(peak_per_bank, dst_tile_per_bank + dst_rm_per_bank);
         }
     } else if (target_layout == Layout::TILE) {
         // Same dtype, target TILE: only tilize needed.
         // Tilize: RM(src) + TILE(src) coexist.
-        TensorSpec src_tile_spec(
+        tt::tt_metal::TensorSpec src_tile_spec(
             tensor_shape, TensorLayout(src_dtype, PageConfig(Layout::TILE, optional_tile), memory_config));
         auto src_tile_per_bank = src_tile_spec.compute_consumed_memory_bytes_per_bank(alignment, num_banks);
         peak_per_bank = src_rm_per_bank + src_tile_per_bank;
@@ -293,7 +296,7 @@ Tensor create_tt_tensor_from_host_data(
 
         return Tensor::from_span(
             ttsl::make_const_span(host_buffer.view_as<T>()),
-            TensorSpec(tensor_shape, dst_tensor_layout),
+            tt::tt_metal::TensorSpec(tensor_shape, dst_tensor_layout),
             nullptr,
             std::nullopt,
             static_cast<T>(pad_value));

@@ -176,7 +176,7 @@ HostMemDeviceCommand build_dispatch_terminate(bool include_dispatch_s = true) {
     }
     const uint32_t total_cmd_bytes = calc.write_offset_bytes();
     HostMemDeviceCommand cmd(total_cmd_bytes);
-    cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+    cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, 0);
     cmd.add_dispatch_terminate();
     if (dispatch_sub_enabled) {
         cmd.add_dispatch_terminate(DispatcherSelect::DISPATCH_SUBORDINATE);
@@ -203,7 +203,7 @@ HostMemDeviceCommand build_dispatch_prefetch_stall() {
     HostMemDeviceCommand cmd(command_size_bytes);
 
     cmd.add_dispatch_wait_with_prefetch_stall(
-        CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER | CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY, 0, 0, 0);
+        CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER | CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY, 0, 0, 0, 0);
 
     return cmd;
 }
@@ -680,7 +680,7 @@ public:
         DeviceCommandCalculator wait_calc;
         wait_calc.add_dispatch_wait();
         HostMemDeviceCommand wait_cmd(wait_calc.write_offset_bytes());
-        wait_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+        wait_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, 0);
         const uint8_t* wptr = reinterpret_cast<const uint8_t*>(wait_cmd.data());
         exec_buf_data.insert(exec_buf_data.end(), wptr, wptr + wait_cmd.size_bytes());
 
@@ -2677,9 +2677,11 @@ public:
         bool /*wait_for_completion*/ = true,
         bool /*wait_for_host_writes*/ = false) override {
         const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
+        // CQ0: this is a slow-dispatch (SD) test with no real command queue.
+        constexpr uint8_t cq_id = 0;
         const uint32_t entry_size = memmap.prefetch_q_entry_size_bytes();
         TT_FATAL(entry_size == 4, "Entry size must be 32 bits for worker cores used to launch prefetcher in this test");
-        const uint32_t dispatch_cb_base = memmap.dispatch_buffer_base();
+        const uint32_t dispatch_cb_base = memmap.dispatch_buffer_base(cq_id);
         const uint32_t dispatch_buffer_pages = memmap.dispatch_buffer_pages();
 
         // L1 layout on the prefetch_hd core comes straight from the production memmap so SD
@@ -2687,15 +2689,18 @@ public:
         // The memmap constructor already asserts scratch_db_base + ringbuffer_size <= l1_size.
         const uint32_t page_size = Common::SD_PREFETCH_CMDDAT_PAGE_SIZE;
         const uint32_t prefetch_q_rd_ptr_addr =
-            memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
+            memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD, cq_id);
         const uint32_t prefetch_q_pcie_rd_ptr_addr =
-            memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD);
-        const uint32_t prefetch_q_base = memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+            memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD, cq_id);
+        const uint32_t prefetch_q_base =
+            memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED, cq_id);
         const uint32_t prefetch_q_size = memmap.prefetch_q_size();
-        const uint32_t cmddat_q_base = memmap.cmddat_q_base();
+        const uint32_t cmddat_q_base = memmap.cmddat_q_base(cq_id);
         const uint32_t cmddat_q_pages = memmap.cmddat_q_size() / page_size;
-        const uint32_t scratch_db_base = memmap.scratch_db_base();
+        const uint32_t scratch_db_base = memmap.scratch_db_base(cq_id);
         const uint32_t scratch_db_size = memmap.scratch_db_size();
+        const uint32_t dispatch_telemetry_addr =
+            memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY, cq_id);
 
         // Hugepage addressing
         // WH/BH stage commands in the PCIe hugepage (same region the FD runtime uses for the issue
@@ -2880,6 +2885,7 @@ public:
             di_dispatch_cb_sem,
             pf_sync_sem,
             entry_size,
+            dispatch_telemetry_addr,
             phys_prefetch,
             phys_disp);
         // On Quasar the experimental API auto-assigns DM cores in creation order, so prefetch must be
@@ -2919,7 +2925,7 @@ public:
             phys_prefetch,
             phys_disp,
             memmap,
-            memmap.dispatch_buffer_base(),
+            memmap.dispatch_buffer_base(cq_id),
             dev_completion_base,
             this->sd_completion_queue_size());
         // prefetch already occupies DM0 on this shared core, so dispatch auto-assigns to DM1.
@@ -2933,13 +2939,13 @@ public:
         {
             const tt_cxy_pair dispatch_cxy(this->device_->id(), phys_disp);
             const uint32_t completion_q_wr_l1 =
-                memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
+                memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR, cq_id);
             const uint32_t completion_q_rd_l1 =
-                memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
+                memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD, cq_id);
             const uint32_t completion_q0_last_event_l1 =
-                memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
+                memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT, cq_id);
             const uint32_t completion_q1_last_event_l1 =
-                memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
+                memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT, cq_id);
             const uint32_t completion_wr_ptr_16B = dev_completion_base >> 4;
             const uint32_t zero = 0u;
             cluster.write_core(&completion_wr_ptr_16B, sizeof(uint32_t), dispatch_cxy, completion_q_wr_l1);
@@ -3016,14 +3022,15 @@ public:
 
     void refresh_completion_data() override {
         if (Common::is_quasar_sim()) {
-            // Read the dispatch kernel's DRAM completion writes into the host staging buffer so
-            // device_data.validate() sees the correct data.
+            // Read the dispatch kernel's DRAM completion writes into the host staging buffer so device_data.validate()
+            // sees the correct data.
             const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
             const CoreCoord phys_disp =
                 this->device_->worker_core_from_logical_core(Common::dispatch_core(this->device_));
             const tt_cxy_pair dispatch_cxy(this->device_->id(), phys_disp);
+            // CQ0: this is a slow-dispatch (SD) test with no real command queue.
             const uint32_t completion_q_wr_l1 =
-                memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
+                memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR, /*cq_id=*/0);
 
             uint32_t wr_ptr_and_toggle = 0;
             tt_metal::MetalContext::instance().get_cluster().read_core(
@@ -3427,7 +3434,7 @@ TEST_P(PrefetcherThroughputTestFixture, HostToDRAMPagedWriteThroughput) {
     }
 
     HostMemDeviceCommand barrier_cmd(barrier_calc.write_offset_bytes());
-    barrier_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0U, 0U, 0U);
+    barrier_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0U, 0U, 0U, 0);
     dc.add_data(barrier_cmd.data(), barrier_cmd.size_bytes(), barrier_cmd.size_bytes());
     entry_sizes.push_back(barrier_cmd.size_bytes());
 

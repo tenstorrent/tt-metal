@@ -179,7 +179,7 @@ ttnn::Tensor all_reduce_async(
     const bool change_mem_config = input_is_sharded;
     if (change_mem_config) {
         ttnn::MemoryConfig working_memory_config{
-            ttnn::TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
+            tt::tt_metal::TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
         interleaved_input_tensor = ttnn::sharded_to_interleaved(input_tensor, working_memory_config, std::nullopt);
     }
     // .value_or() returns by value, .value() returns by reference
@@ -297,7 +297,7 @@ ttnn::Tensor all_reduce_async(
     std::optional<ttnn::Tensor> interleaved_input_tensor;
     if (change_mem_config) {
         ttnn::MemoryConfig working_memory_config{
-            ttnn::TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
+            tt::tt_metal::TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
         interleaved_input_tensor = ttnn::sharded_to_interleaved(input_tensor, working_memory_config, std::nullopt);
     }
     // .value_or() returns by value, .value() returns by reference
@@ -408,14 +408,7 @@ ttnn::Tensor all_reduce_async(
             /*mesh_device*/ &mesh_device);
     } else {
         gathered = ttnn::all_gather(
-            scattered_tensor,
-            dim,
-            cluster_axis,
-            worker_subdevice_id_opt,
-            out_memory_config,
-            std::nullopt,
-            num_preferred_links,
-            topology_);
+            scattered_tensor, dim, cluster_axis, out_memory_config, std::nullopt, worker_subdevice_id_opt);
     }
     scattered_tensor.deallocate();
 

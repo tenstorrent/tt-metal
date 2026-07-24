@@ -36,20 +36,30 @@ def _create_fabric_router_config(max_payload_size):
 def open_mesh_device(mesh_shape: tuple, model_cfg: type, l1_small_size: int = 0) -> ttnn.MeshDevice:
     """Configure fabric and open the mesh device.
 
-    Default fabric is 1D for sp<=8, else 2D. PREFILL_FABRIC_MODE (1d|2d) overrides
-    this: the D2D-socket pipeline needs 2D even at sp=8 because a MeshSocket routes
-    over 2D fabric, and set_fabric_config is one global config for the whole run.
+    Default fabric is 1D for sp<=8, else 2D. PREFILL_FABRIC_MODE overrides this: the D2D-socket
+    pipeline needs 2D even at sp=8 because a MeshSocket routes over 2D fabric, and set_fabric_config
+    is one global config for the whole run. Accepted modes: 1d, 2d, 1d_ring, 2d_torus_x,
+    2d_torus_y, 2d_torus_xy. A torus mode physically wraps the named axis (x = cols = tp_axis,
+    y = rows = sp_axis) into a ring and MUST match the mesh-graph descriptor's dim_types (a Ring
+    collective on an axis the fabric does not wrap hangs). The per-axis CCL topology is derived from
+    the opened fabric via tt_ccl.per_axis_topology().
 
     `l1_small_size` > 0 carves an L1_SMALL region (needed when an op routes its
     semaphores there, e.g. the Kimi MoE routing all-gather with use_l1_small_for_semaphores)."""
     sp = mesh_shape[0]
     fabric_mode = os.environ.get("PREFILL_FABRIC_MODE", "").strip().lower()
-    if fabric_mode == "2d":
-        fabric_config = ttnn.FabricConfig.FABRIC_2D
-    elif fabric_mode == "1d":
-        fabric_config = ttnn.FabricConfig.FABRIC_1D
+    fabric_mode_map = {
+        "1d": ttnn.FabricConfig.FABRIC_1D,
+        "2d": ttnn.FabricConfig.FABRIC_2D,
+        "1d_ring": ttnn.FabricConfig.FABRIC_1D_RING,
+        "2d_torus_x": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+        "2d_torus_y": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+        "2d_torus_xy": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+    }
+    if fabric_mode in fabric_mode_map:
+        fabric_config = fabric_mode_map[fabric_mode]
     elif fabric_mode:
-        raise ValueError(f"PREFILL_FABRIC_MODE must be '1d' or '2d', got {fabric_mode!r}")
+        raise ValueError(f"PREFILL_FABRIC_MODE must be one of {sorted(fabric_mode_map)}, got {fabric_mode!r}")
     else:
         fabric_config = ttnn.FabricConfig.FABRIC_1D if sp <= 8 else ttnn.FabricConfig.FABRIC_2D
     logger.info(f"Fabric config: {fabric_config} (sp={sp}, PREFILL_FABRIC_MODE={fabric_mode or 'unset'})")
