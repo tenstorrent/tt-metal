@@ -17,6 +17,7 @@ Executor contract (``EagerLLMExecutor`` / ``TracedLLMExecutor``): pre-embedded f
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List
@@ -80,6 +81,21 @@ class DeepSeekR1Qwen14BExecutorRuntimeConfig:
     model_cache_path: Path | None = None
     kv_cache_dtype: ttnn.DataType = ttnn.bfloat8_b
     optimizations: Any = None
+    # Batched prefill (parity caveat #12): fuse equal-length users into batched passes to close the
+    # batch-32 TTFT gap. ``supports_batched_prefill`` is the per-model opt-in (the shared engine only
+    # batches models whose prefill_forward threads ``batch_size`` — DeepSeek-R1-Distill-Qwen-14B does,
+    # below). DeepSeek-R1-Distill-Qwen-14B is a standard dense Qwen2.5 attention (NO QK-norm — the HF
+    # checkpoint has no q_norm/k_norm weights, so ``_qk_norm_cfg`` resolves to None), so every prefill op
+    # is row-independent and the batched fold is bit-safe (same as the qwen25_7b / coder-32b ports).
+    # ``max_prefill_batch_size`` caps the per-group batch (8 = partial batching, design rec);
+    # ``disable_batched_prefill`` is the escape hatch back to the sequential loop;
+    # ``max_prefill_chunk_size`` (above) drives the #45234 chunked-prompt decline.
+    supports_batched_prefill: bool = True
+    max_prefill_batch_size: int = 8
+    disable_batched_prefill: bool = False
+    # When True (default), batched prefill runs norm+lm_head ONCE per group over the gathered last-token
+    # rows (TTTv1 parity); False falls back to the bit-identical per-slot path (one lm_head per user).
+    batched_prefill_batched_extract: bool = True
 
     def can_enable_trace(self, prefill_seq_len: int, num_cached_tokens: int = 0) -> bool:
         # Mirror TTTv1's prefill-trace gate (model_config.get_trace_prefill_supported_seq_lens):
@@ -378,6 +394,20 @@ def _build_decoder_layer(
     )
 
     w1, w2, w3 = weight_utils.mlp_weights_from_hf_layer(hf_layer.mlp)
+    # Pad the FF hidden dim to a grid-friendly per-device size so the DRAM-sharded decode FF matmuls
+    # (W1/W3/W2) use a full multi-core grid instead of a starved few. The decode grid divides both the
+    # K-tile and N-tile counts (in0 is K-width-sharded on dim, weights are N-sharded on hidden); the raw
+    # per-device hidden 13824/8 = 1728 = 54 tiles (2*27) gives gcd(dim_tiles=160, 54)=2 -> only 2 DRAM
+    # readers stream the FF weights, which dominate memory-bound decode. Padding per device to a multiple
+    # of 32 tiles (here 64: total 16384 / 8) gives gcd(160, 64)=32 cores. The extra columns are zeros
+    # (silu(0)=0, mul->0, and W2 contracts the padded rows to 0), so decode output is bit-unchanged.
+    # Mirrors the qwen25_coder_32b / qwen25_72b DRAM-shard FF-pad (project_tttv2_decode_dramshard...).
+    _ff_align = TILE_SIZE * TILE_SIZE * num_dev  # 32*32*num_dev
+    _ff_pad = math.ceil(w1.shape[-1] / _ff_align) * _ff_align
+    if _ff_pad != w1.shape[-1]:
+        w1 = torch.nn.functional.pad(w1, (0, _ff_pad - w1.shape[-1]))
+        w3 = torch.nn.functional.pad(w3, (0, _ff_pad - w3.shape[-1]))
+        w2 = torch.nn.functional.pad(w2, (0, 0, 0, _ff_pad - w2.shape[-2]))
     mlp = MLP1D.from_config(
         MLP1DConfig(
             w1=_lazy(
@@ -403,7 +433,9 @@ def _build_decoder_layer(
     post_attn_decode_program_config, post_attn_decode_memory_config = _post_attn_norm_decode_configs(
         mlp,
         dim=qcfg.dim,
-        hidden_dim=qcfg.hidden_dim,
+        # Use the padded FF hidden so the post-attn RMSNorm decode output is width-sharded on the SAME
+        # (32-core) grid as MLP1D's W1/W3 decode input; a mismatch silently corrupts decode.
+        hidden_dim=_ff_pad,
         num_devices=num_dev,
         max_batch_size=qcfg.max_batch_size,
     )
@@ -511,7 +543,11 @@ class DeepSeekR1Qwen14BDecoderLayer(LightweightModule):
         page_table: ttnn.Tensor | None = None,
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
+        batch_size: int = 1,
     ) -> ttnn.Tensor:
+        # For batched prefill (batch_size > 1) x is the folded [1,1,B*S,dim] hidden state; norm,
+        # residual add and MLP are row-independent so they treat B*S as one long sequence unchanged.
+        # Only attention unfolds the batch axis internally (see Attention1D.prefill_forward).
         # Fractured embed / norm activations must be all-gathered to full ``dim`` before
         # Attention1D / MLP1D (QKV matmul expects width ``dim``).
         r = self.input_layernorm.prefill_forward(x)
@@ -525,6 +561,7 @@ class DeepSeekR1Qwen14BDecoderLayer(LightweightModule):
             page_table=page_table,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
+            batch_size=batch_size,
         )
         h = ttnn.add(x, r, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         r2 = self.post_attention_layernorm.prefill_forward(h)
@@ -786,6 +823,7 @@ class DeepSeekR1Qwen14B(LightweightModule):
                 cluster_shape=list(mesh_device.shape),
                 model_cache_path=cache_path,
                 kv_cache_dtype=precision.kv_cache_dtype,
+                batched_prefill_batched_extract=not os.environ.get("DISABLE_BATCHED_EXTRACT"),
             )
         return model
 
@@ -815,7 +853,11 @@ class DeepSeekR1Qwen14B(LightweightModule):
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
         get_last_token: int = -1,
+        batch_size: int = 1,
     ) -> ttnn.Tensor:
+        # batch_size > 1: x_embed is the folded [1,1,B*S,dim] tensor (B users). The batched path always
+        # returns the full hidden state (get_last_token == -1); the executor does per-slot last-token
+        # extraction + norm/lm_head so those stages stay bit-identical to the single-user path.
         x = x_embed
         for layer in self.layers:
             x = layer.prefill_forward(
@@ -825,6 +867,7 @@ class DeepSeekR1Qwen14B(LightweightModule):
                 page_table=page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
+                batch_size=batch_size,
             )
 
         if get_last_token == -1:
