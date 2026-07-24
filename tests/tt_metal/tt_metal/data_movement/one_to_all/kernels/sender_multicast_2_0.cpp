@@ -83,4 +83,5 @@ void kernel_main() {
     }
 
     DeviceTimestampedData("Number of subordinates", num_subordinates);
+    DeviceTimestampedData("Loopback", loopback ? 1 : 0);
 }

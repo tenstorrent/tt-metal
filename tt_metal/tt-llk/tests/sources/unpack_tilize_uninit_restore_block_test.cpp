@@ -105,7 +105,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // ---- Run 1: plain datacopy of each tilized tile (same format, no reconfig) ----
     run = 1;
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0, 0, face_r_dim, num_faces, formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst);
+        0, 0, ckernel::make_tensor_shape_from_legacy(face_r_dim, num_faces), formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst);
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
         _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(

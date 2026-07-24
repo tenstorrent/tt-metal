@@ -20,6 +20,9 @@ struct IndexerScoreSharedVariables {
     // This device's linearized SP-ring index (from its mesh coordinate); chunk_start = base + idx*stride.
     // Stored so override_runtime_arguments can recompute chunk_start for new base/stride on a cache hit.
     uint32_t device_index = 0;
+    // This device's TP-rank along the TP axis (seq_shard_axes[1]; 0 when not 2D-sub-sharded); the 2D block-cyclic
+    // geometry adds tp_index*Sq to the slab position. Stored for the same override recompute.
+    uint32_t tp_index = 0;
 };
 
 // Native mesh-workload factory: one program per mesh coordinate so each device derives its own

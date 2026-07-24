@@ -35,7 +35,7 @@ on:
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.apply-filters.outputs.matrix }}
     env:
@@ -130,7 +130,7 @@ jobs:
         # rw-ness: per-runner caches are :rw so first-use HF downloads can populate them;
         # shared NFS honors mlperf-read-only.
         - ${{ matrix.test-group['weights-cache-mode'] == 'cloud-mlperf' && format('/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw') || (matrix.test-group['weights-cache-mode'] == 'yyz4-mnt-models' && format('/mnt/models/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw')) || (matrix.test-group['weights-cache-mode'] == 'local-disk' || matrix.test-group['weights-cache-mode'] == 'lfc') && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw' || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
-      options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
+      options: "--device /dev/tenstorrent --privileged -v /sys:/sys -e TT_GH_CI_INFRA"
     defaults:
       run:
         shell: bash
@@ -155,7 +155,7 @@ jobs:
           log-file: generated/test_logs/${{ matrix.test-group.name }}.log
           run: |
             mkdir -p generated/test_reports
-            # Perf/accuracy are enforced by the "Validate perf and accuracy targets"
+            # Perf/accuracy are enforced by the "Report and Validate Perf and Accuracy targets"
             # step below; the in-test checks are warning-only, so the tests write
             # complete benchmark JSON before validation runs.
             ${{ matrix.test-group.cmd }}
@@ -180,7 +180,7 @@ jobs:
           path: /work
           username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
-      - name: Validate perf and accuracy targets
+      - name: Report and Validate Perf and Accuracy targets
         if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
         shell: bash
         run: |

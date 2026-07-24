@@ -38,11 +38,10 @@ using ::tt::tt_metal::DataType;
 using ::tt::tt_metal::Layout;
 using ::tt::tt_metal::MemoryConfig;
 using ::tt::tt_metal::PageConfig;
-using ::tt::tt_metal::Tensor;
 using ::tt::tt_metal::TensorLayout;
 using ::tt::tt_metal::TensorMemoryLayout;
-using ::tt::tt_metal::TensorSpec;
 using ::tt::tt_metal::distributed::MeshMapperConfig;
+using ttnn::Tensor;
 
 enum class OutputPath {
     Tensor,
@@ -106,7 +105,7 @@ tt::tt_metal::distributed::MeshWorkload build_d2h_worker_workload(
     const tt::tt_metal::D2HStreamService& service,
     const tt::tt_metal::CoreRange& worker_cores,
     uint32_t fill_seed) {
-    const tt::tt_metal::Tensor& backing = service.get_backing_tensor();
+    const ttnn::Tensor& backing = service.get_backing_tensor();
     auto* backing_buf = backing.buffer();
     TT_FATAL(backing_buf != nullptr, "build_d2h_worker_workload: backing tensor has no buffer");
 
@@ -206,7 +205,7 @@ void run_d2h_worker_sync_case(
         DataType::UINT32,
         PageConfig(Layout::ROW_MAJOR),
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
-    const auto global_spec = TensorSpec(cs.global_shape, tensor_layout);
+    const auto global_spec = tt::tt_metal::TensorSpec(cs.global_shape, tensor_layout);
 
     if (metadata_size_bytes > 0) {
         TT_FATAL(
@@ -266,7 +265,7 @@ void run_d2h_worker_sync_case_per_shard(
         DataType::UINT32,
         PageConfig(Layout::ROW_MAJOR),
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
-    const auto global_spec = TensorSpec(cs.global_shape, tensor_layout);
+    const auto global_spec = tt::tt_metal::TensorSpec(cs.global_shape, tensor_layout);
 
     if (metadata_size_bytes > 0) {
         TT_FATAL(
@@ -338,7 +337,7 @@ void run_d2h_stream_service_case(
         DataType::UINT32,
         PageConfig(Layout::ROW_MAJOR),
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
-    const auto global_spec = TensorSpec(cs.global_shape, tensor_layout);
+    const auto global_spec = tt::tt_metal::TensorSpec(cs.global_shape, tensor_layout);
 
     tt::tt_metal::D2HStreamService::Config cfg{
         .global_spec = global_spec,
@@ -392,7 +391,7 @@ void run_d2h_stream_service_case(
         auto mapper = create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = cs.placements});
         auto host_src = distribute_tensor(Tensor::from_vector<uint32_t>(src, global_spec), *mapper);
         auto& backing = const_cast<Tensor&>(service.get_backing_tensor());
-        tt::tt_metal::copy_to_device(host_src, backing);
+        ttnn::copy_to_device(host_src, backing);
         tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
 
         if (output_path == OutputPath::Tensor) {
@@ -439,7 +438,7 @@ void run_d2h_metadata_only_case(
 
     // Record: [1,1,1,N] uint32, replicated across the mesh, allocated once and refilled per iter.
     const uint32_t n = metadata_size_bytes / sizeof(uint32_t);
-    const auto record_spec = TensorSpec(
+    const auto record_spec = tt::tt_metal::TensorSpec(
         ttnn::Shape({1, 1, 1, n}),
         TensorLayout(
             DataType::UINT32,
@@ -457,7 +456,7 @@ void run_d2h_metadata_only_case(
         std::memcpy(words.data(), expected.data(), metadata_size_bytes);
         // Stage the record on device (same CQ as the op -> ordered), then drive the worker op.
         auto host_record = distribute_tensor(Tensor::from_vector<uint32_t>(words, record_spec), *rep);
-        tt::tt_metal::copy_to_device(host_record, record_dev);
+        ttnn::copy_to_device(host_record, record_dev);
 
         ttnn::experimental::outbound_socket_service_sync(service, /*input=*/std::nullopt, /*metadata=*/record_dev);
 
@@ -852,7 +851,7 @@ TEST_F(D2HStreamServiceTest, DISABLED_MetadataOnly_Microbench) {
 
     // Build the record device tensor (same shape/layout the unit helper uses).
     const uint32_t n = md / sizeof(uint32_t);
-    const auto record_spec = TensorSpec(
+    const auto record_spec = tt::tt_metal::TensorSpec(
         ttnn::Shape({1, 1, 1, n}),
         TensorLayout(
             DataType::UINT32,
@@ -878,7 +877,7 @@ TEST_F(D2HStreamServiceTest, DISABLED_MetadataOnly_Microbench) {
         std::vector<uint32_t> words(n);
         std::memcpy(words.data(), expected.data(), md);
         auto host_record = distribute_tensor(Tensor::from_vector<uint32_t>(words, record_spec), *rep);
-        tt::tt_metal::copy_to_device(host_record, record_dev);
+        ttnn::copy_to_device(host_record, record_dev);
         ttnn::experimental::outbound_socket_service_sync(service, /*input=*/std::nullopt, /*metadata=*/record_dev);
 
         // Timed: just the metadata completion.
@@ -901,7 +900,7 @@ TEST_F(D2HStreamServiceTest, DISABLED_MetadataOnly_Microbench) {
         std::vector<uint32_t> words(n);
         std::memcpy(words.data(), expected.data(), md);
         auto host_record = distribute_tensor(Tensor::from_vector<uint32_t>(words, record_spec), *rep);
-        tt::tt_metal::copy_to_device(host_record, record_dev);
+        ttnn::copy_to_device(host_record, record_dev);
         ttnn::experimental::outbound_socket_service_sync(service, /*input=*/std::nullopt, /*metadata=*/record_dev);
 
         // Timed: full mesh barrier + the same metadata read.

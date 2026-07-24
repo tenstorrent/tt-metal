@@ -16,7 +16,6 @@ from loguru import logger
 
 import ttnn._ttnn
 
-
 Config = ttnn._ttnn.core.Config
 CONFIG = ttnn._ttnn.CONFIG
 CONFIG_PATH = None
@@ -523,7 +522,7 @@ from ttnn.operations.reduction import (
     ReduceType,
 )
 
-from ttnn.operations.ccl import Topology, DispatchAlgorithm, WorkerMode
+from ttnn.operations.ccl import Topology, get_usable_topology, DispatchAlgorithm, WorkerMode
 
 from ttnn.operations.conv2d import (
     Conv2dConfig,
@@ -560,7 +559,9 @@ experimental.disaggregation = disaggregation
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
-from ttnn.operations.transformer import SDPAProgramConfig
+from ttnn.operations.transformer import SDPAProgramConfig, PagedCacheGeometryOverride, SparseKVFormat
+
+transformer.SparseKVFormat = SparseKVFormat
 
 IndexerScoreProgramConfig = ttnn._ttnn.operations.experimental.IndexerScoreProgramConfig
 

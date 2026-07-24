@@ -427,16 +427,16 @@ void run_single_core_reduce_program(
     experimental::ComputeHardwareConfig compute_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
-            .math_fidelity = test_config.math_fidelity,
-            .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-            .dst_full_sync_en = test_config.dst_full_sync_en,
-            .enable_2x_src_format = test_config.enable_2x_src_format,
+            .fpu_math_fidelity = test_config.math_fidelity,
+            .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+            .double_buffer_dest = !test_config.dst_full_sync_en,
+            .enable_2x_src_register = test_config.enable_2x_src_format,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
-            .math_fidelity = test_config.math_fidelity,
-            .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-            .dst_full_sync_en = test_config.dst_full_sync_en,
+            .fpu_math_fidelity = test_config.math_fidelity,
+            .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+            .double_buffer_dest = !test_config.dst_full_sync_en,
         };
     }
     experimental::KernelSpec compute_spec{
@@ -494,13 +494,25 @@ void run_single_core_reduce_program(
     auto& program_run = workload.get_programs().at(device_range);
 
     // Reader/writer RTAs depend on reduce_dim
-    std::unordered_map<std::string, uint32_t> reader_named_rtas;
+    experimental::KernelRunArgs::RuntimeArgValues reader_named_rtas;
     uint32_t writer_num_tiles;
     if (test_config.reduce_dim == ReduceDim::H) {
-        reader_named_rtas = {{"N", dims.N}, {"Ht", dims.Ht}, {"Wt", dims.Wt}, {"HtWt", dims.Ht * dims.Wt}};
+        reader_named_rtas = experimental::MakeRuntimeArgsForSingleNode(
+            node,
+            {
+                {"N", dims.N},
+                {"Ht", dims.Ht},
+                {"Wt", dims.Wt},
+                {"HtWt", dims.Ht * dims.Wt},
+            });
         writer_num_tiles = dims.num_tensor_tiles / dims.Ht;
     } else {
-        reader_named_rtas = {{"num_tiles", dims.num_tensor_tiles}, {"scaler", *reinterpret_cast<uint32_t*>(&scaler)}};
+        reader_named_rtas = experimental::MakeRuntimeArgsForSingleNode(
+            node,
+            {
+                {"num_tiles", dims.num_tensor_tiles},
+                {"scaler", *reinterpret_cast<uint32_t*>(&scaler)},
+            });
         writer_num_tiles = test_config.reduce_dim == ReduceDim::W ? (dims.num_tensor_tiles / dims.Wt)
                                                                   : (dims.num_tensor_tiles / (dims.Wt * dims.Ht));
     }
@@ -509,12 +521,11 @@ void run_single_core_reduce_program(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                {{node, experimental::ProgramRunArgs::KernelRunArgs::RuntimeArgValues(reader_named_rtas)}},
+            .runtime_arg_values = std::move(reader_named_rtas),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = {{node, {{"num_tiles", writer_num_tiles}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"num_tiles", writer_num_tiles}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };

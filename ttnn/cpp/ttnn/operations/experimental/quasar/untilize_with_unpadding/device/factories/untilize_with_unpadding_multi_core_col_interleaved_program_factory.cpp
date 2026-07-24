@@ -118,7 +118,8 @@ UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory::create_program_artif
              {"third_dim", third_dim},
              {"number_blocks_per_core", nblocks_per_core}},
         .runtime_arg_schema = {.runtime_arg_names = {"core_number", "tiles_per_row", "num_blocks"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Writer kernel ----
@@ -138,7 +139,8 @@ UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory::create_program_artif
              {"unpadded_X_size", unpadded_row_size_bytes}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"core_number", "size_per_row_per_block", "blocks_per_core", "width_size"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Compute kernel (full + cliff) ----
@@ -153,10 +155,7 @@ UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory::create_program_artif
         ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(device->arch(), cfg);
         if (fp32_dest_acc_en) {
             std::visit(
-                [&](auto& c) {
-                    c.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
-                },
-                compute_hw);
+                [&](auto& c) { c.unpack_modes.emplace(IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest); }, compute_hw);
         }
         return compute_hw;
     };
@@ -200,10 +199,8 @@ UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory::create_program_artif
     // ---- Per-core runtime args ----
     // Replicates the legacy per-core work-distribution loop verbatim; the src/dst buffer-address
     // RTAs are dropped (carried by the TensorAccessor bindings).
-    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args;
-    reader_node_args.reserve(ncores);
-    writer_node_args.reserve(ncores);
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
 
     const auto& cores = corerange_to_cores(available_grid);
     uint32_t number_blocks_per_core;
@@ -223,19 +220,25 @@ UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory::create_program_artif
         // This factory is not reachable via select_program_factory (dormant path), so the values are
         // preserved as-observed by the legacy kernel; width_size's legacy value was undefined and is
         // set here to the intended per-block width (TILE_WIDTH * el_size). See FLAG in port notes.
-        writer_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = node,
-            .args = {
+        AddRuntimeArgsForNode(
+            writer_node_args,
+            node,
+            {
                 {"core_number", i},
                 {"size_per_row_per_block", number_blocks_per_core},
                 {"blocks_per_core", TILE_WIDTH * el_size},
-                {"width_size", TILE_WIDTH * el_size}}});
+                {"width_size", TILE_WIDTH * el_size},
+            });
 
         // Reader named RTAs (legacy: src_addr, i, num_tiles_per_row, number_blocks_per_core).
-        reader_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = node,
-            .args = {
-                {"core_number", i}, {"tiles_per_row", num_tiles_per_row}, {"num_blocks", number_blocks_per_core}}});
+        AddRuntimeArgsForNode(
+            reader_node_args,
+            node,
+            {
+                {"core_number", i},
+                {"tiles_per_row", num_tiles_per_row},
+                {"num_blocks", number_blocks_per_core},
+            });
     }
 
     // ---- ProgramSpec ----

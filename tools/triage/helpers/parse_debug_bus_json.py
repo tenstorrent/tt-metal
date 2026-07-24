@@ -241,7 +241,7 @@ def main() -> None:
                 if not selected_groups:
                     continue
                 printed_any = True
-                INFO(f"\n[{device_key}] {block_type} — {loc_key}")
+                INFO(f"\n[{device_key}] {block_type} - {loc_key}")
                 WARN(f"Failed RISCs: {loc_data['failed_riscs']}")
                 _print_groups_for_location(selected_groups, debug_bus, groups_data)
 

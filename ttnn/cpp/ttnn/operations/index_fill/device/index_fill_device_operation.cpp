@@ -97,7 +97,7 @@ void IndexFillOperation::validate_on_program_cache_miss(
 IndexFillOperation::spec_return_value_t IndexFillOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& old_spec = tensor_args.input.tensor_spec();
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         old_spec.logical_shape(),
         tt::tt_metal::TensorLayout(
             old_spec.tensor_layout().get_data_type(),

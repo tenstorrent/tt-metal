@@ -35,5 +35,5 @@ bh_p300_viommu:              0  # see bh_p300
 bh_quietbox_2:             106
 bh_galaxy:                  38
 bh_galaxy_perf:             15
-bh_sp1:                      0  # exabox-multihost-with-nfs; no observed tt-metal jobs
-bh_sp4:                      0  # exabox-multihost-with-nfs; same label as bh_sp1
+bh_sc4:                      0  # exabox-multihost-with-nfs; no observed tt-metal jobs
+bh_sc16:                     0  # exabox-multihost-with-nfs; same label as bh_sc4

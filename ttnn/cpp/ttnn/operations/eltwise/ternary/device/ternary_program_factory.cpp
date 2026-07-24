@@ -302,10 +302,10 @@ uint32_t get_shards_per_width(const tt::tt_metal::ShardSpec& shard_spec, TensorM
 }
 
 std::optional<AllShardSpecs> get_shard_specs(
-    const TensorSpec& predicate_spec,
-    const std::optional<TensorSpec>& true_spec,
-    const std::optional<TensorSpec>& false_spec,
-    const TensorSpec& output_spec) {
+    const tt::tt_metal::TensorSpec& predicate_spec,
+    const std::optional<tt::tt_metal::TensorSpec>& true_spec,
+    const std::optional<tt::tt_metal::TensorSpec>& false_spec,
+    const tt::tt_metal::TensorSpec& output_spec) {
     bool predicate_sharded = predicate_spec.memory_config().is_sharded();
     bool true_sharded = true_spec.has_value() && true_spec->memory_config().is_sharded();
     bool false_sharded = false_spec.has_value() && false_spec->memory_config().is_sharded();
@@ -326,7 +326,8 @@ std::optional<AllShardSpecs> get_shard_specs(
     TT_FATAL(get_shard_spec(output_spec).has_value(), "Output must have a shard spec");
     const auto& output_shard = *get_shard_spec(output_spec);
 
-    auto derive_shard_spec = [&](const std::optional<TensorSpec>& spec, bool sharded) -> tt::tt_metal::ShardSpec {
+    auto derive_shard_spec = [&](const std::optional<tt::tt_metal::TensorSpec>& spec,
+                                 bool sharded) -> tt::tt_metal::ShardSpec {
         if (sharded) {
             return *get_shard_spec(*spec);
         }
@@ -550,8 +551,8 @@ TernaryCorePartition compute_core_partition(
     // Get shard specs early
     const auto shard_specs = get_shard_specs(
         predicate_tensor.tensor_spec(),
-        value_true_tensor.has_value() ? value_true_tensor->tensor_spec() : std::optional<TensorSpec>{},
-        value_false_tensor.has_value() ? value_false_tensor->tensor_spec() : std::optional<TensorSpec>{},
+        value_true_tensor.has_value() ? value_true_tensor->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{},
+        value_false_tensor.has_value() ? value_false_tensor->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{},
         output.tensor_spec());
     p.has_sharding = shard_specs.has_value();
     auto grid = p.has_sharding ? shard_specs->predicate_shard_spec.grid : CoreRangeSet{};
@@ -668,8 +669,10 @@ void populate_runtime_arguments(
         // work-split partition was already produced by compute_core_partition above).
         const auto shard_specs = get_shard_specs(
             predicate_tensor.tensor_spec(),
-            value_true_tensor.has_value() ? value_true_tensor->tensor_spec() : std::optional<TensorSpec>{},
-            value_false_tensor.has_value() ? value_false_tensor->tensor_spec() : std::optional<TensorSpec>{},
+            value_true_tensor.has_value() ? value_true_tensor->tensor_spec()
+                                          : std::optional<tt::tt_metal::TensorSpec>{},
+            value_false_tensor.has_value() ? value_false_tensor->tensor_spec()
+                                           : std::optional<tt::tt_metal::TensorSpec>{},
             output.tensor_spec());
         predicate_shard_shape_generator = ShardShapeGenerator(shard_specs->predicate_shard_spec, predicate_tensor);
         if (value_true_tensor.has_value()) {
@@ -879,10 +882,10 @@ void populate_runtime_arguments(
 namespace ttnn::operations::ternary {
 
 std::optional<AllShardVolumes> get_shard_volumes(
-    const TensorSpec& predicate_spec,
-    const std::optional<TensorSpec>& true_spec,
-    const std::optional<TensorSpec>& false_spec,
-    const TensorSpec& output_spec) {
+    const tt::tt_metal::TensorSpec& predicate_spec,
+    const std::optional<tt::tt_metal::TensorSpec>& true_spec,
+    const std::optional<tt::tt_metal::TensorSpec>& false_spec,
+    const tt::tt_metal::TensorSpec& output_spec) {
     const auto shard_specs =
         CMAKE_UNIQUE_NAMESPACE::get_shard_specs(predicate_spec, true_spec, false_spec, output_spec);
 
@@ -958,11 +961,11 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
     uint32_t value_false_single_tile_size = tt::tile_size(value_false_data_format);
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
-    // Get shard volumes (using TensorSpec)
+    // Get shard volumes (using tt::tt_metal::TensorSpec)
     const auto shard_volumes = get_shard_volumes(
         predicate_tensor.tensor_spec(),
-        value_true_tensor.has_value() ? value_true_tensor->tensor_spec() : std::optional<TensorSpec>{},
-        value_false_tensor.has_value() ? value_false_tensor->tensor_spec() : std::optional<TensorSpec>{},
+        value_true_tensor.has_value() ? value_true_tensor->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{},
+        value_false_tensor.has_value() ? value_false_tensor->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{},
         output.tensor_spec());
     const bool has_sharding = shard_volumes.has_value();
     const auto predicate_sharded = has_sharding and shard_volumes->predicate_shard_volume.has_value();

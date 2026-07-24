@@ -1743,7 +1743,7 @@ void py_module(nb::module_& mod) {
     export_enum<BinaryOpType>(mod, "BinaryOpType");
     detail::bind_binary_operation<"remainder">(
         mod,
-        R"doc(Computes the remainder of :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(Computes the remainder of :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`.)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i \mod \mathrm{{input\_tensor\_b}}_i)doc",
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::remainder),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::remainder),

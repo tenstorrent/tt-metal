@@ -1171,11 +1171,12 @@ TEST(MeshGraphDescriptorTests, AllToAllGraphTopology) {
             channels: { count: 1 }
           }
           connections: {
-            # One extra explicit connection
+            # One extra explicit connection (bidirectional: directional inter-mesh connections are rejected,
+            # see MeshGraphDescriptorTests.DirectionalConnectionsAreRejected and issue #50292).
             nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 device_id: 0 } }
             nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 device_id: 1 } }
             channels: { count: 1 }
-            directional: true
+            directional: false
           }
         }
 
@@ -1189,7 +1190,8 @@ TEST(MeshGraphDescriptorTests, AllToAllGraphTopology) {
     auto pod_id = desc.instances_by_type("POD")[0];
     {
         auto connections = desc.connections_by_instance_id(pod_id);
-        ASSERT_EQ(connections.size(), 13);
+        // 12 all-to-all mesh-level connections + 2 for the bidirectional explicit device-level connection.
+        ASSERT_EQ(connections.size(), 14);
         check_connections(desc, connections, {0, 1, 2, 3}, 1u, pod_id, {"M0", "D1", "D0"});
     }
     // Check connections from M0(0)
@@ -1297,8 +1299,10 @@ TEST(MeshGraphDescriptorTests, BidirectionalConnections) {
     ASSERT_EQ(connections_from_mesh_1.size(), 1);
 }
 
-TEST(MeshGraphDescriptorTests, DirectionalConnections) {
-    // Test that when directional=true, only one direction exists
+TEST(MeshGraphDescriptorTests, DirectionalConnectionsAreRejected) {
+    // Directional inter-mesh connections are not supported end-to-end (issue #50292): only the authored
+    // direction is stored, so the peer endpoint never gathers the cable in the control plane and strict binding
+    // resolves 0 routers. MeshGraphDescriptor now hard-fails at parse time instead of silently mis-configuring.
     std::string text_proto = R"proto(
         mesh_descriptors: {
           name: "M0"
@@ -1324,21 +1328,12 @@ TEST(MeshGraphDescriptorTests, DirectionalConnections) {
         top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
     )proto";
 
-    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
-
-    MeshGraphDescriptor desc(text_proto);
-
-    auto pod_id = desc.instances_by_type("POD")[0];
-    const auto& pod_instance = desc.get_instance(pod_id);
-    auto mesh_0_device_0 = pod_instance.sub_instances_local_id_to_global_id.at(0);
-    auto mesh_1_device_0 = pod_instance.sub_instances_local_id_to_global_id.at(1);
-
-    // Check that only one device has outgoing connections (directional)
-    const auto& connections_from_mesh_0 = desc.connections_by_source_device_id(mesh_0_device_0);
-    const auto& connections_from_mesh_1 = desc.connections_by_source_device_id(mesh_1_device_0);
-
-    ASSERT_EQ(connections_from_mesh_0.size(), 1);
-    ASSERT_EQ(connections_from_mesh_1.size(), 0);
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("directional inter-mesh connection"),
+            ::testing::HasSubstr("not fully supported"),
+            ::testing::HasSubstr("50292"))));
 }
 
 TEST(MeshGraphDescriptorTests, ParsesSwitchDescriptor) {
@@ -1945,6 +1940,56 @@ TEST(MeshGraphDescriptorTests, PinningsEmpty) {
     // Check that pinnings map is empty
     const auto& pinnings = desc.get_pinnings();
     EXPECT_TRUE(pinnings.empty()) << "Should have no pinnings when none are specified";
+}
+
+// Finding B -- a directional device-level (STRICT) inter-mesh connection authored high->low is rejected at parse
+// time (tracked by https://github.com/tenstorrent/tt-metal/issues/50292).
+//
+// MeshGraphDescriptor only expands a connection into both directions when it is NOT directional, so a
+// `directional: true` device-level connection authored M1.D0->M0.D0 would be stored ONLY in its authored
+// direction requested_intermesh_ports[1][0]. In the control plane the peer (M0) side then never gathers the
+// cable, the two-sided connection_hash join drops the link, and strict binding resolves 0 routers -> a confusing
+// downstream hard-fatal. Until directionality is tracked as a first-class property (gather bidirectional but
+// routing one-way), MeshGraphDescriptor hard-fails up front. This test pins that behavior for the device-level
+// STRICT case; rework it into a real end-to-end (control-plane gather + budget + one-way routing) test once
+// #50292 is implemented.
+TEST(MeshGraphDescriptorTests, FindingB_DirectionalDeviceLevelStrictIntermeshIsRejected) {
+    // Two 1x2 BH meshes with a single directional device-level STRICT connection authored HIGH->LOW
+    // (M1.D0 -> M0.D0).
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: BLACKHOLE
+          device_topology: {
+            dims: [ 1, 2 ]
+            dim_types: [ LINE, LINE ]
+          }
+          channels: { count: 2 policy: RELAXED }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 device_id: 0 } }
+            channels: { count: 2 policy: STRICT }
+            directional: true
+          }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("directional inter-mesh connection"),
+            ::testing::HasSubstr("not fully supported"),
+            ::testing::HasSubstr("50292"))));
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

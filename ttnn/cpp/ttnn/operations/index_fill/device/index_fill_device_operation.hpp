@@ -22,7 +22,7 @@ struct IndexFillOperation {
         const Tensor& input;
         const Tensor& index;
     };
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     struct MultiCore {
         struct shared_variables_t {

@@ -7,12 +7,12 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr std::uint32_t cb_id_out0 = 16;
+    constexpr std::uint32_t dfb_id_out0 = 16;
 
     constexpr std::uint32_t total_num_rows = get_compile_time_arg_val(0);
     constexpr std::uint32_t third_dim = get_compile_time_arg_val(1);
@@ -24,7 +24,7 @@ void kernel_main() {
 
     const auto s = TensorAccessor(dst_args, dst_addr);
     Noc noc;
-    CircularBuffer cb_out0(cb_id_out0);
+    DataflowBuffer dfb_out0(dfb_id_out0);
 
     auto write_block = [&](std::uint32_t num_rows,
                            std::uint32_t start_row_id,
@@ -34,8 +34,8 @@ void kernel_main() {
                            std::uint32_t single_block_size) {
         bool has_rows = (num_rows) > 0;
 
-        cb_out0.wait_front(single_block_size * has_rows);
-        std::uint32_t l1_read_addr = cb_out0.get_read_ptr();
+        dfb_out0.wait_front(single_block_size * has_rows);
+        std::uint32_t l1_read_addr = dfb_out0.get_read_ptr();
 
         for (std::uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
             std::uint32_t total_size = start_column_id + width_size;
@@ -55,7 +55,7 @@ void kernel_main() {
             l1_read_addr += width_size;
         }
 
-        cb_out0.pop_front(single_block_size * has_rows);
+        dfb_out0.pop_front(single_block_size * has_rows);
     };
 
     const std::uint32_t width_size = get_arg_val<std::uint32_t>(1);

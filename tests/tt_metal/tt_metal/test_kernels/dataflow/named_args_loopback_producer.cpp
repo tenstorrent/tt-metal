@@ -21,6 +21,9 @@
 // return the wrong word, flip bits in the sum, scramble the first word, and fail the test.
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
@@ -39,13 +42,14 @@ void kernel_main() {
     // word of each DFB entry will end up corrupted in the DRAM output buffer.
     const uint32_t vararg_xor = get_vararg(0) ^ get_vararg(1) ^ get_vararg(2) ^ get_common_vararg(0);
 
+    Noc noc;
+    AllocatorBank<AllocatorBankType::DRAM> dram_src;
     DataflowBuffer buf(dfb::loopback_dfb);
 
     for (uint32_t i = 0; i < num_entries; i++) {
         buf.reserve_back(1);
-        uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, src_addr);
-        noc_async_read(src_noc_addr, buf.get_write_ptr(), entry_size);
-        noc_async_read_barrier();
+        noc.async_read(dram_src, buf, entry_size, {.bank_id = bank_id, .addr = src_addr}, {});
+        noc.async_read_barrier();
         // Fold vararg sum into the first word of this entry — the consumer will XOR
         // its own sum into the same word on read.
         volatile tt_l1_ptr uint32_t* dfb_write_ptr = (volatile tt_l1_ptr uint32_t*)buf.get_write_ptr();

@@ -57,7 +57,7 @@ on:
 
 jobs:
   determine-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       run-galaxy: ${{ steps.logic.outputs.run-galaxy }}
       run-t3k: ${{ steps.logic.outputs.run-t3k }}

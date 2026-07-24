@@ -188,29 +188,35 @@ void compile_one(
     const std::string& out_dir,
     size_t src_index,
     const std::string& temp_obj) {
-    std::vector<std::string> args;
-    append_tokenized(args, gpp);
-    args.push_back("-" + target.compiler_opt_level);
-    append_tokenized(args, target.cflags);
-    append_tokenized(args, target.includes);
-
     std::string obj_path = out_dir + target.objs[src_index];
     std::string obj_temp_path = out_dir + temp_obj;
     std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
-    args.push_back("-c");
-    args.push_back("-o");
-    args.push_back(obj_temp_path);
-    args.push_back(target.srcs[src_index]);
-    args.push_back("-MF");
-    args.push_back(temp_d_path);
-    args.insert(args.end(), target.defines.begin(), target.defines.end());
+    // Build the g++ argv via the shared jit_build_utils builder and run it directly (posix_spawn,
+    // no shell), the same path used by the local compile.
+    std::vector<std::string> defines(target.defines.begin(), target.defines.end());
+    std::vector<std::string> args = tt::jit_build::utils::build_gpp_argv(
+        gpp,
+        target.compiler_opt_level,
+        target.cflags,
+        target.includes,
+        defines,
+        target.srcs[src_index],
+        tt::jit_build::utils::GppAction::Compile,
+        obj_temp_path,
+        temp_d_path);
 
     tt::jit_build::utils::FileRenamer log_file(obj_path + ".log");
     fs::remove(log_file.path());
     if (!tt::jit_build::utils::exec_command(args, out_dir, log_file.path())) {
         build_failure(target.target_name, "compile", format_args(args), log_file.path());
     }
-    tt::jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
+    // A preprocessed (.ii) input carries no real #include tree on the server, so -MMD can only list
+    // headers that are absent here (or nothing): no valid object dephash is possible. Skip it -- a
+    // missing dephash conservatively forces a server-side recompile next time, and client-side reuse
+    // rides on the client-written <elf> full-dephash sidecar instead.
+    if (fs::path(target.srcs[src_index]).extension() != ".ii") {
+        tt::jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
+    }
     fs::remove(temp_d_path);
 }
 
@@ -322,7 +328,11 @@ void build_target(
         fs::path dst_path = out_dir + target.objs[i];
         if (compiled[i]) {
             fs::rename(src_path, dst_path);
-            fs::rename(fs::path(src_path).concat(".dephash"), fs::path(dst_path).concat(".dephash"));
+            // A preprocessed (.ii) input produces no object dephash (see compile_one), so tolerate
+            // its absence: a missing dephash conservatively forces a recompile next time, which is
+            // correct (and the common fresh-cache farm case).
+            std::error_code dephash_ec;
+            fs::rename(fs::path(src_path).concat(".dephash"), fs::path(dst_path).concat(".dephash"), dephash_ec);
         } else if (fs::exists(src_path)) {
             fs::remove(src_path);
         }

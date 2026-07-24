@@ -4,6 +4,8 @@
 
 #include "indexer_score_nanobind.hpp"
 
+#include <nanobind/stl/vector.h>
+
 #include "ttnn-nanobind/bind_function.hpp"
 #include "indexer_score.hpp"
 
@@ -38,10 +40,10 @@ void bind_indexer_score(nb::module_& mod) {
             weights: [B, Hi, Sq, 1] bf16 tiled learned per-head gates (scale
                 pre-folded)
             chunk_start_idx: absolute global position of rank 0's query row 0
-                (rank 0 = lowest cluster_axis coord; causality: key t visible to
-                query s iff t <= chunk_start + s). OMIT on a mesh -> deduced as
-                T - sp_ring*Sq (sp_ring = mesh extent along cluster_axis, whole
-                mesh if unset). Single device: set to history + rank*Sq per rank.
+                (rank 0 = lowest seq_shard_axes[0] (SP) coord; causality: key t
+                visible to query s iff t <= chunk_start + s). OMIT on a mesh ->
+                deduced as T - sp_ring*Sq (sp_ring = mesh extent along the SP axis,
+                whole mesh if unset). Single device: set to history + rank*Sq per rank.
             program_config: work-unit knobs (q_chunk_size, k_chunk_size,
                 head_group_size; elements, tile-aligned). Defaults always fit
                 L1; raise head_group_size (0 = all resident) for performance.
@@ -58,10 +60,18 @@ void bind_indexer_score(nb::module_& mod) {
                 chunk_start_idx + Sq <= kv_len. Re-applied each dispatch, so a
                 serving loop growing kv_len (<= T) reuses one program -- no
                 recompile. Only output columns [0, kv_len) are written.
-            cluster_axis: mesh axis that is the SP ring. On a mesh, device r uses
-                chunk_start = chunk_start_idx + r*Sq, where r is its linearized
-                index along this axis (Sq = q seq len). None = linear device order
-                (1 on a single device, so chunk_start_idx is used as-is).
+            seq_shard_axes: the mesh axes the query seq is sharded over, outermost
+                (SP ring) first: [] = linear device order (single device / whole-mesh
+                ring, chunk_start_idx used as-is), [sp] = 1D SP ring, [sp, tp] = 2D SP
+                ring + TP sub-shard. The SP axis (seq_shard_axes[0]) sets each device's
+                causal offset: device r along it uses chunk_start = chunk_start_idx +
+                r*Sq (Sq = q seq len). The optional TP axis (seq_shard_axes[1]) is the
+                SECOND axis the query seq is block-cyclically sub-sharded over; set it
+                (with a block-cyclic layout, when block_cyclic_chunk_local == tp*q_isl)
+                so the exact geometry adds tp_rank*Sq to each device's block-cyclic
+                position, keeping the causal mask correct under rotated (mid-slab) starts
+                — unlike the flat [] path, which is linear-approximate there. The TP axis
+                must be in range and distinct from the SP axis.
             block_cyclic_sp_axis: optional int. The MESH AXIS the K cache was striped
                 over (chunked prefill + SP all-gather leaves [B,1,T,D] k in per-SP-shard
                 slab / block-cyclic physical order). ``sp`` is DERIVED from the mesh
@@ -74,8 +84,10 @@ void bind_indexer_score(nb::module_& mod) {
                 The per-shard chunk length (chunk_size_global / sp). Cross-checked
                 against q: must equal q_isl (Sq, seq sharded only on the SP axis) or
                 tp*q_isl (tp = mesh_size/sp). The tp*q_isl case with tp>1 (seq sharded
-                across BOTH axes) is allowed only with cluster_axis=None (flat row-major
-                linearization over all devices); with a named cluster_axis it is rejected.
+                across BOTH axes) has two forms: seq_shard_axes=[] uses flat row-major
+                linearization over all devices (linear-approximate under a mid-slab
+                start); seq_shard_axes=[sp, tp] names both axes, giving the rotation-exact
+                2D geometry (see seq_shard_axes above).
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -89,7 +101,7 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("compute_kernel_config") = std::nullopt,
         nb::arg("cache_batch_idx") = std::nullopt,
         nb::arg("kv_len") = std::nullopt,
-        nb::arg("cluster_axis") = std::nullopt,
+        nb::arg("seq_shard_axes") = std::nullopt,
         nb::arg("block_cyclic_sp_axis") = std::nullopt,
         nb::arg("block_cyclic_chunk_local") = std::nullopt);
 
@@ -142,9 +154,9 @@ void bind_indexer_score(nb::module_& mod) {
                 blocks are written). Re-applied each dispatch (a serving loop
                 growing kv_len reuses one program). Only columns/blocks within
                 the valid prefix are written.
-            cluster_axis: mesh axis that is the SP ring. On a mesh, device r uses
-                chunk_start = chunk_start_idx + r*Sq, where r is its linearized
-                index along this axis. None = linear device order.
+            seq_shard_axes: the mesh axes the query seq is sharded over. MSA has no
+                TP sub-shard, so at most one axis: [] = linear device order, [sp] = SP
+                ring (device r along it uses chunk_start = chunk_start_idx + r*Sq).
             block_cyclic_sp_axis / block_cyclic_chunk_local: same semantics as
                 indexer_score_dsa. block_cyclic_sp_axis = the MESH AXIS the K cache
                 was striped over (sp derived from the mesh shape on that axis) and
@@ -168,7 +180,7 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("compute_kernel_config") = std::nullopt,
         nb::arg("cache_batch_idx") = std::nullopt,
         nb::arg("kv_len") = std::nullopt,
-        nb::arg("cluster_axis") = std::nullopt,
+        nb::arg("seq_shard_axes") = std::nullopt,
         nb::arg("block_cyclic_sp_axis") = std::nullopt,
         nb::arg("block_cyclic_chunk_local") = std::nullopt);
 }

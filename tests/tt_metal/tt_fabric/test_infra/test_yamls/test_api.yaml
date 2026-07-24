@@ -39,7 +39,8 @@ Tests:
       (optional) fabric_tensix_config: Default/Mux
       # Controls the number of ETH links on each chip that is used in the test.
       # Each sender is duplicated N times, 1 for each link. Allows a single traffic pattern to be sent multiple times simultaneously to the same destination
-      (optional) num_links: 1/2/4
+      # Use an explicit integer, or "max" to resolve to this platform's maximum usable links.
+      (optional) num_links: 1/2/4/max
       (optional) torus_config: XY/X/Y # Only used for Torus topology, to specify torus links
 
     # Provides default values for traffic patterns.
@@ -64,11 +65,15 @@ Tests:
             (optional) destination:
               - (optional) device: 1 # Or [mesh_id, chip_id] or [mesh_id, [row, col]]
                 (optional) core: [1, 1] # [row, col] of the receiver worker core.
-                (optional) hops: # multicast only
+                # multicast only. Either a per-direction map, or the scalar "full".
+                # A per-direction value may be an integer or "max" (resolved to axis_dim - 1 from the
+                # global mesh shape). "full" resolves to get_full_mcast_hops (torus split) per source.
+                (optional) hops:
                   S: 1
-                  E: 1
+                  E: max
                   N: 0
                   W: 0
+                # (optional) hops: full_mcast
             (optional) atomic_inc_val: 1 # Only used for atomic_inc ntype, how much to increment by.
             (optional) atomic_inc_wrap: 65535 # Only used for atomic_inc ntype, the maximum value of the remote counter after which it will wrap to 0.
             # How many hops to perform before starting the multicast. Used for grid-based multicasting.
@@ -105,7 +110,8 @@ Tests:
       (optional) ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       (optional) size: [1024, 2048, 4096]
       (optional) num_packets: [10, 50, 100]
-      (optional) num_links: [1, 2, 4]
+      # Use an explicit list, or "all" to expand to [1, 2, ..., platform max].
+      (optional) num_links: [1, 2, 4]  # or: all
 
     # Other test parameters
     (optional) top_level_iterations: 1 # Determines how many times the whole YAML file is run.

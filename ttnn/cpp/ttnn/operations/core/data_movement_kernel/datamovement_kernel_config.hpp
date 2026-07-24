@@ -18,18 +18,27 @@ namespace ttnn {
 // The conventional reader / writer DM placement, generation-agnostic. On Gen1 these forward to the
 // metal create_reader/writer_gen1_datamovement_config() placement; on Quasar both yield a default
 // DataMovementGen2Config.
-inline tt::tt_metal::experimental::DataMovementHardwareConfig create_reader_datamovement_config(tt::ARCH arch) {
+//
+// disable_dfb_implicit_sync_for_all opts the kernel's DFBs out of implicit-sync credit accounting so the
+// kernel's explicit reserve_back/push_back (resp. wait_front/pop_front) stays authoritative. This is a
+// Gen2 (Quasar) concept only — DM kernels doing many sub-tile ("stick") NOC transfers stall the implicit
+// credit accounting there; it is ignored on the Gen1 (WH/BH) placement, which has no such feature.
+inline tt::tt_metal::experimental::DataMovementHardwareConfig create_reader_datamovement_config(
+    tt::ARCH arch, bool disable_dfb_implicit_sync_for_all = false) {
     if (arch == tt::ARCH::QUASAR) {
-        return tt::tt_metal::experimental::DataMovementGen2Config{};
+        return tt::tt_metal::experimental::DataMovementGen2Config{
+            .disable_dfb_implicit_sync_for_all = disable_dfb_implicit_sync_for_all};
     }
-    return tt::tt_metal::experimental::CreateReader1xxDataMovementConfig();
+    return tt::tt_metal::experimental::CreateReaderGen1DataMovementConfig();
 }
 
-inline tt::tt_metal::experimental::DataMovementHardwareConfig create_writer_datamovement_config(tt::ARCH arch) {
+inline tt::tt_metal::experimental::DataMovementHardwareConfig create_writer_datamovement_config(
+    tt::ARCH arch, bool disable_dfb_implicit_sync_for_all = false) {
     if (arch == tt::ARCH::QUASAR) {
-        return tt::tt_metal::experimental::DataMovementGen2Config{};
+        return tt::tt_metal::experimental::DataMovementGen2Config{
+            .disable_dfb_implicit_sync_for_all = disable_dfb_implicit_sync_for_all};
     }
-    return tt::tt_metal::experimental::CreateWriter1xxDataMovementConfig();
+    return tt::tt_metal::experimental::CreateWriterGen1DataMovementConfig();
 }
 
 }  // namespace ttnn

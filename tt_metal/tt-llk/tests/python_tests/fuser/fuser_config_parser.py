@@ -28,19 +28,15 @@ from .fuser_config import FuserConfig, GlobalConfig
 from .validator import PackSchema
 
 FUSER_CONFIG_DIR = (
-    Path(os.environ.get("LLK_HOME", ".")) / "tests" / "python_tests" / "fuser_tests"
+    Path(os.environ.get("LLK_HOME", ".")) / "tests" / "python_tests" / "fuser" / "tests"
 )
 
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import get_chip_architecture
+
+from .arch_common import _get_parser
 
 arch = get_chip_architecture()
-
-if arch == ChipArchitecture.WORMHOLE:
-    from .wormhole.parser import OperationSchema
-elif arch == ChipArchitecture.BLACKHOLE:
-    from .blackhole.parser import OperationSchema
-else:
-    pytest.skip("Architecture is not supported", allow_module_level=True)
+OperationSchema = _get_parser().OperationSchema
 
 
 def format_validation_error(error: ValidationError) -> str:
@@ -71,10 +67,12 @@ class OperandDefinition(BaseModel):
     name: str = Field(..., min_length=1)
     dims: Annotated[Tuple[int, int], Field(min_length=2, max_length=2)]
     format: DataFormat
+    const_value: Optional[float] = None
+    # Optional per-operand tile geometry (rows, cols). Defaults to a full 32x32 tile
+    # (4 faces). Use (16, 32) for a 16x32 tiny tile (num_faces=2, one face-row).
     tile_dims: Optional[
         Annotated[Tuple[int, int], Field(min_length=2, max_length=2)]
     ] = None
-    const_value: Optional[float] = None
 
     @field_validator("dims")
     @classmethod

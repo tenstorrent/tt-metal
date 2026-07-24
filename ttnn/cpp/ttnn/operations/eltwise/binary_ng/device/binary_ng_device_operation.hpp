@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <cstdint>
+#include <tuple>
+
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
@@ -29,7 +32,7 @@ enum class SubtileBroadcastType {
 SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint32_t b_h, uint32_t b_w);
 
 struct BinaryNgDeviceOperation {
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct operation_attributes_t {
@@ -55,15 +58,71 @@ struct BinaryNgDeviceOperation {
         Layout input_layout_a = Layout::TILE;
         Layout input_layout_b = Layout::TILE;
         Layout output_layout = Layout::TILE;
+        std::optional<std::uint32_t> a_shard_volume;
+        std::optional<std::uint32_t> b_shard_volume;
+        std::optional<std::uint32_t> c_shard_volume;
 
-        ttsl::hash::hash_t to_hash() const;
         DataType get_dtype() const;
+
+        // Program-cache attributes. Runtime scalar/tolerance values are excluded; they are patched as runtime args.
+        static constexpr auto attribute_names = std::make_tuple(
+            "binary_op_type",
+            "lhs_activations",
+            "rhs_activations",
+            "post_activations",
+            "memory_config",
+            "dtype",
+            "compute_kernel_config",
+            "sub_core_grids",
+            "subtile_broadcast_type",
+            "is_sfpu",
+            "is_quant_op",
+            "is_where_op",
+            "input_layout_a",
+            "input_layout_b",
+            "output_layout",
+            "equal_nan",
+            "a_shard_volume",
+            "b_shard_volume",
+            "c_shard_volume");
+
+        auto attribute_values() const {
+            return std::make_tuple(
+                binary_op_type,
+                lhs_activations,
+                rhs_activations,
+                (is_where_op || is_quant_op) ? ttnn::SmallVector<unary::EltwiseUnaryWithParam>{} : post_activations,
+                memory_config,
+                get_dtype(),
+                compute_kernel_config,
+                sub_core_grids,
+                subtile_broadcast_type,
+                is_sfpu,
+                is_quant_op,
+                is_where_op,
+                input_layout_a,
+                input_layout_b,
+                output_layout,
+                binary_op_type == BinaryOpType::ISCLOSE ? equal_nan : false,
+                a_shard_volume,
+                b_shard_volume,
+                c_shard_volume);
+        }
     };
 
     struct tensor_args_t {
         const Tensor& input_tensor_a;
         std::optional<Tensor> input_tensor_b;
         std::optional<Tensor> output_tensor;
+
+        ttsl::hash::hash_t to_hash() const {
+            return ttsl::hash::hash_objects_with_default_seed(
+                input_tensor_a.dtype(),
+                input_tensor_a.memory_config(),
+                input_tensor_b.has_value() ? std::optional<DataType>{input_tensor_b->dtype()} : std::nullopt,
+                input_tensor_b.has_value() ? std::optional<MemoryConfig>{input_tensor_b->memory_config()}
+                                           : std::nullopt);
+        }
     };
 
     struct ProgramFactory {
@@ -78,13 +137,19 @@ struct BinaryNgDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 
-    // compute_program_hash EXCLUDES the tensor volume, so one cached program is reused across
-    // differently-shaped calls.  All shape-/work-split-dependent per-core runtime args are therefore
-    // re-applied on every cache hit here.  Mirrors create_descriptor()'s shared builder.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+    // Re-apply ALL per-dispatch state to the cached program on every program-cache hit — the
+    // descriptor-era analog of the legacy override_runtime_arguments().  compute_program_hash
+    // EXCLUDES the tensor volume, so one cached program is reused across differently-shaped and
+    // differently-allocated (incl. in-place, out=x) calls; this re-derives every per-core runtime
+    // arg AND every tensor-backed circular-buffer base address for the CURRENT tensors, via the same
+    // shared builder create_descriptor() uses.  Correct by construction — no address inference, so
+    // in-place / mixed-aliasing / matmul(X,X)-style cases can't be mis-patched.  An op that defines
+    // this MUST NOT also define get_dynamic_runtime_args (the adapter static_asserts it); override
+    // supersedes both it and resolve_bindings, which this op no longer uses.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& c,

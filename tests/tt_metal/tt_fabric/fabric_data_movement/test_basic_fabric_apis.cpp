@@ -79,7 +79,7 @@ std::shared_ptr<tt_metal::distributed::MeshBuffer> PrepareBuffer(
 }
 
 void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_mesh = false) {
-    CoreCoord logical_core = {0, 0};
+    tt::tt_metal::CoreCoord logical_core = {0, 0};
     const auto& devices = fixture->get_devices();
     const size_t NUM_DEVICES = devices.size();
     bool invalid_test_scenario = !is_multi_mesh && NUM_DEVICES < 2;
@@ -181,7 +181,7 @@ void RunSetUnicastRouteTest(
     }
 
     // Select appropriate logical core based on core type - this will be device-specific
-    std::vector<CoreCoord> logical_cores(NUM_DEVICES);
+    std::vector<tt::tt_metal::CoreCoord> logical_cores(NUM_DEVICES);
     for (size_t dev_idx = 0; dev_idx < NUM_DEVICES; dev_idx++) {
         if (core_type == HalProgrammableCoreType::IDLE_ETH) {
             // Use first available IDLE_ETH core for each device
@@ -926,11 +926,11 @@ TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadFromNode7) {
 }
 
 // Helper to generate all worker coordinate pairs in the compute grid (sender coord == receiver coord)
-std::vector<std::pair<CoreCoord, CoreCoord>> GetAllWorkerCoordPairs(CoreCoord grid_size) {
-    std::vector<std::pair<CoreCoord, CoreCoord>> pairs;
+std::vector<std::pair<tt::tt_metal::CoreCoord, tt::tt_metal::CoreCoord>> GetAllWorkerCoordPairs(tt::tt_metal::CoreCoord grid_size) {
+    std::vector<std::pair<tt::tt_metal::CoreCoord, tt::tt_metal::CoreCoord>> pairs;
     for (size_t x = 0; x < grid_size.x; x++) {
         for (size_t y = 0; y < grid_size.y; y++) {
-            CoreCoord coord{x, y};
+            tt::tt_metal::CoreCoord coord{x, y};
             pairs.push_back({coord, coord});
         }
     }

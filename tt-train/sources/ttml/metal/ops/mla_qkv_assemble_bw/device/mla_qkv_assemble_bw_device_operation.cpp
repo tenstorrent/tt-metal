@@ -17,7 +17,7 @@ void MLAQKVAssembleBwDeviceOperation::validate_on_program_cache_miss(
 
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
         TT_FATAL(
-            tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
+            tensor.storage_type() == ttnn::StorageType::DEVICE,
             "MLAQKVAssembleBw requires {} to be on device. Got storage type: {}",
             name,
             enchantum::to_string(tensor.storage_type()));
@@ -33,7 +33,7 @@ void MLAQKVAssembleBwDeviceOperation::validate_on_program_cache_miss(
             name,
             enchantum::to_string(tensor.dtype()));
         TT_FATAL(
-            tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
+            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
             "MLAQKVAssembleBw requires {} memory layout to be INTERLEAVED. Got: {}",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
@@ -148,9 +148,9 @@ MLAQKVAssembleBwDeviceOperation::tensor_return_value_t MLAQKVAssembleBwDeviceOpe
     auto specs = compute_output_specs(args, tensor_args);
     auto* device = tensor_args.dQ.device();
     return {
-        create_device_tensor(specs[0], device),
-        create_device_tensor(specs[1], device),
-        create_device_tensor(specs[2], device)};
+        ttnn::create_device_tensor(specs[0], device),
+        ttnn::create_device_tensor(specs[1], device),
+        ttnn::create_device_tensor(specs[2], device)};
 }
 
 ttsl::hash::hash_t MLAQKVAssembleBwDeviceOperation::compute_program_hash(

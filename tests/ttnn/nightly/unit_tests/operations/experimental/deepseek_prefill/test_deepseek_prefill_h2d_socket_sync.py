@@ -21,6 +21,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole, skip_for_slow_dispatch
 
 pytestmark = [
+    pytest.mark.requires_host_iommu,
     skip_for_slow_dispatch(),
     pytest.mark.skipif(
         not is_blackhole(),

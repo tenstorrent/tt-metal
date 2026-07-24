@@ -9,6 +9,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_event.hpp>
 #include <tt-metalium/host_api.hpp>
 
 #include <cstdint>
@@ -118,6 +119,31 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferMultipleWriteReadRoundsL1) {
 
         std::vector<uint32_t> dst;
         distributed::EnqueueReadMeshBuffer(cq, dst, buf, /*blocking=*/true);
+
+        ASSERT_EQ(dst, src);
+    }
+}
+
+TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, MeshBufferCrossCQWriteReadRoundsDRAM) {
+    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
+        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
+                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
+    }
+
+    distributed::MeshCommandQueue& cq0 = devices_[0]->mesh_command_queue(0);
+    distributed::MeshCommandQueue& cq1 = devices_[0]->mesh_command_queue(1);
+    std::shared_ptr<distributed::MeshBuffer> buf = make_mesh_buffer(BufferType::DRAM, devices_[0].get());
+
+    for (uint32_t round = 0; round < 10; round++) {
+        std::vector<uint32_t> src(num_elems);
+        std::iota(src.begin(), src.end(), round * 1000u);
+
+        distributed::EnqueueWriteMeshBuffer(cq0, buf, src);
+        distributed::MeshEvent write_event = cq0.enqueue_record_event();
+        cq1.enqueue_wait_for_event(write_event);
+
+        std::vector<uint32_t> dst;
+        distributed::EnqueueReadMeshBuffer(cq1, dst, buf, /*blocking=*/true);
 
         ASSERT_EQ(dst, src);
     }

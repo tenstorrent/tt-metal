@@ -32,7 +32,7 @@ inline constexpr uint32_t kWriterBatchOffsetArg = 4;  // {out, tok_start, tok_co
 struct SparseSDPAOperation {
     using operation_attributes_t = SparseSDPAParams;
     using tensor_args_t = SparseSDPAInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct SparseSDPAProgramFactory {
@@ -67,6 +67,7 @@ Tensor sparse_sdpa(
     const Tensor& indices,
     float scale,
     uint32_t v_dim,
+    transformer::SparseKVFormat kv_format,
     uint32_t k_chunk_size,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,

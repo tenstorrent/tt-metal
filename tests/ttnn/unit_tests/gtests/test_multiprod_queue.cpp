@@ -30,7 +30,7 @@
 namespace tt::tt_metal {
 namespace {
 
-using ::tt::tt_metal::is_device_tensor;
+using ttnn::is_device_tensor;
 
 using MultiProducerCommandQueueTest = ttnn::MultiCommandQueueSingleDeviceFixture;
 
@@ -99,7 +99,7 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
     std::optional<tt::tt_metal::distributed::MeshEvent> read_event;
     std::mutex event_mutex;
 
-    Tensor device_tensor = create_device_tensor(tensor_spec, device);
+    Tensor device_tensor = ttnn::create_device_tensor(tensor_spec, device);
 
     constexpr int kNumIterations = 100;
     std::thread t0([&]() {

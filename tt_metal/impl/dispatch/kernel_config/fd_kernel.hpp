@@ -116,22 +116,12 @@ public:
         get_dispatch_query_manager_(get_dispatch_query_manager),
         get_max_num_eth_cores_(get_max_num_eth_cores),
         get_reads_dispatch_cores_(get_reads_dispatch_cores) {
-        bool is_galaxy_cluster = descriptor_.cluster().is_galaxy_cluster();
-        bool are_fd_kernels_on_same_core = descriptor.cluster().arch() == tt::ARCH::QUASAR && descriptor.num_cqs() == 1;
-        dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
-            CoreType::WORKER,
-            descriptor.num_cqs(),
-            descriptor.hal(),
-            is_galaxy_cluster,
-            are_fd_kernels_on_same_core,
-            descriptor.rtoptions());
-        dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
-            CoreType::ETH,
-            descriptor.num_cqs(),
-            descriptor.hal(),
-            is_galaxy_cluster,
-            /*are_fd_kernels_on_same_core=*/false,
-            descriptor.rtoptions());
+        const bool is_galaxy_cluster = descriptor_.cluster().is_galaxy_cluster();
+        for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
+            const auto& layout = get_dispatch_query_manager_ref().cq_dispatch_layout(core_type);
+            dispatch_mem_map_[enchantum::to_underlying(core_type)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
+                core_type, descriptor.num_cqs(), descriptor.hal(), is_galaxy_cluster, layout, descriptor.rtoptions());
+        }
     }
     virtual ~FDKernel() = default;
 

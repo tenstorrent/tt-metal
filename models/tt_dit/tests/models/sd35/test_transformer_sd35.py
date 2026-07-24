@@ -276,6 +276,7 @@ def test_sd35_transformer2d_model(
                 subfolder="transformer",
                 parallel_config=parallel_config,
                 mesh_shape=tuple(mesh_device.shape),
+                mesh_device=mesh_device,
             )
         except cache.MissingCacheError as err:
             msg = "Cache path does not exist. Run test_sd35_transformer_model_caching first with the desired parallel config."
@@ -432,6 +433,7 @@ def test_sd35_transformer_model_caching(
         subfolder="transformer",
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),
+        mesh_device=mesh_device,
     )
 
     # Create padding config if needed for tensor parallelism

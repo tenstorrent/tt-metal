@@ -25,7 +25,7 @@ bool is_dram_interleaved(const tt::tt_metal::MemoryConfig& mem_config) {
 }
 
 void validate_device_tensor(const Tensor& tensor, const std::string& name) {
-    TT_FATAL(tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
+    TT_FATAL(tensor.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
     TT_FATAL(tensor.buffer() != nullptr, "{} must have a buffer", name);
     TT_FATAL(is_dram_interleaved(tensor.memory_config()), "{} must be DRAM interleaved", name);
     TT_FATAL(tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "{} must be ROW_MAJOR layout", name);
@@ -66,7 +66,6 @@ void PerTokenCastToFp8DeviceOperation::validate_on_program_cache_miss(
         input.dtype() == tt::tt_metal::DataType::BFLOAT16 || input.dtype() == tt::tt_metal::DataType::FLOAT32,
         "per_token_cast_to_fp8: input dtype must be BFLOAT16 or FLOAT32, got {}",
         static_cast<int>(input.dtype()));
-
     const auto tile_shape = input.tensor_spec().tile().get_tile_shape();
     const uint32_t tile_h = tile_shape[0];
     const uint32_t tile_w = tile_shape[1];
@@ -125,14 +124,14 @@ PerTokenCastToFp8DeviceOperation::spec_return_value_t PerTokenCastToFp8DeviceOpe
     const auto& input = tensor_args.input_tensor;
     const auto& input_shape = input.logical_shape();
 
-    TensorSpec output_e4m3_spec(
+    tt::tt_metal::TensorSpec output_e4m3_spec(
         input_shape,
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::FP8_E4M3,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
             attrs.output_memory_config));
 
-    TensorSpec scale_spec(
+    tt::tt_metal::TensorSpec scale_spec(
         scale_output_shape(input_shape),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::FLOAT32,
@@ -170,9 +169,12 @@ ttsl::hash::hash_t PerTokenCastToFp8DeviceOperation::compute_program_hash(
 namespace ttnn::prim {
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> per_token_cast_to_fp8(
-    const Tensor& input_tensor, const tt::tt_metal::MemoryConfig& output_memory_config) {
+    const Tensor& input_tensor,
+    const tt::tt_metal::MemoryConfig& output_memory_config,
+    bool round_scale_to_power_of_two) {
     using OperationType = ttnn::experimental::prim::per_token_cast_to_fp8::PerTokenCastToFp8DeviceOperation;
-    auto operation_attributes = OperationType::operation_attributes_t{.output_memory_config = output_memory_config};
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .output_memory_config = output_memory_config, .round_scale_to_power_of_two = round_scale_to_power_of_two};
     auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

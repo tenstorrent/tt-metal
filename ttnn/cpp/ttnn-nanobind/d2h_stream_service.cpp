@@ -42,7 +42,7 @@ void py_module_types(nb::module_& mod) {
                std::unique_ptr<ttnn::distributed::TensorToMesh> mapper,
                std::optional<tt::tt_metal::distributed::MeshComposerConfig> composer_config,
                std::optional<CoreRange> worker_cores,
-               std::optional<CoreCoord> metadata_master_core,
+               std::optional<tt::tt_metal::CoreCoord> metadata_master_core,
                uint32_t metadata_size_bytes,
                bool parallel_host_read,
                uint32_t host_read_thread_count) {
@@ -82,7 +82,7 @@ void py_module_types(nb::module_& mod) {
             "mode only.")
         .def(
             "read_from_tensor",
-            [](tt::tt_metal::D2HStreamService& self, tt::tt_metal::Tensor& host_tensor) {
+            [](tt::tt_metal::D2HStreamService& self, ttnn::Tensor& host_tensor) {
                 std::vector<std::byte> metadata(self.metadata_size_bytes());
                 self.read_from_tensor(host_tensor, ttsl::Span<std::byte>(metadata.data(), metadata.size()));
                 return nb::bytes(reinterpret_cast<const char*>(metadata.data()), metadata.size());

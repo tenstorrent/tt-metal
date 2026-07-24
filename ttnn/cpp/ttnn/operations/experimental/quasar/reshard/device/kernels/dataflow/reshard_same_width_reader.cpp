@@ -24,8 +24,10 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "api/debug/ring_buffer.h"  // DEBUG: reshard ebreak bisect (remove after)
 
 void kernel_main() {
+    WATCHER_RING_BUFFER_PUSH(0x22DD0001);  // DEBUG: RRD start
     constexpr bool read_from_dram = get_arg(args::interface_with_dram);
     constexpr uint32_t unit_size = get_arg(args::unit_size);
 #ifdef UNALIGNED
@@ -78,15 +80,30 @@ void kernel_main() {
         noc.async_read_barrier();
     }
 #else
+    // DEBUG: reshard ebreak bisect. If PREREAD (with src_addr/l1_write_addr) shows but POSTLOOP doesn't,
+    // the trap is inside noc.async_read(bank,...); if PREREAD is missing, setup (get_bank_base_address/
+    // get_write_ptr) trapped. Remove after.
+    WATCHER_RING_BUFFER_PUSH(0x22DD0002);  // RRD prealigned-loop
+    WATCHER_RING_BUFFER_PUSH((uint32_t)src_addr);
+    WATCHER_RING_BUFFER_PUSH((uint32_t)l1_write_addr);
+    WATCHER_RING_BUFFER_PUSH((uint32_t)num_reads);
     for (uint32_t i = 0; i < num_reads; ++i) {
         uint32_t bank_id = get_vararg(vararg_idx++);
         uint32_t addr = src_addr + get_vararg(vararg_idx++);
         uint32_t units_to_transfer = get_vararg(vararg_idx++);
         uint32_t read_size = units_to_transfer * unit_size;
+        if (i == 0) {
+            WATCHER_RING_BUFFER_PUSH(0x22DD0003);  // RRD first-read
+            WATCHER_RING_BUFFER_PUSH((uint32_t)bank_id);
+            WATCHER_RING_BUFFER_PUSH((uint32_t)addr);
+            WATCHER_RING_BUFFER_PUSH((uint32_t)read_size);
+        }
         CoreLocalMem<uint32_t> dst(l1_write_addr);
         noc.async_read(bank, dst, read_size, {.bank_id = bank_id, .addr = addr}, {.offset_bytes = 0});
         l1_write_addr += read_size;
     }
+    WATCHER_RING_BUFFER_PUSH(0x22DD0004);  // RRD postloop
     noc.async_read_barrier();
+    WATCHER_RING_BUFFER_PUSH(0x22DD0005);  // RRD end
 #endif
 }

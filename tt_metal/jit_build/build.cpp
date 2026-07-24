@@ -8,6 +8,7 @@
 #include "jit_build_cache.hpp"
 #include "jit_device_config.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -15,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -513,85 +515,127 @@ void JitBuildState::write_build_state_hash(const string& out_dir) const {
     file << build_state_hash_;
 }
 
+bool JitBuildState::warmed_elf_reusable(std::string_view kernel_name) const {
+    // TT_METAL_FORCE_JIT_COMPILE bypasses all reuse; both the local fast path and the remote gate
+    // (remote_kernel_cached) consult this predicate, so both recompile when it is set.
+    if (env_.get_rtoptions().get_force_jit_compile()) {
+        return false;
+    }
+    // Derive the ELF path from the canonical accessor (the same path the preprocess-and-ship client
+    // writes the ELF + sidecar to), so local and remote reuse agree on both location and validity.
+    const fs::path elf_path = get_target_out_path(std::string(kernel_name));
+    // The sidecar is a sibling of the ELF (<elf>.fulldephash); build_state_matches() appends
+    // BUILD_STATE_HASH_FILE to out_dir, so keep the trailing separator.
+    const std::string full_dephash = elf_path.string() + std::string(jit_build::FULL_DEPHASH_SUFFIX);
+    const std::string out_dir = elf_path.parent_path().string() + "/";
+    return fs::exists(elf_path) && fs::exists(full_dephash) && build_state_matches(out_dir) &&
+           jit_build::dependencies_up_to_date_file(full_dephash);
+}
+
+void JitBuildState::write_reuse_cache(std::string_view kernel_name) const {
+    // Write the reuse cache (source-complete FULL_DEPHASH_SUFFIX sidecar + ".build_state") that lets a
+    // later run reuse this ELF with no intermediate object. Called only after a successful compile, so
+    // the cache never validates against a missing or stale ELF. The dependencies come from the .d files
+    // the preprocess-and-ship -E step left in the target dir (which is hash-qualified, so it holds only
+    // this build's sources) plus the link inputs, which only this build state knows.
+    const fs::path elf_path = get_target_out_path(std::string(kernel_name));
+    const std::string out_dir = elf_path.parent_path().string() + "/";
+
+    std::vector<std::string> deps;
+    for (const auto& entry : fs::directory_iterator(elf_path.parent_path())) {
+        if (entry.path().extension() != ".d") {
+            continue;
+        }
+        std::ifstream d_file(entry.path());
+        if (!d_file.is_open()) {
+            continue;
+        }
+        for (auto& [key, dep_list] : jit_build::parse_dependency_file(d_file)) {
+            deps.insert(deps.end(), std::make_move_iterator(dep_list.begin()), std::make_move_iterator(dep_list.end()));
+        }
+    }
+    // Link inputs also gate reuse: a changed linker script, firmware, or offline-compiled link object
+    // must invalidate the ELF even when no source changed. weakened_firmware_name_ is the real on-disk
+    // path (the recipe carries only the bare filename, which the server resolves from its own cache).
+    if (!linker_script_.empty()) {
+        deps.push_back(linker_script_);
+    }
+    if (!weakened_firmware_name_.empty()) {
+        deps.push_back(weakened_firmware_name_);
+    }
+    // extra_link_objs_ are offline-built objects linked into the ELF (e.g. Quasar CRT / substitutes);
+    // hash their contents so rebuilding one at the same path invalidates the warmed ELF. Stored as a
+    // space-separated list of real on-disk paths.
+    for (auto& obj : jit_build::utils::tokenize_flags(extra_link_objs_)) {
+        deps.push_back(std::move(obj));
+    }
+    if (deps.empty()) {
+        return;
+    }
+    std::sort(deps.begin(), deps.end());
+    deps.erase(std::unique(deps.begin(), deps.end()), deps.end());
+
+    const std::string elf = elf_path.string();
+    const std::string full_dephash = elf + std::string(jit_build::FULL_DEPHASH_SUFFIX);
+    jit_build::ParsedDependencies deps_map{{elf, std::move(deps)}};
+    std::ofstream hash_file(full_dephash);
+    jit_build::write_dependency_hashes(deps_map, out_dir, elf, hash_file);
+    hash_file.close();
+    if (hash_file.fail()) {
+        // A genuinely unreadable dependency drops the sidecar, correctly forcing a later recompile.
+        fs::remove(full_dephash);
+        return;
+    }
+    write_build_state_hash(out_dir);
+}
+
 void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* settings, size_t src_index) const {
     TTZoneScopedD(JIT);
 
-    string cmd{"cd " + out_dir + " && " + env_.gpp_};
-    string defines = this->defines_;
+    // Build the compile recipe (opt/cflags/includes/defines, including kernel-specific
+    // include paths and the named-compile-arg map) ONCE via export_target_recipe, then turn it
+    // into an argv with the shared builder and run it SHELL-FREE via exec_command — the same argv
+    // builder the JIT compile server and preprocess-and-ship use. Shell-free also means map-valued
+    // defines like
+    // -DKERNEL_COMPILE_TIME_ARG_MAP={"name",idx},... need no escaping — each define is one argv
+    // element, passed verbatim (the macro expansion lives in tt_metal/hw/inc/compile_time_args.h).
+    const tt::jit_build::TargetRecipe recipe = export_target_recipe(settings);
 
+    std::string cflags = recipe.cflags;
     if (env_.get_rtoptions().get_build_map_enabled()) {
-        cmd += "-save-temps=obj -fdump-tree-all -fdump-rtl-all ";
+        cflags += " -save-temps=obj -fdump-tree-all -fdump-rtl-all";
     }
 
-    if (settings) {
-        defines += fmt::format(R"(-DFULL_KERNEL_NAME="\"{}\"" )", settings->get_full_kernel_name());
+    const std::string obj_path = out_dir + this->objs_[src_index];
+    const std::string obj_temp_path = out_dir + this->temp_objs_[src_index];
+    const std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
 
-        // Append user args
-        if (process_defines_at_compile_) {
-            settings->process_defines([&defines](const string& define, const string& value) {
-                defines += fmt::format("-D{}='{}' ", define, value);
-            });
-        }
-
-        settings->process_compile_time_args([&defines](const std::vector<uint32_t>& values) {
-            if (values.empty()) {
-                return;
-            }
-            defines += fmt::format("-DKERNEL_COMPILE_TIME_ARGS={} ", fmt::join(values, ","));
-        });
-
-        // This creates a command-line define for named compile time args
-        // Ex. for named_args like {"buffer_size": 1024, "num_tiles": 64}
-        // This generates:
-        // -DKERNEL_COMPILE_TIME_ARG_MAP="{{\"buffer_size\",1024}, {\"num_tiles\",64}} "
-        // The macro expansion is defined in tt_metal/hw/inc/compile_time_args.h
-        settings->process_named_compile_time_args(
-            [&defines](const std::unordered_map<std::string, uint32_t>& named_args) {
-                if (named_args.empty()) {
-                    return;
-                }
-                std::ostringstream ss;
-                ss << "-DKERNEL_COMPILE_TIME_ARG_MAP=\"";
-                for (const auto& [name, value] : named_args) {
-                    ss << "{\\\"" << name << "\\\"," << value << "}, ";
-                }
-                ss << "\"";
-                defines += ss.str() + " ";
-            });
-
-        cmd += fmt::format("-{} ", settings->get_compiler_opt_level());
-    } else {
-        cmd += fmt::format("-{} ", this->default_compile_opt_level_);
-    }
-
-    // Append common args provided by the build state
-    std::string obj_path = out_dir + this->objs_[src_index];
-    std::string obj_temp_path = out_dir + this->temp_objs_[src_index];
-    std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
-    cmd += this->cflags_;
-    cmd += this->includes_;
-    // Add kernel-specific include paths (e.g., kernel source directory for relative includes)
-    if (settings) {
-        settings->process_include_paths([&cmd](const std::string& path) { cmd += fmt::format("-I{} ", path); });
-    }
-    cmd += fmt::format("-c -o {} {} -MF {} ", obj_temp_path, this->srcs_[src_index], temp_d_path);
-    cmd += defines;
+    std::vector<std::string> args = tt::jit_build::utils::build_gpp_argv(
+        env_.gpp_,
+        recipe.compiler_opt_level,
+        cflags,
+        recipe.includes,
+        recipe.defines,
+        this->srcs_[src_index],
+        tt::jit_build::utils::GppAction::Compile,
+        obj_temp_path,
+        temp_d_path);
 
     if (env_.get_rtoptions().get_log_kernels_compilation_commands()) {
-        log_info(tt::LogBuildKernels, "    g++ compile cmd: {}", cmd);
+        log_info(tt::LogBuildKernels, "    g++ compile cmd: {}", fmt::join(args, " "));
     }
 
     if (env_.get_rtoptions().get_watcher_enabled() && settings) {
-        log_kernel_defines_and_args(out_dir, settings->get_full_kernel_name(), defines);
+        log_kernel_defines_and_args(
+            out_dir, settings->get_full_kernel_name(), fmt::format("{}", fmt::join(recipe.defines, " ")));
     }
 
     // log file and dephash file can be renamed after compilation, but the .o file
     // needs to be renamed after link step to avoid LTO reading inconsistent object files.
     jit_build::utils::FileRenamer log_file(obj_path + ".log");
     fs::remove(log_file.path());
-    bool result =
-        tt::jit_build::utils::run_command(cmd, log_file.path(), env_.get_rtoptions().get_dump_build_commands());
-    report_result(this->target_name_, "compile", cmd, log_file.path(), result);
+    bool result = tt::jit_build::utils::exec_command(args, out_dir, log_file.path());
+    report_result(this->target_name_, "compile", fmt::format("{}", fmt::join(args, " ")), log_file.path(), result);
     jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
     fs::remove(temp_d_path);  // .d file not needed after hash is written
 }
@@ -752,6 +796,23 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     // have changed, force full recompilation and relinking.
     bool state_changed = !build_state_matches(out_dir);
 
+    // Preprocess-and-ship reuse: a warmed cache (produced by an AOT preprocess-and-ship pass) ships
+    // only each ELF plus a source-complete FULL_DEPHASH_SUFFIX sidecar and a ".build_state". When
+    // every target has a matching recipe and a valid sidecar, reuse the ELFs directly -- no object is
+    // needed. Ordinary local builds never write the sidecar, so this stays inert for them.
+    // Firmware never uses the warmed-ELF reuse path; force-recompile is handled inside
+    // warmed_elf_reusable, which both reuse paths call.
+    if (!this->is_fw_) {
+        const bool all_reusable = std::all_of(link_targets.begin(), link_targets.end(), [&](const auto* target) {
+            return target->warmed_elf_reusable(kernel_name);
+        });
+        if (all_reusable) {
+            BuildCacheTelemetry::inst().record_compile(static_cast<uint32_t>(num_objs), 0);
+            extract_zone_src_locations(out_dir);
+            return;
+        }
+    }
+
     auto compiled = compile(out_dir, settings, state_changed);
 
     string link_objs;
@@ -857,6 +918,10 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
         });
     }
     if (settings) {
+        // FULL_KERNEL_NAME: consumed by the LLK sanitizer (CTSTR(FULL_KERNEL_NAME)). Emitted
+        // shell-free as one verbatim argv element with literal quotes (the unified/remote-JIT
+        // path does no shell expansion), matching the KERNEL_COMPILE_TIME_ARG_MAP convention below.
+        defines.push_back(fmt::format(R"(-DFULL_KERNEL_NAME="{}")", settings->get_full_kernel_name()));
         settings->process_compile_time_args([&defines](const std::vector<uint32_t>& values) {
             if (!values.empty()) {
                 defines.push_back(fmt::format("-DKERNEL_COMPILE_TIME_ARGS={}", fmt::join(values, ",")));
@@ -920,8 +985,27 @@ void launch_build_step(const std::function<void()>& build_func, std::vector<std:
 }
 
 void sync_build_steps(std::vector<std::shared_future<void>>& events) {
+    // Join EVERY build step before returning, even when one throws.
+    //
+    // A build_func runs asynchronously and captures locals BY REFERENCE — e.g.
+    // jit_build_subset's `[&build, settings]` over the by-value `build_subset`, and
+    // JitBuildState::compile's `[this, &out_dir, ...]`. Those locals are destroyed as soon as
+    // the enclosing scope unwinds. If we let the first exception propagate straight out of this
+    // loop, the remaining in-flight tasks keep running against references that are about to be
+    // freed (shared_future's destructor does not wait) — a use-after-scope. So we wait on all
+    // futures first, stash the first exception, and rethrow it only once nothing is still running.
+    std::exception_ptr first_error;
     for (auto& event : events) {
-        event.get();
+        try {
+            event.get();
+        } catch (...) {
+            if (!first_error) {
+                first_error = std::current_exception();
+            }
+        }
+    }
+    if (first_error) {
+        std::rethrow_exception(first_error);
     }
 }
 

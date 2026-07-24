@@ -2,6 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE (please keep): PhysicalSystemDiscovery runs outside of tt-metal as well — it is used by
+// applications that manage their own devices. Do NOT instantiate MetalContext here (e.g.
+// `MetalContext::instance()`): that spins up a MetalContext behind the caller's back and breaks
+// telemetry / explicit device ownership. If runtime options or context are needed, pass them in
+// explicitly as function arguments. For a small piece of config, read the environment variable
+// directly with std::getenv (see get_local_discovery_hostname() below for the mock cluster descriptor).
+
 #include <tt_stl/fmt.hpp>
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
@@ -11,6 +18,7 @@
 
 #include <unistd.h>
 #include <climits>
+#include <cstdlib>
 #include <fstream>
 #include <algorithm>
 #include <set>
@@ -26,7 +34,6 @@
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/port_lookup.hpp"
-#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
 
@@ -50,12 +57,14 @@ PortType to_metal_port_type(tt::scaleout_tools::PortType pt) {
 
 // OS hostname for live clusters; mock cluster descriptor filename (basename) per rank in mock mode.
 std::string get_local_discovery_hostname() {
-    const auto& rtoptions = MetalContext::instance().rtoptions();
-    if (rtoptions.get_mock_enabled()) {
-        const auto& path = rtoptions.get_mock_cluster_desc_path();
-        if (!path.empty()) {
-            return std::filesystem::path(path).filename().string();
-        }
+    // Read the mock cluster descriptor path straight from the environment rather than through
+    // MetalContext (see file-header note: MetalContext must not be instantiated here). This matches how
+    // rtoptions defines "mock enabled" (mock_cluster_desc_path non-empty, set from
+    // TT_METAL_MOCK_CLUSTER_DESC_PATH). In mock mode use the descriptor filename as this rank's hostname
+    // so mock-cluster test runs get stable, matching hostnames; otherwise use the OS hostname.
+    if (const char* mock_cluster_desc_path = std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+        mock_cluster_desc_path != nullptr && mock_cluster_desc_path[0] != '\0') {
+        return std::filesystem::path(mock_cluster_desc_path).filename().string();
     }
     return get_host_name();
 }

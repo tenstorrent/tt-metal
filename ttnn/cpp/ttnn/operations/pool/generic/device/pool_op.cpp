@@ -138,7 +138,7 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     ttnn::Shape padded_output_shape({1, 1, out_nhw_padded, out_c_padded});
     ttnn::Shape output_shape({1, 1, out_nhw, out_c});
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout::fromPaddedShape(
             output_dtype, op_attr.output_layout_, mem_config, output_shape, padded_output_shape));
@@ -157,7 +157,7 @@ Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
             output_spec_data.page_config(),
             output_spec_data.memory_config(),
             output_spec_data.tensor_layout().get_alignment());
-        auto output_spec_ind = TensorSpec(output_spec_data.logical_shape(), output_layout_ind);
+        auto output_spec_ind = tt::tt_metal::TensorSpec(output_spec_data.logical_shape(), output_layout_ind);
         return {
             create_device_tensor(output_spec_data, tensor.input_tensor_.device()),
             create_device_tensor(output_spec_ind, tensor.input_tensor_.device())};

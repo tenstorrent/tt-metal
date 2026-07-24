@@ -15,9 +15,9 @@ set_target_properties(
 
 file(
     GLOB_RECURSE kernels
-    hc_sum_reduce/device/kernels/*
-    prefix_scan/device/kernels/*
-    repeat_and_interleave_eltwise_mul/device/kernels/*
+    hc_sum_reduce/device/kernels/*.cpp
+    prefix_scan/device/kernels/*.cpp
+    repeat_and_interleave_eltwise_mul/device/kernels/*.cpp
 )
 
 target_sources(
