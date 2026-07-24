@@ -728,8 +728,8 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWrite) {
                 output_shards.push_back(distributed::ShardDataTransfer{coord}.host_data(dst_vec[coord].data()));
             }
 
-            mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, input_shards, false);
-            mesh_device_->mesh_command_queue().enqueue_read_shards(output_shards, mesh_buffer, true);
+            mesh_device_->mesh_command_queue().enqueue_write_shards(*mesh_buffer, input_shards, false);
+            mesh_device_->mesh_command_queue().enqueue_read_shards(output_shards, *mesh_buffer, true);
 
             for (auto& dst : dst_vec) {
                 EXPECT_EQ(dst.second, src_vec);
@@ -789,8 +789,8 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWriteMultiThread) {
                         output_shards.push_back(distributed::ShardDataTransfer{coord}.host_data(dst_vec[coord].data()));
                     }
 
-                    mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, input_shards, false);
-                    mesh_device_->mesh_command_queue().enqueue_read_shards(output_shards, mesh_buffer, true);
+                    mesh_device_->mesh_command_queue().enqueue_write_shards(*mesh_buffer, input_shards, false);
+                    mesh_device_->mesh_command_queue().enqueue_read_shards(output_shards, *mesh_buffer, true);
 
                     for (auto& dst : dst_vec) {
                         EXPECT_EQ(dst.second, src_vec);
@@ -830,7 +830,7 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
     auto write_transfer = distributed::ShardDataTransfer{coord}
                               .host_data(static_cast<void*>(const_cast<uint32_t*>(src.data())))
                               .region(BufferRegion(0, bytes_per_device));
-    mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
+    mesh_device_->mesh_command_queue().enqueue_write_shards(*mesh_buffer, {write_transfer}, /*blocking=*/true);
 
     // Prepare destination buffer and pin the entire destination range for the target shard
     auto dst = std::make_shared<vector_aligned<uint32_t>>(bytes_per_device / sizeof(uint32_t), 0);
@@ -853,7 +853,7 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
                              .host_data(static_cast<void*>(dst_ptr_aligned))
                              .region(BufferRegion(0, bytes_per_device));
     experimental::ShardDataTransferSetPinnedMemory(read_transfer, pinned_shared);
-    mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+    mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, *mesh_buffer, /*blocking=*/true);
 
     std::vector<uint32_t> dst_aligned(dst_ptr_aligned, dst_ptr_aligned + (bytes_per_device / sizeof(uint32_t)));
 
@@ -886,7 +886,7 @@ TEST_F(MeshBufferTestSuite, EnqueueReadWithDistributedHostBufferAndPinnedMemory)
     auto write_transfer = distributed::ShardDataTransfer{coord}
                               .host_data(static_cast<void*>(const_cast<uint32_t*>(src.data())))
                               .region(BufferRegion(0, bytes_per_device));
-    mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
+    mesh_device_->mesh_command_queue().enqueue_write_shards(*mesh_buffer, {write_transfer}, /*blocking=*/true);
 
     // Prepare destination buffer and pin the entire destination range for the target shard
     auto dst = std::make_shared<vector_aligned<uint32_t>>(bytes_per_device / sizeof(uint32_t), 0);
@@ -909,7 +909,7 @@ TEST_F(MeshBufferTestSuite, EnqueueReadWithDistributedHostBufferAndPinnedMemory)
 
     // Read back using enqueue_read with DistributedHostBuffer
     mesh_device_->mesh_command_queue().enqueue_read(
-        mesh_buffer, distributed_host_buffer, std::nullopt, /*blocking=*/true);
+        *mesh_buffer, distributed_host_buffer, std::nullopt, /*blocking=*/true);
 
     std::vector<uint32_t> dst_aligned(dst_ptr_aligned, dst_ptr_aligned + (bytes_per_device / sizeof(uint32_t)));
 
@@ -1047,7 +1047,7 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRangeUnaligned)
     distributed::MeshCoordinate coord(0, 0);
     auto write_transfer =
         distributed::ShardDataTransfer{coord}.host_data(src.data()).region(BufferRegion(0, bytes_per_device));
-    mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
+    mesh_device_->mesh_command_queue().enqueue_write_shards(*mesh_buffer, {write_transfer}, /*blocking=*/true);
 
     constexpr size_t unaligned_shift = 3;
     // Prepare destination buffer and pin the entire destination range for the target shard
@@ -1068,7 +1068,7 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRangeUnaligned)
     auto read_transfer = distributed::ShardDataTransfer{coord}
                              .host_data(static_cast<void*>(dst_ptr_unaligned))
                              .region(BufferRegion(0, bytes_per_device));
-    mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+    mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, *mesh_buffer, /*blocking=*/true);
 
     std::vector<uint8_t> dst_aligned(dst_ptr_unaligned, dst_ptr_unaligned + bytes_per_device);
 
@@ -1119,14 +1119,14 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRange) {
         log_info(tt::LogTest, "Testing writing from pinned memory to shard at coord {}", coord);
         auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
         distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
-        mesh_device_->mesh_command_queue().enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+        mesh_device_->mesh_command_queue().enqueue_write(*mesh_buffer, distributed_host_buffer, /*blocking=*/false);
 
         // Read back via hugepage
         std::fill(dst.begin(), dst.end(), 0);
         auto read_transfer = distributed::ShardDataTransfer{coord}
                                  .host_data(static_cast<void*>(dst.data()))
                                  .region(BufferRegion(0, bytes_per_device));
-        mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+        mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, *mesh_buffer, /*blocking=*/true);
         EXPECT_EQ(*src, dst);
         // Pinned memory should have been used, so locking may block.
         EXPECT_TRUE(pinned_shared->lock_may_block());
@@ -1174,7 +1174,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryWaitsOnClose) {
 
         auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
         distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
-        mesh_device_->mesh_command_queue().enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+        mesh_device_->mesh_command_queue().enqueue_write(*mesh_buffer, distributed_host_buffer, /*blocking=*/false);
 
         EXPECT_TRUE(pinned_shared->lock_may_block());
     }
@@ -1182,7 +1182,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryWaitsOnClose) {
     auto read_transfer = distributed::ShardDataTransfer{coord}
                              .host_data(static_cast<void*>(dst.data()))
                              .region(BufferRegion(0, bytes_per_device));
-    mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+    mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, *mesh_buffer, /*blocking=*/true);
     EXPECT_EQ(*src, dst);
 }
 
@@ -1232,14 +1232,14 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeLargePage
         auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
         distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
 
-        mesh_device_->mesh_command_queue().enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+        mesh_device_->mesh_command_queue().enqueue_write(*mesh_buffer, distributed_host_buffer, /*blocking=*/false);
 
         // Read back via hugepage
         std::fill(dst.begin(), dst.end(), 0);
         auto read_transfer = distributed::ShardDataTransfer{coord}
                                  .host_data(static_cast<void*>(dst.data()))
                                  .region(BufferRegion(0, bytes_per_device));
-        mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+        mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, *mesh_buffer, /*blocking=*/true);
         EXPECT_EQ(*src, dst);
         // Pinned memory should have been used, so locking may block.
         EXPECT_TRUE(pinned_shared->lock_may_block());
@@ -1331,16 +1331,16 @@ TEST_F(MeshBufferTest1x2MultiCQ, EnqueueWriteShardsWithRemotePinnedMemoryAndAlig
                              .host_data(static_cast<void*>(traffic_src->data()))
                              .region(BufferRegion(0, bytes_per_device));
     auto& traffic_cq = mesh_device_->mesh_command_queue(1);
-    traffic_cq.enqueue_write_shards(traffic_buffer, {traffic_write}, /*blocking=*/false);
+    traffic_cq.enqueue_write_shards(*traffic_buffer, {traffic_write}, /*blocking=*/false);
 
-    mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, write_transfers, /*blocking=*/false);
+    mesh_device_->mesh_command_queue().enqueue_write_shards(*mesh_buffer, write_transfers, /*blocking=*/false);
     EXPECT_TRUE(pinned_sources.at(remote_source_index.value())->lock_may_block());
 
     AlignedByteVector dst(bytes_per_device, 0);
     auto read_transfer = distributed::ShardDataTransfer{remote_coord}
                              .host_data(static_cast<void*>(dst.data()))
                              .region(BufferRegion(0, bytes_per_device));
-    mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+    mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, *mesh_buffer, /*blocking=*/true);
     traffic_cq.finish();
 
     const uint8_t* src_shifted = source_storage.at(remote_source_index.value())->data() + aligned_byte_shift;
@@ -1408,14 +1408,14 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeUnaligned
             log_info(tt::LogTest, "Testing writing from pinned memory to shard at coord {}", coord);
             auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
             distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
-            mesh_device_->mesh_command_queue().enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+            mesh_device_->mesh_command_queue().enqueue_write(*mesh_buffer, distributed_host_buffer, /*blocking=*/false);
 
             // Read back via hugepage
             std::fill(dst.begin(), dst.end(), 0);
             auto read_transfer = distributed::ShardDataTransfer{coord}
                                      .host_data(static_cast<void*>(dst.data()))
                                      .region(BufferRegion(0, bytes_per_device));
-            mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+            mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, *mesh_buffer, /*blocking=*/true);
             EXPECT_EQ(src_vector, dst);
             if (aligned_byte_shift % 16 == 0) {
                 // Pinned memory should have been used, so locking may block.
@@ -1513,7 +1513,7 @@ TEST_F(MeshBufferTestSuite, EnqueueProgramAfterPinnedMemoryWriteRerunsCorrectly)
 
     auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
     distributed_host_buffer.emplace_shard(test_coord, [&host_buffer]() { return host_buffer; });
-    mesh_device_->mesh_command_queue().enqueue_write(pinned_write_buffer, distributed_host_buffer, /*blocking=*/true);
+    mesh_device_->mesh_command_queue().enqueue_write(*pinned_write_buffer, distributed_host_buffer, /*blocking=*/true);
 
     auto& program_after_first_run = workload.get_programs().at(all_devices);
     auto& rtas = GetRuntimeArgs(program_after_first_run, kernel);
@@ -1587,7 +1587,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithPinnedMemory
         auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
         std::function<HostBuffer()> produce_buffer = [&host_buffer]() { return host_buffer; };
         distributed_host_buffer.emplace_shard(coord, produce_buffer);
-        mesh_device_->mesh_command_queue().enqueue_write(buf, distributed_host_buffer, /*blocking=*/false);
+        mesh_device_->mesh_command_queue().enqueue_write(*buf, distributed_host_buffer, /*blocking=*/false);
         EXPECT_TRUE(pinned_shared->lock_may_block());
 
         // Read back and verify
@@ -1666,7 +1666,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalWidthShardedBufferWithPinnedM
 
     auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
     distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
-    mesh_device_->mesh_command_queue().enqueue_write(buf, distributed_host_buffer, /*blocking=*/false);
+    mesh_device_->mesh_command_queue().enqueue_write(*buf, distributed_host_buffer, /*blocking=*/false);
     EXPECT_TRUE(pinned_shared->lock_may_block());
 
     std::vector<uint32_t> dst;
@@ -1744,11 +1744,11 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteWithNullFilterIsEquivalent) {
 
     DistributedHostBuffer dhb_a = DistributedHostBuffer::create(mesh_device_->shape());
     dhb_a.emplace_shard(coord, [src_vec]() { return HostBuffer(src_vec); });
-    mesh_device_->mesh_command_queue().enqueue_write(buf_explicit, dhb_a, /*blocking=*/true);
+    mesh_device_->mesh_command_queue().enqueue_write(*buf_explicit, dhb_a, /*blocking=*/true);
 
     DistributedHostBuffer dhb_b = DistributedHostBuffer::create(mesh_device_->shape());
     dhb_b.emplace_shard(coord, [src_vec]() { return HostBuffer(src_vec); });
-    mesh_device_->mesh_command_queue().enqueue_write(buf_default, dhb_b, /*blocking=*/true);
+    mesh_device_->mesh_command_queue().enqueue_write(*buf_default, dhb_b, /*blocking=*/true);
 
     std::vector<uint32_t> out_a;
     std::vector<uint32_t> out_b;

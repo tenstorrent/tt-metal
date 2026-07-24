@@ -1672,7 +1672,7 @@ void pytensor_module(nb::module_& mod) {
             transfer.host_data(host_buffer->view_bytes().data());
             transfer.region(BufferRegion(0, host_buffer->view_bytes().size()));
 
-            mesh_device->mesh_command_queue().enqueue_write_shards(mesh_buffer, {transfer}, /*blocking=*/true);
+            mesh_device->mesh_command_queue().enqueue_write_shards(*mesh_buffer, {transfer}, /*blocking=*/true);
 
             tt::tt_metal::TensorTopology topology(
                 tt::tt_metal::distributed::MeshShape(1, 1),
