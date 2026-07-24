@@ -1,18 +1,23 @@
 {
-  "last_run": "2026-07-23T23:29:56Z",
-  "run_id": "30053298328",
-  "tasks_run": ["task1_triage", "task2_comment", "task7_welcome", "task8_monthly_summary"],
+  "last_run": "2026-07-24T06:42:39Z",
+  "run_id": "30072973467",
+  "tasks_run": ["task1_triage", "task2_comment", "task6_stale_prs", "task8_monthly_summary"],
   "monthly_activity_issue": {
+    "number": 50956,
     "month": "2026-07",
-    "status": "created_this_run"
+    "status": "updated"
   },
-  "issues_labeled": [9364, 9865, 11090, 11873, 12892],
-  "issues_commented": [9364, 50897, 50955],
+  "issues_labeled": [9364, 9865, 11090, 11873, 12892, 50487, 50684, 50616, 50972, 50973, 50974],
+  "issues_commented": [9364, 50897, 50955, 50684],
   "welcomed_contributors": [50955, 50943, 50897],
+  "stale_pr_actions": {
+    "49800": {"action": "author_nudge", "timestamp": "2026-07-24T06:42:39Z"},
+    "49892": {"action": "codeowners_ping", "timestamp": "2026-07-24T06:42:39Z"}
+  },
   "backlog_cursor": {
-    "issues": 50955,
-    "last_processed_date": "2026-07-23"
+    "issues": 50974,
+    "last_processed_date": "2026-07-24"
   },
   "open_prs": [],
-  "next_tasks": ["task3_fix_issues", "task4_improvements", "task5_maintain_prs", "task6_stale_prs"]
+  "next_tasks": ["task3_fix_issues", "task4_improvements", "task5_maintain_prs", "task7_welcome"]
 }
