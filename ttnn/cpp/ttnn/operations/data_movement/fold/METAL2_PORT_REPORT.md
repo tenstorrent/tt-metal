@@ -6,7 +6,11 @@
 - `MultiCore` (height-sharded row-major path)
 - `MultiCoreDRAMFold` (interleaved DRAM path; both runtime sub-programs — tiled and row-major)
 
-Verification: `tests/ttnn/unit_tests/operations/conv/data_movement/test_fold_op.py` on `wormhole_b0` — **126 passed, 180 skipped, 0 failed** (`SAFE_PYTEST_RESULT: PASS`; no hangs, no device resets). The 180 skips are test-defined parameter filters (the test file was not modified, so the skip pattern is identical to pre-port). Passing coverage spans all three program paths (sharded MultiCore; DRAM tiled; DRAM row-major) across `bfloat8_b` / `bfloat16`, both L1-aligned and unaligned sticks, and multiple stride/padding/shape combinations.
+Verification on `wormhole_b0` (`SAFE_PYTEST_RESULT: PASS` for both; no hangs, no device resets) — **146 passed, 0 failed** total:
+- `tests/ttnn/unit_tests/operations/conv/data_movement/test_fold_op.py` — **126 passed, 180 skipped, 0 failed**. The 180 skips are test-defined parameter filters (the test file was not modified, so the skip pattern is identical to pre-port).
+- `tests/ttnn/nightly/unit_tests/operations/conv/data_movement/test_fold_op.py` — **20 passed, 0 failed** (`test_fold_sharded` + `test_fold_sharded_tile_layout`).
+
+Passing coverage spans all three program paths (sharded MultiCore, including tile-layout sharded input; DRAM tiled; DRAM row-major) across `bfloat8_b` / `bfloat16`, both L1-aligned and unaligned sticks, and multiple stride/padding/shape combinations.
 
 ## Provenance
 
