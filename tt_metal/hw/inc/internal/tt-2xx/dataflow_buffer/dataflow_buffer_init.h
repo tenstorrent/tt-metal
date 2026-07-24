@@ -364,6 +364,18 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                     uint8_t tensix_id = dfb::get_tensix_id(ptc);
                     overlay::llk_intf_reset(tensix_id, tc_id);
                     overlay::llk_intf_set_capacity(tensix_id, tc_id, init_ptr->capacity);
+                    // [#48552 FIX] `llk_intf_set_capacity` is a POSTED overlay MMIO register write. A bare
+                    // memory fence orders it but does NOT wait for the remote overlay register to update —
+                    // confirmed on the emulator: fence alone still reads the stale capacity, while adding a
+                    // DPRINT's worth of delay lets it settle. Physical tile counters are shared and reused
+                    // across back-to-back programs (each program's allocator restarts at tc_id 0), so counter
+                    // (0,0) holds e.g. 224 for this matmul's cb_in0 but 28 for the neighbouring slice_write. If
+                    // this program's 224 write has not landed when its in0 reader runs reserve_back, the reader
+                    // sees the previous program's 28 (< 224) and spins forever (RBFAIL dfb=0 need=224 cap=28).
+                    // Read the register back until it reflects the write, forcing the posted write to complete
+                    // before we publish tc_init_done.
+                    while (overlay::llk_intf_get_capacity(tensix_id, tc_id) != init_ptr->capacity) {
+                    }
 #endif
                 }
                 // [#48552 FIX] The tile-counter capacity is written just above via overlay MMIO register
