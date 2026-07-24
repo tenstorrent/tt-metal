@@ -9,7 +9,6 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/debug/waypoint.h"
-#include "api/debug/dprint.h"
 #include "dataflow_common.hpp"
 #include "chunked_prefill_utils.hpp"
 #include "chain_link.hpp"
@@ -494,7 +493,6 @@ void kernel_main() {
     uint32_t half_sequence = num_q_chunks / 2;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         WAYPOINT("RRIT");
-        DPRINT("R ring_iter={}\n", ring_iter);
         // find out which is the latest ring_id that synchronized
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
         WAYPOINT("RRID");
@@ -701,13 +699,6 @@ void kernel_main() {
                     }
                 }
                 WAYPOINT("RKPR");
-                DPRINT(
-                    "R rit={} qit={} nb={} nq={} kc={} proceed\n",
-                    ring_iter,
-                    q_iter,
-                    (uint32_t)nb,
-                    (uint32_t)nq,
-                    k_chunk);
 
                 // Default to local/gathered KV; override below for joint KV when applicable.
                 Slice k_slice;
@@ -904,8 +895,6 @@ void kernel_main() {
             }
         }
         WAYPOINT("REIE");
-        DPRINT("R ring_iter={} end kv_processed={}\n", ring_iter, KV_chunks_processed_in_iter);
     }
     WAYPOINT("REND");
-    DPRINT("R kernel done\n");
 }

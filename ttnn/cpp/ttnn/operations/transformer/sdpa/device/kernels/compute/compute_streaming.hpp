@@ -21,7 +21,6 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/debug/waypoint.h"
-#include "api/debug/dprint.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
@@ -2457,7 +2456,6 @@ void sdpa_ring_v2(
                 if (aggregate_allowed) {
                     // Reader pushed but this Q chunk doesn't attend — drain.
                     WAYPOINT("CSDR");
-                    DPRINT_UNPACK("C sparse-drain ri={} kc={}\n", ring_iter, k_chunk);
                     CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
                     sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
                     if constexpr (!kt_inplace_v) {
@@ -2557,7 +2555,6 @@ void sdpa_ring_v2(
         // have pushed K/V for chunks this specific Q chunk doesn't attend — we must drain those.
         if constexpr (sparse_frames_enabled) {
             WAYPOINT("CZWC");
-            DPRINT_UNPACK("C ri={} q={} qc={} per_q_valid_kv={}\n", ring_iter, q, q_chunk, per_q_valid_kv);
             if (per_q_valid_kv == 0) {
                 // Drain any k_chunks reader pushed. Aggregate = union of shard's q_frame rows;
                 // reader pushed if ANY q_frame in shard attends this k_frame. Since this q_chunk
@@ -2588,7 +2585,6 @@ void sdpa_ring_v2(
                     }
                     // Drain K/V that reader pushed.
                     WAYPOINT("CZDR");
-                    DPRINT_UNPACK("C zw-drain ri={} q={} qc={} kc={}\n", ring_iter, q, q_chunk, k);
                     CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
                     sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
                     if constexpr (!kt_inplace_v) {
@@ -2656,7 +2652,6 @@ void sdpa_ring_v2(
             }
 
             WAYPOINT("CMLK");
-            DPRINT_UNPACK("C proc ri={} q={} qc={} kc={}\n", ring_iter, q, q_chunk, k_chunk);
             KV_chunks_processed++;
             KV_chunks_processed_in_iter++;
 

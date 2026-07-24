@@ -8,7 +8,6 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/debug/waypoint.h"
-#include "api/debug/dprint.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
@@ -533,7 +532,6 @@ void kernel_main() {
     bool seen_active_iter = false;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         WAYPOINT("WRIT");
-        DPRINT("W ring_iter={}\n", ring_iter);
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
         WAYPOINT("WRID");
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
@@ -891,8 +889,6 @@ void kernel_main() {
             noc.async_write_barrier();  // Ensure writes of output and LSE complete before next iteration
         }
         WAYPOINT("WEIE");
-        DPRINT("W ring_iter={} end\n", ring_iter);
     }
     WAYPOINT("WEND");
-    DPRINT("W kernel done\n");
 }
