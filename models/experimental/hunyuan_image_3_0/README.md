@@ -213,7 +213,8 @@ PyTorch `ref/` path; perf tests profile device timing via tracy.
 
 ## PCC Results
 
-The following PCCs were measured against the PyTorch reference implementation.
+The following PCCs were measured against the PyTorch reference implementation
+(values synced from `tests/pcc/pcc_results.txt` where recorded).
 | File Name | Test Case | PCC |
 |-----------|-----------|----:|
 | `test_attention_modules.py` | RMSNorm ISL decode S=1 | 0.99999349 |
@@ -221,9 +222,20 @@ The following PCCs were measured against the PyTorch reference implementation.
 | | RMSNorm ISL image grid S=4096 | 0.99998385 |
 | | RMSNorm ISL production S=4160 | 0.99998382 |
 | | RMSNorm ISL batch=2 S=32 | 0.99998517 |
-| | RoPE | |
-| | Attention | |
-| | Attention Mask | |
+| | RoPE decode S=1 | Q/K 1.00000000 |
+| | RoPE one tile S=32 | Q/K 0.99999644 / 0.99999639 |
+| | RoPE image grid S=4096 | Q/K 0.99999516 |
+| | RoPE production S=4160 | Q/K 0.99999516 |
+| | RoPE image 64×64 S=4096 | Q/K 0.99999508 / 0.99999509 |
+| | RoPE image+text S=4160 | Q/K 0.99999497 |
+| | RoPE batch=2 S=32 | Q/K 0.99999642 |
+| | Attention decode S=1 | 0.99998462 |
+| | Attention one tile S=32 | 0.99980472 |
+| | Attention image grid S=4096 | 0.99948016 |
+| | Attention production S=4160 | 0.99947957 |
+| | Attention image 64×64 S=4096 | 0.99960084 |
+| | Attention image+text S=4160 | 0.99959604 |
+| | Attention Mask | bitwise exact (PASSED) |
 | `test_transformer.py` | Decoder Layer text decode S=1 | 0.99999725 |
 | | Decoder Layer text prefill S=32 | 0.99999727 |
 | | Decoder Layer ISL text S=4096 | 0.99999824 |
@@ -231,7 +243,6 @@ The following PCCs were measured against the PyTorch reference implementation.
 | | Decoder Layer ISL image S=4096 | 0.99999785 |
 | | Decoder Layer ISL image S=4160 | 0.99999798 |
 | | Decoder Layer max context S=22784 | 0.99999847 |
-| | Transformer Backbone | |
 | | Cache Helpers | n/a (PASSED) |
 | `test_embeddings.py` | Patch Embed smoke GRID=8 UNetDown | 0.99994029 |
 | | Patch Embed smoke GRID=8 UNetUp | 0.99991914 |
@@ -245,19 +256,35 @@ The following PCCs were measured against the PyTorch reference implementation.
 | | Timestep Embedder full schedule `time_embed_2` (S=50) | 0.99999629 |
 | | WTE | 1.00000000 |
 | | WTE production | 1.00000000 |
-| `test_moe.py` | MoE Router | |
-| | MoE Gate | |
-| | Expert MLP | |
-| | MoE Block | |
+| `test_moe.py` | MoE Router decode S=1 | set 100% / wPCC 0.99994664 |
+| | MoE Router one tile S=32 | set 100% / wPCC 0.99966619 |
+| | MoE Router large ISL S=4096 | set-match ok |
+| | MoE Router production decode S=1 | set 100% / wPCC 0.99994664 |
+| | MoE Router production prefill S=4160 | set 100% / wPCC 0.99965457 |
+| | Expert FFN decode S=1 | 0.99984452 |
+| | Expert FFN one tile S=32 | 0.99976680 |
+| | Expert FFN production prefill S=4160 | 0.99972107 |
+| | MoE Layer decode S=1 | 0.99983089 |
+| | MoE Layer one tile S=32 | 0.99970921 |
+| | MoE Layer production prefill S=4160 | 0.99968021 |
+| | MoE parallel vs dense (2×2 bf16) | 0.997888 |
 | `test_full_dim_moe_denoise.py` | Expert FFN max-context S=22784 | 0.99972073 |
 | | MoE Layer max-context S=22784 | 0.99967112 |
 | | Denoise Loop production 32L S=4160 (step=1) | 0.95866893 |
 | `test_lm_head.py` | LM Head full-sequence S=32 | 0.99996616 |
 | | LM Head last-token S=32 | 0.99996201 |
 | | LM Head production last-token S=4160 | 0.99995974 |
-| `test_logit_stack.py` | Logit Stack | |
-| `test_pipeline.py` | Single Denoise Step | |
-| | End-to-End Pipeline | |
+| `test_logit_stack.py` | 32L decode S=1 teacher-forced | 0.99993194 |
+| | 32L prefill S=4160 last-token | 0.98292661 |
+| | 32L max-context last-token | 0.98889049 |
+| `test_pipeline.py` | Backbone smoke 2L decode S=1 | 0.96514635 |
+| | Backbone smoke 2L prefill S=32 | 0.99687753 |
+| | Single Denoise Step smoke 4L GRID=8 S=128 | 0.99993799 |
+| | Denoise Step production GRID=64 S=4160 | >=thr (PASSED) |
+| | Backbone production 32L S=4160 | 0.97353838  |
+| | Backbone production 32L decode S=1 (teacher-forced) | 0.99995700 |
+| | Denoise Step production 32L GRID=64 S=4160 | 0.99764214 |
+| | Gen special-token order | n/a (PASSED) |
 | `test_denoise.py` | Host-routed Denoise Step (fast) | 0.99993799 |
 | | Host-routed Denoise Step (production) | PASSED |
 | | Denoise Loop (fast) | 0.99989697 |
@@ -272,14 +299,45 @@ The following PCCs were measured against the PyTorch reference implementation.
 | | Prefill sanity ISL=22800 (32L) | 0.947658 / 0.951536 |
 | `test_kv_cache_decode.py` | Decode ISL=512 (step 8) | 0.999782 / 0.999713 |
 | | Decode ISL=22800 (step 1) | 0.995632 / 0.997369 |
-| `test_prefill_sp2_pcc.py` | Sequence Parallel Prefill | |
-| `test_recaption.py` | Recaption / Think | |
-| `test_vae_encoder.py` | VAE Encoder | |
-| `test_vae_decoder.py` | VAE Decoder | |
-| `test_vae_decode_pipeline.py` | VAE Decode Pipeline | |
-| `test_siglip2_ttnn.py` | SigLIP2 Encoder | |
-| | Vision Aligner | |
-| `test_siglip2_full_dim.py` | Full-Dimension SigLIP2 | |
+| `test_prefill_sp2_pcc.py` | 32L SP=2 TP=2 ISL=128 (bf8) | hidden 0.983526 / logits 0.983150 |
+| | 32L SP=2 TP=2 ISL=2560 (bf8) | hidden 0.964825 / logits 0.963133 |
+| `test_recaption.py` | Smoke 2L greedy token parity | n/a (token match, PASSED) |
+| | 2L KV trace vs eager | n/a (token match, PASSED) |
+| | 2L 2CQ vs 1CQ / host ref | n/a (token match, PASSED) |
+| | 32L 2×2 resident EP/TP/SP greedy | n/a (token match, PASSED) |
+| `test_vae_encoder.py` | conv_in | 0.999884 |
+| | down_block_0 | 0.999686 |
+| | down_block_1 | 0.999592 |
+| | down_block_2 | 0.999040 |
+| | down_block_3 | 0.999623 |
+| | down_block_4 | 0.999807 |
+| | encoder_down | 0.999387 |
+| | mid | 0.999215 |
+| | encoder_head | 0.999974 |
+| | full_encoder | 0.998731 |
+| `test_vae_decoder.py` | conv_in | 0.999968 |
+| | mid | 0.999761 |
+| | up_block_0 | 0.999483 |
+| | up_block_1 | 0.998373 |
+| | up_block_2 | 0.998433 |
+| | up_block_3 | 0.999334 |
+| | up_block_4 | 0.999444 |
+| | norm_out | 0.999954 |
+| | conv_out | 0.999565 |
+| | decoder_up | 0.997911 |
+| | decoder_up_tail | 0.997887 |
+| | full_decoder | 0.999126 |
+| `test_vae_decode_pipeline.py` | decode_latent glue | 1.000000 |
+| | spatial VAE decode vs reference | 0.999817 |
+| `test_siglip2_ttnn.py` | embeddings | 0.999984 |
+| | attention (no mask / masked) | 0.999967 / 0.999969 |
+| | mlp | 0.999340 |
+| | encoder layer (no mask / masked) | 0.999978 / 0.999976 |
+| | vision 1L (masked / no mask) | 0.999950 / 0.999951 |
+| | Vision Aligner | 0.999992 |
+| | e2e vision+aligner 1L | 0.999986 |
+| `test_siglip2_full_dim.py` | vision 27L S=1024 | 0.998769 |
+| | e2e vision+aligner 27L S=1024 | 0.999743 |
 
 ## Performance Summary
 
