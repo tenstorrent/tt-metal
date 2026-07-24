@@ -9,7 +9,6 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <bit>
 
 namespace ttnn::prim {
 
@@ -197,34 +196,6 @@ SparseSDPAMsaOperation::spec_return_value_t SparseSDPAMsaOperation::compute_outp
 SparseSDPAMsaOperation::tensor_return_value_t SparseSDPAMsaOperation::create_output_tensors(
     const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
     return create_device_tensor(compute_output_specs(attrs, t), t.q.device());
-}
-
-ttsl::hash::hash_t SparseSDPAMsaOperation::compute_program_hash(
-    const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
-    // Hash compile-time choices. Interleaved K/V T and cache_batch_idx are patched at dispatch.
-    // Sharded K/V shapes stay hashed because accessor strides depend on them. The block-cyclic path also
-    // hashes T: the shard stride gap (= (T/sp - chunk_local)/block_size, in blocks) is baked as a compile-time
-    // argument, so a different cache size must be a distinct program.
-    return tt::tt_metal::operation::hash_operation<SparseSDPAMsaOperation>(
-        std::bit_cast<uint32_t>(attrs.scale),
-        attrs.block_size,
-        attrs.compute_kernel_config,
-        t.q.logical_shape(),
-        t.q.dtype(),
-        t.k.dtype(),
-        t.k.memory_config(),
-        (t.k.memory_config().is_sharded() || attrs.has_block_cyclic()) ? t.k.logical_shape() : tt::tt_metal::Shape{},
-        t.v.dtype(),
-        t.v.memory_config(),
-        (t.v.memory_config().is_sharded() || attrs.has_block_cyclic()) ? t.v.logical_shape() : tt::tt_metal::Shape{},
-        t.v.logical_shape()[3],
-        attrs.has_indexed_kv_cache(),
-        attrs.causal_enabled(),
-        attrs.has_block_cyclic(),
-        attrs.block_cyclic.has_value() ? attrs.block_cyclic->sp : 0u,
-        attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
-        t.indices.logical_shape(),
-        t.indices.dtype());
 }
 
 uint32_t SparseSDPAMsaOperation::compute_chunk_start_local(
