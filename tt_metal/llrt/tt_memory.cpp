@@ -15,8 +15,8 @@
 namespace ll_api {
 
 memory::memory() {
-    constexpr uint32_t initial_data_space_ = 0x400;
-    constexpr uint32_t initial_span_space_ = 4;
+    constexpr std::uint32_t initial_data_space_ = 0x400;
+    constexpr std::uint32_t initial_span_space_ = 4;
 
     data_.reserve(initial_data_space_);
     link_spans_.reserve(initial_span_space_);
@@ -36,16 +36,19 @@ memory::memory(const std::string& path, Loading loading) : loading_(loading) {
             std::string out_elf_path = std::string(path) + ".xip.elf";
             try {
                 elf.WriteImage(out_elf_path);
-            } catch (const std::exception &e) {
-                log_warning(tt::LogLLRuntime, "Failed to write XIP ELF for disassembly ({}): {}", out_elf_path, e.what());
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogLLRuntime, "Failed to write XIP ELF for disassembly ({}): {}", out_elf_path, e.what());
             } catch (...) {
                 log_warning(tt::LogLLRuntime, "Failed to write XIP ELF for disassembly: {}", out_elf_path);
             }
         }
     }
 
-    auto const& segments = elf.GetSegments();
+    pack_from_segments(path, elf.GetSegments());
+}
 
+void memory::pack_from_segments(const std::string& path, const std::vector<ElfFile::Segment>& segments) {
     // The ELF file puts the text segment first, but one set of
     // binaries (ncrisc) places data a lower address, and at least one
     // consumer (unknown) requires spans in address order, so generate
@@ -56,7 +59,7 @@ memory::memory(const std::string& path, Loading loading) : loading_(loading) {
     for (unsigned ix = 0; ix != segments.size(); ix++) {
         map.push_back(ix);
     }
-    if (loading == Loading::DISCRETE) {
+    if (loading_ == Loading::DISCRETE) {
         std::sort(
             map.begin(), map.end(), [&](unsigned a, unsigned b) { return segments[a].address < segments[b].address; });
     }
@@ -66,18 +69,20 @@ memory::memory(const std::string& path, Loading loading) : loading_(loading) {
     text_size_ = segments[0].contents.size() * sizeof(word_t);
     auto lma = segments[0].lma;
 
+    // `ix` is already the (address-sorted, for DISCRETE) segment index, so index `segments` with it
+    // directly -- indexing `map` a second time would apply the permutation twice and cancel the sort.
     for (unsigned ix : map) {
-        auto const& segment = segments[map[ix]];
+        const auto& segment = segments[ix];
         if (not segment.relocs.empty()) {
             TT_THROW("{}: unexpected dynamic relocations", path);
         }
-        if (loading != Loading::DISCRETE) {
+        if (loading_ != Loading::DISCRETE) {
             if (segment.lma != lma) {
                 TT_THROW("{}: inconsistent load addresses for packing", path);
             }
             lma += segment.contents.size() * sizeof(word_t);
         }
-        if (loading == Loading::DISCRETE ? !segment.contents.empty() : link_spans_.empty()) {
+        if (loading_ == Loading::DISCRETE ? !segment.contents.empty() : link_spans_.empty()) {
             link_spans_.emplace_back(segment.address, 0);
         }
         link_spans_.back().len += segment.contents.size();
@@ -89,33 +94,34 @@ bool memory::operator==(const memory& other) const { return data_ == other.data_
 
 void memory::fill_from_mem_template(
     const memory& mem_template,
-    const std::function<void(std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback) {
+    const std::function<void(std::vector<std::uint32_t>::iterator, std::uint64_t addr, std::uint32_t len)>& callback) {
     link_spans_ = mem_template.link_spans_;
     data_.resize(mem_template.data_.size());
     process_spans(callback);
 }
 
 void memory::process_spans(
-    const std::function<void(std::vector<uint32_t>::const_iterator, uint64_t addr, uint32_t len)>& callback) const {
-    uint32_t offset = 0;
+    const std::function<void(std::vector<std::uint32_t>::const_iterator, std::uint64_t addr, std::uint32_t len)>&
+        callback) const {
+    std::uint32_t offset = 0;
     for (const auto& span : link_spans_) {
-        std::vector<uint32_t>::const_iterator cit = data_.cbegin() + offset;
+        std::vector<std::uint32_t>::const_iterator cit = data_.cbegin() + offset;
         callback(cit, span.addr, span.len);
         offset += span.len;
     }
 }
 
 void memory::process_spans(
-    const std::function<void(std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback) {
-    uint32_t offset = 0;
+    const std::function<void(std::vector<std::uint32_t>::iterator, std::uint64_t addr, std::uint32_t len)>& callback) {
+    std::uint32_t offset = 0;
     for (const auto& span : link_spans_) {
-        std::vector<uint32_t>::iterator it = data_.begin() + offset;
+        std::vector<std::uint32_t>::iterator it = data_.begin() + offset;
         callback(it, span.addr, span.len);
         offset += span.len;
     }
 }
 
-void memory::update_spans(std::function<void(uint64_t& addr)>& callback) {
+void memory::update_spans(std::function<void(std::uint64_t& addr)>& callback) {
     for (auto& span : link_spans_) {
         callback(span.addr);
     }
