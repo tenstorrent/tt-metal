@@ -1,8 +1,9 @@
-# Quasar ↔ Wormhole parity gaps — experimental-quasar `binary_ng` (no-broadcast)
+# Quasar ↔ Wormhole parity gaps — experimental-quasar `binary_ng`
 
-Scope: the `SubtileBroadcastType::NONE`, tensor-tensor, TILE binary op in
-`ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/`. "Gap" = works on Wormhole but does
-**not** (yet) work / is not validated on **Quasar**. Branch `dchen/no_bcast_quasar`.
+Scope: the TILE binary op in `ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/` — tensor-tensor
+`SubtileBroadcastType::NONE`, the single-operand subtile broadcast types (`SCALAR_A/B`, `ROW_A/B`,
+`COL_A/B`), and tensor-scalar (§7). "Gap" = works on Wormhole but does **not** (yet) work / is not
+validated on **Quasar**. Branch `dchen/next_bcast_quasar`.
 
 This is the **op-author's view** (gate / structural / arch / test-coverage). For **which LLK primitive
 is available on Quasar**, the authoritative source is the WH-baseline matrix
@@ -41,10 +42,21 @@ already do that the op has simply not exercised.**
 
 ## What works on Quasar today (the validated slice)
 
-bf16 · TILE · no-broadcast · tensor-tensor · matching lhs/rhs dtype · all-interleaved (DRAM/L1) **or**
+**No broadcast:** bf16 · TILE · tensor-tensor · matching lhs/rhs dtype · all-interleaved (DRAM/L1) **or**
 all-L1-height/block-sharded with identical specs · add/sub (FPU) + multiply/divide (SFPU) ·
-**lhs/rhs + post activations — `relu`/`silu`/`tanh`/`square`/`sigmoid` sim-certified; `gelu` is `broken` (§5)** ·
-**fp32 multiply and divide** (see §3).
+**lhs/rhs + post activations — `relu`/`silu`/`tanh`/`square`/`sigmoid`/`gelu` all sim-certified** ·
+**fp32 add/subtract/multiply/divide** (see §3).
+
+**Subtile broadcast (single-operand):** all 6 types — `SCALAR_A/B`, `ROW_A/B`, `COL_A/B` — bf16 · TILE ·
+tensor-tensor · add/subtract (FPU) + multiply/divide/maximum (SFPU) · interleaved **and** a sharded
+broadcast operand (NoC-read path) **and** mixed a/b/out layouts, i.e. full per-operand layout
+independence · lhs/rhs/post activation fusion with `relu`/`gelu`/`tanh`/`sigmoid` (see §6).
+
+**Tensor-scalar:** bf16 and fp32 · TILE · add/subtract (FPU for bf16, SFPU for fp32) + multiply/divide
+(SFPU) · a writer-fills-`in1`-once mechanism (the writer produces the RHS input DFB and fills it with the
+packed scalar via a coherent, non-cacheable-L1-alias store; the compute waits on it once and reuses tile
+index 0) · interleaved **and** sharded LHS (NoC-read path — a scalar never triggers the borrow path) ·
+LHS activation fusion (see §7).
 
 ## 1. Structural — gate rejects → no Quasar path via this op  [STRUCTURAL]
 
@@ -54,8 +66,8 @@ Quasar** column is the key per-request signal: *capable* = Quasar LLK could do i
 
 | Config | LLK on Quasar | Class |
 |---|---|---|
-| **Subtile broadcast** (scalar/row/col) | **capable** — `unary_bcast` ported + sim-certified (§6) | **B** — op-side wiring; the single largest WH-vs-Quasar surface, next milestone |
-| Tensor-scalar (`add(t, 5.0)`) | **capable** — scalar-fill + FPU/SFPU binop exist | **B** — gate requires tensor-tensor |
+| **Mixed subtile broadcast** (`ROW_A_COL_B` / `ROW_B_COL_A`) | not ported | op — gate rejects; WH via descriptor (§6) |
+| Tensor-scalar, int32 (`add(t_int32, 5)`) | **capable** in isolation (int32 add/mul compile, matrix `✓`) but the DFB *compute* path returns wrong results for int32 — see §7 | **bug** — the `is_scalar` branch deliberately excludes every int32 op, not a plain LLK/gate gap |
 | where / select (ternary) | **capable** — `where` bridge is `✓` in the matrix | **B** — gate rejects ternary |
 | Row-major (non-TILE) in/out | needs op dataflow work | op (gate + RM kernels), not a pure LLK gap |
 | Non-32×32 tile | op work | op |
@@ -77,9 +89,16 @@ These pass the gate → route to the DFB factory → fail deep on Quasar while W
 | bf8_b / bf4_b (block-float), uint32 / uint16 | host format validator throws — not in Quasar's format set (MX/microscaling) | `format` |
 | Integer / float SFPU ops that are unported (bitwise, shift, sub_int, int-div, remainder/fmod, gcd/lcm, xlogy, atan2, isclose, power, quant, float compares) | JIT compile fails — LLK header `#ifndef ARCH_QUASAR` | `kernel` |
 
-int32 add/mul, SFPU compare-to-zero, and max/min **do** compile (matrix `✓`). **Gate-hygiene idea:** a
-Quasar-aware `validate` could reject a Quasar-unsupported format/op with a clear "unsupported on Quasar"
-message instead of a deep validator/compile error.
+int32 add/mul, SFPU compare-to-zero, and max/min **do** compile (matrix `✓!`/`✓`). int32 add/mul are the
+dangerous ones: run on the DFB compute path they are **silent-wrong** (garbage / all-zero output; suspected
+locus: the factory's `set_unpack_mode`, which emits an SFPU unpack mode only for `Float32`, never `Int32` —
+a compute-path bug, not a gate gap; no no-bcast test exercised int32, so this shipped un-caught). **Both
+gate branches now exclude int32** — the tensor-tensor no-broadcast branch as well as the tensor-scalar
+`is_scalar` branch (§7) — so `int32 == int32` routes to the descriptor and throws a clean "unsupported on
+Quasar" instead of returning garbage. That is a GUARD, not a fix: the compute bug is unfixed and int32 stays
+off the DFB until `set_unpack_mode` handles `Int32`. **Gate-hygiene idea:** a Quasar-aware `validate` could reject a Quasar-unsupported
+format/op with a clear "unsupported on Quasar" message instead of a deep validator/compile error — or, per
+this finding, a silent-wrong result.
 
 ## 3. fp32 (Float32)
 
@@ -103,15 +122,9 @@ The matrix says Quasar LLK supports these (`✓`); `matches_metal_v2_slice` admi
 Quasar test.** These should pass today — the work is *a test case*, not a port (class C). This is the
 direct "what Quasar LLK can do that the op didn't exercise" list.
 
-**Fusable activations** — as of 2026-07-07 the op also tests `tanh`/`square`/`sigmoid` fusion
-(`test_no_bcast_activation_supported`, post + lhs, bf16), all now **sim-certified `✓`** on Quasar. That
-sweep confirmed the matrix's "supported" claim for those three — but caught that it did **NOT** hold for
-`gelu`:
-- **`gelu` / `bias_gelu` — `broken`, not headroom.** The Quasar gelu LLK bridge fails to JIT-compile
-  (`gelu_init` calls `_sfpu_load_config32_` unqualified; it lives in `ckernel::math`, `cmath_common.h:101`).
-  This is an LLK bug — a one-line qualifier fix — not a coverage gap (QUASAR_LLK_GAPS.md Table 2), tracked
-  in tenstorrent/tt-metal#49314. The op test **skips `gelu` on Quasar** (it still runs on WH). Cautionary
-  case: static 3-layer presence ≠ compiles.
+**Fusable activations** — the op tests `tanh`/`square`/`sigmoid`/`gelu` fusion
+(`test_no_bcast_activation_supported`, post + lhs, bf16), all **sim-certified `✓`** on Quasar (`gelu`:
+interleaved/height × post/lhs). `bias_gelu` (`ADD` + post `GELU`) works too.
 - Still `✓` but not yet exercised: `exp` · `sqrt` · `rsqrt` · `reciprocal` · the six compare-to-zero
   (`eqz/nez/gtz/ltz/gez/lez`).
 
@@ -119,40 +132,127 @@ sweep confirmed the matrix's "supported" claim for those three — but caught th
 - `maximum` / `minimum` (float + int32) · `add_int` / `mul_int` (int32) · `where` is capable but
   gate-blocked → §1, class B.
 - Derived (FPU + supported activation): `squared_difference`, `hypot`, `logical_and`/`or`/`xor` — their
-  activation pieces are `✓` (matrix Table 1). (`bias_gelu` is `broken` — it needs `gelu`, see above.)
+  activation pieces are `✓` (matrix Table 1).
 
 **Config coverage** (within the validated slice): rhs pre-activation (only lhs is tested) ·
 block-sharded **+** activation · divide **+** activation · larger / nD interleaved shapes (group-2 / nD
 stride path) · interleaved program-cache-hit. (Uneven height/block shards ARE covered by the resnet canary.)
 
-## 6. Subtile-broadcast foundation (`unary_bcast`) — Quasar-ready
+## 6. Subtile broadcast (`unary_bcast`) — single-operand, validated on Quasar
 
-Subtile broadcast is the next milestone (§1). Its LLK + compute-API foundation on Quasar was audited and
-**sim-certified**, so the remaining work is **op-side wiring** (class B), not a foundation port.
+Single-operand subtile broadcast (`SCALAR_A/B`, `ROW_A/B`, `COL_A/B`) is wired through the DFB factory and
+sim-certified **through the op itself** (`test_binary_ng_bcast.py`), not just the standalone LLK test —
+see `qualification/QUASAR_LLK_GAPS.md` Table 3 for the primitive-level (`unary_bcast`) status.
 
-- **Ported across all 3 layers**, on both our tt-llk pin and `origin/main`: compute API `bcast.h`
-  (`unary_bcast`/`_init`/`_uninit` carry `#ifdef ARCH_QUASAR` branches — landed via #41329) · metal
-  wrappers `hw/ckernels/quasar/…/{llk_unpack_A_api.h, llk_math_unary_datacopy_api.h}` · core LLK
-  `tt_llk_quasar/llk_lib/{llk_unpack_unary_broadcast_operands.h, llk_math_unary_broadcast.h}` (real
-  per-type SCALAR/ROW/COL bodies, no `#ifndef ARCH_QUASAR` no-op).
-- **Sim-certified GREEN** (`release_qsr` libttsim.so, via `run_test.sh`): `test_unary_broadcast_quasar.py`
-  bf16 **scalar / column / row** all PASS.
-- **Caveats — design around these:** fp32 not wired (Quasar branch forces `unpack_to_dest=false`; start
-  bf16, same theme as §3) · `reconfigure_unary_bcast` is a no-op on Quasar (init per bcast type, don't
-  rely on mid-program reconfigure) · A2D/movA2D variant is unsupported (static_assert) — `unary_bcast`
-  uses the B2D/SrcB path, so unaffected; do not route A2D.
-- **Op-side work to enable:** relax `matches_metal_v2_slice` (rejects `SubtileBroadcastType != NONE`) and
-  have the factory/kernel emit the `unary_bcast` pre-broadcast of the smaller operand.
+- **Mechanism:** `unary_bcast<BroadcastType::{ROW,COL,SCALAR}>` all lower to the MOVB2D srcB→dest
+  datacopy, differentiated only by broadcast constants (`dst_lo`/`bcast0`/`srcb_col_inc`); there is no
+  `ELWADD` on the `unary_bcast` path.
+- **Design constraint:** `reconfigure_unary_bcast` (mid-program bcast-type/format switch) has no Quasar
+  branch (`#ifndef ARCH_QUASAR`-only) — each broadcast type is brought up via its own `unary_bcast_init`,
+  not a runtime reconfigure.
+- **Ops:** add/subtract (FPU) + multiply/divide/maximum (SFPU).
+- **Layouts:** interleaved **and** a sharded broadcast operand (via the NoC-read sharding-aware
+  `TensorAccessor` path, not borrowing) **and** mixed a/b/out layouts — full per-operand layout
+  independence.
+- **Activation fusion:** lhs/rhs/post × `relu`/`gelu`/`tanh`/`sigmoid` compose with broadcast (`relu` uses
+  the SFPU post chain; the PACK_RELU fast path is disabled under subtile broadcast).
+- **Validation:** 112 broadcast cases green on the QSR sim (`test_binary_ng_bcast.py`); 88 no-bcast
+  regression cases green (`test_binary_ng_no_bcast.py`).
+- **Two facts that make this work:** the `bcast.h` Quasar `unary_bcast` branch does not reference
+  `DataFormat::UInt32` (Quasar has no uint32 device format — its 32-bit formats are `Float32`/`Int32`; the
+  enum slot WH/BH use for `UInt32` is `MxFp4_2x_B` on Quasar) · the Quasar bcast compute inserts
+  `pack_init` under `#ifdef ARCH_QUASAR` after `pack_reconfig_data_format`, which is gasket-only on Quasar
+  (§4).
+- **Still deferred:**
+  - Mixed subtile types `ROW_A_COL_B` / `ROW_B_COL_A` — not ported; the gate rejects them (no Quasar
+    path; WH runs via descriptor) → §1.
+  - Tensor-scalar (`add(t, 5.0)`) is a separate, now-supported path (§7) — a scalar operand is always
+    `SubtileBroadcastType::NONE`, so it never engages subtile broadcast and has no interaction with this
+    section.
+  - fp32 / int subtile broadcast — bf16-only: the Quasar `unary_bcast` branch forces
+    `unpack_to_dest=false`, and MOVB2D is fp32-fragile (BH #449).
+  - Natively-borrowed all-sharded subtile broadcast is currently **unreachable**: `is_native_L1_sharding`
+    requires the broadcast operand to be *unsharded*, so `all_borrowed` can't hold for a broadcast pair
+    (the `num_tiles_per_cycle == 1` guard on the bcast branch is therefore never exercised for
+    broadcast). A borrowed sharded-broadcast path needs `is_native_L1_sharding` to recognize "both
+    operands sharded, one a subtile broadcast" — structurally different for the `_A` vs `_B` families. A
+    sharded broadcast operand already works today via the NoC-read path (see layouts, above).
+  - Gate hygiene (§2) is unresolved for broadcast too: the gate admits bf16 SFPU ops that are unported on
+    Quasar (float compares, `xlogy`, `atan2`, `isclose`) regardless of broadcast type — they JIT-fail;
+    same open item as the no-bcast slice.
+  - WH/BH execution of this broadcast path is unverified — validated on the QSR sim only; the v2 kernels
+    are ports of the WH/BH `kernels_ng` reference.
+  - Other `DataFormat::UInt32` references under `hw/inc/api/compute/**` should be audited for
+    `!ARCH_QUASAR` guarding — `bcast.h` was the only offender in this op's include closure.
+
+## 7. Tensor-scalar (`add(t, 5.0)`) — validated on Quasar
+
+Tensor-scalar (`ttnn.experimental.quasar.<op>(tensor, python_scalar)`) is wired through the DFB factory via
+a dedicated `is_scalar` early-return in `matches_metal_v2_slice` (`binary_ng_device_operation.cpp`) — a
+different admission path from the tensor-tensor / subtile-broadcast one above, since there is no `b`
+tensor and a scalar never subtile-broadcasts (`SubtileBroadcastType::NONE` always).
+
+- **Mechanism:** with no `b` tensor, the writer becomes the producer of the RHS input DFB (`in1`) and
+  fills it ONCE with the packed scalar via a coherent store — the non-cacheable L1 alias on Quasar DM
+  cores, because the DM core's write-back L1 D$ is incoherent with the TL1 SRAM the compute consumer
+  reads, so a plain cacheable fill would leave the consumer reading zeros or corrupt a neighbor DFB (WH/BH
+  keep the plain fill; the alias offset is 0 there — the same coherence idiom the mixed subtile-broadcast
+  reader uses for its COL-operand fill, `reader_row_col_mixed_bcast_dfb.cpp`, §6). The reader produces
+  `in0` only. The compute waits on `in1` once, outside its per-chunk loop,
+  and reuses tile index 0 for every LHS tile — fill-once, reuse-many, not a per-tile re-materialize.
+- **Ops / dtypes:** add/subtract (FPU for bf16, SFPU for fp32) + multiply/divide (SFPU). All four ops are
+  SFPU for fp32 on Quasar (`is_binary_sfpu_op` is dtype-aware), so the derived scalar RHS format equals `a`
+  for every fp32 op; bf16 add/subtract stay FPU but still derive a bf16 RHS == `a`. The gate additionally
+  requires the derived RHS format to equal `a` (an fp32 FPU-only op would derive a bf16 RHS and correctly
+  fall to the descriptor) and 32×32 tiles.
+- **Layouts:** interleaved and sharded LHS. A scalar never triggers the borrow path — `borrow_shards`
+  requires all three operands sharded, and a scalar has no `b`, so `b_shard_volume`/`b_sharded` is
+  unconditionally false; a sharded `a` (and output) is read/written over the NoC via its sharding-aware
+  `TensorAccessor`, the same reader/writer code the interleaved case uses.
+- **Activation fusion:** LHS (pre) activations compose with the scalar RHS (`PREPROCESS(LHS, ...)` runs
+  before the binary op, identical in structure to the no-broadcast kernels' lhs-activation self-loop). The
+  scalar RHS itself carries no activation chain (there is no `b` to pre-process).
+- **Validation:** 24 scalar cases green on the QSR sim (`test_binary_ng_scalar.py`) — bf16
+  add/subtract/multiply/divide interleaved, fp32 all four ops interleaved, sharded LHS (add + multiply),
+  LHS `relu` (add + multiply).
+- **Still deferred:**
+  - **int32 tensor-scalar** — although the gate's format-derivation rule would admit int32 (int add/mul
+    are SFPU, so the derived RHS format is int32 == `a`), the int32 SFPU tile ops do not produce correct
+    results on the Quasar DFB compute path (empirically: scalar add/multiply return all-zero output tiles).
+    The `is_scalar` branch explicitly excludes every int32 op regardless of which binary op, keeping it on
+    the descriptor (a clean "unsupported on Quasar" instead of a silent-wrong result) until the int32
+    DFB-compute path is fixed — see §2 for the matching tensor-tensor finding (int32 `add`/`mul` on the DFB
+    are silent-wrong, so the tensor-tensor no-broadcast branch now also excludes int32 → clean throw).
+  - **maximum / minimum tensor-scalar** — NOT a `matches_metal_v2_slice` gate rejection: their
+    `ttnn.experimental.quasar` scalar overloads (`binary_composite_op.cpp`) route through
+    `ttnn::operations::unary::detail::unary_impl` with `UnaryOpType::MAXIMUM`/`MINIMUM` and never call
+    `invoke_binary_ng`, so this factory is never consulted for them. The Quasar unary op has no DFB /
+    Metal-2.0 program factory of its own, so it falls through to the descriptor-style
+    `DataMovementKernel`/`ComputeKernel` construction, which hard-throws on Quasar ("... is not supported on
+    Quasar", `tt_metal/impl/kernels/kernel.hpp`). The fix is to reroute those two scalar overloads to
+    `invoke_binary_ng(BinaryOpType::MAXIMUM/MINIMUM)`, not to relax a gate — `is_binary_sfpu_op` already
+    returns true for `MAXIMUM`/`MINIMUM` regardless of dtype, so bf16/fp32 tensor-scalar `maximum`/`minimum`
+    would be admitted by the existing gate logic unchanged once rerouted; no new LLK work is implied.
+  - **row-major-scalar, where-with-scalar, quantization-scalar** — same disposition as their tensor-tensor
+    counterparts (§1): the `is_scalar` branch's own row-major / `is_where_op` / `is_quant_op` checks send
+    them to the descriptor.
 
 ## Priorities
 
-1. **`gelu` bridge fix** (§5) — LLK one-liner: qualify `ckernel::math::_sfpu_load_config32_` in
-   `ckernel_sfpu_gelu.h::gelu_init`. Unblocks `gelu` + `bias_gelu` (both `broken`). Highest value/effort.
-2. **Remaining class-(C) coverage** (§5) — `tanh`/`square`/`sigmoid` now done; add tests for
-   `maximum`/`minimum`/int-add-mul/derived ops (all matrix-`✓`). No LLK work.
-3. **Subtile broadcast** (§1, §6) — the next major porting milestone; foundation is ready, so op-side
-   wiring (gate + factory/kernel).
-4. **Gate hygiene** (§2) — optionally reject Quasar-unsupported formats/ops with a clear message.
+1. **Fix the int32 DFB-compute bug** (§2, §7) — int32 `add`/`mul` are silent-wrong on the DFB compute path;
+   both gate branches now exclude int32 (→ descriptor, clean throw) as a GUARD, but the compute bug is
+   unfixed — fixing it would re-enable int32 on the DFB. Suspected locus: the factory's `set_unpack_mode`
+   (`Float32`-only). Root-cause analysis captured in the int32-DFB issue draft.
+2. **Remaining class-(C) coverage** (§5) — add tests for `maximum`/`minimum`/int-add-mul/derived ops
+   (all matrix-`✓`). No LLK work.
+3. **Reroute `maximum`/`minimum` tensor-scalar** (§7) — their `ttnn.experimental.quasar` overloads call the
+   unary clamp path (`UnaryOpType::MAXIMUM`/`MINIMUM`), not `invoke_binary_ng`, so they never reach this
+   factory and hard-throw on Quasar (`DataMovementKernel` not supported); reroute to
+   `invoke_binary_ng(BinaryOpType::MAXIMUM/MINIMUM)`.
+4. **Mixed subtile broadcast** (`ROW_A_COL_B`/`ROW_B_COL_A`, §1, §6) — remaining subtile milestone; not
+   yet ported (no Quasar path), WH still runs it via the descriptor.
+5. **Gate hygiene** (§2, §6) — optionally reject Quasar-unsupported formats/ops with a clear message;
+   applies under broadcast too, not just the no-broadcast slice.
 
 ## Systemic lesson
 
