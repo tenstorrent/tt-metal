@@ -369,6 +369,7 @@ def test_llm_category_fallback_only_on_residual(monkeypatch):
 
     monkeypatch.setattr("scripts.tt_hw_planner.llm_synth.invoke_llm_cli_one_shot", _fake_invoke)
     monkeypatch.setenv("TT_HW_PLANNER_LLM_CATEGORY", "1")
+    monkeypatch.setenv("TT_HW_PLANNER_CATEGORY_VOTES", "1")  # deterministic single-ask for the count assert
     P._LLM_CATEGORY_CACHE.clear()
     cfg = {"model_type": "mimi", "architectures": ["MimiModel"], "sampling_rate": 24000, "codebook_size": 2048}
     assert P._llm_resolve_category("kyutai/mimi", cfg, "feature-extraction") == "TTS"
@@ -376,6 +377,12 @@ def test_llm_category_fallback_only_on_residual(monkeypatch):
     # cached: a second call does not re-invoke
     assert P._llm_resolve_category("kyutai/mimi", cfg, "feature-extraction") == "TTS"
     assert calls["n"] == 1
+    # self-consistency voting: N asks, majority wins (2x TTS, 1x STT -> TTS)
+    P._LLM_CATEGORY_CACHE.clear()
+    monkeypatch.setenv("TT_HW_PLANNER_CATEGORY_VOTES", "3")
+    seq = iter(['{"category":"TTS"}', '{"category":"STT"}', '{"category":"TTS"}'])
+    monkeypatch.setattr("scripts.tt_hw_planner.llm_synth.invoke_llm_cli_one_shot", lambda p, **k: next(seq))
+    assert P._llm_resolve_category("vote/model", cfg, None) == "TTS"
     # a bogus category from the LLM is rejected (validated against the allowed set)
     P._LLM_CATEGORY_CACHE.clear()
     monkeypatch.setattr(
@@ -386,6 +393,22 @@ def test_llm_category_fallback_only_on_residual(monkeypatch):
     P._LLM_CATEGORY_CACHE.clear()
     monkeypatch.setenv("TT_HW_PLANNER_LLM_CATEGORY", "0")
     assert P._llm_resolve_category("kyutai/mimi", cfg, "feature-extraction") is None
+
+
+def test_fingerprint_to_category_bridge():
+    # when the deterministic tag/model_type path is Unknown but the STRUCTURAL fingerprint
+    # identifies a backbone, the category is derived from it (Janus MultiModalityCausalLM ->
+    # 'decoder-only causal LM' -> LLM), reserving the LLM residual for a truly unknown fp.
+    from scripts.tt_hw_planner.probe import _category_from_fingerprint
+
+    assert _category_from_fingerprint("decoder-only causal LM") == "LLM"
+    assert _category_from_fingerprint("VLM (ViT + decoder LM)") == "VLM"
+    assert _category_from_fingerprint("encoder-decoder transformer") == "LLM"
+    assert _category_from_fingerprint("ViT (vision transformer)") == "CNN"
+    assert _category_from_fingerprint("DiT (diffusion transformer)") == "Image"
+    assert _category_from_fingerprint("diffusion UNet+VAE") == "Image"
+    assert _category_from_fingerprint("SSM/Mamba (hybrid)") == "LLM"
+    assert _category_from_fingerprint("unknown") is None  # -> stays residual for the LLM
 
 
 def test_seq2seq_classified_by_config_fact_not_table():

@@ -207,6 +207,28 @@ _VALID_CATEGORIES = ("LLM", "VLM", "Image", "Video", "STT", "TTS", "Embed", "CNN
 _LLM_CATEGORY_CACHE: dict = {}
 
 
+def _category_from_fingerprint(fingerprint: str) -> Optional[str]:
+    """Bridge the structural fingerprint to a category when the deterministic tag/
+    model_type path came up ``Unknown`` but the fingerprint DID identify a backbone
+    (e.g. Janus ``MultiModalityCausalLM`` -> 'decoder-only causal LM' but model_type
+    'multi_modality' has no table/registry home and the 'any-to-any' tag isn't mapped).
+    Uses the fact already computed, so no new signal is invented and the LLM residual
+    is reserved for a genuinely 'unknown' fingerprint. Returns None if the fingerprint
+    itself is unknown."""
+    fp = fingerprint.lower()
+    if fp.startswith("vlm"):
+        return "VLM"
+    if fp.startswith("decoder-only") or fp.startswith("ssm") or fp.startswith("autoregressive"):
+        return "LLM"
+    if fp.startswith("encoder-decoder") or fp.startswith("encoder-only"):
+        return "LLM"
+    if fp.startswith("vit") or fp.startswith("cnn"):
+        return "CNN"
+    if fp.startswith("dit") or "diffusion" in fp:
+        return "Image"
+    return None
+
+
 def _is_category_residual(model_type_category: Optional[str], fingerprint: str) -> bool:
     """The genuine residual for the LLM: NO deterministic fact placed this model.
     True only when the model_type carries no category (not in the curated table nor
@@ -264,13 +286,36 @@ def _llm_resolve_category(model_id: str, cfg: dict, pipeline_tag: Optional[str],
             f"model card (excerpt): {card_text[:800]}\n"
             'Reply with ONLY compact JSON: {"category": "<one of the allowed>"}'
         )
-        raw = invoke_llm_cli_one_shot(prompt, model="sonnet", timeout_s=90)
-        parsed = extract_json_from_llm_output(raw) or {}
-        cand = str(parsed.get("category") or "").strip()
-        for c in _VALID_CATEGORIES:
-            if cand.lower() == c.lower():
-                result = c
-                break
+
+        def _one_vote(_i: int) -> Optional[str]:
+            try:
+                raw = invoke_llm_cli_one_shot(prompt, model="sonnet", timeout_s=90)
+                parsed = extract_json_from_llm_output(raw) or {}
+                cand = str(parsed.get("category") or "").strip()
+                for c in _VALID_CATEGORIES:
+                    if cand.lower() == c.lower():
+                        return c
+            except Exception:
+                return None
+            return None
+
+        try:
+            votes = max(1, int(os.environ.get("TT_HW_PLANNER_CATEGORY_VOTES", "3")))
+        except (TypeError, ValueError):
+            votes = 3
+        tally: dict = {}
+        if votes <= 1:
+            picks = [_one_vote(0)]
+        else:
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=min(votes, 4)) as ex:
+                picks = list(ex.map(_one_vote, range(votes)))
+        for p in picks:
+            if p:
+                tally[p] = tally.get(p, 0) + 1
+        if tally:
+            result = max(tally, key=lambda k: (tally[k], k != "Unknown"))
     except Exception:
         result = None
     _LLM_CATEGORY_CACHE[model_id] = result
@@ -631,6 +676,8 @@ def _probe_local_model(model_id: str) -> ModelProbe:
         is_encoder_decoder=cfg.get("is_encoder_decoder"),
         pipeline_tag=pipeline_tag,
     )
+    if category == "Unknown":
+        category = _category_from_fingerprint(_fpr) or category
     if _is_category_residual(model_type_category, _fpr):
         _llm_cat = _llm_resolve_category(model_id, cfg, pipeline_tag)
         if _llm_cat:
@@ -793,6 +840,11 @@ def probe_model(model_id: str) -> ModelProbe:
         is_encoder_decoder=cfg.get("is_encoder_decoder"),
         pipeline_tag=probe.pipeline_tag,
     )
+    if probe.category == "Unknown":
+        _fp_cat = _category_from_fingerprint(_fpr)
+        if _fp_cat:
+            probe.flags.append(f"Category Unknown -> {_fp_cat!r} via structural fingerprint {_fpr!r}")
+            probe.category = _fp_cat
     if _is_category_residual(model_type_category, _fpr):
         _llm_cat = _llm_resolve_category(model_id, cfg, probe.pipeline_tag)
         if _llm_cat and _llm_cat != probe.category:
