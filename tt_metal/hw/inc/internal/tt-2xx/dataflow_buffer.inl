@@ -18,6 +18,10 @@
 
 #include "api/kernel_thread_globals.h"
 
+// [#48552 DEBUG -- remove before merge] reserve_back under-size localizer. DPRINT lives in dprint.h, which is
+// NOT transitively pulled in by the WAYPOINT header, so include it explicitly.
+#include "api/debug/dprint.h"
+
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH)
 #define DFB_IS_COMPUTE_MATH 1
 #else
@@ -81,7 +85,22 @@ inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
         }
     } else {
         uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
-        ASSERT(overlay::llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
+        // [#48552 DEBUG -- remove before merge] Fires ONLY on the failing case (cap < requested): this is the
+        // "DM2 tripped assert line 84" / RBW-hang. Names the under-sized CB (logical dfb id) + the sizes so we
+        // can pin which op's reserve_back exceeds its CB capacity.
+        const std::uint32_t rb_cap = overlay::llk_intf_get_capacity(tensix_id, tc_id);
+        if (rb_cap < num_entries) {
+            DPRINT(
+                "RBFAIL dfb={} need={} cap={} tid={} tc={}\n",
+                (std::uint32_t)logical_dfb_id_,
+                (std::uint32_t)num_entries,
+                rb_cap,
+                (std::uint32_t)tensix_id,
+                (std::uint32_t)tc_id);
+            DPRINT("TESTING MESSAGE AFTER RBFAIL");
+            DPRINT("TESTING MESSAGE AFTER RBFAIL");
+        }
+        ASSERT(rb_cap >= num_entries);
         while (overlay::llk_intf_get_free_space(tensix_id, tc_id) < num_entries);
     }
 #endif

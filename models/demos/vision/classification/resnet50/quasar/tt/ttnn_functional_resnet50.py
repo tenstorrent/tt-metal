@@ -137,23 +137,18 @@ def _host_conv2d(
         ttnn.deallocate(input_tensor)  # mirror the on-device conv's input dealloc so L1 doesn't leak
     oh, ow = int(g.shape[2]), int(g.shape[3])
     flat = g.permute(0, 2, 3, 1).reshape(1, 1, batch_size * oh * ow, out_channels).contiguous()
-    nhw = batch_size * oh * ow
-    grid = device.compute_with_storage_grid_size()
-    maxc = grid.x * grid.y
-    nc = max(c for c in range(1, maxc + 1) if nhw % c == 0)
-    mem = ttnn.create_sharded_memory_config(
-        shape=(1, 1, nhw // nc, out_channels),
-        core_grid=ttnn.num_cores_to_corerangeset(nc, grid, True),
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
+    # Upload TILE interleaved (DRAM): the downstream conv reshards/consumes it directly. TILE carries the
+    # tile-grid padding in padded_shape, so a non-tile-aligned N*oH*oW (e.g. layer2's 28x28=784) does NOT
+    # trigger a separate ROW_MAJOR pad op -- that pad routes to the core PadRm* factory whose legacy
+    # DataMovementKernel is unported on Quasar ("Use QuasarDataMovementKernel"). (The stem conv1 bypass in
+    # run() keeps ROW_MAJOR sharded because its consumer is max_pool2d, which wants that layout; here the
+    # consumer is a conv, which prefers TILE and reshards an interleaved input via reshard_if_not_optimal.)
     out = ttnn.from_torch(
         flat.to(torch.bfloat16),
         dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=mem,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     return out, [oh, ow], [weight_tensor, bias_tensor]
 
