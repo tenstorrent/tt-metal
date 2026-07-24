@@ -1402,3 +1402,13 @@
 - Result: median wall regressed `3385.003 -> 4837.313 us` (`+42.9%`). The convolution region expands from 15 calls in the native path to 23 calls, repeatedly running untilize, shifted slice, tilize, and ternary MAC operations per tap.
 - Diagnosis: avoiding native Conv1d does not avoid layout traffic when expressed through generic TTNN slices; it multiplies that traffic by the four taps. Correctness rules out mathematical differences as the regression source.
 - Verdict: reject and restore native Conv1d. A custom single device program remains the supported path: directly read shifted tiled rows, apply all four depthwise taps, fuse SiLU, and write tiled output/state.
+
+
+### 2026-07-24 19:15:20 UTC — Reject fused QKV crop/untilize at target trace shape
+
+- Hypothesis: replace the serialized QKV `SliceDeviceOperation` (`86.093 us`) plus `UntilizeDeviceOperation` (`95.591 us`) with existing `ttnn.untilize_with_unpadding` directly on the fused projection, cropping width 2208 to 1536 while producing row-major convolution input.
+- Focused TP command: `QWEN_KDA_FUSED_QKV_UNTILIZE=1 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_tp_weights.py::test_tp_layer_pcc -q -s` -> PASS with the exact retained output/recurrent/convolution PCC tuple `0.999965/0.999910/0.999997`.
+- Target command: `QWEN_KDA_FUSED_QKV_UNTILIZE=1 PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s` -> `SAFE_PYTEST_RESULT: HANG`. Warm/eager setup completed, but captured replay timed out after 5 seconds; all eight devices became unrecoverable and the safe wrapper reset them. No profiler CSV or latency is valid.
+- Recovery: restored the retained slice+untilize path, then `PERF_SEQ=64 PERF_REPS=1 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s` -> PASS on all eight devices.
+- Diagnosis: correctness at T=32 and successful warm setup rule out tensor semantics; failure is target-shape trace replay safety in the cropped-untilize program. This matches the prior full-sequence L1 gate case: a target path that cannot replay traces is not retainable.
+- Verdict: reject the existing composite and restore source. The measured `181.684 us` combined slice/untilize ceiling still supports an offset-aware custom reader, but not this API route.

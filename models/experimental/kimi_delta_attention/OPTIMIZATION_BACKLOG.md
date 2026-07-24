@@ -212,6 +212,11 @@ improved `622.564 -> 619.594 us` (`-0.48%`). T=5,120 wall improved
 36. Fuse state updates into producing writers.
 37. Eliminate Q/K/V and auxiliary slice programs with addressable projection
     groups or offset-aware consumers.
+    - Fused crop/untilize control, 2026-07-24: `untilize_with_unpadding`
+      removes the QKV slice and preserves exact TP PCC at T=32, but T=5,120
+      trace replay deadlocks and forces an eight-device reset. Reject the
+      existing composite for target trace execution; retain an offset-aware
+      custom reader as the safe implementation path.
 38. Consume beta sigmoid/typecast inside prep without a separate launch.
 39. Fuse decay projection, bias, Softplus, scaling, and FP32 conversion.
 40. Feed decay output directly into prep.
