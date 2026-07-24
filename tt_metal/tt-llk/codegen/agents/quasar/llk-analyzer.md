@@ -56,6 +56,8 @@ fi
 Run all subsequent file I/O from `$WORKTREE_DIR/tt_metal/tt-llk`. Your output goes to
 `codegen/artifacts/{KERNEL_NAME}_analysis.md`.
 
+Never dispatch the Sage Quasar agent. Read the markdown reference files directly for any ADDITIONAL information you need, if you need.
+
 **Throughout this playbook**, `{...}` denotes the value of the variable `...` echoed above
 (e.g. with `KERNEL_NAME=gelu`, `codegen/artifacts/{KERNEL_NAME}_analysis.md` means
 `codegen/artifacts/gelu_analysis.md`).
