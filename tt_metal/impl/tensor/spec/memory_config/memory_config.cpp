@@ -4,15 +4,51 @@
 #include <cstdint>
 
 #include <tt_stl/reflection.hpp>
+#include <tt_stl/assert.hpp>
 
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
 
 namespace tt::tt_metal {
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+void validate_memory_layout_and_shard_spec_consistency(
+    TensorMemoryLayout memory_layout, const std::optional<ShardSpec>& shard_spec) {
+    const bool has_legacy_shard_spec = shard_spec.has_value();
+
+    switch (memory_layout) {
+        case TensorMemoryLayout::INTERLEAVED:
+            TT_FATAL(
+                !has_legacy_shard_spec,
+                "Interleaved MemoryConfig must not contain a legacy ShardSpec. Use a sharded TensorMemoryLayout when "
+                "providing shard metadata.");
+            break;
+        case TensorMemoryLayout::HEIGHT_SHARDED:
+        case TensorMemoryLayout::WIDTH_SHARDED:
+        case TensorMemoryLayout::BLOCK_SHARDED:
+            // Legacy sharded layouts can be created without a shard spec when a later stage
+            // synthesizes the concrete shard geometry.
+            break;
+        case TensorMemoryLayout::ND_SHARDED:
+            TT_FATAL(
+                false,
+                "ND_SHARDED MemoryConfig must be constructed from NdShardSpec, not the legacy ShardSpec constructor "
+                "path.");
+            break;
+        default: break;
+    }
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
 MemoryConfig::MemoryConfig(
     TensorMemoryLayout memory_layout, BufferType buffer_type, std::optional<ShardSpec> shard_spec) :
-    memory_layout_(memory_layout), buffer_type_(buffer_type), shard_spec_(std::move(shard_spec)) {}
+    memory_layout_(memory_layout), buffer_type_(buffer_type), shard_spec_(std::move(shard_spec)) {
+    CMAKE_UNIQUE_NAMESPACE::validate_memory_layout_and_shard_spec_consistency(memory_layout_, shard_spec_);
+}
 
 MemoryConfig::MemoryConfig(BufferType buffer_type, std::optional<NdShardSpec> nd_shard_spec) :
     memory_layout_(nd_shard_spec.has_value() ? TensorMemoryLayout::ND_SHARDED : TensorMemoryLayout::INTERLEAVED),
