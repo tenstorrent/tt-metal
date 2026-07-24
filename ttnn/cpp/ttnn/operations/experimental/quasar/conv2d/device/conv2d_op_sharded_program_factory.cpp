@@ -1189,6 +1189,23 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             // matmul [M, full_K] x [full_K, N] matches. compute_output_specs sizes the output tensor to the same
             // [M*32, full_K*32] shard, so the borrowed OUT matches. (Was mis-sized to M x act_block_w = one
             // window-row's K-sub-block, causing the K=128 vs 512 matmul mismatch.)
+            //
+            // [#48552] HOST-side guard: the borrowed OUT below tilizes per_core_M * full_K tiles, so the output
+            // tensor (which this DFB borrows) MUST be [M, full_K] tiles wide. If compute_output_specs sized it as
+            // the conv result [M, N] instead (i.e. its tilize-only gate disagreed with this factory's gate), the
+            // borrowed-OUT reserve_back(M*full_K) would exceed the M*N capacity and fault as a device
+            // reserve_back RBFAIL (dataflow_buffer.inl "line 84"). Catch it here as a single, clear
+            // program-creation error so the disagreement is fixed in compute_output_specs, not chased on-device.
+            const uint32_t out_w_ntiles = output.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+            TT_FATAL(
+                out_w_ntiles == full_k_ntiles,
+                "Split-conv Program A (tilize-only): output tensor width is {} tiles but the tilize produces "
+                "full_K = {} tiles. The output was sized as the conv result [M, N] instead of the tilized "
+                "activation [M, full_K] -- compute_output_specs' tilize-only gate (keyed on the INPUT "
+                "activation's HEIGHT_SHARDED layout) disagreed with this factory's split_program_tilize_only "
+                "gate. Align compute_output_specs so both classify this conv as tilize-only.",
+                out_w_ntiles,
+                full_k_ntiles);
             const CBInfo& tilized_info = cb(Conv2dCb::ACT_TILIZED);
             dfb = m2::DataflowBufferSpec{
                 .unique_id = DFB_OUT,
