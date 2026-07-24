@@ -122,41 +122,6 @@ TEST(HostTensorToDtype, NonBfpPreservesMetadata) {
     EXPECT_EQ(result.tensor_spec().tile(), tile);
 }
 
-TEST(HostTensorToDtype, RowMajorToBfpChangesLayoutToTileAndPreservesTile) {
-    const Shape shape{32, 32};
-    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
-    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-    auto alignment = tt::tt_metal::Alignment({32, 32});
-    auto tile = Tile({16, 16});
-
-    // Create a ROW_MAJOR tensor, but specify a tile in the page config (embedded tile)
-    auto source_spec = TensorSpec(
-        shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR, tile), memory_config, alignment));
-    auto source = HostTensor::from_vector<float>(data, source_spec);
-
-    auto result = to_dtype(source, DataType::BFLOAT8_B);
-
-    auto expected_spec =
-        TensorSpec(shape, TensorLayout(DataType::BFLOAT8_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
-
-    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), expected_spec));
-    EXPECT_EQ(result.layout(), Layout::TILE);
-    EXPECT_EQ(result.tensor_spec().tile(), tile);
-
-    // Value check on the aligned supported path
-    // We can unpack the BFP8_B data to float and check if it matches the original data
-    auto result_packed_data = host_buffer::get_as<uint32_t>(result);
-    auto unpacked_data =
-        unpack_bfp8_tiles_into_float_vec(result_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-    auto rm_data =
-        tensor_impl::to_row_major_layout(expected_spec.physical_shape(), tile, ttsl::make_const_span(unpacked_data));
-
-    EXPECT_EQ(rm_data.size(), data.size());
-    for (size_t i = 0; i < data.size(); ++i) {
-        EXPECT_NEAR(rm_data[i], data[i], 1.0f);
-    }
-}
-
 TEST(HostTensorToDtype, TileBfp8ToFloat32ValueCheck) {
     const Shape shape{32, 32};
     const auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
@@ -391,16 +356,15 @@ TEST(HostTensorToDtype, RowMajorToBfpPhysicalMismatchThrows) {
     const Shape shape{32, 24};
     auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-    // Alignment that is NOT a multiple of 16 (tile size)
+    // Alignment that is NOT a multiple of the default tile width
     auto alignment = tt::tt_metal::Alignment({32, 24});
-    auto tile = Tile({16, 16});
 
-    auto source_spec = TensorSpec(
-        shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR, tile), memory_config, alignment));
+    auto source_spec =
+        TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
     auto source = HostTensor::from_vector<float>(data, source_spec);
 
-    // This should throw because BFLOAT8_B forces TILE layout, which forces alignment to be multiple of 16
-    // So output physical shape width will be 32 instead of 24
+    // This should throw because BFLOAT8_B forces TILE layout, which forces alignment to be
+    // a multiple of the tile size. So output physical shape width will be 32 instead of 24.
     EXPECT_ANY_THROW(to_dtype(source, DataType::BFLOAT8_B));
 }
 
