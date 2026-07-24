@@ -75,8 +75,14 @@ void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID,
         return;
     }
     if constexpr (PRE_HANDSHAKE) {
-        consumer_ready_.wait(ack_count_);
-        consumer_ready_.set(0);
+        // Receivers increment consumer_ready MONOTONICALLY (up()) and never reset it, so gate on a
+        // running cumulative threshold rather than wait+set(0). The old absolute reset was NOT atomic
+        // with the wait: a receiver that lapped and posted its NEXT send's ack in the window between
+        // wait() returning and set(0) had that ack clobbered, so the sender's next wait deadlocked —
+        // a rare, timing-dependent hang on lockstep mcast. wait_min on the cumulative count is
+        // reset-free and cannot lose a lapped ack.
+        consumer_acks_seen_ += ack_count_;
+        consumer_ready_.wait_min(consumer_acks_seen_);
     }
     // Loopback iff the sender is in the box AND lands its own copy somewhere other than its source
     // (src == dst means the copy is already in place; never self-overwrite in place). The

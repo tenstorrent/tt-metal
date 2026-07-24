@@ -225,6 +225,7 @@ private:
     uint32_t num_dests_excl_;  // EXCLUDE-source mcast fan-out  = area - (in_rect?1:0)
     uint32_t num_dests_incl_;  // INCLUDE-source (loopback) fan-out = num_dests_excl_ + 1
     uint32_t ack_count_;       // consumer-ready handshake wait count (PRE_HANDSHAKE only)
+    uint32_t consumer_acks_seen_ = 0;  // running cumulative consumer-ready threshold (reset-free handshake)
 };
 
 // =============================================================================
