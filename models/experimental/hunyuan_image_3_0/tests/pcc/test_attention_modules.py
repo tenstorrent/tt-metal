@@ -16,6 +16,7 @@
 #   HY_PCC_CSV=/tmp/hunyuan_isl.csv python_env/bin/python -m pytest \
 #     models/experimental/hunyuan_image_3_0/tests/pcc/test_attention_modules.py -k isl_sweep -v -s
 
+import os
 import sys
 from pathlib import Path
 
@@ -28,6 +29,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 if str(PCC_DIR) not in sys.path:
     sys.path.insert(0, str(PCC_DIR))
+
+# Standalone attention PCC uses attention_mask=None → causal SDPA. Demo/denoise always
+# pass an image-span mask (q_chunk=256). Default causal chunk is 512, which overflows
+# Blackhole L1 at S≥4096; pin 256 here so large-ISL Attention PCCs match the demo path.
+os.environ.setdefault("HY_SDPA_CAUSAL_Q_CHUNK", "256")
 
 import ttnn
 from models.experimental.hunyuan_image_3_0.ref.attention.attention import (
@@ -42,7 +48,11 @@ from models.experimental.hunyuan_image_3_0.ref.attention.rope_2d import (
     build_batch_2d_rope,
 )
 from models.experimental.hunyuan_image_3_0.ref.weights import load_tensors, resolve_base_model_dir
+from models.experimental.hunyuan_image_3_0.ttnn.attention import attention as _attn_mod
 from models.experimental.hunyuan_image_3_0.ttnn.attention.attention import HunyuanTtAttention
+
+# Re-bind in case attention was imported earlier in the session with the production default.
+_attn_mod._SDPA_CAUSAL_Q_CHUNK = int(os.environ["HY_SDPA_CAUSAL_Q_CHUNK"])
 from models.experimental.hunyuan_image_3_0.ttnn.attention.mask import _NEG, build_attention_mask_tt
 from models.experimental.hunyuan_image_3_0.ttnn.attention.rms_norm import HunyuanTtRMSNorm
 from models.experimental.hunyuan_image_3_0.ttnn.attention.rope_2d import HunyuanTtRoPE2D
