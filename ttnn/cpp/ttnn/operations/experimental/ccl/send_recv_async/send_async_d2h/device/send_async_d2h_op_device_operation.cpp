@@ -53,14 +53,6 @@ SendAsyncD2HDeviceOperation::tensor_return_value_t SendAsyncD2HDeviceOperation::
     return {};
 }
 
-ttsl::hash::hash_t SendAsyncD2HDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "SendAsyncD2HDeviceOperation::compute_program_hash is called");
-    const ttnn::Tensor& input_tensor = tensor_args;
-    return tt::tt_metal::operation::hash_operation<SendAsyncD2HDeviceOperation>(
-        args.d2h_socket->get_config_buffer_address(), input_tensor);
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
