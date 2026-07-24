@@ -115,7 +115,27 @@ inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
                 (std::uint32_t)local_dfb_interface_.tc_idx);
         }
         ASSERT(rb_cap >= num_entries);
-        while (overlay::llk_intf_get_free_space(tensix_id, tc_id) < num_entries);
+        // [#48552] Bounded-spin stall report. A reserve_back that never gets free space is a
+        // producer/consumer credit deadlock — on this emulator, almost always an INCOHERENT physical
+        // tile-counter REUSE (a straggling posted write on a counter reused across programs leaves the
+        // credit count wrong). Rather than spin silently, after a long stall print the DFB + physical
+        // counter so it can be correlated with the last "Launching Device Operation" host log (which names
+        // the op). Keeps spinning afterward so the watcher still reports the hang.
+        {
+            std::uint32_t qsr_stall_spins = 0;
+            while (overlay::llk_intf_get_free_space(tensix_id, tc_id) < num_entries) {
+                if (++qsr_stall_spins == 50000000u) {
+                    DPRINT(
+                        "QSR-DFB-STALL reserve_back dfb={} tid={} tc={} need={} free={} -- producer stuck; "
+                        "likely #48552 incoherent tile-counter reuse (correlate with last op launch)\n",
+                        (std::uint32_t)logical_dfb_id_,
+                        (std::uint32_t)tensix_id,
+                        (std::uint32_t)tc_id,
+                        (std::uint32_t)num_entries,
+                        (std::uint32_t)overlay::llk_intf_get_free_space(tensix_id, tc_id));
+                }
+            }
+        }
     }
 #endif
     WAYPOINT("RBD");
@@ -171,7 +191,25 @@ inline void DataflowBuffer::wait_front_impl(uint16_t num_entries) {
 #elif !defined(COMPILE_FOR_TRISC)
     uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
     ASSERT(overlay::llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
-    while (overlay::llk_intf_get_occupancy(tensix_id, tc_id) < num_entries);
+    // [#48552] Bounded-spin stall report (mirror of reserve_back). A wait_front that never reaches occupancy
+    // means the producer's push credits never became visible — on this emulator, typically an incoherent
+    // physical tile-counter REUSE. Print the DFB + counter after a long stall (correlate with the last op
+    // launch), then keep spinning so the watcher still reports the hang.
+    {
+        std::uint32_t qsr_stall_spins = 0;
+        while (overlay::llk_intf_get_occupancy(tensix_id, tc_id) < num_entries) {
+            if (++qsr_stall_spins == 50000000u) {
+                DPRINT(
+                    "QSR-DFB-STALL wait_front dfb={} tid={} tc={} need={} occ={} -- consumer stuck; likely "
+                    "#48552 incoherent tile-counter reuse (correlate with last op launch)\n",
+                    (std::uint32_t)logical_dfb_id_,
+                    (std::uint32_t)tensix_id,
+                    (std::uint32_t)tc_id,
+                    (std::uint32_t)num_entries,
+                    (std::uint32_t)overlay::llk_intf_get_occupancy(tensix_id, tc_id));
+            }
+        }
+    }
 #endif
     WAYPOINT("WFD");
 #endif

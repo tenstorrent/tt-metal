@@ -116,6 +116,22 @@ bool tc_lifetime_isolation_enabled() {
     static const bool v = (std::getenv("TT_METAL_QSR_TC_ISOLATE") != nullptr);
     return v;
 }
+// [#48552] No-reuse triage mode: unique physical counters per program, freed on destruction, FATAL on
+// exhaustion (never reuses a live counter -> no incoherent-reuse hang; loud, attributable failure instead).
+bool tc_unique_enabled() {
+    static const bool v = (std::getenv("TT_METAL_QSR_TC_UNIQUE") != nullptr);
+    return v;
+}
+// Used-mask physical pool for the UNIQUE mode: per (core,tensix), a bitmask of counters currently held by a
+// live program (bit i => physical counter i in use). Reserved at finalize, cleared on program destruction.
+struct UniqueTcPool {
+    std::mutex mu;
+    std::unordered_map<CoreCoord, std::array<uint32_t, ::dfb::NUM_TENSIX>> used_mask;
+};
+UniqueTcPool& unique_tc_pool() {
+    static UniqueTcPool pool;
+    return pool;
+}
 
 // [#48552 POC] Per-DISPATCH, free-on-completion physical tile-counter pool (SLOW dispatch). Physical counters
 // per (core,tensix) are DM [0, NUM_TENSIX_TILE_COUNTERS_FOR_DM) and Tensix-only [TC_TENSIX_POOL_START,
@@ -160,6 +176,39 @@ static_assert(::dfb::NUM_TILE_COUNTERS_PER_TENSIX <= 32, "tc id fits in the pool
 
 ::dfb::PackedTileCounter TileCounterAllocator::allocate(const CoreCoord& core, uint8_t tensix_id, bool use_t6_only) {
     TT_FATAL(tensix_id < ::dfb::NUM_TENSIX, "Invalid tensix_id: {}", tensix_id);
+
+    if (tc_unique_enabled()) {
+        // NO-REUSE triage mode: reserve the lowest FREE physical counter from the global pool and hold it for
+        // this program's lifetime (freed in ~TileCounterAllocator). Never reuses a live counter, so it can't
+        // hit the incoherent-reuse hang; if a (core,tensix) pool is exhausted it FATALs with a clear message
+        // (correlate with the op being built) instead of silently colliding/hanging.
+        const uint8_t lo = use_t6_only ? ::dfb::TC_TENSIX_POOL_START : 0;
+        const uint8_t hi = use_t6_only ? ::dfb::NUM_TILE_COUNTERS_PER_TENSIX : ::dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM;
+        auto& pool = unique_tc_pool();
+        std::lock_guard<std::mutex> lk(pool.mu);
+        uint32_t& mask = pool.used_mask[core][tensix_id];
+        uint8_t tc_id = 0xFF;
+        for (uint8_t t = lo; t < hi; ++t) {
+            if ((mask & (1u << t)) == 0u) {
+                tc_id = t;
+                break;
+            }
+        }
+        TT_FATAL(
+            tc_id != 0xFF,
+            "TT_METAL_QSR_TC_UNIQUE: out of {} tile counters on core ({},{}) tensix {} — all {} are held by "
+            "concurrently-live programs. This op needs more physical counters than exist on that (core,tensix); "
+            "the durable fix is coherent counter reuse (see #48552). NOT a wrap-around (by design).",
+            use_t6_only ? "Tensix-only" : "DM-visible",
+            core.x,
+            core.y,
+            tensix_id,
+            hi - lo);
+        mask |= (1u << tc_id);
+        owned_physical_tcs_.push_back(OwnedTc{core, tensix_id, tc_id});
+        return static_cast<::dfb::PackedTileCounter>((tensix_id << ::dfb::PACKED_TC_COUNTER_ID_BITS) | tc_id);
+    }
+
     // Finalize-time baseline: per-program monotonic (restarts at tc_id 0 each program). Under
     // TT_METAL_QSR_TC_ISOLATE this is only a placeholder — the real physical assignment is done per dispatch
     // in ProgramImpl::qsr_rebase_dispatch_tile_counters() and freed on completion.
@@ -184,6 +233,21 @@ static_assert(::dfb::NUM_TILE_COUNTERS_PER_TENSIX <= 32, "tc id fits in the pool
     }
     return static_cast<::dfb::PackedTileCounter>(
         (tensix_id << ::dfb::PACKED_TC_COUNTER_ID_BITS) | tc_id);
+}
+
+TileCounterAllocator::~TileCounterAllocator() {
+    if (owned_physical_tcs_.empty()) {
+        return;  // baseline / ISOLATE modes reserve nothing here
+    }
+    // TT_METAL_QSR_TC_UNIQUE: return this program's physical counters to the global pool on destruction.
+    auto& pool = unique_tc_pool();
+    std::lock_guard<std::mutex> lk(pool.mu);
+    for (const auto& owned : owned_physical_tcs_) {
+        auto it = pool.used_mask.find(owned.core);
+        if (it != pool.used_mask.end()) {
+            it->second[owned.tensix_id] &= ~(1u << owned.tc_id);
+        }
+    }
 }
 
 uint8_t RemapperIndexAllocator::allocate(const CoreCoord& core_coord) {
@@ -1069,6 +1133,11 @@ void ProgramImpl::finalize_dataflow_buffer_configs() {
 // consistent (same (tensix,old_tc) within a DFB -> same new tc). Reservations are freed on completion via
 // qsr_release_dispatch_tile_counters(). Gated by TT_METAL_QSR_TC_ISOLATE. use_remapper DFBs are left untouched.
 void ProgramImpl::qsr_rebase_dispatch_tile_counters() {
+    // UNIQUE (no-reuse) mode assigns unique physical counters at finalize; no per-dispatch rebase (and it takes
+    // precedence over ISOLATE if both are set).
+    if (tt::tt_metal::experimental::dfb::detail::tc_unique_enabled()) {
+        return;
+    }
     if (!tt::tt_metal::experimental::dfb::detail::tc_lifetime_isolation_enabled()) {
         return;
     }
