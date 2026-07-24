@@ -1683,17 +1683,21 @@ def test_slice_rm_height_sharded_override_cache_hit_is_o1(device):
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}
         )
         n, c, w = 1, 1, 16
-        h_out = ncores * 8  # sticks/core after slice
-        h_in = ncores * 10  # extra rows so the slice actually trims padding
+        # Totals scale with the grid, but the per-core shard height is held constant (10 in / 8 out
+        # sticks per core) so the only thing that varies across grids is the core count -- that is what
+        # isolates the O(num_cores) rebuild signal. Per-core height = total // ncores (matches the
+        # _rm_height_sharded_slice helper below).
+        h_out = ncores * 8  # total out height (8 sticks/core after slice)
+        h_in = ncores * 10  # total in height (10 sticks/core; extra rows so the slice trims padding)
         in_cfg = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
-            ttnn.ShardSpec(grid, (h_in, w), ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(grid, (h_in // ncores, w), ttnn.ShardOrientation.ROW_MAJOR),
         )
         out_cfg = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
-            ttnn.ShardSpec(grid, (h_out, w), ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(grid, (h_out // ncores, w), ttnn.ShardOrientation.ROW_MAJOR),
         )
         t = torch.rand((n, c, h_in, w), dtype=torch.bfloat16)
         tt = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_cfg)
