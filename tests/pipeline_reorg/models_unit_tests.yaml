@@ -4,6 +4,7 @@
 #   name: The display name for the job in GitHub Actions.
 #   cmd: The exact command to run (env vars must be inlined).
 #   model: Model identifier for filtering (workflow_dispatch model selection).
+#   model_family: (optional) Human-facing model family for grouping/reporting (e.g. Llama, Qwen, Gemma). Omit when a test spans multiple families.
 #   skus: A mapping of SKU names to their configuration:
 #     timeout: Job timeout in minutes.
 #     tier: Model tier (1, 2, or 3) used to filter which pipeline runs this test.
@@ -26,6 +27,7 @@
     # pytest --timeout 500 models/tt_transformers/tests/test_model.py -k full
     # pytest --timeout 500 models/tt_transformers/tests/test_model_prefill.py -k "performance and not accuracy"
   model: llama3.1-8b
+  model_family: Llama
   skus:
     wh_n150:
       timeout: 30
@@ -43,6 +45,7 @@
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py -k 32-page_params  # batch 32 only
     pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py -k 128-page_params  # 128 seqlen only
   model: llama3.2-1b
+  model_family: Llama
   skus:
     wh_n150:
       timeout: 5
@@ -57,6 +60,7 @@
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py -k 32-page_params  # batch 32 only
     pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py -k 128-page_params  # 128 seqlen only
   model: llama3.2-3b
+  model_family: Llama
   skus:
     wh_n150:
       timeout: 5
@@ -71,6 +75,7 @@
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py -k 32-page_params  # batch 32 only
     pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py -k 128-page_params  # 128 seqlen only
   model: llama3.2-11b-vision
+  model_family: Llama
   skus:
     wh_llmbox_perf:
       timeout: 5
@@ -96,6 +101,7 @@
     # pytest --timeout 900 models/tt_transformers/tests/test_model.py -k quick
     # pytest --timeout 900 models/tt_transformers/tests/test_model_prefill.py -k "performance and 1layer"
   model: llama3.2-90b-vision
+  model_family: Llama
   skus:
     wh_llmbox_perf:
       timeout: 15
@@ -115,6 +121,7 @@
     pytest --timeout 900 models/tt_transformers/tests/test_decoder.py
     pytest --timeout 900 models/tt_transformers/tests/test_decoder_prefill.py
   model: llama3.3-70b
+  model_family: Llama
   skus:
     wh_llmbox_perf:
       timeout: 20
@@ -133,6 +140,7 @@
     pytest --timeout 900 models/tt_transformers/tests/test_decoder.py
     pytest --timeout 900 models/tt_transformers/tests/test_decoder_prefill.py
   model: qwen3-32b
+  model_family: Qwen
   skus:
     wh_llmbox_perf:
       timeout: 20
@@ -151,6 +159,7 @@
     pytest --timeout 900 models/tt_transformers/tests/test_decoder.py
     pytest --timeout 900 models/tt_transformers/tests/test_decoder_prefill.py
   model: qwen2.5-32b
+  model_family: Qwen
   skus:
     wh_llmbox_perf:
       timeout: 18
@@ -169,6 +178,7 @@
     pytest --timeout 900 models/tt_transformers/tests/test_decoder.py
     pytest --timeout 900 models/tt_transformers/tests/test_decoder_prefill.py
   model: qwen2.5-coder-32b
+  model_family: Qwen
   skus:
     wh_llmbox_perf:
       timeout: 15
@@ -191,6 +201,7 @@
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_wrapped_model.py
   model: qwen3.6-27b
+  model_family: Qwen
   skus:
     bh_quietbox_2:
       timeout: 28
@@ -212,6 +223,7 @@
     #pytest --timeout 600 models/tt_transformers/tests/test_model.py -k full
     #pytest --timeout 600 models/tt_transformers/tests/test_model_prefill.py -k "performance and not accuracy"
   model: mistral-7b
+  model_family: Mistral
   skus:
     wh_n150:
       timeout: 20
@@ -224,6 +236,7 @@
     export TT_METAL_WATCHER=30
     pytest --timeout 600 models/demos/multimodal/gemma3/tests/test_ci_dispatch.py -k "4b"
   model: gemma-3-4b
+  model_family: Gemma
   skus:
     wh_n150:
       timeout: 22
@@ -236,6 +249,7 @@
     export TT_METAL_WATCHER=30
     pytest --timeout 600 models/demos/multimodal/gemma3/tests/test_ci_dispatch.py -k "27b"
   model: gemma-3-27b
+  model_family: Gemma
   skus:
     wh_llmbox_perf:
       timeout: 22
@@ -249,6 +263,7 @@
     export TT_METAL_WATCHER=30
     pytest --timeout 600 models/experimental/janus_pro/tests/test_ci_dispatch.py
   model: janus-pro-7b
+  model_family: Janus
   skus:
     bh_p150:
       timeout: 2
@@ -300,6 +315,7 @@
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/
   model: gemma-4-e2b
+  model_family: Gemma
   skus:
     wh_n150:
       timeout: 10
@@ -326,6 +342,7 @@
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/
   model: gemma-4-e4b
+  model_family: Gemma
   skus:
     # wh_n300 disabled due to reduced N300 runner availability — re-enable when capacity returns.
     # wh_n300:
@@ -356,6 +373,7 @@
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/
   model: gemma-4-26b-a4b
+  model_family: Gemma
   skus:
     wh_llmbox:
       timeout: 30
@@ -390,6 +408,7 @@
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/
   model: gemma-4-31b
+  model_family: Gemma
   skus:
     wh_llmbox:
       timeout: 25
@@ -422,6 +441,7 @@
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/
   model: gemma-4-12b
+  model_family: Gemma
   skus:
     bh_quietbox_2:
       timeout: 15
@@ -434,6 +454,7 @@
     export TT_METAL_WATCHER=30
     pytest --timeout 600 models/experimental/functional_unet/tests/test_unet_model.py
   model: shallow-unet
+  model_family: UNet
   skus:
     wh_n150:
       timeout: 5
@@ -459,6 +480,7 @@
     pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_model.py -k "performance and not accuracy and quick"
     pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py -k "paged_attention"
   model: mixtral-8x7b
+  model_family: Mistral
   skus:
     wh_llmbox_perf:
       timeout: 30
@@ -496,6 +518,7 @@
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_decoder.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_decoder_prefill.py
   model: qwen3-32b-galaxy
+  model_family: Qwen
   skus:
     wh_galaxy_perf:
       timeout: 10
@@ -511,6 +534,7 @@
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_attention.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_decoder.py
   model: qwen3-32b-galaxy
+  model_family: Qwen
   skus:
     bh_galaxy:
       timeout: 25
@@ -527,6 +551,7 @@
     export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-20b
     pytest --timeout 600 models/demos/gpt_oss/tests/unit/
   model: gpt-oss-20b
+  model_family: GPT-OSS
   skus:
     # Wormhole
     wh_llmbox:
@@ -552,6 +577,7 @@
     [ "${MLPERF_READ_ONLY:-true}" = "false" ] && SKIP_MODEL_LOAD=""
     pytest --timeout 1500 models/demos/gpt_oss/tests/unit $SKIP_MODEL_LOAD
   model: gpt-oss-120b
+  model_family: GPT-OSS
   skus:
     # Wormhole
     wh_llmbox:
@@ -584,6 +610,7 @@
     pytest --timeout 600 models/demos/audio/whisper/tests/test_whisper_modules.py
     pytest --timeout 600 models/demos/audio/whisper/tests/test_whisper_streaming_detok.py
   model: whisper
+  model_family: Whisper
   skus:
     wh_n150:
       timeout: 10
@@ -604,6 +631,7 @@
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py
     pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py
   model: qwq-32b
+  model_family: Qwen
   skus:
     wh_llmbox_perf:
       timeout: 30
@@ -616,6 +644,7 @@
     export TT_METAL_WATCHER=30
     pytest --timeout 300 models/demos/ttnn_falcon7b/tests/test_falcon_decoder.py
   model: falcon-7b
+  model_family: Falcon
   skus:
     wh_n150:
       timeout: 5
@@ -628,6 +657,7 @@
     export TT_METAL_WATCHER=30
     pytest --timeout 300 models/demos/t3000/falcon40b/tests/test_falcon_decoder.py
   model: falcon-40b
+  model_family: Falcon
   skus:
     wh_llmbox_perf:
       timeout: 5
@@ -642,6 +672,7 @@
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py -k 32-page_params  # batch 32 only
     pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py -k 128-page_params  # 128 seqlen only
   model: qwen2.5-7b
+  model_family: Qwen
   skus:
     wh_n300:
       timeout: 5
@@ -656,6 +687,7 @@
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py -k 32-page_params  # batch 32 only
     pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py -k 128-page_params  # 128 seqlen only
   model: qwen2.5-72b
+  model_family: Qwen
   skus:
     wh_llmbox_perf:
       timeout: 5
@@ -670,6 +702,7 @@
     export HF_MODEL=Qwen/Qwen2.5-VL-72B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-VL-72B-Instruct MESH_DEVICE=T3K
     pytest --timeout 600 models/demos/qwen25_vl/tests/ --ignore=models/demos/qwen25_vl/tests/test_ci_dispatch.py --ignore=models/demos/qwen25_vl/tests/conftest.py
   model: qwen2.5-vl-72b
+  model_family: Qwen
   skus:
     wh_llmbox_perf:
       timeout: 15
@@ -684,6 +717,7 @@
     export HF_MODEL=Qwen/Qwen2.5-VL-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-VL-32B-Instruct MESH_DEVICE=T3K
     pytest --timeout 300 models/demos/qwen25_vl/tests/test_model.py
   model: qwen2.5-vl-32b
+  model_family: Qwen
   skus:
     wh_llmbox_perf:
       timeout: 5
@@ -698,6 +732,7 @@
     export HF_MODEL=Qwen/Qwen3-VL-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-VL-32B-Instruct MESH_DEVICE=T3K PYTEST_ADDOPTS="--tb=short"
     pytest models/demos/qwen3_vl/tests/ --ignore=models/demos/qwen3_vl/tests/test_ci_dispatch.py --ignore=models/demos/qwen3_vl/tests/conftest.py
   model: qwen3-vl-32b
+  model_family: Qwen
   skus:
     wh_llmbox:
       timeout: 15
@@ -712,6 +747,7 @@
     pytest --timeout 240 models/tt_transformers/tests/test_decoder.py -k 32-page_params  # batch 32 only
     pytest --timeout 240 models/tt_transformers/tests/test_decoder_prefill.py -k 128-page_params  # 128 seqlen only
   model: phi-3-mini
+  model_family: Phi
   skus:
     wh_n150:
       timeout: 8
@@ -773,6 +809,7 @@
     pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_schnell
     pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_transformer_flux1.py -k flux_schnell
   model: flux.1-schnell
+  model_family: Flux
   skus:
     bh_quietbox_2:
       timeout: 20
@@ -788,6 +825,7 @@
     pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_dev
     pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_transformer_flux1.py -k flux_dev
   model: flux.1-dev
+  model_family: Flux
   skus:
     bh_quietbox_2:
       timeout: 20
@@ -805,6 +843,7 @@
     pytest --timeout 900 models/demos/stable_diffusion_xl_base/lora/tests/pcc || exit_code=$?
     exit $exit_code
   model: sdxl
+  model_family: Stable Diffusion
   skus:
     wh_n150:
       timeout: 40
@@ -824,6 +863,7 @@
     export HF_HUB_OFFLINE=0
     pytest --timeout 600 models/demos/stable_diffusion_xl_base/refiner/tests/pcc --ignore=models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py
   model: sdxl
+  model_family: Stable Diffusion
   skus:
     wh_n150:
       timeout: 20
@@ -843,6 +883,7 @@
     export HF_HUB_OFFLINE=0
     pytest --timeout 600 models/demos/stable_diffusion_xl_base/vae/tests/pcc --ignore=models/demos/stable_diffusion_xl_base/vae/tests/pcc/test_welford_state_leak_regression.py
   model: sdxl
+  model_family: Stable Diffusion
   skus:
     wh_n150:
       timeout: 20
@@ -862,6 +903,7 @@
     export HF_HUB_OFFLINE=0
     pytest --timeout 600 models/demos/stable_diffusion_xl_base/tests/pcc --ignore=models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --ignore=models/demos/stable_diffusion_xl_base/tests/pcc/test_euler_discrete_scheduler.py
   model: sdxl
+  model_family: Stable Diffusion
   skus:
     wh_n150:
       timeout: 20
@@ -884,6 +926,7 @@
     pytest models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600 || exit_code=$?
     exit $exit_code
   model: sdxl
+  model_family: Stable Diffusion
   skus:
     wh_n150:
       timeout: 60
@@ -906,6 +949,7 @@
     pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600 || exit_code=$?
     exit $exit_code
   model: sdxl
+  model_family: Stable Diffusion
   skus:
     wh_n150:
       timeout: 60
@@ -950,6 +994,7 @@
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
       python3 -m pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k "flux_dev and 2x4sp0tp1"
   model: flux-multihost-tests
+  model_family: Flux
   skus:
     bh_sc1:
       timeout: 20
@@ -966,6 +1011,7 @@
     pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "not 720p"
     pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py
   model: wan-2.2-t2v
+  model_family: Wan
   skus:
     # bh_galaxy:
     #   timeout: 150
@@ -985,6 +1031,7 @@
   # NOTE! The -k filtering above is a hack! We ideally should test both is_fsdp0 and is_fsdp1
   # but wh_galaxies error with OOM right now for fsdp0. This workaround lets tests pass on wh_galaxy.
   model: wan-2.2-i2v
+  model_family: Wan
   skus:
     # bh_galaxy:
     #   timeout: 120
@@ -998,6 +1045,7 @@
 - name: panoptic-deeplab unit tests
   cmd: TT_METAL_WATCHER=30 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/tests/pcc/ --timeout=420
   model: panoptic-deeplab
+  model_family: Panoptic-DeepLab
   skus:
     bh_p150b_civ2:
       timeout: 8
@@ -1008,6 +1056,7 @@
 - name: bevformer unit tests
   cmd: TT_METAL_WATCHER=30 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/bevformer/tests/pcc/ --timeout=660
   model: bevformer
+  model_family: BEVFormer
   skus:
     bh_p150b_civ2:
       timeout: 12

@@ -108,7 +108,7 @@ struct KNSlicedMatmul {
             constexpr bool finalize = true;
             constexpr uint32_t out_w = CTArgs::out_w;
 
-            reconfig_data_format<false, true>(args.weights_cb, args.act_cb);
+            reconfig_data_format<SrcOrder::Reverse, true>(args.act_cb, args.weights_cb);
             pack_reconfig_data_format<true>(args.out_cb);
 
             custom_mm_block_init_short<transpose, split_acc, dense_packing>(
