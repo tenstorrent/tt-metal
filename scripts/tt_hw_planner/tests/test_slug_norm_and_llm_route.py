@@ -396,6 +396,19 @@ def test_llm_category_fallback_only_on_residual(monkeypatch):
     assert P._llm_resolve_category("kyutai/mimi", cfg, "feature-extraction") is None
 
 
+def test_generative_vlm_fact_is_authoritative():
+    # a generative model with a vision tower is provably a VLM (Ornith: text-heavy card but
+    # vision_config present). This FACT is authoritative -- the agent cannot override it to LLM.
+    from scripts.tt_hw_planner.probe import _has_generative_vlm_fact as F
+
+    assert F({"vision_config": {}, "architectures": ["Qwen3_5ForConditionalGeneration"]}) is True
+    assert F({"image_token_id": 5, "architectures": ["FooForCausalLM"]}) is True
+    # a bare contrastive dual-encoder (CLIP) has vision_config but no generative head -> NOT this fact
+    assert F({"vision_config": {}, "text_config": {}, "architectures": ["CLIPModel"]}) is False
+    # text-only LLM -> no vision tower -> False
+    assert F({"architectures": ["LlamaForCausalLM"]}) is False
+
+
 def test_dual_encoder_contrastive_is_a_fact_not_llm():
     # contrastive dual-encoders (CLIP/ALIGN/CLAP) were flaky under the LLM residual
     # (it flips them to a generation category); they carry a STRUCTURAL fact -- text_config

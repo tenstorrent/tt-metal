@@ -196,19 +196,16 @@ def _agent_classify_category(model_id: str, cfg: dict, card_text: str = "") -> O
 
         salient = {
             k: cfg.get(k)
-            for k in (
-                "model_type",
-                "architectures",
-                "is_encoder_decoder",
-                "pipeline_tag",
-                "vision_config",
-                "audio_config",
-                "text_config",
-                "sampling_rate",
-                "codebook_size",
-            )
+            for k in ("model_type", "architectures", "is_encoder_decoder", "pipeline_tag", "sampling_rate")
             if k in cfg
         }
+        # crisp presence FLAGS for the big nested sub-configs -- dumping the full dicts buried the
+        # signal and got truncated, so the agent missed the vision tower (e.g. Ornith VLM -> LLM).
+        salient["has_vision_tower"] = (
+            ("vision_config" in cfg) or ("image_token_id" in cfg) or ("vision_start_token_id" in cfg)
+        )
+        salient["has_audio_config"] = ("audio_config" in cfg) or ("codebook_size" in cfg)
+        salient["has_text_config"] = "text_config" in cfg
         prompt = (
             "You are categorizing a Hugging Face model for hardware bring-up on Tenstorrent "
             "accelerators. Investigate the model (you MAY use WebFetch on its Hugging Face page "
@@ -221,7 +218,11 @@ def _agent_classify_category(model_id: str, cfg: dict, card_text: str = "") -> O
             "SYNTHESIZE that media (not analyze it); a model that is not a text/vision/audio deep "
             "network (tabular, time-series, RL/robotics, graph, molecular) is Unknown. STT means "
             "SPEECH/AUDIO -> text: it REQUIRES audio input. Reading text FROM IMAGES or documents "
-            "(OCR, e.g. a VisionEncoderDecoder) is VLM, never STT.\n"
+            "(OCR, e.g. a VisionEncoderDecoder) is VLM, never STT. If the config declares a vision "
+            "tower (vision_config / image_token / vision_start_token) AND the model GENERATES text, "
+            "it is a VLM even when the description stresses reasoning or text -- the vision tower "
+            "means it accepts images (this does NOT apply to a bare contrastive dual-encoder, which "
+            "stays Embed).\n"
             f"model_id: {model_id}\n"
             f"config (salient keys): {json.dumps(salient)[:1500]}\n"
             f"model card (excerpt): {card_text[:3000]}\n"
@@ -320,6 +321,21 @@ def _is_dual_encoder_contrastive(cfg: dict) -> bool:
     # task model built ON a dual encoder, not a contrastive retriever -> let it flow onward.
     task_head = re.search(r"For[A-Z]", archs)
     return has_text and has_other and not task_head
+
+
+def _has_generative_vlm_fact(cfg: dict) -> bool:
+    """DEFINITIVE fact: the config declares a vision tower (vision_config / image_token /
+    vision_start_token) AND the architecture GENERATES text (*ForCausalLM / *ForCausalMM /
+    *ForConditionalGeneration). Such a model provably accepts images and emits text -> VLM.
+    This is a structural fact, not a per-model rule, and it is AUTHORITATIVE: the agent must
+    not override it (LLMs over-weight a text-heavy card and miss the vision tower, e.g. Ornith).
+    A bare contrastive dual-encoder (CLIP: vision_config but a *Model class, no generative head)
+    is excluded -- it stays Embed."""
+    keys = set(cfg or {})
+    has_vision = bool(keys & {"vision_config", "image_token_id", "vision_start_token_id", "image_token_index"})
+    archs = " ".join((cfg or {}).get("architectures") or [])
+    generative = re.search(r"For(Causal(LM|MM)|ConditionalGeneration)\b", archs)
+    return has_vision and bool(generative)
 
 
 def _has_audio_markers(cfg: dict) -> bool:
@@ -799,20 +815,23 @@ def _probe_local_model(model_id: str) -> ModelProbe:
     )
     if category == "Unknown":
         category = _category_from_fingerprint(_fpr) or category
-    # PRIMARY: a real agent reads the model (config + card, may investigate further) and decides.
-    # The deterministic chain above is the offline fallback used only when the agent is disabled
-    # or unavailable -- so a brand-new model is classified by reasoning, not a table.
-    _agent_cat = _agent_classify_category(model_id, cfg, _fetch_model_card_text(model_id))
-    if _agent_cat:
-        category = _agent_cat
+    if _has_generative_vlm_fact(cfg):
+        # AUTHORITATIVE structural fact -- a generative model with a vision tower is a VLM; the
+        # agent does not get to override it (it over-weights text-heavy cards and misses vision).
+        category = "VLM"
     else:
-        _resid = _is_category_residual(model_type_category, _fpr)
-        if _resid and _is_dual_encoder_contrastive(cfg) and category in {"Unknown", "Embed"}:
-            category = "Embed"
-        elif _resid and (category == "Unknown" or (category == "Embed" and _has_audio_markers(cfg))):
-            _llm_cat = _llm_resolve_category(model_id, cfg, pipeline_tag)
-            if _llm_cat:
-                category = _llm_cat
+        # No definitive fact: a real agent reads the model and decides (reasoning, not a table).
+        _agent_cat = _agent_classify_category(model_id, cfg, _fetch_model_card_text(model_id))
+        if _agent_cat:
+            category = _agent_cat
+        else:
+            _resid = _is_category_residual(model_type_category, _fpr)
+            if _resid and _is_dual_encoder_contrastive(cfg) and category in {"Unknown", "Embed"}:
+                category = "Embed"
+            elif _resid and (category == "Unknown" or (category == "Embed" and _has_audio_markers(cfg))):
+                _llm_cat = _llm_resolve_category(model_id, cfg, pipeline_tag)
+                if _llm_cat:
+                    category = _llm_cat
 
     _td = str(cfg.get("torch_dtype") or "").lower().replace("torch.", "").strip()
     _bpp = _TORCH_DTYPE_BYTES.get(_td)
@@ -982,27 +1001,33 @@ def probe_model(model_id: str) -> ModelProbe:
         if _fp_cat:
             probe.flags.append(f"Category Unknown -> {_fp_cat!r} via structural fingerprint {_fpr!r}")
             probe.category = _fp_cat
-    # PRIMARY: a real agent reads the model (config + card, may investigate the hub) and decides
-    # its category by REASONING -- the generalizing path. The deterministic chain above / below is
-    # the offline fallback, used only when the agent is disabled or unavailable.
-    _agent_cat = _agent_classify_category(model_id, cfg, _fetch_model_card_text(model_id))
-    if _agent_cat:
-        if _agent_cat != probe.category:
-            probe.flags.append(f"Category {probe.category!r} -> {_agent_cat!r} by agent (read card+config, verified)")
-            probe.category = _agent_cat
+    if _has_generative_vlm_fact(cfg):
+        # AUTHORITATIVE fact: a generative model with a vision tower is a VLM. Not overridable by
+        # the agent (which over-weights text-heavy cards and can miss the vision tower, e.g. Ornith).
+        if probe.category != "VLM":
+            probe.flags.append("Category -> 'VLM' via structural fact (vision tower + generative arch)")
+            probe.category = "VLM"
     else:
-        _resid = _is_category_residual(model_type_category, _fpr)
-        if _resid and _is_dual_encoder_contrastive(cfg) and probe.category in {"Unknown", "Embed"}:
-            if probe.category != "Embed":
-                probe.flags.append(
-                    "Category -> 'Embed' via dual-encoder contrastive fact (text_config + vision/audio_config)"
-                )
-                probe.category = "Embed"
-        elif _resid and (probe.category == "Unknown" or (probe.category == "Embed" and _has_audio_markers(cfg))):
-            _llm_cat = _llm_resolve_category(model_id, cfg, probe.pipeline_tag)
-            if _llm_cat and _llm_cat != probe.category:
-                probe.flags.append(f"Category {probe.category!r} -> {_llm_cat!r} by LLM one-shot fallback.")
-                probe.category = _llm_cat
+        # No definitive fact: a real agent reads the model and decides by REASONING (the
+        # generalizing path). The deterministic chain is the offline fallback.
+        _agent_cat = _agent_classify_category(model_id, cfg, _fetch_model_card_text(model_id))
+        if _agent_cat:
+            if _agent_cat != probe.category:
+                probe.flags.append(f"Category {probe.category!r} -> {_agent_cat!r} by agent (read card+config)")
+                probe.category = _agent_cat
+        else:
+            _resid = _is_category_residual(model_type_category, _fpr)
+            if _resid and _is_dual_encoder_contrastive(cfg) and probe.category in {"Unknown", "Embed"}:
+                if probe.category != "Embed":
+                    probe.flags.append(
+                        "Category -> 'Embed' via dual-encoder contrastive fact (text_config + vision/audio_config)"
+                    )
+                    probe.category = "Embed"
+            elif _resid and (probe.category == "Unknown" or (probe.category == "Embed" and _has_audio_markers(cfg))):
+                _llm_cat = _llm_resolve_category(model_id, cfg, probe.pipeline_tag)
+                if _llm_cat and _llm_cat != probe.category:
+                    probe.flags.append(f"Category {probe.category!r} -> {_llm_cat!r} by LLM one-shot fallback.")
+                    probe.category = _llm_cat
 
     if _is_low_confidence_category(probe.pipeline_tag, model_type_category, _arch_changed):
         probe.flags.append(
