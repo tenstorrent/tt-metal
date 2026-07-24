@@ -367,7 +367,7 @@ def test_llm_category_fallback_only_on_residual(monkeypatch):
         calls["n"] += 1
         return '{"category": "TTS"}'
 
-    monkeypatch.setattr("scripts.tt_hw_planner.llm_synth.invoke_llm_cli_one_shot", _fake_invoke)
+    monkeypatch.setattr("scripts.tt_hw_planner.llm_synth.invoke_llm_agent", _fake_invoke)
     monkeypatch.setattr("scripts.tt_hw_planner.probe._fetch_model_card_text", lambda mid: "")  # no network in CI
     monkeypatch.setenv("TT_HW_PLANNER_LLM_CATEGORY", "1")
     monkeypatch.setenv("TT_HW_PLANNER_CATEGORY_VOTES", "1")  # deterministic single-ask for the count assert
@@ -382,13 +382,11 @@ def test_llm_category_fallback_only_on_residual(monkeypatch):
     P._LLM_CATEGORY_CACHE.clear()
     monkeypatch.setenv("TT_HW_PLANNER_CATEGORY_VOTES", "3")
     seq = iter(['{"category":"TTS"}', '{"category":"STT"}', '{"category":"TTS"}'])
-    monkeypatch.setattr("scripts.tt_hw_planner.llm_synth.invoke_llm_cli_one_shot", lambda p, **k: next(seq))
+    monkeypatch.setattr("scripts.tt_hw_planner.llm_synth.invoke_llm_agent", lambda p, **k: next(seq))
     assert P._llm_resolve_category("vote/model", cfg, None) == "TTS"
     # a bogus category from the LLM is rejected (validated against the allowed set)
     P._LLM_CATEGORY_CACHE.clear()
-    monkeypatch.setattr(
-        "scripts.tt_hw_planner.llm_synth.invoke_llm_cli_one_shot", lambda p, **k: '{"category": "Banana"}'
-    )
+    monkeypatch.setattr("scripts.tt_hw_planner.llm_synth.invoke_llm_agent", lambda p, **k: '{"category": "Banana"}')
     assert P._llm_resolve_category("x/y", cfg, None) is None
     # gate off -> never invokes, returns None (deterministic result stands)
     P._LLM_CATEGORY_CACHE.clear()

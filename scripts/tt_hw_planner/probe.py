@@ -396,7 +396,7 @@ def _llm_resolve_category(model_id: str, cfg: dict, pipeline_tag: Optional[str],
         card_text = _fetch_model_card_text(model_id)
     result: Optional[str] = None
     try:
-        from .llm_synth import extract_json_from_llm_output, invoke_llm_cli_one_shot
+        from .llm_synth import extract_json_from_llm_output, invoke_llm_agent
 
         key_cfg = {
             k: cfg.get(k)
@@ -447,7 +447,7 @@ def _llm_resolve_category(model_id: str, cfg: dict, pipeline_tag: Optional[str],
 
         def _one_vote(_i: int) -> Optional[str]:
             try:
-                raw = invoke_llm_cli_one_shot(prompt, model="opus", timeout_s=90)
+                raw = invoke_llm_agent(prompt, model="opus", timeout_s=200)
                 parsed = extract_json_from_llm_output(raw) or {}
                 cand = str(parsed.get("category") or "").strip()
                 for c in _VALID_CATEGORIES:
