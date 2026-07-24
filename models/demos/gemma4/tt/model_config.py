@@ -14,6 +14,7 @@ via HF AutoConfig. Specify model path via HF_MODEL env var.
 """
 
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,6 +24,41 @@ from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM
 
 import ttnn
+
+
+def _ensure_writable_cache_dir(cache_path: Path) -> Path:
+    """Return ``cache_path`` if it can be written to, else a writable temp fallback.
+
+    The CI e2e caches (e.g. ``/mnt/MLPerf/huggingface/tt_cache/...``) are mounted
+    read-only and pre-populated with a *fixed* set of tensorbin files. Any code
+    change that produces a new cache filename — e.g. fusing gate_proj+up_proj into
+    ``gate_up_proj.weight`` or adding the ``_i{padded_split}`` shape tag — is a
+    guaranteed cache miss there, and ``ttnn.as_tensor`` then tries to *write* the
+    freshly-computed tensor, which throws ``errno=30 "Read-only file system"``.
+
+    Falling back to a per-model temp dir keeps the run working (weights are simply
+    regenerated in-process) instead of crashing. On a normal writable mount the
+    requested path is used unchanged, so caching still persists across runs.
+    """
+    try:
+        cache_path.mkdir(parents=True, exist_ok=True)
+        # mkdir succeeding doesn't guarantee the mount is writable (an existing
+        # read-only dir is a no-op), so probe with an actual create+delete.
+        probe = cache_path / ".tt_cache_write_probe"
+        probe.touch()
+        probe.unlink()
+        return cache_path
+    except OSError as e:
+        # Qualify the fallback with the model dir name (cache_path.parent.name) so
+        # concurrent runs of different models on the same host don't collide in
+        # the shared temp dir (e.g. .../tt_cache/google--gemma-4-26B-A4B-it/tensor_cache_bf16).
+        fallback = Path(tempfile.gettempdir()) / "tt_cache" / cache_path.parent.name / cache_path.name
+        logger.warning(
+            f"Weight cache dir {cache_path} is not writable ({e.__class__.__name__}: {e}); "
+            f"falling back to {fallback}. Weights will be regenerated (not persisted) this run."
+        )
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
 
 
 @dataclass
@@ -240,8 +276,7 @@ class Gemma4ModelArgs:
             raise ValueError("model_cache_path must be initialized before requesting a weight cache path")
         dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
         cache_path = self.model_cache_path / f"tensor_cache_{dtype_str}"
-        cache_path.mkdir(parents=True, exist_ok=True)
-        return cache_path
+        return _ensure_writable_cache_dir(cache_path)
 
 
 @dataclass
@@ -302,5 +337,4 @@ class Gemma4AssistantArgs:
             raise ValueError("model_cache_path must be initialized before requesting a weight cache path")
         dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
         cache_path = self.model_cache_path / f"assistant_tensor_cache_{dtype_str}"
-        cache_path.mkdir(parents=True, exist_ok=True)
-        return cache_path
+        return _ensure_writable_cache_dir(cache_path)

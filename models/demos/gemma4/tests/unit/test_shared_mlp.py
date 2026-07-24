@@ -3,8 +3,8 @@
 
 """Unit tests for Gemma4 SharedMLP — uses HF Gemma4TextMLP as reference.
 
-    pytest -k "1x1"   # single card
-    pytest -k "1x8"   # T3K with CCL all-reduce
+pytest -k "1x1"   # single card
+pytest -k "1x8"   # T3K with CCL all-reduce
 """
 
 import torch
@@ -65,7 +65,7 @@ def test_shared_mlp(batch_size, seq_len, mesh_device, reset_seeds, request):
         dtype=ttnn.bfloat16,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
     )
-    tt_output = tt_mlp(x_tt)
+    tt_output = tt_mlp(x_tt, is_decode=(seq_len == 1))
     tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0]) if is_mesh else ttnn.to_torch(tt_output)
 
     passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=get_pcc_threshold(request))
