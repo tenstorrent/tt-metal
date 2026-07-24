@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <tuple>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -30,6 +31,10 @@ struct DeepseekMoEReduceScatterParams {
     uint32_t dim;
     uint32_t num_links;
     std::optional<uint32_t> cluster_axis;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("output_memory_config", "dim", "num_links", "cluster_axis");
+    auto attribute_values() const { return std::make_tuple(output_memory_config, dim, num_links, cluster_axis); }
 
     auto attributes() const {
         using ttsl::reflection::Attribute;

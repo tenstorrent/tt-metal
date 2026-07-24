@@ -183,17 +183,6 @@ std::vector<ttnn::Tensor> DeepseekMoEReduceScatterDeviceOperation::create_output
     };
 }
 
-ttsl::hash::hash_t DeepseekMoEReduceScatterDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "DeepseekMoEReduceScatterDeviceOperation::compute_program_hash is called");
-    return tt::tt_metal::operation::hash_operation<DeepseekMoEReduceScatterDeviceOperation>(
-        operation_attributes.output_memory_config,
-        operation_attributes.dim,
-        operation_attributes.num_links,
-        operation_attributes.cluster_axis,
-        tensor_args);
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
