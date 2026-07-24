@@ -649,17 +649,22 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
     # 2-CQ). Routed via recall_knobs(op_class=host_fallback). Cleared once a measured 'structural'
     # attempt is on file — a trace that doesn't help still counts as tried (bounded, can't hang).
     if bound == "host" or (open_op.get("bucket") or "").lower() == "host_fallback":
-        if not (kinds & {"structural", "trace", "2cq"}):
+        if not (kinds & {"structural", "trace", "2cq", "trace-2cq"}):
             return (
                 False,
-                "structural",
-                "host/dispatch-bound: recall_knobs(op_class='host_fallback') and apply a "
-                "trace-capture / 2-CQ structural lever to the generation loop; record_kernel_attempt(...,'structural',...)",
+                "trace-2cq",
+                "host/dispatch-bound: recall_knobs(op_class='host_fallback') and apply the "
+                "trace-capture / 2-CQ DISPATCH lever to the generation loop; record_kernel_attempt(...,'trace-2cq',...). "
+                "NOTE: trace/2CQ removes DISPATCH gaps only. If decode is repeat_prefill (no KV-cache), the bulk of "
+                "this bucket is REDUNDANT RECOMPUTE, which trace does NOT remove — that is handled by the SEPARATE "
+                "generation_loop 'kv-cache' target, not here.",
             )
         return (
             True,
             "done",
-            "host lever tried (trace/2-CQ) -> remaining dispatch residual is irreducible by the loop transform",
+            "trace/2-CQ DISPATCH lever tried -> remaining DISPATCH residual is bounded by the loop transform. "
+            "This does NOT clear a repeat_prefill RECOMPUTE gap: if the generation_loop 'kv-cache' target is still "
+            "blocking, the residual here is redundant recompute, reducible ONLY by a KV-cache (NOT irreducible).",
         )
     # BOX (1) KNOBS — exhaust the cheap levers IN ORDER before any kernel. A knob is satisfied when
     # the profile tag shows it applied, OR a record_kernel_attempt of that knob-kind is on file (so a
@@ -2132,15 +2137,29 @@ def _decode_gate(prof: dict, attempts: list) -> dict | None:
     recompute = bool(scale) if scale is not None else _decode_is_recompute(_MODEL_ROOT)
     if not (repeat or recompute):
         return None
-    if any((a.get("kernel_kind") or "").lower() in ("structural-decode", "kv-cache") for a in attempts):
+    # MEASUREMENT-GATED EXIT: this lever clears ONLY when a KV-cache attempt actually reduced cost
+    # (beat_baseline == a measured per-token reduction). A generic 'structural'/trace attempt does NOT
+    # clear it — trace removes dispatch gaps, not recompute. Bounded by PERF_MCP_MAX_KV_ATTEMPTS so a
+    # genuinely infeasible cache cannot loop forever: after N real kv-cache attempts the gate yields.
+    _kv_kinds = ("structural-decode", "kv-cache")
+    kv_attempts = [a for a in attempts if (a.get("kernel_kind") or "").lower() in _kv_kinds]
+    kv_won = any(a.get("beat_baseline") for a in kv_attempts)
+    max_kv = int(os.environ.get("PERF_MCP_MAX_KV_ATTEMPTS", "3") or "3")
+    if kv_won or len(kv_attempts) >= max_kv:
         return None
     reason = (
-        "repeat_prefill: decode re-runs the full prefill every token (no cached decode_step / "
-        "KV-cache); add a KV-cache + single-token decode_step (recall_knobs(op_class='decode'))"
+        "MANDATORY kv-cache — a lever SEPARATE from trace/2CQ. decode is repeat_prefill: it re-runs the "
+        "full prefill every token (no cached decode_step / KV-cache). Trace/2CQ removes DISPATCH gaps ONLY "
+        "and does NOT remove this REDUNDANT RECOMPUTE, so 'trace already applied' / 'irreducible' does NOT "
+        "resolve this and will NOT clear the gate. You MUST add a KV-cache + single-token decode_step "
+        "(recall_knobs(op_class='decode')). Then record_kernel_attempt(op='generation_loop','kv-cache',"
+        "measured_ms,beat_baseline) — this gate clears ONLY on a MEASURED per-token reduction from the cache."
         if repeat
-        else "recompute decode: per-token cost scales with capacity (use_cache=False, no KV-cache write) "
-        "-> O(capacity) recompute every token EVEN THOUGH it traces; add a KV-cache + single-token "
-        "decode_step (recall_knobs(op_class='decode'))"
+        else "MANDATORY kv-cache — SEPARATE from trace/2CQ. per-token cost scales with capacity "
+        "(use_cache=False, no KV-cache write) -> O(capacity) recompute every token EVEN THOUGH it traces. "
+        "Trace does NOT remove recompute; 'irreducible' is NOT accepted. Add a KV-cache + single-token "
+        "decode_step (recall_knobs(op_class='decode')); record_kernel_attempt(op='generation_loop','kv-cache',"
+        "measured_ms,beat_baseline) — clears ONLY on a MEASURED per-token reduction."
     )
     host_ms = 0.0
     for b in prof.get("buckets") or []:
