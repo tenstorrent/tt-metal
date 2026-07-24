@@ -841,3 +841,29 @@
   `659.024 -> 653.435 us` (`-5.590 us`, `-0.85%`), active time improves
   `637.981 -> 631.362 us`, and recurrence improves `183.096 -> 176.869 us`.
   Retain `q_decay` as the first accepted BF16-storage candidate.
+
+
+### 2026-07-24 16:03:09 UTC — Reject standalone BF16 v_beta storage
+
+- Hypothesis: halving the V-dependent `v_beta` prep write and sliced scan read
+  traffic will reduce recurrence latency enough to improve the layer critical
+  path. Mask bit 0 (`0x1`) selects `v_beta` only.
+- Direct correctness:
+  `QWEN_KDA_PREP_BF16_MASK=0x1 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_chunk_kda.py -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 5/5 in 18.96 s. HiFi4 output PCC is
+  `0.999992` and state PCC is `0.999993-0.999995`; the HiFi2 case is
+  `0.999918/0.999917`.
+- TP=8 layer correctness:
+  `QWEN_KDA_PREP_BF16_MASK=0x1 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_tp_weights.py::test_tp_layer_pcc -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 1/1 in 6.85 s; output/recurrent/convolution
+  PCC is `0.999962/0.999902/0.999997`.
+- Measurement command:
+  `QWEN_KDA_PREP_BF16_MASK=0x1 PERF_TRACE=1 PERF_SEQ=640 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 1/1.
+- Report:
+  `generated/profiler/reports/2026_07_24_16_03_09/ops_perf_results_2026_07_24_16_03_09.csv`
+  (SHA-256 `40d4fe1afb57a6b48f8531acc4fd8730183a4ba997f8b752bc00a5a28d2480ff`).
+  Recurrence improves only `183.096 -> 181.887 us`, while median wall regresses
+  `659.024 -> 660.214 us` (`+1.189 us`, `+0.18%`) and active time is unchanged
+  (`637.981 -> 637.933 us`). The small local saving is not a layer-level win;
+  do not retain standalone BF16 `v_beta`.
