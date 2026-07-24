@@ -999,6 +999,10 @@ jobs:
     name: Run single sweep
     needs: [resolve-inputs, build-artifact, ttnn-generate-sweeps]
     if: |
+      always() &&
+      !cancelled() &&
+      needs.build-artifact.result == 'success' &&
+      needs.ttnn-generate-sweeps.result == 'success' &&
       needs.resolve-inputs.outputs.sweep-name != 'ALL SWEEPS (Nightly)' &&
       needs.resolve-inputs.outputs.sweep-name != 'ALL SWEEPS (Comprehensive)' &&
       needs.resolve-inputs.outputs.sweep-name != 'ALL SWEEPS (Model Traced)' &&

@@ -75,6 +75,9 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     repeat/device/repeat_program_factory_higher_dim.cpp
     repeat/device/repeat_device_operation.cpp
     repeat/device/repeat_utils.cpp
+    repeat/codegen/repeat_codegen_device_operation.cpp
+    repeat/codegen/repeat_codegen_program_factory.cpp
+    repeat/codegen/repeat_codegen_supported.cpp
     repeat/repeat.cpp
     repeat_interleave/repeat_interleave.cpp
     reshape_on_device/device/reshape_op.cpp

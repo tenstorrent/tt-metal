@@ -8,7 +8,13 @@
 # Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
 
 - name: "ttnn example tests"
-  cmd: "./tests/scripts/run_ttnn_examples.sh"
+  # The codegen-repeat smoke rides this existing leg instead of being its own matrix
+  # entry: a separate entry would allocate a whole new card and pay full checkout +
+  # setup-job overhead for a test whose execution is <1s. Chaining it here adds ~1s to
+  # an already-allocated runner. ttnn.repeat defaults to native, so this guards the
+  # codegen path against regressions. On sim SKUs the impl strips `--timeout`; the test
+  # is a 1-tile bf16 TILE N-repeat, tiny even at ttsim speeds.
+  cmd: "./tests/scripts/run_ttnn_examples.sh && pytest tests/ttnn/unit_tests/operations/data_movement/test_repeat.py::test_repeat_codegen_smoke -x --timeout=120"
   skus:
     wh_n300_civ2:
       timeout: 15
