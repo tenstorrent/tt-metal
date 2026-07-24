@@ -169,6 +169,11 @@ class XttsPipeline:
         self.speaker_encoder = TtSpeakerEncoder(device)  # Block 2 (TTNN): logmel -> d-vector
         self.mel_stats = load_full_state()["mel_stats"].float()  # Block 1 mel normalization
         self.spk_frontend = build_frontend()  # Block 2 logmel front-end (host)
+        # Block 3 traced decoder: built + captured ONCE on first generate(), then reused across
+        # utterances (weights/configs/cache/trace don't depend on the utterance) — turns the ~8.5s
+        # per-call build+capture into a one-time cost. Sized to the max context (cond + text + audio).
+        self.gpt_decoder = None
+        self.MAX_SEQ = 1280
 
     @torch.no_grad()
     def conditioning_from_audio(self, wav, sr):
@@ -197,11 +202,14 @@ class XttsPipeline:
         tokens = self.tok.encode(text, language)
         prefix = build_prefix(self.gpt, cond, tokens)  # [1, P, 1024]
         P = prefix.shape[1]
-        max_new = min(max_new, self.heads["mel_pos"].shape[0] - 1, 605)
+        if self.gpt_decoder is None:
+            self.gpt_decoder = port.TracedGPTDecoder(self.device, max_seq=self.MAX_SEQ)  # once; reused after
+        max_new = min(max_new, self.heads["mel_pos"].shape[0] - 1, 605, self.gpt_decoder.max_seq - P - 8)
         out = port.generate_traced(  # Block 3 (TTNN); XTTS needs sampling (greedy collapses)
-            self.device, prefix, self.heads, max_new=max_new, max_seq=P + max_new + 8,
+            self.device, prefix, self.heads, max_new=max_new,
             use_trace=True, stop_token=port.STOP_AUDIO_TOKEN,
             do_sample=True, temperature=0.75, top_k=50, top_p=0.85, repetition_penalty=10.0, seed=seed,
+            decoder=self.gpt_decoder,  # reuse the built+captured decoder across calls
         )
         wav = self.vocoder(out["latents"], g=spk)  # Block 4 -> [1, 1, L] @ 24 kHz
         return wav.squeeze().cpu(), {"speaker": name, "text_tokens": len(tokens), "audio_codes": out["codes"].numel()}

@@ -240,6 +240,15 @@ class TracedGPTDecoder:
         ttnn.end_trace_capture(self.device, self.trace_id, cq_id=0)
         ttnn.synchronize_device(self.device)
 
+    def release_trace(self):
+        """Drop the captured trace so prefill can allocate buffers again (allocating under a live
+        trace corrupts it). Used when REUSING one decoder across utterances: release -> reset ->
+        prefill -> re-capture. The re-capture is cheap after the first (kernels already compiled)."""
+        if self.trace_id is not None:
+            ttnn.release_trace(self.device, self.trace_id)
+            self.trace_id = None
+            self._out = None
+
     def step(self, emb, pos):  # emb torch [1,1,1024]; pos int -> latent torch [1,1,1024]
         self._set_input(emb)
         self._set_pos(pos)
@@ -276,7 +285,8 @@ def _select_token(logits, prev, temperature, top_k, top_p, repetition_penalty):
 
 
 def generate_traced(device, prefix_emb, heads, max_new=24, max_seq=128, use_trace=True, stop_token=None,
-                    do_sample=False, temperature=0.75, top_k=50, top_p=0.85, repetition_penalty=10.0, seed=None):
+                    do_sample=False, temperature=0.75, top_k=50, top_p=0.85, repetition_penalty=10.0, seed=None,
+                    decoder=None):
     """Autoregressive generation with the traced decoder. Fills the cache with a single batched prefill
     pass over the prompt, then decodes token by token; mel_head + token selection + embedding run on host.
     do_sample=False (default) is greedy argmax — deterministic, for the PCC tests. do_sample=True uses
@@ -285,7 +295,11 @@ def generate_traced(device, prefix_emb, heads, max_new=24, max_seq=128, use_trac
     stop_token (e.g. STOP_AUDIO_TOKEN) ends generation once emitted. Returns dict(codes [T], latents [1,T,1024])."""
     if seed is not None:
         torch.manual_seed(seed)
-    dec = TracedGPTDecoder(device, max_seq=max_seq)
+    # A `decoder` can be passed in and REUSED across calls: its weights, LN configs and KV-cache are
+    # built once (the ~8.5s weight-load + capture is not repeated). Its traced single-token step is
+    # utterance-independent, so only reset/prefill/decode are per-call. When none is given, build a
+    # throwaway one (original behaviour).
+    dec = decoder if decoder is not None else TracedGPTDecoder(device, max_seq=max_seq)
     mel_emb, mel_pos = heads["mel_emb"], heads["mel_pos"]
     mh_w, mh_b = heads["mel_head_w"], heads["mel_head_b"]
     head = lambda latent: latent @ mh_w.t() + mh_b
@@ -297,7 +311,7 @@ def generate_traced(device, prefix_emb, heads, max_new=24, max_seq=128, use_trac
         return int(logits.argmax(-1))
 
     dec.reset()
-    dec.prefill(prefix_emb)  # fill cache positions 0..P-1 in one batched pass (before any trace exists)
+    dec.prefill(prefix_emb)  # fill cache positions 0..P-1 in one batched pass (no live trace here -> alloc safe)
     if use_trace:
         dec.capture()  # capture the single-token decode step; leaves the prefilled cache intact
     pos = prefix_emb.shape[1]
@@ -313,7 +327,12 @@ def generate_traced(device, prefix_emb, heads, max_new=24, max_seq=128, use_trac
             break
         codes.append(code)
         lats.append(lat)
-    return {"codes": torch.tensor(codes), "latents": torch.cat(lats, dim=1)}
+    result = {"codes": torch.tensor(codes), "latents": torch.cat(lats, dim=1)}
+    # Free the trace so a REUSED decoder's next prefill (and the vocoder that runs after) can allocate
+    # buffers safely; the recapture next call is cheap (kernels cached). Weights/cache/configs persist.
+    if use_trace:
+        dec.release_trace()
+    return result
 
 
 def main():
