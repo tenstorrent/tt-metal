@@ -93,6 +93,31 @@ transforms with a parallel prefix scan.
   the measured `606.168 us` serial scan before output reconstruction.
 - Retained research path: distributed-L1 storage and execution only. Do not
   start a general DRAM implementation.
+- Distributed-L1 model, 2026-07-24: reject storing every chunk prefix, but
+  accept a three-phase grouped prototype. Use 27 groups/head (26 groups of six
+  chunks and one group of four), hence 108 whole-V workers/device. Phase 1
+  builds one affine summary per group while keeping its local accumulator in
+  CBs; phase 2 scans only the 108 summaries; phase 3 runs the existing ordered
+  recurrence for at most six chunks/core from the corrected group state.
+- Work model: chunk-transform construction is 48 tile matmuls/chunk
+  (`2.013 GFLOP/chip`); 532 local and at most 248 padded-tree summary
+  compositions cost `6.543 GFLOP/chip`; the final grouped recurrence retains
+  `2.349 GFLOP/chip`. Total is at most `10.905 GFLOP/chip`, with a
+  `71.7 us` compute-peak floor. Beating the current `500.685 us` scan requires
+  `21.78 TFLOP/s`, or `14.32%` of chip peak. That is only 67% of the retained
+  scan active-core efficiency, so the compute model admits a win.
+- Capacity model: selected prepared tensors occupy exactly `64 KiB/chunk`,
+  or `40 MiB/chip`; 108 FP32 `(A,B)` summaries add `13.5 MiB/chip`. Their
+  average distributed-L1 occupancy is about `498 KiB/core`. The full-V scan CB
+  plan is `576 KiB/core`, leaving about `327 KiB/core` under the measured
+  `1,434,496 B` budget. Full-prefix storage would add `80 MiB/chip` and exceed
+  this budget once scan CBs are live, which is why only summaries are viable.
+- Traffic model: local group compositions stay in CBs. Two reads of the
+  `40 MiB` prepared set, summary writes, a padded summary scan bounded by
+  `248 * 384 KiB`, and final output are roughly `200 MiB/chip` of
+  distributed-L1/NOC traffic, requiring about `400 GB/s` to beat the serial
+  scan. This is a hypothesis to validate with the device prototype, not a
+  measured NOC result.
 
 ### 2. Direct prep-to-scan producer/consumer pipeline
 

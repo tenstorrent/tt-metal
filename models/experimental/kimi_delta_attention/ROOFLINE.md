@@ -481,3 +481,47 @@ extra Conv1d/halo stage. Those slicing-specific stages total about 222 us
 of aggregate kernel time; recurrence and output collective dominate. The
 next long-context optimization should target the scan serial 160-chunk chain
 and the fused output program, not add convolution cores.
+
+## Distributed-L1 grouped affine-prefix model
+
+The current KDA scan is a literal 160-iteration dependency chain
+(`chunk_kda_scan.cpp:125-182`). Its chunk update can be written
+`S-prime = A S + B`, where
+`A = diag(dl) - k_dec_t @ T_inv @ kd` and
+`B = k_dec_t @ T_inv @ v_beta`. Associative composition is numerically
+validated by `tests/test_affine_prefix.py`; this section models the device
+mapping rather than claiming measured performance.
+
+A full prefix is capacity-invalid. Four heads times 160 chunks times one FP32
+`A[128,128]` and `B[128,128]` is `80 MiB/chip`. The retained seven prepared
+tensors already occupy `40 MiB/chip`, and the exact full-V scan CB declarations
+at `chunk_gdn_phased_program_factory.cpp:398-417` total `576 KiB/core`.
+Those three live sets exceed the measured `1,434,496 B/core` budget.
+
+The viable prototype is a three-phase, two-level scan:
+
+1. Map 27 groups/head over 108 cores. Twenty-six groups contain six chunks and
+   one contains four. Each worker constructs chunk transforms and serially
+   composes only its local group, emitting one `(A,B)` summary.
+2. Run a work-efficient prefix over the 27 summaries/head. A 32-leaf padded
+   tree bounds this phase at 62 compositions/head, 248/chip.
+3. Reuse the current recurrence kernel with one whole-V worker/group, seeded
+   by the group prefix, so no worker executes more than six chunks.
+
+At `C=32`, `K=V=128`, transform construction is 48 tile matmuls/chunk
+(`2.013 GFLOP/chip`). The 532 local plus at most 248 summary compositions are
+128 tile matmuls each (`6.543 GFLOP/chip`). The grouped final recurrence is
+the retained `2.349 GFLOP/chip`, for `10.905 GFLOP/chip` total. Its ideal
+compute floor is `71.7 us` at the `152.064 TFLOP/s` chip peak. It beats the
+measured `500.685 us` serial scan above `21.78 TFLOP/s`, or `14.32%` chip
+utilization. The current 16-worker scan sustains about `4.69 TFLOP/s`, which
+is roughly `21.2%` of those workers' proportional peak; the new map may lose
+one third of that active-core efficiency and still break even.
+
+Capacity also closes for summaries: prepared tensors (`40 MiB`) plus 108
+summaries (`13.5 MiB`) average about `498 KiB/core`; adding the `576 KiB`
+full-V scan CB plan leaves about `327 KiB/core`. Local compositions retain
+their accumulator in CBs, avoiding the roughly `780 MiB` level traffic of the
+rejected full-prefix form. The remaining distributed-L1/NOC traffic is modeled
+at roughly `200 MiB/chip`, implying about `400 GB/s` at break-even. That NOC
+number is unmeasured and is the first device-prototype falsification target.

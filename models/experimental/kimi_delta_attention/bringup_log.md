@@ -1446,3 +1446,35 @@
 - Native control: route the identical T=672 case through retained native Conv1d -> PASS with output/recurrent-state/convolution-state PCC `0.999967/0.999920/0.999997`. After rebuilding the exact reverted host library, the same command passed again with the identical tuple.
 - Action: history-preserving revert `0c5beb02b0a`; the valid endpoint returns to T=5,120 wall `3385.003 us`. The TP test now accepts `KDA_TP_TEST_SEQ` so every future long-only optimization can be exercised by correctness CI.
 - Verdict: reject and withdraw all performance claims from the tiled-input path. A future retry must pass T=672 before profiling T=5,120.
+
+
+### 2026-07-24 21:08:00 UTC — Accept grouped affine-prefix device prototype
+
+- Hypothesis: full per-chunk affine-prefix storage is unnecessary. A local
+  group-summary pass, a prefix over summaries only, and a parallel short scan
+  can expose 108-core sequence parallelism while retaining prepared tensors in
+  distributed L1.
+- Source evidence: the retained compute kernel executes one literal
+  `NC`-iteration loop (`chunk_kda_scan.cpp:125-182`); its exact full-V CB set
+  is declared at `chunk_gdn_phased_program_factory.cpp:398-417`.
+- Distribution: 27 groups/head over four local heads = 108 workers. Groups are
+  26x6 chunks plus 1x4 chunks per head. Phase 1 emits one 128 KiB FP32 `(A,B)`
+  summary/group; phase 2 scans only those summaries; phase 3 reuses the
+  current recurrence for at most six chunks/worker.
+- Compute model: `2.013 GFLOP/chip` to construct transforms, `6.543 GFLOP/chip`
+  for 532 local plus at most 248 summary compositions, and `2.349 GFLOP/chip`
+  for final recurrence/output = `10.905 GFLOP/chip`. The `71.7 us` peak floor
+  and `14.32%` chip-utilization break-even are below the current scan's
+  approximately `21.2%` active-core efficiency.
+- Capacity model: prepared tensors are `40 MiB/chip`; 108 summaries are
+  `13.5 MiB/chip`; average persistent occupancy is about `498 KiB/core`.
+  The full-V scan CB plan adds `576 KiB/core`, leaving about `327 KiB/core`
+  under the measured `1,434,496 B` limit. Storing all per-chunk transforms
+  would add `80 MiB/chip` and is rejected.
+- Traffic hypothesis: keeping local compositions in CBs bounds distributed
+  L1/NOC traffic near `200 MiB/chip`, requiring approximately `400 GB/s` at
+  break-even. This is not yet measured.
+- Verdict: the explicit model beats the `500.685 us` serial scan on plausible
+  compute and capacity assumptions. Proceed to a device prototype; first
+  falsify summary construction correctness and measured phase cost before
+  integrating the full prefix.

@@ -261,3 +261,34 @@ for more CCL workers; the matched T=640 two-worker experiment already
 regressed. Long-sequence work should instead preserve this placement and
 reduce the scan serial chunk chain or overlap within the fused output
 program.
+
+## Proposed grouped affine scan at T=5120
+
+This is the selected experimental map, not yet a retained implementation.
+Keep TP head ownership unchanged at four heads/device and keep every prepared
+tensor in interleaved distributed L1.
+
+- Divide each head's 160 chunks into 27 contiguous groups: 26 groups of six
+  and a final group of four.
+- Map one whole-V worker to each group, for 108 workers/device in row-major
+  order. Whole-V ownership avoids the six duplicated V-independent reads that
+  made four-way V splitting expensive.
+- Phase 1: each worker reads its local prepared chunks, constructs and
+  accumulates one FP32 affine `(A,B)` summary, and writes one 128 KiB summary.
+- Phase 2: scan the 27 summaries independently for each head with a
+  work-efficient 32-leaf padded tree. Do not materialize per-chunk prefixes.
+- Phase 3: seed each group with its exclusive prefix and execute the existing
+  FP32 recurrence/output equations for four or six chunks on the same
+  whole-V ownership. Only the final group/head writes recurrent state.
+
+The map uses 108 of 110 cores and shortens the ordered recurrence depth from
+160 chunks to at most six, plus ten summary-tree levels. Prepared tensors and
+summaries consume about 498 KiB/core on average; the existing full-V scan CB
+set consumes 576 KiB/core, leaving about 327 KiB/core. The two unused cores
+are not assigned orchestration work until measurement proves a need.
+
+Reject these variants unless new evidence changes the capacity model:
+
+- all 160 per-chunk `(A,B)` prefixes in L1 (`80 MiB/chip` extra);
+- DRAM-backed prefix levels (modeled floor already exceeds the serial scan);
+- sequence sharding across chips, which adds state handoff to the TP path.
