@@ -13,15 +13,22 @@ void MoeGroupedTopkDeviceOperation::validate_on_program_cache_miss(
     const auto& scores = tensor_args.scores;
     const auto& bias = tensor_args.bias;
     const auto& padding_config = tensor_args.padding_config;
+    const auto& biased_scores = tensor_args.biased_scores;
 
     TT_FATAL(scores.storage_type() == ttnn::StorageType::DEVICE, "Scores tensor must be on device");
     TT_FATAL(bias.storage_type() == ttnn::StorageType::DEVICE, "Bias tensor must be on device");
     TT_FATAL(scores.buffer() != nullptr, "Scores tensor must be allocated");
     TT_FATAL(bias.buffer() != nullptr, "Bias tensor must be allocated");
 
-    TT_FATAL(scores.dtype() == tt::tt_metal::DataType::FLOAT32, "Scores tensor must be FLOAT32");
+    // Inputs may be FLOAT32 or BFLOAT16: the op computes internally in fp32 for precision and the
+    // unpacker upcasts bf16 tiles for free.
+    TT_FATAL(
+        scores.dtype() == tt::tt_metal::DataType::FLOAT32 || scores.dtype() == tt::tt_metal::DataType::BFLOAT16,
+        "Scores tensor must be FLOAT32 or BFLOAT16");
     TT_FATAL(scores.layout() == tt::tt_metal::Layout::TILE, "Scores tensor must be TILE layout");
-    TT_FATAL(bias.dtype() == tt::tt_metal::DataType::FLOAT32, "Bias tensor must be FLOAT32");
+    TT_FATAL(
+        bias.dtype() == tt::tt_metal::DataType::FLOAT32 || bias.dtype() == tt::tt_metal::DataType::BFLOAT16,
+        "Bias tensor must be FLOAT32 or BFLOAT16");
     TT_FATAL(bias.layout() == tt::tt_metal::Layout::TILE, "Bias tensor must be TILE layout");
     TT_FATAL(scores.logical_shape() == bias.logical_shape(), "Scores and bias must have the same shape");
 
@@ -38,6 +45,26 @@ void MoeGroupedTopkDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             padding_config->logical_shape()[-1] >= 2,
             "Padding config tensor must contain at least [num_real_tokens, pad_side]");
+    }
+
+    // Test-only optional debug output holding the full-width biased scores (same shape/precision as the
+    // fp32 compute pipeline). Must be a device-allocated FLOAT32 TILE tensor matching the scores shape.
+    if (biased_scores.has_value()) {
+        TT_FATAL(biased_scores->storage_type() == ttnn::StorageType::DEVICE, "biased_scores tensor must be on device");
+        TT_FATAL(biased_scores->buffer() != nullptr, "biased_scores tensor must be allocated");
+        TT_FATAL(biased_scores->dtype() == tt::tt_metal::DataType::FLOAT32, "biased_scores tensor must be FLOAT32");
+        TT_FATAL(biased_scores->layout() == tt::tt_metal::Layout::TILE, "biased_scores tensor must be TILE layout");
+        TT_FATAL(
+            biased_scores->logical_shape() == scores.logical_shape(),
+            "biased_scores tensor must have the same shape as scores");
+        TT_FATAL(
+            biased_scores->padded_shape() == scores.padded_shape(),
+            "biased_scores tensor must have the same padded shape as scores");
+        const auto& biased_tile = biased_scores->tensor_spec().page_config().get_tile();
+        const auto& scores_tile = scores.tensor_spec().page_config().get_tile();
+        TT_FATAL(
+            biased_tile.get_width() == scores_tile.get_width() && biased_tile.get_height() == scores_tile.get_height(),
+            "biased_scores tensor must have the same tile geometry as scores");
     }
 
     const uint32_t experts = scores.logical_shape()[-1];
@@ -125,7 +152,8 @@ moe_grouped_topk(
     bool stable_sort,
     ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk::ScoreFunc score_func,
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
-    const std::optional<Tensor>& padding_config) {
+    const std::optional<Tensor>& padding_config,
+    const std::optional<Tensor>& biased_scores) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk::MoeGroupedTopkDeviceOperation;
 
@@ -139,7 +167,7 @@ moe_grouped_topk(
         stable_sort,
         score_func,
         output_mem_config.value_or(scores.memory_config())};
-    auto tensor_args = OperationType::tensor_args_t{scores, bias, padding_config};
+    auto tensor_args = OperationType::tensor_args_t{scores, bias, padding_config, biased_scores};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

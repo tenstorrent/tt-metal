@@ -11,13 +11,16 @@ using the recall metric (fraction of correctly selected experts per token).
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     assert_gate_output,
     build_padding_config,
     distinct_logits,
     grouped_gate_golden_act,
+    score_activation,
 )
 
 
@@ -38,6 +41,18 @@ ROUTING_CONFIG_IDS = ["deepseek-8g256e", "kimi-1g384e", "dsv4flash-1g256e", "dsv
 SCORE_FUNCS = ["sigmoid", "sqrtsoftplus"]
 
 
+# Input dtype for logits/bias. The op upcasts internally bf16 input to fp32.
+INPUT_DTYPES = [ttnn.float32, ttnn.bfloat16]
+INPUT_DTYPE_IDS = ["in_fp32", "in_bf16"]
+
+# Selected-weight PCC thresholds
+WEIGHTS_PCC_THRESHOLD_FP32 = 0.96
+WEIGHTS_PCC_THRESHOLD_BF16 = 0.85
+# Pre-selection biased-scores PCC
+BIASED_PCC_THRESHOLD = 0.999
+
+
+@pytest.mark.parametrize("input_dtype", INPUT_DTYPES, ids=INPUT_DTYPE_IDS)
 @pytest.mark.parametrize("score_func", SCORE_FUNCS)
 @pytest.mark.parametrize(
     "n_groups,total_experts,summed_experts_per_group,topk_groups,n_activated_experts,route_scale",
@@ -59,6 +74,7 @@ def test_moe_grouped_topk(
     route_scale,
     padded_percent,
     score_func,
+    input_dtype,
 ):
     """Verify moe_grouped_topk matches the PyTorch golden reference using recall and PCC.
 
@@ -74,8 +90,15 @@ def test_moe_grouped_topk(
 
     epsilon = 1e-20
 
-    scores = distinct_logits((num_batches, batch_size, seq_len, total_experts))
+    # For the bf16 input path, generate/quantize inputs to bf16 first so the fp32 golden reference
+    # sees the exact same values the device does (the op upcasts bf16 -> fp32 internally).
+    is_bf16 = input_dtype == ttnn.bfloat16
+    logits_gen_dtype = torch.bfloat16 if is_bf16 else torch.float32
+
+    scores = distinct_logits((num_batches, batch_size, seq_len, total_experts), dtype=logits_gen_dtype).float()
     bias = torch.randn(num_batches, batch_size, seq_len, total_experts, dtype=torch.float32)
+    if is_bf16:
+        bias = bias.to(torch.bfloat16).float()
 
     ref_indices, ref_weights = grouped_gate_golden_act(
         scores,
@@ -95,8 +118,11 @@ def test_moe_grouped_topk(
     apply_padding = 0 < num_real < total_tokens
     padding_config = build_padding_config(device, num_real) if apply_padding else None
 
-    ttnn_scores_in = ttnn.from_torch(scores, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_bias_in = ttnn.from_torch(bias, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_scores_in = ttnn.from_torch(scores, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_bias_in = ttnn.from_torch(bias, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_biased_scores = ttnn.from_torch(
+        torch.zeros_like(scores), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+    )
 
     ttnn_weights_out, ttnn_indices_out = ttnn.experimental.deepseek_prefill.moe_grouped_topk(
         ttnn_scores_in,
@@ -109,12 +135,25 @@ def test_moe_grouped_topk(
         epsilon=epsilon,
         score_func=score_func,
         padding_config=padding_config,
+        biased_scores=ttnn_biased_scores,
     )
 
     # Trim padding (TILE layout pads to tile boundaries); assert_gate_output flattens/compares.
     tt_weights_torch = ttnn.to_torch(ttnn_weights_out)[:num_batches, :batch_size, :seq_len, :n_activated_experts]
     tt_indices_torch = ttnn.to_torch(ttnn_indices_out)[:num_batches, :batch_size, :seq_len, :n_activated_experts]
 
+    tt_biased_torch = ttnn.to_torch(ttnn_biased_scores)[:num_batches, :batch_size, :seq_len, :total_experts]
+    ref_biased = score_activation(scores, score_func) + bias
+    biased_passed, biased_pcc = comp_pcc(tt_biased_torch.float(), ref_biased.float(), pcc=BIASED_PCC_THRESHOLD)
+    logger.info(
+        f"[{'PASS' if biased_passed else 'FAIL'}] biased_scores_pcc={biased_pcc:.6f} "
+        f"(thr={BIASED_PCC_THRESHOLD}, dtype={INPUT_DTYPE_IDS[INPUT_DTYPES.index(input_dtype)]})"
+    )
+    assert (
+        biased_passed
+    ), f"Biased-scores PCC {biased_pcc:.6f} < {BIASED_PCC_THRESHOLD} ({INPUT_DTYPE_IDS[INPUT_DTYPES.index(input_dtype)]})"
+
+    weights_pcc_threshold = WEIGHTS_PCC_THRESHOLD_BF16 if is_bf16 else WEIGHTS_PCC_THRESHOLD_FP32
     assert_gate_output(
         tt_indices_torch,
         tt_weights_torch,
@@ -125,5 +164,5 @@ def test_moe_grouped_topk(
         num_real,
         apply_padding,
         recall_threshold=0.9,
-        pcc_threshold=0.96,
+        pcc_threshold=weights_pcc_threshold,
     )
