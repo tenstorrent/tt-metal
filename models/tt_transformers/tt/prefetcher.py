@@ -224,6 +224,13 @@ class PrefetcherSubDevice:
         self.mesh_device.load_sub_device_manager(self.manager_id)
         self.mesh_device.set_sub_device_stall_group(self.sub_devices_id)
 
+    def load(self):
+        # Re-activate this (already-created) sub-device manager and its stall group.
+        # Used to restore the prefetcher's decode manager after an interleaved prefill
+        # reverted the mesh device to its default sub-device manager (see #47820).
+        self.mesh_device.load_sub_device_manager(self.manager_id)
+        self.mesh_device.set_sub_device_stall_group(self.sub_devices_id)
+
 
 class Prefetcher(LightweightModule):
     def __init__(
@@ -330,6 +337,11 @@ class Prefetcher(LightweightModule):
         self.init_decode_done = False
         self.init_prefill_done = False
         self.prefetch_done = False
+        # Tracks whether the prefetcher's (decode) sub-device manager is the one
+        # currently loaded on the mesh device. Interleaved prefill reverts to the
+        # default manager (where prefill traces are captured); decode restores this
+        # one. See revert_to_default_sub_device_manager() / load() below (#47820).
+        self._decode_manager_loaded = False
 
     # NOTE: DRAM prefetched weights are prefetched in the order of the construction of the module
     def register_callback(self, callback: Callable[[], None]):
@@ -362,8 +374,13 @@ class Prefetcher(LightweightModule):
         NOTE: All DRAM prefetcher APIs can only be called after init() is called for the given mode
         NOTE: Calling init() again for the same mode is a no-op
         """
-        # If the prefetcher has already been initialized for the given mode, we do not need to initialize it again
-        if mode == Mode.DECODE and self.init_decode_done or mode == Mode.PREFILL and self.init_prefill_done:
+        # If the prefetcher has already been initialized for the given mode, we do not
+        # re-create its sub-device manager. For decode we still (re)load it, since an
+        # interleaved prefill may have reverted the device to the default manager (#47820).
+        if mode == Mode.DECODE and self.init_decode_done:
+            self.load()
+            return
+        if mode == Mode.PREFILL and self.init_prefill_done:
             return
         self.mode = mode
         self.sender_cores = self.core_config.sender_cores
@@ -380,6 +397,8 @@ class Prefetcher(LightweightModule):
                 self.prefetcher_sub_device.add_sub_device(self.to_core_range_set(self.sender_cores(active=True)))
                 self.prefetcher_sub_device.add_sub_device(self.all_worker_cores_range_set)
                 self.prefetcher_sub_device.init_sub_device_manager()
+                # init_sub_device_manager() also loads the manager.
+                self._decode_manager_loaded = True
             case Mode.PREFILL:
                 self.prefetcher_sub_device = PrefetcherSubDevice(self.mesh_device)
                 self.prefetcher_sub_device.add_sub_device(self.all_core_range_set)
@@ -400,6 +419,103 @@ class Prefetcher(LightweightModule):
         logger.info("=" * 50)
         self.init_decode_done = True if mode == Mode.DECODE else False
         self.init_prefill_done = True if mode == Mode.PREFILL else False
+
+    @property
+    def is_initialized(self) -> bool:
+        """True once the prefetcher's decode sub-device manager has been created."""
+        return self.init_decode_done
+
+    def load(self) -> None:
+        """
+        Re-activate the prefetcher's decode sub-device manager if it is not currently
+        the loaded manager. Idempotent — safe to call on every decode step; only acts
+        after an interleaved prefill reverted the device to the default manager (#47820).
+        """
+        # Restore decode as the prefetcher's current mode so mode-gated consumers
+        # (e.g. lm_head's use_prefetcher, prefetch()) behave correctly again (#47820).
+        self.mode = Mode.DECODE
+        if self.init_decode_done and not self._decode_manager_loaded:
+            self.prefetcher_sub_device.load()
+            self._decode_manager_loaded = True
+
+    def revert_to_default_sub_device_manager(self) -> None:
+        """
+        Restore the mesh device's default (full-grid) sub-device manager so that prefill
+        runs — and prefill traces are captured/replayed — on the same manager across
+        repeat batches. No-op until the prefetcher's manager has actually been loaded.
+        Note: this does NOT free the prefetcher's global_cb L1 (it persists across the
+        revert); the decode manager is restored by load() on the next decode (#47820).
+        """
+        # Mark the prefetcher as being in prefill so mode-gated consumers (e.g. lm_head's
+        # use_prefetcher, which pins the worker sub-device that only exists on the decode
+        # manager) do not reference decode-only state during prefill (#47820).
+        self.mode = Mode.PREFILL
+        if self.init_decode_done and self._decode_manager_loaded:
+            self.mesh_device.clear_loaded_sub_device_manager()
+            self.mesh_device.reset_sub_device_stall_group()
+            self._decode_manager_loaded = False
+
+    def teardown_global_cb(self) -> None:
+        """
+        Free the persistent global CB L1 so an interleaved prefill can use the cores it
+        occupies — notably core (0,0), where the origin-anchored sharded RMSNorm's CBs
+        otherwise clash with the resident global CB (program.cpp L1 clash, #47820).
+
+        Only the global CB is freed; the prefetcher's sub-device manager, the L1 address
+        tensor, and the cached decode trace are all kept. The next decode re-allocates the
+        global CB at the same L1 address (ensure_global_cb_allocated) and replays the
+        cached trace — we do NOT re-capture, because re-capturing the async dram_prefetcher
+        op hangs trace capture on repeat batches (#47820). No-op if the CB was never made.
+        """
+        if self.global_cb is None:
+            return
+        # decode normally stop()s the prefetcher op before switching to prefill; be
+        # defensive in case a live op output is still around.
+        garbage = getattr(self, "garbage", None)
+        if garbage is not None:
+            ttnn.deallocate(garbage)
+            self.garbage = None
+        # Drain all in-flight device work (the async dram_prefetcher op and any decode
+        # ops) before freeing the global CB's L1. Without this the buffer can be freed
+        # while the device still references it, corrupting NOC state and hanging the next
+        # op (observed as a device timeout in the following prefill) (#47820).
+        ttnn.synchronize_device(self.mesh_device)
+        self._prev_global_cb_address = self.global_cb.buffer_address()
+        self.global_cb.deallocate()
+        self.global_cb = None
+        # NOTE: the L1 address tensor is intentionally KEPT allocated (small, on the sender
+        # cores) so its address stays stable across the prefill — the decode trace bakes it
+        # too, so freeing + reallocating it would add a second same-address dependency.
+
+    def ensure_global_cb_allocated(self) -> None:
+        """
+        Re-allocate the global CB (freed for the preceding prefill by teardown_global_cb)
+        so the cached decode trace — which baked the CB's L1 address at capture — can be
+        replayed without re-capture. Called on the decode switch, after the prefetcher's
+        sub-device manager is reloaded, so allocation happens in the same manager context
+        as the original capture. The replayed trace's dram_prefetcher op fills the CB.
+
+        The rebuilt CB must land at the SAME L1 address as at capture; we log it (and the
+        previous address) so a mismatch is visible. No-op on the first decode (the CB is
+        created by run() during the compile pass) and when no CB was ever freed (#47820).
+        """
+        if not self.init_decode_done or self.global_cb is not None:
+            return
+        self.global_cb_size = self.max_tensor_block_size
+        self.global_cb = ttnn.create_global_circular_buffer(
+            self.mesh_device,
+            self.sender_receiver_mapping,
+            self.global_cb_size,
+        )
+        new_addr = self.global_cb.buffer_address()
+        prev_addr = getattr(self, "_prev_global_cb_address", None)
+        if prev_addr is not None and new_addr != prev_addr:
+            logger.warning(
+                f"[DRAM Prefetcher] global CB re-allocated at {new_addr} but decode trace baked {prev_addr} "
+                f"— address mismatch will corrupt trace replay (#47820)"
+            )
+        else:
+            logger.info(f"[DRAM Prefetcher] Re-allocated global CB at {new_addr} (matches capture)")
 
     def create_address_tensor(self):
         """

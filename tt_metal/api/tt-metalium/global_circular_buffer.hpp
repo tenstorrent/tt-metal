@@ -56,6 +56,12 @@ public:
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping() const;
     IDevice* get_device() const { return this->device_; }
 
+    // Free the L1 backing this GCB (data + config buffers). Copies of this GCB share the
+    // same underlying buffers, so callers must not use any copy after deallocate() until
+    // the GCB is rebuilt. Added for the DRAM-prefetcher prefill/decode teardown (#47820).
+    void deallocate();
+    bool is_allocated() const;
+
     static constexpr auto attribute_names =
         std::forward_as_tuple("sender_receiver_core_mapping", "size", "buffer_type");
     auto attribute_values() const {

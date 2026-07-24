@@ -410,6 +410,29 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
         mesh_buffer->device()->mesh_command_queue(), mesh_buffer, cb_config_host_buffer, false);
 }
 
+void GlobalCircularBuffer::deallocate() {
+    // Free the L1 backing this GCB (data + config buffers). Used so the DRAM prefetcher
+    // can release its persistent global CB across a prefill/decode switch and rebuild it
+    // later; the buffers are re-created by a subsequent create_global_circular_buffer.
+    // Copies of this GCB share the same underlying buffers, so callers must not use any
+    // copy after deallocate() until the GCB is rebuilt (see #47820).
+    if (auto mesh_buffer = cb_buffer_.get_mesh_buffer()) {
+        if (mesh_buffer->is_allocated()) {
+            mesh_buffer->deallocate();
+        }
+    }
+    if (auto mesh_buffer = cb_config_buffer_.get_mesh_buffer()) {
+        if (mesh_buffer->is_allocated()) {
+            mesh_buffer->deallocate();
+        }
+    }
+}
+
+bool GlobalCircularBuffer::is_allocated() const {
+    auto mesh_buffer = cb_buffer_.get_mesh_buffer();
+    return mesh_buffer != nullptr && mesh_buffer->is_allocated();
+}
+
 const Buffer& GlobalCircularBuffer::cb_buffer() const { return *cb_buffer_.get_buffer(); }
 
 const CoreRangeSet& GlobalCircularBuffer::sender_cores() const { return sender_cores_; }

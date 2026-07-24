@@ -845,9 +845,25 @@ class Transformer(LightweightModule):
         return tt_logits, None
 
     def switch_mode(self, mode: Mode):
-        if self.prefetcher is not None:
+        if self.prefetcher is None:
+            return
+        if mode == Mode.DECODE:
+            # Create (first time) or re-activate the prefetcher's decode sub-device
+            # manager, ensure weights are queued, and re-allocate the global CB (freed
+            # for the preceding prefill) at its original L1 address so the cached decode
+            # trace can be replayed without re-capture (#47820).
             self.prefetcher.init(mode)
             self.prefetcher.prefetch()
+            self.prefetcher.ensure_global_cb_allocated()
+        elif mode == Mode.PREFILL:
+            # #47820: run prefill on the mesh device's default sub-device manager (where
+            # the prefill trace is captured). Free the persistent global CB L1 — it
+            # otherwise clashes with the prefill sharded RMSNorm on core (0,0) — but KEEP
+            # the prefetcher's sub-device manager and the cached decode trace. The next
+            # decode re-allocates the global CB at the same address and replays the trace
+            # (no re-capture; re-capturing the async prefetcher op hangs on repeat batches).
+            self.prefetcher.teardown_global_cb()
+            self.prefetcher.revert_to_default_sub_device_manager()
 
     def forward(
         self,

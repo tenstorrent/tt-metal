@@ -100,7 +100,12 @@ class DistributedNorm(LightweightModule):
                 if self.ag_config_key and mode == "decode"
                 else 2,
                 num_buffers_per_channel=2,
-                subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
+                # The prefetcher's worker sub-device (id 1) only exists on the prefetcher's
+                # decode manager. Prefill runs on the default manager (#47820), so only pin
+                # the all-gather to the worker sub-device in decode.
+                subdevice_id=self.prefetcher.worker_sub_device_id
+                if (self.prefetcher is not None and mode == Mode.DECODE)
+                else None,
             )
         else:
             x = ttnn.to_memory_config(x, input_mem_cfg)
