@@ -302,6 +302,11 @@ def main() -> int:
         "mesh_shape": ttnn.MeshShape(mesh_rows, mesh_cols),
         "dispatch_core_config": dispatch_cfg,
     }
+    # Trace-2CQ: open a second command queue so decode input writes can be issued on
+    # CQ1 and overlapped (via events) with the traced compute on CQ0. Opt-in.
+    if os.environ.get("GLM4_MOE_LITE_TRACE_2CQ", "").strip() == "1":
+        open_kwargs["num_command_queues"] = 2
+        print("[DEBUG] Opening mesh with num_command_queues=2 (trace+2CQ)", flush=True)
     if device_ids is not None:
         open_kwargs["physical_device_ids"] = device_ids
     mesh_device = ttnn.open_mesh_device(**open_kwargs)

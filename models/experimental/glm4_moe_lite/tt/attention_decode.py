@@ -55,6 +55,8 @@ def kv_cache_update(
     batch: int,
     cos_batch: ttnn.Tensor,
     sin_batch: ttnn.Tensor,
+    fused_cos_batch: ttnn.Tensor | None,
+    fused_sin_batch: ttnn.Tensor | None,
     trans_matrix: ttnn.Tensor,
     kvpe_cache: ttnn.Tensor,
     page_table_tt: ttnn.Tensor,
@@ -86,8 +88,8 @@ def kv_cache_update(
             device=device,
             x=x,
             fused_kv=w.fused_kv_branch,
-            cos_batch=cos_batch,
-            sin_batch=sin_batch,
+            cos_batch=fused_cos_batch if fused_cos_batch is not None else cos_batch,
+            sin_batch=fused_sin_batch if fused_sin_batch is not None else sin_batch,
         )
     else:
         kv = None

@@ -66,6 +66,7 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
     const auto single_tile_size = tt::tile_size(cb_data_format);
     const auto cb_1_data_format = datatype_to_dataformat_converter(DataType::BFLOAT16);
     const auto cb_1_tile_size = tt::tile_size(cb_1_data_format);
+    const bool has_epilogue = tensor_args.epilogue_input_a.has_value();
 
     const auto& input_shape = tensor_args.input.padded_shape();
     const auto [Wt, Ht, inner_tile_size, reduce_tile_size] =
@@ -163,12 +164,26 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
         tt_metal::CircularBufferConfig(out0_t * single_tile_size, {{CBIndex::c_16, cb_data_format}})
             .set_page_size(CBIndex::c_16, single_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    if (has_epilogue) {
+        tt_metal::CircularBufferConfig cb_epilogue_a_config =
+            tt_metal::CircularBufferConfig(single_tile_size, {{CBIndex::c_2, cb_data_format}})
+                .set_page_size(CBIndex::c_2, single_tile_size);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_epilogue_a_config);
+        tt_metal::CircularBufferConfig cb_epilogue_b_config =
+            tt_metal::CircularBufferConfig(single_tile_size, {{CBIndex::c_3, cb_data_format}})
+                .set_page_size(CBIndex::c_3, single_tile_size);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_epilogue_b_config);
+    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args = {input_granularity, shard_factor, num_cores_to_be_used};
     TensorAccessorArgs(*tensor_args.input.buffer()).append_to(reader_compile_time_args);
+    if (has_epilogue) {
+        TensorAccessorArgs(*tensor_args.epilogue_input_a->buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(*tensor_args.epilogue_input_b->buffer()).append_to(reader_compile_time_args);
+    }
 
     std::vector<uint32_t> writer_compile_time_args = {shard_factor, num_cores_to_be_used};
     TensorAccessorArgs(*tensor_return_value.buffer()).append_to(writer_compile_time_args);
@@ -177,9 +192,16 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reader_reduce_nc.cpp";
     const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/writer_reduce_nc.cpp";
+    std::map<std::string, std::string> reader_defines;
+    if (has_epilogue) {
+        reader_defines["FUSE_EPILOGUE"] = "1";
+    }
 
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
-        program, reader_kernel_file, all_cores, tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        program,
+        reader_kernel_file,
+        all_cores,
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program, writer_kernel_file, all_cores, tt_metal::WriterDataMovementConfig(writer_compile_time_args));
@@ -192,6 +214,9 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
     std::map<std::string, std::string> compute_defines;
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
+    }
+    if (has_epilogue) {
+        compute_defines["FUSE_EPILOGUE"] = "1";
     }
     const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reduce_nc.cpp";
@@ -270,7 +295,9 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
              tile_offset,
              static_cast<uint32_t>(operation_attributes.dim),
              reduce_tile_size,
-             inner_tile_size});
+             inner_tile_size,
+             has_epilogue ? tensor_args.epilogue_input_a->buffer()->address() : 0,
+             has_epilogue ? tensor_args.epilogue_input_b->buffer()->address() : 0});
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -298,6 +325,10 @@ void FastReduceNCProgramFactory::override_runtime_arguments(
     Tensor& tensor_return_value) {
     const auto* input_buffer = tensor_args.input.buffer();
     const auto* output_buffer = tensor_return_value.buffer();
+    const auto* epilogue_a_buffer =
+        tensor_args.epilogue_input_a.has_value() ? tensor_args.epilogue_input_a->buffer() : nullptr;
+    const auto* epilogue_b_buffer =
+        tensor_args.epilogue_input_b.has_value() ? tensor_args.epilogue_input_b->buffer() : nullptr;
     auto& program = cached_program.program;
     const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
@@ -310,6 +341,10 @@ void FastReduceNCProgramFactory::override_runtime_arguments(
         CoreCoord core = {i % num_cores_x, i / num_cores_x};
         auto& reader_kernel_args = reader_kernel_args_by_core[core.x][core.y];
         reader_kernel_args[0] = input_buffer->address();
+        if (epilogue_a_buffer != nullptr) {
+            reader_kernel_args[7] = epilogue_a_buffer->address();
+            reader_kernel_args[8] = epilogue_b_buffer->address();
+        }
         auto& writer_kernel_args = writer_kernel_args_by_core[core.x][core.y];
         writer_kernel_args[0] = output_buffer->address();
     }

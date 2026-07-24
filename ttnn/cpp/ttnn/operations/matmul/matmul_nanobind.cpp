@@ -675,7 +675,6 @@ void py_module(nb::module_& mod) {
             core_grid (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
-
         Returns:
             ttnn.Tensor: the output tensor.
 
@@ -997,6 +996,7 @@ void py_module(nb::module_& mod) {
             core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
+            post_scale (ttnn.Tensor, optional): BF16 TILE tensor broadcast across output width after sparse input-A matmul.
 
         Returns:
             ttnn.Tensor: the output tensor with sparse results.
@@ -1097,6 +1097,7 @@ void py_module(nb::module_& mod) {
             nb::arg("core_grid") = nb::none(),
             nb::arg("output_tile") = nb::none(),
             nb::arg("optional_output_tensor") = nb::none(),
+            nb::arg("post_scale") = nb::none(),
             nb::arg("global_cb") = nb::none(),
             nb::arg("sub_device_id") = nb::none()));
 

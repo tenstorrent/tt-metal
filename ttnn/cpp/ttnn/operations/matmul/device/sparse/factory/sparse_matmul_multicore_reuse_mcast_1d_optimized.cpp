@@ -51,6 +51,9 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     const auto& a = tensor_args.input_tensors.at(0);
     const auto& b = tensor_args.input_tensors.at(1);
     const auto& sparsity = tensor_args.input_tensors.at(2);
+    const bool fuse_post_scale =
+        !tensor_args.optional_input_tensors.empty() && tensor_args.optional_input_tensors.at(0).has_value();
+    const Tensor* post_scale = fuse_post_scale ? &tensor_args.optional_input_tensors.at(0).value() : nullptr;
     const auto& output_tensor = tensor_return_value.at(0);
     auto program_config =
         std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config);
@@ -78,6 +81,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     const auto in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     const auto in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
     const auto output_data_format = tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
+    const auto post_scale_data_format =
+        fuse_post_scale ? tt_metal::datatype_to_dataformat_converter(post_scale->dtype()) : output_data_format;
 
     auto* const device = a.device();
 
@@ -85,10 +90,13 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     const auto in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
     const auto output_single_tile_size = output_tile.get_tile_size(output_data_format);
     const auto interm0_single_tile_size = output_tile.get_tile_size(output_data_format);
+    const auto post_scale_tile = fuse_post_scale ? post_scale->tensor_spec().tile() : output_tile;
+    const auto post_scale_single_tile_size = post_scale_tile.get_tile_size(post_scale_data_format);
 
     auto* const in0_buffer = a.buffer();
     auto* const in1_buffer = b.buffer();
     auto* const sparsity_buffer = sparsity.buffer();
+    auto* const post_scale_buffer = fuse_post_scale ? post_scale->buffer() : nullptr;
     auto* const out_buffer = output_tensor.buffer();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -343,7 +351,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
         // batch args
         (std::uint32_t)Mt * Nt,  // MtNt
-        // bias args (placeholders)
+        // post-scale uses the existing optional operand slot
         (std::uint32_t)0,  // in3_tensor_stride_w
         // fuse op args
         (std::uint32_t)false,  // fuse_op
@@ -354,7 +362,11 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     tt::tt_metal::TensorAccessorArgs(*in1_buffer).append_to(in1_sender_writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*sparsity_buffer).append_to(in1_sender_writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*out_buffer).append_to(in1_sender_writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs().append_to(in1_sender_writer_compile_time_args);  // placeholder for bias
+    if (fuse_post_scale) {
+        tt::tt_metal::TensorAccessorArgs(*post_scale_buffer).append_to(in1_sender_writer_compile_time_args);
+    } else {
+        tt::tt_metal::TensorAccessorArgs().append_to(in1_sender_writer_compile_time_args);
+    }
 
     std::vector<uint32_t> in0_receiver_compile_time_args = {
         // in0 block args
@@ -388,6 +400,12 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), num_cores, mm_kernel_defines);
 
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
+    if (fuse_post_scale) {
+        mm_kernel_defines["FUSE_BIAS"] = "1";
+        mm_kernel_defines["FUSE_ROW_SCALE"] = "1";
+        mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
+        mm_kernel_in1_sender_writer_defines["FUSE_ROW_SCALE"] = "1";
+    }
 
     // Intermediate CB read
     /*
@@ -567,6 +585,14 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         in1_CB_size);
 
     tt::tt_metal::CBHandle cb_src2 = 0;
+    if (fuse_post_scale) {
+        const uint32_t post_scale_cb_index = tt::CBIndex::c_3;
+        auto post_scale_cb_config =
+            tt_metal::CircularBufferConfig(post_scale_single_tile_size, {{post_scale_cb_index, post_scale_data_format}})
+                .set_page_size(post_scale_cb_index, post_scale_single_tile_size)
+                .set_tile_dims(post_scale_cb_index, post_scale_tile);
+        cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, post_scale_cb_config);
+    }
 
     uint32_t output_cb_index = tt::CBIndex::c_4;
     uint32_t interm0_cb_index = tt::CBIndex::c_5;
@@ -760,7 +786,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
                 mm_in1_sender_writer_args.push_back(0);
             }
 
-            mm_in1_sender_writer_args.push_back(0);
+            mm_in1_sender_writer_args.push_back(
+                fuse_post_scale ? static_cast<std::uint32_t>(post_scale_buffer->address()) : 0);
             mm_in1_sender_writer_args.push_back(0);
 
             if (output_idx_x == num_blocks_x - 1) {
@@ -803,6 +830,10 @@ void SparseMatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments
     auto* src_buffer_a = tensor_args.input_tensors.at(0).buffer();
     auto* src_buffer_b = tensor_args.input_tensors.at(1).buffer();
     auto* sparsity_buffer = tensor_args.input_tensors.at(2).buffer();
+    auto* post_scale_buffer =
+        (!tensor_args.optional_input_tensors.empty() && tensor_args.optional_input_tensors.at(0).has_value())
+            ? tensor_args.optional_input_tensors.at(0)->buffer()
+            : nullptr;
     auto* dst_buffer = tensor_return_value.at(0).buffer();
 
     // Manually unroll sender core
@@ -822,6 +853,9 @@ void SparseMatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments
         writer_runtime_args[0] = src_buffer_b->address();
         writer_runtime_args[6] = sparsity_buffer->address();
         writer_runtime_args[7] = dst_buffer->address();
+        if (post_scale_buffer != nullptr) {
+            writer_runtime_args[18] = post_scale_buffer->address();
+        }
     }
 }
 

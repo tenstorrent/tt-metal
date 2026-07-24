@@ -350,7 +350,13 @@ Tensor non_height_width_reduce(
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true));
     Tensor output_tensor = ttnn::experimental::reduction::fast_reduce_nc(
-        input_tensor, dims, /*output=*/std::nullopt, memory_config, config);
+        input_tensor,
+        dims,
+        /*output=*/std::nullopt,
+        /*epilogue_input_a=*/std::nullopt,
+        /*epilogue_input_b=*/std::nullopt,
+        memory_config,
+        config);
     auto [start, end, step] = get_slice_parameters(input_shape, output_tensor.logical_shape());
     output_tensor = ttnn::slice(output_tensor, start, end, step);
     return output_tensor;

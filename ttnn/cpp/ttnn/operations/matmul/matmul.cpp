@@ -508,6 +508,7 @@ Tensor sparse_matmul(
     const std::optional<const CoreGrid> core_grid,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
     const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<const Tensor>& post_scale,
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     std::optional<CoreCoord> user_core_coord =
@@ -517,6 +518,7 @@ Tensor sparse_matmul(
                input_tensor_a,
                input_tensor_b,
                sparsity,
+               post_scale,
                optional_output_tensor,
                nnz,
                is_input_a_sparse,

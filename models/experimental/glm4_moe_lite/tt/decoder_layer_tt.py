@@ -339,18 +339,30 @@ def _fused_kv_branch_forward(
     x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
     # 2. Convert cos/sin to ROW_MAJOR DRAM (kernel reads contiguous bytes)
-    cos_rm = ttnn.to_layout(cos_batch, ttnn.ROW_MAJOR_LAYOUT)
-    cos_dram = ttnn.to_memory_config(cos_rm, ttnn.DRAM_MEMORY_CONFIG)
-    sin_rm = ttnn.to_layout(sin_batch, ttnn.ROW_MAJOR_LAYOUT)
-    sin_dram = ttnn.to_memory_config(sin_rm, ttnn.DRAM_MEMORY_CONFIG)
+    owns_cos_dram = cos_batch.layout != ttnn.ROW_MAJOR_LAYOUT or cos_batch.memory_config() != ttnn.DRAM_MEMORY_CONFIG
+    owns_sin_dram = sin_batch.layout != ttnn.ROW_MAJOR_LAYOUT or sin_batch.memory_config() != ttnn.DRAM_MEMORY_CONFIG
+    cos_rm = (
+        ttnn.to_layout(cos_batch, ttnn.ROW_MAJOR_LAYOUT) if cos_batch.layout != ttnn.ROW_MAJOR_LAYOUT else cos_batch
+    )
+    sin_rm = (
+        ttnn.to_layout(sin_batch, ttnn.ROW_MAJOR_LAYOUT) if sin_batch.layout != ttnn.ROW_MAJOR_LAYOUT else sin_batch
+    )
+    cos_dram = (
+        ttnn.to_memory_config(cos_rm, ttnn.DRAM_MEMORY_CONFIG)
+        if cos_rm.memory_config() != ttnn.DRAM_MEMORY_CONFIG
+        else cos_rm
+    )
+    sin_dram = (
+        ttnn.to_memory_config(sin_rm, ttnn.DRAM_MEMORY_CONFIG)
+        if sin_rm.memory_config() != ttnn.DRAM_MEMORY_CONFIG
+        else sin_rm
+    )
 
-    # 3. Reshard weight from DRAM to L1 for this layer
-    w_kv_a_l1 = ttnn.to_memory_config(fused_kv["w_kv_a"], fused_kv["w_kv_a_l1_config"])
-
-    # 4. Fused kernel: reads x/cos/sin from DRAM, writes nope+rope to kvpe_output DRAM
+    # 3. Fused kernel: reads x/cos/sin and each core's projection-weight
+    # shard directly from DRAM, then writes nope+rope to kvpe_output DRAM.
     kvpe_output = GLMKVCacheBranch.op(
         input_tensor=x_rm,
-        dkv_matmul_weights_tensor=w_kv_a_l1,
+        dkv_matmul_weights_tensor=fused_kv["w_kv_a"],
         gamma_tensor=fused_kv["gamma"],
         cos_tensor=cos_dram,
         sin_tensor=sin_dram,
@@ -360,17 +372,28 @@ def _fused_kv_branch_forward(
         epsilon=fused_kv["epsilon"],
     )
 
-    ttnn.deallocate(w_kv_a_l1, force=True)
-
-    # 5. Convert output to standard TILE format for downstream ops
+    # 4. The kernel writes directly into a standard tiled output tensor.
     kvpe_dim = int(kvpe_output.shape[-1])
-    kvpe_4d = ttnn.reshape(kvpe_output, [1, 1, 1, kvpe_dim])
-    kvpe_new = ttnn.to_layout(kvpe_4d, ttnn.TILE_LAYOUT)
+    kvpe_raw = kvpe_output
+
+    # The Wormhole tiny-tile kernel fuses projection + RoPE. Its scalar
+    # RMSNorm reduction is kept on the validated TTNN path because
+    # REDUCE_SCALAR produces a conventional 32x32 intermediate that is not
+    # compatible with the kernel's TILE_1x32 circular buffers.
+    kv_lora_rank = int(fused_kv["gamma"].shape[-1])
+    kv_nope = ttnn.slice(kvpe_raw, [0, 0, 0, 0], [1, 1, 1, kv_lora_rank])
+    kv_rope = ttnn.slice(kvpe_raw, [0, 0, 0, kv_lora_rank], [1, 1, 1, kvpe_dim])
+    kv_nope = fused_kv["rmsnorm_fn"](kv_nope, mode="decode")
+    kvpe_new = ttnn.concat([kv_nope, kv_rope], dim=-1)
+    ttnn.deallocate(kv_nope, force=False)
+    ttnn.deallocate(kv_rope, force=False)
 
     # Cleanup temporaries
     ttnn.deallocate(x_rm, force=False)
-    ttnn.deallocate(cos_dram, force=False)
-    ttnn.deallocate(sin_dram, force=False)
+    if owns_cos_dram:
+        ttnn.deallocate(cos_dram, force=False)
+    if owns_sin_dram:
+        ttnn.deallocate(sin_dram, force=False)
 
     return kvpe_new
 
@@ -386,6 +409,8 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     cos_batch: ttnn.Tensor,
     sin_batch: ttnn.Tensor,
     trans_matrix: ttnn.Tensor,
+    fused_cos_batch: ttnn.Tensor | None = None,
+    fused_sin_batch: ttnn.Tensor | None = None,
     cos_decode: ttnn.Tensor | None = None,
     sin_decode: ttnn.Tensor | None = None,
     trans_decode: ttnn.Tensor | None = None,
@@ -501,6 +526,8 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         batch=batch,
         cos_batch=cos_batch,
         sin_batch=sin_batch,
+        fused_cos_batch=fused_cos_batch,
+        fused_sin_batch=fused_sin_batch,
         trans_matrix=trans_matrix,
         kvpe_cache=kvpe_cache,
         page_table_tt=page_table_tt,
@@ -591,12 +618,16 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             profile=profile,
             layer_idx=layer_idx,
             use_signpost=use_signpost,
+            collective_residual=residual if cfg.fused_collective_epilogue else None,
         )
     else:
         mlp_out = dense_mlp_forward(x, w, device=device, cfg=cfg, profile=profile)
 
-    x_out = ttnn.add(residual, mlp_out, memory_config=cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(mlp_out, force=False)
+    if use_moe and cfg.fused_collective_epilogue:
+        x_out = mlp_out
+    else:
+        x_out = ttnn.add(residual, mlp_out, memory_config=cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(mlp_out, force=False)
     ttnn.deallocate(residual, force=False)
     if use_signpost:
         signpost(f"L{layer_idx}_moe-end")

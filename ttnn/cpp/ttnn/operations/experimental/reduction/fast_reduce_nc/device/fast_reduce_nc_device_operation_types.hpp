@@ -18,6 +18,8 @@ struct FastReduceNCParams {
 struct FastReduceNCInputs {
     const Tensor input;
     std::optional<Tensor> preallocated_output;
+    std::optional<Tensor> epilogue_input_a;
+    std::optional<Tensor> epilogue_input_b;
 };
 
 }  // namespace ttnn::experimental::prim

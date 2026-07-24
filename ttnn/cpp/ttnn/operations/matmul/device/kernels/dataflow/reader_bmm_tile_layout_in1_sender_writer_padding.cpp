@@ -461,6 +461,14 @@ void kernel_main() {
 #endif  // IN1_SHARDED
                     }
 #ifdef FUSE_BIAS
+#ifdef FUSE_ROW_SCALE
+                    // One TILE scale per sparse batch (block, expert). Its
+                    // first logical column contains one scalar per output row.
+                    cb_in3.reserve_back(1);
+                    noc.async_read(s3, cb_in3, bias_single_tile_size_bytes, {.page_id = b * batchB_lim + bB}, {});
+                    noc.async_read_barrier();
+                    cb_in3.push_back(1);
+#else
                     // Only read bias on first batch, or we have multiple output blocks
                     if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
                         // Operand 1
@@ -578,6 +586,7 @@ void kernel_main() {
                         cb_in3.push_back(in1_block_w);
 #endif  // BIAS_SHARDED
                     }
+#endif  // FUSE_ROW_SCALE
 #endif  // FUSE_BIAS
 
 #ifndef OUT_SHARDED

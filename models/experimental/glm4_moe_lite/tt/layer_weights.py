@@ -483,12 +483,12 @@ def _prepare_fused_kv_branch_weights(
     )
 
     # ---- Pre-allocated DRAM output tensor for kernel-side write ----
-    # The kernel writes nope+rope concatenated directly to this ROW_MAJOR DRAM tensor.
-    # Shape [1, kvpe_dim] so page_size = kvpe_dim * 2 bytes (single page).
+    # The kernel writes the valid first row of each 32x32 output tile directly.
+    # Padding remains zero across reuse, so downstream tiled ops need no tilize.
     kvpe_output_fused = ttnn.from_torch(
-        torch.zeros((1, kvpe_dim), dtype=torch.bfloat16),
+        torch.zeros((1, 1, 1, kvpe_dim), dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh else None,
@@ -913,6 +913,9 @@ def convert_decoder_layer_weights(
             dense_dtype=dense_dtype,
             mesh_mapper=attn_proj_mapper,
         )
+        # Wormhole's fused kernel emits raw no-PE projection values; apply the
+        # validated TTNN RMSNorm immediately after the fused matmul/RoPE dispatch.
+        fused_kv_branch["rmsnorm_fn"] = kv_a_layernorm
 
     return DecoderLayerTTWeights(
         layer_idx=layer_idx,

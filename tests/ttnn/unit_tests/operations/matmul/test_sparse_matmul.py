@@ -14,6 +14,60 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+@pytest.mark.parametrize(("core_grid", "per_core_n"), [((4, 1), 1), ((2, 1), 2)])
+def test_sparse_matmul_input_a_post_scale(device, core_grid, per_core_n):
+    """MoE down projection: multiply each output row by its routing scalar."""
+    torch.manual_seed(0)
+    experts, m, k, n = 2, 32, 128, 128
+    in0 = torch.randn((1, experts, m, k), dtype=torch.bfloat16)
+    in1 = torch.randn((1, experts, k, n), dtype=torch.bfloat16)
+    sparsity = torch.ones((1, 1, 1, experts), dtype=torch.uint16)
+    post_scale = torch.rand((1, experts, m, 1), dtype=torch.bfloat16)
+
+    in0_t = ttnn.from_torch(in0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    in1_t = ttnn.from_torch(in1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    sparsity_t = ttnn.from_torch(
+        sparsity,
+        dtype=ttnn.uint16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    post_scale_t = ttnn.from_torch(
+        post_scale,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+
+    output_t = ttnn.sparse_matmul(
+        in0_t,
+        in1_t,
+        sparsity=sparsity_t,
+        post_scale=post_scale_t,
+        is_input_a_sparse=True,
+        is_input_b_sparse=False,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        output_tile=ttnn.Tile([32, 32]),
+        program_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(*core_grid),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            out_block_h=1,
+            out_block_w=1,
+            per_core_M=1,
+            per_core_N=per_core_n,
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+        ),
+    )
+
+    expected = torch.matmul(in0.float(), in1.float()) * post_scale.float()
+    assert_with_pcc(expected, ttnn.to_torch(output_t), 0.999)
+
+
 @pytest.mark.parametrize("mkn", [(16, 128, 512)])
 @pytest.mark.parametrize("num_experts", [8, 32])
 @pytest.mark.parametrize("num_batches", [(1, 4)])

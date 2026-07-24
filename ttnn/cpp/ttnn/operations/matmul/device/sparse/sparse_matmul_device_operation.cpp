@@ -157,6 +157,35 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
         "nnz ({}) must be less than or equal to the length of all batch dimensions ({})",
         operation_attributes.nnz,
         batch_length);
+
+    const bool has_post_scale =
+        !tensor_args.optional_input_tensors.empty() && tensor_args.optional_input_tensors.at(0).has_value();
+    if (has_post_scale) {
+        const auto& post_scale = tensor_args.optional_input_tensors.at(0).value();
+        TT_FATAL(
+            operation_attributes.is_input_a_sparse && !operation_attributes.is_input_b_sparse,
+            "post_scale is only supported for sparse input A (MoE down projection)");
+        TT_FATAL(post_scale.layout() == Layout::TILE, "post_scale must use TILE layout");
+        TT_FATAL(post_scale.dtype() == DataType::BFLOAT16, "post_scale must use BFLOAT16");
+        TT_FATAL(post_scale.device() == input_tensor_a.device(), "post_scale must be on the same device as input A");
+
+        const auto output_shape = compute_sparse_matmul_output_shape(
+            input_tensor_a,
+            input_tensor_b,
+            operation_attributes.is_input_a_sparse,
+            operation_attributes.is_input_b_sparse);
+        const auto& scale_shape = post_scale.logical_shape();
+        TT_FATAL(scale_shape.rank() == output_shape.rank(), "post_scale rank must match sparse matmul output rank");
+        for (uint32_t i = 0; i + 1 < output_shape.rank(); ++i) {
+            TT_FATAL(
+                scale_shape[i] == output_shape[i],
+                "post_scale dimension {} must match output ({} != {})",
+                i,
+                scale_shape[i],
+                output_shape[i]);
+        }
+        TT_FATAL(scale_shape[-1] == 1, "post_scale last dimension must be 1 for width broadcast");
+    }
 }
 
 SparseMatmulDeviceOperation::spec_return_value_t SparseMatmulDeviceOperation::compute_output_specs(
@@ -251,6 +280,7 @@ std::tuple<SparseMatmulParams, SparseMatmulInputs> sparse_matmul_build_operation
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const Tensor& sparsity,
+    const std::optional<const Tensor>& post_scale,
     const std::optional<Tensor>& optional_output_tensor,
     std::optional<uint32_t> nnz,
     bool is_input_a_sparse,
@@ -279,13 +309,16 @@ std::tuple<SparseMatmulParams, SparseMatmulInputs> sparse_matmul_build_operation
     auto parameters = create_sparse_matmul_attributes(
         input_tensor_a, input_tensor_b, sparsity, sparse_matmul_attributes, {optional_output_tensor});
 
-    return {parameters, SparseMatmulInputs{{input_tensor_a, input_tensor_b, sparsity}, {}, {optional_output_tensor}}};
+    return {
+        parameters,
+        SparseMatmulInputs{{input_tensor_a, input_tensor_b, sparsity}, {post_scale}, {optional_output_tensor}}};
 }
 
 SparseMatmulDeviceOperation::tensor_return_value_t sparse_matmul(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const Tensor& sparsity,
+    const std::optional<const Tensor>& post_scale,
     const std::optional<Tensor>& optional_output_tensor,
     std::optional<uint32_t> nnz,
     bool is_input_a_sparse,
@@ -302,6 +335,7 @@ SparseMatmulDeviceOperation::tensor_return_value_t sparse_matmul(
         input_tensor_a,
         input_tensor_b,
         sparsity,
+        post_scale,
         optional_output_tensor,
         nnz,
         is_input_a_sparse,

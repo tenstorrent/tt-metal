@@ -4,9 +4,9 @@
 """
 GLM KV Cache Branch fused operation (adapted from DSv3 KVCacheBranch).
 
-Fuses: DKV Matmul + Gather + RMSNorm + RoPE into a single dispatch.
-All intermediate CBs use TILE_1x32 format (1 row x 32 cols).
-RMSNorm uses REDUCE_ROW (not REDUCE_SCALAR) — natural scalar on 1-row tiles.
+Fuses DKV matmul and RoPE into a single dispatch. The no-PE projection is
+written directly by each matmul core; validated TTNN RMSNorm follows this op.
+All kernel intermediates use TILE_1x32 format (1 row x 32 cols).
 
 Kernel reads input x, cos, sin directly from DRAM via NOC.
 Kernel writes nope+rope output directly to a DRAM tensor via NOC.
@@ -31,7 +31,7 @@ def _bf16_to_uint16(value: float) -> int:
 
 
 class GLMKVCacheBranch:
-    """GLM KV Cache Branch: DKV matmul + gather + RMSNorm + RoPE in one dispatch."""
+    """GLM KV cache branch: DKV matmul + RoPE in one dispatch."""
 
     @staticmethod
     def op(
@@ -48,12 +48,11 @@ class GLMKVCacheBranch:
         data_format = input_tensor.dtype
         device = input_tensor.device()
 
-        # DKV Matmul weight grid = full 18-core grid
-        dkv_matmul_weights_mc = dkv_matmul_weights_tensor.memory_config()
-        dkv_matmul_weights_core_grid = dkv_matmul_weights_mc.shard_spec.grid
+        # DKV projection uses one 32-column shard on each of 18 cores. Weights
+        # remain DRAM-interleaved and each core pulls its K tiles directly.
+        dkv_matmul_weights_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 2))})
         dkv_matmul_weights_tile = dkv_matmul_weights_tensor.get_tile()
-        dkv_matmul_weights_shard_width = dkv_matmul_weights_mc.shard_spec.shape[1]
-        dkv_matmul_out_w = dkv_matmul_weights_shard_width // dkv_matmul_weights_tile.tile_shape[1]
+        dkv_matmul_out_w = 1
 
         # Core grids derived from weight grid and rope_core_grid param
         input_core_grid = dkv_matmul_weights_core_grid
@@ -97,8 +96,11 @@ class GLMKVCacheBranch:
         dkv_matmul_ncrisc_args = [
             ("dkv_matmul_in0", dkv_matmul_input_cb),
             ("dkv_matmul_in1", dkv_matmul_weights_cb),
+            ("dkv_matmul_out", dkv_matmul_output_cb),
             ("dkv_matmul_k_num_tiles", dkv_matmul_k_num_tiles),
             ("dkv_matmul_out_w_per_core", dkv_matmul_out_w),
+            ("dkv_matmul_weight_tile_bytes", dkv_matmul_weights_tile.get_tile_size(dkv_matmul_weights_tensor.dtype)),
+            ("dkv_matmul_weight_num_output_tiles", 18),
         ]
         dkv_matmul_trisc_args = [
             ("dkv_matmul_in0", dkv_matmul_input_cb),
@@ -118,16 +120,11 @@ class GLMKVCacheBranch:
 
         dkv_gather_sender_cores_list = ttnn.corerange_to_cores(dkv_gather_sender_grid, row_wise=True)
         dkv_gather_num_senders = len(dkv_gather_sender_cores_list)
+        dkv_matmul_cores_list = ttnn.corerange_to_cores(dkv_matmul_weights_core_grid, row_wise=True)
 
         dkv_gather_src_num_pages = dkv_matmul_out_w
         dkv_gather_data_size_bytes = dkv_gather_src_num_pages * tile_1x32_size
         dkv_gather_dst_total_pages = dkv_gather_num_senders * dkv_gather_src_num_pages
-
-        dkv_gather_sender_idx_descriptor = PerCoreCompileTimeDescriptor(
-            named_compile_time_arg="dkv_gather_sender_idx",
-            core_values=[(core, idx) for idx, core in enumerate(dkv_gather_sender_cores_list)],
-            other_value=0,
-        )
 
         dkv_gather_sender_args = [
             ("dkv_gather_dest_noc_x", dkv_gather_dest_noc_core.x),
@@ -138,8 +135,8 @@ class GLMKVCacheBranch:
             ("dkv_gather_src_num_pages", dkv_gather_src_num_pages),
             ("dkv_gather_sender_grid_start_x", 0),
             ("dkv_gather_sender_grid_start_y", 0),
-            ("dkv_gather_sender_grid_end_x", 0),
-            ("dkv_gather_sender_grid_end_y", 0),
+            ("dkv_gather_sender_grid_end_x", 5),
+            ("dkv_gather_sender_grid_end_y", 2),
             ("dkv_gather_row_major", 1),
             ("dkv_gather_dst_cb", kv_rmsnorm_input_cb),
         ]
@@ -187,7 +184,7 @@ class GLMKVCacheBranch:
         kvpe_dim = int(kvpe_output_tensor.shape[-1])
         nope_bytes = nope_num_tiles * tile_1x32_size
         cos_sin_dram_page_size = rope_dim * 2  # bf16
-        kvpe_out_dram_page_size = kvpe_dim * 2  # bf16
+        kvpe_out_dram_page_size = kvpe_output_tensor.get_tile().get_tile_size(kvpe_output_tensor.dtype)
 
         dram_io_ncrisc_args = [
             ("cos_sin_dram_page_size", cos_sin_dram_page_size),
@@ -200,6 +197,16 @@ class GLMKVCacheBranch:
         krope_tile_offset_descriptor = PerCoreCompileTimeDescriptor(
             named_compile_time_arg="krope_core_tile_offset",
             core_values=[(core, idx) for idx, core in enumerate(rope_cores_list)],
+            other_value=0,
+        )
+        knope_tile_offset_descriptor = PerCoreCompileTimeDescriptor(
+            named_compile_time_arg="knope_core_tile_offset",
+            core_values=[(core, idx) for idx, core in enumerate(dkv_matmul_cores_list[:nope_num_tiles])],
+            other_value=0,
+        )
+        weight_tile_offset_descriptor = PerCoreCompileTimeDescriptor(
+            named_compile_time_arg="dkv_weight_core_tile_offset",
+            core_values=[(core, idx) for idx, core in enumerate(dkv_matmul_cores_list)],
             other_value=0,
         )
 
@@ -233,8 +240,16 @@ class GLMKVCacheBranch:
             format_descriptors=[dkv_matmul_output_cb_format],
         )
 
-        dkv_matmul_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            dkv_matmul_weights_cb, dkv_matmul_weights_tensor
+        dkv_matmul_weights_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=dkv_matmul_weights_cb,
+            data_format=dkv_matmul_weights_tensor.dtype,
+            page_size=dkv_matmul_weights_tile.get_tile_size(dkv_matmul_weights_tensor.dtype),
+            tile=ttnn.TileDescriptor(dkv_matmul_weights_tile),
+        )
+        dkv_matmul_weights_cb_descriptor = ttnn.CBDescriptor(
+            total_size=dkv_matmul_k_num_tiles * dkv_matmul_weights_tile.get_tile_size(dkv_matmul_weights_tensor.dtype),
+            core_ranges=dkv_matmul_weights_core_grid,
+            format_descriptors=[dkv_matmul_weights_cb_format],
         )
 
         # ---- RMSNorm input CB (gather destination, intermediate on rmsnorm core) ----
@@ -375,6 +390,7 @@ class GLMKVCacheBranch:
             cos_tensor.buffer_address(),  # arg 5: cos DRAM address
             sin_tensor.buffer_address(),  # arg 6: sin DRAM address
             kvpe_output_tensor.buffer_address(),  # arg 7: kvpe output DRAM address
+            dkv_matmul_weights_tensor.buffer_address(),  # arg 8: projection weights DRAM address
         ]
         trisc_rmsnorm_rt_args = [
             kv_rmsnorm_input_cb,  # arg 0: input_cb
@@ -434,7 +450,8 @@ class GLMKVCacheBranch:
                 ),
             ],
             per_core_compile_time_descriptors=[
-                dkv_gather_sender_idx_descriptor,
+                knope_tile_offset_descriptor,
+                weight_tile_offset_descriptor,
                 krope_tile_offset_descriptor,
             ],
             ncrisc_common_runtime_args=ncrisc_rmsnorm_rt_args,

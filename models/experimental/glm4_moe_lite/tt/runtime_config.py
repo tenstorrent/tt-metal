@@ -111,6 +111,8 @@ class Glm4RuntimeConfig:
 
     # --- MLP / MoE ---
     fuse_mlp_moe_reduce: bool
+    fused_collective_epilogue: bool
+    buffered_moe_all_reduce: bool
     fuse_shared_gate_up: bool
     moe_experts_impl: str
     moe_router_impl: str
@@ -184,6 +186,10 @@ class Glm4RuntimeConfig:
             shard_q=_env_bool("GLM4_MOE_LITE_MLA_SHARD_Q"),
             # MLP / MoE
             fuse_mlp_moe_reduce=_env_bool("GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE"),
+            # On by default (validated: coherent + cross-device-equality gate passes on
+            # 4x8; falls back to the safe path on unsupported configs). Disable with =0.
+            fused_collective_epilogue=_env_bool("GLM4_MOE_LITE_FUSED_COLLECTIVE_EPILOGUE", default=True),
+            buffered_moe_all_reduce=_env_bool("GLM4_MOE_LITE_BUFFERED_MOE_ALL_REDUCE", default=True),
             fuse_shared_gate_up=_env_bool("GLM4_MOE_LITE_FUSE_SHARED_GATE_UP"),
             moe_experts_impl=_env_str("GLM4_MOE_LITE_MOE_EXPERTS_IMPL", default="sparse").lower(),
             moe_router_impl=_env_str("GLM4_MOE_LITE_MOE_ROUTER_IMPL", default="tt").lower(),

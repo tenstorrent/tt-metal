@@ -13,6 +13,8 @@ ttnn::Tensor fast_reduce_nc(
     const ttnn::Tensor& input,
     ttsl::Span<const int32_t> dims,
     const std::optional<const Tensor>& output,
+    const std::optional<const Tensor>& epilogue_input_a,
+    const std::optional<const Tensor>& epilogue_input_b,
     const ttnn::MemoryConfig& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
 

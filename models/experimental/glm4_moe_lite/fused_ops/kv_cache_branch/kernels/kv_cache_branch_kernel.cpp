@@ -3,23 +3,28 @@
 
 // GLM KV Cache Branch unified kernel (adapted from DSv3 KVCacheBranch)
 //
-// Fuses: DKV Matmul + Gather + RMSNorm + RoPE
+// Fuses: DKV Matmul + RoPE. RMSNorm remains on the validated TTNN path.
 // Kernel reads x, cos, sin from DRAM and writes nope+rope output to DRAM.
 // Only gamma, weights, and trans_mat remain as sharded L1 tensors.
 //
 // RISC responsibilities:
 // - NCRISC: Phase 0 (DRAM read x/cos/sin), setup sharded buffers,
 //           RMSNorm scaler/eps fill, Phase 5 (DRAM write output)
-// - BRISC: Gather receiver, wait for output CBs
-// - TRISC: Matmul compute, RMSNorm compute, RoPE compute
+// - BRISC: Wait for RoPE output CBs
+// - TRISC: Matmul compute and RoPE compute
 
+#include "../../../../../demos/deepseek_v3_b1/unified_kernels/kernel_op_api.hpp"
+#include "../../../../../demos/deepseek_v3_b1/unified_kernels/kernel_utils.hpp"
+// tensor_accessor.h transitively needs NOC_INDEX, which the JIT build only
+// defines for NCRISC/BRISC (dataflow) kernels — never for TRISC/compute. Guard
+// it so it does not leak into the compute translation unit (kernel_utils.hpp
+// above already pulls dataflow_api.h in for NC/BR, and the only tensor_accessor::
+// uses in this kernel live inside COMPILE_FOR_NCRISC blocks).
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
 #include "api/tensor/tensor_accessor.h"
-#include "../../../../deepseek_v3_b1/unified_kernels/kernel_op_api.hpp"
-#include "../../../../deepseek_v3_b1/unified_kernels/kernel_utils.hpp"
+#endif
 #include "matmul_wormhole.hpp"
-#include "../../../../deepseek_v3_b1/unified_kernels/gather.hpp"
-#include "rmsnorm_wormhole.hpp"
-#include "../../../../deepseek_v3_b1/unified_kernels/rope.hpp"
+#include "rope_wormhole.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr
 struct Core {
@@ -37,25 +42,6 @@ void kernel_main() {
     using DKV_MatmulCTArgs = glm4_matmul::Matmul::ReaderCTArgs;
     glm4_matmul::Matmul::ReaderArgs dkv_matmul_args{};
 
-    deepseek_b1_ops::Gather::SenderArgs dkv_gather_args{
-        get_named_compile_time_arg_val("dkv_gather_dest_noc_x"),
-        get_named_compile_time_arg_val("dkv_gather_dest_noc_y"),
-        get_named_compile_time_arg_val("dkv_gather_data_size_bytes"),
-        get_semaphore(get_named_compile_time_arg_val("dkv_gather_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("dkv_gather_src_cb"),
-        get_named_compile_time_arg_val("dkv_gather_src_num_pages"),
-        0,  // sender_grid_start_x (unused with UsePerCoreSenderIdx=true)
-        0,  // sender_grid_start_y
-        0,  // sender_grid_end_x
-        0,  // sender_grid_end_y
-        1,  // row_major (unused with UsePerCoreSenderIdx=true)
-        get_write_ptr(get_named_compile_time_arg_val("dkv_gather_dst_cb")),
-        get_named_compile_time_arg_val("dkv_gather_sender_idx"),
-    };
-
-    // RMSNorm reader args (runtime — scaler/eps values passed at dispatch time)
-    using KV_RMSNormCTArgs = glm4_rmsnorm::RMSNorm::ReaderCTArgs;
-
 // ============================================================================
 // BRISC (Writer)
 // ============================================================================
@@ -64,19 +50,8 @@ void kernel_main() {
 
     glm4_matmul::Matmul::WriterArgs dkv_matmul_args{};
 
-    deepseek_b1_ops::Gather::ReceiverArgs dkv_gather_args{
-        get_named_compile_time_arg_val("dkv_gather_noc0_num_senders"),
-        get_named_compile_time_arg_val("dkv_gather_noc1_num_senders"),
-        get_semaphore(get_named_compile_time_arg_val("dkv_gather_noc0_receiver_semaphore_id")),
-        get_semaphore(get_named_compile_time_arg_val("dkv_gather_noc1_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("dkv_gather_dst_cb"),
-        get_named_compile_time_arg_val("dkv_gather_dst_num_pages"),
-    };
-
-    using KV_RMSNormCTArgs = glm4_rmsnorm::RMSNorm::WriterCTArgs;
-
-    using K_RopeCTArgs = deepseek_b1_ops::Rope::WriterCTArgs;
-    deepseek_b1_ops::Rope::WriterArgs k_rope_args{};
+    using K_RopeCTArgs = glm4_rope::Rope::WriterCTArgs;
+    glm4_rope::Rope::WriterArgs k_rope_args{};
 
 // ============================================================================
 // TRISC (Compute)
@@ -92,14 +67,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("dkv_matmul_k_num_tiles"),
     };
 
-    deepseek_b1_ops::Gather::ComputeArgs dkv_gather_args{};
-
-    // RMSNorm compute args
-    constexpr uint32_t kv_nope_num_tiles = get_named_compile_time_arg_val("kv_rmsnorm_num_tiles");
-    using KV_RMSNormCTArgs = glm4_rmsnorm::RMSNorm::ComputeCTArgs<false, kv_nope_num_tiles, true>;
-
-    using K_RopeCTArgs = deepseek_b1_ops::Rope::
-        ComputeCTArgs<get_named_compile_time_arg_val("Wt"), get_named_compile_time_arg_val("Ht")>;
+    using K_RopeCTArgs =
+        glm4_rope::Rope::ComputeCTArgs<get_named_compile_time_arg_val("Wt"), get_named_compile_time_arg_val("Ht")>;
 
     constexpr uint32_t k_rope_input_cb = get_named_compile_time_arg_val("in_cb");
     constexpr uint32_t cos_cb = get_named_compile_time_arg_val("cos_cb");
@@ -110,7 +79,7 @@ void kernel_main() {
     constexpr uint32_t sin_interm_cb = get_named_compile_time_arg_val("sin_interm_cb");
     constexpr uint32_t k_rope_output_cb = get_named_compile_time_arg_val("out_cb");
 
-    deepseek_b1_ops::Rope::ComputeArgs k_rope_args{
+    glm4_rope::Rope::ComputeArgs k_rope_args{
         .in_cb = k_rope_input_cb,
         .cos_cb = cos_cb,
         .sin_cb = sin_cb,
@@ -120,27 +89,7 @@ void kernel_main() {
         .sin_interm_cb = sin_interm_cb,
         .out_cb = k_rope_output_cb,
     };
-#endif
-
-    // RMSNorm runtime args (same struct on all RISCs, populated from common runtime args)
-    glm4_rmsnorm::RMSNorm::RTArgs kv_rmsnorm_args{};
-#if defined(COMPILE_FOR_NCRISC)
-    kv_rmsnorm_args = {
-        get_common_arg_val<uint32_t>(0),  // cb_scaler
-        get_common_arg_val<uint32_t>(1),  // cb_eps
-        get_common_arg_val<uint32_t>(2),  // scaler_packed (bf16 as uint16)
-        get_common_arg_val<uint32_t>(3),  // eps_packed (bf16 as uint16)
-    };
-#elif defined(COMPILE_FOR_TRISC)
-    kv_rmsnorm_args = {
-        get_common_arg_val<uint32_t>(0),  // input_cb (gather dst = rmsnorm input)
-        get_common_arg_val<uint32_t>(1),  // gamma_cb
-        get_common_arg_val<uint32_t>(2),  // output_cb (nope output tensor)
-        get_common_arg_val<uint32_t>(3),  // cb_x2
-        get_common_arg_val<uint32_t>(4),  // cb_var
-        get_common_arg_val<uint32_t>(5),  // cb_scaler
-        get_common_arg_val<uint32_t>(6),  // cb_eps
-    };
+    deepseek_compute_kernel_init();
 #endif
 
     // ========================================================================
@@ -160,7 +109,9 @@ void kernel_main() {
         cb_reserve_back(dkv_matmul_in0, dkv_matmul_k_num_tiles);
         uint32_t l1_write_addr = get_write_ptr(dkv_matmul_in0);
 
-        uint64_t x_noc_addr = tensor_accessor::get_dram_bank_base_offset(0, noc_index) + x_dram_addr;
+        auto x_accessor =
+            TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), x_dram_addr, x_total_bytes);
+        uint64_t x_noc_addr = x_accessor.get_noc_addr(0);
         noc_async_read(x_noc_addr, l1_write_addr, x_total_bytes);
         noc_async_read_barrier();
 
@@ -178,13 +129,16 @@ void kernel_main() {
         uint32_t cos_dram_addr = get_common_arg_val<uint32_t>(5);
         uint32_t sin_dram_addr = get_common_arg_val<uint32_t>(6);
 
-        uint64_t dram_bank0_base = tensor_accessor::get_dram_bank_base_offset(0, noc_index);
+        auto cos_accessor = TensorAccessor(
+            tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), cos_dram_addr, cos_sin_page_size);
+        auto sin_accessor = TensorAccessor(
+            tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), sin_dram_addr, cos_sin_page_size);
 
         // Read cos tile for this core
         cb_reserve_back(cos_cb_id, Wt);
         {
             uint32_t cos_l1_addr = get_write_ptr(cos_cb_id);
-            uint64_t cos_noc_addr = dram_bank0_base + cos_dram_addr + tile_offset * TILE_1x32_BYTES;
+            uint64_t cos_noc_addr = cos_accessor.get_noc_addr(0) + tile_offset * TILE_1x32_BYTES;
             noc_async_read(cos_noc_addr, cos_l1_addr, TILE_1x32_BYTES);
         }
 
@@ -192,7 +146,7 @@ void kernel_main() {
         cb_reserve_back(sin_cb_id, Wt);
         {
             uint32_t sin_l1_addr = get_write_ptr(sin_cb_id);
-            uint64_t sin_noc_addr = dram_bank0_base + sin_dram_addr + tile_offset * TILE_1x32_BYTES;
+            uint64_t sin_noc_addr = sin_accessor.get_noc_addr(0) + tile_offset * TILE_1x32_BYTES;
             noc_async_read(sin_noc_addr, sin_l1_addr, TILE_1x32_BYTES);
         }
 
@@ -201,17 +155,29 @@ void kernel_main() {
         cb_push_back(sin_cb_id, Wt);
     }
 
-    // Setup remaining sharded persistent buffers (weights, gamma, trans_mat)
+    // Pull this core's 32-column weight shard directly from interleaved DRAM.
+    // Tile order for [K, N] is k-major, so tile(k, core) is k * Nt + core.
     if constexpr (Core::is_dkv_matmul_core) {
         constexpr uint32_t dkv_matmul_in1 = get_named_compile_time_arg_val("dkv_matmul_in1");
         constexpr uint32_t dkv_matmul_k_num_tiles = get_named_compile_time_arg_val("dkv_matmul_k_num_tiles");
-        constexpr uint32_t dkv_matmul_out_w_per_core = get_named_compile_time_arg_val("dkv_matmul_out_w_per_core");
-        unified_kernels::setup_sharded_buffer(dkv_matmul_in1, dkv_matmul_k_num_tiles * dkv_matmul_out_w_per_core);
-    }
-    if constexpr (Core::is_kv_rmsnorm_core) {
-        constexpr uint32_t gamma_cb = get_named_compile_time_arg_val("kv_rmsnorm_gamma_cb");
-        constexpr uint32_t gamma_num_tiles = get_named_compile_time_arg_val("kv_rmsnorm_num_tiles");
-        unified_kernels::setup_sharded_buffer(gamma_cb, gamma_num_tiles);
+        constexpr uint32_t weight_tile_bytes = get_named_compile_time_arg_val("dkv_matmul_weight_tile_bytes");
+        constexpr uint32_t weight_num_output_tiles =
+            get_named_compile_time_arg_val("dkv_matmul_weight_num_output_tiles");
+        constexpr uint32_t core_tile_offset = get_named_compile_time_arg_val("dkv_weight_core_tile_offset");
+        uint32_t weights_dram_addr = get_common_arg_val<uint32_t>(8);
+        auto weights_accessor = TensorAccessor(
+            tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), weights_dram_addr, weight_tile_bytes);
+
+        cb_reserve_back(dkv_matmul_in1, dkv_matmul_k_num_tiles);
+        uint32_t weight_l1_addr = get_write_ptr(dkv_matmul_in1);
+        for (uint32_t k = 0; k < dkv_matmul_k_num_tiles; ++k) {
+            noc_async_read_page(
+                k * weight_num_output_tiles + core_tile_offset,
+                weights_accessor,
+                weight_l1_addr + k * weight_tile_bytes);
+        }
+        noc_async_read_barrier();
+        cb_push_back(dkv_matmul_in1, dkv_matmul_k_num_tiles);
     }
     if constexpr (Core::is_krope_core) {
         constexpr uint32_t trans_mat_cb_id = get_named_compile_time_arg_val("trans_mat_cb");
@@ -229,21 +195,21 @@ void kernel_main() {
     }
 
     // ========================================================================
-    // Phase 2: Gather — knope matmul cores -> rmsnorm core
+    // Phase 2: Gather is unnecessary while RMSNorm remains on the validated
+    // TTNN path. Each no-PE matmul core writes its own 1x32 result directly.
     // ========================================================================
     {
         DeviceZoneScopedN("DKV_GATHER");
-        deepseek_b1_ops::Gather::Op<Core::is_knope_core, Core::is_kv_rmsnorm_core, true, true> dkv_gather;
-        dkv_gather(dkv_gather_args);
     }
 
     // ========================================================================
-    // Phase 3: RMSNorm on gathered nope data (on rmsnorm core only)
+    // Phase 3: The TILE_1x32 reduction path cannot represent REDUCE_SCALAR's
+    // 32x32 intermediate safely on Wormhole. Keep RMSNorm as a following TTNN
+    // op and emit the gathered no-PE projection from this fused kernel.
     // ========================================================================
     {
         DeviceZoneScopedN("KV_RMSNORM");
-        glm4_rmsnorm::RMSNorm::Op<KV_RMSNormCTArgs, Core::is_kv_rmsnorm_core, true> kv_rmsnorm;
-        kv_rmsnorm(kv_rmsnorm_args);
+        // Intentionally empty.
     }
 
     // ========================================================================
@@ -253,7 +219,7 @@ void kernel_main() {
     {
         DeviceZoneScopedN("K_ROPE");
 #if !defined(COMPILE_FOR_NCRISC)
-        deepseek_b1_ops::Rope::Op<K_RopeCTArgs, Core::is_krope_core> k_rope;
+        glm4_rope::Rope::Op<K_RopeCTArgs, Core::is_krope_core> k_rope;
         k_rope(k_rope_args);
 #endif
     }
@@ -265,18 +231,24 @@ void kernel_main() {
     {
         DeviceZoneScopedN("DRAM_WRITE_OUTPUT");
 
-        constexpr uint32_t kvpe_out_nope_bytes = get_named_compile_time_arg_val("kvpe_out_nope_bytes");
         uint32_t kvpe_out_dram_addr = get_common_arg_val<uint32_t>(7);
 
-        uint64_t out_base_noc_addr = tensor_accessor::get_dram_bank_base_offset(0, noc_index) + kvpe_out_dram_addr;
+        constexpr uint32_t kvpe_out_dram_page_size = get_named_compile_time_arg_val("kvpe_out_dram_page_size");
+        auto output_accessor = TensorAccessor(
+            tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), kvpe_out_dram_addr, kvpe_out_dram_page_size);
 
-        // RMSNorm core: write nope (16 tiles) to output offset 0
-        if constexpr (Core::is_kv_rmsnorm_core) {
-            constexpr uint32_t nope_output_cb = get_named_compile_time_arg_val("kv_rmsnorm_output_cb");
-            constexpr uint32_t nope_num_tiles = get_named_compile_time_arg_val("kv_rmsnorm_num_tiles");
-            cb_wait_front(nope_output_cb, nope_num_tiles);
+        // No-PE matmul cores: write one naturally ordered output tile each.
+        if constexpr (Core::is_knope_core) {
+            constexpr uint32_t nope_output_cb = get_named_compile_time_arg_val("dkv_matmul_out");
+            constexpr uint32_t tile_offset = get_named_compile_time_arg_val("knope_core_tile_offset");
+            cb_wait_front(nope_output_cb, 1);
             uint32_t nope_l1_addr = get_read_ptr(nope_output_cb);
-            noc_async_write(nope_l1_addr, out_base_noc_addr, kvpe_out_nope_bytes);
+            uint64_t output_tile_noc_addr = output_accessor.get_noc_addr(tile_offset);
+            // A conventional 32x32 tile stores its top row across the first
+            // row of face 0 and face 1. Split the packed tiny-tile row into
+            // those two locations; the pre-zeroed padding remains untouched.
+            noc_async_write(nope_l1_addr, output_tile_noc_addr, 32);
+            noc_async_write(nope_l1_addr + 32, output_tile_noc_addr + 512, 32);
         }
 
         // Rope cores: write rope (1 tile each) to output after nope
@@ -286,8 +258,9 @@ void kernel_main() {
             constexpr uint32_t tile_offset = get_named_compile_time_arg_val("krope_core_tile_offset");
             cb_wait_front(k_rope_output_cb, Wt);
             uint32_t rope_l1_addr = get_read_ptr(k_rope_output_cb);
-            uint64_t rope_dram_addr = out_base_noc_addr + kvpe_out_nope_bytes + tile_offset * TILE_1x32_BYTES;
-            noc_async_write(rope_l1_addr, rope_dram_addr, Wt * TILE_1x32_BYTES);
+            uint64_t rope_tile_noc_addr = output_accessor.get_noc_addr(16 + tile_offset);
+            noc_async_write(rope_l1_addr, rope_tile_noc_addr, 32);
+            noc_async_write(rope_l1_addr + 32, rope_tile_noc_addr + 512, 32);
         }
 
         noc_async_write_barrier();
@@ -296,11 +269,6 @@ void kernel_main() {
 
 #if defined(COMPILE_FOR_BRISC)
     // Wait for output CBs to be ready (synchronization — ensures compute completed)
-    if constexpr (Core::is_kv_rmsnorm_core) {
-        constexpr uint32_t nope_output_cb = get_named_compile_time_arg_val("kv_rmsnorm_output_cb");
-        constexpr uint32_t nope_num_tiles = get_named_compile_time_arg_val("kv_rmsnorm_num_tiles");
-        cb_wait_front(nope_output_cb, nope_num_tiles);
-    }
     if constexpr (Core::is_krope_core) {
         constexpr uint32_t k_rope_output_cb = get_named_compile_time_arg_val("k_rope_output_cb");
         constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");

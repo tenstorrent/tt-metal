@@ -134,6 +134,7 @@ def moe_mlp_forward(
     profile: dict[str, float] | None = None,
     layer_idx: int = -1,
     use_signpost: bool = False,
+    collective_residual: ttnn.Tensor | None = None,
 ) -> ttnn.Tensor:
     """MoE MLP: shared expert (dense) + routed experts. Returns mlp_out [1,1,B,hidden]."""
     from models.experimental.glm4_moe_lite.tt.moe_tt import (
@@ -153,6 +154,32 @@ def moe_mlp_forward(
     moe_decode_mc = getattr(moe_runtime, "decode_memory_config", ttnn.DRAM_MEMORY_CONFIG)
     mlp_compute_kernel_config = cfg.mlp_compute_kernel_config()
     _skip_shared_reduce = cfg.fuse_mlp_moe_reduce and cfg.tp_enabled
+    use_collective_epilogue = cfg.fused_collective_epilogue
+    use_buffered_all_reduce = cfg.buffered_moe_all_reduce
+    if use_collective_epilogue or use_buffered_all_reduce:
+        mesh_shape = (
+            (int(device.shape[0]), int(device.shape[1])) if device.__class__.__name__ == "MeshDevice" else (1, 1)
+        )
+        dispatch_impl = os.environ.get("GLM4_MOE_LITE_MOE_SPARSE_DISPATCH_IMPL", "reduce").strip().lower()
+        if not dispatch_impl:
+            dispatch_impl = "reduce"
+        if (
+            (use_collective_epilogue and collective_residual is None)
+            or mesh_shape != (4, 8)
+            or cfg.tp_enabled
+            or cfg.moe_experts_impl != "sparse"
+            or dispatch_impl != "reduce"
+            or tokens > 32
+            or use_dense_decode
+            or use_dense_prefill
+            or use_packed_prefill
+        ):
+            # The fused MoE collective path only supports 4x8 mesh, TP=0, sparse
+            # reduce dispatch, tokens<=32, and a threaded residual. These flags are
+            # ON by default, so on any unsupported config we fall back to the safe
+            # gather/reduce + standalone adds rather than crashing.
+            use_collective_epilogue = False
+            use_buffered_all_reduce = False
 
     # Pad tokens for sparse expert kernels if needed.
     #
@@ -275,6 +302,9 @@ def moe_mlp_forward(
             rt=moe_runtime,
             skip_defensive_clones=cfg.skip_defensive_clones,
             skip_final_reduce=_skip_shared_reduce,
+            collective_epilogue_a=shared_out if use_collective_epilogue else None,
+            collective_epilogue_b=collective_residual if use_collective_epilogue else None,
+            use_buffered_all_reduce=use_buffered_all_reduce,
         )
     _profile_add(profile, "moe_experts_s", time.perf_counter() - t0 if profile is not None else 0.0)
     if use_signpost:
@@ -284,6 +314,13 @@ def moe_mlp_forward(
     if use_signpost:
         signpost(f"L{layer_idx}_merge-start")
     t0 = time.perf_counter() if profile is not None else 0.0
+    if use_collective_epilogue:
+        ttnn.deallocate(shared_out, force=False)
+        _profile_add(profile, "moe_merge_s", time.perf_counter() - t0 if profile is not None else 0.0)
+        if use_signpost:
+            signpost(f"L{layer_idx}_merge-end")
+        return routed_out
+
     mlp_out = ttnn.add(shared_out, routed_out, memory_config=moe_decode_mc)
     ttnn.deallocate(shared_out, force=False)
     ttnn.deallocate(routed_out, force=False)

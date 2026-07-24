@@ -274,6 +274,13 @@ class Glm4MoeLiteDenseOnlyTT:
             is_distributed=False,
         )
         tp_enabled = _env_tp_enabled()
+        # Vocab-sharded LM head can be enabled independently of full TP. The LM-head
+        # weight is ~17% of the per-token replicated DRAM read at bs=1; sharding its
+        # vocab across the mesh cuts that read to ~1/num_devices. The downstream logits
+        # all-gather (prefill) and per-shard max/argmax host-reduction (decode, incl.
+        # traced sampling) already key off `lm_head_sharded_vocab`, not `tp_enabled`,
+        # so this is a clean decouple.
+        lmhead_shard_enabled = tp_enabled or (os.environ.get("GLM4_MOE_LITE_LMHEAD_SHARD", "").strip() == "1")
         lm_head_mapper = None
         lm_head_variant = ""
         lm_head_sharded_vocab = False
@@ -283,7 +290,7 @@ class Glm4MoeLiteDenseOnlyTT:
         num_devices = 1
         if _is_mesh_device(device):
             num_devices = int(device.shape[0]) * int(device.shape[1])
-        if tp_enabled and num_devices > 1:
+        if lmhead_shard_enabled and num_devices > 1:
             vocab = int(hparams.vocab_size)
             if vocab % int(num_devices) != 0:
                 raise ValueError(
@@ -1444,6 +1451,19 @@ class Glm4MoeLiteDenseOnlyTT:
                 mesh_mapper=mesh_mapper,
             )
 
+        # The fused KV kernel consumes row-major DRAM RoPE rows. Convert once
+        # per token and share them across all layers instead of converting in
+        # every layer.
+        fused_cos_batch = None
+        fused_sin_batch = None
+        if os.environ.get("GLM4_MOE_LITE_FUSED_KV_BRANCH", "").strip() == "1" and active == 1:
+            fused_cos_rm = ttnn.to_layout(cos_batch, ttnn.ROW_MAJOR_LAYOUT)
+            fused_sin_rm = ttnn.to_layout(sin_batch, ttnn.ROW_MAJOR_LAYOUT)
+            fused_cos_batch = ttnn.to_memory_config(fused_cos_rm, ttnn.DRAM_MEMORY_CONFIG)
+            fused_sin_batch = ttnn.to_memory_config(fused_sin_rm, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(fused_cos_rm, force=False)
+            ttnn.deallocate(fused_sin_rm, force=False)
+
         # Run decoder stack.
         for layer_idx in range(self.num_layers_to_run):
             w = self._ensure_layer_weights(layer_idx)
@@ -1458,6 +1478,8 @@ class Glm4MoeLiteDenseOnlyTT:
                 kvpe_cache=kv_cache[layer_idx],
                 cos_batch=cos_batch,
                 sin_batch=sin_batch,
+                fused_cos_batch=fused_cos_batch,
+                fused_sin_batch=fused_sin_batch,
                 trans_matrix=self.rope["trans_matrix"],
                 cos_decode=cos_decode,
                 sin_decode=sin_decode,
@@ -1481,6 +1503,9 @@ class Glm4MoeLiteDenseOnlyTT:
                 ttnn.ReadDeviceProfiler(self.device)
             ttnn.deallocate(x, force=False)
             x = x_next
+        if fused_cos_batch is not None:
+            ttnn.deallocate(fused_cos_batch, force=False)
+            ttnn.deallocate(fused_sin_batch, force=False)
 
         # Preserve hidden state for MTP before final_norm
         mtp_hidden = None
@@ -2138,8 +2163,13 @@ class Glm4MoeLiteDenseOnlyTT:
         tokens: torch.Tensor,
         start_pos: torch.Tensor,
         page_table: torch.Tensor,
+        cq_id: int = 0,
     ) -> None:
-        """Copy host decode inputs into persistent device tensors for a bucket state."""
+        """Copy host decode inputs into persistent device tensors for a bucket state.
+
+        cq_id selects the command queue for the host->device writes; trace-2CQ uses
+        CQ1 so these writes can overlap the CQ0 compute trace (see _decode_trace_*).
+        """
         if (
             state.tokens_tt is None
             or state.positions_tt is None
@@ -2201,7 +2231,7 @@ class Glm4MoeLiteDenseOnlyTT:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mapper,
         )
-        ttnn.copy_host_to_device_tensor(host_tokens, state.tokens_tt)
+        ttnn.copy_host_to_device_tensor(host_tokens, state.tokens_tt, cq_id=cq_id)
 
         host_pos = ttnn.from_torch(
             start_pos.to(torch.int32),
@@ -2211,7 +2241,7 @@ class Glm4MoeLiteDenseOnlyTT:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mapper,
         )
-        ttnn.copy_host_to_device_tensor(host_pos, state.positions_tt)
+        ttnn.copy_host_to_device_tensor(host_pos, state.positions_tt, cq_id=cq_id)
 
         # Trace-mode RoPE: copy rot_idxs (positions) to device and generate cos/sin
         # *inside* the trace graph. Copying host-side RoPE slices directly into
@@ -2238,7 +2268,7 @@ class Glm4MoeLiteDenseOnlyTT:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mapper,
         )
-        ttnn.copy_host_to_device_tensor(host_rot_idxs, state.rot_idxs_tt)
+        ttnn.copy_host_to_device_tensor(host_rot_idxs, state.rot_idxs_tt, cq_id=cq_id)
 
         host_pt = ttnn.from_torch(
             page_table.to(torch.int32),
@@ -2248,7 +2278,7 @@ class Glm4MoeLiteDenseOnlyTT:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mapper,
         )
-        ttnn.copy_host_to_device_tensor(host_pt, state.page_table_tt)
+        ttnn.copy_host_to_device_tensor(host_pt, state.page_table_tt, cq_id=cq_id)
 
         # Batch-expansion serial cache update: copy masked position tensors
         if self.batch_expand and state.positions_main_tt is not None and self._batch_expand_num_main > 0:
@@ -2265,7 +2295,7 @@ class Glm4MoeLiteDenseOnlyTT:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=mapper,
             )
-            ttnn.copy_host_to_device_tensor(host_pos_main, state.positions_main_tt)
+            ttnn.copy_host_to_device_tensor(host_pos_main, state.positions_main_tt, cq_id=cq_id)
             host_pos_draft = ttnn.from_torch(
                 pos_draft,
                 device=None,
@@ -2274,7 +2304,7 @@ class Glm4MoeLiteDenseOnlyTT:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=mapper,
             )
-            ttnn.copy_host_to_device_tensor(host_pos_draft, state.positions_draft_tt)
+            ttnn.copy_host_to_device_tensor(host_pos_draft, state.positions_draft_tt, cq_id=cq_id)
 
     def _copy_mtp_trace_inputs(
         self,
@@ -2558,6 +2588,16 @@ class Glm4MoeLiteDenseOnlyTT:
         x = ttnn.permute(x, (0, 2, 1, 3))  # [1,1,B,D]
         x = ttnn.slice(x, [0, 0, 0, 0], [1, 1, batch, hidden])
 
+        fused_cos_batch = None
+        fused_sin_batch = None
+        if os.environ.get("GLM4_MOE_LITE_FUSED_KV_BRANCH", "").strip() == "1" and batch == 1:
+            fused_cos_rm = ttnn.to_layout(cos_batch, ttnn.ROW_MAJOR_LAYOUT)
+            fused_sin_rm = ttnn.to_layout(sin_batch, ttnn.ROW_MAJOR_LAYOUT)
+            fused_cos_batch = ttnn.to_memory_config(fused_cos_rm, ttnn.DRAM_MEMORY_CONFIG)
+            fused_sin_batch = ttnn.to_memory_config(fused_sin_rm, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(fused_cos_rm, force=False)
+            ttnn.deallocate(fused_sin_rm, force=False)
+
         for layer_idx in range(self.num_layers_to_run):
             w = self._ensure_layer_weights(layer_idx)
             x_next = run_decoder_layer_decode_one_step_update_cache_tt(
@@ -2568,6 +2608,8 @@ class Glm4MoeLiteDenseOnlyTT:
                 kvpe_cache=kv_cache[layer_idx],
                 cos_batch=cos_batch,
                 sin_batch=sin_batch,
+                fused_cos_batch=fused_cos_batch,
+                fused_sin_batch=fused_sin_batch,
                 trans_matrix=trans_matrix,
                 cos_decode=cos_batch,
                 sin_decode=sin_batch,
@@ -2584,6 +2626,9 @@ class Glm4MoeLiteDenseOnlyTT:
             )
             ttnn.deallocate(x, force=False)
             x = x_next
+        if fused_cos_batch is not None:
+            ttnn.deallocate(fused_cos_batch, force=False)
+            ttnn.deallocate(fused_sin_batch, force=False)
 
         # Preserve hidden state for MTP before final_norm consumes it.
         # Use ttnn.clone (not ttnn.copy) so the trace graph allocates a fresh
@@ -2786,10 +2831,27 @@ class Glm4MoeLiteDenseOnlyTT:
         assert state.logits_tt is not None
         assert state.top1_indices_tt is not None
 
-        self._copy_decode_trace_inputs(state=state, tokens=tokens, start_pos=start_pos, page_table=page_table)
-        if os.environ.get("GLM4_MOE_LITE_SYNC_BEFORE_TRACE", "").strip() == "1":
-            ttnn.synchronize_device(self.device)
-        ttnn.execute_trace(self.device, state.trace_id, cq_id=0, blocking=True)
+        # Trace-2CQ (opt-in, GLM4_MOE_LITE_TRACE_2CQ=1): stage host inputs on CQ1 and run
+        # the compute trace on CQ0, overlapped via events (canonical ttnn 2CQ pattern).
+        # Requires the mesh opened with num_command_queues=2. Off by default; disabled with
+        # MTP to keep the two-trace path simple. Falls back to the single-CQ blocking path.
+        _trace_2cq = os.environ.get("GLM4_MOE_LITE_TRACE_2CQ", "").strip() == "1" and not self.mtp_enabled
+        if _trace_2cq:
+            _prev_op_event = getattr(self, "_trace_2cq_op_event", None)
+            if _prev_op_event is not None:
+                ttnn.wait_for_event(1, _prev_op_event)  # CQ1: don't overwrite inputs CQ0 is still reading
+            self._copy_decode_trace_inputs(
+                state=state, tokens=tokens, start_pos=start_pos, page_table=page_table, cq_id=1
+            )
+            _write_event = ttnn.record_event(self.device, 1)
+            ttnn.wait_for_event(0, _write_event)  # CQ0: wait until inputs are on device
+            ttnn.execute_trace(self.device, state.trace_id, cq_id=0, blocking=False)
+            self._trace_2cq_op_event = ttnn.record_event(self.device, 0)  # CQ0 done reading inputs
+        else:
+            self._copy_decode_trace_inputs(state=state, tokens=tokens, start_pos=start_pos, page_table=page_table)
+            if os.environ.get("GLM4_MOE_LITE_SYNC_BEFORE_TRACE", "").strip() == "1":
+                ttnn.synchronize_device(self.device)
+            ttnn.execute_trace(self.device, state.trace_id, cq_id=0, blocking=True)
 
         # MTP: run after main trace completes (traced or eager fallback)
         self._last_draft_token_ids = None
@@ -2872,10 +2934,27 @@ class Glm4MoeLiteDenseOnlyTT:
         assert state.trace_id is not None
         assert state.logits_tt is not None
 
-        self._copy_decode_trace_inputs(state=state, tokens=tokens, start_pos=start_pos, page_table=page_table)
-        if os.environ.get("GLM4_MOE_LITE_SYNC_BEFORE_TRACE", "").strip() == "1":
-            ttnn.synchronize_device(self.device)
-        ttnn.execute_trace(self.device, state.trace_id, cq_id=0, blocking=True)
+        # Trace-2CQ (opt-in, GLM4_MOE_LITE_TRACE_2CQ=1): stage host inputs on CQ1 and run
+        # the compute trace on CQ0, overlapped via events (canonical ttnn 2CQ pattern).
+        # Requires the mesh opened with num_command_queues=2. Off by default; disabled with
+        # MTP to keep the two-trace path simple. Falls back to the single-CQ blocking path.
+        _trace_2cq = os.environ.get("GLM4_MOE_LITE_TRACE_2CQ", "").strip() == "1" and not self.mtp_enabled
+        if _trace_2cq:
+            _prev_op_event = getattr(self, "_trace_2cq_op_event", None)
+            if _prev_op_event is not None:
+                ttnn.wait_for_event(1, _prev_op_event)  # CQ1: don't overwrite inputs CQ0 is still reading
+            self._copy_decode_trace_inputs(
+                state=state, tokens=tokens, start_pos=start_pos, page_table=page_table, cq_id=1
+            )
+            _write_event = ttnn.record_event(self.device, 1)
+            ttnn.wait_for_event(0, _write_event)  # CQ0: wait until inputs are on device
+            ttnn.execute_trace(self.device, state.trace_id, cq_id=0, blocking=False)
+            self._trace_2cq_op_event = ttnn.record_event(self.device, 0)  # CQ0 done reading inputs
+        else:
+            self._copy_decode_trace_inputs(state=state, tokens=tokens, start_pos=start_pos, page_table=page_table)
+            if os.environ.get("GLM4_MOE_LITE_SYNC_BEFORE_TRACE", "").strip() == "1":
+                ttnn.synchronize_device(self.device)
+            ttnn.execute_trace(self.device, state.trace_id, cq_id=0, blocking=True)
 
         # MTP: run after main trace completes (logits path)
         global _mtp_total, _mtp_accepted

@@ -109,6 +109,7 @@ Tensor sparse_matmul(
     std::optional<const CoreGrid> core_grid = std::nullopt,
     const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<const Tensor>& post_scale = std::nullopt,
     const std::optional<const GlobalCircularBuffer>& global_cb = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 

@@ -34,6 +34,8 @@ Tensor fast_reduce_nc(
     const Tensor& input,
     const int32_t& dim,
     const std::optional<const Tensor>& output,
+    const std::optional<const Tensor>& epilogue_input_a,
+    const std::optional<const Tensor>& epilogue_input_b,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config);
 

@@ -94,6 +94,40 @@ def test_fast_reduce_nc(input_shape, dims, compute_kernel_options, dataformat, d
     assert passing
 
 
+@pytest.mark.parametrize("tokens", [1, 8, 32])
+@pytest.mark.parametrize("dataformat", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bfloat16", "bfloat8_b"])
+@pytest.mark.parametrize("use_preallocated_output", [False, True], ids=["allocated", "preallocated"])
+def test_fast_reduce_nc_with_additive_epilogue(tokens, dataformat, use_preallocated_output, device):
+    torch.manual_seed(2026)
+    routed = torch.randn((4, 1, tokens, 2048), dtype=torch.bfloat16)
+    shared = torch.randn((1, 1, tokens, 2048), dtype=torch.bfloat16)
+    residual = torch.randn((1, 1, tokens, 2048), dtype=torch.bfloat16)
+    golden = routed.sum(dim=0, keepdim=True) + shared + residual
+
+    tt_routed = ttnn.from_torch(routed, device=device, layout=ttnn.TILE_LAYOUT, dtype=dataformat)
+    tt_shared = ttnn.from_torch(shared, device=device, layout=ttnn.TILE_LAYOUT, dtype=dataformat)
+    tt_residual = ttnn.from_torch(residual, device=device, layout=ttnn.TILE_LAYOUT, dtype=dataformat)
+    tt_output = None
+    if use_preallocated_output:
+        tt_output = ttnn.from_torch(torch.zeros_like(shared), device=device, layout=ttnn.TILE_LAYOUT, dtype=dataformat)
+
+    result = ttnn.experimental.fast_reduce_nc(
+        tt_routed,
+        dims=[0],
+        output=tt_output,
+        epilogue_input_a=tt_shared,
+        epilogue_input_b=tt_residual,
+    )
+    result_torch = ttnn.to_torch(result).reshape(1, 1, -1, 2048)[:, :, :tokens, :]
+
+    if dataformat == ttnn.bfloat8_b:
+        passing, output_pcc = comp_pcc(golden, result_torch, pcc=0.999)
+    else:
+        passing, output_pcc = comp_allclose_and_pcc(golden, result_torch, pcc=0.999, rtol=0.12, atol=0.12)
+    logger.debug(f"Epilogue passing={passing}; output_pcc={output_pcc}")
+    assert passing
+
+
 # Program caching test
 @pytest.mark.parametrize(
     "dims",

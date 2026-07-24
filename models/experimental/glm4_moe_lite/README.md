@@ -146,7 +146,8 @@ python models/experimental/glm4_moe_lite/scripts/run_sweep_isl_batch.py \
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `GLM4_MOE_LITE_FUSED_KV_BRANCH=1` | Off | Enable fused KV cache branch kernel (DKV matmul + gather + RMSNorm + RoPE in one dispatch) |
+| `GLM4_MOE_LITE_FUSED_KV_BRANCH=1` | Off | Enable fused KV projection + RoPE kernel; validated TTNN RMSNorm follows the fused dispatch |
+| `GLM4_MOE_LITE_FUSE_DOWN_ROUTING_SCALE=1` | Off | Fuse per-token top-k routing weights into the sparse expert down-projection epilogue (decode) |
 | `GLM4_MOE_LITE_ENABLE_MOE=1` | Off (but script forces it on) | Enable MoE layers; the debug script sets this automatically |
 | `GLM4_MOE_LITE_NUM_LAYERS=N` | All (47) | Run only N layers (requires `DEBUG_ALLOW_PARTIAL_LAYERS=1`) |
 | `GLM4_MOE_LITE_DEBUG_ALLOW_PARTIAL_LAYERS=1` | Off | Allow partial-layer runs with `NUM_LAYERS` |
@@ -163,6 +164,8 @@ python models/experimental/glm4_moe_lite/scripts/run_sweep_isl_batch.py \
 | `GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP=1` | Off | Fuse expert gate + up projections |
 | `GLM4_MOE_LITE_FUSE_QKV_A=1` | Off | Fuse Q and KV_A projections into a single matmul |
 | `GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE=1` | Off | Fuse MLP + MoE reduce step (consolidates dual ReduceScatter+AllGather pairs in MoE layers) |
+| `GLM4_MOE_LITE_FUSED_COLLECTIVE_EPILOGUE=1` | Off | Experimental 4x8 decode path: fuse the final routed reduction with shared-expert and residual adds (TP=0, sparse reduce, tokens<=32) |
+| `GLM4_MOE_LITE_BUFFERED_MOE_ALL_REDUCE=1` | Off | Experimental 4x8 decode path: replace MoE gather+reduce with two buffered, semaphore-driven axis all-reduces; combine with the fused epilogue flag |
 | `GLM4_MOE_LITE_SKIP_TYPECAST=1` | Off | Skip unnecessary bf16 typecasts in attention path (eliminates ~1,500 TypecastDeviceOperation calls per decode step) |
 | `GLM4_MOE_LITE_CONCAT_HEADS=1` | Off | Use `ttnn.transformer.concatenate_heads` for attention output head-flattening (tested neutral in traced mode; not recommended) |
 | `GLM4_MOE_LITE_NLP_CONCAT_HEADS=1` | Off | Use `ttnn.experimental.nlp_concat_heads` for prefill attention output path |

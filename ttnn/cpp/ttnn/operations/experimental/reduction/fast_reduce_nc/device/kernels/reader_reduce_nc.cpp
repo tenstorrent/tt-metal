@@ -19,6 +19,11 @@ void kernel_main() {
     constexpr uint32_t num_cores_to_be_used = get_compile_time_arg_val(2);
     constexpr uint32_t outer_id_increment = shard_factor * num_cores_to_be_used;
     constexpr auto tensor_args = TensorAccessorArgs<3>();
+#ifdef FUSE_EPILOGUE
+    constexpr auto epilogue_a_tensor_args = TensorAccessorArgs<tensor_args.next_compile_time_args_offset()>();
+    constexpr auto epilogue_b_tensor_args =
+        TensorAccessorArgs<epilogue_a_tensor_args.next_compile_time_args_offset()>();
+#endif
 
     // runtime args
     const auto input_addr = get_arg_val<uint32_t>(0);
@@ -28,20 +33,36 @@ void kernel_main() {
     const auto dim = get_arg_val<uint32_t>(4);
     const auto reduce_tile_size = get_arg_val<uint32_t>(5);
     const auto inner_tile_size = get_arg_val<uint32_t>(6);
+#ifdef FUSE_EPILOGUE
+    const auto epilogue_a_addr = get_arg_val<uint32_t>(7);
+    const auto epilogue_b_addr = get_arg_val<uint32_t>(8);
+#endif
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
     constexpr uint32_t scaler = 0;
+#ifdef FUSE_EPILOGUE
+    constexpr uint32_t cb_id_epilogue_a = 2;
+    constexpr uint32_t cb_id_epilogue_b = 3;
+#endif
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_in0_obj(cb_id_in0);
+#ifdef FUSE_EPILOGUE
+    experimental::CircularBuffer cb_epilogue_a_obj(cb_id_epilogue_a);
+    experimental::CircularBuffer cb_epilogue_b_obj(cb_id_epilogue_b);
+#endif
 
     generate_reduce_scaler(cb_id_in1, scaler);
 
     constexpr uint32_t input_tile_bytes = get_tile_size(cb_id_in0);
 
     auto tensor_accessor = TensorAccessor(tensor_args, input_addr, input_tile_bytes);
+#ifdef FUSE_EPILOGUE
+    auto epilogue_a_accessor = TensorAccessor(epilogue_a_tensor_args, epilogue_a_addr, input_tile_bytes);
+    auto epilogue_b_accessor = TensorAccessor(epilogue_b_tensor_args, epilogue_b_addr, input_tile_bytes);
+#endif
     uint32_t input_granularity_index = 0;
     uint32_t write_offset = 0;
 
@@ -83,6 +104,19 @@ void kernel_main() {
                     input_granularity_index = 0;
                 }
             }
+#ifdef FUSE_EPILOGUE
+            cb_epilogue_a_obj.reserve_back(1);
+            noc.async_read(
+                epilogue_a_accessor, cb_epilogue_a_obj, input_tile_bytes, {.page_id = i}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_epilogue_a_obj.push_back(1);
+
+            cb_epilogue_b_obj.reserve_back(1);
+            noc.async_read(
+                epilogue_b_accessor, cb_epilogue_b_obj, input_tile_bytes, {.page_id = i}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_epilogue_b_obj.push_back(1);
+#endif
         }
     }
 }

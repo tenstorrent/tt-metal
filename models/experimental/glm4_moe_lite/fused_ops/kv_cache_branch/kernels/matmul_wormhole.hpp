@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "../../../../deepseek_v3_b1/unified_kernels/kernel_op_api.hpp"
+#include "../../../../../demos/deepseek_v3_b1/unified_kernels/kernel_op_api.hpp"
 
 #if defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
@@ -88,9 +88,10 @@ struct Matmul {
         void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_TRISC)
             constexpr uint32_t out_w = CTArgs::out_w;
-            constexpr uint32_t transpose = CTArgs::transpose ? 1 : 0;
-            constexpr uint32_t rt_dim = 1;  // Single row output
-            constexpr uint32_t ct_dim = out_w;
+            // Unified kernels execute several micro-ops in one TRISC program;
+            // do not inherit unpacker/packer formats from the preceding op.
+            reconfig_data_format<false, true>(args.in1, args.in0);
+            pack_reconfig_data_format<true>(args.out);
 
             // Wait for all input tiles
             cb_wait_front(args.in0, args.k_num_tiles);
@@ -99,14 +100,14 @@ struct Matmul {
             // Reserve output tiles
             cb_reserve_back(args.out, out_w);
 
-            // Initialize block matmul with standard Wormhole API
-            mm_block_init(args.in0, args.in1, args.out, transpose, ct_dim, rt_dim, args.k_num_tiles);
-
+            mm_init_short(args.in0, args.in1);
             tile_regs_acquire();
-
-            // Perform the block matmul: C[1,out_w] = A[1,K] @ B[K,out_w]
-            matmul_block(args.in0, args.in1, 0, 0, 0, transpose, ct_dim, rt_dim, args.k_num_tiles);
-
+            MATH(TTI_ZEROACC(p_zeroacc::CLR_ALL, ADDR_MOD_1, 0));
+            for (uint32_t out_idx = 0; out_idx < out_w; ++out_idx) {
+                for (uint32_t k = 0; k < args.k_num_tiles; ++k) {
+                    matmul_tiles(args.in0, args.in1, k, k * out_w + out_idx, out_idx);
+                }
+            }
             tile_regs_commit();
 
             tile_regs_wait();

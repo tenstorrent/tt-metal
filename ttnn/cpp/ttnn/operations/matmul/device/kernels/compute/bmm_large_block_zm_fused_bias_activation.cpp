@@ -428,9 +428,14 @@ void kernel_main() {
 #endif
 
                 reconfig_data_format(in1_cb_id, mm_partials_cb_id, in0_cb_id, bias_cb_id);
+#ifdef FUSE_ROW_SCALE
+                mul_bcast_cols_init_short(mm_partials_cb_id, bias_cb_id);
+                bias_cb.wait_front(1);
+#else
                 add_bcast_rows_init_short(mm_partials_cb_id, bias_cb_id);
                 // reconfigure unpacker df for src B
                 bias_cb.wait_front(in1_block_w);
+#endif
                 for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                     int in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
@@ -440,7 +445,11 @@ void kernel_main() {
                         for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
                             uint32_t bcast_tile_idx = in1_index_subblock_offset;
                             for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
+#ifdef FUSE_ROW_SCALE
+                                mul_tiles_bcast_cols(mm_partials_cb_id, bias_cb_id, i, 0, i);
+#else
                                 add_tiles_bcast_rows(mm_partials_cb_id, bias_cb_id, i, bcast_tile_idx, i);
+#endif
                                 bcast_tile_idx++;
                             }
                         }
@@ -472,8 +481,17 @@ void kernel_main() {
                     }
                 }
                 if constexpr (num_blocks_w_dim > 1) {
+#ifdef FUSE_ROW_SCALE
+                    bias_cb.pop_front(1);
+#else
                     bias_cb.pop_front(in1_block_w);
+#endif
                 }
+#ifdef FUSE_ROW_SCALE
+                if constexpr (num_blocks_w_dim == 1) {
+                    bias_cb.pop_front(1);
+                }
+#endif
 #endif  // FUSE_BIAS
                 if constexpr (untilize_out) {
 #ifdef PACK_RELU

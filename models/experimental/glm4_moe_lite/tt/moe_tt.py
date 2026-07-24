@@ -190,12 +190,149 @@ def _detect_galaxy_ccl(device: Any) -> tuple[int, ttnn.Topology]:
 _GALAXY_CCL_CACHE: dict[int, tuple[int, ttnn.Topology]] = {}
 
 
+@dataclass
+class _BufferedMoeAllReduceState:
+    device: Any
+    output_memory_config: ttnn.MemoryConfig
+    buffers: dict[int, ttnn.Tensor]
+    semaphores: dict[int, list[Any]]
+    semaphore_indices: list[int]
+
+
+_BUFFERED_MOE_ALL_REDUCE_CACHE: dict[tuple[int, int, Any], _BufferedMoeAllReduceState] = {}
+
+
 def _get_galaxy_ccl(device: Any) -> tuple[int, ttnn.Topology]:
     """Cached per-device auto-detection of Galaxy CCL settings."""
     dev_id = id(device)
     if dev_id not in _GALAXY_CCL_CACHE:
         _GALAXY_CCL_CACHE[dev_id] = _detect_galaxy_ccl(device)
     return _GALAXY_CCL_CACHE[dev_id]
+
+
+def _get_buffered_moe_all_reduce_state(*, device: Any, hidden_size: int, dtype: Any) -> _BufferedMoeAllReduceState:
+    key = (id(device), int(hidden_size), dtype)
+    cached = _BUFFERED_MOE_ALL_REDUCE_CACHE.get(key)
+    if cached is not None and cached.device is device:
+        return cached
+
+    mesh_shape = _get_mesh_shape(device)
+    if mesh_shape != (4, 8):
+        raise ValueError(f"Buffered MoE all-reduce currently requires a 4x8 mesh, got {mesh_shape}")
+
+    num_output_cores = 16
+    if hidden_size % num_output_cores != 0 or (hidden_size // num_output_cores) % ttnn.TILE_SIZE != 0:
+        raise ValueError(f"Buffered MoE all-reduce requires tile-aligned width sharding, got hidden={hidden_size}")
+
+    shard_width = hidden_size // num_output_cores
+    output_cores = ttnn.num_cores_to_corerangeset(
+        num_output_cores, device.compute_with_storage_grid_size(), row_wise=True
+    )
+    output_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(output_cores, [ttnn.TILE_SIZE, shard_width], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    buffers: dict[int, ttnn.Tensor] = {}
+    semaphores: dict[int, list[Any]] = {}
+    mapper = ttnn.ReplicateTensorToMesh(device)
+    torch_dtype = torch.bfloat16
+    for axis, axis_size in enumerate(mesh_shape):
+        buffer_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                output_cores,
+                [ttnn.TILE_SIZE, shard_width * axis_size],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        buffers[axis] = ttnn.from_torch(
+            torch.zeros((1, 1, ttnn.TILE_SIZE, hidden_size * axis_size), dtype=torch_dtype),
+            device=device,
+            mesh_mapper=mapper,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=buffer_memory_config,
+        )
+        semaphores[axis] = [ttnn.create_global_semaphore(device, output_cores, 0) for _ in range(2)]
+
+    state = _BufferedMoeAllReduceState(
+        device=device,
+        output_memory_config=output_memory_config,
+        buffers=buffers,
+        semaphores=semaphores,
+        semaphore_indices=[0, 0],
+    )
+    _BUFFERED_MOE_ALL_REDUCE_CACHE[key] = state
+    return state
+
+
+def _clear_buffered_moe_all_reduce_cache(device: Any) -> None:
+    for key, state in list(_BUFFERED_MOE_ALL_REDUCE_CACHE.items()):
+        if state.device is not device:
+            continue
+        for buffer in state.buffers.values():
+            try:
+                ttnn.deallocate(buffer, force=True)
+            except Exception:
+                pass
+        del _BUFFERED_MOE_ALL_REDUCE_CACHE[key]
+
+
+def _buffered_moe_all_reduce_across_mesh(
+    tensor: ttnn.Tensor,
+    *,
+    device: Any,
+    num_links: int,
+    topology: ttnn.Topology,
+    memory_config: ttnn.MemoryConfig,
+    epilogue_input_a: ttnn.Tensor | None,
+    epilogue_input_b: ttnn.Tensor | None,
+) -> ttnn.Tensor:
+    """Two-axis Llama-style buffered all-reduce with an optional final epilogue."""
+    state = _get_buffered_moe_all_reduce_state(device=device, hidden_size=int(tensor.shape[-1]), dtype=tensor.dtype)
+
+    if tensor.memory_config() != state.output_memory_config:
+        sharded = ttnn.to_memory_config(tensor, state.output_memory_config)
+        ttnn.deallocate(tensor, force=False)
+        tensor = sharded
+
+    for axis in range(2):
+        semaphore_index = state.semaphore_indices[axis]
+        state.semaphore_indices[axis] = (semaphore_index + 1) % len(state.semaphores[axis])
+        reduced = ttnn.experimental.all_reduce_async(
+            tensor,
+            state.buffers[axis],
+            cluster_axis=axis,
+            mesh_device=device,
+            multi_device_global_semaphore=state.semaphores[axis][semaphore_index],
+            num_links=num_links,
+            memory_config=state.output_memory_config,
+            dtype=tensor.dtype,
+            topology=topology,
+            use_optimal_ccl_for_llama=True,
+        )
+        ttnn.deallocate(tensor, force=False)
+        tensor = reduced
+
+    if epilogue_input_a is not None or epilogue_input_b is not None:
+        if epilogue_input_a is None or epilogue_input_b is None:
+            raise ValueError("Buffered MoE all-reduce requires both epilogue inputs or neither")
+        output = ttnn.experimental.fast_reduce_nc(
+            tensor,
+            dims=[0],
+            output=None,
+            epilogue_input_a=epilogue_input_a,
+            epilogue_input_b=epilogue_input_b,
+            compute_kernel_config=None,
+            memory_config=memory_config,
+        )
+    else:
+        output = ttnn.to_memory_config(tensor, memory_config)
+    ttnn.deallocate(tensor, force=False)
+    return output
 
 
 def _all_gather_reduce_single_axis(
@@ -207,6 +344,8 @@ def _all_gather_reduce_single_axis(
     topology: ttnn.Topology,
     memory_config: ttnn.MemoryConfig,
     tt_ccl: Any,
+    epilogue_input_a: ttnn.Tensor | None = None,
+    epilogue_input_b: ttnn.Tensor | None = None,
 ) -> ttnn.Tensor:
     """All-reduce along one mesh axis via all_gather + fast_reduce_nc.
 
@@ -234,6 +373,8 @@ def _all_gather_reduce_single_axis(
         gathered,
         dims=[0],
         output=None,
+        epilogue_input_a=epilogue_input_a,
+        epilogue_input_b=epilogue_input_b,
         compute_kernel_config=None,
         memory_config=memory_config,
     )
@@ -248,6 +389,9 @@ def _moe_all_reduce_across_mesh(
     num_links: int,
     topology: ttnn.Topology,
     memory_config: ttnn.MemoryConfig,
+    epilogue_input_a: ttnn.Tensor | None = None,
+    epilogue_input_b: ttnn.Tensor | None = None,
+    use_buffered_all_reduce: bool = False,
 ) -> ttnn.Tensor:
     """All-reduce expert output across ALL devices in the mesh.
 
@@ -274,12 +418,23 @@ def _moe_all_reduce_across_mesh(
     safe_links = min(num_links, hw_links) if hw_links > 0 else num_links
     safe_topology = hw_topology if topology == ttnn.Topology.Ring and hw_topology == ttnn.Topology.Linear else topology
 
+    if use_buffered_all_reduce:
+        return _buffered_moe_all_reduce_across_mesh(
+            tensor,
+            device=device,
+            num_links=safe_links,
+            topology=safe_topology,
+            memory_config=memory_config,
+            epilogue_input_a=epilogue_input_a,
+            epilogue_input_b=epilogue_input_b,
+        )
+
     tt_ccl = get_tt_ccl(device)
 
     if mesh_shape[0] > 1 and mesh_shape[1] > 1:
-        for axis in range(2):
-            if mesh_shape[axis] <= 1:
-                continue
+        active_axes = [axis for axis in range(2) if mesh_shape[axis] > 1]
+        for axis_index, axis in enumerate(active_axes):
+            is_final_axis = axis_index == len(active_axes) - 1
             tensor = _all_gather_reduce_single_axis(
                 tensor,
                 device=device,
@@ -288,8 +443,13 @@ def _moe_all_reduce_across_mesh(
                 topology=safe_topology,
                 memory_config=memory_config,
                 tt_ccl=tt_ccl,
+                epilogue_input_a=epilogue_input_a if is_final_axis else None,
+                epilogue_input_b=epilogue_input_b if is_final_axis else None,
             )
         return tensor
+
+    if epilogue_input_a is not None or epilogue_input_b is not None:
+        raise ValueError("Fused collective epilogue currently requires a 2D mesh")
 
     reduced = ttnn.all_reduce(
         tensor,
@@ -1402,6 +1562,9 @@ def moe_sparse_experts_forward_tt(
     memory_config: ttnn.MemoryConfig,
     skip_defensive_clones: bool = False,
     skip_final_reduce: bool = False,
+    collective_epilogue_a: ttnn.Tensor | None = None,
+    collective_epilogue_b: ttnn.Tensor | None = None,
+    use_buffered_all_reduce: bool = False,
 ) -> ttnn.Tensor:
     """Run routed experts and return routed output [1,1,T,H] TILE.
 
@@ -1464,6 +1627,12 @@ def moe_sparse_experts_forward_tt(
             f"Invalid GLM4_MOE_LITE_MOE_SPARSE_DISPATCH_IMPL={dispatch_impl!r}; " "expected one of ['reduce','a2a']"
         )
     use_all_to_all = dispatch_impl in {"a2a", "all_to_all"} and num_dispatch_devices > 1
+    use_collective_epilogue = collective_epilogue_a is not None or collective_epilogue_b is not None
+    if use_collective_epilogue:
+        if collective_epilogue_a is None or collective_epilogue_b is None:
+            raise ValueError("Both collective epilogue inputs are required")
+        if use_all_to_all or skip_final_reduce or num_devices <= 1:
+            raise ValueError("Collective epilogue requires replicated-token mesh reduction")
 
     # If we are not using all-to-all, do not scale token count by dispatch width.
     total_tokens = tokens_per_device * (num_dispatch_devices if use_all_to_all else 1)
@@ -1839,10 +2008,34 @@ def moe_sparse_experts_forward_tt(
     if tuple(x_ff.shape) != _x_ff_target:
         x_ff = ttnn.reshape(x_ff, _x_ff_target)
 
+    # Prepare one row-scale tile per local expert. The down sparse_matmul
+    # consumes this as a post-matmul width-broadcast epilogue, removing the
+    # separate hidden-width multiply. Decode is enabled first because for
+    # num_blocks > 1 the scale needs a block-major reorder.
+    fuse_down_route_scale = (
+        os.environ.get("GLM4_MOE_LITE_FUSE_DOWN_ROUTING_SCALE", "1").strip() != "0"
+        and not use_all_to_all
+        and num_blocks == 1
+    )
+    down_post_scale = None
+    if fuse_down_route_scale:
+        local_weights_rm = local_weights
+        if local_weights_rm.layout != ttnn.ROW_MAJOR_LAYOUT:
+            local_weights_rm = ttnn.to_layout(local_weights_rm, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(local_weights, force=False)
+        local_weights_rm = ttnn.permute(local_weights_rm, (3, 1, 2, 0))  # [E,1,T,1]
+        down_post_scale = ttnn.to_layout(local_weights_rm, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(local_weights_rm, force=False)
+        down_post_scale = ttnn.reshape(
+            down_post_scale,
+            (num_blocks, int(rt.num_experts_per_device), block, 1),
+        )
+
     expert_output_sparse = ttnn.sparse_matmul(
         x_ff,
         moe_w.w2_experts,
         sparsity=sparsity,
+        post_scale=down_post_scale,
         memory_config=sparse_mc,
         program_config=_down_pc,
         is_input_a_sparse=True,
@@ -1853,6 +2046,8 @@ def moe_sparse_experts_forward_tt(
     )
     ttnn.deallocate(x_ff, force=False)
     ttnn.deallocate(sparsity, force=False)
+    if down_post_scale is not None:
+        ttnn.deallocate(down_post_scale, force=False)
 
     # STEP 5: Prepare expert output for aggregation.
     _eos_target = (num_blocks, int(rt.num_experts_per_device), block, hidden_size)
@@ -1934,25 +2129,33 @@ def moe_sparse_experts_forward_tt(
         return output
 
     # Replicated-token mode:
-    # local_weights is [1,1,total_tokens,experts_per_device] ROW_MAJOR.
-    # Permute to [E,1,T,1] and broadcast-multiply against expert_output [E,1,T,H].
-    local_weights_rm = local_weights
-    if local_weights_rm.layout != ttnn.ROW_MAJOR_LAYOUT:
-        local_weights_rm = ttnn.to_layout(local_weights_rm, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(local_weights, force=False)
-    local_weights_rm = ttnn.permute(local_weights_rm, (3, 1, 2, 0))  # [E,1,T,1]
-    local_weights_tiled = ttnn.to_layout(local_weights_rm, ttnn.TILE_LAYOUT)
-    ttnn.deallocate(local_weights_rm, force=False)
+    if fuse_down_route_scale:
+        weighted = expert_output
+    else:
+        # local_weights is [1,1,total_tokens,experts_per_device] ROW_MAJOR.
+        # Permute to [E,1,T,1] and broadcast-multiply against expert_output [E,1,T,H].
+        local_weights_rm = local_weights
+        if local_weights_rm.layout != ttnn.ROW_MAJOR_LAYOUT:
+            local_weights_rm = ttnn.to_layout(local_weights_rm, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(local_weights, force=False)
+        local_weights_rm = ttnn.permute(local_weights_rm, (3, 1, 2, 0))  # [E,1,T,1]
+        local_weights_tiled = ttnn.to_layout(local_weights_rm, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(local_weights_rm, force=False)
 
-    weighted = ttnn.mul(expert_output, local_weights_tiled, memory_config=memory_config)
-    ttnn.deallocate(expert_output, force=False)
+        weighted = ttnn.mul(expert_output, local_weights_tiled, memory_config=memory_config)
+        ttnn.deallocate(expert_output, force=False)
+        ttnn.deallocate(local_weights_tiled, force=False)
     if skip_defensive_clones:
         try:
             ttnn.deallocate(expert_output_sparse, force=False)
         except Exception:
             pass
-    ttnn.deallocate(local_weights_tiled, force=False)
-    output = ttnn.sum(weighted, dim=0, keepdim=True)
+    reduction_memory_config = memory_config
+    if use_buffered_all_reduce:
+        reduction_memory_config = _get_buffered_moe_all_reduce_state(
+            device=device, hidden_size=hidden_size, dtype=weighted.dtype
+        ).output_memory_config
+    output = ttnn.sum(weighted, dim=0, keepdim=True, memory_config=reduction_memory_config)
     ttnn.deallocate(weighted, force=False)
 
     # Sum contributions across devices (experts are sharded across the mesh).
@@ -1963,6 +2166,9 @@ def moe_sparse_experts_forward_tt(
             num_links=rt.num_links,
             topology=rt.topology,
             memory_config=memory_config,
+            epilogue_input_a=collective_epilogue_a,
+            epilogue_input_b=collective_epilogue_b,
+            use_buffered_all_reduce=use_buffered_all_reduce,
         )
 
     # If we padded tokens for block-aligned sparse kernels, slice back to the original size.
