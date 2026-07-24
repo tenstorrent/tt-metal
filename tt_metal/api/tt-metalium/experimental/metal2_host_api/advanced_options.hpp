@@ -44,21 +44,6 @@ using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
 
 struct KernelAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
-    // Enqueue-loop invariant kernel arguments
-    ////////////////////////////////////////////////////////////////////////////////
-
-    // Designate certain runtime arguments and common runtime arguments as enqueue-loop
-    // invariant. This permits the same argument value to be reused across multiple Program
-    // enqueues via UpdateProgramRunArgs, which can improve performance in enqueue loops.
-    // By default, every runtime argument and common runtime argument is expected to be
-    // re-specified (via SetProgramRunArgs) on every enqueue.
-    //
-    // CAUTION: This feature is unsafe if used incorrectly! The onus is on the programmer
-    // to ensure that the designated arguments remain valid across enqueues.
-    Group<std::string> enqueue_invariant_runtime_args;
-    Group<std::string> enqueue_invariant_common_runtime_args;
-
-    ////////////////////////////////////////////////////////////////////////////////
     // Varargs
     ////////////////////////////////////////////////////////////////////////////////
 
@@ -187,22 +172,6 @@ struct SemaphoreAdvancedOptions {
 };
 
 struct TensorParameterAdvancedOptions {
-    ////////////////////////////////////////////////////////////////////////////////
-    // Enqueue-loop invariance
-    ////////////////////////////////////////////////////////////////////////////////
-
-    // Designate this TensorParameter as enqueue-loop invariant.
-    // Permits the same MeshTensor argument to be reused across multiple Program
-    // enqueues via UpdateProgramRunArgs. By default, a TensorParameter is expected to
-    // be re-specified on every enqueue.
-    //
-    // CAUTION:
-    // The user is responsible for managing the MeshTensor argument's lifetime and
-    // ensuring that it remains valid across enqueues. Undefined behavior will result
-    // if the MeshTensor goes out of scope (and its device memory is deallocated),
-    // and you try to re-enqueue the Program with the now-stale MeshTensor argument.
-    bool enqueue_invariant = false;
-
     ////////////////////////////////////////////////////////////////////////////////
     // TensorSpec match relaxation options
     ////////////////////////////////////////////////////////////////////////////////

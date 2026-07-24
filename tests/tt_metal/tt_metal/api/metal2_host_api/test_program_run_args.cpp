@@ -1311,7 +1311,7 @@ TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_ResizingBorrowedDFBWithout
     setup.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
     SetProgramRunArgs(program, setup);
 
-    // Partial update resizes the borrowed DFB but omits its (would-be enqueue-invariant) backing tensor.
+    // Partial update resizes the borrowed DFB but omits its backing tensor.
     ProgramRunArgs upd;
     upd.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb"}, .num_entries = 4});
     EXPECT_THAT(
@@ -2261,36 +2261,15 @@ TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_DynamicWinsWhenBothSet) {
 }
 
 // ============================================================================
-// SECTION: Enqueue-loop invariance + UpdateProgramRunArgs + MergeProgramRunArgs
+// SECTION: UpdateProgramRunArgs (arbitrary partial update) + MergeProgramRunArgs
 // ============================================================================
 
-// --- Spec-time legality: an invariant name must reference a declared named arg ---
+// --- The core contract: omitted args are retained, supplied args are updated ---
 
-TEST_F(ProgramRunArgsTestQuasar, InvariantRuntimeArgNameMustBeDeclaredFails) {
+TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_RetainsOmittedCRTA) {
     NodeCoord node{0, 0};
-    ProgramSpec spec = MakeSpecWithNamedArgs(node, /*named_rtas=*/{"real_rta"}, /*named_crtas=*/{});
-    spec.kernels[0].advanced_options.enqueue_invariant_runtime_args = {"not_declared"};
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("is not a declared named")));
-}
-
-TEST_F(ProgramRunArgsTestQuasar, InvariantCommonRuntimeArgNameMustBeDeclaredFails) {
-    NodeCoord node{0, 0};
-    ProgramSpec spec = MakeSpecWithNamedArgs(node, /*named_rtas=*/{}, /*named_crtas=*/{"real_crta"});
-    spec.kernels[0].advanced_options.enqueue_invariant_common_runtime_args = {"not_declared"};
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("is not a declared named")));
-}
-
-// --- The core contract: invariant args are retained, regular args are updated ---
-
-TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_RetainsInvariantCRTA) {
-    NodeCoord node{0, 0};
-    // Declaration order: keep @ slot 0 (invariant), change @ slot 1 (regular).
+    // Declaration order: keep @ slot 0 (omitted from the update), change @ slot 1 (supplied).
     ProgramSpec spec = MakeSpecWithNamedArgs(node, {}, {"keep", "change"});
-    spec.kernels[0].advanced_options.enqueue_invariant_common_runtime_args = {"keep"};
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunArgs params;
@@ -2301,7 +2280,7 @@ TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_RetainsInvariantCRTA) {
     params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
     SetProgramRunArgs(program, params);
 
-    // Supply only the regular "change"; omit invariant "keep" and the all-empty compute_kernel.
+    // Supply only "change"; omit "keep" and the all-empty compute_kernel.
     ProgramRunArgs upd;
     upd.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
         .kernel = KernelSpecName{"dm_kernel"},
@@ -2310,14 +2289,13 @@ TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_RetainsInvariantCRTA) {
     EXPECT_NO_THROW(UpdateProgramRunArgs(program, upd));
 
     const auto* crta = program.impl().get_kernel_by_spec_name("dm_kernel")->common_runtime_args_data().data();
-    EXPECT_EQ(crta[0], 10u) << "invariant 'keep' must retain its value across a partial update";
-    EXPECT_EQ(crta[1], 99u) << "regular 'change' must be updated";
+    EXPECT_EQ(crta[0], 10u) << "omitted 'keep' must retain its value across a partial update";
+    EXPECT_EQ(crta[1], 99u) << "supplied 'change' must be updated";
 }
 
-TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_RetainsInvariantPerNodeRTA) {
+TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_RetainsOmittedPerNodeRTA) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithNamedArgs(node, {"keep", "change"}, {});
-    spec.kernels[0].advanced_options.enqueue_invariant_runtime_args = {"keep"};
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunArgs params;
@@ -2337,16 +2315,15 @@ TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_RetainsInvariantPerNodeRTA
 
     const auto& rta = program.impl().get_kernel_by_spec_name("dm_kernel")->runtime_args(node);
     ASSERT_GE(rta.size(), 2u);
-    EXPECT_EQ(rta[0], 1u) << "invariant 'keep' must retain its value";
-    EXPECT_EQ(rta[1], 99u) << "regular 'change' must be updated";
+    EXPECT_EQ(rta[0], 1u) << "omitted 'keep' must retain its value";
+    EXPECT_EQ(rta[1], 99u) << "supplied 'change' must be updated";
 }
 
-// --- Completeness: a regular (non-invariant) arg may not be omitted ---
+// --- Still enforced: a supplied name must be declared in the schema (no extras) ---
 
-TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_MissingRegularCRTAFails) {
+TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_UndeclaredCRTANameFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithNamedArgs(node, {}, {"keep", "change"});
-    spec.kernels[0].advanced_options.enqueue_invariant_common_runtime_args = {"keep"};
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunArgs full;
@@ -2357,15 +2334,15 @@ TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_MissingRegularCRTAFails) {
     full.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
     SetProgramRunArgs(program, full);
 
-    // Supply only the invariant "keep"; omit the regular "change" → error.
+    // Supplying a name that the schema never declared is still an error, even on the partial path.
     ProgramRunArgs upd;
     upd.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
         .kernel = KernelSpecName{"dm_kernel"},
-        .common_runtime_arg_values = {{"keep", 11}},
+        .common_runtime_arg_values = {{"bogus", 11}},
     });
     EXPECT_THAT(
         [&] { UpdateProgramRunArgs(program, upd); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("is missing named CRTA 'change'")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("not declared in the schema")));
 }
 
 // --- Precondition: a partial update before any full set fails ---
@@ -2373,7 +2350,6 @@ TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_MissingRegularCRTAFails) {
 TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_BeforeSetFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithNamedArgs(node, {}, {"keep", "change"});
-    spec.kernels[0].advanced_options.enqueue_invariant_common_runtime_args = {"keep"};
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunArgs upd;
@@ -2386,11 +2362,11 @@ TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_BeforeSetFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("CRTA buffer not allocated")));
 }
 
-// --- Kernel-omission rule ---
+// --- Kernel omission: an omitted kernel retains all of its args ---
 
-TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_OmittingKernelWithRegularArgsFails) {
+TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_OmittingKernelRetainsArgs) {
     NodeCoord node{0, 0};
-    ProgramSpec spec = MakeSpecWithNamedArgs(node, {}, {"change"});  // regular CRTA, nothing invariant
+    ProgramSpec spec = MakeSpecWithNamedArgs(node, {}, {"change"});
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunArgs full;
@@ -2401,32 +2377,11 @@ TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_OmittingKernelWithRegularA
     full.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
     SetProgramRunArgs(program, full);
 
-    // Omit dm_kernel entirely though it has a regular CRTA → error.
-    ProgramRunArgs upd;
-    EXPECT_THAT(
-        [&] { UpdateProgramRunArgs(program, upd); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("was omitted from UpdateProgramRunArgs")));
-}
-
-TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_OmittingAllInvariantKernelSucceeds) {
-    NodeCoord node{0, 0};
-    ProgramSpec spec = MakeSpecWithNamedArgs(node, {}, {"keep"});  // single CRTA, invariant
-    spec.kernels[0].advanced_options.enqueue_invariant_common_runtime_args = {"keep"};
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
-
-    ProgramRunArgs full;
-    full.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
-        .kernel = KernelSpecName{"dm_kernel"},
-        .common_runtime_arg_values = {{"keep", 7}},
-    });
-    full.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
-    SetProgramRunArgs(program, full);
-
-    // Both kernels may be omitted: dm_kernel's only arg is invariant, compute_kernel is empty.
+    // Omit every kernel: an arbitrary partial update may leave all args untouched.
     ProgramRunArgs upd;
     EXPECT_NO_THROW(UpdateProgramRunArgs(program, upd));
-    EXPECT_EQ(program.impl().get_kernel_by_spec_name("dm_kernel")->common_runtime_args_data().data()[0], 7u)
-        << "invariant CRTA retained even when its kernel is omitted entirely";
+    EXPECT_EQ(program.impl().get_kernel_by_spec_name("dm_kernel")->common_runtime_args_data().data()[0], 20u)
+        << "an omitted kernel's args are retained";
 }
 
 // --- DFB size overrides on the fast path (mock fixture: inspects config, no enqueue) ---
@@ -2481,21 +2436,21 @@ const ProgramRunArgs::KernelRunArgs* FindKernel(const ProgramRunArgs& p, const s
 }
 
 TEST(MergeProgramRunArgs, UnionsDisjointCRTAsForSameKernel) {
-    // The motivating pattern: an invariant-args piece + a volatile-args piece for the SAME kernel
-    // with disjoint named CRTAs merge into one kernel entry holding both.
-    ProgramRunArgs invariant_piece;
-    invariant_piece.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+    // The motivating pattern: two pieces carrying disjoint named CRTAs for the SAME kernel merge
+    // into one kernel entry holding both.
+    ProgramRunArgs first_piece;
+    first_piece.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
         .kernel = KernelSpecName{"dm_kernel"},
         .common_runtime_arg_values = {{"keep", 10}},
     });
-    ProgramRunArgs volatile_piece;
-    volatile_piece.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+    ProgramRunArgs second_piece;
+    second_piece.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
         .kernel = KernelSpecName{"dm_kernel"},
         .common_runtime_arg_values = {{"change", 20}},
     });
 
-    std::vector<ProgramRunArgs> rest{volatile_piece};
-    ProgramRunArgs merged = MergeProgramRunArgs(std::move(invariant_piece), rest);
+    std::vector<ProgramRunArgs> rest{second_piece};
+    ProgramRunArgs merged = MergeProgramRunArgs(std::move(first_piece), rest);
 
     const auto* dm = FindKernel(merged, "dm_kernel");
     ASSERT_NE(dm, nullptr);

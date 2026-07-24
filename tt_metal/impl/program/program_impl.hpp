@@ -359,11 +359,7 @@ public:
     void register_dfb_spec_name(const std::string& name, uint32_t dfb_id);
     void register_semaphore_spec_name(const std::string& name, uint32_t sem_id);
     void register_tensor_parameter(
-        const std::string& name,
-        const TensorSpec& spec,
-        bool dynamic_tensor_shape,
-        bool match_padded_shape_only,
-        bool enqueue_invariant);
+        const std::string& name, const TensorSpec& spec, bool dynamic_tensor_shape, bool match_padded_shape_only);
 
     // Metal 2.0: Get handle from name (TT_FATAL if not found)
     KernelHandle get_kernel_handle(const std::string& name) const;
@@ -377,9 +373,6 @@ public:
     // Returns false if the parameter was not registered with match_padded_shape_only=true,
     // or if the name is unknown. (The caller validates known-ness separately.)
     bool get_tensor_parameter_match_padded_shape_only(const std::string& name) const;
-    // Returns false if the parameter was not registered enqueue-invariant, or if the name is
-    // unknown. (The caller validates known-ness separately.)
-    bool get_tensor_parameter_enqueue_invariant(const std::string& name) const;
     std::vector<std::string> get_registered_tensor_parameter_names() const;
 
     // Metal 2.0: register that DFB `dfb_id` borrows its backing L1 memory from the MeshTensor
@@ -413,13 +406,6 @@ public:
         // broadcast count.
         std::unordered_map<CoreCoord, size_t> num_runtime_varargs_per_node;
         size_t num_common_runtime_varargs = 0;
-
-        // Names (each a subset of runtime_arg_names / common_runtime_arg_names) declared
-        // enqueue-loop invariant via KernelAdvancedOptions. These named args may be omitted
-        // from a partial UpdateProgramRunArgs call, in which case the value installed by the
-        // most recent SetProgramRunArgs is retained. (Varargs cannot be marked invariant.)
-        std::unordered_set<std::string> enqueue_invariant_runtime_arg_names;
-        std::unordered_set<std::string> enqueue_invariant_common_runtime_arg_names;
     };
 
     // Metal 2.0: Runtime argument schema registration and lookup
@@ -525,9 +511,6 @@ private:
             TensorSpec spec;
             bool dynamic_tensor_shape = false;
             bool match_padded_shape_only = false;
-            // Declared enqueue-loop invariant: the TensorArgument may be omitted from a partial
-            // UpdateProgramRunArgs call (the previously-bound MeshTensor is retained).
-            bool enqueue_invariant = false;
         };
         std::unordered_map<std::string, RegisteredTensorParameter> tensor_parameter_layouts;
 
