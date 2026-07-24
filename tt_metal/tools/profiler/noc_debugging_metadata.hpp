@@ -6,6 +6,10 @@
 
 #include <cstdint>
 
+#if defined(DEVICE_DEBUG_DUMP)
+#include "api/debug/assert.h"
+#endif
+
 struct alignas(uint64_t) NocDebuggingEventMetadata {
     enum class NocDebugEventType : unsigned char {
         CB_LOCK = 0,
@@ -31,6 +35,10 @@ struct alignas(uint64_t) NocDebuggingEventMetadata {
     void setEventType(NocDebugEventType type) { event_type = static_cast<uint64_t>(type); }
 
     void setLockedRegion(uint32_t locked_address_base, uint32_t num_bytes) {
+#if defined(DEVICE_DEBUG_DUMP)
+        ASSERT(locked_address_base <= 0xFFFFFF);
+        ASSERT(num_bytes <= 0xFFFFFF);
+#endif
         locked_addr = locked_address_base;
         locked_size = num_bytes;
     }

@@ -183,13 +183,12 @@ NOCDebugEvent make_noc_debug_event(
                 event.mcast_end_dst_x,
                 event.mcast_end_dst_y,
                 /*has_source_buffer=*/false});
-        case EMD::NocEventType::READ_BARRIER_END:
-            return NOCDebugEvent(NocReadBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
+        case EMD::NocEventType::READ_BARRIER_END: [[fallthrough]];
         case EMD::NocEventType::READ_BARRIER_WITH_TRID:
-            // Kept as its own case (not folded into READ_BARRIER_END) so a future per-trid model can treat
-            // it differently. For now the debug model tracks reads by address, not trid, so a trid read
-            // barrier is treated as a full read barrier (may under-report a same-address read racing across
-            // different trids, but never false-positives).
+            // READ_BARRIER_WITH_TRID is folded in with READ_BARRIER_END: a future per-trid model could treat it
+            // differently, but for now the debug model tracks reads by address, not trid, so a trid read barrier is
+            // treated as a full read barrier (may under-report a same-address read racing across different trids,
+            // but never false-positives).
             return NOCDebugEvent(NocReadBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
         case EMD::NocEventType::WRITE_BARRIER_END:
             // A regular write barrier waits for outstanding non-posted writes only.
