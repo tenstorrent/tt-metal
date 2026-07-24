@@ -270,11 +270,22 @@ void parallel_for_each_device_index(const std::vector<size_t>& indices, Fn&& fn)
     // Single std::forward: cppcoreguidelines-missing-std-forward; callable is then invoked
     // many times (not forwarding the parameter each time — bugprone-use-after-move).
     std::decay_t<Fn> callable = std::forward<Fn>(fn);
+    auto invoke = [&callable](size_t di) {
+        try {
+            callable(di);
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogMetal, "[Real-time profiler] Per-device init sync failed, skipping device: {}", e.what());
+        } catch (...) {
+            log_warning(
+                tt::LogMetal, "[Real-time profiler] Per-device init sync failed, skipping device (unknown error)");
+        }
+    };
     const unsigned hc = std::thread::hardware_concurrency();
     const size_t worker_count = std::min(indices.size(), static_cast<size_t>(std::max(1u, hc)));
     if (worker_count <= 1) {
         for (size_t di : indices) {
-            callable(di);
+            invoke(di);
         }
         return;
     }
@@ -288,7 +299,7 @@ void parallel_for_each_device_index(const std::vector<size_t>& indices, Fn&& fn)
                 if (k >= indices.size()) {
                     break;
                 }
-                callable(indices[k]);
+                invoke(indices[k]);
             }
         });
     }
@@ -933,10 +944,7 @@ uint32_t RealtimeProfilerManager::drain_device_pages(
         return 0;
     }
     const uint32_t num_pages_to_read = std::min(available, kMaxSocketPagesPerRead);
-    {
-        TTZoneScopedDN(RT_PROFILER, "SocketRead");
-        dev_state.socket->read(page_buf.data(), num_pages_to_read);
-    }
+    dev_state.socket->read(page_buf.data(), num_pages_to_read);
 
     if (scan_sync_marker && dev_state.finish_sync_phase == DeviceState::FinishSyncPhase::AwaitingResponse) {
         for (uint32_t page = 0; page < num_pages_to_read; ++page) {
@@ -983,7 +991,7 @@ uint64_t RealtimeProfilerManager::run_receiver_loop() {
         num_pages_received += num_pages;
         const auto now = std::chrono::steady_clock::now();
         if (now - last_fifo_plot >= kFifoPlotInterval) {
-            TTPlotD(
+            TTTracyPlotD(
                 RT_PROFILER,
                 "RT profiler D2H FIFO high-water mark (pages)",
                 static_cast<int64_t>(windowed_peak_fifo_pages_));
@@ -1071,7 +1079,12 @@ void RealtimeProfilerManager::run_consumer(Consumer& consumer) {
     auto deliver_batch = [&](std::span<const tt::ProgramRealtimeRecord> batch, uint64_t dropped_total) {
         TTZoneScopedDNC(RT_PROFILER, "Callback", 0xF032E6);
         TTZoneValueD(RT_PROFILER, batch.size());
-        const tt::ProgramRealtimeRecordBatch arg{batch, dropped_total - reported_dropped};
+        const uint64_t dropped_delta = dropped_total - reported_dropped;
+        if (TTZoneIsActiveD(RT_PROFILER) && dropped_delta > 0) {
+            const auto dropped_txt = fmt::format("dropped {}", dropped_delta);
+            TTZoneTextD(RT_PROFILER, dropped_txt.c_str(), dropped_txt.size());
+        }
+        const tt::ProgramRealtimeRecordBatch arg{batch, dropped_delta};
         reported_dropped = dropped_total;
         try {
             consumer.callback(arg);
