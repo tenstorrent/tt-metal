@@ -97,6 +97,12 @@ for (const key of ["t640", "t5120"]) {
     if (!(scenario.latency_ns > 0 && scenario.compute_util > 0 && scenario.ccl_util > 0)) throw new Error("non-positive metric");
   });
   check(key + " toggle and render", () => click(scenarios.find(button => button.dataset.s === key)));
+  check(key + " replay chart axes, values, and tooltips", () => {
+    const spark = document.getElementById("spark").innerHTML;
+    if (!spark.includes("replay session") || !spark.includes("wall latency (µs)")) throw new Error("axis labels absent");
+    if ((spark.match(/class="spark-point"/g) || []).length !== 10) throw new Error("point tooltips absent");
+    if (!spark.includes((P.scenarios[key].replay_spans_ns[0] / 1000).toFixed(3) + " µs")) throw new Error("exact value absent");
+  });
   check(key + " semantic graph", () => {
     api.setView("semantic");
     if (!document.getElementById("graph").innerHTML.includes('class="node"')) throw new Error("no semantic nodes");
@@ -114,6 +120,9 @@ check("source drawer", () => {
   api.openDrawer("recurrence");
   const body = document.getElementById("drawerBody").innerHTML;
   if (!/chunk_gdn_phased\.cpp:\d+-\d+/.test(body) || !body.includes("compute_output_specs")) throw new Error("source proof absent");
+});
+check("operation header is pinned to the table viewport", () => {
+  if (!/th\{position:sticky;top:0;z-index:2/.test(report)) throw new Error("sticky header offset is not zero");
 });
 check("sortable operation table", () => {
   const before = document.getElementById("opRows").innerHTML;
