@@ -187,6 +187,31 @@ def test_bytes_per_param_from_safetensors_header(monkeypatch):
     assert pr._bytes_per_param_from_safetensors("m", []) == (None, False, None)
 
 
+def test_compat_no_llm_blocks_for_non_llm_unknown():
+    # issue #6: an unknown NON-LLM arch (DiT) must NOT get the generic LLM decoder block
+    # list; an LLM-like unknown still gets the fallback.
+    from scripts.tt_hw_planner.compatibility import check_compatibility
+
+    r = check_compatibility(
+        "x/longcat", {"model_type": "longcat_video", "architectures": ["LongCatVideoTransformer3DModel"]}
+    )
+    assert [b for b in r.results if getattr(b, "needed", False)] == []
+    assert "non-LLM" in r.architecture_family
+
+    r2 = check_compatibility(
+        "x/novel",
+        {
+            "model_type": "novel_llm",
+            "architectures": ["FooForCausalLM"],
+            "hidden_size": 4096,
+            "num_hidden_layers": 32,
+            "vocab_size": 128000,
+        },
+    )
+    names = [b.block.name for b in r2.results if getattr(b, "needed", False)]
+    assert "LM head" in names, names
+
+
 def test_xtts_v2_is_in_tts_bucket():
     from scripts.tt_hw_planner.family_backends import backends_for_category
 

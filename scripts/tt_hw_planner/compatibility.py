@@ -723,7 +723,32 @@ def check_compatibility(model_id: str, cfg: dict) -> CompatReport:
     is_unknown = family.startswith("unknown")
     minted = _minted_category(cfg) if is_unknown else None
     if is_unknown:
-        family = f"unknown / NEW category '{minted}' — attempting generic LLM path as fallback"
+        from .fingerprint import arch_descriptor
+
+        fpr = arch_descriptor(model_type=cfg.get("model_type"), architectures=cfg.get("architectures"))
+        if not fpr.startswith("decoder-only"):
+            try:
+                from .discovery import discover_model
+
+                discovery = discover_model(model_id)
+            except Exception:
+                discovery = None
+            report = CompatReport(
+                model_id=model_id,
+                architecture_family=(
+                    f"unknown / non-LLM (fingerprint: {fpr}) — generic LLM decoder path does NOT apply; "
+                    "inspect subfolders (dit/, vae/, text_encoder/, ...) and bring up per-component"
+                ),
+                similar_supported_model=None,
+                discovery=discovery,
+            )
+            report.overall = "ARCHITECTURE NOT RECOGNIZED (non-LLM) — no confident block plan"
+            report.effort_summary = (
+                "No LM head / KV-cache / sampling detected; this is not a text decoder, so the generic "
+                "LLM block list is omitted. Bring up per-component (per subfolder / module tree)."
+            )
+            return report
+        family = f"unknown / NEW category '{minted}' — attempting generic LLM path (looks LLM-like: {fpr})"
     closest = closest_supported_model(model_id, cfg)
 
     results: List[CheckResult] = []
