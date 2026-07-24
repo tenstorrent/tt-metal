@@ -128,7 +128,9 @@ class resnet50Bottleneck:
                     enable_act_double_buffer=True if not (is_blackhole_p100(device) and batch_size > 16) else False,
                     enable_weights_double_buffer=True if input_width < 56 else False,
                     full_inner_dim=True,
-                    enable_activation_reuse=True if height_sharding and self.stride == 1 else False,
+                    enable_activation_reuse=True
+                    if height_sharding and self.stride == 1 and not (is_wormhole_b0() and batch_size == 8)
+                    else False,
                 ),
             }
 
@@ -238,7 +240,9 @@ class resnet50Bottleneck:
                 enable_act_double_buffer=True,
                 enable_weights_double_buffer=True,
                 full_inner_dim=True,
-                enable_activation_reuse=True if height_sharding and self.stride == 1 else False,
+                enable_activation_reuse=True
+                if height_sharding and self.stride == 1 and not (is_wormhole_b0() and batch_size == 8)
+                else False,
             ),
         }
 
@@ -491,7 +495,13 @@ class resnet50:
         )
         num_cores_x = 8
         num_cores_y = 8
-        if self.batch_size == 16:
+        if self.batch_size == 8:
+            num_cores_x = 8
+            num_cores_y = 8
+            self.fold_compute_grid_size = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}
+            )
+        elif self.batch_size == 16:
             num_cores_x = 8
             num_cores_y = 8
             self.fold_compute_grid_size = ttnn.CoreRangeSet(
@@ -715,6 +725,11 @@ class resnet50:
         reshard = False
         height_shard = True
 
+        # For batch_size=8 on WH, tensor heights at layers 2-4 are not compatible
+        # with 8 y-cores for BLOCK sharding (e.g. 8*28*28=6272, 6272/8=784, not 32-aligned).
+        # Use height sharding for these layers instead.
+        batch8_wh_height_shard = is_wormhole_b0() and self.batch_size == 8
+
         logger.debug(f"==== Running layer 2 module 1")
         x, x_height, x_width = self.layer2_module1(
             x,
@@ -734,6 +749,7 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
+            height_sharding=True if batch8_wh_height_shard else None,
             layer_module="layer2_module2",
         )
 
@@ -744,6 +760,7 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
+            height_sharding=True if batch8_wh_height_shard else None,
             layer_module="layer2_module3",
         )
 
@@ -754,14 +771,20 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
+            height_sharding=True if batch8_wh_height_shard else None,
             layer_module="layer2_module4",
         )
 
         reshard = is_blackhole()
         height_shard = is_blackhole()
         if is_wormhole_b0():
+            if batch8_wh_height_shard:
+                # For batch_size=8: 6272/8=784 not 32-aligned, use y=7: 6272/7=896 ✓
+                reshard_grid = ttnn.CoreGrid(x=8, y=7)
+            else:
+                reshard_grid = ttnn.CoreGrid(x=8, y=8)
             x = ttnn.to_memory_config(
-                x, ttnn.create_sharded_memory_config(x.shape, ttnn.CoreGrid(x=8, y=8), ttnn.ShardStrategy.BLOCK)
+                x, ttnn.create_sharded_memory_config(x.shape, reshard_grid, ttnn.ShardStrategy.BLOCK)
             )
 
         logger.debug(f"==== Running layer 3 module 1")
@@ -772,7 +795,7 @@ class resnet50:
             x_height,
             x_width,
             reshard_if_not_optimal=reshard,
-            height_sharding=height_shard,
+            height_sharding=True if batch8_wh_height_shard else height_shard,
             layer_module="layer3_module1",
         )
 
@@ -783,6 +806,7 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
+            height_sharding=True if batch8_wh_height_shard else None,
             layer_module="layer3_module2",
         )
 
@@ -793,6 +817,7 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
+            height_sharding=True if batch8_wh_height_shard else None,
             layer_module="layer3_module3",
         )
 
@@ -803,6 +828,7 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
+            height_sharding=True if batch8_wh_height_shard else None,
             layer_module="layer3_module4",
         )
 
@@ -813,6 +839,7 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
+            height_sharding=True if batch8_wh_height_shard else None,
             layer_module="layer3_module5",
         )
 
@@ -823,6 +850,7 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
+            height_sharding=True if batch8_wh_height_shard else None,
             layer_module="layer3_module6",
         )
 
@@ -856,7 +884,7 @@ class resnet50:
             x_height,
             x_width,
             reshard_if_not_optimal=reshard,
-            height_sharding=height_shard,
+            height_sharding=True if batch8_wh_height_shard else height_shard,
             layer_module="layer4_module1",
         )
 
@@ -867,6 +895,7 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
+            height_sharding=True if batch8_wh_height_shard else None,
             layer_module="layer4_module2",
         )
 
@@ -877,6 +906,7 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
+            height_sharding=True if batch8_wh_height_shard else None,
             layer_module="layer4_module3",
         )
 
@@ -901,9 +931,9 @@ class resnet50:
             stride=[1, 1],
             padding=[0, 0, 0, 0],
             output_layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
+            dtype=self.model_config["ACTIVATIONS_DTYPE"],
             compute_kernel_config=ttnn.init_device_compute_kernel_config(
-                self.device.arch(), math_fidelity=ttnn.MathFidelity.LoFi
+                self.device.arch(), math_fidelity=self.model_config["MATH_FIDELITY"]
             ),
         )
 
