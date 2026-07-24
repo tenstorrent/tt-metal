@@ -30,3 +30,6 @@ install(
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tt-nn/examples"
     COMPONENT ttnn-examples
 )
+
+# Add Deit demo
+add_subdirectory(${PROJECT_SOURCE_DIR}/models/experimental/deit/deit_cpp deit_cpp_demo_build)
