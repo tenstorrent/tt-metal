@@ -403,6 +403,11 @@ def test_deepseek_v3_mla_tilize_trace_mode(
       - INTERLEAVED: no sharding
       - WIDTH_SHARDED: width-wise sharding configuration as defined by the test's shard_spec
     """
+    # Both variants are failing in CI:
+    #   interleaved  — TT_FATAL: trace buffers (4112384B) exceed trace_region_size (1671168B)
+    #   width_sharded — TT_FATAL: not on_dispatch_core (program.cpp:146)
+    # Tracked in: https://github.com/tenstorrent/tt-metal/issues/50679
+    pytest.skip(f"Skipping {memory_config_type} variant: known CI failure — #50679")
     torch.manual_seed(2003)
 
     # Create random tensor for input
@@ -549,6 +554,10 @@ def test_tilize_width_sharded_dram_input_45331(device, shard_shape):
 
 
 def test_tilize_width_sharded_dram_input_to_l1_sharded_output_49107(device):
+    # RuntimeError: No core coordinate found at location: (8, 0, TENSIX, LOGICAL)
+    # DRAM grid x-size (9 on BH) exceeds the valid Tensix logical core range on this board.
+    # Tracked in: https://github.com/tenstorrent/tt-metal/issues/50689
+    pytest.skip("Skipping: DRAM grid x-size maps outside valid Tensix logical cores — #50689")
     torch.manual_seed(0)
     num_cores = device.dram_grid_size().x
     shard_shape = (32, 64)
@@ -954,7 +963,7 @@ def test_tilize_program_cache_addr_change(device, config):
         ([1, 1, 256, 512], (4, 4)),
     ],
 )
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.uint8])
 def test_tilize_block_sharded_shapes(device, tensor_shape, grid_shape, dtype):
     torch.manual_seed(42)
     n_y, n_x = grid_shape
@@ -965,8 +974,12 @@ def test_tilize_block_sharded_shapes(device, tensor_shape, grid_shape, dtype):
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(n_x - 1, n_y - 1))})
     shard_spec = ttnn.ShardSpec(grid, [shard_h, shard_w], ttnn.ShardOrientation.ROW_MAJOR)
     mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
-    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
-    torch_input = torch.rand(tensor_shape, dtype=torch_dtype)
+    if dtype == ttnn.uint8:
+        torch_input = torch.randint(0, 256, tensor_shape, dtype=torch.uint8)
+    elif dtype == ttnn.float32:
+        torch_input = torch.rand(tensor_shape, dtype=torch.float32)
+    else:
+        torch_input = torch.rand(tensor_shape, dtype=torch.bfloat16)
     tt_input = ttnn.from_torch(
         torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_cfg
     )
@@ -1100,4 +1113,28 @@ def test_tilize_retile(device, tensor_shape, shard_layout, input_tile_shape, out
     assert tt_output.layout == ttnn.TILE_LAYOUT
     if shard_layout is not None:
         assert tt_output.memory_config().memory_layout == shard_layout
+    assert_equal(torch_input, ttnn.to_torch(tt_output))
+
+
+#   Blackhole LLK (_llk_unpack_tilize_init_): uint8 datums produced a
+#   strided (every-other-row zero) pattern because the BH-specific
+#   Tile_x_dim (face_r_dim * num_faces * FACE_C_DIM, spanning the full
+#   tile) is incompatible with 8-bit data; the fix skips the BH workaround
+#   for IS_8BIT_FORMAT and uses FACE_DIM_1x16 (standard per-face dim).
+#   On Blackhole, non-sharded uint8 is always routed to TilizeMultiCoreBlockProgramFactory
+#   which uses an alignment-aware reader to handle narrow (<64 B) sticks.
+@pytest.mark.parametrize(
+    "shape",
+    [
+        [1, 1, 32, 32],
+        [1, 1, 128, 32],
+        [1, 1, 32, 1056],
+        [1, 1, 2048, 32],
+        [1, 1, 128, 1056],
+    ],
+)
+def test_tilize_uint8(device, shape):
+    torch_input = torch.randint(0, 256, shape, dtype=torch.uint8)
+    tt_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt_output = ttnn.tilize(tt_input)
     assert_equal(torch_input, ttnn.to_torch(tt_output))
