@@ -2306,8 +2306,12 @@ void sdpa_ring_v2(
     const uint32_t q_frame_offset = 0,
     // Reverse-bisection runtime bitmask. See ring_joint_sdpa.cpp for bit meanings.
     // 0 = all sparse code paths runtime-disabled (dense-equivalent behavior with sparse
-    // binary in place). 0x1F = all enabled (production behavior).
-    const uint32_t sparse_feature_mask = 0x1Fu) {
+    // binary in place). 0x7F = all enabled (production behavior).
+    const uint32_t sparse_feature_mask = 0x7Fu,
+    // Per-q_chunk work bitmap. bit iter set iff (q_chunk has work in that iter) AND (iter is
+    // mask-active). Sized to num_q_chunks by the caller. When sparse_frames_enabled=0, every
+    // entry equals active_ring_iter_mask (dense fallback).
+    const uint32_t* q_work_bitmap = nullptr) {
     init_sdpa_streaming_semaphores();
 
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -2609,17 +2613,11 @@ void sdpa_ring_v2(
                     CircularBuffer(cb_signal).reserve_back(1);
                     sdpa_cb_push_back_out_of_line(cb_signal, 1);
                 }
-                // Zero-total-work Q chunk on the mask's last iter: push placeholder outputs so
-                // writer's per-Q-chunk save completes. Contents unspecified — for padded Q frames
-                // (nf_padded > nf_real) the DRAM region is beyond real_n and discarded downstream.
-                if (is_last_ring_iter && q_frame_total_processed[q_frame_for_this_chunk] == 0) {
-                    CircularBuffer(cb_out).reserve_back(Sq_chunk_t * vDHt);
-                    sdpa_cb_push_back_out_of_line(cb_out, Sq_chunk_t * vDHt);
-                    CircularBuffer(cb_max_out).reserve_back(Sq_chunk_t);
-                    sdpa_cb_push_back_out_of_line(cb_max_out, Sq_chunk_t);
-                    CircularBuffer(cb_sum_out).reserve_back(Sq_chunk_t);
-                    sdpa_cb_push_back_out_of_line(cb_sum_out, Sq_chunk_t);
-                }
+                // Placeholder output push for zero-total-work Q chunks is no longer needed under
+                // the bitmap approach: writer's sparse-aware continue (bit 6) skips output write
+                // for these q_chunks entirely, so pushing placeholders would only orphan cb_out.
+                // The DRAM output region for zero-total-work Q chunks is beyond real_n and is
+                // discarded downstream, so leaving it un-written is correct.
                 // Pop Q if reader pushed it this iter. For q_per_core > 1, reader pushes Q every
                 // iter (need_q_read=true) — match with a pop every iter. For q_per_core == 1, Q
                 // is fronted across iters and popped only on the last (matches the standard path
@@ -2679,22 +2677,34 @@ void sdpa_ring_v2(
             bool is_first;
             bool is_last_k_of_last_ring_iter;
             if constexpr (sparse_frames_enabled) {
-                // Feature bit 4: use counter-based flags (else fall back to dense flags).
-                // Counter is indexed by (q - global_q_start) — per-core scope — so the array
-                // is small (~q_per_core). See ring_joint_sdpa.cpp's work_items_arr note.
-                if (sparse_feature_mask & (1u << 4)) {
-                    const uint32_t q_local = q - global_q_start;
-                    q_work_item_processed[q_local]++;
-                    is_first = (q_work_item_processed[q_local] == 1);
-                    is_last_k_of_last_ring_iter =
-                        (q_work_item_processed[q_local] == q_frame_total_processed[q_frame_for_this_chunk]);
+                // Bitmap-based flags: is_first fires on the first KV chunk of the q_chunk's
+                // FIRST work iter; is_last_k_of_last_ring_iter fires on the last KV chunk of the
+                // q_chunk's LAST work iter. Bitmap encodes which iters have work for this
+                // q_chunk. Both compute and writer read the same bitmap so their per-(q_chunk,
+                // iter) decisions align: writer writes output at is_last_work_iter_for_q,
+                // compute normalizes there.
+                //
+                // Safety: guard against q_bits == 0 (would make __builtin_ctz/clz UB). Under
+                // production defaults (bit 0 = pre-scan on) this can't happen because entering
+                // the main K-loop implies per_q_valid_kv > 0 for this iter, which implies the
+                // bitmap bit is set. But if a caller runs with bit 0 off, pre-scan gives a
+                // dense count and we might enter the loop with q_bits == 0. Fall back to
+                // dense-style flags in that case (won't be correct but won't hang or UB).
+                const uint32_t q_bits = q_work_bitmap[q_chunk];
+                if (q_bits != 0u) {
+                    const uint32_t first_work_iter = __builtin_ctz(q_bits);
+                    const uint32_t last_work_iter = 31u - __builtin_clz(q_bits);
+                    is_first = (ring_iter == first_work_iter) && (KV_chunks_processed == 1);
+                    is_last_k_of_last_ring_iter = (ring_iter == last_work_iter) && is_last_k;
                 } else {
-                    (void)q_work_item_processed;
-                    (void)q_frame_total_processed;
                     is_first = is_first_kv_for_this_q && (KV_chunks_processed == 1);
                     is_last_k_of_last_ring_iter = is_last_ring_iter && is_last_k;
                 }
+                // Silence unused-variable warnings for obsolete counter arrays.
+                (void)q_work_item_processed;
+                (void)q_frame_total_processed;
             } else {
+                (void)q_work_bitmap;
                 is_first = is_first_kv_for_this_q && (KV_chunks_processed == 1);
                 is_last_k_of_last_ring_iter = is_last_ring_iter && is_last_k;
             }

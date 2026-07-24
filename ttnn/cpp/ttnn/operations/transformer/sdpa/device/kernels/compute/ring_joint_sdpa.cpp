@@ -139,13 +139,26 @@ void kernel_main() {
     for (uint32_t w = 0; w < 32; ++w) {
         frame_allow_words[w] = get_arg_val<uint32_t>(argidx++);
     }
-    // Sparse feature bitmask (runtime): reverse-bisection knob. Each bit gates one sparse
-    // code path. bit 0 = pre-scan check, 1 = q_frame_total_processed populate, 2 = try_skip
-    // lambda, 3 = zero-work fast path, 4 = counter-based is_first/is_last (else dense flags).
-    // Set to 0 to get dense-equivalent runtime behavior with sparse binary in place; add
-    // bits to enable pieces one at a time. Default from host: 0x1F (all enabled = current
-    // production behavior).
+    // Sparse feature bitmask (runtime): reverse-bisection knob. Bit meanings:
+    //   0: pre-scan bit check inside per_q_valid_kv loop
+    //   1: q_frame_total_processed populate (obsolete under bitmap approach; kept for A/B testing)
+    //   2: try_skip_sparse_frames lambda body
+    //   3: zero-work fast path body
+    //   4: (OBSOLETE) counter-based is_first/is_last — superseded by q_work_bitmap
+    //   5: reader shard-aggregate skip
+    //   6: writer per-iter save/restore skip on zero-work q_chunks
+    // Default from host: 0x7F. Set to 0 to get dense-equivalent runtime behavior.
     const uint32_t sparse_feature_mask = get_arg_val<uint32_t>(argidx++);
+
+    // Per-q_chunk work bitmap: bit ring_iter set iff (q_chunk has attended work in that iter)
+    // AND (iter is active in mask). Host precomputes; both compute and writer read the same.
+    // Replaces the runtime counter (bit 4) — no on-stack counter array needed. Under
+    // sparse_frames_enabled==0, host passes active_ring_iter_mask for every q_chunk so dense
+    // paths derive identical is_first/is_last decisions from the bitmap.
+    uint32_t q_work_bitmap[num_q_chunks] = {};
+    for (uint32_t q = 0; q < num_q_chunks; ++q) {
+        q_work_bitmap[q] = get_arg_val<uint32_t>(argidx++);
+    }
 
     RingSDPAOpIndexer fused_op_indexer(
         ring_size_runtime, ring_index_runtime, forward_writes_expected, backward_writes_expected);
@@ -227,52 +240,21 @@ void kernel_main() {
     // The first active iter starts with fresh accumulators; restoring would read stale staging.
     bool seen_active_iter = false;
 
-    // Sparse-frames per-work-item accounting for correct is_first / is_last across ring iters.
-    // The host-computed active_ring_iter_mask is OOB-only and does not consider sparse-frames,
-    // so its "first active" and "last active" iters can be entirely drained for some Q chunks.
-    // Compute must instead drive is_first / is_last_k_of_last_ring_iter off per-WORK-ITEM counts
-    // of actually-processed K chunks (a "work item" is a (batch, head, q_chunk) tuple — the unit
-    // that produces one attention output tile). Per-Q-frame counters would conflate multiple
-    // work items that share a Q frame (different heads, or multiple Q chunks per Q frame at
-    // sub-frame Sq_chunk_t), so the counter is indexed by q (the sdpa_ring_v2 Q-loop variable,
-    // which enumerates work items) and the total is looked up from a small per-Q-frame table.
-    //
-    // Q is SP-sharded across `ring_size` devices, and `frame_allow` is a broadcast global table
-    // indexed by GLOBAL Q frame. `q_frame_offset` maps this device's local Q chunks to their
-    // global Q-frame indices — without it, every device would look up frame_allow row 0.
-    //
-    // Array sizes: q_frame_total_processed is indexed by GLOBAL Q frame (max 32 by TT_FATAL);
-    // q_work_item_processed is indexed by work-item id (bounded by B * NH * num_q_chunks; all
-    // three are compile-time constants above).
-    constexpr uint32_t nf_pad_arr = num_frames_padded_compile > 0 ? num_frames_padded_compile : 1;
-    // Per-core work-item counter: q_work_item_processed is indexed by `q - global_q_start`
-    // so the array only needs to be as large as this core's actual work-item count
-    // (bounded by ~ceil(B*NH*num_q_chunks / num_cores) — typically single-digit at nh=40).
-    // Sizing the array by B*NH*num_q_chunks (== 360 at nh=40) puts 1440 bytes on the TRISC
-    // stack and hangs the matmul pipeline (Bug 1). 32 is a safe upper bound for realistic
-    // shard geometries; bump if a shape exceeds it and add a host-side TT_FATAL guard.
-    constexpr uint32_t work_items_arr = 32;
-    uint32_t q_frame_total_processed[nf_pad_arr] = {};
-    uint32_t q_work_item_processed[work_items_arr] = {};
+    // Sparse-frames per-device q_frame offset — maps this device's local q_chunks to their GLOBAL
+    // q_frame indices for frame_allow lookup. Q is SP-sharded across `ring_size` devices, and
+    // frame_allow is a broadcast global table indexed by GLOBAL q_frame; without this offset, every
+    // device would look up frame_allow row 0. Used by sdpa_ring_v2's per-chunk try_skip decisions.
     uint32_t q_frame_offset = 0;
     if constexpr (sparse_frames_enabled) {
-        // Feature bit 1: gate the total-array population (nested 24×24 bit scan + writes).
-        if (sparse_feature_mask & (1u << 1)) {
-            const uint32_t q_frames_per_shard = q_local_padded_Nt / frame_seqlen_tiles;
-            q_frame_offset = ring_index * q_frames_per_shard;
-            const uint32_t chunks_per_frame = frame_seqlen_tiles / Sk_chunk_t;
-            for (uint32_t qf = 0; qf < num_frames_padded_compile; ++qf) {
-                uint32_t allowed_k_frames = 0;
-                for (uint32_t kf = 0; kf < num_frames_padded_compile; ++kf) {
-                    const uint32_t bit_idx = qf * num_frames_padded_compile + kf;
-                    if ((frame_allow_words[bit_idx >> 5] >> (bit_idx & 31)) & 1u) {
-                        allowed_k_frames++;
-                    }
-                }
-                q_frame_total_processed[qf] = allowed_k_frames * chunks_per_frame;
-            }
-        }
+        const uint32_t q_frames_per_shard = q_local_padded_Nt / frame_seqlen_tiles;
+        q_frame_offset = ring_index * q_frames_per_shard;
     }
+    // Previously this scope declared q_frame_total_processed[] and q_work_item_processed[] for
+    // bit 4 counter mode. Bitmap approach (q_work_bitmap runtime arg) replaces the counter
+    // entirely — is_first / is_last_k_of_last_ring_iter now derive from the bitmap in
+    // sdpa_ring_v2. The arrays are removed to save ~224 bytes of TRISC stack (Bug 1 mitigation).
+    uint32_t* q_frame_total_processed = nullptr;
+    uint32_t* q_work_item_processed = nullptr;
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         WAYPOINT("CRIT");
@@ -426,7 +408,8 @@ void kernel_main() {
                 q_frame_total_processed,
                 q_work_item_processed,
                 q_frame_offset,
-                sparse_feature_mask);
+                sparse_feature_mask,
+                q_work_bitmap);
         } else {
             assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();
             sdpa_ring<
