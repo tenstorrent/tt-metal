@@ -9,7 +9,7 @@ ITERS="${ITERS:-5}"
 usage() {
 	echo "Usage: $0 [-l logdir]"
 	echo "	-l <logdir>		The directory where to save the log file"
-	echo "	Enironment variable ITERS controls the number of iterations of each test"
+	echo "	Environment variable ITERS controls the number of iterations of each test"
 	echo "		(default 5)"
 }
 
