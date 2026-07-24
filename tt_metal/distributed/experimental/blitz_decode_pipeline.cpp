@@ -45,6 +45,76 @@ const char* eth_chan_dir_cstr(tt::tt_fabric::eth_chan_directions d) {
         case tt::tt_fabric::eth_chan_directions::SOUTH: return "SOUTH";
         case tt::tt_fabric::eth_chan_directions::Z: return "Z";
         default: return "UNKNOWN";
+struct PhysicalPipelineStageConfig {
+    uint32_t entry_node_tray_id;
+    uint32_t exit_node_tray_id;
+    uint32_t entry_node_asic_location;
+    uint32_t exit_node_asic_location;
+};
+
+std::vector<PhysicalPipelineStageConfig> maybe_override_asic_locations_for_forced_fabric_mode(
+    std::vector<PhysicalPipelineStageConfig> pipeline_stage_configs) {
+    const char* force_galaxy_fabric_mode = std::getenv("FORCE_GALAXY_FABRIC_MODE");
+    if (force_galaxy_fabric_mode != nullptr && std::string(force_galaxy_fabric_mode) == "1") {
+        for (auto& stage_config : pipeline_stage_configs) {
+            // In multi-host mode (e.g. 4x_blaze_loudbox frankenquad), each host owns a
+            // single 4x2 mesh of 8 P150 boards — one chip per tray.
+            //
+            // Loudbox inter-host cabling pattern (from the cabling descriptor):
+            //   host N  tray 5 (upper half, port 2) → host N+1 tray 1 (lower half, port 1)
+            //   host N  tray 6 (upper half, port 2) → host N+1 tray 2 (lower half, port 1)
+            //   ... and so on (tray T+4 on host N → tray T on host N+1)
+            //
+            // The galaxy-level configs use different entry trays per stage (1, 3, 4, 2, …),
+            // which is meaningless for the loudbox where each host has its own 4x2 mesh.
+            // Fixing entry to tray 1 and exit to tray 5 (= tray 1 + 4) is the only choice
+            // that is consistent across all stages:
+            //   - entry tray 1 (asic 0): the chip that receives the cross-host fabric packet
+            //     from the previous host's tray 5
+            //   - exit  tray 5 (asic 0): the chip whose port 2 is cabled to the next host's
+            //     tray 1 port 1
+            // Entry and exit are thus distinct chips → CrossDeviceSend src != dst.
+            stage_config.entry_node_tray_id = 5;
+            stage_config.entry_node_asic_location = 0;
+            stage_config.exit_node_tray_id = 1;
+            stage_config.exit_node_asic_location = 0;
+        }
+        // The virtual loopback stage (last entry) receives the token returning from the final
+        // pipeline stage back to stage 0.  If its entry_node_tray_id is left as 1 (same as
+        // stage 0), both the h2d_receiver and the loopback D2D-exchange receiver would be
+        // dispatched to the same ASIC (tray1).  In slow-dispatch mode programs on the same
+        // ASIC execute sequentially, so the loopback receiver would queue behind the
+        // persistent h2d_receiver and never run — causing a hang.
+        //
+        // Using tray 2 (a free tray on rank 0's 4×2 mesh) for the loopback entry breaks the
+        // conflict: the loopback receiver runs on tray 2 while h2d_receiver owns tray 1.
+        // Stage 3 sends its fabric packet to tray 2 on rank 0; the mesh fabric router on
+        // tray 1 (where the inter-host ETH cable lands) forwards it to tray 2 internally.
+        pipeline_stage_configs.back().entry_node_tray_id = 6;
+        // Similarly, the virtual loopback exit (d2h_sender) must not share device 4 (tray 5)
+        // with stage 0's exit D2D exchange.  Both would be submitted to device 4's pipeline
+        // command queue; d2h_sender is a persistent infinite-loop kernel, so the exit D2D
+        // exchange queued behind it never runs — stage 0's embedding output never reaches
+        // rank 1, causing a complete deadlock.
+        //
+        // Moving the loopback exit to tray 6 (device 5, another free ASIC on rank 0) gives
+        // d2h_sender its own device while device 4 is left exclusively for the exit D2D
+        // exchange.  The upstream local socket now runs tray 2 → tray 6, which is an
+        // intra-host path accessible via PCIe from the host.
+        pipeline_stage_configs.back().exit_node_tray_id = 2;
+    }
+    return pipeline_stage_configs;
+}
+
+std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> get_asic_id_to_mesh_coord_map(
+    const distributed::MeshDevice& mesh_device) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> asic_id_to_mesh_coord_map;
+
+    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device.shape())) {
+        tt_fabric::FabricNodeId fabric_node_id = mesh_device.get_fabric_node_id(coord);
+        tt_metal::AsicID asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
+        asic_id_to_mesh_coord_map.emplace(asic_id, coord);
     }
 }
 
@@ -182,6 +252,561 @@ void validate_pipeline_allocation(const ResolvedBlitzDecodePipelineAllocation& a
             allocation.host_egress_stage_index == allocation.stages.size() - 1,
             "Resolved Blitz decode pipeline host egress stage index must reference the last stage when loopback is "
             "disabled");
+    return asic_id_to_mesh_coord_map;
+}
+
+PhysicalSystemDescriptor create_physical_system_descriptor() {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
+
+    return tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
+}
+
+std::vector<PhysicalPipelineStageConfig> generate_physical_pipeline_config() {
+    auto num_procs = *(tt::tt_metal::MetalContext::instance().get_distributed_context_ptr()->size());
+    switch (num_procs) {
+        case 4:
+            return maybe_override_asic_locations_for_forced_fabric_mode(
+                {{.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 2,
+                  .exit_node_asic_location = 6},
+                 {.entry_node_tray_id = 3,
+                  .exit_node_tray_id = 3,
+                  .entry_node_asic_location = 6,
+                  .exit_node_asic_location = 4},
+                 {.entry_node_tray_id = 4,
+                  .exit_node_tray_id = 4,
+                  .entry_node_asic_location = 4,
+                  .exit_node_asic_location = 7},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 7,
+                  .exit_node_asic_location = 4},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 4,
+                  .exit_node_asic_location = 3}});
+        case 16:
+            return maybe_override_asic_locations_for_forced_fabric_mode({
+                // First Tray
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 1,
+                 .exit_node_asic_location = 2},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 3,
+                 .exit_node_asic_location = 4},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 4,
+                 .exit_node_asic_location = 3},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 2,
+                 .exit_node_asic_location = 1},
+                // Second Tray
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 1,
+                 .exit_node_asic_location = 2},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 3,
+                 .exit_node_asic_location = 4},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 4,
+                 .exit_node_asic_location = 3},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 2,
+                 .exit_node_asic_location = 1},
+                // Third Tray
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 1,
+                 .exit_node_asic_location = 2},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 3,
+                 .exit_node_asic_location = 4},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 4,
+                 .exit_node_asic_location = 3},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 2,
+                 .exit_node_asic_location = 1},
+                // Fourth Tray
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 1,
+                 .exit_node_asic_location = 2},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 3,
+                 .exit_node_asic_location = 4},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 4,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                // Wrap-around
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+            });
+
+        case 32:
+            return maybe_override_asic_locations_for_forced_fabric_mode(
+                {{.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 7,
+                  .exit_node_asic_location = 8},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 8,
+                  .exit_node_asic_location = 7},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 6,
+                  .exit_node_asic_location = 5},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 5,
+                  .exit_node_asic_location = 6},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 7,
+                  .exit_node_asic_location = 8},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 8,
+                  .exit_node_asic_location = 7},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 6,
+                  .exit_node_asic_location = 5},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 5,
+                  .exit_node_asic_location = 6},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 7,
+                  .exit_node_asic_location = 8},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 8,
+                  .exit_node_asic_location = 7},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 6,
+                  .exit_node_asic_location = 5},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 5,
+                  .exit_node_asic_location = 6},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 7,
+                  .exit_node_asic_location = 8},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 8,
+                  .exit_node_asic_location = 7},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 6,
+                  .exit_node_asic_location = 5},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 5,
+                  .exit_node_asic_location = 6},
+                 // jump to pod 3
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 6,
+                  .exit_node_asic_location = 5},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 5,
+                  .exit_node_asic_location = 6},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 7,
+                  .exit_node_asic_location = 8},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 8,
+                  .exit_node_asic_location = 7},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 6,
+                  .exit_node_asic_location = 5},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 5,
+                  .exit_node_asic_location = 6},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 7,
+                  .exit_node_asic_location = 8},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 8,
+                  .exit_node_asic_location = 7},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 6,
+                  .exit_node_asic_location = 5},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 5,
+                  .exit_node_asic_location = 6},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 7,
+                  .exit_node_asic_location = 8},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 8,
+                  .exit_node_asic_location = 7},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 6,
+                  .exit_node_asic_location = 5},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 5,
+                  .exit_node_asic_location = 6},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 7,
+                  .exit_node_asic_location = 8},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 4,
+                  .entry_node_asic_location = 8,
+                  .exit_node_asic_location = 4}});
+        case 64:
+            return maybe_override_asic_locations_for_forced_fabric_mode(
+                {{.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 2,
+                  .exit_node_asic_location = 1},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 1,
+                  .exit_node_asic_location = 6},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 7,
+                  .exit_node_asic_location = 8},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 8,
+                  .exit_node_asic_location = 7},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 6,
+                  .exit_node_asic_location = 5},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 5,
+                  .exit_node_asic_location = 6},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 7,
+                  .exit_node_asic_location = 8},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 8,
+                  .exit_node_asic_location = 7},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 6,
+                  .exit_node_asic_location = 5},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 5,
+                  .exit_node_asic_location = 6},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 7,
+                  .exit_node_asic_location = 8},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 8,
+                  .exit_node_asic_location = 7},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 6,
+                  .exit_node_asic_location = 5},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 5,
+                  .exit_node_asic_location = 6},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 7,
+                  .exit_node_asic_location = 8},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 8,
+                  .exit_node_asic_location = 7},
+                 // jump to pod 4
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 7,
+                  .exit_node_asic_location = 8},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 8,
+                  .exit_node_asic_location = 7},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 6,
+                  .exit_node_asic_location = 5},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 5,
+                  .exit_node_asic_location = 6},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 7,
+                  .exit_node_asic_location = 8},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 8,
+                  .exit_node_asic_location = 7},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 6,
+                  .exit_node_asic_location = 5},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 5,
+                  .exit_node_asic_location = 6},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 7,
+                  .exit_node_asic_location = 8},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 8,
+                  .exit_node_asic_location = 7},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 6,
+                  .exit_node_asic_location = 5},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 5,
+                  .exit_node_asic_location = 6},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 7,
+                  .exit_node_asic_location = 8},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 8,
+                  .exit_node_asic_location = 7},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 6,
+                  .exit_node_asic_location = 5},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 5,
+                  .exit_node_asic_location = 6},
+                 // jump to pod 3
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 6,
+                  .exit_node_asic_location = 5},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 5,
+                  .exit_node_asic_location = 6},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 7,
+                  .exit_node_asic_location = 8},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 8,
+                  .exit_node_asic_location = 7},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 6,
+                  .exit_node_asic_location = 5},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 5,
+                  .exit_node_asic_location = 6},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 7,
+                  .exit_node_asic_location = 8},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 8,
+                  .exit_node_asic_location = 7},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 6,
+                  .exit_node_asic_location = 5},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 5,
+                  .exit_node_asic_location = 6},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 7,
+                  .exit_node_asic_location = 8},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 8,
+                  .exit_node_asic_location = 7},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 6,
+                  .exit_node_asic_location = 5},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 5,
+                  .exit_node_asic_location = 6},
+                 {.entry_node_tray_id = 1,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 7,
+                  .exit_node_asic_location = 8},
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 4,
+                  .entry_node_asic_location = 8,
+                  .exit_node_asic_location = 4},
+                 // jump to pod 2
+                 {.entry_node_tray_id = 3,
+                  .exit_node_tray_id = 3,
+                  .entry_node_asic_location = 3,
+                  .exit_node_asic_location = 4},
+                 {.entry_node_tray_id = 4,
+                  .exit_node_tray_id = 4,
+                  .entry_node_asic_location = 4,
+                  .exit_node_asic_location = 3},
+                 {.entry_node_tray_id = 4,
+                  .exit_node_tray_id = 4,
+                  .entry_node_asic_location = 2,
+                  .exit_node_asic_location = 1},
+                 {.entry_node_tray_id = 3,
+                  .exit_node_tray_id = 3,
+                  .entry_node_asic_location = 1,
+                  .exit_node_asic_location = 2},
+                 {.entry_node_tray_id = 3,
+                  .exit_node_tray_id = 3,
+                  .entry_node_asic_location = 3,
+                  .exit_node_asic_location = 4},
+                 {.entry_node_tray_id = 4,
+                  .exit_node_tray_id = 4,
+                  .entry_node_asic_location = 4,
+                  .exit_node_asic_location = 3},
+                 {.entry_node_tray_id = 4,
+                  .exit_node_tray_id = 4,
+                  .entry_node_asic_location = 2,
+                  .exit_node_asic_location = 1},
+                 {.entry_node_tray_id = 3,
+                  .exit_node_tray_id = 3,
+                  .entry_node_asic_location = 1,
+                  .exit_node_asic_location = 2},
+                 {.entry_node_tray_id = 3,
+                  .exit_node_tray_id = 3,
+                  .entry_node_asic_location = 3,
+                  .exit_node_asic_location = 4},
+                 {.entry_node_tray_id = 4,
+                  .exit_node_tray_id = 4,
+                  .entry_node_asic_location = 4,
+                  .exit_node_asic_location = 3},
+                 {.entry_node_tray_id = 4,
+                  .exit_node_tray_id = 4,
+                  .entry_node_asic_location = 2,
+                  .exit_node_asic_location = 1},
+                 {.entry_node_tray_id = 3,
+                  .exit_node_tray_id = 3,
+                  .entry_node_asic_location = 1,
+                  .exit_node_asic_location = 2},
+                 {.entry_node_tray_id = 3,
+                  .exit_node_tray_id = 3,
+                  .entry_node_asic_location = 3,
+                  .exit_node_asic_location = 4},
+                 {.entry_node_tray_id = 4,
+                  .exit_node_tray_id = 4,
+                  .entry_node_asic_location = 4,
+                  .exit_node_asic_location = 3},
+                 {.entry_node_tray_id = 4,
+                  .exit_node_tray_id = 4,
+                  .entry_node_asic_location = 2,
+                  .exit_node_asic_location = 1},
+                 {.entry_node_tray_id = 3,
+                  .exit_node_tray_id = 1,
+                  .entry_node_asic_location = 1,
+                  .exit_node_asic_location = 5},
+                 // wrap-around
+                 {.entry_node_tray_id = 2,
+                  .exit_node_tray_id = 2,
+                  .entry_node_asic_location = 6,
+                  .exit_node_asic_location = 5}});
+        default: TT_THROW("Unsupported number of processes for creating Multi-Host Pipeline: {}", num_procs);
+    }
+}
+
+std::vector<BlitzDecodePipelineStage> build_pipeline(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate>& asic_id_to_mesh_coord) {
+    std::vector<PhysicalPipelineStageConfig> physical_pipeline_stage_configs = generate_physical_pipeline_config();
+
+    const bool force_galaxy_fabric_mode = [] {
+        const char* env = std::getenv("FORCE_GALAXY_FABRIC_MODE");
+        return env != nullptr && std::string(env) == "1";
+    }();
+
+    const auto num_procs = *(tt::tt_metal::MetalContext::instance().get_distributed_context_ptr()->size());
+    std::vector<BlitzDecodePipelineStage> logical_pipeline_stage_configs;
+    logical_pipeline_stage_configs.reserve(physical_pipeline_stage_configs.size());
+
+    for (std::size_t stage_index = 0; stage_index < physical_pipeline_stage_configs.size(); stage_index++) {
+        const auto& stage_config = physical_pipeline_stage_configs[stage_index];
+        auto stage_hostname = physical_system_descriptor.get_hostname_for_rank(stage_index % num_procs);
+
+        auto get_asic_id_with_optional_zero_fallback = [&](tt::tt_metal::TrayID tray_id, uint32_t asic_location) {
+            try {
+                return physical_system_descriptor.get_asic_id(
+                    stage_hostname, tray_id, tt::tt_metal::ASICLocation(asic_location));
+            } catch (const std::exception&) {
+                if (force_galaxy_fabric_mode && asic_location != 0) {
+                    return physical_system_descriptor.get_asic_id(
+                        stage_hostname, tray_id, tt::tt_metal::ASICLocation(0));
+                }
+                throw;
+            }
+        };
+
+        auto entry_node_asic_id = get_asic_id_with_optional_zero_fallback(
+            tt::tt_metal::TrayID(stage_config.entry_node_tray_id), stage_config.entry_node_asic_location);
+        auto exit_node_asic_id = get_asic_id_with_optional_zero_fallback(
+            tt::tt_metal::TrayID(stage_config.exit_node_tray_id), stage_config.exit_node_asic_location);
+
+        logical_pipeline_stage_configs.emplace_back(BlitzDecodePipelineStage{
+            .stage_index = stage_index,
+            .entry_node_coord = asic_id_to_mesh_coord.at(entry_node_asic_id),
+            .exit_node_coord = asic_id_to_mesh_coord.at(exit_node_asic_id)});
     }
 
     TT_FATAL(
