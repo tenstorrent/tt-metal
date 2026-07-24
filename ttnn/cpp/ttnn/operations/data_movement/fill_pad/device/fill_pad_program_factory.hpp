@@ -6,8 +6,8 @@
 
 #include "fill_pad_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include <array>
 #include <bit>
 
@@ -94,7 +94,7 @@ namespace ttnn::prim {
 // with num == 0 are skipped. A single compute kernel binary covers all cores
 // (CT has_right_pad / has_bottom_pad gate the phase branches at compile time).
 struct FillPadProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const FillPadParams& operation_attributes, const FillPadInputs& tensor_args, Tensor& tensor_return_value);
 };
 
@@ -102,7 +102,7 @@ struct FillPadProgramFactory {
 // Unlike `FillPadProgramFactory` which gives each core a comparable number of borders,
 // with FillPadL1ShardedProgramFactory, each core only processes its own local L1 data (no balancing).
 struct FillPadL1ShardedProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const FillPadParams& operation_attributes, const FillPadInputs& tensor_args, Tensor& tensor_return_value);
 };
 

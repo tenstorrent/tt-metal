@@ -3,23 +3,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Reads border tiles from the local L1 shard into dfb_data_in using NOC
+ * Reads border tiles from the local L1 shard into dfb::data_in using NOC
  * reads addressed to this core's own L1. No cross-core NOC access.
  *
- * CT args:
- *   [0] W_tiles         – width of the shard in tiles (= full tensor width for HEIGHT_SHARDED)
- *   [1] has_right_pad   – 1 if tensor width % 32 != 0
- *   [2] elem_size       – 2 or 4 bytes per element
- *   [3] cb_data_in_idx  – CB index for data-in (= 0)
- *
- * RT args:
- *   [0] shard_l1_base_addr  – L1 base address of this core's shard buffer
- *   [1] shard_H_tiles       – active height tiles in this shard
- *   [2] has_bottom_pad_core – 1 if this is the last active shard and tensor has bottom padding
- *   [3] num_work            – 0 → no border tiles on this core; >0 → work to do
- *   [4] local_right_col     – local column index of the right-border tile within this shard
- *                             (= W_tiles-1 for fully-packed shards; may be smaller for the
- *                              rightmost shard when W_tiles_tensor % pages_per_shard_x != 0)
+ * Named compile-time args:
+ *   W_tiles         – width of the shard in tiles (= full tensor width for HEIGHT_SHARDED)
+ *   has_right_pad   – 1 if tensor width % 32 != 0
+ *   elem_size       – 2 or 4 bytes per element (declared, unused here)
+ * Named runtime args:
+ *   shard_H_tiles       – active height tiles in this shard
+ *   has_bottom_pad_core – 1 if this is the last active shard and tensor has bottom padding
+ *   num_work            – 0 → no border tiles on this core; >0 → work to do
+ *   local_right_col     – local column index of the right-border tile within this shard
+ *                         (= W_tiles-1 for fully-packed shards; may be smaller for the
+ *                          rightmost shard when W_tiles_tensor % pages_per_shard_x != 0)
+ * Resource bindings: dfb::data_in (produced); tensor::src — the input tensor. This is a
+ *   Case 2 (raw pointer) binding: the shard L1 base address is pulled from the TensorAccessor
+ *   via get_bank_base_address(), then used directly in UnicastEndpoint address arithmetic.
  *
  * Tile ordering matches fill_pad_compute.cpp exactly:
  *   Mode A (has_bottom_pad_core == 0):
@@ -34,28 +34,31 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t W_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t has_right_pad = get_compile_time_arg_val(1);
-    constexpr uint32_t elem_size = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_data_in_idx = get_compile_time_arg_val(3);
+    constexpr auto W_tiles = get_arg(args::W_tiles);
+    constexpr auto has_right_pad = get_arg(args::has_right_pad);
+    constexpr auto elem_size = get_arg(args::elem_size);  // unused here (preserved arg)
 
-    constexpr uint32_t tile_bytes = get_tile_size(cb_data_in_idx);
+    const uint32_t shard_H_tiles = get_arg(args::shard_H_tiles);
+    const uint32_t has_bottom_pad_core = get_arg(args::has_bottom_pad_core);
+    const uint32_t num_work = get_arg(args::num_work);
+    const uint32_t local_right_col = get_arg(args::local_right_col);
 
-    const uint32_t shard_l1_base = get_arg_val<uint32_t>(0);
-    const uint32_t shard_H_tiles = get_arg_val<uint32_t>(1);
-    const uint32_t has_bottom_pad_core = get_arg_val<uint32_t>(2);
-    const uint32_t num_work = get_arg_val<uint32_t>(3);
-    const uint32_t local_right_col = get_arg_val<uint32_t>(4);
+    Noc noc;
+    DataflowBuffer dfb_data_in(dfb::data_in);
+    const uint32_t tile_bytes = dfb_data_in.get_tile_size();
+
+    // Case 2 binding: pull this core's shard L1 base address from the TensorAccessor.
+    // (The sharded reader does raw UnicastEndpoint arithmetic on the base, not accessor iteration.)
+    const auto s = TensorAccessor(tensor::src);
+    const uint32_t shard_l1_base = s.get_bank_base_address();
 
     // The UnicastEndpoint below carries this core's own physical NOC
     // coordinates (my_x[]/my_y[]) so each read targets local L1.
 
-    constexpr uint32_t row_stride_bytes = W_tiles * tile_bytes;
-
-    Noc noc;
-    DataflowBuffer dfb_data_in(cb_data_in_idx);
+    const uint32_t row_stride_bytes = W_tiles * tile_bytes;
 
     // Local-L1 self-read via the Noc wrapper's UnicastEndpoint form: no
     // address-generator trait is applicable, so the endpoint carries explicit

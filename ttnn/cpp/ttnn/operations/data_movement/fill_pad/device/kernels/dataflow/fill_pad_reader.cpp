@@ -31,38 +31,24 @@
  * Tile ordering across the three phases must match fill_pad_writer.cpp and
  * fill_pad_compute.cpp exactly (CBs are FIFO).
  *
- * CT args layout (common to reader and writer):
- *   [0]  W_tiles
- *   [1]  H_tiles
- *   [2]  N_slices (unused here)
- *   [3]  has_right_pad
- *   [4]  has_bottom_pad
- *   [5]  W_mod32 (unused here)
- *   [6]  H_mod32 (unused here)
- *   [7]  elem_size (2 or 4)
- *   [8]  fill_bits (unused here)
- *   [9]  CB_TILE_IN (= 0)
- *   [10+] TensorAccessorArgs
- *
- * RT args:
- *   [0]  buf_addr
- *   [1]  start_right   [2]  num_right
- *   [3]  start_bottom  [4]  num_bottom
- *   [5]  start_corner  [6]  num_corner
+ * Named compile-time args: W_tiles, H_tiles, has_right_pad, has_bottom_pad
+ *   (N_slices, W_mod32, H_mod32, elem_size, fill_bits are also declared but unused here).
+ * Named runtime args: start_right, num_right, start_bottom, num_bottom, start_corner, num_corner.
+ * Resource bindings: dfb::data_in (produced), tensor::src (the input tensor, read via TensorAccessor).
  */
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t W_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t H_tiles = get_compile_time_arg_val(1);
-    constexpr uint32_t has_right_pad = get_compile_time_arg_val(3);
-    constexpr uint32_t has_bottom_pad = get_compile_time_arg_val(4);
-    constexpr uint32_t elem_size = get_compile_time_arg_val(7);
-    constexpr uint32_t cb_tile_in_idx = get_compile_time_arg_val(9);
+    constexpr auto W_tiles = get_arg(args::W_tiles);
+    constexpr auto H_tiles = get_arg(args::H_tiles);
+    constexpr auto has_right_pad = get_arg(args::has_right_pad);
+    constexpr auto has_bottom_pad = get_arg(args::has_bottom_pad);
+    constexpr auto elem_size = get_arg(args::elem_size);  // unused here (preserved arg)
 
     // Per-phase slice strides (meaningful only when the corresponding phase is active).
     // Clamped to >= 1 so the compiler does not see a constexpr divide-by-zero in
@@ -73,21 +59,19 @@ void kernel_main() {
     constexpr uint32_t bottom_slice_stride =
         has_bottom_pad ? (has_right_pad ? ((W_tiles > 1u) ? (W_tiles - 1u) : 1u) : W_tiles) : 1u;
 
-    constexpr uint32_t tile_bytes = get_tile_size(cb_tile_in_idx);
-
-    const uint32_t buf_addr = get_arg_val<uint32_t>(0);
-    const uint32_t start_right = get_arg_val<uint32_t>(1);
-    const uint32_t num_right = get_arg_val<uint32_t>(2);
-    const uint32_t start_bottom = get_arg_val<uint32_t>(3);
-    const uint32_t num_bottom = get_arg_val<uint32_t>(4);
-    const uint32_t start_corner = get_arg_val<uint32_t>(5);
-    const uint32_t num_corner = get_arg_val<uint32_t>(6);
-
-    constexpr auto src_args = TensorAccessorArgs<10>();
-    const auto s = TensorAccessor(src_args, buf_addr, tile_bytes);
+    const uint32_t start_right = get_arg(args::start_right);
+    const uint32_t num_right = get_arg(args::num_right);
+    const uint32_t start_bottom = get_arg(args::start_bottom);
+    const uint32_t num_bottom = get_arg(args::num_bottom);
+    const uint32_t start_corner = get_arg(args::start_corner);
+    const uint32_t num_corner = get_arg(args::num_corner);
 
     Noc noc;
-    DataflowBuffer dfb_tile_in(cb_tile_in_idx);
+    DataflowBuffer dfb_tile_in(dfb::data_in);
+    const uint32_t tile_bytes = dfb_tile_in.get_tile_size();
+
+    // Base address and layout metadata are injected by the TensorBinding.
+    const auto s = TensorAccessor(tensor::src);
 
     // ---- Right phase ----
     // Maintain (slice, row) incrementally instead of dividing every iteration
