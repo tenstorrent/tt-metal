@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Reader for per_token_cast_back. Streams the core's rows as a flat sequence of 128-element scale
-// blocks; a block is tile_h consecutive scale blocks (tiles_per_block tiles after tilize).
-// Per block:
+// blocks; a block is tile_h consecutive scale blocks (tiles_per_block tiles after tilize). Per block:
 //   - input_e4m3: read each bank-contiguous run of scale blocks into cb_input_e4m3 with a single
 //     NoC async read (mirrors the writer);
 //   - scale: read the (few) tokens spanned by the block as full, page-aligned scale rows into a
@@ -12,6 +11,14 @@
 //     64-aligned DRAM page), then build the single bcast operand tile whose column 0 row r = the
 //     scale of block row r = scale[token_r][block_r] (face-aware). The compute multiplies each
 //     block row by its column-0 scale.
+//
+// The core's block range is chosen two ways (TOKEN_COUNT_AWARE define):
+//   * plain  : the host passes start_row / num_rows / num_blocks as runtime args.
+//   * token_count_aware : this kernel reads the per-expert region offsets / token counts / global-expert-idx
+//              table from DRAM, computes the valid prefix length total_valid_rows, derives its own
+//              balanced tile-row slice from (core_id, num_cores), and publishes num_blocks to the
+//              compute kernel via the cb_loop_count mailbox. The scale may be read from the int32 metadata
+//              tail (scale_col_offset).
 
 #include <cstdint>
 
@@ -24,10 +31,18 @@
 void kernel_main() {
     uint32_t input_e4m3_addr = get_arg_val<uint32_t>(0);
     uint32_t scale_addr = get_arg_val<uint32_t>(1);
+#ifdef TOKEN_COUNT_AWARE
+    uint32_t region_addr = get_arg_val<uint32_t>(2);
+    uint32_t counts_addr = get_arg_val<uint32_t>(3);
+    uint32_t table_addr = get_arg_val<uint32_t>(4);
+    uint32_t core_id = get_arg_val<uint32_t>(5);
+    uint32_t width = get_arg_val<uint32_t>(6);  // H (elements per row)
+#else
     uint32_t num_blocks = get_arg_val<uint32_t>(2);
     uint32_t start_row = get_arg_val<uint32_t>(3);  // absolute first row of this core's stream
     uint32_t num_rows = get_arg_val<uint32_t>(4);   // rows owned by this core
     uint32_t width = get_arg_val<uint32_t>(5);      // H (elements per row)
+#endif
 
     constexpr uint32_t cb_input_e4m3 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_scale_bcast = get_compile_time_arg_val(1);
@@ -40,17 +55,33 @@ void kernel_main() {
     constexpr uint32_t tile_w = get_compile_time_arg_val(7);
     constexpr uint32_t face_h = get_compile_time_arg_val(8);
     constexpr uint32_t face_w = get_compile_time_arg_val(9);
+#ifdef TOKEN_COUNT_AWARE
+    constexpr uint32_t cb_loop_count = get_compile_time_arg_val(10);
+    constexpr uint32_t cb_region_scratch = get_compile_time_arg_val(11);
+    constexpr uint32_t cb_counts_scratch = get_compile_time_arg_val(12);
+    constexpr uint32_t cb_table_scratch = get_compile_time_arg_val(13);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(14);
+    constexpr uint32_t experts_per_chip = get_compile_time_arg_val(15);
+    // Element offset of the scale tail within each scale-source row. 0 for a plain (M, H/128) scale
+    // tensor; = metadata_len - H/128 (skip the routing header) for the metadata path.
+    constexpr uint32_t scale_col_offset = get_compile_time_arg_val(16);
+    constexpr uint32_t ACCESSOR_CT_BASE = 19;
+#else
+    // Plain path: the scale is a FLOAT32 (M, H/128) tensor read from column 0.
+    constexpr uint32_t scale_col_offset = 0;
+    constexpr uint32_t ACCESSOR_CT_BASE = 10;
+#endif
     constexpr uint32_t block_w = 128;
     constexpr uint32_t tiles_per_block = block_w / tile_w;
-    constexpr uint32_t face_elems = face_h * face_w;                // fp32 per face
-    constexpr uint32_t faces_per_row = tile_w / face_w;             // face columns per tile
+    constexpr uint32_t face_elems = face_h * face_w;                                        // fp32 per face
+    constexpr uint32_t faces_per_row = tile_w / face_w;                                     // face columns per tile
     constexpr uint32_t FACE_ROWS = tile_h / face_h;                                         // face rows per tile
     constexpr uint32_t FACE_ROW_STRIDE_BYTES = faces_per_row * face_elems * sizeof(float);  // per face row
     constexpr uint32_t FACE_W_BYTES = face_w * sizeof(float);                               // per in-face row
 
     (void)block_ht;  // kept as a compile-time layout arg for tensor accessor offset stability
 
-    constexpr auto input_e4m3_accessor_args = TensorAccessorArgs<10>();
+    constexpr auto input_e4m3_accessor_args = TensorAccessorArgs<ACCESSOR_CT_BASE>();
     constexpr auto scale_args = TensorAccessorArgs<input_e4m3_accessor_args.next_compile_time_args_offset()>();
     const auto input_e4m3 = TensorAccessor(input_e4m3_accessor_args, input_e4m3_addr);
     const auto scale = TensorAccessor(scale_args, scale_addr);
@@ -59,18 +90,82 @@ void kernel_main() {
     CircularBuffer cb_scale_bcast_obj(cb_scale_bcast);
     CircularBuffer cb_scale_scratch_obj(cb_scale_scratch);
 
+    const uint32_t blocks_per_row = width >> 7;  // H / 128 (block_w = 128); one-time shift
+
+#ifdef TOKEN_COUNT_AWARE
+    constexpr auto region_args = TensorAccessorArgs<scale_args.next_compile_time_args_offset()>();
+    constexpr auto counts_args = TensorAccessorArgs<region_args.next_compile_time_args_offset()>();
+    constexpr auto table_args = TensorAccessorArgs<counts_args.next_compile_time_args_offset()>();
+    const auto region = TensorAccessor(region_args, region_addr);
+    const auto counts = TensorAccessor(counts_args, counts_addr);
+    const auto table = TensorAccessor(table_args, table_addr);
+    CircularBuffer cb_loop_count_obj(cb_loop_count);
+    CircularBuffer cb_region_scratch_obj(cb_region_scratch);
+    CircularBuffer cb_counts_scratch_obj(cb_counts_scratch);
+    CircularBuffer cb_table_scratch_obj(cb_table_scratch);
+
+    // --- Read the three metadata vectors (small, 1 page each) into private L1 scratch. ---
+    cb_region_scratch_obj.reserve_back(1);
+    cb_counts_scratch_obj.reserve_back(1);
+    cb_table_scratch_obj.reserve_back(1);
+    noc.async_read(region, cb_region_scratch_obj, region.get_aligned_page_size(), {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read(counts, cb_counts_scratch_obj, counts.get_aligned_page_size(), {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read(table, cb_table_scratch_obj, table.get_aligned_page_size(), {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read_barrier();
+
+    const volatile tt_l1_ptr uint32_t* region_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_region_scratch_obj.get_write_ptr());
+    const volatile tt_l1_ptr uint32_t* counts_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_counts_scratch_obj.get_write_ptr());
+    const volatile tt_l1_ptr uint32_t* table_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_table_scratch_obj.get_write_ptr());
+
+    // Valid prefix length = max over local expert slots of (region_ptr[g] + ceil_tile(counts_ptr[g])),
+    // where g = table_ptr[local_slot].
+    uint32_t total_valid_rows = 0;
+    for (uint32_t local_slot = 0; local_slot < experts_per_chip; ++local_slot) {
+        const uint32_t global_expert_id = table_ptr[local_slot];
+        const uint32_t token_count = counts_ptr[global_expert_id];
+        const uint32_t token_count_ceil = ((token_count + tile_h - 1) / tile_h) * tile_h;
+        const uint32_t region_end = region_ptr[global_expert_id] + token_count_ceil;
+        if (region_end > total_valid_rows) {
+            total_valid_rows = region_end;
+        }
+    }
+
+    // Split the work across the cores: this core takes a contiguous slice of the flattened compute-block space.
+    const uint32_t total_tile_rows = total_valid_rows / tile_h;
+    const uint32_t total_compute_blocks = total_tile_rows * blocks_per_row;
+    const uint32_t cb_start = (total_compute_blocks * core_id) / num_cores;
+    const uint32_t cb_end = (total_compute_blocks * (core_id + 1)) / num_cores;
+    const uint32_t num_blocks = cb_end - cb_start;
+    // Flattened scale-block indices (tile_h scale-blocks per compute-block). One-time div/mod only.
+    const uint32_t start_flat = cb_start * tile_h;
+    const uint32_t end_flat = cb_end * tile_h;  // exclusive
+    const uint32_t start_row = start_flat / blocks_per_row;
+    const uint32_t start_col = start_flat % blocks_per_row;
+    const uint32_t end_row = (end_flat == 0) ? 0 : ((end_flat - 1) / blocks_per_row) + 1;
+    const uint32_t total_blocks = num_blocks * tile_h;  // per-core scale-blocks (exact multiple of tile_h)
+
+    // Publish num_blocks to the compute kernel (read via read_tile_value on the TRISCs).
+    cb_loop_count_obj.reserve_back(1);
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_loop_count_obj.get_write_ptr())[0] = num_blocks;
+    cb_loop_count_obj.push_back(1);
+#else
+    // num_blocks / start_row / num_rows come from the host runtime args read above.
+    const uint32_t start_col = 0;
+    const uint32_t total_blocks = num_rows * blocks_per_row;
+    const uint32_t end_row = start_row + num_rows;
+#endif
+
     // Reader-private scratch: up to tile_h tokens' full scale rows (one slot per token in a block).
     cb_scale_scratch_obj.reserve_back(1);
     const uint32_t scratch = cb_scale_scratch_obj.get_write_ptr();
 
-    const uint32_t blocks_per_row = width >> 7;  // H / 128 (block_w = 128); one-time shift
-    const uint32_t total_blocks = num_rows * blocks_per_row;
-    const uint32_t end_row = start_row + num_rows;
-
     // Persistent (row, block_idx) cursor over the flat block stream: no per-block div/mod (expensive
     // on the Baby RISC-V); advance block_idx by the run and reset to the next row with a conditional.
     uint32_t current_row = start_row;
-    uint32_t block_idx_in_row = 0;
+    uint32_t block_idx_in_row = start_col;
 
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         const uint32_t base = blk * tile_h;
@@ -132,8 +227,7 @@ void kernel_main() {
             uint32_t col0_off = face_base_off;
             for (uint32_t r = 0; r < face_h; ++r) {
                 if (s < real_in_block) {
-                    uint32_t val = scratch_mem[(tok_off >> 2) + block_idx_b];
-                    page[col0_off >> 2] = val;
+                    page[col0_off >> 2] = scratch_mem[(tok_off >> 2) + scale_col_offset + block_idx_b];
                     ++block_idx_b;
                     if (block_idx_b >= blocks_per_row) {
                         block_idx_b = 0;

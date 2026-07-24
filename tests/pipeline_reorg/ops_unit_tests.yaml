@@ -91,7 +91,7 @@
 
 - name: ttnn nightly experimental tests (blackhole)
   # Host-IOMMU tests are selected by the viommu job below and excluded from these non-IOMMU SKUs.
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance" -m "not requires_host_iommu" --timeout=600'
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -v -k "not performance" -m "not requires_host_iommu" --timeout=600'
   skus:
     bh_p100:
       timeout: 60
