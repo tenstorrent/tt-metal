@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 from types import SimpleNamespace
-
 
 from models.experimental.diffusion_gemma.tt import denoise_forward as DF
 from models.experimental.diffusion_gemma.tt.denoise_forward import (
@@ -510,6 +510,58 @@ def test_denoise_compact_ragged_skips_dense_router_and_capacity(monkeypatch):
 
     assert DF._denoise_moe_forward(moe, _FakeTensor([1, 1, 256, 2816]), expert_input) == "compact-output"
     assert calls == [(experts, expert_input, routing)]
+
+
+def test_denoise_moe_defaults_to_sparse_when_unset(monkeypatch):
+    """Optimized sparse MoE is the DEFAULT: unset DG_SPARSE_MOE => sparse path (not dense/error)."""
+    from models.experimental.diffusion_gemma.tt import sparse_moe
+
+    monkeypatch.delenv("DG_SPARSE_MOE", raising=False)
+    monkeypatch.delenv("DG_DENOISE_COMPACT_RAGGED", raising=False)
+    monkeypatch.delenv("DG_SPARSE_MOE_CAPACITY", raising=False)
+    dense_routing = _FakeTensor([1, 1, 256, 128])
+    monkeypatch.setattr(DF, "_denoise_router_forward", lambda router, hidden: dense_routing)
+    monkeypatch.setattr(
+        sparse_moe, "sparse_experts_forward", lambda experts, hidden, routing, *, capacity: "sparse-output"
+    )
+    # The dense reference path must NOT be entered when the flag is unset.
+    monkeypatch.setattr(
+        DF,
+        "use_tanh_expert_activations",
+        lambda: (_ for _ in ()).throw(AssertionError("dense path must not run when DG_SPARSE_MOE is unset")),
+    )
+    moe = SimpleNamespace(router=object(), experts=object())
+    assert (
+        DF._denoise_moe_forward(moe, _FakeTensor([1, 1, 256, 2816]), _FakeTensor([1, 1, 256, 2816])) == "sparse-output"
+    )
+
+
+def test_denoise_dense_moe_fails_loud_without_escape_hatch(monkeypatch, expect_error):
+    """DG_SPARSE_MOE=0 must raise (no silent ~5x-slower dense fallback) unless opted in."""
+    monkeypatch.setenv("DG_SPARSE_MOE", "0")
+    monkeypatch.delenv("DG_ALLOW_DENSE_MOE", raising=False)
+    moe = SimpleNamespace(router=object(), experts=lambda *a, **k: "dense-output")
+    with expect_error(RuntimeError, match="dense-128 MoE path is disabled"):
+        DF._denoise_moe_forward(moe, _FakeTensor([1, 1, 256, 2816]), _FakeTensor([1, 1, 256, 2816]))
+
+
+def test_denoise_dense_moe_runs_with_explicit_escape_hatch(monkeypatch):
+    """DG_SPARSE_MOE=0 + DG_ALLOW_DENSE_MOE=1 explicitly runs the dense A/B baseline."""
+    monkeypatch.setenv("DG_SPARSE_MOE", "0")
+    monkeypatch.setenv("DG_ALLOW_DENSE_MOE", "1")
+    monkeypatch.setattr(DF, "use_tanh_expert_activations", contextlib.nullcontext)
+    dense_routing = _FakeTensor([1, 1, 256, 128])
+    monkeypatch.setattr(DF, "_denoise_router_forward", lambda router, hidden: dense_routing)
+    calls = []
+
+    def fake_experts(hidden, routing):
+        calls.append((hidden, routing))
+        return "dense-output"
+
+    moe = SimpleNamespace(router=object(), experts=fake_experts)
+    expert_input = _FakeTensor([1, 1, 256, 2816])
+    assert DF._denoise_moe_forward(moe, _FakeTensor([1, 1, 256, 2816]), expert_input) == "dense-output"
+    assert calls == [(expert_input, dense_routing)]
 
 
 def test_compact_ragged_segment_bound_is_static_and_tile_aligned():

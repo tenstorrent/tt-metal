@@ -427,10 +427,28 @@ def _denoise_router_compact_forward(router, hidden_states):
     return RaggedRouting(normalized_values, top_k_indices, router.per_expert_scale)
 
 
+def _sparse_moe_enabled() -> bool:
+    """Whether the optimized true-sparse token-gather MoE runs (``DG_SPARSE_MOE``).
+
+    Default **ON**: the true-sparse path (~13x cheaper than the dense-128 path; ~5x faster
+    end-to-end, measured on QB2) is the validated production default. ``DG_SPARSE_MOE=0``
+    selects the reference dense-128 path, which :func:`_denoise_moe_forward` now REFUSES to
+    run unless ``DG_ALLOW_DENSE_MOE=1`` is also set — dense is a deliberate A/B / PCC baseline,
+    never a silent runtime fallback. See tt/sparse_moe.py.
+    """
+    return os.environ.get("DG_SPARSE_MOE", "1") != "0"
+
+
+def _dense_moe_explicitly_allowed() -> bool:
+    """Escape hatch for the dense-128 reference path (``DG_ALLOW_DENSE_MOE``, default off)."""
+    return os.environ.get("DG_ALLOW_DENSE_MOE", "0").lower() in ("1", "true", "yes", "on")
+
+
 def _denoise_moe_forward(moe, router_input, expert_input):
-    # True-sparse token-gather MoE (~13x cheaper than the dense-128 path). Opt-in via env while
-    # PCC / traced-t/s is validated; default flips once verified. See tt/sparse_moe.py.
-    if os.environ.get("DG_SPARSE_MOE", "0") == "1":
+    # True-sparse token-gather MoE is the DEFAULT (see _sparse_moe_enabled). DG_SPARSE_MOE=0
+    # selects the ~5x-slower reference dense-128 path, which fails loud unless
+    # DG_ALLOW_DENSE_MOE=1 is set (A/B / PCC baseline only). See tt/sparse_moe.py.
+    if _sparse_moe_enabled():
         from models.experimental.diffusion_gemma.tt.sparse_moe import (
             compact_ragged_denoise_enabled,
             compact_ragged_denoise_forward,
@@ -448,6 +466,13 @@ def _denoise_moe_forward(moe, router_input, expert_input):
         out = sparse_experts_forward(moe.experts, expert_input, dense_routing, capacity=capacity)
         dense_routing.deallocate(True)
         return out
+    if not _dense_moe_explicitly_allowed():
+        raise RuntimeError(
+            "DiffusionGemma dense-128 MoE path is disabled: DG_SPARSE_MOE=0 selects the "
+            "~5x-slower reference dense path, which is no longer a supported runtime default. "
+            "Use the optimized sparse MoE (unset DG_SPARSE_MOE, or set DG_SPARSE_MOE=1), or set "
+            "DG_ALLOW_DENSE_MOE=1 to explicitly run the dense baseline for A/B / PCC comparison."
+        )
     dense_routing = _denoise_router_forward(moe.router, router_input)
     with use_tanh_expert_activations():
         return moe.experts(expert_input, dense_routing)

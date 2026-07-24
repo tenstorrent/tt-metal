@@ -22,6 +22,11 @@ Current guardrails:
 - `DG_PREFILL_RAGGED_LONG` defaults on. Every multi-token prefill uses the ragged top-8 path;
   sequences above 4096 are processed in 4096-token slices. Setting it to `0` is a diagnostic
   control that reproduces the historical dense all-128-expert fallback and 4K→16K cliff.
+- `DG_SPARSE_MOE` (the denoise-step MoE) defaults **on** as of 2026-07-24: the true-sparse
+  token-gather path is the optimized default (~5× faster/step than dense-128; MoE is ~89% of the
+  denoise step). `DG_SPARSE_MOE=0` now **fails loud** (`RuntimeError`) — the ~5×-slower dense-128
+  reference is no longer a silent runtime fallback; set `DG_ALLOW_DENSE_MOE=1` to run it explicitly
+  for A/B / PCC baselines. `DG_SPARSE_MOE_TUNED` remains default-on (OPT-004 matmul geometry).
 - The current pure full-depth 64K-build artifact is
   `context_window_prefill_only_chunkedlong_20260713_msl65536.{json,md}`:
   1K 0.78 s, 4K 1.37 s, 8K 4.15 s, 16K 5.55 s, 32K 10.84 s, 64K 35.58 s.
@@ -29,7 +34,12 @@ Current guardrails:
   compilation. The similarly named artifact without `chunkedlong` is the superseded dense-fallback
   control, not the current default.
 - The July-15 fidelity control shows coherent TT output at the intrinsic bf16 floor. Persistent
-  serving garbage is not an accepted performance tradeoff.
+  serving garbage is not an accepted performance tradeoff. The #48291 doc-0 garbage
+  (`níní…1111…`) was root-caused (2026-07-24) as a malformed thinking-template contract in the eval
+  invocation — a manual `<|think|>` system message with server `enable_thinking` not applied, so
+  the checkpoint template emits an empty-closed thought suffix — NOT a sampler/precision/trace
+  defect; fixed by the server-side `enable_thinking=true` contract and device-confirmed
+  (doc-0 `exact_match=1`, `\boxed{C}`). See `official_sampler_earlyhalt_20260722.md`.
 
 ## Up-front denoise capture (accepted path, 2026-07-22)
 

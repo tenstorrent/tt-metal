@@ -125,6 +125,9 @@ def run(num_layers, canvas_length, max_seq_len):
                 out.deallocate(True)
                 return h
 
+            # Dense-128 is fail-loud at runtime now (denoise_forward._denoise_moe_forward);
+            # this A/B baseline explicitly opts into it via the DG_ALLOW_DENSE_MOE escape hatch.
+            os.environ["DG_ALLOW_DENSE_MOE"] = "1"
             os.environ["DG_SPARSE_MOE"] = "0"
             dh1 = _layer(_mk())
             dh2 = _layer(_mk())  # dense-vs-dense noise floor
