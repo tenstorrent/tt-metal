@@ -81,10 +81,10 @@ footer{margin-top:60px;border-top:1px solid var(--line);padding:22px 0;color:var
   </div>
   <div class="meta">
     <div><b>Branch</b>mvasilijevic/codex/kimi-linear-kda</div>
-    <div><b>Profiled commit</b>491dddde4fc7 · clean tree</div>
-    <div><b>Current source audit</b>c1f53d7fa289 · runtime paths byte-identical</div>
+    <div><b>Source-equivalent commit</b>b60f25012aaf · mixed storage 0x26</div>
+    <div><b>Control</b>matched FP32 storage · mask 0</div>
     <div><b>Hardware</b>LoudBox · 8× Blackhole · 1×8 mesh · FABRIC_1D</div>
-    <div><b>Fresh profile</b>2026-07-23 · ten measured replays after warm-up</div>
+    <div><b>Fresh profile</b>2026-07-24 · ten measured replays after warm-up</div>
   </div>
 </header>
 
@@ -109,7 +109,7 @@ footer{margin-top:60px;border-top:1px solid var(--line);padding:22px 0;color:var
     <article class="stage"><span class="n">01</span><h3>Fused projection</h3><p>One TP-local GEMM emits Q, K, V, decay rank, direct output gate, and β. For aligned prefill, <code>g_b@g_a</code> is precomposed offline.</p><span class="shape">[1,T,2304] × [2304,2180]<br>→ [1,T,2180] BF16</span><a href="tt-metal.worktrees/kimi-linear-kda/models/experimental/kimi_delta_attention/tt/layer.py#L273">layer.py:273</a></article>
     <article class="stage"><span class="n">02</span><h3>Native QKV convolution</h3><p>QKV and the three-token carry stay row-major through depthwise Conv1d. T&gt;640 switches to DRAM width slicing to fit L1.</p><span class="shape">carry [1,3,1536]<br>QKV [1,T,1536]</span><a href="tt-metal.worktrees/kimi-linear-kda/models/experimental/kimi_delta_attention/tt/layer.py#L163">layer.py:163</a></article>
     <article class="stage"><span class="n">03</span><h3>Direct slices + decay</h3><p>Aligned Q/K/V remain flat. β gets sigmoid; the rank-128 decay projection folds bias, Softplus and negative exponential scale into its consuming FP32 multiply.</p><span class="shape">g = −exp(Alog) · softplus(r+b)<br>[1,T,512] FP32</span><a href="tt-metal.worktrees/kimi-linear-kda/models/experimental/kimi_delta_attention/tt/layer.py#L302">layer.py:302</a></article>
-    <article class="stage"><span class="n">04</span><h3>Chunk preparation</h3><p>For every head×32-token chunk, the kernel normalizes flat Q/K, builds decay-weighted K/V, A<sub>kk</sub>, A<sub>qk</sub>, and an exact causal inverse.</p><span class="shape">T⁻¹: [32,32] FP32<br>7 prepared tensors in DRAM</span><a href="tt-metal.worktrees/kimi-linear-kda/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_kda_prep.cpp#L374">chunk_kda_prep.cpp:374</a></article>
+    <article class="stage"><span class="n">04</span><h3>Chunk preparation</h3><p>For every head×32-token chunk, the kernel normalizes flat Q/K, builds decay-weighted K/V, A<sub>kk</sub>, A<sub>qk</sub>, and an exact causal inverse.</p><span class="shape">T⁻¹: [32,32] FP32<br>kd · q_decay · dl BF16<br>other prepared tensors FP32</span><a href="tt-metal.worktrees/kimi-linear-kda/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_kda_prep.cpp#L374">chunk_kda_prep.cpp:374</a></article>
     <article class="stage"><span class="n">05</span><h3>Exact doubling inverse</h3><p>The inverse is not the 128×128 recurrent state. Nilpotence reduces the 32×32 unit-triangular solve from 30 serial products to eight tile matmuls.</p><span class="shape">(I−N)⁻¹ = Πₚ(I+N²ᵖ)<br>p = 0…4</span><a href="tt-metal.worktrees/kimi-linear-kda/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_kda_prep.cpp#L209">chunk_kda_prep.cpp:209</a></article>
     <article class="stage"><span class="n">06</span><h3>Ordered chunk scan</h3><p>Each scan worker walks all chunks in order, applying the inverse after <code>vβ − kd·S</code>, emitting output, and carrying the full FP32 state forward.</p><span class="shape">S [4,128,128] / chip<br>FP32, no collective</span><a href="tt-metal.worktrees/kimi-linear-kda/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_kda_scan.cpp#L125">chunk_kda_scan.cpp:125</a></article>
     <article class="stage"><span class="n">07</span><h3>Fused gated RMS</h3><p>A dedicated kernel performs per-head RMS normalization, SiLU gate, multiply, and flat head concatenation in one program.</p><span class="shape">[4,T,128] FP32 + gate BF16<br>→ [1,T,512] FP32</span><a href="tt-metal.worktrees/kimi-linear-kda/models/experimental/kimi_delta_attention/tt/layer.py#L364">layer.py:364</a></article>
@@ -125,10 +125,11 @@ Sout = Diag(dl) · Sin + kdecᵀ · Vnew</div>
       <p class="footnote">The correction term is evaluated against the decayed incoming state, matching the token-ordered reference.</p>
     </div>
     <div class="panel">
-      <h3>Four guide-to-source corrections</h3>
+      <h3>Five guide-to-source corrections</h3>
       <div class="correction"><b>Projection:</b> retained prefill uses one fused GEMM, not independent Q/K/V linears.</div>
       <div class="correction"><b>Layout:</b> aligned Q/K/V stay flat; the prep reader addresses heads and chunks directly.</div>
       <div class="correction"><b>β dtype:</b> sigmoid emits BF16; <code>chunk_kda</code> converts it to FP32 at the recurrence boundary.</div>
+      <div class="correction"><b>Prepared storage:</b> arithmetic stays FP32, but the selected prep→scan boundary stores <code>kd</code>, <code>q_decay</code>, and <code>dl</code> in BF16. Sensitive <code>v_beta</code>, <code>k_dec_t</code>, <code>intra</code>, <code>t_inv</code>, state, and outputs remain FP32.</div>
       <div class="correction"><b>Routing:</b> there is no automatic T threshold. The caller selects <code>mode</code>; fused recurrent accepts exactly T=1.</div>
     </div>
   </div>
@@ -166,7 +167,7 @@ Sout = Diag(dl) · Sin + kdecᵀ · Vnew</div>
 <section id="decisions">
   <div class="kicker">03 · optimization evidence</div>
   <h2>What worked, what did not</h2>
-  <p class="section-lede">Fresh clean traces define the current endpoint. Historical A/B values are useful causal evidence but lack immutable manifests; correctness-only failures are never presented as timing comparisons.</p>
+  <p class="section-lede">The current endpoint is a matched FP32-storage versus mixed-storage A/B on the same hardware and harness. CSV hashes and exact commands are recorded; the harness predates run manifests, so the report explicitly distinguishes source-equivalent fresh traces from historical measurements.</p>
   <div class="filter" id="statusFilter">
     <button data-status="all" aria-pressed="true">All</button>
     <button data-status="retain" aria-pressed="false">Retained</button>
@@ -180,7 +181,7 @@ Sout = Diag(dl) · Sin + kdecᵀ · Vnew</div>
 
 <section id="roofline">
   <div class="kicker">04 · roofline diagnosis</div>
-  <h2>The target is mixed: compute is far away; CCL is essentially there</h2>
+  <h2>Mixed storage moves the memory roof; compute remains far away and CCL is essentially there</h2>
   <p class="section-lede">Blackhole HiFi4 peak is 152.064 TFLOP/s per chip; DRAM is 512 GB/s, giving a 297 FLOP/byte ridge. The whole-layer compute percentage uses the 8-chip mesh peak and executed FLOPs. CCL uses the effective two-link payload roofline.</p>
   <div class="split">
     <article class="panel">
@@ -202,13 +203,13 @@ Sout = Diag(dl) · Sin + kdecᵀ · Vnew</div>
     <article class="panel">
       <h3>Fresh whole-layer target utilization</h3>
       <div id="utilBars"></div>
-      <div class="callout warn" style="margin-top:18px"><b>Interpretation.</b> At T=5,120, CCL is 39.74% against the 40% aspiration—within 0.26 percentage points. Compute is 12.06% against 60%, but that does not mean the layer is simply an inefficient GEMM: recurrence prep/scan are DRAM-bound, output is communication-bound, and the ordered scan cannot fan out across chunks.</div>
+      <div class="callout warn" style="margin-top:18px"><b>Interpretation.</b> At T=5,120, CCL is 39.79% against the 40% aspiration—within 0.21 percentage points. Compute is 12.40% against 60%, but that does not mean the layer is simply an inefficient GEMM: recurrence prep/scan are DRAM-bound, output is communication-bound, and the ordered scan cannot fan out across chunks.</div>
       <div class="callout good" style="margin-top:10px"><b>Distribution consequence.</b> Preserve the 8×8 output matmul grid and two RS rows. Attempts to donate matmul cores to CCL made the fused boundary slower. On recurrence, keep 16 scan cores at H=4; adding synchronization to share reads also lost badly.</div>
     </article>
   </div>
   <div class="thirds" style="margin-top:16px">
-    <div class="callout good"><h3>Compute target</h3><p>Executed work scales 8× from 67.594 to 540.752 GFLOP, while wall grows 5.59×. Utilization rises from 8.43% to 12.06%, so longer sequence amortizes fixed/layout overhead but does not change the memory-bound recurrence roof.</p></div>
-    <div class="callout good"><h3>CCL target</h3><p>Effective two-link utilization rises from 34.88% to 39.74%. The T=5,120 output boundary is the closest part of the layer to its aspirational target.</p></div>
+    <div class="callout good"><h3>Compute target</h3><p>Executed work scales 8× from 67.594 to 540.752 GFLOP, while wall grows 5.57×. Utilization rises from 8.63% to 12.40%, so longer sequence amortizes fixed/layout overhead but does not change the memory-bound recurrence roof.</p></div>
+    <div class="callout good"><h3>CCL target</h3><p>Effective two-link utilization rises from 35.05% to 39.79%. The T=5,120 output boundary is the closest part of the layer to its aspirational target.</p></div>
     <div class="callout warn"><h3>Serial axis</h3><p>Prep grows from 80 independent items to 640 and fills all 110 cores. Scan stays at 16 workers, each walking 20→160 chunks; its latency grows almost linearly with sequence.</p></div>
   </div>
 </section>
@@ -218,12 +219,15 @@ Sout = Diag(dl) · Sin + kdecᵀ · Vnew</div>
   <h2>What is measured, what is inferred</h2>
   <div class="split">
     <div class="panel">
-      <h3>Fresh clean-trace authority</h3>
+      <h3>Matched trace authority</h3>
       <ul class="source-list">
-        <li>T=640 CSV: 2,400 rows · SHA-256 <code>30b5d929…934cf1</code></li>
-        <li>T=5,120 CSV: 2,800 rows · SHA-256 <code>a8762fd8…96cba4</code></li>
+        <li>T=640 selected: 2,400 rows · SHA-256 <code>09d6eebf…adb873</code></li>
+        <li>T=640 FP32 control: 2,400 rows · SHA-256 <code>106c501e…39976</code></li>
+        <li>T=5,120 selected: 2,800 rows · SHA-256 <code>b3fd2c8f…f98a02</code></li>
+        <li>T=5,120 FP32 control: 2,800 rows · SHA-256 <code>25759170…3ac2c3</code></li>
         <li>Ten measured replays, sessions 2–11; session 1 is warm-up.</li>
-        <li>Wall = slowest-device firmware span. Active = slowest-device active sum. Fused MMRS = device mean.</li>
+        <li>Wall = slowest-device firmware span. Graph compute calls = device max; fused MMRS = device mean.</li>
+        <li>The harness predates run manifests. Source behavior matches <code>b60f25012aa</code>; report/log files were dirty during profiling.</li>
       </ul>
     </div>
     <div class="panel">
@@ -232,26 +236,30 @@ Sout = Diag(dl) · Sin + kdecᵀ · Vnew</div>
         <li>Recorded functional suite: <b>27/27 pass</b>.</li>
         <li>Focused TP output / state / conv PCC: <b>0.999964 / 0.999903 / 0.999997</b>.</li>
         <li>Flat T=64 chunk output / state PCC: <b>0.999994 / 0.999995</b>.</li>
-        <li>This report task was read-only with respect to kernels; hardware tests were not rerun.</li>
+        <li>Final hardware validation was rerun: <b>27/27 pass in 74.95 s</b>; both T=5,120 profiles passed.</li>
       </ul>
     </div>
   </div>
   <div class="panel" style="margin-top:16px">
-    <details><summary>Trace commands and exact artifacts</summary><pre>PERF_TRACE=1 PERF_SEQ=640 PERF_REPS=10 python_env/bin/python3 -m tracy -p -r \
-  -o /tmp/kda_perf_report_491dddde4fc_t640_r10 --check-exit-code \
-  --op-support-count 10000 -t 5007 -a device_kernel_duration \
-  -m "pytest models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s"
+    <details><summary>Trace commands and exact artifacts</summary><pre>T=640 FP32 control:
+QWEN_KDA_PREP_BF16_MASK=0 PERF_TRACE=1 PERF_SEQ=640 PERF_REPS=10 scripts/run_safe_pytest.sh --profile \
+  models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s
+generated/profiler/reports/2026_07_24_15_49_24/ops_perf_results_2026_07_24_15_49_24.csv
 
-/tmp/kda_perf_report_491dddde4fc_t640_r10/reports/2026_07_23_14_08_30/
-  ops_perf_results_2026_07_23_14_08_30.csv
+T=640 mixed storage (mask 0x26):
+QWEN_KDA_PREP_BF16_MASK=0x26 PERF_TRACE=1 PERF_SEQ=640 PERF_REPS=10 scripts/run_safe_pytest.sh --profile \
+  models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s
+generated/profiler/reports/2026_07_24_16_17_28/ops_perf_results_2026_07_24_16_17_28.csv
 
-PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 python_env/bin/python3 -m tracy -p -r \
-  -o /tmp/kda_perf_report_491dddde4fc_t5120_r10 --check-exit-code \
-  --op-support-count 10000 -t 5007 -a device_kernel_duration \
-  -m "pytest models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s"
+T=5,120 FP32 control:
+QWEN_KDA_PREP_BF16_MASK=0 PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 scripts/run_safe_pytest.sh --profile \
+  models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s
+generated/profiler/reports/2026_07_24_16_22_50/ops_perf_results_2026_07_24_16_22_50.csv
 
-/tmp/kda_perf_report_491dddde4fc_t5120_r10/reports/2026_07_23_14_09_48/
-  ops_perf_results_2026_07_23_14_09_48.csv</pre></details>
+T=5,120 selected default (mask 0x26):
+PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 scripts/run_safe_pytest.sh --profile \
+  models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s
+generated/profiler/reports/2026_07_24_16_24_06/ops_perf_results_2026_07_24_16_24_06.csv</pre></details>
     <details><summary>Roofline assumptions</summary><pre>Per-chip HiFi4 compute peak:
 110 cores × 4,096 FLOP/cycle ÷ 4 × 1.35 GHz = 152.064 TFLOP/s
 
@@ -259,8 +267,8 @@ DRAM roof: 512 GB/s
 Ridge point: 152.064 TFLOP/s ÷ 0.512 TB/s = 297 FLOP/byte
 
 Whole-mesh compute utilization:
-T640:  67.594 GFLOP / 659.459 µs / (8 × 152.064 TFLOP/s) = 8.43%
-T5120: 540.752 GFLOP / 3,686.650 µs / (8 × 152.064 TFLOP/s) = 12.06%
+T640:  67.594 GFLOP / 643.623 µs / (8 × 152.064 TFLOP/s) = 8.63%
+T5120: 540.752 GFLOP / 3,584.949 µs / (8 × 152.064 TFLOP/s) = 12.40%
 
 CCL utilization uses payload bytes divided by typical-device fused MMRS duration,
 against the measured effective two-link roofline used by the branch analysis.</pre></details>
@@ -272,6 +280,7 @@ against the measured effective two-link roofline used by the branch analysis.</p
         <li><a href="tt-metal.worktrees/kimi-linear-kda/models/experimental/kimi_delta_attention/tt/recurrence.py#L115">Chunk adapter: recurrence.py:115–149</a></li>
         <li><a href="tt-metal.worktrees/kimi-linear-kda/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_kda_prep.cpp#L209">WY prep and doubling inverse: chunk_kda_prep.cpp:209–508</a></li>
         <li><a href="tt-metal.worktrees/kimi-linear-kda/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_kda_scan.cpp#L125">Ordered scan: chunk_kda_scan.cpp:125–181</a></li>
+        <li><a href="tt-metal.worktrees/kimi-linear-kda/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/chunk_gated_delta_rule.cpp#L513">Selected mixed-storage policy and A/B override: chunk_gated_delta_rule.cpp:513–522</a></li>
         <li><a href="tt-metal.worktrees/kimi-linear-kda/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/chunk_gdn_phased_program_factory.cpp#L80">Core distribution: factory.cpp:80–167</a></li>
         <li><a href="tt-metal.worktrees/kimi-linear-kda/models/demos/blackhole/qwen36/tt/tp_common.py#L434">Fused matmul/reduce-scatter: tp_common.py:434–481</a></li>
       </ul>
@@ -285,10 +294,17 @@ against the measured effective two-link roofline used by the branch analysis.</p
 <script id="report-data" type="application/json">
 {
   "scenarios":{
-    "t640":{"label":"T=640","tokens":640,"wall_us":659.459,"active_us":638.203,"graph_us":637.810,"compute":8.43,"ccl":34.88,"flops":67.594,"mmrs_us":147.966,"prep_items":80,"prep_cores":80,"prep_us":84.488,"scan_us":98.981,"rms_us":19.349,"chunks":20},
-    "t5120":{"label":"T=5,120","tokens":5120,"wall_us":3686.650,"active_us":3683.999,"graph_us":3679.658,"compute":12.06,"ccl":39.74,"flops":540.752,"mmrs_us":1039.042,"prep_items":640,"prep_cores":110,"prep_us":345.335,"scan_us":681.950,"rms_us":86.616,"chunks":160}
+    "t640":{"label":"T=640","tokens":640,"wall_us":643.623,"control_wall_us":659.024,"active_us":621.755,"graph_us":622.095,"compute":8.63,"control_compute":8.43,"ccl":35.05,"flops":67.594,"mmrs_us":147.238,"prep_items":80,"prep_cores":80,"prep_us":81.266,"scan_us":86.358,"recurrence_us":167.623,"control_recurrence_us":183.096,"rms_us":19.716,"chunks":20},
+    "t5120":{"label":"T=5,120","tokens":5120,"wall_us":3584.949,"control_wall_us":3681.529,"active_us":3573.748,"graph_us":3572.772,"compute":12.40,"control_compute":12.07,"ccl":39.79,"flops":540.752,"mmrs_us":1037.557,"prep_items":640,"prep_cores":110,"prep_us":314.663,"scan_us":606.168,"recurrence_us":920.831,"control_recurrence_us":1023.411,"rms_us":87.236,"chunks":160}
   },
   "decisions":[
+    {"status":"retain","scope":"Storage","name":"kd + q_decay + dl BF16","result":"T640 659.024 → 643.623 µs; T5120 3681.529 → 3584.949 µs","delta":-2.62,"reason":"Halved selected prep-write and repeated scan-read traffic; recurrence fell 10.02% at T5120 with unchanged TP PCC.","tier":"fresh matched trace"},
+    {"status":"retain","scope":"Storage","name":"q_decay BF16","result":"659.024 → 653.435 µs","delta":-0.85,"reason":"Read-heavy decay storage reduced scan traffic with control-equivalent TP PCC.","tier":"fresh matched trace"},
+    {"status":"reject","scope":"Storage","name":"v_beta BF16","result":"659.024 → 660.214 µs","delta":0.18,"reason":"Passed PCC but did not improve wall latency; the added conversion path erased the byte saving.","tier":"fresh matched trace"},
+    {"status":"reject","scope":"Storage","name":"k_dec_t BF16","result":"659.024 → 653.832 µs; state PCC 0.999899","delta":-0.79,"reason":"Bandwidth improved, but persistent-state fidelity crossed below the selected 0.999900 guard.","tier":"fresh matched trace + correctness"},
+    {"status":"retain","scope":"Storage","name":"kd BF16","result":"659.024 → 652.986 µs","delta":-0.92,"reason":"Matched control TP PCC and provided the strongest clean single-tensor saving.","tier":"fresh matched trace"},
+    {"status":"retain","scope":"Storage","name":"dl BF16","result":"659.024 → 657.743 µs","delta":-0.19,"reason":"Small but clean saving; retained only as part of the combined policy.","tier":"fresh matched trace"},
+    {"status":"retain","scope":"Storage","name":"kd + q_decay BF16","result":"659.024 → 646.784 µs","delta":-1.86,"reason":"Individual savings combined approximately additively with control-equivalent TP PCC.","tier":"fresh matched trace"},
     {"status":"retain","scope":"Layer","name":"Trace + persistent constants","result":"5.749 → 1.263 ms","delta":-78.03,"reason":"Active kernels were already ≈1.21 ms; eager loss was host dispatch. Persistent tiles removed trace-time uploads.","tier":"historical measured"},
     {"status":"retain","scope":"Conv","name":"Native depthwise Conv1d","result":"1.263 → 0.987 ms","delta":-21.85,"reason":"Removed shifted-window layout traffic and ≈274 µs active time/device.","tier":"historical measured"},
     {"status":"retain","scope":"Layout","name":"Head-major output + flat gate","result":"0.987 → 0.689 ms","delta":-30.21,"reason":"Removed large transpose/reshape programs around recurrence and gating.","tier":"historical measured"},
@@ -325,7 +341,7 @@ function card(label,value,sub,pct=0){return `<div class="card"><div class="label
 function renderCards(){
   const d=DATA.scenarios[scenario];
   $("cards").innerHTML=
-    card("Measured wall latency",`${fmt(d.wall_us)} µs`,`slowest-device firmware span`,d.wall_us/40)+
+    card("Measured wall latency",`${fmt(d.wall_us)} µs`,`FP32 control ${fmt(d.control_wall_us)} µs · ${((d.wall_us/d.control_wall_us-1)*100).toFixed(2)}%`,d.wall_us/40)+
     card("Mesh compute",`${d.compute.toFixed(2)}%`,`target 60% · ${fmt(d.flops)} GFLOP executed`,d.compute/60*100)+
     card("Effective CCL",`${d.ccl.toFixed(2)}%`,`target 40% · fused MMRS ${fmt(d.mmrs_us)} µs`,d.ccl/40*100)+
     card("Active / wall",`${(d.active_us/d.wall_us*100).toFixed(2)}%`,`active ${fmt(d.active_us)} µs · ledger ${fmt(d.graph_us)} µs`,d.active_us/d.wall_us*100);
