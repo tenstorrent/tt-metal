@@ -70,6 +70,8 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
     model_args.WEIGHTS_DTYPE = dtype
     reference_model = model_args.reference_mlp()
     reference_model.load_state_dict(partial_state_dict)
+    # HF reference weights load as bf16 (torch_dtype="auto"); torch_input is fp32, so match the reference to fp32.
+    reference_model.to(torch.float32)
 
     tt_model = TtLlamaMLP(
         mesh_device=mesh_device,

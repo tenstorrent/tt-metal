@@ -95,6 +95,8 @@ def test_llama_rms_norm_inference(
     }
     reference_model = model_args.reference_rms_norm()
     reference_model.load_state_dict(partial_state_dict)
+    # HF reference weights load as bf16 (torch_dtype="auto"); torch inputs are fp32, so match the reference to fp32.
+    reference_model.to(torch.float32)
 
     input = torch.rand(1, 1, 32, model_args.dim)
     reference_output = reference_model(input)

@@ -123,6 +123,8 @@ def test_llama_model_inference(
     if run_ref_pt:
         reference_model = model_args.reference_transformer()
         reference_model.load_state_dict(reference_state_dict)
+        # HF reference weights load as bf16 (torch_dtype="auto"); torch inputs are fp32, so match the reference to fp32.
+        reference_model.model.to(torch.float32)
     # Embedding on host
     embd = HostEmbedding(model_args)
     embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
