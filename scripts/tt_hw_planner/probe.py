@@ -220,8 +220,11 @@ def _is_dual_encoder_contrastive(cfg: dict) -> bool:
     has_text = "text_config" in keys
     has_other = "vision_config" in keys or "audio_config" in keys
     archs = " ".join((cfg or {}).get("architectures") or [])
-    generative = re.search(r"For(Causal(LM|MM)|ConditionalGeneration|TextToSpeech|SpeechToText|CTC)\b", archs)
-    return has_text and has_other and not generative
+    # a pure contrastive dual-encoder is a BARE encoder (CLIPModel / ClapModel / AlignModel);
+    # ANY task head (CLIPSegForImageSegmentation, ...ForConditionalGeneration) means it is a
+    # task model built ON a dual encoder, not a contrastive retriever -> let it flow onward.
+    task_head = re.search(r"For[A-Z]", archs)
+    return has_text and has_other and not task_head
 
 
 def _is_category_residual(model_type_category: Optional[str], fingerprint: str) -> bool:

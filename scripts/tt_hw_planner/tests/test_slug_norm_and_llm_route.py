@@ -404,8 +404,13 @@ def test_dual_encoder_contrastive_is_a_fact_not_llm():
 
     assert D({"text_config": {}, "audio_config": {}, "architectures": ["ClapModel"]}) is True
     assert D({"text_config": {}, "vision_config": {}, "architectures": ["AlignModel"]}) is True
+    assert D({"text_config": {}, "vision_config": {}, "architectures": ["SiglipModel"]}) is True
     # a generative multimodal (VLM with an LM head) is NOT a contrastive dual-encoder
     assert D({"text_config": {}, "vision_config": {}, "architectures": ["LlavaForConditionalGeneration"]}) is False
+    # a TASK model built ON a dual encoder (CLIPSeg = segmentation) is NOT contrastive: any
+    # For<Task> head disqualifies it, so it flows to the CNN/LLM path instead of Embed.
+    assert D({"text_config": {}, "vision_config": {}, "architectures": ["CLIPSegForImageSegmentation"]}) is False
+    assert D({"text_config": {}, "vision_config": {}, "architectures": ["CLIPForImageClassification"]}) is False
     # audio-only codec (no text_config) is not dual-encoder -> stays on its own path
     assert D({"audio_config": {}, "sampling_rate": 24000, "architectures": ["EncodecModel"]}) is False
     # plain text/vision model -> not dual-encoder
