@@ -38,3 +38,8 @@ target_link_libraries(bh1_send_probe PRIVATE test_metal_common_libs)
 add_executable(bh1_recv_probe bh1_recv_probe_host.cpp)
 target_include_directories(bh1_recv_probe PRIVATE ${PROJECT_SOURCE_DIR})
 target_link_libraries(bh1_recv_probe PRIVATE test_metal_common_libs)
+
+# BH.2a / M-2 — RISC-off-datapath TX ring drainer (loads bh_rdma_tx_ring.cpp).
+add_executable(bh1_tx_ring bh1_tx_ring_host.cpp)
+target_include_directories(bh1_tx_ring PRIVATE ${PROJECT_SOURCE_DIR})
+target_link_libraries(bh1_tx_ring PRIVATE test_metal_common_libs)

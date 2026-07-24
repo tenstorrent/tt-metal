@@ -166,3 +166,31 @@ no idle power cost (matches the "no busy-poll" note from the BH.0 power discussi
   `ExternalIfaceSender`); confirm zero RISC payload copies.
 - **BH.2d** — WFI doorbell latency path; measure small-message RTT.
 - Reliability (PFC + DPA ARQ) and multi-rail fold in with the gateway (G.x) milestones.
+
+---
+
+## §11. BH.2a implementation results (2026-07-23, on silicon)
+
+First cut of the ring drainer (`bh_rdma_tx_ring.cpp` + `bh1_tx_ring`). Findings:
+
+- **Arm-rate win confirmed.** Removing the per-frame header-build/CRC/copy, the RISC arm-rate hits
+  **~1.75 M arms/s** (unpaced) vs the M-1a probe's ~650k/s — ~2.7×. The RISC-arms-only design works.
+- **Raw `START_RAW` has no deep accept-ahead → over-arming WEDGES the TXQ.** Unpaced, `CMD_ONGOING`
+  eventually sticks and the arm loop freezes (host `Finish` hangs; needs a board reset). The M-1a
+  probe never wedged only because its per-frame CRC/copy *accidentally paced* it. **Fix: pace the
+  ring drainer** (added `pace` arg); paced (`pace≳500`, ~333k/s) runs stable, no wedge, clean stop.
+- **OPEN BUG (blocks BH.2a completion): the ring arms valid descriptors but transmits 0 wire bytes.**
+  The M-1a probe transmits from the same core/txq/txpkt-config; the ring does not, even though:
+  descriptor + payload are correct and intact during the run (verified by live read-back:
+  `len=4080`, header `fe 01 0b 05`), and it is NOT the source address (staging in `TX_BUF0` — the
+  probe's exact region — also yields 0), NOT clobber, NOT L1-cache (RISC-touch didn't help). The
+  `CMD` is accepted (`CMD_ONGOING` toggles, arm counter advances) but no packet reaches the wire.
+  **Next diagnostic:** read the TXQ packet counters the ISA exposes — `ETH_TXQ_PKT_START_CNT`
+  (`TXQ+0x34`), `ETH_TXQ_PKT_END_CNT` (`TXQ+0x3C`), `ETH_TXQ_WORD_CNT` (`TXQ+0x40`) — to see whether
+  the accepted command ever *starts* a packet. The remaining difference from the probe is that the
+  probe RISC-writes the source buffer immediately before each `START_RAW`; the ring does not. If the
+  TXQ requires the source written via the local RISC (vs a producer/DMA), that reshapes the
+  zero-copy plan (BH.2c) — hence this is a hard gate.
+- **CAUTION logged:** an early diagnostic touched `payload_base + 128 KB`, which from a high base
+  overruns past `0x70000` into the link-bricking base-FW region. Any payload staging must stay within
+  the RDMA L1 window; validate `TT_RDMA_L1_BASE`/size vs `MEM_SYSENG_RESERVED_BASE`.
