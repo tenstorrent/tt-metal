@@ -369,7 +369,7 @@ models:
     wh_n300: 60
     bh_p150: 33
     bh_p300: 13
-    bh_quietbox_2: 42
+    bh_quietbox_2: 65
   unit_tier1:
     wh_llmbox: 150
     wh_n150: 118
@@ -397,7 +397,8 @@ models:
     wh_n300: 33
     bh_p150: 30
     bh_p300: 30
-    bh_quietbox_2: 21
+    # 15 (gemma-4-e4b) + 20 (hunyuan-image-3.0)
+    bh_quietbox_2: 35
   integration:
     wh_llmbox: 0
   device_perf:

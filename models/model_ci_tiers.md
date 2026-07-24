@@ -114,6 +114,7 @@ it is classified differently on different systems.
 | Mamba-2.8B | WH N150 |
 | Phi-3-mini | WH N150 |
 | Janus-Pro-7B | BH P150 |
+| HunyuanImage-3.0 | BH QuietBox 2 |
 | Panoptic-DeepLab | BH P150 |
 | BEVFormer | BH P150 |
 | Mistral-Small-3.1-24B | WH LLMBox, BH QuietBox 2 |
