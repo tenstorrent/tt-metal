@@ -833,21 +833,35 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                 overlay::fast_llk_intf_reset(tensix_id, tc_id);
                 total_tc_reset_hw += rdcycle() - t_reset;
                 total_hw_reg_writes++;
-                const uint32_t t_cap = rdcycle();
-                overlay::fast_llk_intf_set_capacity(tensix_id, tc_id, eh.capacity);
-                total_tc_capacity_hw += rdcycle() - t_cap;
-                total_hw_reg_writes++;
 #elif defined(UCK_CHLKC_PACK)
                 const uint32_t t_reset = rdcycle();
                 ckernel::trisc::tile_counters[tc_id].f.reset = 1;
                 total_tc_reset_hw += rdcycle() - t_reset;
                 total_hw_reg_writes++;
+#endif
+            }
+#ifndef COMPILE_FOR_TRISC
+            asm volatile("fence w, w" ::: "memory");
+#endif
+            for (uint8_t t = 0; t < num_tcs; t++) {
+                const uint8_t packed_ptc = iface.tc_slots[t].packed_tile_counter;
+                const uint8_t tc_id = dfb::get_counter_id(packed_ptc);
+#ifndef COMPILE_FOR_TRISC
+                const uint8_t tensix_id = dfb::get_tensix_id(packed_ptc);
+                const uint32_t t_cap = rdcycle();
+                overlay::fast_llk_intf_set_capacity(tensix_id, tc_id, eh.capacity);
+                total_tc_capacity_hw += rdcycle() - t_cap;
+                total_hw_reg_writes++;
+#elif defined(UCK_CHLKC_PACK)
                 const uint32_t t_cap = rdcycle();
                 ckernel::trisc::tile_counters[tc_id].f.buf_capacity = eh.capacity;
                 total_tc_capacity_hw += rdcycle() - t_cap;
                 total_hw_reg_writes++;
 #endif
             }
+#ifndef COMPILE_FOR_TRISC
+            asm volatile("fence w, w" ::: "memory");
+#endif
             total_tc_hw += rdcycle() - tc_hw_start;
 
             const uint32_t t_sig_start = rdcycle();
