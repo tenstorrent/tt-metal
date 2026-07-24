@@ -353,7 +353,7 @@ models:
     bh_p300: 30
     bh_quietbox_2: 21
   integration:
-    wh_llmbox: 422
+    wh_llmbox: 450
   perf:
     wh_llmbox_perf: 685
     wh_galaxy: 280
