@@ -6,11 +6,11 @@
 //
 // Wraps tt::tt_metal::experimental::noc_estimator::estimate_noc_performance() so Claude agents (and
 // humans) can query the empirically-measured NoC bandwidth/latency model from the shell without a
-// C++ harness. It is the data-movement-roofline source of truth: the same noc_latencies.yaml that
+// C++ harness. It is the data-movement-ceiling source of truth: the same noc_latencies.yaml that
 // the validated estimator uses, surfaced as JSON.
 //
 // One invocation == one "transfer group" (a homogeneous batch of NoC transactions). Compose a whole
-// op's target by calling this once per group and combining the results per the perf-roofline-dm
+// op's target by calling this once per group and combining the results per the perf-ceiling-dm
 // skill. Emits a single JSON object on stdout; on estimator failure emits {"error": ...} and exits 1.
 
 #include <tt-metalium/experimental/noc_estimator/noc_estimator.hpp>
