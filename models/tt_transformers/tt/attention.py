@@ -535,18 +535,19 @@ class Attention(LightweightModule):
         self._update_wo(wo_internal)
 
         bias_present = (q_proj_bias is not None) or (k_proj_bias is not None) or (v_proj_bias is not None)
-        if bias_present and self.wqkv_bias_prefill is None:
-            raise ValueError(
-                "Q/K/V projection biases were supplied but Attention was " "constructed without a QKV bias."
-            )
-        if (not bias_present) and self.wqkv_bias_prefill is not None:
-            raise ValueError(
-                "Attention was constructed with a QKV bias but Q/K/V " "projection biases were not supplied."
-            )
         if bias_present:
+            if self.wqkv_bias_prefill is None:
+                raise ValueError(
+                    "Q/K/V projection biases were supplied but Attention was " "constructed without a QKV bias."
+                )
             if q_proj_bias is None or k_proj_bias is None or v_proj_bias is None:
                 raise ValueError("Q/K/V projection biases must all be supplied together.")
             self._update_wqkv_bias(q_proj_bias, k_proj_bias, v_proj_bias)
+        else:
+            if self.wqkv_bias_prefill is not None:
+                raise ValueError(
+                    "Attention was constructed with a QKV bias but Q/K/V " "projection biases were not supplied."
+                )
 
         if q_norm is not None:
             self._update_qk_norm("q_norm", q_norm)
