@@ -250,9 +250,13 @@ class TtXttsGptModel(LightweightModule):
         # to a full tile) on the decode hot path; adding first folds them into one conversion.
         # Activations stay in L1 through the decode (weights remain DRAM) so the matmuls read
         # input-0 from L1 instead of a per-op DRAM round-trip.
-        tok = ttnn.embedding(token_ids, self.mel_emb_weight)  # ROW_MAJOR
-        posn = ttnn.embedding(mel_pos_ids, self.mel_pos_weight)  # ROW_MAJOR
-        x = ttnn.to_layout(ttnn.add(tok, posn), ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)  # [1,1,hidden]
+        tok = ttnn.embedding(token_ids, self.mel_emb_weight, memory_config=ttnn.L1_MEMORY_CONFIG)  # ROW_MAJOR
+        posn = ttnn.embedding(mel_pos_ids, self.mel_pos_weight, memory_config=ttnn.L1_MEMORY_CONFIG)  # ROW_MAJOR
+        x = ttnn.to_layout(
+            ttnn.add(tok, posn, memory_config=ttnn.L1_MEMORY_CONFIG),
+            ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )  # [1,1,hidden] — L1->L1 tilize (embeddings gathered in L1, no DRAM round-trip)
         ttnn.deallocate(tok)
         ttnn.deallocate(posn)
         hidden = self.stack.forward_decode(x, kv, cache_pos, write_idx=write_idx)  # kv updated in place
