@@ -164,7 +164,7 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_read_init_entry_header(uintptr_t entry_add
 }
 
 // Cached variant — used by DM after invalidate_l2_cache_range covers the blob.
-// Plain (non-volatile) pointer: no TL1 bypass; reads go through L1 D$ → L2 → TL1.
+// Plain (non-volatile) pointer: no TL1 bypass; reads go through L2->D$->TL1
 // Bytes [12,24) are in LocalDFBInterface DTCM order (host writes via dfb_write_dm_scalar_pack_to_blob).
 FORCE_INLINE dfb_init_entry_hdr_t dfb_read_init_entry_header_cached(uintptr_t entry_addr) {
     return dfb_unpack_entry_header_dm(reinterpret_cast<const uint32_t*>(entry_addr));
