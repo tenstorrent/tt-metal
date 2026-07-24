@@ -6545,6 +6545,24 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         in0_B,
         in1_B,
         per_core_M * per_core_N);
+    // [#48552 DEBUG -- remove before merge] cb_in0 is borrowed_from RO_IN0_TENSOR, so its runtime capacity is
+    // the ACTUAL shard of `a`, not in0_CB_tiles. cap=28=M*N => the shard width is N not full_K. Dump the real
+    // padded shape vs shard shape of `a` to see if the tensor is allocated [M,N]-sharded or resharded en route.
+    if (a.memory_config().is_sharded() && a.memory_config().shard_spec().has_value()) {
+        const auto& ss = a.memory_config().shard_spec().value().shape;
+        log_warning(
+            tt::LogOp,
+            "[QSR-MM-IN1CB2 #48552] in0 `a`: padded=[{}x{}] shard=[{}x{}] (tiles=[{}x{}]) mem_layout={} "
+            "shard_tiles={}",
+            a.padded_shape()[-2],
+            a.padded_shape()[-1],
+            ss[0],
+            ss[1],
+            ss[0] / tt::constants::TILE_HEIGHT,
+            ss[1] / tt::constants::TILE_WIDTH,
+            static_cast<int>(a.memory_config().memory_layout()),
+            (ss[0] / tt::constants::TILE_HEIGHT) * (ss[1] / tt::constants::TILE_WIDTH));
+    }
 
     const auto& a_shape_logical =
         operations::experimental::quasar::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
