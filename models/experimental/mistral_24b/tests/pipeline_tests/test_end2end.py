@@ -3,26 +3,45 @@
 
 """Test for Mistral-24B End-to-End Vision-Text Pipeline"""
 
+import time
+
 import torch
 import pytest
 from loguru import logger
 import os
 import ttnn
-
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import (
-    sample_host,
-    PagedAttentionConfig,
-    preprocess_inputs_prefill,
-)
+from models.common.sampling import SamplingParams
+from models.tt_transformers.tt.common import PagedAttentionConfig
 
 from models.tt_transformers.tt.model_config import DecodersPrecision
 from models.experimental.mistral_24b.tt.model import MistralTransformer as Transformer
 
-from models.tt_transformers.tt.generator import Generator
+from models.experimental.mistral_24b.tt.generator import MistralGenerator
 
 from models.experimental.mistral_24b.tt.pipeline.vision_model import TtMistralVisionTransformer
 from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
+
+# Mesh trace region (bytes) by architecture.
+TRACE_REGION_SIZE_WORMHOLE = 30_000_000  # 30 MiB
+TRACE_REGION_SIZE_BLACKHOLE = 35_000_000  # 35 MiB
+
+
+def fabric_1d_trace_device_params(*, num_command_queues: int = 1):
+    from models.common.utility_functions import is_wormhole_b0
+
+    wormhole = is_wormhole_b0()
+    trace_region_size = TRACE_REGION_SIZE_WORMHOLE if wormhole else TRACE_REGION_SIZE_BLACKHOLE
+    if not wormhole:
+        num_command_queues = 2
+    return [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": trace_region_size,
+            "num_command_queues": num_command_queues,
+        }
+    ]
+
 
 from models.tt_transformers.tt.model_config import ModelArgs
 from transformers import AutoProcessor, AutoModelForImageTextToText
@@ -100,6 +119,111 @@ def display_chat(logger, conversation):
             logger.info(f"🤖 Assistant: {message}")
 
 
+# Greedy on-device decode avoids full-logits readback + host argmax in the decode loop.
+DECODE_GREEDY_SAMPLING = SamplingParams(
+    temperature=0.0,
+    top_k=1,
+    top_p=1.0,
+    enable_log_probs=False,
+)
+
+
+def next_token_ids_from_decode_output(decode_output):
+    """Flatten token ids from ``decode_forward`` when ``sampling_params`` is set (on-device sampling)."""
+    if isinstance(decode_output, tuple):
+        tok, _ = decode_output
+    else:
+        tok = decode_output
+    return tok.reshape(-1).long()
+
+
+def read_first_token_id_from_device(tt_decode_output):
+    """Read slot-0 token from device mesh replica; skips per-device .cpu()+reshape+concat of process_decode_output_host."""
+    item = tt_decode_output[0]
+    tt_tok = item[0] if isinstance(item, tuple) else item
+    return int(ttnn.to_torch(ttnn.get_device_tensors(tt_tok)[0]).flatten()[0].item())
+
+
+def log_e2e_performance_measurements(
+    *,
+    batch_size,
+    num_prefill_tokens,
+    inference_prefill_time,
+    inference_decode_time,
+    decode_step_times,
+    compile_prefill_time=None,
+    compile_decode_time=None,
+    vision_model_prefill_time=None,
+    full_run_time=None,
+):
+    """Log prefill/decode throughput and latency; decode_step_times may be synthetic (wall/N) for non-blocking trace."""
+    avg_time_to_first_token = inference_prefill_time / batch_size if batch_size else inference_prefill_time
+    prefill_tok_s = (num_prefill_tokens / inference_prefill_time * batch_size) if inference_prefill_time > 0 else 0.0
+    num_decode_tokens = len(decode_step_times)
+    decode_tok_s_user = (num_decode_tokens / inference_decode_time) if inference_decode_time > 0 else 0.0
+    decode_tok_s = decode_tok_s_user * batch_size
+
+    measurements = {
+        "prefill_tokens": num_prefill_tokens,
+        "compile_prefill": compile_prefill_time,
+        "compile_decode": compile_decode_time,
+        "vision_model_prefill": vision_model_prefill_time,
+        "inference_prefill": inference_prefill_time,
+        "inference_decode": inference_decode_time,
+        "prefill_time_to_token": avg_time_to_first_token,
+        "prefill_t/s": prefill_tok_s,
+        "decode_t/s/u": decode_tok_s_user,
+        "decode_t/s": decode_tok_s,
+        "num_decode_tokens": num_decode_tokens,
+        "Total compile time": (
+            (compile_prefill_time + compile_decode_time)
+            if compile_prefill_time is not None and compile_decode_time is not None
+            else None
+        ),
+        "Full demo runtime": full_run_time,
+    }
+
+    logger.info("")
+    logger.info("=== Performance measurements (E2E test) ===")
+    for key, value in measurements.items():
+        if value is None:
+            continue
+        if isinstance(value, float):
+            logger.info(f"  {key}: {value:.6g}")
+        else:
+            logger.info(f"  {key}: {value}")
+
+    logger.info("")
+    logger.info("=== Performance metrics ===")
+    logger.info(
+        f"Prefill tokens: {num_prefill_tokens} | TTFT (prefill to first token): "
+        f"{avg_time_to_first_token * 1000:.2f}ms"
+    )
+    logger.info(
+        f"Prefill throughput: {prefill_tok_s:.2f} tokens/s " f"(inference_prefill={inference_prefill_time:.4f}s)"
+    )
+    if decode_step_times:
+        first_decode_s = decode_step_times[0]
+        uniform_steps = len(decode_step_times) > 1 and all(s == first_decode_s for s in decode_step_times)
+        step_label = "Mean decode step (wall/N)" if uniform_steps else "1st decode step"
+        if first_decode_s > 0:
+            logger.info(
+                f"{step_label}: {first_decode_s * 1000:.2f}ms "
+                f"[{1.0 / first_decode_s:.2f} t/s/u, {(1.0 / first_decode_s) * batch_size:.2f} t/s]"
+            )
+        else:
+            logger.info(f"{step_label}: {first_decode_s * 1000:.2f}ms")
+    logger.info(
+        f"Decode: {num_decode_tokens} tokens in {inference_decode_time:.4f}s → "
+        f"{decode_tok_s_user:.2f} tok/s/user, {decode_tok_s:.2f} tok/s aggregate"
+    )
+    if full_run_time is not None:
+        logger.info(f"Full run (prefill + decode wall time): {full_run_time:.4f}s")
+    logger.info("===")
+
+    return measurements
+
+
 def setup_vision_model_args(weights, max_seq_len, batch_size, mesh_device, optimizations):
     """Setup model arguments for vision-enabled model (Single Responsibility)."""
     instruct = True if weights == "instruct" else False
@@ -153,6 +277,7 @@ def process_vision_info(messages):
 
 def process_real_vision_inputs(messages, model_args):
     """Process real image inputs using AutoProcessor (Interface Segregation)."""
+
     processor = AutoProcessor.from_pretrained(os.getenv("HF_MODEL"))
 
     text = processor.apply_chat_template(
@@ -164,6 +289,7 @@ def process_real_vision_inputs(messages, model_args):
     encoded = processor(
         text=[text], images=image_inputs, videos=video_inputs, return_tensors="pt", return_dict=True
     ).to("cpu", dtype=torch.bfloat16)
+
     input_ids = encoded["input_ids"]
     pixel_values = encoded["pixel_values"] if "pixel_values" in encoded else None
     attention_mask = encoded["attention_mask"] if "attention_mask" in encoded else None
@@ -211,7 +337,6 @@ def load_separate_models_like_test_end2end(model_args, mesh_device, dtype, paged
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
     )
-    logger.info("Separate vision and text models loaded like test_end2end.py")
     return vision_model, text_model
 
 
@@ -224,6 +349,7 @@ def run_generation_exactly_like_test_end2end(
     paged_attention_config=None,
     max_gen_len=20,
     repetition_ngram_size=3,
+    metrics_out=None,
 ):
     """Run generation following the EXACT pattern from test_end2end.py."""
     input_ids = processed_inputs["input_ids"]
@@ -231,64 +357,39 @@ def run_generation_exactly_like_test_end2end(
     logger.info("Running generation exactly like test_end2end.py...")
 
     logger.info("Running Vision Model...")
-    generator = Generator([text_model], [model_args], vision_model.mesh_device, tokenizer=model_args.tokenizer)
+    # Use MistralGenerator for multimodal-aware trace prefill that caches fused embeddings across capture/replay.
+    generator = MistralGenerator([text_model], [model_args], vision_model.mesh_device, tokenizer=model_args.tokenizer)
     tt_kv_cache = [[l.attention.layer_past for l in text_model.layers]] if paged_attention_config else None
 
-    input_tokens_prefill = input_ids
-    batch_size = input_tokens_prefill.shape[0]
-
-    prompt_text = model_args.tokenizer.decode(input_ids[0].tolist())
-    input_prompts = [prompt_text]
-
-    (
-        input_tokens_prefill_pt,
-        encoded_prompts,
-        decoding_pos,
-        prefill_lens,
-    ) = preprocess_inputs_prefill(
-        input_prompts,
-        model_args.tokenizer,
-        [model_args],
-        instruct=True,
-        max_generated_tokens=max_gen_len,
-        max_prefill_len=8192,
-    )
-
-    input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
+    # Pass processor output directly; derive prefill length from attention_mask to skip re-tokenization.
+    input_tokens_prefill_pt = input_ids
+    batch_size = input_tokens_prefill_pt.shape[0]
+    attention_mask = processed_inputs.get("attention_mask", None)
+    if attention_mask is not None:
+        decoding_pos = attention_mask.sum(dim=-1).tolist()
+    else:
+        decoding_pos = [input_tokens_prefill_pt.shape[1]] * batch_size
+    prefill_lens = decoding_pos
+    encoded_prompts = [input_ids[0].tolist()]
 
     logger.info("Running prefill...")
-    logits = generator.prefill_forward_text(
+    # Start full-run and prefill wall-clock timers separately to report both TTFT and total runtime.
+    run_t0 = time.perf_counter()
+    prefill_t0 = time.perf_counter()
+    prefill_out = generator.prefill_forward_text(
         input_tokens_prefill_pt,
         page_table=page_table,
         kv_cache=tt_kv_cache,
         prompt_lens=decoding_pos,
         vision_model=vision_model,
         processed_inputs=processed_inputs,
+        sampling_params=DECODE_GREEDY_SAMPLING,
     )
+    prefill_t1 = time.perf_counter()
+    inference_prefill_time = prefill_t1 - prefill_t0
+    num_prefill_tokens = int(prefill_lens[0])
 
-    prefilled_token = torch.argmax(logits, dim=-1)
-    prefilled_token_decoded_res = model_args.tokenizer.decode(prefilled_token[0].item())
-    logger.info(f"prefilled_token_decoded_res: {prefilled_token_decoded_res}")
-
-    logger.info(f"Prefilled token: {prefilled_token}")
-
-    import torch.nn.functional as F
-
-    logger.info(f"Encoded prompt: {encoded_prompts[0]}")
-    logger.info(f"Decoded prompt: {model_args.tokenizer.decode(encoded_prompts[0])}")
-
-    # logits: [1, 1, vocab_size]
-    last_logits = logits[0, -1]  # shape: [vocab_size]
-    probs = F.softmax(last_logits, dim=-1)
-
-    top_k = 5
-    topk_probs, topk_indices = torch.topk(probs, k=top_k)
-
-    topk_tokens = [model_args.tokenizer.decode([idx.item()]) for idx in topk_indices]
-
-    logger.info("Top-5 predicted tokens (with probabilities):")
-    for i in range(top_k):
-        logger.info(f"{i+1}. Token: '{topk_tokens[i]}' (ID={topk_indices[i].item()}), P={topk_probs[i].item():.4f}")
+    prefilled_token, _ = prefill_out
 
     all_outputs = [encoded_prompts[0][: prefill_lens[0]]]
     all_outputs[0].append(int(prefilled_token[0].item()))
@@ -300,81 +401,85 @@ def run_generation_exactly_like_test_end2end(
     results = []
 
     logger.info("Starting decode loop...")
-    for iteration in range(generation_length):
-        logger.info(f"[Text] Decoding token {iteration}, current_pos: {current_pos.item()}")
-
+    # Phase A: decode warmups before timed region (trace capture/replay steady-state, not measured).
+    decode_warmup_iters = 1
+    logger.info(f"Decode warmup: {decode_warmup_iters} steps (not timed)")
+    for _ in range(decode_warmup_iters):
         decode_output = generator.decode_forward(
             out_tok,
             current_pos,
-            enable_trace=False,
+            enable_trace=True,
             page_table=page_table,
             kv_cache=tt_kv_cache,
+            sampling_params=DECODE_GREEDY_SAMPLING,
         )
+        out_tok = next_token_ids_from_decode_output(decode_output)
+        all_outputs[0].append(int(out_tok[0].item()))
+        current_pos = current_pos + 1
 
-        # decode_forward returns (logits, log_probs) tuple when read_from_device=True
-        if isinstance(decode_output, tuple):
-            logits, _ = decode_output
-        else:
-            logits = decode_output
+    # Cache eos id once — avoids tokenizer attribute lookup every step.
+    eos_token_id = model_args.tokenizer.eos_token_id
 
-        _, out_tok = sample_host(
-            logits,
-            temperature=0,
-            top_p=0.9,
+    # Wall-clock the full decode loop; per-call timers are meaningless with non-blocking trace submit.
+    loop_start = time.perf_counter()
+    for _ in range(generation_length):
+        # read_from_device=False: trace sampling op writes next token on-device, skipping host readback overhead.
+        decode_output = generator.decode_forward(
+            out_tok,
+            current_pos,
+            enable_trace=True,
+            page_table=page_table,
+            kv_cache=tt_kv_cache,
+            sampling_params=DECODE_GREEDY_SAMPLING,
+            read_from_device=False,
         )
-
-        token_id = out_tok[0].item()
-        decoded_token = model_args.tokenizer.decode([token_id])
-        logger.info(f"Generated token {iteration}: ID={token_id}, text='{decoded_token}'")
+        # Lightweight per-step read for EOS / repetition checks.
+        token_id = read_first_token_id_from_device(decode_output)
+        # Mirror device token in out_tok for any future reset_inputs=True path.
+        out_tok = torch.tensor([token_id], dtype=torch.long)
 
         # Stop if EOS detected
-        if token_id == model_args.tokenizer.eos_token_id:
+        if token_id == eos_token_id:
             logger.info("EOS token detected, stopping generation.")
             break
-
-        # Stop if repetition detected (n-gram)
-        if len(all_outputs[0]) >= repetition_ngram_size * 2:
-            last_ngram = tuple(all_outputs[0][-repetition_ngram_size:])
-            for i in range(len(all_outputs[0]) - repetition_ngram_size):
-                if tuple(all_outputs[0][i : i + repetition_ngram_size]) == last_ngram:
-                    logger.info(f"Detected {repetition_ngram_size}-gram repetition, stopping.")
-                    break
-
-        # Create result object
-        result = type("TokenResult", (), {"token": token_id, "text": decoded_token})()
-
-        results.append(result)
 
         all_outputs[0].append(token_id)
         current_pos += 1
 
-        # Early stopping (exactly like test_end2end.py)
-        if len(all_outputs[0]) >= 5 and all(t == all_outputs[0][-1] for t in all_outputs[0][-5:]):
-            logger.warning(f"Detected exact repetition of token {all_outputs[0][-1]} five times in a row. Stopping.")
-            break
+    loop_end = time.perf_counter()
 
-        # Final response (exactly like test_end2end.py)
-        response = model_args.tokenizer.decode(all_outputs[0], skip_special_tokens=True)
-        logger.info(f"Each iteration Generated Response:\n{response}")
-        logger.info(f"Each iteration Generated {len(all_outputs[0])} tokens: {all_outputs[0]}")
-        chat = parse_chat_output(response)
-        display_chat(logger, chat)
-
-        logger.info(f" Each iteration Generated {len(results)} tokens successfully")
-
+    # Build synthetic per-step times (total/N) since non-blocking trace makes per-call timing meaningless.
+    total_decode_time = loop_end - loop_start
+    num_decoded = len(all_outputs[0]) - prefill_lens[0]
+    _n = max(num_decoded, 1)
+    decode_step_times = [total_decode_time / _n] * _n
+    inference_decode_time = total_decode_time
     # Final response (exactly like test_end2end.py)
     response = model_args.tokenizer.decode(all_outputs[0], skip_special_tokens=True)
     logger.info(f"Final Generated Response:\n{response}")
-    logger.info(f"Generated {len(all_outputs[0])} tokens: {all_outputs[0]}")
     chat = parse_chat_output(response)
     display_chat(logger, chat)
 
-    logger.info(f"Generated {len(results)} tokens successfully")
-    return results
+    run_t1 = time.perf_counter()
+    full_run_time = run_t1 - run_t0  # Total prefill + decode wall time including model init overhead.
+
+    measurements = log_e2e_performance_measurements(
+        batch_size=batch_size,
+        num_prefill_tokens=num_prefill_tokens,
+        inference_prefill_time=inference_prefill_time,
+        inference_decode_time=inference_decode_time,
+        decode_step_times=decode_step_times,
+        full_run_time=full_run_time,
+    )
+    # ISL sweep (and other callers) can capture throughput metrics without re-parsing logs.
+    if metrics_out is not None:
+        metrics_out.update(measurements)
+
+    return all_outputs[0]
 
 
 def validate_e2e_outputs(results, expected_min_tokens=1):
-    """Validate end-to-end pipeline outputs."""
+    """Check that results contains at least expected_min_tokens decoded token ids (length check only)."""
     if not results:
         logger.error("No results generated from E2E pipeline")
         return False
@@ -382,18 +487,10 @@ def validate_e2e_outputs(results, expected_min_tokens=1):
     if len(results) < expected_min_tokens:
         logger.warning(f"Generated only {len(results)} tokens, expected at least {expected_min_tokens}")
         return False
-
-    # Check if tokens are valid
-    for result in results:
-        if not hasattr(result, "token") or not hasattr(result, "text"):
-            logger.error("Invalid result format")
-            return False
-
-    logger.info("E2E pipeline validation passed")
     return True
 
 
-@pytest.mark.skip(reason="Disabled: see #45992")
+# @pytest.mark.skip(reason="Disabled: see #45992")
 @torch.no_grad()
 @run_for_wormhole_b0_or_blackhole()
 @pytest.mark.timeout(1800)
@@ -409,11 +506,11 @@ def validate_e2e_outputs(results, expected_min_tokens=1):
     "paged_attention",
     (
         True,
-        # False,
+        False,
     ),
     ids=(
         "paged_attention",
-        # "default_attention",
+        "default_attention",
     ),
 )
 @pytest.mark.parametrize(
@@ -437,15 +534,20 @@ def validate_e2e_outputs(results, expected_min_tokens=1):
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
+    fabric_1d_trace_device_params(num_command_queues=1),  # Arch-adaptive trace region: 30 MiB WH / 35 MiB BH.
     indirect=True,
 )
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "N150x4": (1, 4), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "N150x4": (1, 4),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150x4": (1, 4),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
@@ -518,8 +620,8 @@ def test_e2e_vision_text_pipeline(
             ),
         )
 
-    # Run generation following EXACT test_end2end.py pattern
-    logger.info("Running generation following EXACT test_end2end.py pattern...")
+    # Run generation exactly like test_end2end.py
+    logger.info("Running generation exactly like test_end2end.py...")
     results = run_generation_exactly_like_test_end2end(
         vision_model, text_model, processed_inputs, model_args, page_table, paged_attention_config, max_gen_len=1024 * 4
     )
@@ -531,10 +633,6 @@ def test_e2e_vision_text_pipeline(
     if validation_passed and len(results) > 0:
         logger.info("E2E vision-text pipeline test PASSED!")
         logger.info(f"Successfully generated {len(results)} tokens")
-
-        # Log generated tokens for debugging
-        for i, result in enumerate(results[:5]):
-            logger.info(f"Token {i}: {result.token} -> '{result.text}'")
     else:
         logger.error("E2E pipeline test failed")
         assert False, f"E2E pipeline failed - generated {len(results)} tokens, validation: {validation_passed}"

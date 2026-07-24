@@ -11,6 +11,10 @@ import ttnn
 from models.experimental.mistral_24b.tt.vision_rope import VisionRotarySetup as RotarySetup
 
 from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0_or_blackhole
+
+# Mesh trace region (bytes) by architecture (for fabric mesh tests in this suite).
+TRACE_REGION_SIZE_WORMHOLE = 30_000_000  # 30 MiB
+TRACE_REGION_SIZE_BLACKHOLE = 35_000_000  # 35 MiB
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.load_checkpoints import convert_vision_meta_to_hf
 
@@ -29,9 +33,13 @@ def reference_vision_rot_emb(model_args):
 @pytest.mark.parametrize(
     "device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150x4": (1, 4),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
@@ -81,7 +89,6 @@ def test_rot_emb(seq_len, batch_size, reset_seeds, device):
         orig_context_len=num_patches,
         datatype=dtype,
     )
-
     cos2, sin2 = tt_model.get_rot_mats(position_ids)
     cos2 = ttnn.from_device(cos2)
     cos2 = ttnn.to_torch(cos2)
@@ -90,13 +97,11 @@ def test_rot_emb(seq_len, batch_size, reset_seeds, device):
     sin2 = ttnn.from_device(sin2)
     sin2 = ttnn.to_torch(sin2)
     sin2 = sin2.squeeze(0)
-
     passing, pcc_message = comp_pcc(cos, cos2)
 
     logger.info(comp_allclose(cos, cos2))
     logger.info(f"PCC: {pcc_message}")
     assert passing, f"COS PCC value is lower than {0.99} for some of the outputs. Check Warnings!"
-
     passing, pcc_message = comp_pcc(sin, sin2)
 
     logger.info(comp_allclose(sin, sin2))

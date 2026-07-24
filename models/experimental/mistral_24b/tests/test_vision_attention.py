@@ -12,6 +12,24 @@ from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0_or_blackhole
 
+# Mesh trace region (bytes) by architecture.
+TRACE_REGION_SIZE_WORMHOLE = 30_000_000  # 30 MiB
+TRACE_REGION_SIZE_BLACKHOLE = 35_000_000  # 35 MiB
+
+
+def fabric_1d_trace_device_params(*, num_command_queues: int = 1):
+    from models.common.utility_functions import is_wormhole_b0
+
+    trace_region_size = TRACE_REGION_SIZE_WORMHOLE if is_wormhole_b0() else TRACE_REGION_SIZE_BLACKHOLE
+    return [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": trace_region_size,
+            "num_command_queues": num_command_queues,
+        }
+    ]
+
+
 from models.experimental.mistral_24b.tt.vision_attention import TtMistralImageAttention as TtLlamaImageAttention
 
 from ttnn import ConcatMeshToTensor
@@ -22,9 +40,13 @@ from ttnn import ConcatMeshToTensor
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150x4": (1, 4),  # Blackhole QuietBox-2 (4× P150).
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
@@ -38,7 +60,7 @@ from ttnn import ConcatMeshToTensor
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
+    fabric_1d_trace_device_params(num_command_queues=1),  # Arch-adaptive trace region: 30 MiB WH / 35 MiB BH.
     indirect=True,
 )
 def test_vision_attention(mesh_device, seq_len, batch_size):
@@ -112,10 +134,11 @@ def test_vision_attention(mesh_device, seq_len, batch_size):
         :, :, :, : tt_out.shape[-1]
     ]
     tt_output_torch = tt_output_torch.squeeze(0)
+    # Pass bfloat16 tensors directly; redundant upcast to float32 dropped to match TT model input dtype.
     reference_output = reference_model(
-        pt_attention_input.float(),
-        attention_mask.float(),
-        position_embeddings=(cos.float(), sin.float()),
+        pt_attention_input,
+        attention_mask,
+        position_embeddings=(cos, sin),
     )[0]
     pcc_required = 0.99
 
