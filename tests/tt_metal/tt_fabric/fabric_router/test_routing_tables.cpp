@@ -251,7 +251,7 @@ TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
     int world_size = *distributed_context->size();
     int rank = *distributed_context->rank();
     std::filesystem::path root_dir = rtoptions.get_root_dir();
-    std::filesystem::path generated_dir = root_dir / "generated" / "fabric";
+    std::filesystem::path generated_dir = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric";
     std::string generated_filename =
         "asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" + std::to_string(world_size) + ".yaml";
     std::filesystem::path generated_file = generated_dir / generated_filename;
@@ -422,7 +422,7 @@ TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kControlPlaneInit) {
     int world_size = *distributed_context->size();
     int rank = *distributed_context->rank();
     std::filesystem::path root_dir = rtoptions.get_root_dir();
-    std::filesystem::path generated_dir = root_dir / "generated" / "fabric";
+    std::filesystem::path generated_dir = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric";
     std::string generated_filename =
         "asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" + std::to_string(world_size) + ".yaml";
     std::filesystem::path generated_file = generated_dir / generated_filename;
