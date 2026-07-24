@@ -1,0 +1,73 @@
+name: "Compile Quasar performance tests"
+
+on:
+  workflow_call:
+    inputs:
+      docker_image:
+        description: "Docker image containing the LLK build environment"
+        required: true
+        type: string
+      runs_on:
+        description: "Runner used to compile the tests"
+        required: false
+        default: tt-ubuntu-2204-large-stable
+        type: string
+      timeout_minutes:
+        description: "Timeout in minutes for the compile job"
+        required: false
+        default: 30
+        type: number
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  LLK_PATH: tt_metal/tt-llk
+
+jobs:
+  compile-quasar-perf:
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    container:
+      image: ${{ inputs.docker_image }}
+    name: "Quasar perf compile"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+
+      - name: Install SFPI
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          cd tests
+          CHIP_ARCH=quasar ./setup_testing_env.sh
+          cd ..
+
+      - name: Compile Quasar performance tests
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}/tests/python_tests
+        run: |
+          export CHIP_ARCH=quasar
+          echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
+
+          pytest -q --compile-producer -n 40 \
+            -m "perf and quasar" \
+            --override-ini="log_cli=false" --tb=short --timeout=60 \
+            --junitxml=pytest-report-${CHIP_ARCH}-compile.xml \
+            quasar/perf_*_quasar.py
+
+      - name: Upload JUnit report
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: perf-junit-report-quasar-compile
+          path: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-quasar-compile.xml
+
+      - name: Publish Test Results
+        uses: mikepenz/action-junit-report@3585e9575db828022551b4231f165eb59a0e74e3 # v5.6.2
+        if: always()
+        with:
+          report_paths: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-quasar-compile.xml
+          annotate_only: true

@@ -3,6 +3,12 @@ name: "LLK perf impl"
 
 on:
   workflow_call:
+    inputs:
+      architecture:
+        description: "Architecture to run: all, wormhole, blackhole, or quasar"
+        required: false
+        default: all
+        type: string
 
 permissions:
   checks: write
@@ -19,6 +25,7 @@ jobs:
     secrets: inherit
 
   load-test-matrix:
+    if: ${{ inputs.architecture != 'quasar' }}
     runs-on: ubuntu-slim
     needs: [build-images]
     outputs:
@@ -45,15 +52,40 @@ jobs:
             "perf"
       - name: Build test matrix
         id: build-matrix
+        env:
+          ARCHITECTURE: ${{ inputs.architecture }}
         run: |
+          case "$ARCHITECTURE" in
+            all)
+              ENABLED_SKUS="ALL_SKUS_IN_TESTS"
+              ;;
+            wormhole)
+              ENABLED_SKUS="wh_n150_civ2"
+              ;;
+            blackhole)
+              ENABLED_SKUS="bh_p150b_civ2"
+              ;;
+            *)
+              echo "::error::Unsupported architecture '$ARCHITECTURE'"
+              exit 1
+              ;;
+          esac
+
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
-            "ALL_SKUS_IN_TESTS" \
+            "$ENABLED_SKUS" \
             ./.github/sku_config.yaml
+
+  compile-quasar-perf:
+    if: ${{ inputs.architecture == 'all' || inputs.architecture == 'quasar' }}
+    needs: [build-images]
+    uses: ./.github/workflows/build-quasar-perf.yml
+    with:
+      docker_image: ${{ needs.build-images.outputs.llk-ci-tag }}
 
   llk-perf-exec:
     needs: [load-test-matrix, build-images]
-    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    if: ${{ inputs.architecture != 'quasar' && needs.load-test-matrix.outputs.matrix != '[]' }}
     strategy:
       fail-fast: false
       matrix:
