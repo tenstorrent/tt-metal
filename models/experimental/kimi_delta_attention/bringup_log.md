@@ -1412,3 +1412,14 @@
 - Recovery: restored the retained slice+untilize path, then `PERF_SEQ=64 PERF_REPS=1 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s` -> PASS on all eight devices.
 - Diagnosis: correctness at T=32 and successful warm setup rule out tensor semantics; failure is target-shape trace replay safety in the cropped-untilize program. This matches the prior full-sequence L1 gate case: a target path that cannot replay traces is not retainable.
 - Verdict: reject the existing composite and restore source. The measured `181.684 us` combined slice/untilize ceiling still supports an offset-aware custom reader, but not this API route.
+
+
+### 2026-07-24 19:21:20 UTC — Reject native equal-width Q/K/V split
+
+- Hypothesis: target Kimi has equal TP-local Q/K/V widths (`512/512/512`), so the native tiled N-way `ttnn.split` fast path can replace three independent post-convolution slice programs with one device program. Unequal-width configurations retain the existing slices.
+- Initial diagnostic: applying split-size `q_dim` unconditionally failed the focused test because its deliberate `32/32/256` Q/K/V geometry produced ten outputs. This rejected the assumption that every supported KDA configuration is equal-width and motivated a localized equal-width guard.
+- Focused command with the guard: `scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_tp_weights.py::test_tp_layer_pcc -q -s` -> PASS; output/recurrent/convolution PCC remained exactly `0.999965/0.999910/0.999997` through the unchanged unequal-width path.
+- Target command: `PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s` -> PASS. CSV `generated/profiler/reports/2026_07_24_19_20_59/ops_perf_results_2026_07_24_19_20_59.csv` (SHA-256 `e39287a74d6411e0295ae6ab33d13241ba536c45adc30d7b8fda3849d6772cc3`).
+- Result: calls per device/replay fall `35 -> 33`; the three Q/K/V slices (`30.390 + 30.067 + 30.291 us`) become one `87.567 us` split. Median slowest-device wall improves `3385.003 -> 3381.006 us` (`-3.997 us`, `-0.118%`). Replay spans were `[3370.129, 3363.603, 3369.061, 3379.077, 3373.553, 3390.850, 3387.747, 3384.878, 3390.155, 3382.934] us`.
+- Diagnosis: launch consolidation removes two programs but preserves nearly all tile movement; the replacement kernel costs `96.6%` of the three slice kernels. The approximately `2.9%` split-block improvement and `0.118%` wall improvement miss the established `5%` block and `1%` wall retention gates.
+- Verdict: reject and restore independent slices. A useful projection/consumer fusion must eliminate data movement, not merely coalesce its launch.

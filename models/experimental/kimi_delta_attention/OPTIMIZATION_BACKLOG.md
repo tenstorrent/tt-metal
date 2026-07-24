@@ -217,6 +217,12 @@ improved `622.564 -> 619.594 us` (`-0.48%`). T=5,120 wall improved
       trace replay deadlocks and forces an eight-device reset. Reject the
       existing composite for target trace execution; retain an offset-aware
       custom reader as the safe implementation path.
+    - Native equal-width split control, 2026-07-24: target Kimi Q/K/V can use
+      the single-pass tiled `ttnn.split` kernel, reducing three slice programs
+      (`30.390 + 30.067 + 30.291 us`) to one `87.567 us` split. T=5,120 wall
+      improves only `3385.003 -> 3381.006 us` (`-0.118%`) and the split block
+      improves about `2.9%`; both miss the `1%` wall / `5%` block gates.
+      Reject launch-only consolidation; data movement must also be eliminated.
 38. Consume beta sigmoid/typecast inside prep without a separate launch.
 39. Fuse decay projection, bias, Softplus, scaling, and FP32 conversion.
 40. Feed decay output directly into prep.
