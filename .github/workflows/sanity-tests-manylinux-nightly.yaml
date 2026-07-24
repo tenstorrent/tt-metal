@@ -1,0 +1,35 @@
+name: "(nightly) Sanity - manylinux wheel canary"
+
+# Sanity runs on PRs/main with the fast in-place (Ubuntu) wheel. This nightly re-runs the
+# same suite against the real manylinux build-wheel so a bug that only manifests in the
+# manylinux build (packaging/ABI) is caught with daily cadence instead of only at release.
+
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+  pages: write
+  id-token: write
+  packages: write
+  checks: write
+
+jobs:
+  sanity-manylinux:
+    uses: ./.github/workflows/sanity-tests.yaml
+    with:
+      build-inplace-wheel: false # force the real manylinux build-wheel
+    secrets: inherit
+
+  notify-on-failure:
+    needs: sanity-manylinux
+    if: ${{ failure() }}
+    runs-on: ubuntu-slim
+    steps:
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
