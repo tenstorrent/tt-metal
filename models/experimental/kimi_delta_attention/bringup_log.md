@@ -946,3 +946,28 @@
   time improves `637.981 -> 637.203 us`, and recurrence improves
   `183.096 -> 181.890 us`. Retain `dl` as a small, numerically clean candidate
   for combination testing; it is not meaningful enough to select alone.
+
+
+### 2026-07-24 16:14:31 UTC — Combine BF16 kd and q_decay storage
+
+- Hypothesis: the two individually clean, equal-volume tensors should combine
+  additively because prep writes and four-way scan reads are independent. Mask
+  `0x6` selects `kd` and `q_decay`.
+- Direct correctness:
+  `QWEN_KDA_PREP_BF16_MASK=0x6 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_chunk_kda.py -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 5/5 in 20.65 s. HiFi4 PCC matches the FP32
+  control to six decimals; the HiFi2 case is `0.999921/0.999921`.
+- TP=8 layer correctness:
+  `QWEN_KDA_PREP_BF16_MASK=0x6 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_tp_weights.py::test_tp_layer_pcc -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 1/1 in 6.75 s; output/recurrent/convolution
+  PCC exactly matches control at `0.999964/0.999903/0.999997`.
+- Measurement command:
+  `QWEN_KDA_PREP_BF16_MASK=0x6 PERF_TRACE=1 PERF_SEQ=640 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 1/1.
+- Report:
+  `generated/profiler/reports/2026_07_24_16_14_31/ops_perf_results_2026_07_24_16_14_31.csv`
+  (SHA-256 `78b48a3d637defa1edd8228db431d92b05a09d1e9636ea60e5df5e3b4d3475f1`).
+  Median wall improves `659.024 -> 646.784 us` (`-12.240 us`, `-1.86%`), active
+  time improves `637.981 -> 626.043 us`, and recurrence improves
+  `183.096 -> 171.047 us`. The result is approximately additive and becomes
+  the leading retained candidate.
