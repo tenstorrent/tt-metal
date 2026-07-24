@@ -156,40 +156,6 @@ tensor_return_value_t StridedReduceScatterAsyncDeviceOperation::create_output_te
     return {intermediate_buffer, output_buffer};
 }
 
-ttsl::hash::hash_t StridedReduceScatterAsyncDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-
-    return ttsl::hash::hash_objects(
-        operation_attributes.dim,
-        operation_attributes.num_links,
-        operation_attributes.ring_size,
-        operation_attributes.output_mem_config,
-        operation_attributes.optional_intermediate_mem_config,
-        operation_attributes.topology,
-        operation_attributes.barrier_semaphore.has_value(),
-        operation_attributes.using_persistent_buffers,
-        operation_attributes.sub_device_id.has_value(),
-        operation_attributes.sub_device_id.has_value()
-            ? input_tensor.device()->worker_cores(
-                  tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value())
-            : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
-        operation_attributes.cluster_axis,
-        operation_attributes.num_workers_per_link,
-        operation_attributes.num_buffers_per_channel,
-        operation_attributes.mm_cores_y,
-        operation_attributes.mm_block_ht,
-        operation_attributes.mm_block_wt,
-        operation_attributes.mm_N_full_block_wt,
-        operation_attributes.chunk_width_in_mm_blocks,
-        input_tensor.logical_shape(),
-        input_tensor.padded_shape(),
-        input_tensor.tensor_spec().page_config(),
-        input_tensor.dtype(),
-        input_tensor.layout(),
-        input_tensor.memory_config());
-}
-
 }  // namespace ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail
 
 namespace ttnn::prim {
