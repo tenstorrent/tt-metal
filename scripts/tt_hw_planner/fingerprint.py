@@ -107,7 +107,7 @@ def _backbone_from_text(text: str) -> Optional[str]:
         return "encoder-decoder transformer"
     if any(k in text for k in ("resnet", "convnext", "mobilenet", "conv1d", "conv2d")):
         return "CNN/conv"
-    if any(k in text for k in ("vit", "beit", "deit", "swin")):
+    if any(k in text for k in ("vit", "beit", "deit", "swin", "dino")):
         return "ViT (vision transformer)"
     return None
 

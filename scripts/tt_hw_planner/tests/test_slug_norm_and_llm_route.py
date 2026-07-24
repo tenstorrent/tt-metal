@@ -340,6 +340,9 @@ def test_arch_fingerprint_backbone_families():
     )
     # a real encoder+decoder signal still classifies as encoder-decoder
     assert arch_descriptor(model_type="novel_s2s", notes="encoder-decoder seq2seq").startswith("encoder-decoder")
+    # vision transformers (incl. all DINO variants) infer as ViT from class-name text
+    assert arch_descriptor(model_type="dinov2", architectures=["Dinov2Model"]).startswith("ViT")
+    assert arch_descriptor(model_type="resnet", architectures=["ResNetForImageClassification"]).startswith("CNN")
 
 
 def test_derivation_reads_real_model_type_from_config(tmp_path):
