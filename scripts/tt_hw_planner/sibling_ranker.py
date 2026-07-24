@@ -155,7 +155,7 @@ def rank_backends_llm(
     det_hint: Optional[List[Tuple[FamilyBackend, int, str]]] = None,
     components: Optional[List[dict]] = None,
     is_encoder_decoder: Optional[bool] = None,
-    model: str = "sonnet",
+    model: str = "opus",
     agent_bin: str = "claude",
     timeout_s: int = 120,
 ) -> List[Tuple[FamilyBackend, int, str]]:
@@ -168,7 +168,7 @@ def rank_backends_llm(
     fingerprint -- the substitute for config on config-less models."""
     from .auto_onboard import _summarize_existing_backends
     from .fingerprint import arch_descriptor
-    from .llm_synth import extract_json_from_llm_output, invoke_llm_cli_one_shot
+    from .llm_synth import extract_json_from_llm_output, invoke_llm_agent
 
     target_arch = arch_descriptor(
         model_type=model_type,
@@ -198,7 +198,7 @@ def rank_backends_llm(
         top_n=top_n,
     )
     try:
-        raw = invoke_llm_cli_one_shot(prompt, agent_bin=agent_bin, model=model, timeout_s=timeout_s)
+        raw = invoke_llm_agent(prompt, agent_bin=agent_bin, model=model, timeout_s=max(timeout_s, 200))
     except Exception:
         return []
     obj = extract_json_from_llm_output(raw)
@@ -281,7 +281,7 @@ def rank_siblings(
     use_llm: bool = True,
     components: Optional[List[dict]] = None,
     is_encoder_decoder: Optional[bool] = None,
-    model: str = "sonnet",
+    model: str = "opus",
     agent_bin: str = "claude",
     timeout_s: int = 120,
 ) -> List[Tuple[FamilyBackend, int, str]]:
@@ -346,7 +346,7 @@ def resolve_backend_with_quality(
     use_llm: Optional[bool] = None,
     components: Optional[List[dict]] = None,
     is_encoder_decoder: Optional[bool] = None,
-    model: str = "sonnet",
+    model: str = "opus",
     agent_bin: str = "claude",
     timeout_s: int = 120,
 ) -> Tuple[Optional[FamilyBackend], str]:
