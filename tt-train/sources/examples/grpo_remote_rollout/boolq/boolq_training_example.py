@@ -45,33 +45,7 @@ ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
 from utils.weight_bridge import TTML_RANK, TTT_RANK  # noqa: E402
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
-
-# Topology from GRPO_BOOLQ_TOPOLOGY (set by runner.sh). Defaults to 2x2;
-# 4x4 currently hangs in the cross-rank handshake/transport on this host.
-_TOPOLOGIES = {
-    "2x2": {
-        "ttml_device_config_rel": "tt-train/configs/training_configs/grpo_boolq_llama_1b_ddp_2dev.yaml",
-        "ttt_parent_mesh_shape": (1, 2),
-    },
-    "4x4": {
-        "ttml_device_config_rel": "tt-train/configs/training_configs/grpo_boolq_llama_1b_ddp_4dev.yaml",
-        "ttt_parent_mesh_shape": (1, 4),
-    },
-}
-
-TOPOLOGY = os.environ.get("GRPO_BOOLQ_TOPOLOGY", "2x2")
-if TOPOLOGY not in _TOPOLOGIES:
-    raise RuntimeError(
-        f"Unknown GRPO_BOOLQ_TOPOLOGY={TOPOLOGY!r}; expected one of {sorted(_TOPOLOGIES)}. "
-        "Select it via boolq/runner.sh --topology."
-    )
-_TOPO = _TOPOLOGIES[TOPOLOGY]
-
-TTML_DEVICE_CONFIG_REL = _TOPO["ttml_device_config_rel"]
-TTT_PARENT_MESH_SHAPE = _TOPO["ttt_parent_mesh_shape"]
-
-TTT_MAX_BATCH_SIZE = 32
-TTT_MAX_SEQ_LEN = 2048
+CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1b_remote_rollout.yaml"
 WEIGHT_SYNC_EVERY = 1
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -165,10 +139,10 @@ class GRPOMonitor:
         print("Training complete.")
 
 
-def _load_device_config(device_config_rel: str = TTML_DEVICE_CONFIG_REL):
+def _load_device_config():
     from ttml.common.config import DeviceConfig, load_config
 
-    raw = load_config(os.path.join(str(REPO_ROOT), device_config_rel))
+    raw = load_config(os.path.join(str(REPO_ROOT), CONFIG_REL))
     return DeviceConfig(raw), raw
 
 
@@ -204,7 +178,7 @@ def _ttml_main() -> None:
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
     autograd_ctx.initialize_distributed_context(*sys.argv)
 
-    device_config, raw = _load_device_config(TTML_DEVICE_CONFIG_REL)
+    device_config, raw = _load_device_config()
     mesh_device = _open_ttml_device(device_config)
 
     completer: Any = None
@@ -291,15 +265,17 @@ def _ttt_main() -> None:
     if not ttnn.distributed_context_is_initialized():
         ttnn.init_distributed_context()
 
+    # Read the same yaml as the ttml rank so both use the same GRPO sampling
+    # temperature (the worker bakes it into the captured decode trace) and so
+    # the rollout mesh / batch / seq-len come from ``remote_rollout_config``.
+    raw = load_config(os.path.join(str(REPO_ROOT), CONFIG_REL))
+    grpo_temperature = float(raw["training_config"]["grpo_config"]["temperature"])
+    rr = raw["remote_rollout_config"]
+
     parent_mesh = ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(*TTT_PARENT_MESH_SHAPE),
+        mesh_shape=ttnn.MeshShape(*rr["mesh_shape"]),
         offset=ttnn.MeshCoordinate(0, 0),
     )
-
-    # Read the same yaml as the ttml rank so both use the same GRPO sampling
-    # temperature (the worker bakes it into the captured decode trace).
-    raw = load_config(os.path.join(str(REPO_ROOT), TTML_DEVICE_CONFIG_REL))
-    grpo_temperature = float(raw["training_config"]["grpo_config"]["temperature"])
 
     worker: Any = None
     server: Any = None
@@ -311,8 +287,8 @@ def _ttt_main() -> None:
         worker = TttGenerationWorker(
             mesh_device=parent_mesh,
             model_source=MODEL_ID,
-            max_batch_size=TTT_MAX_BATCH_SIZE,
-            max_seq_len=TTT_MAX_SEQ_LEN,
+            max_batch_size=rr["max_batch_size"],
+            max_seq_len=rr["max_seq_len"],
             instruct=True,
             optimizations=bf16_attn_bfp8_mlp_optimizations,
             stop_token_ids=stop_token_ids,

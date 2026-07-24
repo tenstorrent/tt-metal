@@ -35,9 +35,11 @@ to the other every step.
        └────── WeightBridge socket ─────┘    (replicated weights every step)
 ```
 
-`N` is the per-rank mesh width, selected by `runner.sh --topology`:
-`2` for `2x2` (the default, `configurations/local4`, 4 chips total) or
-`4` for `4x4` (`configurations/local8`, 8 chips total). See
+`N = 2` (2 TTML chips + 2 TTT chips, 4 chips total on one host,
+`configurations/local4`). All settings live in a single yaml,
+[`grpo_boolq_llama_1b_remote_rollout.yaml`](../../../../configs/training_configs/grpo_boolq_llama_1b_remote_rollout.yaml)
+— the trainer reads `training_config` / `device_config`, and the
+generation worker reads `remote_rollout_config`. See
 [How to run](#how-to-run).
 
 `GRPOTrainer` is unaware of the rank split. It calls
@@ -229,32 +231,20 @@ else:
 ## How to run
 
 ```bash
-# Default 2->2 split (4 chips: one N300 board per rank).
+# 2->2 split (4 chips: one N300 board per rank).
 HF_TOKEN=hf_... ./runner.sh
-
-# Explicit topology selection.
-HF_TOKEN=hf_... ./runner.sh --topology 2x2   # same as default
-HF_TOKEN=hf_... ./runner.sh --topology 4x4   # 8 chips, two boards per rank
 ```
 
 `runner.sh` invokes `tt-run` with `world_size == 2` and dispatches the
-two ranks into `boolq_training_example.py`. `--topology` picks the split
-width and exports `GRPO_BOOLQ_TOPOLOGY` (forwarded to both ranks via
-`mpirun -x`) so the entrypoint opens the matching meshes:
+two ranks into `boolq_training_example.py`:
 
-| `--topology` | Bindings | TTML mesh (YAML) | TTT parent → submeshes | Chips |
-|--------------|----------|------------------|------------------------|-------|
-| `2x2` (default) | `configurations/local4` | `[1, 2]` DDP ([`grpo_boolq_llama_1b_ddp_2dev.yaml`](../../../../configs/training_configs/grpo_boolq_llama_1b_ddp_2dev.yaml)) | `[1, 2]` → 2× `[1, 1]` | 4 |
-| `4x4` | `configurations/local8` | `[1, 4]` DDP ([`grpo_boolq_llama_1b_ddp_4dev.yaml`](../../../../configs/training_configs/grpo_boolq_llama_1b_ddp_4dev.yaml)) | `[1, 4]` → 4× `[1, 1]` | 8 |
+| Bindings | TTML mesh (YAML) | TTT parent → submeshes | Chips |
+|----------|------------------|------------------------|-------|
+| `configurations/local4` | `[1, 2]` DDP ([`grpo_boolq_llama_1b_remote_rollout.yaml`](../../../../configs/training_configs/grpo_boolq_llama_1b_remote_rollout.yaml) `device_config`) | `[1, 2]` → 2× `[1, 1]` (same yaml, `remote_rollout_config`) | 4 |
 
-`local4` pins rank 0 to board `0` and rank 1 to board `1`; `local8`
-pins rank 0 to boards `0,1` and rank 1 to boards `2,3` (a T3000-class
-host). Override the bindings/hostfile for other machines with
-`--rank-bindings` / `--hostfile`.
-
-> **Known issue:** `--topology 4x4` currently hangs somewhere in the
-> cross-rank handshake/transport. Use the default `2x2` split until that
-> is resolved.
+`local4` pins rank 0 to board `0` and rank 1 to board `1`. Override
+the bindings/hostfile for other machines with `--rank-bindings` /
+`--hostfile`.
 
 ### Outputs
 
