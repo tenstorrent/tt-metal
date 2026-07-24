@@ -4,10 +4,12 @@
 
 from dataclasses import dataclass
 
+import pytest
 from conftest import skip_for_coverage, skip_for_quasar
 from helpers.param_config import parametrize
+from helpers.perf import PerfConfig
 from helpers.profiler import EntryType, Profiler
-from helpers.test_config import ProfilerBuild, TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import TemplateParameter
 from ttexalens.tt_exalens_lib import read_words_from_device
 
@@ -26,6 +28,20 @@ class OVERRUN_FILL(TemplateParameter):
         )
 
 
+def _build_and_run(config):
+    # This is a test of the profiler itself and doesn't use configuration.run method at all,
+    # therefore it can't leverage default producer-consumer separation of compile and execute phases.
+    # In order to avoid compiling the test elf twice we run it in only one of two phases - the consumer/execute phase,
+    # where everything is done.
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip()
+
+    config.generate_variant_hash()
+    config.build_elfs()
+    config.run_elf_files()
+    config.wait_for_tensix_operations_finished()
+
+
 @skip_for_coverage
 @skip_for_quasar
 @parametrize(
@@ -33,14 +49,11 @@ class OVERRUN_FILL(TemplateParameter):
     nest_depth=lambda filler_count: 20 if filler_count == 501 else 40,
 )
 def test_profiler_buffer_overrun_into_neighbor(filler_count, nest_depth):
-    config = TestConfig(
+    config = PerfConfig(
         "sources/profiler_stress_overrun_test.cpp",
         templates=[OVERRUN_FILL(filler_count, nest_depth)],
-        profiler_build=ProfilerBuild.Yes,
     )
-    # run() compiles in the produce phase and skips there; only the consume/default
-    # phase reaches the device read and assertions below.
-    config.run()
+    _build_and_run(config)
 
     # reading unpack's buffer over the NoC flushes its data cache to L1, so any spill is
     # visible when we read the math buffer next.
@@ -79,12 +92,11 @@ def test_profiler_buffer_overrun_into_neighbor(filler_count, nest_depth):
 @skip_for_coverage
 @skip_for_quasar
 def test_profiler_overrun_absent_from_math_read():
-    config = TestConfig(
+    config = PerfConfig(
         "sources/profiler_stress_overrun_test.cpp",
         templates=[OVERRUN_FILL()],
-        profiler_build=ProfilerBuild.Yes,
     )
-    config.run()
+    _build_and_run(config)
 
     runtime = Profiler.get_data(
         config.test_name, config.variant_id, TestConfig.TENSIX_LOCATION
