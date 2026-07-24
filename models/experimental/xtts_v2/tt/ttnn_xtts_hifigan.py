@@ -36,7 +36,8 @@ COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
 DTYPE = ttnn.float32
 # conv1d auto-slices (num_slices=0 -> ttnn picks the minimal count that fits L1). The transpose can't:
 # with too few slices its circular buffers clash with L1, so it keeps a small budget -> more slices.
-_TR_BUDGET = 200_000  # per-slice output-footprint budget (bytes) for conv_transpose only
+_TR_BUDGET = 1_000_000  # conv_transpose per-slice footprint budget (bytes); full-vocoder sweep: 0.9-2M
+# is the safe+fast window (fewer slices than 200K), >=8M re-triggers the CB/L1 clash. auto (0) errors here.
 
 
 def _num_slices(L_out, C, budget):
