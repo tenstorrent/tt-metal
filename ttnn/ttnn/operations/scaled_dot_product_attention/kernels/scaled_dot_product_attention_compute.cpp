@@ -4,16 +4,26 @@
 // Flash-attention compute kernel (online-softmax recurrence).
 //
 // Per Q-block, stream every KV-block once maintaining running (m, l, O):
-//   m_cur = max(m_prev, rowmax(S))                          [S = Q·Kᵀ (+mask)]
-//   corr  = exp((m_prev - m_cur)·scale)
-//   P     = exp((S - m_cur)·scale)
+//   m_cur = max(m_prev, rowmax(S))                          [S = (Q·scale)·Kᵀ (+mask)]
+//   corr  = exp(m_prev - m_cur)
+//   P     = exp(S - m_cur)
 //   l_cur = corr·l_prev + rowsum(P)
 //   O_cur = corr·O_prev + P·V
 // then O /= l, per row. The S_q×S_kv score matrix is never materialized —
 // only one (Sq_chunk_t × Sk_chunk_t) block (cb_qk_scores) lives in L1.
 //
-// scale (1/sqrt(D) or explicit) is folded into every exp (MulUnary before Exp),
-// never into QKᵀ — matches the numerically-exact online form.
+// scale (1/sqrt(D) or explicit): when the descriptor's `prescale_q` gate is set (the
+// separate cb_q_scaled CB fits L1 — the common/perf path), scale is folded into Q ONCE
+// per Q-block (cb_q_in -> cb_q_scaled) so QKᵀ scores already include scale and BOTH exps
+// are scale-free. That lets the dominant P-exp (fused dual-pack, throughput regime) run
+// the super-fast UNCLAMPED exp (the in-DEST scalar-mul that folding-into-the-exp required
+// does not compose with unclamped exp); a packer ZERO_RELU clamps the negative garbage
+// unclamped exp emits for very-negative inputs back to 0 (= correct exp(-large)≈0). The
+// compounding corr-exp stays exact.
+// When prescale_q is NOT set (a large-head_dim fp32 shape where a second resident Q CB
+// would not fit L1 — host also disables fuse_rowsum there), the kernel keeps the original
+// behavior: no pre-scale, scale folded into each exp via MulUnary, all exps clamped —
+// byte-identical to the prior phase, so those shapes never regress.
 //
 // The running (m, l, O) are held in FIXED CBs updated IN PLACE each KV-block
 // (read the old value via a Held policy, pop it, push the new value in the same
@@ -66,6 +76,7 @@ constexpr uint32_t cb_o = 6;            // running output accumulator (in place)
 constexpr uint32_t cb_out_new = 8;      // this block's P·V (scratch)
 constexpr uint32_t cb_sum_scaled = 9;   // scratch
 constexpr uint32_t cb_out_scaled = 10;  // scratch
+constexpr uint32_t cb_q_scaled = 11;    // pre-scaled Q (Q·scale), resident across the KV loop (prescale_q path)
 
 struct MMParams {
     uint32_t sq, sk, dht, scale_bits;
@@ -77,8 +88,8 @@ struct MMParams {
 // Fusion #2 — fused exp + partial-row-sum dual-pack (raw LLK). Ported from run_804's
 // `fused_exp_dual_pack`, ADAPTED for our scale-folding convention.
 //
-// Replaces phase 4 (P = exp((S - m)*scale)) + phase 5 (dedicated reduce<SUM,REDUCE_ROW>).
-// In one DEST window per query-row it computes P = exp((scores - m_cur)*scale) and packs it
+// Replaces phase 4 (P = exp(S - m)) + phase 5 (dedicated reduce<SUM,REDUCE_ROW>).
+// In one DEST window per query-row it computes P = exp(scores - m_cur) and packs it
 // to cb_exp (row-major, for the PV matmul) AND, over the SAME DEST tiles, L1-accumulates the
 // element-wise partial row-sum across this chunk's sk key-tiles into cb_sum_new[i] (rows x 32
 // cols, un-reduced) via pack_tile<true> + pack_reconfig_l1_acc. The dedicated per-block reduce
@@ -89,14 +100,17 @@ struct MMParams {
 // single-terminal — it cannot co-pack a normal cb_exp AND an L1-accumulating cb_sum_new from
 // one DEST window. So the dual-pack is not expressible with helpers and is hand-written here.
 //
-// SCALE (deviation from 804, which pre-scales Q so its exp is scale-free): our exp folds the
-// attention scale via a MulUnary(scale_bits) BEFORE Exp. The DEST window therefore does
-// sub_tiles_bcast_cols -> mul_unary_tile(scale_bits) -> exp_tile, mirroring the non-fused
-// eltwise_chain's lowering (BinaryFpu<Sub,Col> -> MulUnary -> Exp<Fast> -> PackTile) exactly.
+// SCALE: attention scale is pre-folded into Q (in-place on cb_q_in) ONCE per Q-block, so scores already
+// include scale and this exp is SCALE-FREE. The DEST window does just sub_tiles_bcast_cols ->
+// exp_tile (no in-DEST scalar-mul), which is exactly what lets the unclamped exp below be used.
 //
-// EXP FLAVOR: matches ckl::Exp<Approx::Fast> == exp_tile<true> (approx, ClampToNegative, default
-// scale=1.0). ClampToNegative (the safe clamp) is used — NOT 804's InputClamping::None — so no
-// packer ZERO_RELU is needed (very-negative inputs clamp to ~0 in the SFPU, not to garbage).
+// EXP FLAVOR: SUPER-FAST unclamped approx exp — exp_tile<true, false, InputClamping::None>. For
+// very-negative inputs (masked -1e9, or scores far below the row-max) it emits NEGATIVE garbage
+// instead of ~0. Since exp is always >=0, a packer ZERO_RELU (max(x,0)) set for the row loop
+// clamps that to 0 = the correct exp(-large)≈0, for FREE on the packer (no MATH/SFPU pass); it is
+// restored to NO_RELU before return so no downstream pack inherits it. This is safe ONLY because Q
+// is pre-scaled (an in-DEST scalar-mul does NOT compose with unclamped exp); the compounding
+// corr-exp stays exact and clamped (kv_step).
 //
 // LIGHTWEIGHT reconfig, NOT full init_bcast: reconfig unpack/math src formats to (scores, m_cur),
 // switch math/unpack to sub-bcast-col, init the scalar-mul + fast exp, reconfig ONLY the pack
@@ -105,7 +119,7 @@ struct MMParams {
 // cb_sum_new share interm_format (bf16 in the fuse_rowsum regime), so the two pack targets need
 // no pack_reconfig_data_format between them. Reached only when fp32_dest_acc_en=False, so DEST
 // holds 8 bf16 tiles and sk (<= K_CHUNK <= 8) fits one acquire section.
-FORCE_INLINE void fused_exp_dual_pack(uint32_t sq, uint32_t sk, uint32_t scale_bits) {
+FORCE_INLINE void fused_exp_dual_pack(uint32_t sq, uint32_t sk) {
     const uint32_t sq_sk = sq * sk;
     cb_wait_front(cb_qk_scores, sq_sk);
     cb_wait_front(cb_max_cur, sq);  // m_cur (held; NOT popped by this phase — the copy to cb_m pops it)
@@ -114,18 +128,22 @@ FORCE_INLINE void fused_exp_dual_pack(uint32_t sq, uint32_t sk, uint32_t scale_b
 
     ckernel::reconfig_data_format(cb_qk_scores, cb_max_cur);
     ckernel::sub_bcast_cols_init_short(cb_qk_scores, cb_max_cur);
-    ckernel::binop_with_scalar_tile_init();  // mul_unary (scale fold)
-    ckernel::exp_tile_init<true>();          // fast exp, ClampToNegative (matches ckl::Exp<Fast>)
+    // SUPER-FAST unclamped approx exp (safe: Q is pre-scaled, so this exp is scale-free — see the
+    // function-head comment). No mul_unary init (scale is already in the scores).
+    ckernel::exp_tile_init<true, 0x3F800000, ckernel::InputClamping::None>();
     ckernel::pack_reconfig_data_format(cb_exp);
     ckernel::pack_reconfig_l1_acc(0);
+    // ZERO_RELU: clamp the negative garbage the unclamped exp emits for very-negative inputs to 0
+    // (= correct exp(-large)≈0), for free on the packer. Set once for all packs in the row loop;
+    // restored to NO_RELU before return so no downstream pack inherits it.
+    ckernel::pack_relu_config(ckernel::ReluConfig::zero());
 
     for (uint32_t i = 0; i < sq; ++i) {
         ckernel::tile_regs_acquire();
         for (uint32_t j = 0; j < sk; ++j) {
-            // DEST[j] = exp((scores[i,j] - m[i]) * scale)  (m col-broadcast across the 32 cols)
+            // DEST[j] = exp(scores[i,j] - m[i])  (m col-broadcast across the 32 cols; scale in Q)
             ckernel::sub_tiles_bcast_cols(cb_qk_scores, cb_max_cur, i * sk + j, i, j);
-            ckernel::mul_unary_tile(j, scale_bits);
-            ckernel::exp_tile<true>(j);
+            ckernel::exp_tile<true, false, ckernel::InputClamping::None>(j);
         }
         ckernel::tile_regs_commit();
         ckernel::tile_regs_wait();
@@ -144,6 +162,7 @@ FORCE_INLINE void fused_exp_dual_pack(uint32_t sq, uint32_t sk, uint32_t scale_b
         ckernel::pack_reconfig_l1_acc(0);  // reset before next row / downstream ops
         ckernel::tile_regs_release();
     }
+    ckernel::pack_relu_config(ckernel::ReluConfig::none());  // restore: no ReLU for downstream packs
     cb_push_back(cb_exp, sq_sk);
     cb_push_back(cb_sum_new, sq);
     cb_pop_front(cb_qk_scores, sq_sk);
@@ -174,20 +193,27 @@ FORCE_INLINE void fused_exp_dual_pack(uint32_t sq, uint32_t sk, uint32_t scale_b
 // (the reader generates + pushes cb_mask_in exactly for those); fully-past blocks
 // carry no mask and skip the add — the reader pushes nothing for them, so the CB
 // balance holds. For mask_mode=none it is always false.
-template <ckl::Approx CorrExpMode, ckl::Approx PExpMode, bool Fuse, bool FuseRowsum>
+// Prescaled (compile-time): when true, Q is pre-scaled into cb_q_scaled once per Q-block, so
+// QKᵀ reads cb_q_scaled and every exp below is scale-free. When false, Q is unscaled in cb_q_in,
+// so scale is folded into each exp via MulUnary (the original behavior; large-head_dim fp32
+// shapes where a second resident Q CB does not fit L1). FuseRowsum ⇒ Prescaled (host gate), so
+// the unclamped fused dual-pack is only ever reached on the pre-scaled path.
+template <ckl::Approx CorrExpMode, ckl::Approx PExpMode, bool Fuse, bool FuseRowsum, bool Prescaled>
 void kv_step(bool first, bool apply_mask, const MMParams& p) {
     const uint32_t sq = p.sq, sk = p.sk, dht = p.dht;
+    constexpr uint32_t cb_q_mm = Prescaled ? cb_q_scaled : cb_q_in;  // Q operand for QKᵀ
 
-    // ---- 1. S = Q·Kᵀ  (Q retained across the KV loop; K popped) ----
+    // ---- 1. S = (Q·scale)·Kᵀ  (Q retained across the KV loop; K popped). Scale is in Q on the
+    //         Prescaled path (cb_q_scaled), else folded into the exps below (cb_q_in). ----
     if (p.ablate >= 1) {
         // matmul-stub: keep CB scaffolding, no FPU work (measures SFPU/softmax floor).
-        cb_wait_front(cb_q_in, sq * dht);  // Q present (retained; final pop frees it)
+        cb_wait_front(cb_q_mm, sq * dht);  // Q present (retained; final pop frees it)
         cb_wait_front(cb_k_in, sk * dht);
         cb_pop_front(cb_k_in, sk * dht);
         cb_reserve_back(cb_qk_scores, sq * sk);
         cb_push_back(cb_qk_scores, sq * sk);
     } else {
-        CircularBuffer q_buf(cb_q_in), k_buf(cb_k_in), qk_buf(cb_qk_scores);
+        CircularBuffer q_buf(cb_q_mm), k_buf(cb_k_in), qk_buf(cb_qk_scores);
         ckl::matmul_block<
             /*transpose=*/true,
             /*packer_l1_acc=*/false,
@@ -234,43 +260,71 @@ void kv_step(bool first, bool apply_mask, const MMParams& p) {
             ckl::input(cb_m, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Block),
             ckl::input(cb_max_new),
             ckl::output(cb_max_cur)>(ckl::EltwiseShape::tiles(sq));
-        // corr = exp((m_prev - m_cur)·scale); pops m_prev (old cb_m), keeps m_cur.
-        ckl::eltwise_chain(
-            ckl::EltwiseShape::tiles(sq),
-            ckl::BinaryFpu<
-                ckl::input(cb_m, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                ckl::input(cb_max_cur, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Block),
-                ckl::BinaryFpuOp::Sub,
-                ckl::BroadcastDim::None>{},
-            ckl::MulUnary<>{p.scale_bits},
-            ckl::Exp<CorrExpMode>{},
-            ckl::PackTile<ckl::output(cb_exp_max_diff)>{});
+        // corr = exp((m_prev - m_cur)·scale). On the Prescaled path scale is already in the scores
+        // (Q pre-scaled), so m/the diff are in scaled space and corr is scale-free — no MulUnary.
+        // Otherwise fold scale via MulUnary (original behavior). pops m_prev (old cb_m), keeps m_cur.
+        if constexpr (Prescaled) {
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(sq),
+                ckl::BinaryFpu<
+                    ckl::input(cb_m, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                    ckl::input(cb_max_cur, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Block),
+                    ckl::BinaryFpuOp::Sub,
+                    ckl::BroadcastDim::None>{},
+                ckl::Exp<CorrExpMode>{},
+                ckl::PackTile<ckl::output(cb_exp_max_diff)>{});
+        } else {
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(sq),
+                ckl::BinaryFpu<
+                    ckl::input(cb_m, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                    ckl::input(cb_max_cur, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Block),
+                    ckl::BinaryFpuOp::Sub,
+                    ckl::BroadcastDim::None>{},
+                ckl::MulUnary<>{p.scale_bits},
+                ckl::Exp<CorrExpMode>{},
+                ckl::PackTile<ckl::output(cb_exp_max_diff)>{});
+        }
     }
 
     if constexpr (FuseRowsum) {
-        // ---- 4+5 (FUSED, Fusion #2). P = exp((S - m_cur)·scale) -> cb_exp AND the partial
+        // ---- 4+5 (FUSED, Fusion #2). P = exp(S - m_cur) -> cb_exp AND the partial
         // (rows × 32-col, un-reduced) row-sum -> cb_sum_new, from ONE exp DEST window. The
         // dedicated per-block reduce<SUM> is eliminated (collapsed once post-loop). cb_qk_scores
-        // is popped inside; cb_max_cur is held (the copy below pops it). ----
-        fused_exp_dual_pack(sq, sk, p.scale_bits);
+        // is popped inside; cb_max_cur is held (the copy below pops it). Scale is pre-folded into Q. ----
+        fused_exp_dual_pack(sq, sk);
         // m_cur -> running max cb_m (cb_m was popped above for !first; freshly filled for first).
         ckl::copy<ckl::input(cb_max_cur), ckl::output(cb_m)>(ckl::EltwiseShape::tiles(sq));
     } else {
-        // ---- 4. P = exp((S - m_cur)·scale)  (in place, m_cur col-broadcast) ----
+        // ---- 4. P = exp(S - m_cur)  (in place, m_cur col-broadcast; scale pre-folded into Q) ----
         // ablate>=3: skip the exp chain (the dominant per-KV-block SFPU op over the whole
         // sq×sk score block) to isolate its cost. cb_qk_scores is left as the matmul-stub
         // pushed it (sq·sk tiles present) and popped by the PV matmul-stub → CB balance holds.
         if (p.ablate < 3) {
-            ckl::eltwise_chain(
-                ckl::EltwiseShape::grid(sq, sk),
-                ckl::BinaryFpu<
-                    ckl::input(cb_qk_scores),
-                    ckl::input(cb_max_cur, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Col),
-                    ckl::BinaryFpuOp::Sub,
-                    ckl::BroadcastDim::Col>{},
-                ckl::MulUnary<>{p.scale_bits},
-                ckl::Exp<PExpMode>{},
-                ckl::PackTile<ckl::output(cb_qk_scores)>{});
+            if constexpr (Prescaled) {
+                // scale already in the scores (Q pre-scaled) -> scale-free (no MulUnary).
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::grid(sq, sk),
+                    ckl::BinaryFpu<
+                        ckl::input(cb_qk_scores),
+                        ckl::input(cb_max_cur, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Col),
+                        ckl::BinaryFpuOp::Sub,
+                        ckl::BroadcastDim::Col>{},
+                    ckl::Exp<PExpMode>{},
+                    ckl::PackTile<ckl::output(cb_qk_scores)>{});
+            } else {
+                // fold scale via MulUnary (original behavior; unscaled Q in cb_q_in).
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::grid(sq, sk),
+                    ckl::BinaryFpu<
+                        ckl::input(cb_qk_scores),
+                        ckl::input(cb_max_cur, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Col),
+                        ckl::BinaryFpuOp::Sub,
+                        ckl::BroadcastDim::Col>{},
+                    ckl::MulUnary<>{p.scale_bits},
+                    ckl::Exp<PExpMode>{},
+                    ckl::PackTile<ckl::output(cb_qk_scores)>{});
+            }
         }
 
         // m_cur -> running max cb_m (cb_m was popped above for !first; freshly filled for first).
@@ -505,6 +559,12 @@ void kernel_main() {
     // fp32_dest_acc_en=False throughput regime (implies fuse_oaccum), so the max-precision path
     // stays byte-identical. Env TTNN_SDPA_NO_FUSE_ROWSUM forces it off for same-build A/B.
     constexpr uint32_t fuse_rowsum = get_compile_time_arg_val(17);
+    // prescale_q — pre-scale Q into cb_q_scaled once per Q-block so QKᵀ scores already include
+    // the attention scale and every exp is scale-free (enabling the unclamped fused P-exp). Host
+    // sets this iff the separate cb_q_scaled CB fits L1 (the common/perf path); when it doesn't
+    // (large-head_dim fp32 shapes at the L1 ceiling) the host also disables fuse_rowsum and the
+    // kernel keeps the original scale-in-exp behavior (byte-identical, no regression).
+    constexpr uint32_t prescale_q = get_compile_time_arg_val(18);
 
     const uint32_t q_count = get_arg_val<uint32_t>(0);
     const uint32_t k_num_chunks = get_arg_val<uint32_t>(1);
@@ -530,6 +590,20 @@ void kernel_main() {
     mm_block_init(cb_q_in, cb_k_in, cb_qk_scores, 0, 1, 1, dht);
 
     for (uint32_t qb = 0; qb < q_count; ++qb) {
+        // Pre-scale Q once per Q-block (Prescaled path only): cb_q_scaled = cb_q_in · scale (folds
+        // the attention scale). A clean non-in-place op (read cb_q_in, pop it; write the separate
+        // resident cb_q_scaled) — the streaming chain consumes cb_q_in and produces cb_q_scaled,
+        // which QKᵀ retains across the KV loop and the Q-block-end pop frees. Scores therefore
+        // already include scale, so every exp is scale-free (P-exp can use unclamped exp). When
+        // prescale_q is off, Q stays unscaled in cb_q_in and scale is folded into each exp.
+        if constexpr (prescale_q != 0u) {
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(q_block_tiles),
+                ckl::CopyTile<ckl::input(cb_q_in)>{},
+                ckl::MulUnary<>{scale_bits},
+                ckl::PackTile<ckl::output(cb_q_scaled)>{});
+        }
+
         // Causal (mask_regime==2): truncate the KV loop to the blocks at/before the
         // diagonal and stamp the mask only on the straddling blocks — reader agrees
         // tile-for-tile via the shared sdpa_causal predicates. custom/none run the
@@ -543,13 +617,13 @@ void kernel_main() {
             // exp_mode is a compile-time constant → the two unused kv_step
             // instantiations are dead-code-eliminated (no binary bloat).
             if constexpr (exp_mode == 1u) {
-                kv_step<ckl::Approx::Fast, ckl::Approx::Fast, fuse_oaccum != 0u, fuse_rowsum != 0u>(
+                kv_step<ckl::Approx::Fast, ckl::Approx::Fast, fuse_oaccum != 0u, fuse_rowsum != 0u, prescale_q != 0u>(
                     k == 0, apply_mask, p);
             } else if constexpr (exp_mode == 2u) {
-                kv_step<ckl::Approx::Exact, ckl::Approx::Fast, fuse_oaccum != 0u, fuse_rowsum != 0u>(
+                kv_step<ckl::Approx::Exact, ckl::Approx::Fast, fuse_oaccum != 0u, fuse_rowsum != 0u, prescale_q != 0u>(
                     k == 0, apply_mask, p);
             } else {
-                kv_step<ckl::Approx::Exact, ckl::Approx::Exact, fuse_oaccum != 0u, fuse_rowsum != 0u>(
+                kv_step<ckl::Approx::Exact, ckl::Approx::Exact, fuse_oaccum != 0u, fuse_rowsum != 0u, prescale_q != 0u>(
                     k == 0, apply_mask, p);
             }
         }
@@ -582,8 +656,13 @@ void kernel_main() {
                 ckl::BroadcastDim::Col>(ckl::EltwiseShape::grid(sq, dht));
         }
 
-        // Release the leftover running max (never consumed) and the retained Q.
+        // Release the leftover running max (never consumed) and the retained Q (cb_q_scaled on the
+        // Prescaled path — it was produced by the pre-scale and retained by QKᵀ; else cb_q_in).
         cb_pop_front(cb_m, sq);
-        cb_pop_front(cb_q_in, q_block_tiles);
+        if constexpr (prescale_q != 0u) {
+            cb_pop_front(cb_q_scaled, q_block_tiles);
+        } else {
+            cb_pop_front(cb_q_in, q_block_tiles);
+        }
     }
 }

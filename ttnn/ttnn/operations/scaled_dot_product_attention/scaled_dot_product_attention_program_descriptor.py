@@ -97,6 +97,7 @@ CB_OUT_B = 7
 CB_OUT_NEW = 8
 CB_SUM_SCALED = 9
 CB_OUT_SCALED = 10
+CB_Q_SCALED = 11  # pre-scaled Q (Q·scale), resident across the KV loop (prescale_q path only)
 
 
 def _resolve_exp_mode(math_approx_mode, fp32_dest_acc_en):
@@ -137,7 +138,9 @@ def _divisors_leq(n, cap):
     return [d for d in range(1, min(n, cap) + 1) if n % d == 0]
 
 
-def _cb_specs(sq, sk, dht, needs_mask, in_df, out_df, interm_df, scaler_df, mask_df, fuse_rowsum=False):
+def _cb_specs(
+    sq, sk, dht, needs_mask, in_df, out_df, interm_df, scaler_df, mask_df, fuse_rowsum=False, prescale_q=False
+):
     """(index, num_pages, data_format) for every CB — the SINGLE source of truth
     shared by the L1-footprint budget calc and the actual CB build below. Page
     counts are functions of the block factors sq/sk and DHt (never the full S).
@@ -173,6 +176,12 @@ def _cb_specs(sq, sk, dht, needs_mask, in_df, out_df, interm_df, scaler_df, mask
         # Fusion #2: P = exp(...) dual-pack target (separate from cb_qk_scores so pack_tile<true>
         # writes only into reserved space). Same bf16 interm format as cb_sum_new.
         specs.append((CB_EXP, qk_tiles, interm_df))
+    if prescale_q:
+        # Pre-scaled Q (Q·scale): produced once per Q-block, held resident across the KV loop so
+        # QKᵀ scores already include scale (both exps scale-free). Same format as cb_q_in (Q's
+        # dtype); sized to one Q-block. Allocated ONLY when it fits L1 (the host `prescale_q`
+        # gate); a large-head_dim fp32 shape at the L1 ceiling omits it and keeps scale-in-exp.
+        specs.append((CB_Q_SCALED, q_tiles, in_df))
     if needs_mask:
         specs.append((CB_MASK_IN, qk_tiles * KV_BUFFER_FACTOR, mask_df))
     return specs
@@ -182,10 +191,12 @@ def _cb_footprint_bytes(specs):
     return sum(num_pages * ttnn.tile_size(df) for _, num_pages, df in specs)
 
 
-def _fits_l1(sq, sk, dht, needs_mask, in_df, out_df, interm_df, scaler_df, mask_df, fuse_rowsum=False):
+def _fits_l1(
+    sq, sk, dht, needs_mask, in_df, out_df, interm_df, scaler_df, mask_df, fuse_rowsum=False, prescale_q=False
+):
     return (
         _cb_footprint_bytes(
-            _cb_specs(sq, sk, dht, needs_mask, in_df, out_df, interm_df, scaler_df, mask_df, fuse_rowsum)
+            _cb_specs(sq, sk, dht, needs_mask, in_df, out_df, interm_df, scaler_df, mask_df, fuse_rowsum, prescale_q)
         )
         <= L1_CB_BUDGET
     )
@@ -343,6 +354,39 @@ def create_program_descriptor(
     q_num_chunks = sqt // sq_chunk_t
     k_num_chunks = skvt // sk_chunk_t
 
+    # ---- prescale_q gate: pre-scale Q into a SECOND resident CB (cb_q_scaled) so QKᵀ scores
+    # already include the attention scale and every exp runs scale-free (enabling the unclamped
+    # fused P-exp). This only pays off with the fused dual-pack, and it costs one extra resident
+    # Q-block of L1. Enable it only when that extra CB fits L1 at the chosen chunk (checked ON TOP
+    # of the baseline footprint, incl. cb_exp when in the fuse_rowsum regime). Large-head_dim fp32
+    # shapes already sit at the L1 ceiling → prescale_q off there, and (below) fuse_rowsum is also
+    # disabled so the kernel keeps the original scale-in-exp behavior (byte-identical, no L1 growth).
+    prescale_q = (
+        1
+        if _fits_l1(
+            sq_chunk_t,
+            sk_chunk_t,
+            dht,
+            needs_mask_cb,
+            in_df,
+            out_df,
+            interm_df,
+            scaler_df,
+            mask_df,
+            fuse_rowsum=fuse_rowsum_regime,
+            prescale_q=True,
+        )
+        else 0
+    )
+
+    # Fusion #1 / #2 gates (computed here so the CB build below allocates cb_exp per the REAL gate).
+    # fuse_oaccum requires full q-chunks (always true — sq_chunk_t divides sqt). fuse_rowsum
+    # additionally requires the throughput regime AND prescale_q (the fused dual-pack runs the
+    # unclamped scale-free P-exp, which only composes when Q is pre-scaled): if the second Q CB
+    # doesn't fit L1 (prescale_q=0), fall back to the non-fused, scale-in-exp path.
+    fuse_oaccum = 0 if os.environ.get("TTNN_SDPA_NO_FUSE_OACCUM") else (1 if (sqt % sq_chunk_t == 0) else 0)
+    fuse_rowsum = 1 if (fuse_oaccum and fuse_rowsum_regime and (sqt % sq_chunk_t == 0) and prescale_q) else 0
+
     # Subblock decomposition for the two matmuls (block held in DEST, num_k_blocks=1).
     qk_sb_h, qk_sb_w, qk_in0_sb, qk_in1_sb = _pick_subblock(sq_chunk_t, sk_chunk_t, dst_limit)
     pv_sb_h, pv_sb_w, pv_in0_sb, pv_in1_sb = _pick_subblock(sq_chunk_t, dht, dst_limit)
@@ -462,7 +506,17 @@ def create_program_descriptor(
     cbs = [
         cb(index, num_pages, data_format)
         for index, num_pages, data_format in _cb_specs(
-            sq_chunk_t, sk_chunk_t, dht, needs_mask_cb, in_df, out_df, interm_df, scaler_df, mask_df, fuse_rowsum_regime
+            sq_chunk_t,
+            sk_chunk_t,
+            dht,
+            needs_mask_cb,
+            in_df,
+            out_df,
+            interm_df,
+            scaler_df,
+            mask_df,
+            bool(fuse_rowsum),
+            bool(prescale_q),
         )
     ]
 
@@ -532,12 +586,8 @@ def create_program_descriptor(
     )
 
     # ---- Compute kernel ----
-    # Fusion #1 / #2 gates (compute CT args 16 / 17). fuse_oaccum requires full q-chunks (always
-    # true here — sq_chunk_t divides sqt). fuse_rowsum additionally requires the throughput regime
-    # (fuse_rowsum_regime) AND is gated to imply fuse_oaccum (the kernel's fused-rowsum path always
-    # L1-accumulates PV onto cb_o): if O-accumulate is env-disabled, row-sum fusion is off too.
-    fuse_oaccum = 0 if os.environ.get("TTNN_SDPA_NO_FUSE_OACCUM") else (1 if (sqt % sq_chunk_t == 0) else 0)
-    fuse_rowsum = 1 if (fuse_oaccum and fuse_rowsum_regime and (sqt % sq_chunk_t == 0)) else 0
+    # Fusion #1 / #2 gates (compute CT args 16 / 17) — fuse_oaccum / fuse_rowsum are computed
+    # above (before the CB build, so cb_exp allocation follows the real fuse_rowsum gate).
 
     # k_num_chunks is a RUNTIME arg (not CT): a constexpr loop bound would let
     # the compiler fully unroll the large kv_step body per KV-block, blowing the
@@ -589,6 +639,11 @@ def create_program_descriptor(
         # =False, env not disabling). The full-q-chunk requirement is already carried by
         # fuse_oaccum. Non-qualifying shapes get 0 and take the byte-identical non-fused fallback.
         fuse_rowsum,
+        # prescale_q (CT 18) — pre-scale Q into the resident cb_q_scaled so QKᵀ scores include the
+        # attention scale and every exp is scale-free (enabling the unclamped fused P-exp). Set iff
+        # the extra Q CB fits L1 (computed above); when 0 the kernel keeps the original scale-in-exp
+        # behavior and cb_q_scaled is not allocated. fuse_rowsum already implies prescale_q.
+        prescale_q,
     ]
     # Rebuild the compute config with the dtype-correct fidelity (never pass a
     # HiFi4 + fp32-DEST + bf16 combo through — issue #38306). fp32_dest_acc_en
