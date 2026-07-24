@@ -1153,10 +1153,11 @@ def get_device_data_generate_report(
     export_csv: bool = True,
     cleanup_device_log: bool = False,
     device_analysis_types: Tuple[str, ...] | List[str] = (),
-) -> Path:
+) -> Optional[Path]:
     """Generate CSV rows using only device-side logs (no host metadata).
 
-    Returns the absolute path of the report directory used for CSV output.
+    Returns the absolute path of the report directory used for CSV output when a
+    device report is produced, otherwise ``None``.
     """
 
     deviceTimesLog = os.path.join(logFolder, PROFILER_DEVICE_SIDE_LOG)
@@ -1409,9 +1410,10 @@ def get_device_data_generate_report(
 
         if cleanup_device_log:
             os.remove(deviceTimesLog)
-    else:
-        logger.info("No device logs found")
-    return Path(outFolder)
+        return Path(outFolder)
+
+    logger.info("No device logs found")
+    return None
 
 
 def generate_reports(
@@ -1917,6 +1919,9 @@ def generate_reports(
     logger.info(f"OPs csv generated at: {allOpsCSVPath}")
     write_performance_manifest(outFolder, ops_csv=allOpsCSVPath)
     return Path(outFolder)
+
+
+def analyzeNoCTraces(logFolder: Path):
     """Attempts to import tt-npe from $PYTHONPATH and process noc traces to
     obtain per-operation DRAM BW and NoC utilization statistics and create
     visualizer timeline files"""

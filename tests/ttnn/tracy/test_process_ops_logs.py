@@ -200,3 +200,19 @@ def test_generate_reports_writes_multicast_noc_util_column(tmp_path):
         row = next(reader)
         assert "MULTICAST NOC UTIL (%)" in reader.fieldnames
         assert row["MULTICAST NOC UTIL (%)"] == "25.0"
+
+
+def test_get_device_data_generate_report_returns_none_without_device_logs(tmp_path):
+    log_folder = tmp_path / "logs"
+    log_folder.mkdir()
+    report_folder = tmp_path / "reports"
+
+    result = process_ops_logs.get_device_data_generate_report(
+        logFolder=log_folder,
+        outputFolder=report_folder,
+        date=False,
+        nameAppend=None,
+        export_csv=False,
+    )
+
+    assert result is None
