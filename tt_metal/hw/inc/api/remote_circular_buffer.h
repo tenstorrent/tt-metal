@@ -323,8 +323,9 @@ FORCE_INLINE void remote_cb_sender_barrier(uint32_t cb_id) {
     uint32_t num_receivers = remote_cb_num_receivers(remote_cb.num_receivers_and_remote_pages_sent_ptr);
 
     for (uint32_t i = 0; i < num_receivers; ++i) {
-        while (*pages_acked_ptr != *pages_sent_ptr) {
-        }
+        do {
+            invalidate_l1_cache();
+        } while (*pages_acked_ptr != *pages_sent_ptr);
         pages_acked_ptr += REMOTE_CB_LOCAL_PAGES_STRIDE / sizeof(uint32_t);
         pages_sent_ptr += REMOTE_CB_LOCAL_PAGES_STRIDE / sizeof(uint32_t);
     }
