@@ -83,18 +83,6 @@ SGDDeviceOperation::tensor_return_value_t SGDDeviceOperation::create_output_tens
     return tensor_args.param;
 }
 
-ttsl::hash::hash_t SGDDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& param_tensor = tensor_args.param;
-    const auto& param_logical_shape = param_tensor.logical_shape();
-    auto nesterov = args.nesterov;
-    auto momentum_initialized = tensor_args.momentum_buffer.has_value();
-    auto hash = tt::tt_metal::operation::hash_operation<SGDDeviceOperation>(
-        nesterov, momentum_initialized, param_tensor.dtype(), param_logical_shape);
-
-    return hash;
-}
-
 }  // namespace ttml::metal::optimizers::sgd::device
 
 namespace ttnn::prim {
