@@ -28,6 +28,7 @@ if _WORLD_SIZE != 2:
 _MPI_RANK = int(os.environ["OMPI_COMM_WORLD_RANK"])
 
 # Fabric pinned FABRIC_2D by conftest's autouse fixture (both ranks must match).
+import torch  # noqa: E402
 import ttnn  # noqa: E402
 
 from utils.weight_bridge import (  # noqa: E402
@@ -50,8 +51,6 @@ _SPECS = {
 
 def _synthetic_torch() -> dict:
     """Deterministic per-key torch bf16 tensors (both ranks compute identically)."""
-    import torch
-
     out = {}
     for i, key in enumerate(sorted(_SPECS)):
         shape = _SPECS[key]
@@ -88,8 +87,6 @@ def _sender_side(mesh) -> None:
 
 
 def _receiver_side(parent, submeshes, num_submeshes) -> None:
-    import torch
-
     expected = _synthetic_torch()
     bridge = HostWeightBridge.init_receiver(mesh=parent, peer_rank=SENDER_RANK, submeshes=submeshes)
     bridge.connect()

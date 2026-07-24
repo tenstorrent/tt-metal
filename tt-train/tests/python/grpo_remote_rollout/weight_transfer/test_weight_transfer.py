@@ -33,6 +33,7 @@ if _WORLD_SIZE != 2:
 _MPI_RANK = int(os.environ["OMPI_COMM_WORLD_RANK"])
 
 import ttnn  # noqa: E402
+from transformers import AutoTokenizer  # noqa: E402
 
 from utils.weight_bridge import TTML_RANK, TTT_RANK  # noqa: E402
 
@@ -55,7 +56,6 @@ TTT_MAX_SEQ_LEN = 512
 def _ttml_side() -> None:
     """Drive: handshake -> pre-push gen -> push_weights -> post-push gen -> shutdown."""
     import ttml
-    from transformers import AutoTokenizer
     from ttml.common.config import get_model_config
 
     from _completer_utils import close_device, load_device_config, open_device
@@ -135,7 +135,6 @@ def _ttml_side() -> None:
 
 def _ttt_side() -> None:
     """Host one TttGenerationWorker over four [1, 1] submeshes + MPIRolloutServer."""
-    from transformers import AutoTokenizer
     from utils.mpi_rollout import MPIRolloutServer
     from utils.weight_bridge import HostWeightBridge
     from utils.llama_ttt_presets import bf16_attn_bfp8_mlp_optimizations, llama_stop_and_pad

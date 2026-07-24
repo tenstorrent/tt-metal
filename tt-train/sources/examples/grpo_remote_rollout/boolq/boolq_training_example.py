@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
+from transformers import AutoTokenizer
 
 logger.remove()
 logger.add(sys.stderr, level="ERROR")
@@ -191,7 +192,6 @@ def _close_ttml_device() -> None:
 def _ttml_main() -> None:
     import ttml
     from datasets import load_dataset
-    from transformers import AutoTokenizer
     from ttml.common.config import get_model_config
     from ttml.trainers import GRPOTrainer, get_grpo_config
     from utils.llama_grpo_completer import (
