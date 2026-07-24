@@ -60,7 +60,7 @@ TEST(HostTensorSpecPreservation, ToLayoutInterleavedRmTileRoundTrip) {
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE, tile), memory_config, alignment));
     auto tile_source = HostTensor::from_vector<float>(data, tile_source_spec);
 
-    auto rm = to_layout(tile_source, Layout::ROW_MAJOR);
+    auto rm = to_row_major_layout(tile_source);
     auto expected_rm_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(rm.tensor_spec(), expected_rm_spec));
@@ -110,7 +110,7 @@ TEST(HostTensorSpecPreservation, ToLayoutShardedPreservesShardSpecAndPackedSizes
         distributed::MeshCoordinate(0, 1), [&]() { return HostBuffer(std::vector<float>(data_1)); });
     auto source = HostTensor::from_buffer(std::move(distributed_buffer), source_spec, topology);
 
-    auto result = to_layout(source, Layout::ROW_MAJOR);
+    auto result = to_row_major_layout(source);
 
     auto expected_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));

@@ -7,6 +7,7 @@
 #include <functional>
 #include <optional>
 
+#include <tt_stl/optional_reference.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -23,6 +24,7 @@ Tensor to_layout(
     const std::optional<DataType>& dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    float pad_value = 0.0f);
+    float pad_value = 0.0f,
+    ttsl::optional_reference<const tt::tt_metal::Tile> tile = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::quasar
