@@ -921,3 +921,28 @@
   Median wall improves `659.024 -> 652.986 us` (`-6.039 us`, `-0.92%`), active
   time improves `637.981 -> 631.827 us`, and recurrence improves
   `183.096 -> 177.339 us`. Retain `kd` as an accepted BF16-storage candidate.
+
+
+### 2026-07-24 16:11:37 UTC — Store dl in BF16
+
+- Hypothesis: vector `dl` is only one K-by-1 tile column per chunk, so BF16
+  storage should be numerically safe but yield at most a small traffic win.
+  Mask bit 5 (`0x20`) selects `dl` only.
+- Direct correctness:
+  `QWEN_KDA_PREP_BF16_MASK=0x20 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_chunk_kda.py -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 5/5 in 20.18 s. HiFi4 output/state PCC is
+  `0.999993-0.999995`; the HiFi2 case is `0.999919/0.999917`.
+- TP=8 layer correctness:
+  `QWEN_KDA_PREP_BF16_MASK=0x20 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_tp_weights.py::test_tp_layer_pcc -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 1/1 in 6.21 s; output/recurrent/convolution
+  PCC exactly matches control at `0.999964/0.999903/0.999997`.
+- Measurement command:
+  `QWEN_KDA_PREP_BF16_MASK=0x20 PERF_TRACE=1 PERF_SEQ=640 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 1/1.
+- Report:
+  `generated/profiler/reports/2026_07_24_16_11_37/ops_perf_results_2026_07_24_16_11_37.csv`
+  (SHA-256 `b260736cf9c3aec4f12e12551b13b4ba56dafcacbc9a4b343f3722f97222f71f`).
+  Median wall improves `659.024 -> 657.743 us` (`-1.281 us`, `-0.19%`), active
+  time improves `637.981 -> 637.203 us`, and recurrence improves
+  `183.096 -> 181.890 us`. Retain `dl` as a small, numerically clean candidate
+  for combination testing; it is not meaningful enough to select alone.
