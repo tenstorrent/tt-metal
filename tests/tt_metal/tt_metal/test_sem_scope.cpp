@@ -46,6 +46,8 @@ protected:
     const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_scope_smoke.cpp";
     const std::string kernel_path_concurrent =
         "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_scope_concurrent.cpp";
+    const std::string kernel_path_coexist =
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_scope_coexist.cpp";
     uint32_t report_addr{0};
     uint32_t num_dms_{0};
     bool is_quasar{false};
@@ -201,6 +203,72 @@ protected:
         return result.empty() ? 0u : result[0];
     }
 
+    // Coexistence run: a DM_LOCAL_CACHED semaphore (pool) + an EXTERNAL semaphore (ring) hammered
+    // concurrently by all DMs; returns {cached_final, external_final}, both expected num_dms*iters.
+    std::pair<uint32_t, uint32_t> run_coexist() {
+        std::vector<uint32_t> zero(2, 0);
+        tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, zero);
+
+        distributed::MeshWorkload workload;
+        Program program;
+        distributed::MeshCoordinate zero_coord{0, 0};
+        distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
+
+        experimental::SemaphoreSpec cached_sem{
+            .unique_id = experimental::SemaphoreSpecName{"cached_sem"}, .target_nodes = core};
+        experimental::SemaphoreSpec external_sem{
+            .unique_id = experimental::SemaphoreSpecName{"external_sem"}, .target_nodes = core};
+        experimental::SemaphoreSpec done_sem{
+            .unique_id = experimental::SemaphoreSpecName{"done_sem"}, .target_nodes = core};
+        cached_sem.scope = SemaphoreScope::DM_LOCAL_CACHED;  // -> pool
+        external_sem.scope = SemaphoreScope::EXTERNAL;       // -> ring
+        done_sem.scope = SemaphoreScope::EXTERNAL;           // completion barrier
+
+        const experimental::KernelSpecName DM_KERNEL{"sem_coexist_kernel"};
+        experimental::KernelSpec kernel_spec{
+            .unique_id = DM_KERNEL,
+            .source = kernel_path_coexist,
+            .num_threads = num_dms_,
+            .semaphore_bindings =
+                {{.semaphore_spec_name = experimental::SemaphoreSpecName{"cached_sem"}, .accessor_name = "cached"},
+                 {.semaphore_spec_name = experimental::SemaphoreSpecName{"external_sem"}, .accessor_name = "external"},
+                 {.semaphore_spec_name = experimental::SemaphoreSpecName{"done_sem"}, .accessor_name = "done"}},
+            .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times", "num_threads"}},
+            .hw_config = experimental::DataMovementGen2Config{},
+        };
+
+        experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = core};
+        experimental::ProgramSpec spec{
+            .name = "sem_scope_coexist",
+            .kernels = {kernel_spec},
+            .semaphores = {cached_sem, external_sem, done_sem},
+            .work_units = {main_wu},
+        };
+        program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
+
+        experimental::ProgramRunArgs params;
+        params.kernel_run_args = {
+            experimental::ProgramRunArgs::KernelRunArgs{
+                .kernel = DM_KERNEL,
+                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                    core,
+                    {{"report_addr", report_addr},
+                     {"increment_times", concurrent_iterations},
+                     {"num_threads", num_dms_}}),
+            },
+        };
+        experimental::SetProgramRunArgs(program, params);
+        workload.add_program(device_range, std::move(program));
+        RunProgram(mesh_device_, workload);
+
+        tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 2 * sizeof(uint32_t), result);
+        EXPECT_EQ(result.size(), 2u);
+        if (result.size() < 2) {
+            return {0u, 0u};
+        }
+        return {result[0], result[1]};
+    }
+
     // Build (but do not run) a minimal ProgramSpec whose semaphore carries the given scope
     // intent on the given target, so ValidateProgramSpec's ResolveSemaphoreScope runs.
     // Throws (TT_FATAL) on a contradiction. No JIT/emu-kernel execution.
@@ -324,6 +392,27 @@ TEST_F(SemScopeFixture, TestDmLocalCachedProducerConsumer) {
     const uint32_t observed = run_concurrent(SemaphoreScope::DM_LOCAL_CACHED, "MODE_PRODUCER_CONSUMER");
     log_info(LogTest, "DM_LOCAL_CACHED producer/consumer value(): {} (expected 0)", observed);
     EXPECT_EQ(observed, 0u) << "Semaphore<DM_LOCAL_CACHED>::down() lost a concurrent producer increment.";
+}
+
+// ---- S3: dedicated cached-only pool coexistence proof ----
+
+// A DM_LOCAL_CACHED sem (pool) + an EXTERNAL sem (ring) hammered concurrently by all DMs in one
+// program. The pool is physically disjoint from the NoC-written ring (MEM_DM_CACHED_SEM_BASE <
+// MEM_MAP_END <= kernel_config ring base), so the cached AMO's 64B-line write-back cannot clobber
+// the external sem's ring word (nor vice versa). Both counts exact => coexistence works.
+TEST_F(SemScopeFixture, TestCachedExternalCoexistence) {
+    if (!is_quasar) {
+        GTEST_SKIP() << "cached pool + AMO + mhartid roles are Quasar-only";
+    }
+    const auto [cached_val, external_val] = run_coexist();
+    const uint32_t expected = num_dms_ * concurrent_iterations;
+    log_info(
+        LogTest, "coexistence: cached={} external={} (each expected {})", cached_val, external_val, expected);
+    EXPECT_EQ(cached_val, expected)
+        << "DM_LOCAL_CACHED (pool) count wrong -> cached AMO lost updates or the pool was not initialised.";
+    EXPECT_EQ(external_val, expected)
+        << "EXTERNAL (ring) count wrong -> the cached sem's dirty-line write-back clobbered the NoC-written "
+           "ring word (pool separation FAILED).";
 }
 
 // ---- Phase-2 S2a: host-side scope resolution + contradiction FATALs ----
