@@ -249,10 +249,8 @@ void kernel_main() {
     }
 #endif
 
-    // ===== Per-batch loop — this core handles batches core_id, core_id+total_workers, ... =====
-    // Running count of cross-device (fabric) plan entries seen; used to round-robin each remote send
-    // across the sender cores / links. Persists across batches. Every core counts the same entries in
-    // the same order, so they agree on which core emits which send.
+    // Variable that tracks the number of fabric sends. Used to determine which fabric
+    // link will be used to send the token to the destination device.
     uint32_t fabric_sends_seen = 0;
     for (uint32_t batch_idx = core_id; batch_idx < effective_total_batches; batch_idx += total_workers) {
         uint32_t batch_start = batch_idx * read_batch_size;
