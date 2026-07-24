@@ -7,6 +7,7 @@
 #include <type_traits>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -70,6 +71,14 @@ void kernel_main() {
     // Number of running cores / users. The final-indices CB holds one stick per user (no longer
     // hard-coded to 32), so this kernel waits/pops exactly `num_users` sticks.
     constexpr uint32_t num_users = get_compile_time_arg_val(args_base + 17);
+    // buffer-reuse sync signal: when enabled, increment `buffer_reuse_sync_sem_addr` on the gather's drain core once at
+    // the very end of the op so the next decode step's SAMPLING_VALUES all-gather can safely reuse
+    // the persistent buffer. Closes a cross-sub-device Write-After-Read race that only shows up under
+    // trace (see models/common/sampling and the llama3_70b_galaxy TT_CCL buffer_reuse_sync_sem).
+    constexpr uint32_t signal_buffer_reuse_sync_sem = get_compile_time_arg_val(args_base + 18);
+    constexpr uint32_t buffer_reuse_sync_sem_addr = get_compile_time_arg_val(args_base + 19);
+    constexpr uint32_t buffer_reuse_sync_drain_noc_x = get_compile_time_arg_val(args_base + 20);
+    constexpr uint32_t buffer_reuse_sync_drain_noc_y = get_compile_time_arg_val(args_base + 21);
     constexpr uint32_t k_chunk_size = num_cores * sizeof(uint32_t);     // 4 bytes per uint32_t
     constexpr uint32_t p_chunk_size = num_cores * sizeof(uint16_t);     // 2 bytes per uint16_t
     constexpr uint32_t temp_chunk_size = num_cores * sizeof(uint16_t);  // 2 bytes per uint16_t
@@ -245,4 +254,13 @@ void kernel_main() {
         {.offset_bytes = core_id * 4},
         {.page_id = 0, .offset_bytes = core_id * 4});
     noc.async_write_barrier();
+
+    // Signal read-complete: this core is done reading the gathered SAMPLING_VALUES/INDICES for this step.
+    // all-gather waits until all sampling cores have signalled before overwriting the persistent buffer
+    if constexpr (signal_buffer_reuse_sync_sem != 0) {
+        const uint64_t buffer_reuse_sync_noc_addr =
+            get_noc_addr(buffer_reuse_sync_drain_noc_x, buffer_reuse_sync_drain_noc_y, buffer_reuse_sync_sem_addr, noc.get_noc_id());
+        noc_semaphore_inc(buffer_reuse_sync_noc_addr, 1, noc.get_noc_id());
+        noc.async_atomic_barrier();
+    }
 }

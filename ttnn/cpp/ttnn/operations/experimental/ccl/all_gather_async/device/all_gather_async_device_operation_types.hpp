@@ -38,6 +38,11 @@ struct AllGatherAsyncParams {
     std::optional<uint32_t> num_buffers_per_channel;
     bool reverse_order = false;
     std::optional<CoreRangeSet> sub_core_grid;
+    // buffer-reuse sync semaphore for safe reuse of a persistent output buffer under trace: the drain core
+    // waits until `buffer_reuse_sync_sem_wait_value` increments arrive (one per downstream consumer core, e.g. the
+    // sampling op) before overwriting the persistent buffer. See the llama3_70b_galaxy TT_CCL buffer_reuse_sync_sem.
+    std::optional<GlobalSemaphore> buffer_reuse_sync_semaphore;
+    std::optional<uint32_t> buffer_reuse_sync_sem_wait_value;
 
     AllGatherAsyncParams(
         int32_t dim,
@@ -57,7 +62,9 @@ struct AllGatherAsyncParams {
         std::optional<uint32_t> num_workers_per_link,
         std::optional<uint32_t> num_buffers_per_channel,
         bool reverse_order,
-        const std::optional<CoreRangeSet>& sub_core_grid) :
+        const std::optional<CoreRangeSet>& sub_core_grid,
+        const std::optional<GlobalSemaphore>& buffer_reuse_sync_semaphore = std::nullopt,
+        std::optional<uint32_t> buffer_reuse_sync_sem_wait_value = std::nullopt) :
         dim(dim),
         num_links(num_links),
         ring_size(ring_size),
@@ -75,7 +82,9 @@ struct AllGatherAsyncParams {
         num_workers_per_link(num_workers_per_link),
         num_buffers_per_channel(num_buffers_per_channel),
         reverse_order(reverse_order),
-        sub_core_grid(sub_core_grid) {}
+        sub_core_grid(sub_core_grid),
+        buffer_reuse_sync_semaphore(buffer_reuse_sync_semaphore),
+        buffer_reuse_sync_sem_wait_value(buffer_reuse_sync_sem_wait_value) {}
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dim",
@@ -94,7 +103,9 @@ struct AllGatherAsyncParams {
         "num_workers_per_link",
         "num_buffers_per_channel",
         "reverse_order",
-        "sub_core_grid");
+        "sub_core_grid",
+        "buffer_reuse_sync_semaphore_present",
+        "buffer_reuse_sync_sem_wait_value");
     auto attribute_values() const {
         return std::make_tuple(
             dim,
@@ -113,7 +124,9 @@ struct AllGatherAsyncParams {
             num_workers_per_link,
             num_buffers_per_channel,
             reverse_order,
-            sub_core_grid);
+            sub_core_grid,
+            buffer_reuse_sync_semaphore.has_value(),
+            buffer_reuse_sync_sem_wait_value);
     }
 };
 

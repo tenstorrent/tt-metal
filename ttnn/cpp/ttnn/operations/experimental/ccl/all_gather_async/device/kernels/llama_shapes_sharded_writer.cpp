@@ -32,10 +32,11 @@ constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(6);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(7);
 constexpr uint32_t ring_size = get_compile_time_arg_val(8);
 constexpr uint32_t use_barrier_sem = get_compile_time_arg_val(9);
+constexpr uint32_t use_buffer_reuse_sync_sem = get_compile_time_arg_val(10);
 constexpr ccl_routing_utils::line_multicast_route_info_t forward_multicast_route_info =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<10>();
+    ccl_routing_utils::get_line_multicast_route_info_from_args<11>();
 constexpr ccl_routing_utils::line_multicast_route_info_t backward_multicast_route_info =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<10 + ccl_routing_utils::num_line_multicast_args>();
+    ccl_routing_utils::get_line_multicast_route_info_from_args<11 + ccl_routing_utils::num_line_multicast_args>();
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
@@ -62,6 +63,8 @@ void kernel_main() {
     size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t buffer_reuse_sync_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t buffer_reuse_sync_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
     tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores;
     tt_l1_ptr uint32_t* core_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
@@ -123,6 +126,16 @@ void kernel_main() {
 
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+    }
+
+    // buffer-reuse sync wait: on the drain core (buffer_reuse_sync_sem_addr != 0), block until all downstream
+    // sampling consumers of the previous decode step have signalled 'buffer_reuse_sync_sem'
+    if constexpr (use_buffer_reuse_sync_sem) {
+        if (buffer_reuse_sync_sem_addr != 0) {
+            noc_semaphore_wait_min(
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buffer_reuse_sync_sem_addr), buffer_reuse_sync_sem_wait_value);
+            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buffer_reuse_sync_sem_addr), 0);
+        }
     }
 
     // 1. mcast via fabric to remote tensor addresses

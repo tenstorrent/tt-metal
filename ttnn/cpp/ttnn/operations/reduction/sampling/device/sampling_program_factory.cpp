@@ -373,6 +373,22 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
     }
     desc.kernels.push_back(std::move(reader_desc));
 
+    // buffer-reuse sync signal: each sampling writer core increments it on end of op. The drain
+    // core of the next decode step's SAMPLING_VALUES all-gather waits on its local copy before
+    // overwriting the persistent buffer
+    const bool signal_buffer_reuse_sync_sem =
+        operation_attributes.buffer_reuse_sync_semaphore.has_value() && operation_attributes.buffer_reuse_sync_sem_drain_core.has_value();
+    uint32_t buffer_reuse_sync_sem_addr = 0;
+    uint32_t buffer_reuse_sync_drain_noc_x = 0;
+    uint32_t buffer_reuse_sync_drain_noc_y = 0;
+    if (signal_buffer_reuse_sync_sem) {
+        buffer_reuse_sync_sem_addr = static_cast<uint32_t>(operation_attributes.buffer_reuse_sync_semaphore.value().address());
+        const auto buffer_reuse_sync_drain_noc =
+            device->worker_core_from_logical_core(operation_attributes.buffer_reuse_sync_sem_drain_core.value());
+        buffer_reuse_sync_drain_noc_x = static_cast<uint32_t>(buffer_reuse_sync_drain_noc.x);
+        buffer_reuse_sync_drain_noc_y = static_cast<uint32_t>(buffer_reuse_sync_drain_noc.y);
+    }
+
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
         CoreRangeSet single_core{CoreRange(core, core)};
@@ -403,6 +419,10 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
                 num_cores,
                 static_cast<uint32_t>(use_32bit_index),
                 num_users,
+                static_cast<uint32_t>(signal_buffer_reuse_sync_sem),
+                buffer_reuse_sync_sem_addr,
+                buffer_reuse_sync_drain_noc_x,
+                buffer_reuse_sync_drain_noc_y,
             });
 
         KernelDescriptor writer_desc;

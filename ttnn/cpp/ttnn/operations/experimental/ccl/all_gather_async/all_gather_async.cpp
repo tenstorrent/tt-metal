@@ -210,7 +210,9 @@ ttnn::Tensor all_gather_async(
     bool reverse_order,
     const std::optional<CoreRangeSet>& sub_core_grid,
     std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel) {
+    std::optional<uint32_t> num_buffers_per_channel,
+    const std::optional<GlobalSemaphore>& buffer_reuse_sync_semaphore,
+    std::optional<uint32_t> buffer_reuse_sync_sem_wait_value) {
     uint32_t resolved_links =
         num_preferred_links.value_or(ttnn::operations::ccl::common::get_num_links(mesh_device, cluster_axis));
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
@@ -244,7 +246,9 @@ ttnn::Tensor all_gather_async(
         /*num_buffers_per_channel*/ num_buffers_per_channel,
         reverse_order,
         sub_core_grid,
-        &mesh_device);
+        &mesh_device,
+        buffer_reuse_sync_semaphore,
+        buffer_reuse_sync_sem_wait_value);
 }
 
 // Reversed: overload with sub-core grids
