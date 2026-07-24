@@ -405,6 +405,8 @@ void kernel_main() {
                 weight_bottom_right_bf16);
             scalar_dfb.push_back(1);
 
+            // Ensure the 4 neighbor reads have landed before crediting the CB to compute.
+            noc.async_read_barrier();
             tilize_reduce_dfb.push_back(4);
             block_offset += current_block_size_bytes;
         }
