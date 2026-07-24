@@ -80,6 +80,14 @@ def run_one(isl: int, batch_size: int, repo_root: Path, dry_run: bool, timeout_s
     env["GLM4_MOE_LITE_CCL_TOPOLOGY"] = "ring"
     env["GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE"] = "1"
     env["GLM4_MOE_LITE_SKIP_TYPECAST"] = "1"
+    # Validated decode wins (the sweep previously omitted these — notably BF8 dense).
+    # BF8 dense weights (~7%) + fused MoE collective epilogue + buffered all-reduce +
+    # top-k scale folded into sparse down-proj + width-sharded multi-core RMSNorm.
+    env["GLM4_MOE_LITE_DENSE_TT_DTYPE"] = "bf8"
+    env["GLM4_MOE_LITE_FUSED_COLLECTIVE_EPILOGUE"] = "1"
+    env["GLM4_MOE_LITE_BUFFERED_MOE_ALL_REDUCE"] = "1"
+    env["GLM4_MOE_LITE_FUSE_DOWN_ROUTING_SCALE"] = "1"
+    env["GLM4_MOE_LITE_SHARDED_NORM"] = "1"
 
     result = {
         "isl": isl,

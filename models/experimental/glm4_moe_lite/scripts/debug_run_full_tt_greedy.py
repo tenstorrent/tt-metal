@@ -33,6 +33,13 @@ for _default_key, _default_val in {
     "GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE": "1",
     "GLM4_MOE_LITE_SKIP_TYPECAST": "1",
     "GLM4_MOE_LITE_DENSE_TT_DTYPE": "bf8",
+    # Validated decode wins (also code-default-on; listed explicitly for visibility).
+    # Fused MoE collective epilogue + buffered per-axis all-reduce + top-k scale
+    # folded into the sparse down-projection + width-sharded multi-core RMSNorm.
+    "GLM4_MOE_LITE_FUSED_COLLECTIVE_EPILOGUE": "1",
+    "GLM4_MOE_LITE_BUFFERED_MOE_ALL_REDUCE": "1",
+    "GLM4_MOE_LITE_FUSE_DOWN_ROUTING_SCALE": "1",
+    "GLM4_MOE_LITE_SHARDED_NORM": "1",
 }.items():
     os.environ.setdefault(_default_key, _default_val)
 
