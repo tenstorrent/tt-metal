@@ -2551,7 +2551,7 @@ void CablingGenerator::apply_instance_filter(
     std::set<HostId> kept_host_ids;
     std::vector<bool> include_used(includes.size(), false);
     std::vector<bool> exclude_used(excludes.size(), false);
-    // Full instance paths each filter matched (for logging + multi-parent ambiguity detection).
+    // Full instance paths each filter matched (for logging + nested-lineage ambiguity detection).
     std::vector<std::vector<std::vector<std::string>>> include_matches(includes.size());
     std::vector<std::vector<std::vector<std::string>>> exclude_matches(excludes.size());
 
@@ -2618,20 +2618,16 @@ void CablingGenerator::apply_instance_filter(
         throw std::runtime_error("Instance filter selected no nodes");
     }
 
-    // Report what each filter matched. Matching is suffix-based and fully inclusive: a filter selects the
-    // whole subtree of EVERY instance whose path ends with it. When a (possibly colliding) name matches
-    // instances under more than one parent, warn - the selection is broader than a unique name would give.
+    // Log each filter's matches, and warn on nested-lineage ambiguity: a name matching both an instance and
+    // a descendant of it (e.g. 'node_0' -> 'sp_0/node_0' and 'sp_0/node_0/node_0'). Fan-out across distinct
+    // parents ('sp_0/node_0' and 'sp_1/node_0') is intended, not ambiguous.
     auto report_filter = [](const char* kind,
                             const std::vector<std::vector<std::string>>& filters,
                             const std::vector<std::vector<std::vector<std::string>>>& matches) {
         for (size_t i = 0; i < filters.size(); ++i) {
             std::vector<std::string> joined_paths;
-            std::set<std::string> parents;
             for (const auto& path : matches[i]) {
                 joined_paths.push_back(join_instance_path(path));
-                std::vector<std::string> parent(
-                    path.begin(), path.end() - static_cast<std::ptrdiff_t>(filters[i].size()));
-                parents.insert(join_instance_path(parent));
             }
             log_info(
                 tt::LogDistributed,
@@ -2640,14 +2636,27 @@ void CablingGenerator::apply_instance_filter(
                 join_instance_path(filters[i]),
                 joined_paths.size(),
                 fmt::join(joined_paths, ", "));
-            if (parents.size() > 1) {
+            // Ambiguous iff one match is a strict path prefix of another (same lineage, name recurs).
+            bool nested = false;
+            for (size_t a = 0; a < matches[i].size() && !nested; ++a) {
+                for (size_t b = 0; b < matches[i].size(); ++b) {
+                    const auto& ancestor = matches[i][a];
+                    const auto& descendant = matches[i][b];
+                    if (a != b && ancestor.size() < descendant.size() &&
+                        std::equal(ancestor.begin(), ancestor.end(), descendant.begin())) {
+                        nested = true;
+                        break;
+                    }
+                }
+            }
+            if (nested) {
                 log_warning(
                     tt::LogDistributed,
-                    "Instance filter {} '{}' is ambiguous: matched instances under {} different parents; every "
-                    "match's subtree is selected. Use a longer path to disambiguate. Matches: {}",
+                    "Instance filter {} '{}' is ambiguous: it matches nested instances on the same path (a match "
+                    "and a descendant of it), so a subtree is selected at more than one depth. Use a longer path "
+                    "to disambiguate. Matches: {}",
                     kind,
                     join_instance_path(filters[i]),
-                    parents.size(),
                     fmt::join(joined_paths, ", "));
             }
         }
