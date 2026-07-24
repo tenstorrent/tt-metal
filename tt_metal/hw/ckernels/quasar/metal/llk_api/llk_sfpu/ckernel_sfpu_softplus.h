@@ -8,12 +8,12 @@
 
 #include "ckernel.h"
 #include "ckernel_sfpu_converter.h"
+#include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_polyval.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_exp.h"
 
 namespace ckernel::sfpu
 {
