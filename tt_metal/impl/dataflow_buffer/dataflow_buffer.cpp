@@ -604,6 +604,23 @@ static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowB
         capacity,
         max_capacity);
     log_debug(tt::LogMetal, "DFB {} capacity={} stride_in_entries={}", dfb.id, capacity, stride_in_entries);
+    // [#48552 DEBUG -- remove before merge] Fires when the capacity was divided below num_entries (our
+    // borrowed-in0 bug: num_entries=224 -> capacity=28 because max(num_producers,num_consumers)=8). Shows
+    // which count is 8 and the access pattern, so we can trace the wrong binding for the borrowed self-loop.
+    if (capacity != config.num_entries) {
+        log_warning(
+            tt::LogMetal,
+            "[QSR-DFBCAP #48552] DFB {}: num_entries={} -> capacity={} | num_producers={} num_consumers={} "
+            "cap_pattern={} borrows_memory={} stride_in_entries={}",
+            dfb.id,
+            config.num_entries,
+            capacity,
+            config.num_producers,
+            config.num_consumers,
+            static_cast<uint32_t>(config.cap),
+            config.borrows_memory,
+            stride_in_entries);
+    }
     return {static_cast<uint16_t>(capacity), stride_in_entries};
 }
 
