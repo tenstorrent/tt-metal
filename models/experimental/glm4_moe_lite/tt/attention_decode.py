@@ -12,6 +12,7 @@ corresponding to the three phases of a decode attention step:
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any
 
@@ -145,14 +146,6 @@ def kv_cache_update(
         if qkv is not None:
             ttnn.deallocate(qkv, force=False)
 
-    kvpe_new_sharded = shard_kvpe_fn(
-        device=device,
-        kvpe_new=kvpe_new,
-        batch=batch,
-        kvpe_dim=kvpe_dim,
-        skip_defensive_clones=cfg.skip_defensive_clones,
-    )
-
     mesh_coords = None
     if device.__class__.__name__ == "MeshDevice":
         try:
@@ -161,24 +154,80 @@ def kv_cache_update(
         except Exception:
             mesh_coords = None
 
-    _puc_kwargs = dict(page_table=page_table_tt)
-    if mesh_coords is not None:
-        _puc_kwargs["mesh_coords"] = mesh_coords
+    # `paged_update_cache` height-shards the update tensor as one sequence per Tensix
+    # core, so a single call needs `batch` cores AND its per-core L1 CBs must fit. On
+    # WH (8x8 grid) that hard-caps a single call at 64 sequences, and the per-core CBs
+    # overflow L1 a little past batch~16. For larger decode batches we split the KV
+    # write into sub-batches of <= KV_UPDATE_MAX_USERS sequences (default 16, which is
+    # L1-validated; a single 32-user call overflows the per-core CB by ~0.6%), slicing
+    # positions/page_table per chunk. This sub-batches ONLY the
+    # cheap KV write — attention/MoE and the collectives still run at the full batch,
+    # so the decode-throughput benefit of a wide batch is preserved.
+    grid = device.compute_with_storage_grid_size()
+    max_cores = int(grid.x) * int(grid.y)
+    cap_env = int(os.environ.get("GLM4_MOE_LITE_KV_UPDATE_MAX_USERS", "0").strip() or "0")
+    cap = cap_env if cap_env > 0 else min(16, max_cores)
 
-    if positions_main_tt is not None and positions_draft_tt is not None:
-        ttnn.experimental.paged_update_cache(
-            kvpe_cache, kvpe_new_sharded, update_idxs_tensor=positions_main_tt, **_puc_kwargs
+    if batch <= cap:
+        # Single-call fast path (unchanged behaviour for validated batch sizes).
+        kvpe_new_sharded = shard_kvpe_fn(
+            device=device,
+            kvpe_new=kvpe_new,
+            batch=batch,
+            kvpe_dim=kvpe_dim,
+            skip_defensive_clones=cfg.skip_defensive_clones,
         )
-        ttnn.experimental.paged_update_cache(
-            kvpe_cache, kvpe_new_sharded, update_idxs_tensor=positions_draft_tt, **_puc_kwargs
-        )
+        _puc_kwargs = dict(page_table=page_table_tt)
+        if mesh_coords is not None:
+            _puc_kwargs["mesh_coords"] = mesh_coords
+        if positions_main_tt is not None and positions_draft_tt is not None:
+            ttnn.experimental.paged_update_cache(
+                kvpe_cache, kvpe_new_sharded, update_idxs_tensor=positions_main_tt, **_puc_kwargs
+            )
+            ttnn.experimental.paged_update_cache(
+                kvpe_cache, kvpe_new_sharded, update_idxs_tensor=positions_draft_tt, **_puc_kwargs
+            )
+        else:
+            ttnn.experimental.paged_update_cache(
+                kvpe_cache, kvpe_new_sharded, update_idxs_tensor=tt_positions, **_puc_kwargs
+            )
+        ttnn.deallocate(kvpe_new_sharded, force=False)
     else:
-        ttnn.experimental.paged_update_cache(
-            kvpe_cache, kvpe_new_sharded, update_idxs_tensor=tt_positions, **_puc_kwargs
-        )
+        if positions_main_tt is not None and positions_draft_tt is not None:
+            raise NotImplementedError(
+                "batch-expansion decode (positions_main/draft) is not supported with sub-batched "
+                "KV update; set GLM4_MOE_LITE_KV_UPDATE_MAX_USERS >= batch or disable BATCH_EXPAND."
+            )
+        # kvpe_new is [1,1,batch,kvpe_dim]; slice the batch axis in ROW_MAJOR
+        # (shard_kvpe_fn converts to ROW_MAJOR first anyway, so this is layout-safe for
+        # non-tile-aligned chunk boundaries).
+        pt_width = int(page_table_tt.shape[1])
+        kvpe_new_rm = ttnn.to_layout(kvpe_new, ttnn.ROW_MAJOR_LAYOUT)
+        for start in range(0, batch, cap):
+            end = min(start + cap, batch)
+            n = end - start
+            kvpe_slice = ttnn.slice(kvpe_new_rm, [0, 0, start, 0], [1, 1, end, kvpe_dim])
+            pt_slice = ttnn.slice(page_table_tt, [start, 0], [end, pt_width])
+            pos_slice = ttnn.slice(tt_positions, [start], [end])
+            sharded = shard_kvpe_fn(
+                device=device,
+                kvpe_new=kvpe_slice,
+                batch=n,
+                kvpe_dim=kvpe_dim,
+                skip_defensive_clones=cfg.skip_defensive_clones,
+            )
+            _puc_kwargs = dict(page_table=pt_slice)
+            if mesh_coords is not None:
+                _puc_kwargs["mesh_coords"] = mesh_coords
+            ttnn.experimental.paged_update_cache(kvpe_cache, sharded, update_idxs_tensor=pos_slice, **_puc_kwargs)
+            ttnn.deallocate(sharded, force=False)
+            ttnn.deallocate(kvpe_slice, force=False)
+            ttnn.deallocate(pt_slice, force=False)
+            ttnn.deallocate(pos_slice, force=False)
+        ttnn.deallocate(kvpe_new_rm, force=False)
+
     if cfg.sync_after_kv_update:
         ttnn.synchronize_device(device)
-    ttnn.deallocate(kvpe_new_sharded, force=False)
     ttnn.deallocate(kvpe_new, force=False)
     _profile_add(profile, "kv_cache_update_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
