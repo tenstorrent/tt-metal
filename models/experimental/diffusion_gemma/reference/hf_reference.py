@@ -54,7 +54,7 @@ def load_hf_reference(model_id_or_path: str, *, dtype=None, device: str = "cpu",
     ``DiffusionGemmaForBlockDiffusion`` is **not** an AutoModelForCausalLM —
     ``DiffusionGemmaConfig`` is not registered there because block-diffusion is a
     distinct generation paradigm. Load the class directly. Verified on transformers
-    **5.12.1** (the pinned working env — `diffusion_gemma` ships since 5.12; 5.10.2
+    **5.14.1** (the pinned working env — `diffusion_gemma` ships since 5.12; 5.10.2
     lacked it) and 5.13.0.dev0 (main).
 
     Raises a clear ImportError when ``transformers`` lacks ``diffusion_gemma`` —

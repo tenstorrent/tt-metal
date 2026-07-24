@@ -114,6 +114,26 @@ run_t3000_mochi_tests() {
   fi
 }
 
+run_t3000_qwen3_vl_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_qwen3_vl_tests"
+
+  uv pip install -r models/demos/qwen3_vl/requirements.txt
+  export HF_MODEL=Qwen/Qwen3-VL-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-VL-32B-Instruct MESH_DEVICE=T3K PYTEST_ADDOPTS="--tb=short"
+  pytest models/demos/qwen3_vl/demo/demo.py --timeout 600 ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_qwen3_vl_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 
 
 run_t3000_tests() {
@@ -134,6 +154,9 @@ run_t3000_tests() {
 
   # Run qwenimage tests
   run_t3000_qwenimage_tests
+
+  # Run Qwen3-VL tests
+  run_t3000_qwen3_vl_tests
 
 
   # Run Wan2.2 tests

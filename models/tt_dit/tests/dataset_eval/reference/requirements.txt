@@ -7,7 +7,7 @@ pytest
 
 # model + tokenizer
 sentencepiece
-transformers==4.46.2
+transformers==5.14.1
 # latest dev version required for SD3.5 model architecture (qk_norm, norm_added_k, etc.)
 git+https://github.com/huggingface/diffusers.git
 open_clip_torch

@@ -3,7 +3,7 @@
 
 """
 Numerical ORACLE PCC — our self-authored MiniMax-M3 torch references vs the upstream
-`transformers` (>=5.12) `minimax_m3_vl` implementation, on identical random weights.
+`transformers` (==5.14.1) `minimax_m3_vl` implementation, on identical random weights.
 
 WHY: our per-module / full-model PCC tests (tests/unit/test_*_vs_ref.py) compare TTNN against
 self-authored torch refs — we wrote both sides, so a shared misreading of the arch would pass
@@ -11,19 +11,18 @@ silently. This script closes that gap by checking our refs against the REAL impl
 give: TTNN ==(device PCC)== our refs ==(this, exact)== real minimax_m3_vl.
 
 This is a STANDALONE script, NOT a pytest test — the filename has no `test_` prefix on purpose, so
-the normal pytest suite (which runs in the ttnn python_env, pinned to an older transformers WITHOUT
-minimax_m3_vl) does NOT collect it. It needs transformers>=5.12, which we install into a throwaway
-env (we do NOT bump the repo's pinned transformers). CPU only, no checkpoint, no ttnn. Exits 0 on
+the normal pytest suite (which runs in the ttnn python_env, pinned to transformers==5.14.1) does NOT collect it.
+It uses transformers==5.14.1 in a throwaway env for isolation. CPU only, no checkpoint, no ttnn. Exits 0 on
 all-pass.
 
 HOW TO RUN — option A (uv, recommended; fetches deps into a cached ephemeral env):
 
-    uv run --no-project --with "transformers>=5.12" --with "torch" --python 3.10 \
+    uv run --no-project --with "transformers==5.14.1" --with "torch" --python 3.10 \
         python models/demos/minimax_m3/tests/oracle_minimax_m3_vl_pcc.py
 
 HOW TO RUN — option B (no uv; a one-off venv):
 
-    python3.10 -m venv /tmp/m3_oracle && /tmp/m3_oracle/bin/pip install -q "transformers>=5.12" torch
+    python3.10 -m venv /tmp/m3_oracle && /tmp/m3_oracle/bin/pip install -q "transformers==5.14.1" torch
     /tmp/m3_oracle/bin/python models/demos/minimax_m3/tests/oracle_minimax_m3_vl_pcc.py
 
 First run downloads transformers + torch (~GB, then cached). Covers RMSNorm (gemma), DenseMLP +

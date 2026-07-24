@@ -41,7 +41,7 @@ if python3 -c "import torch, transformers, PIL" >/dev/null 2>&1; then
     echo "  Required Python packages already available; skipping install."
 else
     echo "  Missing Python packages detected; installing dependencies..."
-    pip install --quiet torch transformers pillow 2>&1 | tail -3
+    pip install --quiet torch transformers==5.14.1 pillow 2>&1 | tail -3
 fi
 
 # 3. Clone the branch if not already present

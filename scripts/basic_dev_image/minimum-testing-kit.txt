@@ -2,7 +2,7 @@
 # Python unit tests in the minimum environment
 
 pytest==7.2.2
-transformers==4.53.0
+transformers==5.14.1
 multiprocess==0.70.14
 psutil==7.0.0
 pytest-timeout==2.2.0

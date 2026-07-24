@@ -40,7 +40,7 @@ Decode is not part of this bring-up.
 
 ## Run
 
-MiniMax-M3 is a `trust_remote_code` model: install a `transformers` new enough to carry the `minimax_m3_vl` modeling code, and download the checkpoint (safetensors weights + `config.json` + tokenizer) from the official MiniMax-M3 release (HuggingFace / GitHub) into a local dir that `HF_MODEL` points at. A tilized weight cache (`M3_WEIGHTS_FROM_CACHE=1`) avoids re-conversion after the first load.
+MiniMax-M3 is a `trust_remote_code` model: install `transformers==5.14.1` (or newer) to carry the `minimax_m3_vl` modeling code, and download the checkpoint (safetensors weights + `config.json` + tokenizer) from the official MiniMax-M3 release (HuggingFace / GitHub) into a local dir that `HF_MODEL` points at. A tilized weight cache (`M3_WEIGHTS_FROM_CACHE=1`) avoids re-conversion after the first load.
 
 ```bash
 export TT_METAL_HOME=$PWD PYTHONPATH=$PWD
