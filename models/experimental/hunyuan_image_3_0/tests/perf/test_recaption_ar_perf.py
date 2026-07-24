@@ -61,9 +61,9 @@ from models.experimental.hunyuan_image_3_0.ref.image_processor import HunyuanIma
 from models.experimental.hunyuan_image_3_0.ref.tokenizer import HunyuanTokenizer, prepare_recaption_inputs
 from models.experimental.hunyuan_image_3_0.ref.tokenizer.gen_image_inputs import enrich_bundle_attention
 from models.experimental.hunyuan_image_3_0.tests.pcc import i2i_helpers as h
-from models.experimental.hunyuan_image_3_0.tt.generate import make_backbone_logits_fn
-from models.experimental.hunyuan_image_3_0.tt.lm_head import HunyuanTtLMHead
-from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel
+from models.experimental.hunyuan_image_3_0.ttnn.generate import make_backbone_logits_fn
+from models.experimental.hunyuan_image_3_0.ttnn.lm_head import HunyuanTtLMHead
+from models.experimental.hunyuan_image_3_0.ttnn.model import HunyuanTtModel
 
 PROMPT = "a cat on a mat"
 BOT_TASK = "recaption"

@@ -123,21 +123,21 @@ from models.experimental.hunyuan_image_3_0.ref.model_config import (
     load_config,
     transformer_cfg,
 )
-from models.experimental.hunyuan_image_3_0.tt.attention.mask import (
+from models.experimental.hunyuan_image_3_0.ttnn.attention.mask import (
     build_attention_mask_tt,
     build_attention_mask_tt_sp_sharded,
 )
-from models.experimental.hunyuan_image_3_0.tt.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
-from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
-from models.experimental.hunyuan_image_3_0.tt.lm_head import HunyuanTtLMHead
-from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel, default_bf16_layers
-from models.experimental.hunyuan_image_3_0.tt.pipeline import (
+from models.experimental.hunyuan_image_3_0.ttnn.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
+from models.experimental.hunyuan_image_3_0.ttnn.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
+from models.experimental.hunyuan_image_3_0.ttnn.lm_head import HunyuanTtLMHead
+from models.experimental.hunyuan_image_3_0.ttnn.model import HunyuanTtModel, default_bf16_layers
+from models.experimental.hunyuan_image_3_0.ttnn.pipeline import (
     HunyuanTtDenoiseStep,
     decode_latent,
     denoise_loop,
     upload_denoise_cond_mesh,
 )
-from models.experimental.hunyuan_image_3_0.tt.vision.i2i_bundle import (
+from models.experimental.hunyuan_image_3_0.ttnn.vision.i2i_bundle import (
     apply_cond_encode_cache,
     build_cond_encode_cache_tt,
     load_tt_cond_patch_embed,
@@ -146,16 +146,16 @@ from models.experimental.hunyuan_image_3_0.tt.vision.i2i_bundle import (
     prepare_i2i_denoise_bundle_tt,
     prepare_recaption_ar_bundle_tt,
 )
-from models.experimental.hunyuan_image_3_0.tt.recaption import run_recaption_on_device
-from models.experimental.hunyuan_image_3_0.tt.scheduler import HunyuanTtScheduler
-from models.experimental.hunyuan_image_3_0.tt.trace_config import (
+from models.experimental.hunyuan_image_3_0.ttnn.recaption import run_recaption_on_device
+from models.experimental.hunyuan_image_3_0.ttnn.scheduler import HunyuanTtScheduler
+from models.experimental.hunyuan_image_3_0.ttnn.trace_config import (
     invalidate_cond_encode_traces,
     open_pipeline_mesh,
     print_trace_policy,
     release_pipeline_traces,
     release_stage_resources,
 )
-from models.experimental.hunyuan_image_3_0.tt.wte import HunyuanTtWte
+from models.experimental.hunyuan_image_3_0.ttnn.wte import HunyuanTtWte
 
 from models.experimental.hunyuan_image_3_0.ref.system_prompt import get_system_prompt
 
@@ -303,7 +303,7 @@ def _use_tt_recaption() -> bool:
 
 def _recaption_sampling_config() -> SamplingConfig:
     """Match demo.py: HF generation_config defaults with optional HY_* overrides."""
-    from models.experimental.hunyuan_image_3_0.tt.device_sampling import resolve_hy_top_k
+    from models.experimental.hunyuan_image_3_0.ttnn.device_sampling import resolve_hy_top_k
 
     cfg = replace(default_recaption_sampling_config(), max_new_tokens=MAX_NEW_TOKENS)
     if os.environ.get("HY_DO_SAMPLE") is not None:
@@ -391,7 +391,7 @@ def _run_recaption_on_device_maybe_retry_host_sample(
     Empty/echo cot is left for ``_finalize_recaption_cot``. Set
     ``HY_RECAPTION_HOST_RETRY=1`` to allow a host-multinomial retry.
     """
-    from models.experimental.hunyuan_image_3_0.tt.device_sampling import device_sampling_enabled
+    from models.experimental.hunyuan_image_3_0.ttnn.device_sampling import device_sampling_enabled
 
     recap_result = run_recaption_on_device(
         backbone,
@@ -913,7 +913,7 @@ def main():
             print("[demo_i2i] loading LM head ...", flush=True)
             lm_head = HunyuanTtLMHead(mesh_device, {"lm_head.weight": weights.load("lm_head.weight")})
             recap_config = _recaption_sampling_config()
-            from models.experimental.hunyuan_image_3_0.tt.device_sampling import (
+            from models.experimental.hunyuan_image_3_0.ttnn.device_sampling import (
                 device_sampling_enabled,
                 ttnn_sampling_op_enabled,
             )

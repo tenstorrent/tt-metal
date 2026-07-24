@@ -23,13 +23,13 @@ from models.experimental.hunyuan_image_3_0.ref.recaption import (
 )
 from models.experimental.hunyuan_image_3_0.ref.tokenizer.gen_image_inputs import GenImageHostInputs
 from models.experimental.hunyuan_image_3_0.ref.tokenizer.hunyuan_tokenizer import HunyuanTokenizer
-from models.experimental.hunyuan_image_3_0.tt.ar_dual_cq import ArDualCQCoordinator, recaption_2cq_enabled
-from models.experimental.hunyuan_image_3_0.tt.ar_trace import recaption_trace_enabled
-from models.experimental.hunyuan_image_3_0.tt.device_sampling import (
+from models.experimental.hunyuan_image_3_0.ttnn.ar_dual_cq import ArDualCQCoordinator, recaption_2cq_enabled
+from models.experimental.hunyuan_image_3_0.ttnn.ar_trace import recaption_trace_enabled
+from models.experimental.hunyuan_image_3_0.ttnn.device_sampling import (
     can_use_device_sampling,
     device_sampling_enabled,
 )
-from models.experimental.hunyuan_image_3_0.tt.generate import (
+from models.experimental.hunyuan_image_3_0.ttnn.generate import (
     generate_text,
     make_backbone_logits_fn,
     make_recaption_logits_fn,
@@ -105,7 +105,7 @@ def run_recaption_on_device(
             flush=True,
         )
     elif use_device_sampling:
-        from models.experimental.hunyuan_image_3_0.tt.device_sampling import ttnn_sampling_op_enabled
+        from models.experimental.hunyuan_image_3_0.ttnn.device_sampling import ttnn_sampling_op_enabled
 
         if ttnn_sampling_op_enabled():
             print(

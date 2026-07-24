@@ -23,27 +23,27 @@ from models.experimental.hunyuan_image_3_0.ref.tokenizer.gen_image_inputs import
     prepare_recaption_inputs,
 )
 from models.experimental.hunyuan_image_3_0.ref.vae.encoder import IN_CHANNELS, PIXEL_H, PIXEL_T, PIXEL_W
-from models.experimental.hunyuan_image_3_0.tt.image_gen.cond_instantiate import (
+from models.experimental.hunyuan_image_3_0.ttnn.image_gen.cond_instantiate import (
     _tokens_from_latents,
     instantiate_continuous_tokens_tt,
     instantiate_vae_image_tokens_tt,
 )
-from models.experimental.hunyuan_image_3_0.tt.image_gen.patch_embed import HunyuanTtUNetDown
-from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
-from models.experimental.hunyuan_image_3_0.tt.vision.i2i import encode_cond_vision, inject_cond_vision
-from models.experimental.hunyuan_image_3_0.tt.vision.preprocess import find_image_token_spans, to_vision_inputs
-from models.experimental.hunyuan_image_3_0.tt.vision.siglip2 import (
+from models.experimental.hunyuan_image_3_0.ttnn.image_gen.patch_embed import HunyuanTtUNetDown
+from models.experimental.hunyuan_image_3_0.ttnn.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
+from models.experimental.hunyuan_image_3_0.ttnn.vision.i2i import encode_cond_vision, inject_cond_vision
+from models.experimental.hunyuan_image_3_0.ttnn.vision.preprocess import find_image_token_spans, to_vision_inputs
+from models.experimental.hunyuan_image_3_0.ttnn.vision.siglip2 import (
     HunyuanTtLightProjector,
     HunyuanTtSiglip2Vision,
 )
-from models.experimental.hunyuan_image_3_0.tt.vae.cond_posterior import (
+from models.experimental.hunyuan_image_3_0.ttnn.vae.cond_posterior import (
     apply_vae_latent_scaling_tt,
     diagonal_gaussian_sample_tt,
     squeeze_temporal_tt,
 )
-from models.experimental.hunyuan_image_3_0.tt.vae.decoder import bcthw_to_bthwc
-from models.experimental.hunyuan_image_3_0.tt.vae.encoder import VAEEncoderTTNN
-from models.experimental.hunyuan_image_3_0.tt.wte import HunyuanTtWte
+from models.experimental.hunyuan_image_3_0.ttnn.vae.decoder import bcthw_to_bthwc
+from models.experimental.hunyuan_image_3_0.ttnn.vae.encoder import VAEEncoderTTNN
+from models.experimental.hunyuan_image_3_0.ttnn.wte import HunyuanTtWte
 from models.tt_dit.utils.conv3d import aligned_channels
 
 
@@ -487,14 +487,14 @@ def vae_encode_image_tt(
     cond_encode_trace: bool = True,
 ) -> tuple[torch.Tensor, ttnn.Tensor]:
     """Encode one cond image on device -> ``(timesteps, latents_bthwc)`` on device."""
-    from models.experimental.hunyuan_image_3_0.tt.trace_config import cond_encode_trace_enabled
+    from models.experimental.hunyuan_image_3_0.ttnn.trace_config import cond_encode_trace_enabled
 
     t0 = time.perf_counter()
     vae_encoder = _resolve_tt_vae_encoder(mesh_device, image, vae_encoder)
     pixel_h, pixel_w = _vae_cond_spatial_hw(image)
     traced = cond_encode_trace and cond_encode_trace_enabled()
     if traced:
-        from models.experimental.hunyuan_image_3_0.tt.cond_encode_trace import run_vae_encode_traced
+        from models.experimental.hunyuan_image_3_0.ttnn.cond_encode_trace import run_vae_encode_traced
 
         host_bthwc = _host_bthwc_for_vae_encode(image)
         h_tt = run_vae_encode_traced(
@@ -614,11 +614,11 @@ def _encode_vit_cond_image_tt(
     *,
     cond_encode_trace: bool = True,
 ) -> ttnn.Tensor:
-    from models.experimental.hunyuan_image_3_0.tt.trace_config import cond_encode_trace_enabled
+    from models.experimental.hunyuan_image_3_0.ttnn.trace_config import cond_encode_trace_enabled
 
     pv, hw, mask = _vit_host_tensors(vit_tensor)
     if cond_encode_trace and cond_encode_trace_enabled():
-        from models.experimental.hunyuan_image_3_0.tt.cond_encode_trace import run_vit_encode_traced
+        from models.experimental.hunyuan_image_3_0.ttnn.cond_encode_trace import run_vit_encode_traced
 
         return run_vit_encode_traced(mesh_device, vision, aligner, pv, mask, spatial_shapes_hw=hw)
     vi = to_vision_inputs(mesh_device, pv, hw, mask)
@@ -633,7 +633,7 @@ def _encode_vit_batch_row_tt(
     *,
     cond_encode_trace: bool = True,
 ) -> ttnn.Tensor:
-    from models.experimental.hunyuan_image_3_0.tt.trace_config import cond_encode_trace_enabled
+    from models.experimental.hunyuan_image_3_0.ttnn.trace_config import cond_encode_trace_enabled
 
     t0 = time.perf_counter()
     traced = cond_encode_trace and cond_encode_trace_enabled()

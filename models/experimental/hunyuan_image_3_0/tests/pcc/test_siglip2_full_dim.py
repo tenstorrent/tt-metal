@@ -24,7 +24,7 @@ from models.experimental.hunyuan_image_3_0.ref.vision.siglip2 import (
     load_siglip2_vision,
 )
 from models.experimental.hunyuan_image_3_0.ref.weights import MODEL_DIR
-from models.experimental.hunyuan_image_3_0.tt.vision.siglip2 import (
+from models.experimental.hunyuan_image_3_0.ttnn.vision.siglip2 import (
     HunyuanTtLightProjector,
     HunyuanTtSiglip2Vision,
     Siglip2VisionInputs,

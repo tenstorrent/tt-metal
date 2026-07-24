@@ -316,12 +316,12 @@ def denoise_loop(
     """
     import torch
 
-    from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import (
+    from models.experimental.hunyuan_image_3_0.ttnn.image_gen.timestep_embedder import (
         HunyuanTtTimestepEmbedder,
     )
-    from models.experimental.hunyuan_image_3_0.tt.noise import resolve_latent_nchw
-    from models.experimental.hunyuan_image_3_0.tt.stage_trace import DenoiseStepTracer
-    from models.experimental.hunyuan_image_3_0.tt.trace_config import denoise_execute_trace_enabled
+    from models.experimental.hunyuan_image_3_0.ttnn.noise import resolve_latent_nchw
+    from models.experimental.hunyuan_image_3_0.ttnn.stage_trace import DenoiseStepTracer
+    from models.experimental.hunyuan_image_3_0.ttnn.trace_config import denoise_execute_trace_enabled
 
     B, C, h, w = resolve_latent_nchw(init_latent, token_h=step.token_h, token_w=step.token_w)
     device_init = isinstance(init_latent, ttnn.Tensor)
@@ -335,7 +335,7 @@ def denoise_loop(
     # Import only when needed — avoids pulling cond_instantiate on the T2I path.
     scatter_distill_step_embeds_tt = None
     if device_scatter:
-        from models.experimental.hunyuan_image_3_0.tt.image_gen.cond_instantiate import (
+        from models.experimental.hunyuan_image_3_0.ttnn.image_gen.cond_instantiate import (
             scatter_distill_step_embeds_tt as _scatter_distill_tt,
         )
 
@@ -756,7 +756,7 @@ def decode_latent(
 
     spatial = ccl_manager is not None and (h_mesh_axis is not None or w_mesh_axis is not None)
     if spatial:
-        from models.experimental.hunyuan_image_3_0.tt.trace_config import vae_execute_trace_enabled
+        from models.experimental.hunyuan_image_3_0.ttnn.trace_config import vae_execute_trace_enabled
 
         if vae_execute_trace_enabled():
             return _decode_latent_spatial_traced(
@@ -788,7 +788,7 @@ def decode_latent(
             )
         return img
 
-    from models.experimental.hunyuan_image_3_0.tt.trace_config import vae_execute_trace_enabled
+    from models.experimental.hunyuan_image_3_0.ttnn.trace_config import vae_execute_trace_enabled
 
     if vae_execute_trace_enabled():
         return _decode_latent_replicated_traced(
@@ -878,7 +878,7 @@ def _decode_latent_spatial_traced(
     dtype,
 ):
     from models.experimental.hunyuan_image_3_0.ref.vae.decoder import vae_decode_output_to_rgb
-    from models.experimental.hunyuan_image_3_0.tt.stage_trace import VaeDecodeTracer
+    from models.experimental.hunyuan_image_3_0.ttnn.stage_trace import VaeDecodeTracer
     from .vae.spatial import enable_vae_spatial
 
     print("[vae] execute_trace spatial decode on CQ0 (HY_VAE_DECODE_TRACE=1)", flush=True)
@@ -925,7 +925,7 @@ def _decode_latent_replicated_traced(
     dtype,
 ):
     from models.experimental.hunyuan_image_3_0.ref.vae.decoder import vae_decode_output_to_rgb
-    from models.experimental.hunyuan_image_3_0.tt.stage_trace import VaeDecodeTracer
+    from models.experimental.hunyuan_image_3_0.ttnn.stage_trace import VaeDecodeTracer
     from .vae.decoder import bthwc_to_bcthw
 
     print("[vae] execute_trace decode on CQ0 (HY_VAE_DECODE_TRACE=1)", flush=True)

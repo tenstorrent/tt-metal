@@ -36,14 +36,14 @@ if str(PCC_DIR) not in sys.path:
 from models.experimental.hunyuan_image_3_0.ref.generate import generate_text
 from models.experimental.hunyuan_image_3_0.ref.recaption import decode_cot_text
 from models.experimental.hunyuan_image_3_0.ref.weights import INSTRUCT_MODEL_DIR, load_tensors
-from models.experimental.hunyuan_image_3_0.tt.ar_dual_cq import (
+from models.experimental.hunyuan_image_3_0.ttnn.ar_dual_cq import (
     ArDualCQCoordinator,
     device_num_command_queues,
     open_recaption_mesh,
 )
-from models.experimental.hunyuan_image_3_0.tt.generate import make_backbone_logits_fn, make_recaption_logits_fn
-from models.experimental.hunyuan_image_3_0.tt.recaption import run_recaption_on_device
-from models.experimental.hunyuan_image_3_0.tt.wte import HunyuanTtWte
+from models.experimental.hunyuan_image_3_0.ttnn.generate import make_backbone_logits_fn, make_recaption_logits_fn
+from models.experimental.hunyuan_image_3_0.ttnn.recaption import run_recaption_on_device
+from models.experimental.hunyuan_image_3_0.ttnn.wte import HunyuanTtWte
 from models.tt_dit.parallel.manager import CCLManager
 from recaption_helpers import (
     MAX_NEW,

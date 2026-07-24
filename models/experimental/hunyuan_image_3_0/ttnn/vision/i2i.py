@@ -15,8 +15,8 @@
 
 import ttnn
 
-from models.experimental.hunyuan_image_3_0.tt.vision.inject import scatter_cond_vision_embeddings_multi
-from models.experimental.hunyuan_image_3_0.tt.vision.siglip2 import forward_vision_with_aligner
+from models.experimental.hunyuan_image_3_0.ttnn.vision.inject import scatter_cond_vision_embeddings_multi
+from models.experimental.hunyuan_image_3_0.ttnn.vision.siglip2 import forward_vision_with_aligner
 
 
 def encode_cond_vision(vision, aligner, vision_inputs) -> ttnn.Tensor:
