@@ -6526,6 +6526,26 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         in0_CB_tiles = in0_CB_tiles * 2;
     }
 
+    // [#48552 DEBUG -- remove before merge] Dump the in0/out CB geometry so we can see which CB the RBFAIL
+    // (dfb=0 need=224 cap=28) actually is: in0_CB_tiles (this CB) vs per_core_M*per_core_N (the out/interm
+    // shard, = 28). need=224 = in0_block_w*in0_block_h; if in0_CB_tiles != 28 then dfb=0 is NOT cb_in0.
+    log_warning(
+        tt::LogOp,
+        "[QSR-MM-IN1CB #48552] per_core_M={} per_core_N={} K={} in0_block_w={} num_blocks={} in0_block_h={} "
+        "in0_block_tiles={} in0_CB_tiles={} in0_is_sharded={} in0_B={} in1_B={} outblk(MxN)={}",
+        per_core_M,
+        per_core_N,
+        K,
+        in0_block_w,
+        num_blocks,
+        in0_block_h,
+        in0_block_tiles,
+        in0_CB_tiles,
+        in0_is_sharded,
+        in0_B,
+        in1_B,
+        per_core_M * per_core_N);
+
     const auto& a_shape_logical =
         operations::experimental::quasar::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
     const auto in0_last_ktile_w = transpose_a ? 0 : a_shape_logical[-1] % in0_tile.get_width();
