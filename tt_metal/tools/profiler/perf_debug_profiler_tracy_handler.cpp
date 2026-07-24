@@ -66,6 +66,8 @@ TracyTTCtx PerfDebugTracyHandler::GetOrCreateContext(
         return nullptr;  // device was never AddDevice'd
     }
     const ChipAnchor& a = ait->second;
+    ZoneScopedNC("ctx-create", 0xD35400);  // orange: creating a Tracy GPU context (GpuNewContext+Populate+name)
+                                           // -- one per core, all lazily on the first batch -> startup spike
     TracyTTCtx ctx = TracyTTContext();
     // Calibrated variant: marks the context calibrated (calibrationMod=1.0, no calibration events) so the
     // Tracy GUI does NOT show a per-context "Drift (ns/s)/Auto" control under every core. Timestamps are
@@ -158,6 +160,9 @@ void PerfDebugTracyHandler::HandleWorkerZone([[maybe_unused]] const perf_debug::
         }
     }
 
+    // (no per-marker zone here: it would emit one CPU zone per device marker -> millions, doubling Tracy load
+    // and distorting the measurement. The steady per-marker push cost is captured by the per-batch tracy-emit
+    // zone's duration; the startup spike is the ctx-create children.)
     if (zone.is_start) {
         TracyTTPushStartMarker(ctx, marker);
     } else {
