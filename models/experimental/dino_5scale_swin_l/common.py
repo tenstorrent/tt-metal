@@ -1,0 +1,40 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Common config and constants for DINO-5scale Swin-L (36e COCO).
+Used by reference, TTNN, and tests.
+"""
+
+# Input (test pipeline)
+DINO_INPUT_H = 800
+DINO_INPUT_W = 1333
+DINO_INPUT_SIZE = (DINO_INPUT_H, DINO_INPUT_W)
+
+# Backbone (Swin-L)
+SWIN_L_EMBED_DIM = 192
+SWIN_L_DEPTHS = [2, 2, 18, 2]
+SWIN_L_NUM_HEADS = [6, 12, 24, 48]
+SWIN_L_WINDOW_SIZE = 12
+SWIN_L_STAGE_CHANNELS = [192, 384, 768, 1536]  # C2, C3, C4, C5
+
+# Neck
+NECK_IN_CHANNELS = [192, 384, 768, 1536]
+NECK_OUT_CHANNELS = 256
+NUM_LEVELS = 5  # P2, P3, P4, P5, P6
+
+# Encoder / Decoder
+ENCODER_EMBED_DIMS = 256
+ENCODER_NUM_LAYERS = 6
+ENCODER_NUM_HEADS = 8
+ENCODER_FFN_DIMS = 2048
+ENCODER_NUM_POINTS = 4
+
+DECODER_EMBED_DIMS = 256
+DECODER_NUM_LAYERS = 6
+DECODER_NUM_HEADS = 8
+DECODER_FFN_DIMS = 2048
+
+# Detection
+NUM_QUERIES = 900
+NUM_CLASSES = 80  # COCO
