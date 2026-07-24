@@ -526,7 +526,8 @@ def report(path: CollectivePath, scenario: str, mesh_device, measurement: Measur
     measured_ops = "all_to_all" if path.out_dim is not None else "all_gather"
     logger.info(
         f"real-time profiler measured: {measured_ns / 1e3:.3f} us ({measured_ops}), "
-        f"bandwidth={measured_gigabytes_per_second:.3f} GB/s, "
+        f"achieved ethernet bandwidth={measured_gigabytes_per_second:.3f} / "
+        f"{traffic.roofline_gigabytes_per_second:.3f} GB/s, "
         f"roofline utilization={roofline_utilization:.1%}, "
         f"measured/theoretical={measured_ns / traffic.theoretical_ns:.2f}x"
     )
