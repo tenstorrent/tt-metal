@@ -4,12 +4,10 @@
 
 from dataclasses import dataclass
 
-import pytest
 from conftest import skip_for_coverage, skip_for_quasar
 from helpers.param_config import parametrize
-from helpers.perf import PerfConfig
 from helpers.profiler import EntryType, Profiler
-from helpers.test_config import BuildMode, TestConfig
+from helpers.test_config import ProfilerBuild, TestConfig
 from helpers.test_variant_parameters import TemplateParameter
 from ttexalens.tt_exalens_lib import read_words_from_device
 
@@ -28,16 +26,6 @@ class OVERRUN_FILL(TemplateParameter):
         )
 
 
-def _compile_and_run(config):
-    config.generate_variant_hash()
-    if TestConfig.BUILD_MODE in (BuildMode.PRODUCE, BuildMode.DEFAULT):
-        config.build_elfs()
-    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
-        pytest.skip()
-    config.run_elf_files()
-    config.wait_for_tensix_operations_finished()
-
-
 @skip_for_coverage
 @skip_for_quasar
 @parametrize(
@@ -45,11 +33,14 @@ def _compile_and_run(config):
     nest_depth=lambda filler_count: 20 if filler_count == 501 else 40,
 )
 def test_profiler_buffer_overrun_into_neighbor(filler_count, nest_depth):
-    config = PerfConfig(
+    config = TestConfig(
         "sources/profiler_stress_overrun_test.cpp",
         templates=[OVERRUN_FILL(filler_count, nest_depth)],
+        profiler_build=ProfilerBuild.Yes,
     )
-    _compile_and_run(config)
+    # run() compiles in the produce phase and skips there; only the consume/default
+    # phase reaches the device read and assertions below.
+    config.run()
 
     # reading unpack's buffer over the NoC flushes its data cache to L1, so any spill is
     # visible when we read the math buffer next.
@@ -88,11 +79,12 @@ def test_profiler_buffer_overrun_into_neighbor(filler_count, nest_depth):
 @skip_for_coverage
 @skip_for_quasar
 def test_profiler_overrun_absent_from_math_read():
-    config = PerfConfig(
+    config = TestConfig(
         "sources/profiler_stress_overrun_test.cpp",
         templates=[OVERRUN_FILL()],
+        profiler_build=ProfilerBuild.Yes,
     )
-    _compile_and_run(config)
+    config.run()
 
     runtime = Profiler.get_data(
         config.test_name, config.variant_id, TestConfig.TENSIX_LOCATION
