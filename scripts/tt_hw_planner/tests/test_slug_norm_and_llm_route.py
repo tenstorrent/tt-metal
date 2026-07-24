@@ -352,6 +352,42 @@ def test_arch_fingerprint_backbone_families():
     assert arch_descriptor(model_type="dinov2", architectures=["Dinov2Model"]).startswith("ViT")
 
 
+def test_llm_category_fallback_only_on_residual(monkeypatch):
+    from scripts.tt_hw_planner import probe as P
+
+    # the residual gate: LLM fires ONLY when no model_type home AND fingerprint 'unknown'
+    assert P._is_category_residual(None, "unknown") is True
+    assert P._is_category_residual("LLM", "unknown") is False  # model_type placed it
+    assert P._is_category_residual(None, "decoder-only causal LM") is False  # arch placed it
+    assert P._is_category_residual(None, "encoder-decoder transformer") is False  # fact placed it
+
+    calls = {"n": 0}
+
+    def _fake_invoke(prompt, **kw):
+        calls["n"] += 1
+        return '{"category": "TTS"}'
+
+    monkeypatch.setattr("scripts.tt_hw_planner.llm_synth.invoke_llm_cli_one_shot", _fake_invoke)
+    monkeypatch.setenv("TT_HW_PLANNER_LLM_CATEGORY", "1")
+    P._LLM_CATEGORY_CACHE.clear()
+    cfg = {"model_type": "mimi", "architectures": ["MimiModel"], "sampling_rate": 24000, "codebook_size": 2048}
+    assert P._llm_resolve_category("kyutai/mimi", cfg, "feature-extraction") == "TTS"
+    assert calls["n"] == 1
+    # cached: a second call does not re-invoke
+    assert P._llm_resolve_category("kyutai/mimi", cfg, "feature-extraction") == "TTS"
+    assert calls["n"] == 1
+    # a bogus category from the LLM is rejected (validated against the allowed set)
+    P._LLM_CATEGORY_CACHE.clear()
+    monkeypatch.setattr(
+        "scripts.tt_hw_planner.llm_synth.invoke_llm_cli_one_shot", lambda p, **k: '{"category": "Banana"}'
+    )
+    assert P._llm_resolve_category("x/y", cfg, None) is None
+    # gate off -> never invokes, returns None (deterministic result stands)
+    P._LLM_CATEGORY_CACHE.clear()
+    monkeypatch.setenv("TT_HW_PLANNER_LLM_CATEGORY", "0")
+    assert P._llm_resolve_category("kyutai/mimi", cfg, "feature-extraction") is None
+
+
 def test_seq2seq_classified_by_config_fact_not_table():
     # GENERALIZATION GUARD: seq2seq is classified by the authoritative HF config flag
     # is_encoder_decoder, NOT a per-model_type table -- so model_types that are NOT in

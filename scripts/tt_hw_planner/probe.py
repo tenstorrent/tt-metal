@@ -203,6 +203,80 @@ def _arch_override_category(category: str, cfg: dict) -> str:
     return category
 
 
+_VALID_CATEGORIES = ("LLM", "VLM", "Image", "Video", "STT", "TTS", "Embed", "CNN", "NLP", "Unknown")
+_LLM_CATEGORY_CACHE: dict = {}
+
+
+def _is_category_residual(model_type_category: Optional[str], fingerprint: str) -> bool:
+    """The genuine residual for the LLM: NO deterministic fact placed this model.
+    True only when the model_type carries no category (not in the curated table nor
+    the installed transformers task registry) AND the structural fingerprint is
+    ``unknown`` (no is_encoder_decoder / arch-suffix / module-tree signal either).
+    Every model that any deterministic layer can classify is excluded, so the LLM
+    fires on the tail (exotic/config-less arches), never on the common path."""
+    return not model_type_category and fingerprint.startswith("unknown")
+
+
+def _llm_resolve_category(model_id: str, cfg: dict, pipeline_tag: Optional[str], card_text: str = "") -> Optional[str]:
+    """Ask the LLM to name the category for a residual model from the facts that DO
+    exist -- model_type, architectures, salient config keys (which encode structure,
+    e.g. ``sampling_rate``/``codebook_size`` => audio, ``vision_config`` => VLM) and
+    the model-card summary. Generalized alternative to a per-model table: it reads the
+    same evidence a human would. Gated by ``TT_HW_PLANNER_LLM_CATEGORY`` (default on);
+    returns a validated category or None (degrade to the deterministic result, so the
+    fail-loud guarantee holds). Cached per model_id; never raises."""
+    if os.environ.get("TT_HW_PLANNER_LLM_CATEGORY", "1") == "0":
+        return None
+    if model_id in _LLM_CATEGORY_CACHE:
+        return _LLM_CATEGORY_CACHE[model_id]
+    result: Optional[str] = None
+    try:
+        from .llm_synth import extract_json_from_llm_output, invoke_llm_cli_one_shot
+
+        key_cfg = {
+            k: cfg.get(k)
+            for k in (
+                "model_type",
+                "architectures",
+                "is_encoder_decoder",
+                "sampling_rate",
+                "codebook_size",
+                "num_quantizers",
+                "vision_config",
+                "audio_config",
+                "text_config",
+                "num_mel_bins",
+                "vocab_size",
+                "image_size",
+            )
+            if k in cfg
+        }
+        prompt = (
+            "Classify this Hugging Face model into exactly ONE hardware bring-up category.\n"
+            f"Allowed categories: {', '.join(_VALID_CATEGORIES)}.\n"
+            "Definitions: LLM=text-only generative language model; VLM=vision+language; "
+            "Image/Video=visual generation; STT=speech->text; TTS/audio synthesis or neural "
+            "audio codec; Embed=text embedding/retrieval; CNN=vision classification/detection/"
+            "segmentation; NLP=encoder-only text understanding; Unknown=cannot tell.\n"
+            f"model_id: {model_id}\n"
+            f"pipeline_tag: {pipeline_tag}\n"
+            f"config (salient keys): {json.dumps(key_cfg)[:1500]}\n"
+            f"model card (excerpt): {card_text[:800]}\n"
+            'Reply with ONLY compact JSON: {"category": "<one of the allowed>"}'
+        )
+        raw = invoke_llm_cli_one_shot(prompt, model="sonnet", timeout_s=90)
+        parsed = extract_json_from_llm_output(raw) or {}
+        cand = str(parsed.get("category") or "").strip()
+        for c in _VALID_CATEGORIES:
+            if cand.lower() == c.lower():
+                result = c
+                break
+    except Exception:
+        result = None
+    _LLM_CATEGORY_CACHE[model_id] = result
+    return result
+
+
 @dataclass
 class ModelProbe:
     model_id: str
@@ -549,6 +623,19 @@ def _probe_local_model(model_id: str) -> ModelProbe:
         category = "LLM"
     category = _arch_override_category(category, cfg)
 
+    from .fingerprint import arch_descriptor as _arch_descriptor
+
+    _fpr = _arch_descriptor(
+        model_type=cfg.get("model_type"),
+        architectures=cfg.get("architectures"),
+        is_encoder_decoder=cfg.get("is_encoder_decoder"),
+        pipeline_tag=pipeline_tag,
+    )
+    if _is_category_residual(model_type_category, _fpr):
+        _llm_cat = _llm_resolve_category(model_id, cfg, pipeline_tag)
+        if _llm_cat:
+            category = _llm_cat
+
     _td = str(cfg.get("torch_dtype") or "").lower().replace("torch.", "").strip()
     _bpp = _TORCH_DTYPE_BYTES.get(_td)
     _dtype_pretty = _td or None
@@ -697,6 +784,23 @@ def probe_model(model_id: str) -> ModelProbe:
             f"Reclassified {probe.category} to {_arch_cat} via " f"config.architectures={cfg.get('architectures')!r}"
         )
         probe.category = _arch_cat
+
+    from .fingerprint import arch_descriptor as _arch_descriptor
+
+    _fpr = _arch_descriptor(
+        model_type=cfg.get("model_type"),
+        architectures=cfg.get("architectures"),
+        is_encoder_decoder=cfg.get("is_encoder_decoder"),
+        pipeline_tag=probe.pipeline_tag,
+    )
+    if _is_category_residual(model_type_category, _fpr):
+        _llm_cat = _llm_resolve_category(model_id, cfg, probe.pipeline_tag)
+        if _llm_cat and _llm_cat != probe.category:
+            probe.flags.append(
+                f"Category {probe.category!r} -> {_llm_cat!r} by LLM fallback: no deterministic "
+                f"fact placed it (model_type/registry unknown, structural fingerprint 'unknown')."
+            )
+            probe.category = _llm_cat
 
     if _is_low_confidence_category(probe.pipeline_tag, model_type_category, _arch_changed):
         probe.flags.append(
