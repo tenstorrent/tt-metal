@@ -162,6 +162,9 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     untilize/device/factories/untilize_multi_core_block_program_factory.cpp
     untilize/device/factories/untilize_multi_core_program_factory.cpp
     untilize/device/factories/untilize_multi_core_nd_shard_input_program_factory.cpp
+    untilize/codegen/untilize_codegen_device_operation.cpp
+    untilize/codegen/untilize_codegen_program_factory.cpp
+    untilize/codegen/untilize_codegen_supported.cpp
     untilize/untilize.cpp
     untilize_with_unpadding/device/untilize_with_unpadding_device_operation.cpp
     untilize_with_unpadding/device/factories/untilize_with_unpadding_single_core_program_factory.cpp
