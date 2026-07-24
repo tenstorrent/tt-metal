@@ -52,7 +52,7 @@ TEST_F(NamedArgsTest, TensixTestNamedCommonAndPerCoreRuntimeArgs) {
         .core_ranges = cores,
         .named_compile_time_args = {{"my_kernel.param_a", 0}, {"my_kernel.param_b", 0}},
         .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
-        .named_args =
+        .blaze_named_args =
             {
                 .named_common_runtime_args = {{"my_kernel.marker", expected_marker}},
                 .named_per_core_runtime_args = {{"my_kernel.core_idx", {{core0, core0_idx}, {core1, core1_idx}}}},
@@ -106,7 +106,7 @@ TEST_F(NamedArgsTest, TensixTestNamedArrayRuntimeArgs) {
                 {"NUM_ELEMENTS", std::to_string(num_elements)},
             },
         // Scalar named common RT arg
-        .named_args =
+        .blaze_named_args =
             {
                 .named_common_runtime_args = {{"my_kernel.prefix", prefix_val}},
                 // Array named common RT arg
@@ -146,7 +146,7 @@ TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgs) {
         .core_ranges = cores,
         .named_compile_time_args = {{"my_kernel.param_a", param_a}, {"my_kernel.param_b", param_b}},
         .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
-        .named_args =
+        .blaze_named_args =
             {
                 .named_common_runtime_args = {{"my_kernel.marker", 0}},
                 .named_per_core_runtime_args = {{"my_kernel.core_idx", {{core, 0}}}},
@@ -199,7 +199,7 @@ TEST_F(NamedArgsTest, TensixTestNamedPerCoreArrayRuntimeArgs) {
                 {"WRITE_ADDRESS", std::to_string(write_addr)},
                 {"NUM_ELEMENTS", std::to_string(num_elements)},
             },
-        .named_args =
+        .blaze_named_args =
             {
                 .named_per_core_runtime_arg_arrays =
                     {{"my_kernel.weights", {{core0, core0_weights}, {core1, core1_weights}}}},
@@ -296,7 +296,7 @@ TEST_F(NamedArgsTest, TensixTestMixedPositionalAndNamedRuntimeArgs) {
         // Positional common RT arg (index 0)
         .common_runtime_args = {positional_common},
         // Named common RT arg (appended after positional common → index 1)
-        .named_args =
+        .blaze_named_args =
             {
                 .named_common_runtime_args = {{"my_kernel.named_common", named_common_val}},
                 // Named per-core RT arg (appended after positional per-core → index 1)
@@ -342,7 +342,7 @@ TEST_F(NamedArgsTest, TensixTestCTArgDedupSameValue) {
         .named_compile_time_args =
             {{"my_kernel.param_a", param_a}, {"my_kernel.param_b", param_b}, {"my_kernel.param_a", param_a}},
         .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
-        .named_args =
+        .blaze_named_args =
             {
                 .named_common_runtime_args = {{"my_kernel.marker", 0}},
                 .named_per_core_runtime_args = {{"my_kernel.core_idx", {{core, 0}}}},
@@ -379,7 +379,7 @@ TEST_F(NamedArgsTest, TensixTestCTArgConflictFails) {
         // Same name, conflicting values — should fatal
         .named_compile_time_args = {{"my_kernel.param_a", 42}, {"my_kernel.param_a", 99}},
         .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
-        .named_args =
+        .blaze_named_args =
             {
                 .named_common_runtime_args = {{"my_kernel.marker", 0}},
                 .named_per_core_runtime_args = {{"my_kernel.core_idx", {{core, 0}}}},
@@ -407,7 +407,7 @@ TEST_F(NamedArgsTest, TensixTestInvalidIdentifierFails) {
         .core_ranges = cores,
         .named_compile_time_args = {{"123bad.field", 1}},
         .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
-        .named_args =
+        .blaze_named_args =
             {
                 .named_common_runtime_args = {{"123bad.marker", 0}},
                 .named_per_core_runtime_args = {{"123bad.core_idx", {{core, 0}}}},
@@ -423,7 +423,7 @@ TEST_F(NamedArgsTest, TensixTestInvalidIdentifierFails) {
         .core_ranges = cores,
         .named_compile_time_args = {{"my_kernel.bad-field", 1}},
         .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
-        .named_args =
+        .blaze_named_args =
             {
                 .named_common_runtime_args = {{"my_kernel.marker", 0}},
                 .named_per_core_runtime_args = {{"my_kernel.core_idx", {{core, 0}}}},
