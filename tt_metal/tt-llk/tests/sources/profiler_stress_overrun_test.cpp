@@ -9,15 +9,15 @@ struct RuntimeParams
 {
 };
 
-// is_buffer_full() reserves only 1 word per open zone, but each zone end is 2 words and the
-// zone destructor writes it unconditionally, no capacity check. so if several zones are open
-// near a full buffer, closing them pushes write_idx past the 1024-word buffer into the neighbour
-// math buffer since they are continuous in memory
+// Before this fix, is_buffer_full() reserved only 1 word per open zone, but each zone end is 2 words and the
+// zone destructor wrote it unconditionally without a capacity check. Thus, when several zones were open
+// near a full buffer, closing them pushed write_idx past the 1024-word buffer into the neighboring
+// math buffer because the buffers are contiguous in memory.
 //
 //   501 fillers -> write_idx = 2 (kernel start) + 2*501 = 1004.
-//   The guard then lets ~6 nested zones open before blocking further opens, unwinding their
-//   closes (plus the enclosing kernel zone) drives write_idx to ~1030 -> 6 words spill into
-//   the math buffer
+//   The old guard then let ~6 nested zones open before blocking further opens; unwinding their
+//   closes (plus the enclosing kernel zone) drove write_idx to ~1030 -> 6 words spilled into
+//   the math buffer.
 constexpr std::uint32_t FILLER_COUNT = 501;
 constexpr std::uint32_t NEST_DEPTH   = 20;
 
