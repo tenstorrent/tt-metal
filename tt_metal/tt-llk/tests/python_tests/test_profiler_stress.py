@@ -5,7 +5,7 @@
 from dataclasses import dataclass
 
 import pytest
-from conftest import skip_for_coverage, skip_for_quasar
+from conftest import skip_for_coverage
 from helpers.param_config import parametrize
 from helpers.perf import PerfConfig
 from helpers.profiler import EntryType, Profiler
@@ -43,12 +43,11 @@ def _build_and_run(config):
 
 
 @skip_for_coverage
-@skip_for_quasar
 @parametrize(
     filler_count=[501, 400],
     nest_depth=lambda filler_count: 20 if filler_count == 501 else 40,
 )
-def test_profiler_buffer_overrun_into_neighbor(filler_count, nest_depth):
+def test_profiler_buffer_overflow_into_neighbor(filler_count, nest_depth):
     config = PerfConfig(
         "sources/profiler_stress_overrun_test.cpp",
         templates=[OVERRUN_FILL(filler_count, nest_depth)],
@@ -90,8 +89,7 @@ def test_profiler_buffer_overrun_into_neighbor(filler_count, nest_depth):
 
 
 @skip_for_coverage
-@skip_for_quasar
-def test_profiler_overrun_absent_from_math_read():
+def test_profiler_overflow_absent_from_math_read():
     config = PerfConfig(
         "sources/profiler_stress_overrun_test.cpp",
         templates=[OVERRUN_FILL()],
