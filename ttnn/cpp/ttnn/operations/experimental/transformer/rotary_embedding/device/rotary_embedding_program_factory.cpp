@@ -880,4 +880,16 @@ ProgramDescriptor RotaryEmbeddingProgramFactory::create_descriptor(
     return create_multi_tile_descriptor(operation_attributes, tensor_args, tensor_return_value);
 }
 
+void RotaryEmbeddingProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const RotaryEmbeddingParams& operation_attributes,
+    const RotaryEmbeddingInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // token_idx's value is excluded from the hash, so decode hits the cache; re-derive from
+    // create_descriptor and re-apply runtime args + CB addresses so cos_sin_offset/start_id can't freeze.
+    auto desc = create_descriptor(operation_attributes, tensor_args, tensor_return_value);
+    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
+}
+
 }  // namespace ttnn::experimental::prim

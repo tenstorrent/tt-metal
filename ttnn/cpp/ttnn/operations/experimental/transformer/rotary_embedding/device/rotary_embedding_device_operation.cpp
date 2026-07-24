@@ -145,8 +145,16 @@ Tensor RotaryEmbeddingDeviceOperation::create_output_tensors(
 
 ttsl::hash::hash_t RotaryEmbeddingDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // Key token_idx.has_value() (it selects the program structure) but not its value, so decode reuses
+    // one program; the value-derived runtime args are re-applied per hit in override_runtime_arguments.
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<RotaryEmbeddingDeviceOperation>(
-        args.seq_len, args.output_mem_config, tensor_args.input, tensor_args.cos, tensor_args.sin);
+        args.seq_len,
+        args.token_idx.has_value(),
+        args.output_mem_config,
+        args.compute_kernel_config,
+        tensor_args.input,
+        tensor_args.cos,
+        tensor_args.sin);
     return hash;
 }
 
