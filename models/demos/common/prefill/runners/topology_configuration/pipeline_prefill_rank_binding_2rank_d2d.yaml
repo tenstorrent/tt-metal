@@ -25,7 +25,7 @@ mesh_graph_desc_path: models/demos/common/prefill/runners/topology_configuration
 global_env:
   PREFILL_STANDALONE: "1"   # merged runner: standalone (bring-up/pipeline) mode, not the production request loop
   # Device-to-device socket transport (needs the connected MGD + 2D fabric below).
-  PREFILL_FABRIC_MODE: "2d"
+  PREFILL_FABRIC_MODE: "2d_torus_xy"
 
   # Per-rank KV-cache PCC gate.
   PREFILL_STANDALONE_PCC: "1"
