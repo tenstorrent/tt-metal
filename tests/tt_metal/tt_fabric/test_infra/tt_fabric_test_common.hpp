@@ -841,7 +841,8 @@ public:
         }
 
         const auto src_coord = get_device_coord(src_node_id);
-        auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_, is_ubb_galaxy());
+        auto fabric_type = tt::tt_fabric::normalize_fabric_type_for_mesh_shape(
+            tt::tt_fabric::get_fabric_type(current_fabric_config_, is_ubb_galaxy()), mesh_shape_);
 
         if (has_flag(fabric_type, FabricType::TORUS_X)) {
             // EW dimension: need to cover (mesh_shape_[EW_DIM] - 1) total hops
@@ -2076,7 +2077,8 @@ private:
 
         // If toroidal wraparound connections have been enabled, we need to check whether going in an opposite direction
         // over the wraparound link is faster
-        auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_, is_ubb_galaxy());
+        auto fabric_type = tt::tt_fabric::normalize_fabric_type_for_mesh_shape(
+            tt::tt_fabric::get_fabric_type(current_fabric_config_, is_ubb_galaxy()), mesh_shape_);
         // If the physical topology is a mesh, no wraparound links are present, so we can return the hops as is
         if (fabric_type == tt::tt_fabric::FabricType::MESH) {
             return hops;
@@ -2321,7 +2323,8 @@ private:
 
     MeshCoordinate::BoundaryMode get_boundary_mode_for_dimension(int32_t dim) const {
         if (topology_ == Topology::NeighborExchange || topology_ == Topology::Ring || topology_ == Topology::Torus) {
-            auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_, is_ubb_galaxy());
+            auto fabric_type = tt::tt_fabric::normalize_fabric_type_for_mesh_shape(
+                tt::tt_fabric::get_fabric_type(current_fabric_config_, is_ubb_galaxy()), mesh_shape_);
             switch (fabric_type) {
                 case tt::tt_fabric::FabricType::TORUS_X:
                     return (dim == EW_DIM) ? MeshCoordinate::BoundaryMode::WRAP : MeshCoordinate::BoundaryMode::NONE;

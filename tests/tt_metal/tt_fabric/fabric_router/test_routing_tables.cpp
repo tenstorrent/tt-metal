@@ -241,6 +241,19 @@ TEST(MeshGraphValidation, TestT3kMeshGraphInit) {
         MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 3)));
 }
 
+TEST(MeshGraphValidation, TestT3kCollapsedTorusYRetainsMeshDirections) {
+    const std::filesystem::path t3k_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
+    auto mesh_graph = make_mesh_graph(t3k_mesh_graph_desc_path, tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y);
+    const auto& connectivity = mesh_graph.get_intra_mesh_connectivity().at(0);
+
+    // In a two-row mesh, the torus wrap neighbor is the same chip as the ordinary vertical neighbor. It must retain
+    // normal mesh directionality rather than collapsing both ends of the link onto NORTH.
+    EXPECT_EQ(connectivity.at(0).at(4).port_direction, RoutingDirection::S);
+    EXPECT_EQ(connectivity.at(4).at(0).port_direction, RoutingDirection::N);
+}
+
 TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
     // Reset MetalContext's control plane to ensure it doesn't interfere with the test's custom control plane
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
