@@ -35,7 +35,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
 )
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -137,15 +137,14 @@ def _forward(mla, mesh_device, rope_tensors, kvpe_cache, index_kv_cache, hidden)
 def _new_kvpe(config, mesh_device, mesh_shape):
     # Sparse attention (sparse_sdpa) reads the KVPE cache natively: it must be uncompressed bf16 and
     # ROW_MAJOR (the sparse forward asserts this), not the init_kvpe_cache bf8/TILE default.
-    return init_kvpe_cache(
-        kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
+    return init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BF16_RM,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=SEQ_LEN,
         mesh_shape=mesh_shape,
         sp_axis=SP_AXIS,
         num_kvpe_cache_layers=1,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
 

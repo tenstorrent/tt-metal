@@ -126,8 +126,9 @@ def test_kv_cache_table(
     kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank  # 576
 
     num_kvpe_cache_layers = 1
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_cache_head_dim,
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=seq_len,
         mesh_shape=mesh_shape,
@@ -150,7 +151,7 @@ def test_kv_cache_table(
         mesh_shape=mesh_shape,
         seq_len=seq_len,
         sp_axis=sp_axis,
-        tt_kvpe_cache=tt_kvpe_cache,
+        tt_kvpe_cache=tt_kvpe_cache.storage,
         chunk_size_bytes=CHUNK_SIZE_BYTES,
     )
 
@@ -171,7 +172,7 @@ def test_kv_cache_table(
     )
 
     tt_kvpe_cache_torch = ttnn.to_torch(
-        tt_kvpe_cache,
+        tt_kvpe_cache.storage,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
     ).to(torch.bfloat16)
 
@@ -262,8 +263,9 @@ def test_kimi_kv_cache_table(
     kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank  # 576
 
     num_kvpe_cache_layers = 1
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_cache_head_dim,
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=seq_len,
         mesh_shape=mesh_shape,
@@ -286,7 +288,7 @@ def test_kimi_kv_cache_table(
         mesh_shape=mesh_shape,
         seq_len=seq_len,
         sp_axis=sp_axis,
-        tt_kvpe_cache=tt_kvpe_cache,
+        tt_kvpe_cache=tt_kvpe_cache.storage,
         chunk_size_bytes=CHUNK_SIZE_BYTES,
     )
 
@@ -307,7 +309,7 @@ def test_kimi_kv_cache_table(
     )
 
     tt_kvpe_cache_torch = ttnn.to_torch(
-        tt_kvpe_cache,
+        tt_kvpe_cache.storage,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
     ).to(torch.bfloat16)
 
@@ -616,7 +618,7 @@ def test_glm_kv_cache_table(
         mesh_shape=mesh_shape,
         seq_len=seq_len,
         sp_axis=sp_axis,
-        tt_kvpe_cache=tt_kvpe_cache,
+        tt_kvpe_cache=tt_kvpe_cache.storage,
         chunk_size_bytes=KVPE_CHUNK_SIZE_BYTES,
         num_users=1,
         config_id=KVPE_CONFIG_ID,
