@@ -3,11 +3,8 @@
 
 #include <cstdint>
 
+#include "build.h"
 #include "profiler.h"
-
-struct RuntimeParams
-{
-};
 
 // Before this fix, is_buffer_full() reserved only 1 word per open zone, but each zone end is 2 words and the
 // zone destructor wrote it unconditionally without a capacity check. Thus, when several zones were open
@@ -18,8 +15,14 @@ struct RuntimeParams
 //   The old guard then let ~6 nested zones open before blocking further opens; unwinding their
 //   closes (plus the enclosing kernel zone) drove write_idx to ~1030 -> 6 words spilled into
 //   the math buffer.
-constexpr std::uint32_t FILLER_COUNT = 501;
-constexpr std::uint32_t NEST_DEPTH   = 20;
+//
+// FILLER_COUNT / NEST_DEPTH default here but are overridable from the Python test (OVERRUN_FILL).
+#ifndef FILLER_COUNT
+#define FILLER_COUNT 501
+#endif
+#ifndef NEST_DEPTH
+#define NEST_DEPTH 20
+#endif
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -33,7 +36,7 @@ static void open_nested_zones(std::uint32_t depth)
     open_nested_zones(depth - 1);
 }
 
-void run_kernel([[maybe_unused]] const struct RuntimeParams& params)
+void run_kernel([[maybe_unused]] RUNTIME_PARAMETERS params)
 {
     for (std::uint32_t i = 0; i < FILLER_COUNT; i++)
     {
@@ -46,7 +49,7 @@ void run_kernel([[maybe_unused]] const struct RuntimeParams& params)
 
 #ifdef LLK_TRISC_MATH
 
-void run_kernel([[maybe_unused]] const struct RuntimeParams& params)
+void run_kernel([[maybe_unused]] RUNTIME_PARAMETERS params)
 {
 }
 
@@ -54,7 +57,7 @@ void run_kernel([[maybe_unused]] const struct RuntimeParams& params)
 
 #ifdef LLK_TRISC_PACK
 
-void run_kernel([[maybe_unused]] const struct RuntimeParams& params)
+void run_kernel([[maybe_unused]] RUNTIME_PARAMETERS params)
 {
 }
 

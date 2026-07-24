@@ -2,21 +2,39 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from dataclasses import dataclass
+
 import pytest
 from conftest import skip_for_coverage, skip_for_quasar
 from helpers.perf import PerfConfig
 from helpers.profiler import EntryType, Profiler
 from helpers.test_config import BuildMode, TestConfig
+from helpers.test_variant_parameters import TemplateParameter
 from ttexalens.tt_exalens_lib import read_words_from_device
+
+
+@dataclass
+class OVERRUN_FILL(TemplateParameter):
+    """Fill level for the overrun reproducer, injected as #defines into build.h."""
+
+    filler_count: int = 501
+    nest_depth: int = 20
+
+    def convert_to_cpp(self) -> str:
+        return f"#define FILLER_COUNT {self.filler_count}\n#define NEST_DEPTH {self.nest_depth}"
 
 
 @skip_for_coverage
 @skip_for_quasar
-def test_profiler_buffer_overrun_into_neighbor():
+@pytest.mark.parametrize("filler_count, nest_depth", [(501, 20), (400, 40)])
+def test_profiler_buffer_overrun_into_neighbor(filler_count, nest_depth):
     if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
         pytest.skip()
 
-    config = PerfConfig("sources/profiler_stress_overrun_test.cpp")
+    config = PerfConfig(
+        "sources/profiler_stress_overrun_test.cpp",
+        templates=[OVERRUN_FILL(filler_count, nest_depth)],
+    )
     config.generate_variant_hash()
     config.build_elfs()
     config.run_elf_files()
@@ -62,7 +80,10 @@ def test_profiler_overrun_crashes_normal_read():
     if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
         pytest.skip()
 
-    config = PerfConfig("sources/profiler_stress_overrun_test.cpp")
+    config = PerfConfig(
+        "sources/profiler_stress_overrun_test.cpp",
+        templates=[OVERRUN_FILL()],
+    )
     config.generate_variant_hash()
     config.build_elfs()
     config.run_elf_files()
