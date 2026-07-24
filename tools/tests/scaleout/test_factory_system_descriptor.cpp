@@ -12,6 +12,7 @@
 
 #include <cabling_generator/cabling_generator.hpp>
 #include <factory_system_descriptor/utils.hpp>
+#include <factory_system_descriptor/subset_check.hpp>
 #include <node/node_types.hpp>
 
 // Include generated protobuf headers
@@ -440,6 +441,96 @@ TEST(CablingGenerator, PruneDeadChannelsIgnoresUnknownChannel) {
 
     EXPECT_TRUE(gen.prune_dead_channels({bogus}).empty());  // no cable matched
     EXPECT_EQ(gen.get_chip_connections().size(), before);   // FSD unchanged
+}
+
+// Write an FSD textproto to `path`. `hosts` are in host_id order; `connections` are
+// (host_id_a, tray_a, asic_a, chan_a, host_id_b, tray_b, asic_b, chan_b) tuples.
+namespace {
+struct FsdConn {
+    uint32_t ha, ta, aa, ca, hb, tb, ab, cb;
+};
+void write_fsd(const std::string& path, const std::vector<std::string>& hosts, const std::vector<FsdConn>& conns) {
+    std::ofstream f(path);
+    for (const auto& h : hosts) {
+        f << "hosts { hostname: \"" << h << "\" }\n";
+    }
+    f << "eth_connections {\n";
+    for (const auto& c : conns) {
+        f << "  connection {\n";
+        f << "    endpoint_a { host_id: " << c.ha << " tray_id: " << c.ta << " asic_location: " << c.aa
+          << " chan_id: " << c.ca << " }\n";
+        f << "    endpoint_b { host_id: " << c.hb << " tray_id: " << c.tb << " asic_location: " << c.ab
+          << " chan_id: " << c.cb << " }\n";
+        f << "  }\n";
+    }
+    f << "}\n";
+}
+}  // namespace
+
+TEST(SkinnySubset, IsHostOrderingIndependent) {
+    // skinny: hosts [A, B], one connection A<->B on tray1/asic0/chan0.
+    const std::string skinny = root_output_dir + "subset/skinny_order.textproto";
+    std::filesystem::create_directories(std::filesystem::path(skinny).parent_path());
+    write_fsd(skinny, {"A", "B"}, {{0, 1, 0, 0, 1, 1, 0, 0}});
+
+    // good: hosts listed in REVERSED order [B, A] so the same physical connection has swapped
+    // host_id indices, plus an extra connection. If the check keyed on host_id it would mismatch;
+    // keying on hostname it must still see skinny as a subset.
+    const std::string good = root_output_dir + "subset/good_order.textproto";
+    write_fsd(good, {"B", "A"}, {{1, 1, 0, 0, 0, 1, 0, 0}, {1, 1, 0, 1, 0, 1, 0, 1}});
+
+    // Despite the reversed host ordering in `good`, skinny's connection is found -> subset (empty).
+    EXPECT_TRUE(missing_skinny_connections(skinny, good).empty());
+
+    std::filesystem::remove(skinny);
+    std::filesystem::remove(good);
+}
+
+TEST(SkinnySubset, ReportsMissingRequiredConnection) {
+    // skinny requires two connections; good only provides one -> not a subset, the other is missing.
+    const std::string skinny = root_output_dir + "subset/skinny_missing.textproto";
+    std::filesystem::create_directories(std::filesystem::path(skinny).parent_path());
+    write_fsd(skinny, {"A", "B"}, {{0, 1, 0, 0, 1, 1, 0, 0}, {0, 1, 0, 1, 1, 1, 0, 1}});
+
+    const std::string good = root_output_dir + "subset/good_missing.textproto";
+    write_fsd(good, {"A", "B"}, {{0, 1, 0, 0, 1, 1, 0, 0}});
+
+    auto missing = missing_skinny_connections(skinny, good);
+    EXPECT_EQ(missing.size(), 1u);
+
+    std::filesystem::remove(skinny);
+    std::filesystem::remove(good);
+}
+
+TEST(SkinnySubset, RegeneratedFsdRemainsSupersetOfSkinny) {
+    // Realistic end-to-end: a pruned (degraded) FSD is a subset of the full FSD, and the full FSD
+    // is NOT a subset of the pruned one (the pruned cable is the missing required connection).
+    CablingGenerator full(
+        "tools/tests/scaleout/cabling_descriptors/5_n300_lb_superpod.textproto",
+        "tools/tests/scaleout/deployment_descriptors/5_lb_deployment.textproto");
+    const std::string full_fsd = root_output_dir + "subset/full.textproto";
+    std::filesystem::create_directories(std::filesystem::path(full_fsd).parent_path());
+    full.emit_factory_system_descriptor(full_fsd);
+
+    // Prune one real cable to produce the degraded "good" topology.
+    CablingGenerator degraded(
+        "tools/tests/scaleout/cabling_descriptors/5_n300_lb_superpod.textproto",
+        "tools/tests/scaleout/deployment_descriptors/5_lb_deployment.textproto");
+    const auto& first = degraded.get_chip_connections().front().first;
+    PhysicalChannelEndpoint dead{
+        degraded.get_deployment_hosts().at(*first.host_id).hostname, first.tray_id, first.asic_channel};
+    degraded.prune_dead_channels({dead});
+    const std::string degraded_fsd = root_output_dir + "subset/degraded.textproto";
+    degraded.emit_factory_system_descriptor(degraded_fsd);
+
+    // degraded (skinny) is a subset of full (good): the working set still covers the smaller one.
+    EXPECT_TRUE(missing_skinny_connections(degraded_fsd, full_fsd).empty());
+
+    // full (skinny) is NOT a subset of degraded (good): the pruned cable is required but missing.
+    EXPECT_GT(missing_skinny_connections(full_fsd, degraded_fsd).size(), 0u);
+
+    std::filesystem::remove(full_fsd);
+    std::filesystem::remove(degraded_fsd);
 }
 
 }  // namespace tt::scaleout_tools

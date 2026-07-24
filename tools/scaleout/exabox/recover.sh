@@ -100,6 +100,11 @@ Optional:
                                             In --use-docker mode regen runs inside the image on the first host.
                                             Regen is skipped automatically when only --factory-descriptor-path is
                                             in use (cabling+deployment are required inputs).
+    --skinny-fsd <path>                     After regeneration, check whether the regenerated (good) topology
+                                            still contains every connection in this skinny factory system
+                                            descriptor (.textproto). If so, the degraded cluster can still run a
+                                            workload validated on the skinny topology; otherwise the required
+                                            connections missing from the cluster are listed.
     --help                                  Display this help message and exit
 
 ================================================================================
@@ -141,6 +146,7 @@ OUTPUT_DIR=""  # default computed after --hosts is known: "<comma-separated-host
 RERUN_ON_RETRAIN=false
 VALIDATION_EXTRA_ARGS=()
 REGENERATE_ON_FAILURE=true
+SKINNY_FSD=""
 
 # Minimum required tt-smi/KMD/firmware versions (TT_SMI_MIN_VERSION, KMD_MIN_VERSION,
 # FW_MIN_VERSION) and the check itself live in utils/host_utils.sh, shared with run_validation.sh.
@@ -322,6 +328,14 @@ while [[ $# -gt 0 ]]; do
             REGENERATE_ON_FAILURE=false
             shift
             ;;
+        --skinny-fsd)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --skinny-fsd requires a non-empty value"
+                exit 1
+            fi
+            SKINNY_FSD="$2"
+            shift 2
+            ;;
         --help)
             show_help
             exit 0
@@ -466,6 +480,9 @@ if [[ ${#VALIDATION_EXTRA_ARGS[@]} -gt 0 ]]; then
     echo "Extra validation args: ${VALIDATION_EXTRA_ARGS[*]}"
 fi
 echo "Regenerate on failure: $REGENERATE_ON_FAILURE"
+if [[ -n "$SKINNY_FSD" ]]; then
+    echo "Skinny FSD (subset check): $SKINNY_FSD"
+fi
 echo "=========================================="
 echo ""
 
@@ -644,6 +661,9 @@ if [[ "$REGENERATE_ON_FAILURE" == true && $VALIDATION_EXIT -ne 0 ]]; then
                 --unretrainable-channels "$UNRETRAINABLE_YAML"
                 --output-dir "$REGEN_DIR"
             )
+            # When a skinny descriptor is given, run_regen_descriptors also checks the regenerated
+            # topology still contains it (and exits non-zero if not).
+            [[ -n "$SKINNY_FSD" ]] && REGEN_ARGS+=(--skinny-fsd "$SKINNY_FSD")
             echo ""
             echo "Validation exited unrecoverable; regenerating descriptors without unretrainable cables..."
             if [[ -n "$DOCKER_IMAGE" ]]; then
@@ -652,28 +672,28 @@ if [[ "$REGENERATE_ON_FAILURE" == true && $VALIDATION_EXIT -ne 0 ]]; then
                 # descriptor inputs and the output dir so paths resolve identically in-container.
                 # Relative input paths resolve against the container's working dir, which differs
                 # from the host cwd, so warn the operator to use absolute paths.
-                if [[ "$CABLING_DESCRIPTOR_PATH" != /* || "$DEPLOYMENT_DESCRIPTOR_PATH" != /* ]]; then
-                    echo "Warning: --cabling-descriptor-path / --deployment-descriptor-path are relative;"
-                    echo "         in --use-docker mode they may not resolve inside the container."
-                    echo "         Use absolute paths if regeneration fails to find the descriptors."
+                if [[ "$CABLING_DESCRIPTOR_PATH" != /* || "$DEPLOYMENT_DESCRIPTOR_PATH" != /* || \
+                      ( -n "$SKINNY_FSD" && "$SKINNY_FSD" != /* ) ]]; then
+                    echo "Warning: a descriptor path is relative; in --use-docker mode it may not resolve"
+                    echo "         inside the container. Use absolute paths if regeneration fails to find inputs."
                 fi
                 FIRST_HOST="${HOSTS%%,*}"
                 REGEN_VOLUMES=(--volume /data/scaleout_configs --volume "$OUTPUT_DIR")
                 # Mount the directories holding the input descriptors too, in case they live
-                # outside /data/scaleout_configs (custom --cabling/--deployment paths).
-                CABLING_DIR="$(cd "$(dirname "$CABLING_DESCRIPTOR_PATH")" && pwd)"
-                DEPLOYMENT_DIR="$(cd "$(dirname "$DEPLOYMENT_DESCRIPTOR_PATH")" && pwd)"
-                REGEN_VOLUMES+=(--volume "$CABLING_DIR" --volume "$DEPLOYMENT_DIR")
+                # outside /data/scaleout_configs (custom --cabling/--deployment/--skinny paths).
+                REGEN_VOLUMES+=(--volume "$(cd "$(dirname "$CABLING_DESCRIPTOR_PATH")" && pwd)")
+                REGEN_VOLUMES+=(--volume "$(cd "$(dirname "$DEPLOYMENT_DESCRIPTOR_PATH")" && pwd)")
+                [[ -n "$SKINNY_FSD" ]] && REGEN_VOLUMES+=(--volume "$(cd "$(dirname "$SKINNY_FSD")" && pwd)")
                 ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
                     --empty-entrypoint \
                     --mpi-interface "$MPI_IF" \
                     "${REGEN_VOLUMES[@]}" \
                     --host "$FIRST_HOST" -np 1 \
                     ./build/tools/scaleout/run_regen_descriptors \
-                    "${REGEN_ARGS[@]}" || echo "Warning: descriptor regeneration failed (see error above)"
+                    "${REGEN_ARGS[@]}" || echo "Warning: regeneration / skinny check reported a problem (see above)."
             else
                 ./build/tools/scaleout/run_regen_descriptors \
-                    "${REGEN_ARGS[@]}" || echo "Warning: descriptor regeneration failed (see error above)"
+                    "${REGEN_ARGS[@]}" || echo "Warning: regeneration / skinny check reported a problem (see above)."
             fi
         fi
     fi

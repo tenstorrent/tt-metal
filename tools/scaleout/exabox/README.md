@@ -297,6 +297,8 @@ If you see `could not access or execute an executable`, the build is missing —
 ./tools/scaleout/exabox/recover.sh --hosts <hosts> --validation-args "--min-connections 3" --rerun-on-retrain
 ```
 
+**Deploying around a dead cable:** when a cable can't be retrained, recovery automatically regenerates FSD/cabling/deployment descriptors with the dead cable pruned, so you can deploy on the degraded topology. Optionally pass `--skinny-fsd <path>` to gate the deploy on whether the regenerated topology still contains a minimal "skinny" workload subset. See [Deploying Around a Dead Cable](./TROUBLESHOOTING.md#deploying-around-a-dead-cable-regenerate-descriptors).
+
 Any other `run_cluster_validation` flag (e.g. `--hard-fail`, `--print-connectivity`, `--log-ethernet-metrics`) can be forwarded via `--validation-args`.
 
 ## Troubleshooting
