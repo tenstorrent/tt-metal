@@ -17,7 +17,7 @@ void kernel_main() {
     const uint32_t coordinator_core_physical_coord_x = get_arg_val<uint32_t>(2);
     const uint32_t coordinator_core_physical_coord_y = get_arg_val<uint32_t>(3);
     const uint32_t coordinator_to_cores_semaphore_arg = get_arg_val<uint32_t>(4);
-    const uint32_t cores_to_coordinator_semaphore_arg = get_arg_val<uint32_t>(5);
+    const uint32_t cores_to_coordinator_ready_semaphore_arg = get_arg_val<uint32_t>(5);
 
     // Compile time args
     constexpr uint32_t input_tensor_cb_index = get_compile_time_arg_val(0);
@@ -55,7 +55,7 @@ void kernel_main() {
 
     // Semaphore setup
     Semaphore<> coordinator_to_cores_sem(coordinator_to_cores_semaphore_arg);
-    Semaphore<> cores_to_coordinator_sem(cores_to_coordinator_semaphore_arg);
+    Semaphore<> cores_to_coordinator_ready_sem(cores_to_coordinator_ready_semaphore_arg);
     coordinator_to_cores_sem.set(VALID);  // Reset the semaphore (Valid - we wait for 0)
 
     for (uint32_t h = 0; h < Ht; h++) {
@@ -64,7 +64,7 @@ void kernel_main() {
             get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
 
         // Indicate to the coordinator that the core is ready
-        cores_to_coordinator_sem.up(noc, coordinator_core_physical_coord_x, coordinator_core_physical_coord_y, 1);
+        cores_to_coordinator_ready_sem.up(noc, coordinator_core_physical_coord_x, coordinator_core_physical_coord_y, 1);
         noc.async_atomic_barrier();
         coordinator_to_cores_sem.wait(0);     // Wait for coordinator to signal to start
         coordinator_to_cores_sem.set(VALID);  // Reset the semaphore

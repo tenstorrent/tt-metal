@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include <functional>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -179,14 +181,14 @@ struct Conv2dConfig {
 enum class Conv2dOpParallelizationStrategy { MULTI_CORE, MULTI_CORE_REUSE, MULTI_CORE_REUSE_MCAST, SINGLE_CORE };
 
 struct Conv2dParallelizationConfig {
-    CoreCoord grid_size;  // (x,y)
+    tt::tt_metal::CoreCoord grid_size;  // (x,y)
     uint32_t num_cores_nhw = 1;
     uint32_t num_cores_c_in = 1;
     uint32_t num_cores_c_out = 1;
     uint32_t per_core_out_matrix_height_ntile = 1;
     uint32_t per_core_out_matrix_width_ntile = 1;
 
-    CoreCoord get_grid_size() const { return this->grid_size; }
+    tt::tt_metal::CoreCoord get_grid_size() const { return this->grid_size; }
 };
 
 struct Conv2dBlockConfig {
@@ -216,6 +218,48 @@ struct Conv2dParams {
     bool config_tensors_in_dram = false;
     uint32_t pre_op_l1_allocation_size_bytes = 0;
     std::optional<bool> force_split_reader;
+
+    static constexpr auto attribute_names = std::make_tuple(
+        "sliding_window_config",
+        "output_channels",
+        "groups",
+        "untilize_out",
+        "has_bias",
+        "activation",
+        "parallelization_config",
+        "block_config",
+        "memory_config",
+        "dtype",
+        "input_tensor_shape",
+        "compute_kernel_config",
+        "enable_act_double_buffer",
+        "enable_weights_double_buffer",
+        "full_inner_dim",
+        "enable_activation_reuse",
+        "config_tensors_in_dram",
+        "force_split_reader");
+
+    auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->sliding_window_config),
+            this->output_channels,
+            this->groups,
+            this->untilize_out,
+            this->has_bias,
+            std::cref(this->activation),
+            this->parallelization_config,
+            this->block_config,
+            std::cref(this->memory_config),
+            this->dtype,
+            this->input_tensor_shape,
+            std::cref(this->compute_kernel_config),
+            this->enable_act_double_buffer,
+            this->enable_weights_double_buffer,
+            this->full_inner_dim,
+            this->enable_activation_reuse,
+            this->config_tensors_in_dram,
+            this->force_split_reader);
+    }
 };
 
 struct Conv2dHashableParams {

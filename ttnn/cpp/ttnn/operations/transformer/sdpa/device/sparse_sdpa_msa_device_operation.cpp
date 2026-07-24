@@ -190,7 +190,7 @@ SparseSDPAMsaOperation::spec_return_value_t SparseSDPAMsaOperation::compute_outp
     // Output is DRAM-interleaved ROW_MAJOR, with dtype matching q.
     const tt::tt_metal::MemoryConfig out_mem{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         shape, tt::tt_metal::TensorLayout(t.q.dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), out_mem));
 }
 

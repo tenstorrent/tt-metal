@@ -22,7 +22,7 @@ bool is_dram_interleaved(const ttnn::Tensor& tensor) {
 }
 
 void validate_index_tensor(const ttnn::Tensor& tensor, const std::string& name) {
-    TT_FATAL(tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
+    TT_FATAL(tensor.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
     TT_FATAL(tensor.buffer() != nullptr, "{} must have a buffer", name);
     TT_FATAL(tensor.dtype() == tt::tt_metal::DataType::UINT32, "{} must be UINT32, got {}", name, tensor.dtype());
     TT_FATAL(
@@ -67,7 +67,7 @@ void ExtractDeviceOperation::validate_on_program_cache_miss(
     // The op is byte-level tile-copy (no math on the data), so the kernels work for either dtype.
     // The CB and output tensor both derive their format from global_tensor.dtype(). Production
     // uses BFLOAT8_B; BFLOAT16 is needed for the PCC-comparison test path (bf16 everywhere).
-    TT_FATAL(global_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "global_tensor must be on device");
+    TT_FATAL(global_tensor.storage_type() == ttnn::StorageType::DEVICE, "global_tensor must be on device");
     TT_FATAL(global_tensor.buffer() != nullptr, "global_tensor must have a buffer");
     TT_FATAL(
         global_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B ||
@@ -147,7 +147,7 @@ ExtractDeviceOperation::spec_return_value_t ExtractDeviceOperation::compute_outp
     const ttnn::Shape output_shape({operation_attributes.max_dispatched_tokens_per_expert, hidden_dim});
     const auto mem_config =
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             global_tensor.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), mem_config));

@@ -1575,6 +1575,15 @@ TEST_F(MeshDeviceFixture, B2_TxnIdAllocator_Boundaries_Config_2_0) {
         auto dfbs = program.impl().dataflow_buffers_on_core(CoreCoord(0, 0));
         ASSERT_EQ(dfbs.size(), 1u);
         EXPECT_EQ(dfbs[0]->producer_txn_descriptor.num_txn_ids, c.expected_num_txn_ids);
+        // Txn id 0 is reserved for untagged NoC traffic; DFB assignment starts at 1.
+        for (uint8_t i = 0; i < dfbs[0]->producer_txn_descriptor.num_txn_ids; ++i) {
+            EXPECT_NE(dfbs[0]->producer_txn_descriptor.txn_ids[i], 0)
+                << "producer txn_ids[" << static_cast<int>(i) << "] must not be 0";
+        }
+        for (uint8_t i = 0; i < dfbs[0]->consumer_txn_descriptor.num_txn_ids; ++i) {
+            EXPECT_NE(dfbs[0]->consumer_txn_descriptor.txn_ids[i], 0)
+                << "consumer txn_ids[" << static_cast<int>(i) << "] must not be 0";
+        }
     }
 }
 
