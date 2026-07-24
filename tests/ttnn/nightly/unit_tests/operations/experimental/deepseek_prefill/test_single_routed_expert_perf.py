@@ -95,8 +95,31 @@ def _perf_params():
     return params
 
 
+@pytest.fixture(autouse=True)
+def _release_device_ownership():
+    """Free the chip before the Tracy worker subprocess tries to open it.
+
+    This test spawns a Tracy child (pytest-within-pytest) that opens the device itself. The parent
+    pytest process otherwise holds the CHIP_IN_USE lock for its whole lifetime (it is released only
+    at process exit), so in the shared L2-nightly ops run — where earlier files open a device
+    first — the child deadlocks acquiring the chip. ``ttnn.ReleaseOwnership()`` destroys the lingering
+    MetalContext singleton, releasing the chip. It is safe here: all prior function-scoped device
+    fixtures are already torn down (no open devices), and the MetalContext is transparently
+    re-created on the next device access.
+    """
+    import gc
+
+    import ttnn
+
+    # Force-finalize any device-backed Python objects lingering from earlier tests BEFORE tearing
+    # down the context, so their C++ destructors run against a still-valid MetalContext. Skipping
+    # this risks a later GC collecting a now-dangling wrapper and segfaulting.
+    gc.collect()
+    ttnn.ReleaseOwnership()
+    yield
+
+
 @pytest.mark.parametrize("command, expected_per_op, model_name", _perf_params())
-@pytest.mark.models_device_performance_bare_metal
 # Gate to P150 via tt-smi board telemetry (SMBus). This also skips Wormhole and any
 # other board. Do NOT use ttnn.cluster.get_cluster_type() here: it opens and locks the
 # chip, and since skipif is evaluated at collection time in the parent process, the

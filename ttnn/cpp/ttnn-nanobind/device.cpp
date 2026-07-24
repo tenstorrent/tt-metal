@@ -324,6 +324,21 @@ void device_module(nb::module_& m_device) {
         +------------------+------------------------+-----------------------+-------------+----------+
     )doc");
 
+    m_device.def(
+        "ReleaseOwnership",
+        []() { tt::tt_metal::detail::ReleaseOwnership(); },
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+        Release ownership of the MetalContext singleton, destroying it and freeing the devices so
+        that another process can open them. All devices must be closed before calling this. The
+        MetalContext is transparently re-created on the next device access.
+
+        Primary use: device-perf tests that spawn a Tracy subprocess (pytest-within-pytest). The
+        parent process otherwise holds the CHIP_IN_USE lock for its whole lifetime (released only at
+        process exit), so the child deadlocks acquiring the chip. Calling this in the parent after
+        its devices are closed lets the child acquire the device.
+    )doc");
+
     m_device.def("GetNumAvailableDevices", &tt::tt_metal::GetNumAvailableDevices, R"doc(
         Returns number of Tenstorrent devices that can be targeted.
     )doc");
