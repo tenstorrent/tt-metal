@@ -1214,7 +1214,8 @@ bool isGalaxyMMIODevice(distributed::MeshDevice* mesh_device, IDevice* device) {
 }
 
 bool useFastDispatch(distributed::MeshDevice* mesh_device, IDevice* device, ContextId context_id) {
-    return MetalContext::instance(context_id).device_manager()->is_dispatch_firmware_active() &&
+    return MetalContext::instance(context_id).rtoptions().get_fast_dispatch() &&
+           MetalContext::instance(context_id).device_manager()->is_dispatch_firmware_active() &&
            !isGalaxyMMIODevice(mesh_device, device);
 }
 
