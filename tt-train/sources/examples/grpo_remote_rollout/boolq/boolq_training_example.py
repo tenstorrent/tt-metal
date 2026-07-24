@@ -31,9 +31,7 @@ if _EXAMPLE_ROOT not in sys.path:
 # cross-rank fabric init.
 ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
 
-MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1b_remote_rollout.yaml"
-WEIGHT_SYNC_EVERY = 1
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 
@@ -168,6 +166,9 @@ def _ttml_main() -> None:
     device_config, raw = _load_device_config()
     mesh_device = _open_ttml_device(device_config)
 
+    model_id = raw["model_id"]
+    weight_sync_every = int(raw["weight_sync_every"])
+
     completer: Any = None
     client: Any = None
     try:
@@ -176,7 +177,7 @@ def _ttml_main() -> None:
         bridge = HostWeightBridge.init_sender(mesh=mesh_device, peer_rank=TTT_RANK)
         client = MPIRolloutClient(peer_rank=TTT_RANK, bridge=bridge)
 
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
         system_prompt = "You are a wordy professor. Explain in 3 long sentences before saying Yes or No."
 
         def format_boolq(example):
@@ -204,7 +205,7 @@ def _ttml_main() -> None:
             ),
             transformer_config=transformer_config,
             mesh_device=mesh_device,
-            model_source=MODEL_ID,
+            model_source=model_id,
             inference_client=client,
             enable_ddp=device_config.enable_ddp,
         )
@@ -220,10 +221,10 @@ def _ttml_main() -> None:
             reward_func=_boolq_reward,
             optimizer_dict=optimizer_dict,
             callbacks=[
-                WeightSyncCallback(completer, every=WEIGHT_SYNC_EVERY),
+                WeightSyncCallback(completer, every=weight_sync_every),
                 GRPOMonitor(output_dir),
             ],
-            model_source=MODEL_ID,
+            model_source=model_id,
         )
         trainer.train()
     finally:
@@ -257,6 +258,7 @@ def _ttt_main() -> None:
     # the rollout mesh / batch / seq-len come from ``remote_rollout_config``.
     raw = load_config(os.path.join(str(REPO_ROOT), CONFIG_REL))
     grpo_temperature = float(raw["training_config"]["grpo_config"]["temperature"])
+    model_id = raw["model_id"]
     rr = raw["remote_rollout_config"]
 
     parent_mesh = ttnn.open_mesh_device(
@@ -267,13 +269,13 @@ def _ttt_main() -> None:
     worker: Any = None
     server: Any = None
     try:
-        stop_token_ids, pad_token_id = llama_stop_and_pad(MODEL_ID)
+        stop_token_ids, pad_token_id = llama_stop_and_pad(model_id)
 
         # One worker owns the whole parent mesh: it splits it into [1,1] submeshes
         # and runs generation data-parallel across them.
         worker = TttGenerationWorker(
             mesh_device=parent_mesh,
-            model_source=MODEL_ID,
+            model_source=model_id,
             max_batch_size=rr["max_batch_size"],
             max_seq_len=rr["max_seq_len"],
             instruct=True,
