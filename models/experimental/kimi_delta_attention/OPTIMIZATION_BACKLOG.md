@@ -226,6 +226,10 @@ For local scan changes, retain an experiment only when:
       guard: output PCC `0.999964 -> 0.999867`, recurrent state
       `0.999903 -> 0.999878`. Reject BF8 for the fused input projection; the
       output projection remains an independent experiment.
+    - Output-projection result, 2026-07-24: recurrent PCC stayed unchanged
+      and output PCC remained above `0.999900` at `0.999938`, but T=5,120
+      wall regressed `0.17%` and output/CCL regressed `0.11%`. Reject: the
+      fused MMRS is CCL-bound, so compressed weights do not improve it.
 53. Fold additional auxiliary projection work into the grouped projection.
 54. Tune gated-RMS core mapping separately for short and long sequences.
 55. Evaluate lower-precision gated-RMS output only at the projection boundary.

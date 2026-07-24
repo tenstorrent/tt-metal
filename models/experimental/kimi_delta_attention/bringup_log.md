@@ -1278,3 +1278,27 @@
   lowers recurrent-state PCC below the selected `0.999900` guard.
 - Verdict: reject and remove without profiling; accuracy already disqualifies
   it. Test output-projection BF8 independently because it cannot affect state.
+
+
+### 2026-07-24 18:31:25 UTC — Reject BF8 output-projection weights
+
+- Hypothesis: use `bfloat8_b` only for the row-parallel output-projection
+  weights. This cannot perturb recurrent state and may reduce weight traffic
+  inside the fused matmul/reduce-scatter.
+- Focused TP command with `QWEN_KDA_OUTPUT_BF8=1` -> PASS. Output PCC changed
+  `0.999964 -> 0.999938`; recurrent/convolution PCC stayed exactly
+  `0.999903/0.999997`.
+- T=640 CSV:
+  `generated/profiler/reports/2026_07_24_18_29_21/ops_perf_results_2026_07_24_18_29_21.csv`
+  (SHA-256 `d4c644eef8e615400661e8281c6a71949ffa1ae2267817399635905b94fce16a`).
+  Wall improves `622.564 -> 620.875 us` (`-0.27%`); output/CCL improves
+  `152.946 -> 151.162 us` (`-1.17%`).
+- T=5,120 CSV:
+  `generated/profiler/reports/2026_07_24_18_31_00/ops_perf_results_2026_07_24_18_31_00.csv`
+  (SHA-256 `4207beea2ecf51d9c1175cce24b3f6e11b3bdf7cdc5e21578c25d3b6e2ce08dd`).
+  Wall regresses `3474.029 -> 3480.081 us` (`+0.17%`); output/CCL regresses
+  `1069.975 -> 1071.173 us` (`+0.11%`).
+- Diagnosis: the long fused MMRS is CCL-bound, matching the roofline result;
+  reducing weight bytes does not shorten its critical path. The small short
+  gain does not generalize, while output PCC is lower than the BF16 endpoint.
+- Verdict: reject and remove.
