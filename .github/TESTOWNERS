@@ -1,0 +1,29 @@
+# .github/TESTOWNERS
+#
+# Maps each engineering team to its test-owner lead — the person tests are
+# reassigned to when their original owner is no longer a valid owner (they left
+# the company, are a metal-infra member, or the test has no owner at all).
+#
+# The `team:` value on every entry in tests/pipeline_reorg/*.yaml must match a
+# key under `teams:` below.
+#
+# Format of each entry:
+#
+#     <team>: <github-handle> # <slack-id>, <display-name>
+#
+# The GitHub handle is used to @-mention the lead in escalation issues; the
+# Slack id + name are the credentials a test's `owner_id` is reassigned to.
+# Leads that are still undetermined use REPLACE_ME.
+
+teams:
+  models:   @mtairum           # U03PUAKE719, Miguel Tairum
+  ttnn:     @ayerofieiev-tt    # U076Z1JJUQZ, Artem Yerofieiev
+  runtime:  @msudumbrekar-TT   # U099A7FMKL2, Manish Sudumbrekar
+  scaleout: @cfjchu            # U07D5N7QL4U, Joseph Chu
+  llk:      @ndivnicTT         # U09UC143684, Nemanja Divnic
+  train:    @kevinwuTT         # U07K00A281X, Kevin Wu
+  syseng:   @rdjogoTT          # U08JJGXKWKB, Radomir Djogo
+  shield:   @mbezuljTT         # U08E1JCMAJF, Marko Bezulj
+  umd:      @aleksamarkovicTT  # U09769N29BN, Aleksa Marković
+  ttsim:    @mcraigheadTT      # U08PR765YJ1, Matt Craighead
+  triage:   @onenezicTT        # U09UX6JLA3U, Ognjen Nenezic

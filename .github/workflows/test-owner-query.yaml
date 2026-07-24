@@ -1,0 +1,55 @@
+name: "(infra) Test Owner Query"
+
+# On-demand lookup: given a Slack user ID, list every pipeline-reorg test that
+# person owns (name, pipeline-reorg file, line number, owning team).
+
+on:
+  # TEMP: fire on push to smoke-test the query flow. REMOVE before merge.
+  push:
+    branches:
+      - tdowdall/test-owner-query
+  workflow_dispatch:
+    inputs:
+      slack_id:
+        description: "Slack user ID to look up (e.g. U0A9K67KKJL)"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  query:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: List tests owned by ${{ inputs.slack_id || 'U07J3K6KS1K' }}
+        env:
+          # TEMP: default to example U07J3K6KS1K on push (no dispatch input). REMOVE before merge.
+          SLACK_ID: ${{ inputs.slack_id || 'U07J3K6KS1K' }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/utils/tests_by_owner.py "$SLACK_ID" > tests.json
+          COUNT="$(jq length tests.json)"
+          OWNER_NAME="$(jq -r 'map(.owner_name) | map(select(. != null)) | .[0] // "(name unknown)"' tests.json)"
+
+          {
+            echo "# Tests owned by \`${SLACK_ID}\` (${OWNER_NAME})"
+            echo ""
+            echo "**${COUNT}** test(s) found."
+            echo ""
+            if [ "$COUNT" != "0" ]; then
+              echo "| Test | Team | File | Line |"
+              echo "| --- | --- | --- | --- |"
+              # File and Line both link to the exact start line on GitHub.
+              jq -r --arg repo "$REPO" --arg sha "$SHA" '
+                .[]
+                | "https://github.com/\($repo)/blob/\($sha)/\(.file)#L\(.line)" as $url
+                | "| \(.name) | \(.team // "UNKNOWN") | [\(.file)](\($url)) | [\(.line)](\($url)) |"
+              ' tests.json
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
