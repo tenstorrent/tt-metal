@@ -24,6 +24,11 @@ inline constexpr PackMode llk_test_pack_mode_v = untilize ? PackMode::Untilize
                                                  : tilize ? PackMode::Tilize
                                                           : PackMode::Default;
 
+inline constexpr bool llk_test_is_int_fpu_data_format(const std::uint32_t data_format)
+{
+    return (masked_data_format(data_format) == to_underlying(DataFormat::Int8)) || (data_format == to_underlying(DataFormat::Int32));
+}
+
 #ifdef ARCH_WORMHOLE
 
 template <
@@ -39,6 +44,39 @@ inline void _llk_math_eltwise_unary_datacopy_init_wrapper_(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize || pack_mode == PackMode::Tilize,
         "Wormhole B0 LLK tests: math datacopy init wrapper accepts PackMode::Default, PackMode::Untilize, or PackMode::Tilize (tilize is ignored on WH)");
     _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en>(num_faces, dst_format);
+}
+
+template <
+    DataCopyType type,
+    bool is_fp32_dest_acc_en,
+    BroadcastType src_b_bcast_type      = BroadcastType::NONE,
+    bool is_int_fpu_en                  = false,
+    [[maybe_unused]] PackMode pack_mode = PackMode::Default>
+inline void _llk_math_eltwise_unary_datacopy_init_inferred_wrapper_(
+    const std::uint32_t num_faces                         = 4,
+    const std::uint32_t src_format                        = 255,
+    const std::uint32_t dst_format                        = 255,
+    [[maybe_unused]] const bool skip_bh_tilize_workaround = false)
+{
+    static_assert(
+        pack_mode == PackMode::Default || pack_mode == PackMode::Untilize || pack_mode == PackMode::Tilize,
+        "Wormhole B0 LLK tests: math datacopy init wrapper accepts PackMode::Default, PackMode::Untilize, or PackMode::Tilize (tilize is ignored on WH)");
+    if constexpr (type == DataCopyType::A2D && src_b_bcast_type == BroadcastType::NONE && is_fp32_dest_acc_en)
+    {
+        const bool needs_int_fpu = is_int_fpu_en || llk_test_is_int_fpu_data_format(src_format);
+        if (needs_int_fpu)
+        {
+            _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, true>(num_faces, dst_format);
+        }
+        else
+        {
+            _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, false>(num_faces, dst_format);
+        }
+    }
+    else
+    {
+        _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en>(num_faces, dst_format);
+    }
 }
 
 template <DataCopyType type, DstSync Dst, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
@@ -85,6 +123,39 @@ inline void _llk_math_eltwise_unary_datacopy_init_wrapper_(
         "Blackhole LLK tests: math datacopy init wrapper supports PackMode::Default or PackMode::Tilize");
     _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en, pack_mode>(
         num_faces, dst_format, skip_bh_tilize_workaround);
+}
+
+template <
+    DataCopyType type,
+    bool is_fp32_dest_acc_en,
+    BroadcastType src_b_bcast_type = BroadcastType::NONE,
+    bool is_int_fpu_en             = false,
+    PackMode pack_mode             = PackMode::Default>
+inline void _llk_math_eltwise_unary_datacopy_init_inferred_wrapper_(
+    const std::uint32_t num_faces = 4, const std::uint32_t src_format = 255, const std::uint32_t dst_format = 255, const bool skip_bh_tilize_workaround = false)
+{
+    static_assert(
+        pack_mode == PackMode::Default || pack_mode == PackMode::Tilize,
+        "Blackhole LLK tests: math datacopy init wrapper supports PackMode::Default or PackMode::Tilize");
+    if constexpr (type == DataCopyType::A2D && src_b_bcast_type == BroadcastType::NONE && is_fp32_dest_acc_en)
+    {
+        const bool needs_int_fpu = is_int_fpu_en || llk_test_is_int_fpu_data_format(src_format);
+        if (needs_int_fpu)
+        {
+            _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, true, pack_mode>(
+                num_faces, dst_format, skip_bh_tilize_workaround);
+        }
+        else
+        {
+            _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, false, pack_mode>(
+                num_faces, dst_format, skip_bh_tilize_workaround);
+        }
+    }
+    else
+    {
+        _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en, pack_mode>(
+            num_faces, dst_format, skip_bh_tilize_workaround);
+    }
 }
 
 template <DataCopyType type, DstSync Dst, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
