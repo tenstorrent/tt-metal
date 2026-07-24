@@ -150,4 +150,89 @@ TEST(GraphTrackerThreading, ConcurrentPushPopAndTrackDoNotRace) {
     EXPECT_EQ(dispatcher_proc->function_starts.load(), dispatcher_proc->function_ends.load());
 }
 
+// Work offloaded to a worker thread while a capture is active must observe the
+// same processor as the enqueuing thread. This reproduces the CCL/collective
+// case (ttnn-visualizer #1684): a function_start recorded on the main thread
+// whose matching function_end runs on a worker thread. With context
+// propagation the single processor sees both events (balanced), instead of the
+// worker's empty thread-local list silently dropping the end.
+TEST(GraphTrackerThreading, WrapPropagatesContextToWorkerThread) {
+    auto& tracker = GraphTracker::instance();
+    tracker.clear();
+
+    auto processor = std::make_shared<CountingProcessor>();
+    tracker.push_processor(processor);
+
+    // Begin an op on the main thread.
+    tracker.track_function_start("op");
+
+    // Snapshot the current capture context and hand the matching end off to a
+    // worker thread (as the dispatch thread pool would).
+    auto task = tracker.wrap_with_current_context([]() { GraphTracker::instance().track_function_end(); });
+
+    std::thread worker([task = std::move(task)]() mutable {
+        auto& worker_tracker = GraphTracker::instance();
+        worker_tracker.clear();  // worker starts with an empty thread-local capture
+        EXPECT_FALSE(worker_tracker.is_enabled());
+        task();
+        // After the wrapped task completes, the worker's own (empty) context is restored.
+        EXPECT_FALSE(worker_tracker.is_enabled());
+    });
+    worker.join();
+
+    tracker.pop_processor();
+
+    EXPECT_EQ(processor->function_starts.load(), 1);
+    EXPECT_EQ(processor->function_ends.load(), 1);
+}
+
+// When no capture is active on the enqueuing thread, wrap_with_current_context
+// must return a transparent wrapper (the task still runs, nothing installed).
+TEST(GraphTrackerThreading, WrapIsTransparentWhenNoCaptureActive) {
+    auto& tracker = GraphTracker::instance();
+    tracker.clear();
+
+    std::atomic<int> ran{0};
+    auto task = tracker.wrap_with_current_context([&ran]() { ran.fetch_add(1); });
+    task();
+
+    EXPECT_EQ(ran.load(), 1);
+    EXPECT_TRUE(tracker.get_processors().empty());
+}
+
+// The wrapper must restore whatever capture state the worker thread already had,
+// even if that thread was itself driving an unrelated capture.
+TEST(GraphTrackerThreading, WrapRestoresPreexistingWorkerContext) {
+    auto& outer = GraphTracker::instance();
+    outer.clear();
+
+    auto propagated = std::make_shared<CountingProcessor>();
+    outer.push_processor(propagated);
+    auto task = outer.wrap_with_current_context([]() { GraphTracker::instance().track_function_end(); });
+    outer.pop_processor();
+
+    std::thread worker([task = std::move(task)]() mutable {
+        auto& tracker = GraphTracker::instance();
+        tracker.clear();
+
+        // The worker owns its own capture before running the propagated task.
+        auto local_proc = std::make_shared<CountingProcessor>();
+        tracker.push_processor(local_proc);
+
+        task();  // installs `propagated`, runs, then restores `local_proc`
+
+        // The worker's own processor is back on top and unaffected by the task.
+        EXPECT_EQ(tracker.get_processors().size(), 1u);
+        tracker.track_function_end();
+        tracker.pop_processor();
+
+        // Only the local end was seen by the worker's own processor.
+        EXPECT_EQ(local_proc->function_ends.load(), 1);
+    });
+    worker.join();
+
+    // The propagated processor saw exactly the one end fired inside the task.
+    EXPECT_EQ(propagated->function_ends.load(), 1);
+}
+
 }  // namespace tt::tt_metal::graph_tracking_test

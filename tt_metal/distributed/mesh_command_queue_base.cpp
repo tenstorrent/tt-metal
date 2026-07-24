@@ -18,6 +18,7 @@
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include "tt_metal/impl/threading/thread_pool.hpp"
+#include <tt-metalium/graph_tracking.hpp>
 #include "tt_cluster.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
@@ -189,7 +190,8 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
         for (const auto& coord : device_range) {
             if (mesh_device_->impl().is_local(coord)) {
                 dispatch_thread_pool_->enqueue(
-                    [&dispatch_lambda, coord]() { dispatch_lambda(coord); },
+                    GraphTracker::instance().wrap_with_current_context(
+                        [&dispatch_lambda, coord]() { dispatch_lambda(coord); }),
                     mesh_device_->impl().get_device(coord)->id());
             }
         }
@@ -259,7 +261,8 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
         auto shard_coord = shard_data_transfers[shard_idx].shard_coord();
         if (mesh_device_->impl().is_local(shard_coord)) {
             dispatch_thread_pool_->enqueue(
-                [&dispatch_lambda, shard_idx]() { dispatch_lambda(shard_idx); },
+                GraphTracker::instance().wrap_with_current_context(
+                    [&dispatch_lambda, shard_idx]() { dispatch_lambda(shard_idx); }),
                 mesh_device_->impl().get_device(shard_coord)->id());
         }
     }

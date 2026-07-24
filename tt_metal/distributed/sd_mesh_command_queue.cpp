@@ -303,8 +303,13 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                 continue;  // No local work for this host
             }
             auto* program_ptr = &program;
+            // Propagate any active graph-capture context so tracking events fired
+            // while dispatching this program on a worker thread are not dropped
+            // (e.g. CCL/collective heterogeneous programs). No-op when not capturing.
             launch_thread_pool_->enqueue(
-                [this, coord_range, program_ptr, blocking]() { dispatch_program(coord_range, *program_ptr, blocking); },
+                GraphTracker::instance().wrap_with_current_context([this, coord_range, program_ptr, blocking]() {
+                    dispatch_program(coord_range, *program_ptr, blocking);
+                }),
                 device->id());
         }
         launch_thread_pool_->wait();
