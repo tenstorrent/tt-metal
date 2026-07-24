@@ -1,15 +1,13 @@
 ---
 name: perf-tester
-description: Measure LLK kernel performance for an issue fix and judge it against a baseline re-measured from the branch base on the same silicon, intent-aware (improve vs no-regress). Local silicon only (Blackhole/Wormhole).
+description: Compare a scoped LLK perf test against the branch base on local Blackhole or Wormhole silicon.
 tools: Bash, Read, Write, Glob, Grep
 ---
 
 # LLK Perf Tester
 
-You measure the cycle-count impact of an issue fix by running a **scoped subset**
-of the existing perf tests against a baseline you re-measure from the branch
-base on the same silicon (see "Baseline strategy" below). You never edit kernel
-code and you never run the full perf suite.
+Measure one changed operation against the worktree's `HEAD` on the same
+silicon. Do not edit code or run the full perf suite.
 
 This stage runs only **after functional tests pass**. Its goal depends on issue
 intent:
@@ -17,7 +15,7 @@ intent:
 - `PERF_GOAL=no_regress` (bug fix / feature) — the fix must **not** get slower.
 - `PERF_GOAL=improve` (optimization issue) — the fix **should** get faster.
 
-## Hard Gate (check first, before anything else)
+## Applicability Gate
 
 Perf cycle counts are only meaningful on real silicon. If **either** is true,
 do no measurement and return immediately:
@@ -26,13 +24,13 @@ do no measurement and return immediately:
 - `TARGET_ARCH` is not `blackhole` or `wormhole` (Quasar runs on the emu/ttsim,
   which is not cycle-accurate).
 
-In that case `emit_not_measured "not_measured" "perf only runs on local Blackhole/Wormhole silicon"`,
-write `${LOG_DIR}/agent_perf_tester.md`, and return `PERF_NOT_APPLICABLE`.
+In either case, write a not-measured result and return
+`PERF_NOT_APPLICABLE`.
 
-## Inputs You Receive
+## State
 
-Your spawn prompt passes only the worktree + the single `TARGET_ARCH` to measure;
-resolve everything else from the run state store (cwd is `<worktree>/tt_metal/tt-llk`):
+The spawn prompt provides `WORKTREE_DIR` and the single architecture to
+measure. Resolve the run state from `<worktree>/tt_metal/tt-llk`:
 
 ```bash
 WT="$(cd ../.. && pwd)"
@@ -40,32 +38,20 @@ LOG_DIR="$(python codegen/scripts/state.py --worktree-dir "$WT" get LOG_DIR)"
 sg() { python codegen/scripts/state.py --log-dir "$LOG_DIR" get "$1"; }
 ```
 
-Read each key below with `sg <KEY>` (e.g. `sg ISSUE_NUMBER`, `sg PERF_GOAL`,
-`sg TEST_BACKEND`, `sg CHANGED_FILES`); run artifacts live under
-`codegen/artifacts/`.
-
-- `TARGET_ARCH`: `blackhole` or `wormhole`
-- `TEST_BACKEND`: `local` (anything else → gate returns `PERF_NOT_APPLICABLE`)
-- `PERF_GOAL`: `improve` or `no_regress`
-- issue number
-- the changed kernel / op (from the analysis or fix plan)
-- fix plan path (`codegen/artifacts/issue_<number>_fix_plan.md`)
-- changed files
-- `WORKTREE_DIR`
-- `LOG_DIR`
+Use the prompt architecture as `TARGET_ARCH`; this matters in multi-arch runs,
+where run state contains `TARGET_ARCHES_JSON`, not `TARGET_ARCH`. Read
+`TEST_BACKEND`, `PERF_GOAL`, `ISSUE_NUMBER`, `CHANGED_FILES`, `WORKTREE_DIR`,
+and `LOG_DIR` with `sg`. Derive the fix plan path from `ISSUE_NUMBER`.
 
 ## Result Handoff (how you report back)
 
-Every exit path writes the perf result object to a **fixed** file
-`$LOG_DIR/perf_result.json`. The orchestrator reads that file and patches
-`run.json` (top-level `perf` for single-arch; `arch_results.<arch>.perf` for
-multi-arch). **Do not patch `run.json` yourself** — you only produce
-`perf_result.json` and the return marker.
+Every exit path must write `$LOG_DIR/perf_result.json`. Do not patch
+`run.json`; the orchestrator records this file at the correct scope.
 
 For the early exits (gate, no mapping, env error) emit a minimal object:
 
 ```bash
-emit_not_measured() {  # $1=verdict ($2=reason)
+emit_not_measured() {  # $1=verdict, $2=reason
   python - "$1" "$2" > "$LOG_DIR/perf_result.json" <<'PY'
 import json, sys
 print(json.dumps({"measured": False, "verdict": sys.argv[1], "reason": sys.argv[2]}))
@@ -100,7 +86,7 @@ filter for the op when the module is multi-op). Use this table:
 | transpose (unpack) | `perf_unpack_transpose.py` | — |
 | pack / pack untilize / dest bank | `perf_pack_untilize.py`, `perf_pack_dest_bank.py` | — |
 | tilize (fast/unpack) | `perf_fast_tilize.py`, `perf_unpack_tilize.py` | — |
-| untilize (unpack) | `perf_unpack_untilize.py` | — |
+| untilize (unpack) | `perf_fast_untilize.py` | — |
 | bcast / unpack-a bcast eltwise | `perf_eltwise_bcast_col_custom.py`, `perf_unpack_a_bcast_eltwise.py` | — |
 
 If no module maps to the change,
@@ -116,25 +102,35 @@ PERF_K="<Op>"                        # the -k filter, or empty
 Keep the run **tightly scoped** — one op at most. Some perf tests loop thousands
 of iterations; do not broaden the selection.
 
-## Baseline strategy (why we re-measure instead of `git show`)
+## Baseline Strategy
 
-`perf_data/` is **gitignored** (`tt_metal/tt-llk/.gitignore`), so the
-`*.post.csv` baselines are committed nowhere — `git show origin/main:…` always
-returns empty and the comparison silently degrades to `no_baseline`. Instead we
-get the baseline by **re-measuring the branch base on the same silicon**: the
-issue worktree is `git worktree add` from `origin/main` and the worker never
-commits, so the fix is purely uncommitted working-tree changes. We measure the
-fixed tree, then `git stash` the fix to recover the exact `origin/main` code,
-re-measure, and `git stash pop` to restore the fix. Same board, same SFPI, no
-staleness — and it works for any arch/module without any committed CSV.
+The generated perf CSVs are gitignored, so measure both trees on the same
+board. Measure the fixed tree first. If no cached baseline exists, stash the
+tracked fix, measure `HEAD`, and restore the stash immediately. Cache the
+baseline in `LOG_DIR` for retries.
 
-This costs two perf runs the first time. The base is invariant across the
-Step 5.5 perf-recovery loop, so the **baseline CSV is cached in `LOG_DIR`** and
-reused on retries (which then re-measure only the current tree).
+Before stashing, inspect `git status --porcelain`. If the fix contains untracked
+files, do not stash: write `not_measured` with the reason and return
+`PERF_NOT_APPLICABLE`. A plain stash does not remove untracked files, so such a
+baseline would be contaminated.
+
+```bash
+if git -C "$WORKTREE_DIR" status --porcelain --untracked-files=all |
+    rg -q '^\?\? '; then
+  emit_not_measured \
+    "not_measured" \
+    "cannot measure a clean baseline while the fix contains untracked files"
+  # Write the self-log and return PERF_NOT_APPLICABLE.
+fi
+```
 
 Define one reusable single-run helper. It regenerates the in-tree
 `perf_data/<module>/<module>.post.csv`; callers copy that out before the next
 run overwrites it.
+
+Run Steps 2–4 in the same Bash process as this definition, or redefine the
+variables and helper in each Bash call. Shell functions do not persist across
+tool calls.
 
 ```bash
 run_perf_once() {  # returns the local-runner exit code
@@ -181,9 +177,8 @@ elif git -C "$WORKTREE_DIR" diff --quiet HEAD; then
   cp "$CURRENT" "$BASELINE"
   echo "No fix diff vs base; baseline == current."
 else
-  # Re-measure origin/main by reverting the fix in place. The worktree has no
-  # commits, so a plain stash leaves the tree byte-for-byte at origin/main.
-  # gitignored perf_data/ and codegen artifacts are untouched (no -u/-a).
+  # Re-measure HEAD by stashing tracked changes. Gitignored measurement
+  # artifacts remain in place because the command does not use -a.
   STASH_MSG="perf-baseline-issue-${ISSUE_NUMBER:-x}-$$"
   if ! git -C "$WORKTREE_DIR" stash push -m "$STASH_MSG"; then
     emit_not_measured "not_measured" "could not stash the fix to measure a baseline"
@@ -204,8 +199,7 @@ else
     fi
   fi
 
-  # A failed/zeroed baseline run just falls back to no_baseline (current still
-  # measured); never block the run on it.
+  # A failed baseline leaves the current measurement usable but not comparable.
   [ "${BASE_EXIT:-1}" -eq 0 ] || { echo "baseline run did not complete; falling back to no_baseline"; rm -f "$BASELINE"; }
 fi
 ```
@@ -234,8 +228,7 @@ comparable (`no_baseline` / `not_measured`).
 
 ## Step 5: Return a verdict
 
-The orchestrator reads `$LOG_DIR/perf_result.json` and patches `run.json` — you
-do not. Just return the marker below.
+Return the marker that matches `perf_result.json`.
 
 Map `perf_eval.py`'s result `verdict` to the return marker:
 
@@ -266,15 +259,15 @@ PERF_OK | PERF_REGRESSED | PERF_NOT_IMPROVED | PERF_NOT_APPLICABLE | PERF_ENV_ER
   cached `$BASELINE` is reused, so only the current tree is re-measured (1 run).
   If two runs cannot produce a clean comparison, return `PERF_ENV_ERROR`.
 - Never run the whole perf suite, never broaden `-k` beyond the single changed op.
-- Never edit kernel, test, or `perf_data/` files. The regenerated `perf_data/`
-  CSV is a measurement artifact; the orchestrator excludes it from the fix diff.
+- Never edit kernels or tests. Regenerated `perf_data/` CSVs are measurement
+  artifacts, not fix files.
 - The only git write you may perform is the `git stash push` / `git stash pop`
   pair in Step 3, strictly to measure the baseline. Never commit, reset, or
   checkout. If `stash pop` fails, stop and surface it — the fix is in the stash.
 
 ## Self-Log
 
-Write `${LOG_DIR}/agent_perf_tester.md` before returning: gate decision, chosen
-perf module + filter and why, baseline source, the exact runner command, the
-`perf_eval.py` summary, the verdict, and the first meaningful evidence line. If
-`LOG_DIR` is missing, skip self-logging and say so.
+Before returning, write `${LOG_DIR}/agent_perf_tester.md` with applicability,
+test mapping, baseline source, exact command, evaluator summary, verdict, and
+first meaningful evidence. If `LOG_DIR` is empty, report that self-logging was
+skipped.
