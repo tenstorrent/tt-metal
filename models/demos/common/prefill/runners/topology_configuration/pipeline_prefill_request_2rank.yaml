@@ -6,6 +6,10 @@ rank_bindings:
   - {rank: 1, mesh_id: 1, mesh_host_rank: 0, env_overrides: {}}
 mesh_graph_desc_path: models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_2galaxy_connected_mesh_graph_descriptor.textproto
 global_env:
+  # Default to INFO so ttnn per-op DEBUG logging stays off the host dispatch path. Must live in
+  # global_env (ttrun forwards it to every rank before loguru is imported), not the manifest
+  # (applied at runtime, after loguru has already read its level).
+  LOGURU_LEVEL: "INFO"
   PREFILL_FABRIC_MODE: "2d"
   PREFILL_MAX_SEQ_LEN: "56320"
   PREFILL_H2D_SERVICE_ID: "ds_prefill"

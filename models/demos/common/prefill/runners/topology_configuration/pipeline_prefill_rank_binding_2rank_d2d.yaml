@@ -23,6 +23,10 @@ rank_bindings:
 mesh_graph_desc_path: models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_2galaxy_connected_mesh_graph_descriptor.textproto
 
 global_env:
+  # Default to INFO so ttnn per-op DEBUG logging stays off the host dispatch path. Must live in
+  # global_env (ttrun forwards it to every rank before loguru is imported), not the manifest
+  # (applied at runtime, after loguru has already read its level).
+  LOGURU_LEVEL: "INFO"
   PREFILL_STANDALONE: "1"   # merged runner: standalone (bring-up/pipeline) mode, not the production request loop
   # Device-to-device socket transport (needs the connected MGD + 2D fabric below).
   PREFILL_FABRIC_MODE: "2d"

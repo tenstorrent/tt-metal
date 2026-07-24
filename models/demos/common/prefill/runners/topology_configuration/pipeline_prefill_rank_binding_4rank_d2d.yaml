@@ -32,6 +32,10 @@ rank_bindings:
 mesh_graph_desc_path: models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_4galaxy_connected_mesh_graph_descriptor.textproto
 
 global_env:
+  # Default to INFO so ttnn per-op DEBUG logging stays off the host dispatch path. Must live in
+  # global_env (ttrun forwards it to every rank before loguru is imported), not the manifest
+  # (applied at runtime, after loguru has already read its level).
+  LOGURU_LEVEL: "INFO"
   # Model config (PREFILL_MODEL + model-specific knobs) lives in a per-model manifest, applied via
   # setdefault before the runner's env reads. This binding stays model-agnostic: point PREFILL_MANIFEST
   # at any model's manifest to run it on this topology. ttrun does not propagate shell PREFILL_*, so
