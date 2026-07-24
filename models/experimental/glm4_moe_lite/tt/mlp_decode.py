@@ -154,9 +154,21 @@ def moe_mlp_forward(
     mlp_compute_kernel_config = cfg.mlp_compute_kernel_config()
     _skip_shared_reduce = cfg.fuse_mlp_moe_reduce and cfg.tp_enabled
 
-    # Pad tokens for sparse expert kernels if needed
+    # Pad tokens for sparse expert kernels if needed.
+    #
+    # Only the all-to-all dispatch path needs the input pre-aligned so the
+    # dispatch-scaled token count stays block-divisible. The default "reduce"
+    # path re-pads to the sparsity block *internally*
+    # (moe_sparse_experts_forward_tt), so this outer TILE->RM->pad->TILE round
+    # trip (and the matching slice-back) is pure per-layer overhead there.
+    # Skip it in reduce mode; GLM4_MOE_LITE_FORCE_OUTER_PAD=1 restores the old
+    # behaviour for A/B comparison.
+    _sparse_dispatch = os.environ.get("GLM4_MOE_LITE_MOE_SPARSE_DISPATCH_IMPL", "").strip().lower()
+    _outer_pad_needed = _sparse_dispatch in {"a2a", "all_to_all"} or (
+        os.environ.get("GLM4_MOE_LITE_FORCE_OUTER_PAD", "").strip() == "1"
+    )
     pad_tokens = 0
-    if not use_dense_decode and not use_dense_prefill and not use_packed_prefill:
+    if _outer_pad_needed and not use_dense_decode and not use_dense_prefill and not use_packed_prefill:
         sparse_multiple = _moe_sparse_tokens_multiple(device=device, moe_runtime=moe_runtime)
         pad_tokens = (-tokens) % sparse_multiple
         if pad_tokens:

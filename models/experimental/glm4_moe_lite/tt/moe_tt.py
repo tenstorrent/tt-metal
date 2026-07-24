@@ -1441,9 +1441,15 @@ def moe_sparse_experts_forward_tt(
     tokens_per_device = int(input_shape[0]) * int(input_shape[2])
     hidden_size = int(rt.hidden_size)
 
-    hidden_states = ttnn.reshape(hidden_states, (1, 1, tokens_per_device, hidden_size))
-    topk_expert_indices = ttnn.reshape(topk_expert_indices, (1, 1, tokens_per_device, int(rt.num_experts_per_tok)))
-    topk_expert_weights = ttnn.reshape(topk_expert_weights, (1, 1, tokens_per_device, int(rt.num_experts_per_tok)))
+    # Guard the normalizing reshapes: at decode these are identities (the caller
+    # already passes [1,1,T,H] / [1,1,T,K]); skip them unless the shape differs.
+    _k = int(rt.num_experts_per_tok)
+    if tuple(hidden_states.shape) != (1, 1, tokens_per_device, hidden_size):
+        hidden_states = ttnn.reshape(hidden_states, (1, 1, tokens_per_device, hidden_size))
+    if tuple(topk_expert_indices.shape) != (1, 1, tokens_per_device, _k):
+        topk_expert_indices = ttnn.reshape(topk_expert_indices, (1, 1, tokens_per_device, _k))
+    if tuple(topk_expert_weights.shape) != (1, 1, tokens_per_device, _k):
+        topk_expert_weights = ttnn.reshape(topk_expert_weights, (1, 1, tokens_per_device, _k))
 
     mesh_rows, mesh_cols = _get_mesh_shape(device)
     num_devices = _get_num_devices(device)
