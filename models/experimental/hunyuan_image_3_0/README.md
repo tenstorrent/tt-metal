@@ -2,15 +2,162 @@
 
 Experimental TTNN port of [Tencent HunyuanImage-3.0](https://huggingface.co/tencent/HunyuanImage-3.0).
 
-## Model configuration
+## About the Model
 
-Dims and shapes come from checkpoint / bundled `config.json` via
-[`ref/model_config.py`](ref/model_config.py) — import `transformer_cfg`,
-`backbone_kwargs`, `VAE_SCALING_FACTOR`, `VIT_CONFIG`, `IMAGE_BASE_SIZE`,
-`PRODUCTION_LATENT_GRID`, `PRODUCTION_SEQ`, `PATCH_EMBED_HIDDEN_CHANNELS`, etc.
-instead of hardcoding `4096` / `32` / VAE scaling. TT constructors and demos
-default from those helpers; tests re-export the same loaders through
-`tests/pcc/pcc_common.py`.
+**HunyuanImage 3.0** is Tencent's **open-source multimodal image generation model** designed to produce high-quality images from natural-language prompts. Its **unified autoregressive architecture** and **Mixture-of-Experts (MoE)** design combine text understanding and image generation in one framework, enabling strong prompt comprehension and detailed image synthesis.
+
+The model is available in **Base**, **Instruct**, and **Instruct-Distil** variants:
+
+- **Base:** Text-to-image generation.
+- **Instruct:** Image-to-image generation and enhanced prompt understanding through reasoning-based prompt rewriting.
+- **Instruct-Distil:** A distilled Instruct variant.
+
+This repository provides a **Tenstorrent TTNN implementation** of HunyuanImage 3.0, including the **core inference pipeline**, **TTNN model components**, **end-to-end demos**, **PCC validation tests**, and **performance benchmarks** optimized for Tenstorrent hardware.
+
+## Model Diagram
+
+```mermaid
+flowchart LR
+  subgraph In["Input"]
+    P[Prompt]
+    I[Cond image]
+  end
+
+  subgraph Prep["Host"]
+    T[Tokenizer]
+    E[Embeddings]
+  end
+
+  subgraph Instruct["Instruct only"]
+    V[SigLIP2]
+    A[AR recaption]
+  end
+
+  subgraph Gen["Device"]
+    B[MoE backbone]
+    D[Denoise loop]
+    VAE[VAE decode]
+  end
+
+  P --> T --> E
+  I --> V --> A --> E
+  E --> D
+  D --> B --> D
+  D --> VAE --> Out[PNG]
+```
+
+The backbone repeats the following layer **32 times**: RMSNorm → Attention (GQA + RoPE) → MoE → residual.
+
+## Supported Devices
+
+The implementation has been validated on the following Tenstorrent Blackhole platforms:
+
+| Device | Configuration |
+|---------|---------------|
+| **TT-QuietBox 2** | 2 × Blackhole P300 boards (4 Blackhole ASICs) |
+
+## Repository Layout
+
+```
+hunyuan_image_3_0/
+├── demo/         # Runnable end-to-end demos (demo.py T2I, demo_i2i.py I2I / Distil)
+├── ref/          # PyTorch reference, mirrored block-for-block against tt/
+│   ├── attention/    # RMSNorm, RoPE, attention, mask (reference)
+│   ├── image_gen/    # Patch embed, timestep embedder, sequence scatter (reference)
+│   ├── moe/          # Router/gate, expert MLP, MoE block (reference)
+│   ├── tokenizer/    # Host tokenizer (HunyuanTokenizer) + assets
+│   ├── vae/          # VAE encoder/decoder Conv3D blocks (reference)
+│   └── vision/       # SigLIP2 encoder + image preprocess (reference)
+├── tt/           # TTNN device port (see Model Modules below)
+│   ├── attention/    # RMSNorm, RoPE, attention, mask
+│   ├── image_gen/    # Patch embed, timestep embedder, sequence scatter
+│   ├── moe/          # Router/gate, expert MLP, MoE block, tensor-parallel
+│   ├── vae/          # VAE encoder/decoder + spatial-parallel decode
+│   └── vision/       # SigLIP2 encoder, cond-vision injection, I2I pipeline
+├── tests/        # PCC / parity / perf gates for every block
+│   ├── pcc/          # Per-block PCC tests vs ref/
+│   ├── perf/         # Performance benchmarks
+│   ├── tokenizer/    # Tokenizer parity tests
+│   ├── vae/          # VAE decode pipeline tests
+│   └── vision/       # Vision / injection tests
+└── scripts/      # Helper / utility scripts
+```
+
+## Model Modules
+
+The device port lives under `tt/`. Each block mirrors the PyTorch reference under `ref/`
+and is gated by a PCC test under `tests/`.
+
+### Transformer backbone
+
+| Module | File path | Description |
+|--------|-----------|-------------|
+| RMSNorm | `tt/attention/rms_norm.py` | Root-mean-square layer normalization |
+| 2D RoPE | `tt/attention/rope_2d.py` | 2D rotary position embedding for image tokens |
+| Attention (GQA, qk-norm) | `tt/attention/attention.py` | Grouped-query attention with q/k normalization |
+| Attention mask | `tt/attention/mask.py` | Causal text + bidirectional image-span mask |
+| MoE router / gate | `tt/moe/gate.py` | Top-8 expert routing / gating over 64 experts |
+| MoE expert MLP | `tt/moe/mlp.py` | Per-expert feed-forward network |
+| MoE block | `tt/moe/moe.py` | Mixture-of-Experts block (dense/sparse routing) |
+| MoE tensor-parallel helpers | `tt/moe/moe_parallel.py` | Expert sharding across the mesh |
+| Decoder layer | `tt/transformer_layer.py` | One transformer block (attention + MoE) |
+| Full backbone | `tt/model.py` | Full 32-layer MoE transformer stack |
+| Word-token embedding (WTE) | `tt/wte.py` | Token-id → hidden embedding lookup |
+| LM head | `tt/lm_head.py` | Hidden state → vocabulary logits projection |
+| KV cache | `tt/kv_cache.py`, `tt/cache.py` | Incremental key/value cache for decode |
+
+### Image generation (DiT / flow-matching)
+
+| Module | File path | Description |
+|--------|-----------|-------------|
+| Patch embed / final layer | `tt/image_gen/patch_embed.py` | `UNetDown` patchify / `UNetUp` unpatchify |
+| Patch-embed conv configs | `tt/image_gen/patch_embed_conv_configs.py` | Conv program configs for patch embed |
+| Timestep embedder | `tt/image_gen/timestep_embedder.py` | Diffusion timestep → embedding |
+| Sequence scatter | `tt/image_gen/sequence_scatter.py` | Scatter image latent into the token sequence |
+| Input / cond instantiation | `tt/image_gen/input_instantiate.py`, `tt/image_gen/cond_instantiate.py` | Build gen-image / cond input tensors |
+| Flow-matching scheduler | `tt/scheduler.py` | Euler flow-matching denoise scheduler |
+| Init-noise sampling | `tt/noise.py` | On-device `ttnn.randn` initial latent noise |
+| Denoise pipeline | `tt/pipeline.py` | Single denoise step + multi-step `denoise_loop` |
+
+### VAE
+
+| Module | File path | Description |
+|--------|-----------|-------------|
+| Conv3D primitive | `tt/vae/conv3d.py`, `tt/vae/conv3d_blockings.py` | 3D convolution + blocking/tiling configs |
+| Encoder | `tt/vae/encoder.py`, `tt/vae/encoder_weights.py` | VAE encoder blocks + weight loading |
+| Decoder | `tt/vae/decoder.py`, `tt/vae/decoder_weights.py` | VAE decoder blocks + weight loading |
+| ResNet conv / pointwise | `tt/vae/resnet_conv.py`, `tt/vae/pointwise.py` | ResNet conv and pointwise conv helpers |
+| Spatial-parallel decode | `tt/vae/spatial.py` | Full-res H/W-spatial-parallel decode across mesh |
+| Cond posterior | `tt/vae/cond_posterior.py` | I2I conditioning latent encode (posterior) |
+
+### Vision (Instruct I2I)
+
+| Module | File path | Description |
+|--------|-----------|-------------|
+| SigLIP2 vision encoder | `tt/vision/siglip2.py` | SigLIP2 encoder + vision→4096 aligner |
+| Cond-vision injection | `tt/vision/inject.py` | Scatter vision embeddings into the sequence |
+| Image preprocess / bridge | `tt/vision/preprocess.py` | Device bridge + `<img>` span lookup |
+| I2I pipeline assembly | `tt/vision/i2i.py`, `tt/vision/i2i_bundle.py` | Assemble image→encode→inject→forward |
+
+### Generation, sampling & recaption
+
+| Module | File path | Description |
+|--------|-----------|-------------|
+| AR sampling loop | `tt/generate.py` | Token sampling loop + stage forcing |
+| Device sampling | `tt/device_sampling.py` | On-device `topk` / `sampling` ops |
+| AR prefill | `tt/ar_prefill.py` | Chunked KV prefill for long prefixes |
+| Recaption orchestration | `tt/recaption.py` | Host recaption/think orchestration |
+
+### Trace, dual-CQ & parallelism
+
+| Module | File path | Description |
+|--------|-----------|-------------|
+| Stage trace | `tt/stage_trace.py`, `tt/trace_config.py` | CQ0 `execute_trace` for denoise / VAE + config |
+| Denoise dual-CQ | `tt/denoise_dual_cq.py` | 2CQ async latent D2H for denoise |
+| VAE dual-CQ | `tt/vae_dual_cq.py` | 2CQ async RGB D2H for VAE decode |
+| AR dual-CQ / trace | `tt/ar_dual_cq.py`, `tt/ar_trace.py` | 2CQ async logits D2H + AR decode trace |
+| Cond-encode trace | `tt/cond_encode_trace.py` | Trace for I2I cond VAE + ViT encode |
+| Mesh / parallel utilities | `tt/parallel_utils.py`, `tt/matmul_utils.py` | Mesh sharding + matmul program-config helpers |
 
 ## Tokenizer
 
@@ -20,15 +167,216 @@ Host-side tokenizer code and assets live under `ref/tokenizer/`:
 |------|-------------|
 | `ref/tokenizer/hunyuan_tokenizer.py` | Public API (`HunyuanTokenizer`) |
 | `ref/tokenizer/gen_image_inputs.py` | Host preprocess bundle for device upload |
-| `ref/model_config.py` | Centralized dims from `config.json` (backbone / VAE / ViT) |
 | `ref/tokenizer/assets/config.json` | Model config used by the tokenizer stack |
 | `ref/tokenizer/assets/tokenizer_config.json` | HF tokenizer config |
 | `ref/tokenizer/assets/tokenizer.json` | BPE vocab (~24 MB; not in git) |
 
+## Test Cases
+
+Every block has a test under `tests/`. PCC tests compare the TT device path against the
+PyTorch `ref/` path; perf tests profile device timing via tracy.
+
+### PCC / correctness (`tests/pcc/`)
+
+| Test file | Detail |
+|-----------|--------|
+| `test_attention_modules.py` | RMSNorm / RoPE / attention / mask PCC, incl. batch + max-context |
+| `test_transformer.py` | Decoder-layer + backbone PCC (single, large-ISL, mesh) |
+| `test_embeddings.py` | Patch embed (`UNetDown`/`UNetUp`) + WTE embedding PCC |
+| `test_moe.py` | MoE router/gate, expert MLP, and MoE block PCC |
+| `test_full_dim_moe_denoise.py` | MoE router/module at max-context (S≈22784) |
+| `test_lm_head.py` | LM-head hidden→logits PCC (full + last-token) |
+| `test_logit_stack.py` | 32L teacher-forced / chained last-token logit PCC |
+| `test_pipeline.py` | Single denoise step + e2e latent/RGB pipeline PCC |
+| `test_denoise.py` | Multi-step `denoise_loop` PCC (timestep, Euler, CFG) |
+| `test_scheduler.py` | Flow-matching scheduler deterministic ref match |
+| `test_noise.py` | On-device `ttnn.randn` init-noise parity |
+| `test_teacher_forced.py` | Teacher-forced final PCC + per-layer bf16/bf8 precision audit |
+| `test_kv_cache_prefill.py` | KV-cache prefill correctness |
+| `test_kv_cache_decode.py` | KV-cache incremental single-token decode |
+| `test_prefill_sp2_pcc.py` | Prefill under sequence-parallel (`sp=2`) |
+| `test_generate.py` | Host sampling loop + stage-forcing unit tests (mock logits) |
+| `test_generate_device.py` | Device-backed AR generation path |
+| `test_device_sampling.py` | On-device `topk` / `sampling` op parity |
+| `test_recaption.py` | Recaption/think AR orchestration (greedy token parity) |
+
+### VAE (`tests/vae/`)
+
+| Test file | Detail |
+|-----------|--------|
+| `test_encoder.py` | VAE encoder block PCC |
+| `test_decoder.py` | VAE decoder block PCC |
+| `test_decode_pipeline.py` | Full `decode_latent` glue + spatial decode vs fp32 ref |
+| `test_spatial_hw.py` | H/W-spatial-parallel decode across the 2×2 mesh |
+| `test_conv3d_chunk.py` | Chunked Conv3D correctness |
+| `test_conv3d_sharded.py` | Sharded Conv3D correctness |
+| `test_resnet_conv_pair.py` | ResNet conv-pair PCC |
+| `test_group_mean_pcc.py` | Fused channel group-mean used by DCAE shortcuts |
+| `test_d2s_chunk.py` | Depth-to-space chunk equivalence |
+
+### Vision / I2I (`tests/vision/`)
+
+| Test file | Detail |
+|-----------|--------|
+| `test_siglip2_ttnn.py` | SigLIP2 encoder + aligner PCC |
+| `test_siglip2_full_dim.py` | Full 27L vision @ S=1024 (32×32 patches) vs fp32 ref |
+| `test_image_processor.py` | Image processor (`vit_process_image`, gen-image info) |
+| `test_cond_image_preprocess.py` | Cond-image preprocess bitwise-equal to upstream |
+| `test_cond_vision_inject.py` | Cond-vision sequence injection (contiguous / multi / host scatter) |
+
+### Tokenizer / inputs (`tests/tokenizer/`)
+
+| Test file | Detail |
+|-----------|--------|
+| `test_model_inputs.py` | T2I/I2I `prepare_model_inputs` build + tokenizer parity, attention layout, CFG |
+| `test_cond_vae_encode.py` | I2I cond-image VAE/ViT encode + image-token instantiation + distill scatter |
+| `test_recaption_inputs.py` | Recaption/think AR bundle build, stage params, CoT decode/sanitize |
+
+### Performance (`tests/perf/`)
+
+| Test file | Detail |
+|-----------|--------|
+| `test_denoise_perf_tracy.py` | End-to-end denoise-step device profile |
+| `test_denoise_scatter_perf.py` | Sequence-scatter op timing |
+| `test_encoder_perf_tracy.py` / `test_vae_decode_perf.py` | VAE encode / decode device profile |
+| `test_siglip2_perf_tracy.py` | SigLIP2 vision device profile |
+| `test_recaption_*_perf.py` | Recaption AR / prefill / decode timing |
+| `*_sweep.py` | Matmul / expert / gate / RMSNorm / conv3d / lm-head config sweeps |
+
+## PCC Results
+
+The following PCCs were measured against the PyTorch reference implementation.
+| File Name | Test Case | PCC |
+|-----------|-----------|----:|
+| `test_attention_modules.py` | RMSNorm ISL decode S=1 | 0.99999349 |
+| | RMSNorm ISL one tile S=32 | 0.99998552 |
+| | RMSNorm ISL image grid S=4096 | 0.99998385 |
+| | RMSNorm ISL production S=4160 | 0.99998382 |
+| | RMSNorm ISL batch=2 S=32 | 0.99998517 |
+| | RoPE | |
+| | Attention | |
+| | Attention Mask | |
+| `test_transformer.py` | Decoder Layer text decode S=1 | 0.99999725 |
+| | Decoder Layer text prefill S=32 | 0.99999727 |
+| | Decoder Layer ISL text S=4096 | 0.99999824 |
+| | Decoder Layer ISL text S=4160 | 0.99999824 |
+| | Decoder Layer ISL image S=4096 | 0.99999785 |
+| | Decoder Layer ISL image S=4160 | 0.99999798 |
+| | Decoder Layer max context S=22784 | 0.99999847 |
+| | Transformer Backbone | |
+| | Cache Helpers | n/a (PASSED) |
+| `test_embeddings.py` | Patch Embed smoke GRID=8 UNetDown | 0.99994029 |
+| | Patch Embed smoke GRID=8 UNetUp | 0.99991914 |
+| | Patch Embed production GRID=64 UNetDown | 0.99994233 |
+| | Patch Embed production GRID=64 UNetUp | 0.99992708 |
+| | Timestep Embedder `timestep_emb` | 0.99999864 |
+| | Timestep Embedder `time_embed` | 0.99999794 |
+| | Timestep Embedder `time_embed_2` | 0.99999832 |
+| | Timestep Embedder full schedule `timestep_emb` (S=50) | 0.99999840 |
+| | Timestep Embedder full schedule `time_embed` (S=50) | 0.99999597 |
+| | Timestep Embedder full schedule `time_embed_2` (S=50) | 0.99999629 |
+| | WTE | 1.00000000 |
+| | WTE production | 1.00000000 |
+| `test_moe.py` | MoE Router | |
+| | MoE Gate | |
+| | Expert MLP | |
+| | MoE Block | |
+| `test_full_dim_moe_denoise.py` | Expert FFN max-context S=22784 | 0.99972073 |
+| | MoE Layer max-context S=22784 | 0.99967112 |
+| | Denoise Loop production 32L S=4160 (step=1) | 0.95866893 |
+| `test_lm_head.py` | LM Head full-sequence S=32 | 0.99996616 |
+| | LM Head last-token S=32 | 0.99996201 |
+| | LM Head production last-token S=4160 | 0.99995974 |
+| `test_logit_stack.py` | Logit Stack | |
+| `test_pipeline.py` | Single Denoise Step | |
+| | End-to-End Pipeline | |
+| `test_denoise.py` | Host-routed Denoise Step (fast) | 0.99993799 |
+| | Host-routed Denoise Step (production) | PASSED |
+| | Denoise Loop (fast) | 0.99989697 |
+| | Denoise Loop resident mesh | 0.999900 |
+| | I2I Denoise Step | 0.99994084 |
+| | I2I Denoise Loop CFG | 0.99821097 |
+| `test_scheduler.py` | Schedule Match | exact (1e-6 / 1e-3) |
+| | Denoising Loop smoke 8×8 | ≥0.99 |
+| | CFG Combine smoke 8×8 | ≥0.99 |
+| | Denoising Loop full latent 64×64 | 1.00000000 |
+| | CFG Combine full latent 64×64 | 1.00000000 |
+| `test_noise.py` | Initial Noise | |
+| `test_teacher_forced.py` | All-layers production decode S=1 (32L, worst) | 0.979821 |
+| | All-layers production prefill S=4160 (32L, worst) | 0.999790 |
+| | Final production decode S=1 (32L) | 0.99995817 |
+| | Final production prefill S=4160 (32L) | 0.99989751 |
+| `test_kv_cache_prefill.py` | Prefill sanity ISL=128 (32L) | 0.971850 / 0.973826 |
+| | Prefill sanity ISL=22800 (32L) | 0.947658 / 0.951536 |
+| `test_kv_cache_decode.py` | Decode ISL=512 (step 8) | 0.999782 / 0.999713 |
+| | Decode ISL=22800 (step 1) | 0.995632 / 0.997369 |
+| `test_prefill_sp2_pcc.py` | Sequence Parallel Prefill | |
+| `test_generate.py` | Host Sampling | |
+| | Stage Forcing | |
+| `test_generate_device.py` | Device AR Generation | |
+| `test_device_sampling.py` | Device Top-k Sampling | |
+| `test_recaption.py` | Recaption / Think | |
+| `test_encoder.py` | VAE Encoder | |
+| `test_decoder.py` | VAE Decoder | |
+| `test_decode_pipeline.py` | VAE Decode Pipeline | |
+| `test_spatial_hw.py` | Spatial HW Decode | |
+| `test_conv3d_chunk.py` | Chunked Conv3D | |
+| `test_conv3d_sharded.py` | Sharded Conv3D | |
+| `test_resnet_conv_pair.py` | ResNet Conv Pair | |
+| `test_group_mean_pcc.py` | Group Mean | |
+| `test_d2s_chunk.py` | Depth-to-Space Chunk | |
+| `test_siglip2_ttnn.py` | SigLIP2 Encoder | |
+| | Vision Aligner | |
+| `test_siglip2_full_dim.py` | Full-Dimension SigLIP2 | |
+| `test_image_processor.py` | Image Processor | |
+| `test_cond_image_preprocess.py` | Conditioning Image Preprocess | |
+| `test_cond_vision_inject.py` | Conditioning Vision Injection | |
+| `test_model_inputs.py` | Model Input Preparation | |
+| | Tokenizer Parity | |
+| `test_cond_vae_encode.py` | Conditioning VAE Encode | |
+| `test_recaption_inputs.py` | Recaption Input Builder | |
+## Performance Summary
+
+### Base (Text-to-Image, 50 Steps)
+
+| Sequence Length *(text + output image tokens)* | Denoise (50 steps) | VAE Decode | Avg. Step Latency | End-to-End Latency | Throughput |
+|-----------------------------------------------:|-------------------:|-----------:|------------------:|-------------------:|-----------:|
+| 4,226  | 232.42 s | 17.48 s | 4.65 s/step | 263.06 s | 13.69 images/hr |
+| 8,748  | 429.75 s | 17.60 s | 8.60 s/step | 463.17 s | 7.77 images/hr |
+| 13,424 | 651.28 s | 17.63 s | 13.03 s/step | 684.99 s | 5.26 images/hr |
+| 18,100 | 959.26 s | 17.58 s | 19.19 s/step | 993.50 s | 3.62 images/hr |
+| 22,777 | 1146.31 s | 18.01 s | 22.93 s/step | 1181.33 s | 3.05 images/hr |
+
+---
+
+### Instruct (Image-to-Image, 50 Steps)
+
+| Sequence Length *(4096 input + text + 4096 output tokens)* | Recaption | Denoise (50 steps) | VAE Decode | Avg. Step Latency | TTFT | Text Gen | End-to-End Latency | Throughput |
+|------------------------------------------------------------:|----------:|-------------------:|-----------:|------------------:|-----:|---------:|-------------------:|-----------:|
+| 10,700 | 205.50 s | 556.69 s | 35.87 s | 11.13 s/step | 20.29 s | 3.70 tok/s | 800.94 s | 4.49 images/hr |
+| 13,915 | 282.00 s | 758.66 s | 37.32 s | 15.17 s/step | 57.50 s | 1.03 tok/s | 1081.98 s | 3.33 images/hr |
+| 17,323 | 314.00 s | 984.54 s | 38.20 s | 19.69 s/step | 50.74 s | 0.97 tok/s | 1341.94 s | 2.68 images/hr |
+| 20,415 | 372.00 s | 1218.30 s | 38.37 s | 24.37 s/step | 24.03 s | 0.93 tok/s | 1633.89 s | 2.20 images/hr |
+| 22,773 | 542.00 s | 1382.90 s | 38.27 s | 27.66 s/step | 38.85 s | 1.18 tok/s | 1968.80 s | 1.83 images/hr |
+
+---
+
+### Instruct-Distill (Image-to-Image, 8 Steps)
+
+| Sequence Length *(4096 input + text + 4096 output tokens)* | Recaption | Denoise (8 steps) | VAE Decode | Avg. Step Latency | TTFT | Text Gen | End-to-End Latency | Throughput |
+|------------------------------------------------------------:|----------:|------------------:|-----------:|------------------:|-----:|---------:|-------------------:|-----------:|
+| 10,700 | 241.20 s | 52.54 s | 34.46 s | 6.57 s/step | 37.22 s | 3.48 tok/s | 331.70 s | 10.85 images/hr |
+| 13,915 | 279.20 s | 69.28 s | 35.40 s | 8.66 s/step | 34.71 s | 2.77 tok/s | 388.20 s | 9.27 images/hr |
+| 17,323 | 308.70 s | 91.75 s | 35.83 s | 11.47 s/step | 35.37 s | 2.46 tok/s | 440.73 s | 8.17 images/hr |
+| 20,415 | 361.50 s | 110.50 s | 36.46 s | 13.82 s/step | 39.09 s | 2.03 tok/s | 514.12 s | 7.00 images/hr |
+| 22,773 | 372.40 s | 111.30 s | 36.01 s | 13.91 s/step | 42.31 s | 1.95 tok/s | 524.87 s | 6.86 images/hr |
+
+## Requirements
+
 Download `tokenizer.json` (and refresh `tokenizer_config.json`) from Hugging Face:
 
 ```bash
-cd ~/ign-tt/tt-metal
+cd /path/to/tt-metal
 mkdir -p models/experimental/hunyuan_image_3_0/ref/tokenizer/assets
 
 hf download tencent/HunyuanImage-3.0 \
@@ -55,37 +403,10 @@ Sanity validation:
 ```bash
 python3 -m models.experimental.hunyuan_image_3_0.ref.tokenizer.hunyuan_tokenizer
 ```
-# HunyuanImage-3.0 — TTNN port
 
-TTNN (Tenstorrent) port of Tencent's **HunyuanImage-3.0**, a unified autoregressive
-multimodal model that generates images by running a diffusion (flow-matching)
-denoise loop *inside* a 32-layer MoE transformer backbone.
+## Running Demos
 
-Reference (PyTorch) lives under `HunyuanImage-3.0/hunyuan_image_3/` and is mirrored,
-block-for-block, under `ref/`. The device port lives under `tt/`. Every block has a
-PCC test under `tests/pcc/` (and `tests/vae/`) that gates the TT block against `ref/`.
-
----
-
-## The three variants
-
-All three share the **same MoE transformer backbone** (32 layers, 64 experts, top-8,
-hidden 4096). They differ only at the edges:
-
-| Variant | Adds over base | Incremental port cost |
-|---|---|---|
-| **HunyuanImage-3.0** (base, text→image) | — | runs end-to-end on the 2×2 mesh (`demo/demo.py`); accuracy/scale hardening remains |
-| **HunyuanImage-3.0-Instruct** (image→image, reasoning) | SigLIP2 vision encoder, image-input preprocessing, recaption/think token generation | **large** — net-new vision + AR-text path |
-| **HunyuanImage-3.0-Instruct-Distil** | 8-step meanflow + cfg_distilled (no CFG) | **small** — distill embedders + scheduler reuse |
-
-**Strategy:** finish base T2I end-to-end first (it unblocks all three), add Distil
-(nearly free), then build the Instruct I2I stack.
-
----
-
-## Running demos
-
-Run from the `tt-metal` repo root (`cd ~/ign-tt/tt-metal`). All three use the 2×2 mesh
+Run from the `tt-metal` repository root (`cd /path/to/tt-metal`). All three use the 2×2 mesh
 and default to 32 backbone layers (`HY_NUM_LAYERS=32`).
 
 | Variant | Demo | Steps | CFG | Checkpoint env / default path |
@@ -97,9 +418,8 @@ and default to 32 backbone layers (`HY_NUM_LAYERS=32`).
 ### Base text-to-image
 
 ```bash
-HY_NUM_LAYERS=32 HY_GUIDANCE=5.0 python_env/bin/python \
-  models/experimental/hunyuan_image_3_0/demo/demo.py \
-  "a photo of a cat, studio lighting"
+python_env/bin/python models/experimental/hunyuan_image_3_0/demo/demo.py \
+  $'A cinematic medium shot captures a single Asian woman seated on a chair within a dimly lit room, creating an intimate and theatrical atmosphere. The composition is focused on the subject, rendered with rich colors and intricate textures that evoke a nostalgic and moody feeling.\n\nThe primary subject is a young Asian woman with a thoughtful and expressive countenance, her gaze directed slightly away from the camera. She is seated in a relaxed yet elegant posture on an ornate, vintage armchair. The chair is upholstered in a deep red velvet, its fabric showing detailed, intricate textures and slight signs of wear. She wears a simple, elegant dress in a dark teal hue, the material catching the light in a way that reveals its fine-woven texture. Her skin has a soft, matte quality, and the light delicately models the contours of her face and arms.\n\nThe surrounding room is characterized by its vintage decor, which contributes to the historic and evocative mood. In the immediate background, partially blurred due to a shallow depth of field consistent with a f/2.8 aperture, the wall is covered with wallpaper featuring a subtle, damask pattern. The overall color palette is a carefully balanced interplay of deep teal and rich red hues, creating a visually compelling and cohesive environment. The entire scene is detailed, from the fibers of the upholstery to the subtle patterns on the wall.\n\nThe lighting is highly dramatic and artistic, defined by high contrast and pronounced shadow play. A single key light source, positioned off-camera, projects gobo lighting patterns onto the scene, casting intricate shapes of light and shadow across the woman and the back wall. These dramatic shadows create a strong sense of depth and a theatrical quality. While some shadows are deep and defined, others remain soft, gently wrapping around the subject and preventing the loss of detail in darker areas. The soft focus on the background enhances the intimate feeling, drawing all attention to the expressive subject. The overall image presents a cinematic, photorealistic photography style.'
 ```
 
 Base T2I defaults to **50 denoise steps** and **CFG 5.0**, matching HF
@@ -109,67 +429,16 @@ Base T2I defaults to **50 denoise steps** and **CFG 5.0**, matching HF
 Optional AR recaption (`HY_RECAPTION=1`) rewrites the prompt via the text-sampling loop
 (`ref/generate.py`, re-exported by `tt/generate.py`) before the gen-image block.
 
-| Env | Default | Meaning |
-|---|---|---|
-| `HY_STEPS` | `50` | Denoise steps (HF base default) |
-| `HY_GUIDANCE` | `5.0` | Classifier-free guidance scale (HF base default) |
-| `HY_RECAPTION` | `0` | `1` enables optional recaption/think before image gen |
-| `HY_BOT_TASK` | `recaption` | `recaption` / `think` / `think_recaption` |
-| `HY_MAX_NEW_TOKENS` | `512` | AR token budget — caps recaption latency |
-| `HY_TEMPERATURE` | `0.6` | sampling temperature |
-| `HY_TOP_K` / `HY_TOPK` | (Instruct) | top-k filter; see also rows below — **`=32` → device ttnn topk** |
-| `HY_TOP_P` | `0.95` | nucleus top-p (1.0 disables) |
-| `HY_REP_PENALTY` | `1.0` | repetition penalty (1.0 disables) |
-| `HY_DO_SAMPLE` | `1` | `0` = greedy argmax |
-| `HY_TRACE` | `1` | **Master switch.** `1` = 2CQ mesh + recaption AR trace (when recaption runs) + denoise CFG ``execute_trace`` when steps > ``HY_DENOISE_TRACE_MIN_STEPS``. `0` = eager 1CQ everywhere |
-| `HY_DENOISE_TRACE` | auto | `1` / `0` force denoise trace on/off. Default **auto**: off when denoise steps ≤ ``HY_DENOISE_TRACE_MIN_STEPS`` (capture overhead does not amortize on short loops) |
-| `HY_DENOISE_TRACE_MIN_STEPS` | `8` | Auto-disable denoise ``execute_trace`` when step count is at or below this (Instruct-Distil 8-step path) |
-| `HY_VAE_DECODE_TRACE` | `0` | `1` = CQ0 ``execute_trace`` for final RGB VAE decode (opt-in; see below) |
-| `HY_COND_ENCODE_TRACE` | `0` | `1` = CQ0 ``execute_trace`` for I2I cond **VAE encoder + ViT/aligner** (opt-in; recap stage stays eager) |
-| `HY_TRACE_REGION_MB` | auto | Trace region MiB (default scales with `HY_NUM_LAYERS`, 128–512 MiB) |
-| `HY_RECAPTION_KV` | `1` | `0` disables KV incremental decode on recaption path (required for recaption trace) |
-| `HY_RECAPTION_PREFILL_CHUNK` | `1024` | Chunk size for long-prefix KV prefill (`0` = one shot) |
-| `HY_KEEP_BACKBONE` | `1` | I2I: cache cond VAE/ViT tokens on host and **reuse** the resident backbone for denoise (skip ~140s reload). `0` = old free/rebuild sandwich |
-| `HY_DEVICE_SAMPLING` | `1` | Device-logits AR (**default on**). Alias: `HY_SAMPLE_DEVICE`. `0` = host generate on torch logits. Default sample step: D2H → host ``topk`` (Instruct k, e.g. **1024**) → host multinomial. Simple stage-force (``think_recaption``) stays on device; falls back to host generate for ratio / rep-penalty / greedy |
-| `HY_TOP_K` / `HY_TOPK` | (Instruct cfg) | Override sampling top-k. **`=32`** selects on-device ``ttnn.topk`` + ``ttnn.sampling``; any other value keeps host torch shortlist under device logits |
-| `HY_TTNN_SAMPLING_OP` | `0` | `1` = force pure ``ttnn.topk`` + ``ttnn.sampling`` (same as `HY_TOP_K=32`; k capped ≤32) |
-| `HY_LATENT_RESIDENT` | `1` | `1` = keep DiT latent on device between steps (TILE flat; Euler on device; one final D2H for VAE). `0` = legacy per-step ``to_torch``/``from_torch`` hops (debug) |
-| `HY_SEED` | `0` (T2I) / `42` (I2I) | Seed for on-device ``ttnn.randn`` init noise (demos) and AR sampling. Host ``torch.randn`` only for ``HY_DIT_HOST`` / ``HY_TORCH_BACKBONE`` |
-
-> **``HY_TRACE=1``** (default): recaption AR uses CQ0 ``execute_trace`` when recaption runs.
-> Denoise CFG ``execute_trace`` is **auto-enabled only when steps > 8** (default
-> ``HY_DENOISE_TRACE_MIN_STEPS``): step-1 capture + warmup on an 8-step Distil loop costs
-> more than eager replay. Instruct 50-step and base 50-step T2I keep denoise trace on.
-> Force with ``HY_DENOISE_TRACE=1``; disable with ``HY_DENOISE_TRACE=0``.
-> With ``HY_LATENT_RESIDENT=1`` (default), denoise does **not** use CQ1 inter-step latent D2H —
-> only VAE RGB transfers use CQ1 async I/O when 2CQ is active. Set ``HY_LATENT_RESIDENT=0``
-> to restore legacy host hops (+ optional CQ1 latent D2H).
-> Demos sample init noise with ``ttnn.randn`` (``tt/noise.py``); per-step ``t`` uses
-> ``ttnn.full``. I2I gen-timestep scatter uses ``HunyuanTtTimestepEmbedder`` on device
-> (``scatter_distill_step_embeds_tt``) when demos pass TT emb modules.
->
-> **``HY_TRACE=0``**: single command queue, no trace replay, no async I/O overlap.
->
-> **VAE / vision cond encode trace is opt-in (default off).** ``HY_VAE_DECODE_TRACE``
-> and ``HY_COND_ENCODE_TRACE`` default to ``0`` so first-run latency stays predictable:
-> trace capture on VAE encode/decode often costs more than eager on a single image,
-> cond traces are invalidated across backbone stage boundaries, and other tt-metal
-> pipelines (tt_dit SD3.5/Flux) keep ``vae_traced=False`` by default. Enable when
-> benchmarking steady-state replay (batch runs, repeated resolution) or profiling
-> capture vs eager.
->
-> Text-only and I2I recaption use KV + trace decode when ``HY_TRACE=1`` and recaption runs.
-> Long prefixes (>``HY_RECAPTION_PREFILL_CHUNK``) use chunked eager KV prefill.
-> Prefill cannot be trace-captured (KV ``replace()`` writes are illegal inside a trace).
+All demo/runtime environment variables are documented in the [Flags](#flags) section below.
 
 ### Instruct image-to-image (50-step CFG)
 
 Replace `/path/to/input.png` with your cond image. `--bot-task image` skips the AR
 recaption stage; use `think_recaption` for the full upstream flow.
 
-Trace defaults match ``demo.py``: ``HY_TRACE=1`` for recaption AR; denoise
-``execute_trace`` when steps > 8 (50-step Instruct keeps trace on). VAE decode and cond
-VAE/ViT encode trace off unless ``HY_VAE_DECODE_TRACE=1`` / ``HY_COND_ENCODE_TRACE=1``.
+Trace defaults match `demo.py`: `HY_TRACE=1` for recaption AR; denoise
+`execute_trace` when steps > 8 (50-step Instruct keeps trace on). VAE decode and cond
+VAE/ViT encode trace off unless `HY_VAE_DECODE_TRACE=1` / `HY_COND_ENCODE_TRACE=1`.
 
 ```bash
 HY_STEPS=50 HY_NUM_LAYERS=32 HY_GUIDANCE=2.5 python_env/bin/python \
@@ -180,10 +449,10 @@ HY_STEPS=50 HY_NUM_LAYERS=32 HY_GUIDANCE=2.5 python_env/bin/python \
   --out hy_instruct.png
 ```
 
-### Instruct-Distil image-to-image (8-step meanflow)
+### Instruct-Distil image-to-image (8-step MeanFlow)
 
-Denoise ``execute_trace`` is **off by default** (8 steps ≤ ``HY_DENOISE_TRACE_MIN_STEPS``);
-recaption AR trace (if used) and 2CQ mesh stay on under ``HY_TRACE=1``.
+Denoise `execute_trace` is **off by default** (8 steps ≤ `HY_DENOISE_TRACE_MIN_STEPS`);
+recaption AR trace (if used) and 2CQ mesh stay on under `HY_TRACE=1`.
 
 ```bash
 HY_DISTIL=1 HY_NUM_LAYERS=32 HY_GUIDANCE=2.5 python_env/bin/python \
@@ -200,251 +469,200 @@ Without `HY_STEPS`, Instruct defaults to 50 steps and Distil to 8 (from each che
 
 ---
 
-## Sequence length limits & measured results
+## Flags
+
+All runtime behavior is controlled by `HY_*` / `HUNYUAN_*` environment variables. Tables
+below cover the demo/runtime flags grouped by area, followed by advanced/debug knobs and
+the test/benchmark-only knobs. Defaults are read from the code; where a flag has an alias,
+both names are listed.
+
+### Prompt & I/O (demos)
+
+| Env | Default | Meaning |
+|---|---|---|
+| `HY_PROMPT` | Built-in Base prompt | Prompt (also positional `argv[1]`); I2I default `"make the sky more dramatic"` |
+| `HY_PROMPT_FILE` | — | Read prompt from a file instead |
+| `HY_COND` | — | I2I cond image path(s), comma-separated (also `--cond`) |
+| `HY_IMAGE_SIZE` | base size | Output image size (also `--image-size`) |
+| `HY_OUT` | per-demo | Output PNG path (also `--out`) |
+| `HY_OUT_LATENT` | `real_latent_<size>.pt` | Output latent dump path |
+| `HY_LATENT` | — | Load a precomputed latent instead of denoising |
+| `HY_SAVE_LATENT` | — | Optional `.pt` path to dump the denoised latent |
+| `HY_MODEL` | `base` | Variant selector in `test_e2e` (`base` / `instruct` / …) |
+
+### Model, layers & precision
+
+| Env | Default | Meaning |
+|---|---|---|
+| `HY_NUM_LAYERS` | `32` | Backbone transformer layers |
+| `HY_WEIGHT_DTYPE` | `bf8` (demo) / `bf16` (e2e) | Backbone weight dtype (`bf8` \| `bf16`) |
+| `HY_BF16_LAYERS` | — | Comma-separated layer indices forced to bf16 |
+| `HY_MOE_DTYPE` | `bf16` | MoE parallel matmul dtype (`bf16` \| `bf8`) |
+| `HY_STREAM_EXPERTS` | `1` if layers > 8 | Stream expert weights from host (vs resident) |
+| `HY_CAP` | `1024` | Tile-aligned token capacity per expert |
+| `HY_EPD` | `16` | Local experts per device |
+| `HY_MAX_ISL` | `512` | Max input sequence length (capped at HF max) |
+| `HY_SKIP_WEIGHT_DOWNLOAD` | `0` | `1` skips HF auto-download |
+
+### Denoise & scheduler
+
+| Env | Default | Meaning |
+|---|---|---|
+| `HY_STEPS` | `50` (Base/Instruct) / `8` (Distil) | Denoise steps |
+| `HY_GUIDANCE` | `5.0` (base) / `2.5` (instruct) | Classifier-free guidance scale |
+| `HY_BASE_GUIDANCE` | `1` (32L e2e) | Guidance for densify-fair e2e comparison |
+| `HY_CFG` | `1` | CFG doubling factor |
+| `HY_SEED` | `0` (T2I) / `42` (I2I) | Seed for `ttnn.randn` init noise + AR sampling |
+| `HY_DISTIL` | `0` | `1` = 8-step MeanFlow Distil path (also `--distil`) |
+| `HY_LATENT_RESIDENT` | `1` | Keep DiT latent on device across steps (`0` = legacy host hops) |
+| `HY_DIT_HOST` / `HY_TORCH_BACKBONE` | `0` | Run the DiT/backbone on host torch (debug) |
+| `HY_GRID` | — | Latent grid size for tests/e2e |
+| `HY_TEXT_PRE` / `HY_TEXT_POST` | — | Text-span lengths before/after the image span (e2e) |
+
+### Generation & sampling (AR)
+
+| Env | Default | Meaning |
+|---|---|---|
+| `HY_RECAPTION` | `0` | `1` enables optional recaption/think before image gen |
+| `HY_BOT_TASK` | `recaption` | `recaption` / `think` / `think_recaption` |
+| `HY_MAX_NEW_TOKENS` | `512` | AR token budget — caps recaption latency |
+| `HY_TEMPERATURE` | `0.6` | Sampling temperature |
+| `HY_TOP_K` / `HY_TOPK` | `1024` | Top-k filter (0 disables); `=32` enables `ttnn.topk` path |
+| `HY_TOP_P` | `0.95` | Nucleus top-p (1.0 disables) |
+| `HY_REP_PENALTY` | `1.0` | Repetition penalty (1.0 disables) |
+| `HY_DO_SAMPLE` | `1` | `0` = greedy argmax |
+| `HY_DEVICE_SAMPLING` / `HY_SAMPLE_DEVICE` | `0` | `1` = device-logits AR (D2H full-V → host topk → shortlist multinomial) |
+| `HY_TTNN_SAMPLING_OP` | `0` | `1` = pure `ttnn.topk` + `ttnn.sampling` (k≤32) |
+
+### Recaption / AR orchestration (I2I)
+
+| Env | Default | Meaning |
+|---|---|---|
+| `HY_RECAPTION_LAYERS` | `= HY_NUM_LAYERS` | Backbone layers for the recaption pass |
+| `HY_RECAPTION_KV` | `1` | KV incremental decode (required for recaption trace) |
+| `HY_RECAPTION_PREFILL_CHUNK` | `1024` | Chunk size for long-prefix KV prefill (`0` = one shot) |
+| `HY_RECAPTION_DEVICE` | `1` | Run recaption on device (`0` = host) |
+| `HY_RECAPTION_INSTRUCT` | `1` | Use the Instruct recaption template |
+| `HY_RECAPTION_TRACE` | `1` | CQ0 decode-trace replay in the recaption loop (`0` disables) |
+| `HY_RECAPTION_TRACE_PREFILL` | `0` | `1` also traces the prefill step |
+| `HY_RECAPTION_HOST_RETRY` | `0` | `1` retries on host when device sampling stalls |
+| `HY_RECAPTION_CUDA_FALLBACK` | `0` | `1` falls back to CUDA reference if available |
+| `HY_RECAPTION_VERBOSE` | `1` | Recaption progress logging |
+| `HY_KEEP_BACKBONE` | `1` | Reuse resident backbone for denoise (skip ~140s reload) |
+
+### Trace & command queues
+
+| Env | Default | Meaning |
+|---|---|---|
+| `HY_TRACE` | `1` | **Master switch:** 2CQ mesh + recaption AR trace + denoise trace (steps > min). `0` = eager 1CQ |
+| `HY_DENOISE_TRACE` | auto | Force denoise `execute_trace` on/off (auto-off when steps ≤ min) |
+| `HY_DENOISE_TRACE_MIN_STEPS` | `8` | Auto-disable denoise trace at/below this step count |
+| `HY_VAE_DECODE_TRACE` | `0` | CQ0 `execute_trace` for final RGB VAE decode (opt-in) |
+| `HY_COND_ENCODE_TRACE` | `0` | CQ0 `execute_trace` for I2I cond VAE encoder + ViT/aligner (opt-in) |
+| `HY_TRACE_REGION_MB` | auto | Trace region MiB (scales with `HY_NUM_LAYERS`, 128–512) |
+
+> **`HY_TRACE=1`** (default): recaption AR uses CQ0 `execute_trace`; denoise CFG trace is
+> auto-enabled only when steps > 8 (capture + warmup does not amortize on an 8-step Distil
+> loop). With `HY_LATENT_RESIDENT=1`, only VAE RGB transfers use CQ1 async I/O.
+> **`HY_TRACE=0`**: single command queue, no trace replay, no async I/O overlap.
+> VAE / cond-encode traces are opt-in because capture often costs more than eager on a
+> single image. Prefill cannot be trace-captured (KV `replace()` writes are illegal in a trace).
+
+### Attention / SDPA & sharding (advanced)
+
+| Env | Default | Meaning |
+|---|---|---|
+| `HY_SDPA_Q_CHUNK` / `HY_SDPA_K_CHUNK` | `256` | SDPA prefill query / key chunk size |
+| `HY_SDPA_CAUSAL_Q_CHUNK` | `512` | SDPA causal query chunk size |
+| `HY_SHARDED_MASK` | `1` | Sharded attention mask when denoise `sp > 1` |
+| `HY_SHARD_NORM` | `1` | Sharded LayerNorm/RMSNorm |
+| `HY_L1_SHARDED_MATMUL` | `1` | L1-sharded matmul path |
+| `HY_SPARSE_MOE_CF` | `3` | Sparse-MoE compaction factor |
+| `HY_GN_MODE` | `dist` | VAE GroupNorm mode |
+| `HY_GN_STATS` | `split` | VAE GroupNorm stats mode |
+| `HY_PATCH_EMBED_SHARDED` | `1` | Sharded patch-embed conv |
+| `HY_FINAL_LAYER_EMB_GRID` | — | Override final-layer embedding grid |
+| `HY_ENCODER_W_SPATIAL` | `0` | Width-spatial VAE encoder path |
+| `HY_VERBOSE` | `1` | Runtime progress logging |
+
+### Vision / ViT (I2I, advanced)
+
+| Env | Default | Meaning |
+|---|---|---|
+| `HY_VIT_LAYERS` / `HY_VIT_NUM_LAYERS` | ViT config | SigLIP2 vision layers to run |
+| `HY_VIT_SDPA_Q_CHUNK` / `HY_VIT_SDPA_K_CHUNK` | `256` | ViT SDPA query / key chunk size |
+| `HY_VIT_LOFI` | `0` | Low-fidelity ViT matmuls |
+| `HY_VIT_MLP_BF8` | `0` | bf8 ViT MLP weights |
+| `HY_INFER_ALIGN` | `0` | Inference alignment mode (also `--infer-align`) |
+
+### Checkpoint paths
+
+| Env | Meaning |
+|---|---|
+| `HUNYUAN_MODEL_DIR` | Base checkpoint dir (else HF `tencent/HunyuanImage-3.0`) |
+| `HUNYUAN_INSTRUCT_MODEL_DIR` | Instruct checkpoint dir (else HF `…-Instruct`) |
+| `HUNYUAN_INSTRUCT_DISTIL_MODEL_DIR` | Distil checkpoint dir (else HF `…-Instruct-Distil`) |
+| `HUNYUAN_UPSTREAM` / `HUNYUAN_SRC` | Local clone of the `hunyuan_image_3` package (parity tests) |
+| `HUNYUAN_VOCAB` | Override tokenizer vocab path |
+| `HUNYUAN_EXACT_BLOCKINGS` / `HUNYUAN_DECODER_EXACT_BLOCKINGS` / `HUNYUAN_CHANNEL_BLOCKINGS` | Conv3D blocking overrides |
+
+### Test / benchmark-only knobs
+
+Used only by `tests/` (not the demos). PCC gates: `HY_LATENT_PCC`, `HY_RGB_PCC`,
+`HY_DENOISE_LOOP_PCC`, `HY_VIT_PCC_THR`, `HY_RUN_E2E_RANDOM`, `HY_NUM_LAYERS_MAXSEQ`,
+`HY_PCC_CSV`, `HY_PCC_CSV_DIR`. Perf sweeps: `HY_ITERS`, `HY_S`, `HY_DECODE_STEPS`,
+`HY_PREFILL_ISL`, `HY_PERF_TOKEN_POS`, `HY_DENOISE_PERF_ITERS`, `HY_DENOISE_PERF_WARMUP`,
+`HY_DENOISE_GRID`, `HY_DENOISE_TEXT_PRE`, `HY_DENOISE_TEXT_POST`, `HY_DENOISE_RESIDENT_TEMB`,
+`HY_ENCODER_PERF_*`, `HY_CONV3D_SWEEP_*`, `HY_PATCH_EMBED_CONV_*`, `HY_VIT_SEQ`.
+
+---
+
+## Sequence Length Limits and Measured Results
 
 ### Maximum validated sequence length
 
-**Maximum validated sequence length: 17,343.** Beyond this, the current implementation
-encounters OOM because the 80B model weights occupy most of the available device DRAM
-(middle transformer layers in `BFLOAT8_B`, first and last four layers in `BF16`), leaving
-insufficient memory for the attention mask, whose memory grows quadratically with sequence
-length.
+The implementation supports total sequence lengths up to the model's max_position_embeddings of 22,800 tokens (tile-aligned to 22,784). For a given image resolution, the image token count is fixed; only the text prompt length (along with a small number of special tokens) changes the final sequence length. The full pipeline has been validated end-to-end at this maximum supported context.
 
-Images are generated correctly up to approximately **8K** sequence length. Beyond ~8K, the
-generated images become increasingly noisy. The same behavior is observed with the Hugging
-Face reference implementation.
+Image *quality*, however, is only correct up to approximately **8K** sequence length.
+Beyond ~8K, the generated images become increasingly noisy. The same behavior is observed
+with the Hugging Face reference implementation, so this is a property of the model rather
+than of this port.
 
-| Range | Behavior |
-|---|---|
-| S up to ~8K | Images look correct |
-| Above ~8K through 17,343 | Runs, but images grow noisier (also on HF ref) |
-| Above 17,343 | Device OOM (weights + quadratic attention mask) |
 
-Model capacity is still `max_position_embeddings = 22800`; the 17,343 ceiling is a **DRAM**
-limit on the current 2×2 resident mixed-precision layout, not the HF position embedding
-cap. (HF `generation_config.max_length = 12800` is a separate preprocess guard and is **not**
-applied on the TTNN demo path.)
+### Limitations
 
-### Base T2I timing (measured)
+#### Device Sampling (`ttnn.sampling`)
 
-Example `demo/demo.py` wall times on the 2×2 mesh (resident bf8 backbone):
+By default, HunyuanImage-3.0 uses **Torch sampling** for prompt rewriting because the official model is configured with a much larger `top_k` than is currently supported by the TTNN device sampling kernel.
 
-| Stage | Time | Share |
-|---|---:|---:|
-| `1_setup_weights_tokenizer` | 0.6s | 0.2% |
-| `4_build_denoise_mesh_backbone` | 151.3s | 53.0% |
-| `5_denoise_loop` | 114.9s | 40.2% |
-| `6_vae_decode` | 18.3s | 6.4% |
-| `7_save_png` | 0.6s | 0.2% |
-| **TOTAL** | **285.7s** | 100% |
+| Component | Value |
+|----------|------:|
+| HunyuanImage-3.0 default `top_k` | 1024 |
+| TTNN device sampling `top_k` | ≤ 32 |
 
-Backbone upload dominates first-run latency; subsequent denoise is the other large share.
+As a result:
 
-### Long-seq e2e PCC (measured)
-
-Opt-in random-input gate `test_e2e_pipeline` at production grid / long text span
-(`grid=64`, **S=12112**, 32 layers, 2 steps; densify-fair CFG off):
-
-| Metric | PCC | Threshold | Shapes |
-|---|---:|---:|---|
-| Latent | **0.945957** | 0.85 | — |
-| RGB | **0.977100** | 0.70 | ref=tt=`(1, 3, 1024, 1024)` |
-
-Wall time for that run: **~2099s** (host fp32 reference + TT denoise + VAE). Max |Δ| on
-latent: `7.59e-01`. Status: **PASSED**.
+- **Default behavior:** Prompt rewriting falls back to the **Torch sampler**, preserving the official sampling behavior and prompt quality.
+- **Experimental mode:** Setting `HY_TOPK=32` enables **TTNN device sampling** for the recaption model.
 
 ```bash
-HY_GRID=64 HY_TEXT_PRE=7984 HY_TEXT_POST=32 \
-HY_NUM_LAYERS=32 HY_STEPS=2 HY_RUN_E2E_RANDOM=1 \
-python_env/bin/python -m pytest \
-  models/experimental/hunyuan_image_3_0/tests/pcc/test_pipeline.py::test_e2e_pipeline \
-  -v -s --timeout=43200
+export HY_TOPK=32
 ```
 
----
+**Current limitation**
 
-## Status
+Although device-side sampling works with `HY_TOPK=32`, the rewritten prompts are currently of noticeably lower quality than the default Torch implementation. This is expected because reducing the candidate set from **1024** to **32** changes the sampling distribution and limits token diversity.
 
-### Ported, with passing PCC tests
-- RMSNorm — `tt/attention/rms_norm.py`
-- 2D RoPE — `tt/attention/rope_2d.py`
-- Attention (GQA, qk-norm) — `tt/attention/attention.py`
-- Attention mask (causal text + bidirectional image span) — `tt/attention/mask.py`
-- MoE: router/gate, expert MLP, shared expert — `tt/moe/`
-- Decoder layer — `tt/transformer_layer.py`
-- Full 32-layer backbone (teacher-forced) — `tt/model.py`
-- Patch embed `UNetDown` / final layer `UNetUp` — `tt/image_gen/patch_embed.py`
-- Timestep embedder — `tt/image_gen/timestep_embedder.py`
-- Flow-matching scheduler — `tt/scheduler.py`
-- VAE encoder / decoder blocks (Conv3D) — `tt/vae/`
-- **Full-res VAE decode on device** — `tt/vae/spatial.py` H/W-spatial-parallel
-  (each device a 512² quadrant of 1024²); `tests/vae/test_decode_pipeline.py`
-  (`test_decode_latent_spatial_vs_reference`) vs fp32 reference: PCC 0.999489, no OOM. **Optional trace VAE decode**
-  (``HY_VAE_DECODE_TRACE=1`` with ``HY_TRACE=1``): CQ0 ``execute_trace`` via
-  ``tt/stage_trace.py``; 2CQ async RGB D2H — see ``tt/vae_dual_cq.py``.
-- **On-device single denoise step** — `tt/pipeline.py` `HunyuanTtDenoiseStep`
-  (`tests/pcc/test_pipeline.py`): 4-layer PCC 0.99999, full 32-layer PCC 0.983.
-  Device-side scatter (concat) + image-span slice; no host round-trips.
-- **Multi-step denoise loop** — `tt/pipeline.py` `denoise_loop`
-  (`tests/pcc/test_denoise.py`, PCC 0.99999): per-step timestep embedding,
-  scheduler Euler update, CFG. Default ``HY_LATENT_RESIDENT=1`` keeps the latent
-  TILE-flat on device across DiT steps (no mid-loop ``to_torch``/``from_torch``);
-  one D2H feeds VAE. **Trace denoise** (``HY_TRACE=1`` and steps >
-  ``HY_DENOISE_TRACE_MIN_STEPS``): CQ0 ``execute_trace`` CFG loop via ``tt/stage_trace.py``
-  with the same resident buffers. Legacy hops + CQ1 latent D2H when
-  ``HY_LATENT_RESIDENT=0`` — see ``tt/denoise_dual_cq.py``.
-- **`decode_latent` glue** — `tt/pipeline.py` (`tests/vae/test_decode_pipeline.py`):
-  scaling / temporal-dim / denormalize wiring verified with an injected decoder.
+Device sampling with `HY_TOPK=32` is therefore considered **experimental**. Improving prompt quality while using TTNN device sampling is planned for future work.
 
-### Known issues / blockers
-- ~~**VAE full-res decode OOMs.**~~ RESOLVED — the decoder is now H/W-spatial-parallel
-  across the 2×2 mesh (`tt/vae/spatial.py`), so each device holds a 512² quadrant and the
-  conv im2col is 4× smaller per shard. Full 1024² decode runs with no OOM, PCC 0.999489 vs
-  fp32 reference (`tests/vae/test_decode_pipeline.py`). See MEMORY_FIT_PLAN.md.
-- **32-layer backbone drift:** free-running PCC ≈ 0.88 (bf16) for the standalone backbone;
-  the full denoise step composes to 0.983. Audit before final image fidelity.
-- **Host RAM:** 32 layers resident with `stream_experts=True` ≈ 150 GB host RAM
-  (see note in `tt/model.py`). Needs on-demand disk streaming for the full model.
-- **Not device-resident:** expert weights re-upload from host RAM every forward
-  (`tt/moe/moe.py`), and MoE runs dense over all 64 experts (correct but not sparse).
 
----
 
-## Pending work
+#### Mixed-Precision Execution
 
-### Phase 1 — Base T2I end-to-end (critical path) — COMPLETE
-1. ~~**On-device single denoise step**~~ — DONE (`HunyuanTtDenoiseStep`).
-2. ~~**Multi-step denoise loop** with CFG~~ — DONE (`denoise_loop`).
-3. ~~**VAE decode**~~ — DONE on device, H/W-spatial-parallel (`tt/vae/spatial.py`,
-   `decode_latent`); full-res 1024² runs with no OOM (PCC 0.999489).
-4. ~~**Tokenizer + input construction**~~ — DONE. `HunyuanTokenizer` +
-   `prepare_gen_image_inputs` build input_ids and the `[text | image span | text]`
-   sequence; `demo/demo.py` runs from a real prompt (host wte embed; on-device embed via
-   `HunyuanTtModel(embed_state_dict=...)` is also supported).
-5. ~~**Runnable `demo/demo.py`**~~ — DONE: prompt → tokenizer → resident bf8 2×2 backbone
-   → on-device VAE → PNG (`HY_NUM_LAYERS=32 demo/demo.py "a photo of a cat"`; default 50 steps).
+To balance performance, memory usage, and hardware efficiency, the model uses a mixed-precision weight configuration across its 32 transformer layers:
 
-### Phase 2 — Accuracy & scale
-6. **VAE upsample memory** — chunk/shard/stream the DCAE upsample (the Phase-1 VAE
-   blocker is really this work).
-7. Resolve 32-layer bf16 drift (precision audit; candidate ops: MoE accumulation,
-   RMSNorm, attention softmax). **Instrument:** `tests/pcc/test_teacher_forced.py::
-   test_bf8_mixed_precision_audit` sweeps each layer at bf16 vs bf8 against the fp32 golden
-   and prints the recommended `bf16_layers` set (layers whose bf8 per-layer PCC < 0.99).
-   Run it on the box, then feed the result into `HunyuanTtModel(bf16_layers=...)` / `demo.py`.
-8. On-demand layer/expert weight streaming from disk.
-9. **Device-resident experts** (stop re-uploading per forward) + **sparse top-8 routed
-   MoE** (replace the dense-over-64 correctness path) — `tt/moe/moe.py`.
+- **Layers 0–3:** BF16
+- **Layers 4–27:** BF8
+- **Layers 28–31:** BF16
 
-### Phase 3 — Distil variant — DONE
-10. ~~8-step meanflow sampling + cfg_distilled plumbing~~ — DONE:
-    `scatter_distill_step_embeds`, `denoise_loop` guidance/timestep_r scatter,
-    `demo/demo_i2i.py --distil` / `HY_DISTIL=1` with `HUNYUAN_INSTRUCT_DISTIL_MODEL_DIR`.
-
-### Phase 4 — Instruct (I2I) variant
-Vision input path — device pieces + host glue DONE; full on-box AR decode remains:
-11. ~~**SigLIP2 vision encoder** (`tt/vision/siglip2.py`) + vision→4096 `LightProjector`~~ —
-    ported + PCC-tested (`tests/vision/test_siglip2_ttnn.py`, `forward_vision_with_aligner`).
-12. ~~**Cond-vision sequence injection**~~ — DONE: `tt/vision/inject.py`. Three paths,
-    all vs the reference masked scatter (`tests/vision/test_cond_vision_inject.py`, PCC 0.999998):
-    `scatter_cond_vision_embeddings` (single contiguous TILE-aligned span),
-    `scatter_cond_vision_embeddings_multi` (several contiguous spans — multi-image, device
-    concat), and `scatter_cond_vision_embeddings_host` (arbitrary / ragged / non-aligned mask).
-13. ~~**Host glue**~~ — DONE. `ref/vision/preprocess.py` extracts
-    `HunyuanImage3ImageProcessor.vit_process_image` (verified **bitwise-equal** to upstream —
-    `test_cond_image_preprocess.py::test_ref_preprocess_bitwise_matches_upstream`). `tt/vision/
-    preprocess.py` adds the device bridge (`to_vision_inputs`) + `<img>` span lookup
-    (`find_image_token_spans`). `tt/vision/i2i.py` assembles the pipeline: image → processor →
-    `Siglip2VisionInputs` → vision+aligner (`encode_cond_vision`) → `inject_cond_vision`
-    (auto device-concat vs host-scatter) → `model.forward(inputs_embeds=)`.
-14. ~~**Autoregressive text generation**~~ — DONE (host loop + device head). `tt/lm_head.py`
-    `HunyuanTtLMHead` projects backbone hidden → vocab logits (real `lm_head.weight`,
-    `test_lm_head.py` PCC 0.99999, both full + last-token paths). `tt/generate.py` is the
-    sampling loop: repetition-penalty → temperature → top-k → top-p → sample, plus a
-    `StageTransitionLogitsProcessor` (recaption/think phase forcing) verified **bitwise-equal**
-    to upstream `_StageTransitionLogitsProcessor` (`test_generate.py`, 7 unit tests). The loop
-    is decoupled via a `forward_logits_fn` callback; `make_backbone_logits_fn` wires the
-    resident backbone + LM head as the device adapter.
-    **Host recaption orchestration:** `ref/recaption.py` + `tt/recaption.py`
-    (`run_recaption_on_device` with `make_recaption_logits_fn` for I2I cond embeds).
-    `demo/demo_i2i.py` runs the full ``think_recaption`` → denoise chain.
-    **Remaining:** default ``HY_RECAPTION_LAYERS`` matches ``HY_NUM_LAYERS``. **2CQ AR**
-    (``HY_RECAPTION_2CQ=1``): CQ0 forward + CQ1 async logits D2H — see ``tt/ar_dual_cq.py``.
-    **Trace decode** (``HY_RECAPTION_TRACE=1``): requires ``HY_RECAPTION_KV=1`` and
-    ``sp_factor=1`` on the recaption backbone; captures one KV single-token decode step on
-    CQ0 (``tt/ar_trace.py``) and replays it in the host ``generate_text`` loop while stage
-    forcing stays on host (Whisper-style). Open the device with an enlarged trace region
-    (``open_recaption_mesh`` auto-sizes trace region from layer count, or set
-    ``HY_RECAPTION_TRACE_REGION_MB=128``). Logs:
-    ``capturing decode trace on CQ0``, ``decode trace captured``, ``trace replay steps=N``.
-
----
-
-## PCC thresholds and exceptions
-
-Default gates live in `tests/pcc/pcc_common.py` and `tests/pcc/pipeline_helpers.py`.
-Tests compare TT output against the PyTorch `ref/` path. **Activations** (hidden states,
-latents, text embeds) are randomly generated; **weights** come from the HF checkpoint.
-
-| Threshold | Value | Test / module | Notes |
-|-----------|------:|---------------|-------|
-| `PCC_STRICT` | 0.999 | RMSNorm, RoPE, MoE expert FFN, WTE, **lm_head @ S=4160** | Per-block strict gate |
-| `PCC_BLOCK` | 0.99 | Attention, decoder layer, teacher-forced final, 32L production backbone | Default block gate; production gates at S=1 + S=4160 |
-| `PCC_CHAINED` | 0.86 | 32L chained free-running final hidden | Accumulated drift across layers |
-| `PCC_DECODE_STACK` | 0.96 | Backbone at **S=1** (decode smoke) | Lower bar for single-token stack |
-| `PCC_LOGIT_DECODE` | 0.96 | `test_logit_stack_production_pcc` at S=1 | 32L **teacher-forced** logits (free-running S=1 ~0.59 — known MoE drift) |
-| `PCC_LOGIT_PREFILL` | 0.85 | `test_logit_stack_production_pcc` at S=4160 | 32L chained last-token logits |
-| `PCC_LOGIT_MAX_CONTEXT` | 0.85 | `test_logit_stack_max_context_pcc` | 32L last-token at S=22784 (production slow CI) |
-| `PCC_PIPELINE` | 0.98 | Reserved pipeline constant | See denoise/e2e rows below |
-| Denoise step (≤8L, bf16) | 0.99 | `test_pipeline.py` / `pipeline_pcc_threshold` | |
-| Denoise step (32L, bf16) | 0.85 | `test_denoise_step_production_32l_pcc`, `test_i2i_denoise_step_production_32l_pcc` | **Observed ~0.983** (T2I); threshold is conservative |
-| Denoise step (bf8) | 0.90 | `pipeline_pcc_threshold(bf8)` | |
-| Resident mesh denoise | 0.98 | `test_denoise_step_resident_mesh` | |
-| E2E latent | 0.98 / loop thr | `test_e2e_pipeline` (`e2e_pcc_thresholds`) | ≤8L bf16: 0.98; 32L: `production_loop_pcc_threshold` (bf8+CFG floor 0.70). Opt-in `HY_RUN_E2E_RANDOM=1` |
-| E2E RGB | 0.97 / derived | `test_e2e_pipeline` (`HY_RGB_PCC`) | Tracks latent thr; 32L defaults `HY_BASE_GUIDANCE=1` for fair densify match |
-| `test_generate.py` | — | Host unit tests (`@pytest.mark.unit_host`) | Mock logits (V=64); excluded from smoke/PCC sweeps |
-| Recaption AR | greedy token match | `test_recaption_production_greedy_tokens` | 32L instruct; not PCC (token parity) |
-| Scheduler | 0.99 | `test_scheduler.py` | **Smoke tier only** — deterministic ref match; not in production script |
-| Timestep embedders | 0.999 | `test_timestep_embedder_pcc` | **Smoke tier only** — scalar/batch timesteps @ S≤32; not in production script |
-| lm_head (standalone) | 0.99 / 0.999 | `test_lm_head.py` | Smoke @ S=32 (`PCC_THR=0.99`); **production last-token @ S=4160** (`PCC_STRICT`); integrated path in logit stack |
-| I2I denoise step | 0.85 | `test_i2i_denoise_step_production_32l_pcc` | 32L instruct bundle @ 1024²; in production slow CI |
-| Vision / VAE | varies | `tests/vision/`, `tests/vae/` | Separate subtrees; not in backbone production script |
-| VAE spatial decode | 0.99 | `test_decode_latent_spatial_vs_reference` | **Observed ~0.999489** |
-| Free-running 32L backbone | ~0.88 | Known issue (not a CI gate) | See blockers below |
-| 32L chained decode hidden | 0.96 | `test_backbone_production_32l_decode_pcc` | Chained, not teacher-forced |
-| Attention mask | bitwise | `test_mask_production_pcc` | Exact match @ S=4160 image layout |
-
-Override e2e thresholds with `HY_LATENT_PCC` / `HY_RGB_PCC`. E2E/demo weight dtype via
-`HY_WEIGHT_DTYPE=bf8|bf16` (bf16 streams experts on e2e to avoid resident DRAM OOM).
-Layer mixed-precision via `HY_BF16_LAYERS=0,1,...`.
-
----
-
-## Running tests
-
-```bash
-# Single block (example)
-python_env/bin/python -m pytest \
-  models/experimental/hunyuan_image_3_0/tests/pcc/test_transformer.py -v -s
-
-# On-device denoise step + multi-step loop
-python_env/bin/python -m pytest \
-  models/experimental/hunyuan_image_3_0/tests/pcc/test_pipeline.py \
-  models/experimental/hunyuan_image_3_0/tests/pcc/test_denoise.py -v -s
-
-# Full 32-layer single step on real weights (slow, ~6 min)
-HY_NUM_LAYERS=32 python_env/bin/python -m pytest \
-  models/experimental/hunyuan_image_3_0/tests/pcc/test_pipeline.py -k denoise_step -v -s
-
-# Production slow CI gate (32L, GRID=64, S=4160 + S=22784 max-context, submodule gates)
-bash models/experimental/hunyuan_image_3_0/tests/run_pcc_production_slow.sh
-```
-
-Checkpoint weights (sharded safetensors + `*.index.json` + `config.json`):
-
-- **Base:** `HUNYUAN_MODEL_DIR` — or newest HF hub snapshot for `tencent/HunyuanImage-3.0`
-- **Instruct:** `HUNYUAN_INSTRUCT_MODEL_DIR` — or HF `tencent/HunyuanImage-3.0-Instruct`
-- **Upstream parity:** `HUNYUAN_UPSTREAM` — local clone of the `hunyuan_image_3` Python package (tokenizer tests)
-- **Distil:** `HUNYUAN_INSTRUCT_DISTIL_MODEL_DIR` — HF `tencent/HunyuanImage-3.0-Instruct-Distil`
-
-Demos call `ensure_*_weights()` in `ref/weights.py`: env override first, then HF hub cache, auto-download on first run.
+Using BF8 for the middle transformer layers reduces memory bandwidth and improves performance. However, the lower numerical precision introduces quantization error that can accumulate across layers, leading to small numerical differences compared to full BF16 execution. As a result, model outputs may not exactly match the reference PyTorch implementation.
