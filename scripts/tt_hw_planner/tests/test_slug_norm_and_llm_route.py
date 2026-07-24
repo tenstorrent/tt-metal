@@ -368,6 +368,7 @@ def test_llm_category_fallback_only_on_residual(monkeypatch):
         return '{"category": "TTS"}'
 
     monkeypatch.setattr("scripts.tt_hw_planner.llm_synth.invoke_llm_cli_one_shot", _fake_invoke)
+    monkeypatch.setattr("scripts.tt_hw_planner.probe._fetch_model_card_text", lambda mid: "")  # no network in CI
     monkeypatch.setenv("TT_HW_PLANNER_LLM_CATEGORY", "1")
     monkeypatch.setenv("TT_HW_PLANNER_CATEGORY_VOTES", "1")  # deterministic single-ask for the count assert
     P._LLM_CATEGORY_CACHE.clear()
@@ -393,6 +394,22 @@ def test_llm_category_fallback_only_on_residual(monkeypatch):
     P._LLM_CATEGORY_CACHE.clear()
     monkeypatch.setenv("TT_HW_PLANNER_LLM_CATEGORY", "0")
     assert P._llm_resolve_category("kyutai/mimi", cfg, "feature-extraction") is None
+
+
+def test_dual_encoder_contrastive_is_a_fact_not_llm():
+    # contrastive dual-encoders (CLIP/ALIGN/CLAP) were flaky under the LLM residual
+    # (it flips them to a generation category); they carry a STRUCTURAL fact -- text_config
+    # + vision/audio_config with a non-generative arch -> Embed, read deterministically.
+    from scripts.tt_hw_planner.probe import _is_dual_encoder_contrastive as D
+
+    assert D({"text_config": {}, "audio_config": {}, "architectures": ["ClapModel"]}) is True
+    assert D({"text_config": {}, "vision_config": {}, "architectures": ["AlignModel"]}) is True
+    # a generative multimodal (VLM with an LM head) is NOT a contrastive dual-encoder
+    assert D({"text_config": {}, "vision_config": {}, "architectures": ["LlavaForConditionalGeneration"]}) is False
+    # audio-only codec (no text_config) is not dual-encoder -> stays on its own path
+    assert D({"audio_config": {}, "sampling_rate": 24000, "architectures": ["EncodecModel"]}) is False
+    # plain text/vision model -> not dual-encoder
+    assert D({"architectures": ["BertModel"]}) is False
 
 
 def test_no_hand_maintained_model_type_lists():

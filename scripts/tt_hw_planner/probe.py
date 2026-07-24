@@ -171,6 +171,21 @@ _VALID_CATEGORIES = ("LLM", "VLM", "Image", "Video", "STT", "TTS", "Embed", "CNN
 _LLM_CATEGORY_CACHE: dict = {}
 
 
+def _fetch_model_card_text(model_id: str) -> str:
+    """Fetch the model's README (the same prose a human reads to classify it) so the LLM
+    resolver reasons over real evidence, not just a few config keys. Local dir or HF repo;
+    best-effort, never raises, returns '' on any failure."""
+    try:
+        if _is_local_model_dir(model_id):
+            p = os.path.join(model_id, "README.md")
+            return open(p, encoding="utf-8").read() if os.path.isfile(p) else ""
+        from huggingface_hub import hf_hub_download
+
+        return open(hf_hub_download(model_id, "README.md"), encoding="utf-8").read()
+    except Exception:
+        return ""
+
+
 def _category_from_fingerprint(fingerprint: str) -> Optional[str]:
     """Bridge the structural fingerprint to a category when the deterministic tag/
     model_type path came up ``Unknown`` but the fingerprint DID identify a backbone
@@ -191,6 +206,22 @@ def _category_from_fingerprint(fingerprint: str) -> Optional[str]:
     if fp.startswith("dit") or "diffusion" in fp:
         return "Image"
     return None
+
+
+def _is_dual_encoder_contrastive(cfg: dict) -> bool:
+    """Structural FACT for a contrastive dual-encoder (CLIP / ALIGN / CLAP style): the
+    config ships a ``text_config`` alongside a ``vision_config`` or ``audio_config`` and
+    the architecture is a bare encoder (no generative *ForCausalLM / *ForConditional-
+    Generation / *ForTextToSpeech head). Such models produce embeddings to MATCH inputs,
+    not to synthesize -- category Embed. Reading this fact is stable where the LLM is
+    flaky (it tends to call an audio/vision contrastive model a generation category).
+    Generalizes to any dual-encoder; no per-model list."""
+    keys = set(cfg or {})
+    has_text = "text_config" in keys
+    has_other = "vision_config" in keys or "audio_config" in keys
+    archs = " ".join((cfg or {}).get("architectures") or [])
+    generative = re.search(r"For(Causal(LM|MM)|ConditionalGeneration|TextToSpeech|SpeechToText|CTC)\b", archs)
+    return has_text and has_other and not generative
 
 
 def _is_category_residual(model_type_category: Optional[str], fingerprint: str) -> bool:
@@ -215,6 +246,8 @@ def _llm_resolve_category(model_id: str, cfg: dict, pipeline_tag: Optional[str],
         return None
     if model_id in _LLM_CATEGORY_CACHE:
         return _LLM_CATEGORY_CACHE[model_id]
+    if not card_text:
+        card_text = _fetch_model_card_text(model_id)
     result: Optional[str] = None
     try:
         from .llm_synth import extract_json_from_llm_output, invoke_llm_cli_one_shot
@@ -244,15 +277,18 @@ def _llm_resolve_category(model_id: str, cfg: dict, pipeline_tag: Optional[str],
             "Image/Video=visual generation; STT=speech->text; TTS=audio synthesis or neural "
             "audio codec; Embed=text embedding/retrieval; CNN=vision classification/detection/"
             "segmentation; NLP=encoder-only text understanding; Unknown=cannot tell.\n"
-            "IMPORTANT: pick a GENERATION category (Image/Video/TTS) ONLY if the model actually "
-            "SYNTHESIZES that modality as output. A contrastive / dual-encoder / retrieval / "
-            "matching / zero-shot-classification model (CLIP / ALIGN / CLAP style, which produces "
-            "embeddings to MATCH inputs, not to generate) is Embed -- or CNN if its task is vision "
-            "classification/detection. Never label such a model Image or TTS.\n"
+            "IMPORTANT -- synthesis vs analysis: Image/Video/TTS are ONLY for models that "
+            "SYNTHESIZE brand-new media as output. A model that ANALYZES its input is NOT one of "
+            "those, even when its task name contains 'generation': vision analysis -- "
+            "classification, detection, SEGMENTATION / mask-generation (e.g. Segment-Anything), "
+            "depth, keypoints -- is CNN; producing masks or boxes is analysis, not image synthesis. "
+            "A contrastive / dual-encoder / retrieval / matching / zero-shot model (CLIP / ALIGN / "
+            "CLAP style, which produces embeddings to MATCH inputs) is Embed -- or CNN for a vision "
+            "task. Never label an analysis, segmentation, or matching model Image / Video / TTS.\n"
             f"model_id: {model_id}\n"
             f"pipeline_tag: {pipeline_tag}\n"
             f"config (salient keys): {json.dumps(key_cfg)[:1500]}\n"
-            f"model card (excerpt): {card_text[:800]}\n"
+            f"model card (README, read it to reason about what the model DOES): {card_text[:4000]}\n"
             'Reply with ONLY compact JSON: {"category": "<one of the allowed>"}'
         )
 
@@ -647,7 +683,9 @@ def _probe_local_model(model_id: str) -> ModelProbe:
     )
     if category == "Unknown":
         category = _category_from_fingerprint(_fpr) or category
-    if _is_category_residual(model_type_category, _fpr):
+    if _is_category_residual(model_type_category, _fpr) and _is_dual_encoder_contrastive(cfg):
+        category = "Embed"
+    elif _is_category_residual(model_type_category, _fpr):
         _llm_cat = _llm_resolve_category(model_id, cfg, pipeline_tag)
         if _llm_cat:
             category = _llm_cat
@@ -814,7 +852,13 @@ def probe_model(model_id: str) -> ModelProbe:
         if _fp_cat:
             probe.flags.append(f"Category Unknown -> {_fp_cat!r} via structural fingerprint {_fpr!r}")
             probe.category = _fp_cat
-    if _is_category_residual(model_type_category, _fpr):
+    if _is_category_residual(model_type_category, _fpr) and _is_dual_encoder_contrastive(cfg):
+        if probe.category != "Embed":
+            probe.flags.append(
+                "Category -> 'Embed' via dual-encoder contrastive fact (text_config + vision/audio_config)"
+            )
+            probe.category = "Embed"
+    elif _is_category_residual(model_type_category, _fpr):
         _llm_cat = _llm_resolve_category(model_id, cfg, probe.pipeline_tag)
         if _llm_cat and _llm_cat != probe.category:
             probe.flags.append(
