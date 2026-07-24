@@ -203,6 +203,18 @@
 // Kernel config region size after MEM_MAP_END (see create_tensix_mem_map()).
 #define MEM_KERNEL_CONFIG_SIZE (100 * 1024)
 
+
+// Static invariant the cached-only pool's correctness rests on: it sits ENTIRELY within the
+// reserved region -- above the (fabric, NoC-written) packet header pool and at/below MEM_MAP_END --
+// so it is physically disjoint from the NoC-written kernel_config ring, which begins at MEM_MAP_END.
+// Nothing on the NoC/dispatcher write path can ever address a pool word.
+#if (MEM_DM_CACHED_SEM_BASE < (MEM_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE))
+#error "DM cached semaphore pool overlaps the packet header pool"
+#endif
+#if ((MEM_DM_CACHED_SEM_BASE + MEM_DM_CACHED_SEM_SIZE) > MEM_MAP_END)
+#error "DM cached semaphore pool extends past MEM_MAP_END (would overlap the kernel_config ring)"
+#endif
+
 // Every address after MEM_MAP_END is a "scratch" address
 // These can be used by FW during init, but aren't usable once FW reaches "ready"
 
