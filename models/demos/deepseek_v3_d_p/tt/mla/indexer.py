@@ -26,6 +26,18 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_perm_matrix
 # module-level INDEXER_WEIGHT_NAMES alias is defined at the bottom of this file for back-compat.
 
 
+def normalized_hadamard_matrix(dim: int) -> torch.Tensor:
+    """Sylvester-order orthonormal Hadamard matrix used by the reference indexer."""
+    assert dim > 0 and dim & (dim - 1) == 0, f"Hadamard dimension must be a power of two, got {dim}"
+    matrix = torch.ones(1, 1, dtype=torch.float32)
+    while matrix.shape[0] < dim:
+        matrix = torch.cat(
+            (torch.cat((matrix, matrix), dim=1), torch.cat((matrix, -matrix), dim=1)),
+            dim=0,
+        )
+    return (matrix * (dim**-0.5)).to(torch.bfloat16)
+
+
 class TtIndexer:
     """DSA lightning indexer for one MLA layer. Self-contained: owns the indexer weights, the
     grown-by-concat device index-key cache and the indexer RoPE tables, and runs its own TP/SP
@@ -296,6 +308,24 @@ class TtIndexer:
                 dtype=ttnn.bfloat16,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
+        # Lazily materialized only if the caller supplies a BFP4 index cache. Existing BFP8 deployments
+        # do not pay for or retain an unused matrix on every layer.
+        self._enable_index_hadamard = getattr(config, "index_cache_hadamard", True)
+        self._index_hadamard = None
+
+    def _get_index_hadamard(self):
+        """Replicated orthonormal transform for BFP4-K outlier spreading."""
+        if self._index_hadamard is None:
+            dim = self.index_args.index_head_dim
+            hadamard = normalized_hadamard_matrix(dim).reshape(1, 1, dim, dim)
+            self._index_hadamard = ttnn.from_torch(
+                hadamard,
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        return self._index_hadamard
 
     # Inlined TP/SP collectives — the indexer owns its own copy so it depends on tt_ccl, not on ttMLA
     # (the dense MLA forward keeps its own equivalents; both go through the same tt_ccl handles).
@@ -474,6 +504,16 @@ class TtIndexer:
         # path as one full-seq chunk at start_pos=0, so the indexer is always block-cyclic. num_layers is the
         # compacted stride (_index_cache_layers) so it matches the cache_batch_idx computed in forward().
         k = self._bc_rope_pe(k, rope_tensors, start_pos)  # [1, 1, S/sp, D_idx] bf16
+        if index_kbuf.dtype == ttnn.bfloat4_b and self._enable_index_hadamard:
+            k_h = ttnn.matmul(
+                k,
+                self._get_index_hadamard(),
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.default_compute_kernel_config,
+            )
+            ttnn.deallocate(k)
+            k = k_h
         if k.dtype != index_kbuf.dtype:  # write dtype must match the cache (update_padded_kv_cache asserts)
             k = ttnn.typecast(k, index_kbuf.dtype)
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
@@ -541,20 +581,32 @@ class TtIndexer:
             index_kbuf=index_kv_cache,
         )
 
-        # Q stem: the shared q_a latent (qr) -> indexer wq_b.
+        # Q stem: the shared q_a latent (qr) -> indexer wq_b. The normal path materializes Q directly
+        # as BFP8. For BFP4 K + Hadamard, keep Q in BF16 through projection and RoPE so the transform
+        # sees the unquantized values, then materialize its output as BFP8 exactly once below.
+        apply_index_hadamard = index_kv_cache.dtype == ttnn.bfloat4_b and self._enable_index_hadamard
         q = ttnn.linear(
             qr,
             self._idx_wq_b,
             compute_kernel_config=self.default_compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # Keep indexer Q in BFP8 from its first materialization through scoring.
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16 if apply_index_hadamard else ttnn.bfloat8_b,
         )  # [1, 1, S/sp, H_idx*D_idx] — ALL heads (wq_b replicated); queries stay SP-sharded (rotation-safe)
         q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
             q, num_heads=a.index_n_heads, num_kv_heads=0, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )  # [1, H_idx, S/sp, D_idx] — all heads resident
         # block-cyclic indexed rope (same op/tables as the key rope + MLA q_pe)
         q_dev = self._bc_rope_pe(q, rope_tensors, start_pos)
+        if apply_index_hadamard:
+            q_h = ttnn.matmul(
+                q_dev,
+                self._get_index_hadamard(),
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.default_compute_kernel_config,
+            )
+            ttnn.deallocate(q_dev)
+            q_dev = q_h
 
         # weights_proj: device stem -> FULL all-reduce over tp (all H_idx heads, matching the replicated
         # wq_b heads) -> scale -> [1, 1, S/sp, H_idx].

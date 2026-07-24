@@ -36,7 +36,7 @@ void bind_indexer_score(nb::module_& mod) {
 
         Args:
             q: [B, Hi, Sq, D] bf16 or bfp8_b tiled (post non-interleaved RoPE)
-            k: [B, 1, T, D] bf16 or bfp8_b tiled, single shared head
+            k: [B, 1, T, D] bf16, bfp8_b, or bfp4_b tiled, single shared head
             weights: [B, Hi, Sq, 1] bf16 tiled learned per-head gates (scale
                 pre-folded)
             chunk_start_idx: absolute global position of rank 0's query row 0

@@ -301,9 +301,9 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     const uint32_t bf16_tile = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t fp32_tile = tt::tile_size(tt::DataFormat::Float32);
 
-    // q (srcB) and k (srcA) are matmul inputs; either may be bfp8_b to halve its footprint (w stays bf16).
+    // q (srcB) and k (srcA) are matmul inputs. q is bf16/bfp8_b; k may additionally be bfp4_b to reduce
+    // index-cache bandwidth. w and every accumulator/output CB remain bf16.
     const bool q_is_bfp8 = q.dtype() == tt::tt_metal::DataType::BFLOAT8_B;
-    const bool k_is_bfp8 = k.dtype() == tt::tt_metal::DataType::BFLOAT8_B;
     // Fused single-head fast path: one head/plane, no ReLU, bf16 q -> the matmul writes the gated score
     // straight to the accumulator (cb_qk sized to 1, cb_out_strip deepened). Composes with the multicast.
     // bfp8 q is EXCLUDED: the in-place gate-fold (scale_q_by_w_inplace) re-packs gated q to bfp8 and the
@@ -312,8 +312,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     const bool fuse_single = (plane_heads == 1) && !args.apply_relu && !q_is_bfp8;
     // Fused + mcast: K is one block -> wait whole chunk. Fused + no mcast: stream K in column sub-chunks.
     const bool fused_stream_k = fuse_single && (k_mcast_on == 0) && (q_mcast_on == 0);
-    const tt::DataFormat q_fmt = q_is_bfp8 ? tt::DataFormat::Bfp8_b : tt::DataFormat::Float16_b;
-    const tt::DataFormat k_fmt = k_is_bfp8 ? tt::DataFormat::Bfp8_b : tt::DataFormat::Float16_b;
+    const tt::DataFormat q_fmt = tt::tt_metal::datatype_to_dataformat_converter(q.dtype());
+    const tt::DataFormat k_fmt = tt::tt_metal::datatype_to_dataformat_converter(k.dtype());
     const uint32_t q_tile = tt::tile_size(q_fmt);
     const uint32_t k_tile = tt::tile_size(k_fmt);
 

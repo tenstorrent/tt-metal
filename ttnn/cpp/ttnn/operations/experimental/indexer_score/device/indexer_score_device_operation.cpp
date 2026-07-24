@@ -270,15 +270,16 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(w.layout() == Layout::TILE, "weights must be TILE layout");
     }
 
-    // q/k are matmul inputs (never packed), so each may be bfp8_b (halves BW); both bfp8 -> LoFi, any bf16
-    // -> HiFi2.
+    // q/k are matmul inputs (never packed). q supports bf16/bfp8_b; k additionally supports bfp4_b for
+    // experiments that trade index-cache bandwidth for selector accuracy. Keep q at bf16/bfp8_b for now:
+    // the q path has additional fused-gate assumptions that have not been validated with bfp4_b.
     TT_FATAL(
         q.dtype() == DataType::BFLOAT16 || q.dtype() == DataType::BFLOAT8_B,
         "q must be bfloat16 or bfloat8_b (got {})",
         q.dtype());
     TT_FATAL(
-        k.dtype() == DataType::BFLOAT16 || k.dtype() == DataType::BFLOAT8_B,
-        "k must be bfloat16 or bfloat8_b (got {})",
+        k.dtype() == DataType::BFLOAT16 || k.dtype() == DataType::BFLOAT8_B || k.dtype() == DataType::BFLOAT4_B,
+        "k must be bfloat16, bfloat8_b, or bfloat4_b (got {})",
         k.dtype());
     TT_FATAL(q.layout() == Layout::TILE && k.layout() == Layout::TILE, "q, k must be TILE layout");
 
@@ -640,13 +641,15 @@ ttnn::Tensor launch_indexer_score(
         }
     }
 
-    // Default math_fidelity follows the matmul-input dtypes (both bfp8 -> LoFi, else HiFi2); a caller config
-    // overrides per field. fp32-dest acc / full-sync default off (the only modes the custom LLK is validated for).
-    const bool both_bfp8 = q.dtype() == DataType::BFLOAT8_B && k.dtype() == DataType::BFLOAT8_B;
+    // Default math_fidelity follows the matmul-input dtypes (low-precision Q/K -> LoFi, else HiFi2); a caller
+    // config overrides per field. Q is bfp8 in the deployed low-precision path, while K may be bfp8 or bfp4.
+    // fp32-dest acc / full-sync default off (the only modes the custom LLK is validated for).
+    const bool low_precision_qk =
+        q.dtype() == DataType::BFLOAT8_B && (k.dtype() == DataType::BFLOAT8_B || k.dtype() == DataType::BFLOAT4_B);
     const auto resolved = ttnn::init_device_compute_kernel_config(
         q.device()->arch(),
         compute_kernel_config,
-        /*default_fidelity=*/both_bfp8 ? tt::tt_metal::MathFidelity::LoFi : tt::tt_metal::MathFidelity::HiFi2,
+        /*default_fidelity=*/low_precision_qk ? tt::tt_metal::MathFidelity::LoFi : tt::tt_metal::MathFidelity::HiFi2,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/false,
         /*default_l1_acc=*/false,

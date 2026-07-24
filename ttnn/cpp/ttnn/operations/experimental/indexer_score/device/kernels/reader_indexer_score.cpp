@@ -24,7 +24,7 @@
 
 constexpr uint32_t q_tile_bytes = get_tile_size(cb_q);     // q: bf16 or bfp8_b (smaller tile)
 constexpr uint32_t bf16_tile_bytes = get_tile_size(cb_w);  // w / mask: always bf16
-constexpr uint32_t k_tile_bytes = get_tile_size(cb_k);     // k: bf16 or bfp8_b (smaller tile)
+constexpr uint32_t k_tile_bytes = get_tile_size(cb_k);     // k: bf16, bfp8_b, or bfp4_b
 
 // CT arg layout after the common args: q/k/w TensorAccessors, then 8 multicast args.
 // File-scope so the semaphore ids work as template parameters.

@@ -83,7 +83,7 @@ class GLM51Adapter(MLAPrefillAdapter):
             sp_axis=params.sp_axis,
             num_kvpe_cache_layers=params.num_layers,
             num_users=params.num_users,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat4_b,
         )
         return MlaKvCaches(kvpe=kvpe_cache, index=index_cache)
 
