@@ -16,15 +16,16 @@
 //    call_unary_sfpu_operation_quasar() (and to init_unary_sfpu_operation_quasar()
 //    if the op needs an init step).
 #include "experimental/ckernel_sfpu_abs.h"
+#include "llk_sfpu/ckernel_sfpu_clamp.h"
 #include "llk_sfpu/ckernel_sfpu_comp.h"
 #include "llk_sfpu/ckernel_sfpu_exp.h"
 #include "llk_sfpu/ckernel_sfpu_gelu.h"
 #include "llk_sfpu/ckernel_sfpu_negative.h"
+#include "llk_sfpu/ckernel_sfpu_recip.h"
 #include "llk_sfpu/ckernel_sfpu_rsqrt.h"
 #include "llk_sfpu/ckernel_sfpu_square.h"
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
 #include "llk_sfpu/ckernel_sfpu_typecast.h"
-#include "sfpu/ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_relu.h"
 #include "sfpu/ckernel_sfpu_sigmoid.h"
 #include "sfpu/ckernel_sfpu_silu.h"
@@ -87,6 +88,10 @@ void init_unary_sfpu_operation_quasar()
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
         _init_rsqrt_<APPROX>();
+    }
+    else if constexpr (OPERATION == SfpuType::reciprocal)
+    {
+        _init_reciprocal_<APPROX>();
     }
     else if constexpr (is_zero_comp_op(OPERATION))
     {
@@ -186,7 +191,7 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     }
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_reciprocal_<true /* APPROX */, ITERATIONS>, dst_index);
+        _llk_math_eltwise_unary_sfpu_params_(calculate_reciprocal<APPROX, is_fp32_dest_acc_en, ITERATIONS>, dst_index);
     }
     else if constexpr (OPERATION == SfpuType::sqrt)
     {
@@ -215,6 +220,17 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     else if constexpr (OPERATION == SfpuType::negative)
     {
         _llk_math_eltwise_unary_sfpu_params_(_calculate_negative_<false, ITERATIONS>, dst_index);
+    }
+    else if constexpr (OPERATION == SfpuType::clamp)
+    {
+        // Clamp bounds fixed to [-1.0, +1.0] as fp32 bit patterns (matching the UnarySFPUGolden._clamp
+        // reference). Extra args are forwarded to the per-face functor call.
+        _llk_math_eltwise_unary_sfpu_params_(
+            calculate_clamp<false, ITERATIONS>,
+            dst_index,
+            VectorMode::RC,
+            static_cast<std::uint32_t>(0xBF800000),  // min = -1.0 (fp32)
+            static_cast<std::uint32_t>(0x3F800000)); // max = +1.0 (fp32)
     }
     else if constexpr (is_zero_comp_op(OPERATION))
     {
