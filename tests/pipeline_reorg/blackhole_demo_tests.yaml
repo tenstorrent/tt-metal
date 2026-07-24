@@ -123,3 +123,22 @@
   owner_id: U088VJ79WDB # Jonathan Su
   team: models
   model-name: z-image-turbo
+
+# ─── kokoro-82m ─────────────────────────────────────────────────────────────
+
+- name: kokoro-82m TTNN demo + trace e2e
+  cmd: |
+    set -e
+    # espeak-ng (G2P backend) must be on PATH; not bundled in the tt-metal image.
+    apt-get update && apt-get install -y espeak-ng
+    uv pip install -r models/experimental/kokoro/requirements.txt
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    export HF_MODEL=hexgrad/Kokoro-82M
+    TT_LOGGER_LEVEL=Error python models/experimental/kokoro/demo/ttnn_kokoro_full_demo.py --pcc-check
+    TT_LOGGER_LEVEL=Error pytest models/experimental/kokoro/tests/test_tt_kmodel_trace_e2e.py --timeout=600
+  skus:
+    bh_p150:
+      timeout: 30
+  owner_id: TODO_KOKORO_OWNER # TODO: replace with Kokoro owner Slack member ID (U...) before merge
+  team: models
+  model-name: kokoro-82m
