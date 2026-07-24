@@ -51,6 +51,32 @@ def test_stale_guard_renders_na_not_zero():
     assert "0%   (measured / ceiling)" not in joined
 
 
+def test_floor_form_flags_stale_when_measured_below_floor():
+    # measured faster than the modeled floor => floor is from a different (stale) profile; the table
+    # must say so, NOT print a bogus >100% at-floor. (Caught live on ace_step_audio_tokenizer: a
+    # baseline-profile floor of 14.81 ms paired with the optimized 11.82 ms.)
+    out = "\n".join(S._roofline_lines({"is_llm_decode": False, "modeled_floor_ms": 14.81}, 11.82))
+    assert "stale/suspect" in out
+    assert "125%" not in out and "at-floor            : 1" not in out  # no >100% number
+
+
+def test_llm_form_flags_stale_when_measured_exceeds_ceiling():
+    out = "\n".join(
+        S._roofline_lines(
+            {
+                "is_llm_decode": True,
+                "theoretical_tok_s": 40.0,
+                "band": [24.0, 32.0],
+                "active_bytes": 8_000_000_000,
+                "tp_degree": 1,
+            },
+            19.4,
+        )
+    )
+    # 1000/19.4 = 51.5 tok/s > 40 ceiling => flag, not "129%"
+    assert "EXCEEDS ceiling" in out and "129%" not in out
+
+
 def test_none_throughput_skips_table():
     assert S._roofline_lines(None, 19.4) == []  # no snapshot -> no table at all
     # an empty dict is a (degenerate) snapshot -> floor form with n/a floor, never crashes

@@ -153,25 +153,37 @@ def _roofline_lines(throughput: dict | None, forward_ms: float | None) -> list:
         )
         if bw_gbps is not None:
             out.append(f"  measured mem BW     : {bw_gbps:.0f} GB/s   ({per_dev_bytes / 1e9:.2f} GB / {fm:.2f} ms)")
-        out.append(
-            f"  utilization         : {util * 100:.0f}%   (measured / ceiling)"
-            if util is not None
-            else "  utilization         : n/a"
-        )
+        if util is None:
+            out.append("  utilization         : n/a")
+        elif util > 1.0:
+            # measured beat the theoretical ceiling -> active_bytes / the target is stale/suspect
+            # (the target and the measured ms are from different states); do NOT print a >100% util.
+            out.append(f"  utilization         : measured EXCEEDS ceiling — target stale/suspect (re-profile)")
+        else:
+            out.append(f"  utilization         : {util * 100:.0f}%   (measured / ceiling)")
     else:
         floor = throughput.get("modeled_floor_ms")
+        have_floor = isinstance(floor, (int, float)) and floor > 0
         out.append(
             f"  modeled floor       : {floor:.2f} ms   (Σ per-op roofline floors)"
-            if isinstance(floor, (int, float)) and floor > 0
+            if have_floor
             else "  modeled floor       : n/a"
         )
         out.append(
             f"  measured            : {fm:.2f} ms" if fm else "  measured            : n/a (no valid forward ms)"
         )
-        if isinstance(floor, (int, float)) and floor > 0 and fm:
-            out.append(
-                f"  at-floor            : {floor / fm * 100:.0f}%   ({max(0.0, fm - floor):.2f} ms reachable headroom)"
-            )
+        if have_floor and fm:
+            if fm < floor:
+                # measured is FASTER than the modeled floor -> the floor is from a different (stale)
+                # profile than the measured ms; report it honestly instead of a bogus >100% at-floor.
+                out.append(
+                    f"  at-floor            : measured {fm:.2f} ms is BELOW the modeled floor {floor:.2f} ms "
+                    "— floor stale/suspect (re-profile to refresh)"
+                )
+            else:
+                out.append(
+                    f"  at-floor            : {floor / fm * 100:.0f}%   ({fm - floor:.2f} ms reachable headroom)"
+                )
         out.append("  (tok/s/u — N/A: not an LLM decode pipeline)")
     out.append("")
     return out
