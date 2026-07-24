@@ -1257,11 +1257,12 @@ class TestConfig:
             )
 
             def build_kernel_part(name: str):
-                optional_kernel_flags = ""
-                if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
-                    optional_kernel_flags = "-DCOMPILE_FOR_TRISC=" + str(
-                        TestConfig.KERNEL_COMPONENTS.index(name)
-                    )
+                # COMPILE_FOR_TRISC is the single source of truth for the compute thread id on every
+                # arch (unpack=0/math=1/pack=2/sfpu=3). Quasar also gets -DLLK_TRISC_<NAME> below, but the
+                # LLK headers now require COMPILE_FOR_TRISC (see ckernel_addrmod.h), so pass it for Quasar too.
+                optional_kernel_flags = "-DCOMPILE_FOR_TRISC=" + str(
+                    TestConfig.KERNEL_COMPONENTS.index(name)
+                )
 
                 if not self.compile_time_formats:
                     optional_kernel_flags += " -DRUNTIME_FORMATS"

@@ -30,8 +30,13 @@ mypy==1.9.0
 protobuf==5.29.6
 
 # For TT-Transformers Qwen3 support
-transformers == 5.10.2
+transformers == 5.12.1
 huggingface-hub >= 0.30.0
+
+# For Qwen-VL / multimodal demo preprocessing: qwen-vl-utils (process_vision_info for image prompts)
+# and av/pyav (the transformers load_video backend used for video prompts, e.g. qwen36 vision_demo)
+qwen-vl-utils
+av
 
 # For Tracy WASM profiler web GUI server
 websockets==16.0
@@ -66,7 +71,7 @@ diffusers==0.38.0
 accelerate==1.7.0
 peft==0.18.1
 ftfy==6.1.1
-gitpython==3.1.50
+gitpython==3.1.55
 einops==0.6.1
 # Pin to this because evaluate 0.4.0 will download the latest multiprocess as a
 # transitive dep, which uses dill >=0.3.7, however many packages require
@@ -89,7 +94,7 @@ open_clip_torch==2.26.1 # Required for SDXL accuracy evaluation
 # Needed for various tests
 pyyaml>=5.4
 matplotlib
-Pillow==12.2.0
+Pillow==12.3.0
 jupyterlab==4.5.9
 ipywidgets==8.1.1
 bokeh==3.8.2

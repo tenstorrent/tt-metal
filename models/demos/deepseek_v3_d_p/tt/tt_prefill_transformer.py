@@ -21,14 +21,16 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reverse_reorder_tensor_chunks
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
-from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
+from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TopologyArg, TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat
 
 
 class TtPrefillTransformer(LightweightModule):
@@ -115,7 +117,7 @@ class TtPrefillTransformer(LightweightModule):
         seq_len: int,
         dispatch_buffer_capacity_factor: int = 2,
         num_links: int = 1,
-        topology: ttnn.Topology = ttnn.Topology.Linear,
+        topology: TopologyArg = ttnn.Topology.Linear,
         sp_axis: int = 0,
         tp_axis: int = 1,
         is_balanced: bool = False,
@@ -135,6 +137,7 @@ class TtPrefillTransformer(LightweightModule):
         first_layer_idx: int = 0,
         is_first_rank: bool = True,
         is_last_rank: bool = True,
+        sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -154,6 +157,11 @@ class TtPrefillTransformer(LightweightModule):
         # local layer slice onto the global map.
         self.first_layer_idx = first_layer_idx
         self.indexer_types = getattr(config, "indexer_types", None)
+
+        # The blocks take the full per-axis topology (they split SP/TP internally for the MoE).
+        # The final norm and LM head are pure TP-axis (cluster_axis=tp_axis) collectives, so they
+        # take the scalar TP element.
+        tp_topology = topology[1] if isinstance(topology, tuple) else topology
 
         if not state_dict and not (weight_cache_path and weight_cache_path.exists()):
             raise ValueError(
@@ -217,6 +225,7 @@ class TtPrefillTransformer(LightweightModule):
                 max_seq_len=max_seq_len,
                 kv_only=kv_only_last_layer and is_last,
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+                sparse_kv_cache_format=sparse_kv_cache_format,
             )
             self.layers.append(layer)
 
@@ -232,7 +241,7 @@ class TtPrefillTransformer(LightweightModule):
                 epsilon=config.rms_norm_eps,
                 cluster_axis=tp_axis,
                 num_links=num_links,
-                topology=topology,
+                topology=tp_topology,
                 weight_cache_path=weight_cache_path,
                 cache_name_prefix="norm",
             )
@@ -246,12 +255,18 @@ class TtPrefillTransformer(LightweightModule):
         # Chunked prefill uses the KV-pad-aware indexed rotated path: whole-cache cos/sin/trans built
         # once here and reused for every chunk (only the runtime kv_actual offset varies). seq_len is
         # the per-chunk size and max_seq_len the full per-user cache length.
+        #
+        # SPARSE (DSA) layers ALWAYS use the indexed rotated path — single-shot is folded onto the
+        # block-cyclic path as one full-seq chunk (chunk_size_global == seq_len), so build the indexed
+        # tables whenever the model is sparse too, not only when chunked. Dense single-shot keeps None
+        # (rotary_embedding_llama via get_rope_tensors).
+        self._has_indexer = resolve_has_indexer(config)
         self.indexed_rope = (
             self.rope_setup.get_rope_tensors_indexed(
                 cache_seq_len_global=max_seq_len if max_seq_len is not None else seq_len,
                 chunk_size_global=seq_len,
             )
-            if is_chunked
+            if (is_chunked or self._has_indexer)
             else None
         )
 
@@ -263,7 +278,7 @@ class TtPrefillTransformer(LightweightModule):
                 vocab_size=config.vocab_size,
                 torch_weight=state_dict.get("lm_head_weight"),  # None if cache exists
                 num_links=num_links,
-                topology=topology,
+                topology=tp_topology,
                 is_balanced=is_balanced,
                 weight_cache_path=weight_cache_path,
                 is_column_parallel=lm_head_is_column_parallel,
@@ -290,7 +305,7 @@ class TtPrefillTransformer(LightweightModule):
     def forward(
         self,
         token_ids: ttnn.Tensor,
-        kvpe_cache: ttnn.Tensor,
+        kvpe_cache: MlaKvCache,
         actual_isl: int,
         return_intermediates: bool = False,
         read_profiler: bool = False,
@@ -314,8 +329,11 @@ class TtPrefillTransformer(LightweightModule):
                 emb_dim/tp] hidden-state activation handed over from the previous rank.
             kvpe_cache: externally created KVPE cache [num_layers, 1, seq_len_local, head_dim];
                         each layer writes to its own slot via cache_layer_idx
-            index_kv_cache: sparse-DSA chunked only — per-layer list of block-cyclic indexer key caches
-                        (the indexer is single-layer, so layers can't share one tensor). None otherwise.
+            index_kv_cache: sparse-DSA (v3.2 / GLM) — the caller-owned, layer-stacked block-cyclic indexer
+                        key cache [num_users * num_layers, 1, T, D_idx] (SP-sharded on the seq axis), same
+                        ownership as kvpe_cache. Required for EVERY sparse forward — chunked AND single-shot
+                        (folded onto the block-cyclic path); the indexer never self-allocates it. None only
+                        for dense (non-sparse) variants.
             return_intermediates: if True, sync + snapshot to host after each stage
             read_profiler: if True, read TTNN profiler after each layer to avoid profiler buffer overflows
             temperature: Temperature for sampling. Can be a single float or list of floats.
@@ -344,6 +362,10 @@ class TtPrefillTransformer(LightweightModule):
         # is returned, but the chunked caller ignores it (the populated cache is the output).
         if actual_start is not None:
             assert self.is_chunked, "actual_start requires the transformer to be built with is_chunked=True"
+            rope_tensors = self.indexed_rope
+        elif self._has_indexer:
+            # Sparse single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0),
+            # so it uses the indexed rope tables just like the chunked path.
             rope_tensors = self.indexed_rope
         else:
             rope_tensors = self.rope_setup.get_rope_tensors(self.seq_len)

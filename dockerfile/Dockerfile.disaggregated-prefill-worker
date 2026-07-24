@@ -1,0 +1,127 @@
+# syntax=docker/dockerfile:1
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# BUILD from the repo root (context = tt-metal). Needs a read token for
+# tenstorrent/tt-llm-engine; the base image is private (`docker login ghcr.io`):
+#   DOCKER_BUILDKIT=1 docker build -f dockerfile/Dockerfile.disaggregated-prefill-worker \
+#     --platform=linux/amd64 \
+#     --secret id=gh_token,env=GH_TOKEN \
+#     --build-arg TT_LLM_ENGINE_REF=<llm-branch-or-sha> \
+#     -t ghcr.io/<ns>/disaggregated-prefill-worker:<tag> .
+
+ARG BASE_IMAGE=ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest
+
+# ============================================================================
+# Stage 1 (llm-build): compile ONLY _migration_client from a tt-llm-engine branch,
+# against tt-llm-engine's OWN bundled tt-metal (headers only, no tt-metal build).
+# This whole stage is discarded — only the built module is COPYed into `final`.
+# ============================================================================
+FROM ${BASE_IMAGE} AS llm-build
+USER root
+ARG DEBIAN_FRONTEND=noninteractive
+ARG TT_LLM_ENGINE_REF=main
+# Enforce strict error handling: exit on error, unset vars, pipe failures
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+# Deps the migration CMake needs beyond the base: protobuf (the client
+# (de)serializes the KV chunk-table proto) + Python dev headers (nanobind).
+# fmt/spdlog/nanobind/enchantum/tt-logger/nlohmann are CPM-fetched (network).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git ca-certificates protobuf-compiler libprotobuf-dev python3-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+# Clone the engine at the requested ref WITH submodules so its own tt-metal
+# source is present for headers (build_migration_layer.sh --synthetic-only needs
+# submodule source, not a built libtt_metal.so). Token via git `insteadOf`; this
+# stage is discarded so the token never reaches `final`, and the token-bearing
+# /root/.gitconfig is scrubbed in-layer (trap) so it can't leak via a build-cache
+# export either.
+WORKDIR /src
+RUN --mount=type=secret,id=gh_token \
+    set -e; \
+    trap 'rm -f /root/.gitconfig' EXIT; \
+    TOKEN="$(cat /run/secrets/gh_token)"; \
+    git config --global --add url."https://x-access-token:${TOKEN}@github.com/".insteadOf "git@github.com:"; \
+    git config --global --add url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"; \
+    git clone https://github.com/tenstorrent/tt-llm-engine.git ttllm; \
+    cd ttllm; \
+    git checkout "${TT_LLM_ENGINE_REF}"; \
+    git submodule update --init --recursive --depth 1 --jobs 4
+
+# Build only the nanobind client. No TT_METAL_DIR override => uses the bundled
+# ./tt-metal submodule for headers; --synthetic-only skips the tt-metal build.
+WORKDIR /src/ttllm
+RUN ./build_migration_layer.sh --synthetic-only --targets=_migration_client --build-type=RelWithDebInfo \
+ && ls -l disaggregation/migration/build_RelWithDebInfo/python/_migration_client*.so
+
+# ============================================================================
+# Stage 2 (final): build tt-metal from source out of the LOCAL build context,
+# then bake in _migration_client.
+# ============================================================================
+FROM ${BASE_IMAGE}
+ENV DEBIAN_FRONTEND=noninteractive
+LABEL org.opencontainers.image.source=https://github.com/tenstorrent/tt-metal
+LABEL org.opencontainers.image.description="disaggregated-prefill worker (tt-metal built from local source) with tt-llm-engine _migration_client baked in"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+ARG TT_METAL_HOME=/home/user/tt-metal
+
+# Runtime env (mirrors this repo's release-models stage). The old prebuilt worker
+# base set these implicitly; on the bare dev base we set them explicitly so the
+# image is self-contained. The deploy/k8s spec may also set these.
+ENV TT_METAL_HOME=${TT_METAL_HOME} \
+    PYTHONPATH=${TT_METAL_HOME} \
+    PYTHON_ENV_DIR=/opt/venv \
+    PATH=/opt/venv/bin:$PATH
+
+USER user
+WORKDIR /home/user
+
+# Bring the local tt-metal working tree into the image via a bind mount + copy
+# INSIDE the build RUN — deliberately NOT a `COPY . ${TT_METAL_HOME}` instruction.
+# Why: the build needs .git present (submodule fetch + git-describe version), but a
+# plain `COPY .` bakes the ~2 GB .git — including any CI-checkout credentials in
+# .git/config — permanently into a runtime layer that no later `rm` can remove.
+# Copying then deleting .git within this single RUN keeps .git out of every
+# committed layer while the build still sees it. Build outputs and caches are
+# excluded by the dockerignore; the bind-mounted context honours it too.
+RUN --mount=type=bind,target=/context \
+    --mount=type=secret,id=gh_token,mode=0444 \
+    set -e; \
+    sudo mkdir -p ${TT_METAL_HOME}; \
+    sudo cp -a /context/. ${TT_METAL_HOME}/; \
+    sudo chown -R user:user ${TT_METAL_HOME}; \
+    git config --global --add safe.directory '*'; \
+    TOKEN="$(cat /run/secrets/gh_token)"; \
+    git config --global --add url."https://x-access-token:${TOKEN}@github.com/".insteadOf "git@github.com:"; \
+    git config --global --add url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"; \
+    cd ${TT_METAL_HOME}; \
+    git submodule update --init --recursive --depth 1 --jobs 4; \
+    ./build_metal.sh --enable-ccache; \
+    # The dev base ships a root-owned /opt/venv inside root-owned /opt; recreating
+    # it needs write on the PARENT (/opt). Nuke as root, hand /opt to user, rebuild.
+    sudo rm -rf /opt/venv; \
+    sudo chown user:user /opt; \
+    ./create_venv.sh --env-dir /opt/venv; \
+    # Scrub VCS metadata + build/token caches before the layer commits: .git holds
+    # ~2 GB of history plus any CI checkout creds and is not needed at runtime (the
+    # version is already compiled in); the token config must not persist either.
+    rm -rf ${TT_METAL_HOME}/.git ${TT_METAL_HOME}/.cpmcache \
+           /home/user/.cache/ccache /home/user/.gitconfig; \
+    sudo chmod -R 777 /home/user
+
+# Bake in _migration_client at PREFILL_MIGRATION_CLIENT_DIR. Must equal the path
+# the prefill runner reads (manifest migration_client_dir, set by the prefill
+# Helm chart in the deploy repo — not tt-metal — as $(ttLlmEngineDir)/
+# disaggregation/migration/build_RelWithDebInfo/python) so the runner finds it
+# with no hostPath mount. COPY runs as root -> world-readable under /opt.
+ARG MIG_CLIENT_DIR=/opt/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python
+COPY --from=llm-build \
+     /src/ttllm/disaggregation/migration/build_RelWithDebInfo/python/ \
+     ${MIG_CLIENT_DIR}/
+
+# Fail the BUILD (not the pod, ~2 min into a run) if the client won't import under
+# the interpreter that execs prefill_runner.
+RUN if [ -x /opt/venv/bin/python3 ]; then PY=/opt/venv/bin/python3; else PY=python3; fi; \
+    "$PY" -c "import sys; sys.path.insert(0, sys.argv[1]); import _migration_client; \
+print('OK _migration_client:', _migration_client.__file__); \
+assert hasattr(_migration_client, 'MigrationLayerClient'), 'MigrationLayerClient missing'" "${MIG_CLIENT_DIR}"

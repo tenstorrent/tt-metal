@@ -8,7 +8,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 using namespace tt::data_movement::common;
@@ -22,7 +22,7 @@ void kernel_main() {
 
     constexpr uint32_t original_page_size_bytes = get_compile_time_arg_val(0);
     constexpr uint32_t num_repeats = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(2);
+    constexpr uint32_t dfb_id_in0 = get_compile_time_arg_val(2);
     constexpr auto src_args = TensorAccessorArgs<3, 0>();
     constexpr auto dst_args =
         TensorAccessorArgs<src_args.next_compile_time_args_offset(), src_args.num_common_runtime_args()>();
@@ -34,10 +34,10 @@ void kernel_main() {
     const auto s = TensorAccessor(src_args, src_addr);
     const auto d = TensorAccessor(dst_args, dst_addr);
 
-    CircularBuffer cb(cb_id_in0);
-    cb.reserve_back(1);
-    const uint32_t cb_slot = cb.get_write_ptr();
-    cb.push_back(1);
+    DataflowBuffer dfb(dfb_id_in0);
+    dfb.reserve_back(1);
+    const uint32_t cb_slot = dfb.get_write_ptr();
+    dfb.push_back(1);
 
     Noc noc;
 

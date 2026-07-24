@@ -10,6 +10,7 @@ add_subdirectory(moe_grouped_topk)
 add_subdirectory(moe_hash_gate)
 add_subdirectory(offset_cumsum)
 add_subdirectory(outbound_socket_service_sync)
+add_subdirectory(pack_scaled_fp8_kv_cache)
 add_subdirectory(per_token_cast_back)
 add_subdirectory(per_token_cast_to_fp8)
 add_subdirectory(post_combine_reduce)
@@ -35,6 +36,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::MoeHashGate
         TTNN::Ops::Experimental::DeepSeekPrefill::OffsetCumsum
         TTNN::Ops::Experimental::DeepSeekPrefill::D2dSocketSync
+        TTNN::Ops::Experimental::DeepSeekPrefill::PackScaledFp8KvCache
         TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastBack
         TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastToFp8
         TTNN::Ops::Experimental::DeepSeekPrefill::PostCombineReduce
@@ -67,6 +69,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MoeHashGate>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::OffsetCumsum>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::D2dSocketSync>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::PackScaledFp8KvCache>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastBack>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastToFp8>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::PostCombineReduce>

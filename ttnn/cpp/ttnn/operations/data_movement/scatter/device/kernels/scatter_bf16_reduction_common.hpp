@@ -19,11 +19,11 @@ struct ScatterCTAs {
     const uint32_t index_tensor_addr;
     const uint32_t source_tensor_addr;
     const uint32_t output_tensor_addr;
-    const uint32_t input_cb;
-    const uint32_t index_cb;
-    const uint32_t source_cb;
-    const uint32_t output_cb;
-    const uint32_t fp32_temp_cb;
+    const uint32_t input_dfb;
+    const uint32_t index_dfb;
+    const uint32_t source_dfb;
+    const uint32_t output_dfb;
+    const uint32_t fp32_temp_dfb;
     const uint32_t input_stick_size;
     const uint32_t index_stick_size;
     const uint32_t source_stick_size;

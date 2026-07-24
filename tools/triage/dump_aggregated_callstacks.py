@@ -136,7 +136,7 @@ class AggregationBucket:
         self.core_locations.add(f"{device_label}:{coord_str}")
         self.device_labels.add(device_label)
 
-        dev_id = location._device.id
+        dev_id = location.device.id
         x, y = location._noc0_coord
         self.per_core_hits[dev_id].add((x, y))
 

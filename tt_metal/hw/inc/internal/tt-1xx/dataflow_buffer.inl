@@ -36,7 +36,7 @@ inline uint32_t DataflowBuffer::get_entry_size() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
 #else
-    return local_dfb_interface_.fifo_page_size;
+    return address_units_to_bytes(local_dfb_interface_.fifo_page_size);
 #endif
 }
 
@@ -44,7 +44,7 @@ inline uint32_t DataflowBuffer::get_stride_size() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
 #else
-    return local_dfb_interface_.fifo_page_size;
+    return address_units_to_bytes(local_dfb_interface_.fifo_page_size);
 #endif
 }
 
@@ -52,10 +52,27 @@ inline uint32_t DataflowBuffer::get_total_num_entries() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
 #else
-    return local_dfb_interface_.fifo_num_pages;
+    // Only writers populate fifo_num_pages
+    const uint32_t page_size = local_dfb_interface_.fifo_page_size;
+    return local_dfb_interface_.fifo_num_pages ? local_dfb_interface_.fifo_num_pages : (local_dfb_interface_.fifo_size / page_size);
 #endif
 }
 
+inline uint32_t DataflowBuffer::get_total_size_bytes() const {
+#if DFB_IS_COMPUTE_MATH
+    return 0;
+#else
+    return address_units_to_bytes(local_dfb_interface_.fifo_size);
+#endif
+}
+
+inline uint32_t DataflowBuffer::get_local_num_entries() const { return get_total_num_entries(); }
+
+inline uint32_t DataflowBuffer::get_local_size_bytes() const { return get_total_size_bytes(); }
+
+inline uint32_t DataflowBuffer::get_ring_span_bytes() const { return get_total_size_bytes(); }
+
+inline uint32_t DataflowBuffer::get_ring_span_num_entries() const { return get_total_num_entries(); }
 
 inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
 #ifdef COMPILE_FOR_TRISC
@@ -104,6 +121,22 @@ inline uint32_t DataflowBuffer::get_read_ptr_impl() const {
     return 0;
 #else
     return local_dfb_interface_.fifo_rd_ptr;
+#endif
+}
+
+inline void DataflowBuffer::evil_set_write_ptr(uint32_t addr) {
+#if DFB_IS_COMPUTE_MATH
+    (void)addr;
+#else
+    local_dfb_interface_.fifo_wr_ptr = addr;
+#endif
+}
+
+inline void DataflowBuffer::evil_set_read_ptr(uint32_t addr) {
+#if DFB_IS_COMPUTE_MATH
+    (void)addr;
+#else
+    local_dfb_interface_.fifo_rd_ptr = addr;
 #endif
 }
 

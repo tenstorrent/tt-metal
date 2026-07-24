@@ -180,9 +180,10 @@ SortDeviceOperation::spec_return_value_t SortDeviceOperation::compute_output_spe
                                                ? MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}
                                                : attributes.output_mem_config;
 
-    auto values_spec = TensorSpec(
+    auto values_spec = tt::tt_metal::TensorSpec(
         output_shape, TensorLayout(tensor_args.input_tensor.dtype(), PageConfig(out_layout), effective_mem_cfg));
-    auto index_spec = TensorSpec(output_shape, TensorLayout(index_dtype, PageConfig(out_layout), effective_mem_cfg));
+    auto index_spec =
+        tt::tt_metal::TensorSpec(output_shape, TensorLayout(index_dtype, PageConfig(out_layout), effective_mem_cfg));
 
     return {values_spec, index_spec};
 }

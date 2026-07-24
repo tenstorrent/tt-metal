@@ -41,7 +41,7 @@ Tensor arange_impl(
         }
     }
 
-    TensorSpec spec{
+    tt::tt_metal::TensorSpec spec{
         ttnn::Shape{static_cast<uint32_t>(size)}, TensorLayout{data_type, PageConfig{layout}, output_mem_config}};
 
     return Tensor::from_vector(
@@ -57,7 +57,7 @@ Tensor full_impl(
     const MemoryConfig& output_mem_config,
     std::optional<Tensor> optional_output_tensor) {
     constexpr DataType data_type = tt::tt_metal::convert_to_data_type<T>();
-    TensorSpec tensor_spec(shape, TensorLayout(data_type, PageConfig(layout), MemoryConfig{}));
+    tt::tt_metal::TensorSpec tensor_spec(shape, TensorLayout(data_type, PageConfig(layout), MemoryConfig{}));
     auto owned_buffer = std::vector<T>(tensor_spec.physical_shape().height() * tensor_spec.physical_shape().width());
     std::fill(std::begin(owned_buffer), std::end(owned_buffer), value);
 
@@ -193,9 +193,10 @@ Tensor full_impl(
         case DataType::BFLOAT16: return concrete_full.template operator()<::bfloat16>(static_cast<float>(fill_value));
         case DataType::BFLOAT4_B:
         case DataType::BFLOAT8_B: {
-            TensorSpec tensor_spec(shape_value, TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg));
+            tt::tt_metal::TensorSpec tensor_spec(
+                shape_value, TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg));
             std::vector<float> fill_value_vec(shape_value.volume(), static_cast<float>(fill_value));
-            auto output = tt::tt_metal::Tensor::from_vector(std::move(fill_value_vec), tensor_spec);
+            auto output = ttnn::Tensor::from_vector(std::move(fill_value_vec), tensor_spec);
             if (device_to_use != nullptr) {
                 output = output.to_device(device_to_use, mem_cfg);
             }
@@ -224,7 +225,7 @@ Tensor full_like_impl(
     DataType dtype_value =
         optional_output_tensor.has_value() ? optional_output_tensor.value().dtype() : dtype.value_or(tensor.dtype());
     const bool is_tile_layout = (tensor.layout() == Layout::TILE) && (layout_value == Layout::TILE);
-    if (tt::tt_metal::is_device_tensor(tensor)) {
+    if (ttnn::is_device_tensor(tensor)) {
         // Fast on-device fill via SFPU kernel: only valid when the output dtype matches the input
         // tensor's dtype. If the caller requested a dtype override, fall through to the host-side
         // full_impl so that dtype conversion is applied correctly.
@@ -299,7 +300,8 @@ Tensor empty(
     const Layout& layout,
     MeshDevice* device,
     const MemoryConfig& memory_config) {
-    return create_device_tensor(TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), device);
+    return create_device_tensor(
+        tt::tt_metal::TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), device);
 }
 
 template <typename BufferType>
@@ -312,7 +314,7 @@ Tensor from_buffer(
     const std::optional<MemoryConfig>& memory_config) {
     // This is validated from the invoker, but we need to handle it just in case that the user wants to use it
     TT_ASSERT(dtype != DataType::BFLOAT4_B && dtype != DataType::BFLOAT8_B, "Unsupported DataType!");
-    TensorSpec spec(
+    tt::tt_metal::TensorSpec spec(
         shape,
         TensorLayout(
             dtype, PageConfig(layout.value_or(ttnn::ROW_MAJOR_LAYOUT)), memory_config.value_or(MemoryConfig{})));
@@ -329,7 +331,7 @@ Tensor from_buffer(
     const std::optional<MemoryConfig>& memory_config) {
     // This is validated from the invoker, but we need to handle it just in case that the user wants to use it
     TT_ASSERT(dtype != DataType::BFLOAT4_B && dtype != DataType::BFLOAT8_B, "Unsupported DataType!");
-    TensorSpec spec(
+    tt::tt_metal::TensorSpec spec(
         shape,
         TensorLayout(
             dtype, PageConfig(layout.value_or(ttnn::ROW_MAJOR_LAYOUT)), memory_config.value_or(MemoryConfig{})));
@@ -387,7 +389,7 @@ Tensor empty_like(
     }
 
     return create_device_tensor(
-        TensorSpec(tensor.logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
+        tt::tt_metal::TensorSpec(tensor.logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
         device_ptr,
         std::move(topology));
 }

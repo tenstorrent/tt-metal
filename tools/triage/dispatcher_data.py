@@ -85,7 +85,7 @@ class DispatcherCoreData:
     # Whether kernel_config.enables turned this specific risc on. False => idle by design (no kernel
     # launched on it). None => unknown (read failed / corrupt), so callers must not hide the core.
     risc_enabled_by_kernel: bool | None = None
-    # Hint surfaced when find_kernel fails — explains the most likely cause (program cache off,
+    # Hint surfaced when find_kernel fails - explains the most likely cause (program cache off,
     # or workload destroyed despite cache being on) so callers can append it to "PC not in range" style errors.
     kernel_lookup_warning: str | None = None
 
@@ -282,7 +282,7 @@ class DispatcherData:
                 f"Enable program cache to see the callstack."
             )
         return (
-            "No host-side live program owns the kernel on this device —"
+            "No host-side live program owns the kernel on this device -"
             " the program should remain alive on host while its kernel is running."
         )
 
@@ -382,7 +382,7 @@ class DispatcherData:
                 raise TTTriageError(f"Unsupported block type: {block_type}")
         # Get the build_env for the device to get the correct firmware path
         # Each device may have different firmware paths based on its build configuration
-        device_unique_id = location._device.unique_id
+        device_unique_id = location.device.unique_id
         build_env = self._get_build_env_for_device(device_unique_id)
         proc_name = risc_name.upper()
         proc_type = enum_values["ProcessorTypes"][proc_name]
@@ -449,8 +449,8 @@ class DispatcherData:
         try:
             kernel = self.find_kernel(watcher_kernel_id)
         except Exception:
-            if watcher_kernel_id != -1 and self.metal_device_id_mapping.has_unique_id(location._device.unique_id):
-                metal_device_id = self.metal_device_id_mapping.get_metal_device_id(location._device.unique_id)
+            if watcher_kernel_id != -1 and self.metal_device_id_mapping.has_unique_id(location.device.unique_id):
+                metal_device_id = self.metal_device_id_mapping.get_metal_device_id(location.device.unique_id)
                 kernel_lookup_warning = self._kernel_missing_hint_for_device(metal_device_id)
         try:
             previous_kernel = self.find_kernel(watcher_previous_kernel_id)

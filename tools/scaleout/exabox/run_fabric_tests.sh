@@ -56,7 +56,7 @@ Optional:
                                         (default: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric)
     --test-config <path>                Path to test configuration file
                                         (default: tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_2d_torus_stability.yaml)
-                                        (4x8wh default: tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_wh_neighbor_exchange.yaml)
+                                        (4x8wh default: tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_neighbor_exchange.yaml)
                                         (4x8z/2x4x4z/4x32z/8x4x4z default: test_fabric_multi_mesh_sanity_common.yaml, whose
                                          neighbor_exchange/all_to_all patterns route across mesh boundaries / Z links)
     --filter <pattern>                  Filter pattern passed to test_tt_fabric --filter
@@ -71,6 +71,13 @@ Optional:
                                         (auto-detected if not specified)
     --mpi-args <args>                   Extra arguments passed directly to mpirun (quoted string)
                                         e.g. --mpi-args "--tag-output"
+    --cabling-descriptor-path <path>    Path to cabling descriptor (.textproto). When provided with
+                                        --deployment-descriptor-path, the descriptor-based ring resolver
+                                        is used instead of the hostname heuristic for multi-host configs.
+    --deployment-descriptor-path <path> Path to deployment descriptor (.textproto). Required with
+                                        --cabling-descriptor-path.
+    --fsd <path>                        Path to Factory System Descriptor (.textproto). Alternative to
+                                        cabling+deployment for ring order resolution.
     --skip-reorder                      Use --hosts exactly as given; skip the canonical ring
                                         reordering for the multi-host quad configs (8x4x4z, 4x32z,
                                         <N>x32x4). Use this when the serpentine r<rack>u<unit>
@@ -115,14 +122,18 @@ TEST_CONFIG_EXPLICIT=false
 # with an inter-mesh Z fabric (its Linear/Ring/Torus setups trip the tensix
 # datamover buffer-index assert), so it must not be the default here.
 TEST_CONFIG_Z="tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml"
-# 4x8wh uses the Wormhole neighbor-exchange sanity config by default (single 8x4
-# torus mesh), unless the user explicitly passes --test-config.
-TEST_CONFIG_4x8wh="tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_wh_neighbor_exchange.yaml"
+# 4x8wh uses the neighbor-exchange sanity config by default (single 8x4
+# torus mesh), unless the user explicitly passes --test-config. The config uses
+# num_links: all, which resolves to the platform's max usable links at runtime.
+TEST_CONFIG_4x8wh="tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_neighbor_exchange.yaml"
 FILTER=""
 NUM_PACKETS=""
 MPI_IF=""
 MPI_IF_EXPLICIT=false
 MPI_EXTRA_ARGS=()
+CABLING_DESCRIPTOR_PATH=""
+DEPLOYMENT_DESCRIPTOR_PATH=""
+FSD_PATH=""
 SKIP_REORDER=false
 
 while [[ $# -gt 0 ]]; do
@@ -228,6 +239,30 @@ while [[ $# -gt 0 ]]; do
             fi
             read -ra _extra <<< "$2"
             MPI_EXTRA_ARGS+=("${_extra[@]}")
+            shift 2
+            ;;
+        --cabling-descriptor-path)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --cabling-descriptor-path requires a non-empty value"
+                exit 1
+            fi
+            CABLING_DESCRIPTOR_PATH="$2"
+            shift 2
+            ;;
+        --deployment-descriptor-path)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --deployment-descriptor-path requires a non-empty value"
+                exit 1
+            fi
+            DEPLOYMENT_DESCRIPTOR_PATH="$2"
+            shift 2
+            ;;
+        --fsd)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --fsd requires a non-empty value"
+                exit 1
+            fi
+            FSD_PATH="$2"
             shift 2
             ;;
         --skip-reorder)
@@ -400,16 +435,86 @@ sort_hosts_canonical_per_quad() {
     echo "${joined%,}"
 }
 
+# Descriptor-based ring resolver: calls resolve_host_ring_order.py with
+# --cabling/--deployment or --fsd to produce the physically correct order.
+# Returns the ordered CSV via stdout. Exits the script on failure.
+resolve_hosts_from_descriptors() {
+    local hosts_csv="$1"
+    local resolver="${SCRIPT_DIR}/resolve_host_ring_order.py"
+    local resolver_args=(--hosts "$hosts_csv")
+
+    if [[ -n "$FSD_PATH" ]]; then
+        resolver_args+=(--fsd "$FSD_PATH")
+    else
+        resolver_args+=(--cabling "$CABLING_DESCRIPTOR_PATH" --deployment "$DEPLOYMENT_DESCRIPTOR_PATH")
+    fi
+
+    local output
+    output="$(python3 "$resolver" "${resolver_args[@]}" 2>&1)"
+    local rc=$?
+    if [[ $rc -ne 0 ]]; then
+        echo "Error: resolve_host_ring_order.py failed (rc=$rc):"
+        echo "$output"
+        exit 1
+    fi
+    local ordered
+    ordered="$(echo "$output" | python3 -c 'import json,sys; print(json.load(sys.stdin)["ordered_hosts"])')"
+    if [[ -z "$ordered" ]]; then
+        echo "Error: resolve_host_ring_order.py returned empty ordered_hosts"
+        echo "$output"
+        exit 1
+    fi
+    echo "$ordered"
+}
+
+HAS_DESCRIPTORS=false
+if [[ -n "$FSD_PATH" ]]; then
+    HAS_DESCRIPTORS=true
+elif [[ -n "$CABLING_DESCRIPTOR_PATH" && -n "$DEPLOYMENT_DESCRIPTOR_PATH" ]]; then
+    HAS_DESCRIPTORS=true
+fi
+
 # Only the multi-host quad configs need deterministic ring order; smaller and
 # single-host configs keep the user's --hosts order untouched. 8x4x4z/4x32z are
 # a single quad (one Z-ring) so they canonicalize the whole list; <N>x32x4 has
 # one quad per mesh, so it canonicalizes each group of 4 independently.
-# --skip-reorder bypasses this entirely: the serpentine r<rack>u<unit> heuristic
-# only matches the standard 2-racks-x-2-units galaxy layout, so for hosts cabled
-# differently the operator can pass their own ring order and keep it verbatim.
+#
+# When descriptor paths are provided, the resolver is used instead of the
+# hostname heuristic.  --skip-reorder bypasses both.
 if [[ "$SKIP_REORDER" == true ]]; then
     if [[ "$CONFIG" == "8x4x4z" || "$CONFIG" == "4x32z" || -n "$NX32X4_NUM_MESHES" ]]; then
         echo "Skipping canonical host reordering (--skip-reorder); using --hosts as given."
+    fi
+elif [[ "$HAS_DESCRIPTORS" == true ]] && [[ "$CONFIG" == "8x4x4z" || "$CONFIG" == "4x32z" ]]; then
+    HOSTS_ORIG="$HOSTS"
+    HOSTS="$(resolve_hosts_from_descriptors "$HOSTS")"
+    if [[ "$HOSTS" != "$HOSTS_ORIG" ]]; then
+        echo "Reordered hosts via descriptor-based ring resolver for $CONFIG:"
+        echo "  before: $HOSTS_ORIG"
+        echo "  after:  $HOSTS"
+    fi
+elif [[ "$HAS_DESCRIPTORS" == true ]] && [[ -n "$NX32X4_NUM_MESHES" ]]; then
+    HOSTS_ORIG="$HOSTS"
+    IFS=',' read -ra _all_hosts <<< "$HOSTS"
+    _total=${#_all_hosts[@]}
+    _out=()
+    for ((_i = 0; _i < _total; _i += 4)); do
+        _quad=()
+        for ((_j = _i; _j < _i + 4 && _j < _total; _j++)); do
+            _quad+=("${_all_hosts[$_j]}")
+        done
+        _quad_csv=$(printf '%s,' "${_quad[@]}")
+        _quad_csv="${_quad_csv%,}"
+        _sorted="$(resolve_hosts_from_descriptors "$_quad_csv")"
+        IFS=',' read -ra _quad <<< "$_sorted"
+        _out+=("${_quad[@]}")
+    done
+    printf -v _joined '%s,' "${_out[@]}"
+    HOSTS="${_joined%,}"
+    if [[ "$HOSTS" != "$HOSTS_ORIG" ]]; then
+        echo "Reordered each 4-host quad via descriptor-based ring resolver for $CONFIG:"
+        echo "  before: $HOSTS_ORIG"
+        echo "  after:  $HOSTS"
     fi
 elif [[ "$CONFIG" == "8x4x4z" || "$CONFIG" == "4x32z" ]]; then
     HOSTS_ORIG="$HOSTS"
@@ -508,12 +613,15 @@ fi
 # Assemble the ":"-separated MPMD segments for the non-Z multi-host launch,
 # shared by the docker and no-docker paths. Every rank drives the same single
 # mesh (TT_MESH_ID=0) and descriptor; OpenMPI places one rank per --host entry.
+# TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS matches the Z-config / full_rank_binding
+# path so slow ethernet handshakes after reset don't trip the default 10s sync.
 NONZ_SEGMENTS=()
 for ((i = 0; i < NONZ_NUM_RANKS; i++)); do
     [[ $i -gt 0 ]] && NONZ_SEGMENTS+=(":")
     NONZ_SEGMENTS+=(-np 1)
     NONZ_SEGMENTS+=(-x TT_MESH_ID=0)
     NONZ_SEGMENTS+=(-x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH")
+    NONZ_SEGMENTS+=(-x TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=1000000)
     NONZ_SEGMENTS+=("$TEST_BINARY" --test_config "$TEST_CONFIG" "${EXTRA_BINARY_ARGS[@]}")
 done
 
@@ -1066,6 +1174,7 @@ elif [[ "$CONFIG" == "4x8" || "$CONFIG" == "4x8wh" ]]; then
         -np 1 \
         -x TT_MESH_ID=0 \
         -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        -x TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=1000000 \
         "$TEST_BINARY" \
         --test_config "$TEST_CONFIG" "${EXTRA_BINARY_ARGS[@]}" |& tee "$LOG_FILE" | highlight_fabric_test_success
 else

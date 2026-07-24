@@ -52,9 +52,10 @@ public:
     vector_aligned<uint32_t> cmd_vector() const;
 
     void add_dispatch_wait(
-        uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t dispatcher_type = 0);
+        uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t cq_id, uint8_t dispatcher_type = 0);
 
-    void add_dispatch_wait_with_prefetch_stall(uint32_t flags, uint32_t address, uint32_t stream, uint32_t count);
+    void add_dispatch_wait_with_prefetch_stall(
+        uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t cq_id);
 
     void add_prefetch_relay_linear(uint32_t noc_xy_addr, DeviceAddr lengthB, DeviceAddr addr);
 

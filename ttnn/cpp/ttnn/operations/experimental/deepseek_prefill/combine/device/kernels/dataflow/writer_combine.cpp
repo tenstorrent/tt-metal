@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "api/debug/assert.h"
 #include "api/debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -17,7 +18,7 @@
 // FABRIC_2D vs 1D dispatch is handled portably via ccl_routing_utils::fabric_set_line_unicast_route
 // (templated on packet-header type). Under 1D the helper consumes route_info.distance_in_hops,
 // under 2D it consumes route_info.dst_chip_id + dst_mesh_id. The 2D fabric_route (EDM index)
-// still has to be recomputed from dest_mesh_ids/dest_chip_ids — see note in writer_dispatch.cpp.
+// still has to be recomputed from dest_mesh_ids/dest_chip_ids — see note in writer_sender_dispatch.cpp.
 
 #define ENABLE_COMBINE_DEBUG 0
 #if ENABLE_COMBINE_DEBUG
@@ -119,7 +120,6 @@ void kernel_main() {
     uint32_t expert_start_idx = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t expert_end_idx = get_arg_val<uint32_t>(rt_args_idx++);
 
-    uint32_t output_init_complete_semaphore_address = get_semaphore(output_init_complete_semaphore_id);
     uint32_t output_init_barrier_l1_offset = get_semaphore(output_init_barrier_semaphore_id);
 
     // Read NOC coordinates for all cores (for inter-core barrier signaling).
@@ -149,10 +149,9 @@ void kernel_main() {
 
 #if INIT_ZEROS
     // Wait for reader to complete output-zeroing
-    volatile tt_l1_ptr uint32_t* output_init_complete_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_init_complete_semaphore_address);
-    noc_semaphore_wait(output_init_complete_sem_ptr, 1);
-    noc_semaphore_set(output_init_complete_sem_ptr, 0);
+    Semaphore<> output_init_complete_sem(output_init_complete_semaphore_id);
+    output_init_complete_sem.wait(1);
+    output_init_complete_sem.set(0);
 #endif
 
 #ifdef DEST_CHIP_ID

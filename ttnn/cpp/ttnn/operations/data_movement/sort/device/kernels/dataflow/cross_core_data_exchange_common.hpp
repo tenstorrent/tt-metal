@@ -6,7 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
@@ -60,18 +60,18 @@ void sort_noc_exchange_Wt_tiles(
     uint32_t other_core_y) {
     constexpr uint32_t ONE_TILE = 1;
 
-    CircularBuffer value_tensor_this_cb(value_tensor_this_cb_index);
-    CircularBuffer index_tensor_this_cb(index_tensor_this_cb_index);
-    CircularBuffer cb_value_peer(cb_value_peer_index);
-    CircularBuffer cb_index_peer(cb_index_peer_index);
+    DataflowBuffer value_tensor_this_dfb(value_tensor_this_cb_index);
+    DataflowBuffer index_tensor_this_dfb(index_tensor_this_cb_index);
+    DataflowBuffer dfb_value_peer(cb_value_peer_index);
+    DataflowBuffer dfb_index_peer(cb_index_peer_index);
 
     for (uint32_t w = 0, sem_counter = 1; w < Wt; w++, sem_counter += 2) {
         // Reserve space for new tiles
-        cb_value_peer.reserve_back(ONE_TILE);
-        cb_index_peer.reserve_back(ONE_TILE);
+        dfb_value_peer.reserve_back(ONE_TILE);
+        dfb_index_peer.reserve_back(ONE_TILE);
 
-        uint32_t cb_value_peer_local_write_addr = cb_value_peer.get_write_ptr();
-        uint32_t cb_index_peer_local_write_addr = cb_index_peer.get_write_ptr();
+        uint32_t cb_value_peer_local_write_addr = dfb_value_peer.get_write_ptr();
+        uint32_t cb_index_peer_local_write_addr = dfb_index_peer.get_write_ptr();
 
         // Handshake for tile exchange (signal peer that we are ready)
         sem_self.up(noc, other_core_x, other_core_y, 1);
@@ -79,10 +79,10 @@ void sort_noc_exchange_Wt_tiles(
         sem_self.wait(sem_counter);
 
         // Send local indices and values to peer
-        value_tensor_this_cb.wait_front(ONE_TILE);
-        index_tensor_this_cb.wait_front(ONE_TILE);
-        uint32_t value_cb_self_read_addr = value_tensor_this_cb.get_read_ptr();
-        uint32_t index_cb_self_read_addr = index_tensor_this_cb.get_read_ptr();
+        value_tensor_this_dfb.wait_front(ONE_TILE);
+        index_tensor_this_dfb.wait_front(ONE_TILE);
+        uint32_t value_cb_self_read_addr = value_tensor_this_dfb.get_read_ptr();
+        uint32_t index_cb_self_read_addr = index_tensor_this_dfb.get_read_ptr();
 
         // Write tiles to peer core (local L1 -> peer L1)
         CoreLocalMem<uint32_t> value_src(value_cb_self_read_addr);
@@ -102,8 +102,8 @@ void sort_noc_exchange_Wt_tiles(
 
         noc.async_write_barrier();
 
-        value_tensor_this_cb.pop_front(ONE_TILE);
-        index_tensor_this_cb.pop_front(ONE_TILE);
+        value_tensor_this_dfb.pop_front(ONE_TILE);
+        index_tensor_this_dfb.pop_front(ONE_TILE);
 
         // Indicate finish reading and wait for other core to finish
         sem_self.up(noc, other_core_x, other_core_y, 1);
@@ -111,8 +111,8 @@ void sort_noc_exchange_Wt_tiles(
         sem_self.wait(sem_counter + 1);
 
         // Push incoming tiles to compute buffers
-        cb_value_peer.push_back(ONE_TILE);
-        cb_index_peer.push_back(ONE_TILE);
+        dfb_value_peer.push_back(ONE_TILE);
+        dfb_index_peer.push_back(ONE_TILE);
     }  // Wt
 
     // Reset semaphore value
@@ -143,8 +143,8 @@ FORCE_INLINE std::pair<uint32_t, uint32_t> get_core_physical_coordinates(
         return {core_x, core_y};  // Invalid core ID
     }
 
-    CircularBuffer lookup_table_buffer_cb(lookup_table_buffer_cb_index);
-    const uint32_t l1_read_addr = lookup_table_buffer_cb.get_read_ptr();
+    DataflowBuffer lookup_table_buffer_dfb(lookup_table_buffer_cb_index);
+    const uint32_t l1_read_addr = lookup_table_buffer_dfb.get_read_ptr();
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_read_addr);
 
     core_x = ptr[core_id * 2];

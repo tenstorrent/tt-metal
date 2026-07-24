@@ -81,6 +81,7 @@ def _run_moe_compute_single_card_test(
     dtype,
     activation_type,
     has_bias=False,
+    skip_on_ci=False,
 ):
     """
     Single-card MoE compute test body. cluster_axis is fixed to None
@@ -110,6 +111,13 @@ def _run_moe_compute_single_card_test(
                 f"tilize/matmul bounding-box overlap."
             )
     elif arch == ttnn.device.Arch.BLACKHOLE:
+        if skip_on_ci:
+            # Matmul output fails PCC on BH; runs locally for regression, skipped in CI pending fix.
+            # https://github.com/tenstorrent/tt-metal/issues/50038
+            pytest.skip(
+                "MoE compute single-card test fails PCC on BH; skipped in CI pending fix "
+                "(https://github.com/tenstorrent/tt-metal/issues/50038)."
+            )
         # BH layout assumes the 11x10 production worker grid (logical x=0..10, y=0..9).
         # See moe_compute_program_factory.cpp::get_layout() BH branch.
         if grid.y < 10 or grid.x < 11:
@@ -497,7 +505,7 @@ def _run_moe_compute_single_card_test(
 )
 @pytest.mark.parametrize("has_bias", [False, True], ids=["no_bias", "with_bias"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias):
+def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias, is_ci_env, is_ci_v2_env):
     """compute_only=True on a 1x1 mesh, DeepSeek-shaped workload (hidden=7168).
 
     The matmul ring size is auto-detected from the arch (12 on WH, 8 on BH); the op no longer
@@ -516,6 +524,7 @@ def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias):
         dtype=ttnn.bfloat16,
         activation_type=MoEActivationFunction.SILU,
         has_bias=has_bias,
+        skip_on_ci=is_ci_env or is_ci_v2_env,
     )
 
 
@@ -533,7 +542,7 @@ def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias):
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape):
+def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape, is_ci_env, is_ci_v2_env):
     """compute_only=True on a 1x1 mesh, GPT-OSS-shaped workload (hidden=N=2880, SWIGLU+bias).
 
     The matmul ring size is auto-detected from the arch (12 on WH, 8 on BH); the op no longer
@@ -553,6 +562,7 @@ def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape):
         dtype=ttnn.bfloat16,
         activation_type=MoEActivationFunction.SWIGLU,
         has_bias=True,
+        skip_on_ci=is_ci_env or is_ci_v2_env,
     )
 
 

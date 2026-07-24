@@ -19,6 +19,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import calculate_tile_and_face_counts
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    CLAMP_NEGATIVE,
     FAST_MODE,
     ITERATIONS,
     LOOP_FACTOR,
@@ -112,6 +113,7 @@ def _get_stable_sort_modes(mathop):
         MathOperation.Heaviside,
         MathOperation.Softshrink,
         MathOperation.Softsign,
+        MathOperation.Square,
         MathOperation.Log,
         MathOperation.TopKLocalSort,
         MathOperation.TopKMerge,
@@ -147,10 +149,11 @@ def test_perf_eltwise_unary_sfpu(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
     )
 
-    # If dest_acc is on, we unpack Float32 into 16-bit format in src registers
-    # (later copied over in dest reg for SFPU op)
+    # A 32-bit (fp32) input with dest_acc ON unpacks straight into the 32-bit Dest
+    # register. With dest_acc OFF it goes through the source registers (converted to 16-bit)
+    # and is copied into Dest for the SFPU op.
     unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
+        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
     )
 
     configuration = PerfConfig(
@@ -169,6 +172,7 @@ def test_perf_eltwise_unary_sfpu(
             ITERATIONS(iterations),
             FAST_MODE(fast_mode),
             STABLE_SORT(stable_sort),
+            CLAMP_NEGATIVE(False),
         ],
         runtimes=[
             TILE_COUNT(tile_count_A),

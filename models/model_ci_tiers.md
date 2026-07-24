@@ -72,6 +72,7 @@ The initial release of the 3-tier model CI includes models owned by the models-t
 | Gemma-4-E4B | WH N150, BH P150, BH P300, BH QuietBox 2 |
 | Gemma-4-26B-A4B | WH LLMBox |
 | Gemma-4-31B | WH LLMBox |
+| Stable Diffusion XL | WH N150, WH N300, BH P150 |
 ## Tier 3 Models
 | Model | Systems |
 |-------|---------|
@@ -85,6 +86,8 @@ The initial release of the 3-tier model CI includes models owned by the models-t
 | Qwen2.5-VL-32B | WH LLMBox, BH QuietBox 2 |
 | Mamba-2.8B | WH N150 |
 | Phi-3-mini | WH N150 |
+| Panoptic-DeepLab | BH P150 |
+| BEVFormer | BH P150 |
 
 
 # Pipelines
