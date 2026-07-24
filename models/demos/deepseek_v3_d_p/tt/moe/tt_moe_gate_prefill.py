@@ -45,6 +45,9 @@ class GateComputeMode(Enum):
     # DeepSeek-V4 hash routing fully on device: matmul device, moe_hash_gate device. The tid2eid[input_ids]
     # lookup is fused into the op's reader kernel; weights reuse the shared activation/normalize/scale path.
     HASH_DEVICE = "hash_device"
+    # GPT-OSS routing: top-k on (x@W + bias) raw logits, then softmax over the selected top-k.
+    GPT_HOST = "gpt_host"  # matmul device, topk+softmax on host
+    GPT_DEVICE = "gpt_device"  # matmul device, ttnn.topk + ttnn.softmax on device
 
 
 @dataclass
@@ -740,6 +743,35 @@ class TtMoEGatePrefill(LightweightModule):
             self.config.n_activated_experts,
         )
 
+    def _device_gpt_gate(self, logits: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """GPT-OSS routing on device: top-k on (logits + bias), softmax over the selected top-k.
+
+        Unlike the DeepSeek grouped gate, the bias is folded into the logits before selection and the
+        weights are a softmax over just the chosen experts (no per-expert activation / sum-normalize).
+        ttnn.topk expects a tiled, interleaved input, so the L1 all-reduce output is normalized first.
+        """
+        logits_tiled = ttnn.to_memory_config(logits, ttnn.DRAM_MEMORY_CONFIG)
+        biased = ttnn.add(logits_tiled, self.bias)
+        # sorted=True so the top-k order matches torch.topk (descending) in the golden, keeping the
+        # element-wise scores PCC aligned.
+        values, indices = ttnn.topk(biased, k=self.config.n_activated_experts, dim=-1, sorted=True)
+        scores = ttnn.softmax(values, dim=-1, numeric_stable=True)
+        ttnn.deallocate(biased)
+        ttnn.deallocate(values)
+        ttnn.deallocate(logits_tiled)
+        return scores, indices
+
+    def _host_gpt_gate(self, host_logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """GPT-OSS routing on host. Returns (indices, scores).
+
+        Mirrors the reference GptOssTopKRouter: top-k on (logits + bias) raw logits, then softmax over
+        the selected top-k values.
+        """
+        biased = host_logits.float() + self.torch_bias.float()
+        top_vals, top_idx = torch.topk(biased, self.config.n_activated_experts, dim=-1)
+        scores = torch.softmax(top_vals, dim=-1)
+        return top_idx, scores
+
     # ------------------------------------------------------------------
     # Forward
     # ------------------------------------------------------------------
@@ -762,6 +794,8 @@ class TtMoEGatePrefill(LightweightModule):
             GateComputeMode.DEVICE_FP32,
             GateComputeMode.HOST_GROUPED_GATE,
             GateComputeMode.HASH_DEVICE,
+            GateComputeMode.GPT_HOST,
+            GateComputeMode.GPT_DEVICE,
         ):
             logits = self._device_matmul(x)
         elif mode == GateComputeMode.HASH_HOST:
@@ -824,6 +858,15 @@ class TtMoEGatePrefill(LightweightModule):
                 padding_side=padding_side,
                 padding_config=padding_config,
             )
+
+        elif mode == GateComputeMode.GPT_DEVICE:
+            ttnn_scores, ttnn_top_k_experts_indices = self._device_gpt_gate(logits)
+
+        elif mode == GateComputeMode.GPT_HOST:
+            host_logits = self._compose_logits_to_host(logits)
+            host_indices, host_scores = self._host_gpt_gate(host_logits)
+            ttnn_scores = self._host_scores_to_device(host_scores)
+            ttnn_top_k_experts_indices = self._host_indices_to_device(host_indices)
         signpost(header="moe_gate_grouped_gate")
 
         return (
