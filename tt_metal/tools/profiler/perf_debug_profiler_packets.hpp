@@ -23,6 +23,8 @@ struct WorkerZonePacket {
     std::string_view name;   // deciphered zone name; stable for the profiler session
     uint64_t timestamp = 0;  // full device ticks (59-bit, reconstructed from STICKY_TIMER)
     bool is_start = false;   // true = ZONE_START, false = ZONE_END
+    bool is_x280 = false;    // true = an X280 L2CPU-hart zone (own context "X280 (x,y)", distinct color) not a RISC
+    uint32_t color = 0;      // explicit Tracy zone color (0 = auto by name); set for X280 zones
 };
 
 }  // namespace tt::tt_metal::perf_debug

@@ -102,7 +102,8 @@ void PerfDebugTracyHandler::HandleWorkerZone([[maybe_unused]] const perf_debug::
         zone.chip_id,
         zone.core_noc0_x,
         zone.core_noc0_y,
-        fmt::format("Device: {} Physical ({},{})", zone.chip_id, zone.core_noc0_x, zone.core_noc0_y));
+        zone.is_x280 ? fmt::format("Device: {} X280 ({},{})", zone.chip_id, zone.core_noc0_x, zone.core_noc0_y)
+                     : fmt::format("Device: {} Physical ({},{})", zone.chip_id, zone.core_noc0_x, zone.core_noc0_y));
     if (!ctx) {
         return;
     }
@@ -123,8 +124,9 @@ void PerfDebugTracyHandler::HandleWorkerZone([[maybe_unused]] const perf_debug::
     marker.runtime_host_id = zone.timer_id;
     marker.marker_type = zone.is_start ? tracy::TTDeviceMarkerType::ZONE_START : tracy::TTDeviceMarkerType::ZONE_END;
     marker.marker_name = zone.name.empty() ? fmt::format("Zone_{}", zone.timer_id) : std::string(zone.name);
-    marker.file = "kernel_profiler";
+    marker.file = zone.is_x280 ? "x280_drainer" : "kernel_profiler";
     marker.line = 0;
+    marker.color = zone.color;  // X280 zones set a distinct color (0 = Tracy auto-color by name for RISC zones)
 
     // Mirror Tracy's per-lane GPU zone stack depth; drop an unmatched ZONE_END (would pop an empty
     // stack -> SEGV in tracy-capture). A never-opened lane's first END is a benign capture-start

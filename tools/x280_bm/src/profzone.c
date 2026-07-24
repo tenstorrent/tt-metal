@@ -106,6 +106,28 @@
 #define SMD_FIFO_HI 13u
 #define SOCKET_WIN_BASE 208u      /* posted windows: data @ +h, bytes_sent @ +4+h */
 #define kNonceSocket (1ull << 17) /* P_NONCE bit17: use the D2HSocket transport */
+#define kNonceCalib (1ull << 18)  /* P_NONCE bit18: CALIB mode -- hart0 co-samples rdcycle vs Tensix wall clock */
+
+/* CALIB buffer: core-readable LIM between COORDS-end (~0x08011570) and HEADS (0x08013000). CALIB_N samples x
+ * 3 u64 {x280_rdcycle_mid, tensix_wallclock, noc_roundtrip}. 256*24 = 6144 B -> ends 0x08012E00 < HEADS. */
+#define CALIB_BASE 0x08011600ULL
+#define CALIB_N 256u
+#define CALIB_WIN 199u                /* spare read TLB window (num_cores<=110 < 199 < WRITE_WIN_BASE=200) */
+#define WALLCLOCK_REG_L 0xFFB121F0ULL /* RISCV_DEBUG_REG_WALL_CLOCK_L (reading L atomically latches H) */
+#define WALLCLOCK_REG_H 0xFFB121F8ULL /* RISCV_DEBUG_REG_WALL_CLOCK_1_AT (latched high half) */
+
+#define kNonceHartZones (1ull << 19) /* P_NONCE bit19: harts emit busy/idle spans (+ hart0 inline calib at start) */
+/* Per-hart zone buffer: HZONE_BASE + hartid*HZONE_STRIDE. [+0]=marker count (u64), then markers of 16 B
+ * {u64 rdcycle_ts, u32 tag, u32 pad}. tag = state | (bit31 = START, else END). 16 KiB/hart -> harts 0..3 at
+ * 0x08040000..0x08050000 (free when <=2 readers use STAGE 0x08020000/0x08030000; within the ECC-primed 0x60000).
+ * Bounded to a start-of-run WINDOW (LIM is small): busy/idle spans are emitted only on STATE CHANGE, so a steady
+ * drain is a few long spans, not per-pass -- low volume, covers a useful stretch. */
+#define HZONE_BASE 0x08040000ULL
+#define HZONE_STRIDE 0x4000ULL
+#define HZ_CAP 1000u /* markers/hart ((16 KiB - 16)/16 ~= 1023) */
+#define HZ_BUSY 1u
+#define HZ_IDLE 2u
+static uint32_t g_hartzones = 0; /* set in main() from nonce bit19; read by reader_run (defined below w64) */
 /* socket h config @ base + h*stride. MUST be in the core-readable low mailbox region (between COORDS-end
  * 0x08011570 and HEADS 0x08013000): the X280 core reads 0x0801A000 (the manager's addr) as ZERO -- that
  * range is a hole in the core's LIM view even though it's NoC-writable. See FINDINGS / the takeover note. */
@@ -121,6 +143,21 @@ static inline uint32_t r32(uint64_t a) { return *(volatile uint32_t*)a; }
 static inline void w32(uint64_t a, uint32_t v) { *(volatile uint32_t*)a = v; }
 static inline uint64_t r64(uint64_t a) { return *(volatile uint64_t*)a; }
 static inline void w64(uint64_t a, uint64_t v) { *(volatile uint64_t*)a = v; }
+
+/* Append a {START,END} span for `state` spanning [t0,t1] (X280 rdcycle) to this hart's zone buffer. Bounded. */
+static inline void hz_span(uint64_t base, uint32_t* n, uint32_t state, uint64_t t0, uint64_t t1) {
+    if (*n + 2u > HZ_CAP) {
+        return;
+    }
+    uint64_t off = base + 16 + (uint64_t)(*n) * 16;
+    w64(off, t0);
+    w32(off + 8, state | 0x80000000u); /* START */
+    w32(off + 12, 0);
+    w64(off + 16, t1);
+    w32(off + 24, state); /* END */
+    w32(off + 28, 0);
+    *n += 2;
+}
 static inline void fence_(void) { __asm__ volatile("fence iorw, iorw"); }
 static inline void cpu_pause(void) { __asm__ volatile("nop"); }
 
@@ -220,9 +257,15 @@ static void reader_run(
     uint64_t t_copy = 0, t_wait = 0; /* PROFILE: cycles in the copy (NoC read+LIM write) vs SPSC-full wait */
     uint64_t visits = 0, polls = 0;  /* PROFILE: drains (tail!=head) vs total tail reads -> avg run = words/visits */
     uint64_t t0 = rdcycle();
+    /* hart per-drain zones (--hartzones): emit a DRAIN zone spanning each core-visit that actually moves data
+     * (prod advanced) -- shows the reader stepping core to core. Bounded to a start-of-run window (LIM is small). */
+    uint64_t hzb = HZONE_BASE + hartid * HZONE_STRIDE;
+    uint32_t hzn = 0;
     for (;;) {
         uint64_t pending = 0;
         for (uint64_t c = lo; c < hi; c++) {
+            uint64_t hz_t = g_hartzones ? rdcycle() : 0; /* core-visit start (rdcycle) */
+            uint32_t hz_prod0 = prod;                    /* prod baseline: did this visit drain? */
             uint64_t cbase = NOC_2M_WINDOW_BASE + c * NOC_2M_WINDOW_STRIDE + ctrl_off;
             uint64_t rbufs = cbase + 128;
             uint32_t tails[NRISC];
@@ -372,10 +415,16 @@ static void reader_run(
                 fence_();                /* all riscs' data + stickies visible before PROD advances */
                 w32(PROD(hartid), prod); /* ONE batched publish for the whole core */
             }
+            if (g_hartzones && prod != hz_prod0) { /* this visit drained -> a DRAIN zone */
+                hz_span(hzb, &hzn, HZ_BUSY, hz_t, rdcycle());
+            }
         }
         if (r64(P_STOP) && (!pending || fullread)) { /* fullread: pending is always 1 -> stop on P_STOP alone */
             break;
         }
+    }
+    if (g_hartzones) {
+        w64(hzb, hzn); /* publish marker count */
     }
     uint64_t t_total = rdcycle() - t0;
     w64(RES_SLOT(hartid) + RES_TOTAL, total * 4ULL);
@@ -608,6 +657,9 @@ static void relay_run_socket(
 
     uint64_t total = 0, t_copy = 0, hostfull = 0, idle = 0;
     uint64_t t0 = rdcycle();
+    /* hart per-drain zones (--hartzones): a DRAIN zone spanning each LIM->host copy this relay does. */
+    uint64_t hzb = HZONE_BASE + hartid * HZONE_STRIDE;
+    uint32_t hzn = 0;
     for (;;) {
         uint64_t pending = 0;
         for (uint64_t h = rlo; h < rhi; h++) {
@@ -651,6 +703,9 @@ static void relay_run_socket(
             fence_();                      /* payload lands before bytes_sent is published (posted order) */
             w32(CONS(h), cn);              /* free reader SPSC */
             w32(bsbase[h], bytes_sent[h]); /* publish bytes_sent to host sysmem (amortized per batch) */
+            if (g_hartzones) {             /* DRAIN zone: this relay moved a snapshot to host */
+                hz_span(hzb, &hzn, HZ_BUSY, tc, rdcycle());
+            }
         }
         if (!pending) {
             idle++;
@@ -697,6 +752,9 @@ static void relay_run_socket(
             fence_();
             w32(bsbase[h], bytes_sent[h]);
         }
+    }
+    if (g_hartzones) {
+        w64(hzb, hzn); /* publish this relay's zone count */
     }
     uint64_t t_total = rdcycle() - t0;
     w64(RES_SLOT(hartid) + RES_TOTAL, total * 4ULL);
@@ -852,6 +910,50 @@ static void drain_direct(
     fence_();
 }
 
+/* ============================== CALIBRATION ==============================
+ * hart0 only. Establish the X280<->Tensix clock relation the SAME way the legacy DRAM profiler syncs two
+ * chips over ethernet (sync_device_kernel_sender/receiver): co-timestamp one shared event N times, let the
+ * host linear-regress -> (freq scale, drift). Here the "link" is a NoC read and the "receiver" is the passive
+ * Tensix wall-clock register (no cooperating Tensix kernel needed). Each sample brackets the SAMPLING NoC read
+ * (the L read latches the value) with two rdcycle()s; the midpoint ~= the X280 clock at the latch instant, so
+ * the one-way NoC latency cancels to first order (Cristian's algorithm). Reference core = core 0. */
+static void calibrate(uint64_t read_noc) {
+    volatile uint32_t* coords = (volatile uint32_t*)MBOX_COORDS; /* core 0 = time reference */
+    uint32_t rx = coords[0], ry = coords[1];
+    noc_tlb_2m_t rt;
+    rt.data[0] = 0;
+    rt.data[1] = 0;
+    rt.data[2] = 0;
+    rt.data[3] = 0;
+    rt.addr = WALLCLOCK_REG_L >> 21; /* 2 MiB page holding the debug-reg block */
+    rt.x_end = rx;
+    rt.y_end = ry;
+    rt.x_start = rx;
+    rt.y_start = ry;
+    rt.noc_selector = (uint32_t)read_noc;
+    (void)noc_configure_tlb_2m_ext(CALIB_WIN, &rt, 0);
+    fence_();
+    uint64_t wbase = NOC_2M_WINDOW_BASE + (uint64_t)CALIB_WIN * NOC_2M_WINDOW_STRIDE;
+    uint64_t l_addr = wbase + (WALLCLOCK_REG_L & (NOC_2M_WINDOW_STRIDE - 1ULL));
+    uint64_t h_addr = wbase + (WALLCLOCK_REG_H & (NOC_2M_WINDOW_STRIDE - 1ULL));
+    /* warm the TLB + NoC path so the first real sample isn't a cold-miss outlier */
+    for (int i = 0; i < 16; i++) {
+        (void)r32(l_addr);
+        (void)r32(h_addr);
+    }
+    volatile uint64_t* out = (volatile uint64_t*)CALIB_BASE;
+    for (uint32_t i = 0; i < CALIB_N; i++) {
+        uint64_t x0 = rdcycle();
+        uint32_t lo = r32(l_addr); /* SAMPLING read: latches the high half at this instant */
+        uint64_t x1 = rdcycle();
+        uint32_t hi = r32(h_addr);                  /* fetch latched high (its own timing is irrelevant) */
+        out[i * 3 + 0] = (x0 + x1) / 2;             /* X280 rdcycle at the latch instant (midpoint) */
+        out[i * 3 + 1] = ((uint64_t)hi << 32) | lo; /* Tensix wall clock (aiclk) */
+        out[i * 3 + 2] = x1 - x0;                   /* NoC round-trip (host filters contended outliers) */
+    }
+    fence_();
+}
+
 int main(uint64_t hartid) {
     if (hartid == 0) {
         *(volatile uint64_t*)X280_BOOT_PHASE_ADDR = X280_BOOT_PHASE_RUNNING_ACTIVE_FW;
@@ -879,6 +981,9 @@ int main(uint64_t hartid) {
     uint64_t dualrelay = (nonce >> 15) & 1ull;  /* NONCE bit 15: one relay hart PER READER (decouple halves) */
     uint64_t adaptive = (nonce >> 16) & 1ull;   /* NONCE bit 16: per-core adaptive bulk-vs-per-risc switch */
     uint64_t use_socket = (nonce >> 17) & 1ull; /* NONCE bit 17: relay uses the D2HSocket transport */
+    uint64_t calib = (nonce >> 18) & 1ull;      /* NONCE bit 18: CALIB mode (hart0 clock co-sample, no drain) */
+    uint64_t hartzones = (nonce >> 19) & 1ull;  /* NONCE bit 19: harts emit busy/idle spans + hart0 inline calib */
+    g_hartzones = (uint32_t)hartzones;
     /* P_NREAD carries the drain-hart count in direct mode, the reader count in split mode */
     uint64_t nread_or_drain = r64(P_NREAD);
     uint64_t ndrain = 1, nread = 2;
@@ -944,6 +1049,22 @@ int main(uint64_t hartid) {
 
     w64(HARTHB(hartid), 3);
     fence_();
+
+    if (calib) {
+        /* CALIB mode: hart0 co-samples the clocks; all harts then idle. LIM (incl. CALIB_BASE) persists for
+         * the host to read after hart0 signals DONE. No drain, no P_STOP wait. */
+        if (hartid == 0) {
+            calibrate(read_noc);
+        }
+        w64(RES_SLOT(hartid) + RES_DONE, DONE_MAGIC);
+        fence_();
+        helper_to_idle_fw();
+    }
+    /* --hartzones: hart0 co-samples the clocks ONCE at start (inline), then all harts proceed to drain while
+     * emitting busy/idle spans. Host reads CALIB + the per-hart zone buffers at teardown. */
+    if (hartzones && hartid == 0) {
+        calibrate(read_noc);
+    }
 
     if (direct) {
         uint64_t eff_noc = splitnoc ? (hartid & 1ull) : read_noc; /* split reads across NoC0/NoC1 per hart */

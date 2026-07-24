@@ -59,6 +59,20 @@ inline constexpr uint64_t kNonceBulkcore = 0x4000ULL;   // bit14: one bulk NoC r
 inline constexpr uint64_t kNonceDualrelay = 0x8000ULL;  // bit15: one relay hart per reader
 inline constexpr uint64_t kNonceAdaptive = 0x10000ULL;  // bit16: per-core adaptive bulk-vs-per-risc switch
 inline constexpr uint64_t kNonceSocket = 0x20000ULL;    // bit17: relay uses the D2HSocket transport (sender_socket_md)
+inline constexpr uint64_t kNonceCalib =
+    0x40000ULL;  // bit18: CALIB mode -- hart0 co-samples X280 rdcycle vs a
+                 // reference Tensix wall clock into kProfzoneCalibBase, then
+                 // all harts idle. Host least-squares -> X280<->Tensix (freq,drift).
+// Calibration buffer (core-readable region between COORDS-end and HEADS): kProfzoneCalibN samples x 3 u64
+// {x280_rdcycle_mid, tensix_wallclock, noc_roundtrip_cycles}. 256*24 = 6144 B, ends 0x08012E00 < HEADS 0x08013000.
+inline constexpr uint64_t kProfzoneCalibBase = 0x08011600ULL;
+inline constexpr uint32_t kProfzoneCalibN = 256;
+inline constexpr uint64_t kNonceHartZones = 0x80000ULL;  // bit19: harts emit busy/idle spans + hart0 inline calib
+// Per-hart zone buffer: kProfzoneHZoneBase + hart*kProfzoneHZoneStride. [+0]=marker count (u64), then 16 B markers
+// {u64 rdcycle_ts, u32 tag (state | bit31=START), u32 pad}. Only reader harts (0..nread-1) emit for now.
+inline constexpr uint64_t kProfzoneHZoneBase = 0x08040000ULL;
+inline constexpr uint64_t kProfzoneHZoneStride = 0x4000ULL;
+inline constexpr uint32_t kProfzoneHZoneCap = 1000;
 
 // X280 boot-phase word (from x280_boot.h) -- lets the host confirm profzone is a RESIDENT active FW.
 inline constexpr uint64_t kX280BootPhaseAddr = 0x080160C0ULL;       // X280_BOOT_HANDSHAKE_BASE(0x08016000)+0xC0
@@ -99,6 +113,8 @@ struct ProfzoneBootCfg {
     bool adaptive = true;
     bool socket = false;  // relay writes into a tt-metal D2HSocket (sender_socket_md) instead of a raw ring;
                           // caller must create the D2HSocket(s) at the config addrs BEFORE boot
+    bool calib = false;   // CALIB mode: hart0 co-samples X280 rdcycle vs the reference Tensix wall clock, no drain
+    bool hartzones = false;  // harts emit busy/idle spans while draining (+ hart0 inline calib at start)
     // --socket: caller-captured D2HSocket config buffers ({LIM addr, bytes}) to (re)write into LIM AFTER
     // ensure_idle. The D2HSocket ctor writes the config pre-boot, but ensure_idle asserts L2CPU reset and
     // WIPES LIM -> the relay would read a zeroed config. boot_profzone restores these post-reset (like
@@ -162,7 +178,8 @@ inline bool boot_profzone(X280Driver& drv, const ProfzoneBootCfg& cfg, uint64_t&
                          (cfg.wnoc1 ? kNonceWnoc1 : 0) | (cfg.nodrain ? kNonceNodrain : 0) |
                          (cfg.fullread ? kNonceFullread : 0) | (cfg.bulkcore ? kNonceBulkcore : 0) |
                          (cfg.dualrelay ? kNonceDualrelay : 0) | (cfg.adaptive ? kNonceAdaptive : 0) |
-                         (cfg.socket ? kNonceSocket : 0);
+                         (cfg.socket ? kNonceSocket : 0) | (cfg.calib ? kNonceCalib : 0) |
+                         (cfg.hartzones ? kNonceHartZones : 0);
         detail::pz_pack<uint64_t>(params, kPOffNonce, nonce);
         detail::pz_pack<uint64_t>(params, kPOffNRead, cfg.direct ? cfg.ndrain : cfg.nread);
         drv.write_block(params.data(), static_cast<uint32_t>(params.size()), kProfzoneMboxParams);

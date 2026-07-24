@@ -244,6 +244,9 @@ int main(int argc, char** argv) {
     bool socket_mode = true;   // DEFAULT: relay drains into one tt-metal D2HSocket per relay (the production D2H
                                // transport). --raw switches to raw sysmem rings (a test-only mode for A/B). Both
                                // support the multi-window 4 MiB ring.
+    bool do_calib = false;     // --calib: boot in CALIB mode (hart0 co-samples X280 rdcycle vs a reference Tensix
+                               // wall clock), read the pairs, least-squares the X280<->Tensix (freq scale, drift), exit
+    bool do_hartzones = false;  // --hartzones: harts emit busy/idle spans while draining; read+map+dump at teardown
     bool bringup = false;      // --bringup: STEP1 -- boot profzone as a PERSISTENT active FW and confirm it
                                // stays resident (idle FW never re-entered); no workload, no P_STOP, exit resident.
     bool do_pin = false;       // --pin: bind each flusher to its own core (0,1,...). Pair with `taskset -c 2-N`
@@ -346,6 +349,10 @@ int main(int argc, char** argv) {
             cwork = std::stoi(next());
         } else if (a == "--mqcap") {
             mq_cap = std::stoi(next());
+        } else if (a == "--calib") {
+            do_calib = true;  // CALIB mode: measure X280<->Tensix clock relation, then exit
+        } else if (a == "--hartzones") {
+            do_hartzones = true;  // harts emit busy/idle spans while draining; read+map+dump at teardown
         } else if (a == "--tracy") {
             do_tracy = true;
         } else if (a == "--pin") {
@@ -375,6 +382,9 @@ int main(int argc, char** argv) {
     if (!socket_mode && nodes > 1) {
         fprintf(stderr, "--raw is single-node only; --nodes %d requires socket mode (drop --raw)\n", nodes);
         std::_Exit(2);
+    }
+    if (do_calib) {
+        nodes = 1;  // calibration needs only one L2CPU cluster + one reference Tensix core (core 0)
     }
     if (do_reset) {
         std::string cmd = "tt-smi -r " + std::to_string(device_id);
@@ -640,6 +650,8 @@ int main(int argc, char** argv) {
         bcfg.dualrelay = dualrelay;
         bcfg.adaptive = adaptive;
         bcfg.socket = socket_mode;
+        bcfg.calib = do_calib;          // CALIB mode: hart0 co-samples the clocks, no drain
+        bcfg.hartzones = do_hartzones;  // harts emit busy/idle spans while draining
         // --socket: create one D2HSocket per relay (the production D2H transport) at the LIM config addrs the
         // relay reads (0x08019000 + h*0x100 in THIS node's cluster LIM). Must exist BEFORE boot so the
         // sender_socket_md is resident when relay_run_socket reads it. sender_is_l2cpu routes the config +
@@ -723,6 +735,97 @@ int main(int argc, char** argv) {
     // Node 0 aliases for the raw/offline single-node paths (raw is nodes==1-only) + the pipeline profile below.
     X280Driver& drv = *node[0].drv;
     uint64_t nharts = node[0].nharts;
+
+    // ---- CALIB: read hart0's (x280_rdcycle, tensix_wallclock, noc_rt) samples, least-squares the linear map
+    //      tensix = a*x280 + b (a = aiclk/x280clk freq ratio, b = drift). This is the X280<->Tensix leg the host
+    //      later chains with the existing Tensix<->host sync so X280-hart zones land on the RISC/Tracy timeline. ----
+    if (do_calib) {
+        // hart0 signals DONE (RES slot0 +0x18 == DONE_MAGIC) once the samples are written; wait for it.
+        constexpr uint64_t kDoneMagic = 0xC0570FFEE1ULL;
+        constexpr uint64_t kRes0Done = pz::kProfzoneMboxResults + 0x18;
+        for (int spin = 0; spin < 100000; spin++) {
+            if (drv.lim_rd_u64(kRes0Done) == kDoneMagic) {
+                break;
+            }
+        }
+        if (drv.lim_rd_u64(kRes0Done) != kDoneMagic) {
+            fprintf(stderr, "[calib] hart0 never signaled DONE\n");
+            std::_Exit(1);
+        }
+        const uint32_t N = pz::kProfzoneCalibN;
+        std::vector<uint64_t> raw((size_t)N * 3);
+        drv.read_block(raw.data(), N * 3 * sizeof(uint64_t), pz::kProfzoneCalibBase);
+        // Filter NoC-contended outliers: keep samples whose round-trip <= 1.5x the median.
+        std::vector<uint64_t> rts(N);
+        for (uint32_t i = 0; i < N; i++) {
+            rts[i] = raw[i * 3 + 2];
+        }
+        std::sort(rts.begin(), rts.end());
+        uint64_t rt_med = rts[N / 2];
+        uint64_t rt_min = rts.front(), rt_max = rts.back();
+        uint64_t rt_cut = rt_med + rt_med / 2;
+        // Least squares on base-shifted values (clocks are huge -> avoid float precision loss).
+        uint64_t x_base = raw[0], t_base = raw[1];
+        double sx = 0, st = 0, sxx = 0, sxt = 0;
+        uint32_t n = 0;
+        for (uint32_t i = 0; i < N; i++) {
+            if (raw[i * 3 + 2] > rt_cut) {
+                continue;  // drop contended sample
+            }
+            double x = (double)(raw[i * 3 + 0] - x_base);
+            double t = (double)(raw[i * 3 + 1] - t_base);
+            sx += x;
+            st += t;
+            sxx += x * x;
+            sxt += x * t;
+            n++;
+        }
+        double a = (sxt * n - sx * st) / (sxx * n - sx * sx);  // tensix cyc per x280 cyc
+        double b = (st - a * sx) / n;                          // shifted intercept
+        // Residual (tensix cycles): how tightly the line fits -> the sync error bound.
+        double rss = 0, rmax = 0;
+        for (uint32_t i = 0; i < N; i++) {
+            if (raw[i * 3 + 2] > rt_cut) {
+                continue;
+            }
+            double x = (double)(raw[i * 3 + 0] - x_base);
+            double t = (double)(raw[i * 3 + 1] - t_base);
+            double r = t - (a * x + b);
+            rss += r * r;
+            if (r < 0) {
+                r = -r;
+            }
+            if (r > rmax) {
+                rmax = r;
+            }
+        }
+        double rms = std::sqrt(rss / n);
+        double aiclk_mhz = cluster.get_device_aiclk(device_id);  // Tensix wall-clock frequency (MHz)
+        double x280_mhz = aiclk_mhz / a;                         // implied X280 rdcycle frequency
+        double ns_per_tensix = 1000.0 / aiclk_mhz;
+        printf("\n=== X280<->Tensix clock calibration (ref core 0, %u samples, %u kept after outlier cut) ===\n", N, n);
+        printf("  freq ratio a (tensix cyc / x280 cyc) : %.6f\n", a);
+        printf(
+            "  drift b (shifted intercept, tensix)  : %.1f  (x_base=%llu t_base=%llu)\n",
+            b,
+            (unsigned long long)x_base,
+            (unsigned long long)t_base);
+        printf("  aiclk (Tensix)   : %.1f MHz    implied X280 rdcycle : %.1f MHz\n", aiclk_mhz, x280_mhz);
+        printf(
+            "  NoC round-trip   : min=%llu med=%llu max=%llu x280-cyc  (cut>%llu)\n",
+            (unsigned long long)rt_min,
+            (unsigned long long)rt_med,
+            (unsigned long long)rt_max,
+            (unsigned long long)rt_cut);
+        printf(
+            "  fit residual     : rms=%.1f tensix-cyc (%.1f ns)  max=%.1f (%.1f ns)\n",
+            rms,
+            rms * ns_per_tensix,
+            rmax,
+            rmax * ns_per_tensix);
+        printf("  => X280 zone at rdcycle X maps to tensix = a*(X - x_base) + b + t_base\n");
+        std::_Exit(0);
+    }
     uint64_t nrelay = dualrelay ? nread : 1;
     if (direct) {
         printf("[boot] idle up, profzone RUNNING, %llu direct drain hart(s)\n", (unsigned long long)ndrain);
@@ -1189,9 +1292,11 @@ int main(int argc, char** argv) {
         printf(
             "[tracy] handler up: %zu cores pre-created, %zu zone names loaded\n", (size_t)num_cores, zone_names.size());
     }
+    uint64_t x280_ts_base = 0;  // shared rebase origin (first RISC marker ts); X280 hart zones rebase identically
     auto tracy_consumer = [&]() {
         Batch b;
-        uint64_t ts_base = 0;       // first device timestamp seen; markers are rebased to it so the device
+        uint64_t& ts_base = x280_ts_base;  // hoisted: the X280-hart push (post-join) rebases by the same origin
+        (void)0;                           // (first device timestamp seen; markers rebased so the device
         bool anchored = false;      // timeline starts at the capture origin (the context anchor's gpuTime=0),
         bool names_loaded = false;  // not ~device-ts (~seconds) into the trace. Durations are unaffected.
         uint64_t cnt = 0;
@@ -1533,6 +1638,91 @@ int main(int argc, char** argv) {
                     total,
                     csv_path.c_str(),
                     (unsigned long long)ms);
+            }
+        }
+        // --hartzones: X280 harts wrote per-drain zone buffers while draining. Read hart0's calibration, fit
+        // the X280 rdcycle -> Tensix map, read each hart's zones, map + rebase to the SAME origin as the RISC
+        // zones, and push them into a per-X280 Tracy context (harts = lanes, distinct color). Text-dump too.
+        // Must run BEFORE tracy_handler.reset() so the contexts still exist.
+        if (do_hartzones) {
+            const uint32_t Nc = pz::kProfzoneCalibN;
+            std::vector<uint64_t> raw((size_t)Nc * 3);
+            drv.read_block(raw.data(), Nc * 3 * sizeof(uint64_t), pz::kProfzoneCalibBase);
+            std::vector<uint64_t> rts(Nc);
+            for (uint32_t i = 0; i < Nc; i++) {
+                rts[i] = raw[i * 3 + 2];
+            }
+            std::sort(rts.begin(), rts.end());
+            uint64_t rt_cut = rts[Nc / 2] + rts[Nc / 2] / 2;
+            uint64_t x_base = raw[0], t_base = raw[1];
+            double sx = 0, st = 0, sxx = 0, sxt = 0;
+            uint32_t nfit = 0;
+            for (uint32_t i = 0; i < Nc; i++) {
+                if (raw[i * 3 + 2] > rt_cut) {
+                    continue;
+                }
+                double x = (double)(raw[i * 3 + 0] - x_base), t = (double)(raw[i * 3 + 1] - t_base);
+                sx += x;
+                st += t;
+                sxx += x * x;
+                sxt += x * t;
+                nfit++;
+            }
+            double a = (sxt * nfit - sx * st) / (sxx * nfit - sx * sx);
+            double bb = (st - a * sx) / nfit;
+            double aiclk_mhz = cluster.get_device_aiclk(device_id);
+            auto map_ts = [&](uint64_t x) -> uint64_t { return (uint64_t)(a * (double)(x - x_base) + bb) + t_base; };
+            CoreCoord l2t = pz::x280_l2cpu_tile(node[0].l2cpu);
+            printf(
+                "\n=== X280 hart zones (--hartzones; a=%.5f, context X280 (%u,%u)) ===\n",
+                a,
+                (uint32_t)l2t.x,
+                (uint32_t)l2t.y);
+            for (uint64_t h = 0; h < nharts; h++) {
+                uint64_t hb = pz::kProfzoneHZoneBase + h * pz::kProfzoneHZoneStride;
+                uint64_t cnt = drv.lim_rd_u64(hb);
+                const char* role = (h < nread) ? "READ" : "RELAY";
+                if (cnt == 0 || cnt > pz::kProfzoneHZoneCap) {
+                    printf(
+                        "  hart%llu (%s): %llu markers (empty/overflow)\n",
+                        (unsigned long long)h,
+                        role,
+                        (unsigned long long)cnt);
+                    continue;
+                }
+                std::vector<uint64_t> mk(cnt * 2);
+                drv.read_block(mk.data(), (uint32_t)(cnt * 16), hb + 16);
+                uint64_t busy_ns = 0;
+                uint32_t nz = 0;
+                for (uint64_t i = 0; i + 1 < cnt; i += 2) {
+                    uint64_t ts0 = map_ts(mk[i * 2 + 0]), ts1 = map_ts(mk[(i + 1) * 2 + 0]);
+                    busy_ns += (uint64_t)((double)(ts1 - ts0) / (aiclk_mhz / 1000.0));
+                    nz++;
+#if defined(TRACY_ENABLE)
+                    if (do_tracy && tracy_handler) {
+                        tt::tt_metal::perf_debug::WorkerZonePacket zp{};
+                        zp.chip_id = (uint32_t)device_id;
+                        zp.is_x280 = true;
+                        zp.color = 0xE67E22u;  // distinct orange for all X280 hart zones
+                        zp.core_noc0_x = (uint32_t)l2t.x;
+                        zp.core_noc0_y = (uint32_t)l2t.y;
+                        zp.risc = (uint32_t)h;  // hart index -> lane within the X280 context
+                        zp.name = (h < nread) ? "X280-READ" : "X280-RELAY";
+                        zp.timestamp = (ts0 >= x280_ts_base) ? ts0 - x280_ts_base : 0;
+                        zp.is_start = true;
+                        tracy_handler->HandleWorkerZone(zp);
+                        zp.timestamp = (ts1 >= x280_ts_base) ? ts1 - x280_ts_base : 0;
+                        zp.is_start = false;
+                        tracy_handler->HandleWorkerZone(zp);
+                    }
+#endif
+                }
+                printf(
+                    "  hart%llu (%s): %u zones  busy=%llu us\n",
+                    (unsigned long long)h,
+                    role,
+                    nz,
+                    (unsigned long long)(busy_ns / 1000));
             }
         }
 #if defined(TRACY_ENABLE)
