@@ -97,8 +97,22 @@ inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
                 rb_cap,
                 (std::uint32_t)tensix_id,
                 (std::uint32_t)tc_id);
-            DPRINT("TESTING MESSAGE AFTER RBFAIL");
-            DPRINT("TESTING MESSAGE AFTER RBFAIL");
+            // Decompose cap: ring bytes (limit-base) / stride vs the reported buf_capacity. If ring/stride ==
+            // num_entries(224) but cap==28, the tile-counter buf_capacity was mis-programmed; if ring/stride ==
+            // 28, the borrowed ring itself is under-allocated (borrow bound the wrong tensor/size).
+            const std::uint32_t rb_base =
+                (std::uint32_t)local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr;
+            const std::uint32_t rb_limit =
+                (std::uint32_t)local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].limit;
+            DPRINT(
+                "RBFAIL2 ring_bytes={} stride={} ring/stride={} base={} limit={} tc_idx={}\n",
+                rb_limit - rb_base,
+                (std::uint32_t)local_dfb_interface_.stride_size,
+                (local_dfb_interface_.stride_size ? (rb_limit - rb_base) / (std::uint32_t)local_dfb_interface_.stride_size
+                                                  : 0),
+                rb_base,
+                rb_limit,
+                (std::uint32_t)local_dfb_interface_.tc_idx);
         }
         ASSERT(rb_cap >= num_entries);
         while (overlay::llk_intf_get_free_space(tensix_id, tc_id) < num_entries);
