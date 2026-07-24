@@ -217,7 +217,7 @@ void validate_sub_device_manager_id(std::optional<SubDeviceManagerId> sub_device
 std::atomic<size_t> Buffer::next_unique_id = 0;
 
 std::ostream& operator<<(std::ostream& os, const ShardSpec& spec) {
-    os << "ShardSpec{";
+    os << "ShardSpec(";
     os << "grid=[";
 
     // Format grid as proper JSON array of ranges
@@ -226,7 +226,7 @@ std::ostream& operator<<(std::ostream& os, const ShardSpec& spec) {
         const auto& range = ranges[i];
         os << "{";
         os << R"("start":{"x":)" << range.start_coord.x << R"(,"y":)" << range.start_coord.y << R"(},)";
-        os << R"("end":{"x":)" << range.end_coord.x << R"(,"y":)" << range.end_coord.y << R"()";
+        os << R"("end":{"x":)" << range.end_coord.x << R"(,"y":)" << range.end_coord.y << R"(})";
         os << "}";
         if (i < ranges.size() - 1) {
             os << ", ";
@@ -243,7 +243,7 @@ std::ostream& operator<<(std::ostream& os, const ShardSpec& spec) {
         case ShardOrientation::COL_MAJOR: os << "ShardOrientation::COL_MAJOR"; break;
     }
 
-    os << "}";
+    os << ")";
     return os;
 }
 
