@@ -19,10 +19,17 @@
 // (older tokens finishing the current slab block, then newer tokens spilling into the next block)
 // is absorbed by the shard layout, so the read stays contiguous.
 //
-// `kv_actual_global` is a per-call scalar common runtime arg (NOT in the program hash). The op's
-// MeshWorkloadFactory::override_runtime_arguments patches it on cache hits, so successive chunks with
-// different prior KV lengths reuse one cached program while the value is always current.
-void kernel_main() {
+// The per-call `kv_actual_global` reaches the reader one of two ways, selected by the `has_metadata`
+// compile-time flag (set by the op from whether a metadata tensor was supplied; both keep the value out
+// of the program hash so one cached program is reused across chunks):
+//   - scalar path: common runtime arg 2 directly (patched on cache hits by override_runtime_arguments).
+//   - metadata path: common arg 2 is the metadata tensor's raw DRAM address; the reader NoC-reads
+//     kv_actual_global from index 1 of the canonical [slot_id, actual_start, actual_end] payload.
+// The body is a template on HasMeta so `if constexpr` truly discards the unused metadata branch (the
+// metadata TensorAccessorArgs offset is made dependent on HasMeta to avoid an out-of-range static_assert
+// on the scalar program).
+template <bool HasMeta>
+static void run_reader() {
     uint32_t argrt = 0;
     uint32_t src_addr = get_arg_val<uint32_t>(argrt++);
     uint32_t cos_addr = get_arg_val<uint32_t>(argrt++);
@@ -37,10 +44,9 @@ void kernel_main() {
     // the SP extent. Both are structural (per cached program / mesh coord), not per-call values.
     const uint32_t my_sp_coord = get_common_arg_val<uint32_t>(0);
     const uint32_t sp_factor = get_common_arg_val<uint32_t>(1);
-    // kv_actual_global (prior valid global KV length in tokens) is the only per-call value. It is a
-    // common runtime arg patched on cache hits by MeshWorkloadFactory::override_runtime_arguments, so
-    // it is never stale and stays out of the program hash.
-    const uint32_t kv_actual_global = get_common_arg_val<uint32_t>(2);
+    // Common arg 2 is the per-call value: kv_actual_global (scalar path) or the metadata tensor's raw
+    // DRAM address (metadata path). Resolved to kv_actual_global below depending on HasMeta.
+    const uint32_t per_call_arg2 = get_common_arg_val<uint32_t>(2);
 
     constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t cos_cb_id = get_compile_time_arg_val(1);
@@ -54,7 +60,8 @@ void kernel_main() {
     constexpr uint32_t sin_Ht = get_compile_time_arg_val(9);
     constexpr uint32_t rotary_Ht = get_compile_time_arg_val(10);
     constexpr uint32_t tile_height = get_compile_time_arg_val(11);
-    constexpr auto input_args = TensorAccessorArgs<12>();
+    // [12]=has_metadata, [13]=metadata CB index. Operand accessors start at <14>.
+    constexpr auto input_args = TensorAccessorArgs<14>();
     constexpr auto cos_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
     constexpr auto trans_mat_args = TensorAccessorArgs<sin_args.next_compile_time_args_offset()>();
@@ -64,6 +71,30 @@ void kernel_main() {
     CircularBuffer cos_cb(cos_cb_id);
     CircularBuffer sin_cb(sin_cb_id);
     CircularBuffer trans_mat_cb(trans_mat_cb_id);
+
+    // Resolve kv_actual_global: scalar path takes common arg 2 directly; metadata path NoC-reads index 1
+    // of the metadata tensor (address = common arg 2). Only 8 bytes (indices 0,1) are needed -- safe for
+    // the runner's 12B [slot, start, end] payload. The accessor offset is gated on HasMeta so the scalar
+    // program never instantiates this (would be an out-of-range compile-time arg).
+    uint32_t kv_actual_global;
+    if constexpr (HasMeta) {
+        // Per-element-tensor path: `kv_actual_global` is its OWN 1-element uint32 DRAM tensor (no packed
+        // metadata layout). Read element [0] directly (4 bytes). The tensor's raw DRAM address is common
+        // arg 2. Accessor offset gated on HasMeta so the scalar program never instantiates it.
+        constexpr uint32_t cb_id_meta = get_compile_time_arg_val(13);
+        constexpr uint32_t kMetaArgsOffset = HasMeta ? trans_mat_args.next_compile_time_args_offset() : 0;
+        constexpr auto meta_args = TensorAccessorArgs<kMetaArgsOffset>();
+        CircularBuffer cb_meta(cb_id_meta);
+        const auto s_meta = TensorAccessor(meta_args, per_call_arg2);
+        cb_meta.reserve_back(1);
+        noc.async_read(s_meta, cb_meta, 4, {.page_id = 0}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        CoreLocalMem<volatile uint32_t> meta(cb_meta.get_write_ptr());
+        kv_actual_global = meta[0];  // the 1-element tensor holds kv_actual_global directly
+        cb_meta.push_back(1);
+    } else {
+        kv_actual_global = per_call_arg2;
+    }
 
     // Convert the per-call kv_actual_global (tokens) to tiles.
     const uint32_t kv_actual_global_t = kv_actual_global / tile_height;
@@ -201,4 +232,9 @@ void kernel_main() {
             }
         }
     }
+}
+
+void kernel_main() {
+    constexpr bool has_metadata = get_compile_time_arg_val(12);
+    run_reader<has_metadata>();
 }
