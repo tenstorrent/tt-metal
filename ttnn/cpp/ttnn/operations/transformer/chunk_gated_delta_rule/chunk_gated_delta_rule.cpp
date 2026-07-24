@@ -503,6 +503,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     }
 
     const auto out_mem = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
+    // Keep prep outputs near the scan consumers; the private override preserves a DRAM A/B control.
+    const auto prep_mem =
+        std::getenv("QWEN_KDA_PREP_DRAM") == nullptr ? ttnn::L1_MEMORY_CONFIG : ttnn::DRAM_MEMORY_CONFIG;
     const auto kernel_cfg = init_device_compute_kernel_config(
         dev->arch(),
         compute_kernel_config,
@@ -531,7 +534,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
         ones_c,
         masks_c,
         C,
-        out_mem,
+        prep_mem,
         kernel_cfg,
         flat_v,
         H,

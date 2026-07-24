@@ -10,13 +10,15 @@ keeps failed experiments visible so they are not repeated unchanged.
 - Selected storage policy: mask `0x26`; `kd`, `q_decay`, and `dl` cross the
   prep-to-scan boundary in BF16. Arithmetic, `v_beta`, `k_dec_t`, `intra`,
   `t_inv`, recurrent state, and public outputs remain FP32.
-- T=640 wall: `659.024 -> 643.623 us` (`-2.34%`).
-- T=5,120 wall: `3681.529 -> 3584.949 us` (`-2.62%`).
-- T=5,120 recurrence: `1023.411 -> 920.831 us` (`-10.02%`).
-- T=5,120 selected block times: projection `524.619 us`, convolution
-  `601.621 us`, recurrence `920.831 us`, and output/CCL `1067.788 us`.
-- T=5,120 scan: `606.168 us`; prep: `314.663 us`.
-- Estimated T=5,120 compute utilization: `12.40%`.
+- Prepared tensors now remain interleaved in distributed L1 between prep and
+  scan. `QWEN_KDA_PREP_DRAM=1` preserves the measured DRAM control.
+- T=640 wall: `643.623 -> 622.564 us` (`-3.27%`).
+- T=5,120 wall: `3681.529 -> 3474.029 us` (`-5.64%` versus the matched FP32
+  DRAM control).
+- T=5,120 recurrence: `1023.411 -> 809.704 us` (`-20.88%` versus control).
+- T=5,120 selected block times: projection `524.798 us`, convolution
+  `601.588 us`, recurrence `809.704 us`, and output/CCL `1069.975 us`.
+- Estimated T=5,120 compute utilization: `12.80%`.
 - Estimated T=5,120 CCL utilization: `39.79%` against the 40% aspiration.
 - Final correctness gate: 27/27 tests passed; focused TP output/recurrent
   state/convolution PCC was `0.999964/0.999903/0.999997`.
@@ -26,8 +28,8 @@ The complete evidence is in `bringup_log.md`, `ROOFLINE.md`, and
 
 ## Current ranked queue
 
-1. Direct prep-to-scan producer/consumer pipeline.
-2. Remove duplicated scan reads with static multicast.
+1. Remove duplicated scan reads with static multicast.
+2. Fuse prep and scan into a bounded producer/consumer pipeline.
 3. Distributed-L1 affine prefix scan.
 
 The affine-prefix experiment proved the algebra and FP32 numerics, but rejected
@@ -74,6 +76,12 @@ intermediate in DRAM and reading it back.
   starve scan.
 - First proof: stream one prepared tensor for a bounded chunk window while the
   remaining tensors retain the current DRAM path.
+- Experiment result, 2026-07-24: the lower-risk storage form of this idea won.
+  Keeping every prepared tensor in interleaved distributed L1 across the two
+  existing programs reduced T=640 wall by `3.27%`, T=5,120 wall by `5.64%`,
+  and T=5,120 recurrence by `20.88%`. It passed the full 27-test gate.
+- Remaining path: fuse the programs only if a bounded rolling window can save
+  additional launch/synchronization time beyond the retained L1 endpoint.
 
 ### 3. Remove duplicated scan reads per head
 
@@ -94,13 +102,12 @@ dependency-ordered NOC barrier batching and selective double buffering.
 Potential reward and implementation order are different. The recommended
 experimental sequence is:
 
-1. Direct prep-to-scan streaming prototype for one prepared tensor.
-2. Full direct prep-to-scan pipeline if the prototype wins.
-3. Static multicast of one common scan input.
-4. Full common-input multicast.
-5. Dependency-ordered reader batching.
-6. Selective double buffering.
-7. Distributed-L1 affine-prefix device prototype only if its storage and
+1. Static multicast of one common scan input.
+2. Full common-input multicast.
+3. Dependency-ordered reader batching.
+4. Selective double buffering.
+5. Bounded prep-to-scan producer/consumer fusion.
+6. Distributed-L1 affine-prefix device prototype only if its storage and
    level-traffic model beats the measured serial scan.
 
 For local scan changes, retain an experiment only when:

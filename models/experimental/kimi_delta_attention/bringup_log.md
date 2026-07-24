@@ -1064,3 +1064,48 @@
   but is deferred until a storage and level-traffic design demonstrates a
   lower bound below the serial scan. Direct prep-to-scan streaming and static
   common-input multicast now rank above it.
+
+
+### 2026-07-24 17:36:05 UTC — Retain prepared tensors in distributed L1
+
+- Hypothesis: prep/scan boundary traffic is a material recurrence bottleneck,
+  and all seven prepared tensors fit in aggregate interleaved L1 even at
+  T=5,120. Keeping the existing two-program boundary isolates this traffic
+  effect from producer/consumer fusion.
+- Implementation: `chunk_kda` now gives prep an interleaved L1 memory config;
+  scan and public outputs retain their requested memory config. The private
+  `QWEN_KDA_PREP_DRAM=1` override preserves a DRAM A/B control.
+- Host build: `./build_metal.sh --build-tests --build-type Release`
+  -> exit 0; 51 targets installed.
+- Direct correctness:
+  `QWEN_KDA_PREP_L1=1 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_chunk_kda.py -q -s`
+  -> `SAFE_PYTEST_RESULT: PASS`, 5/5 in 14.59 s. Target-shape output/state PCC
+  is `0.999993/0.999995`.
+- T=640 DRAM control CSV:
+  `generated/profiler/reports/2026_07_24_16_17_28/ops_perf_results_2026_07_24_16_17_28.csv`
+  (SHA-256 `09d6eebffdd8a38346e3c35bb65d4061f05d9a438aebc5d3052df42979adb873`).
+- T=640 L1 command:
+  `QWEN_KDA_PREP_L1=1 PERF_TRACE=1 PERF_SEQ=640 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s`
+  -> PASS. CSV `generated/profiler/reports/2026_07_24_17_31_15/ops_perf_results_2026_07_24_17_31_15.csv`
+  (SHA-256 `299f6b2df589c3e8c0fb1085512740e9e75db74be75edf373afb469edbe1afad`).
+  Median wall improves `643.623 -> 622.564 us` (`-21.059 us`, `-3.27%`);
+  recurrence improves `167.623 -> 144.945 us` (`-13.53%`).
+- T=5,120 L1 command:
+  `QWEN_KDA_PREP_L1=1 PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s`
+  -> PASS. CSV `generated/profiler/reports/2026_07_24_17_33_14/ops_perf_results_2026_07_24_17_33_14.csv`
+  (SHA-256 `904542228cf8cd9a67018a01156b54570f8bae24a96d3d7f07c1ae2a9f2ead6a`).
+  Relative to the matched FP32 DRAM control, median wall improves
+  `3681.529 -> 3474.029 us` (`-207.500 us`, `-5.64%`) and recurrence improves
+  `1023.411 -> 809.704 us` (`-20.88%`).
+- Attribution: T=5,120 projection is `524.704 -> 524.798 us`, convolution is
+  `602.371 -> 601.588 us`, and output/CCL is `1069.479 -> 1069.975 us`.
+  Their stability localizes the gain to recurrence and rejects a run-wide
+  clock or scheduling shift as the explanation.
+- TP=8 validation:
+  `scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_tp_weights.py::test_tp_layer_pcc -q -s`
+  -> PASS; output/recurrent/convolution PCC `0.999964/0.999903/0.999997`.
+- Final gate: the established six-file `scripts/run_safe_pytest.sh --run-all`
+  suite -> `SAFE_PYTEST_RESULT: PASS`, 27/27 in 27.23 s.
+- Verdict: accept and make L1 prep residency the default. The capacity
+  hypothesis is confirmed through T=5,120; no numerical regression was
+  observed. Static multicast of V-independent scan inputs is next.
