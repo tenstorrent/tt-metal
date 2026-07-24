@@ -177,9 +177,9 @@ same patterns recur across factories.
 
 - Numbers/effects behind sections A–B are grounded in
   `tech_reports/Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md` (>92% DRAM BW achieved on
-  Wormhole). Use `/perf-roofline-dm` to turn a proposed transfer scheme into a predicted target and
+  Wormhole). Use `/perf-ceiling-dm` to turn a proposed transfer scheme into a predicted target and
   `/perf-measure` to measure the real number on device.
-- This checklist is the source of Mode-A candidate levers for `/perf-roofline-dm` — walk it when
+- This checklist is the source of Mode-A candidate levers for `/perf-ceiling-dm` — walk it when
   enumerating competing algorithm ideas, then estimate each on your own transfers.
 - Some ops referenced by earlier drafts (`interleaved_to_sharded`, `sharded_to_interleaved`,
   `reshard`) are absent on this branch (nuked for agent eval); the surviving `untilize` / `tilize` /
