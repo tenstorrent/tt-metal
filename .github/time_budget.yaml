@@ -321,7 +321,8 @@ models:
   e2e_tier3:
     wh_llmbox_perf: 64
     wh_n150: 42
-    wh_n300: 15
+    # wh_n300: Qwen2-7B TTTv2 e2e leg (15, cold 7B cache build) + Qwen2.5-7B (5) = 20
+    wh_n300: 20
     bh_p150: 7
     bh_p300: 8
     bh_quietbox_2: 30
