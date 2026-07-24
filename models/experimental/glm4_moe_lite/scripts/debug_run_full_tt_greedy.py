@@ -18,6 +18,24 @@ from models.experimental.glm4_moe_lite.tt.layer0_tt import _alloc_contiguous_pag
 from models.experimental.glm4_moe_lite.tt.model_tt import Glm4MoeLiteDenseOnlyTT
 from models.experimental.glm4_moe_lite.tt.weights import find_missing_shards, resolve_best_effort_snapshot_dir
 
+# Enable the validated production perf flags by default for this debug harness,
+# including BF8 dense weights (a measured ~7% bs=1 decode win, coherence-verified).
+# `setdefault` means an explicit value in the environment still overrides.
+for _default_key, _default_val in {
+    "GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES": "1",
+    "GLM4_MOE_LITE_FUSE_QKV_A": "1",
+    "GLM4_MOE_LITE_FUSE_SHARED_GATE_UP": "1",
+    "GLM4_MOE_LITE_BATCHED_PREFILL": "1",
+    "GLM4_MOE_LITE_DECODE_L1_ACT": "1",
+    "GLM4_MOE_LITE_EP_L1": "1",
+    "GLM4_MOE_LITE_CCL_NUM_LINKS": "4",
+    "GLM4_MOE_LITE_CCL_TOPOLOGY": "ring",
+    "GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE": "1",
+    "GLM4_MOE_LITE_SKIP_TYPECAST": "1",
+    "GLM4_MOE_LITE_DENSE_TT_DTYPE": "bf8",
+}.items():
+    os.environ.setdefault(_default_key, _default_val)
+
 _profiler_read_interval = int(os.environ.get("GLM4_MOE_LITE_PROFILER_READ_INTERVAL", "0").strip() or "0")
 
 
