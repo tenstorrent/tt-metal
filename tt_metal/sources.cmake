@@ -71,6 +71,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp
+    api/tt-metalium/experimental/metal2_host_api/tensor_spec_relaxation.hpp
     api/tt-metalium/experimental/metal2_host_api/utility/group.hpp
     api/tt-metalium/experimental/metal2_host_api/utility/table.hpp
     api/tt-metalium/experimental/mock_device/mock_allocator.hpp
