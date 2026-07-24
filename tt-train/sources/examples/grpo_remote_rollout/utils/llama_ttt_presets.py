@@ -9,6 +9,17 @@ from __future__ import annotations
 
 from typing import Any, Sequence, Tuple
 
+from transformers import AutoTokenizer
+
+from models.tt_transformers.tt.model_config import (
+    DecodersPrecision,
+    MathFidelitySetting,
+    ModelOptimizations,
+    OpGroup,
+    PrecisionSetting,
+    TensorGroup,
+)
+
 
 # Stop-token strings (stable across Llama-3 base/instruct variants; the IDs are
 # not). Resolved to IDs by :func:`llama_stop_and_pad`.
@@ -22,15 +33,6 @@ LLAMA_STOP_TOKEN_STRS: tuple[str, ...] = (
 def bf16_attn_bfp8_mlp_optimizations(num_decoders: int, model_name: str) -> Any:
     """Llama-3 single-chip preset: bf16 attention (Q/K/V/O + KV cache) at HIFI4,
     BFP8 MLP (FF1/FF2/FF3) at HIFI2_FP16. Returns a ``DecodersPrecision``."""
-    from models.tt_transformers.tt.model_config import (
-        DecodersPrecision,
-        MathFidelitySetting,
-        ModelOptimizations,
-        OpGroup,
-        PrecisionSetting,
-        TensorGroup,
-    )
-
     conf = ModelOptimizations(
         {
             "TensorPrecision": {
@@ -65,8 +67,6 @@ def llama_stop_and_pad(model_id: str) -> Tuple[Sequence[int], int]:
     Call with the same ``model_id`` as the ttml side so the IDs stay consistent
     with the peer tokenizer.
     """
-    from transformers import AutoTokenizer
-
     tok = AutoTokenizer.from_pretrained(model_id)
     ids: set[int] = set()
     if tok.eos_token_id is not None:

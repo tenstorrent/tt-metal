@@ -15,6 +15,7 @@ import struct
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
+import torch
 import ttnn
 from ttnn._ttnn.multi_device import recv_bytes as _mpi_recv_bytes
 from ttnn._ttnn.multi_device import send_bytes as _mpi_send_bytes
@@ -147,16 +148,12 @@ def _replicate_from_host(host_tensor, device: "ttnn.MeshDevice") -> "ttnn.Tensor
 
 
 def _torch_save_bytes(t) -> bytes:
-    import torch  # noqa: F401
-
     buf = io.BytesIO()
     torch.save(t, buf)
     return buf.getvalue()
 
 
 def _torch_load_bytes(blob: bytes):
-    import torch
-
     return torch.load(io.BytesIO(blob), weights_only=True)
 
 
