@@ -20,11 +20,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
+import ml_dtypes
 import numpy as np
+import torch
 import ttnn
 
 import ttml
 from huggingface_hub import snapshot_download
+from safetensors.numpy import load_file
+from safetensors.torch import save_file
 from transformers import AutoTokenizer
 from ttml.common.config import TransformerConfig
 from ttml.common.utils import no_grad, round_up_to_tile
@@ -66,9 +70,6 @@ def _deallocate_tensors(tensors: Any) -> None:
 
 
 def _load_checkpoint(model: Any, checkpoint_path: str, dp_mapper: Any = None) -> None:
-    from safetensors.numpy import load_file
-    import ml_dtypes
-
     checkpoint = load_file(checkpoint_path)
     parameters = model.parameters()
     loaded, missing = 0, []
@@ -103,9 +104,6 @@ def _ensure_safetensors_dir(model_dir: str) -> str:
     bin_files = sorted(p.glob("pytorch_model*.bin"))
     if not bin_files:
         raise FileNotFoundError(f"Neither *.safetensors nor pytorch_model*.bin found in {model_dir}")
-
-    import torch
-    from safetensors.torch import save_file
 
     state_dict: dict = {}
     for bin_file in bin_files:

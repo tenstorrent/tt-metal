@@ -16,8 +16,13 @@ import os
 import time
 from typing import Any, Callable, List, Optional, Sequence
 
+import torch
 import ttnn
 from models.common.sampling import SamplingParams
+from models.tt_transformers.tt.common import PagedAttentionConfig
+from models.tt_transformers.tt.generator import Generator, create_submeshes
+from models.tt_transformers.tt.model import Transformer
+from models.tt_transformers.tt.model_config import ModelArgs
 
 OptimizationsFn = Callable[[int, str], Any]
 
@@ -44,13 +49,6 @@ class TttGenerationWorker:
         min_num_blocks: int = 1024,
         dummy_weights: bool = True,
     ) -> None:
-        import torch
-
-        from models.tt_transformers.tt.common import PagedAttentionConfig
-        from models.tt_transformers.tt.generator import Generator, create_submeshes
-        from models.tt_transformers.tt.model import Transformer
-        from models.tt_transformers.tt.model_config import ModelArgs
-
         self.parent_mesh: Any = mesh_device
         self._dtype: Any = ttnn.bfloat16
         self._stop_token_ids: frozenset[int] = frozenset(int(t) for t in stop_token_ids)
@@ -147,8 +145,6 @@ class TttGenerationWorker:
     ) -> List[List[int]]:
         """Prefill + decode a token-ID prompt batch, data-parallel across submeshes. The
         batch is padded to the global size; temperature/top_p/seed are ignored (baked in)."""
-        import torch
-
         del temperature, top_p, seed  # baked into self._sampling_params
 
         if max_new_tokens == 0:

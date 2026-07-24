@@ -5,6 +5,7 @@
 import ttnn
 import ttml
 
+from ttml.models import WeightTyingType
 from ttml.models.llama.gqattn import GroupedQueryAttention
 from ttml.models.llama.transformer import LlamaBlock
 from ttml.models.llama import Llama
@@ -132,8 +133,6 @@ class LlamaCompositeKV(Llama):
         (no DDP/TP shard mapper). The grpo single-device config satisfies this;
         DDP/TP would need a host-side per-parameter concat first.
         """
-        from ttml.models import WeightTyingType
-
         cfg = self.config
         assert cfg.weight_tying == WeightTyingType.Enabled, (
             "weights_ref_hf_dict requires weight_tying=Enabled (Llama-3.2-1B/-Instruct "
