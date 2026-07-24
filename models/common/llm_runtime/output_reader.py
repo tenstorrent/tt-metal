@@ -29,8 +29,10 @@ class PendingRead:
 class OutputReader:
     """Own pending output-read destinations/events until completion or drain.
 
-    Blocking versus asynchronous behavior is selected on each call. There is
-    intentionally no separate static configuration object.
+    `DecodeRuntime.consume` uses `read` for blocking output. vLLM's
+    asynchronous path uses `submit`, returns the retained host value and
+    events to its scheduler, and later calls `complete`. Executor cleanup
+    calls `drain` to retire anything the scheduler did not complete.
     """
 
     def __init__(self, mesh_device: Any):
@@ -41,6 +43,8 @@ class OutputReader:
         self._owner = object()
         self._lock = threading.Lock()
 
+    # Public API
+
     def read(self, value: Any, *, blocking: bool = True) -> Any | PendingRead:
         """Read a nested output payload to host.
 
@@ -50,6 +54,56 @@ class OutputReader:
         """
 
         return self._read(value, blocking=blocking)
+
+    def submit(self, value: Any) -> PendingRead:
+        """Submit an asynchronous read and retain its resources."""
+
+        result = self._read(value, blocking=False)
+        assert isinstance(result, PendingRead)
+        return result
+
+    def read_synchronized(self, value: Any) -> Any:
+        """Submit nested host copies and synchronize the device once."""
+
+        retained_destinations: list[Any] = []
+        try:
+            host_value, submitted = _read_to_host(
+                value,
+                blocking=False,
+                retained_destinations=retained_destinations,
+            )
+            if submitted:
+                ttnn.synchronize_device(self.mesh_device)
+        except BaseException:
+            _synchronize_after_failed_submission(self.mesh_device)
+            raise
+        return host_value
+
+    def complete(self, pending_or_value: PendingRead | Any) -> Any:
+        """Synchronize and retire a pending read, returning its host payload.
+
+        Passing the exact unwrapped ``PendingRead.value`` supports compatibility
+        facades that return ``(host_value, events)`` to external schedulers.
+        Completion is idempotent.
+        """
+
+        return self._complete_pending(pending_or_value)
+
+    def drain(self) -> None:
+        """Complete every pending read; repeated drains are no-ops."""
+
+        with self._lock:
+            pending_reads = tuple(self._pending.values())
+        failures = []
+        for pending in pending_reads:
+            try:
+                self._complete_pending(pending)
+            except BaseException as error:
+                failures.append(error)
+        if failures:
+            raise RuntimeError(f"Failed to drain {len(failures)} pending output read(s)") from failures[0]
+
+    # Private implementation
 
     def _read(self, value: Any, *, blocking: bool) -> Any | PendingRead:
         retained_destinations: list[Any] = []
@@ -87,40 +141,6 @@ class OutputReader:
             self._pending_by_value_id[id(host_value)] = sequence
         return pending
 
-    def submit(self, value: Any) -> PendingRead:
-        """Submit an asynchronous read and retain its resources."""
-
-        result = self._read(value, blocking=False)
-        assert isinstance(result, PendingRead)
-        return result
-
-    def read_synchronized(self, value: Any) -> Any:
-        """Submit nested host copies and synchronize the device once."""
-
-        retained_destinations: list[Any] = []
-        try:
-            host_value, submitted = _read_to_host(
-                value,
-                blocking=False,
-                retained_destinations=retained_destinations,
-            )
-            if submitted:
-                ttnn.synchronize_device(self.mesh_device)
-        except BaseException:
-            _synchronize_after_failed_submission(self.mesh_device)
-            raise
-        return host_value
-
-    def complete(self, pending_or_value: PendingRead | Any) -> Any:
-        """Synchronize and retire a pending read, returning its host payload.
-
-        Passing the exact unwrapped ``PendingRead.value`` supports compatibility
-        facades that return ``(host_value, events)`` to external schedulers.
-        Completion is idempotent.
-        """
-
-        return self._complete_pending(pending_or_value)
-
     def _complete_pending(self, pending_or_value: PendingRead | Any) -> Any:
         if isinstance(pending_or_value, PendingRead):
             candidate = pending_or_value
@@ -157,20 +177,6 @@ class OutputReader:
                 self._pending_by_value_id.pop(id(current.value), None)
                 object.__setattr__(current, "_completed", True)
         return pending.value
-
-    def drain(self) -> None:
-        """Complete every pending read; repeated drains are no-ops."""
-
-        with self._lock:
-            pending_reads = tuple(self._pending.values())
-        failures = []
-        for pending in pending_reads:
-            try:
-                self._complete_pending(pending)
-            except BaseException as error:
-                failures.append(error)
-        if failures:
-            raise RuntimeError(f"Failed to drain {len(failures)} pending output read(s)") from failures[0]
 
 
 def _read_to_host(

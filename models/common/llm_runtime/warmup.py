@@ -30,7 +30,13 @@ class WarmupPlan:
 
 
 class WarmupCoordinator:
-    """Own warmup coverage and the compile-all-before-capture barrier."""
+    """Compile configured coverage and activate traces at one shared barrier.
+
+    ``Llama3Executor.warmup_model_prefill`` and ``warmup_model_decode`` call
+    `warmup_prefill` and `warmup_decode` in either order. Each
+    method compiles its required eager programs and registers trace plans.
+    Capture begins only after both configured operation sets are complete.
+    """
 
     def __init__(
         self,
@@ -64,8 +70,12 @@ class WarmupCoordinator:
         self._captured = False
         self._prefill_trace_postprocess_primed = False
 
+    # Public API
+
     @property
     def already_warmed_up_prefill(self) -> bool:
+        """Whether all configured prefill programs and traces are ready."""
+
         required = set(self._plan(can_sample_on_device=self.device_sampling_enabled).prefill)
         if not required.issubset(self._eager):
             return False
@@ -76,49 +86,6 @@ class WarmupCoordinator:
             return True
         return required.issubset(self._trace_registered) and self._captured
 
-    def _plan(self, *, can_sample_on_device: bool) -> WarmupPlan:
-        sampling_paths = ["logits"]
-        if can_sample_on_device:
-            sampling_paths.append("topk")
-        sampling_config = getattr(getattr(self.model, "sampling", None), "config", None)
-        allow_argmax = bool(getattr(sampling_config, "allow_force_argmax", False))
-        prefill = []
-        max_batch_size = int(self.model.config.max_batch_size)
-        for sequence_length in self.prefill_sequence_lengths:
-            batches = self.config.prefill_batch_sizes if sequence_length == 128 else (1,)
-            for batch_size in batches:
-                if batch_size <= max_batch_size:
-                    batch_sampling_paths = sampling_paths + (
-                        ["argmax"] if can_sample_on_device and allow_argmax and batch_size == 1 else []
-                    )
-                    prefill.extend(
-                        WarmupCase("prefill", batch_size, sequence_length, sampling_path)
-                        for sampling_path in batch_sampling_paths
-                    )
-            cached_prompt_length = int(self.page_table_layout.block_size) + sequence_length
-            if cached_prompt_length <= (
-                int(self.page_table_layout.raw_capacity_width) * int(self.page_table_layout.block_size)
-            ):
-                prefill.extend(
-                    WarmupCase(
-                        "prefill",
-                        1,
-                        sequence_length,
-                        sampling_path,
-                        cached_tokens=int(self.page_table_layout.block_size),
-                    )
-                    for sampling_path in sampling_paths + (["argmax"] if can_sample_on_device and allow_argmax else [])
-                )
-
-        decode_paths = ["logits"]
-        if can_sample_on_device:
-            if allow_argmax:
-                decode_paths.append("argmax")
-            if not allow_argmax or self.config.include_decode_top_k:
-                decode_paths.append("topk")
-        decode = tuple(WarmupCase("decode", max_batch_size, None, sampling_path) for sampling_path in decode_paths)
-        return WarmupPlan(tuple(prefill), decode)
-
     def warmup_prefill(
         self,
         *,
@@ -127,6 +94,8 @@ class WarmupCoordinator:
         can_sample_on_device: bool,
         **_: Any,
     ) -> None:
+        """Compile prefill coverage and capture once decode coverage is ready."""
+
         self._validate_hints("prefill", enable_trace, can_sample_on_device)
         self._trace_decisions["prefill"] = bool(enable_trace)
         if (
@@ -200,6 +169,8 @@ class WarmupCoordinator:
         can_sample_on_device: bool,
         **_: Any,
     ) -> None:
+        """Compile decode coverage and capture once prefill coverage is ready."""
+
         self._validate_hints("decode", enable_trace, can_sample_on_device)
         self._trace_decisions["decode"] = bool(enable_trace)
         self._validate_bound_cache(kv_cache)
@@ -234,6 +205,51 @@ class WarmupCoordinator:
                     logger.info("Compiled on-device sampling")
             destination.add(case)
         self._maybe_capture()
+
+    # Private implementation
+
+    def _plan(self, *, can_sample_on_device: bool) -> WarmupPlan:
+        sampling_paths = ["logits"]
+        if can_sample_on_device:
+            sampling_paths.append("topk")
+        sampling_config = getattr(getattr(self.model, "sampling", None), "config", None)
+        allow_argmax = bool(getattr(sampling_config, "allow_force_argmax", False))
+        prefill = []
+        max_batch_size = int(self.model.config.max_batch_size)
+        for sequence_length in self.prefill_sequence_lengths:
+            batches = self.config.prefill_batch_sizes if sequence_length == 128 else (1,)
+            for batch_size in batches:
+                if batch_size <= max_batch_size:
+                    batch_sampling_paths = sampling_paths + (
+                        ["argmax"] if can_sample_on_device and allow_argmax and batch_size == 1 else []
+                    )
+                    prefill.extend(
+                        WarmupCase("prefill", batch_size, sequence_length, sampling_path)
+                        for sampling_path in batch_sampling_paths
+                    )
+            cached_prompt_length = int(self.page_table_layout.block_size) + sequence_length
+            if cached_prompt_length <= (
+                int(self.page_table_layout.raw_capacity_width) * int(self.page_table_layout.block_size)
+            ):
+                prefill.extend(
+                    WarmupCase(
+                        "prefill",
+                        1,
+                        sequence_length,
+                        sampling_path,
+                        cached_tokens=int(self.page_table_layout.block_size),
+                    )
+                    for sampling_path in sampling_paths + (["argmax"] if can_sample_on_device and allow_argmax else [])
+                )
+
+        decode_paths = ["logits"]
+        if can_sample_on_device:
+            if allow_argmax:
+                decode_paths.append("argmax")
+            if not allow_argmax or self.config.include_decode_top_k:
+                decode_paths.append("topk")
+        decode = tuple(WarmupCase("decode", max_batch_size, None, sampling_path) for sampling_path in decode_paths)
+        return WarmupPlan(tuple(prefill), decode)
 
     def _maybe_capture(self) -> None:
         if self.trace_compiler is None or self._captured:

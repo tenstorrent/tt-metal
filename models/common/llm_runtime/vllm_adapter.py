@@ -28,6 +28,13 @@ _IGNORED_VLLM_KWARGS = frozenset(
 class VLLMAdapter:
     """Convert vLLM-facing calls into the configured runtime call surface.
 
+    `Llama3Generator` calls `normalize_prefill` or
+    `normalize_decode` before choosing an eager or traced execution
+    target. The normalized dictionary contains typed host tensors and an
+    explicit Boolean trace choice. During vLLM initialization,
+    `resolve_legacy_kv_cache_config` validates the external cache shape
+    and returns the one allowed capacity-resolved runtime configuration.
+
     The adapter owns no TT tensors or model/runtime resources. Model-specific
     construction supplies the already-derived KV shape and dtype expectations.
     """
@@ -78,6 +85,8 @@ class VLLMAdapter:
                 "PagedKVCacheConfig.dtype does not match the model-owned KV cache dtype: "
                 f"{paged_kv_cache_config.dtype!r} != {uniform_model_dtype!r}"
             )
+
+    # Public API
 
     def normalize_prefill(self, args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> dict[str, Any]:
         """Normalize legacy prefill (tokens, page_table) calls."""
@@ -154,6 +163,8 @@ class VLLMAdapter:
         if not dataclasses.is_dataclass(config):
             raise TypeError("PagedKVCacheConfig must be a dataclass for immutable capacity resolution")
         return dataclasses.replace(config, num_blocks=num_blocks)
+
+    # Private implementation
 
     @staticmethod
     def _drop_ignored_kwargs(kwargs: dict[str, Any]) -> None:

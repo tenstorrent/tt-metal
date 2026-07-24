@@ -25,13 +25,6 @@ class PagedKVCacheContext:
     per_layer_dtypes: tuple[ttnn.DataType, ...]
 
 
-@dataclass(frozen=True)
-class _LayerKVSpec:
-    local_kv_heads: int
-    head_dim: int
-    dtype: ttnn.DataType
-
-
 def torch_dtype_for_ttnn(dtype: ttnn.DataType) -> torch.dtype:
     """Return the documented torch storage/request surrogate for a TT dtype."""
 
@@ -54,6 +47,12 @@ def torch_dtype_for_ttnn(dtype: ttnn.DataType) -> torch.dtype:
 class PagedKVCacheManager:
     """Own one model-bound paged KV-cache allocation from configure to release.
 
+    ``Llama3Executor`` constructs the manager from model-owned layer metadata.
+    vLLM may resolve the final block count once through `configure`, then
+    `allocate` binds the physical tensors to the model. Program
+    compilation borrows `bound_context`; request execution may present
+    only the exact handle returned by `allocate`.
+
     The returned cache is a borrowed compatibility handle. The manager remains
     the only owner allowed to replace or deallocate its physical tensors.
     """
@@ -70,6 +69,8 @@ class PagedKVCacheManager:
         self._bound_context: PagedKVCacheContext | None = None
         self._owned_tensors: tuple[Any, ...] = ()
         self._release_in_progress = False
+
+    # Public API
 
     @property
     def config(self) -> PagedKVCacheConfig:
@@ -238,6 +239,8 @@ class PagedKVCacheManager:
         return cache
 
     def validate_borrowed_handle(self, cache: Any) -> None:
+        """Require the exact borrowed handle and unchanged tensor identities."""
+
         if self._state != "bound" or self._bound_cache is None:
             raise RuntimeError("Paged KV cache is not allocated and bound")
         if cache is not self._bound_cache:
@@ -270,6 +273,8 @@ class PagedKVCacheManager:
         self._bound_context = None
         self._release_in_progress = False
         self._state = "released"
+
+    # Private implementation
 
     def _deallocate_owned_tensors(self, *, reverse: bool = False) -> list[BaseException]:
         failures = []
@@ -305,6 +310,13 @@ class PagedKVCacheManager:
             raise ValueError(
                 f"Configured KV dtype {config.dtype!r} does not match model-owned dtype {model_dtypes[0]!r}"
             )
+
+
+@dataclass(frozen=True)
+class _LayerKVSpec:
+    local_kv_heads: int
+    head_dim: int
+    dtype: ttnn.DataType
 
 
 def _model_contract(model: Any):

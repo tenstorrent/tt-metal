@@ -77,7 +77,14 @@ class CompiledProgram:
 
 
 class ProgramCompiler:
-    """Own the sole compiled-program registry for one Llama executor lane."""
+    """Compile and retain the eager program set for one execution lane.
+
+    ``EagerExecutor.compile_*`` derives an operation signature and calls
+    `compile`. Warmup registers the complete program set before
+    ``TraceCompiler`` closes the compile gate. Forward execution then uses
+    `require_compiled` to reject unseen signatures after trace
+    activation. Trace artifacts remain in the separate trace registry.
+    """
 
     def __init__(self, mesh_device: Any, bound_cache_context: Callable[[], Any]):
         self.mesh_device = mesh_device
@@ -88,6 +95,8 @@ class ProgramCompiler:
         self._trace_capture_in_progress = False
         self._trace_active = False
         self._released = False
+
+    # Public API
 
     @property
     def trace_capture_in_progress(self) -> bool:
@@ -102,6 +111,8 @@ class ProgramCompiler:
         return len(self._compile_orphans)
 
     def key_for(self, signature: Any) -> ProgramKey:
+        """Return the stable program key for one operation signature."""
+
         material = _canonical_value(_signature_key_material(signature))
         key = self._program_keys.get(material)
         if key is None:
@@ -170,6 +181,8 @@ class ProgramCompiler:
         return program
 
     def require_compiled(self, key: ProgramKey, signature: Any | None = None) -> CompiledProgram:
+        """Return registered program metadata or reject an unseen signature."""
+
         self._ensure_live()
         program = self._programs.get(key)
         if program is None:
@@ -196,6 +209,8 @@ class ProgramCompiler:
         self._trace_active = value
 
     def cleanup(self) -> None:
+        """Release retryable compile outputs and terminalize the registry."""
+
         if self._released:
             return
         failures = release_orphans(self._compile_orphans)
@@ -208,6 +223,8 @@ class ProgramCompiler:
         self._trace_active = False
         self._released = True
 
+    # Private implementation
+
     def _release_or_retain_compile_output(self, output: Any) -> list[BaseException]:
         orphan = TensorResourceOrphan(output)
         failures = best_effort_deallocate_owned_tensors(output, orphan.deallocated_tensor_ids)
@@ -218,6 +235,35 @@ class ProgramCompiler:
     def _ensure_live(self) -> None:
         if self._released:
             raise RuntimeError("ProgramCompiler has been released")
+
+
+# Public helpers
+
+
+def signature_digest(domain: str, schema_version: int, signature: Any) -> str:
+    """Return a stable SHA-256 digest for explicit signature key material."""
+
+    payload = (
+        ("domain", domain),
+        ("schema_version", schema_version),
+        ("signature", _signature_key_material(signature)),
+    )
+    encoded = json.dumps(_canonical_value(payload), ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def validate_sha256_digest(digest: str, domain: str) -> None:
+    """Validate the full lowercase digest representation used by registry keys."""
+
+    if (
+        not isinstance(digest, str)
+        or len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest)
+    ):
+        raise ValueError(f"{domain} key digest must be a full lowercase SHA-256 hexadecimal digest")
+
+
+# Private helpers
 
 
 def _signature_key_material(signature: Any) -> tuple[Any, ...]:
@@ -232,16 +278,6 @@ def _signature_key_material(signature: Any) -> tuple[Any, ...]:
     if not isinstance(material, tuple):
         raise TypeError("signature key_material must be a tuple")
     return material
-
-
-def signature_digest(domain: str, schema_version: int, signature: Any) -> str:
-    payload = (
-        ("domain", domain),
-        ("schema_version", schema_version),
-        ("signature", _signature_key_material(signature)),
-    )
-    encoded = json.dumps(_canonical_value(payload), ensure_ascii=True, separators=(",", ":"))
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _canonical_value(value: Any) -> Any:
@@ -272,12 +308,3 @@ def _canonical_value(value: Any) -> Any:
 def _ensure_matching_signature(key: ProgramKey, retained: Any, candidate: Any) -> None:
     if retained != candidate:
         raise RuntimeError(f"Program key collision for digest {key.digest}: retained signature differs")
-
-
-def validate_sha256_digest(digest: str, domain: str) -> None:
-    if (
-        not isinstance(digest, str)
-        or len(digest) != 64
-        or any(character not in "0123456789abcdef" for character in digest)
-    ):
-        raise ValueError(f"{domain} key digest must be a full lowercase SHA-256 hexadecimal digest")

@@ -15,7 +15,14 @@ from models.common.llm_runtime.trace_compiler import InputRefreshPolicy, TraceCa
 
 
 class EagerExecutor:
-    """Single eager semantic path."""
+    """Compile and execute prepared requests through the eager TT path.
+
+    ``Llama3Executor`` owns one instance and exposes it to
+    ``Llama3Generator`` as the non-traced execution target. Callers normally
+    use `compile_prefill`, `prefill_forward`,
+    `compile_decode`, and `decode_forward`; request preparation and
+    program-registry mechanics remain private to this composition.
+    """
 
     def __init__(self, *, prefill: PrefillRuntime, decode: DecodeRuntime, program_compiler: ProgramCompiler) -> None:
         if not isinstance(prefill, PrefillRuntime):
@@ -27,6 +34,45 @@ class EagerExecutor:
         self.prefill = prefill
         self.decode = decode
         self.program_compiler = program_compiler
+
+    # Public API
+
+    def compile_prefill(self, **kwargs: Any) -> None:
+        """Prepare and compile every eager program needed by one prefill call."""
+
+        kwargs.pop("kv_cache", None)
+        for prepared in self._prepare_prefill(**kwargs):
+            self._compile_prefill(prepared)
+
+    def prefill_forward(self, **kwargs: Any):
+        """Prepare, execute, and assemble one eager prefill call."""
+
+        prepared = self._prepare_prefill(**kwargs)
+        results = tuple((request, self._execute_prefill(request)) for request in prepared)
+        return self.prefill.assemble(
+            results,
+            batch_size=int(kwargs["tokens"].shape[0]),
+            sampling_params=kwargs.get("sampling_params"),
+        )
+
+    def compile_decode(self, **kwargs: Any) -> None:
+        """Prepare and compile the eager program needed by one decode call."""
+
+        kwargs.pop("kv_cache", None)
+        self._compile_decode(self._prepare_decode(**kwargs))
+
+    def decode_forward(
+        self,
+        *,
+        read_from_device: bool = True,
+        **kwargs: Any,
+    ):
+        """Prepare and execute one eager decode call."""
+
+        prepared = self._prepare_decode(**kwargs)
+        return self._execute_decode(prepared, read_from_device=read_from_device)
+
+    # Private implementation
 
     def _prepare_prefill(self, **kwargs: Any):
         return self.prefill.prepare(**kwargs)
@@ -47,20 +93,6 @@ class EagerExecutor:
     def _execute_prefill(self, prepared: Any):
         self._require_ready_after_trace_gate(prepared.program_signatures)
         return self.prefill.invoke(prepared)
-
-    def compile_prefill(self, **kwargs: Any) -> None:
-        kwargs.pop("kv_cache", None)
-        for prepared in self._prepare_prefill(**kwargs):
-            self._compile_prefill(prepared)
-
-    def prefill_forward(self, **kwargs: Any):
-        prepared = self._prepare_prefill(**kwargs)
-        results = tuple((request, self._execute_prefill(request)) for request in prepared)
-        return self.prefill.assemble(
-            results,
-            batch_size=int(kwargs["tokens"].shape[0]),
-            sampling_params=kwargs.get("sampling_params"),
-        )
 
     def _prepare_decode(self, **kwargs: Any):
         return self.decode.prepare(**kwargs)
@@ -89,22 +121,15 @@ class EagerExecutor:
     def _program_gate_active(self) -> bool:
         return self.program_compiler.trace_capture_in_progress or self.program_compiler.trace_active
 
-    def compile_decode(self, **kwargs: Any) -> None:
-        kwargs.pop("kv_cache", None)
-        self._compile_decode(self._prepare_decode(**kwargs))
-
-    def decode_forward(
-        self,
-        *,
-        read_from_device: bool = True,
-        **kwargs: Any,
-    ):
-        prepared = self._prepare_decode(**kwargs)
-        return self._execute_decode(prepared, read_from_device=read_from_device)
-
 
 class TracedExecutor:
-    """Trace-only execution composed with the exact eager semantic owner."""
+    """Compile and replay traces over one exact `EagerExecutor`.
+
+    ``Llama3Generator`` selects this target only when the requested operation
+    is configured and eligible for tracing. This class never chooses an eager
+    fallback; a caller that wants eager execution uses
+    `eager_executor` directly.
+    """
 
     def __init__(self, *, eager: EagerExecutor, trace_compiler: TraceCompiler) -> None:
         if not isinstance(eager, EagerExecutor):
@@ -115,6 +140,48 @@ class TracedExecutor:
             raise ValueError("trace_compiler must compose eager.program_compiler")
         self.eager_executor = eager
         self.trace_compiler = trace_compiler
+
+    # Public API
+
+    def compile_prefill(self, **kwargs: Any) -> None:
+        """Compile eager prefill programs and register their trace plans."""
+
+        kwargs.pop("kv_cache", None)
+        for prepared in self.eager_executor._prepare_prefill(**kwargs):
+            self._compile_prefill(prepared)
+
+    def prefill_forward(self, **kwargs: Any):
+        """Replay traced prefill and assemble the results."""
+
+        prepared = self.eager_executor._prepare_prefill(**kwargs)
+        results = tuple((request, self._execute_prefill(request)) for request in prepared)
+        return self.eager_executor.prefill.assemble(
+            results,
+            batch_size=int(kwargs["tokens"].shape[0]),
+            sampling_params=kwargs.get("sampling_params"),
+        )
+
+    def compile_decode(self, **kwargs: Any) -> None:
+        """Compile the eager decode program and register its trace plan."""
+
+        kwargs.pop("kv_cache", None)
+        self._compile_decode(self.eager_executor._prepare_decode(**kwargs))
+
+    def decode_forward(
+        self,
+        *,
+        read_from_device: bool = True,
+        **kwargs: Any,
+    ):
+        """Replay one traced decode step and consume its output."""
+
+        prepared = self.eager_executor._prepare_decode(**kwargs)
+        return self._execute_decode(
+            prepared,
+            read_from_device=read_from_device,
+        )
+
+    # Private implementation
 
     def _compile_prefill(self, prepared: Any):
         programs = self.eager_executor._compile_prefill(prepared)
@@ -153,20 +220,6 @@ class TracedExecutor:
             prepared,
             hidden,
             record.artifact.persistent_inputs.values,
-        )
-
-    def compile_prefill(self, **kwargs: Any) -> None:
-        kwargs.pop("kv_cache", None)
-        for prepared in self.eager_executor._prepare_prefill(**kwargs):
-            self._compile_prefill(prepared)
-
-    def prefill_forward(self, **kwargs: Any):
-        prepared = self.eager_executor._prepare_prefill(**kwargs)
-        results = tuple((request, self._execute_prefill(request)) for request in prepared)
-        return self.eager_executor.prefill.assemble(
-            results,
-            batch_size=int(kwargs["tokens"].shape[0]),
-            sampling_params=kwargs.get("sampling_params"),
         )
 
     def _compile_decode(self, prepared: Any):
@@ -209,19 +262,3 @@ class TracedExecutor:
             is_tokens=prepared.sampling_params is not None,
         )
         return decode.consume(result, read_from_device=read_from_device)
-
-    def compile_decode(self, **kwargs: Any) -> None:
-        kwargs.pop("kv_cache", None)
-        self._compile_decode(self.eager_executor._prepare_decode(**kwargs))
-
-    def decode_forward(
-        self,
-        *,
-        read_from_device: bool = True,
-        **kwargs: Any,
-    ):
-        prepared = self.eager_executor._prepare_decode(**kwargs)
-        return self._execute_decode(
-            prepared,
-            read_from_device=read_from_device,
-        )

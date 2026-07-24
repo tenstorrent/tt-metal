@@ -150,7 +150,14 @@ class DecodeOutputLease:
 
 
 class DecodeRuntime:
-    """Own the complete decode vertical slice for one Llama execution lane.
+    """Prepare, execute, trace, and consume decode for one execution lane.
+
+    The eager call chain is
+    `EagerExecutor.decode_forward()` → `prepare` → `invoke` →
+    `consume`. Trace warmup uses `capture_plan`; replay calls
+    `refresh_trace`, `note_submitted`, and `consume`.
+    `Llama3Executor` also exposes `read_decode_output` and
+    `process_decode_output_host` for vLLM's asynchronous output path.
 
     The model, mesh, output reader, sampler, and KV-backed page-table values are
     borrowed. Only staged invocation tensors, raw outputs, output leases, and
@@ -192,8 +199,12 @@ class DecodeRuntime:
         self._external_by_host_id: dict[int, DecodeOutputLease] = {}
         self._transient_orphans: list[TensorResourceOrphan] = []
 
+    # Public API
+
     @property
     def transient_orphan_count(self) -> int:
+        """Return the number of failed transient releases awaiting cleanup."""
+
         return len(self._transient_orphans)
 
     def prepare(
@@ -205,6 +216,8 @@ class DecodeRuntime:
         *,
         reset_batch: bool = False,
     ) -> PreparedDecode:
+        """Normalize one host decode request into an immutable prepared value."""
+
         self._ensure_usable()
         self._validate_inputs(tokens, start_pos, page_table)
         if sampling_params is not None and not self.device_sampling_enabled:
@@ -245,18 +258,14 @@ class DecodeRuntime:
         )
 
     def program_signature(self, prepared: PreparedDecode) -> DecodeProgramSignature:
+        """Return the eager program identity for a prepared decode request."""
+
         self._require_prepared(prepared)
         return self._program_signature(prepared)
 
-    def _program_signature(self, prepared: PreparedDecode) -> DecodeProgramSignature:
-        return DecodeProgramSignature(
-            batch_size=self.lane_capacity,
-            page_table_width=int(prepared.page_table.shape[-1]),
-            sampling_path=prepared.sampling_path,
-            device_feedback=prepared.device_feedback,
-        )
-
     def trace_signature(self, prepared: PreparedDecode) -> DecodeTraceSignature:
+        """Return the trace identity for a prepared decode request."""
+
         self._require_prepared(prepared)
         program = self._program_signature(prepared)
         return DecodeTraceSignature(
@@ -267,6 +276,8 @@ class DecodeRuntime:
         )
 
     def invoke(self, prepared: PreparedDecode, *, device_feedback: bool = False) -> InvocationResult:
+        """Stage and execute one prepared request eagerly."""
+
         self._ensure_usable()
         self._require_prepared(prepared)
         host_inputs = self._prepare_inputs_host(prepared)
@@ -292,6 +303,8 @@ class DecodeRuntime:
         )
 
     def capture_plan(self, prepared: PreparedDecode) -> DecodeCapturePlan:
+        """Describe persistent inputs and capture work for one decode trace."""
+
         self._require_prepared(prepared)
 
         def prepare_inputs() -> DecodePersistentInputs:
@@ -339,9 +352,6 @@ class DecodeRuntime:
         self._require_prepared(prepared)
         self._note_submitted(prepared)
 
-    def _note_submitted(self, prepared: PreparedDecode) -> None:
-        self._previous_page_table = prepared.page_table.clone()
-
     def consume(self, result: InvocationResult, *, read_from_device: bool = True) -> Any:
         """Read and normalize an invocation or transfer it to an external lease."""
         if not isinstance(result, InvocationResult):
@@ -367,6 +377,8 @@ class DecodeRuntime:
         return normalized
 
     def read_decode_output(self, tt_out: Any, async_read: bool = False) -> Any:
+        """Read a raw externally leased decode output, optionally asynchronously."""
+
         if not async_read:
             host = self.output_reader.read(tt_out, blocking=True)
             self._release_external_lease(self._external_by_raw_id.get(id(tt_out)))
@@ -380,9 +392,45 @@ class DecodeRuntime:
         return pending.value, list(pending.events)
 
     def process_decode_output_host(self, tt_out: Any, is_tokens: bool = False) -> tuple[Any, Any]:
+        """Complete and normalize a host value returned by async decode read."""
+
         completed = self.output_reader.complete(tt_out)
         self._release_external_lease(self._external_by_host_id.get(id(tt_out)))
         return self._normalize_host_output(completed, is_tokens=is_tokens)
+
+    def drain_external_outputs(self) -> None:
+        """Synchronize and release every outstanding externally owned output."""
+
+        failures = []
+        for lease in tuple(self._external_by_raw_id.values()):
+            try:
+                if lease.pending is None:
+                    ttnn.synchronize_device(self.mesh_device)
+                self._release_external_lease(lease)
+            except BaseException as error:
+                failures.append(error)
+        if failures:
+            raise_cleanup_failures(failures)
+
+    def cleanup_transients(self) -> None:
+        """Retry every transient tensor release that previously failed."""
+
+        failures = release_orphans(self._transient_orphans)
+        if failures:
+            raise_cleanup_failures(failures)
+
+    # Private implementation
+
+    def _program_signature(self, prepared: PreparedDecode) -> DecodeProgramSignature:
+        return DecodeProgramSignature(
+            batch_size=self.lane_capacity,
+            page_table_width=int(prepared.page_table.shape[-1]),
+            sampling_path=prepared.sampling_path,
+            device_feedback=prepared.device_feedback,
+        )
+
+    def _note_submitted(self, prepared: PreparedDecode) -> None:
+        self._previous_page_table = prepared.page_table.clone()
 
     def _normalize_host_output(self, host_output: Any, *, is_tokens: bool) -> tuple[Any, Any]:
         if isinstance(host_output, tuple):
@@ -402,23 +450,6 @@ class DecodeRuntime:
             self._cluster_shape,
         )
         return logits, log_probs
-
-    def drain_external_outputs(self) -> None:
-        failures = []
-        for lease in tuple(self._external_by_raw_id.values()):
-            try:
-                if lease.pending is None:
-                    ttnn.synchronize_device(self.mesh_device)
-                self._release_external_lease(lease)
-            except BaseException as error:
-                failures.append(error)
-        if failures:
-            raise_cleanup_failures(failures)
-
-    def cleanup_transients(self) -> None:
-        failures = release_orphans(self._transient_orphans)
-        if failures:
-            raise_cleanup_failures(failures)
 
     def _normalize_page_table(self, page_table, start_pos, *, allow_one_step_feedback_lag):
         raw_width = _layout_value(self.page_table_layout, "raw_capacity_width", "raw_width")

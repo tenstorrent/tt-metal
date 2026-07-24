@@ -101,7 +101,15 @@ class TraceRecord:
 
 
 class TraceCompiler:
-    """Own trace state while composing the executor's exact ProgramCompiler."""
+    """Register, capture, replay, and release traces for compiled programs.
+
+    ``TracedExecutor.compile_*`` first compiles an eager program and calls
+    `register_capture_plan`. `WarmupCoordinator` calls
+    `capture_all` only after the complete configured program set exists.
+    Forward execution then calls `replay` with operation-owned refresh
+    logic. The compiler owns trace artifacts and persistent inputs, while the
+    composed ``ProgramCompiler`` remains the sole program registry.
+    """
 
     def __init__(self, program_compiler: ProgramCompiler, mesh_device: Any):
         if not isinstance(program_compiler, ProgramCompiler):
@@ -117,14 +125,20 @@ class TraceCompiler:
         self._released = False
         self._previous_replay_key: TraceKey | None = None
 
+    # Public API
+
     @property
     def trace_active(self) -> bool:
         return self._activated
 
     def get(self, key: TraceKey) -> TraceRecord | None:
+        """Return the record needed to finish an operation-specific replay."""
+
         return self._traces.get(key)
 
     def trace_key_for_program(self, program_key: ProgramKey) -> TraceKey | None:
+        """Return the registered trace association for one compiled program."""
+
         return self._program_to_trace.get(program_key)
 
     def register_capture_plan(self, plan: TraceCapturePlan) -> TraceKey:
@@ -253,6 +267,8 @@ class TraceCompiler:
         feedback_compatible: bool = False,
         page_table_changed: bool = False,
     ) -> Any:
+        """Refresh persistent inputs and enqueue one non-blocking trace replay."""
+
         self._ensure_live()
         self.program_compiler.require_compiled(program_key)
         trace_key = self._program_to_trace.get(program_key)
@@ -281,6 +297,8 @@ class TraceCompiler:
         return artifact.outputs
 
     def cleanup(self) -> None:
+        """Release traces and persistent inputs, then reopen the program gate."""
+
         if self._released:
             return
         failures = self._release_trace_resources()
@@ -297,6 +315,8 @@ class TraceCompiler:
         self.program_compiler.set_trace_capture_in_progress(False)
         self.program_compiler.set_trace_active(False)
         self._released = True
+
+    # Private implementation
 
     def _release_trace_resources(self) -> list[BaseException]:
         failures: list[BaseException] = []

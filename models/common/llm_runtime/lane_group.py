@@ -15,7 +15,14 @@ import torch
 
 
 class LaneGroupExecutor:
-    """Compose fixed-capacity executor lanes behind the execution-target surface."""
+    """Present several fixed-capacity executors as one DP execution target.
+
+    ``Llama3Generator`` calls the same public surface for a single
+    ``Llama3Executor`` or this group. Prefill rows are assigned by slot to
+    lanes and restored to source order; decode tensors are split into
+    contiguous lane batches and aggregated after execution. Warmup, cache
+    configuration, and cleanup are replicated across all lanes.
+    """
 
     requires_prefill_trace_warmup = True
 
@@ -62,6 +69,8 @@ class LaneGroupExecutor:
             _attach_failures(primary, cleanup_failures, "cleanup_failures")
             raise
 
+    # Public execution-target API
+
     @property
     def cache_path(self) -> Any:
         return getattr(self.lanes[0], "cache_path", None)
@@ -84,6 +93,8 @@ class LaneGroupExecutor:
         return self._terminal
 
     def configure_paged_kv_cache(self, config: Any | Sequence[Any]) -> None:
+        """Apply one shared or per-lane resolved KV-cache configuration."""
+
         def operation() -> None:
             configs = self._lane_configs(config)
             for lane, lane_config in zip(self.lanes, configs):
@@ -115,10 +126,14 @@ class LaneGroupExecutor:
         self._run_guarded(operation)
 
     def prefill_forward(self, *args: Any, **kwargs: Any) -> Any:
+        """Fan out prefill rows by slot and restore their source-row order."""
+
         bound = _bind_positional(args, kwargs, ("tokens", "page_table"), "prefill_forward")
         return self._run_guarded(lambda: self._prefill_fanout("prefill_forward", bound))
 
     def can_trace_prefill(self, *args: Any, **kwargs: Any) -> bool:
+        """Return true only when every participating lane can use prefill trace."""
+
         bound = _bind_positional(args, kwargs, ("tokens", "page_table"), "can_trace_prefill")
 
         def operation() -> bool:
@@ -146,6 +161,8 @@ class LaneGroupExecutor:
         return self._run_guarded(operation)
 
     def decode_forward(self, *args: Any, **kwargs: Any) -> Any:
+        """Split one decode batch into contiguous lane calls and aggregate it."""
+
         bound = _bind_positional(args, kwargs, ("tokens", "start_pos", "page_table"), "decode_forward")
         return self._run_guarded(
             lambda: self._decode_fanout(
@@ -198,11 +215,15 @@ class LaneGroupExecutor:
         return self._run_guarded(operation)
 
     def cleanup(self) -> None:
+        """Drain work and release every lane and worker-pool resource."""
+
         failures = self._cleanup_impl()
         if failures:
             primary = failures[0]
             _attach_failures(primary, failures[1:], "cleanup_failures")
             raise primary
+
+    # Private implementation
 
     def _prefill_fanout(self, method_name: str, kwargs: dict[str, Any]) -> Any:
         lane_results = self._prefill_lane_results(method_name, kwargs)

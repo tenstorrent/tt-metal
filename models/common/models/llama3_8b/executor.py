@@ -47,7 +47,19 @@ class Llama3ExecutorConfig:
 
 
 class Llama3Executor:
-    """Thin configured single-lane facade and deterministic cleanup root."""
+    """Compose every runtime owner for one Llama 3.1 8B execution lane.
+
+    Construction wires one `PrefillRuntime`, `DecodeRuntime`,
+    `ProgramCompiler`, and `EagerExecutor`. Trace-enabled
+    configurations add one `TraceCompiler` and one
+    `TracedExecutor` over that exact eager instance.
+
+    ``Llama3Generator`` or ``LaneGroupExecutor`` first configures and allocates
+    KV cache, then warms or compiles programs, and finally calls
+    `prefill_forward` and `decode_forward` with an explicit
+    execution target. `cleanup` is the deterministic resource-release
+    root and makes the executor terminal.
+    """
 
     requires_prefill_trace_warmup = True
 
@@ -144,6 +156,8 @@ class Llama3Executor:
             validate_bound_cache=self._validate_bound_cache,
         )
 
+    # Public model execution API
+
     @property
     def model_config(self):
         return self.model.config
@@ -181,6 +195,8 @@ class Llama3Executor:
         self.decode_runtime.device_feedback_enabled = bool(value)
 
     def configure_paged_kv_cache(self, config: PagedKVCacheConfig) -> None:
+        """Resolve late KV capacity before the first allocation."""
+
         self._ensure_active()
         self.kv_cache_manager.configure(config)
         self._refresh_page_table_layout()
@@ -191,6 +207,8 @@ class Llama3Executor:
         dtype: torch.dtype | None = None,
         num_layers: int | None = None,
     ) -> list[list[Any]]:
+        """Allocate and bind the model-owned paged KV cache."""
+
         self._ensure_active()
         supplied = (kv_cache_shape is not None, dtype is not None, num_layers is not None)
         if any(supplied):
@@ -226,6 +244,8 @@ class Llama3Executor:
         execution: EagerExecutor | TracedExecutor | None = None,
         **kwargs: Any,
     ) -> None:
+        """Compile prefill on the supplied eager or traced execution target."""
+
         self._ensure_active()
         self._validate_bound_cache(kwargs.get("kv_cache"))
         self._ensure_sampling_for(kwargs.get("sampling_params"))
@@ -237,6 +257,8 @@ class Llama3Executor:
         execution: EagerExecutor | TracedExecutor | None = None,
         **kwargs: Any,
     ) -> None:
+        """Compile decode on the supplied eager or traced execution target."""
+
         self._ensure_active()
         self._validate_bound_cache(kwargs.get("kv_cache"))
         self._ensure_sampling_for(kwargs.get("sampling_params"))
@@ -253,6 +275,8 @@ class Llama3Executor:
         start_pos=None,
         execution: EagerExecutor | TracedExecutor | None = None,
     ):
+        """Validate ownership and execute one prefill call."""
+
         self._ensure_active()
         self._validate_bound_cache(kv_cache)
         self._ensure_sampling_for(sampling_params)
@@ -276,6 +300,8 @@ class Llama3Executor:
         reset_batch=False,
         execution: EagerExecutor | TracedExecutor | None = None,
     ):
+        """Validate ownership and execute one decode call."""
+
         self._ensure_active()
         self._validate_bound_cache(kv_cache)
         self._ensure_sampling_for(sampling_params)
@@ -296,6 +322,8 @@ class Llama3Executor:
         start_pos=None,
         **_: Any,
     ) -> bool:
+        """Classify whether the prefill request can use this lane's trace."""
+
         if self.traced_executor is None or not self.config.trace.prefill_enabled:
             return False
         return self.prefill_runtime.can_trace(
@@ -321,6 +349,8 @@ class Llama3Executor:
         return self.warmup.warmup_decode(*args, **kwargs)
 
     def cleanup(self) -> None:
+        """Release runtime, trace, program, sampling, and KV resources in order."""
+
         self._terminal = True
         if self._cleaned_up:
             return
@@ -347,6 +377,8 @@ class Llama3Executor:
         if failures:
             _raise_cleanup_failures(failures, "Llama3Executor")
         self._cleaned_up = True
+
+    # Private implementation
 
     def _resolve_page_table_layout(self) -> PageTableLayout:
         kv_config = self.kv_cache_manager.config
@@ -399,6 +431,8 @@ class Llama3Executor:
 
 
 def build_llama3_executor(llm: Llama3ForCausalLM, config: Llama3ExecutorConfig) -> Llama3Executor:
+    """Build one executor around an already-loaded Llama model adapter."""
+
     return Llama3Executor(llm.model, llm.runtime_config, config)
 
 

@@ -54,7 +54,18 @@ class Llama3GeneratorConfig:
 
 
 class Llama3Generator:
-    """Normalize vLLM calls and delegate to one duck-typed execution target."""
+    """Adapt vLLM's model interface to the model-owned execution target.
+
+    vLLM constructs this facade with `initialize_vllm_model`, resolves
+    KV capacity through `allocate_kv_cache`, warms the configured
+    programs, and then calls `prefill_forward` and
+    `decode_forward`. Each forward call is normalized by
+    `VLLMAdapter`, dispatched to the eager or traced executor, and
+    delegated to ``Llama3Executor`` or ``LaneGroupExecutor``.
+
+    This class owns dispatch policy but no TT resources. `cleanup`
+    delegates to the target that owns those resources.
+    """
 
     model_capabilities = {
         "supports_prefix_caching": True,
@@ -68,6 +79,8 @@ class Llama3Generator:
     def __init__(self, target: Any, adapter: VLLMAdapter):
         self.target = target
         self._adapter = adapter
+
+    # Public vLLM API
 
     @property
     def model(self):
@@ -153,24 +166,55 @@ class Llama3Generator:
         return self.target.allocate_kv_cache()
 
     def compile_prefill(self, *args, **kwargs):
+        """Normalize a vLLM prefill call and compile its selected target."""
+
         normalized = self._adapter.normalize_prefill(args, kwargs)
         execution = self._select_prefill_execution(normalized)
         return self.target.compile_prefill(execution=execution, **normalized)
 
     def compile_decode(self, *args, **kwargs):
+        """Normalize a vLLM decode call and compile its selected target."""
+
         normalized = self._adapter.normalize_decode(args, kwargs)
         execution = self._select_execution("decode", normalized.pop("enable_trace"))
         return self.target.compile_decode(execution=execution, **normalized)
 
     def prefill_forward(self, *args, **kwargs):
+        """Normalize and dispatch one vLLM prefill call."""
+
         normalized = self._adapter.normalize_prefill(args, kwargs)
         execution = self._select_prefill_execution(normalized)
         return self.target.prefill_forward(execution=execution, **normalized)
 
     def decode_forward(self, *args, **kwargs):
+        """Normalize and dispatch one vLLM decode call."""
+
         normalized = self._adapter.normalize_decode(args, kwargs)
         execution = self._select_execution("decode", normalized.pop("enable_trace"))
         return self.target.decode_forward(execution=execution, **normalized)
+
+    def read_decode_output(self, *args, **kwargs):
+        """Delegate vLLM's raw decode-output read."""
+
+        return self.target.read_decode_output(*args, **kwargs)
+
+    def process_decode_output_host(self, *args, **kwargs):
+        """Delegate vLLM's asynchronous host-output completion."""
+
+        return self.target.process_decode_output_host(*args, **kwargs)
+
+    def warmup_model_prefill(self, *args, **kwargs):
+        return self.target.warmup_model_prefill(*args, **kwargs)
+
+    def warmup_model_decode(self, *args, **kwargs):
+        return self.target.warmup_model_decode(*args, **kwargs)
+
+    def cleanup(self):
+        """Release every resource owned by the concrete target."""
+
+        return self.target.cleanup()
+
+    # Private implementation
 
     def _select_prefill_execution(self, normalized: dict[str, Any]):
         enable_trace = normalized.pop("enable_trace")
@@ -185,21 +229,6 @@ class Llama3Generator:
         if execution is None:
             raise RuntimeError(f"vLLM requested unavailable traced {operation} execution")
         return execution
-
-    def read_decode_output(self, *args, **kwargs):
-        return self.target.read_decode_output(*args, **kwargs)
-
-    def process_decode_output_host(self, *args, **kwargs):
-        return self.target.process_decode_output_host(*args, **kwargs)
-
-    def warmup_model_prefill(self, *args, **kwargs):
-        return self.target.warmup_model_prefill(*args, **kwargs)
-
-    def warmup_model_decode(self, *args, **kwargs):
-        return self.target.warmup_model_decode(*args, **kwargs)
-
-    def cleanup(self):
-        return self.target.cleanup()
 
 
 def build_llama3_generator(config: Llama3GeneratorConfig) -> Llama3Generator:

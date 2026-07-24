@@ -175,7 +175,18 @@ class PrefillCapturePlan:
 
 
 class PrefillRuntime:
-    """Own the complete prefill operation slice and its transient resources."""
+    """Plan, execute, trace, and assemble prefill for one execution lane.
+
+    The normal eager call chain is
+    `EagerExecutor.prefill_forward()` → `prepare` → `invoke` →
+    `assemble`. Trace warmup uses `capture_plan`; replay uses
+    `refresh_trace` and `finish_trace` before the same
+    `assemble` step. Callers pass host request values and never invoke
+    the private chunk-sequence, staging, or sampling helpers directly.
+
+    The runtime borrows the model, mesh, and output reader. It owns staged
+    prefill tensors and retains failed releases for retry by `cleanup`.
+    """
 
     def __init__(
         self,
@@ -219,8 +230,12 @@ class PrefillRuntime:
         self.can_enable_trace = can_enable_trace
         self._transient_orphans: list[TensorResourceOrphan] = []
 
+    # Public API
+
     @property
     def transient_orphan_count(self) -> int:
+        """Return the number of failed transient releases awaiting cleanup."""
+
         return len(self._transient_orphans)
 
     def can_trace(
@@ -262,6 +277,12 @@ class PrefillRuntime:
         start_pos: torch.Tensor | None = None,
         sampling_params: SamplingParams | None = None,
     ) -> tuple[PreparedPrefill, ...]:
+        """Plan host inputs once and return immutable requests for execution.
+
+        One public request may produce several prepared requests when batching,
+        prefix caching, or chunking requires distinct program invocations.
+        """
+
         self._ensure_usable()
         if sampling_params is not None and not self.device_sampling_enabled:
             raise ValueError("sampling parameters were supplied while device sampling is disabled")
@@ -300,57 +321,6 @@ class PrefillRuntime:
             )
         return tuple(prepared)
 
-    def _program_signatures(
-        self,
-        request: PrefillRequest,
-        sampling_path: SamplingPath,
-    ) -> tuple[PrefillProgramSignature, ...]:
-        variant: PrefillVariant
-        if request.uses_chunked_prefill:
-            variant = "chunked"
-        elif request.kind == "batched":
-            variant = "regular-batched"
-        else:
-            variant = "regular-single"
-        signatures = []
-        for chunk in request.chunks:
-            last_token_tile_start = None
-            if self._uses_static_q128_topk(request, sampling_path) or (
-                sampling_path == "argmax"
-                and request.kind == "single"
-                and not request.uses_chunked_prefill
-                and request.padded_sequence_length == 128
-            ):
-                relative_last = request.last_token_indices[0] - request.cached_tokens[0]
-                last_token_tile_start = (relative_last // _TILE_SIZE) * _TILE_SIZE
-            signatures.append(
-                PrefillProgramSignature(
-                    operation_variant=variant,
-                    padded_batch_size=request.padded_batch_size,
-                    invocation_sequence_length=chunk.chunk_size,
-                    page_table_width=request.page_table_width,
-                    chunk_page_table_width=(
-                        int(chunk.chunk_page_table.shape[-1]) if chunk.chunk_page_table is not None else None
-                    ),
-                    sampling_path=sampling_path,
-                    last_token_tile_start=last_token_tile_start,
-                )
-            )
-        return tuple(dict.fromkeys(signatures))
-
-    def _trace_signature(self, request: PrefillRequest) -> PrefillTraceSignature | None:
-        if request.uses_chunked_prefill:
-            return None
-        if any(request.cached_tokens):
-            return None
-        if not self.can_enable_trace(request.padded_sequence_length, 0):
-            return None
-        return PrefillTraceSignature(
-            padded_batch_size=request.padded_batch_size,
-            padded_sequence_length=request.padded_sequence_length,
-            page_table_width=request.page_table_width,
-        )
-
     def invoke(self, prepared: PreparedPrefill) -> InvocationResult:
         """Run a prepared request eagerly without replanning or reclassification."""
 
@@ -358,6 +328,8 @@ class PrefillRuntime:
         return self._run_prefill_sequence(prepared)
 
     def capture_plan(self, prepared: PreparedPrefill) -> PrefillCapturePlan:
+        """Describe persistent inputs and capture work for one eligible request."""
+
         if prepared.trace_signature is None:
             raise ValueError("cached and multi-chunk prefill requests are trace-ineligible")
 
@@ -430,6 +402,8 @@ class PrefillRuntime:
         hidden: Any,
         persistent: PrefillPersistentInputs,
     ) -> InvocationResult:
+        """Post-process a replayed hidden-state tensor into a normal result."""
+
         output = self._finish_regular_prefill(
             prepared,
             hidden,
@@ -518,9 +492,64 @@ class PrefillRuntime:
         return output_logits
 
     def cleanup(self) -> None:
+        """Retry every transient tensor release that previously failed."""
+
         failures = release_orphans(self._transient_orphans)
         if failures:
             raise_cleanup_failures(failures)
+
+    # Private implementation
+
+    def _program_signatures(
+        self,
+        request: PrefillRequest,
+        sampling_path: SamplingPath,
+    ) -> tuple[PrefillProgramSignature, ...]:
+        variant: PrefillVariant
+        if request.uses_chunked_prefill:
+            variant = "chunked"
+        elif request.kind == "batched":
+            variant = "regular-batched"
+        else:
+            variant = "regular-single"
+        signatures = []
+        for chunk in request.chunks:
+            last_token_tile_start = None
+            if self._uses_static_q128_topk(request, sampling_path) or (
+                sampling_path == "argmax"
+                and request.kind == "single"
+                and not request.uses_chunked_prefill
+                and request.padded_sequence_length == 128
+            ):
+                relative_last = request.last_token_indices[0] - request.cached_tokens[0]
+                last_token_tile_start = (relative_last // _TILE_SIZE) * _TILE_SIZE
+            signatures.append(
+                PrefillProgramSignature(
+                    operation_variant=variant,
+                    padded_batch_size=request.padded_batch_size,
+                    invocation_sequence_length=chunk.chunk_size,
+                    page_table_width=request.page_table_width,
+                    chunk_page_table_width=(
+                        int(chunk.chunk_page_table.shape[-1]) if chunk.chunk_page_table is not None else None
+                    ),
+                    sampling_path=sampling_path,
+                    last_token_tile_start=last_token_tile_start,
+                )
+            )
+        return tuple(dict.fromkeys(signatures))
+
+    def _trace_signature(self, request: PrefillRequest) -> PrefillTraceSignature | None:
+        if request.uses_chunked_prefill:
+            return None
+        if any(request.cached_tokens):
+            return None
+        if not self.can_enable_trace(request.padded_sequence_length, 0):
+            return None
+        return PrefillTraceSignature(
+            padded_batch_size=request.padded_batch_size,
+            padded_sequence_length=request.padded_sequence_length,
+            page_table_width=request.page_table_width,
+        )
 
     def _run_prefill_sequence(self, prepared: PreparedPrefill) -> InvocationResult:
         """Execute the request's planned chunks as one eager prefill sequence."""
