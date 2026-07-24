@@ -80,7 +80,8 @@ struct ScopedLockEvent {
 
     bool is_lock() const {
         return event_type == NocDebuggingEventMetadata::NocDebugEventType::CB_LOCK ||
-               event_type == NocDebuggingEventMetadata::NocDebugEventType::MEM_LOCK;
+               event_type == NocDebuggingEventMetadata::NocDebugEventType::MEM_LOCK ||
+               event_type == NocDebuggingEventMetadata::NocDebugEventType::DFB_LOCK;
     }
 };
 
@@ -99,6 +100,7 @@ enum class NOCDebugIssueBaseType : uint8_t {
     UNFLUSHED_WRITE_AT_END,
     WRITE_TO_LOCKED_CORE_LOCAL_MEM,
     WRITE_TO_LOCKED_CB,
+    WRITE_TO_LOCKED_DFB,
     COUNT,
 };
 
@@ -185,6 +187,7 @@ public:
         enum class LockType {
             CB,
             MEM,
+            DFB,
         };
 
         uint32_t address;

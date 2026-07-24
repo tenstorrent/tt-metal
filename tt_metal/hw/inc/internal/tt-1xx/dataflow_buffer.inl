@@ -186,6 +186,9 @@ T DataflowBuffer::read_tile_value(uint32_t tile_index, uint32_t element_offset) 
     return value;
 }
 
+inline DataflowBuffer::ScopedLockRegion DataflowBuffer::lock_acquire_impl() { return {}; }
+inline void DataflowBuffer::lock_release_impl(ScopedLockRegion) {}
+
 #else
 
 inline bool DataflowBuffer::pages_reservable_at_back(int32_t num_pages) const {
@@ -197,6 +200,19 @@ inline bool DataflowBuffer::pages_available_at_front(int32_t num_pages) const {
 }
 
 inline void DataflowBuffer::write_barrier_impl(const Noc& noc) const { noc.async_write_barrier(); }
+
+// WH/BH: same behavior as CircularBuffer::scoped_lock: lock the entire ring
+inline DataflowBuffer::ScopedLockRegion DataflowBuffer::lock_acquire_impl() {
+    const uint32_t limit = local_dfb_interface_.fifo_limit;
+    const uint32_t base = limit - local_dfb_interface_.fifo_size;
+    RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_LOCK, base, limit - base);
+    return {base, base, limit};
+}
+
+inline void DataflowBuffer::lock_release_impl(ScopedLockRegion region) {
+    RECORD_SCOPED_LOCK_EVENT(
+        NocDebuggingEventMetadata::NocDebugEventType::DFB_UNLOCK, region.start, region.limit - region.start);
+}
 
 #endif
 
