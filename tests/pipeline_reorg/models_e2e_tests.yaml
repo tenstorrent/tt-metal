@@ -852,7 +852,7 @@
   model_family: Wan
   skus:
     bh_sc4-mgd:
-      timeout: 60
+      timeout: 35
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
@@ -873,7 +873,7 @@
   model_family: Wan
   skus:
     bh_sc4-mgd:
-      timeout: 60
+      timeout: 35
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
