@@ -57,6 +57,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "ckernel.h"
 
 void kernel_main() {
     Noc noc;
@@ -195,6 +196,13 @@ void kernel_main() {
         }
 
         if (parent_noc_x != 0xFFFFFFFF) {
+            // Force the tree-add stores into local_hist (== out_addr) to be processed into L1 BEFORE we
+            // signal the parent, which then NoC-reads this core's out_addr. A baby-RISCV store can retire
+            // before its write-request lands, and gather_sem.up() is an MMIO/NoC store that can race ahead
+            // of the L1 stores (WormholeB0/.../MemoryOrdering.md; NoC/Ordering.md: an MMIO write can race
+            // ahead of an L1 write). load_blocking the last accumulated word (blocking load + memory
+            // clobber) to drain the tree-add stores first.
+            (void)ckernel::load_blocking(local_hist + (n_routed_experts - 1));
             // Bump parent's gather_sem (a real semaphore id resolved on each core).
             gather_sem.up(noc, parent_noc_x, parent_noc_y, 1);
             noc.async_atomic_barrier();
