@@ -1548,3 +1548,43 @@
 - Failed bounded-memory variants: two- and three-slot rings with remote-read acknowledgements were tested using stage counters, a stage bitmask, atomic increments, and barrier-ordered remote semaphore writes. All acknowledgement forms retained the three-stage PCC result but deadlocked at four stages. The platform supports 16 NoC semaphores and descriptor IDs are explicit, so semaphore-count and descriptor-order hypotheses were checked and rejected.
 - Validation commands included `QWEN_KDA_GROUP_PREFIX=1 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_chunk_kda.py -q -s -k 2048` (PASS) and `QWEN_KDA_GROUP_PREFIX=1 PERF_SEQ={3072,4096,5120} PERF_REPS=1 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s` (depth-dependent PASS/HANG results above).
 - Verdict: reject and fully restore the validated baseline. No unvalidated kernel remains in the worktree. The experiment never reached a target-shape timing, so it makes no performance claim. A future distributed prefix needs a different ownership protocol (for example, receiver-owned stage storage or a framework-native point-to-point primitive), not another ping-pong/ACK variation.
+
+
+### 2026-07-24 22:30 UTC — Reject static-core prep-to-scan fusion
+
+- Hypothesis: merge prep and scan into one program, reserve 94 workers for
+  chunk-parallel prep and 16 workers for four-head/four-V-block scan, and let
+  each scan worker consume a chunk after its exact readiness bit is published.
+  This should overlap the measured `306.028 us` prep with the `500.140 us`
+  scan while removing one launch.
+- Implementation: the experimental program retained all seven distributed-L1
+  intermediates, used disjoint prep/scan core ranges, and allocated five 32-bit
+  readiness words per scan core (160 chunks). A prep writer published its
+  unique chunk bit only after all seven output barriers completed. This avoided
+  count aliasing under out-of-order producer completion.
+- Host build: `./build_metal.sh --build-tests --build-type Release` -> PASS.
+- Correctness: `QWEN_KDA_FUSED_PIPELINE=1 scripts/run_safe_pytest.sh --run-all
+  models/experimental/kimi_delta_attention/tests/test_tp_weights.py::test_tp_layer_pcc
+  -q -s` -> PASS at T=32 with output/recurrent/convolution PCC
+  `0.999965/0.999910/0.999997`. The same command with
+  `KDA_TP_TEST_SEQ=672` -> PASS at 21 chunks with PCC
+  `0.999967/0.999920/0.999997`.
+- Performance command: `QWEN_KDA_FUSED_PIPELINE=1 PERF_TRACE=1 PERF_SEQ=5120
+  PERF_REPS=10 scripts/run_safe_pytest.sh --profile
+  models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py
+  -q -s` -> PASS. CSV
+  `generated/profiler/reports/2026_07_24_22_29_50/ops_perf_results_2026_07_24_22_29_50.csv`,
+  SHA-256 `8c15e584ba6673f50654c6ebd07c9db57f26467633cd486c5ebba120500999e7`.
+- Result: calls/device/replay fell `35 -> 34`, but median slowest-device wall
+  regressed `3380.644 -> 3421.029 us` (`+40.385 us`, `+1.19%`). Replay spans
+  were `[3417.246, 3416.790, 3429.692, 3415.025, 3440.213, 3414.435,
+  3433.797, 3428.980, 3420.494, 3421.564] us`. The merged recurrence measured
+  `842.027 us`, versus `306.028 + 500.140 = 806.168 us` for sequential prep
+  and scan in the matched control.
+- Diagnosis: correctness and multi-chunk readiness rule out the synchronization
+  protocol. The static 94/16 partition removes 16 prep workers for the entire
+  program and cannot hand them back after prep; that throughput loss exceeds
+  the recovered overlap and launch saving. Elastic reassignment remains a
+  distinct hypothesis, but this disjoint static-core design is rejected.
+- Verdict: reject and fully restore source. No experimental kernel remains in
+  the worktree.

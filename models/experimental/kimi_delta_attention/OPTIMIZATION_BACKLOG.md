@@ -83,9 +83,10 @@ are:
 
 After these, resume the broader queue:
 
-4. Fuse prep and scan into a bounded producer/consumer pipeline.
-5. Revisit direct tiled convolution only with the T=672 PCC gate enabled from
+4. Revisit direct tiled convolution only with the T=672 PCC gate enabled from
    the first implementation step.
+5. Revisit prep/scan fusion only with elastic core reassignment; the disjoint
+   94/16 static partition is measured and rejected.
 
 The affine-prefix experiment proved the algebra and FP32 numerics, but rejected
 a DRAM-backed implementation: its estimated memory floor exceeds the current
@@ -175,8 +176,15 @@ intermediate in DRAM and reading it back.
   Keeping every prepared tensor in interleaved distributed L1 across the two
   existing programs reduced T=640 wall by `3.27%`, T=5,120 wall by `5.64%`,
   and T=5,120 recurrence by `20.88%`. It passed the full 27-test gate.
-- Remaining path: fuse the programs only if a bounded rolling window can save
-  additional launch/synchronization time beyond the retained L1 endpoint.
+- Fused-program result, 2026-07-24: reject the static 94-prep/16-scan
+  partition. Exact per-chunk readiness bits preserved PCC at T=32 and T=672,
+  but T=5,120 wall regressed `3380.644 -> 3421.029 us` (`+1.19%`). The
+  fused recurrence measured `842.027 us`, worse than the control sequential
+  prep plus scan medians of `306.028 + 500.140 = 806.168 us`. Static core
+  partitioning lost more prep throughput than overlap recovered.
+- Remaining path: revisit only with elastic core reassignment or a bounded
+  rolling window whose producer cores can join scan after draining their work;
+  do not repeat the disjoint static partition.
 
 ### 3. Remove duplicated scan reads per head
 
