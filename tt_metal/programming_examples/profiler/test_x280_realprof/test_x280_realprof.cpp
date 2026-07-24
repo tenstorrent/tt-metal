@@ -1713,19 +1713,34 @@ int main(int argc, char** argv) {
                     printf("  hart%llu (%s): 0 zones\n", (unsigned long long)h, role);
                     continue;
                 }
+                // Push markers ONE AT A TIME (not paired) so the handler's per-lane stack nests them -- the
+                // reader emits a SPSC-WAIT child inside a BULK parent (parent-START, child-START, child-END,
+                // parent-END). busy = sum of top-level zone spans (depth returns to 0).
                 uint64_t busy_ns = 0;
                 uint32_t nz = 0, nbulk = 0, nhwait = 0, nswait = 0;
-                for (size_t i = 0; i + 1 < mk.size(); i += 2) {  // pair consecutive START,END
-                    uint32_t kind = (mk[i].meta >> 1) & 3u;      // 0=drain 1=bulk 2=hostwait 3=spscwait (START marker)
-                    uint64_t ts0 = map_ts(mk[i].rdc), ts1 = map_ts(mk[i + 1].rdc);
-                    busy_ns += (uint64_t)((double)(ts1 - ts0) / (aiclk_mhz / 1000.0));
-                    nz++;
-                    if (kind == 1) {
-                        nbulk++;
-                    } else if (kind == 2) {
-                        nhwait++;
-                    } else if (kind == 3) {
-                        nswait++;
+                int depth = 0;
+                uint64_t top_start = 0;
+                for (const HZMark& m : mk) {
+                    uint32_t is_start = m.meta & 1u;
+                    uint32_t kind = (m.meta >> 1) & 3u;  // 0=drain 1=bulk 2=hostwait 3=spscwait
+                    uint64_t ts = map_ts(m.rdc);
+                    if (is_start) {
+                        if (depth == 0) {
+                            top_start = ts;
+                        }
+                        depth++;
+                        nz++;
+                        if (kind == 1) {
+                            nbulk++;
+                        } else if (kind == 2) {
+                            nhwait++;
+                        } else if (kind == 3) {
+                            nswait++;
+                        }
+                    } else {
+                        if (depth > 0 && --depth == 0) {
+                            busy_ns += (uint64_t)((double)(ts - top_start) / (aiclk_mhz / 1000.0));
+                        }
                     }
 #if defined(TRACY_ENABLE)
                     if (do_tracy && tracy_handler) {
@@ -1746,11 +1761,8 @@ int main(int argc, char** argv) {
                         zp.core_noc0_y = 40u + (uint32_t)h;  // (8, 40+hart), off-grid
                         zp.risc = 0;                         // single lane per context
                         zp.name = zn;
-                        zp.timestamp = (ts0 >= x280_ts_base) ? ts0 - x280_ts_base : 0;
-                        zp.is_start = true;
-                        tracy_handler->HandleWorkerZone(zp);
-                        zp.timestamp = (ts1 >= x280_ts_base) ? ts1 - x280_ts_base : 0;
-                        zp.is_start = false;
+                        zp.timestamp = (ts >= x280_ts_base) ? ts - x280_ts_base : 0;
+                        zp.is_start = (is_start != 0u);
                         tracy_handler->HandleWorkerZone(zp);
                     }
 #endif

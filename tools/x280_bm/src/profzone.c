@@ -173,6 +173,18 @@ static inline void hz_stage(
     *prodp = p + 6;
 }
 
+/* Emit ONE X280-zone marker (3 words) into STAGE at *prodp -- no room-wait (caller must pre-reserve room).
+ * Used to build NESTED zones (parent START, child START, child END, parent END) which hz_stage's pair form
+ * can't express. The bulk path reserves +12 words so up to 4 markers fit without re-blocking. */
+static inline void hz_marker(
+    uint64_t sbase, uint32_t swm, uint32_t* prodp, uint32_t hart, uint32_t is_start, uint32_t kind, uint64_t ts) {
+    uint32_t p = *prodp;
+    w32(sbase + (uint64_t)((p + 0) & swm) * 4, hz_w0(hart, is_start, kind));
+    w32(sbase + (uint64_t)((p + 1) & swm) * 4, (uint32_t)ts);
+    w32(sbase + (uint64_t)((p + 2) & swm) * 4, (uint32_t)(ts >> 32));
+    *prodp = p + 3;
+}
+
 /* Inject an X280 hart DRAIN zone [t0,t1] (6 words) directly into the socket FIFO at the current bytes_sent
  * position (wrap-aware). Used by the RELAY harts -- they own the socket write, so their zones ride out with
  * the data they just copied. Caller publishes bytes_sent after. */
@@ -376,11 +388,17 @@ static void reader_run(
                     w32(cbase + r * 4, tails[r]); /* advance heads -> producers unblock */
                 }
                 t_copy += rdcycle() - tc;
-                if (g_hartzones) { /* split: SPSC-WAIT [tw,tc] (if the reader was blocked) + BULK copy [tc,now] */
+                if (g_hartzones) {
+                    /* BULK spans the whole drain-attempt [tw, end] (kept large); when the reader was blocked on
+                     * a full STAGE, a SPSC-WAIT zone [tw,tc] is NESTED inside it. Marker order = parent-START,
+                     * child-START, child-END, parent-END so Tracy stacks them. +12 words reserved above. */
+                    uint64_t ce = rdcycle();
+                    hz_marker(sbase, swm, &prod, (uint32_t)hartid, 1, HZK_BULK, tw); /* BULK start */
                     if (tc - tw > HZ_WAIT_MIN) {
-                        hz_stage(sbase, stage_words, swm, &prod, CONS(hartid), (uint32_t)hartid, HZK_SPSCWAIT, tw, tc);
+                        hz_marker(sbase, swm, &prod, (uint32_t)hartid, 1, HZK_SPSCWAIT, tw); /* WAIT start (child) */
+                        hz_marker(sbase, swm, &prod, (uint32_t)hartid, 0, HZK_SPSCWAIT, tc); /* WAIT end */
                     }
-                    hz_stage(sbase, stage_words, swm, &prod, CONS(hartid), (uint32_t)hartid, HZK_BULK, tc, rdcycle());
+                    hz_marker(sbase, swm, &prod, (uint32_t)hartid, 0, HZK_BULK, ce); /* BULK end */
                 }
                 fence_();                /* frame + raw + zone visible before PROD advances */
                 w32(PROD(hartid), prod); /* ONE publish for the whole core */
