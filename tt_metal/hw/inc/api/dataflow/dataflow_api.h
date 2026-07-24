@@ -2035,7 +2035,7 @@ FORCE_INLINE void noc_inline_dw_write(
     uint8_t vc = NOC_UNICAST_WRITE_VC,
     uint32_t customized_src_addr = 0) {
     WAYPOINT("NWIW");
-    // Inline dword write: 4-byte immediate value, no L1 source buffer.
+    // Inline dword write: 4-byte immediate value.
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_INLINE, 0, addr, 4, -1, posted, noc);
     DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
     DEBUG_SANITIZE_NO_DRAM_ADDR(noc, addr, 4);
