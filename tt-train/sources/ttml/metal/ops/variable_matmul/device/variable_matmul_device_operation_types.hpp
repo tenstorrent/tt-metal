@@ -5,6 +5,8 @@
 #pragma once
 
 #include <optional>
+#include <tt_stl/reflection.hpp>
+#include <tuple>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -59,6 +61,36 @@ struct VariableMatmulParams {
     // index of this call's {start, end} pair within the offsets tensor.
     OffsetsRole offsets_role = OffsetsRole::InputAndOutputRow;
     uint32_t offsets_start_index = 0;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "M_block_size",
+        "K_block_size",
+        "N_block_size",
+        "subblock_h",
+        "subblock_w",
+        "compute_with_storage_grid_size_x",
+        "compute_with_storage_grid_size_y",
+        "compute_kernel_config",
+        "transpose_a",
+        "transpose_b",
+        "offsets_role",
+        "expected_M_tiles");
+
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            config.M_block_size,
+            config.K_block_size,
+            config.N_block_size,
+            config.subblock_h,
+            config.subblock_w,
+            config.compute_with_storage_grid_size.x,
+            config.compute_with_storage_grid_size.y,
+            compute_kernel_config,
+            transpose_a,
+            transpose_b,
+            offsets_role,
+            expected_M_tiles);
+    }
 };
 
 struct VariableMatmulInputs {
@@ -70,6 +102,28 @@ struct VariableMatmulInputs {
     std::optional<ttnn::Tensor> output_tensor;
     // 1-D UINT32 ROW_MAJOR device tensor of offsets; read on every call per offsets_role.
     ttnn::Tensor offsets_tensor;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "input_dtype",
+        "weight_dtype",
+        "input_padded_dim_m1",
+        "input_padded_dim_m2",
+        "weight_padded_dim_n1",
+        "weight_padded_dim_n2",
+        "has_output_tensor");
+
+    auto attribute_values() const {
+        const auto& a_padded = input_tensor.padded_shape();
+        const auto& w_padded = weight_tensor.padded_shape();
+        return std::forward_as_tuple(
+            input_tensor.dtype(),
+            weight_tensor.dtype(),
+            a_padded[-2],
+            a_padded[-1],
+            w_padded[-2],
+            w_padded[-1],
+            output_tensor.has_value());
+    }
 };
 
 }  // namespace ttml::metal::ops::variable_matmul::device
