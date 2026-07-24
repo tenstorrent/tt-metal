@@ -145,6 +145,7 @@ static inline uint32_t pp_packet_words(uint32_t w0) {
 #define PP_X280_DRAIN 0u
 #define PP_X280_BULK 1u
 #define PP_X280_HOSTWAIT 2u
+#define PP_X280_SPSCWAIT 3u /* reader blocked on a full LIM STAGE ring (relay behind) -- backdated [start,end] */
 static inline uint32_t pp_x280_w0(uint32_t hart, uint32_t is_start, uint32_t kind) {
     return pp_word0(PP_X280_ZONE, ((hart & 0x3Fu) << 3) | ((kind & 3u) << 1) | (is_start & 1u));
 }

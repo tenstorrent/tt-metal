@@ -1703,6 +1703,7 @@ int main(int argc, char** argv) {
                 0x3498DBu /* relay1 blue */};
             const uint32_t kBulkColor = 0xE74C3Cu;      // red: reader adaptive-switched to BULK
             const uint32_t kHostWaitColor = 0x34495Eu;  // dark slate: relay blocked on a full host FIFO
+            const uint32_t kSpscWaitColor = 0x8E44ADu;  // purple: reader blocked on a full LIM STAGE (relay behind)
             for (uint64_t h = 0; h < nharts; h++) {
                 const char* role = (h < nread) ? "READ" : "RELAY";
                 std::string hname =
@@ -1713,26 +1714,34 @@ int main(int argc, char** argv) {
                     continue;
                 }
                 uint64_t busy_ns = 0;
-                uint32_t nz = 0, nbulk = 0, nwait = 0;
+                uint32_t nz = 0, nbulk = 0, nhwait = 0, nswait = 0;
                 for (size_t i = 0; i + 1 < mk.size(); i += 2) {  // pair consecutive START,END
-                    uint32_t kind = (mk[i].meta >> 1) & 3u;      // 0=drain 1=bulk 2=hostwait (on the START marker)
+                    uint32_t kind = (mk[i].meta >> 1) & 3u;      // 0=drain 1=bulk 2=hostwait 3=spscwait (START marker)
                     uint64_t ts0 = map_ts(mk[i].rdc), ts1 = map_ts(mk[i + 1].rdc);
                     busy_ns += (uint64_t)((double)(ts1 - ts0) / (aiclk_mhz / 1000.0));
                     nz++;
                     if (kind == 1) {
                         nbulk++;
                     } else if (kind == 2) {
-                        nwait++;
+                        nhwait++;
+                    } else if (kind == 3) {
+                        nswait++;
                     }
 #if defined(TRACY_ENABLE)
                     if (do_tracy && tracy_handler) {
-                        const char* suffix = (kind == 1) ? " BULK" : (kind == 2) ? " HOST-WAIT" : "";
+                        const char* suffix = (kind == 1)   ? " BULK"
+                                             : (kind == 2) ? " HOST-WAIT"
+                                             : (kind == 3) ? " SPSC-WAIT"
+                                                           : "";
                         std::string zn = hname + suffix;
                         tt::tt_metal::perf_debug::WorkerZonePacket zp{};
                         zp.chip_id = (uint32_t)device_id;
                         zp.is_x280 = true;
                         zp.ctx_name = hname;  // context row label = hart
-                        zp.color = (kind == 1) ? kBulkColor : (kind == 2) ? kHostWaitColor : kHartColor[h & 3];
+                        zp.color = (kind == 1)   ? kBulkColor
+                                   : (kind == 2) ? kHostWaitColor
+                                   : (kind == 3) ? kSpscWaitColor
+                                                 : kHartColor[h & 3];
                         zp.core_noc0_x = (uint32_t)l2t.x;    // distinct key per hart:
                         zp.core_noc0_y = 40u + (uint32_t)h;  // (8, 40+hart), off-grid
                         zp.risc = 0;                         // single lane per context
@@ -1747,13 +1756,14 @@ int main(int argc, char** argv) {
 #endif
                 }
                 printf(
-                    "  hart%llu (%s): %u zones (%u bulk / %u host-wait / %u drain)  busy=%llu us\n",
+                    "  hart%llu (%s): %u zones (%u bulk / %u spsc-wait / %u host-wait / %u drain)  busy=%llu us\n",
                     (unsigned long long)h,
                     role,
                     nz,
                     nbulk,
-                    nwait,
-                    nz - nbulk - nwait,
+                    nswait,
+                    nhwait,
+                    nz - nbulk - nswait - nhwait,
                     (unsigned long long)(busy_ns / 1000));
             }
         }

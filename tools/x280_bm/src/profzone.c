@@ -119,10 +119,12 @@
 #define kNonceHartZones (1ull << 19) /* P_NONCE bit19: harts emit per-drain zones IN-BAND (+ hart0 inline calib) */
 #define PP_X280_ZONE 2u              /* in-band X280 hart-zone packet (3 words); MUST match prof_packet.h */
 static uint32_t g_hartzones = 0;     /* set in main() from nonce bit19; read by reader_run/relay */
-/* X280-zone kinds (MUST match prof_packet.h): 0=drain, 1=bulk, 2=hostwait */
+/* X280-zone kinds (MUST match prof_packet.h): 0=drain, 1=bulk, 2=hostwait, 3=spscwait */
 #define HZK_DRAIN 0u
 #define HZK_BULK 1u
 #define HZK_HOSTWAIT 2u
+#define HZK_SPSCWAIT 3u
+#define HZ_WAIT_MIN 500u /* min wait cycles (~500 ns @1GHz) to emit a WAIT zone -- skip trivial waits */
 /* word0 for an X280-zone packet: type | (hart<<3) | (kind<<1) | is_start */
 static inline uint32_t hz_w0(uint32_t hart, uint32_t is_start, uint32_t kind) {
     return (PP_X280_ZONE << 27) | ((hart & 0x3Fu) << 3) | ((kind & 3u) << 1) | (is_start & 1u);
@@ -330,7 +332,8 @@ static void reader_run(
                 if (prefix & 1u) {
                     prefix++; /* pad to even so the stream stays 2-word aligned */
                 }
-                uint32_t need = prefix + rawn;
+                /* reserve +12 words for the SPSC-WAIT + BULK zones so their hz_stage injection never re-blocks */
+                uint32_t need = prefix + rawn + (g_hartzones ? 12u : 0u);
                 uint64_t tw = rdcycle();
                 while ((uint32_t)(stage_words - (prod - r32(CONS(hartid)))) < need) {
                     cpu_pause();
@@ -373,8 +376,11 @@ static void reader_run(
                     w32(cbase + r * 4, tails[r]); /* advance heads -> producers unblock */
                 }
                 t_copy += rdcycle() - tc;
-                if (g_hartzones) { /* BULK drain zone -- inject BEFORE publish so it rides out */
-                    hz_stage(sbase, stage_words, swm, &prod, CONS(hartid), (uint32_t)hartid, HZK_BULK, hz_t, rdcycle());
+                if (g_hartzones) { /* split: SPSC-WAIT [tw,tc] (if the reader was blocked) + BULK copy [tc,now] */
+                    if (tc - tw > HZ_WAIT_MIN) {
+                        hz_stage(sbase, stage_words, swm, &prod, CONS(hartid), (uint32_t)hartid, HZK_SPSCWAIT, tw, tc);
+                    }
+                    hz_stage(sbase, stage_words, swm, &prod, CONS(hartid), (uint32_t)hartid, HZK_BULK, tc, rdcycle());
                 }
                 fence_();                /* frame + raw + zone visible before PROD advances */
                 w32(PROD(hartid), prod); /* ONE publish for the whole core */
