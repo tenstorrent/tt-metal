@@ -43,3 +43,8 @@ target_link_libraries(bh1_recv_probe PRIVATE test_metal_common_libs)
 add_executable(bh1_tx_ring bh1_tx_ring_host.cpp)
 target_include_directories(bh1_tx_ring PRIVATE ${PROJECT_SOURCE_DIR})
 target_link_libraries(bh1_tx_ring PRIVATE test_metal_common_libs)
+
+# BH.2-RX — TT-RDMA receive + opcode dispatch + MR WRITE (loads bh_rdma_rx_dispatch.cpp).
+add_executable(bh1_rx_dispatch bh1_rx_dispatch_host.cpp)
+target_include_directories(bh1_rx_dispatch PRIVATE ${PROJECT_SOURCE_DIR})
+target_link_libraries(bh1_rx_dispatch PRIVATE test_metal_common_libs)
