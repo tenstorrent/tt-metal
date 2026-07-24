@@ -44,7 +44,7 @@ struct MorehSoftmaxBackwardOperation {
         const std::optional<Tensor>& input_grad_tensor;
     };
 
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
 #define DEFINE_SOFTMAX_BACKWARD_FACTORY(factory_name)             \

@@ -46,6 +46,9 @@ def run_all_gather_impl(
     chunks_per_sync=None,
     num_workers_per_link=None,
     num_buffers_per_channel=None,
+    packer_l1_acc=True,
+    precision_offset=None,
+    matmul_1d_mcast_in0=None,
 ):
     if use_legacy_allgather:
         pytest.skip(LEGACY_CCL_SKIP)
@@ -119,7 +122,14 @@ def run_all_gather_impl(
     _, _, _, hidden_dim = ag_output_shape
 
     for i in range(num_iters):
-        ag_output_tensor = torch.rand(ag_output_shape).bfloat16()
+        if precision_offset is not None:
+            # A small random signal plus a large constant offset. Paired with the column-sum-zero
+            # weights below, the offset contributes nothing to the K reduction of in0 @ weights, so
+            # the true result is small while the running partial sums are large (~offset). Any loss of
+            # precision in the cross-block reload of the fp32 partials destroys the small true result.
+            ag_output_tensor = (torch.randn(ag_output_shape) + precision_offset).bfloat16()
+        else:
+            ag_output_tensor = torch.rand(ag_output_shape).bfloat16()
         ag_output_tensor_goldens_list.append(ag_output_tensor)
 
         input_tensor_mesh = ttnn.from_torch(
@@ -135,7 +145,12 @@ def run_all_gather_impl(
 
     ##### Matmul weight setup #####
     if use_bias:
-        weights_tensor = torch.randn([hidden_dim, matmul_output_dim * num_devices]).bfloat16()
+        weights_tensor = torch.randn([hidden_dim, matmul_output_dim * num_devices])
+        if precision_offset is not None:
+            # Each column sums to zero over the K (hidden) dimension so the constant offset in the
+            # activations cancels in in0 @ weights (see the input construction above).
+            weights_tensor = weights_tensor - weights_tensor.mean(dim=0, keepdim=True)
+        weights_tensor = weights_tensor.bfloat16()
         weights_tensor_padded = weights_tensor.unsqueeze(0).unsqueeze(0)
     else:
         weights_tensor = torch.randn([1, 1, hidden_dim, matmul_output_dim * num_devices]).bfloat16()
@@ -166,31 +181,58 @@ def run_all_gather_impl(
 
     ##### Configs for ttnn.matmul #####
     core_grid = (8, 6)
-    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=core_grid,
-        in0_block_w=min(max_in0_block_w, hidden_dim // 32 // core_grid[0]),  # how much inner dim you take each time
-        out_subblock_h=1,  # Must be divisible by per_core_M
-        out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-        per_core_M=max(1, math.ceil(ag_output_shape[2] / 32 / core_grid[1])),  # M / TILE_HEIGHT / Grid_Size
-        per_core_N=max(1, math.ceil(matmul_output_dim / 32 / core_grid[0])),  # N / TILE_WIDTH / Grid_Size
-        transpose_mcast=False,
-        fused_activation=None,  # ttnn.UnaryOpType.SILU,
-        fuse_batch=False,
-    )
+    if matmul_1d_mcast_in0 is not None:
+        # Single-core 1D multicast config: the whole per-device matmul runs on one core with K split
+        # into many blocks, so the cross-block reload runs on the classic mcast_in0/in1 program path
+        # (mcast_in0 selects which). Shapes are kept small so the single core's CBs fit in SRAM.
+        n_tiles = max(1, matmul_output_dim // 32)
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(1, 1),
+            in0_block_w=min(max_in0_block_w, hidden_dim // 32),  # how much inner dim you take each time
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=min(2, n_tiles),  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=max(1, math.ceil(ag_output_shape[2] / 32)),  # full M on the single core
+            per_core_N=n_tiles,  # full per-device N on the single core
+            fuse_batch=True,
+            mcast_in0=matmul_1d_mcast_in0,
+        )
+    else:
+        program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=core_grid,
+            in0_block_w=min(max_in0_block_w, hidden_dim // 32 // core_grid[0]),  # how much inner dim you take each time
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=max(1, math.ceil(ag_output_shape[2] / 32 / core_grid[1])),  # M / TILE_HEIGHT / Grid_Size
+            per_core_N=max(1, math.ceil(matmul_output_dim / 32 / core_grid[0])),  # N / TILE_WIDTH / Grid_Size
+            transpose_mcast=False,
+            fused_activation=None,  # ttnn.UnaryOpType.SILU,
+            fuse_batch=False,
+        )
+    # For the precision check, use HiFi3 with no approximation. HiFi3 keeps the bf16 multiply accurate
+    # so the only source of error under test is the fp32 cross-block reload, while avoiding the Wormhole
+    # HiFi4 + fp32-accumulation hardware bug that otherwise degrades accuracy (see the warning in
+    # compute_kernel_config.cpp, which recommends HiFi3 with fp32 accumulation on Wormhole).
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=True,
+        math_fidelity=ttnn.MathFidelity.HiFi3 if precision_offset is not None else ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False if precision_offset is not None else True,
         fp32_dest_acc_en=True,
-        packer_l1_acc=True,
+        packer_l1_acc=packer_l1_acc,
     )
 
     ##### Perform torch ops #####
     torch_matmul_output_list = []
     for i in range(num_iters):
         if use_bias:
-            matmul_output = torch.nn.functional.linear(
-                ag_output_tensor_goldens_list[i], weights_tensor.T.contiguous(), bias_tensor
-            )
+            g = ag_output_tensor_goldens_list[i]
+            w = weights_tensor.T.contiguous()
+            b = bias_tensor
+
+            if precision_offset is not None:
+                # Reference the true (small) result in fp64 so the assertion detects any precision loss in
+                # the device's fp32 accumulation of the large partial sums.
+                matmul_output = torch.nn.functional.linear(g.double(), w.double(), b.double()).float()
+            else:
+                matmul_output = torch.nn.functional.linear(g, w, b)
         else:
             matmul_output = torch.matmul(ag_output_tensor_goldens_list[i], weights_tensor)
         torch_matmul_output_list.append(matmul_output)
@@ -290,7 +332,13 @@ def run_all_gather_impl(
 
         tt_mm_out = ttnn.from_device(tt_mm_out_tensor)
         tt_mm_out = ttnn.to_torch(tt_mm_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
-        eq, output = comp_pcc(tt_mm_out, torch_mm_out_tensor)
+        # The offset-cancellation construction makes correct fp32 accumulation land near the fp64
+        # reference (PCC ~1) while a TF32-truncated reload collapses PCC, so a tight threshold cleanly
+        # separates the two.
+        if precision_offset is not None:
+            eq, output = comp_pcc(tt_mm_out, torch_mm_out_tensor, 0.99)
+        else:
+            eq, output = comp_pcc(tt_mm_out, torch_mm_out_tensor)
         logger.info(f"{output}, iteration {i}")
         assert eq, f"{i} FAILED mm: {output}"
 
@@ -499,4 +547,121 @@ def test_all_gather_matmul_async(
         chunks_per_sync=chunks_per_sync,
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_ring"],
+)
+def test_all_gather_matmul_async_fp32_reload_precision(mesh_device, all_gather_topology):
+    """fp32-accumulation precision of the fused all-gather + matmul on the 2D multicast program path.
+
+    all_gather_matmul routes a 2D program config to the classic mcast_in0_in1 program factory (a path
+    normal ttnn.matmul does not use), so this is the only coverage of fp32 accumulation there. The
+    activations carry a large constant offset and each weight column sums to zero over the contraction
+    dimension, so the offset cancels in in0 @ weights and the true result is small while the running
+    K-reduction partials are large. With packer_l1_acc disabled the fp32 partials are reloaded into
+    DEST between K-blocks; unless that reload stays in fp32 the small true result is rounded away and
+    PCC against the fp64 reference collapses. The fused bias makes the partials CB a second consumer
+    read as an FPU operand (SrcA), which is the case that requires the reload to go through a separate
+    UnpackToDestFp32 alias of the partials CB. A small in0_block_w splits K into many blocks so the
+    reload runs on every block boundary.
+    """
+    dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    run_all_gather_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        ag_output_shape=[1, 1, 4096, 2560],
+        dim=3,
+        num_links=1,
+        ag_input_dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        matmul_output_dim=960,
+        matmul_weights_dtype=ttnn.bfloat16,
+        max_in0_block_w=1,  # 1 tile per K-block -> ~80 blocks over K=2560, so the reload runs often
+        use_bias=True,
+        mem_config_input=dram,
+        mem_config_ag=dram,
+        mem_config_mm=dram,
+        all_gather_topology=all_gather_topology,
+        use_non_fused=False,
+        use_legacy_allgather=False,
+        num_iters=1,
+        enable_trace=False,
+        use_barrier=False,
+        use_persistent_buffers=False,
+        packer_l1_acc=False,
+        precision_offset=1000.0,
+    )
+
+
+# The mcast_in1 path segfaults for this single-core non-gather 1D matmul routed through
+# all_gather_matmul, and reproduces on main. A segfault would kill the test process; so run=False
+# keeps the case from executing while still recording it as an expected failure.
+@pytest.mark.parametrize(
+    "matmul_1d_mcast_in0",
+    [
+        pytest.param(True, id="mcast_in0"),
+        pytest.param(
+            False,
+            id="mcast_in1",
+            marks=pytest.mark.xfail(
+                reason="process_mcast_in1 segfaults for a single-core non-gather 1D matmul through "
+                "all_gather_matmul; reproduces on main. Issue #50167",
+                run=False,
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_ring"],
+)
+def test_all_gather_matmul_async_1d_fp32_reload_precision(mesh_device, all_gather_topology, matmul_1d_mcast_in0):
+    """fp32-accumulation precision of the fused all-gather + matmul on the 1D multicast program path.
+
+    A non-gather 1D program config routes all_gather_matmul to the classic mcast program factory:
+    process_mcast_in0 when mcast_in0=True, process_mcast_in1 when mcast_in0=False (a path normal
+    ttnn.matmul does not use, since non-gather 1D goes through the descriptor path). Same precision
+    construction as the 2D case: a large offset in the activations cancels against column-sum-zero
+    weights, so the true result is small while the K-reduction partials are large; with packer_l1_acc
+    disabled the fp32 partials reload into DEST between blocks, and unless that reload stays fp32 the
+    small result is rounded away and PCC against the fp64 reference collapses. Fused bias makes the
+    partials CB a second SrcA consumer, exercising the UnpackToDestFp32 alias of the partials CB.
+    """
+    dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    run_all_gather_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        ag_output_shape=[1, 1, 64, 4096],
+        dim=3,
+        num_links=1,
+        ag_input_dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        matmul_output_dim=64,
+        matmul_weights_dtype=ttnn.bfloat16,
+        max_in0_block_w=1,  # 1 tile per K-block -> 128 blocks over K=4096, so the reload runs often
+        use_bias=True,
+        mem_config_input=dram,
+        mem_config_ag=dram,
+        mem_config_mm=dram,
+        all_gather_topology=all_gather_topology,
+        use_non_fused=False,
+        use_legacy_allgather=False,
+        num_iters=1,
+        enable_trace=False,
+        use_barrier=False,
+        use_persistent_buffers=False,
+        packer_l1_acc=False,
+        precision_offset=1000.0,
+        matmul_1d_mcast_in0=matmul_1d_mcast_in0,
     )

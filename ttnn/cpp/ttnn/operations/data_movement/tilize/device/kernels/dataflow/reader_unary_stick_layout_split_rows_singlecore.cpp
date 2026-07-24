@@ -12,7 +12,7 @@
 void kernel_main() {
     // Constexpr
     constexpr uint32_t dfb_id_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t tile_height = 32;
+    constexpr uint32_t tile_height = get_compile_time_arg_val(1);
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_sticks = get_arg_val<uint32_t>(1);
@@ -21,7 +21,7 @@ void kernel_main() {
     const uint32_t num_full_blocks_in_row = get_arg_val<uint32_t>(5);
     const uint32_t start_stick_id = get_arg_val<uint32_t>(8);
 
-    constexpr auto src_tensor_args = TensorAccessorArgs<1>();
+    constexpr auto src_tensor_args = TensorAccessorArgs<2>();
 
     const auto s = TensorAccessor(src_tensor_args, src_addr);
 

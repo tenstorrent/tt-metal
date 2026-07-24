@@ -21,7 +21,7 @@
 #include <xtensor/core/xtensor_forward.hpp>
 #include <xtensor/views/xview.hpp>
 
-namespace tt::tt_metal::experimental::xtensor {
+namespace ttnn::experimental::xtensor {
 namespace {
 
 ttsl::SmallVector<int> normalize_dims(const ttsl::SmallVector<int>& dims, size_t tensor_dims) {
@@ -232,7 +232,7 @@ XtensorAdapter<typename Expression::value_type> concat(const std::vector<Express
     return concat_ndim<Expression>(v, {v.size()}, {dim});
 }
 
-// Adaptor APIs from xtensor to tt::tt_metal::Tensor.
+// Adaptor APIs from xtensor to ttnn::Tensor.
 namespace adaptor {
 namespace {
 
@@ -244,13 +244,13 @@ Tensor concat_impl(const std::vector<Tensor>& tensors, const tt::tt_metal::Tenso
         xtensors.push_back(to_xtensor<T>(tensor));
     }
     xt::xarray<T> result(concat(xtensors, dim).expr());
-    return from_xtensor<T>(result, TensorSpec(get_shape_from_xarray(result), layout));
+    return from_xtensor<T>(result, tt::tt_metal::TensorSpec(get_shape_from_xarray(result), layout));
 }
 
 }  // namespace
 }  // namespace adaptor
 
-Tensor concat(const std::vector<Tensor>& tensors, int dim) {
+ttnn::Tensor concat(const std::vector<ttnn::Tensor>& tensors, int dim) {
     TT_FATAL(!tensors.empty(), "Cannot concatenate an empty list of tensors");
     const auto& reference_layout = tensors.front().tensor_spec().tensor_layout();
     switch (reference_layout.get_data_type()) {
@@ -306,4 +306,4 @@ EXPLICIT_INSTANTIATIONS_FOR_TYPE(float8_e4m3)
 
 #undef EXPLICIT_INSTANTIATIONS_FOR_TYPE
 
-}  // namespace tt::tt_metal::experimental::xtensor
+}  // namespace ttnn::experimental::xtensor

@@ -1144,6 +1144,33 @@ std::vector<CoreCoord> MeshDeviceImpl::worker_cores_from_logical_cores(
 std::vector<CoreCoord> MeshDeviceImpl::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
     return get_devices().front()->get_optimal_dram_bank_to_logical_worker_assignment(noc);
 }
+std::unordered_map<uint32_t, CoreCoord> MeshDeviceImpl::get_optimal_dram_bank_to_logical_worker_assignment(
+    NOC noc, const MeshCoordinate& coord) {
+    // The assignment is a device-local physical property that can only be queried for a local device.
+    // If `coord` maps to a local device, use it. Otherwise (a remote device) fall back to an arbitrary
+    // local device's assignment; this is a best-effort approximation that is exact only when the mesh
+    // is homogeneously harvested. Fail only when there is no local device to fall back to.
+    IDevice* device = nullptr;
+    if (view_->impl().is_local(coord)) {
+        device = view_->impl().get_device(coord);
+    } else {
+        const auto local_devices = this->get_devices();
+        TT_FATAL(
+            !local_devices.empty(),
+            "get_optimal_dram_bank_to_logical_worker_assignment: MeshCoordinate {} maps to a remote device and this "
+            "mesh has no local devices to fall back to.",
+            coord);
+        device = local_devices.front();
+    }
+    // The underlying assignment is a per-bank list indexed by DRAM bank id; expose it as an explicit
+    // bank-id -> worker-core map so consumers do not treat the position in a flat list as incidental.
+    const auto per_bank = device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    std::unordered_map<uint32_t, CoreCoord> assignment;
+    for (uint32_t bank_id = 0; bank_id < per_bank.size(); ++bank_id) {
+        assignment.emplace(bank_id, per_bank[bank_id]);
+    }
+    return assignment;
+}
 CoreCoord MeshDeviceImpl::virtual_core_from_logical_core(
     const CoreCoord& logical_coord, const CoreType& core_type) const {
     return validate_and_get_reference_value(this->get_devices(), [logical_coord, core_type](const auto* device) {
@@ -1725,6 +1752,10 @@ std::vector<CoreCoord> MeshDevice::ethernet_cores_from_logical_cores(
 }
 std::vector<CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
     return pimpl_->get_optimal_dram_bank_to_logical_worker_assignment(noc);
+}
+std::unordered_map<uint32_t, CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(
+    NOC noc, const MeshCoordinate& coord) {
+    return pimpl_->get_optimal_dram_bank_to_logical_worker_assignment(noc, coord);
 }
 CoreCoord MeshDevice::virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const {
     return pimpl_->virtual_core_from_logical_core(logical_coord, core_type);

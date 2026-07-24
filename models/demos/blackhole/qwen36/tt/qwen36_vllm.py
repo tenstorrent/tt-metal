@@ -64,8 +64,17 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         max_num_seqs: int | None = None,
         **kwargs,
     ) -> int:
-        """All-user KV capacity = max_model_len × max_num_seqs (B=1 serving), not the inherited
-        131072 fallback — so these models serve the full requested ISL (e.g. 256K)."""
+        """All-user KV capacity (the shared paged-KV token pool).
+
+        QWEN36_MAX_TOKENS_ALL_USERS overrides it with a FIXED pool (set per device+model from the
+        tt-inference-server spec's env_vars, mirroring GEMMA4_MAX_TOKENS_ALL_USERS). This decouples
+        the pool from max_model_len × max_num_seqs so ONE config serves both a single long request
+        (up to max_model_len) and a batch of shorter ones (sum of lengths ≤ pool) — e.g. 524288 =
+        1×256K or 8×64K. Without the override, fall back to max_model_len × max_num_seqs (the old
+        per-config product) so existing single-mode specs are unchanged."""
+        override = os.environ.get("QWEN36_MAX_TOKENS_ALL_USERS")
+        if override:
+            return int(override)
         if max_model_len is not None:
             return int(max_model_len) * int(max_num_seqs or 1)
         return super().get_max_tokens_all_users(
@@ -301,23 +310,24 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             num_blocks = math.ceil(_PREFILL_WARMUP_BUCKET / _BLOCK_SIZE)
         page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
         model = self.model[0]
-        # Batched serving (max_num_seqs>1): the decode buffers are [B,...], but prefill runs B=1, so
-        # warm the masked-bucket programs against a B=1 GDN scratch and skip parking the chunk trace
-        # (batched serving is short-prompt only; the chunk trace would bake the freed scratch). The
-        # batched decode buffers are restored before the decode-trace warmup captures at [B,...].
+        # Batched serving (max_num_seqs>1): the decode buffers are [B,...], but prefill runs B=1. Bind
+        # the PERSISTENT B=1 GDN prefill scratch and capture the chunk trace against IT, so long prompts
+        # (>chunk_size) replay the traced chunk-outer path per user instead of the slower eager fallback.
+        # The scratch is not freed (prefill_paged_slots rebinds it per request); the batched decode
+        # buffers are restored before the decode-trace warmup captures at [B,...].
         batched = model.num_devices > 1 and model.args.max_batch_size > 1
         logger.info(
-            f"Starting Qwen prefill warmup: {'masked buckets (batched)' if batched else 'chunk-prefill trace'} "
+            f"Starting Qwen prefill warmup: chunk-prefill trace{' (batched, B=1 scratch)' if batched else ''} "
             f"(chunk={_PREFILL_WARMUP_CHUNK}, page_table_blocks={num_blocks})..."
         )
-        prev = model._alloc_gdn_scratch_b1() if batched else None
+        prev = model._bind_gdn_prefill_scratch() if batched else None
         try:
             model.capture_prefill_trace_chunked(
-                self.mesh_device, page_table, chunk_size=_PREFILL_WARMUP_CHUNK, capture_chunk_trace=not batched
+                self.mesh_device, page_table, chunk_size=_PREFILL_WARMUP_CHUNK, capture_chunk_trace=True
             )
         finally:
             if prev is not None:
-                model._restore_gdn_batched(prev)
+                model._unbind_gdn_prefill_scratch(prev)
 
     def warmup_model_decode(self, *args, **kwargs):
         # Defer to WarmupForwardMixin, which captures the paged-SDPA + GDN decode trace at pos 0.

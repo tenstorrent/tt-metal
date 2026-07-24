@@ -122,7 +122,7 @@ public:
     // `tensor_spec() == get_per_shard_spec()` and a populated shard at every
     // covered coord. Streams the per-coord shards through the sockets verbatim;
     // `metadata` follows the same per-call contract as the bytes overload.
-    void forward_to_tensor(const Tensor& host_tensor, ttsl::Span<const std::byte> metadata = {});
+    void forward_to_tensor(const ttnn::Tensor& host_tensor, ttsl::Span<const std::byte> metadata = {});
 
     // Block until every in-flight transfer has fully landed in the backing tensor.
     // The reader acks each socket page as soon as it is staged in L1 (recycling the
@@ -132,7 +132,7 @@ public:
     // the backing tensor afterward from the owner.
     void barrier();
 
-    const Tensor& get_backing_tensor() const;
+    const ttnn::Tensor& get_backing_tensor() const;
 
     // The per-shard TensorSpec produced by the mapper; same as
     // `get_backing_tensor().tensor_spec()`.
@@ -259,7 +259,7 @@ private:
     Config cfg_;
 
     std::unique_ptr<ttnn::distributed::TensorToMesh> mapper_;
-    Tensor device_tensor_;
+    ttnn::Tensor device_tensor_;
 
     // Per-shard tensor spec produced by the mapper. Cached so owner and
     // connector run the same Tensor-overload validation.

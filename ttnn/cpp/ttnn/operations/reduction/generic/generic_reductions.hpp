@@ -71,8 +71,6 @@ Tensor min(
     bool correction = true,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
-// use_legacy is deprecated and non-functional: the Welford implementation is always
-// used. The parameter is kept only for API compatibility and will be removed.
 Tensor std(
     const Tensor& input_tensor_arg,
     const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim_arg = std::nullopt,
@@ -81,11 +79,8 @@ Tensor std(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     float scalar = 1.0f,
     bool correction = true,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    bool use_legacy = false);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
-// use_legacy is deprecated and non-functional: the Welford implementation is always
-// used. The parameter is kept only for API compatibility and will be removed.
 Tensor var(
     const Tensor& input_tensor_arg,
     const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim_arg = std::nullopt,
@@ -94,7 +89,6 @@ Tensor var(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     float scalar = 1.0f,
     bool correction = true,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    bool use_legacy = false);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 }  // namespace ttnn

@@ -47,7 +47,7 @@ BernoulliDeviceOperation::spec_return_value_t BernoulliDeviceOperation::compute_
     }
 
     auto output_shape = tensor_args.input.logical_shape();
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             operation_attributes.dtype, tt::tt_metal::PageConfig(Layout::TILE), operation_attributes.memory_config));

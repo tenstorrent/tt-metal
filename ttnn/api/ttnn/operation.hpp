@@ -25,9 +25,9 @@ static Hash hash_operation(const Types&... objects) {
     return ttsl::hash::hash_objects_with_default_seed(ttsl::hash::type_hash<OperationType>, objects...);
 }
 
-using Tensors = std::vector<Tensor>;
-using OptionalTensors = std::vector<std::optional<Tensor>>;
-using OptionalConstTensors = std::vector<std::optional<const Tensor>>;
+using Tensors = std::vector<ttnn::Tensor>;
+using OptionalTensors = std::vector<std::optional<ttnn::Tensor>>;
+using OptionalConstTensors = std::vector<std::optional<const ttnn::Tensor>>;
 
 template <typename... Args>
 struct last_type;

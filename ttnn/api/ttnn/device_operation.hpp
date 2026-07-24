@@ -189,7 +189,7 @@ void enqueue_mesh_workload(
     if (tt::tt_metal::experimental::inspector::IsEnabled()) {
         auto operation_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
 
-        std::vector<TensorSpec> spec_copies;
+        std::vector<tt::tt_metal::TensorSpec> spec_copies;
         if (tt::tt_metal::experimental::inspector::ShouldCaptureTensorSpecs()) {
             size_t specs_count = ttsl::reflection::count_object_of_type<Tensor>(tensor_args);
             spec_copies.reserve(specs_count);
@@ -220,8 +220,8 @@ void enqueue_mesh_workload(
 }
 
 // Dispatches `fn` to `program_factory` through either the `MeshWorkloadFactoryConcept` directly, or through the adapted
-// path for `ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept` / `MetalV2FactoryConcept`
-// factories.
+// path for `ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept` / `ProgramSpecFactoryConcept` /
+// `CustomProgramSpecFactoryConcept` factories.
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t, typename ProgramFactory, typename Fn>
 void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, const Fn& fn) {
     std::visit(
@@ -235,9 +235,14 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
                 using AdaptedMeshWorkloadFactory = mesh_device_operation_t::template DescriptorMeshWorkloadAdapter<T>;
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
             },
-            [&]<MetalV2FactoryConcept T>(const T&) {
+            [&]<ProgramSpecFactoryConcept T>(const T&) {
                 using AdaptedMeshWorkloadFactory =
-                    mesh_device_operation_t::template MetalV2MeshWorkloadFactoryAdapter<T>;
+                    mesh_device_operation_t::template ProgramSpecMeshWorkloadFactoryAdapter<T>;
+                fn.template operator()<AdaptedMeshWorkloadFactory>();
+            },
+            [&]<CustomProgramSpecFactoryConcept T>(const T&) {
+                using AdaptedMeshWorkloadFactory =
+                    mesh_device_operation_t::template CustomProgramSpecMeshWorkloadFactoryAdapter<T>;
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
             },
             [&]<MeshWorkloadFactoryConcept WorkloadFactory>(const WorkloadFactory&) {

@@ -91,7 +91,7 @@ AllGatherDeviceOperation::spec_return_value_t AllGatherDeviceOperation::compute_
     const auto& input_tensor = tensor_args.input_tensor;
     auto shape = input_tensor.logical_shape();
     shape[args.dim] *= args.num_devices;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(), input_tensor.tensor_spec().page_config(), args.output_mem_config));

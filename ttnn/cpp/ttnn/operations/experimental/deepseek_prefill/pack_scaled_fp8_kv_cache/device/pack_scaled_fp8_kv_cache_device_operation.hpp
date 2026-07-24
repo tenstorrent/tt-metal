@@ -13,7 +13,7 @@ namespace ttnn::experimental::prim::pack_scaled_fp8_kv_cache {
 struct PackScaledFp8KvCacheDeviceOperation {
     using operation_attributes_t = PackScaledFp8KvCacheParams;
     using tensor_args_t = PackScaledFp8KvCacheInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<PackScaledFp8KvCacheProgramFactory>;
 

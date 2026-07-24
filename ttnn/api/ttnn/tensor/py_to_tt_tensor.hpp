@@ -13,7 +13,7 @@ namespace distributed {
 class TensorToMesh;
 }  // namespace distributed
 
-tt::tt_metal::Tensor convert_python_tensor_to_tt_tensor(
+ttnn::Tensor convert_python_tensor_to_tt_tensor(
     const tt::tt_metal::Shape& tensor_shape,
     tt::tt_metal::DataType dst_dtype,
     tt::tt_metal::Layout layout,

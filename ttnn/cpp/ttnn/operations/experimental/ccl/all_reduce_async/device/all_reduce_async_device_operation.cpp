@@ -79,7 +79,7 @@ AllReduceAsyncDeviceOperation::spec_return_value_t AllReduceAsyncDeviceOperation
     tt::tt_metal::TensorLayout output_tensor_layout =
         tt::tt_metal::TensorLayout(args.dtype, input_tensor.tensor_spec().page_config(), args.output_mem_config);
 
-    return TensorSpec(shape, output_tensor_layout);
+    return tt::tt_metal::TensorSpec(shape, output_tensor_layout);
 }
 
 AllReduceAsyncDeviceOperation::tensor_return_value_t AllReduceAsyncDeviceOperation::create_output_tensors(

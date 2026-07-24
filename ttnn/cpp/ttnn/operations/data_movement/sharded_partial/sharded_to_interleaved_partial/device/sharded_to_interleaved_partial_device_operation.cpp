@@ -47,7 +47,7 @@ void ShardedToInterleavedPartialDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec ShardedToInterleavedPartialDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec ShardedToInterleavedPartialDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     // Return the spec of the cache tensor since we're writing to it
     return tensor_args.cache_tensor.tensor_spec();

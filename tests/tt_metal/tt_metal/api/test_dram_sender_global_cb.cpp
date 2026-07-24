@@ -19,6 +19,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include "impl/buffers/drisc_l1_arena.hpp"
+#include "impl/buffers/global_circular_buffer_dram_sender_internal.hpp"
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
 
 #include "impl/kernels/kernel.hpp"  // DramConfig

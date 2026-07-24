@@ -25,7 +25,7 @@ bool is_dram_interleaved(const tt::tt_metal::MemoryConfig& mem_config) {
 }
 
 void validate_device_tensor(const Tensor& tensor, const std::string& name) {
-    TT_FATAL(tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
+    TT_FATAL(tensor.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
     TT_FATAL(tensor.buffer() != nullptr, "{} must have a buffer", name);
     TT_FATAL(is_dram_interleaved(tensor.memory_config()), "{} must be DRAM interleaved", name);
     TT_FATAL(tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "{} must be ROW_MAJOR layout", name);
@@ -124,14 +124,14 @@ PerTokenCastToFp8DeviceOperation::spec_return_value_t PerTokenCastToFp8DeviceOpe
     const auto& input = tensor_args.input_tensor;
     const auto& input_shape = input.logical_shape();
 
-    TensorSpec output_e4m3_spec(
+    tt::tt_metal::TensorSpec output_e4m3_spec(
         input_shape,
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::FP8_E4M3,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
             attrs.output_memory_config));
 
-    TensorSpec scale_spec(
+    tt::tt_metal::TensorSpec scale_spec(
         scale_output_shape(input_shape),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::FLOAT32,

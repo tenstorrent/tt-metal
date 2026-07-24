@@ -749,7 +749,15 @@ def bh_2d_mesh_device_context(device_params):
     fabric_manager = updated_device_params.pop("fabric_manager", None)
     fabric_router_config = updated_device_params.pop("fabric_router_config", None)
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
-    if ttnn.get_num_devices() == 8:
+
+    # TODO #50463: Revisit MGD path handling
+    if os.environ.get("TT_MESH_GRAPH_DESC_PATH"):
+        mesh_shape = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape()
+        mesh_device = ttnn.open_mesh_device(
+            mesh_shape=mesh_shape,
+            **updated_device_params,
+        )
+    elif ttnn.get_num_devices() == 8:
         mesh_device = ttnn.open_mesh_device(
             mesh_shape=ttnn.MeshShape(4, 2),
             **updated_device_params,

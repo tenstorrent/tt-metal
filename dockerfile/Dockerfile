@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # TT-Metalium Dockerfile
 # Optimized with multi-stage builds for tool and Python dependency caching.
 #
@@ -102,10 +103,10 @@ ENV CPATH=${OMPI_PREFIX}/include
 ENV PKG_CONFIG_PATH=${OMPI_PREFIX}/lib/pkgconfig
 ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
 
-COPY --from=uv-layer /uv /uvx /usr/local/bin/
-COPY --from=cmake-layer /install/ /usr/local/
-COPY --from=zstd-layer /install/ /usr/local/
-COPY --from=openmpi-layer /install/ /opt/
+COPY --from=uv-layer --link /uv /uvx /usr/local/bin/
+COPY --from=cmake-layer --link /install/ /usr/local/
+COPY --from=zstd-layer --link /install/ /usr/local/
+COPY --from=openmpi-layer --link /install/ /opt/
 
 RUN test -x /usr/local/bin/cmake || { echo "ERROR: cmake not found in cmake-layer" >&2; exit 1; } && \
     test -x /usr/local/bin/zstd || { echo "ERROR: zstd not found in zstd-layer" >&2; exit 1; } && \
@@ -130,11 +131,11 @@ COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
 COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version
 RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker
 
-# Copy SFPI from pre-built tool image
-RUN --mount=from=sfpi-layer,source=/install,target=/sfpi-staging \
-    mkdir -p /opt/tenstorrent && \
-    cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/ && \
-    test -d /opt/tenstorrent/sfpi || { echo "ERROR: sfpi not found in sfpi-layer" >&2; exit 1; }
+# Copy SFPI from pre-built tool image.
+# COPY --link makes this an independent merge layer whose blob depends only on
+# the sfpi content, not on upstream base-stage churn (decouples registry cache).
+COPY --from=sfpi-layer --link /install/opt/tenstorrent/sfpi /opt/tenstorrent/sfpi
+RUN test -d /opt/tenstorrent/sfpi || { echo "ERROR: sfpi not found in sfpi-layer" >&2; exit 1; }
 
 #############################################################
 # CI Build light image (no Python venv layers)
@@ -150,11 +151,11 @@ ENV CCACHE_TEMPDIR=/tmp/ccache
 
 # Copy pre-built tools from GHCR tool images
 # These images are built by Dockerfile.tools and pushed by build-docker-artifact.yaml
-COPY --from=ccache-layer /install/ /usr/local/
-COPY --from=doxygen-layer /install/ /usr/local/
-COPY --from=clangbuildanalyzer-layer /install/ /usr/local/
-COPY --from=yq-layer /install/bin/yq /usr/local/bin/
-COPY --from=mold-layer /install/ /usr/local/
+COPY --from=ccache-layer --link /install/ /usr/local/
+COPY --from=doxygen-layer --link /install/ /usr/local/
+COPY --from=clangbuildanalyzer-layer --link /install/ /usr/local/
+COPY --from=yq-layer --link /install/bin/yq /usr/local/bin/
+COPY --from=mold-layer --link /install/ /usr/local/
 RUN test -x /usr/local/bin/ccache || { echo "ERROR: ccache not found in ccache-layer" >&2; exit 1; } && \
     test -x /usr/local/bin/doxygen || { echo "ERROR: doxygen not found in doxygen-layer" >&2; exit 1; } && \
     test -x /usr/local/bin/yq || { echo "ERROR: yq not found in yq-layer" >&2; exit 1; } && \
@@ -198,14 +199,16 @@ ENV PYTHON_ENV_DIR=/opt/venv
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
 ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
-# Copy pre-built ci-build venv from tool image
-# Set umask 000 to allow all users to write (required for uv pip install at runtime)
-# SECURITY NOTE: This enables any user in the container to modify the Python environment.
-RUN --mount=from=ci-build-venv-layer,source=/install,target=/venv-staging \
-    umask 000 && \
-    cp -a /venv-staging/venv $PYTHON_ENV_DIR && \
-    umask 002 && \
-    echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
+# Copy pre-built ci-build venv from tool image.
+# COPY --link makes this an independent merge layer whose blob depends only on
+# the venv content, not on upstream base/ci-build-light churn (registry dedupe).
+# The venv is built world-writable (umask 000) in Dockerfile.python; --link
+# preserves those source permissions verbatim, so no umask is needed here.
+# SECURITY NOTE: The venv is world-writable, enabling any container user to
+# modify the Python environment (required for uv pip install at runtime).
+# Do NOT add --chmod: it disables the --link merge fast path.
+COPY --from=ci-build-venv-layer --link /install/venv /opt/venv
+RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 #############################################################
 # CI Test light image (no Python venv layers)
@@ -258,11 +261,12 @@ ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
 ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
 # Copy pre-built ci-test venv. This layer already includes the ci-build venv packages.
-RUN --mount=from=ci-test-venv-layer,source=/install,target=/venv-staging \
-    umask 000 && \
-    cp -a /venv-staging/venv $PYTHON_ENV_DIR && \
-    umask 002 && \
-    echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
+# COPY --link makes this an independent merge layer whose blob depends only on
+# the venv content, not on upstream churn (registry dedupe). The venv is built
+# world-writable (umask 000) in Dockerfile.python; --link preserves those source
+# permissions verbatim. Do NOT add --chmod: it disables the --link fast path.
+COPY --from=ci-test-venv-layer --link /install/venv /opt/venv
+RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 #############################################################
 # Development light image (no Python venv layers)
@@ -281,6 +285,10 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
+# gdb is kept as RUN --mount (not converted to COPY --link) because the source is
+# chosen conditionally on UBUNTU_VERSION (tool image on 22.04, apt gdb on 24.04),
+# which a single COPY --link cannot express. gdb is a small binary, so its
+# contribution to registry cache bloat is low; the venv layers are the offenders.
 RUN --mount=from=gdb-layer,source=/install,target=/gdb-staging \
     if [ "$UBUNTU_VERSION" != "24.04" ]; then \
         cp -a /gdb-staging/* /usr/local/; \
@@ -329,11 +337,12 @@ ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
 ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
 # Copy pre-built ci-test venv. This layer already includes the ci-build venv packages.
-RUN --mount=from=ci-test-venv-layer,source=/install,target=/venv-staging \
-    umask 000 && \
-    cp -a /venv-staging/venv $PYTHON_ENV_DIR && \
-    umask 002 && \
-    echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
+# COPY --link makes this an independent merge layer whose blob depends only on
+# the venv content, not on upstream churn (registry dedupe). The venv is built
+# world-writable (umask 000) in Dockerfile.python; --link preserves those source
+# permissions verbatim. Do NOT add --chmod: it disables the --link fast path.
+COPY --from=ci-test-venv-layer --link /install/venv /opt/venv
+RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 # IWYU (Include What You Use) could be useful to developers.
 # Not currently included; install script ready at dockerfile/scripts/install-iwyu.sh

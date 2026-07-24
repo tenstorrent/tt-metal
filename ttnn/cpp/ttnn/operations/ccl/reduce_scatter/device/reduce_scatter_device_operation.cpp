@@ -77,11 +77,11 @@ ReduceScatterDeviceOperation::spec_return_value_t ReduceScatterDeviceOperation::
     output_shape[operation_attributes.dim] /= target_ring_size;
 
     return {
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             inter_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), input_tensor.tensor_spec().page_config(), adjusted_intermediate_mem_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), input_tensor.tensor_spec().page_config(), operation_attributes.memory_config)),

@@ -14,7 +14,7 @@ void PolyNorm3ForwardDeviceOperation::validate_on_program_cache_miss(
     const PolyNorm3FWAttributes& args, const PolyNorm3FWTensorArgs& tensor_args) {
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
         TT_FATAL(
-            tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
+            tensor.storage_type() == ttnn::StorageType::DEVICE,
             "PolyNorm3Forward operation requires {} to be on Device. Input storage type: {}",
             name,
             enchantum::to_string(tensor.storage_type()));
@@ -34,7 +34,7 @@ void PolyNorm3ForwardDeviceOperation::validate_on_program_cache_miss(
             name,
             enchantum::to_string(tensor.dtype()));
         TT_FATAL(
-            tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
+            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
             "PolyNorm3Forward operation requires Interleaved memory layout. {} memory layout: `{}`",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
@@ -53,7 +53,7 @@ PolyNorm3FWSpecReturn PolyNorm3ForwardDeviceOperation::compute_output_specs(
     if (tensor_args.preallocated_output.has_value()) {
         return {tensor_args.preallocated_output->tensor_spec()};
     }
-    return {ttnn::TensorSpec(
+    return {tt::tt_metal::TensorSpec(
         tensor_args.input.logical_shape(),
         tt::tt_metal::TensorLayout(
             tensor_args.input.dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()))};
@@ -65,7 +65,7 @@ PolyNorm3FWTensorReturn PolyNorm3ForwardDeviceOperation::create_output_tensors(
         return tensor_args.preallocated_output.value();
     }
     auto specs = compute_output_specs(op_attrs, tensor_args);
-    return create_device_tensor(specs[0], tensor_args.input.device());
+    return ttnn::create_device_tensor(specs[0], tensor_args.input.device());
 }
 
 }  // namespace ttml::metal::ops::polynorm3_fw::device

@@ -18,7 +18,7 @@ namespace ttnn::prim {
 struct TopKDeviceOperation {
     using operation_attributes_t = TopkParams;
     using tensor_args_t = TopkInputs;
-    using spec_return_value_t = std::tuple<TensorSpec, TensorSpec>;
+    using spec_return_value_t = std::tuple<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::tuple<Tensor, Tensor>;
 
     struct TopKSingleCoreProgramFactory {

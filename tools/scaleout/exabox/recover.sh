@@ -50,9 +50,12 @@ Required Options:
 
 Optional:
     --config <4x32|8x16>                    Mesh configuration (default: 4x32)
-    --use-docker [docker-image]             Run validation via mpi-docker. If an image is given, uses it;
-                                            if the flag is passed with no image, uses the default:
-                                            $DOCKER_IMAGE_DEFAULT
+    --use-docker [docker-image]             Run validation via mpi-docker. Accepts:
+                                              <image>   use the given image
+                                              default   (or no value) use the default image:
+                                                        $DOCKER_IMAGE_DEFAULT
+                                              none      use plain mpirun with local build
+                                                        (same as omitting --use-docker)
                                             (if the flag is omitted entirely, uses plain mpirun with local build)
     --num-iterations <number>               Number of validation iterations (default: 5)
                                             This is the inner per-run validation loop.
@@ -122,7 +125,7 @@ EOF
 HOSTS=""
 CONFIG="4x32"
 DOCKER_IMAGE=""
-DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.74.0-dev20260620-6-gd9d52dfe7b6"
+DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.76.0-dev20260721-30-g9dca5ec435f"
 NUM_ITERATIONS=5
 MAX_ATTEMPTS=1
 SLEEP_DURATION=5
@@ -179,6 +182,14 @@ while [[ $# -gt 0 ]]; do
                 # No value provided: fall back to the default image.
                 DOCKER_IMAGE="$DOCKER_IMAGE_DEFAULT"
                 shift
+            elif [[ "$2" == "default" ]]; then
+                # Explicit "default": use the default image.
+                DOCKER_IMAGE="$DOCKER_IMAGE_DEFAULT"
+                shift 2
+            elif [[ "$2" == "none" ]]; then
+                # "none": use the local build, same as omitting --use-docker.
+                DOCKER_IMAGE=""
+                shift 2
             else
                 DOCKER_IMAGE="$2"
                 shift 2
@@ -458,21 +469,14 @@ echo "Regenerate on failure: $REGENERATE_ON_FAILURE"
 echo "=========================================="
 echo ""
 
-# Step 0: assert minimum tt-smi / KMD / firmware versions on every host (see check_cluster_versions
+# Step 0: assert minimum tt-smi / KMD / firmware versions on every host (see run_version_check_gate
 # in utils/host_utils.sh). These are host-level (independent of --use-docker), so the check always
-# runs via plain mpirun.
+# runs via plain mpirun. A version below the minimum aborts; versions that can't be read only warn
+# and continue. `if !` suspends `set -e` so we handle the abort case here.
 if [[ "$SKIP_VERSION_CHECK" == false ]]; then
-    echo "Checking tt-smi/KMD/firmware versions on all hosts..."
-    # `if !` suspends `set -e`, so a failing rank is handled here instead of aborting abruptly.
-    if ! check_cluster_versions "$HOSTS" "$MPI_IF" "${MPI_EXTRA_ARGS[@]}"; then
-        echo ""
-        echo "Error: version check failed on one or more hosts (see above)."
-        echo "       Required: tt-smi >= $TT_SMI_MIN_VERSION, KMD >= $KMD_MIN_VERSION, firmware >= $FW_MIN_VERSION."
-        echo "       Re-run with --skip-version-check to bypass."
+    if ! run_version_check_gate "$HOSTS" "$MPI_IF" "${MPI_EXTRA_ARGS[@]}"; then
         exit 1
     fi
-    echo "Version check passed on all hosts."
-    echo ""
 else
     echo "Skipping version check (--skip-version-check)"
     echo ""
