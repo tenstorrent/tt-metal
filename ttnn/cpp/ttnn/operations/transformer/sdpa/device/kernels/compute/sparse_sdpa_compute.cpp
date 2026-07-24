@@ -248,7 +248,9 @@ void kernel_main() {
             // fp8 K tilize leaves srcA in fp8. QK reads K (transposed -> srcA) and Q (srcB), so restore
             // srcA=cb_k_in (bfp8 for fp8 K), srcB=cb_q_in. Reconfigure the tiled descriptor geometry/strides;
             // mm_no_mop_init_short only programs the matmul MOP.
-            reconfig_data_format<SrcOrder::Regular, /*is_tile_dim_reconfig_en=*/true>(cb_k_in, cb_q_in);
+            // skip_int8: do NOT re-derive the int8/unsigned state here -- the fp8 K path relies on the state left
+            // by tilize, and re-deriving it from bfp8 corrupts the QK matmul.
+            reconfig_data_format_skip_int8<SrcOrder::Regular, /*is_tile_dim_reconfig_en=*/true>(cb_k_in, cb_q_in);
             // K tilize also leaves the packer in cb_k_in's format+strides (bfp8 for fp8). Restore bf16 once per
             // chunk for the downstream packs (cb_qk_im/max/sum/out share its geometry); configure_pack_width in
             // the qg loop refreshes only the MOP. No-op for bf16.
