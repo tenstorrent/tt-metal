@@ -185,23 +185,18 @@ static inline void hz_marker(
     *prodp = p + 3;
 }
 
-/* Inject an X280 hart DRAIN zone [t0,t1] (6 words) directly into the socket FIFO at the current bytes_sent
- * position (wrap-aware). Used by the RELAY harts -- they own the socket write, so their zones ride out with
- * the data they just copied. Caller publishes bytes_sent after. */
-static inline void hz_fifo(
-    uint64_t fbase, uint32_t fifo_w, uint32_t* bsentp, uint32_t hart, uint32_t kind, uint64_t t0, uint64_t t1) {
-    uint32_t words[6] = {
-        hz_w0(hart, 1, kind),
-        (uint32_t)t0,
-        (uint32_t)(t0 >> 32),
-        hz_w0(hart, 0, kind),
-        (uint32_t)t1,
-        (uint32_t)(t1 >> 32)};
+/* Emit ONE X280-zone marker (3 words) directly into the socket FIFO at the current bytes_sent (wrap-aware).
+ * Used by the RELAY harts -- they own the socket write, so their zones ride out with the data they just
+ * copied. Individual markers (not pairs) so the relay can build a NESTED DRAIN parent + HOST-WAIT child,
+ * mirroring the reader's BULK + SPSC-WAIT. Caller reserved room (need_b+48) and publishes bytes_sent after. */
+static inline void hz_fifo_marker(
+    uint64_t fbase, uint32_t fifo_w, uint32_t* bsentp, uint32_t hart, uint32_t is_start, uint32_t kind, uint64_t ts) {
+    uint32_t words[3] = {hz_w0(hart, is_start, kind), (uint32_t)ts, (uint32_t)(ts >> 32)};
     uint32_t dw = (*bsentp / 4u) % fifo_w;
-    for (uint32_t k = 0; k < 6u; k++) {
+    for (uint32_t k = 0; k < 3u; k++) {
         w32(fbase + (uint64_t)((dw + k) % fifo_w) * 4, words[k]);
     }
-    *bsentp += 24u;
+    *bsentp += 12u;
 }
 
 /* copy `n` 32-bit words src->dst via wide RVV loads. e32/m8 (8 vector regs) => one vle32.v moves up to
@@ -762,13 +757,20 @@ static void relay_run_socket(
             cons[h] = cn;
             bytes_sent[h] += need_b;
             total += avail;
-            if (g_hartzones) { /* inject the zone(s) into the FIFO BEFORE publishing so they ride out */
-                uint32_t fifo_w = fifo_bytes[h] / 4u;
-                if (hw_active[h]) { /* the just-ended host-full stall -> a backdated HOSTWAIT zone [start,tc] */
-                    hz_fifo(fbase[h], fifo_w, &bytes_sent[h], (uint32_t)hartid, HZK_HOSTWAIT, hw_start[h], tc);
+            if (g_hartzones) {
+                /* DRAIN spans the whole drain-attempt [ds, ce] (kept large); when this relay was blocked on a
+                 * full FIFO, a HOST-WAIT zone [hw_start, tc] is NESTED inside it. Marker order = parent-START,
+                 * child-START, child-END, parent-END so Tracy stacks them (need_b+48 reserved = up to 4 markers). */
+                uint32_t fw = fifo_bytes[h] / 4u;
+                uint64_t ce = rdcycle();
+                uint64_t ds = hw_active[h] ? hw_start[h] : tc; /* drain-attempt start (incl. the stall) */
+                hz_fifo_marker(fbase[h], fw, &bytes_sent[h], (uint32_t)hartid, 1, HZK_DRAIN, ds);
+                if (hw_active[h]) {
+                    hz_fifo_marker(fbase[h], fw, &bytes_sent[h], (uint32_t)hartid, 1, HZK_HOSTWAIT, hw_start[h]);
+                    hz_fifo_marker(fbase[h], fw, &bytes_sent[h], (uint32_t)hartid, 0, HZK_HOSTWAIT, tc);
                     hw_active[h] = 0;
                 }
-                hz_fifo(fbase[h], fifo_w, &bytes_sent[h], (uint32_t)hartid, HZK_DRAIN, tc, rdcycle());
+                hz_fifo_marker(fbase[h], fw, &bytes_sent[h], (uint32_t)hartid, 0, HZK_DRAIN, ce);
             }
             fence_();                      /* payload + zone land before bytes_sent is published (posted order) */
             w32(CONS(h), cn);              /* free reader SPSC */
