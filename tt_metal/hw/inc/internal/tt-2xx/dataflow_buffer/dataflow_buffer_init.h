@@ -358,10 +358,19 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                     ckernel::trisc::tile_counters[tc_id].f.buf_capacity = init_ptr->capacity;
 #elif !defined(COMPILE_FOR_TRISC)
                     uint8_t tensix_id = dfb::get_tensix_id(ptc);
-                    // DPRINT("dfb {} initializing tc tensix_id: {} tc_id: {}\n", logical_dfb_id, tensix_id,
-                    // tc_id);
                     overlay::llk_intf_reset(tensix_id, tc_id);
                     overlay::llk_intf_set_capacity(tensix_id, tc_id, init_ptr->capacity);
+                    // [#48552 DEBUG -- remove before merge] Pair with RBFAIL (the READ side). Did THIS program
+                    // actually write the overlay capacity for the physical counter the in0 reader later reads
+                    // as 28? If we see "DFBSET dfb=0 tensix=0 tc=0 cap=224" on the failing slice but RBFAIL then
+                    // reads cap=28 at (0,0), it's a write-visibility/overwrite bug; if no such DFBSET, the
+                    // matmul's cb_in0 overlay init is being skipped (stale value from a prior program persists).
+                    DPRINT(
+                        "DFBSET dfb={} tensix={} tc={} cap={}\n",
+                        (uint32_t)logical_dfb_id,
+                        (uint32_t)tensix_id,
+                        (uint32_t)tc_id,
+                        (uint32_t)init_ptr->capacity);
 #endif
                 }
                 // Only the RISC that actually performed the TC hardware init sets tc_init_done.
