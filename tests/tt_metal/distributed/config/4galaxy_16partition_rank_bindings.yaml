@@ -1,0 +1,117 @@
+rank_bindings:
+  # Host 0 (wh-glx-a04u02) - Partition 0: devices 0-7
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7"
+
+  # Host 0 (wh-glx-a04u02) - Partition 1: devices 8-15
+  - rank: 1
+    mesh_id: 1
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "8,9,10,11,12,13,14,15"
+
+  # Host 0 (wh-glx-a04u02) - Partition 2: devices 16-23
+  - rank: 2
+    mesh_id: 2
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "16,17,18,19,20,21,22,23"
+
+  # Host 0 (wh-glx-a04u02) - Partition 3: devices 24-31
+  - rank: 3
+    mesh_id: 3
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "24,25,26,27,28,29,30,31"
+
+  # Host 1 (wh-glx-a05u02) - Partition 0: devices 0-7
+  - rank: 4
+    mesh_id: 4
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7"
+
+  # Host 1 (wh-glx-a05u02) - Partition 1: devices 8-15
+  - rank: 5
+    mesh_id: 5
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "8,9,10,11,12,13,14,15"
+
+  # Host 1 (wh-glx-a05u02) - Partition 2: devices 16-23
+  - rank: 6
+    mesh_id: 6
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "16,17,18,19,20,21,22,23"
+
+  # Host 1 (wh-glx-a05u02) - Partition 3: devices 24-31
+  - rank: 7
+    mesh_id: 7
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "24,25,26,27,28,29,30,31"
+
+  # Host 2 (wh-glx-a05u08) - Partition 0: devices 0-7
+  - rank: 8
+    mesh_id: 8
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7"
+
+  # Host 2 (wh-glx-a05u08) - Partition 1: devices 8-15
+  - rank: 9
+    mesh_id: 9
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "8,9,10,11,12,13,14,15"
+
+  # Host 2 (wh-glx-a05u08) - Partition 2: devices 16-23
+  - rank: 10
+    mesh_id: 10
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "16,17,18,19,20,21,22,23"
+
+  # Host 2 (wh-glx-a05u08) - Partition 3: devices 24-31
+  - rank: 11
+    mesh_id: 11
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "24,25,26,27,28,29,30,31"
+
+  # Host 3 (wh-glx-a05u14) - Partition 0: devices 0-7
+  - rank: 12
+    mesh_id: 12
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7"
+
+  # Host 3 (wh-glx-a05u14) - Partition 1: devices 8-15
+  - rank: 13
+    mesh_id: 13
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "8,9,10,11,12,13,14,15"
+
+  # Host 3 (wh-glx-a05u14) - Partition 2: devices 16-23
+  - rank: 14
+    mesh_id: 14
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "16,17,18,19,20,21,22,23"
+
+  # Host 3 (wh-glx-a05u14) - Partition 3: devices 24-31
+  - rank: 15
+    mesh_id: 15
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "24,25,26,27,28,29,30,31"
+
+# Note: You may need to create a mesh graph descriptor for 16 independent meshes
+# For physical discovery, this path may not be critical, but for actual workloads you'll need
+# a proper multi-mesh descriptor that defines all 16 meshes
+mesh_graph_desc_path: "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"
