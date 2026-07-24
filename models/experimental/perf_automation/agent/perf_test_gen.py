@@ -37,12 +37,11 @@ os.environ.setdefault("TT_PERF_LAYERS", "2")
 _PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"
 _DEV_PARAMS = {"l1_small_size": 24576}
 if _PERF_TRACE:
-    # Reserve the trace + 2-CQ budget at device-open, ONCE, for baseline and every candidate: the
-    # second queue and the trace region exist before any candidate runs, so trace+2CQ is the fixed
-    # measurement mode (never a per-candidate downgrade for lack of a queue). A device/config that
-    # genuinely can't open 2 CQs still degrades gracefully in measure_adapter; override with TT_PERF_NUM_CQ.
+    # Reserve the trace region at device-open, ONCE, for baseline and every candidate. The tool
+    # measures trace+1cq end to end, so the device opens with 1 command queue by default (no 2-CQ
+    # reservation to OOM under). TT_PERF_NUM_CQ stays a knob for the rare 2-CQ experiment.
     _DEV_PARAMS["trace_region_size"] = int(os.environ.get("TT_PERF_TRACE_REGION", "23887872"))
-    _DEV_PARAMS["num_command_queues"] = int(os.environ.get("TT_PERF_NUM_CQ", "2"))
+    _DEV_PARAMS["num_command_queues"] = int(os.environ.get("TT_PERF_NUM_CQ", "1"))
 
 @pytest.mark.parametrize("device_params", [_DEV_PARAMS], indirect=True)
 def test_<task>_perf(device_params, device):
@@ -108,27 +107,27 @@ _PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"
 _DEV_PARAMS = {"l1_small_size": 24576}
 if _PERF_TRACE:
     _DEV_PARAMS["trace_region_size"] = int(os.environ.get("TT_PERF_TRACE_REGION", "23887872"))
-    _DEV_PARAMS["num_command_queues"] = int(os.environ.get("TT_PERF_NUM_CQ", "2"))
+    _DEV_PARAMS["num_command_queues"] = int(os.environ.get("TT_PERF_NUM_CQ", "1"))
 
 @pytest.mark.parametrize("device_params", [_DEV_PARAMS], indirect=True)
 def test_<task>_perf(device_params, device):
-    # SELF-RECORDING PIPELINE: the model's own <self_traced_fn> already records its trace (trace+2CQ)
+    # SELF-RECORDING PIPELINE: the model's own <self_traced_fn> already records its trace (trace+1CQ)
     # internally. Do NOT re-record its trace here (no adapter, no manual capture calls) — a nested capture
     # fatals + hangs. Build EXACTLY as the demo does, WARM UP once, then TIME steady-state calls of that
-    # SAME function; that native latency IS the trace+2CQ number. Print the markers verbatim.
+    # SAME function; that native latency IS the trace+1CQ number. Print the markers verbatim.
     pipe = ...        # build EXACTLY as demo/demo_<task>.py does, on `device`
     _inp = ...        # a SMALL representative input (lift from the demo)
     <self_traced_fn>(pipe, _inp)                       # warm up (its own internal capture runs here)
     _iters = int(os.environ.get("TT_PERF_REPLAY_ITERS", "16"))
     _t0 = time.monotonic()
     for _ in range(_iters):
-        out = <self_traced_fn>(pipe, _inp)             # its own trace+2CQ path, timed
+        out = <self_traced_fn>(pipe, _inp)             # its own trace+1cq path, timed
     ttnn.synchronize_device(device)
     _ms = (time.monotonic() - _t0) * 1000.0 / _iters
     assert out is not None                              # perf only — NO PCC
     print("FORWARD_WALL_MS=%.4f" % _ms)
     print("TRACE_PER_TOKEN_MS=%.4f" % _ms)
-    print("TRACE_REPLAY_PATH=trace+2cq native batch=1")
+    print("TRACE_REPLAY_PATH=trace+1cq native batch=1")
 """
 
 
@@ -338,11 +337,11 @@ def _write_trace_caps(out_path: Path, caps: dict) -> None:
         pass
 
 
-# The correction loop keeps regenerating until the test is trace+2cq-acceptable (or a legitimate eager
+# The correction loop keeps regenerating until the test is trace+1cq-acceptable (or a legitimate eager
 # terminal). It has NO fixed attempt budget — only a STALL guard: if the LLM fails to make forward
 # progress this many consecutive times, give up rather than spin forever on a pipeline it can't fix.
 # Env-overridable (PERF_MCP_STALL_LIMIT) for hard-to-trace models that need more regen attempts.
-_STALL_LIMIT = int(os.environ.get("PERF_MCP_STALL_LIMIT", "20") or "20")
+_STALL_LIMIT = int(os.environ.get("PERF_MCP_STALL_LIMIT", "3") or "3")
 
 _TRACE_WEDGE_LIMIT = int(os.environ.get("PERF_MCP_TRACE_WEDGE_LIMIT", "10") or "10")
 
@@ -409,7 +408,7 @@ def _extract_error(out: str) -> str:
 def _is_eager_terminal(out: str) -> bool:
     """A pipeline that GENUINELY cannot be trace-replayed (repeat-prefill / no decode_step) emits the
     authoritative TRACE_NOT_TRACE_CAPABLE=1 marker (from measure_adapter). That is the ONE legitimate
-    reason a test stays on FORWARD_WALL_MS instead of trace+2cq — accept it, don't keep correcting."""
+    reason a test stays on FORWARD_WALL_MS instead of trace+1cq — accept it, don't keep correcting."""
     return "TRACE_NOT_TRACE_CAPABLE=1" in (out or "")
 
 
@@ -471,14 +470,13 @@ def _correction_feedback(reason: str, failure: str, prev_draft: str | None) -> s
 def validate_generated_perf_test(out_path: Path, task: str, component: bool = False) -> tuple[str, str]:
     """Execute the freshly-generated perf test and JUDGE it, model- and hardware-agnostically:
       skip      device/ttnn unavailable at generation time -> soft-accept (never a false rejection)
-      ok_2cq    the 2-CQ probe genuinely engaged (TRACE_REPLAY_PATH=trace+2cq) -> ship it
+      ok_1cq    the trace probe engaged at 1 CQ (a real TRACE_PER_TOKEN_MS / trace+1cq path) -> ship it
       ok_marker the pipeline GENUINELY cannot trace (TRACE_NOT_TRACE_CAPABLE=1) -> the one legit eager
                 terminal, ship it on FORWARD_WALL_MS rather than loop forever chasing a trace it can't do
-      invalid   ran but produced no full-pipeline marker, OR is trace-capable yet only degraded to 1cq
-                -> NOT shipped; the caller keeps correcting until it reaches trace+2cq.
-    The 2-CQ run must run TWICE across the optimize loop (baseline + final bookend) WITHOUT degrading, so
-    a test that can't hold trace+2cq here is rejected NOW rather than silently downgraded later. Records
-    what it saw in the trace_caps sidecar either way. Second return value is the failure detail fed back."""
+      invalid   ran but produced no full-pipeline marker, or could not trace at all -> NOT shipped; the
+                caller keeps correcting.
+    Measurement is trace+1CQ only — there is no separate 2-CQ pass (the tool is trace+1cq end to end).
+    Records what it saw in the trace_caps sidecar either way. Second return value is the failure detail."""
     node_abs = f"{out_path}::test_{task}_perf"
     vt = int(os.environ.get("PERF_MCP_VALIDATE_TIMEOUT", "900") or "900")
     if component:
@@ -555,58 +553,57 @@ def validate_generated_perf_test(out_path: Path, task: str, component: bool = Fa
     if eager:
         _write_trace_caps(out_path, caps)
         return "ok_marker", ""
-    rc2, out2 = _run_perf_node(node_abs, {"TT_PERF_NUM_CQ": "2"}, timeout_s=vt)
-    path2 = _parse_trace_path(out2) if rc2 == 0 and "TRACE_PER_TOKEN_MS=" in out2 else None
-    caps["trace_2cq_path"] = path2
-    caps["trace_2cq"] = path2 == "trace+2cq"
-    if _is_eager_terminal(out2):
-        caps["eager_terminal"] = True
-        _write_trace_caps(out_path, caps)
-        return "ok_marker", ""
+    # trace+1CQ only: a trace-capable pipeline that traces at 1 CQ ships now (no 2-CQ pass to hold).
     _write_trace_caps(out_path, caps)
-    if caps["trace_2cq"]:
-        return "ok_2cq", ""
     if caps["trace_1cq"]:
-        if os.environ.get("TT_PERF_MODULE_LEVEL", "") not in ("", "0", "false", "False"):
-            return "ok_1cq", ""
-        return "invalid", "trace-capable but degraded to 1cq (never held trace+2cq)"
+        return "ok_1cq", ""
     return "invalid", (
-        f"pipeline could not trace at all (path={path2 or _parse_trace_path(out1)}); neither 1cq nor "
-        "2cq trace engaged. " + (_extract_error(out2) or "")
+        f"pipeline could not trace at all (path={_parse_trace_path(out1)}); no trace engaged. "
+        + (_extract_error(out1) or "")
     )
 
 
-def _self_traced_prompt(out_rel: str, task: str, src_label: str, demo_src: str, fns: list) -> str:
+def _self_traced_prompt(out_rel: str, task: str, src_label: str, demo_src: str, fns: list, agentic: bool = False) -> str:
     """Dedicated prompt for a SELF-RECORDING pipeline: no measure_adapter instructions anywhere (they'd
     mandate a second, freezing capture). Just: build like the demo, TIME the model's own self-recording
-    function, print the markers. Its native path already runs trace+2CQ."""
+    function, print the markers. Its native path already runs its own trace (measured trace+1cq).
+    agentic=True drops the one-shot 'respond with only the file content' tail, because the agentic builder
+    writes + runs the file itself."""
     _fns = ", ".join("`%s`" % f for f in fns)
+    tail = (
+        ""
+        if agentic
+        else (
+            "Do NOT use any tools and do NOT write the file yourself — the caller writes it. Respond with ONLY "
+            "the complete python file content — no prose, no markdown fences."
+        )
+    )
     return (
         f"Write a pytest PERFORMANCE test file `{out_rel}` for the '{task}' pipeline of this TTNN model.\n"
         f"CRITICAL — SELF-RECORDING PIPELINE: this pipeline's function(s) {_fns} ALREADY capture their own "
-        f"trace (trace+2CQ) INTERNALLY (they call ttnn.begin_trace_capture). You must NOT record a SECOND "
+        f"trace INTERNALLY (they call ttnn.begin_trace_capture). You must NOT record a SECOND "
         f"time — a nested capture fatals and hangs the device. So do NOT import or call measure_adapter, "
         f"PipelineStageAdapter, or ttnn.begin_trace_capture ANYWHERE in this test.\n"
         f"Instead, MEASURE the native path by TIMING it: build the pipeline EXACTLY as the demo does, warm "
-        f"up once, then time steady-state calls of the model's own function; that latency IS the trace+2CQ "
-        f"number.\n"
+        f"up once, then time steady-state calls of the model's own function; that latency IS the trace+1cq "
+        f"number (the tool measures trace+1cq end to end).\n"
         f"<demo path='{src_label}'>\n{demo_src}\n</demo>\n\n"
         "Requirements:\n"
         f"- a pytest function named `test_{task}_perf`.\n"
         "- DEVICE OPEN: open the device the SAME way the demo/source does (lift its open, or use the "
-        "device_params fixture) with trace_region_size + num_command_queues=2 when TT_PERF_TRACE is set, so "
-        "the model's own capture + 2-CQ replay have the budget. Pass that device to the build + the function.\n"
+        "device_params fixture) with trace_region_size + num_command_queues=1 (default via TT_PERF_NUM_CQ) "
+        "when TT_PERF_TRACE is set, so the model's own capture + replay have the trace budget. Pass that "
+        "device to the build + the function.\n"
         "- Run the device work IN-PROCESS (never subprocess/os.system/python -m pytest).\n"
         "- Cap the profiled work SMALL on whatever axis drives this model's dispatch count (tokens for an "
         "LLM, phonemes/audio-frames for TTS, timesteps for diffusion, frames for video). When size comes "
         "from the RAW INPUT (e.g. a phoneme string sets the audio-frame count), TRIM THE RAW INPUT ITSELF — "
         "a SHORT phoneme string / few timesteps — do NOT copy the demo's full-length input.\n"
         "- NO PCC / correctness asserts. Print, verbatim, `FORWARD_WALL_MS=<ms>`, `TRACE_PER_TOKEN_MS=<ms>` "
-        "(the per-call latency), and `TRACE_REPLAY_PATH=trace+2cq`.\n"
+        "(the per-call latency), and `TRACE_REPLAY_PATH=trace+1cq`.\n"
         "- Do NOT use measure_adapter / PipelineStageAdapter / begin_trace_capture — the model self-records.\n\n"
         f"Use this skeleton (adapt build + the function name to the demo):\n{_SELF_TRACED_SKELETON_REF}\n\n"
-        "Do NOT use any tools and do NOT write the file yourself — the caller writes it. Respond with ONLY "
-        "the complete python file content — no prose, no markdown fences."
+        + tail
     )
 
 
@@ -658,7 +655,7 @@ def _invoked_as_pipeline_op(fn: str, demo_src: str) -> bool:
     called WITH arguments (`fn(pipe, ...)`). This excludes a bare launcher like `main()`, which every demo
     ends with: a self-recording `main` must NOT make a task whose actual pipeline function (e.g. run_tts)
     does NOT self-record get the time-it-directly treatment — that would time the eager path and mislabel
-    it trace+2CQ."""
+    it trace+1CQ."""
     esc = re.escape(fn)
     return bool(re.search(r"\.%s\s*\(" % esc, demo_src) or re.search(r"\b%s\s*\(\s*[^)\s]" % esc, demo_src))
 
@@ -1031,6 +1028,9 @@ def generate_perf_test(
             f"{inproc_ctx}\n"
         )
     prompt += _pipeline_api_hint(root, demo_src)
+    _main_agentic_body = (
+        _self_traced_prompt(out_rel, task, src_label, demo_src, self_traced, agentic=True) if self_traced else prompt
+    )
     prompt += (
         "\n\nDo NOT use any tools and do NOT try to write the file yourself — the caller writes it. "
         "Respond with ONLY the complete python file content as your message text — no prose, no markdown fences."
@@ -1040,19 +1040,20 @@ def generate_perf_test(
     if self_traced and not _component:
         prompt = _self_traced_prompt(out_rel, task, src_label, demo_src, self_traced)
     if (
-        _component
-        and runner is None
+        runner is None
         and validate is not False
         and os.environ.get("TT_PERF_NO_AGENTIC_BUILDER", "") in ("", "0", "false", "False")
     ):
         try:
             from .perf_test_agent import build_component_perf_test
 
-            _body = _component_prompt(
-                out_rel, src_label, demo_src, task, cache_instr=_cache_instr, agentic=True, root=root
+            _body = (
+                _component_prompt(out_rel, src_label, demo_src, task, cache_instr=_cache_instr, agentic=True, root=root)
+                if _component
+                else _main_agentic_body
             )
             if build_component_perf_test(root, task, out_rel, _body):
-                _verdict, _ = validate_generated_perf_test(out_path, task, component=True)
+                _verdict, _ = validate_generated_perf_test(out_path, task, component=_component)
                 if _verdict in ("ok_2cq", "ok_1cq", "ok_marker", "skip"):
                     print(f"      auto-gen perf from pcc (agentic) -> {node}", file=sys.stderr, flush=True)
                     return node
@@ -1102,13 +1103,13 @@ def generate_perf_test(
         _code = "\n".join(re.sub(r"#.*$", "", ln) for ln in content.splitlines())
         _times_selfrec = sorted(f for f in _selfrec_set if _invoked_as_pipeline_op(f, _code))
         _external_capture = "measure_adapter(" in _code or "begin_trace_capture(" in _code
-        _claims_trace = "trace+2cq" in content.lower()
+        _claims_trace = "trace+" in content.lower()
         if _times_selfrec and _external_capture:
             stall += 1
             feedback = _correction_feedback(
-                "the timed function (%s) ALREADY records its own trace+2CQ internally — do NOT re-record it with "
+                "the timed function (%s) ALREADY records its own trace internally — do NOT re-record it with "
                 "measure_adapter or begin_trace_capture (a nested capture fatals + hangs the device). Just TIME "
-                "it directly and print TRACE_PER_TOKEN_MS + TRACE_REPLAY_PATH=trace+2cq." % ", ".join(_times_selfrec),
+                "it directly and print TRACE_PER_TOKEN_MS + TRACE_REPLAY_PATH=trace+1cq." % ", ".join(_times_selfrec),
                 "",
                 content,
             )
@@ -1117,10 +1118,10 @@ def generate_perf_test(
         if _claims_trace and not _external_capture and not _times_selfrec:
             stall += 1
             feedback = _correction_feedback(
-                "the test prints TRACE_REPLAY_PATH=trace+2cq but the timed function does NOT record a trace "
+                "the test prints a traced TRACE_REPLAY_PATH but the timed function does NOT record a trace "
                 "(it is not one of the model's self-recording functions) and you did not call measure_adapter — "
                 "so this is TIMING THE EAGER PATH and mislabelling it. Wrap the timed forward in measure_adapter "
-                "to actually capture + replay a trace+2CQ, or time a function that self-records.",
+                "to actually capture + replay a trace, or time a function that self-records.",
                 "",
                 content,
             )
@@ -1159,22 +1160,15 @@ def generate_perf_test(
         stall += 1
         if "WEDGE" in failure:
             _why = "device wedged on a non-capturable step — reset + regenerating"
-        elif "degraded to 1cq" in failure:
-            _why = "held only trace+1cq — regenerating to reach trace+2cq"
         else:
             _why = ((_extract_error(failure).splitlines() or [""])[0] or "did not run the full pipeline").strip()[:80]
         print(f"      · perf-test regen {stall}/{_STALL_LIMIT}: {_why}", file=sys.stderr, flush=True)
         reason = (
-            "the test ran but never held trace+2cq (it degraded to 1cq); the 2-CQ input overlap must "
-            "engage so the optimize bookend doesn't silently downgrade"
-            if "degraded to 1cq" in failure
-            else (
-                "the module perf test produced no TRACE_PER_TOKEN_MS — implement the trace-replay block so "
-                "it captures a REAL device trace (trace required; eager is only enabled by the operator via "
-                "TT_PERF_TRACE=0, never as a fallback)"
-                if _component
-                else "the test did not run the full pipeline / errored"
-            )
+            "the module perf test produced no TRACE_PER_TOKEN_MS — implement the trace-replay block so "
+            "it captures a REAL device trace at 1 CQ (trace required; eager is only enabled by the operator "
+            "via TT_PERF_TRACE=0, never as a fallback)"
+            if _component
+            else "the test did not run the full pipeline / errored"
         )
         feedback = _correction_feedback(reason, failure, prev_draft)
     return None
