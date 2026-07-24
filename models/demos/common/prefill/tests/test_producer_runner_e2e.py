@@ -78,6 +78,7 @@ def _launch_mode() -> str:
         return "standard"
     return "ci" if _mpi_launcher_keys(os.environ) else "standard"
 
+
 pytestmark = [
     skip_for_slow_dispatch(),
     pytest.mark.skipif(not is_blackhole(), reason="prefill runner + H2DStreamService require a Blackhole galaxy"),
