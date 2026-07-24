@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <map>
 #include <optional>
@@ -46,6 +47,14 @@ const char* eth_chan_dir_cstr(tt::tt_fabric::eth_chan_directions d) {
         case tt::tt_fabric::eth_chan_directions::Z: return "Z";
         default: return "UNKNOWN";
     }
+}
+
+// FORCE_GALAXY_FABRIC_MODE pins the pipeline entry/exit nodes to fixed physical trays that
+// match the frankenquad / 4x_blaze_loudbox inter-host wiring instead of deriving them from the
+// mesh graph. See build_forced_galaxy_fabric_allocation().
+bool force_galaxy_fabric_mode() {
+    const char* env = std::getenv("FORCE_GALAXY_FABRIC_MODE");
+    return env != nullptr && std::string(env) == "1";
 }
 
 // Convert one mesh-local host-rank partition into the public stage/host binding record.
@@ -232,8 +241,94 @@ void synchronize_pipeline_generation() {
     ctx->barrier();
 }
 
+// FORCE_GALAXY_FABRIC_MODE (frankenquad / 4x_blaze_loudbox): the inter-host cabling is not
+// derivable from the mesh graph the way the topology-driven path expects, so the entry/exit
+// nodes are pinned to fixed physical trays that match the loudbox wiring. Ported from the
+// pre-topology-mapper implementation (commit "Various fixes to be able to support the
+// frankenquad in the 4 layer test") and expressed here in the resolved-allocation model.
+//
+//   per stage: entry (h2d receiver)     = tray 5 / asic 0
+//              exit  (d2d fwd sender)    = tray 1 / asic 0
+//   loopback:  entry (loopback receiver) = tray 6 / asic 0  on mesh 0
+//              egress (d2h sender)        = tray 2 / asic 0  on mesh 0
+//
+// Because these placements intentionally do not follow the discovered inter-mesh exit/peer
+// convention, validate_pipeline() skips its physical-connectivity checks in this mode.
+ResolvedBlitzDecodePipelineAllocation build_forced_galaxy_fabric_allocation(bool initialize_loopback) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& topology_mapper = control_plane.get_topology_mapper();
+    auto mesh_ids = mesh_graph.get_mesh_ids();
+    std::sort(mesh_ids.begin(), mesh_ids.end());
+    const auto num_meshes = mesh_ids.size();
+
+    // Resolve the MeshCoordinate of the chip on `mesh_id` sitting on the given physical tray/asic.
+    auto coord_for_tray = [&](MeshId mesh_id, uint32_t tray_id, uint32_t asic_location) {
+        for (const auto& coord : mesh_graph.get_coord_range(mesh_id)) {
+            auto chip_id = mesh_graph.coordinate_to_chip(mesh_id, coord);
+            tt::tt_fabric::FabricNodeId fn(mesh_id, chip_id);
+            if (*topology_mapper.get_tray_id_for_fabric_node_id(fn) == tray_id &&
+                *topology_mapper.get_asic_location_for_fabric_node_id(fn) == asic_location) {
+                return coord;
+            }
+        }
+        TT_THROW(
+            "FORCE_GALAXY_FABRIC_MODE: no chip on mesh {} with tray {} asic {}", *mesh_id, tray_id, asic_location);
+    };
+
+    constexpr uint32_t kEntryTray = 5;
+    constexpr uint32_t kExitTray = 1;
+    constexpr uint32_t kLoopbackEntryTray = 6;
+    constexpr uint32_t kLoopbackExitTray = 2;
+    constexpr uint32_t kAsicLocation = 0;
+
+    std::vector<ResolvedBlitzDecodeStageAllocation> stage_allocations;
+    stage_allocations.reserve(num_meshes);
+    for (std::size_t i = 0; i < num_meshes; i++) {
+        const auto mesh_id = mesh_ids[i];
+        const bool is_last_no_loopback = !initialize_loopback && (i == num_meshes - 1);
+        auto entry_coord = coord_for_tray(mesh_id, kEntryTray, kAsicLocation);
+        std::optional<MeshCoordinate> exit_coord =
+            is_last_no_loopback ? std::nullopt : std::make_optional(coord_for_tray(mesh_id, kExitTray, kAsicLocation));
+
+        stage_allocations.push_back(ResolvedBlitzDecodeStageAllocation{
+            .logical_stage_index = i,
+            .mesh_id = static_cast<std::size_t>(*mesh_id),
+            .host_bindings = collect_stage_host_bindings(mesh_graph, topology_mapper, mesh_id),
+            .entry_endpoint = make_endpoint_placement(topology_mapper, mesh_id, entry_coord),
+            .exit_endpoint = exit_coord.has_value()
+                                 ? std::make_optional(make_endpoint_placement(topology_mapper, mesh_id, *exit_coord))
+                                 : std::nullopt});
+    }
+
+    if (initialize_loopback) {
+        return ResolvedBlitzDecodePipelineAllocation{
+            .initialize_loopback = initialize_loopback,
+            .stages = std::move(stage_allocations),
+            .loopback_entry_stage_index = 0,
+            .loopback_entry_endpoint = make_endpoint_placement(
+                topology_mapper, mesh_ids[0], coord_for_tray(mesh_ids[0], kLoopbackEntryTray, kAsicLocation)),
+            .host_egress_stage_index = 0,
+            .host_egress_endpoint = make_endpoint_placement(
+                topology_mapper, mesh_ids[0], coord_for_tray(mesh_ids[0], kLoopbackExitTray, kAsicLocation))};
+    }
+
+    auto host_egress_endpoint = stage_allocations.back().entry_endpoint;
+    return ResolvedBlitzDecodePipelineAllocation{
+        .initialize_loopback = initialize_loopback,
+        .stages = std::move(stage_allocations),
+        .loopback_entry_stage_index = std::nullopt,
+        .loopback_entry_endpoint = std::nullopt,
+        .host_egress_stage_index = num_meshes - 1,
+        .host_egress_endpoint = host_egress_endpoint};
+}
+
 // Choose inter-stage hops and mesh-0 ingress/egress nodes, then package the result as a resolved allocation object.
 ResolvedBlitzDecodePipelineAllocation build_pipeline_allocation_from_topology(bool initialize_loopback) {
+    if (force_galaxy_fabric_mode()) {
+        return build_forced_galaxy_fabric_allocation(initialize_loopback);
+    }
+
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
     auto mesh_ids = mesh_graph.get_mesh_ids();
@@ -486,6 +581,14 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages, bool
             "Stage [{}] exit fabric node {} has no active fabric ethernet channels",
             i,
             exit_fn);
+    }
+
+    // FORCE_GALAXY_FABRIC_MODE pins entry/exit to fixed trays (build_forced_galaxy_fabric_allocation)
+    // that deliberately do not follow the discovered inter-mesh exit/peer convention, so the
+    // remaining physical-connectivity checks below (inter-mesh links, router symmetry, physical
+    // cable identity, routing-table forwarding) do not apply and are skipped in this mode.
+    if (force_galaxy_fabric_mode()) {
+        return;
     }
 
     // 3. Consecutive stages are physically connected via inter-mesh links:
