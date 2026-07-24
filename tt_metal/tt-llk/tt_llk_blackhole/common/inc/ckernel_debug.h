@@ -41,7 +41,7 @@ struct dbg_daisy_id
     constexpr static std::uint32_t INSTR_ISSUE_2 = 6;
 };
 
-typedef struct
+struct dbg_bus_cntl_t
 {
     std::uint32_t sig_sel    : 16;
     std::uint32_t daisy_sel  : 8;
@@ -49,7 +49,7 @@ typedef struct
     std::uint32_t reserved_0 : 1;
     std::uint32_t en         : 1;
     std::uint32_t reserved_1 : 2;
-} dbg_bus_cntl_t;
+};
 
 typedef union
 {
@@ -59,11 +59,11 @@ typedef union
 
 ;
 
-typedef struct
+struct dbg_array_rd_en_t
 {
     std::uint32_t en       : 1;
     std::uint32_t reserved : 31;
-} dbg_array_rd_en_t;
+};
 
 typedef union
 {
@@ -71,14 +71,14 @@ typedef union
     dbg_array_rd_en_t f;
 } dbg_array_rd_en_u;
 
-typedef struct
+struct dbg_array_rd_cmd_t
 {
     std::uint32_t row_addr    : 12;
     std::uint32_t row_32b_sel : 4;
     std::uint32_t array_id    : 3;
     std::uint32_t bank_id     : 1;
     std::uint32_t reserved    : 12;
-} dbg_array_rd_cmd_t;
+};
 
 typedef union
 {
@@ -86,12 +86,12 @@ typedef union
     dbg_array_rd_cmd_t f;
 } dbg_array_rd_cmd_u;
 
-typedef struct
+struct dbg_soft_reset_t
 {
     std::uint32_t unp      : 2;
     std::uint32_t pack     : 4;
     std::uint32_t reserved : 26;
-} dbg_soft_reset_t;
+};
 
 typedef union
 {
