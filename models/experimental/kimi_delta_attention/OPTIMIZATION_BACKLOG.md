@@ -102,6 +102,9 @@ dependency-ordered NOC barrier batching and selective double buffering.
   `144.945 -> 154.716 us` (`+6.74%`). Do not retain one-tensor sharing.
 - Retained hypothesis: amortize the same one handshake across all six common
   tensors before rejecting static multicast as a class.
+- Diagnostic result: row-aligned placement alone measured `621.223 us` wall
+  and `145.140 us` recurrence versus `622.564/144.945 us`; it is neutral and
+  cannot explain the one-tensor multicast regression.
 
 ## Execution order
 

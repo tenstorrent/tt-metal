@@ -1134,3 +1134,16 @@
   fixed per-chunk synchronization cost exceeding the saved `k_dec_t` reads.
   A single handshake amortized across all six common inputs remains a distinct
   hypothesis and is the next experiment.
+
+
+### 2026-07-24 17:52:17 UTC — Reject row-aligned scan placement alone
+
+- Alternative hypothesis: moving each four-worker head group into one NoC row,
+  rather than synchronization, caused the one-tensor multicast regression.
+- Command: `QWEN_KDA_SCAN_ROW_ALIGN=1 PERF_TRACE=1 PERF_SEQ=640 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s` -> PASS.
+- CSV: `generated/profiler/reports/2026_07_24_17_52_13/ops_perf_results_2026_07_24_17_52_13.csv` (SHA-256 `f89d35b501583fe5f7eb673b0f30a53a26da52f79d3999a01701de93f9aa3996`).
+- Result: wall is `622.564 -> 621.223 us` (`-0.22%`, within run noise);
+  recurrence is `144.945 -> 145.140 us` (`+0.13%`).
+- Verdict: reject placement-only change because it misses the 1% wall gate.
+  It also rules out placement as the source of the prior `+9.77 us` recurrence
+  regression, supporting per-chunk synchronization as the cause.
