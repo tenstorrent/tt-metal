@@ -122,30 +122,6 @@ tensor_return_value_t SwigluElemwiseBwDeviceOperation::create_output_tensors(
     };
 }
 
-ttsl::hash::hash_t SwigluElemwiseBwDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& dL_dlinear1_memcfg = tensor_args.preallocated_dL_dlinear1.has_value()
-                                         ? tensor_args.preallocated_dL_dlinear1->memory_config()
-                                         : tensor_args.linear1.memory_config();
-    const auto& dL_dgate_memcfg = tensor_args.preallocated_dL_dgate.has_value()
-                                      ? tensor_args.preallocated_dL_dgate->memory_config()
-                                      : tensor_args.linear1.memory_config();
-
-    return tt::tt_metal::operation::hash_operation<SwigluElemwiseBwDeviceOperation>(
-        args,
-        tensor_args.linear1.dtype(),
-        tensor_args.linear1.logical_shape(),
-        tensor_args.linear1.padded_shape(),
-        tensor_args.gate.dtype(),
-        tensor_args.gate.logical_shape(),
-        tensor_args.gate.padded_shape(),
-        tensor_args.dL_dprod.dtype(),
-        tensor_args.dL_dprod.logical_shape(),
-        tensor_args.dL_dprod.padded_shape(),
-        dL_dlinear1_memcfg,
-        dL_dgate_memcfg);
-}
-
 }  // namespace ttml::metal::ops::swiglu_elemwise_bw::device
 
 namespace ttnn::prim {
