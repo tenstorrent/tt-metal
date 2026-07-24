@@ -14,7 +14,7 @@ Pipeline (all driven from here):
      noc_placement_matrix.html and refresh the matrix block in report.md.
 
 tt-npe is located via $TT_NPE_HOME, then <tt-metal>/../tt-npe, then a fallback; its
-install/lib + install/bin are put on sys.path (see skills/perf-roofline-dm/tt_npe.sh).
+install/lib + install/bin are put on sys.path (see skills/perf-ceiling-dm/tt_npe.sh).
 
     python -m ttnn.operations.examples.noc_placement --report      # (thin wrapper over this)
     python -m ttnn.operations.examples.noc_placement.noc_report     # direct
