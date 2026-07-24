@@ -346,7 +346,7 @@ std::tuple<vector<uint32_t>, vector<uint32_t>, vector<uint32_t>> generate_packed
 // Per-op (rtol, atol) for the device-vs-golden comparison. Shared by the bf16
 // and Float32 close-checks so the tolerances live in one place. Defaults match
 // is_close()'s own defaults for the "everything else" bucket.
-std::pair<float, float> sfpu_tolerance(const std::string& op_name) {
+std::pair<float, float> sfpu_tolerance(const std::string& op_name, bool fp32_dest = false) {
     if (op_name == "tanh") {
         return {0.175f, 0.1f};
     }
@@ -354,7 +354,9 @@ std::pair<float, float> sfpu_tolerance(const std::string& op_name) {
         return {0.15f, 0.001f};
     }
     if (op_name == "exponential") {
-        return {0.1f, 0.1f};
+        // 16-bit Dest runs the approximate (HW LUT) exp; 32-bit Dest runs the fp32-accurate
+        // path, so hold it to a much tighter tolerance.
+        return fp32_dest ? std::pair<float, float>{0.02f, 0.01f} : std::pair<float, float>{0.1f, 0.1f};
     }
     if (op_name == "log") {
         return {0.03f, 0.02f};
@@ -389,7 +391,7 @@ bool is_close_packed_sfpu_output_f32(
     if (vec_a.size() != vec_b.size()) {
         return false;
     }
-    const auto [rtol, atol] = sfpu_tolerance(op_name);
+    const auto [rtol, atol] = sfpu_tolerance(op_name, /*fp32_dest=*/true);
     for (size_t i = 0; i < vec_a.size(); ++i) {
         const float a = std::bit_cast<float>(vec_a[i]);
         const float b = std::bit_cast<float>(vec_b[i]);
