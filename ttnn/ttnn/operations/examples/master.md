@@ -32,6 +32,22 @@ pass **`row_wise=True`** to spread across the DRAM-facing axis; keep reads on No
 column-localized DRAM traffic; NoC1's north→west concentrates it. The `noc_placement_matrix.html`
 report is reconstructed from code + tt-npe (`--report`). (Diagonal only beats row on asymmetric grids like Blackhole.)
 
+## ⭐⭐ T2 — [`width_split`](width_split/README.md)
+**Concept:** work distribution — splitting a **wide, short** tensor along its **width** (tile-columns)
+to fill the grid, instead of along its height (tile-rows), which strands a one-tile-row-tall tensor
+on a single core.
+**Situation:** a wide, short tensor (few tile-rows, many tile-columns; extreme: one tile-row tall
+like `[32, 8192]`) runs at single-core speed — the natural tile-row split has only `nt_h` rows to
+hand out, so for `nt_h=1` one core does everything and the other 63 sit idle.
+**Measured win:** width-splitting the `Wt` tiles across `min(Wt, grid)` cores is **up to ~7.8× faster**
+than the single-core (tile-row-split) baseline (WH B0, 64-core grid, bf16, relu): 2.24× at Wt=8,
+4.25× at Wt=32, 6.25× at Wt=64 (grid saturation), 7.76× at Wt=256. The only regime with no benefit is
+`Wt=1` (a single tile-column — nothing to split).
+**Gist:** when `Wt > nt_h` (especially `nt_h` small), do **not** split work by tile-rows — assign each
+core a contiguous tile-**column** range, capped by a `WT_CHUNK` constant so per-core L1 stays bounded.
+Same reader/compute/writer kernels; only the per-core `(start_page, num_pages)` and the active-core
+count change.
+
 ## ⭐⭐ T2 — [`double_buffer`](double_buffer/README.md)
 **Concept:** keeping bytes in flight on the NoC for a DRAM reader→compute→writer pipeline, via three
 levers — outstanding reads per barrier (`block`), double-buffered CBs, and transfer size (dtype).
