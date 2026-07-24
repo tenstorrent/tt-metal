@@ -167,6 +167,21 @@ static_assert(!ttnn::device_operation::ProgramFactoryConcept<CustomProgramSpecFa
 static_assert(!ttnn::device_operation::MeshWorkloadFactoryConcept<CustomProgramSpecFactory>);
 static_assert(!ttnn::device_operation::ProgramDescriptorFactoryConcept<CustomProgramSpecFactory>);
 
+// A factory with both create_descriptor (kept for a pybind hook) and create_program_artifacts is
+// classified as a spec factory, not a descriptor factory — the spec wins.
+struct DescriptorAndSpecFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const OperationAttributes& /*attrs*/, const Tensor& /*tensor_args*/, Tensor& /*tensor_return_value*/) {
+        return {};
+    }
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const OperationAttributes& /*attrs*/, const Tensor& /*tensor_args*/, Tensor& /*tensor_return_value*/) {
+        return ttnn::device_operation::ProgramArtifacts{};
+    }
+};
+static_assert(ttnn::device_operation::ProgramSpecFactoryConcept<DescriptorAndSpecFactory>);
+static_assert(!ttnn::device_operation::ProgramDescriptorFactoryConcept<DescriptorAndSpecFactory>);
+
 // Compile-coverage: taking the adapter methods' addresses ODR-uses them, forcing
 // the (otherwise un-instantiated) bodies to compile. Never dispatched.
 TEST(LaunchOperationTest, ProgramSpecAdapterCompiles) {

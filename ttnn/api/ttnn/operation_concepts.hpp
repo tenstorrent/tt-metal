@@ -71,7 +71,11 @@ concept WorkloadDescriptorConcept = requires { &T::create_workload_descriptor; }
 
 template <typename T>
 concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } || WorkloadDescriptorConcept<T>) &&
-                                          !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T>;
+                                          !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T> &&
+                                          // create_program_artifacts present => spec factory wins, so a
+                                          // create_descriptor kept only for a pybind hook won't pin the op
+                                          // to the descriptor path.
+                                          !requires { &T::create_program_artifacts; };
 
 // Metal 2.0 op-porting stepping-stone factory concept: factories that return
 // ProgramArtifacts (a ProgramSpec + ProgramRunArgs + any op-owned tensors) from
