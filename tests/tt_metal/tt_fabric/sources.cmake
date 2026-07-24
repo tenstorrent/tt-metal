@@ -28,6 +28,7 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_router/test_fabric_topology_helpers.cpp
     fabric_router/test_fabric_opt_level.cpp
     fabric_router/test_channel_trimming_capture.cpp
+    fabric_router/test_static_sized_channels_allocator.cpp
     disaggregation/test_kv_chunk_address_table_protobuf.cpp
     fabric_data_movement/test_basic_fabric_apis.cpp
     fabric_data_movement/test_basic_1d_fabric.cpp
