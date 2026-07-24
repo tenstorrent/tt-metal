@@ -71,6 +71,9 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     permute/device/permute_rm_program_factory.cpp
     permute/device/permute_tiled_program_factory.cpp
     permute/permute.cpp
+    permute/codegen/permute_codegen_device_operation.cpp
+    permute/codegen/permute_codegen_program_factory.cpp
+    permute/codegen/permute_codegen_supported.cpp
     repeat/device/repeat_program_factory_last_dim.cpp
     repeat/device/repeat_program_factory_higher_dim.cpp
     repeat/device/repeat_device_operation.cpp

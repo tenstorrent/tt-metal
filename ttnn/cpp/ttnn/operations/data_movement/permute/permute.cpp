@@ -7,6 +7,8 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
+#include "ttnn/operations/data_movement/permute/codegen/permute_codegen_device_operation.hpp"
+#include "ttnn/operations/data_movement/permute/codegen/permute_codegen_supported.hpp"
 
 #include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -14,6 +16,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -197,6 +200,40 @@ bool is_permute_nop(const ttnn::Tensor& a, const ttsl::SmallVector<uint32_t>& di
     return true;
 }
 
+// A permutation is a layout no-op (safe to route through reshape instead of an actual data
+// move) iff the size>1 axes keep their relative order in the output. This must be checked on
+// axis INDICES, not on the sizes themselves: comparing only the size>1 *values* would
+// false-positive whenever two or more size>1 axes share the same extent (e.g. permuting
+// [0, 3, 1, 2] on shape (1, 64, 64, 64)) — the size lists would match even though the axes were
+// genuinely swapped, silently routing a real transpose through a zero-copy reshape and
+// producing wrong data.
+bool is_permute_layout_nop(const ttnn::Tensor& a, const ttsl::SmallVector<uint32_t>& dims) {
+    // Only ROW_MAJOR has a physical layout where this axis-order check is valid; TILE's
+    // tiled last-two-dims storage can make an axis reorder non-trivial even when it satisfies
+    // the check below, so it must never reach this shortcut.
+    if (a.layout() != Layout::ROW_MAJOR) {
+        return false;
+    }
+    if (a.is_sharded()) {
+        return false;
+    }
+
+    const auto& shape = a.logical_shape();
+    bool has_previous_axis = false;
+    uint32_t previous_axis = 0;
+    for (const uint32_t axis : dims) {
+        if (shape[axis] <= 1) {
+            continue;
+        }
+        if (has_previous_axis && axis < previous_axis) {
+            return false;
+        }
+        previous_axis = axis;
+        has_previous_axis = true;
+    }
+    return true;
+}
+
 }  // namespace ttnn::operations::data_movement::detail
 
 namespace ttnn {
@@ -205,7 +242,8 @@ ttnn::Tensor permute(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
-    float pad_value) {
+    float pad_value,
+    const std::string& implementation) {
     const auto input_rank = input_tensor.logical_shape().rank();
     TT_FATAL(
         input_rank == dims.size(),
@@ -216,8 +254,36 @@ ttnn::Tensor permute(
     std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [input_tensor](std::int64_t idx) {
         return input_tensor.logical_shape().get_normalized_index(idx);
     });
+
+    namespace permute_codegen = operations::data_movement::permute_codegen;
+    const auto selector = permute_codegen::parse_implementation(implementation);
+
     if (operations::data_movement::detail::is_permute_nop(input_tensor, normalized_dims)) {
         return ttnn::to_memory_config(input_tensor, memory_config.value_or(input_tensor.memory_config()));
+    }
+
+    if (operations::data_movement::detail::is_permute_layout_nop(input_tensor, normalized_dims)) {
+        const auto& input_shape = input_tensor.logical_shape();
+        ttsl::SmallVector<uint32_t> output_shape(normalized_dims.size());
+        std::transform(
+            normalized_dims.begin(), normalized_dims.end(), output_shape.begin(), [&input_shape](uint32_t dim) {
+                return input_shape[dim];
+            });
+        return ttnn::reshape(input_tensor, ttnn::Shape(std::move(output_shape)), memory_config);
+    }
+
+    const auto& output_memory_config = memory_config.value_or(input_tensor.memory_config());
+    if (selector == permute_codegen::ImplementationSelector::Codegen) {
+        TT_FATAL(
+            permute_codegen::supported_by_codegen(input_tensor, normalized_dims, output_memory_config),
+            "ttnn::permute: implementation=\"codegen\" requested but this input is not supported by the "
+            "codegen implementation");
+        return ttnn::prim::permute_codegen(input_tensor, normalized_dims, memory_config, std::nullopt);
+    }
+    if (selector == permute_codegen::ImplementationSelector::Auto &&
+        permute_codegen::supported_by_codegen(input_tensor, normalized_dims, output_memory_config) &&
+        !permute_codegen::is_demoted(input_tensor, normalized_dims)) {
+        return ttnn::prim::permute_codegen(input_tensor, normalized_dims, memory_config, std::nullopt);
     }
 
     auto adjust_order = [](const ttsl::SmallVector<uint32_t>& dims) {
@@ -255,8 +321,12 @@ ttnn::Tensor permute(
     return output_tensor;
 }
 
-ttnn::Tensor permute(const ttnn::Tensor& input_tensor, const ttsl::SmallVector<int64_t>& dims, float pad_value) {
-    return permute(input_tensor, dims, std::nullopt, pad_value);
+ttnn::Tensor permute(
+    const ttnn::Tensor& input_tensor,
+    const ttsl::SmallVector<int64_t>& dims,
+    float pad_value,
+    const std::string& implementation) {
+    return permute(input_tensor, dims, std::nullopt, pad_value, implementation);
 }
 
 }  // namespace ttnn
