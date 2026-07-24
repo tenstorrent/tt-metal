@@ -36,7 +36,12 @@ target_link_libraries(
         test_common_libs
 )
 if(ENABLE_DISTRIBUTED)
-    target_link_libraries(distributed_unit_tests PRIVATE OpenMPI::MPI)
+    target_link_libraries(
+        distributed_unit_tests
+        PRIVATE
+            OpenMPI::MPI
+            $<$<TARGET_EXISTS:MPI::MPI_CXX>:MPI::MPI_CXX>
+    )
 endif()
 
 target_include_directories(
