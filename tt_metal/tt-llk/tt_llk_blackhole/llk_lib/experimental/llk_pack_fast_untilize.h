@@ -170,13 +170,19 @@ inline void _llk_pack_fast_untilize_reset_src_counters_()
     // Source counters select the row within a block group and the block group
     // itself. Reset before each phase so phase selection is controlled only by
     // DEST target offset, not leftover PAC address-generator state.
-    TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0011);
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
+    hal::address_counters.client<hal::AddressCounterClient::Packers>()
+        .channel<hal::AddressChannel::Channel0>()
+        .X<0>()
+        .Y<0>()
+        .Z<0>()
+        .channel<hal::AddressChannel::Channel1>()
+        .Z<0>()
+        .apply();
 }
 
 inline void _llk_pack_fast_untilize_reset_output_row_counter_()
 {
-    TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b1000);
+    hal::address_counters.client<hal::AddressCounterClient::Packers>().channel<hal::AddressChannel::Channel1>().Y<0>().apply();
 }
 
 inline void _llk_pack_fast_untilize_strided_mop_config_(const std::uint32_t unit_dim, const std::uint32_t rows_per_run)
@@ -255,7 +261,12 @@ inline void _llk_pack_fast_untilize_init_(const std::uint32_t pack_src_format, c
     TTI_SETDMAREG(0, DEST_REGISTER_HALF_SIZE, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
     select_packer_dest_registers<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE>();
 
-    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+    hal::address_counters.client<hal::AddressCounterClient::Packers>()
+        .channel<hal::AddressChannel::Channel0>()
+        .X<FACE_C_DIM - 1>()
+        .channel<hal::AddressChannel::Channel1>()
+        .X<0>()
+        .apply();
 
     // Strides for our row/block/phase advance scheme.
     const std::uint32_t bytes_per_datum = (pack_src_format & 0x3) == ckernel::to_underlying(DataFormat::Float32)   ? 4

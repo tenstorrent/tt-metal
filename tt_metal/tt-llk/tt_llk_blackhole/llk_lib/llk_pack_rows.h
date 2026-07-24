@@ -122,19 +122,13 @@ inline void _llk_pack_rows_init_(const std::uint32_t num_rows)
     cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(y_pos_counter_limit);
 
     // Set the packer X counter to pack the specified number of datums per row
-    address_counters.client<AddressCounterClient::Packers>()
-        .channel<AddressChannel::Channel0>()
+    hal::address_counters.client<hal::AddressCounterClient::Packers>()
+        .channel<hal::AddressChannel::Channel0>()
         .X<row_num_datums - 1>()
-        .channel<AddressChannel::Channel1>()
-        .X<0x0>()
-        .apply();
-
-    // Reset Z/W counters
-    address_counters.client<AddressCounterClient::Packers>()
-        .channel<AddressChannel::Channel0>()
         .Z<0>()
         .W<0>()
-        .channel<AddressChannel::Channel1>()
+        .channel<hal::AddressChannel::Channel1>()
+        .X<0>()
         .Z<0>()
         .W<0>()
         .apply();
@@ -164,7 +158,12 @@ inline void _llk_pack_rows_(const std::uint32_t tile_index, const std::uint32_t 
     ckernel::ckernel_template::run();
 
     // Reset Z counters after pack operation: ch0_z = ch1_z = 0
-    address_counters.client<AddressCounterClient::Packers>().channel<AddressChannel::Channel0>().Z<0>().channel<AddressChannel::Channel1>().Z<0>().apply();
+    hal::address_counters.client<hal::AddressCounterClient::Packers>()
+        .channel<hal::AddressChannel::Channel0>()
+        .Z<0>()
+        .channel<hal::AddressChannel::Channel1>()
+        .Z<0>()
+        .apply();
 }
 
 /**

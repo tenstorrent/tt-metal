@@ -47,7 +47,14 @@ inline void _llk_unpack_topk_xl_copy_init_(const std::uint32_t unpack_src_format
 inline void _llk_unpack_topk_xl_copy_(
     const std::uint32_t address, const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const std::uint32_t elements_this_tile)
 {
-    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    hal::address_counters.client<hal::AddressCounterClient::Unpacker0, hal::AddressCounterClient::Unpacker1>()
+        .channel<hal::AddressChannel::Channel0>()
+        .Z<0>()
+        .W<0>()
+        .channel<hal::AddressChannel::Channel1>()
+        .Z<0>()
+        .W<0>()
+        .apply();
 
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
 

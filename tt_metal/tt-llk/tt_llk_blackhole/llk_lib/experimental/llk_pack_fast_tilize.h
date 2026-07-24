@@ -168,7 +168,12 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_init_(
     TTI_SETDMAREG(0, DEST_REGISTER_HALF_SIZE, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
     select_packer_dest_registers<Dst>();
 
-    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+    hal::address_counters.client<hal::AddressCounterClient::Packers>()
+        .channel<hal::AddressChannel::Channel0>()
+        .X<FACE_C_DIM - 1>()
+        .channel<hal::AddressChannel::Channel1>()
+        .X<0>()
+        .apply();
 
     // Stride registers are in bytes, divided by pack_src datum size at PACR execution
     // (ttsim: src_addr = byte_offset / src_element_align).
@@ -223,7 +228,7 @@ inline void _llk_pack_fast_tilize_row_begin_(const std::uint32_t address)
     //   X wraps to 0 (SETADCXX end=FACE_C_DIM-1, 16 PACRs per tile → X=0).
     //   Y=0 (ADDR_MOD_1 fires last PACR of every tile: y_src={clr:1,cr:1}).
     // So these counters are naturally 0 at every chunk boundary after row_begin.
-    TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0011);
+    hal::address_counters.client<hal::AddressCounterClient::Packers>().channel<hal::AddressChannel::Channel0>().X<0>().Y<0>().apply();
     program_packer_destination(address);
 }
 
@@ -234,7 +239,7 @@ inline void _llk_pack_fast_tilize_row_chunk_(
     // (last_inner/last_outer each fire ADDRCRZW W+=1, and start_op restores W=W_Cr).
     // Z=0 naturally after every tile (ADDR_MOD_1: z_src={clr:1}); no reset needed.
     // X=0 and Y=0 naturally at chunk boundaries (see row_begin comment).
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0010); // reset W only (mask bit1=W)
+    hal::address_counters.client<hal::AddressCounterClient::Packers>().channel<hal::AddressChannel::Channel0>().W<0>().apply();
     ckernel::ckernel_template::run();
 }
 
@@ -257,11 +262,11 @@ inline void _llk_pack_fast_tilize_block_(
     [[maybe_unused]] const std::uint32_t unit_dim,
     [[maybe_unused]] const std::uint32_t num_faces = 4)
 {
-    TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0011);
+    hal::address_counters.client<hal::AddressCounterClient::Packers>().channel<hal::AddressChannel::Channel0>().X<0>().Y<0>().apply();
     program_packer_destination(address);
     // Reset Z/W counters. MOP start_op restores from CR shadows.
     // W_Cr accumulates across tiles within the unit via ADDRCRZW in loop_op1.
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0011);
+    hal::address_counters.client<hal::AddressCounterClient::Packers>().channel<hal::AddressChannel::Channel0>().Z<0>().W<0>().apply();
     ckernel::ckernel_template::run();
 }
 

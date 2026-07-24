@@ -21,7 +21,14 @@ inline void _llk_unpack_A_custom_(const std::uint32_t address)
 {
     LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
     // Clear z/w start counters
-    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    hal::address_counters.client<hal::AddressCounterClient::Unpacker0, hal::AddressCounterClient::Unpacker1>()
+        .channel<hal::AddressChannel::Channel0>()
+        .Z<0>()
+        .W<0>()
+        .channel<hal::AddressChannel::Channel1>()
+        .Z<0>()
+        .W<0>()
+        .apply();
 
     // Should be propagated to the unpacker as parameter if we wish to use this LLK standalone
     // cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(1); // Disable haloize mode
@@ -40,7 +47,12 @@ inline void _llk_unpack_A_custom_(const std::uint32_t address)
 
     // Stall unpacker until pending CFG writes from Trisc have completed
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
-    TTI_SETADCXX(p_setadc::UNP_A, 1023, 0x0);
+    hal::address_counters.client<hal::AddressCounterClient::Unpacker0>()
+        .channel<hal::AddressChannel::Channel0>()
+        .X<1023>()
+        .channel<hal::AddressChannel::Channel1>()
+        .X<0>()
+        .apply();
     TTI_UNPACR(SrcA, 0b0 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     // T6::SEMGET for context release
     t6_semaphore_get(semaphore::UNPACK_SYNC);

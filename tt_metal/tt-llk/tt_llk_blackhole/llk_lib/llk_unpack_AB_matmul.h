@@ -62,10 +62,10 @@ inline void _llk_unpack_AB_matmul_mop_config_(
                         SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                     TTI_UNPACR(
                         SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                    address_counters.client<AddressCounterClient::Unpacker0>()
-                        .channel<AddressChannel::Channel0>()
+                    hal::address_counters.client<hal::AddressCounterClient::Unpacker0>()
+                        .channel<hal::AddressChannel::Channel0>()
                         .Z<0>()
-                        .channel<AddressChannel::Channel1>()
+                        .channel<hal::AddressChannel::Channel1>()
                         .Z<0>()
                         .apply(); // Set ch0_z=0, ch1_z=0
                 }
@@ -97,10 +97,10 @@ inline void _llk_unpack_AB_matmul_mop_config_(
                         SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                     TTI_UNPACR(
                         SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                    address_counters.client<AddressCounterClient::Unpacker0>()
-                        .channel<AddressChannel::Channel0>()
+                    hal::address_counters.client<hal::AddressCounterClient::Unpacker0>()
+                        .channel<hal::AddressChannel::Channel0>()
                         .Z<0>()
-                        .channel<AddressChannel::Channel1>()
+                        .channel<hal::AddressChannel::Channel1>()
                         .Z<0>()
                         .apply(); // Set ch0_z=0, ch1_z=0
                 }
@@ -142,10 +142,10 @@ inline void _llk_unpack_AB_matmul_mop_config_(
                         SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                     TTI_UNPACR(
                         SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                    address_counters.client<AddressCounterClient::Unpacker1>()
-                        .channel<AddressChannel::Channel0>()
+                    hal::address_counters.client<hal::AddressCounterClient::Unpacker1>()
+                        .channel<hal::AddressChannel::Channel0>()
                         .Z<0>()
-                        .channel<AddressChannel::Channel1>()
+                        .channel<hal::AddressChannel::Channel1>()
                         .Z<0>()
                         .apply(); // Set ch0_z=0, ch1_z=0
                 }
@@ -177,10 +177,10 @@ inline void _llk_unpack_AB_matmul_mop_config_(
                         SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                     TTI_UNPACR(
                         SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                    address_counters.client<AddressCounterClient::Unpacker1>()
-                        .channel<AddressChannel::Channel0>()
+                    hal::address_counters.client<hal::AddressCounterClient::Unpacker1>()
+                        .channel<hal::AddressChannel::Channel0>()
                         .Z<0>()
-                        .channel<AddressChannel::Channel1>()
+                        .channel<hal::AddressChannel::Channel1>()
                         .Z<0>()
                         .apply(); // Set ch0_z=0, ch1_z=0
                 }
@@ -282,14 +282,16 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     // in large matmul, datacopy will disable the transpose of faces, so we need it turn it back on for matmul.
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose);
 
-    address_counters.client<AddressCounterClient::Unpacker0, AddressCounterClient::Unpacker1>()
-        .channel<AddressChannel::Channel0>()
+    hal::address_counters.client<hal::AddressCounterClient::Unpacker0, hal::AddressCounterClient::Unpacker1>()
+        .channel<hal::AddressChannel::Channel0>()
         .Z<0>()
         .W<0>()
-        .channel<AddressChannel::Channel1>()
+        .channel<hal::AddressChannel::Channel1>()
         .Z<0>()
         .W<0>()
         .apply();
+
+    constexpr auto unpacker_counters = hal::runtime_address_counters.channel<hal::AddressChannel::Channel1>().X(0).channel<hal::AddressChannel::Channel0>();
 
     if (unpA_partial_face)
     {
@@ -300,7 +302,7 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     else
     {
         const std::uint32_t unpA_x_end = unpA_num_faces * unpA_face_r_dim * FACE_C_DIM - 1;
-        TT_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
+        unpacker_counters.client<hal::AddressCounterClient::Unpacker0>().X(unpA_x_end).apply();
     }
 
     if (unpB_partial_face)
@@ -314,7 +316,7 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
         // Do full tile unpacking. No need to program face dim
         // as address counter pointing to the face is not incremented
         const std::uint32_t unpB_x_end = unpB_num_faces * unpB_face_r_dim * FACE_C_DIM - 1;
-        TT_SETADCXX(p_setadc::UNP_B, unpB_x_end, 0x0);
+        unpacker_counters.client<hal::AddressCounterClient::Unpacker1>().X(unpB_x_end).apply();
     }
 
     TT_SETDMAREG(0, LOWER_HALFWORD(kt_dim), 0, LO_16(p_gpr_unpack::KT_DIM)); // store kt_dim to gpr for scaling tile size
@@ -425,10 +427,10 @@ inline void _llk_unpack_AB_matmul_(
                     SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                 TTI_UNPACR(
                     SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                address_counters.client<AddressCounterClient::Unpacker1>()
-                    .channel<AddressChannel::Channel0>()
+                hal::address_counters.client<hal::AddressCounterClient::Unpacker1>()
+                    .channel<hal::AddressChannel::Channel0>()
                     .Z<0>()
-                    .channel<AddressChannel::Channel1>()
+                    .channel<hal::AddressChannel::Channel1>()
                     .Z<0>()
                     .apply(); // Set ch0_z=0, ch1_z=0
             }
@@ -447,10 +449,10 @@ inline void _llk_unpack_AB_matmul_(
                     SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                 TTI_UNPACR(
                     SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                address_counters.client<AddressCounterClient::Unpacker0>()
-                    .channel<AddressChannel::Channel0>()
+                hal::address_counters.client<hal::AddressCounterClient::Unpacker0>()
+                    .channel<hal::AddressChannel::Channel0>()
                     .Z<0>()
-                    .channel<AddressChannel::Channel1>()
+                    .channel<hal::AddressChannel::Channel1>()
                     .Z<0>()
                     .apply(); // Set ch0_z=0, ch1_z=0
             }

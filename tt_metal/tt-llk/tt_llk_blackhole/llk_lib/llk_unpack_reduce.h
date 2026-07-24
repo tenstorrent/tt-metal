@@ -83,10 +83,10 @@ inline void _llk_unpack_reduce_init_(
     // if we have the flag set with REDUCE_ROW, we don't need to do anything
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(ReduceDim::REDUCE_ROW == dim ? !within_face_16x16_transpose : within_face_16x16_transpose);
 
-    address_counters.client<AddressCounterClient::Unpacker0, AddressCounterClient::Unpacker1>()
-        .channel<AddressChannel::Channel0>()
+    hal::address_counters.client<hal::AddressCounterClient::Unpacker0, hal::AddressCounterClient::Unpacker1>()
+        .channel<hal::AddressChannel::Channel0>()
         .X<FACE_R_DIM * FACE_C_DIM - 1>()
-        .channel<AddressChannel::Channel1>()
+        .channel<hal::AddressChannel::Channel1>()
         .X<0x0>()
         .apply();
 
@@ -108,11 +108,11 @@ template <PoolType type, ReduceDim dim>
 inline void _llk_unpack_reduce_(const std::uint32_t address)
 {
     // Clear z/w start counters on both channels of both unpackers
-    address_counters.client<AddressCounterClient::Unpacker0, AddressCounterClient::Unpacker1>()
-        .channel<AddressChannel::Channel0>()
+    hal::address_counters.client<hal::AddressCounterClient::Unpacker0, hal::AddressCounterClient::Unpacker1>()
+        .channel<hal::AddressChannel::Channel0>()
         .Z<0>()
         .W<0>()
-        .channel<AddressChannel::Channel1>()
+        .channel<hal::AddressChannel::Channel1>()
         .Z<0>()
         .W<0>()
         .apply();
@@ -129,13 +129,13 @@ inline void _llk_unpack_reduce_(const std::uint32_t address)
     // Trisc::SEMPOST for context acquire
     semaphore_post(semaphore::UNPACK_SYNC);
 
+    constexpr auto unpacker_counters = hal::address_counters.client<hal::AddressCounterClient::Unpacker1>()
+                                           .channel<hal::AddressChannel::Channel1>()
+                                           .X<0>()
+                                           .channel<hal::AddressChannel::Channel0>();
+
     // Load only 16 datums into srcB
-    address_counters.client<AddressCounterClient::Unpacker1>()
-        .channel<AddressChannel::Channel0>()
-        .X<FACE_C_DIM - 1>()
-        .channel<AddressChannel::Channel1>()
-        .X<0x0>()
-        .apply();
+    unpacker_counters.X<FACE_C_DIM - 1>().apply();
 
     // Stall unpacker until pending CFG writes from Trisc have completed
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
@@ -144,12 +144,7 @@ inline void _llk_unpack_reduce_(const std::uint32_t address)
     mop_run(0, 4);
 
     // Restore face height
-    address_counters.client<AddressCounterClient::Unpacker1>()
-        .channel<AddressChannel::Channel0>()
-        .X<FACE_R_DIM * FACE_C_DIM - 1>()
-        .channel<AddressChannel::Channel1>()
-        .X<0x0>()
-        .apply();
+    unpacker_counters.X<FACE_R_DIM * FACE_C_DIM - 1>().apply();
 
     // T6::SEMGET for context release
     t6_semaphore_get(semaphore::UNPACK_SYNC);

@@ -98,10 +98,10 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
     ckernel::ckernel_template tmp(
         MOP_OUTER_LOOP,
         MOP_INNER_LOOP,
-        address_counters.client<AddressCounterClient::Packers>()
-            .channel<AddressChannel::Channel0>()
+        hal::address_counters.client<hal::AddressCounterClient::Packers>()
+            .channel<hal::AddressChannel::Channel0>()
             .W<1>()
-            .get_operation<GetOpType::INCREMENT>(), // w cnt points to the next tile
+            .get_operation<hal::GetOpType::INCREMENT>(), // w cnt points to the next tile
         TT_OP_PACR(
             p_pacr::CFG_CTXT_0,
             p_pacr::NO_ROW_PAD_ZERO,
@@ -120,7 +120,7 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
     Since there are two inner loop operations, the instruction set by set_last_inner_loop_instr
     will replace the second inner loop operation (in the last iteration, call the PACR instruction
     with the Last bit set to 1 instead of 0 to close the row).
-    The W counter CR shadow (W_Cr) is established by TT_SETADC(...SET_W...) in _llk_pack_untilize_
+    The W counter CR shadow (W_Cr) is established by the runtime address-counter write in _llk_pack_untilize_
     before run() is called; the SETADCZW there only initializes Z.
     ADDRCRZW with increment 0 resets W to the stored W_Cr value at the start of each outer loop
     iteration (row), without needing tile_dst_offset baked into this MOP template.
@@ -247,18 +247,18 @@ inline void _llk_pack_untilize_init_(
 
     // Always include setup calls for safety (as recommended by maintainer)
     // Program packer to pack out the correct number of datums per row
+    constexpr auto packer_counters = hal::address_counters.client<hal::AddressCounterClient::Packers>()
+                                         .channel<hal::AddressChannel::Channel1>()
+                                         .X<0>()
+                                         .channel<hal::AddressChannel::Channel0>();
+
     if constexpr (narrow_row)
     {
-        TTI_SETADCXX(p_setadc::PAC, row_num_datums - 1, 0x0);
+        packer_counters.X<row_num_datums - 1>().apply();
     }
     else
     {
-        address_counters.client<AddressCounterClient::Packers>()
-            .channel<AddressChannel::Channel0>()
-            .X<FACE_C_DIM - 1>()
-            .channel<AddressChannel::Channel1>()
-            .X<0x0>()
-            .apply();
+        packer_counters.X<FACE_C_DIM - 1>().apply();
     }
 }
 
@@ -312,11 +312,10 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
     // MOP START_OP resets W to this value at the start of each outer loop iteration (row).
     // The first INCADCZW in the inner loop then advances W to tile_dst_offset for the first tile.
     // SETADCZW's Ch0_W field is only 3 bits (0-7), so SETADC is used to carry the full 4-bit W value.
-    // reset ch0 z counter
-    address_counters.client<AddressCounterClient::Packers>().channel<AddressChannel::Channel0>().Z<0>().apply();
-    TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, (15 + tile_dst_offset) & 0xF); // set ch0 w counter, establishing W_Cr
-    // reset ch0 xy counters
-    address_counters.client<AddressCounterClient::Packers>().channel<AddressChannel::Channel0>().X<0>().Y<0>().apply();
+    // Reset ch0 X/Y/Z counters. apply() emits SETADCXY plus SETADC for Z.
+    hal::address_counters.client<hal::AddressCounterClient::Packers>().channel<hal::AddressChannel::Channel0>().X<0>().Y<0>().Z<0>().apply();
+    // Establish W_Cr separately: SETADCZW only has a 3-bit ch0 W field.
+    hal::runtime_address_counters.client<hal::AddressCounterClient::Packers>().channel<hal::AddressChannel::Channel0>().W((15 + tile_dst_offset) & 0xF).apply();
 
     // Iterate over top, then over bottom faces in the block (if num_faces > 2)
     for (std::uint32_t face = 0; face < num_faces_per_rdim_tile; face++)
@@ -324,13 +323,18 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
         ckernel::ckernel_template::run();
 
         // z cnt increments by 2xface_r_dimxFACE_C_DIM
-        address_counters.client<AddressCounterClient::Packers>().channel<AddressChannel::Channel0>().Z<1>().increment();
+        hal::address_counters.client<hal::AddressCounterClient::Packers>().channel<hal::AddressChannel::Channel0>().Z<1>().increment();
         // reset ch0_y counters
-        address_counters.client<AddressCounterClient::Packers>().channel<AddressChannel::Channel0>().Y<0>().apply();
+        hal::address_counters.client<hal::AddressCounterClient::Packers>().channel<hal::AddressChannel::Channel0>().Y<0>().apply();
     }
 
     // reset z counters: ch0_z = ch1_z = 0
-    address_counters.client<AddressCounterClient::Packers>().channel<AddressChannel::Channel0>().Z<0>().channel<AddressChannel::Channel1>().Z<0>().apply();
+    hal::address_counters.client<hal::AddressCounterClient::Packers>()
+        .channel<hal::AddressChannel::Channel0>()
+        .Z<0>()
+        .channel<hal::AddressChannel::Channel1>()
+        .Z<0>()
+        .apply();
     set_dst_write_addr(tile_dst_offset); // reset w counter
 }
 

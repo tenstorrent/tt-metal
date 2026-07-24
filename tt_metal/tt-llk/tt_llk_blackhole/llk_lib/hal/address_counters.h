@@ -1,9 +1,15 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #pragma once
 
 #include <cstdint>
 
-#include "ckernel_defs.h" // ckernel::to_underlying
+#include "ckernel.h" // ckernel::instrn_buffer
 
+namespace hal
+{
 /**
  * Enum class for address counter client selection
  */
@@ -370,7 +376,7 @@ public:
             else
             {
                 static_assert(
-                    false,
+                    SetMask != SetMask,
                     "unsupported selection — matches none of the valid op() patterns (single counter/single channel, X/Y any channel, or Z/W any channel)");
             }
         }
@@ -392,12 +398,12 @@ public:
             }
             else
             {
-                static_assert(false, "misuse - nothing to increment");
+                static_assert(SetMask != SetMask, "misuse - nothing to increment");
             }
         }
         else
         {
-            static_assert(false, "Invalid operation type");
+            static_assert(operation != operation, "Invalid operation type");
         }
     }
 
@@ -485,5 +491,347 @@ public:
     // }
 };
 
+/**
+ * @brief Compile-time-selected, runtime-valued address-counter builder.
+ *
+ * Client, channel, and counter selection remain template arguments, exactly as in @ref ADC.
+ * X/Y/Z/W values are normal function arguments. Consequently the emitter is selected entirely at
+ * compile time and the inlined runtime path contains a TT_* instruction write with no dispatch.
+ *
+ * @code
+ *   runtime_address_counters
+ *       .client<AddressCounterClient::Unpacker0>()
+ *       .channel<AddressChannel::Channel0>()
+ *       .X(face_r_dim)
+ *       .Y(0)
+ *       .apply();
+ * @endcode
+ */
+template <std::uint8_t SetMask = 0, std::uint8_t ClientMask = 0, std::uint8_t ChannelMask = 0, std::uint8_t CurrentChannel = 0>
+struct RuntimeADC
+{
+private:
+    static constexpr std::uint8_t X_CHANNEL0 = 0b01 << 0;
+    static constexpr std::uint8_t X_CHANNEL1 = 0b10 << 0;
+    static constexpr std::uint8_t Y_CHANNEL0 = 0b01 << 2;
+    static constexpr std::uint8_t Y_CHANNEL1 = 0b10 << 2;
+    static constexpr std::uint8_t Z_CHANNEL0 = 0b01 << 4;
+    static constexpr std::uint8_t Z_CHANNEL1 = 0b10 << 4;
+    static constexpr std::uint8_t W_CHANNEL0 = 0b01 << 6;
+    static constexpr std::uint8_t W_CHANNEL1 = 0b10 << 6;
+
+    enum class Counter : std::uint8_t
+    {
+        X = 0x0,
+        Y = 0x2,
+        Z = 0x4,
+        W = 0x6
+    };
+
+    std::uint32_t x_channel0 = 0;
+    std::uint32_t x_channel1 = 0;
+    std::uint32_t y_channel0 = 0;
+    std::uint32_t y_channel1 = 0;
+    std::uint32_t z_channel0 = 0;
+    std::uint32_t z_channel1 = 0;
+    std::uint32_t w_channel0 = 0;
+    std::uint32_t w_channel1 = 0;
+
+    template <std::uint8_t, std::uint8_t, std::uint8_t, std::uint8_t>
+    friend struct RuntimeADC;
+
+    static constexpr bool _is_set(const std::uint8_t mask)
+    {
+        return SetMask & mask;
+    }
+
+    inline __attribute__((always_inline)) static constexpr void _assert_selection()
+    {
+        static_assert(ClientMask != 0, "no client selected — call client<...>() first");
+        static_assert(ChannelMask != 0, "no channel selected — call channel<...>() first");
+    }
+
+    template <std::uint8_t NewSetMask, std::uint8_t NewClientMask, std::uint8_t NewChannelMask, std::uint8_t NewCurrentChannel>
+    inline __attribute__((always_inline)) constexpr RuntimeADC<NewSetMask, NewClientMask, NewChannelMask, NewCurrentChannel> _rebind() const
+    {
+        RuntimeADC<NewSetMask, NewClientMask, NewChannelMask, NewCurrentChannel> next;
+        next.x_channel0 = x_channel0;
+        next.x_channel1 = x_channel1;
+        next.y_channel0 = y_channel0;
+        next.y_channel1 = y_channel1;
+        next.z_channel0 = z_channel0;
+        next.z_channel1 = z_channel1;
+        next.w_channel0 = w_channel0;
+        next.w_channel1 = w_channel1;
+        return next;
+    }
+
+    template <Counter counter>
+    inline __attribute__((always_inline)) constexpr auto _set_counter(const std::uint32_t value) const
+    {
+        constexpr bool selected_channel0     = CurrentChannel & ckernel::to_underlying(AddressChannel::Channel0);
+        constexpr bool selected_channel1     = CurrentChannel & ckernel::to_underlying(AddressChannel::Channel1);
+        constexpr std::uint8_t channel0_mask = 0b01 << ckernel::to_underlying(counter);
+        constexpr std::uint8_t channel1_mask = 0b10 << ckernel::to_underlying(counter);
+        constexpr std::uint8_t new_set_mask  = SetMask | (selected_channel0 ? channel0_mask : 0) | (selected_channel1 ? channel1_mask : 0);
+
+        auto next = _rebind<new_set_mask, ClientMask, ChannelMask, CurrentChannel>();
+        if constexpr (counter == Counter::X)
+        {
+            if constexpr (selected_channel0)
+            {
+                next.x_channel0 = value;
+            }
+            if constexpr (selected_channel1)
+            {
+                next.x_channel1 = value;
+            }
+        }
+        else if constexpr (counter == Counter::Y)
+        {
+            if constexpr (selected_channel0)
+            {
+                next.y_channel0 = value;
+            }
+            if constexpr (selected_channel1)
+            {
+                next.y_channel1 = value;
+            }
+        }
+        else if constexpr (counter == Counter::Z)
+        {
+            if constexpr (selected_channel0)
+            {
+                next.z_channel0 = value;
+            }
+            if constexpr (selected_channel1)
+            {
+                next.z_channel1 = value;
+            }
+        }
+        else
+        {
+            if constexpr (selected_channel0)
+            {
+                next.w_channel0 = value;
+            }
+            if constexpr (selected_channel1)
+            {
+                next.w_channel1 = value;
+            }
+        }
+        return next;
+    }
+
+    inline __attribute__((always_inline)) void _emit_single_counter() const
+    {
+        constexpr bool selected_channel0 = ChannelMask & ckernel::to_underlying(AddressChannel::Channel0);
+        constexpr bool selected_channel1 = ChannelMask & ckernel::to_underlying(AddressChannel::Channel1);
+        constexpr bool is_x              = _is_set(X_CHANNEL0 | X_CHANNEL1);
+        constexpr bool is_y              = _is_set(Y_CHANNEL0 | Y_CHANNEL1);
+        constexpr bool is_z              = _is_set(Z_CHANNEL0 | Z_CHANNEL1);
+        constexpr std::uint32_t channel  = selected_channel1 ? 1 : 0;
+        constexpr std::uint32_t counter  = is_x ? 0 : is_y ? 1 : is_z ? 2 : 3;
+
+        if constexpr (is_x)
+        {
+            TT_SETADC(ClientMask, channel, counter, selected_channel0 ? x_channel0 : x_channel1);
+        }
+        else if constexpr (is_y)
+        {
+            TT_SETADC(ClientMask, channel, counter, selected_channel0 ? y_channel0 : y_channel1);
+        }
+        else if constexpr (is_z)
+        {
+            TT_SETADC(ClientMask, channel, counter, selected_channel0 ? z_channel0 : z_channel1);
+        }
+        else
+        {
+            TT_SETADC(ClientMask, channel, counter, selected_channel0 ? w_channel0 : w_channel1);
+        }
+    }
+
+public:
+    template <AddressCounterClient... clients>
+    inline __attribute__((always_inline)) constexpr auto client() const
+    {
+        constexpr std::uint8_t clients_mask = (std::uint8_t {0} | ... | ckernel::to_underlying(clients));
+        return _rebind<SetMask, ClientMask | clients_mask, ChannelMask, CurrentChannel>();
+    }
+
+    template <AddressChannel Channel>
+    inline __attribute__((always_inline)) constexpr auto channel() const
+    {
+        constexpr std::uint8_t channel_bit = ckernel::to_underlying(Channel);
+        static_assert(!(ChannelMask & channel_bit), "channel already selected — channel<...>() called twice for the same channel");
+        return _rebind<SetMask, ClientMask, ChannelMask | channel_bit, channel_bit>();
+    }
+
+    inline __attribute__((always_inline)) constexpr auto X(const std::uint32_t value) const
+    {
+        return _set_counter<Counter::X>(value);
+    }
+
+    inline __attribute__((always_inline)) constexpr auto Y(const std::uint32_t value) const
+    {
+        return _set_counter<Counter::Y>(value);
+    }
+
+    inline __attribute__((always_inline)) constexpr auto Z(const std::uint32_t value) const
+    {
+        return _set_counter<Counter::Z>(value);
+    }
+
+    inline __attribute__((always_inline)) constexpr auto W(const std::uint32_t value) const
+    {
+        return _set_counter<Counter::W>(value);
+    }
+
+    template <GetOpType operation>
+    inline __attribute__((always_inline)) std::uint32_t get_operation() const
+    {
+        _assert_selection();
+
+        constexpr bool selected_channel0 = ChannelMask & ckernel::to_underlying(AddressChannel::Channel0);
+        constexpr bool selected_channel1 = ChannelMask & ckernel::to_underlying(AddressChannel::Channel1);
+        constexpr bool is_x              = _is_set(X_CHANNEL0 | X_CHANNEL1);
+        constexpr bool is_y              = _is_set(Y_CHANNEL0 | Y_CHANNEL1);
+        constexpr bool is_z              = _is_set(Z_CHANNEL0 | Z_CHANNEL1);
+        constexpr bool is_w              = _is_set(W_CHANNEL0 | W_CHANNEL1);
+        constexpr bool has_xy            = is_x || is_y;
+        constexpr bool has_zw            = is_z || is_w;
+
+        static_assert(has_xy != has_zw, "runtime get_operation() must encode exactly one TT instruction (select X/Y or Z/W, not both)");
+
+        if constexpr (operation == GetOpType::SETTER)
+        {
+            constexpr bool single_counter = (selected_channel0 != selected_channel1) && (is_x + is_y + is_z + is_w == 1);
+            constexpr bool xx             = is_x && !is_y && selected_channel0 && selected_channel1;
+
+            if constexpr (single_counter)
+            {
+                constexpr std::uint32_t channel = selected_channel1 ? 1 : 0;
+                constexpr std::uint32_t counter = is_x ? 0 : is_y ? 1 : is_z ? 2 : 3;
+                if constexpr (is_x)
+                {
+                    return TT_OP_SETADC(ClientMask, channel, counter, selected_channel0 ? x_channel0 : x_channel1);
+                }
+                else if constexpr (is_y)
+                {
+                    return TT_OP_SETADC(ClientMask, channel, counter, selected_channel0 ? y_channel0 : y_channel1);
+                }
+                else if constexpr (is_z)
+                {
+                    return TT_OP_SETADC(ClientMask, channel, counter, selected_channel0 ? z_channel0 : z_channel1);
+                }
+                else
+                {
+                    return TT_OP_SETADC(ClientMask, channel, counter, selected_channel0 ? w_channel0 : w_channel1);
+                }
+            }
+            else if constexpr (xx)
+            {
+                return TT_OP_SETADCXX(ClientMask, x_channel0, x_channel1);
+            }
+            else if constexpr (has_xy)
+            {
+                constexpr std::uint8_t write_mask =
+                    (_is_set(X_CHANNEL0) << 0) | (_is_set(Y_CHANNEL0) << 1) | (_is_set(X_CHANNEL1) << 2) | (_is_set(Y_CHANNEL1) << 3);
+                return TT_OP_SETADCXY(ClientMask, y_channel1, x_channel1, y_channel0, x_channel0, write_mask);
+            }
+            else
+            {
+                constexpr std::uint8_t write_mask =
+                    (_is_set(Z_CHANNEL0) << 0) | (_is_set(W_CHANNEL0) << 1) | (_is_set(Z_CHANNEL1) << 2) | (_is_set(W_CHANNEL1) << 3);
+                return TT_OP_SETADCZW(ClientMask, w_channel1, z_channel1, w_channel0, z_channel0, write_mask);
+            }
+        }
+        else
+        {
+            static_assert(operation == GetOpType::INCREMENT, "invalid operation type");
+            if constexpr (has_xy)
+            {
+                return TT_OP_INCADCXY(ClientMask, y_channel1, x_channel1, y_channel0, x_channel0);
+            }
+            else
+            {
+                return TT_OP_INCADCZW(ClientMask, w_channel1, z_channel1, w_channel0, z_channel0);
+            }
+        }
+    }
+
+    inline __attribute__((always_inline)) void apply() const
+    {
+        _assert_selection();
+
+        constexpr bool selected_channel0 = ChannelMask & ckernel::to_underlying(AddressChannel::Channel0);
+        constexpr bool selected_channel1 = ChannelMask & ckernel::to_underlying(AddressChannel::Channel1);
+        constexpr bool single_channel    = selected_channel0 + selected_channel1 == 1;
+        constexpr bool is_x              = _is_set(X_CHANNEL0 | X_CHANNEL1);
+        constexpr bool is_y              = _is_set(Y_CHANNEL0 | Y_CHANNEL1);
+        constexpr bool is_z              = _is_set(Z_CHANNEL0 | Z_CHANNEL1);
+        constexpr bool is_w              = _is_set(W_CHANNEL0 | W_CHANNEL1);
+        constexpr bool has_xy            = is_x || is_y;
+        constexpr bool has_zw            = is_z || is_w;
+
+        static_assert(has_xy != has_zw, "runtime apply() must encode exactly one TT instruction (select X/Y or Z/W, not both)");
+
+        if constexpr (has_xy)
+        {
+            constexpr bool only_x = is_x && !is_y;
+            constexpr bool only_y = is_y && !is_x;
+            if constexpr (only_x && !single_channel)
+            {
+                TT_SETADCXX(ClientMask, x_channel0, x_channel1);
+            }
+            else if constexpr ((only_x || only_y) && single_channel)
+            {
+                _emit_single_counter();
+            }
+            else
+            {
+                constexpr std::uint8_t write_mask =
+                    (_is_set(X_CHANNEL0) << 0) | (_is_set(Y_CHANNEL0) << 1) | (_is_set(X_CHANNEL1) << 2) | (_is_set(Y_CHANNEL1) << 3);
+                TT_SETADCXY(ClientMask, y_channel1, x_channel1, y_channel0, x_channel0, write_mask);
+            }
+        }
+        else
+        {
+            constexpr bool one_counter = is_z + is_w == 1;
+            if constexpr (one_counter && single_channel)
+            {
+                _emit_single_counter();
+            }
+            else
+            {
+                constexpr std::uint8_t write_mask =
+                    (_is_set(Z_CHANNEL0) << 0) | (_is_set(W_CHANNEL0) << 1) | (_is_set(Z_CHANNEL1) << 2) | (_is_set(W_CHANNEL1) << 3);
+                TT_SETADCZW(ClientMask, w_channel1, z_channel1, w_channel0, z_channel0, write_mask);
+            }
+        }
+    }
+
+    inline __attribute__((always_inline)) void increment() const
+    {
+        _assert_selection();
+
+        constexpr bool has_xy = _is_set(X_CHANNEL0 | X_CHANNEL1 | Y_CHANNEL0 | Y_CHANNEL1);
+        constexpr bool has_zw = _is_set(Z_CHANNEL0 | Z_CHANNEL1 | W_CHANNEL0 | W_CHANNEL1);
+        static_assert(has_xy != has_zw, "runtime increment() must encode exactly one TT instruction (select X/Y or Z/W, not both)");
+
+        if constexpr (has_xy)
+        {
+            TT_INCADCXY(ClientMask, y_channel1, x_channel1, y_channel0, x_channel0);
+        }
+        else
+        {
+            TT_INCADCZW(ClientMask, w_channel1, z_channel1, w_channel0, z_channel0);
+        }
+    }
+};
+
 using _address_counters = ADC<>;
 inline constexpr _address_counters address_counters {};
+inline constexpr RuntimeADC<> runtime_address_counters {};
+
+} // namespace hal

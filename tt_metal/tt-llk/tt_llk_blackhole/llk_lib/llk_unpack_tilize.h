@@ -108,8 +108,13 @@ inline void _llk_unpack_tilize_init_(
         is_unpacker_format_conversion_supported_dest(static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), unpack_to_dest),
         "Unsupported unpacker format conversion.");
 
+    constexpr auto unpacker_counters = hal::runtime_address_counters.client<hal::AddressCounterClient::Unpacker0>()
+                                           .channel<hal::AddressChannel::Channel1>()
+                                           .X(0)
+                                           .channel<hal::AddressChannel::Channel0>();
+
     // Set face dim
-    TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
+    unpacker_counters.X(face_r_dim * FACE_C_DIM - 1).apply();
 
     // Override default settings to enable tilize mode
     unpack_config_u config   = {0};
@@ -141,7 +146,7 @@ inline void _llk_unpack_tilize_init_(
         cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, TILE_DESC_UPPER_HALFWORD_MASK>(0 | (Tile_z_dim << 16));
 
         // Set x-end for Unpackers to (face_r_dim * num_faces * FACE_C_DIM - 1)
-        TT_SETADCXX(p_setadc::UNP0, Tile_x_dim - 1, 0x0);
+        unpacker_counters.X(Tile_x_dim - 1).apply();
     }
 
     _llk_unpack_tilize_mop_config_(narrow_tile, unpack_to_dest, is_8bit_format);
@@ -209,11 +214,11 @@ inline void _llk_unpack_tilize_(
             std::uint32_t address = base_address + top_face_offset_address + ((n == 1) ? bot_face_offset_address : 0);
 
             // Clear z/w start counters
-            address_counters.client<AddressCounterClient::Unpacker0>()
-                .channel<AddressChannel::Channel0>()
+            hal::address_counters.client<hal::AddressCounterClient::Unpacker0>()
+                .channel<hal::AddressChannel::Channel0>()
                 .Z<0>()
                 .W<0>()
-                .channel<AddressChannel::Channel1>()
+                .channel<hal::AddressChannel::Channel1>()
                 .Z<0>()
                 .W<0>()
                 .apply();
@@ -250,11 +255,11 @@ inline void _llk_unpack_tilize_(
         LLK_ASSERT(is_valid_L1_address(address), "L1 base_address must be in valid L1 memory region");
 
         // Clear z/w start counters
-        address_counters.client<AddressCounterClient::Unpacker0>()
-            .channel<AddressChannel::Channel0>()
+        hal::address_counters.client<hal::AddressCounterClient::Unpacker0>()
+            .channel<hal::AddressChannel::Channel0>()
             .Z<0>()
             .W<0>()
-            .channel<AddressChannel::Channel1>()
+            .channel<hal::AddressChannel::Channel1>()
             .Z<0>()
             .W<0>()
             .apply();
@@ -500,11 +505,11 @@ inline void _llk_unpack_tilizeA_B_(
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
     // Clear z/w start counters for SrcA/B
-    address_counters.client<AddressCounterClient::Unpacker0, AddressCounterClient::Unpacker1>()
-        .channel<AddressChannel::Channel0>()
+    hal::address_counters.client<hal::AddressCounterClient::Unpacker0, hal::AddressCounterClient::Unpacker1>()
+        .channel<hal::AddressChannel::Channel0>()
         .Z<0>()
         .W<0>()
-        .channel<AddressChannel::Channel1>()
+        .channel<hal::AddressChannel::Channel1>()
         .Z<0>()
         .W<0>()
         .apply();
@@ -542,10 +547,10 @@ inline void _llk_unpack_tilizeA_B_(
         TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
         // Reset Y counters for SrcA (ch0_y = ch1_y = 0)
-        address_counters.client<AddressCounterClient::Unpacker0>()
-            .channel<AddressChannel::Channel0>()
+        hal::address_counters.client<hal::AddressCounterClient::Unpacker0>()
+            .channel<hal::AddressChannel::Channel0>()
             .Y<0>()
-            .channel<AddressChannel::Channel1>()
+            .channel<hal::AddressChannel::Channel1>()
             .Y<0>()
             .apply();
         // Unpack SrcB 16x16 face & Set Data Valid
@@ -585,10 +590,10 @@ inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format)
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
 
     // _llk_unpack_tilizeA_B uses y-stride and updates y counter (ch0_y = ch1_y = 0 on both unpackers)
-    address_counters.client<AddressCounterClient::Unpacker0, AddressCounterClient::Unpacker1>()
-        .channel<AddressChannel::Channel0>()
+    hal::address_counters.client<hal::AddressCounterClient::Unpacker0, hal::AddressCounterClient::Unpacker1>()
+        .channel<hal::AddressChannel::Channel0>()
         .Y<0>()
-        .channel<AddressChannel::Channel1>()
+        .channel<hal::AddressChannel::Channel1>()
         .Y<0>()
         .apply();
 

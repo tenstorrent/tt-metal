@@ -70,8 +70,10 @@ inline void _llk_unpack_AB_reduce_block_max_row_init_runtime_(std::uint32_t bloc
     // if we have the flag set with REDUCE_ROW, we don't need to do anything
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(1);
 
-    TTI_SETADCXX(p_setadc::UNP_B, FACE_R_DIM * FACE_C_DIM - 1, 0x0);       // Unpack a single face of a scaler
-    TTI_SETADCXX(p_setadc::UNP_A, 4 * (FACE_R_DIM * FACE_C_DIM) - 1, 0x0); // Unpack a whole tile of an operand
+    constexpr auto unpacker_counters = hal::address_counters.channel<hal::AddressChannel::Channel1>().X<0>().channel<hal::AddressChannel::Channel0>();
+
+    unpacker_counters.client<hal::AddressCounterClient::Unpacker1>().X<FACE_R_DIM * FACE_C_DIM - 1>().apply();       // Unpack a single face of a scaler
+    unpacker_counters.client<hal::AddressCounterClient::Unpacker0>().X<4 * (FACE_R_DIM * FACE_C_DIM) - 1>().apply(); // Unpack a whole tile of an operand
 
     // save the following state that is going to be modified:
     // tile x, y, and z dims for both unpackers
@@ -106,7 +108,14 @@ inline void _llk_unpack_AB_reduce_block_max_row_init_runtime_(std::uint32_t bloc
 inline void _llk_unpack_AB_reduce_block_max_row_runtime_(
     const std::uint32_t address_a, const std::uint32_t address_b, bool respect_trigger = false, bool overlap_first_half = false)
 {
-    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // reset counters
+    hal::address_counters.client<hal::AddressCounterClient::Unpacker0, hal::AddressCounterClient::Unpacker1>()
+        .channel<hal::AddressChannel::Channel0>()
+        .Z<0>()
+        .W<0>()
+        .channel<hal::AddressChannel::Channel1>()
+        .Z<0>()
+        .W<0>()
+        .apply();
 
     // Program srcA and srcB base addresses
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID

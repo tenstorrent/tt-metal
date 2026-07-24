@@ -154,11 +154,11 @@ template <PoolType pool_type, ReduceDim reduce_dim>
 inline void _llk_unpack_AB_reduce_(const std::uint32_t address_a, const std::uint32_t address_b)
 {
     // Reset address counters (Z/W = 0 on both channels) for both unpackers
-    address_counters.client<AddressCounterClient::Unpacker0, AddressCounterClient::Unpacker1>()
-        .channel<AddressChannel::Channel0>()
+    hal::address_counters.client<hal::AddressCounterClient::Unpacker0, hal::AddressCounterClient::Unpacker1>()
+        .channel<hal::AddressChannel::Channel0>()
         .Z<0>()
         .W<0>()
-        .channel<AddressChannel::Channel1>()
+        .channel<hal::AddressChannel::Channel1>()
         .Z<0>()
         .W<0>()
         .apply();

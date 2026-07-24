@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "hal/address_counters.h"
 
 namespace ckernel
 {
@@ -135,8 +136,14 @@ public:
     static constexpr std::uint32_t DEF_UNPACR_NOP = TT_OP_UNPACR_NOP(0, 0, 0, 0, 0, 0, 0, 0, p_unpacr::UNP_NOP);
 
     // Default skip A/B instructions that increment Z counters by 1
-    static constexpr std::uint32_t DEF_SKIP_A = TT_OP_INCADCZW(0b001, 0, 0, 0, 1);
-    static constexpr std::uint32_t DEF_SKIP_B = TT_OP_INCADCZW(0b010, 0, 0, 0, 1);
+    static constexpr std::uint32_t DEF_SKIP_A = hal::address_counters.client<hal::AddressCounterClient::Unpacker0>()
+                                                    .channel<hal::AddressChannel::Channel0>()
+                                                    .Z<1>()
+                                                    .get_operation<hal::GetOpType::INCREMENT>();
+    static constexpr std::uint32_t DEF_SKIP_B = hal::address_counters.client<hal::AddressCounterClient::Unpacker1>()
+                                                    .channel<hal::AddressChannel::Channel0>()
+                                                    .Z<1>()
+                                                    .get_operation<hal::GetOpType::INCREMENT>();
 
     // Default non-halo A instruction
     static constexpr std::uint32_t DEF_A_instr           = TT_OP_UNPACR(0, 0b1, 0, 0, 0, 0, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);

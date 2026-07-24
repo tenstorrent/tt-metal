@@ -112,7 +112,12 @@ inline void _llk_unpack_untilize_init_(const std::uint32_t unpack_dst_format, co
     const std::uint32_t unpA_ch1_y_stride = FACE_R_DIM * unpA_ch1_x_stride;
 
     // Set address control for unpacker A
-    TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
+    hal::runtime_address_counters.client<hal::AddressCounterClient::Unpacker0>()
+        .channel<hal::AddressChannel::Channel0>()
+        .X(face_r_dim * FACE_C_DIM - 1)
+        .channel<hal::AddressChannel::Channel1>()
+        .X(0)
+        .apply();
 
     // Configure unpacker registers
     // Get pointer to registers for current state ID
@@ -192,17 +197,15 @@ inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const s
     // Program srcA and srcB base addresses
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
-    // Clear l1 addr y cnt (ch0_y = 0)
-    address_counters.client<AddressCounterClient::Unpacker0>().channel<AddressChannel::Channel0>().Y<0>().apply();
     if constexpr (first_pass)
     {
-        // Select top faces in the 1st pass (ch0_z = 0)
-        address_counters.client<AddressCounterClient::Unpacker0>().channel<AddressChannel::Channel0>().Z<0>().apply();
+        // Clear L1 Y and select top faces (ch0_y = 0, ch0_z = 0).
+        hal::address_counters.client<hal::AddressCounterClient::Unpacker0>().channel<hal::AddressChannel::Channel0>().Y<0>().Z<0>().apply();
     }
     else
     {
-        // Select bottom faces in the 2nd pass (ch0_z = 2)
-        address_counters.client<AddressCounterClient::Unpacker0>().channel<AddressChannel::Channel0>().Z<2>().apply();
+        // Clear L1 Y and select bottom faces (ch0_y = 0, ch0_z = 2).
+        hal::address_counters.client<hal::AddressCounterClient::Unpacker0>().channel<hal::AddressChannel::Channel0>().Y<0>().Z<2>().apply();
     }
 
     // Wait for free context
@@ -231,7 +234,7 @@ inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const s
                 TTI_UNPACR(SrcA, 0b0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // set data valid
                 TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
                 // Clear srcA addr y cnt (ch1_y = 0)
-                address_counters.client<AddressCounterClient::Unpacker0>().channel<AddressChannel::Channel1>().Y<0>().apply();
+                hal::address_counters.client<hal::AddressCounterClient::Unpacker0>().channel<hal::AddressChannel::Channel1>().Y<0>().apply();
                 rem_blocks_in_row -= (8 - face_2xr_cnt);
                 face_2xr_cnt = 0;
             }
@@ -242,7 +245,7 @@ inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const s
                 rem_blocks_in_row = 0;
                 // if (face_2xr_cnt==FACE_HEIGHT/2) {
                 //   TTI_UNPACR(SrcA, 0b0, 0, 0, 0, 0, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); //set data valid
-                //   TTI_SETADCXY(0b001, 0, 0, 0, 0, 0b1000); // Clear srcA addr y cnt
+                // Clear SrcA channel-1 Y through address_counters when this path is enabled.
                 //   face_2xr_cnt = 0;
                 //}
             }
@@ -259,7 +262,7 @@ inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const s
             TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, THCON_SEC0_REG7_Offset_cntx1_address_ADDR32);
         }
         // inc l1 addr y cnt (ch0_y += 1)
-        address_counters.client<AddressCounterClient::Unpacker0>().channel<AddressChannel::Channel0>().Y<1>().increment();
+        hal::address_counters.client<hal::AddressCounterClient::Unpacker0>().channel<hal::AddressChannel::Channel0>().Y<1>().increment();
     }
 
     // T6::SEMGET for context release

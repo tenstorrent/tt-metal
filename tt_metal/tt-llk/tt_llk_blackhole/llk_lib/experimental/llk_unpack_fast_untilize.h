@@ -73,7 +73,14 @@ inline void _llk_unpack_fast_untilize_block_(const std::uint32_t address, const 
     // Reset both SrcA/SrcB Z/W counters before each block so the MOP is
     // stateless across calls. SrcB is included here because fp32 DEST mode uses
     // the same MOP shape with a zero-SrcB dvalid sideband.
-    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    hal::address_counters.client<hal::AddressCounterClient::Unpacker0, hal::AddressCounterClient::Unpacker1>()
+        .channel<hal::AddressChannel::Channel0>()
+        .Z<0>()
+        .W<0>()
+        .channel<hal::AddressChannel::Channel1>()
+        .Z<0>()
+        .W<0>()
+        .apply();
 
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
     wait_for_next_context(2);
@@ -132,7 +139,14 @@ inline void _llk_unpack_fast_untilize_bfp_block_(const std::uint32_t address, co
     // next tile. Non-BFP input can use one wider base address for the chunk.
     for (std::uint32_t tile = 0; tile < unit_dim; tile++)
     {
-        TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+        hal::address_counters.client<hal::AddressCounterClient::Unpacker0, hal::AddressCounterClient::Unpacker1>()
+            .channel<hal::AddressChannel::Channel0>()
+            .Z<0>()
+            .W<0>()
+            .channel<hal::AddressChannel::Channel1>()
+            .Z<0>()
+            .W<0>()
+            .apply();
         ckernel::ckernel_template::run();
 
         if (tile + 1 < unit_dim)

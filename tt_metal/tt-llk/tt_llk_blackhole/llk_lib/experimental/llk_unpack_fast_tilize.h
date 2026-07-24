@@ -94,7 +94,12 @@ inline void _llk_unpack_fast_tilize_init_(const std::uint32_t unpack_dst_format,
     // X counter end = first chunk's tile width. CH1_Z stride stays at 4-wide
     // (8 SrcA rows) regardless of unit_dim - natural gaps in SrcA for unit_dim < 4.
     // Matching init_unit_dim to the first chunk eliminates one reinit_xdim per row.
-    TT_SETADCXX(p_setadc::UNP_A, init_unit_dim * TILE_C_DIM - 1, 0x0);
+    hal::runtime_address_counters.client<hal::AddressCounterClient::Unpacker0>()
+        .channel<hal::AddressChannel::Channel0>()
+        .X(init_unit_dim * TILE_C_DIM - 1)
+        .channel<hal::AddressChannel::Channel1>()
+        .X(0)
+        .apply();
 
     // CH1 Z stride: controls SrcA dest address gap between reads.
     // Uses effective_dst_format because Float32/Tf32 are downgraded to bf16 above.
@@ -113,7 +118,12 @@ inline void _llk_unpack_fast_tilize_init_(const std::uint32_t unpack_dst_format,
 // CH1_Z stride and MOP stay unchanged - only the read width changes.
 inline void _llk_unpack_fast_tilize_reinit_xdim_(const std::uint32_t unit_dim)
 {
-    TT_SETADCXX(p_setadc::UNP_A, unit_dim * TILE_C_DIM - 1, 0x0);
+    hal::runtime_address_counters.client<hal::AddressCounterClient::Unpacker0>()
+        .channel<hal::AddressChannel::Channel0>()
+        .X(unit_dim * TILE_C_DIM - 1)
+        .channel<hal::AddressChannel::Channel1>()
+        .X(0)
+        .apply();
 }
 
 // One call = one row-chunk (one unit_dim, one MOP run).
@@ -137,8 +147,16 @@ inline void _llk_unpack_fast_tilize_block_(
     // L1 addressing via CH0 counters. The caller folds any tile/column offset
     // into base_address, so Y starts at zero for this chunk and Z selects tensor
     // row (0..31).
-    TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b0011); // reset CH0_X=0, CH0_Y=0
-    TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111); // reset all Z,W = 0
+    hal::address_counters.client<hal::AddressCounterClient::Unpacker0>()
+        .channel<hal::AddressChannel::Channel0>()
+        .X<0>()
+        .Y<0>()
+        .Z<0>()
+        .W<0>()
+        .channel<hal::AddressChannel::Channel1>()
+        .Z<0>()
+        .W<0>()
+        .apply();
 
     // Hoist zmask high 16 bits - they persist in mop_zmask_hi16 until changed.
     constexpr std::uint32_t ZMASK = 0x80808080;
@@ -162,6 +180,14 @@ inline void _llk_unpack_fast_tilize_uninit_()
     // Restore Out_data_format (init may have downgraded it from fp32/tf32 to bf16).
     TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_3, 0, THCON_SEC0_REG2_Out_data_format_ADDR32);
 
-    TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b1010);
-    TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111);
+    hal::address_counters.client<hal::AddressCounterClient::Unpacker0>()
+        .channel<hal::AddressChannel::Channel0>()
+        .Y<0>()
+        .Z<0>()
+        .W<0>()
+        .channel<hal::AddressChannel::Channel1>()
+        .Y<0>()
+        .Z<0>()
+        .W<0>()
+        .apply();
 }

@@ -171,8 +171,14 @@ inline void _llk_pack_block_contiguous_mop_config_(const std::uint32_t face_r_di
     // END_OP0: advance W to next Tile32x32 DEST slot
     // END_OP1: reset Z for next tile's face traversal
     tmp.set_end_ops(
-        TT_OP_INCADCZW(p_setadc::PAC, 0, 0, 1, 0),          // ch0_w += 1
-        TT_OP_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0001)); // ch0_z = 0
+        hal::address_counters.client<hal::AddressCounterClient::Packers>()
+            .channel<hal::AddressChannel::Channel0>()
+            .W<1>()
+            .get_operation<hal::GetOpType::INCREMENT>(),
+        hal::address_counters.client<hal::AddressCounterClient::Packers>()
+            .channel<hal::AddressChannel::Channel0>()
+            .Z<0>()
+            .get_operation<hal::GetOpType::SETTER>());
 
     tmp.program();
 }
@@ -186,7 +192,7 @@ inline void _llk_pack_block_contiguous_(const std::uint32_t tile_index, const st
 {
     set_dst_write_addr(tile_index);
 
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0001); // Z = 0
+    hal::address_counters.client<hal::AddressCounterClient::Packers>().channel<hal::AddressChannel::Channel0>().Z<0>().apply();
 
     program_packer_destination(address);
 
@@ -196,5 +202,10 @@ inline void _llk_pack_block_contiguous_(const std::uint32_t tile_index, const st
     mop_cfg[0] = num_tiles;
     TTI_MOP(1, 0, 0);
 
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); // reset Z/W
+    hal::address_counters.client<hal::AddressCounterClient::Packers>()
+        .channel<hal::AddressChannel::Channel0>()
+        .Z<0>()
+        .channel<hal::AddressChannel::Channel1>()
+        .Z<0>()
+        .apply();
 }

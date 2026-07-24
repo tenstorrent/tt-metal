@@ -267,7 +267,11 @@ inline void _llk_pack_mop_config_(
             0,
             1));
 
-        tmp.set_end_op(TT_OP_SETADCZW(p_setadc::PAC, 0, num_faces >> 1, 0, 0, 0b0100)); // ch0_z = 0, ch1_z = num_faces >> 1;
+        tmp.set_end_op(hal::runtime_address_counters.client<hal::AddressCounterClient::Packers>()
+                           .channel<hal::AddressChannel::Channel0>()
+                           .channel<hal::AddressChannel::Channel1>()
+                           .Z(num_faces >> 1)
+                           .get_operation<hal::GetOpType::SETTER>());
 
         tmp.program();
     }
@@ -325,7 +329,7 @@ inline void _llk_pack_mop_config_(
         // if (partial_face) {
         //     tmp.set_start_op(TT_OP_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_NORMAL_MODE, ADDR_MOD_0, p_pacr::ADDR_CNT_CTXT_0,
         //     ZERO_OUTPUT_FLAG, p_pacr::ALL_INTF_ACTIVE, 0, MEGAROW, 0, 0, 1)); // Don't close the tile, point to the next face
-        //     tmp.set_loop_op0(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 1, 0)); // Inc ch0_y+=1 (addr_mod_0 will increment by 15)
+        //     A channel-0 Y increment operation could be installed here (ADDR_MOD_0 increments by 15).
         //     tmp.set_loop_op1(TT_OP_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_NORMAL_MODE, ADDR_MOD_1, p_pacr::ADDR_CNT_CTXT_0,
         //     ZERO_OUTPUT_FLAG, p_pacr::ALL_INTF_ACTIVE, 0, MEGAROW, 0, 0, 1)); // Close the tile
         // }
@@ -375,10 +379,10 @@ inline void pack_init_apply(
 
     // Program the packer X (datum) counter. Per the "inits own SETADCXX" contract, every init sets its
     // own value; on Blackhole x_start/x_end must stay within a single row (0..FACE_C_DIM-1).
-    address_counters.client<AddressCounterClient::Packers>()
-        .channel<AddressChannel::Channel0>()
+    hal::address_counters.client<hal::AddressCounterClient::Packers>()
+        .channel<hal::AddressChannel::Channel0>()
         .X<FACE_C_DIM - 1>()
-        .channel<AddressChannel::Channel1>()
+        .channel<hal::AddressChannel::Channel1>()
         .X<0x0>()
         .apply();
 }
@@ -567,5 +571,10 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
     ckernel::ckernel_template::run();
 
     // reset z counters: ch0_z = ch1_z = 0
-    address_counters.client<AddressCounterClient::Packers>().channel<AddressChannel::Channel0>().Z<0>().channel<AddressChannel::Channel1>().Z<0>().apply();
+    hal::address_counters.client<hal::AddressCounterClient::Packers>()
+        .channel<hal::AddressChannel::Channel0>()
+        .Z<0>()
+        .channel<hal::AddressChannel::Channel1>()
+        .Z<0>()
+        .apply();
 }

@@ -129,7 +129,7 @@ inline void _llk_pack_dest_init_()
  */
 inline void set_dst_write_addr(const std::uint32_t tile_index)
 {
-    TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_index);
+    hal::runtime_address_counters.client<hal::AddressCounterClient::Packers>().channel<hal::AddressChannel::Channel0>().W(tile_index).apply();
 }
 
 /**

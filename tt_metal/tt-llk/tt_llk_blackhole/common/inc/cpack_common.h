@@ -11,6 +11,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
+#include "hal/address_counters.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
@@ -159,8 +160,17 @@ typedef union
 // Set unpacker offsets to 0, except for unpacker 0, channel 1, X, which is the tile X dimension
 inline void packer_addr_counter_init()
 {
-    TTI_SETADCXY(0b100, 0, 0, 0, 0, 0b1011);
-    TTI_SETADCZW(0b100, 0, 0, 0, 0, 0b1111);
+    hal::address_counters.client<hal::AddressCounterClient::Packers>()
+        .channel<hal::AddressChannel::Channel0>()
+        .X<0>()
+        .Y<0>()
+        .Z<0>()
+        .W<0>()
+        .channel<hal::AddressChannel::Channel1>()
+        .Y<0>()
+        .Z<0>()
+        .W<0>()
+        .apply();
 }
 
 /**
@@ -572,7 +582,12 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     // Program the packer X (datum) counter. _llk_pack_init_ owns this counter ("inits own SETADCXX"),
     // but reconfig also programs it here: a reconfig is not always followed by an init, and on Blackhole
     // the value is a mode-independent constant (single row, FACE_C_DIM - 1), so it is safe to set here.
-    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+    hal::address_counters.client<hal::AddressCounterClient::Packers>()
+        .channel<hal::AddressChannel::Channel0>()
+        .X<FACE_C_DIM - 1>()
+        .channel<hal::AddressChannel::Channel1>()
+        .X<0>()
+        .apply();
 }
 
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>

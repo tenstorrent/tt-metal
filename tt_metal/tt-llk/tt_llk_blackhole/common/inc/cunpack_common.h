@@ -6,9 +6,11 @@
 
 #include <array>
 #include <cstdint>
+#include <type_traits>
 
 #include "ckernel.h"
 #include "ckernel_globals.h"
+#include "hal/address_counters.h"
 #include "llk_assert.h"
 
 namespace ckernel::unpacker
@@ -116,8 +118,17 @@ typedef union
 // Set unpacker offsets to 0, except for unpacker 0, channel 1, X, which is the tile X dimension
 inline void unpacker_addr_counter_init()
 {
-    TTI_SETADCXY(p_setadc::UNP_A | p_setadc::UNP_B, 0, 0, 0, 0, 0b1011);
-    TTI_SETADCZW(p_setadc::UNP_A | p_setadc::UNP_B, 0, 0, 0, 0, 0b1111);
+    hal::address_counters.client<hal::AddressCounterClient::Unpacker0, hal::AddressCounterClient::Unpacker1>()
+        .channel<hal::AddressChannel::Channel0>()
+        .X<0>()
+        .Y<0>()
+        .Z<0>()
+        .W<0>()
+        .channel<hal::AddressChannel::Channel1>()
+        .Y<0>()
+        .Z<0>()
+        .W<0>()
+        .apply();
 }
 
 inline void unpacker_iteration_cleanup(std::uint32_t &context)
@@ -961,22 +972,34 @@ inline void config_unpacker_x_end(const std::uint32_t face_r_dim)
     LLK_ASSERT(
         face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == FACE_R_DIM, "face_r_dim must be 1, 2, 4, 8, or FACE_R_DIM");
 
+    constexpr auto apply_x_end = [](auto face_dim)
+    {
+        constexpr std::uint32_t x_end = decltype(face_dim)::value * FACE_C_DIM - 1;
+
+        hal::address_counters.client<static_cast<hal::AddressCounterClient>(UNP_SEL)>()
+            .template channel<hal::AddressChannel::Channel0>()
+            .template X<x_end>()
+            .template channel<hal::AddressChannel::Channel1>()
+            .template X<0>()
+            .apply();
+    };
+
     switch (face_r_dim)
     {
         case 1:
-            TTI_SETADCXX(UNP_SEL, 1 * FACE_C_DIM - 1, 0x0);
+            apply_x_end(std::integral_constant<std::uint32_t, 1> {});
             break;
         case 2:
-            TTI_SETADCXX(UNP_SEL, 2 * FACE_C_DIM - 1, 0x0);
+            apply_x_end(std::integral_constant<std::uint32_t, 2> {});
             break;
         case 4:
-            TTI_SETADCXX(UNP_SEL, 4 * FACE_C_DIM - 1, 0x0);
+            apply_x_end(std::integral_constant<std::uint32_t, 4> {});
             break;
         case 8:
-            TTI_SETADCXX(UNP_SEL, 8 * FACE_C_DIM - 1, 0x0);
+            apply_x_end(std::integral_constant<std::uint32_t, 8> {});
             break;
         default:
-            TTI_SETADCXX(UNP_SEL, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
+            apply_x_end(std::integral_constant<std::uint32_t, FACE_R_DIM> {});
             break;
     }
 }

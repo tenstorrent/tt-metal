@@ -6,6 +6,7 @@
 
 #include "ckernel_globals.h"
 #include "ckernel_include.h"
+#include "hal/address_counters.h"
 #include "llk_defs.h"
 
 using namespace ckernel;
@@ -25,7 +26,14 @@ using namespace ckernel;
  */
 inline void _llk_unpack_mul_reduce_scalar_switch_to_reduce_()
 {
-    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    hal::address_counters.client<hal::AddressCounterClient::Unpacker0, hal::AddressCounterClient::Unpacker1>()
+        .channel<hal::AddressChannel::Channel0>()
+        .Z<0>()
+        .W<0>()
+        .channel<hal::AddressChannel::Channel1>()
+        .Z<0>()
+        .W<0>()
+        .apply();
     semaphore_post(semaphore::UNPACK_SYNC);
     TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
     TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
