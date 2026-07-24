@@ -312,9 +312,7 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
         # concat the tile-32 suffix K/V onto the tile-32 prefix, run SDPA, then bring the [.,32,.]
         # result back down to the tiny tile for the o-proj / gated residual.
         suffix_sq = q.shape[-2]
-        q = _to_tile32_bf8(q)
-        k = _to_tile32_bf8(k)
-        v = _to_tile32_bf8(v)
+        # q/k/v stay at the model tiny (16-row) tile -- kv_sdpa is tiny-tile aware (QK_NUM_FACES).
         # This decode-expert SDPA is non-causal full attention over prefix+suffix KV, so the
         # attention_mask is an all-zero no-op (the flash kernel masks its own KV padding). It is
         # dropped: SDPA corrupts its output when q/k/v are bfloat8_b but the mask is bfloat16 (see

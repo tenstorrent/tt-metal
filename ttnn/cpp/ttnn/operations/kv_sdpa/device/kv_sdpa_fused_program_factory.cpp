@@ -49,8 +49,11 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     // Total KV = optional resident prefix (past_k/past_v) followed by the new/suffix K/V. The reader
     // reads both ranges, so the caller need not pre-concatenate.
     const bool has_past = ta.past_k.has_value();
-    const uint32_t prefix_Kt = has_past ? (ta.past_k->padded_shape()[2] / tt::constants::TILE_HEIGHT) : 0;
-    const uint32_t suffix_Kt = ks[2] / tt::constants::TILE_HEIGHT;
+    // KV tile counts derive from each tensor's actual tile height (tiny tiles may be < 32 tall).
+    const uint32_t k_tile_h = ktile.get_height();
+    const uint32_t prefix_Kt =
+        has_past ? (ta.past_k->padded_shape()[2] / ta.past_k->tensor_spec().tile().get_height()) : 0;
+    const uint32_t suffix_Kt = ks[2] / k_tile_h;
     const uint32_t Kt = prefix_Kt + suffix_Kt;
     const bool use_provided_mask = ta.mask.has_value();
 
@@ -180,7 +183,12 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
         {"MUL_BCAST_GRANULARITY", std::to_string(ttnn::prim::detail::find_valid_granularity(Sk_chunk_t, dst_size))},
         {"DHT_GRANULARITY", std::to_string(ttnn::prim::detail::find_valid_granularity(DHt, dst_size))},
         {"REDUCE_GRANULARITY", std::to_string(ttnn::prim::detail::find_valid_granularity(1, dst_size / 2))},
-        {"EXP_APPROX_MODE", "0"}};
+        {"EXP_APPROX_MODE", "0"},
+        // QK-scores tile face count for reduce_block_max_row (compute_streaming.hpp): 2 for a 16x32
+        // tiny Q tile (one face-row), 4 for a full 32x32 tile. Defaults to 4 in the kernel, which
+        // mis-walks the faces on a tiny tile and corrupts the online-softmax max/SALAD combine
+        // (PCC regression); derive it from the Q operand tile height.
+        {"QK_NUM_FACES", std::to_string(qtile.get_height() < tt::constants::TILE_HEIGHT ? 2u : 4u)}};
     compute.config = ComputeConfigDescriptor{
         .math_fidelity = ckc.math_fidelity,
         .fp32_dest_acc_en = ckc.fp32_dest_acc_en,

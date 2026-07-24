@@ -31,6 +31,18 @@
 #include "experimental/llk_sfpu/ckernel_sfpu_sdpa.h"
 #endif
 
+// Face count of the QK-scores / softmax column-vector tiles in the SDPA flash loop: 4 for a full 32x32
+// tile, 2 for a 16x32 tiny tile (single face-row). Set via a program-factory define derived from the Q
+// operand tile height (see sdpa_program_factory / kv_sdpa_fused_program_factory). Defaults to 4.
+#ifndef QK_NUM_FACES
+#define QK_NUM_FACES 4
+#endif
+// Column-vector (first-column) SFPU traversal mode for the online-softmax corrections (max eltwise-max,
+// exp of max-diff, reciprocal of the row sum). VectorMode::C spans both face-rows (rows 0-31) of a full
+// 32x32 tile; VectorMode::None spans the single face-row (rows 0-15) of a 16x32 tiny tile. Using C on a
+// genuine 16x32 tile walks the non-existent second face-row and corrupts the correction (PCC ~0.5-0.9).
+static constexpr VectorMode QK_COL_VECTOR_MODE = (QK_NUM_FACES == 2) ? VectorMode::None : VectorMode::C;
+
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         transpose, true /*transpose within 16x16 face*/, cbid)));
@@ -201,7 +213,7 @@ template <
     uint32_t in0_cb,
     uint32_t scale_cb,
     uint32_t rows,
-    VectorMode vector_mode = VectorMode::C>
+    VectorMode vector_mode = QK_COL_VECTOR_MODE>
 void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_max = false) {
     CircularBuffer cb_in0(in0_cb);
     CircularBuffer cb_scale(scale_cb);
@@ -249,9 +261,9 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
 }
 
 #ifdef TRISC_MATH
-template <bool legacy_compat = true>
+template <bool legacy_compat = true, VectorMode vector_mode = QK_COL_VECTOR_MODE>
 void recip_tile_first_column(uint32_t idst) {
-    SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_recip_first_column, (legacy_compat), idst, VectorMode::C);
+    SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_recip_first_column, (legacy_compat), idst, vector_mode);
 }
 #endif
 
@@ -647,7 +659,7 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
 
 // vector_mode selects the column face-row traversal: VectorMode::C spans Face0+Face2 (both face-rows of a
 // full 32x32 tile); VectorMode::None spans Face0 only (the single face-row of a 16x32 tiny tile).
-template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16, VectorMode vector_mode = VectorMode::C>
+template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16, VectorMode vector_mode = QK_COL_VECTOR_MODE>
 void exp_tile_first_column(uint32_t idst) {
     SFPU_UNARY_CALL(
         DST_SYNC_MODE,
@@ -694,14 +706,14 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
 }
 
 #ifdef TRISC_MATH
-template <VectorMode vector_mode = VectorMode::C>
+template <VectorMode vector_mode = QK_COL_VECTOR_MODE>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
     SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_fused_max_sub_exp_add_tile, idst, vector_mode, scale_bf16);
 }
 #endif
 
-template <uint32_t scale_fp32, VectorMode vector_mode = VectorMode::C>
+template <uint32_t scale_fp32, VectorMode vector_mode = QK_COL_VECTOR_MODE>
 void correction_block(
     uint32_t cb_worker_max,
     uint32_t cb_worker_sum,
