@@ -648,7 +648,7 @@ def open_mesh_device(
     num_command_queues: int = 1,
     dispatch_core_config: ttnn.DispatchCoreConfig = None,
     offset: Optional[ttnn.MeshCoordinate] = None,
-    physical_device_ids: List[int] = [],
+    physical_device_ids: Optional[List[int]] = None,
     worker_l1_size: int = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
 ):
     """
@@ -661,13 +661,15 @@ def open_mesh_device(
         num_command_queues (int, optional): Number of command queues. Defaults to 1.
         dispatch_core_type (int, optional): Type of dispatch core. Defaults to DispatchCoreType.WORKER.
         offset (ttnn.MeshCoordinate, optional): Offset in logical mesh coordinates for the mesh device. Defaults to None.
-        physical_device_ids (List[int], optional): List of physical device IDs to use. Defaults to [].
+        physical_device_ids (List[int], optional): List of physical device IDs to use. Defaults to None (uses all available devices).
         worker_l1_size (int, optional): Size of the usable worker L1 memory. Defaults to ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE.
 
     Returns:
         ttnn._ttnn.multi_device.MeshDevice: The opened mesh device.
 
     """
+    if physical_device_ids is None:
+        physical_device_ids = []
     return ttnn._ttnn.multi_device.open_mesh_device(
         l1_small_size=l1_small_size,
         trace_region_size=trace_region_size,
