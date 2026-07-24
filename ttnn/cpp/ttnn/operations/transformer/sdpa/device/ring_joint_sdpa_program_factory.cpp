@@ -275,6 +275,7 @@ std::vector<uint32_t> compute_q_work_bitmap(
     uint32_t num_local_k_chunks,
     uint32_t num_joint_k_chunks,
     uint32_t q_local_padded_Nt,
+    uint32_t logical_nt,
     uint32_t active_ring_iter_mask,
     uint32_t backward_writes_expected,
     uint32_t forward_writes_expected,
@@ -321,7 +322,20 @@ std::vector<uint32_t> compute_q_work_bitmap(
             }
             const uint32_t q_frame_for_this_chunk = (q_chunk * Sq_chunk_t) / sparse_frame_seqlen_tiles + q_frame_offset;
             for (uint32_t k = 0; k < num_local_k_chunks; ++k) {
-                const uint32_t k_global = kv_local_padded_Nt * ring_id + k * Sk_chunk_t;
+                const uint32_t k_local_start = k * Sk_chunk_t;
+                // Mirror the compute pre-scan / reader OOB skip (kv_chunk_starts_before_logical_end,
+                // non-chunked / non-kv-pad form used by the sparse video-DiT path). A k_chunk whose
+                // global tiles fall beyond the logical sequence is never pushed by the reader nor
+                // processed by compute, so it must NOT count toward "has work". Otherwise a q_chunk
+                // whose only allowed frame in this iter is OOB (e.g. a window reaching into padded
+                // trailing frames) is marked as work here while compute takes its zero-work fast
+                // path — the writer then waits for a save/restore compute never produces, deadlocking
+                // the ring (writer stuck in flush_deferred_save, compute stuck on prev.max restore).
+                if (k_local_start >= kv_local_padded_Nt ||
+                    (kv_local_padded_Nt * ring_id + k_local_start) >= logical_nt) {
+                    continue;
+                }
+                const uint32_t k_global = kv_local_padded_Nt * ring_id + k_local_start;
                 const uint32_t k_frame = k_global / sparse_frame_seqlen_tiles;
                 const uint32_t bit_idx = q_frame_for_this_chunk * sparse_num_frames_padded + k_frame;
                 const uint32_t word_idx = bit_idx >> 5;
@@ -1623,6 +1637,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         num_local_k_chunks,
         num_joint_k_chunks,
         q_local_padded_Nt,
+        logical_nt,
         active_ring_iter_mask,
         backward_writes_expected,
         forward_writes_expected,

@@ -2636,11 +2636,49 @@ void sdpa_ring_v2(
 
         const bool is_first_kv_for_this_q = is_first_active_iter;
 
+        // Precompute per-q_chunk sparse work-iter flags OUTSIDE the K-loop. Under sparse-frames a
+        // given Q chunk's first / last PROCESSING iter can differ from the host mask's first /
+        // last active iter (the chunk may attend no K frames in some active iters). is_first /
+        // is_last_k below AND the staging save/restore decisions must ALL key off these per-
+        // q_chunk flags so that compute and the (already per-q_chunk-aware) writer agree on which
+        // iter saves raw accumulators vs. runs final normalization. If compute used the mask-
+        // global is_first_active_iter / is_last_ring_iter for staging while the writer used per-
+        // q_chunk flags, compute would redirect output into the staging CB on the very iter it
+        // also runs normalize_row (cb_out == cb_normalized_out are the same physical CB) — an
+        // in-place reserve/wait self-deadlock in the normalize pipeline (Bug 1). Kept outside the
+        // K-loop: the bitmap L1 read + __builtin_ctz/clz stay off the hot path where they
+        // perturbed pack/math/unpack timing; inside the loop these are cheap register compares.
+        bool is_this_first_work_iter_for_q = false;
+        bool is_this_last_work_iter_for_q = false;
+        if constexpr (sparse_frames_enabled) {
+            if (sparse_feature_mask & (1u << 4)) {
+                const uint32_t q_bits = q_work_bitmap[q_chunk];
+                if (q_bits != 0u) {
+                    is_this_first_work_iter_for_q = (ring_iter == __builtin_ctz(q_bits));
+                    is_this_last_work_iter_for_q = (ring_iter == (31u - __builtin_clz(q_bits)));
+                } else {
+                    // Fallback for q_chunk with zero total work (shouldn't reach main loop).
+                    is_this_first_work_iter_for_q = is_first_kv_for_this_q;
+                    is_this_last_work_iter_for_q = is_last_ring_iter;
+                }
+            } else {
+                is_this_first_work_iter_for_q = is_first_kv_for_this_q;
+                is_this_last_work_iter_for_q = is_last_ring_iter;
+            }
+        } else {
+            is_this_first_work_iter_for_q = is_first_kv_for_this_q;
+            is_this_last_work_iter_for_q = is_last_ring_iter;
+        }
+
         // Multi Q-chunk restore: K0 reads prev accumulators directly from staging buffers
         // (cb_prev_out, cb_max_in, cb_sum_in) — no copy_block needed.
         // After K0's swap, reset q_cur to original accumulator CBs for normal ping-pong.
+        // Gate on the per-q_chunk first work iter (not the mask-global first active iter): a
+        // q_chunk whose first processing iter is later than the mask's first active iter has no
+        // prior save to restore on its first work iter, and the writer (also per-q_chunk-gated)
+        // won't push one. Under dense / bit-4-off this reduces to !is_first_active_iter.
         const AccumulatorHalf original_prev = q_prev;
-        const bool restore_from_staging = (q_per_core > 1 && !is_first_active_iter);
+        const bool restore_from_staging = (q_per_core > 1 && !is_this_first_work_iter_for_q);
         if (restore_from_staging) {
             q_prev = {cb_sum_in, cb_max_in, cb_prev_out};
         }
@@ -2676,38 +2714,18 @@ void sdpa_ring_v2(
             // (same total for every work item mapping to that frame).
             bool is_first;
             bool is_last_k_of_last_ring_iter;
-            if constexpr (sparse_frames_enabled) {
-                // Bitmap-based flags: is_first fires on the first KV chunk of the q_chunk's
-                // FIRST work iter; is_last_k_of_last_ring_iter fires on the last KV chunk of the
-                // q_chunk's LAST work iter. Bitmap encodes which iters have work for this
-                // q_chunk. Both compute and writer read the same bitmap so their per-(q_chunk,
-                // iter) decisions align: writer writes output at is_last_work_iter_for_q,
-                // compute normalizes there.
-                //
-                // Safety: guard against q_bits == 0 (would make __builtin_ctz/clz UB). Under
-                // production defaults (bit 0 = pre-scan on) this can't happen because entering
-                // the main K-loop implies per_q_valid_kv > 0 for this iter, which implies the
-                // bitmap bit is set. But if a caller runs with bit 0 off, pre-scan gives a
-                // dense count and we might enter the loop with q_bits == 0. Fall back to
-                // dense-style flags in that case (won't be correct but won't hang or UB).
-                const uint32_t q_bits = q_work_bitmap[q_chunk];
-                if (q_bits != 0u) {
-                    const uint32_t first_work_iter = __builtin_ctz(q_bits);
-                    const uint32_t last_work_iter = 31u - __builtin_clz(q_bits);
-                    is_first = (ring_iter == first_work_iter) && (KV_chunks_processed == 1);
-                    is_last_k_of_last_ring_iter = (ring_iter == last_work_iter) && is_last_k;
-                } else {
-                    is_first = is_first_kv_for_this_q && (KV_chunks_processed == 1);
-                    is_last_k_of_last_ring_iter = is_last_ring_iter && is_last_k;
-                }
-                // Silence unused-variable warnings for obsolete counter arrays.
-                (void)q_work_item_processed;
-                (void)q_frame_total_processed;
-            } else {
-                (void)q_work_bitmap;
-                is_first = is_first_kv_for_this_q && (KV_chunks_processed == 1);
-                is_last_k_of_last_ring_iter = is_last_ring_iter && is_last_k;
-            }
+            // Use precomputed per-q_chunk flags (see above the K-loop). This keeps the K-loop
+            // hot path free of L1 reads and bit-manipulation instructions that were interfering
+            // with the pack/math/unpack pipeline timing (Bug 1). is_this_first_work_iter_for_q
+            // / is_this_last_work_iter_for_q hold constants for the current q_chunk + ring_iter;
+            // in this loop they combine with per-k_chunk state to give is_first / is_last_k.
+            is_first = is_this_first_work_iter_for_q && (KV_chunks_processed == 1);
+            is_last_k_of_last_ring_iter = is_this_last_work_iter_for_q && is_last_k;
+            // Silence unused-variable warnings; the obsolete arrays are pointers passed as
+            // nullptr under the bitmap approach.
+            (void)q_work_item_processed;
+            (void)q_frame_total_processed;
+            (void)q_work_bitmap;
 
             // Signal writer that last K-chunk is starting (for row-by-row DMA save/restore).
             if (is_last_k && q_per_core > 1) {
@@ -2815,7 +2833,14 @@ void sdpa_ring_v2(
             // On last K-chunk of non-last ring iters (multi-Q), redirect output, sum, and max
             // to writer-staging CBs, eliminating post-loop copy_block calls.
             // Writer drains cb_out row-by-row during SALAD; cb_sum_out and cb_max_out bulk after.
-            const bool save_to_staging = is_last_k && !is_last_ring_iter && q_per_core > 1;
+            // Save raw accumulators on the last processed K of every work iter EXCEPT this
+            // q_chunk's last work iter (where the inner step normalizes instead). Must use the
+            // per-q_chunk flag, not mask-global is_last_ring_iter: otherwise a q_chunk whose last
+            // work iter precedes the mask's last active iter would both redirect output to the
+            // staging CB (save) AND normalize in the same step — an in-place CB self-deadlock,
+            // since cb_out and cb_normalized_out are the same buffer (Bug 1). Reduces to
+            // !is_last_ring_iter under dense / bit-4-off.
+            const bool save_to_staging = is_last_k && !is_this_last_work_iter_for_q && q_per_core > 1;
             const uint32_t step_save_out_cb = save_to_staging ? cb_out : INVALID_CB;
             const uint32_t step_save_max_cb = save_to_staging ? cb_max_out : INVALID_CB;
             if (save_to_staging) {
@@ -2953,7 +2978,11 @@ void sdpa_ring_v2(
             // Single Q-chunk: persist in L1 (no DRAM round-trip)
             acc_state.prev = q_prev;
             acc_state.cur = q_cur;
-        } else if (!is_last_ring_iter) {
+        } else if (!is_this_last_work_iter_for_q) {
+            // Per-q_chunk (not mask-global) last-work-iter gate: on this q_chunk's last work iter
+            // the K-loop already normalized (is_last_k_of_last_ring_iter) and popped q_cur.max, so
+            // the raw-accumulator save below must be skipped. Reduces to !is_last_ring_iter under
+            // dense / bit-4-off.
             // Multi Q-chunk: save raw accumulators to DRAM via writer CBs.
             // Out tiles already saved row-by-row via cb_out during last K-chunk SALAD.
             // Sum already in cb_sum_out (redirected via q_cur.sum on last K-chunk).
