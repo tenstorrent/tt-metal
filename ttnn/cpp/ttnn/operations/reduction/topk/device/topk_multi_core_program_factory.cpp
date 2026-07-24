@@ -86,6 +86,10 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // Use bf16 for compute intermediate buffers to avoid precision loss from bfp8/bfp4
     // shared-exponent grouping during sort (e.g. a single inf in a block makes all other
     // elements in that block encode to 0, corrupting the sort result).
+    // fp32 is kept full-width (no downcast): with fp32_dest_acc_en + UnpackToDestFp32 the value CBs
+    // stay fp32 and the sort's default SFPLOAD mode resolves to FP32, so the inter-core transfer
+    // and compute buffers stay fp32.
+    const bool is_fp32_input = input_cb_data_format == tt::DataFormat::Float32;
     const tt::DataFormat compute_cb_data_format =
         (input_cb_data_format == tt::DataFormat::Bfp8_b || input_cb_data_format == tt::DataFormat::Bfp4_b)
             ? tt::DataFormat::Float16_b
@@ -451,13 +455,24 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         static_cast<std::uint32_t>(args.sorted),          // Output sorting requirement
     };
 
+    // fp32: unpack the value-holding CBs straight to fp32 dest (fp32 dest acc) so the sort's
+    // default SFPLOAD mode resolves to FP32 and reads full-precision values.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_local(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (is_fp32_input) {
+        unpack_local[input_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_local[input_transposed_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     KernelDescriptor compute_local_desc;
     compute_local_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_local.cpp";
     compute_local_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_local_desc.core_ranges = local_cores_range_set;  // Runs on all local processing cores
     compute_local_desc.compile_time_args = compute_args;
     compute_local_desc.config = ComputeConfigDescriptor{
+        .fp32_dest_acc_en = is_fp32_input,
         .dst_full_sync_en = false,
+        .unpack_to_dest_mode = unpack_local,
     };
 
     // Final compute - Global TopK Bitonic Merge
@@ -480,13 +495,23 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         static_cast<std::uint32_t>(args.sorted),          // Output sorting requirement
     };
 
+    // Final-core value CBs (gathered input + final workspace) also unpack to fp32 dest.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_final(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (is_fp32_input) {
+        unpack_final[gathered_values_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_final[final_values_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     KernelDescriptor compute_final_desc;
     compute_final_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_final.cpp";
     compute_final_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_final_desc.core_ranges = final_cores_range_set;  // Runs only on final aggregation core
     compute_final_desc.compile_time_args = compute_args_final;
     compute_final_desc.config = ComputeConfigDescriptor{
+        .fp32_dest_acc_en = is_fp32_input,
         .dst_full_sync_en = false,
+        .unpack_to_dest_mode = unpack_final,
     };
 
     uint32_t core_id = 0;            // Width offset counter for core assignment
