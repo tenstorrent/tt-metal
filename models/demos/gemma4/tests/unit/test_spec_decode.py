@@ -2981,7 +2981,7 @@ def test_argmax_cost(mesh_device, reset_seeds):
     replicate = ttnn.ReplicateTensorToMesh(mesh_device)
 
     def _time_argmax(rows, width, mapper, mode="bare"):
-        """mode: 'bare' = argmax on TILE; 'mc' = argmax(use_multicore); 'untile_mc' = untilize+argmax(use_multicore)."""
+        """mode: 'bare' = argmax on TILE; 'mc' = argmax; 'untile_mc' = untilize+argmax."""
         t = ttnn.from_torch(
             torch.randn(1, 1, rows, width),
             device=mesh_device,
@@ -2994,7 +2994,7 @@ def test_argmax_cost(mesh_device, reset_seeds):
             if mode == "bare":
                 return ttnn.argmax(t, dim=-1, keepdim=False)
             tu = ttnn.untilize(t, use_multicore=True)
-            r = ttnn.argmax(tu, dim=-1, keepdim=False, use_multicore=True)
+            r = ttnn.argmax(tu, dim=-1, keepdim=False)
             tu.deallocate(True)
             return r
 
@@ -3040,7 +3040,7 @@ def test_argmax_cost(mesh_device, reset_seeds):
         )
         bare = ttnn.argmax(t, dim=-1, keepdim=False)
         tu = ttnn.untilize(t, use_multicore=True)
-        mc = ttnn.argmax(tu, dim=-1, keepdim=False, use_multicore=True)
+        mc = ttnn.argmax(tu, dim=-1, keepdim=False)
 
         def _to_list(x):
             h = ttnn.to_torch(ttnn.get_device_tensors(x)[0]) if tp > 1 else ttnn.to_torch(x)
@@ -3067,14 +3067,14 @@ def test_argmax_cost(mesh_device, reset_seeds):
             host, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate
         )
         tu = ttnn.untilize(t, use_multicore=True)
-        mc = ttnn.argmax(tu, dim=-1, keepdim=False, use_multicore=True)
+        mc = ttnn.argmax(tu, dim=-1, keepdim=False)
         h = ttnn.to_torch(ttnn.get_device_tensors(mc)[0]) if tp > 1 else ttnn.to_torch(mc)
         got = [int(v) for v in h.reshape(-1)[:real_rows]]
         # time it (trace)
         ttnn.synchronize_device(mesh_device)
         tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         tu2 = ttnn.untilize(t, use_multicore=True)
-        mc2 = ttnn.argmax(tu2, dim=-1, keepdim=False, use_multicore=True)
+        mc2 = ttnn.argmax(tu2, dim=-1, keepdim=False)
         ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
         ttnn.synchronize_device(mesh_device)
         t0 = time.perf_counter()
