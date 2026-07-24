@@ -114,16 +114,6 @@ tensor_return_value_t RMSNormForwardDeviceOperation::create_output_tensors(
     return output_tensors;
 }
 
-ttsl::hash::hash_t RMSNormForwardDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& input_logical_shape = input_tensor.logical_shape();
-    tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<RMSNormForwardDeviceOperation>(
-        args, input_tensor.dtype(), input_logical_shape);
-
-    return hash;
-}
-
 }  // namespace ttml::metal::ops::rmsnorm_fw::device
 
 namespace ttnn::prim {
