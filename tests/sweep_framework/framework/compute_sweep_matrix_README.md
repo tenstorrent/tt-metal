@@ -90,6 +90,28 @@ export SWEEP_NAME="ALL SWEEPS (Nightly)"
 python3 tests/sweep_framework/framework/compute_sweep_matrix.py | python3 -m json.tool
 ```
 
+## Module ownership, categories, and time budgets
+
+Every matrix entry is tagged with a functional **category**, an **owner** (Slack
+member id), and a **team** so a failing sweep job is attributable to the team
+that owns it (consumed by `ttnn-sweeps-slack-notify.yaml`). This policy lives in
+`matrix_runner_config.py` and is produced natively by the matrix builder — there
+is no separate static category list to keep in sync.
+
+- **Category** is the leading segment of the module stem, i.e. the top-level
+  directory under `tests/sweep_framework/sweeps/` (`eltwise.unary.relu` →
+  `eltwise`). Ownership is `SWEEP_CATEGORY_OWNERS`; unlisted categories fall back
+  to `DEFAULT_CATEGORY_METADATA`.
+- **Attributable jobs**: `compute_standard_matrix` groups regular modules by
+  category *before* batching, so a single job never straddles two owners. Mixed
+  batches (possible on the mesh/hardware-routed lead-models / model-traced paths)
+  fall back to the default owner.
+- **Time budgets** (opt-in): set `CATEGORY_TIME_BUDGET_SECONDS[<category>]` and
+  that category is packed into batches whose estimated runtime stays under the
+  budget (`_budget_pack`), instead of a fixed module count. Per-module estimates
+  come from `MODULE_RUNTIME_ESTIMATES` (seed from CI history), defaulting to
+  `DEFAULT_MODULE_RUNTIME_SECONDS`. Categories with no budget are unchanged.
+
 ## Related Files
 
 - `.github/workflows/ttnn-run-sweeps.yaml` — workflow that calls this script

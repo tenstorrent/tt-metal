@@ -38,10 +38,14 @@ from matrix_runner_config import (
     SCHEDULE_TYPES,
     SUPPORTED_VECTOR_GROUPING_MODES,
     SWEEP_TYPES,
+    get_category_metadata_for_module,
+    get_category_time_budget,
     get_lead_models_test_group_name_for_hardware_group,
     get_mesh_test_group_map,
+    get_module_runtime_estimate,
     get_runner_config,
     get_test_group_name_for_hardware_group,
+    resolve_batch_category_metadata,
 )
 
 DEFAULT_PRETTY_MATRIX_PATH = "tests/sweep_framework/framework/sweep_matrix.json"
@@ -99,6 +103,10 @@ def _build_entries(runner_config, batches, batch_display_prefix, suite_name):
     entries = []
     for batch in batches:
         base_display = f"{batch_display_prefix}:{batch}" if batch_display_prefix else batch
+        # Tag each job with its functional category + owner so CI failures are
+        # attributable. Single-category batches get their real owner; mixed
+        # batches fall back to the default sweep owner.
+        category_meta = resolve_batch_category_metadata(batch, strip_grouping_suffix)
         entries.append(
             {
                 **runner_config,
@@ -106,9 +114,35 @@ def _build_entries(runner_config, batches, batch_display_prefix, suite_name):
                 "batch_display": base_display,
                 "suite_name": suite_name,
                 "mesh_dims": "",
+                **category_meta,
             }
         )
     return entries
+
+
+def _budget_pack(modules, budget_seconds):
+    """Pack modules into comma-joined batches whose estimated runtime stays under
+    ``budget_seconds``.
+
+    Greedy first-fit over the module order: a module is added to the current
+    batch unless doing so would exceed the budget, in which case a new batch is
+    started. A single module always gets at least its own batch even if its own
+    estimate already exceeds the budget.
+    """
+    batches = []
+    current = []
+    current_cost = 0.0
+    for module in modules:
+        cost = get_module_runtime_estimate(module)
+        if current and current_cost + cost > budget_seconds:
+            batches.append(",".join(current))
+            current = []
+            current_cost = 0.0
+        current.append(module)
+        current_cost += cost
+    if current:
+        batches.append(",".join(current))
+    return batches
 
 
 def _load_generation_manifest(vectors_path):
@@ -353,18 +387,36 @@ def compute_model_traced_matrix(modules, batch_size, suite_name, grouping_mode=N
 
 
 def compute_standard_matrix(modules, batch_size, suite_name):
-    """Compute matrix for nightly/comprehensive runs."""
+    """Compute matrix for nightly/comprehensive runs.
+
+    Regular (non-CCL) modules are grouped by functional category first, so each
+    matrix entry carries a single category/owner and CI failures are
+    attributable to the owning team. Within a category, modules are batched by
+    time budget when the category declares one (``CATEGORY_TIME_BUDGET_SECONDS``)
+    and by fixed ``batch_size`` otherwise. CCL modules keep their dedicated N300
+    lane.
+    """
     base_modules = sorted(set(strip_grouping_suffix(m) for m in modules))
     ccl_modules = [m for m in base_modules if m.startswith("ccl.")]
     regular_modules = [m for m in base_modules if not m.startswith("ccl.")]
 
-    # Keep CCL modules off the default runner path; they get their own N300 lane below.
-    regular_batches = chunk_modules(regular_modules, batch_size)
-    ccl_batches = chunk_modules(ccl_modules, batch_size)
+    # Group regular modules by category so batches never straddle owners.
+    modules_by_category = defaultdict(list)
+    for module in regular_modules:
+        modules_by_category[get_category_metadata_for_module(module)["category"]].append(module)
 
     n150_config = _get_runner("wormhole-n150-sweeps")
-    include_entries = _build_entries(n150_config, regular_batches, "", suite_name)
+    regular_batches = []
+    include_entries = []
+    for category in sorted(modules_by_category):
+        cat_modules = modules_by_category[category]
+        budget = get_category_time_budget(category)
+        cat_batches = _budget_pack(cat_modules, budget) if budget else chunk_modules(cat_modules, batch_size)
+        regular_batches.extend(cat_batches)
+        include_entries.extend(_build_entries(n150_config, cat_batches, "", suite_name))
 
+    # Keep CCL modules off the default runner path; they get their own N300 lane.
+    ccl_batches = chunk_modules(ccl_modules, batch_size)
     if ccl_batches:
         ccl_config = _get_runner("n300-llmbox-ccl")
         include_entries.extend(_build_entries(ccl_config, ccl_batches, "ccl", "generality_suite_fabric_1d"))

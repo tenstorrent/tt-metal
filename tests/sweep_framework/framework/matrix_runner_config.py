@@ -285,9 +285,107 @@ LOCAL_HARDWARE_MESH_CAPABILITY_RULES = (
 )
 
 
+# ── Sweep module ownership: category, owner, and time budget ─────────────────
+# The routing maps above answer "which physical runner lane runs this vector
+# file?". This block answers a different, op-level question that CI failure
+# triage needs: "which functional category does a sweep module belong to, who
+# owns it, and how long should one CI job for that category run?"
+#
+# Keyed by the leading segment of the sweep module stem — the top-level directory
+# under tests/sweep_framework/sweeps/ (e.g. "eltwise.unary.relu" -> "eltwise").
+# A module whose category is not listed falls back to DEFAULT_CATEGORY_METADATA.
+#
+# ``owner_id`` is a Slack member id consumed by ttnn-sweeps-slack-notify.yaml to
+# ping the owning team on failure. Until per-category owners are assigned they
+# inherit the sweep-suite default owner; fill in real owners incrementally.
+
+DEFAULT_SWEEP_OWNER_ID = "U08T3JQEB36"  # stevendae (current ttnn_sweep_tests.yaml owner)
+DEFAULT_SWEEP_TEAM = "ttnn"
+
+DEFAULT_CATEGORY_METADATA = {
+    "category": "sweep",
+    "owner_id": DEFAULT_SWEEP_OWNER_ID,
+    "team": DEFAULT_SWEEP_TEAM,
+}
+
+# category (sweeps/ top-level dir) -> {owner_id, team}.
+SWEEP_CATEGORY_OWNERS = {
+    "ccl": {"owner_id": DEFAULT_SWEEP_OWNER_ID, "team": DEFAULT_SWEEP_TEAM},
+    "composite": {"owner_id": DEFAULT_SWEEP_OWNER_ID, "team": DEFAULT_SWEEP_TEAM},
+    "conv2d": {"owner_id": DEFAULT_SWEEP_OWNER_ID, "team": DEFAULT_SWEEP_TEAM},
+    "conv_transpose2d": {"owner_id": DEFAULT_SWEEP_OWNER_ID, "team": DEFAULT_SWEEP_TEAM},
+    "creation": {"owner_id": DEFAULT_SWEEP_OWNER_ID, "team": DEFAULT_SWEEP_TEAM},
+    "data_movement": {"owner_id": DEFAULT_SWEEP_OWNER_ID, "team": DEFAULT_SWEEP_TEAM},
+    "eltwise": {"owner_id": DEFAULT_SWEEP_OWNER_ID, "team": DEFAULT_SWEEP_TEAM},
+    "embedding": {"owner_id": DEFAULT_SWEEP_OWNER_ID, "team": DEFAULT_SWEEP_TEAM},
+    "embedding_bw": {"owner_id": DEFAULT_SWEEP_OWNER_ID, "team": DEFAULT_SWEEP_TEAM},
+    "fused": {"owner_id": DEFAULT_SWEEP_OWNER_ID, "team": DEFAULT_SWEEP_TEAM},
+    "losses": {"owner_id": DEFAULT_SWEEP_OWNER_ID, "team": DEFAULT_SWEEP_TEAM},
+    "matmul": {"owner_id": DEFAULT_SWEEP_OWNER_ID, "team": DEFAULT_SWEEP_TEAM},
+    "model_traced": {"owner_id": DEFAULT_SWEEP_OWNER_ID, "team": DEFAULT_SWEEP_TEAM},
+    "normalization": {"owner_id": DEFAULT_SWEEP_OWNER_ID, "team": DEFAULT_SWEEP_TEAM},
+    "pool2d": {"owner_id": DEFAULT_SWEEP_OWNER_ID, "team": DEFAULT_SWEEP_TEAM},
+    "reduction": {"owner_id": DEFAULT_SWEEP_OWNER_ID, "team": DEFAULT_SWEEP_TEAM},
+    "transformer": {"owner_id": DEFAULT_SWEEP_OWNER_ID, "team": DEFAULT_SWEEP_TEAM},
+}
+
+# Per-category CI job wall-clock budget (seconds). When a category sets a budget,
+# compute_sweep_matrix packs its modules into batches whose *estimated* runtime
+# stays under this ceiling instead of using a fixed module count. Categories with
+# no entry keep the caller's fixed ``batch_size`` behavior (no behavior change).
+CATEGORY_TIME_BUDGET_SECONDS = {}
+
+# Per-module runtime estimate (seconds) used by budget packing. Seed from CI
+# history as data becomes available; unlisted modules use the nominal default.
+DEFAULT_MODULE_RUNTIME_SECONDS = 300
+MODULE_RUNTIME_ESTIMATES = {}
+
+
 # ── Routing helpers ───────────────────────────────────────────────────────────
 # Resolve ``test_group_name`` / runner payloads for ``compute_*_matrix`` and
 # ``main`` output splitting.
+
+
+def get_category_for_module(module_stem):
+    """Return the functional category (sweeps/ top-level dir) for a module stem."""
+    return module_stem.split(".", 1)[0] if module_stem else ""
+
+
+def get_category_metadata_for_module(module_stem):
+    """Resolve a module stem to ``{category, owner_id, team}``."""
+    category = get_category_for_module(module_stem)
+    owner = SWEEP_CATEGORY_OWNERS.get(category)
+    if owner is None:
+        return dict(DEFAULT_CATEGORY_METADATA)
+    return {"category": category, "owner_id": owner["owner_id"], "team": owner["team"]}
+
+
+def resolve_batch_category_metadata(batch_selector, strip_fn):
+    """Resolve ``{category, owner_id, team}`` for a comma-joined batch of stems.
+
+    Returns the shared metadata when every module in the batch maps to the same
+    category; otherwise falls back to ``DEFAULT_CATEGORY_METADATA`` (a mixed
+    batch has no single owner). ``strip_fn`` removes any grouping suffix so the
+    stem matches the category map — kept as a parameter so this module stays free
+    of the ``constants.py`` filename-parsing dependency.
+    """
+    modules = [m for m in batch_selector.split(",") if m]
+    if not modules:
+        return dict(DEFAULT_CATEGORY_METADATA)
+    categories = {get_category_for_module(strip_fn(m)) for m in modules}
+    if len(categories) == 1:
+        return get_category_metadata_for_module(strip_fn(modules[0]))
+    return dict(DEFAULT_CATEGORY_METADATA)
+
+
+def get_module_runtime_estimate(module_stem):
+    """Return the runtime estimate (seconds) used for budget packing."""
+    return MODULE_RUNTIME_ESTIMATES.get(module_stem, DEFAULT_MODULE_RUNTIME_SECONDS)
+
+
+def get_category_time_budget(category):
+    """Return the per-job wall-clock budget (seconds) for a category, or ``None``."""
+    return CATEGORY_TIME_BUDGET_SECONDS.get(category)
 
 
 def get_runner_config(test_group_name):
