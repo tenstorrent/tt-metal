@@ -11096,6 +11096,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="re-optimize modules already marked optimized in a prior --module-level run "
         "(default: skip them, so a restart resumes at the next unoptimized module). Mirrors auto-up --reverify.",
     )
+    popt.add_argument(
+        "--matmul-sweep",
+        action="store_true",
+        dest="matmul_sweep",
+        help="run a matmul fidelity x dtype sweep pre-pass FIRST (before the optimize engine): "
+        "micro-benchmark each distinct matmul (LoFi/HiFi2/HiFi4 x bf16/bf8_b), PCC-gated, and write "
+        "matmul_sweep.json as a best-config warm-start table. Needs --perf-test. Off by default.",
+    )
+    popt.add_argument("--matmul-sweep-pcc", type=float, default=0.99, help="matmul-sweep min PCC to accept a config")
+    popt.add_argument("--matmul-sweep-iters", type=int, default=5, help="matmul-sweep timed reps per config")
+    popt.add_argument("--matmul-sweep-max-shapes", type=int, default=0, help="matmul-sweep distinct-shape cap (0=all)")
     popt.set_defaults(func=cmd_optimize)
 
     pao = sub.add_parser(

@@ -391,6 +391,47 @@ def invalid_trace_flag_error():
     return None
 
 
+def _run_matmul_sweep_prepass(args, run_root: Path, run_demo: Path) -> None:
+    """Optional --matmul-sweep pre-pass for `optimize`: BEFORE the cc engine runs, sweep each distinct
+    matmul (fidelity x dtype, PCC-gated) and write matmul_sweep.json as a warm-start table. Loads the
+    standalone perf_automation cc_optimize/matmul_sweep.py by PATH (like the cc runner) so nothing in
+    the optimize engine is imported or changed. Needs --perf-test (the node to sweep); if absent it
+    warns and skips. Any failure is reported and swallowed so the optimize run still proceeds."""
+    node = getattr(args, "perf_test", None)
+    if not node:
+        print("  [optimize/matmul-sweep] --matmul-sweep needs --perf-test (the node to sweep); skipping sweep")
+        return
+    case = getattr(args, "case", None)
+    out = str(Path(run_demo) / "matmul_sweep.json")
+    sweep_path = Path(run_root) / PERF_DIR / "cc_optimize" / "matmul_sweep.py"
+    if not sweep_path.is_file():
+        print(f"  [optimize/matmul-sweep] sweep module not found at {sweep_path}; skipping")
+        return
+    print(f"  [optimize/matmul-sweep] pre-pass on {node}{' -k ' + case if case else ''} -> {out}")
+    try:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("cc_matmul_sweep", sweep_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        s = mod.run_prepass(
+            node,
+            case=case,
+            out_path=out,
+            pcc_threshold=getattr(args, "matmul_sweep_pcc", 0.99),
+            iters=getattr(args, "matmul_sweep_iters", 5),
+            max_shapes=getattr(args, "matmul_sweep_max_shapes", 0),
+            repo_root=Path(run_root),
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [optimize/matmul-sweep] sweep failed ({type(exc).__name__}: {str(exc)[-300:]}); optimize continues")
+        return
+    print(
+        f"  [optimize/matmul-sweep] {s.get('shapes', 0)} matmul shapes, {s.get('seeded', 0)} seeded, "
+        f"{s.get('improved', 0)} beat full-precision -> {out}"
+    )
+
+
 def cmd_optimize(args) -> int:
     _tf = invalid_trace_flag_error()
     if _tf:
@@ -508,6 +549,8 @@ def cmd_optimize(args) -> int:
             from .module_optimize import run_module_level_optimize
 
             return run_module_level_optimize(args, run_demo, run_root, run_cc)
+        if getattr(args, "matmul_sweep", False):
+            _run_matmul_sweep_prepass(args, run_root, run_demo)
         result = run_cc(
             run_demo,
             run_root,
