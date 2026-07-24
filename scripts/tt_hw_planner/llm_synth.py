@@ -342,7 +342,7 @@ def invoke_llm_agent(
     prompt: str,
     *,
     agent_bin: str = "claude",
-    model: str = "sonnet",
+    model: str = "opus",
     allowed_tools: tuple = ("WebFetch", "Bash", "Read"),
     timeout_s: int = 240,
 ) -> str:

@@ -234,7 +234,12 @@ def _agent_classify_category(model_id: str, cfg: dict, card_text: str = "") -> O
 
         def _one_vote(_i: int) -> Optional[str]:
             try:
-                raw = invoke_llm_agent(prompt, agent_bin=_bin, model="sonnet", timeout_s=240)
+                raw = invoke_llm_agent(
+                    prompt,
+                    agent_bin=_bin,
+                    model=os.environ.get("TT_HW_PLANNER_AGENT_MODEL", "opus"),
+                    timeout_s=240,
+                )
                 parsed = extract_json_from_llm_output(raw) or {}
                 cand = str(parsed.get("category") or "").strip()
                 for c in _VALID_CATEGORIES:
@@ -437,7 +442,7 @@ def _llm_resolve_category(model_id: str, cfg: dict, pipeline_tag: Optional[str],
 
         def _one_vote(_i: int) -> Optional[str]:
             try:
-                raw = invoke_llm_cli_one_shot(prompt, model="sonnet", timeout_s=90)
+                raw = invoke_llm_cli_one_shot(prompt, model="opus", timeout_s=90)
                 parsed = extract_json_from_llm_output(raw) or {}
                 cand = str(parsed.get("category") or "").strip()
                 for c in _VALID_CATEGORIES:
@@ -836,13 +841,12 @@ def _probe_local_model(model_id: str) -> ModelProbe:
         if _agent_cat:
             category = _agent_cat
         else:
+            # Claude Code agent unavailable/None -> deterministic FACTS only (no non-agentic
+            # one-shot call). dual-encoder contrastive -> Embed; otherwise the tag/registry/
+            # fingerprint category already computed above stands (degrade-loud).
             _resid = _is_category_residual(model_type_category, _fpr)
             if _resid and _is_dual_encoder_contrastive(cfg) and category in {"Unknown", "Embed"}:
                 category = "Embed"
-            elif _resid and (category == "Unknown" or (category == "Embed" and _has_audio_markers(cfg))):
-                _llm_cat = _llm_resolve_category(model_id, cfg, pipeline_tag)
-                if _llm_cat:
-                    category = _llm_cat
 
     _td = str(cfg.get("torch_dtype") or "").lower().replace("torch.", "").strip()
     _bpp = _TORCH_DTYPE_BYTES.get(_td)
@@ -1027,6 +1031,9 @@ def probe_model(model_id: str) -> ModelProbe:
                 probe.flags.append(f"Category {probe.category!r} -> {_agent_cat!r} by agent (read card+config)")
                 probe.category = _agent_cat
         else:
+            # Claude Code agent unavailable/None -> deterministic FACTS only (no non-agentic
+            # one-shot call). Dual-encoder contrastive -> Embed; otherwise the already-computed
+            # tag/registry/fingerprint category stands (degrade-loud).
             _resid = _is_category_residual(model_type_category, _fpr)
             if _resid and _is_dual_encoder_contrastive(cfg) and probe.category in {"Unknown", "Embed"}:
                 if probe.category != "Embed":
@@ -1034,11 +1041,6 @@ def probe_model(model_id: str) -> ModelProbe:
                         "Category -> 'Embed' via dual-encoder contrastive fact (text_config + vision/audio_config)"
                     )
                     probe.category = "Embed"
-            elif _resid and (probe.category == "Unknown" or (probe.category == "Embed" and _has_audio_markers(cfg))):
-                _llm_cat = _llm_resolve_category(model_id, cfg, probe.pipeline_tag)
-                if _llm_cat and _llm_cat != probe.category:
-                    probe.flags.append(f"Category {probe.category!r} -> {_llm_cat!r} by LLM one-shot fallback.")
-                    probe.category = _llm_cat
 
     if _is_low_confidence_category(probe.pipeline_tag, model_type_category, _arch_changed):
         probe.flags.append(
