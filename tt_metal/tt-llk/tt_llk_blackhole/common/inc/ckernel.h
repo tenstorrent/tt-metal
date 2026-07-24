@@ -65,13 +65,7 @@ constexpr std::uint32_t KERNEL_COMPLETE    = 0xFF;
 extern volatile std::uint32_t tt_reg_ptr *reg_base;
 extern volatile std::uint32_t tt_reg_ptr *pc_buf_base;
 extern volatile std::uint32_t tt_reg_ptr *regfile;
-} // namespace ckernel
-
-extern volatile std::uint32_t __instrn_buffer[];
-
-namespace ckernel
-{
-constexpr inline volatile std::uint32_t(tt_reg_ptr &instrn_buffer)[] = __instrn_buffer;
+extern volatile std::uint32_t tt_reg_ptr *const instrn_buffer;
 extern volatile std::uint32_t tt_reg_ptr *mailbox_base[4];
 
 extern std::uint32_t cfg_state_id;
