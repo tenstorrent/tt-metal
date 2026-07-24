@@ -25,8 +25,8 @@ std::uniform_int_distribution<int32_t> distribution(1, std::numeric_limits<int32
 
 uint32_t get_random_seed() { return distribution(rng); }
 
-// Work split shared by create_descriptor (cache miss) and get_dynamic_runtime_args (cache hit) so
-// both derive the identical core list.
+// Work split used by create_descriptor on both cache miss and hit (via override_runtime_arguments)
+// so both derive the identical core list.
 struct UniformWorkSplit {
     uint32_t num_cores = 0;
     CoreRangeSet all_cores;
@@ -161,8 +161,8 @@ ProgramDescriptor UniformDeviceOperation::create_descriptor(
         // Each core has its own seed to increase the number of generated random numbers
         uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
 
-        // seed/from/to are DYNAMIC (excluded from compute_program_hash): baked here for the
-        // cache-miss build, re-applied on every cache hit via get_dynamic_runtime_args().
+        // seed/from/to are DYNAMIC (excluded from compute_program_hash): derived here from attrs on
+        // both the cache-miss build and every cache hit (via override_runtime_arguments).
         compute_desc.runtime_args.emplace_back(
             core, KernelDescriptor::CoreRuntimeArgs{seed, f2u_from, f2u_to, tile_offset, units_per_core});
 
@@ -179,29 +179,16 @@ ProgramDescriptor UniformDeviceOperation::create_descriptor(
     return desc;
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> UniformDeviceOperation::get_dynamic_runtime_args(
+void UniformDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
-    const tensor_args_t& /*tensor_args*/,
+    const tensor_args_t& tensor_args,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // compute is kernel 1; its runtime args are {seed, f2u_from, f2u_to, tile_offset, units_per_core}.
-    // seed/from/to are excluded from the hash and re-applied here; the rest are static.
-    constexpr uint32_t kComputeKernelIdx = 1;
-    auto cores = uniform_work_split(output).cores;
-
-    const float eps = 1e-6f;
-    const uint32_t f2u_from = std::bit_cast<uint32_t>(operation_attributes.from);
-    const uint32_t f2u_to = std::bit_cast<uint32_t>(operation_attributes.to - eps);
-
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    dynamic_args.reserve(cores.size() * 3);
-    for (int i = 0; i < static_cast<int>(cores.size()); ++i) {
-        const uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
-        dynamic_args.push_back({kComputeKernelIdx, cores[i], 0, seed});
-        dynamic_args.push_back({kComputeKernelIdx, cores[i], 1, f2u_from});
-        dynamic_args.push_back({kComputeKernelIdx, cores[i], 2, f2u_to});
-    }
-    return dynamic_args;
+    // Re-derive seed/from/to (hash-excluded) and every other per-dispatch arg from the single source of
+    // truth (create_descriptor) and re-apply to the cached program. No rebuild; supersedes get_dynamic.
+    auto desc = create_descriptor(operation_attributes, tensor_args, output);
+    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 
 }  // namespace ttnn::operations::uniform
