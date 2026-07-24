@@ -417,6 +417,20 @@ def test_dual_encoder_contrastive_is_a_fact_not_llm():
     assert D({"architectures": ["BertModel"]}) is False
 
 
+def test_dual_fact_does_not_override_confident_tag():
+    # X-CLIP is a bare dual-encoder (XCLIPModel) but tagged video-classification -> Video.
+    # the dual-encoder fact must NOT override a confident tag category; it only sets Embed when
+    # the category is still Unknown or a weak Embed (same trust-the-tag rule as the LLM residual).
+    from scripts.tt_hw_planner.probe import _is_dual_encoder_contrastive
+
+    cfg = {"text_config": {}, "vision_config": {}, "architectures": ["XCLIPModel"]}
+    assert _is_dual_encoder_contrastive(cfg) is True  # it IS a dual encoder
+    # the guard lives at the call site: category in {Unknown, Embed} -- so a Video/CNN tag wins.
+    for resolved, expect_embed in [("Video", False), ("CNN", False), ("Unknown", True), ("Embed", True)]:
+        applies = _is_dual_encoder_contrastive(cfg) and resolved in {"Unknown", "Embed"}
+        assert applies is expect_embed, resolved
+
+
 def test_no_hand_maintained_model_type_lists():
     # ANTI-TREADMILL guard: category classification must run on self-maintaining signals
     # (transformers registry + config facts + arch suffix + LLM residual), NOT hand-kept

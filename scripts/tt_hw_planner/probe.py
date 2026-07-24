@@ -710,7 +710,7 @@ def _probe_local_model(model_id: str) -> ModelProbe:
     if category == "Unknown":
         category = _category_from_fingerprint(_fpr) or category
     _resid = _is_category_residual(model_type_category, _fpr)
-    if _resid and _is_dual_encoder_contrastive(cfg):
+    if _resid and _is_dual_encoder_contrastive(cfg) and category in {"Unknown", "Embed"}:
         category = "Embed"
     elif _resid and (category == "Unknown" or (category == "Embed" and _has_audio_markers(cfg))):
         _llm_cat = _llm_resolve_category(model_id, cfg, pipeline_tag)
@@ -880,7 +880,7 @@ def probe_model(model_id: str) -> ModelProbe:
             probe.flags.append(f"Category Unknown -> {_fp_cat!r} via structural fingerprint {_fpr!r}")
             probe.category = _fp_cat
     _resid = _is_category_residual(model_type_category, _fpr)
-    if _resid and _is_dual_encoder_contrastive(cfg):
+    if _resid and _is_dual_encoder_contrastive(cfg) and probe.category in {"Unknown", "Embed"}:
         if probe.category != "Embed":
             probe.flags.append(
                 "Category -> 'Embed' via dual-encoder contrastive fact (text_config + vision/audio_config)"
