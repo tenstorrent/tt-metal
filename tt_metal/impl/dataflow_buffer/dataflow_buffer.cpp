@@ -7,8 +7,11 @@
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cstdlib>  // std::getenv (TT_METAL_QSR_TC_ISOLATE #48552 prototype)
 #include <limits>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 
 #include "impl/context/metal_context.hpp"
@@ -111,19 +114,51 @@ namespace detail {
     TT_FATAL(tensix_id < ::dfb::NUM_TENSIX, "Invalid tensix_id: {}", tensix_id);
     auto& counters = next_tc_id_[core];
 
+    // [#48552 PROTOTYPE] Physical tile counters are a shared HW resource, and this allocator is a
+    // per-ProgramImpl member that restarts at tc_id 0 for every program. So every program's first DFB
+    // deterministically lands on the same physical (tensix, tc_id=0); back-to-back programs then reuse the
+    // same counter (e.g. a split-conv matmul's cb_in0 = (0,0)=224 followed by the neighbouring slice_write's
+    // DFB0 = (0,0)=28), and one program reads a neighbour's stale capacity -> reserve_back hang (#48552).
+    // With TT_METAL_QSR_TC_ISOLATE=1, draw tc_id from a PERSISTENT per-(core,tensix,pool) rotating counter
+    // that carries ACROSS programs, so consecutive programs get DISJOINT physical counters (until the pool
+    // wraps) — removing the shared-counter race entirely, independent of the exact corruption path. Each
+    // program is still finalized once and keeps a self-consistent assignment (init writes what it reads).
+    // NOTE: prototype — process-global static, assumes single-threaded finalize; wraps at pool size so a
+    // program using > pool DFBs on one (core,tensix) would self-collide (not the case here).
+    static const bool isolate = (std::getenv("TT_METAL_QSR_TC_ISOLATE") != nullptr);
+    static std::unordered_map<CoreCoord, std::array<uint8_t, ::dfb::NUM_TENSIX>> g_dm_rot;
+    static std::unordered_map<CoreCoord, std::array<uint8_t, ::dfb::NUM_TENSIX>> g_t6_rot;
+
     uint8_t tc_id;
     if (use_t6_only) {
-        TT_FATAL(
-            ::dfb::TC_TENSIX_POOL_START + counters.t6_only_next[tensix_id] < ::dfb::NUM_TILE_COUNTERS_PER_TENSIX,
-            "Out of Tensix-only tile counters for tensix {} on core ({}, {})",
-            tensix_id, core.x, core.y);
-        tc_id = ::dfb::TC_TENSIX_POOL_START + counters.t6_only_next[tensix_id]++;
+        if (isolate) {
+            constexpr uint8_t kT6Slots = ::dfb::NUM_TILE_COUNTERS_PER_TENSIX - ::dfb::TC_TENSIX_POOL_START;
+            uint8_t& rot = g_t6_rot[core][tensix_id];
+            tc_id = ::dfb::TC_TENSIX_POOL_START + (rot % kT6Slots);
+            rot = static_cast<uint8_t>((rot + 1) % kT6Slots);
+        } else {
+            TT_FATAL(
+                ::dfb::TC_TENSIX_POOL_START + counters.t6_only_next[tensix_id] < ::dfb::NUM_TILE_COUNTERS_PER_TENSIX,
+                "Out of Tensix-only tile counters for tensix {} on core ({}, {})",
+                tensix_id,
+                core.x,
+                core.y);
+            tc_id = ::dfb::TC_TENSIX_POOL_START + counters.t6_only_next[tensix_id]++;
+        }
     } else {
-        TT_FATAL(
-            counters.dm_next[tensix_id] < ::dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM,
-            "Out of DM-visible tile counters for tensix {} on core ({}, {})",
-            tensix_id, core.x, core.y);
-        tc_id = counters.dm_next[tensix_id]++;
+        if (isolate) {
+            uint8_t& rot = g_dm_rot[core][tensix_id];
+            tc_id = rot % ::dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM;
+            rot = static_cast<uint8_t>((rot + 1) % ::dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM);
+        } else {
+            TT_FATAL(
+                counters.dm_next[tensix_id] < ::dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM,
+                "Out of DM-visible tile counters for tensix {} on core ({}, {})",
+                tensix_id,
+                core.x,
+                core.y);
+            tc_id = counters.dm_next[tensix_id]++;
+        }
     }
     return static_cast<::dfb::PackedTileCounter>(
         (tensix_id << ::dfb::PACKED_TC_COUNTER_ID_BITS) | tc_id);
