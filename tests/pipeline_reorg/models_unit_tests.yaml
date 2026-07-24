@@ -494,6 +494,34 @@
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
+# MiniMax-M3 unit tests — mostly random-weight module PCC; HF_MODEL enables
+# test_msa_layer_vs_ref real-weights PCC on 1-card.
+# Deploy mesh is SP=8 x TP=4 -> (8, 4) on BH Galaxy
+- name: MiniMax-M3 unit tests (1-card)
+  cmd: |
+    # export HF_MODEL=/mnt/models/MiniMaxAI/MiniMax-M3-ref/
+    pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "1x1"
+  model: minimax-m3
+  skus:
+    bh_p150:
+      timeout: 5
+      tier: 1
+  owner_id: U08ECJQ848G # Viacheslav Melnykov
+  team: models
+
+- name: MiniMax-M3 unit tests (BH Galaxy 8x4)
+  cmd: |
+    export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+    # -k 8x4: ring_joint / MSA SP / KV cache / EP MoE / model_sp / attention(+chunked) / dense_mlp@8x4
+    pytest --timeout 900 models/demos/minimax_m3/tests/unit/ -k "8x4"
+  model: minimax-m3
+  skus:
+    bh_galaxy:
+      timeout: 40
+      tier: 1
+  owner_id: U08ECJQ848G # Viacheslav Melnykov
+  team: models
+
 # GPT-OSS unit tests: uses HF config only (no weights). parametrize_mesh_with_fabric()
 # picks the largest fitting mesh shape per SKU when CI=true, so one yaml entry
 # covers N150 (1x1), T3K/llmbox (1x8), and Galaxy (4x8) without per-SKU -k filters.

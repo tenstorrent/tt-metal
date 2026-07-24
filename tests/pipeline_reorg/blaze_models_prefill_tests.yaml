@@ -363,3 +363,31 @@
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
+
+# MiniMax-M3 full-model real-weights prefill + per-layer KV PCC (standalone harness, not pytest).
+# Requires staged mounts (same layout as models/demos/minimax_m3/scripts/README_golden_kv.md):
+#   HF_MODEL          -> /mnt/models/MiniMaxAI/MiniMax-M3-ref/
+#   PREFILL_TRACE_DIR -> /mnt/models/minimax-m3-cache/golden/longbook_full
+#   TT_CACHE_PATH     -> optional; defaults under HF_MODEL. Prefill the tilized
+#                       tensor_cache_bfp8_{MeshShape(8,4)} there or CI will cold-build for hours.
+- name: "Blaze - MiniMax-M3 Prefill KV PCC"
+  cmd: |
+    export LOGURU_LEVEL=INFO
+    export HF_MODEL=/mnt/models/MiniMaxAI/MiniMax-M3-ref/
+    export PREFILL_TRACE_DIR=/mnt/models/minimax-m3-cache/golden/longbook_full
+    export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+    export EXPERT_DTYPE=bf4
+    export PREFILL_CHUNKED=0
+    export PREFILL_TPS_ITERS=1
+    mpirun --pernode --tag-output bash -lc '
+      python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
+    '
+  test_type: minimax_prefill_kv_pcc
+  test_group: module
+  skus:
+    bh_sc1:
+      # Warm tilized-cache + one-shot prefill + KV PCC; cold weight-cache build will exceed this.
+      timeout: 60
+  owner_id: U08ECJQ848G # Viacheslav Melnykov
+  team: models
+  sp_config: sc1
