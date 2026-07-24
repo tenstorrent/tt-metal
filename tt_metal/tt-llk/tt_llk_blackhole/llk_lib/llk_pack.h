@@ -10,6 +10,7 @@
 #include "ckernel_globals.h"
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
+#include "hal/address_counters.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_pack_common.h"
@@ -407,7 +408,12 @@ inline void pack_init_apply(
 
     // Program the packer X (datum) counter. Per the "inits own SETADCXX" contract, every init sets its
     // own value; on Blackhole x_start/x_end must stay within a single row (0..FACE_C_DIM-1).
-    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+    address_counters.client<AddressCounterClient::Packers>()
+        .channel<AddressChannel::Channel0>()
+        .X<FACE_C_DIM - 1>()
+        .channel<AddressChannel::Channel1>()
+        .X<0x0>()
+        .apply();
 }
 } // namespace llk_pack_internal_bh
 
@@ -593,5 +599,6 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
 
     ckernel::ckernel_template::run();
 
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); // reset z counters
+    // reset z counters: ch0_z = ch1_z = 0
+    address_counters.client<AddressCounterClient::Packers>().channel<AddressChannel::Channel0>().Z<0>().channel<AddressChannel::Channel1>().Z<0>().apply();
 }

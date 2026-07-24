@@ -12,6 +12,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "hal/address_counters.h"
 #include "llk_assert.h"
 #include "llk_unpack_common.h"
 #include "sanitizer/api.h"
@@ -67,9 +68,12 @@ inline void _llk_unpack_A_mop_config_(
     static constexpr std::uint32_t unpack_srcb_inc_z_0 =
         TT_OP_UNPACR(SrcB, 0b0 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srcb_set_dvalid = TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-    static constexpr std::uint32_t srca_set_z_1           = TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001); // set srcA ch0_z = 1
-    static constexpr std::uint32_t srcb_set_z_2           = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 2, 0b0001); // set srcB ch0_z = 2
-    static constexpr std::uint32_t srcb_clear_z           = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001); // set srcB ch0_z = 0
+    static constexpr std::uint32_t srca_set_z_1           = // set srcA ch0_z = 1
+        address_counters.client<AddressCounterClient::Unpacker0>().channel<AddressChannel::Channel0>().Z<1>().get_operation<GetOpType::SETTER>();
+    static constexpr std::uint32_t srcb_set_z_2 = // set srcB ch0_z = 2
+        address_counters.client<AddressCounterClient::Unpacker1>().channel<AddressChannel::Channel0>().Z<2>().get_operation<GetOpType::SETTER>();
+    static constexpr std::uint32_t srcb_clear_z = // set srcB ch0_z = 0
+        address_counters.client<AddressCounterClient::Unpacker1>().channel<AddressChannel::Channel0>().Z<0>().get_operation<GetOpType::SETTER>();
 
     if (should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format))
     {
@@ -78,7 +82,12 @@ inline void _llk_unpack_A_mop_config_(
             const std::uint32_t outerloop = 2;
             const std::uint32_t innerloop = 2;
             ckernel_template tmp(outerloop, innerloop, unpack_srca_to_dest_transpose_of_faces);
-            tmp.set_end_op(TT_OP_SETADCZW(p_setadc::UNP_A, 0, 2, 0, 1, 0b0101));
+            tmp.set_end_op(address_counters.client<AddressCounterClient::Unpacker0>()
+                               .channel<AddressChannel::Channel0>()
+                               .Z<1>()
+                               .channel<AddressChannel::Channel1>()
+                               .Z<2>()
+                               .get_operation<GetOpType::SETTER>()); // srcA ch0_z=1, ch1_z=2
             tmp.program();
         }
         else if (BType == BroadcastType::ROW || BType == BroadcastType::SCALAR)
@@ -386,8 +395,15 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     }
     llk::san::operation_check<llk::san::Operation::UnpackA>(BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, unpack_src_format, unpack_dst_format);
 
-    // Clear z/w start counters
-    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    // Clear z/w start counters on both channels of both unpackers (emitted as a single SETADCZW).
+    address_counters.client<AddressCounterClient::Unpacker0, AddressCounterClient::Unpacker1>()
+        .channel<AddressChannel::Channel0>()
+        .Z<0>()
+        .W<0>()
+        .channel<AddressChannel::Channel1>()
+        .Z<0>()
+        .W<0>()
+        .apply();
 
     // Program srcA and srcB base addresses
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID

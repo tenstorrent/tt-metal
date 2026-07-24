@@ -13,6 +13,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "hal/address_counters.h"
 #include "llk_assert.h"
 #include "llk_unpack_common.h"
 
@@ -208,7 +209,14 @@ inline void _llk_unpack_tilize_(
             std::uint32_t address = base_address + top_face_offset_address + ((n == 1) ? bot_face_offset_address : 0);
 
             // Clear z/w start counters
-            TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
+            address_counters.client<AddressCounterClient::Unpacker0>()
+                .channel<AddressChannel::Channel0>()
+                .Z<0>()
+                .W<0>()
+                .channel<AddressChannel::Channel1>()
+                .Z<0>()
+                .W<0>()
+                .apply();
 
             // Wait for free context
             wait_for_next_context(2);
@@ -242,7 +250,14 @@ inline void _llk_unpack_tilize_(
         LLK_ASSERT(is_valid_L1_address(address), "L1 base_address must be in valid L1 memory region");
 
         // Clear z/w start counters
-        TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
+        address_counters.client<AddressCounterClient::Unpacker0>()
+            .channel<AddressChannel::Channel0>()
+            .Z<0>()
+            .W<0>()
+            .channel<AddressChannel::Channel1>()
+            .Z<0>()
+            .W<0>()
+            .apply();
 
         // Wait for free context
         wait_for_next_context(2);
@@ -485,7 +500,14 @@ inline void _llk_unpack_tilizeA_B_(
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
     // Clear z/w start counters for SrcA/B
-    TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, 0b1111);
+    address_counters.client<AddressCounterClient::Unpacker0, AddressCounterClient::Unpacker1>()
+        .channel<AddressChannel::Channel0>()
+        .Z<0>()
+        .W<0>()
+        .channel<AddressChannel::Channel1>()
+        .Z<0>()
+        .W<0>()
+        .apply();
 
     for (std::uint32_t n = 0; n < num_faces; n++)
     {
@@ -519,8 +541,13 @@ inline void _llk_unpack_tilizeA_B_(
         // Stall unpacker until pending CFG writes from Trisc have completed
         TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
-        // Reset Y counters for SrcA
-        TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b1010);
+        // Reset Y counters for SrcA (ch0_y = ch1_y = 0)
+        address_counters.client<AddressCounterClient::Unpacker0>()
+            .channel<AddressChannel::Channel0>()
+            .Y<0>()
+            .channel<AddressChannel::Channel1>()
+            .Y<0>()
+            .apply();
         // Unpack SrcB 16x16 face & Set Data Valid
 
         // If reload_srcB, only first face needs to be loaded, otherwise CH0_Z+=1
@@ -557,8 +584,13 @@ inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format)
 {
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
 
-    // _llk_unpack_tilizeA_B uses y-stride and updates y counter
-    TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
+    // _llk_unpack_tilizeA_B uses y-stride and updates y counter (ch0_y = ch1_y = 0 on both unpackers)
+    address_counters.client<AddressCounterClient::Unpacker0, AddressCounterClient::Unpacker1>()
+        .channel<AddressChannel::Channel0>()
+        .Y<0>()
+        .channel<AddressChannel::Channel1>()
+        .Y<0>()
+        .apply();
 
     unpack_config_u config = {0};
 

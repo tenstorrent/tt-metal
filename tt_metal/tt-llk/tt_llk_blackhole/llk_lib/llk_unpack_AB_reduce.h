@@ -14,6 +14,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "hal/address_counters.h"
 #include "llk_assert.h"
 #include "llk_unpack_common.h"
 #include "tensor_shape.h"
@@ -153,8 +154,15 @@ inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape &tensor_shape
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void _llk_unpack_AB_reduce_(const std::uint32_t address_a, const std::uint32_t address_b)
 {
-    // Reset address counters for both unpackers
-    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    // Reset address counters (Z/W = 0 on both channels) for both unpackers
+    address_counters.client<AddressCounterClient::Unpacker0, AddressCounterClient::Unpacker1>()
+        .channel<AddressChannel::Channel0>()
+        .Z<0>()
+        .W<0>()
+        .channel<AddressChannel::Channel1>()
+        .Z<0>()
+        .W<0>()
+        .apply();
 
     // Program srcA and srcB base addresses
     // Get pointer to configuration registers for current state ID

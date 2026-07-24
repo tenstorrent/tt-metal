@@ -10,6 +10,7 @@
 #include "ckernel_globals.h"
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
+#include "hal/address_counters.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_pack_common.h"
@@ -97,7 +98,10 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
     ckernel::ckernel_template tmp(
         MOP_OUTER_LOOP,
         MOP_INNER_LOOP,
-        TT_OP_INCADCZW(p_setadc::PAC, 0, 0, 1, 0), // w cnt points to the next tile
+        address_counters.client<AddressCounterClient::Packers>()
+            .channel<AddressChannel::Channel0>()
+            .W<1>()
+            .get_operation<GetOpType::INCREMENT>(), // w cnt points to the next tile
         TT_OP_PACR(
             p_pacr::CFG_CTXT_0,
             p_pacr::NO_ROW_PAD_ZERO,
@@ -249,7 +253,12 @@ inline void _llk_pack_untilize_init_(
     }
     else
     {
-        TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+        address_counters.client<AddressCounterClient::Packers>()
+            .channel<AddressChannel::Channel0>()
+            .X<FACE_C_DIM - 1>()
+            .channel<AddressChannel::Channel1>()
+            .X<0x0>()
+            .apply();
     }
 }
 
@@ -303,21 +312,26 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
     // MOP START_OP resets W to this value at the start of each outer loop iteration (row).
     // The first INCADCZW in the inner loop then advances W to tile_dst_offset for the first tile.
     // SETADCZW's Ch0_W field is only 3 bits (0-7), so SETADC is used to carry the full 4-bit W value.
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0001);                                         // reset ch0 z counter
+    // reset ch0 z counter
+    address_counters.client<AddressCounterClient::Packers>().channel<AddressChannel::Channel0>().Z<0>().apply();
     TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, (15 + tile_dst_offset) & 0xF); // set ch0 w counter, establishing W_Cr
-    TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0011);                                         // reset ch0 xy counters
+    // reset ch0 xy counters
+    address_counters.client<AddressCounterClient::Packers>().channel<AddressChannel::Channel0>().X<0>().Y<0>().apply();
 
     // Iterate over top, then over bottom faces in the block (if num_faces > 2)
     for (std::uint32_t face = 0; face < num_faces_per_rdim_tile; face++)
     {
         ckernel::ckernel_template::run();
 
-        TTI_INCADCZW(p_setadc::PAC, 0, 0, 0, 1);         // z cnt increments by 2xface_r_dimxFACE_C_DIM
-        TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0010); // reset ch0_y counters
+        // z cnt increments by 2xface_r_dimxFACE_C_DIM
+        address_counters.client<AddressCounterClient::Packers>().channel<AddressChannel::Channel0>().Z<1>().increment();
+        // reset ch0_y counters
+        address_counters.client<AddressCounterClient::Packers>().channel<AddressChannel::Channel0>().Y<0>().apply();
     }
 
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); // reset z counters
-    set_dst_write_addr(tile_dst_offset);             // reset w counter
+    // reset z counters: ch0_z = ch1_z = 0
+    address_counters.client<AddressCounterClient::Packers>().channel<AddressChannel::Channel0>().Z<0>().channel<AddressChannel::Channel1>().Z<0>().apply();
+    set_dst_write_addr(tile_dst_offset); // reset w counter
 }
 
 /**
