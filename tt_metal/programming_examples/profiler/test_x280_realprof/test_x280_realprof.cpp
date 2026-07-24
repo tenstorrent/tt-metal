@@ -1693,9 +1693,9 @@ int main(int argc, char** argv) {
             auto map_ts = [&](uint64_t x) -> uint64_t { return (uint64_t)(a * (double)(x - x_base) + bb) + t_base; };
             CoreCoord l2t = pz::x280_l2cpu_tile(node[0].l2cpu);
             printf("\n=== X280 hart zones (--hartzones; a=%.5f) ===\n", a);
-            // Each hart is its OWN Tracy context row (named by hart) since the per-lane header is GUI-derived
-            // from the risc bits and can't be set client-side. Distinct per-hart context colors; BULK reader
-            // drains (adaptive-switch tripped) are recolored red so the bulk episodes stand out.
+            // All harts share ONE Tracy context "X280 (x,y)"; each hart is a distinct LANE, labeled by the
+            // RiscType it carries (X280_RD0.., X280_RELAY0.. -> "rd0"/"relay0" via GetRiscName in the GUI, which
+            // needed the widened RiscType). Per-hart lane colors; BULK/WAIT recolored so stalls stand out.
             static const uint32_t kHartColor[4] = {
                 0xE67E22u /* rd0 orange */,
                 0xF1C40Fu /* rd1 yellow */,
@@ -1749,17 +1749,22 @@ int main(int argc, char** argv) {
                                              : (kind == 3) ? " SPSC-WAIT"
                                                            : "";
                         std::string zn = hname + suffix;
+                        // hart -> its lane RiscType: readers X280_RD0+h, relays X280_RELAY0+(h-nread)
+                        uint32_t lane_risc = (h < nread)
+                                                 ? ((uint32_t)tracy::RiscType::X280_RD0 + (uint32_t)h)
+                                                 : ((uint32_t)tracy::RiscType::X280_RELAY0 + (uint32_t)(h - nread));
                         tt::tt_metal::perf_debug::WorkerZonePacket zp{};
                         zp.chip_id = (uint32_t)device_id;
                         zp.is_x280 = true;
-                        zp.ctx_name = hname;  // context row label = hart
+                        // ONE shared context (same coord); lanes distinguished by risc. ctx_name empty ->
+                        // handler names it "X280 (x,y)".
                         zp.color = (kind == 1)   ? kBulkColor
                                    : (kind == 2) ? kHostWaitColor
                                    : (kind == 3) ? kSpscWaitColor
                                                  : kHartColor[h & 3];
-                        zp.core_noc0_x = (uint32_t)l2t.x;    // distinct key per hart:
-                        zp.core_noc0_y = 40u + (uint32_t)h;  // (8, 40+hart), off-grid
-                        zp.risc = 0;                         // single lane per context
+                        zp.core_noc0_x = (uint32_t)l2t.x;
+                        zp.core_noc0_y = (uint32_t)l2t.y;
+                        zp.risc = lane_risc;  // per-hart lane within the single X280 context
                         zp.name = zn;
                         zp.timestamp = (ts >= x280_ts_base) ? ts - x280_ts_base : 0;
                         zp.is_start = (is_start != 0u);

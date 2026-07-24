@@ -121,7 +121,9 @@ void PerfDebugTracyHandler::HandleWorkerZone([[maybe_unused]] const perf_debug::
     marker.chip_id = zone.chip_id;
     marker.core_x = zone.core_noc0_x;
     marker.core_y = zone.core_noc0_y;
-    marker.risc = kRisc[zone.risc % 5];
+    // X280 harts carry their lane's RiscType directly (X280_RD0.., X280_RELAY0..) so the one X280 context shows
+    // per-hart lane labels; Tensix RISCs map the 0..4 index through kRisc.
+    marker.risc = zone.is_x280 ? static_cast<tracy::RiscType>(zone.risc) : kRisc[zone.risc % 5];
     marker.timestamp = zone.timestamp;
     marker.runtime_host_id = zone.timer_id;
     marker.marker_type = zone.is_start ? tracy::TTDeviceMarkerType::ZONE_START : tracy::TTDeviceMarkerType::ZONE_END;
