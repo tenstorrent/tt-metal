@@ -71,7 +71,14 @@ FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, bool is_ub
         case tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE:
         case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: {
             if (is_ubb_galaxy) {
-                return FabricType::TORUS_XY;
+                // [BH galaxy] The single Blackhole galaxy rings only on the size-4 axis
+                // (verified via cluster-descriptor eth connectivity: 8 chips at degree 3 =
+                // the size-8 axis line-ends; size-4 axis has tray0<->tray3 wrap edges). It
+                // has NO both-axis wrap, so TORUS_XY can't map (the torus_x MGD provides
+                // only TORUS_X and mesh_graph.cpp throws "requests TORUS_XY ... MGD provides
+                // TORUS_X"). Request TORUS_X (size-4 ring) matching single_bh_galaxy_torus_x
+                // MGD so the fused-MoE 1D-ring dispatch axis (cluster_axis=0 = size-4) rings.
+                return FabricType::TORUS_X;
             }
             return FabricType::MESH;
         }
