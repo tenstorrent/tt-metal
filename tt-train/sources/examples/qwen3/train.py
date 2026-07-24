@@ -929,6 +929,7 @@ def main():
                 device=device if use_distributed_model else None,
                 shard_dim=shard_dim if use_distributed_model else None,
                 dp_size=dp_size,
+                tp_size=tp_size if use_distributed_model else 1,
                 lora_config=lora_config,
                 args_dict=vars(args),
             )
@@ -1088,6 +1089,7 @@ def main():
             device=device if use_distributed_model else None,
             shard_dim=shard_dim if use_distributed_model else None,
             dp_size=dp_size,
+            tp_size=tp_size if use_distributed_model else 1,
             lora_config=lora_config,
             args_dict=vars(args),
         )
@@ -1106,6 +1108,7 @@ def main():
             device=device if use_distributed_model else None,
             shard_dim=shard_dim if use_distributed_model else None,
             dp_size=dp_size,
+            tp_size=tp_size if use_distributed_model else 1,
             lora_config=lora_config,
         )
 

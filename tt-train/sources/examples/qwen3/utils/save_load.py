@@ -219,29 +219,6 @@ def _gather_distributed(param, shard_type: Optional[str], device, dp_size: int =
     return val
 
 
-def _derive_tp_size(mapping, shard_types, ttml_params, hf_shapes) -> int:
-    """Derive the tensor-parallel size from a col_w param's global vs local rows.
-
-    Uses a NON-fused col_w weight (q_proj) as the reference: its HF row count
-    (hf_shape[0]) is the full un-sharded output size, and its ttml per-device
-    shape (ttml_shape[2]) is the local shard, so tp = full // local. The fused
-    kv_proj is explicitly skipped -- its HF k_proj shape is k_dim while its
-    global rows are 2*k_dim, which would give a bogus (doubled) tp size.
-    """
-    for hf_name, ttml_name in mapping.items():
-        if shard_types.get(hf_name) != "col_w":
-            continue
-        if not hf_name.endswith(".q_proj.weight"):
-            continue  # skip fused kv_proj and any non-reference col_w param
-        actual = _resolve_ttml_name(ttml_name, ttml_params)
-        if actual is None or hf_name not in hf_shapes:
-            continue
-        ttml_shape = list(ttml_params[actual].shape())
-        if len(ttml_shape) >= 3 and ttml_shape[2]:
-            return max(1, hf_shapes[hf_name][0] // ttml_shape[2])
-    return 1
-
-
 def _resolve_ttml_name(ttml_name: str, ttml_params: dict) -> Optional[str]:
     """Resolve the actual ttml param name, accounting for LoRA's /base_layer/ insertion.
 
@@ -291,6 +268,7 @@ def extract_hf_state_dict(
     device=None,
     shard_dim: Optional[int] = None,
     dp_size: int = 1,
+    tp_size: int = 1,
     lora_config: Optional[dict] = None,
     merge_lora: bool = True,
 ) -> Dict[str, torch.Tensor]:
@@ -316,7 +294,11 @@ def extract_hf_state_dict(
         shard_types = {}
 
     inv_transforms = _build_inv_transforms(fwd_transforms)
-    tp_size = _derive_tp_size(mapping, shard_types, ttml_params, hf_shapes) if distributed else 1
+    # tp_size is the tensor-parallel degree, passed down from the caller
+    # (train.py's args.mesh_shape[1]); it drives the fused-KV per-shard
+    # de-interleave. Force to 1 in the non-distributed path.
+    if not distributed:
+        tp_size = 1
     hf_state_dict: Dict[str, torch.Tensor] = {}
 
     def _emit(hf_name: str, raw_squeezed: torch.Tensor) -> None:
@@ -490,6 +472,7 @@ def save_model_to_safetensors(
     device=None,
     shard_dim: Optional[int] = None,
     dp_size: int = 1,
+    tp_size: int = 1,
     lora_config: Optional[dict] = None,
     merge_lora: bool = True,
     filename: str = "model.safetensors",
@@ -514,6 +497,7 @@ def save_model_to_safetensors(
         device=device,
         shard_dim=shard_dim,
         dp_size=dp_size,
+        tp_size=tp_size,
         lora_config=lora_config,
         merge_lora=merge_lora,
     )
@@ -855,6 +839,7 @@ def save_optimizer_state(
     device=None,
     shard_dim: Optional[int] = None,
     dp_size: int = 1,
+    tp_size: int = 1,
     filename: str = "optimizer.safetensors",
 ) -> str:
     """Save optimizer first/second moments and step count to safetensors.
@@ -881,7 +866,10 @@ def save_optimizer_state(
 
     inv_transforms = _build_inv_transforms(fwd_transforms)
     hf_shapes = build_hf_shapes(config, tie_word_embeddings)
-    tp_size = _derive_tp_size(mapping, shard_types, ttml_params, hf_shapes) if distributed else 1
+    # tp_size is passed down from the caller (train.py's args.mesh_shape[1]) and
+    # drives the fused-KV per-shard de-interleave; force to 1 when not distributed.
+    if not distributed:
+        tp_size = 1
     # Reverse lookup: ttml_name → hf_name (accounting for /base_layer/ in LoRA).
     # For the fused kv_proj this records the K (k_proj) HF name; the paired V
     # (v_proj) name is recovered from the forward transform tuple at save time.
@@ -1081,6 +1069,7 @@ def save_checkpoint(
     device=None,
     shard_dim: Optional[int] = None,
     dp_size: int = 1,
+    tp_size: int = 1,
     lora_config: Optional[dict] = None,
     args_dict: Optional[dict] = None,
 ) -> None:
@@ -1111,6 +1100,7 @@ def save_checkpoint(
             device=device,
             shard_dim=shard_dim,
             dp_size=dp_size,
+            tp_size=tp_size,
             lora_config=None,
             merge_lora=False,
         )
@@ -1137,6 +1127,7 @@ def save_checkpoint(
     #     device=device,
     #     shard_dim=shard_dim,
     #     dp_size=dp_size,
+    #     tp_size=tp_size,
     # )
 
     state = {"step": step}
@@ -1248,6 +1239,7 @@ def export_hf_model(
     device=None,
     shard_dim: Optional[int] = None,
     dp_size: int = 1,
+    tp_size: int = 1,
     lora_config: Optional[dict] = None,
 ) -> str:
     """Export the fine-tuned model in HF-compatible format.
@@ -1272,6 +1264,7 @@ def export_hf_model(
         device=device,
         shard_dim=shard_dim,
         dp_size=dp_size,
+        tp_size=tp_size,
         lora_config=lora_config,
         merge_lora=True,
         filename="model.safetensors",
