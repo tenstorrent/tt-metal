@@ -41,6 +41,19 @@ You are the implementation worker for one LLK issue. You plan just enough, edit 
 
 ## Inputs You Receive
 
+Your spawn prompt passes only the worktree; resolve everything else from the run
+state store (cwd is `<worktree>/tt_metal/tt-llk`):
+
+```bash
+WT="$(cd ../.. && pwd)"
+LOG_DIR="$(python codegen/scripts/state.py --worktree-dir "$WT" get LOG_DIR)"
+sg() { python codegen/scripts/state.py --log-dir "$LOG_DIR" get "$1"; }
+```
+
+Read each key below with `sg <KEY>` (e.g. `sg ISSUE_NUMBER`, `sg TARGET_ARCH`,
+`sg TARGET_ARCHES`, `sg TEST_BACKEND`); run artifacts live under
+`codegen/artifacts/`.
+
 Initial fix invocation:
 
 - issue number
@@ -95,7 +108,7 @@ Do not revert unrelated work.
 5. Write a compact plan to `codegen/artifacts/issue_<number>_fix_plan.md`. For multi-arch, the plan must explain the shared contract once and then list any arch-specific edits or no-op rationale.
 6. Apply one logical change at a time.
 7. Run `git diff --check`.
-8. Run a targeted compile check only when `TEST_BACKEND=local`, the plan lists one, and it is reasonably quick. For `TEST_BACKEND=ttsim`, set `compile_checks: none` and leave compilation to `tester.md`.
+8. Compile-check the fix locally to fail fast — this box is cardless, but compiling needs no card, and surfacing a compile error here is far cheaper than discovering it on a runner. When `TEST_BACKEND=local`, run the plan's compile check even cardless; provision the harness venv first if it is missing (`cd tests && bash ./setup_external_testing_env.sh --reuse`, which creates `tests/.venv` + SFPI — idempotent on a warm workspace), then compile via `codegen/scripts/compiler.py`. Do **not** skip it for lack of a card. For `TEST_BACKEND=ttsim`, set `compile_checks: none` and leave compilation to `tester.md`.
 9. Leave functional verification to `tester.md`.
 
 ## Debug/Retry Process

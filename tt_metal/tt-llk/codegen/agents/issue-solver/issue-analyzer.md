@@ -18,6 +18,19 @@ You are an LLK issue triage specialist. Your job is to turn raw GitHub issue tex
 
 ## Inputs You Receive
 
+Your spawn prompt passes only the worktree; resolve everything else from the run
+state store (cwd is `<worktree>/tt_metal/tt-llk`):
+
+```bash
+WT="$(cd ../.. && pwd)"
+LOG_DIR="$(python codegen/scripts/state.py --worktree-dir "$WT" get LOG_DIR)"
+sg() { python codegen/scripts/state.py --log-dir "$LOG_DIR" get "$1"; }
+```
+
+Read each key below with `sg <KEY>` (e.g. `sg ISSUE_NUMBER`, `sg TARGET_ARCH`,
+`sg TARGET_ARCHES`, `sg ISSUE_BODY`, `sg TEST_BACKEND`); run artifacts live under
+`codegen/artifacts/`.
+
 - `TARGET_ARCH`: `blackhole`, `wormhole`, or `quasar` for single-arch runs
 - `TARGET_ARCHES`: ordered list of target arches for multi-arch runs
 - `ISSUE_NUMBER`

@@ -158,21 +158,33 @@ Route by task type and by `len(TARGET_ARCHES)`:
 | **multiple** (e.g. `blackhole + wormhole`) | issue fix | `codegen/agents/issue-solver/orchestrator-multi.md` | `TARGET_ARCHES` (JSON array) |
 | Any | Generate Kernel | NOT SUPPORTED | - |
 
-**Mandatory:** pass the selected orchestrator this exact JSON structure:
-```json
-{
-  "ISSUE_NUMBER": "{issue_number}",
-  "ISSUE_TITLE": "{issue_title}",
-  "ISSUE_BODY": "{issue_body}",
-  "ISSUE_LABELS": ["{label}", "..."],
-  "ISSUE_COMMENTS": ["{comment}", "..."],
-  "TARGET_ARCH": "{target_arch}",         // single-arch path ONLY — omit if TARGET_ARCHES is present
-  "TARGET_ARCHES": ["{arch}", "..."],     // multi-arch path ONLY — omit if TARGET_ARCH is present; never both
-  "WORKTREE_DIR": "{worktree_dir}",       // multi-arch: shared — one fixer owns the combined change across every selected architecture
-  "WORKTREE_BRANCH": "{worktree_branch}", // used for commits and PRs
-  "LOG_DIR_BASE": "/proj_sw/user_dev/llk_code_gen"  // fixed log root; orchestrator appends its own sub-path
-}
+**Mandatory:** before invoking the orchestrator, seed its inputs via
+`state.py --worktree-dir` (do not pass them in the prompt). `RUN_MODE` and the
+arch key are chosen by `len(TARGET_ARCHES)` — the same test that picks the
+orchestrator above:
+```bash
+WT="{worktree_dir}"; S=codegen/scripts/state.py
+python $S --worktree-dir "$WT" set ISSUE_NUMBER     "{issue_number}"
+python $S --worktree-dir "$WT" set ISSUE_TITLE      "{issue_title}"
+python $S --worktree-dir "$WT" set ISSUE_BODY       "{issue_body}"          # verbatim
+python $S --worktree-dir "$WT" set ISSUE_LABELS     "{label1,label2,...}"   # comma-joined string
+python $S --worktree-dir "$WT" set ISSUE_COMMENTS   "{issue_comments}"      # verbatim
+python $S --worktree-dir "$WT" set ISSUE_URL        "{issue_url}"           # or "" (setup_run derives the default)
+python $S --worktree-dir "$WT" set WORKTREE_BRANCH  "{worktree_branch}"
+python $S --worktree-dir "$WT" set TEST_BACKEND     "{local|ttsim}"
+python $S --worktree-dir "$WT" set CREATE_LOCAL_BRANCH "{yes|no}"
+python $S --worktree-dir "$WT" set CREATE_PR        "{yes|no}"
+# single-arch (len(TARGET_ARCHES)==1) → orchestrator.md:
+python $S --worktree-dir "$WT" set RUN_MODE      single
+python $S --worktree-dir "$WT" set TARGET_ARCH   "{target_arch}"
+python $S --worktree-dir "$WT" set TTSIM_SO_PATH "{path}"                    # only when TEST_BACKEND=ttsim
+# multi-arch (len>1) → orchestrator-multi.md:
+python $S --worktree-dir "$WT" set RUN_MODE       multi
+python $S --worktree-dir "$WT" set TARGET_ARCHES  '["{arch}","..."]'         # JSON array string
+python $S --worktree-dir "$WT" set TTSIM_SO_PATHS '{"{arch}":"{path}",...}'  # only when TEST_BACKEND=ttsim
 ```
+Then invoke the selected orchestrator, telling it only `WORKTREE_DIR={worktree_dir}`
+— it reads everything else back via `state.py`.
 
 ---
 
