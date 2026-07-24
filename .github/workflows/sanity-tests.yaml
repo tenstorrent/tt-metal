@@ -182,7 +182,7 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
+      build-inplace-wheel: true
       tracy: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       skip-tt-train: false
