@@ -6,7 +6,21 @@
 // auto-split — no per-frame header build/CRC/copy on the RISC. Reports arm-rate (hb delta/sec);
 // pair with an ethtool rx_bytes_phy sampler on the BF3 for wire BW.
 //
-//   bh1_tx_ring [device] [eth_idx|"ext"] [dst_mac] [ring_size] [payload_len] [hold_s] [max_pkt] [txq]
+// It also reads back the kernel's TXQ packet-counter snapshots (PKT_START/PKT_END/WORD/STATUS,
+// before vs after the run) to diagnose the "CMD accepted but 0 wire bytes" bug (tx-ring-spec §11):
+//   - PKT_START delta == 0            -> command accepted but no packet ever started (source-fetch /
+//                                        MAX_PKT / framing). Try max_pkt=0 and/or risc_touch=1.
+//   - PKT_START moves, PKT_END/WORD 0 -> starts but stalls mid-drain.
+//   - all three move                  -> HW is transmitting; look downstream (TXPKT row / peer / cable).
+//
+//   bh1_tx_ring [device] [eth_idx|"ext"] [dst_mac] [ring_size] [payload_len] [hold_s] [max_pkt] [txq] [pace]
+//   [payload_base] [risc_touch]
+//
+// Two experiments to isolate the bug (tx-ring-spec §11 next-diagnostic list):
+//   max_pkt=0    : arg[7]=0 -> don't set ETH_TXQ_MAX_PKT_SIZE_BYTES (match the working non-burst probe,
+//                  which never sets it; the only probe path that DID set it is the one that regressed).
+//   risc_touch=1 : arg[11]=1 -> kernel RISC-writes the header line before each arm (the working probe
+//                  does this implicitly; the ring does not). Tests the source-fetch/coherence theory.
 
 #include <chrono>
 #include <cstdio>
@@ -55,6 +69,7 @@ int main(int argc, char** argv) {
     const uint32_t txq = (argc > 8) ? std::strtoul(argv[8], nullptr, 0) : 2u;
     const uint32_t pace = (argc > 9) ? std::strtoul(argv[9], nullptr, 0) : 0u;  // spin between arms
     const uint32_t payload_base = (argc > 10) ? std::strtoul(argv[10], nullptr, 0) : TT_RDMA_WQE_PAYLOAD_ADDR;
+    const uint32_t risc_touch = (argc > 11) ? std::strtoul(argv[11], nullptr, 0) : 0u;  // 1 = RISC-touch source
 
     const uint32_t frame_len = TT_RDMA_HDR_BYTES + payload_len;
     const uint32_t slot_stride = (frame_len + 15u) & ~15u;  // 16-B aligned slots
@@ -96,7 +111,8 @@ int main(int argc, char** argv) {
     const CoreCoord eth_phys = device->ethernet_core_from_logical_core(eth_logical);
     std::cout << "BH.2a: dev " << device_id << " core (" << eth_logical.x << "," << eth_logical.y << ") phys ("
               << eth_phys.x << "," << eth_phys.y << ")  ring=" << ring_size << " frame=" << frame_len
-              << "B slot=" << slot_stride << "B txq=" << txq << " max_pkt=" << max_pkt << "\n";
+              << "B slot=" << slot_stride << "B txq=" << txq << " max_pkt=" << max_pkt << " pace=" << pace
+              << " risc_touch=" << risc_touch << "\n";
 
     // --- PRODUCER: pre-fill payload slots + descriptors in L1 (one-shot; BH.2c adds live/DMA feed) ---
     for (uint32_t s = 0; s < ring_size; ++s) {
@@ -126,6 +142,12 @@ int main(int argc, char** argv) {
         std::fflush(stdout);
     }
 
+    // Seed the TXQ-counter debug region with a sentinel so we can tell if the kernel wrote it back.
+    {
+        std::vector<uint32_t> sentinel(8, 0xDEADBEEFu);
+        cluster.write_core(device->id(), eth_phys, sentinel, TT_RDMA_DBG_ADDR);
+    }
+
     Program program = CreateProgram();
     const EthernetConfig cfg{.noc = NOC::NOC_1, .processor = DataMovementProcessor::RISCV_1};
     const KernelHandle k = CreateKernel(program, "tt_metal/tt_rdma/bh0/kernels/bh_rdma_tx_ring.cpp", eth_logical, cfg);
@@ -142,7 +164,8 @@ int main(int argc, char** argv) {
          dmac_hi,
          dmac_lo,
          pace,
-         payload_base});
+         payload_base,
+         risc_touch});
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
@@ -174,6 +197,52 @@ int main(int argc, char** argv) {
     const std::vector<uint32_t> stop_val{1u};
     cluster.write_core(device->id(), eth_phys, stop_val, TT_RDMA_STOP_ADDR);
     distributed::Finish(cq);
+
+    // TXQ packet-counter diagnosis: the kernel snapshotted the counters before the first arm and after
+    // the last. If it never wrote them back (still the 0xDEADBEEF sentinel), the kernel didn't reach
+    // the snapshot points. Otherwise diff BEFORE vs AFTER to localize the 0-wire-bytes bug.
+    {
+        auto before =
+            cluster.read_core<uint32_t>(device->id(), eth_phys, TT_RDMA_DBG_BEFORE_ADDR, 4 * sizeof(uint32_t));
+        auto after = cluster.read_core<uint32_t>(device->id(), eth_phys, TT_RDMA_DBG_AFTER_ADDR, 4 * sizeof(uint32_t));
+        auto hbv = cluster.read_core<uint32_t>(device->id(), eth_phys, TT_RDMA_HB_ADDR, sizeof(uint32_t));
+        const uint32_t armed = hbv.empty() ? 0 : hbv[0];
+        const bool wrote_back = !after.empty() && after[0] != 0xDEADBEEFu;
+        std::printf("\nBH.2a TXQ counters (txq=%u, armed=%u):\n", txq, armed);
+        if (!wrote_back) {
+            std::printf("  kernel did NOT write AFTER snapshot (still sentinel) - it never reached the exit path.\n");
+        }
+        static const char* kName[4] = {"PKT_START", "PKT_END  ", "WORD_CNT ", "STATUS   "};
+        for (int i = 0; i < 4; ++i) {
+            const uint32_t b = before.size() > (size_t)i ? before[i] : 0;
+            const uint32_t a = after.size() > (size_t)i ? after[i] : 0;
+            if (i < 3) {
+                std::printf("  %s  before=%-10u after=%-10u  delta=%d\n", kName[i], b, a, (int)(a - b));
+            } else {
+                std::printf("  %s  before=0x%08x after=0x%08x  (bit16=CMD_ONGOING)\n", kName[i], b, a);
+            }
+        }
+        const uint32_t start_delta = (after.size() > 0 && before.size() > 0) ? (after[0] - before[0]) : 0;
+        const uint32_t end_delta = (after.size() > 1 && before.size() > 1) ? (after[1] - before[1]) : 0;
+        const uint32_t word_delta = (after.size() > 2 && before.size() > 2) ? (after[2] - before[2]) : 0;
+        std::printf("  verdict: ");
+        if (!wrote_back) {
+            std::printf("inconclusive (no AFTER snapshot).\n");
+        } else if (start_delta == 0) {
+            std::printf(
+                "CMD accepted but 0 packets STARTED -> source-fetch/MAX_PKT/framing. Retry max_pkt=0 / "
+                "risc_touch=1.\n");
+        } else if (end_delta == 0 || word_delta == 0) {
+            std::printf("packets STARTED (%u) but did not finish draining -> stalls mid-transmit.\n", start_delta);
+        } else {
+            std::printf(
+                "HW transmitted %u pkts / %u words -> datapath OK; check TXPKT row / peer / cable.\n",
+                start_delta,
+                word_delta);
+        }
+        std::fflush(stdout);
+    }
+
     std::cout << "BH.2a: done; clean shutdown." << std::endl;
     return 0;
 }

@@ -44,6 +44,12 @@ void kernel_main() {
     if (payload_base == 0) {
         payload_base = TT_RDMA_WQE_PAYLOAD_ADDR;
     }
+    // arg10 = risc_touch: if nonzero, the RISC read-modify-writes the frame's header words in L1
+    // immediately before each START_RAW. The M-1a probe (which transmits) RISC-writes its source
+    // every send; the ring (which does not) never touches the source. This isolates whether the TXQ
+    // needs a local RISC write to the source region to fetch it (a coherence/ordering effect) — if so,
+    // pure producer/DMA zero-copy (BH.2c) must account for it. See tt-rdma-tx-ring-spec.md §11.
+    const uint32_t risc_touch = get_arg_val<uint32_t>(10);
 
     volatile tt_l1_ptr uint32_t* hb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hb_addr);
     volatile tt_l1_ptr uint32_t* stop =
@@ -61,23 +67,43 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* descr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(TT_RDMA_WQE_DESCR_ADDR);
     const uint32_t rs = (ring_size == 0) ? 1u : ring_size;
 
+    // Snapshot the TXQ counters BEFORE any arm (host diffs against the AFTER snapshot).
+    tt_rdma_txq_snapshot(txq, reinterpret_cast<volatile tt_l1_ptr uint32_t*>(TT_RDMA_DBG_BEFORE_ADDR));
+
     uint32_t arms = 0;
-    for (;;) {
+    bool done = false;
+    while (!done) {
         for (uint32_t slot = 0; slot < rs; ++slot) {
             const uint32_t frame_off = descr[slot * 4 + 0];
             const uint32_t frame_len = descr[slot * 4 + 1];
+            // DIAGNOSTIC: optionally force a local RISC write to the source region (the header line)
+            // right before arming — mirrors what the working M-1a probe does implicitly.
+            if (risc_touch != 0) {
+                volatile tt_l1_ptr uint32_t* src =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(payload_base + frame_off);
+                for (uint32_t w = 0; w < (TT_RDMA_HDR_BYTES >> 2); ++w) {
+                    const uint32_t v = src[w];
+                    src[w] = v;  // read-modify-write same value: touch, don't corrupt the staged header
+                }
+            }
             // FAST PATH: no header build, no payload copy. Accept-ahead + arm.
             tt_rdma_send_raw(txq, payload_base + frame_off, frame_len);
             *hb = ++arms;
             if (num_arms != 0 && arms >= num_arms) {
-                return;
+                done = true;
+                break;
             }
             if (stop != nullptr && *stop != 0) {
-                return;
+                done = true;
+                break;
             }
             for (volatile uint32_t i = 0; i < pace; ++i) {
                 // pace to the TXQ drain rate (raw mode has no deep accept-ahead)
             }
         }
     }
+
+    // Snapshot the TXQ counters AFTER the run so the host can see whether accepted CMDs ever
+    // START/END a packet (0 delta on PKT_START == command accepted but no packet ever started).
+    tt_rdma_txq_snapshot(txq, reinterpret_cast<volatile tt_l1_ptr uint32_t*>(TT_RDMA_DBG_AFTER_ADDR));
 }

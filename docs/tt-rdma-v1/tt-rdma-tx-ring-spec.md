@@ -179,18 +179,54 @@ First cut of the ring drainer (`bh_rdma_tx_ring.cpp` + `bh1_tx_ring`). Findings:
   eventually sticks and the arm loop freezes (host `Finish` hangs; needs a board reset). The M-1a
   probe never wedged only because its per-frame CRC/copy *accidentally paced* it. **Fix: pace the
   ring drainer** (added `pace` arg); paced (`pace≳500`, ~333k/s) runs stable, no wedge, clean stop.
-- **OPEN BUG (blocks BH.2a completion): the ring arms valid descriptors but transmits 0 wire bytes.**
-  The M-1a probe transmits from the same core/txq/txpkt-config; the ring does not, even though:
-  descriptor + payload are correct and intact during the run (verified by live read-back:
-  `len=4080`, header `fe 01 0b 05`), and it is NOT the source address (staging in `TX_BUF0` — the
-  probe's exact region — also yields 0), NOT clobber, NOT L1-cache (RISC-touch didn't help). The
-  `CMD` is accepted (`CMD_ONGOING` toggles, arm counter advances) but no packet reaches the wire.
-  **Next diagnostic:** read the TXQ packet counters the ISA exposes — `ETH_TXQ_PKT_START_CNT`
-  (`TXQ+0x34`), `ETH_TXQ_PKT_END_CNT` (`TXQ+0x3C`), `ETH_TXQ_WORD_CNT` (`TXQ+0x40`) — to see whether
-  the accepted command ever *starts* a packet. The remaining difference from the probe is that the
-  probe RISC-writes the source buffer immediately before each `START_RAW`; the ring does not. If the
-  TXQ requires the source written via the local RISC (vs a producer/DMA), that reshapes the
-  zero-copy plan (BH.2c) — hence this is a hard gate.
+- **RESOLVED (2026-07-23) — the "0 wire bytes" symptom was a large-single-raw-frame egress ceiling,
+  NOT a ring/zero-copy defect.** Adding the ISA TXQ counters (`ETH_TXQ_PKT_START_CNT` `TXQ+0x34`,
+  `PKT_END_CNT` `TXQ+0x3C`, `WORD_CNT` `TXQ+0x40`) as an on-core before/after snapshot (read back over
+  the RCB debug region) flipped the diagnosis. Measured on TT dev1 ext rail idx2 → BF3 pciconf1, with
+  `ethtool -S <ttport> rx_bytes_phy` as the wire cross-check:
+  - **4080 B frame, `max_pkt` = 4080 or 0:** `PKT_START`/`PKT_END` advance == armed (1.66M) and
+    `WORD_CNT` advances, **yet BF3 wire rx_bytes = 0.** So the counters count *internal command
+    processing, not PHY egress* — which is exactly what made the accepted-`CMD`/advancing-arm-counter
+    look like success in the original investigation. A single raw transfer at/above ~4080 B does not
+    egress the BH Rianta MAC.
+  - **64 B frame, no split:** wire rx_pkts == armed, rx_bytes correct (82 B/frame incl. L2+FCS). **The
+    descriptor-driven, zero-copy, no-RISC-touch ring transmits fine.** `risc_touch` (RISC writes the
+    source before each arm) was a red herring — not needed, and `risc_touch=1` actually hangs (its
+    `send_raw` busy-waits a stuck `CMD_ONGOING`).
+  - **4080 B frame, `max_pkt` = 1024 (auto-split):** ~4 wire frames per arm, **4.15 GB in 3 s
+    (~11 Gbps *paced*), confirmed at the BF3 PHY.** MAX_PKT auto-split — the §1 mechanism — works and
+    is the fix.
+  **Consequence:** the RISC-off-datapath / zero-copy premise is validated end-to-end. The rule is
+  **always set `MAX_PKT` <= the working egress ceiling**; arming a single frame above it silently
+  drops.
+- **Egress ceiling — the 1518 B wall was the BF3 NIC RX MTU (1500), NOT the BH side.** The binary
+  search first found single wire frames > 1518 B blocked, but that was the BlueField's default
+  MTU 1500 silently dropping oversize frames at PHY ingress — mlx5 drops them *before* `rx_bytes_phy`
+  (they'd surface only in `rx_oversize_pkts_phy`), which is why the wire byte-delta read 0 and misled
+  the diagnosis. **The BH Rianta MAC is already configured for 4096 B frames:** `eth_init.cpp:500/505`
+  set `MAC_RS_TX/RX_SLAVE.*_max_pkt_len = 4204` (4096 + 104 B packet-mode header + 4). Proof: after
+  `ip link set dev <ttport> mtu 9000`, a single 4080 B frame (no split) egresses — wire rx_bytes
+  +2.73 GB, `rx_oversize` delta 0. **So BH does jumbo with NO FW change** — just raise the BF3 tt-port
+  MTU (`ip link set mtu 9000`; not persistent across reboot → bake into a setup script).
+  **Recommended `MAX_PKT ≈ 4080`** for single-frame jumbo (far more efficient than 1500-chunk split);
+  BH single-frame TX ceiling ≈ the MAC's 4200, BF3 RX now 9000.
+- **Register-stickiness gotcha:** `tt_rdma_set_max_pkt_size` writes `ETH_TXQ_MAX_PKT_SIZE_BYTES` only
+  when its arg != 0, so `MAX_PKT` **persists across kernel runs** — a run passing `max_pkt=0` inherits
+  the previous run's value. The drainer must **always set `MAX_PKT` explicitly** (<= 1500); never rely
+  on 0/default.
+- **LINE RATE ACHIEVED — one rail, one TXQ, paced: 198.8 Gbps wire / 197.4 Gbps goodput (~200 G).**
+  Both rails at MTU 9000, arming 16384 B messages at `MAX_PKT` 4080 (5 jumbo frames/arm), pace=100.
+  The decisive measurement: **arm rate held at ~1.5 M msg/s independent of message size** (4 KB → 16 KB
+  dropped only 1.577 → 1.509 M/s). This resolves the §9 open question — **`CMD_ONGOING` clears on
+  *accept*, not drain**: the RISC arms at a fixed ~1.5 M/s regardless of transfer size, the HW does all
+  per-frame work, and wire BW = arm_rate × message_size. The RISC-off-datapath premise (§1) is proven
+  on silicon: bigger messages scale straight to line rate at constant RISC cost. (At equal paced arm
+  rate a 4 KB message gave identical ~51 Gbps goodput for jumbo vs 1500-split — jumbo just uses 1/3 the
+  wire frames; the throughput lever is message size per arm, not chunk size.)
+- **Remaining follow-ups:** (a) persist the BF3 tt-port MTU 9000 (`tt_metal/tt_rdma/bh0/set_tt_rail_mtu.sh`,
+  both rails; not reboot-persistent); (b) 3-TXQ (BH.2b) + 2nd rail for aggregate > 200 G; (c) the `pace`
+  is now just a safety throttle — with accept-ahead confirmed, characterize the unpaced max and whether
+  the old over-arming wedge is gone now that TX actually egresses.
 - **CAUTION logged:** an early diagnostic touched `payload_base + 128 KB`, which from a high base
   overruns past `0x70000` into the link-bricking base-FW region. Any payload staging must stay within
   the RDMA L1 window; validate `TT_RDMA_L1_BASE`/size vs `MEM_SYSENG_RESERVED_BASE`.

@@ -35,6 +35,15 @@
 #define TT_ETH_TXQ_CMD_START_RAW 0x1u
 #define TT_ETH_TXQ_STATUS_CMD_ONGOING 0x00010000u
 
+// ---- TX packet counters (ISA-exposed; diagnostic for the "CMD accepted but 0 wire bytes" bug) ----
+// PKT_START advances when the HW begins fetching/emitting a packet; PKT_END when it finishes draining
+// to the MAC; WORD advances per transmitted word. If an accepted CMD never moves PKT_START, the queue
+// took the command but never started the packet (framing / MAX_PKT / source-fetch issue); if
+// PKT_START moves but PKT_END/WORD don't, it stalls mid-drain. See tt-rdma-tx-ring-spec.md §9/§11.
+#define TT_ETH_TXQ_PKT_START_CNT 0x34u
+#define TT_ETH_TXQ_PKT_END_CNT 0x3Cu
+#define TT_ETH_TXQ_WORD_CNT 0x40u
+
 // ---- ETH_CTRL TXPKT_CFG rows: 10 rows, stride 0x80, row N = base + N*0x80 ----
 // (row2 INSERT_CTL is 0xFFB98300 in eth_core_a_reg.h -> row0 = 0xFFB98200.)
 #define TT_ETH_TXPKT_CFG0_BASE 0xFFB98200u
@@ -92,4 +101,16 @@ static inline void tt_rdma_send_raw(uint32_t q, uint32_t l1_src_byte_addr, uint3
     TT_ETH_REG32(qb + TT_ETH_TXQ_TRANSFER_START_ADDR) = l1_src_byte_addr;
     TT_ETH_REG32(qb + TT_ETH_TXQ_TRANSFER_SIZE_BYTES) = nbytes;
     TT_ETH_REG32(qb + TT_ETH_TXQ_CMD) = TT_ETH_TXQ_CMD_START_RAW;
+}
+
+// Snapshot the TX packet counters for queue q into out4 (an L1 dbg region the host reads back):
+//   out4[0]=PKT_START_CNT  out4[1]=PKT_END_CNT  out4[2]=WORD_CNT  out4[3]=STATUS
+// The kernel reads the TXQ register block directly (host NoC reads of 0xFFB9xxxx may not resolve),
+// so this L1 snapshot is the authoritative counter readback for the 0-wire-bytes diagnosis.
+static inline void tt_rdma_txq_snapshot(uint32_t q, volatile tt_l1_ptr uint32_t* out4) {
+    const uint32_t qb = TT_ETH_TXQ0_BASE + q * TT_ETH_TXQ_STRIDE;
+    out4[0] = TT_ETH_REG32(qb + TT_ETH_TXQ_PKT_START_CNT);
+    out4[1] = TT_ETH_REG32(qb + TT_ETH_TXQ_PKT_END_CNT);
+    out4[2] = TT_ETH_REG32(qb + TT_ETH_TXQ_WORD_CNT);
+    out4[3] = TT_ETH_REG32(qb + TT_ETH_TXQ_STATUS);
 }

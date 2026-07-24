@@ -82,6 +82,15 @@
 #define TT_RDMA_HB_ADDR (TT_RDMA_RCB_ADDR + 0x0u)    // heartbeat counter: kernel -> observer/host
 #define TT_RDMA_STOP_ADDR (TT_RDMA_RCB_ADDR + 0x4u)  // graceful-stop flag: host -> kernel (0=run, !=0=stop)
 
+// TXQ counter snapshot region (kernel -> host), inside RCB_SIZE (0x200). 8 u32 slots:
+//   [0..3] = BEFORE first arm : PKT_START, PKT_END, WORD, STATUS
+//   [4..7] = AFTER last arm   : PKT_START, PKT_END, WORD, STATUS
+// The host diffs these to see whether accepted CMDs ever START/END a packet (the 0-wire-bytes bug).
+#define TT_RDMA_DBG_OFF 0x40u
+#define TT_RDMA_DBG_ADDR (TT_RDMA_RCB_ADDR + TT_RDMA_DBG_OFF)
+#define TT_RDMA_DBG_BEFORE_ADDR (TT_RDMA_DBG_ADDR + 0x00u)  // 4 u32
+#define TT_RDMA_DBG_AFTER_ADDR (TT_RDMA_DBG_ADDR + 0x10u)   // 4 u32
+
 // TXQ the on-core RDMA kernel emits on. Base FW owns q0 (chip-info/telemetry), so RDMA uses a
 // separate queue + its own TXPKT_CFG row. Shared here (host-safe) so host tools can report it;
 // tt_rdma_eth_tx.h picks it up via its #ifndef guard.
