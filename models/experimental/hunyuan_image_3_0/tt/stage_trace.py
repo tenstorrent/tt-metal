@@ -572,8 +572,8 @@ class DenoiseStepTracer:
             if t is not None:
                 try:
                     ttnn.deallocate(t, force=False)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    print(f"[denoise] release deallocate {name}: {exc}", flush=True)
                 setattr(self, name, None)
 
 

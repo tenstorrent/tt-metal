@@ -73,7 +73,8 @@ def squeeze_temporal_tt(latents_bthwc: ttnn.Tensor) -> ttnn.Tensor:
 def latent_bthwc_to_patch_input(latents_bthwc: ttnn.Tensor) -> tuple[ttnn.Tensor, int, int, int]:
     """``[B,1,H,W,Z]`` BTHWC -> flat NHWC ``[1,1,B*H*W,Z]`` for ``HunyuanTtUNetDown``."""
     bsz, t_len, h, w, c = (int(latents_bthwc.shape[i]) for i in range(5))
-    assert c == Z_CHANNELS, f"expected Z={Z_CHANNELS}, got {c}"
+    if c != Z_CHANNELS:
+        raise ValueError(f"expected Z={Z_CHANNELS}, got {c}")
     if t_len != 1:
         latents_bthwc = squeeze_temporal_tt(latents_bthwc)
         bsz, t_len, h, w, c = (int(latents_bthwc.shape[i]) for i in range(5))
