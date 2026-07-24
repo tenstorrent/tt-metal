@@ -28,7 +28,7 @@ The complete evidence is in `bringup_log.md`, `ROOFLINE.md`, and
 
 ## Current ranked queue
 
-1. Batch dependency-compatible scan reads behind fewer barriers.
+1. Reorder scan reads into compute-consumption order.
 2. Fuse prep and scan into a bounded producer/consumer pipeline.
 3. Distributed-L1 affine prefix scan.
 
@@ -115,7 +115,7 @@ dependency-ordered NOC barrier batching and selective double buffering.
 Potential reward and implementation order are different. The recommended
 experimental sequence is:
 
-1. Dependency-ordered reader batching.
+1. Read tensors in compute-consumption order.
 2. Selective double buffering.
 3. Bounded prep-to-scan producer/consumer fusion.
 4. Distributed-L1 affine-prefix device prototype only if its storage and
@@ -134,6 +134,10 @@ For local scan changes, retain an experiment only when:
 ### A. Scan data movement and scheduling
 
 1. Batch dependency-compatible scan reads behind fewer NOC barriers.
+   - Experiment result, 2026-07-24: globally collapsing seven barriers into
+     one regressed T=640 wall `622.564 -> 638.924 us` (`+2.63%`) and
+     recurrence `144.945 -> 163.298 us` (`+12.66%`). It withholds all CBs
+     until the slowest read and destroys reader/compute streaming. Reject.
 2. Read tensors in compute-consumption order rather than declaration order.
 3. Double-buffer BF16 `kd`, `q_decay`, and `dl`.
 4. Extend double buffering to other inputs only after measuring L1 headroom.

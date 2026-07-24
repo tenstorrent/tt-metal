@@ -1166,3 +1166,21 @@
   neutral, so sender serialization plus runtime synchronization/fan-out is
   the supported cause. Static multicast leaves the ranked queue; barrier
   batching without inter-core synchronization is next.
+
+
+### 2026-07-24 18:00:01 UTC — Reject global scan-read barrier collapse
+
+- Hypothesis: issue all seven per-chunk input reads before one NoC barrier,
+  replacing seven read barriers without inter-core synchronization.
+- Build: `./build_metal.sh --build-tests --build-type Release` -> exit 0.
+- Target correctness with `QWEN_KDA_SCAN_BATCH_READS=1` -> PASS; output/state
+  PCC `0.999993/0.999995`.
+- Profile command: `QWEN_KDA_SCAN_BATCH_READS=1 PERF_TRACE=1 PERF_SEQ=640 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s` -> PASS.
+- CSV: `generated/profiler/reports/2026_07_24_17_59_57/ops_perf_results_2026_07_24_17_59_57.csv` (SHA-256 `6d1d105a6c4e802004c2e0436aeb80590ffb67d3a07777423295c4e123082b50`).
+- Result: wall regresses `622.564 -> 638.924 us` (`+16.360 us`, `+2.63%`);
+  recurrence regresses `144.945 -> 163.298 us` (`+12.66%`).
+- Root cause: compute consumes `kd`, `v_beta`, then `t_inv`, `q_decay`,
+  `intra`, `k_dec_t`, and `dl`. One global push withholds early `kd/v_beta`
+  until every later read completes, eliminating reader/compute streaming.
+- Verdict: reject and remove. Preserve per-input publication; test read ordering
+  that matches compute consumption next.
