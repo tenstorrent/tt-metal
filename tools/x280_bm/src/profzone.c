@@ -144,19 +144,23 @@ static inline void w32(uint64_t a, uint32_t v) { *(volatile uint32_t*)a = v; }
 static inline uint64_t r64(uint64_t a) { return *(volatile uint64_t*)a; }
 static inline void w64(uint64_t a, uint64_t v) { *(volatile uint64_t*)a = v; }
 
-/* Append a {START,END} span for `state` spanning [t0,t1] (X280 rdcycle) to this hart's zone buffer. Bounded. */
-static inline void hz_span(uint64_t base, uint32_t* n, uint32_t state, uint64_t t0, uint64_t t1) {
-    if (*n + 2u > HZ_CAP) {
-        return;
-    }
-    uint64_t off = base + 16 + (uint64_t)(*n) * 16;
-    w64(off, t0);
-    w32(off + 8, state | 0x80000000u); /* START */
-    w32(off + 12, 0);
-    w64(off + 16, t1);
-    w32(off + 24, state); /* END */
-    w32(off + 28, 0);
-    *n += 2;
+/* Append a {START,END} span for `state` spanning [t0,t1] (X280 rdcycle) to this hart's zone ring. The ring is
+ * CIRCULAR (HZ_CAP slots) and drained LIVE by the host: *prod is the running total marker count, published to
+ * base[0] each span; the host reads [tail,prod) and advances. Unbounded coverage as long as the host keeps up
+ * (hart markers are low-rate); if it falls >HZ_CAP behind, the host detects the lap and reports loss. */
+static inline void hz_span(uint64_t base, uint32_t* prod, uint32_t state, uint64_t t0, uint64_t t1) {
+    uint32_t p = *prod;
+    uint64_t o0 = base + 16 + (uint64_t)(p % HZ_CAP) * 16;
+    w64(o0, t0);
+    w32(o0 + 8, state | 0x80000000u); /* START */
+    w32(o0 + 12, 0);
+    uint32_t q = p + 1;
+    uint64_t o1 = base + 16 + (uint64_t)(q % HZ_CAP) * 16;
+    w64(o1, t1);
+    w32(o1 + 8, state); /* END */
+    w32(o1 + 12, 0);
+    *prod = p + 2;
+    w64(base, (uint64_t)(p + 2)); /* publish running count for the host poller */
 }
 static inline void fence_(void) { __asm__ volatile("fence iorw, iorw"); }
 static inline void cpu_pause(void) { __asm__ volatile("nop"); }

@@ -1347,6 +1347,13 @@ int main(int argc, char** argv) {
     };
 #endif
 
+    // --hartzones: per-hart raw marker buffers (interleaved [ts, tag] as u64), filled LIVE by a poller thread
+    // that empties each hart's circular LIM ring during the run (LIM is too small to hold a whole run). Mapped
+    // + pushed to Tracy at teardown. hz_lost counts markers dropped if the poller ever fell >ring behind.
+    std::vector<std::vector<uint64_t>> hz_raw(nharts);
+    std::atomic<uint64_t> hz_lost{0};
+    std::thread hz_poller;
+
     std::vector<std::thread> flushers, mconsumers;  // --mpmc threads
 
     // One host thread PER ring (default) -> ring 1 is never ack-starved by ring 0's servicing. --rrconsumer
@@ -1359,6 +1366,48 @@ int main(int argc, char** argv) {
             for (uint64_t h = 0; h < ndh; h++) {
                 flushers.emplace_back(flusher, std::ref(node[n]), h);
             }
+        }
+        // --hartzones poller: drain each hart's circular zone ring (node[0]) into hz_raw until device_done, then
+        // one final pass. Low-rate, so a 500 us poll easily outpaces the harts (ring = kProfzoneHZoneCap markers).
+        if (do_hartzones) {
+            hz_poller = std::thread([&]() {
+                const uint64_t CAP = pz::kProfzoneHZoneCap;
+                std::vector<uint64_t> tail(nharts, 0), buf;
+                bool last = false;
+                for (;;) {
+                    bool done = device_done.load();
+                    for (uint64_t h = 0; h < nharts; h++) {
+                        uint64_t hb = pz::kProfzoneHZoneBase + h * pz::kProfzoneHZoneStride;
+                        uint64_t prod = drv.lim_rd_u64(hb);
+                        if (prod <= tail[h]) {
+                            continue;
+                        }
+                        uint64_t avail = prod - tail[h];
+                        if (avail > CAP) {  // poller lapped -> lost the oldest (avail-CAP) markers
+                            hz_lost.fetch_add(avail - CAP);
+                            tail[h] = prod - CAP;
+                            avail = CAP;
+                        }
+                        uint64_t s = tail[h] % CAP;
+                        uint64_t first = std::min<uint64_t>(avail, CAP - s);
+                        buf.resize(avail * 2);  // 2 u64/marker (ts, tag|pad)
+                        drv.read_block(buf.data(), (uint32_t)(first * 16), hb + 16 + s * 16);
+                        if (avail > first) {
+                            drv.read_block(buf.data() + first * 2, (uint32_t)((avail - first) * 16), hb + 16);
+                        }
+                        hz_raw[h].insert(hz_raw[h].end(), buf.begin(), buf.begin() + (size_t)(avail * 2));
+                        tail[h] = prod;
+                    }
+                    if (last) {
+                        break;
+                    }
+                    if (done) {
+                        last = true;  // one more full drain pass after the device is done, then stop
+                    } else {
+                        std::this_thread::sleep_for(std::chrono::microseconds(500));
+                    }
+                }
+            });
         }
         if (do_pin) {
             for (size_t f = 0; f < flushers.size(); f++) {
@@ -1594,6 +1643,9 @@ int main(int argc, char** argv) {
         for (auto& t : mconsumers) {
             t.join();
         }
+        if (hz_poller.joinable()) {
+            hz_poller.join();  // device_done is set -> poller does its final drain pass, then exits
+        }
         if (do_csv) {
             // POST-drain CSV write, off the hot path: format rows into a reused buffer and fwrite in ~1 MB
             // chunks (the "large batches"). No back-pressure risk -- the device is already idle here.
@@ -1678,20 +1730,22 @@ int main(int argc, char** argv) {
                 a,
                 (uint32_t)l2t.x,
                 (uint32_t)l2t.y);
+            if (hz_lost.load()) {
+                printf("  [warn] poller fell behind: %llu markers dropped\n", (unsigned long long)hz_lost.load());
+            }
             for (uint64_t h = 0; h < nharts; h++) {
-                uint64_t hb = pz::kProfzoneHZoneBase + h * pz::kProfzoneHZoneStride;
-                uint64_t cnt = drv.lim_rd_u64(hb);
                 const char* role = (h < nread) ? "READ" : "RELAY";
-                if (cnt == 0 || cnt > pz::kProfzoneHZoneCap) {
-                    printf(
-                        "  hart%llu (%s): %llu markers (empty/overflow)\n",
-                        (unsigned long long)h,
-                        role,
-                        (unsigned long long)cnt);
+                // Per-hart zone name so each lane self-identifies by role+index (the lane HEADER itself is
+                // BRISC/NCRISC/TRISC0/1 -- GUI-derived from the risc bits, not settable client-side). Mapping:
+                // BRISC=rd0, NCRISC=rd1, TRISC_0=relay0, TRISC_1=relay1.
+                std::string hname =
+                    (h < nread) ? ("X280-rd" + std::to_string(h)) : ("X280-relay" + std::to_string(h - nread));
+                const std::vector<uint64_t>& mk = hz_raw[h];  // poller-collected [ts, tag] pairs (full run)
+                uint64_t cnt = mk.size() / 2;                 // markers
+                if (cnt == 0) {
+                    printf("  hart%llu (%s): 0 markers\n", (unsigned long long)h, role);
                     continue;
                 }
-                std::vector<uint64_t> mk(cnt * 2);
-                drv.read_block(mk.data(), (uint32_t)(cnt * 16), hb + 16);
                 uint64_t busy_ns = 0;
                 uint32_t nz = 0;
                 for (uint64_t i = 0; i + 1 < cnt; i += 2) {
@@ -1707,7 +1761,7 @@ int main(int argc, char** argv) {
                         zp.core_noc0_x = (uint32_t)l2t.x;
                         zp.core_noc0_y = (uint32_t)l2t.y;
                         zp.risc = (uint32_t)h;  // hart index -> lane within the X280 context
-                        zp.name = (h < nread) ? "X280-READ" : "X280-RELAY";
+                        zp.name = hname;        // per-hart role+index (self-labels the lane's zones)
                         zp.timestamp = (ts0 >= x280_ts_base) ? ts0 - x280_ts_base : 0;
                         zp.is_start = true;
                         tracy_handler->HandleWorkerZone(zp);

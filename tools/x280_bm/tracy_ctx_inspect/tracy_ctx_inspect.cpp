@@ -177,6 +177,13 @@ int main(int argc, char** argv) {
                     }
                 }
             }
+            // Dump each lane's top zone names for any X280 context -> verify per-hart labels (X280-rd0, ...).
+            if (nm && strstr(nm, "X280")) {
+                for (const auto& td : c->threadData) {
+                    printf("  --- X280 lane tid=%llu top zones ---\n", (unsigned long long)td.first);
+                    sample_top_zones(worker, td.second.timeline, 3);
+                }
+            }
             static bool sampled = false;
             if (!sampled && c->threadData.size() >= 5) {
                 sampled = true;
