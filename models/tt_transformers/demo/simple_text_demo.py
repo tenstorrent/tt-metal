@@ -1050,6 +1050,11 @@ def test_demo_text(
     # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
     # If batch_size=1, the same prompt is repeated for each batch
 
+    # Time the model build. On a cold cache this includes the host HF weight load; on a warm
+    # ttnn cache that load is skipped (see create_tt_model / weight_cache_is_complete), so the
+    # cold-vs-warm delta of this segment is the host time saved per run. Flows through
+    # create_benchmark_data into the models-ci dashboard.
+    profiler.start("load_weights")
     (
         model_args,
         model,
@@ -1073,6 +1078,8 @@ def test_demo_text(
         use_prefetcher=use_prefetcher,
         use_hf_rope=use_hf_rope,
     )
+    profiler.end("load_weights")
+    logger.info(f"Model build (load_weights) took {profiler.get_duration('load_weights'):.2f}s")
 
     global_batch_size = batch_size * local_data_parallel
     input_prompts = select_local_data_parallel_items(input_prompts, batch_size, data_parallel, local_submesh_indices)
@@ -1566,6 +1573,18 @@ def test_demo_text(
         # Instead of running warmup iterations, the demo profiles the initial compile iteration
         bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 1}
         benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
+
+        # Model-build time (cold = incl. host HF weight load; warm ttnn cache = load skipped).
+        # The cold-vs-warm delta of this KPI is the host time saved by the warm-cache skip (#45400).
+        benchmark_data.add_measurement(
+            profiler,
+            0,
+            "load_weights",
+            "time(s)",
+            profiler.get_duration("load_weights"),
+            step_warm_up_num_iterations=None,
+            target=None,
+        )
 
         if not token_accuracy:
             # Save the decode performance of every iteration for plotting in superset

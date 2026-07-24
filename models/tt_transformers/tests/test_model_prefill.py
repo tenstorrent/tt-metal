@@ -200,6 +200,11 @@ def test_model_inference(
     # Load reference model
     if run_ref_pt:
         logger.info("Loading reference model...")
+        # On a warm ttnn cache, create_tt_model defers the HF load and returns state_dict={}.
+        # The host reference embedding below still needs the real weights, so load them here
+        # (only when a reference run is requested -- perf-only runs keep the warm-cache skip).
+        if not state_dict:
+            state_dict = model_args.load_state_dict()
         state_dict_prefix = model_args.get_state_dict_prefix("", None)
         reference_model = model_args.reference_transformer(load_checkpoint=True)
         # Embedding on host
