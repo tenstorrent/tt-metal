@@ -192,7 +192,6 @@ void kernel_main() {
 #ifdef CAUSAL_MASK
         cb_fused_attn_obj.pop_front(block_w);
 #endif
-        reconfig_data_format(cb_exps, cb_sum_scaler);
 
 #else
 
