@@ -164,6 +164,29 @@ def test_low_confidence_category_only_for_ambiguous_tags():
     assert _is_low_confidence_category("text-to-audio", None, True) is False  # arch confirms
 
 
+def test_bytes_per_param_from_safetensors_header(monkeypatch):
+    # issue #7: dtype (and thus param count) read from the actual safetensors header,
+    # so an fp32 repo with no config torch_dtype isn't 2x-overcounted as bf16.
+    import huggingface_hub
+
+    from scripts.tt_hw_planner import probe as pr
+
+    class _T:
+        def __init__(self, d):
+            self.dtype = d
+
+    class _MD:
+        tensors = {"a": _T("F32"), "b": _T("F32"), "c": _T("I32")}  # dominant float = F32; int skipped
+
+    class _Api:
+        def parse_safetensors_file_metadata(self, mid, fn):
+            return _MD()
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", lambda: _Api())
+    assert pr._bytes_per_param_from_safetensors("m", ["x.safetensors"]) == (4, True, "fp32")
+    assert pr._bytes_per_param_from_safetensors("m", []) == (None, False, None)
+
+
 def test_xtts_v2_is_in_tts_bucket():
     from scripts.tt_hw_planner.family_backends import backends_for_category
 

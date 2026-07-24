@@ -359,6 +359,42 @@ def _bytes_per_param_from_config(model_id: str) -> Tuple[int, bool]:
     return 2, False
 
 
+_SF_DTYPE_BYTES = {"F64": 8, "F32": 4, "F16": 2, "BF16": 2, "F8_E4M3": 1, "F8_E5M2": 1}
+_SF_DTYPE_PRETTY = {
+    "F64": "fp64",
+    "F32": "fp32",
+    "F16": "fp16",
+    "BF16": "bf16",
+    "F8_E4M3": "fp8_e4m3",
+    "F8_E5M2": "fp8_e5m2",
+}
+
+
+def _bytes_per_param_from_safetensors(model_id: str, sf_files: List[str]) -> Tuple[Optional[int], bool, Optional[str]]:
+    """Bytes-per-param from the DOMINANT float weight dtype in an actual safetensors
+    file HEADER — the on-disk ground truth. Reads ONE file's header only (no weight
+    download). Handles composite / no-index repos where config torch_dtype is absent
+    (e.g. LongCat-Video, fp32 weights under dit/). Returns ``(bytes, True)`` or
+    ``(None, False)`` when unreadable. Never raises."""
+    if not sf_files:
+        return None, False, None
+    try:
+        from huggingface_hub import HfApi
+
+        md = HfApi().parse_safetensors_file_metadata(model_id, sf_files[0])
+    except Exception:
+        return None, False, None
+    counts: dict = {}
+    for t in md.tensors.values():
+        dt = str(getattr(t, "dtype", ""))
+        if dt in _SF_DTYPE_BYTES:
+            counts[dt] = counts.get(dt, 0) + 1
+    if not counts:
+        return None, False, None
+    dom = max(counts, key=counts.get)
+    return _SF_DTYPE_BYTES[dom], True, _SF_DTYPE_PRETTY.get(dom, dom.lower())
+
+
 def _maybe_fetch_config(model_id: str) -> Optional[dict]:
     safe_id = _validate_hf_id(model_id)
     try:
@@ -538,13 +574,23 @@ def probe_model(model_id: str) -> ModelProbe:
     canonical_dtype, pretty_dtype, total_params, bytes_per_param = _dominant_dtype(parameters, weight_bytes)
     if total_params is None and weight_bytes > 0:
         _bpp, _confident = _bytes_per_param_from_config(model_id)
+        _src = "config torch_dtype"
+        _hdr_pretty = None
+        if not _confident:
+            _sf = [s.rfilename for s in info.siblings if str(s.rfilename).endswith(".safetensors")]
+            _sf_bpp, _sf_conf, _hdr_pretty = _bytes_per_param_from_safetensors(model_id, _sf)
+            if _sf_conf:
+                _bpp, _confident, _src = _sf_bpp, True, "safetensors header"
         total_params = weight_bytes // _bpp
         bytes_per_param = float(_bpp)
+        _base = _hdr_pretty if _hdr_pretty else pretty_dtype
         pretty_dtype = (
-            f"{pretty_dtype} (param count est. from config torch_dtype, {_bpp} B/param)"
+            f"{_base} (param count est. from {_src}, {_bpp} B/param)"
             if _confident
             else f"{pretty_dtype} (param count est., dtype unknown — assumed bf16, low confidence)"
         )
+        if _hdr_pretty and _confident:
+            canonical_dtype = _hdr_pretty
 
     category = _classify_category(info.pipeline_tag, info.tags or [], info.library_name)
 
