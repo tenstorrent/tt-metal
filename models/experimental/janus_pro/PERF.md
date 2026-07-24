@@ -44,20 +44,29 @@ values and are **not** valid perf figures.
 
 ## Vision perf (vision tower + LLaMA decode path)
 
-This is the **perf test** — the vision perf benchmark (`-k "trace and single"`,
-tracing **on**), single image. No reference-token accuracy for the multimodal
-path (image-conditioned generation); functional output is verified by inspection.
+This is the **perf test** — the vision perf benchmark, tracing **on**, covering
+both single-image and multi-image prompts. No reference-token accuracy for the
+multimodal path (image-conditioned generation); functional output is verified by
+inspection.
 
 | Model        | Device | Build   | Scenario | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
 |--------------|--------|---------|----------|-----------|-----------|---------------|-----------|
 | Janus-Pro-7B | N150   | Debug   | OCR      | N/A       | N/A       | 17.73         | 1439.6    |
 | Janus-Pro-7B | N150   | Release | haiku    | N/A       | N/A       | 15.12         | 554.2     |
 | Janus-Pro-7B | N150   | Release | OCR      | N/A       | N/A       | 17.93         | 763.5     |
+| Janus-Pro-7B | N150   | Release | multi    | N/A       | N/A       | 12.94         | 1609.4    |
 
 Only the **Release** rows are valid performance figures; the **Debug** row is kept
 for reference (only the OCR scenario was captured for the Debug run). All rows use
-tracing **on**; scenarios are the two default single-image prompts (haiku on
-`dog.jpg`, OCR on `ocr_image.jpeg`).
+tracing **on**. Scenarios: the two default single-image prompts (haiku on
+`dog.jpg`, OCR on `ocr_image.jpeg`) and the multi-image prompt (`dog.jpg` +
+`ocr_image.jpeg` fed as one prompt, "Describe each of these images in one
+sentence.").
+
+The multi-image row runs a single parametrization; select it with
+`-k "trace-multi and not notrace"`. Note `-k "trace and multi"` is too loose —
+`multi` matches `multimodal` in the test function name and `trace` is a substring
+of `notrace`, so it also runs the single-image and notrace cases.
 
 Comparing the same scenario (OCR) across builds: **decode speed is nearly
 identical** (Debug 17.73 vs Release 17.93) because the traced decode loop is
@@ -66,7 +75,13 @@ matters. **TTFT roughly halves** on Release (1439.6 → 763.5) because prefill r
 **notrace** (host-dispatched) and a Release build cuts that host overhead. TTFT
 includes the vision tower + prefill over the ~596-token image+prompt sequence.
 
+The **multi** row is slower on both axes than the single-image rows: **decode
+12.94 vs ~15–18 t/s/u** because two images push the prefill to ~1172 tokens, so
+the traced decode attends over a longer KV cache each step; and **TTFT 1609.4 ms
+vs ~554–763 ms** because prefill covers roughly double the sequence (two image
+placeholder blocks + prompt).
+
 Not directly comparable to Gemma-3's published vision perf, which is measured
 **multi-image** (`batch1-multi-image-trace`, 8 images per prompt) in a tunable
-`performance` precision mode. Janus here is **single-image** at its one fixed
-precision (`-k "trace and single"`); a multi-image run is not yet validated.
+`performance` precision mode. Janus multi-image is validated here with **2 images**
+per prompt at its one fixed precision; Gemma-3 uses 8.
