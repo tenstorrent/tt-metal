@@ -5,26 +5,27 @@
 /*
 Function reads from RM and writes to RM
 
-Assumptions:
-
-Compile arguments
-0. src0_is_dram: 1 if source is dram else 0
-1. read_size_is_pow2: 1 if read size is power of 2 else 0
-2. log_base_2_of_page_size: log base 2 of page size
-3. write_size_is_pow2: 1 if write size is power of 2 else 0
-4. log_base_2_of_page_size: log base 2 of page size
-5. needs_read_allignment: 1 if read needs alignment else 0
-//Needed if BRAM and page size is not multiple of 64 bytes
+Compile-time arguments
+0. src_aligned_to_64
+1. src_aligned_to_16
+2. cb_id_in0
+3. cb_id_in1
+4. source_page_size_bytes
+5. dest_page_size_bytes
+6. num_dest_write_slots
+7. dest_slot_size_bytes
+8. dest_write_size_bytes
+9+. TensorAccessorArgs for src, then dst
 
 Runtime arguments
-0. src_addr: source address
-1. dst_addr: destination address
-2. source_read_size_bytes: source read size in bytes
-3. read_start_page: read start page
-4. read_end_page: read end page
-5. write_start_page: write start page
-6. write_start_offset: write start offset
-7. nop: 1 if this core should be skipped
+0. src_addr
+1. dst_addr
+2. source_read_size_bytes
+3. read_start_page
+4. read_end_page
+5. write_start_page
+6. write_start_offset
+7. nop
 */
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -33,6 +34,19 @@ Runtime arguments
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/debug/dprint.h"  // required in all kernels using DPRINT
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+
+FORCE_INLINE void acquire_dest_slot(Noc noc, uint32_t& slots_in_flight, const uint32_t num_dest_write_slots) {
+    if (slots_in_flight >= num_dest_write_slots) {
+        noc.async_write_barrier();
+        slots_in_flight = 0;
+    }
+}
+
+FORCE_INLINE void advance_dest_slot(
+    uint32_t& dest_slot, uint32_t& slots_in_flight, const uint32_t num_dest_write_slots) {
+    slots_in_flight++;
+    dest_slot = (dest_slot + 1) % num_dest_write_slots;
+}
 
 void kernel_main() {
     // We are guaranteed to be in 2D going to 2D
@@ -54,7 +68,10 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(3);
     constexpr uint32_t source_page_size_bytes = get_compile_time_arg_val(4);
     constexpr uint32_t dest_page_size_bytes = get_compile_time_arg_val(5);
-    constexpr auto src_args = TensorAccessorArgs<6>();
+    constexpr uint32_t num_dest_write_slots = get_compile_time_arg_val(6);
+    constexpr uint32_t dest_slot_size_bytes = get_compile_time_arg_val(7);
+    constexpr uint32_t dest_write_size_bytes = get_compile_time_arg_val(8);
+    constexpr auto src_args = TensorAccessorArgs<9>();
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
     // Since we need to operate on a grid of cores but sometimes pages don't split properly, if nop then don't use this
@@ -73,10 +90,8 @@ void kernel_main() {
     uint32_t write_page = write_start_page;
     uint32_t readable = 0;
     uint32_t end_to_write = 0;
-    uint32_t transaction = 0;
     uint32_t writable = dest_page_size_bytes - write_start_offset;
-    // cb_id_in0 is a CB source_read_size_bytes page size, 1 page
-    // cb_id_in1 is a CB dest_page_size_bytes + allignment_to_64 page size, 1 page
+    // Ring base from DataflowBuffer; slot offsets applied manually below.
     cb_in0.reserve_back(1);
     cb_in1.reserve_back(1);
     const uint32_t source_buffer = cb_in0.get_write_ptr();
@@ -89,6 +104,10 @@ void kernel_main() {
     uint64_t begin_write_offset = write_offset;
     constexpr bool can_be_clean = ((source_page_size_bytes % 16) == 0 && (dest_page_size_bytes % 16) == 0);
     uint64_t dst_noc_addr_offset = 0;
+
+    uint32_t dest_slot = 0;
+    uint32_t slots_in_flight = 0;
+
     for (uint32_t i = read_start_page; i < read_end_page; i++) {
         // Drain any prior iteration's writes that read source_buffer before this iteration's read
         // overwrites it: source_buffer is a single fixed CB slot reused every iteration, and the
@@ -119,18 +138,24 @@ void kernel_main() {
 
         // Write to dest
         while (readable > 0) {
-            noc.async_write_barrier();
+            if constexpr (can_be_clean) {
+                noc.async_write_barrier();
+            }
             if (readable < writable) {
                 if constexpr (can_be_clean) {
                     tt::data_movement::common::enhanced_noc_async_write<dest_page_size_bytes, false>(
                         noc, source_buffer + read_offset, dst_noc_addr + dst_noc_addr_offset, readable);
                     dst_noc_addr_offset = dst_noc_addr_offset + readable;
                 } else {
-                    tt::data_movement::common::tt_memmove<false, true, false, dest_page_size_bytes>(
-                        noc, dest_buffer + write_offset, source_buffer + read_offset, readable);
+                    acquire_dest_slot(noc, slots_in_flight, num_dest_write_slots);
+                    const uint32_t slot_base = dest_buffer + dest_slot * dest_slot_size_bytes;
+                    // use_read_datamover=true: sync via read barrier so prior DRAM dest writes stay in flight.
+                    tt::data_movement::common::tt_memmove<false, false, true, dest_page_size_bytes>(
+                        noc, slot_base + write_offset, source_buffer + read_offset, readable);
                     if (i == read_end_page - 1) {
-                        tt::data_movement::common::enhanced_noc_async_write<dest_page_size_bytes, false>(
-                            noc, dest_buffer + begin_write_offset, dst_noc_addr, end_to_write);
+                        const uint32_t bytes_to_flush = end_to_write + readable;
+                        tt::data_movement::common::enhanced_noc_async_write<dest_write_size_bytes, false>(
+                            noc, slot_base + begin_write_offset, dst_noc_addr, bytes_to_flush);
                         noc.async_write_barrier();
                         return;
                     }
@@ -145,10 +170,14 @@ void kernel_main() {
                     tt::data_movement::common::enhanced_noc_async_write<dest_page_size_bytes, false>(
                         noc, source_buffer + read_offset, dst_noc_addr + dst_noc_addr_offset, readable);
                 } else {
-                    tt::data_movement::common::tt_memmove<false, false, false, dest_page_size_bytes>(
-                        noc, dest_buffer + write_offset, source_buffer + read_offset, readable);
-                    tt::data_movement::common::enhanced_noc_async_write<dest_page_size_bytes, false>(
-                        noc, dest_buffer + begin_write_offset, dst_noc_addr, dest_page_size_bytes);
+                    acquire_dest_slot(noc, slots_in_flight, num_dest_write_slots);
+                    const uint32_t slot_base = dest_buffer + dest_slot * dest_slot_size_bytes;
+                    // use_read_datamover=true: sync via read barrier so prior DRAM dest writes stay in flight.
+                    tt::data_movement::common::tt_memmove<false, false, true, dest_page_size_bytes>(
+                        noc, slot_base + write_offset, source_buffer + read_offset, readable);
+                    tt::data_movement::common::enhanced_noc_async_write<dest_write_size_bytes, false>(
+                        noc, slot_base + begin_write_offset, dst_noc_addr, dest_write_size_bytes);
+                    advance_dest_slot(dest_slot, slots_in_flight, num_dest_write_slots);
                 }
                 dst_noc_addr_offset = 0;
 
@@ -170,10 +199,14 @@ void kernel_main() {
                     tt::data_movement::common::enhanced_noc_async_write<dest_page_size_bytes, false>(
                         noc, source_buffer + read_offset, dst_noc_addr + dst_noc_addr_offset, writable);
                 } else {
-                    tt::data_movement::common::tt_memmove<false, false, false, dest_page_size_bytes>(
-                        noc, dest_buffer + write_offset, source_buffer + read_offset, writable);
-                    tt::data_movement::common::enhanced_noc_async_write<dest_page_size_bytes, false>(
-                        noc, dest_buffer + begin_write_offset, dst_noc_addr, dest_page_size_bytes);
+                    acquire_dest_slot(noc, slots_in_flight, num_dest_write_slots);
+                    const uint32_t slot_base = dest_buffer + dest_slot * dest_slot_size_bytes;
+                    // use_read_datamover=true: sync via read barrier so prior DRAM dest writes stay in flight.
+                    tt::data_movement::common::tt_memmove<false, false, true, dest_page_size_bytes>(
+                        noc, slot_base + write_offset, source_buffer + read_offset, writable);
+                    tt::data_movement::common::enhanced_noc_async_write<dest_write_size_bytes, false>(
+                        noc, slot_base + begin_write_offset, dst_noc_addr, dest_write_size_bytes);
+                    advance_dest_slot(dest_slot, slots_in_flight, num_dest_write_slots);
                 }
                 // writable < readable
                 readable = readable - writable;

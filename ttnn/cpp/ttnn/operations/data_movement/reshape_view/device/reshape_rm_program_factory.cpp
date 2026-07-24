@@ -4,9 +4,13 @@
 
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_row_major_program_factory.hpp"
 
+#include <algorithm>
+
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 #define MASK_64 0xFFFFFFFFFFFFFFC0
 #define MASK_16 0xFFFFFFFFFFFFFFF0
@@ -14,6 +18,43 @@
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
+
+namespace {
+constexpr uint32_t kSmallDestWriteSlots = 8;
+
+// Kept local (not a shared header): Quasar's factory is an intentional mirror of this
+// file; a cross-op helper would only dedupe ~30 lines and add CMake/packaging coupling.
+// Non-clean dest staging uses a multi-slot L1 ring. Cap slots by per-core L1 budget so
+// wide odd destinations (e.g. bf16 width 100001 from #50191) still fit.
+uint32_t choose_num_dest_write_slots(
+    IDevice* device,
+    bool pages_16b_aligned,
+    bool can_use_dual_kernel,
+    uint32_t cb_size0,
+    uint32_t dest_slot_size_bytes) {
+    if (pages_16b_aligned) {
+        return 1u;
+    }
+
+    const uint32_t l1_reserved = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t l1_size = device->l1_size_per_core();
+    TT_FATAL(l1_size > l1_reserved, "L1 size ({}) must exceed reserved base ({})", l1_size, l1_reserved);
+    const uint32_t l1_available = l1_size - l1_reserved;
+
+    const uint32_t num_kernel_copies = can_use_dual_kernel ? 2u : 1u;
+    const uint32_t source_cb_bytes = cb_size0 * 2u * num_kernel_copies;
+    const uint32_t min_dest_cb_bytes = dest_slot_size_bytes * num_kernel_copies;
+    TT_FATAL(
+        l1_available >= source_cb_bytes + min_dest_cb_bytes,
+        "RM reshape dest staging does not fit in L1: need at least {} B dest + {} B source, have {} B",
+        min_dest_cb_bytes,
+        source_cb_bytes,
+        l1_available);
+
+    const uint32_t max_slots = (l1_available - source_cb_bytes) / (dest_slot_size_bytes * num_kernel_copies);
+    return std::max(1u, std::min(kSmallDestWriteSlots, max_slots));
+}
+}  // namespace
 
 ProgramDescriptor ReshapeViewRMProgramFactory::create_descriptor(
     const ReshapeViewParams& operation_attributes, const ReshapeViewInputs& tensor_args, Tensor& tensor_return_value) {
@@ -56,10 +97,23 @@ ProgramDescriptor ReshapeViewRMProgramFactory::create_descriptor(
         responsibility++;
     }
     const uint32_t cb_size0 = source_read_size_bytes;
-    const uint32_t cb_size1 = ((dest_page_size_bytes - 1) & MASK_64) + 80;
+    const uint32_t dest_slot_size_bytes = ((dest_page_size_bytes - 1) & MASK_64) + 80;
 
-    bool can_use_dual_kernel =
+    const bool pages_16b_aligned = (source_page_size_bytes % 16 == 0) && (dest_page_size_bytes % 16 == 0);
+    const bool pages_divisible =
         (source_page_size_bytes % dest_page_size_bytes == 0 || dest_page_size_bytes % source_page_size_bytes == 0);
+    // Avoid dual-kernel on non-aligned DRAM dests (Blackhole SYS-1419 / #50191).
+    const bool can_use_dual_kernel = pages_divisible && (pages_16b_aligned || !dst_buffer->is_dram());
+
+    const uint32_t num_dest_write_slots =
+        choose_num_dest_write_slots(device, pages_16b_aligned, can_use_dual_kernel, cb_size0, dest_slot_size_bytes);
+    const uint32_t cb_size1 = dest_slot_size_bytes * num_dest_write_slots;
+
+    const uint32_t write_alignment =
+        dst_buffer->is_dram() ? tt::tt_metal::hal::get_dram_alignment() : tt::tt_metal::hal::get_l1_alignment();
+    const uint32_t noc_write_align = std::min(write_alignment, tt::tt_metal::hal::get_l1_alignment());
+    const uint32_t dest_write_size_bytes =
+        pages_16b_aligned ? dest_page_size_bytes : tt::align(dest_page_size_bytes, noc_write_align);
 
     constexpr uint32_t src0_cb_index = 0;
     constexpr uint32_t src1_cb_index = 1;
@@ -93,7 +147,10 @@ ProgramDescriptor ReshapeViewRMProgramFactory::create_descriptor(
         src0_cb_index,
         src1_cb_index,
         source_page_size_bytes,
-        dest_page_size_bytes};
+        dest_page_size_bytes,
+        num_dest_write_slots,
+        dest_slot_size_bytes,
+        dest_write_size_bytes};
     TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
     TensorAccessorArgs(*dst_buffer).append_to(compile_time_args);
 

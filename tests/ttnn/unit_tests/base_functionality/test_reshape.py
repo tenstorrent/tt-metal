@@ -4,7 +4,6 @@
 
 import math
 import pytest
-
 import torch
 
 import ttnn
@@ -934,3 +933,283 @@ def test_reshape_rm_interleaved_wide_multi_page(device, input_shape, output_shap
     )
     y = ttnn.reshape(x, output_shape)
     assert_equal(t.reshape(*output_shape), ttnn.to_torch(y))
+
+
+@pytest.mark.parametrize(
+    "rows,cols",
+    [
+        # dest_page_size = 1 * sizeof(bf16) = 2B — non-clean RM reshape path (issue #50191).
+        (64, 65),
+        (128, 33),
+        (32, 17),
+    ],
+)
+def test_reshape_rm_unit_last_dim_dram(device, rows, cols):
+    """ROW_MAJOR reshape to [N, 1] on interleaved DRAM must not hang and must be correct.
+
+    Regression for https://github.com/tenstorrent/tt-metal/issues/50191: previously the
+    dual-kernel non-clean path issued millions of barriered 2-byte DRAM writes and could
+    hard-deadlock Blackhole (SYS-1419). Shape is smaller than the issue repro but still
+    hits dest_page_size_bytes=2; loop a few times to catch intermittent hangs.
+    """
+    torch.manual_seed(0)
+    torch_input = torch.randn((rows, cols), dtype=torch.bfloat16)
+    n = rows * cols
+    torch_expected = torch_input.reshape(n, 1)
+
+    for _ in range(8):
+        tt_input = ttnn.from_torch(
+            torch_input,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tt_out = ttnn.reshape(tt_input, (n, 1))
+        ttnn.synchronize_device(device)
+        actual = ttnn.to_torch(tt_out)
+        assert_equal(torch_expected, actual)
+        ttnn.deallocate(tt_out)
+        ttnn.deallocate(tt_input)
+
+
+def test_reshape_rm_unit_last_dim_matches_row_shape(device):
+    """[N, 1] and [1, N] RM reshapes must both agree with torch for the same volume."""
+    torch.manual_seed(1)
+    rows, cols = 48, 25
+    torch_input = torch.arange(rows * cols, dtype=torch.bfloat16).reshape(rows, cols)
+    n = rows * cols
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    col = ttnn.to_torch(ttnn.reshape(tt_input, (n, 1)))
+    row = ttnn.to_torch(ttnn.reshape(tt_input, (1, n)))
+    assert_equal(torch_input.reshape(n, 1), col)
+    assert_equal(torch_input.reshape(1, n), row)
+
+
+@pytest.mark.parametrize(
+    "input_shape,output_shape",
+    [
+        # Non-unit last dim, not 16B-aligned (bf16). Cover both non-clean branches:
+        # - accumulate: readable < writable (narrow → wide; needs multiple src pages per dest)
+        # - drain:      readable > writable (wide → narrow; src_page % dest_page == 0)
+        # Accumulate is the path that previously relied on a per-iteration barrier (#50191).
+        ((96, 3), (32, 9)),  # src=6B, dest=18B — accumulate across source pages
+        ((80, 5), (40, 10)),  # src=10B, dest=20B — accumulate
+        ((32, 9), (96, 3)),  # src=18B, dest=6B — drain
+        ((40, 10), (80, 5)),  # src=20B, dest=10B — drain
+        ((16, 15), (80, 3)),  # src=30B, dest=6B — drain
+    ],
+    ids=[
+        "accumulate_6_to_18",
+        "accumulate_10_to_20",
+        "drain_18_to_6",
+        "drain_20_to_10",
+        "drain_30_to_6",
+    ],
+)
+def test_reshape_rm_nonclean_misaligned_last_dim(device, input_shape, output_shape):
+    """Non-clean RM DRAM reshape with odd last dims must stay bit-exact (#50191 follow-up)."""
+    torch.manual_seed(2)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_out = ttnn.reshape(tt_input, output_shape)
+    ttnn.synchronize_device(device)
+    assert_equal(torch_input.reshape(output_shape), ttnn.to_torch(tt_out))
+
+
+@pytest.mark.parametrize(
+    "input_shape,output_shape",
+    [
+        # Divisible, non-16B-aligned pages on interleaved L1 — dual-kernel path stays enabled
+        # (unlike DRAM, where dual-kernel is disabled for non-aligned dests).
+        ((96, 3), (32, 9)),  # src=6B, dest=18B — accumulate
+        ((32, 9), (96, 3)),  # src=18B, dest=6B — drain
+    ],
+    ids=["l1_accumulate_6_to_18", "l1_drain_18_to_6"],
+)
+def test_reshape_rm_nonclean_misaligned_l1_dual_kernel(device, input_shape, output_shape):
+    """Non-clean RM interleaved-L1 reshape must stay correct with dual kernels (#50191)."""
+    torch.manual_seed(5)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    tt_out = ttnn.reshape(tt_input, output_shape, memory_config=ttnn.L1_MEMORY_CONFIG)
+    ttnn.synchronize_device(device)
+    assert_equal(torch_input.reshape(output_shape), ttnn.to_torch(tt_out))
+
+
+@pytest.mark.parametrize(
+    "input_shape,output_shape",
+    [
+        ((96, 3), (32, 9)),
+        ((32, 9), (96, 3)),
+    ],
+    ids=["l1_accumulate_6_to_18", "l1_drain_18_to_6"],
+)
+def test_quasar_reshape_rm_nonclean_misaligned_l1_dual_kernel(device, input_shape, output_shape):
+    """Quasar non-clean RM interleaved-L1 reshape must stay correct with dual kernels (#50191)."""
+    torch.manual_seed(6)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    tt_out = ttnn.experimental.quasar.reshape(tt_input, output_shape, memory_config=ttnn.L1_MEMORY_CONFIG)
+    ttnn.synchronize_device(device)
+    assert_equal(torch_input.reshape(output_shape), ttnn.to_torch(tt_out))
+
+
+@pytest.mark.parametrize(
+    "input_shape,output_shape",
+    [
+        # Larger odd dest pages on the non-clean multi-slot path.
+        # dest CB = dest_slot_size * num_slots (slots capped by per-core L1).
+        # #50191 unit-last-dim uses 2B pages (tiny CB); these check larger staging.
+        ((48, 65), (24, 130)),  # dest_page=260B (bf16*130), not 16B-aligned
+        ((32, 129), (16, 258)),  # dest_page=516B, not 16B-aligned
+        # Issue #50191 width: 8 fixed slots would exceed BH/WH L1; factory must shrink.
+        ((200002, 1), (2, 100001)),
+    ],
+    ids=["dest_page_260B", "dest_page_516B", "dest_page_200002B_issue_width"],
+)
+def test_reshape_rm_nonclean_large_odd_dest_page_l1_cb(device, input_shape, output_shape):
+    """Non-clean RM reshape with large odd dest pages must fit dest CB and be correct."""
+    torch.manual_seed(3)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_out = ttnn.reshape(tt_input, output_shape)
+    ttnn.synchronize_device(device)
+    assert_equal(torch_input.reshape(output_shape), ttnn.to_torch(tt_out))
+
+
+@pytest.mark.parametrize(
+    "rows,cols",
+    [
+        (32, 17),  # bf16 dest_page=2 on [N,1]; src page not 16B-aligned
+        (16, 15),
+    ],
+    ids=["cols_17", "cols_15"],
+)
+def test_quasar_reshape_rm_unit_last_dim(device, rows, cols):
+    """Quasar RM factory/kernel: misaligned [N, 1] reshape must stay bit-exact (#50191)."""
+    torch.manual_seed(4)
+    torch_input = torch.randn((rows, cols), dtype=torch.bfloat16)
+    n = rows * cols
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_out = ttnn.experimental.quasar.reshape(tt_input, (n, 1))
+    ttnn.synchronize_device(device)
+    assert_equal(torch_input.reshape(n, 1), ttnn.to_torch(tt_out))
+
+
+def _run_rm_n1_reshape_hang_loop(device, rows: int, cols: int, iterations: int) -> None:
+    """Issue #50191 repro path: TILE -> RM -> reshape(N, 1) -> sync, looped."""
+    n = rows * cols
+    rank = ttnn.from_torch(
+        torch.zeros((rows, cols), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    for _ in range(iterations):
+        tl = ttnn.to_layout(rank, ttnn.ROW_MAJOR_LAYOUT)
+        rf = ttnn.reshape(tl, (n, 1))
+        ttnn.synchronize_device(device)
+        ttnn.deallocate(rf)
+        ttnn.deallocate(tl)
+    ttnn.deallocate(rank)
+
+
+@pytest.mark.timeout(120, method="thread")
+@pytest.mark.parametrize(
+    "rows,cols,iterations",
+    [
+        pytest.param(512, 1001, 40, id="medium_stress"),
+    ],
+)
+def test_reshape_rm_unit_last_dim_hang_medium_stress(device, rows, cols, iterations):
+    """Medium dest_page_size=2 stress for #50191 (hang repro attached on PR)."""
+    _run_rm_n1_reshape_hang_loop(device, rows, cols, iterations)
+
+
+@pytest.mark.timeout(1800, method="thread")
+def test_reshape_rm_unit_last_dim_hang_bh_issue_stress(device):
+    """Blackhole-gated #50191 issue-scale stress (~250M pages x 60 iters).
+
+    Hang fails as a timeout (device wedges); success asserts on the last iteration.
+    """
+    rows, cols, iterations = 2500, 100001, 60
+    n = rows * cols
+    torch_input = torch.zeros((rows, cols), dtype=torch.bfloat16)
+    expected = torch_input.reshape(n, 1)
+    rank = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    for i in range(1, iterations + 1):
+        tl = ttnn.to_layout(rank, ttnn.ROW_MAJOR_LAYOUT)
+        rf = ttnn.reshape(tl, (n, 1))
+        ttnn.synchronize_device(device)
+        if i == iterations:
+            out = ttnn.to_torch(rf)
+            assert tuple(out.shape) == (n, 1)
+            assert torch.equal(out, expected)
+        ttnn.deallocate(rf)
+        ttnn.deallocate(tl)
+    ttnn.deallocate(rank)
+
+
+def test_reshape_rm_row_shape_control_does_not_hang(device):
+    """Control: [1, N] clean path (16B-aligned pages) must not hang (#50191)."""
+    rows, cols = 64, 128  # bf16 page sizes 16B-aligned; dest CB fits L1
+    n = rows * cols
+    rank = ttnn.from_torch(
+        torch.zeros((rows, cols), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    for _ in range(20):
+        tl = ttnn.to_layout(rank, ttnn.ROW_MAJOR_LAYOUT)
+        rf = ttnn.reshape(tl, (1, n))
+        ttnn.synchronize_device(device)
+        ttnn.deallocate(rf)
+        ttnn.deallocate(tl)
+    ttnn.deallocate(rank)
