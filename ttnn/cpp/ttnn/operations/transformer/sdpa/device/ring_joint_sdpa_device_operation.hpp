@@ -29,6 +29,10 @@ struct RingJointSDPADeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> create_op_performance_model(
         const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors);
+    // Explicit override (rather than the default attribute-reflection hash): the trace-safe metadata path
+    // must key distinct programs on tensor_args.has_metadata() and on the per-layer (kv_cache_num_layers,
+    // kv_cache_layer_idx) that are baked into the readers' create-time args and NOT re-patched per dispatch.
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 RingJointSDPAResult ring_joint_scaled_dot_product_attention(
@@ -59,6 +63,10 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
     std::optional<uint32_t> kv_cache_batch_idx = std::nullopt,
     std::optional<uint32_t> kv_actual_isl = std::nullopt,
-    std::optional<uint32_t> latent_v_head_dim = std::nullopt);
+    std::optional<uint32_t> latent_v_head_dim = std::nullopt,
+    const std::optional<ttnn::Tensor>& slot_id = std::nullopt,
+    const std::optional<ttnn::Tensor>& kv_actual_isl_tensor = std::nullopt,
+    uint32_t kv_cache_num_layers = 1,
+    uint32_t kv_cache_layer_idx = 0);
 
 }  // namespace ttnn::prim
