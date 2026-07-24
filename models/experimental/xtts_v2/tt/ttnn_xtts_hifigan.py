@@ -57,8 +57,8 @@ class TtHifiganGenerator(torch.nn.Module):
         for key, v in w.items():
             if key.endswith(".weight"):
                 if key.startswith("ups."):
-                    Cin, Cout, k = v.shape
-                    self.wd[key] = ttnn.from_torch(v.reshape(Cin, Cout, k, 1).contiguous(), dtype=DTYPE)
+                    Cin, Cout, k = v.shape  # [Cin,Cout,kH=1,kW=k]: length on WIDTH for conv_transpose2d
+                    self.wd[key] = ttnn.from_torch(v.reshape(Cin, Cout, 1, k).contiguous(), dtype=DTYPE)
                 else:
                     self.wd[key] = ttnn.from_torch(v, dtype=DTYPE)
             elif key.endswith(".bias"):
@@ -78,24 +78,24 @@ class TtHifiganGenerator(torch.nn.Module):
         _, _, L, Cin = o.shape
         wt = self.wd[wkey + ".weight"]
         bt = self.wd.get(wkey + ".bias")
-        Cout = wt.shape[1] if transpose else wt.shape[0]
-        k = wt.shape[2]
-        o_in = ttnn.reshape(ttnn.to_layout(o, ttnn.ROW_MAJOR_LAYOUT), [1, L, 1, Cin])
         if transpose:
+            Cout, k = wt.shape[1], wt.shape[3]  # weight [Cin,Cout,1,k]
+            # Length on WIDTH (input [1,1,L,C], kernel (1,k)): ~10x faster than the height axis, which
+            # over-sliced and hit the circular-buffer/L1 clash. Slice on width. (auto num_slices=0 errors here.)
+            o_in = ttnn.to_layout(o, ttnn.ROW_MAJOR_LAYOUT)  # [1,1,L,Cin]
             Lout = (L - 1) * stride - 2 * padding + k
-            kw = {}
             n = _num_slices(Lout, max(Cin, Cout), _TR_BUDGET)
-            if n > 1:
-                kw["dram_slice_config"] = ttnn.Op2DSliceConfig(slice_type=ttnn.Op2DDRAMSliceHeight, num_slices=n)
-            out, (Lo, _) = ttnn.conv_transpose2d(
+            kw = {"dram_slice_config": ttnn.Op2DSliceConfig(slice_type=ttnn.Op2DDRAMSliceWidth, num_slices=n)} if n > 1 else {}
+            out, (_, Lo) = ttnn.conv_transpose2d(
                 input_tensor=o_in, weight_tensor=wt, bias_tensor=bt, in_channels=Cin, out_channels=Cout,
-                device=self.device, kernel_size=(k, 1), stride=(stride, 1), padding=(padding, 0), output_padding=(0, 0),
-                batch_size=1, input_height=L, input_width=1, groups=1, compute_config=COMPUTE_CONFIG,
+                device=self.device, kernel_size=(1, k), stride=(1, stride), padding=(0, padding), output_padding=(0, 0),
+                batch_size=1, input_height=1, input_width=L, groups=1, compute_config=COMPUTE_CONFIG,
                 return_output_dim=True, return_weights_and_bias=False, **kw,
             )
         else:
-            # num_slices=0 -> ttnn auto-picks the minimal DRAM slice count that fits L1 (faster than a
-            # fixed budget, which over-slices). Length is the WIDTH axis for conv1d.
+            Cout, k = wt.shape[0], wt.shape[2]  # weight [Cout,Cin,k]
+            # num_slices=0 -> ttnn auto-picks the minimal DRAM slice count that fits L1. Length is WIDTH for conv1d.
+            o_in = ttnn.reshape(ttnn.to_layout(o, ttnn.ROW_MAJOR_LAYOUT), [1, L, 1, Cin])
             kw = {"slice_config": ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=0)}
             out, Lo = ttnn.conv1d(
                 input_tensor=o_in, weight_tensor=wt, bias_tensor=bt, in_channels=Cin, out_channels=Cout,
