@@ -145,11 +145,14 @@ class XttsPipeline:
         _install_shims()
         from models.experimental.xtts_v2.reference.xtts_gpt_ref import load_gen_head
 
+        from models.experimental.xtts_v2.tt.ttnn_xtts_hifigan import TtHifiganGenerator
+
         self.device = device
         self.tok = XttsTokenizer()
         self.gpt = build_gpt_embedder(self.tok)  # host: text embeddings + prefix
         self.heads = load_gen_head(CKPT)  # host: mel_emb / mel_pos / mel_head
-        self.vocoder = build_vocoder()  # Block 4
+        self.vocoder = build_vocoder()  # Block 4 wrapper (does the latents->z interpolation on host)
+        self.vocoder.waveform_decoder = TtHifiganGenerator(device)  # Block 4 generator on TTNN
 
     @torch.no_grad()
     def generate(self, text, speaker=None, language="en", max_new=400, seed=0):
@@ -186,7 +189,7 @@ def main():
     import ttnn
 
     text = "Hello! This is a test of the text to speech system, running on Tenstorrent hardware."
-    device = ttnn.open_device(device_id=0, trace_region_size=80_000_000)
+    device = ttnn.open_device(device_id=0, trace_region_size=80_000_000, l1_small_size=131072)
     try:
         pipe = XttsPipeline(device)
         wav, info = pipe.generate(text, max_new=300)
