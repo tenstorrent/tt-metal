@@ -341,7 +341,8 @@ def _write_trace_caps(out_path: Path, caps: dict) -> None:
 # The correction loop keeps regenerating until the test is trace+2cq-acceptable (or a legitimate eager
 # terminal). It has NO fixed attempt budget — only a STALL guard: if the LLM fails to make forward
 # progress this many consecutive times, give up rather than spin forever on a pipeline it can't fix.
-_STALL_LIMIT = 6
+# Env-overridable (PERF_MCP_STALL_LIMIT) for hard-to-trace models that need more regen attempts.
+_STALL_LIMIT = int(os.environ.get("PERF_MCP_STALL_LIMIT", "20") or "20")
 
 _TRACE_WEDGE_LIMIT = int(os.environ.get("PERF_MCP_TRACE_WEDGE_LIMIT", "10") or "10")
 
