@@ -155,31 +155,6 @@ UpdatePaddedKvCacheDeviceOperation::tensor_return_value_t UpdatePaddedKvCacheDev
     return tensor_args.cache;
 }
 
-ttsl::hash::hash_t UpdatePaddedKvCacheDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // slot_idx and kv_actual_global are per-call scalars held in common runtime args and patched on
-    // cache hits, so they are intentionally NOT hashed and successive users/chunks reuse the cached
-    // program. layer_idx IS hashed: it takes only num_layers distinct values, so one program per layer
-    // is reused across users/chunks, and a hashed scalar stays correct on the fast cache-hit path.
-    // num_layers and cluster_axis stay IN: both are structural — they govern the cache slot
-    // linearization and which mesh dim is sp — not per-call data.
-    const auto& cache = tensor_args.cache;
-    const auto& input = tensor_args.input;
-    // Hash the full padded shapes, not just their volumes: the descriptor derives Wt, input_Ht,
-    // cache_HtWt/CHtWt and the work split from specific dimensions, so two differently-shaped
-    // tensors that happen to share a volume must NOT collide onto the same cached program.
-    return tt::tt_metal::operation::hash_operation<UpdatePaddedKvCacheDeviceOperation>(
-        args.layer_idx,
-        args.num_layers,
-        args.cluster_axis,
-        input.dtype(),
-        input.layout(),  // TILE vs ROW_MAJOR drives the page-unit math; must not collide
-        input.memory_config(),
-        input.padded_shape(),
-        cache.memory_config(),
-        cache.padded_shape());
-}
-
 tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFactory::create_descriptor(
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
@@ -377,6 +352,12 @@ ttnn::Tensor update_padded_kv_cache(
         .layer_idx = layer_idx,
         .num_layers = num_layers,
         .cluster_axis = cluster_axis,
+        .input_dtype = input.dtype(),
+        .input_layout = input.layout(),
+        .input_memory_config = input.memory_config(),
+        .input_padded_shape = input.padded_shape(),
+        .cache_memory_config = cache.memory_config(),
+        .cache_padded_shape = cache.padded_shape(),
     };
     auto tensor_args = OperationType::tensor_args_t{.cache = cache, .input = input};
     return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
