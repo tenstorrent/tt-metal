@@ -231,8 +231,14 @@ def test_prep_dispatch_combine(
         dims=(sp_axis, None),
     )
 
+    # masked_bincount consumes the gate's UINT16, TILE, L1-interleaved indices directly (untiled in-kernel).
     tt_indices = ttnn.from_torch(
-        indices, mesh_mapper=mesh_mapper_replicated, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.uint16
+        indices,
+        mesh_mapper=mesh_mapper_replicated,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.uint16,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
     # Create expert dispatch table
@@ -275,7 +281,6 @@ def test_prep_dispatch_combine(
     ) = tt_gate_outputs(
         ttnn_top_k_experts_indices=tt_indices,
         num_routed_experts=num_routed_experts,
-        seq_len_per_chip=seq_len_per_chip,
         num_experts_per_tok=num_experts_per_tok,
     )
 

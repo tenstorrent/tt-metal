@@ -80,8 +80,9 @@ void kernel_main() {
     constexpr uint32_t cb_gather_tmp = get_compile_time_arg_val(11);
     constexpr uint32_t cb_mask = get_compile_time_arg_val(15);
     constexpr uint32_t mask_page_size = get_compile_time_arg_val(16);
+    constexpr uint32_t tile_h = get_compile_time_arg_val(17);
 
-    constexpr uint32_t src_accessor_offset = 17;
+    constexpr uint32_t src_accessor_offset = 18;
     constexpr auto src_args = TensorAccessorArgs<src_accessor_offset>();
     const auto src_accessor = TensorAccessor(src_args, src_addr);
 
@@ -102,14 +103,23 @@ void kernel_main() {
     uint32_t out_addr = cb_out.get_write_ptr();
     uint32_t mask_l1_addr = cb_mask_obj.get_write_ptr();
 
-    // Phase 1: Read this core's shard pages
-    for (uint32_t h = 0; h < h_count; h++) {
-        noc.async_read(
-            src_accessor,
-            CoreLocalMem<uint32_t>(in_base_addr + h * input_page_size),
-            input_page_size,
-            {.page_id = h_start + h},
-            {});
+    // Phase 1: Read the TILE pages covering this RISC's global row range [h_start, h_start + h_count).
+    // The input is TILE-interleaved; page_id indexes 32-row tiles (width is padded to a single tile).
+    // Row ranges are not tile-aligned in general, so adjacent RISCs/cores may read a shared boundary
+    // tile — each reads independently and counts only its own rows.
+    uint32_t first_tile = 0;
+    if (h_count > 0) {
+        first_tile = h_start / tile_h;
+        uint32_t last_tile = (h_start + h_count - 1) / tile_h;
+        uint32_t num_tiles = last_tile - first_tile + 1;
+        for (uint32_t t = 0; t < num_tiles; t++) {
+            noc.async_read(
+                src_accessor,
+                CoreLocalMem<uint32_t>(in_base_addr + t * input_page_size),
+                input_page_size,
+                {.page_id = first_tile + t},
+                {});
+        }
     }
 
     // Phase 2: Local histogram counting (BRISC/NCRISC cooperate on same core)
@@ -133,11 +143,23 @@ void kernel_main() {
     const uint8_t my_noc_id = noc.get_noc_id();
     const uint32_t my_noc_x = my_x[my_noc_id];
     const uint32_t my_noc_y = my_y[my_noc_id];
-    for (uint32_t h = 0; h < h_count; h++) {
-        volatile tt_l1_ptr uint16_t* row =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(in_base_addr + h * input_page_size);
+
+    // Untile in place: a 32x32 tile stores four 16x16 faces (face0,face1,face2,face3, row-major within
+    // each). Experts occupy columns [0, num_experts_per_token) which fall in the left faces (0 and 2),
+    // so element (row r within a tile, column c) sits at uint16 offset:
+    //   (r / 16) * 2 * 256 + (r % 16) * 16 + c
+    constexpr uint32_t FACE_DIM = 16;
+    constexpr uint32_t FACE_SIZE = FACE_DIM * FACE_DIM;  // 256 uint16 per face
+    const uint32_t tile_elems = input_page_size / 2;     // uint16 per tile page
+    volatile tt_l1_ptr uint16_t* in_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(in_base_addr);
+    for (uint32_t j = 0; j < h_count; j++) {
+        uint32_t global_row = h_start + j;
+        uint32_t tile_local = global_row / tile_h - first_tile;
+        uint32_t within = global_row % tile_h;
+        uint32_t row_base =
+            tile_local * tile_elems + (within / FACE_DIM) * 2 * FACE_SIZE + (within % FACE_DIM) * FACE_DIM;
         for (uint32_t w = 0; w < num_experts_per_token; w++) {
-            uint32_t expert_idx = row[w];
+            uint32_t expert_idx = in_u16[row_base + w];
             if (expert_idx < n_routed_experts && mask[expert_idx] >= 0) {
                 // TODO: D2.0 has no wrapper for atomic-increment on an arbitrary L1 word
                 // (the target here is a histogram bin, not a registered semaphore). The

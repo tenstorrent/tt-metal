@@ -203,7 +203,6 @@ def run_dispatch_combine(
     tt_dispatch_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = tt_moe_routing_setup(
         ttnn_top_k_experts_indices=indices,
         num_routed_experts=num_routed_experts,
-        seq_len_per_chip=seq_len_per_chip,
         num_experts_per_tok=num_experts_per_tok,
     )
 
@@ -621,7 +620,6 @@ def test_ttnn_dispatch_combine_overflow(mesh_device, num_links, topology, overfl
     tt_dispatch_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = tt_moe_routing_setup(
         ttnn_top_k_experts_indices=indices,
         num_routed_experts=num_routed_experts,
-        seq_len_per_chip=seq_len_per_chip,
         num_experts_per_tok=num_experts_per_tok,
     )
 
