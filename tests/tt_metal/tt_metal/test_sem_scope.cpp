@@ -415,6 +415,31 @@ TEST_F(SemScopeFixture, TestCachedExternalCoexistence) {
            "ring word (pool separation FAILED).";
 }
 
+// ---- S5: AUTO classifier behavior (auto-select LOCAL_NONATOMIC vs EXTERNAL) ----
+
+// AUTO on a MULTI-writer semaphore must auto-resolve to the atomic EXTERNAL path. All DMs
+// concurrently up() an AUTO-scoped semaphore; exact num_dms*iters proves the classifier picked
+// EXTERNAL (a wrong LOCAL_NONATOMIC pick would lose updates under contention -> short count).
+TEST_F(SemScopeFixture, TestAutoMultiWriterResolvesExternal) {
+    if (!is_quasar) {
+        GTEST_SKIP() << "concurrency proof gates DM roles by mhartid (Quasar-only)";
+    }
+    const uint32_t observed = run_concurrent(SemaphoreScope::AUTO, "MODE_CONCURRENT_UP");
+    const uint32_t expected = num_dms_ * concurrent_iterations;
+    log_info(LogTest, "AUTO multi-writer up value(): {} (expected {})", observed, expected);
+    EXPECT_EQ(observed, expected)
+        << "AUTO on a multi-writer semaphore did not resolve to the atomic EXTERNAL path (lost updates "
+           "=> classifier wrongly picked LOCAL_NONATOMIC).";
+}
+
+// AUTO on a SINGLE-writer semaphore resolves to the cheap LOCAL_NONATOMIC path (single-thread,
+// single-node). Single writer -> value() == iterations; confirms the cheap path runs correctly.
+TEST_F(SemScopeFixture, TestAutoSingleWriterResolvesLocal) {
+    const uint32_t observed = run_scope(SemaphoreScope::AUTO);
+    log_info(LogTest, "AUTO single-writer value(): {} (expected {})", observed, iterations);
+    EXPECT_EQ(observed, iterations) << "AUTO on a single-writer semaphore did not produce the expected count.";
+}
+
 // ---- Phase-2 S2a: host-side scope resolution + contradiction FATALs ----
 
 // Explicit single-node scopes are accepted (ResolveSemaphoreScope validates, no throw).
