@@ -36,7 +36,7 @@ to the other every step.
 ```
 
 `N = 2` (2 TTML chips + 2 TTT chips, 4 chips total on one host,
-`configurations/local4`). All settings live in a single yaml,
+`configurations/split_2_2`). All settings live in a single yaml,
 [`grpo_boolq_llama_1b_remote_rollout.yaml`](../../../../configs/training_configs/grpo_boolq_llama_1b_remote_rollout.yaml)
 — the trainer reads `training_config` / `device_config`, and the
 generation worker reads `remote_rollout_config`. See
@@ -240,11 +240,11 @@ two ranks into `boolq_training_example.py`:
 
 | Bindings | TTML mesh (YAML) | TTT parent → submeshes | Chips |
 |----------|------------------|------------------------|-------|
-| `configurations/local4` | `[1, 2]` DDP ([`grpo_boolq_llama_1b_remote_rollout.yaml`](../../../../configs/training_configs/grpo_boolq_llama_1b_remote_rollout.yaml) `device_config`) | `[1, 2]` → 2× `[1, 1]` (same yaml, `remote_rollout_config`) | 4 |
+| `configurations/split_2_2` | `[1, 2]` DDP ([`grpo_boolq_llama_1b_remote_rollout.yaml`](../../../../configs/training_configs/grpo_boolq_llama_1b_remote_rollout.yaml) `device_config`) | `[1, 2]` → 2× `[1, 1]` (same yaml, `remote_rollout_config`) | 4 |
 
-`local4` pins rank 0 to board `0` and rank 1 to board `1`. Override
-the bindings/hostfile for other machines with `--rank-bindings` /
-`--hostfile`.
+`split_2_2` pins rank 0 to board `0` and rank 1 to board `1`.
+Override the bindings/hostfile for other machines with
+`--rank-bindings` / `--hostfile`.
 
 ### Outputs
 

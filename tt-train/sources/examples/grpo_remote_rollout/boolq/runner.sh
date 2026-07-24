@@ -13,7 +13,7 @@ if [[ -z "${TT_METAL_HOME:-}" ]]; then
 fi
 
 EX_DIR="${TT_METAL_HOME}/tt-train/sources/examples/grpo_remote_rollout/boolq"
-CONFIG_DIR="local4"
+CONFIG_DIR="split_2_2"
 HOST_FILE=""
 RANK_BINDINGS_FILE=""
 SCRIPT="${EX_DIR}/boolq_training_example.py"
