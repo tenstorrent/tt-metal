@@ -27,6 +27,10 @@ on:
           # llama3.3-70b-galaxy: disabled — see #42139
           - flux.1-schnell
           - flux.1-dev
+          - ltx-2.3-pro-t2v
+          - ltx-2.3-fast-t2v
+          - ltx-2.3-pro-i2v
+          - ltx-2.3-fast-i2v
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
