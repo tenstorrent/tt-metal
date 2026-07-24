@@ -19,6 +19,7 @@
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
 #include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/float8.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/shape.hpp>

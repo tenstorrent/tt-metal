@@ -5,11 +5,13 @@
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/device.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
+
+#include "page_config_impl.hpp"
+#include "tensor_layout_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -110,7 +112,7 @@ Alignment legacyShapeToAlignment(
     return result;
 }
 
-void validate_alignment(const TensorLayout& tensor_layout) {
+void validate_alignment(const TensorLayoutImpl& tensor_layout) {
     const auto& alignment = tensor_layout.get_alignment();
     const auto& memory_config = tensor_layout.get_memory_config();
     TT_FATAL(
@@ -119,7 +121,7 @@ void validate_alignment(const TensorLayout& tensor_layout) {
 
     const auto& page_config = tensor_layout.get_page_config();
     const auto& dtype = tensor_layout.get_data_type();
-    page_config.validate_alignment(alignment, dtype, memory_config);
+    validate_alignment(page_config, alignment, dtype, memory_config);
 }
 
 std::optional<std::string> get_shard_align_error(
@@ -150,7 +152,11 @@ bool can_shard_align(const MemoryConfig& memory_config, const Layout& layout, co
     return !CMAKE_UNIQUE_NAMESPACE::get_shard_align_error(memory_config, layout, tile).has_value();
 }
 
-TensorLayout::TensorLayout(
+// ------------------------------------------------------------------------------------------------
+// TensorLayoutImpl: the internal layout-computation API, reachable from within tt_metal via impl().
+// ------------------------------------------------------------------------------------------------
+
+TensorLayoutImpl::TensorLayoutImpl(
     DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment) :
     dtype_(dtype), page_config_(page_config), memory_config_(memory_config), alignment_(alignment) {
     initialize_alignment();
@@ -163,26 +169,8 @@ TensorLayout::TensorLayout(
     }
 }
 
-TensorLayout TensorLayout::fromPaddedShape(
-    DataType dtype,
-    const PageConfig& page_config,
-    const MemoryConfig& memory_config,
-    const tt::tt_metal::Shape& logical_shape,
-    const tt::tt_metal::Shape& padded_shape) {
-    return TensorLayout(
-        dtype,
-        page_config,
-        memory_config,
-        CMAKE_UNIQUE_NAMESPACE::legacyShapeToAlignment(logical_shape, padded_shape, page_config, memory_config));
-}
-
-TensorLayout TensorLayout::restore_from_serialized(
-    DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment) {
-    return TensorLayout(dtype, page_config, memory_config, alignment);
-}
-
-void TensorLayout::initialize_alignment() {
-    auto default_alignment = page_config_.create_default_alignment(dtype_, memory_config_);
+void TensorLayoutImpl::initialize_alignment() {
+    auto default_alignment = create_default_alignment(page_config_, dtype_, memory_config_);
     if (alignment_.empty()) {
         alignment_ = default_alignment;
         return;
@@ -199,7 +187,7 @@ void TensorLayout::initialize_alignment() {
     alignment_ = Alignment(std::move(result));
 }
 
-BufferShardingArgs TensorLayout::compute_buffer_sharding_args(const tt::tt_metal::Shape& shape) const {
+BufferShardingArgs TensorLayoutImpl::compute_buffer_sharding_args(const tt::tt_metal::Shape& shape) const {
     if (!memory_config_.is_sharded()) {
         return {};
     }
@@ -266,7 +254,7 @@ BufferShardingArgs TensorLayout::compute_buffer_sharding_args(const tt::tt_metal
     return sharding_args;
 }
 
-size_t TensorLayout::compute_packed_buffer_size_bytes(const tt::tt_metal::Shape& shape) const {
+size_t TensorLayoutImpl::compute_packed_buffer_size_bytes(const tt::tt_metal::Shape& shape) const {
     const Shape2D physical_size = compute_physical_shape(shape);
     const Shape2D page_shape = compute_page_shape(physical_size);
     const auto width_remainder = physical_size.width() % page_shape.width();
@@ -286,17 +274,17 @@ size_t TensorLayout::compute_packed_buffer_size_bytes(const tt::tt_metal::Shape&
     return page_count * page_size_bytes;
 }
 
-size_t TensorLayout::compute_page_size_bytes(const tt::tt_metal::Shape& shape) const {
+size_t TensorLayoutImpl::compute_page_size_bytes(const tt::tt_metal::Shape& shape) const {
     const auto physical_size = compute_physical_shape(shape);
     const auto page_shape = compute_page_shape(physical_size);
     return compute_page_size_bytes(page_shape);
 }
 
-size_t TensorLayout::compute_page_size_bytes(const Shape2D& page_size) const {
-    return page_config_.get_page_size_bytes(page_size, dtype_);
+size_t TensorLayoutImpl::compute_page_size_bytes(const Shape2D& page_size) const {
+    return get_page_size_bytes(page_config_, page_size, dtype_);
 }
 
-size_t TensorLayout::compute_consumed_memory_bytes_per_bank(
+size_t TensorLayoutImpl::compute_consumed_memory_bytes_per_bank(
     const tt::tt_metal::Shape& shape, size_t page_alignment, size_t num_banks) const {
     const Shape2D physical_shape = compute_physical_shape(shape);
     const Shape2D page_shape = compute_page_shape(physical_shape);
@@ -320,19 +308,7 @@ size_t TensorLayout::compute_consumed_memory_bytes_per_bank(
     return num_pages_per_bank * aligned_page_size;
 }
 
-size_t TensorLayout::compute_consumed_memory_bytes_per_bank(
-    const tt::tt_metal::Shape& shape, const IDevice& device) const {
-    const size_t page_alignment = device.allocator()->get_alignment(memory_config_.buffer_type());
-    size_t num_banks = 0;
-    if (memory_config_.is_l1()) {
-        num_banks = device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y;
-    } else {
-        num_banks = device.num_dram_channels();
-    }
-    return compute_consumed_memory_bytes_per_bank(shape, page_alignment, num_banks);
-}
-
-Shape2D TensorLayout::get_logical_shard_shape() const {
+Shape2D TensorLayoutImpl::get_logical_shard_shape() const {
     TT_FATAL(
         memory_config_.shard_spec().has_value(),
         "Shard spec must have value for TensorLayout::get_logical_shard_shape!");
@@ -342,7 +318,7 @@ Shape2D TensorLayout::get_logical_shard_shape() const {
     return Shape2D(memory_config_.shard_spec().value().shape);
 }
 
-Shape2D TensorLayout::get_physical_shard_shape() const {
+Shape2D TensorLayoutImpl::get_physical_shard_shape() const {
     TT_FATAL(
         memory_config_.shard_spec().has_value(),
         "Shard spec must have value for TensorLayout::get_physical_shard_shape!");
@@ -350,7 +326,7 @@ Shape2D TensorLayout::get_physical_shard_shape() const {
     return shard_spec.shape;
 }
 
-Shape2D TensorLayout::compute_logical_2d_shape(const tt::tt_metal::Shape& shape) const {
+Shape2D TensorLayoutImpl::compute_logical_2d_shape(const tt::tt_metal::Shape& shape) const {
     if (shape.rank() < 2) {
         return Shape2D{1, shape[-1]};
     }
@@ -362,7 +338,7 @@ Shape2D TensorLayout::compute_logical_2d_shape(const tt::tt_metal::Shape& shape)
     return Shape2D{height, width};
 }
 
-Shape2D TensorLayout::compute_physical_shape(const tt::tt_metal::Shape& shape) const {
+Shape2D TensorLayoutImpl::compute_physical_shape(const tt::tt_metal::Shape& shape) const {
     const int rank = static_cast<int>(shape.rank());
     const int alignment_rank = static_cast<int>(alignment_.size());
 
@@ -389,16 +365,16 @@ Shape2D TensorLayout::compute_physical_shape(const tt::tt_metal::Shape& shape) c
     return size;
 }
 
-Shape2D TensorLayout::compute_page_shape(const Shape2D& physical_size) const {
+Shape2D TensorLayoutImpl::compute_page_shape(const Shape2D& physical_size) const {
     std::optional<Shape2D> physical_shard_shape = std::nullopt;
     if (memory_config_.shard_spec().has_value()) {
         physical_shard_shape = get_physical_shard_shape();
     }
 
-    return page_config_.get_page_shape(physical_size, dtype_, memory_config_, physical_shard_shape);
+    return get_page_shape(page_config_, physical_size, dtype_, memory_config_, physical_shard_shape);
 }
 
-Strides TensorLayout::compute_strides(const tt::tt_metal::Shape& logical_shape) const {
+Strides TensorLayoutImpl::compute_strides(const tt::tt_metal::Shape& logical_shape) const {
     const int rank = static_cast<int>(logical_shape.rank());
     const int alignment_rank = static_cast<int>(alignment_.size());
     Strides strides(rank, 1);
@@ -412,7 +388,7 @@ Strides TensorLayout::compute_strides(const tt::tt_metal::Shape& logical_shape) 
     return strides;
 }
 
-tt::tt_metal::Shape TensorLayout::compute_padded_shape(const tt::tt_metal::Shape& shape) const {
+tt::tt_metal::Shape TensorLayoutImpl::compute_padded_shape(const tt::tt_metal::Shape& shape) const {
     ttsl::SmallVector<uint32_t> padded_shape(std::max(shape.rank(), alignment_.size()));
     int rank_index = static_cast<int>(shape.rank()) - 1;
     int alignment_index = static_cast<int>(alignment_.size()) - 1;
@@ -447,6 +423,83 @@ tt::tt_metal::Shape TensorLayout::compute_padded_shape(const tt::tt_metal::Shape
         padded_shape[padded_shape_index] = shape[rank_index];
     }
     return tt::tt_metal::Shape(std::move(padded_shape));
+}
+
+// ------------------------------------------------------------------------------------------------
+// TensorLayout: public facade forwarding to TensorLayoutImpl.
+// ------------------------------------------------------------------------------------------------
+
+TensorLayout::TensorLayout(
+    DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment) :
+    impl_(std::make_unique<TensorLayoutImpl>(dtype, page_config, memory_config, alignment)) {}
+
+TensorLayout::~TensorLayout() = default;
+
+TensorLayout::TensorLayout(const TensorLayout& other) :
+    impl_(other.impl_ ? std::make_unique<TensorLayoutImpl>(*other.impl_) : nullptr) {}
+
+TensorLayout& TensorLayout::operator=(const TensorLayout& other) {
+    if (this == &other) {
+        return *this;
+    }
+    impl_ = other.impl_ ? std::make_unique<TensorLayoutImpl>(*other.impl_) : nullptr;
+    return *this;
+}
+
+TensorLayout::TensorLayout(TensorLayout&& other) noexcept = default;
+TensorLayout& TensorLayout::operator=(TensorLayout&& other) noexcept = default;
+
+TensorLayoutImpl& TensorLayout::impl() {
+    TT_FATAL(impl_ != nullptr, "TensorLayout is in a moved-from state.");
+    return *impl_;
+}
+
+const TensorLayoutImpl& TensorLayout::impl() const {
+    TT_FATAL(impl_ != nullptr, "TensorLayout is in a moved-from state.");
+    return *impl_;
+}
+
+TensorLayout TensorLayout::fromPaddedShape(
+    DataType dtype,
+    const PageConfig& page_config,
+    const MemoryConfig& memory_config,
+    const tt::tt_metal::Shape& logical_shape,
+    const tt::tt_metal::Shape& padded_shape) {
+    return TensorLayout(
+        dtype,
+        page_config,
+        memory_config,
+        CMAKE_UNIQUE_NAMESPACE::legacyShapeToAlignment(logical_shape, padded_shape, page_config, memory_config));
+}
+
+TensorLayout TensorLayout::restore_from_serialized(
+    DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment) {
+    return TensorLayout(dtype, page_config, memory_config, alignment);
+}
+
+Layout TensorLayout::get_layout() const { return impl().get_layout(); }
+Tile TensorLayout::get_tile() const { return impl().get_tile(); }
+PageConfig TensorLayout::get_page_config() const { return impl().get_page_config(); }
+DataType TensorLayout::get_data_type() const { return impl().get_data_type(); }
+const MemoryConfig& TensorLayout::get_memory_config() const { return impl().get_memory_config(); }
+const Alignment& TensorLayout::get_alignment() const { return impl().get_alignment(); }
+
+tt::tt_metal::Shape TensorLayout::compute_padded_shape(const tt::tt_metal::Shape& shape) const {
+    return impl().compute_padded_shape(shape);
+}
+
+TensorLayout TensorLayout::with_memory_config(MemoryConfig memory_config) const {
+    TensorLayout result = *this;
+    result.impl().set_memory_config(std::move(memory_config));
+    return result;
+}
+
+bool TensorLayout::operator==(const TensorLayout& other) const { return impl() == other.impl(); }
+bool TensorLayout::operator!=(const TensorLayout& other) const { return impl() != other.impl(); }
+
+std::tuple<const DataType&, const PageConfig&, const MemoryConfig&, const Alignment&> TensorLayout::attribute_values()
+    const {
+    return impl().attribute_values();
 }
 
 }  // namespace tt::tt_metal
