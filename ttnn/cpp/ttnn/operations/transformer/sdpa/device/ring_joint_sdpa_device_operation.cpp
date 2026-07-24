@@ -271,6 +271,80 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     // Validate joint strategy is 'rear'
     TT_FATAL(args.joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", args.joint_strategy);
 
+    // Sparse-frames extension (windowed / block-sparse pattern): frame_seqlen + num_frames_padded + a
+    // bit-packed uint32 vector `frame_allow_packed` describe the frame-block-sparse pattern the
+    // kernel applies. Constraints:
+    //   * frame_allow_packed is required, bit `q*nf_padded + k` = 1 iff Q frame q attends K frame k.
+    //   * frame_seqlen (tokens) is a multiple of TILE_HEIGHT AND is a multiple of both
+    //     q_chunk_size and k_chunk_size — i.e. each SDPA chunk sits inside one frame. Chunks
+    //     smaller than a frame are allowed (multiple chunks per frame, each mapped to the same
+    //     q_frame/k_frame index via integer division in the compute kernel); a chunk that
+    //     straddles a frame boundary would misindex frame_allow.
+    //   * num_frames_padded divides ring_size (each SP shard = whole number of frames), and is
+    //     <= 32 (packed representation caps at 32*32 = 1024 bits).
+    //   * logical_n == num_frames_real * frame_seqlen (un-padded); the padded frames are all-zero
+    //     rows AND columns in the pattern (no queries, no keys attended).
+    //   * incompatible with is_causal (softmax mask semantics differ — causal is triangular,
+    //     ours is arbitrary block-sparse).
+    //   * incompatible with chunked-prefill and kv-pad rotation.
+    if (args.has_sparse_frames()) {
+        const uint32_t fsl = args.frame_seqlen.value();
+        const uint32_t nf_pad = args.num_frames_padded.value();
+        TT_FATAL(!args.is_causal, "sparse-frames windowed path is incompatible with is_causal");
+        // `is_chunked` proper is derived later in this function; compute it locally here so the
+        // sparse-frames block can precede the dtype/shape checks that also use it.
+        TT_FATAL(!tensor_args.is_chunked(), "sparse-frames path does not support chunked-prefill");
+        TT_FATAL(!args.has_kv_pad_rotation(), "sparse-frames path does not support kv-pad rotation");
+        TT_FATAL(
+            fsl % tt::constants::TILE_HEIGHT == 0,
+            "frame_seqlen ({}) must be a multiple of TILE_HEIGHT ({})",
+            fsl,
+            tt::constants::TILE_HEIGHT);
+        // SDPAProgramConfig.q_chunk_size / k_chunk_size are in TOKENS (see how the program factory
+        // converts them via `/ TILE_HEIGHT` at ring_joint_sdpa_program_factory.cpp:349). The
+        // sparse-frames path requires each chunk to sit inside one frame — equivalently, chunk
+        // size (tokens) must divide frame_seqlen (tokens). The compute kernel derives
+        // q_frame/k_frame via integer division of the chunk's start-tile by frame_seqlen_tiles
+        // (compute_streaming.hpp:2417, 2474), so any divisor works. This lets callers shrink
+        // chunks to fit L1 CB budgets at large frame_seqlen (e.g. 720p fsl=3840).
+        TT_FATAL(
+            args.get_q_chunk_size() > 0 && fsl % args.get_q_chunk_size() == 0,
+            "sparse-frames requires q_chunk_size ({}) tokens to divide frame_seqlen ({}) tokens",
+            args.get_q_chunk_size(),
+            fsl);
+        TT_FATAL(
+            args.get_k_chunk_size() > 0 && fsl % args.get_k_chunk_size() == 0,
+            "sparse-frames requires k_chunk_size ({}) tokens to divide frame_seqlen ({}) tokens",
+            args.get_k_chunk_size(),
+            fsl);
+        TT_FATAL(
+            nf_pad > 0 && nf_pad <= 32,
+            "num_frames_padded ({}) must be in [1, 32] for the packed-bit representation",
+            nf_pad);
+        TT_FATAL(
+            nf_pad % args.ring_size == 0,
+            "num_frames_padded ({}) must divide ring_size ({}) so each SP shard holds whole frames",
+            nf_pad,
+            args.ring_size);
+        TT_FATAL(
+            static_cast<std::size_t>(nf_pad) * fsl >= args.logical_n,
+            "sparse-frames: num_frames_padded * frame_seqlen ({}) must be >= logical_n ({})",
+            static_cast<std::size_t>(nf_pad) * fsl,
+            args.logical_n);
+        // Packed size: ceil(nf_pad*nf_pad / 32) words.
+        const uint32_t need_words = (nf_pad * nf_pad + 31) / 32;
+        TT_FATAL(
+            args.frame_allow_packed.size() >= need_words,
+            "frame_allow_packed too small: got {} words, need at least {} for nf_padded={}",
+            args.frame_allow_packed.size(),
+            need_words,
+            nf_pad);
+    } else {
+        TT_FATAL(
+            args.frame_allow_packed.empty(),
+            "frame_allow_packed supplied without frame_seqlen/num_frames_padded — set all three or none");
+    }
+
     // Get shapes
     const auto& q_shape = input_tensor_q.logical_shape();
     const auto& k_shape = gathered_input_tensor_k.logical_shape();
@@ -729,8 +803,20 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
     const std::optional<uint32_t> kv_cache_batch_idx,
     const std::optional<uint32_t> kv_actual_isl,
-    const std::optional<uint32_t> latent_v_head_dim) {
+    const std::optional<uint32_t> latent_v_head_dim,
+    const std::optional<uint32_t> frame_seqlen,
+    const std::optional<uint32_t> num_frames_padded,
+    std::vector<uint32_t> frame_allow_packed) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
+
+    // Sparse-frames extension: all three or none.
+    const bool sparse_frames = frame_seqlen.has_value() || num_frames_padded.has_value() || !frame_allow_packed.empty();
+    if (sparse_frames) {
+        TT_FATAL(
+            frame_seqlen.has_value() && num_frames_padded.has_value() && !frame_allow_packed.empty(),
+            "frame_seqlen / num_frames_padded / frame_allow_packed must all be set together (windowed sparse ring "
+            "path)");
+    }
 
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
@@ -810,7 +896,10 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         ccl_core_grid_offset,
         kv_cache_batch_idx,
         kv_actual_isl,
-        latent_v_head_dim.value_or(0));
+        latent_v_head_dim.value_or(0),
+        frame_seqlen,
+        num_frames_padded,
+        std::move(frame_allow_packed));
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,

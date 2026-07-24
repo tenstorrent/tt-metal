@@ -9,6 +9,7 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/debug/waypoint.h"
 #include <tt-metalium/constants.hpp>
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
@@ -76,6 +77,16 @@ void kernel_main() {
     constexpr uint32_t last_active_ring_iter_compile [[maybe_unused]] = get_compile_time_arg_val(47);
     constexpr bool v_shares_k_buffer = get_compile_time_arg_val(48) == 1;
     constexpr uint32_t v_cb_physical_width_t = v_shares_k_buffer ? DHt : vDHt;
+    // Sparse-frames extension (windowed / block-sparse pattern). All three set together at the host or all
+    // zero (feature disabled). Slots placed after the CB block (base = cb_arg_offset + 23 = 72).
+    // With `sparse_frames_enabled=1`, the kernel maps each Q chunk to a single frame via integer
+    // division (host requires frame_seqlen_tiles % Sq_chunk_t == 0 and % Sk_chunk_t == 0, so no
+    // chunk straddles a frame boundary; chunk sizes may be smaller than the frame to fit L1) and
+    // drains K/V chunks whose (q_frame, k_frame) pair is disallowed by the packed frame_allow
+    // bitmap in runtime args 11..(11+31).
+    constexpr bool sparse_frames_enabled = get_compile_time_arg_val(72) == 1;
+    constexpr uint32_t frame_seqlen_tiles = get_compile_time_arg_val(73);
+    constexpr uint32_t num_frames_padded_compile = get_compile_time_arg_val(74);
     // In-place latent-V (single-tile Q): read V straight from K^T instead of materializing it.
     // Shared with the program factory and reader via kt_inplace_v_enabled().
     constexpr bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
@@ -119,6 +130,22 @@ void kernel_main() {
     const uint32_t kv_pad_q_post_wrap_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t kv_pad_q_valid_tile_count = get_arg_val<uint32_t>(argidx++);
     const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+
+    // Sparse-frames packed frame_allow bitmap (32 uint32 words). Runtime-arg slots so the same
+    // kernel binary handles any windowed pattern that fits (nf_padded <= 32 -> at most 32 * 32
+    // = 1024 bits). Only read when sparse_frames_enabled; when disabled the host passes zeros.
+    uint32_t frame_allow_words[32];
+#pragma GCC unroll 32
+    for (uint32_t w = 0; w < 32; ++w) {
+        frame_allow_words[w] = get_arg_val<uint32_t>(argidx++);
+    }
+    // Sparse feature bitmask (runtime): reverse-bisection knob. Each bit gates one sparse
+    // code path. bit 0 = pre-scan check, 1 = q_frame_total_processed populate, 2 = try_skip
+    // lambda, 3 = zero-work fast path, 4 = counter-based is_first/is_last (else dense flags).
+    // Set to 0 to get dense-equivalent runtime behavior with sparse binary in place; add
+    // bits to enable pieces one at a time. Default from host: 0x1F (all enabled = current
+    // production behavior).
+    const uint32_t sparse_feature_mask = get_arg_val<uint32_t>(argidx++);
 
     RingSDPAOpIndexer fused_op_indexer(
         ring_size_runtime, ring_index_runtime, forward_writes_expected, backward_writes_expected);
@@ -199,8 +226,58 @@ void kernel_main() {
             kv_pad_q_valid_tile_count}};
     // The first active iter starts with fresh accumulators; restoring would read stale staging.
     bool seen_active_iter = false;
+
+    // Sparse-frames per-work-item accounting for correct is_first / is_last across ring iters.
+    // The host-computed active_ring_iter_mask is OOB-only and does not consider sparse-frames,
+    // so its "first active" and "last active" iters can be entirely drained for some Q chunks.
+    // Compute must instead drive is_first / is_last_k_of_last_ring_iter off per-WORK-ITEM counts
+    // of actually-processed K chunks (a "work item" is a (batch, head, q_chunk) tuple — the unit
+    // that produces one attention output tile). Per-Q-frame counters would conflate multiple
+    // work items that share a Q frame (different heads, or multiple Q chunks per Q frame at
+    // sub-frame Sq_chunk_t), so the counter is indexed by q (the sdpa_ring_v2 Q-loop variable,
+    // which enumerates work items) and the total is looked up from a small per-Q-frame table.
+    //
+    // Q is SP-sharded across `ring_size` devices, and `frame_allow` is a broadcast global table
+    // indexed by GLOBAL Q frame. `q_frame_offset` maps this device's local Q chunks to their
+    // global Q-frame indices — without it, every device would look up frame_allow row 0.
+    //
+    // Array sizes: q_frame_total_processed is indexed by GLOBAL Q frame (max 32 by TT_FATAL);
+    // q_work_item_processed is indexed by work-item id (bounded by B * NH * num_q_chunks; all
+    // three are compile-time constants above).
+    constexpr uint32_t nf_pad_arr = num_frames_padded_compile > 0 ? num_frames_padded_compile : 1;
+    // Per-core work-item counter: q_work_item_processed is indexed by `q - global_q_start`
+    // so the array only needs to be as large as this core's actual work-item count
+    // (bounded by ~ceil(B*NH*num_q_chunks / num_cores) — typically single-digit at nh=40).
+    // Sizing the array by B*NH*num_q_chunks (== 360 at nh=40) puts 1440 bytes on the TRISC
+    // stack and hangs the matmul pipeline (Bug 1). 32 is a safe upper bound for realistic
+    // shard geometries; bump if a shape exceeds it and add a host-side TT_FATAL guard.
+    constexpr uint32_t work_items_arr = 32;
+    uint32_t q_frame_total_processed[nf_pad_arr] = {};
+    uint32_t q_work_item_processed[work_items_arr] = {};
+    uint32_t q_frame_offset = 0;
+    if constexpr (sparse_frames_enabled) {
+        // Feature bit 1: gate the total-array population (nested 24×24 bit scan + writes).
+        if (sparse_feature_mask & (1u << 1)) {
+            const uint32_t q_frames_per_shard = q_local_padded_Nt / frame_seqlen_tiles;
+            q_frame_offset = ring_index * q_frames_per_shard;
+            const uint32_t chunks_per_frame = frame_seqlen_tiles / Sk_chunk_t;
+            for (uint32_t qf = 0; qf < num_frames_padded_compile; ++qf) {
+                uint32_t allowed_k_frames = 0;
+                for (uint32_t kf = 0; kf < num_frames_padded_compile; ++kf) {
+                    const uint32_t bit_idx = qf * num_frames_padded_compile + kf;
+                    if ((frame_allow_words[bit_idx >> 5] >> (bit_idx & 31)) & 1u) {
+                        allowed_k_frames++;
+                    }
+                }
+                q_frame_total_processed[qf] = allowed_k_frames * chunks_per_frame;
+            }
+        }
+    }
+
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+        WAYPOINT("CRIT");
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
+        WAYPOINT("CRID");
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so compute stays aligned with reader, writer, and all-gather.
         if (((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
@@ -319,7 +396,10 @@ void kernel_main() {
                 kv_pad_rotation_enabled,
                 v_cb_physical_width_t,
                 v_shares_k_buffer,
-                kt_inplace_v>(
+                kt_inplace_v,
+                sparse_frames_enabled,
+                frame_seqlen_tiles,
+                num_frames_padded_compile>(
                 global_q_start,
                 global_q_end,
                 iter_num_kv_chunks,
@@ -341,7 +421,12 @@ void kernel_main() {
                 skip_first_half_q,
                 use_zigzag_balancing,
                 chunked_context,
-                is_first_active_iter);
+                is_first_active_iter,
+                frame_allow_words,
+                q_frame_total_processed,
+                q_work_item_processed,
+                q_frame_offset,
+                sparse_feature_mask);
         } else {
             assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();
             sdpa_ring<
@@ -414,5 +499,7 @@ void kernel_main() {
                 use_zigzag_balancing,
                 chunked_context);
         }
+        WAYPOINT("CEIE");
     }
+    WAYPOINT("CEND");
 }

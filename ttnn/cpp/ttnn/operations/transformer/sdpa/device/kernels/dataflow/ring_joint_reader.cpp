@@ -8,6 +8,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/debug/waypoint.h"
 #include "dataflow_common.hpp"
 #include "chunked_prefill_utils.hpp"
 #include "chain_link.hpp"
@@ -263,6 +264,18 @@ void kernel_main() {
         true, /* wait_for_op_signal */
         argidx);
 
+    // Sparse-frames packed frame_allow bitmap. Host always pushes 32 uint32 words (zeros when
+    // the feature is disabled), so the read is unconditional here. Later use is gated on the
+    // sparse_frames_enabled compile-time flag. Same bit layout the compute kernel uses; must
+    // match exactly so sender and receiver make identical skip decisions in the chain.
+    uint32_t frame_allow_words[32];
+    for (uint32_t w = 0; w < 32; ++w) {
+        frame_allow_words[w] = get_arg_val<uint32_t>(argidx++);
+    }
+    // Sparse feature mask (matches compute's mask). Bit 5 gates the reader-side shard-aggregate
+    // skip check. Bits 0-4 are compute-only; reader ignores them.
+    const uint32_t sparse_feature_mask = get_arg_val<uint32_t>(argidx++);
+
     // Compile-time semaphore ids and chain flags are appended after all TensorAccessorArgs().
     // ChainLink takes semaphore IDs directly (the new Semaphore<> wrapper resolves them to L1 addrs).
     constexpr uint32_t chain_sender_semaphore_arg_offset = ring_joint::kChainSenderSemaphoreCompileArgOffset;
@@ -326,6 +339,15 @@ void kernel_main() {
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
+
+    // Sparse-frames extension args (mirror compute-side plumbing; see ring_joint_sdpa_program_
+    // factory.cpp where these are appended right after the reader CB compile args). Reader must
+    // skip disallowed k_chunks identically to compute so head/batch/gqa chain multicast rounds
+    // fire only for chunks that will actually be processed — otherwise sparse's variable-rate
+    // compute path breaks chain lockstep at high work-items-per-core.
+    constexpr uint32_t sparse_frames_enabled = get_compile_time_arg_val(cb_arg_offset + 3);
+    constexpr uint32_t sparse_frame_seqlen_tiles = get_compile_time_arg_val(cb_arg_offset + 4);
+    constexpr uint32_t sparse_num_frames_padded = get_compile_time_arg_val(cb_arg_offset + 5);
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
@@ -473,8 +495,10 @@ void kernel_main() {
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+        WAYPOINT("RRIT");
         // find out which is the latest ring_id that synchronized
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
+        WAYPOINT("RRID");
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so reader stays aligned with compute, writer, and all-gather.
         if (((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
@@ -535,6 +559,7 @@ void kernel_main() {
         uint32_t gqa_group_q_iter = 0;
 
         for (uint32_t q_iter = 0; q_iter < loop_q_count; ++q_iter) {
+            WAYPOINT("RQIT");
             // Check if this is a real iteration or only padded chain/mcast synchronization.
             const bool is_padded_iter = (q_iter >= q_per_core);
 
@@ -589,6 +614,44 @@ void kernel_main() {
             // fronted in the CB, so we only need to read it once on the first active ring iteration.
             const bool need_q_read = (q_per_core > 1) || !q_pushed;
 
+            // Push Q BEFORE the k_chunk loop so the sparse-frames per-k_chunk skip below never
+            // strands the Q push. (Historically Q was pushed at k_chunk==0 inside the loop, "after
+            // K forward" to avoid NOC ordering conflicts between K writes and Q read barriers —
+            // but hoisting BEFORE the loop is equally safe: no K writes are in flight yet.) If
+            // ALL k_chunks were sparse-disallowed and Q push stayed inside the loop, compute
+            // would pop an empty Q CB and hang.
+            if (need_q_read) {
+                const auto read_q = [&](const auto& q_gen) {
+                    if constexpr (use_q_subblock_push) {
+                        for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
+                            const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
+                            const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
+                            Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
+                            read_block(
+                                q_gen,
+                                q_sub_slice,
+                                q_end_seq_tile,
+                                cb_q_in,
+                                q_tile_bytes,
+                                false /*transpose*/,
+                                q_barrier_threshold);
+                        }
+                    } else {
+                        read_block(
+                            q_gen,
+                            q_slice,
+                            q_end_seq_tile,
+                            cb_q_in,
+                            q_tile_bytes,
+                            false /*transpose*/,
+                            q_barrier_threshold);
+                    }
+                };
+                read_q_from_source<has_joint_q, joint_tensor_args_offset>(
+                    is_joint_q, joint_q_addr, q_generator, joint_input_tile_logical, read_q);
+                q_pushed = true;
+            }
+
             for (uint32_t k_chunk = 0; k_chunk < iter_num_kv_chunks; ++k_chunk) {
                 /**
                  * Iterate over all KV chunks for this Q chunk.
@@ -608,6 +671,38 @@ void kernel_main() {
                     // This is a KV chunk on spatial input beyond the logical N, and not joint KV. Skip it.
                     continue;
                 }
+
+                // Sparse-frames skip based on the SHARD-AGGREGATE allow (union of allow rows across
+                // all q_frames this device holds). Different cores in the same head/batch/gqa
+                // chain handle different q_chunks with potentially different frame_allow rows —
+                // if reader skipped per-q_chunk, chain participants would disagree per k_chunk
+                // and chain sync would break. Aggregate means "does ANY q_frame in the shard
+                // attend this k_frame?" — the answer is the same for all cores in the chain
+                // (they share the same shard, same q_frame set). Compute still does per-q_chunk
+                // drain for chunks reader pushed but this specific q_chunk doesn't attend.
+                if constexpr (sparse_frames_enabled == 1) {
+                    // Feature bit 5: gate the reader-side shard-aggregate skip check.
+                    if ((sparse_feature_mask & (1u << 5)) && !kv_chunk_is_joint) {
+                        const uint32_t k_global_start_tile = kv_local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
+                        const uint32_t k_frame = k_global_start_tile / sparse_frame_seqlen_tiles;
+                        const uint32_t q_frames_per_shard = q_local_padded_Nt / sparse_frame_seqlen_tiles;
+                        const uint32_t q_frame_base = ring_index * q_frames_per_shard;
+                        bool any_q_attends = false;
+                        for (uint32_t qf_local = 0; qf_local < q_frames_per_shard; ++qf_local) {
+                            const uint32_t qf = q_frame_base + qf_local;
+                            const uint32_t bit_idx = qf * sparse_num_frames_padded + k_frame;
+                            if (((frame_allow_words[bit_idx >> 5] >> (bit_idx & 31)) & 1u) != 0u) {
+                                any_q_attends = true;
+                                break;
+                            }
+                        }
+                        if (!any_q_attends) {
+                            WAYPOINT("RKSK");
+                            continue;
+                        }
+                    }
+                }
+                WAYPOINT("RKPR");
 
                 // Default to local/gathered KV; override below for joint KV when applicable.
                 Slice k_slice;
@@ -652,7 +747,9 @@ void kernel_main() {
                 }
                 uint32_t cb_k_start_address = cb_k.get_write_ptr();
                 if (k_chain.should_receive(nb, k_chain_head)) {
+                    WAYPOINT("RKRV");
                     k_chain.receive(noc);
+                    WAYPOINT("RKRD");
                 } else {
                     // Injector or non-participant: read K from DRAM. Dispatch directly so
                     // local and gathered tensors may use different accessor types.
@@ -678,7 +775,9 @@ void kernel_main() {
 
                 // Forward K chunk via chain (uses K's data size explicitly)
                 if (k_chain.should_forward(nb, k_chain_head, q_iter_local)) {
+                    WAYPOINT("RKFW");
                     k_chain.forward(noc, cb_k_start_address, k_chunk_tiles, k_tile_bytes);
+                    WAYPOINT("RKFD");
                 }
 
                 // Skip Q and compute-visible pushes for padded mcast iterations.
@@ -704,41 +803,9 @@ void kernel_main() {
                 cb_k.push_back(k_chunk_tiles);
                 KV_chunks_processed_in_iter++;
 
-                // Download Q on the first K iteration — after K is downloaded and forwarded.
-                // Push Q one subblock at a time so compute can start QK matmul incrementally.
-                // Placed after K forward so no outstanding NOC writes remain
-                // (noc_async_read_barrier inside subblock read would deadlock with in-flight writes).
-                if (k_chunk == 0 && need_q_read) {
-                    const auto read_q = [&](const auto& q_gen) {
-                        if constexpr (use_q_subblock_push) {
-                            for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
-                                const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
-                                const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
-                                Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
-                                read_block(
-                                    q_gen,
-                                    q_sub_slice,
-                                    q_end_seq_tile,
-                                    cb_q_in,
-                                    q_tile_bytes,
-                                    false /*transpose*/,
-                                    q_barrier_threshold);
-                            }
-                        } else {
-                            read_block(
-                                q_gen,
-                                q_slice,
-                                q_end_seq_tile,
-                                cb_q_in,
-                                q_tile_bytes,
-                                false /*transpose*/,
-                                q_barrier_threshold);
-                        }
-                    };
-                    read_q_from_source<has_joint_q, joint_tensor_args_offset>(
-                        is_joint_q, joint_q_addr, q_generator, joint_input_tile_logical, read_q);
-                    q_pushed = true;
-                }
+                // (Q push was hoisted above the k_chunk loop — see the "Push Q BEFORE the
+                // k_chunk loop" block. Doing it inside here would strand Q when all k_chunks
+                // for this q_iter are sparse-disallowed.)
 
                 // In-place latent-V (kt_inplace_v) materializes nothing: compute reads V straight
                 // from the K^T already pushed above, so neither branch below runs for that case.
@@ -808,7 +875,9 @@ void kernel_main() {
                     // Forward V to next core(s) before push_back — prevents compute from
                     // popping the buffer while the mcast is still reading from it.
                     if (v_chain.should_forward(nb, nv, q_iter_local)) {
+                        WAYPOINT("RVFW");
                         v_chain.forward(noc, cb_v_start_address);
+                        WAYPOINT("RVFD");
                     }
 
                     // Make V available to compute.
@@ -829,5 +898,7 @@ void kernel_main() {
                 cb_v_dummy.push_back(v_cb_entry_tiles);
             }
         }
+        WAYPOINT("REIE");
     }
+    WAYPOINT("REND");
 }

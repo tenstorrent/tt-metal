@@ -20,6 +20,7 @@
 #endif
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/debug/waypoint.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
@@ -2257,6 +2258,9 @@ template <
     uint32_t v_cb_physical_width_t = vDHt,
     bool v_shares_k_buffer = false,
     bool kt_inplace_v = false,
+    bool sparse_frames_enabled = false,
+    uint32_t frame_seqlen_tiles = 0,
+    uint32_t num_frames_padded_compile = 0,
     typename MaskCtx = LightweightMaskContext>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
@@ -2280,7 +2284,30 @@ void sdpa_ring_v2(
     const bool skip_first_half_q = false,
     const bool use_zigzag_balancing = false,
     const ChunkedContext& chunked = {},
-    const bool is_first_active_iter = true) {
+    const bool is_first_active_iter = true,
+    const uint32_t* frame_allow_words = nullptr,
+    // Sparse-frames per-work-item accounting. When sparse_frames_enabled, the caller-supplied
+    // active_ring_iter_mask reflects OOB-only work and can mark iters "active" that are
+    // fully drained for some Q chunks (sparse-frames unknown to the host mask). Compute-
+    // side is_first / is_last logic must therefore track ACTUAL processing history per
+    // WORK ITEM (a (batch, head, q_chunk) tuple — the unit that produces one attention
+    // output tile). `q_frame_total_processed` is the precomputed count of processed K chunks
+    // expected for each GLOBAL Q frame across all ring iters (indexed by q_frame; the total
+    // is the same for every work item mapping to that frame). `q_work_item_processed` is
+    // a running counter maintained across ring-iter calls, indexed by the Q-loop variable
+    // `q` — different heads / different q_chunks that map to the same Q frame get separate
+    // slots. Ignored when !sparse_frames_enabled; may be nullptr in that case.
+    const uint32_t* q_frame_total_processed = nullptr,
+    uint32_t* q_work_item_processed = nullptr,
+    // Sparse-frames global Q frame offset. Q is SP-sharded, so this device's local Q chunk
+    // 0 maps to GLOBAL Q frame `q_frame_offset`. Compute must use the GLOBAL index when
+    // looking up `frame_allow_words` (which is a broadcast global table) and when indexing
+    // the per-Q-frame counters above. Zero for non-sharded / non-sparse paths.
+    const uint32_t q_frame_offset = 0,
+    // Reverse-bisection runtime bitmask. See ring_joint_sdpa.cpp for bit meanings.
+    // 0 = all sparse code paths runtime-disabled (dense-equivalent behavior with sparse
+    // binary in place). 0x1F = all enabled (production behavior).
+    const uint32_t sparse_feature_mask = 0x1Fu) {
     init_sdpa_streaming_semaphores();
 
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -2395,6 +2422,62 @@ void sdpa_ring_v2(
         return false;
     };
 
+    // Sparse-frames skip: this (q_frame, k_frame) pair is disallowed for this Q chunk. Reader
+    // uses a SHARD-AGGREGATE decision (skips only when NO q_frame in the shard attends the
+    // k_frame — required for head/batch/gqa chain sync across cores handling different q_chunks
+    // with different allow rows). So the reader may have PUSHED K/V for a chunk this specific
+    // Q chunk doesn't attend — we drain those here.
+    //
+    //   bit_idx = q_frame * num_frames_padded_compile + k_frame
+    //   allowed = (frame_allow_words[bit_idx / 32] >> (bit_idx % 32)) & 1
+    //
+    // The aggregate check: if no q_frame in the shard attends this k_frame either, the reader
+    // also skipped and we return true without draining. Otherwise reader pushed → drain.
+    auto try_skip_sparse_frames = [&](uint32_t k_chunk, uint32_t q_frame_for_chunk, bool kv_chunk_is_joint) -> bool {
+        if constexpr (sparse_frames_enabled) {
+            // Feature bit 2: gate the try_skip lambda body (aggregate check + drain)
+            if (!(sparse_feature_mask & (1u << 2))) {
+                return false;
+            }
+            if (kv_chunk_is_joint) {
+                return false;  // joint K is always attended (no frame semantics)
+            }
+            // K chunk's global tile position along the padded sequence (all sp shards concatenated).
+            const uint32_t k_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
+            const uint32_t k_frame = k_global_start_tile / frame_seqlen_tiles;
+            const uint32_t bit_idx = q_frame_for_chunk * num_frames_padded_compile + k_frame;
+            const uint32_t word = frame_allow_words[bit_idx >> 5];
+            const uint32_t bit = (word >> (bit_idx & 31u)) & 1u;
+            if (bit == 0u) {
+                // This Q chunk doesn't attend this k_frame. Check if reader pushed (aggregate).
+                const uint32_t q_frames_per_shard = q_local_padded_Nt / frame_seqlen_tiles;
+                const uint32_t q_frame_base = (q_frame_offset / q_frames_per_shard) * q_frames_per_shard;
+                bool aggregate_allowed = false;
+                for (uint32_t qf_local = 0; qf_local < q_frames_per_shard; ++qf_local) {
+                    const uint32_t qf = q_frame_base + qf_local;
+                    const uint32_t agg_bit_idx = qf * num_frames_padded_compile + k_frame;
+                    if (((frame_allow_words[agg_bit_idx >> 5] >> (agg_bit_idx & 31u)) & 1u) != 0u) {
+                        aggregate_allowed = true;
+                        break;
+                    }
+                }
+                if (aggregate_allowed) {
+                    // Reader pushed but this Q chunk doesn't attend — drain.
+                    WAYPOINT("CSDR");
+                    CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
+                    sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
+                    if constexpr (!kt_inplace_v) {
+                        CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
+                        sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+                    }
+                    KV_chunks_processed_in_iter++;
+                }
+                return true;  // skip either way (whether we drained or not)
+            }
+        }
+        return false;
+    };
+
     // -----------------------------------------------------------------------
 
     for (uint32_t q = global_q_start; q < global_q_end; q++) {
@@ -2425,6 +2508,22 @@ void sdpa_ring_v2(
 
         // Per-Q pre-scan: count K chunks that will actually be processed.
         // Placed after balanced-skip guards so skipped Q chunks don't pay for the scan.
+        // Note: this scan does NOT drain CBs (reader hasn't pushed yet); it only mirrors the
+        // skip predicates so `is_last_k` fires on the right chunk in the main loop below.
+        //
+        // Sparse-frames: q_frame is uniform within a Q chunk when the pattern is enabled (host
+        // asserts frame_seqlen_tiles % Sq_chunk_t == 0, so no Q chunk straddles a frame). Chunks
+        // may be smaller than a frame; the integer division below still maps every chunk to
+        // exactly one q_frame. Computed once here and reused inline.
+        uint32_t q_frame_for_this_chunk = 0;
+        if constexpr (sparse_frames_enabled) {
+            // Derive the LOCAL Q-frame index from this device's q_chunk, then add the caller-
+            // supplied `q_frame_offset` to convert to the GLOBAL Q-frame index. `frame_allow`
+            // and the per-Q counters are indexed globally, so this offset is required whenever
+            // Q is SP-sharded (every device holds a different Q shard). Without it, all
+            // devices would look up frame_allow row 0 regardless of their actual Q shard.
+            q_frame_for_this_chunk = (q_chunk * Sq_chunk_t) / frame_seqlen_tiles + q_frame_offset;
+        }
         uint32_t per_q_valid_kv = 0;
         for (uint32_t k = 0; k < num_kv_chunks; ++k) {
             const bool is_joint = k >= num_local_k_chunks;
@@ -2436,7 +2535,101 @@ void sdpa_ring_v2(
                     continue;
                 }
             }
+            if constexpr (sparse_frames_enabled) {
+                // Feature bit 0: pre-scan bit check
+                if ((sparse_feature_mask & 1u) && !is_joint) {
+                    const uint32_t k_global = local_padded_Nt * ring_id + k * Sk_chunk_t;
+                    const uint32_t k_frame = k_global / frame_seqlen_tiles;
+                    const uint32_t bit_idx = q_frame_for_this_chunk * num_frames_padded_compile + k_frame;
+                    const uint32_t word = frame_allow_words[bit_idx >> 5];
+                    if (((word >> (bit_idx & 31u)) & 1u) == 0u) {
+                        continue;
+                    }
+                }
+            }
             per_q_valid_kv++;
+        }
+
+        // Sparse-frames zero-work-iter fast path: this Q chunk has no processed K chunks in
+        // THIS ring iter (either a padded / all-drained Q frame across all iters, or a real Q
+        // frame whose allowed K frames don't land in this iter). We MUST still drain the K/V
+        // that the reader pushed for this Q chunk (reader has no sparse-frames logic — it
+        // pushes every non-OOB chunk). But we CANNOT enter the accumulator machinery: the
+        // restore_from_staging branch below assumes staging CBs were populated, and the post-
+        // loop q_prev.max pop would desync CBs that nothing was written to. Doing everything
+        // inline here and `continue`ing bypasses the entire acc_state state machine for this
+        // Q chunk in this iter — real Q chunks resume normally in their next processing iter,
+        // and zero-total-work Q chunks push placeholder outputs on the last host-mask iter.
+        // Note: reader uses SHARD-AGGREGATE allow (union across shard's q_frames), so it may
+        // have pushed K/V for chunks this specific Q chunk doesn't attend — we must drain those.
+        if constexpr (sparse_frames_enabled) {
+            WAYPOINT("CZWC");
+            // Feature bit 3: gate the zero-work fast path body
+            if ((sparse_feature_mask & (1u << 3)) && per_q_valid_kv == 0) {
+                // Drain any k_chunks reader pushed. Aggregate = union of shard's q_frame rows;
+                // reader pushed if ANY q_frame in shard attends this k_frame. Since this q_chunk
+                // has per_q_valid_kv==0, we drain (not process) every pushed chunk.
+                const uint32_t q_frames_per_shard = q_local_padded_Nt / frame_seqlen_tiles;
+                const uint32_t q_frame_base = (q_frame_offset / q_frames_per_shard) * q_frames_per_shard;
+                for (uint32_t k = 0; k < num_kv_chunks; ++k) {
+                    const bool is_joint_ = (k >= num_local_k_chunks);
+                    if (try_skip_oob_kv(k, is_joint_)) {
+                        continue;
+                    }
+                    if (!is_joint_) {
+                        // Aggregate check: reader pushed only if some q_frame in shard attends.
+                        const uint32_t k_global_start_tile = local_padded_Nt * ring_id + k * Sk_chunk_t;
+                        const uint32_t k_frame = k_global_start_tile / frame_seqlen_tiles;
+                        bool aggregate_allowed = false;
+                        for (uint32_t qf_local = 0; qf_local < q_frames_per_shard; ++qf_local) {
+                            const uint32_t qf = q_frame_base + qf_local;
+                            const uint32_t bit_idx = qf * num_frames_padded_compile + k_frame;
+                            if (((frame_allow_words[bit_idx >> 5] >> (bit_idx & 31u)) & 1u) != 0u) {
+                                aggregate_allowed = true;
+                                break;
+                            }
+                        }
+                        if (!aggregate_allowed) {
+                            continue;  // reader also skipped — nothing to drain
+                        }
+                    }
+                    // Drain K/V that reader pushed.
+                    WAYPOINT("CZDR");
+                    CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
+                    sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
+                    if constexpr (!kt_inplace_v) {
+                        CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
+                        sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+                    }
+                    KV_chunks_processed_in_iter++;
+                }
+                // Per-iter handshake with writer (multi-Q only; matches writer's cb_signal wait
+                // in ring_joint_writer.cpp:775-778).
+                if (q_per_core > 1) {
+                    CircularBuffer(cb_signal).reserve_back(1);
+                    sdpa_cb_push_back_out_of_line(cb_signal, 1);
+                }
+                // Zero-total-work Q chunk on the mask's last iter: push placeholder outputs so
+                // writer's per-Q-chunk save completes. Contents unspecified — for padded Q frames
+                // (nf_padded > nf_real) the DRAM region is beyond real_n and discarded downstream.
+                if (is_last_ring_iter && q_frame_total_processed[q_frame_for_this_chunk] == 0) {
+                    CircularBuffer(cb_out).reserve_back(Sq_chunk_t * vDHt);
+                    sdpa_cb_push_back_out_of_line(cb_out, Sq_chunk_t * vDHt);
+                    CircularBuffer(cb_max_out).reserve_back(Sq_chunk_t);
+                    sdpa_cb_push_back_out_of_line(cb_max_out, Sq_chunk_t);
+                    CircularBuffer(cb_sum_out).reserve_back(Sq_chunk_t);
+                    sdpa_cb_push_back_out_of_line(cb_sum_out, Sq_chunk_t);
+                }
+                // Pop Q if reader pushed it this iter. For q_per_core > 1, reader pushes Q every
+                // iter (need_q_read=true) — match with a pop every iter. For q_per_core == 1, Q
+                // is fronted across iters and popped only on the last (matches the standard path
+                // below at "Pop Q"). A zero-total-work Q chunk on a single-Q core means the whole
+                // core is zero-work; the last-iter pop suffices.
+                if (q_per_core > 1 || is_last_ring_iter) {
+                    sdpa_cb_pop_front_out_of_line(cb_q_in, Sq_chunk_t * DHt);
+                }
+                continue;
+            }
         }
 
         // Use persistent accumulator state from caller (single Q-chunk)
@@ -2464,15 +2657,47 @@ void sdpa_ring_v2(
             if (try_skip_causal_above_diag(k_chunk, causal_k_limit)) {
                 continue;
             }
+            if (try_skip_sparse_frames(k_chunk, q_frame_for_this_chunk, kv_chunk_is_joint)) {
+                continue;
+            }
 
+            WAYPOINT("CMLK");
             KV_chunks_processed++;
             KV_chunks_processed_in_iter++;
 
-            const bool is_first = is_first_kv_for_this_q && (KV_chunks_processed == 1);
             const bool is_last_k = (KV_chunks_processed == per_q_valid_kv);
 
-            // Last K chunk of last ring_iter triggers per-row normalization
-            const bool is_last_k_of_last_ring_iter = is_last_ring_iter && is_last_k;
+            // Sparse-frames: is_first / is_last_k_of_last_ring_iter must be based on per-work-
+            // item ACTUAL processing history, not on the host's active_ring_iter_mask (which is
+            // OOB-only and does not know sparse-frames). Otherwise a work item whose first-
+            // processed iter is not the mask's first-active iter waits for a non-existent prev
+            // accumulator, and a work item whose last-processed iter isn't the mask's last-
+            // active iter never triggers final normalization. Indexed by `q` (the outer Q-loop
+            // variable identifying this work item) so different heads / q_chunks that map to
+            // the same Q frame track independently. Total lookup uses q_frame_for_this_chunk
+            // (same total for every work item mapping to that frame).
+            bool is_first;
+            bool is_last_k_of_last_ring_iter;
+            if constexpr (sparse_frames_enabled) {
+                // Feature bit 4: use counter-based flags (else fall back to dense flags).
+                // Counter is indexed by (q - global_q_start) — per-core scope — so the array
+                // is small (~q_per_core). See ring_joint_sdpa.cpp's work_items_arr note.
+                if (sparse_feature_mask & (1u << 4)) {
+                    const uint32_t q_local = q - global_q_start;
+                    q_work_item_processed[q_local]++;
+                    is_first = (q_work_item_processed[q_local] == 1);
+                    is_last_k_of_last_ring_iter =
+                        (q_work_item_processed[q_local] == q_frame_total_processed[q_frame_for_this_chunk]);
+                } else {
+                    (void)q_work_item_processed;
+                    (void)q_frame_total_processed;
+                    is_first = is_first_kv_for_this_q && (KV_chunks_processed == 1);
+                    is_last_k_of_last_ring_iter = is_last_ring_iter && is_last_k;
+                }
+            } else {
+                is_first = is_first_kv_for_this_q && (KV_chunks_processed == 1);
+                is_last_k_of_last_ring_iter = is_last_ring_iter && is_last_k;
+            }
 
             // Signal writer that last K-chunk is starting (for row-by-row DMA save/restore).
             if (is_last_k && q_per_core > 1) {
@@ -2698,6 +2923,13 @@ void sdpa_ring_v2(
                 }
             }
         }
+
+        // Note: sparse-frames per-iter cb_signal push and zero-total-work placeholder cb_out/max/
+        // sum push are handled by the zero-work-iter fast path above (search "Sparse-frames
+        // zero-work-iter fast path"). This block is reached only when per_q_valid_kv > 0, i.e.
+        // compute actually processed at least one K chunk this iter — the standard is_last_k
+        // guard inside the K loop (line 2542) has already pushed cb_signal via the processing
+        // branch, and cb_out has been pushed by SALAD.
 
         // Pop Q — not popped inside step since ring_mode gates the early Q pop.
         // When q_per_core == 1, Q is identical across ring iterations so we keep it

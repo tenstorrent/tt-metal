@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/debug/waypoint.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
@@ -530,7 +531,9 @@ void kernel_main() {
     // Track non-skipped iters so the first active iter starts with fresh accumulators (matches compute).
     bool seen_active_iter = false;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+        WAYPOINT("WRIT");
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
+        WAYPOINT("WRID");
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so writer stays aligned with reader, compute, and all-gather.
         if (((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
@@ -773,9 +776,11 @@ void kernel_main() {
                 // Wait for compute to signal last K-chunk start (multi-Q only).
                 // Normalize-only path also pushes this signal.
                 if (!single_q_chunk) {
+                    WAYPOINT("WSGW");
                     CircularBuffer cb_sig(cb_signal);
                     cb_sig.wait_front(1);
                     cb_sig.pop_front(1);
+                    WAYPOINT("WSGD");
                 }
 
                 if (is_last_ring_iter) {
@@ -883,5 +888,7 @@ void kernel_main() {
             }
             noc.async_write_barrier();  // Ensure writes of output and LSE complete before next iteration
         }
+        WAYPOINT("WEIE");
     }
+    WAYPOINT("WEND");
 }

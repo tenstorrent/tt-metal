@@ -13,6 +13,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 #include <optional>
 #include <cmath>
@@ -1025,6 +1026,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     TT_FATAL(
         use_streaming_compute || !v_shares_k_buffer,
         "Latent-V ring attention is implemented only for streaming compute (fp32_dest_acc_en must be false)");
+    TT_FATAL(
+        !args.has_sparse_frames() || use_streaming_compute,
+        "sparse-frames windowed attention requires the ring-joint streaming compute path; the "
+        "compute_common.hpp path selected by fp32_dest_acc_en=true is not supported for this feature.");
     log_debug(
         tt::LogOp,
         "use_streaming_compute: {} (is_causal={}, Sq_chunk_t={}, Sk_chunk_t={}, sbh={}, sbw={})",
@@ -1468,10 +1473,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         use_streaming_compute ? allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df) : inactive_cb;
 
     // Signal CB: compute signals writer when last K-chunk starts.
-    // 1 page suffices: writer pops during SALAD before compute pushes the next Q's signal.
+    // Normally 1 page suffices: writer pops during SALAD before compute pushes the next Q's
+    // signal. But under sparse-frames, some Q chunks have zero K processed in an iter (fully
+    // drained), so compute pushes their per-iter signal immediately at the end of the K loop
+    // (no SALAD work between them). Under those conditions compute can push several signals
+    // faster than the writer drains — depth 1 deadlocks. Size the CB to num_q_chunks so compute
+    // can push a full iter's worth of signals without blocking; writer catches up asynchronously.
     constexpr uint32_t signal_page_size = 16;
     const uint32_t cb_signal =
-        use_streaming_compute ? allocate_cb(signal_page_size, 1, tt::DataFormat::UInt16) : inactive_cb;
+        use_streaming_compute ? allocate_cb(signal_page_size, num_q_chunks, tt::DataFormat::UInt16) : inactive_cb;
 
     const std::vector<uint32_t> cb_compile_time_args = {
         cb_q_in,     cb_k_in,     cb_v_in,         cb_mask_in,       cb_scale_in,    cb_identity_scale_in,
@@ -1485,6 +1495,26 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         writer_compile_time_args.end(), cb_compile_time_args.begin(), cb_compile_time_args.end());
     compute_compile_time_args.insert(
         compute_compile_time_args.end(), cb_compile_time_args.begin(), cb_compile_time_args.end());
+
+    // Sparse-frames extension (slots 72..74, after the CB block). Compile-time args reflect the
+    // pattern's shape (enable flag + frame_seqlen_tiles + nf_padded); the packed frame_allow bits
+    // ride as compute-kernel runtime args (see below). Zero when disabled — the compute kernel
+    // gates on `sparse_frames_enabled` and skips the check entirely.
+    const bool sparse_frames_enabled = args.has_sparse_frames();
+    const uint32_t sparse_frame_seqlen_tiles =
+        sparse_frames_enabled ? (args.frame_seqlen.value() / tt::constants::TILE_HEIGHT) : 0u;
+    const uint32_t sparse_num_frames_padded = sparse_frames_enabled ? args.num_frames_padded.value() : 0u;
+    compute_compile_time_args.push_back(static_cast<uint32_t>(sparse_frames_enabled));
+    compute_compile_time_args.push_back(sparse_frame_seqlen_tiles);
+    compute_compile_time_args.push_back(sparse_num_frames_padded);
+    // Reader gets the same three: with them, the reader mirrors the compute-side sparse-frames
+    // skip inside its per-k_chunk loop (skipping reserve/chain/push for disallowed chunks) so
+    // that head_chain/batch_chain multicast stays in lockstep between sender and receiver even
+    // when compute takes different-latency paths per Q chunk under sparse. Slots are at the end
+    // of reader compile args (after the 3 CB slots that were just appended above).
+    reader_compile_time_args.push_back(static_cast<uint32_t>(sparse_frames_enabled));
+    reader_compile_time_args.push_back(sparse_frame_seqlen_tiles);
+    reader_compile_time_args.push_back(sparse_num_frames_padded);
 
     auto* const q_buf = input_tensor_q.buffer();
     auto* const k_buf = input_tensor_k.buffer();
@@ -2339,6 +2369,25 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_signaler_args);
         reader_args.append(reader_signaler_args);
 
+        // Sparse-frames extension: append the 32 uint32 packed frame_allow words. Reader reads
+        // them right after the fused-op signaler runtime args, gated at compile time on
+        // `sparse_frames_enabled` (so zeros are harmless when disabled). Same bit layout the
+        // compute kernel already uses — sender and receiver make identical skip decisions.
+        constexpr uint32_t kReaderSparseFramesPackedWords = 32;
+        for (uint32_t w = 0; w < kReaderSparseFramesPackedWords; ++w) {
+            const uint32_t word =
+                (sparse_frames_enabled && w < args.frame_allow_packed.size()) ? args.frame_allow_packed[w] : 0u;
+            reader_args.push_back(word);
+        }
+        // Sparse feature bitmask (reverse-bisection knob) — reader honors bit 5 for its
+        // shard-aggregate skip. Reuses the same env var as compute so a single value applies
+        // to both kernels.
+        uint32_t reader_sparse_feature_mask = 0x3Fu;  // 0x3F = compute default (0x1F) + bit 5 for reader
+        if (const char* env = std::getenv("TT_SPARSE_FEATURE_MASK")) {
+            reader_sparse_feature_mask = static_cast<uint32_t>(std::strtoul(env, nullptr, 0));
+        }
+        reader_args.push_back(reader_sparse_feature_mask);
+
         reader_kernel.emplace_runtime_args(core, reader_args.args);
 
         // Writer args
@@ -2387,6 +2436,25 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             "compute.q_valid_tile_count");
         compute_args.push_checked(
             runtime_arg_layout.compute_active_ring_iter_mask, active_ring_iter_mask, "compute.active_ring_iter_mask");
+        // Sparse-frames extension: append the 32 uint32 packed frame_allow words. Compute reads
+        // them right after `active_ring_iter_mask` (slot 11..42). Same values on every core (the
+        // pattern is device-global). Passes zeros when the feature is disabled — the kernel gates
+        // on `sparse_frames_enabled` at compile time so the reads have no effect.
+        constexpr uint32_t kSparseFramesPackedWords = 32;
+        for (uint32_t w = 0; w < kSparseFramesPackedWords; ++w) {
+            const uint32_t word =
+                (sparse_frames_enabled && w < args.frame_allow_packed.size()) ? args.frame_allow_packed[w] : 0u;
+            compute_args.push_back(word);
+        }
+        // Sparse feature bitmask (reverse-bisection knob). Overridden by env var
+        // TT_SPARSE_FEATURE_MASK if set; default 0x3F (all bits set = production behavior).
+        // Bit 0: pre-scan check; 1: q_frame_total_processed populate; 2: try_skip lambda;
+        // 3: zero-work fast path; 4: counter-based is_first/is_last; 5: reader shard-aggregate skip.
+        uint32_t sparse_feature_mask = 0x3Fu;
+        if (const char* env = std::getenv("TT_SPARSE_FEATURE_MASK")) {
+            sparse_feature_mask = static_cast<uint32_t>(std::strtoul(env, nullptr, 0));
+        }
+        compute_args.push_back(sparse_feature_mask);
         compute_kernel.emplace_runtime_args(core, compute_args.args);
     }
 
