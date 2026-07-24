@@ -505,7 +505,7 @@ def run_chunked_block_multiuser(
     block.forward(
         tt_h,
         indexed_rope,
-        tt_kvpe_cache.storage,
+        tt_kvpe_cache,
         cache_layer_idx=0,
         actual_start=0,
         actual_end=CHUNK,
@@ -1057,16 +1057,15 @@ def run_chunked_block_glm_indexer(
 
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
     indexed_rope = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=SEQ_CACHE, chunk_size_global=CHUNK)
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_dim,
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BF16_RM,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=SEQ_CACHE,
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
         num_users=1,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
     tt_index_kv_cache = init_kvpe_cache(
         kvpe_cache_head_dim=idx_dim,
@@ -1125,7 +1124,7 @@ def run_chunked_block_glm_indexer(
     dev_idx = unrotate_cache_layer(
         gather_cache_tp0(tt_index_kv_cache, mesh_device)[full_indexer_rank(config, layer_idx)], p, total_len
     )
-    dev_kvpe = unrotate_cache_layer(gather_cache_tp0(tt_kvpe_cache, mesh_device)[0], p, total_len)
+    dev_kvpe = unrotate_cache_layer(gather_cache_tp0(tt_kvpe_cache.storage, mesh_device)[0], p, total_len)
     _, out_pcc = comp_pcc(ref_out, out_accum)
     idx_rope_pcc, idx_nope = cache_half_pccs(g_idx, dev_idx, idx_rope, pe_interleave=False)
     kv_nope, kv_pe = cache_half_pccs(g_post, dev_kvpe, kv_lora, pe_interleave=True)
