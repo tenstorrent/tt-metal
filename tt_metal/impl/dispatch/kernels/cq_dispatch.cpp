@@ -1608,7 +1608,15 @@ void kernel_main() {
         dispatch_cb_reader.wait_for_available_data_and_release_old_pages<DispatchTelemetryBlockGuard>(cmd_ptr);
 
         DeviceZoneScopedN("CQ-DISPATCH");
-        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
+#if defined(COMPILE_FOR_IDLE_ERISC)
+        RISC_POST_HEARTBEAT(heartbeat);
+        if (early_exit()) {
+            noc_async_full_barrier();
+            noc_clear_packet_tags(my_noc_index);
+            set_l1_data_cache<false>();
+            return;
+        }
+#endif
 
         done = is_d_variant ? process_cmd_d(cmd_ptr, l1_cache) : process_cmd_h(cmd_ptr);
 
@@ -1636,6 +1644,8 @@ void kernel_main() {
     if (is_h_variant && !is_d_variant) {
         relay_client.template teardown<upstream_noc_index, upstream_noc_xy, upstream_dispatch_cb_sem_id>();
     }
+    noc_async_full_barrier();
+    noc_clear_packet_tags(my_noc_index);
     // DPRINT("dispatch_{}{}: out\n", is_h_variant, is_d_variant);
     set_l1_data_cache<false>();
 }
