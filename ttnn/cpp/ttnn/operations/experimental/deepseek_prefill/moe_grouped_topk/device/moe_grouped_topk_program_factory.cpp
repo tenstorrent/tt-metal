@@ -21,6 +21,9 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
     auto& output_weights = tensor_return_value[0];
     auto& output_indices = tensor_return_value[1];
 
+    // Test-only debug output.
+    const bool dump_biased = tensor_args.biased_scores.has_value();
+
     TT_FATAL(output_weights.dtype() == DataType::BFLOAT16, "Output weights tensor must be BFLOAT16");
     TT_FATAL(output_weights.layout() == Layout::TILE, "Output weights tensor must be TILE layout");
     TT_FATAL(output_indices.dtype() == DataType::UINT16, "Output indices tensor must be UINT16");
@@ -99,6 +102,15 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
     auto cb_biased_scores = tt::CBIndex::c_5;
     tt::tt_metal::create_cb(cb_sigmoid_scores, program, all_cores, compute_page_size, width_tiles, compute_data_format);
     tt::tt_metal::create_cb(cb_biased_scores, program, all_cores, compute_page_size, width_tiles, compute_data_format);
+
+    // Test-only debug output.
+    tt::CBIndex cb_biased_dump = dump_biased ? tt::CBIndex::c_26 : cb_biased_scores;
+    if (dump_biased) {
+        tt::tt_metal::create_cb(
+            cb_biased_dump, program, all_cores, compute_page_size, 2 * width_tiles, compute_data_format);
+    }
+    auto* biased_buffer = dump_biased ? tensor_args.biased_scores->buffer() : output_weights.buffer();
+    uint32_t biased_page_size = biased_buffer->page_size();
 
     auto cb_sorted_group_scores = tt::CBIndex::c_6;
     auto cb_sorted_expert_indices_temp = tt::CBIndex::c_7;
@@ -223,6 +235,8 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
         {"cb_bias_fp32", cb_bias_fp32},
         {"cb_sigmoid_scores", cb_sigmoid_scores},
         {"cb_biased_scores", cb_biased_scores},
+        {"cb_biased_dump", cb_biased_dump},
+        {"dump_biased_scores", static_cast<uint32_t>(dump_biased)},
         {"cb_out_weights", cb_out_weights},
         {"cb_out_indices", cb_out_indices},
         {"cb_group_index_template", cb_group_index_template},
@@ -303,6 +317,9 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
         {"cb_in_scores", cb_in_scores},
         {"cb_sigmoid_scores", cb_sigmoid_scores},
         {"cb_biased_scores", cb_biased_scores},
+        {"cb_biased_dump", cb_biased_dump},
+        {"dump_biased_scores", static_cast<uint32_t>(dump_biased)},
+        {"biased_page_size", biased_page_size},
         {"cb_reduce_ones_scalar", cb_reduce_ones_scalar},
         {"n_activated_experts", operation_attributes.n_activated_experts},
         {"packed_one_scalar", std::bit_cast<uint32_t>(1.0f)},
@@ -320,6 +337,7 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
     tt::tt_metal::TensorAccessorArgs(output_weights.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output_indices.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(padding_config_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(biased_buffer).append_to(writer_compile_time_args);
 
     auto writer_kernel_id = CreateKernel(
         program,
@@ -330,11 +348,12 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
 
     uint32_t padding_config_addr =
         tensor_args.padding_config.has_value() ? tensor_args.padding_config->buffer()->address() : 0;
+    uint32_t biased_addr = dump_biased ? tensor_args.biased_scores->buffer()->address() : 0;
 
     std::vector<uint32_t> reader_runtime_args = {scores.buffer()->address(), bias.buffer()->address(), 0, 0};
     std::vector<uint32_t> compute_runtime_args = {0, 0};
     std::vector<uint32_t> writer_runtime_args = {
-        output_weights.buffer()->address(), output_indices.buffer()->address(), 0, 0, padding_config_addr};
+        output_weights.buffer()->address(), output_indices.buffer()->address(), 0, 0, padding_config_addr, biased_addr};
 
     uint32_t start_height_tile = 0;
     uint32_t end_height_tile = 0;
@@ -386,6 +405,8 @@ void MoeGroupedTopkDeviceOperation::ProgramFactory::override_runtime_arguments(
         writer_runtime_args[1] = tensor_return_value[1].buffer()->address();
         writer_runtime_args[4] =
             tensor_args.padding_config.has_value() ? tensor_args.padding_config->buffer()->address() : 0;
+        writer_runtime_args[5] =
+            tensor_args.biased_scores.has_value() ? tensor_args.biased_scores->buffer()->address() : 0;
     }
 }
 

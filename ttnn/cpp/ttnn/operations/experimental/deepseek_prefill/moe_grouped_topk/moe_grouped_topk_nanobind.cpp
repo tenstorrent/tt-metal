@@ -43,6 +43,11 @@ void bind_moe_grouped_topk(nb::module_& mod) {
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensor. Defaults to None, which results in auto-selection.
                 padding_config (ttnn.Tensor, optional): ROW_MAJOR UINT32 tensor with per-device [num_real_tokens, pad_side].
                     pad_side is 0 for right padding and 1 for left padding. Defaults to None, which treats all tokens as real.
+                biased_scores (ttnn.Tensor, optional): Test-only debug output. A pre-allocated FLOAT32 TILE tensor with
+                    the same shape as ``scores``; when provided, the op writes the full-width biased scores
+                    (score_activation(logits) + bias, before top-k selection) into it. This is the exact tensor top-k
+                    operates on, so it can be PCC-checked against the torch reference without top-k tie-break ambiguity.
+                    Defaults to None (no debug output, zero overhead).
 
             Returns:
                 Tuple[ttnn.Tensor, ttnn.Tensor]: A tuple containing the scaled expert scores (dtype BFLOAT16) and selected expert indices (dtype UINT16). The shape of the scores tensor should be [N, B, S, 8]. The shape of the indices tensor should be [N, B, S, 8]. N, B and S can be any value. 8 is the number of experts in the final selected groups.
@@ -60,7 +65,8 @@ void bind_moe_grouped_topk(nb::module_& mod) {
         nb::arg("stable_sort") = false,
         nb::arg("score_func") = "sigmoid",
         nb::arg("memory_config") = nb::none(),
-        nb::arg("padding_config") = nb::none());
+        nb::arg("padding_config") = nb::none(),
+        nb::arg("biased_scores") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk::detail

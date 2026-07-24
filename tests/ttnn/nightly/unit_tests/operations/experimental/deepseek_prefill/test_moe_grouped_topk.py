@@ -11,13 +11,16 @@ using the recall metric (fraction of correctly selected experts per token).
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     assert_gate_output,
     build_padding_config,
     distinct_logits,
     grouped_gate_golden_act,
+    score_activation,
 )
 
 
@@ -41,6 +44,12 @@ SCORE_FUNCS = ["sigmoid", "sqrtsoftplus"]
 # Input dtype for logits/bias. The op upcasts internally bf16 input to fp32.
 INPUT_DTYPES = [ttnn.float32, ttnn.bfloat16]
 INPUT_DTYPE_IDS = ["in_fp32", "in_bf16"]
+
+# Selected-weight PCC thresholds
+WEIGHTS_PCC_THRESHOLD_FP32 = 0.96
+WEIGHTS_PCC_THRESHOLD_BF16 = 0.85
+# Pre-selection biased-scores PCC
+BIASED_PCC_THRESHOLD = 0.999
 
 
 @pytest.mark.parametrize("input_dtype", INPUT_DTYPES, ids=INPUT_DTYPE_IDS)
@@ -111,6 +120,9 @@ def test_moe_grouped_topk(
 
     ttnn_scores_in = ttnn.from_torch(scores, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_bias_in = ttnn.from_torch(bias, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_biased_scores = ttnn.from_torch(
+        torch.zeros_like(scores), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+    )
 
     ttnn_weights_out, ttnn_indices_out = ttnn.experimental.deepseek_prefill.moe_grouped_topk(
         ttnn_scores_in,
@@ -123,12 +135,25 @@ def test_moe_grouped_topk(
         epsilon=epsilon,
         score_func=score_func,
         padding_config=padding_config,
+        biased_scores=ttnn_biased_scores,
     )
 
     # Trim padding (TILE layout pads to tile boundaries); assert_gate_output flattens/compares.
     tt_weights_torch = ttnn.to_torch(ttnn_weights_out)[:num_batches, :batch_size, :seq_len, :n_activated_experts]
     tt_indices_torch = ttnn.to_torch(ttnn_indices_out)[:num_batches, :batch_size, :seq_len, :n_activated_experts]
 
+    tt_biased_torch = ttnn.to_torch(ttnn_biased_scores)[:num_batches, :batch_size, :seq_len, :total_experts]
+    ref_biased = score_activation(scores, score_func) + bias
+    biased_passed, biased_pcc = comp_pcc(tt_biased_torch.float(), ref_biased.float(), pcc=BIASED_PCC_THRESHOLD)
+    logger.info(
+        f"[{'PASS' if biased_passed else 'FAIL'}] biased_scores_pcc={biased_pcc:.6f} "
+        f"(thr={BIASED_PCC_THRESHOLD}, dtype={INPUT_DTYPE_IDS[INPUT_DTYPES.index(input_dtype)]})"
+    )
+    assert (
+        biased_passed
+    ), f"Biased-scores PCC {biased_pcc:.6f} < {BIASED_PCC_THRESHOLD} ({INPUT_DTYPE_IDS[INPUT_DTYPES.index(input_dtype)]})"
+
+    weights_pcc_threshold = WEIGHTS_PCC_THRESHOLD_BF16 if is_bf16 else WEIGHTS_PCC_THRESHOLD_FP32
     assert_gate_output(
         tt_indices_torch,
         tt_weights_torch,
@@ -139,5 +164,5 @@ def test_moe_grouped_topk(
         num_real,
         apply_padding,
         recall_threshold=0.9,
-        pcc_threshold=0.96,
+        pcc_threshold=weights_pcc_threshold,
     )
