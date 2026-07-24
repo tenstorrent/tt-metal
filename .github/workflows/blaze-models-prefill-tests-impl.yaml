@@ -141,11 +141,8 @@ jobs:
       PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       VIRTUAL_ENV: /opt/venv
       HOME: /home/user
-      # Root the tests' CI summaries (chunked-prefill perf tables under perf/) on the /ci NFS volume that
-      # is shared between the mpirun worker pods and this runner (same mount the build artifacts flow
-      # through). /home/user is per-node, so a file written there by a worker rank is invisible to the
-      # runner's publish step; /ci is not. Only rank 0 writes (see emit_summary). The run/attempt/job
-      # subpath isolates each run on the (reused) PVC, so no prior run's files can leak into this one.
+      # /ci is the NFS volume shared with the runner; worker /home/user is per-node, invisible to it.
+      # Rank 0 writes; the run/attempt/job subpath keeps reused-PVC runs from colliding.
       PREFILL_SUMMARIES: /ci/prefill_summaries/${{ github.run_id }}-${{ github.run_attempt }}/${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
     strategy:
       fail-fast: false

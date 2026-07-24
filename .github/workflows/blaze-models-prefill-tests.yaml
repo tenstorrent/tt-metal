@@ -42,14 +42,6 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
-      use-artifacts-from-run:
-        required: false
-        type: string
-        default: ""
-        description: >-
-          Reuse the build+wheel from this workflow run ID instead of rebuilding.
-          Only safe when the C++/wheel are unchanged vs that run (e.g. iterating
-          on Python tests or the workflow). Empty = build fresh.
   schedule:
     - cron: "0 5 * * *" # Run at 5:00 AM UTC every day
 
@@ -96,7 +88,6 @@ jobs:
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-      use-artifacts-from-run: ${{ inputs.use-artifacts-from-run || '' }}
 
   Galaxy-Blaze-models-prefill:
     needs: [validate-test-type, check-harbor, build-artifact]
