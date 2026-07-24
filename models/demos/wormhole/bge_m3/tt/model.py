@@ -46,6 +46,8 @@ class BgeM3Model(LightweightModule):
             embedding_weights.layer_norm,
             eps=args.norm_eps,
             mesh_device=mesh_device,
+            max_seq_len=args.max_seq_len,
+            max_batch_size=args.max_batch_size,
         )
         self.layers = [
             BgeM3TransformerBlock(
@@ -67,6 +69,7 @@ class BgeM3Model(LightweightModule):
                     bias=colbert_linear_weights.bias,
                     mesh_device=mesh_device,
                     dtype=dtype,
+                    max_seq_len=args.max_seq_len,
                 )
             )
 
@@ -79,6 +82,7 @@ class BgeM3Model(LightweightModule):
                     bias=sparse_linear_weights.bias,
                     mesh_device=mesh_device,
                     dtype=dtype,
+                    max_seq_len=args.max_seq_len,
                 )
             )
 
@@ -116,8 +120,9 @@ class BgeM3Model(LightweightModule):
         attention_mask: ttnn.Tensor | None,
     ) -> ttnn.Tensor | None:
         """
-        Normalize mask to additive [B, 1, 1, S] with {0.0, -100000.0}.
-        Return None when there are no masked positions.
+        Return additive [B, 1, 1, S] with ``{0.0, -100000.0}`` (all-zero additive mask is a
+        no-op for SDPA). We avoid a host sync / ``.item()`` early return so the path stays
+        trace-safe (``ttnn.begin_trace_capture``) with unchanged numerics.
         """
         self._require_rank2(input_ids, "input_ids")
         seq_len = input_ids.shape[1]
@@ -126,8 +131,6 @@ class BgeM3Model(LightweightModule):
 
         if attention_mask is None:
             pad_mask = ttnn.eq(input_ids, self.pad_token_id)
-            if not self._has_any_masked_positions(pad_mask):
-                return None
         else:
             rank = len(attention_mask.shape)
             if rank == 2:
@@ -169,11 +172,6 @@ class BgeM3Model(LightweightModule):
             self._ADDITIVE_MASKED_VALUE,
             self._ADDITIVE_UNMASKED_VALUE,
         )
-
-    @staticmethod
-    def _has_any_masked_positions(mask: ttnn.Tensor) -> bool:
-        mask_int = ttnn.typecast(mask, dtype=ttnn.uint32)
-        return int(ttnn.sum(mask_int).item()) > 0
 
     def forward(
         self,
@@ -221,6 +219,8 @@ def _build_optional_layer_norm(
     layer_norm_weights: LayerNormWeights | None,
     eps: float,
     mesh_device,
+    max_seq_len: int | None = None,
+    max_batch_size: int | None = None,
 ) -> LayerNorm1D | None:
     if layer_norm_weights is None:
         return None
@@ -231,6 +231,8 @@ def _build_optional_layer_norm(
             bias=layer_norm_weights.bias,
             eps=eps,
             mesh_device=mesh_device,
+            max_seq_len=max_seq_len,
+            max_batch_size=max_batch_size,
         )
     )
 
