@@ -27,16 +27,13 @@ import ttml
 from huggingface_hub import snapshot_download
 from transformers import AutoTokenizer
 from ttml.common.config import TransformerConfig
-from ttml.common.utils import no_grad
+from ttml.common.utils import no_grad, round_up_to_tile
 from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
 from ttml.trainers.grpo_trainer import GRPOCompleter
 
 from .mpi_rollout import MPIRolloutClient
 from .llama_overrides import LlamaCompositeKV
-
-
-TILE_SIZE = 32
 
 
 @dataclass
@@ -94,10 +91,6 @@ def _load_checkpoint(model: Any, checkpoint_path: str, dp_mapper: Any = None) ->
         print(f"Warning: {len(missing)} parameters not found in checkpoint:")
         for n in missing:
             print(f"  - {n}")
-
-
-def _round_up(x: int) -> int:
-    return ((x + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
 
 
 def _ensure_safetensors_dir(model_dir: str) -> str:
@@ -308,7 +301,7 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
 
         logits = self._forward(inputs_np, pad_lengths, B)
 
-        Tp = _round_up(T)
+        Tp = round_up_to_tile(T)
         targets_pad = np.full((B, Tp), pad_token, dtype=np.uint32)
         targets_pad[:, :T] = targets_np
 
@@ -349,7 +342,7 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
         return self._model(x_tt, mask_tt)
 
     def _tokens_to_tensor(self, tokens_np: np.ndarray, B: int) -> ttml.autograd.Tensor:
-        padded_len = _round_up(tokens_np.shape[1])
+        padded_len = round_up_to_tile(tokens_np.shape[1])
         padded = np.full((B, padded_len), self._ctx._pad_token, dtype=np.uint32)
         padded[:, : tokens_np.shape[1]] = tokens_np
         return ttml.autograd.Tensor.from_numpy(
@@ -362,8 +355,8 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
         assert len(pad_lengths) == B
 
         whole_len = prompt_len + query_len
-        padded_q = _round_up(query_len)
-        padded_w = _round_up(whole_len)
+        padded_q = round_up_to_tile(query_len)
+        padded_w = round_up_to_tile(whole_len)
 
         mask_one_token = np.zeros((padded_q, padded_w), dtype=np.float32)
         mask_one_token[:query_len, :padded_w] = np.tri(query_len, padded_w, k=prompt_len, dtype=np.float32)
