@@ -144,6 +144,13 @@ For local scan changes, retain an experiment only when:
      both long-context gates.
 3. Double-buffer BF16 `kd`, `q_decay`, and `dl`.
 4. Extend double buffering to other inputs only after measuring L1 headroom.
+   - Experiment result, 2026-07-24: doubling all seven streamed scan-input
+     CBs passed target correctness, but T=640 improved only `0.35%` wall /
+     `0.64%` recurrence and T=5,120 regressed `0.46%` wall / `0.38%`
+     recurrence. The reader does not exploit the extra one-chunk capacity;
+     added L1 occupancy and scheduling perturbation are net-negative. Reject
+     both the narrow and extended variants: the all-input experiment is the
+     upper bound on overlap opportunity.
 5. Pack prepared inputs into one or two contiguous DRAM records per chunk.
 6. Pipeline prep producers directly into scan consumers through L1/NOC.
 7. Use a bounded rolling window of prepared chunks in L1.

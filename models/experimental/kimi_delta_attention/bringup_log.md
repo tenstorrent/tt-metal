@@ -1197,3 +1197,32 @@
 - T=5,120 CSV: `generated/profiler/reports/2026_07_24_18_04_04/ops_perf_results_2026_07_24_18_04_04.csv` (SHA-256 `88385afab9ab560420ab195b90c297d6ad1e12202238f673c8080c50335fe217`). Wall regresses `3474.029 -> 3483.748 us` (`+0.28%`); recurrence improves only `809.704 -> 807.320 us` (`-0.29%`).
 - Verdict: reject and remove. The short-context overlap benefit does not
   generalize to 160 chunks and misses both long-context retention gates.
+
+
+### 2026-07-24 18:10:31 UTC — Reject double-buffered scan inputs
+
+- Hypothesis: two CB slots for each of the seven streamed scan inputs let the
+  reader prefetch chunk `c+1` while compute consumes chunk `c`; this costs
+  about 38 KiB of additional L1 per scan core and adds no synchronization.
+- Build: `./build_metal.sh --build-tests --build-type Release` -> exit 0.
+- Target correctness with `QWEN_KDA_SCAN_DOUBLE_BUFFER=1` -> PASS; output/state
+  PCC `0.999993/0.999995`.
+- T=640 profile command:
+  `QWEN_KDA_SCAN_DOUBLE_BUFFER=1 PERF_TRACE=1 PERF_SEQ=640 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s`
+  -> PASS. CSV
+  `generated/profiler/reports/2026_07_24_18_08_06/ops_perf_results_2026_07_24_18_08_06.csv`
+  (SHA-256 `f3429aa0752117a5c1276e1eb851b87e51e54c4919f1304fd44f48a1782627dd`).
+  Wall improves `622.564 -> 620.369 us` (`-0.35%`); recurrence improves
+  `144.945 -> 144.022 us` (`-0.64%`).
+- T=5,120 profile command:
+  `QWEN_KDA_SCAN_DOUBLE_BUFFER=1 PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 scripts/run_safe_pytest.sh --profile models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s`
+  -> PASS. CSV
+  `generated/profiler/reports/2026_07_24_18_10_09/ops_perf_results_2026_07_24_18_10_09.csv`
+  (SHA-256 `4ec515566b8e7b8ec6bea48172f75ceffe0ca1ff385806d79c0b02e04e9392fe`).
+  Wall regresses `3474.029 -> 3489.888 us` (`+0.46%`); recurrence regresses
+  `809.704 -> 812.764 us` (`+0.38%`).
+- Diagnosis: because CB publication and consumption remain chunk-serial, the
+  reader does not realize useful lookahead. The extra capacity only increases
+  L1 occupancy and perturbs scheduling. The all-input experiment bounds the
+  narrower BF16-only variant, so both are rejected.
+- Verdict: reject and remove; no implementation change retained.
