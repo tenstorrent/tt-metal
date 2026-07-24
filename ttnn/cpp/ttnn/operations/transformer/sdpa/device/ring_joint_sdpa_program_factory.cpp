@@ -2378,6 +2378,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 (sparse_frames_enabled && w < args.frame_allow_packed.size()) ? args.frame_allow_packed[w] : 0u;
             reader_args.push_back(word);
         }
+        // Sparse feature bitmask (reverse-bisection knob) — reader honors bit 5 for its
+        // shard-aggregate skip. Reuses the same env var as compute so a single value applies
+        // to both kernels.
+        uint32_t reader_sparse_feature_mask = 0x3Fu;  // 0x3F = compute default (0x1F) + bit 5 for reader
+        if (const char* env = std::getenv("TT_SPARSE_FEATURE_MASK")) {
+            reader_sparse_feature_mask = static_cast<uint32_t>(std::strtoul(env, nullptr, 0));
+        }
+        reader_args.push_back(reader_sparse_feature_mask);
 
         reader_kernel.emplace_runtime_args(core, reader_args.args);
 
@@ -2438,10 +2446,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             compute_args.push_back(word);
         }
         // Sparse feature bitmask (reverse-bisection knob). Overridden by env var
-        // TT_SPARSE_FEATURE_MASK if set; default 0x1F (all bits set = production behavior).
+        // TT_SPARSE_FEATURE_MASK if set; default 0x3F (all bits set = production behavior).
         // Bit 0: pre-scan check; 1: q_frame_total_processed populate; 2: try_skip lambda;
-        // 3: zero-work fast path; 4: counter-based is_first/is_last.
-        uint32_t sparse_feature_mask = 0x1Fu;
+        // 3: zero-work fast path; 4: counter-based is_first/is_last; 5: reader shard-aggregate skip.
+        uint32_t sparse_feature_mask = 0x3Fu;
         if (const char* env = std::getenv("TT_SPARSE_FEATURE_MASK")) {
             sparse_feature_mask = static_cast<uint32_t>(std::strtoul(env, nullptr, 0));
         }

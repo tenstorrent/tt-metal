@@ -272,6 +272,9 @@ void kernel_main() {
     for (uint32_t w = 0; w < 32; ++w) {
         frame_allow_words[w] = get_arg_val<uint32_t>(argidx++);
     }
+    // Sparse feature mask (matches compute's mask). Bit 5 gates the reader-side shard-aggregate
+    // skip check. Bits 0-4 are compute-only; reader ignores them.
+    const uint32_t sparse_feature_mask = get_arg_val<uint32_t>(argidx++);
 
     // Compile-time semaphore ids and chain flags are appended after all TensorAccessorArgs().
     // ChainLink takes semaphore IDs directly (the new Semaphore<> wrapper resolves them to L1 addrs).
@@ -678,7 +681,8 @@ void kernel_main() {
                 // (they share the same shard, same q_frame set). Compute still does per-q_chunk
                 // drain for chunks reader pushed but this specific q_chunk doesn't attend.
                 if constexpr (sparse_frames_enabled == 1) {
-                    if (!kv_chunk_is_joint) {
+                    // Feature bit 5: gate the reader-side shard-aggregate skip check.
+                    if ((sparse_feature_mask & (1u << 5)) && !kv_chunk_is_joint) {
                         const uint32_t k_global_start_tile = kv_local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
                         const uint32_t k_frame = k_global_start_tile / sparse_frame_seqlen_tiles;
                         const uint32_t q_frames_per_shard = q_local_padded_Nt / sparse_frame_seqlen_tiles;

@@ -245,7 +245,13 @@ void kernel_main() {
     // q_work_item_processed is indexed by work-item id (bounded by B * NH * num_q_chunks; all
     // three are compile-time constants above).
     constexpr uint32_t nf_pad_arr = num_frames_padded_compile > 0 ? num_frames_padded_compile : 1;
-    constexpr uint32_t work_items_arr = B * NH * num_q_chunks;
+    // Per-core work-item counter: q_work_item_processed is indexed by `q - global_q_start`
+    // so the array only needs to be as large as this core's actual work-item count
+    // (bounded by ~ceil(B*NH*num_q_chunks / num_cores) — typically single-digit at nh=40).
+    // Sizing the array by B*NH*num_q_chunks (== 360 at nh=40) puts 1440 bytes on the TRISC
+    // stack and hangs the matmul pipeline (Bug 1). 32 is a safe upper bound for realistic
+    // shard geometries; bump if a shape exceeds it and add a host-side TT_FATAL guard.
+    constexpr uint32_t work_items_arr = 32;
     uint32_t q_frame_total_processed[nf_pad_arr] = {};
     uint32_t q_work_item_processed[work_items_arr] = {};
     uint32_t q_frame_offset = 0;

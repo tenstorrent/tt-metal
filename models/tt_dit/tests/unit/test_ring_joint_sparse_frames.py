@@ -106,8 +106,8 @@ def _frame_allow(num_frames: int, num_frames_padded: int, window: int, add_last_
 
 
 def _pack_frame_allow(allow: torch.Tensor) -> list:
-    """Bitpack the [nf, nf] uint8 allow table into uint32 words, matching
-    sparse_attention.py::build_frame_allow_packed's convention."""
+    """Bitpack the [nf, nf] uint8 allow table into uint32 words, matching the packing convention
+    used by the ring_joint SDPA sparse-frames extension."""
     nf = allow.shape[0]
     total_bits = nf * nf
     num_words = (total_bits + 31) // 32
@@ -115,6 +115,31 @@ def _pack_frame_allow(allow: torch.Tensor) -> list:
     for q in range(nf):
         for k in range(nf):
             if allow[q, k]:
+                bit_idx = q * nf + k
+                words[bit_idx // 32] |= 1 << (bit_idx % 32)
+    # =================================================================================
+    # TEMPORARY WORKAROUND — Efficiency loss.
+    # =================================================================================
+    # Under sequence-parallel sharding, a device whose Q shard contains ONLY padded Q
+    # frames (e.g. sp=8, nf_real=21, nf_padded=24 puts padded frames 21/22/23 all on
+    # device 7) reads all-zero allow rows for its q_frames. The reader's shard-aggregate
+    # skip decides "no Q attends this K frame" for every K chunk, so that device pushes
+    # zero chunks per ring iter while others push the full count -- head-chain lockstep
+    # breaks and writer deadlocks on cb_prev_out at nh=40.
+    #
+    # Detect all-zero rows (the reliable marker for padded Q frames — real Q frames always
+    # attend at least the diagonal) and force them all-1. Reader then aggregate-passes on
+    # padded shards, chain stays in sync, and compute performs full attention on padded Q
+    # positions. Padded Q values are zeros (input padding), so this "extra" work produces
+    # mean(V[real]) outputs that the downstream slice `[:, :, :real_n, :]` discards -- same
+    # as the dense path. Real Q outputs are byte-identical.
+    #
+    # Cost: ~10% of the sparse compute win on the padded shard. Real fix: make chain sync
+    # robust to per-shard skip divergence.
+    for q in range(nf):
+        row_is_all_zero = all(allow[q, k].item() == 0 for k in range(nf))
+        if row_is_all_zero:
+            for k in range(nf):
                 bit_idx = q * nf + k
                 words[bit_idx // 32] |= 1 << (bit_idx % 32)
     return words

@@ -2680,11 +2680,14 @@ void sdpa_ring_v2(
             bool is_last_k_of_last_ring_iter;
             if constexpr (sparse_frames_enabled) {
                 // Feature bit 4: use counter-based flags (else fall back to dense flags).
+                // Counter is indexed by (q - global_q_start) — per-core scope — so the array
+                // is small (~q_per_core). See ring_joint_sdpa.cpp's work_items_arr note.
                 if (sparse_feature_mask & (1u << 4)) {
-                    q_work_item_processed[q]++;
-                    is_first = (q_work_item_processed[q] == 1);
+                    const uint32_t q_local = q - global_q_start;
+                    q_work_item_processed[q_local]++;
+                    is_first = (q_work_item_processed[q_local] == 1);
                     is_last_k_of_last_ring_iter =
-                        (q_work_item_processed[q] == q_frame_total_processed[q_frame_for_this_chunk]);
+                        (q_work_item_processed[q_local] == q_frame_total_processed[q_frame_for_this_chunk]);
                 } else {
                     (void)q_work_item_processed;
                     (void)q_frame_total_processed;
