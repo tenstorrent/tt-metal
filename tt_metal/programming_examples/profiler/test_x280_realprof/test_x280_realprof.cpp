@@ -87,6 +87,11 @@ static void pin_thread_to_core(std::thread& t, int core) {
 // --tracy: feed decoded zones into the perf_debug profiler's Tracy handler so they render in Tracy.
 // All no-ops unless the build is TRACY_ENABLE (build_Release is). (Uses the perf_debug module's own
 // WorkerZonePacket + PerfDebugTracyHandler; the realtime-profiler versions were removed by the clean cut.)
+// host-side CPU zones (ZoneScopedN) + SetThreadName -- show what on the HOST stalls (consumer Tracy-emit /
+// flusher push-block) and back-pressures the device; CPU zones share the device zones' host timeline. Included
+// unconditionally: Tracy.hpp self-guards (the macros vanish to no-ops when TRACY_ENABLE is off), so the call
+// sites below need no #ifdef.
+#include "tracy/Tracy.hpp"
 #if defined(TRACY_ENABLE)
 #include "tools/profiler/perf_debug_profiler_packets.hpp"
 #include "tools/profiler/perf_debug_profiler_tracy_handler.hpp"
@@ -162,8 +167,9 @@ struct BatchQ {
         std::unique_lock<std::mutex> lk(m);
         if (q.size() >= cap) {
             push_blocks++;  // flusher is about to block on a full queue => this is where MPMC back-pressure starts
+            ZoneScopedNC("mq-push-block", 0xC0392B);  // dark red: flusher stalled here (consumer can't keep up)
+            cv_push.wait(lk, [&] { return q.size() < cap; });
         }
-        cv_push.wait(lk, [&] { return q.size() < cap; });
         q.push(std::move(b));
         if (q.size() > peak) {
             peak = q.size();
@@ -995,6 +1001,11 @@ int main(int argc, char** argv) {
     // batches to the ONE shared MPMC. Demux MUST live here (sticky-src is in-order per stream); records are
     // self-contained so the M consumers are stateless. All lane bounds/counters/driver/sockets are nc's.
     auto flusher = [&](NodeCtx& nc, uint64_t h) {
+        {
+            char tn[24];
+            std::snprintf(tn, sizeof(tn), "x280-flush%llu", (unsigned long long)h);
+            tracy::SetThreadName(tn);  // host thread row in the capture
+        }
         const uint32_t NL = nc.NL;  // this node's band lanes (shadows the full-grid NL for lane bounds below)
         uint64_t hoff = data_off + h * ring_stride, soff = sent_off(h);
         uint32_t acked = 0;
@@ -1097,7 +1108,10 @@ int main(int argc, char** argv) {
                 if (!resid.empty()) {
                     std::copy(resid.begin(), resid.end(), buf.begin());
                 }
-                nc.socks[h]->read(reinterpret_cast<void*>(buf.data() + resid.size()), np);  // notify_sender=true
+                {
+                    ZoneScopedNC("sock-read", 0x27AE60);  // green: flusher reading pages off the D2H socket
+                    nc.socks[h]->read(reinterpret_cast<void*>(buf.data() + resid.size()), np);  // notify_sender=true
+                }
                 total_words.fetch_add(dw);
                 nc.fl_pages[h] += np;  // reliable host-side signal: did the relay deliver anything to this socket?
                 resid.clear();
@@ -1313,6 +1327,7 @@ int main(int argc, char** argv) {
     }
     uint64_t x280_ts_base = 0;  // shared rebase origin (first RISC marker ts); X280 hart zones rebase identically
     auto tracy_consumer = [&]() {
+        tracy::SetThreadName("x280-consume");  // host thread row: where device zones get pushed into Tracy
         Batch b;
         uint64_t& ts_base = x280_ts_base;  // hoisted: the X280-hart push (post-join) rebases by the same origin
         (void)0;                           // (first device timestamp seen; markers rebased so the device
@@ -1332,6 +1347,8 @@ int main(int argc, char** argv) {
                 } catch (const std::exception&) {
                 }
             }
+            ZoneScopedNC("tracy-emit", 0x2980B9);  // blue: pushing this batch's zones into the Tracy client --
+                                                   // when this is the bottleneck the MPMC fills -> flusher blocks
             for (auto& r : b) {
                 uint32_t ci = r.lane / (uint32_t)NRISC, risc = r.lane % (uint32_t)NRISC;
                 if (ci >= num_cores) {
