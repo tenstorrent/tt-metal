@@ -182,10 +182,19 @@ class TtConv1d(LightweightModule):
         fp32_dest_acc_en: bool = True,
         packer_l1_acc: bool = True,
         act_double_buffer: bool | None = None,
+        weight_scale: float = 1.0,
+        conv_config_overrides: dict | None = None,
     ):
         super().__init__()
         assert weight.dim() == 3, f"expected Conv1d weight [out, in/groups, k], got {tuple(weight.shape)}"
         out_channels, in_per_group, kernel_size = weight.shape
+        # ``weight_scale`` scales the WEIGHT only (not the bias): conv is linear in its input, so a
+        # constant output scale folds into the weight. Used to absorb HiFi-GAN's MRF mean (1/num_kernels)
+        # into the *next* layer's weights — leaky_relu(c*x)==c*leaky_relu(x) for c>0, so the mean scale
+        # commutes through the pre-activation and lands here, removing a per-stage ttnn.mul. The bias
+        # (and any folded cond_bias) must stay unscaled, so it is applied to the un-scaled weight below.
+        if weight_scale != 1.0:
+            weight = weight * weight_scale
 
         self.device = device
         self.in_channels = in_per_group * groups
@@ -227,6 +236,12 @@ class TtConv1d(LightweightModule):
             activation=activation,
             **({"enable_act_double_buffer": act_double_buffer} if act_double_buffer is not None else {}),
         )
+        # Optional per-conv scheduling overrides (perf-only Conv1dConfig fields: act_block_h_override,
+        # force_split_reader, enable_*_double_buffer, enable_activation_reuse, ...). Bit-exact — they
+        # change how the conv is tiled/streamed, not the math. Used by the conv-config sweep.
+        if conv_config_overrides:
+            for _k, _v in conv_config_overrides.items():
+                setattr(self.conv_config, _k, _v)
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=math_fidelity,
