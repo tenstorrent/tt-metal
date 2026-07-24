@@ -299,7 +299,7 @@ def invoke_llm_cli_one_shot(
     prompt: str,
     *,
     agent_bin: str = "claude",
-    model: str = "sonnet",
+    model: str = "opus",
     timeout_s: int = 180,
 ) -> str:
     """Single-shot LLM invocation via a CLI binary (default: ``claude``).
