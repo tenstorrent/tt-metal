@@ -113,20 +113,6 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("epsilon") = 1e-5f,
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none());
-    ttnn::bind_function<"kda_tiled_causal_conv1d", "ttnn.transformer.">(
-        mod,
-        "Four-tap KDA convolution reading the QKV prefix directly from a tiled fused projection.",
-        &ttnn::transformer::kda_tiled_causal_conv1d,
-        nb::arg("projected").noconvert(),
-        nb::arg("state").noconvert(),
-        nb::arg("tap0").noconvert(),
-        nb::arg("tap1").noconvert(),
-        nb::arg("tap2").noconvert(),
-        nb::arg("tap3").noconvert(),
-        nb::arg("qkv_width"),
-        nb::kw_only(),
-        nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::transformer

@@ -261,15 +261,3 @@ for more CCL workers; the matched T=640 two-worker experiment already
 regressed. Long-sequence work should instead preserve this placement and
 reduce the scan serial chunk chain or overlap within the fused output
 program.
-
-
-The retained long-sequence tiled convolution independently maps one 32-token
-block at a time across all 110 compute cores. For 160 blocks, cores 0-49 each
-receive two consecutive blocks and cores 50-109 receive one. A core reads the
-four tap tiles once, reads each current QKV tile once, untilizes locally, and
-reuses its last three row-major rows when it owns the following block. Only a
-core's first block reads its three-row prefix from state or the preceding
-projection tile. The rejected row-face reader issued roughly 537,600 tiny DRAM
-reads per layer and cost `1170.134 us`; full-tile reads reduce the program to
-`376.236 us`. This is evidence for contiguous block ownership and local prefix
-reuse, not for redistributing the four TP-local heads.

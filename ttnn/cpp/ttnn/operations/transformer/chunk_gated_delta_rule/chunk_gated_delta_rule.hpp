@@ -89,16 +89,4 @@ ttnn::Tensor kda_gated_rms_norm(
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 
-/** Four-tap KDA convolution that reads the QKV prefix directly from a tiled fused projection. */
-std::tuple<ttnn::Tensor, ttnn::Tensor> kda_tiled_causal_conv1d(
-    const ttnn::Tensor& projected,
-    const ttnn::Tensor& state,
-    const ttnn::Tensor& tap0,
-    const ttnn::Tensor& tap1,
-    const ttnn::Tensor& tap2,
-    const ttnn::Tensor& tap3,
-    uint32_t qkv_width,
-    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
-
 }  // namespace ttnn::transformer
