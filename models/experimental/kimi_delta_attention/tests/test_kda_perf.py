@@ -73,7 +73,7 @@ def _run(mesh, layer, T, tag):
 
 @pytest.mark.parametrize("device_params", [_F2D], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(8, 1)], indirect=True)
-@pytest.mark.parametrize("T", [256, 640])
+@pytest.mark.parametrize("T", [640, 5120])  # prefill benchmarks: 640 and 5k (5*1024)
 def test_kda_perf_before(mesh_device, T):
     """Before distribution: TP=1 (8,1) — all 32 heads per chip, no head-shard, no TP all-reduce."""
     if not ttnn.device.IsProgramRealtimeProfilerActive():
@@ -83,7 +83,7 @@ def test_kda_perf_before(mesh_device, T):
 
 @pytest.mark.parametrize("device_params", [_F2D], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
-@pytest.mark.parametrize("T", [256, 640])
+@pytest.mark.parametrize("T", [640, 5120])  # prefill benchmarks: 640 and 5k (5*1024)
 def test_kda_perf_after(mesh_device, T):
     """After distribution: TP=4 head-shard (8 heads/chip) on LoudBox (2,4)."""
     if not ttnn.device.IsProgramRealtimeProfilerActive():

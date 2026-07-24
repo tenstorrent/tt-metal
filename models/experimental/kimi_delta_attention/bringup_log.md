@@ -447,6 +447,11 @@ capacity driver" was **retracted** — it was a fixable CB-sizing bug, not a mem
 (TP=4, per chip): `time(T) ≈ 1.0ms + 3.4µs/token`, per-token cost falling then plateauing ~3600 ns/tok;
 launch/movement-bound throughout (~50× off roofline even at long T).
 
+**Benchmark set = {T=640, T=5120}** (test_kda_perf.py now sweeps both; 5k = 5×1024 = the production prefill
+chunk). Measured per chip: T=640 before(8,1)TP1 6.76 ms / after(2,4)TP4 **3.21 ms** (2.1×); T=5120
+before(8,1)TP1 41.9 ms / after(2,4)TP4 **18.5 ms** (2.3×). TP win grows slightly at 5k as the shardable
+work amortizes the fixed floor; T=5120 runs on both configs (32 heads/chip at TP1 fits, no OOM).
+
 ## Backlog
 
 - [ ] Phase 7: diagonal-gate chunked delta-rule kernel (C++ or ttnn-composed per-channel chunk scan).
