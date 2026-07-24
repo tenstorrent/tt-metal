@@ -76,9 +76,16 @@ pytestmark = run_for_blackhole("Tensor prefetcher requires Blackhole")
 
 
 @pytest.fixture(autouse=True)
-def _require_tensor_prefetcher(device):
-    """Skip unless programmable DRAM cores are available on this device."""
-    if not ttnn.experimental.is_tensor_prefetcher_supported(device):
+def _require_tensor_prefetcher(request):
+    """Skip unless programmable DRAM cores are available on this device.
+
+    Runs the capability check against whichever device fixture the test uses (single-device
+    ``device`` or ``mesh_device``); the runtime rejects some multi-device configs (e.g. harvested
+    DRAM channels), so mesh tests must be skipped there rather than failing at start.
+    """
+    fixture_name = "mesh_device" if "mesh_device" in request.fixturenames else "device"
+    dev = request.getfixturevalue(fixture_name)
+    if not ttnn.experimental.is_tensor_prefetcher_supported(dev):
         pytest.skip(
             "programmable DRAM cores unavailable (need Blackhole, firmware >= 19.12.0.0, and either no harvested DRAM channels or a single device)"
         )
@@ -640,12 +647,12 @@ def test_tensor_prefetcher_recv_contig_smoke(device, num_tensors, num_layers):
 # ---------------------------------------------------------------------------
 # `queue_tensor_prefetcher_request` does not go through the command queue: it
 # serializes a request into socket pages and a host worker thread fans them out to
-# the DRAM sender cores over NOC. When called with a `cq_id` whose command queue is
-# mid trace-capture, the request must be *captured* (not sent) and re-sent on every
-# `execute_trace` of that trace, so a captured matmul that consumes the GCB is
-# refilled on each replay. This test captures a (queue request + consuming linear)
-# pair into a trace, replays it several times, and PCC-checks every replay.
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872}], indirect=True)
+# the DRAM sender cores over NOC. When the current command queue is mid trace-capture,
+# the request must be *captured* (not sent) and re-sent on every `execute_trace` of
+# that trace, so a captured matmul that consumes the GCB is refilled on each replay.
+# This test captures a (queue request + consuming linear) pair on non-default CQ 1,
+# replays it several times, and PCC-checks every replay.
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872, "num_command_queues": 2}], indirect=True)
 @pytest.mark.parametrize("replay_count", [1, 3])
 def test_tensor_prefetcher_trace_replay(device, replay_count):
     """Capture a (prefetcher-request + linear) pair into a trace and replay it
@@ -756,39 +763,745 @@ def test_tensor_prefetcher_trace_replay(device, replay_count):
             tt_weight,
             global_cb=gcb,
             program_config=program_config,
-            cq_id=0,
             memory_config=output_mem_config,
             compute_kernel_config=compute_kernel_config,
             dtype=dtype,
         )
 
     with tensor_prefetcher_session(device):
-        # ---- Warmup: compile kernels + balance the GCB before trace capture. The
-        # queue here is sent immediately (cq 0 not capturing) and consumed by the matmul. ----
-        logger.info("Warmup (compile) run")
-        tt_out = fill_and_matmul()
-        ttnn.synchronize_device(device)
-        warmup_torch = ttnn.to_torch(tt_out)
-        passing, msg = comp_pcc(expected, warmup_torch, 0.999)
-        assert passing, f"warmup PCC failed: {msg}"
+        with ttnn.command_queue(1):
+            # ---- Warmup: compile kernels + balance the GCB before trace capture. The
+            # queue here is sent immediately (CQ 1 not capturing) and consumed by the matmul. ----
+            logger.info("Warmup (compile) run")
+            tt_out = fill_and_matmul()
+            ttnn.synchronize_device(device)
+            warmup_torch = ttnn.to_torch(tt_out)
+            passing, msg = comp_pcc(expected, warmup_torch, 0.999)
+            assert passing, f"warmup PCC failed: {msg}"
 
-        # ---- Capture: the queue request is captured into the trace (cq 0 mid-capture),
-        # NOT sent now. The linear is captured too. ----
-        logger.info("Capturing trace")
-        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-        tt_out = fill_and_matmul()
-        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+            # ---- Capture: both the request and linear select current CQ 1. The request
+            # is captured into the trace rather than sent immediately. ----
+            logger.info("Capturing trace")
+            trace_id = ttnn.begin_trace_capture(device)
+            tt_out = fill_and_matmul()
+            ttnn.end_trace_capture(device, trace_id)
 
-        # ---- Replay: each execute_trace must replay the captured prefetcher request
-        # (refilling the GCB) and the matmul. ----
-        for i in range(replay_count):
-            logger.info(f"Replay {i + 1}/{replay_count}")
-            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
-            out_torch = ttnn.to_torch(tt_out)
-            passing, msg = comp_pcc(expected, out_torch, 0.999)
-            assert passing, f"replay {i + 1} PCC failed: {msg}"
+            # ---- Replay: each execute_trace must replay the captured prefetcher request
+            # (refilling the GCB) and the matmul. ----
+            for i in range(replay_count):
+                logger.info(f"Replay {i + 1}/{replay_count}")
+                ttnn.execute_trace(device, trace_id, blocking=True)
+                out_torch = ttnn.to_torch(tt_out)
+                passing, msg = comp_pcc(expected, out_torch, 0.999)
+                assert passing, f"replay {i + 1} PCC failed: {msg}"
 
         ttnn.release_trace(device, trace_id)
+
+
+# ---------------------------------------------------------------------------
+# Batched recv-contig matmul (PCC vs torch.matmul)
+# ---------------------------------------------------------------------------
+# Mirrors the production DRAM-core model path: receiver-contiguous weights are queued in
+# natural K-block order, the matmul waits for the full ring of blocks, then each receiver
+# core starts reading at its ring index.
+@pytest.mark.parametrize(
+    "name,k_tiles_per_shard,n_tiles_per_receiver",
+    [
+        ("qkv", 4, 3),  # 4096 x 3072
+        ("wo", 4, 2),  # 4096 x 2048
+        ("ff1_ff3", 4, 7),  # 4096 x 7168
+        ("ff2", 7, 4),  # 7168 x 4096
+    ],
+    ids=["qkv", "wo", "ff1_ff3", "ff2"],
+)
+def test_tensor_prefetcher_recv_contig_batched_matmul_ring32(device, name, k_tiles_per_shard, n_tiles_per_receiver):
+    num_dram_banks = device.dram_grid_size().x
+    num_receivers_per_bank = 4
+    ring_size = num_dram_banks * num_receivers_per_bank
+    ring_cols = num_dram_banks
+    ring_rows = num_receivers_per_bank
+
+    receiver_core_range_set = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ring_cols - 1, ring_rows - 1))}
+    )
+
+    M = 32
+    K = k_tiles_per_shard * ring_size * ttnn.TILE_SIZE
+    N = ring_size * n_tiles_per_receiver * ttnn.TILE_SIZE
+    dtype = ttnn.bfloat8_b
+
+    torch.manual_seed(zlib.crc32(f"recv_contig_batched_ring32_{name}".encode()))
+    pt_weight = torch.randn(1, 1, K, N)
+    tt_weight = _make_recv_contig_weight(
+        device,
+        pt_weight,
+        num_dram_banks=num_dram_banks,
+        ring_size=ring_size,
+        dtype=dtype,
+        distribution_strategy=ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+    )
+
+    pt_act = torch.randn(1, 1, M, K)
+    act_mem_config = ttnn.create_sharded_memory_config(
+        shape=(M, K // ring_size),
+        core_grid=receiver_core_range_set,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_act = ttnn.from_torch(
+        pt_act, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=act_mem_config
+    )
+
+    out_block_h = M // ttnn.TILE_SIZE
+    out_block_w = N // ring_size // ttnn.TILE_SIZE
+    out_subblock_w = min(out_block_w, 8)
+    while out_subblock_w > 1 and out_block_w % out_subblock_w != 0:
+        out_subblock_w -= 1
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(ring_cols, ring_rows),
+        in0_block_w=k_tiles_per_shard,
+        out_subblock_h=1,
+        out_subblock_w=out_subblock_w,
+        per_core_M=out_block_h,
+        per_core_N=out_block_w,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+        gather_in0=True,
+        hop_cores=ttnn.CoreRangeSet([]),
+        num_global_cb_receivers=num_receivers_per_bank,
+        untilize_out=False,
+    )
+
+    tile_bytes = _bytes_per_tile(dtype)
+    in1_block_size_bytes = k_tiles_per_shard * n_tiles_per_receiver * tile_bytes
+    gcb_size = ring_size * in1_block_size_bytes
+    bank_to_receivers = [
+        (b, _bank_receivers_contiguous(b, num_receivers_per_bank, ring_cols=ring_cols)) for b in range(num_dram_banks)
+    ]
+    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
+
+    output_mem_config = ttnn.create_sharded_memory_config(
+        shape=(M, N // ring_size),
+        core_grid=receiver_core_range_set,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+        dst_full_sync_en=True,
+    )
+
+    ttnn.experimental.start_tensor_prefetcher(device)
+    ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], global_cb=gcb)
+    tt_out = ttnn.linear(
+        tt_act,
+        tt_weight,
+        program_config=program_config,
+        memory_config=output_mem_config,
+        compute_kernel_config=compute_kernel_config,
+        dtype=ttnn.bfloat16,
+        global_cb=gcb,
+    )
+    ttnn.experimental.stop_tensor_prefetcher(device)
+
+    out_torch = ttnn.to_torch(tt_out)
+    expected = pt_act.float() @ pt_weight.float()
+    passing, output_str = comp_pcc(expected, out_torch, 0.99)
+    logger.info(f"[recv_contig_batched_ring32_{name}] {output_str}")
+    assert passing, f"[recv_contig_batched_ring32_{name}] PCC check failed: {output_str}"
+
+
+@pytest.mark.parametrize(
+    "mesh_device,num_receivers_per_bank,n_per_device,seed_name",
+    [
+        pytest.param((1, 2), 4, 3072, b"recv_contig_batched_ring32_mesh_qkv", id="p300_ring32_qkv"),
+        pytest.param((1, 4), 2, 1536, b"recv_contig_batched_ring16_mesh_qkv", id="p150x4_ring16_qkv"),
+        pytest.param((1, 4), 2, 1024, b"recv_contig_batched_ring16_mesh_wo", id="p150x4_ring16_wo"),
+        pytest.param((1, 4), 2, 3584, b"recv_contig_batched_ring16_mesh_ff1", id="p150x4_ring16_ff1"),
+    ],
+    indirect=["mesh_device"],
+)
+def test_tensor_prefetcher_recv_contig_batched_matmul_ring32_mesh_qkv(
+    mesh_device, num_receivers_per_bank, n_per_device, seed_name
+):
+    num_dram_banks = mesh_device.dram_grid_size().x
+    ring_size = num_dram_banks * num_receivers_per_bank
+    ring_cols = num_dram_banks
+    ring_rows = num_receivers_per_bank
+
+    receiver_core_range_set = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ring_cols - 1, ring_rows - 1))}
+    )
+
+    M = 32
+    K = 4096
+    num_devices = mesh_device.get_num_devices()
+    N = n_per_device * num_devices
+    dtype = ttnn.bfloat8_b
+
+    torch.manual_seed(zlib.crc32(seed_name))
+    pt_weight = torch.randn(1, 1, K, N)
+    weight_mem_config = _make_recv_contig_weight(
+        mesh_device,
+        pt_weight[:, :, :, :n_per_device],
+        num_dram_banks=num_dram_banks,
+        ring_size=ring_size,
+        dtype=dtype,
+        distribution_strategy=ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+    ).memory_config()
+    tt_weight = ttnn.as_tensor(
+        pt_weight,
+        device=mesh_device,
+        dtype=dtype,
+        memory_config=weight_mem_config,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(2, 3), mesh_shape=(1, num_devices)),
+    )
+
+    pt_act = torch.randn(1, 1, M, K)
+    act_mem_config = ttnn.create_sharded_memory_config(
+        shape=(M, K // ring_size),
+        core_grid=receiver_core_range_set,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_act = ttnn.from_torch(
+        pt_act,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=act_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    out_block_h = M // ttnn.TILE_SIZE
+    out_block_w = n_per_device // ring_size // ttnn.TILE_SIZE
+    out_subblock_w = min(out_block_w, 8)
+    while out_subblock_w > 1 and out_block_w % out_subblock_w != 0:
+        out_subblock_w -= 1
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(ring_cols, ring_rows),
+        in0_block_w=K // ring_size // ttnn.TILE_SIZE,
+        out_subblock_h=1,
+        out_subblock_w=out_subblock_w,
+        per_core_M=out_block_h,
+        per_core_N=out_block_w,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+        gather_in0=True,
+        hop_cores=ttnn.CoreRangeSet([]),
+        num_global_cb_receivers=num_receivers_per_bank,
+        untilize_out=False,
+    )
+
+    tile_bytes = _bytes_per_tile(dtype)
+    in1_block_size_bytes = (K // ring_size // ttnn.TILE_SIZE) * out_block_w * tile_bytes
+    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
+        mesh_device,
+        [
+            (b, _bank_receivers_contiguous(b, num_receivers_per_bank, ring_cols=ring_cols))
+            for b in range(num_dram_banks)
+        ],
+        ring_size * in1_block_size_bytes,
+    )
+    output_mem_config = ttnn.create_sharded_memory_config(
+        shape=(M, n_per_device // ring_size),
+        core_grid=receiver_core_range_set,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+        dst_full_sync_en=True,
+    )
+
+    ttnn.experimental.start_tensor_prefetcher(mesh_device)
+    ttnn.experimental.wait_for_cq_on_tensor_prefetcher(mesh_device, 0)
+    ttnn.experimental.queue_tensor_prefetcher_request(mesh_device, [(tt_weight, ring_size)], global_cb=gcb)
+    tt_out = ttnn.linear(
+        tt_act,
+        tt_weight,
+        program_config=program_config,
+        memory_config=output_mem_config,
+        compute_kernel_config=compute_kernel_config,
+        dtype=ttnn.bfloat16,
+        global_cb=gcb,
+    )
+    ttnn.experimental.stop_tensor_prefetcher(mesh_device)
+
+    out_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
+    expected = pt_act.float() @ pt_weight.float()
+    passing, output_str = comp_pcc(expected, out_torch, 0.99)
+    logger.info(f"[recv_contig_batched_ring32_mesh_qkv] {output_str}")
+    assert passing, f"[recv_contig_batched_ring32_mesh_qkv] PCC check failed: {output_str}"
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+def test_tensor_prefetcher_recv_contig_batched_matmul_ring16_mesh_ff2(mesh_device):
+    num_dram_banks = mesh_device.dram_grid_size().x
+    num_receivers_per_bank = 2
+    ring_size = num_dram_banks * num_receivers_per_bank
+    ring_cols = num_dram_banks
+    ring_rows = num_receivers_per_bank
+
+    receiver_core_range_set = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ring_cols - 1, ring_rows - 1))}
+    )
+
+    M = 32
+    k_per_device = 3584
+    num_devices = mesh_device.get_num_devices()
+    K = k_per_device * num_devices
+    N = 4096
+    dtype = ttnn.bfloat8_b
+
+    torch.manual_seed(zlib.crc32(b"recv_contig_batched_ring16_mesh_ff2"))
+    pt_weight = torch.randn(1, 1, K, N)
+    weight_mem_config = _make_recv_contig_weight(
+        mesh_device,
+        pt_weight[:, :, :k_per_device, :],
+        num_dram_banks=num_dram_banks,
+        ring_size=ring_size,
+        dtype=dtype,
+        distribution_strategy=ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+    ).memory_config()
+    tt_weight = ttnn.as_tensor(
+        pt_weight,
+        device=mesh_device,
+        dtype=dtype,
+        memory_config=weight_mem_config,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(3, 2), mesh_shape=(1, num_devices)),
+    )
+
+    pt_act = torch.randn(1, 1, M, K)
+    act_mem_config = ttnn.create_sharded_memory_config(
+        shape=(M, k_per_device // ring_size),
+        core_grid=receiver_core_range_set,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_act = ttnn.from_torch(
+        pt_act,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=act_mem_config,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+    )
+
+    out_block_h = M // ttnn.TILE_SIZE
+    in0_block_w = k_per_device // ring_size // ttnn.TILE_SIZE
+    out_block_w = N // ring_size // ttnn.TILE_SIZE
+    out_subblock_w = min(out_block_w, 8)
+    while out_subblock_w > 1 and out_block_w % out_subblock_w != 0:
+        out_subblock_w -= 1
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(ring_cols, ring_rows),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=out_subblock_w,
+        per_core_M=out_block_h,
+        per_core_N=out_block_w,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+        gather_in0=True,
+        hop_cores=ttnn.CoreRangeSet([]),
+        num_global_cb_receivers=num_receivers_per_bank,
+        untilize_out=False,
+    )
+
+    tile_bytes = _bytes_per_tile(dtype)
+    in1_block_size_bytes = in0_block_w * out_block_w * tile_bytes
+    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
+        mesh_device,
+        [
+            (b, _bank_receivers_contiguous(b, num_receivers_per_bank, ring_cols=ring_cols))
+            for b in range(num_dram_banks)
+        ],
+        ring_size * in1_block_size_bytes,
+    )
+    output_mem_config = ttnn.create_sharded_memory_config(
+        shape=(M, N // ring_size),
+        core_grid=receiver_core_range_set,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+        dst_full_sync_en=True,
+    )
+
+    ttnn.experimental.start_tensor_prefetcher(mesh_device)
+    ttnn.experimental.wait_for_cq_on_tensor_prefetcher(mesh_device, 0)
+    ttnn.experimental.queue_tensor_prefetcher_request(mesh_device, [(tt_weight, ring_size)], global_cb=gcb)
+    tt_out = ttnn.linear(
+        tt_act,
+        tt_weight,
+        program_config=program_config,
+        memory_config=output_mem_config,
+        compute_kernel_config=compute_kernel_config,
+        dtype=ttnn.bfloat16,
+        global_cb=gcb,
+    )
+    ttnn.experimental.stop_tensor_prefetcher(mesh_device)
+
+    out_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    expected = torch.cat(
+        [
+            pt_act[:, :, :, d * k_per_device : (d + 1) * k_per_device].float()
+            @ pt_weight[:, :, d * k_per_device : (d + 1) * k_per_device, :].float()
+            for d in range(num_devices)
+        ],
+        dim=0,
+    )
+    passing, output_str = comp_pcc(expected, out_torch, 0.99)
+    logger.info(f"[recv_contig_batched_ring16_mesh_ff2] {output_str}")
+    assert passing, f"[recv_contig_batched_ring16_mesh_ff2] PCC check failed: {output_str}"
+
+
+def test_tensor_prefetcher_recv_contig_batched_mixed_sequence_ring32(device):
+    num_dram_banks = device.dram_grid_size().x
+    num_receivers_per_bank = 4
+    ring_size = num_dram_banks * num_receivers_per_bank
+    ring_cols = num_dram_banks
+    ring_rows = num_receivers_per_bank
+    M = 32
+    dtype = ttnn.bfloat8_b
+    shapes = [
+        ("qkv", 4, 3),
+        ("wo", 4, 2),
+        ("ff1", 4, 7),
+        ("ff3", 4, 7),
+        ("ff2", 7, 4),
+    ]
+
+    receiver_core_range_set = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ring_cols - 1, ring_rows - 1))}
+    )
+    bank_to_receivers = [
+        (b, _bank_receivers_contiguous(b, num_receivers_per_bank, ring_cols=ring_cols)) for b in range(num_dram_banks)
+    ]
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+        dst_full_sync_en=True,
+    )
+
+    tensors = []
+    program_configs = []
+    output_mem_configs = []
+    activations = []
+    act_mem_configs = []
+    expected_outputs = []
+    max_in1_block_size = 0
+    tile_bytes = _bytes_per_tile(dtype)
+
+    for name, k_tiles_per_shard, n_tiles_per_receiver in shapes:
+        K = k_tiles_per_shard * ring_size * ttnn.TILE_SIZE
+        N = ring_size * n_tiles_per_receiver * ttnn.TILE_SIZE
+        torch.manual_seed(zlib.crc32(f"recv_contig_mixed_ring32_{name}".encode()))
+        pt_weight = torch.randn(1, 1, K, N)
+        tt_weight = _make_recv_contig_weight(
+            device,
+            pt_weight,
+            num_dram_banks=num_dram_banks,
+            ring_size=ring_size,
+            dtype=dtype,
+            distribution_strategy=ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+        )
+
+        pt_act = torch.randn(1, 1, M, K)
+        act_mem_config = ttnn.create_sharded_memory_config(
+            shape=(M, K // ring_size),
+            core_grid=receiver_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        out_block_h = M // ttnn.TILE_SIZE
+        out_block_w = n_tiles_per_receiver
+        out_subblock_w = min(out_block_w, 8)
+        while out_subblock_w > 1 and out_block_w % out_subblock_w != 0:
+            out_subblock_w -= 1
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(ring_cols, ring_rows),
+            in0_block_w=k_tiles_per_shard,
+            out_subblock_h=1,
+            out_subblock_w=out_subblock_w,
+            per_core_M=out_block_h,
+            per_core_N=out_block_w,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+            gather_in0=True,
+            hop_cores=ttnn.CoreRangeSet([]),
+            num_global_cb_receivers=num_receivers_per_bank,
+            untilize_out=False,
+        )
+        output_mem_config = ttnn.create_sharded_memory_config(
+            shape=(M, N // ring_size),
+            core_grid=receiver_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        tensors.append((name, tt_weight))
+        program_configs.append(program_config)
+        output_mem_configs.append(output_mem_config)
+        activations.append(pt_act)
+        act_mem_configs.append(act_mem_config)
+        expected_outputs.append(pt_act.float() @ pt_weight.float())
+        max_in1_block_size = max(max_in1_block_size, k_tiles_per_shard * n_tiles_per_receiver * tile_bytes)
+
+    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
+        device, bank_to_receivers, ring_size * max_in1_block_size
+    )
+
+    ttnn.experimental.start_tensor_prefetcher(device)
+    ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, 0)
+    ttnn.experimental.queue_tensor_prefetcher_request(
+        device, [(tt_weight, ring_size) for _, tt_weight in tensors], global_cb=gcb
+    )
+
+    try:
+        for i, (name, tt_weight) in enumerate(tensors):
+            tt_act = ttnn.from_torch(
+                activations[i],
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=act_mem_configs[i],
+            )
+            tt_out = ttnn.linear(
+                tt_act,
+                tt_weight,
+                program_config=program_configs[i],
+                memory_config=output_mem_configs[i],
+                compute_kernel_config=compute_kernel_config,
+                dtype=ttnn.bfloat16,
+                global_cb=gcb,
+            )
+            out_torch = ttnn.to_torch(tt_out)
+            ttnn.deallocate(tt_out)
+            ttnn.deallocate(tt_act)
+            passing, output_str = comp_pcc(expected_outputs[i], out_torch, 0.99)
+            logger.info(f"[recv_contig_batched_mixed_ring32_{name}] {output_str}")
+            assert passing, f"[recv_contig_batched_mixed_ring32_{name}] PCC check failed: {output_str}"
+    finally:
+        ttnn.experimental.stop_tensor_prefetcher(device)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+def test_tensor_prefetcher_recv_contig_batched_mixed_sequence_ring16_mesh(mesh_device):
+    num_dram_banks = mesh_device.dram_grid_size().x
+    num_receivers_per_bank = 2
+    ring_size = num_dram_banks * num_receivers_per_bank
+    ring_cols = num_dram_banks
+    ring_rows = num_receivers_per_bank
+    num_devices = mesh_device.get_num_devices()
+    M = 32
+    model_dim = 4096
+    hidden_per_device = 3584
+    dtype = ttnn.bfloat8_b
+
+    receiver_core_range_set = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ring_cols - 1, ring_rows - 1))}
+    )
+    bank_to_receivers = [
+        (b, _bank_receivers_contiguous(b, num_receivers_per_bank, ring_cols=ring_cols)) for b in range(num_dram_banks)
+    ]
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+        dst_full_sync_en=True,
+    )
+
+    # Production decode order for one layer: QKV, WO, FF1, FF3, FF2.  The first four
+    # shard output-N across the mesh; FF2 shards K across the mesh.
+    shapes = [
+        ("qkv", model_dim, 1536, "n"),
+        ("wo", model_dim, 1024, "n"),
+        ("ff1", model_dim, hidden_per_device, "n"),
+        ("ff3", model_dim, hidden_per_device, "n"),
+        ("ff2", hidden_per_device, model_dim, "k"),
+    ]
+
+    tensors = []
+    max_in1_block_size = 0
+    tile_bytes = _bytes_per_tile(dtype)
+
+    for name, k_per_device, n_per_device, shard_axis in shapes:
+        if shard_axis == "n":
+            K = k_per_device
+            N = n_per_device * num_devices
+            torch.manual_seed(zlib.crc32(f"recv_contig_mixed_ring16_mesh_{name}".encode()))
+            pt_weight = torch.randn(1, 1, K, N)
+            weight_mem_config = _make_recv_contig_weight(
+                mesh_device,
+                pt_weight[:, :, :, :n_per_device],
+                num_dram_banks=num_dram_banks,
+                ring_size=ring_size,
+                dtype=dtype,
+                distribution_strategy=ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+            ).memory_config()
+            tt_weight = ttnn.as_tensor(
+                pt_weight,
+                device=mesh_device,
+                dtype=dtype,
+                memory_config=weight_mem_config,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(2, 3), mesh_shape=(1, num_devices)),
+            )
+            pt_act = torch.randn(1, 1, M, K)
+            act_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+            composer = ttnn.ConcatMeshToTensor(mesh_device, dim=3)
+            expected = pt_act.float() @ pt_weight.float()
+        else:
+            K = k_per_device * num_devices
+            N = n_per_device
+            torch.manual_seed(zlib.crc32(f"recv_contig_mixed_ring16_mesh_{name}".encode()))
+            pt_weight = torch.randn(1, 1, K, N)
+            weight_mem_config = _make_recv_contig_weight(
+                mesh_device,
+                pt_weight[:, :, :k_per_device, :],
+                num_dram_banks=num_dram_banks,
+                ring_size=ring_size,
+                dtype=dtype,
+                distribution_strategy=ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+            ).memory_config()
+            tt_weight = ttnn.as_tensor(
+                pt_weight,
+                device=mesh_device,
+                dtype=dtype,
+                memory_config=weight_mem_config,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(3, 2), mesh_shape=(1, num_devices)),
+            )
+            pt_act = torch.randn(1, 1, M, K)
+            act_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3)
+            composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+            expected = torch.cat(
+                [
+                    pt_act[:, :, :, d * k_per_device : (d + 1) * k_per_device].float()
+                    @ pt_weight[:, :, d * k_per_device : (d + 1) * k_per_device, :].float()
+                    for d in range(num_devices)
+                ],
+                dim=0,
+            )
+
+        act_mem_config = ttnn.create_sharded_memory_config(
+            shape=(M, k_per_device // ring_size),
+            core_grid=receiver_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        out_block_h = M // ttnn.TILE_SIZE
+        out_block_w = n_per_device // ring_size // ttnn.TILE_SIZE
+        out_subblock_w = min(out_block_w, 8)
+        while out_subblock_w > 1 and out_block_w % out_subblock_w != 0:
+            out_subblock_w -= 1
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(ring_cols, ring_rows),
+            in0_block_w=k_per_device // ring_size // ttnn.TILE_SIZE,
+            out_subblock_h=1,
+            out_subblock_w=out_subblock_w,
+            per_core_M=out_block_h,
+            per_core_N=out_block_w,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+            gather_in0=True,
+            hop_cores=ttnn.CoreRangeSet([]),
+            num_global_cb_receivers=num_receivers_per_bank,
+            untilize_out=False,
+        )
+        output_mem_config = ttnn.create_sharded_memory_config(
+            shape=(M, n_per_device // ring_size),
+            core_grid=receiver_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        tensors.append(
+            {
+                "name": name,
+                "weight": tt_weight,
+                "activation": pt_act,
+                "act_mapper": act_mapper,
+                "act_mem_config": act_mem_config,
+                "program_config": program_config,
+                "output_mem_config": output_mem_config,
+                "composer": composer,
+                "expected": expected,
+            }
+        )
+        max_in1_block_size = max(
+            max_in1_block_size, program_config.in0_block_w * program_config.per_core_N * tile_bytes
+        )
+
+    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
+        mesh_device, bank_to_receivers, ring_size * max_in1_block_size
+    )
+
+    ttnn.experimental.start_tensor_prefetcher(mesh_device)
+    ttnn.experimental.wait_for_cq_on_tensor_prefetcher(mesh_device, 0)
+    ttnn.experimental.queue_tensor_prefetcher_request(
+        mesh_device, [(entry["weight"], ring_size) for entry in tensors], global_cb=gcb
+    )
+
+    try:
+        for entry in tensors:
+            tt_act = ttnn.from_torch(
+                entry["activation"],
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=entry["act_mem_config"],
+                mesh_mapper=entry["act_mapper"],
+            )
+            tt_out = ttnn.linear(
+                tt_act,
+                entry["weight"],
+                program_config=entry["program_config"],
+                memory_config=entry["output_mem_config"],
+                compute_kernel_config=compute_kernel_config,
+                dtype=ttnn.bfloat16,
+                global_cb=gcb,
+            )
+            out_torch = ttnn.to_torch(tt_out, mesh_composer=entry["composer"])
+            ttnn.deallocate(tt_out)
+            ttnn.deallocate(tt_act)
+            passing, output_str = comp_pcc(entry["expected"], out_torch, 0.99)
+            logger.info(f"[recv_contig_batched_mixed_ring16_mesh_{entry['name']}] {output_str}")
+            assert passing, f"[recv_contig_batched_mixed_ring16_mesh_{entry['name']}] PCC check failed: {output_str}"
+    finally:
+        ttnn.experimental.stop_tensor_prefetcher(mesh_device)
 
 
 # ---------------------------------------------------------------------------

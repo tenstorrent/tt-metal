@@ -29,7 +29,7 @@ from models.tt_transformers.tt.common import (
 )
 from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
-from models.tt_transformers.tt.prefetcher import is_prefetcher_supported
+from models.tt_transformers.tt.prefetcher import is_prefetcher_supported, is_tensor_prefetcher_supported
 
 # Issue: https://github.com/tenstorrent/tt-metal/issues/34763
 models_not_supported_for_device_sampling = ["Mistral-7B"]
@@ -936,8 +936,14 @@ def test_demo_text(
     if use_prefetcher and not is_blackhole():
         logger.warning("--use_prefetcher requested but DRAM prefetcher is only supported on Blackhole; disabling.")
         use_prefetcher = False
+    # Prefer the Tensor Prefetcher whenever its model/mesh geometry is supported, including
+    # configurations such as 8B on fewer than four cards where the worker backend cannot fit.
+    tensor_prefetcher_supported = is_tensor_prefetcher_supported(mesh_device, hf_dir)
     use_prefetcher = (
-        use_prefetcher and is_prefetcher_supported(hf_dir, num_devices) and "Llama" in hf_dir and "8B" in hf_dir
+        use_prefetcher
+        and "Llama" in hf_dir
+        and "8B" in hf_dir
+        and (tensor_prefetcher_supported or is_prefetcher_supported(hf_dir, num_devices))
     )
     global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
     use_hf_rope = request.config.getoption("--use_hf_rope")
@@ -1753,3 +1759,5 @@ def test_demo_text(
         assert (
             all_consistent
         ), f"Batch32 repeat batch outputs should be identical - {failed_checks} out of {total_checks} consistency checks failed"
+
+    generator.close()

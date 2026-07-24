@@ -904,10 +904,10 @@ def create_tt_model(
 ):
     from models.tt_transformers.tt.model import Transformer
     from models.tt_transformers.tt.model_config import ModelArgs
-    from models.tt_transformers.tt.prefetcher import Prefetcher
+    from models.tt_transformers.tt.prefetcher import make_prefetcher
 
     num_tensors = 5 if use_prefetcher else 0
-    prefetcher = Prefetcher(mesh_device, num_tensors, num_layers) if use_prefetcher else None
+    prefetcher = make_prefetcher(mesh_device, num_tensors, num_layers) if use_prefetcher else None
 
     tt_model_args = ModelArgs(
         mesh_device,

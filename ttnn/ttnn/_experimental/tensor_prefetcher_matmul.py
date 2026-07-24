@@ -23,9 +23,8 @@ re-checks it), so there is nothing left to cross-check here.
 
 This is a host-side composition, not a device-level fusion: the prefetch still
 runs on the DRAM-core (DRISC) path off the command queue while the matmul is
-dispatched normally. The pairing does compose with trace capture -- pass the
-recording CQ as ``cq_id`` and the request is captured (and replayed) alongside
-the matmul.
+dispatched normally. Both operations use the current command queue, so the
+pairing composes with trace capture without a separate CQ argument.
 """
 
 import ttnn
@@ -37,7 +36,6 @@ def prefetch_and_linear(
     *,
     global_cb,
     program_config,
-    cq_id=None,
     **linear_kwargs,
 ):
     """Queue a DRAM-core prefetch of ``weight`` into ``global_cb``, then run the
@@ -58,9 +56,6 @@ def prefetch_and_linear(
             the matmul. Its receiver count fixes the prefetch ``block_count``.
         program_config: gather_in0 1D mcast matmul program config driving the matmul;
             its ``stream_in1`` flag selects streaming vs batched prefetch delivery.
-        cq_id: Command queue for the prefetch request. When that CQ is mid
-            trace-capture the request is captured into the trace. Defaults to the
-            current command queue.
         **linear_kwargs: Forwarded to ``ttnn.linear`` (e.g. ``memory_config``,
             ``compute_kernel_config``, ``dtype``, ``bias``).
 
@@ -89,7 +84,6 @@ def prefetch_and_linear(
         device,
         [request],
         global_cb=global_cb,
-        cq_id=cq_id,
     )
     return ttnn.linear(
         input_tensor_a,

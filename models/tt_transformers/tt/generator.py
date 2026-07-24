@@ -35,6 +35,7 @@ from models.tt_transformers.tt.common import (
     get_padded_prefill_len,
     num_blocks_in_seq,
 )
+from models.tt_transformers.tt.prefetcher import uses_tensor_prefetcher
 
 # Maximum total tokens (batch_size * seq_len) allowed for a batched prefill pass.
 # Exceeding this triggers a fallback to sequential per-user prefill.
@@ -2863,11 +2864,24 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 page_table = torch.cat([page_table, padding], dim=1)
             return page_table[:, :num_blocks]
 
-    ## Destructor
+    def close(self):
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
 
-    def __del__(self):
-        # Release all captured traces to prevent nanobind memory leaks
-        # Traces must be released before closing the mesh device
+        # Stop each active Tensor Prefetcher daemon. Log (don't swallow silently) on failure so a
+        # stuck daemon is visible; TensorPrefetcher.__del__ still retries teardown on GC since it
+        # only marks itself stopped on success. Continue to trace release regardless.
+        for model in getattr(self, "model", []):
+            prefetcher = getattr(model, "prefetcher", None)
+            if uses_tensor_prefetcher(prefetcher):
+                try:
+                    prefetcher.teardown()
+                except Exception as e:
+                    logger.warning(f"Tensor Prefetcher teardown failed during Generator.close(): {e}")
+
+        # Release all captured traces to prevent nanobind memory leaks.
+        # Traces must be released before closing the mesh device.
         try:
             # Release prefill traces
             if hasattr(self, "trace_id_prefill"):
@@ -2916,6 +2930,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                             pass  # Ignore errors during cleanup
         except Exception:
             pass  # Ignore any errors during trace cleanup
+
+    ## Destructor
+
+    def __del__(self):
+        self.close()
 
         # Workaround for issue #19052
         if self.data_parallel > 1:

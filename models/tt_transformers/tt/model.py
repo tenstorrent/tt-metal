@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-
 import torch
 from tqdm import tqdm
 
@@ -17,6 +16,7 @@ from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
 from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
+from models.tt_transformers.tt.prefetcher import colocating_prefetcher
 from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
 
 
@@ -64,6 +64,9 @@ class Transformer(LightweightModule):
 
         DefaultRopeSetup = HfRotarySetup if self.args.use_hf_rope else RotarySetup
         ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else DefaultRopeSetup
+        # Only the worker-core backend co-locates rope on its grid; the Tensor Prefetcher backend uses
+        # the default rope placement.
+        rope_prefetcher = colocating_prefetcher(prefetcher)
         self.rope_setup = ActualRopeSetupClass(
             device=mesh_device,
             batch_size=args.max_batch_size,
@@ -72,7 +75,7 @@ class Transformer(LightweightModule):
             rope_theta=args.rope_theta,
             rope_scaling=args.rope_scaling,
             use_qk_fused=args.use_qk_fused,
-            prefetcher=prefetcher,
+            prefetcher=rope_prefetcher,
         )
 
         if args.rope_theta_local:
@@ -866,7 +869,6 @@ class Transformer(LightweightModule):
         page_tables_per_layer=None,
     ):
         if mode == Mode.DECODE:
-            # Run prefetcher if it is enabled
             if self.prefetcher is not None:
                 self.prefetcher.run()
 
@@ -919,7 +921,6 @@ class Transformer(LightweightModule):
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
                 batch_size=batch_size,
             )
-
         if mode == Mode.DECODE:
             if self.prefetcher is not None:
                 self.prefetcher.stop()
@@ -931,16 +932,18 @@ class Transformer(LightweightModule):
         if get_last_token != -1:
             x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
 
+        lm_head_prefetcher = colocating_prefetcher(self.prefetcher)
+
         # Output norm
-        x = self.norm(x, mode=mode, norm_config=self.args.get_norm_config("lm_head", mode, self.prefetcher))
+        x = self.norm(x, mode=mode, norm_config=self.args.get_norm_config("lm_head", mode, lm_head_prefetcher))
 
         lm_head_input_mem_cfg = self.args.get_lm_head_input_mem_config(
-            mode, None if mode == Mode.PREFILL else self.prefetcher
+            mode, None if mode == Mode.PREFILL else lm_head_prefetcher
         )
         if mode == Mode.PREFILL and lm_head_input_mem_cfg.is_sharded():
             x = ttnn.interleaved_to_sharded(x, lm_head_input_mem_cfg)
-        if mode == Mode.DECODE and self.prefetcher is not None:
-            x = ttnn.to_memory_config(x, self.args.get_lm_head_input_mem_config(mode, self.prefetcher))
+        if mode == Mode.DECODE and lm_head_prefetcher is not None:
+            x = ttnn.to_memory_config(x, self.args.get_lm_head_input_mem_config(mode, lm_head_prefetcher))
 
         x = self.lm_head(x)
         if mode == Mode.PREFILL:
