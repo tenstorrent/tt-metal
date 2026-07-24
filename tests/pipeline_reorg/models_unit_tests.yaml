@@ -996,6 +996,24 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
+# Fast (smoke-tier) PCC gate for the HunyuanImage-3.0 TTNN port: the per-block
+# correctness sweep at small scale (2-8 layers, GRID=8, S<=32) excluding the slow
+# production-scale, host-only, and opt-in random-input cases. Single-device
+# (device_id=0). Real checkpoint weights + tokenizer.json must be staged on the NAS
+# (HF hub cache under HF_HOME); HY_SKIP_WEIGHT_DOWNLOAD=1 fails fast in CI.
+- name: HunyuanImage-3.0 unit tests
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface HUNYUAN_MODEL_DIR=/mnt/MLPerf/huggingface/tencent/HunyuanImage-3.0
+    export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_cache/tencent/HunyuanImage-3.0 HY_SKIP_WEIGHT_DOWNLOAD=1
+    pytest --timeout 900 models/experimental/hunyuan_image_3_0/tests/pcc/ -m "not slow and not unit_host and not e2e_random_inputs"
+  model: hunyuan-image-3.0
+  skus:
+    bh_quietbox_2:
+      timeout: 20
+      tier: 3
+  owner_id: D0B8130N4BW # Dalar Vartanians
+  team: models
+
 - name: panoptic-deeplab unit tests
   cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/tests/pcc/ --timeout=420
   model: panoptic-deeplab

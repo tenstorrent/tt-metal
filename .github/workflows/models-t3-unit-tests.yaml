@@ -28,6 +28,7 @@ on:
           # mamba-2.8b: disabled — PCC failures (see #42163)
           - gemma-4-e2b
           - gemma-4-e4b
+          - hunyuan-image-3.0
           - panoptic-deeplab
           - bevformer
       sku:
