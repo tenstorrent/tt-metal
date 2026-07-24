@@ -142,7 +142,7 @@ python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set RUN_ID     "
 python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set START_TIME "{start_time}"
 ```
 Optional per-run override flags — set the same way (`state.py --worktree-dir … set <FLAG> true`) only when the request asks for them:
-- `SKIP_TESTER` — the writer validates against the existing tests; tester/refiner are skipped.
+- `LOCK_TESTS` — the tester runs test-locked: it treats the existing test as the immutable source of truth, authors or modifies no test, and only runs it and debugs the kernel; the writer→tester→refiner loop is otherwise unchanged.
 - `HIDE_EXISTING_KERNEL` — the orchestrator's Step 2b git-removes-and-commits the target op's existing files on the worktree branch, so it regenerates blind. Never `rm` the files in the prompt; set this flag and let the orchestrator do it.
 
 Then invoke the orchestrator, telling it only `WORKTREE_DIR={worktree_dir}` —
