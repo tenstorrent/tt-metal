@@ -90,9 +90,9 @@ void kernel_main() {
     constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(17);
     constexpr uint32_t n_routed_experts = get_compile_time_arg_val(18);
     constexpr uint32_t max_dispatch_buffer_token_size = get_compile_time_arg_val(19);
-    constexpr uint32_t dispatch_core_idx = get_compile_time_arg_val(20);
-    constexpr uint32_t num_dispatch_cores = get_compile_time_arg_val(21);
-    constexpr uint32_t core_mask = num_dispatch_cores - 1;
+    constexpr uint32_t sender_core_idx = get_compile_time_arg_val(20);
+    constexpr uint32_t num_sender_cores = get_compile_time_arg_val(21);
+    constexpr uint32_t core_mask = num_sender_cores - 1;
     // Batches are assigned round-robin (batch i -> core i % total_workers); all cores
     // grow offsets[] left-to-right from the single shared owner copy under the baton.
 
@@ -215,7 +215,7 @@ void kernel_main() {
     uint32_t turn_expected = 1;  // per-core baton counter; +1 for each batch this core handles
     DPRINT_DISPATCH(
         "[R s={} c={}] startup done; owner={} total_batches={} total_workers={}\n",
-        (uint32_t)dispatch_core_idx,
+        (uint32_t)sender_core_idx,
         (uint32_t)core_id,
         (uint32_t)IS_OWNER,
         (uint32_t)total_batches,
@@ -250,6 +250,10 @@ void kernel_main() {
 #endif
 
     // ===== Per-batch loop — this core handles batches core_id, core_id+total_workers, ... =====
+    // Running count of cross-device (fabric) plan entries seen; used to round-robin each remote send
+    // across the sender cores / links. Persists across batches. Every core counts the same entries in
+    // the same order, so they agree on which core emits which send.
+    uint32_t fabric_sends_seen = 0;
     for (uint32_t batch_idx = core_id; batch_idx < effective_total_batches; batch_idx += total_workers) {
         uint32_t batch_start = batch_idx * read_batch_size;
         uint32_t batch_end =
@@ -320,7 +324,7 @@ void kernel_main() {
         // 4. Build per-batch route plan into c_14.
         DPRINT_DISPATCH(
             "[R s={} c={}] b={} reserving plan slot (blocks on writer drain)\n",
-            (uint32_t)dispatch_core_idx,
+            (uint32_t)sender_core_idx,
             (uint32_t)core_id,
             batch_idx);
         cb_reserve_back(cb_plan_id, 1);
@@ -332,13 +336,13 @@ void kernel_main() {
 
         DPRINT_DISPATCH(
             "[R s={} c={}] b={} WAIT baton (turn_sem>={}, have={})\n",
-            (uint32_t)dispatch_core_idx,
+            (uint32_t)sender_core_idx,
             (uint32_t)core_id,
             batch_idx,
             turn_expected,
             (uint32_t)(*turn_sem_ptr));
         noc_semaphore_wait_min(turn_sem_ptr, turn_expected);
-        DPRINT_DISPATCH("[R s={} c={}] b={} GOT baton\n", (uint32_t)dispatch_core_idx, (uint32_t)core_id, batch_idx);
+        DPRINT_DISPATCH("[R s={} c={}] b={} GOT baton\n", (uint32_t)sender_core_idx, (uint32_t)core_id, batch_idx);
         turn_expected++;
         if constexpr (!IS_OWNER) {
             noc.async_read(
@@ -359,29 +363,30 @@ void kernel_main() {
             // dispatch core (after the ownership / mapping / capacity filters below).
             for (uint32_t k = 0; k < num_experts_per_tok; k++) {
                 int32_t routed_expert = indices_t[k];
-                // Experts the table maps nowhere (-1) are dropped by every dispatch core.
+
                 int32_t expert_chip_og = expert_dispatch_table[routed_expert];
                 if (expert_chip_og == -1) {
                     continue;
                 }
                 uint32_t expert_chip = device_begin_idx + (uint32_t)expert_chip_og * device_stride;
-                bool is_local = (expert_chip == linearized_mesh_coord);
+                bool expert_lives_on_this_chip = (expert_chip == linearized_mesh_coord);
 
-                // Work split between the dispatch cores (= sender cores / fabric links):
-                //  - LOCAL tokens keep the expert-parity split: this core owns experts whose low bits
-                //    == dispatch_core_idx, and only the owner touches offsets[e] / emits them.
-                //  - REMOTE (fabric) tokens: EVERY dispatch core walks all of them and advances
-                //    offsets[e] identically, so page_idx stays globally consistent with no cross-core
-                //    sync (deterministic replica). But each core EMITS only its slice — chosen per
-                //    entry by (token_idx, k) — so the fabric sends split evenly across the links.
-                bool owned_local = (((uint32_t)routed_expert & core_mask) == dispatch_core_idx);
-                if (is_local && !owned_local) {
-                    continue;  // another dispatch core owns this local expert (parity split, unchanged)
+                // expert_lives_on_this_chip - does the expert we have to write to live on this chip, if so
+                // we write to DRAM.
+                // this_core_writes_token_to_expert - this worker core from this sender group should write,
+                // if so, then this core writes to DRAM, else, the other worker core from the other sender group writes
+                // to DRAM.
+                bool this_core_writes_token_to_expert = (((uint32_t)routed_expert & core_mask) == sender_core_idx);
+                if (expert_lives_on_this_chip && !this_core_writes_token_to_expert) {
+                    continue;
                 }
 
-                // Allocate this token's destination DRAM page from the expert's counter.
-                // If the dispatch buffer for this expert is full, still bump the counter (so capacity
-                // accounting stays consistent across cores) but drop the token — no entry.
+                // Allocate this token's destination DRAM page from the expert's counter. offsets[e]
+                // grows left-to-right: shared within a group via the baton, and replicated identically
+                // across groups (every core walks all remote experts), so a token lands on the same
+                // page no matter which core sends it.
+                // If the dispatch buffer for this expert is full, still bump the counter
+                // (so capacity accounting stays consistent across cores) but drop the token — no entry.
                 uint32_t& offset = offsets[routed_expert];
                 if (offset >= max_dispatch_buffer_token_size) {
                     offset++;
@@ -391,15 +396,17 @@ void kernel_main() {
 
                 // Remote tokens: emit only this core's slice. offset was already advanced above (full
                 // walk on every core) so the page assignment is identical no matter who sends it.
-                if (!is_local) {
-                    uint32_t send_slot = token_idx * num_experts_per_tok + k;
-                    if ((send_slot % num_dispatch_cores) != dispatch_core_idx) {
+                if (!expert_lives_on_this_chip) {
+                    // Round-robin each fabric send across the links: 0,1,…,L-1,0,… — an exact even
+                    // split, since every core advances the same counter over the same remote entries.
+                    uint32_t target_fabric_link = fabric_sends_seen++ % num_sender_cores;
+                    if (target_fabric_link != sender_core_idx) {
                         continue;
                     }
                 }
 
                 volatile tt_l1_ptr PlanEntry* entry = &entries[entry_count];
-                entry->flags = is_local ? PLAN_FLAG_LOCAL : 0;
+                entry->flags = expert_lives_on_this_chip ? PLAN_FLAG_LOCAL : 0;
                 entry->token_t = t;
                 entry->routed_expert = (uint32_t)routed_expert;
                 entry->page_idx = page_idx;
@@ -411,7 +418,7 @@ void kernel_main() {
                 // writer recomputes the EDM direction and (mesh,chip) header from it.
                 entry->dst_chip = expert_chip;
 
-                if (!is_local) {
+                if (!expert_lives_on_this_chip) {
                     if constexpr (is_1d_topology<topology>()) {
                         entry->route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
                         entry->distance =
@@ -442,14 +449,14 @@ void kernel_main() {
             noc_semaphore_inc(next_turn_sem_noc_addr, 1);
             DPRINT_DISPATCH(
                 "[R s={} c={}] b={} RELEASE baton -> signaled next (entries={})\n",
-                (uint32_t)dispatch_core_idx,
+                (uint32_t)sender_core_idx,
                 (uint32_t)core_id,
                 batch_idx,
                 entry_count);
         } else {
             DPRINT_DISPATCH(
                 "[R s={} c={}] b={} RELEASE baton -> LAST batch, no signal (entries={})\n",
-                (uint32_t)dispatch_core_idx,
+                (uint32_t)sender_core_idx,
                 (uint32_t)core_id,
                 batch_idx,
                 entry_count);
@@ -461,7 +468,7 @@ void kernel_main() {
 
     // Teardown: all batches done — push the two end-of-stream sentinels this core's
     // consumers wait on.
-    DPRINT_DISPATCH("[R s={} c={}] loop DONE -> pushing sentinels\n", (uint32_t)dispatch_core_idx, (uint32_t)core_id);
+    DPRINT_DISPATCH("[R s={} c={}] loop DONE -> pushing sentinels\n", (uint32_t)sender_core_idx, (uint32_t)core_id);
 #ifndef ROW_MAJOR_INPUT
     // (1) Sentinel value to compute so it breaks out of its untilize loop. Row-major has no compute
     //     kernel, so this signal is skipped entirely.
