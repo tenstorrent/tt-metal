@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <tuple>
 #include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -85,6 +86,43 @@ struct operation_attributes_t {
     // (which is also what sp == 1 resolves to, since that is the identity permutation).
     std::optional<BlockCyclicLayout> block_cyclic{std::nullopt};
     bool has_block_cyclic() const { return block_cyclic.has_value(); }
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "apply_relu",
+        "num_groups",
+        "block_size",
+        "synthesize_gate",
+        "gate_scale",
+        "program_config",
+        "compute_kernel_config",
+        "sp_axis_present",
+        "sp_axis",
+        "tp_axis_present",
+        "tp_axis",
+        "has_indexed_kv_cache",
+        "has_runtime_kv_len",
+        "has_block_cyclic",
+        "block_cyclic_sp",
+        "block_cyclic_chunk_local");
+    auto attribute_values() const {
+        return std::make_tuple(
+            apply_relu,
+            num_groups,
+            block_size,
+            synthesize_gate,
+            gate_scale,
+            std::cref(program_config),
+            std::cref(compute_kernel_config),
+            sp_axis().has_value(),
+            sp_axis().value_or(0u),
+            tp_axis().has_value(),
+            tp_axis().value_or(0u),
+            has_indexed_kv_cache(),
+            has_runtime_kv_len(),
+            has_block_cyclic(),
+            block_cyclic.has_value() ? block_cyclic->sp : 0u,
+            block_cyclic.has_value() ? block_cyclic->chunk_local : 0u);
+    }
 };
 
 struct tensor_args_t {
