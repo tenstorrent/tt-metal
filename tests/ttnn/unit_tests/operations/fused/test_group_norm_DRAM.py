@@ -340,10 +340,12 @@ def test_group_norm_no_input_mask_DRAM(
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups", GROUP_NORM_NON_TILE_ALIGNED_DRAM_SHAPES)
-def test_group_norm_non_tile_aligned_DRAM(device, N, C, H, W, num_groups):
-    # Regression for tt-metal #50682: the fused interleaved (two-pass) group_norm must match
+@pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
+def test_group_norm_non_tile_aligned_DRAM(device, N, C, H, W, num_groups, use_welford):
+    # Regression for tt-metal #50682: the fused interleaved group_norm must match
     # torch.nn.functional.group_norm even when the flattened height (N*H*W) is not a multiple
-    # of the tile height. Uses auto grid selection and legacy (non-Welford) mode.
+    # of the tile height. The two-pass path is corrected directly; use_welford=True is routed
+    # to the two-pass path (Welford does not support non-tile-aligned H*W). Auto grid selection.
     torch.manual_seed(0)
     if device.core_grid.y == 7:
         pytest.skip()
@@ -390,7 +392,7 @@ def test_group_norm_non_tile_aligned_DRAM(device, N, C, H, W, num_groups):
         output_layout=ttnn.TILE_LAYOUT,
         core_grid=None,
         inplace=False,
-        use_welford=False,
+        use_welford=use_welford,
     )
     ttnn.synchronize_device(device)
     output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor))
