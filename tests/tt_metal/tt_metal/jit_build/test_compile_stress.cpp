@@ -89,6 +89,17 @@ tt::ARCH get_mock_arch_from_env() {
     return arch;
 }
 
+// Default (1): mock device, for device-less compile hosts / the multi-client
+// remote-server harness. Set to 0 to compile against the real attached device
+// (CI runtime-perf runs on device SKUs, where mock's real->mock transition would
+// throw because MeshDispatchFixture::SetUpTestSuite already opened the device).
+bool use_mock_mode() {
+    // Parse the env var once; the value is fixed for the process lifetime and is
+    // queried from SetUp/TearDown/the test body.
+    static const bool mock = tt::parse_env<std::uint32_t>("TT_METAL_COMPILE_STRESS_MOCK", 1) != 0;
+    return mock;
+}
+
 constexpr std::string_view target_device_type_to_string(tt::TargetDevice t) noexcept {
     const std::string_view name = enchantum::to_string(t);
     return name.empty() ? std::string_view{"Unknown"} : name;
@@ -191,24 +202,42 @@ void write_result_json(const std::string& path, const StressResult& r) {
 class CompileStressFixture : public MeshDispatchFixture {
 protected:
     void SetUp() override {
-        experimental::configure_mock_mode(
-            get_mock_arch_from_env(), tt::parse_env<std::uint32_t>("TT_METAL_COMPILE_STRESS_NUM_CHIPS", 1));
+        if (use_mock_mode()) {
+            experimental::configure_mock_mode(
+                get_mock_arch_from_env(), tt::parse_env<std::uint32_t>("TT_METAL_COMPILE_STRESS_NUM_CHIPS", 1));
+        }
         MeshDispatchFixture::SetUp();
     }
     void TearDown() override {
         MeshDispatchFixture::TearDown();
-        experimental::disable_mock_mode();
+        if (use_mock_mode()) {
+            experimental::disable_mock_mode();
+        }
     }
 };
 
 TEST_F(CompileStressFixture, DISABLED_TensixCompileStress) {
     const auto target = MetalContext::instance().get_cluster().get_target_device_type();
-    TT_FATAL(
-        target == tt::TargetDevice::Mock,
-        "CompileStressFixture expects mock device; got target_type={}.",
-        target_device_type_to_string(target));
 
     IDevice* dev = devices_[0]->get_devices()[0];
+
+    if (use_mock_mode()) {
+        TT_FATAL(
+            target == tt::TargetDevice::Mock,
+            "CompileStressFixture expects mock device; got target_type={}.",
+            target_device_type_to_string(target));
+    } else {
+        // Real mode compiles for the attached device (TT_METAL_COMPILE_STRESS_ARCH
+        // does not steer CompileProgram), so a runner/arch mismatch would gate
+        // e.g. Wormhole kernels against the Blackhole golden. Fail fast instead.
+        const tt::ARCH expected_arch = get_mock_arch_from_env();
+        const tt::ARCH actual_arch = dev->arch();
+        TT_FATAL(
+            actual_arch == expected_arch,
+            "CompileStressFixture requested arch '{}' but the attached device is '{}'.",
+            tt::get_string_lowercase(expected_arch),
+            tt::get_string_lowercase(actual_arch));
+    }
 
     const uint32_t target_num_kernels = tt::parse_env<std::uint32_t>("TT_METAL_COMPILE_STRESS_NUM_KERNELS", 1000);
     const uint32_t client_id = tt::parse_env<std::uint32_t>("TT_METAL_COMPILE_STRESS_CLIENT_ID", 0);

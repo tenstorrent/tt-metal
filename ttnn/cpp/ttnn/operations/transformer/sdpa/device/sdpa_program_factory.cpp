@@ -125,11 +125,7 @@ EffectiveKvGeometry resolve_effective_kv_geometry(
     if (use_mla || !geo.active()) {
         return {k_num_heads, v_num_heads, k_block_size};
     }
-    return {
-        geo.num_kv_heads.value_or(k_num_heads),
-        geo.num_kv_heads.value_or(v_num_heads),
-        geo.block_size.value_or(k_block_size),
-    };
+    return {geo.num_kv_heads, geo.num_kv_heads, geo.block_size};
 }
 
 // Chunked prefill parameters collected from page table layout.
@@ -698,7 +694,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df =
         (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat im_df = tt::DataFormat::Float16_b;  // Keep most intermediates in bf16 to save L1; opt-in fp32 per-CB below.
+    tt::DataFormat im_df =
+        tt::DataFormat::Float16_b;  // Keep most intermediates in bf16 to save L1; opt-in fp32 per-CB below.
     tt::DataFormat stats_df = im_df;
     tt::DataFormat qk_im_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
     tt::DataFormat sum_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);

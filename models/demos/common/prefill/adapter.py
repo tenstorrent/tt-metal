@@ -115,6 +115,10 @@ class PrefillModelAdapter(ABC):
     # Route the MoE routing all-gather's global semaphores to L1_SMALL instead of
     # pinning the main-L1 floor. Requires l1_small_size > 0.
     routing_use_l1_small_for_semaphores: bool = False
+    # Emb-axis sharding of the cross-rank D2D hidden state (seq is always SP-sharded). True (default):
+    # emb TP-sharded, [Shard(2), Shard(3)]. False: emb replicated across TP, [Shard(2), Replicate()].
+    # Must match the layout the model's decoder layer consumes/produces.
+    pipeline_activation_emb_tp_sharded: bool = True
 
     # =====================================================================
     # Glue the engine calls. The adapter is a factory + descriptor only: it says
