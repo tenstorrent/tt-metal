@@ -28,14 +28,10 @@ import ttnn
 
 from models.experimental.hunyuan_image_3_0.ref.vision.preprocess import (
     IMAGE_TOKEN_ID,
-    build_cond_image_processor,
     vit_process_image,
 )
 from models.experimental.hunyuan_image_3_0.ref.weights import MODEL_DIR
 from models.experimental.hunyuan_image_3_0.tt.vision.siglip2 import Siglip2VisionInputs
-
-# Re-export the host-side reference processor build so callers have one import site.
-__all_ref__ = (IMAGE_TOKEN_ID, build_cond_image_processor)
 
 
 def process_cond_image(processor, image, model_dir=MODEL_DIR):

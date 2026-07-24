@@ -30,8 +30,6 @@ def _vit_tensor(cond_image: Any) -> Tensor:
     from .tokenizer.image_info import CondImage
 
     if isinstance(cond_image, CondImage):
-        if cond_image.section_type == "cond_joint_image":
-            return cond_image.vit_image
         return cond_image.vit_image
     return cond_image
 
