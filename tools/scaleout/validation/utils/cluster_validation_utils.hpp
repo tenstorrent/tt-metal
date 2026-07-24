@@ -133,4 +133,33 @@ tt_metal::AsicTopology filter_topology_by_tier(
     uint32_t depth,
     const PhysicalSystemDescriptor& physical_system_descriptor);
 
+// Phased (per-hierarchy-node) discovery for one tier: split the world into subgroups by depth-`depth`
+// instance_path prefix (via FsdQuery::hierarchy_partition), discover each subgroup independently on its own
+// sub-context, and merge the result into `physical_system_descriptor`. One collective `split` forms every
+// subgroup at once; each rank then discovers only within its subgroup.
+//
+// NOTE: this is the per-subgroup building block. Each rank ends with ITS subgroup's connectivity only —
+// assembling a single global PSD across subgroups needs a cross-subgroup gather, and no public PSD
+// serialization exists today (see PHASED_DISCOVERY_DESIGN.md). Until that lands, a caller using this must
+// scope validation per subgroup rather than validate a global PSD.
+void rediscover_by_hierarchy_subgroups(
+    PhysicalSystemDescriptor& physical_system_descriptor, const FsdQuery& fsd_query, uint32_t depth);
+
+// Per-subgroup phased bring-up for one tier (option-(b) validation): each iteration collectively splits into
+// depth-`depth` hierarchy-node subgroups, discovers each subgroup, and validates/retrains each subgroup's OWN
+// tier links (instance_path LCP == depth) — the both-endpoints-discovered guard in validate_fsd_against_gsd
+// scopes the result to intra-subgroup connections, so no global PSD is needed. Ranks stay globally lockstepped
+// (all_gather of a per-rank converged flag) so the collective split/reset can't deadlock when subgroups
+// converge at different rates. Retrained link endpoints accumulate into `link_retrain_counts`. Runs at most
+// `max_retrains` reset rounds for this tier; returns the number of reset rounds performed. Requires ethernet
+// link retraining support.
+uint32_t phased_bring_up_tier(
+    const fsd::proto::FactorySystemDescriptor& fsd_proto,
+    const FsdQuery& fsd_query,
+    uint32_t depth,
+    PhysicalSystemDescriptor& physical_system_descriptor,
+    uint32_t max_retrains,
+    std::optional<uint32_t> min_connections,
+    std::unordered_map<EthChannelIdentifier, uint32_t>& link_retrain_counts);
+
 }  // namespace tt::scaleout_tools

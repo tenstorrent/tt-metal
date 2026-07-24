@@ -1746,6 +1746,106 @@ tt::tt_metal::AsicTopology filter_topology_by_tier(
     return filtered;
 }
 
+void rediscover_by_hierarchy_subgroups(
+    PhysicalSystemDescriptor& physical_system_descriptor, const FsdQuery& fsd_query, uint32_t depth) {
+    namespace mh = tt::tt_metal::distributed::multihost;
+    auto& context = tt::tt_metal::MetalContext::instance();
+    const auto world = context.get_distributed_context_ptr();
+
+    // Every rank computes the same partition, then finds its own subgroup = the group whose depth-`depth`
+    // instance_path prefix matches this host's. Deterministic across ranks (same FSD everywhere).
+    const auto partition = fsd_query.hierarchy_partition(depth);
+    const auto my_path = fsd_query.get_instance_path(physical_system_descriptor.my_host_name());
+    const auto prefix_of = [depth](const std::vector<std::string>& path) {
+        return std::vector<std::string>(path.begin(), path.begin() + std::min<size_t>(depth, path.size()));
+    };
+    const auto my_prefix = prefix_of(my_path);
+
+    int color = -1;
+    for (size_t i = 0; i < partition.size(); ++i) {
+        if (prefix_of(fsd_query.get_instance_path(partition[i].front())) == my_prefix) {
+            color = static_cast<int>(i);
+            break;
+        }
+    }
+    TT_FATAL(
+        color >= 0,
+        "Host {} not found in any hierarchy subgroup at depth {}",
+        physical_system_descriptor.my_host_name(),
+        depth);
+
+    // One collective split forms all subgroups' sub-contexts in parallel; each rank receives its own.
+    const auto subgroup_ctx = world->split(mh::Color(color), mh::Key(*world->rank()));
+
+    // Discover within this subgroup only, then merge into the PSD. NOTE (see header): this leaves each rank
+    // with its subgroup's connectivity; a global PSD needs a cross-subgroup gather that has no public API yet.
+    physical_system_descriptor.clear();
+    auto subgroup_psd = tt::tt_metal::run_physical_system_discovery(
+        *context.get_cluster().get_cluster_desc(),
+        subgroup_ctx,
+        context.rtoptions().get_target_device(),
+        /*run_global_discovery=*/true,
+        /*run_live_discovery=*/true);
+    physical_system_descriptor.merge(std::move(subgroup_psd));
+}
+
+uint32_t phased_bring_up_tier(
+    const fsd::proto::FactorySystemDescriptor& fsd_proto,
+    const FsdQuery& fsd_query,
+    uint32_t depth,
+    PhysicalSystemDescriptor& physical_system_descriptor,
+    uint32_t max_retrains,
+    std::optional<uint32_t> min_connections,
+    std::unordered_map<EthChannelIdentifier, uint32_t>& link_retrain_counts) {
+    const auto world = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
+    const uint32_t world_size = *world->size();
+    uint32_t rounds = 0;
+
+    // Collective agreement across all ranks: true iff EVERY rank's subgroup has converged this tier. Keeps the
+    // shared loop bound identical on every rank so the collective split/reset stay in lockstep.
+    auto all_converged = [&](bool mine) {
+        uint8_t flag = mine ? 1u : 0u;
+        std::vector<uint8_t> flags(world_size, 0u);
+        world->all_gather(
+            ttsl::as_writable_bytes(ttsl::Span<uint8_t>(&flag, 1)),
+            ttsl::as_writable_bytes(ttsl::Span<uint8_t>(flags.data(), flags.size())));
+        return std::all_of(flags.begin(), flags.end(), [](uint8_t f) { return f != 0u; });
+    };
+
+    for (uint32_t iter = 0; iter <= max_retrains; ++iter) {
+        // Collectively split into hierarchy-node subgroups and discover each subgroup independently.
+        rediscover_by_hierarchy_subgroups(physical_system_descriptor, fsd_query, depth);
+        // Validate this subgroup's own connections (guard scopes it intra-subgroup); keep only this tier's links.
+        auto missing = validate_connectivity(
+            fsd_proto,
+            physical_system_descriptor.generate_yaml_node(),
+            false /* never assert mid bring-up */,
+            physical_system_descriptor,
+            min_connections);
+        auto tier_missing = filter_topology_by_tier(missing, fsd_query, depth, physical_system_descriptor);
+
+        if (all_converged(tier_missing.empty())) {
+            break;
+        }
+        if (iter == max_retrains) {
+            log_output_rank0(
+                "Tier depth " + std::to_string(depth) + " did not converge after " + std::to_string(max_retrains) +
+                " retrains");
+            break;
+        }
+        for (const auto& link_id : collect_retrained_link_identifiers(tier_missing, physical_system_descriptor)) {
+            link_retrain_counts[link_id]++;
+        }
+        reset_ethernet_links(physical_system_descriptor, tier_missing);  // collective; a no-op for converged subgroups
+        ++rounds;
+    }
+    // Phase barrier: ensure every subgroup has finished this tier's discovery/reset collectives before any rank
+    // begins the next tier's split. The per-iteration all_gather already keeps ranks in lockstep, so this is
+    // defensive, but it makes the phase boundary explicit and robust to future changes.
+    world->barrier();
+    return rounds;
+}
+
 tt::tt_metal::AsicTopology build_reset_topology(
     const std::string& reset_host,
     uint32_t reset_tray_id,

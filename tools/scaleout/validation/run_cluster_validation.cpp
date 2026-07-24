@@ -393,43 +393,29 @@ int main(int argc, char* argv[]) {
                 fsd_proto, gsd_yaml_node, assert_on_mismatch, physical_system_descriptor, input_args.min_connections);
         };
 
-        missing_asic_topology = validate(false);
-
         uint32_t tier_num = 0;
         for (uint32_t depth : fsd_query.hierarchy_tiers_deepest_first()) {
             ++tier_num;
             log_output_rank0("Starting Tier " + std::to_string(tier_num) + " (depth " + std::to_string(depth) + ")");
-            uint32_t tier_retrains = 0;
-            while (link_retrain_supported) {
-                auto tier_missing =
-                    filter_topology_by_tier(missing_asic_topology, fsd_query, depth, physical_system_descriptor);
-                if (tier_missing.empty()) {
-                    break;
-                }
-                if (tier_retrains >= MAX_RETRAINS_BEFORE_FAILURE) {
-                    log_output_rank0(
-                        "Tier " + std::to_string(tier_num) + " (depth " + std::to_string(depth) +
-                        ") did not converge after " + std::to_string(MAX_RETRAINS_BEFORE_FAILURE) + " retrains");
-                    break;
-                }
-                auto retrained_links = collect_retrained_link_identifiers(tier_missing, physical_system_descriptor);
-                for (const auto& link_id : retrained_links) {
-                    link_retrain_counts[link_id]++;
-                }
-                log_output_rank0(
-                    "Tier " + std::to_string(tier_num) + " retrain iteration " + std::to_string(tier_retrains + 1) +
-                    ": retraining " + std::to_string(retrained_links.size()) + " link endpoints");
-                reset_ethernet_links(physical_system_descriptor, tier_missing);
-                links_reset = true;
-                ++tier_retrains;
-                ++total_retrains;
-                rediscover();
-                missing_asic_topology = validate(false);
+            // Per-subgroup phased bring-up: split into depth-`depth` hierarchy-node subgroups, discover and
+            // retrain each subgroup's own tier links to convergence. No global PSD needed (subgroup-scoped
+            // validation via the both-endpoints-discovered guard).
+            if (link_retrain_supported) {
+                total_retrains += phased_bring_up_tier(
+                    fsd_proto,
+                    fsd_query,
+                    depth,
+                    physical_system_descriptor,
+                    MAX_RETRAINS_BEFORE_FAILURE,
+                    input_args.min_connections,
+                    link_retrain_counts);
             }
             log_output_rank0("Ending Tier " + std::to_string(tier_num) + " (depth " + std::to_string(depth) + ")");
         }
+        links_reset = !link_retrain_counts.empty();
 
-        // Authoritative pass once all tiers are done, using the real fail-on-warning semantics.
+        // Authoritative pass: one whole-system discovery, then a global validation with real fail semantics.
+        rediscover();
         missing_asic_topology = validate(input_args.fail_on_warning);
     }
 
