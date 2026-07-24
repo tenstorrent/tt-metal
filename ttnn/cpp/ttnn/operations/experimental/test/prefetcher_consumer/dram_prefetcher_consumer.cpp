@@ -5,7 +5,6 @@
 #include "dram_prefetcher_consumer.hpp"
 
 #include <tt_stl/assert.hpp>
-#include <tt_stl/reflection.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -41,17 +40,6 @@ DramPrefetcherConsumerDeviceOperation::spec_return_value_t DramPrefetcherConsume
 DramPrefetcherConsumerDeviceOperation::tensor_return_value_t
 DramPrefetcherConsumerDeviceOperation::create_output_tensors(const operation_attributes_t&, const tensor_args_t&) {
     return std::vector<ttnn::Tensor>{};
-}
-
-ttsl::hash::hash_t DramPrefetcherConsumerDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attrs, const tensor_args_t& /*tensor_args*/) {
-    // GlobalCircularBuffer isn't reflection-hashable; hash its identity via config_address
-    // (unique per GCB instance on this device) along with the other attrs.
-    return ttsl::hash::hash_objects_with_default_seed(
-        ttsl::hash::type_hash<DramPrefetcherConsumerDeviceOperation>,
-        attrs.num_iters,
-        attrs.page_size_bytes,
-        static_cast<uint64_t>(attrs.global_cb->config_address()));
 }
 
 ttnn::device_operation::CachedProgram<DramPrefetcherConsumerDeviceOperation::ProgramFactory::shared_variables_t>

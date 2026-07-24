@@ -28,6 +28,15 @@ struct DramPrefetcherConsumerDeviceOperation {
         // constructible attribute struct, and GlobalCircularBuffer has no default ctor.
         std::optional<tt::tt_metal::experimental::GlobalCircularBuffer> global_cb;
         ttnn::MeshDevice* mesh_device;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("num_iters", "page_size_bytes", "global_cb_config_address");
+        auto attribute_values() const {
+            return std::make_tuple(
+                num_iters,
+                page_size_bytes,
+                global_cb.has_value() ? static_cast<uint64_t>(global_cb->config_address()) : uint64_t{0});
+        }
     };
 
     struct tensor_args_t {};
@@ -59,7 +68,6 @@ struct DramPrefetcherConsumerDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 // Public free function (kept for the nanobind binding `ttnn.experimental.test_dram_prefetcher_consumer`).
