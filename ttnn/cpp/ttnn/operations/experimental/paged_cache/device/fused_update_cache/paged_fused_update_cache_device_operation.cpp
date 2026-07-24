@@ -6,6 +6,8 @@
 #include "paged_fused_update_cache_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 using namespace tt::tt_metal;
 
@@ -264,54 +266,26 @@ ttsl::hash::hash_t PagedFusedUpdateCacheDeviceOperation::compute_program_hash(
         program_factory.index());
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> PagedFusedUpdateCacheDeviceOperation::get_dynamic_runtime_args(
+void PagedFusedUpdateCacheDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& /*tensor_return_value*/,
+    tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    // Coords excluded from a mesh dispatch get an empty ProgramDescriptor (see the mesh factories) — no
-    // kernels, nothing to patch.
-    if (operation_attributes.mesh_coords.has_value() && mesh_dispatch_coordinate.has_value() &&
-        !operation_attributes.mesh_coords.value().contains(mesh_dispatch_coordinate.value())) {
-        return {};
-    }
-
-    // Per-index offsets come from the factory matching the input layout — the same tiled-vs-row-major
-    // condition select_program_factory uses. Index-tensor mode bakes no per-call offsets (positions are
-    // read on-device from the re-patched index tensor), so the helper returns empty and there is nothing
-    // dynamic to re-apply.
-    const auto& input_tensor1 = tensor_args.input_tensor1;
-    const bool is_tiled = input_tensor1.layout() == tt::tt_metal::Layout::TILE;
-
-    // Kernel push order in both factories' create_descriptor: reader(0), writer(1), compute(2).
-    // Reader rt args:  [0]=has_work, [1]=is_input1, [2]=dst, [3]=cache_start_id, ...
-    // Writer rt args:  [0]=has_work, [1]=dst, [2]=cache_start_id, [3]=tile_update_offset_B, ...
-    constexpr uint32_t kReaderKernelIdx = 0;
-    constexpr uint32_t kWriterKernelIdx = 1;
-
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    const auto emit = [&](const auto& offsets) {
-        if (offsets.empty()) {
-            return;
-        }
-        // Each index i handles input1 on core1 and input2 on core2, both using the same offsets.
-        dynamic_args.reserve(offsets.size() * 6);
-        for (const auto& off : offsets) {
-            for (const auto& core : {off.core1, off.core2}) {
-                dynamic_args.push_back({kReaderKernelIdx, core, /*arg_idx=*/3, off.cache_start_id});
-                dynamic_args.push_back({kWriterKernelIdx, core, /*arg_idx=*/2, off.cache_start_id});
-                dynamic_args.push_back({kWriterKernelIdx, core, /*arg_idx=*/3, off.tile_update_offset_B});
-            }
-        }
-    };
-
-    if (is_tiled) {
-        emit(PagedTiledFusedUpdateCacheProgramFactory::compute_tiled_fused_offsets(operation_attributes, tensor_args));
-    } else {
-        emit(PagedRowMajorFusedUpdateCacheProgramFactory::compute_row_major_fused_offsets(
-            operation_attributes, tensor_args));
-    }
-    return dynamic_args;
+    // Re-run create_descriptor (single source of truth; re-derives the hash-excluded update_idxs offsets)
+    // and re-apply to the cached program. Mirror select_program_factory; mesh factories thread the coord.
+    const bool is_tiled = tensor_args.input_tensor1.layout() == Layout::TILE;
+    const bool use_mesh = operation_attributes.mesh_coords.has_value();
+    ProgramDescriptor desc =
+        is_tiled ? (use_mesh ? PagedTiledFusedUpdateCacheMeshWorkloadFactory::create_descriptor(
+                                   operation_attributes, tensor_args, tensor_return_value, mesh_dispatch_coordinate)
+                             : PagedTiledFusedUpdateCacheProgramFactory::create_descriptor(
+                                   operation_attributes, tensor_args, tensor_return_value))
+                 : (use_mesh ? PagedRowMajorFusedUpdateCacheMeshWorkloadFactory::create_descriptor(
+                                   operation_attributes, tensor_args, tensor_return_value, mesh_dispatch_coordinate)
+                             : PagedRowMajorFusedUpdateCacheProgramFactory::create_descriptor(
+                                   operation_attributes, tensor_args, tensor_return_value));
+    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 
 }  // namespace ttnn::experimental::prim
