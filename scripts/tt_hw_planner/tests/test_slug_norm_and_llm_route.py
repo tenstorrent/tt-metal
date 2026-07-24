@@ -408,19 +408,23 @@ def test_generative_vlm_fact_requires_vision_encoder():
     assert F({"architectures": ["LlamaForCausalLM"]}) is False
 
 
-def test_causal_lm_arch_beats_text_to_image_tag_issue3():
-    # issue #3 (regression guard): a *ForCausalLM/MM trunk is a generative LM, never diffusion/Image
-    # -- even tagged text-to-image and even if the agent guesses Image (it emits image tokens). The
-    # arch is authoritative; the probe corrects an Image/Video verdict -> LLM for such archs.
-    from scripts.tt_hw_planner.probe import _is_causal_lm_arch, _has_generative_vlm_fact
+def test_issue3_ar_image_llm_handled_by_agent_guidance():
+    # issue #3 (regression guard): AR image-gen LLMs (HunyuanImage/Emu3, *ForCausalLM trunk emitting
+    # image tokens, tagged text-to-image) must NOT be sent to the diffusion/SD path. This is handled
+    # by the CC AGENT via its prompt, not a deterministic override -- so the guard checks (a) the
+    # agent prompt carries the AR-generator principle, and (b) an image generator with only
+    # image_token_id (no vision ENCODER) is NOT force-labeled VLM by the offline vision-fact.
+    import inspect
 
-    hy = {"architectures": ["HunyuanImage3ForCausalMM"], "image_token_id": 5}
-    assert _is_causal_lm_arch(hy) is True and _has_generative_vlm_fact(hy) is False
-    assert _is_causal_lm_arch({"architectures": ["Emu3ForCausalLM"]}) is True
-    # a genuine diffusion image model is NOT causal -> stays Image (not corrected)
-    assert _is_causal_lm_arch({"architectures": ["FluxTransformer2DModel"]}) is False
-    # a real VLM (vision_config) is caught by the vlm fact, not the causal correction
-    assert _has_generative_vlm_fact({"vision_config": {}, "architectures": ["LlavaForConditionalGeneration"]}) is True
+    from scripts.tt_hw_planner import probe as P
+
+    src = inspect.getsource(P._agent_classify_category)
+    assert "ForCausalLM" in src and "diffusion" in src.lower(), "agent prompt missing #3 AR-gen principle"
+    assert "HunyuanImage" in src or "Emu3" in src, "agent prompt missing AR-generator examples"
+    # image generator (image_token_id, no vision_config) is NOT the VLM fact
+    assert P._has_generative_vlm_fact({"architectures": ["HunyuanImage3ForCausalMM"], "image_token_id": 5}) is False
+    # a real VLM (vision_config) still is
+    assert P._has_generative_vlm_fact({"vision_config": {}, "architectures": ["LlavaForConditionalGeneration"]}) is True
 
 
 def test_dual_encoder_contrastive_is_a_fact_not_llm():
