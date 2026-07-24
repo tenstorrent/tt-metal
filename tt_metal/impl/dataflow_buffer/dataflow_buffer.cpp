@@ -1278,6 +1278,23 @@ void ProgramImpl::finalize_single_dfb_config(
                     consumer_idx,
                     consumer_risc_id,
                     use_remapper);
+                // [#48552 DEBUG -- remove before merge] Which PHYSICAL (tensix_id, tc_id) did this DFB land on?
+                // The allocator resets per program and reuses tc_id 0.., so a small (28-cap) DFB and the borrowed
+                // cb_in0 (224) can share (tensix,tc)=(0,0); whoever inits last wins -> reader reads 28 -> hang.
+                log_warning(
+                    tt::LogMetal,
+                    "[QSR-DFBTC #48552] DFB {} core=({},{}) STRIDED: producer_tc=(tensix={},tc={}) "
+                    "consumer_tc=(tensix={},tc={}) "
+                    "use_remapper={} num_entries={}",
+                    dfb->id,
+                    core.x,
+                    core.y,
+                    (uint32_t)::dfb::get_tensix_id(group.producer_tc),
+                    (uint32_t)::dfb::get_counter_id(group.producer_tc),
+                    (uint32_t)::dfb::get_tensix_id(group.consumer_tcs.front()),
+                    (uint32_t)::dfb::get_counter_id(group.consumer_tcs.front()),
+                    use_remapper,
+                    config.num_entries);
             } else if (config.cap == dfb::AccessPattern::ALL) {
                 if (dm_dm_all) {
                     // DM-DM ALL: allocate one TC per consumer (tc_slot == consumer_idx).
