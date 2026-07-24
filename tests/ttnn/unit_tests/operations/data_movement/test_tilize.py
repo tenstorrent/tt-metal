@@ -12,7 +12,7 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
 from tests.ttnn.utils_for_testing import assert_equal, assert_allclose, assert_with_pcc
-from models.common.utility_functions import skip_for_slow_dispatch, run_for_blackhole
+from models.common.utility_functions import skip_for_slow_dispatch, run_for_blackhole, skip_for_wormhole_b0
 
 shapes = [[[1, 1, 32, 32]], [[3, 1, 320, 384]], [[1, 1, 128, 7328]]]
 
@@ -1038,6 +1038,7 @@ def test_tilize_row_major_to_tiny_tile(device, tensor_shape, shard_layout, tile_
     assert_equal(torch_input, ttnn.to_torch(tt_output))
 
 
+@skip_for_wormhole_b0("LLK for tiny tiles not fully supported on Wormhole B0")
 @pytest.mark.parametrize(
     "tensor_shape, shard_layout",
     [

@@ -235,6 +235,20 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         in0_block_w_gu = best_ibw;
     }
 
+    // in0_block_w_gu (the gate/up K-loop block width) must divide K_gate_tiles.
+    // The short_seq picker above already restricts itself to divisors, but the
+    // general 2D path leaves the default 16 unchanged — valid only when emb is a
+    // multiple of 512 (=> K_gate_tiles a multiple of 16). Models with a different
+    // emb (e.g. GPT-OSS 120B: emb 2880 => K_gate_tiles 90) need the default
+    // snapped down to the largest divisor of K_gate_tiles that does not exceed
+    // it. No-op for short_seq and for every shipped 512-multiple emb; the L1
+    // guard below may narrow it further. Previously divisor-snapping only ran as
+    // a side effect of the L1-overflow guard, so non-512 emb slipped through on
+    // the TILE x layout — whose smaller footprint fits at 16 and skips the guard.
+    while (in0_block_w_gu > 1 && (K_gate_tiles % in0_block_w_gu) != 0) {
+        --in0_block_w_gu;
+    }
+
     const uint32_t per_core_N_gu = (N_gate_tiles_full + GRID_X - 1) / GRID_X;
     const uint32_t per_core_N_d = (N_down_tiles_full + GRID_X - 1) / GRID_X;
     const uint32_t N_gate_tiles_padded = per_core_N_gu * GRID_X;
@@ -413,9 +427,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         chunk_M_tiles = per_core_M * GRID_Y;
     }
 
-    // in0_block_w_gu must divide K_gate_tiles (the gate/up K-loop bound); holds
-    // for every value the guard above picks and for the default 16 on all
-    // shipped models (emb a multiple of 512 => K_gate_tiles a multiple of 16).
+    // in0_block_w_gu must divide K_gate_tiles (the gate/up K-loop bound); the
+    // divisor-snap after the short_seq picker and the L1 guard above both
+    // preserve this, so this is a defensive invariant check.
     TT_FATAL(
         K_gate_tiles % in0_block_w_gu == 0,
         "K_gate_tiles ({}) must be divisible by in0_block_w_gu ({})",
