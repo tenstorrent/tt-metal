@@ -164,6 +164,22 @@ def test_low_confidence_category_only_for_ambiguous_tags():
     assert _is_low_confidence_category("text-to-audio", None, True) is False  # arch confirms
 
 
+def test_local_safetensors_header_dtype(tmp_path):
+    # issue #4: local-path reads the real dtype from the safetensors header instead of
+    # hardcoding fp32 (//4), which 2x-undercounts a bf16 local repo (HunyuanImage-3.0).
+    import struct
+
+    from scripts.tt_hw_planner.probe import _bytes_per_param_from_local_safetensors
+
+    hdr = json.dumps({"w": {"dtype": "BF16", "shape": [8], "data_offsets": [0, 16]}}).encode()
+    with open(tmp_path / "model.safetensors", "wb") as f:
+        f.write(struct.pack("<Q", len(hdr)))
+        f.write(hdr)
+        f.write(b"\0" * 16)
+    assert _bytes_per_param_from_local_safetensors(str(tmp_path)) == (2, "bf16")
+    assert _bytes_per_param_from_local_safetensors(str(tmp_path / "empty")) == (None, None)
+
+
 def test_bytes_per_param_from_safetensors_header(monkeypatch):
     # issue #7: dtype (and thus param count) read from the actual safetensors header,
     # so an fp32 repo with no config torch_dtype isn't 2x-overcounted as bf16.

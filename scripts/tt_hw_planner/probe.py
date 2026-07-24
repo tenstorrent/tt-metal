@@ -395,6 +395,35 @@ def _bytes_per_param_from_safetensors(model_id: str, sf_files: List[str]) -> Tup
     return _SF_DTYPE_BYTES[dom], True, _SF_DTYPE_PRETTY.get(dom, dom.lower())
 
 
+def _bytes_per_param_from_local_safetensors(model_dir: str) -> Tuple[Optional[int], Optional[str]]:
+    """Dominant float dtype (bytes, pretty) read directly from a LOCAL safetensors file
+    HEADER on disk (8-byte length prefix + JSON header) — the ground truth for a local
+    repo whose config has no/ambiguous torch_dtype. Reads one header only. Returns
+    ``(bytes, pretty)`` or ``(None, None)``; never raises."""
+    import glob
+    import struct
+
+    files = sorted(glob.glob(os.path.join(model_dir, "**", "*.safetensors"), recursive=True))
+    for f in files[:1]:
+        try:
+            with open(f, "rb") as fh:
+                n = struct.unpack("<Q", fh.read(8))[0]
+                hdr = json.loads(fh.read(n))
+        except Exception:  # noqa: BLE001
+            continue
+        counts: dict = {}
+        for k, v in hdr.items():
+            if k == "__metadata__" or not isinstance(v, dict):
+                continue
+            dt = str(v.get("dtype", ""))
+            if dt in _SF_DTYPE_BYTES:
+                counts[dt] = counts.get(dt, 0) + 1
+        if counts:
+            dom = max(counts, key=counts.get)
+            return _SF_DTYPE_BYTES[dom], _SF_DTYPE_PRETTY.get(dom, dom.lower())
+    return None, None
+
+
 def _maybe_fetch_config(model_id: str) -> Optional[dict]:
     safe_id = _validate_hf_id(model_id)
     try:
@@ -505,8 +534,23 @@ def _probe_local_model(model_id: str) -> ModelProbe:
     elif category == "Unknown" and cfg.get("model_type"):
         category = "LLM"
 
-    total_params = weight_bytes // 4 if weight_bytes > 0 else None
-    bytes_per_param = (weight_bytes / total_params) if total_params else None
+    _td = str(cfg.get("torch_dtype") or "").lower().replace("torch.", "").strip()
+    _bpp = _TORCH_DTYPE_BYTES.get(_td)
+    _dtype_pretty = _td or None
+    if _bpp is None:
+        _hb, _hp = _bytes_per_param_from_local_safetensors(model_id)
+        if _hb is not None:
+            _bpp, _dtype_pretty = _hb, _hp
+    _dtype_confident = _bpp is not None
+    if _bpp is None:
+        _bpp = 2
+    total_params = weight_bytes // _bpp if weight_bytes > 0 else None
+    bytes_per_param = float(_bpp) if weight_bytes > 0 else None
+    pretty = (
+        (_dtype_pretty or "bf16")
+        if _dtype_confident
+        else f"{_dtype_pretty or 'bf16'} (dtype unknown — assumed bf16, low confidence)"
+    )
 
     probe = ModelProbe(
         model_id=model_id,
@@ -516,8 +560,8 @@ def _probe_local_model(model_id: str) -> ModelProbe:
         weight_bytes_total=weight_bytes,
         weight_bytes_safetensors=sf_bytes,
         weight_bytes_legacy=legacy_bytes,
-        saved_dtype="F32",
-        saved_dtype_pretty="fp32",
+        saved_dtype=(_dtype_pretty or "bf16").upper(),
+        saved_dtype_pretty=pretty,
         total_params=total_params,
         bytes_per_param_on_disk=bytes_per_param,
         raw_config=cfg,
