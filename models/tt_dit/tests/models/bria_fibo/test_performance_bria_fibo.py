@@ -320,14 +320,19 @@ def test_fibo_pipeline_perf_breakdown(*, mesh_device, height, width, num_inferen
 @pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=["device_params"])
 @pytest.mark.parametrize("height, width, num_inference_steps, num_measured_runs", [(1024, 1024, 30, 8)])
 @pytest.mark.parametrize("traced", [False, True], ids=["untraced", "traced"])
+@pytest.mark.parametrize("cfg", [True, False], ids=["cfg", "nocfg"])
 def test_fibo_pipeline_perf_breakdown_json(
-    *, mesh_device, height, width, num_inference_steps, num_measured_runs, traced
+    *, mesh_device, height, width, num_inference_steps, num_measured_runs, traced, cfg
 ):
-    """Per-stage wall-clock breakdown for FIBO's intended structured-JSON prompt (gs=5.0, production CFG).
+    """Per-stage wall-clock breakdown for FIBO's intended structured-JSON prompt.
 
     Reads the committed ``fibo_vlm_prompt.json`` (a real VLM text->JSON caption) and feeds
     it to the pipeline as the raw prompt string. This is the realistic production input
     (a longer prompt -> more prompt tokens than the free-text case).
+
+    ``cfg`` toggles classifier-free guidance: ``cfg=True`` uses gs=5.0 (production CFG, 2
+    forwards/step -- encodes both prompts, runs cond+uncond denoise); ``cfg=False`` uses
+    gs=1.0 so the CFG gate in ``_perf_breakdown`` skips the uncond branch (1 forward/step).
     """
 
     if not _JSON_PROMPT_PATH.is_file():
@@ -340,7 +345,7 @@ def test_fibo_pipeline_perf_breakdown_json(
         label="json",
         prompt=json_prompt,
         negative_prompt="blurry, low quality, distorted, watermark, text",
-        guidance_scale=5.0,
+        guidance_scale=5.0 if cfg else 1.0,
         seed=0,
         height=height,
         width=width,
