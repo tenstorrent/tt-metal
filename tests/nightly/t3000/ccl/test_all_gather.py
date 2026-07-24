@@ -480,20 +480,28 @@ def test_all_gather(
 @pytest.mark.parametrize(
     "ag_input_dtype, layout",
     [
+        (ttnn.float32, ttnn.TILE_LAYOUT),
+        # (ttnn.fp8_e4m3, ttnn.ROW_MAJOR_LAYOUT),  # no WH support (Issue #43909)
         (ttnn.bfloat16, ttnn.TILE_LAYOUT),
         (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
-        (ttnn.float32, ttnn.TILE_LAYOUT),
-        (ttnn.uint32, ttnn.TILE_LAYOUT),
         (ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
         (ttnn.bfloat4_b, ttnn.TILE_LAYOUT),
+        (ttnn.uint32, ttnn.TILE_LAYOUT),
+        (ttnn.uint16, ttnn.TILE_LAYOUT),
+        (ttnn.uint8, ttnn.TILE_LAYOUT),
+        (ttnn.int32, ttnn.TILE_LAYOUT),
     ],
     ids=[
+        "float32_tile",
+        # "fp8_e4m3_rm",
         "bfloat16_tile",
         "bfloat16_rm",
-        "float32_tile",
-        "uint32_tile",
         "bfloat8_b_tile",
         "bfloat4_b_tile",
+        "uint32_tile",
+        "uint16_tile",
+        "uint8_tile",
+        "int32_tile",
     ],
 )
 @pytest.mark.parametrize("mem_config_input, mem_config_ag", [(ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG)])
