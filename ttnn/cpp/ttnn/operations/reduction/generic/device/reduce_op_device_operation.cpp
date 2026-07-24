@@ -40,6 +40,10 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         !(operation_attributes.row_major_w_dense_path && operation_attributes.row_major_h_dense_path),
         "Only one of row_major_w_dense_path / row_major_h_dense_path may be set");
+    TT_FATAL(operation_attributes.num_h_slices >= 1, "num_h_slices must be >= 1");
+    TT_FATAL(
+        operation_attributes.num_h_slices == 1 || operation_attributes.row_major_h_dense_path,
+        "num_h_slices > 1 (H-axis split) is only supported on the row-major H dense path");
     if (operation_attributes.row_major_w_dense_path || operation_attributes.row_major_h_dense_path) {
         const auto expected_dim =
             operation_attributes.row_major_w_dense_path ? tt::tt_metal::ReduceOpDim::W : tt::tt_metal::ReduceOpDim::H;
@@ -181,7 +185,8 @@ ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_shape = tensor_args.logical_shape();
     switch (operation_attributes.dim) {
-        case tt::tt_metal::ReduceOpDim::H: output_shape[2] = 1; break;
+        // H-axis split emits one partial row per slice: output H = num_h_slices (1 = normal reduce).
+        case tt::tt_metal::ReduceOpDim::H: output_shape[2] = operation_attributes.num_h_slices; break;
         case tt::tt_metal::ReduceOpDim::W: output_shape[3] = 1; break;
         case tt::tt_metal::ReduceOpDim::HW:
             output_shape[2] = 1;
@@ -220,7 +225,8 @@ ttnn::Tensor reduce(
     float post_mul_scaler,
     bool row_major_w_dense_path,
     bool row_major_h_dense_path,
-    bool use_sfpu_reduce) {
+    bool use_sfpu_reduce,
+    uint32_t num_h_slices) {
     return ttnn::device_operation::launch<ReduceDeviceOperation>(
         ReduceParams{
             reduce_math,
@@ -234,7 +240,8 @@ ttnn::Tensor reduce(
             post_mul_scaler,
             row_major_w_dense_path,
             row_major_h_dense_path,
-            use_sfpu_reduce},
+            use_sfpu_reduce,
+            num_h_slices},
         input_tensor);
 }
 

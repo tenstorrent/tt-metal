@@ -111,10 +111,13 @@ Tensor reduce(
         /*default_fp32_acc=*/true));
     ttnn::verify_numerical_configuration(arch, compute_kernel_config);
 
-    // Accurate fp32 mean: SFPU AVG (lowered to SUM + 1/N below); FPU fallback without fp32_dest_acc_en or on Quasar.
-    const bool use_sfpu_fp32_mean =
+    // Accurate fp32 SUM/mean: accumulate register-to-register in the SFPU to preserve full fp32 (the FPU
+    // reduce truncates fp32 to tf32). AVG is lowered to SUM + a 1/N post-mul below, so SUM and AVG share
+    // this path; SUM just skips the 1/N. FPU fallback without fp32_dest_acc_en or on Quasar.
+    const bool use_sfpu_fp32_reduce =
         !fast_and_approximate_mode && input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 &&
-        reduce_math == tt::tt_metal::ReduceOpMath::AVG && arch != tt::ARCH::QUASAR && config.fp32_dest_acc_en;
+        (reduce_math == tt::tt_metal::ReduceOpMath::SUM || reduce_math == tt::tt_metal::ReduceOpMath::AVG) &&
+        arch != tt::ARCH::QUASAR && config.fp32_dest_acc_en;
 
     // Dense row-major reduce: a fast path that consumes ROW_MAJOR input directly (no host tilize)
     // and is currently restricted to mean (AVG) / sum (SUM) on 4D BF16/FLOAT32 tensors with
@@ -149,15 +152,15 @@ Tensor reduce(
     // The accurate fp32 SFPU mean path also lowers AVG to SUM: the SFPU folds tiles with a plain
     // add (add_binary_tile) and normalizes via the 1/N post-mul below, so it needs SUM semantics.
     tt::tt_metal::ReduceOpMath prim_reduce_math = reduce_math;
-    if ((use_rm_dense || use_sfpu_fp32_mean) && reduce_math == tt::tt_metal::ReduceOpMath::AVG) {
+    if ((use_rm_dense || use_sfpu_fp32_reduce) && reduce_math == tt::tt_metal::ReduceOpMath::AVG) {
         prim_reduce_math = tt::tt_metal::ReduceOpMath::SUM;
     }
 
     // Reduce only works with tile layout on the classic path; dense path keeps row-major input.
-    Tensor tilized_input = input_tensor;
+    Tensor prepared_input = input_tensor;
     if (!use_rm_dense) {
         auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
-        tilized_input = ttnn::tilize_with_val_padding(
+        prepared_input = ttnn::tilize_with_val_padding(
             input_tensor, padded_shape, pad_value, input_tensor.memory_config(), std::nullopt, true, sub_core_grids);
     }
 
@@ -166,7 +169,7 @@ Tensor reduce(
     // scaler CB. Int32 post-mul rounds through fp32, so it is lossy for |result| > 2^24.
     // The accurate fp32 SFPU mean also post-muls (SFPU ignores the scaler CB), applying the 1/N here.
     const bool use_post_mul =
-        ttnn::prim::requires_post_mul(reduce_math, tilized_input.dtype(), scaler, use_sfpu_fp32_mean);
+        ttnn::prim::requires_post_mul(reduce_math, prepared_input.dtype(), scaler, use_sfpu_fp32_reduce);
     const float reduce_scaler = use_post_mul ? 1.0f : scaler;
     const float post_mul = use_post_mul ? scaler : 1.0f;
 
@@ -204,13 +207,13 @@ Tensor reduce(
     // INT32 SFPU reduce has no REDUCE_SCALAR primitive (ROW/COL only), so Int32 HW always uses
     // W-then-H. Float32 max HW can use single-core REDUCE_SCALAR (FPU) when num_tiles == 1;
     // multi-tile HW still uses W-then-H via is_multicore_hw. Applies to MAX/SUM and MIN (MIN via negate).
-    // The accurate fp32 SFPU mean (AVG) likewise has no SFPU REDUCE_SCALAR, so it must decompose HW
+    // The accurate fp32 SFPU reduce (SUM/AVG) likewise has no SFPU REDUCE_SCALAR, so it must decompose HW
     // into W-then-H regardless of tile count; forcing the two-step keeps it off the single-core path.
     const bool use_two_step_hw_sfpu_reduce =
         (reduce_dim == tt::tt_metal::ReduceOpDim::HW) &&
-        ((tilized_input.dtype() == tt::tt_metal::DataType::INT32 &&
+        ((prepared_input.dtype() == tt::tt_metal::DataType::INT32 &&
           (reduce_math == tt::tt_metal::ReduceOpMath::MAX || reduce_math == tt::tt_metal::ReduceOpMath::SUM)) ||
-         use_sfpu_fp32_mean);
+         use_sfpu_fp32_reduce);
 
     if (is_multicore_hw || use_two_step_hw_sfpu_reduce ||
         (reduce_dim == tt::tt_metal::ReduceOpDim::HW && reduce_scaler < 0)) {
@@ -226,12 +229,12 @@ Tensor reduce(
         const bool keep_w_fp32 =
             reduce_math == tt::tt_metal::ReduceOpMath::SUM &&
             ((output_dtype.has_value() && out_final_dtype == tt::tt_metal::DataType::BFLOAT16 &&
-              tilized_input.dtype() == tt::tt_metal::DataType::FLOAT32) ||
-             (tilized_input.dtype() == tt::tt_metal::DataType::BFLOAT16 && config.fp32_dest_acc_en));
+              prepared_input.dtype() == tt::tt_metal::DataType::FLOAT32) ||
+             (prepared_input.dtype() == tt::tt_metal::DataType::BFLOAT16 && config.fp32_dest_acc_en));
         const auto out_w_dtype = keep_w_fp32 ? tt::tt_metal::DataType::FLOAT32 : out_final_dtype;
 
         const Tensor output_tensor = ttnn::prim::reduce(
-            tilized_input,
+            prepared_input,
             prim_reduce_math,
             tt::tt_metal::ReduceOpDim::W,
             1.0f,
@@ -243,7 +246,7 @@ Tensor reduce(
             /*post_mul_scaler=*/1.0f,
             /*row_major_w_dense_path=*/false,
             /*row_major_h_dense_path=*/false,
-            /*use_sfpu_reduce=*/use_sfpu_fp32_mean);
+            /*use_sfpu_reduce=*/use_sfpu_fp32_reduce);
 
         if (negate && !ttnn::prim::h_reduce_negate_fits_in_l1(output_tensor, sub_core_grids)) {
             return h_reduce_with_external_negate(output_tensor, reduce_scaler, post_mul, out_final_dtype);
@@ -262,17 +265,81 @@ Tensor reduce(
             /*post_mul_scaler=*/post_mul,
             /*row_major_w_dense_path=*/false,
             /*row_major_h_dense_path=*/false,
-            /*use_sfpu_reduce=*/use_sfpu_fp32_mean);
+            /*use_sfpu_reduce=*/use_sfpu_fp32_reduce);
     }
 
     if (negate && reduce_dim == tt::tt_metal::ReduceOpDim::H &&
-        !ttnn::prim::h_reduce_negate_fits_in_l1(tilized_input, sub_core_grids)) {
+        !ttnn::prim::h_reduce_negate_fits_in_l1(prepared_input, sub_core_grids)) {
         return h_reduce_with_external_negate(
-            tilized_input, reduce_scaler, post_mul, output_dtype.value_or(input_tensor.dtype()));
+            prepared_input, reduce_scaler, post_mul, output_dtype.value_or(input_tensor.dtype()));
+    }
+
+    // H-axis split: the un-split RM-H path uses only NC*Wt cores (one per output tile
+    // column) and issues one narrow read per H row per core, so tall-H shapes starve the grid. When
+    // that happens, split the reduction axis into S contiguous segments:
+    //   stage 1 → (N,C,S,W) partial (pure SUM, FP32 for accumulation accuracy),
+    //   stage 2 → collapse the S-row slice axis with the user scaler and final dtype.
+    // Exact-sum decomposition: sum over H == sum of per-slice sums, so mean is applied once in stage 2.
+    if (use_rm_dense_h) {
+        const auto& logical = input_tensor.logical_shape();
+        const auto& padded = input_tensor.padded_shape();
+        const uint32_t tile_h = input_tensor.tensor_spec().tile().get_height();
+        const uint32_t tile_w = input_tensor.tensor_spec().tile().get_width();
+        const uint32_t NC = logical[0] * logical[1];
+        const uint32_t Wt = (padded[3] + tile_w - 1) / tile_w;
+        const uint32_t Ht_rm = (logical[2] + tile_h - 1) / tile_h;
+        const uint32_t col_groups = NC * Wt;  // cores the un-split path would use
+
+        const auto grid = input_tensor.device()->compute_with_storage_grid_size();
+        const uint32_t grid_cores = sub_core_grids.has_value() ? sub_core_grids->num_cores() : (grid.x * grid.y);
+
+        // Only split genuinely tall reduces: below this the un-split path already performs well and a
+        // second stage would just add a dispatch + reduction rounding (small-shape precision noise).
+        constexpr uint32_t k_min_ht_for_split = 16;  // ~H >= 512 rows
+        uint32_t num_h_slices = 1;
+        if (col_groups > 0 && col_groups < grid_cores && Ht_rm >= k_min_ht_for_split) {
+            const uint32_t slices_to_fill_grid = grid_cores / col_groups;  // slices that keep the grid filled
+            num_h_slices =
+                (slices_to_fill_grid < Ht_rm) ? slices_to_fill_grid : Ht_rm;  // never more slices than H tiles
+        }
+
+        if (num_h_slices >= 2) {
+            const Tensor partials = ttnn::prim::reduce(
+                prepared_input,
+                tt::tt_metal::ReduceOpMath::SUM,
+                tt::tt_metal::ReduceOpDim::H,
+                /*scaler=*/1.0f,
+                output_mem_config,
+                tt::tt_metal::DataType::FLOAT32,
+                config,
+                sub_core_grids,
+                /*negate=*/false,
+                /*post_mul_scaler=*/1.0f,
+                /*row_major_w_dense_path=*/false,
+                /*row_major_h_dense_path=*/true,
+                /*use_sfpu_reduce=*/use_sfpu_fp32_reduce,
+                /*num_h_slices=*/num_h_slices);
+
+            return ttnn::prim::reduce(
+                partials,
+                tt::tt_metal::ReduceOpMath::SUM,
+                tt::tt_metal::ReduceOpDim::H,
+                reduce_scaler,
+                output_mem_config,
+                output_dtype.value_or(input_tensor.dtype()),
+                config,
+                sub_core_grids,
+                /*negate=*/false,
+                /*post_mul_scaler=*/post_mul,
+                /*row_major_w_dense_path=*/false,
+                /*row_major_h_dense_path=*/true,
+                /*use_sfpu_reduce=*/use_sfpu_fp32_reduce,
+                /*num_h_slices=*/1);
+        }
     }
 
     return ttnn::prim::reduce(
-        tilized_input,
+        prepared_input,
         prim_reduce_math,
         reduce_dim,
         reduce_scaler,
@@ -284,7 +351,7 @@ Tensor reduce(
         /*post_mul_scaler=*/post_mul,
         /*row_major_w_dense_path=*/use_rm_dense_w,
         /*row_major_h_dense_path=*/use_rm_dense_h,
-        /*use_sfpu_reduce=*/use_sfpu_fp32_mean);
+        /*use_sfpu_reduce=*/use_sfpu_fp32_reduce);
 }
 
 }  // namespace ttnn::operations::reduction::generic::detail
