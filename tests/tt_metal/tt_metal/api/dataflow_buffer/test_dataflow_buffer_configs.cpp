@@ -1067,8 +1067,8 @@ TEST_F(MeshDeviceFixture, DFBReentryNumEntriesViolatesTxnDivisorFails) {
             ::testing::HasSubstr("num_entries override 3 is not divisible by")));
 }
 
-// An entry_size override that pushes the TRISC ring extent past the uint16 L1-aligned-unit limit is
-// rejected by the ring-extent re-validation.
+// Ring extent past Tensix unreserved L1 is rejected. entry_size stays within the TRISC uint16
+// L1-unit field so this hits the L1 check rather than the entry_size width check.
 TEST_F(MeshDeviceFixture, DFBReentryEntrySizeRingExtentFails) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "DFB ring-extent check requires Quasar";
@@ -1079,12 +1079,31 @@ TEST_F(MeshDeviceFixture, DFBReentryEntrySizeRingExtentFails) {
     program.impl().finalize_dataflow_buffer_configs();
 
     auto params = MakeMinimalRunArgs(node);
-    params.dfb_run_overrides.push_back({.dfb = experimental::DFBSpecName{"dfb_0"}, .entry_size = 64u * 1024u * 1024u});
+    // 64 KiB * 128 entries = 8 MiB ring > Quasar unreserved L1 (~4 MiB).
+    params.dfb_run_overrides.push_back(
+        {.dfb = experimental::DFBSpecName{"dfb_0"}, .entry_size = 64u * 1024u, .num_entries = 128u});
 
     EXPECT_THAT(
         [&] { experimental::SetProgramRunArgs(program, params); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("exceeds uint16_t; reduce capacity, stride, or entry_size")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("exceeds Tensix unreserved L1 size")));
+}
+
+// TRISC stores entry_size in uint16 L1 units; 1 MiB is 65536 units and must fail before init truncates.
+TEST_F(MeshDeviceFixture, DFBReentryEntrySizeExceedsUint16Fails) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB TRISC entry_size check requires Quasar";
+    }
+    const experimental::NodeCoord node{0, 0};
+    experimental::ProgramSpec spec = experimental::test_helpers::MakeMinimalValidProgramSpec();
+    Program program = experimental::MakeProgramFromSpec(*devices_.at(0), spec);
+    program.impl().finalize_dataflow_buffer_configs();
+
+    auto params = MakeMinimalRunArgs(node);
+    params.dfb_run_overrides.push_back({.dfb = experimental::DFBSpecName{"dfb_0"}, .entry_size = 1024u * 1024u});
+
+    EXPECT_THAT(
+        [&] { experimental::SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("TRISC entry_size")));
 }
 
 // capacity (num_entries / max(producers, consumers)) is stored as uint16_t (the tile-counter register
