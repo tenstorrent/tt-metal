@@ -110,8 +110,10 @@
 # Log control (runner OOM): multihost-with-nfs runners are capped at 4Gi.
 # tt-run always injects --tag-output; without --output-filename, prterun buffers
 # all 64 ranks of tagged stdout in anon RSS (~2Gi+) and OOMKills the runner
-# (exit 137). Send rank I/O to NFS files (kimi-decode-ladder pattern) and discard
-# the Actions pipe with > /dev/null 2>&1.
+# (exit 137). Same pattern as kimi-decode-ladder:
+#   PIPELINE_DIR (job env) on NFS -> --output-filename + launch.log
+#   upload-artifact, then rm -rf PIPELINE_DIR (see demo-sp-multihost-impl.yaml).
+# Do not stream ranks into the Actions pipe (no tee to stdout).
 
 - name: "Teacher Forcing Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
   cmd: |
@@ -120,17 +122,17 @@
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
     PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
     MGD=models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto
+    PIPELINE_DIR="${PIPELINE_DIR:?PIPELINE_DIR must be set (NFS staging for ranklogs)}"
+    mkdir -p "${PIPELINE_DIR}/ranklogs"
 
     # Automapper Phase 1 outputs must land on NFS (same pattern as kimi-decode-ladder).
     cd /ci/tt-metal
-    RANKLOG_DIR=/ci/tt-metal/ranklogs-teacher-forcing
-    mkdir -p "$RANKLOG_DIR"
 
     TT_LOGGER_LEVEL=warn TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
       --mesh-graph-descriptor "$MGD" \
       --hosts "$PIPELINE_HOSTS" \
-      --mpi-args "--bind-to none --wdir ${TT_METAL_HOME} --output-filename ${RANKLOG_DIR}/rank -x LOGURU_LEVEL=WARNING" \
+      --mpi-args "--bind-to none --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs/rank -x LOGURU_LEVEL=WARNING" \
       python3 -m models.demos.deepseek_v3_b1.demo.teacher_forced \
         --weights real \
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
@@ -139,7 +141,7 @@
         --reference-file /mnt/models/ref_data/output1_reference.txt \
         --output-file output1_teacher_forcing_results.json \
         --chunk-accuracy 256 \
-      > /dev/null 2>&1
+      > "${PIPELINE_DIR}/launch.log" 2>&1
   skus:
     bh_sc16:
       timeout: 30
@@ -154,16 +156,16 @@
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
     PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
     MGD=models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto
+    PIPELINE_DIR="${PIPELINE_DIR:?PIPELINE_DIR must be set (NFS staging for ranklogs)}"
+    mkdir -p "${PIPELINE_DIR}/ranklogs"
 
     cd /ci/tt-metal
-    RANKLOG_DIR=/ci/tt-metal/ranklogs-demo-perf
-    mkdir -p "$RANKLOG_DIR"
 
     TT_LOGGER_LEVEL=warn TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
       --mesh-graph-descriptor "$MGD" \
       --hosts "$PIPELINE_HOSTS" \
-      --mpi-args "--bind-to none --wdir ${TT_METAL_HOME} --output-filename ${RANKLOG_DIR}/rank -x LOGURU_LEVEL=WARNING" \
+      --mpi-args "--bind-to none --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs/rank -x LOGURU_LEVEL=WARNING" \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 4096 \
         --no-stop-at-eos \
@@ -171,7 +173,7 @@
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized \
-      > /dev/null 2>&1
+      > "${PIPELINE_DIR}/launch.log" 2>&1
   skus:
     bh_sc16:
       timeout: 60
@@ -186,16 +188,16 @@
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
     PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
     MGD=models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto
+    PIPELINE_DIR="${PIPELINE_DIR:?PIPELINE_DIR must be set (NFS staging for ranklogs)}"
+    mkdir -p "${PIPELINE_DIR}/ranklogs"
 
     cd /ci/tt-metal
-    RANKLOG_DIR=/ci/tt-metal/ranklogs-stress
-    mkdir -p "$RANKLOG_DIR"
 
     TT_LOGGER_LEVEL=warn TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
       --mesh-graph-descriptor "$MGD" \
       --hosts "$PIPELINE_HOSTS" \
-      --mpi-args "--bind-to none --wdir ${TT_METAL_HOME} --output-filename ${RANKLOG_DIR}/rank -x LOGURU_LEVEL=WARNING" \
+      --mpi-args "--bind-to none --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs/rank -x LOGURU_LEVEL=WARNING" \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 128000 \
         --repeat-generations 2 \
@@ -204,7 +206,7 @@
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized \
-      > /dev/null 2>&1
+      > "${PIPELINE_DIR}/launch.log" 2>&1
   skus:
     bh_sc16:
       timeout: 60

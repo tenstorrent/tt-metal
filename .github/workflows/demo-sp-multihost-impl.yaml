@@ -86,6 +86,9 @@ jobs:
       PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       VIRTUAL_ENV: /opt/venv
       HOME: /home/user
+      # Per-job NFS scratch for launch.log + --output-filename ranklogs (kimi pattern).
+      # Keeps 64-rank tagged stdout off the 4Gi Actions runner; uploaded then removed.
+      PIPELINE_DIR: /ci/demo-sp-${{ github.run_id }}-${{ strategy.job-index }}
     strategy:
       fail-fast: false
       matrix:
@@ -362,6 +365,19 @@ jobs:
           echo "$CMD"
           eval "$CMD"
 
+      # MUST precede teardown: NFS staging stays until workers are reclaimed.
+      - name: Upload launch + per-rank logs and automapper outputs
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: demo-sp-${{ inputs.sp-config }}-${{ strategy.job-index }}-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ env.PIPELINE_DIR }}/launch.log
+            ${{ env.PIPELINE_DIR }}/ranklogs/
+            /ci/tt-metal/generated/ttrun/
+
       - name: Delete test environment
         if: always()
         uses: ./.github/actions/ttop-delete-environment
@@ -375,6 +391,12 @@ jobs:
         with:
           allocationName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
           namespace: ttop-ci
+
+      - name: Clean up shared staging dir
+        if: always()
+        run: |
+          # Per-job NFS scratch; logs already uploaded as an artifact above.
+          rm -rf "$PIPELINE_DIR"
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
