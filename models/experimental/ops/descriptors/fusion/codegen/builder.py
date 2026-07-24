@@ -45,6 +45,15 @@ from models.experimental.ops.descriptors.fusion.codegen.args import (
     _validate_fp32_consistency,
 )
 
+# Fused compute kernels concatenate multiple phases into a single binary, so binary
+# size scales with phase count. The C++ default for TENSIX compute kernels is O3;
+# override to O2 to keep fused compute binaries within the TENSIX kernel-config ring
+# buffer as phase count grows. (Os was tried first but triggers a GCC/LTO inline-asm
+# "impossible constraint" failure in the LLK pack code on Blackhole; O2 avoids it
+# while still dropping the aggressive O3 inlining that inflates the fused binary.)
+# Data-movement roles already default to O2 (program.cpp opt_level.value_or), so no override needed there.
+_FUSED_COMPUTE_KERNEL_OPT_LEVEL = ttnn.KernelBuildOptLevel.O2
+
 
 # =============================================================================
 # Compute Config Validation
@@ -445,6 +454,8 @@ def _build_fused_descriptor(
         desc.defines = must_match_defs
         desc.runtime_args = rt_args
         desc.common_runtime_args = _concatenate_common_runtime_args(phase_kernels, role_key)
+        if risc_type == "compute":
+            desc.opt_level = _FUSED_COMPUTE_KERNEL_OPT_LEVEL
         desc.config = role_config
         fused_kernels.append(desc)
 
