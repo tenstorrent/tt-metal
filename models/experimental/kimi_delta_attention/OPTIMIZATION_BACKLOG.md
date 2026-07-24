@@ -427,6 +427,15 @@ improved `622.564 -> 619.594 us` (`-0.48%`). T=5,120 wall improved
       kernel time improved `86.339 -> 83.557 us`; matched wall improved
       `3334.239 -> 3330.328 us` (`-0.117%`).
 55. Evaluate lower-precision gated-RMS output only at the projection boundary.
+    - Experiment result, 2026-07-24: reject the available mixed boundary. A
+      configurable BF16 gated-RMS output paired with FP32 persistent MMRS
+      buffers failed T=5,120 output PCC at `-0.000049`; recurrent and
+      convolution states remained `0.999890/0.999997`, localizing the failure
+      after recurrence. The fused MMRS op derives its matmul output format from
+      the BF16 input but writes into caller-provided FP32 persistent buffers, so
+      the formats alias rather than provide BF16-input/FP32-partial arithmetic.
+      A typecast restores compatibility but also restores the eliminated pass.
+      Reject until MMRS exposes an independent accumulation/buffer dtype.
 56. Fuse gated-RMS output packing with output-projection input staging.
 
 ### G. Output projection and CCL

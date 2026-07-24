@@ -1685,3 +1685,29 @@
   PASS at output/recurrent/convolution PCC `0.999958/0.999890/0.999997`.
 - Verdict: retain. The critical load, not maximum physical core occupancy, is
   the correct mapping objective for this epilogue.
+
+
+### 2026-07-24 23:22 UTC — Reject BF16 gated-RMS projection boundary
+
+- Hypothesis: store the 10 MiB/chip gated-RMS output in BF16 while keeping the
+  fused output matmul and reduce-scatter persistent buffers in FP32. This was
+  intended to isolate local boundary traffic from the previously rejected BF16
+  communication-partial experiment.
+- Implementation: added an experimental gated-RMS output dtype, selected BF16
+  only for long TP prefill, and passed FP32 to the existing MMRS buffer cache.
+- Host build: `./build_metal.sh --build-tests --build-type Release` -> PASS.
+- Correctness: `KDA_TP_TEST_SEQ=5120 scripts/run_safe_pytest.sh --run-all
+  models/experimental/kimi_delta_attention/tests/test_tp_weights.py::test_tp_layer_pcc
+  -q -s` -> FAIL. Output PCC was `-0.000049`; recurrent and convolution-state
+  PCC remained `0.999890/0.999997`.
+- Diagnosis: this is format incompatibility, not BF16 quantization drift. The
+  fused MMRS wrapper chooses FP32 persistent buffers from its `dtype` argument,
+  but the underlying matmul derives its produced format from the BF16 input.
+  The op has no independent output/accumulation dtype, so BF16 tiles alias FP32
+  buffer pages. Inserting a typecast would restore the removed DRAM pass and no
+  longer test the proposed boundary.
+- Restoration: rebuilt the exact reverted source and reran the T=672 long-path
+  gate -> PASS at output/recurrent/convolution PCC
+  `0.999958/0.999912/0.999997`.
+- Verdict: reject and fully restore source. Revisit only after MMRS exposes an
+  independent matmul-output/persistent-buffer dtype contract.
