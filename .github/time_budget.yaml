@@ -247,8 +247,11 @@ runtime:
     wh_galaxy: 15
     bh_galaxy: 15
   perf:
-    wh_n300_civ2: 55
-    bh_p150_perf: 40
+    # +10 min/SKU over the prior 55/40 to cover the new runtime_perf_jit_build job
+    # (JIT-build compile-throughput microbenchmark: 300 kernels x 3 reps, ~2-3 min
+    # measured, budgeted at 10 min in runtime_perf_tests.yaml).
+    wh_n300_civ2: 65
+    bh_p150_perf: 50
 
 triage:
   merge_gate:
@@ -299,7 +302,7 @@ models:
     bh_p150b_civ2: 8
     bh_p300: 20
     bh_loudbox: 193
-    bh_quietbox_2: 80
+    bh_quietbox_2: 90
     bh_sc1: 20 # single galaxy MLA chunked prefill
   # Per-tier e2e budgets, consumed by the tiered model pipelines;
   # The plain `e2e` key is used for the non-tiered pipelines (blackhole-e2e, t3000-e2e).

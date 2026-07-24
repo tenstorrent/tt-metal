@@ -401,7 +401,9 @@ __attribute__((noinline)) void finish_profiler(bool do_accumulate = DO_ACCUMULAT
                 }
                 // Preserve the upper (trace ID) bits of ID_LH; stamp core + risc id.
                 profiler_data_buffer[riscID].data[ID_LH] =
-                    (profiler_data_buffer[riscID].data[ID_LH] & 0x7FFF800) | (((core_flat_id & 0xFF) << 3) | riscID);
+                    (profiler_data_buffer[riscID].data[ID_LH] & PROFILER_ID_TRACE_FIELD_MASK) |
+                    (((core_flat_id & PROFILER_ID_FLAT_MASK) << PROFILER_ID_FLAT_SHIFT) |
+                     (riscID & PROFILER_ID_RISC_MASK));
 
                 int hostIndex = kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER + riscID;
                 int deviceIndex = kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER + riscID;
