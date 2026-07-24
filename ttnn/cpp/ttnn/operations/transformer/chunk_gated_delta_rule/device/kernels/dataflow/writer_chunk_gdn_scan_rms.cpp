@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Phase B (scan) writer, value-parallel. This core produced ONE V-block (vb) of head h:
-// columns [vb*Vt, vb*Vt+Vt) of the full V dimension. It writes that slice back into the full
-// tensors o [BH, NC, C, V] and final_state [BH, K, V] using DRAM row stride Vt_full.
+// columns [vb*Vt, vb*Vt+Vt) of the full V dimension. It writes that slice directly into the
+// assigned RMS consumer core's bounded L1 staging buffer, and writes final_state to DRAM.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -20,24 +20,21 @@ void kernel_main() {
     constexpr uint32_t initial_state_mode = get_compile_time_arg_val(3);
     constexpr uint32_t Vt_full = get_compile_time_arg_val(4);  // full V (tiles) for row stride
     constexpr bool state_only = get_compile_time_arg_val(5) == 1;
+    static_assert(Ct == 1, "fused scan-to-RMS handoff requires 32-token chunks");
     (void)initial_state_mode;
 
-    constexpr auto o_a = TensorAccessorArgs<6>();
-    constexpr auto fs_a = TensorAccessorArgs<o_a.next_compile_time_args_offset()>();
+    constexpr auto fs_a = TensorAccessorArgs<6>();
 
     const uint32_t h = get_arg_val<uint32_t>(0);
     const uint32_t vb = get_arg_val<uint32_t>(1);
     const uint32_t NC = get_arg_val<uint32_t>(2);
-    const uint32_t o_addr = get_arg_val<uint32_t>(3);
-    const uint32_t fs_addr = get_arg_val<uint32_t>(4);
-    const uint32_t consumer_count = get_arg_val<uint32_t>(5);
-    const uint32_t ready_semaphore_id = get_arg_val<uint32_t>(6);
+    const uint32_t fs_addr = get_arg_val<uint32_t>(3);
+    const uint32_t consumer_count = get_arg_val<uint32_t>(4);
+    const uint32_t ready_semaphore_id = get_arg_val<uint32_t>(5);
 
-    // Mixed precision: o is bf16 (cb_out), the final state is fp32 (cb_final). Each write MUST use
-    // its own tile size, else the fp32 state written at the bf16 stride is garbage (and vice versa).
+    // The scan output and final state remain FP32; the former is transferred directly to consumer L1.
     const uint32_t tb_o = get_tile_size(cb_out);
     const uint32_t tb_fs = get_tile_size(cb_final);
-    const auto o_acc = TensorAccessor(o_a, o_addr, tb_o);
     const auto fs_acc = TensorAccessor(fs_a, fs_addr, tb_fs);
 
     constexpr uint32_t cv = Ct * Vt;  // per-core [C, Vt] output slab
@@ -45,23 +42,22 @@ void kernel_main() {
 
     Noc noc;
     CircularBuffer cbout(cb_out);
+    const uint32_t staging_l1_base = get_write_ptr(0);
 
-    // o [BH, NC, C, V]: scatter this V-block back — row stride Vt_full, column offset vb*Vt.
+    // Stage this V-block in the assigned consumer's full-V row, then publish readiness.
     for (uint32_t c = 0; c < NC; c++) {
         cbout.wait_front(cv);
         if constexpr (!state_only) {
-            const uint32_t row_base = (h * NC + c) * Ct * Vt_full;
-            auto src = use<CircularBuffer::AddrSelector::READ_PTR>(cbout);
-            for (uint32_t r = 0; r < Ct; r++) {
-                const uint32_t dst = row_base + r * Vt_full + vb * Vt;
-                for (uint32_t vt = 0; vt < Vt; vt++) {
-                    noc.async_write(src, o_acc, tb_o, {.offset_bytes = (r * Vt + vt) * tb_o}, {.page_id = dst + vt});
-                }
-            }
-            noc.async_write_barrier();
-            const uint32_t consumer = (h * NC + c) % consumer_count;
-            const uint32_t noc_x = get_arg_val<uint32_t>(7 + 2 * consumer);
-            const uint32_t noc_y = get_arg_val<uint32_t>(8 + 2 * consumer);
+            const uint32_t wi = h * NC + c;
+            const uint32_t consumer = wi % consumer_count;
+            const uint32_t local_item = wi / consumer_count;
+            const uint32_t noc_x = get_arg_val<uint32_t>(6 + 2 * consumer);
+            const uint32_t noc_y = get_arg_val<uint32_t>(7 + 2 * consumer);
+            const uint32_t dst_l1 = staging_l1_base + (local_item * Vt_full + vb * Vt) * tb_o;
+            const uint64_t dst_noc = get_noc_addr(noc_x, noc_y, dst_l1);
+            const uint32_t src = get_read_ptr(cb_out);
+            noc_async_write(src, dst_noc, Vt * tb_o);
+            noc_async_write_barrier();
             noc_semaphore_inc(get_noc_addr(noc_x, noc_y, get_semaphore(ready_semaphore_id)), 1);
         }
         cbout.pop_front(cv);

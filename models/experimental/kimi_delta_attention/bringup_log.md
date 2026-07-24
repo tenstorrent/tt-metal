@@ -1745,3 +1745,42 @@
 - Verdict: retain. This proves the bounded producer/consumer schedule and
   synchronization. It does not yet eliminate the intermediate FP32 DRAM
   write/read; direct producer-to-consumer L1 transfer is the next experiment.
+
+
+### 2026-07-24 23:55 UTC — Retain bounded direct-L1 scan-to-RMS handoff
+
+- Hypothesis: the retained fused program still writes each 10 MiB/chip FP32
+  scan output to DRAM and rereads it on the RMS consumers. Fixed consumer-local
+  L1 slots can remove that round trip without introducing a producer/consumer
+  credit cycle.
+- Implementation: CB0 is allocated identically across all 110 Tensix cores.
+  Each of the 94 RMS consumers owns `ceil(640/94) = 7` full-V slots at T=5,120,
+  or `112 KiB/core`. Scan producer `(head, V-block)` writes its unique
+  `(consumer, local item, V-block)` slot, executes a NOC write barrier, then
+  increments the consumer semaphore. The consumer waits for all four V-block
+  signals and publishes that fixed slot into its local CB. Capacity covers the
+  complete invocation, so producers never overwrite an unconsumed slot.
+- Host build: `./build_metal.sh --build-tests --build-type Release` -> PASS for
+  the candidate, matched control, and restored candidate.
+- Correctness: T=672 and T=5,120 `test_tp_layer_pcc` hardware gates both PASS.
+  Output/recurrent/convolution PCC remained `0.999958/0.999912/0.999997` and
+  `0.999958/0.999890/0.999997`, respectively.
+- Candidate profile 1: CSV
+  `generated/profiler/reports/2026_07_24_23_50_45/ops_perf_results_2026_07_24_23_50_45.csv`,
+  SHA-256 `14ce4ddfd5c77a98d231a9fe150e7f9832aa58dbeb61687c9ae4d85a95473979`,
+  median wall `3259.237 us`, scan `512.911 us`.
+- Candidate profile 2: CSV
+  `generated/profiler/reports/2026_07_24_23_52_16/ops_perf_results_2026_07_24_23_52_16.csv`,
+  SHA-256 `d8ca9c233fc17063198707ca1f0791d528707a47ba50c322827a4539aa9959b7`,
+  median wall `3259.763 us`, scan `512.991 us`.
+- Freshly rebuilt DRAM-handoff control: CSV
+  `generated/profiler/reports/2026_07_24_23_54_32/ops_perf_results_2026_07_24_23_54_32.csv`,
+  SHA-256 `7e2b9e843425266e0361a898b8b7f36d53dbd4d32e202664a9bf0fa1acba31ef`,
+  median wall `3264.154 us`, scan `514.549 us`.
+- Result: the replicated candidate center is `3259.500 us`, improving the
+  matched control by `4.655 us` (`0.143%`). The combined scan program improves
+  `1.598 us` (`0.31%`). The smaller kernel delta and wider whole-replay spread
+  explain why the original single-profile estimate was not accepted alone.
+- Verdict: retain. The gain is reproducible and above the requested `0.1%`
+  whole-layer threshold, but it is a micro-optimization, not a material change
+  to the roofline. The FP32 DRAM intermediate is no longer transferred.

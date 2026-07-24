@@ -392,6 +392,11 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
         TT_FATAL(!rms_cores.empty(), "fused RMS requires non-scan consumer cores");
     }
     const CoreRangeSet rms_core_set{rms_ranges};
+    std::set<CoreRange> pipeline_ranges = rms_ranges;
+    for (const auto& core : sdist.cores) {
+        pipeline_ranges.insert(CoreRange{core, core});
+    }
+    const CoreRangeSet pipeline_core_set{pipeline_ranges};
 
     // V-independent tensors (kd, q_decay, intra, k_dec_t, T_inv, dl) are read in FULL; only the
     // V-dependent CBs (v_beta/state/out/scratch) shrink to the per-core V-block width Vt(=Vtl).
@@ -399,6 +404,16 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     uint32_t scr = std::max({cc, ck, cv, kv, kc});
 
     ProgramDescriptor desc;
+    if (attrs.fused_rms) {
+        const uint32_t consumer_count = static_cast<uint32_t>(rms_cores.size());
+        const uint32_t max_items_per_consumer = tt::div_up(BH * NC, consumer_count);
+        const uint32_t tile_size = tt::tile_size(tt::DataFormat::Float32);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = max_items_per_consumer * Vt_full * tile_size,
+            .core_ranges = pipeline_core_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = 0, .data_format = tt::DataFormat::Float32, .page_size = tile_size}}}});
+    }
     auto add_cb = [&](uint32_t idx, uint32_t n_tiles, uint32_t nbuf = 1, tt::DataFormat fmt = tt::DataFormat::Float32) {
         const uint32_t ts = tt::tile_size(fmt);
         desc.cbs.push_back(CBDescriptor{
@@ -442,7 +457,6 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
                 .format_descriptors = {{CBFormatDescriptor{
                     .buffer_index = static_cast<uint8_t>(idx), .data_format = format, .page_size = tile_size}}}});
         };
-        add_rms_cb(0, Vt_full, tt::DataFormat::Float32);
         add_rms_cb(1, Vt_full, tt::DataFormat::Float16_b);
         add_rms_cb(2, Vt_full, tt::DataFormat::Float16_b);
         add_rms_cb(3, Vt_full, tt::DataFormat::Float32);
@@ -479,7 +493,9 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     TensorAccessorArgs(in.identity_tile.has_value() ? in.identity_tile->buffer() : nullptr).append_to(reader_ct);
 
     std::vector<uint32_t> writer_ct = ct_args;
-    TensorAccessorArgs(*outputs[0].buffer()).append_to(writer_ct);
+    if (!attrs.fused_rms) {
+        TensorAccessorArgs(*outputs[0].buffer()).append_to(writer_ct);
+    }
     TensorAccessorArgs(*outputs[1].buffer()).append_to(writer_ct);
 
     KernelDescriptor reader;
@@ -528,7 +544,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
             core, {h, vb, NC, vb_buf, kd_buf, qd_buf, it_buf, kdec_buf, dl_buf, ti_buf, s0_buf, identity_buf});
         if (attrs.fused_rms) {
             std::vector<std::variant<uint32_t, Buffer*>> writer_args{
-                h, vb, NC, o_buf, fs_buf, static_cast<uint32_t>(rms_cores.size()), ready_semaphore_id};
+                h, vb, NC, fs_buf, static_cast<uint32_t>(rms_cores.size()), ready_semaphore_id};
             for (const auto& rms_core : rms_cores) {
                 const auto physical = device->worker_core_from_logical_core(rms_core);
                 writer_args.emplace_back(static_cast<uint32_t>(physical.x));
@@ -552,7 +568,6 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
         const uint32_t producer_count = Vt_full / Vt;
 
         std::vector<uint32_t> rms_reader_ct{Vt_full, attrs.num_heads, NC};
-        TensorAccessorArgs(*outputs[0].buffer()).append_to(rms_reader_ct);
         TensorAccessorArgs(*in.rms_gate->buffer()).append_to(rms_reader_ct);
         TensorAccessorArgs(*in.rms_weight->buffer()).append_to(rms_reader_ct);
         std::vector<uint32_t> rms_writer_ct{Vt_full, attrs.num_heads, NC};
@@ -586,7 +601,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
             const uint32_t count = i < total ? tt::div_up(total - i, consumer_count) : 0;
             const auto& core = rms_cores[i];
             rms_reader.emplace_runtime_args(
-                core, {i, count, o_buf, gate_buf, weight_buf, consumer_count, producer_count, ready_semaphore_id});
+                core, {i, count, gate_buf, weight_buf, consumer_count, producer_count, ready_semaphore_id});
             rms_writer.emplace_runtime_args(core, {i, count, rms_out_buf, consumer_count});
             rms_compute.emplace_runtime_args(core, {count});
         }

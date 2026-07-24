@@ -16,8 +16,8 @@ keeps failed experiments visible so they are not repeated unchanged.
 - Prepared tensors now remain interleaved in distributed L1 between prep and
   scan. `QWEN_KDA_PREP_DRAM=1` preserves the measured DRAM control.
 - T=640 wall: `643.623 -> 619.594 us` (`-3.73%`).
-- T=5,120 wall: `3681.529 -> 3265.240 us` (`-11.31%` versus the matched FP32
-  DRAM control; fused scan-to-gated-RMS endpoint).
+- T=5,120 wall: `3681.529 -> 3259.500 us` (`-11.46%` versus the matched FP32
+  DRAM control; replicated direct-L1 scan-to-gated-RMS endpoint).
 - T=5,120 recurrence: `1023.411 -> 807.181 us` (`-21.13%` versus control).
 - T=5,120 selected block times: projection `524.798 us`, convolution
   `601.588 us`, decay transform `108.106 us`, recurrence `807.181 us`, and
@@ -345,8 +345,17 @@ improved `622.564 -> 619.594 us` (`-0.48%`). T=5,120 wall improved
       `0.999958/0.999890+/0.999997`. Ten T=5,120 replay sessions improve median
       wall `3330.328 -> 3265.240 us` (`-65.088 us`, `-1.954%`). The combined
       scan program measures `514.395 us` and hides about 78% of the former
-      `83.557 us` standalone RMS stage. Retain the bounded pipeline; the
-      intermediate FP32 DRAM write/read remains the next removable boundary.
+      `83.557 us` standalone RMS stage. Retain the bounded pipeline.
+    - Direct-L1 follow-up, 2026-07-24: CB0 spans all 110 cores and gives each
+      RMS consumer up to seven fixed full-V staging slots (`112 KiB/core` at
+      T=5,120). Producers write their unique slot, flush, then signal; consumers
+      publish the same slots into the local CB in cyclic order. T=672 and
+      T=5,120 preserve PCC. Two 10-replay candidate medians were `3259.237` and
+      `3259.763 us`; a freshly rebuilt DRAM-handoff control was `3264.154 us`.
+      The replicated candidate center is `3259.500 us`, a matched `4.655 us`
+      (`0.143%`) wall gain; scan improves `514.549 -> 512.951 us`. Retain, but
+      classify this as a threshold-level micro-optimization rather than a new
+      large roofline shift.
 42. Produce the exact output-projection input layout from gated RMS.
 43. Remove remaining reshape/view programs that materialize data.
 

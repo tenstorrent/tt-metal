@@ -209,6 +209,7 @@ void ChunkGdnScanOperation::validate_on_program_cache_miss(
     TT_FATAL(attrs.val_dim % TILE_WIDTH == 0, "val_dim must be a multiple of 32");
     TT_FATAL(in.rms_gate.has_value() == in.rms_weight.has_value(), "fused RMS requires both gate and weight");
     if (in.rms_gate.has_value()) {
+        TT_FATAL(attrs.chunk_size == TILE_HEIGHT, "fused RMS requires 32-token chunks");
         check(*in.rms_gate, "rms_gate", DataType::BFLOAT16);
         check(*in.rms_weight, "rms_weight", DataType::BFLOAT16);
         TT_FATAL(
