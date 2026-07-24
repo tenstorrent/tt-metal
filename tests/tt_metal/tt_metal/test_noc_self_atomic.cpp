@@ -57,6 +57,8 @@ protected:
         "tests/tt_metal/tt_metal/test_kernels/dataflow/noc_self_atomic.cpp";
     const std::string kernel_path_amo32 =
         "tests/tt_metal/tt_metal/test_kernels/dataflow/dm_amo32.cpp";
+    const std::string kernel_path_cacheline =
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/dm_cacheline_probe.cpp";
     uint32_t l1_unreserved_base{0};
     bool is_quasar{false};
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
@@ -157,6 +159,44 @@ protected:
     void zero_counter(const experimental::NodeCoord& node, uint32_t addr) {
         std::vector<uint32_t> initial_l1_words(1, 0);
         tt::tt_metal::detail::WriteToDeviceL1(device_, node, addr, initial_l1_words);
+    }
+
+    // Launch the single-thread cache-line-width probe on `core`. base_addr is the
+    // (line-aligned) region the probe sweeps; report_addr is a disjoint scratch the
+    // probe writes 2*NUM_SEPS words to (wc,wn per separation).
+    void run_cacheline_probe(uint32_t base_addr, uint32_t report_addr, uint32_t residency_addr) {
+        distributed::MeshWorkload workload;
+        Program program;
+        distributed::MeshCoordinate zero_coord{0, 0};
+        distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
+
+        const experimental::KernelSpecName DM_KERNEL{"cacheline_probe"};
+        experimental::KernelSpec kernel_spec{
+            .unique_id = DM_KERNEL,
+            .source = kernel_path_cacheline,
+            .num_threads = 1,
+            .runtime_arg_schema = {.runtime_arg_names = {"base_addr", "report_addr", "residency_addr"}},
+            .hw_config = experimental::DataMovementGen2Config{},
+        };
+        experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = core};
+        experimental::ProgramSpec spec{
+            .name = "dm_cacheline_probe",
+            .kernels = {kernel_spec},
+            .work_units = {main_wu},
+        };
+        program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
+        experimental::ProgramRunArgs params;
+        params.kernel_run_args = {
+            experimental::ProgramRunArgs::KernelRunArgs{
+                .kernel = DM_KERNEL,
+                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                    core,
+                    {{"base_addr", base_addr}, {"report_addr", report_addr}, {"residency_addr", residency_addr}}),
+            },
+        };
+        experimental::SetProgramRunArgs(program, params);
+        workload.add_program(device_range, std::move(program));
+        RunProgram(mesh_device_, workload);
     }
 };
 
@@ -281,6 +321,128 @@ TEST_F(NocSelfAtomicFixture, TestDmCachedAmo32) {
     EXPECT_EQ(observed, expected)
         << "32-bit RISC-V AMO (amoadd.w) on the cached L1 alias lost updates: the DM_LOCAL_CACHED fast "
            "path needs a 32-bit CAS loop or a 64-bit word instead.";
+}
+
+// (4) DM write-back cache line width, measured as the minimum separation at which a
+// cached-AMO word and a NoC-atomic word STOP sharing a cache line (i.e. the cached
+// dirty-line write-back stops clobbering the NoC word). This is the separation the
+// DM_LOCAL_CACHED segregation (S3) must enforce between a cached semaphore and any
+// NoC-touched word.
+//
+// This is a MEASUREMENT with mandatory validity controls (an adversarial review found
+// that without them, an emulator that fails to model the write-back cache / a coherent
+// NIU would read "safe" at every separation and a naive probe would emit the smallest
+// separation as the width -> S3 under-guards -> silent production corruption). The
+// controls turn every such "hazard not modeled" world into a HARD FAILURE instead of a
+// bogus small width:
+//   - Control A (residency): a cached write must be invisible via the uncached alias
+//     until flushed (proves a write-back cache exists and the uncached alias bypasses it).
+//   - Control B (landed): each NoC atomic must be observed at TL1 pre-flush (so a
+//     post-flush 0 is a genuine clobber, not "never landed").
+//   - Positive control: sep=4B (guaranteed same line) MUST clobber; if not, the clobber
+//     mechanism is not live on this platform -> width INVALID -> verify on silicon.
+// Ceiling: FLUSH64 triggers the write-back, so a width > 64B is not detectable here
+// (needs a natural-eviction variant or silicon); 64B matches the documented L1 D$/L2 line.
+TEST_F(NocSelfAtomicFixture, TestDmCacheLineWidth) {
+    if (!is_quasar) {
+        GTEST_SKIP() << "cached/uncached alias + write-back cache is Quasar-only";
+    }
+    // Must match dm_cacheline_probe.cpp exactly.
+    constexpr uint32_t NUM_SEPS = 6;
+    const uint32_t seps[NUM_SEPS] = {4u, 8u, 16u, 32u, 64u, 128u};
+    constexpr uint32_t CACHED_ADD = 5u;
+    constexpr uint32_t NOC_ADD = 7u;
+    constexpr uint32_t STRIDE = 512u;
+    constexpr uint32_t RES_OLD = 0x1111u;
+    constexpr uint32_t RES_NEW = 0x2222u;
+    constexpr int EXPECTED_WIDTH = 64;  // documented L1 D$ / L2 line (risc_common.h)
+
+    // Line-aligned base (so base+sep shares a line with base iff sep < width); report and
+    // residency scratch placed well past the swept region and each other.
+    const uint32_t base = (l1_unreserved_base + 511u) & ~511u;
+    const uint32_t report = base + NUM_SEPS * STRIDE + 1024u;
+    const uint32_t residency = report + 1024u;
+
+    run_cacheline_probe(base, report, residency);
+
+    const uint32_t total = 2u + 3u * NUM_SEPS;
+    tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report, total * sizeof(uint32_t), result);
+    ASSERT_EQ(result.size(), total);
+
+    // ---- Control A: write-back residency proof. Failure => the platform is not modeling a
+    // write-back cache, so the clobber hazard cannot be measured here at all. ----
+    const uint32_t res_noflush = result[0];
+    const uint32_t res_flushed = result[1];
+    ASSERT_EQ(res_flushed, RES_NEW)
+        << "Control A: flush_l2_cache_line did not write the cached value back to TL1 -> cache/flush not "
+           "functional on this platform.";
+    ASSERT_EQ(res_noflush, RES_OLD)
+        << "Control A: a cached-alias write was visible via the uncached alias WITHOUT a flush (saw 0x"
+        << std::hex << res_noflush << ", expected 0x" << RES_OLD << std::dec
+        << ") -> this platform is NOT modeling a write-back cache (flat/coherent/write-through). The "
+           "write-back-clobber hazard cannot be measured here; verify the DM cache line width on silicon.";
+
+    // ---- Per-separation sweep ----
+    int width = -1;
+    bool seen_clobber = false;
+    bool seen_safe = false;
+    bool monotonic = true;
+    for (uint32_t i = 0; i < NUM_SEPS; i++) {
+        const uint32_t wc_val = result[2 + 3 * i + 0];
+        const uint32_t wn_pre = result[2 + 3 * i + 1];
+        const uint32_t wn_post = result[2 + 3 * i + 2];
+        const bool safe = (wn_post == NOC_ADD);
+        const bool clobbered = (wn_post == 0u);
+        log_info(
+            LogTest,
+            "sep={:>4}B  wc={} (exp {})  wn_pre={} (exp {})  wn_post={}  -> {}",
+            seps[i],
+            wc_val,
+            CACHED_ADD,
+            wn_pre,
+            NOC_ADD,
+            wn_post,
+            safe ? "SAFE (different line)" : (clobbered ? "CLOBBERED (shared line)" : "UNEXPECTED"));
+        EXPECT_EQ(wc_val, CACHED_ADD) << "sep=" << seps[i] << "B: kernel liveness (cached AMO) failed";
+        // Control B: the atomic must have landed pre-flush, else a post-flush 0 is meaningless.
+        ASSERT_EQ(wn_pre, NOC_ADD) << "sep=" << seps[i]
+                                   << "B: NoC atomic did not land at TL1 pre-flush (wn_pre=" << wn_pre
+                                   << ") -> sample invalid, cannot distinguish clobber from never-landed.";
+        EXPECT_TRUE(safe || clobbered)
+            << "sep=" << seps[i] << "B: wn_post=" << wn_post << " is neither " << NOC_ADD << " nor 0";
+        if (clobbered) {
+            seen_clobber = true;
+            if (seen_safe) {
+                monotonic = false;  // a clobber after a safe result breaks same-line-iff-sep<width
+            }
+        } else if (safe) {
+            seen_safe = true;
+            if (width < 0) {
+                width = static_cast<int>(seps[i]);
+            }
+        }
+    }
+
+    // ---- Positive control: the smallest separation shares wc's line and MUST clobber.
+    // If it does not, the clobber mechanism is not live (coherent NIU / unfaithful emu). ----
+    ASSERT_TRUE(seen_clobber)
+        << "POSITIVE CONTROL FAILED: no separation was clobbered across the sweep -> the DM write-back-clobber "
+           "hazard is not live on this platform (coherent NIU, or the emu is not modeling write-back + "
+           "NoC-incoherence). The width is INVALID; do NOT trust it -- verify on silicon.";
+    ASSERT_EQ(result[2 + 3 * 0 + 2], 0u)
+        << "POSITIVE CONTROL FAILED: sep=4B (same cache line) did NOT clobber -> the write-back-clobber hazard "
+           "is not live here. Width INVALID; verify on silicon.";
+
+    EXPECT_TRUE(monotonic)
+        << "clobber->safe transition is non-monotonic across the sweep: the 'shared cache line iff sep < width' "
+           "model does not hold -- investigate before trusting any width.";
+    ASSERT_GE(width, 0)
+        << "even sep=128B was clobbered: the DM write-back line width exceeds the FLUSH64-detectable range; use "
+           "the natural-eviction variant or measure on silicon.";
+    log_info(LogTest, "==> DM write-back cache line width (min NoC-safe separation) = {} B", width);
+    EXPECT_EQ(width, EXPECTED_WIDTH)
+        << "measured DM write-back line width (" << width << "B) != documented 64B (L1 D$/L2 line). If this is "
+           "real (not an artifact), S3 segregation must use the measured value -- investigate.";
 }
 
 }  // namespace tt::tt_metal
