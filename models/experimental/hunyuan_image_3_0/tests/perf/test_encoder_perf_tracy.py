@@ -64,7 +64,7 @@ import ttnn
 from models.experimental.hunyuan_image_3_0.ref.tokenizer.resolution import ResolutionGroup
 from models.experimental.hunyuan_image_3_0.ref.vae.encoder import IN_CHANNELS, PIXEL_T
 from models.experimental.hunyuan_image_3_0.ref.weights import ensure_base_weights
-from models.experimental.hunyuan_image_3_0.tests.vae.test_utils import (
+from models.experimental.hunyuan_image_3_0.tests.pcc.vae_helpers import (
     pad_encoder_channels_bcthw,
     upload_bcthw,
     upload_bcthw_spatial,

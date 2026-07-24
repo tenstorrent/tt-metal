@@ -38,7 +38,7 @@ from models.experimental.hunyuan_image_3_0.tt.pipeline import decode_latent
 from models.experimental.hunyuan_image_3_0.tt.vae.decoder import VAEDecoderTTNN
 
 SCALING_FACTOR = VAE_SCALING_FACTOR
-PCC_THRESHOLD = 0.99  # matches tests/vae/test_decode_pipeline.py
+PCC_THRESHOLD = 0.99  # matches tests/pcc/test_vae_decode_pipeline.py
 
 use_signpost = True
 try:
