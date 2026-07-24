@@ -138,14 +138,26 @@ def build_vocoder():
     return dec
 
 
+def _wav_to_mel_cloning(wav, mel_norms):  # coqui XTTS perceiver-cloning mel front-end (host; feeds Block 1)
+    import torchaudio
+
+    stft = torchaudio.transforms.MelSpectrogram(n_fft=2048, hop_length=256, win_length=1024, power=2,
+        normalized=False, sample_rate=22050, f_min=0, f_max=8000, n_mels=80, norm="slaney")
+    return torch.log(torch.clamp(stft(wav), min=1e-5)) / mel_norms.unsqueeze(0).unsqueeze(-1)
+
+
 class XttsPipeline:
-    """End-to-end XTTS-v2. Host-side glue on CPU; only Block 3 runs on the TT device."""
+    """End-to-end XTTS-v2. All four blocks run on the TT device (Blocks 1+2 conditioning, 3 GPT,
+    4 vocoder); only the tokenizer, mel front-ends and latents->z interpolation stay host-side."""
 
     def __init__(self, device):
         _install_shims()
-        from models.experimental.xtts_v2.reference.xtts_gpt_ref import load_gen_head
+        from models.experimental.xtts_v2.reference.xtts_gpt_ref import load_full_state, load_gen_head
+        from models.experimental.xtts_v2.reference.xtts_speaker_ref import build_frontend
 
+        from models.experimental.xtts_v2.tt.ttnn_xtts_cond import TtConditioningEncoder
         from models.experimental.xtts_v2.tt.ttnn_xtts_hifigan import TtHifiganGenerator
+        from models.experimental.xtts_v2.tt.ttnn_xtts_speaker import TtSpeakerEncoder
 
         self.device = device
         self.tok = XttsTokenizer()
@@ -153,12 +165,35 @@ class XttsPipeline:
         self.heads = load_gen_head(CKPT)  # host: mel_emb / mel_pos / mel_head
         self.vocoder = build_vocoder()  # Block 4 wrapper (does the latents->z interpolation on host)
         self.vocoder.waveform_decoder = TtHifiganGenerator(device)  # Block 4 generator on TTNN
+        self.cond_encoder = TtConditioningEncoder(device)  # Block 1 (TTNN): mel -> gpt_cond_latent
+        self.speaker_encoder = TtSpeakerEncoder(device)  # Block 2 (TTNN): logmel -> d-vector
+        self.mel_stats = load_full_state()["mel_stats"].float()  # Block 1 mel normalization
+        self.spk_frontend = build_frontend()  # Block 2 logmel front-end (host)
 
     @torch.no_grad()
-    def generate(self, text, speaker=None, language="en", max_new=400, seed=0):
+    def conditioning_from_audio(self, wav, sr):
+        """Reference audio -> (gpt_cond_latent [1,32,1024], speaker_embedding [1,512,1]) via Blocks 1+2 (TTNN).
+        wav: torch [1, N] at `sr` Hz. Mirrors coqui Xtts.get_conditioning_latents; mel front-ends run on host."""
+        import torchaudio
+
+        from models.experimental.xtts_v2.reference.xtts_speaker_ref import logmel_from_wav
+
+        a22 = wav if sr == 22050 else torchaudio.functional.resample(wav, sr, 22050)
+        _, gpt_cond = self.cond_encoder(_wav_to_mel_cloning(a22[:, : 22050 * 6], self.mel_stats))  # Block 1
+        a16 = wav if sr == 16000 else torchaudio.functional.resample(wav, sr, 16000)
+        spk = self.speaker_encoder(logmel_from_wav(a16, self.spk_frontend)).unsqueeze(-1)  # Block 2
+        return gpt_cond, spk
+
+    @torch.no_grad()
+    def generate(self, text, speaker=None, speaker_wav=None, language="en", max_new=400, seed=0):
         import models.experimental.xtts_v2.tt.ttnn_xtts_gpt as port
 
-        cond, spk, name = load_speaker(speaker)
+        if speaker_wav is not None:  # clone the voice from a reference clip (Blocks 1+2 on TTNN)
+            wav_in, sr = speaker_wav
+            cond, spk = self.conditioning_from_audio(wav_in, sr)
+            name = "reference-audio"
+        else:  # or use a built-in speaker's precomputed latents (bypasses Blocks 1+2)
+            cond, spk, name = load_speaker(speaker)
         tokens = self.tok.encode(text, language)
         prefix = build_prefix(self.gpt, cond, tokens)  # [1, P, 1024]
         P = prefix.shape[1]
