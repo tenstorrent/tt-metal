@@ -240,10 +240,11 @@ std::vector<CBInfo> get_cb_info(
     // reserve_back one M-row-group in matmul_partials_cb WHILE a full output block of subblock-major spills
     // from the prior K-block is still fronted (the reload pop is sequenced after the reserve) — peak
     // occupancy out_block_num_tiles + row_group_tiles. A one-block region overflows → reserve_back self-
-    // deadlock (Watcher UPAW). Give that quadrant headroom of one extra block (2*out_block_num_tiles ≥
-    // out_block_num_tiles + row_group_tiles for any subblock split, since row_group_tiles =
-    // out_block_num_tiles/in0_num_subblocks ≤ out_block_num_tiles, and the relaxed subblock_h isn't visible
-    // here). OOM cost on L1-tight convs is accepted (features over perf; user directive on GH#45995).
+    // deadlock (Watcher UPAW). The pack subblock_h is now derivable here (auto_select below returns the
+    // relaxed/SBM subblock), so the sizing below reserves exactly out_block_num_tiles + row_group_tiles
+    // instead of the old conservative 2*out_block_num_tiles — reclaiming the extra block minus one
+    // M-row-group of L1 (Sofija's suggestion). Falls back to the full extra block only when the subblock
+    // is not derivable here (non-TRM-eligible shapes), so it never under-sizes.
     //
     // Every OTHER path keeps the one-block region byte-identical. In particular the SubblockMajor
     // bias+untilize l1_acc-OFF path manually rewinds matmul_partials_cb rd/wr to the kernel-entry base after
@@ -292,23 +293,34 @@ std::vector<CBInfo> get_cb_info(
     // The TileRowMajor decision is derived here (not plumbed in) via the SAME helper the sharded factory
     // uses, so this alias decision is identical on the allocation path and the L1-usage prediction path
     // (both call get_cb_info) — otherwise the post-op CB-size equality check would abort.
-    const bool tile_pack_row_major = ttnn::operations::conv::auto_select_tile_pack_row_major(
-                                         sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED,
-                                         enable_bias,
-                                         weights_df,
-                                         is_1d_depthwise_conv,
-                                         fp32_dest_acc_en,
-                                         block_config.act_block_h_ntiles,
-                                         per_core_out_matrix_width_ntiles)
-                                         .selected;
+    const auto trm_decision = ttnn::operations::conv::auto_select_tile_pack_row_major(
+        sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED,
+        enable_bias,
+        weights_df,
+        is_1d_depthwise_conv,
+        fp32_dest_acc_en,
+        block_config.act_block_h_ntiles,
+        per_core_out_matrix_width_ntiles);
+    const bool tile_pack_row_major = trm_decision.selected;
     const bool can_alias_partials_onto_out =
         single_output_block && (partial_dtype == output_datatype) && !untilize_out && !is_1d_depthwise_conv &&
         !caller_owns_class_forces_dedicated && !(tile_pack_row_major && !packer_l1_acc);
+    // Reload headroom (untilize + l1_acc-off): the last K-block reserves ONE M-row-group in
+    // matmul_partials_cb on top of the still-fronted full-block spills (peak = out_block_num_tiles +
+    // row_group_tiles), so size to exactly that instead of the old conservative 2*out_block_num_tiles.
+    // row_group_tiles = the pack's out_subblock_h × output-row width (per_core_out_matrix_width_ntiles).
+    // The pack uses the RELAXED subblock when TileRowMajor is selected, else the SBM subblock — both come
+    // from auto_select above. When the subblock isn't derivable here (non-TRM-eligible: bf8 weights /
+    // width-sharded → auto_select returns 0) fall back to a full extra block, which never under-sizes.
+    const uint32_t reload_pack_subblock_h =
+        trm_decision.selected ? trm_decision.relaxed_out_subblock_h : trm_decision.sbm_out_subblock_h;
+    const uint32_t reload_headroom_tiles =
+        reload_pack_subblock_h > 0 ? reload_pack_subblock_h * per_core_out_matrix_width_ntiles : out_block_num_tiles;
     const uint32_t matmul_partials_num_pages =
         is_1d_depthwise_conv ? 0
         : can_alias_partials_onto_out
             ? per_core_out_ntiles  // aliased onto OUT (== one block here), 0 extra L1
-            : (needs_software_reload_headroom ? 2 * out_block_num_tiles : out_block_num_tiles);
+            : (needs_software_reload_headroom ? out_block_num_tiles + reload_headroom_tiles : out_block_num_tiles);
     // 1D depthwise dest-reuse scratch (main): a single height block reuses out_cb directly for the
     // read-back (0-page — matmul_partials_num_pages is already 0 for is_1d_depthwise_conv); multiple
     // non-coalesced height blocks need a DEDICATED scratch CB in the output data format, because

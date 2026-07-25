@@ -109,8 +109,13 @@ std::pair<uint32_t, uint32_t> largest_subblock_from_flags(
     bool dst_full_sync_en = true,
     bool require_legacy_writer = false);
 
-// True iff (h, w) requires tile_pack_row_major to compile (legacy
-// subblock-major writer rejects h > 1 AND w != per_core_N).
+// True iff a subblock (h, w) requires tile_pack_row_major: the legacy subblock-major writer can only
+// realize the sharded row-major tiled layout when out_subblock_w == per_core_N OR out_subblock_h == 1;
+// any other subblock (h > 1 AND w != per_core_N) must be packed row-strided (TileRowMajor). This is THE
+// single shared source for the "per-core-N / out-subblock-H" constraint — the subblock tuner
+// (subblock_w_eq_per_core_n_required), the matmul factory's out-subblock validation, and conv's
+// auto_select_tile_pack_row_major (via the tuner) all hinge on it. So a caller can pick ANY subblock and
+// flip to TileRowMajor whenever this returns true for a sharded output, instead of re-deriving the rule.
 inline bool needs_row_major_writer(uint32_t h, uint32_t w, uint32_t per_core_N) { return h > 1 && w != per_core_N; }
 
 // Per-core L1 footprint estimate for a matmul program_config. Returned struct

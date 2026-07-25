@@ -160,10 +160,10 @@ SubblockChoice determine_largest_subblock(const SubblockTuneInputs& inputs) {
         if (inputs.per_core_M % h != 0 || inputs.per_core_N % w != 0) {
             continue;
         }
-        if (inputs.subblock_w_eq_per_core_n_required) {
-            if (w != inputs.per_core_N && h != 1) {
-                continue;
-            }
+        // SubblockMajor writer: reject a subblock that would need TileRowMajor. Uses the shared
+        // needs_row_major_writer predicate (matmul_auto_tuner.hpp) — the single source for this constraint.
+        if (inputs.subblock_w_eq_per_core_n_required && needs_row_major_writer(h, w, inputs.per_core_N)) {
+            continue;
         }
         if (inputs.subblock_h_eq_per_core_m_required) {
             if (h != inputs.per_core_M && w != 1) {

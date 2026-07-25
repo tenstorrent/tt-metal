@@ -8,6 +8,7 @@
 
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_auto_tuner.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "tt-metalium/hal_types.hpp"
 #include "tt-metalium/experimental/global_circular_buffer.hpp"
@@ -1146,8 +1147,12 @@ void validate_output_subblock_block_divides_per_core_n(
     uint32_t out_block_w,
     uint32_t out_block_h,
     uint32_t per_core_N) {
+    // SHARED constraint (matmul_auto_tuner.hpp needs_row_major_writer): a subblock that needs
+    // TileRowMajor (out_subblock_w != per_core_N AND out_subblock_h != 1) is illegal for the
+    // subblock-major writer — the caller sets tile_pack_row_major=true instead of forcing a
+    // compliant subblock. Single source, shared with the tuner and conv's auto_select.
     TT_FATAL(
-        out_subblock_w == per_core_N || out_subblock_h == 1,
+        !ttnn::operations::matmul::auto_tune::needs_row_major_writer(out_subblock_h, out_subblock_w, per_core_N),
         "{}: out_subblock_w ({}) must equal per_core_N ({}) or out_subblock_h ({}) must be 1",
         config_name,
         out_subblock_w,
