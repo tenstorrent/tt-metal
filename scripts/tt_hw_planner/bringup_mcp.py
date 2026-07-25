@@ -814,8 +814,14 @@ def decompose_component(component: str) -> dict:
     regardless). Only the gate should direct you here (rung 'decompose'). rc: children_added>0 =
     decomposed; 0 = primitive/leaf (parent still retired). Refuses (returns {gated: True}) unless
     the component is at cap — decompose is a one-way door (parent auto-retires to CPU)."""
-    _attempts_now = (_load_state().get("attempts", {}) or {}).get(component, 0)
-    _agent_may_decompose = _new_is_unlimited(component) and _attempts_now >= 1
+    _st_now = _load_state()
+    _attempts_now = (_st_now.get("attempts", {}) or {}).get(component, 0)
+    _last_class_now = (_st_now.get("last_failure_class", {}) or {}).get(component, "")
+    _agent_may_decompose = (
+        _new_is_unlimited(component)
+        and _attempts_now >= 3
+        and _last_class_now not in ("", "HARNESS_SKIP")
+    )
     if not _agent_may_decompose and not _component_is_at_cap(component):
         st = _load_state()
         attempts = (st.get("attempts", {}) or {}).get(component, 0)
@@ -1006,11 +1012,13 @@ def termination_check() -> dict:
         else:
             rung = "emit" if attempts == 0 else "repair"
             _decompose_hint = ""
-            if _new_is_unlimited(c) and attempts >= 2:
+            if _new_is_unlimited(c) and attempts >= 3 and (last_class or "") not in ("", "HARNESS_SKIP"):
                 _decompose_hint = (
-                    f" [single-run] attempts are unlimited for NEW; if '{c}' is a large composite that keeps "
-                    f"failing structurally (not a small fixable bug), you MAY call decompose_component('{c}') on "
-                    f"your judgment to split it into children — decompose is no longer gated on the attempt cap."
+                    f" [single-run] attempts are unlimited for NEW. You have tried '{c}' {attempts}x and it keeps "
+                    f"failing with a STRUCTURAL class ({last_class}); if it is a large composite you cannot repair "
+                    f"whole, you MAY now call decompose_component('{c}') to split it into children. Do NOT decompose "
+                    f"a first-attempt failure, a HARNESS_SKIP (fix the harness instead), or a small fixable bug — "
+                    f"repair those."
                 )
             nxt = {
                 "unit": c,
