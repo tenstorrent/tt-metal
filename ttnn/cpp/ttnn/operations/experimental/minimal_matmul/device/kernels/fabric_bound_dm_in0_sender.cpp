@@ -107,14 +107,15 @@ void kernel_main() {
 #if defined(FUSE_AG) && defined(READ_FROM_LOCAL_INPUT)
 // If we have FUSE_AG with READ_FROM_LOCAL_INPUT, in3 is defined
 #ifdef FUSE_BIAS
-    // After in2, then in3, then ternary
+    // After in2, then in3, then ternary. TensorAccessorArgs counts are tensor-config dependent, so advance
+    // the accessor-aware way (never a fixed arg count): skip in2 + in3 starting from in2's offset.
     constexpr uint32_t ternary_a_args_cta_offset =
-        in2_args_cta_offset + tensor_accessor::detail::NUM_TENSOR_ACCESSOR_ARGS() * 2;
+        tensor_accessor::detail::get_tensor_accessor_args_cta_offset<2, in2_args_cta_offset>();
 #else
-    // After outputs, then in3, then ternary
+    // After outputs, then in3, then ternary. Treat in3 as one more accessor past the N_chunks outputs so its
+    // real (config-dependent) arg count is skipped.
     constexpr uint32_t ternary_a_args_cta_offset =
-        tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>() +
-        tensor_accessor::detail::NUM_TENSOR_ACCESSOR_ARGS();
+        tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks + 1, out_tensor_args_cta_offset>();
 #endif
 #else
 // No FUSE_AG, same as dm_in1_sender_out
@@ -201,8 +202,8 @@ void kernel_main() {
 
 #ifdef READ_FROM_LOCAL_INPUT
 #ifdef FUSE_BIAS
-    constexpr auto in3_args =
-        TensorAccessorArgs<in2_args_cta_offset + tensor_accessor::detail::NUM_TENSOR_ACCESSOR_ARGS>();
+    // in3 (local input) sits right after in2 (bias); advance by in2's real arg count, not a fixed constant.
+    constexpr auto in3_args = TensorAccessorArgs<in2_args.next_compile_time_args_offset()>();
 #else
     constexpr uint32_t in3_args_cta_offset =
         tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();

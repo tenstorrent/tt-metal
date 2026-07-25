@@ -64,7 +64,12 @@ void StridedAllGatherMinimalMatmulAsyncProgramFactory::override_runtime_argument
         ttnn::experimental::prim::MinimalMatmulFabricBoundProgramFactory::override_runtime_arguments(
             cached_program_proxy,
             attributes.matmul_struct,
-            {output_tensor.at(0), tensor_args.weight_tensor, tensor_args.bias, tensor_args.input_tensor},
+            {output_tensor.at(0),
+             tensor_args.weight_tensor,
+             tensor_args.bias,
+             tensor_args.input_tensor,
+             tensor_args.fused_ternary_input_a,
+             tensor_args.fused_ternary_input_b},
             matmul_output_vec);
     }
 }
@@ -96,7 +101,10 @@ strided_all_gather_minimal_matmul_async_program(
     const std::optional<const Tensor>& bias,
     const std::optional<operations::unary::UnaryWithParam>& fused_activation,
     ttnn::experimental::prim::MinimalMatmulConfig config,
-    DeviceComputeKernelConfig compute_kernel_config) {
+    DeviceComputeKernelConfig compute_kernel_config,
+    std::optional<float> fused_ternary_scalar,
+    const std::optional<const Tensor>& fused_ternary_input_a,
+    const std::optional<const Tensor>& fused_ternary_input_b) {
     tt::tt_metal::Program program{};
 
     // Create a matmul signal info object that gets populated by the matmul kernel
@@ -130,9 +138,9 @@ strided_all_gather_minimal_matmul_async_program(
         compute_kernel_config,
         matmul_fused_op_signaler,
         1,  // N_chunks = 1 for single output
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
+        fused_ternary_scalar,
+        fused_ternary_input_a,
+        fused_ternary_input_b,
         empty_srs_fused_op_signaler);
 
     // Create the all gather fused op signaler
@@ -223,7 +231,10 @@ StridedAllGatherMinimalMatmulAsyncProgramFactory::create_at(
         tensor_args.bias,  // Bias
         attributes.matmul_struct.fused_activation,
         attributes.matmul_struct.config.value(),
-        attributes.matmul_struct.compute_kernel_config);
+        attributes.matmul_struct.compute_kernel_config,
+        attributes.matmul_struct.fused_ternary_scalar,
+        tensor_args.fused_ternary_input_a,
+        tensor_args.fused_ternary_input_b);
 }
 
 }  // namespace ttnn::experimental::prim
