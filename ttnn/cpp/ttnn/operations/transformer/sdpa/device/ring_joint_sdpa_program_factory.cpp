@@ -284,29 +284,6 @@ std::vector<uint32_t> compute_q_work_bitmap(
     uint32_t sparse_num_frames_padded,
     const std::vector<uint32_t>& frame_allow_packed) {
     std::vector<uint32_t> bitmap(num_q_chunks, 0);
-    if (device_index < 8) {
-        log_info(
-            tt::LogOp,
-            "[SPARSE-DBG] compute_q_work_bitmap dev{}: sparse_frames_enabled={} active_ring_iter_mask=0x{:x} "
-            "num_q_chunks={} num_local_q_chunks={} num_local_k_chunks={} Sq_t={} Sk_t={} kv_local_padded_Nt={} "
-            "q_local_padded_Nt={} logical_nt={} fsl_t={} nf_padded={} bwd_writes={} fwd_writes={} frame_allow_words={}",
-            device_index,
-            (int)sparse_frames_enabled,
-            active_ring_iter_mask,
-            num_q_chunks,
-            num_local_q_chunks,
-            num_local_k_chunks,
-            Sq_chunk_t,
-            Sk_chunk_t,
-            kv_local_padded_Nt,
-            q_local_padded_Nt,
-            logical_nt,
-            sparse_frame_seqlen_tiles,
-            sparse_num_frames_padded,
-            backward_writes_expected,
-            forward_writes_expected,
-            frame_allow_packed.size());
-    }
     if (!sparse_frames_enabled) {
         // Dense fallback: every mask-active iter is a work iter for every q_chunk.
         for (uint32_t q = 0; q < num_q_chunks; ++q) {
@@ -368,21 +345,6 @@ std::vector<uint32_t> compute_q_work_bitmap(
                 }
             }
         }
-    }
-    if (device_index < 8) {
-        // Re-simulate the sequencer purely for logging its ring_id-per-iter sequence.
-        std::string seq_str;
-        RingIdSequencer dbg_seq(device_index, ring_size, backward_writes_expected, forward_writes_expected);
-        auto dbg_noop = [](uint32_t, uint32_t) {};
-        for (uint32_t it = 0; it < ring_size; ++it) {
-            seq_str += std::to_string(dbg_seq.get_next_ring_id(dbg_noop)) + " ";
-        }
-        log_info(tt::LogOp, "[SPARSE-DBG] dev{} ring_id sequence per iter = [ {}]", device_index, seq_str);
-        std::string bm_str;
-        for (uint32_t q = 0; q < num_q_chunks; ++q) {
-            bm_str += fmt::format("q{}=0x{:02x} ", q, bitmap[q]);
-        }
-        log_info(tt::LogOp, "[SPARSE-DBG] dev{} q_work_bitmap = [ {}]", device_index, bm_str);
     }
     return bitmap;
 }

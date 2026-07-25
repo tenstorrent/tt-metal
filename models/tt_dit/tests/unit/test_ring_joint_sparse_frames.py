@@ -402,20 +402,26 @@ def _run_sparse_frames_op(
         ),
     )[:, :, :real_n, :]
 
+    # A fully-masked reference — every allowed row attends zero K frames, i.e. softmax over no
+    # keys — is NaN and has no well-defined value (the "drain_all" pattern hits this; it is not a
+    # physically meaningful attention pattern since real Q frames always attend at least their own
+    # frame). PCC against NaN is meaningless, so in that degenerate case only verify the device did
+    # not hang and produced finite output.
+    if torch.isnan(gt).any():
+        assert torch.isfinite(
+            out
+        ).all(), "sparse-frames ring SDPA produced non-finite output for a fully-drained (degenerate) pattern"
+        logger.info(
+            f"[sparse-frames ring] degenerate fully-masked reference — skipped PCC, verified finite "
+            f"output. sp={sp_factor} tp={tp_factor}"
+        )
+        return
+
     passing, pcc = comp_pcc(gt, out, pcc_threshold)
     logger.info(
         f"[sparse-frames ring] nf_real={num_frames_real} nf_pad={num_frames_padded} fsl={frame_seqlen} "
         f"window={window} add_last={add_last_frame} sp={sp_factor} tp={tp_factor} pcc={pcc}"
     )
-    # DEBUG: per-frame PCC to localize which q_frames are wrong.
-    # out/gt are [b, nh, real_n, d]; reshape seq -> [nf_real, frame_seqlen].
-    gt_f = gt.reshape(b, nh, num_frames_real, frame_seqlen, d)
-    out_f = out.reshape(b, nh, num_frames_real, frame_seqlen, d)
-    per_frame = []
-    for f in range(num_frames_real):
-        _, fp = comp_pcc(gt_f[:, :, f], out_f[:, :, f], 0.0)
-        per_frame.append(f"f{f}={fp:.4f}")
-    logger.info("[sparse-frames ring] per-frame PCC: " + " ".join(per_frame))
     assert passing, f"sparse-frames ring SDPA vs torch reference PCC {pcc} < {pcc_threshold}"
 
 
@@ -588,6 +594,61 @@ class TestSparseFramesRing:
             # shape closely within the sparse-frames divisor constraint (chunk must divide fsl).
             q_chunk_size_tokens=320,  # 320 tokens = 10 tiles; fsl/12 = 3840/12
             k_chunk_size_tokens=384,  # 384 tokens = 12 tiles; fsl/10 = 3840/10
+            sparse_frames_enabled=sparse_frames_enabled,
+            force_allow_all=force_allow_all,
+        )
+
+    @_MESH_TOPOLOGY
+    @pytest.mark.parametrize(
+        ("sparse_frames_enabled", "force_allow_all"),
+        [
+            pytest.param(True, False, id="sparse"),
+            pytest.param(True, True, id="sparse_allow_all"),
+        ],
+    )
+    def test_720p_multi_oob(
+        self,
+        mesh_device,
+        num_links,
+        sp_axis,
+        sp_factor,
+        tp_axis,
+        tp_factor,
+        device_params,
+        all_gather_topology,
+        reset_seeds,
+        sparse_frames_enabled,
+        force_allow_all,
+    ):
+        """Same 720p multi-Q-per-core regime as test_720p_shape, but nf_real chosen so that
+        MULTIPLE whole SP shards are padding (fully out-of-bounds). At sp=8, nf_real=18 ->
+        nf_padded=24 (3 frames/shard) leaves shards 6 and 7 entirely padding, so each device sees
+        TWO inactive ring iters. On the upper devices those holes fall mid-sequence and are
+        sometimes non-adjacent (e.g. device 4's ring_id order [4,5,3,6,2,7,1,0] has holes at iters
+        3 and 5) or adjacent at the front (device 6's [6,7,5,4,3,2,1,0] has holes at iters 0,1).
+        This is the toughest case for the writer's cross-ring prefetch look-ahead, which must skip
+        over an arbitrary run of inactive iters to the next active one; a single-hole shape
+        (test_720p_shape) doesn't exercise multi-hole / leading-hole skips."""
+        nf_real = 18
+        nf_padded = ((nf_real + sp_factor - 1) // sp_factor) * sp_factor
+        _run_sparse_frames_op(
+            mesh_device=mesh_device,
+            sp_axis=sp_axis,
+            sp_factor=sp_factor,
+            tp_axis=tp_axis,
+            tp_factor=tp_factor,
+            num_links=num_links,
+            num_frames_real=nf_real,
+            num_frames_padded=nf_padded,
+            frame_seqlen=3840,
+            b=1,
+            nh=40,
+            d=128,
+            window=5,
+            add_last_frame=True,
+            all_gather_topology=all_gather_topology,
+            q_chunk_size_tokens=320,
+            k_chunk_size_tokens=384,
             sparse_frames_enabled=sparse_frames_enabled,
             force_allow_all=force_allow_all,
         )

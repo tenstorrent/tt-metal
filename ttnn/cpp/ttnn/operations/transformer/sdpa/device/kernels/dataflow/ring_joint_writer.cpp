@@ -8,7 +8,6 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/debug/waypoint.h"
-#include "api/debug/ring_buffer.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
@@ -459,14 +458,12 @@ void kernel_main() {
         false, /* wait_for_op_signal */
         argidx);
 
-    // Sparse-frames runtime args (mirror reader/compute layout). Host always pushes 32 uint32
-    // words + 1 feature-mask word regardless of whether sparse is enabled, so the reads are
-    // unconditional; sparse code paths are gated by `sparse_frames_enabled` compile-time flag
-    // and the runtime `sparse_feature_mask`.
-    uint32_t frame_allow_words[32];
-    for (uint32_t w = 0; w < 32; ++w) {
-        frame_allow_words[w] = get_arg_val<uint32_t>(argidx++);
-    }
+    // Sparse-frames runtime args (mirror reader/compute layout). The host always pushes the 32
+    // packed frame_allow words + 1 feature-mask word regardless of whether sparse is enabled. The
+    // writer does not consult frame_allow directly (it uses the precomputed q_work_bitmap below),
+    // so skip past the 32 words rather than reading them into an unused array — but the index must
+    // still advance so sparse_feature_mask / q_work_bitmap land at the right offset.
+    argidx += 32;  // packed frame_allow words (unused by the writer)
     const uint32_t sparse_feature_mask = get_arg_val<uint32_t>(argidx++);
 
     // Per-q_chunk work bitmap. bit iter set iff (q_chunk has attended k in ring_iter) AND (iter
@@ -792,18 +789,6 @@ void kernel_main() {
                 const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
                 const uint32_t q_chunk = global_q_chunk % num_q_chunks;
 
-                // Debug (iter 0 only): emit the writer's RAW sparse_feature_mask + q_work_bitmap word.
-                // Encoding: 0x88 <mask8> <q_chunk8> <bitmap8>. If this differs from compute's 0xBB
-                // marker, the writer's runtime args are still misaligned; if they match but the bitmap
-                // byte is "all active iters", the host bitmap is over-marking (dense).
-                if constexpr (sparse_frames_enabled == 1) {
-                    if (ring_iter == 0) {
-                        WATCHER_RING_BUFFER_PUSH(
-                            0x88000000u | ((sparse_feature_mask & 0xFFu) << 16) | ((q_chunk & 0xFFu) << 8) |
-                            (q_work_bitmap[q_chunk] & 0xFFu));
-                    }
-                }
-
                 const bool balanced_skip_q = q_chunk < half_sequence && is_balanced && ring_index < ring_id;
 
                 // Bitmap-derived per-q_chunk work state. Under sparse_frames_enabled + bit 6,
@@ -830,15 +815,6 @@ void kernel_main() {
                     (sparse_frames_enabled == 1) && (sparse_feature_mask & (1u << 6)) && q_has_work_this_iter
                         ? (ring_iter == q_first_work_iter(q_chunk))
                         : is_first_active_iter;
-
-                // Debug marker: writer's per-q view for this (q_chunk, ring_iter). Encoding mirrors
-                // compute's 0xC0 markers (no-op unless watcher enabled): 0x77<ring_iter><q_chunk><flags>.
-                // flags: 0x40 has_work, 0x20 is_first_work_iter, 0x10 is_last_work_iter. The first
-                // (ring_iter, q_chunk) whose flags differ from compute's is the divergence.
-                WATCHER_RING_BUFFER_PUSH(
-                    0x77000000u | ((ring_iter & 0xFu) << 20) | ((q_chunk & 0xFFFu) << 8) |
-                    (q_has_work_this_iter ? 0x40u : 0u) | (is_first_work_iter_for_q ? 0x20u : 0u) |
-                    (is_last_work_iter_for_q ? 0x10u : 0u));
 
                 const auto qi = get_q_chunk_info<has_joint_q>(
                     q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, q_local_padded_Nt);
