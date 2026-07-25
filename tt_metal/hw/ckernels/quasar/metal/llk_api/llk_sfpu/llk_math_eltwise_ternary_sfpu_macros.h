@@ -11,8 +11,7 @@
 #include "llk_math_eltwise_ternary_sfpu.h"
 #include "llk_math_eltwise_ternary_sfpu_init.h"
 
-// Quasar keeps the same macro surface as BH/WH. Ternary macro calls are limited
-// to VectorMode::RC for now.
+// Quasar keeps the same macro surface as BH/WH.
 
 namespace ckernel {
 
@@ -22,7 +21,7 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_(
     std::uint32_t dst_index_in1,
     std::uint32_t dst_index_in2,
     std::uint32_t dst_index_out,
-    VectorMode vector_mode) {
+    [[maybe_unused]] VectorMode vector_mode) {
     LLK_ASSERT(
         (dst_index_in0 < trisc::get_dest_max_tiles<DST_SYNC, DST_ACCUM, TILE_SHAPE>()),
         "dst_index_in0 exceeds max dest tiles");
@@ -35,7 +34,6 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_(
     LLK_ASSERT(
         (dst_index_out < trisc::get_dest_max_tiles<DST_SYNC, DST_ACCUM, TILE_SHAPE>()),
         "dst_index_out exceeds max dest tiles");
-    LLK_ASSERT(vector_mode == VectorMode::RC, "Quasar currently only supports vector mode RC");
 }
 
 }  // namespace ckernel
