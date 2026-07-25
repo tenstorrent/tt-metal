@@ -1,5 +1,14 @@
 # Up-front denoise: host-Gumbel overlap + on-device Gumbel (2026-07-24)
 
+> **SUPERSEDED 2026-07-25 — the `device` default recommended below was REVERTED.**
+> The n=2 quality risk this doc accepted materialised: on a matched 4-seed A/B with one variable
+> (`--gumbel-mode`), `host` answered correctly 4/4 while `device` corrupted 2/4, producing garbled
+> LaTeX and, in the served GPQA trace, a canvas of one repeated token. Root cause is `ttnn.rand`:
+> the permuted-vocab draw puts the 256 canvas positions on the rand width axis, where only 24 of
+> every 32 row streams are distinct. The throughput numbers below still stand; the default does
+> not. See `doc/decision_fidelity/gumbel_position_correlation.md`.
+
+
 Two optimizations to the up-front traced denoise path (`tt/traced_denoise.py`
 `UpfrontTracedDenoiseController`), motivated by the finding that the path is **host-bound,
 not device-bound**: in the served `DG_VLLM_GUMBEL_MODE=host` contract every replay step

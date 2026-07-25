@@ -83,8 +83,9 @@ from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
 
 MAX_DENOISE_STEPS = 48
 
-# Served default Gumbel source: the on-device permuted-vocab RNG (see the __init__ note).
-DEFAULT_VLLM_GUMBEL_MODE = "device"
+# Served default Gumbel source: IID full-vocabulary host torch Gumbel (see the __init__ note).
+# It was briefly "device"; that default produced corrupted text on 2 of 4 matched seeds.
+DEFAULT_VLLM_GUMBEL_MODE = "host"
 
 
 def _resolve_checkpoint_dir(hf_config):
@@ -268,11 +269,23 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         # The served bound, used to derive the fixed reveal span when the operator does not
         # pin DG_DENOISE_REVEAL_PMAX explicitly.
         self._max_model_len = None if max_model_len is None else int(max_model_len)
-        # DEFAULT "device" is the on-device permuted-vocab Gumbel: it removes the ~313 ms/step
-        # host RNG and the ~256 MiB/step replicated PCIe DMA (~1.8x denoise/step). It is a
-        # distribution change, NOT a bit-exact swap — the sub-40 GPQA host-vs-device @3072
-        # re-gate is still the recommended confirmation. Set DG_VLLM_GUMBEL_MODE=host for the
-        # IID full-vocabulary torch Gumbel reference.
+        # DEFAULT "host" is the IID full-vocabulary torch Gumbel.
+        #
+        # The default was "device" (the on-device permuted-vocab RNG) for the ~313 ms/step host
+        # RNG and ~256 MiB/step replicated PCIe DMA it removes (~1.8x denoise/step). That is
+        # REVERTED: on a matched 4-seed A/B with one variable, host answered correctly 4/4 while
+        # device corrupted 2/4 -- garbled LaTeX ("6.558times", "10^{-^{-}}", "100^{-88") and, in
+        # the served GPQA trace, a full canvas of one repeated token.
+        #
+        # It is not a sampler bug. For the production noise shape (1, 1, 256, vocab) the
+        # permuted-vocab draw puts the 256 CANVAS POSITIONS on the ttnn.rand width axis, where
+        # only 24 of every 32 row streams are distinct and the remainder stay correlated in
+        # value; positions therefore pick the same token together, which is precisely the
+        # observed texture. See doc/decision_fidelity/gumbel_position_correlation.md and
+        # tests/ttnn/nightly/unit_tests/operations/rand/test_rand_independence.py.
+        #
+        # DG_VLLM_GUMBEL_MODE=device is still selectable for throughput work where the text is
+        # not the product; it is only no longer the default.
         #
         # MEMORY ENVELOPE: "device" and "host" both materialize a full-vocabulary (262144)
         # tensor per step. context_contract.json records that materialization measured as an

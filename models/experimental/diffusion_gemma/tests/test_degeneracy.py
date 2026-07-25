@@ -65,9 +65,16 @@ def test_longest_run_edges():
     assert DG.longest_run(torch.tensor([1, 2, 3], dtype=torch.long)) == 1
 
 
-def test_default_policy_is_off_and_measures_nothing(monkeypatch):
+def test_default_policy_is_warn_and_never_raises(monkeypatch):
+    """The default must measure without changing behaviour: stats out, no exception."""
     monkeypatch.delenv("DG_DEGENERACY_POLICY", raising=False)
-    assert DG.resolve_policy() == "off"
+    assert DG.resolve_policy() == "warn"
+    stats = DG.check_committed_block(torch.full((1, CANVAS), 42, dtype=torch.long))
+    assert stats["top_frac"] == 1.0
+
+
+def test_off_policy_measures_nothing(monkeypatch):
+    monkeypatch.setenv("DG_DEGENERACY_POLICY", "off")
     assert DG.check_committed_block(torch.full((1, CANVAS), 1, dtype=torch.long)) == {}
 
 
@@ -168,3 +175,10 @@ def test_measured_healthy_block_shapes_are_not_flagged():
         assert not DG.is_degenerate(stats, stop_token_ids=[EOS_ID]), stats
     for stats in degenerate:
         assert DG.is_degenerate(stats, stop_token_ids=[EOS_ID]), stats
+
+
+def test_scalar_stop_token_id_is_accepted():
+    """Sessions initialised from a bare `eos_token_id` pass a scalar, not a collection."""
+    stats = DG.block_degeneracy(torch.full((1, CANVAS), EOS_ID, dtype=torch.long))
+    assert not DG.is_degenerate(stats, stop_token_ids=EOS_ID)
+    assert DG.is_degenerate(stats, stop_token_ids=999)

@@ -23,12 +23,14 @@ Current guardrails:
   `DG_DENOISE_REVEAL_PMAX=<positive tile-aligned served cap>` is now **optional**: when unset the
   fixed span is derived as the tile-rounded served `max_model_len` and logged at startup; an
   explicit value still wins and both paths get identical validation.
-- `DG_VLLM_GUMBEL_MODE` defaults to `device` as of 2026-07-24 (explicit owner decision): the
-  on-device permuted-vocab Gumbel removes the per-step host RNG and its replicated PCIe copy. It is
-  a **distribution change, not a bit-exact swap** — the sub-40-question GPQA host-vs-device re-gate
-  at `MAX_GEN_TOKS=3072` is still **outstanding**, so no accuracy equivalence is claimed here. Set
-  `DG_VLLM_GUMBEL_MODE=host` for the IID full-vocabulary torch Gumbel reference; `chunked` and
-  `argmax` are not materialized full-tensor sources and are rejected under up-front capture.
+- `DG_VLLM_GUMBEL_MODE` defaults to **`host`**. It was `device` from 2026-07-24 for the throughput
+  the on-device permuted-vocab RNG buys (no per-step host RNG, no replicated PCIe copy); **reverted
+  2026-07-25** because that default corrupts generated text — matched 4-seed A/B, single variable:
+  `host` correct 4/4, `device` corrupted 2/4. Root cause is `ttnn.rand`, which is not IID along the
+  axis the permuted draw puts the canvas positions on; see
+  `doc/decision_fidelity/gumbel_position_correlation.md`. `device` stays selectable for throughput
+  work; `chunked` and `argmax` are not materialized full-tensor sources and are rejected under
+  up-front capture.
 - Reveal masking, non-lazy startup capture, and window-1 early halt are intrinsic. Do not add legacy
   selector flags for them. Every admitted prefill shape must compile before capture; unseen runtime
   shapes fail loudly.

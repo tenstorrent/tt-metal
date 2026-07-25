@@ -959,7 +959,12 @@ def denoise_and_commit_block(
     # Before the commit, never after: a degenerate canvas that reaches the KV cache conditions
     # every later block, which is what makes the degenerate state near-absorbing.
     degeneracy_stats = check_committed_block(
-        trajectory.committed, block_idx=None, logger=logger, stop_token_ids=stop_token_ids
+        trajectory.committed,
+        block_idx=None,
+        logger=logger,
+        stop_token_ids=(
+            None if stop_token_ids is None else _normalize_eos_token_ids(stop_token_ids, kind="stop_token_ids")
+        ),
     )
     if degeneracy_stats:
         logger.info(

@@ -398,6 +398,9 @@ class BlockDiffusionServingSession:
             page_tables_per_layer=self.page_tables_per_layer,
             denoise_block_fn=self._denoise_block_fn,
             timings=timings,
+            # Without this the degeneracy check cannot tell a terminating canvas (a wall of
+            # <eos>, which this session is about to stop on anyway) from a degenerate one.
+            stop_token_ids=self.stop_token_ids,
         )
         latency_s = time.perf_counter() - t0
 

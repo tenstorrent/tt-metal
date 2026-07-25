@@ -8,7 +8,7 @@
 There are exactly two denoise execution modes:
 
 1. **Metal trace (default):** one model-lifetime trace/controller captured during startup with reveal
-   masking, on-device permuted-vocab Gumbel, K=48, and one-step/window early halt. This is what an
+   masking, IID host Gumbel, K=48, and one-step/window early halt. This is what an
    unset `DG_UPFRONT_CAPTURE` now selects.
 2. **Eager fallback:** `DG_UPFRONT_CAPTURE=0`, set explicitly — unsetting it no longer disables
    capture. Eager is valid for diagnostics, and is the only path that emits per-step trajectory
@@ -21,7 +21,7 @@ export DG_UPFRONT_CAPTURE=1                                                  # d
 export DG_UPFRONT_PREFILL_WARMUP_LENS=<all-admitted-aligned-prompt-lengths>  # required, no default
 export DG_TRACE_REGION_SIZE=<validated-positive-reservation>                 # required, no default
 export DG_DENOISE_REVEAL_PMAX=<positive-tile-aligned-served-cap>             # optional; derived from --max-model-len
-export DG_VLLM_GUMBEL_MODE=device                                            # default; `host` is the reference
+export DG_VLLM_GUMBEL_MODE=host                                              # default; `device` is faster but corrupts text
 export DG_VLLM_MAX_DENOISE_STEPS=48
 ```
 
@@ -38,11 +38,20 @@ Reserve it with `--additional-config` `tt.trace_region_size` and mirror the same
 and the derived value is logged; an explicit env value still wins, and both paths share the same
 validation (positive, tile-aligned, fits prompt + one canvas, within the allocated KV span).
 
-`DG_VLLM_GUMBEL_MODE=device` (the on-device permuted-vocab RNG) is a **distribution change, not a
-bit-exact swap** of the `host` IID full-vocabulary torch Gumbel; the sub-40 GPQA host-vs-device
-`MAX_GEN_TOKS=3072` re-gate is still outstanding. Set `DG_VLLM_GUMBEL_MODE=host` for the reference
-sampler when a run must be compared against host-Gumbel quality evidence. `chunked` and `argmax` are
-not materialized full-tensor sources and are rejected by the up-front controller.
+`DG_VLLM_GUMBEL_MODE` defaults to **`host`**, the IID full-vocabulary torch Gumbel. It was briefly
+`device` (the on-device permuted-vocab RNG) for the throughput that removing the per-step host RNG
+and its replicated PCIe copy buys; that is **reverted** — on a matched 4-seed A/B with one variable,
+`host` answered correctly 4/4 while `device` corrupted 2/4, producing garbled LaTeX
+(`6.558times`, `10^{-^{-}}`, `100^{-88`) and, in the served GPQA trace, a whole canvas of one
+repeated token.
+
+That is not a sampler bug. For the production noise shape `(1, 1, 256, vocab)` the permuted-vocab
+draw puts the **256 canvas positions on the `ttnn.rand` width axis**, where only 24 of every 32 row
+streams are distinct and the rest stay correlated in value, so positions pick the same token
+together. See `doc/decision_fidelity/gumbel_position_correlation.md` and the upstream regression
+`tests/ttnn/nightly/unit_tests/operations/rand/test_rand_independence.py`. `device` remains
+selectable for throughput work where the text is not the product. `chunked` and `argmax` are not
+materialized full-tensor sources and are rejected by the up-front controller.
 
 Server command requirements:
 

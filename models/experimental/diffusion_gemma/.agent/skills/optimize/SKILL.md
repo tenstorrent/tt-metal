@@ -27,7 +27,8 @@ Load `diffusion-gemma` first; it overrides the autoregressive assumptions below 
 ### Current benchmark guardrails (2026-07-22)
 
 - The traced vLLM profile is now the default: `DG_UPFRONT_CAPTURE` defaults to `1` and
-  `DG_VLLM_GUMBEL_MODE` defaults to `device`. Set `DG_UPFRONT_CAPTURE=0` only to fall back to eager,
+  `DG_VLLM_GUMBEL_MODE` defaults to `host` (`device` is faster but corrupts text — see
+  doc/decision_fidelity/gumbel_position_correlation.md). Set `DG_UPFRONT_CAPTURE=0` only to fall back to eager,
   which is what you need for per-step trajectory records that replayed traces do not produce. Device
   Gumbel is a distribution change, not bit-exact against host IID Gumbel, and the sub-40 GPQA
   host-vs-device @3072 re-gate is still outstanding: record the mode with every benchmark and use

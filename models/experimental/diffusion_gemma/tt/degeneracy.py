@@ -22,7 +22,12 @@ import os
 import torch
 
 POLICIES = ("off", "warn", "stop")
-DEFAULT_POLICY = "off"
+# `warn` measures every committed canvas and never changes behaviour, so a collapse shows up in
+# the log as it happens. `stop` additionally refuses to commit -- validated on device (4 seeds, 0
+# false positives, all still terminating naturally on EOS) but NOT the default: `max_run` has a
+# plausible false-positive surface in ordinary content (markdown rules, table separators, padding
+# in code blocks), and the degeneration is already fixed at the root by the `host` Gumbel default.
+DEFAULT_POLICY = "warn"
 # A healthy 256-token canvas of prose has well over 100 distinct ids and no long single-id run.
 # These bounds are deliberately far from healthy so the gate cannot fire on ordinary text; they
 # are calibrated in doc/decision_fidelity/degeneracy_calibration.md.
@@ -90,8 +95,12 @@ def is_degenerate(
     observed degenerate canvases collapse onto content ids instead (id 621 ' \\' and id 236770
     '1' for the GPQA physics prompt), so this exclusion does not weaken the gate.
     """
-    if stop_token_ids and stats.get("top_id") in set(stop_token_ids):
-        return False
+    if stop_token_ids is not None:
+        # Accept a bare id as well as a collection: sessions initialised from `eos_token_id`
+        # carry a scalar, and a TypeError here would surface as a failed generation.
+        benign = {int(stop_token_ids)} if isinstance(stop_token_ids, int) else {int(i) for i in stop_token_ids}
+        if benign and stats.get("top_id") in benign:
+            return False
     return stats["top_frac"] >= top_frac or stats["max_run"] >= max_run
 
 

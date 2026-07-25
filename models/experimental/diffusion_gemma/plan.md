@@ -34,7 +34,7 @@ baseline.
 1. **Metal trace (the default):** one model-lifetime, startup-captured path:
    `DG_UPFRONT_CAPTURE` now defaults to `1`, reveal masking with a tile-aligned
    `DG_DENOISE_REVEAL_PMAX` (optional — derived from the served bound when unset, see below),
-   on-device permuted-vocab Gumbel (`DG_VLLM_GUMBEL_MODE` now defaults to `device`), K=48, and
+   IID host Gumbel (`DG_VLLM_GUMBEL_MODE` defaults to `host`), K=48, and
    one-step/window early halt. The reveal, non-lazy capture, and window-1 early-halt behavior is
    intrinsic; it is not selected by additional environment flags. The startup trace/controller is
    rebound across requests and released only at model teardown.
@@ -67,12 +67,14 @@ not an additional trace type.
   an explicit tile-aligned value still wins, and both paths get identical validation
   (positive tile multiple, ≥ tile + one canvas, within the allocated KV span). With no explicit
   value *and* no `max_model_len` it still raises.
-- `DG_VLLM_GUMBEL_MODE` now defaults to `device` (the W4-validated on-device permuted-vocab RNG,
-  which removes the per-step host RNG and the replicated PCIe DMA). This is a **distribution
-  change, not a bit-exact swap** — defaulting it on was an explicit owner decision and the sub-40
-  GPQA host-vs-device `MAX_GEN_TOKS=3072` re-gate is still outstanding. Set
-  `DG_VLLM_GUMBEL_MODE=host` for the IID full-vocabulary torch Gumbel reference; `chunked` and
-  `argmax` remain unsupported under up-front capture.
+- `DG_VLLM_GUMBEL_MODE` defaults to `host`, the IID full-vocabulary torch Gumbel. It was `device`
+  (the on-device permuted-vocab RNG) from 2026-07-24 for the throughput that removing the per-step
+  host RNG and replicated PCIe DMA buys; **reverted 2026-07-25** — on a matched 4-seed A/B with one
+  variable, `host` answered correctly 4/4 while `device` corrupted 2/4. The cause is `ttnn.rand`,
+  which is not IID along the axis the permuted draw puts the 256 canvas positions on, so positions
+  pick the same token together; see `doc/decision_fidelity/degenerate_output_fix.md`. `device`
+  stays selectable for throughput work; `chunked` and `argmax` remain unsupported under up-front
+  capture.
 - Every admitted aligned prefill length must be known and compiled before capture. An unseen runtime
   shape is rejected rather than compiled while traces are resident.
 - Always pass `--generation-config vllm`, set `--max-num-batched-tokens` at least as large as the
