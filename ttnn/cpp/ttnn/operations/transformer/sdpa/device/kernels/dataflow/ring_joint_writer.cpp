@@ -892,11 +892,23 @@ void kernel_main() {
                             // Look up Q[0]'s q_chunk index (after remap for zigzag).
                             const uint32_t gq0 = remap_q_index(global_q_start, num_q_chunks, use_zigzag_balancing);
                             const uint32_t q_chunk_0 = gq0 % num_q_chunks;
-                            const uint32_t next_iter = ring_iter + 1;
-                            // Skip if next iter is zero-work for Q[0] OR if it's Q[0]'s first
-                            // work iter (no prior save to prefetch).
-                            do_cross_ring_prefetch =
-                                q_has_work(q_chunk_0, next_iter) && (next_iter != q_first_work_iter(q_chunk_0));
+                            // Q[0]'s restore lands on the next ACTIVE ring iter, not ring_iter+1:
+                            // the writer and compute `continue` past inactive iters (active_ring_iter_mask
+                            // bit clear — e.g. the all-OOB shard), so ring_iter+1 may be skipped entirely.
+                            // Gating the prefetch on ring_iter+1 then mis-fires when that iter is inactive
+                            // (its bitmap bit is 0): the prefetch is skipped, but the next active iter still
+                            // restores Q[0] via complete_restore, which then barriers on no reads and pushes
+                            // stale CB data — silently wiping the accumulator built up before the hole
+                            // (per-frame PCC drops on exactly the SP shards whose OOB iter is mid-sequence).
+                            uint32_t next_iter = ring_iter + 1;
+                            while (next_iter < ring_size && !((active_ring_iter_mask >> next_iter) & 1u)) {
+                                next_iter++;
+                            }
+                            // Skip if there is no next active iter, or that iter is zero-work for Q[0]
+                            // (compute's zero-work fast path won't consume the prefetched restore), or it
+                            // is Q[0]'s first work iter (no prior save exists yet to prefetch).
+                            do_cross_ring_prefetch = (next_iter < ring_size) && q_has_work(q_chunk_0, next_iter) &&
+                                                     (next_iter != q_first_work_iter(q_chunk_0));
                         }
                     }
                     if (do_cross_ring_prefetch) {
