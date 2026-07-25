@@ -27,15 +27,16 @@ _TP_SIZE = 4
 
 
 def _socket_config(mesh_shape: ttnn.MeshShape) -> ttnn.SocketConfig:
-    """Create the two physical fabric links available per LoudBox device.
+    """Create one rank-aligned fabric lane per LoudBox device.
 
-    A socket connection is instantiated for every matching TP rank below.  On
-    Blackhole LoudBox each rank has two fabric links, so using two worker-core
-    pairs saturates that available path; requesting one pair per TP rank would
-    incorrectly ask each device for four links.
+    This is the established 1x8-to-two-1x4 socket shape used by the CCL
+    send/receive test.  A single worker-core pair avoids the runtime warning
+    and fabric-resource ambiguity associated with multiple sender cores on a
+    device.  Striping the carry over the second physical link is deliberately
+    deferred until the single-lane functional path is measured.
     """
-    sender_cores = [ttnn.CoreCoord(x, 0) for x in range(2)]
-    receiver_cores = [ttnn.CoreCoord(x, 1) for x in range(2)]
+    sender_cores = [ttnn.CoreCoord(0, 0)]
+    receiver_cores = [ttnn.CoreCoord(0, 1)]
     connections = [
         ttnn.SocketConnection(ttnn.MeshCoreCoord(coord, sender), ttnn.MeshCoreCoord(coord, receiver))
         for coord in ttnn.MeshCoordinateRange(mesh_shape)
