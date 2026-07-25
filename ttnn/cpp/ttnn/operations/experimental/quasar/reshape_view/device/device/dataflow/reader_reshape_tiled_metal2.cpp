@@ -18,6 +18,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/debug/dprint.h"  // [#48552 DEBUG] reshape_tiled DM->DM root-cause
 #include "experimental/kernel_args.h"
 
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
@@ -43,6 +44,8 @@ void kernel_main() {
     DataflowBuffer mapping_cb(dfb::mapping);
     DataflowBuffer input_cb(dfb::input);
     bool first = true;
+    uint32_t dbg_pushes = 0;                                                       // [#48552 DEBUG]
+    DPRINT("RRD start op=[{},{})\n", start_output_page_idx, end_output_page_idx);  // [#48552 DEBUG]
     for (uint32_t out_page_idx = start_output_page_idx; out_page_idx < end_output_page_idx; ++out_page_idx) {
         mapping_cb.reserve_back(One_Tile_Reserve);
         const uint64_t map_noc_addr = map_addr_gen.get_noc_addr(out_page_idx);
@@ -75,6 +78,14 @@ void kernel_main() {
             previous_input_page_idx = input_page_idx;
             noc.async_read_barrier();
             input_cb.push_back(1);
+            DPRINT(
+                "RRD op={} push#{} in_pg={} waddr={}\n",
+                out_page_idx,
+                dbg_pushes,
+                input_page_idx,
+                input_write_addr);  // [#48552 DEBUG]
+            dbg_pushes++;
         }
     }
+    DPRINT("RRD END total_pushes={}\n", dbg_pushes);  // [#48552 DEBUG]
 }
