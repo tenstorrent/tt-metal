@@ -107,10 +107,11 @@ EXPECTED_METRICS_BATCH1: dict = {
         "accuracy": {},
     },
     "on_device_topk": {
-        # gate = best-of(TTTv1, TTTv2) per parity rule. Fresh same-box median-of-3 (with the FF-hidden
-        # DRAM-shard pad + fast_prefill_last_token wired this session): TTTv2 decode BEATS TTTv1 — perf
-        # 26.9 vs 25.88 (+3.9%), acc 22.6 vs 22.26 (+1.5%) → gate at the TTTv2 (better) value. ttft is a
-        # generous single-user ceiling above measured TTTv2 (perf ~101ms, acc ~117ms; b1 TTFT is noisy).
+        # gate = best-of(TTTv1, TTTv2) per parity rule. Fresh same-box median-of-3 (FF-hidden DRAM-shard
+        # pad + fast_prefill_last_token wired; minimal_matmul is INERT at the batch-1 seq128 bucket —
+        # gated seq_len>128 — so it does not affect b1): TTTv2 decode BEATS TTTv1 — perf 26.9 vs 25.06
+        # (+7.3%), acc 22.6 vs 21.59 (+4.7%) → gate at the TTTv2 (better) value. ttft is a generous
+        # single-user ceiling above measured TTTv2 (perf ~105ms, acc ~123ms; b1 TTFT is bimodal/noisy).
         "performance": {"T3K": {"tok_s_u": 26.9, "ttft_ms": 115}},
         "accuracy": {"T3K": {"tok_s_u": 22.6, "ttft_ms": 130}},
     },
@@ -145,11 +146,15 @@ EXPECTED_METRICS_BATCH32_CI: dict = {
     },
     "on_device_topk": {
         # gate = best-of, seq2048/decode1024 = the DIRECT TTTv1 ci-32 analog. Fresh same-box median-of-3
-        # (FF-hidden pad): TTTv2 decode BEATS TTTv1 — perf 25.3 vs 24.38 (+3.8%), acc 21.5 vs 20.35
-        # (+5.7%) → gate at the TTTv2 (better) value. ttft ceiling covers batched ON (~45-47ms) and
-        # DISABLE_BATCHED_PREFILL=1 sequential (~98ms). NOTE: batched-prefill TTFT (~45ms) exceeds TTTv1
-        # (~35ms) — the documented shared-engine batched-prefill fold residual (see perf_tables.md); the
-        # gated decode meets/beats TTTv1 and the ttft ceiling is cleared with margin.
+        # (FF-hidden pad + minimal_matmul): TTTv2 decode BEATS TTTv1 — perf 25.3 vs 23.99 (+5.5%), acc
+        # 21.5 vs 20.27 (+6.1%) → gate at the TTTv2 (better) value. ttft ceiling covers batched ON
+        # (~40-44ms with minimal_matmul) and DISABLE_BATCHED_PREFILL=1 sequential (~98ms), so it is NOT
+        # lowered to the batched number. NOTE: minimal_matmul (QKV+W2 prefill, enabled in model.py this
+        # round, mirrors qwen3_32b/deepseek) LOWERS the batched-prefill TTFT — perf 44.7→40.0ms (−10.5%),
+        # acc 47.4→43.6ms (−8.0%) via the DISABLE_MINIMAL_MATMUL=1 A/B — but the batched TTFT (~40/44ms)
+        # still exceeds TTTv1 (~35/41ms): the documented shared-engine batched-prefill fold residual on
+        # the 8-dev T3K mesh (family item — see perf_tables.md / the b32ci-prefill-ttft ticket). Gated
+        # decode meets/beats TTTv1 and the ttft ceiling is cleared with margin.
         "performance": {"T3K": {"tok_s_u": 25.3, "ttft_ms": 110}},
         "accuracy": {"T3K": {"tok_s_u": 21.5, "ttft_ms": 120}},
     },
