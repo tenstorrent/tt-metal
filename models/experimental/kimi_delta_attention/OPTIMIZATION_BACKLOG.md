@@ -86,6 +86,17 @@ are:
    slots exceeded L1, and all tested reverse ACK protocols deadlocked. Revisit
    only with receiver-owned stage storage or an existing point-to-point
    primitive whose synchronization is already validated.
+   - Receiver-owned experiment, 2026-07-25: a single 80-core persistent program
+     with one receiver-owned inbound slot and a global stage barrier passed
+     one through five stages, including T=5,120 TP output/recurrent/convolution
+     PCC `0.999958/0.999890/0.999997`. It therefore fixes the old four-stage
+     deadlock. Performance rejects it: ten measured T=5,120 replays had
+     `3302.103 us` median wall versus the retained `3259.500 us` endpoint
+     (`+42.603 us`, `+1.307%`). The prefix kernel itself costs `197.867 us`;
+     two summary scans, subtraction, grouped final scan, and the standalone RMS
+     boundary leave no net reward. Do not optimize this prefix in isolation.
+     Any retry must fuse summary construction and/or prefix correction into the
+     grouped recurrence.
 
 After these, resume the broader queue:
 

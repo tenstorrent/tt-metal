@@ -1784,3 +1784,45 @@
 - Verdict: retain. The gain is reproducible and above the requested `0.1%`
   whole-layer threshold, but it is a micro-optimization, not a material change
   to the roofline. The FP32 DRAM intermediate is no longer transferred.
+
+
+### 2026-07-25 00:24 UTC — Reject isolated receiver-owned affine prefix
+
+- Hypothesis: replace the failed sender-owned stage protocol with one
+  receiver-owned inbound `(A,B)` slot per core and a global barrier between
+  Hillis-Steele stages. This should remove the four-stage deadlock without
+  exceeding L1 and reduce the serial 160-chunk scan dependency chain.
+- Implementation tested: one persistent worker per eight-chunk group (80 cores
+  at T=5,120), compute-owned A/B ping-pong, one receiver-owned inbound A/B
+  slot, sender flush-before-ready, and a global stage barrier before slot reuse.
+  The surrounding oracle used the existing two group-summary scans plus
+  subtraction, then an eight-chunk grouped final scan.
+- Host build: `./build_metal.sh --build-tests --build-type Release` -> PASS.
+- Progressive hardware gates: T=512 (one stage) passed direct output/state PCC
+  `0.999991/0.999993`; TP=8 T=1,024, 2,048, 3,072, and 5,120 all passed.
+  T=5,120 output/recurrent/convolution PCC was
+  `0.999958/0.999890/0.999997`, identical to the retained endpoint. The
+  four-stage T=3,072 pass rejects stage depth as the cause of the earlier
+  sender-owned deadlock; unsafe sender slot reuse was the differentiator.
+- Integration diagnosis: the first profiler attempt segfaulted because the
+  grouped scan returned two tensors while the fused-RMS caller indexed
+  `scan[2]`. A standalone gated-RMS result restored the public return contract;
+  rebuilt T=5,120 PCC then passed unchanged. This was a host integration bug,
+  not a device protocol hang.
+- Performance command: `QWEN_KDA_GROUP_PREFIX_PERSISTENT=1 PERF_TRACE=1
+  PERF_SEQ=5120 PERF_REPS=10 scripts/run_safe_pytest.sh --profile --run-all
+  models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py
+  -q -s` -> PASS. CSV
+  `generated/profiler/reports/2026_07_25_00_23_43/ops_perf_results_2026_07_25_00_23_43.csv`,
+  SHA-256 `dfdbae7cd91373b81dce8ce502d9e1cc4c56439679e71b64c8b0ab55d0ba9ab9`.
+- Sessions 2-11 slowest-device spans were `[3296.615, 3305.999, 3306.177,
+  3310.197, 3297.297, 3291.047, 3309.246, 3298.207, 3297.561, 3307.103] us`;
+  median `3302.103 us`. Against retained `3259.500 us`, wall regresses
+  `42.603 us` (`1.307%`). The affine-prefix kernel median is `197.867 us`;
+  grouped scans total `249.170 us`, standalone gated RMS is `84.584 us`, and
+  prep remains `305.979 us`.
+- Verdict: reject and fully remove the spike. The protocol is correct but an
+  isolated prefix is not profitable. A retry must first fuse summary
+  construction with the prefix owner or fuse prefix correction into the
+  grouped recurrence; optimizing this 197.867 us kernel alone cannot recover
+  the surrounding materialization and launch costs.
