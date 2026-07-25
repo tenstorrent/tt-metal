@@ -2673,6 +2673,25 @@ def new_mode_flow(
     )
 
 
+def _raise_nproc_soft_limit() -> None:
+    """Raise this process's max-processes/threads (nproc) soft limit to the hard limit.
+
+    The mpirun the launcher spawns (and every rank under it) inherits this. Fresh login sessions often set a
+    low soft nproc (e.g. 512) with a high hard limit; launching many mock ranks then exhausts it and thread
+    creation fails at startup -- 'pmix_progress_thread_start failed' (MPI_Init abort) or
+    'OpenBLAS ... pthread_create failed'. Raising soft to hard is unprivileged and safe.
+    """
+    try:
+        import resource
+
+        soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
+        if hard == resource.RLIM_INFINITY or soft < hard:
+            resource.setrlimit(resource.RLIMIT_NPROC, (hard, hard))
+            logger.debug(f"{TT_RUN_PREFIX} Raised RLIMIT_NPROC soft limit {soft} -> {hard} for MPI/PMIx headroom")
+    except (ImportError, ValueError, OSError) as e:
+        logger.debug(f"{TT_RUN_PREFIX} Could not raise RLIMIT_NPROC soft limit: {e}")
+
+
 @click.command(
     context_settings=dict(
         ignore_unknown_options=True,
@@ -2825,6 +2844,8 @@ def main(
     if not verbose:
         logger.remove()
         logger.add(sys.stderr, level="INFO")
+
+    _raise_nproc_soft_limit()
 
     # Check for mutually exclusive options
     specified = sum(x is not None for x in [rank_binding, rank_bindings_mapping, mesh_graph_descriptor])

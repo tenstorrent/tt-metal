@@ -21,6 +21,7 @@ tools/scaleout/README_sweep_rank_binding_solutions.md for the full design.
 import os
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -42,6 +43,9 @@ from ttnn.distributed.ttrun import (
 PREFIX = "[tt-sweep]"
 POLL_INTERVAL_S = 1.0  # how often the consumer re-reads the index / polls the running workload
 HEARTBEAT_INTERVAL_S = 15.0  # periodic status while waiting on the producer or a long-running workload
+# Give up searching for the NEXT solution if the producer goes this long without emitting one; the remaining
+# solutions are treated as "too difficult to find" and the search is stopped (already-found ones still run).
+DEFAULT_SOLUTION_SEARCH_TIMEOUT_S = 900.0  # 15 minutes
 
 
 # ─────────────────────────────── reused helpers (from v1) ────────────────────────────────
@@ -49,6 +53,25 @@ HEARTBEAT_INTERVAL_S = 15.0  # periodic status while waiting on the producer or 
 
 def _repo_root() -> Path:
     return Path(os.environ.get("TT_METAL_HOME", ".")).resolve()
+
+
+def _raise_nproc_limit() -> Optional[Tuple[int, int]]:
+    """Raise this process's max-processes/threads (nproc) soft limit to the hard limit.
+
+    Child processes (the producer's mpirun and each workload) inherit it. Under a low soft nproc limit
+    (e.g. 512) MPI/PMIx and the numeric libs fail to create threads once the user's baseline thread count
+    exceeds it -- 'pmix_progress_thread_start failed' at MPI_Init, or 'OpenBLAS ... pthread_create failed'.
+    Returns (old_soft, new_soft) if changed, else None."""
+    try:
+        import resource
+
+        soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
+        if hard != resource.RLIM_INFINITY and soft >= hard:
+            return None
+        resource.setrlimit(resource.RLIMIT_NPROC, (hard, hard))
+        return soft, hard
+    except (ImportError, ValueError, OSError):
+        return None
 
 
 def _find_tt_run() -> str:
@@ -149,10 +172,33 @@ def _build_generate_cmd(
 
 
 def _start_producer(cmd: List[str], cwd: Path, log_path: Path) -> subprocess.Popen:
-    """Launch generation in the background; its stdout+stderr stream to generate.log."""
+    """Launch generation in the background; its stdout+stderr stream to generate.log.
+
+    Runs in its own session (setsid) so the whole mpirun process tree can be reaped as a group if we
+    have to stop the search early (e.g. the search timeout)."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_fh = open(log_path, "w")
-    return subprocess.Popen(cmd, cwd=cwd, stdout=log_fh, stderr=subprocess.STDOUT)
+    return subprocess.Popen(cmd, cwd=cwd, stdout=log_fh, stderr=subprocess.STDOUT, start_new_session=True)
+
+
+def _stop_producer(producer: subprocess.Popen, *, grace_s: float = 10.0) -> None:
+    """Terminate the producer and its whole process group (mpirun + mock ranks), escalating to SIGKILL."""
+    if producer.poll() is not None:
+        return
+    try:
+        pgid = os.getpgid(producer.pid)
+    except ProcessLookupError:
+        return
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pgid, sig)
+        except ProcessLookupError:
+            return
+        try:
+            producer.wait(timeout=grace_s)
+            return
+        except subprocess.TimeoutExpired:
+            continue
 
 
 # ─────────────────────────────── v2: index (the handoff) ─────────────────────────────────
@@ -196,6 +242,24 @@ def _write_run_sh(sol_dir: Path, tt_run_cmd: List[str], env: Dict[str, str], sol
     ]
     for k in sorted(env):
         lines.append(f"export {k}={shlex.quote(env[k])}")
+    lines += [
+        "",
+        "# --- Raise the max processes/threads (nproc) soft limit to the hard limit ---",
+        "# MPI/PMIx and the numeric libs each create threads at startup. Under a low soft nproc limit (e.g. 512)",
+        "# pthread_create fails once the user's baseline thread count exceeds it, surfacing as",
+        "# 'pmix_progress_thread_start failed' (MPI_Init abort) or 'OpenBLAS ... pthread_create failed'.",
+        'ulimit -Su "$(ulimit -Hu)" 2>/dev/null || ulimit -u unlimited 2>/dev/null || true',
+        "",
+        "# --- BLAS/OpenMP thread caps (override by exporting these before running) ---",
+        "# tt-run imports ttnn -> tools/tracy -> seaborn -> scipy, which pulls in OpenBLAS. OpenBLAS otherwise",
+        "# spawns one thread per core; under the MPI-imposed RLIMIT_NPROC that can exhaust the process limit and",
+        "# fail with 'pthread_create failed ... Resource temporarily unavailable' (surfacing as an ImportError or",
+        "# a SIGSEGV). tt-run does no heavy BLAS, so 1 thread is plenty.",
+        'export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"',
+        'export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"',
+        'export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"',
+        'export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-1}"',
+    ]
     if "TT_METAL_HOME" in env:
         lines += ["", 'cd "$TT_METAL_HOME"']
     lines += [
@@ -279,12 +343,16 @@ def _sweep_interleaved(
     limit: Optional[int],
     stop_on_failure: bool,
     per_solution_timeout: Optional[int],
+    solution_search_timeout: Optional[float],
     interleave: bool,
     dry_run: bool,
     report_meta: dict,
     report_path: Path,
-) -> List[dict]:
-    """The single control loop: one producer + one consumer, coordinated through solutions_index.yaml."""
+) -> Tuple[List[dict], dict]:
+    """The single control loop: one producer + one consumer, coordinated through solutions_index.yaml.
+
+    Returns (results, outcome). ``outcome`` records why the search ended: search_timed_out / exhausted /
+    capped, plus the number of solutions found -- used by the caller for the final message and exit code."""
     index_path = solutions_dir / "solutions_index.yaml"
     env = _env_snapshot()
 
@@ -297,6 +365,8 @@ def _sweep_interleaved(
     stop = False
     t0 = time.time()
     last_heartbeat = t0
+    last_solution_time = t0  # updated whenever a new solution appears; drives the search timeout
+    search_timed_out = False  # set if the producer went too long without a new solution
 
     def rel() -> str:
         return f"+{int(time.time() - t0):03d}s"
@@ -311,6 +381,7 @@ def _sweep_interleaved(
         _write_report(report_path, report_meta, [results[i] for i in order if i in results], trunc)
 
     def ingest_index() -> None:
+        nonlocal last_solution_time
         idx = _read_index(index_path)
         if not idx:
             return
@@ -324,6 +395,7 @@ def _sweep_interleaved(
             sols[sid] = sol
             order.append(sid)
             queue.append(sid)
+            last_solution_time = time.time()  # progress: reset the "search for next solution" timeout
             hs = sol.get("host_set") or []
             preview = ",".join(hs[:6]) + (f" …(+{len(hs) - 6})" if len(hs) > 6 else "")
             echo(
@@ -455,25 +527,47 @@ def _sweep_interleaved(
             )
             return
         if producer_alive():
+            waited = int(now - last_solution_time)
+            budget = f", {waited}s/{int(solution_search_timeout)}s search budget" if solution_search_timeout else ""
             if order:
                 echo(
                     "gen",
                     f"waiting for next solution   (found {len(order)}, tested {len(results)},"
-                    f" queued {len(queue)}, producer running)",
+                    f" queued {len(queue)}, producer running{budget})",
                 )
             else:
                 echo(
                     "gen",
-                    "waiting for first solution from producer" f"   (see {solutions_dir / 'sweep' / 'generate.log'})",
+                    "waiting for first solution from producer"
+                    f"   (see {solutions_dir / 'sweep' / 'generate.log'}{budget})",
                 )
         elif not order:
             echo("gen", "producer exited before any solution appeared in solutions_index.yaml")
+
+    def search_timed_out_now() -> bool:
+        """True once the producer has gone longer than the search timeout without emitting a new solution."""
+        return (
+            solution_search_timeout is not None
+            and producer_alive()
+            and (time.time() - last_solution_time) > solution_search_timeout
+        )
 
     # ── main loop ───────────────────────────────────────────────────────────────────────
     while True:
         ingest_index()
         if stop:
             break
+        # Give up searching for the next solution if the producer has stalled too long. Already-found
+        # solutions still run: we only stop the producer, then let the queue drain below.
+        if search_timed_out_now():
+            search_timed_out = True
+            mins = solution_search_timeout / 60.0
+            echo(
+                "gen",
+                f"⏱ no new solution for {mins:.0f} min — stopping the search; remaining solutions were "
+                f"too difficult to find (found {len(order)} so far). Draining {len(queue)} queued.",
+            )
+            _stop_producer(producer)
         # launch when idle; in --no-interleave, hold until the producer has fully finished
         if running is None and queue and (interleave or not producer_alive()):
             launch_next()
@@ -484,19 +578,30 @@ def _sweep_interleaved(
             break
         time.sleep(POLL_INTERVAL_S)
 
-    # stop-on-failure (or reaching --limit) ⇒ kill the still-running producer
+    # stop-on-failure / --limit / search-timeout ⇒ reap the still-running producer (whole group)
     if producer_alive():
-        producer.terminate()
-        try:
-            producer.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            producer.kill()
+        _stop_producer(producer)
     if running is not None:  # stop_on_failure left a workload mid-flight
         running["proc"].wait()
         running["log_fh"].close()
 
-    flush_report(trunc=(limit is not None and len(order) >= limit))
-    return [results[i] for i in order if i in results]
+    limit_reached = limit is not None and len(order) >= limit
+    capped = bool((_read_index(index_path) or {}).get("truncated"))
+    outcome = {
+        "found": len(order),
+        "tested": len(results),
+        "search_timed_out": search_timed_out,
+        "stopped_on_failure": stop,
+        "limit_reached": limit_reached,
+        # "capped": producer hit --max-solutions; "exhausted": producer finished the whole space on its own.
+        "capped": not search_timed_out and not stop and not limit_reached and capped,
+        "exhausted": (
+            not search_timed_out and not stop and not limit_reached and not capped and producer.poll() is not None
+        ),
+        "producer_rc": producer.poll(),
+    }
+    flush_report(trunc=limit_reached)
+    return [results[i] for i in order if i in results], outcome
 
 
 # ─────────────────────────────── CLI ─────────────────────────────────────────────────────
@@ -563,6 +668,13 @@ def _sweep_interleaved(
 @click.option("--limit", type=int, default=None, help="Sweep at most the first N solutions (index order).")
 @click.option("--per-solution-timeout", type=int, default=None, help="Kill a launch after N seconds (=> timeout).")
 @click.option(
+    "--solution-search-timeout",
+    type=float,
+    default=DEFAULT_SOLUTION_SEARCH_TIMEOUT_S,
+    help="Stop the search if the producer goes this many seconds without finding a new solution "
+    "(default 900 = 15 min; 0 disables). Already-found solutions still run.",
+)
+@click.option(
     "--stop-on-failure/--continue-on-failure",
     default=False,
     help="Stop the sweep (and generation) on the first failing solution (default: continue).",
@@ -594,6 +706,7 @@ def main(
     allow_shape_permutations,
     limit,
     per_solution_timeout,
+    solution_search_timeout,
     stop_on_failure,
     interleave,
     dry_run,
@@ -665,6 +778,10 @@ def main(
         + ")"
     )
 
+    raised = _raise_nproc_limit()
+    if raised is not None:
+        click.echo(f"{PREFIX} │ nproc limit  : raised soft {raised[0]} → {raised[1]} (MPI/PMIx + BLAS thread headroom)")
+
     producer = _start_producer(gen_cmd, cwd=_repo_root(), log_path=generate_log)
     click.echo(f"{PREFIX} └ producer pid {producer.pid}  →  log {generate_log}")
 
@@ -673,7 +790,8 @@ def main(
         "workload_command": " ".join(shlex.quote(p) for p in program),
         "solutions_dir": str(out),
     }
-    results = _sweep_interleaved(
+    search_timeout = solution_search_timeout if solution_search_timeout and solution_search_timeout > 0 else None
+    results, outcome = _sweep_interleaved(
         producer=producer,
         solutions_dir=out,
         tt_run=tt_run,
@@ -684,6 +802,7 @@ def main(
         limit=limit,
         stop_on_failure=stop_on_failure,
         per_solution_timeout=per_solution_timeout,
+        solution_search_timeout=search_timeout,
         interleave=interleave,
         dry_run=dry_run,
         report_meta=report_meta,
@@ -695,6 +814,22 @@ def main(
     failed = sum(r["status"] == "fail" for r in results)
     timed_out = sum(r["status"] == "timeout" for r in results)
     click.echo(f"\n{PREFIX} ┌ SUMMARY  {passed}/{len(results)} passed · {failed} failed · {timed_out} timed out")
+    # Why did the search end?
+    if outcome.get("search_timed_out"):
+        mins = search_timeout / 60.0 if search_timeout else 0
+        click.echo(
+            f"{PREFIX} │ SEARCH   stopped after {mins:.0f} min with no new solution — remaining solutions "
+            f"were too difficult to find ({outcome['found']} found)."
+        )
+    elif outcome.get("exhausted"):
+        click.echo(f"{PREFIX} │ SEARCH   search space exhausted — all {outcome['found']} solution(s) found and swept.")
+    elif outcome.get("capped"):
+        click.echo(
+            f"{PREFIX} │ SEARCH   reached the --max-solutions cap ({outcome['found']} found; "
+            f"more solutions may exist)."
+        )
+    elif outcome.get("limit_reached"):
+        click.echo(f"{PREFIX} │ SEARCH   reached the --limit of {limit} ({outcome['found']} found).")
     for r in results:
         if r["status"] not in ("pass", "dry-run"):
             click.echo(

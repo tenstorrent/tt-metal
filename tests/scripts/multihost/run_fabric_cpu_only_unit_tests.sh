@@ -13,7 +13,8 @@
 #     Runs one group only (same as a single CI matrix job).
 #     Groups: unit, phys-grouping, control-plane, t3k, wh-galaxy,
 #       bh-6u, bh-single-galaxy, bh-dual-galaxy,
-#       bh-subtorus, bh-subtorus-sc16, bh-subtorus-sc20, bh-sp4-glx, bh-blitz-decode, bh-pod-pipeline, bh-ring-stress, bh-misc
+#       bh-subtorus, bh-subtorus-sc16, bh-subtorus-sc20, bh-sp4-glx, bh-blitz-decode, bh-pod-pipeline, bh-ring-stress,
+#       bh-pipeline-sweep, bh-misc
 #
 #   Parallel (all groups at once):
 #     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --parallel
@@ -68,6 +69,12 @@ cd "$REPO_ROOT"
 if [[ -z "${TT_METAL_HOME:-}" ]]; then
   export TT_METAL_HOME="$REPO_ROOT"
 fi
+
+# Raise the max processes/threads (nproc) soft limit to the hard limit. Fresh login sessions often default
+# to a low soft nproc (e.g. 512) with a high hard limit; launching many mock ranks then exhausts it and
+# thread creation fails at startup -- "pmix_progress_thread_start failed" (MPI_Init abort) or
+# "OpenBLAS ... pthread_create failed". Child tt-run/mpirun/rank processes inherit this. Unprivileged + safe.
+ulimit -Su "$(ulimit -Hu)" 2>/dev/null || ulimit -u unlimited 2>/dev/null || true
 
 if [[ -z "${DONT_USE_VIRTUAL_ENVIRONMENT:-}" && -f "${REPO_ROOT}/python_env/bin/activate" ]]; then
   # shellcheck disable=SC1091
@@ -137,6 +144,17 @@ MGD_BLITZ_96="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_96s
 MGD_BLITZ_112="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_112stage_mesh_graph_descriptor.textproto"
 MGD_BLITZ_128="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_128stage_mesh_graph_descriptor.textproto"
 MGD_BLITZ_144="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_144stage_mesh_graph_descriptor.textproto"
+
+# --- Pipeline-sweep MGDs (generated) ---------------------------------------
+# Ring-pipeline MGDs swept on the SC36 mock by the bh-pipeline-sweep group. Regenerate with:
+#   python3 tests/scripts/multihost/gen_pipeline_sweep_mgds.py
+# 2x4 = device [4,2] RING,LINE (8 ASICs/stage, single-host, no pinnings).
+# 4x4 = device [4,4] RING,RING, alternating single-host [1,1] / split-host [2,1] with corner pinnings
+#       (16 ASICs/stage). The largest ring of each shape exactly fills the 1152-ASIC SC36 mock
+#       (144 x 8 = 72 x 16 = 1152). Files: ${MGD_PIPELINE_SWEEP}/sweep_<shape>_pipeline_<N>stage_*.textproto
+MGD_PIPELINE_SWEEP="${MGD_CUSTOM}/pipeline_sweep"
+PIPELINE_SWEEP_2X4_STAGES="16 32 64 80 96 112 128 144"
+PIPELINE_SWEEP_4X4_STAGES="8 16 32 40 48 56 64 72"
 
 GTEST_GALAXY_LAYOUT_CHECK="ControlPlaneFixture.TestGalaxyLayoutCheck"
 GTEST_GALAXY_4X4_SPLIT_HOST_LAYOUT_CHECK="ControlPlaneFixture.TestGalaxy4x4SplitHostLayoutCheck"
@@ -236,7 +254,7 @@ done
 
 CURRENT_GROUP="$GROUP"
 
-VALID_GROUPS="all unit phys-grouping control-plane t3k wh-galaxy bh-6u bh-single-galaxy bh-dual-galaxy bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-misc"
+VALID_GROUPS="all unit phys-grouping control-plane t3k wh-galaxy bh-6u bh-single-galaxy bh-dual-galaxy bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-pipeline-sweep bh-misc"
 if ! echo "$VALID_GROUPS" | tr ' ' '\n' | grep -qx "$GROUP"; then
   echo "Invalid --group value '$GROUP'. Valid groups: $VALID_GROUPS" >&2; exit 1
 fi
@@ -248,7 +266,8 @@ if [[ "$GROUP" == "all" && "$PARALLEL" -eq 1 ]]; then
   GROUPS=(
     unit phys-grouping control-plane t3k wh-galaxy
     bh-6u bh-single-galaxy bh-dual-galaxy
-    bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-misc
+    bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress
+    bh-pipeline-sweep bh-misc
   )
   tmpdir=$(mktemp -d)
   trap 'rm -rf "$tmpdir"' EXIT
@@ -690,6 +709,53 @@ for entry in \
 done
 
 fi # bh-ring-stress
+
+######################################
+# BH Galaxy: multi-solution rank-binding sweep (LONG RUNNING -- own group)
+# For each generated pipeline MGD, enumerate 20 rank-binding solutions on the 36-host SC36 revC
+# subtorus aisleD mock and run TestBlitzDecodePipelineBuilder on every solution. This exercises the
+# topology mapper across many distinct valid placements per topology (not just the first solution),
+# over two shapes and a range of ring lengths:
+#   2x4 (device [4,2], 8 ASICs/stage): 16 32 64 80 96 112 128 144 stages (up to full 1152-ASIC SC36)
+#   4x4 (device [4,4], 16 ASICs/stage, alternating single-host/split-host + pinnings): 8 16 32 40 48 56 64 72 stages
+# 16 MGDs x 20 solutions = 320 mapping/workload runs, so this is opt-in (own group, not in CI yaml).
+######################################
+if run_group "bh-pipeline-sweep"; then
+
+PIPELINE_SWEEP_SOLUTIONS=20
+PIPELINE_SWEEP_MOCK="${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}"
+PIPELINE_SWEEP_OUT="generated/ttrun/pipeline_sweep"
+
+# Workload per solution: just the pipeline-builder check (no layout-check prerequisite for now).
+PIPELINE_SWEEP_WORKLOAD_FILTER="ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
+
+# Cap BLAS/OpenMP threads. The tt-run launcher imports ttnn -> tools/tracy -> seaborn -> scipy,
+# which pulls in OpenBLAS; OpenBLAS otherwise spawns one thread per core (64 here). With the many
+# mock ranks running under the MPI-imposed RLIMIT_NPROC (512) that exhausts the process limit and
+# pthread_create fails ("OpenBLAS blas_thread_init: pthread_create failed ... Resource temporarily
+# unavailable"), which surfaces as an ImportError on ttnn._ttnn. Setting these caps in the sweep's
+# environment covers the tt-run driver (child inherits env); repeating them after '--' covers the
+# per-rank workload processes too.
+PIPELINE_SWEEP_THREAD_CAPS="OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1"
+
+# shape|space-separated stage counts
+for entry in \
+    "2x4|${PIPELINE_SWEEP_2X4_STAGES}" \
+    "4x4|${PIPELINE_SWEEP_4X4_STAGES}" ; do
+  shape="${entry%%|*}"; stages="${entry#*|}"
+  for stage in ${stages}; do
+    mgd="${MGD_PIPELINE_SWEEP}/sweep_${shape}_pipeline_${stage}stage_mesh_graph_descriptor.textproto"
+    run_test env TT_METAL_SLOW_DISPATCH_MODE=1 ${PIPELINE_SWEEP_THREAD_CAPS} python_env/bin/python3 tools/scaleout/sweep_rank_binding_solutions.py \
+      --mesh-graph-descriptor "${mgd}" \
+      --mock-cluster-rank-binding "${PIPELINE_SWEEP_MOCK}" \
+      --max-solutions "${PIPELINE_SWEEP_SOLUTIONS}" \
+      --solutions-output-dir "${PIPELINE_SWEEP_OUT}/${shape}_${stage}stage" \
+      --mpi-args "--allow-run-as-root --oversubscribe" \
+      -- env TT_METAL_SLOW_DISPATCH_MODE=1 ${PIPELINE_SWEEP_THREAD_CAPS} ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${PIPELINE_SWEEP_WORKLOAD_FILTER}"
+  done
+done
+
+fi # bh-pipeline-sweep
 
 ######################################
 # BH Galaxy: pod pipeline MGDs (TestGalaxyLayoutCheck + TestGalaxyCornerPins)

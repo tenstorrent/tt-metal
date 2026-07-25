@@ -229,8 +229,13 @@ void serialize_asic_to_fabric_node_mapping_to_file(
     const auto& mesh_graph = topology_mapper.get_mesh_graph();
     const auto& physical_system_descriptor = topology_mapper.get_physical_system_descriptor();
 
-    // Structure: hostname -> mesh_id -> umd_chip_id -> {asic_position, fabric_node_id, asic_id}
+    // Structure: hostname -> mesh_id -> fabric chip_id -> {umd_chip_id, asic_position, fabric_node_id, asic_id}.
+    // The inner map is keyed by the mesh-unique fabric chip_id (NOT umd_chip_id): a single mesh can span two
+    // host ranks that share a hostname (e.g. a [2,1] split-host mesh co-located on one mock galaxy), and each
+    // host rank reuses umd_chip_ids 0..N-1. Keying by umd_chip_id then collides and emplace() silently drops
+    // the second host rank's chips. Fabric chip_ids are unique within a mesh, so keying by them keeps every chip.
     struct AsicMapping {
+        ChipId umd_chip_id;
         tt::tt_metal::TrayID tray_id;
         tt::tt_metal::ASICLocation asic_location;
         FabricNodeId fabric_node_id;
@@ -259,9 +264,10 @@ void serialize_asic_to_fabric_node_mapping_to_file(
                 HostName hostname =
                     hostname_for_mapping_export(topology_mapper.get_hostname_for_fabric_node_id(fabric_node_id));
 
-                // Add to the mapping structure, indexed by umd_chip_id (physical chip ID)
-                AsicMapping mapping{tray_id, asic_location, fabric_node_id, asic_id};
-                mappings_by_host_mesh_and_chip[hostname][mesh_id].emplace(umd_chip_id, mapping);
+                // Add to the mapping structure, keyed by the mesh-unique fabric chip_id (see note above).
+                AsicMapping mapping{umd_chip_id, tray_id, asic_location, fabric_node_id, asic_id};
+                mappings_by_host_mesh_and_chip[hostname][mesh_id].emplace(
+                    static_cast<ChipId>(fabric_node_id.chip_id), mapping);
             } catch (...) {
                 // Skip unmapped fabric nodes
                 continue;
@@ -306,13 +312,14 @@ void serialize_asic_to_fabric_node_mapping_to_file(
             emitter << YAML::Key << "chips";
             emitter << YAML::Value << YAML::BeginSeq;
 
-            // Emit each umd_chip_id mapping (physical chip ID)
-            for (const auto& [umd_chip_id, mapping] : chip_mappings) {
+            // Emit each chip mapping (map is ordered by fabric chip_id; umd_chip_id lives in the value)
+            for (const auto& chip_entry : chip_mappings) {
+                const AsicMapping& mapping = chip_entry.second;
                 emitter << YAML::BeginMap;
 
                 // Emit umd_chip_id field
                 emitter << YAML::Key << "umd_chip_id";
-                emitter << YAML::Value << umd_chip_id;
+                emitter << YAML::Value << mapping.umd_chip_id;
 
                 // Emit asic_position
                 emitter << YAML::Key << "asic_position";
