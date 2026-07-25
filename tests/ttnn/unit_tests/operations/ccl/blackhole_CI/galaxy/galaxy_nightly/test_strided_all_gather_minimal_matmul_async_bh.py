@@ -84,6 +84,11 @@ def create_fabric_router_config(max_payload_size):
     ids=["fused"],
 )
 @pytest.mark.parametrize(
+    "use_ternary",
+    [False, True],
+    ids=["no_ternary", "ternary"],
+)
+@pytest.mark.parametrize(
     "read_local_slice_from_input",
     [
         True,
@@ -129,6 +134,7 @@ def test_strided_all_gather_minimal_matmul_async(
     subblock_w,
     mm_core_grid,
     use_non_fused,
+    use_ternary,
     shard_weights,
     ag_offset,
     read_local_slice_from_input,
@@ -165,6 +171,7 @@ def test_strided_all_gather_minimal_matmul_async(
         subblock_w=subblock_w,
         mm_core_grid=mm_core_grid,
         use_non_fused=use_non_fused,
+        use_ternary=use_ternary,
         shard_weights=shard_weights,
         ag_core_grid_offset=ag_offset,
         read_local_slice_from_input=read_local_slice_from_input,

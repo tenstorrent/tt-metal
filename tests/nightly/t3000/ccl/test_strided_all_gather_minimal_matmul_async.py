@@ -54,6 +54,8 @@ def run_strided_all_gather_minimal_matmul_impl(
     skip_check=False,
     num_l1_banks=64,
     use_bias=False,
+    use_ternary=False,
+    ternary_scalar=0.5,
     activation=None,
     math_fidelity=ttnn.MathFidelity.HiFi2,
     fp32_acc=True,
@@ -112,10 +114,16 @@ def run_strided_all_gather_minimal_matmul_impl(
     input_tensor_mesh_list = []
     weight_tensor_mesh_list = []
     bias_tensor_mesh_list = []
+    ternary_a_tensor_mesh_list = []
+    ternary_b_tensor_mesh_list = []
     ag_output_tensor_goldens_list = []
     torch_matmul_output_list = []
 
     shard_dims = [other_dim, dim]
+    if use_ternary:
+        assert (
+            not use_non_fused
+        ), "ternary (addcmul) is only wired into the fused strided_all_gather_minimal_matmul path"
     for i in range(num_iters):
         torch_dtype = torch.float32
         ag_output_tensor = torch.randn(ag_output_shape, dtype=torch_dtype)
@@ -165,12 +173,46 @@ def run_strided_all_gather_minimal_matmul_impl(
         weight_tensor_mesh_list.append(weight_tensor_mesh)
         bias_tensor_mesh_list.append(bias_tensor_mesh)
 
+        if use_ternary:
+            # addcmul: out = ternary_a + scalar * matmul_out * ternary_b.
+            # ternary_a is output-shaped [1, 1, M, N], sharded like the matmul output (M on other_dim, N like
+            # the weight); ternary_b is [1, 1, 1, N] and broadcasts over M (replicated like bias).
+            ternary_a_input = torch.randn((1, 1, M, N), dtype=torch_dtype)
+            ternary_b_input = torch.randn((1, 1, 1, N), dtype=torch_dtype)
+            ternary_a_tensor_mesh = ttnn.from_torch(
+                ternary_a_input,
+                device=mesh_device,
+                layout=layout,
+                dtype=ag_input_dtype,
+                memory_config=mem_config_input,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, dims=[other_dim, dim if shard_weights else None], mesh_shape=tuple(mesh_device.shape)
+                ),
+            )
+            ternary_b_tensor_mesh = ttnn.from_torch(
+                ternary_b_input,
+                device=mesh_device,
+                layout=layout,
+                dtype=ag_input_dtype,
+                memory_config=mem_config_input,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, dims=[None, dim if shard_weights else None], mesh_shape=tuple(mesh_device.shape)
+                ),
+            )
+        else:
+            ternary_a_tensor_mesh = None
+            ternary_b_tensor_mesh = None
+        ternary_a_tensor_mesh_list.append(ternary_a_tensor_mesh)
+        ternary_b_tensor_mesh_list.append(ternary_b_tensor_mesh)
+
         if use_bias:
             matmul_output = torch.nn.functional.linear(
                 ag_output_tensor_goldens_list[i], weight_input.T.contiguous(), bias_input
             )
         else:
             matmul_output = torch.matmul(ag_output_tensor_goldens_list[i], weight_input)
+        if use_ternary:
+            matmul_output = ternary_a_input + ternary_scalar * matmul_output * ternary_b_input
         torch_matmul_output_list.append(matmul_output)
 
     ### Create persistent output buffers
@@ -257,6 +299,9 @@ def run_strided_all_gather_minimal_matmul_impl(
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=num_buffers_per_channel,
                 read_local_slice_from_input=read_local_slice_from_input,
+                fused_ternary_input_a=ternary_a_tensor_mesh_list[i] if use_ternary else None,
+                fused_ternary_input_b=ternary_b_tensor_mesh_list[i] if use_ternary else None,
+                fused_ternary_scalar=ternary_scalar if use_ternary else None,
             )
         return tt_all_gather_out_tensor, tt_matmul_out_tensor
 
