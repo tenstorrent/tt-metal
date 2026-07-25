@@ -7,7 +7,7 @@ name: sync-upstream-ttmetal
 
 on:
   schedule:
-    - cron: "0 6 * * 1"        # Mondays 06:00 UTC
+    - cron: "0 6 * * *"        # every day 06:00 UTC
   workflow_dispatch: {}
 
 permissions:
