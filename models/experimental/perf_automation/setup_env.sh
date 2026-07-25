@@ -122,14 +122,19 @@ PYEOF
         status=1
     fi
 
-    # 5e. transformers pinned at 5.10.2 (a stray downgrade to 5.8.1 breaks bring-up)
+    # 5e. transformers must match tt-metal's pin. Read the pin from requirements-dev.txt (NOT
+    #     hardcoded) so it auto-tracks an upstream tt-metal bump; a stray downgrade breaks bring-up.
+    local tf_req="$ttm/tt_metal/python_env/requirements-dev.txt"
+    local tf_pin; tf_pin="$(grep -oE 'transformers[[:space:]]*==[[:space:]]*[0-9][0-9.]*' "$tf_req" 2>/dev/null | grep -oE '[0-9][0-9.]*' | head -1)"
     local tfv; tfv="$("$py" -c "import transformers; print(transformers.__version__)" 2>/dev/null)"
-    if [[ "$tfv" == "5.10.2" ]]; then
-        echo "  [$ok] transformers 5.10.2"
-    elif [[ -n "$tfv" ]]; then
-        echo "  [${yellow}warn${reset}] transformers $tfv (repo pins 5.10.2; if the tool offers 5.8.1, decline / use --no-env-fix)" >&2
-    else
+    if [[ -z "$tfv" ]]; then
         echo "  [${yellow}warn${reset}] transformers not importable" >&2
+    elif [[ -z "$tf_pin" ]]; then
+        echo "  [$ok] transformers $tfv (no pin found in requirements-dev.txt)"
+    elif [[ "$tfv" == "$tf_pin" ]]; then
+        echo "  [$ok] transformers $tfv (matches tt-metal pin)"
+    else
+        echo "  [${yellow}warn${reset}] transformers $tfv (tt-metal pins $tf_pin — run: uv pip install --index-strategy unsafe-best-match transformers==$tf_pin)" >&2
     fi
 
     # 5f. tt-lang (ttl) kernel rung — cp312 wheels only; unavailable on py3.10 (fine for bring-up)
