@@ -33,6 +33,7 @@ std::vector<ttnn::Tensor> strided_all_gather_minimal_matmul_async(
     std::optional<bool> read_local_slice_from_input = std::nullopt,
     const std::optional<const Tensor>& fused_ternary_input_a = std::nullopt,
     const std::optional<const Tensor>& fused_ternary_input_b = std::nullopt,
-    std::optional<float> fused_ternary_scalar = std::nullopt);
+    std::optional<float> fused_ternary_scalar = std::nullopt,
+    int32_t chunks = 1);
 
 }  // namespace ttnn::experimental

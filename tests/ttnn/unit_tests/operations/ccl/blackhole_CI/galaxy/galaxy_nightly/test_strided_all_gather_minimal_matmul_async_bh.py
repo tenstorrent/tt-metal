@@ -83,12 +83,13 @@ def create_fabric_router_config(max_payload_size):
     ],
     ids=["fused"],
 )
-# addcmul (ternary) and fused_activation are mutually exclusive on the op (see validate), so model them
-# as one axis rather than two independent flags that could produce the forbidden combination.
+# One axis for the mutually-exclusive fused-output variants. addcmul and fused_activation cannot be
+# combined on the op (validate); chunks (output split) is exercised on the plain projection, matching how
+# LTX uses it (qkv/kv projections have no activation/addcmul). "chunks2" needs N divisible by chunks.
 @pytest.mark.parametrize(
     "fused_op_variant",
-    [None, "addcmul", "gelu_tanh"],
-    ids=["plain", "addcmul", "gelu_tanh"],
+    [None, "addcmul", "gelu_tanh", "chunks2"],
+    ids=["plain", "addcmul", "gelu_tanh", "chunks2"],
 )
 @pytest.mark.parametrize(
     "read_local_slice_from_input",
@@ -149,6 +150,7 @@ def test_strided_all_gather_minimal_matmul_async(
 
     use_ternary = fused_op_variant == "addcmul"
     activation = fused_op_variant if fused_op_variant == "gelu_tanh" else None
+    chunks = 2 if fused_op_variant == "chunks2" else 1
 
     run_strided_all_gather_minimal_matmul_impl(
         mesh_device,
@@ -178,6 +180,7 @@ def test_strided_all_gather_minimal_matmul_async(
         use_non_fused=use_non_fused,
         use_ternary=use_ternary,
         activation=activation,
+        chunks=chunks,
         shard_weights=shard_weights,
         ag_core_grid_offset=ag_offset,
         read_local_slice_from_input=read_local_slice_from_input,

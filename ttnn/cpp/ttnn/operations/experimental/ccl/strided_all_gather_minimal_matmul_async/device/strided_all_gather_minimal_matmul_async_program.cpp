@@ -59,8 +59,8 @@ void StridedAllGatherMinimalMatmulAsyncProgramFactory::override_runtime_argument
             ttnn::experimental::prim::MinimalMatmulFabricBoundProgramFactory::cached_program_t::proxy(
                 program, shared_variables.mm_shared_variables);
 
-        // Create a vector for the single output tensor
-        std::vector<Tensor> matmul_output_vec = {output_tensor.at(1)};
+        // Matmul outputs are all tensors after the all-gather output (one per chunk).
+        std::vector<Tensor> matmul_output_vec(output_tensor.begin() + 1, output_tensor.end());
         ttnn::experimental::prim::MinimalMatmulFabricBoundProgramFactory::override_runtime_arguments(
             cached_program_proxy,
             attributes.matmul_struct,
@@ -79,7 +79,7 @@ strided_all_gather_minimal_matmul_async_program(
     const Tensor& input_tensor,
     Tensor& all_gather_output_tensor,
     const Tensor& weight_tensor,
-    Tensor& matmul_output_tensor,
+    std::vector<Tensor> matmul_output_tensors,
     bool read_local_slice_from_input,
 
     /* All Gather Params */
@@ -124,9 +124,8 @@ strided_all_gather_minimal_matmul_async_program(
     // aggregation core (see the AG program factory) collects the N per-worker landing signals and
     // provides that single +1 - so the matmul semaphore count is unchanged here (num_ag_workers = 1).
 
-    // Matmul - wrap single output tensor in vector for unified interface
+    // Matmul outputs: one tensor per chunk (chunks == 1 -> single output).
     std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> empty_srs_fused_op_signaler;
-    std::vector<Tensor> matmul_output_tensors = {matmul_output_tensor};
     auto mm_shared_variables = ttnn::experimental::prim::minimal_matmul_fabric_bound_factory_helper_common(
         program,
         all_gather_output_tensor,
@@ -137,7 +136,7 @@ strided_all_gather_minimal_matmul_async_program(
         matmul_output_tensors,
         compute_kernel_config,
         matmul_fused_op_signaler,
-        1,  // N_chunks = 1 for single output
+        static_cast<uint32_t>(matmul_output_tensors.size()),  // N_chunks
         fused_ternary_scalar,
         fused_ternary_input_a,
         fused_ternary_input_b,
@@ -204,12 +203,15 @@ StridedAllGatherMinimalMatmulAsyncProgramFactory::create_at(
         attributes.strided_all_gather_async_struct.topology,
         attributes.strided_all_gather_async_struct.cluster_axis);
 
+    // Matmul outputs are all tensors after the all-gather output (one per chunk).
+    std::vector<Tensor> matmul_output_tensors(output_tensor.begin() + 1, output_tensor.end());
+
     // Return the StridedAllGatherMinimalMatmulAsync program with callbacks
     return strided_all_gather_minimal_matmul_async_program(
         tensor_args.input_tensor,   // input_tensor
         output_tensor[0],           // all_gather_output_tensor
         tensor_args.weight_tensor,  // weight_tensor
-        output_tensor[1],           // matmul_output_tensor
+        matmul_output_tensors,      // matmul_output_tensors (one per chunk)
         attributes.read_local_slice_from_input,
 
         /* All Gather Params */

@@ -739,6 +739,21 @@ void kernel_main() {
                             n_tile_end);
 #endif
                     } else {
+#ifdef SPLIT_OUTPUT_WRITE
+                        // NOC_0 writer: high rows [split_rows, M) from c_8, demuxed into the chunk tensors.
+                        constexpr uint32_t split_rows = (M_block_tiles * AG_SPLIT_NOC1_PCT) / 100;
+                        write_block_sync_granular_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
+                            outputs_tuple,
+                            out0_shape,
+                            cb_out_id,
+                            out_tile_size,
+                            m_tile,
+                            m_tile_end,
+                            n_tile,
+                            n_tile_end,
+                            split_rows,
+                            M_block_tiles);
+#else
                         write_block_sync_granular_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
                             outputs_tuple,
                             out0_shape,
@@ -748,6 +763,7 @@ void kernel_main() {
                             m_tile_end,
                             n_tile,
                             n_tile_end);
+#endif
                     }
 #endif  // FUSE_SWIGLU
 #ifdef SRS_FUSE_OP_SIGNALER

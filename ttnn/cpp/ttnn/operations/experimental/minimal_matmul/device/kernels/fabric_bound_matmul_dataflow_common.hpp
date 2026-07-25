@@ -439,11 +439,16 @@ void write_block_sync_granular_split(
     uint32_t d0_start,
     uint32_t d0_end,
     uint32_t d1_start,
-    uint32_t d1_end) {
+    uint32_t d1_end,
+    // Restrict the write to the block's M-row sub-range [m_id_start, m_id_end). Used by the two-NoC output
+    // split with chunks: each writer drains only its half of its output CB (per-row cb_wait_front/pop, so the
+    // pop count matches what compute pushed to that CB) and demuxes each row's N columns into the chunks.
+    uint32_t m_id_start = 0,
+    uint32_t m_id_end = M_block_tiles) {
     const uint32_t chunk_idx_start = d1_start / N_tiles_per_chunk;
     const uint32_t tile_idx_in_chunk_start = d1_start % N_tiles_per_chunk;
 
-    for (uint32_t m_id = 0; m_id < M_block_tiles; m_id++) {
+    for (uint32_t m_id = m_id_start; m_id < m_id_end; m_id++) {
         cb_wait_front(cb_id_out, N_block_tiles);
         uint32_t m_tile = d0_start + m_id;
         if (m_tile < d0_end && m_tile < chunk_shape.logical_d0) {

@@ -28,7 +28,8 @@ std::vector<ttnn::Tensor> strided_all_gather_minimal_matmul_async(
     std::optional<bool> read_local_slice_from_input,
     const std::optional<const Tensor>& fused_ternary_input_a,
     const std::optional<const Tensor>& fused_ternary_input_b,
-    std::optional<float> fused_ternary_scalar) {
+    std::optional<float> fused_ternary_scalar,
+    int32_t chunks) {
     return ttnn::prim::strided_all_gather_minimal_matmul_async(
         input_tensor,
         weight_tensor,
@@ -51,7 +52,8 @@ std::vector<ttnn::Tensor> strided_all_gather_minimal_matmul_async(
         read_local_slice_from_input,
         fused_ternary_input_a,
         fused_ternary_input_b,
-        fused_ternary_scalar);
+        fused_ternary_scalar,
+        chunks);
 }
 
 }  // namespace ttnn::experimental
