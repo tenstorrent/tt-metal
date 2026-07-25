@@ -46,6 +46,27 @@ void kernel_main() {
     bool first = true;
     uint32_t dbg_pushes = 0;                                                       // [#48552 DEBUG]
     DPRINT("RRD start op=[{},{})\n", start_output_page_idx, end_output_page_idx);  // [#48552 DEBUG]
+    // [#48552 DEBUG] One-time probe: the FIRST NOC read of a kernel is known to deliver (startup latency
+    // covers it). Read output page (start+1)'s map as this kernel's first read, into a scratch L1 addr. If
+    // seg0_in_pg is page-(start+1)'s CORRECT value -> DRAM map is right per-page and the bug is device-side
+    // (later reads into the reused slot don't deliver). If it's 0 (== page-start's value) -> the host map
+    // itself is wrong. Uses input_cb's slot as raw scratch (no DFB state touched; overwritten later).
+    if (start_output_page_idx + 1 < end_output_page_idx) {
+        const uint32_t probe_l1 = input_cb.get_write_ptr();
+        const uint64_t probe_noc = map_addr_gen.get_noc_addr(start_output_page_idx + 1);
+        enhanced_noc_async_read<Max_Map_Size_Bytes, true>(noc, probe_noc, probe_l1, Max_Map_Size_Bytes);
+        noc.async_read_barrier();
+        for (volatile uint32_t d = 0; d < 50000; ++d) {
+            asm volatile("nop");
+        }
+        invalidate_l1_cache();
+        auto pm = reinterpret_cast<volatile tt_l1_ptr SegmentMapData*>(probe_l1);
+        DPRINT(
+            "RRDprobe page={} seg0_in_pg={} n={}\n",
+            start_output_page_idx + 1,
+            pm[0].input_page_index,
+            pm[0].num_elements);
+    }
     for (uint32_t out_page_idx = start_output_page_idx; out_page_idx < end_output_page_idx; ++out_page_idx) {
         mapping_cb.reserve_back(One_Tile_Reserve);
         const uint64_t map_noc_addr = map_addr_gen.get_noc_addr(out_page_idx);
