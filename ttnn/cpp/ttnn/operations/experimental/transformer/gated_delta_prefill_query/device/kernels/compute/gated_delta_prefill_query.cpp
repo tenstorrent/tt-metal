@@ -26,7 +26,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/copy_dest_values.h"
+#include "api/compute/triangle_solve.h"
 #include "api/compute/common.h"
 #include "api/dataflow/circular_buffer.h"
 
@@ -103,28 +103,29 @@ void kernel_main() {
     cb_kkt_o.push_back(total);
     cb_gram_o.pop_front(total);
 
-    // ---- Phase 3 (triangle-solve scaffold): DST[0] = masked matmul output (unit lower-tri),
-    //      DST[1] = a K tile on the k/hidden dim, dummy SFPU (copy_dest_values, placeholder for
-    //      the real triangle solve) -> DST[2], packed out to cb_solve. Each dummy call is its own
-    //      tight tile_regs cycle (load DST[0]/DST[1], compute, pack DST[2]), so one output tile is
-    //      produced per (output tile, k-dim) step. K-tile indexing assumes one output tile per
-    //      seq-tile (the seq_tile_count==1 case); the multi-tile-block mapping comes with the real
-    //      solve. ----
+    // ---- Phase 3 (triangle solve): L = the masked matmul output (unit lower-tri) tile i, read
+    //      element-wise from L1 via the cb_kkt CircularBuffer (NOT a DST reg). The K/RHS tile goes
+    //      in DST[0]; triangle_solve_tile writes the solution to DST[1], which we pack to cb_solve.
+    //      Each solve is its own tight tile_regs cycle, so one output tile is produced per (output
+    //      tile, k-dim) step. K-tile indexing assumes one output tile per seq-tile (the
+    //      seq_tile_count==1 case); the multi-tile-block mapping comes with fuller integration.
+    //      NOTE: triangle_solve_tile expects L supplied NEGATED (strict-lower entries * -1); the
+    //      Phase-2 mask still produces the positive unit-lower-tri, so flip the mask sign before
+    //      relying on the solve's values. ----
     cb_kkt_o.wait_front(total);
     cb_solve_o.reserve_back(total * d_tiles);
     uint32_t solve_out = 0;
     for (uint32_t i = 0; i < total; ++i) {
         for (uint32_t kd = 0; kd < d_tiles; ++kd) {
             tile_regs_acquire();
-            copy_tile_init(cb_kkt);
-            copy_tile(cb_kkt, i, /*dst=*/0);  // DST[0] = masked matmul output (unit lower-tri)
             copy_tile_init(cb_k);
-            copy_tile(cb_k, kd * seq_tile_count + i, /*dst=*/1);  // DST[1] = K value on the k dim
-            copy_dest_values_init();
-            copy_dest_values(/*idst_in=*/0, /*idst_out=*/2);  // dummy SFPU -> DST[2]
+            copy_tile(cb_k, kd * seq_tile_count + i, /*dst=*/0);  // DST[0] = K/RHS tile on the k dim
+            // L = cb_kkt tile i (from L1); RHS in DST[0] -> solution in DST[1].
+            triangle_solve_tile_init();
+            triangle_solve_tile(cb_kkt_o, /*l_tile_idx=*/i, /*idst_in=*/0, /*idst_out=*/1);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile<true>(2, cb_solve, solve_out++);  // pack DST[2] every iteration
+            pack_tile<true>(1, cb_solve, solve_out++);  // pack DST[1] (the solution) every iteration
             tile_regs_release();
         }
     }

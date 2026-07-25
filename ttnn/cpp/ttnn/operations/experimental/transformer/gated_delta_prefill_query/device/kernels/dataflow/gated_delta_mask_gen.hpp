@@ -19,8 +19,9 @@
 
 namespace gated_delta {
 
-// bf16 encoding of 1.0 (top 16 bits of fp32 0x3F800000).
+// bf16 encoding of 1.0 (top 16 bits of fp32 0x3F800000) and -1.0 (0xBF800000).
 constexpr uint16_t BF16_ONE = 0x3F80;
+constexpr uint16_t BF16_NEG_ONE = 0xBF80;
 
 // Logical (r, c) in a 32x32 tile -> uint16 element offset in TILE_LAYOUT.
 inline uint32_t tile_elem_offset(uint32_t r, uint32_t c) {
@@ -28,12 +29,14 @@ inline uint32_t tile_elem_offset(uint32_t r, uint32_t c) {
     return face * 256 + (r % 16) * 16 + (c % 16);
 }
 
-// Strict-lower mask: 1.0 strictly below the diagonal (r > c), 0 on and above it.
+// Strict-lower mask: -1.0 strictly below the diagonal (r > c), 0 on and above it.
+// Negated so that gram (*) mask = -strict_lower(gram); adding the identity then yields the NEGATED
+// unit lower-triangular L that triangle_solve_tile expects (its per-column update is an accumulate).
 inline void generate_strict_lower_mask(uint32_t l1_write_addr) {
     volatile tt_l1_ptr uint16_t* t = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr);
     for (uint32_t r = 0; r < 32; ++r) {
         for (uint32_t c = 0; c < 32; ++c) {
-            t[tile_elem_offset(r, c)] = (r > c) ? BF16_ONE : static_cast<uint16_t>(0);
+            t[tile_elem_offset(r, c)] = (r > c) ? BF16_NEG_ONE : static_cast<uint16_t>(0);
         }
     }
 }
