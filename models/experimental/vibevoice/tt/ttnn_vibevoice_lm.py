@@ -79,6 +79,35 @@ _QO_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     mcast_in0=True,
 )
 
+# Decode-only fused-KV projection (32 x 1536 x 512).  Auto lands on 16 cores / ~22 µs SLOW.
+# Sweep winner (tests/perf/_probe_wkv_devtime.py): 1D mcast_in0, 8x1=8 cores, in0_block_w=2
+# (matches auto's K-reduction → maxabsdiff==0), per_core_N=2, out_subblock 1x2, width-sharded
+# L1 out + L1 in0 (attn rms_norm) → ~16 µs.  Bias-add then reshard to DRAM for NlpCreateHeads;
+# full q/k/v path stays byte-identical.  Prefill (S>1) keeps auto.
+_WKV_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    compute_with_storage_grid_size=ttnn.CoreCoord(8, 1),
+    in0_block_w=2,
+    out_subblock_h=1,
+    out_subblock_w=2,
+    per_core_M=1,
+    per_core_N=2,
+    fuse_batch=True,
+    fused_activation=None,
+    mcast_in0=True,
+)
+_WKV_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    compute_with_storage_grid_size=ttnn.CoreCoord(8, 1),
+    in0_block_w=2,
+    out_subblock_h=1,
+    out_subblock_w=2,
+    per_core_M=2,
+    per_core_N=2,
+    fuse_batch=True,
+    fused_activation=None,
+    mcast_in0=True,
+)
+_WKV_DECODE_OUT_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
+
 # Decode-only FFN program configs (S==1).  BYTE-IDENTICAL to the auto config (in0_block_w=2 is the
 # K-reduction block auto uses for these shapes — proven maxabsdiff==0 vs auto in
 # tests/perf/ffn_byteident_ibw_sweep.py), so the K-reduction order — hence the bf16 rounding — is
@@ -149,10 +178,9 @@ def load_vibevoice_lm_weights(model_path: str) -> Dict[str, torch.Tensor]:
 
 @dataclass
 class LayerWeights:
-    wq: ttnn.Tensor  # [n_heads*head_dim, hidden]
-    wk: ttnn.Tensor  # [n_kv_heads*head_dim, hidden]
-    wv: ttnn.Tensor  # [n_kv_heads*head_dim, hidden]
-    wo: ttnn.Tensor  # [hidden, n_heads*head_dim]
+    wq: ttnn.Tensor  # TILE [1,1,hidden,n_heads*head_dim]
+    wkv: ttnn.Tensor  # TILE [1,1,hidden,2*n_kv*head_dim] — fused wk|wv (byte-ident vs separate)
+    wo: ttnn.Tensor  # TILE [1,1,n_heads*head_dim,hidden]
     w1: ttnn.Tensor  # [ffn_dim, hidden]  gate
     w2: ttnn.Tensor  # [hidden, ffn_dim]  down
     w3: ttnn.Tensor  # [ffn_dim, hidden]  up
@@ -160,8 +188,7 @@ class LayerWeights:
     ffn_norm_w: ttnn.Tensor  # [1,1,1,hidden]
     # Qwen2 qkv biases
     q_bias: Optional[ttnn.Tensor] = None
-    k_bias: Optional[ttnn.Tensor] = None
-    v_bias: Optional[ttnn.Tensor] = None
+    kv_bias: Optional[ttnn.Tensor] = None  # fused k_bias|v_bias on the out dim
 
 
 @dataclass
@@ -253,10 +280,22 @@ def preprocess_lm_weights(
                 )
             return None
 
+        # Fuse wk|wv (and biases) on the out dim once at load — decode keeps the fast wq
+        # progcfg, while nlp_create_qkv_heads(q, input_kv=kv) drops the runtime concat +
+        # separate K/V matmuls (byte-identical; see fused-KV probe).
+        wk_t = state_dict[f"{prefix}.attention.wk.weight"]
+        wv_t = state_dict[f"{prefix}.attention.wv.weight"]
+        wkv_tt = _tile(torch.cat([wk_t, wv_t], dim=0), device)
+        k_b = _b("attention.wk")
+        v_b = _b("attention.wv")
+        if k_b is not None and v_b is not None:
+            kv_bias = ttnn.concat([k_b, v_b], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            kv_bias = None
+
         lw = LayerWeights(
             wq=_w("attention.wq"),
-            wk=_w("attention.wk"),
-            wv=_w("attention.wv"),
+            wkv=wkv_tt,
             wo=_w("attention.wo"),
             w1=_w("feed_forward.w1"),
             w2=_w("feed_forward.w2"),
@@ -264,8 +303,7 @@ def preprocess_lm_weights(
             attn_norm_w=_norm_weight(state_dict[f"{prefix}.attention_norm.weight"], device),
             ffn_norm_w=_norm_weight(state_dict[f"{prefix}.ffn_norm.weight"], device),
             q_bias=_b("attention.wq"),
-            k_bias=_b("attention.wk"),
-            v_bias=_b("attention.wv"),
+            kv_bias=kv_bias,
         )
         layers.append(lw)
 
@@ -550,9 +588,11 @@ class TTVibeVoiceLM:
         n_heads = cfg.num_attention_heads
         n_kv = cfg.num_key_value_heads
 
-        # QKV projections [B, 1, S, n*hd]
-        # wq is 1536x1536; on a single-token decode step (S==1) use the swept fast
-        # config (2.08x), else the auto config for prefill chunks.
+        # Q + fused KV projections.  wq keeps the swept decode progcfg (S==1); wk|wv are
+        # one matmul (wkv) so nlp_create_qkv_heads can take ``input_kv`` and skip the
+        # runtime Q|K|V concat (byte-identical vs separate K/V + concat).  wkv uses its
+        # own decode progcfg + width-sharded L1 out (S==1); bias-add below returns DRAM
+        # for NlpCreateHeads.
         q = ttnn.linear(
             x,
             layer_w.wq,
@@ -560,33 +600,40 @@ class TTVibeVoiceLM:
             program_config=_QO_DECODE_PROGCFG if S == 1 else None,
             memory_config=_QO_DECODE_OUT_MEMCFG if S == 1 else ttnn.DRAM_MEMORY_CONFIG,
         )
-        k = ttnn.linear(x, layer_w.wk, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        v = ttnn.linear(x, layer_w.wv, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
+        kv = ttnn.linear(
+            x,
+            layer_w.wkv,
+            compute_kernel_config=_HIFI4,
+            program_config=_WKV_DECODE_PROGCFG if S == 1 else None,
+            memory_config=_WKV_DECODE_OUT_MEMCFG if S == 1 else ttnn.DRAM_MEMORY_CONFIG,
+        )
         if layer_w.q_bias is not None:
             q = ttnn.add(q, layer_w.q_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if layer_w.k_bias is not None:
-            k = ttnn.add(k, layer_w.k_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if layer_w.v_bias is not None:
-            v = ttnn.add(v, layer_w.v_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if layer_w.kv_bias is not None:
+            kv = ttnn.add(kv, layer_w.kv_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            q,
+            input_kv=kv,
+            num_heads=n_heads,
+            num_kv_heads=n_kv,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [B, n_heads/n_kv, S, hd]
 
-        # Reshape [B, 1, S, n*hd] → [B, S, n, hd] then permute → [B, n, S, hd]
-        # Matches PyTorch: view(B, S, n, hd).transpose(1, 2)
-        q = ttnn.permute(_reshape_tt(q, [B, S, n_heads, head_dim]), (0, 2, 1, 3))  # [B, n_heads, S, hd]
-        k = ttnn.permute(_reshape_tt(k, [B, S, n_kv, head_dim]), (0, 2, 1, 3))  # [B, n_kv, S, hd]
-        v = ttnn.permute(_reshape_tt(v, [B, S, n_kv, head_dim]), (0, 2, 1, 3))  # [B, n_kv, S, hd]
-
-        # Apply RoPE on device (validated fp32 path); cos/sin sliced [start_pos : start_pos+S].
+        # Apply RoPE on device (validated fp32 path).
+        # cos_sin_tt is the already-sliced [1,1,S,hd] window when hoisted by forward();
+        # fall back to slicing the full table if a caller still passes the raw cache.
         if cos_sin_tt is not None:
             cos_tt, sin_tt = cos_sin_tt
-            c = ttnn.slice(
-                cos_tt, [0, 0, start_pos, 0], [1, 1, start_pos + S, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
-            s = ttnn.slice(
-                sin_tt, [0, 0, start_pos, 0], [1, 1, start_pos + S, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
-            q = _apply_rope_ttnn(q, c, s)
-            k = _apply_rope_ttnn(k, c, s)
+            if cos_tt.shape[2] != S:
+                cos_tt = ttnn.slice(
+                    cos_tt, [0, 0, start_pos, 0], [1, 1, start_pos + S, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+                sin_tt = ttnn.slice(
+                    sin_tt, [0, 0, start_pos, 0], [1, 1, start_pos + S, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+            q = _apply_rope_ttnn(q, cos_tt, sin_tt)
+            k = _apply_rope_ttnn(k, cos_tt, sin_tt)
 
         if S > 1:
             # ── Prefill: fp32 manual attention reading the fixed-cache prefix ──
@@ -795,13 +842,15 @@ class TTVibeVoiceLM:
         """Full transformer layer with pre-norm residuals."""
         lw = self.w.layers[layer_idx]
 
-        # Pre-norm + attention
+        # Pre-norm + attention.  Decode (S==1): emit attn-norm into L1 so wq/wkv read
+        # in0 from L1 (byte-identical memory placement; pairs with _WKV_DECODE_*).
+        S = x.shape[2]
         x_norm = ttnn.rms_norm(
             x,
             weight=lw.attn_norm_w,
             epsilon=self.cfg.rms_norm_eps,
             compute_kernel_config=_HIFI4,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG if S == 1 else ttnn.DRAM_MEMORY_CONFIG,
         )
         attn_out = self._attention_layer(x_norm, lw, cos_sin_tt, kv_cache, layer_idx, start_pos)
         x = ttnn.add(x, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -840,14 +889,22 @@ class TTVibeVoiceLM:
         S = inputs_embeds.shape[2]
         cfg = self.cfg
 
-        # Use precomputed full RoPE tables; _attention_layer slices [start_pos:start_pos+S]
-        cos_tt, sin_tt = self._cos_tt, self._sin_tt
+        # Hoist RoPE cos/sin slice once per forward (same window for all 28 layers).
+        # Avoids 2×num_layers redundant Slice ops on the decode/prefill path.
+        head_dim = cfg.head_dim
+        cos_row = ttnn.slice(
+            self._cos_tt, [0, 0, start_pos, 0], [1, 1, start_pos + S, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        sin_row = ttnn.slice(
+            self._sin_tt, [0, 0, start_pos, 0], [1, 1, start_pos + S, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        cos_sin_tt = (cos_row, sin_row)
 
         x = inputs_embeds
         if x.dtype == ttnn.float32:
             x = ttnn.typecast(x, ttnn.bfloat16)
         for layer_idx in range(cfg.num_hidden_layers):
-            x = self._transformer_layer(x, layer_idx, (cos_tt, sin_tt), kv_cache, start_pos)
+            x = self._transformer_layer(x, layer_idx, cos_sin_tt, kv_cache, start_pos)
 
         # Final norm
         x = ttnn.rms_norm(
@@ -899,18 +956,25 @@ class TTVibeVoiceLM:
             program_config=_QO_DECODE_PROGCFG,
             memory_config=_QO_DECODE_OUT_MEMCFG,
         )
-        k = ttnn.linear(x, layer_w.wk, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        v = ttnn.linear(x, layer_w.wv, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        kv = ttnn.linear(
+            x,
+            layer_w.wkv,
+            compute_kernel_config=_HIFI4,
+            program_config=_WKV_DECODE_PROGCFG,
+            memory_config=_WKV_DECODE_OUT_MEMCFG,
+        )
         if layer_w.q_bias is not None:
             q = ttnn.add(q, layer_w.q_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if layer_w.k_bias is not None:
-            k = ttnn.add(k, layer_w.k_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if layer_w.v_bias is not None:
-            v = ttnn.add(v, layer_w.v_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        q = ttnn.permute(_reshape_tt(q, [B, S, n_heads, head_dim]), (0, 2, 1, 3))  # [1, n_heads, 1, hd]
-        k = ttnn.permute(_reshape_tt(k, [B, S, n_kv, head_dim]), (0, 2, 1, 3))  # [1, n_kv, 1, hd]
-        v = ttnn.permute(_reshape_tt(v, [B, S, n_kv, head_dim]), (0, 2, 1, 3))
+        if layer_w.kv_bias is not None:
+            kv = ttnn.add(kv, layer_w.kv_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            q,
+            input_kv=kv,
+            num_heads=n_heads,
+            num_kv_heads=n_kv,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1, n_heads/n_kv, 1, hd]
 
         # RoPE via the per-position row (broadcasts over the head dim; same numerics
         # as the eager sliced-table path).
@@ -962,7 +1026,7 @@ class TTVibeVoiceLM:
             weight=lw.attn_norm_w,
             epsilon=self.cfg.rms_norm_eps,
             compute_kernel_config=_HIFI4,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         attn_out = self._attention_decode_traced(x_norm, lw, cos_row, sin_row, cur_pos, kv_cache, layer_idx)
         x = ttnn.add(x, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -1076,7 +1140,7 @@ class TTVibeVoiceLM:
         n_heads = cfg.num_attention_heads
         n_kv = cfg.num_key_value_heads
 
-        # Batched weight-bound projections — read wq/wk/wv once for both rows.
+        # Batched weight-bound projections — read wq/wkv once for both rows.
         q = ttnn.linear(
             x,
             layer_w.wq,
@@ -1084,19 +1148,25 @@ class TTVibeVoiceLM:
             program_config=_QO_DECODE_PROGCFG_B2,
             memory_config=_QO_DECODE_OUT_MEMCFG,
         )
-        k = ttnn.linear(x, layer_w.wk, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        v = ttnn.linear(x, layer_w.wv, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        kv = ttnn.linear(
+            x,
+            layer_w.wkv,
+            compute_kernel_config=_HIFI4,
+            program_config=_WKV_DECODE_PROGCFG_B2,
+            memory_config=_WKV_DECODE_OUT_MEMCFG,
+        )
         if layer_w.q_bias is not None:
             q = ttnn.add(q, layer_w.q_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if layer_w.k_bias is not None:
-            k = ttnn.add(k, layer_w.k_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if layer_w.v_bias is not None:
-            v = ttnn.add(v, layer_w.v_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        # [2,1,1,X] → [2, X_heads, 1, hd]; the reshape reshards the width-sharded q to DRAM.
-        q = ttnn.permute(_reshape_tt(q, [2, 1, n_heads, head_dim]), (0, 2, 1, 3))  # [2, n_heads, 1, hd]
-        k = ttnn.permute(_reshape_tt(k, [2, 1, n_kv, head_dim]), (0, 2, 1, 3))  # [2, n_kv, 1, hd]
-        v = ttnn.permute(_reshape_tt(v, [2, 1, n_kv, head_dim]), (0, 2, 1, 3))
+        if layer_w.kv_bias is not None:
+            kv = ttnn.add(kv, layer_w.kv_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            q,
+            input_kv=kv,
+            num_heads=n_heads,
+            num_kv_heads=n_kv,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [2, n_heads/n_kv, 1, hd]
 
         # Per-row attention on the two separate caches — identical ops to the B=1 path.
         attn_rows = []
@@ -1146,7 +1216,7 @@ class TTVibeVoiceLM:
             weight=lw.attn_norm_w,
             epsilon=self.cfg.rms_norm_eps,
             compute_kernel_config=_HIFI4,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         attn_out = self._attention_decode_traced_b2(x_norm, lw, rope_rows, cur_positions, kv_caches, layer_idx)
         x = ttnn.add(x, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
