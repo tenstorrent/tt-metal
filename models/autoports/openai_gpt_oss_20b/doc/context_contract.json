@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "hf_model": "openai/gpt-oss-20b",
+  "stage": "multichip_decoder",
+  "hf_advertised_context": 131072,
+  "current_supported_context": 131072,
+  "limiting_reason": "none_on_target_mesh",
+  "capacity_evidence": {
+    "target": "two Blackhole P300c devices in a fixed 1x2 TP mesh",
+    "mesh_shape": [1, 2],
+    "tensor_parallel_degree": 2,
+    "residual_layout": "replicated BF16 [1,1,S,2880] on both devices",
+    "attention_partition": "32 of 64 Q heads and 4 of 8 KV heads per device; row-parallel O with one all-reduce",
+    "expert_partition": "all 32 experts retain gate-selected top-4 execution; gate/up output and down K are fractured over TP-local intermediate 1440; down result is all-reduced; selected prefill program is 15/30 cores with 1x3 subblocks and selected decode program is 45/90 cores with 1x1 subblocks",
+    "collective_topology": "FABRIC_1D_RING / Ring / one link",
+    "dram_view_gib_per_device": 31.875,
+    "page_block_size": 64,
+    "global_kv_heads": 8,
+    "local_kv_heads_per_device": 4,
+    "cache_blocks_per_device": 2048,
+    "key_or_value_cache_shape_per_device_per_layer": [2048, 4, 64, 64],
+    "key_or_value_cache_bytes_per_device_per_layer": 67108864,
+    "combined_kv_cache_bytes_per_device_per_layer": 134217728,
+    "combined_kv_cache_gib_per_device_for_24_layers": 3.0,
+    "estimated_tp_layer_weights_gib_per_device_for_24_layers": 10.03,
+    "embedding_and_head_allowance_gib_per_device": 1.2,
+    "runtime_trace_activation_and_fragmentation_reserve_gib_per_device": 4.0,
+    "estimated_total_gib_per_device": 18.23,
+    "largest_supported_cache_length": 131072,
+    "largest_validated_cache_position": 131071,
+    "validation": "RUN_MULTICHIP_CONTEXT=1 test_full_context_cache_allocation_and_last_page_update allocates both paged local caches and executes a synchronized decode update at position 131071",
+    "prior_single_chip_limit": 21248,
+    "prior_limit_status": "superseded for this stage; TP2 KV-head and weight partitioning plus sparse active-expert execution fit the full HF-advertised cache contract"
+  },
+  "notes": "The fixed 1x2 P300 path restores the HF-advertised 131072-token cache contract without reducing the prior advertised capability. Capacity evidence validates physical paged-cache allocation and the final logical position, not a single 131072-token prefill invocation. Public logical sequence lengths remain unaligned: internal tile/page padding and 128-token active-expert chunking are not exposed. Exact prefill executes 4*S token-specific expert routes, but current sparse matmul allocates a physical 32-row tile to every route; this is a performance limitation, not a context-capacity limit.",
+  "paths": {
+    "prefill": {
+      "status": "implemented",
+      "pcc_validated_sequence_lengths": [17, 33, 128],
+      "non_aligned_logical_lengths_validated": [17, 33],
+      "current_supported_context": 131072,
+      "capacity_status": "paged-cache capacity validated at 131072; full-length prefill compute was not run",
+      "cache_behavior": "fills local four-KV-head paged key/value caches through an arbitrary page-table mapping and returns the exact logical sequence length",
+      "expert_behavior": "pads internally to 32, chunks at 128, executes exactly four token-specific active experts through three sparse matmuls, all-reduces the TP-local down result, and slices back to logical S"
+    },
+    "decode": {
+      "status": "implemented",
+      "pcc_validated_cache_positions": [128, 129, 130],
+      "trace_validated_cache_positions": [128, 129, 130],
+      "largest_capacity_validated_cache_position": 131071,
+      "current_supported_cache_length": 131072,
+      "cache_behavior": "updates the TP-local physical page selected by the replicated page table; eager and traced physical cache pages are bit-identical on both ranks",
+      "decode_layout": "30-core [32,96] QKV input shard, 40-core [32,64] QKV output shard, 10-core input/post-attention RMSNorms, replicated layer output"
+    }
+  }
+}
