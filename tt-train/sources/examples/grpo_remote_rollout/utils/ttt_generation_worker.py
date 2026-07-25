@@ -7,7 +7,7 @@ N [1, 1] submeshes, and runs prefill/decode concurrently across one model per su
 via a single Generator (data_parallel == N).
 
 On-device sampling: temperature/top_k/top_p/seed are baked into each submesh's decode
-trace at construction, so generate()'s per-call temperature/top_p/seed are IGNORED.
+trace at construction and cannot vary per generate() call.
 """
 
 from __future__ import annotations
@@ -137,16 +137,12 @@ class TttGenerationWorker:
         prompts: List[List[int]],
         *,
         max_new_tokens: int = 128,
-        temperature: float = 0.0,
-        top_p: float = 1.0,
-        seed: Optional[int] = None,
         enable_trace: bool = True,
         stop_at_eos: bool = True,
     ) -> List[List[int]]:
         """Prefill + decode a token-ID prompt batch, data-parallel across submeshes. The
-        batch is padded to the global size; temperature/top_p/seed are ignored (baked in)."""
-        del temperature, top_p, seed  # baked into self._sampling_params
-
+        batch is padded to the global size; sampling params were baked into
+        ``self._sampling_params`` at construction and cannot vary per call."""
         if max_new_tokens == 0:
             return [[] for _ in prompts]
 

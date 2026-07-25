@@ -96,7 +96,6 @@ def _ttml_side() -> None:
         pre_push_ids = client.remote_generate(
             [prompt_ids],
             max_new_tokens=MAX_NEW_TOKENS,
-            temperature=TEMPERATURE,
         )[0]
         print(
             f"[TTML rank {TTML_RANK}] (remote pre-push, dummy weights) ({len(pre_push_ids)} tok): "
@@ -113,7 +112,6 @@ def _ttml_side() -> None:
         completions = client.remote_generate(
             [prompt_ids] * POST_PUSH_BATCH,
             max_new_tokens=MAX_NEW_TOKENS,
-            temperature=TEMPERATURE,
         )
         for i in range(POST_PUSH_BATCH):
             assert completions[i] == completions[0], (
@@ -209,7 +207,7 @@ def _ttt_side() -> None:
         prompt_ids = tokenizer.encode(PROMPT, add_special_tokens=True)
         verify_batch = NUM_SUBMESHES * TTT_MAX_BATCH_SIZE
         print("\n========= per-submesh verification =========", flush=True)
-        outs = worker.generate([prompt_ids] * verify_batch, max_new_tokens=VERIFY_NEW_TOKENS, temperature=TEMPERATURE)
+        outs = worker.generate([prompt_ids] * verify_batch, max_new_tokens=VERIFY_NEW_TOKENS)
         print(f"[submesh 0] ({len(outs[0])} tok) {tokenizer.decode(outs[0], skip_special_tokens=False)!r}", flush=True)
         for i in range(1, verify_batch):
             assert outs[i] == outs[0], f"submesh completion {i} diverged from 0 -> weights differ"
