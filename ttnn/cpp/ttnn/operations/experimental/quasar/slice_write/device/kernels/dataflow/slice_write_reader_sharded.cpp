@@ -18,7 +18,5 @@ void kernel_main() {
     cb_in0.reserve_back(num_sticks);
     DPRINT("SWR reserved\n");
     cb_in0.push_back(num_sticks);
-    cb_in0.finish();  // [#48552 EXPERIMENT] drain credits (posted==acked) before exit so the counter is quiescent for
-                      // reuse
     DPRINT("SWR pushed/end\n");
 }

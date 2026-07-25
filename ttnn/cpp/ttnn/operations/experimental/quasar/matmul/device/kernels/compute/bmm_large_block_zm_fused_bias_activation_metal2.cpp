@@ -651,13 +651,9 @@ void kernel_main() {
         bias_cb.pop_front(bias_ntiles);
     }
 #endif
-    // [#48552 EXPERIMENT] Drain the compute's DFB credits (posted==acked) before exit. This is the Tensix
-    // (packer/unpacker) side, which updates the tile counters via the TRISC port — the cross-port straggler
-    // source in the reuse-incoherence. Balancing here leaves the counters quiescent for the next program that
-    // reuses them. Remove before merge. (If finish() itself hangs, that's evidence the counter is already
-    // corrupted -> posted!=acked can never balance.)
-    in0_cb.finish();
-    in1_cb.finish();
-    untilize_mode_out_cb.finish();
+    // [#48552] Compute-side finish() REMOVED: it wedged on PACK (TRISC2 stuck at "MMC bias", never reached
+    // "MMC end") — finish() across UNPACK/MATH/PACK isn't well-defined for a role that doesn't drive that CB's
+    // balance, and untilize_mode_out_cb.finish() waits on the output writer. Credit drain-on-exit is kept only
+    // on the DM producer/consumer kernels.
     DPRINT("MMC end\n");  // DEBUG: stem conv1 Program-B hang
 }
