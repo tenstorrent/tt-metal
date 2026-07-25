@@ -1,9 +1,9 @@
 name: sync-upstream-ttmetal
 
-# Device-free automatic sync to latest tenstorrent/tt-metal.
-# Gates: merge -> build -> `import ttnn`. No Tenstorrent hardware needed, so this runs on
-# GitHub-hosted (cloud) runners. On green it opens a PR; on failure it files an issue.
-# NOTE: PCC (numeric correctness) is NOT checked here -- that needs a TT device (self-hosted runner).
+# Keeps the REMOTE apande-TT:feature/tt-hw-planner branch synced to latest tenstorrent/tt-metal.
+# Cloud-side does ONLY the merge + push (no build) -> runs on any runner, needs no TT hardware and
+# no big build machine. Heavy verification (build + PCC) is done locally on a TT box, because that
+# is the only place with a device. On an unexpected conflict it files an issue and pushes nothing.
 
 on:
   schedule:
@@ -12,29 +12,20 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
   issues: write
 
 jobs:
-  sync-build-import:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 180        # bound the heavy build so it can't hang for hours
-    container:
-      image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest
+  sync-remote:
+    runs-on: ubuntu-22.04       # merge-only -> no container / no big runner needed
     env:
-      ARCH_NAME: blackhole
       GH_API: https://api.github.com/repos/${{ github.repository }}
     steps:
-      - name: Checkout fork branch (full history + submodules)
+      - name: Checkout the remote tool branch (full history)
         uses: actions/checkout@v4
         with:
           ref: feature/tt-hw-planner
           fetch-depth: 0
-          submodules: recursive
 
-      # The container runs as a different user than owns the checkout -> git refuses with
-      # "dubious ownership". Mark the workspace safe and set identity globally so ALL later
-      # git commands (fetch/merge/commit) work.
       - name: Git setup (safe.directory + identity)
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -56,78 +47,36 @@ jobs:
             echo "uptodate=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Merge upstream (auto-resolve known core conflict, bail on others)
+      - name: Merge upstream + push the remote branch (auto-sync)
         if: steps.check.outputs.uptodate == 'false'
-        id: merge
+        id: sync
         run: |
           SHA=$(git rev-parse --short upstream/main)
-          BR="auto/sync-upstream-$SHA"
-          echo "branch=$BR" >> "$GITHUB_OUTPUT"
-          echo "sha=$SHA"    >> "$GITHUB_OUTPUT"
-          git checkout -b "$BR"
           set +e
           git merge --no-commit --no-ff upstream/main
+          # known, recurring core conflicts -> take upstream
           git checkout --theirs ttnn/ttnn/device.py 2>/dev/null && git add ttnn/ttnn/device.py
+          UMD=$(git rev-parse upstream/main:tt_metal/third_party/umd 2>/dev/null)
+          [ -n "$UMD" ] && git update-index --cacheinfo 160000,"$UMD",tt_metal/third_party/umd
           UNRESOLVED=$(git diff --name-only --diff-filter=U)
           set -e
           if [ -n "$UNRESOLVED" ]; then
-            echo "Unexpected conflicts:"; echo "$UNRESOLVED"
+            echo "Unexpected conflicts -- not pushing:"; echo "$UNRESOLVED"
             { echo "conflicts<<EOF"; echo "$UNRESOLVED"; echo "EOF"; } >> "$GITHUB_OUTPUT"
             git merge --abort
             exit 1
           fi
-          git commit -m "Merge upstream/main ($SHA) into feature/tt-hw-planner [auto-sync]"
-          git submodule update --init --recursive
+          git commit -m "Merge upstream/main ($SHA, latest tt-metal) [auto-sync, tool-only]"
+          git push origin HEAD:feature/tt-hw-planner
+          echo "Pushed feature/tt-hw-planner -> latest tt-metal ($SHA)"
 
-      # The dev container ships a prebuilt venv at /opt/venv -- use it (do NOT run create_venv,
-      # which refuses to overwrite it non-interactively). Just refresh transformers to the pin.
-      - name: Prepare venv (container's /opt/venv) + refresh transformers
-        if: steps.check.outputs.uptodate == 'false'
-        run: |
-          . /opt/venv/bin/activate
-          TFPIN=$(grep -oE 'transformers[[:space:]]*==[[:space:]]*[0-9.]+' tt_metal/python_env/requirements-dev.txt | grep -oE '[0-9][0-9.]*' | head -1)
-          uv pip install --index-strategy unsafe-best-match "transformers==$TFPIN" || pip install "transformers==$TFPIN" || true
-
-      - name: Build tt-metal (device-free)
-        if: steps.check.outputs.uptodate == 'false'
-        run: |
-          export TT_METAL_HOME="$PWD" PYTHON_ENV_DIR="/opt/venv"
-          . /opt/venv/bin/activate
-          ./build_metal.sh
-
-      - name: Import gate (device-free)
-        if: steps.check.outputs.uptodate == 'false'
-        run: |
-          export TT_METAL_HOME="$PWD"
-          . /opt/venv/bin/activate
-          python -c "import ttnn; print('ttnn import OK')"
-
-      # PR / issue via the REST API (curl) -- the dev container has no `gh` CLI.
-      - name: Open PR (all device-free gates green)
-        if: steps.check.outputs.uptodate == 'false' && success()
-        run: |
-          git push origin "${{ steps.merge.outputs.branch }}"
-          BODY='Automated upstream sync. Device-free gates passed: merge + build + import ttnn. PCC (numeric) NOT verified -- run per-component PCC on a TT box before merging if numerics matter.'
-          python3 - "$BODY" <<'PY'
-          import json,os,sys,urllib.request
-          data=json.dumps({"title":"Auto-sync: latest tt-metal (%s)"%os.environ["SHA"],
-                           "head":os.environ["BR"],"base":"feature/tt-hw-planner","body":sys.argv[1]}).encode()
-          req=urllib.request.Request(os.environ["GH_API"]+"/pulls",data=data,
-              headers={"Authorization":"token %s"%os.environ["TOKEN"],"Accept":"application/vnd.github+json"})
-          print(urllib.request.urlopen(req).status)
-          PY
-        env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SHA: ${{ steps.merge.outputs.sha }}
-          BR: ${{ steps.merge.outputs.branch }}
-
-      - name: File an issue on failure
+      - name: File an issue on conflict/failure
         if: failure()
         run: |
-          BODY="Scheduled upstream sync failed (merge conflict, build, or import). Conflicts (if any): ${{ steps.merge.outputs.conflicts }}. See the run logs."
+          BODY="Auto-sync to latest tt-metal could not push (unexpected merge conflict). Conflicts: ${{ steps.sync.outputs.conflicts }}. Resolve manually, then verify build+PCC on a TT box. See run logs."
           python3 - "$BODY" <<'PY'
-          import json,os,sys,urllib.request,datetime
-          data=json.dumps({"title":"Auto-sync to latest tt-metal FAILED","body":sys.argv[1]}).encode()
+          import json,os,sys,urllib.request
+          data=json.dumps({"title":"Auto-sync to latest tt-metal needs manual attention","body":sys.argv[1]}).encode()
           req=urllib.request.Request(os.environ["GH_API"]+"/issues",data=data,
               headers={"Authorization":"token %s"%os.environ["TOKEN"],"Accept":"application/vnd.github+json"})
           print(urllib.request.urlopen(req).status)
