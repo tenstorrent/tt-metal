@@ -21,21 +21,21 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_CSVS = {
     "t640": Path("generated/profiler/reports/2026_07_24_18_44_22/ops_perf_results_2026_07_24_18_44_22.csv"),
-    "t5120": Path("generated/profiler/reports/2026_07_24_18_46_01/ops_perf_results_2026_07_24_18_46_01.csv"),
+    "t5120": Path("generated/profiler/reports/2026_07_25_02_18_57/ops_perf_results_2026_07_25_02_18_57.csv"),
 }
 CONTROL_CSVS = {
     "t640": Path("generated/profiler/reports/2026_07_24_15_49_24/ops_perf_results_2026_07_24_15_49_24.csv"),
-    "t5120": Path("generated/profiler/reports/2026_07_24_16_22_50/ops_perf_results_2026_07_24_16_22_50.csv"),
+    "t5120": Path("generated/profiler/reports/2026_07_25_02_20_13/ops_perf_results_2026_07_25_02_20_13.csv"),
 }
 EXPECTED_SHA256 = {
     "t640": "d00e2c212d8778b6fabc90dd80d3c583adaf8027f89aac38ea44b824d006f2eb",
-    "t5120": "e4aced4133c9897beaffbb783051215141e5dcf2894bc815940ccda16cfa257c",
+    "t5120": "b72bd0cea8ea5a129de946b631088012c3e6212e2e14a862b765377304812524",
 }
 CONTROL_SHA256 = {
     "t640": "106c501e09f50fc185046b96d0263c7f2107a49fdf446fdc5669a54748293976",
-    "t5120": "25759170be81e5186552a43dc7f531c13223b16c6307a29880c3886d1a3ac2c3",
+    "t5120": "7b48a60387890afe53d016f4158376483c32d6d061e246f2a5020051adfeb759",
 }
-EXPECTED_CALLS = {"t640": 30, "t5120": 35}
+EXPECTED_CALLS = {"t640": 30, "t5120": 24}
 TOKENS = {"t640": 640, "t5120": 5120}
 SESSION_IDS = list(range(2, 12))
 DEVICE_IDS = list(range(8))
@@ -59,7 +59,7 @@ BLOCKS = [
         "desc": "Carry concat, depthwise conv1d, layout conversion, and SiLU.",
         "file": "models/experimental/kimi_delta_attention/tt/layer.py",
         "lines": [163, 256],
-        "ranges": {"t640": [1, 11], "t5120": [1, 16]},
+        "ranges": {"t640": [1, 11], "t5120": [1, 5]},
         "shape": "[1,T,1536] + [1,3,1536] → [1,T,1536]",
         "distribution": "1536 TP-local channels; T=5120 uses two DRAM width slices",
     },
@@ -69,7 +69,7 @@ BLOCKS = [
         "desc": "Views the fused projection as Q, K, V, decay, output gate, and beta tensors.",
         "file": "models/experimental/kimi_delta_attention/tt/layer.py",
         "lines": [302, 321],
-        "ranges": {"t640": [11, 17], "t5120": [16, 22]},
+        "ranges": {"t640": [11, 17], "t5120": [5, 8]},
         "shape": "Q/K/V [1,T,512], decay [1,T,128], gate [1,T,512], beta [1,T,4]",
         "distribution": "four heads per chip; decay rank is replicated",
     },
@@ -79,7 +79,7 @@ BLOCKS = [
         "desc": "Sigmoid beta, project decay rank, fused Softplus, scale, and promote to FP32.",
         "file": "models/experimental/kimi_delta_attention/tt/layer.py",
         "lines": [322, 353],
-        "ranges": {"t640": [17, 20], "t5120": [22, 25]},
+        "ranges": {"t640": [17, 20], "t5120": [8, 12]},
         "shape": "decay [1,T,128] → gate [1,T,512] FP32; beta [1,T,4]",
         "distribution": "TP-local four-head gate; rank-128 input replicated",
     },
@@ -89,19 +89,19 @@ BLOCKS = [
         "desc": "Typecast, transpose, and reshape into the head-major chunk-kernel contract.",
         "file": "models/experimental/kimi_delta_attention/tt/recurrence.py",
         "lines": [115, 149],
-        "ranges": {"t640": [20, 23], "t5120": [25, 28]},
+        "ranges": {"t640": [20, 23], "t5120": [12, 14]},
         "shape": "beta [1,T,4] → head-major FP32 recurrence input",
         "distribution": "four local heads per chip",
     },
     {
         "id": "recurrence",
         "label": "chunk KDA recurrence",
-        "desc": "Fused preparation and phased scan update the FP32 recurrent state.",
-        "file": "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/chunk_gdn_phased.cpp",
-        "lines": [69, 205],
-        "ranges": {"t640": [23, 25], "t5120": [28, 30]},
+        "desc": "Preparation feeds a one-pass affine-summary builder, receiver-owned prefix, and grouped final scan at T>=5,120.",
+        "file": "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/chunk_gated_delta_rule.cpp",
+        "lines": [611, 736],
+        "ranges": {"t640": [23, 25], "t5120": [14, 19]},
         "shape": "Q/K/V/gate + state [1,4,128,128] → output + final state",
-        "distribution": "prep/epilogue: 110 cores; scan: 16 cores, four V splits/head",
+        "distribution": "prep: 110 cores; long scan: 80 whole-V group owners; short scan: 16 V-split workers",
     },
     {
         "id": "epilogue",
@@ -109,7 +109,7 @@ BLOCKS = [
         "desc": "Normalizes recurrence output and applies the SiLU output gate.",
         "file": "models/experimental/kimi_delta_attention/tt/layer.py",
         "lines": [364, 397],
-        "ranges": {"t640": [25, 26], "t5120": [30, 31]},
+        "ranges": {"t640": [25, 26], "t5120": [19, 20]},
         "shape": "[4,T,128] FP32 + gate [1,T,512] BF16 → [1,T,512] FP32",
         "distribution": "640 work items over 110 cores (90×6 + 20×5)",
     },
@@ -119,7 +119,7 @@ BLOCKS = [
         "desc": "Fused row-parallel matmul overlaps an FP32 ring reduce-scatter, then clones its shared buffer.",
         "file": "models/demos/blackhole/qwen36/tt/tp_common.py",
         "lines": [434, 481],
-        "ranges": {"t640": [26, 28], "t5120": [31, 33]},
+        "ranges": {"t640": [26, 28], "t5120": [20, 22]},
         "shape": "[1,T,512] × [512,2304] → [1,T,288] per TP rank",
         "distribution": "8×8 matmul; two RS worker rows; ring TP8; two Ethernet links",
     },
@@ -129,7 +129,7 @@ BLOCKS = [
         "desc": "Copies recurrent and convolution carry outputs into persistent state.",
         "file": "models/experimental/kimi_delta_attention/tt/layer.py",
         "lines": [437, 445],
-        "ranges": {"t640": [28, 30], "t5120": [33, 35]},
+        "ranges": {"t640": [28, 30], "t5120": [22, 24]},
         "shape": "state [1,4,128,128] FP32; carry [1,3,1536] BF16",
         "distribution": "independent TP-local state",
     },
@@ -154,12 +154,15 @@ EDGES = [
 COMMANDS = {
     scenario: (
         f"PERF_TRACE=1 PERF_SEQ={TOKENS[scenario]} PERF_REPS=10 "
-        "scripts/run_safe_pytest.sh --profile "
+        "scripts/run_safe_pytest.sh --profile --run-all "
         "models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s"
     )
     for scenario in TOKENS
 }
-CONTROL_COMMANDS = {scenario: f"QWEN_KDA_PREP_BF16_MASK=0 {command}" for scenario, command in COMMANDS.items()}
+CONTROL_COMMANDS = {
+    "t640": f"QWEN_KDA_PREP_BF16_MASK=0 {COMMANDS['t640']}",
+    "t5120": f"QWEN_KDA_SUMMARY_INTERLEAVED=1 {COMMANDS['t5120']}",
+}
 
 
 @dataclass(frozen=True)
@@ -293,7 +296,7 @@ def build_payload(traces: dict[str, Trace], controls: dict[str, Trace]) -> dict[
         enriched["snippet"] = source_snippet(block["file"], block["lines"])
         blocks.append(enriched)
     scenarios: dict[str, Any] = {}
-    flops_per_token = 67_594_000_000 / 640
+    executed_flops_by_scenario = {"t640": 67.594e9, "t5120": 547.765e9}
     peak_flops = 8 * 152.064e12
     for scenario, trace in traces.items():
         control = controls[scenario]
@@ -302,7 +305,7 @@ def build_payload(traces: dict[str, Trace], controls: dict[str, Trace]) -> dict[
         control_span = pd.Series(control.replay_spans_ns)
         control_active = pd.Series(control.replay_active_ns)
         tokens = TOKENS[scenario]
-        executed_flops = tokens * flops_per_token
+        executed_flops = executed_flops_by_scenario[scenario]
         latency_ns = float(span.median())
         control_latency_ns = float(control_span.median())
         mrs_ns = trace.typical_device_ns[MRS_OP]
@@ -346,11 +349,11 @@ def build_payload(traces: dict[str, Trace], controls: dict[str, Trace]) -> dict[
             "recurrence_delta_pct": trace.block_timing_ns["recurrence"] / control.block_timing_ns["recurrence"] - 1,
         }
     return {
-        "title": "Kimi Linear KDA · mixed-storage performance dossier",
+        "title": "Kimi Linear KDA · retained performance dossier",
         "branch": "mvasilijevic/codex/kimi-linear-kda",
-        "profile_commit": "43acf8af714",
+        "profile_commit": "36fe4f65df1",
         "profile_tree_clean": False,
-        "profile_date": "2026-07-24",
+        "profile_date": "2026-07-25",
         "hardware": "LoudBox · 8× Blackhole · 1×8 mesh · FABRIC_1D",
         "software": "firmware 19.5.0 · KMD 2.4.1",
         "method": (
@@ -361,12 +364,12 @@ def build_payload(traces: dict[str, Trace], controls: dict[str, Trace]) -> dict[
         "provenance_note": (
             "The KDA harness predates run manifests. CSV hashes, exact commands, hardware, and source-equivalent "
             "commit are recorded. Profiling preceded the final documentation commit; implementation behavior matches "
-            "b60f25012aa, while report/log files were dirty."
+            "36fe4f65df1, while report/log files were dirty."
         ),
         "baseline": (
-            "The before state is the matched all-FP32 prep/scan storage control selected with "
-            "QWEN_KDA_PREP_BF16_MASK=0. The after state stores kd, q_decay, and dl in BF16 (mask 0x26). "
-            "Arithmetic accumulation, intra, t_inv, recurrent state, and public outputs remain FP32."
+            "T=640 compares mixed storage against the matched all-FP32 boundary. T=5,120 compares the "
+            "retained owner-sharded affine summaries against the matched interleaved-L1 summary control. "
+            "Both use identical arithmetic and public dtypes; the long-sequence delta isolates ownership."
         ),
         "dtype_policy": {
             "mask": "0x26",
@@ -417,7 +420,7 @@ footer{{margin-top:55px;border-top:2px solid var(--ink);padding:18px 0;color:var
 <header><div><div class="eyebrow">Tracy-backed · source verified · TP8 Blackhole</div><h1>KDA<br>performance dossier</h1><p class="lede">A measured map of the Kimi Linear KDA layer: where time goes, how work is distributed, and how far the current implementation is from the 60% compute / 40% CCL aspiration.</p></div><div class="meta" id="meta"></div></header>
 <div class="controls"><div class="seg" id="scenarioSeg"><button data-s="t640" aria-pressed="true">T=640</button><button data-s="t5120" aria-pressed="false">T=5,120</button></div><div class="seg" id="viewSeg"><button data-v="semantic" aria-pressed="true">semantic</button><button data-v="ops" aria-pressed="false">operations</button></div></div>
 <section><div class="kicker">Measured outcome · selected mixed storage</div><div class="cards" id="cards"></div></section>
-<section><h2>FP32 control → mixed-storage result</h2><div class="split"><div class="panel" id="dtypeDelta"></div><div class="panel"><div class="kicker">Selected boundary policy</div><p><b>BF16 storage:</b> kd · q_decay · dl</p><p><b>FP32 retained:</b> v_beta · k_dec_t · intra · t_inv · recurrent state · public outputs</p><p class="note">This changes storage traffic across prep → scan. It does not change the TP=8 partition or fused output collective.</p></div></div></section>
+<section><h2>Matched control → retained result</h2><div class="split"><div class="panel" id="dtypeDelta"></div><div class="panel"><div class="kicker">Retained boundary policy</div><p><b>BF16 storage:</b> kd · q_decay · dl</p><p><b>FP32 retained:</b> v_beta · k_dec_t · intra · t_inv · recurrent state · public outputs</p><p class="note">At T=5,120 the affine summaries and group-entry states are owner-local L1. TP=8 head ownership and the fused output collective are unchanged.</p></div></div></section>
 <section><h2>Replay stability and scaling</h2><div class="split"><div class="panel"><svg id="spark" class="spark" viewBox="0 0 680 220" role="img" aria-label="Measured wall latency by Tracy replay session"></svg><p class="legend">Ten measured replay spans. Axes show replay session and measured wall latency; hover or keyboard-focus a point for its exact value.</p></div><div class="panel" id="scaling"></div></div></section>
 <section><h2>Source-verified dataflow</h2><p class="note">Node time is collapsed active kernel time, not wall time. Click a semantic node for its source proof; double-click to expand its exact Tracy calls. Drag to pan and use the controls to zoom.</p><div class="graph-shell"><svg id="graph" viewBox="0 0 1420 620"></svg><div class="zoom"><button data-z="in">+</button><button data-z="out">−</button><button data-z="reset">reset</button></div></div><p class="legend" id="graphLegend"></p></section>
 <section><h2>Ordered operation ledger</h2><div class="call-grid"><table><thead><tr><th data-sort="order">#</th><th data-sort="label">Tracy operation</th><th data-sort="block">semantic block</th><th class="num" data-sort="duration_ns">median µs</th><th class="num" data-sort="p10_ns">p10</th><th class="num" data-sort="p90_ns">p90</th><th class="num" data-sort="cores">cores</th></tr></thead><tbody id="opRows"></tbody></table></div></section>
@@ -434,7 +437,7 @@ function staticDraw(){{
  $('meta').innerHTML=`<div><b>profile commit</b>${{P.profile_commit.slice(0,12)}}</div><div><b>branch</b>${{esc(P.branch)}}</div><div><b>platform</b>${{esc(P.hardware)}}</div><div><b>software</b>${{esc(P.software)}}</div>`;
  $('sources').innerHTML=P.blocks.map(b=>`<details><summary>${{esc(b.label)}} · ${{esc(b.file)}}:${{b.lines[0]}}-${{b.lines[1]}}</summary><pre>${{esc(b.snippet)}}</pre></details>`).join('');
  $('fullCalls').innerHTML=Object.values(P.scenarios).map(s=>`<h3>${{s.label}}</h3><div class="call-grid"><table><thead><tr><th>#</th><th>op</th><th>block</th><th class="num">median µs</th><th>program hash</th></tr></thead><tbody>${{s.calls.map(c=>`<tr><td>${{c.order}}</td><td>${{esc(c.op)}}</td><td>${{esc(c.block)}}</td><td class="num">${{(c.duration_ns/1000).toFixed(3)}}</td><td class="mono">${{esc(c.program_hash)}}</td></tr>`).join('')}}</tbody></table></div>`).join('');
- $("provenance").innerHTML=Object.values(P.scenarios).map(s=>`<h3>${{s.label}}</h3><p><b>Selected mixed-storage CSV</b> <span class="mono">${{esc(s.csv)}}</span><br><b>SHA-256</b> <span class="mono">${{s.csv_sha256}}</span><br><b>measured rows</b> ${{s.csv_rows.toLocaleString()}}</p><pre>${{esc(s.command)}}</pre><p><b>FP32 control CSV</b> <span class="mono">${{esc(s.control.csv)}}</span><br><b>SHA-256</b> <span class="mono">${{s.control.csv_sha256}}</span><br><b>measured rows</b> ${{s.control.csv_rows.toLocaleString()}}</p><pre>${{esc(s.control.command)}}</pre>`).join("")+`<p><b>Source-equivalent profile commit:</b> ${{P.profile_commit}}.</p><p>${{esc(P.provenance_note)}}</p><p>${{esc(P.method)}}</p><p class="note">${{esc(P.baseline)}}</p>`;
+ $("provenance").innerHTML=Object.values(P.scenarios).map(s=>`<h3>${{s.label}}</h3><p><b>Retained candidate CSV</b> <span class="mono">${{esc(s.csv)}}</span><br><b>SHA-256</b> <span class="mono">${{s.csv_sha256}}</span><br><b>measured rows</b> ${{s.csv_rows.toLocaleString()}}</p><pre>${{esc(s.command)}}</pre><p><b>Matched control CSV</b> <span class="mono">${{esc(s.control.csv)}}</span><br><b>SHA-256</b> <span class="mono">${{s.control.csv_sha256}}</span><br><b>measured rows</b> ${{s.control.csv_rows.toLocaleString()}}</p><pre>${{esc(s.control.command)}}</pre>`).join("")+`<p><b>Source-equivalent profile commit:</b> ${{P.profile_commit}}.</p><p>${{esc(P.provenance_note)}}</p><p>${{esc(P.method)}}</p><p class="note">${{esc(P.baseline)}}</p>`;
 }}
 function drawCards(){{
  const s=P.scenarios[scenario],cards=[['wall latency',fmtNs(s.latency_ns),`${{fmtNs(s.latency_min_ns)}}–${{fmtNs(s.latency_max_ns)}} across ten replays`],['compute utilization',pct(s.compute_util),`executed ${{(s.executed_flops/1e9).toFixed(1)}} GFLOP / 8-chip HiFi4 peak`,s.compute_util/P.aspiration.compute_util,'cool'],['CCL utilization',pct(s.ccl_util),`${{s.ccl_effective_gbps.toFixed(1)}} GB/s effective payload / 100 GB/s target`,s.ccl_util/P.aspiration.ccl_util,''],['collapsed active',fmtNs(s.graph_total_ns),`${{s.calls.length}} calls · graph share denominator`]];
@@ -462,7 +465,7 @@ function drawGraph(){{
 }}
 function openDrawer(id){{const b=P.blocks.find(x=>x.id===id),s=P.scenarios[scenario],calls=s.calls.filter(c=>c.block===id);$('drawerBody').innerHTML=`<div class="kicker">${{fmtNs(s.block_timing_ns[id])}} · ${{pct(s.block_timing_ns[id]/s.graph_total_ns)}}</div><h2>${{esc(b.label)}}</h2><p>${{esc(b.desc)}}</p><p><b>tensor contract</b><br>${{esc(b.shape)}}</p><p><b>distribution</b><br>${{esc(b.distribution)}}</p><p><b>Tracy calls</b><br>${{calls.map(c=>c.order+' '+esc(c.label)+' '+fmtNs(c.duration_ns)).join('<br>')}}</p><p><b>${{esc(b.file)}}:${{b.lines[0]}}-${{b.lines[1]}}</b></p><pre>${{esc(b.snippet)}}</pre>`;$('drawer').classList.add('open');}}
 function drawTable(){{const calls=[...P.scenarios[scenario].calls].sort((a,b)=>{{let x=a[sortKey]??0,y=b[sortKey]??0;return (typeof x==='string'?x.localeCompare(y):x-y)*sortDir;}});$('opRows').innerHTML=calls.map(c=>`<tr><td>${{c.order}}</td><td title="${{esc(c.op)}}">${{esc(c.label)}}</td><td>${{esc(c.block)}}</td><td class="num">${{(c.duration_ns/1000).toFixed(3)}}</td><td class="num">${{(c.p10_ns/1000).toFixed(3)}}</td><td class="num">${{(c.p90_ns/1000).toFixed(3)}}</td><td class="num">${{c.cores??'—'}}</td></tr>`).join('');}}
-function drawRoofline(){{const s=P.scenarios[scenario],computeGap=P.aspiration.compute_util/s.compute_util,cclGap=P.aspiration.ccl_util/s.ccl_util;$('roofline').innerHTML=`<h3>${{s.label}}</h3><p>Executed-work estimate: <b>${{(s.executed_flops/1e9).toFixed(3)}} GFLOP</b>. Against the 8-chip HiFi4 peak of 1,216.512 TFLOP/s and measured wall latency, this is <b>${{pct(s.compute_util)}}</b> utilization. Reaching 60% requires about <b>${{computeGap.toFixed(1)}}×</b> the present useful-FLOP rate.</p><p>The fused output collective moves a minimum FP32 ring payload of <b>${{(s.ccl_payload_bytes/1e6).toFixed(2)}} MB</b>. Dividing by its typical-device Tracy median gives <b>${{s.ccl_effective_gbps.toFixed(1)}} GB/s</b>, or <b>${{pct(s.ccl_util)}}</b> of the 100 GB/s planning target; the 40% aspiration is ${{cclGap.toFixed(2)}}× away. This is a lower-bound payload model because Tracy exposes the fused kernel, not isolated link occupancy.</p><p>The source and trace together identify recurrence and fused output as the dominant optimization surfaces.</p>`;}}
+function drawRoofline(){{const s=P.scenarios[scenario],computeGap=P.aspiration.compute_util/s.compute_util,cclGap=P.aspiration.ccl_util/s.ccl_util;$('roofline').innerHTML=`<h3>${{s.label}}</h3><p>Executed-work estimate: <b>${{(s.executed_flops/1e9).toFixed(3)}} GFLOP</b>. Against the 8-chip HiFi4 peak of 1,216.512 TFLOP/s and measured wall latency, this is <b>${{pct(s.compute_util)}}</b> utilization. Reaching 60% requires about <b>${{computeGap.toFixed(1)}}×</b> the present useful-FLOP rate.</p><p>The fused output collective moves a minimum FP32 ring payload of <b>${{(s.ccl_payload_bytes/1e6).toFixed(2)}} MB</b>. Dividing by its typical-device Tracy median gives <b>${{s.ccl_effective_gbps.toFixed(1)}} GB/s</b>, or <b>${{pct(s.ccl_util)}}</b> of the 100 GB/s planning target; the 40% aspiration is ${{cclGap.toFixed(2)}}× away. This is a lower-bound payload model because Tracy exposes the fused kernel, not isolated link occupancy.</p><p>The retained grouped prefix removes the old serial-scan bottleneck; fused output, projection, and convolution now dominate.</p>`;}}
 function draw(){{sync();drawCards();drawDtypeDelta();drawSpark();drawGraph();drawTable();drawRoofline();}}
 document.querySelectorAll('#scenarioSeg button').forEach(b=>b.onclick=()=>{{scenario=b.dataset.s;expanded.clear();scale=1;tx=0;ty=0;draw();}});document.querySelectorAll('#viewSeg button').forEach(b=>b.onclick=()=>{{view=b.dataset.v;expanded.clear();draw();}});
 document.querySelectorAll('th[data-sort]').forEach(h=>h.onclick=()=>{{if(sortKey===h.dataset.sort)sortDir*=-1;else{{sortKey=h.dataset.sort;sortDir=1;}}drawTable();}});document.querySelectorAll('.zoom button').forEach(b=>b.onclick=()=>{{if(b.dataset.z==='in')scale*=1.18;else if(b.dataset.z==='out')scale/=1.18;else{{scale=1;tx=0;ty=0;}}drawGraph();}});

@@ -81,10 +81,10 @@ footer{margin-top:60px;border-top:1px solid var(--line);padding:22px 0;color:var
   </div>
   <div class="meta">
     <div><b>Branch</b>mvasilijevic/codex/kimi-linear-kda</div>
-    <div><b>Source-equivalent commit</b>43acf8af714 · mixed storage 0x26 + BF16 prefill gate</div>
-    <div><b>Control</b>matched FP32 storage · mask 0</div>
+    <div><b>Source-equivalent commit</b>36fe4f65df1 · owner-sharded grouped affine prefix</div>
+    <div><b>Control</b>T640: FP32 storage; T5120: interleaved-L1 summaries</div>
     <div><b>Hardware</b>LoudBox · 8× Blackhole · 1×8 mesh · FABRIC_1D</div>
-    <div><b>Fresh profile</b>2026-07-24 · ten measured replays after warm-up</div>
+    <div><b>Fresh profile</b>2026-07-25 · ten measured replays after warm-up</div>
   </div>
 </header>
 
@@ -97,7 +97,7 @@ footer{margin-top:60px;border-top:1px solid var(--line);padding:22px 0;color:var
 </div>
 
 <section id="verdict">
-  <div class="verdict"><div class="kicker">Verdict</div><div><strong>Head tensor-parallelism is the right outer decomposition; the ordered scan is the irreducible serial axis.</strong><p>Each of eight chips owns four complete heads and their FP32 state. Prep and epilogue fan out over head×chunk work. Scan uses four V-block workers per head. Only the final row-parallel output projection communicates.</p></div></div>
+  <div class="verdict"><div class="kicker">Verdict</div><div><strong>Whole-head TP remains the right outer decomposition; at T=5,120 a two-level affine scan replaces the 160-step serial chain.</strong><p>Each chip owns four complete heads and FP32 state. Prep uses 110 cores; 80 whole-V owners build eight-chunk summaries, execute a receiver-owned prefix, and finish their local groups. Only the final row-parallel output projection communicates.</p></div></div>
   <div class="cards" id="cards"></div>
 </section>
 
@@ -111,18 +111,18 @@ footer{margin-top:60px;border-top:1px solid var(--line);padding:22px 0;color:var
     <article class="stage"><span class="n">03</span><h3>Direct slices + decay</h3><p>Aligned Q/K/V remain flat. β gets sigmoid; the rank-128 decay projection folds bias, Softplus and negative exponential scale into its consuming FP32 multiply.</p><span class="shape">g = −exp(Alog) · softplus(r+b)<br>[1,T,512] BF16</span><a href="tt-metal.worktrees/kimi-linear-kda/models/experimental/kimi_delta_attention/tt/layer.py#L302">layer.py:302</a></article>
     <article class="stage"><span class="n">04</span><h3>Chunk preparation</h3><p>For every head×32-token chunk, the kernel normalizes flat Q/K, builds decay-weighted K/V, A<sub>kk</sub>, A<sub>qk</sub>, and an exact causal inverse.</p><span class="shape">T⁻¹: [32,32] FP32<br>kd · q_decay · dl BF16<br>other prepared tensors FP32</span><a href="tt-metal.worktrees/kimi-linear-kda/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_kda_prep.cpp#L374">chunk_kda_prep.cpp:374</a></article>
     <article class="stage"><span class="n">05</span><h3>Exact doubling inverse</h3><p>The inverse is not the 128×128 recurrent state. Nilpotence reduces the 32×32 unit-triangular solve from 30 serial products to eight tile matmuls.</p><span class="shape">(I−N)⁻¹ = Πₚ(I+N²ᵖ)<br>p = 0…4</span><a href="tt-metal.worktrees/kimi-linear-kda/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_kda_prep.cpp#L209">chunk_kda_prep.cpp:209</a></article>
-    <article class="stage"><span class="n">06</span><h3>Ordered chunk scan</h3><p>Each scan worker walks all chunks in order, applying the inverse after <code>vβ − kd·S</code>, emitting output, and carrying the full FP32 state forward.</p><span class="shape">S [4,128,128] / chip<br>FP32, no collective</span><a href="tt-metal.worktrees/kimi-linear-kda/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_kda_scan.cpp#L125">chunk_kda_scan.cpp:125</a></article>
+    <article class="stage"><span class="n">06</span><h3>Grouped affine scan</h3><p>At T≥5,120, 80 whole-V owners each summarize eight chunks as <code>S′=A·S+B</code>. A receiver-owned distance-1/2/4/8 prefix creates group-entry states; the same owners execute the final eight-chunk recurrence.</p><span class="shape">20 groups/head × 4 heads<br>A/B + entry state owner-sharded L1</span><a href="tt-metal.worktrees/kimi-linear-kda/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/chunk_gated_delta_rule.cpp#L611">chunk_gated_delta_rule.cpp:611–736</a></article>
     <article class="stage"><span class="n">07</span><h3>Fused gated RMS</h3><p>A dedicated kernel performs per-head RMS normalization, SiLU gate, multiply, and flat head concatenation in one program.</p><span class="shape">[4,T,128] FP32 + gate BF16<br>→ [1,T,512] FP32</span><a href="tt-metal.worktrees/kimi-linear-kda/models/experimental/kimi_delta_attention/tt/layer.py#L364">layer.py:364</a></article>
     <article class="stage"><span class="n">08</span><h3>Matmul + reduce-scatter</h3><p>The row-parallel output GEMM overlaps a Ring reduce-scatter. An 8×8 matmul grid leaves rows 8–9 available; four sender workers begin at (0,8).</p><span class="shape">local [1,T,512] × [512,2304]<br>→ [1,T,288] / chip</span><a href="tt-metal.worktrees/kimi-linear-kda/models/experimental/kimi_delta_attention/tt/layer.py#L398">layer.py:398</a></article>
   </div>
 
   <div class="split" style="margin-top:18px">
     <div class="panel">
-      <h3>The scan is the guide’s recurrence, factored</h3>
+      <h3>The grouped scan composes the guide’s recurrence</h3>
       <div class="equation">Vnew = T⁻¹ · (vβ − kd · Sin)
 O    = qd · Sin + Aqk · Vnew
 Sout = Diag(dl) · Sin + kdecᵀ · Vnew</div>
-      <p class="footnote">The correction term is evaluated against the decayed incoming state, matching the token-ordered reference.</p>
+      <p class="footnote">Each eight-chunk group evaluates this exact recurrence; affine prefix composition supplies the correct incoming state without changing token order inside a group.</p>
     </div>
     <div class="panel">
       <h3>Five guide-to-source corrections</h3>
@@ -147,7 +147,7 @@ Sout = Diag(dl) · Sin + kdecᵀ · Vnew</div>
   </div>
   <div class="core-panels" style="margin-top:16px">
     <article class="core-panel"><h3>Prep and gated RMS</h3><p id="prepText"></p><div class="core-grid" id="prepGrid"></div><div class="legend"><span><i class="swatch" style="background:var(--cyan)"></i>head×chunk item</span><span><i class="swatch" style="background:var(--idle)"></i>idle</span></div></article>
-    <article class="core-panel"><h3>Ordered scan</h3><p id="scanText"></p><div class="core-grid" id="scanGrid"></div><div class="legend"><span><i class="swatch" style="background:var(--violet)"></i>(head,V-block) worker</span><span><i class="swatch" style="background:var(--idle)"></i>idle</span></div></article>
+    <article class="core-panel"><h3>Recurrence scan</h3><p id="scanText"></p><div class="core-grid" id="scanGrid"></div><div class="legend"><span><i class="swatch" style="background:var(--violet)"></i>short V-split or long group owner</span><span><i class="swatch" style="background:var(--idle)"></i>idle</span></div></article>
     <article class="core-panel"><h3>Output matmul</h3><p>8×8 compute grid. The extra physical rows are not “free compute”: they preserve overlap with the collective.</p><div class="core-grid" id="mmGrid"></div><div class="legend"><span><i class="swatch" style="background:var(--blue)"></i>matmul</span><span><i class="swatch" style="background:var(--idle)"></i>unused here</span></div></article>
     <article class="core-panel"><h3>Ring reduce-scatter</h3><p>Two links × two ring directions × one sender each = four workers, allocated row-major from (0,8). Rows 8–9 are available to CCL; FP32 partials are mandatory.</p><div class="core-grid" id="rsGrid"></div><div class="legend"><span><i class="swatch" style="background:var(--amber)"></i>active RS sender</span><span><i class="swatch" style="background:var(--idle)"></i>not an RS sender</span></div></article>
   </div>
@@ -158,7 +158,7 @@ Sout = Diag(dl) · Sin + kdecᵀ · Vnew</div>
         <tr><td>Heads</td><td>32 → 4 whole heads/chip</td><td>Independent recurrence and full local state</td><td>None needed</td></tr>
         <tr><td>Sequence</td><td>Replicated on all 8 chips</td><td>No cross-partition state handoff</td><td>Sequence parallel: architecturally serializes scan boundaries</td></tr>
         <tr><td>Prep / RMS</td><td id="prepMap"></td><td>Independent head×chunk work saturates available cores</td><td>Subdivide 32-token item: requires a K reduction; unmeasured</td></tr>
-        <tr><td>Scan</td><td>4 V blocks/head × 4 heads = 16 cores</td><td>H=4 is below measured mapping crossover</td><td>Full V/head: 148.009 µs vs 96.132 µs</td></tr>
+        <tr><td>Scan</td><td id="scanMap"></td><td>Short sequence favors V splitting; long sequence exposes 80 independent groups</td><td>Static 94/16 prep/scan fusion regressed 1.19%</td></tr>
         <tr><td>Output</td><td>8×8 MM + 4 RS senders from (0,8)</td><td>Best measured compute/CCL overlap</td><td>Smaller MM grids and extra RS workers regress</td></tr>
       </tbody>
     </table>
@@ -168,7 +168,7 @@ Sout = Diag(dl) · Sin + kdecᵀ · Vnew</div>
 <section id="decisions">
   <div class="kicker">03 · optimization evidence</div>
   <h2>What worked, what did not</h2>
-  <p class="section-lede">The current endpoint is a matched FP32-storage versus mixed-storage A/B on the same hardware and harness. CSV hashes and exact commands are recorded; the harness predates run manifests, so the report explicitly distinguishes source-equivalent fresh traces from historical measurements.</p>
+  <p class="section-lede">The final endpoint is an owner-sharded versus interleaved-L1 affine-summary A/B on the same hardware and harness; the earlier dtype sweep remains in the ledger. CSV hashes and exact commands are recorded; the harness predates run manifests, so the report explicitly distinguishes source-equivalent fresh traces from historical measurements.</p>
   <div class="filter" id="statusFilter">
     <button data-status="all" aria-pressed="true">All</button>
     <button data-status="retain" aria-pressed="false">Retained</button>
@@ -182,7 +182,7 @@ Sout = Diag(dl) · Sin + kdecᵀ · Vnew</div>
 
 <section id="roofline">
   <div class="kicker">04 · roofline diagnosis</div>
-  <h2>Mixed storage moves the memory roof; compute remains far away and CCL is essentially there</h2>
+  <h2>Grouped prefix removes the serial wall; compute remains far away and CCL is essentially there</h2>
   <p class="section-lede">Blackhole HiFi4 peak is 152.064 TFLOP/s per chip; DRAM is 512 GB/s, giving a 297 FLOP/byte ridge. The whole-layer compute percentage uses the 8-chip mesh peak and executed FLOPs. CCL uses the effective two-link payload roofline.</p>
   <div class="split">
     <article class="panel">
@@ -204,14 +204,14 @@ Sout = Diag(dl) · Sin + kdecᵀ · Vnew</div>
     <article class="panel">
       <h3>Fresh whole-layer target utilization</h3>
       <div id="utilBars"></div>
-      <div class="callout warn" style="margin-top:18px"><b>Interpretation.</b> At T=5,120, CCL is 39.79% against the 40% aspiration—within 0.21 percentage points. Compute is 12.40% against 60%, but that does not mean the layer is simply an inefficient GEMM: recurrence prep/scan are DRAM-bound, output is communication-bound, and the ordered scan cannot fan out across chunks.</div>
-      <div class="callout good" style="margin-top:10px"><b>Distribution consequence.</b> Preserve the 8×8 output matmul grid and two RS rows. Attempts to donate matmul cores to CCL made the fused boundary slower. On recurrence, keep 16 scan cores at H=4; adding synchronization to share reads also lost badly.</div>
+      <div class="callout warn" style="margin-top:18px"><b>Interpretation.</b> At T=5,120, CCL is 39.67% against the 40% aspiration—within 0.33 percentage points. Compute is 14.15% against 60%, but that does not mean the layer is simply an inefficient GEMM: recurrence remains memory/synchronization sensitive, output is communication-bound, and the grouped prefix adds useful work to shorten dependency depth.</div>
+      <div class="callout good" style="margin-top:10px"><b>Distribution consequence.</b> Preserve the 8×8 output matmul grid and two RS rows. Attempts to donate matmul cores to CCL made the fused boundary slower. At long sequence, retain the 80 whole-V group owners; static prep/scan partitioning and both grouped-RMS fusion topologies regressed.</div>
     </article>
   </div>
   <div class="thirds" style="margin-top:16px">
-    <div class="callout good"><h3>Compute target</h3><p>Executed work scales 8× from 67.594 to 540.752 GFLOP, while wall grows 5.57×. Utilization rises from 8.63% to 12.40%, so longer sequence amortizes fixed/layout overhead but does not change the memory-bound recurrence roof.</p></div>
-    <div class="callout good"><h3>CCL target</h3><p>Effective two-link utilization rises from 35.05% to 39.79%. The T=5,120 output boundary is the closest part of the layer to its aspirational target.</p></div>
-    <div class="callout warn"><h3>Serial axis</h3><p>Prep grows from 80 independent items to 640 and fills all 110 cores. Scan stays at 16 workers, each walking 20→160 chunks; its latency grows almost linearly with sequence.</p></div>
+    <div class="callout good"><h3>Compute target</h3><p>Executed work grows from 67.594 to about 547.765 GFLOP, including affine summaries and prefix, while wall grows 5.14×. Utilization rises from 8.97% to 14.15%, so longer sequence amortizes fixed/layout overhead but does not change the memory-bound recurrence roof.</p></div>
+    <div class="callout good"><h3>CCL target</h3><p>Effective two-link utilization rises from 34.90% to 39.67%. The T=5,120 output boundary is the closest part of the layer to its aspirational target.</p></div>
+    <div class="callout warn"><h3>Serial axis</h3><p>Prep grows from 80 independent items to 640 and fills all 110 cores. The long path replaces sixteen 160-chunk walkers with 80 eight-chunk owners plus a four-stage affine prefix.</p></div>
   </div>
 </section>
 
@@ -224,20 +224,20 @@ Sout = Diag(dl) · Sin + kdecᵀ · Vnew</div>
       <ul class="source-list">
         <li>T=640 selected: 2,400 rows · SHA-256 <code>09d6eebf…adb873</code></li>
         <li>T=640 FP32 control: 2,400 rows · SHA-256 <code>106c501e…39976</code></li>
-        <li>T=5,120 selected: 2,800 rows · SHA-256 <code>b3fd2c8f…f98a02</code></li>
-        <li>T=5,120 FP32 control: 2,800 rows · SHA-256 <code>25759170…3ac2c3</code></li>
+        <li>T=5,120 retained: 1,920 rows · SHA-256 <code>b72bd0ce…812524</code></li>
+        <li>T=5,120 interleaved-summary control: 1,920 rows · SHA-256 <code>7b48a603…feb759</code></li>
         <li>Ten measured replays, sessions 2–11; session 1 is warm-up.</li>
         <li>Wall = slowest-device firmware span. Graph compute calls = device max; fused MMRS = device mean.</li>
-        <li>The harness predates run manifests. Source behavior matches <code>b60f25012aa</code>; report/log files were dirty during profiling.</li>
+        <li>The harness predates run manifests. Source behavior matches <code>36fe4f65df1</code>; report/log files were dirty during profiling.</li>
       </ul>
     </div>
     <div class="panel">
       <h3>Validation boundary</h3>
       <ul class="source-list">
         <li>Recorded functional suite: <b>27/27 pass</b>.</li>
-        <li>Focused TP output / state / conv PCC: <b>0.999964 / 0.999903 / 0.999997</b>.</li>
+        <li>Focused TP output / state / conv PCC: <b>0.999958 / 0.999890 / 0.999997</b>.</li>
         <li>Flat T=64 chunk output / state PCC: <b>0.999994 / 0.999995</b>.</li>
-        <li>Final hardware validation was rerun: <b>27/27 pass in 74.95 s</b>; both T=5,120 profiles passed.</li>
+        <li>Final retained T=5,120 hardware gate passed; the final owner-sharded profile and matched control both passed.</li>
       </ul>
     </div>
   </div>
@@ -252,15 +252,15 @@ QWEN_KDA_PREP_BF16_MASK=0x26 PERF_TRACE=1 PERF_SEQ=640 PERF_REPS=10 scripts/run_
   models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s
 generated/profiler/reports/2026_07_24_16_17_28/ops_perf_results_2026_07_24_16_17_28.csv
 
-T=5,120 FP32 control:
-QWEN_KDA_PREP_BF16_MASK=0 PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 scripts/run_safe_pytest.sh --profile \
+T=5,120 interleaved-summary control:
+QWEN_KDA_SUMMARY_INTERLEAVED=1 PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 scripts/run_safe_pytest.sh --profile --run-all \
   models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s
-generated/profiler/reports/2026_07_24_16_22_50/ops_perf_results_2026_07_24_16_22_50.csv
+generated/profiler/reports/2026_07_25_02_20_13/ops_perf_results_2026_07_25_02_20_13.csv
 
-T=5,120 selected default (mask 0x26):
-PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 scripts/run_safe_pytest.sh --profile \
+T=5,120 retained owner-sharded summaries:
+QWEN_KDA_SUMMARY_SHARDED=1 PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 scripts/run_safe_pytest.sh --profile --run-all \
   models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s
-generated/profiler/reports/2026_07_24_16_24_06/ops_perf_results_2026_07_24_16_24_06.csv</pre></details>
+generated/profiler/reports/2026_07_25_02_18_57/ops_perf_results_2026_07_25_02_18_57.csv</pre></details>
     <details><summary>Roofline assumptions</summary><pre>Per-chip HiFi4 compute peak:
 110 cores × 4,096 FLOP/cycle ÷ 4 × 1.35 GHz = 152.064 TFLOP/s
 
@@ -268,8 +268,8 @@ DRAM roof: 512 GB/s
 Ridge point: 152.064 TFLOP/s ÷ 0.512 TB/s = 297 FLOP/byte
 
 Whole-mesh compute utilization:
-T640:  67.594 GFLOP / 643.623 µs / (8 × 152.064 TFLOP/s) = 8.63%
-T5120: 540.752 GFLOP / 3,584.949 µs / (8 × 152.064 TFLOP/s) = 12.40%
+T640:  67.594 GFLOP / 619.594 µs / (8 × 152.064 TFLOP/s) = 8.97%
+T5120: 547.765 GFLOP / 3,183.263 µs / (8 × 152.064 TFLOP/s) = 14.15%
 
 CCL utilization uses payload bytes divided by typical-device fused MMRS duration,
 against the measured effective two-link roofline used by the branch analysis.</pre></details>
@@ -295,10 +295,18 @@ against the measured effective two-link roofline used by the branch analysis.</p
 <script id="report-data" type="application/json">
 {
   "scenarios":{
-    "t640":{"label":"T=640","tokens":640,"wall_us":619.594,"control_wall_us":659.024,"active_us":586.404,"graph_us":586.404,"compute":8.97,"control_compute":8.43,"ccl":34.90,"flops":67.594,"mmrs_us":147.864,"prep_items":80,"prep_cores":80,"prep_us":75.868,"scan_us":67.765,"recurrence_us":143.633,"control_recurrence_us":183.096,"rms_us":19.255,"chunks":20},
-    "t5120":{"label":"T=5,120","tokens":5120,"wall_us":3385.003,"control_wall_us":3681.529,"active_us":3377.191,"graph_us":3377.191,"compute":13.13,"control_compute":12.07,"ccl":39.66,"flops":540.752,"mmrs_us":1040.965,"prep_items":640,"prep_cores":110,"prep_us":306.496,"scan_us":500.685,"recurrence_us":807.181,"control_recurrence_us":1023.411,"rms_us":87.405,"chunks":160}
+    "t640":{"label":"T=640","tokens":640,"wall_us":619.594,"control_wall_us":659.024,"control_label":"FP32 storage","active_us":586.404,"graph_us":586.404,"compute":8.97,"control_compute":8.43,"ccl":34.90,"flops":67.594,"mmrs_us":147.864,"prep_items":80,"prep_cores":80,"prep_us":75.868,"scan_cores":16,"scan_us":67.765,"recurrence_us":143.633,"control_recurrence_us":183.096,"rms_us":19.255,"chunks":20},
+    "t5120":{"label":"T=5,120","tokens":5120,"wall_us":3183.263,"control_wall_us":3200.471,"control_label":"interleaved-L1 summaries","active_us":3125.218,"graph_us":3125.384,"compute":14.15,"control_compute":14.07,"ccl":39.67,"flops":547.765,"mmrs_us":1040.837,"prep_items":640,"prep_cores":110,"prep_us":306.372,"scan_cores":80,"summary_us":134.928,"prefix_us":116.670,"scan_us":354.407,"recurrence_us":660.779,"control_recurrence_us":679.819,"rms_us":84.775,"chunks":160}
   },
   "decisions":[
+    {"status":"retain","scope":"Long scan","name":"Receiver-owned affine prefix","result":"3262.281 → 3216.229 µs","delta":-1.41,"reason":"One-pass summaries plus a persistent distance-1/2/4/8 prefix and eight-chunk final scan replace the 160-step serial chain while preserving PCC.","tier":"fresh matched trace + correctness"},
+    {"status":"retain","scope":"Long scan","name":"L1 group-entry states","result":"3211.482 → 3195.611 µs","delta":-0.49,"reason":"Prefix and grouped scan share the same 80-owner map; distributed L1 removes the 5 MiB DRAM boundary.","tier":"fresh matched trace + correctness"},
+    {"status":"retain","scope":"Long scan","name":"Owner-sharded affine summaries","result":"3200.471 → 3183.263 µs","delta":-0.54,"reason":"One [128,128] A and B shard per owner removes interleaved-L1 NOC handoff; prefix improves 13.617 µs.","tier":"fresh matched trace + correctness"},
+    {"status":"retain","scope":"Conv","name":"Direct-output causal convolution","result":"3380.644 → 3334.239 µs; calls 24 → 21","delta":-1.37,"reason":"The row-major custom path writes Q, K, and V directly and removes three post-convolution slices.","tier":"fresh matched trace + correctness"},
+    {"status":"reject","scope":"RMS","name":"Grouped RMS fusion","result":"disjoint +2.02%; owner-local pooled +0.125%","delta":0.13,"reason":"Disjoint consumers lose parallelism; local fusion moves RMS compute onto the recurrence critical path. Both topologies regress.","tier":"fresh matched traces + correctness"},
+    {"status":"reject","scope":"Pipeline","name":"Elastic 83-prep/27-summary split","result":"PCC passes; profiled warm replay hangs twice","delta":0,"reason":"The second hang had 260/260 JIT cache hits, ruling out first-build latency; the multi-head CB protocol is not trace-safe.","tier":"fresh hardware diagnosis"},
+    {"status":"reject","scope":"Conv","name":"Direct tiled-input convolution","result":"T672 output PCC 0.951854","delta":0,"reason":"Correct convolution and recurrent state isolate the error to raw cross-core three-row prefix import; canonical tile offsets do not repair it.","tier":"correctness-only rejection"},
+    {"status":"reject","scope":"Chunk","name":"Chunk size 64","result":"output/state PCC 0.996686/0.929095","delta":0,"reason":"Ct=2 inverse variants agree, leaving recurrence numerics or state handoff unresolved; profiling an incorrect candidate was rejected.","tier":"correctness-only rejection"},
     {"status":"retain","scope":"Gate","name":"BF16 transformed prefill gate","result":"T640 622.564 → 619.594 µs; T5120 3474.029 → 3385.003 µs","delta":-2.56,"reason":"Halved transformed-gate storage traffic; the decay block fell 46.1% with TP PCC 0.999965/0.999910/0.999997 and 27/27 tests passing.","tier":"fresh matched trace + correctness"},
     {"status":"retain","scope":"Storage","name":"kd + q_decay + dl BF16","result":"T640 659.024 → 643.623 µs; T5120 3681.529 → 3584.949 µs","delta":-2.62,"reason":"Halved selected prep-write and repeated scan-read traffic; recurrence fell 10.02% at T5120 with unchanged TP PCC.","tier":"fresh matched trace"},
     {"status":"retain","scope":"Storage","name":"q_decay BF16","result":"659.024 → 653.435 µs","delta":-0.85,"reason":"Read-heavy decay storage reduced scan traffic with control-equivalent TP PCC.","tier":"fresh matched trace"},
@@ -343,7 +351,7 @@ function card(label,value,sub,pct=0){return `<div class="card"><div class="label
 function renderCards(){
   const d=DATA.scenarios[scenario];
   $("cards").innerHTML=
-    card("Measured wall latency",`${fmt(d.wall_us)} µs`,`FP32 control ${fmt(d.control_wall_us)} µs · ${((d.wall_us/d.control_wall_us-1)*100).toFixed(2)}%`,d.wall_us/40)+
+    card("Measured wall latency",`${fmt(d.wall_us)} µs`,`${d.control_label} ${fmt(d.control_wall_us)} µs · ${((d.wall_us/d.control_wall_us-1)*100).toFixed(2)}%`,d.wall_us/40)+
     card("Mesh compute",`${d.compute.toFixed(2)}%`,`target 60% · ${fmt(d.flops)} GFLOP executed`,d.compute/60*100)+
     card("Effective CCL",`${d.ccl.toFixed(2)}%`,`target 40% · fused MMRS ${fmt(d.mmrs_us)} µs`,d.ccl/40*100)+
     card("Active / wall",`${(d.active_us/d.wall_us*100).toFixed(2)}%`,`active ${fmt(d.active_us)} µs · ledger ${fmt(d.graph_us)} µs`,d.active_us/d.wall_us*100);
@@ -363,12 +371,13 @@ function physicalGrid(id,kind,predicate,labelFn){
 function renderDistribution(){
   const d=DATA.scenarios[scenario];
   grid("prepGrid","prep",d.prep_cores,i=>d.prep_items<=110?`core ${i}: 1 work item`:`core ${i}: ${i<90?6:5} work items`);
-  grid("scanGrid","scan",16,i=>`core ${i}: head ${Math.floor(i/4)}, V block ${i%4}, scans ${d.chunks} chunks`);
+  grid("scanGrid","scan",d.scan_cores,i=>d.scan_cores===16?`core ${i}: head ${Math.floor(i/4)}, V block ${i%4}, scans ${d.chunks} chunks`:`core ${i}: group owner ${i}, scans 8 chunks`);
   physicalGrid("mmGrid","mm",(x,y)=>x<8&&y<8,(x,y)=>`core (${x},${y}): 8×8 matmul worker`);
   physicalGrid("rsGrid","rs",(x,y)=>y===8&&x<4,(x,y)=>`core (${x},${y}): Ring RS sender`);
   $("prepText").textContent=d.prep_items<=110?`${d.prep_items} independent head×chunk items map one-per-core; 30 cores are idle in this phase.`:`${d.prep_items} items fill 110 cores: the first 90 take six each, the last 20 take five.`;
-  $("scanText").textContent=`16 workers remain fixed: four V blocks × four heads. Each worker walks all ${d.chunks} chunks in order.`;
+  $("scanText").textContent=d.scan_cores===16?`16 workers: four V blocks × four heads; each walks ${d.chunks} chunks.`:`80 whole-V owners: 20 eight-chunk groups × four heads, followed by a receiver-owned affine prefix.`;
   $("prepMap").textContent=d.prep_items<=110?"80 items → 80 cores":"640 items → 110 cores (90×6 + 20×5)";
+  $("scanMap").textContent=d.scan_cores===16?"16 V-split workers":"80 whole-V group owners (20/head)";
 }
 function renderUtil(){
   const d=DATA.scenarios[scenario];

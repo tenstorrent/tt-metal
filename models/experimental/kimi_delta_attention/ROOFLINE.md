@@ -559,3 +559,49 @@ now the decisive unknown.
 ### Generic-prefix measurement
 
 The five-stage generic Hillis-Steele oracle executes the correct work but takes `3120.528 us` for prefix/correction alone, versus the `210.978 us` 1%-win budget. Its effective rate is therefore dominated by 62 materializing launches and DRAM staging, not the `2.315 GFLOP` affine-composition roofline. This rejects general tensor composition and strengthens the requirement for a persistent CB-local prefix kernel.
+
+
+## Final retained grouped-prefix endpoint (2026-07-25)
+
+The final T=5,120 profile is
+`generated/profiler/reports/2026_07_25_02_18_57/ops_perf_results_2026_07_25_02_18_57.csv`
+(SHA-256 `b72bd0cea8ea5a129de946b631088012c3e6212e2e14a862b765377304812524`).
+Ten measured replays give a `3183.263 us` median slowest-device wall and
+`3125.384 us` collapsed active time. The matched interleaved-summary control is
+`3200.471 us`; owner sharding saves `17.208 us` (`0.538%`).
+
+The retained long recurrence is no longer the 16-worker, 160-step serial scan.
+Its collapsed critical-path attribution is:
+
+| Component | Median |
+|---|---:|
+| 110-core preparation | 306.372 us |
+| one-pass affine summaries, 80 owners | 134.928 us |
+| receiver-owned affine prefix | 116.670 us |
+| eight-chunk grouped final scan | 101.188 us |
+| final-state slice | 1.622 us |
+| recurrence block total | 660.779 us |
+
+The executed-work estimate grows from the original `540.752 GFLOP` to about
+`547.765 GFLOP`: the grouped path preserves token work and adds approximately
+`4.698 GFLOP` of two-state summary work plus `2.315 GFLOP` of affine-prefix
+composition. Against the eight-chip HiFi4 peak (`1216.512 TFLOP/s`) and measured
+wall, this is `14.15%` compute utilization. This is an executed-useful-work
+estimate, not an instruction-level utilization counter.
+
+The FP32 Ring reduce-scatter critical-path payload remains `41.287680 MB`. Its
+`1040.837 us` typical-device fused MMRS median gives `39.67 GB/s`, or `39.67%`
+of the effective `100 GB/s` planning roof. The 40% CCL aspiration is therefore
+within `0.33` percentage points; the 60% whole-layer compute aspiration remains
+far away.
+
+The remaining same-owner summary-to-prefix fusion is below the campaign stop
+threshold. Across 88 device/replay observations, prefix `OP TO OP LATENCY` is
+`0.539 us` median and `0.577 us` maximum (`0.0169%` and `0.0181%` of wall).
+Because summaries are already owner-sharded L1, this dispatch gap is the
+remaining measurable handoff ceiling.
+
+An 83-prep/27-summary service-rate experiment passed T=5,120 PCC but hung in two
+profiled warm replays, including a retry with `260/260` JIT cache hits. The
+ideal work model could hide at most about `37 us`; the tested multi-head CB
+protocol is not trace-safe, so no elastic-overlap speed result is claimed.

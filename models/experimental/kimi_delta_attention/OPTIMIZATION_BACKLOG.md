@@ -21,8 +21,8 @@ keeps failed experiments visible so they are not repeated unchanged.
   receiver-owned distributed prefix, and an eight-chunk grouped final scan.
 - T=5,120 selected recurrence times: affine summaries `134.994 us`, affine
   prefix `115.753 us`, and grouped final scan `121.325 us`.
-- Estimated T=5,120 compute utilization: `13.14%`.
-- Estimated T=5,120 CCL utilization: `39.79%` against the 40% aspiration.
+- Estimated T=5,120 compute utilization: `14.15%` (including grouped-summary and prefix work).
+- Estimated T=5,120 CCL utilization: `39.67%` against the 40% aspiration.
 - Final correctness gate: 27/27 tests passed; focused TP output/recurrent
   state/convolution PCC was `0.999965/0.999910/0.999997`.
 

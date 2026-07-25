@@ -333,3 +333,43 @@ items/core maximum rather than 110 cores with the same maximum. The reduced
 underfilled tail improves gated-RMS `86.339 -> 83.557 us` and layer wall
 `3334.239 -> 3330.328 us`. This distribution rule is shape-derived and does
 not alter scan, TP, or CCL placement.
+
+
+## Final retained T=5120 distribution (2026-07-25)
+
+Whole-head TP and sequence replication are unchanged: each of eight chips owns
+four complete KDA heads and their FP32 `[128,128]` states. No recurrence
+collective is introduced.
+
+The long-sequence recurrence now uses three core maps:
+
+- preparation distributes 640 `(head,chunk)` items over all 110 compute cores;
+  90 cores process six items and 20 process five;
+- affine summary construction maps 20 contiguous eight-chunk groups per head,
+  four heads per chip, to 80 row-major whole-V owners;
+- the receiver-owned distance-1/2/4/8 prefix and grouped final scan preserve
+  those same 80 owners. Each final worker executes only eight ordered chunks.
+
+Each summary owner writes one FP32 `A[128,128]` and `B[128,128]` shard into its
+own height-sharded L1 allocation. The prefix reads the same owner-local shards.
+Corrected group-entry states remain distributed L1 for the grouped scan. This
+same-owner placement is the source of the final `3200.471 -> 3183.263 us`
+(`-0.538%`) wall improvement; it is not a DRAM-saving claim.
+
+The short path remains the validated 16-worker V-split scan (four V blocks per
+local head). The T>=5,120 grouped path is selected only when there are at least
+160 chunks; `QWEN_KDA_SERIAL_SCAN=1` preserves the diagnostic serial control.
+
+Output placement is unchanged: an 8x8 matmul grid overlaps the FP32 Ring
+reduce-scatter with four sender workers in rows 8-9. The final fused MMRS reaches
+`39.67%` of the effective CCL roof, so recurrence changes do not justify moving
+cores away from that placement.
+
+Rejected distributions remain explicit constraints:
+
+- static 94-prep/16-scan producer-consumer fusion regressed wall by `1.19%`;
+- an 83-prep/27-summary batched protocol passed numerics but reproducibly hung
+  under trace replay;
+- 30 disjoint grouped-RMS consumers regressed `2.02%`;
+- 80 owner-local RMS workers regressed pooled wall by `0.125%` because RMS moved
+  onto the recurrence critical path.

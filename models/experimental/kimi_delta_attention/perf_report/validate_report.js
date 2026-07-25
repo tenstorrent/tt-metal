@@ -88,7 +88,7 @@ for (const key of ["t640", "t5120"]) {
   check(key + " trace invariants", () => {
     const scenario = P.scenarios[key];
     if (scenario.replay_spans_ns.length !== 10) throw new Error("not ten replays");
-    if (scenario.calls.length !== (key === "t640" ? 30 : 35)) throw new Error("call count");
+    if (scenario.calls.length !== (key === "t640" ? 30 : 24)) throw new Error("call count");
     const callSum = scenario.calls.reduce((sum, call) => sum + call.duration_ns, 0);
     const blockSum = Object.values(scenario.block_timing_ns).reduce((sum, value) => sum + value, 0);
     if (Math.round(callSum) !== Math.round(blockSum) || Math.round(blockSum) !== Math.round(scenario.graph_total_ns)) {
@@ -117,7 +117,7 @@ for (const key of ["t640", "t5120"]) {
 check("dtype A/B panel", () => {
   api.setScenario("t5120");
   const panel = document.getElementById("dtypeDelta").innerHTML;
-  if (!panel.includes("3,681.53 µs") || !panel.includes("3,584.95 µs") || !panel.includes("2.6% faster")) throw new Error("matched dtype comparison absent");
+  if (!panel.includes("3200.47 µs") || !panel.includes("3183.26 µs") || !panel.includes("0.5% faster")) throw new Error("matched final comparison absent");
 });
 check("node expand", () => {
   api.setScenario("t640"); api.setView("semantic"); api.expanded.add("convolution"); api.drawGraph();
@@ -126,7 +126,7 @@ check("node expand", () => {
 check("source drawer", () => {
   api.openDrawer("recurrence");
   const body = document.getElementById("drawerBody").innerHTML;
-  if (!/chunk_gdn_phased\.cpp:\d+-\d+/.test(body) || !body.includes("compute_output_specs")) throw new Error("source proof absent");
+  if (!/chunk_gated_delta_rule\.cpp:\d+-\d+/.test(body) || !body.includes("use_persistent_group_prefix")) throw new Error("source proof absent");
 });
 check("operation header is pinned to the table viewport", () => {
   if (!/th\{position:sticky;top:0;z-index:2/.test(report)) throw new Error("sticky header offset is not zero");
