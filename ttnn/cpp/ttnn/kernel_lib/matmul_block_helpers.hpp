@@ -416,24 +416,6 @@ template <
     typename In1BaseOffsetFn = NoIn1BaseOffset,
     typename Activation = NoneActivation,
     matmul_config::DataFormatReconfig reconfig = matmul_config::DataFormatReconfig::InputAndOutput,
-    // ── Compile-time block-shape opt-in (perf) ───────────────────────────────────────
-    // Pass the block dims here (they are compile-time constants at every caller) and the
-    // helper rebuilds a constexpr MatmulBlockShape so its fields FOLD TO IMMEDIATES. The
-    // runtime `const MatmulBlockShape& shape` below does NOT const-fold through this ALWI
-    // reference at -O3 — every loop bound / derived tile-count stays a runtime load, a
-    // per-subblock pack-thread tax (measured +0.38% on pack-bound block-sharded conv2d,
-    // 33 K-blocks × 13 subblocks). c_num_k_blocks == 0 (default) keeps the runtime path,
-    // so every non-opting caller is byte-identical. Fields mirror MatmulBlockShape::of.
-    uint32_t c_in0_num_subblocks = 0,
-    uint32_t c_in1_num_subblocks = 0,
-    uint32_t c_out_subblock_h = 0,
-    uint32_t c_out_subblock_w = 0,
-    uint32_t c_in0_block_k = 0,
-    uint32_t c_num_k_blocks = 0,
-    uint32_t c_batch = 1,
-    uint32_t c_last_in1_subblock_w_valid = 0,
-    uint32_t c_in1_per_core_w = 0,
-    uint32_t c_out_row_width = 0,
     typename Buf = ::CircularBuffer>
 ALWI void matmul_block_impl(
     Buf& in0_buf,
@@ -457,7 +439,7 @@ ALWI void matmul_block_impl(
  * Template parameters (see matmul_block_impl's doc above for the full semantics):
  *   transpose, packer_l1_acc, last_block_target, tile_order, init_mode, in0_policy, in1_policy,
  *   reconfig (right after in1_policy — the perf knob a caller tracking format usage sets),
- *   Activation, then the compile-time block-shape opt-in (c_*), then Buf.
+ *   Activation, then Buf.
  * Runtime parameters: (in0_buf, in1_buf, out_buf, interm_buf, shape) — no functor args.
  */
 template <
@@ -470,16 +452,6 @@ template <
     InputPolicy in1_policy = InputPolicy::WaitAndPopPerKBlock,
     matmul_config::DataFormatReconfig reconfig = matmul_config::DataFormatReconfig::InputAndOutput,
     typename Activation = NoneActivation,
-    uint32_t c_in0_num_subblocks = 0,
-    uint32_t c_in1_num_subblocks = 0,
-    uint32_t c_out_subblock_h = 0,
-    uint32_t c_out_subblock_w = 0,
-    uint32_t c_in0_block_k = 0,
-    uint32_t c_num_k_blocks = 0,
-    uint32_t c_batch = 1,
-    uint32_t c_last_in1_subblock_w_valid = 0,
-    uint32_t c_in1_per_core_w = 0,
-    uint32_t c_out_row_width = 0,
     typename Buf = ::CircularBuffer>
 ALWI void matmul_block(Buf& in0_buf, Buf& in1_buf, Buf& out_buf, Buf& interm_buf, const MatmulBlockShape& shape) {
     matmul_block_impl<
@@ -498,16 +470,6 @@ ALWI void matmul_block(Buf& in0_buf, Buf& in1_buf, Buf& out_buf, Buf& interm_buf
         NoIn1BaseOffset,
         Activation,
         reconfig,
-        c_in0_num_subblocks,
-        c_in1_num_subblocks,
-        c_out_subblock_h,
-        c_out_subblock_w,
-        c_in0_block_k,
-        c_num_k_blocks,
-        c_batch,
-        c_last_in1_subblock_w_valid,
-        c_in1_per_core_w,
-        c_out_row_width,
         Buf>(in0_buf, in1_buf, out_buf, interm_buf, shape);
 }
 

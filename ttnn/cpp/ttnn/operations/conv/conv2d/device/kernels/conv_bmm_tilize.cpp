@@ -672,17 +672,7 @@ void kernel_main() {
                 compute_kernel_lib::NoPostKBlock,
                 compute_kernel_lib::NoKBlockInnerDimFn,
                 compute_kernel_lib::NoIn0Source,
-                compute_kernel_lib::NoIn1BaseOffset,
-                // Compile-time block-shape opt-in: fold the helper's loop bounds / derived counts
-                // to immediates (avoids the runtime-MatmulBlockShape pack-thread tax; mirrors the
-                // MatmulBlockShape::of(...) args below). Everything here is a compile-time constant.
-                in0_num_subblocks,
-                in1_num_subblocks,
-                out_subblock_h,
-                out_subblock_w,
-                in0_block_w,
-                in0_num_blocks_w,
-                /*c_batch=*/1>(
+                compute_kernel_lib::NoIn1BaseOffset>(
                 cb_mm_in0,
                 cb_in1,
                 matmul_out_buf,
