@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from types import SimpleNamespace
 
 import pytest
@@ -10,12 +11,13 @@ import torch
 
 import models.common.llm_runtime.decode as decode_module
 import ttnn
-from models.common.lightweightmodule import LightweightModule
+from models.common.llm_runtime.config import PageTableLayout
 from models.common.llm_runtime.decode import (
     DecodeDeviceInputs,
     DecodePersistentInputs,
     DecodeProgramSignature,
     DecodeRuntime,
+    DecodeRuntimeConfig,
     DecodeTraceSignature,
     InvocationResult,
 )
@@ -61,15 +63,23 @@ class FakeModel:
 def make_runtime(*, sampling=True, force_greedy_top_k=False):
     mesh = FakeMesh()
     model = FakeModel()
-    layout = SimpleNamespace(raw_capacity_width=8, decode_width=8, block_size=32)
-    return DecodeRuntime(
-        model,
-        mesh,
-        OutputReader(mesh),
+    config = DecodeRuntimeConfig.resolve(
+        model=model,
+        output_reader=OutputReader(mesh),
         lane_capacity=2,
-        page_table_layout=layout,
+        page_table_layout=page_table_layout(),
         device_sampling_enabled=sampling,
         force_greedy_top_k=force_greedy_top_k,
+    )
+    return DecodeRuntime(config)
+
+
+def page_table_layout(*, raw_width=8, block_size=32):
+    return PageTableLayout(
+        block_size=block_size,
+        raw_capacity_width=raw_width,
+        prefill_width=((raw_width + 7) // 8) * 8,
+        decode_width=((raw_width + 7) // 8) * 8,
     )
 
 
@@ -116,6 +126,137 @@ def prepare(runtime, *, positions=(0, -1), page_table=None, sampling_params=None
         sampling_params,
         reset_batch=reset,
     )
+
+
+def test_config_resolves_canonical_static_capabilities_and_is_frozen(expect_error):
+    mesh = FakeMesh()
+    model = FakeModel()
+    config = DecodeRuntimeConfig.resolve(
+        model=model,
+        output_reader=OutputReader(mesh),
+        lane_capacity=2,
+        page_table_layout=page_table_layout(),
+        device_sampling_enabled=True,
+    )
+
+    assert config.cluster_shape == (1, 1)
+    assert config.num_devices == 1
+    assert config.vocab_size == 8
+    assert config.allow_force_argmax
+    assert config.position_feedback_capable
+    with expect_error(dataclasses.FrozenInstanceError, "cannot assign to field"):
+        config.lane_capacity = 1
+    with expect_error(TypeError, "DecodeRuntimeConfig"):
+        DecodeRuntime(config=None)
+
+
+def test_config_rejects_inconsistent_collaborators_and_dimensions(expect_error):
+    mesh = FakeMesh()
+    model = FakeModel()
+    model.config.mesh_device = mesh
+    with expect_error(ValueError, "same mesh_device"):
+        DecodeRuntimeConfig.resolve(
+            model=model,
+            output_reader=OutputReader(FakeMesh()),
+            lane_capacity=2,
+            page_table_layout=page_table_layout(),
+            device_sampling_enabled=True,
+        )
+    with expect_error(ValueError, "positive integer"):
+        DecodeRuntimeConfig.resolve(
+            model=model,
+            output_reader=OutputReader(mesh),
+            lane_capacity=True,
+            page_table_layout=page_table_layout(),
+            device_sampling_enabled=True,
+        )
+    with expect_error(TypeError, "PageTableLayout"):
+        DecodeRuntimeConfig.resolve(
+            model=model,
+            output_reader=OutputReader(mesh),
+            lane_capacity=2,
+            page_table_layout=SimpleNamespace(raw_capacity_width=8, decode_width=8, block_size=32),
+            device_sampling_enabled=True,
+        )
+
+
+def test_layout_replacement_is_immutable_and_bounded(expect_error):
+    runtime = make_runtime()
+    original = runtime.config
+    replacement = page_table_layout(raw_width=4)
+
+    runtime.configure_page_table_layout(replacement)
+
+    assert runtime.config is not original
+    assert original.page_table_layout.raw_capacity_width == 8
+    assert runtime.config.page_table_layout is replacement
+    with expect_error(ValueError, "block_size"):
+        runtime.configure_page_table_layout(page_table_layout(raw_width=4, block_size=16))
+    with expect_error(ValueError, "ceiling"):
+        runtime.configure_page_table_layout(page_table_layout(raw_width=9))
+    with expect_error(ValueError, "decode width"):
+        runtime.configure_page_table_layout(PageTableLayout(32, 4, 8, 1024))
+
+
+def test_sampling_admission_follows_resolved_configuration(expect_error):
+    runtime = make_runtime(sampling=False)
+    with expect_error(ValueError, "device sampling is disabled"):
+        prepare(runtime, sampling_params=greedy_sampling())
+
+
+def test_feedback_and_sampling_path_follow_resolved_capabilities():
+    argmax_runtime = make_runtime()
+    argmax_prepared = prepare(argmax_runtime, sampling_params=greedy_sampling())
+    assert argmax_prepared.device_feedback
+    assert argmax_prepared.sampling_path == "argmax"
+
+    model = FakeModel()
+    model.increment_positions = None
+    mesh = FakeMesh()
+    no_feedback = DecodeRuntime(
+        DecodeRuntimeConfig.resolve(
+            model=model,
+            output_reader=OutputReader(mesh),
+            lane_capacity=2,
+            page_table_layout=page_table_layout(),
+            device_sampling_enabled=True,
+            force_greedy_top_k=True,
+        )
+    )
+    prepared = prepare(no_feedback, sampling_params=greedy_sampling())
+
+    assert not prepared.device_feedback
+    assert prepared.sampling_path == "topk"
+
+
+def test_single_and_multi_device_logits_conversion(monkeypatch):
+    single = make_runtime()
+    logits = torch.arange(16, dtype=torch.float32).reshape(1, 1, 2, 8)
+    monkeypatch.setattr(ttnn, "to_torch", lambda value: logits)
+    converted, _ = single._normalize_host_output("single-device", is_tokens=False)
+    assert converted.shape == (2, 1, 8)
+
+    mesh = SimpleNamespace(shape=(1, 2))
+    model = FakeModel()
+    model.num_devices = 2
+    multi = DecodeRuntime(
+        DecodeRuntimeConfig.resolve(
+            model=model,
+            output_reader=OutputReader(mesh),
+            lane_capacity=2,
+            page_table_layout=page_table_layout(),
+            device_sampling_enabled=True,
+        )
+    )
+    calls = []
+    monkeypatch.setattr(
+        decode_module,
+        "_concat_host_output",
+        lambda value, shape: calls.append((value, shape)) or logits,
+    )
+    converted, _ = multi._normalize_host_output("multi-device", is_tokens=False)
+    assert converted.shape == (2, 1, 8)
+    assert calls == [("multi-device", (1, 2))]
 
 
 def test_signatures_expose_ordered_material_and_separate_types():
@@ -368,7 +509,7 @@ def test_blocking_consume_normalizes_logits_and_releases_owned_values(monkeypatc
     runtime = make_runtime()
     host_logits = torch.arange(16, dtype=torch.float32).reshape(1, 1, 2, 8)
     released = []
-    monkeypatch.setattr(runtime.output_reader, "read", lambda value, *, blocking: (host_logits, "probs"))
+    monkeypatch.setattr(runtime.config.output_reader, "read", lambda value, *, blocking: (host_logits, "probs"))
     monkeypatch.setattr(runtime, "_release_or_retain_transient", lambda value: released.append(value) or [])
     result = InvocationResult(value="raw", owned="owned", is_tokens=False)
 
@@ -390,16 +531,15 @@ def test_raw_blocking_and_async_leases_release_exact_records(monkeypatch):
 
     first = InvocationResult(value=object(), owned="first-owned", is_tokens=False)
     assert runtime.consume(first, read_from_device=False) is first.value
-    monkeypatch.setattr(runtime.output_reader, "read", lambda value, *, blocking: "first-host")
+    monkeypatch.setattr(runtime.config.output_reader, "read", lambda value, *, blocking: "first-host")
     assert runtime.read_decode_output(first.value) == "first-host"
 
     second = InvocationResult(value=object(), owned="second-owned", is_tokens=True)
     runtime.consume(second, read_from_device=False)
     host_tokens = torch.tensor([[[[7], [8]]]], dtype=torch.int32)
     pending = PendingRead(value=(host_tokens, None), events=("event",), sequence=4, _owner=object())
-    monkeypatch.setattr(runtime.output_reader, "submit", lambda value: pending)
-    monkeypatch.setattr(runtime.output_reader, "complete", lambda value: pending.value)
-    monkeypatch.setattr(runtime.output_reader, "complete", lambda value: pending.value)
+    monkeypatch.setattr(runtime.config.output_reader, "submit", lambda value: pending)
+    monkeypatch.setattr(runtime.config.output_reader, "complete", lambda value: pending.value)
 
     host, events = runtime.read_decode_output(second.value, async_read=True)
     assert host is pending.value
@@ -425,9 +565,8 @@ def test_async_trace_lease_never_releases_borrowed_trace_output(monkeypatch):
         "best_effort_deallocate_owned_tensors",
         lambda values, completed: deallocated.append(values) or [],
     )
-    monkeypatch.setattr(runtime.output_reader, "submit", lambda value: pending)
-    monkeypatch.setattr(runtime.output_reader, "complete", lambda value: pending.value)
-    monkeypatch.setattr(runtime.output_reader, "complete", lambda value: pending.value)
+    monkeypatch.setattr(runtime.config.output_reader, "submit", lambda value: pending)
+    monkeypatch.setattr(runtime.config.output_reader, "complete", lambda value: pending.value)
 
     result = InvocationResult(value=raw, owned=None, is_tokens=True)
     assert runtime.consume(result, read_from_device=False) is raw
@@ -467,10 +606,3 @@ def test_failed_transient_release_blocks_use_and_cleanup_retries(monkeypatch, ex
     assert attempts == [tensor, tensor]
     assert runtime.transient_orphan_count == 0
     assert prepare(runtime).sampling_path == "logits"
-
-
-def test_decode_runtime_is_plain_constructor_injected_orchestration():
-    assert not hasattr(decode_module, "DecodeRuntimeConfig")
-    assert not hasattr(DecodeRuntime, "from_config")
-    assert not issubclass(DecodeRuntime, LightweightModule)
-    assert DecodeRuntime.__bases__ == (object,)

@@ -15,6 +15,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.llm_runtime.config import PageTableLayout
 from models.common.llm_runtime.output_reader import OutputReader, PendingRead
 from models.common.llm_runtime.tensor_resources import (
     TensorResourceOrphan,
@@ -149,6 +150,114 @@ class DecodeOutputLease:
     deallocated_tensor_ids: set[int] = field(default_factory=set, repr=False)
 
 
+@dataclass(frozen=True)
+class DecodeRuntimeConfig:
+    """Fully resolved, immutable decode policy and borrowed collaborators."""
+
+    model: Any
+    mesh_device: Any
+    output_reader: OutputReader
+    lane_capacity: int
+    page_table_layout: PageTableLayout
+    cluster_shape: tuple[int, int]
+    num_devices: int
+    vocab_size: int
+    device_sampling_enabled: bool
+    force_greedy_top_k: bool
+    allow_force_argmax: bool
+    position_feedback_capable: bool
+    max_page_table_capacity_width: int
+    max_decode_page_table_width: int
+
+    def __post_init__(self) -> None:
+        _validate_resolved_decode_config(self)
+
+    @classmethod
+    def resolve(
+        cls,
+        *,
+        model: Any,
+        output_reader: OutputReader,
+        lane_capacity: int,
+        page_table_layout: PageTableLayout,
+        device_sampling_enabled: bool,
+        force_greedy_top_k: bool = False,
+    ) -> "DecodeRuntimeConfig":
+        if not isinstance(output_reader, OutputReader):
+            raise TypeError("output_reader must be an OutputReader")
+        mesh_device = output_reader.mesh_device
+        model_mesh = getattr(getattr(model, "config", None), "mesh_device", None)
+        if model_mesh is not None and model_mesh is not mesh_device:
+            raise ValueError("model and decode runtime must use the same mesh_device")
+        if not isinstance(lane_capacity, int) or isinstance(lane_capacity, bool) or lane_capacity <= 0:
+            raise ValueError("lane_capacity must be a positive integer")
+        if lane_capacity > 32:
+            raise ValueError("decode token input padding supports at most 32 lane slots")
+        if not isinstance(device_sampling_enabled, bool):
+            raise TypeError("device_sampling_enabled must be bool")
+        if not isinstance(force_greedy_top_k, bool):
+            raise TypeError("force_greedy_top_k must be bool")
+        _validate_page_table_layout(page_table_layout)
+
+        try:
+            cluster_shape = tuple(int(value) for value in mesh_device.shape)
+        except (AttributeError, TypeError, ValueError) as error:
+            raise TypeError("mesh_device must provide a two-dimensional shape") from error
+        if len(cluster_shape) != 2 or any(value <= 0 for value in cluster_shape):
+            raise ValueError("mesh_device shape must contain two positive dimensions")
+        model_config = getattr(model, "config", None)
+        num_devices = getattr(model_config, "num_devices", None)
+        if num_devices is None:
+            num_devices = getattr(model, "num_devices", cluster_shape[0] * cluster_shape[1])
+        if not isinstance(num_devices, int) or isinstance(num_devices, bool) or num_devices <= 0:
+            raise ValueError("model num_devices must be a positive integer")
+        if num_devices != cluster_shape[0] * cluster_shape[1]:
+            raise ValueError("model num_devices must match the decode mesh shape")
+        vocab_size = getattr(model, "vocab_size", None)
+        if not isinstance(vocab_size, int) or isinstance(vocab_size, bool) or vocab_size <= 0:
+            raise ValueError("model vocab_size must be a positive integer")
+
+        sampling = getattr(model, "sampling", None)
+        sampling_config = getattr(sampling, "config", None)
+        allow_force_argmax = getattr(sampling_config, "allow_force_argmax", False)
+        if device_sampling_enabled:
+            if not callable(getattr(sampling, "decode_forward", None)):
+                raise TypeError("device sampling requires model.sampling.decode_forward()")
+            if not isinstance(allow_force_argmax, bool):
+                raise TypeError("model sampling allow_force_argmax must be bool")
+        else:
+            allow_force_argmax = False
+
+        return cls(
+            model=model,
+            mesh_device=mesh_device,
+            output_reader=output_reader,
+            lane_capacity=lane_capacity,
+            page_table_layout=page_table_layout,
+            cluster_shape=cluster_shape,
+            num_devices=num_devices,
+            vocab_size=vocab_size,
+            device_sampling_enabled=device_sampling_enabled,
+            force_greedy_top_k=force_greedy_top_k,
+            allow_force_argmax=allow_force_argmax,
+            position_feedback_capable=callable(getattr(model, "increment_positions", None)),
+            max_page_table_capacity_width=page_table_layout.raw_capacity_width,
+            max_decode_page_table_width=page_table_layout.decode_width,
+        )
+
+    def with_page_table_layout(self, layout: PageTableLayout) -> "DecodeRuntimeConfig":
+        """Return a validated geometry replacement within the original ceiling."""
+
+        _validate_page_table_layout(layout)
+        if layout.block_size != self.page_table_layout.block_size:
+            raise ValueError("replacement page-table layout cannot change block_size")
+        if layout.raw_capacity_width > self.max_page_table_capacity_width:
+            raise ValueError("replacement page-table capacity exceeds the construction-time ceiling")
+        if layout.decode_width > self.max_decode_page_table_width:
+            raise ValueError("replacement decode width exceeds the construction-time ceiling")
+        return dataclasses.replace(self, page_table_layout=layout)
+
+
 class DecodeRuntime:
     """Prepare, execute, trace, and consume decode for one execution lane.
 
@@ -164,32 +273,10 @@ class DecodeRuntime:
     retryable decode transients are released here.
     """
 
-    def __init__(
-        self,
-        model: Any,
-        mesh_device: Any,
-        output_reader: OutputReader,
-        *,
-        lane_capacity: int,
-        page_table_layout: Any,
-        device_sampling_enabled: bool,
-        force_greedy_top_k: bool = False,
-    ):
-        if not isinstance(output_reader, OutputReader):
-            raise TypeError("output_reader must be an OutputReader")
-        if int(lane_capacity) <= 0:
-            raise ValueError("lane_capacity must be positive")
-        if int(lane_capacity) > 32:
-            raise ValueError("decode token input padding supports at most 32 lane slots")
-        self.model = model
-        self.mesh_device = mesh_device
-        self.output_reader = output_reader
-        self.lane_capacity = int(lane_capacity)
-        self._cluster_shape = tuple(int(value) for value in mesh_device.shape)
-        self.page_table_layout = page_table_layout
-        self.device_sampling_enabled = bool(device_sampling_enabled)
-        self.force_greedy_top_k = bool(force_greedy_top_k)
-        self.device_feedback_enabled = True
+    def __init__(self, config: DecodeRuntimeConfig):
+        if not isinstance(config, DecodeRuntimeConfig):
+            raise TypeError("config must be a DecodeRuntimeConfig")
+        self.config = config
         self._previous_page_table: torch.Tensor | None = None
         self._normalization_source: torch.Tensor | None = None
         self._normalization_copy_blocks: tuple[int, ...] | None = None
@@ -207,6 +294,11 @@ class DecodeRuntime:
 
         return len(self._transient_orphans)
 
+    def configure_page_table_layout(self, layout: PageTableLayout) -> None:
+        """Install final physical-capacity geometry before allocation."""
+
+        self.config = self.config.with_page_table_layout(layout)
+
     def prepare(
         self,
         tokens: torch.Tensor,
@@ -220,13 +312,10 @@ class DecodeRuntime:
 
         self._ensure_usable()
         self._validate_inputs(tokens, start_pos, page_table)
-        if sampling_params is not None and not self.device_sampling_enabled:
-            raise ValueError("sampling parameters were supplied while device sampling is disabled")
-        feedback = (
-            self.device_feedback_enabled and sampling_params is not None and hasattr(self.model, "increment_positions")
-        )
+        self._validate_sampling_request(sampling_params)
+        feedback = self._classify_feedback(sampling_params)
         sampling_values = (
-            None if sampling_params is None else _formatted_sampling_values(sampling_params, self.lane_capacity)
+            None if sampling_params is None else _formatted_sampling_values(sampling_params, self.config.lane_capacity)
         )
         normalized = self._normalize_page_table(
             page_table,
@@ -239,17 +328,7 @@ class DecodeRuntime:
             page_table=normalized,
             sampling_params=sampling_params,
             sampling_values=sampling_values,
-            sampling_path=(
-                "logits"
-                if sampling_values is None
-                else (
-                    "argmax"
-                    if bool(self.model.sampling.config.allow_force_argmax)
-                    and sampling_values[3]
-                    and not self.force_greedy_top_k
-                    else "topk"
-                )
-            ),
+            sampling_path=self._classify_sampling_path(sampling_values),
             reset_batch=bool(reset_batch),
             device_feedback=feedback,
             page_table_changed=(
@@ -284,7 +363,7 @@ class DecodeRuntime:
         device_inputs, kpt = self._stage_inputs_and_kpt(host_inputs, prepared)
         owned = (device_inputs, kpt)
         try:
-            with _validate_module_inputs(self.model):
+            with _validate_module_inputs(self.config.model):
                 output = self._run_body(
                     device_inputs,
                     prepared.sampling_params,
@@ -362,7 +441,7 @@ class DecodeRuntime:
                 self._external_by_raw_id[id(result.value)] = lease
             return result.value
         try:
-            host = self.output_reader.read(result.value, blocking=True)
+            host = self.config.output_reader.read(result.value, blocking=True)
             normalized = self._normalize_host_output(
                 host,
                 is_tokens=result.is_tokens,
@@ -380,10 +459,10 @@ class DecodeRuntime:
         """Read a raw externally leased decode output, optionally asynchronously."""
 
         if not async_read:
-            host = self.output_reader.read(tt_out, blocking=True)
+            host = self.config.output_reader.read(tt_out, blocking=True)
             self._release_external_lease(self._external_by_raw_id.get(id(tt_out)))
             return host
-        pending = self.output_reader.submit(tt_out)
+        pending = self.config.output_reader.submit(tt_out)
         lease = self._external_by_raw_id.get(id(tt_out))
         if lease is not None:
             lease.host_value = pending.value
@@ -394,7 +473,7 @@ class DecodeRuntime:
     def process_decode_output_host(self, tt_out: Any, is_tokens: bool = False) -> tuple[Any, Any]:
         """Complete and normalize a host value returned by async decode read."""
 
-        completed = self.output_reader.complete(tt_out)
+        completed = self.config.output_reader.complete(tt_out)
         self._release_external_lease(self._external_by_host_id.get(id(tt_out)))
         return self._normalize_host_output(completed, is_tokens=is_tokens)
 
@@ -405,7 +484,7 @@ class DecodeRuntime:
         for lease in tuple(self._external_by_raw_id.values()):
             try:
                 if lease.pending is None:
-                    ttnn.synchronize_device(self.mesh_device)
+                    ttnn.synchronize_device(self.config.mesh_device)
                 self._release_external_lease(lease)
             except BaseException as error:
                 failures.append(error)
@@ -421,9 +500,37 @@ class DecodeRuntime:
 
     # Private implementation
 
+    def _validate_sampling_request(self, sampling_params: SamplingParams | None) -> None:
+        if sampling_params is not None and not self.config.device_sampling_enabled:
+            raise ValueError("sampling parameters were supplied while device sampling is disabled")
+
+    def _classify_sampling_path(self, sampling_values: Any) -> str:
+        if sampling_values is None:
+            return "logits"
+        config = self.config
+        if config.allow_force_argmax and not config.force_greedy_top_k and sampling_values[3]:
+            return "argmax"
+        return "topk"
+
+    def _classify_feedback(self, sampling_params: SamplingParams | None) -> bool:
+        return sampling_params is not None and self.config.position_feedback_capable
+
+    def _convert_logits(self, value: Any) -> torch.Tensor:
+        if isinstance(value, torch.Tensor):
+            output = value.float()
+        elif self.config.num_devices == 1:
+            output = ttnn.to_torch(value).float()
+        else:
+            output = _concat_host_output(value, self.config.cluster_shape).float()
+        return self._slice_logits(output)
+
+    def _slice_logits(self, output: torch.Tensor) -> torch.Tensor:
+        config = self.config
+        return output[:, :, : config.lane_capacity, : config.vocab_size].contiguous().view(config.lane_capacity, 1, -1)
+
     def _program_signature(self, prepared: PreparedDecode) -> DecodeProgramSignature:
         return DecodeProgramSignature(
-            batch_size=self.lane_capacity,
+            batch_size=self.config.lane_capacity,
             page_table_width=int(prepared.page_table.shape[-1]),
             sampling_path=prepared.sampling_path,
             device_feedback=prepared.device_feedback,
@@ -440,21 +547,15 @@ class DecodeRuntime:
         else:
             output, log_probs = host_output, None
         if is_tokens:
-            tokens = _process_output_tokens(output, self.lane_capacity, self._cluster_shape)
+            tokens = _process_output_tokens(output, self.config.lane_capacity, self.config.cluster_shape)
             return tokens.to(torch.int64), log_probs
-        logits = _process_output_decode_logits(
-            output,
-            self.lane_capacity,
-            int(self.model.vocab_size),
-            int(self.model.num_devices),
-            self._cluster_shape,
-        )
-        return logits, log_probs
+        return self._convert_logits(output), log_probs
 
     def _normalize_page_table(self, page_table, start_pos, *, allow_one_step_feedback_lag):
-        raw_width = _layout_value(self.page_table_layout, "raw_capacity_width", "raw_width")
-        decode_width = _layout_value(self.page_table_layout, "decode_width", "canonical_decode_width")
-        block_size = _layout_value(self.page_table_layout, "block_size")
+        layout = self.config.page_table_layout
+        raw_width = layout.raw_capacity_width
+        decode_width = layout.decode_width
+        block_size = layout.block_size
         copy_blocks_by_row = []
         for row, position_value in enumerate(start_pos):
             position = int(position_value)
@@ -493,18 +594,23 @@ class DecodeRuntime:
         return normalized
 
     def _prepare_inputs_host(self, prepared: PreparedDecode) -> DecodeHostInputs:
-        padded = torch.nn.functional.pad(prepared.tokens.reshape(-1), (0, 32 - self.lane_capacity))
+        config = self.config
+        padded = torch.nn.functional.pad(prepared.tokens.reshape(-1), (0, 32 - config.lane_capacity))
         tokens_tt = ttnn.unsqueeze_to_4D(
             ttnn.from_torch(
                 padded,
                 device=None,
                 dtype=ttnn.uint32,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(config.mesh_device),
             )
         )
         nonnegative = torch.maximum(prepared.start_pos, torch.zeros_like(prepared.start_pos))
-        rotary = self.model.rope_setup.get_rot_idxs(nonnegative, on_host=True)
-        mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self._cluster_shape)
+        rotary = config.model.rope_setup.get_rot_idxs(nonnegative, on_host=True)
+        mapper = ttnn.ShardTensor2dMesh(
+            config.mesh_device,
+            dims=(None, None),
+            mesh_shape=config.cluster_shape,
+        )
         positions = ttnn.from_torch(prepared.start_pos, device=None, dtype=ttnn.int32, mesh_mapper=mapper)
         page_table = ttnn.from_torch(prepared.page_table, device=None, dtype=ttnn.int32, mesh_mapper=mapper)
         return DecodeHostInputs(tokens_tt, positions, rotary, page_table)
@@ -512,7 +618,7 @@ class DecodeRuntime:
     def _stage_inputs_and_kpt(self, host_inputs, prepared):
         device_inputs = None
         try:
-            raw = _copy_host_to_device(host_inputs.values(), mesh_device=self.mesh_device)
+            raw = _copy_host_to_device(host_inputs.values(), mesh_device=self.config.mesh_device)
             device_inputs = DecodeDeviceInputs(*raw)
             kpt = self._make_device_kpt(prepared)
         except BaseException as primary:
@@ -522,40 +628,45 @@ class DecodeRuntime:
         return device_inputs, kpt
 
     def _run_body(self, inputs, sampling_params, kpt, *, device_feedback):
-        rot_mats = self.model.rope_setup.get_rot_mats(inputs.rotary_indices)
-        logits = self.model.decode_forward(
-            self.model.embed_decode(inputs.tokens),
+        model = self.config.model
+        rot_mats = model.rope_setup.get_rot_mats(inputs.rotary_indices)
+        logits = model.decode_forward(
+            model.embed_decode(inputs.tokens),
             inputs.positions,
             rot_mats,
             page_table=inputs.page_table,
         )
         if sampling_params is None:
-            return self.model.gather_and_untilize_logits(logits), None
+            return model.gather_and_untilize_logits(logits), None
         output = self._sample_device(logits, kpt)
         if device_feedback:
             sampled_tokens = ttnn.reshape(output[0], inputs.tokens.shape)
             ttnn.copy(input_a=sampled_tokens, input_b=inputs.tokens)
-            self.model.increment_positions(inputs.positions, inputs.rotary_indices)
+            model.increment_positions(inputs.positions, inputs.rotary_indices)
         return output
 
     def _sample_device(self, logits, kpt):
         if kpt is None:
-            return self.model.sampling.decode_forward(logits, tt_out_tok=None)
-        return self.model.sampling.decode_forward(logits, k=kpt[0], p=kpt[1], temp=kpt[2], tt_out_tok=None)
+            return self.config.model.sampling.decode_forward(logits, tt_out_tok=None)
+        return self.config.model.sampling.decode_forward(
+            logits,
+            k=kpt[0],
+            p=kpt[1],
+            temp=kpt[2],
+            tt_out_tok=None,
+        )
 
     def _make_device_kpt(self, prepared):
         host = self._make_host_kpt(prepared)
         if host is None:
             return None
-        return tuple(_copy_host_to_device(host, mesh_device=self.mesh_device))
+        return tuple(_copy_host_to_device(host, mesh_device=self.config.mesh_device))
 
     def _make_host_kpt(self, prepared):
-        if prepared.sampling_values is None:
+        if prepared.sampling_values is None or prepared.sampling_path == "argmax":
             return None
-        k, p, temperature, greedy = prepared.sampling_values
-        if bool(self.model.sampling.config.allow_force_argmax) and greedy and not self.force_greedy_top_k:
-            return None
-        mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        k, p, temperature, _ = prepared.sampling_values
+        mapper = ttnn.ReplicateTensorToMesh(self.config.mesh_device)
         return (
             ttnn.from_torch(
                 torch.tensor(k, dtype=torch.int32),
@@ -594,9 +705,10 @@ class DecodeRuntime:
             raise ValueError("decode start_pos must be a rank-1 torch.Tensor")
         if not isinstance(page_table, torch.Tensor) or page_table.ndim != 2:
             raise ValueError("decode page_table must be a rank-2 torch.Tensor")
-        if int(tokens.shape[0]) != self.lane_capacity:
-            raise ValueError(f"decode batch {tokens.shape[0]} must equal lane capacity {self.lane_capacity}")
-        if int(start_pos.shape[0]) != self.lane_capacity or int(page_table.shape[0]) != self.lane_capacity:
+        lane_capacity = self.config.lane_capacity
+        if int(tokens.shape[0]) != lane_capacity:
+            raise ValueError(f"decode batch {tokens.shape[0]} must equal lane capacity {lane_capacity}")
+        if int(start_pos.shape[0]) != lane_capacity or int(page_table.shape[0]) != lane_capacity:
             raise ValueError("decode tokens, start_pos, and page_table batches must match")
 
     def _require_prepared(self, prepared):
@@ -611,7 +723,7 @@ class DecodeRuntime:
         if lease is None or lease.released:
             return
         if lease.pending is not None:
-            self.output_reader.complete(lease.pending)
+            self.config.output_reader.complete(lease.pending)
         failures = []
         if lease.owned_values is not None:
             failures = best_effort_deallocate_owned_tensors(
@@ -688,15 +800,81 @@ def _validate_module_inputs(model: Any):
             logger.warning(f"Config mismatch at {name}: declared {expected}, actual {actual}")
 
 
-def _layout_value(layout: Any, *names: str) -> int:
-    for name in names:
-        value = getattr(layout, name, None)
-        if value is not None:
-            value = int(value)
-            if value <= 0:
-                raise ValueError(f"page-table layout {name} must be positive")
-            return value
-    raise TypeError(f"page_table_layout must provide one of {names!r}")
+def _validate_page_table_layout(layout: Any) -> None:
+    if not isinstance(layout, PageTableLayout):
+        raise TypeError("page_table_layout must be a PageTableLayout")
+
+
+def _validate_resolved_decode_config(config: DecodeRuntimeConfig) -> None:
+    if not isinstance(config.output_reader, OutputReader):
+        raise TypeError("output_reader must be an OutputReader")
+    if config.output_reader.mesh_device is not config.mesh_device:
+        raise ValueError("output_reader must use the decode mesh_device")
+    model_mesh = getattr(getattr(config.model, "config", None), "mesh_device", None)
+    if model_mesh is not None and model_mesh is not config.mesh_device:
+        raise ValueError("model and decode runtime must use the same mesh_device")
+    if (
+        not isinstance(config.lane_capacity, int)
+        or isinstance(config.lane_capacity, bool)
+        or not 0 < config.lane_capacity <= 32
+    ):
+        raise ValueError("lane_capacity must be an integer from 1 through 32")
+    _validate_page_table_layout(config.page_table_layout)
+    if (
+        not isinstance(config.cluster_shape, tuple)
+        or len(config.cluster_shape) != 2
+        or any(not isinstance(value, int) or isinstance(value, bool) or value <= 0 for value in config.cluster_shape)
+    ):
+        raise ValueError("cluster_shape must contain two positive integers")
+    if tuple(int(value) for value in config.mesh_device.shape) != config.cluster_shape:
+        raise ValueError("cluster_shape must match mesh_device.shape")
+    if (
+        not isinstance(config.num_devices, int)
+        or isinstance(config.num_devices, bool)
+        or config.num_devices != config.cluster_shape[0] * config.cluster_shape[1]
+    ):
+        raise ValueError("num_devices must match cluster_shape")
+    model_num_devices = getattr(getattr(config.model, "config", None), "num_devices", None)
+    if model_num_devices is None:
+        model_num_devices = getattr(config.model, "num_devices", config.num_devices)
+    if model_num_devices != config.num_devices:
+        raise ValueError("num_devices must match the model")
+    if not isinstance(config.vocab_size, int) or isinstance(config.vocab_size, bool) or config.vocab_size <= 0:
+        raise ValueError("vocab_size must be a positive integer")
+    if getattr(config.model, "vocab_size", None) != config.vocab_size:
+        raise ValueError("vocab_size must match the model")
+    for name in (
+        "device_sampling_enabled",
+        "force_greedy_top_k",
+        "allow_force_argmax",
+        "position_feedback_capable",
+    ):
+        if not isinstance(getattr(config, name), bool):
+            raise TypeError(f"{name} must be bool")
+    sampling = getattr(config.model, "sampling", None)
+    sampling_config = getattr(sampling, "config", None)
+    expected_argmax = getattr(sampling_config, "allow_force_argmax", None) if config.device_sampling_enabled else False
+    if config.device_sampling_enabled:
+        if not callable(getattr(sampling, "decode_forward", None)):
+            raise TypeError("device sampling requires model.sampling.decode_forward()")
+        if not isinstance(expected_argmax, bool):
+            raise TypeError("model sampling allow_force_argmax must be bool")
+    if config.allow_force_argmax is not expected_argmax:
+        raise ValueError("allow_force_argmax must match the resolved model capability")
+    if config.position_feedback_capable != callable(getattr(config.model, "increment_positions", None)):
+        raise ValueError("position_feedback_capable must match the resolved model capability")
+    if (
+        not isinstance(config.max_page_table_capacity_width, int)
+        or isinstance(config.max_page_table_capacity_width, bool)
+        or config.max_page_table_capacity_width < config.page_table_layout.raw_capacity_width
+    ):
+        raise ValueError("max_page_table_capacity_width must cover page_table_layout")
+    if (
+        not isinstance(config.max_decode_page_table_width, int)
+        or isinstance(config.max_decode_page_table_width, bool)
+        or config.max_decode_page_table_width < config.page_table_layout.decode_width
+    ):
+        raise ValueError("max_decode_page_table_width must cover page_table_layout")
 
 
 def _copy_host_to_device(host_tensors, device_tensors=None, mesh_device=None):
@@ -747,16 +925,6 @@ def _concat_host_output(value, cluster_shape):
     rows, columns = cluster_shape
     mesh = [tensors[index : index + columns] for index in range(0, len(tensors), columns)]
     return torch.cat([torch.cat(row, dim=-1) for row in mesh], dim=1)
-
-
-def _process_output_decode_logits(value, batch_size, vocab_size, num_devices, cluster_shape):
-    if isinstance(value, torch.Tensor):
-        output = value.float()
-    elif num_devices > 1:
-        output = _concat_host_output(value, cluster_shape).float()
-    else:
-        output = ttnn.to_torch(value).float()
-    return output[:, :, :batch_size, :vocab_size].contiguous().view(batch_size, 1, -1)
 
 
 def _process_output_tokens(value, batch_size, cluster_shape):

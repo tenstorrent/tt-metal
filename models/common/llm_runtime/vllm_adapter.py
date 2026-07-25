@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -25,6 +26,57 @@ _IGNORED_VLLM_KWARGS = frozenset(
 )
 
 
+@dataclass(frozen=True)
+class VLLMAdapterConfig:
+    """Fully resolved static policy for the vLLM compatibility boundary."""
+
+    trace: TraceConfig
+    paged_kv_cache: PagedKVCacheConfig
+    expected_num_layers: int
+    expected_kv_heads_per_device: int | None
+    expected_head_dim: int | None
+    model_kv_cache_dtypes: tuple[Any, ...]
+
+    def __post_init__(self) -> None:
+        _validate_resolved_adapter_config(self)
+
+    @classmethod
+    def resolve(
+        cls,
+        *,
+        trace: TraceConfig,
+        paged_kv_cache: PagedKVCacheConfig,
+        expected_num_layers: int,
+        expected_kv_heads_per_device: int | None = None,
+        expected_head_dim: int | None = None,
+        model_kv_cache_dtype: Any | Sequence[Any],
+    ) -> "VLLMAdapterConfig":
+        if type(trace) is not TraceConfig:
+            raise TypeError("trace must be a TraceConfig")
+        if type(paged_kv_cache) is not PagedKVCacheConfig:
+            raise TypeError("paged_kv_cache must be a PagedKVCacheConfig")
+
+        resolved_num_layers = _resolve_positive_int("expected_num_layers", expected_num_layers)
+        resolved_kv_heads = _resolve_optional_positive_int("expected_kv_heads_per_device", expected_kv_heads_per_device)
+        resolved_head_dim = _resolve_optional_positive_int("expected_head_dim", expected_head_dim)
+
+        if model_kv_cache_dtype is None:
+            raise TypeError("model_kv_cache_dtype must be supplied from model metadata")
+        if isinstance(model_kv_cache_dtype, Sequence) and not isinstance(model_kv_cache_dtype, (str, bytes)):
+            model_kv_cache_dtypes = tuple(model_kv_cache_dtype)
+        else:
+            model_kv_cache_dtypes = (model_kv_cache_dtype,)
+
+        return cls(
+            trace=trace,
+            paged_kv_cache=paged_kv_cache,
+            expected_num_layers=resolved_num_layers,
+            expected_kv_heads_per_device=resolved_kv_heads,
+            expected_head_dim=resolved_head_dim,
+            model_kv_cache_dtypes=model_kv_cache_dtypes,
+        )
+
+
 class VLLMAdapter:
     """Convert vLLM-facing calls into the configured runtime call surface.
 
@@ -39,52 +91,10 @@ class VLLMAdapter:
     construction supplies the already-derived KV shape and dtype expectations.
     """
 
-    def __init__(
-        self,
-        *,
-        trace_config: TraceConfig,
-        paged_kv_cache_config: PagedKVCacheConfig,
-        expected_num_layers: int,
-        expected_kv_heads_per_device: int | None = None,
-        expected_head_dim: int | None = None,
-        model_kv_cache_dtype: Any | Sequence[Any],
-    ) -> None:
-        self.trace_config = trace_config
-        self.paged_kv_cache_config = paged_kv_cache_config
-        self.expected_num_layers = int(expected_num_layers)
-        self.expected_kv_heads_per_device = (
-            None if expected_kv_heads_per_device is None else int(expected_kv_heads_per_device)
-        )
-        self.expected_head_dim = None if expected_head_dim is None else int(expected_head_dim)
-        if model_kv_cache_dtype is None:
-            raise TypeError("model_kv_cache_dtype must be supplied from model metadata")
-        if isinstance(model_kv_cache_dtype, (list, tuple)):
-            if not model_kv_cache_dtype:
-                raise ValueError("model_kv_cache_dtype cannot be empty")
-            self._model_kv_cache_dtypes = tuple(model_kv_cache_dtype)
-        else:
-            self._model_kv_cache_dtypes = (model_kv_cache_dtype,)
-
-        if self.expected_num_layers <= 0:
-            raise ValueError("expected_num_layers must be positive")
-        if int(paged_kv_cache_config.block_size) <= 0:
-            raise ValueError("PagedKVCacheConfig.block_size must be positive")
-        if int(paged_kv_cache_config.max_num_blocks) <= 0:
-            raise ValueError("PagedKVCacheConfig.max_num_blocks must be positive")
-        if not isinstance(trace_config.prefill_enabled, bool) or not isinstance(trace_config.decode_enabled, bool):
-            raise TypeError("TraceConfig prefill_enabled/decode_enabled must be bool")
-        if len(self._model_kv_cache_dtypes) not in (1, self.expected_num_layers):
-            raise ValueError("model_kv_cache_dtype must be uniform or contain one dtype per model layer")
-
-        first_dtype = self._model_kv_cache_dtypes[0]
-        uniform_model_dtype = (
-            first_dtype if all(dtype == first_dtype for dtype in self._model_kv_cache_dtypes[1:]) else None
-        )
-        if uniform_model_dtype is not None and paged_kv_cache_config.dtype != uniform_model_dtype:
-            raise ValueError(
-                "PagedKVCacheConfig.dtype does not match the model-owned KV cache dtype: "
-                f"{paged_kv_cache_config.dtype!r} != {uniform_model_dtype!r}"
-            )
+    def __init__(self, config: VLLMAdapterConfig) -> None:
+        if not isinstance(config, VLLMAdapterConfig):
+            raise TypeError("config must be a VLLMAdapterConfig")
+        self.config = config
 
     # Public API
 
@@ -130,7 +140,7 @@ class VLLMAdapter:
             raise ValueError(f"KV cache shape must have rank 4, got {shape}")
 
         num_blocks, kv_heads, block_size, head_dim = shape
-        config = self.paged_kv_cache_config
+        config = self.config.paged_kv_cache
         if num_blocks <= 0:
             raise ValueError("KV cache num_blocks must be positive")
         if num_blocks > int(config.max_num_blocks):
@@ -139,29 +149,33 @@ class VLLMAdapter:
             raise ValueError(
                 f"vLLM KV block size {block_size} does not match configured block size {config.block_size}"
             )
-        if self.expected_kv_heads_per_device is not None and kv_heads != self.expected_kv_heads_per_device:
+        if (
+            self.config.expected_kv_heads_per_device is not None
+            and kv_heads != self.config.expected_kv_heads_per_device
+        ):
             raise ValueError(
-                f"vLLM KV heads {kv_heads} do not match model-derived KV heads " f"{self.expected_kv_heads_per_device}"
+                f"vLLM KV heads {kv_heads} do not match model-derived KV heads "
+                f"{self.config.expected_kv_heads_per_device}"
             )
-        if self.expected_head_dim is not None and head_dim != self.expected_head_dim:
+        if self.config.expected_head_dim is not None and head_dim != self.config.expected_head_dim:
             raise ValueError(
-                f"vLLM KV head dimension {head_dim} does not match model-derived head dimension {self.expected_head_dim}"
+                f"vLLM KV head dimension {head_dim} does not match model-derived head dimension "
+                f"{self.config.expected_head_dim}"
             )
-        if int(num_layers) != self.expected_num_layers:
+        if int(num_layers) != self.config.expected_num_layers:
             raise ValueError(
-                f"vLLM KV layer count {num_layers} does not match model-derived layer count {self.expected_num_layers}"
+                f"vLLM KV layer count {num_layers} does not match model-derived layer count "
+                f"{self.config.expected_num_layers}"
             )
 
-        _validate_vllm_torch_dtype(dtype, self._model_kv_cache_dtypes)
+        _validate_vllm_torch_dtype(dtype, self.config.model_kv_cache_dtypes)
 
-        configured_num_blocks = getattr(config, "num_blocks", None)
+        configured_num_blocks = config.num_blocks
         if configured_num_blocks is not None and int(configured_num_blocks) != num_blocks:
             raise ValueError(
                 f"PagedKVCacheConfig is already resolved to {configured_num_blocks} blocks; "
                 f"vLLM requested {num_blocks}"
             )
-        if not dataclasses.is_dataclass(config):
-            raise TypeError("PagedKVCacheConfig must be a dataclass for immutable capacity resolution")
         return dataclasses.replace(config, num_blocks=num_blocks)
 
     # Private implementation
@@ -178,9 +192,9 @@ class VLLMAdapter:
         if not isinstance(enable_trace, bool):
             raise TypeError("enable_trace must be bool")
         if operation == "prefill":
-            configured = self.trace_config.prefill_enabled
+            configured = self.config.trace.prefill_enabled
         elif operation == "decode":
-            configured = self.trace_config.decode_enabled
+            configured = self.config.trace.decode_enabled
         else:
             raise ValueError(f"Unknown trace operation {operation!r}")
         if enable_trace and not configured:
@@ -188,6 +202,55 @@ class VLLMAdapter:
                 f"enable_trace={enable_trace} for {operation} disagrees with static "
                 f"TraceConfig policy ({configured})"
             )
+
+
+def _resolve_positive_int(name: str, value: Any) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be a positive integer")
+    try:
+        resolved = int(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{name} must be a positive integer") from error
+    if resolved <= 0 or resolved != value:
+        raise ValueError(f"{name} must be a positive integer")
+    return resolved
+
+
+def _resolve_optional_positive_int(name: str, value: Any) -> int | None:
+    return None if value is None else _resolve_positive_int(name, value)
+
+
+def _validate_resolved_adapter_config(config: VLLMAdapterConfig) -> None:
+    if type(config.trace) is not TraceConfig:
+        raise TypeError("trace must be a TraceConfig")
+    if type(config.paged_kv_cache) is not PagedKVCacheConfig:
+        raise TypeError("paged_kv_cache must be a PagedKVCacheConfig")
+    _require_resolved_positive_int("expected_num_layers", config.expected_num_layers)
+    if config.expected_kv_heads_per_device is not None:
+        _require_resolved_positive_int("expected_kv_heads_per_device", config.expected_kv_heads_per_device)
+    if config.expected_head_dim is not None:
+        _require_resolved_positive_int("expected_head_dim", config.expected_head_dim)
+    if not isinstance(config.model_kv_cache_dtypes, tuple):
+        raise TypeError("model_kv_cache_dtypes must be a tuple")
+    if not config.model_kv_cache_dtypes:
+        raise ValueError("model_kv_cache_dtypes cannot be empty")
+    if len(config.model_kv_cache_dtypes) not in (1, config.expected_num_layers):
+        raise ValueError("model_kv_cache_dtypes must be uniform or contain one dtype per model layer")
+
+    first_dtype = config.model_kv_cache_dtypes[0]
+    uniform_model_dtype = (
+        first_dtype if all(dtype == first_dtype for dtype in config.model_kv_cache_dtypes[1:]) else None
+    )
+    if uniform_model_dtype is not None and config.paged_kv_cache.dtype != uniform_model_dtype:
+        raise ValueError(
+            "PagedKVCacheConfig.dtype does not match the model-owned KV cache dtype: "
+            f"{config.paged_kv_cache.dtype!r} != {uniform_model_dtype!r}"
+        )
+
+
+def _require_resolved_positive_int(name: str, value: Any) -> None:
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
 
 
 def _bind_positional(

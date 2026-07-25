@@ -11,8 +11,9 @@ from typing import Any, Callable, Literal, Sequence
 import torch
 
 import ttnn
+from models.common.llm_runtime.config import PageTableLayout
+from models.common.llm_runtime.prefill.config import PrefillRuntimeConfig
 from models.common.llm_runtime.prefill.plan import (
-    _PAGE_TABLE_WIDTH_ALIGNMENT,
     PrefillChunk,
     PrefillRequest,
     _padded_prefill_length,
@@ -188,46 +189,10 @@ class PrefillRuntime:
     prefill tensors and retains failed releases for retry by `cleanup`.
     """
 
-    def __init__(
-        self,
-        *,
-        model: Any,
-        mesh_device: Any,
-        output_reader: Any,
-        page_table_layout: Any,
-        max_batch_size: int,
-        max_prefill_chunk_size: int,
-        cluster_shape: Sequence[int],
-        device_sampling_enabled: bool,
-        can_enable_trace: Callable[[int, int], bool],
-    ) -> None:
-        block_size = int(page_table_layout.block_size)
-        max_actual_page_table_width = int(page_table_layout.raw_capacity_width)
-        canonical_page_table_width = int(page_table_layout.prefill_width)
-        if block_size <= 0 or max_batch_size <= 0 or max_prefill_chunk_size <= 0:
-            raise ValueError("prefill runtime dimensions must be positive")
-        if max_actual_page_table_width <= 0:
-            raise ValueError("max_actual_page_table_width must be positive")
-        if canonical_page_table_width < max_actual_page_table_width:
-            raise ValueError("canonical page-table width cannot be smaller than physical width")
-        if canonical_page_table_width % _PAGE_TABLE_WIDTH_ALIGNMENT:
-            raise ValueError("canonical page-table width must be 8-entry aligned")
-        if len(cluster_shape) != 2:
-            raise ValueError("cluster_shape must contain rows and columns")
-        if not callable(can_enable_trace):
-            raise TypeError("can_enable_trace must be callable")
-
-        self.model = model
-        self.mesh_device = mesh_device
-        self.output_reader = output_reader
-        self.block_size = int(block_size)
-        self.max_batch_size = int(max_batch_size)
-        self.max_prefill_chunk_size = int(max_prefill_chunk_size)
-        self.max_actual_page_table_width = int(max_actual_page_table_width)
-        self.canonical_page_table_width = int(canonical_page_table_width)
-        self.cluster_shape = tuple(int(value) for value in cluster_shape)
-        self.device_sampling_enabled = bool(device_sampling_enabled)
-        self.can_enable_trace = can_enable_trace
+    def __init__(self, config: PrefillRuntimeConfig) -> None:
+        if not isinstance(config, PrefillRuntimeConfig):
+            raise TypeError("config must be a PrefillRuntimeConfig")
+        self.config = config
         self._transient_orphans: list[TensorResourceOrphan] = []
 
     # Public API
@@ -237,6 +202,11 @@ class PrefillRuntime:
         """Return the number of failed transient releases awaiting cleanup."""
 
         return len(self._transient_orphans)
+
+    def configure_page_table_layout(self, layout: PageTableLayout) -> None:
+        """Install final physical KV geometry before allocation or execution."""
+
+        self.config = self.config.with_page_table_layout(layout)
 
     def can_trace(
         self,
@@ -263,7 +233,7 @@ class PrefillRuntime:
             if num_cached_tokens != 0 or length <= 0 or length > token_width:
                 return False
             padded_length = _padded_prefill_length(length)
-            if padded_length > self.max_prefill_chunk_size or not self.can_enable_trace(padded_length, 0):
+            if padded_length > self.config.max_prefill_chunk_size or not self.config.can_enable_trace(padded_length, 0):
                 return False
         return True
 
@@ -284,30 +254,24 @@ class PrefillRuntime:
         """
 
         self._ensure_usable()
-        if sampling_params is not None and not self.device_sampling_enabled:
-            raise ValueError("sampling parameters were supplied while device sampling is disabled")
+        self._validate_sampling_request(sampling_params)
+        layout = self.config.page_table_layout
         requests = _plan_prefill_requests(
             tokens=tokens,
             page_table=page_table,
             prompt_lens=prompt_lens,
             empty_slots=empty_slots,
             start_pos=start_pos,
-            block_size=self.block_size,
-            max_batch_size=self.max_batch_size,
-            max_prefill_chunk_size=self.max_prefill_chunk_size,
-            max_actual_page_table_width=self.max_actual_page_table_width,
-            canonical_page_table_width=self.canonical_page_table_width,
+            block_size=layout.block_size,
+            max_batch_size=self.config.max_batch_size,
+            max_prefill_chunk_size=self.config.max_prefill_chunk_size,
+            max_actual_page_table_width=layout.raw_capacity_width,
+            canonical_page_table_width=layout.prefill_width,
         )
         prepared = []
         for request in requests:
             request_sampling = _slice_sampling_params(sampling_params, request.source_rows)
-            sampling_path: SamplingPath = "logits"
-            if request_sampling is not None:
-                sampling_path = "topk"
-                if request.kind == "single" and bool(self.model.sampling.config.allow_force_argmax):
-                    values = _formatted_sampling_values(request_sampling, self._sampling_batch_size(request))
-                    if values[3]:
-                        sampling_path = "argmax"
+            sampling_path = self._classify_sampling_path(request, request_sampling)
             signatures = self._program_signatures(request, sampling_path)
             trace_signature = self._trace_signature(request)
             prepared.append(
@@ -330,6 +294,7 @@ class PrefillRuntime:
     def capture_plan(self, prepared: PreparedPrefill) -> PrefillCapturePlan:
         """Describe persistent inputs and capture work for one eligible request."""
 
+        self._ensure_usable()
         if prepared.trace_signature is None:
             raise ValueError("cached and multi-chunk prefill requests are trace-ineligible")
 
@@ -353,7 +318,7 @@ class PrefillRuntime:
         # Trace-eligible prefill fixes rotary positions and has no chunk inputs.
         # Rebuilding those capture-owned host tensors on every replay adds TTFT
         # without refreshing any device input; only tokens and page table vary.
-        mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        mapper = ttnn.ReplicateTensorToMesh(self.config.mesh_device)
         host_tokens = ttnn.from_torch(
             request.tokens.reshape(1, 1, 1, -1),
             device=None,
@@ -426,14 +391,17 @@ class PrefillRuntime:
         sampled = sampling_params is not None
         if prepared_results and sampled != (prepared_results[0][0].sampling_params is not None):
             raise ValueError("prefill result sampling path disagrees with the public request")
-        output_logits = torch.zeros(batch_size, 1, int(self.model.vocab_size))
+        config = self.config
+        vocab_size = int(config.model.vocab_size)
+        cluster_shape = config.cluster_shape
+        output_logits = torch.zeros(batch_size, 1, vocab_size)
         output_tokens = torch.zeros(batch_size, dtype=torch.int64)
         row_log_probs: list[tuple[tuple[int, ...], Any]] = []
 
         for prepared, result in prepared_results:
             request = prepared.request
             try:
-                host_output = self.output_reader.read_synchronized(result.value)
+                host_output = config.output_reader.read_synchronized(result.value)
                 if isinstance(host_output, tuple):
                     if len(host_output) != 2:
                         raise TypeError("runtime output tuple must contain (output, log_probs)")
@@ -441,26 +409,23 @@ class PrefillRuntime:
                 else:
                     host_primary, host_log_probs = host_output, None
                 if sampled:
-                    output_rows = (
-                        _TILE_SIZE
-                        if self._uses_static_q128_topk(request, prepared.sampling_path)
-                        else self._sampling_batch_size(request)
-                    )
+                    uses_static_q128 = self._uses_static_q128_topk(request, prepared.sampling_path)
+                    output_rows = _TILE_SIZE if uses_static_q128 else self._sampling_batch_size(request)
                     sampled_tokens = _process_output_tokens(
                         host_primary,
                         output_rows,
-                        self.cluster_shape,
+                        cluster_shape,
                     )
                     for source_row, slot in zip(request.source_rows, request.slots):
                         if request.kind == "batched":
                             token_index = slot
-                        elif self._uses_static_q128_topk(request, prepared.sampling_path):
+                        elif uses_static_q128:
                             token_index = (request.last_token_indices[0] - request.cached_tokens[0]) % _TILE_SIZE
                         else:
                             token_index = 0
                         output_tokens[source_row] = sampled_tokens.reshape(-1)[token_index].to(torch.int64)
                     if host_log_probs is not None:
-                        if self._uses_static_q128_topk(request, prepared.sampling_path):
+                        if uses_static_q128:
                             host_log_probs = _select_sample_log_prob(host_log_probs, token_index)
                         row_log_probs.append((request.source_rows, host_log_probs))
                 elif request.kind == "batched":
@@ -468,16 +433,16 @@ class PrefillRuntime:
                         output_logits[source_row] = _process_output_prefill(
                             host_primary,
                             slot,
-                            int(self.model.vocab_size),
-                            self.cluster_shape,
+                            vocab_size,
+                            cluster_shape,
                         )
                 else:
                     relative_last = (request.last_token_indices[0] - request.cached_tokens[0]) % _TILE_SIZE
                     output_logits[request.source_rows[0]] = _process_output_prefill(
                         host_primary,
                         relative_last,
-                        int(self.model.vocab_size),
-                        self.cluster_shape,
+                        vocab_size,
+                        cluster_shape,
                     )
             except BaseException as primary:
                 failures = self._release_or_retain_transient(result.owned)
@@ -499,6 +464,23 @@ class PrefillRuntime:
             raise_cleanup_failures(failures)
 
     # Private implementation
+
+    def _validate_sampling_request(self, sampling_params: SamplingParams | None) -> None:
+        if sampling_params is not None and not self.config.device_sampling_enabled:
+            raise ValueError("sampling parameters were supplied while device sampling is disabled")
+
+    def _classify_sampling_path(
+        self,
+        request: PrefillRequest,
+        sampling_params: SamplingParams | None,
+    ) -> SamplingPath:
+        if sampling_params is None:
+            return "logits"
+        if self.config.allow_force_argmax and request.kind == "single":
+            values = _formatted_sampling_values(sampling_params, self._sampling_batch_size(request))
+            if values[3]:
+                return "argmax"
+        return "topk"
 
     def _program_signatures(
         self,
@@ -543,7 +525,7 @@ class PrefillRuntime:
             return None
         if any(request.cached_tokens):
             return None
-        if not self.can_enable_trace(request.padded_sequence_length, 0):
+        if not self.config.can_enable_trace(request.padded_sequence_length, 0):
             return None
         return PrefillTraceSignature(
             padded_batch_size=request.padded_batch_size,
@@ -653,7 +635,7 @@ class PrefillRuntime:
             device_inputs = self._stage_device_inputs(host_inputs)
             position_values = _copy_host_to_device(
                 self._prepare_position_inputs_host(final_relative_last, chunk.chunk_size).values(),
-                mesh_device=self.mesh_device,
+                mesh_device=self.config.mesh_device,
             )
             position_inputs = PrefillPositionInputs(*position_values)
         except BaseException as primary:
@@ -672,8 +654,8 @@ class PrefillRuntime:
         request = prepared.request
         if not request.uses_chunked_prefill:
             return self._run_hidden_body(request, device_inputs)
-        return self.model.prefill_forward(
-            self.model.embed_prefill(device_inputs.tokens),
+        return self.config.model.prefill_forward(
+            self.config.model.embed_prefill(device_inputs.tokens),
             [device_inputs.rotary_cos, device_inputs.rotary_sin],
             user_id=0,
             page_table=device_inputs.page_table,
@@ -705,7 +687,7 @@ class PrefillRuntime:
                 owned=owned,
             )
         if prepared.sampling_params is not None:
-            selected = _pad_prefill_logits(final_step_output, self.model.sampling)
+            selected = _pad_prefill_logits(final_step_output, self.config.model.sampling)
             _retain_owned(owned, selected)
             output = self._sample_device(selected, kpt)
         else:
@@ -755,8 +737,8 @@ class PrefillRuntime:
         )
 
     def _run_hidden_body(self, request: PrefillRequest, device_inputs: PrefillDeviceInputs) -> Any:
-        return self.model.prefill_forward(
-            self.model.embed_prefill(device_inputs.tokens),
+        return self.config.model.prefill_forward(
+            self.config.model.embed_prefill(device_inputs.tokens),
             [device_inputs.rotary_cos, device_inputs.rotary_sin],
             user_id=list(range(request.padded_batch_size)) if request.kind == "batched" else 0,
             page_table=device_inputs.page_table,
@@ -780,7 +762,7 @@ class PrefillRuntime:
         relative_last = [last - cached for last, cached in zip(request.last_token_indices, request.cached_tokens)]
         if request.kind == "batched":
             padded_last = list(relative_last) + [0] * (request.padded_batch_size - len(relative_last))
-            logits = self.model.post_process_batched_prefill_output(
+            logits = self.config.model.post_process_batched_prefill_output(
                 hidden,
                 padded_last,
                 request.padded_batch_size,
@@ -789,9 +771,9 @@ class PrefillRuntime:
                 last_token_index=position_inputs.row_index,
             )
         elif self._uses_static_q128_topk(request, prepared.sampling_path):
-            logits = self.model.post_process_prefill_output(hidden, relative_last[0])
+            logits = self.config.model.post_process_prefill_output(hidden, relative_last[0])
         else:
-            logits = self.model.post_process_prefill_output(
+            logits = self.config.model.post_process_prefill_output(
                 hidden,
                 relative_last[0],
                 last_token_slice=(position_inputs.slice_start, position_inputs.slice_end),
@@ -799,7 +781,7 @@ class PrefillRuntime:
             )
         _retain_owned(owned, logits)
         if prepared.sampling_params is not None:
-            selected = _pad_prefill_logits(logits, self.model.sampling)
+            selected = _pad_prefill_logits(logits, self.config.model.sampling)
             _retain_owned(owned, selected)
             output = self._sample_device(selected, kpt, sampled_output)
         else:
@@ -819,7 +801,7 @@ class PrefillRuntime:
     ) -> PrefillHostInputs:
         if tokens.ndim != 2:
             raise ValueError("prefill tokens must be rank 2")
-        mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        mapper = ttnn.ReplicateTensorToMesh(self.config.mesh_device)
         tokens_tt = ttnn.from_torch(
             tokens.reshape(1, 1, 1, -1),
             device=None,
@@ -827,7 +809,7 @@ class PrefillRuntime:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=mapper,
         )
-        rope = self.model.rope_setup
+        rope = self.config.model.rope_setup
         rope.load_device_weights()
         matrix_length = int(rope.cos_matrix.shape[2])
         if matrix_length <= 0:
@@ -885,9 +867,9 @@ class PrefillRuntime:
         if relative_last < 0 or relative_last >= sequence_length:
             raise ValueError("prefill last-token position must fall within the padded sequence")
         block_start = (relative_last // _TILE_SIZE) * _TILE_SIZE
-        hidden_width = int(self.model.config.dim)
+        hidden_width = int(self.config.model.config.dim)
         bounds = ((0, 0, block_start, 0), (1, 1, block_start + _TILE_SIZE, hidden_width))
-        mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        mapper = ttnn.ReplicateTensorToMesh(self.config.mesh_device)
         slice_bounds = tuple(
             ttnn.from_torch(
                 torch.tensor(bound, dtype=torch.int32),
@@ -911,8 +893,8 @@ class PrefillRuntime:
         raw_inputs = None
         rot_mats = None
         try:
-            raw_inputs = _copy_host_to_device(host_inputs.values(), mesh_device=self.mesh_device)
-            prepare_rot_mats = getattr(self.model, "prepare_prefill_rot_mats", None)
+            raw_inputs = _copy_host_to_device(host_inputs.values(), mesh_device=self.config.mesh_device)
+            prepare_rot_mats = getattr(self.config.model, "prepare_prefill_rot_mats", None)
             if not callable(prepare_rot_mats):
                 raise TypeError("model must provide prepare_prefill_rot_mats()")
             rot_mats = tuple(prepare_rot_mats(raw_inputs[1]))
@@ -949,7 +931,7 @@ class PrefillRuntime:
             device_inputs = self._stage_device_inputs(host_inputs)
             position_values = _copy_host_to_device(
                 self._prepare_position_inputs_host(relative_last, sequence_length).values(),
-                mesh_device=self.mesh_device,
+                mesh_device=self.config.mesh_device,
             )
             position_inputs = PrefillPositionInputs(*position_values)
             kpt = self._make_device_kpt(sampling_params, batch_size, force_topk)
@@ -960,9 +942,9 @@ class PrefillRuntime:
         return device_inputs, position_inputs, kpt
 
     def _sampling_batch_size(self, request: PrefillRequest) -> int:
-        if not self.device_sampling_enabled:
-            return request.padded_batch_size
-        return int(self.model.sampling.config.max_batch_size)
+        if self.config.device_sampling_enabled:
+            return self.config.sampling_batch_size
+        return request.padded_batch_size
 
     def _sampling_output_rows(self, prepared: PreparedPrefill) -> int:
         # TT sampling validates K/P/T against the physical logits row count.
@@ -972,9 +954,13 @@ class PrefillRuntime:
             return _TILE_SIZE
         return self._sampling_batch_size(prepared.request)
 
-    def _uses_static_q128_topk(self, request: PrefillRequest, sampling_path: SamplingPath) -> bool:
+    def _uses_static_q128_topk(
+        self,
+        request: PrefillRequest,
+        sampling_path: SamplingPath,
+    ) -> bool:
         return (
-            int(self.model.sampling.config.max_batch_size) >= _TILE_SIZE
+            self.config.static_q128_topk_supported
             and sampling_path == "topk"
             and request.kind == "single"
             and not request.uses_chunked_prefill
@@ -990,7 +976,7 @@ class PrefillRuntime:
         host = self._make_host_kpt(sampling_params, batch_size, force_topk)
         if host is None:
             return None
-        return tuple(_copy_host_to_device(host, mesh_device=self.mesh_device))
+        return tuple(_copy_host_to_device(host, mesh_device=self.config.mesh_device))
 
     def _make_host_kpt(
         self,
@@ -1000,12 +986,11 @@ class PrefillRuntime:
     ) -> tuple[Any, Any, Any] | None:
         if sampling_params is None:
             return None
-        allow_argmax = bool(self.model.sampling.config.allow_force_argmax) and not force_topk
         values = _formatted_sampling_values(sampling_params, batch_size)
-        if allow_argmax and values[3]:
+        if self.config.allow_force_argmax and not force_topk and values[3]:
             return None
         k, p, temperature, _ = values
-        mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        mapper = ttnn.ReplicateTensorToMesh(self.config.mesh_device)
         return (
             ttnn.from_torch(
                 torch.tensor(k, dtype=torch.int32),
@@ -1046,11 +1031,11 @@ class PrefillRuntime:
     def _make_sampling_output(self, batch_size: int) -> Any:
         return ttnn.from_torch(
             torch.zeros((1, 1, 1, int(batch_size)), dtype=torch.int32),
-            device=self.mesh_device,
+            device=self.config.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.config.mesh_device),
         )
 
     def _sample_device(
@@ -1060,8 +1045,8 @@ class PrefillRuntime:
         sampled_output: Any | None = None,
     ) -> Any:
         if kpt is None:
-            return self.model.sampling.decode_forward(logits, tt_out_tok=sampled_output)
-        return self.model.sampling.decode_forward(
+            return self.config.model.sampling.decode_forward(logits, tt_out_tok=sampled_output)
+        return self.config.model.sampling.decode_forward(
             logits,
             k=kpt[0],
             p=kpt[1],

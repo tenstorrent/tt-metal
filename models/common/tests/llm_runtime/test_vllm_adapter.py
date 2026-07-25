@@ -1,40 +1,146 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
+import dataclasses
+import inspect
 
 import pytest
 import torch
 
 import ttnn
-from models.common.llm_runtime.vllm_adapter import VLLMAdapter
-
-
-@dataclass(frozen=True)
-class _TraceConfig:
-    prefill_enabled: bool
-    decode_enabled: bool
-
-
-@dataclass(frozen=True)
-class _PagedKVCacheConfig:
-    block_size: int
-    max_num_blocks: int
-    dtype: object
-    memory_config: object = "dram"
-    num_blocks: int | None = None
+from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig
+from models.common.llm_runtime.vllm_adapter import VLLMAdapter, VLLMAdapterConfig
 
 
 def _adapter(*, trace=None, paged_config=None, model_dtype=ttnn.bfloat8_b):
     return VLLMAdapter(
-        trace_config=trace or _TraceConfig(prefill_enabled=True, decode_enabled=True),
-        paged_kv_cache_config=paged_config
-        or _PagedKVCacheConfig(block_size=32, max_num_blocks=128, dtype=ttnn.bfloat8_b),
-        expected_num_layers=32,
-        expected_kv_heads_per_device=8,
-        expected_head_dim=128,
-        model_kv_cache_dtype=model_dtype,
+        VLLMAdapterConfig.resolve(
+            trace=trace or TraceConfig(mode="all"),
+            paged_kv_cache=paged_config or PagedKVCacheConfig(block_size=32, max_num_blocks=128, dtype=ttnn.bfloat8_b),
+            expected_num_layers=32,
+            expected_kv_heads_per_device=8,
+            expected_head_dim=128,
+            model_kv_cache_dtype=model_dtype,
+        )
     )
+
+
+def test_config_resolves_canonical_static_policy_and_is_frozen(expect_error):
+    trace = TraceConfig(mode="all")
+    paged_kv_cache = PagedKVCacheConfig(block_size=32, max_num_blocks=128, dtype=ttnn.bfloat8_b)
+
+    config = VLLMAdapterConfig.resolve(
+        trace=trace,
+        paged_kv_cache=paged_kv_cache,
+        expected_num_layers=32.0,
+        expected_kv_heads_per_device=8.0,
+        expected_head_dim=128.0,
+        model_kv_cache_dtype=[ttnn.bfloat8_b] * 32,
+    )
+
+    assert config.trace is trace
+    assert config.paged_kv_cache is paged_kv_cache
+    assert config.expected_num_layers == 32
+    assert isinstance(config.expected_num_layers, int)
+    assert config.expected_kv_heads_per_device == 8
+    assert isinstance(config.expected_kv_heads_per_device, int)
+    assert config.expected_head_dim == 128
+    assert isinstance(config.expected_head_dim, int)
+    assert config.model_kv_cache_dtypes == (ttnn.bfloat8_b,) * 32
+    with expect_error(dataclasses.FrozenInstanceError, "cannot assign to field"):
+        config.expected_num_layers = 1
+    with expect_error(ValueError, "expected_num_layers"):
+        VLLMAdapterConfig(
+            trace=trace,
+            paged_kv_cache=paged_kv_cache,
+            expected_num_layers=0,
+            expected_kv_heads_per_device=8,
+            expected_head_dim=128,
+            model_kv_cache_dtypes=(ttnn.bfloat8_b,),
+        )
+    with expect_error(TypeError, "must be a tuple"):
+        VLLMAdapterConfig(
+            trace=trace,
+            paged_kv_cache=paged_kv_cache,
+            expected_num_layers=32,
+            expected_kv_heads_per_device=8,
+            expected_head_dim=128,
+            model_kv_cache_dtypes=[ttnn.bfloat8_b],
+        )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error_type", "message"),
+    [
+        ({"trace": object()}, TypeError, "TraceConfig"),
+        ({"paged_kv_cache": object()}, TypeError, "PagedKVCacheConfig"),
+        ({"expected_num_layers": 0}, ValueError, "positive integer"),
+        ({"expected_num_layers": True}, ValueError, "positive integer"),
+        ({"expected_kv_heads_per_device": 0}, ValueError, "positive integer"),
+        ({"expected_kv_heads_per_device": -1}, ValueError, "positive integer"),
+        ({"expected_kv_heads_per_device": True}, ValueError, "positive integer"),
+        ({"expected_kv_heads_per_device": 8.5}, ValueError, "positive integer"),
+        ({"expected_head_dim": -1}, ValueError, "positive integer"),
+        ({"expected_head_dim": 0}, ValueError, "positive integer"),
+        ({"expected_head_dim": True}, ValueError, "positive integer"),
+        ({"expected_head_dim": 128.5}, ValueError, "positive integer"),
+        ({"model_kv_cache_dtype": ()}, ValueError, "cannot be empty"),
+        ({"model_kv_cache_dtype": (ttnn.bfloat8_b,) * 2}, ValueError, "one dtype per model layer"),
+        ({"model_kv_cache_dtype": None}, TypeError, "model metadata"),
+    ],
+)
+def test_config_rejects_inconsistent_static_inputs(overrides, error_type, message, expect_error):
+    arguments = {
+        "trace": TraceConfig(mode="all"),
+        "paged_kv_cache": PagedKVCacheConfig(block_size=32, max_num_blocks=128, dtype=ttnn.bfloat8_b),
+        "expected_num_layers": 32,
+        "expected_kv_heads_per_device": 8,
+        "expected_head_dim": 128,
+        "model_kv_cache_dtype": ttnn.bfloat8_b,
+    }
+
+    with expect_error(error_type, message):
+        VLLMAdapterConfig.resolve(**(arguments | overrides))
+
+
+def test_config_requires_exact_static_policy_types(expect_error):
+    class TraceConfigSubclass(TraceConfig):
+        pass
+
+    class PagedKVCacheConfigSubclass(PagedKVCacheConfig):
+        pass
+
+    arguments = {
+        "trace": TraceConfig(mode="all"),
+        "paged_kv_cache": PagedKVCacheConfig(block_size=32, max_num_blocks=128, dtype=ttnn.bfloat8_b),
+        "expected_num_layers": 32,
+        "model_kv_cache_dtype": ttnn.bfloat8_b,
+    }
+
+    with expect_error(TypeError, "TraceConfig"):
+        VLLMAdapterConfig.resolve(**(arguments | {"trace": TraceConfigSubclass(mode="all")}))
+    with expect_error(TypeError, "PagedKVCacheConfig"):
+        VLLMAdapterConfig.resolve(
+            **(
+                arguments
+                | {
+                    "paged_kv_cache": PagedKVCacheConfigSubclass(
+                        block_size=32,
+                        max_num_blocks=128,
+                        dtype=ttnn.bfloat8_b,
+                    )
+                }
+            )
+        )
+
+
+def test_adapter_is_plain_orchestration_with_one_config_surface(expect_error):
+    adapter = _adapter()
+
+    assert tuple(inspect.signature(VLLMAdapter).parameters) == ("config",)
+    assert vars(adapter) == {"config": adapter.config}
+    with expect_error(TypeError, "VLLMAdapterConfig"):
+        VLLMAdapter(config=None)
 
 
 def test_normalize_prefill_positional_call_without_mutating_caller_kwargs():
@@ -64,7 +170,7 @@ def test_normalize_prefill_positional_call_without_mutating_caller_kwargs():
 
 
 def test_normalize_decode_converts_existing_tensors_and_flattens_column_tokens():
-    adapter = _adapter(trace=_TraceConfig(prefill_enabled=False, decode_enabled=True))
+    adapter = _adapter(trace=TraceConfig(mode="decode_only"))
 
     normalized = adapter.normalize_decode(
         (
@@ -89,13 +195,13 @@ def test_normalize_decode_converts_existing_tensors_and_flattens_column_tokens()
         (
             "normalize_prefill",
             (torch.zeros((1, 1)), torch.zeros((1, 1))),
-            _TraceConfig(prefill_enabled=False, decode_enabled=True),
+            TraceConfig(mode="decode_only"),
             True,
         ),
         (
             "normalize_decode",
             (torch.zeros(1), torch.zeros(1), torch.zeros((1, 1))),
-            _TraceConfig(prefill_enabled=True, decode_enabled=False),
+            TraceConfig(mode="none"),
             True,
         ),
     ],
@@ -108,7 +214,7 @@ def test_normalize_rejects_trace_hint_that_disagrees_with_static_policy(method_n
 
 
 def test_eager_compile_trace_hint_is_allowed_with_static_trace_enabled():
-    adapter = _adapter(trace=_TraceConfig(prefill_enabled=True, decode_enabled=True))
+    adapter = _adapter(trace=TraceConfig(mode="all"))
 
     normalized = adapter.normalize_decode(
         (torch.zeros(1), torch.zeros(1), torch.zeros((1, 1))),
@@ -141,7 +247,7 @@ def test_normalize_rejects_duplicate_positional_and_keyword_argument(expect_erro
 
 
 def test_resolve_legacy_kv_cache_returns_new_immutable_config():
-    base = _PagedKVCacheConfig(block_size=32, max_num_blocks=128, dtype=ttnn.bfloat8_b)
+    base = PagedKVCacheConfig(block_size=32, max_num_blocks=128, dtype=ttnn.bfloat8_b)
     adapter = _adapter(paged_config=base)
 
     resolved = adapter.resolve_legacy_kv_cache_config(
@@ -188,7 +294,7 @@ def test_adapter_requires_explicit_model_owned_dtype_metadata(expect_error):
 
 
 def test_bfloat4_model_dtype_uses_shared_bfloat16_torch_surrogate():
-    config = _PagedKVCacheConfig(
+    config = PagedKVCacheConfig(
         block_size=32,
         max_num_blocks=128,
         dtype=ttnn.bfloat4_b,
@@ -207,7 +313,7 @@ def test_bfloat4_model_dtype_uses_shared_bfloat16_torch_surrogate():
 
 def test_resolve_legacy_kv_cache_rejects_replacing_resolved_capacity(expect_error):
     adapter = _adapter(
-        paged_config=_PagedKVCacheConfig(
+        paged_config=PagedKVCacheConfig(
             block_size=32,
             max_num_blocks=128,
             dtype=ttnn.bfloat8_b,

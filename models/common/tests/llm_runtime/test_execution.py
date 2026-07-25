@@ -41,7 +41,7 @@ def _compiler(monkeypatch):
 
 
 def _trace_compiler(program_compiler, *, mode="all"):
-    return TraceCompiler(program_compiler, "mesh")
+    return TraceCompiler(program_compiler)
 
 
 def _prepared_prefill(*, trace_eligible=True, signatures=None, name="regular"):
@@ -270,7 +270,7 @@ def test_decode_replay_prepares_once_and_uses_same_object_for_refresh_submission
     events = []
     decode = _runtime(
         DecodeRuntime,
-        device_feedback_enabled=True,
+        config=SimpleNamespace(position_feedback_capable=True),
         prepare=lambda **kwargs: events.append(("prepare", prepared)) or prepared,
         program_signature=lambda request: events.append(("signature", request)) or _Signature("decode", 1),
         refresh_trace=lambda artifact, request, decision: events.append(("refresh", request)),

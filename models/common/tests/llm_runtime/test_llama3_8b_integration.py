@@ -61,7 +61,7 @@ def _runtime_config():
     )
 
 
-def _config(mode="none"):
+def _config(mode="none", *, num_blocks=None):
     return llama_executor.Llama3ExecutorConfig(
         trace=TraceConfig(mode),
         warmup=WarmupConfig(prefill_seq_lens=(128,), prefill_batch_sizes=(1,)),
@@ -69,6 +69,7 @@ def _config(mode="none"):
             block_size=32,
             max_num_blocks=132,
             dtype=ttnn.bfloat8_b,
+            num_blocks=num_blocks,
         ),
         device_sampling_enabled=False,
     )
@@ -81,13 +82,17 @@ def test_model_owned_executor_constructs_exact_composition(mode):
     assert executor.eager_executor.program_compiler is executor.program_compiler
     assert executor.eager_executor.prefill is executor.prefill_runtime
     assert executor.eager_executor.decode is executor.decode_runtime
+    assert executor.warmup.eager is executor.eager_executor
+    assert executor.warmup.trace_compiler is executor.trace_compiler
     if mode == "none":
+        assert executor.warmup.execution is executor.eager_executor
         assert executor.eager_execution is executor.eager_executor
         assert executor.traced_prefill_execution is None
         assert executor.traced_decode_execution is None
         assert executor.trace_compiler is None
         assert executor.traced_executor is None
     else:
+        assert executor.warmup.execution is executor.traced_executor
         expected_prefill = executor.traced_executor if mode == "all" else None
         assert executor.eager_execution is executor.eager_executor
         assert executor.traced_prefill_execution is expected_prefill
@@ -95,6 +100,91 @@ def test_model_owned_executor_constructs_exact_composition(mode):
         assert executor.traced_executor.eager_executor is executor.eager_executor
         assert executor.traced_executor.trace_compiler is executor.trace_compiler
         assert executor.trace_compiler.program_compiler is executor.program_compiler
+
+
+def test_vllm_capacity_resolution_reconfigures_existing_runtime_owners_before_allocation(monkeypatch):
+    executor = llama_executor.Llama3Executor(_model(), _runtime_config(), _config())
+    owner_ids = tuple(
+        id(owner)
+        for owner in (
+            executor.prefill_runtime,
+            executor.decode_runtime,
+            executor.warmup,
+            executor.program_compiler,
+        )
+    )
+    assert executor.page_table_layout.raw_capacity_width == 128
+
+    executor.configure_paged_kv_cache(
+        PagedKVCacheConfig(
+            block_size=32,
+            max_num_blocks=132,
+            dtype=ttnn.bfloat8_b,
+            num_blocks=64,
+        )
+    )
+
+    assert (
+        tuple(
+            id(owner)
+            for owner in (
+                executor.prefill_runtime,
+                executor.decode_runtime,
+                executor.warmup,
+                executor.program_compiler,
+            )
+        )
+        == owner_ids
+    )
+    assert executor.page_table_layout.raw_capacity_width == 64
+    assert executor.prefill_runtime.config.page_table_layout is executor.page_table_layout
+    assert executor.decode_runtime.config.page_table_layout is executor.page_table_layout
+    assert executor.warmup.config.page_table_layout is executor.page_table_layout
+
+    def fake_allocate():
+        assert executor._runtime_configuration_sealed
+        assert executor.warmup._configuration_sealed
+        return ["allocated"]
+
+    monkeypatch.setattr(executor.kv_cache_manager, "allocate", fake_allocate)
+    assert executor.allocate_kv_cache() == ["allocated"]
+
+
+def test_late_vllm_capacity_resolution_fails_before_mutating_kv_configuration(expect_error):
+    executor = llama_executor.Llama3Executor(_model(), _runtime_config(), _config())
+    executor._seal_runtime_configuration()
+    unresolved = executor.kv_cache_manager.config
+
+    with expect_error(RuntimeError, "runtime configuration is sealed"):
+        executor.configure_paged_kv_cache(
+            PagedKVCacheConfig(
+                block_size=32,
+                max_num_blocks=132,
+                dtype=ttnn.bfloat8_b,
+                num_blocks=64,
+            )
+        )
+
+    assert executor.kv_cache_manager.config is unresolved
+    assert not executor.kv_cache_manager.config.is_resolved()
+
+
+def test_direct_demo_resolves_physical_capacity_to_configured_maximum(monkeypatch):
+    attention = SimpleNamespace(
+        paged_attention_config=SimpleNamespace(block_size=32, max_num_blocks=128),
+        kv_cache_dtype=ttnn.bfloat8_b,
+    )
+    llm = SimpleNamespace(
+        model=SimpleNamespace(config=SimpleNamespace(block_configs=(SimpleNamespace(attention_config=attention),)))
+    )
+    captured = []
+    monkeypatch.setattr(
+        llama_demo, "build_llama3_executor", lambda product, config: captured.append(config) or object()
+    )
+
+    llama_demo._build_demo_executor(llm, trace_mode="all", device_sampling_enabled=False)
+
+    assert captured[0].paged_kv_cache.num_blocks == captured[0].paged_kv_cache.max_num_blocks == 128
 
 
 def test_model_owned_cleanup_is_ordered_best_effort_retryable_and_idempotent(expect_error):
@@ -259,6 +349,12 @@ def test_generator_constructs_model_owned_lane_configs(monkeypatch):
     assert len(executor_calls) == 2
     assert all(isinstance(config, llama_executor.Llama3ExecutorConfig) for _, config in executor_calls)
     assert all(not config.warmup.include_decode_top_k for _, config in executor_calls)
+    assert isinstance(generator._adapter.config, llama_generator.VLLMAdapterConfig)
+    assert vars(generator._adapter) == {"config": generator._adapter.config}
+    assert generator._adapter.config.trace.mode == "all"
+    assert generator._adapter.config.expected_num_layers == 1
+    assert generator._adapter.config.expected_kv_heads_per_device == 8
+    assert generator._adapter.config.expected_head_dim == 128
 
 
 @pytest.mark.parametrize(

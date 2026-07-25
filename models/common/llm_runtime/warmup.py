@@ -5,12 +5,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable
 
 import torch
 from loguru import logger
 
+from models.common.llm_runtime.config import PageTableLayout, TraceConfig, WarmupConfig
+from models.common.llm_runtime.decode import DecodeRuntimeConfig
+from models.common.llm_runtime.prefill.config import PrefillRuntimeConfig
 from models.common.sampling import SamplingParams
 
 
@@ -29,6 +32,194 @@ class WarmupPlan:
     decode: tuple[WarmupCase, ...]
 
 
+@dataclass(frozen=True)
+class WarmupCoordinatorConfig:
+    """Fully resolved immutable warmup policy and coverage."""
+
+    warmup: WarmupConfig
+    model: Any
+    page_table_layout: PageTableLayout
+    prefill_sequence_lengths: tuple[int, ...]
+    lane_batch_size: int
+    device_sampling_enabled: bool
+    allow_force_argmax: bool
+    prime_q128_tile_ends: bool
+    prefill_trace_enabled: bool
+    decode_trace_enabled: bool
+    eager_plan: WarmupPlan
+    sampled_plan: WarmupPlan
+    max_page_table_capacity_width: int
+    max_prefill_page_table_width: int
+    max_decode_page_table_width: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.warmup, WarmupConfig):
+            raise TypeError("warmup must be a WarmupConfig")
+        if self.model is None:
+            raise ValueError("model is required")
+        if not isinstance(self.page_table_layout, PageTableLayout):
+            raise TypeError("page_table_layout must be a PageTableLayout")
+        _validate_prefill_sequence_lengths(self.prefill_sequence_lengths)
+        _require_positive_int("lane_batch_size", self.lane_batch_size)
+        for name in (
+            "device_sampling_enabled",
+            "allow_force_argmax",
+            "prime_q128_tile_ends",
+            "prefill_trace_enabled",
+            "decode_trace_enabled",
+        ):
+            if not isinstance(getattr(self, name), bool):
+                raise TypeError(f"{name} must be bool")
+        if not self.device_sampling_enabled and self.allow_force_argmax:
+            raise ValueError("force-argmax capability requires device sampling")
+        if self.prime_q128_tile_ends is not (self.device_sampling_enabled and self.lane_batch_size >= 32):
+            raise ValueError("prime_q128_tile_ends must match resolved sampling and lane capabilities")
+        ceilings = (
+            ("max_page_table_capacity_width", self.max_page_table_capacity_width),
+            ("max_prefill_page_table_width", self.max_prefill_page_table_width),
+            ("max_decode_page_table_width", self.max_decode_page_table_width),
+        )
+        for name, value in ceilings:
+            _require_positive_int(name, value)
+        if self.page_table_layout.raw_capacity_width > self.max_page_table_capacity_width:
+            raise ValueError("max_page_table_capacity_width must cover page_table_layout")
+        if self.page_table_layout.prefill_width > self.max_prefill_page_table_width:
+            raise ValueError("max_prefill_page_table_width must cover page_table_layout")
+        if self.page_table_layout.decode_width > self.max_decode_page_table_width:
+            raise ValueError("max_decode_page_table_width must cover page_table_layout")
+        expected_eager = _build_plan(
+            warmup=self.warmup,
+            layout=self.page_table_layout,
+            prefill_sequence_lengths=self.prefill_sequence_lengths,
+            lane_batch_size=self.lane_batch_size,
+            allow_force_argmax=self.allow_force_argmax,
+            can_sample_on_device=False,
+        )
+        expected_sampled = _build_plan(
+            warmup=self.warmup,
+            layout=self.page_table_layout,
+            prefill_sequence_lengths=self.prefill_sequence_lengths,
+            lane_batch_size=self.lane_batch_size,
+            allow_force_argmax=self.allow_force_argmax,
+            can_sample_on_device=True,
+        )
+        if self.eager_plan != expected_eager or self.sampled_plan != expected_sampled:
+            raise ValueError("warmup plans must match resolved policy and geometry")
+
+    @classmethod
+    def resolve(
+        cls,
+        *,
+        warmup: WarmupConfig,
+        trace: TraceConfig,
+        prefill: PrefillRuntimeConfig,
+        decode: DecodeRuntimeConfig,
+        prefill_sequence_lengths: tuple[int, ...],
+    ) -> "WarmupCoordinatorConfig":
+        """Validate resolved runtimes and derive both static coverage plans."""
+
+        if not isinstance(warmup, WarmupConfig):
+            raise TypeError("warmup must be a WarmupConfig")
+        if not isinstance(trace, TraceConfig):
+            raise TypeError("trace must be a TraceConfig")
+        if not isinstance(prefill, PrefillRuntimeConfig):
+            raise TypeError("prefill must be a PrefillRuntimeConfig")
+        if not isinstance(decode, DecodeRuntimeConfig):
+            raise TypeError("decode must be a DecodeRuntimeConfig")
+        if decode.model is not prefill.model:
+            raise ValueError("prefill and decode configs must share one model")
+        if decode.page_table_layout is not prefill.page_table_layout:
+            raise ValueError("prefill and decode configs must share one page-table layout")
+        if decode.lane_capacity != prefill.max_batch_size:
+            raise ValueError("prefill and decode configs must share one lane capacity")
+        if decode.device_sampling_enabled is not prefill.device_sampling_enabled:
+            raise ValueError("prefill and decode configs must share device-sampling policy")
+        if decode.allow_force_argmax is not prefill.allow_force_argmax:
+            raise ValueError("prefill and decode configs must share force-argmax capability")
+        if decode.max_page_table_capacity_width != prefill.max_page_table_capacity_width:
+            raise ValueError("prefill and decode configs must share the original capacity ceiling")
+        if decode.max_decode_page_table_width != prefill.max_decode_page_table_width:
+            raise ValueError("prefill and decode configs must share the original decode-width ceiling")
+
+        source_lengths = warmup.prefill_seq_lens
+        if source_lengths is None:
+            source_lengths = prefill_sequence_lengths
+        _validate_prefill_sequence_lengths(source_lengths)
+
+        lane_batch_size = prefill.max_batch_size
+        device_sampling_enabled = prefill.device_sampling_enabled
+        allow_force_argmax = prefill.allow_force_argmax
+        prime_q128_tile_ends = device_sampling_enabled and lane_batch_size >= 32
+        eager_plan = _build_plan(
+            warmup=warmup,
+            layout=prefill.page_table_layout,
+            prefill_sequence_lengths=source_lengths,
+            lane_batch_size=lane_batch_size,
+            allow_force_argmax=allow_force_argmax,
+            can_sample_on_device=False,
+        )
+        sampled_plan = _build_plan(
+            warmup=warmup,
+            layout=prefill.page_table_layout,
+            prefill_sequence_lengths=source_lengths,
+            lane_batch_size=lane_batch_size,
+            allow_force_argmax=allow_force_argmax,
+            can_sample_on_device=True,
+        )
+        return cls(
+            warmup=warmup,
+            model=prefill.model,
+            page_table_layout=prefill.page_table_layout,
+            prefill_sequence_lengths=source_lengths,
+            lane_batch_size=lane_batch_size,
+            device_sampling_enabled=device_sampling_enabled,
+            allow_force_argmax=allow_force_argmax,
+            prime_q128_tile_ends=prime_q128_tile_ends,
+            prefill_trace_enabled=trace.prefill_enabled,
+            decode_trace_enabled=trace.decode_enabled,
+            eager_plan=eager_plan,
+            sampled_plan=sampled_plan,
+            max_page_table_capacity_width=prefill.max_page_table_capacity_width,
+            max_prefill_page_table_width=prefill.max_prefill_page_table_width,
+            max_decode_page_table_width=decode.max_decode_page_table_width,
+        )
+
+    def with_page_table_layout(self, layout: PageTableLayout) -> "WarmupCoordinatorConfig":
+        """Return the same policy with final geometry within original ceilings."""
+
+        if not isinstance(layout, PageTableLayout):
+            raise TypeError("layout must be a PageTableLayout")
+        if layout.block_size != self.page_table_layout.block_size:
+            raise ValueError("page-table layout replacement cannot change block_size")
+        if layout.raw_capacity_width > self.max_page_table_capacity_width:
+            raise ValueError("page-table layout replacement cannot exceed the construction-time capacity ceiling")
+        if (
+            layout.prefill_width > self.max_prefill_page_table_width
+            or layout.decode_width > self.max_decode_page_table_width
+        ):
+            raise ValueError("page-table layout replacement cannot expand canonical geometry")
+        return replace(
+            self,
+            page_table_layout=layout,
+            eager_plan=_build_plan(
+                warmup=self.warmup,
+                layout=layout,
+                prefill_sequence_lengths=self.prefill_sequence_lengths,
+                lane_batch_size=self.lane_batch_size,
+                allow_force_argmax=self.allow_force_argmax,
+                can_sample_on_device=False,
+            ),
+            sampled_plan=_build_plan(
+                warmup=self.warmup,
+                layout=layout,
+                prefill_sequence_lengths=self.prefill_sequence_lengths,
+                lane_batch_size=self.lane_batch_size,
+                allow_force_argmax=self.allow_force_argmax,
+                can_sample_on_device=True,
+            ),
+        )
+
+
 class WarmupCoordinator:
     """Compile configured coverage and activate traces at one shared barrier.
 
@@ -41,27 +232,45 @@ class WarmupCoordinator:
     def __init__(
         self,
         *,
-        config: Any,
-        trace_config: Any,
+        config: WarmupCoordinatorConfig,
         execution: Any,
-        eager: Any,
-        trace_compiler: Any | None,
-        model: Any,
-        page_table_layout: Any,
-        prefill_sequence_lengths: tuple[int, ...],
-        device_sampling_enabled: bool,
         ensure_sampling_buffers: Callable[[], None],
         validate_bound_cache: Callable[[Any], None],
     ) -> None:
+        if not isinstance(config, WarmupCoordinatorConfig):
+            raise TypeError("config must be a WarmupCoordinatorConfig")
+        eager = getattr(execution, "eager_executor", execution)
+        trace_compiler = getattr(execution, "trace_compiler", None)
+        prefill_config = getattr(getattr(eager, "prefill", None), "config", None)
+        decode_config = getattr(getattr(eager, "decode", None), "config", None)
+        if not isinstance(prefill_config, PrefillRuntimeConfig) or not isinstance(decode_config, DecodeRuntimeConfig):
+            raise TypeError("execution must compose configured prefill and decode runtimes")
+        if prefill_config.model is not config.model or decode_config.model is not config.model:
+            raise ValueError("execution runtimes must use the warmup config model")
+        if (
+            prefill_config.page_table_layout is not config.page_table_layout
+            or decode_config.page_table_layout is not config.page_table_layout
+        ):
+            raise ValueError("execution runtimes must use the warmup config page-table layout")
+        if (
+            prefill_config.max_batch_size != config.lane_batch_size
+            or decode_config.lane_capacity != config.lane_batch_size
+        ):
+            raise ValueError("execution runtimes must use the warmup config lane capacity")
+        if (
+            prefill_config.device_sampling_enabled is not config.device_sampling_enabled
+            or decode_config.device_sampling_enabled is not config.device_sampling_enabled
+        ):
+            raise ValueError("execution runtimes must use the warmup config sampling policy")
+        if not callable(ensure_sampling_buffers):
+            raise TypeError("ensure_sampling_buffers must be callable")
+        if not callable(validate_bound_cache):
+            raise TypeError("validate_bound_cache must be callable")
+
         self.config = config
-        self.trace_config = trace_config
         self.execution = execution
         self.eager = eager
         self.trace_compiler = trace_compiler
-        self.model = model
-        self.page_table_layout = page_table_layout
-        self.prefill_sequence_lengths = tuple(int(value) for value in prefill_sequence_lengths)
-        self.device_sampling_enabled = bool(device_sampling_enabled)
         self._ensure_sampling_buffers = ensure_sampling_buffers
         self._validate_bound_cache = validate_bound_cache
         self._eager: set[WarmupCase] = set()
@@ -69,6 +278,7 @@ class WarmupCoordinator:
         self._trace_decisions: dict[str, bool] = {}
         self._captured = False
         self._prefill_trace_postprocess_primed = False
+        self._configuration_sealed = False
 
     # Public API
 
@@ -76,15 +286,24 @@ class WarmupCoordinator:
     def already_warmed_up_prefill(self) -> bool:
         """Whether all configured prefill programs and traces are ready."""
 
-        required = set(self._plan(can_sample_on_device=self.device_sampling_enabled).prefill)
+        required = set(self._plan(can_sample_on_device=self.config.device_sampling_enabled).prefill)
         if not required.issubset(self._eager):
             return False
-        if (
-            not bool(getattr(self.trace_config, "prefill_enabled", False))
-            or self._trace_decisions.get("prefill") is False
-        ):
+        if not self.config.prefill_trace_enabled or self._trace_decisions.get("prefill") is False:
             return True
         return required.issubset(self._trace_registered) and self._captured
+
+    def configure_page_table_layout(self, layout: PageTableLayout) -> None:
+        """Install final paged-KV geometry before warmup compiles any program."""
+
+        if self._configuration_sealed:
+            raise RuntimeError("page-table layout cannot change after warmup configuration is sealed")
+        self.config = self.config.with_page_table_layout(layout)
+
+    def seal_configuration(self) -> None:
+        """Forbid geometry replacement before physical KV allocation begins."""
+
+        self._configuration_sealed = True
 
     def warmup_prefill(
         self,
@@ -97,14 +316,11 @@ class WarmupCoordinator:
         """Compile prefill coverage and capture once decode coverage is ready."""
 
         self._validate_hints("prefill", enable_trace, can_sample_on_device)
-        self._trace_decisions["prefill"] = bool(enable_trace)
-        if (
-            enable_trace
-            and self._trace_decisions.get("decode") is False
-            and bool(getattr(self.trace_config, "decode_enabled", False))
-        ):
-            del self._trace_decisions["decode"]
         self._validate_bound_cache(kv_cache)
+        self._trace_decisions["prefill"] = bool(enable_trace)
+        if enable_trace and self._trace_decisions.get("decode") is False and self.config.decode_trace_enabled:
+            del self._trace_decisions["decode"]
+        self._configuration_sealed = True
         if can_sample_on_device:
             self._ensure_sampling_buffers()
         plan = self._plan(can_sample_on_device=can_sample_on_device)
@@ -130,7 +346,7 @@ class WarmupCoordinator:
                 and case.cached_tokens == 0
                 and (
                     case.sampling_path == "argmax"
-                    or (case.sampling_path == "topk" and int(self.model.config.max_batch_size) >= 32)
+                    or (case.sampling_path == "topk" and self.config.prime_q128_tile_ends)
                 )
             ):
                 # Q128 single-user sampled postprocessing has one TT slice
@@ -141,7 +357,7 @@ class WarmupCoordinator:
                 prompt_length = case.cached_tokens + actual_uncached_length
                 tokens = torch.zeros((case.batch_size, prompt_length), dtype=torch.long)
                 prompt_lens = torch.full((case.batch_size,), prompt_length, dtype=torch.long)
-                width = _ceil_div(prompt_length, int(self.page_table_layout.block_size))
+                width = _ceil_div(prompt_length, self.config.page_table_layout.block_size)
                 page_table = torch.zeros((case.batch_size, width), dtype=torch.int32)
                 start_pos = (
                     torch.full((case.batch_size,), case.cached_tokens, dtype=torch.long) if case.cached_tokens else None
@@ -172,13 +388,14 @@ class WarmupCoordinator:
         """Compile decode coverage and capture once prefill coverage is ready."""
 
         self._validate_hints("decode", enable_trace, can_sample_on_device)
-        self._trace_decisions["decode"] = bool(enable_trace)
         self._validate_bound_cache(kv_cache)
-        lane_batch = int(self.model.config.max_batch_size)
+        lane_batch = self.config.lane_batch_size
         if int(max_batch_size) != lane_batch:
             raise ValueError(f"decode warmup batch {max_batch_size} does not match lane capacity {lane_batch}")
         if int(num_blocks) <= 0:
             raise ValueError("decode warmup num_blocks must be positive")
+        self._trace_decisions["decode"] = bool(enable_trace)
+        self._configuration_sealed = True
         if can_sample_on_device:
             self._ensure_sampling_buffers()
         plan = self._plan(can_sample_on_device=can_sample_on_device)
@@ -209,60 +426,20 @@ class WarmupCoordinator:
     # Private implementation
 
     def _plan(self, *, can_sample_on_device: bool) -> WarmupPlan:
-        sampling_paths = ["logits"]
-        if can_sample_on_device:
-            sampling_paths.append("topk")
-        sampling_config = getattr(getattr(self.model, "sampling", None), "config", None)
-        allow_argmax = bool(getattr(sampling_config, "allow_force_argmax", False))
-        prefill = []
-        max_batch_size = int(self.model.config.max_batch_size)
-        for sequence_length in self.prefill_sequence_lengths:
-            batches = self.config.prefill_batch_sizes if sequence_length == 128 else (1,)
-            for batch_size in batches:
-                if batch_size <= max_batch_size:
-                    batch_sampling_paths = sampling_paths + (
-                        ["argmax"] if can_sample_on_device and allow_argmax and batch_size == 1 else []
-                    )
-                    prefill.extend(
-                        WarmupCase("prefill", batch_size, sequence_length, sampling_path)
-                        for sampling_path in batch_sampling_paths
-                    )
-            cached_prompt_length = int(self.page_table_layout.block_size) + sequence_length
-            if cached_prompt_length <= (
-                int(self.page_table_layout.raw_capacity_width) * int(self.page_table_layout.block_size)
-            ):
-                prefill.extend(
-                    WarmupCase(
-                        "prefill",
-                        1,
-                        sequence_length,
-                        sampling_path,
-                        cached_tokens=int(self.page_table_layout.block_size),
-                    )
-                    for sampling_path in sampling_paths + (["argmax"] if can_sample_on_device and allow_argmax else [])
-                )
-
-        decode_paths = ["logits"]
-        if can_sample_on_device:
-            if allow_argmax:
-                decode_paths.append("argmax")
-            if not allow_argmax or self.config.include_decode_top_k:
-                decode_paths.append("topk")
-        decode = tuple(WarmupCase("decode", max_batch_size, None, sampling_path) for sampling_path in decode_paths)
-        return WarmupPlan(tuple(prefill), decode)
+        return self.config.sampled_plan if can_sample_on_device else self.config.eager_plan
 
     def _maybe_capture(self) -> None:
         if self.trace_compiler is None or self._captured:
             return
-        required = self._plan(can_sample_on_device=self.device_sampling_enabled)
+        required = self._plan(can_sample_on_device=self.config.device_sampling_enabled)
         required_trace: set[WarmupCase] = set()
-        if bool(getattr(self.trace_config, "prefill_enabled", False)):
+        if self.config.prefill_trace_enabled:
             prefill_decision = self._trace_decisions.get("prefill")
             if prefill_decision is None:
                 return
             if prefill_decision:
                 required_trace.update(required.prefill)
-        if bool(getattr(self.trace_config, "decode_enabled", False)):
+        if self.config.decode_trace_enabled:
             decode_decision = self._trace_decisions.get("decode")
             if decode_decision is None:
                 return
@@ -280,15 +457,16 @@ class WarmupCoordinator:
         if (
             self._prefill_trace_postprocess_primed
             or self._trace_decisions.get("prefill") is False
-            or not bool(getattr(self.trace_config, "prefill_enabled", False))
+            or not self.config.prefill_trace_enabled
         ):
             return
-        sampling_config = getattr(getattr(self.model, "sampling", None), "config", None)
-        if not self.device_sampling_enabled or not bool(getattr(sampling_config, "allow_force_argmax", False)):
+        if not self.config.device_sampling_enabled or not self.config.allow_force_argmax:
             self._prefill_trace_postprocess_primed = True
             return
-        sequence_length = 128 if 128 in self.prefill_sequence_lengths else int(self.prefill_sequence_lengths[0])
-        width = _ceil_div(sequence_length, int(self.page_table_layout.block_size))
+        sequence_length = (
+            128 if 128 in self.config.prefill_sequence_lengths else int(self.config.prefill_sequence_lengths[0])
+        )
+        width = _ceil_div(sequence_length, self.config.page_table_layout.block_size)
         self.execution.prefill_forward(
             tokens=torch.zeros((1, sequence_length), dtype=torch.long),
             page_table=torch.zeros((1, width), dtype=torch.int32),
@@ -300,10 +478,75 @@ class WarmupCoordinator:
         self._prefill_trace_postprocess_primed = True
 
     def _validate_hints(self, operation: str, enable_trace: bool, can_sample_on_device: bool) -> None:
-        if enable_trace and not bool(getattr(self.trace_config, f"{operation}_enabled")):
+        trace_enabled = (
+            self.config.prefill_trace_enabled if operation == "prefill" else self.config.decode_trace_enabled
+        )
+        if enable_trace and not trace_enabled:
             raise ValueError(f"{operation} trace warmup exceeds the configured trace policy")
-        if can_sample_on_device and not self.device_sampling_enabled:
+        if can_sample_on_device and not self.config.device_sampling_enabled:
             raise ValueError("warmup cannot enable device sampling when it is statically disabled")
+
+
+def _validate_prefill_sequence_lengths(values: Any) -> None:
+    if not isinstance(values, tuple) or not values:
+        raise ValueError("prefill sequence lengths must be a non-empty tuple")
+    if any(not isinstance(value, int) or isinstance(value, bool) or value <= 0 for value in values):
+        raise ValueError("prefill sequence lengths must contain positive integers")
+    if len(set(values)) != len(values):
+        raise ValueError("prefill sequence lengths must be unique")
+
+
+def _require_positive_int(name: str, value: Any) -> None:
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+
+
+def _build_plan(
+    *,
+    warmup: WarmupConfig,
+    layout: PageTableLayout,
+    prefill_sequence_lengths: tuple[int, ...],
+    lane_batch_size: int,
+    allow_force_argmax: bool,
+    can_sample_on_device: bool,
+) -> WarmupPlan:
+    sampling_paths = ["logits"]
+    if can_sample_on_device:
+        sampling_paths.append("topk")
+    prefill = []
+    for sequence_length in prefill_sequence_lengths:
+        batches = warmup.prefill_batch_sizes if sequence_length == 128 else (1,)
+        for batch_size in batches:
+            if batch_size <= lane_batch_size:
+                batch_sampling_paths = sampling_paths + (
+                    ["argmax"] if can_sample_on_device and allow_force_argmax and batch_size == 1 else []
+                )
+                prefill.extend(
+                    WarmupCase("prefill", batch_size, sequence_length, sampling_path)
+                    for sampling_path in batch_sampling_paths
+                )
+        cached_prompt_length = layout.block_size + sequence_length
+        if cached_prompt_length <= layout.raw_capacity_width * layout.block_size:
+            prefill.extend(
+                WarmupCase(
+                    "prefill",
+                    1,
+                    sequence_length,
+                    sampling_path,
+                    cached_tokens=layout.block_size,
+                )
+                for sampling_path in sampling_paths
+                + (["argmax"] if can_sample_on_device and allow_force_argmax else [])
+            )
+
+    decode_paths = ["logits"]
+    if can_sample_on_device:
+        if allow_force_argmax:
+            decode_paths.append("argmax")
+        if not allow_force_argmax or warmup.include_decode_top_k:
+            decode_paths.append("topk")
+    decode = tuple(WarmupCase("decode", lane_batch_size, None, sampling_path) for sampling_path in decode_paths)
+    return WarmupPlan(tuple(prefill), decode)
 
 
 def _greedy_sampling_params(batch_size: int) -> SamplingParams:

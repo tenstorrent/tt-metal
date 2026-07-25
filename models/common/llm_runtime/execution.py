@@ -251,7 +251,7 @@ class TracedExecutor:
             program_key,
             lambda artifact, decision: decode.refresh_trace(artifact, prepared, decision),
             reset_batch=prepared.reset_batch,
-            device_feedback_enabled=decode.device_feedback_enabled,
+            device_feedback_enabled=decode.config.position_feedback_capable,
             feedback_compatible=prepared.device_feedback,
             page_table_changed=prepared.page_table_changed,
         )

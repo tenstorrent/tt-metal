@@ -11,7 +11,7 @@ from typing import Any
 import ttnn
 from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig, TraceMode, WarmupConfig
 from models.common.llm_runtime.lane_group import LaneGroupExecutor
-from models.common.llm_runtime.vllm_adapter import VLLMAdapter
+from models.common.llm_runtime.vllm_adapter import VLLMAdapter, VLLMAdapterConfig
 from models.common.models.llama3_8b.executor import Llama3ExecutorConfig, build_llama3_executor
 from models.common.models.llama3_8b.hf_adaptor import from_pretrained
 from models.common.models.llama3_8b.model import Llama31_8BPagedAttentionConfig
@@ -287,12 +287,14 @@ def build_llama3_generator(config: Llama3GeneratorConfig) -> Llama3Generator:
 def _build_vllm_adapter(lane) -> VLLMAdapter:
     model_kv_cache_dtypes, num_layers, kv_heads_per_device, head_dim = _model_kv_metadata(lane.model)
     return VLLMAdapter(
-        trace_config=lane.config.trace,
-        paged_kv_cache_config=lane.config.paged_kv_cache,
-        expected_num_layers=num_layers,
-        expected_kv_heads_per_device=kv_heads_per_device,
-        expected_head_dim=head_dim,
-        model_kv_cache_dtype=model_kv_cache_dtypes,
+        VLLMAdapterConfig.resolve(
+            trace=lane.config.trace,
+            paged_kv_cache=lane.config.paged_kv_cache,
+            expected_num_layers=num_layers,
+            expected_kv_heads_per_device=kv_heads_per_device,
+            expected_head_dim=head_dim,
+            model_kv_cache_dtype=model_kv_cache_dtypes,
+        )
     )
 
 

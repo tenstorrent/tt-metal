@@ -111,11 +111,11 @@ class TraceCompiler:
     composed ``ProgramCompiler`` remains the sole program registry.
     """
 
-    def __init__(self, program_compiler: ProgramCompiler, mesh_device: Any):
+    def __init__(self, program_compiler: ProgramCompiler):
         if not isinstance(program_compiler, ProgramCompiler):
             raise TypeError("program_compiler must be a ProgramCompiler")
         self.program_compiler = program_compiler
-        self.mesh_device = mesh_device
+        self.mesh_device = program_compiler.mesh_device
         self._traces: dict[TraceKey, TraceRecord] = {}
         self._plans: dict[TraceKey, TraceCapturePlan] = {}
         self._program_to_trace: dict[ProgramKey, TraceKey] = {}

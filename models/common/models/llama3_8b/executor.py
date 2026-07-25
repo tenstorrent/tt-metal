@@ -11,15 +11,16 @@ from typing import Any
 import torch
 
 from models.common.llm_runtime.config import PagedKVCacheConfig, PageTableLayout, TraceConfig, WarmupConfig
-from models.common.llm_runtime.decode import DecodeRuntime
+from models.common.llm_runtime.decode import DecodeRuntime, DecodeRuntimeConfig
 from models.common.llm_runtime.execution import EagerExecutor, TracedExecutor
 from models.common.llm_runtime.output_reader import OutputReader
 from models.common.llm_runtime.paged_kv_cache import PagedKVCacheManager
+from models.common.llm_runtime.prefill.config import PrefillRuntimeConfig
 from models.common.llm_runtime.prefill.runtime import PrefillRuntime
 from models.common.llm_runtime.program_compiler import ProgramCompiler
 from models.common.llm_runtime.tensor_resources import attach_cleanup_failures
 from models.common.llm_runtime.trace_compiler import TraceCompiler
-from models.common.llm_runtime.warmup import WarmupCoordinator
+from models.common.llm_runtime.warmup import WarmupCoordinator, WarmupCoordinatorConfig
 from models.common.models.llama3_8b.hf_adaptor import Llama3ForCausalLM
 from models.common.modules.sampling.sampling_1d import Sampling1D
 
@@ -86,6 +87,7 @@ class Llama3Executor:
         self._terminal = False
         self._cleaned_up = False
         self._sampling_buffers_loaded = False
+        self._runtime_configuration_sealed = False
 
         sampling = getattr(model, "sampling", None)
         if config.device_sampling_enabled:
@@ -99,24 +101,25 @@ class Llama3Executor:
         self.page_table_layout = self._resolve_page_table_layout()
         self.output_reader = OutputReader(mesh_device)
         self.prefill_runtime = PrefillRuntime(
-            model=model,
-            mesh_device=mesh_device,
-            output_reader=self.output_reader,
-            page_table_layout=self.page_table_layout,
-            max_batch_size=int(model.config.max_batch_size),
-            max_prefill_chunk_size=int(runtime_config.max_prefill_chunk_size),
-            cluster_shape=list(mesh_device.shape),
-            device_sampling_enabled=config.device_sampling_enabled,
-            can_enable_trace=runtime_config.can_enable_trace,
+            PrefillRuntimeConfig.resolve(
+                model=model,
+                output_reader=self.output_reader,
+                page_table_layout=self.page_table_layout,
+                max_batch_size=int(model.config.max_batch_size),
+                max_prefill_chunk_size=int(runtime_config.max_prefill_chunk_size),
+                device_sampling_enabled=config.device_sampling_enabled,
+                can_enable_trace=runtime_config.can_enable_trace,
+            )
         )
         self.decode_runtime = DecodeRuntime(
-            model,
-            mesh_device,
-            self.output_reader,
-            lane_capacity=int(model.config.max_batch_size),
-            page_table_layout=self.page_table_layout,
-            device_sampling_enabled=config.device_sampling_enabled,
-            force_greedy_top_k=config.warmup.include_decode_top_k,
+            DecodeRuntimeConfig.resolve(
+                model=model,
+                output_reader=self.output_reader,
+                lane_capacity=int(model.config.max_batch_size),
+                page_table_layout=self.page_table_layout,
+                device_sampling_enabled=config.device_sampling_enabled,
+                force_greedy_top_k=config.warmup.include_decode_top_k,
+            )
         )
         self.program_compiler = ProgramCompiler(mesh_device, lambda: self.kv_cache_manager.bound_context)
         self.eager_executor = EagerExecutor(
@@ -127,7 +130,7 @@ class Llama3Executor:
         self.trace_compiler: TraceCompiler | None = None
         self.traced_executor: TracedExecutor | None = None
         if config.trace.mode != "none":
-            self.trace_compiler = TraceCompiler(self.program_compiler, mesh_device)
+            self.trace_compiler = TraceCompiler(self.program_compiler)
             self.traced_executor = TracedExecutor(eager=self.eager_executor, trace_compiler=self.trace_compiler)
         self.eager_execution = self.eager_executor
         self.traced_prefill_execution = (
@@ -139,19 +142,16 @@ class Llama3Executor:
         self._prefill_execution = self.traced_prefill_execution or self.eager_executor
         self._decode_execution = self.traced_decode_execution or self.eager_executor
 
-        prefill_sequence_lengths = tuple(
-            int(value) for value in (getattr(runtime_config, "trace_prefill_supported_seq_lens", ()) or (128,))
-        )
+        prefill_sequence_lengths = getattr(runtime_config, "trace_prefill_supported_seq_lens", ()) or (128,)
         self.warmup = WarmupCoordinator(
-            config=config.warmup,
-            trace_config=config.trace,
+            config=WarmupCoordinatorConfig.resolve(
+                warmup=config.warmup,
+                trace=config.trace,
+                prefill=self.prefill_runtime.config,
+                decode=self.decode_runtime.config,
+                prefill_sequence_lengths=prefill_sequence_lengths,
+            ),
             execution=self.traced_executor or self.eager_executor,
-            eager=self.eager_executor,
-            trace_compiler=self.trace_compiler,
-            model=model,
-            page_table_layout=self.page_table_layout,
-            prefill_sequence_lengths=prefill_sequence_lengths,
-            device_sampling_enabled=config.device_sampling_enabled,
             ensure_sampling_buffers=self._ensure_sampling_buffers,
             validate_bound_cache=self._validate_bound_cache,
         )
@@ -186,18 +186,12 @@ class Llama3Executor:
         # coverage is derived from the coordinator's completed case ledger.
         return None
 
-    @property
-    def device_decode_feedback_enabled(self) -> bool:
-        return self.decode_runtime.device_feedback_enabled
-
-    @device_decode_feedback_enabled.setter
-    def device_decode_feedback_enabled(self, value: bool) -> None:
-        self.decode_runtime.device_feedback_enabled = bool(value)
-
     def configure_paged_kv_cache(self, config: PagedKVCacheConfig) -> None:
         """Resolve late KV capacity before the first allocation."""
 
         self._ensure_active()
+        if self._runtime_configuration_sealed:
+            raise RuntimeError("runtime configuration is sealed")
         self.kv_cache_manager.configure(config)
         self._refresh_page_table_layout()
 
@@ -236,6 +230,9 @@ class Llama3Executor:
                 raise ValueError(
                     f"vLLM KV shape {shape} does not match model-derived shapes {self.kv_cache_manager.cache_shapes}"
                 )
+        if not self.kv_cache_manager.config.is_resolved():
+            raise RuntimeError("Paged KV cache capacity must be resolved before allocation")
+        self._seal_runtime_configuration()
         return self.kv_cache_manager.allocate()
 
     def compile_prefill(
@@ -382,6 +379,12 @@ class Llama3Executor:
 
     def _resolve_page_table_layout(self) -> PageTableLayout:
         kv_config = self.kv_cache_manager.config
+        # The direct demo resolves num_blocks=max_num_blocks before constructing
+        # this executor, so its geometry is final immediately and it physically
+        # allocates that maximum. vLLM constructs against max_num_blocks only as
+        # a cheap capacity ceiling: no KV tensor is allocated until vLLM supplies
+        # num_blocks, _refresh_page_table_layout installs the final geometry, and
+        # allocate_kv_cache seals all runtime configs.
         physical_num_blocks = kv_config.num_blocks or kv_config.max_num_blocks
         return PageTableLayout.resolve(
             block_size=int(kv_config.block_size),
@@ -394,13 +397,21 @@ class Llama3Executor:
         )
 
     def _refresh_page_table_layout(self) -> None:
+        # vLLM reaches this boundary after choosing the physical block count and
+        # before PagedKVCacheManager.allocate(), compilation, warmup, or tracing.
+        # Replace small immutable geometry configs while preserving every runtime
+        # and resource owner's identity.
         layout = self._resolve_page_table_layout()
+        self.prefill_runtime.configure_page_table_layout(layout)
+        self.decode_runtime.configure_page_table_layout(layout)
+        self.warmup.configure_page_table_layout(layout)
         self.page_table_layout = layout
-        self.prefill_runtime.block_size = layout.block_size
-        self.prefill_runtime.max_actual_page_table_width = layout.raw_capacity_width
-        self.prefill_runtime.canonical_page_table_width = layout.prefill_width
-        self.decode_runtime.page_table_layout = layout
-        self.warmup.page_table_layout = layout
+
+    def _seal_runtime_configuration(self) -> None:
+        """Seal final geometry immediately before physical KV allocation."""
+
+        self.warmup.seal_configuration()
+        self._runtime_configuration_sealed = True
 
     def _ensure_sampling_for(self, sampling_params: Any) -> None:
         if sampling_params is None:

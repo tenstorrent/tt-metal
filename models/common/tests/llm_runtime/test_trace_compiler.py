@@ -68,10 +68,11 @@ def _plan(program, variant, events, *, operation="decode", policy=InputRefreshPo
 def test_trace_compiler_retains_exact_program_compiler_and_separate_registries(monkeypatch):
     compiler = ProgramCompiler("mesh", lambda: object())
     program = _compiled_program(compiler, monkeypatch, 1)
-    trace = TraceCompiler(compiler, "mesh")
+    trace = TraceCompiler(compiler)
     trace_key = trace.register_capture_plan(_plan(program, 1, []))
 
     assert trace.program_compiler is compiler
+    assert trace.mesh_device is compiler.mesh_device
     assert trace.trace_key_for_program(program.key) == trace_key
     assert trace.get(trace_key) is not None
     assert compiler.require_compiled(program.key) is program
@@ -85,7 +86,7 @@ def test_trace_aliases_share_one_artifact_without_copying_program_records(monkey
     compiler = ProgramCompiler("mesh", lambda: object())
     first = compiler.compile(_Signature("program", 1), lambda context: torch.zeros(1))
     second = compiler.compile(_Signature("program", 2), lambda context: torch.zeros(1))
-    trace = TraceCompiler(compiler, "mesh")
+    trace = TraceCompiler(compiler)
     shared_signature = _Signature("trace", 1)
     first_key = trace.register_capture_plan(
         TraceCapturePlan(first.key, shared_signature, "decode", lambda: (), lambda persistent: torch.zeros(1))
@@ -110,7 +111,7 @@ def test_capture_allocates_every_input_before_capture_and_coordinates_gates(monk
     _patch_backend(monkeypatch, events)
     compiler = ProgramCompiler("mesh", lambda: object())
     programs = [compiler.compile(_Signature("program", variant), lambda context: torch.zeros(1)) for variant in (1, 2)]
-    trace = TraceCompiler(compiler, "mesh")
+    trace = TraceCompiler(compiler)
 
     def capture_with_gate(persistent):
         events.append(("capture", 1))
@@ -145,7 +146,7 @@ def test_capture_orders_decode_before_prefill_after_allocating_every_input(monke
     _patch_backend(monkeypatch, events)
     compiler = ProgramCompiler("mesh", lambda: object())
     programs = [compiler.compile(_Signature("program", variant), lambda context: torch.zeros(1)) for variant in (1, 2)]
-    trace = TraceCompiler(compiler, "mesh")
+    trace = TraceCompiler(compiler)
     trace.register_capture_plan(_plan(programs[0], 1, events, operation="prefill"))
     trace.register_capture_plan(_plan(programs[1], 2, events, operation="decode"))
     events.clear()
@@ -169,7 +170,7 @@ def test_capture_failure_rolls_back_traces_and_uncaptured_inputs(monkeypatch, ex
     monkeypatch.setattr(ttnn, "deallocate", released.append)
     compiler = ProgramCompiler("mesh", lambda: object())
     programs = [compiler.compile(_Signature("program", variant), lambda context: torch.zeros(1)) for variant in (1, 2)]
-    trace = TraceCompiler(compiler, "mesh")
+    trace = TraceCompiler(compiler)
     first_input, first_output, second_input = OwnedTensor(), OwnedTensor(), OwnedTensor()
     trace.register_capture_plan(
         TraceCapturePlan(
@@ -224,7 +225,7 @@ def test_incomplete_capture_rollback_keeps_program_gate_closed_until_cleanup(mon
     monkeypatch.setattr(ttnn, "deallocate", deallocate)
     compiler = ProgramCompiler("mesh", lambda: object())
     programs = [compiler.compile(_Signature("program", variant), lambda context: torch.zeros(1)) for variant in (1, 2)]
-    trace = TraceCompiler(compiler, "mesh")
+    trace = TraceCompiler(compiler)
     trace.register_capture_plan(
         TraceCapturePlan(programs[0].key, _Signature("trace", 1), "decode", lambda: retry, lambda _: torch.zeros(1))
     )
@@ -256,7 +257,7 @@ def test_replay_refresh_decisions_cover_first_replay_page_change_feedback_and_sw
     compiler = ProgramCompiler("mesh", lambda: object())
     programs = [compiler.compile(_Signature("program", variant), lambda context: torch.zeros(1)) for variant in (1, 2)]
     policy = InputRefreshPolicy(every_replay=("position", "sampling"))
-    trace = TraceCompiler(compiler, "mesh")
+    trace = TraceCompiler(compiler)
     for variant, program in enumerate(programs, 1):
         trace.register_capture_plan(_plan(program, variant, events, policy=policy))
     trace.capture_all()
@@ -314,7 +315,7 @@ def test_cleanup_retries_trace_release_before_deallocating_and_does_not_own_prog
     monkeypatch.setattr(ttnn, "release_trace", release)
     compiler = ProgramCompiler("mesh", lambda: object())
     program = compiler.compile(_Signature("program", 1), lambda context: torch.zeros(1))
-    trace = TraceCompiler(compiler, "mesh")
+    trace = TraceCompiler(compiler)
     trace.register_capture_plan(
         TraceCapturePlan(
             program.key,
@@ -362,7 +363,7 @@ def test_cleanup_releases_operation_owned_persistent_dataclasses_once(monkeypatc
 
     compiler = ProgramCompiler("mesh", lambda: object())
     programs = [compiler.compile(_Signature("program", variant), lambda context: torch.zeros(1)) for variant in (1, 2)]
-    trace = TraceCompiler(compiler, "mesh")
+    trace = TraceCompiler(compiler)
     trace.register_capture_plan(
         TraceCapturePlan(programs[0].key, _Signature("trace", 1), "decode", lambda: decode, lambda _: values[0])
     )

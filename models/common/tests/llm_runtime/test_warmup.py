@@ -3,33 +3,37 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
 from models.common.llm_runtime.config import PageTableLayout, TraceConfig, WarmupConfig
-from models.common.llm_runtime.warmup import WarmupCoordinator
+from models.common.llm_runtime.decode import DecodeRuntimeConfig
+from models.common.llm_runtime.output_reader import OutputReader
+from models.common.llm_runtime.prefill.config import PrefillRuntimeConfig
+from models.common.llm_runtime.warmup import WarmupCoordinator, WarmupCoordinatorConfig
 
 
 class RecordingExecution:
     def __init__(self, events=None):
-        self.prefill = []
-        self.decode = []
+        self.prefill_calls = []
+        self.decode_calls = []
         self.events = events if events is not None else []
         self.fail_decode_call = None
         self.prefill_replays = []
 
     def compile_prefill(self, **kwargs):
         self.events.append("compile_prefill")
-        self.prefill.append(kwargs)
+        self.prefill_calls.append(kwargs)
 
     def compile_decode(self, **kwargs):
-        call = len(self.decode) + 1
+        call = len(self.decode_calls) + 1
         self.events.append("compile_decode")
         if call == self.fail_decode_call:
             self.fail_decode_call = None
             raise RuntimeError("decode compile failed")
-        self.decode.append(kwargs)
+        self.decode_calls.append(kwargs)
 
     def prefill_forward(self, **kwargs):
         self.events.append("prefill_replay")
@@ -46,6 +50,55 @@ class RecordingTraceCompiler:
         self.calls += 1
 
 
+class Mesh:
+    shape = (1, 1)
+
+
+def make_runtime_configs(
+    *,
+    sampling=True,
+    lane_capacity=4,
+    allow_force_argmax=True,
+    page_table_layout=None,
+    sampling_config=None,
+    model=None,
+):
+    mesh = Mesh()
+    sampling_config = sampling_config or SimpleNamespace(allow_force_argmax=allow_force_argmax)
+    sampling_config.max_batch_size = lane_capacity
+    model = model or SimpleNamespace(
+        config=SimpleNamespace(max_batch_size=lane_capacity, mesh_device=mesh, num_devices=1),
+        sampling=SimpleNamespace(config=sampling_config, decode_forward=lambda *args, **kwargs: None),
+        vocab_size=128,
+    )
+    mesh = model.config.mesh_device
+    layout = page_table_layout or PageTableLayout(
+        block_size=32,
+        raw_capacity_width=128,
+        prefill_width=192,
+        decode_width=128,
+    )
+    output_reader = OutputReader(mesh)
+    return (
+        PrefillRuntimeConfig.resolve(
+            model=model,
+            output_reader=output_reader,
+            page_table_layout=layout,
+            max_batch_size=lane_capacity,
+            max_prefill_chunk_size=128,
+            device_sampling_enabled=sampling,
+            can_enable_trace=lambda *_: True,
+        ),
+        DecodeRuntimeConfig.resolve(
+            model=model,
+            output_reader=output_reader,
+            lane_capacity=lane_capacity,
+            page_table_layout=layout,
+            device_sampling_enabled=sampling,
+        ),
+    )
+
+
 def make_coordinator(
     *,
     trace_mode="all",
@@ -57,6 +110,8 @@ def make_coordinator(
     trace_compiler=None,
     events=None,
     allow_force_argmax=True,
+    page_table_layout=None,
+    sampling_config=None,
 ):
     events = events if events is not None else []
     execution = execution or RecordingExecution(events)
@@ -72,28 +127,263 @@ def make_coordinator(
     def validate_bound(value):
         bound_calls.append(value)
 
+    layout = page_table_layout or PageTableLayout(
+        block_size=32,
+        raw_capacity_width=128,
+        prefill_width=192,
+        decode_width=128,
+    )
+    prefill_config, decode_config = make_runtime_configs(
+        sampling=sampling,
+        lane_capacity=lane_capacity,
+        allow_force_argmax=allow_force_argmax,
+        page_table_layout=layout,
+        sampling_config=sampling_config,
+    )
+    execution.prefill = SimpleNamespace(config=prefill_config)
+    execution.decode = SimpleNamespace(config=decode_config)
+    execution.eager_executor = execution
+    execution.trace_compiler = trace_compiler
+
     coordinator = WarmupCoordinator(
-        config=warmup_config or WarmupConfig(),
-        trace_config=TraceConfig(trace_mode),
+        config=WarmupCoordinatorConfig.resolve(
+            warmup=warmup_config or WarmupConfig(),
+            trace=TraceConfig(trace_mode),
+            prefill=prefill_config,
+            decode=decode_config,
+            prefill_sequence_lengths=sequence_lengths,
+        ),
         execution=execution,
-        eager=execution,
-        trace_compiler=trace_compiler,
-        model=SimpleNamespace(
-            config=SimpleNamespace(max_batch_size=lane_capacity),
-            sampling=SimpleNamespace(config=SimpleNamespace(allow_force_argmax=allow_force_argmax)),
-        ),
-        page_table_layout=PageTableLayout(
-            block_size=32,
-            raw_capacity_width=128,
-            prefill_width=192,
-            decode_width=128,
-        ),
-        prefill_sequence_lengths=sequence_lengths,
-        device_sampling_enabled=sampling,
         ensure_sampling_buffers=ensure_sampling,
         validate_bound_cache=validate_bound,
     )
     return coordinator, execution, trace_compiler, sampling_calls, bound_calls, events
+
+
+def test_configured_prefill_lengths_override_model_supported_defaults():
+    coordinator, execution, *_ = make_coordinator(
+        warmup_config=WarmupConfig(prefill_seq_lens=(1024,), prefill_batch_sizes=(1,)),
+        sequence_lengths=(128,),
+        sampling=False,
+    )
+
+    coordinator.warmup_prefill(kv_cache="cache", enable_trace=False, can_sample_on_device=False)
+
+    regular_lengths = [int(call["tokens"].shape[-1]) for call in execution.prefill_calls if call["start_pos"] is None]
+    assert regular_lengths == [1024]
+
+
+@pytest.mark.parametrize(
+    ("sequence_lengths", "message"),
+    [
+        ((), "non-empty tuple"),
+        ((True,), "positive integers"),
+        ((128, 128), "unique"),
+    ],
+)
+def test_model_supported_prefill_lengths_are_validated_once(sequence_lengths, message, expect_error):
+    with expect_error(ValueError, message):
+        make_coordinator(sequence_lengths=sequence_lengths)
+
+
+def test_sampler_argmax_capability_is_resolved_once():
+    class SamplingConfig:
+        reads = 0
+
+        @property
+        def allow_force_argmax(self):
+            self.reads += 1
+            return True
+
+    sampling_config = SamplingConfig()
+    coordinator, *_ = make_coordinator(sampling_config=sampling_config)
+    resolved_reads = sampling_config.reads
+
+    coordinator.warmup_prefill(kv_cache="cache", enable_trace=False, can_sample_on_device=True)
+    coordinator.warmup_decode(
+        kv_cache="cache",
+        enable_trace=False,
+        max_batch_size=4,
+        num_blocks=8,
+        can_sample_on_device=True,
+    )
+
+    assert sampling_config.reads == resolved_reads
+
+
+def test_page_table_layout_can_be_reconfigured_only_before_use(expect_error):
+    coordinator, execution, *_ = make_coordinator(
+        warmup_config=WarmupConfig(prefill_seq_lens=(128,), prefill_batch_sizes=(1,)),
+        sampling=False,
+    )
+    final_layout = PageTableLayout(
+        block_size=32,
+        raw_capacity_width=4,
+        prefill_width=64,
+        decode_width=8,
+    )
+
+    coordinator.configure_page_table_layout(final_layout)
+    assert coordinator.config.page_table_layout is final_layout
+    coordinator.warmup_prefill(kv_cache="cache", enable_trace=False, can_sample_on_device=False)
+
+    assert all(call["start_pos"] is None for call in execution.prefill_calls)
+    with expect_error(RuntimeError, "configuration is sealed"):
+        coordinator.configure_page_table_layout(final_layout)
+
+
+def test_explicit_configuration_seal_precedes_physical_kv_allocation(expect_error):
+    coordinator, *_ = make_coordinator()
+    coordinator.seal_configuration()
+
+    with expect_error(RuntimeError, "configuration is sealed"):
+        coordinator.configure_page_table_layout(
+            PageTableLayout(
+                block_size=32,
+                raw_capacity_width=64,
+                prefill_width=128,
+                decode_width=64,
+            )
+        )
+
+
+def test_page_table_layout_reconfiguration_requires_immutable_layout(expect_error):
+    coordinator, *_ = make_coordinator()
+
+    with expect_error(TypeError, "PageTableLayout"):
+        coordinator.configure_page_table_layout(SimpleNamespace(block_size=32))
+
+
+def test_resolved_config_is_frozen_and_owns_both_coverage_plans(expect_error):
+    coordinator, *_ = make_coordinator(
+        warmup_config=WarmupConfig(prefill_seq_lens=(128,), prefill_batch_sizes=(1,)),
+        lane_capacity=2,
+    )
+
+    assert coordinator.config.eager_plan.decode == (coordinator.config.eager_plan.decode[0],)
+    assert [case.sampling_path for case in coordinator.config.sampled_plan.decode] == ["logits", "argmax"]
+    with expect_error(AttributeError, "cannot assign"):
+        coordinator.config.lane_batch_size = 4
+
+
+def test_direct_config_construction_rejects_inconsistent_derived_plan(expect_error):
+    coordinator, *_ = make_coordinator()
+
+    with expect_error(ValueError, "plans must match"):
+        replace(coordinator.config, eager_plan=coordinator.config.sampled_plan)
+
+
+@pytest.mark.parametrize(
+    ("mismatch", "message"),
+    [
+        ("model", "share one model"),
+        ("layout", "share one page-table layout"),
+        ("lane", "share one lane capacity"),
+        ("sampling", "share device-sampling policy"),
+        ("argmax", "share force-argmax capability"),
+        ("raw_ceiling", "original capacity ceiling"),
+        ("decode_ceiling", "original decode-width ceiling"),
+    ],
+)
+def test_resolution_rejects_inconsistent_runtime_configs(mismatch, message, expect_error):
+    prefill, decode = make_runtime_configs()
+    if mismatch == "model":
+        _, decode = make_runtime_configs()
+    elif mismatch == "layout":
+        decode = decode.with_page_table_layout(PageTableLayout(32, 64, 128, 64))
+    elif mismatch == "lane":
+        decode = DecodeRuntimeConfig.resolve(
+            model=prefill.model,
+            output_reader=prefill.output_reader,
+            lane_capacity=2,
+            page_table_layout=prefill.page_table_layout,
+            device_sampling_enabled=True,
+        )
+    elif mismatch == "sampling":
+        decode = DecodeRuntimeConfig.resolve(
+            model=prefill.model,
+            output_reader=prefill.output_reader,
+            lane_capacity=prefill.max_batch_size,
+            page_table_layout=prefill.page_table_layout,
+            device_sampling_enabled=False,
+        )
+    elif mismatch == "argmax":
+        prefill.model.sampling.config.allow_force_argmax = False
+        decode = DecodeRuntimeConfig.resolve(
+            model=prefill.model,
+            output_reader=prefill.output_reader,
+            lane_capacity=prefill.max_batch_size,
+            page_table_layout=prefill.page_table_layout,
+            device_sampling_enabled=True,
+        )
+    elif mismatch == "raw_ceiling":
+        prefill = replace(prefill, max_page_table_capacity_width=prefill.max_page_table_capacity_width + 1)
+    else:
+        prefill = replace(prefill, max_decode_page_table_width=prefill.max_decode_page_table_width + 8)
+
+    with expect_error(ValueError, message):
+        WarmupCoordinatorConfig.resolve(
+            warmup=WarmupConfig(),
+            trace=TraceConfig("all"),
+            prefill=prefill,
+            decode=decode,
+            prefill_sequence_lengths=(128,),
+        )
+
+
+def test_constructor_rejects_execution_disagreement_with_resolved_config(expect_error):
+    coordinator, execution, *_ = make_coordinator()
+    config = coordinator.config
+    execution.prefill.config = replace(
+        execution.prefill.config,
+        page_table_layout=PageTableLayout(32, 64, 128, 64),
+    )
+
+    with expect_error(ValueError, "warmup config page-table layout"):
+        WarmupCoordinator(
+            config=config,
+            execution=execution,
+            ensure_sampling_buffers=lambda: None,
+            validate_bound_cache=lambda _: None,
+        )
+
+
+def test_runtime_does_not_copy_static_config_fields():
+    coordinator, *_ = make_coordinator()
+
+    assert {
+        "page_table_layout",
+        "prefill_sequence_lengths",
+        "lane_batch_size",
+        "device_sampling_enabled",
+        "allow_force_argmax",
+        "prime_q128_tile_ends",
+        "prefill_trace_enabled",
+        "decode_trace_enabled",
+        "eager_plan",
+        "sampled_plan",
+    }.isdisjoint(vars(coordinator))
+
+
+def test_layout_replacement_is_immutable_bounded_and_rebuilds_coverage(expect_error):
+    coordinator, *_ = make_coordinator(
+        warmup_config=WarmupConfig(prefill_seq_lens=(128,), prefill_batch_sizes=(1,)),
+        page_table_layout=PageTableLayout(32, 128, 192, 128),
+    )
+    original = coordinator.config
+    replacement = PageTableLayout(32, 4, 64, 8)
+
+    coordinator.configure_page_table_layout(replacement)
+
+    assert coordinator.config is not original
+    assert original.page_table_layout.raw_capacity_width == 128
+    assert not any(case.cached_tokens for case in coordinator.config.eager_plan.prefill)
+    with expect_error(ValueError, "cannot change block_size"):
+        original.with_page_table_layout(PageTableLayout(16, 4, 64, 8))
+    with expect_error(ValueError, "capacity ceiling"):
+        original.with_page_table_layout(PageTableLayout(32, 129, 192, 136))
+    with expect_error(ValueError, "canonical geometry"):
+        original.with_page_table_layout(PageTableLayout(32, 128, 200, 128))
 
 
 def test_q128_batches_are_capped_by_lane_and_non128_is_batch_one():
@@ -104,12 +394,12 @@ def test_q128_batches_are_capped_by_lane_and_non128_is_batch_one():
 
     regular_q128 = [
         int(call["tokens"].shape[0])
-        for call in execution.prefill
+        for call in execution.prefill_calls
         if int(call["tokens"].shape[-1]) == 128 and call["start_pos"] is None
     ]
     regular_q1024 = [
         int(call["tokens"].shape[0])
-        for call in execution.prefill
+        for call in execution.prefill_calls
         if int(call["tokens"].shape[-1]) == 1024 and call["start_pos"] is None
     ]
     assert regular_q128 == [1, 2, 4, 8]
@@ -129,13 +419,13 @@ def test_sampling_paths_include_forced_prefill_topk_and_opt_in_true_topk_decode(
         can_sample_on_device=True,
     )
 
-    assert execution.prefill[0]["sampling_params"] is None
-    assert execution.prefill[1]["sampling_params"].top_k.tolist() == [32]
-    assert execution.decode[0]["sampling_params"] is None
-    assert execution.decode[1]["sampling_params"].top_k.tolist() == [1, 1]
-    assert execution.decode[2]["sampling_params"].top_k.tolist() == [32, 32]
+    assert execution.prefill_calls[0]["sampling_params"] is None
+    assert execution.prefill_calls[1]["sampling_params"].top_k.tolist() == [32]
+    assert execution.decode_calls[0]["sampling_params"] is None
+    assert execution.decode_calls[1]["sampling_params"].top_k.tolist() == [1, 1]
+    assert execution.decode_calls[2]["sampling_params"].top_k.tolist() == [32, 32]
     # Preserve the established true-top-k recipe, not merely a top-k label.
-    assert execution.decode[2]["sampling_params"].top_p.tolist() == pytest.approx([0.08, 0.08])
+    assert execution.decode_calls[2]["sampling_params"].top_p.tolist() == pytest.approx([0.08, 0.08])
 
 
 def test_q128_single_topk_primes_all_tile_ends():
@@ -149,7 +439,7 @@ def test_q128_single_topk_primes_all_tile_ends():
 
     topk_calls = [
         call
-        for call in execution.prefill
+        for call in execution.prefill_calls
         if call["sampling_params"] is not None
         and float(call["sampling_params"].temperature[0]) == 1.0
         and call["start_pos"] is None
@@ -158,7 +448,7 @@ def test_q128_single_topk_primes_all_tile_ends():
     assert [int(call["tokens"].shape[-1]) for call in topk_calls] == [32, 64, 96, 128]
     argmax_calls = [
         call
-        for call in execution.prefill
+        for call in execution.prefill_calls
         if call["sampling_params"] is not None
         and float(call["sampling_params"].temperature[0]) == 0.0
         and call["start_pos"] is None
@@ -181,8 +471,8 @@ def test_decode_warmup_uses_topk_as_the_platform_greedy_path_when_argmax_is_disa
         can_sample_on_device=True,
     )
 
-    assert execution.decode[0]["sampling_params"] is None
-    assert execution.decode[1]["sampling_params"].top_k.tolist() == [32, 32]
+    assert execution.decode_calls[0]["sampling_params"] is None
+    assert execution.decode_calls[1]["sampling_params"].top_k.tolist() == [32, 32]
 
 
 def test_eager_and_trace_coverage_are_separately_idempotent():
@@ -192,14 +482,14 @@ def test_eager_and_trace_coverage_are_separately_idempotent():
     )
 
     coordinator.warmup_prefill(kv_cache="cache", enable_trace=False, can_sample_on_device=False)
-    eager_calls = len(execution.prefill)
+    eager_calls = len(execution.prefill_calls)
     coordinator.warmup_prefill(kv_cache="cache", enable_trace=False, can_sample_on_device=False)
-    assert len(execution.prefill) == eager_calls
+    assert len(execution.prefill_calls) == eager_calls
 
     coordinator.warmup_prefill(kv_cache="cache", enable_trace=True, can_sample_on_device=True)
-    trace_calls = len(execution.prefill)
+    trace_calls = len(execution.prefill_calls)
     coordinator.warmup_prefill(kv_cache="cache", enable_trace=True, can_sample_on_device=True)
-    assert len(execution.prefill) == trace_calls
+    assert len(execution.prefill_calls) == trace_calls
     assert trace_compiler.calls == 0
 
 
@@ -332,7 +622,7 @@ def test_failed_case_is_not_marked_complete_and_retry_skips_completed_case(expec
             num_blocks=8,
             can_sample_on_device=True,
         )
-    assert len(execution.decode) == 1
+    assert len(execution.decode_calls) == 1
 
     coordinator.warmup_decode(
         kv_cache="cache",
@@ -341,7 +631,7 @@ def test_failed_case_is_not_marked_complete_and_retry_skips_completed_case(expec
         num_blocks=8,
         can_sample_on_device=True,
     )
-    assert len(execution.decode) == 2
+    assert len(execution.decode_calls) == 2
 
 
 def test_dynamic_hints_cannot_expand_static_trace_or_sampling_ceilings(expect_error):

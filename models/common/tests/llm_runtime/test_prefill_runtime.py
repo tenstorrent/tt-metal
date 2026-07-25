@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +14,9 @@ import torch
 import models.common.llm_runtime.prefill.runtime as prefill_module
 import models.common.llm_runtime.prefill.sampling_helpers as sampling_helpers
 import models.common.llm_runtime.tensor_resources as tensor_resources_module
+from models.common.llm_runtime.config import PageTableLayout
+from models.common.llm_runtime.output_reader import OutputReader
+from models.common.llm_runtime.prefill.config import PrefillRuntimeConfig
 from models.common.llm_runtime.prefill.plan import _plan_prefill_requests
 from models.common.llm_runtime.prefill.runtime import (
     InvocationResult,
@@ -25,7 +29,10 @@ from models.common.llm_runtime.prefill.runtime import (
 from models.common.sampling import SamplingParams
 
 
-class FakeReader:
+class FakeReader(OutputReader):
+    def __init__(self, mesh_device):
+        self.mesh_device = mesh_device
+
     def read(self, value, *, blocking):
         assert blocking
         return value
@@ -37,9 +44,14 @@ class FakeReader:
 class FakeModel:
     vocab_size = 8
 
-    def __init__(self):
-        self.config = SimpleNamespace(dim=32)
-        self.sampling = SimpleNamespace(config=SimpleNamespace(max_batch_size=32, allow_force_argmax=False))
+    def __init__(self, mesh_device, *, sampling_batch_size=32, allow_force_argmax=False):
+        self.config = SimpleNamespace(dim=32, mesh_device=mesh_device)
+        self.sampling = SimpleNamespace(
+            config=SimpleNamespace(
+                max_batch_size=sampling_batch_size,
+                allow_force_argmax=allow_force_argmax,
+            )
+        )
         self.chunk_starts = []
 
     def embed_prefill(self, tokens):
@@ -50,19 +62,33 @@ class FakeModel:
         return SimpleNamespace(shape=(1, 1, 1, self.vocab_size))
 
 
-def _runtime(*, trace_lengths=(128, 1024)):
-    layout = SimpleNamespace(block_size=32, raw_capacity_width=256, prefill_width=264, decode_width=256)
-    return PrefillRuntime(
-        model=FakeModel(),
-        mesh_device="mesh",
-        output_reader=FakeReader(),
-        page_table_layout=layout,
+def _runtime(
+    *,
+    trace_lengths=(128, 1024),
+    allow_force_argmax=False,
+    sampling_batch_size=32,
+    device_sampling_enabled=True,
+):
+    mesh_device = SimpleNamespace(shape=(1, 1))
+    config = PrefillRuntimeConfig.resolve(
+        model=FakeModel(
+            mesh_device,
+            sampling_batch_size=sampling_batch_size,
+            allow_force_argmax=allow_force_argmax,
+        ),
+        output_reader=FakeReader(mesh_device),
+        page_table_layout=PageTableLayout(
+            block_size=32,
+            raw_capacity_width=256,
+            prefill_width=264,
+            decode_width=256,
+        ),
         max_batch_size=32,
         max_prefill_chunk_size=2048,
-        cluster_shape=(1, 1),
-        device_sampling_enabled=True,
+        device_sampling_enabled=device_sampling_enabled,
         can_enable_trace=lambda length, cached: cached == 0 and length in trace_lengths,
     )
+    return PrefillRuntime(config)
 
 
 def _inputs(*, prompt_length, cached_tokens=0, token_width=None, page_width=256, rows=1):
@@ -146,8 +172,7 @@ def test_sampling_values_accept_vector_tensor_fields_for_full_batch():
 
 
 def test_single_greedy_prefill_uses_argmax_without_changing_batched_sampling():
-    runtime = _runtime()
-    runtime.model.sampling.config.allow_force_argmax = True
+    runtime = _runtime(allow_force_argmax=True)
     greedy = SamplingParams(temperature=0.0, top_k=32, top_p=0.08)
     single_inputs = _inputs(prompt_length=80)
 
@@ -289,7 +314,7 @@ def test_sampling_output_is_allocated_before_capture_with_device_shape(monkeypat
 
     assert runtime._make_sampling_output(1) == "device-output"
     assert tuple(seen[0][0].shape) == (1, 1, 1, 1)
-    assert seen[0][1]["device"] == "mesh"
+    assert seen[0][1]["device"] is runtime.config.mesh_device
     assert seen[0][1]["mesh_mapper"] == "replicate"
 
 
@@ -508,7 +533,7 @@ def test_static_q128_single_topk_uses_tile_output_and_exact_host_row(monkeypatch
         sampling_params=sampling,
     )[0]
     seen = []
-    runtime.model.post_process_prefill_output = lambda *args, **kwargs: seen.append((args, kwargs)) or "logits"
+    runtime.config.model.post_process_prefill_output = lambda *args, **kwargs: seen.append((args, kwargs)) or "logits"
     monkeypatch.setattr(prefill_module, "_pad_prefill_logits", lambda logits, sampler: logits)
     monkeypatch.setattr(runtime, "_sample_device", lambda logits, kpt, output: output)
 
@@ -542,10 +567,9 @@ def test_static_q128_single_topk_uses_tile_output_and_exact_host_row(monkeypatch
 
 
 def test_static_q128_output_sizing_does_not_change_chunked_or_non_q128_paths():
-    runtime = _runtime()
     sampling = SamplingParams(temperature=0.0, top_k=1, top_p=1.0)
 
-    def prepare(prompt_length, cached_tokens=0):
+    def prepare(runtime, prompt_length, cached_tokens=0):
         tokens, page_table, prompt_lens, start_pos = _inputs(
             prompt_length=prompt_length,
             cached_tokens=cached_tokens,
@@ -559,16 +583,17 @@ def test_static_q128_output_sizing_does_not_change_chunked_or_non_q128_paths():
             sampling_params=sampling,
         )[0]
 
-    static = prepare(80)
-    runtime.model.sampling.config.max_batch_size = 32
+    runtime = _runtime(sampling_batch_size=32)
+    static = prepare(runtime, 80)
     assert runtime._sampling_output_rows(static) == 32
 
-    runtime.model.sampling.config.max_batch_size = 16
+    runtime = _runtime(sampling_batch_size=16)
+    static = prepare(runtime, 80)
     assert runtime._sampling_output_rows(static) == 16
 
-    runtime.model.sampling.config.max_batch_size = 1
-    cached = prepare(160, cached_tokens=32)
-    non_q128 = prepare(129)
+    runtime = _runtime(sampling_batch_size=1)
+    cached = prepare(runtime, 160, cached_tokens=32)
+    non_q128 = prepare(runtime, 129)
     assert runtime._sampling_output_rows(cached) == 1
     assert runtime._sampling_output_rows(non_q128) == 1
 
@@ -582,8 +607,7 @@ def test_static_q128_output_sizing_does_not_change_chunked_or_non_q128_paths():
     ],
 )
 def test_prepare_selects_single_prefill_sampling_path(allow_force_argmax, sampling_params, expected_path):
-    runtime = _runtime()
-    runtime.model.sampling.config.allow_force_argmax = allow_force_argmax
+    runtime = _runtime(allow_force_argmax=allow_force_argmax)
     tokens, page_table, prompt_lens, start_pos = _inputs(prompt_length=80)
 
     prepared = runtime.prepare(
@@ -631,7 +655,7 @@ def test_cached_one_chunk_uses_chunk_model_contract(monkeypatch):
     device_inputs = PrefillDeviceInputs("tokens", "cos", "sin", "page", "chunk-page", "pos", "chunk-start")
     position_inputs = PrefillPositionInputs("slice-start", "slice-end", "row")
     seen = []
-    runtime.model.prefill_forward = lambda *args, **kwargs: seen.append((args, kwargs)) or "output"
+    runtime.config.model.prefill_forward = lambda *args, **kwargs: seen.append((args, kwargs)) or "output"
     monkeypatch.setattr(runtime, "_run_hidden_body", lambda *args: pytest.fail("regular model body used"))
 
     assert runtime._execute_prefill_step(prepared, chunk, device_inputs, position_inputs) == "output"
@@ -660,9 +684,9 @@ def test_regular_batched_step_and_finalization_preserve_exact_model_contract(mon
     device_inputs = PrefillDeviceInputs("tokens", "cos", "sin", "page", None, "pos", None)
     position_inputs = PrefillPositionInputs("slice-start", "slice-end", "row")
     calls = []
-    runtime.model.embed_prefill = lambda tokens: calls.append(("embed", tokens)) or "embedded"
-    runtime.model.prefill_forward = lambda *args, **kwargs: calls.append(("forward", args, kwargs)) or "hidden"
-    runtime.model.post_process_batched_prefill_output = (
+    runtime.config.model.embed_prefill = lambda tokens: calls.append(("embed", tokens)) or "embedded"
+    runtime.config.model.prefill_forward = lambda *args, **kwargs: calls.append(("forward", args, kwargs)) or "hidden"
+    runtime.config.model.post_process_batched_prefill_output = (
         lambda *args, **kwargs: calls.append(("postprocess", args, kwargs)) or "logits"
     )
     monkeypatch.setattr(
@@ -744,7 +768,7 @@ def test_regular_logits_and_argmax_preserve_operation_order(
         "_execute_prefill_step",
         lambda *args: events.append("execute") or "hidden",
     )
-    runtime.model.post_process_prefill_output = lambda *args, **kwargs: events.append("postprocess") or "logits"
+    runtime.config.model.post_process_prefill_output = lambda *args, **kwargs: events.append("postprocess") or "logits"
     monkeypatch.setattr(
         prefill_module,
         "_pad_prefill_logits",
@@ -934,7 +958,7 @@ def test_sequence_retains_raw_padded_and_sampled_outputs(monkeypatch):
     )
     raw_regular, padded_regular, sampled_regular = object(), object(), object()
     regular_owned = []
-    runtime.model.post_process_prefill_output = lambda *args, **kwargs: raw_regular
+    runtime.config.model.post_process_prefill_output = lambda *args, **kwargs: raw_regular
     monkeypatch.setattr(prefill_module, "_pad_prefill_logits", lambda *args: padded_regular)
     monkeypatch.setattr(runtime, "_sample_device", lambda *args: sampled_regular)
 
@@ -975,7 +999,7 @@ def test_sequence_retains_raw_padded_and_sampled_outputs(monkeypatch):
     assert chunked_owned == [raw_chunked, padded_chunked, sampled_chunked]
 
     alias_owned = []
-    runtime.model.post_process_prefill_output = lambda *args, **kwargs: raw_regular
+    runtime.config.model.post_process_prefill_output = lambda *args, **kwargs: raw_regular
     monkeypatch.setattr(prefill_module, "_pad_prefill_logits", lambda *args: raw_regular)
     monkeypatch.setattr(runtime, "_sample_device", lambda *args: raw_regular)
     assert (
@@ -1101,7 +1125,7 @@ def test_finalization_failure_releases_every_resource_acquired_before_failure(mo
             raise RuntimeError("untilize failed")
         return object()
 
-    runtime.model.post_process_prefill_output = postprocess
+    runtime.config.model.post_process_prefill_output = postprocess
     monkeypatch.setattr(prefill_module, "_pad_prefill_logits", pad)
     monkeypatch.setattr(runtime, "_sample_device", sample)
     monkeypatch.setattr(prefill_module.ttnn, "untilize", untilize)
@@ -1204,7 +1228,7 @@ def test_assemble_restores_source_rows_and_releases_each_owned_result(monkeypatc
     runtime = _runtime()
     requests = _plan(prompt_length=80, slots=(7, 3))
     prepared = [SimpleNamespace(request=request, sampling_params=None) for request in requests]
-    first = torch.zeros(1, 1, 32, runtime.model.vocab_size)
+    first = torch.zeros(1, 1, 32, runtime.config.model.vocab_size)
     second = torch.zeros_like(first)
     first[0, 0, 15, :] = 1
     second[0, 0, 15, :] = 2
@@ -1216,9 +1240,9 @@ def test_assemble_restores_source_rows_and_releases_each_owned_result(monkeypatc
         batch_size=2,
     )
 
-    assert output.shape == (2, 1, runtime.model.vocab_size)
-    assert torch.equal(output[0, 0], torch.ones(runtime.model.vocab_size))
-    assert torch.equal(output[1, 0], torch.full((runtime.model.vocab_size,), 2.0))
+    assert output.shape == (2, 1, runtime.config.model.vocab_size)
+    assert torch.equal(output[0, 0], torch.ones(runtime.config.model.vocab_size))
+    assert torch.equal(output[1, 0], torch.full((runtime.config.model.vocab_size,), 2.0))
     assert released == ["owned-0", "owned-1"]
 
 
@@ -1255,7 +1279,7 @@ def test_zero_uncached_tokens_preserve_current_empty_plan_and_output_contract():
     )
 
     logits = runtime.assemble([], batch_size=1)
-    assert logits.shape == (1, 1, runtime.model.vocab_size)
+    assert logits.shape == (1, 1, runtime.config.model.vocab_size)
     sampled, log_probs = runtime.assemble(
         [],
         batch_size=1,
@@ -1266,12 +1290,81 @@ def test_zero_uncached_tokens_preserve_current_empty_plan_and_output_contract():
     assert log_probs is None
 
 
-def test_prefill_runtime_is_plain_orchestration_without_duplicate_config_surface():
+def test_prefill_runtime_config_resolves_frozen_static_capabilities(expect_error):
+    runtime = _runtime(allow_force_argmax=True, sampling_batch_size=16)
+    config = runtime.config
+
+    assert config.cluster_shape == (1, 1)
+    assert config.allow_force_argmax
+    assert config.sampling_batch_size == 16
+    assert not config.static_q128_topk_supported
+    with expect_error(FrozenInstanceError, "cannot assign to field"):
+        config.max_batch_size = 8
+
+
+def test_prefill_runtime_config_rejects_mesh_and_sampler_mismatches(expect_error):
+    mesh_device = SimpleNamespace(shape=(1, 1))
+    other_mesh = SimpleNamespace(shape=(1, 1))
+    model = FakeModel(mesh_device)
+    reader = FakeReader(mesh_device)
+    layout = PageTableLayout(32, 256, 264, 256)
+    arguments = dict(
+        model=model,
+        output_reader=reader,
+        page_table_layout=layout,
+        max_batch_size=32,
+        max_prefill_chunk_size=2048,
+        device_sampling_enabled=True,
+        can_enable_trace=lambda length, cached: True,
+    )
+
+    with expect_error(ValueError, "model and prefill runtime"):
+        PrefillRuntimeConfig.resolve(**(arguments | {"output_reader": FakeReader(other_mesh)}))
+    model.sampling = None
+    with expect_error(TypeError, "model.sampling.config"):
+        PrefillRuntimeConfig.resolve(**arguments)
+
+
+def test_page_table_layout_replacement_is_immutable_and_bounded(expect_error):
+    runtime = _runtime()
+    original = runtime.config
+    smaller = PageTableLayout(32, 128, 136, 128)
+
+    runtime.configure_page_table_layout(smaller)
+
+    assert runtime.config is not original
+    assert runtime.config.page_table_layout is smaller
+    assert original.page_table_layout.raw_capacity_width == 256
+    with expect_error(ValueError, "block_size"):
+        runtime.configure_page_table_layout(PageTableLayout(16, 128, 136, 128))
+    with expect_error(ValueError, "capacity ceiling"):
+        runtime.configure_page_table_layout(PageTableLayout(32, 512, 520, 512))
+    with expect_error(ValueError, "canonical geometry"):
+        runtime.configure_page_table_layout(PageTableLayout(32, 128, 520, 128))
+
+
+def test_disabled_device_sampling_rejects_sampling_at_runtime_boundary(expect_error):
+    runtime = _runtime(device_sampling_enabled=False)
+    tokens, page_table, prompt_lens, start_pos = _inputs(prompt_length=80)
+
+    with expect_error(ValueError, "device sampling is disabled"):
+        runtime.prepare(
+            tokens=tokens,
+            page_table=page_table,
+            prompt_lens=prompt_lens,
+            empty_slots=[0],
+            start_pos=start_pos,
+            sampling_params=SamplingParams(temperature=0.0, top_k=1, top_p=1.0),
+        )
+
+
+def test_prefill_runtime_is_plain_orchestration_with_one_config_surface():
     source = inspect.getsource(prefill_module)
-    assert not hasattr(prefill_module, "PrefillRuntimeConfig")
+    assert hasattr(prefill_module, "PrefillRuntimeConfig")
     assert not hasattr(PrefillRuntime, "from_config")
     assert "LightweightModule" not in source
     assert PrefillRuntime.__bases__ == (object,)
+    assert tuple(inspect.signature(PrefillRuntime).parameters) == ("config",)
 
 
 def test_prefill_package_has_no_compatibility_barrel():

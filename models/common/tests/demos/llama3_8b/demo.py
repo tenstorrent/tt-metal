@@ -244,6 +244,10 @@ def _build_demo_executor(llm, *, trace_mode, device_sampling_enabled, include_de
         paged_kv_cache=PagedKVCacheConfig(
             block_size=int(paged_attention_config.block_size),
             max_num_blocks=int(paged_attention_config.max_num_blocks),
+            # Unlike vLLM, the direct demo has no later scheduler-selected
+            # physical capacity. Resolve num_blocks to the configured maximum
+            # now; PageTableLayout is final at executor construction and the
+            # subsequent KV allocation intentionally materializes this maximum.
             num_blocks=int(paged_attention_config.max_num_blocks),
             dtype=attention_config.kv_cache_dtype,
         ),
