@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Cross-rank weight transport (``WeightBridge`` ABC + ``HostWeightBridge``).
 
-MPI tags here (1..6) must stay disjoint from the rollout RPC tags (10..13 in
-utils.mpi_rollout) so both protocols can share one MPI context without crosstalk.
+MPI tags here must stay disjoint from the rollout RPC tags in
+``utils.mpi_rollout`` (and from the fabric MPI tag range) so all protocols
+can share one MPI context without crosstalk.
 """
 
 from __future__ import annotations
@@ -30,13 +31,13 @@ TTT_RANK: int = RECEIVER_RANK
 _ROLE_SENDER: str = "sender"
 _ROLE_RECEIVER: str = "receiver"
 
-_MANIFEST_LEN_TAG: int = 1
-_MANIFEST_BODY_TAG: int = 2
+_MANIFEST_LEN_TAG: int = 22101
+_MANIFEST_BODY_TAG: int = 22102
 # Per-direction handshake tags so a send cannot self-match the same rank's recv.
-_HANDSHAKE_TAG_FROM_SENDER: int = 3
-_HANDSHAKE_TAG_FROM_RECEIVER: int = 4
-_WEIGHT_LEN_TAG: int = 5
-_WEIGHT_BLOB_TAG: int = 6
+_HANDSHAKE_TAG_FROM_SENDER: int = 22103
+_HANDSHAKE_TAG_FROM_RECEIVER: int = 22104
+_WEIGHT_LEN_TAG: int = 22105
+_WEIGHT_BLOB_TAG: int = 22106
 
 _HANDSHAKE_PAYLOAD: bytes = b"ready"
 

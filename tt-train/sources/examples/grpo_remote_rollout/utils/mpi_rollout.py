@@ -10,8 +10,8 @@ Gotchas:
 - Server-side callback (``generate_fn`` / ``on_weights_received``) failures are
   not caught: the server dies, the client's blocking recv never returns, MPI
   aborts the world. That is the intended failure mode; do not wrap in try/except.
-- Rollout RPC uses MPI tags 10..13, disjoint from WeightBridge (1..6), so both
-  protocols share one MPI context without crosstalk.
+- Rollout RPC tags are disjoint from WeightBridge tags (and from the fabric
+  MPI tag range), so both protocols share one MPI context without crosstalk.
 """
 
 from __future__ import annotations
@@ -30,15 +30,14 @@ from .weight_bridge import (
     _require_distributed_context,
 )
 
-OP_GENERATE: int = 1
-OP_SHUTDOWN: int = 2
-OP_REQUEST_TRANSFER: int = 3
+OP_GENERATE: int = 22001
+OP_SHUTDOWN: int = 22002
+OP_REQUEST_TRANSFER: int = 22003
 
-# Rollout RPC tags 10..13, disjoint from WeightBridge (1..6).
-_INFER_REQ_HDR_TAG: int = 10
-_INFER_REQ_BODY_TAG: int = 11
-_INFER_RES_HDR_TAG: int = 12
-_INFER_RES_BODY_TAG: int = 13
+_INFER_REQ_HDR_TAG: int = 22010
+_INFER_REQ_BODY_TAG: int = 22011
+_INFER_RES_HDR_TAG: int = 22012
+_INFER_RES_BODY_TAG: int = 22013
 
 # 16-byte header: op (u32), body_len (u64), reserved (u32), little-endian.
 _HEADER_FMT: str = "<IQI"
