@@ -106,9 +106,10 @@ def test_chunk_kda_pcc(
     _assert_pcc(f"{label} state", golden_state, actual_state)
 
 
-def test_chunk_kda_affine_summary_matches_final_state(device: ttnn.Device) -> None:
+@pytest.mark.parametrize("sequence", [512, 640])
+def test_chunk_kda_affine_summary_matches_final_state(device: ttnn.Device, sequence: int) -> None:
     """A span summary must reproduce the recurrence for any incoming state."""
-    sequence, heads, dim = 512, 2, 32
+    heads, dim = 2, 32
     generator = torch.Generator().manual_seed(1138)
     q = torch.randn(1, sequence, heads * dim, generator=generator)
     k = torch.randn(1, sequence, heads * dim, generator=generator)
@@ -146,7 +147,8 @@ def test_chunk_kda_affine_summary_matches_final_state(device: ttnn.Device) -> No
         )
 
     assert final_state_tt is not None
-    groups = sequence // 256
+    groups = sequence // (256 if sequence % 256 == 0 else 128)
+    affine_threshold = 0.999 if sequence % 256 == 0 else 0.995
     grouped_prep = ttnn.transformer.chunk_kda_group_prepare(
         q_tt,
         k_tt,
@@ -179,11 +181,18 @@ def test_chunk_kda_affine_summary_matches_final_state(device: ttnn.Device) -> No
     entries = ttnn.to_torch(entries_tt).reshape(heads, groups, dim, dim)
     expected_final_state = torch.matmul(transform_a[:, -1].float(), entries[:, -1].float()) + transform_b[:, -1].float()
     expected_final_state = expected_final_state.reshape_as(initial_state)
-    _assert_pcc("KDA affine span summary", expected_final_state, ttnn.to_torch(final_state_tt), threshold=0.999)
-    _assert_pcc("KDA grouped scan output", ttnn.to_torch(output_tt), ttnn.to_torch(grouped_output_tt), threshold=0.999)
+    _assert_pcc(
+        "KDA affine span summary", expected_final_state, ttnn.to_torch(final_state_tt), threshold=affine_threshold
+    )
+    _assert_pcc(
+        "KDA grouped scan output",
+        ttnn.to_torch(output_tt),
+        ttnn.to_torch(grouped_output_tt),
+        threshold=affine_threshold,
+    )
     _assert_pcc(
         "KDA grouped scan final state",
         ttnn.to_torch(final_state_tt),
         ttnn.to_torch(grouped_final_state_tt).reshape_as(initial_state),
-        threshold=0.999,
+        threshold=affine_threshold,
     )

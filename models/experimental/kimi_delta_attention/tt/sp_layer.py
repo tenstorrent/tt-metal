@@ -200,13 +200,14 @@ class SP2TP4KimiDeltaAttention:
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run the SP affine prefix without repeating either span's KDA prep.
 
-        Each span first builds the state-independent eight-chunk preparation
+        Each span first builds state-independent four- or eight-chunk preparation
         tensors.  The first prefix produces the boundary state while both
         spans' final output scans remain unscheduled; once the state is on
         fabric, the two seeded scans can run independently.
         """
         first, second = self.first_layer, self.second_layer
-        groups = first_span.shape[1] // 256
+        group_tokens = 256 if first_span.shape[1] % 256 == 0 else 128
+        groups = first_span.shape[1] // group_tokens
         first_prepared = first.prepare_chunk(first_span)
         ttnn.experimental.send_async(first_prepared.new_convolution_state, self._send_socket)
         ttnn.experimental.recv_async(second.convolution_state, self._recv_socket)
@@ -247,7 +248,7 @@ class SP2TP4KimiDeltaAttention:
             os.getenv("KDA_SP_SPLIT_AFFINE", "0") == "1"
             and mode == "chunk"
             and first_span.shape[1] == second_span.shape[1]
-            and first_span.shape[1] % 256 == 0
+            and first_span.shape[1] % 128 == 0
         ):
             return self._forward_split_affine_sp2(first_span, second_span)
         if os.getenv("KDA_SP_PIPELINED", "0") == "1" and mode == "chunk":

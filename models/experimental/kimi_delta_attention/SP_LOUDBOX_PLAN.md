@@ -106,14 +106,24 @@ state-transfer protocol and measure its components.
   fabric and profile its first logical 1x4 submesh. Opening only a physical
   1x4 mesh makes fabric-router initialization time out; the logical submesh is
   the same TP group used by SP=2/TP=4 child traces.
-* With that apples-to-apples trace harness, the initial T=1280 diagnostics
-  are: TP=4 T=640 **1.071 ms** (report `2026_07_25_19_32_51`), TP=4 T=1280
+* With that apples-to-apples trace harness, the initial T=1280 controls are:
+  TP=4 T=640 **1.071 ms** (report `2026_07_25_19_32_51`), TP=4 T=1280
   **1.590 ms** (report `2026_07_25_19_34_47`), and SP=2/TP=4 global T=1280
-  **1.505 ms** (report `2026_07_25_19_33_50`). SP is consequently only
-  1.056x faster than equal-global TP=4 and 1.405x the local-work control. It
-  misses the 1.339 ms production-rank budget by 0.166 ms. Since direct carry
-  transport is already ~0.1 ms, the remaining excess is predominantly the
-  split-affine summary/prefix/final-scan decomposition.
+  **1.505 ms** (report `2026_07_25_19_33_50`). The last result is a
+  **serialized fallback**, not a split-affine result: each 640-token span is
+  not divisible by the current 256-token group. It is useful as a legacy
+  control (1.056x equal-global speedup and 1.405x local-work latency), but it
+  is not a valid measurement of the intended production-rank affine path.
+* Group preparation now selects 128-token groups when a span is not divisible
+  by 256, which makes the T=640 span five groups while retaining eight-chunk
+  groups for the T=2560 production-equivalent path. The primitive has PCC >=
+  0.995 at T=640 and the full T=1280 SP test passes the output, recurrent,
+  convolution, and boundary-token PCC >= 0.98 gate. The valid warmed
+  split-affine child-trace result is **1.438 ms** (report
+  `2026_07_25_19_42_27`): 1.106x the equal-global TP=4 control and 1.343x the
+  local-work control. It misses the actionable 1.339 ms production-rank budget
+  by **0.099 ms**; the next target is to remove that remaining prefix/final
+  scan critical-path cost.
 
 ## Milestones
 

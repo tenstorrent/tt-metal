@@ -808,7 +808,7 @@ std::vector<ttnn::Tensor> chunk_kda_group_prepare(
     TT_FATAL(flat_g || gs.rank() == 4, "chunk_kda_affine_summary expects rank-3 or rank-4 g");
 
     const uint32_t B = bs[0], T = bs[1], H = bs[2];
-    TT_FATAL(T % 256 == 0, "chunk_kda_affine_summary requires T divisible by 256, got {}", T);
+    TT_FATAL(T % 128 == 0, "chunk_kda_affine_summary requires T divisible by 128, got {}", T);
     TT_FATAL(flat_g ? gs[2] % H == 0 : gs[2] == H, "chunk_kda_affine_summary g head dimension mismatch");
     const uint32_t K = flat_g ? gs[2] / H : gs[3];
     TT_FATAL(flat_v ? vs[2] % H == 0 : vs[2] == H, "chunk_kda_affine_summary v head dimension mismatch");
@@ -826,8 +826,14 @@ std::vector<ttnn::Tensor> chunk_kda_group_prepare(
     auto* dev = q_in.device();
     const uint32_t BH = B * H;
     constexpr uint32_t C = 32;
-    constexpr uint32_t group_chunks = 8;
     const uint32_t NC = T / C;
+    // Prefer 256-token groups to minimize the number of prefix workers.  A
+    // 640-token production-rank span has 20 chunks, however, and needs
+    // 128-token groups so it can enter the same affine SP path.
+    constexpr uint32_t min_group_chunks = 4;
+    constexpr uint32_t preferred_group_chunks = 8;
+    TT_FATAL(NC % min_group_chunks == 0, "chunk_kda_affine_summary requires a multiple of four chunks");
+    const uint32_t group_chunks = NC % preferred_group_chunks == 0 ? preferred_group_chunks : min_group_chunks;
     const uint32_t groups_per_head = NC / group_chunks;
     const uint32_t group_heads = BH * groups_per_head;
     const float scale = scale_opt.value_or(1.0f / std::sqrt(static_cast<float>(K)));
@@ -910,7 +916,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_group_summary(
     const std::optional<ttnn::Tensor>& eye) {
     TT_FATAL(grouped_prep.size() == 7, "chunk_kda_group_summary expects seven preparation tensors");
     const auto& shape = grouped_prep[0].logical_shape();
-    TT_FATAL(shape.rank() == 4, "chunk_kda_group_summary expects [group_heads,8,chunk,value] preparation tensors");
+    TT_FATAL(
+        shape.rank() == 4,
+        "chunk_kda_group_summary expects [group_heads,group_chunks,chunk,value] preparation tensors");
     const uint32_t chunk_size = shape[2];
     auto* dev = grouped_prep[0].device();
     ConstTiles fallback;
@@ -958,7 +966,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_group_scan(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     TT_FATAL(grouped_prep.size() == 7, "chunk_kda_group_scan expects seven preparation tensors");
     const auto& shape = grouped_prep[0].logical_shape();
-    TT_FATAL(shape.rank() == 4, "chunk_kda_group_scan expects [group_heads,8,chunk,value] preparation tensors");
+    TT_FATAL(
+        shape.rank() == 4, "chunk_kda_group_scan expects [group_heads,group_chunks,chunk,value] preparation tensors");
     const uint32_t group_heads = shape[0];
     const uint32_t group_chunks = shape[1];
     const uint32_t chunk_size = shape[2];

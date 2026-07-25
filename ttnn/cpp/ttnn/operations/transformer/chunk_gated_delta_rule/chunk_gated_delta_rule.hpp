@@ -84,8 +84,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     float rms_epsilon = 1e-5f);
 
 /**
- * Build reusable KDA preparation tensors, grouped into eight contiguous
- * 32-token chunks.  The result feeds chunk_kda_group_summary and
+ * Build reusable KDA preparation tensors, grouped into four or eight
+ * contiguous 32-token chunks. Eight is preferred; four supports a
+ * production-rank 640-token span. The result feeds chunk_kda_group_summary and
  * chunk_kda_group_scan so an SP implementation can compute a boundary state
  * before scheduling the final output scan.
  */
@@ -103,7 +104,7 @@ std::vector<ttnn::Tensor> chunk_kda_group_prepare(
     const std::optional<ttnn::Tensor>& ones = std::nullopt,
     const std::optional<ttnn::Tensor>& masks = std::nullopt);
 
-/** Return flattened per-eight-chunk affine transforms from grouped preparation tensors. */
+/** Return flattened affine transforms from grouped preparation tensors. */
 std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_group_summary(
     const std::vector<ttnn::Tensor>& grouped_prep,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,

@@ -429,8 +429,8 @@ class KimiDeltaAttention:
 
     def group_prepare(self, prepared: PreparedKDA) -> list[ttnn.Tensor]:
         """Create reusable eight-chunk recurrence preparation tensors."""
-        if prepared.mode != "chunk" or not prepared.head_major or prepared.sequence % 256:
-            raise ValueError("group preparation requires a tile-aligned chunk span divisible by 256")
+        if prepared.mode != "chunk" or not prepared.head_major or prepared.sequence % 128:
+            raise ValueError("group preparation requires a tile-aligned chunk span divisible by 128")
         return ttnn.transformer.chunk_kda_group_prepare(
             prepared.q,
             prepared.k,
@@ -510,7 +510,8 @@ class KimiDeltaAttention:
         self, prepared: PreparedKDA, grouped_prep: list[ttnn.Tensor], entries: ttnn.Tensor
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run the grouped output scan from precomputed entry states."""
-        groups = prepared.sequence // 256
+        batch_heads = prepared.batch * self.config.num_heads
+        groups = grouped_prep[0].shape[0] // batch_heads
         output, state = ttnn.transformer.chunk_kda_group_scan(
             grouped_prep,
             entries,
