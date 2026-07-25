@@ -323,12 +323,22 @@ class TtHCA(_TtHCABase):
         self.sp_factor = device.shape[sp_axis] if self.is_mesh else 1
         self.tp_factor = device.shape[tp_axis] if self.is_mesh else 1
         self.tp_ccl_topology = topology
-        self.tt_ccl = get_tt_ccl(device) if (self.is_mesh and self.tp_factor > 1) else None
+        # Rides both axes: TP all-reduce (q/kv stems) and SP all-gather (sliding KV in _attention),
+        # so the CCL object is needed whenever either factor > 1.
+        self.tt_ccl = get_tt_ccl(device) if (self.is_mesh and (self.sp_factor > 1 or self.tp_factor > 1)) else None
         self.ccl_num_links = (2 if is_blackhole() else 1) if ccl_num_links is None else ccl_num_links
 
-        # sink pre-divided by scale: SDPA scales BOTH QK and the sink by `scale` internally,
-        # but the reference scales only QK -> divide the sink so the kernel's ×scale cancels.
-        self.sinks_sdpa = self._from_torch(sinks.detach().reshape(1, self.num_heads, 1, 1) / self.scaling)
+        # sink pre-divided by scale: SDPA scales BOTH QK and the sink by `scale` internally, but the
+        # reference scales only QK -> divide the sink so the kernel's ×scale cancels. Per-head, so it
+        # is TP-sharded on heads (dim 1) to match the head-sharded q; every other axis is broadcast.
+        sinks_host = sinks.detach().reshape(1, self.num_heads, 1, 1) / self.scaling
+        if self.is_mesh and self.tp_factor > 1:
+            sink_dims = [None, None]
+            sink_dims[self.tp_axis] = 1
+            sink_mapper = ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=sink_dims)
+            self.sinks_sdpa = self._from_torch(sinks_host, mesh_mapper=sink_mapper)
+        else:
+            self.sinks_sdpa = self._from_torch(sinks_host)
 
         # q_a_proj: TP-shard the contraction (hidden) so each chip matmuls its hidden shard to a
         # partial q_lora (all-reduced in _q_stem). q_b_proj: TP-shard the output (heads) so each
@@ -480,7 +490,9 @@ class TtHCA(_TtHCABase):
         """Combined additive mask [B, 1, S, sk_pad] (TILE): sliding-window causal (width
         ``sliding_window``) over the S main keys, block_bias over the T compressed keys, then
         -inf over the [S+T, sk_pad) tile-padding so SDPA ignores the zero-padded KV columns.
-        Built on host, uploaded to device."""
+        ``seq_len`` is the GLOBAL query length. Built on host with global indices; on a mesh it is
+        SP-sharded on the query rows (dim 2) to match the SP-sharded q (head-independent -> TP-replicated,
+        full over the key columns since every query attends all keys)."""
         t_len = block_bias.shape[-1]
         i = torch.arange(seq_len).view(seq_len, 1)
         j = torch.arange(seq_len).view(1, seq_len)
@@ -488,15 +500,39 @@ class TtHCA(_TtHCABase):
         main = torch.zeros(seq_len, seq_len).masked_fill(~allowed, float("-inf"))
         full = torch.full((batch, 1, seq_len, sk_pad), float("-inf"))
         full[..., :seq_len] = main.view(1, 1, seq_len, seq_len)
-        full[..., seq_len : seq_len + t_len] = block_bias.to(torch.float32)
-        return self._from_torch(full)
+        # block_bias covers the real query rows; padded query rows (if any) keep -inf and are discarded.
+        full[:, :, : block_bias.shape[2], seq_len : seq_len + t_len] = block_bias.to(torch.float32)
+        mesh_mapper = None
+        if self.is_mesh and self.sp_factor > 1:
+            dims = [None, None]
+            dims[self.sp_axis] = 2
+            mesh_mapper = ttnn.ShardTensor2dMesh(self.device, mesh_shape=tuple(self.device.shape), dims=dims)
+        return self._from_torch(full, mesh_mapper=mesh_mapper)
 
     def _attention(self, q, sliding_kv, compressed_kv, block_bias: torch.Tensor, position_ids: torch.Tensor):
-        """Attention core (reference L833/843/718-746/869). Inputs: ``q`` [B,64,S,512],
-        ``sliding_kv`` [B,1,S,512], ``compressed_kv`` [B,1,T,512], ``block_bias`` host
-        torch [B,1,S,T], ``position_ids`` torch [B,S]. Concats KV, runs SDPA with the
-        combined mask + per-head sink, then undoes V's RoPE. Returns [B,64,S,512]."""
-        batch, seq_len = q.shape[0], q.shape[2]
+        """Attention core (reference L833/843/718-746/869). Inputs: ``q`` [B, num_heads/tp, S/sp, 512],
+        ``sliding_kv`` [B,1,S/sp,512] (SP-sharded), ``compressed_kv`` [B,1,T,512] (replicated),
+        ``block_bias`` host torch [B,1,S,T], ``position_ids`` torch [B,S]. SP-gathers the sliding KV to
+        full S, concats the (replicated) compressed KV, runs single-device SDPA per chip (q SP+TP-sharded,
+        KV replicated, mask SP-sharded, sink TP-sharded), then undoes V's RoPE. Returns [B, num_heads/tp, S/sp, 512]."""
+        batch, seq_local = q.shape[0], q.shape[2]
+        seq_len = seq_local * self.sp_factor  # global query/main-key length
+        num_heads_local = self.num_heads // self.tp_factor
+
+        # Every query attends all keys, so the single-device SDPA needs the full sliding KV on each chip:
+        # gather the SP-sharded sliding KV to full S (compressed KV is already replicated).
+        if self.sp_factor > 1:
+            sliding_kv = ttnn.experimental.all_gather_async(
+                sliding_kv,
+                dim=2,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.sp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.tp_ccl_topology,
+                cluster_axis=self.sp_axis,
+            )
+
         # Pad the concatenated KV seq (S + T) up to a multiple of 32: SDPA tile-pads a
         # non-aligned Sk with ZEROS and a provided mask's pad columns default to 0 (= attend),
         # polluting the softmax -- pad explicitly and mark those columns -inf in _attn_mask.
@@ -519,8 +555,8 @@ class TtHCA(_TtHCABase):
         )
 
         nope_dim = self.head_dim - self.rope_head_dim
-        nope = ttnn.slice(attn, [0, 0, 0, 0], [batch, self.num_heads, seq_len, nope_dim])
-        rope = ttnn.slice(attn, [0, 0, 0, nope_dim], [batch, self.num_heads, seq_len, self.head_dim])
+        nope = ttnn.slice(attn, [0, 0, 0, 0], [batch, num_heads_local, seq_local, nope_dim])
+        rope = ttnn.slice(attn, [0, 0, 0, nope_dim], [batch, num_heads_local, seq_local, self.head_dim])
         cos, sin = self._cos_sin(position_ids, negate_sin=True)
         rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
         return ttnn.concat([nope, rope], dim=-1)

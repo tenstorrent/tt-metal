@@ -397,6 +397,96 @@ def test_hca_attention(device, batch, seq_len):
     logger.debug("PCC test passed!")
 
 
+@pytest.mark.parametrize("seq_len", [512, 2048, 5120], ids=["seq512", "seq2k", "seq5120"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    _MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+def test_hca_attention_mesh(mesh_device, device_params, num_links, topology, seq_len):
+    """Mesh/TP/SP PCC for TtHCA._attention: q head(TP)+seq(SP) sharded, sliding_kv SP-sharded (gathered
+    inside), compressed_kv replicated, mask SP-sharded, sink TP-sharded. Aligned seq only (padding-awareness
+    is a full-block concern). Compared against the full unsharded attention core."""
+    torch.manual_seed(42)
+
+    batch = 1
+    config = _flash_config()
+    nh, hd = config.num_attention_heads, config.head_dim
+    logger.debug(f"mesh={tuple(mesh_device.shape)} seq_len={seq_len}")
+
+    ref = DeepseekV4Attention(config, layer_idx=0).eval()
+    assert ref.compressor is not None, "layer_idx=0 must be a heavily_compressed_attention layer"
+    with torch.no_grad():
+        ref.q_a_norm.weight.uniform_(0.5, 1.5)
+        ref.kv_norm.weight.uniform_(0.5, 1.5)
+        ref.sinks.normal_(0.0, 1.0)
+        ref.compressor.position_bias.normal_(0.0, 0.02)
+        ref.compressor.kv_norm.weight.uniform_(0.5, 1.5)
+
+    hidden = torch.randn(batch, seq_len, config.hidden_size)
+    position_ids = torch.arange(seq_len).unsqueeze(0).expand(batch, -1)
+
+    with torch.no_grad():
+        cos, sin = ref.compressor.rotary_emb(hidden, position_ids=position_ids, layer_type="compress")
+        q_res = ref.q_a_norm(ref.q_a_proj(hidden))
+        q = ref.q_b_norm(ref.q_b_proj(q_res).view(batch, seq_len, nh, hd).transpose(1, 2))
+        q = apply_rotary_pos_emb(q, cos, sin)
+        sliding_kv = apply_rotary_pos_emb(
+            ref.kv_norm(ref.kv_proj(hidden)).view(batch, seq_len, -1, hd).transpose(1, 2), cos, sin
+        )
+        compressed_kv, block_bias = ref.compressor(hidden, q_res, position_ids, None, 0)
+        kv_cat = torch.cat([sliding_kv, compressed_kv], dim=2)
+        i = torch.arange(seq_len).view(seq_len, 1)
+        j = torch.arange(seq_len).view(1, seq_len)
+        allowed = (j <= i) & (i - j < config.sliding_window)
+        main = torch.zeros(seq_len, seq_len).masked_fill(~allowed, float("-inf"))
+        mask = torch.cat([main.view(1, 1, seq_len, seq_len).expand(batch, 1, seq_len, seq_len), block_bias], dim=-1)
+        attn_out, _ = eager_attention_forward(ref, q, kv_cat, kv_cat, mask, ref.scaling)
+        attn_out = apply_rotary_pos_emb(attn_out.transpose(1, 2), cos, -sin).transpose(1, 2)
+        attn_ref = attn_out.transpose(1, 2)  # [B, num_heads, S, head_dim]
+
+    tt_model = TtHCA.from_reference(
+        mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology, ccl_num_links=num_links
+    )
+
+    ms = tuple(mesh_device.shape)
+
+    def _shard(x, dims):
+        return ttnn.from_torch(
+            x,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=ms, dims=dims),
+        )
+
+    q_tt = _shard(q, (2, 1))  # seq @ SP (axis0, dim2), heads @ TP (axis1, dim1)
+    sliding_tt = _shard(sliding_kv, (2, None))  # seq @ SP, replicated across TP
+    compressed_tt = ttnn.from_torch(
+        compressed_kv,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    signpost("HCA_START")
+    out_tt = tt_model._attention(q_tt, sliding_tt, compressed_tt, block_bias, position_ids)
+    signpost("HCA_END")
+    out = ttnn.to_torch(
+        out_tt, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=ms, dims=(2, 1))
+    )  # sp -> seq (dim2), tp -> heads (dim1)
+    logger.debug(f"TTNN attn output shape: {tuple(out.shape)}")
+
+    assert out.shape == attn_ref.shape, f"shape mismatch: tt {tuple(out.shape)} vs ref {tuple(attn_ref.shape)}"
+
+    pcc_passed, pcc_message = assert_with_pcc(attn_ref.to(torch.float32), out.to(torch.float32), pcc=0.999)
+    logger.debug(f"mesh attention core PCC: {pcc_message}")
+    assert pcc_passed, f"HCA mesh attention core PCC test failed: {pcc_message}"
+
+    logger.debug("PCC test passed!")
+
+
 @pytest.mark.parametrize("batch, seq_len", _SHAPES, ids=_SHAPE_IDS)
 def test_hca_output(device, batch, seq_len):
     """
