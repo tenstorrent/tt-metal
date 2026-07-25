@@ -9,9 +9,12 @@ Tracy ``start``/``stop`` window.
 
 Standalone Tracy capture::
 
-    python -m tracy -p -v -r --dump-device-data-mid-run \\
-        pytest models/experimental/vibevoice/tests/perf/test_profile_single_step_prefill.py \\
+    python -m tracy -p -v -r --dump-device-data-mid-run --op-support-count 100000 -m pytest \\
+        models/experimental/vibevoice/tests/perf/test_profile_single_step_prefill.py \\
         ::test_profile_single_step_prefill -v
+
+Without ``--op-support-count 100000`` the device profiler buffer can overflow
+(``markers were dropped``) on a 256-token chunk; prefer ``-m pytest``.
 
 Device perf CSV/JSON dump (outer driver spawns this under Tracy)::
 
