@@ -95,6 +95,13 @@ state-transfer protocol and measure its components.
   optimization must attack the remaining child-trace critical path; a larger
   one-lane FIFO is the quick saturation check before considering a more
   invasive multi-lane state stripe or KDA/epilogue work reduction.
+* The planned SP=8/TP=1 seven-boundary protocol probe is now implemented as
+  `SP8TP1KimiDeltaAttention`. At global T=5120 it executes eight real
+  640-token KDA spans with all 32 heads/chip, passes output/recurrent/
+  convolution PCC >= 0.98, and validates the first output token after every
+  one of the seven fabric handoffs. The 640-token span previously selected
+  the generic convolution path and exceeded L1; the channel-blocked direct
+  KDA convolution now applies at `T >= 640`.
 
 ## Milestones
 
@@ -169,6 +176,9 @@ read from the resulting report.
 # Functional target gate: output, recurrent carry, short-conv carry, and the
 # first output token after the SP boundary must all reach PCC >= 0.98.
 KDA_SP_SPLIT_AFFINE=1 KDA_SP_TARGET_SHAPE=1 scripts/run_safe_pytest.sh -svv models/experimental/kimi_delta_attention/tests/test_sp2_tp4.py
+
+# SP=8/TP=1 protocol probe: seven real KDA boundary handoffs at global T=5120.
+KDA_SP8_TARGET_SHAPE=1 KDA_SP8_TEST_SEQ=5120 scripts/run_safe_pytest.sh -svv models/experimental/kimi_delta_attention/tests/test_sp8_tp1.py
 
 # Local TP=4 controls: run both lengths with the same warmed trace procedure.
 PERF_SEQ=640  PERF_TRACE=1 scripts/run_safe_pytest.sh --profile -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_tp4_layer_perf.py

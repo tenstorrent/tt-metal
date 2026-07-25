@@ -25,6 +25,8 @@ from models.tt_transformers.tt.ccl import TT_CCL
 
 _SP_SIZE = 2
 _TP_SIZE = 4
+_SP8_SIZE = 8
+_TP1_SIZE = 1
 
 
 def _socket_config(mesh_shape: ttnn.MeshShape) -> ttnn.SocketConfig:
@@ -254,3 +256,71 @@ class SP2TP4KimiDeltaAttention:
         self._handoff_causal_state()
         second_output = self.second_layer.forward(second_span, mode=mode)
         return first_output, second_output
+
+
+class SP8TP1KimiDeltaAttention:
+    """Eight-rank sequence-parallel KDA protocol probe for LoudBox.
+
+    Each chip owns all heads for one contiguous sequence span. This is not a
+    production-performance topology--a Galaxy rank will instead own one
+    quarter of the heads--but it exercises all seven ordered causal handoffs
+    with the real KDA layer and no host materialization of either cache.
+    """
+
+    def __init__(
+        self,
+        mesh_device: ttnn.MeshDevice,
+        config: KDAConfig,
+        state_dict: Mapping[str, torch.Tensor],
+        tensor_cache_path: Path | None = None,
+    ) -> None:
+        if tuple(mesh_device.shape) != (1, _SP8_SIZE):
+            raise ValueError(f"SP8TP1 requires a 1x8 LoudBox mesh, got {tuple(mesh_device.shape)}")
+        self.mesh_device = mesh_device
+        self.span_devices = tuple(
+            mesh_device.create_submesh(ttnn.MeshShape(1, _TP1_SIZE), ttnn.MeshCoordinate(0, span))
+            for span in range(_SP8_SIZE)
+        )
+        self.layers = tuple(
+            KimiDeltaAttention(
+                span_device,
+                config,
+                state_dict,
+                tensor_cache_path=tensor_cache_path,
+                tt_ccl=TT_CCL(span_device),
+            )
+            for span_device in self.span_devices
+        )
+        self._sockets = tuple(
+            ttnn.create_socket_pair(
+                self.span_devices[span], self.span_devices[span + 1], _socket_config(self.span_devices[span].shape)
+            )
+            for span in range(_SP8_SIZE - 1)
+        )
+
+    def reset_state(self, batch_size: int) -> None:
+        for layer in self.layers:
+            layer.reset_state(batch_size)
+
+    def _handoff_causal_state(self, source_index: int) -> None:
+        source = self.layers[source_index]
+        destination = self.layers[source_index + 1]
+        assert source.recurrent_state is not None
+        assert source.convolution_state is not None
+        assert destination.recurrent_state is not None
+        assert destination.convolution_state is not None
+        send_socket, recv_socket = self._sockets[source_index]
+        ttnn.experimental.send_async(source.recurrent_state, send_socket)
+        ttnn.experimental.recv_async(destination.recurrent_state, recv_socket)
+        ttnn.experimental.send_async(source.convolution_state, send_socket)
+        ttnn.experimental.recv_async(destination.convolution_state, recv_socket)
+
+    def forward(self, *spans: ttnn.Tensor, mode: str = "chunk") -> tuple[ttnn.Tensor, ...]:
+        if len(spans) != _SP8_SIZE:
+            raise ValueError(f"SP8TP1 expects {_SP8_SIZE} spans, got {len(spans)}")
+        outputs = []
+        for span_index, (layer, span) in enumerate(zip(self.layers, spans, strict=True)):
+            outputs.append(layer.forward(span, mode=mode))
+            if span_index + 1 < _SP8_SIZE:
+                self._handoff_causal_state(span_index)
+        return tuple(outputs)

@@ -212,7 +212,7 @@ class KimiDeltaAttention:
                 convolution_state.layout,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-        if sequence > 640:
+        if sequence >= 640:
             q, k, v = ttnn.transformer.kda_causal_conv1d_split(
                 qkv_row_major,
                 state_row_major,
