@@ -65,7 +65,7 @@ overlap, so they must not be added.
 
 The receiver-owned affine prefix is now the T>=5,120 default. Remaining experiments, ranked by measured or bounded reward, are:
 
-1. **Fuse gated RMS into the grouped final recurrence.** The promoted path pays a standalone `KdaGatedRmsOperation` median of `83.417 us` (`2.59%` of wall). The existing scan kernel already has a fused-RMS interface, but grouped pseudo-head output must be mapped back to the four real heads without breaking its gate/weight indexing.
+1. **Fuse gated RMS locally in each grouped scan owner.** The existing disjoint-consumer pipeline is measured and rejected: it removed the `83.560 us` standalone op but expanded grouped scan `111.262 -> 187.476 us` and regressed wall `3218.490 -> 3283.410 us` (`+2.02%`) because 80 producers leave only 30 synchronized consumers. A viable retry must perform RMS locally on each full-V group owner after its eight chunks, with no cross-core staging.
 2. **Keep corrected group-entry states in their prefix owners.** The prefix writes and the grouped recurrence rereads 80 FP32 `[128,128]` states (`5 MiB` each direction) and pays a separate launch. Fusion has a traffic-plus-launch ceiling above the `0.1%` continuation threshold, but requires merging two independently validated core programs.
 3. **Form summaries in the persistent prefix owners.** The one-pass builder writes 80 FP32 `(A,B)` pairs and the prefix rereads them. A producer/consumer handoff could remove approximately `20 MiB` of DRAM traffic per chip, but it must preserve the distributed-L1 prep placement and avoid the rejected static prep/scan partition.
 
