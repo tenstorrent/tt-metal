@@ -634,14 +634,30 @@ class KimiDeltaAttention:
         if self.tensor_parallel_size > 1 and not fused_output_collective:
             assert self.tt_ccl is not None
             output = ttnn.reshape(output, (batch, 1, sequence, self.global_config.hidden_size))
+            # The TP=4 SP prototype uses reduce-scatter directly because its
+            # child mesh is 1x4.  Keep production defaults, with opt-in knobs
+            # for LoudBox CCL scheduling experiments.
+            ccl_links = int(os.getenv("KDA_TP4_CCL_LINKS", "0")) or None
+            # Four workers win for the 2,560-token production-rank span but
+            # over-parallelize the 640-token LoudBox control.  Preserve the
+            # smaller schedule below that crossover, while allowing explicit
+            # experimentation through the environment.
+            default_ccl_workers = "4" if sequence >= 1024 else "2"
+            ccl_workers = int(os.getenv("KDA_TP4_CCL_WORKERS", default_ccl_workers))
+            ccl_chunks = int(os.getenv("KDA_TP4_CCL_CHUNKS_PER_SYNC", "10"))
+            if ccl_workers <= 0 or ccl_chunks <= 0:
+                raise ValueError("KDA TP4 CCL workers and chunks_per_sync must be positive")
             output = tt_all_reduce(
                 output,
                 self.device,
                 self.tt_ccl,
                 cluster_axis=0,
                 dim=3,
+                num_reduce_scatter_links=ccl_links,
                 topology=ttnn.Topology.Linear,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                chunks_per_sync=ccl_chunks,
+                num_workers_per_link=ccl_workers,
             )
             output = ttnn.reshape(
                 output, (batch, sequence, self.global_config.hidden_size // self.tensor_parallel_size)

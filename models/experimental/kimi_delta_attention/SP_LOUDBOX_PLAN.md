@@ -174,6 +174,18 @@ state-transfer protocol and measure its components.
   T=5120 (report `2026_07_25_20_57_59`), versus 1.343 ms and 3.219 ms.  It is
   the new baseline, but still misses the 2.958 ms production-rank target by
   0.248 ms; the next optimization must address the final scan/output path.
+* Grouped-recurrence granularity was probed at the T=5120 production-rank
+  shape.  Four chunks per group creates 160 group-heads on TP=4 and violates
+  the 120-core grouped-scan mapping.  Sixteen chunks per group is correct but
+  measured **3.249 ms** (report `2026_07_25_21_04_31`), slower than the
+  eight-chunk 3.206 ms baseline.  Keep the default eight-chunk grouping; it is
+  the best viable layout tested on LoudBox.
+* TP=4 output reduce-scatter benefits from a length-aware worker schedule.
+  Four workers per link is PCC-correct and improves T=5120 to **3.196 ms**
+  (report `2026_07_25_21_07_47`) from 3.206 ms, but regresses T=1280 to
+  1.456 ms (report `2026_07_25_21_09_28`).  The implementation therefore uses
+  two workers below the 1024-token local-span crossover and four at or above
+  it; the environment can still override the choice for future CCL tuning.
 
 ## Milestones
 
