@@ -74,7 +74,9 @@ def _profile_trace(
 
 def test_kda_tp_layer_device_perf(mesh_device: ttnn.MeshDevice) -> None:
     """Profile warm target-shape TP=8 prefill; invoke through Tracy for attribution."""
-    sequence = int(os.getenv("PERF_SEQ", "640"))
+    # Keep the default aligned with the SP=2, TP=4 harness: this is the
+    # head-to-head global-T=5120 gate, not the short-sequence smoke workload.
+    sequence = int(os.getenv("PERF_SEQ", "5120"))
     if sequence % 32:
         raise ValueError(f"PERF_SEQ must be divisible by 32, got {sequence}")
     config = KDAConfig(
