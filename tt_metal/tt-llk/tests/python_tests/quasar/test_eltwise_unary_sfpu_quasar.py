@@ -680,7 +680,8 @@ def generate_sfpu_unary_combinations():
         # ApproximationMode values; every other op has a single implementation (ApproximationMode.No).
         approx_modes = (
             (ApproximationMode.No, ApproximationMode.Yes)
-            if cfg.mathop in (MathOperation.Exp, MathOperation.Reciprocal)
+            if cfg.mathop
+            in (MathOperation.Exp, MathOperation.Reciprocal, MathOperation.Rsqrt)
             else (ApproximationMode.No,)
         )
         for fmt in formats_for_op(cfg):

@@ -1051,6 +1051,9 @@ public:
             GTEST_SKIP() << "Requires TT_METAL_SLOW_DISPATCH_MODE";
         }
         this->device_ = tt_metal::CreateDevice(0);
+        if (tt::tt_metal::detail::sd_cq_kernel_tests_should_skip(this->device_)) {
+            GTEST_SKIP() << "Quasar SD cq-kernel tests require dispatch-engine cores in the soc descriptor";
+        }
         Common::DispatchPayloadGenerator::Config pgcfg;
         pgcfg.use_coherent_data = this->cfg_.use_coherent_data;
         pgcfg.perf_test = this->cfg_.perf_test;
@@ -1120,7 +1123,8 @@ public:
             append_dispatch_payload(raw, term_cmd);
         }
 
-        const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
+        const auto& memmap = Common::sd_dispatch_mem_map(this->device_);
+        const tt::CoreType cq_core_type = Common::sd_cq_kernel_core_type(this->device_);
         // CQ0: this is a slow-dispatch (SD) test with no real command queue.
         const uint32_t l1_buf_base = memmap.dispatch_buffer_base(/*cq_id=*/0);
         const uint32_t dispatch_buffer_pages = memmap.dispatch_buffer_pages();
@@ -1136,10 +1140,10 @@ public:
 
         const uint32_t cmd_cb_bytes = cmd_cb_pages * page_size;
 
+        const CoreCoord spoof_logical = Common::sd_spoof_prefetch_core(this->device_);
         const CoreCoord disp_logical = Common::dispatch_core(this->device_);
-        const CoreCoord phys_spoof = this->device_->worker_core_from_logical_core(Common::sd_spoof_prefetch_core);
-        const CoreCoord phys_disp = this->device_->worker_core_from_logical_core(disp_logical);
-        const bool is_quasar = (this->device_->arch() == tt::ARCH::QUASAR);
+        const CoreCoord phys_spoof = Common::sd_virtual_core(this->device_, spoof_logical);
+        const CoreCoord phys_disp = Common::sd_virtual_core(this->device_, disp_logical);
         const bool fd_kernels_on_same_core = (phys_spoof == phys_disp);
 
         // When both FD kernels share a core, each kernel writes into its own L1 region, so the dispatcher
@@ -1147,15 +1151,19 @@ public:
         // start at l1_buf_base independently.
         const uint32_t dispatch_cb_base = fd_kernels_on_same_core ? (l1_buf_base + cmd_cb_bytes) : l1_buf_base;
 
-        const auto& soc_desc = tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->device_->id());
+        const uint32_t dispatch_l1_size =
+            (cq_core_type == tt::CoreType::DISPATCH)
+                ? tt_metal::MetalContext::instance().hal().get_dev_size(
+                      tt_metal::HalProgrammableCoreType::DISPATCH, tt_metal::HalL1MemAddrType::BASE)
+                : tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->device_->id()).worker_l1_size;
         if (fd_kernels_on_same_core) {
             TT_FATAL(
-                l1_buf_base + cmd_cb_bytes + dispatch_buffer_size <= soc_desc.worker_l1_size,
+                l1_buf_base + cmd_cb_bytes + dispatch_buffer_size <= dispatch_l1_size,
                 "SD cmd CB + dispatch CB too large for L1");
         } else {
-            TT_FATAL(raw.size() + l1_buf_base <= soc_desc.worker_l1_size, "SD command buffer too large for L1");
+            TT_FATAL(raw.size() + l1_buf_base <= dispatch_l1_size, "SD command buffer too large for L1");
             TT_FATAL(
-                dispatch_buffer_size + l1_buf_base <= soc_desc.worker_l1_size, "SD dispatch buffer too large for L1");
+                dispatch_buffer_size + l1_buf_base <= dispatch_l1_size, "SD dispatch buffer too large for L1");
         }
 
         tt_metal::MetalContext::instance().get_cluster().write_core(
@@ -1163,10 +1171,10 @@ public:
 
         tt_metal::Program program = tt_metal::CreateProgram();
 
-        const uint32_t spoof_prefetch_sem_id =
-            tt_metal::CreateSemaphore(program, {Common::sd_spoof_prefetch_core}, dispatch_buffer_pages);
-        const uint32_t dispatch_core_sem_id = tt_metal::CreateSemaphore(program, {disp_logical}, 0);
-        const uint32_t prefetch_sync_sem = tt_metal::CreateSemaphore(program, {Common::sd_spoof_prefetch_core}, 0);
+        const uint32_t spoof_prefetch_sem_id = tt_metal::CreateSemaphore(
+            program, {spoof_logical}, dispatch_buffer_pages, cq_core_type);
+        const uint32_t dispatch_core_sem_id = tt_metal::CreateSemaphore(program, {disp_logical}, 0, cq_core_type);
+        const uint32_t prefetch_sync_sem = tt_metal::CreateSemaphore(program, {spoof_logical}, 0, cq_core_type);
 
         const std::vector<uint32_t> spoof_args = {
             dispatch_cb_base,                                               // 0: dispatch_cb_base
@@ -1181,34 +1189,17 @@ public:
         const std::map<std::string, std::string> prefetch_defines = {
             {"DISPATCH_NOC_X", std::to_string(phys_disp.x)},
             {"DISPATCH_NOC_Y", std::to_string(phys_disp.y)},
-            {"FD_CORE_TYPE", "0"},
         };
 
-        KernelHandle sp;
-        if (is_quasar) {
-            // Quasar requires the experimental API; GetProcessorsPerClusterQuasar auto-assigns DM0.
-            // spoof must be created before dispatch so it gets DM0 and dispatch gets DM1.
-            sp = tt::tt_metal::experimental::quasar::CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/spoof_prefetch.cpp",
-                Common::sd_spoof_prefetch_core,
-                tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                    .num_threads_per_cluster = 1,
-                    .compile_args = spoof_args,
-                    .defines = prefetch_defines,
-                    .is_legacy_kernel = true});
-        } else {
-            sp = tt_metal::CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/spoof_prefetch.cpp",
-                {Common::sd_spoof_prefetch_core},
-                tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt_metal::NOC::RISCV_0_default,
-                    .compile_args = spoof_args,
-                    .defines = prefetch_defines});
-        }
-        tt_metal::SetRuntimeArgs(program, sp, Common::sd_spoof_prefetch_core, {1u});
+        const tt_metal::KernelHandle sp = Common::create_sd_cq_kernel(
+            program,
+            this->device_,
+            "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/spoof_prefetch.cpp",
+            spoof_logical,
+            Common::prefetch_dm(),
+            prefetch_defines,
+            spoof_args);
+        tt_metal::SetRuntimeArgs(program, sp, spoof_logical, {1u});
 
         auto dispatch_defines = Common::make_sd_dispatch_defines(
             this->device_,
@@ -1221,25 +1212,13 @@ public:
             memmap,
             dispatch_cb_base);
 
-        KernelHandle dispatch_kernel;
-        if (is_quasar) {
-            // Quasar auto-assigns DM1 since spoof already occupies DM0 on this core.
-            dispatch_kernel = tt::tt_metal::experimental::quasar::CreateKernel(
-                program,
-                "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
-                disp_logical,
-                tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                    .num_threads_per_cluster = 1, .defines = dispatch_defines, .is_legacy_kernel = true});
-        } else {
-            dispatch_kernel = tt_metal::CreateKernel(
-                program,
-                "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
-                {disp_logical},
-                tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt_metal::NOC::NOC_0,
-                    .defines = dispatch_defines});
-        }
+        const tt_metal::KernelHandle dispatch_kernel = Common::create_sd_cq_kernel(
+            program,
+            this->device_,
+            "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+            disp_logical,
+            Common::dispatch_dm(),
+            dispatch_defines);
         tt_metal::SetRuntimeArgs(program, dispatch_kernel, disp_logical, {0u, 0u, 0u});
 
         device_data.overflow_check(this->device_);
