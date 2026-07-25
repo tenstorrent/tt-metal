@@ -14,7 +14,9 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 
 def hca_block_bias(position_ids: torch.Tensor, compressed_len: int, compress_rate: int) -> torch.Tensor:
@@ -32,37 +34,57 @@ def hca_block_bias(position_ids: torch.Tensor, compressed_len: int, compress_rat
 class _TtHCABase(LightweightModule):
     """Shared TTNN helpers for the HCA compressor/block: weight tilize and interleaved
     cos/sin from the reference compress rotary. Not instantiated directly; subclasses set
-    ``device`` / ``dtype`` / ``memory_config`` / ``rotary_emb`` before calling these."""
+    ``device`` / ``dtype`` / ``memory_config`` / ``rotary_emb`` and the mesh attributes
+    (``is_mesh`` / ``sp_axis`` / ``tp_axis`` / ``sp_factor`` / ``tp_factor``) before calling these."""
 
-    def _to_tt_linear_weight(self, weight: torch.Tensor):
+    def _to_tt_linear_weight(self, weight: torch.Tensor, tp_shard_dim: int | None = None):
+        # tp_shard_dim indexes the transposed 4D weight [1, 1, in, out]: 2 = contraction (in), 3 = output.
         torch_weight = weight.detach().transpose(-2, -1).contiguous().unsqueeze(0).unsqueeze(0).to(torch.bfloat16)
+        mesh_mapper = None
+        if self.is_mesh:
+            if tp_shard_dim is not None and self.tp_factor > 1:
+                dims = [None, None]
+                dims[self.tp_axis] = tp_shard_dim
+                mesh_mapper = ttnn.ShardTensor2dMesh(self.device, mesh_shape=tuple(self.device.shape), dims=dims)
+            else:
+                mesh_mapper = ttnn.ReplicateTensorToMesh(self.device)
         return ttnn.from_torch(
             torch_weight,
             device=self.device,
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=self.memory_config,
+            mesh_mapper=mesh_mapper,
         )
 
-    def _from_torch(self, x: torch.Tensor):
+    def _from_torch(self, x: torch.Tensor, mesh_mapper=None):
+        if self.is_mesh and mesh_mapper is None:
+            mesh_mapper = ttnn.ReplicateTensorToMesh(self.device)
         return ttnn.from_torch(
             x.to(torch.bfloat16),
             device=self.device,
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=self.memory_config,
+            mesh_mapper=mesh_mapper,
         )
 
     def _cos_sin(self, positions: torch.Tensor, negate_sin: bool = False):
         """Interleaved cos/sin [1, 1, N, rope_head_dim] from the reference compress rotary.
-        ``negate_sin`` gives the conjugate rotation used for undo-RoPE (rope with -sin)."""
+        ``negate_sin`` gives the conjugate rotation used for undo-RoPE (rope with -sin). On a mesh
+        the seq axis is SP-sharded to match the SP-sharded query rows (natural-order, non-balanced)."""
         positions = positions[:1].to(torch.long)
         cos, sin = self.rotary_emb(torch.zeros(1), position_ids=positions, layer_type="compress")
         if negate_sin:
             sin = -sin
         cos = cos.repeat_interleave(2, dim=-1).unsqueeze(1)
         sin = sin.repeat_interleave(2, dim=-1).unsqueeze(1)
-        return self._from_torch(cos), self._from_torch(sin)
+        mesh_mapper = None
+        if self.is_mesh and self.sp_factor > 1:
+            dims = [None, None]
+            dims[self.sp_axis] = 2
+            mesh_mapper = ttnn.ShardTensor2dMesh(self.device, mesh_shape=tuple(self.device.shape), dims=dims)
+        return self._from_torch(cos, mesh_mapper=mesh_mapper), self._from_torch(sin, mesh_mapper=mesh_mapper)
 
 
 class TtHCACompressor(_TtHCABase):
@@ -79,6 +101,8 @@ class TtHCACompressor(_TtHCABase):
         rope_head_dim: int,
         rotary_emb,
         rms_norm_eps: float = 1e-6,
+        sp_axis: int = 0,
+        tp_axis: int = 1,
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     ):
@@ -91,17 +115,16 @@ class TtHCACompressor(_TtHCABase):
         self.rotary_emb = rotary_emb
         self.rms_norm_eps = float(rms_norm_eps)
 
+        self.is_mesh = hasattr(device, "shape")
+        self.sp_axis, self.tp_axis = sp_axis, tp_axis
+        self.sp_factor = device.shape[sp_axis] if self.is_mesh else 1
+        self.tp_factor = device.shape[tp_axis] if self.is_mesh else 1
+
         self.wkv = self._to_tt_linear_weight(kv_proj_weight)
         self.wgate = self._to_tt_linear_weight(gate_proj_weight)
         self.position_bias = self._from_torch(position_bias.detach().reshape(1, 1, self.compress_rate, self.head_dim))
         self.kv_norm_weight = self._from_torch(kv_norm_weight.detach().reshape(1, 1, 1, self.head_dim))
-        self.trans_mat = ttnn.from_torch(
-            get_rot_transformation_mat(),
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=dtype,
-            memory_config=memory_config,
-        )
+        self.trans_mat = self._from_torch(get_rot_transformation_mat())
 
     @classmethod
     def from_reference(cls, device, reference, config, **kwargs) -> "TtHCACompressor":
@@ -196,6 +219,10 @@ class TtHCA(_TtHCABase):
         sliding_window: int,
         o_groups: int,
         rms_norm_eps: float = 1e-6,
+        sp_axis: int = 0,
+        tp_axis: int = 1,
+        topology=ttnn.Topology.Linear,
+        ccl_num_links: int | None = None,
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     ):
@@ -211,12 +238,23 @@ class TtHCA(_TtHCABase):
         self.rms_norm_eps = float(rms_norm_eps)
         self.compressor = compressor
 
+        self.is_mesh = hasattr(device, "shape")
+        self.sp_axis, self.tp_axis = sp_axis, tp_axis
+        self.sp_factor = device.shape[sp_axis] if self.is_mesh else 1
+        self.tp_factor = device.shape[tp_axis] if self.is_mesh else 1
+        self.tp_ccl_topology = topology
+        self.tt_ccl = get_tt_ccl(device) if (self.is_mesh and self.tp_factor > 1) else None
+        self.ccl_num_links = (2 if is_blackhole() else 1) if ccl_num_links is None else ccl_num_links
+
         # sink pre-divided by scale: SDPA scales BOTH QK and the sink by `scale` internally,
         # but the reference scales only QK -> divide the sink so the kernel's ×scale cancels.
         self.sinks_sdpa = self._from_torch(sinks.detach().reshape(1, self.num_heads, 1, 1) / self.scaling)
 
-        self.wq_a = self._to_tt_linear_weight(q_a_proj_weight)
-        self.wq_b = self._to_tt_linear_weight(q_b_proj_weight)
+        # q_a_proj: TP-shard the contraction (hidden) so each chip matmuls its hidden shard to a
+        # partial q_lora (all-reduced in _q_stem). q_b_proj: TP-shard the output (heads) so each
+        # chip owns num_heads/tp heads.
+        self.wq_a = self._to_tt_linear_weight(q_a_proj_weight, tp_shard_dim=2)
+        self.wq_b = self._to_tt_linear_weight(q_b_proj_weight, tp_shard_dim=3)
         self.q_a_norm_weight = self._from_torch(q_a_norm_weight.detach().reshape(1, 1, 1, -1))
         self.q_b_norm_weight = self._from_torch(torch.ones(1, 1, 1, self.head_dim))
         self.wkv = self._to_tt_linear_weight(kv_proj_weight)
@@ -230,13 +268,7 @@ class TtHCA(_TtHCABase):
         self.wo_a = [self._to_tt_linear_weight(o_a_grouped[g]) for g in range(self.o_groups)]
         self.wo_b = self._to_tt_linear_weight(o_b_proj_weight)
 
-        self.trans_mat = ttnn.from_torch(
-            get_rot_transformation_mat(),
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=dtype,
-            memory_config=memory_config,
-        )
+        self.trans_mat = self._from_torch(get_rot_transformation_mat())
 
     @classmethod
     def from_reference(cls, device, reference, config, **kwargs) -> "TtHCA":
@@ -263,24 +295,52 @@ class TtHCA(_TtHCABase):
         )
 
     def _q_stem(self, hidden_states, position_ids: torch.Tensor):
-        """Query path (reference L817-820). ``hidden_states``: TTNN [B, 1, S, hidden];
-        ``position_ids``: torch [B, S]. Returns ``q`` TTNN [B, num_heads, S, head_dim]."""
+        """Query path (reference L817-820). ``hidden_states``: TTNN [B, 1, S/sp, hidden/tp];
+        ``position_ids``: torch [B, S] (full). Returns ``q`` TTNN [B, num_heads/tp, S/sp, head_dim]."""
         input_shape = tuple(hidden_states.shape)
         if len(input_shape) != 4 or input_shape[1] != 1:
             raise ValueError(f"Expected hidden_states shape [B, 1, S, hidden], got {input_shape}")
         batch, seq_len = input_shape[0], input_shape[2]
+        num_heads_local = self.num_heads // self.tp_factor
 
         q = ttnn.linear(hidden_states, self.wq_a, memory_config=self.memory_config)
+
+        # q_a_proj is contraction(row)-parallel: hidden is TP-sharded on columns and wq_a on the
+        # contraction, so each chip holds a full-shape but partial-sum q_lora -> TP all-reduce
+        # (reduce_scatter + all_gather) rebuilds the full q_lora latent, replicated across TP.
+        if self.tp_factor > 1:
+            q = ttnn.experimental.reduce_scatter_minimal_async(
+                q,
+                persistent_output_buffers=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.tp_ccl_topology,
+                cluster_axis=self.tp_axis,
+            )
+            q = ttnn.experimental.all_gather_async(
+                q,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.tp_ccl_topology,
+                cluster_axis=self.tp_axis,
+            )
+
         q = ttnn.rms_norm(q, weight=self.q_a_norm_weight, epsilon=self.rms_norm_eps)
         q = ttnn.linear(q, self.wq_b, memory_config=self.memory_config)
 
-        q = ttnn.reshape(q, [batch, seq_len, self.num_heads, self.head_dim])
+        q = ttnn.reshape(q, [batch, seq_len, num_heads_local, self.head_dim])
         q = ttnn.permute(q, (0, 2, 1, 3))
         q = ttnn.rms_norm(q, weight=self.q_b_norm_weight, epsilon=self.rms_norm_eps)
 
         nope_dim = self.head_dim - self.rope_head_dim
-        nope = ttnn.slice(q, [0, 0, 0, 0], [batch, self.num_heads, seq_len, nope_dim])
-        rope = ttnn.slice(q, [0, 0, 0, nope_dim], [batch, self.num_heads, seq_len, self.head_dim])
+        nope = ttnn.slice(q, [0, 0, 0, 0], [batch, num_heads_local, seq_len, nope_dim])
+        rope = ttnn.slice(q, [0, 0, 0, nope_dim], [batch, num_heads_local, seq_len, self.head_dim])
         cos, sin = self._cos_sin(position_ids)
         rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
         return ttnn.concat([nope, rope], dim=-1)
