@@ -134,6 +134,8 @@ def run_strided_all_gather_minimal_matmul_impl(
         activation_fn = None
         if activation == "gelu":
             activation_fn = (ttnn.UnaryOpType.GELU, False)
+        elif activation == "gelu_tanh":
+            activation_fn = ttnn.UnaryOpType.GELU_TANH
         else:
             assert activation is None, f"Unsupported activation: {activation}"
 
@@ -213,6 +215,11 @@ def run_strided_all_gather_minimal_matmul_impl(
             matmul_output = torch.matmul(ag_output_tensor_goldens_list[i], weight_input)
         if use_ternary:
             matmul_output = ternary_a_input + ternary_scalar * matmul_output * ternary_b_input
+        # fused_activation is applied last (mutually exclusive with ternary; see the op's validate).
+        if activation == "gelu":
+            matmul_output = torch.nn.functional.gelu(matmul_output)
+        elif activation == "gelu_tanh":
+            matmul_output = torch.nn.functional.gelu(matmul_output, approximate="tanh")
         torch_matmul_output_list.append(matmul_output)
 
     ### Create persistent output buffers
