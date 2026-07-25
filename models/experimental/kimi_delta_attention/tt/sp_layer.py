@@ -27,9 +27,15 @@ _TP_SIZE = 4
 
 
 def _socket_config(mesh_shape: ttnn.MeshShape) -> ttnn.SocketConfig:
-    """Create four rank-aligned fabric links between two TP submeshes."""
-    sender_cores = [ttnn.CoreCoord(x, 0) for x in range(_TP_SIZE)]
-    receiver_cores = [ttnn.CoreCoord(x, 1) for x in range(_TP_SIZE)]
+    """Create the two physical fabric links available per LoudBox device.
+
+    A socket connection is instantiated for every matching TP rank below.  On
+    Blackhole LoudBox each rank has two fabric links, so using two worker-core
+    pairs saturates that available path; requesting one pair per TP rank would
+    incorrectly ask each device for four links.
+    """
+    sender_cores = [ttnn.CoreCoord(x, 0) for x in range(2)]
+    receiver_cores = [ttnn.CoreCoord(x, 1) for x in range(2)]
     connections = [
         ttnn.SocketConnection(ttnn.MeshCoreCoord(coord, sender), ttnn.MeshCoreCoord(coord, receiver))
         for coord in ttnn.MeshCoordinateRange(mesh_shape)
