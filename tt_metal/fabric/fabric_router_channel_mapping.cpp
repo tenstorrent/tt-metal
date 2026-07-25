@@ -114,7 +114,10 @@ void FabricRouterChannelMapping::initialize_vc1_mappings() {
             // Mesh without Z: 3 sender channels (3 mesh directions only)
             uint32_t mesh_vc1_sender_count = has_z_on_device_ ? 4 : 3;
 
-            uint32_t mesh_vc1_base_sender_channel = builder_config::num_sender_channels_2d_mesh;
+            // VC1 senders occupy the flat index space immediately after VC0's. Derive the base from the
+            // actual VC0 count rather than the 2D mesh constant: the two agree today, but a wider VC0
+            // would otherwise alias VC1 sender 0 onto VC0's last channel.
+            uint32_t mesh_vc1_base_sender_channel = get_num_sender_channels_for_vc(0);
             constexpr uint32_t mesh_vc1_receiver_channel = 1;
 
             // Create sender channels (3 or 4 depending on router type)
@@ -155,11 +158,12 @@ void FabricRouterChannelMapping::initialize_vc2_mappings() {
     } else {
         // Mesh router VC2: 1 sender + 1 receiver
         if (intermesh_vc_config_ && intermesh_vc_config_->requires_vc2) {
-            // VC2 sender at last flat index (after VC0 + VC1 senders)
-            // Use actual VC1 sender count (0 if VC1 not active, 3 or 4 if active)
+            // VC2 sender at last flat index (after VC0 + VC1 senders).
+            // Both counts are the actual per-router values, not constants: VC0 is 4 or 5, and VC1 is 0
+            // when inactive, else 3 or 4.
+            uint32_t actual_vc0_sender_count = get_num_sender_channels_for_vc(0);
             uint32_t actual_vc1_sender_count = get_num_sender_channels_for_vc(1);
-            uint32_t mesh_vc2_base_sender_channel =
-                builder_config::num_sender_channels_2d_mesh + actual_vc1_sender_count;
+            uint32_t mesh_vc2_base_sender_channel = actual_vc0_sender_count + actual_vc1_sender_count;
 
             sender_channel_map_[LogicalSenderChannelKey{2, 0}] =
                 InternalSenderChannelMapping{BuilderType::ERISC, mesh_vc2_base_sender_channel};
