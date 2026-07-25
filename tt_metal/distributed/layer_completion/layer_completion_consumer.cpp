@@ -5,7 +5,8 @@
 #include <internal/disaggregation/layer_completion_consumer.hpp>
 
 #include <chrono>
-#include <cstdio>
+
+#include <tt-logger/tt-logger.hpp>
 
 #include <internal/service/inter_process_counter_channel.hpp>
 
@@ -46,11 +47,7 @@ void LayerCompletionConsumer::run() {
         // Only this thread writes total_, so a plain accumulate suffices (fetch_add(0) is a no-op).
         const uint64_t cur = total_.fetch_add(n, std::memory_order_relaxed) + n;
         if (cur - logged >= log_step_) {
-            std::fprintf(
-                stderr,
-                "[completion-check] C++ consumer drained %llu/%llu completions\n",
-                static_cast<unsigned long long>(cur),
-                static_cast<unsigned long long>(expected_));
+            log_error(LogMetal, "[completion-check] C++ consumer drained {}/{} completions", cur, expected_);
             logged = cur;
         }
         if (cur >= expected_) {
@@ -60,11 +57,7 @@ void LayerCompletionConsumer::run() {
     }
     const uint64_t fin = total_.load(std::memory_order_relaxed);
     if (fin >= expected_) {
-        std::fprintf(
-            stderr,
-            "[completion-check] PASS: C++ consumer drained %llu == %llu (expected)\n",
-            static_cast<unsigned long long>(fin),
-            static_cast<unsigned long long>(expected_));
+        log_error(LogMetal, "[completion-check] PASS: C++ consumer drained {} == {} (expected)", fin, expected_);
     }
 }
 
