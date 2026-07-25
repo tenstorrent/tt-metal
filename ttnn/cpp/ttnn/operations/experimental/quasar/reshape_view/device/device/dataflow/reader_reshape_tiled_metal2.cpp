@@ -52,13 +52,15 @@ void kernel_main() {
         const uint32_t map_l1_addr = mapping_cb.get_write_ptr();
         enhanced_noc_async_read<Max_Map_Size_Bytes, true>(noc, map_noc_addr, map_l1_addr, Max_Map_Size_Bytes);
         noc.async_read_barrier();
-        // [#48552 DEBUG] async_read_barrier is a NO-OP on this emulator (v2 ncrisc_noc_reads_flushed =
-        // scmdbuf_tr_ack()==0, always true), so the map DMA may not have landed before we parse it. Busy-wait
-        // to let it land: if seg0_in_pg now VARIES per output page (and PCC recovers), the no-op barrier is the
-        // confirmed root cause. Perf-irrelevant diagnostic; remove for the real fix.
-        for (volatile uint32_t d = 0; d < 300000; ++d) {
+        // [#48552 DEBUG] The 300k-nop delay ALONE did NOT de-stale the map -> not pure DMA latency. Next
+        // hypothesis: the no-op barrier's invalidate_l1_cache() runs BEFORE the DMA lands, so the RISC keeps a
+        // stale cached L1 line. Small delay to let the DMA land, THEN invalidate the cache right before we read.
+        // If seg0_in_pg now VARIES per page -> stale-cache-after-late-landing is the cause. If still stale ->
+        // the repeated read to the same L1 slot (281088) genuinely isn't delivering.
+        for (volatile uint32_t d = 0; d < 50000; ++d) {
             asm volatile("nop");
         }
+        invalidate_l1_cache();
         // [#48552 DEBUG] map_noc lo/hi + l1 slot + first segment's input page as read from L1 -> is the map
         // read advancing per output page, and does the L1 slot actually hold this page's map?
         {
