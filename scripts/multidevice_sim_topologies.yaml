@@ -117,3 +117,19 @@ topologies:
     applies_to_ops: [all_gather]
     required: true        # VALIDATED 2026-06-25: test_all_gather_async gather_dim_0/fabric_linear PASS on the WH all-MMIO sim
     extra_env: {}
+
+  # ── all_reduce (CCL + COMPUTE probe) — same WH all-MMIO (1,8) line as all_gather ─────
+  # all_reduce sums each device's shard across the line (a collective WITH a reduction),
+  # so it exercises the compute helpers on top of the fabric dataflow helper. Reuses the
+  # WH all-MMIO sim + (1,8) mesh-graph descriptor that all_gather is validated on.
+  - name: wh_t3k_allmmio_all_reduce
+    arch: wormhole_b0
+    sim_so: "{sim_wh_so}"
+    cluster_desc: "{craqsim_data}/wh/wormhole_t3k_all_mmio.yaml"
+    mesh_graph_desc: "{repo}/tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto"
+    mesh_shape: [1, 8]
+    fabric_config: FABRIC_1D
+    applies_to_ops: [all_reduce]
+    grade_primary: true
+    required: false       # probe op (CCL+compute validation), not a gating topology
+    extra_env: {}
