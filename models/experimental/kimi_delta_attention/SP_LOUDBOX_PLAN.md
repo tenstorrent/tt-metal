@@ -225,6 +225,15 @@ state-transfer protocol and measure its components.
   The failure also persists with one or two links, one/two/four workers per
   direction, and one/two channel buffers; those scheduling settings are not a
   workaround.
+* The direct TP=4 output matmul has no safe grid-only win.  An explicit 10x8
+  prefill grid passed the full target-shape SP2xTP4 PCC suite, but raised its
+  output matmul from about **205 us** to **223 us** and the three-replay
+  T=5120 child-trace span to about **2.70 ms** (report
+  `2026_07_25_22_01_05`), versus the retained four-worker baseline's
+  2.677 ms.  The probe was removed.  The attempted configuration also exposed
+  that `create_prefill_matmul_program_config` requires an inner-K block that
+  divides the 32 K tiles exactly; do not use a 10-column grid through that
+  helper without correcting that generic constraint separately.
 
 ## Milestones
 
