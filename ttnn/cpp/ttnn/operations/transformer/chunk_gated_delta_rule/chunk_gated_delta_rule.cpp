@@ -963,7 +963,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_group_scan(
     const ttnn::Tensor& group_initial_states,
     uint32_t groups_per_head,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    bool output_final_state) {
     TT_FATAL(grouped_prep.size() == 7, "chunk_kda_group_scan expects seven preparation tensors");
     const auto& shape = grouped_prep[0].logical_shape();
     TT_FATAL(
@@ -997,13 +998,19 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_group_scan(
         grouped_prep[6],
         group_initial_states,
         chunk_size,
-        true,
+        output_final_state,
         out_mem,
         kernel_cfg,
         true);
     auto output =
         ttnn::reshape(scan[0], ttnn::Shape({batch_heads, groups_per_head, group_chunks, chunk_size, value_dim}));
     output = ttnn::reshape(output, ttnn::Shape({batch_heads, groups_per_head * group_chunks * chunk_size, value_dim}));
+    if (!output_final_state) {
+        // The caller already owns the affine-prefix terminal carry.  The
+        // scan's state buffer is deliberately unwritten in this mode, so do
+        // not enqueue a slice that would read it before returning it unused.
+        return {output, scan[1]};
+    }
     auto all_final_states = ttnn::reshape(scan[1], ttnn::Shape({batch_heads, groups_per_head, key_dim, value_dim}));
     auto final_state = slice_group_axis(all_final_states, groups_per_head - 1, groups_per_head, out_mem);
     final_state = ttnn::reshape(final_state, ttnn::Shape({batch_heads, key_dim, value_dim}));

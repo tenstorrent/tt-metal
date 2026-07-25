@@ -20,10 +20,11 @@ void kernel_main() {
     constexpr uint32_t initial_state_mode = get_compile_time_arg_val(3);
     constexpr uint32_t Vt_full = get_compile_time_arg_val(4);  // full V (tiles) for row stride
     constexpr bool state_only = get_compile_time_arg_val(5) == 1;
+    constexpr bool output_final_state = get_compile_time_arg_val(7) == 1;
     static_assert(Ct == 1, "fused scan-to-RMS handoff requires 32-token chunks");
     (void)initial_state_mode;
 
-    constexpr auto fs_a = TensorAccessorArgs<7>();
+    constexpr auto fs_a = TensorAccessorArgs<8>();
 
     const uint32_t h = get_arg_val<uint32_t>(0);
     const uint32_t vb = get_arg_val<uint32_t>(1);
@@ -66,14 +67,16 @@ void kernel_main() {
     // final_state [BH, K, V]: same V-block slicing (row stride Vt_full over K rows).
     CircularBuffer cbfs(cb_final);
     cbfs.wait_front(kv);
-    const uint32_t row_base = h * Kt * Vt_full;
-    auto src = use<CircularBuffer::AddrSelector::READ_PTR>(cbfs);
-    for (uint32_t r = 0; r < Kt; r++) {
-        const uint32_t dst = row_base + r * Vt_full + vb * Vt;
-        for (uint32_t vt = 0; vt < Vt; vt++) {
-            noc.async_write(src, fs_acc, tb_fs, {.offset_bytes = (r * Vt + vt) * tb_fs}, {.page_id = dst + vt});
+    if constexpr (output_final_state) {
+        const uint32_t row_base = h * Kt * Vt_full;
+        auto src = use<CircularBuffer::AddrSelector::READ_PTR>(cbfs);
+        for (uint32_t r = 0; r < Kt; r++) {
+            const uint32_t dst = row_base + r * Vt_full + vb * Vt;
+            for (uint32_t vt = 0; vt < Vt; vt++) {
+                noc.async_write(src, fs_acc, tb_fs, {.offset_bytes = (r * Vt + vt) * tb_fs}, {.page_id = dst + vt});
+            }
         }
+        noc.async_write_barrier();
     }
-    noc.async_write_barrier();
     cbfs.pop_front(kv);
 }

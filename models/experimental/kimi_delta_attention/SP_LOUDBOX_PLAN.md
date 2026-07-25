@@ -126,6 +126,24 @@ state-transfer protocol and measure its components.
   TP=4 control and 1.303x the local-work control. It now misses the actionable
   1.339 ms production-rank budget by only **0.057 ms**; the next target is the
   remaining final-scan/epilogue critical path.
+* Skipping the now-redundant first grouped scan's final-state write is correct
+  but exposes no measurable critical-path gain: T=1280 measured **1.400 ms**
+  (report `2026_07_25_20_00_07`).  The write was already hidden by scan and
+  epilogue work.  The API retains this mode to avoid consuming the unwritten
+  state buffer.
+* Socket page striping over two worker/link pairs is correct at both T=1280
+  and T=5120.  With `KDA_SP_SOCKET_LANES=2` and 512 KiB FIFO *per lane*, the
+  initial T=1280 trace improved to **1.362 ms** (report
+  `2026_07_25_20_05_26`), and avoiding a subsequent unused slice/read of the
+  intentionally unwritten first scan state improves it again to **1.343 ms**
+  (report `2026_07_25_20_16_29`). T=5120 improves from 3.317 ms to **3.219 ms** (report
+  `2026_07_25_20_13_42`).  This is an opt-in experiment because the socket
+  runtime warns that multiple sender cores may have fabric limitations.
+  It remains 0.004 ms over the T=1280 budget and 0.261 ms over the T=5120
+  head-to-head gate.
+* A TP=4 output all-reduce Ring-topology A/B deadlocked under the guarded LB
+  test and was removed.  Keep the validated Linear collective; do not retry
+  the ring variant without a CCL protocol investigation.
 
 ## Milestones
 
@@ -204,7 +222,7 @@ read from the resulting report.
 ```bash
 # Functional target gate: output, recurrent carry, short-conv carry, and the
 # first output token after the SP boundary must all reach PCC >= 0.98.
-KDA_SP_SPLIT_AFFINE=1 KDA_SP_TARGET_SHAPE=1 scripts/run_safe_pytest.sh -svv models/experimental/kimi_delta_attention/tests/test_sp2_tp4.py
+KDA_SP_SPLIT_AFFINE=1 KDA_SP_SOCKET_LANES=2 KDA_SP_SOCKET_FIFO_BYTES=524288 KDA_SP_TARGET_SHAPE=1 scripts/run_safe_pytest.sh -svv models/experimental/kimi_delta_attention/tests/test_sp2_tp4.py
 
 # SP=8/TP=1 protocol probe: seven real KDA boundary handoffs at global T=5120.
 KDA_SP8_TARGET_SHAPE=1 KDA_SP8_TEST_SEQ=5120 scripts/run_safe_pytest.sh -svv models/experimental/kimi_delta_attention/tests/test_sp8_tp1.py
@@ -214,8 +232,8 @@ PERF_SEQ=640  PERF_TRACE=1 scripts/run_safe_pytest.sh --profile -svv models/expe
 PERF_SEQ=1280 PERF_TRACE=1 scripts/run_safe_pytest.sh --profile -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_tp4_layer_perf.py
 
 # Primary SP experiment and the direct TP=8 topology comparison at global T=5120.
-KDA_SP_SPLIT_AFFINE=1 PERF_SEQ=1280 PERF_CHILD_TRACE=1 scripts/run_safe_pytest.sh --profile -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_sp2_tp4_layer_perf.py
-KDA_SP_SPLIT_AFFINE=1 PERF_SEQ=5120 PERF_CHILD_TRACE=1 scripts/run_safe_pytest.sh --profile -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_sp2_tp4_layer_perf.py
+KDA_SP_SPLIT_AFFINE=1 KDA_SP_SOCKET_LANES=2 KDA_SP_SOCKET_FIFO_BYTES=524288 PERF_SEQ=1280 PERF_CHILD_TRACE=1 scripts/run_safe_pytest.sh --profile -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_sp2_tp4_layer_perf.py
+KDA_SP_SPLIT_AFFINE=1 KDA_SP_SOCKET_LANES=2 KDA_SP_SOCKET_FIFO_BYTES=524288 PERF_SEQ=5120 PERF_CHILD_TRACE=1 scripts/run_safe_pytest.sh --profile -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_sp2_tp4_layer_perf.py
 PERF_SEQ=5120 PERF_TRACE=1 scripts/run_safe_pytest.sh --profile -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py
 ```
 

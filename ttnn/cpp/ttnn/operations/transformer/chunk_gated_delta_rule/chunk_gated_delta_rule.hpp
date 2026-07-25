@@ -114,13 +114,15 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_group_summary(
 /**
  * Run the final grouped output scan from already-computed per-group entry
  * states.  Returns head-major output [BH,T,V] and final state [BH,K,V].
+ * Set output_final_state=false when the terminal carry is already available.
  */
 std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_group_scan(
     const std::vector<ttnn::Tensor>& grouped_prep,
     const ttnn::Tensor& group_initial_states,
     uint32_t groups_per_head,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    bool output_final_state = true);
 
 /**
  * Build independent eight-chunk KDA affine transforms without materializing

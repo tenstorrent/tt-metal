@@ -517,7 +517,14 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     // ct arg 2 = per-core Vt(=Vtl); arg 4 = Vt_full (full V in tiles) for the readers'/writer's
     // V-slice row stride. Compute reads only args 0..2 (Ct, Kt, Vt) so the extra arg is harmless.
     const std::vector<uint32_t> ct_args = {
-        Ct, Kt, Vt, initial_state_mode, Vt_full, attrs.state_only ? 1u : 0u, attrs.summary_pair ? 1u : 0u};
+        Ct,
+        Kt,
+        Vt,
+        initial_state_mode,
+        Vt_full,
+        attrs.state_only ? 1u : 0u,
+        attrs.summary_pair ? 1u : 0u,
+        attrs.output_final_state ? 1u : 0u};
 
     std::vector<uint32_t> reader_ct = ct_args;
     TensorAccessorArgs(*in.v_beta.buffer()).append_to(reader_ct);

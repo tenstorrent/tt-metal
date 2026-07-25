@@ -142,7 +142,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("groups_per_head"),
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("output_final_state") = true);
 
     ttnn::bind_function<"chunk_kda_affine_summary", "ttnn.transformer.">(
         mod,

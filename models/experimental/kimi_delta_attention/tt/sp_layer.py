@@ -33,22 +33,28 @@ def _socket_config(mesh_shape: ttnn.MeshShape) -> ttnn.SocketConfig:
     """Create one rank-aligned fabric lane per LoudBox device.
 
     This is the established 1x8-to-two-1x4 socket shape used by the CCL
-    send/receive test.  A single worker-core pair avoids the runtime warning
-    and fabric-resource ambiguity associated with multiple sender cores on a
-    device.  Striping the carry over the second physical link is deliberately
-    deferred until the single-lane functional path is measured.
+    send/receive test.  One worker-core pair is the conservative default;
+    a two-lane opt-in is available to evaluate fabric striping despite the
+    runtime's experimental multi-sender warning.
     """
-    sender_cores = [ttnn.CoreCoord(0, 0)]
-    receiver_cores = [ttnn.CoreCoord(0, 1)]
+    # send_async/recv_async stripe tensor pages over the socket's worker pairs,
+    # and map each pair onto a distinct fabric link.  Keep one lane as the
+    # conservative default; the two-lane variant is the relevant LoudBox
+    # boundary-transport experiment for a 512 KiB recurrent shard.
+    lanes = int(os.getenv("KDA_SP_SOCKET_LANES", "1"))
+    if lanes not in (1, 2):
+        raise ValueError(f"KDA_SP_SOCKET_LANES must be 1 or 2, got {lanes}")
+    sender_cores = [ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)][:lanes]
+    receiver_cores = [ttnn.CoreCoord(0, 1), ttnn.CoreCoord(1, 1)][:lanes]
     connections = [
         ttnn.SocketConnection(ttnn.MeshCoreCoord(coord, sender), ttnn.MeshCoreCoord(coord, receiver))
         for coord in ttnn.MeshCoordinateRange(mesh_shape)
         for sender, receiver in zip(sender_cores, receiver_cores, strict=True)
     ]
-    # A full per-rank FP32 recurrent state is 512 KiB.  Matching the socket
-    # FIFO to that payload eliminates the multi-round-trip backpressure of
-    # the old 10 KiB default; callers can still sweep it through the env var.
-    fifo_size = int(os.getenv("KDA_SP_SOCKET_FIFO_BYTES", str(512 * 1024)))
+    # A full per-rank FP32 recurrent state is 512 KiB.  Match the aggregate
+    # FIFO to that payload so each striped lane can make one uninterrupted
+    # pass, without multiplying socket memory by the number of lanes.
+    fifo_size = int(os.getenv("KDA_SP_SOCKET_FIFO_BYTES", str((512 * 1024) // lanes)))
     if fifo_size <= 0 or fifo_size % 1024:
         raise ValueError(f"KDA_SP_SOCKET_FIFO_BYTES must be a positive KiB multiple, got {fifo_size}")
     return ttnn.SocketConfig(connections, ttnn.SocketMemoryConfig(ttnn.BufferType.DRAM, fifo_size))
@@ -222,9 +228,10 @@ class SP2TP4KimiDeltaAttention:
         ttnn.experimental.recv_async(second.recurrent_state, self._recv_socket)
         second_entries = second.group_entry_states(second_a, second_b, groups)
 
-        first_raw_output, first_state = first.group_scan(first_prepared, first_grouped, first_entries)
+        first_raw_output, _ = first.group_scan(first_prepared, first_grouped, first_entries, output_final_state=False)
         second_raw_output, second_state = second.group_scan(second_prepared, second_grouped, second_entries)
-        first_output = first._finish_prepared(first_prepared, first_raw_output, first_state, fuse_scan_rms=False)
+        assert second_state is not None
+        first_output = first._finish_prepared(first_prepared, first_raw_output, first_end_state, fuse_scan_rms=False)
         second_output = second._finish_prepared(second_prepared, second_raw_output, second_state, fuse_scan_rms=False)
         return first_output, second_output
 

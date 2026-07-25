@@ -524,8 +524,13 @@ class KimiDeltaAttention:
         return ttnn.reshape(end, (batch, heads, key_dim, value_dim))
 
     def group_scan(
-        self, prepared: PreparedKDA, grouped_prep: list[ttnn.Tensor], entries: ttnn.Tensor
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        self,
+        prepared: PreparedKDA,
+        grouped_prep: list[ttnn.Tensor],
+        entries: ttnn.Tensor,
+        *,
+        output_final_state: bool = True,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
         """Run the grouped output scan from precomputed entry states."""
         batch_heads = prepared.batch * self.config.num_heads
         groups = grouped_prep[0].shape[0] // batch_heads
@@ -535,7 +540,10 @@ class KimiDeltaAttention:
             groups,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_config,
+            output_final_state=output_final_state,
         )
+        if not output_final_state:
+            return output, None
         state = ttnn.reshape(
             state,
             (prepared.batch, self.config.num_heads, self.config.head_k_dim, self.config.head_v_dim),
