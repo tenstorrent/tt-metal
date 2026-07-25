@@ -190,6 +190,15 @@ state-transfer protocol and measure its components.
   `2026_07_25_21_11_53`), one link 3.581 ms (report
   `2026_07_25_21_13_35`), and three workers 3.207 ms (report
   `2026_07_25_21_15_17`).
+* Extending that safe output-CCL sweep did not find a fifth-worker or deeper
+  channel-pipeline win.  Five workers completed ten traced T=5120 replays
+  (report `2026_07_25_21_23_07`) but its per-device replay-span median was
+  2.681 ms versus 2.677 ms for the four-worker report.  Three buffers per
+  channel also passed the full SP2×TP4 PCC suite, but increased the output-RS
+  device median from 442.8 to 449.2 us and the same replay span to 2.683 ms
+  (report `2026_07_25_21_26_52`).  The implementation remains at four workers
+  and two buffers; do not add a buffer-depth runtime knob without a measured
+  long-span gain.
 * The fused TP4 `matmul_reduce_scatter_async` probe also times out when using
   the standalone fused-op `(8,6)` matmul grid and reduce-scatter offset
   `(0,6)` (guarded T=1280 test on 2026-07-25).  This rules out the original
