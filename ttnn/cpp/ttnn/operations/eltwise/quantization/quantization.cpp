@@ -372,6 +372,31 @@ Tensor requantize(
     const Tensor* out_scale_p = std::get_if<Tensor>(&out_scale);
     const Tensor* out_zero_point_p = std::get_if<Tensor>(&out_zero_point);
 
+
+    // Fast path: per-channel Tensor scales + scalar int32 zero-points -> single fused binary_ng REQUANT
+    const bool per_channel_scales_scalar_zp =
+        has_axis && in_scale_p && out_scale_p && !in_zero_point_p && !out_zero_point_p;
+    if (per_channel_scales_scalar_zp) {
+        const int32_t axis_v = axis.value();
+        const ttnn::Shape& input_shape = input_tensor.logical_shape();
+        const int32_t rank = input_shape.rank();
+        check_scale_tensor_args(input_tensor, in_scale_p, axis_v, rank, false);
+        check_scale_tensor_args(input_tensor, out_scale_p, axis_v, rank, false);
+        const float in_zp_f = static_cast<float>(std::get<int32_t>(in_zero_point));
+        const float out_zp_f = static_cast<float>(std::get<int32_t>(out_zero_point));
+        const Tensor in_scale_f32 = ttnn::typecast(*in_scale_p, DataType::FLOAT32);
+        const Tensor out_scale_f32 = ttnn::typecast(*out_scale_p, DataType::FLOAT32);
+        const Tensor scale_recip = ttnn::divide(
+            in_scale_f32, out_scale_f32, std::nullopt, std::nullopt, std::nullopt, none, none, none);
+        const float zero_point = out_zp_f - (in_zp_f * 1.0f);
+        const std::array post_activation{operations::unary::EltwiseUnaryWithParam{
+            operations::unary::UnaryOpType::ZERO_POINT, zero_point}};
+        return ttnn::prim::binary_ng(
+            input_tensor, scale_recip,
+            operations::binary::BinaryOpType::REQUANT,
+            c_dtype, memory_config, optional_output_tensor,
+            /*fast_and_approximate_mode*/ false, none, none, post_activation, std::nullopt);
+    }
     // Use the fused per-channel tensor path when axis is provided AND all params are tensors.
     // Mixed scalar/tensor cases will fall through to composite fallback.
     // NOTE: Benchmarks show this path is not faster; it's selected
