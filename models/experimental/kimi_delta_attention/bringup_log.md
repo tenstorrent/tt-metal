@@ -1917,3 +1917,16 @@
 - Independent pair 2: candidate CSV `generated/profiler/reports/2026_07_25_02_04_24/ops_perf_results_2026_07_25_02_04_24.csv` (SHA-256 `9f16fa8915704707bc36b30867697acc59097ae6a5c07fab40ffab7fed209037`) measured `3227.923 us`; control CSV `generated/profiler/reports/2026_07_25_02_05_38/ops_perf_results_2026_07_25_02_05_38.csv` (SHA-256 `5fb75490d37c05b34da46ebe071f0d3f55d3beeb5ac77adf4ab502027dd3dfba`) measured `3209.753 us`.
 - Pooled result: 20 candidate replays had median/mean `3220.836/3222.700 us`; 20 control replays had `3216.827/3215.411 us`. The pooled median regresses `4.009 us` (`0.125%`). Local fusion expands grouped scan from about `111.3 us` to `153.3 us`; removing the standalone RMS does not produce a stable wall gain because that compute is moved onto the recurrence critical path.
 - Verdict: reject and fully restore source. Both available grouped RMS topologies are now measured and rejected; do not revisit without overlapping RMS on otherwise idle cores without reducing consumer parallelism.
+
+
+### 2026-07-25 02:14 UTC — Retain distributed-L1 group-entry states
+
+- Hypothesis: the prefix and grouped recurrence already use the same 80-core row-major ownership, so keeping the 80 FP32 `[128,128]` corrected entry states in distributed L1 should remove their 5 MiB DRAM write/read boundary without merging the two programs.
+- Implementation: `kda_affine_prefix` now emits its entry-state tensor to interleaved L1 by default; the existing grouped scan consumes it unchanged. `QWEN_KDA_PREFIX_DRAM=1` preserves the matched diagnostic control.
+- Host build: `./build_metal.sh --build-tests --build-type Release` -> PASS.
+- Correctness: promoted-default TP=8 T=5,120 passed at output/recurrent/convolution PCC `0.999958/0.999890/0.999997`.
+- Candidate: `QWEN_KDA_PREFIX_L1=1 PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 scripts/run_safe_pytest.sh --profile --run-all models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s` -> PASS. CSV `generated/profiler/reports/2026_07_25_02_09_42/ops_perf_results_2026_07_25_02_09_42.csv`, SHA-256 `3bd3b9409d4853a7a46942ec7be85aa1fe9b921e5ca4b539b9673eba922f8514`; median wall `3195.611 us`, prefix `129.276 us`, grouped scan `121.559 us`.
+- Matched DRAM control: identical command without the experiment -> PASS. CSV `generated/profiler/reports/2026_07_25_02_10_55/ops_perf_results_2026_07_25_02_10_55.csv`, SHA-256 `011ec4c83b83983c38fbec824ba979de6e2fdbae2e56e9bf4f6cb34c874d248c`; median wall `3211.482 us`, prefix `150.211 us`, grouped scan `111.439 us`.
+- Result: wall improved `3211.482 -> 3195.611 us`, saving `15.871 us` (`0.494%`). Prefix writes improve `20.935 us`; scan reads regress `10.120 us`, for a net measured recurrence-block gain of `10.815 us`; scheduling/overlap realizes a larger `15.871 us` wall gain.
+- Regression coverage: full directory -> `36 passed, 1 failed`; the only failure is the unchanged single-device Conv1d perf fixture whose `1,572,864 B` per-bank request exceeds `1,436,800 B` L1 capacity.
+- Verdict: retain and promote. A full same-program handoff is not justified yet; this low-risk storage change captures the measurable boundary reward while preserving both validated protocols.

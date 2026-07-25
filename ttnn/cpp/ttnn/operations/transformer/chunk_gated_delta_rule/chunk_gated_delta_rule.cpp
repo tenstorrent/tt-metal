@@ -650,7 +650,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
         auto summary_b = summaries[1];
         if (std::getenv("QWEN_KDA_GROUP_PREFIX") != nullptr || use_persistent_group_prefix) {
             TT_FATAL(s0.has_value(), "group-prefix scan requires initial state");
-            const auto prefix_mem = ttnn::DRAM_MEMORY_CONFIG;
+            const auto prefix_mem =
+                std::getenv("QWEN_KDA_PREFIX_DRAM") == nullptr ? ttnn::L1_MEMORY_CONFIG : ttnn::DRAM_MEMORY_CONFIG;
             if (use_persistent_group_prefix) {
                 auto group_initial_states =
                     ttnn::prim::kda_affine_prefix(summary_a, summary_b, *s0, groups_per_head, prefix_mem, kernel_cfg);
