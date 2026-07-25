@@ -53,6 +53,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/cluster.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/protected_ring_model.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder_impl.hpp"
 #include "tt_metal/fabric/serialization/router_port_directions.hpp"
@@ -3968,6 +3969,54 @@ std::vector<ChipId> ControlPlane::get_switch_mesh_device_ids() const {
 
 tt::tt_metal::AsicID ControlPlane::get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const {
     return topology_mapper_->get_asic_id_from_fabric_node_id(fabric_node_id);
+}
+
+// ============ Protected-ring predicates for express (Z) routing ============
+//
+// All derivation lives in ProtectedRingModel; these are thin forwarders that translate a
+// FabricNodeId into the logical Y row the model is indexed by. Ring identities and transition
+// policy stay inside the model, so FabricBuilder sees only the boolean answers.
+
+const ProtectedRingModel& ControlPlane::get_protected_ring_model(MeshId mesh_id) const {
+    const auto key = *mesh_id;
+    auto it = protected_ring_models_.find(key);
+    if (it == protected_ring_models_.end()) {
+        it = protected_ring_models_
+                 .emplace(
+                     key,
+                     std::make_unique<ProtectedRingModel>(
+                         ProtectedRingModel::derive_from_mesh_graph(this->get_mesh_graph(), mesh_id)))
+                 .first;
+    }
+    return *it->second;
+}
+
+bool ControlPlane::express_routing_enabled(MeshId mesh_id) const {
+    return this->get_protected_ring_model(mesh_id).express_enabled();
+}
+
+bool ControlPlane::has_protected_ring_in_axis_of(FabricNodeId node, RoutingDirection axis_direction) const {
+    const bool is_x = axis_direction == RoutingDirection::E || axis_direction == RoutingDirection::W;
+    const auto row = this->get_mesh_graph().chip_to_coordinate(node.mesh_id, node.chip_id)[0];
+    return this->get_protected_ring_model(node.mesh_id)
+        .has_protected_ring(row, is_x ? RoutingDimension::X : RoutingDimension::Y);
+}
+
+bool ControlPlane::is_protected_ring_edge(FabricNodeId local, RoutingDirection egress) const {
+    const auto row = this->get_mesh_graph().chip_to_coordinate(local.mesh_id, local.chip_id)[0];
+    return this->get_protected_ring_model(local.mesh_id).is_protected_ring_edge(row, egress);
+}
+
+bool ControlPlane::are_same_directed_ring_edges(
+    FabricNodeId local, RoutingDirection ingress, RoutingDirection egress) const {
+    const auto row = this->get_mesh_graph().chip_to_coordinate(local.mesh_id, local.chip_id)[0];
+    return this->get_protected_ring_model(local.mesh_id).are_same_directed_ring_edges(row, ingress, egress);
+}
+
+bool ControlPlane::continuation_allowed(
+    FabricNodeId local, RoutingDirection ingress, RoutingDirection egress) const {
+    const auto row = this->get_mesh_graph().chip_to_coordinate(local.mesh_id, local.chip_id)[0];
+    return this->get_protected_ring_model(local.mesh_id).continuation_allowed(row, ingress, egress);
 }
 
 ControlPlane::~ControlPlane() = default;

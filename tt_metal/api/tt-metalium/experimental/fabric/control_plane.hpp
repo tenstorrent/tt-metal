@@ -49,6 +49,7 @@ class PhysicalSystemDescriptor;
 namespace tt::tt_fabric {
 
 class TopologyMapper;
+class ProtectedRingModel;
 
 // TODO: remove this once UMD provides API for UBB ID and bus ID
 struct UbbId {
@@ -231,6 +232,34 @@ public:
     // from the usable count. Not intended as a query API. Set semantics: the latest call wins, so repeated
     // invocation during fabric re-init is idempotent (reserving 0 is a no-op).
     void reserve_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction, size_t num_reserved);
+
+    // --- Protected-ring predicates for express (Z) routing ---
+    //
+    // FabricBuilder consumes these to derive each wired producer's bubble-flow-control role. They
+    // deliberately expose only boolean answers: ring identities, ordered cycles, membership maps, and
+    // transition policy stay internal, so no consumer can grow a second routing contract from them.
+    // See GALAXY_BUILDER_ROUTING_CONFIG_CONTRACT.md section 4.2.
+
+    // True when this mesh has materialized express (Z) adjacencies. Derived from the neighbor graph,
+    // so it cannot disagree with it.
+    bool express_routing_enabled(MeshId mesh_id) const;
+
+    // Does this node sit on a protected ring in the axis that `axis_direction` belongs to
+    // (N/S/Z select Y, E/W select X)? A node that is a leaf in Y may still be on the X ring, so this
+    // is never a single per-chip bit.
+    bool has_protected_ring_in_axis_of(FabricNodeId node, RoutingDirection axis_direction) const;
+
+    // Is the directed edge leaving `local` through `egress` a cyclic resource of a protected ring?
+    bool is_protected_ring_edge(FabricNodeId local, RoutingDirection egress) const;
+
+    // Do the hop arriving over the link facing `ingress` and the hop leaving through `egress` belong
+    // to the same directed ring? True means same-ring transit, which needs only the transit guard.
+    bool are_same_directed_ring_edges(
+        FabricNodeId local, RoutingDirection ingress, RoutingDirection egress) const;
+
+    // Is a non-transit acquisition of the egress ring legal for this turn? Only meaningful once the
+    // egress is known protected and the turn is not same-ring transit.
+    bool continuation_allowed(FabricNodeId local, RoutingDirection ingress, RoutingDirection egress) const;
 
     std::set<std::pair<chan_id_t, eth_chan_directions>> get_active_fabric_eth_channels(
         FabricNodeId fabric_node_id) const;
@@ -545,6 +574,11 @@ private:
     // Cache for faster asic_id to fabric_node_id lookup
     // Valid for the lifetime of the physical_system_descriptor_; cleared when fabric context is reset
     mutable std::unordered_map<uint64_t, FabricNodeId> asic_id_to_fabric_node_cache_;
+
+    // Protected-ring model per mesh, derived from the logical topology on first query so that no
+    // setup cost is paid by configurations that never ask. Keyed by the raw mesh id.
+    mutable std::unordered_map<uint32_t, std::unique_ptr<ProtectedRingModel>> protected_ring_models_;
+    const ProtectedRingModel& get_protected_ring_model(MeshId mesh_id) const;
 
     // This method performs validation through assertions and exceptions.
     void validate_torus_setup(tt::tt_fabric::FabricConfig fabric_config) const;
