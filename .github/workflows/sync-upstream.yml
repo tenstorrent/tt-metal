@@ -1,0 +1,122 @@
+name: sync-upstream-ttmetal
+
+# Device-free automatic sync to latest tenstorrent/tt-metal.
+# Gates: merge -> build -> `import ttnn`. These need NO Tenstorrent hardware, so this runs
+# entirely on GitHub-hosted (cloud) runners. On green it opens a PR; on any failure it files
+# an issue. NOTE: PCC (numeric correctness) is NOT checked here -- that requires a TT device
+# and must be run on a self-hosted TT runner (or manually) before trusting the numbers.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"        # Mondays 06:00 UTC
+  workflow_dispatch: {}         # manual "Run workflow" button
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  sync-build-import:
+    # tt-metal's build is heavy (clang-20, lots of RAM). A standard 2-core runner will choke --
+    # use a larger GitHub-hosted runner if you have one, else this may time out.
+    runs-on: ubuntu-22.04
+    # The dev container carries the tt-metal build toolchain. Verify the tag matches what
+    # tt-metal's own CI uses (ghcr may require a login for private images).
+    container:
+      image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest
+    env:
+      ARCH_NAME: blackhole
+    steps:
+      - name: Checkout fork branch (full history + submodules)
+        uses: actions/checkout@v4
+        with:
+          ref: feature/tt-hw-planner
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Git identity
+        run: |
+          git config user.name  "tt-hw-planner-bot"
+          git config user.email "tt-hw-planner-bot@users.noreply.github.com"
+
+      - name: Fetch upstream tenstorrent/tt-metal
+        run: |
+          git remote add upstream https://github.com/tenstorrent/tt-metal.git 2>/dev/null \
+            || git remote set-url upstream https://github.com/tenstorrent/tt-metal.git
+          git fetch upstream main
+
+      - name: Already up to date?
+        id: check
+        run: |
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "uptodate=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "uptodate=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge upstream (auto-resolve known core conflict, bail on others)
+        if: steps.check.outputs.uptodate == 'false'
+        id: merge
+        run: |
+          SHA=$(git rev-parse --short upstream/main)
+          BR="auto/sync-upstream-$SHA"
+          echo "branch=$BR" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA"    >> "$GITHUB_OUTPUT"
+          git checkout -b "$BR"
+          set +e
+          git merge --no-commit --no-ff upstream/main
+          # The one known, recurring conflict: dispatch-core defaults moved into C++ upstream.
+          git checkout --theirs ttnn/ttnn/device.py 2>/dev/null && git add ttnn/ttnn/device.py
+          UNRESOLVED=$(git diff --name-only --diff-filter=U)
+          set -e
+          if [ -n "$UNRESOLVED" ]; then
+            echo "Unexpected conflicts -- manual review needed:"; echo "$UNRESOLVED"
+            { echo "conflicts<<EOF"; echo "$UNRESOLVED"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+            git merge --abort
+            exit 1
+          fi
+          git commit -m "Merge upstream/main ($SHA) into feature/tt-hw-planner [auto-sync]"
+          git submodule update --init --recursive
+
+      - name: Create venv (3.12) + refresh deps
+        if: steps.check.outputs.uptodate == 'false'
+        run: |
+          ./create_venv.sh --skip-compat-check --python-version 3.12
+          . python_env/bin/activate
+          uv pip install --index-strategy unsafe-best-match -r tt_metal/python_env/requirements-dev.txt || true
+
+      - name: Build tt-metal (device-free)
+        if: steps.check.outputs.uptodate == 'false'
+        run: |
+          export TT_METAL_HOME="$PWD" PYTHON_ENV_DIR="$PWD/python_env"
+          . python_env/bin/activate
+          ./build_metal.sh
+
+      - name: Import gate (device-free)
+        if: steps.check.outputs.uptodate == 'false'
+        run: |
+          export TT_METAL_HOME="$PWD"
+          . python_env/bin/activate
+          python -c "import ttnn; print('ttnn import OK')"
+
+      - name: Open PR (all device-free gates green)
+        if: steps.check.outputs.uptodate == 'false' && success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git push origin "${{ steps.merge.outputs.branch }}"
+          gh pr create \
+            --base feature/tt-hw-planner \
+            --head "${{ steps.merge.outputs.branch }}" \
+            --title "Auto-sync: latest tt-metal (${{ steps.merge.outputs.sha }})" \
+            --body $'Automated upstream sync — **device-free gates passed**: merge + build + \x60import ttnn\x60.\n\n⚠️ **PCC (numeric correctness) NOT verified** — CI has no TT device. Run per-component PCC on a TT box (e.g. \x60pytest models/demos/hunyuanimage_3_0/tests/pcc/test_r_m_s_norm.py\x60) before merging if you rely on numerics.'
+
+      - name: File an issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "Auto-sync to latest tt-metal FAILED ($(date -u +%F))" \
+            --body $'The scheduled upstream sync failed (merge conflict, build, or import).\n\nUnexpected merge conflicts (if any):\n${{ steps.merge.outputs.conflicts }}\n\nSee the workflow run logs for details.'
