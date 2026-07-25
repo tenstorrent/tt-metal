@@ -110,3 +110,61 @@ def test_empty_canvas_is_not_degenerate():
     stats = DG.block_degeneracy(torch.zeros((1, 0), dtype=torch.long))
     assert stats["tokens"] == 0
     assert not DG.is_degenerate(stats)
+
+
+# The distinction calibration forced: on the real device run, a finished answer fills the canvas
+# with <eos> (id 1) and scores top_frac 1.0 / max_run 256 -- numerically identical to the
+# degenerate walls, opposite meaning. The GPQA degenerate canvases collapse onto CONTENT ids
+# instead (id 621 " \\" and id 236770 "1"), which is what keeps the two separable.
+EOS_ID = 1
+CONTENT_ID = 236770
+
+
+def test_all_eos_canvas_is_termination_not_degeneration():
+    stats = DG.block_degeneracy(torch.full((1, CANVAS), EOS_ID, dtype=torch.long))
+    assert DG.is_degenerate(stats), "with no stop set declared it still looks degenerate"
+    assert not DG.is_degenerate(stats, stop_token_ids=[EOS_ID]), "a terminating canvas must not be flagged"
+
+
+def test_wall_of_a_content_token_is_still_degenerate_with_a_stop_set():
+    stats = DG.block_degeneracy(torch.full((1, CANVAS), CONTENT_ID, dtype=torch.long))
+    assert DG.is_degenerate(stats, stop_token_ids=[EOS_ID, 0])
+
+
+def test_stop_policy_lets_a_terminating_block_through(monkeypatch):
+    monkeypatch.setenv("DG_DEGENERACY_POLICY", "stop")
+    stats = DG.check_committed_block(
+        torch.full((1, CANVAS), EOS_ID, dtype=torch.long), block_idx=9, stop_token_ids=[EOS_ID]
+    )
+    assert stats["top_id"] == EOS_ID
+
+
+def test_stop_policy_still_catches_the_content_wall(monkeypatch, expect_error):
+    monkeypatch.setenv("DG_DEGENERACY_POLICY", "stop")
+    with expect_error(DG.DegenerateBlockError, match="degenerate committed canvas"):
+        DG.check_committed_block(
+            torch.full((1, CANVAS), CONTENT_ID, dtype=torch.long), block_idx=7, stop_token_ids=[EOS_ID]
+        )
+
+
+def test_measured_healthy_block_shapes_are_not_flagged():
+    """Real per-block statistics from the traced device sweep (host Gumbel, seed 0).
+
+    Healthy blocks of a LaTeX-heavy physics answer: 54-106 distinct ids, top_frac 0.06-0.08,
+    max_run 1-2. The degenerate ones from the same run: 1-16 distinct, top_frac 0.94-1.00,
+    max_run 240-256. The bounds must sit in that gap.
+    """
+    healthy = [
+        {"top_frac": 0.0703, "max_run": 1, "top_id": 621},
+        {"top_frac": 0.0820, "max_run": 1, "top_id": CONTENT_ID},
+        {"top_frac": 0.0664, "max_run": 2, "top_id": CONTENT_ID},
+        {"top_frac": 0.0625, "max_run": 2, "top_id": 621},
+    ]
+    degenerate = [
+        {"top_frac": 0.9492, "max_run": 243, "top_id": CONTENT_ID},
+        {"top_frac": 0.9375, "max_run": 240, "top_id": CONTENT_ID},
+    ]
+    for stats in healthy:
+        assert not DG.is_degenerate(stats, stop_token_ids=[EOS_ID]), stats
+    for stats in degenerate:
+        assert DG.is_degenerate(stats, stop_token_ids=[EOS_ID]), stats

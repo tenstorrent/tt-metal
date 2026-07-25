@@ -926,6 +926,7 @@ def denoise_and_commit_block(
     denoise_block_fn: Callable[..., DenoiseTrajectory] | None = None,
     commit_fn: Callable[..., None] | None = None,
     timings: dict[str, float] | None = None,
+    stop_token_ids=None,
 ) -> GeneratedBlock:
     """Denoise one canvas, commit the clean argmax, and advance position.
 
@@ -957,7 +958,9 @@ def denoise_and_commit_block(
     _validate_committed_block_shape(trajectory.committed, batch_size=1, canvas_length=config.canvas_length)
     # Before the commit, never after: a degenerate canvas that reaches the KV cache conditions
     # every later block, which is what makes the degenerate state near-absorbing.
-    degeneracy_stats = check_committed_block(trajectory.committed, block_idx=None, logger=logger)
+    degeneracy_stats = check_committed_block(
+        trajectory.committed, block_idx=None, logger=logger, stop_token_ids=stop_token_ids
+    )
     if degeneracy_stats:
         logger.info(
             "DG_DEGENERACY start_pos={} distinct={}/{} top_id={} top_frac={:.4f} max_run={}".format(
@@ -1065,6 +1068,7 @@ def generate_blocks(
                     noise_tokens_fn=noise_tokens_fn(block_idx) if noise_tokens_fn else None,
                     page_table=page_table,
                     page_tables_per_layer=page_tables_per_layer,
+                    stop_token_ids=stop_token_ids,
                 )
             except DegenerateBlockError as degenerate:
                 # Uncommitted by construction, so the generation simply ends one block early with

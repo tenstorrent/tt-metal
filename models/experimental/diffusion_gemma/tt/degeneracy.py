@@ -75,7 +75,23 @@ def block_degeneracy(tokens: torch.Tensor) -> dict:
     }
 
 
-def is_degenerate(stats: dict, *, top_frac: float = DEFAULT_TOP_FRAC, max_run: int = DEFAULT_MAX_RUN) -> bool:
+def is_degenerate(
+    stats: dict,
+    *,
+    top_frac: float = DEFAULT_TOP_FRAC,
+    max_run: int = DEFAULT_MAX_RUN,
+    stop_token_ids=None,
+) -> bool:
+    """True when the canvas collapsed onto CONTENT, not when it terminated.
+
+    A finished answer fills the canvas with <eos>, which scores top_frac 1.0 / max_run 256 —
+    the same numbers as degeneration but the opposite meaning, and the stop-token path already
+    ends generation on it. So a canvas dominated by a stop token is never degenerate here. The
+    observed degenerate canvases collapse onto content ids instead (id 621 ' \\' and id 236770
+    '1' for the GPQA physics prompt), so this exclusion does not weaken the gate.
+    """
+    if stop_token_ids and stats.get("top_id") in set(stop_token_ids):
+        return False
     return stats["top_frac"] >= top_frac or stats["max_run"] >= max_run
 
 
@@ -106,7 +122,9 @@ def _resolve_int(name: str, default: int) -> int:
     return value
 
 
-def check_committed_block(tokens: torch.Tensor, *, block_idx: int | None = None, logger=None) -> dict:
+def check_committed_block(
+    tokens: torch.Tensor, *, block_idx: int | None = None, logger=None, stop_token_ids=None
+) -> dict:
     """Apply ``DG_DEGENERACY_POLICY`` to a committed canvas. Returns the stats either way.
 
     ``off`` (default) measures nothing and costs nothing. ``warn`` logs. ``stop`` raises
@@ -120,6 +138,7 @@ def check_committed_block(tokens: torch.Tensor, *, block_idx: int | None = None,
         stats,
         top_frac=_resolve_float("DG_DEGENERACY_TOP_FRAC", DEFAULT_TOP_FRAC),
         max_run=_resolve_int("DG_DEGENERACY_MAX_RUN", DEFAULT_MAX_RUN),
+        stop_token_ids=stop_token_ids,
     ):
         return stats
     where = "" if block_idx is None else f" at block {block_idx}"
