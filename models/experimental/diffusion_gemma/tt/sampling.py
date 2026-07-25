@@ -322,7 +322,22 @@ def sample_gumbel_noise_with_permuted_vocab(shape, *, device, seed: int, dtype=t
     QB2's single-call ``ttnn.rand(shape=[..., vocab])`` path currently shows
     last-dimension correlation that biases Gumbel-max distributions. Generating
     the vocab axis first and permuting back preserves one random draw per logits
-    element while avoiding that correlation in W4 distributional validation.
+    element and removes that correlation from the *vocab* axis, which is what the
+    W4 per-position marginal validation checks.
+
+    **It does not produce IID noise.** For the production shape ``(1, 1, 256, vocab)`` the
+    collapsed ``inner`` axis below IS the 256 canvas positions, so the last-dimension
+    correlation is relocated onto the canvas-position axis rather than removed. Measured on
+    device 2026-07-25 (P150x4, canvas 256, vocab 16384 and 262144 alike): 64 of the 256 position
+    rows are byte-identical to row ``i - 24`` -- ``ttnn.rand`` reuses 24 of every 32 row streams
+    per tile -- and with flat logits only 119/256 positions pick distinct tokens, against
+    255/256 for host IID Gumbel. That is worse than the plain vocab-innermost path (157/256) on
+    the axis the diffusion decisions are taken along. Chunking along vocab with distinct seeds
+    and both tile-aware layout workarounds were also measured and do not reach IID.
+
+    ``DG_VLLM_GUMBEL_MODE=host`` is the only IID arm today. See
+    ``doc/decision_fidelity/gumbel_position_correlation.md`` and the gate
+    ``tests/test_device_gumbel_position_correlation.py``.
     """
     seed = _validate_ttnn_rand_seed(seed)
     shape = _validate_gumbel_noise_shape(shape, require_vocab_axis=True)

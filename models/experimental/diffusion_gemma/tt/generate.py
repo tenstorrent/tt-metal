@@ -192,15 +192,50 @@ def _as_prompt_token_tensor(input_ids) -> torch.Tensor:
     return tokens
 
 
+def _assert_chat_template_honors_thinking(tokenizer, messages, *, add_generation_prompt: bool) -> None:
+    """Raise when the chat template silently drops ``enable_thinking``.
+
+    ``apply_chat_template`` forwards unrecognised kwargs into the jinja context, so a template
+    with no thinking branch renders the *same* string and the caller walks away holding a
+    non-thinking prompt while believing it asked for thinking. That silent drop is how the
+    offline DiffusionGemma path measured the halt gates against a malformed contract (#48291),
+    so an explicit ``enable_thinking=True`` must fail loudly rather than degrade.
+    """
+    render_kwargs = {"add_generation_prompt": add_generation_prompt, "tokenize": False}
+    plain = tokenizer.apply_chat_template(messages, **render_kwargs)
+    thinking = tokenizer.apply_chat_template(messages, enable_thinking=True, **render_kwargs)
+    if plain == thinking:
+        raise ValueError(
+            "enable_thinking=True was requested but this tokenizer's chat template renders an "
+            "identical prompt with and without it, i.e. the flag is being ignored. Use a "
+            "DiffusionGemma tokenizer whose template emits the <|think|> turn, or drop the flag "
+            "-- do not proceed, since the model would silently run the non-thinking contract."
+        )
+
+
 def tokenize_prompt(
     tokenizer,
     prompt,
     *,
     system_prompt: str | None = None,
     add_generation_prompt: bool = True,
+    enable_thinking: bool | None = None,
 ) -> torch.Tensor:
-    """Tokenize a prompt string or chat messages into host ids ``[batch, seq_len]``."""
+    """Tokenize a prompt string or chat messages into host ids ``[batch, seq_len]``.
+
+    ``enable_thinking`` selects DiffusionGemma's thinking contract, which the chat template
+    renders as an extra ``<|think|>`` system turn. It defaults to ``None`` = pass nothing to
+    the template, which reproduces the previous render byte-for-byte; ``True``/``False`` are
+    forwarded explicitly. An ignored ``True`` raises (see
+    :func:`_assert_chat_template_honors_thinking`) instead of silently handing back the
+    non-thinking prompt.
+    """
     if isinstance(prompt, torch.Tensor):
+        if enable_thinking is not None:
+            raise ValueError(
+                "enable_thinking cannot be applied to pre-tokenized prompt ids; pass the prompt "
+                "as a string or chat messages so the chat template can render the thinking turn"
+            )
         return _as_prompt_token_tensor(prompt)
 
     if hasattr(tokenizer, "apply_chat_template"):
@@ -211,16 +246,27 @@ def tokenize_prompt(
             messages.append({"role": "user", "content": prompt})
         else:
             messages = prompt
+        template_kwargs = {}
+        if enable_thinking is not None:
+            if enable_thinking:
+                _assert_chat_template_honors_thinking(tokenizer, messages, add_generation_prompt=add_generation_prompt)
+            template_kwargs["enable_thinking"] = bool(enable_thinking)
         return _as_prompt_token_tensor(
             tokenizer.apply_chat_template(
                 messages,
                 add_generation_prompt=add_generation_prompt,
                 tokenize=True,
+                **template_kwargs,
             )
         )
 
     if not isinstance(prompt, str):
         raise ValueError("chat messages require a tokenizer with apply_chat_template")
+    if enable_thinking is not None:
+        raise ValueError(
+            "enable_thinking requires a tokenizer with apply_chat_template; this tokenizer has "
+            "no chat template, so the thinking turn cannot be rendered"
+        )
     if callable(tokenizer):
         return _as_prompt_token_tensor(tokenizer(prompt, return_tensors="pt"))
     return _as_prompt_token_tensor(tokenizer.encode(prompt))

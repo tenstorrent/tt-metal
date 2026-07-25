@@ -113,6 +113,15 @@ def build_arg_parser():
     p.add_argument("--canvas-length", type=int, default=256)
     p.add_argument("--max-denoise-steps", type=int, default=48)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument(
+        "--enable-thinking",
+        dest="enable_thinking",
+        action="store_true",
+        default=None,
+        help="render the prompt with DiffusionGemma's <|think|> contract (the released "
+        "checkpoint's post-training contract). Omitted = the previous non-thinking render, "
+        "which is what the invalidated early-halt measurement used.",
+    )
     p.add_argument("--blocks", type=int, default=2)
     p.add_argument("--out", default=None)
     return p
@@ -128,7 +137,7 @@ def main(argv=None) -> int:
         if args.num_layers is not None:
             model_kwargs["num_layers"] = args.num_layers
         bundle = build_tt_model_from_checkpoint_dir(mesh_device, args.checkpoint, **model_kwargs)
-        prompt_tokens = tokenize_prompt(bundle.tokenizer, args.prompt)
+        prompt_tokens = tokenize_prompt(bundle.tokenizer, args.prompt, enable_thinking=args.enable_thinking)
         config = DiffusionConfig(canvas_length=args.canvas_length, max_denoise_steps=args.max_denoise_steps)
         session = BlockDiffusionServingSession(
             bundle.tt_model,

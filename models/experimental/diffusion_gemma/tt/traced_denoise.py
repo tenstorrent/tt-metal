@@ -249,6 +249,64 @@ def _trace_metric(event: str, **fields) -> None:
     logger.info("DG_TRACE_METRIC " + json.dumps({"event": event, **fields}, sort_keys=True, default=str))
 
 
+def _summarize_halt_trace(halt_trace, *, threshold: float) -> dict:
+    """Reduce a per-step ``(steps_run, mean_entropy, mismatch)`` trace to the fields that say
+    WHICH halt criterion blocked -- something the ``halted`` boolean alone cannot express.
+
+    ``eval_halt`` fires only when ``mismatch == 0`` AND ``mean_entropy < threshold``, and only
+    from step index 1 on (it needs a previous step to compare the argmax against). So a
+    step-cap exit has exactly three shapes, and they call for opposite fixes:
+
+    * ``entropy``  -- the argmax went stable but the entropy never got under the bar
+      (content did not converge; the lever is fidelity or the bar itself);
+    * ``mismatch`` -- the entropy got under the bar but the argmax never stopped moving
+      (a few positions oscillate; the lever is the accept/renoise decisions);
+    * ``both``     -- no eligible step satisfied either gate.
+
+    ``halt_entropy_floor_ratio`` separates a *structural* entropy floor (min entropy many
+    times the bar) from a *numerical* near-miss (ratio ~1) -- also invisible in ``halted``.
+    """
+    if not halt_trace:
+        return {"halt_trace_steps": 0, "halt_blocking_gate": "none"}
+    entropies = [float(entropy) for _, entropy, _ in halt_trace]
+    mismatches = [float(mismatch) for _, _, mismatch in halt_trace]
+    # eval_halt cannot fire on the first step (no previous argmax to compare against), so gate
+    # accounting must skip it or it reports a gate as blocking on a step that was never eligible.
+    eligible = [(entropy, mismatch) for (steps_run, entropy, mismatch) in halt_trace if steps_run >= 2]
+    entropy_ok = sum(1 for entropy, _ in eligible if entropy < threshold)
+    mismatch_ok = sum(1 for _, mismatch in eligible if mismatch == 0.0)
+    both_ok = sum(1 for entropy, mismatch in eligible if entropy < threshold and mismatch == 0.0)
+    if both_ok:
+        blocking = "none"
+    elif mismatch_ok and not entropy_ok:
+        blocking = "entropy"
+    elif entropy_ok and not mismatch_ok:
+        blocking = "mismatch"
+    elif entropy_ok and mismatch_ok:
+        blocking = "never_simultaneous"
+    else:
+        blocking = "both"
+    entropy_min = min(entropies)
+    return {
+        "halt_trace_steps": len(halt_trace),
+        "halt_threshold": threshold,
+        "halt_blocking_gate": blocking,
+        "halt_entropy_per_step": [round(entropy, 6) for entropy in entropies],
+        "halt_mismatch_per_step": mismatches,
+        "halt_entropy_first": round(entropies[0], 6),
+        "halt_entropy_final": round(entropies[-1], 6),
+        "halt_entropy_min": round(entropy_min, 6),
+        "halt_entropy_margin_final": round(entropies[-1] - threshold, 6),
+        "halt_entropy_floor_ratio": (round(entropy_min / threshold, 3) if threshold > 0 else None),
+        "halt_mismatch_final": mismatches[-1],
+        "halt_mismatch_min": min(mismatches),
+        "halt_eligible_steps": len(eligible),
+        "halt_steps_entropy_under_threshold": entropy_ok,
+        "halt_steps_mismatch_zero": mismatch_ok,
+        "halt_steps_both_gates": both_ok,
+    }
+
+
 @contextmanager
 def _trace_capture_guard(mesh_device, *, cq_id: int = 0):
     """Finalize a successful trace or release a partially captured trace."""
@@ -605,6 +663,7 @@ class UpfrontTracedDenoiseController:
             steps_run=steps_run,
             halted=halted,
             captured_this_block=captured_this_block,
+            **_summarize_halt_trace(self.last_halt_trace, threshold=self.config.entropy_stop_threshold),
             **self.stats(),
         )
         return DenoiseTrajectory(_ids_to_torch(self.committed_buf), steps_run, halted, [])

@@ -1,7 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Distributional device canvas sampling test for DiffusionGemma W4 (#47472)."""
+"""Distributional device canvas sampling test for DiffusionGemma W4 (#47472).
+
+SCOPE: this module validates per-position **marginals**. ``_distribution_metrics`` averages over
+the sample axis, so correlation *between* canvas positions is invisible here -- every marginal
+can be correct while positions share noise. Independence across canvas positions is gated
+separately by ``test_device_gumbel_position_correlation.py``; do not read a pass here as
+evidence that the device Gumbel draw is IID (as of 2026-07-25 it is not).
+"""
 
 import os
 
