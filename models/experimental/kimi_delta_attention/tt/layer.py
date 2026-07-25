@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
@@ -28,6 +28,23 @@ def _slice_width(tensor: ttnn.Tensor, start: int, end: int) -> ttnn.Tensor:
     begin[-1] = start
     stop[-1] = end
     return ttnn.slice(tensor, tuple(begin), tuple(stop), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+@dataclass(frozen=True)
+class PreparedKDA:
+    """Projection/convolution work shared by span summary and final scan."""
+
+    batch: int
+    sequence: int
+    mode: Literal["recurrent", "chunk"]
+    head_major: bool
+    q: ttnn.Tensor
+    k: ttnn.Tensor
+    v: ttnn.Tensor
+    gate: ttnn.Tensor
+    beta: ttnn.Tensor
+    output_gate_rank: ttnn.Tensor
+    new_convolution_state: ttnn.Tensor
 
 
 class KimiDeltaAttention:
@@ -165,9 +182,12 @@ class KimiDeltaAttention:
         self,
         qkv: ttnn.Tensor,
         sequence: int,
+        convolution_state: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """Run depthwise convolution and emit Q/K/V without post-convolution slices."""
-        assert self.convolution_state is not None
+        if convolution_state is None:
+            assert self.convolution_state is not None
+            convolution_state = self.convolution_state
         config = self.config
         channels = self._convolution_width
         input_length = sequence + config.conv_kernel_size - 1
@@ -177,7 +197,7 @@ class KimiDeltaAttention:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         state_row_major = ttnn.to_layout(
-            self.convolution_state,
+            convolution_state,
             ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -186,10 +206,10 @@ class KimiDeltaAttention:
             (0, sequence - (config.conv_kernel_size - 1), 0),
             (1, sequence, channels),
         )
-        if self.convolution_state.layout != ttnn.ROW_MAJOR_LAYOUT:
+        if convolution_state.layout != ttnn.ROW_MAJOR_LAYOUT:
             new_state = ttnn.to_layout(
                 new_state,
-                self.convolution_state.layout,
+                convolution_state.layout,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         if sequence > 640:
@@ -272,6 +292,184 @@ class KimiDeltaAttention:
         k = _slice_width(output, config.q_dim, config.q_dim + config.k_dim)
         v = _slice_width(output, config.q_dim + config.k_dim, channels)
         return q, k, v, new_state
+
+    def prepare_chunk(
+        self,
+        hidden_states: ttnn.Tensor,
+        *,
+        convolution_state: ttnn.Tensor | None = None,
+    ) -> PreparedKDA:
+        """Prepare a tile-aligned chunk span for affine summary or final scan.
+
+        The optional convolution cache makes the short causal convolution an
+        explicit dependency while leaving the expensive KDA recurrence free to
+        be scheduled after an inter-span affine prefix.
+        """
+        batch, sequence = self._validate_forward(hidden_states, "chunk", None, None)
+        if sequence % ttnn.TILE_SIZE:
+            raise ValueError(f"affine-span preparation requires tile-aligned sequence, got T={sequence}")
+        config, weights = self.config, self.weights
+        head_major = True
+        memory_config = (
+            ttnn.L1_MEMORY_CONFIG if batch * sequence * self._convolution_width <= 65536 else ttnn.DRAM_MEMORY_CONFIG
+        )
+        projected = ttnn.linear(
+            hidden_states,
+            weights.input_projection_prefill,
+            memory_config=memory_config,
+            compute_kernel_config=self.compute_config,
+        )
+        qkv = _slice_width(projected, 0, self._convolution_width)
+        q, k, v, new_convolution_state = self._causal_conv1d_prefill(qkv, sequence, convolution_state)
+        auxiliary_start = self._convolution_width
+        decay_rank = _slice_width(projected, auxiliary_start, auxiliary_start + config.head_k_dim)
+        output_gate_rank = _slice_width(
+            projected,
+            auxiliary_start + config.head_k_dim,
+            auxiliary_start + config.head_k_dim + config.v_dim,
+        )
+        beta = _slice_width(
+            projected,
+            auxiliary_start + config.head_k_dim + config.v_dim,
+            auxiliary_start + config.head_k_dim + config.v_dim + config.num_heads,
+        )
+        beta = ttnn.sigmoid(beta, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        gate = ttnn.linear(
+            decay_rank,
+            weights.decay_output_projection,
+            bias=weights.decay_bias_flat,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_config,
+        )
+        gate = ttnn.multiply(
+            weights.decay_scale_flat,
+            gate,
+            input_tensor_b_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)],
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return PreparedKDA(
+            batch=batch,
+            sequence=sequence,
+            mode="chunk",
+            head_major=head_major,
+            q=q,
+            k=k,
+            v=v,
+            gate=gate,
+            beta=beta,
+            output_gate_rank=output_gate_rank,
+            new_convolution_state=new_convolution_state,
+        )
+
+    def affine_summary(self, prepared: PreparedKDA) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Return the prepared chunk span's FP32 recurrent transform `(A, B)`."""
+        if prepared.mode != "chunk" or not prepared.head_major:
+            raise ValueError("affine summary requires a tile-aligned chunk preparation")
+        if prepared.sequence % 32:
+            raise ValueError(f"affine summary requires T divisible by 32, got T={prepared.sequence}")
+        return ttnn.transformer.chunk_kda_affine_summary(
+            prepared.q,
+            prepared.k,
+            prepared.v,
+            prepared.gate,
+            prepared.beta,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_config,
+            eye=self.chunk_const_tiles[0],
+            tril=self.chunk_const_tiles[1],
+            ones=self.chunk_const_tiles[2],
+            masks=self.chunk_const_tiles[3],
+        )
+
+    def forward_prepared(self, prepared: PreparedKDA) -> ttnn.Tensor:
+        """Finish a prepared chunk span using the layer's current recurrent state."""
+        if prepared.mode != "chunk" or not prepared.head_major:
+            raise ValueError("forward_prepared currently supports tile-aligned chunk preparation only")
+        assert self.recurrent_state is not None
+        assert self.convolution_state is not None
+        config, weights = self.config, self.weights
+        batch, sequence = prepared.batch, prepared.sequence
+        use_group_prefix = sequence >= 5120 and sequence % 256 == 0 and os.getenv("QWEN_KDA_SERIAL_SCAN") is None
+        fuse_scan_rms = (
+            sequence > 640
+            and self.tensor_parallel_size == 8
+            and os.getenv("QWEN_KDA_GROUP_PREFIX") is None
+            and not use_group_prefix
+        )
+        output, new_recurrent_state = chunk_kda_recurrence(
+            prepared.q,
+            prepared.k,
+            prepared.v,
+            prepared.gate,
+            prepared.beta,
+            self.recurrent_state,
+            self.chunk_const_tiles,
+            rms_gate=prepared.output_gate_rank if fuse_scan_rms else None,
+            rms_weight=weights.norm if fuse_scan_rms else None,
+            rms_epsilon=config.norm_eps,
+        )
+        if new_recurrent_state.dtype != config.recurrent_state_dtype:
+            new_recurrent_state = ttnn.typecast(new_recurrent_state, config.recurrent_state_dtype)
+        if not fuse_scan_rms:
+            output = ttnn.transformer.kda_gated_rms_norm(
+                output,
+                prepared.output_gate_rank,
+                weights.norm,
+                config.num_heads,
+                epsilon=config.norm_eps,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_config,
+            )
+        output = ttnn.reshape(output, (batch, sequence, config.v_dim))
+        fused_output_collective = self.tensor_parallel_size == 8 and config.v_dim >= 8 * ttnn.TILE_SIZE
+        if fused_output_collective:
+            assert self.tt_ccl is not None
+            output = matmul_reduce_scatter_prefill(
+                output,
+                weights.output_projection,
+                self.tt_ccl,
+                self.compute_config,
+                ttnn.Topology.Ring,
+                self.tensor_parallel_size,
+                output.dtype,
+            )
+        else:
+            output = ttnn.linear(
+                output,
+                weights.output_projection,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_config,
+            )
+        if self.tensor_parallel_size > 1 and not fused_output_collective:
+            assert self.tt_ccl is not None
+            output = ttnn.reshape(output, (batch, 1, sequence, self.global_config.hidden_size))
+            output = tt_all_reduce(
+                output,
+                self.device,
+                self.tt_ccl,
+                cluster_axis=0,
+                dim=3,
+                topology=ttnn.Topology.Linear,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            output = ttnn.reshape(
+                output, (batch, sequence, self.global_config.hidden_size // self.tensor_parallel_size)
+            )
+        if self.use_inplace_state:
+            ttnn.copy(new_recurrent_state, self.recurrent_state)
+            new_convolution_state = prepared.new_convolution_state
+            if new_convolution_state.layout != self.convolution_state.layout:
+                new_convolution_state = ttnn.to_layout(
+                    new_convolution_state,
+                    self.convolution_state.layout,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            ttnn.copy(new_convolution_state, self.convolution_state)
+        else:
+            self.recurrent_state = new_recurrent_state
+            self.convolution_state = prepared.new_convolution_state
+        return output
 
     def forward(
         self,

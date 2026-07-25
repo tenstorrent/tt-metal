@@ -47,6 +47,13 @@ state-transfer protocol and measure its components.
   cannot recover the 2.749 ms deficit.  The next implementation target is
   Milestone 4's inter-span affine scan, which makes the large span scans
   concurrent after a small log-depth prefix over `(A, B)` summaries.
+* An opt-in `KDA_SP_AFFINE=1` SP=2 prototype now validates that schedule's
+  state transition and overlaps prepared final scans.  Its direct state-only
+  span-summary kernel is correct, but its current eager measurement is
+  **6.821 ms/forward** (three repetitions; report `2026_07_25_18_36_33`), so
+  it remains disabled by default.  The next optimisation is to keep summary
+  prep/scan intermediates resident and fuse their consumption with the final
+  scan rather than re-reading/re-preparing the span.
 
 ## Milestones
 

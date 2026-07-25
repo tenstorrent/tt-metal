@@ -90,7 +90,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
  *
  * q/k/g [B,T,H,K], v [B,T,H,V], beta [B,T,H], with the same tile-aligned
  * rank-3 flat forms accepted by chunk_kda. K and V must match and T must be
- * divisible by 256 (eight 32-token chunks per summary group).
+ * divisible by the 32-token KDA chunk size.
  */
 std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_affine_summary(
     const ttnn::Tensor& q,

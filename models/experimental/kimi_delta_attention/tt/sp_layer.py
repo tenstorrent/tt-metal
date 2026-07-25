@@ -12,6 +12,7 @@ TP group to the matching rank of the second group.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -125,6 +126,50 @@ class SP2TP4KimiDeltaAttention:
         ttnn.experimental.send_async(source.convolution_state, self._send_socket)
         ttnn.experimental.recv_async(destination.convolution_state, self._recv_socket)
 
+    def _forward_affine_sp2(
+        self,
+        first_span: ttnn.Tensor,
+        second_span: ttnn.Tensor,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Use the first span's affine summary to release the second scan early.
+
+        The short convolution remains an ordered three-sample dependency, but
+        it is available as soon as first-span preparation completes.  The
+        large recurrent boundary is instead derived from `(A, B)` before the
+        first span's token-output scan, allowing the two final scans to run on
+        their separate TP=4 submeshes concurrently.  This is the SP=2 base
+        case of the Galaxy log-depth affine prefix; larger SP will prefix the
+        same per-span transforms instead of relaying a materialized state.
+        """
+        first = self.first_layer
+        second = self.second_layer
+        assert first.recurrent_state is not None
+        assert first.convolution_state is not None
+        assert second.recurrent_state is not None
+        assert second.convolution_state is not None
+
+        first_prepared = first.prepare_chunk(first_span)
+        # Queue the small convolution handoff immediately. The second prepare
+        # consumes its destination buffer, so its projection/convolution work
+        # can overlap the first span's affine-summary construction.
+        ttnn.experimental.send_async(first_prepared.new_convolution_state, self._send_socket)
+        ttnn.experimental.recv_async(second.convolution_state, self._recv_socket)
+        second_prepared = second.prepare_chunk(second_span)
+
+        transform_a, transform_b = first.affine_summary(first_prepared)
+        span_end_state = ttnn.matmul(
+            transform_a,
+            first.recurrent_state,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        span_end_state = ttnn.add(span_end_state, transform_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.experimental.send_async(span_end_state, self._send_socket)
+        ttnn.experimental.recv_async(second.recurrent_state, self._recv_socket)
+
+        first_output = first.forward_prepared(first_prepared)
+        second_output = second.forward_prepared(second_prepared)
+        return first_output, second_output
+
     def forward(
         self,
         first_span: ttnn.Tensor,
@@ -133,6 +178,13 @@ class SP2TP4KimiDeltaAttention:
         mode: str = "chunk",
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run span zero, transfer its causal cache, then run span one."""
+        if (
+            os.getenv("KDA_SP_AFFINE", "0") == "1"
+            and mode == "chunk"
+            and first_span.shape[1] == second_span.shape[1]
+            and first_span.shape[1] % 256 == 0
+        ):
+            return self._forward_affine_sp2(first_span, second_span)
         first_output = self.first_layer.forward(first_span, mode=mode)
         self._handoff_causal_state()
         second_output = self.second_layer.forward(second_span, mode=mode)

@@ -113,7 +113,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
 
         q/k/g [B,T,H,K], v [B,T,H,V], beta [B,T,H]; tile-aligned rank-3 flat
         q/k/v/g forms are also accepted. K must equal V and T must be divisible
-        by 256, the eight-chunk affine-summary group size.
+        by the 32-token KDA chunk size.
         )doc",
         &ttnn::transformer::chunk_kda_affine_summary,
         nb::arg("q").noconvert(),

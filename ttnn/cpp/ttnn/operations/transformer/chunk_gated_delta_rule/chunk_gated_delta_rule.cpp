@@ -808,7 +808,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_affine_summary(
     TT_FATAL(flat_g || gs.rank() == 4, "chunk_kda_affine_summary expects rank-3 or rank-4 g");
 
     const uint32_t B = bs[0], T = bs[1], H = bs[2];
-    TT_FATAL(T % 256 == 0, "chunk_kda_affine_summary requires T divisible by 256, got {}", T);
+    TT_FATAL(T % 32 == 0, "chunk_kda_affine_summary requires T divisible by 32, got {}", T);
     TT_FATAL(flat_g ? gs[2] % H == 0 : gs[2] == H, "chunk_kda_affine_summary g head dimension mismatch");
     const uint32_t K = flat_g ? gs[2] / H : gs[3];
     TT_FATAL(flat_v ? vs[2] % H == 0 : vs[2] == H, "chunk_kda_affine_summary v head dimension mismatch");
@@ -826,10 +826,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_affine_summary(
     auto* dev = q_in.device();
     const uint32_t BH = B * H;
     constexpr uint32_t C = 32;
-    constexpr uint32_t group_chunks = 8;
     const uint32_t NC = T / C;
-    const uint32_t groups_per_head = NC / group_chunks;
-    const uint32_t group_heads = BH * groups_per_head;
     const float scale = scale_opt.value_or(1.0f / std::sqrt(static_cast<float>(K)));
 
     auto as_bf16 = [](const ttnn::Tensor& tensor) {
@@ -893,13 +890,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_affine_summary(
         flat_g,
         true,
         0x26);
-    prep[0] = ttnn::reshape(prep[0], ttnn::Shape({group_heads, group_chunks, C, V}));
-    prep[1] = ttnn::reshape(prep[1], ttnn::Shape({group_heads, group_chunks, C, K}));
-    prep[2] = ttnn::reshape(prep[2], ttnn::Shape({group_heads, group_chunks, C, K}));
-    prep[3] = ttnn::reshape(prep[3], ttnn::Shape({group_heads, group_chunks, C, C}));
-    prep[4] = ttnn::reshape(prep[4], ttnn::Shape({group_heads, group_chunks, K, C}));
-    prep[5] = ttnn::reshape(prep[5], ttnn::Shape({group_heads, group_chunks, K, 1}));
-    prep[6] = ttnn::reshape(prep[6], ttnn::Shape({group_heads, group_chunks, C, C}));
+    // A boundary needs one transform for the complete span. Run the proven
+    // state-only affine scan directly over its chunks; the grouped-prefix
+    // path is for producing every group's initial state and adds needless
+    // matmul/concat work when only the final transform is required.
     auto summaries = ttnn::prim::chunk_gdn_scan(
         prep[0],
         prep[1],
@@ -921,13 +915,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_affine_summary(
         0,
         1e-5f,
         true);
-    auto transform_a = ttnn::reshape(summaries[0], ttnn::Shape({BH, groups_per_head, K, K}));
-    auto transform_b = ttnn::reshape(summaries[1], ttnn::Shape({BH, groups_per_head, K, V}));
-    auto [prefix_a, prefix_b] = inclusive_affine_prefix(transform_a, transform_b, groups_per_head, out_mem, kernel_cfg);
-    transform_a = slice_group_axis(prefix_a, groups_per_head - 1, groups_per_head, out_mem);
-    transform_b = slice_group_axis(prefix_b, groups_per_head - 1, groups_per_head, out_mem);
     return {
-        ttnn::reshape(transform_a, ttnn::Shape({B, H, K, K})), ttnn::reshape(transform_b, ttnn::Shape({B, H, K, V}))};
+        ttnn::reshape(summaries[0], ttnn::Shape({B, H, K, K})), ttnn::reshape(summaries[1], ttnn::Shape({B, H, K, V}))};
 }
 
 ttnn::Tensor kda_gated_rms_norm(
