@@ -282,6 +282,8 @@ llk:
     bh_p150b_civ2_viommu: 70
 
 models:
+  profiler:
+    wh_llmbox: 30
   merge_gate:
     wh_galaxy_merge_gate: 5
   sanity:
