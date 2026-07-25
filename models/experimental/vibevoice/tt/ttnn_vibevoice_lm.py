@@ -704,7 +704,9 @@ class TTVibeVoiceLM:
             attn = ttnn.softmax(scores, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             out = ttnn.matmul(attn, v_f32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             out = ttnn.typecast(out, ttnn.bfloat16)
-            out = _reshape_tt(ttnn.permute(out, (0, 2, 1, 3)), [B, 1, S, n_heads * head_dim])
+            # [B, n_heads, S, hd] → [B, 1, S, n_heads*hd]; byte-identical to permute+reshape
+            # (maxabsdiff==0 on S=1 and S=256).
+            out = ttnn.experimental.nlp_concat_heads(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
             # ── Decode: write one token at start_pos, then fused flash-decode over the
             # cache prefix.  GQA handled natively (no KV-head materialization, no fp32
