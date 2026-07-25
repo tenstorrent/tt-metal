@@ -380,10 +380,10 @@ MinimalMatmulFabricBoundProgramFactory::shared_variables_t minimal_matmul_fabric
     // epilogue with a single output and one M-block per core (defer_write always false). split_noc1_pct
     // (0..100) sets the percent of rows going to NOC_1 (dm_in1); the rest go to NOC_0.
     const uint32_t split_noc1_pct = 50;
-    // Works with chunks (N_chunks > 1): compute still packs low/high M-rows into c_2/c_8 (copy_block_split is
-    // chunk-agnostic), and each of the two writers demuxes its M-row half's N columns into the chunk tensors.
-    bool split_output_write =
-        !use_bias && !use_fused_ternary && !fuse_swiglu && M_blocks_per_core == 1 && M_block_tiles > 1;
+    // Works with bias (compute uses add_bias_block_split; dm_in1 reads the bias since both DMs are writers)
+    // and with chunks (N_chunks > 1): compute still packs low/high M-rows into c_2/c_8 and each writer demuxes
+    // its M-row half's N columns into the chunk tensors. Not compatible with ternary/swiglu epilogues.
+    bool split_output_write = !use_fused_ternary && !fuse_swiglu && M_blocks_per_core == 1 && M_block_tiles > 1;
 
     uint32_t out_cb_id = tt::CBIndex::c_2;
     tt::tt_metal::create_cb(out_cb_id, program, core_grid, out_tile_size, out_cb_num_tiles, output_data_format);

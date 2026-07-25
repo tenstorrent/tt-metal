@@ -461,7 +461,15 @@ void kernel_main() {
 #endif
             }
 #ifdef FUSE_BIAS
-            if constexpr (!is_output_writer) {
+            // Under the two-NoC split both DMs are output writers, so the !is_output_writer read never fires
+            // on either and nobody would fill the bias CB. dm_in1 (NOC_1 writer) reads it here; dm_in0 keeps
+            // skipping it (its !is_output_writer is already false under split).
+#ifdef SPLIT_OUTPUT_WRITE
+            constexpr bool read_bias = true;
+#else
+            constexpr bool read_bias = !is_output_writer;
+#endif
+            if constexpr (read_bias) {
                 cb_in2.reserve_back(N_block_tiles);
 
                 uint32_t l1_write_addr_in2 = get_write_ptr(cb_in2_id);
