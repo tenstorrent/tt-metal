@@ -8,8 +8,8 @@ Prefills ``PREFILL_LEN`` tokens **outside** the Tracy window, then measures
 
 Standalone Tracy capture::
 
-    python -m tracy -p -v -r --dump-device-data-mid-run \\
-        pytest models/experimental/vibevoice/tests/perf/test_profile_single_step_decode.py \\
+    python -m tracy -p -v -r --dump-device-data-mid-run --op-support-count 100000 -m pytest \\
+        models/experimental/vibevoice/tests/perf/test_profile_single_step_decode.py\\
         ::test_profile_single_step_decode -v
 
 Device perf CSV/JSON dump (outer driver spawns this under Tracy)::

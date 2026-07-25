@@ -18,6 +18,7 @@ from models.experimental.vibevoice.tt.ttnn_vibevoice_lm import (
     TTVibeVoiceLM,
     preprocess_lm_weights,
 )
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 PCC_THRESHOLD = 0.99
@@ -293,6 +294,15 @@ def tt_decoder_layer_decode_forward(
     return probe.forward_decoder_layer_hidden(hidden, position, kv_cache, layer_idx=layer_idx)
 
 
+# Decoder-layer decode numeric floors (seed-0 random hiddens, positions 0…9).
+# Baseline (pre nlp_create_qkv_heads, BH): min PCC≈0.999985, max|Δ|≈0.0156, rel-Frob≈0.0055.
+# Floors keep headroom under the starter 0.9994 / 0.09 / 0.03 template used by other VV PCC tests.
+DECODE_LAYER_PCC_THRESHOLD = 0.9999
+DECODE_LAYER_RTOL = 0.09
+DECODE_LAYER_ATOL = 0.02
+DECODE_LAYER_FROBENIUS_THRESHOLD = 0.01
+
+
 def run_decoder_layer_decode_pcc_sweep(
     mesh_device,
     lm_state,
@@ -314,6 +324,7 @@ def run_decoder_layer_decode_pcc_sweep(
         f"(no prefill, random hiddens)"
     )
 
+    torch.manual_seed(0)
     for step in range(num_steps):
         hidden = (torch.rand(DECODE_BATCH_SIZE, 1, ctx.hidden_size, dtype=torch.bfloat16) * 2) - 1
 
@@ -331,15 +342,36 @@ def run_decoder_layer_decode_pcc_sweep(
             kv_cache=kv_cache,
         )
 
-        passed_d, pcc_d = compare_decode_hidden_pcc(ref_out, tt_out)
-        step_pccs.append(pcc_d)
-        print(f"Decode step {step}  position={step}  PCC={pcc_d:.5f}")
+        # Align shapes to [B, 1, H] float32 (HF may be [B,1,H]; TT probe returns [B,S,H]).
+        ref_f = ref_out.to(torch.float32)
+        tt_f = tt_out.to(torch.float32)
+        if ref_f.dim() == 2:
+            ref_f = ref_f.unsqueeze(1)
+        if tt_f.dim() == 2:
+            tt_f = tt_f.unsqueeze(1)
+        if ref_f.shape != tt_f.shape:
+            raise AssertionError(f"Decode hidden shape mismatch: ref={tuple(ref_f.shape)} tt={tuple(tt_f.shape)}")
+
+        passed_d, msg = assert_numeric_metrics(
+            ref_f,
+            tt_f,
+            pcc_threshold=DECODE_LAYER_PCC_THRESHOLD,
+            rtol=DECODE_LAYER_RTOL,
+            atol=DECODE_LAYER_ATOL,
+            frobenius_threshold=DECODE_LAYER_FROBENIUS_THRESHOLD,
+            assert_on_fail=False,
+        )
+        # Keep a PCC scalar for the summary table.
+        _, pcc_d = comp_pcc(ref_f, tt_f, pcc=DECODE_LAYER_PCC_THRESHOLD)
+        step_pccs.append(float(pcc_d))
+        print(f"Decode step {step}  position={step}  PCC={float(pcc_d):.5f}")
+        print(msg)
 
         if not passed_d:
-            failures.append(f"decode step={step} position={step} measured_pcc={pcc_d:.6f} threshold={PCC_THRESHOLD}")
+            failures.append(f"decode step={step} position={step}\n{msg}")
 
     print_decode_pcc_summary(step_pccs)
     if failures:
-        raise AssertionError("Decoder layer decode PCC below threshold:\n" + "\n".join(failures))
+        raise AssertionError("Decoder layer decode numeric metrics below threshold:\n" + "\n".join(failures))
 
     return step_pccs
