@@ -56,6 +56,9 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_SRCS
     gated_delta_prefill_query/gated_delta_prefill_query.cpp
     gated_delta_prefill_query/device/gated_delta_prefill_query_device_operation.cpp
     gated_delta_prefill_query/device/gated_delta_prefill_query_program_factory.cpp
+    triangle_solve/triangle_solve.cpp
+    triangle_solve/device/triangle_solve_device_operation.cpp
+    triangle_solve/device/triangle_solve_program_factory.cpp
     dit_layernorm_pre_all_gather/dit_layernorm_pre_all_gather.cpp
     dit_layernorm_pre_all_gather/device/dit_layernorm_pre_all_gather_device_operation.cpp
     dit_layernorm_pre_all_gather/device/dit_layernorm_pre_all_gather_welford_program_factory.cpp
@@ -118,6 +121,7 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_NANOBIND_SRCS
     nlp_kv_cache_load_slice/nlp_kv_cache_load_slice_nanobind.cpp
     fused_distributed_rmsnorm/rmsnorm_distributed_nanobind.cpp
     gated_delta_prefill_query/gated_delta_prefill_query_nanobind.cpp
+    triangle_solve/triangle_solve_nanobind.cpp
     dit_layernorm_pre_all_gather/dit_layernorm_pre_all_gather_nanobind.cpp
     dit_layernorm_post_all_gather/dit_layernorm_post_all_gather_nanobind.cpp
     dit_minimal_matmul_addcmul_fused/dit_minimal_matmul_addcmul_fused_nanobind.cpp

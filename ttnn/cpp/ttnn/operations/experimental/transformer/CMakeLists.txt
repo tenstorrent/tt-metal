@@ -37,6 +37,7 @@ file(
     rotate_half/device/kernels/*.cpp
     split_query_key_value_and_split_heads/device/kernels/*.cpp
     gated_delta_prefill_query/device/kernels/*.cpp
+    triangle_solve/device/kernels/*.cpp
     dit_layernorm_pre_all_gather/device/kernels/*.cpp
     dit_layernorm_post_all_gather/device/kernels/*.cpp
 )

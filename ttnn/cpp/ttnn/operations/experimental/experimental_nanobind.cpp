@@ -35,6 +35,7 @@
 #include "ttnn/operations/experimental/paged_cache/paged_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/rmsnorm_distributed_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/gated_delta_prefill_query/gated_delta_prefill_query_nanobind.hpp"
+#include "ttnn/operations/experimental/transformer/triangle_solve/triangle_solve_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/dit_layernorm_pre_all_gather_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/dit_layernorm_post_all_gather_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/dit_minimal_matmul_addcmul_fused/dit_minimal_matmul_addcmul_fused_nanobind.hpp"
@@ -117,6 +118,7 @@ void py_module(nb::module_& mod) {
 
     transformer::bind_wan_fused_distributed_rmsnorm(mod);
     transformer::bind_gated_delta_prefill_query(mod);
+    transformer::bind_triangle_solve(mod);
     transformer::bind_dit_layernorm_pre_all_gather(mod);
     transformer::bind_dit_layernorm_post_all_gather(mod);
     transformer::bind_dit_minimal_matmul_addcmul_fused(mod);
