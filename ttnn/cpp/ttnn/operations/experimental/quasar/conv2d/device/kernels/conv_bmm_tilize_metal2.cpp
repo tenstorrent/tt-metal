@@ -460,6 +460,19 @@ void kernel_main() {
                             pack_reconfig_data_format(curr_matmul_out_cb, tilized_in0_cb_id);
                             pack_reconfig_l1_acc(0);
                         }
+#ifdef ARCH_QUASAR
+                        // [#48552] The Quasar fused-conv tilize init fix (dvalid scrub + MATH/PACK sync re-seed
+                        // + pack BD / DEST init) was applied ONLY to the height_sharded branch below. The
+                        // block-sharded (mcast) tilize hits the SAME ERROR_TRISC1 (MATH) 0x19: the plain Quasar
+                        // tilize_init omits llk_math_pack_sync_init and never scrubs the matmul's stale DEST
+                        // dvalid, so the tilize's MOVA2D datacopy MOP is rejected at issue for targeting a bank
+                        // whose dvalid is still set. Scrub + re-seed here too (see the full rationale in the
+                        // height_sharded branch). Runs once per tilize group; no per-block hw_configure.
+                        MATH((llk_math_set_dvalid<p_cleardvalid::FPU, DST_SYNC_MODE>()));
+                        MATH((llk_math_pack_sync_init()));
+                        PACK((llk_pack_init(tilized_in0_cb_id)));
+                        PACK((llk_pack_dest_init()));
+#endif
                         tilize_in<
                             in0_block_w,
                             in0_pretilize_cb_id,
