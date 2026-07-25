@@ -39,6 +39,7 @@ def run_reduce_scatter_impl(
     mem_config_weights=None,
     num_iters=1,
     enable_trace=True,
+    check_first_output_tile=False,
 ):
     torch.manual_seed(0)
 
@@ -73,9 +74,15 @@ def run_reduce_scatter_impl(
     rs_num_batches = rs_input_shape[0]
     single_batch_input_shape = rs_input_shape[:]
     single_batch_input_shape[2] //= rs_num_batches
+    # Line reduce-scatter carries forward and backward partials separately.
+    # Its intermediate is consequently two input-sized halves; Ring uses the
+    # original single-input staging shape.
+    intermediate_shape = single_batch_input_shape[:]
+    if rs_topology == ttnn.Topology.Linear:
+        intermediate_shape[0] *= 2
     persistent_intermediate_buffers = [
         ttnn.from_torch(
-            torch.zeros(single_batch_input_shape),
+            torch.zeros(intermediate_shape),
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=rs_input_dtype,
@@ -139,7 +146,7 @@ def run_reduce_scatter_impl(
         out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
         per_core_M=per_core_M,
         per_core_N=per_core_N,
-        out_block_w=per_core_N // 2,
+        out_block_w=max(divisor for divisor in range(per_core_N // 2, 0, -1) if per_core_N % divisor == 0),
         transpose_mcast=False,
         fused_activation=None,  # ttnn.UnaryOpType.SILU,
         fuse_batch=False,
@@ -289,9 +296,13 @@ def run_reduce_scatter_impl(
 
         tt_rs_out = ttnn.from_device(tt_rs_out_tensor)
         tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
+        assert torch.isfinite(tt_rs_out).all(), f"{i} fused reduce-scatter produced non-finite output"
         eq, output = comp_pcc(tt_rs_out, torch_rs_out)
         logger.info(f"{output}, iteration {i}")
         assert eq, f"{i} FAILED ag: {output}"
+        if check_first_output_tile:
+            first_tile_eq, first_tile_pcc = comp_pcc(tt_rs_out[..., :32, :], torch_rs_out[..., :32, :])
+            assert first_tile_eq, f"{i} FAILED first output tile: {first_tile_pcc}"
 
         # print(f"RS TORCH TENSOR {torch_rs_out}")
         # print(f"RS TT TENSOR {tt_rs_out}")
@@ -380,6 +391,7 @@ def run_reduce_scatter_impl(
     "device_params, rs_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 330000}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 500000}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
 )
@@ -424,4 +436,44 @@ def test_reduce_scatter_async(
         enable_trace=enable_trace,
         num_iters=num_iters,
         use_non_fused=False,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 1024 * 1024}],
+    indirect=True,
+)
+@pytest.mark.parametrize("child_start", [0, 4], ids=["child_0", "child_4"])
+def test_linear_matmul_reduce_scatter_tp4_child_mesh(mesh_device, child_start):
+    """Exercise the KDA output-projection MRS shape on one LoudBox child mesh.
+
+    KDA TP=4 is row parallel: every chip owns 1,024 of the 4,096 input
+    features, produces all 2,304 output features, then reduces/scatters the
+    output width.  Keep this minimal repro independent of KDA's recurrent
+    scheduling so a first-tile failure is attributable to fused Line MRS.
+    """
+    child_mesh = mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, child_start))
+    run_reduce_scatter_impl(
+        child_mesh,
+        num_devices=4,
+        rs_input_shape=[1, 1, 640, 2304],
+        mm_shard_dim=2,
+        rs_scatter_dim=3,
+        num_links=2,
+        mm_weights_shape=[1, 1, 4096, 2304],
+        rs_input_dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        matmul_weights_dtype=ttnn.bfloat16,
+        max_in0_block_w=4,
+        use_bias=False,
+        mem_config_input=ttnn.DRAM_MEMORY_CONFIG,
+        mem_config_rs=ttnn.DRAM_MEMORY_CONFIG,
+        mem_config_mm=ttnn.DRAM_MEMORY_CONFIG,
+        rs_topology=ttnn.Topology.Linear,
+        use_non_fused=False,
+        num_iters=1,
+        enable_trace=True,
+        check_first_output_tile=True,
     )
