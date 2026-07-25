@@ -149,6 +149,32 @@ std::vector<uint32_t> canonical_forward(const Adjacency& adj, const std::set<uin
     return std::min(walks[0], walks[1]);
 }
 
+// The X ring is closed when a row's E/W edges form a cycle over every column. Under the uniform
+// four-chip X ring of the supported deployment that reduces to the wrap edge being present, so this
+// looks for an E/W neighbour of column 0 sitting in the last column.
+bool x_ring_is_closed(
+    const MeshGraph& mesh_graph,
+    MeshId mesh_id,
+    uint32_t num_cols,
+    const std::vector<std::unordered_map<ChipId, RouterEdge>>& mesh_edges) {
+    if (num_cols <= 2) {
+        return false;  // a one- or two-column axis has no distinct wrap edge
+    }
+    const ChipId first = mesh_graph.coordinate_to_chip(mesh_id, MeshCoordinate(0, 0));
+    if (first < 0 || static_cast<size_t>(first) >= mesh_edges.size()) {
+        return false;
+    }
+    for (const auto& [neighbor_chip, edge] : mesh_edges[first]) {
+        if (edge.port_direction != RoutingDirection::E && edge.port_direction != RoutingDirection::W) {
+            continue;
+        }
+        if (mesh_graph.chip_to_coordinate(mesh_id, neighbor_chip)[1] == num_cols - 1) {
+            return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace
 
 bool ExpressYProjection::has_cardinal_end_wrap() const {
@@ -587,20 +613,45 @@ bool ProtectedRingModel::continuation_allowed(
 
 ProtectedRingModel ProtectedRingModel::derive_from_mesh_graph(const MeshGraph& mesh_graph, MeshId mesh_id) {
     const auto shape = mesh_graph.get_mesh_shape(mesh_id);
-    TT_FATAL(shape.dims() == 2, "Express ring derivation requires a 2D mesh, got {} dims", shape.dims());
-    const uint32_t num_rows = shape[0];
-    const uint32_t num_cols = shape[1];
-
     const auto& intra = mesh_graph.get_intra_mesh_connectivity();
     const auto mesh_index = *mesh_id;
     TT_FATAL(mesh_index < intra.size(), "Mesh {} is out of range of intra-mesh connectivity", mesh_index);
+
+    // A mesh with no same-mesh express adjacency has no Y ring to derive, and none of the structural
+    // requirements below apply to it. Legacy cardinal meshes take this path: they must not be
+    // rejected for a non-2D shape or for columns that differ, which an irregular carve-out can
+    // legitimately have. The strict projection is an express-topology requirement, not a general one.
+    bool any_express = false;
+    for (const auto& chip_edges : intra[mesh_index]) {
+        for (const auto& [neighbor_chip, edge] : chip_edges) {
+            if (edge.port_direction == RoutingDirection::Z) {
+                any_express = true;
+                break;
+            }
+        }
+        if (any_express) {
+            break;
+        }
+    }
+
+    if (shape.dims() != 2 || !any_express) {
+        ProtectedRingModel model;
+        if (shape.dims() == 2) {
+            model.num_rows_ = shape[0];
+            model.num_cols_ = shape[1];
+            model.x_ring_closed_ = x_ring_is_closed(mesh_graph, mesh_id, shape[1], intra[mesh_index]);
+        }
+        return model;
+    }
+
+    const uint32_t num_rows = shape[0];
+    const uint32_t num_cols = shape[1];
 
     ExpressYProjection projection;
     projection.num_rows = num_rows;
 
     EdgeSet ordinary;
     EdgeSet express;
-    bool x_ring_closed = num_cols > 2;
 
     // Project every column, then require them to agree. The compact route relation depends on that
     // uniformity, so a mismatch is a topology this model cannot describe.
@@ -669,24 +720,7 @@ ProtectedRingModel ProtectedRingModel::derive_from_mesh_graph(const MeshGraph& m
     projection.ordinary_edges.assign(ordinary.begin(), ordinary.end());
     projection.express_edges.assign(express.begin(), express.end());
 
-    // The X ring is closed when each row's E/W edges form a cycle over every column. With the
-    // uniform four-chip X ring of the supported deployment this reduces to the wrap being present.
-    if (x_ring_closed) {
-        const ChipId first = mesh_graph.coordinate_to_chip(mesh_id, MeshCoordinate(0, 0));
-        bool wrap_present = false;
-        for (const auto& [neighbor_chip, edge] : intra[mesh_index][first]) {
-            if (edge.port_direction != RoutingDirection::E && edge.port_direction != RoutingDirection::W) {
-                continue;
-            }
-            const auto neighbor_coord = mesh_graph.chip_to_coordinate(mesh_id, neighbor_chip);
-            if (neighbor_coord[1] == num_cols - 1) {
-                wrap_present = true;
-            }
-        }
-        x_ring_closed = wrap_present;
-    }
-
-    return derive(projection, num_cols, x_ring_closed);
+    return derive(projection, num_cols, x_ring_is_closed(mesh_graph, mesh_id, num_cols, intra[mesh_index]));
 }
 
 }  // namespace tt::tt_fabric

@@ -7,6 +7,7 @@
 #include "tt_metal/fabric/compute_mesh_router_builder.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
+#include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "dispatch/kernel_config/relay_mux.hpp"
@@ -66,13 +67,18 @@ void FabricBuilder::discover_channels() {
         // Cache neighbor and channel info
         FabricNodeId neighbor_fabric_node_id = FabricNodeId(neighbors.begin()->first, neighbors.begin()->second[0]);
 
-        // A same-mesh Z adjacency is an intramesh express (skip-link) chord, not an intermesh Z router.
-        // The builder cannot yet wire one: there is no VC0/VC1 express sender, no protected-ring
-        // classification for its BFC guard, and no 5-wide VC0 to hold it. Routing generation and the
-        // packet codec can already produce express hops, so failing here is what keeps an express mesh
-        // from running half-wired, with the kernel forwarding to a Z downstream that was never created.
+        // Classify the edge here so every later decision keyed on capability agrees with one answer,
+        // and so a same-mesh Z on a mesh without validated express intent fails at discovery.
+        const auto capability =
+            classify_fabric_edge(control_plane, local_node_, neighbor_fabric_node_id, direction);
+
+        // The builder cannot wire an express chord yet: there is no VC0/VC1 express sender, no
+        // protected-ring classification to pick its BFC guard, and no 5-wide VC0 to hold it. Routing
+        // generation and the packet codec can already produce express hops, so failing here is what
+        // keeps an express mesh from running half-wired, with the kernel forwarding to a Z downstream
+        // that was never created.
         TT_FATAL(
-            !(direction == RoutingDirection::Z && neighbor_fabric_node_id.mesh_id == local_node_.mesh_id),
+            capability != EdgeCapability::INTRAMESH_EXPRESS,
             "Intramesh express (Z) link on M{}D{} -> D{} is not yet supported by FabricBuilder. Express "
             "wiring, sender allocation, and BFC classification are still being implemented; run this mesh "
             "graph descriptor without express/skip links until that lands.",

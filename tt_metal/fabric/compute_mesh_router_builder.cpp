@@ -11,6 +11,7 @@
 #include "tt_metal/fabric/channel_trimming_import.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/fabric_core_placement.hpp"
+#include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -170,11 +171,16 @@ RouterChannelCounts compute_router_channel_counts(
     const auto topology = fabric_context.get_fabric_topology();
     const auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     const bool downstream_is_tensix_builder = !is_dispatch_link && fabric_tensix_config == FabricTensixConfig::MUX;
-    const bool has_z_router = fabric_context.has_z_router_on_device(control_plane, fabric_node_id);
-    const auto variant = (direction == RoutingDirection::Z) ? RouterVariant::Z_ROUTER : RouterVariant::MESH;
+    // Only an intermesh Z edge gets the dedicated Z_ROUTER shape and the VC1 sender it implies. A
+    // same-mesh Z is an express chord, which is an ordinary mesh-like forwarding direction carrying a
+    // capability -- not a variant family of its own. discover_channels() already rejects more than one
+    // neighbor mesh per direction, so the Z direction has exactly one neighbor to classify.
+    const bool has_intermesh_z = has_intermesh_z_edge(control_plane, fabric_node_id);
+    const auto variant =
+        (direction == RoutingDirection::Z && has_intermesh_z) ? RouterVariant::Z_ROUTER : RouterVariant::MESH;
     const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
-    auto channel_mapping =
-        FabricRouterChannelMapping(topology, downstream_is_tensix_builder, variant, &intermesh_config, has_z_router);
+    auto channel_mapping = FabricRouterChannelMapping(
+        topology, downstream_is_tensix_builder, variant, &intermesh_config, has_intermesh_z);
 
     RouterChannelCounts counts;
     const uint32_t num_vcs = channel_mapping.get_num_virtual_channels();
@@ -263,14 +269,22 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     auto tensix_config_for_lookup = will_create_tensix_builder ? fabric_tensix_config : FabricTensixConfig::DISABLED;
     const auto& edm_config = builder_context.get_fabric_router_config(tensix_config_for_lookup, eth_direction);
 
-    // Determine the router variant
-    bool has_z_router = fabric_context.has_z_router_on_device(control_plane, local_node);
-    RouterVariant variant = (location.direction == RoutingDirection::Z) ? RouterVariant::Z_ROUTER : RouterVariant::MESH;
+    // Determine the router variant from this edge's capability rather than its direction letter. A
+    // same-mesh Z is an express chord and stays a MESH router; only a Z edge that actually crosses a
+    // mesh boundary gets the dedicated Z_ROUTER shape.
+    const auto edge_capability =
+        classify_fabric_edge(control_plane, local_node, location.remote_node, location.direction);
+    const bool has_intermesh_z = has_intermesh_z_edge(control_plane, local_node);
+    RouterVariant variant = (location.direction == RoutingDirection::Z && edge_capability == EdgeCapability::INTERMESH)
+                                ? RouterVariant::Z_ROUTER
+                                : RouterVariant::MESH;
 
-    // Create channel mapping EARLY (needed for computing injection flags)
+    // Create channel mapping EARLY (needed for computing injection flags). The Z-related channel
+    // shapes exist to reach an intermesh Z router, so they are gated on that rather than on the
+    // presence of any Z port.
     const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
-    auto channel_mapping =
-        FabricRouterChannelMapping(topology, downstream_is_tensix_builder, variant, &intermesh_config, has_z_router);
+    auto channel_mapping = FabricRouterChannelMapping(
+        topology, downstream_is_tensix_builder, variant, &intermesh_config, has_intermesh_z);
 
     // Create connection mapping (Phase 3)
     RouterConnectionMapping connection_mapping;
@@ -282,8 +296,11 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         // EXPERIMENTAL: in pass-through mode, mesh routers also forward VC1 traffic to the local Z
         // router (MESH_TO_Z on VC1) so inter-mesh traffic can traverse intermediate meshes (A->B->C).
         bool enable_mesh_pass_through = intermesh_config.requires_vc1_mesh_pass_through;
+        // The MESH_TO_Z connection exists to reach an intermesh Z router, so it follows the intermesh
+        // Z edge rather than the presence of any Z port. An express chord is wired as an ordinary
+        // same-VC cardinal/Z transition instead, which arrives with the express wiring work.
         connection_mapping = RouterConnectionMapping::for_mesh_router(
-            topology, location.direction, has_z_router, enable_vc1, enable_mesh_pass_through);
+            topology, location.direction, has_intermesh_z, enable_vc1, enable_mesh_pass_through);
     }
 
     // Compute injection channel flags at router level BEFORE creating builders
