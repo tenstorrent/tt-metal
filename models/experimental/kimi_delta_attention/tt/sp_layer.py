@@ -100,6 +100,18 @@ class SP2TP4KimiDeltaAttention:
         for layer in self.layers:
             layer.reset_state(batch_size)
 
+    def enable_trace_stable_state(self) -> None:
+        """Keep both span caches at fixed addresses for captured execution.
+
+        The sequence handoff overwrites the second span's cache before its
+        recurrence consumes it, so fixed destination buffers are compatible
+        with the causal ordering as well as required for trace replay.
+        """
+        for layer in self.layers:
+            assert layer.recurrent_state is not None
+            assert layer.convolution_state is not None
+            layer.set_external_state(layer.recurrent_state, layer.convolution_state)
+
     def _handoff_causal_state(self) -> None:
         """Copy the completed first-span cache into the second-span cache."""
         source, destination = self.first_layer, self.second_layer

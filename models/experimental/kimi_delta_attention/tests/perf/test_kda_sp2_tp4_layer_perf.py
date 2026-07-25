@@ -101,6 +101,7 @@ def test_kda_sp2_tp4_layer_device_perf(mesh_device: ttnn.MeshDevice) -> None:
     )
     layer = SP2TP4KimiDeltaAttention(mesh_device, config, random_weights(config))
     layer.reset_state(batch_size=1)
+    layer.enable_trace_stable_state()
     span = sequence // 2
     first_span = ttnn.from_torch(
         hidden[:, :span],
