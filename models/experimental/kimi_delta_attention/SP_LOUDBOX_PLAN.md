@@ -190,6 +190,11 @@ state-transfer protocol and measure its components.
   `2026_07_25_21_11_53`), one link 3.581 ms (report
   `2026_07_25_21_13_35`), and three workers 3.207 ms (report
   `2026_07_25_21_15_17`).
+* The fused TP4 `matmul_reduce_scatter_async` probe also times out when using
+  the standalone fused-op `(8,6)` matmul grid and reduce-scatter offset
+  `(0,6)` (guarded T=1280 test on 2026-07-25).  This rules out the original
+  `(8,8)/(0,8)` worker-layout conflict; do not reintroduce a KDA-side fused
+  toggle until child-mesh fused-MRS protocol ownership is fixed in CCL.
 
 ## Milestones
 
