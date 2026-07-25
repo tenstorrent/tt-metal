@@ -222,17 +222,23 @@ def test_pipeline_distilled(
             assert_vbench_quality(output_filename, prompt=prompt, thresholds=thresholds)
             return
 
+        cwd = os.path.abspath(os.getcwd())
+
         with tempfile.TemporaryDirectory() as vbench_dir:
 
-            def _link(n):
-                src = os.path.abspath(f"ltx_av_fast_{width}x{height}_{n}.mp4")
-                os.symlink(src, os.path.join(vbench_dir, f"seed_{n}.mp4"))
+            def _link(idx: int, mp4_number: int) -> None:
+                # The render always lands directly in CWD; resolve the path and confirm it stays there so
+                # the number threaded into the filename can't escape it, and give the link a plain integer
+                # name so nothing dynamic reaches the destination path either.
+                src = os.path.abspath(os.path.join(cwd, f"ltx_av_fast_{width}x{height}_{mp4_number}.mp4"))
+                if os.path.dirname(src) != cwd:
+                    raise ValueError(f"render path escaped the working dir: {src!r}")
+                os.symlink(src, os.path.join(vbench_dir, f"seed_{idx}.mp4"))
 
-            _link(number)
+            _link(0, number)
             for k in range(1, num_seeds):
-                extra = f"vbench{k}"
-                run(prompt=prompt, number=extra, seed=seed + k)
-                _link(extra)
+                run(prompt=prompt, number=1000 + k, seed=seed + k)
+                _link(k, 1000 + k)
             logger.info(f"VBench gate averaged over {num_seeds} seeds (base seed {seed})")
             assert_vbench_quality(vbench_dir, prompt=prompt, thresholds=thresholds)
 
