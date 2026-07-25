@@ -19,6 +19,7 @@ constexpr uint32_t cb_remote_b = 7;
 constexpr uint32_t cb_initial_state = 8;
 constexpr uint32_t cb_output = 9;
 constexpr uint32_t cb_stage_token = 11;
+constexpr uint32_t cb_terminal = 12;
 }  // namespace
 
 void kernel_main() {
@@ -26,10 +27,12 @@ void kernel_main() {
     constexpr uint32_t Vt = get_compile_time_arg_val(1);
     constexpr uint32_t BH = get_compile_time_arg_val(2);
     constexpr uint32_t G = get_compile_time_arg_val(3);
-    constexpr auto a_args = TensorAccessorArgs<4>();
+    constexpr bool output_terminal_state = get_compile_time_arg_val(4);
+    constexpr auto a_args = TensorAccessorArgs<5>();
     constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
     constexpr auto s_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
     constexpr auto o_args = TensorAccessorArgs<s_args.next_compile_time_args_offset()>();
+    constexpr auto terminal_args = TensorAccessorArgs<o_args.next_compile_time_args_offset()>();
     constexpr uint32_t kk = Kt * Kt;
     constexpr uint32_t kv = Kt * Vt;
     static_assert(BH * G <= 128, "affine prefix coordinate table exceeds runtime-arg budget");
@@ -41,21 +44,23 @@ void kernel_main() {
     const uint32_t b_addr = get_arg_val<uint32_t>(4);
     const uint32_t s_addr = get_arg_val<uint32_t>(5);
     const uint32_t o_addr = get_arg_val<uint32_t>(6);
-    const uint32_t ready_sem = get_arg_val<uint32_t>(7);
-    const uint32_t arrival_sem = get_arg_val<uint32_t>(8);
-    const uint32_t release_sem = get_arg_val<uint32_t>(9);
-    const uint32_t coordinator_x = get_arg_val<uint32_t>(10);
-    const uint32_t coordinator_y = get_arg_val<uint32_t>(11);
+    const uint32_t terminal_addr = get_arg_val<uint32_t>(7);
+    const uint32_t ready_sem = get_arg_val<uint32_t>(8);
+    const uint32_t arrival_sem = get_arg_val<uint32_t>(9);
+    const uint32_t release_sem = get_arg_val<uint32_t>(10);
+    const uint32_t coordinator_x = get_arg_val<uint32_t>(11);
+    const uint32_t coordinator_y = get_arg_val<uint32_t>(12);
 
     const uint32_t tile_bytes = get_tile_size(cb_initial_a);
     const auto a_accessor = TensorAccessor(a_args, a_addr, tile_bytes);
     const auto b_accessor = TensorAccessor(b_args, b_addr, tile_bytes);
     const auto s_accessor = TensorAccessor(s_args, s_addr, tile_bytes);
     const auto o_accessor = TensorAccessor(o_args, o_addr, tile_bytes);
+    const auto terminal_accessor = TensorAccessor(terminal_args, terminal_addr, tile_bytes);
     Noc noc;
 
-    auto worker_x = [&](uint32_t worker) { return get_arg_val<uint32_t>(12 + 2 * worker); };
-    auto worker_y = [&](uint32_t worker) { return get_arg_val<uint32_t>(13 + 2 * worker); };
+    auto worker_x = [&](uint32_t worker) { return get_arg_val<uint32_t>(13 + 2 * worker); };
+    auto worker_y = [&](uint32_t worker) { return get_arg_val<uint32_t>(14 + 2 * worker); };
     auto read_tiles = [&](const auto& accessor, uint32_t cb_id, uint32_t page, uint32_t tiles) {
         CircularBuffer cb(cb_id);
         cb.reserve_back(tiles);
@@ -155,4 +160,21 @@ void kernel_main() {
     }
     noc.async_write_barrier();
     output.pop_front(kv);
+
+    if constexpr (output_terminal_state) {
+        if (group == G - 1) {
+            CircularBuffer terminal(cb_terminal);
+            terminal.wait_front(kv);
+            for (uint32_t tile = 0; tile < kv; tile++) {
+                noc.async_write(
+                    terminal,
+                    terminal_accessor,
+                    tile_bytes,
+                    {.offset_bytes = tile * tile_bytes},
+                    {.page_id = (worker_index / G) * kv + tile});
+            }
+            noc.async_write_barrier();
+            terminal.pop_front(kv);
+        }
+    }
 }

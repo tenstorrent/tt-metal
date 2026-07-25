@@ -119,11 +119,13 @@ state-transfer protocol and measure its components.
   groups for the T=2560 production-equivalent path. The primitive has PCC >=
   0.995 at T=640 and the full T=1280 SP test passes the output, recurrent,
   convolution, and boundary-token PCC >= 0.98 gate. The valid warmed
-  split-affine child-trace result is **1.438 ms** (report
-  `2026_07_25_19_42_27`): 1.106x the equal-global TP=4 control and 1.343x the
-  local-work control. It misses the actionable 1.339 ms production-rank budget
-  by **0.099 ms**; the next target is to remove that remaining prefix/final
-  scan critical-path cost.
+  split-affine child-trace result was **1.438 ms** (report
+  `2026_07_25_19_42_27`). Fusing the terminal affine application into the
+  prefix program removes the DRAM slices and standalone matmul/add, reducing
+  it to **1.396 ms** (report `2026_07_25_19_49_41`): 1.139x the equal-global
+  TP=4 control and 1.303x the local-work control. It now misses the actionable
+  1.339 ms production-rank budget by only **0.057 ms**; the next target is the
+  remaining final-scan/epilogue critical path.
 
 ## Milestones
 

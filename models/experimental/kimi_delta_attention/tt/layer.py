@@ -471,6 +471,23 @@ class KimiDeltaAttention:
             compute_kernel_config=self.compute_config,
         )
 
+    def group_entry_states_and_end(
+        self, transform_a: ttnn.Tensor, transform_b: ttnn.Tensor, groups: int
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Return grouped entry states and the terminal carry from one prefix program."""
+        assert self.recurrent_state is not None
+        batch, heads, key_dim, value_dim = self.recurrent_state.shape
+        initial = ttnn.reshape(self.recurrent_state, (batch * heads, key_dim, value_dim))
+        entries, terminal = ttnn.transformer.kda_affine_prefix_with_terminal_state(
+            transform_a,
+            transform_b,
+            initial,
+            groups,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_config,
+        )
+        return entries, ttnn.reshape(terminal, (batch, heads, key_dim, value_dim))
+
     def group_end_state(
         self, transform_a: ttnn.Tensor, transform_b: ttnn.Tensor, entries: ttnn.Tensor, groups: int
     ) -> ttnn.Tensor:

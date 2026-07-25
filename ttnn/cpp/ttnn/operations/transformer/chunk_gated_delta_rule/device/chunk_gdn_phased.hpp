@@ -198,6 +198,7 @@ struct KdaAffinePrefixParams {
     uint32_t val_dim;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
+    bool output_terminal_state;
 };
 
 struct KdaAffinePrefixInputs {
@@ -225,6 +226,14 @@ struct KdaAffinePrefixOperation {
 };
 
 Tensor kda_affine_prefix(
+    const Tensor& transform_a,
+    const Tensor& transform_b,
+    const Tensor& initial_state,
+    uint32_t groups_per_head,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const DeviceComputeKernelConfig& compute_kernel_config);
+
+std::tuple<Tensor, Tensor> kda_affine_prefix_with_terminal_state(
     const Tensor& transform_a,
     const Tensor& transform_b,
     const Tensor& initial_state,

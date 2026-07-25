@@ -181,6 +181,18 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none());
 
+    ttnn::bind_function<"kda_affine_prefix_with_terminal_state", "ttnn.transformer.">(
+        mod,
+        "Compute per-group KDA entry states and the terminal state in one device program.",
+        &ttnn::transformer::kda_affine_prefix_with_terminal_state,
+        nb::arg("transform_a").noconvert(),
+        nb::arg("transform_b").noconvert(),
+        nb::arg("initial_state").noconvert(),
+        nb::arg("groups_per_head"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
+
     ttnn::bind_function<"kda_gated_rms_norm", "ttnn.transformer.">(
         mod,
         "Fused per-head RMSNorm and sigmoid gate for tile-aligned KDA prefill.",

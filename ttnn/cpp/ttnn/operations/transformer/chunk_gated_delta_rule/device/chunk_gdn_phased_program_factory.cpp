@@ -695,6 +695,9 @@ tt::tt_metal::ProgramDescriptor KdaAffinePrefixProgramFactory::create_descriptor
     add_cb(9, kv);   // group entry state
     add_cb(10, kv);  // matmul scratch
     add_cb(11, 1);   // dataflow-to-compute stage token
+    if (attrs.output_terminal_state) {
+        add_cb(12, kv);  // terminal span state
+    }
 
     constexpr uint32_t ready_semaphore_id = 0;
     constexpr uint32_t arrival_semaphore_id = 1;
@@ -705,11 +708,13 @@ tt::tt_metal::ProgramDescriptor KdaAffinePrefixProgramFactory::create_descriptor
     }
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/";
-    std::vector<uint32_t> dataflow_ct = {Kt, Vt, attrs.BH, G};
+    std::vector<uint32_t> dataflow_ct = {Kt, Vt, attrs.BH, G, attrs.output_terminal_state};
     TensorAccessorArgs(*in.transform_a.buffer()).append_to(dataflow_ct);
     TensorAccessorArgs(*in.transform_b.buffer()).append_to(dataflow_ct);
     TensorAccessorArgs(*in.initial_state.buffer()).append_to(dataflow_ct);
     TensorAccessorArgs(*outputs[0].buffer()).append_to(dataflow_ct);
+    TensorAccessorArgs(*(attrs.output_terminal_state ? outputs[1].buffer() : outputs[0].buffer()))
+        .append_to(dataflow_ct);
 
     KernelDescriptor dataflow;
     dataflow.kernel_source = kdir + "dataflow/reader_writer_kda_affine_prefix.cpp";
@@ -723,7 +728,7 @@ tt::tt_metal::ProgramDescriptor KdaAffinePrefixProgramFactory::create_descriptor
     compute.kernel_source = kdir + "compute/kda_affine_prefix.cpp";
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = cores;
-    compute.compile_time_args = {Kt, Vt, G};
+    compute.compile_time_args = {Kt, Vt, G, attrs.output_terminal_state};
     compute.config = compute_cfg(device->arch(), attrs.compute_kernel_config);
     compute.runtime_args.reserve(group_heads);
 
@@ -731,12 +736,13 @@ tt::tt_metal::ProgramDescriptor KdaAffinePrefixProgramFactory::create_descriptor
     auto* b_buffer = in.transform_b.buffer();
     auto* s_buffer = in.initial_state.buffer();
     auto* output_buffer = outputs[0].buffer();
+    auto* terminal_buffer = attrs.output_terminal_state ? outputs[1].buffer() : output_buffer;
     const auto coordinator = device->worker_core_from_logical_core(dist.cores[0]);
     for (uint32_t flat = 0; flat < group_heads; flat++) {
         const auto& core = dist.cores[flat];
         const uint32_t group = flat % G;
         KernelDescriptor::RTArgList args;
-        args.reserve(12 + 2 * group_heads);
+        args.reserve(13 + 2 * group_heads);
         args.push_back(flat);
         args.push_back(group);
         args.push_back(group_heads);
@@ -744,6 +750,7 @@ tt::tt_metal::ProgramDescriptor KdaAffinePrefixProgramFactory::create_descriptor
         args.push_back(b_buffer);
         args.push_back(s_buffer);
         args.push_back(output_buffer);
+        args.push_back(terminal_buffer);
         args.push_back(ready_semaphore_id);
         args.push_back(arrival_semaphore_id);
         args.push_back(release_semaphore_id);

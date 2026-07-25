@@ -22,6 +22,7 @@ constexpr uint32_t cb_initial_state = 8;
 constexpr uint32_t cb_final = 9;
 constexpr uint32_t cb_scratch = 10;
 constexpr uint32_t cb_stage_token = 11;
+constexpr uint32_t cb_terminal = 12;
 
 inline void wait(uint32_t cb, uint32_t tiles) { CircularBuffer(cb).wait_front(tiles); }
 inline void pop(uint32_t cb, uint32_t tiles) { CircularBuffer(cb).pop_front(tiles); }
@@ -83,6 +84,7 @@ void kernel_main() {
     constexpr uint32_t Kt = get_compile_time_arg_val(0);
     constexpr uint32_t Vt = get_compile_time_arg_val(1);
     constexpr uint32_t G = get_compile_time_arg_val(2);
+    constexpr bool output_terminal_state = get_compile_time_arg_val(3);
     constexpr uint32_t kk = Kt * Kt;
     constexpr uint32_t kv = Kt * Vt;
     const uint32_t group = get_arg_val<uint32_t>(0);
@@ -122,11 +124,12 @@ void kernel_main() {
         ping = !ping;
     }
 
+    const uint32_t terminal_a = ping ? cb_stage_a_pong : cb_stage_a_ping;
+    const uint32_t terminal_b = ping ? cb_stage_b_pong : cb_stage_b_ping;
     wait(cb_stage_token, 1);
     if (group == 0) {
         wait(cb_initial_state, kv);
         copy(cb_initial_state, cb_final, kv);
-        pop(cb_initial_state, kv);
     } else {
         wait(cb_remote_a, kk);
         wait(cb_remote_b, kv);
@@ -136,8 +139,26 @@ void kernel_main() {
         add(cb_scratch, cb_remote_b, cb_final, kv);
         pop(cb_remote_a, kk);
         pop(cb_remote_b, kv);
-        pop(cb_initial_state, kv);
         pop(cb_scratch, kv);
     }
     pop(cb_stage_token, 1);
+
+    if constexpr (output_terminal_state) {
+        if (group == G - 1) {
+            wait(terminal_a, kk);
+            wait(terminal_b, kv);
+            wait(cb_initial_state, kv);
+            matmul(terminal_a, cb_initial_state, cb_scratch, Kt, Kt, Vt);
+            wait(cb_scratch, kv);
+            add(cb_scratch, terminal_b, cb_terminal, kv);
+            pop(terminal_a, kk);
+            pop(terminal_b, kv);
+            pop(cb_initial_state, kv);
+            pop(cb_scratch, kv);
+        } else {
+            pop(cb_initial_state, kv);
+        }
+    } else {
+        pop(cb_initial_state, kv);
+    }
 }

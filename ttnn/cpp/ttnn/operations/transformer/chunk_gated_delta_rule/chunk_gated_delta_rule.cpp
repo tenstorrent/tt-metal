@@ -1046,6 +1046,26 @@ ttnn::Tensor kda_affine_prefix(
     return ttnn::prim::kda_affine_prefix(transform_a, transform_b, initial_state, groups_per_head, out_mem, kernel_cfg);
 }
 
+std::tuple<ttnn::Tensor, ttnn::Tensor> kda_affine_prefix_with_terminal_state(
+    const ttnn::Tensor& transform_a,
+    const ttnn::Tensor& transform_b,
+    const ttnn::Tensor& initial_state,
+    uint32_t groups_per_head,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    auto* dev = transform_a.device();
+    const auto out_mem = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
+    const auto kernel_cfg = init_device_compute_kernel_config(
+        dev->arch(),
+        compute_kernel_config,
+        MathFidelity::HiFi4,
+        /*default_approx_mode=*/false,
+        /*default_fp32_acc=*/true,
+        /*default_l1_acc=*/false);
+    return ttnn::prim::kda_affine_prefix_with_terminal_state(
+        transform_a, transform_b, initial_state, groups_per_head, out_mem, kernel_cfg);
+}
+
 ttnn::Tensor kda_gated_rms_norm(
     const ttnn::Tensor& input,
     const ttnn::Tensor& gate,

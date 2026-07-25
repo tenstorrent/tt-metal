@@ -348,15 +348,26 @@ void KdaAffinePrefixOperation::validate_on_program_cache_miss(
 
 KdaAffinePrefixOperation::spec_return_value_t KdaAffinePrefixOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t&) {
-    return {TensorSpec(
+    std::vector<TensorSpec> specs = {TensorSpec(
         Shape({attrs.BH * attrs.groups_per_head, attrs.key_dim, attrs.val_dim}),
         TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config))};
+    if (attrs.output_terminal_state) {
+        specs.emplace_back(
+            Shape({attrs.BH, attrs.key_dim, attrs.val_dim}),
+            TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config));
+    }
+    return specs;
 }
 
 KdaAffinePrefixOperation::tensor_return_value_t KdaAffinePrefixOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     auto specs = compute_output_specs(attrs, in);
-    return {create_device_tensor(specs[0], in.transform_a.device())};
+    std::vector<Tensor> outputs;
+    outputs.reserve(specs.size());
+    for (const auto& spec : specs) {
+        outputs.push_back(create_device_tensor(spec, in.transform_a.device()));
+    }
+    return outputs;
 }
 
 Tensor kda_affine_prefix(
@@ -376,9 +387,33 @@ Tensor kda_affine_prefix(
             .key_dim = static_cast<uint32_t>(as[1]),
             .val_dim = static_cast<uint32_t>(bs[2]),
             .output_mem_config = output_mem_config,
-            .compute_kernel_config = compute_kernel_config},
+            .compute_kernel_config = compute_kernel_config,
+            .output_terminal_state = false},
         KdaAffinePrefixInputs{.transform_a = transform_a, .transform_b = transform_b, .initial_state = initial_state});
     return results[0];
+}
+
+std::tuple<Tensor, Tensor> kda_affine_prefix_with_terminal_state(
+    const Tensor& transform_a,
+    const Tensor& transform_b,
+    const Tensor& initial_state,
+    uint32_t groups_per_head,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const auto& as = transform_a.logical_shape();
+    const auto& bs = transform_b.logical_shape();
+    TT_FATAL(groups_per_head > 0 && as[0] % groups_per_head == 0, "invalid affine group count");
+    auto results = ttnn::device_operation::launch<KdaAffinePrefixOperation>(
+        KdaAffinePrefixParams{
+            .BH = static_cast<uint32_t>(as[0]) / groups_per_head,
+            .groups_per_head = groups_per_head,
+            .key_dim = static_cast<uint32_t>(as[1]),
+            .val_dim = static_cast<uint32_t>(bs[2]),
+            .output_mem_config = output_mem_config,
+            .compute_kernel_config = compute_kernel_config,
+            .output_terminal_state = true},
+        KdaAffinePrefixInputs{.transform_a = transform_a, .transform_b = transform_b, .initial_state = initial_state});
+    return {results[0], results[1]};
 }
 
 KdaGatedRmsOperation::program_factory_t KdaGatedRmsOperation::select_program_factory(

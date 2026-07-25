@@ -153,6 +153,15 @@ ttnn::Tensor kda_affine_prefix(
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 
+/** Return the per-group entry states and the terminal state in one device program. */
+std::tuple<ttnn::Tensor, ttnn::Tensor> kda_affine_prefix_with_terminal_state(
+    const ttnn::Tensor& transform_a,
+    const ttnn::Tensor& transform_b,
+    const ttnn::Tensor& initial_state,
+    uint32_t groups_per_head,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+
 /** Fused per-head RMSNorm and sigmoid gate for tile-aligned KDA prefill. */
 ttnn::Tensor kda_gated_rms_norm(
     const ttnn::Tensor& input,
