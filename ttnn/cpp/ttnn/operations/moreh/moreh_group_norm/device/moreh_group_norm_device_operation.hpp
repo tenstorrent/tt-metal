@@ -5,8 +5,10 @@
 #pragma once
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+
+#include <variant>
 
 namespace ttnn::operations::moreh::moreh_group_norm {
 struct MorehGroupNormOperation {
@@ -32,10 +34,16 @@ struct MorehGroupNormOperation {
     using spec_return_value_t = std::vector<std::optional<tt::tt_metal::TensorSpec>>;
     using tensor_return_value_t = std::vector<std::optional<Tensor>>;
 
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& outputs);
+    // Metal 2.0 / DataflowBuffer factory. Emits a ProgramSpec + ProgramRunArgs (a
+    // ProgramArtifacts) instead of a ProgramDescriptor. See moreh_group_norm_program_factory.cpp.
+    struct ProgramFactory {
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& outputs);
+    };
+
+    using program_factory_t = std::variant<ProgramFactory>;
 
     static void validate_tensors(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
