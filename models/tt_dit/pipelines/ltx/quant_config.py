@@ -26,18 +26,14 @@ from loguru import logger
 
 import ttnn
 
-# ``activation_dtype`` is honoured only when this is set. It is a more aggressive change than the
-# weight quant it rides on — weights are a fixed, well-conditioned distribution, activations are not
-# — and it is the one knob here that changes what the *collectives* move. It is on by default because
-# the shipped 1080p tier is measured and VBench-gated with it on; set it to 0 to A/B against the
-# weight-only preset.
+# When set, activations are narrowed to bf8 wherever they cross the fabric — both the linear activation
+# casts and the ring-SDPA Q/K/V inputs — so this is the one knob that changes what the collectives move
+# (the linear payloads and the SP-gathered K/V; SDPA itself stays HiFi2, only its inputs narrow). More
+# aggressive than the weight quant it rides on: weights are a fixed, well-conditioned distribution,
+# activations are not. On by default because the shipped 1080p tier is measured and VBench-gated with it
+# on; set to 0 to A/B against the weight-only preset. Keeping the SDPA input cast on this same knob means
+# a run can't narrow the linear activations while silently leaving SDPA at bf16 (or vice versa).
 LTX_QUANT_ACTIVATIONS = os.environ.get("LTX_QUANT_ACTIVATIONS", "1") in ("1", "true", "True")
-
-# Cast the ring-SDPA inputs (Q/K/V) to bf8 on top of the selected preset. On by default: SDPA stays
-# HiFi2 (only the inputs narrow), it holds baseline VBench across seeds, and it shrinks the SP-gathered
-# K/V collective for ~3% end-to-end. Rides the base preset's weight cache — no separate tensorbin dir,
-# since the cast is a runtime compute config, not a weight change. Set to 0 for bf16 SDPA inputs.
-LTX_QUANT_SDPA_BF8 = os.environ.get("LTX_QUANT_SDPA_BF8", "1") in ("1", "true", "True")
 
 # ---------------------------------------------------------------------------
 # Config dataclasses (field definitions identical to the Wan template)
@@ -102,7 +98,7 @@ class QuantConfig:
         (residual, gate) are bf16 and must match the weight tile format, so those weights
         stay bf16. ``ffn_ff2`` uses the RowParallel RS-fused addcmul, which Wan runs at bf8
         with no issue, so it is quantized. SDPA stays fully unquantized here (FastVideo kept
-        attention higher precision); the ``LTX_QUANT_SDPA_BF8`` flag casts the SDPA inputs to bf8.
+        attention higher precision); ``LTX_QUANT_ACTIVATIONS`` also narrows the SDPA inputs to bf8.
         """
         lc = LinearQuantConfig(
             weight_dtype=ttnn.bfloat8_b,
@@ -205,7 +201,7 @@ def apply_quant_config_to_block(block, config: QuantConfig, arch, has_audio: boo
         fp32_dest_acc_en=config.ring_sdpa.fp32_dest_acc,
     )
 
-    sdpa_input_dtype = ttnn.bfloat8_b if LTX_QUANT_SDPA_BF8 else config.ring_sdpa.input_dtype
+    sdpa_input_dtype = ttnn.bfloat8_b if LTX_QUANT_ACTIVATIONS else config.ring_sdpa.input_dtype
 
     def _pin_gate_output(attn):
         # to_gate_logits shares the gathered (bf8) activation with to_q/to_qkv but is not itself
@@ -290,5 +286,5 @@ def apply_quant_config(model, config: QuantConfig) -> None:
         f"  LTX_QUANT_ACTIVATIONS={LTX_QUANT_ACTIVATIONS} -> linear activation cast: {act} "
         f"(None = collectives move bf16)"
     )
-    sdpa_in = ttnn.bfloat8_b if LTX_QUANT_SDPA_BF8 else config.ring_sdpa.input_dtype
+    sdpa_in = ttnn.bfloat8_b if LTX_QUANT_ACTIVATIONS else config.ring_sdpa.input_dtype
     logger.info(f"  Ring SDPA: input_dtype={sdpa_in}, fidelity={config.ring_sdpa.math_fidelity}")
