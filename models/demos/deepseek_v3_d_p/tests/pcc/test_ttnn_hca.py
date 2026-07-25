@@ -80,86 +80,7 @@ def _flash_config(num_hidden_layers=4):
     )
 
 
-@pytest.mark.parametrize("batch, seq_len", _SHAPES, ids=_SHAPE_IDS)
-def test_hca_compressor(device, batch, seq_len):
-    """
-    Test TtHCACompressor PCC against DeepseekV4HCACompressor reference.
-
-    Uses DeepSeek-V4-Flash dimensions:
-        - hidden_size: 4096
-        - head_dim: 512
-        - compress_rate (HCA): 128
-    """
-    torch.manual_seed(42)
-
-    config = DeepseekV4Config(
-        hidden_size=DeepSeekV4FlashConfig.EMB_SIZE,
-        head_dim=DeepSeekV4FlashConfig.HEAD_DIM,
-        num_attention_heads=DeepSeekV4FlashConfig.NUM_ATTENTION_HEADS,
-        num_hidden_layers=4,
-        compress_rates=dict(DeepSeekV4FlashConfig.COMPRESS_RATES),
-        compress_rope_theta=DeepSeekV4FlashConfig.COMPRESS_ROPE_THETA,
-        rms_norm_eps=DeepSeekV4FlashConfig.RMS_NORM_EPS,
-    )
-    compress_rate = config.compress_rates["heavily_compressed_attention"]
-    logger.debug(f"batch={batch}, seq_len={seq_len}, hidden_size={config.hidden_size}, head_dim={config.head_dim}")
-    logger.debug(f"compress_rate={compress_rate}")
-
-    # Create PyTorch reference with random weights (position_bias is torch.empty and
-    # kv_norm.weight defaults to ones — randomise both so the comparison is meaningful).
-    logger.debug("Creating DeepseekV4HCACompressor reference")
-    ref = DeepseekV4HCACompressor(config).eval()
-    with torch.no_grad():
-        ref.position_bias.normal_(0.0, 0.02)
-        ref.kv_norm.weight.uniform_(0.5, 1.5)
-
-    hidden = torch.randn(batch, seq_len, config.hidden_size)
-    q_residual = torch.zeros(batch, seq_len, config.q_lora_rank)  # unused by HCA
-    position_ids = torch.arange(seq_len).unsqueeze(0).expand(batch, -1)
-
-    logger.debug("Running torch reference forward")
-    with torch.no_grad():
-        compressed_kv_ref, block_bias_ref = ref(hidden, q_residual, position_ids, past_key_values=None, layer_idx=0)
-    logger.debug(f"Reference compressed_kv shape: {tuple(compressed_kv_ref.shape)}")
-
-    logger.debug("Creating TtHCACompressor with same weights")
-    tt_model = TtHCACompressor.from_reference(device, ref, config)
-
-    tt_input = ttnn.from_torch(
-        hidden.unsqueeze(1),  # [B, 1, S, hidden]
-        device=device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-    )
-    logger.debug(f"Created ttnn input: {tuple(tt_input.shape)}")
-
-    logger.debug("Running ttnn forward")
-    signpost("HCA_START")
-    compressed_kv_tt, block_bias_tt = tt_model(tt_input, position_ids)
-    signpost("HCA_END")
-    compressed_kv_out = ttnn.to_torch(compressed_kv_tt)
-    logger.debug(f"TTNN compressed_kv shape: {tuple(compressed_kv_out.shape)}")
-
-    assert (
-        compressed_kv_out.shape == compressed_kv_ref.shape
-    ), f"shape mismatch: tt {tuple(compressed_kv_out.shape)} vs ref {tuple(compressed_kv_ref.shape)}"
-
-    logger.debug("Comparing compressed_kv with PCC")
-    pcc_passed, pcc_message = assert_with_pcc(
-        compressed_kv_ref.to(torch.float32),
-        compressed_kv_out.to(torch.float32),
-        pcc=0.999,
-    )
-    logger.debug(f"compressed_kv PCC: {pcc_message}")
-    assert pcc_passed, f"HCA compressor PCC test failed: {pcc_message}"
-
-    logger.debug("Comparing block_bias (exact)")
-    torch.testing.assert_close(block_bias_tt, block_bias_ref.to(torch.float32), rtol=0, atol=0)
-
-    logger.debug("PCC test passed!")
-
-
-# Mesh query-path configs: seq_len restricted to multiples of 32*sp (SP seq shard must stay
+# Mesh configs: seq_len restricted to multiples of 32*sp (SP seq shard must stay
 # tile-aligned). FABRIC_1D for the small TP/SP meshes; FABRIC_2D (+router/RELAXED_INIT) for 8x4.
 _MESH_CONFIGS = [
     pytest.param(
@@ -330,6 +251,75 @@ def test_hca_kv_path_mesh(mesh_device, device_params, num_links, topology, seq_l
     logger.debug(f"mesh KV path PCC: {pcc_message}")
     assert pcc_passed, f"HCA mesh KV path PCC test failed: {pcc_message}"
 
+    logger.debug("PCC test passed!")
+
+
+@pytest.mark.parametrize("seq_len", [900, 2048, 5120], ids=["seq900-unaligned", "seq2k", "seq5120"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    _MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+def test_hca_compressor_mesh(mesh_device, device_params, num_links, topology, seq_len):
+    """Mesh/TP/SP PCC for TtHCACompressor: wkv/wgate contraction-parallel + TP all-reduce, SP-parallel
+    window pooling (input host-padded to compress_rate*sp), compressed KV SP-gathered + trimmed to the
+    real length. seq_len is the REAL (pre-pad) length; unaligned values exercise the pad + trim path.
+    Compared against the full unpadded DeepseekV4HCACompressor."""
+    torch.manual_seed(42)
+
+    batch = 1
+    config = _flash_config()
+    sp_factor = mesh_device.shape[0]
+    compress_rate = config.compress_rates["heavily_compressed_attention"]
+    logger.debug(f"mesh={tuple(mesh_device.shape)} seq_len={seq_len} sp={sp_factor}")
+
+    ref = DeepseekV4HCACompressor(config).eval()
+    with torch.no_grad():
+        ref.position_bias.normal_(0.0, 0.02)
+        ref.kv_norm.weight.uniform_(0.5, 1.5)
+
+    hidden = torch.randn(batch, seq_len, config.hidden_size)
+    q_residual = torch.zeros(batch, seq_len, config.q_lora_rank)  # unused by HCA
+    position_ids = torch.arange(seq_len).unsqueeze(0).expand(batch, -1)
+
+    with torch.no_grad():
+        compressed_kv_ref, block_bias_ref = ref(hidden, q_residual, position_ids, past_key_values=None, layer_idx=0)
+
+    tt_model = TtHCACompressor.from_reference(
+        mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology, ccl_num_links=num_links
+    )
+
+    # Host-pad the seq to compress_rate*sp (pre-shard) so each SP shard holds whole compression windows.
+    hidden_padded, seq_len_actual = TtHCACompressor.prepare_input(hidden, sp_factor, compress_rate)
+    tt_input = ttnn.from_torch(
+        hidden_padded.unsqueeze(1),
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 3)),
+    )
+
+    signpost("HCA_START")
+    compressed_kv_tt, block_bias_tt = tt_model(tt_input, position_ids, seq_len_actual=seq_len_actual)
+    signpost("HCA_END")
+    # compressed_kv is fully replicated (SP-gathered + TP-replicated): take a single replica.
+    compressed_kv_out = ttnn.to_torch(
+        compressed_kv_tt,
+        mesh_composer=ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig([0, 1], ttnn.MeshShape(1, 1))),
+    )
+    logger.debug(f"TTNN compressed_kv shape: {tuple(compressed_kv_out.shape)}")
+
+    assert (
+        compressed_kv_out.shape == compressed_kv_ref.shape
+    ), f"shape mismatch: tt {tuple(compressed_kv_out.shape)} vs ref {tuple(compressed_kv_ref.shape)}"
+
+    pcc_passed, pcc_message = assert_with_pcc(
+        compressed_kv_ref.to(torch.float32), compressed_kv_out.to(torch.float32), pcc=0.999
+    )
+    logger.debug(f"mesh compressor PCC: {pcc_message}")
+    assert pcc_passed, f"HCA mesh compressor PCC test failed: {pcc_message}"
+
+    torch.testing.assert_close(block_bias_tt, block_bias_ref.to(torch.float32), rtol=0, atol=0)
     logger.debug("PCC test passed!")
 
 
