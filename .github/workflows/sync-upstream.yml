@@ -7,7 +7,11 @@ name: sync-upstream-ttmetal
 
 on:
   schedule:
-    - cron: "0 6 * * *"        # every day 06:00 UTC
+    # Target is 06:00 Europe/Berlin every day. GitHub cron is UTC-only and DST-blind, so both
+    # candidate hours are scheduled and the `berlin-gate` job drops the wrong twin: 04:00 UTC is
+    # 06:00 CEST (summer), 05:00 UTC is 06:00 CET (winter). Exactly one fires as 06:00 local.
+    - cron: "0 4 * * *"
+    - cron: "0 5 * * *"
   workflow_dispatch: {}
 
 permissions:
@@ -15,7 +19,33 @@ permissions:
   issues: write
 
 jobs:
+  berlin-gate:
+    # DST discriminator: keep whichever cron corresponds to 06:00 Berlin right now, drop the twin.
+    # It keys off WHICH cron fired (github.event.schedule), NOT off the current wall clock --
+    # scheduled runs are best-effort and routinely start hours late (observed: the 06:00 cron ran
+    # at 08:27Z), so a wall-clock hour comparison would skip the sync on every delayed run.
+    # Manual dispatch always proceeds.
+    runs-on: ubuntu-22.04
+    outputs:
+      go: ${{ steps.tz.outputs.go }}
+    steps:
+      - name: Did the 06:00-Europe/Berlin cron fire?
+        id: tz
+        run: |
+          OFFSET=$(TZ=Europe/Berlin date +%z)
+          if [ "$OFFSET" = "+0100" ]; then WANT="0 5 * * *"; else WANT="0 4 * * *"; fi
+          FIRED="${{ github.event.schedule }}"
+          if [ "${{ github.event_name }}" != "schedule" ] || [ "$FIRED" = "$WANT" ]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+            echo "Proceeding (Berlin offset=$OFFSET, cron fired='$FIRED', event=${{ github.event_name }})."
+          else
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping: Berlin offset=$OFFSET wants cron '$WANT', but '$FIRED' fired -- off-DST twin."
+          fi
+
   sync-remote:
+    needs: berlin-gate
+    if: needs.berlin-gate.outputs.go == 'true'
     runs-on: ubuntu-22.04       # merge-only -> no container / no big runner needed
     env:
       GH_API: https://api.github.com/repos/${{ github.repository }}
