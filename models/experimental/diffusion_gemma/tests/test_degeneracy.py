@@ -65,10 +65,16 @@ def test_longest_run_edges():
     assert DG.longest_run(torch.tensor([1, 2, 3], dtype=torch.long)) == 1
 
 
-def test_default_policy_is_warn_and_never_raises(monkeypatch):
-    """The default must measure without changing behaviour: stats out, no exception."""
+def test_default_policy_is_stop(monkeypatch, expect_error):
+    """The default must actually prevent the emission, not just log it."""
     monkeypatch.delenv("DG_DEGENERACY_POLICY", raising=False)
-    assert DG.resolve_policy() == "warn"
+    assert DG.resolve_policy() == "stop"
+    with expect_error(DG.DegenerateBlockError):
+        DG.check_committed_block(torch.full((1, CANVAS), 42, dtype=torch.long))
+
+
+def test_warn_policy_still_available(monkeypatch):
+    monkeypatch.setenv("DG_DEGENERACY_POLICY", "warn")
     stats = DG.check_committed_block(torch.full((1, CANVAS), 42, dtype=torch.long))
     assert stats["top_frac"] == 1.0
 
@@ -166,10 +172,16 @@ def test_measured_healthy_block_shapes_are_not_flagged():
         {"top_frac": 0.0820, "max_run": 1, "top_id": CONTENT_ID},
         {"top_frac": 0.0664, "max_run": 2, "top_id": CONTENT_ID},
         {"top_frac": 0.0625, "max_run": 2, "top_id": 621},
+        # the two most extreme HEALTHY canvases across all 136 measured: the bounds must clear both
+        {"top_frac": 0.1836, "max_run": 18, "top_id": 236772},
+        {"top_frac": 0.1719, "max_run": 1, "top_id": 236772},
     ]
     degenerate = [
         {"top_frac": 0.9492, "max_run": 243, "top_id": CONTENT_ID},
         {"top_frac": 0.9375, "max_run": 240, "top_id": CONTENT_ID},
+        # GPQA doc7 under the host Gumbel default -- the case that proves the root-cause fix
+        # alone is not sufficient and the guard has to be the default.
+        {"top_frac": 0.8516, "max_run": 86, "top_id": CONTENT_ID},
     ]
     for stats in healthy:
         assert not DG.is_degenerate(stats, stop_token_ids=[EOS_ID]), stats

@@ -22,17 +22,23 @@ import os
 import torch
 
 POLICIES = ("off", "warn", "stop")
-# `warn` measures every committed canvas and never changes behaviour, so a collapse shows up in
-# the log as it happens. `stop` additionally refuses to commit -- validated on device (4 seeds, 0
-# false positives, all still terminating naturally on EOS) but NOT the default: `max_run` has a
-# plausible false-positive surface in ordinary content (markdown rules, table separators, padding
-# in code blocks), and the degeneration is already fixed at the root by the `host` Gumbel default.
-DEFAULT_POLICY = "warn"
-# A healthy 256-token canvas of prose has well over 100 distinct ids and no long single-id run.
-# These bounds are deliberately far from healthy so the gate cannot fire on ordinary text; they
-# are calibrated in doc/decision_fidelity/degeneracy_calibration.md.
+# `stop` is the default: it refuses to commit a collapsed canvas, which is the only setting that
+# actually prevents degenerate output. The `host` Gumbel default removes the FREQUENT corruption
+# but not degeneration itself -- across 10 GPQA docs re-run under it, one still committed a canvas
+# that was 85.2% a single content token. `warn` would have logged that and emitted it anyway.
+# `off` disables the measurement entirely.
+DEFAULT_POLICY = "stop"
+# Calibrated on 192 committed canvases (the 10-doc GPQA re-check plus both 4-seed sweeps), taking
+# only the ones NOT dominated by a stop token, since those are terminations rather than content:
+#
+#   healthy (n=136):  max top_frac 0.1836,  max max_run 18
+#   degenerate (n=1):     top_frac 0.8516,      max_run 86
+#
+# 0.5 sits 2.7x above the healthy maximum and 1.7x below the degenerate one. max_run 64 is 3.5x
+# above the healthy maximum -- the margin that ordinary long runs (markdown rules, table
+# separators, padding in code blocks) need -- and still under the observed 86.
 DEFAULT_TOP_FRAC = 0.5
-DEFAULT_MAX_RUN = 32
+DEFAULT_MAX_RUN = 64
 
 
 class DegenerateBlockError(RuntimeError):

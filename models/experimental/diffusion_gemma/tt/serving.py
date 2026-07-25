@@ -49,6 +49,7 @@ from models.experimental.diffusion_gemma.tt import sampling as TS
 from models.experimental.diffusion_gemma.tt.denoise_forward import (
     make_generation_logits_fn_builder_from_checkpoint_state,
 )
+from models.experimental.diffusion_gemma.tt.degeneracy import DegenerateBlockError
 from models.experimental.diffusion_gemma.tt.generate import (
     _contains_stop_token,
     _infer_generation_vocab_size,
@@ -386,22 +387,42 @@ class BlockDiffusionServingSession:
 
         timings: dict[str, float] = {}
         t0 = time.perf_counter()
-        block = denoise_and_commit_block(
-            self.tt_model,
-            self._logits_fn,
-            init_canvas,
-            self.config,
-            start_pos=start_pos,
-            gumbel_noise_fn=gumbel_for_block,
-            noise_tokens_fn=noise_for_block,
-            page_table=self.page_table,
-            page_tables_per_layer=self.page_tables_per_layer,
-            denoise_block_fn=self._denoise_block_fn,
-            timings=timings,
-            # Without this the degeneracy check cannot tell a terminating canvas (a wall of
-            # <eos>, which this session is about to stop on anyway) from a degenerate one.
-            stop_token_ids=self.stop_token_ids,
-        )
+        try:
+            block = denoise_and_commit_block(
+                self.tt_model,
+                self._logits_fn,
+                init_canvas,
+                self.config,
+                start_pos=start_pos,
+                gumbel_noise_fn=gumbel_for_block,
+                noise_tokens_fn=noise_for_block,
+                page_table=self.page_table,
+                page_tables_per_layer=self.page_tables_per_layer,
+                denoise_block_fn=self._denoise_block_fn,
+                timings=timings,
+                # Without this the degeneracy check cannot tell a terminating canvas (a wall of
+                # <eos>, which this session is about to stop on anyway) from a degenerate one.
+                stop_token_ids=self.stop_token_ids,
+            )
+        except DegenerateBlockError as degenerate:
+            # The canvas was NOT committed. End the request here and return a zero-token terminal
+            # emission, so the caller keeps every healthy block it already received instead of
+            # losing the whole response to an exception.
+            logger.warning(f"[serving] ending request at block {block_idx}: {degenerate}")
+            self.finished = True
+            self.block_idx += 1
+            return BlockEmission(
+                tokens=torch.zeros((1, 0), dtype=torch.long),
+                block_idx=block_idx,
+                start_pos=start_pos,
+                next_pos=start_pos,
+                num_denoise_steps=0,
+                halted=False,
+                stop=True,
+                latency_s=time.perf_counter() - t0,
+                denoise_latency_s=timings.get("denoise_s", 0.0),
+                commit_latency_s=timings.get("commit_s", 0.0),
+            )
         latency_s = time.perf_counter() - t0
 
         self.next_pos = block.next_pos

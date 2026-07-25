@@ -139,6 +139,39 @@ was calling the commit path without `stop_token_ids` (so the termination exclusi
 path that matters, and the first `<eos>` canvas raised), and `stop_token_ids` can be a bare int
 from `eos_token_id`, so `set()` on it raised TypeError.
 
+## 6c. What the fix does and does not cover (measured, 10 GPQA docs)
+
+The 10 worst-behaving docs from the served run were replayed under the shipped defaults (host
+Gumbel, thinking mode, EOS stop enabled, 12-block cap). Across **192 committed canvases** measured
+here and in both 4-seed sweeps:
+
+| | n | max top_frac | max max_run |
+| --- | --- | --- | --- |
+| healthy, not stop-dominated | 136 | 0.1836 | 18 |
+| degenerate | 1 | 0.8516 | 86 |
+
+**doc0 — the trace that emitted a 2000-character wall of `1` in serving — now answers `C`,
+correctly.** Nine of ten docs committed no degenerate canvas at all.
+
+**COVERED.** A canvas that collapses onto one content token. `top_frac 0.5` sits 2.7x above the
+healthy maximum and 1.7x below the degenerate one; `max_run 64` is 3.5x above the healthy maximum.
+On the serving path the request now ends gracefully — the collapsed canvas is refused, the session
+is marked finished, and a zero-token terminal emission hands the caller every healthy block it
+already received. (First attempt failed the whole request with an exception, which loses the good
+text; "no degenerate output" must not mean "no output".)
+
+**NOT COVERED.** `host` Gumbel does not eliminate degeneration, it only makes it rare: doc7 still
+collapsed, at the very end of a 12-block run that never finished its answer. And degradation is
+*progressive* — the block immediately before the refused one was already repetitive
+(`the the the ... ,,,1,1111`) at `top_frac` under 0.5, so it was emitted. Catching that precursor
+would need a bound near 0.2–0.3, against a measured healthy maximum of 0.1836; that margin is too
+thin to spend, so it is left uncaught rather than traded for false positives on ordinary text.
+
+The residual sits in the over-generation regime — doc7 was one of the traces that was TRUNCATED in
+the served run too, i.e. it ran out of context before it ran out of reasoning. That is the
+context-length bottleneck `gpqa_thinking3072_sub40_20260723.md` already identified
+("Bottleneck is context length (4096), not the sampler"), and it is a separate piece of work.
+
 ## 7. What the halt telemetry says, and why it is not the detector
 
 `traced_denoise` now emits the per-step `(entropy, mismatch)` trace it always computed, with a
