@@ -117,28 +117,14 @@ def _pack_frame_allow(allow: torch.Tensor) -> list:
             if allow[q, k]:
                 bit_idx = q * nf + k
                 words[bit_idx // 32] |= 1 << (bit_idx % 32)
-    # =================================================================================
-    # TEMPORARY WORKAROUND — Efficiency loss.
-    # =================================================================================
-    # Under sequence-parallel sharding, a device whose Q shard contains ONLY padded Q
-    # frames (e.g. sp=8, nf_real=21, nf_padded=24 puts padded frames 21/22/23 all on
-    # device 7) reads all-zero allow rows for its q_frames. The reader's shard-aggregate
-    # skip decides "no Q attends this K frame" for every K chunk, so that device pushes
-    # zero chunks per ring iter while others push the full count -- head-chain lockstep
-    # breaks and writer deadlocks on cb_prev_out at nh=40.
-    #
-    # Detect all-zero rows (the reliable marker for padded Q frames — real Q frames always
-    # attend at least the diagonal) and force them all-1. Reader then aggregate-passes on
-    # padded shards, chain stays in sync, and compute performs full attention on padded Q
-    # positions. Padded Q values are zeros (input padding), so this "extra" work produces
-    # mean(V[real]) outputs that the downstream slice `[:, :, :real_n, :]` discards -- same
-    # as the dense path. Real Q outputs are byte-identical.
-    #
-    # Cost: ~10% of the sparse compute win on the padded shard. Real fix: make chain sync
-    # robust to per-shard skip divergence.
+    # WORKAROUND (costs ~10% of the sparse win on padded shards): force all-zero allow rows to
+    # all-1. A device whose Q shard is entirely padded (e.g. frames 21-23 on device 7 at
+    # nf_real=21/nf_padded=24) reads all-zero rows, so the reader's shard-aggregate skip pushes
+    # zero K chunks per iter, breaking head-chain lockstep and deadlocking. Attending-all keeps the
+    # chain in sync; padded Q outputs are discarded by the [:, :, :real_n, :] slice downstream, so
+    # real outputs are unaffected. Proper fix: make chain sync robust to per-shard skip divergence.
     for q in range(nf):
-        row_is_all_zero = all(allow[q, k].item() == 0 for k in range(nf))
-        if row_is_all_zero:
+        if all(allow[q, k].item() == 0 for k in range(nf)):
             for k in range(nf):
                 bit_idx = q * nf + k
                 words[bit_idx // 32] |= 1 << (bit_idx % 32)
@@ -254,13 +240,9 @@ def _run_sparse_frames_op(
     elif sparse_frames_enabled and not force_allow_all:
         allow = _frame_allow(num_frames_real, num_frames_padded, window, add_last_frame)
     else:
-        # Dense-equivalent allow: every Q attends every K (padded frames stay all-zero rows/cols
-        # so the additive-mask helper's padding logic still keeps softmax finite). Used both for
-        # sparse_frames_enabled=False AND for force_allow_all=True — the difference: with
-        # sparse_frames_enabled=True + force_allow_all=True, the op still runs through the
-        # extension setup (pre-scan, ring_iter_mask, bitmap fetch) but the per-chunk skip path
-        # in try_skip_sparse_frames never fires. Diagnostic: isolates whether the sparse-frames
-        # bug is in the drain path vs the extension setup.
+        # Dense-equivalent allow (every real Q attends every real K), used for both
+        # sparse_frames_enabled=False and force_allow_all=True. With force_allow_all the op still
+        # runs the full sparse setup but never skips a chunk — isolating setup bugs from skip bugs.
         allow = torch.zeros(num_frames_padded, num_frames_padded, dtype=torch.uint8)
         allow[:num_frames_real, :num_frames_real] = 1
     gt = _torch_sdpa_ref(
@@ -402,18 +384,19 @@ def _run_sparse_frames_op(
         ),
     )[:, :, :real_n, :]
 
-    # A fully-masked reference — every allowed row attends zero K frames, i.e. softmax over no
-    # keys — is NaN and has no well-defined value (the "drain_all" pattern hits this; it is not a
-    # physically meaningful attention pattern since real Q frames always attend at least their own
-    # frame). PCC against NaN is meaningless, so in that degenerate case only verify the device did
-    # not hang and produced finite output.
-    if torch.isnan(gt).any():
+    # Degenerate pattern: if any REAL Q frame attends zero K frames, the torch reference is a
+    # fully-masked softmax row (which PyTorch collapses to 0/undefined), while the kernel's
+    # `_pack_frame_allow` workaround forces those all-zero rows to attend-all so the reader chain
+    # stays in sync — so the two diverge by construction and PCC is meaningless. Only the drain_all
+    # pattern hits this; real windowed patterns always attend at least the diagonal. Just verify the
+    # device didn't hang and produced finite output.
+    if bool((allow[:num_frames_real].sum(dim=1) == 0).any()):
         assert torch.isfinite(
             out
         ).all(), "sparse-frames ring SDPA produced non-finite output for a fully-drained (degenerate) pattern"
         logger.info(
-            f"[sparse-frames ring] degenerate fully-masked reference — skipped PCC, verified finite "
-            f"output. sp={sp_factor} tp={tp_factor}"
+            f"[sparse-frames ring] degenerate allow (a Q frame attends no K) — skipped PCC, verified "
+            f"finite output. sp={sp_factor} tp={tp_factor}"
         )
         return
 
@@ -541,10 +524,8 @@ class TestSparseFramesRing:
         [
             pytest.param(True, False, id="sparse"),
             pytest.param(False, False, id="dense"),
-            # Sparse infrastructure enabled but every (q_frame, k_frame) allowed — no k_chunks
-            # skipped. Isolates whether the deadlock is in the sparse machinery itself (drain
-            # path, per-work-item counters, restore_from_staging bypass) versus in whatever
-            # differs when some k_chunks are actually skipped/drained.
+            # Full sparse setup but every (q_frame, k_frame) allowed — nothing skipped. Isolates
+            # sparse-setup bugs from skip/drain bugs.
             pytest.param(True, True, id="sparse_allow_all"),
         ],
     )
@@ -743,18 +724,10 @@ class TestSparseFramesRing:
         reset_seeds,
         drain_pattern,
     ):
-        """Isolates the drain path by shape of the allow pattern. Every Q frame gets the same
-        K-frame allow mask, chosen so the drain fires at:
-          - tail_drain: after all processed chunks (K frames [0..N/2) allowed, [N/2..N) drained).
-            This mimics the causal-skip pattern (contiguous trailing drain), which is known to work.
-          - head_drain: before any processed chunks (K frames [0..N/2) drained, [N/2..N) allowed).
-            Drain fires BEFORE any real matmul in the ring iter loop.
-          - middle_drain: alternating (even K frames allowed, odd drained).
-            Drain fires interleaved with processing.
-
-        Diagnostic: if tail passes and head/middle hang, the drain path desyncs some state that
-        normal processing establishes on first-run. If all hang, drain is broken regardless of
-        position. If all pass, the bug is specific to the windowed pattern's shape."""
+        """Exercises the drain path by the shape of the allow pattern (every Q frame gets the same
+        mask): tail (trailing K frames drained), head (leading drained), middle (alternating),
+        drain_all (everything drained — degenerate), and single-frame drops. Confirms the drain
+        fires correctly before/after/interleaved with processing."""
         frame_seqlen = 128  # 4 tiles/frame, small
         nf_real = 8
         nf_padded = 8

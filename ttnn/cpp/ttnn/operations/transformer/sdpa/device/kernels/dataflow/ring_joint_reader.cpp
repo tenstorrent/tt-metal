@@ -8,7 +8,6 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
-#include "api/debug/waypoint.h"
 #include "dataflow_common.hpp"
 #include "chunked_prefill_utils.hpp"
 #include "chain_link.hpp"
@@ -495,10 +494,8 @@ void kernel_main() {
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-        WAYPOINT("RRIT");
         // find out which is the latest ring_id that synchronized
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
-        WAYPOINT("RRID");
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so reader stays aligned with compute, writer, and all-gather.
         if (((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
@@ -559,7 +556,6 @@ void kernel_main() {
         uint32_t gqa_group_q_iter = 0;
 
         for (uint32_t q_iter = 0; q_iter < loop_q_count; ++q_iter) {
-            WAYPOINT("RQIT");
             // Check if this is a real iteration or only padded chain/mcast synchronization.
             const bool is_padded_iter = (q_iter >= q_per_core);
 
@@ -697,12 +693,10 @@ void kernel_main() {
                             }
                         }
                         if (!any_q_attends) {
-                            WAYPOINT("RKSK");
                             continue;
                         }
                     }
                 }
-                WAYPOINT("RKPR");
 
                 // Default to local/gathered KV; override below for joint KV when applicable.
                 Slice k_slice;
@@ -747,9 +741,7 @@ void kernel_main() {
                 }
                 uint32_t cb_k_start_address = cb_k.get_write_ptr();
                 if (k_chain.should_receive(nb, k_chain_head)) {
-                    WAYPOINT("RKRV");
                     k_chain.receive(noc);
-                    WAYPOINT("RKRD");
                 } else {
                     // Injector or non-participant: read K from DRAM. Dispatch directly so
                     // local and gathered tensors may use different accessor types.
@@ -775,9 +767,7 @@ void kernel_main() {
 
                 // Forward K chunk via chain (uses K's data size explicitly)
                 if (k_chain.should_forward(nb, k_chain_head, q_iter_local)) {
-                    WAYPOINT("RKFW");
                     k_chain.forward(noc, cb_k_start_address, k_chunk_tiles, k_tile_bytes);
-                    WAYPOINT("RKFD");
                 }
 
                 // Skip Q and compute-visible pushes for padded mcast iterations.
@@ -875,9 +865,7 @@ void kernel_main() {
                     // Forward V to next core(s) before push_back — prevents compute from
                     // popping the buffer while the mcast is still reading from it.
                     if (v_chain.should_forward(nb, nv, q_iter_local)) {
-                        WAYPOINT("RVFW");
                         v_chain.forward(noc, cb_v_start_address);
-                        WAYPOINT("RVFD");
                     }
 
                     // Make V available to compute.
@@ -898,7 +886,5 @@ void kernel_main() {
                 cb_v_dummy.push_back(v_cb_entry_tiles);
             }
         }
-        WAYPOINT("REIE");
     }
-    WAYPOINT("REND");
 }

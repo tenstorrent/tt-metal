@@ -20,7 +20,6 @@
 #endif
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
-#include "api/debug/waypoint.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
@@ -2286,31 +2285,12 @@ void sdpa_ring_v2(
     const ChunkedContext& chunked = {},
     const bool is_first_active_iter = true,
     const uint32_t* frame_allow_words = nullptr,
-    // Sparse-frames per-work-item accounting. When sparse_frames_enabled, the caller-supplied
-    // active_ring_iter_mask reflects OOB-only work and can mark iters "active" that are
-    // fully drained for some Q chunks (sparse-frames unknown to the host mask). Compute-
-    // side is_first / is_last logic must therefore track ACTUAL processing history per
-    // WORK ITEM (a (batch, head, q_chunk) tuple — the unit that produces one attention
-    // output tile). `q_frame_total_processed` is the precomputed count of processed K chunks
-    // expected for each GLOBAL Q frame across all ring iters (indexed by q_frame; the total
-    // is the same for every work item mapping to that frame). `q_work_item_processed` is
-    // a running counter maintained across ring-iter calls, indexed by the Q-loop variable
-    // `q` — different heads / different q_chunks that map to the same Q frame get separate
-    // slots. Ignored when !sparse_frames_enabled; may be nullptr in that case.
-    const uint32_t* q_frame_total_processed = nullptr,
-    uint32_t* q_work_item_processed = nullptr,
-    // Sparse-frames global Q frame offset. Q is SP-sharded, so this device's local Q chunk
-    // 0 maps to GLOBAL Q frame `q_frame_offset`. Compute must use the GLOBAL index when
-    // looking up `frame_allow_words` (which is a broadcast global table) and when indexing
-    // the per-Q-frame counters above. Zero for non-sharded / non-sparse paths.
+    // Global Q-frame offset: this SP-sharded device's local Q chunk 0 maps to global Q frame
+    // `q_frame_offset`, used to index the broadcast-global `frame_allow_words` table. 0 when unsharded.
     const uint32_t q_frame_offset = 0,
-    // Reverse-bisection runtime bitmask. See ring_joint_sdpa.cpp for bit meanings.
-    // 0 = all sparse code paths runtime-disabled (dense-equivalent behavior with sparse
-    // binary in place). 0x7F = all enabled (production behavior).
+    // Runtime feature bitmask (bit meanings in ring_joint_sdpa.cpp); 0x7F enables all sparse paths.
     const uint32_t sparse_feature_mask = 0x7Fu,
-    // Per-q_chunk work bitmap. bit iter set iff (q_chunk has work in that iter) AND (iter is
-    // mask-active). Sized to num_q_chunks by the caller. When sparse_frames_enabled=0, every
-    // entry equals active_ring_iter_mask (dense fallback).
+    // Per-q_chunk work bitmap: bit `iter` set iff q_chunk has work in that (mask-active) iter.
     const uint32_t* q_work_bitmap = nullptr) {
     init_sdpa_streaming_semaphores();
 
@@ -2467,7 +2447,6 @@ void sdpa_ring_v2(
                 }
                 if (aggregate_allowed) {
                     // Reader pushed but this Q chunk doesn't attend — drain.
-                    WAYPOINT("CSDR");
                     CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
                     sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
                     if constexpr (!kt_inplace_v) {
@@ -2567,7 +2546,6 @@ void sdpa_ring_v2(
         // Note: reader uses SHARD-AGGREGATE allow (union across shard's q_frames), so it may
         // have pushed K/V for chunks this specific Q chunk doesn't attend — we must drain those.
         if constexpr (sparse_frames_enabled) {
-            WAYPOINT("CZWC");
             // Feature bit 3: gate the zero-work fast path body
             if ((sparse_feature_mask & (1u << 3)) && per_q_valid_kv == 0) {
                 // Drain any k_chunks reader pushed. Aggregate = union of shard's q_frame rows;
@@ -2598,7 +2576,6 @@ void sdpa_ring_v2(
                         }
                     }
                     // Drain K/V that reader pushed.
-                    WAYPOINT("CZDR");
                     CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
                     sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
                     if constexpr (!kt_inplace_v) {
@@ -2645,7 +2622,7 @@ void sdpa_ring_v2(
         // global is_first_active_iter / is_last_ring_iter for staging while the writer used per-
         // q_chunk flags, compute would redirect output into the staging CB on the very iter it
         // also runs normalize_row (cb_out == cb_normalized_out are the same physical CB) — an
-        // in-place reserve/wait self-deadlock in the normalize pipeline (Bug 1). Kept outside the
+        // in-place reserve/wait self-deadlock in the normalize pipeline. Kept outside the
         // K-loop: the bitmap L1 read + __builtin_ctz/clz stay off the hot path where they
         // perturbed pack/math/unpack timing; inside the loop these are cheap register compares.
         bool is_this_first_work_iter_for_q = false;
@@ -2697,7 +2674,6 @@ void sdpa_ring_v2(
                 continue;
             }
 
-            WAYPOINT("CMLK");
             KV_chunks_processed++;
             KV_chunks_processed_in_iter++;
 
@@ -2716,16 +2692,11 @@ void sdpa_ring_v2(
             bool is_last_k_of_last_ring_iter;
             // Use precomputed per-q_chunk flags (see above the K-loop). This keeps the K-loop
             // hot path free of L1 reads and bit-manipulation instructions that were interfering
-            // with the pack/math/unpack pipeline timing (Bug 1). is_this_first_work_iter_for_q
+            // with the pack/math/unpack pipeline timing. is_this_first_work_iter_for_q
             // / is_this_last_work_iter_for_q hold constants for the current q_chunk + ring_iter;
             // in this loop they combine with per-k_chunk state to give is_first / is_last_k.
             is_first = is_this_first_work_iter_for_q && (KV_chunks_processed == 1);
             is_last_k_of_last_ring_iter = is_this_last_work_iter_for_q && is_last_k;
-            // Silence unused-variable warnings; the obsolete arrays are pointers passed as
-            // nullptr under the bitmap approach.
-            (void)q_work_item_processed;
-            (void)q_frame_total_processed;
-            (void)q_work_bitmap;
 
             // Signal writer that last K-chunk is starting (for row-by-row DMA save/restore).
             if (is_last_k && q_per_core > 1) {
@@ -2838,7 +2809,7 @@ void sdpa_ring_v2(
             // per-q_chunk flag, not mask-global is_last_ring_iter: otherwise a q_chunk whose last
             // work iter precedes the mask's last active iter would both redirect output to the
             // staging CB (save) AND normalize in the same step — an in-place CB self-deadlock,
-            // since cb_out and cb_normalized_out are the same buffer (Bug 1). Reduces to
+            // since cb_out and cb_normalized_out are the same buffer. Reduces to
             // !is_last_ring_iter under dense / bit-4-off.
             const bool save_to_staging = is_last_k && !is_this_last_work_iter_for_q && q_per_core > 1;
             const uint32_t step_save_out_cb = save_to_staging ? cb_out : INVALID_CB;

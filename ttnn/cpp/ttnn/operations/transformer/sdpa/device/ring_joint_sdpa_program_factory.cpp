@@ -2509,14 +2509,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 (sparse_frames_enabled && w < args.frame_allow_packed.size()) ? args.frame_allow_packed[w] : 0u;
             reader_args.push_back(word);
         }
-        // Sparse feature bitmask (reverse-bisection knob) — reader honors bit 5 for its
-        // shard-aggregate skip. Reuses the same env var as compute so a single value applies
-        // to both kernels.
-        uint32_t reader_sparse_feature_mask = 0x7Fu;  // 0x7F = all bits (0..6) — reader honors bit 5
-        if (const char* env = std::getenv("TT_SPARSE_FEATURE_MASK")) {
-            reader_sparse_feature_mask = static_cast<uint32_t>(std::strtoul(env, nullptr, 0));
-        }
-        reader_args.push_back(reader_sparse_feature_mask);
+        // Sparse feature bitmask (all bits enabled). Reader honors bit 5 (shard-aggregate skip).
+        reader_args.push_back(0x7Fu);
 
         reader_kernel.emplace_runtime_args(core, reader_args.args);
 
@@ -2548,11 +2542,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 (sparse_frames_enabled && w < args.frame_allow_packed.size()) ? args.frame_allow_packed[w] : 0u;
             writer_args.push_back(word);
         }
-        uint32_t writer_sparse_feature_mask = 0x7Fu;  // default: all sparse bits including bit 6 (writer skip)
-        if (const char* env = std::getenv("TT_SPARSE_FEATURE_MASK")) {
-            writer_sparse_feature_mask = static_cast<uint32_t>(std::strtoul(env, nullptr, 0));
-        }
-        writer_args.push_back(writer_sparse_feature_mask);
+        writer_args.push_back(0x7Fu);  // sparse feature bitmask (all bits enabled)
         // Per-q_chunk work bitmap (num_q_chunks uint32s). Bit `iter` set iff (q_chunk has any
         // attended k_chunk in ring_iter) AND (iter is active in mask). Writer uses this to gate
         // restore push / deferred save / prefetch on zero-work iters, and to detect each q_chunk's
@@ -2600,16 +2590,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 (sparse_frames_enabled && w < args.frame_allow_packed.size()) ? args.frame_allow_packed[w] : 0u;
             compute_args.push_back(word);
         }
-        // Sparse feature bitmask (reverse-bisection knob). Overridden by env var
-        // TT_SPARSE_FEATURE_MASK if set; default 0x7F (all bits set = production behavior).
-        // Bit 0: pre-scan check; 1: q_frame_total_processed populate; 2: try_skip lambda;
-        // 3: zero-work fast path; 4: counter-based is_first/is_last; 5: reader shard-aggregate
-        // skip; 6: writer per-iter save/restore skip on zero-work q_chunks.
-        uint32_t sparse_feature_mask = 0x7Fu;
-        if (const char* env = std::getenv("TT_SPARSE_FEATURE_MASK")) {
-            sparse_feature_mask = static_cast<uint32_t>(std::strtoul(env, nullptr, 0));
-        }
-        compute_args.push_back(sparse_feature_mask);
+        // Sparse feature bitmask (all bits enabled). Bits: 0 pre-scan, 2 try_skip drain,
+        // 3 zero-work path, 4 bitmap is_first/is_last, 5 reader shard-aggregate skip,
+        // 6 writer save/restore skip (bit 1 unused).
+        compute_args.push_back(0x7Fu);
         // Per-q_chunk work bitmap (num_q_chunks uint32s) — mirrors what writer receives so both
         // kernels make identical per-(q_chunk, iter) decisions about work / no-work.
         for (uint32_t q = 0; q < num_q_chunks; ++q) {

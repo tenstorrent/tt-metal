@@ -9,7 +9,6 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/debug/waypoint.h"
 #include <tt-metalium/constants.hpp>
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
@@ -139,22 +138,16 @@ void kernel_main() {
     for (uint32_t w = 0; w < 32; ++w) {
         frame_allow_words[w] = get_arg_val<uint32_t>(argidx++);
     }
-    // Sparse feature bitmask (runtime): reverse-bisection knob. Bit meanings:
-    //   0: pre-scan bit check inside per_q_valid_kv loop
-    //   1: q_frame_total_processed populate (obsolete under bitmap approach; kept for A/B testing)
-    //   2: try_skip_sparse_frames lambda body
-    //   3: zero-work fast path body
-    //   4: (OBSOLETE) counter-based is_first/is_last — superseded by q_work_bitmap
-    //   5: reader shard-aggregate skip
-    //   6: writer per-iter save/restore skip on zero-work q_chunks
-    // Default from host: 0x7F. Set to 0 to get dense-equivalent runtime behavior.
+    // Sparse feature bitmask (runtime, default 0x7F; 0 = dense-equivalent). Bit meanings:
+    //   0: pre-scan frame_allow check (per_q_valid_kv)   2: try_skip_sparse_frames drain
+    //   3: zero-work fast path   4: bitmap-derived is_first/is_last_k
+    //   5: reader shard-aggregate skip   6: writer per-(q_chunk,iter) save/restore skip
+    // (bit 1 is unused — a removed counter-mode path.)
     const uint32_t sparse_feature_mask = get_arg_val<uint32_t>(argidx++);
 
-    // Per-q_chunk work bitmap: bit ring_iter set iff (q_chunk has attended work in that iter)
-    // AND (iter is active in mask). Host precomputes; both compute and writer read the same.
-    // Replaces the runtime counter (bit 4) — no on-stack counter array needed. Under
-    // sparse_frames_enabled==0, host passes active_ring_iter_mask for every q_chunk so dense
-    // paths derive identical is_first/is_last decisions from the bitmap.
+    // Per-q_chunk work bitmap: bit `ring_iter` set iff q_chunk has attended work in that (mask-
+    // active) iter. Host-precomputed; compute and writer read the same. When sparse is disabled the
+    // host fills every entry with active_ring_iter_mask, so dense derives identical decisions.
     uint32_t q_work_bitmap[num_q_chunks] = {};
     for (uint32_t q = 0; q < num_q_chunks; ++q) {
         q_work_bitmap[q] = get_arg_val<uint32_t>(argidx++);
@@ -249,17 +242,9 @@ void kernel_main() {
         const uint32_t q_frames_per_shard = q_local_padded_Nt / frame_seqlen_tiles;
         q_frame_offset = ring_index * q_frames_per_shard;
     }
-    // Previously this scope declared q_frame_total_processed[] and q_work_item_processed[] for
-    // bit 4 counter mode. Bitmap approach (q_work_bitmap runtime arg) replaces the counter
-    // entirely — is_first / is_last_k_of_last_ring_iter now derive from the bitmap in
-    // sdpa_ring_v2. The arrays are removed to save ~224 bytes of TRISC stack (Bug 1 mitigation).
-    uint32_t* q_frame_total_processed = nullptr;
-    uint32_t* q_work_item_processed = nullptr;
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-        WAYPOINT("CRIT");
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
-        WAYPOINT("CRID");
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so compute stays aligned with reader, writer, and all-gather.
         if (((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
@@ -405,8 +390,6 @@ void kernel_main() {
                 chunked_context,
                 is_first_active_iter,
                 frame_allow_words,
-                q_frame_total_processed,
-                q_work_item_processed,
                 q_frame_offset,
                 sparse_feature_mask,
                 q_work_bitmap);
@@ -482,7 +465,5 @@ void kernel_main() {
                 use_zigzag_balancing,
                 chunked_context);
         }
-        WAYPOINT("CEIE");
     }
-    WAYPOINT("CEND");
 }
