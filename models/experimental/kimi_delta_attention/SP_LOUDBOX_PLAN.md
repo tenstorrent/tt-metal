@@ -65,6 +65,11 @@ boundary.
   **1.5x faster** than TP=4/SP=1 at T=1280.  The stretch target is **1.7x**.
   This is an end-to-end layer comparison with the same model, global sequence,
   and output semantics; it is the closest full-system experiment LB can run.
+* **Head-to-head LB topology gate:** at global T=5120, SP=2/TP=4 must beat
+  the traced TP=8 control of 3.114 ms by at least **5%**, i.e. <= **2.958 ms**
+  on the slowest device; the stretch target is 10%, <= **2.803 ms**.  Both
+  layouts do 20,480 head-tokens per chip, so this is deliberately a stringent
+  topology-and-CCL efficiency goal, not a claimed work-reduction speedup.
 * **Production-rank budget:** SP=2/TP=4 at T=1280 must be no more than
   **1.25x** the latency of the TP=4/SP=1 T=640 local-work control.  The
   difference is the measurable cost of one real SP boundary plus scheduling;
