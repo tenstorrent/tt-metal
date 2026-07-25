@@ -270,7 +270,7 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
         total_size,
         this->available_channel_buffering_space);
     TT_FATAL(
-        buffer_addr_end < this->max_l1_loading_size,
+        buffer_addr_end <= this->max_l1_loading_size,
         "Internal error - channel buffers spilled past the end of usable L1 region.");
 }
 
@@ -693,8 +693,7 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     // local-worker injection channel; forwarding and receive depths stay
     // unchanged.
     if ((topology == Topology::Mesh || topology == Topology::Torus) &&
-        options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::DISABLED &&
-        num_used_sender_channels_per_vc[0] > 0) {
+        options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::DISABLED) {
         size_t allocated_slots = 0;
         for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
             allocated_slots += std::accumulate(

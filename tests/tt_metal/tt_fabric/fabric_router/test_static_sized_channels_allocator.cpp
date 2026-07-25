@@ -14,7 +14,7 @@ namespace {
 
 TEST(FabricStaticSizedChannelsAllocatorTest, MeshAssignsStrandedSlotsToLocalWorkerInjection) {
     constexpr size_t channel_buffer_size = 14432;
-    constexpr size_t available_space = 365248;
+    constexpr size_t available_space = 360800;
     constexpr std::array<size_t, builder_config::MAX_NUM_VCS> sender_channels = {4, 3, 0};
     constexpr std::array<size_t, builder_config::MAX_NUM_VCS> receiver_channels = {1, 1, 0};
     const std::vector<MemoryRegion> memory_regions = {{0, available_space}};
