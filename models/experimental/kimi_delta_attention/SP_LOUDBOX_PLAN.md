@@ -222,6 +222,9 @@ state-transfer protocol and measure its components.
   four local matmul shards are finite when the reduced output fails, so the
   defect is downstream in the Line reduce-scatter consumer rather than KDA,
   the matmul producer, or its output-DMA publication.
+  The failure also persists with one or two links, one/two/four workers per
+  direction, and one/two channel buffers; those scheduling settings are not a
+  workaround.
 
 ## Milestones
 
