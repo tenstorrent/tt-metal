@@ -72,6 +72,38 @@ rows remain correlated in value, and their argmaxes still coincide far more ofte
 allows. Chunking along vocab with distinct seeds (`chunked`, already implemented and wired)
 does not fix it either. No cheap layout or seeding change reaches IID.
 
+## Tried in ttnn and REVERTED: the per-core seed was not the cause
+
+`rand_program_factory.cpp` seeds core `i` with `seed + i + device_seed_offset` — consecutive
+integers straight into per-core PRNGs, which is poor practice and was the obvious suspect. It was
+implemented (a SplitMix64 finalizer applied to the same linear index, so the documented sharding
+law and `test_rand_mesh_shard_matches_single_device` both still hold), built, and measured
+against the reverted baseline on the same device:
+
+| metric (64 tile-rows, width 16384) | without the mix | with the mix | host IID |
+| --- | --- | --- | --- |
+| exact duplicate row pairs | 0 | 0 | 0 |
+| max abs r | 0.04423 (5.7σ) | 0.05046 (6.5σ) | 0.02780 (3.6σ) |
+| distinct argmax winners | 63/64 | 64/64 | 64/64 |
+
+Indistinguishable, and the canvas-position metrics did not move either (permuted 119 -> 120
+distinct winners; the `{i : i % 32 >= 24}` duplication was byte-for-byte unchanged). **Cores are
+already independent** — `init_prng_seed` evidently scrambles internally — so the change was pure
+churn on a shared op that alters the output of every `ttnn.rand` caller, and it was reverted
+rather than shipped.
+
+What that experiment *does* buy is attribution: the defect is **inside a single core's tile**, in
+the SFPU PRNG path `compute_uniform.cpp` -> `ckernel_sfpu_rand.h` (8 SFPU draws per face, 4 faces
+per tile), along the tile's WIDTH axis. Fixing it means changing the SFPU sequence, which affects
+every consumer of `rand`/`randn`/`uniform`, so it needs SFPU/hardware knowledge and its own
+validation rather than a guess from here.
+
+Filed as a ttnn-side regression instead:
+`tests/ttnn/nightly/unit_tests/operations/rand/test_rand_independence.py` — two xfail(strict)
+tests pinning the two width-axis properties, plus a passing cross-tile control that is exactly
+the arm which rules out the seeding hypothesis. strict=True means it flips to a failure the day
+the op is fixed, which is the signal to delete the xfail.
+
 ## What this means for the open decisions
 
 1. **The owed sub-40 host-vs-device re-gate is not bookkeeping.** `DG_VLLM_GUMBEL_MODE` defaulted
