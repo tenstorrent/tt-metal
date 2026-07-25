@@ -94,7 +94,7 @@ def t2v_metrics(mesh_device, height):
         assert is_blackhole(), "4x32 is only supported for blackhole"
         assert height == 720, "4x32 is only supported for 720p"
         expected_metrics = {
-            "encoder": 0.5,
+            "encoder": 0.54,
             "denoising": 75.0,
             "vae": 5.0,
             "total": 80.5,

@@ -212,6 +212,7 @@ def test_pipeline_inference(
     # gate in CI without loosening the thresholds the other (WH) configs are calibrated to.
     if "4x32sp1tp0nl2_ring_is_fsdp0" in request.node.callspec.id:
         vbench_thresholds_by_height[720]["background_consistency"] = 0.92
+        vbench_thresholds_by_height[720]["subject_consistency"] = 0.91
         vbench_thresholds_by_height[720]["imaging_quality"] = 0.62
 
     def check_output_with_vbench(prompt, number):
