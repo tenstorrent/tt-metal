@@ -197,8 +197,10 @@ state-transfer protocol and measure its components.
   channel also passed the full SP2×TP4 PCC suite, but increased the output-RS
   device median from 442.8 to 449.2 us and the same replay span to 2.683 ms
   (report `2026_07_25_21_26_52`).  The implementation remains at four workers
-  and two buffers; do not add a buffer-depth runtime knob without a measured
-  long-span gain.
+  and two buffers.  Five chunks per sync was also correct but regressed the
+  RS median to 451.4 us and the replay span to 2.687 ms (report
+  `2026_07_25_21_30_20`).  Do not add further direct-RS scheduling knobs
+  without a measured long-span gain.
 * The fused TP4 `matmul_reduce_scatter_async` probe also times out when using
   the standalone fused-op `(8,6)` matmul grid and reduce-scatter offset
   `(0,6)` (guarded T=1280 test on 2026-07-25).  This rules out the original
