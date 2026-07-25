@@ -21,7 +21,8 @@
   },
 
   "server_configs": {
-    "A_default_gencfg": "python -m vllm.entrypoints.openai.api_server --model $DG_CKPT --served-model-name diffusiongemma-26B-A4B-it --max-model-len 1024 --max-num-seqs 1 --block-size 64 --additional-config '{\"tt\":{\"sample_on_device_mode\":\"all\",\"enable_model_warmup\":false}}' --host 127.0.0.1 --port 8000  (env: MESH_DEVICE=P150x4 DG_CKPT=... DG_VLLM_GUMBEL_MODE=argmax VLLM_ENABLE_V1_MULTIPROCESSING=0 TT_METAL_HOME=/home/zni/tt-metal VLLM_RPC_TIMEOUT=1800000). NOTE: the model generation_config.json caps default max_tokens=256.",
+    "_replay_note_20260724": "These commands were recorded when up-front trace capture was opt-in. It is now default ON, so replaying them verbatim aborts in DiffusionGemmaForCausalLM.__init__ ('DG_UPFRONT_CAPTURE requires DG_VLLM_GUMBEL_MODE in {host, device}; got argmax'), and enable_model_warmup=false would fail every request. Add DG_UPFRONT_CAPTURE=0 to reproduce these eager runs as recorded.",
+    "A_default_gencfg": "python -m vllm.entrypoints.openai.api_server --model $DG_CKPT --served-model-name diffusiongemma-26B-A4B-it --max-model-len 1024 --max-num-seqs 1 --block-size 64 --additional-config '{\"tt\":{\"sample_on_device_mode\":\"all\",\"enable_model_warmup\":false}}' --host 127.0.0.1 --port 8000  (env: MESH_DEVICE=P150x4 DG_CKPT=... DG_UPFRONT_CAPTURE=0 DG_VLLM_GUMBEL_MODE=argmax VLLM_ENABLE_V1_MULTIPROCESSING=0 TT_METAL_HOME=/home/zni/tt-metal VLLM_RPC_TIMEOUT=1800000). NOTE: the model generation_config.json caps default max_tokens=256.",
     "B_multiblock": "config A + --generation-config vllm  (disables the model's max_tokens=256 cap so a request can span >1 block). Used for the 2-block serve."
   },
 

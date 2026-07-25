@@ -36,10 +36,21 @@ APC.
 Never benchmark or judge quality from an implicit launch:
 
 - There is exactly one Metal denoise trace path: model-lifetime up-front capture with reveal
-  masking, IID host Gumbel, K=48, and one-step/window early halt. Eager is the only fallback.
-- Set `DG_UPFRONT_CAPTURE=1`, `DG_UPFRONT_PREFILL_WARMUP_LENS` to every admitted aligned prompt
-  length, explicit positive tile-aligned `DG_DENOISE_REVEAL_PMAX`, validated positive
-  `DG_TRACE_REGION_SIZE`, `DG_VLLM_GUMBEL_MODE=host`, and `DG_VLLM_MAX_DENOISE_STEPS=48`.
+  masking, on-device Gumbel, K=48, and one-step/window early halt. Eager is the only fallback.
+- `DG_UPFRONT_CAPTURE` defaults to `1`; up-front capture is the default serving path and no longer
+  needs setting. `DG_UPFRONT_CAPTURE=0` is the documented eager opt-out, required when you need
+  per-step trajectory records, which replayed traces do not produce.
+- Still required and fail-loud: `DG_UPFRONT_PREFILL_WARMUP_LENS` for every admitted aligned prompt
+  length (the shape list cannot be derived), and validated positive `DG_TRACE_REGION_SIZE` (the
+  reserved region cannot be read back from the device, so defaulting it would silence the guard
+  without reserving anything, and a trace-region overflow poisons the device).
+- `DG_DENOISE_REVEAL_PMAX` is now optional: when unset the span is derived from `max_model_len`
+  rounded DOWN to a tile and logged (rounding up would exceed the unpadded KV span and abort
+  startup). An explicit positive tile-aligned value still wins.
+- `DG_VLLM_GUMBEL_MODE` defaults to `device`. That is a distribution change, not bit-exact against
+  host IID Gumbel, and the sub-40 GPQA host-vs-device @3072 re-gate is still outstanding; use
+  `DG_VLLM_GUMBEL_MODE=host` as the IID reference fallback when judging quality.
+- Set `DG_VLLM_MAX_DENOISE_STEPS=48`.
 - Reveal masking, non-lazy startup capture, and window-1 early halt are intrinsic. Do not set
   legacy selector flags.
 - Every admitted prefill shape must compile before capture. Reject unseen runtime shapes rather

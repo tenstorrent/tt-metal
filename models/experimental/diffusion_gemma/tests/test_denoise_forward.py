@@ -4,6 +4,8 @@
 import contextlib
 from types import SimpleNamespace
 
+import pytest
+
 from models.experimental.diffusion_gemma.tt import denoise_forward as DF
 from models.experimental.diffusion_gemma.tt.denoise_forward import (
     DenoiseLogitsAdapter,
@@ -715,6 +717,129 @@ def test_read_prompt_kv_cache_slice_uses_dram_slice_outputs(monkeypatch):
         ("k-cache", [0, 0, 32, 0], [1, 2, 96, 16], "dram"),
         ("v-cache", [0, 0, 32, 0], [1, 2, 96, 16], "dram"),
     ]
+
+
+def test_full_span_read_clones_by_default_and_borrows_when_asked(monkeypatch):
+    """The full-span read must never hand back an unowned alias unless asked to."""
+    cloned = []
+
+    class _FakeCache:
+        def __init__(self, name):
+            self.name = name
+            self.shape = [1, 2, 128, 16]
+
+    class _FakeTtnn:
+        TILE_SIZE = 32
+        DRAM_MEMORY_CONFIG = "dram"
+
+        @staticmethod
+        def clone(cache):
+            cloned.append(cache.name)
+            return f"clone-{cache.name}"
+
+        @staticmethod
+        def slice(cache, starts, ends, *, memory_config=None):
+            raise AssertionError("a full-span read must not slice (it would alias the cache)")
+
+    monkeypatch.setattr(DF, "ttnn", _FakeTtnn)
+    k, v = _FakeCache("k-cache"), _FakeCache("v-cache")
+
+    # Default: an owned clone, exactly as before.
+    assert read_prompt_kv_cache_slice((k, v), prompt_len=128) == ("clone-k-cache", "clone-v-cache")
+    assert cloned == ["k-cache", "v-cache"]
+
+    # Opted in: the cache tensors themselves, no copy.
+    cloned.clear()
+    assert read_prompt_kv_cache_slice((k, v), prompt_len=128, borrow_full_span=True) == (k, v)
+    assert cloned == []
+
+
+def test_reader_owns_result_is_true_unless_span_covers_whole_cache():
+    class _Cache:
+        def __init__(self, span):
+            self.shape = [1, 2, span, 16]
+
+    def _model(spans):
+        return SimpleNamespace(tt_kv_cache=[(_Cache(s), _Cache(s)) for s in spans], layers=[None] * len(spans))
+
+    # Borrowing not requested -> always owned.
+    reader = DF.MutablePrefixKVReader(_model([128] * 3), prompt_len=64)
+    reader.set_read_span(128)
+    assert reader.owns_result is True
+
+    # Requested and the fixed span covers the whole cache -> borrowed.
+    reader = DF.MutablePrefixKVReader(_model([128] * 3), prompt_len=64, borrow_full_span=True)
+    reader.set_read_span(128)
+    assert reader.owns_result is False
+
+    # Requested but the span is a strict prefix -> the slice is an independent copy, so owned.
+    reader = DF.MutablePrefixKVReader(_model([128] * 3), prompt_len=64, borrow_full_span=True)
+    reader.set_read_span(64)
+    assert reader.owns_result is True
+
+    # Non-uniform cache spans -> refuse to borrow (some layer would be a partial slice).
+    reader = DF.MutablePrefixKVReader(_model([128, 128, 256]), prompt_len=64, borrow_full_span=True)
+    reader.set_read_span(128)
+    assert reader.owns_result is True
+
+    # A nonzero start offset is a partial read by definition -> owned.
+    reader = DF.MutablePrefixKVReader(_model([128] * 3), prompt_len=64, seq_len_start=32, borrow_full_span=True)
+    reader.set_read_span(128)
+    assert reader.owns_result is True
+
+
+@pytest.mark.parametrize(("owns_result", "expect_freed"), [(False, False), (True, True)])
+def test_denoise_hidden_forward_honours_prompt_source_ownership(monkeypatch, owns_result, expect_freed):
+    """The per-layer ``finally`` must skip the free when the source reports owns_result False.
+
+    This drives the REAL ``denoise_hidden_forward`` (same harness as
+    ``test_denoise_hidden_forward_reads_and_deallocates_lazy_prompt_sources``) rather than
+    re-implementing the predicate, so deleting the ``owns_result`` guard from the production
+    ``finally`` actually fails this test. That guard is what stops the borrowed fixed-span
+    prefix read from deallocating the model-owned KV cache — a device-fatal
+    ``TT_FATAL: Input Tensor is not allocated`` on the next block, which CPU CI can never catch
+    directly, so the guard needs real coverage here.
+    """
+    freed = []
+    monkeypatch.setattr(DF, "_deallocate_prompt_source", lambda src: freed.append(src))
+
+    num_layers = 2
+    prompt_sources = [(_FakeTensor([1, 1, 32, 16]), _FakeTensor([1, 1, 32, 16])) for _ in range(num_layers)]
+    layer_hiddens = [_FakeTensor([1, 1, 256, 16]) for _ in range(num_layers)]
+    final_hidden = _FakeTensor([1, 1, 256, 16])
+    model = _FakeModel(num_layers=num_layers)
+    model.norm = SimpleNamespace()
+
+    class _Reader:
+        """Callable prompt source mirroring MutablePrefixKVReader's ownership contract."""
+
+        def __init__(self, owns):
+            self.owns_result = owns
+
+        def __call__(self, layer_idx):
+            return prompt_sources[layer_idx]
+
+    monkeypatch.setattr(
+        DF,
+        "_denoise_layer_forward",
+        lambda tt_model, layer_idx, hidden_states, prompt_source, attn_mask, q_rope_offset, *, canvas_rope_provider=None: layer_hiddens[
+            layer_idx
+        ],
+    )
+    monkeypatch.setattr(DF, "_chunked_norm_forward", lambda norm, hidden_states: final_hidden)
+
+    out = DF.denoise_hidden_forward(
+        model,
+        prompt_hidden_by_layer=_Reader(owns_result),
+        prompt_len=32,
+        canvas_hidden=_FakeTensor([1, 1, 256, 16]),
+    )
+
+    assert out is final_hidden
+    if expect_freed:
+        assert freed == prompt_sources, "an owning source's per-layer prefix must be freed"
+    else:
+        assert freed == [], "a BORROWED prefix must never be freed -- that would free the model KV cache"
 
 
 def test_read_prompt_kv_cache_by_layer_reads_every_model_layer():

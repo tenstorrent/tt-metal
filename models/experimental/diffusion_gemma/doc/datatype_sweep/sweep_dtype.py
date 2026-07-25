@@ -107,7 +107,8 @@ def main(argv=None) -> int:
     os.environ["DG_SPARSE_MOE"] = "1"
     os.environ["DG_DEDUP_ARGMAX"] = "1"
     os.environ["DG_SPARSE_MOE_TUNED"] = "1"
-    os.environ.pop("DG_UPFRONT_CAPTURE", None)
+    # Explicit "0": up-front capture is default ON, so unsetting no longer disables it.
+    os.environ["DG_UPFRONT_CAPTURE"] = "0"
     os.makedirs(args.out_dir, exist_ok=True)
     steps_list = [int(x) for x in args.steps.split(",")]
     configs = _configs(steps_list)

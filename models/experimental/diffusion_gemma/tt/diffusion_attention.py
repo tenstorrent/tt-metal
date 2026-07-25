@@ -69,6 +69,43 @@ def _largest_tile_divisor(length, preferred):
     return TILE_SIZE
 
 
+class CanvasTailWorkspace:
+    """Denoise K/V workspace holding ``[prefix span ; canvas]`` in ONE contiguous tensor.
+
+    Lives here (the consumer) so ``denoise_forward`` can import it without a cycle. Deliberately
+    not a tuple, so the ordinary ``prefix_k, prefix_v = prefix_kv`` unpack cannot consume it by
+    accident. ``denoise_attention`` writes the canvas into the tail at ``canvas_offset`` with
+    ``ttnn.fill_cache`` and passes the workspace straight to SDPA — no ``concat``, so the prefix
+    bytes never move per step. The prefix region is refreshed once per BLOCK, outside any trace.
+
+    The tensors are PERSISTENT and pre-capture allocated: nothing downstream may deallocate them.
+    """
+
+    __slots__ = ("k", "v", "canvas_offset")
+
+    def __init__(self, k, v, canvas_offset: int):
+        self.k = k
+        self.v = v
+        self.canvas_offset = int(canvas_offset)
+
+
+def _is_distinct_buffer(converted, source) -> bool:
+    """Whether ``converted`` owns a different buffer than ``source`` (so freeing it is safe).
+
+    ``ttnn.to_memory_config`` returns a new Tensor object even when it does not convert, and
+    that object can alias the source buffer. Deallocating such an alias frees the source, so an
+    ``is not`` check is not sufficient. When the buffer addresses cannot be compared we return
+    False and leak the conversion rather than risk freeing a caller-owned tensor: a leak is
+    recoverable, freeing the model-owned KV cache is not.
+    """
+    if converted is source:
+        return False
+    try:
+        return converted.buffer_address() != source.buffer_address()
+    except Exception:
+        return False
+
+
 def _denoise_sdpa_program_config(head_dim, q_seq_len, k_seq_len):
     """SDPAProgramConfig for the rectangular non-causal denoise SDPA.
 
@@ -425,16 +462,37 @@ def denoise_attention(
     k_rope_offset = q_rope_offset if prefix_kv is not None else 0
     tt_k = _apply_rope_chunked(tt_k, cos_cache, sin_cache, start_offset=k_rope_offset)
 
-    if prefix_kv is not None:
+    # Persistent K/V that must survive this call (the canvas-tail workspace). Anything derived
+    # from them may only be freed when it is provably a DIFFERENT buffer.
+    persistent_kv = None
+    if isinstance(prefix_kv, CanvasTailWorkspace):
+        # Canvas-tail workspace (#51080 item 4): the prefix already sits in a persistent
+        # [1, nkv, span + C, hd] tensor, refreshed once per block. Write only the canvas into the
+        # tail and hand the whole thing to SDPA — no concat, so no prefix bytes move per step.
+        # The write is nkv * C/32 tile-rows (8-16), well inside fill_cache's safe region, and the
+        # destination was allocated before trace capture so its address is stable across replays.
+        canvas_k, canvas_v = tt_k, tt_v
+        ttnn.fill_cache(prefix_kv.k, canvas_k, 0, update_idx=prefix_kv.canvas_offset)
+        ttnn.fill_cache(prefix_kv.v, canvas_v, 0, update_idx=prefix_kv.canvas_offset)
+        tt_k, tt_v = prefix_kv.k, prefix_kv.v
+        persistent_kv = (prefix_kv.k, prefix_kv.v)
+        canvas_k.deallocate(True)
+        canvas_v.deallocate(True)
+    elif prefix_kv is not None:
         prefix_k, prefix_v = prefix_kv
         canvas_k, canvas_v = tt_k, tt_v
         prefix_k_concat = ttnn.to_memory_config(prefix_k, canvas_k.memory_config())
         prefix_v_concat = ttnn.to_memory_config(prefix_v, canvas_v.memory_config())
         tt_k = ttnn.concat([prefix_k_concat, canvas_k], dim=2)
         tt_v = ttnn.concat([prefix_v_concat, canvas_v], dim=2)
-        if prefix_k_concat is not prefix_k:
+        # ``to_memory_config`` hands back a NEW Tensor object that may still ALIAS the input's
+        # buffer when no conversion is needed, so object identity does not tell us whether we
+        # own what came back. Freeing an alias frees the input's buffer — and the input here may
+        # be the model-owned KV cache itself (the borrowed fixed-span prefix read), which then
+        # fails the next op with "Input Tensor is not allocated". Compare buffers, not objects.
+        if _is_distinct_buffer(prefix_k_concat, prefix_k):
             prefix_k_concat.deallocate(True)
-        if prefix_v_concat is not prefix_v:
+        if _is_distinct_buffer(prefix_v_concat, prefix_v):
             prefix_v_concat.deallocate(True)
         canvas_k.deallocate(True)
         canvas_v.deallocate(True)
@@ -462,14 +520,24 @@ def denoise_attention(
         layer_idx=getattr(attn, "layer_idx", None),
     )
     tt_q.deallocate(True)
-    tt_k.deallocate(True)
-    tt_v.deallocate(True)
     if q_old is not tt_q:
         q_old.deallocate(True)
-    if k_old is not tt_k:
-        k_old.deallocate(True)
-    if v_old is not tt_v:
-        v_old.deallocate(True)
+    if persistent_kv is None:
+        tt_k.deallocate(True)
+        tt_v.deallocate(True)
+        if k_old is not tt_k:
+            k_old.deallocate(True)
+        if v_old is not tt_v:
+            v_old.deallocate(True)
+    else:
+        # The K/V are the caller-owned canvas-tail workspace. Free only tensors that are provably
+        # a DIFFERENT buffer (a real to_memory_config conversion); freeing an alias would destroy
+        # the workspace and the next replay would read garbage. Same buffer-vs-object distinction
+        # that the borrowed-prefix path needs (see _is_distinct_buffer).
+        ws_k, ws_v = persistent_kv
+        for tensor, source in ((tt_k, ws_k), (k_old, ws_k), (tt_v, ws_v), (v_old, ws_v)):
+            if _is_distinct_buffer(tensor, source):
+                tensor.deallocate(True)
 
     tt_out = concat_heads(tt_sdpa, is_decode_mode=False)
     tt_sdpa.deallocate(True)

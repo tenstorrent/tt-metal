@@ -8,9 +8,21 @@ by concatenating encoder K/V **in front of** the canvas K/V (prefix-style). So
 for canvas *queries* the key axis is ``[prompt (P) ; canvas (C)]`` of length
 ``P + C`` and the additive mask is ``[C, P + C]`` (0 = attend, -inf = masked).
 
-HF VISIBILITY: full-attention layers are fully bidirectional. Sliding layers use
-HF's ``sliding_window_bidirectional_overlay`` when ``prompt_len`` grows beyond the
-window, so they attend only keys with ``abs(q_idx - kv_idx) <= sliding_window``.
+HF VISIBILITY (corrected 2026-07-24, see #51080). Full-attention layers are fully
+bidirectional. Sliding layers do **not** apply a ``abs(q_idx - kv_idx) <= sliding_window``
+staircase — this module previously claimed and implemented that, and it was wrong:
+
+* ``DiffusionGemmaDecoderModel.create_diffusion_decoder_attention_mask`` returns ``None`` for
+  both masks on the ordinary unpadded ``DynamicCache`` path, so no sliding mask exists at all;
+* the window is purely a CACHE-TRUNCATION effect — ``DynamicSlidingWindowLayer.update`` retains
+  only ``full_key_states[:, :, -sliding_window + 1:, :]``, i.e. ``sliding_window - 1`` tokens;
+* when a padding mask *is* materialized it is expanded from a 1-D per-key vector, so it has NO
+  query-index dependence — every canvas row sees the same key set.
+
+So sliding-layer denoise visibility = the ``sliding_window - 1`` most recent COMMITTED tokens,
+all-attend, plus the full canvas. It is a per-KEY predicate on the committed prefix, not a
+per-(query, key) distance predicate. Pinned by
+``tests/test_hf_sliding_window_reference.py``.
 
 :func:`build_canvas_denoise_mask` returns an all-attend mask by default for
 backwards compatibility and short-prompt tests. Pass ``layer_type="sliding_attention"``
@@ -55,19 +67,19 @@ def build_canvas_reveal_denoise_mask(
     - Canvas key slot ``j'`` in ``[0, canvas_len)`` lives at key columns ``[p_max:p_max+canvas_len]``.
 
     ``enforce_sliding_window=False`` (Phase 1) → committed keys are all-attend (matches today's
-    maskless production denoise path; the reveal is the ONLY masking). ``True`` (Phase 2) → also
-    apply HF's bidirectional window ``abs(q_abs - k_abs) <= sliding_window`` (a decision change vs
-    today → its own #48291 re-validation). ``layer_type='full_attention'`` ignores the window.
+    maskless production denoise path; the reveal is the ONLY masking). ``True`` → additionally
+    hide committed keys HF's sliding cache no longer retains, i.e. keep only absolute positions
+    ``>= prompt_len - (sliding_window - 1)``. That is a per-KEY predicate with no query
+    dependence (see the module docstring); it is a decision change vs today's TT output and needs
+    its own re-validation against fp32 HF — but it moves TOWARD HF, which currently sees fewer
+    keys than TT does. ``layer_type='full_attention'`` ignores the window.
     """
     if p_max < prompt_len:
         raise ValueError(f"p_max ({p_max}) must be >= prompt_len ({prompt_len})")
     total_k = p_max + canvas_len
-    i = torch.arange(canvas_len, device=device).unsqueeze(1)  # [C, 1] canvas row index
-    q_abs = (prompt_len + i).to(torch.long)  # [C, 1] canvas absolute position
     # Key absolute position: prefix slot j -> abs j; canvas slot j' -> abs prompt_len + j'.
+    # Visibility here is entirely a per-KEY predicate, so no q_abs/k_abs grid is needed.
     prefix_abs = torch.arange(p_max, device=device)  # [p_max]
-    canvas_abs = prompt_len + torch.arange(canvas_len, device=device)  # [C]
-    k_abs = torch.cat([prefix_abs, canvas_abs]).unsqueeze(0).to(torch.long)  # [1, p_max+C]
 
     # Committed predicate: prefix columns require j < prompt_len; canvas columns always committed.
     committed = torch.zeros(total_k, dtype=torch.bool, device=device)
@@ -78,10 +90,69 @@ def build_canvas_reveal_denoise_mask(
     if enforce_sliding_window and layer_type == "sliding_attention":
         if sliding_window is None or sliding_window <= 0:
             raise ValueError("sliding_window must be positive for sliding_attention")
-        allowed = allowed & ((q_abs - k_abs).abs() <= sliding_window)
+        # HF retains only the last ``sliding_window - 1`` COMMITTED tokens in a sliding layer's
+        # cache. Visibility is therefore a per-KEY property of the committed prefix with no
+        # query dependence; the canvas is always fully visible. (The previous implementation
+        # applied a per-(q,k) ``abs(q_abs - k_abs) <= sliding_window`` staircase, which HF does
+        # not do and which would hide up to canvas_len-1 keys per row that HF attends.)
+        keep_from = prompt_len - (sliding_window - 1)
+        retained = torch.zeros(total_k, dtype=torch.bool, device=device)
+        retained[:p_max] = prefix_abs >= keep_from
+        retained[p_max:] = True
+        allowed = allowed & retained.unsqueeze(0)
     elif layer_type not in (None, "full_attention", "sliding_attention"):
         raise ValueError(f"unsupported layer_type {layer_type!r}")
 
+    return torch.where(
+        allowed, torch.zeros((), dtype=dtype, device=device), torch.full((), neg_inf, dtype=dtype, device=device)
+    )
+
+
+def build_canvas_reveal_denoise_window_mask(
+    prompt_len: int,
+    canvas_len: int,
+    span: int,
+    lo: int,
+    *,
+    sliding_window: int,
+    neg_inf: float = float("-inf"),
+    dtype: torch.dtype = torch.float32,
+    device=None,
+) -> torch.Tensor:
+    """Fixed-shape ``[canvas_len, span + canvas_len]`` mask for a BOUNDED sliding-layer read.
+
+    Companion to :func:`build_canvas_reveal_denoise_mask` for the per-layer bounded span: a
+    sliding layer reads only ``span`` cache rows starting at absolute position ``lo`` instead of
+    the whole ``p_max`` prefix, so prefix column ``r`` maps to absolute position ``lo + r``
+    (whereas the full-span builder has ``lo == 0`` and column ``j`` maps to ``j``).
+
+    A column is attended iff BOTH hold:
+
+    * ``lo + r < prompt_len`` — the position is actually committed (the reveal predicate);
+    * ``lo + r >= prompt_len - (sliding_window - 1)`` — HF's sliding cache still retains it.
+
+    Canvas columns are always attended. With ``span`` tile-aligned and ``lo = max(0, prompt_len -
+    span)``, the two regimes are:
+
+    * ``prompt_len <= span``  -> ``lo == 0``, so this is the leading ``span`` columns of the
+      full-span mask (identical content where they overlap);
+    * ``prompt_len > span``   -> ``lo == prompt_len - span``, the commit predicate is vacuous and
+      the retention predicate reduces to ``r >= span - (sliding_window - 1)``, which is
+      ``prompt_len``-INDEPENDENT. So in steady state the mask stops changing between blocks.
+    """
+    if span <= 0:
+        raise ValueError(f"span must be positive, got {span}")
+    if lo < 0:
+        raise ValueError(f"lo must be non-negative, got {lo}")
+    if sliding_window <= 0:
+        raise ValueError(f"sliding_window must be positive, got {sliding_window}")
+    total_k = span + canvas_len
+    prefix_abs = lo + torch.arange(span, device=device)
+    keep_from = prompt_len - (sliding_window - 1)
+
+    allowed = torch.zeros(canvas_len, total_k, dtype=torch.bool, device=device)
+    allowed[:, :span] = ((prefix_abs < prompt_len) & (prefix_abs >= keep_from)).unsqueeze(0)
+    allowed[:, span:] = True
     return torch.where(
         allowed, torch.zeros((), dtype=dtype, device=device), torch.full((), neg_inf, dtype=dtype, device=device)
     )
@@ -158,9 +229,16 @@ def build_canvas_denoise_mask(
     elif layer_type == "sliding_attention":
         if sliding_window is None or sliding_window <= 0:
             raise ValueError("sliding_window must be positive for sliding_attention")
-        q_abs = canvas_positions(prompt_len, canvas_len, device=device).unsqueeze(1)  # [C, 1]
-        k_abs = torch.arange(total_k, device=device).unsqueeze(0)  # [1, P+C]
-        allowed = (q_abs - k_abs).abs() <= sliding_window
+        # Non-causal (denoise) sliding visibility is a per-KEY predicate: HF's sliding cache
+        # retains only the last ``sliding_window - 1`` committed prompt positions, and the whole
+        # canvas is always visible. It is NOT a ``abs(q_abs - k_abs) <= sliding_window``
+        # staircase — see the module docstring and #51080. The old staircase both hid committed
+        # keys HF attends and revealed prompt keys HF has already evicted.
+        keep_from = prompt_len - (sliding_window - 1)
+        prompt_abs = torch.arange(prompt_len, device=device)
+        allowed = torch.zeros(canvas_len, total_k, dtype=torch.bool, device=device)
+        allowed[:, :prompt_len] = (prompt_abs >= keep_from).unsqueeze(0)
+        allowed[:, prompt_len:] = True
     elif layer_type in (None, "full_attention"):
         allowed = torch.ones(canvas_len, total_k, dtype=torch.bool, device=device)
     else:

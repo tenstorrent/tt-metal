@@ -26,6 +26,14 @@ from loguru import logger
 
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.reference.denoise_loop import DenoiseTrajectory
+from models.experimental.diffusion_gemma.tt.denoise_forward import (
+    _layer_type_for_denoise,
+    _sliding_window_for_denoise,
+    denoise_canvas_tail_enabled,
+    denoise_sliding_span_enabled,
+    denoise_sliding_window_enabled,
+    sliding_read_span,
+)
 from models.experimental.diffusion_gemma.tt.denoise_loop import (
     HaltBuffers,
     _argmax_to_tile_f32,
@@ -45,21 +53,56 @@ from models.experimental.diffusion_gemma.tt.denoise_loop import (
 UPFRONT_DENOISE_STEPS = 48
 _CONTROLLER_ATTR = "_upfront_traced_denoise_controller"
 
+# Fixed reveal span registered by a caller that derives it from its own served-context
+# bound instead of the operator setting DG_DENOISE_REVEAL_PMAX (the vLLM wrapper derives
+# it from ``max_model_len``). The controller is built deep inside the denoise-block entry
+# point, which cannot take extra arguments without changing the ``denoise_block_fn``
+# protocol, so the derived value is registered here once at startup. An explicit
+# DG_DENOISE_REVEAL_PMAX always wins; both paths get identical validation.
+_DEFAULT_REVEAL_PMAX: int | None = None
+
+
+def set_default_reveal_pmax(p_max: int | None) -> None:
+    """Register the derived fixed reveal span used when DG_DENOISE_REVEAL_PMAX is unset."""
+    global _DEFAULT_REVEAL_PMAX
+    _DEFAULT_REVEAL_PMAX = None if p_max is None else int(p_max)
+
 
 def upfront_capture_enabled() -> bool:
-    """Return whether model-startup denoise capture is enabled."""
-    return os.environ.get("DG_UPFRONT_CAPTURE", "0").lower() in ("1", "true", "yes", "on")
+    """Return whether model-startup denoise capture is enabled (default ON).
+
+    Up-front capture is the shipped serving path: capture the 48 released denoise
+    steps once during startup and replay them for every request. Set
+    ``DG_UPFRONT_CAPTURE=0`` to opt out and run the ordinary eager per-step loop
+    (~1.7-2.3x slower, and the supported choice when per-step trajectory records
+    are needed — replayed traces do not produce them).
+    """
+    return os.environ.get("DG_UPFRONT_CAPTURE", "1").lower() in ("1", "true", "yes", "on")
+
+
+def prefix_borrow_enabled() -> bool:
+    """Whether the fixed full-span prefix read borrows the cache instead of cloning it.
+
+    Default ON: the clone it replaces is ~2 whole-cache copies per layer per step of data that
+    is bit-identical across all 48 steps of a block, and borrowing is bit-exact by construction
+    (the downstream concat copies the bytes it needs). ``DG_PREFIX_BORROW=0`` restores the clone
+    — it exists to A/B the change on device and as an escape hatch.
+    """
+    return os.environ.get("DG_PREFIX_BORROW", "1").lower() not in ("0", "false", "no", "off")
 
 
 def _resolve_reveal_pmax(adapter) -> int:
     """Resolve and validate the fixed prefix span used by every captured trace."""
     raw = os.environ.get("DG_DENOISE_REVEAL_PMAX", "").strip()
     if not raw:
-        raise RuntimeError("up-front denoise capture requires an explicit bounded DG_DENOISE_REVEAL_PMAX")
-    try:
-        p_max = int(raw)
-    except ValueError as exc:
-        raise RuntimeError("DG_DENOISE_REVEAL_PMAX must be a positive 32-token multiple") from exc
+        if _DEFAULT_REVEAL_PMAX is None:
+            raise RuntimeError("up-front denoise capture requires an explicit bounded DG_DENOISE_REVEAL_PMAX")
+        p_max = _DEFAULT_REVEAL_PMAX
+    else:
+        try:
+            p_max = int(raw)
+        except ValueError as exc:
+            raise RuntimeError("DG_DENOISE_REVEAL_PMAX must be a positive 32-token multiple") from exc
     if p_max <= 0 or p_max % ttnn.TILE_SIZE:
         raise RuntimeError("DG_DENOISE_REVEAL_PMAX must be a positive 32-token multiple")
 
@@ -87,11 +130,94 @@ def _prepare_fixed_reveal(adapter, *, canvas_len: int) -> int:
     if not callable(set_read_span):
         raise RuntimeError("up-front denoise capture requires a MutablePrefixKVReader prefix source")
     set_read_span(p_max)
+    # The fixed span is now bound and never changes, so when it covers the whole cache the
+    # per-layer prefix read can hand back the model-owned cache instead of cloning it. That
+    # clone is ~2 whole-cache copies per layer per step of data that is identical across all
+    # 48 steps of a block.
+    #
+    # Two things make borrowing safe, and BOTH were required: denoise_hidden_forward consults
+    # ``owns_result`` before freeing, and denoise_attention compares BUFFERS (not object
+    # identity) before freeing its ``to_memory_config`` result. That second one is not
+    # theoretical — ``to_memory_config`` returns a fresh Tensor object that aliases the input
+    # buffer when no conversion is needed, so the old ``is not`` check deallocated the model
+    # KV cache and the next op failed with "Input Tensor is not allocated".
+    if hasattr(reader, "borrow_full_span"):
+        reader.borrow_full_span = prefix_borrow_enabled()
+        logger.info(
+            f"[DiffusionGemma up-front] prefix read borrow_full_span={reader.borrow_full_span} "
+            f"engaged={not reader.owns_result} (p_max={p_max})"
+        )
+    # HF's sliding layers retain only the last sliding_window-1 committed tokens; enforcing that
+    # is a fidelity fix (#51080) but decision-changing above prompt_len 1024, so it is gated.
+    # Both masks share one shape, so this changes content only and every trace stays valid.
+    enforce_window = denoise_sliding_window_enabled()
+    # Bounded sliding spans (perf half): sliding layers read only the retained window instead of
+    # the full p_max. The read must move OUT of the trace because its offset slides with the
+    # committed prefix, so allocate the block-resident buffers HERE, before begin_trace_capture.
+    sliding_span = None
+    window_layers = {}
+    if denoise_sliding_span_enabled():
+        window = _sliding_window_for_denoise(adapter.tt_model, 0)
+        if window:
+            sliding_span = sliding_read_span(window, p_max)
+            if sliding_span >= p_max:
+                # Nothing to save; keep the single-shape path.
+                sliding_span = None
+            else:
+                window_layers = {
+                    layer_idx: sliding_span
+                    for layer_idx in range(len(adapter.tt_model.layers))
+                    if _layer_type_for_denoise(adapter.tt_model, layer_idx) == "sliding_attention"
+                }
+                if not window_layers:
+                    sliding_span = None
     adapter.prepare_reveal_mask_buffers(
         canvas_len=canvas_len,
         p_max=p_max,
         prompt_len=prompt_len,
+        enforce_window=enforce_window,
+        sliding_span=sliding_span,
     )
+    # Canvas-tail workspace (item 4): give EVERY layer a persistent [read_span + C] workspace so
+    # the per-step concat disappears. Layers already bounded by item 3 keep their bounded span;
+    # the rest (the 5 full-attention layers) get a p_max-sized one.
+    canvas_tail = 0
+    if denoise_canvas_tail_enabled():
+        canvas_tail = canvas_len
+        for layer_idx in range(len(adapter.tt_model.layers)):
+            window_layers.setdefault(layer_idx, sliding_span if sliding_span else p_max)
+            if _layer_type_for_denoise(adapter.tt_model, layer_idx) != "sliding_attention":
+                window_layers[layer_idx] = p_max
+    if window_layers:
+        reader.prepare_window_buffers(window_layers, canvas_tail=canvas_tail)
+        reader.refresh_windows(prompt_len)
+        # Derive the report from the ACTUAL per-layer spans. Counting "layers in window_layers" as
+        # sliding was wrong once the canvas-tail path started adding the full-attention layers too,
+        # and it understated the key rows by pricing them at the bounded span.
+        n_layers = len(adapter.tt_model.layers)
+        bounded = sum(1 for span in window_layers.values() if sliding_span and span == sliding_span)
+        key_rows_before = n_layers * (p_max + canvas_len)
+        key_rows_after = sum(window_layers.get(i, p_max) + canvas_len for i in range(n_layers))
+        # The engagement markers are a stable contract for the A/B harnesses in
+        # doc/optimize_perf/verify_sliding_span.sh and verify_canvas_tail.sh, which fail loudly if
+        # the candidate arm did not actually turn the feature on.
+        markers = []
+        if bounded:
+            markers.append("DG_DENOISE_SLIDING_SPAN=1:")
+        if canvas_tail:
+            markers.append("DG_DENOISE_CANVAS_TAIL=1:")
+        logger.info(
+            f"[DiffusionGemma up-front] {' '.join(markers)} prefix spans: {bounded}/{n_layers} layers "
+            f"bounded to {sliding_span}, rest at {p_max}; "
+            f"SDPA key rows/step {key_rows_before} -> {key_rows_after}"
+            + (f"; canvas-tail workspace ON (+{canvas_tail} rows/layer)" if canvas_tail else "")
+        )
+    if enforce_window:
+        logger.info(
+            f"[DiffusionGemma up-front] DG_DENOISE_SLIDING_WINDOW=1: enforcing HF sliding-layer "
+            f"key retention (masks={sorted(adapter._reveal_mask_bufs)}, p_max={p_max}, "
+            f"sliding_span={sliding_span})"
+        )
     adapter.update_reveal_mask_buffer(prompt_len)
     if not getattr(adapter, "use_reveal_mask", False):
         raise RuntimeError("up-front denoise capture failed to enable the persistent reveal mask")

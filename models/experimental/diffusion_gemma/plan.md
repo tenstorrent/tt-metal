@@ -31,14 +31,17 @@ baseline.
 
 **Exactly two denoise execution modes**
 
-1. **Metal trace:** one model-lifetime, startup-captured path:
-   `DG_UPFRONT_CAPTURE=1`, reveal masking with explicit tile-aligned
-   `DG_DENOISE_REVEAL_PMAX`, IID host Gumbel, K=48, and one-step/window early halt. The reveal,
-   non-lazy capture, and window-1 early-halt behavior is intrinsic; it is not selected by additional
-   environment flags. The startup trace/controller is rebound across requests and released only at
-   model teardown.
-2. **Eager fallback:** leave `DG_UPFRONT_CAPTURE` unset/zero. Eager remains available for ordinary
-   demos and diagnostics, but it is not optimized traced-serving evidence.
+1. **Metal trace (the default):** one model-lifetime, startup-captured path:
+   `DG_UPFRONT_CAPTURE` now defaults to `1`, reveal masking with a tile-aligned
+   `DG_DENOISE_REVEAL_PMAX` (optional — derived from the served bound when unset, see below),
+   on-device permuted-vocab Gumbel (`DG_VLLM_GUMBEL_MODE` now defaults to `device`), K=48, and
+   one-step/window early halt. The reveal, non-lazy capture, and window-1 early-halt behavior is
+   intrinsic; it is not selected by additional environment flags. The startup trace/controller is
+   rebound across requests and released only at model teardown.
+2. **Eager fallback:** set `DG_UPFRONT_CAPTURE=0` explicitly — leaving the variable unset no longer
+   disables capture. Eager remains available for ordinary demos and diagnostics, and it is the only
+   path that emits eager per-step trajectory records (a replayed trace does not produce them), but
+   it is not optimized traced-serving evidence.
 
 There is no supported fixed-budget, grouped/multistep, frozen-prefix, per-request, or argmax Metal
 trace variant. The removed legacy knobs are `DG_VLLM_TRACE`, `DG_DENOISE_TRACED`,
@@ -49,11 +52,27 @@ not an additional trace type.
 
 **Up-front vLLM launch requirements**
 
-- Set only the model-level contract values: `DG_UPFRONT_CAPTURE=1`,
-  `DG_UPFRONT_PREFILL_WARMUP_LENS=<all admitted aligned prompt lengths>`,
-  `DG_DENOISE_REVEAL_PMAX=<positive tile-aligned served prompt+generated cap>`,
-  `DG_TRACE_REGION_SIZE=<validated positive reservation>`, `DG_VLLM_GUMBEL_MODE=host`, and
-  `DG_VLLM_MAX_DENOISE_STEPS=48`.
+- Still **required and fail-loud** (neither can be derived from anything the wrapper knows):
+  `DG_UPFRONT_PREFILL_WARMUP_LENS=<all admitted aligned prompt lengths>` and
+  `DG_TRACE_REGION_SIZE=<validated positive reservation>`, mirroring
+  `--additional-config tt.trace_region_size`. The trace region is deliberately *not* defaulted:
+  Metal takes it as an open-time constructor argument with no getter, so this process cannot read
+  the reservation back, defaulting it would silence the guard without reserving anything, and a
+  trace-region overflow poisons the device (needs `tt-smi -r`).
+- Now **defaulted / optional**: `DG_UPFRONT_CAPTURE` (default `1`), `DG_VLLM_MAX_DENOISE_STEPS`
+  (the model config is already 48), and `DG_DENOISE_REVEAL_PMAX` — when the env var is unset the
+  fixed reveal span is derived as `max_model_len` (vLLM `--max-model-len`) rounded **down** to a
+  tile and logged — the KV cache seq dim is `max_model_len` verbatim (ttnn keeps the unpadded
+  logical shape), so rounding up would exceed the allocated span and abort startup;
+  an explicit tile-aligned value still wins, and both paths get identical validation
+  (positive tile multiple, ≥ tile + one canvas, within the allocated KV span). With no explicit
+  value *and* no `max_model_len` it still raises.
+- `DG_VLLM_GUMBEL_MODE` now defaults to `device` (the W4-validated on-device permuted-vocab RNG,
+  which removes the per-step host RNG and the replicated PCIe DMA). This is a **distribution
+  change, not a bit-exact swap** — defaulting it on was an explicit owner decision and the sub-40
+  GPQA host-vs-device `MAX_GEN_TOKS=3072` re-gate is still outstanding. Set
+  `DG_VLLM_GUMBEL_MODE=host` for the IID full-vocabulary torch Gumbel reference; `chunked` and
+  `argmax` remain unsupported under up-front capture.
 - Every admitted aligned prefill length must be known and compiled before capture. An unseen runtime
   shape is rejected rather than compiled while traces are resident.
 - Always pass `--generation-config vllm`, set `--max-num-batched-tokens` at least as large as the

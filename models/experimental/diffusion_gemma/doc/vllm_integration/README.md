@@ -7,25 +7,42 @@
 
 There are exactly two denoise execution modes:
 
-1. **Metal trace:** one model-lifetime trace/controller captured during startup with reveal masking,
-   IID host Gumbel, K=48, and one-step/window early halt.
-2. **Eager fallback:** `DG_UPFRONT_CAPTURE` unset/zero. Eager is valid for diagnostics but is not
-   optimized traced-serving evidence.
+1. **Metal trace (default):** one model-lifetime trace/controller captured during startup with reveal
+   masking, on-device permuted-vocab Gumbel, K=48, and one-step/window early halt. This is what an
+   unset `DG_UPFRONT_CAPTURE` now selects.
+2. **Eager fallback:** `DG_UPFRONT_CAPTURE=0`, set explicitly — unsetting it no longer disables
+   capture. Eager is valid for diagnostics, and is the only path that emits per-step trajectory
+   records (a replayed trace does not), but is not optimized traced-serving evidence.
 
 The complete model-level trace environment is:
 
 ```bash
-export DG_UPFRONT_CAPTURE=1
-export DG_UPFRONT_PREFILL_WARMUP_LENS=<all-admitted-aligned-prompt-lengths>
-export DG_DENOISE_REVEAL_PMAX=<positive-tile-aligned-served-cap>
-export DG_TRACE_REGION_SIZE=<validated-positive-reservation>
-export DG_VLLM_GUMBEL_MODE=host
+export DG_UPFRONT_CAPTURE=1                                                  # default ON; redundant but explicit
+export DG_UPFRONT_PREFILL_WARMUP_LENS=<all-admitted-aligned-prompt-lengths>  # required, no default
+export DG_TRACE_REGION_SIZE=<validated-positive-reservation>                 # required, no default
+export DG_DENOISE_REVEAL_PMAX=<positive-tile-aligned-served-cap>             # optional; derived from --max-model-len
+export DG_VLLM_GUMBEL_MODE=device                                            # default; `host` is the reference
 export DG_VLLM_MAX_DENOISE_STEPS=48
 ```
 
 Reveal masking, non-lazy startup capture, and window-1 early halt are intrinsic. Every aligned
 prefill length the server can admit must be listed and compiled before denoise capture; an unseen
 runtime shape fails instead of compiling with resident traces.
+
+The two required knobs stay fail-loud on purpose: the prefill shape list cannot be derived from
+anything the wrapper knows, and the reserved trace region cannot be read back from the device (Metal
+takes it as an open-time constructor argument with no getter), so defaulting it would silence the
+guard without reserving anything — and a trace-region overflow poisons the device (`tt-smi -r`).
+Reserve it with `--additional-config` `tt.trace_region_size` and mirror the same value here.
+`DG_DENOISE_REVEAL_PMAX` is optional: when unset the fixed span is the tile-rounded `--max-model-len`
+and the derived value is logged; an explicit env value still wins, and both paths share the same
+validation (positive, tile-aligned, fits prompt + one canvas, within the allocated KV span).
+
+`DG_VLLM_GUMBEL_MODE=device` (the on-device permuted-vocab RNG) is a **distribution change, not a
+bit-exact swap** of the `host` IID full-vocabulary torch Gumbel; the sub-40 GPQA host-vs-device
+`MAX_GEN_TOKS=3072` re-gate is still outstanding. Set `DG_VLLM_GUMBEL_MODE=host` for the reference
+sampler when a run must be compared against host-Gumbel quality evidence. `chunked` and `argmax` are
+not materialized full-tensor sources and are rejected by the up-front controller.
 
 Server command requirements:
 
@@ -296,6 +313,9 @@ Both saved verbatim under this dir and re-appliable with `git apply` from the vl
 source /home/zni/venvs/tt-diffusion-gemma/bin/activate
 export TT_METAL_HOME=/home/zni/tt-metal PYTHONPATH=/home/zni/tt-metal
 export MESH_DEVICE=P150x4 DG_CKPT=/home/zni/dg_models/diffusiongemma-26B-A4B-it
+# Recorded before up-front capture became default ON; the `argmax` sampler is rejected by
+# the up-front controller, so replaying this eager run needs the opt-out set explicitly.
+export DG_UPFRONT_CAPTURE=0
 export DG_VLLM_GUMBEL_MODE=argmax VLLM_RPC_TIMEOUT=1800000
 export VLLM_ENABLE_V1_MULTIPROCESSING=0   # single-process V1 so tracebacks surface in the log
 python -m vllm.entrypoints.openai.api_server \

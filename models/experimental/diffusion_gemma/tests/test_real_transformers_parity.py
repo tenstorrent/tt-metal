@@ -104,19 +104,29 @@ def test_canvas_denoise_mask_matches_real_bidirectional_layer_masks():
     total_len = prompt_len + canvas_len
     hf_masks = create_masks_for_generate(cfg, torch.zeros(1, total_len, hidden), None, None)
 
-    hf_sliding = hf_masks["sliding_attention"][0, 0, prompt_len:, :] == 0
-    ours_sliding = (
-        build_canvas_denoise_mask(
-            prompt_len,
-            canvas_len,
-            layer_type="sliding_attention",
-            sliding_window=sliding_window,
-        )
-        == 0
-    )
-    assert torch.equal(ours_sliding, hf_sliding)
+    # ``create_masks_for_generate`` is ``transformers.masking_utils``' GENERIC builder (see the
+    # import at the top of modeling_diffusion_gemma.py); DiffusionGemma's own override of that
+    # name lives on DiffusionGemmaEncoderModel and just delegates to it. It therefore describes
+    # the ENCODER's prompt self-attention, where the sliding window IS a per-(q,k) distance
+    # predicate — and its sliding mask is a staircase.
+    #
+    # The DENOISE pass is the DECODER, which builds its masks with
+    # ``DiffusionGemmaDecoderModel.create_diffusion_decoder_attention_mask`` instead. That
+    # function applies NO staircase: on the ordinary unpadded DynamicCache path it returns None
+    # for both masks, and the sliding window is purely a cache-truncation effect (the layer
+    # retains only ``sliding_window - 1`` committed tokens). Comparing our denoise mask against
+    # the encoder/generic builder is what put a ``abs(q-k) <= sliding_window`` staircase into
+    # this repo's reference in the first place — see #51080. The decoder semantics are pinned in
+    # tests/test_hf_sliding_window_reference.py, so this test no longer asserts that parity.
+    assert hf_masks["sliding_attention"] is not None, "encoder-side sliding mask should materialize"
+    hf_encoder_sliding = hf_masks["sliding_attention"][0, 0, prompt_len:, :] == 0
+    rows = hf_encoder_sliding.shape[0]
+    assert any(
+        not torch.equal(hf_encoder_sliding[row], hf_encoder_sliding[0]) for row in range(1, rows)
+    ), "the generic/encoder builder is expected to be query-dependent (a staircase); if this ever stops being true, revisit #51080"
 
-    # HF skips materializing an all-bidirectional mask for full layers.
+    # Full-attention parity still holds and is meaningful: HF skips materializing an
+    # all-bidirectional mask for full layers, and ours is all-attend.
     assert hf_masks["full_attention"] is None
     assert torch.all(build_canvas_denoise_mask(prompt_len, canvas_len, layer_type="full_attention") == 0)
 

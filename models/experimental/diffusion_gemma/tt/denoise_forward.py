@@ -21,8 +21,9 @@ from loguru import logger
 from models.experimental.diffusion_gemma.reference.attention_mask import (
     build_canvas_denoise_mask,
     build_canvas_reveal_denoise_mask,
+    build_canvas_reveal_denoise_window_mask,
 )
-from models.experimental.diffusion_gemma.tt.diffusion_attention import denoise_attention
+from models.experimental.diffusion_gemma.tt.diffusion_attention import CanvasTailWorkspace, denoise_attention
 from models.experimental.diffusion_gemma.tt.expert_operations import (
     shared_mlp_forward,
     use_tanh_expert_activations,
@@ -134,6 +135,155 @@ def build_device_canvas_reveal_mask(
     )
 
 
+def build_device_canvas_reveal_window_mask(
+    mesh_device,
+    *,
+    prompt_len: int,
+    canvas_len: int,
+    span: int,
+    lo: int,
+    sliding_window: int,
+    dtype=ttnn.bfloat16,
+):
+    """Device ``[1, 1, C, span + C]`` mask for a bounded sliding-layer read (see the reference)."""
+    mask = build_canvas_reveal_denoise_window_mask(
+        prompt_len,
+        canvas_len,
+        span,
+        lo,
+        sliding_window=sliding_window,
+        neg_inf=NEG,
+        dtype=torch.float32,
+    ).view(1, 1, canvas_len, span + canvas_len)
+    return ttnn.from_torch(
+        mask,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=dtype,
+        mesh_mapper=_replicate_mapper(mesh_device),
+    )
+
+
+def denoise_canvas_tail_enabled() -> bool:
+    """Whether denoise K/V uses a canvas-tail workspace instead of a per-step concat (#51080 item 4).
+
+    The per-step ``concat([prefix, canvas])`` re-materialises the whole prefix every step, every
+    layer. With a workspace the prefix is written once per block and only the 256-row canvas tail
+    is written per step, so the remaining per-step prefix copy goes to zero.
+
+    Requires bounded spans to be resolved first (the workspace is sized ``read_span + canvas``).
+    Default OFF: it adds a persistent DG-owned scratch tensor per layer (~106 MB at p_max=4096,
+    ~1.3 GB at 128K), which is a real DRAM-for-bandwidth trade that must be measured against the
+    256K envelope before it is used at long context.
+    """
+    return os.environ.get("DG_DENOISE_CANVAS_TAIL", "0").lower() in ("1", "true", "yes", "on")
+
+
+def _fill_cache_rows_are_safe(dst, src_rows: int, mesh_device) -> bool:
+    """Whether one ``ttnn.fill_cache`` of ``src_rows`` tokens into ``dst`` avoids the spill bug.
+
+    ``ttnn.fill_cache``'s program factory splits ``nkv * rows/32`` tile-rows over the core grid and
+    each core writes its rows contiguously from one ``cache_start_id``, assuming no core's range
+    crosses a kv-head boundary. Above ``rows > cores`` it silently writes some rows to the wrong
+    head unless the write spans the whole destination. Mirrors the guard in
+    ``tt/commit_batched.py::_fill_write_unsupported_reason``.
+    """
+    tile = ttnn.TILE_SIZE
+    rows = int(dst.shape[1]) * (int(src_rows) // tile)
+    grid = mesh_device.compute_with_storage_grid_size()
+    return int(src_rows) == int(dst.shape[2]) or rows <= grid.x * grid.y
+
+
+def _fill_prefix_into_workspace(dst, cache, *, lo: int, span: int, mesh_device) -> None:
+    """Copy ``cache[lo : lo+span]`` into ``dst[0 : span]``, chunked to stay inside the safe region.
+
+    A single fill of the whole span would exceed the tile-row/core bound on the full-attention
+    layers (nkv=1, span=4096 -> 128 tile-rows > 110 cores), which is the silent head-boundary
+    spill. Chunking keeps every individual write at or under the bound.
+    """
+    tile = ttnn.TILE_SIZE
+    nkv = int(dst.shape[1])
+    grid = mesh_device.compute_with_storage_grid_size()
+    max_tiles = max(1, (grid.x * grid.y) // max(1, nkv))
+    chunk = max(tile, max_tiles * tile)
+    written = 0
+    while written < span:
+        rows = min(chunk, span - written)
+        rows = (rows // tile) * tile or tile
+        src = ttnn.slice(
+            cache,
+            [0, 0, lo + written, 0],
+            [cache.shape[0], cache.shape[1], lo + written + rows, cache.shape[3]],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        try:
+            if not _fill_cache_rows_are_safe(dst, rows, mesh_device):
+                raise RuntimeError(
+                    f"canvas-tail prefix fill of {rows} tokens would spill across kv-head "
+                    f"boundaries (nkv={nkv}); refusing to corrupt the workspace"
+                )
+            ttnn.fill_cache(dst, src, 0, update_idx=written)
+        finally:
+            src.deallocate(True)
+        written += rows
+
+
+def denoise_sliding_span_enabled() -> bool:
+    """Whether sliding layers read a BOUNDED prefix span instead of the full p_max (#51080 item 3).
+
+    This is the perf half of the sliding-window work: a sliding layer only needs the
+    ``sliding_window - 1`` most recent committed tokens, so reading the whole ``p_max`` prefix on
+    25 of 30 layers is wasted SDPA key rows. Bounding the read takes the per-step key rows from
+    ``30*(p_max+C)`` to ``25*(span+C) + 5*(p_max+C)``.
+
+    Requires :func:`denoise_sliding_window_enabled` — without the retention mask a bounded read
+    would silently change visibility rather than implement it. Default OFF for the same reason
+    that flag is: above ``prompt_len = sliding_window - 1`` it is decision-affecting.
+    """
+    if not denoise_sliding_window_enabled():
+        return False
+    return os.environ.get("DG_DENOISE_SLIDING_SPAN", "0").lower() in ("1", "true", "yes", "on")
+
+
+def sliding_read_span(sliding_window: int, p_max: int) -> int:
+    """Tile-aligned rows a sliding layer must read to cover HF's retained window.
+
+    HF retains ``sliding_window - 1`` tokens, which is not tile-aligned (1023), so read one whole
+    tile more and let the mask drop the extra column(s). Never exceed ``p_max``.
+    """
+    needed = int(sliding_window)  # (sliding_window - 1) rounded up to the next tile == sliding_window when W%32==0
+    span = ((needed + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    return min(span, int(p_max))
+
+
+def sliding_read_offset(prompt_len: int, span: int, p_max: int) -> int:
+    """Tile-aligned start of the bounded window: the last ``span`` committed rows.
+
+    ``prompt_len`` is always a 32-multiple on the commit path, so this stays tile-aligned (the
+    slice op requires it). Clamped so the read never runs past the reveal span.
+    """
+    lo = max(0, int(prompt_len) - int(span))
+    lo = min(lo, max(0, int(p_max) - int(span)))
+    if lo % ttnn.TILE_SIZE != 0:
+        raise ValueError(f"bounded sliding read offset must be tile aligned, got {lo}")
+    return lo
+
+
+def denoise_sliding_window_enabled() -> bool:
+    """Whether denoise applies HF's sliding-layer key retention (#51080).
+
+    HF's sliding layers hold only the last ``sliding_window - 1`` committed tokens, so TT's
+    all-attend denoise currently attends keys HF does not have, on 25 of 30 layers, for every
+    prompt past 1024 tokens. Enabling this makes TT match HF.
+
+    Default OFF because it is decision-CHANGING above ``prompt_len = 1024`` and its gate is a
+    decision-agreement run against fp32 HF (not against today's TT output, which is the defect
+    being corrected). Below 1024 the window never binds and the mask is identical to today's, so
+    enabling it there is bit-exact. Flip the default once the fp32 HF agreement run lands.
+    """
+    return os.environ.get("DG_DENOISE_SLIDING_WINDOW", "0").lower() in ("1", "true", "yes", "on")
+
+
 def _layer_type_for_denoise(tt_model, layer_idx: int) -> str | None:
     layer_types = getattr(getattr(tt_model, "hf_config", None), "layer_types", None)
     if layer_types is not None:
@@ -143,6 +293,16 @@ def _layer_type_for_denoise(tt_model, layer_idx: int) -> str | None:
 
 
 def _sliding_window_for_denoise(tt_model, layer_idx: int) -> int | None:
+    # Validation-only override. The real window (1024) masks just P-(W-1) keys, which at
+    # P=1056 is 2.5% of the attended span — enough to be a fidelity difference but far too
+    # small to reliably flip an argmax, so an end-to-end output A/B cannot prove the plumbing
+    # is live. Forcing a small window makes the effect large enough to be unmistakable.
+    override = os.environ.get("DG_DENOISE_SLIDING_WINDOW_OVERRIDE", "").strip()
+    if override:
+        value = int(override)
+        if value <= 0:
+            raise ValueError(f"DG_DENOISE_SLIDING_WINDOW_OVERRIDE must be positive, got {value}")
+        return value
     attn_config = getattr(getattr(tt_model.layers[layer_idx], "self_attn", None), "config", None)
     window = getattr(attn_config, "sliding_window", None)
     if window is not None:
@@ -151,8 +311,16 @@ def _sliding_window_for_denoise(tt_model, layer_idx: int) -> int | None:
 
 
 def _sliding_layer_needs_denoise_mask(prompt_len: int, canvas_len: int, sliding_window: int) -> bool:
-    # HF's bidirectional sliding overlay allows abs(q_idx - kv_idx) <= sliding_window.
-    return prompt_len + canvas_len - 1 > sliding_window
+    """Whether a sliding layer needs a mask at all for this committed prefix length.
+
+    HF's sliding cache retains the last ``sliding_window - 1`` committed tokens and the canvas is
+    always fully visible, so a mask is needed exactly when some committed position has been
+    evicted: ``prompt_len > sliding_window - 1``. ``canvas_len`` does not enter — the old
+    ``prompt_len + canvas_len - 1 > sliding_window`` threshold came from a per-(q,k) staircase
+    that HF does not implement (see reference/attention_mask.py and #51080).
+    """
+    del canvas_len  # not part of the predicate; kept for call-site compatibility
+    return prompt_len > sliding_window - 1
 
 
 def _build_denoise_attn_mask_for_layer(
@@ -238,6 +406,20 @@ def denoise_attention_forward(
 
 def _prompt_source_len(prompt_source):
     return prompt_source[0].shape[-2] if isinstance(prompt_source, (tuple, list)) else prompt_source.shape[-2]
+
+
+def _prompt_source_is_owned(prompt_source_fn, layer_idx: int) -> bool:
+    """Whether the per-layer prompt source must be deallocated by the caller.
+
+    Ownership can differ PER LAYER once bounded sliding spans are active: a windowed layer gets a
+    persistent block-resident buffer (never free it) while a full-attention layer may get either a
+    borrowed cache view (never free) or an owned clone (must free). Prefer the per-layer query and
+    fall back to the whole-source flag, then to the historic owned contract.
+    """
+    per_layer = getattr(prompt_source_fn, "owns_result_for", None)
+    if callable(per_layer):
+        return bool(per_layer(layer_idx))
+    return bool(getattr(prompt_source_fn, "owns_result", True))
 
 
 def _deallocate_prompt_source(prompt_source) -> None:
@@ -490,7 +672,7 @@ def _denoise_layer_forward(
     layer = tt_model.layers[layer_idx]
     residual = hidden_states
     normed = _chunked_norm_forward(layer.input_layernorm, hidden_states)
-    prefix_kv = prompt_source if isinstance(prompt_source, (tuple, list)) else None
+    prefix_kv = prompt_source if isinstance(prompt_source, (tuple, list, CanvasTailWorkspace)) else None
     kv_hidden = None if prefix_kv is not None else ttnn.concat([prompt_source, normed], dim=2)
     # Cross-block-trace-reusable RoPE: when a canvas_rope_provider is supplied it returns a
     # CONSTANT-SHAPE [1,1,C,head_dim] buffer already holding cos/sin for the absolute canvas
@@ -615,7 +797,11 @@ def denoise_hidden_forward(
                 canvas_rope_provider=canvas_rope_provider,
             )
         finally:
-            if prompt_source_fn is not None:
+            # A prompt source may hand back the model-owned KV cache itself rather than a copy
+            # (MutablePrefixKVReader.owns_result False); freeing that would destroy the cache.
+            # Same discipline as the reveal mask below, which is provider-owned and never freed
+            # here. Default True so any other callable keeps the historic owned contract.
+            if prompt_source_fn is not None and _prompt_source_is_owned(prompt_source_fn, layer_idx):
                 _deallocate_prompt_source(prompt_source)
             if reveal_mask_provider is None:
                 _deallocate_optional_tensor(attn_mask)
@@ -751,24 +937,36 @@ def collect_prompt_kv_by_layer(tt_model, prompt_hidden):
     return prompt_kv_by_layer
 
 
-def read_prompt_kv_cache_slice(kv_cache, *, prompt_len: int, seq_len_start: int = 0):
+def read_prompt_kv_cache_slice(kv_cache, *, prompt_len: int, seq_len_start: int = 0, borrow_full_span: bool = False):
     """Read a frozen prompt K/V prefix from a contiguous Gemma4 KV cache.
 
     This is the non-paged cache adapter for W2: it reads the encoder-written K/V
     heads from `[B, heads, max_seq, head_dim]` cache tensors and returns the
     cache-shaped `(K, V)` prefix accepted by denoise attention. The underlying
     TTNN slice op requires full tiles along sequence, so bounds must be 32-aligned.
+
+    ``borrow_full_span`` returns the model-owned cache tensors THEMSELVES for a read that
+    spans the entire cache seq dim, instead of cloning them. The caller must then not
+    deallocate the result — see :attr:`MutablePrefixKVReader.owns_result`, which is what
+    ``denoise_hidden_forward`` consults. Default off so every existing caller keeps getting
+    an owned copy.
     """
     seq_len_end = seq_len_start + prompt_len
     if seq_len_start % ttnn.TILE_SIZE != 0 or seq_len_end % ttnn.TILE_SIZE != 0:
         raise ValueError("KV cache slice bounds must be multiples of 32")
     k_cache, v_cache = kv_cache
     # A slice spanning the ENTIRE cache seq dim (the reveal-mask fixed p_max == cache_len read)
-    # ALIASES the cache buffer, and denoise_attention deallocates the returned prefix K/V — which
-    # would free the model-owned cache ("Input Tensor is not allocated" on the next block). For the
-    # full-span read, clone the cache DIRECTLY into a caller-owned copy (never slice/deallocate the
-    # alias). Partial slices already produce an independent copy, so they take the cheap path.
+    # ALIASES the cache buffer, so it must never be sliced-then-deallocated: freeing the alias
+    # frees the model-owned cache ("Input Tensor is not allocated" on the next block). The free
+    # is the caller's, at ``denoise_hidden_forward``'s per-layer ``finally`` — denoise_attention
+    # itself never deallocates the prefix, it only frees its own ``to_memory_config`` temporaries.
+    # So there are two safe options for the full-span read: hand back a clone the caller may
+    # free, or hand back the cache itself and have the caller skip the free. The clone costs a
+    # whole-cache copy per layer per step of data that is invariant across a block's 48 steps,
+    # which is why borrowing exists. Partial slices already produce an independent copy.
     if seq_len_start == 0 and seq_len_end == int(k_cache.shape[2]):
+        if borrow_full_span:
+            return (k_cache, v_cache)
         return (ttnn.clone(k_cache), ttnn.clone(v_cache))
     starts = [0, 0, seq_len_start, 0]
     k_ends = [k_cache.shape[0], k_cache.shape[1], seq_len_end, k_cache.shape[3]]
@@ -786,35 +984,66 @@ def read_prompt_kv_cache_by_layer(
     seq_len_start: int = 0,
     layer_idx: int | None = None,
     read_fn=read_prompt_kv_cache_slice,
+    borrow_full_span: bool = False,
 ):
     """Read frozen prompt K/V prefixes from every layer's Gemma4 KV cache.
 
     This is the production-shaped prompt source for the denoise adapter: one
     `(K, V)` tuple per decoder layer, rather than the early single-layer test
-    shim. The returned tensors are owned by the caller.
+    shim. The returned tensors are owned by the caller unless ``borrow_full_span``
+    is set (see :func:`read_prompt_kv_cache_slice`).
     """
     if len(tt_model.tt_kv_cache) != len(tt_model.layers):
         raise ValueError(
             f"tt_kv_cache has {len(tt_model.tt_kv_cache)} layers but model has {len(tt_model.layers)} layers"
         )
+    # Only forward the kwarg when borrowing is actually requested: ``read_fn`` is a documented
+    # injection point and existing test doubles / demo/replay_hf_tt.py monkeypatches accept only
+    # (kv_cache, *, prompt_len, seq_len_start).
+    extra = {"borrow_full_span": True} if borrow_full_span else {}
     if layer_idx is not None:
-        return read_fn(tt_model.tt_kv_cache[layer_idx], prompt_len=prompt_len, seq_len_start=seq_len_start)
-    return [read_fn(kv_cache, prompt_len=prompt_len, seq_len_start=seq_len_start) for kv_cache in tt_model.tt_kv_cache]
+        return read_fn(tt_model.tt_kv_cache[layer_idx], prompt_len=prompt_len, seq_len_start=seq_len_start, **extra)
+    return [
+        read_fn(kv_cache, prompt_len=prompt_len, seq_len_start=seq_len_start, **extra)
+        for kv_cache in tt_model.tt_kv_cache
+    ]
 
 
 class MutablePrefixKVReader:
     """Lazy per-layer contiguous-cache reader with a commit-advanced prefix span."""
 
-    def __init__(self, tt_model, *, prompt_len: int, seq_len_start: int = 0, read_fn=read_prompt_kv_cache_by_layer):
+    def __init__(
+        self,
+        tt_model,
+        *,
+        prompt_len: int,
+        seq_len_start: int = 0,
+        read_fn=read_prompt_kv_cache_by_layer,
+        borrow_full_span: bool = False,
+    ):
         self.tt_model = tt_model
         self.prompt_len = int(prompt_len)
         self.seq_len_start = int(seq_len_start)
         self.read_fn = read_fn
+        # When the read covers the whole cache seq dim, hand back the model-owned cache tensors
+        # instead of cloning them (~2 whole-cache copies per layer per step of block-invariant
+        # data). Default off; the traced up-front path opts in once the fixed span is bound.
+        self.borrow_full_span = bool(borrow_full_span)
         # Paged-prefix Phase 1 (reveal-mask): a CONSTANT read span decouples the traced
         # slice shape from the growing committed ``prompt_len``. When set, ``__call__`` always
         # reads ``read_span`` rows (so the trace never invalidates on prefix growth), and the
         # committed ``prompt_len`` only drives the reveal mask content + canvas RoPE anchor.
         self.read_span = None
+        # Bounded per-layer spans (#51080 item 3 perf half). ``window_layers`` maps layer_idx ->
+        # span for layers that read only a bounded window instead of the full ``read_span``.
+        # Because the window OFFSET slides with the committed prompt_len and a slice offset is
+        # baked into a captured trace, those reads cannot happen inside the trace: each windowed
+        # layer gets a persistent block-resident buffer, allocated BEFORE capture and refreshed
+        # (contents only, address stable) once per block from outside any trace.
+        self.window_layers: dict[int, int] = {}
+        self._window_bufs: dict[int, tuple] = {}
+        self._window_lo: dict[int, int] = {}
+        self._canvas_tail = 0
 
     def set_read_span(self, p_max: int) -> None:
         p_max = int(p_max)
@@ -824,13 +1053,146 @@ class MutablePrefixKVReader:
             raise ValueError(f"read span {p_max} < committed prompt_len {self.prompt_len}")
         self.read_span = p_max
 
-    def __call__(self, layer_idx: int):
+    @property
+    def owns_result(self) -> bool:
+        """Whether the caller must deallocate what :meth:`__call__` returns, for a NON-windowed layer.
+
+        ``False`` only when the read spans the whole cache seq dim AND borrowing was requested —
+        in that case ``__call__`` returns the model-owned cache tensors themselves and freeing
+        them would destroy the cache. Windowed layers are always non-owned (they return persistent
+        buffers); use :meth:`owns_result_for` when per-layer resolution matters.
+        """
+        if not self.borrow_full_span:
+            return True
         n = self.read_span if self.read_span is not None else self.prompt_len
+        if self.seq_len_start != 0:
+            return True
+        caches = getattr(self.tt_model, "tt_kv_cache", None)
+        if not caches:
+            return True
+        spans = {int(k_cache.shape[2]) for k_cache, _v_cache in caches}
+        return not (len(spans) == 1 and n == next(iter(spans)))
+
+    def owns_result_for(self, layer_idx: int) -> bool:
+        """Per-layer ownership. Windowed layers hand back persistent buffers we must NOT free."""
+        if layer_idx in self._window_bufs:
+            return False
+        return self.owns_result
+
+    # --- bounded per-layer window buffers -------------------------------------------------
+    def prepare_window_buffers(self, window_layers: dict, *, canvas_tail: int = 0) -> None:
+        """Allocate the block-resident K/V buffers OUTSIDE any trace (pre-capture).
+
+        One persistent pair per listed layer. Their ADDRESSES are what the captured trace bakes;
+        only their contents change per block (see :meth:`refresh_windows`).
+
+        ``canvas_tail == 0`` (item 3): ``[1, nkv, span, hd]``, just the bounded prefix window; the
+        canvas is still concatenated per step by ``denoise_attention``.
+
+        ``canvas_tail == C`` (item 4): ``[1, nkv, span + C, hd]`` — a canvas-tail workspace. The
+        prefix occupies ``[0:span]`` and the per-step canvas is written into ``[span:span+C]``, so
+        no prefix bytes move per step. Returned from ``__call__`` as a
+        :class:`CanvasTailWorkspace`.
+        """
+        self.release_window_buffers()
+        self.window_layers = {int(k): int(v) for k, v in dict(window_layers).items()}
+        self._canvas_tail = int(canvas_tail)
+        if not self.window_layers:
+            return
+        p_max = self.read_span if self.read_span is not None else self.prompt_len
+        mesh_device = self.tt_model.mesh_device
+        for layer_idx, span in sorted(self.window_layers.items()):
+            lo = sliding_read_offset(self.prompt_len, span, p_max)
+            k_cache, v_cache = self.tt_model.tt_kv_cache[layer_idx]
+            if self._canvas_tail:
+                rows = span + self._canvas_tail
+                bufs = []
+                for cache in (k_cache, v_cache):
+                    host = torch.zeros(
+                        (1, int(cache.shape[1]), rows, int(cache.shape[3])),
+                        dtype=torch.bfloat16,
+                    )
+                    buf = ttnn.from_torch(
+                        host,
+                        device=mesh_device,
+                        layout=ttnn.TILE_LAYOUT,
+                        dtype=cache.dtype,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=_replicate_mapper(mesh_device),
+                    )
+                    _fill_prefix_into_workspace(buf, cache, lo=lo, span=span, mesh_device=mesh_device)
+                    bufs.append(buf)
+                self._window_bufs[layer_idx] = (bufs[0], bufs[1])
+            else:
+                # ``read_prompt_kv_cache_slice`` returns an owned copy for a partial slice, so
+                # these are already caller-owned and serve directly as the persistent buffers.
+                self._window_bufs[layer_idx] = read_prompt_kv_cache_slice(
+                    self.tt_model.tt_kv_cache[layer_idx], prompt_len=span, seq_len_start=lo
+                )
+            self._window_lo[layer_idx] = lo
+
+    def refresh_windows(self, prompt_len: int) -> None:
+        """Refresh bounded-window buffer CONTENTS for a block (OUTSIDE any trace).
+
+        Addresses are untouched, so every captured trace stays valid; only the slice offset moves.
+        """
+        if not self._window_bufs:
+            return
+        p_max = self.read_span if self.read_span is not None else int(prompt_len)
+        mesh_device = self.tt_model.mesh_device
+        for layer_idx, span in sorted(self.window_layers.items()):
+            lo = sliding_read_offset(int(prompt_len), span, p_max)
+            k_buf, v_buf = self._window_bufs[layer_idx]
+            k_cache, v_cache = self.tt_model.tt_kv_cache[layer_idx]
+            if self._canvas_tail:
+                # Refresh ONLY the prefix region; [span:span+C] is the canvas tail the traced
+                # fill_cache rewrites every step, so touching it here would be wasted work.
+                for buf, cache in ((k_buf, k_cache), (v_buf, v_cache)):
+                    _fill_prefix_into_workspace(buf, cache, lo=lo, span=span, mesh_device=mesh_device)
+            else:
+                k_src, v_src = read_prompt_kv_cache_slice(
+                    self.tt_model.tt_kv_cache[layer_idx], prompt_len=span, seq_len_start=lo
+                )
+                try:
+                    ttnn.copy(k_src, k_buf)
+                    ttnn.copy(v_src, v_buf)
+                finally:
+                    k_src.deallocate(True)
+                    v_src.deallocate(True)
+            self._window_lo[layer_idx] = lo
+
+    def window_offset(self, layer_idx: int) -> int:
+        """Absolute position the windowed read for ``layer_idx`` currently starts at."""
+        return self._window_lo[layer_idx]
+
+    def release_window_buffers(self) -> None:
+        for layer_idx, pair in getattr(self, "_window_bufs", {}).items():
+            for tensor in pair:
+                try:
+                    _deallocate_optional_tensor(tensor)
+                except BaseException as cleanup_error:
+                    logger.error(f"failed to release window buffer for layer {layer_idx}: {cleanup_error}")
+        self._window_bufs = {}
+        self._window_lo = {}
+        self.window_layers = {}
+        self._canvas_tail = 0
+
+    def __call__(self, layer_idx: int):
+        buffered = self._window_bufs.get(layer_idx)
+        if buffered is not None:
+            if self._canvas_tail:
+                # The canvas goes into the tail, so hand back the workspace marker rather than a
+                # plain (k, v) prefix pair -- denoise_attention must not concat these.
+                return CanvasTailWorkspace(buffered[0], buffered[1], self.window_layers[layer_idx])
+            return buffered
+        n = self.read_span if self.read_span is not None else self.prompt_len
+        extra = {"borrow_full_span": True} if self.borrow_full_span else {}
         return self.read_fn(
             self.tt_model,
             prompt_len=n,
             seq_len_start=self.seq_len_start,
             layer_idx=layer_idx,
+            **extra,
         )
 
     def set_prompt_len(self, prompt_len: int) -> None:
@@ -994,6 +1356,8 @@ class DenoiseLogitsAdapter:
         # content refreshed per block OUTSIDE capture to reveal committed prefix / hide tail).
         self.use_reveal_mask = False
         self._reveal_mask_buf = None
+        self._reveal_mask_bufs = {}
+        self._reveal_sliding_span = None
         self._reveal_p_max = None
         self._reveal_canvas_len = None
         self._reveal_enforce_window = False
@@ -1160,28 +1524,101 @@ class DenoiseLogitsAdapter:
     # prefix read (MutablePrefixKVReader.set_read_span) so the traced graph is shape-invariant
     # → capture-once/replay-many. See doc/optimize_perf/paged_prefix_denoise_design.md §1a/§5.
 
-    def _build_reveal_mask_device(self, prompt_len: int):
+    def _reveal_mask_layer_types(self) -> tuple[str, ...]:
+        """Distinct layer types needing their own reveal mask, in a stable order.
+
+        Only ``sliding_attention`` layers get a different mask, and only when the sliding
+        window is enforced. Otherwise one shared ``full_attention`` mask serves every layer,
+        exactly as before.
+        """
+        if not self._reveal_enforce_window:
+            return ("full_attention",)
+        tt_model = self.tt_model
+        types = []
+        for layer_idx in range(len(tt_model.layers)):
+            layer_type = _layer_type_for_denoise(tt_model, layer_idx)
+            key = "sliding_attention" if layer_type == "sliding_attention" else "full_attention"
+            if key not in types:
+                types.append(key)
+        return tuple(types)
+
+    def _sliding_span(self) -> int | None:
+        """Bounded span for sliding layers, or None when they read the full p_max."""
+        return getattr(self, "_reveal_sliding_span", None)
+
+    def _build_reveal_mask_device(self, prompt_len: int, layer_type: str = "full_attention"):
+        sliding_window = None
+        if layer_type == "sliding_attention":
+            sliding_window = _sliding_window_for_denoise(self.tt_model, self._sliding_reference_layer_idx())
+            span = self._sliding_span()
+            if span is not None:
+                # Bounded read: prefix column r maps to absolute lo + r, so the mask must be
+                # built for (span, lo) rather than the full p_max. lo is recomputed here from the
+                # same helper the reader uses, keeping mask and read in lockstep.
+                lo = sliding_read_offset(int(prompt_len), span, self._reveal_p_max)
+                return build_device_canvas_reveal_window_mask(
+                    self.tt_model.mesh_device,
+                    prompt_len=int(prompt_len),
+                    canvas_len=self._reveal_canvas_len,
+                    span=span,
+                    lo=lo,
+                    sliding_window=sliding_window,
+                )
         return build_device_canvas_reveal_mask(
             self.tt_model.mesh_device,
             prompt_len=prompt_len,
             canvas_len=self._reveal_canvas_len,
             p_max=self._reveal_p_max,
-            layer_type="full_attention",
-            enforce_sliding_window=self._reveal_enforce_window,
+            layer_type=layer_type,
+            sliding_window=sliding_window,
+            enforce_sliding_window=self._reveal_enforce_window and layer_type == "sliding_attention",
         )
 
+    def _sliding_reference_layer_idx(self) -> int:
+        """Index of any sliding layer (they share one window), for reading the window size."""
+        tt_model = self.tt_model
+        for layer_idx in range(len(tt_model.layers)):
+            if _layer_type_for_denoise(tt_model, layer_idx) == "sliding_attention":
+                return layer_idx
+        return 0
+
     def prepare_reveal_mask_buffers(
-        self, *, canvas_len: int, p_max: int, prompt_len: int, enforce_window: bool = False
+        self,
+        *,
+        canvas_len: int,
+        p_max: int,
+        prompt_len: int,
+        enforce_window: bool = False,
+        sliding_span: int | None = None,
     ):
-        """Preallocate the persistent reveal mask OUTSIDE any trace (session-8 rule)."""
+        """Preallocate the persistent reveal mask(s) OUTSIDE any trace (session-8 rule).
+
+        One buffer per distinct layer type. Without ``sliding_span`` they all share the same
+        ``[1, 1, C, p_max + C]`` shape, so enforcing the window changes mask CONTENT only. With
+        ``sliding_span`` the sliding-layer mask is instead ``[1, 1, C, sliding_span + C]``, matching
+        the bounded read those layers now perform — a per-layer-type SHAPE difference, which is
+        fine because a trace bakes each layer's own program. Mirrors the canvas-RoPE discipline.
+        """
         if p_max % ttnn.TILE_SIZE != 0:
             raise ValueError(f"reveal p_max must be tile aligned, got {p_max}")
+        if sliding_span is not None:
+            if not enforce_window:
+                raise ValueError("a bounded sliding span requires the retention mask (enforce_window)")
+            if sliding_span % ttnn.TILE_SIZE != 0 or sliding_span <= 0:
+                raise ValueError(f"sliding span must be a positive tile multiple, got {sliding_span}")
+            if sliding_span > int(p_max):
+                raise ValueError(f"sliding span {sliding_span} exceeds reveal span {p_max}")
         self._reveal_canvas_len = int(canvas_len)
         self._reveal_p_max = int(p_max)
         self._reveal_enforce_window = bool(enforce_window)
-        if self._reveal_mask_buf is not None:
-            self._reveal_mask_buf.deallocate(True)
-        self._reveal_mask_buf = self._build_reveal_mask_device(int(prompt_len))
+        self._reveal_sliding_span = None if sliding_span is None else int(sliding_span)
+        self.release_reveal_mask_buffers()
+        self._reveal_mask_bufs = {
+            layer_type: self._build_reveal_mask_device(int(prompt_len), layer_type)
+            for layer_type in self._reveal_mask_layer_types()
+        }
+        # Back-compat handle for callers/tests that expect the single-mask attribute.
+        self._reveal_mask_buf = self._reveal_mask_bufs.get("full_attention")
         self.use_reveal_mask = True
 
     def update_reveal_mask_buffer(self, prompt_len: int):
@@ -1190,22 +1627,29 @@ class DenoiseLogitsAdapter:
             return
         if prompt_len % ttnn.TILE_SIZE != 0:
             raise ValueError(f"reveal prompt_len must be a 32-tile multiple, got {prompt_len}")
-        fresh = self._build_reveal_mask_device(int(prompt_len))
-        ttnn.copy(fresh, self._reveal_mask_buf)
-        fresh.deallocate(True)
+        for layer_type, buf in self._reveal_mask_bufs.items():
+            fresh = self._build_reveal_mask_device(int(prompt_len), layer_type)
+            ttnn.copy(fresh, buf)
+            fresh.deallocate(True)
 
     def _reveal_mask_provider(self, layer_idx):
-        return self._reveal_mask_buf
+        bufs = self._reveal_mask_bufs
+        if len(bufs) == 1:
+            return next(iter(bufs.values()))
+        layer_type = _layer_type_for_denoise(self.tt_model, layer_idx)
+        key = "sliding_attention" if layer_type == "sliding_attention" else "full_attention"
+        return bufs[key]
 
     def release_reveal_mask_buffers(self):
-        try:
-            if self._reveal_mask_buf is not None:
-                self._reveal_mask_buf.deallocate(True)
-        except BaseException as cleanup_error:
-            logger.error(f"failed to release reveal mask: {cleanup_error}")
-        finally:
-            self._reveal_mask_buf = None
-            self.use_reveal_mask = False
+        for layer_type, buf in getattr(self, "_reveal_mask_bufs", {}).items():
+            try:
+                if buf is not None:
+                    buf.deallocate(True)
+            except BaseException as cleanup_error:
+                logger.error(f"failed to release reveal mask {layer_type}: {cleanup_error}")
+        self._reveal_mask_bufs = {}
+        self._reveal_mask_buf = None
+        self.use_reveal_mask = False
 
     # --- TP-sharded denoise terminal (DG_TERMINAL_SHARDED) ---------------------------
     #
@@ -1416,6 +1860,9 @@ class DenoiseLogitsAdapter:
         self.q_rope_offset = prompt_len
         self.update_reveal_mask_buffer(prompt_len)
         self.update_canvas_rope_buffers(prompt_len)
+        # A new request overwrote the cache head, so the bounded-window buffers hold the previous
+        # request's KV until re-filled. Same contract as the mask/RoPE refreshes above.
+        self._refresh_prefix_windows(prompt_len)
 
     def advance_prefix_after_commit(self, next_pos: int) -> bool:
         """Expose newly committed KV to later denoise blocks.
@@ -1434,7 +1881,16 @@ class DenoiseLogitsAdapter:
         # trace, before the next block's replay). The controller demotes its recapture guard.
         if getattr(self, "use_reveal_mask", False):
             self.update_reveal_mask_buffer(int(next_pos))
+        # Bounded sliding spans: the window OFFSET slides with the committed prefix, so the
+        # block-resident buffers must be re-filled here (outside any trace) in lockstep with the
+        # mask above, which is rebuilt from the same sliding_read_offset().
+        self._refresh_prefix_windows(int(next_pos))
         return True
+
+    def _refresh_prefix_windows(self, prompt_len: int) -> None:
+        refresher = getattr(self.prompt_hidden_by_layer, "refresh_windows", None)
+        if callable(refresher):
+            refresher(int(prompt_len))
 
     def reset(self):
         """Release eager and trace-persistent adapter state for request teardown."""

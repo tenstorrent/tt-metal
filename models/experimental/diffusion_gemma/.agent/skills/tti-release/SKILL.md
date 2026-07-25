@@ -179,6 +179,9 @@ MODEL_DIR=models/experimental/diffusion_gemma
 MAX_MODEL_LEN=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["max_model_len"])' "$MODEL_DIR/doc/context_contract.json")
 export PYTHONPATH="$TT_METAL_HOME:$VLLM_CHECKOUT:${PYTHONPATH:-}"
 export DG_CKPT="$HF_MODEL_OR_LOCAL_WEIGHTS"
+# Up-front trace capture is default ON and rejects the deterministic `argmax` sampler
+# (it needs a materialized full-tensor Gumbel source), so this smoke opts out explicitly.
+export DG_UPFRONT_CAPTURE=0
 export DG_VLLM_GUMBEL_MODE=argmax
 python -m vllm.entrypoints.openai.api_server \
   --model "$HF_MODEL_OR_LOCAL_WEIGHTS" \

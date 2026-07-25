@@ -1,18 +1,34 @@
 # DiffusionGemma — optimize-perf stage (#47465)
 
 > **CURRENT CONTRACT — 2026-07-22.** Use `plan.md` Part 0 first. There is exactly one supported
-> Metal denoise trace path: model-lifetime up-front capture with reveal masking, IID host Gumbel,
+> Metal denoise trace path: model-lifetime up-front capture with reveal masking, a materialized
+> full-vocabulary Gumbel source (`device` by default since 2026-07-24, `host` as the IID reference),
 > K=48, and one-step/window early halt. Ordinary eager execution is the only fallback. All
 > fixed-budget, grouped/multistep, frozen-prefix, per-request, and argmax trace results below are
 > historical evidence, not executable current-path guidance.
 
 Current guardrails:
 
-- Up-front trace launches set `DG_UPFRONT_CAPTURE=1`,
-  `DG_UPFRONT_PREFILL_WARMUP_LENS=<every admitted aligned prefill length>`,
-  `DG_DENOISE_REVEAL_PMAX=<positive tile-aligned served cap>`,
-  `DG_TRACE_REGION_SIZE=<validated positive reservation>`, `DG_VLLM_GUMBEL_MODE=host`, and
-  `DG_VLLM_MAX_DENOISE_STEPS=48`.
+- Up-front trace capture is **default-on** as of 2026-07-24 (`DG_UPFRONT_CAPTURE` defaults to `1`);
+  a launch no longer has to set it. `DG_UPFRONT_CAPTURE=0` is the documented opt-out and is the
+  required setting when eager per-step trajectory records are needed — replayed traces do not
+  produce them.
+- Up-front launches still set `DG_UPFRONT_PREFILL_WARMUP_LENS=<every admitted aligned prefill
+  length>` and `DG_TRACE_REGION_SIZE=<validated positive reservation>`; both stay **fail-loud** and
+  are deliberately not defaulted (the admitted prefill shape list cannot be derived from anything
+  the wrapper knows, and the reserved trace region cannot be read back from the device — Metal takes
+  it as an open-time constructor argument with no getter — so defaulting it would silence the guard
+  without reserving anything, while a trace-region overflow poisons the device and needs `tt-smi -r`).
+  `DG_VLLM_MAX_DENOISE_STEPS=48` is still required by the 48-step startup capture.
+  `DG_DENOISE_REVEAL_PMAX=<positive tile-aligned served cap>` is now **optional**: when unset the
+  fixed span is derived as the tile-rounded served `max_model_len` and logged at startup; an
+  explicit value still wins and both paths get identical validation.
+- `DG_VLLM_GUMBEL_MODE` defaults to `device` as of 2026-07-24 (explicit owner decision): the
+  on-device permuted-vocab Gumbel removes the per-step host RNG and its replicated PCIe copy. It is
+  a **distribution change, not a bit-exact swap** — the sub-40-question GPQA host-vs-device re-gate
+  at `MAX_GEN_TOKS=3072` is still **outstanding**, so no accuracy equivalence is claimed here. Set
+  `DG_VLLM_GUMBEL_MODE=host` for the IID full-vocabulary torch Gumbel reference; `chunked` and
+  `argmax` are not materialized full-tensor sources and are rejected under up-front capture.
 - Reveal masking, non-lazy startup capture, and window-1 early halt are intrinsic. Do not add legacy
   selector flags for them. Every admitted prefill shape must compile before capture; unseen runtime
   shapes fail loudly.
@@ -41,19 +57,21 @@ Current guardrails:
   defect; fixed by the server-side `enable_thinking=true` contract and device-confirmed
   (doc-0 `exact_match=1`, `\boxed{C}`). See `official_sampler_earlyhalt_20260722.md`.
 
-## Up-front denoise capture (accepted path, 2026-07-22)
+## Up-front denoise capture (accepted 2026-07-22; default path 2026-07-24)
 
-`DG_UPFRONT_CAPTURE=1` captures the reveal-mask denoise trace during
-`warmup_model_prefill` and retains its adapter/controller for the model lifetime. Each request
-prefills the model-owned KV cache, rebinds the fixed-span adapter in place, replays the startup
-trace, and detaches without releasing it. The default-OFF path retains per-request construction
-and teardown as the eager fallback; it does not select another trace implementation. The wrapper
-destructor invokes the idempotent persistent-release path before inherited model/mesh teardown.
+Up-front capture is the default serving path (`DG_UPFRONT_CAPTURE` defaults to `1`). It captures the
+reveal-mask denoise trace during `warmup_model_prefill` and retains its adapter/controller for the
+model lifetime. Each request prefills the model-owned KV cache, rebinds the fixed-span adapter in
+place, replays the startup trace, and detaches without releasing it. The `DG_UPFRONT_CAPTURE=0`
+opt-out retains per-request construction and teardown as the eager fallback; it does not select
+another trace implementation. The wrapper destructor invokes the idempotent persistent-release path
+before inherited model/mesh teardown.
 
-The mode fails at startup unless `DG_TRACE_REGION_SIZE` is positive and
-`DG_DENOISE_REVEAL_PMAX` is explicit, positive, and tile aligned. Reveal masking, non-lazy startup
-capture, and one-step/window early halt are intrinsic. The fixed `p_max` is also enforced as the
-served `prompt + generated` cap before denoise/commit.
+The mode fails at startup unless `DG_TRACE_REGION_SIZE` is positive. `DG_DENOISE_REVEAL_PMAX` is
+optional: when unset it is derived as the tile-rounded served `max_model_len` (passed through
+`initialize_vllm_model`) and logged; an explicit value must still be positive and tile aligned.
+Reveal masking, non-lazy startup capture, and one-step/window early halt are intrinsic. The fixed
+`p_max` is also enforced as the served `prompt + generated` cap before denoise/commit.
 Under vLLM, `DG_UPFRONT_PREFILL_WARMUP_LENS` must list every aligned prefill length the server will
 admit. Those shapes compile before denoise capture; an unseen runtime length fails loudly because
 compiling a new prefill program while traces are active can corrupt trace/CCL state.
@@ -200,6 +218,34 @@ Early-halt is data-dependent and cannot shorten a static trace, so the trace-saf
 full budget; the entropy-budget cutoff stays a device tensor and the sorted scatter indices are
 device-valued (`entropy_budget_accept`). The retired fixed-step verifier recorded traced replay ==
 eager with device canvas feedback; its result is historical and the executable was removed.
+
+## Prefix-cost work off #51080 (2026-07-24)
+
+The #51080 analysis produced a ranked list of levers against the `p_max`-proportional denoise
+prefix cost. Outcomes so far, including the one that was refuted:
+
+| item | outcome | evidence |
+|---|---|---|
+| SDPA `q_chunk` 32 → 64/128 | **refuted** — bit-exact but ≤1%, inside noise. Default stays 32. | `qchunk_sweep_20260724.md`, `sweep_denoise_qchunk.sh` |
+| Borrow the KV cache instead of cloning it per step | **landed, default ON** (`DG_PREFIX_BORROW=0` to opt out). Bit-identical `committed_sha256`, ~5.5% off the steady block. | `verify_prefix_borrow.sh` |
+| HF sliding-layer key retention on the 25 sliding layers | **landed, default OFF** (`DG_DENOISE_SLIDING_WINDOW=1`). Fidelity fix; unbound blocks bit-identical, enforcement proven live on device. | `per_layer_prefix_spans.md`, `verify_denoise_sliding_window.sh` |
+| Bounded 1024-row sliding read (block-resident buffers) | **landed, gated** (`DG_DENOISE_SLIDING_SPAN=1`). SDPA key rows/step 130560 -> 53760 (2.43x), `committed_sha256` bit-identical. | `per_layer_prefix_spans.md`, `verify_sliding_span.sh` |
+| Canvas-tail workspace + `fill_cache` | **landed but NOT worth enabling** (`DG_DENOISE_CANVAS_TAIL`, default OFF). Bit-identical, ~1.4% *slower*: the bounded span above already removed the concat it targets. | `canvas_tail_workspace.md`, `verify_canvas_tail.sh` |
+
+Two method notes worth carrying forward, both learned the hard way here:
+
+* **Never time block 0.** It carries program compilation (≈5.5 s vs ≈1.7 s steady in the q-chunk
+  sweep), and measuring it produced a bogus "+50% regression" before the harness was fixed to use
+  `mean(per_block_latency_s[1:])`.
+* **Borrowed tensors need a *buffer* audit, not an object audit.** `ttnn.to_memory_config` returns
+  a fresh Tensor object that can alias its input's buffer, so an `is not` check deallocated the
+  model KV cache and the next op died with `Input Tensor is not allocated`. See
+  `_is_distinct_buffer` in `tt/diffusion_attention.py`.
+
+`demo/serving_smoke.py --upfront` was added to exercise the traced path (48-trace startup capture
++ replay) under the same fail-loud contract the vLLM wrapper enforces, without standing up a
+server. It is the vehicle for all three device gates above, and `--num-layers 2` turns a 15-minute
+reproduction into ~2 minutes.
 
 ## Artifacts
 

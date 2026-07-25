@@ -197,7 +197,8 @@ def main(argv=None) -> int:
     os.environ["DG_SPARSE_MOE"] = "1"
     os.environ["DG_DEDUP_ARGMAX"] = "1"
     os.environ["DG_SPARSE_MOE_TUNED"] = "1"
-    os.environ.pop("DG_UPFRONT_CAPTURE", None)
+    # Explicit "0": up-front capture is default ON, so unsetting no longer keeps this eager.
+    os.environ["DG_UPFRONT_CAPTURE"] = "0"
 
     TS.token_entropy = _patched_token_entropy  # patch the sampling module (denoise_loop uses TS.token_entropy)
     holder, orig_db = _instrument_trajectory()

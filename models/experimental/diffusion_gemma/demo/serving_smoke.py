@@ -34,6 +34,7 @@ import time
 from pathlib import Path
 
 import torch
+import ttnn
 from loguru import logger
 
 from models.experimental.diffusion_gemma.checkpoint import build_tt_model_from_checkpoint_dir
@@ -49,6 +50,11 @@ from models.experimental.diffusion_gemma.tt.self_conditioning import (
     self_conditioning_logits_l1_mode,
 )
 from models.experimental.diffusion_gemma.tt.serving import BlockDiffusionServingSession
+from models.experimental.diffusion_gemma.tt.traced_denoise import (
+    UPFRONT_DENOISE_STEPS,
+    set_default_reveal_pmax,
+    upfront_traced_denoise_block,
+)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -86,6 +92,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--local-files-only", action="store_true")
     parser.add_argument("--metrics-json", default=None, help="optional path to dump the per-block metrics JSON")
+    parser.add_argument(
+        "--upfront",
+        action="store_true",
+        help="exercise the model-lifetime up-front traced denoise path (capture 48 traces once at "
+        "startup, then replay) instead of the eager per-step loop. Requires DG_TRACE_REGION_SIZE>0 "
+        "and a materialized --gumbel-mode (host/device); forces 48 denoise steps.",
+    )
+    parser.add_argument(
+        "--reveal-pmax",
+        type=int,
+        default=None,
+        help="fixed reveal span for --upfront (default: --max-seq-len rounded down to a tile). "
+        "DG_DENOISE_REVEAL_PMAX still wins if set.",
+    )
     return parser
 
 
@@ -112,8 +132,42 @@ def _file_sha256(path: Path) -> str | None:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _resolve_upfront(args):
+    """Validate the --upfront contract and return (denoise_steps, reveal_pmax).
+
+    Mirrors the fail-loud startup contract the vLLM wrapper enforces, so this smoke is a
+    faithful (and far cheaper) stand-in for it: the controller captures the released 48-step
+    schedule, needs a real trace-region reservation, and needs a materialized full-tensor
+    Gumbel source ("chunked" is a descriptor and "argmax" is None, neither of which can be
+    refreshed between trace replays).
+    """
+    if args.gumbel_mode not in ("host", "device"):
+        raise ValueError(
+            f"--upfront requires --gumbel-mode host|device (materialized), got {args.gumbel_mode!r}. "
+            "'chunked'/'argmax' are not materialized full-tensor sources."
+        )
+    if int(os.environ.get("DG_TRACE_REGION_SIZE", "0")) <= 0:
+        raise ValueError("--upfront requires DG_TRACE_REGION_SIZE>0 (the mesh is opened with it reserved)")
+    if args.max_denoising_steps != UPFRONT_DENOISE_STEPS:
+        logger.warning(
+            f"[serving_smoke] --upfront captures the released {UPFRONT_DENOISE_STEPS}-step schedule; "
+            f"overriding --max-denoising-steps {args.max_denoising_steps}"
+        )
+    p_max = args.reveal_pmax
+    if p_max is None:
+        p_max = (int(args.max_seq_len) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    return UPFRONT_DENOISE_STEPS, int(p_max)
+
+
 def run(args) -> dict:
-    config = DiffusionConfig(canvas_length=args.canvas_length, max_denoise_steps=args.max_denoising_steps)
+    denoise_steps = args.max_denoising_steps
+    reveal_pmax = None
+    if args.upfront:
+        denoise_steps, reveal_pmax = _resolve_upfront(args)
+        # The controller re-reads DG_DENOISE_REVEAL_PMAX; register the resolved span so an
+        # unset env var derives from --max-seq-len instead of hard-failing.
+        set_default_reveal_pmax(reveal_pmax)
+    config = DiffusionConfig(canvas_length=args.canvas_length, max_denoise_steps=denoise_steps)
     tokenizer_kwargs = {"local_files_only": True} if args.local_files_only else None
 
     mesh_device = _open_mesh_device(args.mesh)
@@ -146,12 +200,29 @@ def run(args) -> dict:
             # Empty list disables the EOS/stop halt so degenerate EOS-heavy blocks
             # still emit their non-EOS positions for the qualitative control.
             stop_token_ids=[] if args.disable_eos_stop else None,
+            denoise_block_fn=upfront_traced_denoise_block if args.upfront else None,
         )
 
         # prefill_forward == prefill + block 0 (TTFT).
         t0 = time.perf_counter()
         cache_len = session.prefill(prompt_tokens)
-        first = session.decode_block()
+        if args.upfront:
+            # The controller is created lazily and ONLY during the startup capture phase, so the
+            # first block must be marked as that phase (same handshake as the vLLM wrapper's
+            # warmup_model_prefill). Every later block replays the captured traces.
+            adapter = session._logits_fn
+            adapter._upfront_capture_phase = True
+            try:
+                first = session.decode_block()
+            finally:
+                delattr(adapter, "_upfront_capture_phase")
+            controller = getattr(adapter, "_upfront_traced_denoise_controller", None)
+            if controller is None or not getattr(controller, "captured", False):
+                raise RuntimeError("--upfront startup denoise did not leave a fully captured controller")
+            if not getattr(adapter, "use_reveal_mask", False):
+                raise RuntimeError("--upfront trace was not captured with a persistent reveal mask")
+        else:
+            first = session.decode_block()
         ttft_s = time.perf_counter() - t0
         _log_mesh_dram(mesh_device, "post-prefill+block0")
 
@@ -207,8 +278,14 @@ def run(args) -> dict:
             "prompt_aligned_256": bool(prompt_len % args.canvas_length == 0),
             "cache_len": cache_len,
             "canvas_length": args.canvas_length,
-            "max_denoising_steps": args.max_denoising_steps,
+            "max_denoising_steps": config.max_denoise_steps,
             "gumbel_mode": args.gumbel_mode,
+            "upfront": bool(args.upfront),
+            "reveal_pmax": reveal_pmax,
+            # False => the fixed full-span prefix read borrowed the model-owned cache instead
+            # of cloning it per layer per step.
+            "prefix_owns_result": getattr(session._logits_fn, "prompt_hidden_by_layer", None) is not None
+            and getattr(session._logits_fn.prompt_hidden_by_layer, "owns_result", None),
             "blocks_emitted": len(emissions),
             "tokens_emitted": tokens_emitted,
             "committed_sha256": committed_sha256,

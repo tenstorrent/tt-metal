@@ -38,6 +38,14 @@ def test_full_attention_layer_type_is_fully_bidirectional():
 
 
 def test_sliding_attention_layer_type_windows_prompt_tail():
+    """Sliding denoise visibility = last (W-1) COMMITTED positions + the WHOLE canvas.
+
+    Updated 2026-07-24 (#51080). This test previously asserted a per-(q,k)
+    ``abs(q_abs - k_abs) <= sliding_window`` staircase, which HF does not implement — it even
+    asserted that a canvas column was masked, while HF pads the canvas region with
+    unconditional True. HF's window is a cache-retention effect on the committed prefix only;
+    see tests/test_hf_sliding_window_reference.py for the pinned reference behaviour.
+    """
     prompt_len, canvas_len, sliding_window = 10, 6, 4
     attend = _attend(
         build_canvas_denoise_mask(
@@ -48,11 +56,17 @@ def test_sliding_attention_layer_type_windows_prompt_tail():
         )
     )
 
-    q0 = prompt_len
-    assert not attend[0, q0 - sliding_window - 1]
-    assert attend[0, q0 - sliding_window]
-    assert attend[0, q0 + sliding_window]
-    assert not attend[0, q0 + sliding_window + 1]
+    keep_from = prompt_len - (sliding_window - 1)  # 10 - 3 = 7
+    # Evicted committed positions are hidden; retained ones are attended.
+    assert not attend[0, keep_from - 1]
+    assert attend[0, keep_from]
+    assert attend[0, prompt_len - 1]
+    # The canvas is ALWAYS fully visible, for every canvas query row.
+    for row in range(canvas_len):
+        assert attend[row, prompt_len:].all()
+    # No query dependence: every canvas row sees exactly the same key set.
+    for row in range(1, canvas_len):
+        assert (attend[row] == attend[0]).all()
 
 
 def test_sliding_attention_requires_window():

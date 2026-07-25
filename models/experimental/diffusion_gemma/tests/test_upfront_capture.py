@@ -61,9 +61,10 @@ def test_upfront_capture_flag_parses_truthy(monkeypatch, value, expected):
     assert upfront_capture_enabled() is expected
 
 
-def test_upfront_capture_flag_defaults_off(monkeypatch):
+def test_upfront_capture_flag_defaults_on(monkeypatch):
+    """Up-front capture is the shipped serving path; DG_UPFRONT_CAPTURE=0 is the opt-out."""
     monkeypatch.delenv("DG_UPFRONT_CAPTURE", raising=False)
-    assert upfront_capture_enabled() is False
+    assert upfront_capture_enabled() is True
 
 
 def test_mutable_prefix_reader_request_reset_can_shrink_only_with_fixed_span(expect_error):
@@ -245,6 +246,81 @@ def test_vllm_upfront_configuration_accepts_only_released_contract(monkeypatch, 
         )
 
 
+def test_vllm_upfront_pmax_derives_from_max_model_len(monkeypatch, expect_error):
+    """With DG_DENOISE_REVEAL_PMAX unset the span comes from max_model_len, tile-rounded DOWN."""
+    pytest.importorskip("vllm")
+    from models.experimental.diffusion_gemma.tt import generator_vllm
+
+    _set_valid_upfront_env(monkeypatch)
+    monkeypatch.delenv("DG_DENOISE_REVEAL_PMAX")
+
+    assert (
+        generator_vllm._validate_upfront_capture_configuration(
+            canvas_length=256,
+            max_denoise_steps=UPFRONT_DENOISE_STEPS,
+            gumbel_mode="device",
+            max_model_len=4096,
+        )
+        == 4096
+    )
+    # Non-tile-aligned served bounds round DOWN. The KV cache is allocated with seq dim ==
+    # max_model_len verbatim, so rounding up (4090 -> 4096) would exceed the allocated span
+    # and abort startup; 4064 is the largest tile multiple that still fits.
+    assert (
+        generator_vllm._validate_upfront_capture_configuration(
+            canvas_length=256,
+            max_denoise_steps=UPFRONT_DENOISE_STEPS,
+            gumbel_mode="device",
+            max_model_len=4090,
+        )
+        == 4064
+    )
+    # An explicit env value still wins over the derived one.
+    monkeypatch.setenv("DG_DENOISE_REVEAL_PMAX", "1024")
+    assert (
+        generator_vllm._validate_upfront_capture_configuration(
+            canvas_length=256,
+            max_denoise_steps=UPFRONT_DENOISE_STEPS,
+            gumbel_mode="device",
+            max_model_len=4096,
+        )
+        == 1024
+    )
+    # A served bound too small for one prompt tile plus a canvas is still rejected loudly.
+    monkeypatch.delenv("DG_DENOISE_REVEAL_PMAX")
+    with expect_error(RuntimeError, match="cannot fit the startup prompt and one canvas"):
+        generator_vllm._validate_upfront_capture_configuration(
+            canvas_length=256,
+            max_denoise_steps=UPFRONT_DENOISE_STEPS,
+            gumbel_mode="device",
+            max_model_len=128,
+        )
+
+
+def test_traced_denoise_reveal_pmax_default_registration(monkeypatch, expect_error):
+    """The registered derived span satisfies the controller without DG_DENOISE_REVEAL_PMAX."""
+    from models.experimental.diffusion_gemma.tt import traced_denoise as TD
+
+    monkeypatch.delenv("DG_DENOISE_REVEAL_PMAX", raising=False)
+    monkeypatch.setattr(TD, "_DEFAULT_REVEAL_PMAX", None, raising=False)
+    with expect_error(RuntimeError, match="explicit bounded DG_DENOISE_REVEAL_PMAX"):
+        TD._resolve_reveal_pmax(object())
+
+    TD.set_default_reveal_pmax(4096)
+    try:
+        assert TD._resolve_reveal_pmax(object()) == 4096
+        # An explicit env value still wins.
+        monkeypatch.setenv("DG_DENOISE_REVEAL_PMAX", "1024")
+        assert TD._resolve_reveal_pmax(object()) == 1024
+        # Registered garbage is rejected by the same validation as the env value.
+        monkeypatch.delenv("DG_DENOISE_REVEAL_PMAX")
+        TD.set_default_reveal_pmax(1000)
+        with expect_error(RuntimeError, match="positive 32-token multiple"):
+            TD._resolve_reveal_pmax(object())
+    finally:
+        TD.set_default_reveal_pmax(None)
+
+
 def test_vllm_warmup_captures_48_traces_and_detaches_persistent_adapter(monkeypatch):
     pytest.importorskip("vllm")
     from models.experimental.diffusion_gemma.tt import generator_vllm
@@ -296,6 +372,7 @@ def test_vllm_warmup_captures_48_traces_and_detaches_persistent_adapter(monkeypa
     wrapper._upfront_compile_phase_seen = True
     wrapper._upfront_prefill_warmup_lens = frozenset({32})
     wrapper._upfront_pmax = 1024
+    wrapper._max_model_len = 1024
     wrapper._make_session = _Session
     monkeypatch.setattr(generator_vllm, "_dram_snapshot", lambda *args, **kwargs: {})
     metrics = []

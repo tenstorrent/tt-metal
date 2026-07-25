@@ -94,7 +94,7 @@ class _FakeAdapter:
         self.calls.append(("set_read_span", p_max))
 
     # adapter reveal surface
-    def prepare_reveal_mask_buffers(self, *, canvas_len, p_max, prompt_len, enforce_window=False):
+    def prepare_reveal_mask_buffers(self, *, canvas_len, p_max, prompt_len, enforce_window=False, sliding_span=None):
         self.calls.append(("prepare", canvas_len, p_max, prompt_len))
         self.use_reveal_mask = True
 

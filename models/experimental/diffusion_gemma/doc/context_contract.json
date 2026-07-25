@@ -7,15 +7,15 @@
   "current_execution_contract_20260722": {
     "authoritative_status": "plan.md Part 0 current execution contract",
     "denoise_execution_modes": {
-      "metal_trace": "Exactly one supported path: model-lifetime startup capture with reveal masking, IID host Gumbel, K=48, and one-step/window early halt. The controller is rebound across requests and released at model teardown.",
-      "eager_fallback": "Leave DG_UPFRONT_CAPTURE unset/zero. Eager is supported for ordinary diagnostics but is not optimized traced-serving evidence."
+      "metal_trace": "DEFAULT path: model-lifetime startup capture with reveal masking, K=48, on-device permuted-vocab Gumbel, and one-step/window early halt. The controller is rebound across requests and released at model teardown.",
+      "eager_fallback": "Set DG_UPFRONT_CAPTURE=0 (unset now means ON). Eager is supported for ordinary diagnostics and is the only path that yields per-step trajectory records, but is not optimized traced-serving evidence."
     },
     "upfront_model_environment": {
-      "DG_UPFRONT_CAPTURE": "1",
-      "DG_UPFRONT_PREFILL_WARMUP_LENS": "every aligned prompt length the server will admit",
-      "DG_DENOISE_REVEAL_PMAX": "explicit positive 32-token multiple bounding served prompt + generated",
-      "DG_TRACE_REGION_SIZE": "explicit validated positive byte reservation",
-      "DG_VLLM_GUMBEL_MODE": "host",
+      "DG_UPFRONT_CAPTURE": "1 (default; set 0 to opt out)",
+      "DG_UPFRONT_PREFILL_WARMUP_LENS": "every aligned prompt length the server will admit (required, cannot be derived)",
+      "DG_DENOISE_REVEAL_PMAX": "optional override; a positive 32-token multiple bounding served prompt + generated. Unset derives it from max_model_len, rounded DOWN to a tile (rounding up would exceed the unpadded allocated KV span and abort startup)",
+      "DG_TRACE_REGION_SIZE": "explicit validated positive byte reservation (required: the reservation cannot be read back from the device)",
+      "DG_VLLM_GUMBEL_MODE": "device (default; set host for the IID full-vocabulary torch Gumbel reference)",
       "DG_VLLM_MAX_DENOISE_STEPS": 48
     },
     "intrinsic_trace_behavior": "Reveal masking, non-lazy startup capture, and window-1 early halt are intrinsic and have no selector flags.",

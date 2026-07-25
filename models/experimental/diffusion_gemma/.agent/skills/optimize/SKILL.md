@@ -12,7 +12,7 @@ Load `diffusion-gemma` first; it overrides the autoregressive assumptions below 
 - The optimization unit is the **denoise step** over the 256-token canvas (≤48 steps/block) plus the commit — NOT per-token autoregressive decode. Map every "per token" metric (roofline, ms/token, gen_len, t/s/u) onto per-step / per-block; report tokens-per-block / blocks-per-second, never `1000/mean_tpot_ms`. `perf_summary.json` needs new fields (`ms_per_denoise_step`, `steps_per_block`, `ms_per_block`, canvas size); the profile is not `single_user_decode`.
 - Replace the entire LM-Head / greedy-argmax / split-sampling / `tt_out_tok` apparatus: the terminal path is **entropy-budget acceptance** (sort → cumsum → scatter/inverse-permutation over the canvas). These ops have no generic guidance here — add a candidate table (program configs, sharding, DRAM-vs-L1 placement, tile-friendly widths for the 256 axis) for sort/cumsum/scatter/gather/entropy.
 - Roofline changes fundamentally: there is **no incremental single-token KV read**; each of the ≤48 steps re-reads weights and recomputes over the full 256 canvas against the frozen prefix. Reconcile measured device time against per-step-weight-traffic × steps.
-- Keep every captured trace **shape- and operation-static** (on-device cutoff mask, tensor-valued scatter indices, warmed program cache). There is exactly one Metal denoise trace path: model-lifetime up-front reveal capture with IID host Gumbel, K=48, and one-step/window early halt; eager is the only fallback. Token-feedback tests become **canvas-feedback tests**.
+- Keep every captured trace **shape- and operation-static** (on-device cutoff mask, tensor-valued scatter indices, warmed program cache). There is exactly one Metal denoise trace path: model-lifetime up-front reveal capture with on-device Gumbel, K=48, and one-step/window early halt; eager is the only fallback. Token-feedback tests become **canvas-feedback tests**.
 - **NEVER edit `models/demos/gemma4/`**; validate with the shared-directory gate using the actual `DG_BASE_REF`, not a stale local `main`. Optimize DiffusionGemma-local code and drive the backbone through existing knobs. Evidence goes under `models/experimental/diffusion_gemma/doc/<stage>/`.
 - **Read the `DiffusionGemma denoise-step optimization playbook` below before tuning any knob.**
   The July-10 **18.844 t/s @48** row is historical warmed same-shape argmax trace replay with a
@@ -26,9 +26,17 @@ Load `diffusion-gemma` first; it overrides the autoregressive assumptions below 
 
 ### Current benchmark guardrails (2026-07-22)
 
-- The traced vLLM profile sets `DG_UPFRONT_CAPTURE=1`, every admitted aligned length in
-  `DG_UPFRONT_PREFILL_WARMUP_LENS`, explicit tile-aligned `DG_DENOISE_REVEAL_PMAX`, positive
-  `DG_TRACE_REGION_SIZE`, `DG_VLLM_GUMBEL_MODE=host`, and `DG_VLLM_MAX_DENOISE_STEPS=48`.
+- The traced vLLM profile is now the default: `DG_UPFRONT_CAPTURE` defaults to `1` and
+  `DG_VLLM_GUMBEL_MODE` defaults to `device`. Set `DG_UPFRONT_CAPTURE=0` only to fall back to eager,
+  which is what you need for per-step trajectory records that replayed traces do not produce. Device
+  Gumbel is a distribution change, not bit-exact against host IID Gumbel, and the sub-40 GPQA
+  host-vs-device @3072 re-gate is still outstanding: record the mode with every benchmark and use
+  `DG_VLLM_GUMBEL_MODE=host` for the IID reference.
+- Still required and fail-loud: every admitted aligned length in `DG_UPFRONT_PREFILL_WARMUP_LENS`
+  and positive `DG_TRACE_REGION_SIZE` (the reserved region cannot be read back from the device, and
+  a trace-region overflow poisons the device). `DG_DENOISE_REVEAL_PMAX` is now optional — unset
+  means the span is derived from `max_model_len` rounded DOWN to a tile and logged; an explicit
+  tile-aligned value still wins. Keep `DG_VLLM_MAX_DENOISE_STEPS=48`.
 - Reveal masking, non-lazy startup capture, and window-1 early halt are intrinsic. There are no
   fixed-budget, grouped/multistep, frozen-prefix, per-request, or argmax trace choices.
 - For vLLM, split queue time, pure prefill, denoise, commit, trace capture, and replay. API-visible

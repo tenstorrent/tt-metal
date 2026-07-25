@@ -75,12 +75,16 @@ from models.experimental.diffusion_gemma.tt.prefix_cache import PrefixKVCache
 from models.experimental.diffusion_gemma.tt.serving import BlockDiffusionServingSession
 from models.experimental.diffusion_gemma.tt.traced_denoise import (
     UPFRONT_DENOISE_STEPS,
+    set_default_reveal_pmax,
     upfront_capture_enabled,
     upfront_traced_denoise_block,
 )
 from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
 
 MAX_DENOISE_STEPS = 48
+
+# Served default Gumbel source: the on-device permuted-vocab RNG (see the __init__ note).
+DEFAULT_VLLM_GUMBEL_MODE = "device"
 
 
 def _resolve_checkpoint_dir(hf_config):
@@ -109,13 +113,27 @@ def _with_vllm_max_denoise_steps(config: DiffusionConfig) -> DiffusionConfig:
     return replace(config, max_denoise_steps=steps)
 
 
+def _round_down_to_tile(value: int) -> int:
+    """Round ``value`` down to a ``ttnn.TILE_SIZE`` multiple."""
+    return (value // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+
+
 def _validate_upfront_capture_configuration(
     *,
     canvas_length: int,
     max_denoise_steps: int,
     gumbel_mode: str,
+    max_model_len: int | None = None,
 ) -> int:
-    """Validate the fail-loud startup contract and return the explicit fixed prefix span."""
+    """Validate the fail-loud startup contract and return the fixed prefix span.
+
+    ``DG_DENOISE_REVEAL_PMAX`` stays an accepted explicit override, but when it is
+    unset the span is derived from ``max_model_len`` (vLLM's ``--max-model-len``),
+    which is exactly what the served bound already is. The remaining contract items
+    stay fail-loud: ``DG_TRACE_REGION_SIZE`` mirrors a reservation this process
+    cannot query back from the device, and the prefill warmup shapes cannot be
+    guessed from anything the wrapper knows.
+    """
     if max_denoise_steps != UPFRONT_DENOISE_STEPS:
         raise RuntimeError(
             f"DG_UPFRONT_CAPTURE requires max_denoise_steps={UPFRONT_DENOISE_STEPS}, " f"got {max_denoise_steps}"
@@ -123,34 +141,57 @@ def _validate_upfront_capture_configuration(
     if gumbel_mode not in ("host", "device"):
         raise RuntimeError(
             "DG_UPFRONT_CAPTURE requires DG_VLLM_GUMBEL_MODE in {host, device}; "
-            f"got {gumbel_mode!r}. 'host' is the IID full-vocab torch Gumbel (default); "
-            "'device' is the W4-validated on-device permuted-vocab RNG (no per-step host "
-            "RNG or PCIe DMA, but a distribution change that must clear the #48291/GPQA "
-            "decision gate before it replaces the served default). 'chunked'/'argmax' are "
-            "not materialized full-tensor sources and are unsupported by the up-front "
-            "controller."
+            f"got {gumbel_mode!r}. 'device' is the default: the W4-validated on-device "
+            "permuted-vocab RNG (no per-step host RNG or PCIe DMA). 'host' is the IID "
+            "full-vocab torch Gumbel fallback. 'chunked'/'argmax' are not materialized "
+            "full-tensor sources and are unsupported by the up-front controller."
         )
 
+    # This process cannot read the reserved trace region back from the device (Metal takes
+    # it as an open-time constructor argument and exposes no getter), so the operator must
+    # mirror the reservation here. Defaulting it would silence the guard without reserving
+    # anything, and a trace-region overflow poisons the device (needs `tt-smi -r`).
     raw_trace_region = os.environ.get("DG_TRACE_REGION_SIZE", "").strip()
+    _trace_region_remedy = (
+        " Reserve it with the vLLM --additional-config tt.trace_region_size and mirror the "
+        "same value in DG_TRACE_REGION_SIZE, or set DG_UPFRONT_CAPTURE=0 to run the eager loop."
+    )
     if not raw_trace_region:
-        raise RuntimeError("DG_UPFRONT_CAPTURE requires an explicit integer DG_TRACE_REGION_SIZE > 0")
+        raise RuntimeError(
+            "DG_UPFRONT_CAPTURE requires an explicit integer DG_TRACE_REGION_SIZE > 0." + _trace_region_remedy
+        )
     try:
         trace_region_size = int(raw_trace_region)
     except ValueError as exc:
-        raise RuntimeError("DG_UPFRONT_CAPTURE requires an integer DG_TRACE_REGION_SIZE > 0") from exc
+        raise RuntimeError(
+            "DG_UPFRONT_CAPTURE requires an integer DG_TRACE_REGION_SIZE > 0." + _trace_region_remedy
+        ) from exc
     if trace_region_size <= 0:
-        raise RuntimeError("DG_UPFRONT_CAPTURE requires DG_TRACE_REGION_SIZE > 0")
+        raise RuntimeError("DG_UPFRONT_CAPTURE requires DG_TRACE_REGION_SIZE > 0." + _trace_region_remedy)
 
     raw_pmax = os.environ.get("DG_DENOISE_REVEAL_PMAX", "").strip()
     if not raw_pmax:
-        raise RuntimeError(
-            "DG_UPFRONT_CAPTURE requires an explicit bounded DG_DENOISE_REVEAL_PMAX; "
-            "the full allocated KV span is not an acceptable fallback"
+        if max_model_len is None:
+            raise RuntimeError(
+                "DG_UPFRONT_CAPTURE requires an explicit bounded DG_DENOISE_REVEAL_PMAX "
+                "when no max_model_len is available to derive it from; "
+                "the full allocated KV span is not an acceptable fallback"
+            )
+        # Round DOWN. The model-owned KV cache is allocated with seq dim == max_model_len
+        # verbatim and ttnn keeps that logical (unpadded) shape, so rounding UP would make
+        # p_max exceed the allocated span for every non-tile-multiple served bound and abort
+        # startup. The rounded-off tokens were never addressable anyway: the reachable span
+        # is capped by the cache, not by p_max.
+        p_max = _round_down_to_tile(int(max_model_len))
+        logger.info(
+            f"[DiffusionGemma vLLM] DG_DENOISE_REVEAL_PMAX unset; derived fixed reveal span "
+            f"p_max={p_max} from max_model_len={max_model_len}"
         )
-    try:
-        p_max = int(raw_pmax)
-    except ValueError as exc:
-        raise RuntimeError("DG_DENOISE_REVEAL_PMAX must be an integer") from exc
+    else:
+        try:
+            p_max = int(raw_pmax)
+        except ValueError as exc:
+            raise RuntimeError("DG_DENOISE_REVEAL_PMAX must be an integer") from exc
     if p_max <= 0 or p_max % ttnn.TILE_SIZE != 0:
         raise RuntimeError(f"DG_DENOISE_REVEAL_PMAX must be a positive {ttnn.TILE_SIZE}-token multiple, got {p_max}")
     minimum = ttnn.TILE_SIZE + int(canvas_length)
@@ -209,26 +250,47 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         "supports_sample_on_device": True,
     }
 
-    def __init__(self, *args, dg_state_dict=None, tokenizer=None, config=None, gumbel_mode="chunked", **kwargs):
+    def __init__(
+        self,
+        *args,
+        dg_state_dict=None,
+        tokenizer=None,
+        config=None,
+        gumbel_mode=DEFAULT_VLLM_GUMBEL_MODE,
+        max_model_len=None,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self._dg_state_dict = dg_state_dict
         self._tokenizer = tokenizer
         self._config = _with_vllm_max_denoise_steps(DiffusionConfig() if config is None else config)
         self.canvas_length = self._config.canvas_length
-        # DEFAULT "chunked" is the no-materialize bounded-memory Gumbel-max path that fits
-        # full-depth 256K, but its current QB2 1024-wide RNG has a known distribution bias.
-        # Official-quality runs at smaller served contexts explicitly select "host" for IID
-        # full-vocabulary Gumbel noise. "argmax" is the fast deterministic RUN control;
-        # full-vocabulary "host"/"device" modes do not fit the 256K memory envelope.
+        # The served bound, used to derive the fixed reveal span when the operator does not
+        # pin DG_DENOISE_REVEAL_PMAX explicitly.
+        self._max_model_len = None if max_model_len is None else int(max_model_len)
+        # DEFAULT "device" is the on-device permuted-vocab Gumbel: it removes the ~313 ms/step
+        # host RNG and the ~256 MiB/step replicated PCIe DMA (~1.8x denoise/step). It is a
+        # distribution change, NOT a bit-exact swap — the sub-40 GPQA host-vs-device @3072
+        # re-gate is still the recommended confirmation. Set DG_VLLM_GUMBEL_MODE=host for the
+        # IID full-vocabulary torch Gumbel reference.
+        #
+        # MEMORY ENVELOPE: "device" and "host" both materialize a full-vocabulary (262144)
+        # tensor per step. context_contract.json records that materialization measured as an
+        # OOM in the DRAM left after a 256K-KV allocation, where only the no-materialize
+        # "chunked" descriptor fits. So at very large served contexts this default must be
+        # overridden with DG_VLLM_GUMBEL_MODE=chunked, which in turn requires
+        # DG_UPFRONT_CAPTURE=0 (the up-front controller needs a materialized source and
+        # rejects "chunked"/"argmax"). "chunked" also carries a known QB2 1024-wide RNG
+        # distribution bias; "argmax" is the fast deterministic RUN control.
         self._gumbel_mode = os.environ.get("DG_VLLM_GUMBEL_MODE", gumbel_mode)
         # One active session per batch row. A single contiguous model cache backs
         # one active sequence today (see module docstring); the dict is keyed by
         # row so output formatting never assumes batch size 1.
         self._sessions: dict[int, BlockDiffusionServingSession] = {}
-        # Model-level denoise has exactly two paths. DG_UPFRONT_CAPTURE owns one
-        # startup-captured adapter/controller for the model lifetime; otherwise each
-        # request uses the ordinary eager denoise loop. The TT vLLM ``trace_mode=all``
-        # setting remains only the runner's compile/capture warmup phase signal.
+        # Model-level denoise has exactly two paths. DG_UPFRONT_CAPTURE (default ON) owns
+        # one startup-captured adapter/controller for the model lifetime; DG_UPFRONT_CAPTURE=0
+        # opts out and each request uses the ordinary eager denoise loop. The TT vLLM
+        # ``trace_mode=all`` setting remains only the runner's compile/capture warmup signal.
         self._upfront = upfront_capture_enabled()
         self._persistent_adapter = None
         self._upfront_compile_phase_seen = False
@@ -238,10 +300,15 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                 canvas_length=self.canvas_length,
                 max_denoise_steps=self._config.max_denoise_steps,
                 gumbel_mode=self._gumbel_mode,
+                max_model_len=self._max_model_len,
             )
             if self._upfront
             else None
         )
+        # The controller is built inside the denoise-block entry point, which cannot take the
+        # span as an argument without changing the denoise_block_fn protocol; register the
+        # resolved value so it does not have to re-read (and re-require) the env var.
+        set_default_reveal_pmax(self._upfront_pmax)
         # Frozen prompt-prefix KV reuse (APC prototype, #47466): a single registry
         # shared across sessions so a request whose aligned prompt is a prefix of the
         # resident contiguous-cache prompt can skip its prefill. Inert unless
@@ -287,14 +354,15 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         dram = _dram_snapshot(mesh_device, synchronize=False)
         logger.info(
             f"[DiffusionGemma vLLM] built model: max_seq_len={max_seq_len} "
-            f"n_layers={n_layers or 'full'} gumbel_mode={os.environ.get('DG_VLLM_GUMBEL_MODE', 'chunked')}"
+            f"n_layers={n_layers or 'full'} "
+            f"gumbel_mode={os.environ.get('DG_VLLM_GUMBEL_MODE', DEFAULT_VLLM_GUMBEL_MODE)}"
         )
         _metric(
             "model_build",
             max_seq_len=max_seq_len,
             num_layers=n_layers or 30,
             model_build_s=round(model_build_s, 6),
-            gumbel_mode=os.environ.get("DG_VLLM_GUMBEL_MODE", "chunked"),
+            gumbel_mode=os.environ.get("DG_VLLM_GUMBEL_MODE", DEFAULT_VLLM_GUMBEL_MODE),
             max_denoise_steps=diffusion_config.max_denoise_steps,
             trace_region_size_env=int(os.environ.get("DG_TRACE_REGION_SIZE", "0")),
             selfcond_prechunk_embed=os.environ.get("DG_SELFCOND_PRECHUNK_EMBED", "1"),
@@ -308,6 +376,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             dg_state_dict=bundle.state_dict,
             tokenizer=bundle.tokenizer,
             config=diffusion_config,
+            max_model_len=max_seq_len,
         )
 
     @property
@@ -470,12 +539,15 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         if not self._upfront_compile_phase_seen:
             raise RuntimeError(
                 "DG_UPFRONT_CAPTURE requires the startup compile warmup phase before capture; "
-                "enable vLLM model warmup with TT trace_mode=all"
+                "enable vLLM model warmup with TT trace_mode=all, "
+                "or set DG_UPFRONT_CAPTURE=0 to run the eager loop"
             )
         if not getattr(self, "_upfront_prefill_warmup_lens", ()):
             raise RuntimeError(
                 "DG_UPFRONT_CAPTURE requires a compile-only warmup with DG_UPFRONT_PREFILL_WARMUP_LENS; "
-                "executing an unseen prefill shape after trace capture can corrupt active traces"
+                "executing an unseen prefill shape after trace capture can corrupt active traces. "
+                "List every aligned prompt length the server will admit, "
+                "or set DG_UPFRONT_CAPTURE=0 to run the eager loop"
             )
         if self._persistent_adapter is not None:
             logger.info("[DiffusionGemma vLLM] up-front denoise capture already initialized")
@@ -485,11 +557,24 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             canvas_length=self.canvas_length,
             max_denoise_steps=self._config.max_denoise_steps,
             gumbel_mode=self._gumbel_mode,
+            max_model_len=self._max_model_len,
         )
         cache_span = min(int(k_cache.shape[-2]) for k_cache, _v_cache in self.model[0].tt_kv_cache)
         if p_max > cache_span:
             raise RuntimeError(
                 f"DG_DENOISE_REVEAL_PMAX={p_max} exceeds the smallest allocated model KV span {cache_span}"
+            )
+        if p_max == cache_span:
+            # A span equal to the whole cache is legal but is the most expensive one: the
+            # per-step prefix read takes the full-span branch (a whole-cache clone per layer
+            # per step) and the persistent reveal mask is sized for the full span. Pinning
+            # DG_DENOISE_REVEAL_PMAX to the context actually served is the cheap path — this
+            # is exactly why the span used to be mandatory rather than derived.
+            logger.warning(
+                f"[DiffusionGemma vLLM] fixed reveal span p_max={p_max} equals the whole allocated "
+                f"KV span: every denoise step reads the full prefix and the reveal mask is sized "
+                f"for it. Set DG_DENOISE_REVEAL_PMAX to the context you actually serve to cut "
+                f"per-step prefix cost."
             )
         self._upfront_pmax = p_max
 
