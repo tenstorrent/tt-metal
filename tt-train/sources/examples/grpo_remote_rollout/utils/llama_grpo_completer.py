@@ -134,8 +134,6 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
         mesh_device: Any,
         model_source: str,
         inference_client: Optional[MPIRolloutClient] = None,
-        top_p: float = 1.0,
-        seed: Optional[int] = None,
         enable_ddp: bool = False,
     ) -> None:
         tf_config = transformer_config
@@ -217,8 +215,6 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
         self.transformer_config = tf_config
 
         self._client = inference_client
-        self._top_p = float(top_p)
-        self._seed = seed
 
     @property
     def tokenizer(self) -> Any:
@@ -242,9 +238,6 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
         return self._client.remote_generate(
             expanded,
             max_new_tokens=int(ctx.max_tokens_to_complete),
-            temperature=float(ctx.temperature),
-            top_p=self._top_p,
-            seed=self._seed,
         )
 
     def generate_str(self, prompt_strs: List[str]) -> List[str]:

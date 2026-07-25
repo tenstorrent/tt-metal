@@ -103,9 +103,6 @@ class MPIRolloutServer:
             completions = self._generate_fn(
                 req["prompts"],
                 max_new_tokens=int(req["max_new_tokens"]),
-                temperature=float(req.get("temperature", 0.0)),
-                top_p=float(req.get("top_p", 1.0)),
-                seed=(None if req.get("seed") is None else int(req["seed"])),
             )
 
             response_body = json.dumps({"completions": [[int(t) for t in c] for c in completions]}).encode("utf-8")
@@ -143,18 +140,12 @@ class MPIRolloutClient:
         prompts: List[List[int]],
         *,
         max_new_tokens: int,
-        temperature: float = 0.0,
-        top_p: float = 1.0,
-        seed: Optional[int] = None,
     ) -> List[List[int]]:
         """Run inference on the ttt rank and return token-id lists."""
         req_body = json.dumps(
             {
                 "prompts": [[int(t) for t in p] for p in prompts],
                 "max_new_tokens": int(max_new_tokens),
-                "temperature": float(temperature),
-                "top_p": float(top_p),
-                "seed": None if seed is None else int(seed),
             }
         ).encode("utf-8")
         req_hdr = struct.pack(_HEADER_FMT, OP_GENERATE, len(req_body), 0)
