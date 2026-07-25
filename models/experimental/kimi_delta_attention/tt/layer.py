@@ -47,6 +47,24 @@ class PreparedKDA:
     new_convolution_state: ttnn.Tensor
 
 
+@dataclass(frozen=True)
+class PreparedKDAConvolution:
+    """The cache-producing prefix of chunk preparation.
+
+    The causal-convolution state is the sole inter-span dependency.  Keeping
+    this prefix separate lets sequence parallelism hand it off before the
+    decay/gate projection work is queued on the producer device.
+    """
+
+    batch: int
+    sequence: int
+    projected: ttnn.Tensor
+    q: ttnn.Tensor
+    k: ttnn.Tensor
+    v: ttnn.Tensor
+    new_convolution_state: ttnn.Tensor
+
+
 class KimiDeltaAttention:
     """Stateful, fully device-resident KDA correctness implementation."""
 
@@ -305,11 +323,20 @@ class KimiDeltaAttention:
         explicit dependency while leaving the expensive KDA recurrence free to
         be scheduled after an inter-span affine prefix.
         """
+        convolution = self.prepare_chunk_convolution(hidden_states, convolution_state=convolution_state)
+        return self.complete_chunk_preparation(convolution)
+
+    def prepare_chunk_convolution(
+        self,
+        hidden_states: ttnn.Tensor,
+        *,
+        convolution_state: ttnn.Tensor | None = None,
+    ) -> PreparedKDAConvolution:
+        """Run the cache-producing prefix of tile-aligned chunk preparation."""
         batch, sequence = self._validate_forward(hidden_states, "chunk", None, None)
         if sequence % ttnn.TILE_SIZE:
             raise ValueError(f"affine-span preparation requires tile-aligned sequence, got T={sequence}")
         config, weights = self.config, self.weights
-        head_major = True
         memory_config = (
             ttnn.L1_MEMORY_CONFIG if batch * sequence * self._convolution_width <= 65536 else ttnn.DRAM_MEMORY_CONFIG
         )
@@ -321,6 +348,21 @@ class KimiDeltaAttention:
         )
         qkv = _slice_width(projected, 0, self._convolution_width)
         q, k, v, new_convolution_state = self._causal_conv1d_prefill(qkv, sequence, convolution_state)
+        return PreparedKDAConvolution(
+            batch=batch,
+            sequence=sequence,
+            projected=projected,
+            q=q,
+            k=k,
+            v=v,
+            new_convolution_state=new_convolution_state,
+        )
+
+    def complete_chunk_preparation(self, convolution: PreparedKDAConvolution) -> PreparedKDA:
+        """Finish gate and decay work after the causal cache is available."""
+        config, weights = self.config, self.weights
+        batch, sequence = convolution.batch, convolution.sequence
+        projected = convolution.projected
         auxiliary_start = self._convolution_width
         decay_rank = _slice_width(projected, auxiliary_start, auxiliary_start + config.head_k_dim)
         output_gate_rank = _slice_width(
@@ -352,14 +394,14 @@ class KimiDeltaAttention:
             batch=batch,
             sequence=sequence,
             mode="chunk",
-            head_major=head_major,
-            q=q,
-            k=k,
-            v=v,
+            head_major=True,
+            q=convolution.q,
+            k=convolution.k,
+            v=convolution.v,
             gate=gate,
             beta=beta,
             output_gate_rank=output_gate_rank,
-            new_convolution_state=new_convolution_state,
+            new_convolution_state=convolution.new_convolution_state,
         )
 
     def affine_summary(self, prepared: PreparedKDA) -> tuple[ttnn.Tensor, ttnn.Tensor]:

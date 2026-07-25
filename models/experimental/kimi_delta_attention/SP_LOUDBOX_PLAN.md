@@ -144,6 +144,36 @@ state-transfer protocol and measure its components.
 * A TP=4 output all-reduce Ring-topology A/B deadlocked under the guarded LB
   test and was removed.  Keep the validated Linear collective; do not retry
   the ring variant without a CCL protocol investigation.
+* Two subsequent output-fusion probes confirm that this is not just a choice
+  of all-reduce topology.  Replacing the TP=4 linear-plus-Linear-all-reduce
+  output path with the existing `matmul_reduce_scatter_async` primitive was
+  correct to compile but timed out on the two TP=4 child meshes with both its
+  Ring and Linear reduce-scatter modes (guarded T=1280 PCC tests on
+  2026-07-25).  Both probes were removed and the normal path subsequently
+  passed after the safe device reset.  Treat child-mesh fused MRS support as
+  a separate CCL/runtime investigation, not a KDA-layer toggle.
+* A terminal-only affine-prefix attempt made the boundary carry available
+  before materializing the first span's entries, but needed a second prefix
+  to obtain those entries.  It remained correct at T=1280 but regressed the
+  three-replay boundary to **1.400 ms** (report `2026_07_25_20_28_29`) from
+  1.343 ms, so it was removed.  Future scan work must eliminate, rather than
+  duplicate, prefix or final-scan work.
+* Grouped scan-to-gated-RMS fusion was made correct by waiting until all
+  independently-produced group-head slices were present before the RMS reader
+  drained them.  It narrowly met the T=1280 gate at **1.338 ms** (report
+  `2026_07_25_20_47_15`), but regressed the representative T=5120 trace to
+  **3.311 ms** (report `2026_07_25_20_49_36`) from 3.219 ms.  The experiment
+  was removed: its cross-group synchronization serializes enough work to lose
+  at long sequence length.  A viable fused epilogue needs ordered per-output
+  publication or a staging design that avoids that global consumer wait.
+* Splitting chunk preparation at the causal-convolution boundary lets the
+  producer queue its convolution-cache send before independent decay/gate
+  work.  This preserves the normal layer path and passes direct single-device
+  PCC plus SP2xTP4 PCC at T=1280 and T=5120.  The child-trace boundary improves
+  to **1.332 ms** at T=1280 (report `2026_07_25_20_56_27`) and **3.206 ms** at
+  T=5120 (report `2026_07_25_20_57_59`), versus 1.343 ms and 3.219 ms.  It is
+  the new baseline, but still misses the 2.958 ms production-rank target by
+  0.248 ms; the next optimization must address the final scan/output path.
 
 ## Milestones
 

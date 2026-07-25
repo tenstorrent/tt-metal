@@ -214,10 +214,12 @@ class SP2TP4KimiDeltaAttention:
         first, second = self.first_layer, self.second_layer
         group_tokens = 256 if first_span.shape[1] % 256 == 0 else 128
         groups = first_span.shape[1] // group_tokens
-        first_prepared = first.prepare_chunk(first_span)
-        ttnn.experimental.send_async(first_prepared.new_convolution_state, self._send_socket)
+        first_convolution = first.prepare_chunk_convolution(first_span)
+        ttnn.experimental.send_async(first_convolution.new_convolution_state, self._send_socket)
         ttnn.experimental.recv_async(second.convolution_state, self._recv_socket)
-        second_prepared = second.prepare_chunk(second_span)
+        second_convolution = second.prepare_chunk_convolution(second_span)
+        first_prepared = first.complete_chunk_preparation(first_convolution)
+        second_prepared = second.complete_chunk_preparation(second_convolution)
 
         first_grouped = first.group_prepare(first_prepared)
         second_grouped = second.group_prepare(second_prepared)
