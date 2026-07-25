@@ -14,11 +14,10 @@ from __future__ import annotations
 import pytest
 import torch
 
-from _completer_utils import as_update_input, open_completer, to_torch_2d
+from _completer_utils import as_update_input, generate_one, open_completer, to_torch_2d
 
 PROMPT = "Explain a tensor in a paragraph."
 MAX_NEW_TOKENS = 32
-TEMPERATURE = 0.0  # greedy decoding -> deterministic, byte-comparable
 OVERWRITE_VALUE = 0.0
 
 
@@ -39,10 +38,6 @@ def _snapshot_lm_head_hf(lm_head):
     return permuted.transpose(0, 1).contiguous().to(torch.bfloat16)  # (vocab_size, dim)
 
 
-def _generate(completer, prompt_ids):
-    return completer.generate([prompt_ids], max_new_tokens=MAX_NEW_TOKENS, temperature=TEMPERATURE)[0]
-
-
 def test_lm_head_update_round_trip(completer):
     """Snapshot -> overwrite -> restore must reproduce the original tokens."""
     model = completer.models[0]
@@ -51,20 +46,20 @@ def test_lm_head_update_round_trip(completer):
     H = lm_head.args.dim
     prompt_ids = completer.tokenizer.encode(PROMPT, add_special_tokens=True)
 
-    tokens_A = _generate(completer, prompt_ids)
+    tokens_A = generate_one(completer, prompt_ids, max_new_tokens=MAX_NEW_TOKENS)
     snap_hf = _snapshot_lm_head_hf(lm_head)
 
     overwrite_hf = torch.full((V, H), float(OVERWRITE_VALUE), dtype=torch.bfloat16)
     lm_head.update(weight=as_update_input(overwrite_hf, model.mesh_device))
 
-    tokens_broken = _generate(completer, prompt_ids)
+    tokens_broken = generate_one(completer, prompt_ids, max_new_tokens=MAX_NEW_TOKENS)
     assert tokens_broken != tokens_A, (
         f"overwriting LMHead with constant {OVERWRITE_VALUE} did not change generation; "
         "the overwrite step was a no-op, so the rest of the test is meaningless"
     )
 
     lm_head.update(weight=as_update_input(snap_hf, model.mesh_device))
-    tokens_B = _generate(completer, prompt_ids)
+    tokens_B = generate_one(completer, prompt_ids, max_new_tokens=MAX_NEW_TOKENS)
     assert tokens_B == tokens_A, (
         "LMHead.update did not reproduce __init__-equivalent state: " f"tokens_A={tokens_A}, tokens_B={tokens_B}"
     )
