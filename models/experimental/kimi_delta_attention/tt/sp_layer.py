@@ -43,10 +43,13 @@ def _socket_config(mesh_shape: ttnn.MeshShape) -> ttnn.SocketConfig:
         for coord in ttnn.MeshCoordinateRange(mesh_shape)
         for sender, receiver in zip(sender_cores, receiver_cores, strict=True)
     ]
-    return ttnn.SocketConfig(
-        connections,
-        ttnn.SocketMemoryConfig(ttnn.BufferType.DRAM, 10 * 1024),
-    )
+    # A full per-rank FP32 recurrent state is 512 KiB.  Matching the socket
+    # FIFO to that payload eliminates the multi-round-trip backpressure of
+    # the old 10 KiB default; callers can still sweep it through the env var.
+    fifo_size = int(os.getenv("KDA_SP_SOCKET_FIFO_BYTES", str(512 * 1024)))
+    if fifo_size <= 0 or fifo_size % 1024:
+        raise ValueError(f"KDA_SP_SOCKET_FIFO_BYTES must be a positive KiB multiple, got {fifo_size}")
+    return ttnn.SocketConfig(connections, ttnn.SocketMemoryConfig(ttnn.BufferType.DRAM, fifo_size))
 
 
 class SP2TP4KimiDeltaAttention:

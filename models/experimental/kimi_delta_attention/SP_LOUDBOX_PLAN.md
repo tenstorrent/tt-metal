@@ -36,7 +36,8 @@ state-transfer protocol and measure its components.
 * The TP=4 long path uses explicit post-scan KDA RMS normalization.  The
   TP=8-only fused scan/RMS variant produced incorrect TP=4 long outputs even
   though the recurrent cache was correct.
-* The warmed three-replay trace at global T=5120 is **5.707 ms/forward**
+* The original parent-mesh warmed three-replay trace at global T=5120 is
+  **5.707 ms/forward**
   (report `2026_07_25_18_16_20`), versus the <= **2.958 ms** primary gate.
   This prototype therefore misses the gate by 2.749 ms (93%).  The comparable
   eager signpost is 5.961 ms/forward.  The experimental local
@@ -75,6 +76,25 @@ state-transfer protocol and measure its components.
   sufficient: the next investigation must make the two TP=4 final scans
   genuinely concurrent at the queue/fabric level, rather than only enqueueing
   their work from the host in that order.
+* Capturing one trace per TP=4 child mesh fixes that scheduling artifact: the
+  parent 1x8 mesh owns no KDA queues, whereas each child trace owns one side
+  of the socket handoff.  With `KDA_SP_SPLIT_AFFINE=1`, the warmed T=5120
+  replay was **4.364 ms/forward** at the old 10 KiB socket FIFO (report
+  `2026_07_25_19_02_45`).  The recurrent transfer was then the critical
+  bottleneck: its sender took roughly 1.3--1.5 ms.
+* Sweeping the direct fabric FIFO shows that this is pure backpressure, not
+  an unavoidable link latency: 64 KiB gives **4.050 ms** (report
+  `2026_07_25_19_04_31`), 256 KiB gives **3.967 ms** (report
+  `2026_07_25_19_05_19`), and one full-state **512 KiB** FIFO gives
+  **3.297 ms/forward** (report `2026_07_25_19_06_19`).  At 512 KiB, the
+  recurrent send/receive is about 0.10--0.12 ms and the full target-shape
+  PCC gate passes.  The 512 KiB depth is consequently the default, with
+  `KDA_SP_SOCKET_FIFO_BYTES` retained as an explicit sweep override.
+* This removes the carry-budget blocker but does **not** yet pass the primary
+  head-to-head gate: 3.297 ms is 0.339 ms (11.5%) above 2.958 ms.  The next
+  optimization must attack the remaining child-trace critical path; a larger
+  one-lane FIFO is the quick saturation check before considering a more
+  invasive multi-lane state stripe or KDA/epilogue work reduction.
 
 ## Milestones
 
@@ -148,15 +168,15 @@ read from the resulting report.
 ```bash
 # Functional target gate: output, recurrent carry, short-conv carry, and the
 # first output token after the SP boundary must all reach PCC >= 0.98.
-KDA_SP_TARGET_SHAPE=1 scripts/run_safe_pytest.sh -svv models/experimental/kimi_delta_attention/tests/test_sp2_tp4.py
+KDA_SP_SPLIT_AFFINE=1 KDA_SP_TARGET_SHAPE=1 scripts/run_safe_pytest.sh -svv models/experimental/kimi_delta_attention/tests/test_sp2_tp4.py
 
 # Local TP=4 controls: run both lengths with the same warmed trace procedure.
 PERF_SEQ=640  PERF_TRACE=1 scripts/run_safe_pytest.sh --profile -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_tp4_layer_perf.py
 PERF_SEQ=1280 PERF_TRACE=1 scripts/run_safe_pytest.sh --profile -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_tp4_layer_perf.py
 
 # Primary SP experiment and the direct TP=8 topology comparison at global T=5120.
-PERF_SEQ=1280 PERF_TRACE=1 scripts/run_safe_pytest.sh --profile -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_sp2_tp4_layer_perf.py
-PERF_SEQ=5120 PERF_TRACE=1 scripts/run_safe_pytest.sh --profile -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_sp2_tp4_layer_perf.py
+KDA_SP_SPLIT_AFFINE=1 PERF_SEQ=1280 PERF_CHILD_TRACE=1 scripts/run_safe_pytest.sh --profile -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_sp2_tp4_layer_perf.py
+KDA_SP_SPLIT_AFFINE=1 PERF_SEQ=5120 PERF_CHILD_TRACE=1 scripts/run_safe_pytest.sh --profile -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_sp2_tp4_layer_perf.py
 PERF_SEQ=5120 PERF_TRACE=1 scripts/run_safe_pytest.sh --profile -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py
 ```
 

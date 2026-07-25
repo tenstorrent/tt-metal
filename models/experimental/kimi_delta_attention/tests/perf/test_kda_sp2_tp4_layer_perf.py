@@ -92,6 +92,42 @@ def _profile_trace(
     ttnn.deallocate(second_output)
 
 
+def _profile_child_traces(
+    layer: SP2TP4KimiDeltaAttention,
+    first_span: ttnn.Tensor,
+    second_span: ttnn.Tensor,
+    repetitions: int,
+) -> None:
+    """Replay independently captured TP=4 child-mesh command streams.
+
+    The parent 1x8 mesh owns no KDA work. Capturing it therefore loses the
+    child queues at teardown and can add host scheduling between the two SP
+    spans. Each child trace owns one endpoint of the socket handoff.
+    """
+    first_device, second_device = layer.span_devices
+    first_trace = ttnn.begin_trace_capture(first_device, cq_id=0)
+    second_trace = ttnn.begin_trace_capture(second_device, cq_id=0)
+    first_output, second_output = layer.forward(first_span, second_span, mode="chunk")
+    ttnn.end_trace_capture(first_device, first_trace, cq_id=0)
+    ttnn.end_trace_capture(second_device, second_trace, cq_id=0)
+
+    ttnn.execute_trace(first_device, first_trace, cq_id=0, blocking=False)
+    ttnn.execute_trace(second_device, second_trace, cq_id=0, blocking=False)
+    _synchronize_spans(layer)
+
+    signpost(header="sp2_tp4_start")
+    for _ in range(repetitions):
+        ttnn.execute_trace(first_device, first_trace, cq_id=0, blocking=False)
+        ttnn.execute_trace(second_device, second_trace, cq_id=0, blocking=False)
+    _synchronize_spans(layer)
+    signpost(header="sp2_tp4_stop")
+
+    ttnn.release_trace(first_device, first_trace)
+    ttnn.release_trace(second_device, second_trace)
+    ttnn.deallocate(first_output)
+    ttnn.deallocate(second_output)
+
+
 def test_kda_sp2_tp4_layer_device_perf(mesh_device: ttnn.MeshDevice) -> None:
     """Profile SP=2, TP=4 at the TP=8-comparable global sequence target."""
     sequence = int(os.getenv("PERF_SEQ", "5120"))
@@ -136,7 +172,9 @@ def test_kda_sp2_tp4_layer_device_perf(mesh_device: ttnn.MeshDevice) -> None:
     ttnn.deallocate(warm_second)
 
     repetitions = int(os.getenv("PERF_REPS", "3"))
-    if os.getenv("PERF_TRACE", "0") == "1":
+    if os.getenv("PERF_CHILD_TRACE", "0") == "1":
+        _profile_child_traces(layer, first_span, second_span, repetitions)
+    elif os.getenv("PERF_TRACE", "0") == "1":
         _profile_trace(mesh_device, layer, first_span, second_span, repetitions)
     else:
         _profile_eager(layer, first_span, second_span, repetitions)
