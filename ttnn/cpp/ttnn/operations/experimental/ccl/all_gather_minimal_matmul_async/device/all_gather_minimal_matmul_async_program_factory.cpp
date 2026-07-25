@@ -454,8 +454,9 @@ all_gather_minimal_matmul_async_factory_helper(
             tt::tt_metal::datatype_to_dataformat_converter(fused_ternary_input_a.value().dtype());
         auto ternary_a_tile_size = tt::tile_size(ternary_a_data_format);
 
-        TT_FATAL(ternary_a_tile_size == in1_tile_size, "ternary_a_tile_size must be equal to in1_tile_size");
-        TT_FATAL(ternary_a_data_format == in1_data_format, "ternary_a_data_format must be equal to in1_data_format");
+        // ternary_a (residual) need not share the weight's (in1) format: its CB is created from its own
+        // dtype below and compute reconfigs to it (reconfig_data_format before add_tiles), so a bf8 weight
+        // composes with a bf16 residual.
         uint32_t ternary_a_cb_num_tiles = out_block_num_tiles;  // Same as output block, not double buffered
 
         tt::tt_metal::create_cb(

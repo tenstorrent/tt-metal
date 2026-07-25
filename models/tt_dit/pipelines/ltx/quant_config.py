@@ -130,6 +130,27 @@ class QuantConfig:
             ring_sdpa=sc,
         )
 
+    @staticmethod
+    def all_bf8_lofi_toout() -> QuantConfig:
+        """all_bf8_lofi with the attention to_out weights (self/cross-attn, incl. audio a2v/v2a) at bf8.
+
+        The fused dit_minimal_matmul_addcmul epilogue reads its bf16 ternary residual/gate at their own
+        CB data-format (reconfig_data_format before add_tiles in the compute kernel), so the matmul weight
+        need not share their tile format — the former weight==residual same-format asserts were redundant.
+        Distinct preset name gives the bf8 to_out weights their own ``.q-`` tensorbin, avoiding a collision
+        with the shipped bf16 to_out cache.
+        """
+        cfg = QuantConfig.all_bf8_lofi()
+        lc_out_bf8 = LinearQuantConfig(
+            weight_dtype=ttnn.bfloat8_b,
+            activation_dtype=ttnn.bfloat8_b,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            fp32_dest_acc=False,
+        )
+        cfg.self_attn_out = lc_out_bf8
+        cfg.cross_attn_out = lc_out_bf8
+        return cfg
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
