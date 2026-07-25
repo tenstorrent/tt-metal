@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "hf_model": "openai/gpt-oss-20b",
+  "hf_advertised_context": 131072,
+  "current_supported_context": 21248,
+  "limiting_reason": "device_dram_capacity",
+  "capacity_evidence": {
+    "validated_at_utc": "2026-07-25",
+    "device": "one Blackhole chip on a P300c endpoint",
+    "visible_endpoint": "TT_VISIBLE_DEVICES=2,3",
+    "translation_mesh": [1, 1],
+    "dtype_layout_memory": "BFLOAT16, TILE, DRAM by default",
+    "maximum_pass": {
+      "sequence_length": 21248,
+      "command": "TT_VISIBLE_DEVICES=2,3 HF_HOME=/home/mvasiljevic/hf-cache timeout 600 python models/autoports/openai_gpt_oss_20b/tests/functional_decoder_capacity_probe.py 21248",
+      "result": "CAPACITY_PROBE_PASS seq_len=21248 output_shape=(1, 21248, 2880)"
+    },
+    "first_failure": {
+      "sequence_length": 21249,
+      "command": "TT_VISIBLE_DEVICES=2,3 HF_HOME=/home/mvasiljevic/hf-cache timeout 600 python models/autoports/openai_gpt_oss_20b/tests/functional_decoder_capacity_probe.py 21249 --probe-above-supported-expecting-dram-oom",
+      "result": "CAPACITY_PROBE_EXPECTED_DRAM_OOM seq_len=21249",
+      "failing_allocation_bytes": 3922329600,
+      "dram_banks": 8,
+      "bytes_required_per_bank": 490291200,
+      "bytes_free_per_bank": 566160768,
+      "largest_free_block_per_bank": 457193856,
+      "failure_site": "MoE gate/up stride-2 slice output tilization"
+    },
+    "scope": "The bound applies to this correctness-first dense all-expert single-device functional decoder. It is not a limit of the model architecture or later optimized/multichip implementations."
+  },
+  "paths": {
+    "prefill": {
+      "status": "translated",
+      "emit_package": "/home/mvasiljevic/emit-gptoss/g0_prefill",
+      "emitted_batch": 1,
+      "emitted_sequence": 17,
+      "pcc_validated_sequences": [17, 128, 256],
+      "capacity_validated_sequence": 21248
+    },
+    "decode": {
+      "status": "translated",
+      "emit_package": "/home/mvasiljevic/emit-gptoss/g1_decode",
+      "emitted_batch": 1,
+      "emitted_sequence": 1,
+      "validated_cache_positions": [17, 256],
+      "sliding_window": 128,
+      "attention_mask_contract": "caller-supplied additive BFLOAT16 TILE DRAM tensor [1, 1, 64, max_cache_len]"
+    }
+  },
+  "notes": "The Hugging Face YaRN RoPE target is 131072. This stage records the measured DRAM boundary of the dense functional topology without claiming support beyond 21248."
+}
