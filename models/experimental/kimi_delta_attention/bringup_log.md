@@ -1826,3 +1826,46 @@
   construction with the prefix owner or fuse prefix correction into the
   grouped recurrence; optimizing this 197.867 us kernel alone cannot recover
   the surrounding materialization and launch costs.
+
+
+### 2026-07-25 00:52 UTC — Reject chunk size 64 before profiling
+
+- Hypothesis: doubling the chunk from 32 to 64 tokens halves the ordered scan
+  from 160 to 80 steps at T=5,120, potentially recovering roughly half of the
+  retained scan span. The risk was extra Ct=2 prep work and numerical drift.
+- Initial implementation: parameterized the layer and recurrence for C=64,
+  disabled fused scan-to-RMS for the candidate, and lifted the host Ct=1 guard.
+  The first host validation failure correctly showed the operation still
+  required C=32; after lifting it, the q/k-flat validation required adjustment
+  because normalization was temporarily performed before the fused operation.
+- Hang diagnosis 1: the prep compute reserved and the writer consumed
+  `Kt*Ct` tiles for `k_dec_t`, but the transpose loop pushed only `Kt`. The
+  exact missing-producer count caused the first device hang. Publishing all
+  `(ki,ci)` transposed tiles removed it.
+- Hang diagnosis 2: the retained doubling inverse produces one 32x32 tile,
+  while Ct=2 scan waits for `Ct*Ct = 4` inverse tiles. Reusing the existing
+  generic Ct=2 blocked triangular solver removed this second deterministic
+  wait. Its first adaptation also exposed two KDA-specific live-range
+  collisions (`cb_supd` still held the anchor factor and `cb_scr1` still held
+  the right-decayed key); moving solver temporaries off those live tensors
+  eliminated corruption.
+- Correctness with external Q/K normalization: `QWEN_KDA_CHUNK_SIZE=64
+  KDA_TP_TEST_SEQ=64 scripts/run_safe_pytest.sh --run-all
+  models/experimental/kimi_delta_attention/tests/test_tp_weights.py::test_tp_layer_pcc
+  -q -s` -> FAIL at output/recurrent/convolution PCC
+  `0.996686/0.929095/0.999997`. A generalized full-64 exact-doubling inverse
+  produced the identical PCC, rejecting the inherited blocked solver as the
+  source of the remaining state error.
+- Normalization control: enabling the retained in-prep Q/K normalization for
+  Ct=2 regressed output/recurrent PCC to `0.949638/0.907320`; convolution
+  remained `0.999997`. This rejects the external-normalization path as the sole
+  cause and identifies Ct=2 recurrence numerics or state handoff as unresolved.
+- Performance: not measured. Profiling an implementation that fails the state
+  correctness gate would not support a retention decision.
+- Restoration: all candidate source was removed, then
+  `./build_metal.sh --build-tests --build-type Release` passed. The restored
+  `KDA_TP_TEST_SEQ=5120` TP=8 gate passed at output/recurrent/convolution PCC
+  `0.999958/0.999890/0.999997`.
+- Verdict: reject C=64 in the current optimization campaign. A future retry
+  requires a standalone Ct=2 oracle that attributes prepared tensors and final
+  state before any whole-layer performance work.

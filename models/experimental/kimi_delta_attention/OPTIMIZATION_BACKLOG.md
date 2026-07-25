@@ -311,6 +311,17 @@ improved `622.564 -> 619.594 us` (`-0.48%`). T=5,120 wall improved
 28. Build a specialized 32x32 unit-lower-triangular inverse/solve kernel.
 29. Retune the existing exact-doubling inverse schedule.
 30. Evaluate chunk size 64.
+    - Experiment result, 2026-07-25: rejected before profiling. Ct=2 first
+      exposed two latent producer-count defects: `k_dec_t` published Kt tiles
+      while the writer consumed Kt*Ct, and the 32x32 inverse published one
+      tile while the scan consumed Ct*Ct. Reusing the existing Ct=2 blocked
+      solver eliminated the hangs, but a T=64 TP gate reached only
+      output/state PCC `0.996686/0.929095` with external Q/K normalization.
+      Generalized 64x64 exact doubling produced the identical result; restoring
+      in-prep normalization regressed PCC to `0.949638/0.907320`. The retained
+      Ct=1 T=5,120 path was fully restored and passed at
+      `0.999958/0.999890/0.999997`. Do not profile or retain C=64 until a
+      standalone Ct=2 numerical oracle localizes the state-update error.
 31. Evaluate chunk size 16 as a control.
 32. Pipeline prep reads, compute, and output writes across consecutive items.
 
