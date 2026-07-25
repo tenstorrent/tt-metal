@@ -70,7 +70,7 @@ inline void calculate_sfpu_binary(
     static_assert(
         BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::DIV,
         "calculate_sfpu_binary only supports ADD, SUB, MUL and DIV");
-    constexpr std::uint32_t dst_tile_size_sfpi = 1U << (ckernel::to_underlying(TILE_SHAPE) - 1);
+    constexpr std::uint32_t dst_tile_size_sfpi = 1U << (trisc::get_dest_tile_size_log2(TILE_SHAPE) - 1);
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];

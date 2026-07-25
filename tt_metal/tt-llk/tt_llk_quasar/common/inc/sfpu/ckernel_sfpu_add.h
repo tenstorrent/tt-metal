@@ -27,8 +27,8 @@ inline void _add_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst
 
     constexpr bool is_int    = (FMT == DataFormat::Int32);
     constexpr auto instr_mod = is_int ? p_sfpu::sfpmem::INT32 : p_sfpu::sfpmem::DEFAULT; // There is a quasar bug with implied fmts + upk to dest, so we need
-                                                                                         // use use explicit types for int SFPULOAD/STORE TEN-4674
-    constexpr std::uint32_t tile_stride = 1U << ckernel::to_underlying(TILE_SHAPE);
+                                                                                         // use explicit types for int SFPULOAD/STORE TEN-4674
+    constexpr std::uint32_t tile_stride = 1U << trisc::get_dest_tile_size_log2(TILE_SHAPE);
     const std::uint32_t in0_offset      = dst_index_in0 * tile_stride;
     const std::uint32_t in1_offset      = dst_index_in1 * tile_stride;
     const std::uint32_t out_offset      = dst_index_out * tile_stride;

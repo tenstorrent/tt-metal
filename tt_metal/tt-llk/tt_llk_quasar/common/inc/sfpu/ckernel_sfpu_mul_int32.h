@@ -21,7 +21,7 @@ namespace sfpu
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false, trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
 inline void _mul_int32_(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
 {
-    constexpr std::uint32_t tile_stride = 1U << ckernel::to_underlying(TILE_SHAPE);
+    constexpr std::uint32_t tile_stride = 1U << trisc::get_dest_tile_size_log2(TILE_SHAPE);
     const std::uint32_t in0_offset      = dst_index_in0 * tile_stride;
     const std::uint32_t in1_offset      = dst_index_in1 * tile_stride;
     const std::uint32_t out_offset      = dst_index_out * tile_stride;

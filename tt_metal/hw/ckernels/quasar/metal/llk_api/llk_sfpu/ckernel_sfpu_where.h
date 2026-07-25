@@ -59,7 +59,7 @@ inline void calculate_where(
     const std::uint32_t dst_index_in1,
     const std::uint32_t dst_index_in2,
     const std::uint32_t dst_index_out) {
-    constexpr std::uint32_t dst_tile_size_sfpi = 1U << (ckernel::to_underlying(TILE_SHAPE) - 1);
+    constexpr std::uint32_t dst_tile_size_sfpi = 1U << (trisc::get_dest_tile_size_log2(TILE_SHAPE) - 1);
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {

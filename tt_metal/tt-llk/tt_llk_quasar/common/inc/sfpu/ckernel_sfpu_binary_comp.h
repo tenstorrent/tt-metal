@@ -41,7 +41,7 @@ inline void calculate_binary_comp_int32(const std::uint32_t dst_index_in0, const
         TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, 0x01);
     }
 
-    constexpr std::uint32_t tile_stride = 1U << ckernel::to_underlying(TILE_SHAPE);
+    constexpr std::uint32_t tile_stride = 1U << trisc::get_dest_tile_size_log2(TILE_SHAPE);
     const std::uint32_t idx_x           = (swap_operands ? dst_index_in1 : dst_index_in0) * tile_stride;
     const std::uint32_t idx_y           = (swap_operands ? dst_index_in0 : dst_index_in1) * tile_stride;
     const std::uint32_t out_offset      = dst_index_out * tile_stride;

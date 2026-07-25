@@ -82,7 +82,7 @@ inline void calculate_binary_max_min(
 
     // Tile-base offsets relative to the dest counter start set by _llk_math_eltwise_binary_sfpu_params_.
     // Per-row stride comes from ADDR_MOD_6's dest.incr=2 on SFPSTORE, not from these offsets.
-    constexpr std::uint32_t tile_stride = 1U << ckernel::to_underlying(TILE_SHAPE);
+    constexpr std::uint32_t tile_stride = 1U << trisc::get_dest_tile_size_log2(TILE_SHAPE);
     const std::uint32_t offset0 = dst_index_in0 * tile_stride;
     const std::uint32_t offset1 = dst_index_in1 * tile_stride;
     const std::uint32_t offset2 = dst_index_out * tile_stride;
