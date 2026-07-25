@@ -23,6 +23,9 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
+// Experiment 3 (#50932/#50772): attribute the writer kernel's cross-device sync stalls.
+// DeviceZoneScopedN compiles to nothing unless the device profiler is enabled (tracy build).
+#include "tools/profiler/kernel_profiler.hpp"
 
 // FABRIC_2D vs 1D dispatch is handled portably via ccl_routing_utils::fabric_set_line_unicast_route
 // (templated on packet-header type). Under 1D the helper consumes route_info.distance_in_hops,
@@ -298,7 +301,10 @@ void kernel_main() {
     open_direction_connections_async(directions, fabric_connections, rt_args_idx);
     auto* sem_packet_header =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
-    open_direction_connections_barrier(directions, fabric_connections);
+    {
+        DeviceZoneScopedN("DISPATCH_fabric_open");
+        open_direction_connections_barrier(directions, fabric_connections);
+    }
 #endif
 
     // Init semaphore exchange
@@ -317,7 +323,10 @@ void kernel_main() {
 #endif
 
     volatile tt_l1_ptr uint32_t* init_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_address);
-    noc_semaphore_wait(init_sem_ptr, dispatch_devices - 1);
+    {
+        DeviceZoneScopedN("DISPATCH_init_barrier_wait");
+        noc_semaphore_wait(init_sem_ptr, dispatch_devices - 1);
+    }
     noc_semaphore_set(init_sem_ptr, 0);
 
     DPRINT_DISPATCH("Fabric setup complete\n");
@@ -550,7 +559,10 @@ void kernel_main() {
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(exit_semaphore_address);
             DPRINT_DISPATCH(
                 "[SND] drain DONE; WAIT exit_sem=={} (have={})\n", dispatch_devices - 1, (uint32_t)(*exit_sem_ptr));
-            noc_semaphore_wait(exit_sem_ptr, dispatch_devices - 1);
+            {
+                DeviceZoneScopedN("DISPATCH_exit_barrier_wait");
+                noc_semaphore_wait(exit_sem_ptr, dispatch_devices - 1);
+            }
             DPRINT_DISPATCH("[SND] exit handshake done\n");
             noc_semaphore_set(exit_sem_ptr, 0);
         }
@@ -561,7 +573,10 @@ void kernel_main() {
         // close the fabric connections while a send is mid-flight, the EDM might process its slot
         // bookkeeping before the bytes arrive. A full barrier ensures all writes (and atomics,
         // defensively) have completed before we close.
-        noc_async_full_barrier();
+        {
+            DeviceZoneScopedN("DISPATCH_final_full_barrier");
+            noc_async_full_barrier();
+        }
 
 #ifdef FABRIC_2D
         fabric_connections.close();
