@@ -819,7 +819,7 @@ def decompose_component(component: str) -> dict:
     _last_class_now = (_st_now.get("last_failure_class", {}) or {}).get(component, "")
     _agent_may_decompose = (
         _new_is_unlimited(component)
-        and _attempts_now >= 3
+        and _attempts_now >= 10
         and _last_class_now not in ("", "HARNESS_SKIP")
     )
     if not _agent_may_decompose and not _component_is_at_cap(component):
@@ -1012,7 +1012,7 @@ def termination_check() -> dict:
         else:
             rung = "emit" if attempts == 0 else "repair"
             _decompose_hint = ""
-            if _new_is_unlimited(c) and attempts >= 3 and (last_class or "") not in ("", "HARNESS_SKIP"):
+            if _new_is_unlimited(c) and attempts >= 10 and (last_class or "") not in ("", "HARNESS_SKIP"):
                 _decompose_hint = (
                     f" [single-run] attempts are unlimited for NEW. You have tried '{c}' {attempts}x and it keeps "
                     f"failing with a STRUCTURAL class ({last_class}); if it is a large composite you cannot repair "
