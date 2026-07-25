@@ -206,6 +206,18 @@ state-transfer protocol and measure its components.
   `(0,6)` (guarded T=1280 test on 2026-07-25).  This rules out the original
   `(8,8)/(0,8)` worker-layout conflict; do not reintroduce a KDA-side fused
   toggle until child-mesh fused-MRS protocol ownership is fixed in CCL.
+* A deeper CCL investigation found that fused MRS unconditionally constructed
+  the Ring reduce-scatter program even when its caller requested `Linear`.
+  Routing the child TP=4 request to the actual Line builder and allocating its
+  required double-sized intermediate buffer removes the timeout and passes
+  aggregate output/state PCC, but deterministically leaves the first output
+  tile of each span as NaN at the T=5120 target (including the first token
+  after the SP boundary).  One versus two Line links and a constrained
+  two-worker footprint have the same failure.  The Line fused-MRS handshake
+  therefore lacks a correctness-safe first-tile protocol; the probe was
+  removed rather than leaving an opt-in invalid path.  A future CCL fix needs
+  a standalone Linear fused-MRS test that checks the first output tile on a
+  1x4 child mesh before KDA can consume it.
 
 ## Milestones
 
