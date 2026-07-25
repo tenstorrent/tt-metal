@@ -257,7 +257,9 @@ class TtHCA(_TtHCABase):
         self.wq_b = self._to_tt_linear_weight(q_b_proj_weight, tp_shard_dim=3)
         self.q_a_norm_weight = self._from_torch(q_a_norm_weight.detach().reshape(1, 1, 1, -1))
         self.q_b_norm_weight = self._from_torch(torch.ones(1, 1, 1, self.head_dim))
-        self.wkv = self._to_tt_linear_weight(kv_proj_weight)
+        # kv_proj: same contraction(row)-parallel scheme as wq_a. The single-head KV is all-reduced in
+        # _kv_stem -> TP-replicated (every TP chip's query heads attend the same KV).
+        self.wkv = self._to_tt_linear_weight(kv_proj_weight, tp_shard_dim=2)
         self.kv_norm_weight = self._from_torch(kv_norm_weight.detach().reshape(1, 1, 1, self.head_dim))
 
         # Grouped output projection: o_a_proj is block-diagonal (o_groups independent
@@ -346,15 +348,41 @@ class TtHCA(_TtHCABase):
         return ttnn.concat([nope, rope], dim=-1)
 
     def _kv_stem(self, hidden_states, position_ids: torch.Tensor):
-        """Sliding KV path (reference L822-823, K == V). ``hidden_states``: TTNN
-        [B, 1, S, hidden]. Returns ``sliding_kv`` TTNN [B, 1, S, head_dim] (full S in
-        stateless single-shot; sliding-window truncation is chunked-prefill only)."""
+        """Sliding KV path (reference L822-823, K == V). ``hidden_states``: TTNN [B, 1, S/sp, hidden/tp].
+        Returns single-head ``sliding_kv`` TTNN [B, 1, S/sp, head_dim], TP-replicated + SP-sharded
+        (full S in stateless single-shot; sliding-window truncation is chunked-prefill only)."""
         input_shape = tuple(hidden_states.shape)
         if len(input_shape) != 4 or input_shape[1] != 1:
             raise ValueError(f"Expected hidden_states shape [B, 1, S, hidden], got {input_shape}")
         batch, seq_len = input_shape[0], input_shape[2]
 
         kv = ttnn.linear(hidden_states, self.wkv, memory_config=self.memory_config)
+
+        # kv_proj is contraction(row)-parallel like wq_a -> partial-sum single-head KV; TP all-reduce
+        # (reduce_scatter + all_gather) rebuilds the full head_dim, replicated across TP.
+        if self.tp_factor > 1:
+            kv = ttnn.experimental.reduce_scatter_minimal_async(
+                kv,
+                persistent_output_buffers=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.tp_ccl_topology,
+                cluster_axis=self.tp_axis,
+            )
+            kv = ttnn.experimental.all_gather_async(
+                kv,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.tp_ccl_topology,
+                cluster_axis=self.tp_axis,
+            )
+
         kv = ttnn.rms_norm(kv, weight=self.kv_norm_weight, epsilon=self.rms_norm_eps)
 
         nope_dim = self.head_dim - self.rope_head_dim
