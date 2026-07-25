@@ -86,6 +86,32 @@ boundary.
   generation/consumption or reduce the transport representation with an
   accuracy study.
 
+## Reproducible LoudBox gate commands
+
+Run these only after the eight-device board is healthy.  Each profiler command
+uses three warmed trace replays by default and brackets the measured region
+with a distinct Tracy signpost, so the slowest-device critical path can be
+read from the resulting report.
+
+```bash
+# Functional target gate: output, recurrent carry, short-conv carry, and the
+# first output token after the SP boundary must all reach PCC >= 0.98.
+KDA_SP_TARGET_SHAPE=1 pytest -svv models/experimental/kimi_delta_attention/tests/test_sp2_tp4.py
+
+# Local TP=4 controls: run both lengths with the same warmed trace procedure.
+PERF_SEQ=640  PERF_TRACE=1 pytest -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_tp4_layer_perf.py
+PERF_SEQ=1280 PERF_TRACE=1 pytest -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_tp4_layer_perf.py
+
+# Primary SP experiment and the direct TP=8 topology comparison at global T=5120.
+PERF_SEQ=1280 PERF_TRACE=1 pytest -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_sp2_tp4_layer_perf.py
+PERF_SEQ=5120 PERF_TRACE=1 pytest -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_sp2_tp4_layer_perf.py
+PERF_SEQ=5120 PERF_TRACE=1 pytest -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py
+```
+
+The final two reports are the head-to-head decision: SP=2/TP=4 must be no
+slower than 2.958 ms on the slowest device to pass, against the existing
+3.114 ms TP=8 control.
+
 ## Non-goals for this first slice
 
 * No FP32 recurrent-state downgrade.
