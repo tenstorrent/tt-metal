@@ -407,6 +407,15 @@ def _run_sparse_frames_op(
         f"[sparse-frames ring] nf_real={num_frames_real} nf_pad={num_frames_padded} fsl={frame_seqlen} "
         f"window={window} add_last={add_last_frame} sp={sp_factor} tp={tp_factor} pcc={pcc}"
     )
+    # DEBUG: per-frame PCC to localize which q_frames are wrong.
+    # out/gt are [b, nh, real_n, d]; reshape seq -> [nf_real, frame_seqlen].
+    gt_f = gt.reshape(b, nh, num_frames_real, frame_seqlen, d)
+    out_f = out.reshape(b, nh, num_frames_real, frame_seqlen, d)
+    per_frame = []
+    for f in range(num_frames_real):
+        _, fp = comp_pcc(gt_f[:, :, f], out_f[:, :, f], 0.0)
+        per_frame.append(f"f{f}={fp:.4f}")
+    logger.info("[sparse-frames ring] per-frame PCC: " + " ".join(per_frame))
     assert passing, f"sparse-frames ring SDPA vs torch reference PCC {pcc} < {pcc_threshold}"
 
 
