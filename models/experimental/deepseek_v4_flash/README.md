@@ -48,6 +48,31 @@ checkpoint is missing, the test is skipped.
 | `DEEPSEEK_V4_CACHE_DIR` | `../cache` | Directory for converted ttnn weight tiles. Reuse across runs to avoid redoing the slow bf4 conversion. |
 | `DEEPSEEK_V4_MAX_NEW_TOKENS` | `1024` | Max tokens to generate after the prompt. |
 | `DEEPSEEK_V4_TRACED_DECODE` | `1` (on) | Set to `0` / `false` to use eager host-bound decode instead of captured ttnn traces. |
+| `DEEPSEEK_V4_POOL_EVERY_STEP` | `0` (off) | Re-pool the CSA/HCA compressors on *every* decode step instead of only on the steps that close a window. Slower, and only useful as an A/B reference — the two are bit-identical. See below. |
+
+### Compressor pooling schedule
+
+A CSA/HCA compressor emits a new compressed entry once every `compress_rate`
+tokens (CSA 4, HCA 128), and the additive block-bias only ever exposes entries
+`w < (pos+1)//compress_rate` — a value that does not change between two window
+closures. The pool itself runs over the whole fixed `max_seq`-sized buffer, so
+its cost scales with `max_seq` rather than with the current position. Running it
+only on the steps that close a window is therefore bit-identical and
+`compress_rate` times cheaper. Measured on 4 layers, 2048 generated tokens:
+71.0 tok/s (`DEEPSEEK_V4_POOL_EVERY_STEP=1`) vs 84.0 tok/s, same token stream.
+
+A ttnn trace is a flat op sequence and cannot branch on the device-side
+position, so the traced path bakes the schedule into the capture: one trace
+variant per *window phase*, picked on host per step. Because the rates divide
+one another (4 | 128), an HCA closure always coincides with a CSA closure, so
+there are three phases — pool nothing / CSA / CSA+HCA — not four. Variants are
+deduplicated per submesh, so a submesh whose layers are all `sliding_attention`
+is still captured exactly once.
+
+**This costs trace memory**: a submesh hosting both a CSA and an HCA layer now
+holds three traces instead of one. If capture fails or hangs on the full
+43-layer stack, raise `trace_region_size` in the test's `device_params`, or set
+`DEEPSEEK_V4_POOL_EVERY_STEP=1` to collapse back to a single trace.
 
 ## Run the demo
 
