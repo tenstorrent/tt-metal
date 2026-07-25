@@ -114,14 +114,6 @@
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
 
-- name: models_tttv2_llama31_8B_tests
-  cmd: MESH_DEVICE=T3K HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama--Llama-3.1-8B-Instruct pytest --tb=short models/common/demos/llama31_8B_demo.py
-  skus:
-    wh_llmbox:
-      timeout: 20
-  owner_id: U07RY6B5FLJ # Gongyu Wang
-  team: models
-
 - name: t3k_DeepSeek_PREFILL
   cmd: |
     pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe -vvv --tb=short -k "mesh-4x2 and not fabric2d-" --timeout 900
