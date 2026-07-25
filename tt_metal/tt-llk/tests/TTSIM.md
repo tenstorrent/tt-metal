@@ -105,3 +105,13 @@ the most common format and no SFPU/tilize paths.
   tt-umd. The fix that advances the sim clock on host writes
   (TTSimTTDevice::write_to_device) is required; upgrade to a release
   that contains it.
+- `Simulator binary not found at: <dir>/run.sh` — you passed a **directory** to
+  `init_ttexalens(simulation_directory=...)`, which selects the **RTL** flow and
+  looks for `run.sh` inside it. The argument is overloaded: pass the path to the
+  shared library instead and the same function opens ttsim —
+  `init_ttexalens(simulation_directory="<path>/libttsim_wh.so")`. That is what
+  the harness does itself (`python_tests/conftest.py` forwards
+  `TT_METAL_SIMULATOR` when it ends in `.so`). Setting `TT_METAL_SIMULATOR` and
+  letting the harness initialise is the least error-prone route;
+  `tt_umd.create_simulation_tt_device("<path>/libttsim_wh.so")` also works when
+  driving tt-umd directly.
