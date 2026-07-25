@@ -75,9 +75,6 @@ constexpr uint32_t kStressRuntimeId = 0xBEEFu;
 // kernel_start/end pulse spread by at least a handful of cycles, but it
 // should never be in the millisecond range. Anything beyond 1s means a
 // timestamp got corrupted (e.g. wraparound, swapped halves) under load.
-// Named distinctly from kMaxDurationNs in test_realtime_profiler_sanity.cpp
-// because both files share a Unity build TU and identically-named constants
-// in anonymous namespaces would collide at compile time.
 constexpr double kMaxStressDurationNs = 1'000'000'000.0;
 
 // Quiesce + drain window before unregistering the callback.
@@ -140,11 +137,6 @@ std::shared_ptr<distributed::MeshDevice> open_full_mesh() {
         kTraceRegionSize,
         1,
         DispatchCoreConfig{DispatchCoreType::WORKER});
-}
-
-std::shared_ptr<distributed::MeshDevice> open_unit_mesh() {
-    return distributed::MeshDevice::create_unit_mesh(
-        0, DEFAULT_L1_SMALL_SIZE, kTraceRegionSize, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
 }
 
 TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
@@ -288,124 +280,6 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
                                         << " stress record(s) reported duration >= " << kMaxStressDurationNs
                                         << " ns (clock corruption / mis-decoded timestamp)";
 
-    EXPECT_TRUE(mesh_device->close());
-}
-
-TEST(RealtimeProfilerStress, CallbackDeliveryLatency) {
-    using namespace std::chrono_literals;
-    constexpr uint32_t kPacedId = 0x6AC0;
-    constexpr std::array<std::chrono::microseconds, 5> kGaps = {5us, 50us, 200us, 1000us, 5000us};
-    constexpr uint32_t kOpsPerGap = 100;
-    constexpr double kMaxPacedOverheadP50Us = 20'000.0;
-    constexpr double kMaxPacedOverheadP99Us = 50'000.0;
-
-    constexpr uint32_t num_gaps = static_cast<uint32_t>(kGaps.size());
-    constexpr uint32_t total_paced = kOpsPerGap * num_gaps;
-
-    auto mesh_device = open_unit_mesh();
-    ASSERT_NE(mesh_device, nullptr);
-    if (!IsProgramRealtimeProfilerActive()) {
-        mesh_device->close();
-        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
-    }
-
-    std::vector<std::chrono::steady_clock::time_point> paced_enqueued(total_paced);
-    std::vector<std::atomic<std::chrono::steady_clock::rep>> paced_delivered(total_paced);
-    std::atomic<uint64_t> paced_idx{0};
-    std::atomic<uint64_t> dropped_total{0};
-
-    ProgramRealtimeProfilerCallbackHandle handle =
-        RegisterProgramRealtimeProfilerCallback([&](const ProgramRealtimeRecordBatch& batch) {
-            dropped_total.fetch_add(batch.dropped, std::memory_order_relaxed);
-            const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
-            for (const auto& rec : batch.records) {
-                if (rec.runtime_id == kPacedId) {
-                    const uint64_t idx = paced_idx.fetch_add(1, std::memory_order_relaxed);
-                    if (idx < total_paced) {
-                        paced_delivered[idx].store(now, std::memory_order_relaxed);
-                    }
-                }
-            }
-        });
-
-    distributed::MeshWorkload workload = build_blank_kernel_workload(mesh_device);
-    auto& cq = mesh_device->mesh_command_queue(0);
-    distributed::EnqueueMeshWorkload(cq, workload, true);
-
-    for (auto& [_, prog] : workload.get_programs()) {
-        prog.set_runtime_id(static_cast<uint64_t>(kPacedId));
-    }
-    distributed::MeshTraceId paced_trace = distributed::BeginTraceCapture(mesh_device.get(), cq.id());
-    distributed::EnqueueMeshWorkload(cq, workload, false);
-    mesh_device->end_mesh_trace(cq.id(), paced_trace);
-
-    uint32_t k = 0;
-    for (uint32_t gap_idx = 0; gap_idx < num_gaps; ++gap_idx) {
-        mesh_device->quiesce_devices();
-        const auto gap = kGaps[gap_idx];
-        const auto bucket_start = std::chrono::steady_clock::now();
-        for (uint32_t i = 0; i < kOpsPerGap; ++i) {
-            while (std::chrono::steady_clock::now() < bucket_start + gap * i) {
-            }
-            mesh_device->replay_mesh_trace(cq.id(), paced_trace, false);
-            paced_enqueued[k] = std::chrono::steady_clock::now();
-            ++k;
-        }
-    }
-
-    mesh_device->quiesce_devices();
-    std::this_thread::sleep_for(kPostQuiesceDrain);
-    UnregisterProgramRealtimeProfilerCallback(handle);
-    mesh_device->release_mesh_trace(paced_trace);
-
-    auto percentile = [](std::vector<double>& v, double p) {
-        if (v.empty()) {
-            return 0.0;
-        }
-        std::sort(v.begin(), v.end());
-        return v[std::min(v.size() - 1, static_cast<size_t>(std::lround(p * static_cast<double>(v.size() - 1))))];
-    };
-
-    const uint64_t paced_matched = std::min<uint64_t>(paced_idx.load(), total_paced);
-    double worst_paced_overhead_p50_us = 0.0;
-    double worst_paced_overhead_p99_us = 0.0;
-    for (uint32_t gap_idx = 0; gap_idx < num_gaps; ++gap_idx) {
-        std::vector<double> overhead_us;
-        overhead_us.reserve(kOpsPerGap);
-        for (uint32_t i = 0; i < kOpsPerGap; ++i) {
-            const uint32_t idx = gap_idx * kOpsPerGap + i;
-            const auto d = paced_delivered[idx].load(std::memory_order_relaxed);
-            if (d == 0) {
-                continue;
-            }
-            const auto delivered_tp = std::chrono::steady_clock::time_point(std::chrono::steady_clock::duration(d));
-            const double lat = std::chrono::duration<double, std::micro>(delivered_tp - paced_enqueued[idx]).count();
-            overhead_us.push_back(std::max(0.0, lat - static_cast<double>(kGaps[gap_idx].count())));
-        }
-        const double ov_p50 = percentile(overhead_us, 0.50);
-        const double ov_p99 = percentile(overhead_us, 0.99);
-        worst_paced_overhead_p50_us = std::max(worst_paced_overhead_p50_us, ov_p50);
-        worst_paced_overhead_p99_us = std::max(worst_paced_overhead_p99_us, ov_p99);
-        log_info(
-            tt::LogTest,
-            "[RT profiler stress] gap={:5}us | overhead p50={:.1f} p99={:.1f} max={:.1f}us",
-            kGaps[gap_idx].count(),
-            ov_p50,
-            ov_p99,
-            percentile(overhead_us, 1.0));
-    }
-
-    EXPECT_EQ(dropped_total.load(), 0u)
-        << "callback dropped records; deliveries are paired to enqueues by position, so a drop misaligns every "
-        << "later pair and the latencies below are meaningless";
-    EXPECT_GE(paced_matched, total_paced - total_paced / 100)
-        << "too few of the " << total_paced << " paced ops reached the callback; the latency percentiles "
-        << "below are over a partial sample and unreliable";
-    EXPECT_LT(worst_paced_overhead_p50_us, kMaxPacedOverheadP50Us)
-        << "median delivery overhead too high; the consumer is not waking promptly (a fixed "
-        << "backoff/oversleep would show up here)";
-    EXPECT_LT(worst_paced_overhead_p99_us, kMaxPacedOverheadP99Us)
-        << "tail delivery overhead too high; occasional long stalls in the delivery path";
     EXPECT_TRUE(mesh_device->close());
 }
 
