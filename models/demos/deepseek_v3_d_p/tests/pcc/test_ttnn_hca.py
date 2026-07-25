@@ -31,6 +31,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 imp
 )
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCA, TtHCACompressor
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 _SHAPES = [
@@ -158,21 +159,71 @@ def test_hca_compressor(device, batch, seq_len):
     logger.debug("PCC test passed!")
 
 
-@pytest.mark.parametrize("batch, seq_len", _SHAPES, ids=_SHAPE_IDS)
-def test_hca_query_path(device, batch, seq_len):
-    """
-    Test TtHCA._q_stem PCC against the DeepseekV4Attention query path (lines 817-820).
+# Mesh query-path configs: seq_len restricted to multiples of 32*sp (SP seq shard must stay
+# tile-aligned). FABRIC_1D for the small TP/SP meshes; FABRIC_2D (+router/RELAXED_INIT) for 8x4.
+_MESH_QUERY_CONFIGS = [
+    pytest.param(
+        (1, 1),
+        {},
+        1,
+        ttnn.Topology.Linear,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 1), topology="linear"),
+        id="single-1x1",
+    ),
+    pytest.param(
+        (1, 4),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        1,
+        ttnn.Topology.Linear,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="linear"),
+        id="linear-1x4",
+    ),
+    pytest.param(
+        (2, 4),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        1,
+        ttnn.Topology.Linear,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-4x2"),
+        id="mesh-2x4",
+    ),
+    pytest.param(
+        (4, 2),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        1,
+        ttnn.Topology.Linear,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+        id="mesh-4x2",
+    ),
+    pytest.param(
+        (8, 4),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        },
+        1,
+        ttnn.Topology.Linear,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        id="fabric2d-mesh-8x4",
+    ),
+]
 
-    Compares q [B, num_heads, S, head_dim] after q_a_proj / q_a_norm / q_b_proj /
-    q_b_norm (unweighted) / partial compress-RoPE.
 
-    NOTE: development scaffolding — exercises a TtHCA method in isolation (not the
-    folder's class+forward idiom). Remove once the full TtHCA block forward is PCC-tested.
-    """
+@pytest.mark.parametrize("seq_len", [512, 2048, 5120], ids=["seq512", "seq2k", "seq5120"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    _MESH_QUERY_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+def test_hca_query_path_mesh(mesh_device, device_params, num_links, topology, seq_len):
+    """Mesh/TP/SP PCC for TtHCA._q_stem: hidden SP-sharded on seq + TP-sharded on hidden, q gathered
+    over TP (heads) and SP (seq), compared against the full unsharded DeepseekV4Attention query path."""
     torch.manual_seed(42)
 
+    sp_factor, tp_factor = mesh_device.shape[0], mesh_device.shape[1]
+    batch = 1
     config = _flash_config()
-    logger.debug(f"batch={batch}, seq_len={seq_len}, heads={config.num_attention_heads}, head_dim={config.head_dim}")
+    logger.debug(f"mesh={tuple(mesh_device.shape)} sp={sp_factor} tp={tp_factor} seq_len={seq_len}")
 
     ref = DeepseekV4Attention(config, layer_idx=0).eval()
     assert ref.compressor is not None, "layer_idx=0 must be a heavily_compressed_attention layer"
@@ -182,35 +233,38 @@ def test_hca_query_path(device, batch, seq_len):
     hidden = torch.randn(batch, seq_len, config.hidden_size)
     position_ids = torch.arange(seq_len).unsqueeze(0).expand(batch, -1)
 
-    logger.debug("Running torch reference query path")
     with torch.no_grad():
         cos, sin = ref.compressor.rotary_emb(hidden, position_ids=position_ids, layer_type="compress")
         q_residual = ref.q_a_norm(ref.q_a_proj(hidden))
         q = ref.q_b_proj(q_residual).view(batch, seq_len, config.num_attention_heads, config.head_dim).transpose(1, 2)
         q = ref.q_b_norm(q)
         q_ref = apply_rotary_pos_emb(q, cos, sin)
-    logger.debug(f"Reference q shape: {tuple(q_ref.shape)}")
 
-    tt_model = TtHCA.from_reference(device, ref, config)
+    tt_model = TtHCA.from_reference(
+        mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology, ccl_num_links=num_links
+    )
     tt_input = ttnn.from_torch(
         hidden.unsqueeze(1),
-        device=device,
+        device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 3)),
     )
 
-    logger.debug("Running ttnn forward")
     signpost("HCA_START")
     q_tt = tt_model._q_stem(tt_input, position_ids)
     signpost("HCA_END")
-    q_out = ttnn.to_torch(q_tt)
+    q_out = ttnn.to_torch(
+        q_tt,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 1)),
+    )
     logger.debug(f"TTNN q shape: {tuple(q_out.shape)}")
 
     assert q_out.shape == q_ref.shape, f"shape mismatch: tt {tuple(q_out.shape)} vs ref {tuple(q_ref.shape)}"
 
-    pcc_passed, pcc_message = assert_with_pcc(q_ref.to(torch.float32), q_out.to(torch.float32), pcc=0.99)
-    logger.debug(f"query path PCC: {pcc_message}")
-    assert pcc_passed, f"HCA query path PCC test failed: {pcc_message}"
+    pcc_passed, pcc_message = assert_with_pcc(q_ref.to(torch.float32), q_out.to(torch.float32), pcc=0.999)
+    logger.debug(f"mesh query path PCC: {pcc_message}")
+    assert pcc_passed, f"HCA mesh query path PCC test failed: {pcc_message}"
 
     logger.debug("PCC test passed!")
 
