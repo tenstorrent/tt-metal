@@ -1,15 +1,14 @@
 name: sync-upstream-ttmetal
 
 # Device-free automatic sync to latest tenstorrent/tt-metal.
-# Gates: merge -> build -> `import ttnn`. These need NO Tenstorrent hardware, so this runs
-# entirely on GitHub-hosted (cloud) runners. On green it opens a PR; on any failure it files
-# an issue. NOTE: PCC (numeric correctness) is NOT checked here -- that requires a TT device
-# and must be run on a self-hosted TT runner (or manually) before trusting the numbers.
+# Gates: merge -> build -> `import ttnn`. No Tenstorrent hardware needed, so this runs on
+# GitHub-hosted (cloud) runners. On green it opens a PR; on failure it files an issue.
+# NOTE: PCC (numeric correctness) is NOT checked here -- that needs a TT device (self-hosted runner).
 
 on:
   schedule:
     - cron: "0 6 * * 1"        # Mondays 06:00 UTC
-  workflow_dispatch: {}         # manual "Run workflow" button
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -18,15 +17,13 @@ permissions:
 
 jobs:
   sync-build-import:
-    # tt-metal's build is heavy (clang-20, lots of RAM). A standard 2-core runner will choke --
-    # use a larger GitHub-hosted runner if you have one, else this may time out.
     runs-on: ubuntu-22.04
-    # The dev container carries the tt-metal build toolchain. Verify the tag matches what
-    # tt-metal's own CI uses (ghcr may require a login for private images).
+    timeout-minutes: 180        # bound the heavy build so it can't hang for hours
     container:
       image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest
     env:
       ARCH_NAME: blackhole
+      GH_API: https://api.github.com/repos/${{ github.repository }}
     steps:
       - name: Checkout fork branch (full history + submodules)
         uses: actions/checkout@v4
@@ -35,10 +32,14 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Git identity
+      # The container runs as a different user than owns the checkout -> git refuses with
+      # "dubious ownership". Mark the workspace safe and set identity globally so ALL later
+      # git commands (fetch/merge/commit) work.
+      - name: Git setup (safe.directory + identity)
         run: |
-          git config user.name  "tt-hw-planner-bot"
-          git config user.email "tt-hw-planner-bot@users.noreply.github.com"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global user.name  "tt-hw-planner-bot"
+          git config --global user.email "tt-hw-planner-bot@users.noreply.github.com"
 
       - name: Fetch upstream tenstorrent/tt-metal
         run: |
@@ -66,12 +67,11 @@ jobs:
           git checkout -b "$BR"
           set +e
           git merge --no-commit --no-ff upstream/main
-          # The one known, recurring conflict: dispatch-core defaults moved into C++ upstream.
           git checkout --theirs ttnn/ttnn/device.py 2>/dev/null && git add ttnn/ttnn/device.py
           UNRESOLVED=$(git diff --name-only --diff-filter=U)
           set -e
           if [ -n "$UNRESOLVED" ]; then
-            echo "Unexpected conflicts -- manual review needed:"; echo "$UNRESOLVED"
+            echo "Unexpected conflicts:"; echo "$UNRESOLVED"
             { echo "conflicts<<EOF"; echo "$UNRESOLVED"; echo "EOF"; } >> "$GITHUB_OUTPUT"
             git merge --abort
             exit 1
@@ -100,23 +100,35 @@ jobs:
           . python_env/bin/activate
           python -c "import ttnn; print('ttnn import OK')"
 
+      # PR / issue via the REST API (curl) -- the dev container has no `gh` CLI.
       - name: Open PR (all device-free gates green)
         if: steps.check.outputs.uptodate == 'false' && success()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git push origin "${{ steps.merge.outputs.branch }}"
-          gh pr create \
-            --base feature/tt-hw-planner \
-            --head "${{ steps.merge.outputs.branch }}" \
-            --title "Auto-sync: latest tt-metal (${{ steps.merge.outputs.sha }})" \
-            --body $'Automated upstream sync — **device-free gates passed**: merge + build + \x60import ttnn\x60.\n\n⚠️ **PCC (numeric correctness) NOT verified** — CI has no TT device. Run per-component PCC on a TT box (e.g. \x60pytest models/demos/hunyuanimage_3_0/tests/pcc/test_r_m_s_norm.py\x60) before merging if you rely on numerics.'
+          BODY='Automated upstream sync. Device-free gates passed: merge + build + import ttnn. PCC (numeric) NOT verified -- run per-component PCC on a TT box before merging if numerics matter.'
+          python3 - "$BODY" <<'PY'
+          import json,os,sys,urllib.request
+          data=json.dumps({"title":"Auto-sync: latest tt-metal (%s)"%os.environ["SHA"],
+                           "head":os.environ["BR"],"base":"feature/tt-hw-planner","body":sys.argv[1]}).encode()
+          req=urllib.request.Request(os.environ["GH_API"]+"/pulls",data=data,
+              headers={"Authorization":"token %s"%os.environ["TOKEN"],"Accept":"application/vnd.github+json"})
+          print(urllib.request.urlopen(req).status)
+          PY
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ steps.merge.outputs.sha }}
+          BR: ${{ steps.merge.outputs.branch }}
 
       - name: File an issue on failure
         if: failure()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh issue create \
-            --title "Auto-sync to latest tt-metal FAILED ($(date -u +%F))" \
-            --body $'The scheduled upstream sync failed (merge conflict, build, or import).\n\nUnexpected merge conflicts (if any):\n${{ steps.merge.outputs.conflicts }}\n\nSee the workflow run logs for details.'
+          BODY="Scheduled upstream sync failed (merge conflict, build, or import). Conflicts (if any): ${{ steps.merge.outputs.conflicts }}. See the run logs."
+          python3 - "$BODY" <<'PY'
+          import json,os,sys,urllib.request,datetime
+          data=json.dumps({"title":"Auto-sync to latest tt-metal FAILED","body":sys.argv[1]}).encode()
+          req=urllib.request.Request(os.environ["GH_API"]+"/issues",data=data,
+              headers={"Authorization":"token %s"%os.environ["TOKEN"],"Accept":"application/vnd.github+json"})
+          print(urllib.request.urlopen(req).status)
+          PY
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
