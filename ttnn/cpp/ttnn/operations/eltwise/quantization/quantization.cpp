@@ -224,6 +224,25 @@ Tensor quantize(
         const int32_t axis_v = axis.value();
         const ttnn::Shape& input_shape = input_a.logical_shape();
 
+
+        // Fast path: per-channel Tensor scale + scalar int32 zero-point -> single fused binary_ng
+        if (scale_p != nullptr && zero_point_p == nullptr) {
+            const int32_t zp = std::get<int32_t>(zero_point);
+            const std::array post_activation{operations::unary::EltwiseUnaryWithParam{
+                operations::unary::UnaryOpType::ZERO_POINT, static_cast<float>(zp)}};
+            return ttnn::prim::binary_ng(
+                input_a,
+                *scale_p,
+                operations::binary::BinaryOpType::QUANT,
+                c_dtype,
+                memory_config,
+                optional_output_tensor,
+                /*fast_and_approximate_mode*/ false,
+                none,
+                none,
+                post_activation,
+                std::nullopt);
+        }
         check_per_channel_tensor_args(input_a, scale_p, zero_point_p, axis_v, input_shape.rank());
 
         const Tensor scale_full = reshape_per_channel_vector_args(*scale_p, input_shape, axis_v, a_dtype);
@@ -498,6 +517,25 @@ Tensor dequantize(
         const int32_t axis_v = axis.value();
         const ttnn::Shape& input_shape = input_tensor.logical_shape();
 
+
+        // Fast path: per-channel Tensor scale + scalar int32 zero-point -> single fused binary_ng
+        if (scale_p != nullptr && zero_point_p == nullptr) {
+            const int32_t zp = std::get<int32_t>(zero_point);
+            const std::array post_activation{operations::unary::EltwiseUnaryWithParam{
+                operations::unary::UnaryOpType::ZERO_POINT, static_cast<float>(-zp)}};
+            return ttnn::prim::binary_ng(
+                input_tensor,
+                *scale_p,
+                operations::binary::BinaryOpType::DEQUANT,
+                c_dtype,
+                memory_config,
+                optional_output_tensor,
+                /*fast_and_approximate_mode*/ false,
+                none,
+                none,
+                post_activation,
+                std::nullopt);
+        }
         check_per_channel_tensor_args(input_tensor, scale_p, zero_point_p, axis_v, input_shape.rank());
 
         const Tensor scale_full = reshape_per_channel_vector_args(*scale_p, input_shape, axis_v, DataType::FLOAT32);
