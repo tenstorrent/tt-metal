@@ -6,78 +6,61 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t i = 0;
-    const auto input_addr = get_arg_val<uint32_t>(i++);
-    const auto gamma_addr = get_arg_val<uint32_t>(i++);
-    const auto beta_addr = get_arg_val<uint32_t>(i++);
-    const auto num_rows_per_core = get_arg_val<uint32_t>(i++);
-    const auto num_inner = get_arg_val<uint32_t>(i++);
-    const auto tile_offset = get_arg_val<uint32_t>(i++);
-    const auto scaler = get_arg_val<uint32_t>(i++);
-    const auto eps = get_arg_val<uint32_t>(i++);
-    const auto mask_h = get_arg_val<uint32_t>(i++);
-    const auto mask_w = get_arg_val<uint32_t>(i++);
+    const auto num_rows_per_core = get_arg(args::num_rows_per_core);
+    const auto num_inner = get_arg(args::num_inner);
+    const auto tile_offset = get_arg(args::tile_offset);
+    const auto scaler = get_arg(args::scaler);
+    const auto eps = get_arg(args::eps);
+    const auto mask_h = get_arg(args::mask_h);
+    const auto mask_w = get_arg(args::mask_w);
 
-    constexpr uint32_t cb_id_input = tt::CBIndex::c_0;
-    constexpr uint32_t cb_id_scaler = tt::CBIndex::c_1;
-    constexpr uint32_t cb_id_eps = tt::CBIndex::c_2;
-    constexpr uint32_t cb_id_gamma = tt::CBIndex::c_3;
-    constexpr uint32_t cb_id_beta = tt::CBIndex::c_4;
-    constexpr uint32_t cb_id_mask_h = tt::CBIndex::c_5;
-    constexpr uint32_t cb_id_mask_w = tt::CBIndex::c_6;
+    constexpr auto block_size = get_arg(args::block_size);
 
-    const uint32_t input_tile_bytes = get_tile_size(cb_id_input);
-    const auto input_data_format = get_dataformat(cb_id_input);
+    Noc noc;
 
-    constexpr uint32_t block_size = get_compile_time_arg_val(0);
-    constexpr auto input_args = TensorAccessorArgs<1>();
-    constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+    // Input DFB (bound as dfb::input); tile metadata now comes off the DFB object (whitelist rule 7).
+    DataflowBuffer dfb_input(dfb::input);
+    const uint32_t input_tile_bytes = dfb_input.get_tile_size();
+    const auto input_data_format = dfb_input.get_dataformat();
 
-    const auto input_addrg = TensorAccessor(input_args, input_addr);
+    const auto input_addrg = TensorAccessor(tensor::input);
 
 #ifdef GAMMA_HAS_VALUE
-    const uint32_t gamma_tile_bytes = get_tile_size(cb_id_gamma);
-    const auto gamm_addrg = TensorAccessor(gamma_args, gamma_addr);
+    DataflowBuffer dfb_gamma(dfb::gamma);
+    const uint32_t gamma_tile_bytes = dfb_gamma.get_tile_size();
+    const auto gamm_addrg = TensorAccessor(tensor::gamma);
 #endif
 
 #ifdef BETA_HAS_VALUE
-    const uint32_t beta_tile_bytes = get_tile_size(cb_id_beta);
-    const auto beta_addrg = TensorAccessor(beta_args, beta_addr);
+    DataflowBuffer dfb_beta(dfb::beta);
+    const uint32_t beta_tile_bytes = dfb_beta.get_tile_size();
+    const auto beta_addrg = TensorAccessor(tensor::beta);
 #endif
 
-    DataflowBuffer dfb_scaler(cb_id_scaler);
-    DataflowBuffer dfb_eps(cb_id_eps);
+    DataflowBuffer dfb_scaler(dfb::scaler);
+    DataflowBuffer dfb_eps(dfb::eps);
     fill_cb_with_value(dfb_scaler, scaler);
     fill_cb_with_value(dfb_eps, eps);
 
 #ifdef DO_MASK_H
     {
-        DataflowBuffer dfb_mask_h(cb_id_mask_h);
+        DataflowBuffer dfb_mask_h(dfb::mask_h);
         generate_mask_h(dfb_mask_h, mask_h);
     }
 #endif
 
 #ifdef DO_MASK_W
     {
-        DataflowBuffer dfb_mask_w(cb_id_mask_w);
+        DataflowBuffer dfb_mask_w(dfb::mask_w);
         generate_mask_w(dfb_mask_w, mask_w);
     }
 #endif
 
     constexpr uint32_t onetile = 1;
     uint32_t offs = 0;
-
-    Noc noc;
-    DataflowBuffer dfb_input(cb_id_input);
-#ifdef GAMMA_HAS_VALUE
-    DataflowBuffer dfb_gamma(cb_id_gamma);
-#endif
-#ifdef BETA_HAS_VALUE
-    DataflowBuffer dfb_beta(cb_id_beta);
-#endif
 
     uint32_t input_tile_idx;
     for (uint32_t outer_idx = 0; outer_idx < num_rows_per_core; outer_idx++) {
