@@ -809,12 +809,13 @@ class TTVibeVoiceLM:
             gate_pc, down_pc = None, _FFN_DOWN_DECODE_PROGCFG_B1
         else:  # prefill (S>1) → auto
             gate_pc, down_pc = None, None
-        # L1-island for the cfg-batch-2 deploy chain (S==1, B==2): keep gate/up matmul outputs and
-        # the silu output in L1 so silu/mul read from L1 instead of DRAM.  gate/up use an EXPLICIT
-        # progcfg here, so output placement does not re-pick the config => byte-identical (maxabsdiff==0,
-        # ffn_chain_l1_probe.py; 1.15x on the chain).  B==1 uses auto gate_pc (which could re-pick its
-        # config on an L1 output) so it stays DRAM.
-        gateup_mc = ttnn.L1_MEMORY_CONFIG if (S == 1 and B == 2) else ttnn.DRAM_MEMORY_CONFIG
+        # L1-island for gate/up matmul outputs + silu:
+        # - Decode B==2: explicit progcfg + L1 (ffn_chain_l1_probe.py; ~1.15x, maxabsdiff==0).
+        # - Prefill S>1: auto + L1 interleaved is byte-identical and ~1.13x on the 5-op chain
+        #   (ffn_prefill_l1_chain_probe.py).  Prefill down must keep DRAM in0 — auto+L1-in0
+        #   re-picks K-reduction (maxabsdiff≠0) — so silu→mul stays DRAM below.
+        # - Decode B==1: auto+L1 gate is byte-ident in isolation but the full chain is not faster.
+        gateup_mc = ttnn.L1_MEMORY_CONFIG if ((S == 1 and B == 2) or S > 1) else ttnn.DRAM_MEMORY_CONFIG
         gate = ttnn.linear(x, layer_w.w1, compute_kernel_config=_HIFI4, program_config=gate_pc, memory_config=gateup_mc)
         up = ttnn.linear(x, layer_w.w3, compute_kernel_config=_HIFI4, program_config=gate_pc, memory_config=gateup_mc)
         gate = ttnn.silu(gate, memory_config=gateup_mc)
