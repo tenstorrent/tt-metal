@@ -66,6 +66,15 @@ state-transfer protocol and measure its components.
   both spans' group output scans from those already-computed entry states.  It
   must eliminate the duplicate summary prep/scan before this topology can
   plausibly reach the 2.958 ms LB gate.
+* That split-phase interface is now implemented behind
+  `KDA_SP_SPLIT_AFFINE=1`.  Its reusable preparation, summary, prefix, and
+  seeded grouped-output scan agree with the regular KDA path (primitive PCC
+  >= 0.999; end-to-end SP PCC >= 0.98).  The first three-repetition eager
+  measurement is **7.771 ms/forward** (report `2026_07_25_18_55_46`), still
+  above the serial control.  Thus removing duplicate preparation alone is not
+  sufficient: the next investigation must make the two TP=4 final scans
+  genuinely concurrent at the queue/fabric level, rather than only enqueueing
+  their work from the host in that order.
 
 ## Milestones
 

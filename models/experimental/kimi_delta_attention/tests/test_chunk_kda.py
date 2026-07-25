@@ -132,7 +132,7 @@ def test_chunk_kda_affine_summary_matches_final_state(device: ttnn.Device) -> No
             beta_tt,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        _, final_state_tt = ttnn.transformer.chunk_kda(
+        output_tt, final_state_tt = ttnn.transformer.chunk_kda(
             q_tt,
             k_tt,
             v_tt,
@@ -147,16 +147,43 @@ def test_chunk_kda_affine_summary_matches_final_state(device: ttnn.Device) -> No
 
     assert final_state_tt is not None
     groups = sequence // 256
+    grouped_prep = ttnn.transformer.chunk_kda_group_prepare(
+        q_tt,
+        k_tt,
+        v_tt,
+        gate_tt,
+        beta_tt,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    grouped_a_tt, grouped_b_tt = ttnn.transformer.chunk_kda_group_summary(
+        grouped_prep,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
     entries_tt = ttnn.transformer.kda_affine_prefix(
-        transform_a_tt,
-        transform_b_tt,
+        grouped_a_tt,
+        grouped_b_tt,
         ttnn.reshape(initial_state_tt, (heads, dim, dim)),
         groups,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    transform_a = ttnn.to_torch(transform_a_tt).reshape(heads, groups, dim, dim)
-    transform_b = ttnn.to_torch(transform_b_tt).reshape(heads, groups, dim, dim)
+    grouped_output_tt, grouped_final_state_tt = ttnn.transformer.chunk_kda_group_scan(
+        grouped_prep,
+        entries_tt,
+        groups,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    _assert_pcc("KDA grouped summary A", ttnn.to_torch(transform_a_tt), ttnn.to_torch(grouped_a_tt), threshold=0.999)
+    _assert_pcc("KDA grouped summary B", ttnn.to_torch(transform_b_tt), ttnn.to_torch(grouped_b_tt), threshold=0.999)
+    transform_a = ttnn.to_torch(grouped_a_tt).reshape(heads, groups, dim, dim)
+    transform_b = ttnn.to_torch(grouped_b_tt).reshape(heads, groups, dim, dim)
     entries = ttnn.to_torch(entries_tt).reshape(heads, groups, dim, dim)
     expected_final_state = torch.matmul(transform_a[:, -1].float(), entries[:, -1].float()) + transform_b[:, -1].float()
     expected_final_state = expected_final_state.reshape_as(initial_state)
     _assert_pcc("KDA affine span summary", expected_final_state, ttnn.to_torch(final_state_tt), threshold=0.999)
+    _assert_pcc("KDA grouped scan output", ttnn.to_torch(output_tt), ttnn.to_torch(grouped_output_tt), threshold=0.999)
+    _assert_pcc(
+        "KDA grouped scan final state",
+        ttnn.to_torch(final_state_tt),
+        ttnn.to_torch(grouped_final_state_tt).reshape_as(initial_state),
+        threshold=0.999,
+    )

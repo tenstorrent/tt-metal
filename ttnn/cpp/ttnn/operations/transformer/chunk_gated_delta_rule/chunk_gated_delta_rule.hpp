@@ -5,6 +5,7 @@
 
 #include <optional>
 #include <tuple>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
@@ -81,6 +82,44 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     const std::optional<ttnn::Tensor>& rms_gate = std::nullopt,
     const std::optional<ttnn::Tensor>& rms_weight = std::nullopt,
     float rms_epsilon = 1e-5f);
+
+/**
+ * Build reusable KDA preparation tensors, grouped into eight contiguous
+ * 32-token chunks.  The result feeds chunk_kda_group_summary and
+ * chunk_kda_group_scan so an SP implementation can compute a boundary state
+ * before scheduling the final output scan.
+ */
+std::vector<ttnn::Tensor> chunk_kda_group_prepare(
+    const ttnn::Tensor& q,
+    const ttnn::Tensor& k,
+    const ttnn::Tensor& v,
+    const ttnn::Tensor& g,
+    const ttnn::Tensor& beta,
+    std::optional<float> scale = std::nullopt,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& eye = std::nullopt,
+    const std::optional<ttnn::Tensor>& tril = std::nullopt,
+    const std::optional<ttnn::Tensor>& ones = std::nullopt,
+    const std::optional<ttnn::Tensor>& masks = std::nullopt);
+
+/** Return flattened per-eight-chunk affine transforms from grouped preparation tensors. */
+std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_group_summary(
+    const std::vector<ttnn::Tensor>& grouped_prep,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& eye = std::nullopt);
+
+/**
+ * Run the final grouped output scan from already-computed per-group entry
+ * states.  Returns head-major output [BH,T,V] and final state [BH,K,V].
+ */
+std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_group_scan(
+    const std::vector<ttnn::Tensor>& grouped_prep,
+    const ttnn::Tensor& group_initial_states,
+    uint32_t groups_per_head,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 
 /**
  * Build independent eight-chunk KDA affine transforms without materializing

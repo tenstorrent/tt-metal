@@ -188,6 +188,41 @@ class SP2TP4KimiDeltaAttention:
         second_output = second.forward_prepared(second_prepared)
         return first_output, second_output
 
+    def _forward_split_affine_sp2(
+        self,
+        first_span: ttnn.Tensor,
+        second_span: ttnn.Tensor,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Run the SP affine prefix without repeating either span's KDA prep.
+
+        Each span first builds the state-independent eight-chunk preparation
+        tensors.  The first prefix produces the boundary state while both
+        spans' final output scans remain unscheduled; once the state is on
+        fabric, the two seeded scans can run independently.
+        """
+        first, second = self.first_layer, self.second_layer
+        groups = first_span.shape[1] // 256
+        first_prepared = first.prepare_chunk(first_span)
+        ttnn.experimental.send_async(first_prepared.new_convolution_state, self._send_socket)
+        ttnn.experimental.recv_async(second.convolution_state, self._recv_socket)
+        second_prepared = second.prepare_chunk(second_span)
+
+        first_grouped = first.group_prepare(first_prepared)
+        second_grouped = second.group_prepare(second_prepared)
+        first_a, first_b = first.group_summary(first_grouped)
+        second_a, second_b = second.group_summary(second_grouped)
+        first_entries = first.group_entry_states(first_a, first_b, groups)
+        first_end_state = first.group_end_state(first_a, first_b, first_entries, groups)
+        ttnn.experimental.send_async(first_end_state, self._send_socket)
+        ttnn.experimental.recv_async(second.recurrent_state, self._recv_socket)
+        second_entries = second.group_entry_states(second_a, second_b, groups)
+
+        first_raw_output, first_state = first.group_scan(first_prepared, first_grouped, first_entries)
+        second_raw_output, second_state = second.group_scan(second_prepared, second_grouped, second_entries)
+        first_output = first._finish_prepared(first_prepared, first_raw_output, first_state, fuse_scan_rms=False)
+        second_output = second._finish_prepared(second_prepared, second_raw_output, second_state, fuse_scan_rms=False)
+        return first_output, second_output
+
     def forward(
         self,
         first_span: ttnn.Tensor,
@@ -203,6 +238,13 @@ class SP2TP4KimiDeltaAttention:
             and first_span.shape[1] % 256 == 0
         ):
             return self._forward_affine_sp2(first_span, second_span)
+        if (
+            os.getenv("KDA_SP_SPLIT_AFFINE", "0") == "1"
+            and mode == "chunk"
+            and first_span.shape[1] == second_span.shape[1]
+            and first_span.shape[1] % 256 == 0
+        ):
+            return self._forward_split_affine_sp2(first_span, second_span)
         if os.getenv("KDA_SP_PIPELINED", "0") == "1" and mode == "chunk":
             return self._forward_pipelined_sp2(first_span, second_span)
         first_output = self.first_layer.forward(first_span, mode=mode)

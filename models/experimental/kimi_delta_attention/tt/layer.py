@@ -427,33 +427,110 @@ class KimiDeltaAttention:
         )
         return ttnn.reshape(end, (prepared.batch, heads, key_dim, value_dim))
 
-    def forward_prepared(self, prepared: PreparedKDA) -> ttnn.Tensor:
-        """Finish a prepared chunk span using the layer's current recurrent state."""
-        if prepared.mode != "chunk" or not prepared.head_major:
-            raise ValueError("forward_prepared currently supports tile-aligned chunk preparation only")
-        assert self.recurrent_state is not None
-        assert self.convolution_state is not None
-        config, weights = self.config, self.weights
-        batch, sequence = prepared.batch, prepared.sequence
-        use_group_prefix = sequence >= 5120 and sequence % 256 == 0 and os.getenv("QWEN_KDA_SERIAL_SCAN") is None
-        fuse_scan_rms = (
-            sequence > 640
-            and self.tensor_parallel_size == 8
-            and os.getenv("QWEN_KDA_GROUP_PREFIX") is None
-            and not use_group_prefix
-        )
-        output, new_recurrent_state = chunk_kda_recurrence(
+    def group_prepare(self, prepared: PreparedKDA) -> list[ttnn.Tensor]:
+        """Create reusable eight-chunk recurrence preparation tensors."""
+        if prepared.mode != "chunk" or not prepared.head_major or prepared.sequence % 256:
+            raise ValueError("group preparation requires a tile-aligned chunk span divisible by 256")
+        return ttnn.transformer.chunk_kda_group_prepare(
             prepared.q,
             prepared.k,
             prepared.v,
             prepared.gate,
             prepared.beta,
-            self.recurrent_state,
-            self.chunk_const_tiles,
-            rms_gate=prepared.output_gate_rank if fuse_scan_rms else None,
-            rms_weight=weights.norm if fuse_scan_rms else None,
-            rms_epsilon=config.norm_eps,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_config,
+            eye=self.chunk_const_tiles[0],
+            tril=self.chunk_const_tiles[1],
+            ones=self.chunk_const_tiles[2],
+            masks=self.chunk_const_tiles[3],
         )
+
+    def group_summary(self, grouped_prep: list[ttnn.Tensor]) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Return flattened affine transforms from reusable group preparation."""
+        return ttnn.transformer.chunk_kda_group_summary(
+            grouped_prep,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_config,
+            eye=self.chunk_const_tiles[0],
+        )
+
+    def group_entry_states(self, transform_a: ttnn.Tensor, transform_b: ttnn.Tensor, groups: int) -> ttnn.Tensor:
+        """Return the recurrent state at each grouped scan entry."""
+        assert self.recurrent_state is not None
+        batch_heads = self.recurrent_state.shape[0] * self.recurrent_state.shape[1]
+        initial = ttnn.reshape(
+            self.recurrent_state,
+            (batch_heads, self.config.head_k_dim, self.config.head_v_dim),
+        )
+        return ttnn.transformer.kda_affine_prefix(
+            transform_a,
+            transform_b,
+            initial,
+            groups,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_config,
+        )
+
+    def group_end_state(
+        self, transform_a: ttnn.Tensor, transform_b: ttnn.Tensor, entries: ttnn.Tensor, groups: int
+    ) -> ttnn.Tensor:
+        """Compose the final affine transform after a grouped prefix."""
+        assert self.recurrent_state is not None
+        batch, heads, key_dim, value_dim = self.recurrent_state.shape
+        batch_heads = batch * heads
+        entry_last = ttnn.slice(
+            ttnn.reshape(entries, (batch_heads, groups, key_dim, value_dim)),
+            (0, groups - 1, 0, 0),
+            (batch_heads, groups, key_dim, value_dim),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        entry_last = ttnn.reshape(entry_last, (batch_heads, key_dim, value_dim))
+        a_last = ttnn.slice(
+            ttnn.reshape(transform_a, (batch_heads, groups, key_dim, key_dim)),
+            (0, groups - 1, 0, 0),
+            (batch_heads, groups, key_dim, key_dim),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        a_last = ttnn.reshape(a_last, (batch_heads, key_dim, key_dim))
+        b_last = ttnn.slice(
+            ttnn.reshape(transform_b, (batch_heads, groups, key_dim, value_dim)),
+            (0, groups - 1, 0, 0),
+            (batch_heads, groups, key_dim, value_dim),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        end = ttnn.matmul(a_last, entry_last, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        end = ttnn.add(
+            end,
+            ttnn.reshape(b_last, (batch_heads, key_dim, value_dim)),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return ttnn.reshape(end, (batch, heads, key_dim, value_dim))
+
+    def group_scan(
+        self, prepared: PreparedKDA, grouped_prep: list[ttnn.Tensor], entries: ttnn.Tensor
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Run the grouped output scan from precomputed entry states."""
+        groups = prepared.sequence // 256
+        output, state = ttnn.transformer.chunk_kda_group_scan(
+            grouped_prep,
+            entries,
+            groups,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_config,
+        )
+        state = ttnn.reshape(
+            state,
+            (prepared.batch, self.config.num_heads, self.config.head_k_dim, self.config.head_v_dim),
+        )
+        return output, state
+
+    def _finish_prepared(
+        self, prepared: PreparedKDA, output: ttnn.Tensor, new_recurrent_state: ttnn.Tensor, *, fuse_scan_rms: bool
+    ) -> ttnn.Tensor:
+        """Run the common KDA epilogue, projection, and persistent-state updates."""
+        assert self.convolution_state is not None
+        config, weights = self.config, self.weights
+        batch, sequence = prepared.batch, prepared.sequence
         if new_recurrent_state.dtype != config.recurrent_state_dtype:
             new_recurrent_state = ttnn.typecast(new_recurrent_state, config.recurrent_state_dtype)
         if not fuse_scan_rms:
@@ -515,6 +592,34 @@ class KimiDeltaAttention:
             self.recurrent_state = new_recurrent_state
             self.convolution_state = prepared.new_convolution_state
         return output
+
+    def forward_prepared(self, prepared: PreparedKDA) -> ttnn.Tensor:
+        """Finish a prepared chunk span using the layer's current recurrent state."""
+        if prepared.mode != "chunk" or not prepared.head_major:
+            raise ValueError("forward_prepared currently supports tile-aligned chunk preparation only")
+        assert self.recurrent_state is not None
+        config, weights = self.config, self.weights
+        sequence = prepared.sequence
+        use_group_prefix = sequence >= 5120 and sequence % 256 == 0 and os.getenv("QWEN_KDA_SERIAL_SCAN") is None
+        fuse_scan_rms = (
+            sequence > 640
+            and self.tensor_parallel_size == 8
+            and os.getenv("QWEN_KDA_GROUP_PREFIX") is None
+            and not use_group_prefix
+        )
+        output, new_recurrent_state = chunk_kda_recurrence(
+            prepared.q,
+            prepared.k,
+            prepared.v,
+            prepared.gate,
+            prepared.beta,
+            self.recurrent_state,
+            self.chunk_const_tiles,
+            rms_gate=prepared.output_gate_rank if fuse_scan_rms else None,
+            rms_weight=weights.norm if fuse_scan_rms else None,
+            rms_epsilon=config.norm_eps,
+        )
+        return self._finish_prepared(prepared, output, new_recurrent_state, fuse_scan_rms=fuse_scan_rms)
 
     def forward(
         self,

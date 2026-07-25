@@ -782,7 +782,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     return {output, final_state};
 }
 
-std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_affine_summary(
+std::vector<ttnn::Tensor> chunk_kda_group_prepare(
     const ttnn::Tensor& q_in,
     const ttnn::Tensor& k_in,
     const ttnn::Tensor& v_in,
@@ -861,7 +861,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_affine_summary(
     const auto& tril_c = has_const_tiles ? *tril : fallback.tril;
     const auto& ones_c = has_const_tiles ? *ones : fallback.ones;
     const auto& masks_c = has_const_tiles ? *masks : fallback.masks;
-    const auto out_mem = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
+    (void)memory_config;
     const auto prep_mem =
         std::getenv("QWEN_KDA_PREP_DRAM") == nullptr ? ttnn::L1_MEMORY_CONFIG : ttnn::DRAM_MEMORY_CONFIG;
     const auto kernel_cfg = init_device_compute_kernel_config(
@@ -900,16 +900,42 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_affine_summary(
     prep[4] = ttnn::reshape(prep[4], ttnn::Shape({group_heads, group_chunks, K, C}));
     prep[5] = ttnn::reshape(prep[5], ttnn::Shape({group_heads, group_chunks, K, 1}));
     prep[6] = ttnn::reshape(prep[6], ttnn::Shape({group_heads, group_chunks, C, C}));
+    return prep;
+}
+
+std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_group_summary(
+    const std::vector<ttnn::Tensor>& grouped_prep,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<ttnn::Tensor>& eye) {
+    TT_FATAL(grouped_prep.size() == 7, "chunk_kda_group_summary expects seven preparation tensors");
+    const auto& shape = grouped_prep[0].logical_shape();
+    TT_FATAL(shape.rank() == 4, "chunk_kda_group_summary expects [group_heads,8,chunk,value] preparation tensors");
+    const uint32_t chunk_size = shape[2];
+    auto* dev = grouped_prep[0].device();
+    ConstTiles fallback;
+    if (!eye.has_value()) {
+        fallback = build_const_tiles(chunk_size, dev);
+    }
+    const auto& eye_c = eye.has_value() ? *eye : fallback.eye;
+    const auto out_mem = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
+    const auto kernel_cfg = init_device_compute_kernel_config(
+        dev->arch(),
+        compute_kernel_config,
+        MathFidelity::HiFi4,
+        /*default_approx_mode=*/false,
+        /*default_fp32_acc=*/true,
+        /*default_l1_acc=*/false);
     auto summaries = ttnn::prim::chunk_gdn_scan(
-        prep[0],
-        prep[1],
-        prep[2],
-        prep[3],
-        prep[4],
-        prep[5],
-        prep[6],
+        grouped_prep[0],
+        grouped_prep[1],
+        grouped_prep[2],
+        grouped_prep[3],
+        grouped_prep[4],
+        grouped_prep[5],
+        grouped_prep[6],
         std::nullopt,
-        C,
+        chunk_size,
         true,
         out_mem,
         kernel_cfg,
@@ -922,6 +948,75 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_affine_summary(
         1e-5f,
         true);
     return {summaries[0], summaries[1]};
+}
+
+std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_group_scan(
+    const std::vector<ttnn::Tensor>& grouped_prep,
+    const ttnn::Tensor& group_initial_states,
+    uint32_t groups_per_head,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    TT_FATAL(grouped_prep.size() == 7, "chunk_kda_group_scan expects seven preparation tensors");
+    const auto& shape = grouped_prep[0].logical_shape();
+    TT_FATAL(shape.rank() == 4, "chunk_kda_group_scan expects [group_heads,8,chunk,value] preparation tensors");
+    const uint32_t group_heads = shape[0];
+    const uint32_t group_chunks = shape[1];
+    const uint32_t chunk_size = shape[2];
+    const uint32_t value_dim = shape[3];
+    const uint32_t key_dim = grouped_prep[1].logical_shape()[3];
+    TT_FATAL(groups_per_head > 0 && group_heads % groups_per_head == 0, "invalid groups_per_head={}", groups_per_head);
+    TT_FATAL(
+        group_initial_states.logical_shape() == ttnn::Shape({group_heads, key_dim, value_dim}),
+        "group initial states must be [group_heads,key,value]");
+    const uint32_t batch_heads = group_heads / groups_per_head;
+    auto* dev = grouped_prep[0].device();
+    const auto out_mem = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
+    const auto kernel_cfg = init_device_compute_kernel_config(
+        dev->arch(),
+        compute_kernel_config,
+        MathFidelity::HiFi4,
+        /*default_approx_mode=*/false,
+        /*default_fp32_acc=*/true,
+        /*default_l1_acc=*/false);
+    auto scan = ttnn::prim::chunk_gdn_scan(
+        grouped_prep[0],
+        grouped_prep[1],
+        grouped_prep[2],
+        grouped_prep[3],
+        grouped_prep[4],
+        grouped_prep[5],
+        grouped_prep[6],
+        group_initial_states,
+        chunk_size,
+        true,
+        out_mem,
+        kernel_cfg,
+        true);
+    auto output =
+        ttnn::reshape(scan[0], ttnn::Shape({batch_heads, groups_per_head, group_chunks, chunk_size, value_dim}));
+    output = ttnn::reshape(output, ttnn::Shape({batch_heads, groups_per_head * group_chunks * chunk_size, value_dim}));
+    auto all_final_states = ttnn::reshape(scan[1], ttnn::Shape({batch_heads, groups_per_head, key_dim, value_dim}));
+    auto final_state = slice_group_axis(all_final_states, groups_per_head - 1, groups_per_head, out_mem);
+    final_state = ttnn::reshape(final_state, ttnn::Shape({batch_heads, key_dim, value_dim}));
+    return {output, final_state};
+}
+
+std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_affine_summary(
+    const ttnn::Tensor& q,
+    const ttnn::Tensor& k,
+    const ttnn::Tensor& v,
+    const ttnn::Tensor& g,
+    const ttnn::Tensor& beta,
+    std::optional<float> scale,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<ttnn::Tensor>& eye,
+    const std::optional<ttnn::Tensor>& tril,
+    const std::optional<ttnn::Tensor>& ones,
+    const std::optional<ttnn::Tensor>& masks) {
+    auto grouped_prep =
+        chunk_kda_group_prepare(q, k, v, g, beta, scale, memory_config, compute_kernel_config, eye, tril, ones, masks);
+    return chunk_kda_group_summary(grouped_prep, memory_config, compute_kernel_config, eye);
 }
 
 ttnn::Tensor kda_affine_prefix(

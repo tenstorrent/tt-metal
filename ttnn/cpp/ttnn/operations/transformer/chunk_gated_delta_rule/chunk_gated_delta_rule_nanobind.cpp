@@ -8,6 +8,7 @@
 
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/tuple.h>
+#include <nanobind/stl/vector.h>
 
 namespace ttnn::operations::transformer {
 
@@ -103,6 +104,45 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("rms_gate") = nb::none(),
         nb::arg("rms_weight") = nb::none(),
         nb::arg("rms_epsilon") = 1e-5f);
+
+    ttnn::bind_function<"chunk_kda_group_prepare", "ttnn.transformer.">(
+        mod,
+        "Build reusable eight-chunk grouped KDA preparation tensors.",
+        &ttnn::transformer::chunk_kda_group_prepare,
+        nb::arg("q").noconvert(),
+        nb::arg("k").noconvert(),
+        nb::arg("v").noconvert(),
+        nb::arg("g").noconvert(),
+        nb::arg("beta").noconvert(),
+        nb::kw_only(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("eye") = nb::none(),
+        nb::arg("tril") = nb::none(),
+        nb::arg("ones") = nb::none(),
+        nb::arg("masks") = nb::none());
+
+    ttnn::bind_function<"chunk_kda_group_summary", "ttnn.transformer.">(
+        mod,
+        "Build affine transforms from reusable grouped KDA preparation tensors.",
+        &ttnn::transformer::chunk_kda_group_summary,
+        nb::arg("grouped_prep").noconvert(),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("eye") = nb::none());
+
+    ttnn::bind_function<"chunk_kda_group_scan", "ttnn.transformer.">(
+        mod,
+        "Run a grouped KDA output scan from precomputed per-group entry states.",
+        &ttnn::transformer::chunk_kda_group_scan,
+        nb::arg("grouped_prep").noconvert(),
+        nb::arg("group_initial_states").noconvert(),
+        nb::arg("groups_per_head"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 
     ttnn::bind_function<"chunk_kda_affine_summary", "ttnn.transformer.">(
         mod,
