@@ -1953,3 +1953,42 @@
 - Diagnosis: the correct recurrent and convolution states rule out projection stride and state update. Canonical physical offsets fail identically, while the earlier alternate offsets worsened row error; therefore face ordering is not the residual cause. The existing row oracle already confines the error to rows 0-2 of each core first block, so the unvalidated raw cross-core prefix import remains the proven fault boundary.
 - Restoration: removed the complete private operation, binding, host factory, kernels, and env route. No experiment code remains. Rebuilt the exact restored source with `./build_metal.sh --build-tests --build-type Release` -> PASS, then `KDA_TP_TEST_SEQ=672 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_tp_weights.py::test_tp_layer_pcc -q -s` -> PASS at `0.999958/0.999912/0.999997`.
 - Verdict: reject and close direct tiled-input convolution for this campaign. The remaining ~95 us pre-convolution untilize ceiling is not actionable without a standalone validated prefix-import primitive or producer-exported boundary rows.
+
+
+### 2026-07-25 02:47 UTC — Reject elastic prep/summary split and close the queue
+
+- Hypothesis: use a work-balanced static approximation to elastic
+  reassignment—83 prep cores and 27 affine-summary cores—to measure whether a
+  one-pass producer/consumer pipeline can overlap the retained `~306 us` prep
+  and `~135 us` summary phases. The core-work lower bound is about `404 us`
+  versus `441 us` serialized, so perfect scheduling can hide at most `~37 us`.
+- Implementation experiment: parameterized prep core count and distributed
+  multiple summary heads over fewer cores. Each summary core processed its
+  assigned heads sequentially through the existing CB protocol.
+- Host build: `./build_metal.sh --build-tests --build-type Release` -> PASS.
+- Correctness: `QWEN_KDA_PREP_CORES=83 QWEN_KDA_SUMMARY_CORES=27
+  KDA_TP_TEST_SEQ=5120 scripts/run_safe_pytest.sh --run-all
+  models/experimental/kimi_delta_attention/tests/test_tp_weights.py::test_tp_layer_pcc
+  -q -s` -> PASS at output/recurrent/convolution PCC
+  `0.999958/0.999890/0.999997`.
+- Profiler result: the corresponding `PERF_TRACE=1 PERF_SEQ=5120
+  PERF_REPS=10 ... --profile --run-all` command hung during warm replay twice.
+  The second attempt followed a full device reset and reported `260/260` JIT
+  cache hits before the same fetch-queue timeout, ruling out first-build
+  latency. Both runs required safe-wrapper device reset.
+- Diagnosis: numerical work partitioning is valid, but the multi-head reuse of
+  the existing summary CB protocol is timing-sensitive under trace replay and
+  cannot be retained. Because no stable profile exists, no speed claim is
+  made. The experiment source was fully removed.
+- Restoration: `./build_metal.sh --build-tests --build-type Release` -> PASS;
+  the exact retained `KDA_TP_TEST_SEQ=5120` TP=8 gate passed at
+  `0.999958/0.999890/0.999997`.
+- Residual-fusion bound: in retained CSV
+  `generated/profiler/reports/2026_07_25_02_18_57/ops_perf_results_2026_07_25_02_18_57.csv`,
+  the summary-to-prefix `OP TO OP LATENCY` across 88 device/replay observations
+  is `0.539 us` median and `0.577 us` maximum. Since summaries are already
+  owner-sharded in L1, that dispatch gap is the remaining fusion reward:
+  `0.0169%` median (`0.0181%` maximum) of the `3183.263 us` retained wall.
+- Verdict: reject the elastic split and stop this optimization campaign. No
+  identified actionable idea remains above the `0.1%` (`3.183 us`) whole-layer
+  threshold.

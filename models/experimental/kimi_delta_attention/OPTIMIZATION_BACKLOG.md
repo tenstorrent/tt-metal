@@ -16,12 +16,11 @@ keeps failed experiments visible so they are not repeated unchanged.
 - Prepared tensors now remain interleaved in distributed L1 between prep and
   scan. `QWEN_KDA_PREP_DRAM=1` preserves the measured DRAM control.
 - T=640 wall: `643.623 -> 619.594 us` (`-3.73%`).
-- T=5,120 wall: `3681.529 -> 3259.500 us` (`-11.46%` versus the matched FP32
-  DRAM control; replicated direct-L1 scan-to-gated-RMS endpoint).
-- T=5,120 recurrence: `1023.411 -> 807.181 us` (`-21.13%` versus control).
-- T=5,120 selected block times: projection `524.798 us`, convolution
-  `601.588 us`, decay transform `108.106 us`, recurrence `807.181 us`, and
-  output/CCL `1069.975 us`.
+- T=5,120 retained wall: `3183.263 us` (10-replay median, slowest-device
+  span). The recurrence is now a one-pass affine-summary builder, a
+  receiver-owned distributed prefix, and an eight-chunk grouped final scan.
+- T=5,120 selected recurrence times: affine summaries `134.994 us`, affine
+  prefix `115.753 us`, and grouped final scan `121.325 us`.
 - Estimated T=5,120 compute utilization: `13.14%`.
 - Estimated T=5,120 CCL utilization: `39.79%` against the 40% aspiration.
 - Final correctness gate: 27/27 tests passed; focused TP output/recurrent
@@ -63,11 +62,20 @@ overlap, so they must not be added.
 
 ## Current execution queue
 
-The receiver-owned affine prefix, L1 group entries, and owner-sharded summaries are now the T>=5,120 default. Remaining experiments, ranked by bounded reward, are:
+The receiver-owned affine prefix, L1 group entries, and owner-sharded summaries
+are now the T>=5,120 default. The execution queue is exhausted at the `0.1%`
+whole-layer stopping threshold.
 
-
-1. Revisit prep/scan fusion only with elastic core reassignment; the disjoint
-   94/16 static partition is measured and rejected.
+- An empirical 83-prep/27-summary elastic service-rate experiment passed the
+  non-profiled T=5,120 correctness gate, but reproducibly hung in two profiled
+  warm replays, including a retry after kernel caching and device reset. The
+  static work model bounds ideal overlap at about `37 us`, while the attempted
+  multi-head summary CB protocol is not trace-safe. No candidate is retained.
+- The remaining summary-to-prefix fusion can remove only the dispatch gap
+  because A/B summaries are already owner-sharded in L1. Across 88
+  device/replay observations, that gap is `0.539 us` median and `0.577 us`
+  maximum, only `0.0169%` and `0.0181%` of the retained `3183.263 us` wall.
+  This is below the `3.183 us` continuation threshold.
 
 Direct tiled convolution is exhausted for this campaign. The corrected padded
 stride plus canonical TL/TR/BL/BR bottom-row addresses reproduced output PCC
@@ -172,6 +180,10 @@ intermediate in DRAM and reading it back.
 - Remaining path: revisit only with elastic core reassignment or a bounded
   rolling window whose producer cores can join scan after draining their work;
   do not repeat the disjoint static partition.
+- Elastic follow-up, 2026-07-25: an 83-prep/27-summary implementation passed
+  T=5,120 PCC `0.999958/0.999890/0.999997` without profiling, but hung in two
+  profiled warm replays. The second run had 100% JIT cache hits, ruling out
+  first-build latency. Reject the timing-sensitive multi-head CB protocol.
 
 ### 3. Remove duplicated scan reads per head
 
@@ -202,13 +214,10 @@ dependency-ordered NOC barrier batching and selective double buffering.
 
 ## Execution order
 
-Potential reward and implementation order are different. The recommended
-experimental sequence is:
-
-1. Selective double buffering.
-3. Bounded prep-to-scan producer/consumer fusion.
-4. Distributed-L1 affine-prefix device prototype only if its storage and
-   level-traffic model beats the measured serial scan.
+No experiment remains above the `0.1%` whole-layer continuation threshold.
+Future work requires a new architectural hypothesis or a materially different
+producer/consumer protocol; the measured rejected designs must not be repeated
+unchanged.
 
 For local scan changes, retain an experiment only when:
 
