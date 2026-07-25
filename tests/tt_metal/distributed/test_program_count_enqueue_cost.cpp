@@ -54,7 +54,7 @@ Program make_blank_program() {
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
         CoreCoord{0, 0},
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0});
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     return program;
 }
 

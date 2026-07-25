@@ -34,6 +34,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/work_split.hpp>
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
@@ -51,13 +52,13 @@ Program make_footprint_program(
     const std::shared_ptr<MeshDevice>& mesh_device, uint32_t num_cores, uint32_t args_per_core) {
     Program program = CreateProgram();
     auto grid = mesh_device->compute_with_storage_grid_size();
-    CoreRangeSet cores = num_cores_to_corerangeset(num_cores, grid, /*row_wise=*/true);
+    CoreRangeSet cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, grid, /*row_wise=*/true);
 
     auto kernel = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
         cores,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0});
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     std::vector<uint32_t> rt_args(args_per_core, 0u);
     for (const auto& core : corerange_to_cores(cores)) {
