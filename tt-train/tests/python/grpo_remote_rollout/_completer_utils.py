@@ -195,3 +195,12 @@ def to_torch_2d(t):
     while out.dim() > 2 and out.shape[0] == 1:
         out = out.squeeze(0)
     return out
+
+
+def generate_one(completer, prompt_ids, *, max_new_tokens: int):
+    """Single-prompt completion helper: return the generated token list.
+
+    Sampling params (temperature/top_k/top_p/seed) are baked into the worker at
+    construction; per-call overrides are not supported.
+    """
+    return completer.generate([prompt_ids], max_new_tokens=max_new_tokens)[0]

@@ -12,11 +12,10 @@ from __future__ import annotations
 import pytest
 import torch
 
-from _completer_utils import as_update_input, open_completer
+from _completer_utils import as_update_input, generate_one, open_completer
 
 PROMPT = "Explain a tensor in a paragraph."
 MAX_NEW_TOKENS = 8
-TEMPERATURE = 0.0  # greedy
 
 
 @pytest.fixture(scope="module")
@@ -77,11 +76,7 @@ def test_lm_head_logits_zero_when_weights_zero(completer):
 def test_lm_head_greedy_collapses_to_single_token(completer):
     """Uniform softmax + greedy decoding -> all generated tokens identical."""
     prompt_ids = completer.tokenizer.encode(PROMPT, add_special_tokens=True)
-    tokens = completer.generate(
-        [prompt_ids],
-        max_new_tokens=MAX_NEW_TOKENS,
-        temperature=TEMPERATURE,
-    )[0]
+    tokens = generate_one(completer, prompt_ids, max_new_tokens=MAX_NEW_TOKENS)
     assert (
         len(set(tokens)) <= 1
     ), f"greedy decoding under uniform logits did not collapse to a single token: tokens={tokens}"
