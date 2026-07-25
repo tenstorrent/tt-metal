@@ -364,6 +364,9 @@ ALWI void matmul_block_impl(
     // DISTINCT CB indices to the SAME globally-allocated address (e.g. conv's partials-onto-out alias),
     // which an index compare misses. Debug-only tripwire — the real guard is the factory refusing to
     // alias this combo (matmul do_not_inplace_interm0_out_CB / conv can_alias_partials_onto_out).
+    // get_local_cb_interface is UNPACK/PACK-only — undefined on the MATH thread (Watcher compile error,
+    // reported by mstaletovic). The PACK thread writes both interm and out, so run the tripwire there.
+#if defined(UCK_CHLKC_PACK)
     if constexpr (tile_order == OutputCBLayout::TileRowMajor && !packer_l1_acc) {
         const uint32_t interm_l1_base =
             get_local_cb_interface(interm_cb_id).fifo_limit - get_local_cb_interface(interm_cb_id).fifo_size;
@@ -371,6 +374,7 @@ ALWI void matmul_block_impl(
             get_local_cb_interface(out_cb_id).fifo_limit - get_local_cb_interface(out_cb_id).fifo_size;
         ASSERT(shape.num_k_blocks == 1 || interm_l1_base != out_l1_base);
     }
+#endif
 
     // Reconfig and init are independent compile-time gates (see the InitMode /
     // DataFormatReconfig enums). The pack reconfig targets interm_cb_id (where non-last
