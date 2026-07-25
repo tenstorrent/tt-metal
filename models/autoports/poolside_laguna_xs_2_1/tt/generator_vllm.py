@@ -650,21 +650,26 @@ class LagunaForCausalLM:
             from types import SimpleNamespace
 
             greedy = SimpleNamespace(temperature=[0.0], top_k=[0], top_p=[1.0], seed=[None])
+        # Warm at the SERVING page-table width (max_num_blocks_per_req), NOT a bucket-tight arange.
+        # Serving always passes a full-width page table (see comment below); the chunked prefill path
+        # (seq > PIPE_CHUNK) slices it per chunk (ttnn.slice / chunked SDPA are keyed on that width).
+        # Warming those programs at a narrow width leaves them to RECOMPILE under the resident decode
+        # trace on the first real >PIPE_CHUNK prefill — a ~200x slowdown (measured: chunked 4096 is
+        # 3.2s standalone but 11+ min at serving until the wide-page-table programs recompile). Warming
+        # at the serving width makes serving-time prefill compile-free. Single-shot buckets use the
+        # table whole (width-agnostic) so this is a no-op for them.
+        serve_w = int(self._max_blocks) if self._max_blocks else 0
         for L in self._prefill_bucket_lens():
             nb = (L + bs - 1) // bs
             if nb > total_blocks:  # cache too small for this bucket (reduced bring-up); skip
                 continue
-            pt = torch.arange(nb, dtype=torch.int32).reshape(1, nb)
+            w = serve_w if serve_w >= nb else nb
+            pt = torch.zeros((1, w), dtype=torch.int32)
+            pt[0, :nb] = torch.arange(nb, dtype=torch.int32)
             dummy = torch.zeros((1, L), dtype=torch.int64)
             self.prefill_forward(
                 dummy, page_table=pt, kv_cache=kv_cache, prompt_lens=[L], start_pos=[0], sampling_params=greedy
             )
-        # Pre-allocate the persistent page-table buffer at the serving width (max_num_blocks_per_req,
-        # learned from warmup_model_decode) so the first real prefill — whose page table spans the
-        # full per-request block count, wider than any single bucket — hits the cache instead of
-        # allocating under the resident decode trace.
-        if self._max_blocks:
-            self._prefill_pt(torch.zeros((1, int(self._max_blocks)), dtype=torch.int32))
         return None
 
     def warmup_model_decode(

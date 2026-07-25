@@ -26,6 +26,7 @@ Public API is identical to ``FunctionalDecoder`` so the same tests/harness drive
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 
 import torch
@@ -373,6 +374,18 @@ class OptimizedDecoder(LightweightModule):
         self.policy = policy
         self.meta = meta  # dict of precomputed shapes/configs (dram cores, grids, etc.)
         self.use_dram_sharded = True
+
+        # Prefill single-shot boundary. Prompts with seq > PIPE_CHUNK take the bounded-footprint
+        # chunked path (_prefill_pipelined, chunk = PIPE_CHUNK). The class default (8192) allocates
+        # full-length prefill activations under the resident decode trace, which wedges the allocator
+        # (allocator.cpp:123) at seq >= 4096 regardless of chip count. Lower it (env
+        # TT_LAGUNA_PIPE_CHUNK=2048) to route every prefill > 2048 onto the chunked path so its
+        # per-chunk activation stays at the proven-safe 2048 size. warmup_model_prefill compiles the
+        # chunk program pre-trace via its 4096/8192 buckets.
+        self.PIPE_CHUNK = int(os.environ.get("TT_LAGUNA_PIPE_CHUNK", OptimizedDecoder.PIPE_CHUNK))
+        self.PREFILL_SDPA_CHUNK = int(
+            os.environ.get("TT_LAGUNA_PREFILL_SDPA_CHUNK", OptimizedDecoder.PREFILL_SDPA_CHUNK)
+        )
 
         # Compute-kernel configs (Blackhole). LoFi/HiFi2 for projections; precise for norm/SDPA.
         arch = mesh_device.arch()
