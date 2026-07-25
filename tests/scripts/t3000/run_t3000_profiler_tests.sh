@@ -206,17 +206,42 @@ run_llama8b_decode_profile() {
     # The demo is instrumented with signposts around the decode loop only, ci-eval-32
     # is cut to 2 decode iterations, and the prefill warmup is skipped (see
     # models/tt_transformers/demo/simple_text_demo.py). -p scopes capture to the
-    # decode signpost zone. Artifacts (cpp_device_perf_report.csv, profile_log_device.csv,
-    # tracy capture) land under $PROFILER_ARTIFACTS_DIR and are uploaded by the workflow.
+    # decode signpost zone.
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
 
+    # Weights: the profiler (wh_llmbox) runner is not a ci-v2 env, so the demo's
+    # model_location_generator download path does not run. Load from the shared HF
+    # cache offline instead (mirrors the working local capture).
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+    export HF_HOME=/mnt/MLPerf/huggingface
+    export HF_HUB_OFFLINE=1
+    export TRANSFORMERS_OFFLINE=1
 
+    # `|| true`: tracy may exit non-zero on the host<->device op-merge step even when
+    # decode ran fine (a known device-4 merge assertion); don't let that abort before
+    # we harvest. The decode guard below is the real success check.
     python -m tracy -v -r -p -m pytest models/tt_transformers/demo/simple_text_demo.py \
         -k "performance-ci-eval-32" --use_prefetcher True --repeat_batches 1 \
-        | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+        2>&1 | tee $PROFILER_ARTIFACTS_DIR/test_out.log || true
+
+    # Harvest: the workflow only uploads generated/test_reports/, so copy the profiler
+    # outputs there (skip the huge raw tracy_ops_times.csv / .tracy binary).
+    HARVEST=generated/test_reports/llama8b_decode_profile
+    mkdir -p "$HARVEST"
+    find $PROFILER_ARTIFACTS_DIR/reports -name "ops_perf_results_*.csv" -exec cp {} "$HARVEST/" \; 2>/dev/null || true
+    cp $PROFILER_ARTIFACTS_DIR/.logs/cpp_device_perf_report.csv "$HARVEST/" 2>/dev/null || true
+    cp $PROFILER_ARTIFACTS_DIR/.logs/profile_log_device.csv "$HARVEST/" 2>/dev/null || true
+    cp $PROFILER_ARTIFACTS_DIR/test_out.log "$HARVEST/" 2>/dev/null || true
+    echo "Harvested profiler artifacts:"; ls -la "$HARVEST/" || true
+
+    # Guard: fail loudly if decode did not actually run (e.g. weights not found),
+    # so a masked failure does not look like a successful capture.
+    if ! grep -q "tok/s/user" $PROFILER_ARTIFACTS_DIR/test_out.log; then
+        echo "ERROR: decode did not run (no 'tok/s/user' perf line in test_out.log) — model likely failed to load." 1>&2
+        exit 1
+    fi
 }
 
 run_device_profiler_test() {
