@@ -83,10 +83,12 @@ def create_fabric_router_config(max_payload_size):
     ],
     ids=["fused"],
 )
+# addcmul (ternary) and fused_activation are mutually exclusive on the op (see validate), so model them
+# as one axis rather than two independent flags that could produce the forbidden combination.
 @pytest.mark.parametrize(
-    "use_ternary",
-    [False, True],
-    ids=["no_ternary", "ternary"],
+    "fused_op_variant",
+    [None, "addcmul", "gelu_tanh"],
+    ids=["plain", "addcmul", "gelu_tanh"],
 )
 @pytest.mark.parametrize(
     "read_local_slice_from_input",
@@ -134,7 +136,7 @@ def test_strided_all_gather_minimal_matmul_async(
     subblock_w,
     mm_core_grid,
     use_non_fused,
-    use_ternary,
+    fused_op_variant,
     shard_weights,
     ag_offset,
     read_local_slice_from_input,
@@ -144,6 +146,9 @@ def test_strided_all_gather_minimal_matmul_async(
     grid = mesh_device.compute_with_storage_grid_size()
     if grid.x < mm_core_grid.x or grid.y < ag_offset[1] + 1:
         pytest.skip(f"Requires worker grid >= {mm_core_grid.x}x{ag_offset[1] + 1}, got {grid.x}x{grid.y}")
+
+    use_ternary = fused_op_variant == "addcmul"
+    activation = fused_op_variant if fused_op_variant == "gelu_tanh" else None
 
     run_strided_all_gather_minimal_matmul_impl(
         mesh_device,
@@ -172,6 +177,7 @@ def test_strided_all_gather_minimal_matmul_async(
         mm_core_grid=mm_core_grid,
         use_non_fused=use_non_fused,
         use_ternary=use_ternary,
+        activation=activation,
         shard_weights=shard_weights,
         ag_core_grid_offset=ag_offset,
         read_local_slice_from_input=read_local_slice_from_input,
