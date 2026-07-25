@@ -37,6 +37,7 @@ LazyWeight tensor cache: ``TT_CACHE_PATH/<device_name>`` when ``TT_CACHE_PATH`` 
 """
 
 import json
+import math
 import os
 from pathlib import Path
 
@@ -56,6 +57,9 @@ from models.common.models.qwen25_72b.executor import EagerQwen25_72BExecutor, Tr
 from models.common.models.qwen25_72b.model import QWEN25_72B_ACCURACY, QWEN25_72B_PERFORMANCE, Qwen25_72B
 from models.common.sampling.sampling_params import SamplingParams
 from models.common.tests.demos.cleanup_utils import cleanup_model_case
+from models.demos.utils.llm_demo_utils import create_benchmark_data
+from models.demos.utils.model_targets import resolve_accuracy_targets
+from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import encode_prompt_hf
 
 # =============================================================================
@@ -99,10 +103,14 @@ EXPECTED_METRICS_BATCH1: dict = {
         "accuracy": {},
     },
     "on_device_topk": {
-        # gate = better-of(TTTv1 default, TTTv2 odt). Same-box TTTv1 b1 = 16.06 t/s/u / 188.45 ms
-        # (on-device top-k, force_argmax=False); TTTv2 odt = 16.1 / 189.8 → PARITY (best-of 16.1). 72B
-        # perf==acc recipe (">70B" special case), TTTv1 acc not separately run → acc gates at TTTv2 16.1.
-        # ttft 200 = generous single-user ceiling (b1 TTFT ~189 both stacks, run-to-run noisy).
+        # gate = better-of(TTTv1 default, TTTv2 odt). Same-box TTTv1 perf-ci-1 (base 32c1f0e882b) = 16.24
+        # t/s/u (window-matched to TTTv2's 200-token decode window; on-device top-k, force_argmax=False) /
+        # 181.69 ms TTFT; TTTv2 odt = 16.30 / 190.5 → decode PARITY (best-of 16.30; floor 16.1 conservative,
+        # never lowered). TTFT b1 is a +4.9% RED residual (190.5 vs 181.69) — b1 buckets to seq128 where
+        # minimal_matmul is inert (gated >128) and the device last-token slice is already used, so it is the
+        # shared single-user prefill critical path (ticket b32ci-prefill-ttft-minimal-matmul, also_covers_b1).
+        # TTTv1 ACCURACY b1 DRAM-OOMs (higher-precision recipe) → acc cells own-gate; TTTv2 acc == perf
+        # (">70B" identical recipe). ttft gate 200 = best-of ceiling (b1 TTFT ~181-190, run-to-run noisy).
         "performance": {"T3K": {"tok_s_u": 16.1, "ttft_ms": 200}},
         "accuracy": {"T3K": {"tok_s_u": 16.1, "ttft_ms": 200}},
     },
@@ -138,9 +146,16 @@ EXPECTED_METRICS_BATCH32_CI: dict = {
         "accuracy": {},
     },
     "on_device_topk": {
-        # gate = TTTv2 odt (same-box TTTv1 ci-32 also trace-region OOMs — 70.5 MB > TTTv1's region; use
-        # the side that works). TTTv2 b32-ci = 15.5 / 101 ms ON (15.5 < b32 15.9 because the ~880-token
-        # decode streams a larger KV as it grows). ttft 185 covers ON (101) + the sequential A/B (~179).
+        # gate = best-of(TTTv1 default, TTTv2 odt). Decode: TTTv2 odt 15.56 (decode latency 64.25ms) vs
+        # same-box TTTv1 ci-32 'Average speed' 15.54 = PARITY (both batch the prefill, grow KV over the
+        # ~880-token window); gate floor 15.5 is conservative (best-of 15.56, never lowered). TTFT: with
+        # minimal_matmul ENABLED (2026-07-25, model.py) TTTv2 b32-ci = 81.2 ms ON (A/B: minimal_matmul OFF
+        # 97.2 ms → a −16.5% prefill win). Same-box TTTv1 ci-32 = 68.74 ms (batched) but ONLY runs after a
+        # TEMPORARY, uncommitted trace-region bump (its committed 70 MB region trace-OOMs the 32-user
+        # batched-prefill trace); TTTv2 is +18.1% over it — a documented shared batched-prefill-fold TTFT
+        # residual (ticket b32ci-prefill-ttft-minimal-matmul; fold-cap dead lever; same family as
+        # qwen3_32b/coder-32b/deepseek). ttft gate 185 is a best-of ceiling covering batched ON (81.2) AND
+        # the DISABLE_BATCHED_PREFILL=1 sequential A/B baseline (~179); never lowered to a slow number.
         "performance": {"T3K": {"tok_s_u": 15.5, "ttft_ms": 185}},
         "accuracy": {"T3K": {"tok_s_u": 15.5, "ttft_ms": 185}},
     },
@@ -857,6 +872,12 @@ def _run_token_accuracy(model, mesh_device, expected):
         prompt_len,
         metadata_aligned=has_prompt_len_metadata,
     )
+    is_ci_env = os.environ.get("CI") == "true"
+    profiler = BenchmarkProfiler()
+    profiler.start("run")
+    # run_teacher_forcing times the prefill + per-step (teacher-forced) decode loop and, given the
+    # profiler, brackets the "inference_prefill" / "inference_decode" steps itself — so the returned
+    # result carries prefill/decode throughput alongside accuracy for CI benchmark-data emission.
     result = run_teacher_forcing(
         executor,
         prompt_tokens=prompt_tokens,
@@ -865,22 +886,77 @@ def _run_token_accuracy(model, mesh_device, expected):
         kv_cache=kv_cache,
         page_table=page_table,
         max_batch_size=max_batch_size,
+        profiler=profiler,
     )
+    profiler.end("run")
 
     top1 = result.top1_accuracy() * 100
     top5 = result.top5_accuracy() * 100
 
-    logger.info(f"Token accuracy — top1: {top1:.1f}%, top5: {top5:.1f}%")
+    logger.info(
+        f"Token accuracy — top1: {top1:.1f}%, top5: {top5:.1f}% | "
+        f"TTFT: {result.ttft_ms:.1f}ms, decode: {result.decode_tok_s_u:.1f} tok/s/u"
+    )
     log_teacher_forcing_text(prompt_tokens, result.predicted_tokens_per_user, reference_tokens[prompt_len:], tokenizer)
 
-    if "top1" in expected:
-        assert top1 >= expected["top1"] * (
-            1 - PERF_TOLERANCE
-        ), f"Top-1 accuracy {top1:.1f}% below threshold {expected['top1']}%"
-    if "top5" in expected:
-        assert top5 >= expected["top5"] * (
-            1 - PERF_TOLERANCE
-        ), f"Top-5 accuracy {top5:.1f}% below threshold {expected['top5']}%"
+    # CI-dashboard telemetry: emit a ``demo_accuracy`` partial mirroring TTTv1 simple_text_demo.py
+    # — the FULL perf measurement set (prefill_t/s, prefill_time_to_token, decode_t/s, decode_t/s/u)
+    # PLUS top1/top5, all from this timed teacher-forcing run. create_benchmark_data /
+    # save_partial_run_json are no-ops unless CI == "true" (they guard on it internally); the
+    # is_ci_env guard here keeps the import/attr access off the local path too. Saved BEFORE the
+    # accuracy asserts so telemetry is captured even when the gate later fails.
+    if is_ci_env:
+        num_target = len(reference_tokens) - prompt_len
+        measurements = {
+            "prefill_t/s": result.prefill_tok_s,
+            "prefill_time_to_token": result.prefill_time_to_token_s,  # seconds (TTTv1 units)
+            "decode_t/s": result.decode_tok_s,
+            "decode_t/s/u": result.decode_tok_s_u,
+        }
+        benchmark_data = create_benchmark_data(
+            profiler, measurements, {"inference_prefill": 0, "inference_decode": 1}, targets={}
+        )
+        benchmark_data.add_measurement(profiler, 0, "inference_decode", "top1_token_accuracy", top1, target=None)
+        benchmark_data.add_measurement(profiler, 0, "inference_decode", "top5_token_accuracy", top5, target=None)
+        benchmark_data.save_partial_run_json(
+            profiler,
+            run_type="demo_accuracy",
+            ml_model_name=hf_model,
+            ml_model_type="llm",
+            device_name=get_device_name(mesh_device),
+            num_layers=ma.n_layers,
+            batch_size=1,
+            input_sequence_length=prompt_len,
+            output_sequence_length=num_target,
+        )
+
+    # Accuracy gate — threshold SOURCE is flag-controlled (currently ``is_ci_env``):
+    #   use_centralized_targets = True  → mirror TTTv1: centralized targets via resolve_accuracy_targets
+    #       minus an ABSOLUTE 0.5 pp (get_accuracy_thresholds, simple_text_demo.py). A missing entry is
+    #       a hard error (never silently un-gate in CI).
+    #   use_centralized_targets = False → the demo's local EXPECTED_METRICS values DIRECTLY (no ratio
+    #       tolerance — TTTv1 applies none to accuracy).
+    # Measured accuracy is rounded up with math.ceil before the compare, matching TTTv1 exactly
+    # (simple_text_demo.py, ``math.ceil(acc[...] * 100)``).
+    use_centralized_targets = is_ci_env
+    device_name = get_device_name(mesh_device)
+    if use_centralized_targets:
+        central = resolve_accuracy_targets(hf_model, device_name, batch_size=1, seq_len=512)
+        if not central or "top1" not in central or "top5" not in central:
+            raise ValueError(
+                f"No centralized accuracy target for {hf_model} on {device_name} "
+                "(batch_size=1, seq_len=512); add an entry to models/model_targets.yaml."
+            )
+        min_top1 = float(central["top1"]) - 0.5
+        min_top5 = float(central["top5"]) - 0.5
+    else:
+        min_top1 = float(expected.get("top1", 0))
+        min_top5 = float(expected.get("top5", 0))
+
+    meas_top1 = math.ceil(top1)
+    meas_top5 = math.ceil(top5)
+    assert meas_top1 >= min_top1, f"Top-1 accuracy {top1:.1f}% (ceil {meas_top1}) below threshold {min_top1:.1f}%"
+    assert meas_top5 >= min_top5, f"Top-5 accuracy {top5:.1f}% (ceil {meas_top5}) below threshold {min_top5:.1f}%"
 
 
 def _run_perf_benchmark(
@@ -965,6 +1041,11 @@ def _run_perf_benchmark(
         # get_padded_prefill_len. These sample prompts are ~90-125 tokens -> 128 bucket.
         input_tokens, prompt_lens = tokenize_prompts(prompts, tokenizer, max_prefill_len=max_prefill_len)
 
+        # BenchmarkProfiler brackets the timed prefill/decode regions inside run_perf_benchmark
+        # (default-None ⇒ byte-inert for every other caller) so we can emit CI perf telemetry.
+        is_ci_env = os.environ.get("CI") == "true"
+        profiler = BenchmarkProfiler()
+        profiler.start("run")
         result = run_perf_benchmark(
             traced_executor,
             tokens=input_tokens,
@@ -974,7 +1055,9 @@ def _run_perf_benchmark(
             max_batch_size=max_batch_size,
             prompt_lens=prompt_lens,
             sampling_params=sampling_params,
+            profiler=profiler,
         )
+        profiler.end("run")
 
         logger.info(
             f"Performance [{case_name}] — TTFT: {result.ttft_ms:.1f}ms, "
@@ -983,6 +1066,34 @@ def _run_perf_benchmark(
             f"decode latency: {result.decode_latency_mean_ms:.2f}ms"
         )
         log_generated_text(prompts, result.generated_token_ids, tokenizer)
+
+        # CI-dashboard telemetry: emit a ``demo_perf`` partial mirroring TTTv1 simple_text_demo.py.
+        # Saved BEFORE the special-token guard and perf gate so telemetry is captured even when a
+        # downstream assert fails. No-op unless CI == "true" (BenchmarkData guards on it).
+        if is_ci_env:
+            prefill_seq_len = int(prompt_lens.max())
+            prefill_time_s = result.prefill_time_s
+            measurements = {
+                "prefill_t/s": (result.batch_size * prefill_seq_len) / prefill_time_s if prefill_time_s > 0 else 0.0,
+                "prefill_time_to_token": prefill_time_s / result.batch_size,  # seconds (TTTv1 units)
+                "decode_t/s": result.tok_s,
+                "decode_t/s/u": result.tok_s_u,
+            }
+            benchmark_data = create_benchmark_data(
+                profiler, measurements, {"inference_prefill": 0, "inference_decode": 1}, targets={}
+            )
+            benchmark_data.save_partial_run_json(
+                profiler,
+                run_type="demo_perf",
+                ml_model_name=hf_model,
+                ml_model_type="llm",
+                device_name=get_device_name(mesh_device),
+                num_layers=ma.n_layers,
+                batch_size=result.batch_size,
+                input_sequence_length=prefill_seq_len,
+                output_sequence_length=effective_decode,
+            )
+
         assert_no_special_tokens(result.generated_token_ids, tokenizer, case_name=case_name)
 
         if expected:

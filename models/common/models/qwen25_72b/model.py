@@ -284,6 +284,16 @@ class _Qwen25_72BWHTuning:
 
     mlp_prefill_len_cutoff: int | None = None
     mlp_decode_spill_w1_to_dram: bool = False
+    # Use ttnn.experimental.minimal_matmul for the QKV + W2 prefill matmuls above seq_len > 128 (TTTv1
+    # parity, PLAN_01). A/B escape hatch: set DISABLE_MINIMAL_MATMUL=1 to force ttnn.linear. On a 72B the
+    # batch-32-ci prefill is matmul-compute-bound (~80% of FLOPs = the 3 MLP matmuls), so minimal_matmul
+    # is a real prefill-TTFT win — it narrows the batch-32-ci TTFT gap vs TTTv1 (which uses minimal_matmul
+    # for the same matmuls). The shared plumbing (attention_1d.use_minimal_qkv_matmul / mlp_1d
+    # use_minimal_w2_matmul, both gated seq_len>128) is already in the base; this flag just engages it.
+    # Qwen2.5-72B is a Qwen2.5 arch: the QKV bias is added AFTER the matmul, so it is unchanged by the
+    # minimal path (same as the mistral_7b / Coder-32B / deepseek Qwen2 ports). Independent of the
+    # FF-hidden DRAM-shard pad (a decode fix); minimal_matmul is prefill-only, so decode is unchanged.
+    prefill_minimal_matmul: bool = True
 
 
 def _resolve_qwen_72b_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Qwen25_72BWHTuning:
@@ -298,10 +308,12 @@ def _resolve_qwen_72b_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Qwen25
         mlp_prefill_len_cutoff=256,
         mlp_decode_spill_w1_to_dram=False,
     )
+    t.prefill_minimal_matmul = not os.environ.get("DISABLE_MINIMAL_MATMUL")
     logger.info(
         f"L1 tuning for Qwen2.5-72B on {num_dev} device(s): "
         f"prefill_len_cutoff={t.mlp_prefill_len_cutoff}, "
-        f"decode_spill_w1_to_dram={t.mlp_decode_spill_w1_to_dram}"
+        f"decode_spill_w1_to_dram={t.mlp_decode_spill_w1_to_dram}, "
+        f"prefill_minimal_matmul={t.prefill_minimal_matmul}"
     )
     return t
 
@@ -383,6 +395,7 @@ def _build_decoder_layer(
             sdpa_decode_compute_kernel_cfg=precision.attn_sdpa_kernel_cfg,
             li_o_prefill_compute_kernel_cfg=precision.attn_li_o_kernel_cfg,
             li_o_decode_compute_kernel_cfg=precision.attn_li_o_kernel_cfg,
+            prefill_qkv_minimal_matmul=wh.prefill_minimal_matmul,
         )
     )
 
@@ -420,6 +433,7 @@ def _build_decoder_layer(
             ff1_3_compute_kernel_cfg=precision.mlp_ff1_3_compute_kernel_cfg,
             decode_ff1_3_compute_kernel_cfg=precision.mlp_ff1_3_compute_kernel_cfg,
             decode_spill_w1_to_dram_before_w3=wh.mlp_decode_spill_w1_to_dram,
+            prefill_w2_minimal_matmul=wh.prefill_minimal_matmul,
         )
     )
 
