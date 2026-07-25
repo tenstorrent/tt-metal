@@ -80,3 +80,25 @@
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+
+# --- Fast Dispatch Command Construction Benchmark ---
+# Host-side cost of the Metal 2.0 fast-dispatch command path: ProgramSpec build (#5),
+# EnqueueMeshWorkload / EnqueueWriteMeshBuffer / trace replay command construction (#6),
+# and SetProgramRunArgs / UpdateProgramRunArgs mutable updates (#7). Google Benchmark
+# manual time; compared against a golden. Times are ignored (structural gate only) until
+# per-SKU goldens are characterized and armed.
+- name: runtime_perf_fd_cmd_construction
+  cmd: |
+    mkdir -p generated/test_reports
+    ./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_fd_command_construction \
+      --benchmark_out_format=json --benchmark_out=fd_cmd_bench.json --benchmark_repetitions=3
+    ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_fd_command_construction_ci.py \
+      fd_cmd_bench.json --ignore-times \
+      --golden tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/fd_command_construction_golden.json
+  skus:
+    wh_n300_civ2:
+      timeout: 15
+    bh_p150_perf:
+      timeout: 15
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
