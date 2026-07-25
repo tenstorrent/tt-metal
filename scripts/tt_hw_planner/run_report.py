@@ -417,7 +417,14 @@ def _emit_run_report_impl(
             f"`overlay-clear-skips --category TOOL_BUG {model_id}`"
         )
     _ungraduated = len(cat_report.kernel_missing) + len(cat_report.pending)
-    if _ungraduated:
+    _unlimited = int(os.environ.get("BRINGUP_MCP_MAX_ATTEMPTS", "2") or "2") <= 0
+    if _ungraduated and _unlimited:
+        lines.append(
+            f"- **{_ungraduated} component(s) not graduated** — the single run hit its ceiling or a real "
+            f"blocker (e.g. a missing TTNN kernel). Re-run to continue (already-graduated components are kept):"
+        )
+        lines.append(f"  - `python -m scripts.tt_hw_planner auto-up {model_id} --box <BOX> --mesh <MESH>`")
+    elif _ungraduated:
         lines.append(
             f"- **{_ungraduated} component(s) not graduated** — resume where it left off (already-graduated "
             f"components are kept):"

@@ -8204,7 +8204,7 @@ def cmd_bringup(args) -> int:
         "auto_agent": "claude",
         "auto_model_tiered": True,
         "auto_max_iters": 24,
-        "auto_max_attempts_per_component": 5,
+        "auto_max_attempts_per_component": 0,
         "isolation": "worktree",
         # Other knobs that `up` reads — set to neutral defaults so
         # argparse-injected attributes don't surprise cmd_up.
@@ -9741,7 +9741,7 @@ def _cmd_up_core_impl(args) -> int:
                 demo_dir=_dd,
                 agent_bin=(getattr(args, "auto_agent_bin", None) or "claude"),
                 mesh=getattr(args, "mesh", None),
-                max_attempts=getattr(args, "auto_max_attempts_per_component", 2),
+                max_attempts=getattr(args, "auto_max_attempts_per_component", 0),
                 reverify=bool(getattr(args, "reverify", False)),
             )
             try:
@@ -10046,9 +10046,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     pup.add_argument(
         "--auto-max-attempts-per-component",
         type=int,
-        default=2,
+        default=0,
         help=(
-            "Per-component attempt cap (default: 2). The loop targets ONE "
+            "Per-component attempt cap (default: 0 = unlimited for NEW modules; agent-driven "
+            "decompose replaces the cap. Set N>0 to re-cap NEW; ADAPT/REUSE always finite). "
+            "When capped, the loop targets ONE "
             "component per iter and re-attempts it up to N times in a row. "
             "Once a component fails N times, the loop restores it to a "
             "stable CPU-fallback stub and moves on to the next ungraduated "

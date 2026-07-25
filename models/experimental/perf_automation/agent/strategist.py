@@ -102,3 +102,33 @@ def make_axis_runner(
         return "\n".join(chunks)
 
     return runner
+
+
+def make_cli_axis_runner() -> Callable[[str], str]:
+    """CC-native strategist runner: drives the `claude` CLI (no SDK, no model tier, no tools) so cc
+    discovery picks the axis via claude-code. Single-shot judgment — same contract as make_axis_runner."""
+    import os
+    import subprocess
+
+    from .agent_bin import resolve_claude_bin
+
+    _sys = "You pick the optimization axis. Final message is one JSON object, no prose."
+
+    def runner(prompt: str) -> str:
+        env = dict(os.environ)
+        for _k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"):
+            env.pop(_k, None)
+        r = subprocess.run(
+            [resolve_claude_bin(), "-p", prompt, "--output-format", "text", "--system-prompt", _sys],
+            capture_output=True,
+            text=True,
+            timeout=600,
+            env=env,
+        )
+        if r.returncode != 0:
+            raise RuntimeError(f"cc strategist (claude CLI) exit {r.returncode}: {(r.stderr or '')[-200:]}")
+        return r.stdout or ""
+
+    runner.last_usage = None
+    runner.model = "claude-cli"
+    return runner

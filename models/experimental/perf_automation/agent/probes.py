@@ -1065,6 +1065,53 @@ def lead_review_gate(
     return {"decision": decision, "reasoning": reasoning, "model": model, "usage": usage.get("summary")}
 
 
+def cli_lead_review_gate(
+    pathmap: dict[str, Any],
+    max_turns: int = 4,
+) -> dict[str, Any]:
+    """CC-native lead review: same go/no-go decision as lead_review_gate but via the `claude` CLI
+    (no SDK, no model tier, no tools). Raises DiscoveryRejected on stop; returns the verdict on continue."""
+    findings = json.dumps({k: pathmap[k] for k in ("perf_test", "pcc", "components", "summary", "warnings")}, indent=1)
+    prompt = REVIEW_PROMPT.format(findings=findings)
+    if os.environ.get("TT_PERF_MODULE_LEVEL", "") not in ("", "0", "false", "False"):
+        prompt += (
+            "\n\nMODULE-LEVEL RUN (--module-level): this is a SINGLE-COMPONENT optimization. The perf test "
+            "times ONE module in isolation and the correctness gate is DELIBERATELY that module's OWN "
+            "per-component PCC test (a unit-level PCC >= its target), NOT a full-model end-to-end check. A "
+            "whole-pipeline / end-to-end gate is NOT expected or required here — the per-component PCC test "
+            "IS the correct and sufficient correctness signal for the single module being optimized. Do NOT "
+            "stop for 'the gate is only a per-component/unit test' or 'no correctness signal for the other "
+            "stages'; judge ONLY whether the per-component perf test and its per-component PCC gate are sound "
+            "for that one module."
+        )
+    env = dict(os.environ)
+    for _k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"):
+        env.pop(_k, None)
+    from .agent_bin import resolve_claude_bin
+
+    r = subprocess.run(
+        [resolve_claude_bin(), "-p", prompt, "--output-format", "text",
+         "--system-prompt", "You make go/no-go calls for an automated perf-optimization harness."],
+        capture_output=True,
+        text=True,
+        timeout=600,
+        env=env,
+    )
+    if r.returncode != 0:
+        raise DiscoveryRejected(f"cc lead review (claude CLI) exit {r.returncode}: {(r.stderr or '')[-200:]}")
+    try:
+        verdict = json.loads(_extract_json_object(r.stdout or ""))
+    except json.JSONDecodeError as exc:
+        raise DiscoveryRejected(f"lead review returned unparseable verdict: {exc}") from exc
+    decision = verdict.get("decision")
+    reasoning = str(verdict.get("reasoning", ""))
+    if decision not in ("continue", "stop"):
+        raise DiscoveryRejected(f"lead review returned invalid decision: {decision!r}")
+    if decision == "stop":
+        raise DiscoveryRejected(f"cc lead agent stopped the run: {reasoning}")
+    return {"decision": decision, "reasoning": reasoning, "model": "claude-cli", "usage": None}
+
+
 # ---------------------------------------------------------------------------
 # Human-readable input -> test case matching (--input 128 / --input 128x128)
 # ---------------------------------------------------------------------------

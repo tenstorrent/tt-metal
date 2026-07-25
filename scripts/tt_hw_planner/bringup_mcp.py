@@ -70,7 +70,9 @@ _DEMO_DIR = Path(os.environ.get("BRINGUP_MCP_DEMO_DIR", "") or ".")
 _MODEL_ID = os.environ.get("BRINGUP_MCP_MODEL_ID", "")
 _STATE_PATH = Path(os.environ.get("BRINGUP_MCP_STATE", "") or (_DEMO_DIR / ".bringup_cc_state.json"))
 _MAX_ATTEMPTS = int(os.environ.get("BRINGUP_MCP_MAX_ATTEMPTS", "2"))
-_HARD_CAP = max(3, _MAX_ATTEMPTS * 2)
+_NEW_UNLIMITED = _MAX_ATTEMPTS <= 0
+_ADAPT_CAP = _MAX_ATTEMPTS if _MAX_ATTEMPTS > 0 else 2
+_HARD_CAP = max(3, _ADAPT_CAP * 2)
 _PCC = float(os.environ.get("BRINGUP_MCP_PCC", "0.99"))
 _TIMEOUT = int(os.environ.get("BRINGUP_MCP_TIMEOUT", "1800"))
 _SHARD_TP = int(os.environ.get("TT_HW_PLANNER_SHARD_TP", "2"))
@@ -653,13 +655,34 @@ def _unmark_fallback(component: str) -> None:
     _save_state(st)
 
 
+def _status_of(component: str) -> str:
+    """The component's plan tier (NEW/ADAPT/REUSE) from bringup_status.json; '' if unknown."""
+    try:
+        data = json.loads((_DEMO_DIR / "bringup_status.json").read_text())
+    except Exception:
+        return ""
+    for c in data.get("components", []) or []:
+        if str(c.get("name", "")).strip() == component:
+            return str(c.get("status") or "")
+    return ""
+
+
+def _new_is_unlimited(component: str) -> bool:
+    """Unlimited attempts for NEW when the cap is 0/unset (`--auto-max-attempts-per-component 0`);
+    agent-driven decompose replaces the cap. ADAPT/REUSE always keep the finite cap; a positive cap
+    re-caps NEW too."""
+    return _NEW_UNLIMITED and _status_of(component) == "NEW"
+
+
 def _component_is_at_cap(component: str) -> bool:
     """True iff the component's attempt cap is exhausted. Gate for fallback/decompose."""
+    if _new_is_unlimited(component):
+        return False
     st = _load_state()
     last_class_map = st.get("last_failure_class", {}) or {}
     eff = bringup_ladder.effective_attempt_cap(
         component,
-        max_attempts_per_component=_MAX_ATTEMPTS,
+        max_attempts_per_component=_ADAPT_CAP,
         hard_total_attempt_cap=_HARD_CAP,
         complexity_bonus=0,
         last_failure_class=last_class_map,
@@ -791,7 +814,9 @@ def decompose_component(component: str) -> dict:
     regardless). Only the gate should direct you here (rung 'decompose'). rc: children_added>0 =
     decomposed; 0 = primitive/leaf (parent still retired). Refuses (returns {gated: True}) unless
     the component is at cap — decompose is a one-way door (parent auto-retires to CPU)."""
-    if not _component_is_at_cap(component):
+    _attempts_now = (_load_state().get("attempts", {}) or {}).get(component, 0)
+    _agent_may_decompose = _new_is_unlimited(component) and _attempts_now >= 1
+    if not _agent_may_decompose and not _component_is_at_cap(component):
         st = _load_state()
         attempts = (st.get("attempts", {}) or {}).get(component, 0)
         return {
@@ -894,13 +919,13 @@ def termination_check() -> dict:
             continue
         eff = bringup_ladder.effective_attempt_cap(
             c,
-            max_attempts_per_component=_MAX_ATTEMPTS,
+            max_attempts_per_component=_ADAPT_CAP,
             hard_total_attempt_cap=_HARD_CAP,
             complexity_bonus=0,
             last_failure_class=last_class_map,
             last_pcc=st.get("last_pcc", {}) or {},
         )
-        at_cap = bringup_ladder.is_at_cap(
+        at_cap = False if _new_is_unlimited(c) else bringup_ladder.is_at_cap(
             c,
             attempts_per_component=st.get("attempts", {}) or {},
             consecutive_same_class_attempts=st.get("consecutive_same_class", {}) or {},
@@ -980,12 +1005,19 @@ def termination_check() -> dict:
             }
         else:
             rung = "emit" if attempts == 0 else "repair"
+            _decompose_hint = ""
+            if _new_is_unlimited(c) and attempts >= 2:
+                _decompose_hint = (
+                    f" [single-run] attempts are unlimited for NEW; if '{c}' is a large composite that keeps "
+                    f"failing structurally (not a small fixable bug), you MAY call decompose_component('{c}') on "
+                    f"your judgment to split it into children — decompose is no longer gated on the attempt cap."
+                )
             nxt = {
                 "unit": c,
                 "rung": rung,
                 "reason": f"component '{c}' not graduated (attempts={attempts}, last_class={last_class or 'none'}). "
                 f"run_component to see the failure; if it cannot even run, fix tests/pcc/conftest.py; else "
-                f"edit _stubs/{c}.py to native ttnn; re-run; record_result. PCC>={_PCC} graduates it.",
+                f"edit _stubs/{c}.py to native ttnn; re-run; record_result. PCC>={_PCC} graduates it." + _decompose_hint,
             }
     elif needs_cap:
         c = needs_cap[0]

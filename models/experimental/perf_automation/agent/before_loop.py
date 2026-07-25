@@ -278,24 +278,27 @@ def before_loop(
     # Detect that here (a trivial call in a clean subprocess) and, by default, auto-upgrade +
     # re-test BEFORE the first in-process SDK import (discover), so the run picks up the fix.
     stages.start("agent_sdk_health", "Checking the agent toolchain")
-    from .sdk_health import ensure_compatible
-
-    sdk_status = ensure_compatible()
-    if sdk_status.get("ok"):
-        stages.done(
-            f"healthy (claude-agent-sdk {sdk_status.get('version')}"
-            + (f", auto-synced from {sdk_status['version_before']}" if sdk_status.get("healed") else "")
-            + ")"
-        )
+    if config.get("cc_discovery"):
+        stages.done("cc discovery: claude CLI (SDK health check skipped)")
     else:
-        # Not healthy and not auto-fixable here — fail fast with the remediation instead of
-        # running the whole sweep only to error/hang on the first agent call.
-        raise SystemExit(
-            "BEFORE-LOOP FAILED: agent SDK unhealthy "
-            f"(claude-agent-sdk {sdk_status.get('version')}): {sdk_status.get('reason')}\n"
-            f"  detail: {sdk_status.get('detail', '')}\n"
-            f"  fix: {installer_hint()} -U claude-agent-sdk  (or set AGENT_SDK_AUTOSYNC=1 to auto-fix)"
-        )
+        from .sdk_health import ensure_compatible
+
+        sdk_status = ensure_compatible()
+        if sdk_status.get("ok"):
+            stages.done(
+                f"healthy (claude-agent-sdk {sdk_status.get('version')}"
+                + (f", auto-synced from {sdk_status['version_before']}" if sdk_status.get("healed") else "")
+                + ")"
+            )
+        else:
+            # Not healthy and not auto-fixable here — fail fast with the remediation instead of
+            # running the whole sweep only to error/hang on the first agent call.
+            raise SystemExit(
+                "BEFORE-LOOP FAILED: agent SDK unhealthy "
+                f"(claude-agent-sdk {sdk_status.get('version')}): {sdk_status.get('reason')}\n"
+                f"  detail: {sdk_status.get('detail', '')}\n"
+                f"  fix: {installer_hint()} -U claude-agent-sdk  (or set AGENT_SDK_AUTOSYNC=1 to auto-fix)"
+            )
 
     stages.start("ensure_tt_lang", "Verifying the kernel toolchain (tt-lang)")
     try:
@@ -594,9 +597,10 @@ def before_loop(
     metric_name = config.get("metric") or "device_ms"
     if metric_name == "auto":
         try:
-            from .strategist import choose_axis, make_axis_runner
+            from .strategist import choose_axis, make_axis_runner, make_cli_axis_runner
 
-            metric_name = choose_axis(profile, make_axis_runner())
+            _axis_runner = make_cli_axis_runner() if config.get("cc_discovery") else make_axis_runner()
+            metric_name = choose_axis(profile, _axis_runner)
             print(f"      strategist chose axis -> metric={metric_name}", flush=True)
         except Exception as exc:
             metric_name = "device_ms"
@@ -743,6 +747,7 @@ def main(argv: list[str] | None = None) -> int:
             "devices",
             "input",
             "box",
+            "cc_discovery",
         )
     }
     if args.mesh:
@@ -773,6 +778,10 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.mock_model_files:
             review = mock_review  # gatherer mocked -> nothing real to review
+        elif getattr(args, "cc_discovery", False):
+            from .probes import cli_lead_review_gate
+
+            review = cli_lead_review_gate
         else:
             from .probes import lead_review_gate
 
