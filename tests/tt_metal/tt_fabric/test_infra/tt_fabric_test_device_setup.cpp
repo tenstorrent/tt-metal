@@ -13,10 +13,7 @@ namespace tt::tt_fabric::fabric_tests {
 // ====================================
 
 void FabricConnectionManager::register_client(
-    const tt::tt_metal::CoreCoord& core,
-    TestWorkerType worker_type,
-    const ConnectionKey& key,
-    const FabricNodeId& next_hop_dst) {
+    const tt::tt_metal::CoreCoord& core, TestWorkerType worker_type, const ConnectionKey& key, const FabricNodeId& next_hop_dst) {
     auto [it, inserted] = connections_.try_emplace(key);
     auto& conn = it->second;
 
@@ -168,8 +165,7 @@ std::vector<ConnectionKey> FabricConnectionManager::get_connection_keys_for_core
     return {};
 }
 
-size_t FabricConnectionManager::get_connection_count_for_core(
-    const tt::tt_metal::CoreCoord& core, TestWorkerType worker_type) const {
+size_t FabricConnectionManager::get_connection_count_for_core(const tt::tt_metal::CoreCoord& core, TestWorkerType worker_type) const {
     auto keys = get_connection_keys_for_core(core, worker_type);
     return keys.size();
 }
@@ -420,25 +416,12 @@ void TestSender::add_config(TestTrafficSenderConfig config) {
                                (config.parameters.is_2D_routing_enabled) &&
                                (config.parameters.chip_send_type == ChipSendType::CHIP_UNICAST);
 
-    // Skip-link (BH galaxy sub-torus) 2D unicast: on a mesh with intra-mesh Z skip links, the routing
-    // table can take a shorter wrap/skip route whose first-hop direction disagrees with the
-    // displacement-based hop map. The hop map is an unordered direction->count derived purely from
-    // coordinate displacement, so it cannot see skip/wrap links and can pick the opposite cardinal
-    // (e.g. displacement South for D4->D24 while the table routes D4 -N-> D0 -Z(D0<->D28)-> D28 -N-> D24)
-    // or a cardinal where the route buffer actually starts with FORWARD_Z. Injecting on that channel
-    // while the device route buffer expects the control-plane direction strands every packet. As with
-    // the is_torus_2d_unicast bypass, use the node-ID (control-plane) direction, which matches the route
-    // buffer. This is a topology-level skip: it applies to the whole run on skip-link meshes.
-    const bool is_skip_link_2d_unicast = config.parameters.is_2D_routing_enabled &&
-                                         (config.parameters.chip_send_type == ChipSendType::CHIP_UNICAST) &&
-                                         this->test_device_ptr_->has_intra_mesh_skip_links();
-
-    if (config.hops.has_value() && !is_torus_2d_unicast && !is_skip_link_2d_unicast) {
+    if (config.hops.has_value() && !is_torus_2d_unicast) {
         // Use hops to determine direction (for static routing with explicit hops)
         // However, NeighborExchange topology does not support multi-hop.
         outgoing_direction = this->test_device_ptr_->get_forwarding_direction(config.hops.value());
     } else {
-        // Derive direction from src->dst node IDs (control-plane route, matches the device route buffer)
+        // Derive direction from src->dst node IDs
         outgoing_direction =
             this->test_device_ptr_->get_forwarding_direction(this->test_device_ptr_->get_node_id(), dst_node_id);
     }
@@ -548,8 +531,7 @@ bool TestReceiver::validate_results(std::vector<uint32_t>& data) const {
 // TestSync Implementation
 // ====================================
 
-TestSync::TestSync(
-    tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
+TestSync::TestSync(tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
     TestWorker(logical_core, test_device_ptr, kernel_src) {
     // TODO: init mem map?
 }
@@ -583,8 +565,7 @@ bool TestSync::validate_results(std::vector<uint32_t>& /*data*/) const {
 // TestMux Implementation
 // ====================================
 
-TestMux::TestMux(
-    tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
+TestMux::TestMux(tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
     TestWorker(logical_core, test_device_ptr, kernel_src) {}
 
 void TestMux::set_config(FabricMuxConfig* mux_config, ConnectionKey connection_key, FabricNodeId next_hop_dst) {
@@ -733,8 +714,7 @@ void TestDevice::add_sender_sync_config(tt::tt_metal::CoreCoord logical_core, Te
     this->sync_workers_.at(logical_core).add_config(std::move(sync_config));
 }
 
-void TestDevice::add_receiver_traffic_config(
-    tt::tt_metal::CoreCoord logical_core, const TestTrafficReceiverConfig& config) {
+void TestDevice::add_receiver_traffic_config(tt::tt_metal::CoreCoord logical_core, const TestTrafficReceiverConfig& config) {
     if (!this->receivers_.contains(logical_core)) {
         this->add_worker(TestWorkerType::RECEIVER, logical_core);
     }
@@ -743,10 +723,7 @@ void TestDevice::add_receiver_traffic_config(
 }
 
 void TestDevice::add_mux_worker_config(
-    tt::tt_metal::CoreCoord logical_core,
-    FabricMuxConfig* mux_config,
-    ConnectionKey connection_key,
-    FabricNodeId next_hop_dst) {
+    tt::tt_metal::CoreCoord logical_core, FabricMuxConfig* mux_config, ConnectionKey connection_key, FabricNodeId next_hop_dst) {
     if (!this->muxes_.contains(logical_core)) {
         this->add_worker(TestWorkerType::MUX, logical_core);
     }
@@ -1191,11 +1168,6 @@ RoutingDirection TestDevice::get_forwarding_direction(
 RoutingDirection TestDevice::get_forwarding_direction(
     const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id) const {
     return this->route_manager_->get_forwarding_direction(src_node_id, dst_node_id);
-}
-
-bool TestDevice::has_intra_mesh_skip_links() const {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    return control_plane.get_fabric_context().has_any_intra_mesh_z_router(control_plane);
 }
 
 std::vector<uint32_t> TestDevice::get_forwarding_link_indices_in_direction(const RoutingDirection& direction) const {
