@@ -57,6 +57,7 @@ def run_strided_all_gather_minimal_matmul_impl(
     use_ternary=False,
     ternary_scalar=0.5,
     activation=None,
+    chunks=1,
     math_fidelity=ttnn.MathFidelity.HiFi2,
     fp32_acc=True,
     mm_core_grid=None,
@@ -124,6 +125,9 @@ def run_strided_all_gather_minimal_matmul_impl(
         assert (
             not use_non_fused
         ), "ternary (addcmul) is only wired into the fused strided_all_gather_minimal_matmul path"
+    if chunks > 1:
+        assert not use_non_fused, "chunks > 1 is only wired into the fused strided_all_gather_minimal_matmul path"
+        assert N % chunks == 0, f"N ({N}) must be divisible by chunks ({chunks})"
     for i in range(num_iters):
         torch_dtype = torch.float32
         ag_output_tensor = torch.randn(ag_output_shape, dtype=torch_dtype)
@@ -286,8 +290,10 @@ def run_strided_all_gather_minimal_matmul_impl(
                 compute_kernel_config=compute_config,
                 config=matmul_config,
             )
+            # Uniform list-of-chunks interface (single output for the non-fused path).
+            tt_matmul_out_tensors = [tt_matmul_out_tensor]
         else:
-            tt_all_gather_out_tensor, tt_matmul_out_tensor = ttnn.experimental.strided_all_gather_minimal_matmul_async(
+            fused_outputs = ttnn.experimental.strided_all_gather_minimal_matmul_async(
                 input_tensor_mesh_list[i],
                 weight_tensor_mesh_list[i],
                 persistent_output_buffer=persistent_output_buffers[i],
@@ -309,8 +315,12 @@ def run_strided_all_gather_minimal_matmul_impl(
                 fused_ternary_input_a=ternary_a_tensor_mesh_list[i] if use_ternary else None,
                 fused_ternary_input_b=ternary_b_tensor_mesh_list[i] if use_ternary else None,
                 fused_ternary_scalar=ternary_scalar if use_ternary else None,
+                chunks=chunks,
             )
-        return tt_all_gather_out_tensor, tt_matmul_out_tensor
+            # Op returns [all_gather_output, matmul_chunk_0, ..., matmul_chunk_{chunks-1}].
+            tt_all_gather_out_tensor = fused_outputs[0]
+            tt_matmul_out_tensors = list(fused_outputs[1:])
+        return tt_all_gather_out_tensor, tt_matmul_out_tensors
 
     if enable_trace:
         # Compile the op
@@ -373,26 +383,32 @@ def run_strided_all_gather_minimal_matmul_impl(
                 logger.info(f"{output}, iteration {i}")
                 assert eq, f"iter {i} AG FAILED ag: {output}"
 
-            tt_mm_out_tensor = tt_matmul_out_tensor_list[i]
+            # Matmul output is a list of chunk tensors (one for chunks=1). Each chunk is the matching
+            # N-slice of the full golden output.
+            tt_mm_out_tensors = tt_matmul_out_tensor_list[i]
             torch_mm_out_tensor = torch_matmul_output_list[i if not enable_trace else 0]
+            torch_mm_chunks = torch.chunk(torch_mm_out_tensor, len(tt_mm_out_tensors), dim=-1)
 
-            tt_mm_out = ttnn.from_device(tt_mm_out_tensor)
-            tt_mm_out = ttnn.to_torch(
-                tt_mm_out,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims if shard_weights else concat_dims
-                ),
-            )
-            if not shard_weights:
-                for d in range(mesh_device.shape[1]):
-                    tt_mm_out_slice = tt_mm_out[d : d + 1, :, :, :]
-                    eq, output = comp_pcc(tt_mm_out_slice, torch_mm_out_tensor)
-                logger.info(f"{output}, iteration {i}")
-                assert eq, f"iter {i} MM FAILED ag: {output}"
-            else:
-                eq, output = comp_pcc(tt_mm_out, torch_mm_out_tensor)
-                logger.info(f"{output}, iteration {i}")
-                assert eq, f"iter {i} MM FAILED ag: {output}"
+            for c, tt_mm_chunk_tensor in enumerate(tt_mm_out_tensors):
+                tt_mm_out = ttnn.from_device(tt_mm_chunk_tensor)
+                tt_mm_out = ttnn.to_torch(
+                    tt_mm_out,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        mesh_device,
+                        mesh_shape=tuple(mesh_device.shape),
+                        dims=shard_dims if shard_weights else concat_dims,
+                    ),
+                )
+                if not shard_weights:
+                    for d in range(mesh_device.shape[1]):
+                        tt_mm_out_slice = tt_mm_out[d : d + 1, :, :, :]
+                        eq, output = comp_pcc(tt_mm_out_slice, torch_mm_chunks[c])
+                    logger.info(f"{output}, iteration {i} chunk {c}")
+                    assert eq, f"iter {i} chunk {c} MM FAILED ag: {output}"
+                else:
+                    eq, output = comp_pcc(tt_mm_out, torch_mm_chunks[c])
+                    logger.info(f"{output}, iteration {i} chunk {c}")
+                    assert eq, f"iter {i} chunk {c} MM FAILED ag: {output}"
 
 
 # tiles_per_chunk needs to be divisible by num_workers_per_link

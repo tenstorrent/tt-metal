@@ -69,6 +69,7 @@ std::vector<Tensor> strided_all_gather_minimal_matmul_async(
     std::optional<bool> read_local_slice_from_input,
     const std::optional<const Tensor>& fused_ternary_input_a,
     const std::optional<const Tensor>& fused_ternary_input_b,
-    std::optional<float> fused_ternary_scalar);
+    std::optional<float> fused_ternary_scalar,
+    int32_t chunks);
 
 }  // namespace ttnn::prim

@@ -67,13 +67,18 @@ StridedAllGatherMinimalMatmulAsync::spec_return_value_t StridedAllGatherMinimalM
     tt::tt_metal::TensorSpec strided_all_gather_output_shape = StridedAllGatherAsync::compute_output_specs(
         attributes.strided_all_gather_async_struct, StridedAllGatherAsyncInputs{tensor_args.input_tensor});
 
-    // Matmul shape - now returns a vector, extract the single output (chunks=1 by default)
+    // Matmul specs: one per output chunk (chunks == 1 by default). Output layout is
+    // [all_gather_output, matmul_chunk_0, ..., matmul_chunk_{chunks-1}].
     auto minimal_matmul_output_specs_vec = matmul_device_operation_t::compute_output_specs(
         attributes.matmul_struct, {tensor_args.input_tensor, tensor_args.weight_tensor});
-    TT_FATAL(minimal_matmul_output_specs_vec.size() == 1, "Expected single matmul output spec");
-    tt::tt_metal::TensorSpec minimal_matmul_output_specs = minimal_matmul_output_specs_vec[0];
 
-    return {strided_all_gather_output_shape, minimal_matmul_output_specs};
+    spec_return_value_t specs;
+    specs.reserve(1 + minimal_matmul_output_specs_vec.size());
+    specs.push_back(strided_all_gather_output_shape);
+    for (auto& spec : minimal_matmul_output_specs_vec) {
+        specs.push_back(spec);
+    }
+    return specs;
 }
 
 StridedAllGatherMinimalMatmulAsync::tensor_return_value_t StridedAllGatherMinimalMatmulAsync::create_output_tensors(
@@ -83,13 +88,17 @@ StridedAllGatherMinimalMatmulAsync::tensor_return_value_t StridedAllGatherMinima
         attributes.strided_all_gather_async_struct,
         StridedAllGatherAsyncInputs{tensor_args.input_tensor, tensor_args.persistent_output_buffer});
 
-    // Matmul output tensor - now returns a vector, extract the single output (chunks=1 by default)
+    // Matmul outputs: one per chunk (chunks == 1 by default), appended after the all-gather output.
     auto minimal_matmul_output_tensors_vec = matmul_device_operation_t::create_output_tensors(
         attributes.matmul_struct, {strided_all_gather_output_tensor, tensor_args.weight_tensor});
-    TT_FATAL(minimal_matmul_output_tensors_vec.size() == 1, "Expected single matmul output tensor");
-    ttnn::Tensor minimal_matmul_output_tensor = minimal_matmul_output_tensors_vec[0];
 
-    return {strided_all_gather_output_tensor, minimal_matmul_output_tensor};
+    tensor_return_value_t outputs;
+    outputs.reserve(1 + minimal_matmul_output_tensors_vec.size());
+    outputs.push_back(strided_all_gather_output_tensor);
+    for (auto& t : minimal_matmul_output_tensors_vec) {
+        outputs.push_back(t);
+    }
+    return outputs;
 }
 
 }  // namespace ttnn::experimental::prim
@@ -117,7 +126,8 @@ std::vector<Tensor> strided_all_gather_minimal_matmul_async(
     std::optional<bool> read_local_slice_from_input,
     const std::optional<const Tensor>& fused_ternary_input_a,
     const std::optional<const Tensor>& fused_ternary_input_b,
-    std::optional<float> fused_ternary_scalar) {
+    std::optional<float> fused_ternary_scalar,
+    int32_t chunks) {
     using OperationType = ttnn::experimental::prim::StridedAllGatherMinimalMatmulAsync;
 
     // addcmul uses value=1 (torch default) when ternary inputs are given without an explicit scalar; the
@@ -158,7 +168,8 @@ std::vector<Tensor> strided_all_gather_minimal_matmul_async(
         .fused_activation = std::move(fused_activation),
         .output_mem_config = memory_config_mm,
         .fused_ternary_scalar = fused_ternary_scalar,
-        .compute_kernel_config = compute_kernel_config.value()};
+        .compute_kernel_config = compute_kernel_config.value(),
+        .chunks = chunks};
     ttnn::experimental::prim::StridedAllGatherAsync ag_op{};
 
     bool read_local_from_input = read_local_slice_from_input.value_or(false);
