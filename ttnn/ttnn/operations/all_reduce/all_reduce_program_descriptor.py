@@ -44,6 +44,13 @@ _CB_OUTPUT_TILES = 16  # compute -> writer: the reduced tile
 
 _LINK_IDX = 0  # single-link transfer
 
+# Position of the writer inside ProgramDescriptor.kernels — the fabric connection
+# RT args must be appended through a LIVE reference into that kernel's arg list
+# (setup_fabric_connection also mutates the program), so the index is named rather
+# than spelled inline.
+_KERNEL_ORDER = ("reader", "compute", "writer")
+_WRITER_KERNEL_IDX = _KERNEL_ORDER.index("writer")
+
 # align(page_size, 1) == page_size, so the on-wire size can never round up past
 # the destination page. Tile pages (2048 / 4096 B) are already 32-B aligned for
 # the DRAM write. (op_design.md Risk 15; matches the only shipped duplex user.)
@@ -230,15 +237,15 @@ def _build_device_program(
     )
 
     program = ttnn.ProgramDescriptor(
-        kernels=[reader, compute, writer],
+        kernels=[reader, compute, writer],  # order must match _KERNEL_ORDER
         semaphores=[],  # reserved for the SemaphoreDescriptors setup_fabric_connection appends
         cbs=[cb_broadcast_pages, cb_shard_tiles, cb_output_tiles],
     )
 
-    # Fabric connection args live on the WRITER (kernel index 2), appended through a
-    # live reference so setup_fabric_connection can also mutate `program`.
+    # Fabric connection args live on the WRITER, appended through a live reference
+    # so setup_fabric_connection can also mutate `program`.
     fabric_id_i = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(0, i))
-    rt_ref = program.kernels[2].runtime_args[core.x][core.y]
+    rt_ref = program.kernels[_WRITER_KERNEL_IDX].runtime_args[core.x][core.y]
     _append_fabric_rt_args(rt_ref, fabric_id_i, program, core, fwd_slot, bwd_slot)
 
     return program

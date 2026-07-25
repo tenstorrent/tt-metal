@@ -108,14 +108,19 @@ void kernel_main() {
         for (uint32_t p = 0; p < P; ++p) {
             cb_wait_front(cb_broadcast_pages, 1);
             const uint32_t l1 = get_read_ptr(cb_broadcast_pages);
-            // noc0-encoded destination: the gathered buffer is ONE mesh allocation,
-            // so this address resolves to the correct DRAM bank on every peer.
-            const uint64_t dst_noc_addr =
-                tt::tt_fabric::linear::addrgen_detail::get_noc_address(gathered, slot_base + p, 0);
             if (p + 1 == P) {
+                // The FUSED channel has no page/addrgen overload, so resolve the
+                // page here exactly as write_page() does internally
+                // (ccl_helpers_dataflow.inl:463-467). noc0-encoded destination:
+                // the gathered buffer is ONE mesh allocation, so this address
+                // resolves to the correct DRAM bank on every peer.
+                const uint64_t dst_noc_addr =
+                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(gathered, slot_base + p, 0);
                 fused.write_fused(dst_noc_addr, l1, peer_sem_noc_addr);
             } else {
-                payload.write(dst_noc_addr, l1);
+                // Helper-owned page resolution (same convenience overload
+                // all_gather's writer uses): armed size + noc0 conversion.
+                payload.write_page(l1, slot_base + p, gathered);
             }
             // The fabric sender must have read the page out of the CB slot before
             // the reader may refill it.

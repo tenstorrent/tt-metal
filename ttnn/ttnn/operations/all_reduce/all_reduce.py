@@ -99,28 +99,30 @@ EXCLUSIONS: list = []
 # ---------------------------------------------------------------------------
 # Op-internal cross-device GlobalSemaphore: created ONCE per mesh_device (+ one
 # synchronize_device), reused across program-cache hits, never recreated.
+#
+# The cache is stored as an attribute ON the mesh_device object rather than in a
+# module-level `{id(mesh_device): sem}` dict: a MeshDevice does not support weak
+# references (`MeshDevice.__weakrefoffset__ == 0`), so an id-keyed module dict
+# outlives the device it was created for, and CPython freely re-uses the freed
+# address for the NEXT MeshDevice — which would hand a fresh device a
+# GlobalSemaphore that belongs to a closed one. Binding the lifetime to the
+# device object (MeshDevice carries a Python __dict__ — the root conftest already
+# attaches `cache_entries_counter` the same way) makes that class of stale reuse
+# impossible and releases the semaphore with the device.
 # ---------------------------------------------------------------------------
-_SEMAPHORE_CACHE: dict = {}
+_SEM_ATTR = "_ttnn_all_reduce_recv_semaphore"
 
 
 def _get_or_create_semaphore(mesh_device):
-    key = id(mesh_device)
-    sem = _SEMAPHORE_CACHE.get(key)
+    sem = getattr(mesh_device, _SEM_ATTR, None)
     if sem is None:
         grid = mesh_device.compute_with_storage_grid_size()
         num_cores = grid.x * grid.y
         worker_cores = ttnn.num_cores_to_corerangeset(num_cores, grid, row_wise=True)
         sem = ttnn.create_global_semaphore(mesh_device, worker_cores, 0)
         ttnn.synchronize_device(mesh_device)
-        _SEMAPHORE_CACHE[key] = sem
+        setattr(mesh_device, _SEM_ATTR, sem)
     return sem
-
-
-def _num_line_devices(mesh_device) -> int:
-    n = 1
-    for d in tuple(mesh_device.shape):
-        n *= d
-    return n
 
 
 def _gathered_shape(shard_shape, num_devices):
@@ -171,6 +173,27 @@ def validate(input_tensor, *, topology, output_tensor):
     if rank < 2:
         raise ValueError(f"all_reduce: input rank must be >= 2, got {rank}")
 
+    # Axis gate (registry model). It runs BEFORE the dtype/page-size-dependent
+    # framing gates below: those would otherwise be able to reject an
+    # out-of-SUPPORTED dtype with a ValueError, and the golden harness expects a
+    # NotImplementedError subclass for every out-of-SUPPORTED cell (a ValueError
+    # there shows up as xfail_wrong_mode). Placement/shape checks stay above —
+    # they are independent of the axis universe, and `rank >= 2` is a
+    # precondition of the shape-derived tagger.
+    axes = {
+        "dtype": input_tensor.dtype,
+        "layout": input_tensor.layout,
+        "topology": topology,
+    }
+    for axis_name, tagger in INPUT_TAGGERS.items():
+        axes[axis_name] = tagger((tuple(input_tensor.shape),), axes)
+    for axis, allowed in SUPPORTED.items():
+        if axes[axis] not in allowed:
+            raise UnsupportedAxisValue(f"all_reduce: {axis}={axes[axis]!r} not in SUPPORTED {allowed}")
+    for exc in EXCLUSIONS:
+        if all(axes.get(k) == v for k, v in exc.items()):
+            raise ExcludedCell(f"all_reduce: unsupported combination (refinement candidate): {exc}")
+
     page_size = input_tensor.buffer_page_size()
     l1_alignment = ttnn.get_l1_alignment()
     if page_size % l1_alignment != 0:
@@ -201,21 +224,6 @@ def validate(input_tensor, *, topology, output_tensor):
         ):
             raise ValueError("all_reduce: output_tensor spec must equal the input shard spec exactly")
 
-    # Axis gate (registry model).
-    axes = {
-        "dtype": input_tensor.dtype,
-        "layout": input_tensor.layout,
-        "topology": topology,
-    }
-    for axis_name, tagger in INPUT_TAGGERS.items():
-        axes[axis_name] = tagger((tuple(input_tensor.shape),), axes)
-    for axis, allowed in SUPPORTED.items():
-        if axes[axis] not in allowed:
-            raise UnsupportedAxisValue(f"all_reduce: {axis}={axes[axis]!r} not in SUPPORTED {allowed}")
-    for exc in EXCLUSIONS:
-        if all(axes.get(k) == v for k, v in exc.items()):
-            raise ExcludedCell(f"all_reduce: unsupported combination (refinement candidate): {exc}")
-
     # Fabric direction slotting. `is_forward` is NOT "toward increasing index" —
     # ccl_dm_route owns a deliberate sign reversal — so never assume it; query it,
     # and assert the two neighbours land in DIFFERENT slots (op_design.md Risk 4).
@@ -227,7 +235,7 @@ def validate(input_tensor, *, topology, output_tensor):
 def all_reduce(
     input_tensor: ttnn.Tensor,
     topology: ttnn.Topology = _Topology.Linear,
-    output_tensor: ttnn.Tensor = None,
+    output_tensor: ttnn.Tensor | None = None,
 ) -> ttnn.Tensor:
     """Element-wise SUM of every device's shard, left identically on every device.
 
