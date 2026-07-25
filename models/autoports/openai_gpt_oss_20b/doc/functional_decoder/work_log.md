@@ -164,4 +164,7 @@ decoder reached `0.9994802`. The source diagnosis is in `AUTODEBUG.md`.
 - Independent stage review round 3: CLEAN PASS with no required work. The
   reviewer revalidated implementation, tests, JUnit, context checks, source
   hashes, all 16 collectives, and the parameter/transient provenance.
-- Local checkpoint SHA: pending.
+- Primary local stage checkpoint SHA:
+  `3aca1e9ea34b9399b3ff4e27b3a04176dea37e4c`.
+- A follow-up documentation-only ledger commit records this checkpoint; its
+  SHA is included in the final handoff. Nothing was pushed.
