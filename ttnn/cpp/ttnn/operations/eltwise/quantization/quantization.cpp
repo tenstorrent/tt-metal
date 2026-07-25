@@ -163,6 +163,30 @@ void check_zero_point_tensor_args(
     }
 }
 
+
+// Helper: extract scalar zero-point from variant<int32_t, Tensor> or volume-1 Tensor
+inline std::optional<int32_t> try_get_scalar_zero_point(
+    const std::variant<Tensor, int32_t>& zp) {
+    if (const auto* s = std::get_if<int32_t>(&zp)) return *s;
+    if (const auto* t = std::get_if<Tensor>(&zp)) {
+        if (t->logical_volume() == 1u && t->dtype() == DataType::INT32) {
+            return 0;
+        }
+    }
+    return std::nullopt;
+}
+
+// Helper: extract scalar scale from variant<Tensor, float> or volume-1 Tensor
+inline std::optional<float> try_get_scalar_scale(
+    const std::variant<Tensor, float>& scale) {
+    if (const auto* s = std::get_if<float>(&scale)) return *s;
+    if (const auto* t = std::get_if<Tensor>(&scale)) {
+        if (t->logical_volume() == 1u) {
+            return 0.0f;
+        }
+    }
+    return std::nullopt;
+}
 ttnn::Tensor reshape_per_channel_vector_args(
     const ttnn::Tensor& vector, ttnn::Shape tensor_shape, const int32_t axis, const ttnn::DataType out_dtype) {
     // This function is internal use only, use asserts instead of TT_FATAL to convey intended usage
