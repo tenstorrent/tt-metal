@@ -25,13 +25,13 @@ pytestmark = [
     run_for_blackhole(),
     pytest.mark.perf,
     pytest.mark.timeout(0),
-    pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True),
+    pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True),
     pytest.mark.parametrize(
         "device_params",
         [
             {
                 "l1_small_size": 24576,
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
                 "trace_region_size": 256 * 1024 * 1024,
             }
         ],
@@ -95,26 +95,30 @@ def test_kda_tp4_layer_device_perf(mesh_device: ttnn.MeshDevice) -> None:
     hidden = torch.randn(1, sequence, config.hidden_size, generator=torch.Generator().manual_seed(1607)).to(
         torch.bfloat16
     )
+    # LoudBox fabric initialization requires the physical 1x8 board. Profile
+    # only its first logical TP=4 group after opening that parent mesh, exactly
+    # as the SP=2 harness does for each child trace.
+    tp4_device = mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 0))
     hidden_tt = ttnn.from_torch(
         hidden,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
+        device=tp4_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(tp4_device),
     )
-    layer = KimiDeltaAttention(mesh_device, config, random_weights(config), tt_ccl=TT_CCL(mesh_device))
+    layer = KimiDeltaAttention(tp4_device, config, random_weights(config), tt_ccl=TT_CCL(tp4_device))
     layer.reset_state(batch_size=1)
     assert layer.recurrent_state is not None
     assert layer.convolution_state is not None
     layer.set_external_state(layer.recurrent_state, layer.convolution_state)
 
     warm_output = layer.forward(hidden_tt, mode="chunk")
-    ttnn.synchronize_device(mesh_device)
+    ttnn.synchronize_device(tp4_device)
     ttnn.deallocate(warm_output)
 
     repetitions = int(os.getenv("PERF_REPS", "3"))
     if os.getenv("PERF_TRACE", "0") == "1":
-        _profile_trace(mesh_device, layer, hidden_tt, repetitions)
+        _profile_trace(tp4_device, layer, hidden_tt, repetitions)
     else:
-        _profile_eager(mesh_device, layer, hidden_tt, repetitions)
+        _profile_eager(tp4_device, layer, hidden_tt, repetitions)

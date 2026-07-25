@@ -13,7 +13,7 @@ state-transfer protocol and measure its components.
 * Branch: `pjosipovic/kda-loudbox-sp-prototype`, based on Momcilo's
   `mvasilijevic/codex/kimi-linear-kda` at `671b0c9acb6`.
 * Hardware: one eight-device Blackhole LoudBox.
-* `test_ttnn_layer.py`: 7 passed (T=1, 4, 32, state continuity and external
+* `test_ttnn_layer.py`: 8 passed (T=1, 4, 32, state continuity and external
   state tests).
 * `test_tp_weights.py`: 2 passed; TP=8 output PCC 0.999965, recurrent-state
   PCC 0.999910, convolution-state PCC 0.999997.
@@ -90,11 +90,11 @@ state-transfer protocol and measure its components.
   recurrent send/receive is about 0.10--0.12 ms and the full target-shape
   PCC gate passes.  The 512 KiB depth is consequently the default, with
   `KDA_SP_SOCKET_FIFO_BYTES` retained as an explicit sweep override.
-* This removes the carry-budget blocker but does **not** yet pass the primary
-  head-to-head gate: 3.297 ms is 0.339 ms (11.5%) above 2.958 ms.  The next
-  optimization must attack the remaining child-trace critical path; a larger
-  one-lane FIFO is the quick saturation check before considering a more
-  invasive multi-lane state stripe or KDA/epilogue work reduction.
+* A fresh 512 KiB replay measured **3.317 ms/forward** (report
+  `2026_07_25_19_24_11`).  This still misses the primary head-to-head gate by
+  0.359 ms (12.1%).  Transport is now only about 0.10--0.12 ms, so the next
+  optimization must remove split-affine scan/materialization work on the
+  child-trace critical path rather than further tuning the FIFO.
 * The planned SP=8/TP=1 seven-boundary protocol probe is now implemented as
   `SP8TP1KimiDeltaAttention`. At global T=5120 it executes eight real
   640-token KDA spans with all 32 heads/chip, passes output/recurrent/
@@ -102,6 +102,18 @@ state-transfer protocol and measure its components.
   one of the seven fabric handoffs. The 640-token span previously selected
   the generic convolution path and exceeded L1; the channel-blocked direct
   KDA convolution now applies at `T >= 640`.
+* The TP=4 performance control must open the physical 1x8 LoudBox with 2D
+  fabric and profile its first logical 1x4 submesh. Opening only a physical
+  1x4 mesh makes fabric-router initialization time out; the logical submesh is
+  the same TP group used by SP=2/TP=4 child traces.
+* With that apples-to-apples trace harness, the initial T=1280 diagnostics
+  are: TP=4 T=640 **1.071 ms** (report `2026_07_25_19_32_51`), TP=4 T=1280
+  **1.590 ms** (report `2026_07_25_19_34_47`), and SP=2/TP=4 global T=1280
+  **1.505 ms** (report `2026_07_25_19_33_50`). SP is consequently only
+  1.056x faster than equal-global TP=4 and 1.405x the local-work control. It
+  misses the 1.339 ms production-rank budget by 0.166 ms. Since direct carry
+  transport is already ~0.1 ms, the remaining excess is predominantly the
+  split-affine summary/prefix/final-scan decomposition.
 
 ## Milestones
 
@@ -144,6 +156,11 @@ boundary.
   **1.5x faster** than TP=4/SP=1 at T=1280.  The stretch target is **1.7x**.
   This is an end-to-end layer comparison with the same model, global sequence,
   and output semantics; it is the closest full-system experiment LB can run.
+  The first controls show that 1.5x requires <= **1.060 ms**, below the
+  measured 1.071 ms cost of mandatory TP=4/T=640 local work before any
+  cross-SP boundary. Treat it as an aspirational scaling comparison, not a
+  presently attainable acceptance condition; the production-rank budget below
+  is the actionable near-term gate.
 * **Head-to-head LB topology gate:** at global T=5120, SP=2/TP=4 must beat
   the traced TP=8 control of 3.114 ms by at least **5%**, i.e. <= **2.958 ms**
   on the slowest device; the stretch target is 10%, <= **2.803 ms**.  Both
