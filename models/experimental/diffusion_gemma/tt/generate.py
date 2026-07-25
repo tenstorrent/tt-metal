@@ -23,6 +23,7 @@ import ttnn
 
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.reference.denoise_loop import DenoiseTrajectory
+from models.experimental.diffusion_gemma.tt.degeneracy import DegenerateBlockError, check_committed_block
 from models.experimental.diffusion_gemma.tt.commit_decode import commit_decode_forward
 from models.experimental.diffusion_gemma.tt.denoise_forward import (
     make_generation_logits_fn_builder_from_checkpoint_state,
@@ -954,6 +955,20 @@ def denoise_and_commit_block(
     if trajectory.committed is None:
         raise RuntimeError("denoise trajectory did not produce committed canvas tokens")
     _validate_committed_block_shape(trajectory.committed, batch_size=1, canvas_length=config.canvas_length)
+    # Before the commit, never after: a degenerate canvas that reaches the KV cache conditions
+    # every later block, which is what makes the degenerate state near-absorbing.
+    degeneracy_stats = check_committed_block(trajectory.committed, block_idx=None, logger=logger)
+    if degeneracy_stats:
+        logger.info(
+            "DG_DEGENERACY start_pos={} distinct={}/{} top_id={} top_frac={:.4f} max_run={}".format(
+                start_pos,
+                degeneracy_stats["distinct"],
+                degeneracy_stats["tokens"],
+                degeneracy_stats["top_id"],
+                degeneracy_stats["top_frac"],
+                degeneracy_stats["max_run"],
+            )
+        )
     commit_t0 = time.perf_counter()
     commit_fn(
         tt_model,
@@ -1051,6 +1066,12 @@ def generate_blocks(
                     page_table=page_table,
                     page_tables_per_layer=page_tables_per_layer,
                 )
+            except DegenerateBlockError as degenerate:
+                # Uncommitted by construction, so the generation simply ends one block early with
+                # everything that was healthy. Emitting the canvas would be the degenerate output.
+                _deallocate_if_possible(init_canvas)
+                logger.warning(f"[generate_blocks] stopping at block {block_idx + 1}: {degenerate}")
+                break
             except Exception:
                 _deallocate_if_possible(init_canvas)
                 raise

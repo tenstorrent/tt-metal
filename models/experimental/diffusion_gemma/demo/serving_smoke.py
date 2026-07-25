@@ -90,6 +90,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="do not halt on committed EOS/stop tokens (surfaces visible non-EOS text for the "
         "qualitative control; mirrors text_demo --disable-eos-stop)",
     )
+    parser.add_argument(
+        "--enable-thinking",
+        dest="enable_thinking",
+        action="store_true",
+        default=None,
+        help="render the prompt with DiffusionGemma's <|think|> contract (what the GPQA CoT runs "
+        "use through vLLM). Omitted = the non-thinking render.",
+    )
     parser.add_argument("--local-files-only", action="store_true")
     parser.add_argument("--metrics-json", default=None, help="optional path to dump the per-block metrics JSON")
     parser.add_argument(
@@ -186,7 +194,7 @@ def run(args) -> dict:
 
         # Prompt length is intentionally NOT a multiple of the 256 output block —
         # the adapter must serve any valid prompt length.
-        prompt_tokens = tokenize_prompt(bundle.tokenizer, args.prompt)
+        prompt_tokens = tokenize_prompt(bundle.tokenizer, args.prompt, enable_thinking=args.enable_thinking)
         prompt_len = int(prompt_tokens.shape[1])
         logger.info(f"[serving_smoke] prompt_len={prompt_len} (aligned_256={prompt_len % args.canvas_length == 0})")
 
