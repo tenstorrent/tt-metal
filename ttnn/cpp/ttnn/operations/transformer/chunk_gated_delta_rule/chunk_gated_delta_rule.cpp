@@ -624,7 +624,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
         grouped[4] = ttnn::reshape(grouped[4], ttnn::Shape({group_heads, group_chunks, K, C}));
         grouped[5] = ttnn::reshape(grouped[5], ttnn::Shape({group_heads, group_chunks, K, 1}));
         grouped[6] = ttnn::reshape(grouped[6], ttnn::Shape({group_heads, group_chunks, C, C}));
-        auto summary_b = ttnn::prim::chunk_gdn_scan(
+        auto summaries = ttnn::prim::chunk_gdn_scan(
             grouped[0],
             grouped[1],
             grouped[2],
@@ -638,29 +638,20 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
             prep_mem,
             kernel_cfg,
             true,
+            true,
+            eye_c,
+            std::nullopt,
+            std::nullopt,
+            0,
+            1e-5f,
             true);
-        auto summary_a_plus_b = ttnn::prim::chunk_gdn_scan(
-            grouped[0],
-            grouped[1],
-            grouped[2],
-            grouped[3],
-            grouped[4],
-            grouped[5],
-            grouped[6],
-            std::nullopt,
-            C,
-            true,
-            prep_mem,
-            kernel_cfg,
-            true,
-            true,
-            eye_c);
-        auto summary_a = ttnn::subtract(summary_a_plus_b[1], summary_b[1], std::nullopt, prep_mem);
+        auto summary_a = summaries[0];
+        auto summary_b = summaries[1];
         if (std::getenv("QWEN_KDA_GROUP_PREFIX") != nullptr) {
             TT_FATAL(s0.has_value(), "group-prefix scan requires initial state");
             const auto prefix_mem = ttnn::DRAM_MEMORY_CONFIG;
             summary_a = ttnn::reshape(summary_a, ttnn::Shape({BH, groups_per_head, K, K}));
-            auto summary_b_grouped = ttnn::reshape(summary_b[1], ttnn::Shape({BH, groups_per_head, K, V}));
+            auto summary_b_grouped = ttnn::reshape(summary_b, ttnn::Shape({BH, groups_per_head, K, V}));
             auto [prefix_a, prefix_b] =
                 inclusive_affine_prefix(summary_a, summary_b_grouped, groups_per_head, prefix_mem, kernel_cfg);
             auto initial = ttnn::reshape(*s0, ttnn::Shape({BH, 1, K, V}));

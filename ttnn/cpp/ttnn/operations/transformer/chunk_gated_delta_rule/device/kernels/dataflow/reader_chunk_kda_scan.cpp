@@ -12,6 +12,7 @@
 
 constexpr uint32_t cb_dl = 11, cb_S = 8, cb_Tinv = 13;
 constexpr uint32_t cb_vbeta = 17, cb_kd = 18, cb_qdecay = 19, cb_intra = 20, cb_kdec_t = 24;
+constexpr uint32_t cb_summary_S = cb_qdecay;
 
 void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(0);
@@ -19,8 +20,9 @@ void kernel_main() {
     constexpr uint32_t Vt = get_compile_time_arg_val(2);                  // per-core V-block width (tiles)
     constexpr uint32_t initial_state_mode = get_compile_time_arg_val(3);  // 0=provided, 1=zeros, 2=identity
     constexpr uint32_t Vt_full = get_compile_time_arg_val(4);             // full V (tiles) for row stride
+    constexpr bool summary_pair = get_compile_time_arg_val(6) == 1;
 
-    constexpr auto vb_a = TensorAccessorArgs<6>();
+    constexpr auto vb_a = TensorAccessorArgs<7>();
     constexpr auto kd_a = TensorAccessorArgs<vb_a.next_compile_time_args_offset()>();
     constexpr auto qd_a = TensorAccessorArgs<kd_a.next_compile_time_args_offset()>();
     constexpr auto it_a = TensorAccessorArgs<qd_a.next_compile_time_args_offset()>();
@@ -97,8 +99,24 @@ void kernel_main() {
         cb.push_back(R * Vt);
     };
 
-    // Initial state S [K,V]: provided, generated zero, or a block identity.
-    if constexpr (initial_state_mode == 0) {
+    // The summary specialization seeds B from zero and A+B from identity on the same core.
+    if constexpr (summary_pair) {
+        CircularBuffer zero_cb(cb_S);
+        zero_cb.reserve_back(Kt * Vt);
+        noc.async_write_zeros(zero_cb, Kt * Vt * s0_tb);
+        noc.write_zeros_l1_barrier();
+        zero_cb.push_back(Kt * Vt);
+
+        CircularBuffer identity_cb(cb_summary_S);
+        identity_cb.reserve_back(Kt * Vt);
+        noc.async_write_zeros(identity_cb, Kt * Vt * s0_tb);
+        noc.write_zeros_l1_barrier();
+        for (uint32_t i = 0; i < Kt; i++) {
+            noc.async_read(id_acc, identity_cb, s0_tb, {.page_id = 0}, {.offset_bytes = (i * Vt + i) * s0_tb});
+        }
+        noc.async_read_barrier();
+        identity_cb.push_back(Kt * Vt);
+    } else if constexpr (initial_state_mode == 0) {
         read_vslice(s0_acc, cb_S, s0_tb, h * Kt * Vt_full, Kt);
     } else {
         CircularBuffer state_cb(cb_S);
@@ -118,8 +136,10 @@ void kernel_main() {
         const uint32_t hc = h * NC + c;
         read_vslice(vb_acc, cb_vbeta, vb_tb, hc * Ct * Vt_full, Ct);  // v_beta [C, V] slice
         read_into(kd_acc, cb_kd, kd_tb, hc * ck, ck);                 // V-independent: full read
-        read_into(qd_acc, cb_qdecay, qd_tb, hc * ck, ck);
-        read_into(it_acc, cb_intra, it_tb, hc * cc, cc);
+        if constexpr (!summary_pair) {
+            read_into(qd_acc, cb_qdecay, qd_tb, hc * ck, ck);
+            read_into(it_acc, cb_intra, it_tb, hc * cc, cc);
+        }
         read_into(kc_acc, cb_kdec_t, kc_tb, hc * kc, kc);
         read_into(dl_acc, cb_dl, dl_tb, hc * Kt, Kt);
         read_into(ti_acc, cb_Tinv, ti_tb, hc * cc, cc);

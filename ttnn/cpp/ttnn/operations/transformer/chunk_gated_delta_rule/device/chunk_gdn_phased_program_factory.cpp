@@ -423,30 +423,35 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
                 {CBFormatDescriptor{.buffer_index = static_cast<uint8_t>(idx), .data_format = fmt, .page_size = ts}}}});
     };
 
-    // Per-chunk inputs (streamed from DRAM). u-slot holds v_beta, w-slot holds kd. nbuf=1.
+    // The dual-summary specialization reads only state-update tensors and repurposes
+    // the unused output-side CBs as a second state ping-pong. Normal scan allocation is unchanged.
     const auto input_df = [](const Tensor& tensor) {
         return tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
     };
-    add_cb(pcb::u, cv, 1, input_df(in.v_beta));  // v_beta
-    add_cb(pcb::w, ck, 1, input_df(in.kd));      // kd
-    add_cb(pcb::qdecay, ck, 1, input_df(in.q_decay));
-    add_cb(pcb::intra, cc, 1, input_df(in.intra));
+    add_cb(pcb::u, cv, 1, input_df(in.v_beta));
+    add_cb(pcb::w, ck, 1, input_df(in.kd));
     add_cb(pcb::kdec_t, kc, 1, input_df(in.k_dec_t));
     add_cb(pcb::dl, attrs.vector_gate ? Kt : 1, 1, input_df(in.dl));
-    add_cb(pcb::Tinv, cc, 1, input_df(in.t_inv));  // t_inv (WY inverse)
-    // State: cb_S is reader-produced (chunk 0 only); s2/s3 are compute-only ping-pong.
+    add_cb(pcb::Tinv, cc, 1, input_df(in.t_inv));
     add_cb(pcb::S, kv);
     add_cb(pcb::s2, kv);
     add_cb(pcb::s3, kv);
-    // Outputs.
-    add_cb(pcb::out, cv, 2, df_io);
     add_cb(pcb::final_s, kv);
-    // Scratch.
     add_cb(pcb::vnew, cv);
-    add_cb(pcb::ointer, cv);
     add_cb(pcb::supd, kv);
     add_cb(pcb::stmp, kv);
     add_cb(pcb::scr1, scr);
+    if (attrs.summary_pair) {
+        add_cb(pcb::qdecay, kv);         // identity-seeded second initial state
+        add_cb(pcb::intra, kv);          // second-state ping
+        add_cb(pcb::ointer, kv);         // second-state pong
+        add_cb(pcb::out, kv, 1, df_io);  // second final state before subtraction
+    } else {
+        add_cb(pcb::qdecay, ck, 1, input_df(in.q_decay));
+        add_cb(pcb::intra, cc, 1, input_df(in.intra));
+        add_cb(pcb::ointer, cv);
+        add_cb(pcb::out, cv, 2, df_io);
+    }
 
     if (attrs.fused_rms) {
         auto add_rms_cb = [&](uint32_t idx, uint32_t tiles, tt::DataFormat format, uint32_t buffers = 1) {
@@ -479,7 +484,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/";
     // ct arg 2 = per-core Vt(=Vtl); arg 4 = Vt_full (full V in tiles) for the readers'/writer's
     // V-slice row stride. Compute reads only args 0..2 (Ct, Kt, Vt) so the extra arg is harmless.
-    const std::vector<uint32_t> ct_args = {Ct, Kt, Vt, initial_state_mode, Vt_full, attrs.state_only ? 1u : 0u};
+    const std::vector<uint32_t> ct_args = {
+        Ct, Kt, Vt, initial_state_mode, Vt_full, attrs.state_only ? 1u : 0u, attrs.summary_pair ? 1u : 0u};
 
     std::vector<uint32_t> reader_ct = ct_args;
     TensorAccessorArgs(*in.v_beta.buffer()).append_to(reader_ct);

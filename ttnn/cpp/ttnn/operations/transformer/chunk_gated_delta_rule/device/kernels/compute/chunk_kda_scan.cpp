@@ -29,6 +29,7 @@ constexpr uint32_t cb_vbeta = 17, cb_kd = 18, cb_qdecay = 19, cb_intra = 20;
 constexpr uint32_t cb_s2 = 21, cb_vnew = 22, cb_ointer = 23, cb_kdec_t = 24;
 constexpr uint32_t cb_supd = 25, cb_stmp = 26, cb_final = 27;
 constexpr uint32_t cb_scr1 = 28, cb_s3 = 31;
+constexpr uint32_t cb_summary_S = cb_qdecay, cb_summary_s2 = cb_intra, cb_summary_s3 = cb_ointer;
 
 inline void WAIT(uint32_t cb, uint32_t n) { CircularBuffer(cb).wait_front(n); }
 inline void POP(uint32_t cb, uint32_t n) { CircularBuffer(cb).pop_front(n); }
@@ -106,6 +107,28 @@ void bcast_decay_mul(uint32_t a, uint32_t decay, uint32_t o, uint32_t Kt, uint32
     cb_push_back(o, Kt * Vt);
 }
 
+void summary_step(uint32_t cur_S, uint32_t dst, uint32_t Ct, uint32_t Kt, uint32_t Vt) {
+    const uint32_t cv = Ct * Vt, kv = Kt * Vt;
+    WAIT(cur_S, kv);
+    mm(cb_kd, cur_S, cb_scr1, Ct, Kt, Vt, false);
+    WAIT(cb_scr1, cv);
+    ew(cb_vbeta, cb_scr1, cb_vnew, cv, 1);
+    WAIT(cb_vnew, cv);
+    POP(cb_scr1, cv);
+    mm(cb_Tinv, cb_vnew, cb_scr1, Ct, Ct, Vt, false);
+    WAIT(cb_scr1, cv);
+    POP(cb_vnew, cv);
+    mm(cb_kdec_t, cb_scr1, cb_supd, Kt, Ct, Vt, false);
+    WAIT(cb_supd, kv);
+    POP(cb_scr1, cv);
+    bcast_decay_mul(cur_S, cb_dl, cb_stmp, Kt, Vt);
+    WAIT(cb_stmp, kv);
+    POP(cur_S, kv);
+    ew(cb_stmp, cb_supd, dst, kv, 0);
+    POP(cb_stmp, kv);
+    POP(cb_supd, kv);
+}
+
 }  // namespace
 
 void kernel_main() {
@@ -119,8 +142,38 @@ void kernel_main() {
     constexpr uint32_t cv = Ct * Vt;
     constexpr uint32_t kv = Kt * Vt;
     constexpr uint32_t kc = Kt * Ct;
+    constexpr bool summary_pair = get_compile_time_arg_val(6) == 1;
 
     compute_kernel_hw_startup(cb_kd, cb_vbeta, cb_out);
+
+    if constexpr (summary_pair) {
+        for (uint32_t c = 0; c < NC; c++) {
+            const uint32_t cur_b = (c == 0) ? cb_S : ((c & 1u) ? cb_s2 : cb_s3);
+            const uint32_t nxt_b = (c & 1u) ? cb_s3 : cb_s2;
+            const uint32_t cur_ab = (c == 0) ? cb_summary_S : ((c & 1u) ? cb_summary_s2 : cb_summary_s3);
+            const uint32_t nxt_ab = (c & 1u) ? cb_summary_s3 : cb_summary_s2;
+            const bool last = c == NC - 1;
+
+            WAIT(cb_kd, ck);
+            WAIT(cb_vbeta, cv);
+            WAIT(cb_Tinv, cc);
+            WAIT(cb_kdec_t, kc);
+            WAIT(cb_dl, Kt);
+            summary_step(cur_b, last ? cb_final : nxt_b, Ct, Kt, Vt);
+            summary_step(cur_ab, last ? cb_out : nxt_ab, Ct, Kt, Vt);
+            POP(cb_kd, ck);
+            POP(cb_vbeta, cv);
+            POP(cb_Tinv, cc);
+            POP(cb_kdec_t, kc);
+            POP(cb_dl, Kt);
+        }
+        WAIT(cb_out, kv);
+        WAIT(cb_final, kv);
+        ew(cb_out, cb_final, cb_stmp, kv, 1);  // A = (A+B) - B
+        WAIT(cb_stmp, kv);
+        POP(cb_out, kv);
+        return;
+    }
 
     for (uint32_t c = 0; c < NC; c++) {
         // State uses THREE single-producer CBs so no CB is produced by both the reader and

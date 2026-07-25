@@ -19,7 +19,7 @@ void kernel_main() {
     constexpr uint32_t initial_state_mode = get_compile_time_arg_val(3);  // 0=provided, 1=zeros, 2=identity
     constexpr uint32_t Vt_full = get_compile_time_arg_val(4);             // full V (tiles) for row stride
 
-    constexpr auto vb_a = TensorAccessorArgs<6>();
+    constexpr auto vb_a = TensorAccessorArgs<7>();
     constexpr auto kd_a = TensorAccessorArgs<vb_a.next_compile_time_args_offset()>();
     constexpr auto qd_a = TensorAccessorArgs<kd_a.next_compile_time_args_offset()>();
     constexpr auto it_a = TensorAccessorArgs<qd_a.next_compile_time_args_offset()>();

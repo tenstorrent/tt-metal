@@ -74,6 +74,7 @@ are:
    launch, and summary handoff. Gross measured ceiling: `176.147 us`, or
    `5.21%` of the matched `3380.644 us` layer wall. This must not reuse the
    rejected sender-owned ping-pong/ACK protocol.
+   - One-pass summary-builder result, 2026-07-25: retained as an opt-in building block. A single state-only scan now carries zero and identity states together and subtracts A=(A+B)-B on-core. The summary block fell from `184.487 us` to `134.994 us`, saving `49.493 us` (`26.83%`). At T=5,120, summary-only wall is `3391.428 us` versus matched control `3265.230 us` (`+126.198 us`); therefore summary construction alone is not an endpoint win. The grouped-prefix consumer passes TP=8 T=5,120 PCC `0.999958/0.999890/0.999997`. Next, fuse prefix correction with the grouped final recurrence so this new pass replaces serial scan work instead of merely adding to it.
 2. **Fuse prefix correction with the grouped final recurrence.** The prefix
    currently materializes 80 group-entry states before launching the eight-
    chunk recurrence. Retaining each corrected entry state in its owner core

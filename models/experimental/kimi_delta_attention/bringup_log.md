@@ -1869,3 +1869,16 @@
 - Verdict: reject C=64 in the current optimization campaign. A future retry
   requires a standalone Ct=2 oracle that attributes prepared tensors and final
   state before any whole-layer performance work.
+
+
+### 2026-07-25 01:09 UTC — Retain one-pass affine summary builder
+
+- Hypothesis: carry zero and identity recurrent states through one state-only grouped scan, then compute `A = (A+B) - B` on-core. This should remove the second scan, standalone subtraction launch, and intermediate DRAM handoff from the eight-chunk affine-summary oracle.
+- Implementation: added a private `summary_pair` scan specialization. Each of 80 group owners at T=5,120 retains two state accumulators, skips token-output math and unused q-decay/intra reads, writes A and B directly, and leaves the default KDA path unchanged. The experimental grouped-prefix layer now disables in-scan RMS and applies the existing standalone gated RMS after regrouping, matching the raw-output contract.
+- Host build: `./build_metal.sh --build-tests --build-type Release` -> PASS.
+- Correctness: `QWEN_KDA_GROUP_PREFIX=1 KDA_TP_TEST_SEQ=5120 scripts/run_safe_pytest.sh --run-all models/experimental/kimi_delta_attention/tests/test_tp_weights.py::test_tp_layer_pcc -q -s` -> PASS at output/recurrent/convolution PCC `0.999958/0.999890/0.999997`. T=512 summary-produced and summary-consumed gates also passed at `0.999967/0.999923/0.999997`.
+- Candidate profile: `QWEN_KDA_GROUP_SUMMARY=1 PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 scripts/run_safe_pytest.sh --profile --run-all models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s` -> PASS. CSV `generated/profiler/reports/2026_07_25_01_00_09/ops_perf_results_2026_07_25_01_00_09.csv`, SHA-256 `36a5c5f12ecb2a31776456b557319ba420d5e8abb604c35794ccaa6502b6843c`. Sessions 2-11 median wall was `3391.428 us`; the fused summary scan median was `134.994 us`.
+- Matched control: identical command without the experiment -> PASS. CSV `generated/profiler/reports/2026_07_25_01_02_04/ops_perf_results_2026_07_25_01_02_04.csv`, SHA-256 `8da573ad50efd7c672f89d9ff90d939a1f8b5fb0a9c7eadabfe7af43780ce6bf`. Median wall was `3265.230 us`. Candidate overhead is `126.198 us` (`3.865%`).
+- Result: the summary block improves from the prior `70.869 + 91.912 + 21.706 = 184.487 us` to `134.994 us`, saving `49.493 us` (`26.83%`). This validates the fused algebra and removes one program launch, but it remains additive relative to the retained serial endpoint.
+- Regression coverage: the full directory run reported `36 passed, 1 failed`; the failure is deterministic and precedes recurrence in the pre-existing single-device perf fixture. Its conv1d requests a `17,301,504 B` L1 buffer requiring `1,572,864 B` per bank, exceeding the empty-bank capacity `1,436,800 B`. The same test fails alone with the identical allocator fatal; all KDA correctness, TP, recurrent, CCL, and recurrence perf cases passed.
+- Verdict: retain the opt-in summary specialization as the profitable first half of the distributed-prefix design, not as the default endpoint. The next experiment must fuse prefix correction with the grouped final recurrence; otherwise the added `134.994 us` pass cannot beat the serial scan.

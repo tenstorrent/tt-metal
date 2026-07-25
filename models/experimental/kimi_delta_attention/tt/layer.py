@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -369,7 +370,11 @@ class KimiDeltaAttention:
         )
 
         assert self.recurrent_state is not None
-        fuse_scan_rms = head_major and mode != "recurrent" and sequence > 640
+        # The experimental grouped-prefix path returns raw scan output; normalize it
+        # after regrouping instead of asking the serial scan for a fused RMS tensor.
+        fuse_scan_rms = (
+            head_major and mode != "recurrent" and sequence > 640 and os.getenv("QWEN_KDA_GROUP_PREFIX") is None
+        )
         if mode == "recurrent":
             output, new_recurrent_state = fused_kda_recurrence(q, k, v, gate, beta, self.recurrent_state)
         else:

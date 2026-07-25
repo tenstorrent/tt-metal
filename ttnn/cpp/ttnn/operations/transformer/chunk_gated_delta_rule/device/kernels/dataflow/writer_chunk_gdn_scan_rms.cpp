@@ -23,7 +23,7 @@ void kernel_main() {
     static_assert(Ct == 1, "fused scan-to-RMS handoff requires 32-token chunks");
     (void)initial_state_mode;
 
-    constexpr auto fs_a = TensorAccessorArgs<6>();
+    constexpr auto fs_a = TensorAccessorArgs<7>();
 
     const uint32_t h = get_arg_val<uint32_t>(0);
     const uint32_t vb = get_arg_val<uint32_t>(1);

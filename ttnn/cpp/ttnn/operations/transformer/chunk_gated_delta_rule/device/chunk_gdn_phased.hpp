@@ -124,6 +124,7 @@ struct ChunkGdnScanParams {
     bool identity_initial_state = false;
     bool output_final_state;
     bool state_only = false;
+    bool summary_pair = false;
     bool vector_gate = false;
     bool fused_rms = false;
     uint32_t num_heads = 0;
@@ -184,7 +185,8 @@ std::vector<Tensor> chunk_gdn_scan(
     const std::optional<Tensor>& rms_gate = std::nullopt,
     const std::optional<Tensor>& rms_weight = std::nullopt,
     uint32_t num_heads = 0,
-    float rms_epsilon = 1e-5f);
+    float rms_epsilon = 1e-5f,
+    bool summary_pair = false);
 
 struct KdaGatedRmsParams {
     uint32_t batch;
