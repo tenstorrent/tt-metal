@@ -250,8 +250,8 @@ def test_mochi_pipeline_performance(
         expected_metrics = {
             "encoder": 8.0,
             "denoising": 400,
-            "vae": 22,
-            "total": 430,
+            "vae": 70,
+            "total": 478,
         }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"

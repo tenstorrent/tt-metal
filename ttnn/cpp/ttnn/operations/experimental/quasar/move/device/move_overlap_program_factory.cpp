@@ -19,6 +19,7 @@
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::prim::qsr {
 
@@ -26,6 +27,7 @@ using namespace tt::tt_metal;
 namespace m2 = tt::tt_metal::experimental;
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 std::vector<CoreRange> get_multicast_regions(const CoreRangeSet& all_cores, const CoreCoord& logical_controller) {
     TT_ASSERT(!all_cores.ranges().empty() and all_cores.ranges().size() <= 2);
@@ -67,17 +69,20 @@ std::vector<CoreRange> get_multicast_regions(const CoreRangeSet& all_cores, cons
 
 // Metal 2.0 resource names (ProgramSpec scope).
 const m2::KernelSpecName READER{"reader"};
+const m2::KernelSpecName WRITER{"writer"};
 const m2::DFBSpecName SCRATCH{"scratch"};
 const m2::SemaphoreSpecName SEM{"sem"};
 const m2::TensorParamName INPUT{"input"};
 const m2::TensorParamName OUTPUT{"output"};
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_program_artifacts(
     const MoveOperationAttributes& /*operation_attributes*/,
     const MoveTensorArgs& tensor_args,
     Tensor& tensor_return_value) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;  // resolve the file-local ids/helpers below
     using namespace tt::constants;
 
     const Tensor& input = tensor_args.input_tensor;
@@ -138,20 +143,23 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
                   "move_interleaved_with_overlap.cpp"
                 : "ttnn/cpp/ttnn/operations/experimental/quasar/move/device/kernels/dataflow/"
                   "move_stick_layout_interleaved_with_overlap.cpp";
+    const std::filesystem::path writer_kernel_path =
+        tilized ? "ttnn/cpp/ttnn/operations/experimental/quasar/move/device/kernels/dataflow/"
+                  "move_interleaved_with_overlap_writer.cpp"
+                : "ttnn/cpp/ttnn/operations/experimental/quasar/move/device/kernels/dataflow/"
+                  "move_stick_layout_interleaved_with_overlap_writer.cpp";
 
     m2::KernelSpec reader{
         .unique_id = READER,
         .source = kernel_path,
         .dfb_bindings =
             {
+                // Producer side of the cross-kernel scratch DFB (the writer kernel is the consumer);
+                // splitting producer/consumer across two kernels avoids a forbidden DM self-loop.
                 m2::DFBBinding{
                     .dfb_spec_name = SCRATCH,
                     .accessor_name = "scratch",
                     .endpoint_type = m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{
-                    .dfb_spec_name = SCRATCH,
-                    .accessor_name = "scratch",
-                    .endpoint_type = m2::DFBEndpointType::CONSUMER},
             },
         .semaphore_bindings =
             {
@@ -160,9 +168,8 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
         .tensor_bindings =
             {
                 m2::TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"},
-                m2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"},
             },
-        .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
 
     // Named CTA: the stick-layout kernel needs the (unaligned) page size at compile time.
@@ -187,9 +194,46 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
 
     spec.kernels.push_back(reader);
 
+    // Consumer side of the cross-kernel scratch DFB: drains CB -> dst. Runs on the WRITER processor
+    // (the opposite RISC from the reader) on the same cores, sharing the scratch L1 buffer SPSC. Its
+    // wait_front(scratch) cannot unblock until the reader's post-handshake push_back, so dst writes
+    // only begin once every core has read src (the overlap-safety invariant).
+    m2::KernelSpec writer{
+        .unique_id = WRITER,
+        .source = writer_kernel_path,
+        .dfb_bindings =
+            {
+                m2::DFBBinding{
+                    .dfb_spec_name = SCRATCH,
+                    .accessor_name = "scratch",
+                    .endpoint_type = m2::DFBEndpointType::CONSUMER},
+            },
+        .tensor_bindings =
+            {
+                m2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"},
+            },
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+    };
+
+    // The stick-layout writer needs the (unaligned) page size at compile time, like its reader.
+    if (!tilized) {
+        writer.compile_time_args = {{"page_size", page_size}};
+    }
+
+    // Writer RTAs are the subset the drain phase needs (no sem/multicast coordination).
+    {
+        m2::Group<std::string> writer_rta_names = {"start_id", "num_pages"};
+        if (!tilized) {
+            writer_rta_names.push_back("aligned_page_size");
+        }
+        writer.runtime_arg_schema.runtime_arg_names = std::move(writer_rta_names);
+    }
+
+    spec.kernels.push_back(writer);
+
     spec.work_units.push_back(m2::WorkUnitSpec{
         .name = "wu",
-        .kernels = {READER},
+        .kernels = {READER, WRITER},
         .target_nodes = all_cores,
     });
 
@@ -217,7 +261,11 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
     m2::ProgramRunArgs run_args;
     m2::KernelRunArgs reader_run_args;
     reader_run_args.kernel = READER;
+    m2::KernelRunArgs writer_run_args;
+    writer_run_args.kernel = WRITER;
 
+    m2::KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run_args.runtime_arg_values;
+    m2::KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run_args.runtime_arg_values;
     for (uint32_t i = 0, pages_handled_per_core = 0; i < num_cores; i++) {
         const CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_pages_per_core = 0;
@@ -231,40 +279,53 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
 
         const bool is_controller = (i == 0);
 
-        m2::KernelRunArgs::RuntimeArgValues vals = {
-            {"start_id", pages_handled_per_core},
-            {"num_pages", num_pages_per_core},
-            {"control_value", num_cores - 1},
-            {"controller_noc_x", static_cast<uint32_t>(noc_controller.x)},
-            {"controller_noc_y", static_cast<uint32_t>(noc_controller.y)},
-            {"is_controller", static_cast<uint32_t>(is_controller)},
-            {"range_0_start_noc_x", static_cast<uint32_t>(range_0_noc.start_coord.x)},
-            {"range_0_start_noc_y", static_cast<uint32_t>(range_0_noc.start_coord.y)},
-            {"range_0_end_noc_x", static_cast<uint32_t>(range_0_noc.end_coord.x)},
-            {"range_0_end_noc_y", static_cast<uint32_t>(range_0_noc.end_coord.y)},
-            {"range_0_size", static_cast<uint32_t>(logical_multicast_regions[0].size())},
-            {"range_1_start_noc_x", static_cast<uint32_t>(range_1_noc.start_coord.x)},
-            {"range_1_start_noc_y", static_cast<uint32_t>(range_1_noc.start_coord.y)},
-            {"range_1_end_noc_x", static_cast<uint32_t>(range_1_noc.end_coord.x)},
-            {"range_1_end_noc_y", static_cast<uint32_t>(range_1_noc.end_coord.y)},
-            {"range_1_size", static_cast<uint32_t>(logical_multicast_regions[1].size())},
-            {"range_2_start_noc_x", static_cast<uint32_t>(noc_multicast_regions.back().start_coord.x)},
-            {"range_2_start_noc_y", static_cast<uint32_t>(noc_multicast_regions.back().start_coord.y)},
-            {"range_2_end_noc_x", static_cast<uint32_t>(noc_multicast_regions.back().end_coord.x)},
-            {"range_2_end_noc_y", static_cast<uint32_t>(noc_multicast_regions.back().end_coord.y)},
-            {"range_2_size", static_cast<uint32_t>(logical_multicast_regions.back().size())},
-            {"do_third_multicast", static_cast<uint32_t>(do_third_multicast)},
-        };
+        m2::AddRuntimeArgsForNode(
+            reader_rtas,
+            core,
+            {
+                {"start_id", pages_handled_per_core},
+                {"num_pages", num_pages_per_core},
+                {"control_value", num_cores - 1},
+                {"controller_noc_x", static_cast<uint32_t>(noc_controller.x)},
+                {"controller_noc_y", static_cast<uint32_t>(noc_controller.y)},
+                {"is_controller", static_cast<uint32_t>(is_controller)},
+                {"range_0_start_noc_x", static_cast<uint32_t>(range_0_noc.start_coord.x)},
+                {"range_0_start_noc_y", static_cast<uint32_t>(range_0_noc.start_coord.y)},
+                {"range_0_end_noc_x", static_cast<uint32_t>(range_0_noc.end_coord.x)},
+                {"range_0_end_noc_y", static_cast<uint32_t>(range_0_noc.end_coord.y)},
+                {"range_0_size", static_cast<uint32_t>(logical_multicast_regions[0].size())},
+                {"range_1_start_noc_x", static_cast<uint32_t>(range_1_noc.start_coord.x)},
+                {"range_1_start_noc_y", static_cast<uint32_t>(range_1_noc.start_coord.y)},
+                {"range_1_end_noc_x", static_cast<uint32_t>(range_1_noc.end_coord.x)},
+                {"range_1_end_noc_y", static_cast<uint32_t>(range_1_noc.end_coord.y)},
+                {"range_1_size", static_cast<uint32_t>(logical_multicast_regions[1].size())},
+                {"range_2_start_noc_x", static_cast<uint32_t>(noc_multicast_regions.back().start_coord.x)},
+                {"range_2_start_noc_y", static_cast<uint32_t>(noc_multicast_regions.back().start_coord.y)},
+                {"range_2_end_noc_x", static_cast<uint32_t>(noc_multicast_regions.back().end_coord.x)},
+                {"range_2_end_noc_y", static_cast<uint32_t>(noc_multicast_regions.back().end_coord.y)},
+                {"range_2_size", static_cast<uint32_t>(logical_multicast_regions.back().size())},
+                {"do_third_multicast", static_cast<uint32_t>(do_third_multicast)},
+            });
         if (!tilized) {
-            vals.insert({"aligned_page_size", aligned_page_size});
+            reader_rtas["aligned_page_size"][core] = aligned_page_size;
         }
 
-        reader_run_args.runtime_arg_values.push_back(
-            m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = std::move(vals)});
+        m2::AddRuntimeArgsForNode(
+            writer_rtas,
+            core,
+            {
+                {"start_id", pages_handled_per_core},
+                {"num_pages", num_pages_per_core},
+            });
+        if (!tilized) {
+            writer_rtas["aligned_page_size"][core] = aligned_page_size;
+        }
+
         pages_handled_per_core += num_pages_per_core;
     }
 
     run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    run_args.kernel_run_args.push_back(std::move(writer_run_args));
 
     run_args.tensor_args.emplace(INPUT, input_mt);
     run_args.tensor_args.emplace(OUTPUT, output_mt);

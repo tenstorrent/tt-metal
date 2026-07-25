@@ -20,8 +20,6 @@ def _is_subconfig(annotation: Any) -> bool:
         return False
 
 
-from ttnn.experimental.moe_compute_utils import get_tilize_drain_core
-
 import ttnn
 from models.common.modules.moe.tt_moe_decode_config_schemas import (
     ActivationFunction,
@@ -403,11 +401,11 @@ class BuffersConfig(_TTOpKwargs):
     hidden_size: int
     effective_experts_k: int
     shard_dim: int = 0
-    # Per-arch tilize drain/sync core for the MoE compute op (WH (6,9) / BH (10,9)).
-    # Resolved from the current arch via the commonized moe_compute helper so the
-    # default tracks the hardware rather than hardcoding the WH coordinate; callers
-    # can still pin an explicit core.
-    compute_tilize_drain_core: CoreCoord = Field(default_factory=get_tilize_drain_core)
+    # Tilize drain core for the MoE compute op.  Must be None (default); TTMoEDecode
+    # resolves it dynamically via ttnn.experimental.get_moe_tilize_drain_core(), which
+    # accounts for the actual device grid, mux exclusion zones, and hidden-size-dependent
+    # core layout.  Pinning an explicit core is not supported.
+    compute_tilize_drain_core: Optional[CoreCoord] = None
 
     @classmethod
     def adopt_fields(cls) -> set[str]:

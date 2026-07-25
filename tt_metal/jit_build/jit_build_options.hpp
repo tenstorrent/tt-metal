@@ -48,6 +48,10 @@ public:
     // unpack_dst_format for 2x-capable inputs.
     bool enable_2x_src_format{};
 
+    // (Quasar only) Explicit unpack-to-dest flag; emitted as `constexpr bool UnpackToDestEn` into
+    // chlkc_descriptors.h. Default false; WH/BH never set it (they keep UnpackToDestEn hardcoded in llk_defs.h).
+    bool unpack_to_dest_en{};
+
     JitBuildOptions(const JitBuildEnv& env);
     void set_name(const std::string& name);
 

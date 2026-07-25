@@ -16,9 +16,9 @@
 //
 // split_reader_cb_shared (the side-channel-semaphore second-writer overlap) is DEFERRED on the host side
 // (the factory TT_FATAL-rejects it and forces split reader off), so all split_reader_cb_shared code paths
-// and the reserve_done/write_done semaphores are removed here.  conv_reader_common.hpp is header-only
-// Device-2.0 already; its helpers take experimental::CB, so CBs passed to them (and to the local mcast
-// helpers) are constructed as experimental::CB from the dfb:: constexpr index.
+// and the reserve_done/write_done semaphores are removed here.  conv_reader_common.hpp helpers are
+// templated on the CB-object type, so DataflowBuffers (constructed from dfb:: constexpr indices) are
+// passed to them and to the local mcast helpers directly.
 
 #include <cstdint>
 #include <api/dataflow/dataflow_api.h>
@@ -50,11 +50,11 @@ void multicast_data(
     Noc noc,
     MulticastEndpoint mcast_ep,
     bool is_receiver_core,
-    experimental::CB src_cb,
+    DataflowBuffer src_cb,
     uint32_t src_offset,
     McastDst& dst,
     uint32_t total_bytes) {
-    auto src = use<CircularBuffer::AddrSelector::READ_PTR>(src_cb);
+    auto& src = src_cb;  // DataflowBuffer src -> read_ptr (was use<READ_PTR> on CircularBuffer)
     if (is_receiver_core) {
         if constexpr (act_mcast_num_cores > 0) {
             noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
@@ -92,9 +92,9 @@ template <
 void mcast_block_chunked(
     Noc noc,
     MulticastEndpoint mcast_ep,
-    experimental::CB src_cb_obj,
+    DataflowBuffer src_cb_obj,
     bool is_receiver_core,
-    experimental::CB dst_cb_obj,
+    DataflowBuffer dst_cb_obj,
     const McastRect& rect) {
     // Build mcast dst once; only .addr is updated per burst
     // number of full bursts
@@ -177,8 +177,6 @@ void kernel_main() {
     constexpr bool transpose_mcast = get_arg(args::transpose_mcast) == 1;
     constexpr bool needs_act_block_zero_out = get_arg(args::needs_act_block_zero_out) == 1;
     constexpr uint32_t cb_id_act = dfb::act;
-    constexpr uint32_t cb_id_sharded_act = dfb::act_sharded;
-    constexpr uint32_t cb_reader_indices = dfb::reader_indices;
     constexpr uint32_t tilized_in0_cb_id = dfb::act_tilized;
     constexpr uint32_t cb_id_act_row_major_bfloat16 = dfb::act_row_major;
     constexpr bool split_reader_enabled = get_arg(args::split_reader_enabled);
@@ -188,11 +186,9 @@ void kernel_main() {
     Semaphore act_mcast_sender_sem(sem::act_mcast_sender);
     Semaphore act_mcast_receiver_sem(sem::act_mcast_receiver);
     MulticastEndpoint mcast_ep;
-    experimental::CB cb_act_obj(cb_id_act);
-    experimental::CB cb_act_rm_obj(cb_id_act_row_major_bfloat16);
-    experimental::CB cb_tilized_in0_obj(tilized_in0_cb_id);
-    experimental::CB cb_reader_indices_obj(cb_reader_indices);
-    experimental::CB cb_sharded_act_obj(cb_id_sharded_act);
+    DataflowBuffer cb_act_obj(cb_id_act);
+    DataflowBuffer cb_act_rm_obj(cb_id_act_row_major_bfloat16);
+    DataflowBuffer cb_tilized_in0_obj(tilized_in0_cb_id);
 
     if constexpr (needs_act_block_zero_out) {
         zero_out_tiles<cb_id_act_row_major_bfloat16>(noc, cb_act_rm_obj);
@@ -216,8 +212,13 @@ void kernel_main() {
     // The act-mcast sender NoC-coord lookup table for the mcast dimension is supplied as positional
     // runtime varargs; get_vararg(act_w_outer_i) is the physical coord of sender act_w_outer_i.
 
+    // Reader-indices base. On the resident (L1) path the config slice already lives in L1, reached by
+    // base address from a local TensorAccessor (tensor::reader_indices) — no borrowed CB. On the
+    // DRAM-config path it is DMA'd into a fresh L1 DFB (dfb::reader_indices) first.
+    volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr;
 #ifdef CONFIG_TENSOR_IN_DRAM
-    // Read this core's slice of the reader-indices config tensor from DRAM into reader_indices CB.
+    DataflowBuffer cb_reader_indices_obj(dfb::reader_indices);
+    packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_reader_indices_obj.get_write_ptr());
     {
         const auto config_accessor = TensorAccessor(tensor::reader_indices);
         constexpr uint32_t config_page_size = get_arg(args::config_page_size);
@@ -226,10 +227,11 @@ void kernel_main() {
         noc.async_read_barrier();
         cb_reader_indices_obj.push_back(1);
     }
+#else
+    packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        (uint32_t)NOC_LOCAL_ADDR_OFFSET(TensorAccessor(tensor::reader_indices).get_noc_addr(0)));
+    (void)dram_config_reader_index;
 #endif
-
-    volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_reader_indices_obj.get_write_ptr());
 
     // Set up receiver semaphore VALID value, to be mcasted to destinations after the data has been mcasted
     act_mcast_receiver_sem.set(VALID);
@@ -242,8 +244,9 @@ void kernel_main() {
     constexpr uint32_t coalesced_read_bytes =
         ((dilation_w == 1) ? weight_size_w * conv_act_c_read_bytes : conv_act_c_read_bytes);
 
-    // Fully create act matrix and tilize it before mcast
-    uint32_t act_l1_read_addr = cb_sharded_act_obj.get_read_ptr();
+    // Fully create act matrix and tilize it before mcast. The resident activation shard is reached by
+    // L1 base address from a local TensorAccessor (tensor::act_sharded), not a borrowed self-loop CB.
+    uint32_t act_l1_read_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(TensorAccessor(tensor::act_sharded).get_noc_addr(0));
 
     experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
 

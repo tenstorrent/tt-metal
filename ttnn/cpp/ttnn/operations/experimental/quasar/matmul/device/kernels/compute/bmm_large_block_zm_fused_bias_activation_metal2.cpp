@@ -28,9 +28,10 @@
 #include <cstdint>
 
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
@@ -42,6 +43,7 @@
 
 #include "api/compute/eltwise_binary.h"
 #include "api/debug/dprint.h"  // DEBUG: matmul layer3 hang localization (remove after)
+#include "api/debug/ring_buffer.h"  // DEBUG mcast2d compute-stall: ring-buffer markers (remove after)
 // DEBUG: neutralize compute-kernel DPRINT. DPRINT inside the compute (pack/math/unpack) perturbs the
 // kernel epilogue timing and re-triggers the program-completion stall when DPRINT is enabled on-device.
 // Keep DM-kernel DPRINT (reader/writer) for diagnosis; make the CMPM markers here no-ops.
@@ -56,8 +58,8 @@
  */
 template <uint32_t in0_block_num_tiles, uint32_t block_size = 4>
 FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_cb_id, uint32_t in0_cb_id) {
-    CircularBuffer in0_transpose_cb(in0_transpose_cb_id);
-    CircularBuffer in0_cb(in0_cb_id);
+    DataflowBuffer in0_transpose_cb(in0_transpose_cb_id);
+    DataflowBuffer in0_cb(in0_cb_id);
     constexpr uint32_t num_blocks = in0_block_num_tiles / block_size;
     constexpr uint32_t last_block_size = in0_block_num_tiles % block_size;
     // Lets do 2 passes: One loop until last and one last for the left overs
@@ -65,7 +67,7 @@ FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_cb_id, uint32_t in
         in0_transpose_cb.wait_front(block_size);
         tile_regs_acquire();
         for (uint32_t tile_idx = 0; tile_idx < block_size; tile_idx++) {
-            transpose_wh_tile(in0_transpose_cb_id, tile_idx, tile_idx);
+            transpose_tile(in0_transpose_cb_id, tile_idx, tile_idx);
         }
         tile_regs_commit();
         in0_transpose_cb.pop_front(block_size);
@@ -83,7 +85,7 @@ FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_cb_id, uint32_t in
         in0_transpose_cb.wait_front(last_block_size);
         tile_regs_acquire();
         for (uint32_t tile_idx = 0; tile_idx < last_block_size; tile_idx++) {
-            transpose_wh_tile(in0_transpose_cb_id, tile_idx, tile_idx);
+            transpose_tile(in0_transpose_cb_id, tile_idx, tile_idx);
         }
         tile_regs_commit();
         in0_transpose_cb.pop_front(last_block_size);
@@ -107,9 +109,16 @@ FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t out_subblock_w,
     uint32_t out_subblock_h,
     uint32_t in0_block_w) {
-    CircularBuffer mm_partials_cb(mm_partials_cb_id);
+    DataflowBuffer mm_partials_cb(mm_partials_cb_id);
     // Reconfigure input
+#ifndef ARCH_QUASAR
     copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
+#else
+    // QSR: copy_tile_to_dst_init_short_with_dt is WH/BH-only; expand it into its
+    // two constituent steps (identical reconfig + copy init) on Quasar.
+    reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
+    copy_tile_to_dst_init_short(mm_partials_cb_id);
+#endif
     mm_partials_cb.wait_front(out_subblock_num_tiles);
 
     uint32_t start_dst_index = 0;
@@ -118,8 +127,8 @@ FORCE_INLINE void reload_from_cb_to_dst(
 
     mm_partials_cb.pop_front(out_subblock_num_tiles);
     // Reconfigure srcA back
-    mm_block_init_short_with_dt(
-        in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
+    matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
 template <uint32_t out_subblock_w, uint32_t out_block_w>
@@ -129,8 +138,8 @@ inline void reblock_and_untilize(
     uint32_t out_subblock_h,
     uint32_t interm_cb_id,
     uint32_t out_cb_id) {
-    CircularBuffer interm_cb(interm_cb_id);
-    CircularBuffer out_cb(out_cb_id);
+    DataflowBuffer interm_cb(interm_cb_id);
+    DataflowBuffer out_cb(out_cb_id);
     uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
     interm_cb.wait_front(num_tiles_in_row_of_subblocks);
 
@@ -268,8 +277,8 @@ void kernel_main() {
 
     constexpr bool spill = num_blocks_inner_dim > 1;
 
-    mm_block_init(
-        in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, mm_partials_cb_id);
+    matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
@@ -310,25 +319,30 @@ void kernel_main() {
 
                     if constexpr (in0_transpose_tile) {
                         reconfig_data_format_srca(in1_cb_id, in0_transpose_cb_id);
-                        transpose_wh_init_short(in0_transpose_cb_id);
+                        transpose_init(in0_transpose_cb_id);
                         PACK((pack_reconfig_data_format(in0_cb_id)));
 #ifdef PACKER_L1_ACC
                         PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
                         transpose_tile_block<in0_block_num_tiles>(in0_transpose_cb_id, in0_cb_id);
-                        mm_block_init_short_with_dt(
-                            in0_cb_id,
-                            in1_cb_id,
-                            in0_transpose_cb_id,
-                            in1_transpose_tile,
-                            out_subblock_w,
-                            out_subblock_h,
-                            in0_block_w);
+                        reconfig_data_format_srca(in0_transpose_cb_id, in1_cb_id);
+                        matmul_block_init(
+                            in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
                         PACK((pack_reconfig_data_format(mm_partials_cb_id)));
                     }
 
+                    // [DEBUG mcast2d compute stall] Which input wait does the unpacker (UPMW) block on?
+                    // Newest ring marker per stuck core: 0xC0FFEE00 -> stuck at in0 wait (in0 data not
+                    // delivered); 0xC0FFEE01 -> passed in0, stuck at in1 wait; 0xC0FFEE02 -> passed BOTH
+                    // input waits, so the stall is later (partials reserve/wait, pack, or dest).
+                    UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE00u));
+                    UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)block));
+                    UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)in0_block_num_tiles));
                     in0_cb.wait_front(in0_block_num_tiles);
+                    UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE01u));
+                    UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)in1_block_num_tiles));
                     in1_cb.wait_front(in1_block_num_tiles);
+                    UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE02u));
 
                     int in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
@@ -604,7 +618,7 @@ void kernel_main() {
                     reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
 #endif
                     // reconfigure init for matmul
-                    mm_block_init_short(
+                    matmul_block_init(
                         in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
                 }
             }

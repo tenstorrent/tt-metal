@@ -97,6 +97,13 @@ repos:
       files: ^ttnn/.*\.hpp$
       pass_filenames: true
       require_serial: true
+    - id: detect-smuggled-rta
+      name: Detect smuggled buffer-address runtime args in descriptor factories
+      entry: python3 scripts/detect_smuggled_rta.py
+      language: system
+      types: [file]
+      files: ^ttnn/.*/device/.*\.(cpp|hpp)$
+      pass_filenames: true
 - repo: local
   hooks:
     - id: validate-golden-csv-columns

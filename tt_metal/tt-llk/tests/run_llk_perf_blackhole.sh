@@ -45,12 +45,12 @@ while IFS=":" read -r FILE GIDX TOTAL ITEMS; do
   fi
 
   pytest $PYTEST_COMPILE_EXTRA --speed-of-light --compile-producer -n 10 \
-    -m "perf" --timeout=60 \
+    -m "perf and not accuracy" --timeout=60 \
     $SPLIT_ARGS \
     "$FILE"
   tt-smi -r 0
   pytest $PYTEST_RUN_EXTRA --speed-of-light --compile-consumer -n 15 -x \
-    -m "perf" --timeout=60 \
+    -m "perf and not accuracy" --timeout=60 \
     $SPLIT_ARGS \
     --junitxml="pytest-report-blackhole-${GROUP}-${REPORT_NAME}.xml" \
     "$FILE"

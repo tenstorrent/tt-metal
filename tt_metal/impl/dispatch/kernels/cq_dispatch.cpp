@@ -62,6 +62,7 @@ constexpr uintptr_t dev_completion_q_rd_ptr = DEV_COMPLETION_Q_RD_PTR;
 constexpr uintptr_t dev_dispatch_progress_ptr = DEV_DISPATCH_PROGRESS_PTR;
 
 constexpr uint32_t first_stream_used = FIRST_STREAM_USED;
+constexpr uint32_t completion_counter_offset = COMPLETION_COUNTER_OFFSET;
 
 constexpr uint32_t virtualize_unicast_cores = VIRTUALIZE_UNICAST_CORES;
 constexpr uint32_t num_virtual_unicast_cores = NUM_VIRTUAL_UNICAST_CORES;
@@ -113,16 +114,19 @@ constexpr bool telemetry_enabled = !DISPATCH_TELEMETRY_DISABLED;
 constexpr uint32_t dispatch_telemetry_base = DISPATCH_TELEMETRY_ADDR;
 constexpr uintptr_t dispatch_telemetry_control_addr = DISPATCH_TELEMETRY_CONTROL_ADDR;
 constexpr uint32_t upstream_blocked_count_addr =
-    dispatch_telemetry_base + offsetof(tt::tt_metal::DispatchCoreTelemetry, upstream_blocked_count);
+    dispatch_telemetry_base +
+    offsetof(tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry, upstream_blocked_count);
 constexpr uint32_t upstream_unblocked_count_addr =
-    dispatch_telemetry_base + offsetof(tt::tt_metal::DispatchCoreTelemetry, upstream_unblocked_count);
+    dispatch_telemetry_base +
+    offsetof(tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry, upstream_unblocked_count);
 using DispatchTelemetryBlockGuard = TelemetryBlockGuard<
     upstream_blocked_count_addr,
     upstream_unblocked_count_addr,
     &upstream_blocked_counter,
     telemetry_enabled>;
-volatile tt_l1_ptr tt::tt_metal::DispatchTelemetryControl* dispatch_telemetry_control =
-    reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchTelemetryControl*>(dispatch_telemetry_control_addr);
+volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchTelemetryControl* dispatch_telemetry_control =
+    reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchTelemetryControl*>(
+        dispatch_telemetry_control_addr);
 
 constexpr uint8_t upstream_noc_index = UPSTREAM_NOC_INDEX;
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
@@ -146,10 +150,14 @@ constexpr uint32_t completion_queue_base_addr_16B = completion_queue_base_addr >
 constexpr uint32_t dispatch_cb_size = dispatch_cb_page_size * dispatch_cb_pages;
 constexpr uintptr_t dispatch_cb_end = dispatch_cb_base + dispatch_cb_size;
 constexpr uint32_t downstream_cb_end = downstream_cb_base + downstream_cb_size;
-constexpr uint32_t fd_core_type_idx = static_cast<uint32_t>(fd_core_type);
+constexpr uint32_t programmable_core_type_idx = static_cast<uint32_t>(programmable_core_type);
 
 constexpr bool dispatch_s_enabled = dispatch_d_shutdown_sem_id != 0;
+#ifdef ARCH_QUASAR
+constexpr bool publish_noc_count = false;
+#else
 constexpr bool publish_noc_count = !distributed_dispatcher && dispatch_s_enabled;
+#endif
 
 // Break buffer into blocks, 1/n of the total (dividing equally)
 // Do bookkeeping (release, etc) based on blocks
@@ -185,9 +193,9 @@ struct NocReleasePolicy {
     template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id>
     static FORCE_INLINE void release(uint32_t pages) {
 #ifdef ARCH_QUASAR
-        Semaphore<fd_core_type>(sem_id).up(pages);
+        Semaphore<programmable_core_type>(sem_id).up(pages);
 #else
-        uint32_t sem_addr = get_semaphore<fd_core_type>(sem_id);
+        uint32_t sem_addr = get_semaphore<programmable_core_type>(sem_id);
         noc_semaphore_inc(get_noc_addr_helper(noc_xy, sem_addr), pages, noc_idx);
 #endif
     }
@@ -410,7 +418,7 @@ void process_exec_buf_end_h() {
     if constexpr (split_prefetch) {
         invalidate_l1_cache();
         volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-            get_semaphore<fd_core_type>(prefetch_h_local_downstream_sem_addr));
+            get_semaphore<programmable_core_type>(prefetch_h_local_downstream_sem_addr));
 
         noc_semaphore_inc(
             get_noc_addr_helper(prefetch_h_noc_xy, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(sem_addr))),
@@ -540,7 +548,7 @@ void process_write_linear(uint32_t num_mcast_dests) {
     // DPRINT("process_write_linear noc_xy:0x{:x} write_offset:{} dst_addr:0x{08x} length:{} data_ptr:0x{08x}\n",
     // dst_noc, write_offset_index, dst_addr, length, data_ptr);
     if (multicast) {
-        cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, true>(0, dst_noc, dst_addr);
+        cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, true>(0, dst_noc, dst_addr, 0, noc_index, num_mcast_dests);
     } else {
         cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, false>(0, dst_noc, dst_addr);
     }
@@ -557,7 +565,7 @@ void process_write_linear(uint32_t num_mcast_dests) {
         uint32_t xfer_size = length > available_data ? available_data : length;
         if (hit_boundary) {
             if (multicast) {
-                cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, true>(0, dst_noc, dst_addr);
+                cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, true>(0, dst_noc, dst_addr, 0, noc_index, num_mcast_dests);
             } else {
                 cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, false>(0, dst_noc, dst_addr);
             }
@@ -732,7 +740,7 @@ void process_write_packed(uint32_t flags, uint32_t* l1_cache) {
                 cq_noc_async_write_with_state<CQ_NOC_SnDL>(
                     static_cast<uint32_t>(data_ptr), remainder_dst_addr, remainder_xfer_size, num_dests);
                 // Reset values expected below
-                cq_noc_async_write_with_state<CQ_NOC_snDL, CQ_NOC_WAIT, CQ_NOC_send>(0, dst, xfer_size);
+                cq_noc_async_write_with_state<CQ_NOC_snDL, CQ_NOC_WAIT, CQ_NOC_send>(0, dst, xfer_size, num_dests);
                 writes++;
                 mcasts += num_dests;
 
@@ -858,7 +866,7 @@ void process_write_packed_large(uint32_t* l1_cache) {
                     uint32_t rem_xfer_size = cq_noc_async_write_with_state_any_len<false>(
                         static_cast<uint32_t>(data_ptr), dst_addr, xfer_size, num_dests);
                     // Unset Link flag
-                    cq_noc_async_write_init_state<CQ_NOC_sndl, true, false>(0, 0, 0);
+                    cq_noc_async_write_init_state<CQ_NOC_sndl, true, false>(0, 0, 0, num_dests, noc_index);
                     uint32_t data_offset = xfer_size - rem_xfer_size;
                     cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_wait>(
                         static_cast<uint32_t>(data_ptr + data_offset),
@@ -998,6 +1006,16 @@ uint32_t stream_wrap_ge(uint32_t a, uint32_t b) {
     return (diff << shift) >= 0;
 }
 
+FORCE_INLINE void wait_worker_completion(uint32_t stream, uint32_t wait_count) {
+#ifdef ARCH_QUASAR
+    while (!wrap_ge(*worker_completion_sem_addr(stream, first_stream_used, completion_counter_offset), wait_count)) {
+    }
+#else
+    while (!stream_wrap_ge(NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), wait_count)) {
+    }
+#endif
+}
+
 static void process_wait() {
     volatile CQDispatchCmd tt_l1_ptr* cmd =
         reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(l1_uncached_addr(cmd_ptr));
@@ -1006,6 +1024,7 @@ static void process_wait() {
     uint32_t barrier = flags & CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER;
     uint32_t notify_prefetch = flags & CQ_DISPATCH_CMD_WAIT_FLAG_NOTIFY_PREFETCH;
     uint32_t clear_stream = flags & CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM;
+    uint32_t clear_memory = flags & CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_MEMORY;
     uint32_t wait_memory = flags & CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY;
     uint32_t wait_stream = flags & CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM;
     uint32_t count = cmd->wait.count;
@@ -1035,7 +1054,6 @@ static void process_wait() {
         last_wait_stream = stream;
         volatile uint32_t* sem_addr = reinterpret_cast<volatile uint32_t*>(
             static_cast<uintptr_t>(STREAM_REG_ADDR(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)));
-        // DPRINT("DISPATCH WAIT STREAM 0x{:08x} count {}\n", stream, count);
         do {
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
         } while (!stream_wrap_ge(*sem_addr, count));
@@ -1056,12 +1074,16 @@ static void process_wait() {
             dispatch_telemetry_control->worker_stream_reset_update = ++local_worker_stream_reset_update;
         }
     }
+    if (clear_memory) {
+        uintptr_t addr = cmd->wait.addr;
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(addr)) = 0;
+    }
     if (notify_prefetch) {
 #ifdef ARCH_QUASAR
-        Semaphore<fd_core_type>(upstream_sync_sem).up(1);
+        Semaphore<programmable_core_type>(upstream_sync_sem).up(1);
 #else
         noc_semaphore_inc(
-            get_noc_addr_helper(upstream_noc_xy, get_semaphore<fd_core_type>(upstream_sync_sem)),
+            get_noc_addr_helper(upstream_noc_xy, get_semaphore<programmable_core_type>(upstream_sync_sem)),
             1,
             upstream_noc_index);
 #endif
@@ -1112,21 +1134,19 @@ void process_go_signal_mcast_cmd() {
         cq_noc_async_write_init_state<CQ_NOC_SNDL, true>(
             static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&aligned_go_signal_storage[storage_offset])),
             dst_noc_addr_multicast,
-            sizeof(uint32_t));
+            sizeof(uint32_t),
+            num_dests,
+            noc_index);
         noc_nonposted_writes_acked[noc_index] += num_dests;
 
         WAYPOINT("WCW");
-        while (!stream_wrap_ge(
-            NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), wait_count)) {
-        }
+        wait_worker_completion(stream, wait_count);
         WAYPOINT("WCD");
-        cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0);
+        cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0, num_dests);
         noc_nonposted_writes_num_issued[noc_index] += 1;
     } else {
         WAYPOINT("WCW");
-        while (!stream_wrap_ge(
-            NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), wait_count)) {
-        }
+        wait_worker_completion(stream, wait_count);
         WAYPOINT("WCD");
     }
 
@@ -1143,10 +1163,15 @@ void process_go_signal_mcast_cmd() {
             // the number of cores specified inside cmd->mcast.num_unicast_txns. If this is
             // greater than the number of cores actually on the chip, we must account for acks
             // from non-existent cores here.
+#ifdef ARCH_QUASAR
+            *worker_completion_sem_addr(stream, first_stream_used, completion_counter_offset) +=
+                (num_virtual_unicast_cores - num_physical_unicast_cores);
+#else
             NOC_STREAM_WRITE_REG(
                 stream,
                 STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX,
                 (num_virtual_unicast_cores - num_physical_unicast_cores) << REMOTE_DEST_BUF_WORDS_FREE_INC);
+#endif
         }
     }
 
@@ -1339,7 +1364,8 @@ re_run_command:
             //              cmd->set_write_offset.offset2, cmd->set_write_offset.program_host_id);
             DeviceTimestampedData("runtime_host_id_dispatch", cmd->set_write_offset.program_host_id);
             if constexpr (telemetry_enabled) {
-                reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base)
+                reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry*>(
+                    dispatch_telemetry_base)
                     ->program_count = ++program_counter;
             }
             if (rt_profiler_msg->realtime_profiler_core_noc_xy != 0 &&
@@ -1488,7 +1514,7 @@ void publish_dispatch_d_noc_count(const NocCounterSnapshot& snapshot) {
     set_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(
         upstream_noc_index, posted_writes_delta);
 
-    Semaphore<fd_core_type>(dispatch_d_shutdown_sem_id).set(1);
+    Semaphore<programmable_core_type>(dispatch_d_shutdown_sem_id).set(1);
 }
 
 void kernel_main() {
@@ -1517,13 +1543,16 @@ void kernel_main() {
     }
 
     for (size_t i = 0; i < max_num_worker_sems; i++) {
-        uint32_t index = i + first_stream_used;
-
+        const uint32_t index = i + first_stream_used;
+#ifdef ARCH_QUASAR
+        *worker_completion_sem_addr(index, first_stream_used, completion_counter_offset) = 0;
+#else
         NOC_STREAM_WRITE_REG(
             index,
             STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX,
             -NOC_STREAM_READ_REG(index, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)
                 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+#endif
     }
 
     uint32_t l1_cache[l1_cache_elements_rounded];

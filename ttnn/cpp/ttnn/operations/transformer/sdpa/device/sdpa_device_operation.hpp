@@ -18,7 +18,7 @@ namespace ttnn::prim {
 struct SDPAOperation {
     using operation_attributes_t = SDPAParams;
     using tensor_args_t = SDPAInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct SDPAProgramFactory {
@@ -56,6 +56,8 @@ Tensor sdpa(
     std::optional<uint32_t> head_dim_v,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config);
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    const std::optional<Tensor>& cu_window_seqlens = std::nullopt,
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt);
 
 }  // namespace ttnn::prim

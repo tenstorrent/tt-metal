@@ -25,7 +25,7 @@ import ml_dtypes
 
 import ttnn
 import ttml
-from ttml.common.data import build_causal_mask
+from ttml.common.utils import build_causal_mask
 from ttml.models import RunnerType
 from ttml.models.deepseek import DeepSeek, DeepSeekConfig
 from ttml.models.deepseek.moe import MoE as TtmlMoE

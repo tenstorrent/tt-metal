@@ -13,6 +13,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
@@ -69,13 +70,14 @@ void kernel_main() {
     }
 
     DataflowBuffer act_cb(dfb::act);
-    DataflowBuffer sharded_act_cb(dfb::act_sharded);
-    DataflowBuffer reader_indices_cb(dfb::reader_indices);
     Noc noc;
 
     // LOOP TO FILL READER INDICES
-    volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_cb.get_write_ptr());
+    // The resident activation shard and reader-indices config are L1-resident (the 1D depthwise path
+    // has no DRAM-config variant); both are reached by L1 base address from local TensorAccessors
+    // (tensor::act_sharded / tensor::reader_indices), not borrowed self-loop CBs.
+    volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        (uint32_t)NOC_LOCAL_ADDR_OFFSET(TensorAccessor(tensor::reader_indices).get_noc_addr(0)));
 
     uint32_t reader_idx = 0;
 
@@ -87,7 +89,7 @@ void kernel_main() {
 
     reader_offset_idx = 0;
     uint32_t act_l1_offset = 0;
-    uint32_t act_l1_read_addr = sharded_act_cb.get_read_ptr();
+    uint32_t act_l1_read_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(TensorAccessor(tensor::act_sharded).get_noc_addr(0));
 
     if constexpr (coalesced_read_bytes <= NOC_MAX_BURST_SIZE) {
         experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);

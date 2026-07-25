@@ -452,7 +452,7 @@ TEST_F(ServiceCoreFdFixture, ServiceWorkloadReenqueueRequiresRelease) {
         Program prog;
         CreateKernel(
             prog,
-            "tt_metal/kernels/dataflow/blank.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
             CoreRangeSet(CoreRange(svc_core)),
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
         auto workload = std::make_shared<MeshWorkload>();
@@ -496,7 +496,7 @@ TEST_F(ServiceCoreFdFixture, ServiceWorkloadMixingFatal) {
     Program prog;
     CreateKernel(
         prog,
-        "tt_metal/kernels/dataflow/blank.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
         CoreRangeSet(std::vector<CoreCoord>{svc_core, worker_core}),
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     auto workload = std::make_shared<MeshWorkload>();

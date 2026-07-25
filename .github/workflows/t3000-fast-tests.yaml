@@ -3,21 +3,6 @@ name: "(T3K) T3000 fast tests"
 on:
   workflow_dispatch:
     inputs:
-      run-fabric-tests:
-        description: "Run t3k fabric tests"
-        required: false
-        default: true
-        type: boolean
-      run-multiprocess-tests:
-        description: "Run t3k ttnn multiprocess tests"
-        required: false
-        default: true
-        type: boolean
-      run-ccl-tests:
-        description: "Run t3k ttnn ccl tests"
-        required: false
-        default: true
-        type: boolean
       platform:
         required: false
         type: choice
@@ -42,6 +27,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      enable-watcher:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable watcher for long-running tests"
 
 jobs:
   check-harbor:
@@ -59,14 +49,14 @@ jobs:
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-  t3000-fast-tests:
+  t3000-sanity-tests:
     needs: [check-harbor, build-artifact]
     secrets: inherit
-    uses: ./.github/workflows/t3000-fast-tests-impl.yaml
+    uses: ./.github/workflows/t3000-sanity-tests-impl.yaml
     with:
+      enabled-skus: "wh_llmbox"
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      run-fabric-tests: ${{ inputs.run-fabric-tests }}
-      run-multiprocess-tests: ${{ inputs.run-multiprocess-tests }}
-      run-ccl-tests: ${{ inputs.run-ccl-tests }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      timeout-minutes-override: ${{ inputs.enable-watcher && 80 || 0 }}

@@ -139,6 +139,9 @@ inline void move_d2b_fixed_face(const std::uint8_t addrmod)
 
 inline void move_d2a_row_broadcast_fixed_face(const std::uint8_t addrmod)
 {
+    // MOVD2A does not auto-wait for SrcA[MatrixUnit.SrcABank].AllowedClient == MatrixUnit, so gate on SRCA_VLD
+    // before the row moves (mirrors move_d2b_fixed_face's SRCB_VLD wait). See llk_math_transpose_dest.h. tt-llk#1664.
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD);
     // // Seems to make things 200 clocks slower. Really shouldn't though.
     TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 0, addrmod, p_movd2a::MOV_1_ROW, 0);
     TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 1, addrmod, p_movd2a::MOV_1_ROW, 0);

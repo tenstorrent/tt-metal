@@ -6,6 +6,7 @@ set(UNIT_TESTS_FABRIC_SRC
     common/fabric_worker_kernel_helpers.cpp
     common/fabric_command_interface.cpp
     fabric_router/test_routing_tables.cpp
+    fabric_router/test_pipeline_builder.cpp
     fabric_router/test_mesh_graph_descriptor.cpp
     fabric_router/test_physical_grouping_descriptor.cpp
     fabric_router/test_topology_mapper.cpp
@@ -31,6 +32,7 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_data_movement/test_basic_fabric_apis.cpp
     fabric_data_movement/test_basic_1d_fabric.cpp
     fabric_data_movement/test_basic_fabric_mux.cpp
+    fabric_data_movement/test_basic_fabric_mux_v2.cpp
     fabric_data_movement/test_fabric_traffic_generator_kernel.cpp
 )
 

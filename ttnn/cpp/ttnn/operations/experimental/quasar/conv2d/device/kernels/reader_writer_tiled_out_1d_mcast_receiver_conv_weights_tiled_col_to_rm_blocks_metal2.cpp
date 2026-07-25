@@ -15,7 +15,7 @@
 //   - CB-index CTAs -> dfb:: tokens (weights / bias / act_second_reader / act_sharded / reader_indices)
 //   - weights-mcast semaphore RTAs -> Semaphore(sem::weights_mcast_sender / weights_mcast_receiver)
 //   - remaining positional CTAs -> get_arg(args::name); remaining RTAs -> get_arg(args::name)
-//   - experimental::CB -> DataflowBuffer (objects passed to conv_reader_common.hpp helpers stay
+//   - DataflowBuffer -> DataflowBuffer (objects passed to conv_reader_common.hpp helpers stay
 //     experimental::CB); dfb::bias gated behind FUSE_BIAS; dfb::act_second_reader behind SPLIT_READER
 
 #include <api/dataflow/dataflow_api.h>
@@ -23,10 +23,8 @@
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
 #include "conv_reader_common.hpp"
-#include "api/debug/dprint.h"  // DEBUG: conv2d layer3 hang localization (remove after)
 
 void kernel_main() {
-    DPRINT("WR start\n");  // DEBUG: conv2d layer3 hang
     constexpr uint32_t num_blocks_weight_h = get_arg(args::num_blocks_weight_h);
     constexpr uint32_t weight_block_num_tiles = get_arg(args::weight_block_num_tiles);
 
@@ -72,7 +70,7 @@ void kernel_main() {
     Noc noc;
 
 #ifdef SPLIT_READER
-    experimental::CB cb_act_second_obj(dfb::act_second_reader);
+    DataflowBuffer cb_act_second_obj(dfb::act_second_reader);
     if constexpr (split_reader_enabled) {
         if constexpr (needs_act_block_zero_out) {
             zero_out_tiles<dfb::act_second_reader>(noc, cb_act_second_obj);
@@ -134,7 +132,7 @@ void kernel_main() {
         if constexpr (split_reader_enabled) {
             if constexpr (activation_reuse_enabled) {
                 l1_write_addr_act = cb_start_addr;
-                get_local_cb_interface(dfb::act_second_reader).fifo_wr_ptr = l1_write_addr_act;
+                cb_act_second_obj.evil_set_write_ptr(l1_write_addr_act);
             }
             reader_offset = act_l1_read_addr;
         }
@@ -248,5 +246,4 @@ void kernel_main() {
     // the legacy runtime did, so returning with an un-acked atomic leaves the core "running" and it
     // never signals program completion -> dispatch process_wait hangs.
     noc.async_full_barrier();
-    DPRINT("WR end\n");  // DEBUG: conv2d layer3 hang
 }

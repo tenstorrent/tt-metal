@@ -213,6 +213,54 @@ TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
     EXPECT_TRUE(mesh_device->close());
 }
 
+TEST(RealtimeProfilerSanity, LastProgramRecordDeliveredOnFinish) {
+    constexpr int kDeviceId = 0;
+
+    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
+        kDeviceId, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
+    ASSERT_NE(mesh_device, nullptr);
+
+    if (!IsProgramRealtimeProfilerActive()) {
+        mesh_device->close();
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    }
+
+    std::mutex records_mu;
+    std::vector<ProgramRealtimeRecord> records;
+    ProgramRealtimeProfilerCallbackHandle handle =
+        RegisterProgramRealtimeProfilerCallback([&records_mu, &records](const ProgramRealtimeRecord& record) {
+            std::lock_guard<std::mutex> lk(records_mu);
+            records.push_back(record);
+        });
+
+    CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();
+    CoreRange all_cores(CoreCoord{0, 0}, CoreCoord{compute_grid.x - 1, compute_grid.y - 1});
+
+    for (uint32_t i = 0; i < kNumPrograms; ++i) {
+        enqueue_sanity_program(mesh_device, i + 1, all_cores);
+    }
+
+    distributed::Finish(mesh_device->mesh_command_queue());
+    UnregisterProgramRealtimeProfilerCallback(handle);
+
+    constexpr uint32_t last_runtime_id = kNumPrograms;
+    bool last_record_seen = false;
+    {
+        std::lock_guard<std::mutex> lk(records_mu);
+        for (const auto& rec : records) {
+            if (rec.runtime_id == last_runtime_id) {
+                last_record_seen = true;
+                break;
+            }
+        }
+    }
+
+    EXPECT_TRUE(last_record_seen) << "The final program's RT profiler record (runtime_id=" << last_runtime_id
+                                  << ") was not delivered; ensure that the finish-time RT-profiler flush is emitted";
+
+    EXPECT_TRUE(mesh_device->close());
+}
+
 TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
     constexpr int kDeviceId = 0;
     constexpr uint32_t kWarmupRuntimeId = 0x6001;

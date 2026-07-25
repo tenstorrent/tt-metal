@@ -15,6 +15,8 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -105,34 +107,59 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
 
     // ------------------------------------------------------------------------
     // Dataflow buffers (formerly CB c_0 / c_16). The legacy factory emitted a CB pair per non-empty
-    // sub-region with a per-region size. A DataflowBuffer carries one size set at construction, so the
-    // IN/OUT DFBs are sized to the MAX present region size — a superset of each legacy per-region
-    // buffer (the FIFO depth need only be >= the block consumed at once).
+    // sub-region with a per-region size; a DataflowBuffer carries ONE size shared across all regions.
+    // pack_untilize_block reads/writes block_width_tiles CONTIGUOUS tiles from the FIFO read/write
+    // pointer (fifo_rd_ptr + tile_index*page_size, no wrap mid-block), so the shared capacity must be
+    // a MULTIPLE of every present region's block_width_tiles. Sizing to just the MAX block (what an
+    // earlier port did) lets a block straddle the FIFO wrap when capacity % block_width_tiles != 0
+    // (e.g. cap 6 with a width-4 block: block 2 reads tiles 4..7 past fifo_limit), running the indexed
+    // tile read out of bounds (caught by the cb_access_within_bounds sanitizer; previously a silent
+    // garbage read). Size to the LCM of the present regions' block_width_tiles (full / cliff_col use
+    // single_sub_block_size; cliff_row / cliff_col_row use single_block_size_cliff_row). A multiple of
+    // block_width_tiles is also a multiple of the block-based path's sub_block_width (which divides
+    // block_width_tiles), so this is correct for both untilize dispatch paths; LCM(a,b) >= max(a,b) so
+    // capacity is never under-sized.
     // ------------------------------------------------------------------------
-    uint32_t max_block_tiles = 0;
+    auto lcm_u32 = [](uint32_t a, uint32_t b) -> uint32_t {
+        if (a == 0) {
+            return b;
+        }
+        if (b == 0) {
+            return a;
+        }
+        uint32_t ga = a;
+        uint32_t gb = b;
+        while (gb != 0) {
+            uint32_t t = gb;
+            gb = ga % gb;
+            ga = t;
+        }
+        return a / ga * b;
+    };
+    uint32_t block_buf_tiles = 0;
     if (!core_range.empty()) {
-        max_block_tiles = std::max(max_block_tiles, single_sub_block_size);
-    }
-    if (has_cliff_col && has_cliff_row) {
-        max_block_tiles = std::max(max_block_tiles, single_block_size_cliff_row);
+        block_buf_tiles = lcm_u32(block_buf_tiles, single_sub_block_size);
     }
     if (has_cliff_row) {
-        max_block_tiles = std::max(max_block_tiles, single_block_size_cliff_row);
+        block_buf_tiles = lcm_u32(block_buf_tiles, single_block_size_cliff_row);
     }
     if (has_cliff_col) {
-        max_block_tiles = std::max(max_block_tiles, single_sub_block_size);
+        block_buf_tiles = lcm_u32(block_buf_tiles, single_sub_block_size);
+    }
+    if (has_cliff_col && has_cliff_row) {
+        block_buf_tiles = lcm_u32(block_buf_tiles, single_block_size_cliff_row);
     }
 
     DataflowBufferSpec in_dfb{
         .unique_id = IN_DFB,
         .entry_size = input_single_tile_size,
-        .num_entries = max_block_tiles,
+        .num_entries = block_buf_tiles,
         .data_format_metadata = input_cb_data_format,
     };
     DataflowBufferSpec out_dfb{
         .unique_id = OUT_DFB,
         .entry_size = output_single_tile_size,
-        .num_entries = max_block_tiles,
+        .num_entries = block_buf_tiles,
         .data_format_metadata = output_cb_data_format,
     };
 
@@ -170,7 +197,8 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
              {"total_tiles_per_row", total_tiles_per_row}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"start_id", "single_block_size_row_arg", "single_block_size_col_arg"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config =
+            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     KernelSpec writer{
@@ -195,7 +223,8 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
                   "single_block_size_col_arg",
                   "sub_block_width_size",
                   "single_sub_block_size_row_arg"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config =
+            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     uint32_t single_sub_block_size_wh = single_block_size * single_block_size / single_sub_block_size;
@@ -208,12 +237,15 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
 
-    auto make_compute_hw = [&]() {
-        ComputeHardwareConfig hw{.fp32_dest_acc_en = fp32_dest_acc_en};
+    auto make_compute_hw = [&]() -> ComputeHardwareConfig {
+        ttnn::ComputeKernelConfig cfg{
+            .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
+        ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(device->arch(), cfg);
         if (fp32_dest_acc_en) {
-            hw.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+            std::visit(
+                [&](auto& c) { c.unpack_modes.emplace(IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest); }, compute_hw);
         }
-        return hw;
+        return compute_hw;
     };
 
     const std::filesystem::path compute_source(
@@ -273,10 +305,8 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
     // Per-node runtime args. Replicates the legacy per-core work-distribution loop verbatim; the
     // src/dst buffer-address RTAs are dropped (carried by the TensorAccessor bindings).
     // ------------------------------------------------------------------------
-    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args;
-    reader_node_args.reserve(ncores);
-    writer_node_args.reserve(ncores);
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
 
     const auto& cores = corerange_to_cores(available_grid);
     uint32_t start_row_id = 0;
@@ -286,53 +316,61 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
     uint32_t single_block_size_col_arg;
     uint32_t single_sub_block_size_row_arg;
 
-    uint32_t total_row_cores = full_cores_per_row;
-    if (has_cliff_row) {
-        total_row_cores++;
-    }
     uint32_t cores_col_count = 1;
 
     for (uint32_t i = 0; i < ncores; ++i) {
         const NodeCoord node = cores[i];
 
-        if (has_cliff_col && has_cliff_row && i == ncores - 1) {
+        // Classify each core by ACTUAL region-set membership (the same sets the WorkUnitSpecs use to
+        // place the compute kernels), not by reconstructing split_blocks_for_tilize_wh's assignment
+        // from the linear index. The index heuristic breaks for wide / single-tile-high shapes where
+        // full_cores_per_col == 0 (every core lands in cliff_col, but the modulo still flags one as
+        // cliff_row), giving that core reader/writer RTAs that don't match its compute kernel -> the
+        // writer pops a different tile count than compute pushes and the compute/writer stall (CWFW).
+        // Membership is exact.
+        const CoreCoord core = cores[i];
+        if (has_cliff_col && has_cliff_row && cliff_col_row_core_range.contains(core)) {
             single_block_size_row_arg = single_block_size_cliff_row;
             single_block_size_col_arg = single_block_size_cliff_col;
             single_sub_block_size_row_arg = single_block_size_cliff_row;
 
-        } else if (has_cliff_row && i != 0 && ((i + 1) % (full_cores_per_row + 1)) == 0) {
+        } else if (has_cliff_row && cliff_row_core_range.contains(core)) {
             single_block_size_row_arg = single_block_size_cliff_row;
             single_block_size_col_arg = single_block_size;
             single_sub_block_size_row_arg = single_block_size_cliff_row;
 
-        } else if (i < total_row_cores * full_cores_per_col) {
+        } else if (has_cliff_col && cliff_col_core_range.contains(core)) {
             single_block_size_row_arg = single_block_size;
-            single_block_size_col_arg = single_block_size;
+            single_block_size_col_arg = single_block_size_cliff_col;
             single_sub_block_size_row_arg = single_sub_block_size;
 
         } else {
             single_block_size_row_arg = single_block_size;
-            single_block_size_col_arg = single_block_size_cliff_col;
+            single_block_size_col_arg = single_block_size;
             single_sub_block_size_row_arg = single_sub_block_size;
         }
 
-        reader_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = node,
-            .args = {
+        AddRuntimeArgsForNode(
+            reader_node_args,
+            node,
+            {
                 {"start_id", tile_start_id},
                 {"single_block_size_row_arg", single_block_size_row_arg},
-                {"single_block_size_col_arg", single_block_size_col_arg}}});
+                {"single_block_size_col_arg", single_block_size_col_arg},
+            });
 
-        writer_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = node,
-            .args = {
+        AddRuntimeArgsForNode(
+            writer_node_args,
+            node,
+            {
                 {"width_size", TILE_WIDTH * el_size * single_block_size_row_arg},
                 {"start_row_id", start_row_id},
                 {"start_column_id", start_column_id},
                 {"single_block_size_row_arg", single_block_size_row_arg},
                 {"single_block_size_col_arg", single_block_size_col_arg},
                 {"sub_block_width_size", TILE_WIDTH * el_size * single_sub_block_size_row_arg},
-                {"single_sub_block_size_row_arg", single_sub_block_size_row_arg}}});
+                {"single_sub_block_size_row_arg", single_sub_block_size_row_arg},
+            });
 
         uint32_t end_column_id = start_column_id + (single_block_size_row_arg * TILE_WIDTH * el_size);
         start_column_id = end_column_id % padded_row_size_bytes;

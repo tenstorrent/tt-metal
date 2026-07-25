@@ -5,9 +5,11 @@
 #pragma once
 
 #include <filesystem>
+#include <set>
 #include <string>
 #include <variant>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 
 /**
@@ -74,6 +76,7 @@ struct QuasarComputeConfig {
     bool bfp8_pack_precise = false;
     bool math_approx_mode = false;
     bool enable_2x_src_format = false;
+    bool unpack_to_dest_en = false;
 
     std::vector<uint32_t> compile_args;
 
@@ -125,5 +128,17 @@ KernelHandle CreateKernel(
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const QuasarComputeConfig& config);
+
+/**
+ * @brief Reserve free data-movement processors on the given programmable core type.
+ *
+ * Same allocation policy as Quasar Tensix CreateKernel: pick the lowest-numbered free DMs.
+ */
+std::set<DataMovementProcessor> GetAvailableDataMovementProcessors(
+    Program& program,
+    const CoreRangeSet& core_ranges,
+    uint32_t num_processors_per_cluster,
+    HalProgrammableCoreType programmable_core_type);
+
 }  // namespace experimental::quasar
 }  // namespace tt::tt_metal

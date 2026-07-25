@@ -25,14 +25,14 @@ from tqdm import tqdm
 
 import ttml
 import ttnn
-from utils.param_utils import (
-    build_weight_mapping_distributed,
+from ttml.models.qwen3.weights import (
     build_weight_mapping_single,
     repermute_norm_weights,
     repermute_proj_rows,
     unpermute_norm_weights,
     unpermute_proj_rows,
 )
+from utils.param_utils import build_weight_mapping_distributed
 
 # =====================================================================
 # HF tensor shape registry
@@ -406,7 +406,7 @@ def _load_hf_dict_into_ttml(
             shard_dim=shard_dim,
         )
     else:
-        from model_qwen3 import load_weights_from_hf
+        from ttml.models.qwen3.weights import load_weights_from_hf
 
         load_weights_from_hf(ttml_model, hf_state_dict, config, tie_word_embeddings=tie_word_embeddings)
 

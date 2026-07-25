@@ -19,6 +19,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -54,8 +55,11 @@ namespace {
 //                       input shard; compute consumes it.  (tiled path only)
 //   UNTILIZE_OUT0/1   - real scratch FIFOs: compute produces, reader0/reader1
 //                       consume (one each, SPSC-clean).  (tiled path only)
-//   PAD0/1            - per-reader private scratch holding the immediate pad
-//                       value (only when pad_val != 0).  Self-loop bound.
+//   PAD0/1            - per-reader pad-immediate scratch (only when pad_val != 0).
+//                       Cross-reader bound: reader0 produces PAD0 / consumes PAD1,
+//                       reader1 produces PAD1 / consumes PAD0 (the pad value is the
+//                       same constant on both, both run on the same core), so neither
+//                       DM kernel self-loops a DFB.  See make_reader.
 // ---------------------------------------------------------------------------
 const TensorParamName IN{"in"};
 const TensorParamName OUT{"out"};
@@ -296,8 +300,11 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
         });
     }
 
-    // Per-reader pad scratch (only used when pad_val != 0).
-    const bool use_pad_scratch = enable_padding && (pad_val != 0);
+    // Per-reader pad scratch. Always allocate it when padding is enabled: Quasar has no static
+    // MEM_ZEROS L1 region (WH/BH-only) for the zero-pad case to copy from, so the kernel always
+    // sources padding from this scratch DFB -- filled via noc.async_write_zeros for pad_val==0, or
+    // the immediate value otherwise.
+    const bool use_pad_scratch = enable_padding;
     const uint32_t pad_cb_pagesize = aligned_stick_nbytes;
     if (use_pad_scratch) {
         dataflow_buffers.push_back(DataflowBufferSpec{
@@ -352,10 +359,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
     Group<KernelSpec> kernels;
 
     if (!skip_untilize) {
-        auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-            get_compute_kernel_config_args(input_tensor.device()->arch(), operation_attributes.compute_kernel_config);
-        (void)packer_l1_acc;
-
         KernelSpec compute{
             .unique_id = COMPUTE,
             .source = std::filesystem::path(kComputeKernelPath),
@@ -373,13 +376,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
             .compile_time_args =
                 {{"tiles_per_row", ntiles_per_block}, {"block_size", clamped_block_size_height / TILE_HEIGHT}},
             .runtime_arg_schema = {.runtime_arg_names = {"total_blocks"}},
-            .hw_config =
-                ComputeHardwareConfig{
-                    .math_fidelity = math_fidelity,
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
-                    .dst_full_sync_en = dst_full_sync_en,
-                    .math_approx_mode = math_approx_mode,
-                },
+            .hw_config = ttnn::to_compute_hardware_config(
+                input_tensor.device()->arch(), operation_attributes.compute_kernel_config),
         };
         kernels.push_back(std::move(compute));
     }
@@ -391,6 +389,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
     const auto make_reader = [&](const KernelSpecName& name,
                                  const DFBSpecName& untilize_out_dfb,
                                  const DFBSpecName& pad_dfb,
+                                 const DFBSpecName& pad_other_dfb,
                                  const DFBSpecName& gather_scratch_dfb,
                                  const DFBSpecName& pad_scratch_dfb,
                                  const TensorParamName& gather_cfg,
@@ -398,14 +397,20 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
                                  uint32_t reader_block_start_offset,
                                  DataMovementProcessor processor,
                                  NOC noc) {
+        DataMovementHardwareConfig reader_hw;
+        if (device->arch() == tt::ARCH::QUASAR) {
+            // QSR: this reader fills/drains DFBs with many sub-tile (per-row stick) NOC reads/writes (gather
+            // scatter-writes, pad replication, partial-page DRAM config reads); that sub-tile pattern stalls the
+            // DFB implicit-sync credit accounting. Opt out so explicit push_back/pop_front stay authoritative
+            // (mirrors tilize default / transpose HC-sharded).
+            reader_hw = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        } else {
+            reader_hw = DataMovementGen1Config{.processor = processor, .noc = noc};
+        }
         KernelSpec reader{
             .unique_id = name,
             .source = std::filesystem::path(kReaderKernelPath),
-            .hw_config =
-                DataMovementHardwareConfig{
-                    .role = DataMovementRoleHint::UNSPECIFIED,
-                    .gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = processor, .noc = noc},
-                },
+            .hw_config = std::move(reader_hw),
         };
 
         // Tensor bindings: OUT always (scatter-write target).  IN directly only on
@@ -422,7 +427,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
         }
 
         // DFB bindings: untilize_out (consumer) on the tiled path; pad scratch
-        // (self-loop) when used.
+        // (cross-reader, see below) when used.
         if (!skip_untilize) {
             reader.dfb_bindings.push_back(DFBBinding{
                 .dfb_spec_name = untilize_out_dfb,
@@ -438,10 +443,17 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
                 .dfb_spec_name = SRC_DFB, .accessor_name = "src", .endpoint_type = DFBEndpointType::PRODUCER});
         }
         if (use_pad_scratch) {
+            // Cross-reader pad scratch (the pad value is the SAME constant on both readers, and both
+            // readers run on the same core, so PAD0/PAD1 are interchangeable L1 sources). Each reader
+            // PRODUCES its own pad DFB (pad_fill) and CONSUMES the peer reader's identical pad DFB
+            // (pad_read). Neither reader binds one DFB as both producer and consumer -> no self-loop,
+            // and each DFB has exactly one producer + one consumer (different kernels) -> SPSC clean.
             reader.dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = pad_dfb, .accessor_name = "pad", .endpoint_type = DFBEndpointType::PRODUCER});
+                .dfb_spec_name = pad_dfb, .accessor_name = "pad_fill", .endpoint_type = DFBEndpointType::PRODUCER});
             reader.dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = pad_dfb, .accessor_name = "pad", .endpoint_type = DFBEndpointType::CONSUMER});
+                .dfb_spec_name = pad_other_dfb,
+                .accessor_name = "pad_read",
+                .endpoint_type = DFBEndpointType::CONSUMER});
         }
         if (config_tensors_in_dram) {
             // DRAM config landing scratch (self-loop: reader fills via NoC read, then reads it).
@@ -517,7 +529,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
     KernelSpec reader0 = make_reader(
         READER0,
         UNTILIZE_OUT0,
-        PAD0,
+        /*pad_dfb (own)=*/PAD0,
+        /*pad_other_dfb (peer)=*/PAD1,
         GATHER_SCRATCH0,
         PAD_SCRATCH0,
         GATHER_CONFIG0,
@@ -528,7 +541,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
     KernelSpec reader1 = make_reader(
         READER1,
         UNTILIZE_OUT1,
-        PAD1,
+        /*pad_dfb (own)=*/PAD1,
+        /*pad_other_dfb (peer)=*/PAD0,
         GATHER_SCRATCH1,
         PAD_SCRATCH1,
         GATHER_CONFIG1,
@@ -572,9 +586,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
     if (!skip_untilize) {
         KernelRunArgs compute_args{.kernel = COMPUTE};
         for (size_t core_id = 0; core_id < cores.size(); ++core_id) {
-            compute_args.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-                .node = NodeCoord{cores[core_id].x, cores[core_id].y},
-                .args = {{"total_blocks", static_cast<uint32_t>(number_of_blocks_per_core[core_id])}}});
+            compute_args.runtime_arg_values["total_blocks"][NodeCoord{cores[core_id].x, cores[core_id].y}] =
+                static_cast<uint32_t>(number_of_blocks_per_core[core_id]);
         }
         run_args.kernel_run_args.push_back(std::move(compute_args));
     }
@@ -593,10 +606,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
                 read_index = is_rm_orientation ? core.y : core.x;
             }
             const NodeCoord node{core.x, core.y};
-            reader0_args.runtime_arg_values.push_back(
-                KernelRunArgs::NodeRuntimeArgs{.node = node, .args = {{"config_read_index", read_index}}});
-            reader1_args.runtime_arg_values.push_back(
-                KernelRunArgs::NodeRuntimeArgs{.node = node, .args = {{"config_read_index", read_index}}});
+            reader0_args.runtime_arg_values["config_read_index"][node] = read_index;
+            reader1_args.runtime_arg_values["config_read_index"][node] = read_index;
         }
     }
     run_args.kernel_run_args.push_back(std::move(reader0_args));

@@ -6,8 +6,6 @@ import os
 import math
 from itertools import product
 
-import torch
-
 import ttnn
 from loguru import logger
 import pytest
@@ -73,6 +71,7 @@ def test_ring_joint_sdpa_dit_wh_t3k(
     )
 
 
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_acc", "fp32_acc"])
 @pytest.mark.parametrize(
     "dtype, pcc_threshold",
     [(ttnn.bfloat16, 0.994), (ttnn.bfloat8_b, 0.994), (ttnn.bfloat4_b, 0.8)],
@@ -147,6 +146,7 @@ def test_ring_joint_sdpa(
     up_factor,
     all_gather_topology,
     reset_seeds,
+    fp32_dest_acc_en,
 ):
     if nh % up_factor != 0:
         pytest.skip("nh must be divisible by up_factor")
@@ -162,6 +162,16 @@ def test_ring_joint_sdpa(
     logger.debug(f"submesh: {submesh.shape}")
 
     skip_check = False
+
+    # fp32_dest_acc_en=True routes cb_sum_A/B and cb_qk_im through fp32 CBs, so require
+    # a strictly tighter PCC floor. Tighter floors for bf16; bf8/bf4 gains capped by input format.
+    if fp32_dest_acc_en:
+        if dtype == ttnn.bfloat16:
+            pcc_threshold = 0.997
+        elif dtype == ttnn.bfloat8_b:
+            pcc_threshold = 0.995
+        elif dtype == ttnn.bfloat4_b:
+            pcc_threshold = 0.8005
 
     run_ring_joint_sdpa(
         submesh,
@@ -182,6 +192,7 @@ def test_ring_joint_sdpa(
         all_gather_topology,
         skip_check,
         pcc_threshold,
+        fp32_dest_acc_en=fp32_dest_acc_en,
     )
 
 
@@ -201,7 +212,7 @@ def test_ring_joint_sdpa(
     ],
     ids=["sd35"],
 )
-@pytest.mark.parametrize("n_iters, trace_enabled", [(1, False)], ids=["no_trace"])
+@pytest.mark.parametrize("n_iters, trace_enabled", [(3, False)], ids=["no_trace"])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
@@ -263,38 +274,32 @@ def test_ring_joint_sdpa_program_cache(
     skip_check = False
 
     submesh.cache_entries_counter = CacheEntriesCounter(submesh)
-    dummy_tensors = []
-    for i in range(3):
-        dummy_tensors.append(
-            ttnn.from_torch(
-                torch.rand((b, nh, seq_len, d)),
-                device=submesh,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=dtype,
-                mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=[None, None]),
-            )
-        )
-
-        run_ring_joint_sdpa(
-            submesh,
-            b,
-            nh,
-            seq_len,
-            seq_len,
-            joint_seq_len,
-            d,
-            q_chunk_size,
-            k_chunk_size,
-            dtype,
-            n_iters,
-            trace_enabled,
-            num_links,
-            rp_axis,
-            up_axis,
-            all_gather_topology,
-            skip_check,
-            pcc_threshold,
-        )
+    # Run the op n_iters (>1) times within a SINGLE run_ring_joint_sdpa invocation. The op must be
+    # exercised under one sub-device-manager lifetime: run_ring_joint_sdpa loads a sub-device manager
+    # on entry, which clears the program cache (mesh_device.cpp clear_program_cache on manager switch),
+    # so looping the whole helper would clear the cache between calls and defeat the reuse check.
+    # run_ring_joint_sdpa's internal loop runs the op n_iters times with distinct per-iter persistent
+    # buffers and global semaphores, so cache reuse is still validated against address variation.
+    run_ring_joint_sdpa(
+        submesh,
+        b,
+        nh,
+        seq_len,
+        seq_len,
+        joint_seq_len,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        n_iters,
+        trace_enabled,
+        num_links,
+        rp_axis,
+        up_axis,
+        all_gather_topology,
+        skip_check,
+        pcc_threshold,
+    )
 
     assert submesh.cache_entries_counter.total == 1
 
@@ -305,14 +310,16 @@ def test_ring_joint_sdpa_program_cache(
 # ===========================================================================
 
 
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_acc", "fp32_acc"])
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
-def test_ring_joint_sdpa_sd35_model_config(mesh_device, reset_seeds):
+def test_ring_joint_sdpa_sd35_model_config(mesh_device, reset_seeds, fp32_dest_acc_en):
     """SD3.5: heads=38, d=64, seq=4096, joint=333, sp4×tp2, chunks=(256,512)."""
+    pcc_threshold = 0.999
     run_ring_joint_sdpa_model_config(
         mesh_device,
         b=1,
@@ -330,17 +337,21 @@ def test_ring_joint_sdpa_sd35_model_config(mesh_device, reset_seeds):
         ccl_reserve_last_column=False,
         use_column_major_ccl=False,
         use_wormhole_compute_kernel_config=True,
+        pcc_threshold=pcc_threshold,
+        fp32_dest_acc_en=fp32_dest_acc_en,
     )
 
 
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_acc", "fp32_acc"])
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
-def test_ring_joint_sdpa_wan_14b_720p_model_config(mesh_device, reset_seeds):
+def test_ring_joint_sdpa_wan_14b_720p_model_config(mesh_device, reset_seeds, fp32_dest_acc_en):
     """Wan2.2 14B-720p: heads=40, d=128, seq=75600, joint=0, sp2×tp4, chunks=(256,256)."""
+    pcc_threshold = 0.9997 if fp32_dest_acc_en else 0.9994
     run_ring_joint_sdpa_model_config(
         mesh_device,
         b=1,
@@ -358,18 +369,24 @@ def test_ring_joint_sdpa_wan_14b_720p_model_config(mesh_device, reset_seeds):
         ccl_reserve_last_column=True,
         use_column_major_ccl=True,
         use_wormhole_compute_kernel_config=False,
-        pcc_threshold=0.9994,
+        pcc_threshold=pcc_threshold,
+        fp32_dest_acc_en=fp32_dest_acc_en,
     )
 
 
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_acc", "fp32_acc"])
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    # Shrink worker_l1_size from the default so the L1 unreserved base moves up and the
+    # kernel-config ringbuffer gains room. The fp32-dest mochi kernel (joint-seq path)
+    # is ~1KB over the default 70656B budget; 4KB of extra room clears it with margin.
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "worker_l1_size": 1340416}],
     indirect=True,
 )
-def test_ring_joint_sdpa_mochi_model_config(mesh_device, reset_seeds):
+def test_ring_joint_sdpa_mochi_model_config(mesh_device, reset_seeds, fp32_dest_acc_en):
     """Mochi: heads=24, d=128, seq=4000, joint=118, sp2×tp2, chunks=(256,256)."""
+    pcc_threshold = 0.999
     run_ring_joint_sdpa_model_config(
         mesh_device,
         b=1,
@@ -387,6 +404,8 @@ def test_ring_joint_sdpa_mochi_model_config(mesh_device, reset_seeds):
         ccl_reserve_last_column=False,
         use_column_major_ccl=False,
         use_wormhole_compute_kernel_config=False,
+        pcc_threshold=pcc_threshold,
+        fp32_dest_acc_en=fp32_dest_acc_en,
     )
 
 

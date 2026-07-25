@@ -150,9 +150,33 @@ def run(
     torch_input_tensor_b = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_b)(
         shape_b
     )
-    torch_input_tensor_c = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_c)(
-        shape_c
+    # input_c is the page table: integer indices into the cache's pages
+    # ([0, num_pages)). Generating it from torch_random(-1, 1) yields garbage
+    # values ({-1, 0, 1}) so the golden and device disagree on invalid/duplicate
+    # pages (PCC ~0.985). A real page table is a permutation of distinct page
+    # indices — generate that so each chunk fills a distinct valid page and the
+    # golden matches the device exactly.
+    _is_int_c = str(dtype_c).rsplit(".", 1)[-1] in ("INT32", "UINT32", "UINT16") or dtype_c in (
+        ttnn.int32,
+        ttnn.uint32,
+        ttnn.uint16,
     )
+    if _is_int_c and len(shape_a) == 4 and len(shape_c) >= 1:
+        _num_pages = int(shape_a[0])
+        _rows = int(shape_c[0]) if len(shape_c) >= 2 else 1
+        _cols = int(shape_c[-1])
+
+        def _perm_row():
+            p = torch.randperm(_num_pages)
+            if _cols <= _num_pages:
+                return p[:_cols]
+            return torch.cat([p, torch.randint(0, _num_pages, (_cols - _num_pages,))])
+
+        torch_input_tensor_c = torch.stack([_perm_row() for _ in range(_rows)]).reshape(shape_c).to(torch.int32)
+    else:
+        torch_input_tensor_c = gen_func_with_cast_tt(
+            partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_c
+        )(shape_c)
 
     # Real paged_fill_cache golden: write input_b's seq_len chunks into the
     # cache pages indexed by page_table[batch_idx]. cache layout is

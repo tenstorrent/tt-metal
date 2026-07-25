@@ -70,13 +70,13 @@ static vector<uint32_t> run_fp8_typecast(
 
     auto reader = CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
     auto writer = CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
@@ -114,7 +114,7 @@ using tt::test_utils::fp8_to_floats;
 
 static vector<float> bfp8_to_floats(const vector<uint32_t>& packed) {
     return unpack_bfp8_tiles_into_float_vec(
-        tt::stl::make_const_span(packed), /*row_major_output=*/false, /*is_exp_a=*/false);
+        ttsl::make_const_span(packed), /*row_major_output=*/false, /*is_exp_a=*/false);
 }
 
 // --- Validation ---

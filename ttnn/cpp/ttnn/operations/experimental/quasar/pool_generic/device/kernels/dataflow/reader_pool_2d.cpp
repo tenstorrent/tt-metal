@@ -5,9 +5,10 @@
 
 #include <cstdint>
 #include <api/dataflow/dataflow_api.h>
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
-#include <ttnn/cpp/ttnn/operations/pool/device/kernels/pool_kernels_common.hpp>
+#include <ttnn/cpp/ttnn/operations/experimental/quasar/pool_generic/device/kernels/pool_kernels_common.hpp>
 
 #define ENABLE_DEBUG_PRINT 0
 
@@ -52,8 +53,8 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
     constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
                                      (kernel_h * kernel_w) <= 16 && !last_tile_is_partial;
 
-    experimental::CB in_cb(in_cb_id);
-    experimental::CB clear_cb(clear_value_cb_id);
+    DataflowBuffer in_cb(in_cb_id);
+    DataflowBuffer clear_cb(clear_value_cb_id);
     Noc noc;
     UnicastEndpoint self_ep;
 
@@ -241,16 +242,23 @@ void kernel_main() {
          interm_reduction_chunks <= multi_buffering_factor);
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
-    experimental::CB clear_value_cb(clear_value_cb_id);
-    experimental::CB in_scalar_cb(in_scalar_cb_id);
-    experimental::CB in_shard_cb(in_shard_cb_id);
-    experimental::CB reader_indices_cb(in_reader_indices_cb_id);
+    DataflowBuffer clear_value_cb(clear_value_cb_id);
+    DataflowBuffer in_scalar_cb(in_scalar_cb_id);
+    DataflowBuffer in_shard_cb(in_shard_cb_id);
+    DataflowBuffer reader_indices_cb(in_reader_indices_cb_id);
 #ifdef HAS_CONFIG
-    experimental::CB config_cb(config_cb_id);
+    DataflowBuffer config_cb(config_cb_id);
 #endif
 
+    // QSR max_pool fix: for a partial-face window (face_r_dim < 16, e.g. 3x3 -> 9), need_to_initialize_in_cb
+    // is false, but the quasar reduce reads the FULL 16-row face while the reader fills only the populated
+    // rows -> the unwritten face rows leak stale L1 into the max (value inflation; masked only when the L1
+    // residue happens to be <= the data). Force the -inf pre-clear for MAX pool. -inf is the max identity,
+    // so pre-clearing can never change a correct max; the once-at-init clear persists across the in_cb ring
+    // because the reader never overwrites those rows. (Real fix: make the quasar reduce respect face_r_dim.)
+    constexpr bool force_max_clear = !is_avg_pool;
     // fill the clear cb
-    if constexpr (is_avg_pool || need_to_initialize_in_cb) {
+    if constexpr (is_avg_pool || need_to_initialize_in_cb || force_max_clear) {
         if constexpr (reader_id == 0) {
             fill_with_val(clear_value_cb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
             clear_value_cb.push_back(1);
@@ -260,7 +268,7 @@ void kernel_main() {
         }
         // for average pool clear out tiles runs in loop, no need to initialize here
         if constexpr (!is_avg_pool || !is_large_kernel) {
-            clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), experimental::CB(in_cb_id), clear_value_cb);
+            clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), DataflowBuffer(in_cb_id), clear_value_cb);
         }
     }
 

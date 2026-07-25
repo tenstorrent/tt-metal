@@ -28,14 +28,14 @@ Tensor create_ghost_tensor(const Tensor& input_tensor) {
     const auto& mesh_buffer = input_tensor.mesh_buffer();
     auto ghost_mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
         mesh_buffer.global_config(), mesh_buffer.device_local_config(), mesh_buffer.device(), mesh_buffer.address());
-    return Tensor(MeshTensor(ghost_mesh_buffer, input_tensor.tensor_spec(), input_tensor.tensor_topology()));
+    return Tensor(MeshTensor::from_buffer(std::move(*ghost_mesh_buffer), input_tensor.tensor_spec(), input_tensor.tensor_topology()));
 }
 
 inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     const auto& input_mem_config = input_tensor.memory_config();
     auto input_address = input_tensor.buffer()->address();
-    TensorSpec output_tensor_spec = input_tensor.tensor_spec();
+    tt::tt_metal::TensorSpec output_tensor_spec = input_tensor.tensor_spec();
 
     // Construct a ghost tensor so we can pass an deallocated tensor through the TTNN infrastructure.
     auto ghost_input_tensor = create_ghost_tensor(input_tensor);
@@ -46,8 +46,13 @@ inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryCo
     }
 
     if (mem_config) {
-        output_tensor_spec = TensorSpec(
-            output_tensor_spec.logical_shape(), output_tensor_spec.tensor_layout().with_memory_config(*mem_config));
+        output_tensor_spec = tt::tt_metal::TensorSpec(
+            output_tensor_spec.logical_shape(),
+            TensorLayout(
+                output_tensor_spec.tensor_layout().get_data_type(),
+                output_tensor_spec.tensor_layout().get_page_config(),
+                *mem_config,
+                output_tensor_spec.tensor_layout().get_alignment()));
     }
 
     auto output_tensor = create_device_tensor(output_tensor_spec, ghost_input_tensor.device());
@@ -135,9 +140,13 @@ inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<Memor
     if (mem_config) {
         TT_FATAL(mem_config->is_sharded(), "Expected output tensor memory config to be sharded");
         auto output_mem_config = MemoryConfig(mem_config->memory_layout(), mem_config->buffer_type(), shard_spec);
-        output_tensor_spec = TensorSpec(
+        output_tensor_spec = tt::tt_metal::TensorSpec(
             output_tensor_spec.logical_shape(),
-            output_tensor_spec.tensor_layout().with_memory_config(output_mem_config));
+            TensorLayout(
+                output_tensor_spec.tensor_layout().get_data_type(),
+                output_tensor_spec.tensor_layout().get_page_config(),
+                output_mem_config,
+                output_tensor_spec.tensor_layout().get_alignment()));
     }
 
     auto output_tensor = create_device_tensor(output_tensor_spec, ghost_input_tensor.device());

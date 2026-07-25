@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -63,12 +63,12 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     constexpr auto pad_tensor_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
 
-    constexpr uint32_t cb_id = tt::CBIndex::c_0;
-    CircularBuffer cb(cb_id);
+    constexpr uint32_t dfb_id = tt::CBIndex::c_0;
+    DataflowBuffer dfb(dfb_id);
     Noc noc;
 
     // calculate the offset for alignment of padding in rows/sticks
-    uint32_t l1_addr_partial = cb.get_write_ptr() + unpadded_X_nbytes;
+    uint32_t l1_addr_partial = dfb.get_write_ptr() + unpadded_X_nbytes;
     const uint32_t l1_addr_align_offset =
         32 - l1_addr_partial % 32;  // NOTE: this is fine with double buffering since offset will be same for each page
 
@@ -82,8 +82,8 @@ void kernel_main() {
     for (uint32_t w = 0; w < num_local_W; ++w) {
         for (uint32_t z = 0; z < num_total_Z; ++z) {
             for (uint32_t y = 0; y < num_local_Y; ++y) {
-                cb.reserve_back(1);
-                uint32_t l1_addr = cb.get_write_ptr();
+                dfb.reserve_back(1);
+                uint32_t l1_addr = dfb.get_write_ptr();
                 if (y >= num_local_unpadded_Y || z >= num_unpadded_Z || w >= num_unpadded_W) {
                     // this is fully padding
                     fill_with_val_async(
@@ -109,7 +109,7 @@ void kernel_main() {
                     ++src_stick_id;
                 }
                 noc.async_read_barrier();
-                cb.push_back(1);
+                dfb.push_back(1);
             }
         }
     }

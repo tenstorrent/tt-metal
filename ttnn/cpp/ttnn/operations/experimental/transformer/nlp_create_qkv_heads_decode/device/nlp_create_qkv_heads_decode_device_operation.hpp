@@ -17,7 +17,7 @@ namespace ttnn::experimental::prim {
 struct NLPCreateQKVHeadsDecodeDeviceOperation {
     using operation_attributes_t = NlpCreateQkvHeadsDecodeParams;
     using tensor_args_t = NlpCreateQkvHeadsDecodeInputs;
-    using spec_return_value_t = std::vector<TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
     using program_factory_t = std::variant<
         NLPCreateQKVHeadsDecodeInterleavedProgramFactory,

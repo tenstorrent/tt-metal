@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "cmath_common.h"
 #include "ckernel_sfpu_sigmoid_appx.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_recip.h"
@@ -27,7 +28,7 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
         exp_neg_x = _sfpu_exp_21f_bf16_<true>(-x);
     }
 
-    sfpi::vFloat denominator = sfpi::vConst1 + exp_neg_x;
+    sfpi::vFloat denominator = 1.0f + exp_neg_x;
 
     sfpi::vFloat result;
     if constexpr (is_fp32_acc_to_dest_mode) {
@@ -62,6 +63,7 @@ inline void calculate_sigmoid() {
 
 template <bool APPROXIMATION_MODE>
 inline void sigmoid_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (!APPROXIMATION_MODE) {
         recip_init<false, false>();
     } else {

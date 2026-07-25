@@ -19,6 +19,7 @@ from fuser.validator import (
     BinarySfpuMathSchema,
     FpuMathSchemaBase,
     OperationSchemaBase,
+    PackSchema,
     UnarySfpuMathSchema,
     _has_transpose,
     _tile_dims,
@@ -191,6 +192,13 @@ _eltwise_bcast_32x16 = (
     "32x16 tiles are not supported for eltwise with column/row broadcast",
 )
 
+_only_32x32_or_16x32_tile = (
+    lambda s, a, b: _tile_dims(a.tile_shape) not in ((32, 32), (16, 32)),
+    "Only (32, 32) or (16, 32) tiles are supported for this operation",
+)
+
+# 32x32-only: for ops whose Blackhole fuser generators do not yet plumb tile shape / dst_index
+# (e.g. SubBcastColCustom, whose BH math generator calls the ct_dim-only overload -> 32x32 default).
 _only_32x32_tile = (
     lambda s, a, b: _tile_dims(a.tile_shape) != (32, 32),
     "Only (32, 32) tiles are supported for this operation",
@@ -284,14 +292,18 @@ FPU_MAP = {
     ),
     "ReduceBlockMax": (
         lambda s: ReduceBlockMaxFpu(),
-        [_no_reuse_dest, _forced_unpacker("ReduceBlockMaxUnpacker"), _only_32x32_tile],
+        [
+            _no_reuse_dest,
+            _forced_unpacker("ReduceBlockMaxUnpacker"),
+            _only_32x32_or_16x32_tile,
+        ],
     ),
     "ReduceBlockMaxRuntime": (
         lambda s: ReduceBlockMaxRuntimeFpu(),
         [
             _no_reuse_dest,
             _forced_unpacker("ReduceBlockMaxRuntimeUnpacker"),
-            _only_32x32_tile,
+            _only_32x32_or_16x32_tile,
         ],
     ),
     "SubBcastColCustom": (
@@ -393,9 +405,18 @@ MathSchema = Annotated[
 ]
 
 
-class OperationSchema(OperationSchemaBase):
+class BlackholePackSchema(PackSchema):
     _packer_map: ClassVar = PACKER_MAP
+
+
+PackEntrySchema = Union[
+    BlackholeUnarySfpuMathSchema, BlackholeBinarySfpuMathSchema, BlackholePackSchema
+]
+
+
+class OperationSchema(OperationSchemaBase):
     math: List[MathSchema] = Field(..., min_length=1)
+    pack: List[PackEntrySchema] = Field(..., min_length=1)
     bh_tilize: Tilize = Tilize.No
 
     def _arch_validate(self):

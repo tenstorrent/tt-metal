@@ -390,6 +390,7 @@ class Sampling1D(LightweightModule):
             topk_indices_int32,
             dtype=ttnn.int32,
             memory_config=cfg.sampling_memory_config,
+            sub_core_grids=cfg.sub_core_grids,
         )
         ttnn.deallocate(topk_indices_int32)
 
@@ -436,18 +437,28 @@ class Sampling1D(LightweightModule):
             return self._mask_invalid_vocab_tail_logits(logits)
         if self._invalid_vocab_mask is None:
             return logits
-        return ttnn.add(logits, self._invalid_vocab_mask, memory_config=logits.memory_config())
+        return ttnn.add(
+            logits,
+            self._invalid_vocab_mask,
+            memory_config=logits.memory_config(),
+            sub_core_grids=self.config.sub_core_grids,
+        )
 
     def _mask_invalid_vocab_tail_logits(self, logits):
+        cfg = self.config
         tail_width = self._invalid_vocab_tail_width
         local_width = logits.shape[-1]
         valid_width = local_width - tail_width
         if tail_width <= 0 or valid_width < 0:
             return self._mask_invalid_vocab_logits_fallback(logits)
         if valid_width == 0:
-            return ttnn.add(logits, self._invalid_vocab_tail_mask, memory_config=logits.memory_config())
+            return ttnn.add(
+                logits,
+                self._invalid_vocab_tail_mask,
+                memory_config=logits.memory_config(),
+                sub_core_grids=cfg.sub_core_grids,
+            )
 
-        cfg = self.config
         valid_logits = ttnn.slice(
             logits,
             [0, 0, 0, 0],
@@ -462,11 +473,17 @@ class Sampling1D(LightweightModule):
             memory_config=logits.memory_config(),
             sub_core_grids=cfg.sub_core_grids,
         )
-        masked_tail_logits = ttnn.add(tail_logits, self._invalid_vocab_tail_mask, memory_config=logits.memory_config())
+        masked_tail_logits = ttnn.add(
+            tail_logits,
+            self._invalid_vocab_tail_mask,
+            memory_config=logits.memory_config(),
+            sub_core_grids=cfg.sub_core_grids,
+        )
         masked_logits = ttnn.concat(
             [valid_logits, masked_tail_logits],
             dim=3,
             memory_config=logits.memory_config(),
+            sub_core_grids=cfg.sub_core_grids,
         )
         ttnn.deallocate(valid_logits)
         ttnn.deallocate(tail_logits)
@@ -476,7 +493,12 @@ class Sampling1D(LightweightModule):
     def _mask_invalid_vocab_logits_fallback(self, logits):
         if self._invalid_vocab_mask is None:
             return logits
-        return ttnn.add(logits, self._invalid_vocab_mask, memory_config=logits.memory_config())
+        return ttnn.add(
+            logits,
+            self._invalid_vocab_mask,
+            memory_config=logits.memory_config(),
+            sub_core_grids=self.config.sub_core_grids,
+        )
 
     def _can_slice_valid_vocab_for_argmax(self):
         cfg = self.config

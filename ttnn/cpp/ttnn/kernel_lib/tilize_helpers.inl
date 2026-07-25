@@ -46,6 +46,11 @@ constexpr bool is_fp32_output_format() {
 
 template <uint32_t block_width_tiles, uint32_t input_dfb, uint32_t output_dfb>
 constexpr bool can_use_fast_tilize() {
+#ifdef ARCH_QUASAR
+    // Quasar has no fast-tilize LLK (and per the LLK team it never will) — only regular tilize.
+    // Always take the regular tilize_init/tilize_block/tilize_uninit path below.
+    return false;
+#else
     // Float32 OUTPUT is unsupported: fast-tilize's pack path uses Read_32b=0
     // (bf16-stride stepping through DEST), which truncates fp32 DEST to bf16.
     // That truncation is acceptable for bf16/bfp output but destroys precision
@@ -53,6 +58,7 @@ constexpr bool can_use_fast_tilize() {
     // (see attn_matmul_fp32 regression).
     return block_width_tiles < 256 && dfb_has_32x32_tiles<output_dfb>() && !get_dst_full_sync_enabled() &&
            has_supported_fast_tilize_format<input_dfb>() && !is_fp32_output_format<output_dfb>();
+#endif
 }
 
 // =============================================================================
@@ -135,7 +141,13 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
             } else
 #endif
             {
+#ifndef ARCH_QUASAR  // Quasar has no fast tilize (use_fast is always false here); keep the name out of the parse
                 fast_tilize_init(input_dfb, block_width_tiles, output_dfb);
+#else
+                // Unreachable: can_use_fast_tilize() returns false on Quasar so use_fast is always false.
+                // Trap (watcher/runtime assert) in case this path is ever reached.
+                ASSERT(false);
+#endif
             }
         } else {
             tilize_init(input_dfb, block_width_tiles, output_dfb);
@@ -178,7 +190,13 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         out_dfb.reserve_back(block_width_tiles);
 
         if constexpr (use_fast) {
+#ifndef ARCH_QUASAR  // Quasar has no fast tilize (use_fast is always false here); keep the name out of the parse
             fast_tilize_block(input_dfb, block_width_tiles, output_dfb);
+#else
+            // Unreachable: can_use_fast_tilize() returns false on Quasar so use_fast is always false.
+            // Trap (watcher/runtime assert) in case this path is ever reached.
+            ASSERT(false);
+#endif
         } else {
             tilize_block(input_dfb, block_width_tiles, output_dfb);
         }
@@ -196,7 +214,13 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         init_uninit_mode == tilize_config::InitUninitMode::InitAndUninit ||
         init_uninit_mode == tilize_config::InitUninitMode::UninitOnly) {
         if constexpr (use_fast) {
+#ifndef ARCH_QUASAR  // Quasar has no fast tilize (use_fast is always false here); keep the name out of the parse
             fast_tilize_uninit(input_dfb, output_dfb, block_width_tiles);
+#else
+            // Unreachable: can_use_fast_tilize() returns false on Quasar so use_fast is always false.
+            // Trap (watcher/runtime assert) in case this path is ever reached.
+            ASSERT(false);
+#endif
         } else {
             tilize_uninit(input_dfb, output_dfb);
         }

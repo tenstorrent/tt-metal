@@ -11,8 +11,8 @@ on:
       test-category:
         required: false
         type: string
-        default: smoke
-        description: "Time-budget workflow key passed to verify_time_budget.py (smoke for merge-gate and N300 fabric)."
+        default: merge_gate
+        description: "Time-budget workflow key passed to verify_time_budget.py (merge_gate for merge-gate and N300 fabric)."
       build-artifact-name:
         required: true
         type: string
@@ -36,14 +36,22 @@ on:
         required: false
         type: boolean
         default: false
+      per-test-timeout:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Max allowed timeout (minutes) for any individual test SKU entry in the
+          tests yaml. Verified during load-test-matrix via verify_time_budget.py.
+          Empty skips the per-test ceiling check.
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/fabric_smoke_merge_gate_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/fabric_merge_gate_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -59,11 +67,16 @@ jobs:
 
       - name: Verify test timeouts against budget
         run: |
-          set -e
+          set -euo pipefail
+          extra=()
+          if [ -n "${{ inputs.per-test-timeout }}" ]; then
+            extra+=(--max-per-test-timeout "${{ inputs.per-test-timeout }}")
+          fi
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "${{ inputs.test-category }}"
+            "${{ inputs.test-category }}" \
+            "${extra[@]}"
 
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
@@ -71,7 +84,8 @@ jobs:
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
+            ./.github/sku_config.yaml \
+            --event "${{ github.event_name }}"
 
   fabric-tests:
     needs: load-test-matrix

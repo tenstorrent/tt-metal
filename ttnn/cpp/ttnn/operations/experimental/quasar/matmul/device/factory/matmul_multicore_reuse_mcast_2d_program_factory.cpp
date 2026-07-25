@@ -1140,10 +1140,18 @@ namespace reuse_mcast_optimized_helpers {
 
     for (const auto& core : cores) {
         CoreCoord left_core = {(std::size_t)start_core_x, (std::size_t)core.y};
-        CoreCoord left_core_plus_one = {(std::size_t)start_core_x + 1, (std::size_t)core.y};
+        // [Quasar single-row/col guard] The mcast "+1" corner (the first receiver past the sender) does not
+        // exist when there is only one column (in0 row-mcast) or one row (in1 column-mcast) -- e.g. on the
+        // 2-core emulator (2x1 grid) start_core_y+1 = (0,1) has no core, so translating it throws
+        // "No core coordinate found at (0,1)". Clamp the +1 corner to the sender's own coord when that
+        // dimension has a single core; the degenerate mcast then covers 0 receivers so the clamped
+        // rectangle is unused. Multi-row/col grids (num_cores_with_work_* > 1) are unchanged.
+        CoreCoord left_core_plus_one = {
+            (std::size_t)start_core_x + (num_cores_with_work_c > 1 ? 1u : 0u), (std::size_t)core.y};
         CoreCoord right_core = {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)core.y};
         CoreCoord top_core = {(std::size_t)core.x, (std::size_t)start_core_y};
-        CoreCoord top_core_plus_one = {(std::size_t)core.x, (std::size_t)start_core_y + 1};
+        CoreCoord top_core_plus_one = {
+            (std::size_t)core.x, (std::size_t)start_core_y + (num_cores_with_work_r > 1 ? 1u : 0u)};
         CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core_y + num_cores_with_work_r - 1};
 
         auto left_core_physical = device->worker_core_from_logical_core(left_core);
@@ -1307,7 +1315,8 @@ namespace reuse_mcast_optimized_helpers {
                     mm_in1_sender_writer_args.push_back(0);
                 }
 
-                mm_in1_sender_writer_args.push_back(bias_mesh.has_value() ? (std::uint32_t)bias_mesh->address() : 0);
+                mm_in1_sender_writer_args.push_back(
+                    bias_mesh.has_value() ? (std::uint32_t)bias_mesh->address() : 0);  // smuggled-rta-ok
                 mm_in1_sender_writer_args.push_back(
                     bias_mesh.has_value() ? (std::uint32_t)per_core_N * in1_idx : 0);  // in1_tensor_start_tile_id
                 if (!output_is_sharded) {
@@ -2593,10 +2602,18 @@ create_program_mcast_in0_in1(
 
     for (const auto& core : cores) {
         CoreCoord left_core = {(std::size_t)start_core_x, (std::size_t)core.y};
-        CoreCoord left_core_plus_one = {(std::size_t)start_core_x + 1, (std::size_t)core.y};
+        // [Quasar single-row/col guard] The mcast "+1" corner (the first receiver past the sender) does not
+        // exist when there is only one column (in0 row-mcast) or one row (in1 column-mcast) -- e.g. on the
+        // 2-core emulator (2x1 grid) start_core_y+1 = (0,1) has no core, so translating it throws
+        // "No core coordinate found at (0,1)". Clamp the +1 corner to the sender's own coord when that
+        // dimension has a single core; the degenerate mcast then covers 0 receivers so the clamped
+        // rectangle is unused. Multi-row/col grids (num_cores_with_work_* > 1) are unchanged.
+        CoreCoord left_core_plus_one = {
+            (std::size_t)start_core_x + (num_cores_with_work_c > 1 ? 1u : 0u), (std::size_t)core.y};
         CoreCoord right_core = {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)core.y};
         CoreCoord top_core = {(std::size_t)core.x, (std::size_t)start_core_y};
-        CoreCoord top_core_plus_one = {(std::size_t)core.x, (std::size_t)start_core_y + 1};
+        CoreCoord top_core_plus_one = {
+            (std::size_t)core.x, (std::size_t)start_core_y + (num_cores_with_work_r > 1 ? 1u : 0u)};
         CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core_y + num_cores_with_work_r - 1};
 
         auto left_core_physical = device->worker_core_from_logical_core(left_core);
@@ -2761,7 +2778,8 @@ create_program_mcast_in0_in1(
                     mm_in1_sender_writer_args.push_back(0);
                 }
 
-                mm_in1_sender_writer_args.push_back(bias_mesh.has_value() ? (std::uint32_t)bias_mesh->address() : 0);
+                mm_in1_sender_writer_args.push_back(
+                    bias_mesh.has_value() ? (std::uint32_t)bias_mesh->address() : 0);  // smuggled-rta-ok
                 mm_in1_sender_writer_args.push_back(
                     bias_mesh.has_value() ? (std::uint32_t)per_core_N * in1_idx : 0);  // in1_tensor_start_tile_id
                 if (!output_is_sharded) {
@@ -3052,6 +3070,7 @@ void override_runtime_arguments_impl(
 }  // namespace reuse_mcast_optimized_helpers
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 // ===========================================================================================
 // Metal 2.0 (ProgramArtifacts) port of the resnet50 mcast_2d path.
@@ -3068,10 +3087,20 @@ namespace {
 
 namespace m2 = tt::tt_metal::experimental;
 
+namespace CMAKE_UNIQUE_NAMESPACE {
+// Create a generation-agnostic data movement hardware config: Gen1 (WH/BH) takes the given
+// processor & NOC; Gen2 (Quasar) uses the default config.
+m2::DataMovementHardwareConfig make_datamovement_hardware_config(
+    tt::ARCH arch, tt::tt_metal::DataMovementProcessor processor, tt::tt_metal::NOC noc) {
+    if (arch == tt::ARCH::QUASAR) {
+        return m2::DataMovementGen2Config{};
+    }
+    return m2::DataMovementGen1Config{.processor = processor, .noc = noc};
+}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+
 const m2::DFBSpecName RO_IN0_DFB{"cb_in0"};
 const m2::DFBSpecName RO_IN1_DFB{"cb_in1"};
-const m2::DFBSpecName RO_IN0_SHARDED_DFB{"cb_in0_sharded"};
-const m2::DFBSpecName RO_L1_ARRAY_DFB{"cb_l1_array"};
 const m2::DFBSpecName RO_BIAS_DFB{"cb_bias"};
 const m2::DFBSpecName RO_OUT_DFB{"cb_out"};
 const m2::DFBSpecName RO_INTERM0_DFB{"cb_intermed0"};
@@ -3232,7 +3261,7 @@ m2::KernelSpec make_compute_kernel(
 // mcast_in0_in1 (ProgramArtifacts). Mirrors create_program_mcast_in0_in1_descriptor.
 // ---------------------------------------------------------------------------------------------------
 ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
-    const tt::tt_metal::Tensor& a,
+    const ttnn::Tensor& a,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -3350,7 +3379,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         in0_shard_height_in_tiles = in0_tensor.shard_spec()->shape[0] / in0_tile.get_height();
         in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
     }
-    uint32_t in2_CB_tiles = in2_block_tiles;
+    [[maybe_unused]] uint32_t in2_CB_tiles = in2_block_tiles;
 
     uint32_t in3_block_tiles = out_block_w;
     uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
@@ -3545,6 +3574,34 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         std::swap(num_x_bs, num_y_bs);
     }
 
+    // [DEBUG mcast2d hang] The in0 sender counts num_dests along num_blocks_x (a ROW), but the observed
+    // deadlock has receivers acking a COLUMN. If in0_sender_num_cores_along_width (= in0_shard_grid.x for
+    // non-transpose) != num_blocks_x, or if in0_mcast_noc_x/y describe a column, that's the mismatch.
+    if (in0_block_sharded) {
+        std::string noc_x_str, noc_y_str;
+        for (auto v : in0_mcast_noc_x) {
+            noc_x_str += std::to_string(v) + ",";
+        }
+        for (auto v : in0_mcast_noc_y) {
+            noc_y_str += std::to_string(v) + ",";
+        }
+        log_warning(
+            tt::LogOp,
+            "[QSR-MCAST2D-DBG] transpose_mcast={} in0_sender_num_cores_along_width={} num_x_bs={} "
+            "num_y_bs={} num_blocks_x(=in0_mcast_num_dests)={} num_blocks_y={} num_cores_c={} num_cores_r={} "
+            "in0_mcast_noc_x=[{}] in0_mcast_noc_y=[{}]",
+            transpose_mcast,
+            in0_sender_num_cores_along_width,
+            num_x_bs,
+            num_y_bs,
+            num_blocks_x,
+            num_blocks_y,
+            num_cores_c,
+            num_cores_r,
+            noc_x_str,
+            noc_y_str);
+    }
+
     // ---- Defines ----
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_sharded_defines;
@@ -3637,10 +3694,14 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         }
         dataflow_buffers.push_back(std::move(in0_dfb));
     }
-    // Inert sparsity scratch DFB for the in0 sender (only the interleaved/height-sharded in0
-    // sender fork references cb_sparsity; the block-sharded fork does not, so only define it
-    // there). Self-looped (PRODUCER+CONSUMER) on that single kernel.
-    if (!in0_block_sharded) {
+    // Sparsity scratch DFBs are a single-kernel DMA-landing self-loop (PRODUCER+CONSUMER on one DM
+    // kernel), which the Metal 2.0 DM-kernel self-loop validator rejects. These non-sparse mcast
+    // factories never enable sparsity (batchB is hardcoded 0; the sparse path is a separate factory),
+    // so the sparsity DFBs/bindings — and the kernels' SPARSITY-gated cb_sparsity usage — are simply
+    // absent here. When the sparse matmul is ported to Metal 2.0, flip sparsity_enabled, define
+    // SPARSITY on the sender kernels, and replace the self-loop with a scratchpad/LocalTensorAccessor.
+    const bool sparsity_enabled = false;
+    if (sparsity_enabled && !in0_block_sharded) {
         dataflow_buffers.push_back(m2::DataflowBufferSpec{
             .unique_id = RO_SPARSITY_DFB,
             .entry_size = in0_single_tile_size,
@@ -3649,14 +3710,15 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             .tile_format_metadata = in0_tile,
         });
     }
-    // Inert sparsity scratch DFB for the in1 sender writer (always present). Self-looped.
-    dataflow_buffers.push_back(m2::DataflowBufferSpec{
-        .unique_id = RO_SPARSITY_IN1_DFB,
-        .entry_size = in0_single_tile_size,
-        .num_entries = 1,
-        .data_format_metadata = in0_data_format,
-        .tile_format_metadata = in0_tile,
-    });
+    if (sparsity_enabled) {
+        dataflow_buffers.push_back(m2::DataflowBufferSpec{
+            .unique_id = RO_SPARSITY_IN1_DFB,
+            .entry_size = in0_single_tile_size,
+            .num_entries = 1,
+            .data_format_metadata = in0_data_format,
+            .tile_format_metadata = in0_tile,
+        });
+    }
     {
         m2::DataflowBufferSpec in1_dfb{
             .unique_id = RO_IN1_DFB,
@@ -3670,23 +3732,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         }
         dataflow_buffers.push_back(std::move(in1_dfb));
     }
-    // in0 sharded CB (block sharded) + the c_6 l1 scratch array.
-    if (in0_block_sharded) {
-        dataflow_buffers.push_back(m2::DataflowBufferSpec{
-            .unique_id = RO_IN0_SHARDED_DFB,
-            .entry_size = in0_single_tile_size,
-            .num_entries = in2_CB_tiles,
-            .data_format_metadata = in0_data_format,
-            .tile_format_metadata = in0_tile,
-            .borrowed_from = RO_IN0_TENSOR,
-        });
-        dataflow_buffers.push_back(m2::DataflowBufferSpec{
-            .unique_id = RO_L1_ARRAY_DFB,
-            .entry_size = 32 * 2,
-            .num_entries = 1,
-            .data_format_metadata = tt::DataFormat::Float16_b,
-        });
-    }
+    // Block-sharded in0: the resident shard is read by L1 base address from a local TensorAccessor
+    // over the in0 tensor in the sender kernel (no borrowed self-loop CB, which Metal 2.0 forbids on
+    // DM kernels), and the legacy c_6 l1 scratch (cb_l1_array) is inert (no kernel reads it back), so
+    // neither needs a DataflowBuffer here.
 
     // out / intermed0: separate or aliased (shared memory) — predicate matches the legacy CB-sharing.
     const bool separate_out_interm = do_not_inplace_interm0_out_CB || (interm0_data_format != output_data_format) ||
@@ -3747,16 +3796,17 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         m2::SemaphoreSpec{.unique_id = RO_IN1_RECEIVER_SEM, .target_nodes = all_cores_set},
     };
 
-    m2::ComputeHardwareConfig compute_hw_config{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = false,
-        .math_approx_mode = math_approx_mode,
-    };
+    m2::ComputeHardwareConfig compute_hw_config = ttnn::to_compute_hardware_config(
+        device->arch(),
+        ttnn::ComputeKernelConfig{
+            .math_fidelity = math_fidelity,
+            .math_approx_mode = math_approx_mode,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = false});
 
     // in1 reader uses the optimized reader noc; in0 the dram-write noc. (The legacy split-half
     // _other receivers ran on the opposite NOC for perf; the Metal 2.0 host API selects the NOC via
-    // DataMovementRoleHint, so the _other kernels are functionally identical here — see report.)
+    // the reader/writer Gen1 config, so the _other kernels are functionally identical here — see report.)
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
@@ -3827,30 +3877,11 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             m2::DFBBinding{
                 .dfb_spec_name = RO_IN0_DFB, .accessor_name = "cb_in0", .endpoint_type = m2::DFBEndpointType::PRODUCER},
         };
-        if (in0_block_sharded) {
-            // cb_in0_sharded is the borrowed resident in0 shard. The sender reserve_back's it
-            // (a PRODUCER op) to obtain the mcast source address; there is no separate consumer
-            // (receivers read cb_in0). Self-loop PRODUCER+CONSUMER on this single kernel so the
-            // producer view exists and the SPSC completeness check holds.
-            b.push_back(m2::DFBBinding{
-                .dfb_spec_name = RO_IN0_SHARDED_DFB,
-                .accessor_name = "cb_in0_sharded",
-                .endpoint_type = m2::DFBEndpointType::PRODUCER});
-            b.push_back(m2::DFBBinding{
-                .dfb_spec_name = RO_IN0_SHARDED_DFB,
-                .accessor_name = "cb_in0_sharded",
-                .endpoint_type = m2::DFBEndpointType::CONSUMER});
-            // cb_l1_array is an inert L1 scratch (no kernel currently reads it back). Self-loop.
-            b.push_back(m2::DFBBinding{
-                .dfb_spec_name = RO_L1_ARRAY_DFB,
-                .accessor_name = "cb_l1_array",
-                .endpoint_type = m2::DFBEndpointType::PRODUCER});
-            b.push_back(m2::DFBBinding{
-                .dfb_spec_name = RO_L1_ARRAY_DFB,
-                .accessor_name = "cb_l1_array",
-                .endpoint_type = m2::DFBEndpointType::CONSUMER});
-        } else {
-            // Inert sparsity scratch self-loop (PRODUCER+CONSUMER on this single kernel).
+        // Block-sharded in0 reads its resident shard via tensor::in0 in the sender kernel, so it
+        // needs no extra DFB bindings here (only cb_in0 above, the mcast staging buffer).
+        if (sparsity_enabled) {
+            // Sparsity scratch self-loop — gated off (see sparsity_enabled note above; kernels
+            // build without SPARSITY so they do not reference dfb::cb_sparsity).
             b.push_back(m2::DFBBinding{
                 .dfb_spec_name = RO_SPARSITY_DFB,
                 .accessor_name = "cb_sparsity",
@@ -3915,11 +3946,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             // Pin RISCV_1 + in0_noc (legacy parity): the in0 row-mcast dest rectangle is swapped for
             // in0_noc below, so the mcast must issue on in0_noc or it inverts and only the sender's
             // own column receives in0 (degenerate 2-corner delivery -> partial-grid hang).
-            .hw_config =
-                m2::DataMovementHardwareConfig{
-                    .gen1_config =
-                        m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
+            .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
+                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
         };
         // Block-sharded in0 sender reads num_x + num_y per-core mcast-coord varargs (in0_mcast_noc_x/y);
         // declare the count so the framework allocates the vararg slots (else get_vararg is OOB).
@@ -3947,11 +3975,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             .compile_time_args = std::move(no_work_cta),
             .runtime_arg_schema = {.runtime_arg_names = in0_sender_rta_names},
             // Pin RISCV_1 + in0_noc (legacy parity) to match the in0-mcast rectangle geometry.
-            .hw_config =
-                m2::DataMovementHardwareConfig{
-                    .gen1_config =
-                        m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
+            .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
+                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
         };
         // Same varargs (in0_mcast_noc_x/y) as the work in0 sender (block-sharded only path).
         no_work_ks.advanced_options.num_runtime_varargs = num_x_bs + num_y_bs;
@@ -3988,11 +4013,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             .runtime_arg_schema = {.runtime_arg_names = {"in0_mcast_sender_noc_x", "in0_mcast_sender_noc_y"}},
             // Pin RISCV_1 + in0_noc (legacy parity). The m2 path computes a single in0-mcast geometry
             // on in0_noc for both the main and _other receivers, so both must use in0_noc.
-            .hw_config =
-                m2::DataMovementHardwareConfig{
-                    .gen1_config =
-                        m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
+            .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
+                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
         };
     };
     if (has_in0_receiver) {
@@ -4048,16 +4070,19 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                 .dfb_spec_name = RO_IN1_DFB, .accessor_name = "cb_in1", .endpoint_type = m2::DFBEndpointType::PRODUCER},
             m2::DFBBinding{
                 .dfb_spec_name = RO_OUT_DFB, .accessor_name = "cb_out", .endpoint_type = m2::DFBEndpointType::CONSUMER},
-            m2::DFBBinding{
-                .dfb_spec_name = RO_SPARSITY_IN1_DFB,
-                .accessor_name = "cb_sparsity",
-                .endpoint_type = m2::DFBEndpointType::PRODUCER},
-            // Inert sparsity scratch self-loop (PRODUCER+CONSUMER on this single kernel).
-            m2::DFBBinding{
-                .dfb_spec_name = RO_SPARSITY_IN1_DFB,
-                .accessor_name = "cb_sparsity",
-                .endpoint_type = m2::DFBEndpointType::CONSUMER},
         };
+        if (sparsity_enabled) {
+            // Sparsity scratch self-loop — gated off (see sparsity_enabled note above; the kernel
+            // builds without SPARSITY so it does not reference dfb::cb_sparsity).
+            b.push_back(m2::DFBBinding{
+                .dfb_spec_name = RO_SPARSITY_IN1_DFB,
+                .accessor_name = "cb_sparsity",
+                .endpoint_type = m2::DFBEndpointType::PRODUCER});
+            b.push_back(m2::DFBBinding{
+                .dfb_spec_name = RO_SPARSITY_IN1_DFB,
+                .accessor_name = "cb_sparsity",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER});
+        }
         std::vector<m2::TensorBinding> tb = {
             m2::TensorBinding{.tensor_parameter_name = RO_IN1_TENSOR, .accessor_name = "in1"},
             m2::TensorBinding{.tensor_parameter_name = RO_OUT_TENSOR, .accessor_name = "out"},
@@ -4111,11 +4136,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             .runtime_arg_schema = {.runtime_arg_names = std::move(rta_names)},
             // Pin RISCV_0 + in1_noc (legacy parity): the in1 column-mcast dest rectangle is swapped
             // for in1_noc below, so the mcast must issue on in1_noc or it inverts and degenerates.
-            .hw_config =
-                m2::DataMovementHardwareConfig{
-                    .gen1_config =
-                        m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
+            .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
+                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_0, in1_noc),
         });
     }
 
@@ -4192,11 +4214,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             // Pin RISCV_0 + in1_noc (legacy parity). The m2 path computes a single in1-mcast geometry
             // on in1_noc for both the main and _other receivers, so both must use in1_noc to match
             // the sender's multicast rectangle and semaphore signaling.
-            .hw_config =
-                m2::DataMovementHardwareConfig{
-                    .gen1_config =
-                        m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
+            .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
+                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_0, in1_noc),
         };
     };
     const bool has_in1_receiver = in1_receiver.num_cores() > 0;
@@ -4376,10 +4395,18 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
 
     for (const auto& core : cores) {
         CoreCoord left_core = {(std::size_t)start_core_x, (std::size_t)core.y};
-        CoreCoord left_core_plus_one = {(std::size_t)start_core_x + 1, (std::size_t)core.y};
+        // [Quasar single-row/col guard] The mcast "+1" corner (the first receiver past the sender) does not
+        // exist when there is only one column (in0 row-mcast) or one row (in1 column-mcast) -- e.g. on the
+        // 2-core emulator (2x1 grid) start_core_y+1 = (0,1) has no core, so translating it throws
+        // "No core coordinate found at (0,1)". Clamp the +1 corner to the sender's own coord when that
+        // dimension has a single core; the degenerate mcast then covers 0 receivers so the clamped
+        // rectangle is unused. Multi-row/col grids (num_cores_with_work_* > 1) are unchanged.
+        CoreCoord left_core_plus_one = {
+            (std::size_t)start_core_x + (num_cores_with_work_c > 1 ? 1u : 0u), (std::size_t)core.y};
         CoreCoord right_core = {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)core.y};
         CoreCoord top_core = {(std::size_t)core.x, (std::size_t)start_core_y};
-        CoreCoord top_core_plus_one = {(std::size_t)core.x, (std::size_t)start_core_y + 1};
+        CoreCoord top_core_plus_one = {
+            (std::size_t)core.x, (std::size_t)start_core_y + (num_cores_with_work_r > 1 ? 1u : 0u)};
         CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core_y + num_cores_with_work_r - 1};
 
         auto left_core_physical = device->worker_core_from_logical_core(left_core);
@@ -4419,7 +4446,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         if (in0_block_sharded) {
             m2::AdvancedKernelRunArgs::Varargs v;
             uint32_t in0_mcast_receiver_grid_same_coord;
-            m2::KernelRunArgs::RuntimeArgValues leading;
+            m2::Table<std::string, uint32_t> leading;
             if (transpose_mcast) {
                 in0_mcast_receiver_grid_same_coord = device->worker_core_from_logical_core(core).x;
                 leading = {
@@ -4485,87 +4512,104 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                 v.empty() ? 0u : v.back());
 
             if (in1_idx < num_blocks_x) {
-                in0_sender_run_args.runtime_arg_values.push_back(
-                    m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = leading});
+                for (const auto& [name, value] : leading) {
+                    in0_sender_run_args.runtime_arg_values[name][core] = value;
+                }
                 in0_sender_run_args.advanced_options.runtime_varargs.emplace(core, v);
             } else if (has_in0_no_work) {
-                in0_no_work_run_args.runtime_arg_values.push_back(
-                    m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = leading});
+                for (const auto& [name, value] : leading) {
+                    in0_no_work_run_args.runtime_arg_values[name][core] = value;
+                }
                 in0_no_work_run_args.advanced_options.runtime_varargs.emplace(core, v);
             }
         } else if (in1_idx == 0) {
             // in0 interleaved sender (left column).
-            m2::KernelRunArgs::RuntimeArgValues args = {
-                {"in0_tensor_start_tile_id", (uint32_t)in0_tensor_start_tile_id_stride * in0_idx},
-                {"in0_mcast_dest_noc_start_x", (uint32_t)in0_mcast_start.x},
-                {"in0_mcast_dest_noc_start_y", (uint32_t)in0_mcast_start.y},
-                {"in0_mcast_dest_noc_end_x", (uint32_t)in0_mcast_end.x},
-                {"in0_mcast_dest_noc_end_y", (uint32_t)in0_mcast_end.y},
-                {"last_block_h", in0_idx == in0_end_idx ? last_out_block_h : out_block_h},
-                {"sparsity_addr", 0u},
-            };
-            in0_sender_run_args.runtime_arg_values.push_back(
-                m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = std::move(args)});
+            m2::KernelRunArgs::RuntimeArgValues& in0_sender_rtas = in0_sender_run_args.runtime_arg_values;
+            m2::AddRuntimeArgsForNode(
+                in0_sender_rtas,
+                core,
+                {
+                    {"in0_tensor_start_tile_id", (uint32_t)in0_tensor_start_tile_id_stride * in0_idx},
+                    {"in0_mcast_dest_noc_start_x", (uint32_t)in0_mcast_start.x},
+                    {"in0_mcast_dest_noc_start_y", (uint32_t)in0_mcast_start.y},
+                    {"in0_mcast_dest_noc_end_x", (uint32_t)in0_mcast_end.x},
+                    {"in0_mcast_dest_noc_end_y", (uint32_t)in0_mcast_end.y},
+                    {"last_block_h", in0_idx == in0_end_idx ? last_out_block_h : out_block_h},
+                    {"sparsity_addr", 0u},
+                });
         } else {
             // in0 interleaved receiver.
-            m2::KernelRunArgs::RuntimeArgValues args = {
-                {"in0_mcast_sender_noc_x", (uint32_t)in0_mcast_sender.x},
-                {"in0_mcast_sender_noc_y", (uint32_t)in0_mcast_sender.y},
-            };
-            if ((core.x - start_core_x) <= half_core || (!transpose_mcast and core.y == start_core_y)) {
-                in0_receiver_run_args.runtime_arg_values.push_back(
-                    m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = std::move(args)});
-            } else {
-                in0_receiver_other_run_args.runtime_arg_values.push_back(
-                    m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = std::move(args)});
-            }
+            m2::KernelRunArgs::RuntimeArgValues& in0_receiver_rtas =
+                ((core.x - start_core_x) <= half_core || (!transpose_mcast and core.y == start_core_y))
+                    ? in0_receiver_run_args.runtime_arg_values
+                    : in0_receiver_other_run_args.runtime_arg_values;
+            m2::AddRuntimeArgsForNode(
+                in0_receiver_rtas,
+                core,
+                {
+                    {"in0_mcast_sender_noc_x", (uint32_t)in0_mcast_sender.x},
+                    {"in0_mcast_sender_noc_y", (uint32_t)in0_mcast_sender.y},
+                });
         }
 
         if (in0_idx < num_blocks_y and in1_idx < num_blocks_x) {
             // in1 sender (top row).
             if (in0_idx == 0) {
-                m2::KernelRunArgs::RuntimeArgValues args = {
-                    {"in1_tensor_start_tile_id", (uint32_t)in1_tensor_start_tile_id_stride * in1_idx},
-                    {"in1_mcast_dest_noc_start_x", (uint32_t)in1_mcast_start.x},
-                    {"in1_mcast_dest_noc_start_y", (uint32_t)in1_mcast_start.y},
-                    {"in1_mcast_dest_noc_end_x", (uint32_t)in1_mcast_end.x},
-                    {"in1_mcast_dest_noc_end_y", (uint32_t)in1_mcast_end.y},
-                    {"sparsity_addr", 0u},
-                    {"out_tensor_start_tile_id", ((uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)},
-                };
+                m2::KernelRunArgs::RuntimeArgValues& in1_sender_writer_rtas =
+                    in1_sender_writer_run_args.runtime_arg_values;
+                m2::AddRuntimeArgsForNode(
+                    in1_sender_writer_rtas,
+                    core,
+                    {
+                        {"in1_tensor_start_tile_id", (uint32_t)in1_tensor_start_tile_id_stride * in1_idx},
+                        {"in1_mcast_dest_noc_start_x", (uint32_t)in1_mcast_start.x},
+                        {"in1_mcast_dest_noc_start_y", (uint32_t)in1_mcast_start.y},
+                        {"in1_mcast_dest_noc_end_x", (uint32_t)in1_mcast_end.x},
+                        {"in1_mcast_dest_noc_end_y", (uint32_t)in1_mcast_end.y},
+                        {"sparsity_addr", 0u},
+                        {"out_tensor_start_tile_id", ((uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)},
+                    });
                 if (in1_idx == in1_end_idx) {
-                    args.insert({"last_block_w", last_out_block_w});
-                    args.insert({"out_num_nonzero_subblocks_h", out_block_h / out_subblock_h});
-                    args.insert({"out_last_subblock_h", out_subblock_h});
-                    args.insert({"padded_block_tiles_h_skip", 0u});
-                    args.insert({"out_num_nonzero_subblocks_w", out_block_w / out_subblock_w});
-                    args.insert({"out_last_num_nonzero_subblocks_w", last_block_num_nonzero_subblocks_w});
-                    args.insert({"out_last_subblock_w", last_subblock_of_last_block_w});
-                    args.insert({"padded_subblock_tiles_addr_skip", last_block_padded_subblock_tiles_addr_skip});
-                    args.insert({"padded_block_tiles_w_skip", last_block_padded_block_tiles_w_skip});
+                    m2::AddRuntimeArgsForNode(
+                        in1_sender_writer_rtas,
+                        core,
+                        {
+                            {"last_block_w", last_out_block_w},
+                            {"out_num_nonzero_subblocks_h", out_block_h / out_subblock_h},
+                            {"out_last_subblock_h", out_subblock_h},
+                            {"padded_block_tiles_h_skip", 0u},
+                            {"out_num_nonzero_subblocks_w", out_block_w / out_subblock_w},
+                            {"out_last_num_nonzero_subblocks_w", last_block_num_nonzero_subblocks_w},
+                            {"out_last_subblock_w", last_subblock_of_last_block_w},
+                            {"padded_subblock_tiles_addr_skip", last_block_padded_subblock_tiles_addr_skip},
+                            {"padded_block_tiles_w_skip", last_block_padded_block_tiles_w_skip},
+                        });
                 } else {
-                    args.insert({"last_block_w", out_block_w});
-                    args.insert({"out_num_nonzero_subblocks_h", out_block_h / out_subblock_h});
-                    args.insert({"out_last_subblock_h", out_subblock_h});
-                    args.insert({"padded_block_tiles_h_skip", 0u});
-                    args.insert({"out_num_nonzero_subblocks_w", out_block_w / out_subblock_w});
-                    args.insert({"out_last_num_nonzero_subblocks_w", out_block_w / out_subblock_w});
-                    args.insert({"out_last_subblock_w", out_subblock_w});
-                    args.insert({"padded_subblock_tiles_addr_skip", 0u});
-                    args.insert({"padded_block_tiles_w_skip", 0u});
+                    m2::AddRuntimeArgsForNode(
+                        in1_sender_writer_rtas,
+                        core,
+                        {
+                            {"last_block_w", out_block_w},
+                            {"out_num_nonzero_subblocks_h", out_block_h / out_subblock_h},
+                            {"out_last_subblock_h", out_subblock_h},
+                            {"padded_block_tiles_h_skip", 0u},
+                            {"out_num_nonzero_subblocks_w", out_block_w / out_subblock_w},
+                            {"out_last_num_nonzero_subblocks_w", out_block_w / out_subblock_w},
+                            {"out_last_subblock_w", out_subblock_w},
+                            {"padded_subblock_tiles_addr_skip", 0u},
+                            {"padded_block_tiles_w_skip", 0u},
+                        });
                 }
                 if (bias_tensor.has_value()) {
-                    args.insert({"in3_tensor_start_tile_id", (uint32_t)per_core_N * in1_idx});
+                    in1_sender_writer_rtas["in3_tensor_start_tile_id"][core] = (uint32_t)per_core_N * in1_idx;
                 }
                 if (!output_is_sharded) {
-                    args.insert(
-                        {"last_num_blocks_w_dim", in1_idx == in1_end_idx ? last_out_num_blocks_w : out_num_blocks_x});
+                    in1_sender_writer_rtas["last_num_blocks_w_dim"][core] =
+                        in1_idx == in1_end_idx ? last_out_num_blocks_w : out_num_blocks_x;
                 }
-                in1_sender_writer_run_args.runtime_arg_values.push_back(
-                    m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = std::move(args)});
             } else {
                 // in1 receiver.
-                m2::KernelRunArgs::RuntimeArgValues args = {
+                m2::Table<std::string, uint32_t> args = {
                     {"in1_mcast_sender_noc_x", (uint32_t)in1_mcast_sender.x},
                     {"in1_mcast_sender_noc_y", (uint32_t)in1_mcast_sender.y},
                     {"out_tensor_start_tile_id", ((uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)},
@@ -4627,11 +4671,13 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                     }
                 }
                 if ((core.x - start_core_x) <= half_core || (transpose_mcast and core.y == start_core_y)) {
-                    in1_receiver_writer_run_args.runtime_arg_values.push_back(
-                        m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = std::move(args)});
+                    for (const auto& [name, value] : args) {
+                        in1_receiver_writer_run_args.runtime_arg_values[name][core] = value;
+                    }
                 } else {
-                    in1_receiver_writer_other_run_args.runtime_arg_values.push_back(
-                        m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = std::move(args)});
+                    for (const auto& [name, value] : args) {
+                        in1_receiver_writer_other_run_args.runtime_arg_values[name][core] = value;
+                    }
                 }
             }
         }
@@ -4686,6 +4732,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
     };
 }
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 static ttnn::device_operation::CachedProgram<MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t>
@@ -5034,7 +5081,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast2DProgramFacto
     }
 
     (void)dst_full_sync_en;
-    return create_program_mcast_in0_in1_artifacts(
+    return CMAKE_UNIQUE_NAMESPACE::create_program_mcast_in0_in1_artifacts(
         a,
         device,
         math_fidelity,

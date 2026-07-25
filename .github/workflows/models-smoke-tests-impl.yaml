@@ -25,19 +25,22 @@ on:
         type: boolean
         default: true
         description: "Set to false to allow write access to MLPerf mount"
-      test-category:
+      per-test-timeout:
         required: false
         type: string
-        default: smoke
-        description: "Time-budget workflow key passed to verify_time_budget.py."
+        default: ""
+        description: >-
+          Max allowed timeout (minutes) for any individual test SKU entry in the
+          tests yaml. Verified during load-test-matrix via verify_time_budget.py.
+          Empty skips the per-test ceiling check.
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/models_smoke_merge_gate_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/models_merge_gate_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -53,11 +56,16 @@ jobs:
 
       - name: Verify test timeouts against budget
         run: |
-          set -e
+          set -euo pipefail
+          extra=()
+          if [ -n "${{ inputs.per-test-timeout }}" ]; then
+            extra+=(--max-per-test-timeout "${{ inputs.per-test-timeout }}")
+          fi
           python3 .github/scripts/utils/verify_time_budget.py \
             "${{ env.TESTS_YAML_PATH }}" \
             ./.github/time_budget.yaml \
-            "${{ inputs.test-category }}"
+            merge_gate \
+            "${extra[@]}"
 
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
@@ -65,7 +73,7 @@ jobs:
           TESTS_YAML: ${{ env.TESTS_YAML_PATH }}
         run: |
           set -euo pipefail
-          # TODO: Remove this empty-yaml short-circuit once models_smoke_merge_gate_tests.yaml
+          # TODO: Remove this empty-yaml short-circuit once models_merge_gate_tests.yaml
           # has at least one test row; prepare_test_matrix.py fails on an empty yaml.
           test_count=$(python3 - <<'PY'
           import os, yaml
@@ -82,7 +90,8 @@ jobs:
           python3 .github/scripts/utils/prepare_test_matrix.py \
             "${{ env.TESTS_YAML_PATH }}" \
             "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
+            ./.github/sku_config.yaml \
+            --event "${{ github.event_name }}"
 
   models-smoke-tests:
     needs: load-test-matrix

@@ -128,20 +128,20 @@ ttnn::Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_t
         return tt::tt_metal::HostBuffer(std::move(owned_buffer));
     };
 
-    const TensorSpec output_spec(
+    const tt::tt_metal::TensorSpec output_spec(
         output_shape,
         tt::tt_metal::TensorLayout(
             conv_weight_tensor.dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
 
     auto transformed_buffer = conv_weight_tensor.host_storage().buffer().transform(
         compute, tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
-    return Tensor(
-        tt::tt_metal::HostTensor(std::move(transformed_buffer), output_spec, conv_weight_tensor.tensor_topology()));
+    return Tensor(tt::tt_metal::HostTensor::from_buffer(
+        std::move(transformed_buffer), output_spec, conv_weight_tensor.tensor_topology()));
 }
 
 Tensor transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, bool mirror_kernel) {
     Tensor to_mirror_tensor;
-    if (tt::tt_metal::is_device_tensor(conv_weight_tensor)) {
+    if (ttnn::is_device_tensor(conv_weight_tensor)) {
         log_warning(
             tt::LogOp,
             "Prepare Weights for ConvTranspose2D needs weights on host, but they are already on device. The op will "
@@ -272,8 +272,8 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
     }
 
     // Determine execution path based on configuration and input properties
-    ConvT2dExecutionPath path = determine_conv_transpose2d_execution_path(
-        tt::tt_metal::StorageType::DEVICE, input_memory_config, actual_slice_config);
+    ConvT2dExecutionPath path =
+        determine_conv_transpose2d_execution_path(ttnn::StorageType::DEVICE, input_memory_config, actual_slice_config);
 
     Tensor mirrored_weight_tensor = transform_weights_for_conv_transpose2d(weight_for_transform, mirror_kernel);
     if (path == ConvT2dExecutionPath::L1) {

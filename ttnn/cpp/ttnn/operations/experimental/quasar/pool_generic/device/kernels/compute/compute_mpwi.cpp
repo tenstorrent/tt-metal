@@ -14,6 +14,7 @@
 #include "api/compute/add_int_sfpu.h"
 #include "api/compute/copy_dest_values.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
 #define DEBUG_PRINT 0
@@ -72,19 +73,19 @@ void kernel_main() {
     constexpr uint32_t kernel_w = get_arg(args::kernel_w);
     constexpr uint32_t indexes_32_bit = get_arg(args::indexes_32_bit);
 
-    // experimental::CB wrappers for CB operations
-    experimental::CB in_scalar_cb(in_scalar_cb_id_0);
-    experimental::CB in_idx_cb(in_idx_cb_id);
-    experimental::CB pack_tmp_cb(pack_tmp_cb_id);
-    experimental::CB pack_idx_tmp_cb(pack_idx_tmp_cb_id);
-    experimental::CB right_inc_cb(right_inc_cb_id);
-    experimental::CB down_left_wrap_inc_cb(down_left_wrap_inc_cb_id);
-    experimental::CB up_left_wrap_inc_cb(up_left_wrap_inc_cb_id);
-    experimental::CB intra_kernel_right_inc_cb(intra_kernel_right_inc_cb_id);
-    experimental::CB intra_kernel_down_left_wrap_inc_cb(intra_kernel_down_left_wrap_inc_cb_id);
-    experimental::CB compute_tmp_idx_cb(compute_tmp_idx_cb_id);
-    experimental::CB clear_value_cb(clear_value_cb_id);
-    experimental::CB in_cb_0(in_cb_id_0);
+    // DataflowBuffer wrappers for CB operations
+    DataflowBuffer in_scalar_cb(in_scalar_cb_id_0);
+    DataflowBuffer in_idx_cb(in_idx_cb_id);
+    DataflowBuffer pack_tmp_cb(pack_tmp_cb_id);
+    DataflowBuffer pack_idx_tmp_cb(pack_idx_tmp_cb_id);
+    DataflowBuffer right_inc_cb(right_inc_cb_id);
+    DataflowBuffer down_left_wrap_inc_cb(down_left_wrap_inc_cb_id);
+    DataflowBuffer up_left_wrap_inc_cb(up_left_wrap_inc_cb_id);
+    DataflowBuffer intra_kernel_right_inc_cb(intra_kernel_right_inc_cb_id);
+    DataflowBuffer intra_kernel_down_left_wrap_inc_cb(intra_kernel_down_left_wrap_inc_cb_id);
+    DataflowBuffer compute_tmp_idx_cb(compute_tmp_idx_cb_id);
+    DataflowBuffer clear_value_cb(clear_value_cb_id);
+    DataflowBuffer in_cb_0(in_cb_id_0);
 
     constexpr DataFormat copy_format = indexes_32_bit ? DataFormat::UInt32 : DataFormat::UInt16;
 

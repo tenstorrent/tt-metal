@@ -375,7 +375,12 @@ class TTSampling(LightweightModule):
             return self._mask_invalid_vocab_tail_logits(logits)
         if self.tt_invalid_vocab_mask is None:
             return logits
-        return ttnn.add(logits, self.tt_invalid_vocab_mask, memory_config=logits.memory_config())
+        return ttnn.add(
+            logits,
+            self.tt_invalid_vocab_mask,
+            memory_config=logits.memory_config(),
+            sub_core_grids=self.sub_core_grids,
+        )
 
     def _mask_invalid_vocab_tail_logits(self, logits):
         tail_width = self._invalid_vocab_tail_width
@@ -384,7 +389,12 @@ class TTSampling(LightweightModule):
         if tail_width <= 0 or valid_width < 0:
             return self._mask_invalid_vocab_logits_fallback(logits)
         if valid_width == 0:
-            return ttnn.add(logits, self.tt_invalid_vocab_tail_mask, memory_config=logits.memory_config())
+            return ttnn.add(
+                logits,
+                self.tt_invalid_vocab_tail_mask,
+                memory_config=logits.memory_config(),
+                sub_core_grids=self.sub_core_grids,
+            )
 
         valid_logits = ttnn.slice(
             logits,
@@ -401,12 +411,16 @@ class TTSampling(LightweightModule):
             sub_core_grids=self.sub_core_grids,
         )
         masked_tail_logits = ttnn.add(
-            tail_logits, self.tt_invalid_vocab_tail_mask, memory_config=logits.memory_config()
+            tail_logits,
+            self.tt_invalid_vocab_tail_mask,
+            memory_config=logits.memory_config(),
+            sub_core_grids=self.sub_core_grids,
         )
         masked_logits = ttnn.concat(
             [valid_logits, masked_tail_logits],
             dim=3,
             memory_config=logits.memory_config(),
+            sub_core_grids=self.sub_core_grids,
         )
         ttnn.deallocate(valid_logits)
         ttnn.deallocate(tail_logits)
@@ -416,7 +430,12 @@ class TTSampling(LightweightModule):
     def _mask_invalid_vocab_logits_fallback(self, logits):
         if self.tt_invalid_vocab_mask is None:
             return logits
-        return ttnn.add(logits, self.tt_invalid_vocab_mask, memory_config=logits.memory_config())
+        return ttnn.add(
+            logits,
+            self.tt_invalid_vocab_mask,
+            memory_config=logits.memory_config(),
+            sub_core_grids=self.sub_core_grids,
+        )
 
     def _can_slice_valid_vocab_for_argmax(self):
         return self.vocab_size < self.padded_vocab_size and self.vocab_size % ttnn.TILE_SIZE == 0

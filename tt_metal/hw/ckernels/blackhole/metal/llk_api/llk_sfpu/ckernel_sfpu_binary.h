@@ -158,7 +158,7 @@ inline void calculate_sfpu_binary_div(const uint dst_index_in0, const uint dst_i
             // Skip quotient refinement when in0*r is already non-finite (biased exponent == 255).
             // If in0*r = +/-inf, then the residual e = in0 - (+/-inf)*in1 = -/+inf and
             // result + e*r = inf + (-inf) = NaN, which would corrupt IEEE overflow behavior.
-            v_if(sfpi::exexp(result, sfpi::ExponentMode::NoDebias) != 255) {
+            v_if(sfpi::exexp(result, sfpi::ExponentMode::Biased) != 255) {
                 // Residual (Markstein) refinement removes the double-rounding of in0 * round(1/in1).
                 // The residual subtraction is exact under Sterbenz's lemma.
                 sfpi::vFloat e = in0 - result * in1;

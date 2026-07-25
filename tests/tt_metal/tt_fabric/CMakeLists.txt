@@ -4,7 +4,7 @@ include(sources.cmake)
 add_executable(
     fabric_unit_tests
     ${UNIT_TESTS_FABRIC_SRC}
-    ${PROJECT_SOURCE_DIR}/tt_metal/impl/experimental/disaggregation/kv_chunk_address_table_protobuf.cpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/impl/internal/disaggregation/kv_chunk_address_table_protobuf.cpp
 )
 
 target_link_libraries(
@@ -145,7 +145,16 @@ target_link_libraries(
         tt_metal
         test_common_libs
         yaml-cpp::yaml-cpp
-        TT::ScaleoutTools
+)
+
+# NOTE(#48783): Take only TT::ScaleoutTools headers, do NOT link it. Its protobuf sources
+# are already in libtt_metal.so; linking again duplicates the descriptor pool and trips a
+# libprotobuf fatal on the Torus paths. Symbols resolve from libtt_metal.so at link/run time.
+target_include_directories(
+    test_tt_fabric
+    SYSTEM
+    PRIVATE
+        $<TARGET_PROPERTY:TT::ScaleoutTools,INTERFACE_INCLUDE_DIRECTORIES>
 )
 
 target_include_directories(

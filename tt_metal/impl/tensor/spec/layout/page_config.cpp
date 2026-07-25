@@ -148,12 +148,8 @@ Alignment TilePageConfig::get_required_shard_shape_alignment() const {
 }
 
 RowMajorPageConfig::RowMajorPageConfig(const Tile& tile) : tile_(tile) {
-    if (tile != Tile{}) {
-        log_warning(
-            LogMetal,
-            "Configuring a ROW MAJOR page config with a tile configuration, this will be rejected in the future. See "
-            "#18536");
-    }
+    TT_FATAL(
+        tile == Tile{}, "Configuring a ROW MAJOR page config with a custom tile configuration is not supported.");
 }
 
 Alignment RowMajorPageConfig::create_default_alignment(DataType /*dtype*/, const MemoryConfig& memory_config) const {
@@ -219,13 +215,9 @@ size_t RowMajorPageConfig::get_page_size_bytes(const Shape2D& page_shape, DataTy
 }
 
 const Tile& RowMajorPageConfig::get_tile() const {
-    if (tile_ != Tile{}) {
-        log_warning(
-            LogMetal,
-            "Attempting to extract tile information out of a ROW MAJOR layout, this will be rejected in the future. "
-            "See "
-            "#18536.");
-    }
+    TT_FATAL(
+        tile_ == Tile{},
+        "Attempting to extract tile information out of a ROW MAJOR layout is not supported.");
     return tile_;
 }
 

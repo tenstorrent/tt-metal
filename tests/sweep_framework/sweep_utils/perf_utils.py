@@ -25,6 +25,14 @@ DEVICE_PERF_KEYS = [
     "CORE COUNT",
 ]
 
+# Sentinel returned as the device-perf value when a sweep module opts a vector out of
+# profiling by setting _SKIP_DEVICE_PERF (e.g. conv2d's heavy FABRIC_1D path, where the
+# profiler read/clock-ARC over the busy fabric hangs). Distinct from None, which means
+# "profiler ran but produced nothing" -> FAIL_UNSUPPORTED_DEVICE_PERF. The runner treats
+# this sentinel as PASS with device-perf N/A, so an unprofilable-but-correct vector is
+# not counted as a failure.
+DEVICE_PERF_SKIPPED = "__device_perf_skipped__"
+
 
 def clear_disk_kernel_cache() -> None:
     """Clear disk kernel cache for current git hash."""
@@ -59,6 +67,23 @@ def _resolve_perf_device(device, test_module):
         d = getattr(test_module, _name, None)
         if d is not None:
             return d
+    # CCL ops (all_gather etc.) don't keep a module-global device; they hold it in
+    # ccl_common's persistent _DEVICE_CACHE (kept open across vectors when the
+    # profiler is on). Read the live cached device if present. The cache is set to
+    # None on teardown/failure, so this self-corrects -- never a stale/closed read.
+    # Scan sys.modules instead of importing by name: the sweep module imports
+    # ccl_common as "tests.sweep_framework.sweep_utils.ccl_common" while a plain
+    # "from sweep_utils import ccl_common" here is a DIFFERENT module object (two
+    # PYTHONPATH roots -> two sys.modules entries, two separate _DEVICE_CACHE
+    # dicts). Reading the already-imported module that actually owns the device
+    # avoids creating a fresh, empty cache.
+    import sys
+
+    for _name, _mod in list(sys.modules.items()):
+        if _mod is not None and _name.endswith("sweep_utils.ccl_common"):
+            cache = getattr(_mod, "_DEVICE_CACHE", None)
+            if isinstance(cache, dict) and cache.get("mesh_device") is not None:
+                return cache["mesh_device"]
     return None
 
 
@@ -210,8 +235,17 @@ def run_with_cache_comparison(
     # First run (without cache)
     status_uncached, message_uncached, e2e_uncached_ms = execute_test(test_module, test_vector, device)
 
+    # A sweep module can set _SKIP_DEVICE_PERF (per-vector) to opt this vector out of
+    # the profiler read -- e.g. conv2d's heavy FABRIC_1D path, where the profiler's
+    # remote-chip AICLK ARC read hangs over the fabric-busy ETH link. Checked AFTER
+    # execute_test() since run() sets the flag. dp_skipped -> return the SKIPPED
+    # sentinel so the runner marks PASS (perf N/A), not FAIL_UNSUPPORTED_DEVICE_PERF.
+    dp_requested = getattr(config, "measure_device_perf", False)
+    dp_skipped = dp_requested and getattr(test_module, "_SKIP_DEVICE_PERF", False)
+    measure_dp = dp_requested and not dp_skipped
+
     device_perf_uncached = None
-    if getattr(config, "measure_device_perf", False):
+    if measure_dp:
         # Each gather's ttnn.ReadDeviceProfiler refreshes the in-memory "latest"
         # program perf data, so the cached run below reads its own data with no
         # legacy CSV-log clearing needed.
@@ -221,7 +255,7 @@ def run_with_cache_comparison(
     status_cached, message_cached, e2e_cached_ms = execute_test(test_module, test_vector, device)
 
     device_perf_cached = None
-    if getattr(config, "measure_device_perf", False):
+    if measure_dp:
         device_perf_cached = gather_single_test_perf(_resolve_perf_device(device, test_module), status_cached)
 
     # Determine combined status and message
@@ -252,7 +286,7 @@ def run_with_cache_comparison(
     e2e_perf = {"uncached": e2e_uncached_ms, "cached": e2e_cached_ms}
 
     # Device perf dict (simplified) and message augmentation
-    if getattr(config, "measure_device_perf", False):
+    if measure_dp:
         combined_device_perf = {"uncached": device_perf_uncached, "cached": device_perf_cached}
         if device_perf_uncached or device_perf_cached:
             message = get_updated_message(message, combined_device_perf)
@@ -263,6 +297,8 @@ def run_with_cache_comparison(
         if device_perf_cached:
             simplified_perf["cached"] = simplify_device_perf(device_perf_cached)
         return status, message, e2e_perf, simplified_perf, peak_memory
+    elif dp_skipped:
+        return status, message, e2e_perf, DEVICE_PERF_SKIPPED, peak_memory
     else:
         return status, message, e2e_perf, None, peak_memory
 
@@ -279,7 +315,13 @@ def run_single(
 
         peak_memory = capture_peak_memory(test_module, test_vector, device, use_no_dispatch=True)
 
-    if getattr(config, "measure_device_perf", False):
+    dp_requested = getattr(config, "measure_device_perf", False)
+    # Per-vector opt-out: a module sets _SKIP_DEVICE_PERF when the profiler read would
+    # hang (e.g. conv2d heavy FABRIC_1D path -> remote-chip AICLK ARC read over fabric).
+    # Return the SKIPPED sentinel (not None) so the runner marks PASS, not unsupported.
+    if dp_requested and getattr(test_module, "_SKIP_DEVICE_PERF", False):
+        return status, message, e2e_ms, DEVICE_PERF_SKIPPED, peak_memory
+    if dp_requested:
         perf_result = gather_single_test_perf(_resolve_perf_device(device, test_module), status)
         message = get_updated_message(message, perf_result)
         simplified_perf = simplify_device_perf(perf_result)

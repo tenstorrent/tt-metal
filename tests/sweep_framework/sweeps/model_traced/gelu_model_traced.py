@@ -64,7 +64,7 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config, device=device)
 
     # Only restore memory_config if the master trace actually recorded it.
     # Do NOT add it from output_memory_config when master didn't have it —

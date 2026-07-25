@@ -11,20 +11,23 @@
 #include "llk_math_eltwise_binary_sfpu.h"
 #include "llk_math_eltwise_binary_sfpu_init.h"
 
-/*
- * Quasar keeps the same macro surface as BH/WH. DST_SYNC and DST_ACCUM are
- * unused until Quasar has an equivalent of get_dest_max_tiles<...>. Binary
- * macro calls are limited to VectorMode::RC for now.
- */
+// Quasar keeps the same macro surface as BH/WH. Binary macro calls are limited
+// to VectorMode::RC for now.
 
 namespace ckernel {
 
-template <DstSync /*DST_SYNC*/, bool /*DST_ACCUM*/>
+template <DstSync DST_SYNC, bool DST_ACCUM>
 inline __attribute__((always_inline)) void _sfpu_binary_check_(
-    [[maybe_unused]] std::uint32_t dst_index_in0,
-    [[maybe_unused]] std::uint32_t dst_index_in1,
-    [[maybe_unused]] std::uint32_t dst_index_out,
-    VectorMode vector_mode) {
+    std::uint32_t dst_index_in0, std::uint32_t dst_index_in1, std::uint32_t dst_index_out, VectorMode vector_mode) {
+    LLK_ASSERT(
+        (dst_index_in0 < trisc::get_dest_max_tiles<DST_SYNC, DST_ACCUM, trisc::DstTileShape::Tile32x32>()),
+        "dst_index_in0 exceeds max dest tiles");
+    LLK_ASSERT(
+        (dst_index_in1 < trisc::get_dest_max_tiles<DST_SYNC, DST_ACCUM, trisc::DstTileShape::Tile32x32>()),
+        "dst_index_in1 exceeds max dest tiles");
+    LLK_ASSERT(
+        (dst_index_out < trisc::get_dest_max_tiles<DST_SYNC, DST_ACCUM, trisc::DstTileShape::Tile32x32>()),
+        "dst_index_out exceeds max dest tiles");
     LLK_ASSERT(vector_mode == VectorMode::RC, "Quasar currently only supports vector mode RC");
 }
 
@@ -56,10 +59,9 @@ inline __attribute__((always_inline)) void _sfpu_binary_check_(
  * These mirror the unary/ternary SFPU_UNARY_INIT* macros and delegate to
  * `ckernel::llk_math_eltwise_binary_sfpu_init<SfpuType::OP>` (defined in
  * `llk_math_eltwise_binary_sfpu_init.h`). On Quasar that wrapper is itself
- * a thin shim around `_llk_math_eltwise_sfpu_init_()`, matching what the
- * hand-written `llk_math_eltwise_binary_sfpu_binop_init` wrappers do
- * (the `SfpuType` template parameter is unused on Quasar but kept for API
- * parity with BH/WH).
+ * a thin shim around `_llk_math_eltwise_sfpu_init_()` that then invokes the
+ * init callback (the `SfpuType` template parameter is unused on Quasar but
+ * kept for API parity with BH/WH).
  *
  * SfpuType lives inside `::ckernel::` on Quasar (in llk_defs.h), so the
  * fully-qualified path is `::ckernel::SfpuType::OP`.

@@ -8,7 +8,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
-#include "../zero_padded_kv_cache_common.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/zero_padded_kv_cache/device/kernels/zero_padded_kv_cache_common.hpp"
 
 // Reads the boundary (partial) pad tile from the cache into the src CB, and builds the bf16 row-mask
 // tile (rows [0,row_start) = 1.0, rows [row_start,32) = 0.0) into the mask CB. Only runs on the chip

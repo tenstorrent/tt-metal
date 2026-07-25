@@ -87,6 +87,14 @@ class DataFormat(Enum):
     Fp8_e4m3 = DataFormatInfo("Fp8_e4m3", 1)
 
     @property
+    def cpp_enum_value(self) -> str:
+        return f"DataFormat::{self.name}"
+
+    @property
+    def cpp_underlying_value(self) -> str:
+        return f"ckernel::to_underlying(DataFormat::{self.name})"
+
+    @property
     def size(self) -> Fraction:
         """Returns the byte size of the data format."""
         return self.value.byte_size

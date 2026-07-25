@@ -12,6 +12,8 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include <vector>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -22,7 +24,6 @@ namespace ttnn::prim::qsr {
 ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::create_program_artifacts(
     const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
     // Metal 2.0 named resource handles (locals to avoid unity-build name collisions).
-    const DFBSpecName CB_IN0{"cb_in0"};              // legacy c_0: input shard (borrowed)
     const DFBSpecName CB_IN{"cb_in"};                // legacy c_24: reader -> compute tile staging
     const DFBSpecName CB_TILIZE{"cb_tilize"};        // legacy c_25: tilize self-loop intermediate
     const DFBSpecName CB_OUT_STAGE{"cb_out_stage"};  // legacy c_27: compute -> writer staging (ht>8)
@@ -98,13 +99,8 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
     // cb_out_stage exists only on the ht>8 path (compute -> writer staging).
     // ------------------------------------------------------------------------
     std::vector<DataflowBufferSpec> dfbs;
-    dfbs.push_back(DataflowBufferSpec{
-        .unique_id = CB_IN0,
-        .entry_size = stick_size_bytes,
-        .num_entries = shard_height,
-        .data_format_metadata = src0_cb_data_format,
-        .borrowed_from = INPUT_TENSOR,
-    });
+    // cb_in0 is gone: the reader reads the resident input shard via tensor::input (local TensorAccessor),
+    // not a borrowed self-loop fake-CB.
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = CB_IN,
         .entry_size = src0_single_tile_size,
@@ -117,14 +113,18 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
         .num_entries = ht * wt,
         .data_format_metadata = src0_cb_data_format,
     });
-    dfbs.push_back(DataflowBufferSpec{
-        .unique_id = CB_OUT0,
-        .entry_size = output_page_size,
-        .num_entries = (stick_size_bytes * shard_height) / output_page_size,
-        .data_format_metadata = dst_cb_data_format,
-        .borrowed_from = OUTPUT_TENSOR,
-    });
-    if (ht_gt_8) {
+    if (!ht_gt_8) {
+        // ht<=8: compute writes the output shard in place via a borrowed INTRA self-loop DFB.
+        dfbs.push_back(DataflowBufferSpec{
+            .unique_id = CB_OUT0,
+            .entry_size = output_page_size,
+            .num_entries = (stick_size_bytes * shard_height) / output_page_size,
+            .data_format_metadata = dst_cb_data_format,
+            .borrowed_from = OUTPUT_TENSOR,
+        });
+    } else {
+        // ht>8: compute drains to a staging DFB; the writer scatters it to the output shard, which it
+        // reaches via tensor::output (local TensorAccessor), not a borrowed self-loop fake-CB.
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = CB_OUT_STAGE,
             .entry_size = dst_single_tile_size,
@@ -151,11 +151,10 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
         .source =
             std::filesystem::path{"ttnn/cpp/ttnn/operations/experimental/quasar/transpose/device/kernels/dataflow/"
                                   "reader_unary_transpose_wh_sharded_rm.cpp"},
-        // cb_in0: read-by-address borrowed shard; single-producer-single-consumer self-loop (no FIFO ops).
-        .dfb_bindings =
-            {DFBBinding{.dfb_spec_name = CB_IN0, .accessor_name = "cb_src", .endpoint_type = DFBEndpointType::PRODUCER},
-             DFBBinding{.dfb_spec_name = CB_IN0, .accessor_name = "cb_src", .endpoint_type = DFBEndpointType::CONSUMER},
-             DFBBinding{.dfb_spec_name = CB_IN, .accessor_name = "cb_dst", .endpoint_type = DFBEndpointType::PRODUCER}},
+        // Input shard read via tensor::input (local TensorAccessor); cb_dst is the tile-staging output.
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = CB_IN, .accessor_name = "cb_dst", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "input"}},
         .compile_time_args =
             {{"num_hw_blocks_per_core", num_hw_blocks_per_core},
              {"Ht", ht},
@@ -164,16 +163,21 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
              {"Wt", wt},
              {"W_size_bytes", stick_size_bytes},
              {"l1_write_offset_bytes", wt * input_tensor.element_size() * TILE_WIDTH}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device()->arch()),
     };
 
-    ComputeHardwareConfig compute_cfg{.fp32_dest_acc_en = fp32_dest_acc_en};
+    ttnn::ComputeKernelConfig compute_cfg{
+        .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(input_tensor.device()->arch(), compute_cfg);
     if (src0_cb_data_format == tt::DataFormat::Float32) {
         // Keep both the tilize input (cb_in) and its output (cb_tilize, which feeds the transpose)
         // in full Float32 on the unpack-to-dest path; otherwise the unpacker falls back to tf32.
-        compute_cfg.unpack_to_dest_mode = {
-            {CB_IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32},
-            {CB_TILIZE, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
+        std::visit(
+            [&](auto& c) {
+                c.unpack_modes.emplace(CB_IN, tt::tt_metal::UnpackMode::UnpackToDest);
+                c.unpack_modes.emplace(CB_TILIZE, tt::tt_metal::UnpackMode::UnpackToDest);
+            },
+            compute_hw);
     }
 
     // Output binding: ht<=8 -> compute self-loops the borrowed output shard directly; ht>8 -> compute
@@ -208,7 +212,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
              {"last_output_row_num_datums", last_output_row_num_datums},
              {"pack_num_pages_last_col", pack_num_pages_last_col},
              {"pack_num_pages_last_row_col", pack_num_pages_last_row_col}},
-        .hw_config = compute_cfg,
+        .hw_config = compute_hw,
     };
 
     std::vector<KernelSpec> kernels;
@@ -224,17 +228,11 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
             .source =
                 std::filesystem::path{"ttnn/cpp/ttnn/operations/experimental/quasar/transpose/device/kernels/dataflow/"
                                       "writer_unary_transpose_wh_sharded_rm.cpp"},
-            // cb_out_stage: real consumer of the compute staging output.
-            // cb_out0: write-by-address borrowed shard; single-producer-single-consumer self-loop.
-            .dfb_bindings =
-                {DFBBinding{
-                     .dfb_spec_name = CB_OUT_STAGE,
-                     .accessor_name = "cb_src",
-                     .endpoint_type = DFBEndpointType::CONSUMER},
-                 DFBBinding{
-                     .dfb_spec_name = CB_OUT0, .accessor_name = "cb_dst", .endpoint_type = DFBEndpointType::PRODUCER},
-                 DFBBinding{
-                     .dfb_spec_name = CB_OUT0, .accessor_name = "cb_dst", .endpoint_type = DFBEndpointType::CONSUMER}},
+            // cb_out_stage: real consumer of the compute staging output. The output shard is reached via
+            // tensor::output (local TensorAccessor), not a borrowed self-loop fake-CB.
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = CB_OUT_STAGE, .accessor_name = "cb_src", .endpoint_type = DFBEndpointType::CONSUMER}},
+            .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "output"}},
             .compile_time_args =
                 {{"num_hw_blocks_per_core", num_hw_blocks_per_core},
                  {"Ht", ht},
@@ -243,7 +241,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
                  {"W_per_tile_last", W_per_tile_last},
                  {"H_size_bytes", H * output_tensor.element_size()},
                  {"l1_read_offset_bytes", ht * output_tensor.element_size() * TILE_HEIGHT}},
-            .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+            .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
         };
         kernels.push_back(std::move(writer_spec));
         wu_kernels.push_back(WRITER_KERNEL);
