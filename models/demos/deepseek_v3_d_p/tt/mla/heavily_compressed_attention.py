@@ -37,6 +37,19 @@ class _TtHCABase(LightweightModule):
     ``device`` / ``dtype`` / ``memory_config`` / ``rotary_emb`` and the mesh attributes
     (``is_mesh`` / ``sp_axis`` / ``tp_axis`` / ``sp_factor`` / ``tp_factor``) before calling these."""
 
+    @staticmethod
+    def prepare_input(hidden: torch.Tensor, sp_factor: int, compress_rate: int):
+        """Host-side, pre-shard: pad the seq dim up to a multiple of ``compress_rate * sp_factor`` so
+        each SP shard holds whole compression windows (pad can't be added to an already-sharded seq —
+        per-chip append would land mid-sequence). Returns ``(padded_hidden, seq_len_actual)``; the pad
+        rows are causally masked downstream and trimmed out of the compressed output via seq_len_actual."""
+        seq_len_actual = hidden.shape[1]
+        align = compress_rate * sp_factor
+        pad = (-seq_len_actual) % align
+        if pad:
+            hidden = torch.nn.functional.pad(hidden, (0, 0, 0, pad))
+        return hidden, seq_len_actual
+
     def _to_tt_linear_weight(self, weight: torch.Tensor, tp_shard_dim: int | None = None):
         # tp_shard_dim indexes the transposed 4D weight [1, 1, in, out]: 2 = contraction (in), 3 = output.
         torch_weight = weight.detach().transpose(-2, -1).contiguous().unsqueeze(0).unsqueeze(0).to(torch.bfloat16)
@@ -103,6 +116,8 @@ class TtHCACompressor(_TtHCABase):
         rms_norm_eps: float = 1e-6,
         sp_axis: int = 0,
         tp_axis: int = 1,
+        topology=ttnn.Topology.Linear,
+        ccl_num_links: int | None = None,
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     ):
@@ -119,9 +134,16 @@ class TtHCACompressor(_TtHCABase):
         self.sp_axis, self.tp_axis = sp_axis, tp_axis
         self.sp_factor = device.shape[sp_axis] if self.is_mesh else 1
         self.tp_factor = device.shape[tp_axis] if self.is_mesh else 1
+        # The compressor rides BOTH axes: TP all-reduce for wkv/wgate, SP all-gather for the pooled
+        # compressed KV -> needs the CCL object whenever either factor > 1.
+        self.ccl_topology = topology
+        self.tt_ccl = get_tt_ccl(device) if (self.is_mesh and (self.sp_factor > 1 or self.tp_factor > 1)) else None
+        self.ccl_num_links = (2 if is_blackhole() else 1) if ccl_num_links is None else ccl_num_links
 
-        self.wkv = self._to_tt_linear_weight(kv_proj_weight)
-        self.wgate = self._to_tt_linear_weight(gate_proj_weight)
+        # wkv/wgate: contraction(row)-parallel like the sliding wkv -> partial-sum single-head KV/gate,
+        # TP all-reduced in forward to a TP-replicated full head_dim.
+        self.wkv = self._to_tt_linear_weight(kv_proj_weight, tp_shard_dim=2)
+        self.wgate = self._to_tt_linear_weight(gate_proj_weight, tp_shard_dim=2)
         self.position_bias = self._from_torch(position_bias.detach().reshape(1, 1, self.compress_rate, self.head_dim))
         self.kv_norm_weight = self._from_torch(kv_norm_weight.detach().reshape(1, 1, 1, self.head_dim))
         self.trans_mat = self._from_torch(get_rot_transformation_mat())
@@ -142,51 +164,109 @@ class TtHCACompressor(_TtHCABase):
             **kwargs,
         )
 
-    def forward(self, hidden_states, position_ids: torch.Tensor):
-        """``hidden_states``: TTNN tensor [B, 1, S, hidden]. ``position_ids``: torch [B, S].
-        Returns ``(compressed_kv, block_bias)`` — compressed_kv TTNN [B, 1, T, head_dim];
-        block_bias host torch [B, 1, S, T] (or None)."""
+    def forward(self, hidden_states, position_ids: torch.Tensor, seq_len_actual: int | None = None):
+        """``hidden_states``: TTNN [B, 1, S_pad/sp, hidden/tp] (seq host-padded to a multiple of
+        compress_rate*sp via ``prepare_input``). ``position_ids``: torch [B, S_real] (real positions).
+        ``seq_len_actual``: real pre-pad length; only ``T_real = S_real // compress_rate`` compressed
+        entries survive (pad-derived windows are trimmed). ``None`` -> no padding (single-shot: use the
+        full seq). Returns ``compressed_kv`` [B, 1, T_real, head_dim] (TP-replicated, SP-gathered) and
+        host ``block_bias`` [B, 1, S_real, T_real] (or None)."""
         input_shape = tuple(hidden_states.shape)
         if len(input_shape) != 4 or input_shape[1] != 1:
             raise ValueError(f"Expected hidden_states shape [B, 1, S, hidden], got {input_shape}")
-        batch, seq_len = input_shape[0], input_shape[2]
+        batch, seq_len = input_shape[0], input_shape[2]  # seq_len = per-chip S_pad/sp
+        if seq_len_actual is None:
+            seq_len_actual = seq_len * self.sp_factor
 
         kv = ttnn.linear(hidden_states, self.wkv, memory_config=self.memory_config)
         gate = ttnn.linear(hidden_states, self.wgate, memory_config=self.memory_config)
-        usable = (seq_len // self.compress_rate) * self.compress_rate
-        if usable > 0:
-            n_windows = usable // self.compress_rate
 
-            # device: +position_bias then softmax over the window axis (per channel)
+        # wkv/wgate are contraction(row)-parallel -> partial-sum single-head KV/gate; TP all-reduce
+        # (reduce_scatter + all_gather) each to the full head_dim, replicated across TP.
+        if self.tp_factor > 1:
+            for name in ("kv", "gate"):
+                t = kv if name == "kv" else gate
+                t = ttnn.experimental.reduce_scatter_minimal_async(
+                    t,
+                    persistent_output_buffers=None,
+                    dim=3,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(
+                        cluster_axis=self.tp_axis
+                    ),
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+                    num_links=self.ccl_num_links,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    topology=self.ccl_topology,
+                    cluster_axis=self.tp_axis,
+                )
+                t = ttnn.experimental.all_gather_async(
+                    t,
+                    dim=3,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(
+                        cluster_axis=self.tp_axis
+                    ),
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+                    num_links=self.ccl_num_links,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    topology=self.ccl_topology,
+                    cluster_axis=self.tp_axis,
+                )
+                if name == "kv":
+                    kv = t
+                else:
+                    gate = t
+
+        usable = (seq_len // self.compress_rate) * self.compress_rate
+        n_windows = usable // self.compress_rate  # windows this chip owns (S_pad/sp is rate-aligned on mesh)
+        t_real = seq_len_actual // self.compress_rate
+        if n_windows > 0:
+            # device: +position_bias then softmax over the window axis (per channel), weighted sum
             gate = ttnn.slice(gate, [0, 0, 0, 0], [batch, 1, usable, self.head_dim])
             gate = ttnn.reshape(gate, [batch, n_windows, self.compress_rate, self.head_dim])
             gate = ttnn.add(gate, self.position_bias)
             weights = ttnn.softmax(gate, dim=2, numeric_stable=True)
 
-            # device: weighted sum over the window axis
             kv = ttnn.slice(kv, [0, 0, 0, 0], [batch, 1, usable, self.head_dim])
             kv = ttnn.reshape(kv, [batch, n_windows, self.compress_rate, self.head_dim])
             pooled = ttnn.sum(ttnn.multiply(kv, weights), dim=2)
 
-            # device: RMSNorm over head_dim
             compressed = ttnn.reshape(pooled, [batch, 1, n_windows, self.head_dim])
             compressed = ttnn.rms_norm(compressed, weight=self.kv_norm_weight, epsilon=self.rms_norm_eps)
 
             # RoPE (device) on the trailing rope_head_dim channels only (op caps head_dim <= 256).
+            # Positions are GLOBAL window indices: chip r owns global windows [r*n_windows, (r+1)*n_windows),
+            # so _cos_sin SP-shards the full arange(n_windows*sp) to match each chip's window slice.
             nope_dim = self.head_dim - self.rope_head_dim
             nope = ttnn.slice(compressed, [0, 0, 0, 0], [batch, 1, n_windows, nope_dim])
             rope = ttnn.slice(compressed, [0, 0, 0, nope_dim], [batch, 1, n_windows, self.head_dim])
-            positions = (torch.arange(n_windows) * self.compress_rate).unsqueeze(0)
+            positions = (torch.arange(n_windows * self.sp_factor) * self.compress_rate).unsqueeze(0)
             cos, sin = self._cos_sin(positions)
             rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
             compressed_kv = ttnn.concat([nope, rope], dim=-1)
+
+            # SP all-gather the per-chip windows -> full T_pad global, replicated; then trim the
+            # pad-derived tail so only the T_real real compressed entries survive.
+            if self.sp_factor > 1:
+                compressed_kv = ttnn.experimental.all_gather_async(
+                    compressed_kv,
+                    dim=2,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(
+                        cluster_axis=self.sp_axis
+                    ),
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
+                    num_links=self.ccl_num_links,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    topology=self.ccl_topology,
+                    cluster_axis=self.sp_axis,
+                )
+            if t_real < compressed_kv.shape[2]:
+                compressed_kv = ttnn.slice(compressed_kv, [0, 0, 0, 0], [batch, 1, t_real, self.head_dim])
         else:
-            n_windows = 0
             compressed_kv = self._from_torch(torch.zeros(batch, 1, 0, self.head_dim))
 
         block_bias = None
-        if seq_len > 1 and n_windows > 0:
-            block_bias = hca_block_bias(position_ids, n_windows, self.compress_rate)
+        if seq_len_actual > 1 and t_real > 0:
+            block_bias = hca_block_bias(position_ids, t_real, self.compress_rate)
 
         return compressed_kv, block_bias
 
@@ -274,7 +354,11 @@ class TtHCA(_TtHCABase):
 
     @classmethod
     def from_reference(cls, device, reference, config, **kwargs) -> "TtHCA":
-        compressor = TtHCACompressor.from_reference(device, reference.compressor, config)
+        # Forward the mesh/CCL config so the compressor rides the same SP/TP axes as the block.
+        compressor_keys = ("sp_axis", "tp_axis", "topology", "ccl_num_links")
+        compressor = TtHCACompressor.from_reference(
+            device, reference.compressor, config, **{k: kwargs[k] for k in compressor_keys if k in kwargs}
+        )
         return cls(
             device,
             compressor=compressor,
