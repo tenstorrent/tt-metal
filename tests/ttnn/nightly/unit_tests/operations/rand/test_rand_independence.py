@@ -7,11 +7,14 @@ The existing rand suite pins range, determinism, cache behaviour and mesh shardi
 hold. None of it pins *independence between elements*, and on Blackhole the width axis is not
 independent:
 
-* within every 32-wide tile, columns 24..31 are byte-identical to columns 0..7 -- i.e. only 24
-  of the 32 column streams are distinct. The duplicate set is exactly ``{c : c % 32 >= 24}`` and
-  every duplicate equals column ``c - 24``;
-* the remaining columns are still correlated in value, so even after discarding the duplicates
-  the argmax over a wide row coincides across columns far more often than IID sampling allows.
+* ~~within every 32-wide tile, columns 24..31 are byte-identical to columns 0..7~~ -- FIXED: the
+  kernel now consumes several PRNG values per element, so the sliding window advances past its own
+  width and no two columns are byte-identical. That test is no longer xfail;
+* the remaining correlation is NOT fixed. The PRNG is a sliding window over one stream -- element
+  (read t, lane i) carries stream[t + i] -- so columns stay correlated in value and the argmax over
+  a wide row still coincides far more often than IID allows (cross-position max |r| 0.618 against
+  0.035 for a host control). Any combination of extra reads is still a function of t + i; removing
+  it needs a counter-based RNG keyed on the element's own position.
 
 Both are properties of the op (they are present in the raw ``ttnn.rand`` output, independent of
 the other axis extent and of the seed), so they belong in the rand suite rather than in a
@@ -52,11 +55,6 @@ def _rand_rows(device, height, width, seed=SEED):
 
 
 @pytest.mark.parametrize("width", [256, 2048])
-@pytest.mark.xfail(
-    strict=True,
-    reason="ttnn.rand reuses 24 of every 32 column streams per tile on Blackhole; "
-    "columns c and c-24 are byte-identical for c % 32 >= 24",
-)
 def test_rand_columns_are_distinct(device, width):
     """No two columns of a single rand draw may be byte-identical."""
     columns = _rand_rows(device, height=2048, width=width)
@@ -75,8 +73,10 @@ def test_rand_columns_are_distinct(device, width):
 
 @pytest.mark.xfail(
     strict=True,
-    reason="ttnn.rand columns stay correlated in value even where they are not byte-identical, "
-    "so argmax over a wide row coincides across columns far more often than IID allows",
+    reason="the PRNG is a sliding window over one stream, so columns stay correlated in value even "
+    "now that none are byte-identical: cross-position max |r| is 0.618 against 0.035 for host IID, "
+    "and argmax coincides far more often than IID allows. Removing this needs a counter-based RNG "
+    "keyed on each element's position; consuming more PRNG values only dilutes it",
 )
 def test_rand_columns_do_not_share_an_argmax(device):
     """Independent columns almost never pick the same row as their maximum.

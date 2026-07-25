@@ -83,9 +83,9 @@ from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
 
 MAX_DENOISE_STEPS = 48
 
-# Served default Gumbel source: IID full-vocabulary host torch Gumbel (see the __init__ note).
-# It was briefly "device"; that default produced corrupted text on 2 of 4 matched seeds.
-DEFAULT_VLLM_GUMBEL_MODE = "host"
+# Served default Gumbel source: the on-device permuted-vocab RNG (see the __init__ note).
+# Requires the Blackhole ttnn.rand kernel fix; without it this default corrupts generated text.
+DEFAULT_VLLM_GUMBEL_MODE = "device"
 
 
 def _resolve_checkpoint_dir(hf_config):
@@ -269,23 +269,25 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         # The served bound, used to derive the fixed reveal span when the operator does not
         # pin DG_DENOISE_REVEAL_PMAX explicitly.
         self._max_model_len = None if max_model_len is None else int(max_model_len)
-        # DEFAULT "host" is the IID full-vocabulary torch Gumbel.
+        # DEFAULT "device" is the on-device permuted-vocab Gumbel: it removes the ~313 ms/step
+        # host RNG and the ~256 MiB/step replicated PCIe DMA, measured here at ~53.6 vs ~36.3
+        # tokens/block/s steady against host (~1.48x).
         #
-        # The default was "device" (the on-device permuted-vocab RNG) for the ~313 ms/step host
-        # RNG and ~256 MiB/step replicated PCIe DMA it removes (~1.8x denoise/step). That is
-        # REVERTED: on a matched 4-seed A/B with one variable, host answered correctly 4/4 while
-        # device corrupted 2/4 -- garbled LaTeX ("6.558times", "10^{-^{-}}", "100^{-88") and, in
-        # the served GPQA trace, a full canvas of one repeated token.
+        # HISTORY, because this default has moved twice. It was flipped to "device" on 2026-07-24,
+        # reverted to "host" on 2026-07-25 after it corrupted generated text on 2 of 4 matched
+        # seeds, and restored here once the CAUSE was fixed. The cause was never in this module:
+        # for the production noise shape (1, 1, 256, vocab) the permuted-vocab draw puts the 256
+        # canvas positions on the ttnn.rand width axis, and the Blackhole SFPU PRNG is a sliding
+        # window over one stream -- element (read t, lane i) carried stream[t + i], so 64 of 256
+        # positions held a byte-identical COPY of another position's noise and picked the same
+        # token together. tt_metal/hw/ckernels/blackhole/.../ckernel_sfpu_rand.h now advances the
+        # window per element; duplicate rows are gone and the same 4-seed A/B answers correctly
+        # 4/4 on both arms with the degeneracy guard never firing.
         #
-        # It is not a sampler bug. For the production noise shape (1, 1, 256, vocab) the
-        # permuted-vocab draw puts the 256 CANVAS POSITIONS on the ttnn.rand width axis, where
-        # only 24 of every 32 row streams are distinct and the remainder stay correlated in
-        # value; positions therefore pick the same token together, which is precisely the
-        # observed texture. See doc/decision_fidelity/gumbel_position_correlation.md and
-        # tests/ttnn/nightly/unit_tests/operations/rand/test_rand_independence.py.
-        #
-        # DG_VLLM_GUMBEL_MODE=device is still selectable for throughput work where the text is
-        # not the product; it is only no longer the default.
+        # This default therefore DEPENDS on that kernel fix. The residual correlation it does not
+        # remove (cross-position max |r| 0.618 against 0.035 for host IID) is pinned by
+        # tests/ttnn/nightly/unit_tests/operations/rand/test_rand_independence.py; if that
+        # regresses, revisit this default. DG_VLLM_GUMBEL_MODE=host remains the IID reference.
         #
         # MEMORY ENVELOPE: "device" and "host" both materialize a full-vocabulary (262144)
         # tensor per step. context_contract.json records that materialization measured as an

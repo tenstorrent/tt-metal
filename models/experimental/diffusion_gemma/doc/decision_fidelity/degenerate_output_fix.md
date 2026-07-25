@@ -79,6 +79,59 @@ the product — it does buy the ~313 ms/step host RNG and the ~256 MiB/step repl
 (~1.8x denoise/step) recorded in `upfront_gumbel_overlap_devicemode_20260724.md`, which is now
 banner-marked as superseded on the default question only. The throughput numbers there stand.
 
+## 5b. The ttnn.rand fix, and the device default restored (2026-07-25, later)
+
+`host` met the correctness bar but not the throughput bar (~36.3 vs ~53.6 tokens/block/s), so the
+kernel defect itself was fixed rather than routed around.
+
+**What the defect actually was.** Mapping one 32x32 `ttnn.rand` tile element by element: 94 distinct
+values in 1024 slots, the PRNG per-lane (32/32 distinct inside one 32-lane SFPU vector) but only 20
+of a tile's 32 vector draws distinct, with the exact relation
+
+    (face f, vector 2k)  ==  (face f+1, vector 2k+1)
+
+which in tile coordinates is "column c is byte-identical to column c-24 for c % 32 >= 24". So
+element `(read t, lane i)` carries `stream[t + i]`: **one sliding window that advances about one
+element per read while all 32 lanes read overlapping positions.**
+
+**The fix.** `ckernel_sfpu_rand.h` (Blackhole) now consumes several PRNG values per stored element,
+so the window moves past its own width instead of being re-read. Measured:
+
+| | tile distinct | distinct vector draws | byte-identical rows | max abs r | max argmax mult |
+| --- | --- | --- | --- | --- | --- |
+| before | 94/1024 | 20/32 | 64/256 | 1.00000 | 11 |
+| after | 214/1024 | 32/32 | **0/256** | 0.618 | 5 |
+| host IID | — | — | 0/256 | 0.035 | 2 |
+
+The uniform [0,1) distribution is untouched: mean 0.4994, std 0.2887, top decile 0.0996 over 524288
+samples (ideal 0.5 / 0.28868 / 0.1).
+
+**Rejected alternatives, all measured, so nobody repeats them.** NOP spacing after the PRNG read
+(0 through 32 NOPs: byte-identical output — it is not a pipeline hazard, and the Wormhole kernel's
+extra NOPs are irrelevant here); xorshift32 mixing of two draws (no gain — any combination of reads
+is still a function of `t + i`); `SFPTRANSP` across four draws with an XOR fold (modest, and it
+re-introduced duplicate rows). One trap worth recording: holding `scale`/`from` in lreg4/lreg5
+across a transpose silently broke the output range to mean 0.35 / std 0.64, which for a while looked
+like a decorrelation success.
+
+**What the fix does not do.** It dilutes the lane/stream degeneracy rather than removing it —
+cross-position max |r| is 0.618 against 0.035 for host IID. A full fix needs a counter-based RNG
+keyed on each element's own position, which this instruction sequence has no lane index to build
+from. `test_rand_independence.py` keeps that half as `xfail(strict)`; the duplicate-column half now
+passes and its marker is gone.
+
+**Gate.** Same 4-seed A/B, shipped serving configuration (EOS stop on, degeneracy guard at its
+default), GPQA doc0 in thinking mode:
+
+| seed | device answer | device tok/blk/s | host answer | host tok/blk/s |
+| --- | --- | --- | --- | --- |
+| 0 | C | 23.8 (6 blocks) | C | 37.5 |
+| 1 | C | 52.3 | C | 27.2 |
+| 2 | C | 53.8 | C | 34.5 |
+| 3 | C | 54.5 | C | 37.0 |
+
+8/8 correct, guard never fired on any run, and the served default is back to `device`.
+
 ## 6. Defense in depth: the degenerate-canvas detector
 
 Block diffusion commits a whole 256-token canvas at once, so degeneration is directly measurable

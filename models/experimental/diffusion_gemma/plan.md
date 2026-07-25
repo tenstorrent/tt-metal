@@ -34,7 +34,7 @@ baseline.
 1. **Metal trace (the default):** one model-lifetime, startup-captured path:
    `DG_UPFRONT_CAPTURE` now defaults to `1`, reveal masking with a tile-aligned
    `DG_DENOISE_REVEAL_PMAX` (optional — derived from the served bound when unset, see below),
-   IID host Gumbel (`DG_VLLM_GUMBEL_MODE` defaults to `host`), K=48, and
+   on-device permuted-vocab Gumbel (`DG_VLLM_GUMBEL_MODE` defaults to `device`), K=48, and
    one-step/window early halt. The reveal, non-lazy capture, and window-1 early-halt behavior is
    intrinsic; it is not selected by additional environment flags. The startup trace/controller is
    rebound across requests and released only at model teardown.
@@ -67,14 +67,14 @@ not an additional trace type.
   an explicit tile-aligned value still wins, and both paths get identical validation
   (positive tile multiple, ≥ tile + one canvas, within the allocated KV span). With no explicit
   value *and* no `max_model_len` it still raises.
-- `DG_VLLM_GUMBEL_MODE` defaults to `host`, the IID full-vocabulary torch Gumbel. It was `device`
-  (the on-device permuted-vocab RNG) from 2026-07-24 for the throughput that removing the per-step
-  host RNG and replicated PCIe DMA buys; **reverted 2026-07-25** — on a matched 4-seed A/B with one
-  variable, `host` answered correctly 4/4 while `device` corrupted 2/4. The cause is `ttnn.rand`,
-  which is not IID along the axis the permuted draw puts the 256 canvas positions on, so positions
-  pick the same token together; see `doc/decision_fidelity/degenerate_output_fix.md`. `device`
-  stays selectable for throughput work; `chunked` and `argmax` remain unsupported under up-front
-  capture.
+- `DG_VLLM_GUMBEL_MODE` defaults to `device`, the on-device permuted-vocab RNG (~53.6 vs ~36.3
+  tokens/block/s against `host`, ~1.48x). This default moved twice: it corrupted generated text on
+  2 of 4 matched seeds and was reverted to `host` on 2026-07-25, then restored once the cause was
+  fixed in `ttnn.rand` — the Blackhole SFPU PRNG is a sliding window over one stream, so 64 of the
+  256 canvas positions were receiving a byte-identical copy of another position's noise. The
+  default therefore DEPENDS on that kernel fix; see
+  `doc/decision_fidelity/degenerate_output_fix.md`. `host` remains the IID reference; `chunked` and
+  `argmax` remain unsupported under up-front capture.
 - Every admitted aligned prefill length must be known and compiled before capture. An unseen runtime
   shape is rejected rather than compiled while traces are resident.
 - Always pass `--generation-config vllm`, set `--max-num-batched-tokens` at least as large as the

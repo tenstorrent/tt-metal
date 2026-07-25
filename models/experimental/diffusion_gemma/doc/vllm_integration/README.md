@@ -21,7 +21,7 @@ export DG_UPFRONT_CAPTURE=1                                                  # d
 export DG_UPFRONT_PREFILL_WARMUP_LENS=<all-admitted-aligned-prompt-lengths>  # required, no default
 export DG_TRACE_REGION_SIZE=<validated-positive-reservation>                 # required, no default
 export DG_DENOISE_REVEAL_PMAX=<positive-tile-aligned-served-cap>             # optional; derived from --max-model-len
-export DG_VLLM_GUMBEL_MODE=host                                              # default; `device` is faster but corrupts text
+export DG_VLLM_GUMBEL_MODE=device                                            # default; ~1.48x faster than `host`
 export DG_VLLM_MAX_DENOISE_STEPS=48
 ```
 
@@ -38,20 +38,25 @@ Reserve it with `--additional-config` `tt.trace_region_size` and mirror the same
 and the derived value is logged; an explicit env value still wins, and both paths share the same
 validation (positive, tile-aligned, fits prompt + one canvas, within the allocated KV span).
 
-`DG_VLLM_GUMBEL_MODE` defaults to **`host`**, the IID full-vocabulary torch Gumbel. It was briefly
-`device` (the on-device permuted-vocab RNG) for the throughput that removing the per-step host RNG
-and its replicated PCIe copy buys; that is **reverted** — on a matched 4-seed A/B with one variable,
-`host` answered correctly 4/4 while `device` corrupted 2/4, producing garbled LaTeX
-(`6.558times`, `10^{-^{-}}`, `100^{-88`) and, in the served GPQA trace, a whole canvas of one
-repeated token.
+`DG_VLLM_GUMBEL_MODE` defaults to **`device`**, the on-device permuted-vocab RNG: **~53.6 vs ~36.3
+tokens/block/s** against `host` (~1.48x), since it removes the per-step host RNG and its replicated
+PCIe copy.
 
-That is not a sampler bug. For the production noise shape `(1, 1, 256, vocab)` the permuted-vocab
-draw puts the **256 canvas positions on the `ttnn.rand` width axis**, where only 24 of every 32 row
-streams are distinct and the rest stay correlated in value, so positions pick the same token
-together. See `doc/decision_fidelity/gumbel_position_correlation.md` and the upstream regression
-`tests/ttnn/nightly/unit_tests/operations/rand/test_rand_independence.py`. `device` remains
-selectable for throughput work where the text is not the product. `chunked` and `argmax` are not
-materialized full-tensor sources and are rejected by the up-front controller.
+This default has moved twice, and the history is the useful part. `device` corrupted generated text
+on 2 of 4 matched seeds — garbled LaTeX (`6.558times`, `10^{-^{-}}`, `100^{-88`) and, in the served
+GPQA trace, a whole canvas of one repeated token — so it was reverted to `host`. It is restored here
+because the **cause was fixed**, and the cause was never in the sampler: for the production noise
+shape `(1, 1, 256, vocab)` the permuted-vocab draw puts the 256 canvas positions on the
+`ttnn.rand` width axis, and the Blackhole SFPU PRNG is a sliding window over one stream — element
+`(read t, lane i)` carried `stream[t + i]`, so 64 of 256 positions held a byte-identical **copy** of
+another position's noise. The kernel now advances the window per element; duplicate rows are gone
+and the same 4-seed A/B answers correctly 4/4 on both arms with the degeneracy guard never firing.
+
+**This default depends on that kernel fix.** The residual correlation it does not remove
+(cross-position max |r| 0.618 against 0.035 for host IID) is pinned by
+`tests/ttnn/nightly/unit_tests/operations/rand/test_rand_independence.py`; if that gate regresses,
+revisit this default. `host` remains the IID reference. `chunked` and `argmax` are not materialized
+full-tensor sources and are rejected by the up-front controller.
 
 Server command requirements:
 

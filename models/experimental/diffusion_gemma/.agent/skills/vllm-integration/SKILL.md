@@ -47,8 +47,10 @@ Never benchmark or judge quality from an implicit launch:
 - `DG_DENOISE_REVEAL_PMAX` is now optional: when unset the span is derived from `max_model_len`
   rounded DOWN to a tile and logged (rounding up would exceed the unpadded KV span and abort
   startup). An explicit positive tile-aligned value still wins.
-- `DG_VLLM_GUMBEL_MODE` defaults to `host` (`device` was tried and reverted: it corrupts text on
-  2 of 4 matched seeds). Any non-host source is a distribution change, not bit-exact against
+- `DG_VLLM_GUMBEL_MODE` defaults to `device` (~1.48x faster than `host`). It was reverted to
+  `host` once for corrupting text and restored after the ttnn.rand kernel fix it depends on; the
+  residual RNG correlation is pinned by tests/ttnn/.../test_rand_independence.py. Any non-host
+  source is a distribution change, not bit-exact against
   host IID Gumbel, and the sub-40 GPQA host-vs-device @3072 re-gate is still outstanding; use
   `DG_VLLM_GUMBEL_MODE=host` as the IID reference fallback when judging quality.
 - Set `DG_VLLM_MAX_DENOISE_STEPS=48`.
