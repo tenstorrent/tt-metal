@@ -812,7 +812,8 @@ def decompose_component(component: str) -> dict:
     via the shared consumer (children then appear as new components in list_components/
     termination_check), and cascade-retires the PARENT to CPU (the fsm loop retires the parent at cap
     regardless). Only the gate should direct you here (rung 'decompose'). rc: children_added>0 =
-    decomposed; 0 = primitive/leaf (parent still retired). Refuses (returns {gated: True}) unless
+    decomposed; 0 = primitive/leaf (decomposed mark UNDONE, parent kept in the repair queue, NOT
+    retired — a 0-child split produces nothing to recompose from, so retiring would strand it). Refuses (returns {gated: True}) unless
     the component is at cap — decompose is a one-way door (parent auto-retires to CPU)."""
     _st_now = _load_state()
     _attempts_now = (_st_now.get("attempts", {}) or {}).get(component, 0)
@@ -864,6 +865,20 @@ def decompose_component(component: str) -> dict:
         reason = "decompose subprocess timed out (HF load too slow)"
     except Exception as exc:  # noqa: BLE001
         reason = f"{type(exc).__name__}: {exc}"
+
+    if children_added <= 0:
+        st2 = _load_state()
+        _d = set(st2.get("decomposed") or [])
+        _d.discard(component)
+        st2["decomposed"] = sorted(_d)
+        _save_state(st2)
+        return {
+            "decomposed": False,
+            "children_added": 0,
+            "notes": notes[:8],
+            "reason": (reason or "no children") + " — parent NOT retired; keep repairing (no dead-end CPU retire)",
+            "parent_retired": False,
+        }
 
     parent = _do_fallback(component)
     return {
