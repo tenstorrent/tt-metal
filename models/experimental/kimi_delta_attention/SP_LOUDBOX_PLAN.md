@@ -218,7 +218,12 @@ state-transfer protocol and measure its components.
   a post-handoff device fence, and a constrained two-worker footprint have
   the same failure.  The KDA-side fused probe was removed rather than leaving
   an opt-in invalid path.  The remaining CCL investigation must reproduce
-  KDA's full producer/signaler lifetime around the Line consumer.
+  KDA's full interleaved layer schedule around the Line consumer.  The focused
+  primitive now also covers KDA's rank-3-to-local-width reshape, explicit
+  worker grid, Blackhole HiFi4 config, on-device producer, no sub-device
+  manager, barrier semaphore, and persistent-output clone; it passes eagerly
+  and under trace on both child placements.  Those producer/signaler inputs
+  alone therefore do not reproduce the boundary defect.
   Capturing the fused primitive's separate matmul output confirms that all
   four local matmul shards are finite when the reduced output fails, so the
   defect is downstream in the Line reduce-scatter consumer rather than KDA,

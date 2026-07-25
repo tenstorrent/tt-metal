@@ -40,6 +40,13 @@ def run_reduce_scatter_impl(
     num_iters=1,
     enable_trace=True,
     check_first_output_tile=False,
+    input_rank3_then_reshape=False,
+    populate_allowed_worker_cores=False,
+    use_kda_compute_config=False,
+    input_from_device_producer=False,
+    use_sub_device_manager=True,
+    clone_reduce_scatter_output=False,
+    use_barrier_semaphore=False,
 ):
     torch.manual_seed(0)
 
@@ -54,20 +61,28 @@ def run_reduce_scatter_impl(
     ccl_sub_device_crs = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
     )
-    worker_sub_device = ttnn.SubDevice(
-        [
-            ccl_sub_device_crs,
-        ]
-    )
-    worker_sub_device_id = ttnn.SubDeviceId(0)
-    sub_device_stall_group = [worker_sub_device_id]
-
-    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    mesh_device.load_sub_device_manager(sub_device_manager)
-    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+    if use_sub_device_manager:
+        worker_sub_device = ttnn.SubDevice(
+            [
+                ccl_sub_device_crs,
+            ]
+        )
+        worker_sub_device_id = ttnn.SubDeviceId(0)
+        sub_device_stall_group = [worker_sub_device_id]
+        sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+        mesh_device.load_sub_device_manager(sub_device_manager)
+        mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+    else:
+        worker_sub_device_id = None
+        sub_device_stall_group = []
 
     # create global semaphore handles
     ccl_semaphore_handles = [create_global_semaphores(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
+    barrier_semaphore_handles = (
+        [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
+        if use_barrier_semaphore
+        else [None] * num_iters
+    )
 
     ### Create persistent output buffers
     logger.info("Creating persistent buffers")
@@ -139,6 +154,11 @@ def run_reduce_scatter_impl(
     in0_block_w = min(max_in0_block_w, mm_weights_shape[2] // num_devices // 32 // core_grid[0])
     per_core_M = max(1, math.ceil(rs_input_shape[2] / 32 / core_grid[1]))  # M / TILE_HEIGHT / Grid_Size
     per_core_N = max(1, math.ceil(rs_input_shape[3] / 32 / core_grid[0]))  # N / TILE_WIDTH / Grid_Size
+    program_config_kwargs = {}
+    if populate_allowed_worker_cores:
+        program_config_kwargs["allowed_worker_cores"] = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid[0] - 1, core_grid[1] - 1))}
+        )
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=core_grid,
         in0_block_w=in0_block_w,
@@ -150,12 +170,22 @@ def run_reduce_scatter_impl(
         transpose_mcast=False,
         fused_activation=None,  # ttnn.UnaryOpType.SILU,
         fuse_batch=False,
+        **program_config_kwargs,
     )
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=True,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
+    compute_kernel_config = (
+        ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        if use_kda_compute_config
+        else ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
     )
 
     ##### MM input setup #####
@@ -171,19 +201,38 @@ def run_reduce_scatter_impl(
         input_tensors = torch.chunk(mm_input_tensor, num_devices, 3)
         torch_input_tensor_list.append(input_tensors)
 
-        input_tensor_mesh = ttnn.from_torch(
-            mm_input_tensor,
-            device=mesh_device,
-            layout=layout,
-            dtype=rs_input_dtype,
-            memory_config=mem_config_input,
-            mesh_mapper=ttnn.create_mesh_mapper(
-                mesh_device,
-                ttnn.MeshMapperConfig(
-                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(3)], ttnn.MeshShape(1, num_devices)
+        if input_rank3_then_reshape:
+            input_tensor_mesh = ttnn.from_torch(
+                mm_input_tensor.squeeze(1),
+                device=mesh_device,
+                layout=layout,
+                dtype=rs_input_dtype,
+                memory_config=mem_config_input,
+                mesh_mapper=ttnn.create_mesh_mapper(
+                    mesh_device,
+                    ttnn.MeshMapperConfig(
+                        [ttnn.PlacementReplicate(), ttnn.PlacementShard(2)], ttnn.MeshShape(1, num_devices)
+                    ),
                 ),
-            ),
-        )
+            )
+            input_tensor_mesh = ttnn.reshape(
+                input_tensor_mesh,
+                (1, 1, rs_input_shape[2], mm_weights_shape[2] // num_devices),
+            )
+        else:
+            input_tensor_mesh = ttnn.from_torch(
+                mm_input_tensor,
+                device=mesh_device,
+                layout=layout,
+                dtype=rs_input_dtype,
+                memory_config=mem_config_input,
+                mesh_mapper=ttnn.create_mesh_mapper(
+                    mesh_device,
+                    ttnn.MeshMapperConfig(
+                        [ttnn.PlacementReplicate(), ttnn.PlacementShard(3)], ttnn.MeshShape(1, num_devices)
+                    ),
+                ),
+            )
 
         tt_input_tensor_mesh_list.append(input_tensor_mesh)
 
@@ -192,6 +241,8 @@ def run_reduce_scatter_impl(
     torch_matmul_output_list = []
     for i in range(num_iters):
         matmul_input = torch.cat(torch_input_tensor_list[i], dim=3)
+        if input_from_device_producer:
+            matmul_input = matmul_input * matmul_input
         if use_bias:
             matmul_output = torch.matmul(matmul_input, weights_tensor) + bias_tensor_padded
         else:
@@ -205,9 +256,17 @@ def run_reduce_scatter_impl(
     tt_matmul_output_list = []
 
     def run_op(i):
+        matmul_input_tensor = tt_input_tensor_mesh_list[i]
+        if input_from_device_producer:
+            matmul_input_tensor = ttnn.multiply(
+                matmul_input_tensor,
+                matmul_input_tensor,
+                dtype=rs_input_dtype,
+                memory_config=mem_config_input,
+            )
         if use_non_fused:
             tt_matmul_out_tensor = ttnn.linear(
-                tt_input_tensor_mesh_list[i],
+                matmul_input_tensor,
                 weight_tt,
                 bias=bias_tt,
                 memory_config=mem_config_mm,
@@ -227,12 +286,13 @@ def run_reduce_scatter_impl(
             )
         else:
             tt_matmul_out_tensor, tt_reduce_scatter_output_tensor = ttnn.experimental.matmul_reduce_scatter_async(
-                tt_input_tensor_mesh_list[i],
+                matmul_input_tensor,
                 weight_tt,
                 persistent_intermediate_buffer=persistent_intermediate_buffers[i],
                 persistent_output_buffer=persistent_output_buffers[i],
                 dim=rs_scatter_dim,
                 multi_device_global_semaphore=ccl_semaphore_handles[i],
+                barrier_semaphore=barrier_semaphore_handles[i],
                 reduce_scatter_core_grid_offset=(0, 6),
                 bias=bias_tt,
                 num_links=num_links,
@@ -244,6 +304,11 @@ def run_reduce_scatter_impl(
                 compute_kernel_config=compute_kernel_config,
             )
 
+        if clone_reduce_scatter_output:
+            tt_reduce_scatter_output_tensor = ttnn.clone(
+                tt_reduce_scatter_output_tensor,
+                memory_config=mem_config_rs,
+            )
         return tt_matmul_out_tensor, tt_reduce_scatter_output_tensor
 
     if enable_trace:
@@ -307,8 +372,9 @@ def run_reduce_scatter_impl(
         # print(f"RS TORCH TENSOR {torch_rs_out}")
         # print(f"RS TT TENSOR {tt_rs_out}")
 
-    mesh_device.reset_sub_device_stall_group()
-    mesh_device.clear_loaded_sub_device_manager()
+    if use_sub_device_manager:
+        mesh_device.reset_sub_device_stall_group()
+        mesh_device.clear_loaded_sub_device_manager()
 
 
 @pytest.mark.parametrize(
@@ -445,8 +511,9 @@ def test_reduce_scatter_async(
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 1024 * 1024}],
     indirect=True,
 )
+@pytest.mark.parametrize("enable_trace", [False, True], ids=["eager", "trace"])
 @pytest.mark.parametrize("child_start", [0, 4], ids=["child_0", "child_4"])
-def test_linear_matmul_reduce_scatter_tp4_child_mesh(mesh_device, child_start):
+def test_linear_matmul_reduce_scatter_tp4_child_mesh(mesh_device, child_start, enable_trace):
     """Exercise the KDA output-projection MRS shape on one LoudBox child mesh.
 
     KDA TP=4 is row parallel: every chip owns 1,024 of the 4,096 input
@@ -474,6 +541,16 @@ def test_linear_matmul_reduce_scatter_tp4_child_mesh(mesh_device, child_start):
         rs_topology=ttnn.Topology.Linear,
         use_non_fused=False,
         num_iters=1,
-        enable_trace=True,
+        enable_trace=enable_trace,
         check_first_output_tile=True,
+        # Match the KDA epilogue's local-width reshape, explicit worker grid,
+        # Blackhole compute config, on-device producer, no subdevice manager,
+        # and clone of the persistent RS output.
+        input_rank3_then_reshape=True,
+        populate_allowed_worker_cores=True,
+        use_kda_compute_config=True,
+        input_from_device_producer=True,
+        use_sub_device_manager=False,
+        clone_reduce_scatter_output=True,
+        use_barrier_semaphore=True,
     )
