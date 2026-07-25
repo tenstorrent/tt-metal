@@ -91,6 +91,49 @@ void copy_block_split(
         }
     }
 }
+
+#ifdef FUSE_BIAS
+// Bias variant of copy_block_split: add the row-broadcast bias (and the fused activation, if any) per tile,
+// packing the block's first split_rows M-rows into out_cb_a (c_2) and the rest into out_cb_b (c_8). Same
+// two-NoC split as copy_block_split; the DM writers drain their halves unchanged.
+void add_bias_block_split(
+    uint32_t in_cb,
+    uint32_t bias_cb,
+    uint32_t out_cb_a,
+    uint32_t out_cb_b,
+    uint32_t M_block_tiles,
+    uint32_t N_block_tiles,
+    uint32_t split_rows) {
+    CircularBuffer cb_out_a(out_cb_a);
+    CircularBuffer cb_out_b(out_cb_b);
+    add_bcast_rows_init_short(in_cb, bias_cb);
+    reconfig_data_format(in_cb, bias_cb);
+    pack_reconfig_data_format(out_cb_a);
+    uint32_t fused_act_dst_id = 0;
+
+    uint32_t tile_id = 0;
+    for (uint32_t m = 0; m < M_block_tiles; m++) {
+        const uint32_t out_cb = (m < split_rows) ? out_cb_a : out_cb_b;
+        for (uint32_t n = 0; n < N_block_tiles; n++) {
+            tile_regs_acquire();
+            tile_regs_wait();
+            add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, tile_id, n, fused_act_dst_id /*dst*/);
+#ifdef SFPU_OP_INIT_ACTIVATION
+            SFPU_OP_FUNC_ACTIVATION
+#endif
+            pack_tile(fused_act_dst_id, out_cb);
+            tile_regs_commit();
+            tile_regs_release();
+            tile_id++;
+        }
+        if (m < split_rows) {
+            cb_out_a.push_back(N_block_tiles);
+        } else {
+            cb_out_b.push_back(N_block_tiles);
+        }
+    }
+}
+#endif  // FUSE_BIAS
 #endif  // SPLIT_OUTPUT_WRITE
 
 #ifdef FUSE_SWIGLU
@@ -642,7 +685,7 @@ void kernel_main() {
             cb_intermediate.pop_front(out_block_num_tiles);
 
 #elif !defined(FUSE_TERNARY)
-#if defined(SPLIT_OUTPUT_WRITE) && !defined(FUSE_BIAS)
+#ifdef SPLIT_OUTPUT_WRITE
             // Two-NoC split: pack low rows -> c_2 (dm_in1/NOC_1), high rows -> c_8 (dm_in0/NOC_0).
             constexpr uint32_t split_rows = (M_block_tiles * AG_SPLIT_NOC1_PCT) / 100;
             if (split_rows) {
@@ -652,7 +695,13 @@ void kernel_main() {
                 cb_out_b.reserve_back((M_block_tiles - split_rows) * N_block_tiles);
             }
             cb_intermediate.wait_front(out_block_num_tiles);
+#ifndef FUSE_BIAS
             copy_block_split(intermediate_cb, out_cb, out_cb_b, M_block_tiles, N_block_tiles, split_rows);
+#else
+            cb_in2.wait_front(N_block_tiles);
+            add_bias_block_split(intermediate_cb, in2_cb, out_cb, out_cb_b, M_block_tiles, N_block_tiles, split_rows);
+            cb_in2.pop_front(N_block_tiles);
+#endif  // FUSE_BIAS
             cb_intermediate.pop_front(out_block_num_tiles);
 #else
             cb_out.reserve_back(out_block_num_tiles);
