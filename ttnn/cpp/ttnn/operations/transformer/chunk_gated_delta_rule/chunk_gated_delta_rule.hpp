@@ -82,6 +82,30 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     const std::optional<ttnn::Tensor>& rms_weight = std::nullopt,
     float rms_epsilon = 1e-5f);
 
+/**
+ * Build the affine transform of a complete KDA span without materializing
+ * token outputs. For an incoming recurrent state S, the span transition is
+ * `S_out = transform_a @ S + transform_b`. This is the device-side summary
+ * exchanged by sequence-parallel KDA before its inter-span prefix scan.
+ *
+ * q/k/g [B,T,H,K], v [B,T,H,V], beta [B,T,H], with the same tile-aligned
+ * rank-3 flat forms accepted by chunk_kda. K and V must match and T must be
+ * divisible by 256 (eight 32-token chunks per summary group).
+ */
+std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_affine_summary(
+    const ttnn::Tensor& q,
+    const ttnn::Tensor& k,
+    const ttnn::Tensor& v,
+    const ttnn::Tensor& g,
+    const ttnn::Tensor& beta,
+    std::optional<float> scale = std::nullopt,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& eye = std::nullopt,
+    const std::optional<ttnn::Tensor>& tril = std::nullopt,
+    const std::optional<ttnn::Tensor>& ones = std::nullopt,
+    const std::optional<ttnn::Tensor>& masks = std::nullopt);
+
 /** Fused per-head RMSNorm and sigmoid gate for tile-aligned KDA prefill. */
 ttnn::Tensor kda_gated_rms_norm(
     const ttnn::Tensor& input,

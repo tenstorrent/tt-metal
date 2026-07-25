@@ -104,3 +104,49 @@ def test_chunk_kda_pcc(
     label = f"H={heads},K={key_dim},V={value_dim},T={sequence},flat_v={flat_v},flat_qk={flat_qk},flat_g={flat_g},math_fidelity={math_fidelity}"
     _assert_pcc(f"{label} output", golden_output, actual_output)
     _assert_pcc(f"{label} state", golden_state, actual_state)
+
+
+def test_chunk_kda_affine_summary_matches_final_state(device: ttnn.Device) -> None:
+    """A span summary must reproduce the recurrence for any incoming state."""
+    sequence, heads, dim = 512, 2, 32
+    generator = torch.Generator().manual_seed(1138)
+    q = torch.randn(1, sequence, heads * dim, generator=generator)
+    k = torch.randn(1, sequence, heads * dim, generator=generator)
+    v = torch.randn(1, sequence, heads * dim, generator=generator)
+    gate = -0.02 * torch.rand(1, sequence, heads * dim, generator=generator)
+    beta = torch.sigmoid(torch.randn(1, sequence, heads, generator=generator))
+    initial_state = 0.02 * torch.randn(1, heads, dim, dim, generator=generator)
+
+    q_tt = _to_device(q, device, ttnn.bfloat16)
+    k_tt = _to_device(k, device, ttnn.bfloat16)
+    v_tt = _to_device(v, device, ttnn.bfloat16)
+    gate_tt = _to_device(gate, device, ttnn.float32)
+    beta_tt = _to_device(beta, device, ttnn.float32)
+    initial_state_tt = _to_device(initial_state, device, ttnn.float32)
+    with ttnn.manage_config("throw_exception_on_fallback", True):
+        transform_a_tt, transform_b_tt = ttnn.transformer.chunk_kda_affine_summary(
+            q_tt,
+            k_tt,
+            v_tt,
+            gate_tt,
+            beta_tt,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        _, final_state_tt = ttnn.transformer.chunk_kda(
+            q_tt,
+            k_tt,
+            v_tt,
+            gate_tt,
+            beta_tt,
+            initial_state=initial_state_tt,
+            output_final_state=True,
+            output_head_major=True,
+            chunk_size=32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    assert final_state_tt is not None
+    transform_a = ttnn.to_torch(transform_a_tt)
+    transform_b = ttnn.to_torch(transform_b_tt)
+    expected_final_state = torch.matmul(transform_a.float(), initial_state.float()) + transform_b.float()
+    _assert_pcc("KDA affine span summary", expected_final_state, ttnn.to_torch(final_state_tt), threshold=0.999)

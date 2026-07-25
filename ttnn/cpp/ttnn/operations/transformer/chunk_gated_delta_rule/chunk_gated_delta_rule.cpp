@@ -782,6 +782,154 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     return {output, final_state};
 }
 
+std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_affine_summary(
+    const ttnn::Tensor& q_in,
+    const ttnn::Tensor& k_in,
+    const ttnn::Tensor& v_in,
+    const ttnn::Tensor& g_in,
+    const ttnn::Tensor& beta_in,
+    std::optional<float> scale_opt,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<ttnn::Tensor>& eye,
+    const std::optional<ttnn::Tensor>& tril,
+    const std::optional<ttnn::Tensor>& ones,
+    const std::optional<ttnn::Tensor>& masks) {
+    const auto& qs = q_in.logical_shape();
+    const auto& vs = v_in.logical_shape();
+    const auto& gs = g_in.logical_shape();
+    const auto& bs = beta_in.logical_shape();
+    const bool flat_qk = qs.rank() == 3;
+    const bool flat_v = vs.rank() == 3;
+    const bool flat_g = gs.rank() == 3;
+    TT_FATAL(bs.rank() == 3, "chunk_kda_affine_summary beta must be [B,T,H]");
+    TT_FATAL(flat_qk || qs.rank() == 4, "chunk_kda_affine_summary expects rank-3 or rank-4 q/k");
+    TT_FATAL(flat_v || vs.rank() == 4, "chunk_kda_affine_summary expects rank-3 or rank-4 v");
+    TT_FATAL(flat_g || gs.rank() == 4, "chunk_kda_affine_summary expects rank-3 or rank-4 g");
+
+    const uint32_t B = bs[0], T = bs[1], H = bs[2];
+    TT_FATAL(T % 256 == 0, "chunk_kda_affine_summary requires T divisible by 256, got {}", T);
+    TT_FATAL(flat_g ? gs[2] % H == 0 : gs[2] == H, "chunk_kda_affine_summary g head dimension mismatch");
+    const uint32_t K = flat_g ? gs[2] / H : gs[3];
+    TT_FATAL(flat_v ? vs[2] % H == 0 : vs[2] == H, "chunk_kda_affine_summary v head dimension mismatch");
+    const uint32_t V = flat_v ? vs[2] / H : vs[3];
+    TT_FATAL(K == V, "chunk_kda_affine_summary requires K == V, got K={} V={}", K, V);
+    TT_FATAL(
+        k_in.logical_shape() == qs && qs[0] == B && qs[1] == T &&
+            (flat_qk ? qs[2] == H * K : (qs[2] == H && qs[3] == K)) && vs[0] == B && vs[1] == T &&
+            (flat_v ? vs[2] == H * V : (vs[2] == H && vs[3] == V)),
+        "chunk_kda_affine_summary q/k/v shapes are inconsistent");
+    TT_FATAL(
+        gs[0] == B && gs[1] == T && (flat_g ? gs[2] == H * K : (gs[2] == H && gs[3] == K)),
+        "chunk_kda_affine_summary g shape is inconsistent");
+
+    auto* dev = q_in.device();
+    const uint32_t BH = B * H;
+    constexpr uint32_t C = 32;
+    constexpr uint32_t group_chunks = 8;
+    const uint32_t NC = T / C;
+    const uint32_t groups_per_head = NC / group_chunks;
+    const uint32_t group_heads = BH * groups_per_head;
+    const float scale = scale_opt.value_or(1.0f / std::sqrt(static_cast<float>(K)));
+
+    auto as_bf16 = [](const ttnn::Tensor& tensor) {
+        return tensor.dtype() == DataType::BFLOAT16 ? tensor : ttnn::typecast(tensor, DataType::BFLOAT16);
+    };
+    ttnn::Tensor q = flat_qk ? as_bf16(q_in) : ttnn::multiply(head_split_tile(q_in, B, T, H, K), scale);
+    ttnn::Tensor k = flat_qk ? as_bf16(k_in) : head_split_tile(k_in, B, T, H, K);
+    ttnn::Tensor v = flat_v ? as_bf16(v_in) : head_split_tile(v_in, B, T, H, V);
+    ttnn::Tensor g = flat_g ? g_in : head_split_float_tile(g_in, B, T, H, K);
+    ttnn::Tensor beta = headvec_split_tile(beta_in, B, T, H);
+    if (!flat_qk) {
+        q = ttnn::reshape(q, ttnn::Shape({BH, NC, C, K}));
+        k = ttnn::reshape(k, ttnn::Shape({BH, NC, C, K}));
+    }
+    if (!flat_v) {
+        v = ttnn::reshape(v, ttnn::Shape({BH, NC, C, V}));
+    }
+    if (!flat_g) {
+        g = ttnn::reshape(g, ttnn::Shape({BH, NC, C, K}));
+    }
+    beta = ttnn::reshape(beta, ttnn::Shape({BH, NC, C, 1}));
+
+    const bool has_const_tiles = eye.has_value() && tril.has_value() && ones.has_value() && masks.has_value();
+    ConstTiles fallback;
+    if (!has_const_tiles) {
+        fallback = build_const_tiles(C, dev);
+    }
+    const auto& eye_c = has_const_tiles ? *eye : fallback.eye;
+    const auto& tril_c = has_const_tiles ? *tril : fallback.tril;
+    const auto& ones_c = has_const_tiles ? *ones : fallback.ones;
+    const auto& masks_c = has_const_tiles ? *masks : fallback.masks;
+    const auto out_mem = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
+    const auto prep_mem =
+        std::getenv("QWEN_KDA_PREP_DRAM") == nullptr ? ttnn::L1_MEMORY_CONFIG : ttnn::DRAM_MEMORY_CONFIG;
+    const auto kernel_cfg = init_device_compute_kernel_config(
+        dev->arch(),
+        compute_kernel_config,
+        MathFidelity::HiFi4,
+        /*default_approx_mode=*/false,
+        /*default_fp32_acc=*/true,
+        /*default_l1_acc=*/false);
+    auto prep = ttnn::prim::chunk_gdn_prep(
+        q,
+        k,
+        v,
+        g,
+        beta,
+        eye_c,
+        tril_c,
+        ones_c,
+        masks_c,
+        C,
+        prep_mem,
+        kernel_cfg,
+        flat_v,
+        H,
+        flat_qk,
+        scale,
+        flat_qk,
+        H,
+        flat_g,
+        true,
+        0x26);
+    prep[0] = ttnn::reshape(prep[0], ttnn::Shape({group_heads, group_chunks, C, V}));
+    prep[1] = ttnn::reshape(prep[1], ttnn::Shape({group_heads, group_chunks, C, K}));
+    prep[2] = ttnn::reshape(prep[2], ttnn::Shape({group_heads, group_chunks, C, K}));
+    prep[3] = ttnn::reshape(prep[3], ttnn::Shape({group_heads, group_chunks, C, C}));
+    prep[4] = ttnn::reshape(prep[4], ttnn::Shape({group_heads, group_chunks, K, C}));
+    prep[5] = ttnn::reshape(prep[5], ttnn::Shape({group_heads, group_chunks, K, 1}));
+    prep[6] = ttnn::reshape(prep[6], ttnn::Shape({group_heads, group_chunks, C, C}));
+    auto summaries = ttnn::prim::chunk_gdn_scan(
+        prep[0],
+        prep[1],
+        prep[2],
+        prep[3],
+        prep[4],
+        prep[5],
+        prep[6],
+        std::nullopt,
+        C,
+        true,
+        out_mem,
+        kernel_cfg,
+        true,
+        true,
+        eye_c,
+        std::nullopt,
+        std::nullopt,
+        0,
+        1e-5f,
+        true);
+    auto transform_a = ttnn::reshape(summaries[0], ttnn::Shape({BH, groups_per_head, K, K}));
+    auto transform_b = ttnn::reshape(summaries[1], ttnn::Shape({BH, groups_per_head, K, V}));
+    auto [prefix_a, prefix_b] = inclusive_affine_prefix(transform_a, transform_b, groups_per_head, out_mem, kernel_cfg);
+    transform_a = slice_group_axis(prefix_a, groups_per_head - 1, groups_per_head, out_mem);
+    transform_b = slice_group_axis(prefix_b, groups_per_head - 1, groups_per_head, out_mem);
+    return {
+        ttnn::reshape(transform_a, ttnn::Shape({B, H, K, K})), ttnn::reshape(transform_b, ttnn::Shape({B, H, K, V}))};
+}
+
 ttnn::Tensor kda_gated_rms_norm(
     const ttnn::Tensor& input,
     const ttnn::Tensor& gate,

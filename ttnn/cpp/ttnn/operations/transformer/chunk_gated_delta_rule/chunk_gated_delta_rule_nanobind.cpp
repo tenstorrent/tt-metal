@@ -104,6 +104,32 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("rms_weight") = nb::none(),
         nb::arg("rms_epsilon") = 1e-5f);
 
+    ttnn::bind_function<"chunk_kda_affine_summary", "ttnn.transformer.">(
+        mod,
+        R"doc(
+        Build a KDA span's affine recurrent-state transform without producing
+        token outputs. Returns `(transform_a, transform_b)` such that for an
+        incoming state `S`, the span produces `transform_a @ S + transform_b`.
+
+        q/k/g [B,T,H,K], v [B,T,H,V], beta [B,T,H]; tile-aligned rank-3 flat
+        q/k/v/g forms are also accepted. K must equal V and T must be divisible
+        by 256, the eight-chunk affine-summary group size.
+        )doc",
+        &ttnn::transformer::chunk_kda_affine_summary,
+        nb::arg("q").noconvert(),
+        nb::arg("k").noconvert(),
+        nb::arg("v").noconvert(),
+        nb::arg("g").noconvert(),
+        nb::arg("beta").noconvert(),
+        nb::kw_only(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("eye") = nb::none(),
+        nb::arg("tril") = nb::none(),
+        nb::arg("ones") = nb::none(),
+        nb::arg("masks") = nb::none());
+
     ttnn::bind_function<"kda_gated_rms_norm", "ttnn.transformer.">(
         mod,
         "Fused per-head RMSNorm and sigmoid gate for tile-aligned KDA prefill.",
