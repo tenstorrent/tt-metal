@@ -107,6 +107,9 @@ tt_metal::HalProgrammableCoreType get_core_type(tt::ChipId chip_id, const tt::tt
     if (is_inactive_eth_core) {
         return tt_metal::HalProgrammableCoreType::IDLE_ETH;
     }
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_dispatch_core(virtual_core, chip_id)) {
+        return tt_metal::HalProgrammableCoreType::DISPATCH;
+    }
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_dram_core(virtual_core, chip_id)) {
         return tt_metal::HalProgrammableCoreType::DRAM;
     }
@@ -173,6 +176,7 @@ bool test_load_write_read_risc_binary(
     TT_ASSERT(
         tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(core, chip_id) or
         tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(core, chip_id) or
+        tt::tt_metal::MetalContext::instance().get_cluster().is_dispatch_core(core, chip_id) or
         static_cast<tt_metal::HalProgrammableCoreType>(core_type_idx) == tt_metal::HalProgrammableCoreType::DRAM);
 
     const auto& jit_build_config = tt::tt_metal::MetalContext::instance().hal().get_jit_build_config(

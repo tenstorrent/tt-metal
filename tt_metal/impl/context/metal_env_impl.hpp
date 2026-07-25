@@ -8,9 +8,16 @@
 #include <mutex>
 #include <set>
 #include <atomic>
+#include <cstdint>
 #include <filesystem>
+#include <string>
+#include <unordered_map>
+#include <vector>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include "llrt/core_descriptor_types.hpp"
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
@@ -109,6 +116,12 @@ public:
     // Returns true if set_fabric_config changed state requiring a reinit.
     bool consume_force_reinit();
 
+    const std::vector<CoreCoord>& get_quasar_dispatch_cores(
+        ChipId device_id, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config);
+
+    const tt::core_descriptor_t& get_core_descriptor_config(
+        ChipId device_id, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config);
+
 private:
     // During init we need to bypass set_fabric_config to avoid reinitialization of the control plane
     // by directly setting the fabric config state.
@@ -156,6 +169,39 @@ private:
     void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
     void construct_control_plane();
     void initialize_control_plane_impl();
+
+    struct QuasarDispatchCoresCacheKey {
+        ChipId device_id;
+        uint8_t num_hw_cqs;
+        DispatchCoreConfig dispatch_core_config;
+        bool use_tensix_fallback;
+
+        bool operator==(const QuasarDispatchCoresCacheKey& other) const;
+    };
+
+    struct QuasarDispatchCoresCacheKeyHash {
+        std::size_t operator()(const QuasarDispatchCoresCacheKey& key) const;
+    };
+
+    std::unordered_map<QuasarDispatchCoresCacheKey, std::vector<CoreCoord>, QuasarDispatchCoresCacheKeyHash>
+        quasar_dispatch_cores_cache_;
+
+    struct CoreDescriptorCacheKey {
+        std::string product_name;
+        DispatchCoreConfig dispatch_core_config;
+        tt_fabric::FabricTensixConfig fabric_tensix_config;
+        uint8_t num_hw_cqs;
+        bool fast_dispatch;
+
+        bool operator==(const CoreDescriptorCacheKey& other) const;
+    };
+
+    struct CoreDescriptorCacheKeyHash {
+        std::size_t operator()(const CoreDescriptorCacheKey& key) const;
+    };
+
+    std::unordered_map<CoreDescriptorCacheKey, tt::core_descriptor_t, CoreDescriptorCacheKeyHash>
+        core_descriptor_cache_;
 
     static std::mutex s_registry_mutex_;
     static std::set<MetalEnvImpl*> s_registry_;

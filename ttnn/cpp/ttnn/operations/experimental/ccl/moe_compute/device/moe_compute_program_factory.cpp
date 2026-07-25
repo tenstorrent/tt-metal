@@ -677,13 +677,13 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     // BRISC's e_t buffer for parallel metadata processing
     // BRISC processes the second half of tokens (tokens/2 to tokens)
-    // Single page containing all experts' token lists, each with capacity tokens/2
+    // Single page containing all experts' token lists, each with capacity ceil(tokens/2)
     // Uses same 16B entry alignment as main e_t buffer for NOC DMA compatibility
     tt::tt_metal::create_cb(
         brisc_e_t_cb_id,
         program,
         tilize_core_range_set,
-        (tokens / 2) * l1_alignment * experts_per_device,  // full buffer with 16B entries
+        tt::div_up(tokens, 2) * l1_alignment * experts_per_device,  // full buffer, ceil(tokens/2) 16B entries/expert
         1,
         tt::DataFormat::UInt32);
 
@@ -699,13 +699,13 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     // BRISC's expert activation buffer - same format as main expert_activation buffer
     // [token_id, k_indices[experts_per_device], scores[experts_per_device]] per activated token
-    // Single page containing all activation rows (max tokens/2)
+    // Single page containing all activation rows (max ceil(tokens/2))
     uint32_t brisc_activation_row_size = tt::align((2 * experts_per_device + 1) * sizeof(uint32_t), l1_alignment);
     tt::tt_metal::create_cb(
         brisc_expert_activation_cb_id,
         program,
         tilize_core_range_set,
-        brisc_activation_row_size * (tokens / 2),  // full buffer in one page
+        brisc_activation_row_size * tt::div_up(tokens, 2),  // full buffer in one page
         1,
         tt::DataFormat::UInt32);
 

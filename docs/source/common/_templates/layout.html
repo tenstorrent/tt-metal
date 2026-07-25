@@ -3,6 +3,11 @@
 {#── noindex + canonical for versioned (non-latest) pages ────────#}
 {%- block extrahead %}
 {{ super() }}
+{#- Load the shared theme from the global _static (single source of truth,
+    same place the search/nav scripts come from). It carries the search-modal,
+    sidebar and nav styles; the local tt_theme.css only has a subset. -#}
+<link rel="stylesheet" href="https://docs.tenstorrent.com/_static/tt_theme.css">
+
 <script>
 (function() {
     var parts = window.location.pathname.split('/');
