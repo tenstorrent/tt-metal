@@ -611,8 +611,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     // independent pseudo-head. Running the proven recurrence from zero gives B; running
     // from I gives A+B. State-only mode drains token outputs without materializing them.
     constexpr uint32_t group_chunks = 8;
-    const bool build_group_summaries =
-        std::getenv("QWEN_KDA_GROUP_SUMMARY") != nullptr || std::getenv("QWEN_KDA_GROUP_PREFIX") != nullptr;
+    const bool use_persistent_group_prefix = NC >= 160 && std::getenv("QWEN_KDA_SERIAL_SCAN") == nullptr;
+    const bool build_group_summaries = std::getenv("QWEN_KDA_GROUP_SUMMARY") != nullptr ||
+                                       std::getenv("QWEN_KDA_GROUP_PREFIX") != nullptr || use_persistent_group_prefix;
     if (build_group_summaries && NC % group_chunks == 0 && K == V) {
         const uint32_t groups_per_head = NC / group_chunks;
         const uint32_t group_heads = BH * groups_per_head;
@@ -647,46 +648,67 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
             true);
         auto summary_a = summaries[0];
         auto summary_b = summaries[1];
-        if (std::getenv("QWEN_KDA_GROUP_PREFIX") != nullptr) {
+        if (std::getenv("QWEN_KDA_GROUP_PREFIX") != nullptr || use_persistent_group_prefix) {
             TT_FATAL(s0.has_value(), "group-prefix scan requires initial state");
             const auto prefix_mem = ttnn::DRAM_MEMORY_CONFIG;
-            summary_a = ttnn::reshape(summary_a, ttnn::Shape({BH, groups_per_head, K, K}));
-            auto summary_b_grouped = ttnn::reshape(summary_b, ttnn::Shape({BH, groups_per_head, K, V}));
-            auto [prefix_a, prefix_b] =
-                inclusive_affine_prefix(summary_a, summary_b_grouped, groups_per_head, prefix_mem, kernel_cfg);
-            auto initial = ttnn::reshape(*s0, ttnn::Shape({BH, 1, K, V}));
-            auto repeated_initial = ttnn::repeat_interleave(initial, groups_per_head, 1, prefix_mem);
-            auto group_end_states = ttnn::matmul(
-                prefix_a,
-                repeated_initial,
-                false,
-                false,
-                prefix_mem,
-                DataType::FLOAT32,
-                std::nullopt,
-                std::nullopt,
-                kernel_cfg);
-            group_end_states = ttnn::add(group_end_states, prefix_b, std::nullopt, prefix_mem);
-            auto group_initial_states = initial;
-            if (groups_per_head > 1) {
-                group_initial_states = ttnn::concat(
-                    {initial, slice_group_axis(group_end_states, 0, groups_per_head - 1, prefix_mem)}, 1, prefix_mem);
+            if (use_persistent_group_prefix) {
+                auto group_initial_states =
+                    ttnn::prim::kda_affine_prefix(summary_a, summary_b, *s0, groups_per_head, prefix_mem, kernel_cfg);
+                grouped_scan = ttnn::prim::chunk_gdn_scan(
+                    grouped[0],
+                    grouped[1],
+                    grouped[2],
+                    grouped[3],
+                    grouped[4],
+                    grouped[5],
+                    grouped[6],
+                    group_initial_states,
+                    C,
+                    true,
+                    out_mem,
+                    kernel_cfg,
+                    true);
+            } else {
+                summary_a = ttnn::reshape(summary_a, ttnn::Shape({BH, groups_per_head, K, K}));
+                auto summary_b_grouped = ttnn::reshape(summary_b, ttnn::Shape({BH, groups_per_head, K, V}));
+                auto [prefix_a, prefix_b] =
+                    inclusive_affine_prefix(summary_a, summary_b_grouped, groups_per_head, prefix_mem, kernel_cfg);
+                auto initial = ttnn::reshape(*s0, ttnn::Shape({BH, 1, K, V}));
+                auto repeated_initial = ttnn::repeat_interleave(initial, groups_per_head, 1, prefix_mem);
+                auto group_end_states = ttnn::matmul(
+                    prefix_a,
+                    repeated_initial,
+                    false,
+                    false,
+                    prefix_mem,
+                    DataType::FLOAT32,
+                    std::nullopt,
+                    std::nullopt,
+                    kernel_cfg);
+                group_end_states = ttnn::add(group_end_states, prefix_b, std::nullopt, prefix_mem);
+                auto group_initial_states = initial;
+                if (groups_per_head > 1) {
+                    group_initial_states = ttnn::concat(
+                        {initial, slice_group_axis(group_end_states, 0, groups_per_head - 1, prefix_mem)},
+                        1,
+                        prefix_mem);
+                }
+                group_initial_states = ttnn::reshape(group_initial_states, ttnn::Shape({group_heads, K, V}));
+                grouped_scan = ttnn::prim::chunk_gdn_scan(
+                    grouped[0],
+                    grouped[1],
+                    grouped[2],
+                    grouped[3],
+                    grouped[4],
+                    grouped[5],
+                    grouped[6],
+                    group_initial_states,
+                    C,
+                    true,
+                    out_mem,
+                    kernel_cfg,
+                    true);
             }
-            group_initial_states = ttnn::reshape(group_initial_states, ttnn::Shape({group_heads, K, V}));
-            grouped_scan = ttnn::prim::chunk_gdn_scan(
-                grouped[0],
-                grouped[1],
-                grouped[2],
-                grouped[3],
-                grouped[4],
-                grouped[5],
-                grouped[6],
-                group_initial_states,
-                C,
-                true,
-                out_mem,
-                kernel_cfg,
-                true);
             (*grouped_scan)[0] = ttnn::reshape((*grouped_scan)[0], ttnn::Shape({BH, NC, C, V}));
             auto all_final_states = ttnn::reshape((*grouped_scan)[1], ttnn::Shape({BH, groups_per_head, K, V}));
             (*grouped_scan)[1] = ttnn::reshape(

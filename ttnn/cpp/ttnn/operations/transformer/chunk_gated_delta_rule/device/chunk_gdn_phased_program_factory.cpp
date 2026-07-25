@@ -622,6 +622,115 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     return desc;
 }
 
+// ---------------------------------------------------------------------------
+// KDA GROUPED AFFINE PREFIX
+// ---------------------------------------------------------------------------
+tt::tt_metal::ProgramDescriptor KdaAffinePrefixProgramFactory::create_descriptor(
+    const KdaAffinePrefixParams& attrs, const KdaAffinePrefixInputs& in, std::vector<Tensor>& outputs) {
+    const uint32_t Kt = attrs.key_dim / TILE_WIDTH;
+    const uint32_t Vt = attrs.val_dim / TILE_WIDTH;
+    const uint32_t G = attrs.groups_per_head;
+    const uint32_t group_heads = attrs.BH * G;
+    const uint32_t kk = Kt * Kt;
+    const uint32_t kv = Kt * Vt;
+
+    auto* device = in.transform_a.device();
+    const auto grid = device->compute_with_storage_grid_size();
+    TT_FATAL(group_heads <= grid.x * grid.y, "affine prefix requires one worker per group");
+    auto dist = distribute_prep(grid, group_heads, group_heads);
+    const auto& cores = dist.core_set;
+
+    ProgramDescriptor desc;
+    auto add_cb = [&](uint32_t index, uint32_t tiles) {
+        const uint32_t tile_size = tt::tile_size(tt::DataFormat::Float32);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = tiles * tile_size,
+            .core_ranges = cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(index),
+                .data_format = tt::DataFormat::Float32,
+                .page_size = tile_size}}}});
+    };
+    add_cb(0, kk);   // input A
+    add_cb(1, kv);   // input B
+    add_cb(2, kk);   // prefix A ping
+    add_cb(3, kv);   // prefix B ping
+    add_cb(4, kk);   // prefix A pong
+    add_cb(5, kv);   // prefix B pong
+    add_cb(6, kk);   // receiver-owned inbound A
+    add_cb(7, kv);   // receiver-owned inbound B
+    add_cb(8, kv);   // initial state
+    add_cb(9, kv);   // group entry state
+    add_cb(10, kv);  // matmul scratch
+    add_cb(11, 1);   // dataflow-to-compute stage token
+
+    constexpr uint32_t ready_semaphore_id = 0;
+    constexpr uint32_t arrival_semaphore_id = 1;
+    constexpr uint32_t release_semaphore_id = 2;
+    for (uint32_t id : {ready_semaphore_id, arrival_semaphore_id, release_semaphore_id}) {
+        desc.semaphores.push_back(
+            SemaphoreDescriptor{.id = id, .core_type = tt::CoreType::WORKER, .core_ranges = cores, .initial_value = 0});
+    }
+
+    const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/";
+    std::vector<uint32_t> dataflow_ct = {Kt, Vt, attrs.BH, G};
+    TensorAccessorArgs(*in.transform_a.buffer()).append_to(dataflow_ct);
+    TensorAccessorArgs(*in.transform_b.buffer()).append_to(dataflow_ct);
+    TensorAccessorArgs(*in.initial_state.buffer()).append_to(dataflow_ct);
+    TensorAccessorArgs(*outputs[0].buffer()).append_to(dataflow_ct);
+
+    KernelDescriptor dataflow;
+    dataflow.kernel_source = kdir + "dataflow/reader_writer_kda_affine_prefix.cpp";
+    dataflow.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    dataflow.core_ranges = cores;
+    dataflow.compile_time_args = dataflow_ct;
+    dataflow.config = ReaderConfigDescriptor{};
+    dataflow.runtime_args.reserve(group_heads);
+
+    KernelDescriptor compute;
+    compute.kernel_source = kdir + "compute/kda_affine_prefix.cpp";
+    compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute.core_ranges = cores;
+    compute.compile_time_args = {Kt, Vt, G};
+    compute.config = compute_cfg(device->arch(), attrs.compute_kernel_config);
+    compute.runtime_args.reserve(group_heads);
+
+    auto* a_buffer = in.transform_a.buffer();
+    auto* b_buffer = in.transform_b.buffer();
+    auto* s_buffer = in.initial_state.buffer();
+    auto* output_buffer = outputs[0].buffer();
+    const auto coordinator = device->worker_core_from_logical_core(dist.cores[0]);
+    for (uint32_t flat = 0; flat < group_heads; flat++) {
+        const auto& core = dist.cores[flat];
+        const uint32_t group = flat % G;
+        KernelDescriptor::RTArgList args;
+        args.reserve(12 + 2 * group_heads);
+        args.push_back(flat);
+        args.push_back(group);
+        args.push_back(group_heads);
+        args.push_back(a_buffer);
+        args.push_back(b_buffer);
+        args.push_back(s_buffer);
+        args.push_back(output_buffer);
+        args.push_back(ready_semaphore_id);
+        args.push_back(arrival_semaphore_id);
+        args.push_back(release_semaphore_id);
+        args.push_back(coordinator.x);
+        args.push_back(coordinator.y);
+        for (const auto& worker : dist.cores) {
+            const auto physical = device->worker_core_from_logical_core(worker);
+            args.push_back(physical.x);
+            args.push_back(physical.y);
+        }
+        dataflow.emplace_runtime_args(core, std::move(args));
+        compute.emplace_runtime_args(core, {group});
+    }
+
+    desc.kernels.push_back(std::move(dataflow));
+    desc.kernels.push_back(std::move(compute));
+    return desc;
+}
+
 tt::tt_metal::ProgramDescriptor KdaGatedRmsProgramFactory::create_descriptor(
     const KdaGatedRmsParams& attrs, const KdaGatedRmsInputs& in, std::vector<Tensor>& outputs) {
     const uint32_t Mt = attrs.sequence / TILE_HEIGHT;

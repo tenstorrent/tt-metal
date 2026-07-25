@@ -319,6 +319,68 @@ std::vector<Tensor> chunk_gdn_scan(
     return ttnn::device_operation::launch<ChunkGdnScanOperation>(attrs, tensor_args);
 }
 
+// ---------------------------------------------------------------------------
+// KDA GROUPED AFFINE PREFIX
+// ---------------------------------------------------------------------------
+KdaAffinePrefixOperation::program_factory_t KdaAffinePrefixOperation::select_program_factory(
+    const operation_attributes_t&, const tensor_args_t&) {
+    return KdaAffinePrefixProgramFactory{};
+}
+
+void KdaAffinePrefixOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& attrs, const tensor_args_t& in) {
+    check(in.transform_a, "transform_a", DataType::FLOAT32);
+    check(in.transform_b, "transform_b", DataType::FLOAT32);
+    check(in.initial_state, "initial_state", DataType::FLOAT32);
+    const auto& as = in.transform_a.logical_shape();
+    const auto& bs = in.transform_b.logical_shape();
+    const auto& ss = in.initial_state.logical_shape();
+    TT_FATAL(as.rank() == 3 && bs.rank() == 3 && ss.rank() == 3, "KDA affine prefix expects rank-3 tensors");
+    TT_FATAL(attrs.groups_per_head > 0, "groups_per_head must be positive");
+    TT_FATAL(as[0] == attrs.BH * attrs.groups_per_head, "transform_a leading dimension mismatch");
+    TT_FATAL(bs[0] == as[0], "transform_a/transform_b leading dimensions must match");
+    TT_FATAL(as[1] == attrs.key_dim && as[2] == attrs.key_dim, "transform_a must be [BH*G,K,K]");
+    TT_FATAL(bs[1] == attrs.key_dim && bs[2] == attrs.val_dim, "transform_b must be [BH*G,K,V]");
+    TT_FATAL(ss[0] == attrs.BH && ss[1] == attrs.key_dim && ss[2] == attrs.val_dim, "initial_state shape mismatch");
+    TT_FATAL(attrs.key_dim % TILE_WIDTH == 0, "key_dim must be tile aligned");
+    TT_FATAL(attrs.val_dim % TILE_WIDTH == 0, "val_dim must be tile aligned");
+}
+
+KdaAffinePrefixOperation::spec_return_value_t KdaAffinePrefixOperation::compute_output_specs(
+    const operation_attributes_t& attrs, const tensor_args_t&) {
+    return {TensorSpec(
+        Shape({attrs.BH * attrs.groups_per_head, attrs.key_dim, attrs.val_dim}),
+        TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config))};
+}
+
+KdaAffinePrefixOperation::tensor_return_value_t KdaAffinePrefixOperation::create_output_tensors(
+    const operation_attributes_t& attrs, const tensor_args_t& in) {
+    auto specs = compute_output_specs(attrs, in);
+    return {create_device_tensor(specs[0], in.transform_a.device())};
+}
+
+Tensor kda_affine_prefix(
+    const Tensor& transform_a,
+    const Tensor& transform_b,
+    const Tensor& initial_state,
+    uint32_t groups_per_head,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const auto& as = transform_a.logical_shape();
+    const auto& bs = transform_b.logical_shape();
+    TT_FATAL(groups_per_head > 0 && as[0] % groups_per_head == 0, "invalid affine group count");
+    auto results = ttnn::device_operation::launch<KdaAffinePrefixOperation>(
+        KdaAffinePrefixParams{
+            .BH = static_cast<uint32_t>(as[0]) / groups_per_head,
+            .groups_per_head = groups_per_head,
+            .key_dim = static_cast<uint32_t>(as[1]),
+            .val_dim = static_cast<uint32_t>(bs[2]),
+            .output_mem_config = output_mem_config,
+            .compute_kernel_config = compute_kernel_config},
+        KdaAffinePrefixInputs{.transform_a = transform_a, .transform_b = transform_b, .initial_state = initial_state});
+    return results[0];
+}
+
 KdaGatedRmsOperation::program_factory_t KdaGatedRmsOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
     return KdaGatedRmsProgramFactory{};

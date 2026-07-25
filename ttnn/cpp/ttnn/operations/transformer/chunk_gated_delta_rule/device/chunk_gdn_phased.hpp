@@ -188,6 +188,50 @@ std::vector<Tensor> chunk_gdn_scan(
     float rms_epsilon = 1e-5f,
     bool summary_pair = false);
 
+// ---------------------------------------------------------------------------
+// KDA GROUPED AFFINE PREFIX
+// ---------------------------------------------------------------------------
+struct KdaAffinePrefixParams {
+    uint32_t BH;
+    uint32_t groups_per_head;
+    uint32_t key_dim;
+    uint32_t val_dim;
+    tt::tt_metal::MemoryConfig output_mem_config;
+    DeviceComputeKernelConfig compute_kernel_config;
+};
+
+struct KdaAffinePrefixInputs {
+    Tensor transform_a;
+    Tensor transform_b;
+    Tensor initial_state;
+};
+
+struct KdaAffinePrefixProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const KdaAffinePrefixParams&, const KdaAffinePrefixInputs&, std::vector<Tensor>&);
+};
+
+struct KdaAffinePrefixOperation {
+    using operation_attributes_t = KdaAffinePrefixParams;
+    using tensor_args_t = KdaAffinePrefixInputs;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
+    using tensor_return_value_t = std::vector<Tensor>;
+    using program_factory_t = std::variant<KdaAffinePrefixProgramFactory>;
+
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+};
+
+Tensor kda_affine_prefix(
+    const Tensor& transform_a,
+    const Tensor& transform_b,
+    const Tensor& initial_state,
+    uint32_t groups_per_head,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const DeviceComputeKernelConfig& compute_kernel_config);
+
 struct KdaGatedRmsParams {
     uint32_t batch;
     uint32_t num_heads;

@@ -63,41 +63,11 @@ overlap, so they must not be added.
 
 ## Current execution queue
 
-The grouped-affine oracle has now validated the algorithm and isolated the
-remaining cost. The next three experiments, ranked by maximum plausible reward,
-are:
+The receiver-owned affine prefix is now the T>=5,120 default. Remaining experiments, ranked by measured or bounded reward, are:
 
-1. **Fuse summary construction with a distributed prefix owner.** The retained
-   two-scan summary construction costs `176.147 us` and writes/reads 80 affine
-   pairs. A dedicated producer that forms each eight-chunk summary directly in
-   the eventual prefix owner can remove the second recurrence pass, subtraction
-   launch, and summary handoff. Gross measured ceiling: `176.147 us`, or
-   `5.21%` of the matched `3380.644 us` layer wall. This must not reuse the
-   rejected sender-owned ping-pong/ACK protocol.
-   - One-pass summary-builder result, 2026-07-25: retained as an opt-in building block. A single state-only scan now carries zero and identity states together and subtracts A=(A+B)-B on-core. The summary block fell from `184.487 us` to `134.994 us`, saving `49.493 us` (`26.83%`). At T=5,120, summary-only wall is `3391.428 us` versus matched control `3265.230 us` (`+126.198 us`); therefore summary construction alone is not an endpoint win. The grouped-prefix consumer passes TP=8 T=5,120 PCC `0.999958/0.999890/0.999997`. Next, fuse prefix correction with the grouped final recurrence so this new pass replaces serial scan work instead of merely adding to it.
-2. **Fuse prefix correction with the grouped final recurrence.** The prefix
-   currently materializes 80 group-entry states before launching the eight-
-   chunk recurrence. Retaining each corrected entry state in its owner core
-   can remove that write/read boundary and one program launch. Its reward is
-   smaller than summary fusion but compounds with the same 80-core placement.
-3. **Receiver-owned or framework-native distributed prefix.** The one-group/core
-   point-to-point prototype proved FP32 numerics through three stages but
-   deadlocked at four stages because sender-owned state could not be retained
-   safely within target L1. Three slots fixed four-stage execution; four/five
-   slots exceeded L1, and all tested reverse ACK protocols deadlocked. Revisit
-   only with receiver-owned stage storage or an existing point-to-point
-   primitive whose synchronization is already validated.
-   - Receiver-owned experiment, 2026-07-25: a single 80-core persistent program
-     with one receiver-owned inbound slot and a global stage barrier passed
-     one through five stages, including T=5,120 TP output/recurrent/convolution
-     PCC `0.999958/0.999890/0.999997`. It therefore fixes the old four-stage
-     deadlock. Performance rejects it: ten measured T=5,120 replays had
-     `3302.103 us` median wall versus the retained `3259.500 us` endpoint
-     (`+42.603 us`, `+1.307%`). The prefix kernel itself costs `197.867 us`;
-     two summary scans, subtraction, grouped final scan, and the standalone RMS
-     boundary leave no net reward. Do not optimize this prefix in isolation.
-     Any retry must fuse summary construction and/or prefix correction into the
-     grouped recurrence.
+1. **Fuse gated RMS into the grouped final recurrence.** The promoted path pays a standalone `KdaGatedRmsOperation` median of `83.417 us` (`2.59%` of wall). The existing scan kernel already has a fused-RMS interface, but grouped pseudo-head output must be mapped back to the four real heads without breaking its gate/weight indexing.
+2. **Keep corrected group-entry states in their prefix owners.** The prefix writes and the grouped recurrence rereads 80 FP32 `[128,128]` states (`5 MiB` each direction) and pays a separate launch. Fusion has a traffic-plus-launch ceiling above the `0.1%` continuation threshold, but requires merging two independently validated core programs.
+3. **Form summaries in the persistent prefix owners.** The one-pass builder writes 80 FP32 `(A,B)` pairs and the prefix rereads them. A producer/consumer handoff could remove approximately `20 MiB` of DRAM traffic per chip, but it must preserve the distributed-L1 prep placement and avoid the rejected static prep/scan partition.
 
 After these, resume the broader queue:
 

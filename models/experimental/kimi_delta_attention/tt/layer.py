@@ -370,10 +370,21 @@ class KimiDeltaAttention:
         )
 
         assert self.recurrent_state is not None
-        # The experimental grouped-prefix path returns raw scan output; normalize it
+        # The long-context grouped-prefix path returns raw scan output; normalize it
         # after regrouping instead of asking the serial scan for a fused RMS tensor.
+        use_group_prefix = (
+            head_major
+            and mode != "recurrent"
+            and sequence >= 5120
+            and sequence % 256 == 0
+            and os.getenv("QWEN_KDA_SERIAL_SCAN") is None
+        )
         fuse_scan_rms = (
-            head_major and mode != "recurrent" and sequence > 640 and os.getenv("QWEN_KDA_GROUP_PREFIX") is None
+            head_major
+            and mode != "recurrent"
+            and sequence > 640
+            and os.getenv("QWEN_KDA_GROUP_PREFIX") is None
+            and not use_group_prefix
         )
         if mode == "recurrent":
             output, new_recurrent_state = fused_kda_recurrence(q, k, v, gate, beta, self.recurrent_state)
