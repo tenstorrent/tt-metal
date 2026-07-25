@@ -29,13 +29,13 @@ _REPORT_NAME = "RUN_REPORT.md"
 _SECTION_KEYS = ("bringup", "emit-e2e", "optimize")
 
 
-def upsert_report_section(demo_dir, key: str, block_md: str):
+def upsert_report_section(demo_dir, key: str, block_md: str, fresh: bool = False):
     try:
         demo_dir = Path(demo_dir)
         path = demo_dir / _REPORT_NAME
         begin, end = f"<!-- BEGIN {key} -->", f"<!-- END {key} -->"
         block = f"{begin}\n{block_md.strip()}\n{end}"
-        existing = path.read_text() if path.exists() else ""
+        existing = "" if fresh else (path.read_text() if path.exists() else "")
         if begin in existing and end in existing:
             pre = existing.split(begin, 1)[0].rstrip()
             post = existing.split(end, 1)[1].lstrip()
@@ -95,6 +95,7 @@ def emit_run_report(
             demo_pytest_status=demo_pytest_status,
             stop_reason=stop_reason,
             echo_terminal=echo_terminal,
+            fresh=True,
         )
         _REPORT_EMITTED = True
         return _p
@@ -151,6 +152,7 @@ def _emit_run_report_impl(
     demo_pytest_status: Optional[str],
     stop_reason: str = "",
     echo_terminal: bool = True,
+    fresh: bool = False,
 ) -> Path:
     from .final_categorization import build_final_categorization
     from .overlay_manager import load_persistent_skips
@@ -441,7 +443,7 @@ def _emit_run_report_impl(
         lines.append(f"  - `python -m scripts.tt_hw_planner emit-e2e {model_id}`")
     lines.append("")
 
-    upsert_report_section(demo_dir, "bringup", "\n".join(lines))
+    upsert_report_section(demo_dir, "bringup", "\n".join(lines), fresh=fresh)
 
     if echo_terminal:
         bar = "=" * 78
