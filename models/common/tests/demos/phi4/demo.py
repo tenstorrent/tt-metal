@@ -68,8 +68,8 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import encode_prompt_hf
 
 # =============================================================================
-# Expected metrics — perf gates set from FRESH same-box N300 measurement (2026-07-23, base c5d1c924245,
-# median of 3 interleaved same-session reps per gated cell), NOT PERF.md.
+# Expected metrics — perf gates set from FRESH same-box N300 measurement (consolidation round-1,
+# 2026-07-25, base 32c1f0e882b, median of 3 interleaved same-session reps per gated cell), NOT PERF.md.
 #
 # TTTv1 DOES run Phi-4 (special-cased into the Llama-3/Mistral/Phi accuracy branch, model_config.py) and
 # — unlike Qwen2-7B — its on-device sampling IS enabled on N300 (vocab 100352//2 = 50176 <= 64*1024), so
@@ -79,24 +79,33 @@ from models.tt_transformers.tt.common import encode_prompt_hf
 # TTTv2_host (TTTv1 phi-4 default is on-device, so there is no TTTv1 host counterpart). TTTv1 accuracy
 # OOMs on N300 (bank_manager; documented phi-4 limit) => accuracy gates anchor to the TTTv2 value.
 #
-# Fresh N300 medians (2026-07-23), t/s/u | TTFT-ms.  DECODE is compared MEAN-to-MEAN over the full decode
-# window (TTTv1's demo prints a per-iteration decode that DECAYS with seq position; its "Average speed"
-# mean is the fair comparand, NOT the 1st-token peak):
-#   TTTv1 perf (on-device default, mean): b1 18.58|149.0   ci-32 16.26|50.0    (accuracy profile OOMs)
-#   TTTv2 on_device_topk: perf b1 18.6|117.5  b32 17.8|58.6  ci-32 16.6|58.7 ; acc b1 16.4|136  b32 15.7|68  ci-32 15.0|68
-#   TTTv2 host:           perf b1 25.2|121.7  b32 23.6|58.8  ci-32 21.0|58.8 ; acc b1 21.2|144  b32 19.9|68  ci-32 18.3|68
+# *** minimal_matmul (QKV+FF2) is ENABLED (model.py _Phi4WHTuning.prefill_minimal_matmul=True; A/B escape
+# DISABLE_MINIMAL_MATMUL=1). On the 14B, batch-32-ci prefill is matmul-compute-bound (~80% FLOPs = the 3
+# MLP matmuls); minimal_matmul (~2-2.5x faster than ttnn.linear on the large folded prefill matmuls, TTTv1
+# parity) closes the batch-32-ci prefill-TTFT gap: A/B same-box median-of-3 odt = ON 49.1ms vs OFF 58.5ms,
+# beating the TTTv1 ci-32 control (50.47ms). It also drops the host + acc b32-ci TTFT (~58->49 / ~68->58ms).
+# Accuracy with it ON is TTTv1-parity (eval-32 64/64 ON+OFF+odt; token-accuracy 97.3/100 perf, 99.0/100
+# acc). Decode is minimal_matmul-independent (b1 buckets to seq128 < the seq>128 gate). ***
+#
+# Fresh N300 medians (2026-07-25, minimal_matmul ON), t/s/u | TTFT-ms.  DECODE compared MEAN-to-MEAN over
+# the full decode window (TTTv1's per-iter decays with seq position; its "Average speed" mean is the fair
+# comparand, NOT the 1st-token peak). Decode values decode-latency-derived (higher precision than the
+# 1-decimal print):
+#   TTTv1 perf (on-device default, mean): b1 18.56|149.05  ci-32 16.20|50.47   (accuracy profile OOMs)
+#   TTTv2 on_device_topk: perf b1 18.45|117.0  b32 17.7|49.1  ci-32 16.5|49.1 ; acc b1 16.3|136.7  b32 15.7|58.0  ci-32 14.9|58.1
+#   TTTv2 host:           perf b1 25.2|125.0   b32 23.4|49.1  ci-32 21.6|49.1 ; acc b1 21.3|136.5  b32 20.1|58.0  ci-32 18.8|57.9
 # Parity verdict (perf, TTTv2 odt vs TTTv1 default, tolerance-free mean-to-mean):
-#   - DECODE at/above parity on BOTH gated cells: b1 18.6 >= 18.58; ci-32 16.6 >= 16.26 (TTTv2 wins).
-#   - batch-1 TTFT faster (117.5 <= 149.0).
-#   - batch-32-ci TTFT is the ONE residual: 58.7 vs 50.0 (~17%). Root-caused (tt-perf-report) to the shared
-#     engine returning the FULL [32 x 100352] prefill logits to host + host-argmax vs TTTv1's on-device
-#     prefill-sampling trace (32-token readback). Not per-model closeable (fold-count / gather / per-slot
-#     levers all measured, none reach <=50); it is the cross-model batched-prefill residual (llama1b/3b/8b).
-#     Decode on the same cell meets/beats TTTv1 and the CI TTFT ceiling clears with >2x margin.
-# Decode tok_s_u is prefill-independent (batched prefill does not change it). tok_s_u gates sit at/just
-# below the measured (best-of) value so the 5% PERF_TOLERANCE absorbs jitter yet catches regressions; they
-# are never lowered below a prior gate. TTFT gates are conservative ceilings covering BOTH batched-prefill
-# ON (default, ~58ms) and DISABLE_BATCHED_PREFILL=1 (~116ms). N300 is the only supported+gated SKU
+#   - batch-32-ci: DECODE 16.5 >= 16.20 (TTTv2 wins); TTFT 49.1 <= 50.47 (PARITY — closed by minimal_matmul).
+#   - batch-1 TTFT faster (117.0 <= 149.05).
+#   - batch-1 DECODE is the ONE residual RED: 18.45 vs TTTv1 18.56 (~0.6%; decode latency 54.19 vs 53.87
+#     ms/step). minimal_matmul-independent; per-model CCL-tuning lever (24/4 -> house-default 10/2) A/B'd
+#     and REFUTED (54.31ms == unchanged). It is a diffuse SHARED decode-critical-path residual (executor
+#     decode loop / shared modules), escalated as a consolidation SHARED-GAP ticket — out of per-model scope.
+# Decode tok_s_u is prefill-independent (batched prefill / minimal_matmul do not change it). tok_s_u gates
+# sit at/just below the measured (best-of) value so the 5% PERF_TOLERANCE absorbs jitter yet catches
+# regressions; never lowered below a prior gate. TTFT gates are conservative ceilings covering BOTH
+# batched-prefill ON (default, ~49ms with minimal_matmul) and DISABLE_BATCHED_PREFILL=1 (~116ms) — the
+# ceiling is NOT tightened below the sequential-fallback path. N300 is the only supported+gated SKU
 # (N150 L1-OOM, T3K/TG 8 does not divide 10 KV heads).
 # =============================================================================
 
@@ -144,11 +153,11 @@ EXPECTED_METRICS_BATCH32: dict = {
 }
 
 # CI-faithful batch-32 (the ``batch-32-ci`` leg): TTTv1 ci-32 = seq2048 (perf) / seq1024 (acc, DRAM
-# clamp) + 1024-token decode budget. Keyed by SAMPLING_MODE + profile. odt perf DECODE 16.6 >= TTTv1 ci-32
-# mean 16.26 (best-of = TTTv2, mean-to-mean). The ttft ceiling (125) is a regression guard that clears the
-# measured 58.7ms ON / ~116ms OFF with >2x margin; the tolerance-free TTFT parity RED vs TTTv1's 50.0ms is
-# the documented shared-engine batched-prefill residual (see header + perf_tables). Cells absent fall back
-# to EXPECTED_METRICS_BATCH32.
+# clamp) + 1024-token decode budget. Keyed by SAMPLING_MODE + profile. odt perf DECODE 16.5 >= TTTv1 ci-32
+# mean 16.20 (best-of = TTTv2, mean-to-mean). With minimal_matmul ON the measured TTFT is now ~49ms ON
+# (batched) / ~116ms OFF (sequential); the ttft ceiling (125) is a regression guard clearing both with
+# margin. The prior batch-32-ci TTFT parity RED vs TTTv1 (~50ms) is now CLOSED — TTTv2 49.1 <= TTTv1 50.47
+# same-box (see header). Cells absent fall back to EXPECTED_METRICS_BATCH32.
 EXPECTED_METRICS_BATCH32_CI: dict = {
     "host": {
         "performance": {"N300": {"tok_s_u": 21.0, "ttft_ms": 125}},
