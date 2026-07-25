@@ -186,6 +186,10 @@ state-transfer protocol and measure its components.
   1.456 ms (report `2026_07_25_21_09_28`).  The implementation therefore uses
   two workers below the 1024-token local-span crossover and four at or above
   it; the environment can still override the choice for future CCL tuning.
+  Other safe knobs were negative: 20 sync chunks measured 3.215 ms (report
+  `2026_07_25_21_11_53`), one link 3.581 ms (report
+  `2026_07_25_21_13_35`), and three workers 3.207 ms (report
+  `2026_07_25_21_15_17`).
 
 ## Milestones
 
