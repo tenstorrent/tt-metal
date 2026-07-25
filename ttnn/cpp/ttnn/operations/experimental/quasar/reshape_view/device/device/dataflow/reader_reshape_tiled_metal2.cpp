@@ -52,6 +52,19 @@ void kernel_main() {
         const uint32_t map_l1_addr = mapping_cb.get_write_ptr();
         enhanced_noc_async_read<Max_Map_Size_Bytes, true>(noc, map_noc_addr, map_l1_addr, Max_Map_Size_Bytes);
         noc.async_read_barrier();
+        // [#48552 DEBUG] map_noc lo/hi + l1 slot + first segment's input page as read from L1 -> is the map
+        // read advancing per output page, and does the L1 slot actually hold this page's map?
+        {
+            auto dbg_map = reinterpret_cast<volatile tt_l1_ptr SegmentMapData*>(map_l1_addr);
+            DPRINT(
+                "RRDmap op={} noc_lo={} noc_hi={} l1={} seg0_in_pg={} seg0_n={}\n",
+                out_page_idx,
+                (uint32_t)map_noc_addr,
+                (uint32_t)(map_noc_addr >> 32),
+                map_l1_addr,
+                dbg_map[0].input_page_index,
+                dbg_map[0].num_elements);
+        }
         mapping_cb.push_back(1);
 
         auto map_ptr = reinterpret_cast<volatile tt_l1_ptr SegmentMapData*>(map_l1_addr);
