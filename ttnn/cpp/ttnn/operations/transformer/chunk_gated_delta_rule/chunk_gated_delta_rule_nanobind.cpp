@@ -107,13 +107,12 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
     ttnn::bind_function<"chunk_kda_affine_summary", "ttnn.transformer.">(
         mod,
         R"doc(
-        Build a KDA span's affine recurrent-state transform without producing
-        token outputs. Returns `(transform_a, transform_b)` such that for an
-        incoming state `S`, the span produces `transform_a @ S + transform_b`.
+        Build independent eight-chunk KDA affine transforms without producing
+        token outputs. Pass the returned pair to `kda_affine_prefix`.
 
         q/k/g [B,T,H,K], v [B,T,H,V], beta [B,T,H]; tile-aligned rank-3 flat
         q/k/v/g forms are also accepted. K must equal V and T must be divisible
-        by the 32-token KDA chunk size.
+        by 256, the eight-chunk summary size.
         )doc",
         &ttnn::transformer::chunk_kda_affine_summary,
         nb::arg("q").noconvert(),
@@ -129,6 +128,18 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("tril") = nb::none(),
         nb::arg("ones") = nb::none(),
         nb::arg("masks") = nb::none());
+
+    ttnn::bind_function<"kda_affine_prefix", "ttnn.transformer.">(
+        mod,
+        "Compute the per-group KDA entry states from flattened affine summaries.",
+        &ttnn::transformer::kda_affine_prefix,
+        nb::arg("transform_a").noconvert(),
+        nb::arg("transform_b").noconvert(),
+        nb::arg("initial_state").noconvert(),
+        nb::arg("groups_per_head"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 
     ttnn::bind_function<"kda_gated_rms_norm", "ttnn.transformer.">(
         mod,

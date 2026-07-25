@@ -83,14 +83,13 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     float rms_epsilon = 1e-5f);
 
 /**
- * Build the affine transform of a complete KDA span without materializing
- * token outputs. For an incoming recurrent state S, the span transition is
- * `S_out = transform_a @ S + transform_b`. This is the device-side summary
- * exchanged by sequence-parallel KDA before its inter-span prefix scan.
+ * Build independent eight-chunk KDA affine transforms without materializing
+ * token outputs. The returned flattened `[B*H*G,K,K]` and `[B*H*G,K,V]`
+ * tensors are consumed by kda_affine_prefix to produce span boundary states.
  *
  * q/k/g [B,T,H,K], v [B,T,H,V], beta [B,T,H], with the same tile-aligned
  * rank-3 flat forms accepted by chunk_kda. K and V must match and T must be
- * divisible by the 32-token KDA chunk size.
+ * divisible by 256 (eight 32-token chunks per summary group).
  */
 std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_affine_summary(
     const ttnn::Tensor& q,
@@ -105,6 +104,14 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_affine_summary(
     const std::optional<ttnn::Tensor>& tril = std::nullopt,
     const std::optional<ttnn::Tensor>& ones = std::nullopt,
     const std::optional<ttnn::Tensor>& masks = std::nullopt);
+
+ttnn::Tensor kda_affine_prefix(
+    const ttnn::Tensor& transform_a,
+    const ttnn::Tensor& transform_b,
+    const ttnn::Tensor& initial_state,
+    uint32_t groups_per_head,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 
 /** Fused per-head RMSNorm and sigmoid gate for tile-aligned KDA prefill. */
 ttnn::Tensor kda_gated_rms_norm(

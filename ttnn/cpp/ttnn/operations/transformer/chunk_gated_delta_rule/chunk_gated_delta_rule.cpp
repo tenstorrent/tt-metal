@@ -808,7 +808,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_affine_summary(
     TT_FATAL(flat_g || gs.rank() == 4, "chunk_kda_affine_summary expects rank-3 or rank-4 g");
 
     const uint32_t B = bs[0], T = bs[1], H = bs[2];
-    TT_FATAL(T % 32 == 0, "chunk_kda_affine_summary requires T divisible by 32, got {}", T);
+    TT_FATAL(T % 256 == 0, "chunk_kda_affine_summary requires T divisible by 256, got {}", T);
     TT_FATAL(flat_g ? gs[2] % H == 0 : gs[2] == H, "chunk_kda_affine_summary g head dimension mismatch");
     const uint32_t K = flat_g ? gs[2] / H : gs[3];
     TT_FATAL(flat_v ? vs[2] % H == 0 : vs[2] == H, "chunk_kda_affine_summary v head dimension mismatch");
@@ -826,7 +826,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_affine_summary(
     auto* dev = q_in.device();
     const uint32_t BH = B * H;
     constexpr uint32_t C = 32;
+    constexpr uint32_t group_chunks = 8;
     const uint32_t NC = T / C;
+    const uint32_t groups_per_head = NC / group_chunks;
+    const uint32_t group_heads = BH * groups_per_head;
     const float scale = scale_opt.value_or(1.0f / std::sqrt(static_cast<float>(K)));
 
     auto as_bf16 = [](const ttnn::Tensor& tensor) {
@@ -890,10 +893,13 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_affine_summary(
         flat_g,
         true,
         0x26);
-    // A boundary needs one transform for the complete span. Run the proven
-    // state-only affine scan directly over its chunks; the grouped-prefix
-    // path is for producing every group's initial state and adds needless
-    // matmul/concat work when only the final transform is required.
+    prep[0] = ttnn::reshape(prep[0], ttnn::Shape({group_heads, group_chunks, C, V}));
+    prep[1] = ttnn::reshape(prep[1], ttnn::Shape({group_heads, group_chunks, C, K}));
+    prep[2] = ttnn::reshape(prep[2], ttnn::Shape({group_heads, group_chunks, C, K}));
+    prep[3] = ttnn::reshape(prep[3], ttnn::Shape({group_heads, group_chunks, C, C}));
+    prep[4] = ttnn::reshape(prep[4], ttnn::Shape({group_heads, group_chunks, K, C}));
+    prep[5] = ttnn::reshape(prep[5], ttnn::Shape({group_heads, group_chunks, K, 1}));
+    prep[6] = ttnn::reshape(prep[6], ttnn::Shape({group_heads, group_chunks, C, C}));
     auto summaries = ttnn::prim::chunk_gdn_scan(
         prep[0],
         prep[1],
@@ -915,8 +921,25 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> chunk_kda_affine_summary(
         0,
         1e-5f,
         true);
-    return {
-        ttnn::reshape(summaries[0], ttnn::Shape({B, H, K, K})), ttnn::reshape(summaries[1], ttnn::Shape({B, H, K, V}))};
+    return {summaries[0], summaries[1]};
+}
+
+ttnn::Tensor kda_affine_prefix(
+    const ttnn::Tensor& transform_a,
+    const ttnn::Tensor& transform_b,
+    const ttnn::Tensor& initial_state,
+    uint32_t groups_per_head,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const auto out_mem = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
+    const auto kernel_cfg = init_device_compute_kernel_config(
+        transform_a.device()->arch(),
+        compute_kernel_config,
+        MathFidelity::HiFi4,
+        /*default_approx_mode=*/false,
+        /*default_fp32_acc=*/true,
+        /*default_l1_acc=*/false);
+    return ttnn::prim::kda_affine_prefix(transform_a, transform_b, initial_state, groups_per_head, out_mem, kernel_cfg);
 }
 
 ttnn::Tensor kda_gated_rms_norm(

@@ -156,17 +156,35 @@ class SP2TP4KimiDeltaAttention:
         ttnn.experimental.recv_async(second.convolution_state, self._recv_socket)
         second_prepared = second.prepare_chunk(second_span)
 
-        transform_a, transform_b = first.affine_summary(first_prepared)
-        span_end_state = ttnn.matmul(
-            transform_a,
-            first.recurrent_state,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        span_end_state = ttnn.add(span_end_state, transform_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        span_end_state = first.affine_span_end_state(first_prepared)
         ttnn.experimental.send_async(span_end_state, self._send_socket)
         ttnn.experimental.recv_async(second.recurrent_state, self._recv_socket)
 
         first_output = first.forward_prepared(first_prepared)
+        second_output = second.forward_prepared(second_prepared)
+        return first_output, second_output
+
+    def _forward_pipelined_sp2(
+        self,
+        first_span: ttnn.Tensor,
+        second_span: ttnn.Tensor,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Overlap span one's recurrence with span two's input preparation.
+
+        Unlike the affine-summary prototype, this reuses the first span's
+        ordinary recurrence result for the state handoff, so it introduces no
+        second scan of that span.
+        """
+        first, second = self.first_layer, self.second_layer
+        first_prepared = first.prepare_chunk(first_span)
+        ttnn.experimental.send_async(first_prepared.new_convolution_state, self._send_socket)
+        ttnn.experimental.recv_async(second.convolution_state, self._recv_socket)
+        second_prepared = second.prepare_chunk(second_span)
+
+        first_output = first.forward_prepared(first_prepared)
+        assert first.recurrent_state is not None
+        ttnn.experimental.send_async(first.recurrent_state, self._send_socket)
+        ttnn.experimental.recv_async(second.recurrent_state, self._recv_socket)
         second_output = second.forward_prepared(second_prepared)
         return first_output, second_output
 
@@ -185,6 +203,8 @@ class SP2TP4KimiDeltaAttention:
             and first_span.shape[1] % 256 == 0
         ):
             return self._forward_affine_sp2(first_span, second_span)
+        if os.getenv("KDA_SP_PIPELINED", "0") == "1" and mode == "chunk":
+            return self._forward_pipelined_sp2(first_span, second_span)
         first_output = self.first_layer.forward(first_span, mode=mode)
         self._handoff_causal_state()
         second_output = self.second_layer.forward(second_span, mode=mode)

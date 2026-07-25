@@ -47,13 +47,25 @@ state-transfer protocol and measure its components.
   cannot recover the 2.749 ms deficit.  The next implementation target is
   Milestone 4's inter-span affine scan, which makes the large span scans
   concurrent after a small log-depth prefix over `(A, B)` summaries.
-* An opt-in `KDA_SP_AFFINE=1` SP=2 prototype now validates that schedule's
-  state transition and overlaps prepared final scans.  Its direct state-only
-  span-summary kernel is correct, but its current eager measurement is
-  **6.821 ms/forward** (three repetitions; report `2026_07_25_18_36_33`), so
-  it remains disabled by default.  The next optimisation is to keep summary
-  prep/scan intermediates resident and fuse their consumption with the final
-  scan rather than re-reading/re-preparing the span.
+* An opt-in `KDA_SP_AFFINE=1` SP=2 prototype validates the affine state
+  transition and overlaps prepared final scans.  Its direct state-only
+  span-summary kernel was correct but measured **6.821 ms/forward** (three
+  repetitions; report `2026_07_25_18_36_33`).  Replacing it with eight-chunk
+  summaries plus the device `KdaAffinePrefixOperation` preserves the full
+  T=5120 PCC gate, but is **7.572 ms/forward** (report
+  `2026_07_25_18_44_53`): it still computes a summary scan and a final output
+  scan.  Both remain disabled by default.
+* An opt-in `KDA_SP_PIPELINED=1` control overlaps span two's convolution/input
+  preparation with span one's normal recurrence, then transfers the ordinary
+  final recurrent state.  It passes the same PCC gate, but measures **7.050
+  ms/forward** (report `2026_07_25_18_46_43`), so host scheduling alone is
+  also not the lever.
+* The concrete next target is a split-phase grouped KDA interface: retain the
+  existing `chunk_gdn_prep` results, emit group `(A, B)` summaries and their
+  affine prefix, send the prefix-derived final state immediately, then run
+  both spans' group output scans from those already-computed entry states.  It
+  must eliminate the duplicate summary prep/scan before this topology can
+  plausibly reach the 2.958 ms LB gate.
 
 ## Milestones
 

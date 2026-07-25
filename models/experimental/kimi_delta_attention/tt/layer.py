@@ -363,11 +363,11 @@ class KimiDeltaAttention:
         )
 
     def affine_summary(self, prepared: PreparedKDA) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Return the prepared chunk span's FP32 recurrent transform `(A, B)`."""
+        """Return flattened independent eight-chunk affine transforms."""
         if prepared.mode != "chunk" or not prepared.head_major:
             raise ValueError("affine summary requires a tile-aligned chunk preparation")
-        if prepared.sequence % 32:
-            raise ValueError(f"affine summary requires T divisible by 32, got T={prepared.sequence}")
+        if prepared.sequence % 256:
+            raise ValueError(f"affine summary requires T divisible by 256, got T={prepared.sequence}")
         return ttnn.transformer.chunk_kda_affine_summary(
             prepared.q,
             prepared.k,
@@ -381,6 +381,51 @@ class KimiDeltaAttention:
             ones=self.chunk_const_tiles[2],
             masks=self.chunk_const_tiles[3],
         )
+
+    def affine_span_end_state(self, prepared: PreparedKDA) -> ttnn.Tensor:
+        """Compose prepared group summaries into this span's final recurrent state."""
+        assert self.recurrent_state is not None
+        transform_a, transform_b = self.affine_summary(prepared)
+        groups = prepared.sequence // 256
+        heads = self.config.num_heads
+        batch_heads = prepared.batch * heads
+        key_dim, value_dim = self.config.head_k_dim, self.config.head_v_dim
+        initial = ttnn.reshape(self.recurrent_state, (batch_heads, key_dim, value_dim))
+        entries = ttnn.transformer.kda_affine_prefix(
+            transform_a,
+            transform_b,
+            initial,
+            groups,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_config,
+        )
+        entry_last = ttnn.slice(
+            ttnn.reshape(entries, (batch_heads, groups, key_dim, value_dim)),
+            (0, groups - 1, 0, 0),
+            (batch_heads, groups, key_dim, value_dim),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        entry_last = ttnn.reshape(entry_last, (batch_heads, key_dim, value_dim))
+        a_last = ttnn.slice(
+            ttnn.reshape(transform_a, (batch_heads, groups, key_dim, key_dim)),
+            (0, groups - 1, 0, 0),
+            (batch_heads, groups, key_dim, key_dim),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        a_last = ttnn.reshape(a_last, (batch_heads, key_dim, key_dim))
+        b_last = ttnn.slice(
+            ttnn.reshape(transform_b, (batch_heads, groups, key_dim, value_dim)),
+            (0, groups - 1, 0, 0),
+            (batch_heads, groups, key_dim, value_dim),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        end = ttnn.matmul(a_last, entry_last, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        end = ttnn.add(
+            end,
+            ttnn.reshape(b_last, (batch_heads, key_dim, value_dim)),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return ttnn.reshape(end, (prepared.batch, heads, key_dim, value_dim))
 
     def forward_prepared(self, prepared: PreparedKDA) -> ttnn.Tensor:
         """Finish a prepared chunk span using the layer's current recurrent state."""

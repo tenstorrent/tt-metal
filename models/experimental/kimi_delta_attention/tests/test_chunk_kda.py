@@ -146,7 +146,17 @@ def test_chunk_kda_affine_summary_matches_final_state(device: ttnn.Device) -> No
         )
 
     assert final_state_tt is not None
-    transform_a = ttnn.to_torch(transform_a_tt)
-    transform_b = ttnn.to_torch(transform_b_tt)
-    expected_final_state = torch.matmul(transform_a.float(), initial_state.float()) + transform_b.float()
+    groups = sequence // 256
+    entries_tt = ttnn.transformer.kda_affine_prefix(
+        transform_a_tt,
+        transform_b_tt,
+        ttnn.reshape(initial_state_tt, (heads, dim, dim)),
+        groups,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    transform_a = ttnn.to_torch(transform_a_tt).reshape(heads, groups, dim, dim)
+    transform_b = ttnn.to_torch(transform_b_tt).reshape(heads, groups, dim, dim)
+    entries = ttnn.to_torch(entries_tt).reshape(heads, groups, dim, dim)
+    expected_final_state = torch.matmul(transform_a[:, -1].float(), entries[:, -1].float()) + transform_b[:, -1].float()
+    expected_final_state = expected_final_state.reshape_as(initial_state)
     _assert_pcc("KDA affine span summary", expected_final_state, ttnn.to_torch(final_state_tt), threshold=0.999)
