@@ -93,8 +93,14 @@ from models.tt_transformers.tt.common import encode_prompt_hf
 # =============================================================================
 
 # top1/top5 teacher-forcing accuracy floors (book refpt), profile-split. Perf metrics live in the batch
-# dicts below. Floors set at/below measured (5% PERF_TOLERANCE gives headroom). Measured 2026-07-10:
-#   perf N300 87.7/99.4, T3K 87.7/98.4 ; acc N300 95.7/100.0, T3K 94.7/99.8.
+# dicts below. Floors set at/below measured. The gate rounds the measured value up with math.ceil
+# (TTTv1 parity) before compare, so an integer floor of 87 admits a measured 86.5. Re-measured
+# 2026-07-25 with minimal_matmul ON (the shipped prefill config; see _DSR1WHTuning.prefill_minimal_matmul):
+#   perf N300 87.1/98.6, T3K 86.5/98.4 ; acc N300 95.9/100.0, T3K 95.7/100.0.
+# NOTE: minimal_matmul (block-matmul kernel for the QKV+W2 prefill matmuls, seq_len>128) costs ~1.0pp top1
+# vs ttnn.linear (perf T3K 87.5 OFF -> 86.5 ON; N300 87.9 -> 87.1) from its numerics; it still clears every
+# floor here AND the CI central-0.5 gate (resolve_accuracy_targets = 87 -> 86.5 floor; ceil(86.5)=87 PASS),
+# and TTTv1 itself uses minimal_matmul for these matmuls. Kept because it halves the batch-32-ci TTFT gap.
 EXPECTED_METRICS: dict = {
     "performance": {
         "N300": {"top1": 87, "top5": 99},
@@ -171,11 +177,14 @@ EXPECTED_METRICS_BATCH32: dict = {
 
 # CI-faithful batch-32 targets (the ``batch-32-ci`` leg), seq2048 + 1024-token decode budget = the DIRECT
 # TTTv1 ci-32 analog (the matched CI pair). Per PARITY_RULES §2: on_device_topk gate = best-of(TTTv1 ci-32,
-# TTTv2 odt); host gate = TTTv2 host. On T3K TTTv1 samples on-device → best-of anchors at TTTv1 ci-32 (33.02
-# perf / 29.37 acc), which TTTv2 (32.7 / 28.7) clears within 5%. On N300 TTTv1 ci-32 is host argmax (17.08),
-# which TTTv2 host (17.2) BEATS. The accuracy profile is DRAM-infeasible on N300 (guarded skip) → no N300
-# acc entry. T3K host = degenerate (ungated). ttft ceilings cover the sequential OFF path (batched ON ~halves
-# TTFT: T3K 32→ON vs 58→OFF).
+# TTTv2 odt); host gate = TTTv2 host. On T3K, after the FF-pad decode fix TTTv2 odt decode BEATS TTTv1 ci-32
+# (38.2 vs fresh 34.3 perf / 32.9 vs 30.33 acc) → gate at the TTTv2 (better) value; TTTv2 clears within 5%.
+# On N300 TTTv1 ci-32 is host argmax (18.75), and TTTv2 host decode (18.2) is at parity within noise (host
+# is informational; N300 odt is own-gated). The accuracy profile is DRAM-infeasible on N300 (guarded skip)
+# → no N300 acc entry. T3K host = degenerate (ungated). ttft ceilings are conservative (cover the sequential
+# OFF path). minimal_matmul ON (default) lowered the odt/host prefill TTFT (T3K perf 29.2→25.3, N300 host
+# 61.3→51.7); the residual TTFT vs TTTv1 (T3K perf +11.9%, acc +22.1%; shared batched-prefill fold) is
+# recorded in perf_tables.md / parity_gate.py, NOT a tight demo gate.
 EXPECTED_METRICS_BATCH32_CI: dict = {
     "host": {
         "performance": {
