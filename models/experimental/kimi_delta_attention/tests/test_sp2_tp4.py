@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 import torch
 
@@ -19,6 +21,40 @@ def _host_shards(tensor: ttnn.Tensor) -> list[torch.Tensor]:
     return [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(tensor)]
 
 
+def _sp_test_shape() -> tuple[KDAConfig, int]:
+    """Return the smoke or LB production-rank-equivalent PCC shape.
+
+    Run ``KDA_SP_TARGET_SHAPE=1 pytest .../test_sp2_tp4.py`` after a LoudBox
+    reset to check the plan's global-T=1280, TP=4-per-span gate.  The default
+    remains a fast full-path smoke test suitable for regular development.
+    """
+    if os.getenv("KDA_SP_TARGET_SHAPE", "0") == "1":
+        return (
+            KDAConfig(
+                hidden_size=2304,
+                num_heads=32,
+                head_k_dim=128,
+                head_v_dim=128,
+                conv_kernel_size=4,
+                norm_eps=1e-5,
+                chunk_size=32,
+            ),
+            int(os.getenv("KDA_SP_TEST_SEQ", "1280")),
+        )
+    return (
+        KDAConfig(
+            hidden_size=256,
+            num_heads=8,
+            head_k_dim=128,
+            head_v_dim=128,
+            conv_kernel_size=4,
+            norm_eps=1e-5,
+            chunk_size=32,
+        ),
+        int(os.getenv("KDA_SP_TEST_SEQ", "64")),
+    )
+
+
 pytestmark = [
     run_for_blackhole(),
     pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True),
@@ -32,17 +68,10 @@ pytestmark = [
 
 def test_sp2_tp4_layer_pcc(mesh_device: ttnn.MeshDevice) -> None:
     """The second span must consume the recurrent and short-conv carry on fabric."""
-    config = KDAConfig(
-        hidden_size=256,
-        num_heads=8,
-        head_k_dim=128,
-        head_v_dim=128,
-        conv_kernel_size=4,
-        norm_eps=1e-5,
-        chunk_size=32,
-    )
+    config, sequence = _sp_test_shape()
+    if sequence % 64:
+        raise ValueError(f"KDA_SP_TEST_SEQ must be divisible by 64 for two aligned spans, got {sequence}")
     state_dict = random_weights(config)
-    sequence = 64
     hidden = torch.randn(1, sequence, config.hidden_size, generator=torch.Generator().manual_seed(6081)).to(
         torch.bfloat16
     )
@@ -102,3 +131,9 @@ def test_sp2_tp4_layer_pcc(mesh_device: ttnn.MeshDevice) -> None:
     ):
         passed, pcc = comp_pcc(golden, actual, pcc=0.98)
         assert passed, f"SP=2 TP=4 {name} PCC {pcc:.6f} < 0.98"
+
+    boundary = sequence // 2
+    passed, pcc = comp_pcc(
+        golden_output[:, boundary : boundary + 1], actual_output[:, boundary : boundary + 1], pcc=0.98
+    )
+    assert passed, f"SP=2 TP=4 first post-boundary token PCC {pcc:.6f} < 0.98"
