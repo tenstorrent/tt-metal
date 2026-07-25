@@ -218,6 +218,10 @@ state-transfer protocol and measure its components.
   removed rather than leaving an opt-in invalid path.  A future CCL fix needs
   a standalone Linear fused-MRS test that checks the first output tile on a
   1x4 child mesh before KDA can consume it.
+  Capturing the fused primitive's separate matmul output confirms that all
+  four local matmul shards are finite when the reduced output fails, so the
+  defect is downstream in the Line reduce-scatter consumer rather than KDA,
+  the matmul producer, or its output-DMA publication.
 
 ## Milestones
 
