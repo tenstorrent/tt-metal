@@ -79,25 +79,27 @@ jobs:
           git commit -m "Merge upstream/main ($SHA) into feature/tt-hw-planner [auto-sync]"
           git submodule update --init --recursive
 
-      - name: Create venv (3.12) + refresh deps
+      # The dev container ships a prebuilt venv at /opt/venv -- use it (do NOT run create_venv,
+      # which refuses to overwrite it non-interactively). Just refresh transformers to the pin.
+      - name: Prepare venv (container's /opt/venv) + refresh transformers
         if: steps.check.outputs.uptodate == 'false'
         run: |
-          ./create_venv.sh --skip-compat-check --python-version 3.12
-          . python_env/bin/activate
-          uv pip install --index-strategy unsafe-best-match -r tt_metal/python_env/requirements-dev.txt || true
+          . /opt/venv/bin/activate
+          TFPIN=$(grep -oE 'transformers[[:space:]]*==[[:space:]]*[0-9.]+' tt_metal/python_env/requirements-dev.txt | grep -oE '[0-9][0-9.]*' | head -1)
+          uv pip install --index-strategy unsafe-best-match "transformers==$TFPIN" || pip install "transformers==$TFPIN" || true
 
       - name: Build tt-metal (device-free)
         if: steps.check.outputs.uptodate == 'false'
         run: |
-          export TT_METAL_HOME="$PWD" PYTHON_ENV_DIR="$PWD/python_env"
-          . python_env/bin/activate
+          export TT_METAL_HOME="$PWD" PYTHON_ENV_DIR="/opt/venv"
+          . /opt/venv/bin/activate
           ./build_metal.sh
 
       - name: Import gate (device-free)
         if: steps.check.outputs.uptodate == 'false'
         run: |
           export TT_METAL_HOME="$PWD"
-          . python_env/bin/activate
+          . /opt/venv/bin/activate
           python -c "import ttnn; print('ttnn import OK')"
 
       # PR / issue via the REST API (curl) -- the dev container has no `gh` CLI.
