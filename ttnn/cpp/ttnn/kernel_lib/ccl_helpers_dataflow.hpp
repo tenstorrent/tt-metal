@@ -286,6 +286,68 @@ private:
     volatile PACKET_HEADER_TYPE* hdr_;
 };
 
+/**
+ * @brief Armed FUSED unicast-write + atomic-inc channel — the reduction collectives' workhorse.
+ *
+ * One packet carries the payload AND bumps a semaphore on the receiving chip, so a reduction worker
+ * never needs a second inc packet to announce "your input slice has landed". The armed invariants
+ * are the inc value, the flush flag and the payload size; each issue varies the payload destination
+ * and the semaphore address.
+ *
+ * @note The receiver-side wait stays op-owned (a local @c noc_semaphore_wait_min), exactly as for
+ *   the non-fused AtomicIncChannel — the split documented in the banner is unchanged.
+ */
+template <typename ConnT>
+class FusedWriteIncChannel {
+public:
+    /// Issue one armed fused write+inc: land the armed payload size at @c dst_noc_addr and atomically
+    /// bump @c remote_sem_noc_addr by the armed value (with_state — varies dst + semaphore address).
+    FORCE_INLINE void write_fused(uint64_t dst_noc_addr, uint32_t src_l1_addr, uint64_t remote_sem_noc_addr);
+
+private:
+    friend class FabricStream<ConnT>;
+    FORCE_INLINE FusedWriteIncChannel(ConnT* conn, volatile PACKET_HEADER_TYPE* hdr) : conn_(conn), hdr_(hdr) {}
+    ConnT* conn_;
+    volatile PACKET_HEADER_TYPE* hdr_;
+};
+
+/**
+ * @brief Armed chip-MULTICAST payload-write channel: one payload write delivered to every chip on
+ *        the armed multicast route (as opposed to MulticastIncChannel, which multicasts an
+ *        atomic-inc). The NOC send type is still a unicast write — it is the CHIP-level routing
+ *        that is multicast, which is why this takes its own multicast route rather than the
+ *        stream's unicast one (same rule as arm_multicast_inc).
+ */
+template <typename ConnT>
+class MulticastWriteChannel {
+public:
+    /// Issue one armed multicast payload write of the armed size to @c dst_noc_addr on every chip
+    /// along the armed route (with_state — varies only the destination address).
+    FORCE_INLINE void write(uint64_t dst_noc_addr, uint32_t src_l1_addr);
+
+private:
+    friend class FabricStream<ConnT>;
+    FORCE_INLINE MulticastWriteChannel(ConnT* conn, volatile PACKET_HEADER_TYPE* hdr) : conn_(conn), hdr_(hdr) {}
+    ConnT* conn_;
+    volatile PACKET_HEADER_TYPE* hdr_;
+};
+
+/// Armed chip-MULTICAST fused write + atomic-inc channel: the MulticastWriteChannel payload fan-out
+/// with the receiver's semaphore bump folded into the same packet (see FusedWriteIncChannel).
+template <typename ConnT>
+class MulticastFusedWriteIncChannel {
+public:
+    /// Issue one armed multicast fused write+inc to every chip on the armed route.
+    FORCE_INLINE void write_fused(uint64_t dst_noc_addr, uint32_t src_l1_addr, uint64_t remote_sem_noc_addr);
+
+private:
+    friend class FabricStream<ConnT>;
+    FORCE_INLINE MulticastFusedWriteIncChannel(ConnT* conn, volatile PACKET_HEADER_TYPE* hdr) :
+        conn_(conn), hdr_(hdr) {}
+    ConnT* conn_;
+    volatile PACKET_HEADER_TYPE* hdr_;
+};
+
 // ============================================================================================
 // FabricStream — the OPENED egress. Holds the alignment + the bound route and hands out armed
 // channels; each arm_* draws a fresh pooled header that the returned channel owns. Borrows the
@@ -328,6 +390,32 @@ public:
     FORCE_INLINE MulticastIncChannel<ConnT> arm_multicast_inc(
         const ccl_routing_utils::line_multicast_route_info_t& route, uint32_t val = 1);
 
+    // --- Armed fused write + atomic-inc channel --------------------------------------
+    /// Arm the fused write+inc channel: program the stream's route + the invariant inc value, flush
+    /// flag and on-wire payload size onto a pooled header once (set_state, Val|Flush|PayloadSize).
+    /// Each issue varies the payload destination and the semaphore address.
+    /// @param page_size_bytes  Payload size per issue (aligned up using the stream's alignment).
+    /// @param val              Semaphore increment carried by every packet.
+    /// @param flush            Whether the receiving fabric endpoint flushes the write before the inc.
+    FORCE_INLINE FusedWriteIncChannel<ConnT> arm_fused_write_inc(
+        uint32_t page_size_bytes, uint32_t val = 1, bool flush = false);
+
+    // --- Armed multicast payload-write channel ---------------------------------------
+    /// Arm a chip-MULTICAST payload write: program a MULTICAST route (its own, like
+    /// arm_multicast_inc) + the invariant on-wire payload size onto a dedicated pooled header once
+    /// (set_state, PayloadSize). Each issue varies only the destination address.
+    FORCE_INLINE MulticastWriteChannel<ConnT> arm_multicast_write(
+        const ccl_routing_utils::line_multicast_route_info_t& route, uint32_t page_size_bytes);
+
+    // --- Armed multicast fused write + atomic-inc channel ----------------------------
+    /// Arm a chip-MULTICAST fused write+inc: arm_multicast_write plus the receiver semaphore bump
+    /// folded into the same packet (set_state, Val|Flush|PayloadSize).
+    FORCE_INLINE MulticastFusedWriteIncChannel<ConnT> arm_multicast_fused_write_inc(
+        const ccl_routing_utils::line_multicast_route_info_t& route,
+        uint32_t page_size_bytes,
+        uint32_t val = 1,
+        bool flush = false);
+
     // --- Lifecycle -------------------------------------------------------------------
     /// Drain outstanding local NoC writes + fabric atomic-incs (noc_async_write_barrier +
     /// noc_async_atomic_barrier). Optional — close() drains automatically; call this only for an
@@ -343,9 +431,12 @@ private:
         ConnT* conn, uint32_t alignment, const ccl_routing_utils::line_unicast_route_info_t& route) :
         conn_(conn), alignment_(alignment), route_(route) {}
 
-    ConnT* conn_;                                         // borrowed from the FabricStreamSender
-    uint32_t alignment_;                                  // L1 alignment for on-wire payload sizing
-    ccl_routing_utils::line_unicast_route_info_t route_;  // bound at open(); reused by every unicast arm_*
+    ConnT* conn_;                                            // borrowed from the FabricStreamSender
+    uint32_t alignment_;                                     // L1 alignment for on-wire payload sizing
+    ccl_routing_utils::line_unicast_route_info_t route_;     // bound at open(); reused by every unicast arm_*
+    volatile PACKET_HEADER_TYPE* fused_hdr_ = nullptr;       // lazily allocated by arm_fused_write_inc
+    volatile PACKET_HEADER_TYPE* mcast_write_hdr_ = nullptr; // lazily allocated by arm_multicast_write
+    volatile PACKET_HEADER_TYPE* mcast_fused_hdr_ = nullptr; // lazily allocated by arm_multicast_fused_write_inc
     bool closed_ = false;
 };
 
@@ -407,6 +498,288 @@ public:
         uint64_t remote_sem_noc_addr,
         uint32_t val = 1) {
         signal_once(conn_arg_idx, is_forward, alignment, unicast_route(num_hops), remote_sem_noc_addr, val);
+    }
+
+private:
+    ConnT conn_;
+    uint32_t alignment_;
+};
+
+// ============================================================================================
+// THE DUPLEX TIER — what the reduction / fused collectives need.
+//
+// point_to_point and all_gather bind ONE direction per worker: a worker is either a
+// forward-sender or a backward-sender, and FabricStream models exactly that. The reduction
+// collectives instead have a single worker drive BOTH directions of one FabricConnectionManager,
+// sending the same payload each way along a different route. Before this tier that meant the op
+// carried two raw header pointers and re-derived `has_forward_connection()` /
+// `has_backward_connection()` at every send site (see the free functions in
+// minimal_ccl_common.hpp). Here the direction set is resolved ONCE at open() and each issue fans
+// out to the connected directions automatically, so a forgotten direction check cannot happen.
+//
+// The type progression is unchanged: FabricDuplexSender -> open() -> FabricDuplexStream ->
+// arm_*() -> armed channel -> issue. The CHIP-LEVEL cast is a compile-time property (Cast),
+// fixed by which open() overload the op calls, so per-issue dispatch stays branch-free.
+// ============================================================================================
+
+/// Chip-level cast mode of a duplex stream's payload route. Chosen by the open() overload: a
+/// unicast route pair yields Cast::Unicast, a multicast route pair Cast::Multicast. The NOC send
+/// type is a unicast write either way — this selects only how the FABRIC routes the packet between
+/// chips (one destination chip vs every chip in a hop range).
+enum class Cast : uint8_t { Unicast, Multicast };
+
+// Forward declarations: FabricDuplexStream constructs the duplex channel handles (their ctors are
+// private and it is their friend); FabricDuplexSender constructs FabricDuplexStream.
+template <Cast C, typename ConnT>
+class FabricDuplexStream;
+template <typename ConnT>
+class FabricDuplexSender;
+
+/**
+ * @brief Duplex fabric-connection policy: one FabricConnectionManager, BOTH directions exposed.
+ *
+ * The counterpart to DirectConn, which pre-binds a single direction. Instead of a bare @c sender(),
+ * this exposes @c has(dir) / @c sender(dir) so a duplex channel can fan an issue out over every
+ * connected direction. A worker at the end of a line has only one of the two connected; the
+ * has(dir) gate is what makes that case correct without any op-side conditional.
+ *
+ * @note @c open_finish() and @c close() on FabricConnectionManager already gate per-direction
+ *   internally, so both are called unconditionally here. @c get_*_connection() does NOT — it
+ *   ASSERTs — so @c sender(dir) must only be reached through a @c has(dir) check, which is exactly
+ *   what the channels do.
+ */
+class DuplexConn {
+public:
+    using SenderT = tt::tt_fabric::WorkerToFabricEdmSender;
+    static constexpr uint32_t kForward = 0;
+    static constexpr uint32_t kBackward = 1;
+    static constexpr uint32_t kNumDirections = 2;
+
+    /// Build the connection (deferred open) from the fabric runtime-arg block; advances conn_arg_idx.
+    /// Unlike DirectConn there is no is_forward argument — a duplex sender uses whichever directions
+    /// the host actually wired up.
+    FORCE_INLINE explicit DuplexConn(size_t& conn_arg_idx) :
+        conn_(FabricConnectionManager::build_from_args<
+              FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(conn_arg_idx)) {}
+
+    FORCE_INLINE void open() { conn_.open_finish(); }
+    FORCE_INLINE void close() { conn_.close(); }
+    FORCE_INLINE bool has(uint32_t dir) const {
+        return dir == kForward ? conn_.has_forward_connection() : conn_.has_backward_connection();
+    }
+    /// Valid ONLY when has(dir) — get_*_connection() asserts otherwise.
+    FORCE_INLINE SenderT* sender(uint32_t dir) {
+        return dir == kForward ? &conn_.get_forward_connection() : &conn_.get_backward_connection();
+    }
+
+private:
+    FabricConnectionManager conn_;
+};
+
+/**
+ * @brief Armed duplex payload-write channel: one call, one packet per connected direction.
+ *
+ * Replaces @c write_and_advance_local_read_address_for_fabric_write. The armed invariant is the
+ * on-wire payload size; each issue varies the destination address.
+ *
+ * @note VARIABLE payload size. Unlike the unidirectional UnicastWriteChannel, whose size is a pure
+ *   arm-time invariant, the reduction collectives size each packet by how many tiles the current
+ *   shard/core contributes, so every issue re-programs PayloadSize (the same reason
+ *   ScatterWriteChannel re-programs ChunkSizes per issue). The no-size overloads use the armed size
+ *   for the common fixed-size case; the explicit-size overloads carry a per-packet size.
+ */
+template <Cast C, typename ConnT>
+class DuplexWriteChannel {
+public:
+    /// Issue one payload write of the ARMED size to @c dst_noc_addr on EVERY connected direction.
+    FORCE_INLINE void write(uint64_t dst_noc_addr, uint32_t src_l1_addr);
+    /// Issue one payload write of @c payload_size_bytes (this packet only) on every connected direction.
+    FORCE_INLINE void write(uint64_t dst_noc_addr, uint32_t src_l1_addr, uint32_t payload_size_bytes);
+    /// write(), plus a LOCAL NoC copy of the same payload to the same logical destination on this
+    /// chip — the "mirror the slice locally as well as forwarding it" step every reduction worker
+    /// performs. Issues the local write first (so it overlaps the fabric sends) and flushes local
+    /// writes before returning, matching the semantics of the free function it replaces.
+    /// @note The op still advances its own L1 read cursor; see the banner's ownership split.
+    FORCE_INLINE void write_with_local_copy(uint64_t dst_noc_addr, uint32_t src_l1_addr);
+    FORCE_INLINE void write_with_local_copy(uint64_t dst_noc_addr, uint32_t src_l1_addr, uint32_t payload_size_bytes);
+    /// Convenience over write(): resolve page @c page_idx of a consumed TensorAccessor/ShardedAddrGen.
+    template <class AddrGen>
+    FORCE_INLINE void write_page(uint32_t src_l1_addr, uint32_t page_idx, const AddrGen& dst);
+
+private:
+    friend class FabricDuplexStream<C, ConnT>;
+    FORCE_INLINE DuplexWriteChannel(
+        ConnT* conn,
+        volatile PACKET_HEADER_TYPE* fwd_hdr,
+        volatile PACKET_HEADER_TYPE* bwd_hdr,
+        uint32_t payload_size) :
+        conn_(conn), hdr_{fwd_hdr, bwd_hdr}, payload_size_(payload_size) {}
+    ConnT* conn_;
+    volatile PACKET_HEADER_TYPE* hdr_[DuplexConn::kNumDirections];
+    uint32_t payload_size_;  // armed on-wire size; the default for the no-size overloads
+};
+
+/**
+ * @brief Armed duplex FUSED write + atomic-inc channel — the all_reduce / reduce_scatter workhorse.
+ *
+ * Replaces @c fused_write_atomic_and_advance_local_read_address_for_fabric_write: payload plus the
+ * receiver's semaphore bump in one packet, fanned out over every connected direction.
+ */
+template <Cast C, typename ConnT>
+class DuplexFusedWriteIncChannel {
+public:
+    /// Issue one fused write+inc of the ARMED payload size on every connected direction.
+    FORCE_INLINE void write_fused(uint64_t dst_noc_addr, uint32_t src_l1_addr, uint64_t remote_sem_noc_addr);
+    /// Issue one fused write+inc of @c payload_size_bytes (this packet only) on every connected direction.
+    FORCE_INLINE void write_fused(
+        uint64_t dst_noc_addr, uint32_t src_l1_addr, uint64_t remote_sem_noc_addr, uint32_t payload_size_bytes);
+    /// write_fused(), plus the local NoC copy (see DuplexWriteChannel::write_with_local_copy).
+    /// @note Unlike the write-only mirror this does NOT flush local writes — the fused free function
+    ///   it replaces deliberately leaves flushing to the caller, which pairs the flush with its own
+    ///   semaphore protocol. Keep the op's existing flush/barrier placement when migrating.
+    FORCE_INLINE void write_fused_with_local_copy(
+        uint64_t dst_noc_addr, uint32_t src_l1_addr, uint64_t remote_sem_noc_addr);
+    FORCE_INLINE void write_fused_with_local_copy(
+        uint64_t dst_noc_addr, uint32_t src_l1_addr, uint64_t remote_sem_noc_addr, uint32_t payload_size_bytes);
+
+private:
+    friend class FabricDuplexStream<C, ConnT>;
+    FORCE_INLINE DuplexFusedWriteIncChannel(
+        ConnT* conn,
+        volatile PACKET_HEADER_TYPE* fwd_hdr,
+        volatile PACKET_HEADER_TYPE* bwd_hdr,
+        uint32_t payload_size) :
+        conn_(conn), hdr_{fwd_hdr, bwd_hdr}, payload_size_(payload_size) {}
+    ConnT* conn_;
+    volatile PACKET_HEADER_TYPE* hdr_[DuplexConn::kNumDirections];
+    uint32_t payload_size_;
+};
+
+/// Armed duplex scatter-write channel (<=4 destinations per packet), fanned out over every connected
+/// direction. Replaces @c scatter_write_and_advance_local_read_address_for_fabric_write.
+template <Cast C, typename ConnT>
+class DuplexScatterWriteChannel {
+public:
+    /// Issue one armed scatter write on every connected direction. @c num_chunks must be <= the arm.
+    FORCE_INLINE void write_scatter(const uint64_t* dst_noc_addrs, uint32_t num_chunks, uint32_t src_l1_addr);
+
+private:
+    friend class FabricDuplexStream<C, ConnT>;
+    FORCE_INLINE DuplexScatterWriteChannel(
+        ConnT* conn,
+        volatile PACKET_HEADER_TYPE* fwd_hdr,
+        volatile PACKET_HEADER_TYPE* bwd_hdr,
+        uint32_t chunk_size_bytes) :
+        conn_(conn), hdr_{fwd_hdr, bwd_hdr}, chunk_size_bytes_(chunk_size_bytes) {}
+    ConnT* conn_;
+    volatile PACKET_HEADER_TYPE* hdr_[DuplexConn::kNumDirections];
+    uint32_t chunk_size_bytes_;
+};
+
+/**
+ * @brief FabricDuplexStream — the OPENED duplex egress. Owns the per-direction lazily-pooled
+ *        headers and the per-direction routes; hands out armed duplex channels. Borrows the
+ *        connection from the FabricDuplexSender that produced it, so the sender must outlive it
+ *        (declare the sender first). RAII-closes on destruction.
+ * @tparam C      Chip-level cast mode of the payload route (set by the open() overload used).
+ * @tparam ConnT  Connection policy (DuplexConn).
+ */
+template <Cast C, typename ConnT = DuplexConn>
+class FabricDuplexStream {
+public:
+    FabricDuplexStream(const FabricDuplexStream&) = delete;
+    FabricDuplexStream& operator=(const FabricDuplexStream&) = delete;
+    /// Move ctor (open() returns by value); transfers `closed_` so the moved-from stream never
+    /// double-closes the transferred connection.
+    FORCE_INLINE FabricDuplexStream(FabricDuplexStream&& o) :
+        conn_(o.conn_), alignment_(o.alignment_), closed_(o.closed_) {
+        for (uint32_t d = 0; d < DuplexConn::kNumDirections; ++d) {
+            uni_route_[d] = o.uni_route_[d];
+            mcast_route_[d] = o.mcast_route_[d];
+            write_hdr_[d] = o.write_hdr_[d];
+            fused_hdr_[d] = o.fused_hdr_[d];
+            scatter_hdr_[d] = o.scatter_hdr_[d];
+        }
+        o.closed_ = true;
+    }
+    FabricDuplexStream& operator=(FabricDuplexStream&&) = delete;
+    FORCE_INLINE ~FabricDuplexStream() { close(); }  // RAII backstop; idempotent with close()
+
+    /// Arm the duplex payload-write channel: program each connected direction's route + the
+    /// invariant on-wire payload size onto that direction's own pooled header (set_state).
+    FORCE_INLINE DuplexWriteChannel<C, ConnT> arm_write(uint32_t page_size_bytes);
+    /// Arm the duplex fused write+inc channel (set_state, Val|Flush|PayloadSize per direction).
+    FORCE_INLINE DuplexFusedWriteIncChannel<C, ConnT> arm_fused_write_inc(
+        uint32_t page_size_bytes, uint32_t val = 1, bool flush = false);
+    /// Arm the duplex scatter-write channel (2..4 chunks per packet, per direction).
+    FORCE_INLINE DuplexScatterWriteChannel<C, ConnT> arm_scatter_write(uint32_t chunk_size_bytes, uint32_t num_chunks);
+
+    /// Drain outstanding local NoC writes + fabric atomic-incs. Optional — close() drains.
+    FORCE_INLINE void drain();
+    /// Drain, then close both directions. Idempotent.
+    FORCE_INLINE void close();
+
+private:
+    friend class FabricDuplexSender<ConnT>;
+    FORCE_INLINE FabricDuplexStream(ConnT* conn, uint32_t alignment) : conn_(conn), alignment_(alignment) {}
+
+    ConnT* conn_;         // borrowed from the FabricDuplexSender
+    uint32_t alignment_;  // L1 alignment for on-wire payload sizing
+    // Per-direction routes. Only the member matching C is populated; the other stays default. Both
+    // are held (rather than a union) so the arm_* bodies can `if constexpr` on C without casting.
+    ccl_routing_utils::line_unicast_route_info_t uni_route_[DuplexConn::kNumDirections] = {};
+    ccl_routing_utils::line_multicast_route_info_t mcast_route_[DuplexConn::kNumDirections] = {};
+    // Per-direction, per-channel pooled headers; allocated lazily and ONLY for connected directions.
+    volatile PACKET_HEADER_TYPE* write_hdr_[DuplexConn::kNumDirections] = {nullptr, nullptr};
+    volatile PACKET_HEADER_TYPE* fused_hdr_[DuplexConn::kNumDirections] = {nullptr, nullptr};
+    volatile PACKET_HEADER_TYPE* scatter_hdr_[DuplexConn::kNumDirections] = {nullptr, nullptr};
+    bool closed_ = false;
+};
+
+/**
+ * @brief FabricDuplexSender — the UNOPENED duplex egress. Owns the connection policy; open()
+ *        finishes the connection, binds BOTH directions' routes, and yields the stream.
+ *
+ * The route-pair type picks the stream's cast mode, so an op cannot accidentally mix a unicast
+ * route on one direction with a multicast route on the other.
+ */
+template <typename ConnT = DuplexConn>
+class FabricDuplexSender {
+public:
+    /**
+     * @brief Convenience ctor for the default DuplexConn policy: build the connection (deferred
+     *        open) from runtime args. Advances conn_arg_idx past the fabric block.
+     * @param conn_arg_idx  Index of the fabric arg block; ADVANCED past the block.
+     * @param alignment     L1 alignment used to size the on-wire payload (bytes).
+     */
+    FORCE_INLINE FabricDuplexSender(size_t& conn_arg_idx, uint32_t alignment) :
+        conn_(conn_arg_idx), alignment_(alignment) {}
+    /// Construct from a pre-built connection policy.
+    FORCE_INLINE FabricDuplexSender(ConnT conn, uint32_t alignment) : conn_(conn), alignment_(alignment) {}
+
+    FabricDuplexSender(const FabricDuplexSender&) = delete;
+    FabricDuplexSender& operator=(const FabricDuplexSender&) = delete;
+
+    /// Open with a UNICAST route per direction -> Cast::Unicast stream.
+    FORCE_INLINE FabricDuplexStream<Cast::Unicast, ConnT> open(
+        const ccl_routing_utils::line_unicast_route_info_t& forward_route,
+        const ccl_routing_utils::line_unicast_route_info_t& backward_route) {
+        conn_.open();
+        FabricDuplexStream<Cast::Unicast, ConnT> s(&conn_, alignment_);
+        s.uni_route_[DuplexConn::kForward] = forward_route;
+        s.uni_route_[DuplexConn::kBackward] = backward_route;
+        return s;
+    }
+
+    /// Open with a MULTICAST route per direction -> Cast::Multicast stream (all_reduce's shape).
+    FORCE_INLINE FabricDuplexStream<Cast::Multicast, ConnT> open(
+        const ccl_routing_utils::line_multicast_route_info_t& forward_route,
+        const ccl_routing_utils::line_multicast_route_info_t& backward_route) {
+        conn_.open();
+        FabricDuplexStream<Cast::Multicast, ConnT> s(&conn_, alignment_);
+        s.mcast_route_[DuplexConn::kForward] = forward_route;
+        s.mcast_route_[DuplexConn::kBackward] = backward_route;
+        return s;
     }
 
 private:
