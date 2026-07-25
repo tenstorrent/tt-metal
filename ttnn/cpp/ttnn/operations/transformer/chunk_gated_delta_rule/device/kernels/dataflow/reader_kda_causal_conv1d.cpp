@@ -7,10 +7,11 @@
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr uint32_t Ct = get_compile_time_arg_val(0);
+    constexpr uint32_t worker_Ct = get_compile_time_arg_val(0);
     constexpr uint32_t channels = get_compile_time_arg_val(1);
     constexpr uint32_t row_bytes = get_compile_time_arg_val(2);
-    constexpr auto input_a = TensorAccessorArgs<3>();
+    constexpr uint32_t Mt = get_compile_time_arg_val(3);
+    constexpr auto input_a = TensorAccessorArgs<4>();
     constexpr auto state_a = TensorAccessorArgs<input_a.next_compile_time_args_offset()>();
     constexpr auto tap0_a = TensorAccessorArgs<state_a.next_compile_time_args_offset()>();
     constexpr auto tap1_a = TensorAccessorArgs<tap0_a.next_compile_time_args_offset()>();
@@ -28,6 +29,8 @@ void kernel_main() {
     const uint32_t tap3_addr = get_arg_val<uint32_t>(7);
 
     constexpr uint32_t tile_bytes = 2048;
+    constexpr uint32_t tile_row_bytes = 32 * sizeof(uint16_t);
+    constexpr uint32_t worker_row_bytes = worker_Ct * tile_row_bytes;
     const auto input = TensorAccessor(input_a, input_addr, row_bytes);
     const auto state = TensorAccessor(state_a, state_addr, row_bytes);
     const auto tap0 = TensorAccessor(tap0_a, tap0_addr, tile_bytes);
@@ -37,22 +40,40 @@ void kernel_main() {
     Noc noc;
 
     CircularBuffer weights(2);
-    weights.reserve_back(4 * Ct);
+    const uint32_t channel_tile_offset = (mt_start / Mt) * worker_Ct;
+    weights.reserve_back(4 * worker_Ct);
     auto weight_dst = use<CircularBuffer::AddrSelector::WRITE_PTR>(weights);
-    for (uint32_t ct = 0; ct < Ct; ++ct) {
-        noc.async_read(tap0, weight_dst, tile_bytes, {.page_id = ct}, {.offset_bytes = ct * tile_bytes});
-        noc.async_read(tap1, weight_dst, tile_bytes, {.page_id = ct}, {.offset_bytes = (Ct + ct) * tile_bytes});
-        noc.async_read(tap2, weight_dst, tile_bytes, {.page_id = ct}, {.offset_bytes = (2 * Ct + ct) * tile_bytes});
-        noc.async_read(tap3, weight_dst, tile_bytes, {.page_id = ct}, {.offset_bytes = (3 * Ct + ct) * tile_bytes});
+    for (uint32_t ct = 0; ct < worker_Ct; ++ct) {
+        noc.async_read(
+            tap0, weight_dst, tile_bytes, {.page_id = channel_tile_offset + ct}, {.offset_bytes = ct * tile_bytes});
+        noc.async_read(
+            tap1,
+            weight_dst,
+            tile_bytes,
+            {.page_id = channel_tile_offset + ct},
+            {.offset_bytes = (worker_Ct + ct) * tile_bytes});
+        noc.async_read(
+            tap2,
+            weight_dst,
+            tile_bytes,
+            {.page_id = channel_tile_offset + ct},
+            {.offset_bytes = (2 * worker_Ct + ct) * tile_bytes});
+        noc.async_read(
+            tap3,
+            weight_dst,
+            tile_bytes,
+            {.page_id = channel_tile_offset + ct},
+            {.offset_bytes = (3 * worker_Ct + ct) * tile_bytes});
     }
     noc.async_read_barrier();
-    weights.push_back(4 * Ct);
+    weights.push_back(4 * worker_Ct);
 
     CircularBuffer activation(0);
     for (uint32_t item = 0; item < mt_count; ++item) {
-        const uint32_t mt = mt_start + item;
+        const uint32_t work_item = mt_start + item;
+        const uint32_t mt = work_item % Mt;
         for (uint32_t tap = 0; tap < 4; ++tap) {
-            activation.reserve_back(Ct);
+            activation.reserve_back(worker_Ct);
             auto activation_dst = use<CircularBuffer::AddrSelector::WRITE_PTR>(activation);
             for (uint32_t row = 0; row < 32; ++row) {
                 const int32_t source_row = static_cast<int32_t>(mt * 32 + row + tap) - 3;
@@ -60,20 +81,22 @@ void kernel_main() {
                     noc.async_read(
                         state,
                         activation_dst,
-                        row_bytes,
-                        {.page_id = static_cast<uint32_t>(source_row + 3)},
-                        {.offset_bytes = row * row_bytes});
+                        worker_row_bytes,
+                        {.page_id = static_cast<uint32_t>(source_row + 3),
+                         .offset_bytes = channel_tile_offset * tile_row_bytes},
+                        {.offset_bytes = row * worker_row_bytes});
                 } else {
                     noc.async_read(
                         input,
                         activation_dst,
-                        row_bytes,
-                        {.page_id = static_cast<uint32_t>(source_row)},
-                        {.offset_bytes = row * row_bytes});
+                        worker_row_bytes,
+                        {.page_id = static_cast<uint32_t>(source_row),
+                         .offset_bytes = channel_tile_offset * tile_row_bytes},
+                        {.offset_bytes = row * worker_row_bytes});
                 }
             }
             noc.async_read_barrier();
-            activation.push_back(Ct);
+            activation.push_back(worker_Ct);
         }
     }
 }

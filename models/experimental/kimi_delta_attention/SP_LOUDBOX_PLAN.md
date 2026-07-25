@@ -24,6 +24,30 @@ state-transfer protocol and measure its components.
   matmul/reduce-scatter is about 1.04 ms, so its CCL is a primary reason that
   merely tuning local KDA will not meet the next goal.
 
+## Current implementation and measurements (2026-07-25)
+
+* SP=2/TP=4 is functional at the production-rank-equivalent shape: global
+  T=5120, H=2304, 32 heads, 8 heads/rank.  Output, recurrent cache, short-conv
+  cache, and the first post-boundary token pass PCC >= 0.98.
+* TP=4 needs a 96-tile causal-convolution input while the original direct
+  kernel holds all channel tiles in each worker's L1.  The kernel now splits
+  that into two 48-tile channel blocks; the target PCC test validates the
+  split convolution through the full layer.
+* The TP=4 long path uses explicit post-scan KDA RMS normalization.  The
+  TP=8-only fused scan/RMS variant produced incorrect TP=4 long outputs even
+  though the recurrent cache was correct.
+* The warmed three-replay trace at global T=5120 is **5.707 ms/forward**
+  (report `2026_07_25_18_16_20`), versus the <= **2.958 ms** primary gate.
+  This prototype therefore misses the gate by 2.749 ms (93%).  The comparable
+  eager signpost is 5.961 ms/forward.  The experimental local
+  `QWEN_KDA_GROUP_PREFIX=1` route is correct but slower, 13.197 ms/forward;
+  it is not an optimisation to enable.
+* The remaining critical-path cause is architectural: first-span recurrence,
+  cache transfer, and second-span recurrence are ordered.  Transport tuning
+  cannot recover the 2.749 ms deficit.  The next implementation target is
+  Milestone 4's inter-span affine scan, which makes the large span scans
+  concurrent after a small log-depth prefix over `(A, B)` summaries.
+
 ## Milestones
 
 1. **Protocol reference and tests.** Add a partitioned PyTorch reference that
@@ -96,16 +120,16 @@ read from the resulting report.
 ```bash
 # Functional target gate: output, recurrent carry, short-conv carry, and the
 # first output token after the SP boundary must all reach PCC >= 0.98.
-KDA_SP_TARGET_SHAPE=1 pytest -svv models/experimental/kimi_delta_attention/tests/test_sp2_tp4.py
+KDA_SP_TARGET_SHAPE=1 scripts/run_safe_pytest.sh -svv models/experimental/kimi_delta_attention/tests/test_sp2_tp4.py
 
 # Local TP=4 controls: run both lengths with the same warmed trace procedure.
-PERF_SEQ=640  PERF_TRACE=1 pytest -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_tp4_layer_perf.py
-PERF_SEQ=1280 PERF_TRACE=1 pytest -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_tp4_layer_perf.py
+PERF_SEQ=640  PERF_TRACE=1 scripts/run_safe_pytest.sh --profile -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_tp4_layer_perf.py
+PERF_SEQ=1280 PERF_TRACE=1 scripts/run_safe_pytest.sh --profile -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_tp4_layer_perf.py
 
 # Primary SP experiment and the direct TP=8 topology comparison at global T=5120.
-PERF_SEQ=1280 PERF_TRACE=1 pytest -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_sp2_tp4_layer_perf.py
-PERF_SEQ=5120 PERF_TRACE=1 pytest -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_sp2_tp4_layer_perf.py
-PERF_SEQ=5120 PERF_TRACE=1 pytest -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py
+PERF_SEQ=1280 PERF_TRACE=1 scripts/run_safe_pytest.sh --profile -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_sp2_tp4_layer_perf.py
+PERF_SEQ=5120 PERF_TRACE=1 scripts/run_safe_pytest.sh --profile -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_sp2_tp4_layer_perf.py
+PERF_SEQ=5120 PERF_TRACE=1 scripts/run_safe_pytest.sh --profile -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py
 ```
 
 The final two reports are the head-to-head decision: SP=2/TP=4 must be no

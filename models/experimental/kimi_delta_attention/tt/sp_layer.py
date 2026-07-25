@@ -82,10 +82,10 @@ class SP2TP4KimiDeltaAttention:
             for span_device in self.span_devices
         )
         socket_config = _socket_config(self.span_devices[0].shape)
-        self._recurrent_send_socket, self._recurrent_recv_socket = ttnn.create_socket_pair(
-            self.span_devices[0], self.span_devices[1], socket_config
-        )
-        self._convolution_send_socket, self._convolution_recv_socket = ttnn.create_socket_pair(
+        # A socket endpoint is a single ordered fabric stream.  Reuse it for
+        # the recurrent cache and then the convolution history rather than
+        # allocating competing socket pairs on the same worker core.
+        self._send_socket, self._recv_socket = ttnn.create_socket_pair(
             self.span_devices[0], self.span_devices[1], socket_config
         )
 
@@ -120,10 +120,10 @@ class SP2TP4KimiDeltaAttention:
         assert source.convolution_state is not None
         assert destination.recurrent_state is not None
         assert destination.convolution_state is not None
-        ttnn.experimental.send_async(source.recurrent_state, self._recurrent_send_socket)
-        ttnn.experimental.recv_async(destination.recurrent_state, self._recurrent_recv_socket)
-        ttnn.experimental.send_async(source.convolution_state, self._convolution_send_socket)
-        ttnn.experimental.recv_async(destination.convolution_state, self._convolution_recv_socket)
+        ttnn.experimental.send_async(source.recurrent_state, self._send_socket)
+        ttnn.experimental.recv_async(destination.recurrent_state, self._recv_socket)
+        ttnn.experimental.send_async(source.convolution_state, self._send_socket)
+        ttnn.experimental.recv_async(destination.convolution_state, self._recv_socket)
 
     def forward(
         self,

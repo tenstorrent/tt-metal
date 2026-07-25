@@ -383,6 +383,11 @@ class KimiDeltaAttention:
             head_major
             and mode != "recurrent"
             and sequence > 640
+            # The fused scan/RMS path is validated on the original TP=8
+            # topology.  TP=4 produces a different head grouping; use the
+            # explicit post-scan KDA RMS norm until that fused variant has
+            # equivalent long-context coverage.
+            and self.tensor_parallel_size == 8
             and os.getenv("QWEN_KDA_GROUP_PREFIX") is None
             and not use_group_prefix
         )
@@ -439,7 +444,13 @@ class KimiDeltaAttention:
             )
         output = ttnn.reshape(output, (batch, sequence, config.v_dim))
         fused_output_collective = (
-            self.tensor_parallel_size > 1 and mode == "chunk" and config.v_dim >= 8 * ttnn.TILE_SIZE
+            # The fused matmul/reduce-scatter kernel is validated for the
+            # existing full TP=8 mesh.  A TP=4 submesh instead takes the
+            # ordinary output matmul plus all-reduce below; that path has
+            # independent CCL coverage and is required for SP=2 x TP=4.
+            self.tensor_parallel_size == 8
+            and mode == "chunk"
+            and config.v_dim >= 8 * ttnn.TILE_SIZE
         )
         if fused_output_collective:
             assert self.tt_ccl is not None

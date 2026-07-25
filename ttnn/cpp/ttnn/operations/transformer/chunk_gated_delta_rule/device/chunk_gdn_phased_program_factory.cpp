@@ -119,6 +119,38 @@ PrepWorkDist distribute_prep(CoreCoord grid, uint32_t total, uint32_t core_cap) 
     return d;
 }
 
+// Keep one contiguous channel block on each worker: the causal-convolution
+// reader caches that block's four taps in L1 and reuses them for its time tiles.
+PrepWorkDist distribute_channel_blocks(CoreCoord grid, uint32_t time_tiles, uint32_t channel_blocks) {
+    const uint32_t max_cores = grid.x * grid.y;
+    TT_FATAL(channel_blocks <= max_cores, "{} channel blocks exceed {} worker cores", channel_blocks, max_cores);
+    const uint32_t workers_per_block = std::min(time_tiles, max_cores / channel_blocks);
+    TT_FATAL(workers_per_block > 0, "causal convolution needs at least one worker per channel block");
+
+    PrepWorkDist d;
+    d.cores.reserve(workers_per_block * channel_blocks);
+    d.wi_start.reserve(workers_per_block * channel_blocks);
+    d.wi_count.reserve(workers_per_block * channel_blocks);
+    std::set<CoreRange> crs;
+    for (uint32_t block = 0; block < channel_blocks; ++block) {
+        const uint32_t base = time_tiles / workers_per_block;
+        const uint32_t rem = time_tiles % workers_per_block;
+        uint32_t offset = block * time_tiles;
+        for (uint32_t worker = 0; worker < workers_per_block; ++worker) {
+            const uint32_t core_index = block * workers_per_block + worker;
+            const CoreCoord core{core_index % grid.x, core_index / grid.x};
+            const uint32_t count = base + (worker < rem ? 1u : 0u);
+            d.cores.push_back(core);
+            d.wi_start.push_back(offset);
+            d.wi_count.push_back(count);
+            crs.insert(CoreRange{core, core});
+            offset += count;
+        }
+    }
+    d.core_set = CoreRangeSet{crs};
+    return d;
+}
+
 // The scan factorizes over V, but splitting V duplicates every V-independent tensor read and matmul setup.
 // For Kimi KDA (Vt=4), one full-V core per head is 36% faster than two V-shards. Keep value
 // splitting only as an explicit A/B knob until a larger-V crossover is measured.
@@ -830,7 +862,18 @@ tt::tt_metal::ProgramDescriptor KdaCausalConvProgramFactory::create_descriptor(
     const uint32_t Ct = Qt + Kt + Vt;
     const uint32_t channels = attrs.q_width + attrs.k_width + attrs.v_width;
     const uint32_t row_bytes = channels * sizeof(uint16_t);
-    auto dist = distribute_prep(in.input.device()->compute_with_storage_grid_size(), Mt, ~0u);
+    // The direct causal-convolution kernel keeps every channel tile live in
+    // each worker's circular buffers.  TP=4 KDA has 96 channel tiles, which
+    // exceeds Blackhole L1.  Split only large, evenly divisible widths so the
+    // existing compact cases retain their one-worker-per-time-tile mapping.
+    constexpr uint32_t max_channel_tiles_per_worker = 48;
+    const uint32_t channel_blocks = Ct > max_channel_tiles_per_worker && Ct % max_channel_tiles_per_worker == 0
+                                        ? Ct / max_channel_tiles_per_worker
+                                        : 1;
+    const uint32_t worker_Ct = Ct / channel_blocks;
+    auto dist = channel_blocks == 1 ? distribute_prep(in.input.device()->compute_with_storage_grid_size(), Mt, ~0u)
+                                    : distribute_channel_blocks(
+                                          in.input.device()->compute_with_storage_grid_size(), Mt, channel_blocks);
     const auto& cores = dist.core_set;
 
     ProgramDescriptor desc;
@@ -844,22 +887,22 @@ tt::tt_metal::ProgramDescriptor KdaCausalConvProgramFactory::create_descriptor(
                 .data_format = tt::DataFormat::Float16_b,
                 .page_size = tile_size}}}});
     };
-    add_tile_cb(act_rm_cb, Ct);
-    add_tile_cb(act_tile_cb, Ct);
-    add_tile_cb(weights_cb, 4 * Ct);
-    add_tile_cb(partial_a_cb, Ct);
-    add_tile_cb(partial_b_cb, Ct);
-    add_tile_cb(output_cb, Ct);
+    add_tile_cb(act_rm_cb, worker_Ct);
+    add_tile_cb(act_tile_cb, worker_Ct);
+    add_tile_cb(weights_cb, 4 * worker_Ct);
+    add_tile_cb(partial_a_cb, worker_Ct);
+    add_tile_cb(partial_b_cb, worker_Ct);
+    add_tile_cb(output_cb, worker_Ct);
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/";
-    std::vector<uint32_t> reader_ct = {Ct, channels, row_bytes};
+    std::vector<uint32_t> reader_ct = {worker_Ct, channels, row_bytes, Mt};
     TensorAccessorArgs(*in.input.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.state.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.tap0.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.tap1.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.tap2.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.tap3.buffer()).append_to(reader_ct);
-    std::vector<uint32_t> writer_ct = {Qt, Kt, Vt};
+    std::vector<uint32_t> writer_ct = {Qt, Kt, Vt, worker_Ct, Mt};
     TensorAccessorArgs(*outputs[0].buffer()).append_to(writer_ct);
     TensorAccessorArgs(*outputs[1].buffer()).append_to(writer_ct);
     TensorAccessorArgs(*outputs[2].buffer()).append_to(writer_ct);
@@ -880,7 +923,7 @@ tt::tt_metal::ProgramDescriptor KdaCausalConvProgramFactory::create_descriptor(
     compute.kernel_source = kdir + "compute/kda_causal_conv1d.cpp";
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = cores;
-    compute.compile_time_args = {Ct};
+    compute.compile_time_args = {worker_Ct};
     compute.config = compute_cfg(in.input.device()->arch(), attrs.compute_kernel_config);
 
     for (uint32_t i = 0; i < dist.cores.size(); ++i) {

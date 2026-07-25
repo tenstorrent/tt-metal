@@ -40,8 +40,18 @@ pytestmark = [
 ]
 
 
+def _synchronize_spans(layer: SP2TP4KimiDeltaAttention) -> None:
+    """Wait on the queues that own the SP=2 x TP=4 work.
+
+    The parent 1x8 mesh owns the child submeshes but does not execute their
+    KDA operations. Synchronizing it would retain its command queue while the
+    pytest fixture closes the children.
+    """
+    for span_device in layer.span_devices:
+        ttnn.synchronize_device(span_device)
+
+
 def _profile_eager(
-    mesh_device: ttnn.MeshDevice,
     layer: SP2TP4KimiDeltaAttention,
     first_span: ttnn.Tensor,
     second_span: ttnn.Tensor,
@@ -51,7 +61,7 @@ def _profile_eager(
     signpost(header="sp2_tp4_start")
     for _ in range(repetitions):
         outputs.append(layer.forward(first_span, second_span, mode="chunk"))
-    ttnn.synchronize_device(mesh_device)
+    _synchronize_spans(layer)
     signpost(header="sp2_tp4_stop")
     for first_output, second_output in outputs:
         ttnn.deallocate(first_output)
@@ -121,7 +131,7 @@ def test_kda_sp2_tp4_layer_device_perf(mesh_device: ttnn.MeshDevice) -> None:
     )
 
     warm_first, warm_second = layer.forward(first_span, second_span, mode="chunk")
-    ttnn.synchronize_device(mesh_device)
+    _synchronize_spans(layer)
     ttnn.deallocate(warm_first)
     ttnn.deallocate(warm_second)
 
@@ -129,4 +139,4 @@ def test_kda_sp2_tp4_layer_device_perf(mesh_device: ttnn.MeshDevice) -> None:
     if os.getenv("PERF_TRACE", "0") == "1":
         _profile_trace(mesh_device, layer, first_span, second_span, repetitions)
     else:
-        _profile_eager(mesh_device, layer, first_span, second_span, repetitions)
+        _profile_eager(layer, first_span, second_span, repetitions)
