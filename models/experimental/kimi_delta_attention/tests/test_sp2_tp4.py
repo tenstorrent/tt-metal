@@ -126,6 +126,10 @@ def test_sp2_tp4_layer_pcc(mesh_device: ttnn.MeshDevice) -> None:
     golden_convolution = torch.cat(
         (golden_state.q_convolution, golden_state.k_convolution, golden_state.v_convolution), dim=-1
     )
+    # PCC comparisons can omit NaNs while accumulating their covariance.  An
+    # SP output is not valid if a fused producer leaves even one tile
+    # unwritten, so make finiteness an explicit correctness invariant.
+    assert torch.isfinite(actual_output).all(), "SP=2 TP=4 output contains non-finite values"
     for name, golden, actual in (
         ("output", golden_output, actual_output),
         ("recurrent state", golden_state.recurrent, actual_recurrent),
