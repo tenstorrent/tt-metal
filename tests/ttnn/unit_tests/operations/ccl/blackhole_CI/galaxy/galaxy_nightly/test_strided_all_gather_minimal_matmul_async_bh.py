@@ -91,6 +91,13 @@ def create_fabric_router_config(max_payload_size):
     [None, "addcmul", "gelu_tanh", "chunks2"],
     ids=["plain", "addcmul", "gelu_tanh", "chunks2"],
 )
+# Bias is orthogonal to the variant (LTX uses bias on every AG-matmul call). Note bias disables the
+# two-NoC split write (the !use_bias gate), so bias+chunks2 uses the single-NoC chunk write.
+@pytest.mark.parametrize(
+    "use_bias",
+    [False, True],
+    ids=["no_bias", "bias"],
+)
 @pytest.mark.parametrize(
     "read_local_slice_from_input",
     [
@@ -138,6 +145,7 @@ def test_strided_all_gather_minimal_matmul_async(
     mm_core_grid,
     use_non_fused,
     fused_op_variant,
+    use_bias,
     shard_weights,
     ag_offset,
     read_local_slice_from_input,
@@ -181,7 +189,136 @@ def test_strided_all_gather_minimal_matmul_async(
         use_ternary=use_ternary,
         activation=activation,
         chunks=chunks,
+        use_bias=use_bias,
         shard_weights=shard_weights,
         ag_core_grid_offset=ag_offset,
         read_local_slice_from_input=read_local_slice_from_input,
+    )
+
+
+# The AG-matmul configurations the LTX transformer block actually uses (see models/tt_dit LTXAttention /
+# ParallelFeedForward), for both the video (dim=4096) and audio (dim=2048) blocks. Every call has bias; only
+# K (=dim, gathered across TP=4), the output width N, the chunk count, the fused epilogue, and the N blocking
+# differ. M reuses the wan1 sequence for all (see caveat: the real M is the text sequence for *_kv and the
+# audio sequence for a_*; N=32 gate is a 1-tile edge case needing mm_block_n=32).
+#   *_qkv         : attn1.to_qkv       bias, chunks=3  (Q|K|V,  N = 3*dim)
+#   *_kv          : attn2.to_kv        bias, chunks=2  (K|V,    N = 2*dim, M = context/text seq)
+#   *_q_out       : to_q / to_out      bias, chunks=1, N = dim
+#   *_out_addcmul : attn.to_out fused  bias + addcmul, chunks=1
+#   *_ff1         : ffn.ff1 / audio_ff bias + gelu_tanh, chunks=1, N = ffn_dim
+#   *_gate        : to_gate_logits     bias, chunks=1, N = num_heads = 32
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(1)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "ltx_layer, K, N, chunks, use_bias, activation, use_ternary, mm_block_n, subblock_w",
+    [
+        # Video block (K = video_dim = 4096). q_out folds to_q / to_out(plain) / cross-attn q.
+        ("v_qkv", 4096, 12288, 3, True, None, False, 128, 2),
+        ("v_kv", 4096, 8192, 2, True, None, False, 128, 2),
+        ("v_q_out", 4096, 4096, 1, True, None, False, 128, 2),
+        ("v_out_addcmul", 4096, 4096, 1, True, None, True, 128, 2),
+        ("v_ff1", 4096, 16384, 1, True, "gelu_tanh", False, 128, 2),
+        ("v_gate", 4096, 32, 1, True, None, False, 32, 1),  # to_gate_logits: N = num_heads = 32 (1 tile)
+        # Audio block (K = audio_dim = 2048), same fusion structure with halved dims.
+        ("a_qkv", 2048, 6144, 3, True, None, False, 128, 2),
+        ("a_kv", 2048, 4096, 2, True, None, False, 128, 2),
+        ("a_q_out", 2048, 2048, 1, True, None, False, 128, 2),
+        ("a_out_addcmul", 2048, 2048, 1, True, None, True, 128, 2),
+        ("a_ff1", 2048, 8192, 1, True, "gelu_tanh", False, 128, 2),
+        ("a_gate", 2048, 32, 1, True, None, False, 32, 1),
+    ],
+    ids=[
+        "v_qkv",
+        "v_kv",
+        "v_q_out",
+        "v_out_addcmul",
+        "v_ff1",
+        "v_gate",
+        "a_qkv",
+        "a_kv",
+        "a_q_out",
+        "a_out_addcmul",
+        "a_ff1",
+        "a_gate",
+    ],
+)
+@pytest.mark.parametrize(
+    "enable_trace,num_iters",
+    [
+        (True, 3),
+        (False, 1),
+    ],
+    ids=["perf", "check"],
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(8192),
+                "trace_region_size": 1171456,
+            },
+            ttnn.Topology.Ring,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_ring"],
+)
+def test_strided_all_gather_minimal_matmul_ltx_configs(
+    mesh_device,
+    ltx_layer,
+    K,
+    N,
+    chunks,
+    use_bias,
+    activation,
+    use_ternary,
+    mm_block_n,
+    subblock_w,
+    enable_trace,
+    num_iters,
+    all_gather_topology,
+):
+    mm_core_grid = ttnn.CoreCoord(12, 8)
+    ag_offset = (0, 8)
+    grid = mesh_device.compute_with_storage_grid_size()
+    if grid.x < mm_core_grid.x or grid.y < ag_offset[1] + 1:
+        pytest.skip(f"Requires worker grid >= {mm_core_grid.x}x{ag_offset[1] + 1}, got {grid.x}x{grid.y}")
+
+    dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    run_strided_all_gather_minimal_matmul_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        38912,  # M (sequence, sharded on SP=8) -- reuses the wan1 ragged-M-block shape for all configs
+        K,  # video_dim=4096 or audio_dim=2048, gathered across TP=4
+        N,
+        3,  # dim (AG/K shard axis)
+        2,  # other_dim (M/sequence shard axis)
+        2,  # num_links
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        dram,
+        dram,
+        dram,
+        all_gather_topology=all_gather_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        num_workers_per_link=3,
+        num_buffers_per_channel=8,
+        mm_block_m=512,
+        mm_block_k=256,
+        mm_block_n=mm_block_n,
+        subblock_h=2,
+        subblock_w=subblock_w,
+        mm_core_grid=mm_core_grid,
+        use_non_fused=False,
+        use_ternary=use_ternary,
+        activation=activation,
+        chunks=chunks,
+        use_bias=use_bias,
+        shard_weights=False,
+        ag_core_grid_offset=ag_offset,
+        read_local_slice_from_input=True,
     )
