@@ -99,9 +99,13 @@ model architecture (Llama, Qwen, etc.).
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `generate` | `(prompts: List[List[int]]) -> List[List[int]]` | Generate completions for a batch of tokenised prompts. Returns `N * completions_per_prompt` completions. |
+| `generate` | `(prompts: List[List[int]]) -> List[List[int]]` | Generate completions for a batch of tokenised prompts. |
 | `generate_str` | `(prompt_strs: List[str]) -> List[str]` | Generate completions from string prompts, returning decoded strings. |
-| `compute_nlog_probs` | `(prompts, completions) -> (nlog_probs, mask)` | Compute per-token negative log probabilities for prompt+completion pairs. Returns tensors `[B_local, T_padded]`. |
+| `compute_nlog_probs` | `(prompts, completions) -> (nlog_probs, mask)` | Compute per-token negative log probabilities for prompt+completion pairs. |
+
+The detailed API contract can be found in `tt-train/sources/ttml/ttml/trainers/grpo_trainer.py`.
+
+### Available completer implementations
 
 Three concrete completers ship today:
 
