@@ -12,6 +12,7 @@ set(DISTRIBUTED_UNIT_TEST_SOURCES
     test_mesh_device_view.cpp
     test_mesh_workload.cpp
     test_program_count_enqueue_cost.cpp
+    test_program_footprint_enqueue_cost.cpp
     test_mesh_socket.cpp
     test_hd_sockets.cpp
     test_mesh_sub_device.cpp
