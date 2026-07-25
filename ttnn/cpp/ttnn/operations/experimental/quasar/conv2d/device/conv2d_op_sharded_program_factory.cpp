@@ -953,7 +953,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // coord below is unchanged there.
     const CoreCoord grid_start = input_cores.bounding_box().start_coord;
     const CoreCoord top_left_core = grid_start;
-    const CoreCoord top_left_core_plus_one = {grid_start.x + 1, grid_start.y + 1};
+    // Clamp the +1 per dimension: on a degenerate block-sharded grid (only 1 core in x or y, e.g. a 2x1 or
+    // 1x2 sub-grid on the emulator) the unconditional +{1,1} names a logical core that does not exist (e.g.
+    // (1,1)), and resolving it below throws "No core coordinate found at (1,1)". Only step into a dimension
+    // that actually spans >1 core. Mirrors the matmul 2D-mcast single-row/col grid fix. On a full 2D grid
+    // (num_cores_x>1 && num_cores_y>1) this is unchanged: {grid_start.x+1, grid_start.y+1}.
+    const CoreCoord top_left_core_plus_one = {
+        grid_start.x + (num_cores_x > 1 ? 1u : 0u), grid_start.y + (num_cores_y > 1 ? 1u : 0u)};
     const CoreCoord bottom_right_core = {(std::size_t)in_num_cores_x - 1, (std::size_t)in_num_cores_y - 1};
     const CoreCoord top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
     // top_left_core_plus_one (logical origin + {1,1}) is consumed ONLY by the block-sharded 2D
