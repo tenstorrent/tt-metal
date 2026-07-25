@@ -121,6 +121,39 @@ std::vector<uint32_t> compute_per_neighbor_forwarding_links(
 // cores per sender (num_workers_per_sender, u1..uN) under a baton ring; the sender is fabric-only.
 // Tile-layout untilizes tiled input via a compute kernel; row-major reads input rows straight into
 // the payload CB and skips compute entirely. Selected internally via is_row_major.
+// Mesh-wide fabric data that is identical for every coordinate. create_dispatch_program is called
+// once per coord (32x on an 8x4 galaxy), and it used to rebuild all of this on every one of those
+// calls: the dest_mesh_id / dest_chip_id vectors walk the whole mesh, so building them per coord is
+// O(mesh^2) get_fabric_node_id() lookups (1024 instead of 32 on 8x4), and their stringified forms
+// are byte-identical across coords yet were re-formatted every time. Computed once by
+// make_mesh_fabric_ids() and passed in by const ref.
+struct MeshFabricIds {
+    std::vector<uint32_t> dest_mesh_id;
+    std::vector<uint32_t> dest_chip_id;
+    std::string dest_mesh_id_str;
+    std::string dest_chip_id_str;
+};
+
+MeshFabricIds make_mesh_fabric_ids(
+    const tt::tt_metal::distributed::MeshDevice* mesh_device, const MeshDeviceView& mesh_view) {
+    MeshFabricIds ids;
+    const auto range = ttnn::MeshCoordinateRange(mesh_view.shape());
+    size_t n = 0;
+    for ([[maybe_unused]] const auto& coord : range) {
+        ++n;
+    }
+    ids.dest_mesh_id.reserve(n);
+    ids.dest_chip_id.reserve(n);
+    for (const auto& coord : range) {
+        auto dest_fabric_node_id = mesh_device->get_fabric_node_id(coord);
+        ids.dest_mesh_id.push_back(*dest_fabric_node_id.mesh_id);
+        ids.dest_chip_id.push_back((uint32_t)dest_fabric_node_id.chip_id);
+    }
+    ids.dest_mesh_id_str = ccl::common::stringify(ids.dest_mesh_id);
+    ids.dest_chip_id_str = ccl::common::stringify(ids.dest_chip_id);
+    return ids;
+}
+
 tt::tt_metal::ProgramDescriptor create_dispatch_program(
     const DispatchParams& operation_attributes,
     const MeshCoordinate& mesh_coordinate,
@@ -128,7 +161,8 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     DispatchProgramFactory::tensor_return_value_t& tensor_return_value,
     const GlobalSemaphore& init_semaphore,
     const GlobalSemaphore& exit_semaphore,
-    const GlobalSemaphore& cross_device_semaphore) {
+    const GlobalSemaphore& cross_device_semaphore,
+    const MeshFabricIds& mesh_fabric_ids) {
     tt::tt_metal::ProgramDescriptor desc;
 
     auto input_tensor = tensor_args.input_tensor;
@@ -520,14 +554,11 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     // the mesh shape) — replaces the legacy `tensor_coords` parameter, which the
     // new descriptor-style entry point no longer threads through.  The fabric
     // defines baked into kernel compile-time args list every device on the mesh.
-    std::vector<uint32_t> dest_mesh_id, dest_chip_id;
-    for (const auto& coord : ttnn::MeshCoordinateRange(mesh_view.shape())) {
-        auto dest_fabric_node_id = mesh_device->get_fabric_node_id(coord);
-        dest_mesh_id.push_back(*dest_fabric_node_id.mesh_id);
-        dest_chip_id.push_back((uint32_t)dest_fabric_node_id.chip_id);
-    }
-    log_debug(tt::LogOp, "dest_chip_id: {}", ccl::common::stringify(dest_chip_id));
-    log_debug(tt::LogOp, "dest_mesh_id: {}", ccl::common::stringify(dest_mesh_id));
+    // Mesh-wide and coord-invariant: hoisted to make_mesh_fabric_ids(), computed once per workload.
+    const std::vector<uint32_t>& dest_mesh_id = mesh_fabric_ids.dest_mesh_id;
+    const std::vector<uint32_t>& dest_chip_id = mesh_fabric_ids.dest_chip_id;
+    log_debug(tt::LogOp, "dest_chip_id: {}", mesh_fabric_ids.dest_chip_id_str);
+    log_debug(tt::LogOp, "dest_mesh_id: {}", mesh_fabric_ids.dest_mesh_id_str);
     log_debug(tt::LogOp, "directions: {}", ccl::common::stringify(directions));
 
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
@@ -1111,6 +1142,10 @@ tt::tt_metal::WorkloadDescriptor DispatchProgramFactory::create_workload_descrip
     // replicate one ProgramDescriptor across the whole mesh — every coord
     // gets its own build. Both layouts share create_dispatch_program; it detects
     // row-major vs tile internally (row-major skips the untilize compute kernel).
+    // Mesh-wide fabric ids are identical for every coord, so build them once here rather than
+    // letting each of the 32 per-coord builds recompute them (was O(mesh^2) get_fabric_node_id
+    // lookups plus a redundant stringify per coord).
+    const MeshFabricIds mesh_fabric_ids = make_mesh_fabric_ids(mesh_device, mesh_device->get_view());
     for (const auto& coord : tensor_coords.coords()) {
         tt::tt_metal::ProgramDescriptor desc = create_dispatch_program(
             operation_attributes,
@@ -1119,7 +1154,8 @@ tt::tt_metal::WorkloadDescriptor DispatchProgramFactory::create_workload_descrip
             tensor_return_value,
             init_barrier_semaphore,
             exit_barrier_semaphore,
-            final_barrier_semaphore);
+            final_barrier_semaphore,
+            mesh_fabric_ids);
         workload_descriptor.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
     }
     return workload_descriptor;

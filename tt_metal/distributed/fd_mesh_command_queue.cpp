@@ -380,8 +380,36 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
     this->wait_for_outstanding_reads(lock);
 }
 
+// TELEMETRY (#50932/#50772): host-side timing of the enqueue itself. The decisive question is whether
+// the op2op gap is the host arriving late or the device being slow to start. These two numbers answer it
+// without any clock-domain alignment:
+//   t_enqueue    — wall time inside enqueue_mesh_workload. If this is milliseconds, the host BLOCKED,
+//                  almost certainly in wait_for_fetch_q_space (command-queue backpressure), and the gap
+//                  is host-side after all.
+//   t_since_prev — host idle between the previous enqueue returning and this one starting (i.e. model
+//                  Python + ttnn frontend). If t_enqueue and t_since_prev are both small while the
+//                  device gap is milliseconds, the host is far ahead and the cost is device-side.
+namespace {
+bool dispatch_telemetry_enabled() {
+    static const bool on = [] {
+        const char* e = std::getenv("TT_METAL_DISPATCH_TELEMETRY");
+        return e != nullptr && e[0] == '1';
+    }();
+    return on;
+}
+thread_local std::chrono::steady_clock::time_point g_prev_enqueue_end{};
+thread_local bool g_have_prev_enqueue = false;
+}  // namespace
+
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
     ZoneScopedN("EnqueueProgram");
+    const bool telemetry_on = dispatch_telemetry_enabled();
+    const auto t_enqueue_start = telemetry_on ? std::chrono::steady_clock::now()
+                                             : std::chrono::steady_clock::time_point{};
+    const double t_since_prev_us =
+        (telemetry_on && g_have_prev_enqueue)
+            ? std::chrono::duration<double, std::micro>(t_enqueue_start - g_prev_enqueue_end).count()
+            : -1.0;
     auto lock = lock_api_function_();
     in_use_ = true;
     uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
@@ -493,6 +521,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         // prefetcher cache will be overwritten, reset for next workload
         this->reset_prefetcher_cache_manager();
     }
+
     // Iterate over all programs. Update dispatch commands per program to reflect
     // current device state. Write the finalized program command sequence to each
     // physical device tied to the program.
@@ -551,6 +580,33 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     // From the dispatcher's perspective, binaries are now committed to DRAM
     mesh_workload.impl().set_program_binary_status(mesh_device_id, ProgramBinaryStatus::Committed);
     mesh_workload.set_last_used_command_queue_for_testing(this);
+
+    if (telemetry_on) {
+        const auto t_end = std::chrono::steady_clock::now();
+        const double t_enqueue_us = std::chrono::duration<double, std::micro>(t_end - t_enqueue_start).count();
+        log_info(
+            tt::LogMetal,
+            "DISPATCH_TELEMETRY nprog={} workers={} t_enqueue_us={:.1f} t_since_prev_us={:.1f} "
+            "stall_first={} stall_before_program={} sync_count={} exp_workers_done={} "
+            "prefetch_cache={} kernels_B={} cache_B={} unicast_eth={} n_eth_cores={} mcast={} binstatus={}",
+            mesh_workload.get_programs().size(),
+            num_workers,
+            t_enqueue_us,
+            t_since_prev_us,
+            dispatch_metadata.stall_first,
+            dispatch_metadata.stall_before_program,
+            dispatch_metadata.sync_count,
+            expected_num_workers_completed,
+            mesh_workload.impl().use_prefetcher_cache_,
+            mesh_workload.impl().max_program_kernels_sizeB_,
+            this->prefetcher_cache_sizeB_,
+            unicast_go_signals,
+            num_virtual_eth_cores,
+            mcast_go_signals,
+            static_cast<int>(mesh_workload.impl().get_program_binary_status(mesh_device_id)));
+        g_prev_enqueue_end = std::chrono::steady_clock::now();
+        g_have_prev_enqueue = true;
+    }
 
     if (blocking) {
         this->finish_nolock({{sub_device_id}});

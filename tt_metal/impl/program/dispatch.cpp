@@ -2395,6 +2395,17 @@ void initialize_worker_config_buf_mgr(
             ringbuffer_size =
                 hal.get_dev_size(hal.get_programmable_core_type(index), tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG);
         }
+        // TELEMETRY (#50932): the TENSIX kernel-config ring is whatever L1 is left over after the
+        // model's tensor budget (worker_l1_unreserved_start). If it cannot hold two ops' configs,
+        // every op forces a full worker drain in reserve_space_in_kernel_config_buffer.
+        if (std::getenv("TT_METAL_DISPATCH_TELEMETRY") != nullptr) {
+            log_info(
+                tt::LogMetal,
+                "CONFIG_RING core_type={} base=0x{:x} ringbuffer_size={} bytes",
+                static_cast<int>(hal.get_programmable_core_type(index)),
+                hal.get_dev_addr(hal.get_programmable_core_type(index), tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG),
+                ringbuffer_size);
+        }
         config_buffer_mgr.init_add_buffer(
             hal.get_dev_addr(hal.get_programmable_core_type(index), tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG),
             ringbuffer_size);
@@ -2415,6 +2426,23 @@ void reserve_space_in_kernel_config_buffer(
     // Reserve space in kernel config ring buffer for the current program
     std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> reservation =
         config_buffer_mgr.reserve(program_config_sizes);
+    // TELEMETRY (#50932): the actual per-op demand on the kernel-config ring, next to the
+    // sync verdict. This is what competes for the 69 KB TENSIX ring measured at init.
+    if (std::getenv("TT_METAL_DISPATCH_TELEMETRY") != nullptr) {
+        uint32_t total = 0;
+        std::string breakdown;
+        for (size_t i = 0; i < program_config_sizes.size(); i++) {
+            total += program_config_sizes[i];
+            breakdown += (i ? "," : "") + std::to_string(program_config_sizes[i]);
+        }
+        log_info(
+            tt::LogMetal,
+            "CONFIG_DEMAND total_B={} per_core_type=[{}] need_sync={} workers={}",
+            total,
+            breakdown,
+            reservation.first.need_sync,
+            num_program_workers);
+    }
     // Determine where a sync (dispatch wait on workers) must be inserted in the program sequence and the number
     // of workers to wait on
     dispatch_md.sync_count = 0;
