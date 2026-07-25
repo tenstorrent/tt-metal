@@ -172,10 +172,7 @@ def _ttml_main() -> None:
     completer: Any = None
     client: Any = None
     try:
-        # Constructing the client blocks on the handshake until the ttt rank
-        # has also constructed its MPIRolloutServer.
         bridge = HostWeightBridge.init_sender(mesh=mesh_device, peer_rank=TTT_RANK)
-        client = MPIRolloutClient(peer_rank=TTT_RANK, bridge=bridge)
 
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         system_prompt = "You are a wordy professor. Explain in 3 long sentences before saying Yes or No."
@@ -206,9 +203,11 @@ def _ttml_main() -> None:
             transformer_config=transformer_config,
             mesh_device=mesh_device,
             model_source=model_id,
-            inference_client=client,
             enable_ddp=device_config.enable_ddp,
         )
+
+        client = MPIRolloutClient(peer_rank=TTT_RANK, bridge=bridge)
+        completer._client = client
 
         # Replace the worker's dummy boot weights with real instruct weights
         # before training starts.

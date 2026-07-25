@@ -133,7 +133,7 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
         *,
         mesh_device: Any,
         model_source: str,
-        inference_client: MPIRolloutClient,
+        inference_client: Optional[MPIRolloutClient] = None,
         top_p: float = 1.0,
         seed: Optional[int] = None,
         enable_ddp: bool = False,
