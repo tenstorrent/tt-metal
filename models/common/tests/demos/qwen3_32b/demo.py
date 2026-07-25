@@ -110,11 +110,12 @@ EXPECTED_METRICS_BATCH1: dict = {
     "on_device_topk": {
         "performance": {
             "T3K": {"tok_s_u": 27.5, "ttft_ms": 125}
-        },  # best-of{TTTv2 27.56, TTTv1 27.04} same-box 2026-07-23 — TTTv2 WINS decode (wired decode loop
-        # removes the per-step host round-trip) AND TTFT (112 vs 140). ttft is a ceiling covering ON+OFF.
-        "accuracy": {"T3K": {"tok_s_u": 23.1, "ttft_ms": 145}},  # best-of{TTTv2 22.65, TTTv1 23.16}; TTTv2
-        # decode is 2.2% under TTTv1 (diffuse shared-engine per-step delta, not lowered to TTTv2 — see PR.md);
-        # TTFT wins (127 vs 158).
+        },  # best-of{TTTv2, TTTv1} — same-box decode is at ~parity (2026-07-25: TTTv2 27.5 vs TTTv1 27.9,
+        # ~1.4% under; a diffuse shared-engine per-step delta, NOT lowered to a slow number — see PR.md).
+        # b1 TTFT is noisy (both stacks span ~96-105ms); the 125 ceiling covers ON+OFF with headroom.
+        "accuracy": {"T3K": {"tok_s_u": 23.1, "ttft_ms": 145}},  # best-of{TTTv2 22.5, TTTv1 23.16}; TTTv2
+        # decode ~2.9% under TTTv1 (diffuse shared-engine per-step delta, HiFi4 path; not lowered to TTTv2 —
+        # see PR.md). b1 TTFT noisy (~118-127ms both stacks); 145 ceiling covers ON+OFF.
     },
 }
 
@@ -146,25 +147,33 @@ EXPECTED_METRICS_BATCH32: dict = {
 # DIRECT TTTv1 ci-32 analog. gate = better-of(TTTv1 ci-32, TTTv2). Prior-healthy same-box TTTv1 ci-32
 # ("Average speed", seq2048/1024): perf 25.06 t/s/u (39.9ms/step, TTFT 41.1ms), acc 20.45 (48.9ms/step).
 #
-# DECODE GAP CLOSED (issue #49282, fixed by #49284). The old base (c93ed50) lacked the shared on-device
-# decode loop, so TTTv2 ci-32 sat ~8% (perf) / ~10% (acc) below TTTv1 (the ~3.4ms/step per-step blocking
-# readback + synchronize, amortized over 32 users). The base now carries #49284 and the loop is wired
-# into this model, removing that per-step host round-trip; same-box step time now matches TTTv1. On a
-# healthy box TTTv2 reaches ci-32 parity (sibling qwen25_coder_32b, identical wiring/base: 99%). The gate
-# stays at the prior-healthy TTTv1 best-of; ttft is a ceiling TTTv2 clears (batched ON << sequential OFF).
-# Runs batched ON + OFF. NB: a #893 NUMA-degraded T3K depresses BOTH stacks ~1.8x (measured this session:
-# TTTv2 14.2 @ 70.6ms/step vs TTTv1 14.31 @ 69.9ms/step = 99%) — confirm parity RELATIVE to same-box
-# TTTv1 there, and never lower the gate to the degraded number.
+# DECODE GAP CLOSED (issue #49282, fixed by #49284). The on-device decode loop is wired into this model
+# (removes the per-step host round-trip), so same-box decode step time is at TTTv1 parity within ~1-2%
+# (a diffuse shared-engine per-step delta; see PR.md). The gate stays at the prior-healthy TTTv1 best-of;
+# never lowered. NB: a #893 NUMA-degraded T3K depresses BOTH stacks ~1.8x — confirm parity RELATIVE to
+# same-box TTTv1 there, never lower the gate to the degraded number.
+#
+# TTFT LEVER — minimal_matmul (model.py prefill_minimal_matmul, default ON; DISABLE_MINIMAL_MATMUL=1 to
+# A/B off). The batch-32-ci prefill is matmul-compute-bound, so enabling minimal_matmul for the QKV + FF2
+# prefill matmuls cuts ci-32 TTFT: same-box median-of-3 (2026-07-25) perf 47.3ms (OFF) -> 40.3ms (ON),
+# acc ~56 -> 48.8ms — closing most of the old +28/36% gap vs TTTv1 (perf 37.4 / acc 41.5ms) down to
+# ~+8% / +18%. Accuracy is unchanged with it ON (eval-32 64/64 host, batched ON+OFF; token-accuracy
+# 90.6/98.6 perf, 96.7/100 acc). The residual TTFT gap is the shared-engine batched-prefill FOLD term
+# (32 users -> passes capped at max_prefill_batch_size vs TTTv1's single pass); the fold-cap lever is
+# dead (8->32 single-pass moved TTFT only ~1ms), so it is NOT per-model closeable and is escalated as a
+# shared-engine item. The ttft gate is a CEILING TTTv2 clears (batched-ON ~40/49 << the sequential-OFF
+# ~103/113); the tolerance-free parity RED lives in PR.md, not a lowered gate.
 EXPECTED_METRICS_BATCH32_CI: dict = {
     "host": {
         "performance": {},
         "accuracy": {},
     },
     "on_device_topk": {
-        # best-of{TTTv2, same-box TTTv1 ci-32} 2026-07-23. Decode: TTTv2 25.56/20.57 vs TTTv1 25.72/20.86 —
-        # 0.6%/1.4% under (diffuse shared-engine per-step delta; NOT lowered to the TTTv2 number — see PR.md).
-        # ttft is a CEILING TTTv2 clears (batched-ON ~48/56 << the sequential-OFF ~103/113); the tolerance-free
-        # TTFT parity RED (TTTv2 batched-prefill fold vs TTTv1 single-pass, +28/36%) is documented in PR.md.
+        # best-of{TTTv2, same-box TTTv1 ci-32}. Decode: TTTv2 25.3/20.5 vs TTTv1 25.75/20.89 — ~1.7/1.9%
+        # under (diffuse shared-engine per-step delta; NOT lowered to the TTTv2 number — see PR.md).
+        # ttft is a CEILING TTTv2 clears (minimal_matmul-ON batched ~40/49 << the sequential-OFF ~103/113);
+        # the tolerance-free TTFT parity RED (residual batched-prefill fold, +8/18% after minimal_matmul)
+        # is documented in PR.md + the shared-gap ticket.
         "performance": {"T3K": {"tok_s_u": 25.7, "ttft_ms": 110}},
         "accuracy": {"T3K": {"tok_s_u": 20.8, "ttft_ms": 120}},
     },
