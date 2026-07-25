@@ -66,10 +66,14 @@ overlap, so they must not be added.
 The receiver-owned affine prefix, L1 group entries, and owner-sharded summaries are now the T>=5,120 default. Remaining experiments, ranked by bounded reward, are:
 
 
-1. Revisit direct tiled convolution only with the T=672 PCC gate enabled from
-   the first implementation step.
-2. Revisit prep/scan fusion only with elastic core reassignment; the disjoint
+1. Revisit prep/scan fusion only with elastic core reassignment; the disjoint
    94/16 static partition is measured and rejected.
+
+Direct tiled convolution is exhausted for this campaign. The corrected padded
+stride plus canonical TL/TR/BL/BR bottom-row addresses reproduced output PCC
+`0.951854` at T=672 while both states remained correct. A future retry requires
+a standalone prefix-import primitive or a projection producer that exports the
+three boundary rows; do not retry raw partial-row gathers.
 
 The affine-prefix experiment proved the algebra and FP32 numerics, but rejected
 a DRAM-backed implementation: its estimated memory floor exceeds the current
