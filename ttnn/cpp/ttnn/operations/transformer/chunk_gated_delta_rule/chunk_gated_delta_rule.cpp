@@ -16,6 +16,7 @@
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/repeat_interleave/repeat_interleave.hpp"
@@ -25,6 +26,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/device.hpp"
+#include <tt-metalium/work_split.hpp>
 
 using namespace tt::tt_metal;
 
@@ -625,6 +627,18 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
         grouped[4] = ttnn::reshape(grouped[4], ttnn::Shape({group_heads, group_chunks, K, C}));
         grouped[5] = ttnn::reshape(grouped[5], ttnn::Shape({group_heads, group_chunks, K, 1}));
         grouped[6] = ttnn::reshape(grouped[6], ttnn::Shape({group_heads, group_chunks, C, C}));
+        auto summary_mem = prep_mem;
+        if (std::getenv("QWEN_KDA_SUMMARY_INTERLEAVED") == nullptr) {
+            const auto summary_cores =
+                tt::tt_metal::num_cores_to_corerangeset(group_heads, dev->compute_with_storage_grid_size(), true);
+            summary_mem = ttnn::operations::data_movement::create_sharded_memory_config(
+                ttnn::Shape({group_heads, K, K}),
+                summary_cores,
+                ttnn::operations::data_movement::ShardStrategy::HEIGHT,
+                ShardOrientation::ROW_MAJOR,
+                std::array<uint32_t, 2>{K, K},
+                Layout::TILE);
+        }
         auto summaries = ttnn::prim::chunk_gdn_scan(
             grouped[0],
             grouped[1],
@@ -636,7 +650,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
             std::nullopt,
             C,
             true,
-            prep_mem,
+            summary_mem,
             kernel_cfg,
             true,
             true,

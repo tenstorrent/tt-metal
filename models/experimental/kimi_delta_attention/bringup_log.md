@@ -1930,3 +1930,15 @@
 - Result: wall improved `3211.482 -> 3195.611 us`, saving `15.871 us` (`0.494%`). Prefix writes improve `20.935 us`; scan reads regress `10.120 us`, for a net measured recurrence-block gain of `10.815 us`; scheduling/overlap realizes a larger `15.871 us` wall gain.
 - Regression coverage: full directory -> `36 passed, 1 failed`; the only failure is the unchanged single-device Conv1d perf fixture whose `1,572,864 B` per-bank request exceeds `1,436,800 B` L1 capacity.
 - Verdict: retain and promote. A full same-program handoff is not justified yet; this low-risk storage change captures the measurable boundary reward while preserving both validated protocols.
+
+
+### 2026-07-25 02:23 UTC — Retain owner-sharded affine summaries
+
+- Corrected hypothesis: affine summaries were already in interleaved L1, not DRAM. Because summary construction and prefix both distribute the same 80 groups row-major, height-sharding A and B as one `[128,128]` shard per owner should eliminate the interleaved-L1 NOC write/read handoff without merging programs.
+- Implementation: the default summary memory config is HEIGHT_SHARDED L1 over the first 80 row-major cores with explicit `[128,128]` shards. `QWEN_KDA_SUMMARY_INTERLEAVED=1` preserves the prior interleaved-L1 control.
+- Host build: `./build_metal.sh --build-tests --build-type Release` -> PASS.
+- Correctness: promoted-default TP=8 T=5,120 passed at output/recurrent/convolution PCC `0.999958/0.999890/0.999997`.
+- Candidate: `QWEN_KDA_SUMMARY_SHARDED=1 PERF_TRACE=1 PERF_SEQ=5120 PERF_REPS=10 scripts/run_safe_pytest.sh --profile --run-all models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py -q -s` -> PASS. CSV `generated/profiler/reports/2026_07_25_02_18_57/ops_perf_results_2026_07_25_02_18_57.csv`, SHA-256 `b72bd0cea8ea5a129de946b631088012c3e6212e2e14a862b765377304812524`; median wall `3183.263 us`, prefix `115.753 us`, grouped scan `121.325 us`.
+- Matched interleaved control: identical command without the experiment -> PASS. CSV `generated/profiler/reports/2026_07_25_02_20_13/ops_perf_results_2026_07_25_02_20_13.csv`, SHA-256 `7b48a60387890afe53d016f4158376483c32d6d061e246f2a5020051adfeb759`; median wall `3200.471 us`, prefix `129.370 us`, grouped scan `119.907 us`.
+- Result: wall improved `3200.471 -> 3183.263 us`, saving `17.208 us` (`0.538%`). Prefix improved `13.617 us`; grouped scan changed only `+1.418 us`. This validates same-owner sharding as the relevant handoff optimization and rules out the stale DRAM model.
+- Verdict: retain and promote. Full summary/prefix kernel fusion now has only launch and CB-handoff upside left; its remaining ceiling is below the original 20 MiB traffic estimate and should be reprioritized behind larger unfused blocks.
