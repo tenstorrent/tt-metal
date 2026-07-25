@@ -65,15 +65,14 @@ overlap, so they must not be added.
 
 The receiver-owned affine prefix is now the T>=5,120 default. Remaining experiments, ranked by measured or bounded reward, are:
 
-1. **Fuse gated RMS locally in each grouped scan owner.** The existing disjoint-consumer pipeline is measured and rejected: it removed the `83.560 us` standalone op but expanded grouped scan `111.262 -> 187.476 us` and regressed wall `3218.490 -> 3283.410 us` (`+2.02%`) because 80 producers leave only 30 synchronized consumers. A viable retry must perform RMS locally on each full-V group owner after its eight chunks, with no cross-core staging.
-2. **Keep corrected group-entry states in their prefix owners.** The prefix writes and the grouped recurrence rereads 80 FP32 `[128,128]` states (`5 MiB` each direction) and pays a separate launch. Fusion has a traffic-plus-launch ceiling above the `0.1%` continuation threshold, but requires merging two independently validated core programs.
-3. **Form summaries in the persistent prefix owners.** The one-pass builder writes 80 FP32 `(A,B)` pairs and the prefix rereads them. A producer/consumer handoff could remove approximately `20 MiB` of DRAM traffic per chip, but it must preserve the distributed-L1 prep placement and avoid the rejected static prep/scan partition.
+1. **Keep corrected group-entry states in their prefix owners.** The prefix writes and the grouped recurrence rereads 80 FP32 `[128,128]` states (`5 MiB` each direction) and pays a separate launch. Fusion has a traffic-plus-launch ceiling above the `0.1%` continuation threshold, but requires merging two independently validated core programs.
+2. **Form summaries in the persistent prefix owners.** The one-pass builder writes 80 FP32 `(A,B)` pairs and the prefix rereads them. A producer/consumer handoff could remove approximately `20 MiB` of DRAM traffic per chip, but it must preserve the distributed-L1 prep placement and avoid the rejected static prep/scan partition.
 
 After these, resume the broader queue:
 
-4. Revisit direct tiled convolution only with the T=672 PCC gate enabled from
+3. Revisit direct tiled convolution only with the T=672 PCC gate enabled from
    the first implementation step.
-5. Revisit prep/scan fusion only with elastic core reassignment; the disjoint
+4. Revisit prep/scan fusion only with elastic core reassignment; the disjoint
    94/16 static partition is measured and rejected.
 
 The affine-prefix experiment proved the algebra and FP32 numerics, but rejected
