@@ -18,7 +18,8 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "api/debug/dprint.h"  // [#48552 DEBUG] reshape_tiled DM->DM root-cause
+#include "api/core_local_mem.h"  // [#48552] CoreLocalMem for the TRID read
+#include "api/debug/dprint.h"    // [#48552 DEBUG] reshape_tiled DM->DM root-cause
 #include "experimental/kernel_args.h"
 
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
@@ -71,15 +72,18 @@ void kernel_main() {
         mapping_cb.reserve_back(One_Tile_Reserve);
         const uint64_t map_noc_addr = map_addr_gen.get_noc_addr(out_page_idx);
         const uint32_t map_l1_addr = mapping_cb.get_write_ptr();
-        enhanced_noc_async_read<Max_Map_Size_Bytes, true>(noc, map_noc_addr, map_l1_addr, Max_Map_Size_Bytes);
-        noc.async_read_barrier();
-        // [#48552 DEBUG] The 300k-nop delay ALONE did NOT de-stale the map -> not pure DMA latency. Next
-        // hypothesis: the no-op barrier's invalidate_l1_cache() runs BEFORE the DMA lands, so the RISC keeps a
-        // stale cached L1 line. Small delay to let the DMA land, THEN invalidate the cache right before we read.
-        // If seg0_in_pg now VARIES per page -> stale-cache-after-late-landing is the cause. If still stale ->
-        // the repeated read to the same L1 slot (281088) genuinely isn't delivering.
-        for (volatile uint32_t d = 0; d < 50000; ++d) {
-            asm volatile("nop");
+        // [#48552] async_read_barrier is a no-op on Quasar (scmdbuf_tr_ack stubbed) and a repeated read into
+        // the reused num_entries=1 slot doesn't re-deliver. Use the TRID read + is_read_trid_flushed poll
+        // (the mechanism padded_slice relies on) so the transaction actually completes before we parse.
+        constexpr uint8_t map_trid = 1;
+        noc.async_read<NocOptions::TXN_ID>(
+            map_addr_gen,
+            CoreLocalMem<uint32_t>(map_l1_addr),
+            Max_Map_Size_Bytes,
+            {.page_id = out_page_idx, .offset_bytes = 0},
+            {.offset_bytes = 0},
+            NocOptVals{.trid = map_trid});
+        while (!noc.is_read_trid_flushed(map_trid)) {
         }
         invalidate_l1_cache();
         // [#48552 DEBUG] map_noc lo/hi + l1 slot + first segment's input page as read from L1 -> is the map
@@ -116,10 +120,20 @@ void kernel_main() {
 
             input_cb.reserve_back(One_Tile_Reserve);
             const uint32_t input_write_addr = input_cb.get_write_ptr();
-            const uint64_t input_page_noc_addr = input_addr_gen.get_noc_addr(input_page_idx);
-            enhanced_noc_async_read<Tile_Size_Bytes, true>(noc, input_page_noc_addr, input_write_addr, Tile_Size_Bytes);
+            // [#48552] TRID read (see map read above) — the input_cb slot is also reused (num_entries=1), so
+            // the same no-op-barrier / no-re-deliver problem applies. Poll is_read_trid_flushed for completion.
+            constexpr uint8_t input_trid = 2;
+            noc.async_read<NocOptions::TXN_ID>(
+                input_addr_gen,
+                CoreLocalMem<uint32_t>(input_write_addr),
+                Tile_Size_Bytes,
+                {.page_id = input_page_idx, .offset_bytes = 0},
+                {.offset_bytes = 0},
+                NocOptVals{.trid = input_trid});
             previous_input_page_idx = input_page_idx;
-            noc.async_read_barrier();
+            while (!noc.is_read_trid_flushed(input_trid)) {
+            }
+            invalidate_l1_cache();
             input_cb.push_back(1);
             DPRINT(
                 "RRD op={} push#{} in_pg={} waddr={}\n",
