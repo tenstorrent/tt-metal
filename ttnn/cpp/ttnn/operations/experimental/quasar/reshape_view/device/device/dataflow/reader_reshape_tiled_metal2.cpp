@@ -85,7 +85,10 @@ void kernel_main() {
             NocOptVals{.trid = map_trid});
         while (!noc.is_read_trid_flushed(map_trid)) {
         }
-        invalidate_l1_cache();
+        // [#48552] invalidate_l1_cache() is a NO-OP on Quasar DM. The map lands in TL1 but the DM reads a
+        // STALE L2 cache line for the reused constant slot -> every page saw page-0's map. Discard the L2
+        // line(s) so the parse re-fetches from TL1 (same fix as the maxpool constant-read-address bug).
+        invalidate_l2_cache_range(map_l1_addr, Max_Map_Size_Bytes);
         // [#48552 DEBUG] map_noc lo/hi + l1 slot + first segment's input page as read from L1 -> is the map
         // read advancing per output page, and does the L1 slot actually hold this page's map?
         {
@@ -133,7 +136,7 @@ void kernel_main() {
             previous_input_page_idx = input_page_idx;
             while (!noc.is_read_trid_flushed(input_trid)) {
             }
-            invalidate_l1_cache();
+            invalidate_l2_cache_range(input_write_addr, Tile_Size_Bytes);  // [#48552] stale-L2 fix (see map read)
             input_cb.push_back(1);
             DPRINT(
                 "RRD op={} push#{} in_pg={} waddr={}\n",
