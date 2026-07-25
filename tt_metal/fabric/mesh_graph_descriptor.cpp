@@ -11,6 +11,9 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <memory>
+#include <regex>
+#include <map>
+#include <set>
 #include <tt_stl/assert.hpp>
 
 #include "protobuf/mesh_graph_descriptor.pb.h"
@@ -1580,49 +1583,192 @@ void MeshGraphDescriptor::print_all_nodes() {
     print_node(top_level_id_, 0);
 }
 
+namespace {
+// Expand a pinning id pattern against a domain of valid ids. Supports:
+//   - inclusive numeric range   "0-8"          -> 0..8
+//   - comma list of the above   "0,2,4-6"      -> 0,2,4,5,6
+//   - std::regex (full match)   "\\d*[02468]"  -> every id whose decimal string matches
+// The result is the subset of `domain` (in domain order) selected by the pattern.
+std::vector<uint32_t> expand_id_pattern(const std::string& pattern, const std::vector<uint32_t>& domain) {
+    auto b = pattern.find_first_not_of(" \t");
+    auto e = pattern.find_last_not_of(" \t");
+    std::string p = (b == std::string::npos) ? std::string{} : pattern.substr(b, e - b + 1);
+    std::vector<uint32_t> out;
+    if (p.empty()) {
+        return out;
+    }
+
+    // Pure digits/commas/dashes -> treat as a range/list; anything else -> regex.
+    if (p.find_first_not_of("0123456789,- \t") == std::string::npos) {
+        std::set<uint32_t> want;
+        std::stringstream ss(p);
+        std::string tok;
+        while (std::getline(ss, tok, ',')) {
+            auto dash = tok.find('-');
+            try {
+                if (dash == std::string::npos) {
+                    want.insert(static_cast<uint32_t>(std::stoul(tok)));
+                } else {
+                    auto lo = static_cast<uint32_t>(std::stoul(tok.substr(0, dash)));
+                    auto hi = static_cast<uint32_t>(std::stoul(tok.substr(dash + 1)));
+                    for (uint32_t v = lo; v <= hi; ++v) {
+                        want.insert(v);
+                    }
+                }
+            } catch (const std::exception&) {
+            }
+        }
+        for (uint32_t id : domain) {
+            if (want.count(id) != 0) {
+                out.push_back(id);
+            }
+        }
+        return out;
+    }
+
+    try {
+        std::regex re(p);
+        for (uint32_t id : domain) {
+            if (std::regex_match(std::to_string(id), re)) {
+                out.push_back(id);
+            }
+        }
+    } catch (const std::regex_error&) {
+        // Invalid regex -> no matches.
+    }
+    return out;
+}
+}  // namespace
+
 void MeshGraphDescriptor::populate_pinnings() {
     pinnings_.clear();
 
-    // Extract pinnings from top-level pinnings section
+    // Domain for logical-id regex expansion: instantiated local mesh ids and their chip counts.
+    std::map<uint32_t, uint32_t> mesh_chip_count;  // local mesh_id -> chip count
+    for (GlobalNodeId gid : mesh_instances_) {
+        const auto& inst = get_instance(gid);
+        mesh_chip_count[static_cast<uint32_t>(inst.local_id)] = get_chip_count(inst);
+    }
+    std::vector<uint32_t> all_mesh_ids;
+    all_mesh_ids.reserve(mesh_chip_count.size());
+    for (const auto& [m, _] : mesh_chip_count) {
+        all_mesh_ids.push_back(m);
+    }
+
+    // Extract pinnings from the top-level pinnings section, preserving the many-to-many grouping.
+    //
+    // Each AsicPinning entry may list multiple logical fabric nodes and multiple physical ASIC
+    // positions (all-to-all). We keep the group intact here: any listed node may map to any listed
+    // position. Downstream consumers enumerate each group into the existing 1:many pinning format --
+    // one (fabric_node -> asic_positions) entry per node -- so no downstream interface changes. A
+    // single-node/single-position entry reproduces the classic one-to-one pin.
     for (const auto& pinning : proto_->pinnings()) {
-        // Extract LogicalFabricNodeId from proto
-        const auto& logical_node_id = pinning.logical_fabric_node_id();
-        ::tt::tt_fabric::FabricNodeId fabric_node(MeshId{logical_node_id.mesh_id()}, logical_node_id.chip_id());
+        // Physical positions are shared by every group produced from this entry.
+        std::vector<AsicPosition> positions;
+        positions.reserve(pinning.physical_asic_position().size());
+        for (const auto& physical_pos : pinning.physical_asic_position()) {
+            positions.emplace_back(
+                tt::tt_metal::TrayID{physical_pos.tray_id()}, tt::tt_metal::ASICLocation{physical_pos.asic_location()});
+        }
 
-        // Extract PhysicalAsicPosition from proto and convert to AsicPosition
-        const auto& physical_pos = pinning.physical_asic_position();
-        AsicPosition asic_pos(
-            tt::tt_metal::TrayID{physical_pos.tray_id()}, tt::tt_metal::ASICLocation{physical_pos.asic_location()});
+        // Fast path: no regex fields anywhere in this entry -> preserve the original single-group behavior.
+        bool uses_regex = false;
+        for (const auto& n : pinning.logical_fabric_node_id()) {
+            if (!n.mesh_id_regex().empty() || !n.chip_id_regex().empty()) {
+                uses_regex = true;
+                break;
+            }
+        }
+        if (!uses_regex) {
+            AsicPinningGroup group;
+            group.fabric_nodes.reserve(pinning.logical_fabric_node_id().size());
+            for (const auto& logical_node_id : pinning.logical_fabric_node_id()) {
+                group.fabric_nodes.emplace_back(MeshId{logical_node_id.mesh_id()}, logical_node_id.chip_id());
+            }
+            group.asic_positions = positions;
+            pinnings_.push_back(std::move(group));
+            continue;
+        }
 
-        // Store as pair(AsicPosition, FabricNodeId) for C++ compatibility
-        // MeshId is embedded in FabricNodeId, so no need to group by MeshId
-        pinnings_.emplace_back(asic_pos, fabric_node);
+        // Regex path: expand into concrete (mesh_id -> chips), grouped BY MESH so each matched mesh gets its
+        // own all-to-all group (preserving the per-mesh bijection). A *_regex OVERRIDES its numeric field.
+        std::map<uint32_t, std::vector<uint32_t>> mesh_to_chips;  // ordered mesh -> ordered unique chips
+        std::map<uint32_t, std::set<uint32_t>> seen_chips;
+        for (const auto& n : pinning.logical_fabric_node_id()) {
+            const std::vector<uint32_t> meshes = n.mesh_id_regex().empty()
+                                                     ? std::vector<uint32_t>{n.mesh_id()}
+                                                     : expand_id_pattern(n.mesh_id_regex(), all_mesh_ids);
+            for (uint32_t m : meshes) {
+                std::vector<uint32_t> chips;
+                if (n.chip_id_regex().empty()) {
+                    chips = {n.chip_id()};
+                } else {
+                    std::vector<uint32_t> chip_domain;
+                    auto it = mesh_chip_count.find(m);
+                    const uint32_t cc = (it != mesh_chip_count.end()) ? it->second : 0;
+                    chip_domain.reserve(cc);
+                    for (uint32_t c = 0; c < cc; ++c) {
+                        chip_domain.push_back(c);
+                    }
+                    chips = expand_id_pattern(n.chip_id_regex(), chip_domain);
+                }
+                for (uint32_t c : chips) {
+                    if (seen_chips[m].insert(c).second) {
+                        mesh_to_chips[m].push_back(c);
+                    }
+                }
+            }
+        }
+        for (const auto& [m, chips] : mesh_to_chips) {
+            AsicPinningGroup group;
+            group.fabric_nodes.reserve(chips.size());
+            for (uint32_t c : chips) {
+                group.fabric_nodes.emplace_back(MeshId{m}, c);
+            }
+            group.asic_positions = positions;
+            pinnings_.push_back(std::move(group));
+        }
     }
 }
 
 void MeshGraphDescriptor::validate_pinnings(
     const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
-    // Track duplicate pinnings for the same logical_fabric_node_id
+    // Track how many pinning entries reference the same logical_fabric_node_id. A logical node may be
+    // paired with many positions within a single (all-to-all) entry, but appearing in more than one
+    // entry is ambiguous and treated as a duplicate.
     std::map<std::pair<uint32_t, uint32_t>, uint32_t> fabric_node_pinning_count;
 
     for (const auto& pinning : proto.pinnings()) {
-        const auto& logical_node_id = pinning.logical_fabric_node_id();
-
-        uint32_t mesh_id = logical_node_id.mesh_id();
-        uint32_t chip_id = logical_node_id.chip_id();
-
-        // Check for duplicate pinnings
-        auto key = std::make_pair(mesh_id, chip_id);
-        fabric_node_pinning_count[key]++;
-        if (fabric_node_pinning_count[key] > 1) {
-            error_messages.push_back(
-                fmt::format("Duplicate pinning for fabric node (mesh_id: {}, chip_id: {})", mesh_id, chip_id));
+        // All-to-all entries must list at least one logical node and at least one physical position.
+        if (pinning.logical_fabric_node_id().empty()) {
+            error_messages.push_back("Pinning entry has no logical_fabric_node_id");
+        }
+        if (pinning.physical_asic_position().empty()) {
+            error_messages.push_back("Pinning entry has no physical_asic_position");
         }
 
-        // Validate that mesh_id exists in the mesh instances
-        // Note: We can't fully validate chip_id range without knowing which mesh descriptor
-        // corresponds to which mesh_id, but we can at least check that mesh_id is reasonable
-        // More precise validation would require checking the top_level_instance structure
+        for (const auto& logical_node_id : pinning.logical_fabric_node_id()) {
+            // Regex entries are expanded later against the instantiated domain; their numeric
+            // mesh_id/chip_id are unused, so skip exact-duplicate tracking for them.
+            if (!logical_node_id.mesh_id_regex().empty() || !logical_node_id.chip_id_regex().empty()) {
+                continue;
+            }
+            uint32_t mesh_id = logical_node_id.mesh_id();
+            uint32_t chip_id = logical_node_id.chip_id();
+
+            // Check for the same logical node pinned across multiple entries.
+            auto key = std::make_pair(mesh_id, chip_id);
+            fabric_node_pinning_count[key]++;
+            if (fabric_node_pinning_count[key] > 1) {
+                error_messages.push_back(
+                    fmt::format("Duplicate pinning for fabric node (mesh_id: {}, chip_id: {})", mesh_id, chip_id));
+            }
+
+            // Validate that mesh_id exists in the mesh instances
+            // Note: We can't fully validate chip_id range without knowing which mesh descriptor
+            // corresponds to which mesh_id, but we can at least check that mesh_id is reasonable
+            // More precise validation would require checking the top_level_instance structure
+        }
     }
 }
 }  // namespace tt::tt_fabric

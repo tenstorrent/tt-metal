@@ -94,6 +94,16 @@ private:
 // Use ASICPosition type alias for consistency with TopologyMapper
 using AsicPosition = tt::tt_metal::ASICPosition;
 
+// A many-to-many ASIC pinning group parsed from a single AsicPinning entry in the MGD. Any of
+// `fabric_nodes` may map to any of `asic_positions` (all-to-all); the topology solver still enforces a
+// bijection, so distinct nodes land on distinct ASICs. Downstream consumers enumerate a group into the
+// existing 1:many pinning format -- one (fabric_node -> asic_positions) entry per node. A group with a
+// single node and a single position is the classic one-to-one pin.
+struct AsicPinningGroup {
+    std::vector<FabricNodeId> fabric_nodes;
+    std::vector<AsicPosition> asic_positions;
+};
+
 // TODO: Try make efficient by storing stringviews?
 class MeshGraphDescriptor {
 public:
@@ -216,7 +226,9 @@ public:
     // Helper to infer FabricType from MGD dim_types
     static FabricType infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc);
 
-    const std::vector<std::pair<AsicPosition, FabricNodeId>>& get_pinnings() const { return pinnings_; }
+    // Many-to-many pinning groups parsed from the MGD's top-level `pinnings` section. Each entry may
+    // bind multiple logical fabric nodes to multiple physical ASIC positions (all-to-all).
+    const std::vector<AsicPinningGroup>& get_pinnings() const { return pinnings_; }
 
 private:
     // Descriptor fast lookup
@@ -243,7 +255,7 @@ private:
     std::unordered_map<std::string_view, std::vector<ConnectionId>> connections_by_type_;
     std::unordered_map<GlobalNodeId, std::vector<ConnectionId>> connections_by_source_device_id_;
 
-    std::vector<std::pair<AsicPosition, FabricNodeId>> pinnings_;
+    std::vector<AsicPinningGroup> pinnings_;
 
     static void set_defaults(proto::MeshGraphDescriptor& proto);
     static std::vector<std::string> static_validate(

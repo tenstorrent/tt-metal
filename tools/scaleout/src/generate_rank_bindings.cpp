@@ -113,10 +113,16 @@ TopologyMappingResult run_topology_mapping(
         config.asic_positions[asic_id] = std::make_pair(desc.tray_id, desc.asic_location);
     }
 
-    // Extract pinnings from MGD and add to config (same as control plane)
+    // Extract pinnings from MGD and add to config (same as control plane). MGD pinnings are
+    // many-to-many groups; enumerate each group into the flat (position, node) config format -- one
+    // pair per (node, position) in the group -- so any node in the group may map to any position.
     const auto& pinnings = mgd.get_pinnings();
-    for (const auto& [pos, fabric_node] : pinnings) {
-        config.pinnings.emplace_back(pos, fabric_node);
+    for (const auto& group : pinnings) {
+        for (const auto& fabric_node : group.fabric_nodes) {
+            for (const auto& pos : group.asic_positions) {
+                config.pinnings.emplace_back(pos, fabric_node);
+            }
+        }
     }
 
     // Set per-mesh validation modes based on mesh graph policy

@@ -474,11 +474,16 @@ void ControlPlane::init_control_plane(
             }
         }
 
-        // Add MGD pinnings to the topology mapper (only if mesh graph descriptor is available)
+        // Add MGD pinnings to the topology mapper (only if mesh graph descriptor is available).
+        // MGD pinnings are many-to-many groups; enumerate each group into the 1:many format the mapper
+        // expects -- one (fabric_node -> asic_positions) entry per node -- so any node in the group may
+        // map to any position in the group.
         if (this->mesh_graph_->get_mesh_graph_descriptor_path().has_value()) {
             const auto& pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
-            for (const auto& [pos, fabric_node] : pinnings) {
-                fixed_asic_position_pinnings.emplace_back(fabric_node, std::vector<AsicPosition>{pos});
+            for (const auto& group : pinnings) {
+                for (const auto& fabric_node : group.fabric_nodes) {
+                    fixed_asic_position_pinnings.emplace_back(fabric_node, group.asic_positions);
+                }
             }
         }
 

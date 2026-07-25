@@ -465,11 +465,18 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
             }
         }
 
-        // Extract pinnings from MGD and add to config (only if mesh graph descriptor is available)
+        // Extract pinnings from MGD and add to config (only if mesh graph descriptor is available).
+        // MGD pinnings are many-to-many groups; enumerate each group into the flat (position, node)
+        // config format -- one pair per (node, position) in the group -- so any node in the group may
+        // map to any position in the group.
         if (mesh_graph_.get_mesh_graph_descriptor_path().has_value()) {
             const auto& pinnings = mesh_graph_.get_mesh_graph_descriptor().get_pinnings();
-            for (const auto& [pos, fabric_node] : pinnings) {
-                config.pinnings.emplace_back(pos, fabric_node);
+            for (const auto& group : pinnings) {
+                for (const auto& fabric_node : group.fabric_nodes) {
+                    for (const auto& pos : group.asic_positions) {
+                        config.pinnings.emplace_back(pos, fabric_node);
+                    }
+                }
             }
         }
 

@@ -88,6 +88,31 @@ pinnings {
 }
 ```
 
+### All-to-all pinnings
+
+A single `pinnings` entry may list multiple `logical_fabric_node_id` fields **and** multiple
+`physical_asic_position` fields. Any listed logical node may then map to any listed physical position
+(all-to-all). The solver still enforces a bijection, so distinct logical nodes land on distinct ASICs.
+This is useful when a set of interchangeable nodes (e.g. mesh corners) may each land on any position in
+a set of interchangeable hardware slots.
+
+```proto
+# The 4 corner nodes may land on any of the 4 tray-corner ASICs, in any assignment.
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 0 }
+  logical_fabric_node_id { mesh_id: 0 chip_id: 3 }
+  logical_fabric_node_id { mesh_id: 0 chip_id: 12 }
+  logical_fabric_node_id { mesh_id: 0 chip_id: 15 }
+  physical_asic_position { tray_id: 1 asic_location: 1 }
+  physical_asic_position { tray_id: 2 asic_location: 1 }
+  physical_asic_position { tray_id: 3 asic_location: 1 }
+  physical_asic_position { tray_id: 4 asic_location: 1 }
+}
+```
+
+A given logical node may appear in at most one `pinnings` entry. Listing exactly one node and one
+position reproduces the classic one-to-one pin.
+
 ---
 
 ## Writing an MGD 2.0 textproto
