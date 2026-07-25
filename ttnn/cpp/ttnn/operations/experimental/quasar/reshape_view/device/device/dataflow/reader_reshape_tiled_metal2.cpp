@@ -52,6 +52,13 @@ void kernel_main() {
         const uint32_t map_l1_addr = mapping_cb.get_write_ptr();
         enhanced_noc_async_read<Max_Map_Size_Bytes, true>(noc, map_noc_addr, map_l1_addr, Max_Map_Size_Bytes);
         noc.async_read_barrier();
+        // [#48552 DEBUG] async_read_barrier is a NO-OP on this emulator (v2 ncrisc_noc_reads_flushed =
+        // scmdbuf_tr_ack()==0, always true), so the map DMA may not have landed before we parse it. Busy-wait
+        // to let it land: if seg0_in_pg now VARIES per output page (and PCC recovers), the no-op barrier is the
+        // confirmed root cause. Perf-irrelevant diagnostic; remove for the real fix.
+        for (volatile uint32_t d = 0; d < 300000; ++d) {
+            asm volatile("nop");
+        }
         // [#48552 DEBUG] map_noc lo/hi + l1 slot + first segment's input page as read from L1 -> is the map
         // read advancing per output page, and does the L1 slot actually hold this page's map?
         {
