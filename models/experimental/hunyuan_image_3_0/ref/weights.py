@@ -92,6 +92,23 @@ def has_weights(model_dir: Path) -> bool:
     return is_checkpoint_complete(model_dir)
 
 
+def _downloads_disabled() -> bool:
+    """True when weight downloads must not be attempted (offline CI / explicit skip).
+
+    The test pipelines run with ``HF_HUB_OFFLINE=1`` and pre-staged weights, so a
+    missing/incomplete checkpoint should fail fast with a clear message rather than
+    a doomed ``snapshot_download`` that only dies with an ``OfflineModeIsEnabled``
+    traceback. Weights are downloaded once, out of band, into ``HUNYUAN_MODEL_DIR``.
+    """
+    if os.environ.get("HY_SKIP_WEIGHT_DOWNLOAD", "0") == "1":
+        return True
+    for var in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE"):
+        val = os.environ.get(var, "").strip().lower()
+        if val and val not in ("0", "false", "no"):
+            return True
+    return False
+
+
 def _hf_download(repo_id: str, local_dir: Path | None = None) -> None:
     """Download ``repo_id`` via ``snapshot_download`` / ``hf download``.
 
@@ -229,16 +246,30 @@ def ensure_checkpoint(*, env_var: str, repo_id: str) -> Path:
     try:
         path = resolve_checkpoint(env_var=env_var, repo_id=repo_id)
         if is_checkpoint_complete(path):
+            print(f"[weights] using {path}", flush=True)
             return path
         if not (path / _WEIGHT_INDEX).is_file():
-            reason = f"missing {_WEIGHT_INDEX}"
+            reason = f"incomplete checkpoint at {path}: missing {_WEIGHT_INDEX}"
         else:
             missing = missing_weight_shards(path)
-            reason = f"missing {len(missing)} shard(s) (e.g. {missing[:3]})"
-        print(f"[weights] incomplete checkpoint at {path}: {reason}. Downloading ...", flush=True)
+            reason = f"incomplete checkpoint at {path}: missing {len(missing)} shard(s) (e.g. {missing[:3]})"
     except FileNotFoundError:
         path = None
-        print(f"[weights] no local checkpoint for {repo_id!r}. Downloading ...", flush=True)
+        reason = f"no local checkpoint for {repo_id!r}"
+
+    # Weights are missing/incomplete. When downloads are disabled (offline CI or
+    # HY_SKIP_WEIGHT_DOWNLOAD=1), fail fast at the start with an actionable message
+    # instead of attempting a snapshot_download that can only die with a confusing
+    # OfflineModeIsEnabled traceback. Weights must be pre-staged (see _downloads_disabled).
+    if _downloads_disabled():
+        target = os.environ.get(env_var) or "the HF hub cache"
+        raise FileNotFoundError(
+            f"[weights] {reason}; downloads are disabled (HF_HUB_OFFLINE / "
+            f"HY_SKIP_WEIGHT_DOWNLOAD). Stage the weights before running, e.g.: "
+            f"hf download {repo_id} --local-dir {target}"
+        )
+
+    print(f"[weights] {reason}. Downloading ...", flush=True)
 
     # Prefer the env override path (CI / HUNYUAN_*_MODEL_DIR); else HF hub cache.
     local_dir = Path(os.environ[env_var]) if os.environ.get(env_var) else None
