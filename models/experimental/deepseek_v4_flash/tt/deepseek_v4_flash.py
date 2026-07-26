@@ -9,6 +9,8 @@ from .attention import (
     host_decode_mask,
     int32_pos_tensor,
     make_rope_table,
+    sdpa_causal_cur_pos,
+    sdpa_causal_ok,
 )
 from .common import (
     DeepSeekV4Module,
@@ -58,6 +60,8 @@ __all__ = [
     "host_decode_mask",
     "int32_pos_tensor",
     "make_rope_table",
+    "sdpa_causal_cur_pos",
+    "sdpa_causal_ok",
     "set_signposts_enabled",
     "to_ttnn_device",
 ]

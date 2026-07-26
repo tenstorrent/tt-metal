@@ -7,6 +7,54 @@ from .weight_cache import _load_weight, _materialize
 import torch
 
 
+def get_width_shard_num_cores(width: int, device, num_cores: Optional[int] = None) -> int:
+    if num_cores is None:
+        num_cores = width // ttnn.TILE_SIZE
+    device_grid_size = device.compute_with_storage_grid_size()
+    device_cores = device_grid_size.x * device_grid_size.y
+    while num_cores > device_cores:
+        num_cores //= 2
+    return num_cores
+
+
+def regular_width_sharded_l1_config(
+    height: int, width: int, device, num_cores: Optional[int] = None
+) -> ttnn.MemoryConfig:
+    assert width % ttnn.TILE_SIZE == 0, f"width {width} must be tile-aligned"
+    num_cores = get_width_shard_num_cores(width, device, num_cores)
+    shard_width = width // num_cores
+    height_padded = ((height + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    shard_spec = ttnn.ShardSpec(
+        ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size(), row_wise=True),
+        [height_padded, shard_width],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+
+def reshard_to_rectangular_grid(x: ttnn.Tensor) -> ttnn.Tensor:
+    if not x.is_sharded():
+        return x
+
+    memory_config = x.memory_config()
+    shard_spec = memory_config.shard_spec
+    rectangular_grid = rectangular_core_range_set(shard_spec.grid.num_cores(), x.device())
+    if shard_spec.grid == rectangular_grid:
+        return x
+
+    rectangular_shard_spec = ttnn.ShardSpec(
+        rectangular_grid,
+        shard_spec.shape,
+        shard_spec.orientation,
+    )
+    rectangular_memory_config = ttnn.MemoryConfig(
+        memory_config.memory_layout,
+        memory_config.buffer_type,
+        rectangular_shard_spec,
+    )
+    return ttnn.to_memory_config(x, rectangular_memory_config)
+
+
 def to_ttnn_device(
     tensor: torch.Tensor,
     device: ttnn.MeshDevice,
@@ -101,7 +149,9 @@ class LinearDecode(DeepSeekV4Module):
                 num_inputB_cores = n_blocks
             shard_shape = (self.K, self.N // num_inputB_cores)
 
-        b_core_range_set = rectangular_core_range_set(num_inputB_cores, self.device)
+        b_core_range_set = ttnn.num_cores_to_corerangeset(
+            num_inputB_cores, self.device.compute_with_storage_grid_size(), row_wise=True
+        )
         self.weights_memory_config = ttnn.create_sharded_memory_config(
             shard_shape,
             core_grid=b_core_range_set,
@@ -146,7 +196,9 @@ class LinearDecode(DeepSeekV4Module):
         # self.weight.deallocate()
 
     def get_input_memory_config(self, m: int, k: int) -> ttnn.MemoryConfig:
-        a_core_range_set = rectangular_core_range_set(self.num_inputA_cores, self.device)
+        a_core_range_set = ttnn.num_cores_to_corerangeset(
+            self.num_inputA_cores, self.device.compute_with_storage_grid_size(), row_wise=True
+        )
         a_memory_config = ttnn.create_sharded_memory_config(
             (32, k // self.num_inputA_cores),
             core_grid=a_core_range_set,
@@ -163,9 +215,11 @@ class LinearDecode(DeepSeekV4Module):
         m_padded = ((m + 31) // 32) * 32
         if self.partial_width_sharded:
             # The partial layout reduces the K-partials onto n_blocks output cores, so shard the
-            # output WIDTH_SHARDED across a rectangular grid of n_blocks cores (shard
+            # output WIDTH_SHARDED across n_blocks cores (shard
             # [padded_m, N / n_blocks]).
-            output_core_range_set = rectangular_core_range_set(self.n_blocks, self.device)
+            output_core_range_set = ttnn.num_cores_to_corerangeset(
+                self.n_blocks, self.device.compute_with_storage_grid_size(), row_wise=True
+            )
             output_memory_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 ttnn.BufferType.L1,
@@ -176,7 +230,7 @@ class LinearDecode(DeepSeekV4Module):
                 ),
             )
         else:
-            output_memory_config = width_sharded_l1_config(m_padded, self.N, self.device)
+            output_memory_config = regular_width_sharded_l1_config(m_padded, self.N, self.device)
         if not x.is_sharded():
             x = ttnn.to_memory_config(x, self.get_input_memory_config(x.shape[-2], x.shape[-1]))
         result = ttnn.experimental.matmul_decode(
@@ -242,7 +296,9 @@ class BatchedLinearDecode(DeepSeekV4Module):
         self.bc = batch // self.b_blocks
         self.nc = N // self.n_blocks
 
-        b_core_range_set = rectangular_core_range_set(self.b_blocks * self.n_blocks, device)
+        b_core_range_set = ttnn.num_cores_to_corerangeset(
+            self.b_blocks * self.n_blocks, device.compute_with_storage_grid_size(), row_wise=True
+        )
         self.weights_memory_config = ttnn.create_sharded_memory_config(
             (self.bc * K, self.nc),
             core_grid=b_core_range_set,
@@ -270,7 +326,9 @@ class BatchedLinearDecode(DeepSeekV4Module):
     def get_input_memory_config(self, m: int) -> ttnn.MemoryConfig:
         # Activation A is width(K)-sharded: shard [batch * m_padded, K / num_inputA_cores].
         m_padded = ((m + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-        a_core_range_set = rectangular_core_range_set(self.num_inputA_cores, self.device)
+        a_core_range_set = ttnn.num_cores_to_corerangeset(
+            self.num_inputA_cores, self.device.compute_with_storage_grid_size(), row_wise=True
+        )
         return ttnn.create_sharded_memory_config(
             (self.batch * m_padded, self.K // self.num_inputA_cores),
             core_grid=a_core_range_set,
@@ -307,8 +365,18 @@ class DeepSeekV4RMSNorm(DeepSeekV4Module):
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if self.sharded:
             b, s, t, d = x.shape
-            x_mem_config = width_sharded_l1_config(b * s * t, d, x.device())
-            x = ttnn.to_memory_config(x, x_mem_config)
+            rows = b * s * t
+            # The width-sharded L1 layout gives every core the *full* height (one
+            # tile-width each, so only ``d // TILE_SIZE`` cores), which means its L1
+            # footprint grows with the row count. That is a win for the single-token
+            # decode activations it was added for, but the compressor's pooled entries
+            # are ``max_seq // compress_rate`` rows tall: by max_seq 32k the shards plus
+            # rms_norm's own CBs reach ~2.8 MB against a 1.5 MB budget, and even below
+            # that the interleaved path is measurably faster past one tile-row. So only
+            # shard while the whole tensor is a single tile-row.
+            if rows <= ttnn.TILE_SIZE:
+                x = ttnn.to_memory_config(x, width_sharded_l1_config(rows, d, x.device()))
+        x = reshard_to_rectangular_grid(x)
         return ttnn.rms_norm(x, weight=self.weight, epsilon=self.eps)
 
 
@@ -318,4 +386,5 @@ def _rms_norm_unweighted(x: ttnn.Tensor, eps: float) -> ttnn.Tensor:
     #     b, s, t, d = x.shape
     #     x_mem_config = width_sharded_l1_config(b * s * t, d, x.device())
     #     x = ttnn.to_memory_config(x, x_mem_config)
+    x = reshard_to_rectangular_grid(x)
     return ttnn.rms_norm(x, epsilon=eps)
