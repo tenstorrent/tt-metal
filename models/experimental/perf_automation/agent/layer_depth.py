@@ -26,9 +26,89 @@ THE FIX IS THE ABSENCE OF A VALUE
 
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 
 ENV = "TT_PERF_LAYERS"
+
+# Keys that declare "how many repeated blocks does this model have", across the config dialects
+# tt-metal models actually ship: HF transformers, Meta llama params.json, and hand-rolled JSON.
+_DEPTH_KEYS = (
+    "num_hidden_layers",  # HF transformers (llama, mistral, qwen, ...)
+    "n_layers",  # Meta llama params.json
+    "num_layers",
+    "n_layer",  # GPT-2 lineage
+    "num_blocks",
+    "num_decoder_layers",
+    "decoder_layers",
+    "gpt_layers",  # XTTS
+    "depth",
+)
+
+# Directories that hold OTHER models' configs. Never descend into these: a llama demo carries
+# model_params/Qwen2.5-VL-72B-Instruct/config.json and ~40 more, so a recursive scan silently
+# returns a different model's depth -- the same class of wrong-number-looks-plausible bug this
+# module exists to stop.
+_FOREIGN_DIRS = ("model_params", "reference_outputs", "sweeps", "model_cache", "tests")
+
+
+def _depth_from_mapping(obj) -> int | None:
+    """The first recognised depth key with a positive int value, or None."""
+    if not isinstance(obj, dict):
+        return None
+    for key in _DEPTH_KEYS:
+        v = obj.get(key)
+        if isinstance(v, bool):
+            continue
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            continue
+        if n > 0:
+            return n
+    for nested in ("text_config", "decoder", "model", "gpt", "llm_config"):
+        n = _depth_from_mapping(obj.get(nested))
+        if n is not None:
+            return n
+    return None
+
+
+def full_depth_from_config(model_id: str = "", model_dir=None) -> int | None:
+    """How many repeated blocks does this model have, read WITHOUT building or running it.
+
+    Resolution order, most authoritative first:
+      1. HF transformers config for `model_id` (also covers custom architectures via
+         trust_remote_code, and nested text_config for multimodal wrappers).
+      2. A config file sitting at the ROOT of `model_dir` -- config.json / params.json /
+         model_config.json -- for models that ship their own, HF or not.
+
+    Returns None rather than a guess when nothing declares it, so the caller falls back to letting
+    the builder reveal its own depth. Never recurses: see _FOREIGN_DIRS for why.
+    """
+    if model_id:
+        try:
+            from transformers import AutoConfig
+
+            cfg = AutoConfig.from_pretrained(str(model_id), trust_remote_code=True)
+            n = _depth_from_mapping(getattr(cfg, "__dict__", {}) or {})
+            if n is not None:
+                return n
+        except Exception:  # noqa: BLE001
+            pass
+    if model_dir:
+        root = Path(model_dir)
+        for name in ("config.json", "params.json", "model_config.json"):
+            p = root / name
+            if not p.is_file():
+                continue
+            try:
+                n = _depth_from_mapping(json.loads(p.read_text(errors="ignore")))
+            except Exception:  # noqa: BLE001
+                continue
+            if n is not None:
+                return n
+    return None
 
 
 def set_depth(env, depth) -> dict:
