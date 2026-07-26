@@ -25,7 +25,6 @@ def test_contract_has_decode_horizon_section() -> None:
 
 def test_contract_forbids_magic_constant() -> None:
     c = _TT_ONLY_CONTRACT
-    # calls out the hardcoded-N defect explicitly
     assert "magic" in c and "N=40" in c
     assert "NOT an arbitrary hardcoded constant" in c
 
@@ -36,19 +35,16 @@ def test_contract_prioritizes_stop_token_then_config_then_llm() -> None:
     assert "eos_token_id" in c
     assert "generation_config.max_new_tokens" in c
     assert "LLM FALLBACK" in c
-    # ordering: stop-token guidance appears before the LLM fallback
     assert c.index("STOP-TOKEN") < c.index("LLM FALLBACK")
 
 
 def test_contract_requires_safety_cap_and_same_rule_for_golden() -> None:
     c = _TT_ONLY_CONTRACT
     assert "safety cap" in c
-    # the golden/reference must use the SAME horizon rule as the TT decode
     assert "SAME stop rule" in c and "HF golden" in c
 
 
 def test_contract_keeps_trace_capture_fixed_capacity() -> None:
-    # variable-length correctness decode must not make traced shapes dynamic
     c = _TT_ONLY_CONTRACT
     assert "FIXED max capacity" in c
     assert "PCC/correctness test only" in c

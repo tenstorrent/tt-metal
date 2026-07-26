@@ -493,12 +493,6 @@ def synthesize_recompose_links(
                 kids.append(c)
         return kids
 
-    # Existing (live + archived) parent->children linkage. A parent already
-    # fully linked is skipped (idempotent); a parent that is no_emit/locked
-    # but has NO linkage is the cross-run-resume stranded case -- re-link it
-    # so the recompose path can restore it. Being no_emit/locked alone must
-    # NOT skip, or a resume where the plan file didn't round-trip through the
-    # overlay leaves the parent permanently stuck (no_emit, never recomposed).
     try:
         from .final_categorization import _load_decomposition_children
 
@@ -523,13 +517,6 @@ def synthesize_recompose_links(
         prior = set(existing_links.get(pname) or [])
         fully_linked = bool(prior) and all((k.get("submodule_path") or "") in prior for k in kids)
         if fully_linked:
-            # Already linked. Re-arm an INCOMPLETE recompose target on resume:
-            # a linked, non-graduated parent that is NOT currently no_emit was
-            # un-armed when a prior run's recompose executor removed its no_emit
-            # and locked it -- but it never graduated (that run ended first).
-            # parents_ready only iterates no_emit parents, so without re-arming
-            # it is stranded (linked + locked, never re-offered). Re-mark no_emit
-            # (via the tail) so parents_ready re-offers it this run.
             if on_device and pname not in no_emit:
                 linked.append(pname)
                 notes.append(
@@ -537,8 +524,6 @@ def synthesize_recompose_links(
                     "-> re-offer for recompose"
                 )
             continue
-        # Refuse if any child is already claimed by a DIFFERENT parent's
-        # formal decomposition -- never fight a real linkage.
         if any((k.get("_added_by_decomposition_of") or pname) != pname for k in kids):
             continue
         if not on_device:

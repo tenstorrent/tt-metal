@@ -283,10 +283,6 @@ def test_reinject_skips_intermediate_and_no_emit(tmp_path: Path, monkeypatch) ->
     assert added == 1
 
 
-# ---------------------------------------------------------------------------
-# synthesize_recompose_links: link a never-decomposed composite to its
-# already-on-device children (the XTTS g_p_t gap).
-# ---------------------------------------------------------------------------
 from scripts.tt_hw_planner.decomposition_consumer import (  # noqa: E402
     synthesize_recompose_links,
 )
@@ -306,7 +302,6 @@ def test_synthesize_links_wrapper_with_ondevice_children(tmp_path: Path, monkeyp
             {"name": "wrap", "status": "NEW", "submodule_path": "gpt"},
             {"name": "kid_a", "status": "NEW", "submodule_path": "gpt.a"},
             {"name": "kid_b", "status": "NEW", "submodule_path": "gpt.b"},
-            # grandchild — must NOT be treated as an immediate child of wrap
             {"name": "grand", "status": "NEW", "submodule_path": "gpt.a.inner"},
         ],
     )
@@ -316,16 +311,13 @@ def test_synthesize_links_wrapper_with_ondevice_children(tmp_path: Path, monkeyp
     )
     assert linked == 1, notes
 
-    # parent marked no_emit
     assert "wrap" in om.load_no_emit_tests("test/m")
 
-    # plan records exactly the two immediate children (not the grandchild)
     plan = json.loads((demo_dir / "decomposition_plan.json").read_text())
     entry = [e for e in plan if e["parent_name"] == "wrap"][0]
     kid_paths = sorted(c["submodule_path"] for c in entry["children"])
     assert kid_paths == ["gpt.a", "gpt.b"]
 
-    # children tagged so the recompose prompt can surface them as building blocks
     status = json.loads((demo_dir / "bringup_status.json").read_text())
     by = {c["name"]: c for c in status["components"]}
     assert by["kid_a"]["_added_by_decomposition_of"] == "wrap"
@@ -371,7 +363,6 @@ def test_synthesize_links_relinks_no_emit_parent_missing_plan(tmp_path: Path, mo
             {"name": "kid_b", "status": "NEW", "submodule_path": "gpt.b"},
         ],
     )
-    # no_emit set but NO decomposition_plan.json present — the stranded state.
     om.persist_no_emit_test("test/m", "wrap", reason="prior run, plan lost")
     linked, _ = synthesize_recompose_links(
         model_id="test/m", demo_dir=demo_dir, graduated_set={"kid_a", "kid_b"}
@@ -380,7 +371,6 @@ def test_synthesize_links_relinks_no_emit_parent_missing_plan(tmp_path: Path, mo
     plan = json.loads((demo_dir / "decomposition_plan.json").read_text())
     assert [e for e in plan if e["parent_name"] == "wrap"]
 
-    # now the plan exists -> second run is a no-op (idempotent, no double entry)
     linked2, _ = synthesize_recompose_links(
         model_id="test/m", demo_dir=demo_dir, graduated_set={"kid_a", "kid_b"}
     )
@@ -404,8 +394,6 @@ def test_synthesize_rearms_incomplete_locked_target(tmp_path: Path, monkeypatch)
             {"name": "kid_b", "status": "NEW", "submodule_path": "gpt.b"},
         ],
     )
-    # Prior run's state: plan exists (linked), children on device, but wrap is
-    # NOT no_emit (executor removed it) and NOT graduated -> the stranded case.
     plan = [{"parent_name": "wrap", "children": [
         {"name": "kid_a", "submodule_path": "gpt.a"},
         {"name": "kid_b", "submodule_path": "gpt.b"}]}]
@@ -440,7 +428,6 @@ def test_synthesize_does_not_rearm_graduated_target(tmp_path: Path, monkeypatch)
         {"name": "kid_b", "submodule_path": "gpt.b"}]}]
     (demo_dir / "decomposition_plan.json").write_text(json.dumps(plan))
 
-    # wrap graduated -> must not be re-armed
     linked, _ = synthesize_recompose_links(
         model_id="test/m", demo_dir=demo_dir, graduated_set={"wrap", "kid_a", "kid_b"}
     )

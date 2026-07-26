@@ -42,7 +42,6 @@ def test_clears_harness_skipped_and_reason(tmp_path: Path) -> None:
     cleared = _clear_terminal_state_for_recompose(demo, "g_p_t")
     assert "harness_skipped" in cleared
     st = json.loads((demo / ".bringup_cc_state.json").read_text())
-    # g_p_t scrubbed everywhere; the other component untouched
     assert st["harness_skipped"] == ["other"]
     assert "g_p_t" not in st["harness_skip_reason"]
     assert st["harness_skip_reason"]["other"] == "x"

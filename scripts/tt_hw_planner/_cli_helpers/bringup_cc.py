@@ -188,12 +188,6 @@ def _reconcile_recompose(model_id: str, demo_dir: Path) -> List[str]:
         from ..final_categorization import parents_ready_to_recompose
         from ..overlay_manager import persist_locked_module, remove_no_emit_test
 
-        # Self-heal: a NEW composite that never formally decomposed but whose
-        # sub-modules already graduated as their own components gets its
-        # parent->children linkage synthesized here, so the recompose path
-        # below can restore it as a whole-module target instead of stranding
-        # it on CPU. Reliable path-identity only; the parent still earns
-        # ON_DEVICE by passing its OWN test.
         _linked, _link_notes = synthesize_recompose_links(model_id=model_id, demo_dir=demo_dir)
         if _linked:
             print(f"  [recompose-link] synthesized {_linked} parent->on-device-children linkage(s):")
@@ -561,10 +555,6 @@ def run_bringup_cc(
 
     _banner(f"Step 6/6  Bring-up (cc engine) — harness loop on the per-component gate for {model_id}")
 
-    # Reconcile recompose BEFORE capture: restoring a recomposed whole-module
-    # target clears its no_emit mark, so the subsequent capture pass includes
-    # it and refreshes its golden. Doing capture first would skip the still-
-    # no_emit target and leave the restored parent without inputs to test.
     _restore_orphaned_stale_tests(model_id, Path(demo_dir))
     _reinject_orphan_children(model_id, Path(demo_dir))
     _reconcile_recompose(model_id, Path(demo_dir))

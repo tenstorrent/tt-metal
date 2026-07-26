@@ -8362,18 +8362,6 @@ def _cmd_up_isolated(args) -> int:
         captured, capture_ok = _capture_worktree_deltas_as_overlay(session.path, args.model_id)
         if capture_ok:
             if rc == 0:
-                # Persist the freshly-graduated demo dir(s) back to the main tree
-                # BEFORE destroying the worktree. The graduated deliverables
-                # (native/sharded stubs + their `.last_good_*` snapshots +
-                # bringup_status.json + tests + RUN_REPORT.md) live in the
-                # worktree's demo dir; without this copy they are destroyed with
-                # the worktree, only the overlay keeps them, and any in-place
-                # downstream stage (emit-e2e / promote, which read the demo dir,
-                # not the overlay) sees a STALE main tree — e.g. a module that
-                # graduated via recompose in the worktree (its snapshot only in
-                # the overlay) is under-counted as CPU, and the report shows
-                # 31/32 after a run that reached 32/32. A demo dir is identified
-                # by its bringup_status.json.
                 for _rel in _persist_graduated_demos(session.path, prev_cwd):
                     print(f"  [isolation] persisted graduated demo (stubs+snapshots+status+report) -> {_rel}")
                 print(f"  [isolation] captured {captured} LLM delta(s); destroying worktree")

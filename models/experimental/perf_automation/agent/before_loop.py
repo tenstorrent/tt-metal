@@ -291,8 +291,6 @@ def before_loop(
                 + ")"
             )
         else:
-            # Not healthy and not auto-fixable here — fail fast with the remediation instead of
-            # running the whole sweep only to error/hang on the first agent call.
             raise SystemExit(
                 "BEFORE-LOOP FAILED: agent SDK unhealthy "
                 f"(claude-agent-sdk {sdk_status.get('version')}): {sdk_status.get('reason')}\n"

@@ -34,14 +34,12 @@ def test_persists_full_demo_including_snapshots(tmp_path: Path) -> None:
     wt = tmp_path / "worktree"
     main = tmp_path / "maintree"
     _make_worktree_demo(wt)
-    # main tree starts EMPTY (simulating the stale/missing state)
     (main).mkdir()
 
     synced = _persist_graduated_demos(wt, main)
     assert synced == ["models/demos/xtts_v2"]
 
     md = main / "models" / "demos" / "xtts_v2"
-    # the graduation snapshot (the thing that was missing → 31/32) is now on disk
     assert (md / "_stubs" / "g_p_t.py.last_good_sharded").is_file()
     assert (md / "_stubs" / "g_p_t.py").is_file()
     assert (md / "bringup_status.json").is_file()
@@ -54,7 +52,6 @@ def test_merges_over_existing_stale_main(tmp_path: Path) -> None:
     wt = tmp_path / "worktree"
     main = tmp_path / "maintree"
     _make_worktree_demo(wt)
-    # stale main: 31 stubs but NO g_p_t snapshot, old report
     stale = main / "models" / "demos" / "xtts_v2" / "_stubs"
     stale.mkdir(parents=True)
     (stale / "g_p_t.py").write_text("# OLD body\n")
