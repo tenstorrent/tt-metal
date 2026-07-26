@@ -34,7 +34,13 @@ pytestmark = [
     pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True),
     pytest.mark.parametrize(
         "device_params",
-        [{"l1_small_size": 24576, "fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+        [
+            {
+                "l1_small_size": 24576,
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "trace_region_size": 256 * 1024 * 1024,
+            }
+        ],
         indirect=True,
     ),
 ]
@@ -130,6 +136,70 @@ def _enqueue_scans(
     return tuple(outputs)
 
 
+def _execute_stage_traces(
+    probe: SP8AffinePrefixProbe,
+    stage_traces: tuple[tuple[int, ...], ...],
+    repetitions: int,
+) -> None:
+    """Replay each distance on all ranks, then establish its global boundary."""
+    for _ in range(repetitions):
+        for trace_ids in stage_traces:
+            for device, trace_id in zip(probe.span_devices, trace_ids, strict=True):
+                ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
+            probe._synchronize()
+
+
+def _stage_sliced_trace_overlap(
+    probe: SP8AffinePrefixProbe,
+    transform_a: tuple[ttnn.Tensor, ...],
+    transform_b: tuple[ttnn.Tensor, ...],
+    layers: tuple[KimiDeltaAttention, ...],
+    prepared: tuple[PreparedKDA, ...],
+    grouped: tuple[list[ttnn.Tensor], ...],
+    entries: tuple[ttnn.Tensor, ...],
+    repetitions: int,
+) -> None:
+    """Capture one trace per rank and prefix distance, with host stage fences."""
+    # All program binaries must be in cache before capture. These retained
+    # outputs also keep the allocated stage addresses stable for trace capture.
+    warm_scan_outputs = _enqueue_scans(layers, prepared, grouped, entries)
+    warm_a, warm_b = probe.run(transform_a, transform_b, retain_buffers=True, synchronize_stages=True)
+    probe._synchronize()
+
+    prefix_a, prefix_b = transform_a, transform_b
+    stage_traces = []
+    trace_outputs: list[ttnn.Tensor] = []
+    for stage in range(3):
+        trace_ids = tuple(ttnn.begin_trace_capture(device, cq_id=0) for device in probe.span_devices)
+        scans: tuple[ttnn.Tensor, ...] = ()
+
+        def enqueue_stage_zero_scan(current_stage: int) -> None:
+            nonlocal scans
+            if current_stage == 0:
+                scans = _enqueue_scans(layers, prepared, grouped, entries)
+
+        prefix_a, prefix_b = probe.run_stage(
+            prefix_a,
+            prefix_b,
+            stage,
+            retain_buffers=True,
+            after_enqueued=enqueue_stage_zero_scan,
+        )
+        for device, trace_id in zip(probe.span_devices, trace_ids, strict=True):
+            ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        stage_traces.append(trace_ids)
+        trace_outputs.extend(scans)
+
+    _execute_stage_traces(probe, tuple(stage_traces), 1)
+    signpost(header="sp8_stage_sliced_trace_start")
+    _execute_stage_traces(probe, tuple(stage_traces), repetitions)
+    signpost(header="sp8_stage_sliced_trace_stop")
+
+    for device, trace_ids in zip(probe.span_devices, zip(*stage_traces, strict=True), strict=True):
+        for trace_id in trace_ids:
+            ttnn.release_trace(device, trace_id)
+
+
 def test_sp8_stage_barrier_overlap_stability(mesh_device: ttnn.MeshDevice) -> None:
     """Verify the stage-barrier schedule drains fabric under rank-shaped work."""
     sequence = int(os.getenv("PERF_LOCAL_SEQ", "2560"))
@@ -145,15 +215,27 @@ def test_sp8_stage_barrier_overlap_stability(mesh_device: ttnn.MeshDevice) -> No
         if stage == 0:
             scan_outputs = _enqueue_scans(layers, prepared, grouped, entries)
 
-    signpost(header="sp8_stage_barrier_overlap_start")
-    prefix_a, prefix_b = probe.run(
-        transform_a,
-        transform_b,
-        synchronize_stages=True,
-        after_stage_enqueued=enqueue_after_stage_zero,
-    )
-    signpost(header="sp8_stage_barrier_overlap_stop")
-    for output in scan_outputs:
-        ttnn.deallocate(output)
-    for tensor in (*prefix_a, *prefix_b):
-        ttnn.deallocate(tensor)
+    if os.getenv("PERF_STAGE_SLICED_TRACE", "0") == "1":
+        _stage_sliced_trace_overlap(
+            probe,
+            transform_a,
+            transform_b,
+            layers,
+            prepared,
+            grouped,
+            entries,
+            int(os.getenv("PERF_REPS", "3")),
+        )
+    else:
+        signpost(header="sp8_stage_barrier_overlap_start")
+        prefix_a, prefix_b = probe.run(
+            transform_a,
+            transform_b,
+            synchronize_stages=True,
+            after_stage_enqueued=enqueue_after_stage_zero,
+        )
+        signpost(header="sp8_stage_barrier_overlap_stop")
+        for output in scan_outputs:
+            ttnn.deallocate(output)
+        for tensor in (*prefix_a, *prefix_b):
+            ttnn.deallocate(tensor)

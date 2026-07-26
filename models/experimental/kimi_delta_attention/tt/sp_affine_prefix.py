@@ -75,6 +75,70 @@ class SP8AffinePrefixProbe:
         for device in self.span_devices:
             ttnn.synchronize_device(device)
 
+    def run_stage(
+        self,
+        prefix_a: tuple[ttnn.Tensor, ...],
+        prefix_b: tuple[ttnn.Tensor, ...],
+        stage: int,
+        *,
+        retain_buffers: bool = False,
+        synchronize_transfer: bool = False,
+        after_enqueued: Callable[[int], None] | None = None,
+    ) -> tuple[tuple[ttnn.Tensor, ...], tuple[ttnn.Tensor, ...]]:
+        """Enqueue one prefix distance.
+
+        Callers that invoke more than one stage must establish a rank-wide
+        completion boundary before the following stage.  ``synchronize_transfer``
+        is the eager implementation of that boundary; stage-sliced trace
+        callers synchronize after replaying this stage on every rank.
+        """
+        if stage < 0 or stage >= len(_PREFIX_STAGES):
+            raise ValueError(f"expected prefix stage in [0, {len(_PREFIX_STAGES)}), got {stage}")
+        if len(prefix_a) != _SP_SIZE or len(prefix_b) != _SP_SIZE:
+            raise ValueError(f"expected {_SP_SIZE} transforms, got A={len(prefix_a)}, B={len(prefix_b)}")
+        distance = _PREFIX_STAGES[stage]
+        received_a: dict[int, ttnn.Tensor] = {}
+        received_b: dict[int, ttnn.Tensor] = {}
+        # Snapshot the preceding stage at every source before any rank is
+        # overwritten. A socket is an ordered stream, so A then B are sent and
+        # received in the same order on every edge.
+        for source, (send_socket, recv_socket) in enumerate(self._stage_sockets[stage]):
+            destination = source + distance
+            received_a[destination] = ttnn.allocate_tensor_on_device(
+                prefix_a[source].spec, self.span_devices[destination]
+            )
+            received_b[destination] = ttnn.allocate_tensor_on_device(
+                prefix_b[source].spec, self.span_devices[destination]
+            )
+            ttnn.experimental.send_async(prefix_a[source], send_socket)
+            ttnn.experimental.recv_async(received_a[destination], recv_socket)
+            ttnn.experimental.send_async(prefix_b[source], send_socket)
+            ttnn.experimental.recv_async(received_b[destination], recv_socket)
+        if after_enqueued is not None:
+            after_enqueued(stage)
+        if synchronize_transfer:
+            self._synchronize()
+
+        next_a = list(prefix_a)
+        next_b = list(prefix_b)
+        for destination in range(distance, _SP_SIZE):
+            # T_destination o T_prefix: A_d @ A_p, A_d @ B_p + B_d.
+            next_a[destination] = ttnn.matmul(
+                prefix_a[destination], received_a[destination], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            carried_b = ttnn.matmul(
+                prefix_a[destination], received_b[destination], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            next_b[destination] = ttnn.add(carried_b, prefix_b[destination], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        if not retain_buffers:
+            for destination in range(distance, _SP_SIZE):
+                ttnn.deallocate(prefix_a[destination])
+                ttnn.deallocate(prefix_b[destination])
+                ttnn.deallocate(received_a[destination])
+                ttnn.deallocate(received_b[destination])
+        return tuple(next_a), tuple(next_b)
+
     def run(
         self,
         transform_a: tuple[ttnn.Tensor, ...],
@@ -95,52 +159,16 @@ class SP8AffinePrefixProbe:
             raise ValueError(f"expected {_SP_SIZE} transforms, got A={len(transform_a)}, B={len(transform_b)}")
         if after_stage_enqueued is not None and not synchronize_stages:
             raise ValueError("after_stage_enqueued requires synchronize_stages=True")
-        prefix_a = list(transform_a)
-        prefix_b = list(transform_b)
-
-        for stage, distance in enumerate(_PREFIX_STAGES):
-            received_a: dict[int, ttnn.Tensor] = {}
-            received_b: dict[int, ttnn.Tensor] = {}
-            # Snapshot the preceding stage at every source before any rank is
-            # overwritten.  A socket is an ordered stream, so A then B are
-            # sent/received in the same order on every edge.
-            for source, (send_socket, recv_socket) in enumerate(self._stage_sockets[stage]):
-                destination = source + distance
-                received_a[destination] = ttnn.allocate_tensor_on_device(
-                    prefix_a[source].spec, self.span_devices[destination]
-                )
-                received_b[destination] = ttnn.allocate_tensor_on_device(
-                    prefix_b[source].spec, self.span_devices[destination]
-                )
-                ttnn.experimental.send_async(prefix_a[source], send_socket)
-                ttnn.experimental.recv_async(received_a[destination], recv_socket)
-                ttnn.experimental.send_async(prefix_b[source], send_socket)
-                ttnn.experimental.recv_async(received_b[destination], recv_socket)
-            if after_stage_enqueued is not None:
-                after_stage_enqueued(stage)
+        prefix_a, prefix_b = transform_a, transform_b
+        for stage in range(len(_PREFIX_STAGES)):
+            prefix_a, prefix_b = self.run_stage(
+                prefix_a,
+                prefix_b,
+                stage,
+                retain_buffers=retain_buffers,
+                synchronize_transfer=synchronize_stages,
+                after_enqueued=after_stage_enqueued,
+            )
             if synchronize_stages:
                 self._synchronize()
-
-            next_a = list(prefix_a)
-            next_b = list(prefix_b)
-            for destination in range(distance, _SP_SIZE):
-                # T_destination o T_prefix: A_d @ A_p, A_d @ B_p + B_d.
-                next_a[destination] = ttnn.matmul(
-                    prefix_a[destination], received_a[destination], memory_config=ttnn.DRAM_MEMORY_CONFIG
-                )
-                carried_b = ttnn.matmul(
-                    prefix_a[destination], received_b[destination], memory_config=ttnn.DRAM_MEMORY_CONFIG
-                )
-                next_b[destination] = ttnn.add(carried_b, prefix_b[destination], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            if synchronize_stages:
-                self._synchronize()
-
-            if not retain_buffers:
-                for destination in range(distance, _SP_SIZE):
-                    ttnn.deallocate(prefix_a[destination])
-                    ttnn.deallocate(prefix_b[destination])
-                    ttnn.deallocate(received_a[destination])
-                    ttnn.deallocate(received_b[destination])
-            prefix_a, prefix_b = next_a, next_b
-
-        return tuple(prefix_a), tuple(prefix_b)
+        return prefix_a, prefix_b

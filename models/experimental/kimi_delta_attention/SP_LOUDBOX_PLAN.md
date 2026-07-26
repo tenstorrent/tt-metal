@@ -255,6 +255,13 @@ state-transfer protocol and measure its components.
   issuing the next one.  This passed on LB with both one and two socket lanes.
   It is a stability proof only: its all-rank scan release is optimistic and
   the host stage barriers make it unsuitable as a performance measurement.
+  The same ordering is now exercised as three separately captured child-trace
+  distances, with a host synchronization only between trace replays.  Ten
+  two-lane replays take **2.692 ms/replay** in the signposted host interval
+  (report `2026_07_26_13_25_08`) for prefix plus the optimistic grouped-scan
+  workload.  It is a safe scheduling baseline, not a layer benchmark: it
+  omits the KDA epilogue and TP=4 CCL, and production must replace the host
+  stage fences with supported device events or a fused fabric protocol.
 * The direct TP=4 output matmul has no safe grid-only win.  An explicit 10x8
   prefill grid passed the full target-shape SP2xTP4 PCC suite, but raised its
   output matmul from about **205 us** to **223 us** and the three-replay
