@@ -47,6 +47,14 @@ if _PERF_TRACE:
     _DEV_PARAMS["trace_region_size"] = int(os.environ.get("TT_PERF_TRACE_REGION", "23887872"))
     _DEV_PARAMS["num_command_queues"] = int(os.environ.get("TT_PERF_NUM_CQ", "1"))
 
+
+# TOPOLOGY. --devices/--mesh are planned by the tool and exported as TT_PERF_MESH_ROWS/COLS;
+# resolve_mesh_shape is how a run honours them. Give it the SOURCE's own shape as the default, so an
+# unset env behaves exactly as the demo does. If the source uses a `mesh_device` FIXTURE, keep that
+# fixture + its parametrize and feed this tuple in; if it SELF-OPENS, pass it to MeshShape().
+# A copied MESH_DEVICE board table on its own cannot see --devices/--mesh.
+from models.experimental.perf_automation.agent.perf_adapter import resolve_mesh_shape
+_MESH_SHAPE = resolve_mesh_shape(default_rows=<source rows>, default_cols=<source cols>)
 @pytest.mark.parametrize("device_params", [_DEV_PARAMS], indirect=True)
 def test_<task>_perf(device_params, device):
     # 1) build the pipeline EXACTLY as demo/demo_<task>.py does
@@ -136,6 +144,14 @@ if _PERF_TRACE:
     _DEV_PARAMS["trace_region_size"] = int(os.environ.get("TT_PERF_TRACE_REGION", "23887872"))
     _DEV_PARAMS["num_command_queues"] = int(os.environ.get("TT_PERF_NUM_CQ", "1"))
 
+
+# TOPOLOGY. --devices/--mesh are planned by the tool and exported as TT_PERF_MESH_ROWS/COLS;
+# resolve_mesh_shape is how a run honours them. Give it the SOURCE's own shape as the default, so an
+# unset env behaves exactly as the demo does. If the source uses a `mesh_device` FIXTURE, keep that
+# fixture + its parametrize and feed this tuple in; if it SELF-OPENS, pass it to MeshShape().
+# A copied MESH_DEVICE board table on its own cannot see --devices/--mesh.
+from models.experimental.perf_automation.agent.perf_adapter import resolve_mesh_shape
+_MESH_SHAPE = resolve_mesh_shape(default_rows=<source rows>, default_cols=<source cols>)
 @pytest.mark.parametrize("device_params", [_DEV_PARAMS], indirect=True)
 def test_<task>_perf(device_params, device):
     # SELF-RECORDING PIPELINE: the model's own <self_traced_fn> already records its trace (trace+1CQ)
@@ -1108,11 +1124,23 @@ def generate_perf_test(
         "`trace_region_size`/`num_command_queues` on that self-open call when TT_PERF_TRACE (drop the "
         "`_DEV_PARAMS`/`device_params` fixture entirely). Keep `_build_for_perf(dev)` building the pipeline "
         "on the passed-in `dev` so both the eager forward and the trace run the SAME sharded topology.\n"
-        "- MESH SHAPE — honor the tool's topology: when you self-open a mesh, derive the (rows, cols) via "
-        "`from models.experimental.perf_automation.agent.perf_adapter import resolve_mesh_shape` and "
-        "`rows, cols = resolve_mesh_shape(default_rows=<source rows>, default_cols=<source cols>)`, then "
-        "open `MeshShape(rows, cols)`. This lets --devices/--mesh reshape the run (single->1x1, N chips->the "
-        "planned TP x DP); with the env unset it falls back to the source's own shape. Do NOT hardcode the shape.\n"
+        "- MESH SHAPE — honor the tool's topology, HOWEVER this test obtains its device. The shape MUST come "
+        "from `from models.experimental.perf_automation.agent.perf_adapter import resolve_mesh_shape` / "
+        "`rows, cols = resolve_mesh_shape(default_rows=<source rows>, default_cols=<source cols>)`. That is "
+        "what lets --devices/--mesh reshape the run (single->1x1, N chips->the planned TP x DP); with the env "
+        "unset it returns the source's own shape, so a bare manual run behaves exactly as before. It applies "
+        "to BOTH shapes a test can take:\n"
+        "    SELF-OPENED mesh -> open `MeshShape(rows, cols)`.\n"
+        "    `mesh_device` FIXTURE + @pytest.mark.parametrize (what most tt-metal demos use, and what the "
+        "SAME-FIXTURES rule tells you to reuse) -> keep the fixture and the decorator, but the tuple inside "
+        "the parametrize must be resolve_mesh_shape's result, with the source's own lookup as its DEFAULT:\n"
+        "        _DEMO_MESH = {<the source's board table>}.get(os.environ.get('MESH_DEVICE'), <source default>)\n"
+        "        _MESH_SHAPE = resolve_mesh_shape(default_rows=_DEMO_MESH[0], default_cols=_DEMO_MESH[1])\n"
+        "        @pytest.mark.parametrize('mesh_device', [_MESH_SHAPE], indirect=True)\n"
+        "  NEVER hardcode the shape, and NEVER leave a copied board-name table as the ONLY source of it: a "
+        "lookup keyed on MESH_DEVICE cannot see --devices/--mesh, so the planned topology is silently ignored "
+        "and the operator must hand-set MESH_DEVICE. Measured on llama3_1_8b_p150 (2026-07-26): the copied "
+        "table meant --devices single never reached the device open.\n"
         "- Lift the imports + build args straight from the demo above.\n\n"
         f"Use this structural skeleton (adapt the build+run to the demo):\n{skeleton_for(root)}\n"
     )
