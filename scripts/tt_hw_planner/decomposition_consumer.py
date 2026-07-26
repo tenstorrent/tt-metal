@@ -418,6 +418,151 @@ def reinject_missing_decomposition_children(
     return added, notes
 
 
+def synthesize_recompose_links(
+    *,
+    model_id: str,
+    demo_dir: Path,
+    graduated_set: Optional[Set[str]] = None,
+) -> Tuple[int, List[str]]:
+    """Record a parent->children decomposition linkage for a NEW composite
+    that was never formally decomposed but whose sub-modules already exist as
+    separate on-device components.
+
+    The formal decompose path only creates a recompose linkage when the tool
+    itself splits a parent. A model that ships a thin wrapper over heavy
+    sub-modules (XTTS ``g_p_t`` over its GPT2 stack + conditioning encoders)
+    has those sub-modules discovered as their OWN top-level components, so
+    ``decompose`` finds zero NEW children and no linkage is ever recorded --
+    the wrapper can never recompose and, if its own port stalls, strands on
+    CPU. This synthesizes the missing linkage from ``submodule_path`` identity:
+    for a not-yet-graduated NEW composite whose immediate child components
+    (closest component-ancestor == parent) are ALL on device, it tags those
+    children as the parent's decomposition children, writes a decomposition
+    plan entry, and marks the parent ``no_emit`` so the existing recompose
+    path restores it as a whole-module target. Reliable-signal (path identity)
+    only -- no fuzzy matching.
+
+    The parent still earns ON_DEVICE solely by passing its OWN PCC test, so a
+    wrong composition simply fails and it stays on CPU; nothing graduates on a
+    linkage alone. Idempotent: a parent already decomposed / no_emit / locked
+    / graduated, or one whose children are not all on device, is skipped.
+    Returns ``(parents_linked, notes)``.
+    """
+    status_path = demo_dir / "bringup_status.json"
+    if not status_path.is_file():
+        return 0, []
+    try:
+        status = json.loads(status_path.read_text())
+    except Exception:
+        return 0, []
+
+    components: List[Dict[str, Any]] = list(status.get("components", []) or [])
+    if not components:
+        return 0, []
+
+    try:
+        from .final_categorization import _infer_graduated_from_disk
+        from .overlay_manager import load_locked_modules, load_no_emit_tests, load_persistent_skips, persist_no_emit_test
+    except Exception:
+        return 0, []
+
+    new_names = [c.get("name") for c in components if c.get("status") == "NEW" and c.get("name")]
+    graduated = set(graduated_set or set()) | set(_infer_graduated_from_disk(demo_dir, new_names))
+    graduated -= set(load_persistent_skips(model_id).keys())
+    reuse = {c.get("name") for c in components if c.get("status") == "REUSE" and c.get("name")}
+    no_emit = set(load_no_emit_tests(model_id).keys())
+    locked = set(load_locked_modules(model_id).keys())
+
+    def _on_device(name: str) -> bool:
+        return name in graduated or name in reuse
+
+    comp_by_path: Dict[str, Dict[str, Any]] = {
+        c.get("submodule_path"): c for c in components if c.get("submodule_path") and c.get("name")
+    }
+
+    def _immediate_children(parent_sp: str) -> List[Dict[str, Any]]:
+        kids: List[Dict[str, Any]] = []
+        for sp, c in comp_by_path.items():
+            if sp == parent_sp or not sp.startswith(parent_sp + "."):
+                continue
+            closer = any(
+                o != sp and o != parent_sp and sp.startswith(o + ".") and o.startswith(parent_sp + ".")
+                for o in comp_by_path
+            )
+            if not closer:
+                kids.append(c)
+        return kids
+
+    plan_entries: List[Dict[str, Any]] = []
+    linked: List[str] = []
+    notes: List[str] = []
+    for parent in components:
+        pname = parent.get("name")
+        psp = parent.get("submodule_path")
+        if not pname or not psp or parent.get("status") != "NEW":
+            continue
+        if pname in graduated or pname in no_emit or pname in locked:
+            continue
+        kids = _immediate_children(psp)
+        if len(kids) < 2:
+            continue
+        # Refuse if any child is already claimed by a DIFFERENT parent's
+        # formal decomposition -- never fight a real linkage.
+        if any((k.get("_added_by_decomposition_of") or pname) != pname for k in kids):
+            continue
+        if not all(_on_device(k.get("name") or "") for k in kids):
+            continue
+        for k in kids:
+            k["_added_by_decomposition_of"] = pname
+            if not k.get("_child_short_name"):
+                k["_child_short_name"] = str(k.get("name") or "")
+        plan_entries.append(
+            {
+                "parent_name": pname,
+                "children": [
+                    {
+                        "name": k.get("name"),
+                        "submodule_path": k.get("submodule_path"),
+                        "class_name": k.get("class_name") or "",
+                    }
+                    for k in kids
+                ],
+            }
+        )
+        linked.append(pname)
+        notes.append(
+            f"[recompose-link] `{pname}` ({psp}) -> {len(kids)} on-device child component(s): "
+            + ", ".join(k.get("name") or "" for k in kids)
+        )
+
+    if not linked:
+        return 0, []
+
+    status["components"] = components
+    status_path.write_text(json.dumps(status, indent=2))
+
+    plan_path = demo_dir / "decomposition_plan.json"
+    existing_plan: List[Any] = []
+    if plan_path.is_file():
+        try:
+            loaded = json.loads(plan_path.read_text())
+            if isinstance(loaded, list):
+                existing_plan = loaded
+        except Exception:
+            existing_plan = []
+    have_parents = {e.get("parent_name") for e in existing_plan if isinstance(e, dict)}
+    existing_plan.extend(e for e in plan_entries if e["parent_name"] not in have_parents)
+    plan_path.write_text(json.dumps(existing_plan, indent=2))
+
+    for pname in linked:
+        try:
+            persist_no_emit_test(model_id, pname, reason="recompose from pre-existing on-device children")
+        except Exception as exc:  # noqa: BLE001
+            notes.append(f"[recompose-link] no_emit persist failed for `{pname}`: {type(exc).__name__}: {exc}")
+
+    return len(linked), notes
+
+
 def _archive_plan(plan_path: Path, demo_dir: Path) -> None:
     """Move the applied plan to ``decomposition_plan.applied.<ts>.json``
     so subsequent runs don't re-apply it."""

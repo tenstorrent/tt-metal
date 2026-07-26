@@ -281,3 +281,103 @@ def test_reinject_skips_intermediate_and_no_emit(tmp_path: Path, monkeypatch) ->
     assert "blk.mid" not in paths  # intermediate (has descendant) skipped
     assert "blk.leaf" not in paths  # no_emit child skipped
     assert added == 1
+
+
+# ---------------------------------------------------------------------------
+# synthesize_recompose_links: link a never-decomposed composite to its
+# already-on-device children (the XTTS g_p_t gap).
+# ---------------------------------------------------------------------------
+from scripts.tt_hw_planner.decomposition_consumer import (  # noqa: E402
+    synthesize_recompose_links,
+)
+
+
+def test_synthesize_links_wrapper_with_ondevice_children(tmp_path: Path, monkeypatch) -> None:
+    """A NEW composite that never decomposed, whose immediate child
+    components are all on device, gets a synthesized parent->children
+    linkage + no_emit so recompose can restore it."""
+    from scripts.tt_hw_planner import overlay_manager as om
+
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+
+    demo_dir = _make_demo(
+        tmp_path,
+        [
+            {"name": "wrap", "status": "NEW", "submodule_path": "gpt"},
+            {"name": "kid_a", "status": "NEW", "submodule_path": "gpt.a"},
+            {"name": "kid_b", "status": "NEW", "submodule_path": "gpt.b"},
+            # grandchild — must NOT be treated as an immediate child of wrap
+            {"name": "grand", "status": "NEW", "submodule_path": "gpt.a.inner"},
+        ],
+    )
+
+    linked, notes = synthesize_recompose_links(
+        model_id="test/m", demo_dir=demo_dir, graduated_set={"kid_a", "kid_b", "grand"}
+    )
+    assert linked == 1, notes
+
+    # parent marked no_emit
+    assert "wrap" in om.load_no_emit_tests("test/m")
+
+    # plan records exactly the two immediate children (not the grandchild)
+    plan = json.loads((demo_dir / "decomposition_plan.json").read_text())
+    entry = [e for e in plan if e["parent_name"] == "wrap"][0]
+    kid_paths = sorted(c["submodule_path"] for c in entry["children"])
+    assert kid_paths == ["gpt.a", "gpt.b"]
+
+    # children tagged so the recompose prompt can surface them as building blocks
+    status = json.loads((demo_dir / "bringup_status.json").read_text())
+    by = {c["name"]: c for c in status["components"]}
+    assert by["kid_a"]["_added_by_decomposition_of"] == "wrap"
+    assert by["kid_b"]["_added_by_decomposition_of"] == "wrap"
+    assert "_added_by_decomposition_of" not in by["grand"]
+
+
+def test_synthesize_links_skips_when_a_child_not_on_device(tmp_path: Path, monkeypatch) -> None:
+    """If any immediate child is not yet on device, no linkage is made
+    (the parent must not be prematurely retired to a recompose target)."""
+    from scripts.tt_hw_planner import overlay_manager as om
+
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+
+    demo_dir = _make_demo(
+        tmp_path,
+        [
+            {"name": "wrap", "status": "NEW", "submodule_path": "gpt"},
+            {"name": "kid_a", "status": "NEW", "submodule_path": "gpt.a"},
+            {"name": "kid_b", "status": "NEW", "submodule_path": "gpt.b"},
+        ],
+    )
+    linked, _ = synthesize_recompose_links(model_id="test/m", demo_dir=demo_dir, graduated_set={"kid_a"})
+    assert linked == 0
+    assert "wrap" not in om.load_no_emit_tests("test/m")
+
+
+def test_synthesize_links_skips_leaf_and_already_decomposed(tmp_path: Path, monkeypatch) -> None:
+    """A leaf (no child components) and an already-no_emit parent are both
+    skipped — idempotent, no double-linking."""
+    from scripts.tt_hw_planner import overlay_manager as om
+
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+
+    demo_dir = _make_demo(
+        tmp_path,
+        [
+            {"name": "leaf", "status": "NEW", "submodule_path": "solo"},
+            {"name": "wrap", "status": "NEW", "submodule_path": "gpt"},
+            {"name": "kid_a", "status": "NEW", "submodule_path": "gpt.a"},
+            {"name": "kid_b", "status": "NEW", "submodule_path": "gpt.b"},
+        ],
+    )
+    om.persist_no_emit_test("test/m", "wrap", reason="already decomposed")
+    linked, _ = synthesize_recompose_links(
+        model_id="test/m", demo_dir=demo_dir, graduated_set={"kid_a", "kid_b"}
+    )
+    # leaf has no children; wrap already no_emit -> nothing new linked
+    assert linked == 0
+
+    # second run is a no-op too (idempotent)
+    linked2, _ = synthesize_recompose_links(
+        model_id="test/m", demo_dir=demo_dir, graduated_set={"kid_a", "kid_b"}
+    )
+    assert linked2 == 0

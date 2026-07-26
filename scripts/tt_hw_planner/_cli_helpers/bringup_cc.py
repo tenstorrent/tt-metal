@@ -152,8 +152,21 @@ def _reconcile_recompose(model_id: str, demo_dir: Path) -> List[str]:
     try:
         from ..agentic.stale_tests import restore_stale_test
         from ..bringup_loop import _safe_id
+        from ..decomposition_consumer import synthesize_recompose_links
         from ..final_categorization import parents_ready_to_recompose
         from ..overlay_manager import persist_locked_module, remove_no_emit_test
+
+        # Self-heal: a NEW composite that never formally decomposed but whose
+        # sub-modules already graduated as their own components gets its
+        # parent->children linkage synthesized here, so the recompose path
+        # below can restore it as a whole-module target instead of stranding
+        # it on CPU. Reliable path-identity only; the parent still earns
+        # ON_DEVICE by passing its OWN test.
+        _linked, _link_notes = synthesize_recompose_links(model_id=model_id, demo_dir=demo_dir)
+        if _linked:
+            print(f"  [recompose-link] synthesized {_linked} parent->on-device-children linkage(s):")
+            for n in _link_notes[:20]:
+                print(f"     · {n}")
 
         ready = parents_ready_to_recompose(model_id=model_id, demo_dir=demo_dir)
         done: List[str] = []
