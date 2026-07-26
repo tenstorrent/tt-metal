@@ -58,6 +58,138 @@ def _pipeline_self_opens_device(demo_dir: Path):
     return hits
 
 
+_SCOPE_ITER_EVIDENCE = (
+    "logits", "argmax", "_select_next", "step_logits", "gen_ids", "next_token",
+    "stubs[", "_fwd(", ".forward(", "scheduler", "denoise", "unet", "hidden_states", "timestep",
+)
+_SCOPE_CONFIG_DERIVED = re.compile(
+    r"ar_horizon|\beff\b|\.nonzero\(|==\s*stop|\.timesteps|generation_config|max_new_tokens|max_length|"
+    r"num_inference_steps|num_train_timesteps|num_hidden_layers|num_layers|\bn_layer\b|num_experts|"
+    r"num_local_experts|image_size|patch_size|num_patches"
+)
+_SCOPE_CONFIG_SIGNAL = re.compile(
+    r"stop.*token|eos|max_new_tokens|max_length|max.*audio.*token|max.*mel.*token|num_inference_steps|"
+    r"num_train_timesteps|num_hidden_layers|num_layers|n_layer|gpt_layers|num.*experts|image_size|patch_size",
+    re.IGNORECASE,
+)
+_SCOPE_SENTINEL = object()
+
+
+def _flatten_config_text(cfg) -> str:
+    try:
+        d = cfg.to_dict() if hasattr(cfg, "to_dict") else cfg
+    except Exception:
+        d = cfg
+    out: list = []
+
+    def _rec(x):
+        if isinstance(x, dict):
+            for k, v in x.items():
+                out.append(str(k))
+                _rec(v)
+        elif isinstance(x, (list, tuple)):
+            for v in x:
+                _rec(v)
+
+    if isinstance(d, dict):
+        _rec(d)
+    return " ".join(out)
+
+
+def _reference_config(demo_dir: Path):
+    try:
+        model_id = os.environ.get("E2E_MODEL_ID", "")
+        if not model_id:
+            import json as _json
+
+            st = _json.loads((demo_dir / "bringup_status.json").read_text())
+            model_id = st.get("new_model_id") or st.get("model_id") or ""
+        if not model_id:
+            return None
+        from ..probe import _maybe_fetch_config
+
+        return _maybe_fetch_config(model_id)
+    except Exception:
+        return None
+
+
+def _scope_grounding_gate(demo_dir: Path, reference_config=_SCOPE_SENTINEL):
+    """Return a failure reason (or None) enforcing that any hardcoded bound driving
+    a MODEL ITERATION in the emitted pipeline is grounded in the model/config, not a
+    magic literal that silently reduces e2e test scope.
+
+    General across model families: an autoregressive decode horizon, a diffusion
+    step count, a re-stacked layer count, a tile/patch count -- any
+    ``for _ in range(<literal>)`` whose body drives model computation (a stub /
+    forward / scheduler / decode step) with NO early ``break`` and a bound not
+    derived from a config count.
+
+    Enforcement is GATED ON THE HF REFERENCE: it only fails when the reference
+    config actually exposes a groundable signal (a stop/eos token, generation
+    length, inference-step count, layer/expert/patch count, ...). If the HF
+    reference is unavailable or exposes no such signal, the gate SKIPS -- the
+    agent's chosen bound stands. When the reference does expose a signal, the
+    pipeline must ground the bound (``ar_horizon``/``eff`` from the stop token, a
+    ``nonzero``/``== stop`` truncation, a decode ``break``, or a config-derived
+    count). Model-agnostic; only reads config (no weights); never raises."""
+    tt_pkg = demo_dir / "tt"
+    if not tt_pkg.is_dir():
+        return None
+    try:
+        srcs = {p: p.read_text(errors="ignore") for p in sorted(tt_pkg.rglob("*.py"))}
+    except Exception:
+        return None
+
+    def _nc(s):
+        return re.sub(r"#.*", "", s)
+
+    whole_code = _nc("\n".join(srcs.values()))
+    magic_hits = []
+    for p, src in srcs.items():
+        try:
+            tree = ast.parse(src)
+        except Exception:
+            continue
+        lines = src.splitlines()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.For):
+                continue
+            it = node.iter
+            if not (isinstance(it, ast.Call) and isinstance(it.func, ast.Name) and it.func.id == "range"):
+                continue
+            body_code = _nc("\n".join(lines[node.lineno - 1 : (node.end_lineno or node.lineno)]))
+            if not any(tok in body_code for tok in _SCOPE_ITER_EVIDENCE):
+                continue
+            if any(isinstance(n, ast.Break) for n in ast.walk(node)):
+                continue
+            if _SCOPE_CONFIG_DERIVED.search(_nc(ast.get_source_segment(src, it) or "")):
+                continue
+            magic_hits.append((str(p.relative_to(demo_dir)), node.lineno))
+
+    if not magic_hits:
+        return None
+    if _SCOPE_CONFIG_DERIVED.search(whole_code):
+        return None
+
+    cfg = _reference_config(demo_dir) if reference_config is _SCOPE_SENTINEL else reference_config
+    if not cfg:
+        return None
+    if not _SCOPE_CONFIG_SIGNAL.search(_flatten_config_text(cfg)):
+        return None
+
+    where = ", ".join(f"{rel}:{ln}" for rel, ln in magic_hits[:4])
+    return (
+        "G3 scope-grounding: a hardcoded magic bound drives a model iteration "
+        f"({where}) but the HF reference config exposes a signal to derive it from (stop/eos token, "
+        "generation length, inference-step count, or layer/expert/patch count). Ground the bound in the "
+        "model -- decode to the stop token / read generation_config.max_new_tokens / iterate the config "
+        "count -- and apply the SAME bound to the HF golden. A fixed magic literal silently reduces e2e "
+        "test scope. The trace/host-free forward may keep a FIXED max capacity, but the PCC/correctness "
+        "scope must be model-grounded. (If the reference genuinely exposed no signal, this gate would "
+        "have skipped.)"
+    )
+
+
 def _reset_device() -> str:
     chips = os.environ.get("TT_HW_PLANNER_RESET_CHIPS", "0,1,2,3")
     tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
@@ -630,6 +762,10 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
         reasons.append("G4 structure: no tt/ package (standard demo layout)")
     if not (demo_dir / "README.md").is_file():
         reasons.append("G4 structure: no README.md (standard demo layout)")
+
+    _scope_reason = _scope_grounding_gate(demo_dir)
+    if _scope_reason:
+        reasons.append(_scope_reason)
 
     _self_opens = _pipeline_self_opens_device(demo_dir)
     if _self_opens:
