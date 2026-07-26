@@ -461,14 +461,16 @@ void kernel_main() {
                             pack_reconfig_l1_acc(0);
                         }
 #ifdef ARCH_QUASAR
-                        // [#48552] The Quasar fused-conv tilize init fix (dvalid scrub + MATH/PACK sync re-seed
-                        // + pack BD / DEST init) was applied ONLY to the height_sharded branch below. The
-                        // block-sharded (mcast) tilize hits the SAME ERROR_TRISC1 (MATH) 0x19: the plain Quasar
-                        // tilize_init omits llk_math_pack_sync_init and never scrubs the matmul's stale DEST
-                        // dvalid, so the tilize's MOVA2D datacopy MOP is rejected at issue for targeting a bank
-                        // whose dvalid is still set. Scrub + re-seed here too (see the full rationale in the
-                        // height_sharded branch). Runs once per tilize group; no per-block hw_configure.
-                        MATH((llk_math_set_dvalid<p_cleardvalid::FPU, DST_SYNC_MODE>()));
+                        // [#48552] Re-seed the Quasar MATH/PACK DEST sync + repoint the pack BD before the
+                        // block-sharded (mcast) tilize. The plain Quasar tilize_init omits llk_math_pack_sync_init,
+                        // so the tilize inherits the prior matmul's stale MATH_PACK semaphore / DEST bank phase ->
+                        // MATH datacopy MOP out of phase with PACK -> ERROR_TRISC1 (MATH) 0x19. This init existed
+                        // only in the height_sharded branch below (which is dead: height-sharded convs take the
+                        // split conv_tilize_only path, not this fused kernel). NOTE: that branch also shows a
+                        // llk_math_set_dvalid CLEARDVALID scrub, but that belongs to the dest-dvalid scheme and is
+                        // hard-blocked by a static_assert on the current semaphore-based tt-metal (uncompilable).
+                        // This path forces SyncFull (#47797), whose serialized DEST handshake should not need the
+                        // scrub the SyncHalf fast-tilize race did. Runs once per tilize group; no hw_configure.
                         MATH((llk_math_pack_sync_init()));
                         PACK((llk_pack_init(tilized_in0_cb_id)));
                         PACK((llk_pack_dest_init()));
