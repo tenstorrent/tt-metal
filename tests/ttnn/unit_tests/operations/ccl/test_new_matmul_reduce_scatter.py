@@ -49,6 +49,7 @@ def run_reduce_scatter_impl(
     use_sub_device_manager=True,
     clone_reduce_scatter_output=False,
     use_barrier_semaphore=False,
+    defer_synchronize=False,
 ):
     torch.manual_seed(0)
     if input_from_device_producer and input_from_kda_gated_rms:
@@ -409,7 +410,8 @@ def run_reduce_scatter_impl(
         logger.info(f"Done executing trace")
 
         # Synchronize the devices
-        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+        if not defer_synchronize:
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
     else:
         for i in range(num_iters):
             tt_matmul_out_tensor, tt_reduce_scatter_output_tensor = run_op(i)
@@ -417,10 +419,17 @@ def run_reduce_scatter_impl(
             tt_matmul_output_list.append(tt_matmul_out_tensor)
 
             logger.info(f"Waiting for op")
-            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+            if not defer_synchronize:
+                ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
             logger.info(f"Done op")
 
             logger.info(f"Done iteration {i}")
+
+    if defer_synchronize:
+        return {
+            "tt_reduce_scatter_outputs": tt_reduce_scatter_output_list,
+            "torch_reduce_scatter_outputs": torch_reduce_scatter_output_list,
+        }
 
     for i in range(num_iters):
         tt_mm_out_tensor = tt_matmul_output_list[i]
@@ -741,6 +750,21 @@ def test_linear_matmul_reduce_scatter_tp4_after_sp_socket_handoff(mesh_device):
         use_sub_device_manager=False,
         clone_reduce_scatter_output=True,
         use_barrier_semaphore=True,
+        defer_synchronize=True,
     )
-    run_reduce_scatter_impl(source, **common)
-    run_reduce_scatter_impl(destination, **common)
+    source_result = run_reduce_scatter_impl(source, **common)
+    destination_result = run_reduce_scatter_impl(destination, **common)
+    ttnn.synchronize_device(source)
+    ttnn.synchronize_device(destination)
+    for child, result in ((source, source_result), (destination, destination_result)):
+        assert result is not None
+        actual = ttnn.to_torch(
+            ttnn.from_device(result["tt_reduce_scatter_outputs"][0]),
+            mesh_composer=ConcatMeshToTensor(child, dim=3),
+        )
+        expected = torch.cat(result["torch_reduce_scatter_outputs"][0], dim=3)
+        assert torch.isfinite(actual).all()
+        passed, pcc = comp_pcc(actual, expected)
+        assert passed, f"Line MRS output PCC {pcc} after SP socket handoff"
+        passed, pcc = comp_pcc(actual[..., :32, :], expected[..., :32, :])
+        assert passed, f"Line MRS first tile PCC {pcc} after SP socket handoff"
