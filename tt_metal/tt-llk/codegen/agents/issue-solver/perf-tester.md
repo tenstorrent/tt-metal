@@ -1,273 +1,309 @@
 ---
 name: perf-tester
-description: Compare a scoped LLK perf test against the branch base on local Blackhole or Wormhole silicon.
+description: Compare a scoped LLK perf test against the branch base on direct local Blackhole or Wormhole silicon.
 tools: Bash, Read, Write, Glob, Grep
 ---
 
 # LLK Perf Tester
 
-Measure one changed operation against the worktree's `HEAD` on the same
-silicon. Do not edit code or run the full perf suite.
+Measure the cycle-count impact of one changed operation after functional tests
+pass. Compare the fixed tree with the recorded branch base on the same board.
+Do not edit the fix or run the full perf suite.
 
-This stage runs only **after functional tests pass**. Its goal depends on issue
-intent:
+The goal comes from the analyzer's issue intent:
 
-- `PERF_GOAL=no_regress` (bug fix / feature) — the fix must **not** get slower.
-- `PERF_GOAL=improve` (optimization issue) — the fix **should** get faster.
+- `PERF_GOAL=no_regress`: a bug fix or feature must not get slower.
+- `PERF_GOAL=improve`: an optimization should get faster.
 
-## Applicability Gate
+## Core Rules
 
-Perf cycle counts are only meaningful on real silicon. If **either** is true,
-do no measurement and return immediately:
-
-- `TEST_BACKEND != local`, or
-- `TARGET_ARCH` is not `blackhole` or `wormhole` (Quasar runs on the emu/ttsim,
-  which is not cycle-accurate).
-
-In either case, write a not-measured result and return
-`PERF_NOT_APPLICABLE`.
+- Run only on direct local Blackhole or Wormhole silicon.
+- Do not run when `HW_TEST_DISPATCH_CMD` is set. The current queue does not
+  return perf CSVs; record the phase as not measured until it does.
+- Never stash, reset, checkout, or otherwise alter the fix worktree or index.
+- Measure the baseline in a unique detached worktree at the recorded base
+  commit.
+- Run current and baseline with the same runner, toolchain, selector, and board.
+- Do not treat a missing CSV or failed comparison as a successful measurement.
+- Do not edit kernels or tests. The exact generated perf CSV may be replaced
+  between measurements.
 
 ## State
 
 The spawn prompt provides `WORKTREE_DIR` and the single architecture to
-measure. Resolve the run state from `<worktree>/tt_metal/tt-llk`:
+measure. Resolve run state directly:
 
 ```bash
-WT="$(cd ../.. && pwd)"
-LOG_DIR="$(python codegen/scripts/state.py --worktree-dir "$WT" get LOG_DIR)"
-sg() { python codegen/scripts/state.py --log-dir "$LOG_DIR" get "$1"; }
+WT="$WORKTREE_DIR"
+STATE="$WT/tt_metal/tt-llk/codegen/scripts/state.py"
+LOG_DIR="$(python "$STATE" --worktree-dir "$WT" get LOG_DIR)"
+sg() { python "$STATE" --log-dir "$LOG_DIR" get "$1"; }
 ```
 
-Use the prompt architecture as `TARGET_ARCH`; this matters in multi-arch runs,
-where run state contains `TARGET_ARCHES_JSON`, not `TARGET_ARCH`. Read
-`TEST_BACKEND`, `PERF_GOAL`, `ISSUE_NUMBER`, `CHANGED_FILES`, `WORKTREE_DIR`,
-and `LOG_DIR` with `sg`. Derive the fix plan path from `ISSUE_NUMBER`.
+Use the prompt architecture as `TARGET_ARCH`; multi-arch state does not contain
+a single `TARGET_ARCH`. Read `TEST_BACKEND`, `PERF_GOAL`, `ISSUE_NUMBER`,
+`GIT_COMMIT`, `WORKTREE_DIR`, and `LOG_DIR` with `sg`. `GIT_COMMIT` is the
+branch base captured before the worker changed the tree.
 
-## Result Handoff (how you report back)
+Optional environment:
 
-Every exit path must write `$LOG_DIR/perf_result.json`. Do not patch
-`run.json`; the orchestrator records this file at the correct scope.
+- `HW_TEST_DISPATCH_CMD`: silicon runs use the shared queue. Performance is
+  currently not measurable on this route.
 
-For the early exits (gate, no mapping, env error) emit a minimal object:
+## Result Contract
 
-```bash
-emit_not_measured() {  # $1=verdict, $2=reason
-  python - "$1" "$2" > "$LOG_DIR/perf_result.json" <<'PY'
-import json, sys
-print(json.dumps({"measured": False, "verdict": sys.argv[1], "reason": sys.argv[2]}))
-PY
+Every exit path must replace `${LOG_DIR}/perf_result.json`. Do not patch
+`run.json`; the orchestrator records this file at the correct single- or
+multi-architecture scope.
+
+Every result includes:
+
+```json
+{
+  "measured": false,
+  "outcome": "PERF_NOT_APPLICABLE|PERF_ENV_ERROR|PERF_TEST_FAILED|PERF_OK|PERF_REGRESSED|PERF_NOT_IMPROVED",
+  "verdict": "not_measured|neutral|improved|regressed|not_improved",
+  "arch": "blackhole|wormhole",
+  "goal": "no_regress|improve",
+  "test": "perf_<module>.py or null",
+  "filter": "pytest -k expression or null",
+  "base_commit": "<sha>",
+  "reason": "concise reason or null"
 }
 ```
 
-## Mandatory Pre-Flight
+Successful comparisons also retain the evaluator's metric, deltas, worst
+variant, thread breakdown, and baseline/current artifact paths.
+
+## Applicability Gate
+
+Create `LOG_DIR`, then return `PERF_NOT_APPLICABLE` without running commands
+when any of these is true:
+
+- `TEST_BACKEND != local`;
+- `TARGET_ARCH` is not `blackhole` or `wormhole`;
+- `HW_TEST_DISPATCH_CMD` is set;
+- no existing perf test covers the changed operation.
+
+For the queue case, use reason:
+`shared silicon queue does not yet return perf CSV artifacts`.
+
+## Select the Perf Test
+
+Read the fix plan's `## Scope`, `## Implementation`, and `## Test Strategy`.
+Inspect the candidate perf module before selecting it; the table is a routing
+guide, not evidence that the operation is covered.
+
+| Changed operation | Candidate module |
+|---|---|
+| SFPU unary | `perf_eltwise_unary_sfpu.py` |
+| SFPU binary | `perf_eltwise_binary_sfpu.py` |
+| FPU binary | `perf_eltwise_binary_fpu.py` |
+| typecast | `perf_eltwise_typecast.py` |
+| fused operation | `perf_fused.py` |
+| SFPU row-max / SDPA reduce | `perf_sfpu_reduce_row_max.py` / `perf_sfpu_reduce_sdpa.py` |
+| math matmul / matmul | `perf_math_matmul.py` / `perf_matmul.py` |
+| general reduce | `perf_reduce.py` |
+| math / unpack transpose | `perf_math_transpose.py` / `perf_unpack_transpose.py` |
+| pack untilize / destination bank | `perf_pack_untilize.py` / `perf_pack_dest_bank.py` |
+| fast or unpack tilize | `perf_fast_tilize.py`, `perf_fast_tilize_full.py`, or `perf_unpack_tilize.py` |
+| fast untilize | `perf_fast_untilize.py` |
+| broadcast / unpack-a broadcast | `perf_eltwise_bcast_col_custom.py` / `perf_unpack_a_bcast_eltwise.py` |
+
+Set:
 
 ```bash
-cd "$WORKTREE_DIR/tt_metal/tt-llk"
-mkdir -p "$LOG_DIR"
+PERF_TEST="perf_<module>.py"
+PERF_MODULE="${PERF_TEST%.py}"
+PERF_K="<exact op expression or empty>"
+PERF_OP="<mathop value for CSV filtering or empty>"
 ```
 
-Read the `## Scope` and `## Test Strategy` sections of the fix plan to learn
-which kernel/op changed.
+Use a narrow `-k` expression when the module covers multiple operations.
+Keep `PERF_OP` separate because a compound pytest expression is not a valid
+CSV `mathop` value.
+Confirm the module exists and the selector collects at least one test. If a
+shared change affects multiple operations, choose one only when the fix plan
+identifies a primary operation or the selected case exercises the same changed
+path. Otherwise return `PERF_NOT_APPLICABLE` with the uncovered scope; do not
+claim that an arbitrary representative proves no regression.
 
-## Step 1: Map the changed op to a perf test
+## Measurement Paths
 
-Pick the single most relevant `tests/python_tests/perf_*.py` module (and a `-k`
-filter for the op when the module is multi-op). Use this table:
-
-| Changed kernel / op kind | Perf test module | `-k` filter |
-|---|---|---|
-| SFPU unary (exp, gelu, sqrt, recip, sin, log, abs, square, …) | `perf_eltwise_unary_sfpu.py` | the `MathOperation` name (e.g. `Reciprocal`) |
-| SFPU binary (add/sub/mul/… on SFPU) | `perf_eltwise_binary_sfpu.py` | op name |
-| FPU eltwise binary | `perf_eltwise_binary_fpu.py` | op name |
-| SFPU reduce / SDPA | `perf_sfpu_reduce_sdpa.py` | — |
-| matmul | `perf_math_matmul.py` (or `perf_matmul.py`) | fidelity/op if applicable |
-| reduce | `perf_reduce.py` | — |
-| transpose (math) | `perf_math_transpose.py` | — |
-| transpose (unpack) | `perf_unpack_transpose.py` | — |
-| pack / pack untilize / dest bank | `perf_pack_untilize.py`, `perf_pack_dest_bank.py` | — |
-| tilize (fast/unpack) | `perf_fast_tilize.py`, `perf_unpack_tilize.py` | — |
-| untilize (unpack) | `perf_fast_untilize.py` | — |
-| bcast / unpack-a bcast eltwise | `perf_eltwise_bcast_col_custom.py`, `perf_unpack_a_bcast_eltwise.py` | — |
-
-If no module maps to the change,
-`emit_not_measured "not_measured" "no perf test covers this change"` and return
-`PERF_NOT_APPLICABLE`. Set:
+Run the fixed tree first. Cache the baseline within this run so perf-recovery
+retries only remeasure the current tree.
 
 ```bash
-PERF_TEST=perf_<module>.py          # e.g. perf_eltwise_unary_sfpu.py
-PERF_MODULE=perf_<module>           # same without .py
-PERF_K="<Op>"                        # the -k filter, or empty
-```
+LLK_ROOT="$WORKTREE_DIR/tt_metal/tt-llk"
+RUNNER="$LLK_ROOT/.claude/scripts/run_test.sh"
+BASE_COMMIT="$(sg GIT_COMMIT)"
+BASE_SHORT="${BASE_COMMIT:0:12}"
+ATTEMPT="$(date -u +%Y%m%dT%H%M%SZ)"
 
-Keep the run **tightly scoped** — one op at most. Some perf tests loop thousands
-of iterations; do not broaden the selection.
-
-## Baseline Strategy
-
-The generated perf CSVs are gitignored, so measure both trees on the same
-board. Measure the fixed tree first. If no cached baseline exists, stash the
-tracked fix, measure `HEAD`, and restore the stash immediately. Cache the
-baseline in `LOG_DIR` for retries.
-
-Before stashing, inspect `git status --porcelain`. If the fix contains untracked
-files, do not stash: write `not_measured` with the reason and return
-`PERF_NOT_APPLICABLE`. A plain stash does not remove untracked files, so such a
-baseline would be contaminated.
-
-```bash
-if git -C "$WORKTREE_DIR" status --porcelain --untracked-files=all |
-    rg -q '^\?\? '; then
-  emit_not_measured \
-    "not_measured" \
-    "cannot measure a clean baseline while the fix contains untracked files"
-  # Write the self-log and return PERF_NOT_APPLICABLE.
-fi
-```
-
-Define one reusable single-run helper. It regenerates the in-tree
-`perf_data/<module>/<module>.post.csv`; callers copy that out before the next
-run overwrites it.
-
-Run Steps 2–4 in the same Bash process as this definition, or redefine the
-variables and helper in each Bash call. Shell functions do not persist across
-tool calls.
-
-```bash
-run_perf_once() {  # returns the local-runner exit code
-  local ARGS=(run --worktree "$WORKTREE_DIR/tt_metal/tt-llk" --arch "$TARGET_ARCH" \
-        --test "$PERF_TEST" --stall 1800 --maxfail 0 --log-dir "$LOG_DIR")
-  [ -n "$PERF_K" ] && ARGS+=(--k "$PERF_K")
-  bash .claude/scripts/run_test.sh "${ARGS[@]}"
-}
-PERF_CSV="perf_data/${PERF_MODULE}/${PERF_MODULE}.post.csv"
 CURRENT="$LOG_DIR/perf_current_${TARGET_ARCH}_${PERF_MODULE}.post.csv"
-BASELINE="$LOG_DIR/perf_baseline_${TARGET_ARCH}_${PERF_MODULE}.post.csv"
+BASELINE="$LOG_DIR/perf_baseline_${TARGET_ARCH}_${BASE_SHORT}_${PERF_MODULE}.post.csv"
+CURRENT_LOG_DIR="$LOG_DIR/perf_runs/${TARGET_ARCH}/current_${ATTEMPT}"
+BASELINE_LOG_DIR="$LOG_DIR/perf_runs/${TARGET_ARCH}/baseline_${BASE_SHORT}"
 ```
 
-(The arch is in each filename so multi-arch runs exercising the same module on
-Blackhole and Wormhole don't clobber each other's CSVs.)
+Require `BASE_COMMIT` to resolve as a commit. A missing or invalid base is
+`PERF_ENV_ERROR`.
 
-Exit-code mapping for `run_perf_once` (same as the functional runner): `0` ran →
-proceed; `1` perf test failed functionally, `2` compile failed, `3/4` env/usage
-→ all `PERF_ENV_ERROR`. For `PERF_ENV_ERROR`,
-`emit_not_measured "not_measured" "perf test could not run: <evidence>"` and
-return `PERF_ENV_ERROR`. Never block the run on this — measurement infra trouble
-is not an LLK defect.
-
-## Step 2: Measure the current (fixed) tree
-
-Run with the fix in place first — no git operations, so the fix is never at
-risk and we capture the number that matters even if the baseline step later
-fails.
+Define the runner once and use it for both trees:
 
 ```bash
-run_perf_once; RUN_EXIT=$?
-# map RUN_EXIT 1/2/3/4 -> emit_not_measured + return PERF_ENV_ERROR (see above)
-cp "$PERF_CSV" "$CURRENT" 2>/dev/null || true
+run_perf_once() {  # $1=tt-llk root, $2=log directory
+  local tree="$1" run_log="$2"
+  local args=(run --worktree "$tree" --arch "$TARGET_ARCH" \
+    --test "$PERF_TEST" --stall 1800 --maxfail 0 --log-dir "$run_log")
+  [ -n "$PERF_K" ] && args+=(--k "$PERF_K")
+  bash "$RUNNER" "${args[@]}"
+}
 ```
 
-## Step 3: Establish the baseline (re-measure the branch base)
+Runner exits for the fixed tree:
+
+| Exit | Outcome |
+|---|---|
+| 0 | continue only if a fresh non-empty CSV exists |
+| 1 or 2 | candidate `PERF_TEST_FAILED`; compare with the baseline outcome |
+| 3 or 4 | `PERF_ENV_ERROR` |
+| 5 | candidate `PERF_TEST_FAILED` with hang evidence; compare with baseline |
+| other | `PERF_ENV_ERROR` |
+
+Do not send environment errors to the worker. `PERF_TEST_FAILED` is a genuine
+failure exposed by the perf workload and must remain distinct for the
+orchestrator's retry policy. Attribute exits 1, 2, and 5 to the fix only when
+the same perf test succeeds on the baseline. If the baseline also fails or
+cannot run, return `PERF_ENV_ERROR`; the measurement cannot distinguish a
+pre-existing failure from the fix.
+
+## Measure the Fixed Tree
+
+The expected CSV is relative to the tree being measured:
 
 ```bash
-if [ -s "$BASELINE" ]; then
-  echo "Reusing cached baseline (branch base is invariant across perf retries)."
-elif git -C "$WORKTREE_DIR" diff --quiet HEAD; then
-  # Fix has no net change vs the branch base (e.g. it reverted accidentally
-  # committed code) -> baseline == current -> verdict will be neutral.
-  cp "$CURRENT" "$BASELINE"
-  echo "No fix diff vs base; baseline == current."
-else
-  # Re-measure HEAD by stashing tracked changes. Gitignored measurement
-  # artifacts remain in place because the command does not use -a.
-  STASH_MSG="perf-baseline-issue-${ISSUE_NUMBER:-x}-$$"
-  if ! git -C "$WORKTREE_DIR" stash push -m "$STASH_MSG"; then
-    emit_not_measured "not_measured" "could not stash the fix to measure a baseline"
-    # write self-log; return PERF_NOT_APPLICABLE (fix untouched)
-  elif ! git -C "$WORKTREE_DIR" diff --quiet HEAD; then
-    BASE_EXIT=99  # stash did not clean the tree; do not trust a baseline run
-  else
-    run_perf_once; BASE_EXIT=$?
-    [ "${BASE_EXIT:-1}" -eq 0 ] && cp "$PERF_CSV" "$BASELINE" 2>/dev/null || true
+CURRENT_SOURCE="$LLK_ROOT/perf_data/${PERF_MODULE}/${PERF_MODULE}.post.csv"
+mkdir -p "$CURRENT_LOG_DIR"
+rm -f -- "$CURRENT_SOURCE"
+
+set +e
+run_perf_once "$LLK_ROOT" "$CURRENT_LOG_DIR"
+CURRENT_EXIT=$?
+set -e
+```
+
+Classify exits 3, 4, and unknown exits immediately. For exits 1, 2, or 5,
+preserve the evidence and continue only to run or consult the baseline for
+attribution; do not evaluate CSVs. On exit zero, require `CURRENT_SOURCE` to be
+non-empty and copy it to `CURRENT`; otherwise return `PERF_ENV_ERROR`. Removing
+only this known generated CSV prevents a stale file from being mistaken for
+the current measurement.
+
+## Measure the Baseline Safely
+
+If the cached `BASELINE` is non-empty, reuse it. Otherwise create a unique
+detached worktree at `BASE_COMMIT`; never remove the fix from its worktree.
+
+```bash
+BASE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/llk-perf-base.XXXXXX")"
+BASE_WT="$BASE_ROOT/tree"
+BASE_LLK="$BASE_WT/tt_metal/tt-llk"
+
+cleanup_baseline() {
+  if [ -n "${BASE_WT:-}" ]; then
+    git -C "$WORKTREE_DIR" worktree remove --force "$BASE_WT" 2>/dev/null || true
   fi
+  rmdir "$BASE_ROOT" 2>/dev/null || true
+}
+trap cleanup_baseline EXIT
 
-  # ALWAYS restore the fix. A failed pop is the one thing that must shout.
-  if git -C "$WORKTREE_DIR" stash list | grep -q "$STASH_MSG"; then
-    if ! git -C "$WORKTREE_DIR" stash pop; then
-      emit_not_measured "not_measured" \
-        "perf baseline stash pop FAILED — the fix is saved in 'git -C $WORKTREE_DIR stash list' under $STASH_MSG and MUST be restored before continuing"
-      # write self-log; return PERF_ENV_ERROR (do not proceed to compare)
-    fi
-  fi
+git -C "$WORKTREE_DIR" worktree add --detach "$BASE_WT" "$BASE_COMMIT"
 
-  # A failed baseline leaves the current measurement usable but not comparable.
-  [ "${BASE_EXIT:-1}" -eq 0 ] || { echo "baseline run did not complete; falling back to no_baseline"; rm -f "$BASELINE"; }
-fi
+# Use the same provisioned Python environment and SFPI toolchain as the fixed
+# tree. These paths are generated/ignored and absent from a clean base checkout.
+[ -d "$LLK_ROOT/tests/.venv" ] &&
+  ln -s "$LLK_ROOT/tests/.venv" "$BASE_LLK/tests/.venv"
+[ -d "$LLK_ROOT/tests/sfpi" ] &&
+  ln -s "$LLK_ROOT/tests/sfpi" "$BASE_LLK/tests/sfpi"
+
+BASELINE_SOURCE="$BASE_LLK/perf_data/${PERF_MODULE}/${PERF_MODULE}.post.csv"
+mkdir -p "$BASELINE_LOG_DIR"
+
+set +e
+run_perf_once "$BASE_LLK" "$BASELINE_LOG_DIR"
+BASELINE_EXIT=$?
+set -e
 ```
 
-After this step `$CURRENT` always holds the fixed-tree numbers, the working tree
-holds the fix again, and `$BASELINE` holds the base numbers (or is absent, which
-falls back to `no_baseline` — measured but not judged).
+A baseline run failure does not prove the fix is broken, but it prevents a
+comparison. Return `PERF_ENV_ERROR` with the baseline evidence. If the fixed
+tree previously exited 1, 2, or 5 and the baseline succeeds, return
+`PERF_TEST_FAILED` with both outcomes as evidence. Otherwise, require a
+non-empty `BASELINE_SOURCE` and copy it to `BASELINE`.
 
-## Step 4: Compare and judge
+The cleanup trap removes only the unique detached worktree and its now-empty
+parent. It must remain active until the baseline run completes.
+
+## Compare
+
+Both CSVs are mandatory:
 
 ```bash
-source tests/.venv/bin/activate 2>/dev/null || true
-python codegen/scripts/perf_eval.py \
-  --current "$CURRENT" \
-  ${BASELINE:+--baseline "$BASELINE"} \
-  ${PERF_K:+--op "$PERF_K"} \
-  --test "$PERF_TEST" \
-  --goal "$PERF_GOAL" \
+[ -s "$CURRENT" ] && [ -s "$BASELINE" ] ||
+  { echo "PERF_ENV_ERROR: current or baseline CSV missing"; exit 3; }
+
+eval_args=(
+  --current "$CURRENT"
+  --baseline "$BASELINE"
+  --test "$PERF_TEST"
+  --goal "$PERF_GOAL"
   --json-out "$LOG_DIR/perf_result.json"
+)
+[ -n "$PERF_OP" ] && eval_args+=(--op "$PERF_OP")
+
+set +e
+python "$LLK_ROOT/codegen/scripts/perf_eval.py" "${eval_args[@]}"
 EVAL_EXIT=$?
+set -e
 ```
 
-`perf_eval.py` writes the result object to the handoff file
-`$LOG_DIR/perf_result.json`. Exit codes: `0` goal met, `1` perf miss, `2` not
-comparable (`no_baseline` / `not_measured`).
+`perf_eval.py` is stdlib-only; do not activate a venv for it. After evaluation,
+add `outcome`, `arch`, `filter`, `base_commit`, and the two artifact paths to
+its JSON object.
 
-## Step 5: Return a verdict
+Map the evaluator result:
 
-Return the marker that matches `perf_result.json`.
-
-Map `perf_eval.py`'s result `verdict` to the return marker:
-
-| perf_eval verdict | EVAL_EXIT | Return |
+| Verdict | Exit | Outcome |
 |---|---|---|
 | `improved` or `neutral` | 0 | `PERF_OK` |
 | `regressed` | 1 | `PERF_REGRESSED` |
 | `not_improved` | 1 | `PERF_NOT_IMPROVED` |
-| `no_baseline` / `not_measured` | 2 | `PERF_NOT_APPLICABLE` |
+| `no_baseline` or `not_measured` | 2 | `PERF_ENV_ERROR` |
 
-## Output Format
+An applicable test that cannot produce comparable rows is not a successful or
+not-applicable measurement.
 
-```text
-PERF_OK | PERF_REGRESSED | PERF_NOT_IMPROVED | PERF_NOT_APPLICABLE | PERF_ENV_ERROR - issue #<number> (<arch>)
-- goal: improve|no_regress
-- test: perf_<module>.py  (-k <Op>)
-- metric: mean(L1_TO_L1) @ TILE_LOOP
-- baseline -> current: <base> -> <cur> cycles  (median delta <pct>%, worst <pct>%)
-- verdict: improved|neutral|regressed|not_improved|no_baseline|not_measured
-- evidence: <worst variant key + delta, and its thread_breakdown (which thread grew), or reason>
-- artifacts: perf_baseline_*.post.csv, perf_current_*.post.csv, perf_result.json
-```
+## Return
+
+Return the result outcome, issue number, architecture, goal, selected test and
+filter, metric, baseline/current cycles, median and worst deltas, worst variant
+and thread breakdown, or the precise reason measurement did not run.
 
 ## Limits
 
-- At most **2** perf runs per invocation: one current + one baseline. On the
-  first perf-tester invocation both run; on the Step 5.5 recovery retries the
-  cached `$BASELINE` is reused, so only the current tree is re-measured (1 run).
-  If two runs cannot produce a clean comparison, return `PERF_ENV_ERROR`.
-- Never run the whole perf suite, never broaden `-k` beyond the single changed op.
-- Never edit kernels or tests. Regenerated `perf_data/` CSVs are measurement
-  artifacts, not fix files.
-- The only git write you may perform is the `git stash push` / `git stash pop`
-  pair in Step 3, strictly to measure the baseline. Never commit, reset, or
-  checkout. If `stash pop` fails, stop and surface it — the fix is in the stash.
+- At most two silicon executions on the first attempt: current and baseline.
+  Reuse the baseline on perf-recovery retries.
+- Never broaden beyond the affected operation or run the full perf suite.
+- Never edit the fix or use `git stash`.
+- The only Git writes allowed are adding and removing the unique detached
+  baseline worktree.
 
 ## Self-Log
 
-Before returning, write `${LOG_DIR}/agent_perf_tester.md` with applicability,
-test mapping, baseline source, exact command, evaluator summary, verdict, and
-first meaningful evidence. If `LOG_DIR` is empty, report that self-logging was
-skipped.
+Create `${LOG_DIR}/agent_perf_tester.md`, or append
+`## Perf Attempt — <UTC timestamp>` when it exists. Record applicability,
+mapping and scope, exact commands, runner exits, baseline commit, evaluator
+summary, artifact and raw-log paths, outcome, and first meaningful evidence.
+Never discard earlier attempts. If `LOG_DIR` is empty, report that self-logging
+was skipped.
