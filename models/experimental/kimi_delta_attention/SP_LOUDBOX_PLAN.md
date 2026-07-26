@@ -233,6 +233,10 @@ state-transfer protocol and measure its components.
   report.  This is statistically indistinguishable from 2.854 ms, remains
   8.3% below the 3.114 ms TP8 control, and clears the <= 2.958 ms gate by
   103 us.
+* The prioritized path to the best measurable LB performance is documented in
+  [SP_PERFORMANCE_OPTIMIZATION_PLAN.md](SP_PERFORMANCE_OPTIMIZATION_PLAN.md).
+  It starts with the fused TP4 output MRS/clone tail, whose dependent union is
+  about 916 us, before considering further SP transport tuning.
 * The principal Galaxy-scale risk now has a LoudBox probe: an SP=8,
   three-stage Hillis--Steele affine prefix transfers the exact per-TP4-rank
   payload, eight FP32 `[128,128]` A matrices plus eight `[128,128]` B matrices
