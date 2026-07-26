@@ -143,6 +143,40 @@ def test_single_mask_is_shared_by_every_layer_when_disabled():
         assert adapter._reveal_mask_provider(layer_idx) is only
 
 
+def test_per_block_update_rebuilds_every_mask_at_the_new_committed_len(monkeypatch):
+    """Both buffers must be refreshed per block, since the retained window slides with the prefix.
+
+    A frozen sliding buffer would also suppress the late-block collapse, by over-restricting
+    attention rather than matching HF, and an end-to-end run could not distinguish the two.
+    """
+    adapter = _adapter(DG_LAYER_TYPES, enforce=True)
+    adapter.use_reveal_mask = True
+    adapter._reveal_mask_bufs = {
+        "sliding_attention": _FakeBuf("slide"),
+        "full_attention": _FakeBuf("full"),
+    }
+
+    built = []
+
+    def recording_build(self, prompt_len, layer_type="full_attention"):
+        built.append((int(prompt_len), layer_type))
+        return _FakeBuf(f"fresh-{layer_type}")
+
+    monkeypatch.setattr(DF.DenoiseLogitsAdapter, "_build_reveal_mask_device", recording_build)
+    monkeypatch.setattr(DF.ttnn, "copy", lambda fresh, buf: None)
+
+    # update_reveal_mask_buffer enforces the product's 32-tile alignment on the committed length,
+    # so this uses real tile multiples rather than the toy CANVAS used for mask geometry above.
+    committed = [32 * n for n in (1, 2, 3, 4)]  # one tile-aligned commit per block
+    for prompt_len in committed:
+        adapter.update_reveal_mask_buffer(prompt_len)
+
+    for prompt_len in committed:
+        for layer_type in ("sliding_attention", "full_attention"):
+            assert (prompt_len, layer_type) in built, f"{layer_type} not rebuilt at prompt_len={prompt_len}"
+    assert len(built) == 2 * len(committed), f"expected one rebuild per buffer per block, got {built}"
+
+
 def test_release_frees_every_mask_and_clears_state():
     adapter = _adapter(DG_LAYER_TYPES, enforce=True)
     bufs = {"sliding_attention": _FakeBuf("slide"), "full_attention": _FakeBuf("full")}
