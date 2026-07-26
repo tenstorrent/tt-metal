@@ -1,8 +1,8 @@
 ---
 name: issue-solver-orchestrator
-description: "Run the single-architecture LLK issue-solver pipeline on local silicon or ttsim."
+description: "Coordinate one LLK-related tt-metal issue fix for one architecture."
 model: sonnet
-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, mcp__atlassian__search, mcp__atlassian__searchConfluenceUsingCql, mcp__atlassian__getConfluencePage, mcp__atlassian__getAccessibleAtlassianResources, mcp__deepwiki__ask_question, mcp__deepwiki__read_wiki_contents, mcp__deepwiki__read_wiki_structure
+tools: Read, Bash, Grep, Agent
 ---
 
 # LLK Issue Solver Orchestrator (single-arch)
@@ -11,14 +11,8 @@ Fix one issue for one `TARGET_ARCH`. All state changes and dashboard mechanics
 live in
 `codegen/scripts/issue_solver/orchestrator_steps.sh` (shared with the multi-arch
 orchestrator under `RUN_MODE=single`). Use this file only for control flow.
-Source the library once per Bash call; do not reproduce or edit its functions:
-
-```bash
-source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_setup_run
-```
-
-Run Bash blocks in order. Agent prompt blocks are templates, not commands.
+Source the library once per Bash call; do not reproduce or edit its functions.
+Run the applicable Bash blocks in order.
 
 ## Input & State
 
@@ -37,214 +31,250 @@ Bootstrap state schema:
 - `TTSIM_SO_PATH` when `TEST_BACKEND=ttsim`
 - `CREATE_LOCAL_BRANCH`, `CREATE_PR`
 
-Code writes must stay inside `$WORKTREE_DIR/tt_metal/tt-llk`,
-`.../tt_metal/hw/ckernels`, `.../tt_metal/hw/inc/api`, `.../ttnn/cpp/ttnn/operations`,
-or `.../tests/tt_metal`. Editing elsewhere is a scope violation.
+Code writes may touch any path inside `$WORKTREE_DIR` when the analysis and
+repository evidence show it is required. Do not edit dashboard or codegen
+implementation; required artifacts and self-logs are allowed. Editing outside
+the tt-metal worktree is a scope violation.
 
 ## Git Policy
 
 Do not run git mutations directly. Only
 `execute_step_write_generated_patch` may create the final local commit and
-patch. Never push, open a PR, checkout, or reset.
+patch. Never push, open a PR, checkout, or reset. Leaf agents follow their own
+Git policies; in particular, `perf-tester.md` may add and remove only its
+temporary detached baseline worktree.
 
-## Agent I/O conventions
+## Agent and Result Conventions
 
-- Read each agent's status from its final tool result.
-- Spawn agents synchronously.
-- Expand prompt placeholders with `sg`; the Agent tool does not expand shell
-  variables. Agents resolve their remaining inputs from state.
-  ```
-  WT="$(cd ../.. && pwd)"; LOG_DIR="$(python codegen/scripts/state.py --worktree-dir "$WT" get LOG_DIR)"
-  python codegen/scripts/state.py --log-dir "$LOG_DIR" get <KEY>
-  ```
+- Spawn one agent at a time and wait for it.
+- Give every agent `WORKTREE_DIR`; give `perf-tester.md` the one architecture
+  it must measure. Agents resolve other inputs from state.
+- Expand prompt placeholders before spawning. The Agent tool does not expand
+  shell variables.
+- Follow each leaf playbook instead of repeating its implementation here.
+- Use the authoritative result for each stage:
 
-## Out of Space
+  | Stage | Authoritative result |
+  |---|---|
+  | analyze / research | issue artifact |
+  | fix / retry | worker's final marker and fix plan |
+  | functional test | `run.json` metrics plus tester result |
+  | review | `review_result.json` |
+  | performance | `perf_result.json` |
+
+After every `FIX_APPLIED` or `FIX_UPDATED`, route verification again and record
+the full worktree diff. That worker edit invalidates all later evidence:
+functional verification, review, and performance must run again in that order.
+
+## Stop Conditions
 
 On `NO SPACE LEFT ON DEVICE`, spawn nothing else. Run
-`execute_step_report_no_space "<current step>"` and end the run as failed.
+`execute_step_report_no_space "<current step>"` and end the run.
+
+Do not send these outcomes to the worker:
+
+- `ENV_ERROR`: the test environment is unusable.
+- `SIM_ISA_GAP`: the selected simulator cannot execute the test.
+- `PERF_ENV_ERROR` or `PERF_NOT_APPLICABLE`: performance was not comparable or
+  does not apply.
+
+Record their evidence and follow the outcome rules below.
 
 ## Pipeline
 
-```
-analyzer → [arch_lookup?] → writer → {tester | metal_test} → [debug loop] → review → perf → finalize
+```text
+analyze → [research] → fix → functional verification → review → performance → finalize
+                          ↑__________________________________________|
+                                     any worker edit
 ```
 
-## Step 0: Setup
+## 1. Setup
+
+From `$WORKTREE_DIR/tt_metal/tt-llk`:
 
 ```bash
 source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_validate_input "{worktree_dir}"   # OK: … or REJECT: … (stop on REJECT)
+execute_step_validate_input "$WORKTREE_DIR"
 execute_step_validate_env
 execute_step_setup_run
 execute_step_write_initial_run_json
 ```
 
-## Step 1: Analyze
+Stop on an input rejection. Environment validation is advisory unless a later
+stage proves the missing prerequisite is required.
 
-```text
-Agent: subagent_type=general-purpose, description="Analyze ${TARGET_ARCH} issue #${ISSUE_NUMBER}"
-  prompt: |
-    Read and follow codegen/agents/issue-solver/issue-analyzer.md.
-    Resolve LOG_DIR from the worktree state file, then read TARGET_ARCH and ISSUE_*
-    from state. Write codegen/artifacts/issue_${ISSUE_NUMBER}_analysis.md and
-    ${LOG_DIR}/agent_issue_analyzer.md.
-```
+## 2. Analyze and Research
+
+Spawn `issue-analyzer.md` once. It owns scope, architecture classification,
+verification routing, perf intent, and research questions. Then run:
 
 ```bash
 source codegen/scripts/issue_solver/orchestrator_steps.sh
 execute_step_refine_perf_goal
 ```
 
-If the analyzer declares the issue out of scope: run Step 6 with
-`execute_step_mark_status skipped`, then finalize.
+Read `in_scope` from the analysis artifact. If false, use final functional
+verdict `SKIPPED` and finalize without spawning another agent.
 
-## Step 1.5: Route Verification
+If `needs_arch_research: true`, run `execute_step_advance_arch_lookup`, then
+spawn `arch-lookup.md` once. Otherwise leave `PREVIOUS_AGENT=analyzer`.
 
-```bash
-source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_route_verification                # VERIFY_ROUTE=llk|metal|both|none
-```
-
-`llk`→Step 4; `metal`→Step 4b only; `both`→Step 4 then 4b (green iff neither
-failed); `none`→neither (`compiled`/Working, never `skipped`).
-
-## Step 2: Research (only if analysis asks for arch facts)
-
-```bash
-source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_advance_arch_lookup
-```
-
-Spawn `arch-lookup.md`; it reads questions from the analysis artifact and
-writes its artifact and self-log.
-If not needed, skip — `PREVIOUS_AGENT` stays `analyzer`.
-
-## Step 3: Fix
+## 3. Apply the Fix
 
 ```bash
 source codegen/scripts/issue_solver/orchestrator_steps.sh
 execute_step_advance_writer
 ```
 
-Spawn `issue-worker.md` for the initial fix (reads inputs from state; writes fix
-plan + self-log). Then:
+Spawn `issue-worker.md` in initial-fix mode.
+
+- `FIX_APPLIED`: continue.
+- `BLOCKED` or `HYPOTHESIS_REFUTED`: store the reported reason in `OBSTACLE`,
+  mark the run failed, and finalize without verification.
+- Any other or missing marker: treat it as an environment/orchestration error,
+  not as an applied fix.
+
+After a successful worker result:
 
 ```bash
 source codegen/scripts/issue_solver/orchestrator_steps.sh
+execute_step_route_verification
 execute_step_record_changed_files
 ```
 
-## Step 4: Test
+If there is no fix-related diff, stop as blocked rather than reporting a
+successful empty fix.
 
-Branch on `VERIFY_ROUTE`: `none`→`execute_step_mark_unverifiable` then Step 5.3;
-`metal`→Step 4b only; `llk`/`both`→below.
+## 4. Functional Verification
 
-```bash
-source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_advance_tester                    # (pass "fix_tests" on a debug re-test)
-```
+Use `VERIFY_ROUTE`:
 
-Spawn `tester.md` (run state plus bootstrap `TTSIM_SO_PATH`). It returns one
-verdict: `SUCCESS`/`COMPILE_FAILED`/
-`TESTS_FAILED`/`SIM_ISA_GAP`/`ENV_ERROR`/`COMPILED_ONLY`/`UNVERIFIABLE_IN_LLK_SUITE`
-and writes counts via `metric`. Then:
+| Route | Action |
+|---|---|
+| `llk` | spawn `tester.md` |
+| `metal` | spawn `metal-tester.md` |
+| `both` | run `tester.md`, then `metal-tester.md`; retain both outcomes |
+| `none` | run `execute_step_mark_unverifiable`; no functional agent |
 
-```bash
-source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_aggregate_results
-```
-
-`both`→Step 4b; `llk`→Step 5.
-
-## Step 4b: Metal Suite (VERIFY_ROUTE = metal | both)
+Before a tester, call its advance helper:
 
 ```bash
 source codegen/scripts/issue_solver/orchestrator_steps.sh
+execute_step_advance_tester       # pass fix_tests after a retry
+# or
 execute_step_advance_metal_test
 ```
 
-Spawn `metal-tester.md` (run state, bootstrap simulator path, and environment
-provisioning). Treat its verdict as the functional result; for `both`, both
-suites must pass. Then run `execute_step_aggregate_results`.
+Run `execute_step_aggregate_results` after functional testing. For `both`,
+never let the second suite hide an earlier failure. The combined functional
+outcome is:
 
-## Step 5: Debug loop (tester COMPILE_FAILED/TESTS_FAILED)
+- failing if either suite fails;
+- `SUCCESS` if at least one suite passes and the other is non-failing;
+- otherwise `COMPILED_ONLY` or `UNVERIFIABLE_IN_LLK_SUITE`.
 
-While the tester is red and `DEBUG_CYCLES < MAX_DEBUG_CYCLES`:
+Handle each suite verdict as follows:
 
-```bash
-source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_debug_feedback "{FAILURE_SUMMARY}"
-```
+| Verdict | Action |
+|---|---|
+| `SUCCESS` | continue |
+| `COMPILED_ONLY`, `UNVERIFIABLE_IN_LLK_SUITE` | continue with a compiled/unverified outcome |
+| `COMPILE_FAILED`, `TESTS_FAILED` | enter the debug loop |
+| `ENV_ERROR`, `SIM_ISA_GAP` | record the evidence and finalize failed without a worker retry |
+| `SKIPPED` | valid only for analyzer-owned out-of-scope work |
 
-Spawn `issue-worker.md` in debug mode, then run `execute_step_bump_debug`.
-Re-run the failed route: Step 4 for tt-llk, Step 4b for metal, or both in order.
-Aggregate the new results.
-Terminate: `SUCCESS`→Step 5.3; `DEBUG_CYCLES == MAX` still red → Step 6
-`execute_step_mark_status failed`; worker `HYPOTHESIS_REFUTED` → Step 6
-`execute_step_mark_status failed`. Never debug `SIM_ISA_GAP` — finalize failed.
+### Debug Loop
 
-## Step 5.3: Review loop
+Retry only while `DEBUG_CYCLES < MAX_DEBUG_CYCLES`:
 
-Run once tests are green (a diff exists to review).
+1. Call `execute_step_debug_feedback` with the first meaningful failure.
+2. Spawn `issue-worker.md` with the concrete failure class and raw-log path.
+3. On `FIX_UPDATED`, rerun route verification and changed-file recording, then
+   call `execute_step_bump_debug`.
+4. Return to functional verification using the updated route.
+
+`BLOCKED` or `HYPOTHESIS_REFUTED` ends the run failed with its evidence. If the
+budget is exhausted while a repairable failure remains, call
+`execute_step_mark_status failed` and finalize.
+
+## 5. Review
+
+Run review when a fix diff exists and functional verification has no terminal
+failure. This includes `VERIFY_ROUTE=none`.
 
 ```bash
 source codegen/scripts/issue_solver/orchestrator_steps.sh
 execute_step_advance_review
 ```
 
-Spawn `reviewer.md`, then `execute_step_record_review`. Read `blocking_total`:
-`0`→Step 5.5. `>0` and `REVIEW_RETRIES < MAX_REVIEW_RETRIES`:
-`execute_step_review_feedback "{summary}"`, spawn `issue-worker.md`
-(`FAILURE_CLASS=REVIEW_FINDINGS` + `review_result.json`), `execute_step_bump_review`,
-re-run the applicable functional route, and if green re-run Step 5.3. Worker
-`HYPOTHESIS_REFUTED`→Step 5.5.
-When the review budget is exhausted, preserve the functional status and set:
+Spawn `reviewer.md`, then call `execute_step_record_review`. Read
+`blocking_total` from `review_result.json`:
 
-```bash
-LOG_DIR="$(python codegen/scripts/state.py --worktree-dir "$WORKTREE_DIR" get LOG_DIR)"
-python codegen/scripts/state.py --log-dir "$LOG_DIR" set \
-  OBSTACLE unresolved_review_findings
-```
+- `0`: continue to performance.
+- Greater than zero with retry budget: call `execute_step_review_feedback`,
+  spawn `issue-worker.md` with `FAILURE_CLASS=REVIEW_FINDINGS`, and then call
+  `execute_step_bump_review`.
+- Budget exhausted, `BLOCKED`, or `HYPOTHESIS_REFUTED`: preserve the functional
+  outcome, set `OBSTACLE=unresolved_review_findings`, and stop retrying review.
 
-Then continue.
+After `FIX_UPDATED`, rerun route verification and changed-file recording, then
+return to functional verification. Do not reuse the earlier review.
 
-## Step 5.5: Perf loop (green only; local BH/WH only)
+## 6. Performance
+
+Run only after the current diff has completed the review loop.
 
 ```bash
 source codegen/scripts/issue_solver/orchestrator_steps.sh
 PERF_ARCHES="$(execute_step_perf_arches)"
 ```
 
-Empty → `execute_step_perf_not_measured`, Step 6. Else:
+If empty, call `execute_step_perf_not_measured` and finalize. Otherwise call
+`execute_step_advance_perf`, spawn `perf-tester.md` for `TARGET_ARCH`, and call
+`execute_step_record_perf`.
+
+| Outcome | Action |
+|---|---|
+| `PERF_OK` | finalize |
+| `PERF_NOT_APPLICABLE`, `PERF_ENV_ERROR` | preserve the functional outcome; do not retry the worker |
+| `PERF_TEST_FAILED` | retry the worker with its concrete compile/test/hang failure class |
+| `PERF_REGRESSED` | retry with `FAILURE_CLASS=PERF_REGRESSION` |
+| `PERF_NOT_IMPROVED` | retry with `FAILURE_CLASS=PERF_NOT_IMPROVED` when the goal is `improve` |
+
+For a performance retry, call `execute_step_perf_feedback`, spawn the worker,
+and then call `execute_step_bump_perf`. On `FIX_UPDATED`, rerun route
+verification and changed-file recording, then return to functional
+verification, review, and performance.
+
+When the performance budget is exhausted:
+
+- `PERF_TEST_FAILED` or a `no_regress` regression fails the run and records the
+  obstacle.
+- `PERF_NOT_IMPROVED` for an optimization preserves the functional outcome and
+  remains visible in `perf_result.json`.
+
+## 7. Finalize
+
+Choose the final functional verdict from the latest valid functional evidence:
+`SKIPPED` for an out-of-scope issue, `SUCCESS` for real passing verification,
+or `COMPILED_ONLY` / `UNVERIFIABLE_IN_LLK_SUITE` when no relevant in-harness
+test exists. A previously marked failure remains failed.
 
 ```bash
 source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_advance_perf
-```
-
-Spawn `perf-tester.md` (`PERF_GOAL`, changed op, fix plan from state); it writes
-`$LOG_DIR/perf_result.json`. Then `execute_step_record_perf` (no arg — top-level
-perf). A *miss* = `PERF_REGRESSED`, or `PERF_NOT_IMPROVED` when `PERF_GOAL=improve`.
-On a miss with retry budget: `execute_step_perf_feedback "{summary}"`,
-spawn `issue-worker.md` (`FAILURE_CLASS=PERF_REGRESSION|PERF_NOT_IMPROVED` + CSV
-paths), `execute_step_bump_perf`, re-run the applicable functional route, then
-Step 5.5. Exhausted:
-`no_regress` + still regressed → set `OBSTACLE=perf_regression` with
-`state.py`, then run `execute_step_mark_status failed test_failure`;
-`improve` + not improved → keep the functional status.
-
-## Step 6: Finalize
-
-```bash
-source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_deferred_message                  # no-op unless VERIFY_DEFERRED=1
-execute_step_status_from_verdict "{final functional verdict}"   # maps verdict → STATUS (skips if already failed)
-execute_step_write_generated_patch             # local commit (no push) + generated.patch
+execute_step_deferred_message
+execute_step_status_from_verdict "{final functional verdict}"
+execute_step_write_generated_patch
 execute_step_finalize_run
 execute_step_copy_artifacts
 ```
 
-Return the run summary (`status`, `run_id`, `log_dir`, `branch`,
-`base_commit`, `fix_commit`, `worktree_dir`, `patch`, `test_backend`, `perf`,
-`review`, cost, `create_pr_requested`, `changed_files`, `obstacle`) — read every
-field from `$LOG_DIR/run.json`.
+If `OBSTACLE` is already nonempty, preserve it across
+`execute_step_deferred_message`; that helper may clear an obstacle when
+verification is deferred. After patch generation, verify that every
+fix-related changed path is present in the local fix commit or
+`generated.patch`. If any path is omitted, mark the run failed and report the
+packaging gap instead of claiming success.
+
+Return the summary from `$LOG_DIR/run.json`, including status, commits, patch,
+changed files, functional evidence, review, performance, obstacle, and cost.
