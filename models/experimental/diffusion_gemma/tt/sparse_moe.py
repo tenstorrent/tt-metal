@@ -39,31 +39,38 @@ _EXPERT_FP32_FULL_SYNC_CFG_CACHE = {}
 
 
 def default_sparse_moe_compute_kernel_config():
-    """HiFi4, matching the gemma4 dense reference this path was ported from.
+    """HiFi2. ``DG_SPARSE_MOE_HIFI4=1`` raises it to HiFi4, which is what the gemma4 dense
+    reference (``models/demos/gemma4/tt/experts/prefill.py``) uses.
 
-    ``models/demos/gemma4/tt/experts/prefill.py`` uses HiFi4; this path shipped at HiFi2 for speed,
-    and that difference is a real contributor to the pcc-vs-dense gap. Both halves of the original
-    reasoning here now have measurements behind them.
+    The fidelity gap against that reference is real and is a contributor to the pcc-vs-dense gap,
+    but raising it is NOT a net win, and the numbers below are why it is opt-in rather than the
+    default. Measured over paired 16K runs on the same prompts, seed, span, traced path and noise
+    mode, with only the fidelity differing:
 
-    COST is small, because the expert matmuls are weight-bound and these blocks are dominated by
-    attention and DRAM traffic, so the extra math passes hide behind the DRAM read. Per-block
-    latency at 16K, on the two questions with a clean before/after:
+        HiFi2   2/13 collapsed   1 empty output   11 answered   10 correct
+        HiFi4   4/13 collapsed   0 empty output    9 answered    9 correct
+
+    HiFi4 wins only the empty-output case: q007's block 0 goes from 48 steps / not halted /
+    109 of 256 positions still flipping to 30 steps / halted / 0, so that request stops emitting
+    nothing. But collapses double and one fewer answer is correct, because many blocks converge
+    right AT the 48-step cap -- q012's block 0 halted on step 45 of 48 under HiFi2 and tips over
+    under HiFi4 -- so a numerical change moves blocks in BOTH directions.
+
+    Cost is not the obstacle -- it is small, because the expert matmuls are weight-bound and these
+    blocks are dominated by attention and DRAM traffic, so the extra math passes hide behind the
+    DRAM read. Per-block latency at 16K, on the two questions with a clean before/after:
 
         q012   HiFi2 24.112 s/blk (10.62 tok/s)   HiFi4 25.556 s/blk (10.02 tok/s)   +6.0%
         q013   HiFi2 27.786 s/blk ( 9.21 tok/s)   HiFi4 27.685 s/blk ( 9.25 tok/s)   -0.4%
 
-    BENEFIT on the failure mode that matters: the worst collapse in that set, q007, went from one
-    block and ZERO characters emitted (the degeneracy guard refused block 0) to 8 blocks and 3022
-    characters.
-
-    It does NOT close the gap. None of those questions yields an extractable answer under HiFi4
-    either, and all still end on a refused canvas: the denoise loop keeps hitting its 48-step cap
-    with the entropy high and ~100 of 256 positions still flipping. That remainder is #48291.
+    So if a larger paired run ever shows HiFi4 net-positive, the throughput will not stand in the
+    way. What is needed is that measurement, not another single-prompt result: this default was
+    briefly flipped to HiFi4 on three data points and had to be reverted, which is the same mistake
+    that shipped a corrupting DG_VLLM_GUMBEL_MODE default for two weeks.
 
     fp32_dest_acc_en stays False so the tuned out_subblock (product up to 8) remains legal
-    (fp32_dest_acc caps it at 4). ``DG_SPARSE_MOE_HIFI4=0`` restores the previous HiFi2 config
-    byte-for-byte for comparison against older numbers."""
-    fidelity = ttnn.MathFidelity.HiFi2 if os.environ.get("DG_SPARSE_MOE_HIFI4", "1") == "0" else ttnn.MathFidelity.HiFi4
+    (fp32_dest_acc caps it at 4)."""
+    fidelity = ttnn.MathFidelity.HiFi4 if os.environ.get("DG_SPARSE_MOE_HIFI4", "0") != "0" else ttnn.MathFidelity.HiFi2
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=fidelity,
         math_approx_mode=False,
