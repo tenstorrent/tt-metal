@@ -154,7 +154,21 @@ Use `VERIFY_ROUTE`:
 | `llk` | spawn `tester.md` |
 | `metal` | spawn `metal-tester.md` |
 | `both` | run `tester.md`, then `metal-tester.md`; retain both outcomes |
-| `none` | run `execute_step_mark_unverifiable`; no functional agent |
+| `missing` | send `MISSING_TEST_COVERAGE` to the worker; do not test or review |
+| `none` | run `execute_step_mark_unverifiable`; valid only when `verification_required: no` |
+
+The analyzer and worker must leave every required suite at coverage
+`existing` or `added`. If routing returns `missing`, consume one debug retry:
+
+1. Call `execute_step_coverage_feedback` with the missing LLK/metal coverage
+   and selector evidence printed by `execute_step_route_verification`.
+2. Spawn `issue-worker.md` with
+   `FAILURE_CLASS=MISSING_TEST_COVERAGE`.
+3. On `FIX_UPDATED`, call `execute_step_bump_debug`, rerun route verification,
+   and record changed files.
+
+If the worker cannot add a truthful runnable regression or the retry budget is
+exhausted, finalize failed. Never convert missing coverage to `none`.
 
 Before a tester, call its advance helper:
 
@@ -182,6 +196,8 @@ The combiner writes the compatibility verdict and counters at
 - otherwise `COMPILED_ONLY` or `UNVERIFIABLE_IN_LLK_SUITE`.
 
 For `none`, call `execute_step_mark_unverifiable` and skip the combiner.
+`none` means runtime verification is genuinely not applicable; it never means
+that the repository lacked a test.
 
 Handle each suite verdict as follows:
 
@@ -189,7 +205,7 @@ Handle each suite verdict as follows:
 |---|---|
 | `SUCCESS` | continue |
 | `COMPILED_ONLY`, `UNVERIFIABLE_IN_LLK_SUITE` | continue with a compiled/unverified outcome |
-| `COMPILE_FAILED`, `TESTS_FAILED` | enter the debug loop |
+| `COMPILE_FAILED`, `TESTS_FAILED` | enter the debug loop; `MISSING_TEST_COVERAGE` requires adding/registering a test |
 | `ENV_ERROR`, `SIM_ISA_GAP` | record the evidence and finalize failed without a worker retry |
 | `SKIPPED` | valid only for analyzer-owned out-of-scope work |
 
@@ -199,6 +215,8 @@ Retry only while `DEBUG_CYCLES < MAX_DEBUG_CYCLES`:
 
 1. Call `execute_step_debug_feedback` with the first meaningful failure.
 2. Spawn `issue-worker.md` with the concrete failure class and raw-log path.
+   A missing selector or zero selected tests uses
+   `FAILURE_CLASS=MISSING_TEST_COVERAGE`.
 3. On `FIX_UPDATED`, rerun route verification and changed-file recording, then
    call `execute_step_bump_debug`.
 4. Return to functional verification using the updated route.
@@ -267,8 +285,9 @@ When the performance budget is exhausted:
 
 Choose the final functional verdict from the latest valid functional evidence:
 `SKIPPED` for an out-of-scope issue, `SUCCESS` for real passing verification,
-or `COMPILED_ONLY` / `UNVERIFIABLE_IN_LLK_SUITE` when no relevant in-harness
-test exists. A previously marked failure remains failed.
+or `COMPILED_ONLY` / `UNVERIFIABLE_IN_LLK_SUITE` only when runtime verification
+was explicitly not applicable. Missing required coverage is a failure. A
+previously marked failure remains failed.
 
 ```bash
 source codegen/scripts/issue_solver/orchestrator_steps.sh

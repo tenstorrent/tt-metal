@@ -18,6 +18,9 @@ implementation target.
 - Decide scope for each requested architecture before proposing a fix. Set the
   whole issue out of scope only when no requested architecture is in scope.
 - Support classifications with issue or repository evidence.
+- Every in-scope executable behavior change requires a regression test runnable
+  by this pipeline. When coverage does not exist, plan the test that the worker
+  must add; absence of an existing test is not a reason to skip verification.
 - Do not edit code.
 
 ## State
@@ -80,12 +83,22 @@ runs; otherwise use `TARGET_ARCH`.
    | `metal_tests` | `tests/tt_metal/**` only |
    | `mixed` | more than one layer |
 
-6. Set `verifiable_in_llk_suite`:
-   - `yes`: a source under `tests/sources/**` calls the affected Layer-1 code.
+6. Set `verification_required` to `yes` for any executable source behavior.
+   Use `no` only when the entire change is non-executable, such as
+   documentation or comments, and explain why no runtime assertion applies.
+   A missing test or unavailable backend does not make verification optional.
+   When it is `no`, also set `verifiable_in_llk_suite: no`,
+   `llk_coverage: not_applicable`, and metal coverage to `target: none` /
+   `coverage: not_applicable`.
+7. Set `verifiable_in_llk_suite` and `llk_coverage`:
+   - `yes`: the affected behavior belongs in the Layer-1 tt-llk suite.
+     Set coverage to `existing` when a source under `tests/sources/**` already
+     reaches it, or `add_required` when the worker must add or extend a source
+     and its Python selector.
    - `no`: the change is confined to Layers 2–4, tt-metal runtime, or metal
-     tests.
+     tests. Set LLK coverage to `not_applicable`.
    - `partial`: a mixed change has both a reachable Layer-1 part and an
-     unreachable higher-layer part.
+     higher-layer part. Set LLK coverage to `existing` or `add_required`.
 
    Confirm reachability with repository evidence:
 
@@ -94,7 +107,7 @@ runs; otherwise use `TARGET_ARCH`.
      tests/sources tests/python_tests
    ```
 
-7. For `no` or `partial`, find the `unit_tests_llk` test that drives a compute
+8. For `no` or `partial`, find the `unit_tests_llk` test that drives a compute
    kernel calling the changed symbol:
 
    ```bash
@@ -106,13 +119,24 @@ runs; otherwise use `TARGET_ARCH`.
    proposed `gtest_filter` selects at least one test with
    `--gtest_list_tests`. Do not build the binary.
 
-   Record the target, filter, compute kernel, and dispatch mode. Use `slow` for
-   a `*SlowDispatchOnly` fixture and `fast` otherwise. If no metal test reaches
-   the symbol, set `target: none` and explain why. The `reason` field is
-   downstream evidence; routing scripts do not parse it.
-8. Record likely files, one initial hypothesis with a falsification condition,
-   and relevant reproduction or regression test candidates.
-9. Request architecture research only for ISA semantics, register layouts,
+   Record the target, coverage state, test file, filter, compute kernel, and
+   dispatch mode. Use `slow` for a `*SlowDispatchOnly` fixture and `fast`
+   otherwise.
+
+   If no metal test reaches required runtime behavior, keep
+   `target: unit_tests_llk`, set `coverage: add_required`, and identify the
+   `tests/tt_metal/tt_metal/llk/test_*.cpp` fixture, optional test kernel, source
+   registration, and tight filter the worker must add. A Layer-4 TTNN pytest
+   that this pipeline cannot execute does not satisfy this requirement; add
+   metal coverage for the production compute path as well.
+
+   Use `target: none` only with `verification_required: no`; set coverage to
+   `not_applicable`.
+9. Record likely production and test files, one initial hypothesis with a
+   falsification condition, and relevant reproduction or regression test
+   candidates. Mark each candidate as `existing` or `add_required` and ensure
+   at least one candidate per required suite is runnable by that suite.
+10. Request architecture research only for ISA semantics, register layouts,
    scheduling, hardware contracts, or cross-architecture porting. Use
    `questions: []` when no research is needed.
 
@@ -138,13 +162,17 @@ scope_style: sweep|targeted
 
 ## Verification
 fix_layer: llk_lib|ckernels_api|compute_api|ttnn|tt_metal_runtime|metal_tests|mixed
+verification_required: yes|no
 verifiable_in_llk_suite: yes|no|partial
+llk_coverage: existing|add_required|added|not_applicable
 metal_verification:            # required when verifiable_in_llk_suite is no|partial
   target: unit_tests_llk|none
-  gtest_filter: '<tight filter>'  # empty when target is none
+  coverage: existing|add_required|added|not_applicable
+  test_file: <tests/tt_metal/tt_metal/llk/test_*.cpp>|none
+  gtest_filter: '<tight filter>'  # proposed filter when coverage must be added
   kernel: <compute-kernel path>|none
   dispatch: slow|fast|none
-  reason: <required when target is none; otherwise empty>
+  reason: <coverage evidence or why verification is not applicable>
 
 ## Evidence
 failing_command_or_test: ...
@@ -173,6 +201,7 @@ questions:
 
 - test: <path, pytest id, filter, or command>
   arch: blackhole|wormhole|quasar|all
+  coverage: existing|add_required|added
   reason: ...
 ```
 

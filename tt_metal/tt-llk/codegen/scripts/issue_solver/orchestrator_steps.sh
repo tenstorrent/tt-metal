@@ -452,33 +452,77 @@ execute_step_refine_perf_goal() {
 }
 
 # ===========================================================================
-# Step 1.5 — route verification by fix layer. Parses the analysis artifact and
-# sets VERIFY_ROUTE (llk|metal|both|none) + the metal target/filter/dispatch.
+# Step 1.5 — route verification by fix layer and required coverage. Parses the
+# analysis artifact and sets VERIFY_ROUTE (llk|metal|both|missing|none) plus the
+# coverage states and metal target/filter/dispatch. Required coverage must be
+# existing or added after the worker returns; a missing test fails closed.
 # ===========================================================================
 execute_step_route_verification() {
     local _L; _L="$(_LOG)"
     local num A; num="$(sg ISSUE_NUMBER)"; A="codegen/artifacts/issue_${num}_analysis.md"
-    local FIX_LAYER VERIFIABLE METAL_TARGET METAL_FILTER METAL_DISPATCH ROUTE
-    gval() { grep -ioE "$1:[[:space:]]*[A-Za-z_]+" "$A" 2>/dev/null | head -1 | sed -E "s/.*:[[:space:]]*//"; }
+    local FIX_LAYER VERIFY_REQUIRED VERIFIABLE LLK_COVERAGE
+    local METAL_TARGET METAL_COVERAGE METAL_FILTER METAL_DISPATCH ROUTE
+    gval() {
+        grep -ioE "$1:[[:space:]]*[A-Za-z_]+" "$A" 2>/dev/null |
+            head -1 | sed -E "s/.*:[[:space:]]*//" || true
+    }
+    mval() {
+        sed -n '/^metal_verification:/,/^## /p' "$A" 2>/dev/null |
+            grep -ioE "^[[:space:]]*$1:[[:space:]]*[A-Za-z_]+" |
+            head -1 | sed -E "s/.*:[[:space:]]*//" || true
+    }
     FIX_LAYER="$(gval 'fix_layer')"
+    VERIFY_REQUIRED="$(gval 'verification_required')"
     VERIFIABLE="$(gval 'verifiable_in_llk_suite')"
-    METAL_TARGET="$(grep -A6 'metal_verification:' "$A" 2>/dev/null | grep -ioE 'target:[[:space:]]*[A-Za-z_]+' | head -1 | sed -E 's/.*:[[:space:]]*//')"
-    METAL_FILTER="$(grep -A6 'metal_verification:' "$A" 2>/dev/null | grep -ioE 'gtest_filter:.*' | head -1 | sed -E "s/gtest_filter:[[:space:]]*//; s/^['\"]//; s/['\"]$//")"
-    METAL_DISPATCH="$(grep -A6 'metal_verification:' "$A" 2>/dev/null | grep -ioE 'dispatch:[[:space:]]*[A-Za-z_]+' | head -1 | sed -E 's/.*:[[:space:]]*//')"
-    case "$VERIFIABLE" in
-        yes)     ROUTE=llk ;;
-        partial) ROUTE=both ;;
-        no)      if [ -z "$METAL_TARGET" ] || [ "$METAL_TARGET" = none ]; then ROUTE=none; else ROUTE=metal; fi ;;
-        *)       ROUTE=llk ;;
+    LLK_COVERAGE="$(gval 'llk_coverage')"
+    METAL_TARGET="$(mval 'target')"
+    METAL_COVERAGE="$(mval 'coverage')"
+    METAL_FILTER="$(
+        sed -n '/^metal_verification:/,/^## /p' "$A" 2>/dev/null |
+            grep -ioE '^[[:space:]]*gtest_filter:.*' |
+            head -1 | sed -E "s/^[[:space:]]*gtest_filter:[[:space:]]*//; s/^['\"]//; s/['\"]$//" || true
+    )"
+    METAL_DISPATCH="$(mval 'dispatch')"
+    if [ "$VERIFY_REQUIRED" = no ]; then
+        ROUTE=none
+    else
+        case "$VERIFIABLE" in
+            yes)     ROUTE=llk ;;
+            partial) ROUTE=both ;;
+            no)      if [ -z "$METAL_TARGET" ] || [ "$METAL_TARGET" = none ]; then ROUTE=none; else ROUTE=metal; fi ;;
+            *)       ROUTE=missing ;;
+        esac
+    fi
+
+    case "$ROUTE" in
+        llk)
+            case "$LLK_COVERAGE" in existing|added) ;; *) ROUTE=missing ;; esac
+            ;;
+        metal)
+            case "$METAL_COVERAGE" in existing|added) ;; *) ROUTE=missing ;; esac
+            [ "$METAL_TARGET" = unit_tests_llk ] && [ -n "$METAL_FILTER" ] || ROUTE=missing
+            ;;
+        both)
+            case "$LLK_COVERAGE" in existing|added) ;; *) ROUTE=missing ;; esac
+            case "$METAL_COVERAGE" in existing|added) ;; *) ROUTE=missing ;; esac
+            [ "$METAL_TARGET" = unit_tests_llk ] && [ -n "$METAL_FILTER" ] || ROUTE=missing
+            ;;
+        none)
+            [ "$VERIFY_REQUIRED" = no ] || ROUTE=missing
+            ;;
     esac
+
     ss FIX_LAYER      "$FIX_LAYER"
+    ss VERIFY_REQUIRED "$VERIFY_REQUIRED"
     ss VERIFIABLE_IN_LLK "$VERIFIABLE"
+    ss LLK_COVERAGE   "$LLK_COVERAGE"
     ss METAL_TARGET   "$METAL_TARGET"
+    ss METAL_COVERAGE "$METAL_COVERAGE"
     ss METAL_FILTER   "$METAL_FILTER"
     ss METAL_DISPATCH "$METAL_DISPATCH"
     ss VERIFY_ROUTE   "$ROUTE"
-    rj message --message "Verify route: ${ROUTE} (fix_layer=${FIX_LAYER:-?}); metal=${METAL_TARGET:-n/a} ${METAL_FILTER:-}"
-    echo "VERIFY_ROUTE=$ROUTE FIX_LAYER=${FIX_LAYER:-?} METAL_TARGET=${METAL_TARGET:-none}"
+    rj message --message "Verify route: ${ROUTE} (fix_layer=${FIX_LAYER:-?}; llk_coverage=${LLK_COVERAGE:-missing}; metal_coverage=${METAL_COVERAGE:-missing})"
+    echo "VERIFY_ROUTE=$ROUTE FIX_LAYER=${FIX_LAYER:-?} LLK_COVERAGE=${LLK_COVERAGE:-missing} METAL_TARGET=${METAL_TARGET:-none} METAL_COVERAGE=${METAL_COVERAGE:-missing}"
 }
 
 # ===========================================================================
@@ -511,18 +555,21 @@ execute_step_advance_writer() {
 # ===========================================================================
 execute_step_record_changed_files() {
     local _L; _L="$(_LOG)"
-    local wt tracked untracked cf; wt="$(_wt)"
+    local wt tracked untracked cf test_changes; wt="$(_wt)"
     tracked="$(git -C "$wt" diff --name-only 2>/dev/null || true)"
     untracked="$(git -C "$wt" ls-files --others --exclude-standard 2>/dev/null || true)"
     cf="$(printf '%s\n%s\n' "$tracked" "$untracked" | sed '/^$/d' | sort -u)"
     ss CHANGED_FILES "$cf"
+    test_changes="$(printf '%s\n' "$cf" | grep -E '(^|/)tests?/|(^|/)test_[^/]+$' || true)"
+    [ -z "$test_changes" ] || rj metric --patch-json '{"tests_generated":true}'
     printf '%s\n' "$cf"
 }
 
 # ===========================================================================
-# Step 4 — VERIFY_ROUTE=none: no in-harness test exists. Mark every in-scope
-# arch UNVERIFIABLE_IN_LLK_SUITE (multi) and record the deferral (Working, not
-# failed, not skipped). Single just records the deferral flags.
+# Step 4 — VERIFY_ROUTE=none: runtime verification is explicitly not applicable.
+# Mark every in-scope arch UNVERIFIABLE_IN_LLK_SUITE (multi) and record the
+# non-runtime outcome. Missing required coverage uses VERIFY_ROUTE=missing and
+# must never reach this helper.
 # ===========================================================================
 execute_step_mark_unverifiable() {
     local _L; _L="$(_LOG)"
@@ -533,7 +580,7 @@ execute_step_mark_unverifiable() {
         done
     fi
     ss VERIFY_DEFERRED 1 --json
-    ss VERIFY_DEFER_NOTE "fix applied + committed; no tt-llk or metal test exercises this ${fl} change — verify in tt-metal CI"
+    ss VERIFY_DEFER_NOTE "fix applied + committed; runtime verification is not applicable to this ${fl} change"
 }
 
 # ===========================================================================
@@ -705,6 +752,13 @@ execute_step_debug_feedback() {
     local summary="$1" num dc mdc; num="$(sg ISSUE_NUMBER)"; dc="$(sg DEBUG_CYCLES)"; mdc="$(sg MAX_DEBUG_CYCLES)"
     execute_step_feedback "tester" "tester" "$summary" \
         "Debugging test failure for issue #${num} (attempt $((dc+1))/${mdc})"
+}
+execute_step_coverage_feedback() {
+    local _L; _L="$(_LOG)"
+    local summary="${1:-MISSING_TEST_COVERAGE: required runnable regression coverage was not added}"
+    local num dc mdc; num="$(sg ISSUE_NUMBER)"; dc="$(sg DEBUG_CYCLES)"; mdc="$(sg MAX_DEBUG_CYCLES)"
+    execute_step_feedback "writer" "writer" "$summary" \
+        "Adding missing test coverage for issue #${num} (attempt $((dc+1))/${mdc})"
 }
 execute_step_review_feedback() {
     local _L; _L="$(_LOG)"
@@ -890,7 +944,7 @@ execute_step_deferred_message() {
     local _L; _L="$(_LOG)"
     [ "$(sg VERIFY_DEFERRED)" = "1" ] || return 0
     local mode num fl note tag; mode="$(sg RUN_MODE)"; num="$(sg ISSUE_NUMBER)"; fl="$(sg FIX_LAYER)"
-    note="$(sg VERIFY_DEFER_NOTE)"; note="${note:-no in-harness test exercises this ${fl} change; verify in tt-metal CI}"
+    note="$(sg VERIFY_DEFER_NOTE)"; note="${note:-runtime verification is not applicable to this ${fl} change}"
     tag="$(sg TARGET_ARCH)"; [ "$mode" = multi ] && tag="multi-arch"
     ss OBSTACLE ""
     ss FINAL_MESSAGE "${tag} issue #${num}: fix applied — ${note}"

@@ -25,6 +25,8 @@ orchestrator handles changes that are not verifiable in this suite.
   inside every arch-specific ttsim command.
 - Do not debug failures or edit files.
 - Do not mark environment failures as compile-only success.
+- Treat missing or zero-selected required coverage as a test failure that the
+  worker must repair, not as an environment failure.
 - Do not invoke the standalone `.claude` run-test skill or
   `llk-test-runner` agent; this pipeline tester owns execution.
 
@@ -63,7 +65,8 @@ mkdir -p "$LOG_DIR"
 Read:
 
 1. `.claude/CLAUDE.md`
-2. the analysis artifact's `arch_scope`
+2. the analysis artifact's `arch_scope`, `verification_required`, and
+   `llk_coverage`
 3. the fix plan's `## Test Strategy`
 
 Parse `TARGET_ARCHES_JSON` as JSON for multi-arch runs; otherwise use
@@ -89,15 +92,21 @@ Use the plan's test strategy:
 | regression test | run only after all reproduction tests pass |
 | `-k` filter | pass the same filter |
 | pytest id | pass as `TEST_ID` |
-| no relevant functional test and `compile_only_ok: true` | report `COMPILED_ONLY` after compile check passes |
+| `verification_required: no` and `compile_only_ok: true` | report `COMPILED_ONLY` after the listed compile check passes |
 
 For ttsim, ignore `compile_checks` and run the listed reproduction/regression
 pytest through the ttsim command below.
 
 For each in-scope architecture, select tests whose `arch` is that architecture
-or `all`. If none apply, return `ENV_ERROR` for an incomplete test strategy.
-The only exception is a local compile-only plan that explicitly sets
-`compile_only_ok: true`.
+or `all`. Required LLK coverage must be `existing` or `added`. If it remains
+`add_required`, no test applies, a selector names a missing file, or pytest
+selects zero tests, return `TESTS_FAILED` with
+`MISSING_TEST_COVERAGE: <specific evidence>`. This is a repairable fix gap, not
+an environment failure.
+
+The only compile-only exception is a local plan with
+`verification_required: no` and `compile_only_ok: true`. Never use
+compile-only because a runtime regression test is absent.
 
 Use exact pytest IDs or narrow `-k` filters. Do not count unrelated
 parametrizations as validation.
@@ -209,6 +218,10 @@ Local runner exit code mapping:
 | 3 | `ENV_ERROR` |
 | 4 | `ENV_ERROR` |
 | 5 | `TESTS_FAILED` with hang evidence |
+
+Specific evidence overrides the generic exit mapping: a missing selector or
+zero selected tests is `TESTS_FAILED` with `MISSING_TEST_COVERAGE`, even when
+the wrapper reports an environment-style exit.
 
 Do not submit a queue job after a local compile failure.
 
@@ -344,9 +357,9 @@ generic pytest exit code:
 | `UnpredictableValueUsed`, `UndefinedBehavior`, or `NonContractualBehavior` | `TESTS_FAILED` with typed ttsim evidence |
 | compiler/build error | `COMPILE_FAILED` |
 | assertion/data mismatch/timeout/hang | `TESTS_FAILED` |
-| pytest exit 5 / no tests selected | `ENV_ERROR` |
+| pytest exit 5 / no tests selected | `TESTS_FAILED` with `MISSING_TEST_COVERAGE` |
 | missing/invalid `TTSIM_SO_PATH`, unusable ttsim install, bad runner invocation, missing environment | `ENV_ERROR` |
-| local compile check passed, no functional test exists, and the plan allows compile-only | `COMPILED_ONLY` |
+| local compile check passed, verification is not required, and the plan allows compile-only | `COMPILED_ONLY` |
 
 `SIM_ISA_GAP` is not an LLK bug. Record the opcode or function and affected
 test; do not send it to the worker.
@@ -364,7 +377,7 @@ Create `${LOG_DIR}/agent_tester.md`, or append
 `## Test Attempt — <UTC timestamp>` when it exists; never discard earlier
 attempts. Record backend and scope, planned tests and normalized selectors,
 exact commands, simulator path where applicable, exit codes, verdict markers,
-queue job IDs, counts, first failure per architecture, and deviations from the
-plan.
+queue job IDs, counts, coverage state, first failure per architecture, and
+deviations from the plan.
 
 If `LOG_DIR` is empty, report that self-logging was skipped.

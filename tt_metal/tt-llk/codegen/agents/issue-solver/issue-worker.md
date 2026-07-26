@@ -33,6 +33,9 @@ multi-arch fix.
 - Do not reset devices for compile errors or reconfig escapes.
 - Do not edit LLK to avoid a ttsim `UnimplementedFunctionality:` gap.
 - Do not run functional tests; `tester.md` owns verification.
+- Treat required regression coverage as part of the fix. Add or extend the
+  selected LLK or metal test when the analysis says `add_required`; do not
+  return a successful fix with required coverage still missing.
 - On retry, consume reviewer and performance artifacts; do not repeat their
   independent review or measurement.
 - Do not invoke the standalone `.claude` arch-lookup, debug-kernel,
@@ -97,8 +100,9 @@ Treat the analysis artifact as the starting contract:
 - Use `category` and `llk_area` to restrict the first inspection.
 - Start from the recorded hypothesis; refine or falsify it with code evidence.
 - Re-run `coverage_search` for a sweep and account for every result.
-- Use `fix_layer` to plan API propagation. Use `verifiable_in_llk_suite` and
-  `metal_verification` to confirm which suites and targets should run.
+- Use `fix_layer` to plan API propagation. Use `verification_required`,
+  `verifiable_in_llk_suite`, `llk_coverage`, and `metal_verification` to
+  confirm which suites, targets, and tests must exist.
 - Validate `Test Candidates` against the code. Put only tt-llk suite tests in
   the plan's reproduction and regression lists; `metal-tester.md` consumes
   `metal_verification` from the analysis.
@@ -111,20 +115,49 @@ not listed in the analysis, add it to `Likely Files` with the reason before
 editing.
 
 If implementation evidence changes `arch_scope`, `fix_layer`,
-`verifiable_in_llk_suite`, or `metal_verification`, update the analysis
-artifact with that evidence before returning.
+`verification_required`, `verifiable_in_llk_suite`, `llk_coverage`, or
+`metal_verification`, update the analysis artifact with that evidence before
+returning.
+
+## Required Test Coverage
+
+For every suite marked `add_required`, add the smallest regression that
+executes the changed production behavior and would detect the reported defect.
+Do not satisfy the contract with a test that only duplicates the implementation
+or with a test the selected pipeline cannot run.
+
+- LLK coverage belongs under `tt_metal/tt-llk/tests/`. Add or extend the
+  `tests/sources/**` kernel, its `tests/python_tests/**` selector, and any
+  required parameter/config registration. Record the exact pytest selector in
+  the fix plan.
+- Metal coverage belongs in `unit_tests_llk`. Add or extend
+  `tests/tt_metal/tt_metal/llk/test_*.cpp`, add a focused kernel under
+  `tests/tt_metal/tt_metal/test_kernels/**` only when needed, and register a new
+  gtest source in `tests/tt_metal/tt_metal/llk/sources.cmake`. The test should
+  launch the changed production compute/dataflow kernel or the narrowest
+  production path that exposes the behavior.
+- For a TTNN change, a higher-level TTNN pytest is useful but does not replace
+  required metal coverage while this pipeline cannot execute that pytest.
+
+After adding coverage, change the applicable analysis state from
+`add_required` to `added`, replace proposed paths and filters with the exact
+ones implemented, and keep `verification_required: yes`. If no truthful,
+runnable regression can be added inside the tt-metal worktree, return
+`BLOCKED` with the missing capability instead of claiming `FIX_APPLIED`.
 
 ## Initial Fix Process
 
 1. Validate the analysis hypothesis, likely files, and propagation scope.
 2. Audit call sites. For a sweep, account for every coverage-search result as
    changed or technically exempt.
-3. Write `codegen/artifacts/issue_<number>_fix_plan.md`. For multi-arch work,
+3. Validate existing coverage and design every test marked `add_required`.
+4. Write `codegen/artifacts/issue_<number>_fix_plan.md`. For multi-arch work,
    explain the shared contract once and list only genuine arch differences.
-4. Apply the planned changes.
-5. Update the analysis artifact if implementation evidence changed routing.
-6. Run `git diff --check`.
-7. For `TEST_BACKEND=local`, run a narrow cardless compile check appropriate
+5. Apply the production and test changes.
+6. Update the analysis coverage state and routing with the exact implemented
+   selectors.
+7. Run `git diff --check`.
+8. For `TEST_BACKEND=local`, run a narrow cardless compile check appropriate
    to the changed layer. For LLK sources, provision the harness when needed
    with `cd tests && bash ./setup_external_testing_env.sh --reuse`, then use
    `codegen/scripts/compiler.py`. If no narrow cardless check exists, record
@@ -142,6 +175,7 @@ artifact with that evidence before returning.
    | `ASSERTION` | LLK/test assertion | inspect violated contract |
    | `DATA_MISMATCH` | wrong values/PCC/allclose | compare algorithm, face/order/addressing, init/uninit |
    | `RECONFIG_ESCAPE` | passes alone, fails after another test | inspect init/uninit symmetry; do not reset |
+   | `MISSING_TEST_COVERAGE` | no applicable test or zero tests selected | add and register a focused runnable regression, then update analysis routing |
    | `PERF_REGRESSION` | fixed tree is slower | localize added work from the perf artifact without weakening correctness |
    | `PERF_NOT_IMPROVED` | optimization goal missed | optimize the evidenced thread or refute the hypothesis |
    | `REVIEW_FINDINGS` | `review_result.json` has blockers | fix blocking findings only |
@@ -207,7 +241,8 @@ reproduction_tests:
 regression_tests:
 - arch: blackhole|wormhole|quasar|all
   test: test file / filter / pytest id
-compile_only_ok: true|false  # true only when no relevant functional test exists
+  coverage: existing|added
+compile_only_ok: true|false  # true only when verification_required is no
 why_compile_only_ok: ...
 
 ## Risks
@@ -216,8 +251,9 @@ why_compile_only_ok: ...
 
 ## Result
 
-Return `FIX_APPLIED` for an initial fix or `FIX_UPDATED` for a retry. Include
-the changed files, checks, and plan path.
+Return `FIX_APPLIED` for an initial fix or `FIX_UPDATED` for a retry only after
+all required coverage is `existing` or `added`. Include the production and test
+files, checks, and plan path.
 
 ```text
 HYPOTHESIS_REFUTED - issue #<number>

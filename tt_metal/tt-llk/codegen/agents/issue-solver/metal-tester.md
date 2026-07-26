@@ -21,6 +21,8 @@ honors `TT_METAL_SIMULATOR`. Compute-API headers are JIT-compiled from
   may execute different architectures concurrently. Report all results in one
   `${LOG_DIR}/agent_metal_tester.md`.
 - Do not mark a build or environment failure as success.
+- Treat missing or zero-selected required coverage as a test failure that the
+  worker must repair, not as an environment failure.
 
 ## State
 
@@ -35,7 +37,8 @@ bg() { python codegen/scripts/state.py --worktree-dir "$WT" get "$1"; }
 
 Read `ISSUE_NUMBER`, `RUN_MODE`, `TARGET_ARCH` or `TARGET_ARCHES_JSON`,
 `TEST_BACKEND`, `METAL_TARGET`, `METAL_FILTER`, `METAL_DISPATCH`,
-`VERIFY_ROUTE`, `CHANGED_FILES`, `WORKTREE_DIR`, and `LOG_DIR` with `sg`.
+`METAL_COVERAGE`, `VERIFY_ROUTE`, `CHANGED_FILES`, `WORKTREE_DIR`, and
+`LOG_DIR` with `sg`.
 
 For ttsim, read `TTSIM_SO_PATH` (single) or `TTSIM_SO_PATHS` (multi) from
 bootstrap state with `bg`.
@@ -61,9 +64,12 @@ cd "$WORKTREE_DIR"
 mkdir -p "$LOG_DIR"
 ```
 
-1. Require `METAL_TARGET=unit_tests_llk` and a non-empty `METAL_FILTER`.
-   `METAL_TARGET=none` is handled by the orchestrator and must not reach this
-   agent.
+1. Require `METAL_TARGET=unit_tests_llk`, `METAL_COVERAGE=existing|added`, and
+   a non-empty `METAL_FILTER`. If coverage is `add_required`, the filter is
+   empty because no runnable test was added, or the named test source is
+   missing, return `TESTS_FAILED` with
+   `MISSING_TEST_COVERAGE: <specific evidence>`. `METAL_TARGET=none` is valid
+   only when verification is not required and must not reach this agent.
 2. Normalize the ordered architecture list from `TARGET_ARCHES_JSON` or
    `TARGET_ARCH`.
 3. Build locally. A failed build returns `COMPILE_FAILED` without submitting
@@ -168,8 +174,8 @@ that the filter selects at least one test:
 listed_tests="$("$BIN" --gtest_list_tests --gtest_filter="$METAL_FILTER" 2>&1)"
 if ! printf '%s\n' "$listed_tests" |
     rg -q '^[[:space:]]+[^[:space:]]'; then
-  echo "ENV_ERROR: gtest filter selected zero tests: $METAL_FILTER"
-  exit 3
+  echo "MISSING_TEST_COVERAGE: gtest filter selected zero tests: $METAL_FILTER"
+  exit 1
 fi
 ```
 
@@ -288,6 +294,7 @@ unknown cache directory.
 | build/link error in Step A | `COMPILE_FAILED` |
 | Watcher `LLK_ASSERT`/`ASSERT` message in the run log (only with `TT_METAL_LLK_ASSERTS=1`) | `TESTS_FAILED` |
 | `[  FAILED  ]` / data mismatch / assertion / timeout | `TESTS_FAILED` |
+| missing test source, `add_required`, or zero selected tests | `TESTS_FAILED` with `MISSING_TEST_COVERAGE` |
 | `UnimplementedFunctionality` / SIM ISA gap from ttsim | `SIM_ISA_GAP` |
 | missing/invalid `.so`, no `soc_descriptor.yaml`, missing binary, bad build tree | `ENV_ERROR` |
 
@@ -297,8 +304,9 @@ Report the assert message as `first_evidence` so the debug loop targets the kern
 (see `docs/source/tt-metalium/tools/llk_asserts.rst`).
 
 Confirm the filter selected a non-zero set (`--gtest_list_tests --gtest_filter=...`) before
-counting a pass; an empty selection is `ENV_ERROR`, not `SUCCESS`. `SIM_ISA_GAP` is a
-simulator limitation, not a fix failure — report the opcode/test and stop that arch.
+counting a pass; an empty selection is `MISSING_TEST_COVERAGE`, not `SUCCESS`.
+`SIM_ISA_GAP` is a simulator limitation, not a fix failure — report the
+opcode/test and stop that arch.
 
 If Quasar ttsim cannot implement or boot the metal program, report
 `SIM_ISA_GAP` with the exact evidence.
@@ -346,6 +354,6 @@ out-of-scope architectures.
 Create `${LOG_DIR}/agent_metal_tester.md`, or append
 `## Metal Test Attempt — <UTC timestamp>` when it exists. Record the build
 strategy and duration, exact commands and relevant environment, filter,
-assertion mode, queue job IDs, per-architecture counts and verdicts, and the
-first meaningful failure. Never discard earlier attempts. If `LOG_DIR` is
-empty, report that self-logging was skipped.
+coverage state, assertion mode, queue job IDs, per-architecture counts and
+verdicts, and the first meaningful failure. Never discard earlier attempts. If
+`LOG_DIR` is empty, report that self-logging was skipped.
