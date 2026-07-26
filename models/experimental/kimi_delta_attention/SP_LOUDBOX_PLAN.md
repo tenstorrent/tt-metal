@@ -246,6 +246,15 @@ state-transfer protocol and measure its components.
   traces as a current LB runtime/queue limitation, not a measured performance
   opportunity; it must be resolved with a trace/fabric runtime investigation
   before attempting an end-to-end SP=8 overlap implementation.
+  Triage identifies the missing global stage ordering as the immediate cause:
+  fabric routers were blocked on receiver credits and buffer space while
+  independently replayed ranks had advanced to different prefix distances.
+  An eager stage-barrier harness resolves that condition.  It queues real
+  eight-head, 2,560-token local KDA grouped scans while stage-zero traffic is
+  in flight, then synchronizes every device before composing that stage or
+  issuing the next one.  This passed on LB with both one and two socket lanes.
+  It is a stability proof only: its all-rank scan release is optimistic and
+  the host stage barriers make it unsuitable as a performance measurement.
 * The direct TP=4 output matmul has no safe grid-only win.  An explicit 10x8
   prefill grid passed the full target-shape SP2xTP4 PCC suite, but raised its
   output matmul from about **205 us** to **223 us** and the three-replay

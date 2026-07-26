@@ -12,6 +12,7 @@ same 1 MiB/rank transform payload a Galaxy prefix must carry.
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 
 import ttnn
 
@@ -81,10 +82,19 @@ class SP8AffinePrefixProbe:
         *,
         retain_buffers: bool = False,
         synchronize_stages: bool = True,
+        after_stage_enqueued: Callable[[int], None] | None = None,
     ) -> tuple[tuple[ttnn.Tensor, ...], tuple[ttnn.Tensor, ...]]:
-        """Run all three Hillis--Steele stages and return inclusive transforms."""
+        """Run all three Hillis--Steele stages and return inclusive transforms.
+
+        ``after_stage_enqueued`` can queue independent local work once a
+        stage's socket operations are in flight.  It deliberately requires
+        the global stage barriers: a callback with unsynchronized stages would
+        let device traces advance the fabric protocol out of order.
+        """
         if len(transform_a) != _SP_SIZE or len(transform_b) != _SP_SIZE:
             raise ValueError(f"expected {_SP_SIZE} transforms, got A={len(transform_a)}, B={len(transform_b)}")
+        if after_stage_enqueued is not None and not synchronize_stages:
+            raise ValueError("after_stage_enqueued requires synchronize_stages=True")
         prefix_a = list(transform_a)
         prefix_b = list(transform_b)
 
@@ -106,6 +116,8 @@ class SP8AffinePrefixProbe:
                 ttnn.experimental.recv_async(received_a[destination], recv_socket)
                 ttnn.experimental.send_async(prefix_b[source], send_socket)
                 ttnn.experimental.recv_async(received_b[destination], recv_socket)
+            if after_stage_enqueued is not None:
+                after_stage_enqueued(stage)
             if synchronize_stages:
                 self._synchronize()
 
