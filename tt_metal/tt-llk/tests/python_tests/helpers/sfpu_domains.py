@@ -317,9 +317,12 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Selu: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
-    # i0: modified Bessel I0; kernel poly approx is only valid on |x| <= 3.75
+    # i0: modified Bessel I0. The Maclaurin polynomial covers |x| <= 7 and an
+    # asymptotic branch takes over above it, so sample past the handover — the
+    # old +-3.75 bound stopped short of the region where the truncated series
+    # silently underestimates (#50465: broke between 16 and 17).
     MathOperation.I0: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-3.75, high=3.75)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-30.0, high=30.0)
     ),
     # i1: modified Bessel I1; poly path valid on |x| <= ~3.75 (asymptotic beyond)
     MathOperation.I1: OperandSpecs(
