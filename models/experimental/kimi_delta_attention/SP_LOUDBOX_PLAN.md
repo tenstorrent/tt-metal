@@ -427,6 +427,11 @@ device-ordered affine prefix and with the normal TP=4 output CCL intact.
      models/experimental/kimi_delta_attention/tests/test_sp8_tp4.py::test_sp8_tp4_serial_layer_pcc
    scripts/run_safe_pytest.sh -q -s \
      models/experimental/kimi_delta_attention/tests/test_sp8_tp4.py::test_sp8_tp4_affine_layer_pcc
+
+   # Capture/replay the complete affine layer and check its output before a
+   # profiler report is accepted.
+   KDA_SP8TP4_AFFINE_TRACE_TEST=1 scripts/run_safe_pytest.sh -q -s \
+     models/experimental/kimi_delta_attention/tests/test_sp8_tp4.py::test_sp8_tp4_affine_trace_layer_pcc
    ```
 
 4. **Capture the actual E2E SP2×TP4 layer on LB.**  Keep persistent state,

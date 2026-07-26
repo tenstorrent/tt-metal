@@ -20,7 +20,6 @@ from models.experimental.kimi_delta_attention.tt.sp_layer import (
     SP8TP4KimiDeltaAttention,
 )
 
-
 pytestmark = [
     run_for_blackhole(),
     pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True),
@@ -187,3 +186,77 @@ def test_sp8_tp4_affine_layer_pcc(mesh_device: ttnn.MeshDevice) -> None:
         assert torch.isfinite(actual).all(), f"SP=8 affine TP=4 {name} contains non-finite values"
         passed, pcc = comp_pcc(golden, actual, pcc=0.98)
         assert passed, f"SP=8 affine TP=4 {name} PCC {pcc:.6f} < 0.98"
+
+
+def test_sp8_tp4_affine_trace_layer_pcc(mesh_device: ttnn.MeshDevice, monkeypatch) -> None:
+    """Replay a complete device-queued affine SP8×TP4 layer before profiling it."""
+    if os.getenv("KDA_SP8TP4_AFFINE_TRACE_TEST", "0") != "1":
+        pytest.skip("set KDA_SP8TP4_AFFINE_TRACE_TEST=1 to run the experimental e2e trace gate")
+    monkeypatch.setenv("KDA_SP8_TRACE_SCHEDULE", "1")
+    monkeypatch.setenv("KDA_SP_FABRIC_TREE_BARRIER", "1")
+    monkeypatch.setenv("KDA_SP8_PIPELINED_HANDOFFS", "1")
+    monkeypatch.setenv("KDA_SP_PREFIX_LANES", "1")
+    config = KDAConfig(
+        hidden_size=256,
+        num_heads=8,
+        head_k_dim=128,
+        head_v_dim=128,
+        conv_kernel_size=4,
+        norm_eps=1e-5,
+        chunk_size=32,
+    )
+    sequence = 8 * 128
+    state_dict = random_weights(config)
+    hidden = torch.randn(1, sequence, config.hidden_size, generator=torch.Generator().manual_seed(7712)).to(
+        torch.bfloat16
+    )
+    golden_output, _ = kda_forward_reference(hidden, state_dict, config)
+    layer = SP8AffineTP4KimiDeltaAttention(mesh_device, config, state_dict)
+    layer.reset_state(batch_size=1)
+    span = sequence // 8
+    span_inputs = tuple(
+        ttnn.from_torch(
+            hidden[:, rank * span : (rank + 1) * span],
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=span_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(span_device),
+        )
+        for rank, span_device in enumerate(layer.span_devices)
+    )
+
+    # Compile and drain every fabric/kernel program before the trace owns it,
+    # then restore zero state so the captured replay is compared to the same
+    # reference initial condition.
+    warm_outputs = layer.forward(*span_inputs)
+    for span_device in layer.span_devices:
+        ttnn.synchronize_device(span_device)
+    for output in warm_outputs:
+        ttnn.deallocate(output)
+    layer.reset_state(batch_size=1)
+    layer.enable_trace_stable_state()
+
+    trace_ids = tuple(ttnn.begin_trace_capture(span_device, cq_id=0) for span_device in layer.span_devices)
+    outputs = layer.forward(*span_inputs)
+    for span_device, trace_id in zip(layer.span_devices, trace_ids, strict=True):
+        ttnn.end_trace_capture(span_device, trace_id, cq_id=0)
+    for span_device, trace_id in zip(layer.span_devices, trace_ids, strict=True):
+        ttnn.execute_trace(span_device, trace_id, cq_id=0, blocking=False)
+    for span_device in layer.span_devices:
+        ttnn.synchronize_device(span_device)
+
+    actual_output = torch.cat(
+        [
+            ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(span_device, dim=-1))
+            for output, span_device in zip(outputs, layer.span_devices, strict=True)
+        ],
+        dim=1,
+    )
+    passed, pcc = comp_pcc(golden_output, actual_output, pcc=0.98)
+    assert passed, f"SP=8 affine TP=4 traced output PCC {pcc:.6f} < 0.98"
+
+    for span_device, trace_id in zip(layer.span_devices, trace_ids, strict=True):
+        ttnn.release_trace(span_device, trace_id)
+    for output in outputs:
+        ttnn.deallocate(output)
