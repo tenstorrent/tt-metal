@@ -17,17 +17,17 @@ honors `TT_METAL_SIMULATOR`. Compute-API headers are JIT-compiled from
 - You may use `git apply` only in a designated clean warm verification tree.
   Reverse the patch before returning, including on failure.
 - Do not edit the fix. You build and run; you do not debug or change code.
-- A multi-arch run is one session: run each arch sequentially, report per-arch results in
-  one `${LOG_DIR}/agent_metal_tester.md`.
+- A multi-arch run is one session. Local executions are sequential; the queue
+  may execute different architectures concurrently. Report all results in one
+  `${LOG_DIR}/agent_metal_tester.md`.
 - Do not mark a build or environment failure as success.
 
 ## State
 
-The spawn prompt provides `WORKTREE_DIR`. Resolve both state stores from
-`<worktree>/tt_metal/tt-llk`:
+The spawn prompt provides `WORKTREE_DIR`. Resolve both state stores directly:
 
 ```bash
-WT="$(cd ../.. && pwd)"
+WT="$WORKTREE_DIR"
 LOG_DIR="$(python codegen/scripts/state.py --worktree-dir "$WT" get LOG_DIR)"
 sg() { python codegen/scripts/state.py --log-dir "$LOG_DIR" get "$1"; }
 bg() { python codegen/scripts/state.py --worktree-dir "$WT" get "$1"; }
@@ -47,11 +47,12 @@ Optional environment:
   worktree.
 - `METAL_VERIFY_BUILD_DIR`: warm build directory. Fall back to
   `CODEGEN_METAL_VERIFY_BUILD_DIR`, then `<METAL_VERIFY_HOME>/build`.
-- `HW_TEST_DISPATCH_CMD`: on a cardless local run, compile locally and dispatch
-  the silicon run.
+- `HW_TEST_DISPATCH_CMD`: submit silicon execution to the shared hardware-test
+  queue after the local build passes.
 - `HW_TEST_SESSION`: dispatch session name.
 - `TT_METAL_LLK_ASSERTS=1`: enable device assertions and
-  `TT_METAL_WATCHER=1`.
+  `TT_METAL_WATCHER=1` for local execution. The current queue request does not
+  transport these optional variables.
 
 ## Mandatory Pre-Flight
 
@@ -60,16 +61,19 @@ cd "$WORKTREE_DIR"
 mkdir -p "$LOG_DIR"
 ```
 
-1. If `METAL_TARGET=none`, return `UNVERIFIABLE_IN_LLK_SUITE` for every
-   in-scope architecture without running a command.
+1. Require `METAL_TARGET=unit_tests_llk` and a non-empty `METAL_FILTER`.
+   `METAL_TARGET=none` is handled by the orchestrator and must not reach this
+   agent.
 2. Normalize the ordered architecture list from `TARGET_ARCHES_JSON` or
    `TARGET_ARCH`.
-3. Choose the route:
-   - local with `HW_TEST_DISPATCH_CMD`: compile locally, then dispatch
-   - otherwise: build and run locally
-4. Resolve the verification home and build directory using the fallback order
+3. Build locally. A failed build returns `COMPILE_FAILED` without submitting
+   silicon work.
+4. Choose the execution route:
+   - local with `HW_TEST_DISPATCH_CMD`: shared silicon queue
+   - otherwise: local silicon or ttsim
+5. Resolve the verification home and build directory using the fallback order
    above. Set `BIN=<build-dir>/test/tt_metal/unit_tests_llk`.
-5. Read the fix plan's `## Test Strategy` and the analysis artifact's
+6. Read the fix plan's `## Test Strategy` and the analysis artifact's
    `metal_verification` block.
 
 ```bash
@@ -93,64 +97,10 @@ if [ -n "$METAL_VERIFY_HOME" ] && [ -z "$METAL_VERIFY_BUILD_DIR" ]; then
 fi
 ```
 
-## Step 0 — Silicon (cardless): compile-verify locally, then dispatch the on-card run
+## Step A — Build `unit_tests_llk` locally
 
-Use this route only for `TEST_BACKEND=local` with `HW_TEST_DISPATCH_CMD`.
-Do not dispatch when the local compile gate fails.
-
-### Step 0a — compile-verify locally (gate)
-
-Build `unit_tests_llk` in the worktree exactly as Step A Strategy 2 (`build_metal.sh`
-provisions a cold tree itself — no card touched). A build failure short-circuits the whole
-dispatch: report `COMPILE_FAILED` for every target arch and return **without enqueuing
-anything**, so no runner time is spent on a fix that cannot compile.
-
-```bash
-cd "$WORKTREE_DIR"
-export CCACHE_DIR="${CCACHE_DIR:-$HOME/.codegen/ccache}"
-if ! ./build_metal.sh --enable-ccache --build-metal-tests \
-    2>&1 | tee "$LOG_DIR/metal_build.log"; then
-  echo "COMPILE_FAILED (cardless compile-verify) — not dispatching"
-  exit 2
-fi
-```
-
-### Step 0b — dispatch the on-card run
-
-Compile-verify passed. Ship each arch's change to the hw_test queue: a runner (re)builds
-`unit_tests_llk` off the worktree's diff and runs the mapped gtest on that arch's real card,
-then returns the verdict. Skip Steps A+B entirely.
-
-```bash
-if [ "${TT_METAL_LLK_ASSERTS:-0}" = 1 ]; then export TT_METAL_LLK_ASSERTS=1 TT_METAL_WATCHER=1; fi
-ARCHES_CSV="$(IFS=,; echo "${ARCHES[*]}")"
-$HW_TEST_DISPATCH_CMD --kind metal --arch "$ARCHES_CSV" \
-      --test "$METAL_FILTER" --dispatch "${METAL_DISPATCH:-fast}" \
-      --worktree "$WORKTREE_DIR" --session "${HW_TEST_SESSION:-issue-${ISSUE_NUMBER}}" \
-      --timeout "${TIMEOUT:-1800}" 2>&1 | tee "$LOG_DIR/metal_run.log"
-
-for arch in "${ARCHES[@]}"; do
-  line="$(rg "HW_TEST_RESULT arch=${arch} " "$LOG_DIR/metal_run.log" |
-    tail -1)"
-  case "$line" in
-    *"ok=true"*) verdict=SUCCESS ;;
-    *"ran=true"*) verdict=TESTS_FAILED ;;
-    *) verdict=ENV_ERROR ;;
-  esac
-
-  # Parse counts from this architecture's summary when present, then write its
-  # arch_results entry as described under Multi-Arch Dashboard Updates.
-done
-```
-
-Parse one `HW_TEST_RESULT arch=<arch>` line per architecture:
-`ok=true` is `SUCCESS`; `ran=true` without success is `TESTS_FAILED`; no usable
-result is `ENV_ERROR`. Do not set simulator or cache variables on the dispatch
-route.
-
-## Step A — Ensure a `unit_tests_llk` binary that includes the fix
-
-Run Steps A+B only when Step 0 did **not** apply (ttsim, or a local-card runner).
+This is a gate for every backend, including queued silicon. Do not submit a
+hardware job when the build fails.
 
 Pick the strategy that matches what the environment provides.
 
@@ -160,9 +110,9 @@ Use this only when the warm tree is clean, the fix changes tracked files only,
 and the worktree diff applies cleanly. Create `FIX_PATCH` from the worktree's
 binary diff against `HEAD`. Otherwise use Strategy 2.
 
-Run Strategy 1 and Step B in the same Bash process. The cleanup trap must stay
-active until all gtests finish; if the shell exits after the build, it will
-reverse the patch before JIT compilation and test the old headers.
+Run Strategy 1 and the execution step in the same Bash process. The cleanup
+trap must stay active until verification finishes; exiting after the build
+would reverse the patch before local JIT compilation.
 
 ```bash
 set -euo pipefail
@@ -210,7 +160,67 @@ VERIFY_STRATEGY=worktree
 
 Report the strategy and build wall-time in the self-log.
 
-## Step B — Run the mapped gtest on the selected backend
+Before requesting hardware, confirm that the locally built binary exists and
+that the filter selects at least one test:
+
+```bash
+[ -x "$BIN" ] || { echo "ENV_ERROR: missing $BIN"; exit 3; }
+listed_tests="$("$BIN" --gtest_list_tests --gtest_filter="$METAL_FILTER" 2>&1)"
+if ! printf '%s\n' "$listed_tests" |
+    rg -q '^[[:space:]]+[^[:space:]]'; then
+  echo "ENV_ERROR: gtest filter selected zero tests: $METAL_FILTER"
+  exit 3
+fi
+```
+
+## Step B — Execute on queued silicon
+
+Use this route only for `TEST_BACKEND=local` with
+`HW_TEST_DISPATCH_CMD`. Compilation remains local; the queue owns card
+scheduling and the silicon execution. Do not run the local binary on the
+issue-solver machine.
+
+The current dispatch service accepts a worktree rather than a built-artifact
+reference, so it reconstructs the executable on its runner. It also omits
+untracked files from the worktree patch. Check `git status --short`; if an
+untracked path belongs to the fix, return `ENV_ERROR` without dispatching.
+These are queue transport limitations, not replacements for the mandatory
+local build gate above.
+
+```bash
+ARCHES_CSV="$(IFS=,; echo "${ARCHES[*]}")"
+set +e
+$HW_TEST_DISPATCH_CMD --kind metal --arch "$ARCHES_CSV" \
+  --test "$METAL_FILTER" --dispatch "${METAL_DISPATCH:-fast}" \
+  --worktree "$WORKTREE_DIR" \
+  --session "${HW_TEST_SESSION:-issue-${ISSUE_NUMBER}}" \
+  --timeout "${TIMEOUT:-1800}" 2>&1 | tee -a "$LOG_DIR/metal_run.log"
+dispatch_exit=${PIPESTATUS[0]}
+set -e
+```
+
+Require exactly one final `HW_TEST_RESULT arch=<arch>` marker for each
+requested architecture and record its `job` value:
+
+| Marker | Verdict |
+|---|---|
+| `ok=true ran=true passed=true` | `SUCCESS` |
+| `ok=false ran=true` | `TESTS_FAILED` |
+| missing, malformed, or `ran=false` | `ENV_ERROR` |
+
+Use the marker summary for counts when present. If counts are absent, use
+zero and state that the queue did not report them; never infer a passing count.
+The overall dispatch exit is supporting evidence only because one failed
+architecture makes a multi-arch call non-zero.
+
+Do not set `TT_METAL_SIMULATOR`, `TT_METAL_CACHE`,
+`TT_METAL_SLOW_DISPATCH_MODE`, or card locks on this route. Return after
+recording all architecture results.
+
+## Step C — Execute locally on ttsim or silicon
+
+Use this route for ttsim, or for local silicon when
+`HW_TEST_DISPATCH_CMD` is unset.
 
 Use the same gtest command for both backends. Ttsim additionally requires
 `TT_METAL_SIMULATOR` and slow dispatch.
@@ -258,15 +268,7 @@ else
   [ "$METAL_DISPATCH" = slow ] &&
     env_args+=( TT_METAL_SLOW_DISPATCH_MODE=1 )
 fi
-# local backend (only reached when HW_TEST_DISPATCH_CMD is unset — a runner that owns the
-# card; cardless silicon went to Step 0): no TT_METAL_SIMULATOR; targets the local card.
-
-listed_tests="$("$BIN" --gtest_list_tests --gtest_filter="$METAL_FILTER" 2>&1)"
-if ! printf '%s\n' "$listed_tests" |
-    rg -q '^[[:space:]]+[^[:space:]]'; then
-  echo "ENV_ERROR: gtest filter selected zero tests: $METAL_FILTER"
-  exit 3
-fi
+# Local silicon reaches this point only when the queue command is unset.
 
 set +e
 env "${env_args[@]}" timeout "${TIMEOUT:-1200}" \
@@ -288,7 +290,6 @@ unknown cache directory.
 | `[  FAILED  ]` / data mismatch / assertion / timeout | `TESTS_FAILED` |
 | `UnimplementedFunctionality` / SIM ISA gap from ttsim | `SIM_ISA_GAP` |
 | missing/invalid `.so`, no `soc_descriptor.yaml`, missing binary, bad build tree | `ENV_ERROR` |
-| `METAL_TARGET=none` | `UNVERIFIABLE_IN_LLK_SUITE` |
 
 When `TT_METAL_LLK_ASSERTS=1` and the failure is an LLK assert, the root cause is almost
 always the **kernel** calling the LLK API with an illegal parameter/config — not the test.
@@ -308,33 +309,36 @@ If Quasar ttsim cannot implement or boot the metal program, report
 METAL_TEST_RESULT - issue #<number> (unit_tests_llk, <backend>)
 arch_results:
   blackhole:
-    verdict: SUCCESS|COMPILE_FAILED|TESTS_FAILED|SIM_ISA_GAP|ENV_ERROR|UNVERIFIABLE_IN_LLK_SUITE
+    verdict: SUCCESS|COMPILE_FAILED|TESTS_FAILED|SIM_ISA_GAP|ENV_ERROR
     tests_total: N
     tests_passed: N
     gtest_filter: '<...>'
+    queue_job: '<job-id or empty>'
     first_evidence: ...
   ...
-combined_verdict: SUCCESS|COMPILE_FAILED|TESTS_FAILED|SIM_ISA_GAP|ENV_ERROR|UNVERIFIABLE_IN_LLK_SUITE
 ```
 
-`combined_verdict` is a human roll-up; the orchestrator derives its own `combined_status`
-from per-arch `arch_results`.
+Return per-architecture results only. The orchestrator owns the combined
+status.
 
-## Multi-Arch Dashboard Updates
+## Result Recording
 
-Update the single run as each arch starts/ends, exactly like `tester.md`
-(`run_json_writer.py message` / `phase-start` / `metric` / `phase-end`). Patch
-`arch_results.<arch>` with `status`, `verdict`, `tests_total`, `tests_passed`, and the
-`gtest_filter` used. Do not create per-arch `run.json` files.
+Keep raw output append-only in `metal_build.log` and `metal_run*.log`. Update
+the single `run.json` as each architecture starts and ends, using the same
+`message`, `phase-start`, `metric`, and `phase-end` operations as `tester.md`.
+Patch `arch_results.<arch>` with `status`, `verdict`, `tests_total`,
+`tests_passed`, `gtest_filter`, and `queue_job`. JSON-encode failure evidence;
+do not interpolate raw output into JSON.
 
-## Limits
-
-At most 4 build attempts and 20 gtest invocations per session. Prefer one tight
-`--gtest_filter` over broad runs.
+Map `SUCCESS` to a passed phase and every other verdict to a failed phase.
+Do not call `phase-end` twice for an already completed phase, and do not
+create per-architecture `run.json` files.
 
 ## Self-Log
 
-Before returning, write `${LOG_DIR}/agent_metal_tester.md` with build strategy
-and duration, exact environment and filter, assertion mode, per-arch results,
-and the first meaningful failure. If `LOG_DIR` is empty, report that
-self-logging was skipped.
+Create `${LOG_DIR}/agent_metal_tester.md`, or append
+`## Metal Test Attempt — <UTC timestamp>` when it exists. Record the build
+strategy and duration, exact commands and relevant environment, filter,
+assertion mode, queue job IDs, per-architecture counts and verdicts, and the
+first meaningful failure. Never discard earlier attempts. If `LOG_DIR` is
+empty, report that self-logging was skipped.
