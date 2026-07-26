@@ -180,7 +180,12 @@ the real fix is **PFC (BH.6)** to keep the sender ≤ drain, staying in the loss
   RxWqeRing (host hugepage via NoC→PCIe). Not yet built.
 - **CRC-32 validation** — **Done (SW).** The header `header_cksum` (CRC-32, poly 0x04C11DB7 =
   reflected 0xEDB88320) is validated on RX; mismatches are dropped + counted (`crc_err`). The kernel
-  computes it bit-serially today. **Follow-up (HW offload):** the ETH-CTRL `ROCE_ICRC` engine (regs @
+  computes it bit-serially today. **Measured cost (2026-07-26, DPU sender, eSwitch-bypassed):** the
+  bit-serial CRC is a real fast-path bottleneck, not free — with CRC **off** the RISC drained a jumbo
+  WRITE stream losslessly at ≥560k fps (≥18 Gbps, sender-limited — ceiling not even reached); with CRC
+  **on** the RISC ceiling drops to ~408k fps (~13 Gbps) and beyond that it laps into resync collapse.
+  So the SW CRC costs **≥25% of jumbo-WRITE throughput** (≥0.5 µs/frame added; SEND small-frame showed
+  ~0.18 µs/frame lower bound). This is the concrete justification for the HW offload below. **Follow-up (HW offload):** the ETH-CTRL `ROCE_ICRC` engine (regs @
   `0xFFB98100`) implements this exact polynomial with an inline RX check (`RX_CHECK_EN` + a
   `RX_CALCULATED` vs `RX_RECEIVED` compare) and a 64-byte header bytemask. Wiring it removes the CRC
   from the RISC hot path entirely (zero cycles/frame). This is why the wire cksum was moved onto the
