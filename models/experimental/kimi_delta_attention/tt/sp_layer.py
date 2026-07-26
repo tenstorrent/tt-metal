@@ -21,6 +21,7 @@ import torch
 import ttnn
 from models.experimental.kimi_delta_attention.config import KDAConfig
 from models.experimental.kimi_delta_attention.tt.layer import KimiDeltaAttention
+from models.experimental.kimi_delta_attention.tt.sp_affine_prefix import SP8AffinePrefixProbe, _prefix_socket_config
 from models.tt_transformers.tt.ccl import TT_CCL
 
 _SP_SIZE = 2
@@ -332,4 +333,158 @@ class SP8TP1KimiDeltaAttention:
             outputs.append(layer.forward(span, mode=mode))
             if span_index + 1 < _SP8_SIZE:
                 self._handoff_causal_state(span_index)
+        return tuple(outputs)
+
+
+class SP8AffineTP1KimiDeltaAttention:
+    """Correctness-first SP=8 affine scheduler on a 1x8 LoudBox.
+
+    This path is deliberately a TP=1 protocol proof, not a performance model
+    for Galaxy's SP=8 x TP=4 topology.  It keeps short-convolution history in
+    causal order, derives each span's terminal affine map on device, prefixes
+    those maps through the real fabric, and installs the resulting recurrent
+    entry states without a host tensor handoff.
+    """
+
+    def __init__(
+        self,
+        mesh_device: ttnn.MeshDevice,
+        config: KDAConfig,
+        state_dict: Mapping[str, torch.Tensor],
+        tensor_cache_path: Path | None = None,
+    ) -> None:
+        if tuple(mesh_device.shape) != (1, _SP8_SIZE):
+            raise ValueError(f"SP8 affine TP1 requires a 1x8 LoudBox mesh, got {tuple(mesh_device.shape)}")
+        self.mesh_device = mesh_device
+        self.prefix = SP8AffinePrefixProbe(mesh_device)
+        self.span_devices = self.prefix.span_devices
+        self.layers = tuple(
+            KimiDeltaAttention(span_device, config, state_dict, tensor_cache_path=tensor_cache_path)
+            for span_device in self.span_devices
+        )
+        # Keep the two ordered causal handoffs on cores disjoint from all three
+        # affine-prefix distances. The convolution transfer is tiny; the entry
+        # state carries one FP32 state per TP1 rank.
+        self._convolution_sockets = tuple(
+            ttnn.create_socket_pair(self.span_devices[span], self.span_devices[span + 1], _prefix_socket_config(3))
+            for span in range(_SP8_SIZE - 1)
+        )
+        self._entry_sockets = tuple(
+            ttnn.create_socket_pair(self.span_devices[span], self.span_devices[span + 1], _prefix_socket_config(4))
+            for span in range(_SP8_SIZE - 1)
+        )
+
+    def reset_state(self, batch_size: int) -> None:
+        for layer in self.layers:
+            layer.reset_state(batch_size)
+
+    def _synchronize(self) -> None:
+        for device in self.span_devices:
+            ttnn.synchronize_device(device)
+
+    def _prepare_convolutions(self, spans: tuple[ttnn.Tensor, ...]) -> tuple:
+        """Prepare the short-convolution boundary in causal order on device."""
+        convolutions = []
+        for span, (layer, hidden) in enumerate(zip(self.layers, spans, strict=True)):
+            convolution = layer.prepare_chunk_convolution(hidden)
+            convolutions.append(convolution)
+            if span + 1 < _SP8_SIZE:
+                destination = self.layers[span + 1]
+                assert destination.convolution_state is not None
+                send_socket, recv_socket = self._convolution_sockets[span]
+                ttnn.experimental.send_async(convolution.new_convolution_state, send_socket)
+                ttnn.experimental.recv_async(destination.convolution_state, recv_socket)
+                self._synchronize()
+        return tuple(convolutions)
+
+    def _broadcast_initial_recurrent_state(self) -> None:
+        """Install rank zero's carry on every rank without a host copy.
+
+        An inclusive affine prefix maps the same incoming state through each
+        rank's terminal transform.  After a previous invocation only rank zero
+        necessarily owns that global carry, so propagate it over the ordered
+        chain before deriving the per-rank endpoint states.
+        """
+        for span in range(_SP8_SIZE - 1):
+            source = self.layers[span]
+            destination = self.layers[span + 1]
+            assert source.recurrent_state is not None
+            assert destination.recurrent_state is not None
+            send_socket, recv_socket = self._entry_sockets[span]
+            ttnn.experimental.send_async(source.recurrent_state, send_socket)
+            ttnn.experimental.recv_async(destination.recurrent_state, recv_socket)
+            self._synchronize()
+
+    def forward(self, *spans: ttnn.Tensor, mode: str = "chunk") -> tuple[ttnn.Tensor, ...]:
+        """Run eight equal chunk spans with a device-resident affine prefix."""
+        if mode != "chunk":
+            raise ValueError("SP8 affine TP1 currently supports chunk mode only")
+        if len(spans) != _SP8_SIZE:
+            raise ValueError(f"SP8 affine TP1 expects {_SP8_SIZE} spans, got {len(spans)}")
+        span_length = spans[0].shape[1]
+        if any(span.shape[1] != span_length for span in spans):
+            raise ValueError("SP8 affine TP1 requires equal sequence spans")
+        if span_length % 128:
+            raise ValueError(f"SP8 affine TP1 requires 128-token-aligned spans, got T={span_length}")
+        groups = span_length // (256 if span_length % 256 == 0 else 128)
+        self._broadcast_initial_recurrent_state()
+        convolutions = self._prepare_convolutions(spans)
+        prepared = tuple(
+            layer.complete_chunk_preparation(convolution) for layer, convolution in zip(self.layers, convolutions)
+        )
+        grouped = tuple(layer.group_prepare(rank_prepared) for layer, rank_prepared in zip(self.layers, prepared))
+        grouped_transforms = tuple(
+            layer.group_summary(rank_grouped) for layer, rank_grouped in zip(self.layers, grouped)
+        )
+        span_transforms = tuple(
+            layer.group_terminal_affine_transform(transform_a, transform_b, groups, batch_size=spans[0].shape[0])
+            for layer, (transform_a, transform_b) in zip(self.layers, grouped_transforms, strict=True)
+        )
+        span_a, span_b = zip(*span_transforms, strict=True)
+        prefix_a, prefix_b = self.prefix.run(span_a, span_b, synchronize_stages=True)
+
+        # Each inclusive prefix maps the common initial state to the state at
+        # the end of its rank. Send that completed state one hop in parallel so
+        # every following rank owns the exact exclusive scan entry.
+        span_end_states = tuple(
+            ttnn.reshape(
+                ttnn.add(
+                    ttnn.matmul(
+                        transform_a,
+                        ttnn.reshape(
+                            layer.recurrent_state,
+                            (
+                                layer.recurrent_state.shape[0] * layer.recurrent_state.shape[1],
+                                layer.recurrent_state.shape[2],
+                                layer.recurrent_state.shape[3],
+                            ),
+                        ),
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    ),
+                    transform_b,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ),
+                layer.recurrent_state.shape,
+            )
+            for layer, transform_a, transform_b in zip(self.layers, prefix_a, prefix_b, strict=True)
+        )
+        for span, span_end_state in enumerate(span_end_states[:-1]):
+            destination = self.layers[span + 1]
+            assert destination.recurrent_state is not None
+            send_socket, recv_socket = self._entry_sockets[span]
+            ttnn.experimental.send_async(span_end_state, send_socket)
+            ttnn.experimental.recv_async(destination.recurrent_state, recv_socket)
+        self._synchronize()
+
+        entries = tuple(
+            layer.group_entry_states(transform_a, transform_b, groups)
+            for layer, (transform_a, transform_b) in zip(self.layers, grouped_transforms, strict=True)
+        )
+        outputs = []
+        for layer, rank_prepared, rank_grouped, rank_entries in zip(
+            self.layers, prepared, grouped, entries, strict=True
+        ):
+            raw_output, final_state = layer.group_scan(rank_prepared, rank_grouped, rank_entries)
+            assert final_state is not None
+            outputs.append(layer._finish_prepared(rank_prepared, raw_output, final_state, fuse_scan_rms=False))
         return tuple(outputs)

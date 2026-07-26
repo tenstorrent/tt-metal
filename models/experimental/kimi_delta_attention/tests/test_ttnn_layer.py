@@ -191,6 +191,49 @@ def test_layer_prepared_span_summary_matches_recurrence_state(device: ttnn.Devic
     _assert_pcc("prepared span summary state", expected_state, ttnn.to_torch(layer.recurrent_state), threshold=0.999)
 
 
+def test_group_terminal_affine_transform_matches_grouped_terminal_state(device: ttnn.Device) -> None:
+    """A span-level affine map reproduces the terminal grouped recurrence state."""
+    config = make_config()
+    weights = random_weights(config)
+    sequence = 512
+    hidden = torch.randn(1, sequence, config.hidden_size, generator=torch.Generator().manual_seed(711)).to(
+        torch.bfloat16
+    )
+    initial_state = 0.02 * torch.randn(
+        1, config.num_heads, config.head_k_dim, config.head_v_dim, generator=torch.Generator().manual_seed(712)
+    )
+    layer = KimiDeltaAttention(device, config, weights)
+    layer.reset_state(batch_size=1)
+    assert layer.convolution_state is not None
+    initial_state_tt = ttnn.from_torch(
+        initial_state,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    layer.set_external_state(initial_state_tt, layer.convolution_state)
+    hidden_tt = ttnn.from_torch(
+        hidden,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    prepared = layer.prepare_chunk(hidden_tt)
+    grouped = layer.group_prepare(prepared)
+    grouped_a, grouped_b = layer.group_summary(grouped)
+    span_a, span_b = layer.group_terminal_affine_transform(grouped_a, grouped_b, groups=2, batch_size=1)
+    _, grouped_terminal = layer.group_entry_states_and_end(grouped_a, grouped_b, groups=2)
+    reconstructed_terminal = ttnn.to_torch(span_a).float() @ initial_state.float() + ttnn.to_torch(span_b).float()
+    _assert_pcc(
+        "group terminal affine transform",
+        ttnn.to_torch(grouped_terminal),
+        reconstructed_terminal,
+        threshold=0.999,
+    )
+
+
 @pytest.mark.parametrize("recurrent_state_dtype", [ttnn.float32, ttnn.bfloat16])
 def test_external_state_is_updated_in_place(device: ttnn.Device, recurrent_state_dtype: ttnn.DataType) -> None:
     config = make_config(recurrent_state_dtype=recurrent_state_dtype)

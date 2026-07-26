@@ -262,6 +262,19 @@ state-transfer protocol and measure its components.
   workload.  It is a safe scheduling baseline, not a layer benchmark: it
   omits the KDA epilogue and TP=4 CCL, and production must replace the host
   stage fences with supported device events or a fused fabric protocol.
+* The first end-to-end implementation now exists as
+  `SP8AffineTP1KimiDeltaAttention`, a deliberately correctness-first LoudBox
+  protocol.  It derives each rank's terminal `(A, B)` map entirely on device
+  from the grouped KDA transforms, performs the three fabric prefix stages,
+  and uses fabric sends for both the common incoming carry and each rank's
+  exclusive recurrent entry state.  It passes output, recurrent-state, and
+  short-convolution-cache PCC >= 0.98 at the production-rank payload and
+  global T=5120 with two prefix lanes.  The default test additionally passes
+  two sequential 4K calls, covering cache reuse.  This is not a performance
+  result: convolution handoff and incoming-carry broadcast are serial, and
+  every prefix distance uses a host synchronization.  It intentionally has
+  no TP=4 output CCL.  Its value is a device-resident correctness contract for
+  the next TP=4 rank-release scheduler.
 * The direct TP=4 output matmul has no safe grid-only win.  An explicit 10x8
   prefill grid passed the full target-shape SP2xTP4 PCC suite, but raised its
   output matmul from about **205 us** to **223 us** and the three-replay
@@ -334,6 +347,11 @@ boundary.
 * **SP=8/TP=1 boundary probe:** seven-hop relay at T=5120 must preserve PCC
   >= 0.98 and expose per-hop latency.  It has no speedup target because its
   per-device head count differs from production.
+* **SP=8 affine production-rank correctness gate:** with eight local heads,
+  T=5120, and two prefix lanes, output, recurrent carry, and short-conv carry
+  must all reach PCC >= 0.98.  This is explicitly a protocol gate, not a
+  latency target: the current TP=1 implementation serializes several sends
+  and omits the TP=4 output CCL.
 * **Stop/adjust condition:** if the boundary cannot meet the 10% carry budget,
   do not proceed with a full 32-device integration; first fuse summary
   generation/consumption or reduce the transport representation with an
@@ -353,6 +371,10 @@ KDA_SP_SPLIT_AFFINE=1 KDA_SP_SOCKET_LANES=2 KDA_SP_SOCKET_FIFO_BYTES=524288 KDA_
 
 # SP=8/TP=1 protocol probe: seven real KDA boundary handoffs at global T=5120.
 KDA_SP8_TARGET_SHAPE=1 KDA_SP8_TEST_SEQ=5120 scripts/run_safe_pytest.sh -svv models/experimental/kimi_delta_attention/tests/test_sp8_tp1.py
+
+# SP=8 affine protocol: production TP4-rank state payload (8 heads) with the
+# real 3-stage fabric prefix. This is a PCC gate, not a perf benchmark.
+KDA_SP_PREFIX_LANES=2 KDA_SP8_AFFINE_TARGET_SHAPE=1 scripts/run_safe_pytest.sh -svv models/experimental/kimi_delta_attention/tests/test_sp8_tp1.py::test_sp8_tp1_affine_layer_pcc
 
 # Local TP=4 controls: run both lengths with the same warmed trace procedure.
 PERF_SEQ=640  PERF_TRACE=1 scripts/run_safe_pytest.sh --profile -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_tp4_layer_perf.py

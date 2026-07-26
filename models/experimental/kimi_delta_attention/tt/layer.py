@@ -496,6 +496,60 @@ class KimiDeltaAttention:
             eye=self.chunk_const_tiles[0],
         )
 
+    def group_terminal_affine_transform(
+        self, transform_a: ttnn.Tensor, transform_b: ttnn.Tensor, groups: int, batch_size: int
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Compose grouped transforms into one device-resident span transform.
+
+        KDA's grouped-prefix primitive exposes terminal *states*, rather than
+        the terminal affine map.  Evaluating that map at zero gives ``B``;
+        evaluating it at identity gives ``A + B``.  Their difference therefore
+        yields the span's ``(A, B)`` without materializing either on the host.
+        Kimi's key and value dimensions are equal, which makes the identity
+        state well-defined.
+        """
+        if self.config.head_k_dim != self.config.head_v_dim:
+            raise ValueError("terminal affine transform requires matching KDA key/value dimensions")
+        batch_heads = batch_size * self.config.num_heads
+        state_shape = (batch_heads, self.config.head_k_dim, self.config.head_v_dim)
+        zero = ttnn.zeros(
+            state_shape,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        identity_host = torch.eye(self.config.head_k_dim, dtype=torch.float32).expand(batch_heads, -1, -1).clone()
+        identity_kwargs = {}
+        if isinstance(self.device, ttnn.MeshDevice):
+            identity_kwargs["mesh_mapper"] = ttnn.ReplicateTensorToMesh(self.device)
+        identity = ttnn.from_torch(
+            identity_host,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **identity_kwargs,
+        )
+        _, terminal_b = ttnn.transformer.kda_affine_prefix_with_terminal_state(
+            transform_a,
+            transform_b,
+            zero,
+            groups,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_config,
+        )
+        _, terminal_identity = ttnn.transformer.kda_affine_prefix_with_terminal_state(
+            transform_a,
+            transform_b,
+            identity,
+            groups,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_config,
+        )
+        terminal_a = ttnn.subtract(terminal_identity, terminal_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return terminal_a, terminal_b
+
     def group_entry_states(self, transform_a: ttnn.Tensor, transform_b: ttnn.Tensor, groups: int) -> ttnn.Tensor:
         """Return the recurrent state at each grouped scan entry."""
         assert self.recurrent_state is not None
