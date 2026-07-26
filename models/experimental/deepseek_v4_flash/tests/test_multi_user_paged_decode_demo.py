@@ -1,19 +1,24 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Multi-user paged-KV decode demo for ``DeepSeekV4Model``.
+"""Multi-user paged-KV decode demo for ``DeepSeekV4Model`` (traced path).
 
-Two independent chat sessions share one physical paged sliding-KV pool per
-sliding-attention layer (block size 64, GPT-OSS / vLLM style). Each user has a
-``page_table`` row mapping logical blocks to disjoint physical blocks, so
-interleaved decode steps do not clobber the other user's cache.
+Two independent conversations share one model, one block pool per layer and one set
+of captured decode traces. Each is a *session* on the model: its KV lives in blocks
+addressed through a per-session ``page_table``, so switching sessions rewrites that
+table (plus the small compressor window buffers) instead of touching the caches, and
+no second trace capture is needed.
 
 Flow:
-  1. Prefill two different prompts (one token at a time, per user).
+  1. Prefill two different prompts (one token at a time, per session).
   2. Generate in bursts of 64 tokens for user 0, then 64 for user 1, and repeat.
 
-CSA/HCA layers keep per-user compressor caches; sliding-attention layers use
-``paged_update_cache`` + ``paged_scaled_dot_product_attention_decode``.
+The assertion that matters is the interleaving one: a burst for user 1 must not
+change what user 0 goes on to say. So user 0's *first* burst is compared against a
+second, single-user run of the same prompt with no interleaving -- if the sessions
+shared a block, or the compressor window state leaked between them, the two runs
+diverge. (That the paged reads themselves match a dense cache is covered at the op
+level by ``test_paged_kv_equivalence.py``.)
 
 Run (ttnn venv)::
 
@@ -23,7 +28,6 @@ Run (ttnn venv)::
 
 from __future__ import annotations
 
-import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,7 +40,7 @@ import ttnn
 from models.experimental.deepseek_v4_flash.encoding_dsv4 import render_message
 from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.model import DeepSeekV4Model
-from models.experimental.deepseek_v4_flash.tt.paged_cache import PagedCacheConfig
+from models.experimental.deepseek_v4_flash.tt.paged_cache import round_context
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.quant import dequantize_weight
 from models.experimental.deepseek_v4_flash.tt.weight_loader import (
@@ -52,11 +56,7 @@ _CACHE_DIR = os.environ.get("DEEPSEEK_V4_CACHE_DIR", "../cache")
 _NUM_USERS = 2
 _BURST_STEPS = int(os.environ.get("DEEPSEEK_V4_MULTI_USER_BURST", "64"))
 _NUM_ROUNDS = int(os.environ.get("DEEPSEEK_V4_MULTI_USER_ROUNDS", "2"))
-_PAGE_BLOCK_SIZE = 64
-
-
-def _pad_to_tile(n: int) -> int:
-    return ((n + 31) // 32) * 32
+_PAGE_BLOCK_SIZE = 32
 
 
 def _checkpoint_available() -> bool:
@@ -92,6 +92,7 @@ def _build_rope(config, max_seq: int) -> dict:
 @dataclass
 class UserSession:
     user_id: int
+    sid: int
     prompt_ids: list[int]
     generated: list[int] = field(default_factory=list)
     pos: int = 0
@@ -107,6 +108,13 @@ def _tokenize_prompt(tokenizer, text: str) -> list[int]:
     return list(tokenizer(prompt)["input_ids"])
 
 
+def _decode(model, session: UserSession, token_id: int, pos: int) -> int:
+    """One traced step for ``session`` (``lm_head`` is folded into the trace)."""
+    model.activate_session(session.sid)
+    logits = ttnn.to_torch(model.decode_traced(int(token_id), int(pos))).reshape(1, -1).float()
+    return int(logits[0].argmax().item())
+
+
 @pytest.mark.skipif(not _checkpoint_available(), reason=f"V4-Flash checkpoint not found under {_DEFAULT_MODEL_DIR}")
 @pytest.mark.timeout(14400)
 @torch.no_grad()
@@ -117,7 +125,7 @@ def _tokenize_prompt(tokenizer, text: str) -> list[int]:
     ids=["fabric_2d"],
 )
 def test_multi_user_paged_decode_demo(mesh_device, reset_seeds) -> None:
-    """Interleaved two-user decode with shared paged sliding-KV pools."""
+    """Interleaved two-user decode over shared paged KV pools and one trace set."""
     from transformers import AutoTokenizer
     from transformers.models.deepseek_v4.configuration_deepseek_v4 import DeepseekV4Config
 
@@ -127,14 +135,10 @@ def test_multi_user_paged_decode_demo(mesh_device, reset_seeds) -> None:
     tokenizer = AutoTokenizer.from_pretrained(loader.snapshot_dir)
 
     prompts = [_PROMPT_A, _PROMPT_B]
-    sessions = [UserSession(user_id=u, prompt_ids=_tokenize_prompt(tokenizer, prompts[u])) for u in range(_NUM_USERS)]
-    max_prompt = max(s.prompt_len for s in sessions)
-    total_gen = _BURST_STEPS * _NUM_ROUNDS * _NUM_USERS
-    max_seq = _pad_to_tile(max_prompt + total_gen)
-    crs = {int(v) for v in config.compress_rates.values()}
-    if crs:
-        step = math.lcm(32, _PAGE_BLOCK_SIZE, *crs)
-        max_seq = ((max_seq + step - 1) // step) * step
+    prompt_ids = [_tokenize_prompt(tokenizer, p) for p in prompts]
+    per_user = max(len(ids) for ids in prompt_ids) + _BURST_STEPS * _NUM_ROUNDS + 1
+    crs = set(config.compress_rates.values())
+    max_seq = round_context(per_user, crs, _PAGE_BLOCK_SIZE)
 
     rope = _build_rope(config, max_seq)
     max_layers = min(
@@ -157,25 +161,27 @@ def test_multi_user_paged_decode_demo(mesh_device, reset_seeds) -> None:
         top_cache.file("lm_head") if top_cache else None,
         dtype=_WEIGHT_DTYPE,
     )
-    model.reset_multi_user_paged_caches(max_seq, num_users=_NUM_USERS, block_size=_PAGE_BLOCK_SIZE)
-
-    paged_cfg = model._paged_cfg
-    assert isinstance(paged_cfg, PagedCacheConfig)
-    sliding_layers = [li for li in range(model.num_layers) if config.layer_types[li] == "sliding_attention"]
-    logger.info(
-        f"multi-user paged decode: users={_NUM_USERS} block_size={_PAGE_BLOCK_SIZE} "
-        f"blocks_per_user={paged_cfg.blocks_per_user} total_blocks={paged_cfg.total_blocks} "
-        f"max_seq={max_seq} sliding_layers={sliding_layers}"
+    # One extra session slot for the isolation re-run at the end.
+    model.prepare_static_decode(
+        rope,
+        max_seq,
+        lm_head=lm_head,
+        num_sessions=_NUM_USERS + 1,
+        total_tokens=(_NUM_USERS + 1) * max_seq,
+        block_size=_PAGE_BLOCK_SIZE,
     )
-    logger.info(f"page_table (host):\n{model._page_table_host}")
+
+    sessions = [UserSession(user_id=u, sid=model.open_session(), prompt_ids=prompt_ids[u]) for u in range(_NUM_USERS)]
+    logger.info(
+        f"multi-user paged decode: users={_NUM_USERS} block_size={_PAGE_BLOCK_SIZE} max_seq={max_seq} "
+        f"pool usage {model.session_usage()}"
+    )
 
     # --- prefill each user's prompt ----------------------------------------- #
     for session in sessions:
         logger.info(f"prefill user {session.user_id}: {prompts[session.user_id]!r} ({session.prompt_len} tokens)")
         for pos in range(session.prompt_len):
-            hidden = model.decode_user(session.user_id, session.prompt_ids[pos], pos, rope)
-            logits = ttnn.to_torch(lm_head(hidden)).reshape(1, -1).float()
-            session.next_token = int(logits[0].argmax().item())
+            session.next_token = _decode(model, session, session.prompt_ids[pos], pos)
         session.pos = session.prompt_len
         session.generated.append(session.next_token)
         logger.info(
@@ -189,11 +195,8 @@ def test_multi_user_paged_decode_demo(mesh_device, reset_seeds) -> None:
             logger.info(f"--- round {round_idx} user {session.user_id}: {_BURST_STEPS} decode steps ---")
             for step in range(_BURST_STEPS):
                 pos = session.pos
-                if pos >= max_seq:
-                    pytest.fail(f"user {session.user_id} exceeded max_seq {max_seq} at pos {pos}")
-                hidden = model.decode_user(session.user_id, session.next_token, pos, rope)
-                logits = ttnn.to_torch(lm_head(hidden)).reshape(1, -1).float()
-                session.next_token = int(logits[0].argmax().item())
+                assert pos < max_seq, f"user {session.user_id} exceeded max_seq {max_seq}"
+                session.next_token = _decode(model, session, session.next_token, pos)
                 session.pos += 1
                 session.generated.append(session.next_token)
                 if step < 3 or step == _BURST_STEPS - 1:
@@ -208,6 +211,30 @@ def test_multi_user_paged_decode_demo(mesh_device, reset_seeds) -> None:
             f"USER {session.user_id} GENERATED : {tokenizer.decode(session.generated)!r} "
             f"({len(session.generated)} tokens, final pos {session.pos})"
         )
+    logger.info(f"pool usage after generation: {model.session_usage()}")
+    # Whether two prompts produce different text is a property of the *model*, not of
+    # the paging: a stack truncated by ``DEEPSEEK_V4_DECODE_LAYERS`` emits much the same
+    # gibberish for any prompt. So it is logged, not asserted.
+    if sessions[0].generated == sessions[1].generated:
+        logger.warning("both users produced identical tokens (expected on a heavily truncated stack)")
 
-    assert sessions[0].generated and sessions[1].generated
-    assert sessions[0].generated != sessions[1].generated, "users should diverge after different prompts"
+    # --- isolation: user 0's tokens must not depend on user 1 running -------- #
+    # Same prompt and the same greedy decode, but alone in its own session, for as
+    # many tokens as user 0 produced before user 1's first burst.
+    solo_steps = _BURST_STEPS
+    solo = UserSession(user_id=0, sid=model.open_session(), prompt_ids=prompt_ids[0])
+    for pos in range(solo.prompt_len):
+        solo.next_token = _decode(model, solo, solo.prompt_ids[pos], pos)
+    solo.pos = solo.prompt_len
+    solo.generated.append(solo.next_token)
+    for _ in range(solo_steps):
+        solo.next_token = _decode(model, solo, solo.next_token, solo.pos)
+        solo.pos += 1
+        solo.generated.append(solo.next_token)
+
+    interleaved = sessions[0].generated[: len(solo.generated)]
+    assert solo.generated == interleaved, (
+        "user 0's tokens changed depending on whether user 1 was interleaved:\n"
+        f"  interleaved: {tokenizer.decode(interleaved)!r}\n"
+        f"  solo       : {tokenizer.decode(solo.generated)!r}"
+    )
