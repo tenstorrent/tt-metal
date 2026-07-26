@@ -83,7 +83,7 @@ The one rule: **never write `0x70000+`** (base FW code/data, `boot_results 0x7CC
 
 | WH structure | WH addr | Size | BH action |
 |---|---|---|---|
-| RX ring (BUF_WRAP) | `0x4000` | 14 KB | re-place; **swap CMAC BUF_WRAP for the BH RX-classifier TCAM** matching ethertype `0x1AF6` → landing region (drop the rest) |
+| RX ring (BUF_WRAP) | `0x4000` | 14 KB | **DONE:** RXQ2 raw BUF_WRAP, 128 KB ring. NB the RX-classifier TCAM does **not** exist in shipped FW (`eth_rx_flow.cpp` is dead code) — reception is the base-FW dst-MAC router (unicast→RXQ2); the kernel SW-filters/parses. See `tt-rdma-rx-dispatch-spec.md` |
 | MR table | `0x8500` | 16×32 B | re-place; `rkey=(slot<<24)|(rand16<<8)|gen`, O(1) direct-index lookup; **grow to 64 slots** (free; NCCL/UCX need it) |
 | RCB header + doorbells | `0x8400` | 64 B | re-place; ctrl doorbell `+0x28`, cumulative-ACK `rcb[2]` |
 | WQE descr + payload pool | `0x8000` / `0x9000` | ~128 KB | re-place |
@@ -119,8 +119,8 @@ do not block external interop on it.**
 |---|---|---|---|---|
 | **BH.0** | — | Active-eth RDMA skeleton: RISC1 tight loop + RISC0 base-FW yield; link stays up | no | `port_status` UP 10 min with kernel resident + periodic `service_eth_msg()` |
 | **BH.1** | E | Raw TX: build 32 B v1 hdr + payload in SW L1, `eth_send_raw` to BF3 "tt" MAC | no | BF3 receives valid `0x1AF6` frame; bytes match |
-| **BH.2** | E | RX: classifier TCAM `0x1AF6` → SW L1 landing; opcode dispatch (SEND/WRITE) | no | inbound WRITE lands at right NoC offset; 100% admit @ 4 KB |
-| **BH.3** | E | MR table + WQE ring re-laid-out; host `register_mr` / `post_send_write` (workstream ③) | no | `TtRdmaEndpoint` loopback WRITE/READ vs BH addresses |
+| **BH.2** ✅ **DONE** | E | RX: raw RXQ2 (dst-MAC router, **NOT** a TCAM — `eth_rx_flow.cpp` is dead code) → SW L1 landing; opcode dispatch (SEND/WRITE); BUF_WRAP streaming + 128 KB ring | no | **Met:** inbound WRITE byte-exact; jumbo dispatch 264k frames/s, bad=0, 8.7 Gbps lossless. See `tt-rdma-rx-dispatch-spec.md` |
+| **BH.3 (core)** ✅ **DONE** | E | MR table (64 slots, rkey lookup + bounds) + WRITE via `noc_async_write` to off-core MR target (RISC off the copy) | no | **Met:** WRITE lands byte-exact on Tensix L1 via NoC; **0.02 → 8.48 Gbps (~128×)**, lossless. Remaining BH.3: host `TtRdmaEndpoint` retarget + SEND→host RxWqeRing |
 | **BH.4** | E | Gateway interop | gateway only | `ib_write_bw` from remote CX into a BH MR; bytes match |
 | **BH.5** | L | TT-Link packet mode, HW ARQ, WRITE-without-remote-MR; BH↔BH / BH↔WH | no | sustained WRITE, 0 drops, no SW retx; line rate to ≤3 peers/erisc |
 | **BH.6** | E | PFC / lossless on **Rianta** (the `eth_init.cpp:538` TODO; WH DWC procedure does NOT port) | maybe | pause counters non-zero under load, 0 buffer-discard |
@@ -436,7 +436,9 @@ both sides build against identical bytes from day one — the spec is executable
 
 ## 13. References
 
-- Wire: `tt-rdma-wire-protocol-v1.md` · SDK: `tt-rdma-host-sdk.md` · RX FW: `tt-rdma-fw-arch-rx.md`
+- Wire: `tt-rdma-wire-protocol-v1.md` · SDK: `tt-rdma-host-sdk.md` · RX FW (WH, older): `tt-rdma-fw-arch-rx.md`
+- **BH chip-side, validated on silicon:** TX `tt-rdma-tx-ring-spec.md` (200G/rail, 397G aggregate) ·
+  RX `tt-rdma-rx-dispatch-spec.md` (dispatch + MR WRITE via noc_async_write, 8.5 Gbps, push model + perf headroom)
 - Chip-side: `tt-rdma-blackhole-port.md` · Gateway: `bf3-gateway-design.md`
 - Outbound/bidirectional: `tt-rdma-mesh-addressing-spec.md`, `tt-rdma-bidirectional-mesh-gap.md`
 - Switch interop: `tt-rdma-switch-interop-architecture.md` · Alt: `tt-rdma-verbs-provider.md`

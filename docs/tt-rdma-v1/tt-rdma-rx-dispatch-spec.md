@@ -1,0 +1,174 @@
+# TT-RDMA v1 — RX Dispatch (Blackhole chip side)
+
+Status: validated on silicon (2026-07-24). The receive counterpart to `tt-rdma-tx-ring-spec.md`.
+Implements BH.2-RX + the core of BH.3 (MR table + WRITE): inbound TT-RDMA-v1 frames from a NIC/gateway
+(BF3) are received, parsed, dispatched by opcode, and WRITE payloads land at their MR target — with the
+RISC-V core OFF the per-byte datapath (the §14 performance mandate of `tt-rdma-bh-bf3-impl-plan.md`,
+applied to RX).
+
+Golden references: `tt-rdma-wire-protocol-v1.md` (frame), `bh-erisc` `docs/eth_arch_spec.md` (ETH SS
+RX), `tt_metal/hw/inc/internal/ethernet/tt_rdma_wire.h` / `tt_rdma_l1_layout.h` / `tt_rdma_eth_rx.h`.
+Code: `tt_metal/tt_rdma/bh0/kernels/bh_rdma_rx_dispatch.cpp` + `bh1_rx_dispatch_host.cpp`; BF3 sender
+`tt_rdma_bf3_send.c`.
+
+---
+
+## 1. Principle: everything is a PUSH; the RISC routes, the NoC moves the bytes
+
+The inbound path is push end-to-end — nobody pulls across the wire:
+
+1. **BF3 → wire:** the NIC/gateway *transmits* (pushes) raw `0x1AF6` frames. This is inherent to RDMA
+   WRITE/SEND — the initiator drives the transfer. (Even READ is push-of-REQ + push-of-RESP; there is
+   no wire-level pull in this protocol.)
+2. **wire → L1:** the Rianta MAC RX engine *pushes* received frames into an L1 ring (RXQ raw mode,
+   BUF_WRAP). The RISC never pulls from the wire — it reads the write pointer and walks what landed.
+3. **L1 → MR target:** the eth core is the NoC *initiator* and *pushes* the payload to the MR's
+   `base_noc_addr` via `noc_async_write` (Tensix L1 / DRAM / another chip). The RISC issues one
+   descriptor per message; the NoC engine moves the bytes.
+
+So the RISC does O(1) work per frame — parse the 32 B header, look up the rkey, issue one NoC-write
+descriptor — and **never copies a payload byte**. This is the RX analog of the TX ring's "RISC arms,
+HW moves." Consequence of push: **no inherent back-pressure to the sender** — the BH absorbs bursts
+with a deep ring and throttles the sender only via out-of-band PFC (BH.6), never by pulling.
+
+## 2. Actors
+
+| Actor | Role | On the per-byte datapath? |
+|---|---|---|
+| **BF3 / gateway** | pushes `0x1AF6` frames onto the wire (RoCE→TT translation, or the userspace `tt_rdma_bf3_send` today) | Yes (it is the source) |
+| **Rianta MAC RX + RXQ2** | cut-through receive; pushes L2-stripped frames into the L1 ring; advances BUF_PTR | Yes (this is the ingress datapath) |
+| **RISC1 (subordinate erisc)** | walk ring → parse header → opcode dispatch → rkey lookup → issue `noc_async_write` | **Control/routing only** — parses headers, never copies payload |
+| **NoC engine** | moves the payload from the L1 ring to the MR target off-core | Yes (this is the landing datapath) |
+| **RISC0 (active erisc)** | unchanged base-FW yield (BH.0 coexistence) | No |
+
+## 3. RX mechanism (BH ETH SS specifics)
+
+- **No HW ethertype classifier.** `eth_rx_flow.cpp` (the TCAM/flow-director that could match `0x1AF6`)
+  is dead/uncompiled in `bh-erisc`. So the `blackhole-port.md` "classifier TCAM → landing region"
+  premise is **wrong**. Reception uses the base-FW **dst-MAC router** instead (`eth_init.cpp:266-280`):
+  broadcast→RXQ0, multicast→RXQ1, **unicast/"other"→RXQ2**. A unicast `0x1AF6` frame lands on RXQ2,
+  which the base FW never drains (it only reads RXQ2's drop counter for link telemetry) — so RXQ2 is
+  free for this kernel. The MAC is **accept-all** (no dst-address filter, no station address
+  programmed), so the sender may use any unicast dst MAC.
+- **Raw mode, kernel-configured.** Base FW leaves all RXQ in *packet* mode; the kernel reconfigures
+  RXQ2 to **raw** (`ETH_RXQ_CTRL`: packet_mode = bit 1 / 0x2, **buf_wrap = bit 2 / 0x4** — NB not bit
+  1). Raw mode strips the 14 B L2, so frames land as `[32 B tt_rdma_hdr][payload]`, contiguous — the
+  opcode is at `rxbuf[0]`. RXQ block base `0xFFB94000`; `BUF_PTR` @ +0x08 is in **bytes** (it pegs at
+  the ring size, not ring-size words); `BUF_START_WORD_ADDR` @ +0x0C is in 16 B words;
+  `BUF_SIZE_WORDS` @ +0x10.
+- **MAC RX max frame = 4204** (`eth_init.cpp:505`, committed base FW) → jumbo RX up to ~4200 B needs
+  **no FW change**; only the sender's egress MTU matters (a DPU-side config on the BF3, not the BH).
+
+## 4. L1 data structures (`tt_rdma_l1_layout.h`)
+
+- **RX ring** — a large BUF_WRAP streaming ring. Default is `TT_RDMA_RX_RING_BIG` = **128 KB**, which
+  reuses the (TX-only) WQE payload region since the RX-dispatch kernel never transmits. The 16 KB
+  `TT_RDMA_RX_RING` (~4 jumbo frames) laps at ~9 Gbps and is retained only for small tests. Size must
+  be a multiple of 16 so every wrap-straddling header word / frame stride stays word-aligned.
+- **MR table** — `TT_RDMA_MR_TABLE_ADDR`, 64 × 32 B (`tt_rdma_mr_entry_t`). `rkey = (slot<<24) |
+  (rand16<<8) | gen`; O(1) lookup on `rkey>>24`. Validation per WRITE: `rkey` match, `REMOTE_WRITE`
+  access flag, `remote_offset + len ≤ mr.length` → else drop.
+- **Stats** — 8 u32 in the RCB dbg region: `total, send, write, write_ok, unknown, bad, last_op,
+  read_pos` (host observability).
+
+## 5. The dispatch loop (RISC1, control/routing only)
+
+```c
+tt_rdma_rxq_init(RXQ2, ring, ring_size, /*wrap=*/1);      // raw BUF_WRAP; L2-stripped landing
+read_pos = 0;
+for (;;) {
+    wp = BUF_PTR(RXQ2);                                    // bytes pushed by HW (wraps 0..ring_size)
+    avail = (wp + ring_size - read_pos) % ring_size;
+    while (avail >= 32) {                                  // 32 B header
+        op, len, rkey, roff = ring_rd(read_pos ...);       // wrap-aware header reads
+        if (len > MAX_PAYLOAD) { bad++; break; }           // framing lost / ring lapped
+        frame = align16(32 + len);
+        if (frame > avail) break;                          // not fully landed yet
+        switch (op) {
+          SEND/SEND_IMM: send++;                            // (real impl: DMA-push to host RxWqeRing)
+          WRITE/WRITE_IMM:
+            mr = MR[rkey>>24];
+            if (mr.rkey==rkey && (mr.access&REMOTE_WRITE) && roff+len<=mr.len) {
+                dst = get_noc_addr(mr.noc_x, mr.noc_y, mr.base + roff);
+                noc_async_write(ring + payload_off, dst, len);   // straddle-split at wrap; RISC issues,
+                write_ok++;                                        // NoC moves — no byte copy
+            }
+          default: unknown++;
+        }
+        read_pos = (read_pos + frame) % ring_size;
+        avail -= frame;
+    }
+    if (use_noc) noc_async_write_barrier();                // per-batch: bound outstanding NoC writes
+    publish stats; if (stop) break; light pause;
+}
+```
+
+The straddle split: when a frame wraps the ring end, the payload is issued as two `noc_async_write`s
+(to `dst` and `dst+first`); each 4 B word stays aligned because `ring_size % 16 == 0`. `noc_base == 0`
+selects a local L1 copy fallback (Stage 1/2a) instead of the NoC path.
+
+## 6. Push model and flow control
+
+Because the sender pushes and the BH can't pull, overrun is handled by, in order:
+1. **Deep ring** (128 KB) — absorbs bursts; at 9.4 Gbps jumbo the 16 KB ring lapped (bad exploded), the
+   128 KB ring kept up losslessly.
+2. **Fast drain** — `noc_async_write` (not a RISC copy) keeps the consumer ahead of the producer.
+3. **PFC (BH.6)** — the only true back-pressure: the BH pauses the sender when the ring fills. Not yet
+   implemented (Rianta PFC is the `eth_init.cpp:538` TODO); the ~ppm discards seen without it are the
+   push-with-no-flow-control tax.
+
+## 7. Validated results (on silicon, BF3 → BH ext rail idx2, 128 KB ring)
+
+| Path | Result |
+|---|---|
+| **RX dispatch (parse+route), jumbo SEND** | **264k frames/s, bad=0, 8.7 Gbps** — lossless, matches wire |
+| **RX WRITE via `noc_async_write` (jumbo)** | **256k frames/s, bad=0, 8.48 Gbps** — lossless |
+| RX WRITE via RISC copy (before Stage 2b) | ~2k frames/s, ~0.02 Gbps → **~128× slower** |
+| Off-core landing | WRITE lands **byte-exact on a Tensix worker L1** via the NoC |
+| Correctness | opcode counts exact, `read_pos` byte-exact, payload byte-exact ("TTWR"+incr) |
+
+All numbers are **sender-limited** — the userspace `tt_rdma_bf3_send` caps the wire at ~9 Gbps (3.4 at
+1500 B, 9.2 at jumbo). The BH RX has not been stressed to its own ceiling.
+
+## 8. Performance headroom (the BH RX ceiling is not yet found)
+
+Once a fast sender (DOCA/DPA gateway) saturates the wire:
+
+| Stage | Ceiling |
+|---|---|
+| Wire / MAC cut-through RX | 200 G line rate (same MAC that does 400 G on stock TT-link) |
+| NoC write (one eth core) | fabric-limited, » one rail |
+| **RISC per-frame parse + descriptor** | **~1.5 M frames/s** (from the TX arm rate) → the next ceiling |
+
+RDMA routing **forces a per-frame parse** (read rkey/offset to know where to push) — with no HW
+classifier, this is on the RISC. At jumbo 4080 B, ~1.5 M frames/s ≈ **~49 Gbps/rail**, **~98 Gbps across
+both external rails**. Levers to go higher, in order:
+1. **Fast sender first** — required even to reach ~49 G/rail and confirm it.
+2. **Multi-rail** — ~2× (as TX did for its 397 G aggregate).
+3. **Amortize the per-frame descriptor** — coalesce contiguous same-MR frames into one `noc_async_write`;
+   tune the barrier cadence. (Helps the descriptor side, not the parse side.)
+4. **Bigger frames** — more bytes per header (needs MTU > 4080).
+5. **Get the RISC off the per-frame parse** — revive the HW RX classifier (steer by ethertype/flow) or
+   an overlay/DMA-driven path. This is where the gap to line-rate/rail lives; some per-frame RISC work
+   is fundamental unless HW-assisted, because routing needs the header.
+
+## 9. Open questions / follow-ups
+
+- **SEND landing** — currently counted only; the real path DMA-pushes SEND payloads to the host
+  RxWqeRing (host hugepage via NoC→PCIe). Not yet built.
+- **CRC-32C validation** — the header `header_cksum` is not checked on RX yet (sender leaves it 0).
+- **ACK / READ** — `0x40` ACK reception and `0x20/0x21` READ_REQ/RESP not yet implemented on BH RX.
+- **MR carries the full NoC address** — Stage 2b passes the target `(noc_x, noc_y, base)` as kernel
+  args; the productized form stores the NoC-encoded `base_noc_addr` in the MR entry (host builds it).
+- **Overflow handling** — a single bad-length frame currently `break`s the whole walk; on a lapped ring
+  this stalls. Needs resync-on-bad + a drop counter, plus PFC to avoid lapping at all.
+
+## 10. Milestones
+
+- **RX.0 (M-1b)** — RXQ2 raw reception; BF3 unicast `0x1AF6` → L1 byte-exact. **Done.**
+- **RX.1 (BH.2-RX)** — frame walk + opcode dispatch (SEND/WRITE); NOWRAP one-shot. **Done.**
+- **RX.2 (Stage 2a)** — BUF_WRAP streaming ring (continuous RX). **Done.**
+- **RX.3** — 128 KB ring (lossless jumbo absorb). **Done.**
+- **RX.4 (Stage 2b, core of BH.3)** — MR table + WRITE via `noc_async_write` off-core (8.5 Gbps). **Done.**
+- **RX.5** — SEND→host RxWqeRing; CRC-32C; ACK/READ. Pending.
+- **RX.6** — PFC-lossless (BH.6) + resync-on-bad; fast gateway sender to find the real ceiling. Pending.
