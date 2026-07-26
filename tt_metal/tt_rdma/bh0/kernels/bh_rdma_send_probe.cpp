@@ -18,7 +18,7 @@
 #include <cstdint>
 
 #include "tt_metal/hw/inc/internal/ethernet/tt_rdma_wire.h"       // opcodes, ethertype, hdr struct
-#include "tt_metal/hw/inc/internal/ethernet/tt_rdma_hdr_build.h"  // tt_rdma_build_hdr + crc32c
+#include "tt_metal/hw/inc/internal/ethernet/tt_rdma_hdr_build.h"  // tt_rdma_build_hdr + crc32
 #include "tt_metal/hw/inc/internal/ethernet/tt_rdma_l1_layout.h"  // HB/STOP/TX_BUF0 addresses
 #include "tt_metal/hw/inc/internal/ethernet/tt_rdma_eth_tx.h"     // tt_rdma_txpkt_config + send_raw
 

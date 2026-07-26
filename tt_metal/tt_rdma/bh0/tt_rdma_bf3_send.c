@@ -10,7 +10,7 @@
 // Single-purpose (fixed-shape frames) so it is safe to allowlist for passwordless sudo.
 //
 //   sudo tt_rdma_bf3_send <iface> [count] [dst_mac] [ethertype] [opcode] [payload_len] [rkey] [roff]
-//                         [threads] [batch]
+//                         [threads] [batch] [badcrc]
 //   e.g. blast WRITE: sudo tt_rdma_bf3_send enp193s0f0np0 40000000 02:00:00:00:00:02 0x1af6 0x10 4080
 //                     0x00CAFE42 0 8 64
 #define _GNU_SOURCE
@@ -41,6 +41,20 @@ static void put_u64(unsigned char* p, uint64_t v) {
     for (int i = 0; i < 8; i++) {
         p[i] = (v >> (8 * i)) & 0xff;
     }
+}
+
+// CRC-32 (poly 0x04C11DB7, reflected 0xEDB88320), matching tt_rdma_crc32 in tt_rdma_hdr_build.h
+// (the chip/gateway oracle + the ETH-CTRL ROCE_ICRC hardware polynomial).
+static uint32_t tt_crc32(const unsigned char* p, unsigned n) {
+    uint32_t crc = 0xFFFFFFFFu;
+    for (unsigned i = 0; i < n; i++) {
+        crc ^= p[i];
+        for (int b = 0; b < 8; b++) {
+            uint32_t mask = (uint32_t)(-(int32_t)(crc & 1u));
+            crc = (crc >> 1) ^ (0xEDB88320u & mask);
+        }
+    }
+    return crc ^ 0xFFFFFFFFu;
 }
 
 // Per-thread blast state: each thread owns a socket and sendmmsg()es `batch` copies of `frame`.
@@ -104,7 +118,7 @@ int main(int argc, char** argv) {
         fprintf(
             stderr,
             "usage: %s <iface> [count] [dst_mac] [ethertype] [opcode] [payload_len] [rkey] [roff] "
-            "[threads] [batch]\n",
+            "[threads] [batch] [badcrc]\n",
             argv[0]);
         return 2;
     }
@@ -124,6 +138,10 @@ int main(int argc, char** argv) {
     if (batch < 1) {
         batch = 1;
     }
+    // Test hook (arg[11] badcrc=1): corrupt the header CRC so the RX kernel's crc_check must drop the
+    // frame. Positional (not env) so it survives the allowlisted `sudo` (which strips the environment).
+    const int badcrc = (argc > 11) ? atoi(argv[11]) : 0;
+    const uint32_t crc_xor = badcrc ? 0xFFFFFFFFu : 0u;
 
     unsigned dm[6] = {0};
     if (sscanf(dmac_s, "%x:%x:%x:%x:%x:%x", &dm[0], &dm[1], &dm[2], &dm[3], &dm[4], &dm[5]) != 6) {
@@ -179,7 +197,7 @@ int main(int argc, char** argv) {
         put_u32(h + 12, rkey);
         put_u64(h + 16, roff);
         put_u32(h + 24, 0);
-        put_u32(h + 28, 0);
+        put_u32(h + 28, tt_crc32(h, 28) ^ crc_xor);  // header_cksum over bytes [0..27] (BADCRC corrupts it)
         unsigned char* pay = frame + 14 + 32;
         pay[0] = 'T';
         pay[1] = 'T';
@@ -235,7 +253,8 @@ int main(int argc, char** argv) {
     int first_errno = 0;
     for (long i = 0; i < count; i++) {
         if (opcode != 0) {
-            put_u32(frame + 14 + 8, (uint32_t)(i + 1));  // seq = 1..count
+            put_u32(frame + 14 + 8, (uint32_t)(i + 1));                    // seq = 1..count
+            put_u32(frame + 14 + 28, tt_crc32(frame + 14, 28) ^ crc_xor);  // re-stamp CRC after seq change
         }
         ssize_t r = sendto(fd, frame, frame_len, 0, (struct sockaddr*)&sa, sizeof(sa));
         if (r == (ssize_t)frame_len) {

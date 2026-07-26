@@ -328,7 +328,7 @@ int tt_rdma_post_send(struct ibv_qp *qp, struct ibv_send_wr *wr,
         w->hdr.rkey          = wr->wr.rdma.rkey;
         w->hdr.remote_offset = wr->wr.rdma.remote_addr - q->peer_mr_base[wr->wr.rdma.rkey];
         w->hdr.imm_data      = be32toh(wr->imm_data);
-        w->hdr.header_cksum  = crc32c(&w->hdr, 28);
+        w->hdr.header_cksum  = crc32(&w->hdr, 28);  // CRC-32 (0x04C11DB7, ETH-CTRL ICRC poly)
 
         // 3. Gather sg_list into payload
         gather_sges(w->payload, wr->sg_list, wr->num_sge);

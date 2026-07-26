@@ -61,6 +61,19 @@ if wait_up "$OUT"; then
   [ "${bad:-1}" = 0 ] && [ "${tot:-0}" -ge 1000 ] && pass "RX streaming lossless (total=$tot, bad=0)" || fail "RX streaming (total=${tot:-0}, bad=${bad:-?})"
 else fail "RX kernel did not come up (T4)"; kill $DPID 2>/dev/null; fi
 
+echo "== T5: RX CRC-32 integrity -- corrupt-header frames dropped, not dispatched =="
+OUT=$D/rx3.txt
+timeout 115 "$BIN/bh1_rx_dispatch" 1 ext 8 1 1 2 1 >"$OUT" 2>&1 &   # crc_check=1 (arg7)
+DPID=$!
+if wait_up "$OUT"; then
+  sudo -n "$ALLOW" $P0 40 $DMAC 0x1af6 0x10 256 $RKEY 0 1 1 1 >/dev/null 2>&1   # badcrc=1 (arg11)
+  wait $DPID
+  line=$(grep "total=" "$OUT" | grep -v info | tail -1)
+  cerr=$(echo "$line" | grep -oE 'crc_err=[0-9]+' | cut -d= -f2)
+  wok=$(echo "$line" | grep -oE 'write_ok=[0-9]+' | cut -d= -f2)
+  [ "${cerr:-0}" -ge 30 ] && [ "${wok:-1}" = 0 ] && pass "RX CRC drop (crc_err=$cerr, write_ok=$wok)" || fail "RX CRC drop (crc_err=${cerr:-0}, write_ok=${wok:-?})"
+else fail "RX kernel did not come up (T5)"; kill $DPID 2>/dev/null; fi
+
 echo "======================================================"
 echo "REGRESSION: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ] && { echo "== ALL GREEN =="; exit 0; } || { echo "== FAILURES =="; exit 1; }

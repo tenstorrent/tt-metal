@@ -69,6 +69,21 @@ DOCA_LOG_REGISTER(ETH_TXQ_BATCH_SEND_ETHERNET_FRAMES);
 #define TT_RDMA_ETHERTYPE 0x1AF6
 #define TT_RDMA_WRITE_OPCODE 0x10
 #define TT_RDMA_RKEY 0x00CAFE42u
+
+/* CRC-32 (poly 0x04C11DB7, reflected 0xEDB88320) over header bytes [0..27] -- matches
+ * tt_rdma_crc32 in tt_rdma_hdr_build.h and the BH ETH-CTRL ROCE_ICRC hardware polynomial.
+ * The RX kernel's crc_check drops frames whose header_cksum does not match. */
+static uint32_t tt_crc32(const uint8_t* p, uint32_t n) {
+    uint32_t crc = 0xFFFFFFFFu;
+    for (uint32_t i = 0; i < n; i++) {
+        crc ^= p[i];
+        for (int b = 0; b < 8; b++) {
+            uint32_t mask = (uint32_t)(-(int32_t)(crc & 1u));
+            crc = (crc >> 1) ^ (0xEDB88320u & mask);
+        }
+    }
+    return crc ^ 0xFFFFFFFFu;
+}
 #define NUM_SEND_ITERS 300000 /* 300k batches x 64 frames = ~19.2M jumbo frames */
 
 struct eth_txq_batch_send_sample_objects {
@@ -313,7 +328,12 @@ static doca_error_t create_eth_txq_packet_buffers(
         payload[13] = (TT_RDMA_RKEY >> 8) & 0xff;
         payload[14] = (TT_RDMA_RKEY >> 16) & 0xff;
         payload[15] = (TT_RDMA_RKEY >> 24) & 0xff; /* rkey */
-        memset(&payload[16], 0, 16);               /* remote_offset(8) + imm(4) + cksum(4) = 0 */
+        memset(&payload[16], 0, 12);               /* remote_offset(8) + imm(4) = 0 */
+        uint32_t cksum = tt_crc32(payload, 28);    /* header_cksum over bytes [0..27] */
+        payload[28] = cksum & 0xff;
+        payload[29] = (cksum >> 8) & 0xff;
+        payload[30] = (cksum >> 16) & 0xff;
+        payload[31] = (cksum >> 24) & 0xff;
         payload[32] = 'T';
         payload[33] = 'T';
         payload[34] = 'W';

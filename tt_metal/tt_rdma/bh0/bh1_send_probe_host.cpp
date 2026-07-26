@@ -9,7 +9,7 @@
 //
 // Before touching hardware it runs a GOLDEN SELF-TEST: build the wire-protocol
 // §7.1 SEND header and assert it is byte-for-byte TT_GOLDEN_SEND_HDR (cksum
-// 0x7E9BA1C3). If that fails the frame builder is wrong — abort before the wire.
+// 0x69B1EDCC). If that fails the frame builder is wrong — abort before the wire.
 
 #include <chrono>
 #include <cstdio>
@@ -59,10 +59,10 @@ static bool golden_self_test() {
         /*imm=*/0);
     if (std::memcmp(&h, TT_GOLDEN_SEND_HDR, TT_RDMA_HDR_BYTES) != 0) {
         std::cout << "GOLDEN SELF-TEST FAILED: header mismatch (cksum=0x" << std::hex << h.header_cksum << std::dec
-                  << ", expected 0x7545F9A8)\n";
+                  << ", expected 0x69B1EDCC)\n";
         return false;
     }
-    std::cout << "golden self-test PASS: §7.1 SEND header == TT_GOLDEN_SEND_HDR (crc32c ok)\n";
+    std::cout << "golden self-test PASS: §7.1 SEND header == TT_GOLDEN_SEND_HDR (crc32 ok)\n";
     return true;
 }
 

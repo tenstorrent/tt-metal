@@ -31,6 +31,7 @@
 #include "tt_metal/hw/inc/internal/ethernet/tt_rdma_wire.h"
 #include "tt_metal/hw/inc/internal/ethernet/tt_rdma_l1_layout.h"
 #include "tt_metal/hw/inc/internal/ethernet/tt_rdma_eth_rx.h"
+#include "tt_metal/hw/inc/internal/ethernet/tt_rdma_hdr_build.h"  // tt_rdma_crc32 (header validation)
 
 // Wrap-aware word read from the ring (off is 4-B aligned; buf_size % 16 == 0 keeps it in-bounds).
 static inline uint32_t ring_rd(uint32_t buf, uint32_t off, uint32_t buf_size) {
@@ -65,6 +66,10 @@ void kernel_main() {
     const uint32_t noc_y = get_arg_val<uint32_t>(8);
     const uint32_t noc_base = get_arg_val<uint32_t>(9);
     const bool use_noc = (noc_base != 0);
+    // arg10 = crc_check: validate CRC-32 over header bytes [0..27] vs the header_cksum field; drop +
+    // count mismatches. Correctness/integrity gate (Phase 1.1). Default on; a perf sweep may disable it
+    // (the bit-serial CRC is ~224 ops/frame -- Phase 3 can table/HW-offload it).
+    const uint32_t crc_check = get_arg_val<uint32_t>(10);
 
     volatile tt_l1_ptr uint32_t* hb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hb_addr);
     volatile tt_l1_ptr uint32_t* stats = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stats_addr);
@@ -77,18 +82,23 @@ void kernel_main() {
     tt_rdma_rxq_init(TT_RDMA_RX_QUEUE, rx_buf, rx_buf_size, wrap);  // raw; L2-stripped landing
 
     uint32_t read_pos = 0;  // byte position in the ring (mod buf_size in wrap mode)
-    uint32_t n_send = 0, n_write = 0, n_write_ok = 0, n_unknown = 0, n_bad = 0, total = 0, last_op = 0;
+    uint32_t n_send = 0, n_write = 0, n_write_ok = 0, n_unknown = 0, n_bad = 0, n_crc_err = 0, total = 0, last_op = 0;
 
     for (;;) {
         const uint32_t wp = tt_rdma_rxq_bufptr(TT_RDMA_RX_QUEUE);  // bytes written by HW
         uint32_t avail = wrap ? ((wp + rx_buf_size - read_pos) % rx_buf_size) : (wp - read_pos);
 
         while (avail >= TT_RDMA_HDR_BYTES) {
-            // Header words (packed LE): w0=[op|ver<<8|tag<<16] w1=length w3=rkey w4=roff_lo.
-            const uint32_t op = ring_rd(rx_buf, read_pos + 0u, rx_buf_size) & 0xFFu;
-            const uint32_t len = ring_rd(rx_buf, read_pos + 4u, rx_buf_size);
-            const uint32_t rkey = ring_rd(rx_buf, read_pos + 12u, rx_buf_size);
-            const uint32_t roff = ring_rd(rx_buf, read_pos + 16u, rx_buf_size);  // 32-bit offset (Stage 1/2a)
+            // Read the full 32B header (8 LE words) wrap-aware into a contiguous local copy.
+            //   w0=[op|ver<<8|tag<<16] w1=length w3=rkey w4=roff_lo ... w7=header_cksum.
+            uint32_t hw[8];
+            for (uint32_t i = 0; i < 8u; ++i) {
+                hw[i] = ring_rd(rx_buf, read_pos + 4u * i, rx_buf_size);
+            }
+            const uint32_t op = hw[0] & 0xFFu;
+            const uint32_t len = hw[1];
+            const uint32_t rkey = hw[3];
+            const uint32_t roff = hw[4];  // 32-bit offset (Stage 1/2a)
 
             if (len > TT_RDMA_MAX_PAYLOAD) {
                 // Implausible length => the producer lapped the consumer (ring overflow) and read_pos now
@@ -103,6 +113,16 @@ void kernel_main() {
             frame = (frame + 15u) & ~15u;  // 16-B aligned stride
             if (frame > avail) {
                 break;  // frame not fully landed yet
+            }
+
+            // Header integrity: CRC-32 (ETH-CTRL ICRC poly) over bytes [0..27] must equal header_cksum
+            // (hw[7]). Drop + count mismatches (corruption / spoofing) -- never dispatch an unvalidated
+            // header. SW fallback here; the ROCE_ICRC engine can offload this (see tt-rdma-rx-dispatch-spec).
+            if (crc_check && tt_rdma_crc32(reinterpret_cast<const uint8_t*>(hw), 28u) != hw[7]) {
+                ++n_crc_err;
+                read_pos = wrap ? ((read_pos + frame) % rx_buf_size) : (read_pos + frame);
+                avail -= frame;
+                continue;
             }
 
             if (op == TT_OP_SEND || op == TT_OP_SEND_IMM) {
@@ -156,8 +176,9 @@ void kernel_main() {
         stats[3] = n_write_ok;
         stats[4] = n_unknown;
         stats[5] = n_bad;
-        stats[6] = last_op;
-        stats[7] = read_pos;
+        stats[6] = n_crc_err;
+        stats[7] = last_op;
+        stats[8] = read_pos;
 
         if (stop != nullptr && *stop != 0) {
             break;

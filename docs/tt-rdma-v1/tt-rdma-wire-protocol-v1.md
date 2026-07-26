@@ -30,8 +30,12 @@ Offset  Size  Field            Notes
 16      8     remote_offset    byte offset within rkey'd region (WRITE/READ).
                                Ignored when rkey=0.
 24      4     imm_data         immediate value (valid iff version_flags.IMM).
-28      4     header_cksum     CRC-32C over bytes [0..27]. Inner integrity
-                               for header only — payload is covered by FCS.
+28      4     header_cksum     CRC-32 (poly 0x04C11DB7, reflected 0xEDB88320,
+                               init/final ~0) over bytes [0..27]. Inner integrity
+                               for header only — payload is covered by FCS. This
+                               is the BH ETH-CTRL ROCE_ICRC hardware polynomial,
+                               so the RX check can offload to that engine.
+                               Canonical vector: crc32("123456789")=0xCBF43926.
 32      L     payload          L = length bytes; absent for READ_REQ/ACK.
 ```
 

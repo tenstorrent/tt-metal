@@ -74,7 +74,14 @@ except the GitHub-Actions job wiring (infra task).
 
 No opcode left behind; every path tested + error-handled.
 
-- **1.1 CRC-32C validation** on every inbound header (drop + count on mismatch); golden-vector tests.
+- **1.1 CRC-32 validation** on every inbound header (drop + count on mismatch); golden-vector tests.
+  **Done (SW).** Header `header_cksum` is **CRC-32 (poly 0x04C11DB7, reflected 0xEDB88320)** — the BH
+  ETH-CTRL `ROCE_ICRC` hardware polynomial (was Castagnoli/CRC-32C; switched pre-freeze so the RX check
+  can offload to that inline engine). Kernel drops + counts mismatches (`crc_err`); validated on silicon
+  both paths (good→0, corrupt→all dropped). Golden vectors regenerated (`crc32("123456789")=0xCBF43926`),
+  HW-less CI + regression T5 green. **Follow-up:** wire the `ROCE_ICRC` engine (regs @ `0xFFB98100`,
+  `RX_CHECK_EN` + `RX_CALCULATED`/`RX_RECEIVED`) to remove the CRC from the RISC hot path — needs an
+  on-silicon bit-order/init calibration pass (see tt-rdma-rx-dispatch-spec §9).
 - **1.2 SEND / SEND_IMM** → host RxWqeRing (NoC→PCIe push to a hugepage ring), completion to the host;
   test byte-exact delivery + CQE.
 - **1.3 READ_REQ / READ_RESP** — target-side READ handler (NoC read from MR → RESP frame via TXQ),

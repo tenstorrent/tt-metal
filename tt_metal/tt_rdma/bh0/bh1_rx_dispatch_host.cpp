@@ -41,6 +41,7 @@ int main(int argc, char** argv) {
     // Stage 2b noc_target: 0 = local L1 copy (Stage 1/2a); 1 = loopback (own eth L1 via NoC);
     // 2 = Tensix worker (0,0) L1 via NoC (off-core, the real RDMA case).
     const uint32_t noc_target = (argc > 6) ? std::strtoul(argv[6], nullptr, 0) : 0u;
+    const uint32_t crc_check = (argc > 7) ? std::strtoul(argv[7], nullptr, 0) : 1u;  // 1 = validate CRC-32 (Phase 1.1)
     const uint32_t rx_ring_addr = bigring ? TT_RDMA_RX_RING_BIG_ADDR : TT_RDMA_RX_RING_ADDR;
     const uint32_t rx_ring_size = bigring ? TT_RDMA_RX_RING_BIG_SIZE : TT_RDMA_RX_RING_SIZE;
 
@@ -121,7 +122,7 @@ int main(int argc, char** argv) {
     // Clear the WRITE landing target (on its own core) + the stats region.
     std::vector<uint32_t> zeros(kMrLen / 4, 0u);
     cluster.write_core(device->id(), verify_core, zeros, verify_addr);
-    std::vector<uint32_t> zstats(8, 0u);
+    std::vector<uint32_t> zstats(9, 0u);
     cluster.write_core(device->id(), eth_phys, zstats, (uint32_t)stats_addr);
 
     Program program = CreateProgram();
@@ -141,7 +142,8 @@ int main(int argc, char** argv) {
          wrap,
          noc_x,
          noc_y,
-         noc_base});
+         noc_base,
+         crc_check});
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
@@ -151,9 +153,9 @@ int main(int argc, char** argv) {
     std::cout << "BH.2-RX: dispatch kernel up. Now send TT-RDMA frames from the BF3. Stats:\n";
 
     for (int s = 0; s < hold_s; ++s) {
-        auto st = cluster.read_core<uint32_t>(device->id(), eth_phys, (uint32_t)stats_addr, 8 * sizeof(uint32_t));
+        auto st = cluster.read_core<uint32_t>(device->id(), eth_phys, (uint32_t)stats_addr, 9 * sizeof(uint32_t));
         std::printf(
-            "  t=%2ds  total=%u send=%u write=%u write_ok=%u unknown=%u bad=%u last_op=0x%02x read_pos=%u\n",
+            "  t=%2ds  total=%u send=%u write=%u write_ok=%u unknown=%u bad=%u crc_err=%u last_op=0x%02x read_pos=%u\n",
             s,
             st[0],
             st[1],
@@ -162,7 +164,8 @@ int main(int argc, char** argv) {
             st[4],
             st[5],
             st[6],
-            st[7]);
+            st[7],
+            st[8]);
         std::fflush(stdout);
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }

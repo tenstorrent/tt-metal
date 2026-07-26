@@ -178,7 +178,14 @@ the real fix is **PFC (BH.6)** to keep the sender ≤ drain, staying in the loss
 
 - **SEND landing** — currently counted only; the real path DMA-pushes SEND payloads to the host
   RxWqeRing (host hugepage via NoC→PCIe). Not yet built.
-- **CRC-32C validation** — the header `header_cksum` is not checked on RX yet (sender leaves it 0).
+- **CRC-32 validation** — **Done (SW).** The header `header_cksum` (CRC-32, poly 0x04C11DB7 =
+  reflected 0xEDB88320) is validated on RX; mismatches are dropped + counted (`crc_err`). The kernel
+  computes it bit-serially today. **Follow-up (HW offload):** the ETH-CTRL `ROCE_ICRC` engine (regs @
+  `0xFFB98100`) implements this exact polynomial with an inline RX check (`RX_CHECK_EN` + a
+  `RX_CALCULATED` vs `RX_RECEIVED` compare) and a 64-byte header bytemask. Wiring it removes the CRC
+  from the RISC hot path entirely (zero cycles/frame). This is why the wire cksum was moved onto the
+  0x04C11DB7 polynomial. On-silicon step: calibrate the CTRL bit-order/reflection selects + init so
+  HW `RX_CALCULATED` == the SW `tt_rdma_crc32` for a known frame, *then* trust `RX_CHECK_EN`.
 - **ACK / READ** — `0x40` ACK reception and `0x20/0x21` READ_REQ/RESP not yet implemented on BH RX.
 - **MR carries the full NoC address** — Stage 2b passes the target `(noc_x, noc_y, base)` as kernel
   args; the productized form stores the NoC-encoded `base_noc_addr` in the MR entry (host builds it).
@@ -192,5 +199,6 @@ the real fix is **PFC (BH.6)** to keep the sender ≤ drain, staying in the loss
 - **RX.2 (Stage 2a)** — BUF_WRAP streaming ring (continuous RX). **Done.**
 - **RX.3** — 128 KB ring (lossless jumbo absorb). **Done.**
 - **RX.4 (Stage 2b, core of BH.3)** — MR table + WRITE via `noc_async_write` off-core (8.5 Gbps). **Done.**
-- **RX.5** — SEND→host RxWqeRing; CRC-32C; ACK/READ. Pending.
+- **RX.5** — CRC-32 header validation (SW). **Done.** HW `ROCE_ICRC` offload — follow-up.
+- **RX.5b** — SEND→host RxWqeRing; ACK/READ. Pending.
 - **RX.6** — PFC-lossless (BH.6) + resync-on-bad; fast gateway sender to find the real ceiling. Pending.

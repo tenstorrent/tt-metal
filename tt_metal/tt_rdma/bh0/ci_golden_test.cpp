@@ -2,7 +2,7 @@
 //
 // HW-less CI unit test (Phase 0.4 of tt-rdma-production-plan.md): the TT-RDMA-v1 wire-header oracle.
 // Builds the spec §7 golden headers with tt_rdma_build_hdr and asserts they are byte-for-byte the frozen
-// golden vectors in tt_rdma_wire.h, plus the canonical CRC-32C vector. No hardware, no tt-metal, no DOCA
+// golden vectors in tt_rdma_wire.h, plus the canonical CRC-32 vector. No hardware, no tt-metal, no DOCA
 // — runs anywhere on any PR:
 //
 //   g++ -std=c++17 -I<repo-root> tt_metal/tt_rdma/bh0/ci_golden_test.cpp -o /tmp/ci_golden && /tmp/ci_golden
@@ -49,8 +49,8 @@ static void check_u32(const char* name, uint32_t got, uint32_t want) {
 int main() {
     std::printf("== TT-RDMA-v1 wire-header golden vectors (HW-less) ==\n");
 
-    // Canonical CRC-32C (Castagnoli) check vector.
-    check_u32("crc32c(\"123456789\")", tt_rdma_crc32c((const uint8_t*)"123456789", 9), 0xE3069283u);
+    // Canonical CRC-32 (poly 0x04C11DB7, ETH-CTRL ICRC) check vector.
+    check_u32("crc32(\"123456789\")", tt_rdma_crc32((const uint8_t*)"123456789", 9), 0xCBF43926u);
 
     // §7.1 SEND: 64 B payload, tag=0xCAFE, seq=0x1234.
     tt_rdma_hdr_t h;
