@@ -404,6 +404,50 @@ prompts carry 7-31 padding tokens, which looked like a lead. It is not: over all
 CLEAN group has MORE padding on average (18.2 vs 16.3), and eight clean questions sit at the maximum
 29-31 while running 4-17 blocks. Refuted before it was implemented.
 
+## 12. CORRECTION to sections 9 and 11: the mean entropy is the WRONG statistic
+
+Sections 9 and 11 both lead with mean per-position entropy -- TT 5.10 against the reference's 3.75 --
+and treat the 1.35-nat gap as the thing to explain. `EntropyBoundSampler` never reads the mean. It
+accepts the k lowest-entropy positions whose EXCLUSIVE prefix sum of entropies is <= `entropy_bound`
+(0.1 nats, absolute), so k is decided entirely by the LOW TAIL.
+
+Computing the reference's actual step-1 distribution from the dumps (`first_forward_stats.py`) shows
+how misleading the mean is here, because the distribution is strongly bimodal:
+
+| | q106 | q096 | q095 |
+| --- | --- | --- | --- |
+| entropy mean | 3.7535 | 4.0771 | 3.4311 |
+| entropy **median** | **4.2624** | **4.2541** | **3.9226** |
+| entropy max | 4.8179 | 4.9567 | 4.1219 |
+| entropy min | 1.7e-05 | 2.9e-04 | 4.3e-05 |
+| positions below 0.1 nats | 5 | 5 | 6 |
+| **accept count at step 1** | **6 / 256** | **5 / 256** | **7 / 256** |
+| logit_std | 7.4553 | 8.1133 | 7.4228 |
+
+The reference's *typical* position is at 4.25 nats, not 3.75; the mean is dragged down by four to six
+positions that are essentially CERTAIN (min 1.7e-05). Those few positions are the entire accept
+budget: **the reference also starts at only 5-7 accepted of 256.** It converges because that count
+RAMPS as the canvas fills -- the shape TT shows on a healthy block (1, 2, 3, 5, 6, 7, 10, 16, 23, 51,
+75, 121 ... 252).
+
+So "TT is 1.35 nats flatter on average" is not the mechanism. The mechanism is that TT has **no
+position under the bound at all**, which pins k at 1 -- k=1 is always accepted because its exclusive
+prefix sum is 0 -- and a ramp that starts at 1 and stays at 1 settles at most 47 of 256 positions in
+48 steps.
+
+Two consequences for the localisation:
+
+* The target is the accept count and the tail that produces it, not the mean. A change that lowered
+  TT's mean entropy without creating sub-0.1-nat positions would fix nothing.
+* One number now discriminates the hypotheses cleanly: **logit_std, 7.455 on the reference**. TT's
+  mean of 5.10 is above the reference's *most uncertain* position (4.82), which is what a uniform
+  reduction in logit scale looks like -- every position flattens and the confident ones stop being
+  confident. If TT's logit_std comes in materially below 7.455 this is a scale defect; if it matches,
+  the flatness is distributional and the per-layer hidden RMS table is the next cut.
+
+`first_forward_stats.py` computes these for either side and prints them paired, with the per-layer
+hidden RMS ratio, so the same statistic is never implemented twice.
+
 ## 6. Reproduce
 
 ```bash
