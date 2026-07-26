@@ -28,6 +28,33 @@ def test_ccl_topology_env_override(monkeypatch, env, expected):
     assert default_ccl_topology() == expected
 
 
+class _FakeMesh:
+    def __init__(self, n):
+        self._n = n
+
+    def get_num_devices(self):
+        return self._n
+
+
+def test_ccl_topology_linear_on_4_device_mesh(monkeypatch):
+    """QB2 / P300x2 opened as 1x4: Ring drops 12B full-model PCC below 0.94."""
+    monkeypatch.delenv("GEMMA4_CCL_TOPOLOGY", raising=False)
+    assert default_ccl_topology(_FakeMesh(4)) == ttnn.Topology.Linear
+
+
+def test_ccl_topology_ring_on_8_device_mesh(monkeypatch):
+    """LoudBox P150x8: Ring remains the TTFT-swept default."""
+    monkeypatch.delenv("GEMMA4_CCL_TOPOLOGY", raising=False)
+    assert default_ccl_topology(_FakeMesh(8)) == ttnn.Topology.Ring
+
+
+def test_ccl_topology_env_override_beats_device_count(monkeypatch):
+    monkeypatch.setenv("GEMMA4_CCL_TOPOLOGY", "ring")
+    assert default_ccl_topology(_FakeMesh(4)) == ttnn.Topology.Ring
+    monkeypatch.setenv("GEMMA4_CCL_TOPOLOGY", "linear")
+    assert default_ccl_topology(_FakeMesh(8)) == ttnn.Topology.Linear
+
+
 def test_ccl_async_env(monkeypatch):
     monkeypatch.delenv("GEMMA4_CCL_ASYNC", raising=False)
     assert ccl_async_enabled() is False
