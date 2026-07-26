@@ -210,7 +210,8 @@ def test_sp8_tp4_affine_trace_layer_pcc(mesh_device: ttnn.MeshDevice, monkeypatc
     hidden = torch.randn(1, sequence, config.hidden_size, generator=torch.Generator().manual_seed(7712)).to(
         torch.bfloat16
     )
-    golden_output, _ = kda_forward_reference(hidden, state_dict, config)
+    golden_first_output, golden_first_state = kda_forward_reference(hidden, state_dict, config)
+    golden_second_output, golden_second_state = kda_forward_reference(hidden, state_dict, config, golden_first_state)
     layer = SP8AffineTP4KimiDeltaAttention(mesh_device, config, state_dict)
     layer.reset_state(batch_size=1)
     span = sequence // 8
@@ -246,15 +247,52 @@ def test_sp8_tp4_affine_trace_layer_pcc(mesh_device: ttnn.MeshDevice, monkeypatc
     for span_device in layer.span_devices:
         ttnn.synchronize_device(span_device)
 
-    actual_output = torch.cat(
+    actual_first_output = torch.cat(
         [
             ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(span_device, dim=-1))
             for output, span_device in zip(outputs, layer.span_devices, strict=True)
         ],
         dim=1,
     )
-    passed, pcc = comp_pcc(golden_output, actual_output, pcc=0.98)
-    assert passed, f"SP=8 affine TP=4 traced output PCC {pcc:.6f} < 0.98"
+    passed, pcc = comp_pcc(golden_first_output, actual_first_output, pcc=0.98)
+    assert passed, f"SP=8 affine TP=4 first traced output PCC {pcc:.6f} < 0.98"
+
+    # A second replay must consume the first call's device-resident caches.
+    # This catches an apparently trace-stable implementation that silently
+    # reuses the initial state on every replay.
+    for span_device, trace_id in zip(layer.span_devices, trace_ids, strict=True):
+        ttnn.execute_trace(span_device, trace_id, cq_id=0, blocking=False)
+    for span_device in layer.span_devices:
+        ttnn.synchronize_device(span_device)
+    actual_second_output = torch.cat(
+        [
+            ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(span_device, dim=-1))
+            for output, span_device in zip(outputs, layer.span_devices, strict=True)
+        ],
+        dim=1,
+    )
+    final_layer = layer.layers[-1]
+    assert final_layer.recurrent_state is not None
+    assert final_layer.convolution_state is not None
+    golden_second_convolution = torch.cat(
+        (
+            golden_second_state.q_convolution,
+            golden_second_state.k_convolution,
+            golden_second_state.v_convolution,
+        ),
+        dim=-1,
+    )
+    for name, golden, actual in (
+        ("second traced output", golden_second_output, actual_second_output),
+        (
+            "second traced recurrent state",
+            golden_second_state.recurrent,
+            torch.cat(_host_shards(final_layer.recurrent_state), dim=1),
+        ),
+        ("second traced convolution state", golden_second_convolution, _full_convolution_state(layer, config)),
+    ):
+        passed, pcc = comp_pcc(golden, actual, pcc=0.98)
+        assert passed, f"SP=8 affine TP=4 {name} PCC {pcc:.6f} < 0.98"
 
     for span_device, trace_id in zip(layer.span_devices, trace_ids, strict=True):
         ttnn.release_trace(span_device, trace_id)
