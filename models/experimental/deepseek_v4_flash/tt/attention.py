@@ -5,6 +5,7 @@ import torch
 
 from .common import DeepSeekV4Module, _HIFI4_SDPA, _MASK_NEG, _profile, width_sharded_l1_config
 from .layers import BatchedLinearDecode, DeepSeekV4RMSNorm, Linear, LinearDecode, _rms_norm_unweighted
+from .paged_cache import PagedLayerView
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize
 
 
@@ -118,8 +119,15 @@ def build_static_layer_cache(
     head_dim: int,
     max_seq: int,
     compress_rates: dict,
+    paged: bool = False,
 ) -> _StaticLayerCache:
-    """Allocate a layer's fixed-size in-place caches empty (all-zero)."""
+    """Allocate a layer's fixed-size in-place caches empty (all-zero).
+
+    ``paged`` leaves the KV buffers (``sliding`` / ``combined``) unallocated: those
+    reads and writes go through the shared block pool instead (see
+    :mod:`.paged_cache`), and only the small compressor window buffers -- which are
+    per-session state swapped outside the trace -- are still owned per layer.
+    """
 
     def _filled(rows: int, width: int, value: float = 0.0) -> ttnn.Tensor:
         return ttnn.from_torch(
@@ -132,7 +140,7 @@ def build_static_layer_cache(
 
     # CSA/HCA layers keep the sliding ring inside ``combined`` rather than in its
     # own buffer, so only sliding-only layers allocate ``sliding``.
-    sliding = None if layer_type != "sliding_attention" else _filled(sliding_window, head_dim)
+    sliding = None if paged or layer_type != "sliding_attention" else _filled(sliding_window, head_dim)
     win_kv = win_gate = prev_kv = prev_gate = combined = None
     if layer_type != "sliding_attention":
         cr = compress_rates[layer_type]
@@ -149,7 +157,8 @@ def build_static_layer_cache(
             prev_gate = _filled(cr, feat, _MASK_NEG)
         # ``[sliding ring | compressed entries]`` on one axis. The width matches the
         # mask that :func:`host_decode_mask` builds for this layer.
-        combined = _filled(sliding_window + max(cap // cr, 0), head_dim)
+        if not paged:
+            combined = _filled(sliding_window + max(cap // cr, 0), head_dim)
     return _StaticLayerCache(sliding, win_kv, win_gate, prev_kv, prev_gate, combined)
 
 
@@ -332,19 +341,29 @@ def _update_cache_at(
     cache: ttnn.Tensor,
     row: ttnn.Tensor,
     pos_tensor: ttnn.Tensor,
-    page_table: ttnn.Tensor | None = None,
+    paged: PagedLayerView | None = None,
 ) -> None:
-    """In-place write ``row`` ``[1, 1, 1, F]`` into ``cache`` at ``pos_tensor`` ``[1]`` (INT32).
+    """In-place write ``row`` ``[1, 1, 1, F]`` into a KV cache at ``pos_tensor`` ``[1]``
+    (INT32), either the layer's own dense buffer or -- when ``paged`` is given --
+    ``paged.pool`` through the active session's page table.
 
-    When ``page_table`` is ``[1, num_blocks]``, uses vLLM-style logical->physical block
-    mapping (GPT-OSS / tt-transformers paged KV path).
+    ``paged.position_modulo`` wraps the logical position into a bounded capacity
+    before the page-table lookup, which is what makes a sliding-window session need
+    only ``window / block_size`` blocks; without it any position past that capacity
+    resolves through the row's unmapped tail (see :mod:`.paged_cache`).
     """
     width = row.shape[-1]
     row_sharded = ttnn.to_memory_config(row, _height_sharded_l1_config(width))
-    if page_table is not None:
-        ttnn.experimental.paged_update_cache(cache, row_sharded, update_idxs_tensor=pos_tensor, page_table=page_table)
-    else:
+    if paged is None:
         ttnn.experimental.paged_update_cache(cache, row_sharded, update_idxs_tensor=pos_tensor)
+    else:
+        ttnn.experimental.paged_update_cache(
+            paged.pool,
+            row_sharded,
+            update_idxs_tensor=pos_tensor,
+            page_table=paged.page_table,
+            cache_position_modulo=paged.position_modulo,
+        )
     ttnn.deallocate(row_sharded)
 
 
@@ -434,15 +453,17 @@ class DeepSeekV4HCACompressor:
         win_slot: ttnn.Tensor,
         win_row: ttnn.Tensor | None = None,
         pool: bool = True,
+        paged: PagedLayerView | None = None,
     ) -> None:
         """Trace-safe decode: write this token's projection in place at ``win_slot``
         (``pos % compress_rate``) into the one-window ``[1, 1, compress_rate, Dh]``
         buffers, and -- on the step that closes the window -- pool just that window
-        and append its single entry to ``combined_cache`` at row ``win_row``.
+        and append its single entry at row ``win_row`` of the layer's KV axis
+        (``combined_cache``, or ``paged``'s block pool).
 
         ``pool`` is set by the caller only on the steps that close a window, so the
         cost per step is ``O(compress_rate)`` rather than ``O(max_seq)``: in between,
-        ``combined_cache`` already holds exactly the entries the block-bias exposes
+        the KV axis already holds exactly the entries the block-bias exposes
         (see the module header).
         """
         kv, gate = self._project(hidden)  # [1, 1, 1, Dh]
@@ -450,9 +471,9 @@ class DeepSeekV4HCACompressor:
         gate = ttnn.reshape(gate, [1, 1, 1, self.head_dim])
         _update_cache_at(scache.win_kv, kv, win_slot)
         _update_cache_at(scache.win_gate, gate, win_slot)
-        if pool and combined_cache is not None:
+        if pool and (combined_cache is not None or paged is not None):
             pooled = self._pool_window(scache.win_kv, scache.win_gate, cos_row, sin_row)
-            _update_cache_at(combined_cache, pooled, win_row)
+            _update_cache_at(combined_cache, pooled, win_row, paged=paged)
             ttnn.deallocate(pooled)
 
 
@@ -557,12 +578,13 @@ class DeepSeekV4CSACompressor:
         win_slot: ttnn.Tensor,
         win_row: ttnn.Tensor | None = None,
         pool: bool = True,
+        paged: PagedLayerView | None = None,
     ) -> None:
         """Trace-safe decode: write this token's ``2*Dh`` projection in place at
         ``win_slot`` into the one-window ``[1, 1, compress_rate, 2*Dh]`` buffers, and
         -- on the step that closes the window -- pool just that window (Ca/Cb overlap
-        against the retained previous window) and append its single entry to
-        ``combined_cache`` at row ``win_row``.
+        against the retained previous window) and append its single entry at row
+        ``win_row`` of the layer's KV axis (``combined_cache``, or ``paged``'s pool).
 
         After pooling, the closing window becomes the ``prev_*`` the *next* window
         will overlap with. See :meth:`DeepSeekV4HCACompressor.decode_static`.
@@ -573,11 +595,11 @@ class DeepSeekV4CSACompressor:
         gate = ttnn.reshape(gate, [1, 1, 1, feat])
         _update_cache_at(scache.win_kv, kv, win_slot)
         _update_cache_at(scache.win_gate, gate, win_slot)
-        if pool and combined_cache is not None:
+        if pool and (combined_cache is not None or paged is not None):
             pooled = self._pool_window(
                 scache.prev_kv, scache.prev_gate, scache.win_kv, scache.win_gate, cos_row, sin_row
             )
-            _update_cache_at(combined_cache, pooled, win_row)
+            _update_cache_at(combined_cache, pooled, win_row, paged=paged)
             ttnn.deallocate(pooled)
             # Retire the closed window into ``prev_*`` for the next overlap. ``fill_cache``
             # is an in-place whole-tensor cache writer, so (unlike ``ttnn.copy``) it is
@@ -731,7 +753,13 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         self.q_a_proj.fetch_weights()
 
     def _sdpa_decode(
-        self, q: ttnn.Tensor, kv: ttnn.Tensor, mask: ttnn.Tensor | None, cur_pos: ttnn.Tensor | None = None
+        self,
+        q: ttnn.Tensor,
+        kv: ttnn.Tensor,
+        mask: ttnn.Tensor | None,
+        cur_pos: ttnn.Tensor | None = None,
+        paged: PagedLayerView | None = None,
+        sliding_window: int | None = None,
     ) -> ttnn.Tensor:
         """Single-token (``S == 1``) attention via the fused SDPA-decode op.
 
@@ -757,15 +785,36 @@ class DeepSeekV4Attention(DeepSeekV4Module):
           not control flow, so the kernel always walks the whole axis. The op wants
           the mask to carry Q's (padded) head count, so the head-independent row is
           broadcast across ``H`` first -- a materialisation the causal path avoids.
+
+        ``paged`` swaps ``kv`` for the layer's block pool read through the active
+        session's page table; the bounding modes above are unchanged by it, except
+        that a bounded ring (``paged.position_modulo``) additionally passes
+        ``sliding_window_size`` so the kernel attends the last ``window`` positions
+        rather than the whole (wrapped) capacity.
         """
         # sdpa_decode requires its K/V operands in DRAM.
         q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
-        kv = ttnn.to_memory_config(kv, ttnn.DRAM_MEMORY_CONFIG)
         bounds = (
             {"is_causal": True, "cur_pos_tensor": cur_pos}
             if cur_pos is not None
             else {"is_causal": False, "attn_mask": ttnn.repeat(mask, ttnn.Shape([1, 1, self.num_heads, 1]))}
         )
+        if paged is not None:
+            return ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                q,
+                paged.pool,
+                paged.pool,  # K == V (shared single KV head)
+                paged.page_table,
+                attention_sink=self.sdpa_sinks_tt,
+                scale=self.scaling,
+                sliding_window_size=sliding_window,
+                cache_position_modulo=paged.position_modulo,
+                program_config=self._sdpa_pcfg,
+                compute_kernel_config=_HIFI4_SDPA,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                **bounds,
+            )
+        kv = ttnn.to_memory_config(kv, ttnn.DRAM_MEMORY_CONFIG)
         return ttnn.transformer.scaled_dot_product_attention_decode(
             q,
             kv,
@@ -777,31 +826,6 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             memory_config=ttnn.L1_MEMORY_CONFIG,
             **bounds,
         )  # [1, 1, H, Dh]
-
-    def _sdpa_paged_sliding(
-        self,
-        q: ttnn.Tensor,
-        paged_pool: ttnn.Tensor,
-        page_table: ttnn.Tensor,
-        cur_pos: ttnn.Tensor,
-        sliding_window: int,
-    ) -> ttnn.Tensor:
-        """Sliding-window MQA decode against a paged K=V pool (K==V)."""
-        q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
-        return ttnn.transformer.paged_scaled_dot_product_attention_decode(
-            q,
-            paged_pool,
-            paged_pool,
-            page_table,
-            is_causal=False,
-            cur_pos_tensor=cur_pos,
-            sliding_window_size=sliding_window,
-            attention_sink=self.sdpa_sinks_tt,
-            scale=self.scaling,
-            program_config=self._sdpa_pcfg,
-            compute_kernel_config=_HIFI4_SDPA,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
 
     def _grouped_output(self, attn: ttnn.Tensor) -> ttnn.Tensor:
         """``DeepseekV4GroupedLinear`` (o_a) + ``o_b_proj``.
@@ -831,17 +855,21 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         cos: ttnn.Tensor,
         neg_sin: ttnn.Tensor,
         sdpa_cur_pos: ttnn.Tensor | None = None,
+        paged: PagedLayerView | None = None,
+        sliding_window: int | None = None,
     ) -> ttnn.Tensor:
         """Fused SDPA-decode + output RoPE + grouped output projection.
 
         Shared tail of :meth:`decode` / :meth:`decode_static`: ``q`` ``[B,1,H,Dh]``,
-        the shared K==V ``kv`` ``[B,1,Skv,Dh]`` and either ``sdpa_cur_pos`` or the
-        additive ``mask`` ``[1,1,1,Skv]`` -> the block's hidden output ``[B,1,1,D]``.
-        ``kv`` is the layer's persistent buffer, updated in place; the only
-        per-path difference is where ``mask`` / ``sdpa_cur_pos`` come from (host-built
-        for eager, device-generated for the traced path).
+        the shared K==V ``kv`` ``[B,1,Skv,Dh]`` (or ``paged``'s block pool) and either
+        ``sdpa_cur_pos`` or the additive ``mask`` ``[1,1,1,Skv]`` -> the block's hidden
+        output ``[B,1,1,D]``. ``kv`` is the layer's persistent buffer, updated in place;
+        the only per-path difference is where ``mask`` / ``sdpa_cur_pos`` come from
+        (host-built for eager, device-generated for the traced path).
         """
-        attn = self._sdpa_decode(q, kv, mask, cur_pos=sdpa_cur_pos)  # [B, 1, H, Dh]
+        attn = self._sdpa_decode(
+            q, kv, mask, cur_pos=sdpa_cur_pos, paged=paged, sliding_window=sliding_window
+        )  # [B, 1, H, Dh]
         attn = _apply_rope(attn, cos, neg_sin, self.rot, self.rope_dim)
         return self._grouped_output(attn)  # already [B, 1, H, Dh] for the grouped proj
 
@@ -891,14 +919,13 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         scache: "_StaticLayerCache",
         sliding_pos: ttnn.Tensor,
         compress_pos: ttnn.Tensor,
-        paged_sliding_pool: ttnn.Tensor | None = None,
-        page_table: ttnn.Tensor | None = None,
+        paged: PagedLayerView | None = None,
         pool_compressor: bool = True,
         sdpa_cur_pos: ttnn.Tensor | None = None,
         win_slot: ttnn.Tensor | None = None,
         win_row: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
-        """Single-token decode attention against the paged in-place ``scache``.
+        """Single-token decode attention against the in-place ``scache`` (or ``paged``).
 
         Same as :meth:`decode_static`; the eager model path builds ``mask`` and the
         position tensors on host while the traced path generates them on device.
@@ -914,8 +941,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             scache,
             sliding_pos,
             compress_pos,
-            paged_sliding_pool=paged_sliding_pool,
-            page_table=page_table,
+            paged=paged,
             pool_compressor=pool_compressor,
             sdpa_cur_pos=sdpa_cur_pos,
             win_slot=win_slot,
@@ -934,8 +960,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         scache: "_StaticLayerCache",
         sliding_pos: ttnn.Tensor,
         compress_pos: ttnn.Tensor,
-        paged_sliding_pool: ttnn.Tensor | None = None,
-        page_table: ttnn.Tensor | None = None,
+        paged: PagedLayerView | None = None,
         pool_compressor: bool = True,
         sdpa_cur_pos: ttnn.Tensor | None = None,
         win_slot: ttnn.Tensor | None = None,
@@ -943,10 +968,12 @@ class DeepSeekV4Attention(DeepSeekV4Module):
     ) -> ttnn.Tensor:
         """Trace-safe single-token decode against fixed-size in-place caches.
 
-        When ``paged_sliding_pool`` and ``page_table`` are set and this is a
-        sliding-attention layer, K=V is stored in the shared paged pool (block
-        size 64) and attention uses ``paged_scaled_dot_product_attention_decode``.
-        CSA/HCA layers keep the ring buffer + compressor path with per-user caches.
+        ``paged`` replaces the layer's dense KV buffer (``scache.sliding`` /
+        ``scache.combined``) with a shared block pool read through the active
+        session's page table, which is what lets several sessions share one captured
+        trace (see :mod:`.paged_cache`). The compressor's own window buffers stay in
+        ``scache`` either way -- they are small enough to be swapped per session
+        outside the trace.
 
         ``pool_compressor`` selects whether this step closes (and so pools) a
         compressor window; it is ignored by sliding layers. On CSA/HCA layers
@@ -960,34 +987,42 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         """
         q, kv_new = self._qkv(hidden, cos, sin)  # q [1,1,H,Dh], kv_new [1,1,1,Dh]
 
-        use_paged_sliding = (
-            paged_sliding_pool is not None and page_table is not None and self.layer_type == "sliding_attention"
-        )
-
-        if use_paged_sliding:
-            _update_cache_at(paged_sliding_pool, kv_new, compress_pos, page_table=page_table)
-            attn = self._sdpa_paged_sliding(q, paged_sliding_pool, page_table, compress_pos, self.config.sliding_window)
-            attn = _apply_rope(attn, cos, neg_sin, self.rot, self.rope_dim)
-            return self._grouped_output(attn)
-
         if self.compressor is None:
+            # The KV axis is the sliding ring alone. Paged: the *absolute* position,
+            # which ``paged.position_modulo`` wraps into the bounded ring, read in causal
+            # mode so the kernel honours ``cur_pos`` -- non-causal ignores it and walks
+            # the whole (wrapped) capacity, double-counting the tail. Dense: the ring
+            # slot, with the additive mask hiding the not-yet-written slots.
+            if paged is not None:
+                _update_cache_at(None, kv_new, compress_pos, paged=paged)
+                return self._attend(
+                    q,
+                    None,
+                    None,
+                    cos,
+                    neg_sin,
+                    sdpa_cur_pos=compress_pos,
+                    paged=paged,
+                    sliding_window=self.config.sliding_window,
+                )
             _update_cache_at(scache.sliding, kv_new, sliding_pos)
-            kv = scache.sliding  # [1, 1, window, Dh] (updated in place)
-        else:
-            # One buffer holds both regions of the attention axis, so there is no
-            # per-step concat: the ring slot ``pos % window`` lands in the prefix and
-            # each pooled entry is appended after it at row ``window + w``.
-            kv = scache.combined  # [1, 1, window + n_win, Dh] (updated in place)
-            _update_cache_at(kv, kv_new, sliding_pos)
-            self.compressor.decode_static(
-                hidden,
-                cos_win,
-                sin_win,
-                scache,
-                kv,
-                win_slot,
-                win_row=win_row,
-                pool=pool_compressor,
-            )
-        print(f"kv shape: {kv.shape} on layer {self.layer_idx}")
-        return self._attend(q, kv, mask, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos)
+            return self._attend(q, scache.sliding, mask, cos, neg_sin)
+
+        # One KV axis holds both regions, so there is no per-step concat: the ring slot
+        # ``pos % window`` lands in the prefix and each pooled entry is appended after
+        # it at row ``window + w``. Both indices are pre-wrapped, so the paged reads
+        # need no ``cache_position_modulo``.
+        kv = None if paged is not None else scache.combined  # [1, 1, window + n_win, Dh]
+        _update_cache_at(kv, kv_new, sliding_pos, paged=paged)
+        self.compressor.decode_static(
+            hidden,
+            cos_win,
+            sin_win,
+            scache,
+            kv,
+            win_slot,
+            win_row=win_row,
+            pool=pool_compressor,
+            paged=paged,
+        )
+        return self._attend(q, kv, mask, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos, paged=paged)
