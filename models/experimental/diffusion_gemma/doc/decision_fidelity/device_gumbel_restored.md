@@ -128,6 +128,68 @@ Note a real trade-off visible at 16K: truncation goes to 0%, but the collapse ra
 8192/12 blocks vs ~43% at 16K/60 blocks) because a larger budget gives the NON-CONVERGED mode far
 more blocks in which to churn. Raising the context is not free until #48291 is addressed.
 
+## 7. CORRECTION: the residual was MoE math fidelity, not an untouchable ceiling
+
+An earlier revision of this document attributed the NON-CONVERGED collapses to #48291 and called
+HiFi4 a narrowing that "does not close" it. **That was wrong**, and the single-variable control says
+so unambiguously. Same prompt (q007), same seed, same reveal span, same traced up-front path, same
+noise mode -- only `DG_SPARSE_MOE_HIFI4` differs:
+
+| block 0 of q007 | HiFi2 | HiFi4 |
+| --- | --- | --- |
+| steps run | 48 | **30** |
+| halted | **False** | **True** |
+| blocking gate | both | none |
+| final mean entropy | **2.4278** | **0.0035** |
+| positions still flipping | **109 / 256** | **0** |
+| blocks emitted | 1 (guard refused block 0) | 4, clean |
+
+The reveal span is not involved: block 0 is bit-identical at spans 2048 / 4096 / 8192 / 16384
+(steps=30, H_final=0.003495, mismatch=0 at all four). The earlier misreading was mine, not the
+data's -- the HiFi4 arm's q007 run emitted 8 blocks and I recorded that the guard fired without
+checking that it had fired at block 9 rather than at block 0.
+
+### HiFi4 is not uniformly better, and the reason matters
+
+| block 0 | HiFi2 | HiFi4 |
+| --- | --- | --- |
+| q007 | 48 steps, not halted, mismatch 109 | **30 steps, halted, mismatch 0** |
+| q012 | 45 steps, halted, mismatch 0 | **48 steps, not halted, mismatch 12** |
+| q013 | 16 steps, halted | 18 steps, halted |
+
+q012 was converging on step 45 of 48 -- three steps from failure. HiFi4 changes the numerical
+trajectory, so it rescues a block whose gap was large and tips over a block that was already on the
+edge. **Many blocks land right at the step cap**, which is why any perturbation flips some of them
+in either direction. Judging a fidelity change on one prompt is therefore not safe; it needs a set.
+
+### More steps do not rescue the plateau cases
+
+Run eagerly with the cap raised to 96 (the eager path is not bound by the trace's K=48):
+
+* q007 halts at **34** steps, accepted positions climbing 1 -> 252 of 256;
+* q012 does **not** halt at 96 either. Its accepted count plateaus at ~183-195 of 256 from step ~75
+  onward and stops improving, so ~60 positions never clear the entropy budget and the mean entropy
+  floors at 0.183 -- 36x the 0.005 bar.
+
+So q012 is not a "needs a few more steps" case: the entropy-bound rule reaches a fixed point that
+leaves a subset of positions permanently uncertain. Raising the traced K would spend time for
+nothing on this class.
+
+### What the reference does with the same prompts
+
+| | CUDA reference | TT under HiFi4 |
+| --- | --- | --- |
+| q007 | answers C, correct, 7596 tokens | block 0 converges in 30-34 steps |
+| q012 | @8192 hits the cap with no answer; @16384 answers A, correct, 8357 tokens | block 0 does not converge at 96 |
+| q013 | answers D (wrong, gold B) | block 0 converges |
+
+Note what the reference does NOT have: a guard. At its own cap it commits the unsettled positions
+anyway, shipping a canvas with some uncertain tokens rather than stopping -- which is what the 22.2%
+tail-repetition rate in section 4 is. So the difference on TT is not that positions stay uncertain,
+it is that the uncertain ones collapse onto ONE token and form a wall, which the guard then refuses.
+Noise is ruled out as the cause of that collapse (fresh noise reproduces it byte-for-byte), so what
+still distinguishes TT is the logits distribution over those unsettled positions.
+
 ## 6. Reproduce
 
 ```bash
