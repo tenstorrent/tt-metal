@@ -357,13 +357,20 @@ def test_attention_real_weights_decode(
     print("seq_len: ", seq_len)
     for pos in range(seq_len):
         cos_d, sin_d, neg_sin_d = _rope_rows(bundle["cos_q"][pos : pos + 1], bundle["sin_q"][pos : pos + 1], device)
-        cos_win_d = sin_win_d = None
+        cos_win_d = sin_win_d = win_slot = win_row = None
+        pool = False
         print("pos: ", pos)
         if is_compressor:
-            n_win_cap = seq_len // cr
-            cw, sw = make_rope_table(bundle["cos_win"][:n_win_cap], bundle["sin_win"][:n_win_cap])
+            # Incremental pooling: this token fills slot ``pos % cr`` of the one-window
+            # buffer, and only a step that closes window ``wi`` pools it into row
+            # ``sliding_window + wi`` (RoPE'd at that window's own row).
+            wi = max((pos + 1) // cr - 1, 0)
+            pool = (pos + 1) % cr == 0
+            cw, sw = make_rope_table(bundle["cos_win"][wi : wi + 1], bundle["sin_win"][wi : wi + 1])
             cos_win_d = _to_tt(cw, device)
             sin_win_d = _to_tt(sw, device)
+            win_slot = int32_pos_tensor(pos % cr, device)
+            win_row = int32_pos_tensor(cfg.sliding_window + wi, device)
 
         mask = host_decode_mask(cfg.sliding_window, layer_type, cr, pos, seq_len, device)
         out_tt = attn.decode(
@@ -377,6 +384,9 @@ def test_attention_real_weights_decode(
             kv_cache,
             int32_pos_tensor(pos % cfg.sliding_window, device),
             int32_pos_tensor(pos, device),
+            pool_compressor=pool,
+            win_slot=win_slot,
+            win_row=win_row,
         )
         if pos < split:
             continue  # seeding the cache; no reference row to compare yet
