@@ -70,6 +70,22 @@ void kernel_main() {
     // count mismatches. Correctness/integrity gate (Phase 1.1). Default on; a perf sweep may disable it
     // (the bit-serial CRC is ~224 ops/frame -- Phase 3 can table/HW-offload it).
     const uint32_t crc_check = get_arg_val<uint32_t>(10);
+    // Phase 1.2a: SEND / SEND_IMM -> RxWqeRing publish. When send_ring_base != 0, a SEND lands as a
+    // ring slot (host-sdk §3 format: 32B slot header + payload) at get_noc_addr(sr_x, sr_y, ring_base +
+    // slot*SLOT_BYTES), slot = prod_idx % send_ring_slots, then the producer index at sr_prodidx is
+    // bumped (host polls it — the completion). The productized target is a host hugepage (NoC->PCIe);
+    // this first cut lands on a NoC-addressable core (Tensix L1) to prove byte-exact SEND delivery +
+    // completion. send_ring_base == 0 -> SEND is only counted (unchanged; keeps the WRITE/streaming tests).
+    const uint32_t sr_x = get_arg_val<uint32_t>(11);
+    const uint32_t sr_y = get_arg_val<uint32_t>(12);
+    const uint32_t sr_base = get_arg_val<uint32_t>(13);
+    const uint32_t sr_slots = get_arg_val<uint32_t>(14);
+    const uint32_t sr_prodidx = get_arg_val<uint32_t>(15);
+    const bool use_send_ring = (sr_base != 0);
+    constexpr uint32_t TT_RXWQE_SLOT_BYTES = 1536u;  // host-sdk §3: 64 slots x 1536 B
+    constexpr uint32_t TT_RXWQE_PAYLOAD_OFF = 0x20u;
+    constexpr uint32_t TT_RXWQE_OWNED_BY_HOST = (1u << 8);  // flags byte at slot+0x14, bit0 (word bit8)
+    uint32_t sr_prod = 0;
 
     volatile tt_l1_ptr uint32_t* hb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hb_addr);
     volatile tt_l1_ptr uint32_t* stats = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stats_addr);
@@ -127,6 +143,46 @@ void kernel_main() {
 
             if (op == TT_OP_SEND || op == TT_OP_SEND_IMM) {
                 ++n_send;
+                if (use_send_ring) {
+                    // Publish this SEND as one RxWqeRing slot (host-sdk §3). One in-flight slot at a
+                    // time (barrier per stage) — correctness-first; the productized path pipelines.
+                    const uint32_t slot = sr_prod % sr_slots;
+                    const uint32_t slot_base = sr_base + slot * TT_RXWQE_SLOT_BYTES;
+                    const uint32_t src_off = (read_pos + TT_RDMA_HDR_BYTES) % rx_buf_size;
+                    const uint32_t pay_dst = slot_base + TT_RXWQE_PAYLOAD_OFF;
+                    if (len > 0) {  // payload -> slot+0x20 (straddle-split at the ring wrap)
+                        if (src_off + len <= rx_buf_size) {
+                            noc_async_write(rx_buf + src_off, get_noc_addr(sr_x, sr_y, pay_dst), len);
+                        } else {
+                            const uint32_t first = rx_buf_size - src_off;
+                            noc_async_write(rx_buf + src_off, get_noc_addr(sr_x, sr_y, pay_dst), first);
+                            noc_async_write(rx_buf, get_noc_addr(sr_x, sr_y, pay_dst + first), len - first);
+                        }
+                    }
+                    noc_async_write_barrier();  // payload commits before header (host-sdk: OWNED written last)
+                    // Stage the 32B slot header + prod_idx in LOCAL L1 scratch (TX_BUF0, idle during RX):
+                    // noc_async_write needs its source in the RDMA L1 region, NOT the RISC stack (a stack
+                    // source silently does not land — proven on silicon: payload landed, stack header did not).
+                    volatile tt_l1_ptr uint32_t* sh =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(TT_RDMA_TX_BUF0_ADDR);
+                    sh[0] = hw[2];                           // peer_seq
+                    sh[1] = len;                             // length
+                    sh[2] = (op & 0xFFu);                    // opcode | status(0)<<8
+                    sh[3] = hw[6];                           // immediate (SEND_IMM)
+                    sh[4] = (hw[0] >> 16) & 0xFFFFu;         // cookie <- tag
+                    sh[5] = 0xFFu | TT_RXWQE_OWNED_BY_HOST;  // mr_idx=0xFF | flags=OWNED_BY_HOST
+                    sh[6] = 0u;
+                    sh[7] = 0u;
+                    noc_async_write(TT_RDMA_TX_BUF0_ADDR, get_noc_addr(sr_x, sr_y, slot_base), 32u);
+                    noc_async_write_barrier();
+                    ++sr_prod;  // bump producer index (host polls this = the completion)
+                    volatile tt_l1_ptr uint32_t* pi_scratch =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(TT_RDMA_TX_BUF0_ADDR + 0x40u);
+                    *pi_scratch = sr_prod;
+                    noc_async_write(TT_RDMA_TX_BUF0_ADDR + 0x40u, get_noc_addr(sr_x, sr_y, sr_prodidx), 4u);
+                    noc_async_write_barrier();
+                    ++n_write_ok;  // reuse write_ok as the "delivered to a NoC target" counter
+                }
             } else if (op == TT_OP_WRITE || op == TT_OP_WRITE_IMM) {
                 ++n_write;
                 const uint32_t slot = rkey >> 24;  // rkey = (slot<<24)|(rand16<<8)|gen

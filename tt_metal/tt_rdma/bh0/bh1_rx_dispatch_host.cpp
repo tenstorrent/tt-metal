@@ -11,6 +11,7 @@
 //
 //   bh1_rx_dispatch [device_id] [eth_idx|"ext"] [hold_s]
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -106,6 +107,25 @@ int main(int argc, char** argv) {
         verify_addr = 0x20000u;
         mode = "noc-tensix(0,0 L1)";
     }
+
+    // Phase 1.2a SEND-ring mode (noc_target == 3): the kernel publishes SEND frames as RxWqeRing slots
+    // on a Tensix worker's L1 (NoC target = stand-in for the productized host hugepage). We verify slot
+    // bytes + the producer index after the run. WRITE landing is unused in this mode.
+    uint32_t sr_x = 0, sr_y = 0, sr_base = 0, sr_slots = 0, sr_prodidx = 0;
+    constexpr uint32_t kSlotBytes = 1536u;
+    CoreCoord sr_core = eth_phys;
+    if (noc_target == 3) {
+        const CoreCoord w = device->worker_core_from_logical_core(CoreCoord{0, 0});
+        sr_core = w;
+        sr_x = (uint32_t)w.x;
+        sr_y = (uint32_t)w.y;
+        sr_base = 0x30000u;                             // ring base on the worker L1
+        sr_slots = 8u;                                  // small ring for the test
+        sr_prodidx = 0x30000u + sr_slots * kSlotBytes;  // prod_idx just past the slots
+        mode = "send-ring(tensix 0,0 L1)";
+        std::printf(
+            "  SEND-ring: core(%u,%u) base 0x%x slots %u prodidx 0x%x\n", sr_x, sr_y, sr_base, sr_slots, sr_prodidx);
+    }
     std::printf(
         "  WRITE target mode=%s  noc=(%u,%u)+0x%x  verify @core(%u,%u):0x%x\n",
         mode,
@@ -124,6 +144,11 @@ int main(int argc, char** argv) {
     cluster.write_core(device->id(), verify_core, zeros, verify_addr);
     std::vector<uint32_t> zstats(9, 0u);
     cluster.write_core(device->id(), eth_phys, zstats, (uint32_t)stats_addr);
+    // Clear the SEND ring + prod_idx on its core.
+    if (noc_target == 3) {
+        std::vector<uint32_t> zring((sr_slots * kSlotBytes) / 4 + 4, 0u);
+        cluster.write_core(device->id(), sr_core, zring, sr_base);
+    }
 
     Program program = CreateProgram();
     const EthernetConfig cfg{.noc = NOC::NOC_1, .processor = DataMovementProcessor::RISCV_1};
@@ -143,7 +168,12 @@ int main(int argc, char** argv) {
          noc_x,
          noc_y,
          noc_base,
-         crc_check});
+         crc_check,
+         sr_x,
+         sr_y,
+         sr_base,
+         sr_slots,
+         sr_prodidx});
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
@@ -170,17 +200,63 @@ int main(int argc, char** argv) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 
-    // Verify the WRITE landing (on the resolved target core): first 8 bytes should be "TTWR" + 0x04..0x07.
-    auto land = cluster.read_core<uint32_t>(device->id(), verify_core, verify_addr, 4 * sizeof(uint32_t));
-    std::printf(
-        "  WRITE landing @core(%u,%u):0x%x [0..3] = %08x %08x %08x %08x  (word0 'TTWR' = 0x52575454)\n",
-        (unsigned)verify_core.x,
-        (unsigned)verify_core.y,
-        verify_addr,
-        land[0],
-        land[1],
-        land[2],
-        land[3]);
+    if (noc_target == 3) {
+        // SEND-ring verification: read prod_idx + each populated slot; assert per-slot header fields and
+        // byte-exact payload ("TTWR" + 0x04..). prod_idx is the completion count the host would consume.
+        auto pi = cluster.read_core<uint32_t>(device->id(), sr_core, sr_prodidx, sizeof(uint32_t));
+        const uint32_t prod = pi.empty() ? 0u : pi[0];
+        std::printf("  SEND-ring prod_idx = %u (delivered SEND slots)\n", prod);
+        // Diagnostic: always dump slot 0 header + payload, regardless of prod_idx.
+        {
+            auto h0 = cluster.read_core<uint32_t>(device->id(), sr_core, sr_base, 8 * sizeof(uint32_t));
+            auto p0 = cluster.read_core<uint32_t>(device->id(), sr_core, sr_base + 0x20u, 4 * sizeof(uint32_t));
+            std::printf(
+                "  [diag] slot0 hdr = %08x %08x %08x %08x %08x %08x  pay = %08x %08x\n",
+                h0[0],
+                h0[1],
+                h0[2],
+                h0[3],
+                h0[4],
+                h0[5],
+                p0[0],
+                p0[1]);
+        }
+        const uint32_t nshow = std::min<uint32_t>(prod, sr_slots);
+        uint32_t ok = 0;
+        for (uint32_t s = 0; s < nshow; ++s) {
+            const uint32_t slot_base = sr_base + s * kSlotBytes;
+            auto hdr = cluster.read_core<uint32_t>(device->id(), sr_core, slot_base, 8 * sizeof(uint32_t));
+            auto pay = cluster.read_core<uint32_t>(device->id(), sr_core, slot_base + 0x20u, 2 * sizeof(uint32_t));
+            const uint32_t opcode = hdr[2] & 0xFFu;
+            const bool owned = (hdr[5] & 0x100u) != 0u;
+            const bool paylo = (pay[0] == 0x52575454u);  // 'TTWR'
+            const bool good = owned && (opcode == TT_OP_SEND || opcode == TT_OP_SEND_IMM) && paylo;
+            ok += good ? 1u : 0u;
+            std::printf(
+                "    slot %u: seq=%u len=%u op=0x%02x owned=%d cookie=%u pay[0]=%08x %s\n",
+                s,
+                hdr[0],
+                hdr[1],
+                opcode,
+                owned ? 1 : 0,
+                hdr[4],
+                pay[0],
+                good ? "OK" : "BAD");
+        }
+        std::printf("  SEND-ring: %u/%u shown slots byte-exact (word0 'TTWR' = 0x52575454)\n", ok, nshow);
+    } else {
+        // Verify the WRITE landing (on the resolved target core): first 8 bytes should be "TTWR" + 0x04..0x07.
+        auto land = cluster.read_core<uint32_t>(device->id(), verify_core, verify_addr, 4 * sizeof(uint32_t));
+        std::printf(
+            "  WRITE landing @core(%u,%u):0x%x [0..3] = %08x %08x %08x %08x  (word0 'TTWR' = 0x52575454)\n",
+            (unsigned)verify_core.x,
+            (unsigned)verify_core.y,
+            verify_addr,
+            land[0],
+            land[1],
+            land[2],
+            land[3]);
+    }
 
     const std::vector<uint32_t> stop_val{1u};
     cluster.write_core(device->id(), eth_phys, stop_val, TT_RDMA_STOP_ADDR);

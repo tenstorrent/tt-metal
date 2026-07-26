@@ -84,6 +84,12 @@ No opcode left behind; every path tested + error-handled.
   on-silicon bit-order/init calibration pass (see tt-rdma-rx-dispatch-spec §9).
 - **1.2 SEND / SEND_IMM** → host RxWqeRing (NoC→PCIe push to a hugepage ring), completion to the host;
   test byte-exact delivery + CQE.
+  - **1.2a Done (on-core).** SEND/SEND_IMM publish an RxWqeRing slot (host-sdk §3: 32B header + payload,
+    `OWNED_BY_HOST` last) to a NoC-addressable core (Tensix L1) + bump a producer index (the completion).
+    Byte-exact on silicon, regression **T6** (prod_idx=20, 8/8 slots `TTWR`-exact). Kernel gotcha fixed:
+    `noc_async_write` source must be RDMA-L1, not the RISC stack (stage header/prod_idx in TX_BUF0 scratch).
+  - **1.2b Pending.** Swap the ring target to a host hugepage (NoC→PCIe), map it + resolve its NoC address
+    on the host SDK side, and raise the host-visible CQE.
 - **1.3 READ_REQ / READ_RESP** — target-side READ handler (NoC read from MR → RESP frame via TXQ),
   initiator correlation; round-trip byte-exact test.
 - **1.4 ACK (0x40)** reception + cumulative-ACK accounting (pairs with Phase 2 reliability).

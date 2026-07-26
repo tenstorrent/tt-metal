@@ -176,8 +176,14 @@ the real fix is **PFC (BH.6)** to keep the sender ≤ drain, staying in the loss
 
 ## 9. Open questions / follow-ups
 
-- **SEND landing** — currently counted only; the real path DMA-pushes SEND payloads to the host
-  RxWqeRing (host hugepage via NoC→PCIe). Not yet built.
+- **SEND landing** — **Done (1.2a, on-core → NoC target).** SEND/SEND_IMM now publish an `RxWqeRing`
+  slot (host-sdk §3 format: 32B slot header + payload, `OWNED_BY_HOST` written after the payload commits)
+  and bump a producer index the host polls. Validated byte-exact on silicon (regression T6: prod_idx +
+  8/8 slots `TTWR`-exact). The ring target is a NoC-addressable core (Tensix L1) — the productization
+  swap to a **host hugepage (NoC→PCIe)** is 1.2b (needs host hugepage mapping + its NoC address).
+  Gotcha found + fixed: `noc_async_write` source MUST be in the RDMA L1 region — a **RISC-stack source
+  silently does not land** (payload from `rx_buf` landed; a stack-array header did not). The publish
+  stages the slot header + prod_idx in L1 scratch (TX_BUF0) before the NoC write.
 - **CRC-32 validation** — **Done (SW).** The header `header_cksum` (CRC-32, poly 0x04C11DB7 =
   reflected 0xEDB88320) is validated on RX; mismatches are dropped + counted (`crc_err`). The kernel
   computes it bit-serially today. **Measured cost (2026-07-26, DPU sender, eSwitch-bypassed):** the

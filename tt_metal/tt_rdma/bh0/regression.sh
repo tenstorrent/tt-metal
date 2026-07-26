@@ -74,6 +74,21 @@ if wait_up "$OUT"; then
   [ "${cerr:-0}" -ge 30 ] && [ "${wok:-1}" = 0 ] && pass "RX CRC drop (crc_err=$cerr, write_ok=$wok)" || fail "RX CRC drop (crc_err=${cerr:-0}, write_ok=${wok:-?})"
 else fail "RX kernel did not come up (T5)"; kill $DPID 2>/dev/null; fi
 
+echo "== T6: RX SEND -> RxWqeRing publish (byte-exact slots + producer index) =="
+OUT=$D/rx4.txt
+timeout 115 "$BIN/bh1_rx_dispatch" 1 ext 8 1 1 3 1 >"$OUT" 2>&1 &   # noc_target=3 (SEND-ring)
+DPID=$!
+if wait_up "$OUT"; then
+  sudo -n "$ALLOW" $P0 20 $DMAC 0x1af6 0x01 256 0 0 >/dev/null 2>&1   # 20 SEND frames, distinct seqs
+  wait $DPID
+  prod=$(grep "prod_idx =" "$OUT" | tail -1 | grep -oE 'prod_idx = [0-9]+' | grep -oE '[0-9]+')
+  bx=$(grep "shown slots byte-exact" "$OUT" | tail -1)   # "SEND-ring: N/M shown slots byte-exact"
+  n=$(echo "$bx" | grep -oE '[0-9]+/[0-9]+' | cut -d/ -f1); m=$(echo "$bx" | grep -oE '[0-9]+/[0-9]+' | cut -d/ -f2)
+  [ "${prod:-0}" -ge 20 ] && [ "${m:-0}" -gt 0 ] && [ "${n:-0}" = "${m:-1}" ] \
+    && pass "RX SEND-ring (prod_idx=$prod, $n/$m slots byte-exact)" \
+    || fail "RX SEND-ring (prod_idx=${prod:-0}, ${n:-0}/${m:-0} byte-exact)"
+else fail "RX kernel did not come up (T6)"; kill $DPID 2>/dev/null; fi
+
 echo "======================================================"
 echo "REGRESSION: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ] && { echo "== ALL GREEN =="; exit 0; } || { echo "== FAILURES =="; exit 1; }
