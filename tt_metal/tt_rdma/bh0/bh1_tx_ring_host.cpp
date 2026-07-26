@@ -13,18 +13,16 @@
 // It also reads back each rail's TXQ packet-counter snapshots (PKT_START/PKT_END/WORD/STATUS,
 // before vs after the run) to diagnose egress (tx-ring-spec §11):
 //   - PKT_START delta == 0            -> command accepted but no packet ever started (source-fetch /
-//                                        MAX_PKT / framing). Try max_pkt=0 and/or risc_touch=1.
+//                                        MAX_PKT / framing).
 //   - PKT_START moves, PKT_END/WORD 0 -> starts but stalls mid-drain.
 //   - all three move                  -> HW is transmitting.
 //
 //   bh1_tx_ring [device] [eth_idx|"ext"] [dst_mac] [ring_size] [payload_len] [hold_s] [max_pkt] [txq]
-//   [pace] [payload_base] [risc_touch]
+//   [pace] [payload_base]
 //
-// Two experiments to isolate an egress issue (tx-ring-spec §11):
-//   max_pkt=0    : arg[7]=0 -> don't set ETH_TXQ_MAX_PKT_SIZE_BYTES (note: MAX_PKT is STICKY across
-//                  runs — the register keeps the previous value if not written).
-//   risc_touch=1 : arg[11]=1 -> kernel RISC-writes the header line before each arm (red herring; can
-//                  hang — its send_raw busy-waits a stuck CMD_ONGOING).
+// NB MAX_PKT is STICKY across runs (the register keeps the previous value if not written): always pass
+// max_pkt explicitly (<= the wire egress ceiling). `pace` spins between arms — raw START_RAW has no deep
+// accept-ahead FIFO, so arming faster than the TXQ drains wedges it; pace to the sustainable rate.
 
 #include <chrono>
 #include <cstdio>
@@ -73,7 +71,6 @@ int main(int argc, char** argv) {
     const uint32_t txq = (argc > 8) ? std::strtoul(argv[8], nullptr, 0) : 2u;
     const uint32_t pace = (argc > 9) ? std::strtoul(argv[9], nullptr, 0) : 0u;  // spin between arms
     const uint32_t payload_base = (argc > 10) ? std::strtoul(argv[10], nullptr, 0) : TT_RDMA_WQE_PAYLOAD_ADDR;
-    const uint32_t risc_touch = (argc > 11) ? std::strtoul(argv[11], nullptr, 0) : 0u;  // 1 = RISC-touch source
 
     const uint32_t frame_len = TT_RDMA_HDR_BYTES + payload_len;
     const uint32_t slot_stride = (frame_len + 15u) & ~15u;  // 16-B aligned slots
@@ -161,8 +158,7 @@ int main(int argc, char** argv) {
              dmac_hi,
              dmac_lo,
              pace,
-             payload_base,
-             risc_touch});
+             payload_base});
     }
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();

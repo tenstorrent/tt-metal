@@ -46,9 +46,17 @@ phase inherits manual bench fragility.
   T4 RX streaming lossless (BUF_WRAP, bad==0). Uses 256B host-sender frames so correctness gates don't
   depend on jumbo/DPU state. Runs green (5/5) on the rig. TODO: add TX-aggregate (2-rail), jumbo-both-ways,
   and RX-ceiling perf assertions (perf tests, separate from correctness); fold into a `make test` target.
-- **0.3 Close known rough edges.** `risc_touch` hang (remove or guard), TX `pace`→real accept-ahead
-  (characterize the unpaced wedge, replace the spin-pace), RX resync-on-lap tuned + counted, all the
-  "uncommitted diagnostic" tooling either committed clean or removed.
+- **0.3 Close known rough edges. ✅ mostly DONE.**
+  - **`risc_touch` removed** from the TX ring kernel + host — it was a diagnostic red herring that hangs
+    the TXQ (busy-waits a stuck `CMD_ONGOING`); a footgun that must not ship. TX egress re-verified after
+    removal (no regression). The useful TXQ counter snapshots are kept.
+  - **TX `pace` = the required raw-mode rate-limit, not a hack.** Raw `START_RAW` has no deep accept-ahead
+    FIFO; over-arming sticks `CMD_ONGOING` and wedges the TXQ (needs a board reset — §11). `pace` throttles
+    to the sustainable arm rate; the safe operating point (pace ≥ 100, line rate with MAX_PKT split) is
+    validated. Deliberately NOT re-triggering the wedge to "characterize" it — it's understood and
+    documented; a deeper HW fix (why `CMD_ONGOING` sticks) is a future investigation, not a bench reset now.
+  - **RX resync-on-lap** counts lap events (`n_bad`) and degrades gracefully — done in the RX-ceiling work.
+  - Diagnostic tooling is committed clean (counter snapshots) or removed (`risc_touch`).
 - **0.4 CI wiring.** The regression harness runs on a labeled bench runner (nightly/on-PR where HW is
   available); a HW-less subset (golden vectors, header self-tests, builds) runs on every PR.
 
