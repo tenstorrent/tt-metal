@@ -207,9 +207,12 @@ def run_reduce_scatter_impl(
             # a BF16 1,024-wide gate, then flattens them to its K-shard.
             heads_per_device, value_dim = 8, 128
             assert mm_weights_shape[2] == num_devices * heads_per_device * value_dim
-            rms_input = torch.rand(num_devices * heads_per_device, rs_input_shape[2], value_dim)
+            # KDA's recurrence and learned RMS scale both emit signed FP32
+            # values.  Keep this producer test signed so Line MRS covers the
+            # actual output-projection value domain, not only a positive one.
+            rms_input = torch.randn(num_devices * heads_per_device, rs_input_shape[2], value_dim)
             gate = torch.rand(1, rs_input_shape[2], mm_weights_shape[2]).bfloat16()
-            rms_weight = torch.rand(1, 1, 1, value_dim).bfloat16()
+            rms_weight = torch.randn(1, 1, 1, value_dim).bfloat16()
             gate_by_device = torch.chunk(gate, num_devices, 2)
             input_tensors = []
             for device_index, device_heads in enumerate(torch.chunk(rms_input, num_devices, 0)):
