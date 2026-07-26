@@ -86,7 +86,19 @@ TensorSpec Conv2dDeviceOperation::compute_output_specs(
         // and the +1 shard row broke the strict emulator sharded readback. Shard = exact M x full_K.
         std::array<uint32_t, 2> shard_shape = {
             m_ntiles * tt::constants::TILE_HEIGHT, k_ntiles * tt::constants::TILE_WIDTH};
-        auto shard_grid = in_mem.shard_spec().value().grid;
+        // [#48552 Stage2] For a BLOCK_SHARDED conv, Program B's 2D matmul requires in0 (this tilized activation)
+        // on a SINGLE COLUMN of the grid (matmul_device_operation.cpp:1572 start.x==end.x); it then mcasts in0
+        // across the N-split columns. in0 needs FULL K per core regardless, so place it HEIGHT_SHARDED on
+        // column 0 with num_cores_nhw rows (= the M split), NOT the full 2D grid. Height-sharded convs keep
+        // their existing grid.
+        tt::tt_metal::CoreRangeSet shard_grid;
+        if (in_mem.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+            const auto bbox = in_mem.shard_spec().value().grid.bounding_box();
+            shard_grid = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(
+                bbox.start_coord, CoreCoord(bbox.start_coord.x, bbox.start_coord.y + num_cores_nhw - 1)));
+        } else {
+            shard_grid = in_mem.shard_spec().value().grid;
+        }
         auto shard_spec = tt::tt_metal::ShardSpec{shard_grid, shard_shape, in_mem.shard_spec().value().orientation};
         auto mem_config =
             tt::tt_metal::MemoryConfig(TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, shard_spec);
