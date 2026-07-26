@@ -2195,6 +2195,22 @@ def optimize_pipeline(
     _capture_board_topology()  # snapshot chip->board reset map while the device is healthy (reset-only)
     cfg = _mcp_config(repo_root, manifest_path, pipe, devices, kernel_log)
     _cov_env = cfg["mcpServers"]["perf-mcp"]["env"]
+    # Discover the model's depth knob BEFORE the first probe, not inside it. The probe asks for ALL
+    # layers by REMOVING the cap, and a perf test can fill that straight back in at import time
+    # (os.environ.setdefault("TT_PERF_LAYERS", "2")). The depth guard undoes that, but only if it knows
+    # WHICH variable to drop, and an existing demo may read any name. before_loop.py:569 already
+    # discovers first and passes it down; doing the same here makes both entry points agree and means
+    # even the first probe is guarded. Agent call only -- no device time.
+    _depth_knob = {}
+    try:
+        _mr = _model_root_from_node(repo_root, pipe.get("perf_test"))
+        if _mr is not None:
+            _depth_knob = _llm_depth_env(_mr, 2) or {}
+    except Exception:  # noqa: BLE001
+        _depth_knob = {}
+    if _depth_knob:
+        _cov_env["PERF_MCP_DEPTH_VARS"] = ",".join(sorted(_depth_knob))
+        print(f"  [optimize/cc] depth knob(s): {', '.join(sorted(_depth_knob))}")
     _cov, _cov_facts = _coverage_layers(
         repo_root,
         _cov_env,
@@ -2203,6 +2219,7 @@ def optimize_pipeline(
         pipe.get("case"),
         model_name=model_name,
         config_ref=config_ref,
+        depth_knob=_depth_knob or None,
     )
     if _cov:
         from agent.layer_depth import set_depth as _set_depth

@@ -111,12 +111,22 @@ def full_depth_from_config(model_id: str = "", model_dir=None) -> int | None:
     return None
 
 
+FORCE_ALL = "PERF_MCP_FORCE_ALL_LAYERS"
+
+
 def set_depth(env, depth) -> dict:
     """Express `depth` to a model builder through the mapping `env`.
 
     A positive int caps the build to that many blocks. ANY non-positive or unparseable depth --
     including None and 0 -- means ALL LAYERS and is expressed by DELETING the variable, never by
     writing a sentinel a builder could read as a count.
+
+    Asking for ALL layers also arms the depth guard (PERF_MCP_FORCE_ALL_LAYERS=1), because absence
+    alone is not enough: a perf test can fill the cap back in at import with
+    os.environ.setdefault(...), silently turning "whole model" into a 2-layer build. The flag is set
+    HERE rather than at each call site so no caller can express "all layers" and forget to defend it;
+    the guard itself only acts if the invocation also loads agent/depth_guard_plugin via `-p`.
+    Requesting a positive cap clears the flag, so the tracy slice is never stripped.
     """
     try:
         d = int(depth)
@@ -124,8 +134,10 @@ def set_depth(env, depth) -> dict:
         d = 0
     if d > 0:
         env[ENV] = str(d)
+        env.pop(FORCE_ALL, None)
     else:
         env.pop(ENV, None)
+        env[FORCE_ALL] = "1"
     return env
 
 

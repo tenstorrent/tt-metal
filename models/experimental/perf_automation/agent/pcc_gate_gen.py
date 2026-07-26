@@ -30,6 +30,8 @@ from pathlib import Path
 
 from .layer_depth import set_depth as _set_depth
 
+_DEPTH_GUARD = "models.experimental.perf_automation.agent.depth_guard_plugin"
+
 STALL_LIMIT = int(os.environ.get("PERF_MCP_PCC_GEN_STALL_LIMIT", "3") or "3")
 
 # Emitted by the generated gate; the optimize loop parses exactly this.
@@ -73,7 +75,8 @@ def _run_gate(node: str, repo_root: Path, env=None, timeout=None) -> tuple:
     _set_depth(e, None)  # correctness always runs full depth (cap REMOVED, never sent as 0)
     try:
         r = subprocess.run(
-            [sys.executable, "-m", "pytest", "-o", "addopts=", "-o", "timeout=0", node, "-sv"],
+            # -p depth_guard: correctness must run at FULL depth; see agent/depth_guard_plugin.py
+            [sys.executable, "-m", "pytest", "-p", _DEPTH_GUARD, "-o", "addopts=", "-o", "timeout=0", node, "-sv"],
             cwd=str(repo_root),
             env=e,
             capture_output=True,

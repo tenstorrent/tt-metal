@@ -199,7 +199,9 @@ def main(node: str, case: str | None = None) -> None:
     _install_block_signposts()
     import pytest
 
-    argv = ["-s", "-o", "timeout=0", node]
+    # The probe asks for ALL layers (the caller removed the cap); load the depth guard so a
+    # setdefault in the test module cannot quietly reinstate one before the model is built.
+    argv = ["-s", "-p", "models.experimental.perf_automation.agent.depth_guard_plugin", "-o", "timeout=0", node]
     if case:
         argv += ["-k", case]
     try:

@@ -35,6 +35,8 @@ sys.path.insert(0, str(_PKG))  # the perf_automation dir, so `agent` imports res
 from agent import gitio, perf_target, promote, roofline, router  # noqa: E402
 from agent import integrity as _integrity  # noqa: E402
 from agent.layer_depth import set_depth as _set_depth  # noqa: E402
+
+_DEPTH_GUARD = "models.experimental.perf_automation.agent.depth_guard_plugin"
 from agent.handlers import remeasure as _rm  # noqa: E402
 from agent.measure import measure_runs  # noqa: E402
 from agent.pcc_runner import run_pcc  # noqa: E402
@@ -1625,7 +1627,9 @@ def _run_full_pipeline_ms():
         except (ValueError, TypeError):
             pass
     env.pop("TT_METAL_DEVICE_PROFILER", None)
-    cmd = [sys.executable, "-m", "pytest", "-o", "timeout=0", "-s", node]
+    # -p depth_guard: this gate asks for ALL layers by removing the cap, and a perf test can fill
+    # it back in at import via setdefault. The guard drops it again before the test body builds.
+    cmd = [sys.executable, "-m", "pytest", "-p", _DEPTH_GUARD, "-o", "timeout=0", "-s", node]
     if case:
         cmd += ["-k", case]
     per_tokens = []

@@ -17,6 +17,8 @@ from pathlib import Path
 from . import gitio, probes
 from .layer_depth import set_depth as _set_depth
 
+_DEPTH_GUARD = "models.experimental.perf_automation.agent.depth_guard_plugin"
+
 _PCC_RE = re.compile(r"(?i)pcc[^\n]*?[:=]\s*(-?\d+\.\d+)")
 
 
@@ -142,7 +144,8 @@ def run_pcc(ctx) -> dict:
         env["TT_METAL_VISIBLE_DEVICES"] = str(vd)
     try:
         r = subprocess.run(
-            [sys.executable, "-m", "pytest", "-o", "addopts=", "-o", "timeout=0", test, "-sv"],
+            # -p depth_guard: correctness must run at FULL depth; see agent/depth_guard_plugin.py
+            [sys.executable, "-m", "pytest", "-p", _DEPTH_GUARD, "-o", "addopts=", "-o", "timeout=0", test, "-sv"],
             cwd=str(gitio.repo_root(ctx.model_root())),
             env=env,
             capture_output=True,
