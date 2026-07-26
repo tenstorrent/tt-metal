@@ -533,6 +533,19 @@ Result conv2d_L1(
     const bool force_conv_no_spill = (!arch_is_quasar || split_env_requested) &&
                                      (height_sharded_conv || block_sharded_conv) && !mm_conv && !conv_is_1d_depthwise &&
                                      (kernel_size[0] > 1) && (full_inner_dim_k_ntiles <= kQuasarConvNoSpillMaxKTiles);
+    log_warning(
+        tt::LogOp,
+        "[QSR-SPLIT2 #48552] force_no_spill={} height_sh={} block_sh={} act_block_w(pre)={} full_K={} shard={} "
+        "split_env={} k0={} mm_conv={}",
+        force_conv_no_spill,
+        height_sharded_conv,
+        block_sharded_conv,
+        opt_conv_op_block_config.act_block_w_ntiles,
+        full_inner_dim_k_ntiles,
+        static_cast<int>(parallel_config.shard_scheme),
+        split_env_requested,
+        kernel_size[0],
+        mm_conv);
     if (force_conv_no_spill) {
         opt_conv_op_block_config.act_block_w_ntiles = full_inner_dim_k_ntiles;
         conv_config.full_inner_dim = true;
