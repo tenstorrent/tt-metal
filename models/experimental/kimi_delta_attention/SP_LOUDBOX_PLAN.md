@@ -288,6 +288,16 @@ state-transfer protocol and measure its components.
   ms/call, the interval includes host fences and TP=1 epilogues, and no
   slowest-device replay metric exists for this eager protocol.  It is a
   stable scheduling experiment, not a new LB or Galaxy performance result.
+  The scheduler now uses fixed-address per-rank shadow buffers instead of
+  allocating eight `ttnn.clone` tensors per forward; PCC and two-call reuse
+  remain correct, but its first 3-call eager interval was 60.197 ms/call, so
+  allocation removal is not a measurable win at this granularity.  It is
+  retained as a trace-stability prerequisite.  Mesh events cannot replace the
+  host stage fence: they order command queues at the *same mesh coordinate*,
+  not completion across all eight coordinates; event synchronization is also
+  unsupported during trace capture.  The next real fence-removal target is
+  therefore a custom fused fabric protocol with an explicit cross-rank stage
+  barrier, rather than an event-only Python scheduler.
 * The direct TP=4 output matmul has no safe grid-only win.  An explicit 10x8
   prefill grid passed the full target-shape SP2xTP4 PCC suite, but raised its
   output matmul from about **205 us** to **223 us** and the three-replay

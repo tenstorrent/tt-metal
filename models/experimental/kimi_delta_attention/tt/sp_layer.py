@@ -373,10 +373,22 @@ class SP8AffineTP1KimiDeltaAttention:
             ttnn.create_socket_pair(self.span_devices[span], self.span_devices[span + 1], _prefix_socket_config(4))
             for span in range(_SP8_SIZE - 1)
         )
+        # Fixed-address copies of the common incoming carry. Rank release
+        # overwrites each layer's recurrent-state buffer with its exclusive
+        # entry while the prefix still needs the original common state to
+        # evaluate later endpoints. Allocate these once per reset instead of
+        # cloning eight new device tensors on every forward.
+        self._prefix_initial_states: tuple[ttnn.Tensor, ...] | None = None
 
     def reset_state(self, batch_size: int) -> None:
         for layer in self.layers:
             layer.reset_state(batch_size)
+        if self._prefix_initial_states is not None:
+            for state in self._prefix_initial_states:
+                ttnn.deallocate(state)
+        self._prefix_initial_states = tuple(
+            ttnn.allocate_tensor_on_device(layer.recurrent_state.spec, layer.device) for layer in self.layers
+        )
 
     def _synchronize(self) -> None:
         for device in self.span_devices:
@@ -493,7 +505,11 @@ class SP8AffineTP1KimiDeltaAttention:
         without allowing a later prefix stage to be starved by KDA work.
         """
         self._broadcast_initial_recurrent_state()
-        prefix_initial = tuple(ttnn.clone(layer.recurrent_state) for layer in self.layers)
+        assert self._prefix_initial_states is not None
+        for layer, prefix_initial_state in zip(self.layers, self._prefix_initial_states, strict=True):
+            assert layer.recurrent_state is not None
+            ttnn.copy(layer.recurrent_state, prefix_initial_state)
+        prefix_initial = self._prefix_initial_states
         convolutions = self._prepare_convolutions(spans)
         prepared = tuple(
             layer.complete_chunk_preparation(convolution) for layer, convolution in zip(self.layers, convolutions)
