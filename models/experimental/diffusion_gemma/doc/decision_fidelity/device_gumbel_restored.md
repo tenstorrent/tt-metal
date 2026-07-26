@@ -229,6 +229,72 @@ close a numerics gap on prompts that already work elsewhere. The 60 questions ar
 reproducer set -- the shortest ones (by reference token use) are the right place to start, since
 they collapse without needing a long context.
 
+## 9. ROOT CAUSE of the 60: TT's FIRST denoise forward produces flatter logits than HF-bf16
+
+Everything above narrowed the residual to "the logits are too flat at the unsettled positions".
+That is now measured at its source, and it is neither an iteration problem nor a precision ceiling.
+
+### The mechanism, end to end
+
+The entropy-bound acceptance rule accepts the k lowest-entropy positions whose exclusive prefix sum
+of entropies is <= `entropy_bound` (0.1 nats, absolute). On q106 the per-step accepted count on TT is
+
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
+
+**exactly one position per step.** Forty-eight steps therefore settle at most 47 of 256 positions;
+the other ~209 stay renoised with uniform-random tokens for the whole block. Taking the clean argmax
+over a canvas that is four-fifths random noise returns the unigram prior -- which is precisely the
+observed collapse set: `-` (14 of 64 collapses), `\n` (11), `1` (7), `' the'` (4), `0`, `,`, `.`,
+`2`, `' '`. Decoding the vocab neighbourhood confirms it: ids 236743-236780 are the single-character
+tokens ordered by English letter frequency, i.e. the highest-prior, lowest-information tokens.
+
+So the collapse is arithmetic, not mysterious: **accept count 1 => the canvas never fills => argmax
+returns the prior.** A converging block looks completely different -- q007 ramps 1, 2, 3, 5, 6, 7,
+10, 16, 23, 51, 75, 121 ... 252 and halts.
+
+### Where it starts: step 1, before any feedback exists
+
+Mean per-position entropy on q106, same prompt, same thinking contract:
+
+| path | step-1 entropy |
+| --- | --- |
+| **HF reference, bfloat16, CPU** | **3.7495** |
+| TT traced, sparse MoE, HiFi2 | 5.1022 |
+| TT eager, sparse MoE | 5.1022 |
+| TT eager, self-conditioning disabled | 5.3681 |
+| TT traced, dense-128 MoE | 5.0913 |
+
+Every TT path clusters at 5.09-5.37; the reference sits at 3.75, **in bf16**. The gap is 1.35 nats on
+the FIRST forward, before self-conditioning exists and before any canvas feedback.
+
+That rules out, in one table, the things this investigation spent the most time on:
+
+* **not bf16 precision** -- the reference reaches 3.75 in bfloat16;
+* **not the sparse token-gather MoE** -- the reference dense-128 expert path gives 5.0913, the same;
+* **not traced vs eager** -- both give 5.1022 to five decimals;
+* **not self-conditioning** -- step 1 has none, and disabling it makes the trajectory worse, not
+  identical, so it is active;
+* **not the iteration or the step budget** -- the divergence exists at step 1.
+
+And it contradicts the "bf16 architectural floor" framing of #48291: a bf16 reference on the same
+checkpoint, with the same 48-step budget, the same thresholds and the same schedule, converges on
+q106 in **12 steps** (entropy 3.75 -> 0.0042, mismatch 175 -> 0) and answers it.
+
+### The reference trajectory harness
+
+`hf_reference_trajectory.py` records the reference's per-step trajectory in TT's own telemetry units
+(mean per-position entropy, argmax mismatch against the previous step, distinct argmax count,
+dominant-token share) by wrapping `StableAndConfidentStoppingCriteria`, which already receives the
+processed logits and the argmax canvas every step. It needs no model changes and runs in **53
+seconds** on the QB2 host CPU in bf16, so any prompt's reference curve is a minute away.
+
+### Reproducer set
+
+Seven questions collapse on **block 0**, so one block reproduces them, and the reference answers all
+seven: **q106, q096, q122, q095, q007, q090, q064**. q106 is the cheapest -- the reference spends
+1561 tokens on it. The right next step is a layer-by-layer comparison of that first denoise forward
+against the reference, since the discrepancy is now known to live in a single forward pass.
+
 ## 6. Reproduce
 
 ```bash
