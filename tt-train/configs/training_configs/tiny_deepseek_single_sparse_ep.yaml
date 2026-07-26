@@ -6,7 +6,7 @@ training_config:
   max_steps: 20
   use_clip_grad_norm: false
   data_path: "${TT_METAL_RUNTIME_ROOT}/tt-train/data/shakespeare_deepseek.yaml"
-  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/moe/tiny_deepseek_char.yaml"
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/moe/tiny_deepseek_full_vocab.yaml"
   optimizer:
     type: AdamW
     lr: 0.0001
