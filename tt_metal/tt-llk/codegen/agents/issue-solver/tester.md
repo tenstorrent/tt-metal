@@ -15,8 +15,9 @@ orchestrator handles changes that are not verifiable in this suite.
 - `TEST_BACKEND` is an operator choice, not a hint.
 - Run all in-scope architectures sequentially in one multi-arch session and
   one self-log.
-- For `TEST_BACKEND=local`, call `.claude/scripts/run_test.sh` directly. Do not
-  invoke pytest.
+- For `TEST_BACKEND=local`, compile with `.claude/scripts/run_test.sh`. When
+  `HW_TEST_DISPATCH_CMD` is set, submit only silicon execution to the shared
+  queue; otherwise let the wrapper run on the local device.
 - For `TEST_BACKEND=ttsim`, run selected pytest tests directly with the
   in-process simulator library. Do not use local, RTL-simulator, or
   compile-only flows.
@@ -45,6 +46,12 @@ and `TEST_BACKEND` with `sg`. Derive the artifacts as
 
 The router leaves simulator paths in bootstrap state. For ttsim, read
 `TTSIM_SO_PATH` (single) or `TTSIM_SO_PATHS` (multi) with `bg`.
+
+Optional environment:
+
+- `HW_TEST_DISPATCH_CMD`: shared silicon-queue client. It applies only to the
+  local backend.
+- `HW_TEST_SESSION`: queue session name.
 
 ## Pre-Flight
 
@@ -77,7 +84,7 @@ Use the plan's test strategy:
 
 | Plan item | Action |
 |---|---|
-| compile check only | local only: runner `compile` or the listed command |
+| compile check only | local only: runner `compile` or the listed command; do not enqueue silicon |
 | reproduction test | run first |
 | regression test | run only after all reproduction tests pass |
 | `-k` filter | pass the same filter |
@@ -124,13 +131,15 @@ python codegen/scripts/run_json_writer.py phase-start \
 ```
 
 After each architecture completes, patch its result and the aggregate counts.
-JSON-encode `obstacle_json`; never interpolate raw failure text into JSON. Do
-not create per-architecture sibling `run.json` files.
+For queued runs, also include `queue_jobs`, an array of the job IDs submitted
+for that architecture; use `[]` otherwise. JSON-encode `obstacle_json` and
+`queue_jobs`; never interpolate raw failure text into JSON. Do not create
+per-architecture sibling `run.json` files.
 
 ```bash
 python codegen/scripts/run_json_writer.py metric \
   --log-dir "$LOG_DIR" \
-  --patch-json "{\"arch_results\":{\"${arch}\":{\"status\":\"done\",\"verdict\":\"${verdict}\",\"tests_total\":${tests_total},\"tests_passed\":${tests_passed},\"obstacle\":${obstacle_json}}},\"tests_total\":${aggregate_total},\"tests_passed\":${aggregate_passed}}"
+  --patch-json "{\"arch_results\":{\"${arch}\":{\"status\":\"done\",\"verdict\":\"${verdict}\",\"tests_total\":${tests_total},\"tests_passed\":${tests_passed},\"queue_jobs\":${queue_jobs_json},\"obstacle\":${obstacle_json}}},\"tests_total\":${aggregate_total},\"tests_passed\":${aggregate_passed}}"
 
 python codegen/scripts/run_json_writer.py phase-end \
   --log-dir "$LOG_DIR" \
@@ -145,10 +154,17 @@ compilation, simulator, and environment failures to `failed`.
 already recorded as passed. Retests must still replace `arch_results` and
 append their raw and self-log evidence.
 
-## Local Backend
+## Local Compile and Execution
 
-Use `subcommand=run` for reproduction and regression tests. Use
-`subcommand=compile` only for an allowed compile-only route:
+For a compile-only plan, use `subcommand=compile` and return
+`COMPILED_ONLY` after it passes.
+
+For a functional test:
+
+- with `HW_TEST_DISPATCH_CMD`, run `subcommand=compile` as the local gate and
+  then follow **Queued Silicon**;
+- without it, use `subcommand=run` so the wrapper compiles and runs on the
+  local device.
 
 ```bash
 bash .claude/scripts/run_test.sh "$subcommand" \
@@ -176,6 +192,59 @@ Local runner exit code mapping:
 | 3 | `ENV_ERROR` |
 | 4 | `ENV_ERROR` |
 | 5 | `TESTS_FAILED` with hang evidence |
+
+Do not submit a queue job after a local compile failure.
+
+## Queued Silicon
+
+Use this route only for `TEST_BACKEND=local` with
+`HW_TEST_DISPATCH_CMD`, after the corresponding local compile passes. The
+queue owns card scheduling and silicon execution; do not call the wrapper's
+`run` or `simulate` subcommands.
+
+The current queue accepts a worktree and pytest selector rather than the
+locally produced artifact. Its runner repeats the producer step because
+producer artifacts are node-local, and its worktree patch omits untracked
+files. Check `git status --short`; if an untracked path belongs to the fix,
+return `ENV_ERROR` without dispatching. These are queue transport limitations;
+the issue-solver's local compile remains the gate.
+
+The queue accepts a pytest node selector, but not a separate `-k` expression.
+Require `TEST_ID` or an unfiltered `TEST_FILE`; if the plan has only
+`K_FILTER`, return `ENV_ERROR` rather than silently running a broader test.
+The queue also always uses split producer/consumer execution, so reject a test
+that specifically requires `--no-split`.
+
+Construct the selector relative to `tests/python_tests`, which differs from
+the wrapper's arch-relative selector:
+
+```bash
+QUEUE_TEST="${TEST_ID:-$TEST_FILE}"
+[ "$arch" = quasar ] && QUEUE_TEST="quasar/$QUEUE_TEST"
+
+set +e
+$HW_TEST_DISPATCH_CMD --kind llk --arch "$arch" \
+  --test "$QUEUE_TEST" \
+  --worktree "$WORKTREE_DIR" \
+  --session "${HW_TEST_SESSION:-issue-${ISSUE_NUMBER}}" \
+  --timeout "${TIMEOUT:-1800}" 2>&1 | tee -a "$LOG_DIR/run.log"
+dispatch_exit=${PIPESTATUS[0]}
+set -e
+```
+
+Require one final `HW_TEST_RESULT arch=<arch>` marker and record its `job`
+value:
+
+| Marker | Verdict |
+|---|---|
+| `ok=true ran=true passed=true` | `SUCCESS` |
+| `ok=false ran=true` | `TESTS_FAILED` |
+| missing, malformed, or `ran=false` | `ENV_ERROR` |
+
+The marker is authoritative; the command exit is supporting evidence. Current
+LLK queue results do not provide test counts. Record zero counts with an
+explicit obstacle instead of inventing them, and always retain the job ID so
+the detailed queue result can be inspected.
 
 ## ttsim Backend
 
@@ -242,7 +311,7 @@ simulator path affects only the current architecture.
 
 ## Outcome Reading
 
-Start with the final verdict marker for local runs:
+Start with the final verdict marker for non-queued local runs:
 
 ```text
 === RUN_LLK_TESTS_VERDICT === ...
@@ -268,8 +337,9 @@ test; do not send it to the worker.
 ## Result
 
 Return `TEST_RESULT` with the backend, each requested architecture's verdict,
-counts and first evidence, plus the raw- and self-log paths. Include
-analyzer-owned `SKIPPED` results; do not calculate a separate combined verdict.
+counts, queue job IDs, and first evidence, plus the raw- and self-log paths.
+Include analyzer-owned `SKIPPED` results; do not calculate a separate combined
+verdict.
 
 ## Self-Log
 
@@ -277,6 +347,7 @@ Create `${LOG_DIR}/agent_tester.md`, or append
 `## Test Attempt — <UTC timestamp>` when it exists; never discard earlier
 attempts. Record backend and scope, planned tests and normalized selectors,
 exact commands, simulator path where applicable, exit codes, verdict markers,
-counts, first failure per architecture, and deviations from the plan.
+queue job IDs, counts, first failure per architecture, and deviations from the
+plan.
 
 If `LOG_DIR` is empty, report that self-logging was skipped.
