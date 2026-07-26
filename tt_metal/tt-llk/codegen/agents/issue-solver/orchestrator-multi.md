@@ -88,17 +88,23 @@ Both testers must skip analyzer-owned out-of-scope architectures. After
 `execute_step_mark_unverifiable`, reapply their `SKIPPED` results because the
 helper initializes every target as unverifiable.
 
-Call `execute_step_aggregate_results` after the stage. For a `both` route,
-combine the two suite results independently for each architecture:
+After an `llk`, `metal`, or `both` route, call:
+
+```bash
+execute_step_combine_verification_results
+execute_step_aggregate_results
+```
+
+The combiner retains each tester's nested suite result and writes the
+dashboard-compatible verdict and counters to `arch_results.<arch>`. For
+`both`, it combines the suites independently for each architecture:
 
 - any suite failure makes that architecture fail;
 - at least one `SUCCESS` with no failure makes it successful;
 - only compile-only/unverifiable outcomes make it compiled;
 - `SKIPPED` remains excluded from the combined status.
 
-Do not let the second tester overwrite an earlier suite failure in the
-control-flow decision. Retain both suite outcomes in their agent summaries and
-write the combined verdict back to `arch_results.<arch>` before aggregation.
+For `none`, call `execute_step_mark_unverifiable` and skip the combiner.
 
 ## Debug and Review
 
