@@ -64,12 +64,15 @@ TensorSpec Conv2dDeviceOperation::compute_output_specs(
     // in one block), which means it stays HEIGHT_SHARDED [M, full_K] even for block-sharded convs -- the
     // block-sharding N-split lives only in Program B's weights [K, N/cols]. So emit the SAME height-sharded
     // tilized output regardless of the input's height/block layout.
+    // [#48552 Stage2 REVERTED] Block-sharded convs process K in >1 block (in0_num_blocks_w=2 -> K/Cin split &
+    // reduced across grid columns), so they CANNOT use the single-K-block split (which dodges the Quasar matmul
+    // K-accumulate). The factory's split_program_tilize_only correctly refuses them; emitting the [M,full_K]
+    // tilized shape here for block-sharded created a spec-vs-fused-Program-A mismatch -> TILE_COUNTERS. Keep
+    // this HEIGHT_SHARDED-only; block-sharded falls back to the fused conv.
     const auto& in_mem = tensor_args.a.memory_config();
     if (((std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") != nullptr) ||
          (std::getenv("TT_METAL_QSR_CONV_UNPACK_TILIZE") != nullptr)) &&
-        in_mem.is_sharded() &&
-        (in_mem.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
-         in_mem.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED)) {
+        in_mem.is_sharded() && in_mem.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
         const uint32_t m_ntiles = args.parallelization_config.per_core_out_matrix_height_ntile;
         // FULL im2col K, in tiles = the PREPARED weights' K-height (b.padded_shape()[2] / TILE_HEIGHT). This is
         // EXACTLY what the factory uses for full_k_ntiles (weight_matrix_height / TILE_HEIGHT), so the output

@@ -530,9 +530,12 @@ Result conv2d_L1(
     // b_height=2304=full-K while Program A had tilized only Cin=256 because act_block_w was not rewritten). So
     // block-sharded needs the SAME full-K activation as height-sharded; set act_block_w = full_K for BOTH. The
     // N-split lives in Program B's 2D config (per_core_N = N/num_cores_c). full_inner_dim -> single K-block.
-    const bool force_conv_no_spill = (!arch_is_quasar || split_env_requested) &&
-                                     (height_sharded_conv || block_sharded_conv) && !mm_conv && !conv_is_1d_depthwise &&
-                                     (kernel_size[0] > 1) && (full_inner_dim_k_ntiles <= kQuasarConvNoSpillMaxKTiles);
+    // [#48552 Stage2 REVERTED] Block-sharded convs split K across grid columns (in0_num_blocks_w>1) and reduce
+    // across them, so they can't use the single-K-block split; keep force_conv_no_spill height-sharded-only.
+    (void)block_sharded_conv;
+    const bool force_conv_no_spill = (!arch_is_quasar || split_env_requested) && height_sharded_conv && !mm_conv &&
+                                     !conv_is_1d_depthwise && (kernel_size[0] > 1) &&
+                                     (full_inner_dim_k_ntiles <= kQuasarConvNoSpillMaxKTiles);
     log_warning(
         tt::LogOp,
         "[QSR-SPLIT2 #48552] force_no_spill={} height_sh={} block_sh={} act_block_w(pre)={} full_K={} shard={} "
@@ -933,11 +936,10 @@ Result conv2d_L1(
         // arch check) — otherwise the factory builds the tilize-only Program A but conv2d.cpp skips Program B, and
         // the op returns the raw tilized activation [M,K] instead of the conv result [M,N]. The env var is the
         // explicit opt-in (only tests set it), so production convs on any arch are unaffected.
-        // [#48552 Stage2] block_sharded also runs the two-program split (must match the factory's
-        // split_program_tilize_only gate). height-sharded -> 1D Program B; block-sharded -> 2D Program B.
+        // [#48552 Stage2 REVERTED] block-sharded can't use the single-K-block split (in0_num_blocks_w>1 ->
+        // needs cross-column K-reduction the split path deliberately avoids); keep height-sharded-only.
         const bool split_program_active = (std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") != nullptr) &&
-                                          (parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED ||
-                                           parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) &&
+                                          parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED &&
                                           conv_config.full_inner_dim && !tilize_only_no_matmul;
         if (split_program_active) {
             std::optional<ttnn::operations::experimental::quasar::matmul::MatmulProgramConfig> program_config =
