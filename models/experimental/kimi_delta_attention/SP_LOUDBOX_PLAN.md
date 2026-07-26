@@ -235,7 +235,16 @@ state-transfer protocol and measure its components.
   the matmul producer, or its output-DMA publication.
   The failure also persists with one or two links, one/two/four workers per
   direction, and one/two channel buffers; those scheduling settings are not a
-  workaround.
+  workaround.  Signed FP32 KDA-like activation and RMS-weight coverage also
+  passes eagerly and under trace on both child placements, ruling out the
+  positive-only primitive test domain.  Conversely, a saved, exact second-span
+  KDA epilogue tensor succeeds through a fresh Line MRS after the SP schedule
+  has drained.  The same tensor fails only when MRS is invoked in the live
+  interleaved SP schedule.  Moving socket endpoints, fencing the first child,
+  and reversing socket/CCL construction order do not change that result.  The
+  next CCL reproducer must therefore retain the timeline: one TP4 child is in
+  fused MRS while the other executes its KDA completion path, rather than only
+  recreating the tensors or socket handoff.
 * The direct TP=4 output matmul has no safe grid-only win.  An explicit 10x8
   prefill grid passed the full target-shape SP2xTP4 PCC suite, but raised its
   output matmul from about **205 us** to **223 us** and the three-replay
