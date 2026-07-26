@@ -21,7 +21,7 @@
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_fusion.hpp"        // RingSDPAFusedOpSignaler
-#include "ttnn/operations/transformer/sdpa/device/ring_id_sequencer.hpp"  // host replay for band arrival order
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_id_sequencer.hpp"  // host replay for band arrival order
 #include "ttnn/operations/ccl/ccl_common.hpp"     // linearized index / neighbor / fwd-bwd config
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"  // AllGatherFusedOpSignaler
 // the fused AG helper (the only Linear+fuse-capable all-gather):
