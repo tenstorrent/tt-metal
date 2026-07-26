@@ -65,25 +65,25 @@ def test_canvas_sampling_params_duck_type_vllm_fields():
     assert config.top_k_top_p_supported is False
 
 
-def test_canvas_sampling_params_rejects_greedy_temperature():
+def test_canvas_sampling_params_rejects_greedy_temperature(expect_error):
     params = {"temperature": 0.0, "top_k": 1, "top_p": 1.0}
 
-    with pytest.raises(ValueError, match="temperature > 0"):
+    with expect_error(ValueError, match="temperature > 0"):
         canvas_sampling_config_from_params(params, default_temperature=0.8)
 
 
 @pytest.mark.parametrize("seed", [0, -1])
-def test_canvas_sampling_params_rejects_nonpositive_seed(seed):
+def test_canvas_sampling_params_rejects_nonpositive_seed(seed, expect_error):
     params = {"temperature": 0.8, "seed": seed}
 
-    with pytest.raises(ValueError, match="positive nonzero"):
+    with expect_error(ValueError, match="positive nonzero"):
         canvas_sampling_config_from_params(params, default_temperature=0.8)
 
 
-def test_canvas_sample_from_params_requires_noise_or_seed():
+def test_canvas_sample_from_params_requires_noise_or_seed(expect_error):
     params = {"temperature": 0.8}
 
-    with pytest.raises(ValueError, match="gumbel_noise or a sampling seed"):
+    with expect_error(ValueError, match="gumbel_noise or a sampling seed"):
         canvas_sample_from_params(
             logits=None,
             sampling_params=params,
@@ -91,10 +91,10 @@ def test_canvas_sample_from_params_requires_noise_or_seed():
         )
 
 
-def test_canvas_sample_from_params_rejects_multiple_rng_workarounds():
+def test_canvas_sample_from_params_rejects_multiple_rng_workarounds(expect_error):
     params = {"temperature": 0.8, "seed": 47472}
 
-    with pytest.raises(ValueError, match="at most one"):
+    with expect_error(ValueError, match="at most one"):
         canvas_sample_from_params(
             logits=None,
             sampling_params=params,
@@ -104,7 +104,10 @@ def test_canvas_sample_from_params_rejects_multiple_rng_workarounds():
         )
 
 
-def test_canvas_sample_from_params_defaults_to_permuted_vocab_rng(monkeypatch):
+def test_canvas_sample_from_params_defaults_to_vocab_innermost_rng(monkeypatch):
+    """Default is the plain draw: for a (..., canvas, vocab) shape the permuted variant
+    relocates the RNG degeneracy onto the canvas-position axis, which is what makes
+    different positions collapse onto the same token."""
     calls = {}
 
     def fake_permuted_noise(shape, *, device, seed):
@@ -115,7 +118,7 @@ def test_canvas_sample_from_params_defaults_to_permuted_vocab_rng(monkeypatch):
         calls["sample"] = (logits, temperature, gumbel_noise)
         return "samples"
 
-    monkeypatch.setattr(TS, "sample_gumbel_noise_with_permuted_vocab", fake_permuted_noise)
+    monkeypatch.setattr(TS, "sample_gumbel_noise", fake_permuted_noise)
     monkeypatch.setattr(TS, "canvas_sample", fake_canvas_sample)
 
     logits = _FakeLogits()
@@ -142,7 +145,7 @@ def test_canvas_sample_from_params_deallocates_generated_gumbel_noise(monkeypatc
         calls["sample"] = (logits, temperature, gumbel_noise, gumbel_noise.deallocated)
         return "samples"
 
-    monkeypatch.setattr(TS, "sample_gumbel_noise_with_permuted_vocab", fake_permuted_noise)
+    monkeypatch.setattr(TS, "sample_gumbel_noise", fake_permuted_noise)
     monkeypatch.setattr(TS, "canvas_sample", fake_canvas_sample)
 
     logits = _FakeLogits()
@@ -158,7 +161,7 @@ def test_canvas_sample_from_params_deallocates_generated_gumbel_noise(monkeypatc
     assert noise.deallocated is True
 
 
-def test_canvas_sample_from_params_deallocates_generated_gumbel_noise_on_failure(monkeypatch):
+def test_canvas_sample_from_params_deallocates_generated_gumbel_noise_on_failure(monkeypatch, expect_error):
     noise = _FakeNoise("permuted-gumbel")
 
     def fake_permuted_noise(shape, *, device, seed):
@@ -169,10 +172,10 @@ def test_canvas_sample_from_params_deallocates_generated_gumbel_noise_on_failure
         assert noise.deallocated is False
         raise RuntimeError("sampling failed")
 
-    monkeypatch.setattr(TS, "sample_gumbel_noise_with_permuted_vocab", fake_permuted_noise)
+    monkeypatch.setattr(TS, "sample_gumbel_noise", fake_permuted_noise)
     monkeypatch.setattr(TS, "canvas_sample", fail_canvas_sample)
 
-    with pytest.raises(RuntimeError, match="sampling failed"):
+    with expect_error(RuntimeError, match="sampling failed"):
         canvas_sample_from_params(
             _FakeLogits(),
             {"temperature": 0.7, "seed": 47472},

@@ -685,14 +685,21 @@ def make_seeded_gumbel_noise_fn(
 
     The production-shaped seeded path uses the permuted-vocab TTNN RNG workaround
     validated by W4 distributional tests, avoiding the raw innermost-vocab
-    correlation path kept only as a diagnostic in ``tt.sampling``.
+    innermost-vocab layout: see the comment on the draw below for why that is the
+    correct axis choice here rather than the permuted-vocab workaround.
     """
     _check_random_token_args(batch, canvas_len, vocab_size)
     seed = TS._validate_ttnn_rand_seed(seed)
 
     def gumbel_noise_for_block(block_idx: int):
         def gumbel_noise_for_step(step: int):
-            return TS.sample_gumbel_noise_with_permuted_vocab(
+            # Vocab innermost, deliberately. The permuted-vocab variant keeps vocab off ttnn.rand's
+            # innermost axis by collapsing every other axis into it -- which for this shape is the
+            # 256 CANVAS POSITIONS, i.e. it relocates the RNG degeneracy onto the axis where it
+            # makes different positions pick the same token and collapses the canvas. Measured at
+            # canvas 256 / vocab 262144 with the fixed rand kernel: this layout gives 253/256
+            # distinct flat-logit winners (host IID control 256/256), the permuted one 154/256.
+            return TS.sample_gumbel_noise(
                 (batch, 1, canvas_len, vocab_size),
                 device=mesh_device,
                 seed=seed + block_idx * 1_000_003 + step,

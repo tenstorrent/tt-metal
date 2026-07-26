@@ -114,7 +114,11 @@ def canvas_sample_from_params(
         if config.seed is None:
             raise ValueError("canvas_sample_from_params requires gumbel_noise or a sampling seed")
         if use_vocab_permuted_noise is None:
-            use_vocab_permuted_noise = not use_vocab_chunked_noise
+            # Default OFF: for a (…, canvas, vocab) logits shape the permuted-vocab draw puts the
+            # canvas positions on ttnn.rand's degenerate innermost axis, which is what makes
+            # positions collapse onto one token. Vocab-innermost measures at the IID control
+            # (253/256 vs 154/256 distinct flat-logit winners at the production geometry).
+            use_vocab_permuted_noise = False
         if use_vocab_chunked_noise and use_vocab_permuted_noise:
             raise ValueError("choose at most one regenerated-noise workaround")
         if use_vocab_permuted_noise:

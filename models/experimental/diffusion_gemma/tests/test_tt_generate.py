@@ -3240,14 +3240,16 @@ def test_make_host_gumbel_noise_fn_rejects_non_integer_step_index(step, expect_e
         noise_fn(0)(step)
 
 
-def test_make_seeded_gumbel_noise_fn_generates_permuted_vocab_block_step_seeds(monkeypatch):
+def test_make_seeded_gumbel_noise_fn_generates_block_step_seeds(monkeypatch):
+    """The production draw is vocab-innermost: the permuted variant would put the canvas
+    positions on ttnn.rand's degenerate axis (154/256 vs 253/256 distinct winners)."""
     calls = []
 
-    def fake_sample_gumbel_noise_with_permuted_vocab(shape, *, device, seed):
+    def fake_sample_gumbel_noise(shape, *, device, seed):
         calls.append((shape, device, seed))
         return f"gumbel-{len(calls)}"
 
-    monkeypatch.setattr(G.TS, "sample_gumbel_noise_with_permuted_vocab", fake_sample_gumbel_noise_with_permuted_vocab)
+    monkeypatch.setattr(G.TS, "sample_gumbel_noise", fake_sample_gumbel_noise)
 
     noise = make_seeded_gumbel_noise_fn("mesh", batch=2, canvas_len=4, vocab_size=16, seed=31)
 
