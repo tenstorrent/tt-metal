@@ -704,6 +704,22 @@ until a caller passes a span -- byte-identical for every existing caller, which 
 this commit changes no behaviour. Mutation-checked: stubbing the one line that applies the span fails
 `test_hidden_span_hides_exactly_those_slots` and `test_hidden_span_composes_with_the_retention_window`.
 
+### A cross-check that could have falsified the two-defect split
+
+If attended pad keys are the block-0 cause, then a question whose prompt is ALREADY a 32-multiple has
+no pad slots and must not be able to collapse on block 0. Five of the 64 collapses have zero padding:
+
+    q013 prompt_len=160 collapse_block=9    q102 352 -> 12    q075 224 -> 13
+    q022 256 -> 14                          q104 256 -> 15
+
+All five collapse LATE (blocks 9-15), none on block 0, and none of the seven block-0 collapses has
+zero padding (their pads are 7, 15, 18, 21, 25, 27, 31). So the two mechanisms partition the failures
+the way the model says they should: zero-padding questions can only fail through the sliding-window
+regime, and two of those five (q022, q104) are already confirmed fixed by the retention arm.
+
+This was a real test rather than a restatement -- a single zero-padding block-0 collapse would have
+refuted the pad mechanism as the block-0 explanation.
+
 Still to do, and it is the part that needs the device: thread `(true_prompt_len, cache_len)` from
 `PromptPrefill` -- which already carries both values -- to the adapter's mask build, then re-run the
 block-0 seven. The prediction is explicit: q106/q096/q095 should go from never-converging to roughly
