@@ -34,6 +34,7 @@ sys.path.insert(0, str(_PKG))  # the perf_automation dir, so `agent` imports res
 
 from agent import gitio, perf_target, promote, roofline, router  # noqa: E402
 from agent import integrity as _integrity  # noqa: E402
+from agent.layer_depth import set_depth as _set_depth  # noqa: E402
 from agent.handlers import remeasure as _rm  # noqa: E402
 from agent.measure import measure_runs  # noqa: E402
 from agent.pcc_runner import run_pcc  # noqa: E402
@@ -1610,7 +1611,10 @@ def _run_full_pipeline_ms():
     env = dict(os.environ)
     env["TT_METAL_HOME"] = repo
     env["PYTHONPATH"] = repo
-    env["TT_PERF_LAYERS"] = "0"
+    # WHOLE model: the depth cap is REMOVED, not set to 0. "0" arrives as a truthy string and was
+    # read by model builders as "build zero layers", so this gate measured nothing and could only
+    # report "no markers". See agent/layer_depth.py.
+    _set_depth(env, None)
     env["TT_PERF_MAX_NEW_TOKENS"] = os.environ.get("PERF_MCP_FULLPIPE_TOKENS", "1")
     env.setdefault("TT_PERF_TRACE", "1")
     env["TT_PERF_PREFILL_TRACE"] = "1"
@@ -2027,7 +2031,7 @@ def _full_depth_op_probe():
     env = dict(os.environ)
     env["TT_METAL_HOME"] = repo
     env["PYTHONPATH"] = repo
-    env["TT_PERF_LAYERS"] = "0"
+    _set_depth(env, None)  # ALL layers: cap REMOVED, never sent as 0 (see agent/layer_depth.py)
     env["TT_PERF_MAX_NEW_TOKENS"] = "1"
     env.pop("TT_METAL_DEVICE_PROFILER", None)
     cmd = [sys.executable, str(Path(__file__).parent / "_op_sig_probe.py"), node]

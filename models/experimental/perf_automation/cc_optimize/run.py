@@ -505,7 +505,11 @@ def _run_op_sigs(repo_root: Path, mcp_env: dict, devices: str, node: str, case, 
     while the pipeline was simply never optimized."""
     env = cc_env(repo_root, devices)
     env.update(mcp_env)
-    env["TT_PERF_LAYERS"] = str(k)
+    # k<=0 means ALL LAYERS and is expressed by REMOVING the cap, never by sending "0": that value
+    # arrives as a truthy string and was read by model builders as "build zero layers".
+    from agent.layer_depth import set_depth as _set_depth
+
+    _set_depth(env, k)
     env["TT_PERF_MAX_NEW_TOKENS"] = "1"
     env.pop("TT_METAL_DEVICE_PROFILER", None)
     cmd = [_python_bin(repo_root), str(repo_root / CC_DIR / "_op_sig_probe.py"), node]
@@ -2201,7 +2205,9 @@ def optimize_pipeline(
         config_ref=config_ref,
     )
     if _cov:
-        _cov_env["TT_PERF_LAYERS"] = str(_cov)
+        from agent.layer_depth import set_depth as _set_depth
+
+        _set_depth(_cov_env, _cov)
         print(f"  [optimize/cc] coverage-sized profiling window: TT_PERF_LAYERS={_cov} (covers all block types)")
         _depth_env = _bridge_depth_env(repo_root, _cov_env, devices, pipe.get("perf_test"), pipe.get("case"), _cov)
         if _depth_env:

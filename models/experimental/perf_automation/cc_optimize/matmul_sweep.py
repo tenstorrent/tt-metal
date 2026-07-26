@@ -22,6 +22,7 @@ import ast
 import json
 import os
 
+from agent.layer_depth import set_depth as _set_depth
 from agent.probes import adaptive_op_timeout as _adaptive_op_timeout
 import subprocess
 import sys
@@ -251,7 +252,7 @@ def enumerate_matmul_sigs(node: str, case: Optional[str] = None, repo_root: Opti
     env = dict(os.environ)
     env["TT_METAL_HOME"] = str(repo)
     env["PYTHONPATH"] = str(repo)
-    env["TT_PERF_LAYERS"] = "0"
+    _set_depth(env, None)  # ALL layers: cap REMOVED, never sent as 0 (see agent/layer_depth.py)
     env["TT_PERF_MAX_NEW_TOKENS"] = "1"
     env.pop("TT_METAL_DEVICE_PROFILER", None)
     cmd = [sys.executable, str(_CC_DIR / "_op_sig_probe.py"), node]

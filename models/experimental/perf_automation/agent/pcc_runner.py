@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 from . import gitio, probes
+from .layer_depth import set_depth as _set_depth
 
 _PCC_RE = re.compile(r"(?i)pcc[^\n]*?[:=]\s*(-?\d+\.\d+)")
 
@@ -131,8 +132,10 @@ def run_pcc(ctx) -> dict:
     test = str(resolved) + (sep + fn)
     threshold = entry["threshold"]
     env = dict(os.environ)
-    # FULL DEPTH for correctness: 0 = every layer. Same rule the e2e measurement paths use.
-    env["TT_PERF_LAYERS"] = "0"
+    # FULL DEPTH for correctness, expressed by REMOVING the cap rather than by a sentinel: "0"
+    # arrives as a truthy string and was read by model builders as "build zero layers", which PCC'd
+    # a model that had done no work. See agent/layer_depth.py.
+    _set_depth(env, None)
     vd = ctx.manifest.get("config", {}).get("visible_devices")
     if vd is not None:
         env["TT_VISIBLE_DEVICES"] = str(vd)

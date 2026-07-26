@@ -28,6 +28,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .layer_depth import set_depth as _set_depth
+
 STALL_LIMIT = int(os.environ.get("PERF_MCP_PCC_GEN_STALL_LIMIT", "3") or "3")
 
 # Emitted by the generated gate; the optimize loop parses exactly this.
@@ -68,7 +70,7 @@ def _run_gate(node: str, repo_root: Path, env=None, timeout=None) -> tuple:
     """Run the gate; return (rc, output, parsed_pcc_or_None)."""
     e = dict(os.environ)
     e.update(env or {})
-    e["TT_PERF_LAYERS"] = "0"  # correctness always runs full depth
+    _set_depth(e, None)  # correctness always runs full depth (cap REMOVED, never sent as 0)
     try:
         r = subprocess.run(
             [sys.executable, "-m", "pytest", "-o", "addopts=", "-o", "timeout=0", node, "-sv"],

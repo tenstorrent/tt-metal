@@ -29,10 +29,14 @@ import ttnn
 
 PERF_MAX_NEW_TOKENS = int(os.environ.get("TT_PERF_MAX_NEW_TOKENS", "4"))
 PERF_FLUSH_EVERY = int(os.environ.get("TT_PERF_FLUSH_EVERY", "32"))
-# perf-only depth cap: profile a few blocks so a deep model's marker stream (x mesh chips) does not
-# overflow / bloat the profiler; pipelines that read TT_PERF_LAYERS honor it, others ignore it. This
-# is set in-process here so ONLY the perf run is capped (the correctness/e2e gate runs the full model).
-os.environ.setdefault("TT_PERF_LAYERS", "2")
+# DEPTH. A POSITIVE TT_PERF_LAYERS caps the profiled window so a deep model's marker stream (x mesh
+# chips) does not overflow the profiler; the tool sends that number for tracy runs. The variable being
+# ABSENT means ALL LAYERS -- the tool expresses "whole model" by REMOVING the cap, never by sending a
+# sentinel, because "0" arrives as a truthy string and gets read as "build zero layers".
+# Pass PERF_LAYERS straight to the builder: None is every builder's own all-layers value. Do NOT
+# default it to a number here -- that would silently cap the full-depth gate.
+_pl = (os.environ.get("TT_PERF_LAYERS") or "").strip()
+PERF_LAYERS = int(_pl) if (_pl.isdigit() and int(_pl) > 0) else None
 
 _PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"
 _DEV_PARAMS = {"l1_small_size": 24576}
@@ -1060,19 +1064,19 @@ def generate_perf_test(
         "magnitude slower and the host blocks in ttnn.synchronize_device for many minutes, stalling the run. "
         "Make the small size env-overridable with a SMALL default. A perf profile only needs a "
         "representative dispatch-dense pass, not the full-length run.\n"
-        '- KEEP the skeleton\'s `os.environ.setdefault("TT_PERF_LAYERS", ...)` line VERBATIM near the top. '
-        "It caps profiled depth for deep (many-layer) models so the device profiler's marker buffer does "
-        "not overflow (worse on a multi-chip mesh, where markers scale x chips). It is set in-process so "
-        "ONLY this perf run is capped; a pipeline that does not read TT_PERF_LAYERS simply ignores it. Do "
-        "NOT hard-require it and do NOT gate on it — just carry it through.\n"
-        "- TT_PERF_LAYERS=0 means ALL LAYERS, not zero. PREFERRED: do NOT resolve it yourself and do NOT "
-        "pass a depth argument to the builder at all -- leave it unset so the builder reads the env and "
-        "applies ITS OWN convention for 'all', whatever that is (None, -1, omitted, 0). Resolving it in "
-        "the test (e.g. num_layers=int(os.environ['TT_PERF_LAYERS'])) hands the builder a literal 0, "
-        "which on a builder whose 'all' sentinel is None means a ZERO-LAYER model: no KV cache, and the "
-        "first prefill dies on kv_cache[0][0] before any timing marker, so the gate reports only 'no "
-        "markers'. If the builder REQUIRES an explicit depth, read its source to find the sentinel it "
-        "uses for 'all layers' and emit THAT -- never assume None.\n"
+        "- KEEP the skeleton's `_pl` / `PERF_LAYERS` depth lines VERBATIM near the top. A POSITIVE "
+        "TT_PERF_LAYERS caps profiled depth for deep models so the device profiler's marker buffer does "
+        "not overflow (worse on a multi-chip mesh, where markers scale x chips); the tool sends that "
+        "number for tracy runs. The variable being ABSENT means ALL LAYERS -- the tool expresses 'whole "
+        "model' by REMOVING the cap, so `PERF_LAYERS` is None in that case. Do NOT add a numeric default "
+        "and do NOT call os.environ.setdefault on it: defaulting absent-to-a-number silently caps the "
+        "full-depth gate, which then measures a fraction of the model and calls it whole.\n"
+        "- NEVER pass a literal 0 as a depth. PREFERRED: hand the builder `PERF_LAYERS` directly, since "
+        "None is the all-layers value for essentially every builder; or omit the depth argument entirely "
+        "and let the builder read the env itself. Passing 0 to a builder whose 'all' sentinel is None "
+        "yields a ZERO-LAYER model: no KV cache, and the first prefill dies on kv_cache[0][0] before any "
+        "timing marker, so the gate can only report 'no markers'. If the builder REQUIRES an explicit "
+        "depth and its 'all' sentinel is something else, read its source and emit THAT -- never guess.\n"
         "- NO PCC / correctness assertions (this is perf only) — just assert the pipeline produced output.\n"
         "- TIME THE FORWARD: keep the skeleton's time.monotonic() bracket around the bounded forward and "
         'the final print("FORWARD_WALL_MS=...") VERBATIM inside `_eager_forward()` — the harness reads it '
