@@ -111,6 +111,10 @@ and routes to the relevant layout, sharding, precision, blocking, and kernel ref
 Keep operation-local focused development tests under `ttnn/ttnn/operations/<op_name>/` when working
 inside a goal-driven evaluation. Run them through `scripts/run_safe_pytest.sh`.
 
+For goal-driven operation work, establish correctness and performance on the declared target shapes
+first, select a measured performant pattern, and only then generalize that pattern while preserving
+the anchor benchmark.
+
 For a goal-driven TTNN implementation/evaluation, read and follow
 `.claude/agents_codex/goal-coordinator.md` before changing implementation code. It owns the adaptive
 approach, rolling task list, official golden validation, commit protocol, publication, and recovery.
