@@ -1264,24 +1264,36 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_physical_chip_id(ChipId physi
 }
 
 ChipId ControlPlane::get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const {
-    auto it = logical_mesh_chip_id_to_physical_chip_id_mapping_.find(fabric_node_id);
+    auto physical_chip_id = try_get_physical_chip_id_from_fabric_node_id(fabric_node_id);
     TT_FATAL(
-        it != logical_mesh_chip_id_to_physical_chip_id_mapping_.end(),
+        physical_chip_id.has_value(),
         "FabricNodeId {} not found in logical-to-physical chip mapping. Check for a fabric mesh/topology "
         "mismatch or a node outside the configured fabric cluster.",
         fabric_node_id);
+    return *physical_chip_id;
+}
+
+std::optional<ChipId> ControlPlane::try_get_physical_chip_id_from_fabric_node_id(
+    const FabricNodeId& fabric_node_id) const {
+    auto it = logical_mesh_chip_id_to_physical_chip_id_mapping_.find(fabric_node_id);
+    if (it == logical_mesh_chip_id_to_physical_chip_id_mapping_.end()) {
+        return std::nullopt;
+    }
     return it->second;
 }
 
-std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_ids(
+std::optional<std::pair<FabricNodeId, chan_id_t>> ControlPlane::try_get_connected_mesh_chip_chan_ids(
     FabricNodeId fabric_node_id, chan_id_t chan_id) const {
     // TODO: simplify this and use Global Physical Desc in ControlPlane soon
     const auto& intra_mesh_connectivity = this->mesh_graph_->get_intra_mesh_connectivity();
     const auto& inter_mesh_connectivity = this->mesh_graph_->get_inter_mesh_connectivity();
     RoutingDirection port_direction = RoutingDirection::NONE;
     routing_plane_id_t routing_plane_id = 0;
-    for (const auto& [direction, eth_chans] :
-         this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)) {
+    const auto source_channels_it = this->router_port_directions_to_physical_eth_chan_map_.find(fabric_node_id);
+    if (source_channels_it == this->router_port_directions_to_physical_eth_chan_map_.end()) {
+        return std::nullopt;
+    }
+    for (const auto& [direction, eth_chans] : source_channels_it->second) {
         for (const auto& eth_chan : eth_chans) {
             if (eth_chan == chan_id) {
                 port_direction = direction;
@@ -1306,11 +1318,17 @@ std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_id
                     .at(fabric_node_id.chip_id)
                     .port_direction;
             // Find the eth chan on connected dst_fabric_chip_id based on routing_plane_id
-            const auto& dst_fabric_node = FabricNodeId(fabric_node_id.mesh_id, dst_fabric_chip_id);
-            const auto& dst_fabric_chip_eth_chans =
-                this->router_port_directions_to_physical_eth_chan_map_.at(dst_fabric_node);
-            for (const auto& [direction, eth_chans] : dst_fabric_chip_eth_chans) {
-                if (direction == reverse_port_direction) {
+            const auto dst_fabric_node = FabricNodeId(fabric_node_id.mesh_id, dst_fabric_chip_id);
+            const auto dst_channels_it = this->router_port_directions_to_physical_eth_chan_map_.find(dst_fabric_node);
+            if (dst_channels_it == this->router_port_directions_to_physical_eth_chan_map_.end()) {
+                continue;
+            }
+            for (const auto& [direction, eth_chans] : dst_channels_it->second) {
+                if (direction == reverse_port_direction && !eth_chans.empty()) {
+                    if (routing_plane_id >= eth_chans.size()) {
+                        // A routing-plane mismatch cannot identify the exact physical peer channel.
+                        return std::nullopt;
+                    }
                     return std::make_pair(dst_fabric_node, eth_chans[routing_plane_id]);
                 }
             }
@@ -1343,11 +1361,13 @@ std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_id
                     .at(fabric_node_id.mesh_id)
                     .port_direction;
             // Find the eth chan on connected dst_fabric_mesh_id based on routing_plane_id
-            const auto& dst_fabric_node = FabricNodeId(dst_fabric_mesh_id, dst_connected_fabric_chip_id);
-            const auto& dst_fabric_chip_eth_chans =
-                this->router_port_directions_to_physical_eth_chan_map_.at(dst_fabric_node);
-            for (const auto& [direction, eth_chans] : dst_fabric_chip_eth_chans) {
-                if (direction == reverse_port_direction) {
+            const auto dst_fabric_node = FabricNodeId(dst_fabric_mesh_id, dst_connected_fabric_chip_id);
+            const auto dst_channels_it = this->router_port_directions_to_physical_eth_chan_map_.find(dst_fabric_node);
+            if (dst_channels_it == this->router_port_directions_to_physical_eth_chan_map_.end()) {
+                continue;
+            }
+            for (const auto& [direction, eth_chans] : dst_channels_it->second) {
+                if (direction == reverse_port_direction && !eth_chans.empty()) {
                     if (routing_plane_id >= eth_chans.size()) {
                         // Only TG non-standard intermesh connections hits this
                         return std::make_pair(dst_fabric_node, eth_chans[0]);
@@ -1357,8 +1377,15 @@ std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_id
             }
         }
     }
-    TT_FATAL(false, "Could not find connected mesh chip chan ids for {} on chan {}", fabric_node_id, chan_id);
-    return std::make_pair(FabricNodeId(MeshId{0}, 0), 0);
+    return std::nullopt;
+}
+
+std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_ids(
+    FabricNodeId fabric_node_id, chan_id_t chan_id) const {
+    auto peer = try_get_connected_mesh_chip_chan_ids(fabric_node_id, chan_id);
+    TT_FATAL(
+        peer.has_value(), "Could not find connected mesh chip chan ids for {} on chan {}", fabric_node_id, chan_id);
+    return *peer;
 }
 
 std::vector<chan_id_t> ControlPlane::get_valid_eth_chans_on_routing_plane(
