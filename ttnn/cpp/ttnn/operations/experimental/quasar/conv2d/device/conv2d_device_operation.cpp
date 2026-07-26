@@ -58,10 +58,18 @@ TensorSpec Conv2dDeviceOperation::compute_output_specs(
     // [M,full_K] -> the borrowed-OUT reserve_back(M*full_K) exceeded its M*N capacity (RBFAIL #48552). Key on
     // the INPUT, and emit the tilized-activation output as HEIGHT_SHARDED L1 on the input's grid (the tilized
     // act lives on the same cores as the gather, and feeds Program B's matmul).
+    // [#48552 Stage2] Block-sharded convs ALSO run the tilize-only Program A and must emit the tilized
+    // activation [M, full_K], NOT the normal conv result [M, N] (else Program B's matmul sees a_width = N =
+    // 256 instead of full_K = 2304). The tilized activation needs FULL K per core (the matmul contracts full K
+    // in one block), which means it stays HEIGHT_SHARDED [M, full_K] even for block-sharded convs -- the
+    // block-sharding N-split lives only in Program B's weights [K, N/cols]. So emit the SAME height-sharded
+    // tilized output regardless of the input's height/block layout.
     const auto& in_mem = tensor_args.a.memory_config();
     if (((std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") != nullptr) ||
          (std::getenv("TT_METAL_QSR_CONV_UNPACK_TILIZE") != nullptr)) &&
-        in_mem.is_sharded() && in_mem.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+        in_mem.is_sharded() &&
+        (in_mem.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+         in_mem.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED)) {
         const uint32_t m_ntiles = args.parallelization_config.per_core_out_matrix_height_ntile;
         // FULL im2col K, in tiles = the PREPARED weights' K-height (b.padded_shape()[2] / TILE_HEIGHT). This is
         // EXACTLY what the factory uses for full_k_ntiles (weight_matrix_height / TILE_HEIGHT), so the output
