@@ -101,18 +101,25 @@ Files under `models/experimental/deepseek_v4_flash/`:
 - `tt/model.py` — `DeepSeekV4Model`. Entry points:
   - `decode(token_id: int, pos: int, rope) -> hidden [B,1,1,D]` (B=1, eager).
   - `decode_traced(token_id: int, pos: int) -> logits [1,1,V]` (B=1, traced,
-    lm_head folded in). Requires `prepare_static_decode(rope, max_seq, lm_head)`.
-  - `decode_user(user_id, token_id, pos, rope) -> hidden` (B=1 per call, per-user
-    paged sliding caches + per-user compressor caches). Requires
-    `reset_multi_user_paged_caches(max_seq, num_users, block_size=64)`.
-  - `reset_caches(max_seq)` — single-stream fixed caches.
+    lm_head folded in). Requires `prepare_static_decode(rope, max_seq, lm_head,
+    num_sessions=..., total_tokens=..., block_size=...)`.
+  - Paged multi-session API on the traced path: `open_session()`,
+    `activate_session(sid)`, `reset_session(sid)`, `close_session(sid)`,
+    `session_usage()` / `session_tokens_left(sid)`. Sessions share one block pool
+    (`total_tokens` is the whole budget) and one set of captured traces; a step
+    runs as `activate_session(sid)` then `decode_traced(...)`.
+  - `reset_caches(max_seq)` — single-stream dense (non-paged) caches.
   - `decode_sampled_burst(...)` — on-device greedy multi-step (single submesh).
-- `tt/attention.py` — three attention flavors; sliding layers use
-  `paged_update_cache` + `paged_scaled_dot_product_attention_decode`; CSA/HCA
-  layers keep per-token compressor projections (`compressor_kv`/`compressor_gate`)
-  in `_StaticLayerCache`.
-- `tt/paged_cache.py` — `PagedCacheConfig`, `build_page_table`,
-  `build_paged_sliding_pool` (only sliding layers are paged today).
+- `tt/attention.py` — three attention flavors, all of which page their KV when a
+  `PagedLayerView` is supplied: `paged_update_cache` /
+  `paged_scaled_dot_product_attention_decode` with `cache_position_modulo` to
+  bound the sliding ring. The small per-token compressor window state
+  (`win_kv`/`win_gate`/`prev_kv`/`prev_gate` in `_StaticLayerCache`) stays dense
+  and is swapped per session on `activate_session`.
+- `tt/paged_cache.py` — `PagedGroup` / `build_groups` (block geometry per layer
+  type), `plan_pool_blocks`, `round_context`, `PagedKVManager` (shared block pool
+  + per-session page-table rows), `PagedLayerView` (device pool + page table +
+  `position_modulo` handed to attention), `PagedCacheFull`.
 - `tt/weight_loader.py` — `DeepseekV4WeightLoader` (reads safetensors directly,
   not the HF `state_dict` path). `resolve_snapshot_dir` finds the checkpoint.
 - `tt/quant.py`, `tt/moe.py`, `tt/hyperconnection.py`, `tt/decoder_layer.py`,
@@ -138,25 +145,26 @@ ordered by severity. Each notes the Phase-1 workaround.
 1. **Batch = 1 (BIGGEST GAP).** Every `DeepSeekV4Model` entry point handles a
    single token for a single user. vLLM decode passes `tokens[max_batch_size,1]`
    and expects all users advanced in one call.
-   - **Phase 1 workaround**: In the wrapper, loop over the active users and call
-     `decode_user(user_id, token, pos, rope)` once per user, stacking the
-     per-user logits into `[B,1,V]`. Correct, but O(batch) slower than a real
-     batched kernel. Map vLLM's request slot index → V4 `user_id`.
+   - **Phase 1 workaround**: In the wrapper, loop over the active users and run
+     `activate_session(sid)` + `decode_traced(token, pos)` once per user, stacking
+     the per-user logits into `[B,1,V]`. Correct, and each step is a trace replay,
+     but still O(batch) slower than a real batched kernel. Map vLLM's request slot
+     index → session id (`self.slots`).
 
 2. **KV cache ownership / shape mismatch (HARDEST PROBLEM).** vLLM's
    `allocate_kv_cache` assumes a *uniform per-layer paged KV* of shape
    `(max_num_blocks, num_kv_heads, block_size, head_size)`. V4 has **three**
    layer types:
-   - `sliding_attention`: paged sliding KV (block_size 64) — *does* map to vLLM
-     paging.
-   - `compressed_sparse_attention` / `heavily_compressed_attention`: keep
-     per-token **compressor** projections (`compressor_kv`/`compressor_gate`)
-     sized to `max_seq // compress_rate`, re-pooled every step. These are **not**
-     vLLM-pageable (different tensor, different shape, not per-token-block).
+   - `sliding_attention`: paged sliding KV — *does* map to vLLM paging.
+   - `compressed_sparse_attention` / `heavily_compressed_attention`: their KV is
+     paged too, but on a *combined* logical axis (sliding ring blocks followed by
+     `max_seq // compress_rate` compressed-entry blocks) with its own per-group
+     block size, so the per-layer geometry is not uniform. The small compressor
+     **window** state is a separate dense per-session buffer, not per-token-block.
    - **Phase 1 workaround**: Do **not** try to hand V4's caches to vLLM. Let the
-     wrapper own all caches internally via
-     `reset_multi_user_paged_caches(max_seq=max_model_len, num_users=max_num_seqs)`,
-     keyed by user slot. Return a **minimal/placeholder** `kv_cache` from
+     model own all caches internally via `prepare_static_decode(...,
+     num_sessions=max_num_seqs, total_tokens=...)`, one session per vLLM slot.
+     Return a **minimal/placeholder** `kv_cache` from
      `allocate_kv_cache` (enough to satisfy the worker's bookkeeping) and ignore
      the `kv_cache`/`page_table` args vLLM passes into forward. First verify the
      plugin tolerates a model that self-manages caches — check
@@ -169,7 +177,7 @@ ordered by severity. Each notes the Phase-1 workaround.
      KV group or stay model-owned. This is a substantial design task; defer it.
 
 3. **No real prefill.** Prefill is emulated by replaying decode one token at a
-   time (`for pos in range(prompt_len): decode_user(...)`).
+   time (`for pos in range(prompt_len): decode_traced(...)`).
    - **Phase 1 workaround**: `prefill_forward` loops per user, per prompt token,
      seeding the caches, and returns the final-token logits (or full per-position
      logits if vLLM needs them). Slow (O(prompt_len)) but correct.
@@ -183,7 +191,8 @@ ordered by severity. Each notes the Phase-1 workaround.
 5. **RoPE tables are precomputed to a fixed `max_seq`.** The wrapper must build
    the YaRN RoPE bundle once for `max_model_len` (see `_build_rope` in the demo
    tests) and slice per step. `max_seq` must be rounded up to a multiple of
-   `lcm(32, block_size, *compress_rates)` (see the demos).
+   a length every group's block geometry tiles — use
+   `paged_cache.round_context(max_seq_len, compress_rates, block_size)`.
 
 6. **Weight loading is bespoke.** Uses `DeepseekV4WeightLoader` + a checkpoint
    dir (default
@@ -281,15 +290,18 @@ Steps (copy patterns from the demo `_build_and_prefill` and the V3 wrapper):
    `config._attn_implementation = "eager"`, load tokenizer.
 2. Enforce `tt_data_parallel == 1` (raise a clear error otherwise — V4 is
    pipeline-parallel over the whole mesh, not DP). Set `use_submeshes=True`.
-3. Compute `max_seq` = round up `max_seq_len` to a multiple of
-   `lcm(32, block_size=64, *compress_rates)` (see `test_multi_user_paged_decode_demo.py`).
+3. Compute `max_seq` = `round_context(max_seq_len, config.compress_rates.values(),
+   block_size)` (see `test_multi_user_paged_decode_demo.py`).
 4. Build the RoPE bundle with the demo's `_build_rope(config, max_seq)`.
 5. Respect `DEEPSEEK_V4_DECODE_LAYERS` for `max_layers` (bringup).
 6. Build `DeepSeekV4Model(config, loader, mesh_device, cache=WeightCache(...),
    weight_dtype=ttnn.bfloat4_b, max_layers=..., use_submeshes=True)` and the
    external `lm_head` `Linear` (as in the demo).
-7. Call `model.reset_multi_user_paged_caches(max_seq, num_users=max_batch_size,
-   block_size=64)`.
+7. Call `model.prepare_static_decode(rope, max_seq, lm_head=lm_head,
+   num_sessions=max_batch_size, total_tokens=max_batch_size * max_seq,
+   block_size=...)`, then `open_session()` once per slot. Every device buffer
+   (block pools, page tables, per-session state) is allocated here, before any
+   trace is captured.
 8. Return `cls(...)` storing all of the above.
 
 Verify: instantiation runs to completion with `DEEPSEEK_V4_DECODE_LAYERS=4`
@@ -324,10 +336,13 @@ def prefill_forward(self, *args, **kwargs):
     sampling_params = kwargs.get("sampling_params")  # Phase 1: expect None
 ```
 For each user `i` in the batch:
-1. slot = `empty_slots[i]` if provided else `i`; map slot → V4 `user_id`.
-2. For `pos in range(prompt_lens[i])`: `hidden = model.decode_user(user_id,
-   int(tokens[i,pos]), pos, self.rope)`; keep the last one.
-3. `logits = ttnn.to_torch(lm_head(hidden)).reshape(1, -1).float()`.
+1. slot = `empty_slots[i]` if provided else `i`; map slot → session id, and
+   `model.reset_session(sid)` — a recycled slot still holds the previous
+   sequence's cache, and the new prefill restarts at position 0.
+2. For `pos in range(prompt_lens[i])`: `model.activate_session(sid)` then
+   `logits = model.decode_traced(int(tokens[i,pos]), pos)`; keep the last one.
+3. `logits = ttnn.to_torch(logits).reshape(1, -1).float()` (`lm_head` is folded
+   into the trace, so no separate matmul).
 4. Track each user's `next_pos = prompt_lens[i]` for the decode phase.
 Return host logits stacked to `[B, S, V]` (Phase 1 can return just the final
 position per user, `[B, 1, V]`, if the plugin accepts it — confirm in
@@ -348,11 +363,11 @@ def decode_forward(self, *args, **kwargs):
     enable_trace = kwargs.get("enable_trace", False)  # Phase 1: ignore / False
 ```
 For each *active* user slot (ignore padding rows beyond the real batch):
-1. `hidden = model.decode_user(user_id, int(tokens[slot]), int(start_pos[slot]),
-   self.rope)`.
-2. `logits[slot] = ttnn.to_torch(lm_head(hidden)).reshape(-1).float()`.
-Return `[B, 1, V]` host logits (host sampling). Ignore `enable_trace` in Phase 1
-(traced batched decode is Phase 2).
+1. `model.activate_session(self.slots[slot])`, then
+   `logits = model.decode_traced(int(tokens[slot]), int(start_pos[slot]))`.
+2. `out[slot, 0] = ttnn.to_torch(logits).reshape(-1).float()`.
+Return `[B, 1, V]` host logits (host sampling). `enable_trace` is moot — every
+step is already a trace replay; batched (B>1) tracing is Phase 2.
 
 Verify: multi-step greedy decode of a single prompt through
 `decode_forward` reproduces the standalone demo's token sequence
@@ -394,10 +409,11 @@ Verify text quality is reasonable vs the HF reference for a short prompt.
 
 ## Phase 2 — Performance & tracing (optional, after Phase 1 is correct)
 
-- **Task 2.1**: Replace the eager per-user decode loop with the **traced** path.
-  Adapt `prepare_static_decode` / `decode_traced` (currently single-user) to a
-  per-user traced replay, or capture one trace and re-inject per-user cache
-  handles. Set `enable_trace=True` support and honor it in `decode_forward`.
+- **Task 2.1** (done in the model, not yet batched): per-user decode already runs
+  on the **traced** path — one capture is shared by every session, with the active
+  session selected by swapping the page-table rows and compressor window state
+  (`activate_session`). What remains is folding the per-slot loop into a single
+  B>1 traced step so a batch costs one replay instead of `B`.
 - **Task 2.2**: Add on-device sampling. Reuse `decode_sampled_burst`'s
   on-device argmax; wire `sampling_params` (temperature/top_k/top_p). Flip
   `supports_sample_on_device=True` and support the `sample_on_device_mode` TT
@@ -423,10 +439,11 @@ Only attempt once Phases 1–2 are solid.
   `allocate_kv_cache_per_layer`, and consume `page_tables_per_group` /
   `page_tables_per_layer` in `prefill_forward`/`decode_forward` (README
   "Hybrid Attention Models").
-- **Task 3.2**: Decide the representation for CSA/HCA **compressor** caches under
-  vLLM — either a distinct KV cache group with a bespoke spec, or keep them
-  model-owned and only page the sliding K/V. Document the choice; it affects
-  memory accounting in the worker.
+- **Task 3.2**: Decide the representation for CSA/HCA caches under vLLM. They are
+  already paged model-side, but on a combined ring+compressed axis with a
+  per-group block size, so either they become distinct KV cache groups with
+  bespoke specs or stay model-owned. Document the choice; it affects memory
+  accounting in the worker.
 - **Task 3.3**: True batched (not looped) decode kernel for all three layer
   types. This likely requires changes in `tt/attention.py` and
   `tt/decoder_layer.py` to accept a batch dim > 1.
@@ -437,16 +454,17 @@ Only attempt once Phases 1–2 are solid.
 
 1. **Parity vs standalone demo**: same prompt + same `DEEPSEEK_V4_DECODE_LAYERS`
    → identical greedy token ids between the demo test and the vLLM path.
-2. **Multi-user isolation**: two different prompts in one batch diverge and do
-   not corrupt each other (mirror `test_multi_user_paged_decode_demo.py`'s
-   `assert sessions[0].generated != sessions[1].generated`).
+2. **Multi-user isolation**: interleaved sessions produce the same tokens they
+   would alone (mirror `test_multi_user_paged_decode_demo.py`; op-level dense-vs-
+   paged equivalence lives in `test_paged_kv_equivalence.py`).
 3. **Increasing seq lens**: `offline_inference_tt.py --test_increasing_seq_lens`.
 4. **Server**: completion request returns coherent text.
 
 ## Files you will create or edit
 
-- **Create** `models/experimental/deepseek_v4_flash/tt/generator_vllm.py` (bulk
-  of the work; Tasks 1.1–1.5).
+- **Edit** `models/experimental/deepseek_v4_flash/tt/generator_vllm.py` (bulk of
+  the work; Tasks 1.1–1.5 — a first cut of it exists and drives the paged
+  sessions).
 - **Edit** (in the `tenstorrent/vllm` clone)
   `plugins/vllm-tt-plugin/src/vllm_tt_plugin/model_registry.py` and
   `platform.py` (Task 1.6).
@@ -455,21 +473,29 @@ Only attempt once Phases 1–2 are solid.
 
 ## Things that will bite you (pitfalls)
 
-- **Slot ↔ user_id mapping**: vLLM reuses/condenses slots across requests. Keep a
-  stable map and reset a user's caches when its slot is reassigned to a new
-  request (there is no per-user "clear" today — you may need to add one, or
-  re-`reset_multi_user_paged_caches` when the batch composition changes).
-- **`max_num_seqs` vs `num_users`**: the internal paged pool is sized to
-  `num_users` at init. It must be `>= max_batch_size`. Size it from
-  `max_batch_size` in `initialize_vllm_model`.
+- **Slot ↔ session mapping**: vLLM reuses/condenses slots across requests. Keep a
+  stable slot → session-id map and call `model.reset_session(sid)` when a slot is
+  reassigned to a new request; that rewinds it to position 0 and returns its
+  blocks to the shared pool.
+- **`max_num_seqs` vs `num_sessions`**: the session slots are allocated at init
+  and must be `>= max_batch_size`; size them from `max_batch_size` in
+  `initialize_vllm_model`. `total_tokens` is a *shared* budget across sessions, so
+  a session that outgrows what the pool has left raises `PagedCacheFull` even if
+  its own `max_seq` is not reached.
 - **Position accounting**: V4 uses *absolute* positions for RoPE and cache slots
   (`pos % sliding_window` for the ring). Feed vLLM's `start_pos` directly as the
   absolute position; do not re-derive.
-- **`max_seq` rounding**: must be a multiple of `lcm(32, 64, *compress_rates)`
-  (compress_rates default `{4, 128}` → lcm with 32,64 = 384). vLLM's
+- **`max_seq` rounding**: use `paged_cache.round_context`, which rounds to
+  `lcm(TILE_SIZE, *(rate * block_size for rate in compress_rates))` — every
+  compressor's entry count has to be a whole number of blocks. vLLM's
   `max_model_len` will not be pre-rounded; round it up inside the wrapper and
   make sure RoPE tables cover it.
 - **bf4 weight conversion is slow**: always set `DEEPSEEK_V4_CACHE_DIR` so
   converted tiles are reused across runs.
-- **Do not hand compressor caches to vLLM paging** — they are not per-token
-  blocks. This is the single most common way this integration goes wrong.
+- **Do not hand compressor caches to vLLM paging** — the model pages them itself
+  on a combined ring+compressed axis, and the compressor *window* state is not
+  per-token blocks at all. This is the single most common way this integration
+  goes wrong.
+- **Never allocate device buffers after a trace is captured.** Pools, page tables
+  and per-session state are all created in `prepare_static_decode`; a later
+  allocation can corrupt every capture.
