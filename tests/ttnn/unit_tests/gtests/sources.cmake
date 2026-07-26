@@ -47,6 +47,7 @@ set(UNIT_TESTS_TTNN_CCL_SOURCES
     ccl/test_ccl_tensor_slicers.cpp
     ccl/test_erisc_data_mover_with_workers.cpp
     ccl/test_fabric_erisc_data_mover_loopback_with_workers.cpp
+    ccl/test_high_bw_all_gather_scheduler.cpp
     ccl/test_sharded_address_generators.cpp
     ccl/test_sharded_address_generators_new.cpp
 )

@@ -351,6 +351,31 @@
   team: models
   sp_config: sc1
 
+- name: "Blaze - High-bandwidth all-gather Galaxy perf"
+  # Production sparse-MLA transport shape: four independent 8-device SP rings execute concurrently
+  # on the full 8x4 Blackhole Galaxy while FABRIC_2D_TORUS_XY keeps both physical axes wrapped.
+  # The test characterizes 55k and 512k global sequence lengths for all four supported formats,
+  # reports median program duration and per-device effective receive bandwidth, and checks exact
+  # gather output on a smaller tensor for each format.
+  cmd: |
+    export MESH_DEVICE=TG
+    export TT_METAL_HIGH_BW_ALL_GATHER_RUN_GALAXY_PERF=1
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest \
+        tests/ttnn/unit_tests/operations/experimental/deepseek_prefill/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_perf \
+        -svv --tb=short
+    '
+  test_type: high_bw_all_gather_perf
+  test_group: ccl_perf
+  skus:
+    bh_sc1:
+      timeout: 25
+  owner_id: U08RL15T4N8
+  team: models
+  sp_config: sc1
+
 - name: "Blaze - Chunked Kimi (code_debug 55k)"
   # 55k-ISL chunked-prefill perf/smoke for Kimi: full 61 layers, 11 chunks x 5120 = 56320 tokens
   # (the full code_debug trace), 10 iterations. No-PCC: it drives the real chunked-prefill path end to
