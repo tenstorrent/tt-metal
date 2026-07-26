@@ -1,0 +1,112 @@
+{
+  "tp1_sp32/stage_1": {
+    "config": "tp1_sp32",
+    "stage": "stage_1",
+    "TP": 1,
+    "SP": 32,
+    "matmul_tp_ccl": 1040.3,
+    "ring_attention": 2599.4,
+    "overhead": 991.4,
+    "total": 4631.1,
+    "measured": false
+  },
+  "tp2_sp16/stage_1": {
+    "config": "tp2_sp16",
+    "stage": "stage_1",
+    "TP": 2,
+    "SP": 16,
+    "matmul_tp_ccl": 1529.9,
+    "ring_attention": 1376.1,
+    "overhead": 991.4,
+    "total": 3897.4,
+    "measured": false
+  },
+  "tp4_sp8/stage_1": {
+    "config": "tp4_sp8",
+    "stage": "stage_1",
+    "TP": 4,
+    "SP": 8,
+    "matmul_tp_ccl": 2509.1,
+    "ring_attention": 764.5,
+    "overhead": 991.4,
+    "total": 4265.0,
+    "measured": true
+  },
+  "tp8_sp4/stage_1": {
+    "config": "tp8_sp4",
+    "stage": "stage_1",
+    "TP": 8,
+    "SP": 4,
+    "matmul_tp_ccl": 4467.4,
+    "ring_attention": 458.7,
+    "overhead": 991.4,
+    "total": 5917.6,
+    "measured": false
+  },
+  "tp16_sp2/stage_1": {
+    "config": "tp16_sp2",
+    "stage": "stage_1",
+    "TP": 16,
+    "SP": 2,
+    "matmul_tp_ccl": 8466.8,
+    "ring_attention": 305.8,
+    "overhead": 991.4,
+    "total": 9764.0,
+    "measured": false
+  },
+  "tp1_sp32/stage_2": {
+    "config": "tp1_sp32",
+    "stage": "stage_2",
+    "TP": 1,
+    "SP": 32,
+    "matmul_tp_ccl": 2305.5,
+    "ring_attention": 11552.4,
+    "overhead": 1960.8,
+    "total": 15818.6,
+    "measured": false
+  },
+  "tp2_sp16/stage_2": {
+    "config": "tp2_sp16",
+    "stage": "stage_2",
+    "TP": 2,
+    "SP": 16,
+    "matmul_tp_ccl": 3351.2,
+    "ring_attention": 6116.0,
+    "overhead": 1960.8,
+    "total": 11427.9,
+    "measured": false
+  },
+  "tp4_sp8/stage_2": {
+    "config": "tp4_sp8",
+    "stage": "stage_2",
+    "TP": 4,
+    "SP": 8,
+    "matmul_tp_ccl": 5442.6,
+    "ring_attention": 3397.8,
+    "overhead": 1960.8,
+    "total": 10801.2,
+    "measured": true
+  },
+  "tp8_sp4/stage_2": {
+    "config": "tp8_sp4",
+    "stage": "stage_2",
+    "TP": 8,
+    "SP": 4,
+    "matmul_tp_ccl": 9625.6,
+    "ring_attention": 2038.7,
+    "overhead": 1960.8,
+    "total": 13625.0,
+    "measured": false
+  },
+  "tp16_sp2/stage_2": {
+    "config": "tp16_sp2",
+    "stage": "stage_2",
+    "TP": 16,
+    "SP": 2,
+    "matmul_tp_ccl": 18180.4,
+    "ring_attention": 1359.1,
+    "overhead": 1960.8,
+    "total": 21500.2,
+    "measured": false
+  }
+}

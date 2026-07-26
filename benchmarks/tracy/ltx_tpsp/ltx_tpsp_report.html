@@ -1,0 +1,274 @@
+<title>LTX-2.3 TP×SP on BH Galaxy 4×8</title>
+<style>
+  :root{
+    --paper:#fbfcfd; --panel:#f2f5f8; --ink:#161b21; --muted:#5b6773; --line:#d8e0e7;
+    --accent:#2f6f8f; --mm:#4C78A8; --ring:#F58518; --over:#9aa4ab; --good:#2a7d4f;
+    --shadow:0 1px 2px rgba(20,40,60,.06),0 4px 16px rgba(20,40,60,.06);
+    --mono:ui-monospace,SFMono-Regular,Menlo,"Cascadia Mono",Consolas,monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{ --paper:#0f1318; --panel:#171d24; --ink:#e7edf2; --muted:#93a1ad; --line:#28323c;
+           --accent:#5aa6c9; --mm:#6b9bd1; --ring:#f79a4a; --over:#8b96a0; --good:#4bb37a;
+           --shadow:0 1px 2px rgba(0,0,0,.4),0 6px 20px rgba(0,0,0,.35); }
+  }
+  :root[data-theme="light"]{ --paper:#fbfcfd; --panel:#f2f5f8; --ink:#161b21; --muted:#5b6773; --line:#d8e0e7;
+    --accent:#2f6f8f; --mm:#4C78A8; --ring:#F58518; --over:#9aa4ab; --good:#2a7d4f;
+    --shadow:0 1px 2px rgba(20,40,60,.06),0 4px 16px rgba(20,40,60,.06); }
+  :root[data-theme="dark"]{ --paper:#0f1318; --panel:#171d24; --ink:#e7edf2; --muted:#93a1ad; --line:#28323c;
+    --accent:#5aa6c9; --mm:#6b9bd1; --ring:#f79a4a; --over:#8b96a0; --good:#4bb37a;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 6px 20px rgba(0,0,0,.35); }
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
+       line-height:1.6;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:960px;margin:0 auto;padding:clamp(20px,4vw,56px) clamp(16px,4vw,32px)}
+  .prose{max-width:68ch}
+  h1{font-size:clamp(1.7rem,3.4vw,2.5rem);line-height:1.12;margin:.2em 0 .1em;letter-spacing:-.02em;text-wrap:balance}
+  h2{font-size:1.32rem;margin:2.4em 0 .5em;letter-spacing:-.01em;display:flex;align-items:baseline;gap:.5em}
+  h2 .n{font-family:var(--mono);font-size:.8rem;color:var(--accent);font-weight:700}
+  h3{font-size:1.02rem;margin:1.6em 0 .3em}
+  p{margin:.6em 0}
+  a{color:var(--accent)}
+  .eyebrow{font-family:var(--mono);text-transform:uppercase;letter-spacing:.14em;font-size:.72rem;color:var(--accent);font-weight:700}
+  .sub{color:var(--muted);font-size:1.05rem;margin-top:.4em}
+  code,.mono{font-family:var(--mono)}
+  code{background:var(--panel);padding:.08em .38em;border-radius:4px;font-size:.86em;border:1px solid var(--line)}
+  strong{font-weight:650}
+  .rule{height:1px;background:var(--line);border:0;margin:2.2em 0}
+
+  .verdict{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--good);
+           border-radius:10px;padding:20px 22px;box-shadow:var(--shadow);margin:1.6em 0}
+  .verdict h2{margin:0 0 .3em}
+  .verdict .big{font-family:var(--mono);font-size:1.5rem;font-weight:700;color:var(--good);letter-spacing:-.01em}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:680px){.grid2{grid-template-columns:1fr}}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 18px 14px;box-shadow:var(--shadow)}
+  .card h3{margin:0 0 .1em;font-size:.95rem}
+  .card .cap{color:var(--muted);font-size:.82rem;font-family:var(--mono);margin-bottom:.7em}
+
+  /* chart */
+  .chart{display:flex;align-items:flex-end;gap:min(3.4vw,26px);height:330px;padding:26px 4px 0;
+         border-bottom:1px solid var(--line);overflow-x:auto}
+  .bar{flex:1 1 0;min-width:58px;display:flex;flex-direction:column;align-items:center;height:100%;justify-content:flex-end;position:relative}
+  .stack{width:64%;max-width:66px;display:flex;flex-direction:column-reverse;border-radius:4px 4px 0 0;overflow:hidden;
+         box-shadow:var(--shadow)}
+  .seg{width:100%}
+  .seg.mm{background:var(--mm)} .seg.ring{background:var(--ring)} .seg.over{background:var(--over)}
+  .tot{position:absolute;font-family:var(--mono);font-size:.74rem;font-weight:700;color:var(--ink);white-space:nowrap}
+  .flag{position:absolute;font-family:var(--mono);font-size:.64rem;letter-spacing:.03em;white-space:nowrap}
+  .flag.ship{color:var(--good);font-weight:700}
+  .flag.un{color:var(--muted)}
+  .xlab{margin-top:8px;font-family:var(--mono);font-size:.76rem;text-align:center;color:var(--ink)}
+  .xlab .sp{color:var(--muted)}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;margin:12px 2px 0;font-family:var(--mono);font-size:.78rem;color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .sw{width:12px;height:12px;border-radius:3px;display:inline-block}
+
+  table{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:.82rem;margin:.6em 0}
+  th,td{padding:7px 10px;text-align:right;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
+  th:first-child,td:first-child{text-align:left}
+  thead th{color:var(--muted);font-weight:600;border-bottom:2px solid var(--line);text-transform:uppercase;font-size:.7rem;letter-spacing:.06em}
+  tr.ship td{background:color-mix(in srgb,var(--good) 10%,transparent);font-weight:650}
+  .tag{font-family:var(--mono);font-size:.66rem;padding:.1em .5em;border-radius:100px;border:1px solid var(--line);color:var(--muted)}
+  .tag.m{color:var(--good);border-color:var(--good)}
+  .tag.p{color:var(--accent);border-color:var(--accent)}
+
+  .callout{border:1px solid var(--line);border-left:3px solid var(--accent);background:var(--panel);
+           border-radius:8px;padding:14px 16px;margin:1.2em 0;font-size:.95rem}
+  .callout.warn{border-left-color:var(--ring)}
+  ul{margin:.5em 0;padding-left:1.25em} li{margin:.3em 0}
+  .eq{font-family:var(--mono);background:var(--panel);border:1px solid var(--line);border-radius:8px;
+      padding:12px 14px;font-size:.9rem;overflow-x:auto;margin:.8em 0}
+  .k{color:var(--accent);font-weight:700}
+  footer{color:var(--muted);font-size:.8rem;font-family:var(--mono);margin-top:3em;border-top:1px solid var(--line);padding-top:1.2em}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+</style>
+
+<div class="wrap">
+  <div class="eyebrow">LTX-2.3 bringup · denoiser parallelism</div>
+  <h1>Choosing TP×SP for the LTX-2.3 denoiser on a Blackhole Galaxy</h1>
+  <p class="sub prose">One transformer layer, 32 chips, one degree of freedom: how to split
+  <code>TP · SP = 32</code>. This is the measurement, the model, and the topology reasoning behind the shipped split.</p>
+
+  <div class="verdict">
+    <div class="eyebrow" style="color:var(--good)">Decision</div>
+    <div class="big">TP = 4 &nbsp;/&nbsp; SP = 8</div>
+    <p style="margin:.3em 0 0" class="prose">Sits at the floor of the per-layer latency curve for the wall-clock-dominant
+    <strong>stage 2</strong> (HD, 38 912 tokens) and within ~9% of optimal for stage 1. Both 1-D extremes lose:
+    a fat SP ring drowns in K/V-gather, a fat TP shard starves the matmul and inflates the feature all-gather.</p>
+  </div>
+
+  <h2><span class="n">01</span> The one measured point, decomposed</h2>
+  <p class="prose">Profiled per-op device time for the shipped <code>(TP=4, SP=8)</code> layer on BH Galaxy 4×8
+  (branch <code>rjsdpa-split-forward</code>). Two facts drive everything downstream:</p>
+  <div class="grid2">
+    <div class="card">
+      <h3>Ring attention's share nearly doubles with sequence</h3>
+      <div class="cap">RingJointSDPA, % of per-layer device time</div>
+      <table>
+        <thead><tr><th>Bucket</th><th>Stage 1<br>N=9 728</th><th>Stage 2<br>N=38 912</th></tr></thead>
+        <tbody>
+          <tr><td>Matmul + TP-CCL</td><td>59%</td><td>50%</td></tr>
+          <tr class="ship"><td>Ring attention</td><td>18%</td><td>31%</td></tr>
+          <tr><td>Norm / RoPE / misc</td><td>23%</td><td>19%</td></tr>
+        </tbody>
+      </table>
+      <p style="font-size:.86rem;margin:.4em 0 0" class="prose">Attention is O(N²), the matmuls O(N). At HD the SP collective
+      is the thing to optimize — so the optimum shifts toward more SP.</p>
+    </div>
+    <div class="card">
+      <h3>The fused ops tell you what's compute vs comm</h3>
+      <div class="cap">FLOP utilization from the profile</div>
+      <table>
+        <thead><tr><th>Op</th><th>FLOP&nbsp;util</th><th>Reads as</th></tr></thead>
+        <tbody>
+          <tr><td>AllGather-matmul</td><td>~5%</td><td>TP&nbsp;comm</td></tr>
+          <tr><td>ReduceScatter-matmul</td><td>~53%</td><td>compute</td></tr>
+          <tr><td>RingJointSDPA</td><td>transport-bound</td><td>SP&nbsp;gather</td></tr>
+        </tbody>
+      </table>
+      <p style="font-size:.86rem;margin:.4em 0 0" class="prose">The column-parallel all-gather is dispatch/comm-bound, not
+      FLOP-bound. That's the calibration hook: the measured buckets split cleanly into a compute floor and a collective term.</p>
+    </div>
+  </div>
+
+  <h2><span class="n">02</span> The tradeoff curve</h2>
+  <p class="prose">Per-layer device time vs the split. <span class="tag m">measured</span> is the profiled anchor;
+  <span class="tag p">model</span> points are the roofline calibrated <em>through</em> that anchor
+  (compute floor + <code class="k">tp∝N·TP</code> + <code class="k">sp∝N/TP</code>), pending the measured sweep.
+  Every non-anchor split is also chunk-size <strong>untuned</strong>, which can only make it look worse — so the
+  shipped point's win is conservative.</p>
+
+  <div class="card" style="margin-bottom:16px">
+    <h3>Stage 2 — HD, N = 38 912 <span class="tag p">model + <span class="tag m" style="border:0;padding:0">measured@(4,8)</span></span></h3>
+    <div class="cap">per-layer device time (µs) · minimum at TP=4 / SP=8</div>
+    <div class="chart" id="c2"></div>
+    <div class="xrow" id="x2" style="display:flex;gap:min(3.4vw,26px);padding:0 4px"></div>
+  </div>
+  <div class="card">
+    <h3>Stage 1 — N = 9 728 <span class="tag p">model + measured@(4,8)</span></h3>
+    <div class="cap">per-layer device time (µs) · flatter floor; TP=2/SP=16 marginally ahead of the shipped TP=4/SP=8</div>
+    <div class="chart" id="c1"></div>
+    <div class="xrow" id="x1" style="display:flex;gap:min(3.4vw,26px);padding:0 4px"></div>
+  </div>
+  <div class="legend">
+    <span><i class="sw" style="background:var(--mm)"></i>Matmul + TP-CCL</span>
+    <span><i class="sw" style="background:var(--ring)"></i>Ring attention (SP)</span>
+    <span><i class="sw" style="background:var(--over)"></i>Norm / RoPE / misc</span>
+  </div>
+
+  <h2><span class="n">03</span> Why the curve is U-shaped</h2>
+  <p class="prose">Start from the one fact that removes the red herring:</p>
+  <div class="callout">
+    <strong>Per-device compute is invariant to the split.</strong> Each chip always does <code>total / 32</code> —
+    for the matmuls <em>and</em> for attention. Matmul: <code>M·(W/TP) = (N·TP/32)·(W/TP) = N·W/32</code>, the TP cancels.
+    Attention: <code>heads·N²·hd/(TP·SP) = N²·hd</code>, the split cancels. So the choice is <em>not</em> about FLOPs —
+    it is entirely about collective cost and matmul shape efficiency.
+  </div>
+  <p class="prose">What does change are two collectives that pull in opposite directions:</p>
+  <div class="eq">
+    <span class="k">TP feature all-gather</span>  bytes ~ M·dim = (N·TP/32)·dim   →  cost ∝ <b>N·TP</b>   (grows as TP ↑)<br>
+    <span class="k">SP ring K/V gather</span>    bytes ~ N·heads_local = N·(32/TP) →  cost ∝ <b>N/TP</b>   (grows as SP ↑, i.e. TP ↓)
+  </div>
+  <p class="prose">Sum a rising <code>N·TP</code> and a falling <code>N/TP</code> and you get a U with its floor near
+  <code>TP* ≈ √(k_sp/k_tp)</code>. Because ring attention is relatively costlier at longer sequence, <code>k_sp/k_tp</code>
+  is larger at stage 2 → the optimum sits at a <em>higher</em> TP there (4) than at stage 1 (2). Add matmul MFU rolloff at
+  high TP — at TP=32 the attn-out projection is only N=128 wide (4 tiles), mcast-bound — and the right wall steepens further.</p>
+
+  <h3>The two 1-D extremes, concretely</h3>
+  <ul class="prose">
+    <li><code>TP=1 / SP=32</code> — no TP collective, but every layer ring-gathers all 32 heads of K/V around a
+      32-long ring (16-hop diameter). Ring attention balloons: predicted <strong>11.5 ms/layer</strong> at stage 2 vs 3.4 ms shipped.</li>
+    <li><code>TP=32 / SP=1</code> — <strong>architecturally invalid.</strong> LTX video self-attention masks SP-padded keys only
+      via ring SDPA's <code>logical_n</code>, which needs <code>SP&gt;1</code>. Plain SDPA at SP=1 would attend padded keys and
+      corrupt the output. It doesn't just lose — it can't run.</li>
+  </ul>
+
+  <h2><span class="n">04</span> How the physical torus shapes the answer</h2>
+  <p class="prose">A Blackhole Galaxy is 32 chips wired as a native <strong>8×4 2-D torus</strong> — wraparound (ring) links on
+  <em>both</em> axes, <strong>4 Ethernet links</strong> between adjacent chips at <strong>200 Gbps bi-dir each</strong>. A logical
+  4×8 is the same silicon relabeled. Two properties of that fabric decide where each collective wants to live:</p>
+  <ul class="prose">
+    <li><strong>A ring axis sustains both directions</strong> → ≈2× the bandwidth of a linear (non-wrapped) axis. This is why LTX runs
+      <code>FABRIC_1D_RING</code> and <code>Topology.Ring</code>, not linear.</li>
+    <li><strong>Shorter ring = fewer hops.</strong> Diameter is ~N/2: a length-4 axis is 2 hops, length-8 is 4, length-32 is 16.
+      For a fixed tensor the shorter ring wins on latency.</li>
+  </ul>
+  <p class="prose">So the placement rule: put the <strong>heaviest, most frequent</strong> collective on the axis that serves it best.
+  The K/V ring-gather runs in every attention and moves the most bytes → it takes the long (length-8) axis for bandwidth;
+  TP's smaller, matmul-fused all-gather tolerates the short (length-4) axis. That is the precise sense in which
+  <em>matmul-best is one orientation and attention-best is the other</em> — and the shipped <code>sp_axis=1 (len 8), tp_axis=0 (len 4)</code>
+  is the attention-favoring choice, correct because attention is the growing cost at HD.</p>
+  <div class="callout warn"><strong>Open question the sweep answers directly:</strong> is SP-on-len-8 (shipped, bandwidth) actually
+  better than SP-on-len-4 (fewer hops)? The <code>*_altaxis</code> rows in the harness transpose the mesh to measure exactly this.</div>
+
+  <h2><span class="n">05</span> The verdict on TP=4 / SP=8</h2>
+  <ul class="prose">
+    <li><strong>Optimal for stage 2</strong>, which dominates wall-clock — the measured anchor sits at the modeled floor.</li>
+    <li><strong>Within ~9% of optimal for stage 1</strong>; one shared config for both stages avoids a re-shard between them.</li>
+    <li><strong>Balanced 2-D shard</strong> — neither collective is allowed to blow up; each op stays near its compute-bound floor.</li>
+    <li><strong>Rides the torus correctly</strong> — the dominant K/V ring gets the long, double-bandwidth axis.</li>
+  </ul>
+
+  <h2><span class="n">06</span> Status &amp; how the numbers get replaced</h2>
+  <p class="prose">The measured sweep is blocked on a Galaxy reset (eth core wedged at <code>open_mesh_device</code>). The harness is
+  written and validated up to mesh-open:</p>
+  <ul class="prose">
+    <li>Harness: <code>models/tt_dit/tests/models/ltx/test_perf_ltx_layer_tpsp.py</code> — one video-only <code>LTXTransformerBlock</code>,
+      random weights, signposted forward; params sweep all six splits + two axis-placement variants × both stages.</li>
+    <li>Per config: <code>python -m tracy -p -r -o … -a device_kernel_duration -m "pytest … -k '&lt;id&gt;'"</code> →
+      <code>tt_perf_report --start-signpost start --end-signpost stop --stacked-csv</code> → <code>bucket.py</code> → <code>plot.py</code>.</li>
+    <li>On reset, the measured points drop into the same charts and flip <span class="tag p">model</span> → <span class="tag m">measured</span>.</li>
+  </ul>
+
+  <footer>
+    BH Galaxy 4×8 · LTX-2.3-22B distilled · dim 4096, 32 heads×128, FFN 16384, 48 layers · bf16 ·
+    measured anchor from <code>benchmarks/tracy/ltx_4x8_ring_profiles</code> · model calibrated through the (4,8) anchor,
+    non-anchor splits pending device measurement.
+  </footer>
+</div>
+
+<script>
+  const DATA = {
+    c2:{max:21500, bars:[
+      {tp:1,sp:32,mm:2306,ring:11552,over:1961,tot:15819,flag:"untuned"},
+      {tp:2,sp:16,mm:3351,ring:6116,over:1961,tot:11428,flag:"untuned"},
+      {tp:4,sp:8,mm:5443,ring:3398,over:1961,tot:10801,flag:"SHIPPED",ship:true},
+      {tp:8,sp:4,mm:9626,ring:2039,over:1961,tot:13625,flag:"untuned"},
+      {tp:16,sp:2,mm:18180,ring:1359,over:1961,tot:21500,flag:"untuned"},
+    ]},
+    c1:{max:9764, bars:[
+      {tp:1,sp:32,mm:1040,ring:2599,over:991,tot:4631,flag:"untuned"},
+      {tp:2,sp:16,mm:1530,ring:1376,over:991,tot:3897,flag:"untuned"},
+      {tp:4,sp:8,mm:2509,ring:764,over:991,tot:4265,flag:"SHIPPED",ship:true},
+      {tp:8,sp:4,mm:4467,ring:459,over:991,tot:5918,flag:"untuned"},
+      {tp:16,sp:2,mm:8467,ring:306,over:991,tot:9764,flag:"untuned"},
+    ]},
+  };
+  const H = 300;
+  for(const [id,cfg] of Object.entries(DATA)){
+    const chart=document.getElementById(id);
+    const xrow=document.getElementById(id.replace("c","x"));
+    for(const b of cfg.bars){
+      const px=v=>Math.max(2,(v/cfg.max)*H);
+      const bar=document.createElement("div"); bar.className="bar";
+      const stack=document.createElement("div"); stack.className="stack"; stack.style.height=px(b.tot)+"px";
+      for(const [cls,val] of [["mm",b.mm],["ring",b.ring],["over",b.over]]){
+        const s=document.createElement("div"); s.className="seg "+cls; s.style.height=px(val)+"px";
+        s.title=cls+": "+val+" µs"; stack.appendChild(s);
+      }
+      const tot=document.createElement("div"); tot.className="tot"; tot.textContent=(b.tot/1000).toFixed(1)+" ms";
+      tot.style.bottom=(px(b.tot)+22)+"px";
+      const flag=document.createElement("div"); flag.className="flag "+(b.ship?"ship":"un");
+      flag.textContent=b.ship?"◆ SHIPPED":"untuned*"; flag.style.bottom=(px(b.tot)+6)+"px";
+      bar.appendChild(stack); bar.appendChild(tot); bar.appendChild(flag);
+      chart.appendChild(bar);
+      const xl=document.createElement("div"); xl.className="xlab"; xl.style.flex="1 1 0"; xl.style.minWidth="58px";
+      xl.innerHTML="TP="+b.tp+"<br><span class='sp'>SP="+b.sp+"</span>";
+      xrow.appendChild(xl);
+    }
+  }
+</script>
