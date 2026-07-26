@@ -71,6 +71,17 @@ def _block_bias(seq_len: int, n_windows: int, compress_rate: int, dtype: torch.d
     return bias.masked_fill(entry >= threshold, _MASK_NEG)
 
 
+def _window_indices(compress_rate: int, pos: int) -> tuple[int, int]:
+    """``(slot, window)`` for the compressor at absolute ``pos``.
+
+    ``slot`` is where this token's projection goes in the one-window buffer, and
+    ``window`` is the index of the window that closes at ``pos`` — i.e. the entry
+    the pool appends. ``window`` is ``-1`` before the first window closes, in which
+    case nothing is pooled (see :meth:`DeepSeekV4Model._compressor_pool_due`).
+    """
+    return pos % compress_rate, (pos + 1) // compress_rate - 1
+
+
 class DeepSeekV4Model(DeepSeekV4Module):
     """ttnn port of ``DeepseekV4Model`` (prefill).
 
@@ -339,12 +350,13 @@ class DeepSeekV4Model(DeepSeekV4Module):
     #
     # A CSA/HCA compressor emits a new compressed entry once every
     # ``compress_rate`` tokens, and the block-bias exposes entries
-    # ``w < (pos+1)//compress_rate`` -- constant between two window closures. So
-    # the (``max_seq``-sized, hence expensive) pool only has to run on the steps
-    # that close a window; :class:`_StaticLayerCache` holds the result in between.
-    # ``DEEPSEEK_V4_POOL_EVERY_STEP=1`` restores the old pool-every-step behaviour
-    # (and, on the traced path, collapses back to a single captured trace).
-    _POOL_EVERY_STEP = os.environ.get("DEEPSEEK_V4_POOL_EVERY_STEP", "0") not in ("0", "", "false", "False")
+    # ``w < (pos+1)//compress_rate`` -- constant between two window closures. So the
+    # pool only runs on the steps that close a window, and it pools *only* that
+    # window's ``compress_rate`` projections, appending one entry to the layer's
+    # combined buffer (:class:`_StaticLayerCache`). Both together make a step
+    # ``O(compress_rate)`` instead of ``O(max_seq)``, so throughput is flat in
+    # ``max_seq``. Pooling off-closure is not merely slower but wrong -- the window
+    # buffer is only fully written at a closure -- so there is no A/B switch here.
 
     # -- SDPA masking mode ------------------------------------------------------- #
     #
@@ -369,8 +381,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
         """Does the step at absolute ``pos`` close a window for ``layer_type``?"""
         if layer_type == "sliding_attention":
             return False
-        if self._POOL_EVERY_STEP:
-            return True
         return (pos + 1) % self.config.compress_rates[layer_type] == 0
 
     def _compress_rates_for(self, layer_types) -> list[int]:
@@ -390,8 +400,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
         """
         if not crs:
             return [()], {0: 0}
-        if self._POOL_EVERY_STEP:
-            return [tuple(True for _ in crs)], {p: 0 for p in range(math.lcm(*crs))}
         phases: list[tuple] = []
         phase_of: dict[int, int] = {}
         for p in range(math.lcm(*crs)):
@@ -564,6 +572,12 @@ class DeepSeekV4Model(DeepSeekV4Module):
             )
             sdpa_cur_pos = int32_pos_tensor(sdpa_causal_cur_pos(w, compress_rate, pos), this_device) if causal else None
 
+            win_slot = win_row = None
+            if compress_rate is not None:
+                slot, wi = _window_indices(compress_rate, pos)
+                win_slot = int32_pos_tensor(slot, this_device)
+                win_row = int32_pos_tensor(w + max(wi, 0), this_device)
+
             paged_pool = None
             page_row = None
             if layer_type == "sliding_attention":
@@ -588,6 +602,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 page_table=page_row,
                 pool_compressor=self._compressor_pool_due(layer_type, pos),
                 sdpa_cur_pos=sdpa_cur_pos,
+                win_slot=win_slot,
+                win_row=win_row,
             )
             last_submesh_id = current_submesh_id
             _profile(this_device)
@@ -608,10 +624,10 @@ class DeepSeekV4Model(DeepSeekV4Module):
     ):
         """Single-position RoPE rows for a decode step.
 
-        Returns ``(cos, sin, neg_sin, cos_win, sin_win)`` where ``cos/sin/neg_sin``
-        are the one ``[1,1,1,Rd]`` rows at absolute position ``pos`` and the window
-        tables cover every compressor window in the fixed paged buffer (``None`` for
-        sliding layers).
+        Returns ``(cos, sin, neg_sin, cos_win, sin_win)``, all one ``[1,1,1,Rd]`` row:
+        ``cos/sin/neg_sin`` at absolute ``pos``, and ``cos_win/sin_win`` at the window
+        closing at ``pos`` (``None`` for sliding layers). Incremental pooling emits a
+        single compressed entry per closure, so a single window row is all it needs.
         """
         key = f'{"sliding" if layer_type == "sliding_attention" else compress_rate}_{device.id()}'
         if key in cache:
@@ -626,10 +642,12 @@ class DeepSeekV4Model(DeepSeekV4Module):
         cos_win_tt = sin_win_tt = None
         if layer_type != "sliding_attention":
             assert self._decode_max_seq is not None
-            n_win_cap = self._decode_max_seq // compress_rate
-            if n_win_cap > 0:
+            if self._decode_max_seq // compress_rate > 0:
+                # ``rope["win"][cr]`` row w is the "compress" family at position w*cr;
+                # clamp because before the first closure there is no window to pool.
+                wi = max(_window_indices(compress_rate, pos)[1], 0)
                 cw_h, sw_h = rope["win"][compress_rate]
-                cw, sw = make_rope_table(cw_h[:n_win_cap], sw_h[:n_win_cap])
+                cw, sw = make_rope_table(cw_h[wi : wi + 1], sw_h[wi : wi + 1])
                 cos_win_tt = self._to_tt(cw, device)
                 sin_win_tt = self._to_tt(sw, device)
         out = (cos_tt, sin_tt, neg_sin_tt, cos_win_tt, sin_win_tt)
@@ -693,6 +711,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 if causal
                 else host_decode_mask(w, layer_type, compress_rate, pos, self._decode_max_seq, this_device)
             )
+            win_slot = win_row = None
+            if compress_rate is not None:
+                slot, wi = _window_indices(compress_rate, pos)
+                win_slot = int32_pos_tensor(slot, this_device)
+                win_row = int32_pos_tensor(w + max(wi, 0), this_device)
             streams = layer.decode(
                 streams,
                 cos_tt,
@@ -706,6 +729,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 int32_pos_tensor(pos, this_device),
                 input_ids=ids,
                 pool_compressor=self._compressor_pool_due(layer_type, pos),
+                win_slot=win_slot,
+                win_row=win_row,
                 sdpa_cur_pos=(
                     int32_pos_tensor(sdpa_causal_cur_pos(w, compress_rate, pos), this_device) if causal else None
                 ),
@@ -854,7 +879,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 "device": device,
                 "index": k,
                 "layers": layers_k,
-                "win_rope": {},
                 "rope_invfreq": {},
                 "mask_gen": {},
                 "scaches": {li: self._build_static_layer_cache(li, device) for li in layers_k},
@@ -898,28 +922,6 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     )
                 )
                 sm["mask_gen"][lt] = (a_tt, b_tt, cr)
-            for cr in crs:
-                n_win_cap = self._cr_caps[cr][1]
-                cw, sw = make_rope_table(rope["win"][cr][0][:n_win_cap], rope["win"][cr][1][:n_win_cap])
-                # Store the compressor RoPE tables DRAM-interleaved -- the layout the fused
-                # ``_apply_rope`` op consumes for cos/sin (only X is sharded). The static path
-                # uses the full ``n_win_cap`` rows, matching the compressed input rows.
-                sm["win_rope"][cr] = (
-                    ttnn.from_torch(
-                        cw,
-                        dtype=ttnn.bfloat16,
-                        layout=ttnn.TILE_LAYOUT,
-                        device=device,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    ),
-                    ttnn.from_torch(
-                        sw,
-                        dtype=ttnn.bfloat16,
-                        layout=ttnn.TILE_LAYOUT,
-                        device=device,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    ),
-                )
             # Submesh 0 owns global layer 0, whose per-step inputs are host-written into
             # the tiny fused packet (token + positions); everything downstream is fed
             # over the ring sockets. Under round-robin, submesh 0 *also* revisits the ring
@@ -970,15 +972,41 @@ class DeepSeekV4Model(DeepSeekV4Module):
             invalid = ttnn.add(invalid, ttnn.ge(b, thr))  # compressor: window >= completed count
         return ttnn.typecast(ttnn.multiply(invalid, _MASK_NEG), ttnn.bfloat16)
 
+    @staticmethod
+    def _device_index(value_f: ttnn.Tensor) -> ttnn.Tensor:
+        """A device-computed FP32 scalar tile ``[1,1,1,1]`` as the INT32 ``[1]`` row-major
+        tensor the in-place cache writers and SDPA-decode take for an index."""
+        return ttnn.reshape(ttnn.to_layout(ttnn.typecast(value_f, ttnn.int32), ttnn.ROW_MAJOR_LAYOUT), [1])
+
     def _device_causal_pos(self, cr: int, pos_f: ttnn.Tensor) -> ttnn.Tensor:
         """Generate one decode step's causal SDPA ``cur_pos`` on device from the
         absolute position: ``sliding_window + (pos+1)//cr - 1``, the inclusive last
         valid index on the ``[sliding | compressor]`` KV axis (the device twin of
-        :func:`sdpa_causal_cur_pos`). Returned as the INT32 ``[1]`` row-major tensor
-        the op takes for ``cur_pos_tensor``."""
+        :func:`sdpa_causal_cur_pos`)."""
         thr = ttnn.floor(ttnn.multiply(ttnn.add(pos_f, 1.0), 1.0 / cr))  # (pos+1)//cr
-        last = ttnn.add(thr, float(self.sliding_window - 1))
-        return ttnn.reshape(ttnn.to_layout(ttnn.typecast(last, ttnn.int32), ttnn.ROW_MAJOR_LAYOUT), [1])
+        return self._device_index(ttnn.add(thr, float(self.sliding_window - 1)))
+
+    def _device_compressor_indices(self, cr: int, pos_f: ttnn.Tensor):
+        """Device twins of :func:`_window_indices`, plus the closing window's position.
+
+        Returns ``(win_slot, win_row, win_pos_f)``: the INT32 ``[1]`` slot ``pos % cr``
+        this token's projection is written to in the one-window buffer, the INT32 ``[1]``
+        row ``sliding_window + w`` of the combined KV buffer the pooled entry lands in,
+        and the FP32 ``[1,1,1,1]`` absolute position ``w * cr`` to RoPE that entry at,
+        for the window ``w = (pos+1)//cr - 1`` closing at this step.
+
+        A trace cannot branch on the device-side position, so all three are pure
+        arithmetic on ``pos_f``. On steps that do not close a window ``w`` is one short
+        (or ``-1``), but nothing consumes these then (``pool_compressor`` is ``False``).
+        """
+        thr = ttnn.floor(ttnn.multiply(ttnn.add(pos_f, 1.0), 1.0 / cr))  # (pos+1)//cr == w+1
+        slot_f = ttnn.subtract(pos_f, ttnn.multiply(ttnn.floor(ttnn.multiply(pos_f, 1.0 / cr)), float(cr)))
+        win_pos_f = ttnn.multiply(ttnn.subtract(thr, 1.0), float(cr))
+        return (
+            self._device_index(slot_f),
+            self._device_index(ttnn.add(thr, float(self.sliding_window - 1))),
+            win_pos_f,
+        )
 
     def _decode_submesh_static(self, sm: dict, pool_flags: dict[int, bool], causal: bool) -> ttnn.Tensor:
         """Run one submesh's round-robin layers over the per-step input packets /
@@ -1059,9 +1087,14 @@ class DeepSeekV4Model(DeepSeekV4Module):
             mask = None if use_causal else self._device_mask(a, b, cr, pos_f)
             sdpa_cur_pos = self._device_causal_pos(cr, pos_f) if use_causal else None
             if lt == "sliding_attention":
-                cos_win = sin_win = None
+                cos_win = sin_win = win_slot = win_row = None
             else:
-                cos_win, sin_win = sm["win_rope"][cfg.compress_rates[lt]]
+                # Incremental pooling emits one entry per closure, so instead of a
+                # ``max_seq``-wide window table we generate just that entry's RoPE row.
+                # ``rope["win"][cr]`` row w is the "compress" family at ``w * cr``, which
+                # is the same generator (and inv_freq) already in scope for this layer.
+                win_slot, win_row, win_pos_f = self._device_compressor_indices(cr, pos_f)
+                cos_win, sin_win, _ = self._device_rope(inv_freq, scaling, win_pos_f)
 
             if is_first:
                 inputs_embeds = self.embed_tokens(token)  # [1, 1, D]
@@ -1085,6 +1118,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 hash_token=token if layer.mlp.is_hash else None,
                 pool_compressor=(lt != "sliding_attention" and pool_flags[cfg.compress_rates[lt]]),
                 sdpa_cur_pos=sdpa_cur_pos,
+                win_slot=win_slot,
+                win_row=win_row,
             )
 
             if is_last:

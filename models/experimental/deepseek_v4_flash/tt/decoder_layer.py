@@ -133,6 +133,8 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         page_table: ttnn.Tensor | None = None,
         pool_compressor: bool = True,
         sdpa_cur_pos: ttnn.Tensor | None = None,
+        win_slot: ttnn.Tensor | None = None,
+        win_row: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Single-token decode: ``hidden_streams`` ``[B, 1, hc_mult, D]`` -> same.
 
@@ -159,6 +161,8 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
                 page_table=page_table,
                 pool_compressor=pool_compressor,
                 sdpa_cur_pos=sdpa_cur_pos,
+                win_slot=win_slot,
+                win_row=win_row,
             )
         with _region("ATTN_MIX"):
             hidden_streams = self._mix(post, comb, attn_out, hidden_streams)
@@ -187,6 +191,8 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         hash_token: ttnn.Tensor | None = None,
         pool_compressor: bool = True,
         sdpa_cur_pos: ttnn.Tensor | None = None,
+        win_slot: ttnn.Tensor | None = None,
+        win_row: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Trace-safe single-token decode (see :meth:`decode`). Uses the fixed-size
         in-place attention cache + the host-sync-free MoE so the whole block can be
@@ -209,6 +215,8 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             compress_pos,
             pool_compressor=pool_compressor,
             sdpa_cur_pos=sdpa_cur_pos,
+            win_slot=win_slot,
+            win_row=win_row,
         )
         hidden_streams = self._mix(post, comb, attn_out, hidden_streams)
         post, comb, collapsed = self.ffn_hc(hidden_streams)
