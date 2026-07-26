@@ -14,6 +14,8 @@ Covers the control-flow the recapture fix depends on, without a device:
 from __future__ import annotations
 
 
+import pytest
+
 from models.experimental.diffusion_gemma.tt import denoise_forward as DF
 from models.experimental.diffusion_gemma.tt import traced_denoise as TD
 
@@ -88,6 +90,9 @@ class _FakeAdapter:
         self.calls = []
         self.use_reveal_mask = False
         self.prompt_hidden_by_layer = self  # acts as the reader too
+        # The real adapter keeps one reveal buffer per layer type; the controller logs their keys
+        # on the retention-window path, so the double has to carry them too.
+        self._reveal_mask_bufs = {}
 
     # reader surface
     def set_read_span(self, p_max):
@@ -97,6 +102,8 @@ class _FakeAdapter:
     def prepare_reveal_mask_buffers(self, *, canvas_len, p_max, prompt_len, enforce_window=False, sliding_span=None):
         self.calls.append(("prepare", canvas_len, p_max, prompt_len))
         self.use_reveal_mask = True
+        layer_types = ("full_attention", "sliding_attention") if enforce_window else ("full_attention",)
+        self._reveal_mask_bufs = {layer_type: object() for layer_type in layer_types}
 
     def update_reveal_mask_buffer(self, prompt_len):
         self.calls.append(("update", prompt_len))
@@ -123,3 +130,43 @@ def test_prepare_fixed_reveal_wires_read_span_and_mask(monkeypatch):
     assert ("set_read_span", 4096) in a.calls
     assert ("prepare", 256, 4096, 256) in a.calls
     assert ("update", 256) in a.calls
+
+
+@pytest.mark.parametrize(
+    "flag, expect_window, expect_masks",
+    [
+        ("0", False, ["full_attention"]),
+        ("1", True, ["full_attention", "sliding_attention"]),
+    ],
+)
+def test_prepare_fixed_reveal_forwards_the_retention_flag(monkeypatch, flag, expect_window, expect_masks):
+    """The env gate has to reach `prepare_reveal_mask_buffers`, and add the sliding mask when on.
+
+    HF's sliding layers retain only `sliding_window - 1` committed keys (#51080). With the flag off
+    one shared full-attention mask serves all 30 layers; with it on the sliding layers need their
+    own mask, so the buffer set is what tells the two regimes apart.
+    """
+    monkeypatch.setenv("DG_DENOISE_REVEAL_PMAX", "4096")
+    monkeypatch.setenv("DG_DENOISE_SLIDING_WINDOW", flag)
+    seen = {}
+
+    adapter = _FakeAdapter(cache_seq=8192, prompt_len=256)
+    real_prepare = adapter.prepare_reveal_mask_buffers
+
+    def recording_prepare(*, canvas_len, p_max, prompt_len, enforce_window=False, sliding_span=None):
+        seen["enforce_window"] = enforce_window
+        seen["sliding_span"] = sliding_span
+        return real_prepare(
+            canvas_len=canvas_len,
+            p_max=p_max,
+            prompt_len=prompt_len,
+            enforce_window=enforce_window,
+            sliding_span=sliding_span,
+        )
+
+    adapter.prepare_reveal_mask_buffers = recording_prepare
+    TD._prepare_fixed_reveal(adapter, canvas_len=256)
+
+    assert seen["enforce_window"] is expect_window
+    assert seen["sliding_span"] is None, "the bounded-span perf half is its own gate, off here"
+    assert sorted(adapter._reveal_mask_bufs) == expect_masks
