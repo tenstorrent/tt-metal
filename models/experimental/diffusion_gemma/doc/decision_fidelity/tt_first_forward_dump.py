@@ -129,6 +129,19 @@ def main() -> int:
         f"logit_std={stats['logit_std']:.4f}"
     )
     print("reference targets on q106: accept 6, below_0.1 5, median 4.2624, logit_std 7.4553")
+
+    # The reference's confident positions are not scattered: on q106/q096/q095 they are positions 0-4
+    # and they carry the SAME tokens every time -- <|channel>(100), thought(45518), \n(107), *(236829),
+    # spaces(139) -- the thinking-template prefix that structurally must follow the generation prompt.
+    # That handful of near-zero-entropy positions is the entire accept budget the block bootstraps
+    # from, so whether TT is confident THERE is the question, not what its average entropy is.
+    print("\npositions 0-7 (reference on q106: ids 100/45518/107/236829/139 at H 4e-4/2e-5/0.011/0.009/0.004):")
+    for pos in range(8):
+        top = processed[0, pos].topk(2)
+        print(
+            f"  pos {pos:>2}  H={float(entropy[0, pos]):.6f}  argmax={int(argmax[0, pos]):>7}  "
+            f"top1-top2={float(top.values[0] - top.values[1]):.4f}"
+        )
     print("full comparison: first_forward_stats.py ref_ff_qNNN.pt tt_first_forward.pt")
 
     torch.save(

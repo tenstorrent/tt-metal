@@ -465,6 +465,74 @@ run, not ahead of one.
 For reference, what the baseline telemetry DOES show on q106 block 0 is a mean entropy that declines
 far too slowly to halt: 5.102, 5.573, 5.445, 5.502, 5.461, 5.214, ... 4.077, 3.983 by step 28.
 
+## 13. What the reference is confident ABOUT, and a block-0 RoPE-offset lead (UNTESTED)
+
+Section 12 established that the accept budget comes from a handful of near-zero-entropy positions.
+Which positions those are turns out to be the useful question.
+
+### The accept budget is the thinking-template prefix
+
+Decoding the reference's sub-0.5-nat positions on the three dumped questions:
+
+| position | q106 | q096 | q095 | token |
+| --- | --- | --- | --- | --- |
+| 0 | 4.3e-04 | 2.9e-04 | 4.3e-05 | `<|channel>` (100) |
+| 1 | 1.7e-05 | 5.4e-04 | 1.8e-04 | `thought` (45518) |
+| 2 | 0.011 | 0.054 | 0.0016 | `\n` (107) |
+| 3 | 0.0091 | 0.042 | 0.00096 | `*` (236829) |
+| 4 | 0.0042 | 0.044 | 0.00045 | `   ` (139) |
+| 5+ | 0.25, 0.47, ... | — | 0.011, 0.25 | first content tokens |
+
+**Positions 0-4, the same five token ids, on all three prompts.** These are the thinking-template
+prefix that structurally must follow the generation prompt, which is why the model is certain about
+them while every content position sits at ~4.3 nats. The whole block bootstraps from them.
+
+So the block-0 question is sharper than "why are TT's logits flat": **is TT confident at positions
+0-4?** Those tokens are determined by the prompt's ending, not by reasoning. `tt_first_forward_dump.py`
+now prints positions 0-7 with their entropy, argmax and top1-top2 margin against these reference
+values.
+
+### The lead: the canvas is positionally detached from the prompt at block 0
+
+The reference places canvas position 0 immediately after the prompt:
+
+    decoder_position_ids = arange(cache_seq_length, cache_seq_length + canvas_length)
+
+with `cache_seq_length = past_key_values.get_seq_length()`, and HF prefills the prompt UNPADDED, so on
+q106 that is 270 — canvas position 0 at absolute 270, distance 1 from the last real prompt token.
+
+TT pads the prompt to a tile multiple before writing K/V (`_pad_prompt_tokens_for_prefill` appends the
+padding: `torch.cat([prompt_tokens, padding], dim=1)`), reports `prompt_len=270 cache_len=288`, and
+then threads the PADDED length everywhere: `generate_from_prompt_tokens` passes
+`prompt_len=prefill.cache_len`, and the adapter does `self.q_rope_offset = prompt_len`. So TT's canvas
+position 0 sits at absolute **288**, with the last real prompt token at 269 — a gap of 18 positions.
+
+The coupling that causes it is incidental rather than intended: the reveal mask requires a 32-aligned
+`prompt_len` (`update_reveal_mask_buffer` raises otherwise), so the padded length is threaded through,
+and `q_rope_offset` rides the same variable. The two are independent — the mask span needs alignment,
+the RoPE offset needs the true prompt length.
+
+**This is block-0-only by construction.** At block 1 the committed 256 real tokens occupy 288-543, so
+canvas position 0 at 544 is adjacent to real content again. Every later block is contiguous. That
+matches the observation that these seven questions collapse on block 0 and the other 57 collapses are
+late-block.
+
+### Why this is a lead and NOT yet a cause
+
+Padding size does not separate collapsed from clean: all seven block-0 questions have 7-31 padding
+tokens, but so do most clean questions, and the clean group averages MORE padding (18.2 vs 16.3, §11).
+So an offset gap cannot be sufficient on its own; at most it is necessary-and-marginal, tipping cases
+that are already close. Two facts do keep it interesting: no clean question has zero padding (min 2),
+and the positions it would damage are exactly the positions the accept budget depends on.
+
+The test is two device runs on one block-0 prompt, no code change for the first:
+
+1. Run `tt_first_forward_dump.py`. If TT's positions 0-4 carry the reference's ids at near-zero
+   entropy, the lead is dead and the per-layer RMS table is the next cut.
+2. If TT is uncertain there, decouple the RoPE offset from the mask span (true prompt length for
+   `q_rope_offset`, padded span for the reveal mask) and re-run. Confidence returning at positions
+   0-4, and the accept count rising above 1, would be the demonstration.
+
 ## 6. Reproduce
 
 ```bash
