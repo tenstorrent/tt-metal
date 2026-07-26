@@ -105,6 +105,13 @@
 // NOTE: the SEND landing ring (RxWqeRing) is NOT in L1 — it is DMA-pushed to a host hugepage
 // at +128 KB (reverse of the TX DMA-pull). See tt-rdma-fw-arch-rx.md / host-sdk.md.
 
+// Stage 2: a LARGE RX streaming ring that reuses the (TX-only) WQE payload region — the RX-dispatch
+// kernel never transmits, so the 128 KB TX payload pool is free to absorb high inbound wire rates
+// without the 16 KB TT_RDMA_RX_RING lapping. Ends exactly at TX_BUF0 (no overlap with the MR-target
+// TX bufs). Size is a multiple of 16 (wrap-word alignment). 128 KB ~= 31 jumbo frames vs ~4 in 16 KB.
+#define TT_RDMA_RX_RING_BIG_ADDR TT_RDMA_WQE_PAYLOAD_ADDR
+#define TT_RDMA_RX_RING_BIG_SIZE TT_RDMA_WQE_PAYLOAD_SIZE
+
 // ---- Compile-time guards (the link-bricking one is #1). ----
 #ifdef __cplusplus
 #define TT_RDMA_SASSERT static_assert

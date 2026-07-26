@@ -36,7 +36,10 @@ int main(int argc, char** argv) {
     const bool want_ext = (std::strcmp(eth_sel, "ext") == 0);
     const size_t eth_idx = want_ext ? 0 : (size_t)std::atoi(eth_sel);
     const int hold_s = (argc > 3) ? std::atoi(argv[3]) : 20;
-    const uint32_t wrap = (argc > 4) ? std::strtoul(argv[4], nullptr, 0) : 1u;  // 1 = BUF_WRAP streaming (Stage 2a)
+    const uint32_t wrap = (argc > 4) ? std::strtoul(argv[4], nullptr, 0) : 1u;     // 1 = BUF_WRAP streaming (Stage 2a)
+    const uint32_t bigring = (argc > 5) ? std::strtoul(argv[5], nullptr, 0) : 1u;  // 1 = 128KB RX ring (Stage 2)
+    const uint32_t rx_ring_addr = bigring ? TT_RDMA_RX_RING_BIG_ADDR : TT_RDMA_RX_RING_ADDR;
+    const uint32_t rx_ring_size = bigring ? TT_RDMA_RX_RING_BIG_SIZE : TT_RDMA_RX_RING_SIZE;
 
     // MR slot 0: rkey top byte = slot = 0. The BF3 sender must use this exact rkey.
     const uint32_t kRkey = 0x00CAFE42u;               // (slot=0)<<24 | (rand=0xCAFE)<<8 | (gen=0x42)
@@ -98,8 +101,8 @@ int main(int argc, char** argv) {
         {TT_RDMA_HB_ADDR,
          TT_RDMA_STOP_ADDR,
          (uint32_t)stats_addr,
-         TT_RDMA_RX_RING_ADDR,
-         TT_RDMA_RX_RING_SIZE,
+         rx_ring_addr,
+         rx_ring_size,
          TT_RDMA_MR_TABLE_ADDR,
          wrap});
 
