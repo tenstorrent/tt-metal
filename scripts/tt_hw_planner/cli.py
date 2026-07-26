@@ -8333,6 +8333,26 @@ def _cmd_up_isolated(args) -> int:
         captured, capture_ok = _capture_worktree_deltas_as_overlay(session.path, args.model_id)
         if capture_ok:
             if rc == 0:
+                # Persist the freshly-written RUN_REPORT.md back to the main
+                # tree BEFORE destroying the worktree. The report lives in the
+                # worktree's demo dir; without this copy it is destroyed with
+                # the worktree and the persistent demo dir keeps a STALE report
+                # (e.g. showing 31/32 after a run that reached 32/32).
+                try:
+                    import shutil
+
+                    for _rpt in sorted(Path(session.path).glob("models/**/RUN_REPORT.md")):
+                        _rel = _rpt.relative_to(session.path)
+                        _dst = Path(prev_cwd) / _rel
+                        _dst.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(_rpt, _dst)
+                        print(f"  [isolation] persisted final RUN_REPORT.md -> {_rel}")
+                except Exception as _rpt_exc:
+                    print(
+                        f"  [isolation] WARN could not persist RUN_REPORT.md: "
+                        f"{type(_rpt_exc).__name__}: {_rpt_exc}",
+                        file=sys.stderr,
+                    )
                 print(f"  [isolation] captured {captured} LLM delta(s); destroying worktree")
                 try:
                     _wt_destroy(session)
