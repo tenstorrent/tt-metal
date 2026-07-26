@@ -41,7 +41,7 @@ def test_auto_up_locks_in_brain_defaults() -> None:
     assert '"auto": True' in handler_body, "auto must be True"
     assert '"auto_agent": "claude"' in handler_body, "auto_agent must be claude"
     assert '"auto_model_tiered": True' in handler_body, "tiered model must be on"
-    assert '"auto_max_iters": 24' in handler_body, "iter budget must be 24"
+    assert '"auto_max_iters": 0' in handler_body, "iter budget must be 0 (unlimited; capped only when --auto-max-iters given)"
     assert (
         '"auto_max_attempts_per_component": 0' in handler_body
     ), "per-component cap must be 0 (unlimited for NEW; agent-driven decompose)"

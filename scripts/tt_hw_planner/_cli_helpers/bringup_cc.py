@@ -536,6 +536,7 @@ def run_bringup_cc(
         pre_round=_pre_round,
         on_round=_on_round,
         on_heartbeat=_announce_graduations,
+        max_consecutive_timeouts=int(os.environ.get("TT_BRINGUP_MAX_WEDGES", "1000") or "1000"),
     )
     final = gate_fn()
     _announce_graduations(final)
