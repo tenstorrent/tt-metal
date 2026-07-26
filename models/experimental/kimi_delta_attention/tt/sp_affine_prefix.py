@@ -20,9 +20,28 @@ import ttnn
 
 _SP_SIZE = 8
 _PREFIX_STAGES = (1, 2, 4)
+_BARRIER_CORE = ttnn.CoreCoord(4, 0)
+_BARRIER_SENDER_KERNEL = "models/experimental/kimi_delta_attention/tt/kernels/fabric_tree_barrier_sender.cpp"
+_BARRIER_WAITER_KERNEL = "models/experimental/kimi_delta_attention/tt/kernels/fabric_tree_barrier_waiter.cpp"
 
 
-def _prefix_socket_config(stage_index: int) -> ttnn.SocketConfig:
+def _fabric_tree_edges() -> tuple[tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]]:
+    """Return binary-tree gather and release edges as ``(source, destination)``.
+
+    A gather edge points from a completed child to its parent.  A release edge
+    points from a released parent to its child.  Keeping this topology pure
+    Python makes the device scheduling contract directly unit-testable.
+    """
+    gather = tuple(
+        tuple((source + distance, source) for source in range(0, _SP_SIZE, 2 * distance)) for distance in _PREFIX_STAGES
+    )
+    release = tuple(
+        tuple((source, source + distance) for source in range(0, _SP_SIZE, 2 * distance)) for distance in _PREFIX_STAGES
+    )
+    return gather, release
+
+
+def _prefix_socket_config(stage_index: int, mesh_shape: ttnn.MeshShape | None = None) -> ttnn.SocketConfig:
     """Give each prefix stage disjoint endpoint cores and a one-tensor FIFO."""
     lanes = int(os.getenv("KDA_SP_PREFIX_LANES", "1"))
     if lanes not in (1, 2):
@@ -30,7 +49,7 @@ def _prefix_socket_config(stage_index: int) -> ttnn.SocketConfig:
     fifo_bytes = int(os.getenv("KDA_SP_PREFIX_FIFO_BYTES", str((512 * 1024) // lanes)))
     if fifo_bytes <= 0 or fifo_bytes % 1024:
         raise ValueError(f"KDA_SP_PREFIX_FIFO_BYTES must be a positive KiB multiple, got {fifo_bytes}")
-    mesh_coord = ttnn.MeshCoordinate(0, 0)
+    mesh_shape = mesh_shape or ttnn.MeshShape(1, 1)
     # An intermediate rank sends and receives in each stage.  Distinct cores
     # avoid sharing one fabric endpoint between those two directions.  Stages
     # are also assigned distinct rows so their persistent socket objects do
@@ -40,13 +59,14 @@ def _prefix_socket_config(stage_index: int) -> ttnn.SocketConfig:
     return ttnn.SocketConfig(
         [
             ttnn.SocketConnection(ttnn.MeshCoreCoord(mesh_coord, sender), ttnn.MeshCoreCoord(mesh_coord, receiver))
+            for mesh_coord in ttnn.MeshCoordinateRange(mesh_shape)
             for sender, receiver in zip(sender_cores, receiver_cores, strict=True)
         ],
         ttnn.SocketMemoryConfig(ttnn.BufferType.DRAM, fifo_bytes),
     )
 
 
-def _barrier_socket_config(stage_index: int) -> ttnn.SocketConfig:
+def _barrier_socket_config(stage_index: int, mesh_shape: ttnn.MeshShape | None = None) -> ttnn.SocketConfig:
     """Use the reverse prefix endpoints for a tiny tree-barrier token."""
     lanes = int(os.getenv("KDA_SP_PREFIX_LANES", "1"))
     sender_cores = [ttnn.CoreCoord(0, stage_index * 2), ttnn.CoreCoord(2, stage_index * 2)][:lanes]
@@ -54,10 +74,11 @@ def _barrier_socket_config(stage_index: int) -> ttnn.SocketConfig:
     fifo_bytes = int(os.getenv("KDA_SP_BARRIER_FIFO_BYTES", "4096"))
     if fifo_bytes <= 0 or fifo_bytes % 1024:
         raise ValueError(f"KDA_SP_BARRIER_FIFO_BYTES must be a positive KiB multiple, got {fifo_bytes}")
-    mesh_coord = ttnn.MeshCoordinate(0, 0)
+    mesh_shape = mesh_shape or ttnn.MeshShape(1, 1)
     return ttnn.SocketConfig(
         [
             ttnn.SocketConnection(ttnn.MeshCoreCoord(mesh_coord, sender), ttnn.MeshCoreCoord(mesh_coord, receiver))
+            for mesh_coord in ttnn.MeshCoordinateRange(mesh_shape)
             for sender, receiver in zip(sender_cores, receiver_cores, strict=True)
         ],
         ttnn.SocketMemoryConfig(ttnn.BufferType.DRAM, fifo_bytes),
@@ -74,17 +95,35 @@ class SP8AffinePrefixProbe:
     instead queues a fabric gather/release boundary between prefix distances.
     """
 
-    def __init__(self, mesh_device: ttnn.MeshDevice) -> None:
-        if tuple(mesh_device.shape) != (1, _SP_SIZE):
-            raise ValueError(f"SP8 affine prefix requires a 1x8 LoudBox mesh, got {tuple(mesh_device.shape)}")
+    def __init__(self, mesh_device: ttnn.MeshDevice, *, tp_size: int = 1) -> None:
+        if tp_size <= 0:
+            raise ValueError(f"SP8 affine prefix TP size must be positive, got {tp_size}")
+        mesh_shape = tuple(mesh_device.shape)
+        if mesh_shape == (1, _SP_SIZE * tp_size):
+            flattened = True
+        elif mesh_shape == (_SP_SIZE, tp_size):
+            flattened = False
+        else:
+            raise ValueError(
+                f"SP8 affine prefix TP={tp_size} requires flattened (1, {_SP_SIZE * tp_size}) "
+                f"or native ({_SP_SIZE}, {tp_size}) mesh, got {mesh_shape}"
+            )
         self.mesh_device = mesh_device
+        self.tp_size = tp_size
+        self._flattened = flattened
         self.span_devices = tuple(
-            mesh_device.create_submesh(ttnn.MeshShape(1, 1), ttnn.MeshCoordinate(0, span)) for span in range(_SP_SIZE)
+            mesh_device.create_submesh(
+                ttnn.MeshShape(1, tp_size),
+                ttnn.MeshCoordinate(0, span * tp_size) if flattened else ttnn.MeshCoordinate(span, 0),
+            )
+            for span in range(_SP_SIZE)
         )
         self._stage_sockets = tuple(
             tuple(
                 ttnn.create_socket_pair(
-                    self.span_devices[source], self.span_devices[source + distance], _prefix_socket_config(stage)
+                    self.span_devices[source],
+                    self.span_devices[source + distance],
+                    _prefix_socket_config(stage, self.span_devices[source].shape),
                 )
                 for source in range(_SP_SIZE - distance)
             )
@@ -93,6 +132,148 @@ class SP8AffinePrefixProbe:
         self._barrier_gather_sockets = None
         self._barrier_release_sockets = None
         self._barrier_tokens = None
+        self._fabric_tree_barrier = None
+
+    def _parent_mesh_coord(self, span_rank: int, tp_rank: int) -> ttnn.MeshCoordinate:
+        """Return the parent-mesh coordinate for one logical ``(SP, TP)`` rank."""
+        if not 0 <= span_rank < _SP_SIZE or not 0 <= tp_rank < self.tp_size:
+            raise ValueError(f"invalid logical rank SP={span_rank}, TP={tp_rank}")
+        return (
+            ttnn.MeshCoordinate(0, span_rank * self.tp_size + tp_rank)
+            if self._flattened
+            else ttnn.MeshCoordinate(span_rank, tp_rank)
+        )
+
+    def _ensure_fabric_tree_barrier(self) -> None:
+        """Create persistent mesh programs for a trace-safe SP8 tree barrier.
+
+        A GenericOp program is enqueued on the same device command queues as
+        KDA and socket traffic, unlike the existing Python-level device
+        synchronizations.  Every level has one sender and one local waiter;
+        ranks not participating in that level intentionally have no program.
+        Six levels (gather 1/2/4, release 4/2/1) establish a full global stage
+        boundary without moving a tiled control token through fabric FIFOs.
+        """
+        if self._fabric_tree_barrier is not None:
+            return
+        core_range = ttnn.CoreRangeSet([ttnn.CoreRange(_BARRIER_CORE, _BARRIER_CORE)])
+        # KDA is queued through one TP group per span. These semaphores and
+        # GenericOps must use those exact group meshes: queuing a parent-mesh
+        # program alongside span-group KDA is not a valid shared-CQ schedule.
+        # A GlobalSemaphore reserves the same L1 address on every TP device;
+        # each rank's tree uses that address only on its own device, so the
+        # four trees remain independent.
+        semaphores = tuple(ttnn.create_global_semaphore(device, core_range, 0) for device in self.span_devices)
+        semaphore_addrs = tuple(ttnn.get_global_semaphore_address(semaphore) for semaphore in semaphores)
+        # GenericOp requires tensor arguments even though these barrier
+        # programs have no tensor accesses.  Fixed replicated pages give the
+        # mesh operation stable buffers for eager reuse and trace capture.
+        dummy = torch.zeros((1, 1, 32, 32), dtype=torch.bfloat16)
+        barrier_input = tuple(
+            ttnn.from_torch(
+                dummy,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+            )
+            for device in self.span_devices
+        )
+        barrier_output = tuple(
+            ttnn.from_torch(
+                dummy,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+            )
+            for device in self.span_devices
+        )
+        self._synchronize()
+
+        def descriptor_for_edge(
+            source: int, destination: int, tp_rank: int
+        ) -> tuple[int, int, int, ttnn.MeshProgramDescriptor, ttnn.MeshProgramDescriptor]:
+            sender_descriptor = ttnn.MeshProgramDescriptor()
+            runtime_args = ttnn.RuntimeArgs()
+            runtime_args[_BARRIER_CORE.x][_BARRIER_CORE.y] = [semaphore_addrs[destination]]
+            sender = ttnn.KernelDescriptor(
+                kernel_source=_BARRIER_SENDER_KERNEL,
+                core_ranges=core_range,
+                defines=ttnn.get_fabric_kernel_defines("Mesh"),
+                runtime_args=runtime_args,
+                config=ttnn.DataMovementConfigDescriptor(),
+            )
+            sender_program = ttnn.ProgramDescriptor(kernels=[sender], semaphores=[], cbs=[])
+            parent_source_coord = self._parent_mesh_coord(source, tp_rank)
+            parent_destination_coord = self._parent_mesh_coord(destination, tp_rank)
+            source_node = self.mesh_device.get_fabric_node_id(parent_source_coord)
+            destination_node = self.mesh_device.get_fabric_node_id(parent_destination_coord)
+            # This allocates the connection-manager resources and returns the
+            # matching runtime arguments; the Mesh API compile defines above
+            # are intentionally supplied separately.
+            connection_args = ttnn.fabric_connection_rt_args(
+                source_node, [destination_node], [], sender_program, 0, _BARRIER_CORE
+            )
+            sender_program.kernels[0].runtime_args[_BARRIER_CORE.x][_BARRIER_CORE.y].extend(connection_args)
+            child_coord = ttnn.MeshCoordinate(0, tp_rank)
+            sender_descriptor[ttnn.MeshCoordinateRange(child_coord, child_coord)] = sender_program
+
+            waiter_args = ttnn.RuntimeArgs()
+            waiter_args[_BARRIER_CORE.x][_BARRIER_CORE.y] = [semaphore_addrs[destination]]
+            waiter = ttnn.KernelDescriptor(
+                kernel_source=_BARRIER_WAITER_KERNEL,
+                core_ranges=core_range,
+                runtime_args=waiter_args,
+                config=ttnn.DataMovementConfigDescriptor(),
+            )
+            waiter_descriptor = ttnn.MeshProgramDescriptor()
+            waiter_descriptor[ttnn.MeshCoordinateRange(child_coord, child_coord)] = ttnn.ProgramDescriptor(
+                kernels=[waiter], semaphores=[], cbs=[]
+            )
+            return source, destination, tp_rank, sender_descriptor, waiter_descriptor
+
+        gather_edges, release_edges = _fabric_tree_edges()
+        self._fabric_tree_barrier = (
+            semaphores,
+            barrier_input,
+            barrier_output,
+            tuple(
+                tuple(descriptor_for_edge(*edge, tp_rank) for edge in edges for tp_rank in range(self.tp_size))
+                for edges in gather_edges
+            ),
+            tuple(
+                tuple(descriptor_for_edge(*edge, tp_rank) for edge in edges for tp_rank in range(self.tp_size))
+                for edges in release_edges
+            ),
+        )
+
+    def queue_fabric_tree_barrier(self) -> None:
+        """Queue a compact gather/release boundary using fabric atomics.
+
+        This is intended for monolithic trace capture.  Program order gives an
+        intermediate rank its child arrival before it notifies its parent,
+        then performs the reverse dependency for release.  No host fence,
+        mesh event, socket FIFO, or control tensor is involved.
+        """
+        self._ensure_fabric_tree_barrier()
+        assert self._fabric_tree_barrier is not None
+        _, barrier_input, barrier_output, gather_descriptors, release_descriptors = self._fabric_tree_barrier
+        for stage_descriptors in gather_descriptors:
+            # Queue all receivers before their matching senders.  Each program
+            # targets one child mesh, which is the same command-queue owner as
+            # the surrounding span KDA work.
+            for _, destination, _, _, waiter_descriptor in stage_descriptors:
+                ttnn.generic_op([barrier_input[destination], barrier_output[destination]], waiter_descriptor)
+            for source, _, _, sender_descriptor, _ in stage_descriptors:
+                ttnn.generic_op([barrier_input[source], barrier_output[source]], sender_descriptor)
+        for stage_descriptors in reversed(release_descriptors):
+            for _, destination, _, _, waiter_descriptor in stage_descriptors:
+                ttnn.generic_op([barrier_input[destination], barrier_output[destination]], waiter_descriptor)
+            for source, _, _, sender_descriptor, _ in stage_descriptors:
+                ttnn.generic_op([barrier_input[source], barrier_output[source]], sender_descriptor)
 
     def _ensure_device_barrier(self) -> None:
         """Allocate the opt-in tree barrier without perturbing the baseline."""
@@ -110,7 +291,7 @@ class SP8AffinePrefixProbe:
                 ttnn.create_socket_pair(
                     self.span_devices[source + distance],
                     self.span_devices[source],
-                    _barrier_socket_config(stage),
+                    _barrier_socket_config(stage, self.span_devices[source].shape),
                 )
                 for source in range(0, _SP_SIZE, 2 * distance)
             )
@@ -238,6 +419,7 @@ class SP8AffinePrefixProbe:
         retain_buffers: bool = False,
         synchronize_stages: bool = True,
         device_barrier: bool = False,
+        fabric_tree_barrier: bool = False,
         after_stage_enqueued: Callable[[int], None] | None = None,
     ) -> tuple[tuple[ttnn.Tensor, ...], tuple[ttnn.Tensor, ...]]:
         """Run all three Hillis--Steele stages and return inclusive transforms.
@@ -249,8 +431,10 @@ class SP8AffinePrefixProbe:
         """
         if len(transform_a) != _SP_SIZE or len(transform_b) != _SP_SIZE:
             raise ValueError(f"expected {_SP_SIZE} transforms, got A={len(transform_a)}, B={len(transform_b)}")
-        if device_barrier and synchronize_stages:
-            raise ValueError("device_barrier requires synchronize_stages=False")
+        if (device_barrier or fabric_tree_barrier) and synchronize_stages:
+            raise ValueError("a device-side barrier requires synchronize_stages=False")
+        if device_barrier and fabric_tree_barrier:
+            raise ValueError("select either device_barrier or fabric_tree_barrier")
         if after_stage_enqueued is not None and not synchronize_stages:
             raise ValueError("after_stage_enqueued requires synchronize_stages=True")
         prefix_a, prefix_b = transform_a, transform_b
@@ -265,6 +449,9 @@ class SP8AffinePrefixProbe:
             )
             if synchronize_stages:
                 self._synchronize()
-            elif device_barrier and stage + 1 < len(_PREFIX_STAGES):
-                self.queue_device_barrier()
+            elif stage + 1 < len(_PREFIX_STAGES):
+                if device_barrier:
+                    self.queue_device_barrier()
+                elif fabric_tree_barrier:
+                    self.queue_fabric_tree_barrier()
         return prefix_a, prefix_b

@@ -358,6 +358,34 @@ device-ordered affine prefix and with the normal TP=4 output CCL intact.
    material; it does *not* prove a slowest-device or traced speedup, since the
    barrier tokens themselves are ordinary socket operations.
 
+   The current candidate is `KDA_SP_FABRIC_TREE_BARRIER=1`: six cached
+   `generic_op` programs per boundary, each a Mesh-API fabric atomic increment
+   plus a local fixed-address semaphore wait. They are deliberately enqueued
+   on the existing 1x1 span submeshes, not on the parent 1x8 mesh, because
+   parent-mesh work conflicts with the child meshes that own KDA's command
+   queues. This is still **unvalidated**: the first parent-mesh prototype
+   stalled and left the board PCIe-hung; after recovery it was replaced with
+   the child-mesh design before a fresh silicon run could be made. Do not use
+   it for a performance claim until this exact gate passes repeatedly:
+
+   ```bash
+   # Isolate the six-level fabric-atomic barrier; requires ten clean rounds.
+   KDA_SP_FABRIC_TREE_BARRIER_TEST=1 KDA_SP_FABRIC_TREE_REPS=10 \
+     scripts/run_safe_pytest.sh -q -s \
+     models/experimental/kimi_delta_attention/tests/test_sp8_affine_prefix.py::test_sp8_fabric_tree_barrier_stability
+
+   # Then re-run the 1 MiB/rank affine prefix PCC gate.
+   KDA_SP_FABRIC_TREE_BARRIER=1 KDA_SP_PREFIX_LANES=1 \
+     scripts/run_safe_pytest.sh -q -s \
+     models/experimental/kimi_delta_attention/tests/test_sp8_affine_prefix.py::test_sp8_affine_prefix_production_tp4_payload
+
+   # Finally use the same device-side ordering in the full SP8 TP1 KDA proof.
+   KDA_SP_FABRIC_TREE_BARRIER=1 KDA_SP8_AFFINE_TARGET_SHAPE=1 \
+     KDA_SP8_PIPELINED_HANDOFFS=1 KDA_SP_PREFIX_LANES=1 \
+     scripts/run_safe_pytest.sh -q -s \
+     models/experimental/kimi_delta_attention/tests/test_sp8_tp1.py::test_sp8_tp1_affine_layer_pcc
+   ```
+
 3. **Factor the prefix scheduler by `(SP rank, TP rank)`.**  Move the current
    TP1 affine proof's preparation, terminal-map construction, entry-state
    installation, and rank-release ordering behind a per-TP-rank interface.
@@ -366,6 +394,40 @@ device-ordered affine prefix and with the normal TP=4 output CCL intact.
    the same code in its SP=2/TP=4 projection: it must preserve output,
    recurrent-state, and convolution-state PCC >= 0.98 at global T=5120 and
    retain the existing fused Line MRS output path.
+
+   The common `SPTPTopology` mapping now accepts both LoudBox's flattened
+   `1 x (SP*TP)` layout and Galaxy's native `SP x TP` layout.  A serial
+   `SP8TP4KimiDeltaAttention` baseline now constructs eight real TP=4 layers
+   and seven rank-aligned cache handoffs on an `8 x 4` mesh.  It is deliberately
+   not an affine-performance path; it is the Galaxy correctness reference that
+   the prefix scheduler must replace.  Its first hardware gate is:
+
+   ```bash
+   scripts/run_safe_pytest.sh -q -s \
+     models/experimental/kimi_delta_attention/tests/test_sp8_tp4.py::test_sp8_tp4_serial_layer_pcc
+   ```
+
+   `SP8AffineTP4KimiDeltaAttention` now applies the same three-stage affine
+   prefix to those eight TP=4 groups, with four rank-aligned socket streams at
+   each SP edge and the normal TP4 CCL retained in every layer. The
+   fabric-atomic candidate now creates four independent trees (one per TP
+   rank) and dispatches each program through its owning TP4 span mesh. It is
+   still unvalidated on hardware; use host fences first, then qualify the
+   atomic-tree mode before profiling. The initial Galaxy affine correctness
+   gate is:
+
+   ```bash
+   # Qualify all four independent TP-rank atomic trees first.
+   KDA_SP8TP4_FABRIC_TREE_BARRIER_TEST=1 KDA_SP_FABRIC_TREE_REPS=10 \
+     scripts/run_safe_pytest.sh -q -s \
+     models/experimental/kimi_delta_attention/tests/test_sp8_tp4.py::test_sp8_tp4_fabric_tree_barrier_stability
+
+   # Verify the serial SP8xTP4 reference, then the affine scheduler.
+   scripts/run_safe_pytest.sh -q -s \
+     models/experimental/kimi_delta_attention/tests/test_sp8_tp4.py::test_sp8_tp4_serial_layer_pcc
+   scripts/run_safe_pytest.sh -q -s \
+     models/experimental/kimi_delta_attention/tests/test_sp8_tp4.py::test_sp8_tp4_affine_layer_pcc
+   ```
 
 4. **Capture the actual E2E SP2×TP4 layer on LB.**  Keep persistent state,
    sockets, barrier resources, and MRS intermediate buffers at fixed
@@ -383,6 +445,29 @@ device-ordered affine prefix and with the normal TP=4 output CCL intact.
    stable should we tune overlap of final grouped scans, the final epilogue,
    and TP=4 MRS.  Galaxy performance targets must be set from its first
    slowest-device trace rather than extrapolated from the TP1 eager interval.
+
+## E2E closure plan
+
+The current SP2×TP4 layer is already an end-to-end performance control.  The
+remaining work is to make the *same device-ordered protocol* trace-safe,
+prove it on the only available eight-device system, and then qualify the
+native 8×4 Galaxy topology.  No new implementation is accepted merely because
+an isolated prefix becomes faster.
+
+| Step | Deliverable and gate | LoudBox target / expected value |
+| --- | --- | --- |
+| 0. Recovery checkpoint | Resume hardware work only once a minimal guarded device test completes. Use `scripts/run_safe_pytest.sh`; do not issue another manual reset. | Prevents treating a PCIe-hung board as a protocol failure. |
+| 1. Atomic-barrier qualification | Run 10 barrier-only rounds, then the 1 MiB/rank prefix PCC test, then the full SP8×TP1 two-call cache-reuse test. Start with one prefix lane. | PCC >= 0.98 end-to-end; zero runner recovery/timeouts. This is a stability gate, not a latency claim. |
+| 2. Captured SP2×TP4 integration | Allocate the barrier, socket, recurrent-state and Line-MRS buffers once; capture the complete SP2×TP4 forward, including its normal TP=4 output CCL; replay it 10 times. | Must retain the current <= 2.958 ms slowest-device gate. Target is to preserve or beat the 2.854 ms control; <= 2.803 ms is the 51 us stretch. |
+| 3. Trace diagnosis and one bounded optimization | Profile only a gate-passing trace. Attribute time to affine-prefix/barrier, carry sockets, grouped final scan, epilogue, and Line MRS; optimize the largest *unhidden* span only. | The plausible LB gain is 0--51 us: the new barrier mainly enables Galaxy ordering, so a larger LB claim would be unjustified. Revert any change that exceeds 2.958 ms. |
+| 4. Galaxy functional bring-up | Run the serial SP8×TP4 reference, then the affine version with host fences, then the four TP-rank atomic trees. Verify output, recurrent state, convolution state and boundary tokens. | PCC >= 0.98; no host state copy/fence; 10 clean trace replays. This is the first native-topology proof. |
+| 5. Galaxy e2e performance closure | Capture the whole SP8×TP4 layer, establish a slowest-device baseline, and tune prefix/scan overlap only after the trace is stable. | Record the baseline first. The deployment stretch goal is <= 1.339 ms, 1.25× the 1.071 ms TP4/T640 local-work control; failure means prefix traffic is not sufficiently hidden, not that correctness is incomplete. |
+| 6. Operational hand-off | Add the measured command lines/report IDs, keep the serial path as a debug oracle, and document the topology/resource lifetime. | Reproducible correctness and performance evidence for every accepted mode. |
+
+The immediate critical path is therefore **0 → 1 → 2**.  Steps 4--5 require
+a healthy 32-device Galaxy; LoudBox can validate the exact resource-lifetime,
+barrier, TP=4 CCL, and regression behavior but cannot claim native SP8×TP4
+latency.
 
 ## Milestones
 

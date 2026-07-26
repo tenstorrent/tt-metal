@@ -48,6 +48,24 @@ def _production_rank_transforms() -> tuple[list[torch.Tensor], list[torch.Tensor
     return transforms_a, transforms_b, initial_state
 
 
+def test_sp8_fabric_tree_barrier_stability(mesh_device: ttnn.MeshDevice) -> None:
+    """Exercise the trace-candidate barrier without affine payload traffic.
+
+    This gate is opt-in because the candidate is not enabled for the ordinary
+    SP8 prefix path yet.  Draining each round checks that its fixed-address
+    semaphore is reset before the cached programs are reused.
+    """
+    if os.getenv("KDA_SP_FABRIC_TREE_BARRIER_TEST", "0") != "1":
+        pytest.skip("set KDA_SP_FABRIC_TREE_BARRIER_TEST=1 to run the experimental barrier gate")
+    repetitions = int(os.getenv("KDA_SP_FABRIC_TREE_REPS", "10"))
+    if repetitions <= 0:
+        raise ValueError(f"KDA_SP_FABRIC_TREE_REPS must be positive, got {repetitions}")
+    probe = SP8AffinePrefixProbe(mesh_device)
+    for _ in range(repetitions):
+        probe.queue_fabric_tree_barrier()
+        probe._synchronize()
+
+
 def test_sp8_affine_prefix_production_tp4_payload(mesh_device: ttnn.MeshDevice) -> None:
     """Three device stages derive all eight SP entry states with no host handoff.
 
@@ -82,11 +100,13 @@ def test_sp8_affine_prefix_production_tp4_payload(mesh_device: ttnn.MeshDevice) 
 
     with ttnn.manage_config("throw_exception_on_fallback", True):
         device_barrier = os.getenv("KDA_SP_DEVICE_BARRIER", "0") == "1"
+        fabric_tree_barrier = os.getenv("KDA_SP_FABRIC_TREE_BARRIER", "0") == "1"
         actual_a, actual_b = probe.run(
             device_a,
             device_b,
-            synchronize_stages=not device_barrier,
+            synchronize_stages=not (device_barrier or fabric_tree_barrier),
             device_barrier=device_barrier,
+            fabric_tree_barrier=fabric_tree_barrier,
         )
     probe._synchronize()
 

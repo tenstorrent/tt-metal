@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 import torch
@@ -28,6 +29,57 @@ _SP_SIZE = 2
 _TP_SIZE = 4
 _SP8_SIZE = 8
 _TP1_SIZE = 1
+
+
+@dataclass(frozen=True)
+class SPTPTopology:
+    """Map logical sequence/tensor ranks onto a physical mesh.
+
+    LoudBox presents all eight devices as a flattened ``1 x 8`` mesh.  Galaxy
+    can present the production layout directly as ``SP x TP``.  The logical
+    mapping is identical: one contiguous ``1 x TP`` child mesh per sequence
+    rank, and TP rank ``j`` has the same local coordinate in every child.
+    """
+
+    sp_size: int
+    tp_size: int
+
+    def __post_init__(self) -> None:
+        if self.sp_size <= 0 or self.tp_size <= 0:
+            raise ValueError(f"SP and TP sizes must be positive, got SP={self.sp_size}, TP={self.tp_size}")
+
+    @property
+    def flattened_shape(self) -> tuple[int, int]:
+        return 1, self.sp_size * self.tp_size
+
+    @property
+    def native_shape(self) -> tuple[int, int]:
+        return self.sp_size, self.tp_size
+
+    def validate_mesh_shape(self, mesh_shape: tuple[int, int], *, name: str) -> bool:
+        """Validate ``mesh_shape`` and return whether it is a flattened mesh."""
+        if mesh_shape == self.flattened_shape:
+            return True
+        if mesh_shape == self.native_shape:
+            return False
+        raise ValueError(
+            f"{name} requires either flattened {self.flattened_shape} or native {self.native_shape} mesh, "
+            f"got {mesh_shape}"
+        )
+
+    def span_start(self, span_rank: int, *, flattened: bool) -> tuple[int, int]:
+        if not 0 <= span_rank < self.sp_size:
+            raise ValueError(f"SP rank must be in [0, {self.sp_size}), got {span_rank}")
+        return (0, span_rank * self.tp_size) if flattened else (span_rank, 0)
+
+    def create_span_submeshes(self, mesh_device: ttnn.MeshDevice, *, name: str) -> tuple[ttnn.MeshDevice, ...]:
+        flattened = self.validate_mesh_shape(tuple(mesh_device.shape), name=name)
+        return tuple(
+            mesh_device.create_submesh(
+                ttnn.MeshShape(1, self.tp_size), ttnn.MeshCoordinate(*self.span_start(rank, flattened=flattened))
+            )
+            for rank in range(self.sp_size)
+        )
 
 
 def _socket_config(mesh_shape: ttnn.MeshShape) -> ttnn.SocketConfig:
@@ -77,13 +129,9 @@ class SP2TP4KimiDeltaAttention:
         state_dict: Mapping[str, torch.Tensor],
         tensor_cache_path: Path | None = None,
     ) -> None:
-        if tuple(mesh_device.shape) != (1, _SP_SIZE * _TP_SIZE):
-            raise ValueError(f"SP2TP4 requires a 1x8 LoudBox mesh, got {tuple(mesh_device.shape)}")
+        self.topology = SPTPTopology(_SP_SIZE, _TP_SIZE)
         self.mesh_device = mesh_device
-        self.span_devices = tuple(
-            mesh_device.create_submesh(ttnn.MeshShape(1, _TP_SIZE), ttnn.MeshCoordinate(0, span * _TP_SIZE))
-            for span in range(_SP_SIZE)
-        )
+        self.span_devices = self.topology.create_span_submeshes(mesh_device, name="SP2TP4")
         self.layers = tuple(
             KimiDeltaAttention(
                 span_device,
@@ -284,13 +332,9 @@ class SP8TP1KimiDeltaAttention:
         state_dict: Mapping[str, torch.Tensor],
         tensor_cache_path: Path | None = None,
     ) -> None:
-        if tuple(mesh_device.shape) != (1, _SP8_SIZE):
-            raise ValueError(f"SP8TP1 requires a 1x8 LoudBox mesh, got {tuple(mesh_device.shape)}")
+        self.topology = SPTPTopology(_SP8_SIZE, _TP1_SIZE)
         self.mesh_device = mesh_device
-        self.span_devices = tuple(
-            mesh_device.create_submesh(ttnn.MeshShape(1, _TP1_SIZE), ttnn.MeshCoordinate(0, span))
-            for span in range(_SP8_SIZE)
-        )
+        self.span_devices = self.topology.create_span_submeshes(mesh_device, name="SP8TP1")
         self.layers = tuple(
             KimiDeltaAttention(
                 span_device,
@@ -336,6 +380,76 @@ class SP8TP1KimiDeltaAttention:
         return tuple(outputs)
 
 
+class SP8TP4KimiDeltaAttention:
+    """Galaxy-shaped serial SP=8, TP=4 KDA correctness baseline.
+
+    This establishes the production rank layout before the affine prefix is
+    enabled: every sequence rank owns a normal TP=4 KDA layer and each causal
+    transfer remains rank-aligned across the two neighbouring TP groups.  It
+    intentionally retains the ordered relay, so it is a correctness baseline
+    and scheduler integration target rather than a latency candidate.
+    """
+
+    def __init__(
+        self,
+        mesh_device: ttnn.MeshDevice,
+        config: KDAConfig,
+        state_dict: Mapping[str, torch.Tensor],
+        tensor_cache_path: Path | None = None,
+    ) -> None:
+        self.topology = SPTPTopology(_SP8_SIZE, _TP_SIZE)
+        self.mesh_device = mesh_device
+        self.span_devices = self.topology.create_span_submeshes(mesh_device, name="SP8TP4")
+        self.layers = tuple(
+            KimiDeltaAttention(
+                span_device,
+                config,
+                state_dict,
+                tensor_cache_path=tensor_cache_path,
+                tt_ccl=TT_CCL(span_device),
+            )
+            for span_device in self.span_devices
+        )
+        socket_config = _socket_config(self.span_devices[0].shape)
+        self._sockets = tuple(
+            ttnn.create_socket_pair(self.span_devices[span], self.span_devices[span + 1], socket_config)
+            for span in range(_SP8_SIZE - 1)
+        )
+
+    def reset_state(self, batch_size: int) -> None:
+        for layer in self.layers:
+            layer.reset_state(batch_size)
+
+    def enable_trace_stable_state(self) -> None:
+        for layer in self.layers:
+            assert layer.recurrent_state is not None
+            assert layer.convolution_state is not None
+            layer.set_external_state(layer.recurrent_state, layer.convolution_state)
+
+    def _handoff_causal_state(self, source_index: int) -> None:
+        source = self.layers[source_index]
+        destination = self.layers[source_index + 1]
+        assert source.recurrent_state is not None
+        assert source.convolution_state is not None
+        assert destination.recurrent_state is not None
+        assert destination.convolution_state is not None
+        send_socket, recv_socket = self._sockets[source_index]
+        ttnn.experimental.send_async(source.recurrent_state, send_socket)
+        ttnn.experimental.recv_async(destination.recurrent_state, recv_socket)
+        ttnn.experimental.send_async(source.convolution_state, send_socket)
+        ttnn.experimental.recv_async(destination.convolution_state, recv_socket)
+
+    def forward(self, *spans: ttnn.Tensor, mode: str = "chunk") -> tuple[ttnn.Tensor, ...]:
+        if len(spans) != _SP8_SIZE:
+            raise ValueError(f"SP8TP4 expects {_SP8_SIZE} spans, got {len(spans)}")
+        outputs = []
+        for span_index, (layer, span) in enumerate(zip(self.layers, spans, strict=True)):
+            outputs.append(layer.forward(span, mode=mode))
+            if span_index + 1 < _SP8_SIZE:
+                self._handoff_causal_state(span_index)
+        return tuple(outputs)
+
+
 class SP8AffineTP1KimiDeltaAttention:
     """Correctness-first SP=8 affine scheduler on a 1x8 LoudBox.
 
@@ -353,8 +467,9 @@ class SP8AffineTP1KimiDeltaAttention:
         state_dict: Mapping[str, torch.Tensor],
         tensor_cache_path: Path | None = None,
     ) -> None:
-        if tuple(mesh_device.shape) != (1, _SP8_SIZE):
-            raise ValueError(f"SP8 affine TP1 requires a 1x8 LoudBox mesh, got {tuple(mesh_device.shape)}")
+        self.topology = SPTPTopology(_SP8_SIZE, _TP1_SIZE)
+        if not self.topology.validate_mesh_shape(tuple(mesh_device.shape), name="SP8 affine TP1"):
+            raise ValueError("SP8 affine TP1 currently requires the flattened 1x8 LoudBox mesh")
         self.mesh_device = mesh_device
         self.prefix = SP8AffinePrefixProbe(mesh_device)
         self.span_devices = self.prefix.span_devices
@@ -598,15 +713,20 @@ class SP8AffineTP1KimiDeltaAttention:
         )
         span_a, span_b = zip(*span_transforms, strict=True)
         # The default keeps the conservative eager fences.  The opt-in tree
-        # barrier is device-queued after every affine stage's local matmuls,
+        # barriers are device-queued after every affine stage's local matmuls,
         # so no rank can enter the following fabric distance early while the
-        # host remains free to enqueue the rest of the KDA schedule.
+        # host remains free to enqueue the rest of the KDA schedule.  The
+        # fabric-atomic version is the trace-candidate replacement for the
+        # socket-token control traffic; it remains separately opt-in until it
+        # passes the standalone and full-layer LoudBox gates.
         device_barrier = os.getenv("KDA_SP_DEVICE_BARRIER", "0") == "1"
+        fabric_tree_barrier = os.getenv("KDA_SP_FABRIC_TREE_BARRIER", "0") == "1"
         prefix_a, prefix_b = self.prefix.run(
             span_a,
             span_b,
-            synchronize_stages=not device_barrier,
+            synchronize_stages=not (device_barrier or fabric_tree_barrier),
             device_barrier=device_barrier,
+            fabric_tree_barrier=fabric_tree_barrier,
         )
 
         # Each inclusive prefix maps the common initial state to the state at
@@ -654,3 +774,54 @@ class SP8AffineTP1KimiDeltaAttention:
             assert final_state is not None
             outputs.append(layer._finish_prepared(rank_prepared, raw_output, final_state, fuse_scan_rms=False))
         return tuple(outputs)
+
+
+class SP8AffineTP4KimiDeltaAttention(SP8AffineTP1KimiDeltaAttention):
+    """Galaxy-shaped SP=8 affine scheduler with one TP=4 layer per span.
+
+    The inherited scheduling methods operate on one layer object per sequence
+    rank.  Here each object is a normal TP=4 KDA layer, so its affine summary,
+    state transform, and output projection retain the production TP layout.
+    The prefix probe creates four rank-aligned socket streams for every SP
+    edge. The fabric-atomic candidate constructs four independent TP trees and
+    dispatches their programs through the owning TP4 span meshes.
+    """
+
+    def __init__(
+        self,
+        mesh_device: ttnn.MeshDevice,
+        config: KDAConfig,
+        state_dict: Mapping[str, torch.Tensor],
+        tensor_cache_path: Path | None = None,
+    ) -> None:
+        self.topology = SPTPTopology(_SP8_SIZE, _TP_SIZE)
+        self.mesh_device = mesh_device
+        self.prefix = SP8AffinePrefixProbe(mesh_device, tp_size=_TP_SIZE)
+        self.span_devices = self.prefix.span_devices
+        self.layers = tuple(
+            KimiDeltaAttention(
+                span_device,
+                config,
+                state_dict,
+                tensor_cache_path=tensor_cache_path,
+                tt_ccl=TT_CCL(span_device),
+            )
+            for span_device in self.span_devices
+        )
+        self._convolution_sockets = tuple(
+            ttnn.create_socket_pair(
+                self.span_devices[span],
+                self.span_devices[span + 1],
+                _prefix_socket_config(3, self.span_devices[span].shape),
+            )
+            for span in range(_SP8_SIZE - 1)
+        )
+        self._entry_sockets = tuple(
+            ttnn.create_socket_pair(
+                self.span_devices[span],
+                self.span_devices[span + 1],
+                _prefix_socket_config(4, self.span_devices[span].shape),
+            )
+            for span in range(_SP8_SIZE - 1)
+        )
+        self._prefix_initial_states: tuple[ttnn.Tensor, ...] | None = None
