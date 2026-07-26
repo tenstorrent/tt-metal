@@ -741,10 +741,12 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // AND the unpack-tilize probe (above): reader gather + tilize into a PLAIN ACT_TILIZED, no matmul / weights /
     // writer, borrowed OUT kept only to satisfy TP_OUTPUT. They differ only where split_program_unpack_tilize is
     // consulted (compute kernel selection, scalar DFB, compute defines, compute bindings).
+    // [#48552 Stage2] block_sharded also eligible for the tilize-only Program A (split path). Must stay aligned
+    // with conv2d.cpp's split_program_active gate or Program A tilizes but Program B never runs (RBFAIL).
     const bool split_program_tilize_only =
         ((std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") != nullptr) || split_program_unpack_tilize) &&
-        height_sharded && !is_conv_1d_depthwise_conv && !enable_split_reader && !enable_activation_reuse &&
-        (in0_num_blocks_w == 1) && (num_blocks_weight_w_per_core == 1);
+        (height_sharded || block_sharded) && !is_conv_1d_depthwise_conv && !enable_split_reader &&
+        !enable_activation_reuse && (in0_num_blocks_w == 1) && (num_blocks_weight_w_per_core == 1);
 
     // [#48552 DEBUG -- remove before merge] When the split env is set but this conv did NOT run tilize-only,
     // Program A produces a normal conv output [M, N] instead of the tilized activation [M, full_K], and the

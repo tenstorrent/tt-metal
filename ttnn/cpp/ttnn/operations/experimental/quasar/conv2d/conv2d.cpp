@@ -506,6 +506,8 @@ Result conv2d_L1(
     // raise (not K-spill) suffices IF it fits. test_quasar_gap_deep_k_over_32 K144_layer4 pins this: PASS = done;
     // OOM = the biggest 3x3 needs K-spill / more L1. force_conv_no_spill still caps act_block_h for the DFB ring.
     const bool height_sharded_conv = parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED;
+    const bool block_sharded_conv =
+        parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED;  // [#48552 Stage2]
     const uint32_t full_inner_dim_k_ntiles =
         tt::round_up(in_channels_padded * kernel_size[0] * kernel_size[1], tt::constants::TILE_WIDTH) /
         tt::constants::TILE_HEIGHT;
@@ -523,11 +525,17 @@ Result conv2d_L1(
     // split is requested, matching the WH/BH config (act_block_w == full_K, reader gather == CB size).
     const bool arch_is_quasar = device->arch() == tt::ARCH::QUASAR;
     const bool split_env_requested = (std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") != nullptr);
-    const bool force_conv_no_spill = (!arch_is_quasar || split_env_requested) && height_sharded_conv && !mm_conv &&
-                                     !conv_is_1d_depthwise && (kernel_size[0] > 1) &&
-                                     (full_inner_dim_k_ntiles <= kQuasarConvNoSpillMaxKTiles);
+    // [#48552 Stage2] Block-sharded convs also take the split path. For block-sharded, K is split across the
+    // grid columns so each core's per-core K is already act_block_w (a single K-block); we set full_inner_dim
+    // (no reduction-dim slicing) but do NOT rewrite act_block_w to the FULL K (that is the height-sharded
+    // per-core K). ITERATION 1 — validate the 2D geometry on the emulator (layer3/layer4).
+    const bool force_conv_no_spill = (!arch_is_quasar || split_env_requested) &&
+                                     (height_sharded_conv || block_sharded_conv) && !mm_conv && !conv_is_1d_depthwise &&
+                                     (kernel_size[0] > 1) && (full_inner_dim_k_ntiles <= kQuasarConvNoSpillMaxKTiles);
     if (force_conv_no_spill) {
-        opt_conv_op_block_config.act_block_w_ntiles = full_inner_dim_k_ntiles;
+        if (height_sharded_conv) {
+            opt_conv_op_block_config.act_block_w_ntiles = full_inner_dim_k_ntiles;
+        }
         conv_config.full_inner_dim = true;
 
         // The no-spill path grows act_block_w from one filter row to the full K (filter_h*filter_w*Cin).
@@ -913,8 +921,11 @@ Result conv2d_L1(
         // arch check) — otherwise the factory builds the tilize-only Program A but conv2d.cpp skips Program B, and
         // the op returns the raw tilized activation [M,K] instead of the conv result [M,N]. The env var is the
         // explicit opt-in (only tests set it), so production convs on any arch are unaffected.
+        // [#48552 Stage2] block_sharded also runs the two-program split (must match the factory's
+        // split_program_tilize_only gate). height-sharded -> 1D Program B; block-sharded -> 2D Program B.
         const bool split_program_active = (std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") != nullptr) &&
-                                          parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED &&
+                                          (parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED ||
+                                           parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) &&
                                           conv_config.full_inner_dim && !tilize_only_no_matmul;
         if (split_program_active) {
             std::optional<ttnn::operations::experimental::quasar::matmul::MatmulProgramConfig> program_config =
@@ -941,51 +952,63 @@ Result conv2d_L1(
                 // act_block_w * kernel_size[0]: on WH/BH act_block_w is ALREADY the full K, so multiplying by
                 // kernel_size[0] over-counted 4x and made Program B's K (64) disagree with the weights' K (16).
                 // full_inner_dim_k_ntiles is that intrinsic K on every arch.
+                // Program A tilized the FULL im2col K contiguously; Program B contracts it in ONE K-block
+                // (in0_block_w == full_K) to dodge the Quasar matmul K-spill accumulate. Program A's output is
+                // [M, K], so the helper's per_core_N is the tilized-activation WIDTH K, not the real N
+                // (out_channels) -> override the N dims below (else the output is K-wide and scrambled).
                 const uint32_t full_k_ntiles_mm = full_inner_dim_k_ntiles;
-                // The helper always builds a MatmulMultiCoreReuseMultiCast1DProgramConfig (height-sharded, 1D
-                // mcast_in0=false). Only that alternative carries in0_block_w, so target it directly rather than a
-                // std::visit lambda (which would have to compile for every variant, most of which lack the field).
-                auto* mm1d_cfg = std::get_if<
-                    ttnn::operations::experimental::quasar::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
-                    &program_config.value());
-                TT_FATAL(
-                    mm1d_cfg != nullptr,
-                    "QUASAR split conv Program B expected a MatmulMultiCoreReuseMultiCast1DProgramConfig");
-                mm1d_cfg->in0_block_w = full_k_ntiles_mm;
-
-                // Program B's OUTPUT is [M, N] (N = out_channels), but the helper derived per_core_N / out_block_w
-                // from per_core_out_matrix_width_ntile, which on the split path is the tilized-activation width K
-                // (16 tiles), NOT N (out_channels tiles). Uncorrected, the matmul writes a K-wide output and the
-                // real N columns are scattered -> correct values, scrambled layout (sorted-flat PCC~1, exact~0,
-                // raw out.shape [1,1,512,512] instead of [1,1,512,64]). Override the N dims to true out_channels
-                // and pick a valid out_subblock_w divisor (<=8, DEST limit).
                 const uint32_t n_ntiles_mm =
                     tt::round_up(out_channels, tt::constants::TILE_WIDTH) / tt::constants::TILE_WIDTH;
-                // out_block_w MUST equal per_core_N (matmul asserts out_block_w==per_core_N || out_block_h==1),
-                // and out_block_h stays per_core_M: on Quasar out_block_h < per_core_M (multi-M-block) writes the
-                // output TRANSPOSED (device_flat == golden.T; a Quasar matmul multi-M-block output-order bug).
-                // out_subblock_w = largest divisor of per_core_N <= 8 (1 x osw <= 8 DEST). KNOWN LIMITATION:
-                // wide-N (out_channels >= 256, N >= 8 tiles) + FUSED bias HANGS on Quasar at program completion
-                // (the fused-bias wide-N epilogue); pure N>=8 and bias N<=4 pass. Needs a matmul-kernel fix.
-                uint32_t osw_mm = n_ntiles_mm;
-                while (osw_mm > 8 || (n_ntiles_mm % osw_mm) != 0) {
-                    osw_mm--;
-                }
-                mm1d_cfg->per_core_N = n_ntiles_mm;
-                mm1d_cfg->out_block_w = n_ntiles_mm;  // == per_core_N (assert clause 1)
-                mm1d_cfg->out_subblock_w = osw_mm;
-                mm1d_cfg->out_subblock_h = 1;
-
-                // Build the matching [M, N] output memory config: same grid/orientation as Program A's [M, K]
-                // output, but shard WIDTH = N (out_channels padded), not K. Reusing conv_out_memory_config (the
-                // [M, K] tilized-activation config) is what forced the K-wide output.
                 const auto& a_shard = conv_out_memory_config.shard_spec().value();
-                const std::array<uint32_t, 2> mm_shard_shape = {
-                    a_shard.shape[0], n_ntiles_mm * tt::constants::TILE_WIDTH};
-                mm_output_memory_config = tt::tt_metal::MemoryConfig(
-                    conv_out_memory_config.memory_layout(),
-                    conv_out_memory_config.buffer_type(),
-                    tt::tt_metal::ShardSpec{a_shard.grid, mm_shard_shape, a_shard.orientation});
+                if (auto* mm1d_cfg = std::get_if<
+                        ttnn::operations::experimental::quasar::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
+                        &program_config.value())) {
+                    // 1D (height-sharded): FULL N per core. out_block_w == per_core_N (matmul assert); out_subblock_w
+                    // = largest divisor of per_core_N <= 8 (DEST limit). KNOWN LIMITATION: wide-N (>=8 tiles) + FUSED
+                    // bias HANGS on Quasar (fused-bias wide-N epilogue); pure N>=8 and bias N<=4 pass.
+                    uint32_t osw_mm = n_ntiles_mm;
+                    while (osw_mm > 8 || (n_ntiles_mm % osw_mm) != 0) {
+                        osw_mm--;
+                    }
+                    mm1d_cfg->in0_block_w = full_k_ntiles_mm;
+                    mm1d_cfg->per_core_N = n_ntiles_mm;
+                    mm1d_cfg->out_block_w = n_ntiles_mm;
+                    mm1d_cfg->out_subblock_w = osw_mm;
+                    mm1d_cfg->out_subblock_h = 1;
+                    const std::array<uint32_t, 2> mm_shard_shape = {
+                        a_shard.shape[0], n_ntiles_mm * tt::constants::TILE_WIDTH};
+                    mm_output_memory_config = tt::tt_metal::MemoryConfig(
+                        conv_out_memory_config.memory_layout(),
+                        conv_out_memory_config.buffer_type(),
+                        tt::tt_metal::ShardSpec{a_shard.grid, mm_shard_shape, a_shard.orientation});
+                } else if (
+                    auto* mm2d_cfg = std::get_if<
+                        ttnn::operations::experimental::quasar::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>(
+                        &program_config.value())) {
+                    // [#48552 Stage2 ITERATION 1] 2D (block-sharded): block-sharding splits N (out_channels)
+                    // across num_cores_c grid columns -> full K per core, per_core_N = ceil(N / num_cores_c). The
+                    // N-split keeps the per-core weights DFB under the uint16 ring (why layer3/4 block-shard).
+                    // per_core_M / out_block_h / transpose_mcast are trusted from the helper. Output is
+                    // block-sharded [M_row, N_col]. Geometry NOT yet emulator-validated -- refine from layer3/4.
+                    const uint32_t n_col_ntiles = tt::div_up(n_ntiles_mm, num_cores_c);
+                    uint32_t osw_mm = n_col_ntiles;
+                    while (osw_mm > 8 || (n_col_ntiles % osw_mm) != 0) {
+                        osw_mm--;
+                    }
+                    mm2d_cfg->in0_block_w = full_k_ntiles_mm;
+                    mm2d_cfg->per_core_N = n_col_ntiles;
+                    mm2d_cfg->out_block_w = n_col_ntiles;
+                    mm2d_cfg->out_subblock_w = osw_mm;
+                    mm2d_cfg->out_subblock_h = 1;
+                    const std::array<uint32_t, 2> mm_shard_shape = {
+                        a_shard.shape[0], n_col_ntiles * tt::constants::TILE_WIDTH};
+                    mm_output_memory_config = tt::tt_metal::MemoryConfig(
+                        conv_out_memory_config.memory_layout(),
+                        conv_out_memory_config.buffer_type(),
+                        tt::tt_metal::ShardSpec{a_shard.grid, mm_shard_shape, a_shard.orientation});
+                } else {
+                    TT_FATAL(false, "QUASAR split conv Program B: unexpected matmul program config variant");
+                }
             }
             ttnn::Tensor matmul_output = ttnn::operations::experimental::quasar::matmul::linear(
                 conv_output,  // Program A output = tilized activation [M, K]
