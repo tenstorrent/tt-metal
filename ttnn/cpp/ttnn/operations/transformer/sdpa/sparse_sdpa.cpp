@@ -21,7 +21,10 @@ ttnn::Tensor sparse_sdpa(
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> block_cyclic_sp_axis,
-    std::optional<uint32_t> block_cyclic_chunk_local) {
+    std::optional<uint32_t> block_cyclic_chunk_local,
+    const std::optional<ttnn::Tensor>& page_table,
+    std::optional<uint32_t> paged_layer_idx,
+    std::optional<uint32_t> paged_sp_axis) {
     const uint32_t k_dim = q.logical_shape()[3];  // head dim, from the tensor
     const float resolved_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(k_dim)));
 
@@ -55,6 +58,48 @@ ttnn::Tensor sparse_sdpa(
         block_cyclic = ttnn::prim::BlockCyclicLayout{sp, chunk_local};
     }
 
+    constexpr uint32_t glm52_bundle_tokens = 5120;
+    constexpr uint32_t glm52_num_layers = 78;
+    const bool any_paged_arg = page_table.has_value() || paged_layer_idx.has_value() || paged_sp_axis.has_value();
+    TT_FATAL(
+        !any_paged_arg || (page_table.has_value() && paged_layer_idx.has_value() && paged_sp_axis.has_value()),
+        "sparse_sdpa: page_table, paged_layer_idx and paged_sp_axis must be provided together");
+    std::optional<ttnn::prim::SparseSDPAParams::PagedKVLayout> paged_kv = std::nullopt;
+    if (any_paged_arg) {
+        TT_FATAL(cache_batch_idx.has_value(), "sparse_sdpa: paged KV requires cache_batch_idx (logical slot)");
+        const auto mesh_shape = q.device()->get_view().shape();
+        TT_FATAL(mesh_shape.dims() == 2, "sparse_sdpa: paged KV currently requires a 2D mesh");
+        const uint32_t sp_axis = paged_sp_axis.value();
+        TT_FATAL(
+            sp_axis < mesh_shape.dims(),
+            "sparse_sdpa: paged_sp_axis {} is outside mesh rank {}",
+            sp_axis,
+            mesh_shape.dims());
+        const uint32_t sp = mesh_shape[sp_axis];
+        TT_FATAL(
+            glm52_bundle_tokens % sp == 0,
+            "sparse_sdpa: GLM-5.2 bundle size {} must be divisible by SP {}",
+            glm52_bundle_tokens,
+            sp);
+        const auto table_shape = page_table->logical_shape();
+        TT_FATAL(
+            table_shape.rank() == 2 && table_shape[0] > 0 && table_shape[1] > 0,
+            "sparse_sdpa: page_table must be [logical_slots,max_bundles], got {}",
+            table_shape);
+        paged_kv = ttnn::prim::SparseSDPAParams::PagedKVLayout{
+            .sp = sp,
+            .sp_axis = sp_axis,
+            .chunk_local = glm52_bundle_tokens / sp,
+            .layer_idx = paged_layer_idx.value(),
+            .num_layers = glm52_num_layers,
+            .bundle_tokens = glm52_bundle_tokens,
+            .max_bundles_per_slot = table_shape[1],
+        };
+        // Paged addressing performs the natural-position -> owner/local-row mapping
+        // directly.  Applying the legacy gathered-buffer remap as well would permute twice.
+        block_cyclic = std::nullopt;
+    }
+
     // fp8 q/kv must be tilized through a 32-bit dest accumulator, so default fp32_dest_acc_en on for fp8.
     const bool any_fp8 = (kv.dtype() == ttnn::DataType::FP8_E4M3) || (q.dtype() == ttnn::DataType::FP8_E4M3);
     auto kernel_config = init_device_compute_kernel_config(
@@ -66,7 +111,18 @@ ttnn::Tensor sparse_sdpa(
         /*default_l1_acc=*/false);
 
     return ttnn::prim::sparse_sdpa(
-        q, kv, indices, resolved_scale, v_dim, kv_format, k_chunk_size, kernel_config, cache_batch_idx, block_cyclic);
+        q,
+        kv,
+        indices,
+        resolved_scale,
+        v_dim,
+        kv_format,
+        k_chunk_size,
+        kernel_config,
+        cache_batch_idx,
+        block_cyclic,
+        paged_kv,
+        page_table);
 }
 
 }  // namespace ttnn::transformer

@@ -442,6 +442,7 @@ class TtPrefillBlock(LightweightModule):
         indexer_indices: Optional[ttnn.Tensor] = None,
         return_indexer_indices: bool = False,
         index_kv_cache: Optional[ttnn.Tensor] = None,
+        paged_cache=None,
     ):
         """
         Args:
@@ -491,6 +492,7 @@ class TtPrefillBlock(LightweightModule):
             indexer_indices=indexer_indices,
             return_indexer_indices=return_indexer_indices,
             index_kv_cache=index_kv_cache,
+            paged_cache=paged_cache,
         )
         kv_intermediates = None
         mla_indices = None  # GLM-5.2 reuse: this layer's top-k indices (full layer) for downstream shared layers

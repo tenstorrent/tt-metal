@@ -16,6 +16,7 @@ namespace tt::tt_fabric::udm {
 // All parameters are compile-time template arguments
 template <uint32_t BaseAddress, uint32_t SlotSize, uint32_t NumSlots>
 class UDMMemoryPool {
+    static_assert(BaseAddress % DRAM_ALIGNMENT == 0, "UDM memory pool base must be DRAM aligned");
     static_assert(SlotSize % DRAM_ALIGNMENT == 0, "SlotSize must be DRAM aligned");
 
 private:

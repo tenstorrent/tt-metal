@@ -37,6 +37,11 @@ DTYPE_LAYOUT_CASES = [
 ]
 DTYPE_LAYOUT_IDS = ["bfp8_tile", "bf16_rm", "fp8_rm"]
 
+PAGED_DTYPE_LAYOUT_CASES = [
+    (ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+    (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+]
+
 
 def _make_input(torch_chunk, dtype, layout, mesh_device, mesh_mapper):
     """Build a device input tensor. fp8_e4m3 cannot be constructed through the mesh-mapper path
@@ -210,6 +215,67 @@ def test_update_padded_kv_cache_single_device(mesh_device, dtype, layout):
                 f"(max abs diff {(written.float() - expected[(u, l)].float()).abs().max().item()})"
             )
             logger.info(f"  [{dtype}] user {u} layer {l}: exact match")
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=True)
+@pytest.mark.parametrize("dtype,layout", PAGED_DTYPE_LAYOUT_CASES, ids=["bfp8_tile", "bf16_rm"])
+@pytest.mark.timeout(0)
+def test_paged_update_uses_compact_bundle_table(mesh_device, dtype, layout):
+    """One table entry selects a complete physical 5120-token bundle, not 160 page IDs."""
+    bundle_tokens = 5 * 1024
+    num_physical_bundles, num_layers = 3, 2
+    selected_bundle, layer_idx = 2, 1
+
+    pool = init_kvpe_cache(
+        kvpe_cache_head_dim=KVPE_HEAD_DIM,
+        mesh_device=mesh_device,
+        seq_len=bundle_tokens,
+        mesh_shape=list(mesh_device.shape),
+        sp_axis=0,
+        num_kvpe_cache_layers=num_physical_bundles * num_layers,
+        dtype=dtype,
+        layout=layout,
+    )
+    torch.manual_seed(23)
+    source = torch.randn(1, 1, bundle_tokens, KVPE_HEAD_DIM, dtype=torch.bfloat16)
+    tt_input = _make_input(
+        source,
+        dtype,
+        layout,
+        mesh_device,
+        ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    expected = ttnn.to_torch(tt_input, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).reshape(
+        bundle_tokens, KVPE_HEAD_DIM
+    )
+    # Width is logical-bundle count. The selected physical ID is runtime table contents.
+    page_table = ttnn.from_torch(
+        torch.tensor([[selected_bundle, -1], [-1, -1]], dtype=torch.int32),
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    ttnn.experimental.deepseek_prefill.paged_update_padded_kv_cache(
+        pool,
+        tt_input,
+        page_table,
+        slot_idx=0,
+        layer_idx=layer_idx,
+        num_layers=num_layers,
+        kv_actual_global=0,
+        cluster_axis=0,
+    )
+    result = ttnn.to_torch(pool, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).reshape(
+        num_physical_bundles * num_layers, 1, bundle_tokens, KVPE_HEAD_DIM
+    )
+
+    selected_batch = selected_bundle * num_layers + layer_idx
+    assert torch.equal(result[selected_batch, 0], expected)
+    assert torch.count_nonzero(result[:selected_batch].float()) == 0
+    assert torch.count_nonzero(result[selected_batch + 1 :].float()) == 0
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 4), (2, 4), (8, 4)], ids=["1x4", "2x4", "8x4"], indirect=True)

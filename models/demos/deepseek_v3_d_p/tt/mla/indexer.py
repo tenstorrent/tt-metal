@@ -303,7 +303,7 @@ class TtIndexer:
         """All-reduce over TP = reduce-scatter (dim 3) then all-gather; rs_only stops after the RS."""
         if self.tp_factor == 1:
             return t
-        t = ttnn.experimental.reduce_scatter_minimal_async(
+        reduced = ttnn.experimental.reduce_scatter_minimal_async(
             t,
             persistent_output_buffers=None,
             dim=3,
@@ -315,9 +315,9 @@ class TtIndexer:
             cluster_axis=self.tp_axis,
         )
         if rs_only:
-            return t
-        return ttnn.experimental.all_gather_async(
-            t,
+            return reduced
+        gathered = ttnn.experimental.all_gather_async(
+            reduced,
             dim=3,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
@@ -326,6 +326,8 @@ class TtIndexer:
             topology=self.tp_ccl_topology,
             cluster_axis=self.tp_axis,
         )
+        ttnn.deallocate(reduced)
+        return gathered
 
     def _sp_all_gather(self, t, dim):
         """All-gather across the SP axis (sequence) → full-S replicated on SP. sp=1: no-op."""
@@ -443,7 +445,15 @@ class TtIndexer:
         return full
 
     def write_k(
-        self, hidden_states, seq_len, start_pos, rope_tensors=None, cache_user_id=0, cache_layer_idx=0, index_kbuf=None
+        self,
+        hidden_states,
+        seq_len,
+        start_pos,
+        rope_tensors=None,
+        cache_user_id=0,
+        cache_layer_idx=0,
+        index_kbuf=None,
+        paged_cache=None,
     ):
         """Device K stem (wk + TP all-reduce + k_norm + device rope) written into the device index-key
         cache. forward() calls this on every chunk so the key-cache stays complete — else later chunks
@@ -476,16 +486,117 @@ class TtIndexer:
         k = self._bc_rope_pe(k, rope_tensors, start_pos)  # [1, 1, S/sp, D_idx] bf16
         if k.dtype != index_kbuf.dtype:  # write dtype must match the cache (update_padded_kv_cache asserts)
             k = ttnn.typecast(k, index_kbuf.dtype)
-        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            index_kbuf,
-            k,
-            slot_idx=cache_user_id,
-            layer_idx=cache_layer_idx,
-            num_layers=self._index_cache_layers,
-            kv_actual_global=start_pos,
-            cluster_axis=self.sp_axis,
-        )
+        if paged_cache is None:
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                index_kbuf,
+                k,
+                slot_idx=cache_user_id,
+                layer_idx=cache_layer_idx,
+                num_layers=self._index_cache_layers,
+                kv_actual_global=start_pos,
+                cluster_axis=self.sp_axis,
+            )
+        else:
+            ttnn.experimental.deepseek_prefill.paged_update_padded_kv_cache(
+                index_kbuf,
+                k,
+                paged_cache.device_page_table,
+                slot_idx=cache_user_id,
+                layer_idx=cache_layer_idx,
+                num_layers=paged_cache.num_index_layers,
+                kv_actual_global=start_pos,
+                cluster_axis=self.sp_axis,
+            )
         ttnn.deallocate(k)
+
+    def _paged_remote_topk(
+        self,
+        q,
+        k_pool,
+        page_table,
+        weights,
+        *,
+        layer_idx,
+        num_layers,
+        end_pos,
+        chunk_start_idx,
+        paged_sp_axis,
+        query_seq_axis,
+        cache_slot,
+        program_config,
+    ):
+        """Score paged K in bounded bundles, then fold the existing TopK results.
+
+        Queries remain on their SP/TP owners. The page-aware reader fetches K
+        tiles directly from their position-dependent SP owners through UDM, so
+        neither Q/W, K, nor intermediate candidates are all-gathered.
+        """
+        bundle_tokens = 5120
+        target_k = self.index_args.index_topk
+        assert (self.sp_factor, self.tp_factor) in {
+            (4, 1),
+            (8, 4),
+        }, f"paged GLM-5.2 indexer supports SP4xTP1 validation and SP8xTP4 production, got SP{self.sp_factor}xTP{self.tp_factor}"
+        assert target_k % 16 == 0, f"paged indexer top-k requires a 16-element-aligned k; got {target_k}"
+        assert 0 < end_pos, f"paged indexer requires a non-empty valid prefix; got end_pos={end_pos}"
+        assert bundle_tokens % self.sp_factor == 0
+        seq_axes = [self.sp_axis, query_seq_axis] if query_seq_axis is not None else [self.sp_axis]
+        state_values = None
+        state_indices = None
+        for bundle_start in range(0, end_pos, bundle_tokens):
+            # The model always computes a complete 5,120-row chunk. Score the
+            # complete allocated bundle as well; causal masking prevents real
+            # query rows from selecting unwritten suffix positions. This keeps
+            # TopK at its fixed, tile-aligned 2,048-wide contract while
+            # ``end_pos`` still controls how many bundles are visited.
+            bundle_end = bundle_start + bundle_tokens
+            score_cfg = ttnn.IndexerScoreProgramConfig(
+                q_chunk_size=program_config.q_chunk_size,
+                k_chunk_size=min(program_config.k_chunk_size, bundle_tokens),
+                head_group_size=program_config.head_group_size,
+            )
+            scores_rm = ttnn.experimental.indexer_score_dsa_paged(
+                q,
+                k_pool,
+                page_table,
+                weights,
+                layer_idx=layer_idx,
+                num_layers=num_layers,
+                kv_len=bundle_end,
+                kv_start=bundle_start,
+                chunk_start_idx=chunk_start_idx,
+                paged_sp_axis=paged_sp_axis,
+                seq_shard_axes=seq_axes,
+                program_config=score_cfg,
+                cache_slot=cache_slot,
+            )
+            bundle_values, bundle_indices = ttnn.experimental.topk_large_values_indices(
+                scores_rm,
+                k=target_k,
+                valid_length=bundle_tokens,
+                index_offset=bundle_start,
+            )
+            ttnn.deallocate(scores_rm)
+            if state_values is None:
+                state_values, state_indices = bundle_values, bundle_indices
+                continue
+
+            candidate_values = ttnn.concat([state_values, bundle_values], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            candidate_indices = ttnn.concat(
+                [state_indices, bundle_indices], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            for tensor in (state_values, state_indices, bundle_values, bundle_indices):
+                ttnn.deallocate(tensor)
+            state_values, state_indices = ttnn.experimental.topk_large_values_indices(
+                candidate_values,
+                k=min(target_k, candidate_values.shape[-1]),
+                input_indices=candidate_indices,
+            )
+            ttnn.deallocate(candidate_values)
+            ttnn.deallocate(candidate_indices)
+
+        ttnn.deallocate(state_values)
+        return state_indices
 
     def forward(
         self,
@@ -497,6 +608,7 @@ class TtIndexer:
         cache_user_id: int = 0,
         cache_layer_idx: int = 0,
         index_kv_cache: ttnn.Tensor = None,
+        paged_cache=None,
     ) -> ttnn.Tensor:
         """Indexer forward → top-k key indices [1, 1, S/sp, k] over the device index-key cache, SP-sharded
         on the query axis (each chip scores its own S/sp rows; no Q/W all-gather). Fully on-device:
@@ -539,10 +651,11 @@ class TtIndexer:
             cache_user_id=cache_user_id,
             cache_layer_idx=cache_layer_idx,
             index_kbuf=index_kv_cache,
+            paged_cache=paged_cache,
         )
 
         # Q stem: the shared q_a latent (qr) -> indexer wq_b.
-        q = ttnn.linear(
+        q_linear = ttnn.linear(
             qr,
             self._idx_wq_b,
             compute_kernel_config=self.default_compute_kernel_config,
@@ -551,27 +664,41 @@ class TtIndexer:
             dtype=ttnn.bfloat8_b,
         )  # [1, 1, S/sp, H_idx*D_idx] — ALL heads (wq_b replicated); queries stay SP-sharded (rotation-safe)
         q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
-            q, num_heads=a.index_n_heads, num_kv_heads=0, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            q_linear,
+            num_heads=a.index_n_heads,
+            num_kv_heads=0,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1, H_idx, S/sp, D_idx] — all heads resident
+        ttnn.deallocate(q_linear)
         # block-cyclic indexed rope (same op/tables as the key rope + MLA q_pe)
         q_dev = self._bc_rope_pe(q, rope_tensors, start_pos)
+        ttnn.deallocate(q)
 
         # weights_proj: device stem -> FULL all-reduce over tp (all H_idx heads, matching the replicated
         # wq_b heads) -> scale -> [1, 1, S/sp, H_idx].
-        wts = ttnn.linear(
+        wts_linear = ttnn.linear(
             hidden_states,
             self._idx_wproj,
             compute_kernel_config=self.default_compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        wts = self._tp_rs_ag(wts)  # full all-reduce (RS+AG) over tp -> all H_idx head-weights, replicated
+        wts_reduced = self._tp_rs_ag(
+            wts_linear
+        )  # full all-reduce (RS+AG) over tp -> all H_idx head-weights, replicated
+        if self.tp_factor > 1:
+            ttnn.deallocate(wts_linear)
         # Indexer softmax scale = index_head_dim**-0.5 (NO mscale), matching the reference IndexerCPU
         # (model.py: softmax_scale = head_dim**-0.5). Distinct from MLA's qk_head_dim*mscale**2 scale —
         # though as a uniform positive multiplier it cannot change the top-k selection regardless.
-        wts = ttnn.multiply(wts, a.index_n_heads**-0.5 * a.index_head_dim**-0.5)  # [1,1,S/sp,H_idx] repl on tp
+        wts = ttnn.multiply(
+            wts_reduced, a.index_n_heads**-0.5 * a.index_head_dim**-0.5
+        )  # [1,1,S/sp,H_idx] repl on tp
+        ttnn.deallocate(wts_reduced)
 
         # indexer_score wants per-head weights [1, H_idx, S/sp, 1]; wts is [1, 1, S/sp, H_idx].
         weights = ttnn.permute(wts, (0, 3, 2, 1))
+        ttnn.deallocate(wts)
 
         # TP×SP query parallelism (rope-then-split). q_dev/weights were roped on the FULL S/sp slab
         # (block-cyclic-correct, cluster_axis=sp_axis), so every row already carries its true position; now
@@ -593,6 +720,7 @@ class TtIndexer:
             sq_local = seq_len // self.tp_factor
             qc = 64 if sq_local % 64 == 0 else 32  # q_chunk must divide the per-chip query tile count
         else:
+            sq_local = seq_len
             qc = 64
         # Causality is fused inside indexer_score (future columns -> -inf from chunk_start_idx), so no triu
         # mask here. All H_idx heads are resident on-chip (wq_b replicated), so head_group_size=0 reads the
@@ -616,23 +744,53 @@ class TtIndexer:
         # top-k below is told the valid length (valid_length=end_pos) so it never reads or ranks that
         # stale tail — which is the future top-k would drop anyway (causally -inf), so the selection is
         # unchanged.
-        k_full = self._gather_index_kbuf(index_kv_cache, cache_batch_idx)  # [1,1,T,D_idx] bf16 TILE, block-cyclic
-        logits = ttnn.experimental.indexer_score_dsa(
-            q_dev,
-            k_full,
-            weights,
-            chunk_start_idx=start_pos,
-            program_config=cfg,
-            # Seq shard axes, outermost (SP ring) first. TP×SP adds the TP axis so the score adds each
-            # device's tp_rank*Sq' block-cyclic sub-offset — rotation-EXACT (vs the flat [] path, which is
-            # linear-approximate under a mid-slab start). SP-only ([sp]) when the query stays SP-sharded.
-            seq_shard_axes=[self.sp_axis, self.tp_axis] if tpsp else [self.sp_axis],
-            cache_batch_idx=None,  # k_full is already sliced to this slot (batch-1) → no in-kernel select
-            block_cyclic_sp_axis=self.sp_axis,
-            block_cyclic_chunk_local=seq_len,  # cache slab == chunk_size_global / sp (== Sq'·tp when TP-split)
-            kv_len=end_pos,
-        )
-        ttnn.deallocate(k_full)
+        seq_axes = [self.sp_axis, self.tp_axis] if tpsp else [self.sp_axis]
+        if paged_cache is not None:
+            assert paged_cache.num_index_layers == self._index_cache_layers, (
+                "paged index-cache layer stride must match the indexer's compact layer count: "
+                f"pool={paged_cache.num_index_layers}, model={self._index_cache_layers}"
+            )
+            # Reuse the standard indexer-score and large-index TopK operations
+            # bundle by bundle. Every SP rank scores only its resident
+            # position-owned K half; normal-fabric collectives exchange Q/W
+            # once and bounded candidates thereafter. valid_end limits the
+            # number of bundles visited; fused causality masks the unwritten
+            # tail for every real query row. Thus no full-context score or
+            # gathered K prefix is materialized.
+            idx = self._paged_remote_topk(
+                q_dev,
+                index_kv_cache,
+                paged_cache.device_page_table,
+                weights,
+                layer_idx=cache_layer_idx,
+                num_layers=paged_cache.num_index_layers,
+                chunk_start_idx=start_pos,
+                paged_sp_axis=self.sp_axis,
+                query_seq_axis=self.tp_axis if tpsp else None,
+                end_pos=paged_cache.valid_end(cache_user_id),
+                cache_slot=cache_user_id,
+                program_config=cfg,
+            )
+        else:
+            k_full = self._gather_index_kbuf(index_kv_cache, cache_batch_idx)  # [1,1,T,D_idx] bf16 TILE, block-cyclic
+            logits = ttnn.experimental.indexer_score_dsa(
+                q_dev,
+                k_full,
+                weights,
+                chunk_start_idx=start_pos,
+                program_config=cfg,
+                # Seq shard axes, outermost (SP ring) first. TP×SP adds the TP axis so the score adds each
+                # device's tp_rank*Sq' block-cyclic sub-offset — rotation-EXACT (vs the flat [] path, which is
+                # linear-approximate under a mid-slab start). SP-only ([sp]) when the query stays SP-sharded.
+                seq_shard_axes=seq_axes,
+                cache_batch_idx=None,  # k_full is already sliced to this slot (batch-1) → no in-kernel select
+                block_cyclic_sp_axis=self.sp_axis,
+                block_cyclic_chunk_local=seq_len,  # cache slab == chunk_size_global / sp (== Sq'·tp when TP-split)
+                kv_len=end_pos,
+            )
+            ttnn.deallocate(k_full)
+        ttnn.deallocate(q_dev)
+        ttnn.deallocate(weights)
         # wq_b replicated -> each chip already holds the COMPLETE head-summed logit, so there is NO
         # partial-logit all-reduce over tp. This is the win: the removed step was a 2-CCL (RS+AG) all-reduce
         # spanning the full end_pos-wide logit (+ a TILE<->ROW_MAJOR round-trip), the indexer's dominant cost.
@@ -644,9 +802,10 @@ class TtIndexer:
         # Block-cyclic logits are the full preallocated width T with a stale [end_pos, T) tail (kv_len only
         # wrote the real prefix); valid_length bounds top-k to that prefix so the tail is never read or ranked.
         topk_valid_length = end_pos
-        idx = ttnn.experimental.topk_large_indices(
-            logits, k=min(self.index_args.index_topk, end_pos), valid_length=topk_valid_length
-        )
+        if paged_cache is None:
+            idx = ttnn.experimental.topk_large_indices(
+                logits, k=min(self.index_args.index_topk, end_pos), valid_length=topk_valid_length
+            )
         # TP×SP: topk ran on the TP-seq-sharded rows ([1,1,S/(sp·tp),k]); regather over TP back to the
         # [1,1,S/sp,k] contract so sparse_sdpa/mla.py are unchanged. (Redundant TP-round-trip for GLM's
         # head→seq reshard, which re-splits it; correct regardless. tp=1: no-op.)

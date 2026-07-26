@@ -31,11 +31,16 @@ struct UpdatePaddedKvCacheDeviceOperation {
         uint32_t layer_idx;
         uint32_t num_layers;
         uint32_t cluster_axis;
+        // Paged mode stores bundle-major/layer-inner 5120-token bundles. A compact persistent
+        // device table maps (slot, logical bundle) to physical bundle; its contents are runtime
+        // data and deliberately do not participate in the program hash.
+        bool paged;
     };
 
     struct tensor_args_t {
         const Tensor& cache;
         const Tensor& input;
+        std::optional<Tensor> page_table;
     };
 
     using spec_return_value_t = tt::tt_metal::TensorSpec;
@@ -95,6 +100,16 @@ namespace ttnn::prim {
 ttnn::Tensor update_padded_kv_cache(
     const ttnn::Tensor& cache,
     const ttnn::Tensor& input,
+    uint32_t slot_idx,
+    uint32_t layer_idx,
+    uint32_t num_layers,
+    uint32_t kv_actual_global,
+    uint32_t cluster_axis);
+
+ttnn::Tensor paged_update_padded_kv_cache(
+    const ttnn::Tensor& cache_pool,
+    const ttnn::Tensor& input,
+    const ttnn::Tensor& page_table,
     uint32_t slot_idx,
     uint32_t layer_idx,
     uint32_t num_layers,

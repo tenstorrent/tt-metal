@@ -10,6 +10,7 @@
 
 #include <stdint.h>
 #include <tt-metalium/constants.hpp>  // tt::constants::TILE_WIDTH
+#include "api/core_local_mem.h"
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp"  // generate_bcast_col_scalar
@@ -43,6 +44,7 @@ void kernel_main() {
     constexpr uint32_t cb_kreq = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_KREQ);
     constexpr uint32_t cb_kack = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_KACK);
     constexpr uint32_t packed_row_bytes = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::PACKED_ROW_BYTES);
+    constexpr bool paged_kv = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::PAGED_KV) != 0;
     constexpr auto out_args = TensorAccessorArgs<sparse_sdpa::writer_ct_arg::END, 0>();
     // kv carries a RUNTIME tensor shape (T dim in common runtime args), so its accessor spans both arg streams.
     constexpr auto kv_args =
@@ -98,9 +100,10 @@ void kernel_main() {
     }
 
     for (uint32_t tok = tok_start; tok < tok_start + tok_count; ++tok) {
+        uint32_t output_l1 = 0;
         // K-gather phase: process this token's active chunks (reader signals per chunk; is_last ends the token).
         // Gather rows [0,split) on the writer's NoC into the reader-reserved destination, then ack.
-        bool last = false;
+        bool last = paged_kv;
         while (!last) {
             kreq_cb.wait_front(1);
             uint32_t base, split, dst_l1, scale_dst_l1 = 0;
@@ -141,9 +144,11 @@ void kernel_main() {
             kack_cb.push_back(1);
         }
         out_cb.wait_front(block_tiles);  // one untilized [H, V_DIM] block
+        output_l1 = out_cb.get_read_ptr();
         for (uint32_t h = 0; h < H; ++h) {
             // row h (head h) at CB read-ptr byte offset h*row_bytes; DRAM page = h*S + tok.
-            noc.async_write(out_cb, out, row_bytes, {.offset_bytes = h * row_bytes}, {.page_id = h * S + tok});
+            noc.async_write(
+                CoreLocalMem<uint32_t>(output_l1 + h * row_bytes), out, row_bytes, {}, {.page_id = h * S + tok});
         }
         noc.async_write_barrier();
         out_cb.pop_front(block_tiles);

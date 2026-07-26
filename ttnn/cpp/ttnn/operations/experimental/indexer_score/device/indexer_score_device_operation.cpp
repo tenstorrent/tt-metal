@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_device.hpp>  // q.device()->get_view().shape() for block-cyclic sp derivation
 
@@ -20,6 +21,16 @@
 namespace ttnn::operations::experimental::indexer_score {
 
 namespace {
+uint32_t allocated_logical_kv_capacity(const operation_attributes_t& attrs, const tensor_args_t& t) {
+    return attrs.has_paged_cache ? static_cast<uint32_t>(t.page_table->logical_shape()[1]) * attrs.paged_bundle_tokens
+                                 : static_cast<uint32_t>(t.k.logical_shape()[2]);
+}
+
+uint32_t active_logical_kv_extent(const operation_attributes_t& attrs, const tensor_args_t& t) {
+    return attrs.has_paged_cache ? attrs.kv_len.value() - attrs.paged_kv_start
+                                 : allocated_logical_kv_capacity(attrs, t);
+}
+
 // Largest linearized index of q's devices along the given mesh axis (0 on a single device). Single source
 // for the worst-case window check (max_chunk_start) and the host-side chunk_start deduction, so a future
 // change to the coord/linearization semantics can't desync the deduced base from the validated window.
@@ -67,9 +78,17 @@ void validate_static(const operation_attributes_t& attrs, const tensor_args_t& t
     }
     TT_FATAL(
         q.device() == k.device() && q.device() == w.device(), "indexer_score q, k, weights must be on the same device");
+    if (attrs.has_paged_cache) {
+        TT_FATAL(t.page_table.has_value(), "paged indexer_score requires page_table");
+        TT_FATAL(
+            t.page_table->device() == q.device(), "paged indexer_score page_table must be on the same device as q/k");
+        TT_FATAL(
+            t.page_table->storage_type() == StorageType::DEVICE && t.page_table->buffer() != nullptr,
+            "paged indexer_score page_table must be allocated on device");
+    }
 
     // Non-indexed k must be single-slot [1,1,T,D] (the indexed slot < B check is runtime -> below).
-    if (!attrs.cache_batch_idx.has_value()) {
+    if (!attrs.cache_batch_idx.has_value() && !attrs.has_paged_cache) {
         const uint32_t kB = k.logical_shape()[0];
         TT_FATAL(kB == 1, "indexer_score k batch must be 1 unless cache_batch_idx is set (got {})", kB);
     }
@@ -79,20 +98,23 @@ void validate_static(const operation_attributes_t& attrs, const tensor_args_t& t
 void validate_runtime_values(const operation_attributes_t& attrs, const tensor_args_t& t) {
     const auto& k = t.k;
 
-    // Indexed KV cache: cache_batch_idx picks a slot of [B,1,T,D] k; an out-of-range slot offsets pages OOB.
+    // Dense mode indexes [B,1,T,D]. Paged mode indexes a logical page-table row instead; that row
+    // count is independent of the physical pool's folded bundle/layer batch dimension. This check
+    // runs on cache hits as well because the slot value is a runtime argument.
     if (attrs.cache_batch_idx.has_value()) {
-        const uint32_t kB = k.logical_shape()[0];
+        const uint32_t slots = attrs.has_paged_cache ? static_cast<uint32_t>(t.page_table->logical_shape()[0])
+                                                     : static_cast<uint32_t>(k.logical_shape()[0]);
         TT_FATAL(
-            attrs.cache_batch_idx.value() < kB,
-            "indexer_score cache_batch_idx ({}) must be < k batch slots ({})",
+            attrs.cache_batch_idx.value() < slots,
+            "indexer_score cache_batch_idx ({}) must be < logical cache slots ({})",
             attrs.cache_batch_idx.value(),
-            kB);
+            slots);
     }
 
     // Runtime KV length: kv_len <= T is the valid prefix this dispatch (not hashed -> re-checked here). The
     // chunk-window-vs-kv_len bound lives in validate_chunk_start.
     if (attrs.kv_len.has_value()) {
-        const uint32_t T = k.logical_shape()[2];
+        const uint32_t T = allocated_logical_kv_capacity(attrs, t);
         const uint32_t kv_len = attrs.kv_len.value();
         TT_FATAL(kv_len % tt::constants::TILE_WIDTH == 0, "indexer_score kv_len {} must be tile-aligned", kv_len);
         TT_FATAL(
@@ -113,29 +135,56 @@ void validate_runtime_values(const operation_attributes_t& attrs, const tensor_a
                 attrs.block_size);
         }
     }
+    if (attrs.has_paged_cache) {
+        TT_FATAL(
+            attrs.paged_kv_start % tt::constants::TILE_WIDTH == 0,
+            "paged indexer kv_start {} must be tile-aligned",
+            attrs.paged_kv_start);
+        TT_FATAL(
+            attrs.paged_kv_start < attrs.kv_len.value(),
+            "paged indexer window [{}, {}) must be non-empty",
+            attrs.paged_kv_start,
+            attrs.kv_len.value());
+    } else {
+        TT_FATAL(attrs.paged_kv_start == 0, "kv_start is only valid for paged indexer_score");
+    }
 }
 
 // Runs on miss AND hit (chunk_start is hash-excluded). All chunk_start checks in one place: base alignment
 // and the fullest device's window against T and (when set) kv_len.
 void validate_chunk_start(const operation_attributes_t& attrs, const tensor_args_t& t) {
     const uint32_t Sq = t.q.logical_shape()[2];
-    const uint32_t T = t.k.logical_shape()[2];
+    const uint32_t T = attrs.has_paged_cache ? t.page_table->logical_shape()[1] * attrs.paged_bundle_tokens
+                                             : active_logical_kv_extent(attrs, t);
     TT_FATAL(
         attrs.chunk_start_idx % tt::constants::TILE_WIDTH == 0,
         "chunk_start_idx {} must be tile-aligned",
         attrs.chunk_start_idx);
     const uint32_t max_cs = max_chunk_start(attrs, t.q, Sq);
-    TT_FATAL(
-        max_cs + Sq <= T,
-        "fullest-device chunk window [{}, {}+{}) exceeds T={} (base={}, per-rank stride Sq={})",
-        max_cs,
-        max_cs,
-        Sq,
-        T,
-        attrs.chunk_start_idx,
-        Sq);
+    // A paged GLM prefill always launches the 5120-token compute chunk, including
+    // the padded query rows in a short final chunk.  Those rows are masked by
+    // kv_len in the reader/compute/writer; only the first query position must
+    // belong to the allocated logical address space.  Dense/indexed-cache paths
+    // still require the complete query window to fit.
+    if (attrs.has_paged_cache) {
+        TT_FATAL(
+            attrs.chunk_start_idx < T,
+            "paged chunk_start_idx {} must be inside allocated logical capacity {}",
+            attrs.chunk_start_idx,
+            T);
+    } else {
+        TT_FATAL(
+            max_cs + Sq <= T,
+            "fullest-device chunk window [{}, {}+{}) exceeds T={} (base={}, per-rank stride Sq={})",
+            max_cs,
+            max_cs,
+            Sq,
+            T,
+            attrs.chunk_start_idx,
+            Sq);
+    }
     // Causal window must also stay inside the valid prefix.
-    if (attrs.kv_len.has_value()) {
+    if (attrs.kv_len.has_value() && !attrs.has_paged_cache) {
         const uint32_t kv_len = attrs.kv_len.value();
         TT_FATAL(
             max_cs + Sq <= kv_len,
@@ -160,24 +209,88 @@ void validate_block_cyclic(const operation_attributes_t& attrs, const tensor_arg
     const uint32_t sp = attrs.block_cyclic->sp;
     const uint32_t chunk_local = attrs.block_cyclic->chunk_local;
     const uint32_t chunk_global = sp * chunk_local;
-    const uint32_t T = t.k.logical_shape()[2];
+    const uint32_t T = active_logical_kv_extent(attrs, t);
     const uint32_t Sq = t.q.logical_shape()[2];
     TT_FATAL(sp >= 1, "block-cyclic sp must be >= 1 (got {})", sp);
     TT_FATAL(
         chunk_local > 0 && chunk_local % tt::constants::TILE_WIDTH == 0,
         "block_cyclic_chunk_local ({}) must be > 0 and tile-aligned",
         chunk_local);
-    TT_FATAL(
-        T % chunk_global == 0,
-        "global chunk {} (= sp*chunk_local) must divide T {} (the cache must be a whole number of global chunks)",
-        chunk_global,
-        T);
+    // Paged storage is allocated in complete 5120-token bundles while T is the
+    // active prefix.  A short final bundle therefore need not divide evenly by
+    // the model's global compute chunk.  The physical bundle geometry is
+    // validated separately in validate_paged_cache().
+    if (!attrs.has_paged_cache) {
+        TT_FATAL(
+            T % chunk_global == 0,
+            "global chunk {} (= sp*chunk_local) must divide T {} (the cache must be a whole number of global chunks)",
+            chunk_global,
+            T);
+    }
     TT_FATAL(
         Sq <= chunk_local,
         "Sq ({}) must be <= block_cyclic_chunk_local ({}); a device's queries may cross at most one cache-slab "
         "boundary (one straddle). A coarser indexer SP (Sq > chunk_local) is not yet supported.",
         Sq,
         chunk_local);
+}
+
+void validate_paged_cache(const operation_attributes_t& attrs, const tensor_args_t& t) {
+    if (!attrs.has_paged_cache) {
+        TT_FATAL(!t.page_table.has_value(), "page_table is only valid for the paged indexer_score path");
+        return;
+    }
+    const auto& table = *t.page_table;
+    const auto& ks = t.k.logical_shape();
+    const auto& ts = table.logical_shape();
+    TT_FATAL(attrs.paged_sp_size >= 1, "paged_sp_size must be >= 1");
+    TT_FATAL(attrs.kv_len.has_value(), "paged indexer_score requires an explicit active kv_len");
+    if (attrs.paged_sp_size > 1) {
+        TT_FATAL(
+            tt::tt_fabric::GetFabricConfig() != tt::tt_fabric::FabricConfig::DISABLED &&
+                tt::tt_fabric::GetFabricUDMMode() == tt::tt_fabric::FabricUDMMode::ENABLED,
+            "paged distributed indexer_score requires an active fabric with FabricUDMMode::ENABLED");
+        const auto mesh_shape = t.q.device()->get_view().shape();
+        TT_FATAL(mesh_shape.dims() == 2, "paged indexer_score currently requires a 2D mesh");
+        TT_FATAL(attrs.sp_axis().has_value(), "paged distributed indexer_score requires an SP seq_shard_axis");
+        TT_FATAL(
+            *attrs.sp_axis() < mesh_shape.dims() && mesh_shape[*attrs.sp_axis()] == attrs.paged_sp_size,
+            "paged SP axis extent must equal paged_sp_size {}",
+            attrs.paged_sp_size);
+    }
+    TT_FATAL(
+        attrs.paged_bundle_tokens == 5120 && attrs.paged_bundle_tokens % tt::constants::TILE_HEIGHT == 0,
+        "GLM paged index cache requires a 5120-token tile-aligned bundle (got {})",
+        attrs.paged_bundle_tokens);
+    TT_FATAL(attrs.paged_num_layers > 0, "paged_num_layers must be > 0");
+    TT_FATAL(
+        attrs.paged_layer_idx < attrs.paged_num_layers,
+        "paged layer_idx {} must be < num_layers {}",
+        attrs.paged_layer_idx,
+        attrs.paged_num_layers);
+    TT_FATAL(
+        table.dtype() == DataType::INT32 && table.layout() == Layout::ROW_MAJOR && !table.is_sharded(),
+        "paged index page_table must be interleaved INT32 ROW_MAJOR");
+    TT_FATAL(ts.rank() == 2 && ts[0] > 0 && ts[1] > 0, "paged index page_table must be [slots,max_bundles]");
+    TT_FATAL(
+        table.buffer()->aligned_page_size() % 32 == 0,
+        "paged index page-table aligned row must be 32-byte aligned (got {} bytes)",
+        table.buffer()->aligned_page_size());
+    TT_FATAL(
+        attrs.cache_batch_idx.has_value() && *attrs.cache_batch_idx < ts[0],
+        "paged index cache_slot must select a page-table row");
+    TT_FATAL(ks.rank() == 4 && ks[1] == 1, "paged k_pool must be [P*num_layers,1,5120,D]");
+    TT_FATAL(
+        ks[0] % attrs.paged_num_layers == 0,
+        "paged k_pool batch {} must be physical_bundles*num_layers ({})",
+        ks[0],
+        attrs.paged_num_layers);
+    TT_FATAL(
+        ks[2] * attrs.paged_sp_size == attrs.paged_bundle_tokens,
+        "paged k_pool local height {} * sp {} must equal bundle_tokens {}",
+        ks[2],
+        attrs.paged_sp_size,
+        attrs.paged_bundle_tokens);
 }
 }  // namespace
 
@@ -188,8 +301,9 @@ IndexerScoreDeviceOperation::program_factory_t IndexerScoreDeviceOperation::sele
 
 ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    // Hash what shapes the binary, NOT the runtime values: chunk_start_idx is EXCLUDED, cache_batch_idx /
-    // kv_len contribute only has_value() (so distinct slot / kv_len / chunk_start reuse one program).
+    // Hash what shapes the binary, NOT the runtime values: chunk_start_idx and cache slot are excluded.
+    // Dense kv_len contributes only has_value(). Paged mode hashes only the compact active width:
+    // successive compact bundle windows have different logical starts but identical programs.
     // The seq-shard axes ARE hashed (they shape the causal geometry); tensor_args cover dtype + shape.
     // apply_relu / num_groups / block_size pick the compile-time kernel path, so they MUST be hashed (else
     // DSA vs MSA, or pooled vs unpooled, would collide). Hash via the SP/TP accessors so the key is identical
@@ -213,6 +327,13 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         attrs.has_block_cyclic(),
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->sp : 0u,
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
+        attrs.has_paged_cache,
+        attrs.paged_layer_idx,
+        attrs.paged_num_layers,
+        attrs.paged_bundle_tokens,
+        attrs.paged_sp_size,
+        attrs.paged_sp_axis,
+        attrs.has_paged_cache ? active_logical_kv_extent(attrs, tensor_args) : 0u,
         tensor_args);
 }
 
@@ -252,6 +373,7 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     validate_static(attrs, tensor_args);
     validate_runtime_values(attrs, tensor_args);
     validate_block_cyclic(attrs, tensor_args);
+    validate_paged_cache(attrs, tensor_args);
 
     // Shapes: q [B, Hi, Sq, D], k [B, 1, T, D] (single shared head), weights [B, Hi, Sq, 1].
     TT_FATAL(q_shape.rank() == 4 && k_shape.rank() == 4, "q, k must be rank 4");
@@ -286,7 +408,7 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     const uint32_t Hi = q_shape[1];
     const uint32_t Sq = q_shape[2];
     const uint32_t D = q_shape[3];
-    const uint32_t T = k_shape[2];
+    const uint32_t T = active_logical_kv_extent(attrs, tensor_args);
     TT_FATAL(
         Sq % tt::constants::TILE_HEIGHT == 0 && T % tt::constants::TILE_WIDTH == 0 &&
             D % tt::constants::TILE_WIDTH == 0,
@@ -370,10 +492,10 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
 IndexerScoreDeviceOperation::spec_return_value_t IndexerScoreDeviceOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto& q_shape = tensor_args.q.logical_shape();
-    const auto& k_shape = tensor_args.k.logical_shape();
     // score [B, num_groups, Sq, T_out], row-major bf16. num_groups==1 = head-summed (DSA/GLM); >1 = one
     // plane per GQA group (M3). T_out = T, or T/block_size when block-max-pooling.
-    const uint32_t T_out = attrs.block_size ? k_shape[2] / attrs.block_size : k_shape[2];
+    const uint32_t logical_t = active_logical_kv_extent(attrs, tensor_args);
+    const uint32_t T_out = attrs.block_size ? logical_t / attrs.block_size : logical_t;
     ttnn::Shape out_shape({q_shape[0], attrs.num_groups, q_shape[2], T_out});
     return tt::tt_metal::TensorSpec(
         out_shape,
@@ -403,20 +525,19 @@ IndexerScoreDeviceOperation::create_op_performance_model(
     }
 
     const auto& q_shape = q.logical_shape();
-    const auto& k_shape = k.logical_shape();
     const uint32_t B = q_shape[0];
     const uint32_t Hi = q_shape[1];
     const uint32_t D = q_shape[3];
     const uint32_t Sqt = q_shape[2] / tt::constants::TILE_HEIGHT;
-    const uint32_t Tt = k_shape[2] / tt::constants::TILE_WIDTH;
+    const uint32_t Tt = active_logical_kv_extent(attrs, tensor_args) / tt::constants::TILE_WIDTH;
     const uint32_t chunk_t = attrs.chunk_start_idx / tt::constants::TILE_WIDTH;
+    const uint32_t key_start_t = attrs.paged_kv_start / tt::constants::TILE_WIDTH;
 
-    // Causal-valid output tiles V = sum_rows min(kv_len_tiles, chunk_t + row + 1) (masked future excluded;
-    // matches the test's sp7_valid_tiles()). kv_len caps per-row valid columns; nullopt == full Tt.
-    const uint32_t kv_len_tiles = attrs.kv_len.has_value() ? attrs.kv_len.value() / tt::constants::TILE_WIDTH : Tt;
+    // Causal-valid output tiles inside the compact paged stripe. Dense mode has key_start_t=0.
     uint64_t valid_tiles = 0;
     for (uint32_t s = 0; s < Sqt; ++s) {
-        valid_tiles += std::min<uint64_t>(kv_len_tiles, (uint64_t)chunk_t + s + 1);
+        const uint64_t visible_end = static_cast<uint64_t>(chunk_t) + s + 1;
+        valid_tiles += visible_end > key_start_t ? std::min<uint64_t>(Tt, visible_end - key_start_t) : 0;
     }
 
     // Per valid 32x32 tile per head: (32*32) outputs x 2*D FLOPs; summed over heads/tiles/batch
@@ -460,7 +581,14 @@ IndexerScoreDeviceOperation::invoke(
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> kv_len,
     std::vector<uint32_t> seq_shard_axes,
-    std::optional<BlockCyclicLayout> block_cyclic) {
+    std::optional<BlockCyclicLayout> block_cyclic,
+    std::optional<Tensor> page_table,
+    uint32_t paged_layer_idx,
+    uint32_t paged_num_layers,
+    uint32_t paged_bundle_tokens,
+    uint32_t paged_sp_size,
+    uint32_t paged_kv_start,
+    uint32_t paged_sp_axis) {
     return {
         operation_attributes_t{
             .chunk_start_idx = chunk_start_idx,
@@ -474,8 +602,15 @@ IndexerScoreDeviceOperation::invoke(
             .compute_kernel_config = compute_kernel_config,
             .cache_batch_idx = cache_batch_idx,
             .kv_len = kv_len,
-            .block_cyclic = block_cyclic},
-        tensor_args_t{.q = q, .k = k, .weights = weights}};
+            .paged_kv_start = paged_kv_start,
+            .block_cyclic = block_cyclic,
+            .paged_layer_idx = paged_layer_idx,
+            .paged_num_layers = paged_num_layers,
+            .paged_bundle_tokens = paged_bundle_tokens,
+            .paged_sp_size = paged_sp_size,
+            .paged_sp_axis = paged_sp_axis,
+            .has_paged_cache = page_table.has_value()},
+        tensor_args_t{.q = q, .k = k, .weights = weights, .page_table = std::move(page_table)}};
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score
@@ -521,7 +656,14 @@ ttnn::Tensor launch_indexer_score(
     std::vector<uint32_t> seq_shard_axes,
     bool allow_subshard,
     std::optional<uint32_t> block_cyclic_sp_axis,
-    std::optional<uint32_t> block_cyclic_chunk_local) {
+    std::optional<uint32_t> block_cyclic_chunk_local,
+    std::optional<Tensor> page_table = std::nullopt,
+    uint32_t paged_layer_idx = 0,
+    uint32_t paged_num_layers = 0,
+    uint32_t paged_bundle_tokens = 5120,
+    uint32_t paged_sp_size = 1,
+    uint32_t paged_kv_start = 0,
+    uint32_t paged_sp_axis = 0) {
     // Decompose the seq-shard axes into the SP/TP roles the validation + causal geometry below reason about.
     const auto [cluster_axis, seq_subshard_axis] = split_seq_shard_axes(seq_shard_axes, allow_subshard);
     using OperationType = ttnn::operations::experimental::indexer_score::IndexerScoreDeviceOperation;
@@ -612,7 +754,9 @@ ttnn::Tensor launch_indexer_score(
     if (chunk_start_idx.has_value()) {
         base = *chunk_start_idx;
     } else {
-        const uint32_t T = k.logical_shape()[2];
+        const uint32_t T = page_table.has_value()
+                               ? static_cast<uint32_t>(page_table->logical_shape()[1]) * paged_bundle_tokens
+                               : static_cast<uint32_t>(k.logical_shape()[2]);
         if (block_cyclic.has_value()) {
             const uint32_t chunk = block_cyclic->sp * block_cyclic->chunk_local;
             TT_FATAL(
@@ -666,7 +810,14 @@ ttnn::Tensor launch_indexer_score(
         cache_batch_idx,
         kv_len,
         std::move(seq_shard_axes),
-        block_cyclic);
+        block_cyclic,
+        std::move(page_table),
+        paged_layer_idx,
+        paged_num_layers,
+        paged_bundle_tokens,
+        paged_sp_size,
+        paged_kv_start,
+        paged_sp_axis);
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
@@ -703,6 +854,55 @@ ttnn::Tensor indexer_score_dsa(
         /*allow_subshard=*/true,
         block_cyclic_sp_axis,
         block_cyclic_chunk_local);
+}
+
+ttnn::Tensor indexer_score_dsa_paged(
+    const ttnn::Tensor& q,
+    const ttnn::Tensor& k_pool,
+    const ttnn::Tensor& page_table,
+    const ttnn::Tensor& weights,
+    uint32_t layer_idx,
+    uint32_t num_layers,
+    uint32_t kv_len,
+    uint32_t chunk_start_idx,
+    uint32_t paged_sp_axis,
+    uint32_t kv_start,
+    const std::optional<std::vector<uint32_t>>& seq_shard_axes,
+    uint32_t bundle_tokens,
+    const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    uint32_t cache_slot) {
+    const auto mesh_shape = q.device()->get_view().shape();
+    TT_FATAL(
+        paged_sp_axis < mesh_shape.dims(), "paged_sp_axis {} outside mesh rank {}", paged_sp_axis, mesh_shape.dims());
+    const uint32_t sp = mesh_shape[paged_sp_axis];
+    const uint32_t chunk_local = k_pool.logical_shape()[2];
+    auto axes = seq_shard_axes.value_or(std::vector<uint32_t>{paged_sp_axis});
+    return launch_indexer_score(
+        q,
+        k_pool,
+        weights,
+        chunk_start_idx,
+        /*apply_relu=*/true,
+        /*num_groups=*/1,
+        /*block_size=*/0,
+        /*synthesize_gate=*/false,
+        /*gate_scale=*/1.0f,
+        program_config,
+        compute_kernel_config,
+        cache_slot,
+        kv_len,
+        std::move(axes),
+        /*allow_subshard=*/true,
+        paged_sp_axis,
+        chunk_local,
+        page_table,
+        layer_idx,
+        num_layers,
+        bundle_tokens,
+        sp,
+        kv_start,
+        paged_sp_axis);
 }
 
 ttnn::Tensor indexer_score_msa(

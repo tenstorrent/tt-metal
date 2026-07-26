@@ -35,6 +35,7 @@ constexpr uint32_t reader_w_addr = 2;
 constexpr uint32_t compute_chunk_start_tiles = 7;  // after 6 sched scalars + kv_len[6]
 constexpr uint32_t compute_straddle_q_tile = 8;    // mid-slab boundary-chip diagonal jump (q-tile-row)
 constexpr uint32_t compute_straddle_jump_tiles = 9;
+constexpr uint32_t compute_kv_start_tiles = 10;
 constexpr uint32_t writer_out_addr = 0;
 // Persistent-cache args, appended after each kernel's schedule/mcast args (hash-excluded, re-patched on a hit).
 constexpr uint32_t reader_num_scalars = 3 + 6;  // q/k/w addrs + schedule {row_group0..max_bands}
@@ -42,6 +43,9 @@ constexpr uint32_t mcast_args_per_dir = 8;      // role, rect (xs,ys,xe,ye), sen
 constexpr uint32_t reader_num_mcast_dirs = 2;   // K column, then Q/W row
 constexpr uint32_t reader_k_batch_offset = reader_num_scalars + reader_num_mcast_dirs * mcast_args_per_dir;  // 25
 constexpr uint32_t reader_kv_len_tiles = reader_k_batch_offset + 1;                                          // 26
+constexpr uint32_t reader_page_table_addr = reader_kv_len_tiles + 1;                                         // 27
+constexpr uint32_t reader_page_table_slot = reader_page_table_addr + 1;                                      // 28
+constexpr uint32_t reader_kv_start_tiles = reader_page_table_slot + 1;                                       // 29
 constexpr uint32_t compute_kv_len_tiles = 6;          // after the 6 schedule scalars {row_group0..max_bands}
 constexpr uint32_t writer_kv_len_tiles = 1 + 6;       // out_addr + the 6 schedule scalars {row_group0..max_bands}
 constexpr uint32_t writer_chunk_start_tiles = 1 + 7;  // after out_addr + 6 sched scalars + kv_len[7]; match writer
@@ -143,14 +147,24 @@ inline void patch_arg(tt::tt_metal::RuntimeArgsData& args, uint32_t index, uint3
 struct PersistentCacheArgs {
     uint32_t k_batch_page_offset;  // cache_batch_idx * Tt * Dt; 0 when not indexed
     uint32_t kv_len_tiles;         // valid key prefix in tiles; full Tt when kv_len unset
+    uint32_t kv_start_tiles;       // compact paged stripe origin; 0 for dense
 };
 inline PersistentCacheArgs persistent_cache_args(const operation_attributes_t& attrs, const Tensor& k) {
     const auto& shape = k.logical_shape();
+    // Paged mode never uses the dense batch offset. kv_len is mandatory there and supplies the logical
+    // prefix independently from the physical pool height.
+    if (attrs.has_paged_cache) {
+        return {
+            .k_batch_page_offset = 0,
+            .kv_len_tiles = (attrs.kv_len.value() - attrs.paged_kv_start) / tt::constants::TILE_WIDTH,
+            .kv_start_tiles = attrs.paged_kv_start / tt::constants::TILE_WIDTH};
+    }
     const uint32_t Tt = shape[2] / tt::constants::TILE_WIDTH;
     const uint32_t Dt = shape[3] / tt::constants::TILE_WIDTH;
     return {
         .k_batch_page_offset = attrs.cache_batch_idx.value_or(0) * Tt * Dt,
-        .kv_len_tiles = attrs.kv_len.value_or(shape[2]) / tt::constants::TILE_WIDTH};
+        .kv_len_tiles = attrs.kv_len.value_or(shape[2]) / tt::constants::TILE_WIDTH,
+        .kv_start_tiles = 0};
 }
 
 // Banded-product schedule: the work space (group_count q-row-groups x band_count k-bands) tiles onto a
@@ -172,7 +186,11 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     const uint32_t Hi = q.logical_shape()[1];
     const uint32_t Sq = q.logical_shape()[2];
     const uint32_t D = q.logical_shape()[3];
-    const uint32_t T = k.logical_shape()[2];
+    // Paged mode schedules and materializes only the populated prefix. The compact table may describe
+    // a 1M-token logical address space, but first-chunk scoring must not walk or allocate that maximum.
+    // kv_len is part of the paged program hash, so this compile-time width is cache-safe.
+    const uint32_t T =
+        args.has_paged_cache ? args.kv_len.value() - args.paged_kv_start : static_cast<uint32_t>(k.logical_shape()[2]);
 
     // This device's SP-ring index and chunk_start (tiles), from the coordinate. chunk_t is a compute RUNTIME
     // arg, so the binary is identical across coords and steps. tp_index = its rank along the TP axis
@@ -183,7 +201,9 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
                                   : 0u;
     const auto geom = device_causal_geometry(args, device_index, tp_index, Sq);
     const uint32_t chunk_t = geom.chunk_start_tiles;
-
+    const auto view_shape = q.device()->get_view().shape();
+    TT_FATAL(view_shape.dims() == 2, "indexer_score fabric node map requires a 2D mesh");
+    const uint32_t my_flat = coord[0] * view_shape[1] + coord[1];
     const uint32_t Sqt = Sq / tt::constants::TILE_HEIGHT;
     const uint32_t Tt = T / tt::constants::TILE_WIDTH;
     const uint32_t Dt = D / tt::constants::TILE_WIDTH;
@@ -399,6 +419,20 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     // cb_acc_strip accumulates a whole unit's QC*KC strip, then untilizes under ONE pack_untilize bracket.
     // max(2*KC, .) keeps the QC<=2 double buffer and a whole multiple of QC*KC so a push never wraps mid-unit.
     make_cb(cb_acc_strip_arg, std::max(2u * KC, QC * KC), acc_fmt, acc_tile);
+    if (args.has_paged_cache) {
+        const uint32_t table_page_bytes = tensors.page_table->buffer()->aligned_page_size();
+        const uint32_t table_cb_id = next_cb_index++;
+        cb_id[cb_page_table_arg] = table_cb_id;
+        tt::tt_metal::CreateCircularBuffer(
+            program,
+            core_ranges,
+            tt::tt_metal::CircularBufferConfig(table_page_bytes, {{table_cb_id, tt::DataFormat::Int32}})
+                .set_page_size(table_cb_id, table_page_bytes));
+    } else {
+        // The compile-time slot exists in both binaries so all pre-existing CB slots retain their IDs.
+        // It is never dereferenced by the dense reader.
+        cb_id[cb_page_table_arg] = next_cb_index;
+    }
 
     // Common args: 9 dims then the CB indices in CbArg order. chunk_t is NOT here (per-device runtime arg).
     std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, QC, KC, HB, G, block_tiles};
@@ -445,6 +479,25 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
         return ct;
     }();
     reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
+    const uint32_t table_entries =
+        args.has_paged_cache ? static_cast<uint32_t>(tensors.page_table->logical_shape()[1]) : 0u;
+    const uint32_t table_stick_bytes = args.has_paged_cache ? tensors.page_table->buffer()->aligned_page_size() : 0u;
+    reader_ct.push_back(args.has_paged_cache ? 1u : 0u);
+    reader_ct.push_back(args.paged_layer_idx);
+    reader_ct.push_back(args.paged_num_layers);
+    reader_ct.push_back(
+        args.has_paged_cache ? args.paged_bundle_tokens / args.paged_sp_size / tt::constants::TILE_HEIGHT : 0u);
+    reader_ct.push_back(table_entries);
+    reader_ct.push_back(table_stick_bytes);
+    reader_ct.push_back(
+        args.has_paged_cache ? static_cast<uint32_t>(tensors.k.logical_shape()[0] / args.paged_num_layers) : 0u);
+    reader_ct.push_back(args.has_paged_cache ? args.paged_sp_size : 1u);
+    reader_ct.push_back(args.has_paged_cache ? args.paged_sp_axis : 0u);
+    const auto mesh_shape = q.device()->get_view().shape();
+    reader_ct.push_back(static_cast<uint32_t>(mesh_shape[0]));
+    reader_ct.push_back(static_cast<uint32_t>(mesh_shape[1]));
+    tt::tt_metal::TensorAccessorArgs(*(args.has_paged_cache ? tensors.page_table->buffer() : tensors.q.buffer()))
+        .append_to(reader_ct);
 
     std::vector<uint32_t> writer_ct = common_ct;
     const uint32_t out_elem_bytes = out.element_size();  // bf16 today
@@ -484,7 +537,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     // mcast rects are fixed per core; only the data changes per phase.
     const auto u32 = [](auto v) { return static_cast<uint32_t>(v); };
     // Indexed-cache k page offset + valid kv_len, baked at miss and re-applied each dispatch (both hash-excluded).
-    const auto [k_batch_page_offset, kv_len_tiles] = persistent_cache_args(args, k);
+    const auto [k_batch_page_offset, kv_len_tiles, kv_start_tiles] = persistent_cache_args(args, k);
     std::vector<CoreCoord> cores;
     cores.reserve(num_cores);
     for (uint32_t row = 0; row < rows_used; ++row) {
@@ -557,6 +610,19 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
             // Persistent-cache args last (slots reader[25,26]).
             reader_rt.push_back(k_batch_page_offset);
             reader_rt.push_back(kv_len_tiles);
+            reader_rt.push_back(
+                args.has_paged_cache ? tensors.page_table->buffer()->address() : tensors.q.buffer()->address());
+            reader_rt.push_back(args.cache_batch_idx.value_or(0));
+            reader_rt.push_back(kv_start_tiles);
+            // Runtime-indexable copy of the view's fabric-node map. The owner rank is data-dependent;
+            // get_compile_time_arg_val cannot be indexed by it on device.
+            for (const auto& node : q.device()->get_view().get_fabric_node_ids()) {
+                reader_rt.push_back(*node.mesh_id);
+            }
+            for (const auto& node : q.device()->get_view().get_fabric_node_ids()) {
+                reader_rt.push_back(static_cast<uint32_t>(node.chip_id));
+            }
+            reader_rt.push_back(my_flat);
             tt::tt_metal::SetRuntimeArgs(program, reader_id, core, reader_rt);
             // compute: schedule[0-5], kv_len_tiles[6], chunk_start_tiles[7], straddle[8,9] (hash-excluded runtime).
             std::vector<uint32_t> compute_rt(sched.begin(), sched.end());
@@ -564,6 +630,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
             compute_rt.push_back(chunk_t);                   // slot [7]
             compute_rt.push_back(geom.straddle_q_tile);      // slot [8], mid-slab boundary-chip diagonal jump
             compute_rt.push_back(geom.straddle_jump_tiles);  // slot [9]
+            compute_rt.push_back(kv_start_tiles);            // slot [10], absolute logical K stripe origin
             tt::tt_metal::SetRuntimeArgs(program, compute_id, core, compute_rt);
             std::vector<uint32_t> writer_rt = {out.buffer()->address()};
             writer_rt.insert(writer_rt.end(), sched.begin(), sched.end());
@@ -613,7 +680,7 @@ void IndexerScoreProgramFactory::override_runtime_arguments(
     // Re-apply all hash-excluded runtime values on a hit: buffer addresses, cache_batch_idx / kv_len, and
     // chunk_start (per-coordinate, from the stored device_index).
     const uint32_t Sq = tensors.q.logical_shape()[2];
-    const auto [k_batch_page_offset, kv_len_tiles] = persistent_cache_args(args, tensors.k);
+    const auto [k_batch_page_offset, kv_len_tiles, kv_start_tiles] = persistent_cache_args(args, tensors.k);
     for (auto& [range, shared] : cached.shared_variables) {
         auto& program = cached.workload.get_programs().at(range);
         auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, shared.reader_kernel);
@@ -628,6 +695,14 @@ void IndexerScoreProgramFactory::override_runtime_arguments(
             patch_arg(reader_rt, rt_arg::reader_w_addr, tensors.weights.buffer()->address(), "reader.w_addr");
             patch_arg(reader_rt, rt_arg::reader_k_batch_offset, k_batch_page_offset, "reader.k_batch_offset");
             patch_arg(reader_rt, rt_arg::reader_kv_len_tiles, kv_len_tiles, "reader.kv_len_tiles");
+            patch_arg(
+                reader_rt,
+                rt_arg::reader_page_table_addr,
+                args.has_paged_cache ? tensors.page_table->buffer()->address() : tensors.q.buffer()->address(),
+                "reader.page_table_addr");
+            patch_arg(
+                reader_rt, rt_arg::reader_page_table_slot, args.cache_batch_idx.value_or(0), "reader.page_table_slot");
+            patch_arg(reader_rt, rt_arg::reader_kv_start_tiles, kv_start_tiles, "reader.kv_start_tiles");
             patch_arg(compute_args[core.x][core.y], rt_arg::compute_kv_len_tiles, kv_len_tiles, "compute.kv_len_tiles");
             patch_arg(compute_args[core.x][core.y], rt_arg::compute_chunk_start_tiles, chunk_t, "compute.chunk_start");
             patch_arg(
@@ -640,6 +715,8 @@ void IndexerScoreProgramFactory::override_runtime_arguments(
                 rt_arg::compute_straddle_jump_tiles,
                 geom.straddle_jump_tiles,
                 "compute.straddle_jump_tiles");
+            patch_arg(
+                compute_args[core.x][core.y], rt_arg::compute_kv_start_tiles, kv_start_tiles, "compute.kv_start_tiles");
             patch_arg(writer_args[core.x][core.y], rt_arg::writer_out_addr, out.buffer()->address(), "writer.out_addr");
             patch_arg(writer_args[core.x][core.y], rt_arg::writer_kv_len_tiles, kv_len_tiles, "writer.kv_len_tiles");
             patch_arg(writer_args[core.x][core.y], rt_arg::writer_chunk_start_tiles, chunk_t, "writer.chunk_start");

@@ -55,7 +55,14 @@ struct IndexerScoreDeviceOperation {
         std::optional<uint32_t> cache_batch_idx,
         std::optional<uint32_t> kv_len,
         std::vector<uint32_t> seq_shard_axes,
-        std::optional<BlockCyclicLayout> block_cyclic);
+        std::optional<BlockCyclicLayout> block_cyclic,
+        std::optional<Tensor> page_table = std::nullopt,
+        uint32_t paged_layer_idx = 0,
+        uint32_t paged_num_layers = 0,
+        uint32_t paged_bundle_tokens = 5120,
+        uint32_t paged_sp_size = 1,
+        uint32_t paged_kv_start = 0,
+        uint32_t paged_sp_axis = 0);
 };
 
 }  // namespace ttnn::operations::experimental::indexer_score
@@ -98,6 +105,23 @@ ttnn::Tensor indexer_score_dsa(
     const std::optional<std::vector<uint32_t>>& seq_shard_axes = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
+
+ttnn::Tensor indexer_score_dsa_paged(
+    const ttnn::Tensor& q,
+    const ttnn::Tensor& k_pool,
+    const ttnn::Tensor& page_table,
+    const ttnn::Tensor& weights,
+    uint32_t layer_idx,
+    uint32_t num_layers,
+    uint32_t kv_len,
+    uint32_t chunk_start_idx,
+    uint32_t paged_sp_axis,
+    uint32_t kv_start = 0,
+    const std::optional<std::vector<uint32_t>>& seq_shard_axes = std::nullopt,
+    uint32_t bundle_tokens = 5120,
+    const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config = {},
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    uint32_t cache_slot = 0);
 
 // MiniMax-M3 MSA (ttnn.experimental.indexer_score_msa):
 //   score[b, g, s, t] = sum_{h in group g} (q[b,h,s,:] . k[b,t,:]) * scale

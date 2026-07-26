@@ -498,6 +498,8 @@ tt::tt_fabric::Topology get_fabric_topology() {
 
 FabricConfig GetFabricConfig() { return tt::tt_metal::MetalContext::instance().get_fabric_config(); }
 
+FabricUDMMode GetFabricUDMMode() { return tt::tt_metal::MetalContext::instance().get_fabric_udm_mode(); }
+
 void SetFabricConfig(
     FabricConfig fabric_config,
     FabricReliabilityMode reliability_mode,

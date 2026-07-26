@@ -15,7 +15,13 @@
 #include <stdint.h>
 #include <tt-metalium/constants.hpp>  // tt::constants::TILE_HEIGHT
 #include "api/dataflow/dataflow_api.h"
+#include "api/core_local_mem.h"
+#include "hostdevcommon/api/hostdevcommon/fabric_common.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#ifdef SPARSE_SDPA_PAGED_REMOTE_UDM
+#include "tt_metal/fabric/hw/inc/udm/tt_fabric_udm.hpp"
+#endif
+#include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/paged_sparse_sdpa_layout.hpp"
 #include "sparse_sdpa_gather.hpp"  // dual-NoC trid-ring gather helper (shared with the writer)
 
 constexpr uint32_t sentinel = 0xFFFFFFFFu;
@@ -61,6 +67,28 @@ void kernel_main() {
     constexpr uint32_t packed_row_bytes = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::PACKED_ROW_BYTES);
     constexpr uint32_t cb_kreq = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::CB_KREQ);
     constexpr uint32_t cb_kack = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::CB_KACK);
+    constexpr bool paged_kv = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::PAGED_KV) != 0;
+    constexpr uint32_t paged_chunk_local = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::PAGED_CHUNK_LOCAL);
+    constexpr uint32_t paged_sp = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::PAGED_SP);
+    constexpr uint32_t paged_sp_axis = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::PAGED_SP_AXIS);
+    constexpr uint32_t paged_layer = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::PAGED_LAYER);
+    constexpr uint32_t paged_num_layers = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::PAGED_NUM_LAYERS);
+    constexpr uint32_t paged_bundle_tokens = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::PAGED_BUNDLE_TOKENS);
+    constexpr uint32_t paged_max_bundles = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::PAGED_MAX_BUNDLES);
+    constexpr uint32_t paged_physical_bundles =
+        get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::PAGED_PHYSICAL_BUNDLES);
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::MESH_ROWS);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::MESH_COLS);
+    constexpr uint32_t mesh_nodes = mesh_rows * mesh_cols;
+    constexpr uint32_t cb_page_table = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::CB_PAGE_TABLE);
+
+#ifdef SPARSE_SDPA_PAGED_REMOTE_UDM
+    if constexpr (paged_kv && paged_sp > 1) {
+        // Establish this dispatch's software acknowledgement baseline before
+        // issuing the first remote cache read.
+        tt::tt_fabric::udm::fabric_local_state_init();
+    }
+#endif
 
     // kv carries a RUNTIME tensor shape (its T dim is common runtime args, not compile-time), so its accessor
     // spans both the compile-time AND common-runtime arg streams. Thread both offsets through all three.
@@ -69,6 +97,8 @@ void kernel_main() {
         TensorAccessorArgs<q_args.next_compile_time_args_offset(), q_args.next_common_runtime_args_offset()>();
     constexpr auto idx_args =
         TensorAccessorArgs<kv_args.next_compile_time_args_offset(), kv_args.next_common_runtime_args_offset()>();
+    constexpr auto table_args =
+        TensorAccessorArgs<idx_args.next_compile_time_args_offset(), idx_args.next_common_runtime_args_offset()>();
 
     const uint32_t q_addr = get_arg_val<uint32_t>(0);
     const uint32_t kv_addr = get_arg_val<uint32_t>(1);
@@ -77,6 +107,9 @@ void kernel_main() {
     const uint32_t tok_count = get_arg_val<uint32_t>(4);
     // Indexed KV cache: page offset (cache_batch_idx * T) selecting the cache's batch slot; 0 if not indexed.
     const uint32_t kv_batch_page_offset = get_arg_val<uint32_t>(5);
+    const uint32_t page_table_addr = get_arg_val<uint32_t>(6);
+    constexpr uint32_t mesh_ids_rt_arg = 7;
+    constexpr uint32_t chip_ids_rt_arg = mesh_ids_rt_arg + mesh_nodes;
 
     constexpr uint32_t q_row_bytes = k_dim * q_elem_bytes;   // Q row (bf16)
     constexpr uint32_t k_row_bytes = k_dim * kv_elem_bytes;  // K row (native dtype: fp8 or bf16)
@@ -91,6 +124,38 @@ void kernel_main() {
     const auto q = TensorAccessor(q_args, q_addr);
     const auto kv = TensorAccessor(kv_args, kv_addr);
     const auto idx = TensorAccessor(idx_args, idx_addr);
+    const auto page_table = TensorAccessor(table_args, page_table_addr);
+    experimental::CB page_table_cb(cb_page_table);
+
+    // The table is replicated and immutable for the duration of one dispatch.
+    // Fetch its selected row once per worker, not once per selected key.
+    volatile tt_l1_ptr uint32_t* page_table_ptr = nullptr;
+    if constexpr (paged_kv) {
+        static_assert(paged_bundle_tokens == paged_chunk_local * paged_sp);
+        page_table_cb.reserve_back(1);
+        noc.async_read(
+            page_table, page_table_cb, paged_max_bundles * sizeof(uint32_t), {.page_id = kv_batch_page_offset}, {});
+        noc.async_read_barrier();
+        page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb.get_write_ptr());
+    }
+    uint32_t my_flat = 0;
+    uint32_t my_mesh_row = 0;
+    uint32_t my_mesh_col = 0;
+    if constexpr (paged_kv) {
+        auto* routing_table =
+            reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+        const uint32_t my_mesh_id = routing_table->my_mesh_id;
+        const uint32_t my_chip_id = routing_table->my_device_id;
+        for (uint32_t n = 0; n < mesh_nodes; ++n) {
+            if (get_arg_val<uint32_t>(mesh_ids_rt_arg + n) == my_mesh_id &&
+                get_arg_val<uint32_t>(chip_ids_rt_arg + n) == my_chip_id) {
+                my_flat = n;
+                break;
+            }
+        }
+        my_mesh_row = my_flat / mesh_cols;
+        my_mesh_col = my_flat - my_mesh_row * mesh_cols;
+    }
     // Reader-internal scratch for one token's index row (reserved once, reused).
     idx_cb.reserve_back(1);
     const uint32_t idx_l1 = idx_cb.get_write_ptr();
@@ -109,20 +174,24 @@ void kernel_main() {
         noc.async_read(idx, idx_cb, idx_row_bytes, {.page_id = tok}, {.offset_bytes = 0});
         noc.async_read_barrier();
 
+        volatile tt_l1_ptr uint32_t* active_idx_ptr = idx_ptr;
+
         // binary-search the first sentinel -> nv (valid-key count); only ceil(nv/k_chunk) chunks are active.
         uint32_t nv = topk;
         {
             uint32_t lo = 0, hi = topk;
             while (lo < hi) {
                 const uint32_t mid = (lo + hi) >> 1;
-                if (idx_ptr[mid] == sentinel) {
+                if (active_idx_ptr[mid] == sentinel) {
                     hi = mid;
                 } else {
                     lo = mid + 1;
                 }
             }
-            nv = lo == 0 ? 1 : lo;  // contract guarantees >=1 valid; guard anyway
+            nv = lo;
         }
+        // The compute path does not support an all-sentinel row.
+        nv = nv == 0 ? 1 : nv;
         const uint32_t n_active = (nv + k_chunk - 1) / k_chunk;
 
         // hand the active chunk count + valid-key count to compute (it can't issue DRAM reads to derive
@@ -174,7 +243,15 @@ void kernel_main() {
                         bc_shard_stride_gap,
                         bc_slab_stride_gap,
                         sparse_sdpa::SCALED_K_TRID_RING>(
-                        noc, kv, k_write_ptr, idx_ptr, slab_base, split, rows, packed_row_bytes, kv_batch_page_offset);
+                        noc,
+                        kv,
+                        k_write_ptr,
+                        active_idx_ptr,
+                        slab_base,
+                        split,
+                        rows,
+                        packed_row_bytes,
+                        kv_batch_page_offset);
                     // Expand the scale rows from the reader's gathered half while the writer handles its
                     // own half. The two RISCs write disjoint rows of the same FP32 broadcast tiles.
                     sparse_sdpa::scatter_packed_scales<scale_blocks>(
@@ -203,28 +280,80 @@ void kernel_main() {
                 // rows [half,valid); it hands the writer rows [0,half) via cb_kreq, and the writer gathers
                 // them on ITS NoC into the same reserved cb_k_rm L1 (shared on-core), then acks via cb_kack -- each
                 // link then carries half the gather traffic.
-                const uint32_t half = valid >> 1;
-                kreq_cb.reserve_back(1);
-                {
-                    volatile tt_l1_ptr uint32_t* request =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_write_ptr());
-                    request[sparse_sdpa::gather_request::BASE] = base;
-                    request[sparse_sdpa::gather_request::SPLIT] = half;
-                    request[sparse_sdpa::gather_request::IS_LAST] = chunk == n_active - 1;
-                    request[sparse_sdpa::gather_request::DST_L1] = k_write_ptr;
+                if constexpr (paged_kv) {
+                    // Position-dependent ownership preserves the existing balanced
+                    // per-SP slab assignment.  The compact table chooses only the
+                    // physical 5120-token bundle; 32-token subpages and row offsets
+                    // are deterministic inside it.
+                    for (uint32_t p = 0; p < valid; ++p) {
+                        const uint32_t logical_token = active_idx_ptr[base + p];
+                        const auto location =
+                            sparse_sdpa::paged::locate<paged_bundle_tokens, paged_chunk_local, paged_sp>(logical_token);
+                        const uint32_t physical_bundle = location.logical_bundle < paged_max_bundles
+                                                             ? page_table_ptr[location.logical_bundle]
+                                                             : sentinel;
+                        const bool mapping_valid =
+                            physical_bundle != sentinel && physical_bundle < paged_physical_bundles;
+                        if (!mapping_valid) {
+                            // Never derive or issue a remote address from an invalid
+                            // table entry. Watcher reports the missing allocation.
+                            ASSERT(mapping_valid);
+                            continue;
+                        }
+                        const uint32_t dest_flat = sparse_sdpa::paged::owner_flat(
+                            location.owner, paged_sp_axis, my_mesh_row, my_mesh_col, mesh_cols);
+                        const uint32_t pool_page = sparse_sdpa::paged::pool_page(
+                            physical_bundle, paged_layer, paged_num_layers, paged_chunk_local, location.local_row);
+                        if (dest_flat == my_flat) {
+                            noc.async_read(
+                                kv,
+                                CoreLocalMem<uint32_t>(k_write_ptr + p * k_row_bytes),
+                                k_row_bytes,
+                                {.page_id = pool_page},
+                                {});
+                        }
+#ifdef SPARSE_SDPA_PAGED_REMOTE_UDM
+                        else {
+                            tt::tt_fabric::udm::fabric_fast_read_any_len(
+                                get_arg_val<uint32_t>(chip_ids_rt_arg + dest_flat),
+                                get_arg_val<uint32_t>(mesh_ids_rt_arg + dest_flat),
+                                kv.get_noc_addr(pool_page),
+                                k_write_ptr + p * k_row_bytes,
+                                k_row_bytes);
+                        }
+#else
+                        else {
+                            ASSERT(false);
+                        }
+#endif
+                    }
+                    noc.async_read_barrier();
+#ifdef SPARSE_SDPA_PAGED_REMOTE_UDM
+                    tt::tt_fabric::udm::fabric_read_barrier();
+#endif
+                } else {
+                    const uint32_t half = valid >> 1;
+                    kreq_cb.reserve_back(1);
+                    {
+                        volatile tt_l1_ptr uint32_t* request =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_write_ptr());
+                        request[sparse_sdpa::gather_request::BASE] = base;
+                        request[sparse_sdpa::gather_request::SPLIT] = half;
+                        request[sparse_sdpa::gather_request::IS_LAST] = chunk == n_active - 1;
+                        request[sparse_sdpa::gather_request::DST_L1] = k_write_ptr;
+                    }
+                    kreq_cb.push_back(1);
+                    sparse_sdpa::trid_ring_gather<
+                        block_cyclic,
+                        bc_chunk_local,
+                        bc_sp,
+                        bc_shard_stride_gap,
+                        bc_slab_stride_gap,
+                        sparse_sdpa::K_TRID_RING>(
+                        noc, kv, k_write_ptr, active_idx_ptr, base, half, valid, k_row_bytes, kv_batch_page_offset);
+                    kack_cb.wait_front(1);
+                    kack_cb.pop_front(1);
                 }
-                kreq_cb.push_back(1);
-                // Reader gathers its half [half, valid) on its NoC (depth-4 trid ring, shared helper).
-                sparse_sdpa::trid_ring_gather<
-                    block_cyclic,
-                    bc_chunk_local,
-                    bc_sp,
-                    bc_shard_stride_gap,
-                    bc_slab_stride_gap,
-                    sparse_sdpa::K_TRID_RING>(
-                    noc, kv, k_write_ptr, idx_ptr, base, half, valid, k_row_bytes, kv_batch_page_offset);
-                kack_cb.wait_front(1);  // writer's half landed in cb_k_rm L1
-                kack_cb.pop_front(1);
                 // Zero-fill the sentinel suffix: masked-key scores become a defined 0 (compute adds -inf).
                 if (valid < k_chunk) {
                     noc.async_write_zeros(k_cb, (k_chunk - valid) * k_row_bytes, {.offset_bytes = valid * k_row_bytes});

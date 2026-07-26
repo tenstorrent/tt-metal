@@ -16,11 +16,15 @@
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
+#ifdef UDM_MODE
+#include "tt_metal/fabric/hw/inc/udm/tt_fabric_udm.hpp"
+#endif
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/dataflow_common.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/block_cyclic_remap.hpp"  // shared invP remap
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"  // block-max-pool: calculate_and_prepare_reduce_scaler
 
 #include "indexer_score_common.hpp"  // shared CB indices, compile-time dims, work-unit walk
+#include "paged_indexer_layout.hpp"
 
 constexpr uint32_t q_tile_bytes = get_tile_size(cb_q);     // q: bf16 or bfp8_b (smaller tile)
 constexpr uint32_t bf16_tile_bytes = get_tile_size(cb_w);  // w / mask: always bf16
@@ -55,6 +59,64 @@ constexpr uint32_t bc_chunk_local = get_compile_time_arg_val(bc_ct_base + 1);
 constexpr uint32_t bc_sp = get_compile_time_arg_val(bc_ct_base + 2);
 constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(bc_ct_base + 3);
 constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(bc_ct_base + 4);
+constexpr uint32_t paged_ct_base = bc_ct_base + 5;
+constexpr bool paged_cache = get_compile_time_arg_val(paged_ct_base) != 0;
+constexpr uint32_t paged_layer_idx = get_compile_time_arg_val(paged_ct_base + 1);
+constexpr uint32_t paged_num_layers = get_compile_time_arg_val(paged_ct_base + 2);
+constexpr uint32_t paged_local_bundle_tiles = get_compile_time_arg_val(paged_ct_base + 3);
+constexpr uint32_t paged_table_entries = get_compile_time_arg_val(paged_ct_base + 4);
+constexpr uint32_t paged_table_stick_bytes = get_compile_time_arg_val(paged_ct_base + 5);
+constexpr uint32_t paged_physical_bundles = get_compile_time_arg_val(paged_ct_base + 6);
+constexpr uint32_t paged_sp = get_compile_time_arg_val(paged_ct_base + 7);
+constexpr uint32_t paged_sp_axis = get_compile_time_arg_val(paged_ct_base + 8);
+constexpr uint32_t mesh_rows = get_compile_time_arg_val(paged_ct_base + 9);
+constexpr uint32_t mesh_cols = get_compile_time_arg_val(paged_ct_base + 10);
+constexpr uint32_t mesh_nodes = mesh_rows * mesh_cols;
+constexpr auto page_table_args = TensorAccessorArgs<paged_ct_base + 11>();
+constexpr uint32_t kv_start_tiles_rt_arg = 29;
+constexpr uint32_t mesh_ids_rt_arg = 30;
+constexpr uint32_t chip_ids_rt_arg = mesh_ids_rt_arg + mesh_nodes;
+constexpr uint32_t my_flat_rt_arg = chip_ids_rt_arg + mesh_nodes;
+
+template <typename Acc>
+FORCE_INLINE void async_read_qw_tile(Noc noc, const Acc& acc, uint32_t page_id, uint32_t dst_l1, uint32_t bytes) {
+    noc.async_read(acc, CoreLocalMem<uint32_t>(dst_l1), bytes, {.page_id = page_id}, {});
+}
+
+FORCE_INLINE void qw_read_barrier(Noc noc) { noc.async_read_barrier(); }
+
+template <typename KAcc>
+FORCE_INLINE void async_read_k_tile(
+    Noc noc, const KAcc& k_acc, uint32_t logical_seq_tile, uint32_t physical_page, uint32_t dst_l1, uint32_t my_flat) {
+    if constexpr (paged_cache && paged_sp > 1) {
+#ifdef UDM_MODE
+        const uint32_t owner =
+            iscore::paged::owner_rank(logical_seq_tile, paged_local_bundle_tiles * paged_sp, paged_sp);
+        const uint32_t my_row = my_flat / mesh_cols;
+        const uint32_t my_col = my_flat - my_row * mesh_cols;
+        // Preserve the non-SP (TP) coordinate and replace only the SP coordinate with the position owner.
+        // UDM routes directly to the selected SP4 mesh node; no ring-order assumption is required.
+        const uint32_t dest_flat = paged_sp_axis == 0 ? owner * mesh_cols + my_col : my_row * mesh_cols + owner;
+        if (dest_flat == my_flat) {
+            noc.async_read(k_acc, CoreLocalMem<uint32_t>(dst_l1), k_tile_bytes, {.page_id = physical_page}, {});
+        } else {
+            tt::tt_fabric::udm::fabric_fast_read_any_len(
+                get_arg_val<uint32_t>(chip_ids_rt_arg + dest_flat),
+                get_arg_val<uint32_t>(mesh_ids_rt_arg + dest_flat),
+                k_acc.get_noc_addr(physical_page),
+                dst_l1,
+                k_tile_bytes);
+        }
+#else
+        // The host rejects distributed paged scoring unless UDM fabric is
+        // enabled. Keeping the UDM header/code out of SP=1 binaries also lets
+        // the local primitive compile without initializing fabric.
+        ASSERT(false);
+#endif
+    } else {
+        noc.async_read(k_acc, CoreLocalMem<uint32_t>(dst_l1), k_tile_bytes, {.page_id = physical_page}, {});
+    }
+}
 
 // Receiver rectangle / sender coords for one mcast direction (physical NoC), set per core on host.
 struct McastDir {
@@ -123,7 +185,7 @@ inline void read_block_or_mcast(Noc noc, uint32_t ntiles, uint32_t bytes, const 
         }
     }
     read_into(addr);
-    noc.async_read_barrier();
+    qw_read_barrier(noc);
     if constexpr (mcast_on) {
         if (dir.role == iscore::mcast_role_sender) {  // broadcast the block to the rest of the rect
             mcast_send<send_sem, recv_sem, valid_sem>(noc, dir, addr, bytes);
@@ -148,7 +210,7 @@ inline uint32_t read_q_row_into(Noc noc, const QAcc& q_acc, uint32_t ptr, uint32
     for (uint32_t head = first_head; head < first_head + heads_per_group; ++head) {
         const uint32_t base = head * q_len_tiles * head_dim_tiles + q_row_abs * head_dim_tiles;
         for (uint32_t dim_tile = 0; dim_tile < head_dim_tiles; ++dim_tile) {
-            noc.async_read(q_acc, CoreLocalMem<uint32_t>(ptr), q_tile_bytes, {.page_id = base + dim_tile}, {});
+            async_read_qw_tile(noc, q_acc, base + dim_tile, ptr, q_tile_bytes);
             ptr += q_tile_bytes;
         }
     }
@@ -186,7 +248,7 @@ inline void read_q_rows(Noc noc, const QAcc& q_acc, uint32_t q_row_start, const 
             }
         }
         read_q_row_into(noc, q_acc, row_addr, q_row_start + q_row, /*first_head=*/0);
-        noc.async_read_barrier();
+        qw_read_barrier(noc);
         if constexpr (q_mcast_on) {
             if (q_dir.role == iscore::mcast_role_sender) {  // broadcast this row down the grid row
                 mcast_send<q_send_sem, q_recv_sem, q_valid_sem>(noc, q_dir, row_addr, row_tiles * q_tile_bytes);
@@ -222,12 +284,7 @@ inline void read_w_group(Noc noc, const WAcc& w_acc, uint32_t q_row_start, const
             uint32_t ptr = addr;
             for (uint32_t q_row = 0; q_row < q_tiles_per_unit; ++q_row) {
                 for (uint32_t head = 0; head < num_heads; ++head) {
-                    noc.async_read(
-                        w_acc,
-                        CoreLocalMem<uint32_t>(ptr),
-                        bf16_tile_bytes,
-                        {.page_id = head * q_len_tiles + q_row_start + q_row},
-                        {});
+                    async_read_qw_tile(noc, w_acc, head * q_len_tiles + q_row_start + q_row, ptr, bf16_tile_bytes);
                     ptr += bf16_tile_bytes;
                 }
             }
@@ -242,7 +299,10 @@ inline void read_k_chunk(
     uint32_t k_tile_start,
     uint32_t k_tiles_in_unit,
     const McastDir& k_dir,
-    uint32_t k_batch_page_offset) {
+    uint32_t k_batch_page_offset,
+    const volatile tt_l1_ptr uint32_t* page_table_ptr,
+    uint32_t my_flat,
+    uint32_t kv_start_tiles) {
     // Reserves/pushes the full k_chunk_tiles (keeps the 2-chunk ring half-aligned) but reads only the
     // k_tiles_in_unit valid cols (pad slots stale, compute masks them). k_batch_page_offset = indexed-cache
     // slot shift; 0 when not indexed.
@@ -250,21 +310,54 @@ inline void read_k_chunk(
         noc, k_chunk_tiles, k_chunk_tiles * k_tile_bytes, k_dir, [&](uint32_t addr) {
             uint32_t ptr = addr;
             for (uint32_t k_col = 0; k_col < k_tiles_in_unit; ++k_col) {
-                const uint32_t seq_tile = tt::block_cyclic::logical_to_physical_page<
+                const uint32_t logical_seq_tile = kv_start_tiles + k_tile_start + k_col;
+                uint32_t seq_tile = tt::block_cyclic::logical_to_physical_page<
                     block_cyclic,
                     bc_chunk_local,
                     bc_sp,
                     bc_shard_stride_gap,
-                    bc_slab_stride_gap>(k_tile_start + k_col);
+                    bc_slab_stride_gap>(logical_seq_tile);
+                uint32_t page_base = k_batch_page_offset + seq_tile * head_dim_tiles;
+                if constexpr (paged_cache) {
+                    const auto local = iscore::paged::split_global_tile(
+                        logical_seq_tile, paged_local_bundle_tiles * paged_sp, paged_sp);
+                    if (local.logical_bundle >= paged_table_entries) {
+                        ASSERT(false);
+                        volatile tt_l1_ptr uint32_t* zero_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ptr);
+                        for (uint32_t i = 0; i < head_dim_tiles * k_tile_bytes / sizeof(uint32_t); ++i) {
+                            zero_ptr[i] = 0;
+                        }
+                        ptr += head_dim_tiles * k_tile_bytes;
+                        continue;
+                    }
+                    const uint32_t physical_bundle = page_table_ptr[local.logical_bundle];
+                    if (physical_bundle == iscore::paged::invalid_bundle || physical_bundle >= paged_physical_bundles) {
+                        ASSERT(false);
+                        volatile tt_l1_ptr uint32_t* zero_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ptr);
+                        for (uint32_t i = 0; i < head_dim_tiles * k_tile_bytes / sizeof(uint32_t); ++i) {
+                            zero_ptr[i] = 0;
+                        }
+                        ptr += head_dim_tiles * k_tile_bytes;
+                        continue;
+                    }
+                    page_base = iscore::paged::physical_tile_page(
+                        physical_bundle,
+                        paged_num_layers,
+                        paged_layer_idx,
+                        paged_local_bundle_tiles,
+                        head_dim_tiles,
+                        local.bundle_tile,
+                        0);
+                }
                 for (uint32_t dim_tile = 0; dim_tile < head_dim_tiles; ++dim_tile) {
-                    noc.async_read(
-                        k_acc,
-                        CoreLocalMem<uint32_t>(ptr),
-                        k_tile_bytes,
-                        {.page_id = k_batch_page_offset + seq_tile * head_dim_tiles + dim_tile},
-                        {});
+                    async_read_k_tile(noc, k_acc, logical_seq_tile, page_base + dim_tile, ptr, my_flat);
                     ptr += k_tile_bytes;
                 }
+            }
+            if constexpr (paged_cache && paged_sp > 1) {
+#ifdef UDM_MODE
+                tt::tt_fabric::udm::fabric_read_barrier();
+#endif
             }
         });
 }
@@ -274,7 +367,14 @@ inline void read_k_chunk(
  *  No mcast. mm_col_batch is shared with the compute kernel's DEST column batch (indexer_score_common.hpp). */
 template <typename KAcc>
 inline void read_k_chunk_streaming(
-    Noc noc, const KAcc& k_acc, uint32_t k_tile_start, uint32_t k_tiles_in_unit, uint32_t k_batch_page_offset) {
+    Noc noc,
+    const KAcc& k_acc,
+    uint32_t k_tile_start,
+    uint32_t k_tiles_in_unit,
+    uint32_t k_batch_page_offset,
+    const volatile tt_l1_ptr uint32_t* page_table_ptr,
+    uint32_t my_flat,
+    uint32_t kv_start_tiles) {
     // k_batch_page_offset = indexed-cache slot shift (0 when not indexed), applied on top of the (possibly
     // block-cyclic remapped) intra-slot page -- identical to read_k_chunk; the fused-streaming path must not
     // drop it, or an indexed slot would silently read slot 0.
@@ -286,22 +386,51 @@ inline void read_k_chunk_streaming(
         uint32_t ptr = cb.get_write_ptr();
         for (uint32_t c = cbase; c < c_end; ++c) {
             if (c < k_tiles_in_unit) {
+                const uint32_t logical_seq_tile = kv_start_tiles + k_tile_start + c;
                 const uint32_t seq_tile = tt::block_cyclic::logical_to_physical_page<
                     block_cyclic,
                     bc_chunk_local,
                     bc_sp,
                     bc_shard_stride_gap,
-                    bc_slab_stride_gap>(k_tile_start + c);
+                    bc_slab_stride_gap>(logical_seq_tile);
+                uint32_t page_base = k_batch_page_offset + seq_tile * head_dim_tiles;
+                if constexpr (paged_cache) {
+                    const auto local = iscore::paged::split_global_tile(
+                        logical_seq_tile, paged_local_bundle_tiles * paged_sp, paged_sp);
+                    if (local.logical_bundle >= paged_table_entries) {
+                        ASSERT(false);
+                        noc.async_write_zeros(CoreLocalMem<uint32_t>(ptr), head_dim_tiles * k_tile_bytes);
+                        noc.write_zeros_l1_barrier();
+                        ptr += head_dim_tiles * k_tile_bytes;
+                        continue;
+                    }
+                    const uint32_t physical_bundle = page_table_ptr[local.logical_bundle];
+                    if (physical_bundle == iscore::paged::invalid_bundle || physical_bundle >= paged_physical_bundles) {
+                        ASSERT(false);
+                        noc.async_write_zeros(CoreLocalMem<uint32_t>(ptr), head_dim_tiles * k_tile_bytes);
+                        noc.write_zeros_l1_barrier();
+                        ptr += head_dim_tiles * k_tile_bytes;
+                        continue;
+                    }
+                    page_base = iscore::paged::physical_tile_page(
+                        physical_bundle,
+                        paged_num_layers,
+                        paged_layer_idx,
+                        paged_local_bundle_tiles,
+                        head_dim_tiles,
+                        local.bundle_tile,
+                        0);
+                }
                 for (uint32_t d = 0; d < head_dim_tiles; ++d) {
-                    noc.async_read(
-                        k_acc,
-                        CoreLocalMem<uint32_t>(ptr),
-                        k_tile_bytes,
-                        {.page_id = k_batch_page_offset + seq_tile * head_dim_tiles + d},
-                        {});
+                    async_read_k_tile(noc, k_acc, logical_seq_tile, page_base + d, ptr, my_flat);
                     ptr += k_tile_bytes;
                 }
             }
+        }
+        if constexpr (paged_cache && paged_sp > 1) {
+#ifdef UDM_MODE
+            tt::tt_fabric::udm::fabric_read_barrier();
+#endif
         }
         noc.async_read_barrier();
         cb.push_back(sub_tiles);
@@ -309,6 +438,13 @@ inline void read_k_chunk_streaming(
 }
 
 void kernel_main() {
+#ifdef UDM_MODE
+    if constexpr (paged_cache && paged_sp > 1) {
+        // Establish this dispatch's software acknowledgement baseline before
+        // issuing the first remote cache read.
+        tt::tt_fabric::udm::fabric_local_state_init();
+    }
+#endif
     const uint32_t q_addr = get_arg_val<uint32_t>(0);
     const uint32_t k_addr = get_arg_val<uint32_t>(1);
     const uint32_t w_addr = get_arg_val<uint32_t>(2);
@@ -324,12 +460,29 @@ void kernel_main() {
     // Persistent-cache args (hash-excluded, re-applied each dispatch), after the mcast tuples.
     const uint32_t k_batch_page_offset = get_arg_val<uint32_t>(25);  // indexed-cache page offset; 0 when not indexed
     const uint32_t kv_len_tiles = get_arg_val<uint32_t>(26);         // valid KV length in tiles (full when unset)
+    const uint32_t page_table_addr = get_arg_val<uint32_t>(27);
+    const uint32_t page_table_slot = get_arg_val<uint32_t>(28);
+    const uint32_t kv_start_tiles = get_arg_val<uint32_t>(29);
 
     const auto q_acc = TensorAccessor(q_args, q_addr, q_tile_bytes);
     const auto k_acc = TensorAccessor(k_args, k_addr, k_tile_bytes);
     const auto w_acc = TensorAccessor(w_args, w_addr, bf16_tile_bytes);
 
     Noc noc;
+    const uint32_t my_flat = paged_cache && paged_sp > 1 ? get_arg_val<uint32_t>(my_flat_rt_arg) : 0;
+
+    const volatile tt_l1_ptr uint32_t* page_table_ptr = nullptr;
+    if constexpr (paged_cache) {
+        CircularBuffer table_cb(cb_page_table);
+        table_cb.reserve_back(1);
+        const uint32_t table_l1 = table_cb.get_write_ptr();
+        const auto table_acc = TensorAccessor(page_table_args, page_table_addr, paged_table_stick_bytes);
+        noc.async_read(
+            table_acc, CoreLocalMem<uint32_t>(table_l1), paged_table_stick_bytes, {.page_id = page_table_slot}, {});
+        noc.async_read_barrier();
+        table_cb.push_back(1);
+        page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_l1);
+    }
 
     build_mask_tiles(noc);
     if constexpr (block_pool) {
@@ -365,11 +518,27 @@ void kernel_main() {
                 span.set(group, band0 + band);
                 if constexpr (fuse_single && fused_stream_k) {
                     read_k_chunk_streaming(
-                        noc, k_acc, span.k_tile_start(), span.k_tiles(), k_batch_page_offset);  // no mcast: stream
+                        noc,
+                        k_acc,
+                        span.k_tile_start(),
+                        span.k_tiles(),
+                        k_batch_page_offset,
+                        page_table_ptr,
+                        my_flat,
+                        kv_start_tiles);  // no mcast: stream
                 } else {
                     // k FIRST: compute waits the whole k chunk, so reading k ahead lets the split q-row0 push
                     // unblock the first matmul.
-                    read_k_chunk(noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir, k_batch_page_offset);
+                    read_k_chunk(
+                        noc,
+                        k_acc,
+                        span.k_tile_start(),
+                        span.k_tiles(),
+                        k_dir,
+                        k_batch_page_offset,
+                        page_table_ptr,
+                        my_flat,
+                        kv_start_tiles);
                 }
                 if (band == 0 && !stream_heads && !fuse_single) {
                     // Non-fused resident: q/w deferred behind q/k here.

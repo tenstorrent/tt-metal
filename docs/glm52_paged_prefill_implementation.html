@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="High-level visual walkthrough of GLM-5.2 paged KV cache changes in prefill.">
+  <title>GLM-5.2 · Paged Prefill</title>
+  <style>
+    :root {
+      --ink: #eef4ff;
+      --muted: #9eabc2;
+      --navy: #070b17;
+      --panel: rgba(16, 24, 43, .82);
+      --line: rgba(157, 178, 217, .16);
+      --cyan: #5ee7f2;
+      --blue: #6292ff;
+      --violet: #a884ff;
+      --green: #63e6a6;
+      --amber: #ffcc72;
+      --red: #ff879d;
+      --shadow: 0 24px 70px rgba(0, 0, 0, .36);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      overflow: hidden;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 16% 14%, rgba(64, 116, 255, .17), transparent 31%),
+        radial-gradient(circle at 84% 74%, rgba(106, 66, 255, .13), transparent 32%),
+        var(--navy);
+      font: 15px/1.55 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: .23;
+      background-image:
+        linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
+      background-size: 36px 36px;
+      mask-image: linear-gradient(to bottom, black, transparent 85%);
+    }
+
+    button { font: inherit; }
+    .topbar {
+      position: fixed;
+      z-index: 20;
+      inset: 0 0 auto;
+      height: 68px;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      padding: 0 28px;
+      background: rgba(7, 11, 23, .74);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(18px);
+    }
+    .brand { display: flex; align-items: center; gap: 11px; white-space: nowrap; font-weight: 750; }
+    .brand-mark {
+      width: 29px; height: 29px; border-radius: 9px;
+      display: grid; place-items: center;
+      color: #07121b; font-size: 12px; font-weight: 900;
+      background: linear-gradient(135deg, var(--cyan), var(--green));
+      box-shadow: 0 0 24px rgba(94, 231, 242, .24);
+    }
+    .brand small {
+      color: var(--muted); font-weight: 520; margin-left: 8px;
+    }
+    .progress-track {
+      height: 3px; flex: 1; max-width: 540px; margin-left: auto;
+      overflow: hidden; border-radius: 9px; background: rgba(255,255,255,.08);
+    }
+    .progress {
+      width: 10%; height: 100%; border-radius: inherit;
+      background: linear-gradient(90deg, var(--cyan), var(--violet));
+      transition: width .38s ease;
+    }
+    .counter { color: var(--muted); font: 700 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    .deck { position: relative; width: 100%; height: 100%; }
+    .slide {
+      position: absolute;
+      inset: 68px 0 78px;
+      overflow: auto;
+      padding: clamp(32px, 5vw, 70px) max(28px, calc((100vw - 1160px) / 2));
+      opacity: 0;
+      visibility: hidden;
+      transform: translateX(52px) scale(.985);
+      transition: opacity .35s ease, transform .42s cubic-bezier(.2,.8,.2,1), visibility .42s;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(94,231,242,.35) transparent;
+    }
+    .slide.before { transform: translateX(-52px) scale(.985); }
+    .slide.active { opacity: 1; visibility: visible; transform: none; z-index: 2; }
+    .slide-inner { max-width: 1160px; margin: 0 auto; min-height: 100%; display: flex; flex-direction: column; justify-content: center; }
+
+    .eyebrow {
+      color: var(--cyan); text-transform: uppercase; letter-spacing: .17em;
+      font: 800 11px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+      margin-bottom: 16px;
+    }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { max-width: 950px; font-size: clamp(42px, 7vw, 86px); line-height: .98; letter-spacing: -.055em; margin-bottom: 24px; }
+    h2 { font-size: clamp(31px, 4.5vw, 55px); line-height: 1.04; letter-spacing: -.038em; margin-bottom: 17px; }
+    h3 { font-size: 17px; margin-bottom: 8px; }
+    .lead { max-width: 800px; color: #c6d1e3; font-size: clamp(17px, 2vw, 22px); line-height: 1.45; }
+    .accent { color: var(--cyan); }
+    .muted { color: var(--muted); }
+    code {
+      padding: 2px 6px;
+      border: 1px solid rgba(94,231,242,.12);
+      border-radius: 6px;
+      color: #bdf7fb;
+      background: rgba(94,231,242,.07);
+      font: .88em ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .grid { display: grid; gap: 16px; margin-top: 24px; }
+    .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .card {
+      position: relative;
+      overflow: hidden;
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 17px;
+      background: linear-gradient(145deg, rgba(21,32,56,.9), rgba(11,17,32,.78));
+      box-shadow: 0 12px 34px rgba(0,0,0,.15);
+    }
+    .card::after {
+      content:""; position:absolute; inset:auto -50px -70px auto; width:130px; height:130px;
+      border-radius:50%; background:var(--glow, var(--blue)); filter:blur(56px); opacity:.13;
+    }
+    .card p:last-child { margin-bottom: 0; }
+    .big-number { font-size: 34px; font-weight: 850; letter-spacing: -.04em; }
+    .tag {
+      display: inline-flex; align-items: center; gap: 7px; padding: 6px 10px;
+      border: 1px solid var(--line); border-radius: 999px; color: #cbd6e7;
+      background: rgba(255,255,255,.035); font-size: 12px; font-weight: 700;
+    }
+    .tag::before { content:""; width:6px; height:6px; border-radius:50%; background:var(--tag, var(--green)); box-shadow:0 0 10px var(--tag, var(--green)); }
+    .tags { display:flex; flex-wrap:wrap; gap:8px; margin-top:24px; }
+
+    .compare {
+      display: grid; grid-template-columns: 1fr 56px 1fr; align-items: stretch; gap: 14px; margin-top: 28px;
+    }
+    .compare-side { border-radius: 20px; padding: 24px; border: 1px solid var(--line); background: var(--panel); }
+    .compare-side.old { opacity: .67; }
+    .arrow { display:grid; place-items:center; color:var(--cyan); font-size:30px; }
+    .memory-row { display:flex; gap:5px; margin:18px 0 12px; }
+    .memory-row span { height:42px; flex:1; border-radius:5px; background:rgba(255,135,157,.28); border:1px solid rgba(255,135,157,.34); }
+    .memory-row.paged span { background:rgba(99,230,166,.25); border-color:rgba(99,230,166,.36); }
+    .memory-row.paged span.free { background:transparent; border-style:dashed; border-color:rgba(157,178,217,.25); }
+
+    .flow {
+      display:grid; grid-template-columns:repeat(5, minmax(0,1fr)); gap:12px; margin-top:29px; align-items:center;
+    }
+    .node {
+      min-height: 112px; display:flex; flex-direction:column; justify-content:center;
+      padding:15px; text-align:center; border:1px solid var(--line); border-radius:16px;
+      background:rgba(15,24,43,.78);
+    }
+    .node b { display:block; font-size:14px; margin-bottom:5px; }
+    .node small { color:var(--muted); }
+    .flow-arrow { display:none; }
+
+    .map-wrap { display:grid; grid-template-columns: .85fr 1.15fr; gap:30px; align-items:center; margin-top:22px; }
+    .table-map { display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; }
+    .cell {
+      min-height:58px; display:grid; place-items:center; border-radius:10px;
+      border:1px solid rgba(98,146,255,.35); color:#dbe6ff;
+      background:rgba(98,146,255,.13); font:700 13px ui-monospace,monospace;
+    }
+    .cell:nth-child(2), .cell:nth-child(7) { background:rgba(168,132,255,.17); border-color:rgba(168,132,255,.4); }
+    .cell.empty { color:#59657b; border-style:dashed; background:transparent; }
+    .pool { display:grid; grid-template-columns:repeat(8,1fr); gap:7px; }
+    .pool .cell { min-height:50px; border-color:rgba(99,230,166,.32); background:rgba(99,230,166,.13); }
+    .pool .cell.hot { animation:pulse 2.2s ease-in-out infinite; }
+
+    .transport { display:grid; grid-template-columns:1fr 110px 1fr; gap:17px; align-items:center; margin-top:24px; }
+    .device {
+      padding:22px; border:1px solid var(--line); border-radius:20px; background:var(--panel);
+    }
+    .device .bank { display:flex; gap:5px; margin-top:14px; }
+    .device .bank i { display:block; height:34px; flex:1; border-radius:5px; background:rgba(94,231,242,.15); border:1px solid rgba(94,231,242,.28); }
+    .device:last-child .bank i { background:rgba(168,132,255,.16); border-color:rgba(168,132,255,.3); }
+    .bridge { text-align:center; color:var(--muted); font-size:11px; }
+    .bridge-line { height:2px; margin:11px 0; background:linear-gradient(90deg,var(--cyan),var(--violet)); position:relative; overflow:hidden; }
+    .bridge-line::after { content:""; position:absolute; inset:0; width:36%; background:white; filter:blur(3px); animation:travel 2.1s linear infinite; }
+
+    .checklist { list-style:none; padding:0; margin:23px 0 0; display:grid; grid-template-columns:repeat(2,1fr); gap:11px; }
+    .checklist li {
+      position:relative; padding:13px 15px 13px 42px; border:1px solid var(--line);
+      border-radius:13px; background:rgba(14,22,39,.72); color:#cbd5e5;
+    }
+    .checklist li::before {
+      content:"✓"; position:absolute; left:14px; top:12px; color:var(--green); font-weight:900;
+    }
+    .checklist li.pending::before { content:"→"; color:var(--amber); }
+    .checklist li.out::before { content:"×"; color:var(--muted); }
+
+    .layers { display:flex; flex-direction:column; gap:8px; margin-top:22px; }
+    .layer {
+      display:grid; grid-template-columns:150px 1fr auto; align-items:center; gap:15px;
+      padding:12px 15px; border:1px solid var(--line); border-radius:12px; background:rgba(13,20,36,.7);
+    }
+    .layer-bar { height:7px; border-radius:8px; background:linear-gradient(90deg,var(--blue),var(--cyan)); transform-origin:left; }
+    .layer:nth-child(2) .layer-bar { background:linear-gradient(90deg,var(--violet),var(--blue)); }
+    .layer:nth-child(3) .layer-bar { background:linear-gradient(90deg,var(--cyan),var(--green)); }
+    .layer:nth-child(4) .layer-bar { background:linear-gradient(90deg,var(--amber),var(--violet)); }
+
+    .active .reveal { animation:rise .52s both; animation-delay:calc(var(--i,0) * 80ms + 80ms); }
+    .callout {
+      margin-top:24px; padding:16px 18px; border-left:3px solid var(--cyan); border-radius:0 12px 12px 0;
+      background:rgba(94,231,242,.06); color:#c8d6e7;
+    }
+
+    .controls {
+      position:fixed; z-index:30; inset:auto 0 0; height:78px; display:flex; align-items:center; justify-content:center;
+      gap:16px; border-top:1px solid var(--line); background:rgba(7,11,23,.78); backdrop-filter:blur(18px);
+    }
+    .nav-button {
+      min-width:112px; padding:10px 16px; color:var(--ink); cursor:pointer;
+      border:1px solid var(--line); border-radius:11px; background:rgba(255,255,255,.045);
+      transition:transform .18s, border-color .18s, background .18s;
+    }
+    .nav-button:hover:not(:disabled) { transform:translateY(-2px); border-color:rgba(94,231,242,.42); background:rgba(94,231,242,.08); }
+    .nav-button:disabled { opacity:.3; cursor:not-allowed; }
+    .dots { display:flex; gap:7px; padding:0 8px; }
+    .dot { width:7px; height:7px; border:0; padding:0; cursor:pointer; border-radius:20px; background:#435069; transition:.28s; }
+    .dot.active { width:25px; background:linear-gradient(90deg,var(--cyan),var(--violet)); }
+    .hint { position:fixed; right:22px; bottom:28px; z-index:31; color:#68758b; font-size:11px; }
+
+    @keyframes rise { from { opacity:0; transform:translateY(15px); } to { opacity:1; transform:none; } }
+    @keyframes pulse { 0%,100% { box-shadow:0 0 0 rgba(99,230,166,0); } 50% { box-shadow:0 0 24px rgba(99,230,166,.25); } }
+    @keyframes travel { from { transform:translateX(-130%); } to { transform:translateX(400%); } }
+
+    @media (max-width: 760px) {
+      .topbar { padding:0 16px; } .brand small, .hint { display:none; }
+      .slide { padding:28px 18px; }
+      .grid.two, .grid.three, .grid.four, .map-wrap, .compare { grid-template-columns:1fr; }
+      .compare .arrow { transform:rotate(90deg); }
+      .flow { grid-template-columns:1fr; }
+      .transport { grid-template-columns:1fr; }
+      .bridge { padding:6px 30px; }
+      .checklist { grid-template-columns:1fr; }
+      .layer { grid-template-columns:110px 1fr; }
+      .layer .tag { display:none; }
+      .dots { max-width:140px; overflow:hidden; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">KV</span> GLM-5.2 <small>prefill paging</small></div>
+    <div class="progress-track" aria-hidden="true"><div class="progress" id="progress"></div></div>
+    <div class="counter" id="counter">01 / 10</div>
+  </header>
+
+  <main class="deck" id="deck">
+    <section class="slide active" data-title="Outcome">
+      <div class="slide-inner">
+        <div class="eyebrow reveal" style="--i:0">Implementation overview · prefill only</div>
+        <h1 class="reveal" style="--i:1">GLM-5.2 KV memory now grows with <span class="accent">active context</span>.</h1>
+        <p class="lead reveal" style="--i:2">A capacity-sized physical pool replaces the model-side assumption that every user owns a maximum-context cache. Indexer and sparse attention resolve logical tokens through a compact page table.</p>
+        <div class="tags reveal" style="--i:3">
+          <span class="tag">Model wired</span>
+          <span class="tag">Writers page-aware</span>
+          <span class="tag">Indexer page-aware</span>
+          <span class="tag">SDPA page-aware</span>
+          <span class="tag" style="--tag:var(--cyan)">SP8 × TP4 production</span>
+          <span class="tag" style="--tag:var(--violet)">SP4 × TP1 QB proxy</span>
+        </div>
+        <div class="callout reveal" style="--i:4"><strong>Preserved:</strong> computation remains in 5,120-token chunks, while the exact real sequence end is tracked separately.</div>
+      </div>
+    </section>
+
+    <section class="slide" data-title="Why it changed">
+      <div class="slide-inner">
+        <div class="eyebrow reveal" style="--i:0">01 · Memory model</div>
+        <h2 class="reveal" style="--i:1">Reserve bundles, not a maximum slot.</h2>
+        <div class="compare reveal" style="--i:2">
+          <div class="compare-side old">
+            <span class="tag" style="--tag:var(--red)">Before</span>
+            <h3 style="margin-top:16px">User × maximum context</h3>
+            <p class="muted">Each admitted user reserves the entire configured KV extent, even when its prompt is short.</p>
+            <div class="memory-row"><span></span><span></span><span></span><span></span><span></span><span></span></div>
+            <small class="muted">Mostly reserved, not necessarily populated</small>
+          </div>
+          <div class="arrow">→</div>
+          <div class="compare-side">
+            <span class="tag">Now</span>
+            <h3 style="margin-top:16px">Shared capacity × active bundles</h3>
+            <p class="muted">A user receives one physical bundle only as each 5,120-token chunk is admitted.</p>
+            <div class="memory-row paged"><span></span><span></span><span class="free"></span><span class="free"></span><span class="free"></span><span class="free"></span></div>
+            <small class="muted">Unused capacity remains available to other users</small>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-title="Address contract">
+      <div class="slide-inner">
+        <div class="eyebrow reveal" style="--i:0">02 · Storage contract</div>
+        <h2 class="reveal" style="--i:1">One compact mapping coordinates both KV pools.</h2>
+        <div class="map-wrap">
+          <div class="reveal" style="--i:2">
+            <h3>Logical table</h3>
+            <p class="muted"><code>INT32 [user slots, max bundles]</code><br>Each entry is a physical-bundle ID; <code>-1</code> is unmapped.</p>
+            <div class="table-map" aria-label="Example page table">
+              <div class="cell">3</div><div class="cell">0</div><div class="cell empty">−1</div><div class="cell empty">−1</div>
+              <div class="cell">1</div><div class="cell empty">−1</div><div class="cell">2</div><div class="cell empty">−1</div>
+            </div>
+          </div>
+          <div class="reveal" style="--i:3">
+            <h3>Physical bundle pool</h3>
+            <p class="muted">The same physical ID selects the corresponding layer bundle in primary KVPE and index-key storage.</p>
+            <div class="pool" aria-label="Physical bundle pool">
+              <div class="cell hot">P0</div><div class="cell">P1</div><div class="cell">P2</div><div class="cell hot">P3</div>
+              <div class="cell empty">free</div><div class="cell empty">free</div><div class="cell empty">free</div><div class="cell empty">free</div>
+            </div>
+          </div>
+        </div>
+        <div class="grid three reveal" style="--i:4">
+          <div class="card"><div class="big-number">5,120</div><p class="muted">tokens per allocatable bundle</p></div>
+          <div class="card"><div class="big-number">160</div><p class="muted">native 32-token pages per bundle</p></div>
+          <div class="card"><div class="big-number">4 B</div><p class="muted">table cost per logical bundle</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-title="Lifecycle">
+      <div class="slide-inner">
+        <div class="eyebrow reveal" style="--i:0">03 · Runtime lifecycle</div>
+        <h2 class="reveal" style="--i:1">Allocation is explicit, coordinated, and reusable.</h2>
+        <div class="flow reveal" style="--i:2">
+          <div class="node"><b>1 · Admit chunk</b><small>Aligned 5K start + exact actual end</small></div>
+          <div class="node"><b>2 · Reserve ID</b><small>Atomically take one free physical bundle</small></div>
+          <div class="node"><b>3 · Sync table</b><small>Publish the mapping to a persistent device tensor</small></div>
+          <div class="node"><b>4 · Run model</b><small>Pass slot, layer, table, and valid end</small></div>
+          <div class="node"><b>5 · Release</b><small>Invalidate first, then return the bundle</small></div>
+        </div>
+        <ul class="checklist reveal" style="--i:3">
+          <li>Exact prefix continuity is checked</li>
+          <li>Primary and index caches share ownership</li>
+          <li>Exhaustion is reported explicitly</li>
+          <li>Rollback protects allocation state</li>
+        </ul>
+        <div class="callout reveal" style="--i:4">There is currently <strong>no eviction policy</strong>. The pool provides allocation and release primitives; scheduling policy remains outside this change.</div>
+      </div>
+    </section>
+
+    <section class="slide" data-title="Direct writes">
+      <div class="slide-inner">
+        <div class="eyebrow reveal" style="--i:0">04 · Cache writers</div>
+        <h2 class="reveal" style="--i:1">New tokens land directly in their physical bundle.</h2>
+        <p class="lead reveal" style="--i:2">The existing padded KV update operation gained a paged mode. Its writer reads the compact mapping, folds physical bundle and layer into the pool batch, and writes the current SP-local slab.</p>
+        <div class="grid three">
+          <div class="card reveal" style="--i:3;--glow:var(--cyan)"><h3>Primary KVPE</h3><p><code>BF16 RM</code></p><p class="muted">78 layer slots per physical bundle, width 576.</p></div>
+          <div class="card reveal" style="--i:4;--glow:var(--violet)"><h3>Indexer keys</h3><p><code>BFP8 TILE</code></p><p class="muted">Compact index-layer slots, width 128.</p></div>
+          <div class="card reveal" style="--i:5;--glow:var(--green)"><h3>No prefix copy</h3><p><code>logical → table → pool</code></p><p class="muted">Previous cache contents are not gathered or relocated.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-title="Indexer">
+      <div class="slide-inner">
+        <div class="eyebrow reveal" style="--i:0">05 · Index selection</div>
+        <h2 class="reveal" style="--i:1">Keep queries in place; read paged K directly.</h2>
+        <div class="card reveal" style="--i:2">
+          <h3>Reusable score + TopK composition</h3>
+          <p class="muted">Every SP/TP query shard remains local. The page-aware reader translates each logical K tile, reads it directly from its position-dependent SP owner, and scores one bounded 5,120-token bundle. Existing large-index TopK folds those bundle results without gathering Q, weights, K, or owner candidates.</p>
+          <div class="tags"><span class="tag">No SP gather</span><span class="tag">Existing TopK</span><span class="tag">Logical UINT32 IDs</span><span class="tag">5,120-token windows</span></div>
+        </div>
+        <div class="callout reveal" style="--i:3"><strong>Important:</strong> returned indices stay in natural logical-token space. Physical bundle IDs never leak into sparse attention’s model-visible contract.</div>
+      </div>
+    </section>
+
+    <section class="slide" data-title="Sparse attention">
+      <div class="slide-inner">
+        <div class="eyebrow reveal" style="--i:0">06 · Paged sparse SDPA</div>
+        <h2 class="reveal" style="--i:1">Distributed paging resolves each selected row at its SP owner.</h2>
+        <div class="transport reveal" style="--i:2">
+          <div class="device">
+            <span class="tag" style="--tag:var(--cyan)">Attention worker</span>
+            <h3 style="margin-top:14px">Natural logical token IDs</h3>
+            <p class="muted">Resolves bundle, owner, local row, physical bundle, and folded layer directly in the reader.</p>
+            <div class="bank"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          </div>
+          <div class="bridge">
+            local read or UDM
+            <div class="bridge-line"></div>
+            selected KV row
+          </div>
+          <div class="device">
+            <span class="tag" style="--tag:var(--violet)">One of eight production owners</span>
+            <h3 style="margin-top:14px">640 positions / bundle</h3>
+            <p class="muted">Position-dependent ownership preserves balanced storage; remote selected rows are read without gathering or copying a prefix.</p>
+            <div class="bank"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          </div>
+        </div>
+        <div class="grid four reveal" style="--i:3">
+          <div class="card"><h3>SP8 × TP4</h3><p class="muted">Galaxy production shape.</p></div>
+          <div class="card"><h3>Balanced banks</h3><p class="muted">Owner remains position-dependent.</p></div>
+          <div class="card"><h3>No prefix gather</h3><p class="muted">Only selected rows cross fabric.</p></div>
+          <div class="card"><h3>Tail-safe</h3><p class="muted">Exact valid end masks padding.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-title="End-to-end path">
+      <div class="slide-inner">
+        <div class="eyebrow reveal" style="--i:0">07 · Model integration</div>
+        <h2 class="reveal" style="--i:1">The GLM runner carries one paging contract through every layer.</h2>
+        <div class="layers">
+          <div class="layer reveal" style="--i:2"><b>Runner / adapter</b><div class="layer-bar"></div><span class="tag">creates pool</span></div>
+          <div class="layer reveal" style="--i:3"><b>Prefill runtime</b><div class="layer-bar"></div><span class="tag">allocates chunk</span></div>
+          <div class="layer reveal" style="--i:4"><b>GLM ttMLA</b><div class="layer-bar"></div><span class="tag">passes metadata</span></div>
+          <div class="layer reveal" style="--i:5"><b>Device kernels</b><div class="layer-bar"></div><span class="tag">resolve addresses</span></div>
+        </div>
+        <div class="grid two reveal" style="--i:6">
+          <div class="card"><h3>Enable</h3><p><code>TT_GLM52_PAGED_PREFILL=1</code></p></div>
+          <div class="card"><h3>Pool capacity</h3><p><code>TT_GLM52_KV_POOL_BUNDLES=&lt;N&gt;</code></p></div>
+        </div>
+        <p class="muted reveal" style="--i:7;margin-top:14px">Current gate: SP8×TP4 on Galaxy for production, SP4×TP1 on QB as the hardware-validation proxy; SP axis 0, TP axis 1, UDM enabled, one prefill pipeline rank, BF16 row-major primary cache.</p>
+      </div>
+    </section>
+
+    <section class="slide" data-title="Evidence">
+      <div class="slide-inner">
+        <div class="eyebrow reveal" style="--i:0">08 · Verification</div>
+        <h2 class="reveal" style="--i:1">Tested from allocation contracts through full sparse-attention geometry.</h2>
+        <ul class="checklist">
+          <li class="reveal" style="--i:2">Random allocation, release, rollback, exhaustion</li>
+          <li class="reveal" style="--i:3">Fragmented and non-identity page mappings</li>
+          <li class="reveal" style="--i:4">Paged primary and index cache writes</li>
+          <li class="reveal" style="--i:5">Logical IDs and global candidate merging</li>
+          <li class="reveal" style="--i:6">SP4 hardware proxy for paged SDPA owner, tail, and repeat cases</li>
+          <li class="reveal" style="--i:7">Cached program with different user-table rows</li>
+          <li class="reveal" style="--i:8">SP8×TP4 production contract plus SP4×TP1 UDM hardware dispatch</li>
+          <li class="reveal" style="--i:9">5,120-query × 2,048-key sparse-SDPA proxy: PCC 0.999971</li>
+          <li class="reveal" style="--i:10">One full paged GLM MLA layer passed end-to-end on the SP4×TP1 QB proxy</li>
+        </ul>
+        <div class="grid three reveal" style="--i:11">
+          <div class="card"><div class="big-number">.999971</div><p class="muted">full-geometry sparse-SDPA PCC</p></div>
+          <div class="card"><div class="big-number">≥ .999</div><p class="muted">cache-write PCC target</p></div>
+          <div class="card"><div class="big-number">1 layer</div><p class="muted">paged GLM QB integration pass</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-title="Boundary">
+      <div class="slide-inner">
+        <div class="eyebrow reveal" style="--i:0">09 · Delivered boundary</div>
+        <h2 class="reveal" style="--i:1">Prefill model mechanics are in place. System policy comes later.</h2>
+        <div class="grid two">
+          <div class="card reveal" style="--i:2;--glow:var(--green)">
+            <span class="tag">Done here</span>
+            <ul class="checklist" style="grid-template-columns:1fr">
+              <li>Capacity-sized pool and compact table</li>
+              <li>Direct paged writes for both caches</li>
+              <li>Page-aware indexer and TopK flow</li>
+              <li>Page-aware sparse SDPA with selected-row UDM reads</li>
+              <li>SP8×TP4 production and SP4×TP1 validation wiring</li>
+              <li>Focused host, kernel, and model tests</li>
+            </ul>
+          </div>
+          <div class="card reveal" style="--i:3;--glow:var(--amber)">
+            <span class="tag" style="--tag:var(--amber)">Deferred</span>
+            <ul class="checklist" style="grid-template-columns:1fr">
+              <li class="pending">Scheduler admission and eviction policy</li>
+              <li class="pending">Address-based migration integration</li>
+              <li class="pending">Decode consuming the same table</li>
+              <li class="pending">Command-queue trace replay</li>
+              <li class="pending">Production performance tuning</li>
+              <li class="pending">Broader topology / pipeline support</li>
+            </ul>
+          </div>
+        </div>
+        <div class="callout reveal" style="--i:4"><strong>Net result:</strong> the prefill model no longer needs a maximum-context KV allocation per user, while preserving GLM-5.2’s 5K compute shape, logical token semantics, and position-balanced SP ownership.</div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="controls">
+    <button class="nav-button" id="prev" type="button" aria-label="Previous section">← Previous</button>
+    <div class="dots" id="dots" aria-label="Section navigation"></div>
+    <button class="nav-button" id="next" type="button" aria-label="Next section">Next →</button>
+  </footer>
+  <div class="hint">← → keys · swipe · Home / End</div>
+
+  <script>
+    (() => {
+      const slides = [...document.querySelectorAll(".slide")];
+      const dots = document.getElementById("dots");
+      const counter = document.getElementById("counter");
+      const progress = document.getElementById("progress");
+      const prev = document.getElementById("prev");
+      const next = document.getElementById("next");
+      let index = 0;
+      let touchStart = null;
+
+      slides.forEach((slide, i) => {
+        const dot = document.createElement("button");
+        dot.type = "button";
+        dot.className = "dot";
+        dot.setAttribute("aria-label", `Go to ${i + 1}: ${slide.dataset.title}`);
+        dot.addEventListener("click", () => show(i));
+        dots.appendChild(dot);
+      });
+      const dotList = [...dots.children];
+
+      function show(target) {
+        const nextIndex = Math.max(0, Math.min(slides.length - 1, target));
+        slides.forEach((slide, i) => {
+          slide.classList.toggle("active", i === nextIndex);
+          slide.classList.toggle("before", i < nextIndex);
+          slide.setAttribute("aria-hidden", i === nextIndex ? "false" : "true");
+          if (i === nextIndex) slide.scrollTop = 0;
+        });
+        dotList.forEach((dot, i) => dot.classList.toggle("active", i === nextIndex));
+        index = nextIndex;
+        counter.textContent = `${String(index + 1).padStart(2, "0")} / ${String(slides.length).padStart(2, "0")}`;
+        progress.style.width = `${((index + 1) / slides.length) * 100}%`;
+        prev.disabled = index === 0;
+        next.disabled = index === slides.length - 1;
+        document.title = `${slides[index].dataset.title} · GLM-5.2 Paged Prefill`;
+      }
+
+      prev.addEventListener("click", () => show(index - 1));
+      next.addEventListener("click", () => show(index + 1));
+      document.addEventListener("keydown", event => {
+        if (["ArrowRight", "PageDown", " "].includes(event.key)) { event.preventDefault(); show(index + 1); }
+        if (["ArrowLeft", "PageUp"].includes(event.key)) { event.preventDefault(); show(index - 1); }
+        if (event.key === "Home") show(0);
+        if (event.key === "End") show(slides.length - 1);
+      });
+      document.addEventListener("touchstart", event => { touchStart = event.changedTouches[0].clientX; }, {passive:true});
+      document.addEventListener("touchend", event => {
+        if (touchStart === null) return;
+        const distance = event.changedTouches[0].clientX - touchStart;
+        if (Math.abs(distance) > 55) show(index + (distance < 0 ? 1 : -1));
+        touchStart = null;
+      }, {passive:true});
+      show(0);
+    })();
+  </script>
+</body>
+</html>

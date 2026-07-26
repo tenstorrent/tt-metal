@@ -28,7 +28,9 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     const auto s = TensorAccessor(src_args, src_addr);
     Noc noc;
-    const uint32_t src_tile_bytes = cb_in0.get_tile_size();
+    // The same reader serves TILE and ROW_MAJOR cache updates. In ROW_MAJOR
+    // mode a CB page is one aligned token stick, which is not a hardware tile.
+    const uint32_t src_tile_bytes = get_local_cb_interface(cb_id_in0).fifo_page_size;
 
 #ifdef BACKWARDS
     uint32_t end_id = start_id - num_tiles;

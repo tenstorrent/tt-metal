@@ -1,0 +1,703 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Simple SP=4 DRAM layout visualization for GLM-5.2 fixed and paged prefill caches.">
+  <title>GLM-5.2 Cache Layout on SP=4 DRAM</title>
+  <style>
+    :root {
+      --bg: #08111a;
+      --panel: #101e2a;
+      --panel2: #142634;
+      --text: #eef8fb;
+      --muted: #9cb0ba;
+      --line: rgba(186, 224, 234, .16);
+      --cyan: #54dce2;
+      --blue: #729cff;
+      --violet: #ab83ef;
+      --pink: #ed8acb;
+      --green: #62e5a1;
+      --amber: #ffc766;
+      --red: #ff8195;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 12% 7%, rgba(52,175,185,.14), transparent 27rem),
+        radial-gradient(circle at 90% 58%, rgba(107,90,220,.12), transparent 29rem),
+        var(--bg);
+      font: 15px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      opacity: .18;
+      background-image:
+        linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
+      background-size: 38px 38px;
+      mask-image: linear-gradient(to bottom, black, transparent 94%);
+    }
+    select, input, button { font: inherit; }
+    code {
+      padding: 2px 6px;
+      border: 1px solid rgba(84,220,226,.15);
+      border-radius: 6px;
+      color: #c3f9fb;
+      background: rgba(84,220,226,.07);
+      font: .9em ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .page { width: min(1320px, calc(100% - 34px)); margin: 0 auto; padding: 40px 0 70px; }
+    .eyebrow {
+      margin-bottom: 12px;
+      color: var(--cyan);
+      text-transform: uppercase;
+      letter-spacing: .16em;
+      font: 800 11px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { max-width: 930px; margin-bottom: 17px; font-size: clamp(39px, 6vw, 72px); line-height: .98; letter-spacing: -.052em; }
+    h2 { margin-bottom: 7px; font-size: clamp(27px, 3vw, 40px); line-height: 1.05; letter-spacing: -.035em; }
+    h3 { margin-bottom: 5px; font-size: 15px; }
+    .lead { max-width: 840px; color: #c8d8de; font-size: clamp(16px, 1.7vw, 20px); }
+    .muted { color: var(--muted); }
+    .accent { color: var(--cyan); }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 19px;
+      background: linear-gradient(145deg, rgba(19,36,49,.92), rgba(10,21,30,.88));
+      box-shadow: 0 17px 50px rgba(0,0,0,.17);
+    }
+
+    .controls {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      padding: 18px;
+      margin: 26px 0 20px;
+    }
+    .control { padding: 11px 13px; border: 1px solid rgba(186,224,234,.11); border-radius: 12px; background: rgba(255,255,255,.023); }
+    .control-head { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
+    .control label { color: #cbd9de; font-size: 12px; font-weight: 760; }
+    .value { color: var(--cyan); font: 780 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    select {
+      width: 100%;
+      padding: 8px 10px;
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      outline: none;
+      background: #10202c;
+    }
+    input[type="range"] { width: 100%; accent-color: var(--cyan); cursor: pointer; }
+
+    .equation {
+      display: grid;
+      grid-template-columns: minmax(160px, 1.15fr) 32px repeat(4, minmax(120px, 1fr));
+      gap: 9px;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    .eq-box {
+      min-height: 84px;
+      display: grid;
+      place-items: center;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--panel);
+      text-align: center;
+    }
+    .eq-box b { display: block; font-size: 21px; }
+    .eq-box small { color: var(--muted); }
+    .eq-box.sp { border-color: color-mix(in srgb, var(--sp) 40%, transparent); background: color-mix(in srgb, var(--sp) 11%, var(--panel)); }
+    .eq-box.sp b { color: var(--sp); }
+    .equals { color: var(--cyan); text-align: center; font-size: 25px; font-weight: 800; }
+
+    .key-facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 11px; margin-bottom: 28px; }
+    .fact { padding: 14px 16px; }
+    .fact b { color: var(--green); }
+
+    .tabs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 7px;
+      max-width: 620px;
+      margin: 0 auto 14px;
+      padding: 6px;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: rgba(8,17,26,.78);
+    }
+    .tab-button {
+      padding: 11px 17px;
+      color: var(--muted);
+      cursor: pointer;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      background: transparent;
+      font-weight: 790;
+      transition: color .18s, border-color .18s, background .18s, transform .18s;
+    }
+    .tab-button:hover { color: var(--text); transform: translateY(-1px); }
+    .tab-button.active[data-tab="before"] {
+      color: #ffc4cd;
+      border-color: rgba(255,129,149,.26);
+      background: rgba(255,129,149,.09);
+    }
+    .tab-button.active[data-tab="after"] {
+      color: #bef5d7;
+      border-color: rgba(98,229,161,.26);
+      background: rgba(98,229,161,.09);
+    }
+    .cache-tab { display: none; }
+    .cache-tab.active { display: block; animation: tab-in .28s ease both; }
+
+    .section { margin-top: 26px; padding: 23px; }
+    .section-head { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; margin-bottom: 18px; }
+    .badge {
+      flex: 0 0 auto;
+      padding: 6px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: #cfdee3;
+      background: rgba(255,255,255,.035);
+      font-size: 11px;
+      font-weight: 760;
+    }
+    .badge.old { border-color: rgba(255,129,149,.27); color: #ffc0ca; }
+    .badge.new { border-color: rgba(98,229,161,.27); color: #baf5d5; }
+
+    .dram-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 13px; }
+    .dram {
+      min-width: 0;
+      overflow: hidden;
+      border: 1px solid color-mix(in srgb, var(--sp) 42%, transparent);
+      border-radius: 15px;
+      background: rgba(7,17,25,.48);
+    }
+    .dram-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px 14px;
+      color: var(--sp);
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in srgb, var(--sp) 9%, transparent);
+      font-weight: 820;
+    }
+    .dram-head span:last-child { color: var(--muted); font: 700 10px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .dram-body { padding: 13px; }
+    .tensor {
+      margin-bottom: 12px;
+      padding: 11px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: rgba(255,255,255,.022);
+    }
+    .tensor-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; margin-bottom: 7px; }
+    .tensor-head b { font-size: 12px; }
+    .tensor-head span { color: var(--muted); font: 700 9px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; text-align: right; }
+    .user-cache { margin-top: 9px; }
+    .user-cache + .user-cache { padding-top: 9px; border-top: 1px solid rgba(186,224,234,.09); }
+    .user-line { display: flex; justify-content: space-between; gap: 7px; margin-bottom: 5px; }
+    .user-name { display: inline-flex; align-items: center; gap: 6px; color: var(--user); font: 800 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .user-name::before { content: ""; width: 7px; height: 7px; border-radius: 2px; background: var(--user); }
+    .user-size { color: var(--muted); font: 700 8px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .chunks {
+      display: grid;
+      grid-template-columns: repeat(10, 1fr);
+      gap: 3px;
+      min-height: 25px;
+      align-content: start;
+    }
+    .chunk {
+      position: relative;
+      aspect-ratio: 1.15;
+      min-height: 10px;
+      overflow: hidden;
+      border: 1px solid color-mix(in srgb, var(--user) 38%, transparent);
+      border-radius: 4px;
+      background: color-mix(in srgb, var(--user) 9%, transparent);
+      transition: transform .18s, box-shadow .18s, opacity .18s;
+    }
+    .chunk::before {
+      content: "";
+      position: absolute;
+      inset: auto 0 0;
+      height: var(--fill);
+      background: color-mix(in srgb, var(--user) 72%, #172a36);
+    }
+    .chunk.allocated { border-style: solid; }
+    .chunk.selected {
+      z-index: 2;
+      transform: translateY(-2px) scale(1.1);
+      box-shadow: 0 0 13px color-mix(in srgb, var(--user) 42%, transparent);
+    }
+    .chunk.merged { opacity: .68; }
+    .chunk-label {
+      position: absolute;
+      z-index: 1;
+      inset: 50% 0 auto;
+      color: rgba(255,255,255,.78);
+      transform: translateY(-50%);
+      text-align: center;
+      font: 800 7px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .dram-summary {
+      padding: 9px 10px;
+      border-radius: 9px;
+      color: #c8d6dc;
+      background: color-mix(in srgb, var(--sp) 7%, transparent);
+      font-size: 11px;
+    }
+    .dram-summary b { color: var(--sp); }
+
+    .old-note, .new-note {
+      margin-top: 15px;
+      padding: 13px 15px;
+      border-left: 3px solid var(--red);
+      border-radius: 0 11px 11px 0;
+      color: #cad9de;
+      background: rgba(255,129,149,.055);
+    }
+    .new-note { border-left-color: var(--green); background: rgba(98,229,161,.055); }
+
+    .map {
+      display: grid;
+      grid-template-columns: 180px minmax(0, 1fr);
+      gap: 15px;
+      align-items: start;
+      margin-top: 17px;
+      padding: 15px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: rgba(255,255,255,.02);
+    }
+    .map-title b { display: block; margin-bottom: 4px; color: var(--green); }
+    .map-list { display: flex; flex-wrap: wrap; gap: 7px; max-height: 120px; overflow: auto; scrollbar-width: thin; }
+    .map-entry {
+      padding: 7px 9px;
+      border: 1px solid rgba(98,229,161,.21);
+      border-radius: 8px;
+      color: #cde0e3;
+      background: rgba(98,229,161,.055);
+      font: 720 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .map-entry[data-user="0"] { border-color: rgba(84,220,226,.3); }
+    .map-entry[data-user="1"] { border-color: rgba(255,199,102,.3); }
+    .map-entry[data-user="2"] { border-color: rgba(98,229,161,.3); }
+    .zoom-select { margin-top: 10px; max-width: 180px; }
+
+    .zoom {
+      display: grid;
+      grid-template-columns: 250px minmax(0, 1fr);
+      gap: 17px;
+      margin-top: 22px;
+      padding: 20px;
+    }
+    .zoom-copy .big { margin: 4px 0; color: var(--cyan); font-size: 31px; font-weight: 880; letter-spacing: -.04em; }
+    .pages {
+      display: grid;
+      grid-template-columns: repeat(40, minmax(4px, 1fr));
+      gap: 3px;
+      align-content: center;
+    }
+    .page-cell { aspect-ratio: 1; min-height: 6px; border-radius: 2px; opacity: .15; background: var(--sp); }
+    .page-cell.live { opacity: .9; box-shadow: 0 0 6px color-mix(in srgb, var(--sp) 20%, transparent); }
+    .page-labels { grid-column: 2; display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; }
+    .page-label { color: var(--sp); text-align: center; font: 740 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    .sizes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 11px; margin-top: 22px; }
+    .size-card { padding: 15px; }
+    .size-card .n { margin: 5px 0 2px; font-size: 25px; font-weight: 870; letter-spacing: -.03em; }
+
+    @media (max-width: 1040px) {
+      .controls { grid-template-columns: repeat(2, 1fr); }
+      .dram-grid { grid-template-columns: repeat(2, 1fr); }
+      .equation { grid-template-columns: repeat(4, 1fr); }
+      .equation .global { grid-column: 1 / -1; }
+      .equals { display: none; }
+    }
+    @media (max-width: 720px) {
+      .controls, .key-facts, .sizes, .zoom { grid-template-columns: 1fr; }
+      .page-labels { grid-column: 1; }
+      .map { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 520px) {
+      .page { width: min(100% - 20px, 1320px); }
+      .dram-grid, .equation { grid-template-columns: 1fr; }
+      .section { padding: 16px; }
+      .section-head { display: block; }
+      .badge { display: inline-block; margin-bottom: 12px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { transition: none !important; }
+    }
+    @keyframes tab-in {
+      from { opacity: 0; transform: translateY(7px); }
+      to { opacity: 1; transform: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <div class="eyebrow">Three users · SP=4 · DRAM view</div>
+      <h1>What is stored on <span class="accent">each device’s DRAM?</span></h1>
+      <p class="lead">
+        The same cache data, before and after paging. Each DRAM box represents the memory attached to one SP device;
+        individual DRAM-bank interleaving is intentionally omitted.
+      </p>
+    </header>
+
+    <section class="controls panel">
+      <div class="control">
+        <div class="control-head"><label for="maxContext">Maximum context</label><span class="value" id="maxValue"></span></div>
+        <select id="maxContext">
+          <option value="20480">20K</option>
+          <option value="81920">80K</option>
+          <option value="163840" selected>160K</option>
+          <option value="327680">320K</option>
+          <option value="1048576">1M</option>
+        </select>
+      </div>
+      <div class="control">
+        <div class="control-head"><label for="actual0">User 1 actual</label><span class="value" id="actualValue0"></span></div>
+        <input id="actual0" type="range" min="32" max="163840" step="32" value="21824">
+      </div>
+      <div class="control">
+        <div class="control-head"><label for="actual1">User 2 actual</label><span class="value" id="actualValue1"></span></div>
+        <input id="actual1" type="range" min="32" max="163840" step="32" value="48960">
+      </div>
+      <div class="control">
+        <div class="control-head"><label for="actual2">User 3 actual</label><span class="value" id="actualValue2"></span></div>
+        <input id="actual2" type="range" min="32" max="163840" step="32" value="7968">
+      </div>
+    </section>
+
+    <section class="equation" aria-label="Bundle split across SP ranks">
+      <div class="eq-box global">
+        <div><b>5,120 tokens</b><small>one global allocation bundle</small></div>
+      </div>
+      <div class="equals">=</div>
+      <div class="eq-box sp" style="--sp:var(--cyan)"><div><b>1,280</b><small>SP 0 DRAM</small></div></div>
+      <div class="eq-box sp" style="--sp:var(--blue)"><div><b>1,280</b><small>SP 1 DRAM</small></div></div>
+      <div class="eq-box sp" style="--sp:var(--violet)"><div><b>1,280</b><small>SP 2 DRAM</small></div></div>
+      <div class="eq-box sp" style="--sp:var(--pink)"><div><b>1,280</b><small>SP 3 DRAM</small></div></div>
+    </section>
+
+    <section class="key-facts">
+      <div class="fact panel"><b>Allocation unit</b><br>5,120 tokens globally</div>
+      <div class="fact panel"><b>Local DRAM chunk</b><br>1,280 token rows per SP</div>
+      <div class="fact panel"><b>Internal subpage</b><br>32 tokens; 40 subpages per local chunk</div>
+    </section>
+
+    <nav class="tabs" role="tablist" aria-label="Cache layout">
+      <button class="tab-button active" id="beforeTab" data-tab="before" role="tab" aria-selected="true" aria-controls="beforePanel">
+        Before paging
+      </button>
+      <button class="tab-button" id="afterTab" data-tab="after" role="tab" aria-selected="false" aria-controls="afterPanel">
+        After paging
+      </button>
+    </nav>
+
+    <section class="section panel cache-tab active" id="beforePanel" role="tabpanel" aria-labelledby="beforeTab">
+      <div class="section-head">
+        <div>
+          <div class="eyebrow">Before paging</div>
+          <h2>Every DRAM reserves three maximum-sized user slots</h2>
+          <p class="muted">Each color is one user. Faded chunks are allocated to that user but empty.</p>
+        </div>
+        <span class="badge old">fixed user slot</span>
+      </div>
+      <div class="dram-grid" id="oldDrams"></div>
+      <div class="old-note" id="oldNote"></div>
+    </section>
+
+    <section class="section panel cache-tab" id="afterPanel" role="tabpanel" aria-labelledby="afterTab" hidden>
+      <div class="section-head">
+        <div>
+          <div class="eyebrow">After paging</div>
+          <h2>Every DRAM stores only allocated physical bundles</h2>
+          <p class="muted">A physical bundle is coordinated: allocating P3 creates one 1,280-token chunk on every SP DRAM.</p>
+        </div>
+        <span class="badge new">shared physical pool</span>
+      </div>
+      <div class="dram-grid" id="newDrams"></div>
+      <div class="map">
+        <div class="map-title">
+          <b>Page tables for all three users</b>
+          <span class="muted">Each user has one entry per 5,120-token logical bundle.</span>
+        </div>
+        <div class="map-list" id="pageTable"></div>
+      </div>
+      <div class="new-note" id="newNote"></div>
+    </section>
+
+    <section class="zoom panel">
+      <div class="zoom-copy">
+        <div class="eyebrow">Zoom into one bundle</div>
+        <h2>160 pages total</h2>
+        <div class="big">40 pages / SP</div>
+        <p class="muted">Each square is 32 token rows. The final bundle may be only partly valid, but allocation still occurs in one coordinated 5,120-token bundle.</p>
+        <select class="zoom-select" id="zoomUser" aria-label="User shown in bundle zoom">
+          <option value="0">Zoom User 1</option>
+          <option value="1">Zoom User 2</option>
+          <option value="2">Zoom User 3</option>
+        </select>
+      </div>
+      <div class="pages" id="pages"></div>
+      <div></div>
+      <div class="page-labels">
+        <div class="page-label" style="--sp:var(--cyan)">SP 0</div>
+        <div class="page-label" style="--sp:var(--blue)">SP 1</div>
+        <div class="page-label" style="--sp:var(--violet)">SP 2</div>
+        <div class="page-label" style="--sp:var(--pink)">SP 3</div>
+      </div>
+    </section>
+
+    <section class="sizes">
+      <div class="size-card panel">
+        <div class="eyebrow">Primary cache chunk</div>
+        <h3>KVPE · BF16 row-major</h3>
+        <div class="n">[1,280 × 576]</div>
+        <div class="muted">1.41 MiB/layer · 109.7 MiB for all 78 layers, per SP DRAM</div>
+      </div>
+      <div class="size-card panel">
+        <div class="eyebrow">Indexer cache chunk</div>
+        <h3>Index keys · BFP8 tiled</h3>
+        <div class="n">[1,280 × 128]</div>
+        <div class="muted">170 KiB/layer · 3.49 MiB for all 21 full layers, per SP DRAM</div>
+      </div>
+      <div class="size-card panel">
+        <div class="eyebrow">All GLM-5.2 cache layers</div>
+        <h3>One physical bundle</h3>
+        <div class="n" id="bundleBytes"></div>
+        <div class="muted">per SP DRAM: 78 KVPE layers + 21 index layers</div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const BUNDLE = 5120;
+    const LOCAL = 1280;
+    const PAGE = 32;
+    const SP_COLORS = ["#54dce2", "#729cff", "#ab83ef", "#ed8acb"];
+    const USER_COLORS = ["#54dce2", "#ffc766", "#62e5a1"];
+    const MAX_VISIBLE = 30;
+    const maxContext = document.getElementById("maxContext");
+    const actualInputs = [0, 1, 2].map(i => document.getElementById(`actual${i}`));
+    const zoomUser = document.getElementById("zoomUser");
+    const tabButtons = [...document.querySelectorAll(".tab-button")];
+    const tabPanels = {
+      before: document.getElementById("beforePanel"),
+      after: document.getElementById("afterPanel")
+    };
+    const fmt = value => value >= 1_000_000
+      ? `${(value / 1_000_000).toFixed(2)}M`
+      : value >= 1_000 ? `${(value / 1_000).toFixed(value % 1_000 ? 1 : 0)}K` : String(value);
+    const mib = bytes => `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+    const ceilDiv = (a, b) => Math.ceil(a / b);
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+    // BFP8 tiles contain 1,024 values plus their exponent metadata: 1,088 bytes.
+    const primaryBundleBytes = LOCAL * 576 * 2 * 78;
+    const indexTilesPerLayer = (LOCAL / 32) * (128 / 32);
+    const indexBundleBytes = indexTilesPerLayer * 1088 * 21;
+    const totalBundleBytes = primaryBundleBytes + indexBundleBytes;
+
+    function fillFor(globalBundle, sp, sequence) {
+      const begin = globalBundle * BUNDLE + sp * LOCAL;
+      return clamp((sequence - begin) / LOCAL, 0, 1);
+    }
+
+    function physicalId(user, logical, bundleCounts) {
+      const ordinal = bundleCounts.slice(0, user).reduce((sum, count) => sum + count, 0) + logical;
+      return ordinal * 7 + 3;
+    }
+
+    function makeUserCache(user, sp, mode, reservedBundles, bundleCounts, sequences) {
+      const total = mode === "old" ? reservedBundles : bundleCounts[user];
+      const visible = Math.min(total, MAX_VISIBLE);
+      const wrapper = document.createElement("div");
+      wrapper.className = "user-cache";
+      wrapper.style.setProperty("--user", USER_COLORS[user]);
+      wrapper.innerHTML = `
+        <div class="user-line">
+          <span class="user-name">User ${user + 1}</span>
+          <span class="user-size">${fmt(sequences[user])} actual · ${total} chunk${total === 1 ? "" : "s"}</span>
+        </div>
+        <div class="chunks"></div>`;
+      const container = wrapper.querySelector(".chunks");
+
+      for (let i = 0; i < visible; ++i) {
+        const logical = Math.floor(i * total / visible);
+        const fill = fillFor(logical, sp, sequences[user]);
+        const physical = physicalId(user, logical, bundleCounts);
+        const chunk = document.createElement("div");
+        chunk.className = `chunk ${mode === "new" ? "allocated" : ""}${total > MAX_VISIBLE ? " merged" : ""}`;
+        chunk.style.setProperty("--user", USER_COLORS[user]);
+        chunk.style.setProperty("--fill", `${fill * 100}%`);
+        chunk.dataset.key = `${user}-${logical}`;
+        chunk.title = mode === "old"
+          ? `User ${user + 1}, reserved L${logical}: ${Math.round(fill * LOCAL)} / 1,280 valid rows`
+          : `User ${user + 1}, L${logical} → P${physical}: ${Math.round(fill * LOCAL)} / 1,280 valid rows`;
+        if (visible <= 20) {
+          const label = document.createElement("span");
+          label.className = "chunk-label";
+          label.textContent = mode === "old" ? `L${logical}` : `P${physical}`;
+          chunk.appendChild(label);
+        }
+        chunk.addEventListener("mouseenter", () => highlight(user, logical, true));
+        chunk.addEventListener("mouseleave", () => highlight(user, logical, false));
+        container.appendChild(chunk);
+      }
+      return wrapper;
+    }
+
+    function makeDram(sp, mode, reservedBundles, bundleCounts, sequences) {
+      const dram = document.createElement("article");
+      dram.className = "dram";
+      dram.style.setProperty("--sp", SP_COLORS[sp]);
+      dram.innerHTML = `
+        <div class="dram-head"><span>SP ${sp} DRAM</span><span>owner slab ${sp}</span></div>
+        <div class="dram-body">
+          <div class="tensor">
+            <div class="tensor-head"><b>Primary KVPE cache</b><span>BF16 · width 576 · 78 layers</span></div>
+            <div class="user-stack"></div>
+          </div>
+          <div class="tensor">
+            <div class="tensor-head"><b>Indexer key cache</b><span>BFP8 · width 128 · 21 layers</span></div>
+            <div class="user-stack"></div>
+          </div>
+          <div class="dram-summary"></div>
+        </div>`;
+
+      dram.querySelectorAll(".user-stack").forEach(stack => {
+        for (let user = 0; user < 3; ++user) {
+          stack.appendChild(makeUserCache(user, sp, mode, reservedBundles, bundleCounts, sequences));
+        }
+      });
+
+      const totalChunks = mode === "old" ? reservedBundles * 3 : bundleCounts.reduce((a, b) => a + b, 0);
+      const summary = dram.querySelector(".dram-summary");
+      summary.innerHTML = mode === "old"
+        ? `<b>${fmt(Number(maxContext.value) * 3 / 4)} rows reserved</b><br>3 users × ${fmt(Number(maxContext.value) / 4)} rows`
+        : `<b>${fmt(totalChunks * LOCAL)} rows allocated</b><br>${totalChunks} shared-pool chunks × 1,280 rows`;
+      return dram;
+    }
+
+    function highlight(user, logical, on) {
+      const key = `${user}-${logical}`;
+      document.querySelectorAll(`.chunk[data-key="${key}"]`).forEach(node => node.classList.toggle("selected", on));
+      document.querySelectorAll(`.map-entry[data-key="${key}"]`).forEach(node => {
+        node.style.boxShadow = on ? `0 0 13px ${USER_COLORS[user]}55` : "";
+      });
+    }
+
+    function render() {
+      const max = Number(maxContext.value);
+      actualInputs.forEach(input => {
+        input.max = max;
+        input.value = Math.min(Number(input.value), max);
+      });
+      const sequences = actualInputs.map(input => Number(input.value));
+      const reservedBundles = ceilDiv(max, BUNDLE);
+      const bundleCounts = sequences.map(sequence => ceilDiv(sequence, BUNDLE));
+      const totalBundles = bundleCounts.reduce((a, b) => a + b, 0);
+
+      document.getElementById("maxValue").textContent = `${fmt(max)} / user`;
+      sequences.forEach((sequence, user) => {
+        document.getElementById(`actualValue${user}`).textContent =
+          `${fmt(sequence)} · ${bundleCounts[user]} bundle${bundleCounts[user] === 1 ? "" : "s"}`;
+      });
+
+      const oldRoot = document.getElementById("oldDrams");
+      const newRoot = document.getElementById("newDrams");
+      oldRoot.innerHTML = "";
+      newRoot.innerHTML = "";
+      for (let sp = 0; sp < 4; ++sp) {
+        oldRoot.appendChild(makeDram(sp, "old", reservedBundles, bundleCounts, sequences));
+        newRoot.appendChild(makeDram(sp, "new", reservedBundles, bundleCounts, sequences));
+      }
+
+      const oldPerSp = max * 3 / 4;
+      const newPerSp = totalBundles * LOCAL;
+      document.getElementById("oldNote").innerHTML =
+        `Each DRAM reserves <b>3 × ${fmt(max / 4)} = ${fmt(oldPerSp)} token rows</b>. ` +
+        `Unused rows in User 1’s slot cannot be used by User 2 or User 3.`;
+      document.getElementById("newNote").innerHTML =
+        `All three users share the pool. Each DRAM allocates <b>${totalBundles} × 1,280 = ${fmt(newPerSp)} rows</b> ` +
+        `for their current sequences, instead of ${fmt(oldPerSp)} fixed rows.`;
+
+      const table = document.getElementById("pageTable");
+      table.innerHTML = "";
+      for (let user = 0; user < 3; ++user) {
+        for (let logical = 0; logical < bundleCounts[user]; ++logical) {
+          const entry = document.createElement("div");
+          entry.className = "map-entry";
+          entry.dataset.user = String(user);
+          entry.dataset.key = `${user}-${logical}`;
+          entry.style.color = USER_COLORS[user];
+          entry.textContent = `U${user + 1}: L${logical} → P${physicalId(user, logical, bundleCounts)}`;
+          entry.addEventListener("mouseenter", () => highlight(user, logical, true));
+          entry.addEventListener("mouseleave", () => highlight(user, logical, false));
+          table.appendChild(entry);
+        }
+      }
+
+      const selectedUser = Number(zoomUser.value);
+      const finalBundle = bundleCounts[selectedUser] - 1;
+      const pages = document.getElementById("pages");
+      pages.innerHTML = "";
+      for (let sp = 0; sp < 4; ++sp) {
+        const validPages = ceilDiv(Math.round(fillFor(finalBundle, sp, sequences[selectedUser]) * LOCAL), PAGE);
+        for (let page = 0; page < 40; ++page) {
+          const cell = document.createElement("div");
+          cell.className = `page-cell${page < validPages ? " live" : ""}`;
+          cell.style.setProperty("--sp", SP_COLORS[sp]);
+          cell.title = `User ${selectedUser + 1}, SP ${sp}, page ${page}: ${page < validPages ? "valid" : "allocated tail"}`;
+          pages.appendChild(cell);
+        }
+      }
+
+      document.getElementById("bundleBytes").textContent = mib(totalBundleBytes);
+    }
+
+    function showTab(name) {
+      tabButtons.forEach(button => {
+        const active = button.dataset.tab === name;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-selected", String(active));
+      });
+      Object.entries(tabPanels).forEach(([panelName, panel]) => {
+        const active = panelName === name;
+        panel.classList.toggle("active", active);
+        panel.hidden = !active;
+      });
+    }
+
+    tabButtons.forEach(button => button.addEventListener("click", () => showTab(button.dataset.tab)));
+    document.querySelector(".tabs").addEventListener("keydown", event => {
+      if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+      event.preventDefault();
+      const next = event.key === "ArrowRight" ? "after" : "before";
+      showTab(next);
+      document.querySelector(`[data-tab="${next}"]`).focus();
+    });
+    maxContext.addEventListener("change", render);
+    actualInputs.forEach(input => input.addEventListener("input", render));
+    zoomUser.addEventListener("change", render);
+    render();
+  </script>
+</body>
+</html>

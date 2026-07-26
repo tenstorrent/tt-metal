@@ -47,16 +47,47 @@ void bind_topk_large_indices(nb::module_& mod) {
             * must be in [k, last dimension]; defaults to the full last dimension;
             * applied at runtime (no recompile), so a loop growing valid_length reuses one program.
 
+        index_offset:
+            * added to every finite output index;
+            * runtime-only, allowing independently scanned paging stripes to emit
+              global logical positions without recompilation.
         Args:
             input_tensor: device tensor with ROW_MAJOR layout and BFLOAT16 dtype.
             k: required number of indices to return.
             valid_length: optional number of leading columns to search (default: full width).
+            index_offset: logical index represented by input column zero (default: 0).
         )doc",
         &ttnn::experimental::topk_large_indices,
         nb::arg("input_tensor"),
         nb::kw_only(),
         nb::arg("k"),
-        nb::arg("valid_length") = std::nullopt);
+        nb::arg("valid_length") = std::nullopt,
+        nb::arg("index_offset") = 0);
+
+    ttnn::bind_function<"topk_large_values_indices", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Value-preserving form of ``topk_large_indices``.
+
+        Returns ``(values, indices)`` as ROW_MAJOR BFLOAT16 and UINT32 tensors.
+        It uses the same Blackhole TopK-XL streaming implementation, including
+        exact 0xFFFFFFFF sentinel indices for retained ``-inf`` lanes.
+
+        ``input_indices`` optionally supplies one UINT32 logical ID per input
+        value. For the exact bounded-state merge it must have the same shape as
+        the values (exactly ``2*k`` columns); output indices then carry those IDs
+        instead of candidate ordinals.
+
+        The generated-ID form accepts the same runtime-only ``index_offset`` as
+        ``topk_large_indices``.
+        )doc",
+        &ttnn::experimental::topk_large_values_indices,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("k"),
+        nb::arg("valid_length") = std::nullopt,
+        nb::arg("index_offset") = 0,
+        nb::arg("input_indices") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::detail

@@ -46,6 +46,7 @@ constexpr uint32_t cb_acc_strip = get_compile_time_arg_val(num_dim_args + iscore
 constexpr uint32_t cb_out_strip = get_compile_time_arg_val(num_dim_args + iscore::cb_out_strip_arg);
 constexpr uint32_t cb_scaler = get_compile_time_arg_val(num_dim_args + iscore::cb_scaler_arg);
 constexpr uint32_t cb_pool_scratch = get_compile_time_arg_val(num_dim_args + iscore::cb_pool_scratch_arg);
+constexpr uint32_t cb_page_table = get_compile_time_arg_val(num_dim_args + iscore::cb_page_table_arg);
 
 // Dim args + CB indices are common to all kernels; per-kernel compile-time args start here.
 constexpr uint32_t num_common_ct_args = num_dim_args + iscore::num_cb_args;

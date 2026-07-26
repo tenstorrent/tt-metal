@@ -79,18 +79,37 @@ struct operation_attributes_t {
     // reuses ONE program. grid/work-split/output width stay keyed on the hashed T. nullopt == T.
     std::optional<uint32_t> kv_len{std::nullopt};
     bool has_runtime_kv_len() const { return kv_len.has_value(); }
+    // Paged-only logical window start. The reader adds this offset when resolving K,
+    // while the output remains a compact [kv_start, kv_len) score stripe. This keeps
+    // the transitional streaming-topk path bounded without reconstructing a prefix.
+    // Hash-pinned because it changes output width and the compiled work split.
+    uint32_t paged_kv_start{0};
     // Resolved block-cyclic (per-SP-shard) K layout. When set, the reader remaps each logical k-tile to its
     // physical (permuted) tile, presenting K in natural token order. HASHED (sp/chunk_local shape the reader
     // binary via compile-time arguments). nullopt == contiguous K
     // (which is also what sp == 1 resolves to, since that is the identity permutation).
     std::optional<BlockCyclicLayout> block_cyclic{std::nullopt};
     bool has_block_cyclic() const { return block_cyclic.has_value(); }
+    // Experimental GLM prefill paged-cache source. The page table has one INT32 entry per logical
+    // 5120-token bundle (not one entry per 32-token tile).  The entry names a physical bundle in k;
+    // layer_idx selects the layer within that bundle.  logical_kv_capacity is independent of k.shape[2],
+    // which is the per-SP-rank physical bundle height.
+    //
+    // This is deliberately hash-pinned geometry while slot/kv_len remain runtime values.
+    // The legacy dense source is unchanged when page_table is absent.
+    uint32_t paged_layer_idx{0};
+    uint32_t paged_num_layers{0};
+    uint32_t paged_bundle_tokens{5120};
+    uint32_t paged_sp_size{1};
+    uint32_t paged_sp_axis{0};
+    bool has_paged_cache{false};
 };
 
 struct tensor_args_t {
     const Tensor& q;
     const Tensor& k;
     const Tensor& weights;
+    std::optional<Tensor> page_table{std::nullopt};
 };
 
 using tensor_return_value_t = Tensor;

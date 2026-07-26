@@ -488,7 +488,12 @@ def reset_fabric(fabric_config):
 # Do nothing if not set
 # Must be called before creating the mesh device
 def set_fabric(
-    fabric_config, reliability_mode=None, fabric_tensix_config=None, fabric_manager=None, fabric_router_config=None
+    fabric_config,
+    reliability_mode=None,
+    fabric_tensix_config=None,
+    fabric_manager=None,
+    fabric_router_config=None,
+    fabric_udm_mode=None,
 ):
     import ttnn
 
@@ -506,15 +511,23 @@ def set_fabric(
 
         if fabric_manager is None:
             fabric_manager = ttnn.FabricManagerMode.DEFAULT
+        if fabric_udm_mode is None:
+            fabric_udm_mode = ttnn.FabricUDMMode.DISABLED
+        # The UDM Tensix relay currently assigns one Ethernet channel per
+        # reserved worker core.  Limit UDM tests to one routing plane so
+        # multi-link QuietBox devices do not over-subscribe that mapping.
+        # Plane 0 is reserved by the dispatch tunnel on QuietBox; configure two
+        # planes so UDM retains one non-dispatch data plane.
+        num_routing_planes = 2 if fabric_udm_mode == ttnn.FabricUDMMode.ENABLED else None
 
         # Build kwargs for set_fabric_config, only include fabric_router_config if provided
         if fabric_router_config is not None:
             ttnn.set_fabric_config(
                 fabric_config,
                 reliability_mode,
-                None,
+                num_routing_planes,
                 fabric_tensix_config,
-                ttnn.FabricUDMMode.DISABLED,
+                fabric_udm_mode,
                 fabric_manager,
                 fabric_router_config,
             )
@@ -522,9 +535,9 @@ def set_fabric(
             ttnn.set_fabric_config(
                 fabric_config,
                 reliability_mode,
-                None,
+                num_routing_planes,
                 fabric_tensix_config,
-                ttnn.FabricUDMMode.DISABLED,
+                fabric_udm_mode,
                 fabric_manager,
             )
 
@@ -618,7 +631,15 @@ def mesh_device(request, silicon_arch_name, device_params):
     reliability_mode = updated_device_params.pop("reliability_mode", None)
     fabric_manager = updated_device_params.pop("fabric_manager", None)
     fabric_router_config = updated_device_params.pop("fabric_router_config", None)
-    set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
+    fabric_udm_mode = updated_device_params.pop("fabric_udm_mode", None)
+    set_fabric(
+        fabric_config,
+        reliability_mode,
+        fabric_tensix_config,
+        fabric_manager,
+        fabric_router_config,
+        fabric_udm_mode,
+    )
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
 
     from tests.tests_common.cache_entries_counter import CacheEntriesCounter

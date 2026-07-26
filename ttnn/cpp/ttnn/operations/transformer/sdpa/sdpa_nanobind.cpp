@@ -380,7 +380,11 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("cache_batch_idx") = nb::none(),
         nb::arg("block_cyclic_sp_axis") = nb::none(),
-        nb::arg("block_cyclic_chunk_local") = nb::none());
+        nb::arg("block_cyclic_chunk_local") = nb::none(),
+        nb::arg("page_table") = nb::none(),
+        nb::arg("paged_layer_idx") = nb::none(),
+        // Model shapes are validated by GLM; there is no transport-mode switch.
+        nb::arg("paged_sp_axis") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,

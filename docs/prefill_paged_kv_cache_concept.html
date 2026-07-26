@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Paged KV Cache for Prefill: Feasibility and Architecture</title>
+  <style>
+    :root {
+      --ink: #17212b;
+      --muted: #5d6976;
+      --line: #d9e0e7;
+      --paper: #ffffff;
+      --wash: #f4f7f9;
+      --blue: #175cd3;
+      --blue-bg: #edf4ff;
+      --green: #16803c;
+      --green-bg: #ecfdf3;
+      --amber: #b56b00;
+      --amber-bg: #fff7e0;
+      --red: #c73535;
+      --red-bg: #fff0f0;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--wash);
+      font: 15px/1.55 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main {
+      max-width: 1120px;
+      margin: 32px auto;
+      padding: 38px 44px 52px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      box-shadow: 0 8px 30px rgba(23, 33, 43, 0.06);
+    }
+    h1, h2, h3 { line-height: 1.22; }
+    h1 { margin: 0 0 8px; font-size: 30px; }
+    h2 {
+      margin: 38px 0 14px;
+      padding-bottom: 7px;
+      border-bottom: 2px solid var(--line);
+      font-size: 21px;
+    }
+    h3 { margin: 24px 0 8px; font-size: 17px; }
+    p { margin: 8px 0 12px; }
+    ul, ol { margin: 8px 0 14px; padding-left: 24px; }
+    li { margin: 5px 0; }
+    code {
+      padding: 1px 4px;
+      border-radius: 4px;
+      background: #eef1f5;
+      font: 0.9em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      overflow-wrap: anywhere;
+    }
+    .subtitle { color: var(--muted); font-size: 16px; }
+    .scope, .callout {
+      margin: 16px 0;
+      padding: 12px 15px;
+      border-left: 4px solid;
+      border-radius: 4px;
+    }
+    .scope { border-color: var(--blue); background: var(--blue-bg); }
+    .yes { border-color: var(--green); background: var(--green-bg); }
+    .warning { border-color: var(--amber); background: var(--amber-bg); }
+    .critical { border-color: var(--red); background: var(--red-bg); }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 9px;
+      margin: 18px 0;
+    }
+    .flow div {
+      min-height: 120px;
+      padding: 11px;
+      border: 1px solid var(--line);
+      border-top: 4px solid var(--blue);
+      border-radius: 7px;
+      background: var(--wash);
+    }
+    .flow strong { display: block; margin-bottom: 5px; }
+    .architecture {
+      display: grid;
+      grid-template-columns: 1fr 1.2fr 1fr;
+      gap: 12px;
+      margin: 16px 0;
+    }
+    .architecture section {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--wash);
+    }
+    table {
+      width: 100%;
+      margin: 12px 0 20px;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    th, td {
+      padding: 9px 10px;
+      border: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: #eef1f5; }
+    .small { color: var(--muted); font-size: 13px; }
+    .verdict { color: var(--green); }
+    .nowrap { white-space: nowrap; }
+    @media (max-width: 900px) {
+      main { margin: 0; padding: 24px 18px 38px; border: 0; border-radius: 0; }
+      .flow, .architecture { grid-template-columns: 1fr; }
+      table { display: block; overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Paged KV Cache for Prefill</h1>
+    <div class="subtitle">Feasibility, recommended architecture, and impact on GLM-5.2 storage, kernels, models, scheduling, and migration</div>
+  </header>
+
+  <div class="scope">
+    <strong>Scope.</strong> This is a high-level design investigation for the prefill side on
+    current <code>main</code>. It does not specify a final API or implementation. Decode may
+    remain dense in the first version.
+  </div>
+
+  <h2>1. Verdict</h2>
+
+  <div class="callout yes">
+    <strong class="verdict">Feasible.</strong> Allocate one fixed-capacity shared DRAM pool,
+    then map each request's logical token blocks to physical blocks at runtime. TTNN already
+    has working paged cache writers and paged SDPA readers that prove this indirection model.
+    GLM-5.2 needs new integration because its custom MLA, sparse attention, indexer, and
+    migration paths currently assume one dense, maximum-sized slot.
+  </div>
+
+  <p>
+    The safest useful first milestone is <strong>paged prefill storage + page-aware writes +
+    gather of the active request into the existing batch-1 attention scratch</strong>. This
+    gains multi-user capacity without immediately rewriting the fused ring or sparse attention
+    computation. Page lookup can later be fused into those readers for performance.
+  </p>
+
+  <h2>2. Why the current allocation does not scale</h2>
+
+  <p>
+    Today, the engine allocates the complete cache once at startup. The primary cache has the
+    physical shape <code>[users × layers, 1, max_seq_len / SP, width]</code>. Slot recycling
+    overwrites a fixed region; it does not allocate or free memory.
+  </p>
+
+  <p>
+    GLM-5.2 makes this especially costly: it has 78 layers and a 1,048,576-token maximum
+    context. It allocates a BF16 row-major 576-wide primary KVPE cache for every layer and a
+    separate BFP8 128-wide index-key cache for its 21 full indexer layers.
+  </p>
+
+  <div class="callout warning">
+    <strong>Scale illustration.</strong> At the full 1M-token limit, one user's logical cache is
+    approximately 87.75 GiB primary + 2.79 GiB index = <strong>90.54 GiB</strong> across one SP
+    group, before unrelated model memory. SP divides that footprint across its chips, while TP
+    replicas multiply the fleet allocation. The exact physical total depends on topology,
+    padding, and cache format.
+  </div>
+
+  <p>
+    The root problem is therefore not merely unused bytes inside a request. It is that
+    <code>number_of_users × maximum_context</code> is committed before the actual prompt
+    lengths are known.
+  </p>
+
+  <h2>3. Recommended architecture</h2>
+
+  <div class="architecture" aria-label="Paged KV architecture">
+    <section>
+      <strong>Logical identity</strong>
+      <p><code>slot + token position</code> remains stable and is what the scheduler and model use.</p>
+    </section>
+    <section>
+      <strong>Runtime translation</strong>
+      <p><code>(allocation epoch, cache kind, logical block) → physical block ID</code></p>
+      <p>A small device-resident INT32 table supplies the translation to data-movement kernels.</p>
+    </section>
+    <section>
+      <strong>Physical storage</strong>
+      <p>Fixed shared pools sized for the service's desired concurrent token capacity, not for every slot's maximum context.</p>
+    </section>
+  </div>
+
+  <h3>Pool organization</h3>
+
+  <ul>
+    <li>Use separate physical pools where format or layer ownership differs: at minimum, a primary KVPE pool and an index-key pool.</li>
+    <li>Preserve the current SP block-cyclic placement and 32-token DRAM-bank unit inside each allocation.</li>
+    <li>Keep pool geometry fixed after startup. Only page-table contents and free-list ownership change, so kernel programs can remain cached.</li>
+    <li>Use fixed-size blocks to avoid external fragmentation. Only the final block of a request wastes capacity.</li>
+  </ul>
+
+  <h3>Recommended first allocation granularity</h3>
+
+  <p>
+    Distinguish the <strong>physical storage/transfer page</strong> from the
+    <strong>allocator block</strong>. The existing physical and migration unit is 32 tokens.
+    Allocating individual 32-token pages for a 1M context would require 32,768 entries per
+    row (128 KiB of INT32 metadata), which is awkward to stage in L1 and creates excessive
+    host bookkeeping.
+  </p>
+
+  <p>
+    A practical first version can allocate one logical prefill chunk at a time: 5,120 global
+    tokens, containing the existing 32-token physical subpages. Every layer advances through
+    the same token interval, so one request-level allocation can reserve a coordinated
+    <em>layer bundle</em> for the primary and applicable index layers. At 1M context this is
+    about 205 logical entries per request, while migration can still address the contained
+    32-token chunks. The final block size should remain configurable and be selected from
+    memory-waste, table-size, and kernel-bandwidth measurements.
+  </p>
+
+  <div class="callout warning">
+    <strong>Do not encode raw NoC addresses in the attention page table.</strong> Prefer stable
+    physical block IDs and let the existing TensorAccessor map pool page IDs to DRAM banks.
+    Raw address descriptors are appropriate only at the migration boundary, where the current
+    wire protocol already transfers physical source/destination chunks.
+  </div>
+
+  <h2>4. Request lifecycle</h2>
+
+  <div class="flow" aria-label="Paged request lifecycle">
+    <div><strong>1. Admit</strong>Compute missing logical blocks for the complete turn.</div>
+    <div><strong>2. Reserve</strong>Atomically reserve primary and index blocks before any kernel runs.</div>
+    <div><strong>3. Publish</strong>Write the mapping and its generation to the device page table.</div>
+    <div><strong>4. Execute</strong>Writers and readers resolve logical positions through that mapping.</div>
+    <div><strong>5. Pin</strong>Attention and migration hold immutable mapping snapshots while in flight.</div>
+    <div><strong>6. Release</strong>Return pages only after eviction and all device/migration completions.</div>
+  </div>
+
+  <p>
+    Reserving the whole submitted turn before execution is recommended initially. An
+    out-of-memory result is then a retryable admission failure; it cannot occur halfway
+    through the model after some layers have already modified the cache.
+  </p>
+
+  <p>
+    Slot ID alone is no longer sufficient because a physical block can be reused. Each
+    allocation needs <code>{slot_id, slot_epoch}</code>, plus a
+    <code>mapping_generation</code>. In-flight chunks and migration completions retain these
+    values, preventing a late completion from touching a newly reused slot.
+  </p>
+
+  <table>
+    <thead>
+      <tr><th>Event</th><th>KV behavior</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>SUBMIT</code></td><td>Reserve missing blocks, publish a new immutable generation, then enqueue prefill.</td></tr>
+      <tr><td>Turn completes</td><td>Commit the new logical end; keep pages resident for continuation.</td></tr>
+      <tr><td><code>STOP</code></td><td>Stop work but preserve the resident KV mapping, matching current semantics.</td></tr>
+      <tr><td><code>EVICT</code></td><td>Drain writes and migrations, unpublish the mapping, release all pages, and advance the slot epoch.</td></tr>
+      <tr><td>Failure before execution</td><td>Roll back the reservation and leave the previously committed mapping unchanged.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>5. Changes by subsystem</h2>
+
+  <table>
+    <thead>
+      <tr><th>Area</th><th>Current assumption</th><th>Required change</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="nowrap">Engine / scheduler</td>
+        <td>Allocates all cache storage at startup; request metadata contains only slot and logical range.</td>
+        <td>Own a page manager, perform admission/reservation, publish generations, and release on the existing lifecycle barriers.</td>
+      </tr>
+      <tr>
+        <td>Model cache handle</td>
+        <td><code>MlaKvCaches</code> contains two dense tensors.</td>
+        <td>Carry physical pool tensors, device page tables, and allocator metadata while remaining opaque to the common runner.</td>
+      </tr>
+      <tr>
+        <td>KV writer</td>
+        <td><code>update_padded_kv_cache</code> calculates <code>slot × layers + layer</code> and a dense sequence offset.</td>
+        <td>After the existing global-to-SP position mapping, look up a physical block and write at its in-block offset.</td>
+      </tr>
+      <tr>
+        <td>Dense MLA read</td>
+        <td><code>ring_mla</code> gathers a contiguous prefix from one dense slot.</td>
+        <td>MVP: materialize allocated blocks into its shared batch-1 scratch. Later: resolve blocks directly inside the fused ring gather.</td>
+      </tr>
+      <tr>
+        <td>Sparse MLA read</td>
+        <td><code>_gather_kvpe_prefix</code> slices a contiguous slot before <code>sparse_sdpa</code>.</td>
+        <td>Make this gather page-aware; keep sparse SDPA unchanged initially.</td>
+      </tr>
+      <tr>
+        <td>Indexer</td>
+        <td>Writes and gathers the compact 21-layer index cache using dense slot arithmetic.</td>
+        <td>Use the coordinated index pool mapping for both scatter and active-prefix gather.</td>
+      </tr>
+      <tr>
+        <td>Utilities / tests</td>
+        <td>Zeroing, PCC, readback, and address-table generation expect a dense tensor.</td>
+        <td>Operate only on allocated logical blocks and validate unallocated entries explicitly.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Why program caching remains possible</h3>
+
+  <p>
+    Existing TTNN paged cache operations bind the pool and page-table buffers through runtime
+    arguments. Table values may change without recompilation; stable pool shape, format, block
+    size, and table geometry remain structural program inputs. DeepSeek's existing writer
+    already patches slot and logical position as runtime arguments. A paged writer can follow
+    the same pattern.
+  </p>
+
+  <h2>6. Migration impact</h2>
+
+  <p>
+    The current migration table is a startup-time dense grid over every
+    <code>slot × layer × max-sequence chunk</code>. Migration commands contain logical slot,
+    layer, and token ranges but no cache config, allocation epoch, mapping generation, or page
+    list. The worker installs the table once and derives permanent queues from it. That
+    contract cannot safely describe recycled physical pages.
+  </p>
+
+  <p>
+    Migration should consume an <strong>immutable mapping snapshot</strong> captured for the
+    exact logical range. The snapshot identifies:
+  </p>
+
+  <ul>
+    <li>allocation ID (<code>slot + epoch</code>), mapping generation, and cache <code>config_id</code>;</li>
+    <li>logical layer/block range;</li>
+    <li>resolved source device, NoC address, and byte count for each allocated physical chunk;</li>
+    <li>compatible resolved destination chunks.</li>
+  </ul>
+
+  <p>
+    Pages in the snapshot remain pinned until <code>MIGRATION_COMPLETE</code>. The scheduler's
+    current <code>in_flight_count</code>, writer-pending count, and migration-completion gates
+    are good lifecycle foundations; the pin must apply to the exact captured pages, not merely
+    to a logical slot.
+  </p>
+
+  <div class="callout yes">
+    <strong>Useful compatibility path.</strong> Prefill can become paged first while decode
+    remains dense. Migration resolves the paged source snapshot and the existing dense
+    destination addresses, validates format and chunk compatibility, and uses the current
+    physical destination-address wire format.
+  </div>
+
+  <h2>7. Suggested implementation sequence</h2>
+
+  <ol>
+    <li><strong>Lifecycle foundation:</strong> introduce a <code>KvPageManager</code> abstraction with allocation IDs, generations, snapshots, and pin counts, initially backed by the existing dense cache.</li>
+    <li><strong>Paged storage and write:</strong> allocate fixed primary/index pools, publish device tables, and add a page-aware DeepSeek writer.</li>
+    <li><strong>Functional attention path:</strong> gather only the active slot's allocated prefix into the current batch-1 scratch; retain existing dense/sparse attention kernels.</li>
+    <li><strong>Paged-source migration:</strong> replace the startup dense source table with immutable resolved snapshots; keep dense decode destinations.</li>
+    <li><strong>Performance:</strong> fuse page lookup into ring gather and optimize sparse/index gathering after profiling.</li>
+    <li><strong>Later robustness:</strong> dynamic paged destinations, prefix-copy allocation, recoverable migration failure, cancellation, and crash reconstruction.</li>
+  </ol>
+
+  <h2>8. Main risks and decisions to validate</h2>
+
+  <table>
+    <thead>
+      <tr><th>Decision / risk</th><th>What must be measured or proven</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Block size</td><td>Balance tail waste and admission flexibility against page-table size, L1 staging, and address-lookup overhead.</td></tr>
+      <tr><td>Layer bundle vs per-layer allocation</td><td>Bundles simplify atomic admission and compact tables; independent blocks improve flexibility but enlarge metadata and rollback state.</td></tr>
+      <tr><td>Gather MVP cost</td><td>Measure the extra DRAM pass versus the capacity gain; use the already shared batch-1 scratch rather than per-user scratch.</td></tr>
+      <tr><td>SP/TP/PP identity</td><td>Make local/global layer identity and per-SP mappings explicit; verify TP replicas receive consistent ownership updates.</td></tr>
+      <tr><td>Atomic two-cache reservation</td><td>GLM requires primary blocks for all owned layers and index blocks only for full-indexer layers; partial reservation must roll back.</td></tr>
+      <tr><td>Mapping lifetime</td><td>No page may be recycled while a device write, attention read, prefix copy, or migration snapshot can still reference it.</td></tr>
+      <tr><td>Program stability</td><td>Pool/table addresses and values are runtime-bound; block geometry and formats remain stable program-cache inputs.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>9. Code evidence</h2>
+
+  <ul class="small">
+    <li>Startup cache ownership: <code>models/demos/common/prefill/runners/prefill_runner.py</code>, <code>models/demos/common/prefill/adapter.py</code>.</li>
+    <li>GLM-5.2 primary/index allocations: <code>models/demos/deepseek_v3_d_p/tt/runners/adapters/glm_5_2.py</code>.</li>
+    <li>Current ND-sharded layout: <code>models/demos/deepseek_v3_d_p/utils/kv_cache_utils.py</code>.</li>
+    <li>Dense and sparse read paths: <code>models/demos/deepseek_v3_d_p/tt/mla/mla.py</code> and <code>indexer.py</code>.</li>
+    <li>DeepSeek dense-address writer: <code>ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/</code>.</li>
+    <li>Existing paged precedent: <code>ttnn/cpp/ttnn/operations/experimental/paged_cache/</code> and paged SDPA under <code>ttnn/cpp/ttnn/operations/transformer/sdpa/</code>.</li>
+    <li>Current migration table builder: <code>models/demos/deepseek_v3_d_p/tt/runners/kv_chunk_table.py</code>.</li>
+    <li>Metal address/layout basis: <code>tech_reports/tensor_accessor/tensor_accessor.md</code> and <code>tech_reports/tensor_layouts/tensor_layouts.md</code>.</li>
+    <li>Current migration contract companion report: <code>docs/kv_cache_migration_contract.html</code>.</li>
+  </ul>
+
+  <p class="small">
+    Conclusion: paging is technically compatible with the TT-Metal memory model. The critical
+    engineering boundary is consistent logical-to-physical translation across every producer,
+    consumer, and migration lifetime—not the DRAM allocation itself.
+  </p>
+</main>
+</body>
+</html>

@@ -603,7 +603,17 @@ FabricTensixDatamoverRelayConfig::FabricTensixDatamoverRelayConfig(
     }
 
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const size_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    // UDM fills this pool directly from remote DRAM.  NoC DRAM reads require
+    // the source and destination to have matching DRAM-alignment offsets.
+    // Tensor buffers are DRAM aligned, so keep every pool slot aligned too.
+    current_address = tt::align(current_address, dram_alignment);
     udm_memory_pool_slot_size_ = fabric_context.get_fabric_max_payload_size_bytes();
+    TT_FATAL(
+        current_address % dram_alignment == 0,
+        "UDM memory pool base address {} must be DRAM aligned to {} bytes",
+        current_address,
+        dram_alignment);
     const size_t udm_memory_pool_size = udm_memory_pool_slot_size_ * udm_memory_pool_num_slots_;
     udm_memory_pool_region_ = MemoryRegion(current_address, udm_memory_pool_size, 1);
     current_address = udm_memory_pool_region_.get_end_address();

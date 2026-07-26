@@ -105,6 +105,35 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("block_cyclic_sp_axis") = std::nullopt,
         nb::arg("block_cyclic_chunk_local") = std::nullopt);
 
+    ttnn::bind_function<"indexer_score_dsa_paged", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Distributed page-aware GLM-5.2 prefill index scorer.
+
+        Reads the compact INT32 ``[slot,max_bundles]`` table once per worker. For each natural logical
+        K tile the reader derives its position-dependent SP owner, physical bundle/layer/local-tile
+        address, and issues a fabric UDM read directly into the score CB. No dense K prefix is allocated
+        or copied. The existing K-column multicast then shares each arriving band across query workers.
+        SP=4 uses direct UDM reads to the position owner; there is no ring-order assumption.
+        )doc",
+        &ttnn::experimental::indexer_score_dsa_paged,
+        nb::arg("q"),
+        nb::arg("k_pool"),
+        nb::arg("page_table"),
+        nb::arg("weights"),
+        nb::kw_only(),
+        nb::arg("layer_idx"),
+        nb::arg("num_layers"),
+        nb::arg("kv_len"),
+        nb::arg("chunk_start_idx"),
+        nb::arg("paged_sp_axis"),
+        nb::arg("kv_start") = 0,
+        nb::arg("seq_shard_axes") = std::nullopt,
+        nb::arg("bundle_tokens") = 5120,
+        nb::arg("program_config") = IndexerScoreProgramConfig{},
+        nb::arg("compute_kernel_config") = std::nullopt,
+        nb::arg("cache_slot") = 0);
+
     ttnn::bind_function<"indexer_score_msa", "ttnn.experimental.">(
         mod,
         R"doc(

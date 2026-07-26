@@ -104,6 +104,7 @@ class TtPrefillRuntime:
 
         self.model_built = False
         self.compiled = False
+        self._paged_prefill = False
 
         self._build_model(state_dict)
 
@@ -209,12 +210,20 @@ class TtPrefillRuntime:
         `MlaKvCaches` it owns; the warm-up writes into it (slot 0) and is harmless. The runtime holds NO
         cache state — the same `kv_caches` is passed back into every prefill_chunk."""
         assert self.model_built
+        from models.demos.deepseek_v3_d_p.tt.runners.glm52_paged_kv_cache import Glm52PagedKvCachePool
+
+        self._paged_prefill = isinstance(kv_caches, Glm52PagedKvCachePool)
         chunk = self.config.chunk_size
         logger.info(f"TtPrefillRuntime.compile() — warming up one {chunk}-token chunk")
         t0 = time.perf_counter()
         tt_input = self.make_chunk_input([0] * chunk)
         self.prefill_chunk(tt_input, kv_caches, slot_id=0, actual_start=0, actual_end=chunk)
         ttnn.synchronize_device(self.mesh_device)
+        if self._paged_prefill:
+            # Compilation is not a serving allocation.  Return its temporary
+            # bundle after the device is quiescent so the configured physical
+            # capacity is fully available to real users.
+            kv_caches.release_slot(0)
         warmup_ms = (time.perf_counter() - t0) * 1000.0
         logger.info(
             f"[prefill timing] task_id=WARMUP num_tokens={chunk} runtime.prefill_chunk(chunk) = {warmup_ms:.2f} ms"
@@ -271,6 +280,21 @@ class TtPrefillRuntime:
             actual_start <= actual_end <= actual_start + self.config.chunk_size
         ), f"[actual_start={actual_start}, actual_end={actual_end}) not within one chunk of {self.config.chunk_size}"
 
+        paged_cache = None
+        # Experimental GLM-5.2 paging is deliberately model-local for this phase.
+        # Reserve the fixed compute chunk before launching any layer so every
+        # layer sees the same stable physical-bundle mapping.
+        from models.demos.deepseek_v3_d_p.tt.runners.glm52_paged_kv_cache import Glm52PagedKvCachePool
+
+        if isinstance(kv_caches, Glm52PagedKvCachePool):
+            if self._on_layer_complete is not None:
+                raise RuntimeError(
+                    "GLM-5.2 paged prefill does not yet support migration; "
+                    "disable LayerAck/migration for model-only paging"
+                )
+            kv_caches.allocate_chunk(slot_id, actual_start, actual_end)
+            paged_cache = kv_caches
+
         out = self.model.forward(
             input_tensor,
             kv_caches.kvpe,
@@ -280,6 +304,7 @@ class TtPrefillRuntime:
             actual_end=actual_end,
             cache_user_id=slot_id,
             index_kv_cache=kv_caches.index,
+            paged_cache=paged_cache,
         )
         ttnn.deallocate(input_tensor)
         # Non-last rank: forward returns the hidden-state activation to forward downstream.
@@ -300,6 +325,8 @@ class TtPrefillRuntime:
         be configured with layers_per_chunk == NUM_LAYERS.
         """
         assert self.compiled, "Call compile() before set_layer_ack_channel()"
+        if getattr(self, "_paged_prefill", False):
+            raise RuntimeError("GLM-5.2 paged prefill migration/LayerAck is intentionally not implemented yet")
 
         def on_layer_complete(layer_idx: int) -> None:
             layer_ack_channel.inject(1)
@@ -319,7 +346,11 @@ class TtPrefillRuntime:
         For a sparse/DSA model (``.index`` present) the result is a single MERGED table describing BOTH
         caches — config 0 = the KVPE cache, config 1 = the index-key cache. A dense model (``.index`` None)
         → the usual single-config table over the KVPE cache alone."""
+        from models.demos.deepseek_v3_d_p.tt.runners.glm52_paged_kv_cache import Glm52PagedKvCachePool
         from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
+
+        if isinstance(kv_caches, Glm52PagedKvCachePool):
+            raise RuntimeError("migration address-table generation does not yet support GLM-5.2 paged prefill")
 
         return build_and_serialize_kv_chunk_table(
             mesh_device=self.mesh_device,
@@ -340,6 +371,10 @@ class TtPrefillRuntime:
         not un-rotated to natural token order. DRAM_MEMORY_CONFIG on the slice is REQUIRED — the cache is
         ND-sharded ROUND_ROBIN_1D, and slicing into another ND-shard miscomputes the DRAM core on host
         read-back."""
+        from models.demos.deepseek_v3_d_p.tt.runners.glm52_paged_kv_cache import Glm52PagedKvCachePool
+
+        if isinstance(kv_caches, Glm52PagedKvCachePool):
+            raise RuntimeError("fixed-slot KV readback is not valid for GLM-5.2 paged prefill")
         mesh_device = self.mesh_device
         num_layers = self.config.num_layers
         kvpe = kv_caches.kvpe
@@ -365,7 +400,11 @@ class TtPrefillRuntime:
         serving). PCC the populated engine-owned primary KV cache (`.kvpe`) for `slot_id` against the
         golden trace; returns the min per-layer PCC and asserts on failure (unless
         PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1). Thin forwarder into the model's validation module."""
+        from models.demos.deepseek_v3_d_p.tt.runners.glm52_paged_kv_cache import Glm52PagedKvCachePool
         from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import kv_cache_pcc_check
+
+        if isinstance(kv_caches, Glm52PagedKvCachePool):
+            raise RuntimeError("fixed-slot KV PCC helper does not yet reconstruct GLM-5.2 paged prefill")
 
         return kv_cache_pcc_check(
             self,

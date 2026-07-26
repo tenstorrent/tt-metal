@@ -2275,8 +2275,17 @@ FORCE_INLINE void fabric_sparse_multicast_noc_unicast_write(
     uint16_t hops) {
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
 
+#if defined(UDM_MODE)
+    // UDM adds response-control fields after the regular hybrid routing
+    // prefix. Sparse multicast configures that inherited prefix, whose CRTP
+    // route command is therefore parameterized by HybridMeshPacketHeader.
+    auto* routing_header = reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::HybridMeshPacketHeader*>(packet_header);
+    routing_header->to_chip_sparse_multicast(
+        tt::tt_fabric::SparseMulticastRoutingCommandHeader<tt::tt_fabric::HybridMeshPacketHeader>{hops});
+#else
     packet_header->to_chip_sparse_multicast(
         tt::tt_fabric::SparseMulticastRoutingCommandHeader<PACKET_HEADER_TYPE>{hops});
+#endif
     packet_header->to_noc_unicast_write(noc_unicast_command_header, size);
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);

@@ -8,6 +8,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/device.hpp"
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/hal.hpp>
 #include <bit>
 
@@ -27,6 +28,20 @@ void validate_non_hashed(const SparseSDPAParams& attrs, const SparseSDPAInputs& 
     const auto& idx = t.indices;
     TT_FATAL(
         q.device() == kv.device() && q.device() == idx.device(), "sparse_sdpa: all inputs must be on the same device");
+    TT_FATAL(
+        attrs.has_paged_kv() == t.page_table.has_value(),
+        "sparse_sdpa: paged attributes and page_table tensor must be present together");
+    if (t.page_table.has_value()) {
+        const auto& table = t.page_table.value();
+        TT_FATAL(table.device() == q.device(), "sparse_sdpa: page_table must be on the same mesh as q/kv/indices");
+        TT_FATAL(table.layout() == Layout::ROW_MAJOR, "sparse_sdpa: page_table must be ROW_MAJOR");
+        TT_FATAL(table.dtype() == DataType::INT32, "sparse_sdpa: page_table must be INT32");
+        TT_FATAL(table.memory_config().buffer_type() == BufferType::DRAM, "sparse_sdpa: page_table must be in DRAM");
+        TT_FATAL(
+            !table.memory_config().is_sharded(),
+            "sparse_sdpa: page_table must be device-interleaved and mesh-replicated");
+        TT_FATAL(table.padded_shape() == table.logical_shape(), "sparse_sdpa: page_table must not be padded");
+    }
     // q and indices: ROW_MAJOR, DRAM, interleaved, unpadded (row-major paged-accessor assumptions).
     for (const Tensor* tp : {&q, &idx}) {
         TT_FATAL(tp->layout() == Layout::ROW_MAJOR, "sparse_sdpa q/indices must be ROW_MAJOR");
@@ -53,7 +68,30 @@ void validate_non_hashed(const SparseSDPAParams& attrs, const SparseSDPAInputs& 
         kvs);
     TT_FATAL(kvs[2] > 0, "kv T (cache length) must be > 0");
     const uint32_t B = kvs[0];
-    if (attrs.cache_batch_idx.has_value()) {
+    const uint32_t T = kvs[2];
+    if (attrs.has_paged_kv()) {
+        const auto& paged = attrs.paged_kv.value();
+        const auto table_shape = t.page_table->logical_shape();
+        TT_FATAL(
+            attrs.cache_batch_idx.has_value() && attrs.cache_batch_idx.value() < table_shape[0],
+            "sparse_sdpa: paged cache_batch_idx must select a page-table row (slots={})",
+            table_shape[0]);
+        TT_FATAL(
+            table_shape[1] == paged.max_bundles_per_slot,
+            "sparse_sdpa: page-table width changed after paged layout resolution");
+        TT_FATAL(
+            paged.layer_idx < paged.num_layers,
+            "sparse_sdpa: paged layer {} is outside [0,{})",
+            paged.layer_idx,
+            paged.num_layers);
+        TT_FATAL(
+            B % paged.num_layers == 0 && T == paged.chunk_local,
+            "sparse_sdpa: paged pool must be [physical_bundles*{},1,{},{}], got {}",
+            paged.num_layers,
+            paged.chunk_local,
+            expected_kv_width,
+            kvs);
+    } else if (attrs.cache_batch_idx.has_value()) {
         TT_FATAL(
             attrs.cache_batch_idx.value() < B,
             "cache_batch_idx ({}) must be < kv batch slots ({})",
@@ -75,6 +113,18 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
     const auto& idx = t.indices;
 
     TT_FATAL(tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE, "sparse_sdpa is Blackhole-only");
+    if (attrs.has_paged_kv()) {
+        TT_FATAL(
+            attrs.paged_kv->sp == 4 || attrs.paged_kv->sp == 8,
+            "sparse_sdpa: GLM-5.2 paged prefill supports SP=4 validation and SP=8 production");
+        TT_FATAL(
+            tt::tt_fabric::GetFabricConfig() != tt::tt_fabric::FabricConfig::DISABLED &&
+                tt::tt_fabric::GetFabricUDMMode() == tt::tt_fabric::FabricUDMMode::ENABLED,
+            "sparse_sdpa: distributed paged KV requires active fabric with FabricUDMMode::ENABLED");
+        TT_FATAL(
+            attrs.kv_format == transformer::SparseKVFormat::BF16,
+            "sparse_sdpa: GLM-5.2 paged KV currently supports BF16 row-major primary storage only");
+    }
 
     // dtypes. q and kv may each be bf16 or fp8_e4m3 — fp8 halves that input's K/Q-gather bytes; the reader
     // gathers it row-major and compute tilizes fp8 -> bfp8_b cb_*_in (near-lossless, also halves the L1).
@@ -249,6 +299,19 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         attrs.has_block_cyclic(),
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->sp : 0u,
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
+        attrs.has_paged_kv(),
+        attrs.paged_kv.has_value() ? attrs.paged_kv->sp : 0u,
+        attrs.paged_kv.has_value() ? attrs.paged_kv->sp_axis : 0u,
+        attrs.paged_kv.has_value() ? attrs.paged_kv->chunk_local : 0u,
+        attrs.paged_kv.has_value() ? attrs.paged_kv->layer_idx : 0u,
+        attrs.paged_kv.has_value() ? attrs.paged_kv->num_layers : 0u,
+        attrs.paged_kv.has_value() ? attrs.paged_kv->max_bundles_per_slot : 0u,
+        // The paged reader bakes physical_bundles = pool_B / num_layers
+        // into its mapping bounds, so pool capacity changes require a distinct
+        // kernel even though ordinary interleaved KV lengths remain runtime.
+        attrs.has_paged_kv() ? t.kv.logical_shape() : tt::tt_metal::Shape{},
+        t.page_table.has_value() ? t.page_table->logical_shape() : tt::tt_metal::Shape{},
+        t.page_table.has_value() ? t.page_table->memory_config() : tt::tt_metal::MemoryConfig{},
         t.indices.logical_shape(),
         t.indices.dtype());
 }
@@ -263,7 +326,9 @@ Tensor sparse_sdpa(
     uint32_t k_chunk_size,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
-    std::optional<BlockCyclicLayout> block_cyclic) {
+    std::optional<BlockCyclicLayout> block_cyclic,
+    std::optional<SparseSDPAParams::PagedKVLayout> paged_kv,
+    const std::optional<Tensor>& page_table) {
     using OperationType = ttnn::prim::SparseSDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -274,11 +339,13 @@ Tensor sparse_sdpa(
             .compute_kernel_config = compute_kernel_config,
             .cache_batch_idx = cache_batch_idx,
             .block_cyclic = block_cyclic,
+            .paged_kv = paged_kv,
         },
         OperationType::tensor_args_t{
             .q = q,
             .kv = kv,
             .indices = indices,
+            .page_table = page_table,
         });
 }
 

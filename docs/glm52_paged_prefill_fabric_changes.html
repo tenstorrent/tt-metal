@@ -1,0 +1,819 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A visual, beginner-friendly explanation of the fabric changes used by GLM-5.2 paged prefill.">
+  <title>GLM-5.2 Paged Prefill · Fabric Changes</title>
+  <style>
+    :root {
+      --bg: #071018;
+      --panel: rgba(17, 31, 43, .88);
+      --panel-2: rgba(23, 42, 57, .72);
+      --text: #eef8fb;
+      --muted: #9fb3bc;
+      --line: rgba(184, 224, 235, .16);
+      --cyan: #59e1e6;
+      --blue: #75a7ff;
+      --green: #65e6a4;
+      --amber: #ffc86a;
+      --red: #ff8496;
+      --violet: #ad8cff;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      overflow: hidden;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 14% 16%, rgba(56, 176, 190, .16), transparent 30%),
+        radial-gradient(circle at 87% 78%, rgba(99, 106, 225, .14), transparent 31%),
+        var(--bg);
+      font: 15px/1.52 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: .22;
+      background-image:
+        linear-gradient(rgba(255,255,255,.026) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.026) 1px, transparent 1px);
+      background-size: 38px 38px;
+      mask-image: linear-gradient(to bottom, black, transparent 88%);
+    }
+
+    button { font: inherit; }
+    code {
+      padding: 2px 6px;
+      border: 1px solid rgba(89, 225, 230, .14);
+      border-radius: 6px;
+      color: #c2fafb;
+      background: rgba(89, 225, 230, .07);
+      font: .88em ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .topbar {
+      position: fixed;
+      z-index: 20;
+      inset: 0 0 auto;
+      height: 68px;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      padding: 0 28px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(7, 16, 24, .78);
+      backdrop-filter: blur(18px);
+    }
+    .brand { display: flex; align-items: center; gap: 11px; white-space: nowrap; font-weight: 780; }
+    .brand-mark {
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      border-radius: 9px;
+      color: #061317;
+      background: linear-gradient(135deg, var(--cyan), var(--green));
+      box-shadow: 0 0 26px rgba(89,225,230,.22);
+      font-weight: 950;
+    }
+    .brand small { margin-left: 7px; color: var(--muted); font-weight: 540; }
+    .progress-track {
+      height: 3px;
+      flex: 1;
+      max-width: 520px;
+      margin-left: auto;
+      overflow: hidden;
+      border-radius: 10px;
+      background: rgba(255,255,255,.08);
+    }
+    .progress {
+      width: 8.33%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--cyan), var(--violet));
+      transition: width .36s ease;
+    }
+    .counter { color: var(--muted); font: 700 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    .deck { position: relative; width: 100%; height: 100%; }
+    .slide {
+      position: absolute;
+      inset: 68px 0 78px;
+      overflow: auto;
+      padding: clamp(28px, 4.5vw, 64px) max(26px, calc((100vw - 1160px) / 2));
+      opacity: 0;
+      visibility: hidden;
+      transform: translateX(52px) scale(.985);
+      transition: opacity .34s ease, transform .42s cubic-bezier(.2,.8,.2,1), visibility .42s;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(89,225,230,.35) transparent;
+    }
+    .slide.before { transform: translateX(-52px) scale(.985); }
+    .slide.active { z-index: 2; opacity: 1; visibility: visible; transform: none; }
+    .inner {
+      width: 100%;
+      max-width: 1160px;
+      min-height: 100%;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .eyebrow {
+      margin-bottom: 15px;
+      color: var(--cyan);
+      text-transform: uppercase;
+      letter-spacing: .16em;
+      font: 800 11px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 {
+      max-width: 960px;
+      margin-bottom: 23px;
+      font-size: clamp(42px, 7vw, 84px);
+      line-height: .98;
+      letter-spacing: -.055em;
+    }
+    h2 {
+      margin-bottom: 16px;
+      font-size: clamp(31px, 4.5vw, 54px);
+      line-height: 1.04;
+      letter-spacing: -.04em;
+    }
+    h3 { margin-bottom: 8px; font-size: 17px; }
+    .lead { max-width: 850px; color: #c9d9df; font-size: clamp(17px, 2vw, 22px); line-height: 1.45; }
+    .muted { color: var(--muted); }
+    .accent { color: var(--cyan); }
+    .green { color: var(--green); }
+    .amber { color: var(--amber); }
+    .red { color: var(--red); }
+
+    .grid { display: grid; gap: 15px; margin-top: 24px; }
+    .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .card {
+      position: relative;
+      overflow: hidden;
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 17px;
+      background: linear-gradient(145deg, var(--panel), rgba(10,20,29,.78));
+      box-shadow: 0 14px 35px rgba(0,0,0,.16);
+    }
+    .card::after {
+      content: "";
+      position: absolute;
+      right: -48px;
+      bottom: -70px;
+      width: 130px;
+      height: 130px;
+      border-radius: 50%;
+      opacity: .13;
+      filter: blur(54px);
+      background: var(--glow, var(--blue));
+    }
+    .card p:last-child { margin-bottom: 0; }
+    .number { font-size: 35px; font-weight: 880; letter-spacing: -.04em; }
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: #ccdae0;
+      background: rgba(255,255,255,.035);
+      font-size: 12px;
+      font-weight: 720;
+    }
+    .tag::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--tag, var(--green));
+      box-shadow: 0 0 10px var(--tag, var(--green));
+    }
+    .tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 23px; }
+
+    .road {
+      display: grid;
+      grid-template-columns: 1fr 160px 1fr;
+      gap: 22px;
+      align-items: center;
+      margin-top: 30px;
+    }
+    .chip {
+      min-height: 190px;
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: var(--panel);
+    }
+    .chip-title { display: flex; justify-content: space-between; gap: 12px; font-weight: 800; }
+    .memory { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-top: 18px; }
+    .memory i {
+      height: 40px;
+      border: 1px solid rgba(117,167,255,.31);
+      border-radius: 6px;
+      background: rgba(117,167,255,.14);
+    }
+    .memory i.hot { border-color: rgba(101,230,164,.42); background: rgba(101,230,164,.2); animation: pulse 1.8s ease-in-out infinite; }
+    .fabric-road { color: var(--muted); text-align: center; font-size: 12px; }
+    .road-line {
+      position: relative;
+      height: 4px;
+      margin: 12px 0;
+      overflow: hidden;
+      border-radius: 8px;
+      background: linear-gradient(90deg, var(--blue), var(--cyan), var(--violet));
+    }
+    .road-line::after {
+      content: "";
+      position: absolute;
+      inset: -2px auto;
+      width: 34%;
+      background: white;
+      opacity: .75;
+      filter: blur(4px);
+      animation: travel 2s linear infinite;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 9px;
+      align-items: center;
+      margin-top: 28px;
+    }
+    .node {
+      min-height: 120px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: var(--panel-2);
+      text-align: center;
+    }
+    .node b { margin-bottom: 5px; font-size: 13px; }
+    .node small { color: var(--muted); }
+    .arrow { color: var(--cyan); text-align: center; font-size: 25px; }
+
+    .mesh {
+      display: grid;
+      grid-template-columns: repeat(8, minmax(56px, 1fr));
+      gap: 8px;
+      margin-top: 25px;
+    }
+    .rank {
+      min-height: 90px;
+      display: grid;
+      place-items: center;
+      padding: 10px;
+      border: 1px solid rgba(117,167,255,.34);
+      border-radius: 13px;
+      background: rgba(117,167,255,.12);
+      text-align: center;
+      font: 750 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .rank.owner {
+      border-color: rgba(101,230,164,.55);
+      background: rgba(101,230,164,.19);
+      box-shadow: 0 0 26px rgba(101,230,164,.09);
+    }
+    .rank.requester {
+      border-color: rgba(255,200,106,.55);
+      background: rgba(255,200,106,.16);
+    }
+    .mesh-link {
+      position: relative;
+      height: 34px;
+      margin: 12px 6% 0;
+      border-top: 2px solid rgba(89,225,230,.5);
+    }
+    .mesh-link::before, .mesh-link::after {
+      content: "";
+      position: absolute;
+      top: -5px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--cyan);
+      box-shadow: 0 0 14px var(--cyan);
+    }
+    .mesh-link::before { left: 0; }
+    .mesh-link::after { right: 0; }
+
+    .stack { display: flex; flex-direction: column; gap: 9px; margin-top: 24px; }
+    .layer {
+      display: grid;
+      grid-template-columns: 190px 1fr auto;
+      gap: 16px;
+      align-items: center;
+      padding: 13px 16px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: rgba(15,28,39,.74);
+    }
+    .layer strong { font-size: 13px; }
+    .bar { height: 7px; border-radius: 8px; background: linear-gradient(90deg, var(--blue), var(--cyan)); transform-origin: left; }
+    .layer:nth-child(2) .bar { background: linear-gradient(90deg, var(--violet), var(--blue)); }
+    .layer:nth-child(3) .bar { background: linear-gradient(90deg, var(--cyan), var(--green)); }
+    .layer:nth-child(4) .bar { background: linear-gradient(90deg, var(--amber), var(--violet)); }
+    .layer:nth-child(5) .bar { background: linear-gradient(90deg, var(--green), var(--cyan)); }
+
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 17px;
+      margin-top: 25px;
+    }
+    .bucket {
+      padding: 23px;
+      border: 1px solid var(--line);
+      border-radius: 19px;
+      background: var(--panel);
+    }
+    .bucket.keep { border-color: rgba(101,230,164,.28); }
+    .bucket.trim { border-color: rgba(255,200,106,.26); }
+    .list { list-style: none; padding: 0; margin: 16px 0 0; }
+    .list li { position: relative; margin: 10px 0; padding-left: 27px; color: #c8d7dd; }
+    .list li::before { position: absolute; left: 0; top: 0; color: var(--green); content: "✓"; font-weight: 900; }
+    .trim .list li::before { color: var(--amber); content: "–"; }
+
+    .callout {
+      margin-top: 23px;
+      padding: 16px 18px;
+      border-left: 3px solid var(--cyan);
+      border-radius: 0 12px 12px 0;
+      color: #c9d9df;
+      background: rgba(89,225,230,.06);
+    }
+    .warning { border-left-color: var(--amber); background: rgba(255,200,106,.06); }
+
+    .active .reveal { animation: rise .52s both; animation-delay: calc(var(--i,0) * 80ms + 70ms); }
+
+    .controls {
+      position: fixed;
+      z-index: 30;
+      inset: auto 0 0;
+      height: 78px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      border-top: 1px solid var(--line);
+      background: rgba(7,16,24,.8);
+      backdrop-filter: blur(18px);
+    }
+    .nav {
+      min-width: 112px;
+      padding: 10px 16px;
+      color: var(--text);
+      cursor: pointer;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: rgba(255,255,255,.045);
+      transition: transform .18s, border-color .18s, background .18s;
+    }
+    .nav:hover:not(:disabled) { transform: translateY(-2px); border-color: rgba(89,225,230,.42); background: rgba(89,225,230,.08); }
+    .nav:disabled { opacity: .3; cursor: not-allowed; }
+    .dots { display: flex; gap: 7px; padding: 0 7px; }
+    .dot { width: 7px; height: 7px; padding: 0; border: 0; border-radius: 20px; cursor: pointer; background: #435561; transition: .28s; }
+    .dot.active { width: 25px; background: linear-gradient(90deg, var(--cyan), var(--violet)); }
+    .hint { position: fixed; z-index: 31; right: 22px; bottom: 28px; color: #6e828c; font-size: 11px; }
+
+    @keyframes rise { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: none; } }
+    @keyframes travel { from { left: -38%; } to { left: 104%; } }
+    @keyframes pulse { 0%,100% { opacity: .62; } 50% { opacity: 1; box-shadow: inset 0 0 15px rgba(101,230,164,.16); } }
+
+    @media (max-width: 860px) {
+      body { overflow: auto; }
+      .slide { padding-left: 22px; padding-right: 22px; }
+      .grid.three, .grid.four { grid-template-columns: repeat(2, 1fr); }
+      .road, .split { grid-template-columns: 1fr; }
+      .fabric-road { min-height: 72px; }
+      .flow { grid-template-columns: 1fr; }
+      .arrow { transform: rotate(90deg); }
+      .mesh { grid-template-columns: repeat(4, 1fr); }
+      .layer { grid-template-columns: 1fr; gap: 8px; }
+      .dots { display: none; }
+      .brand small, .hint { display: none; }
+    }
+    @media (max-width: 560px) {
+      .grid.two, .grid.three, .grid.four { grid-template-columns: 1fr; }
+      .topbar { padding: 0 16px; }
+      .progress-track { display: none; }
+      .mesh { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">F</span>
+      GLM-5.2 Fabric
+      <small>paged prefill</small>
+    </div>
+    <div class="progress-track"><div class="progress" id="progress"></div></div>
+    <div class="counter" id="counter">01 / 12</div>
+  </header>
+
+  <main class="deck" id="deck">
+    <section class="slide active">
+      <div class="inner">
+        <div class="eyebrow reveal" style="--i:0">Beginner-first walkthrough</div>
+        <h1 class="reveal" style="--i:1">Why paged prefill touches <span class="accent">fabric</span></h1>
+        <p class="lead reveal" style="--i:2">
+          Fabric is the communication system connecting Tenstorrent devices. Paged KV cache uses it to fetch only the
+          required cache rows from whichever device owns them.
+        </p>
+        <div class="tags reveal" style="--i:3">
+          <span class="tag">Production: Galaxy SP=8 / TP=4</span>
+          <span class="tag" style="--tag:var(--amber)">Proxy: QB SP=4 / TP=1</span>
+          <span class="tag" style="--tag:var(--blue)">Model-side only</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="inner">
+        <div class="eyebrow reveal" style="--i:0">Start here</div>
+        <h2 class="reveal" style="--i:1">What is fabric?</h2>
+        <p class="lead reveal" style="--i:2">
+          Think of each accelerator as a building with its own memory. <span class="accent">Fabric is the road network</span>
+          that lets one building send data to, or read data from, another.
+        </p>
+        <div class="road reveal" style="--i:3">
+          <div class="chip">
+            <div class="chip-title"><span>Device A</span><span class="muted">requester</span></div>
+            <div class="memory"><i></i><i></i><i></i><i></i><i></i></div>
+            <p class="muted">Runs attention and needs a KV row.</p>
+          </div>
+          <div class="fabric-road">
+            <b class="accent">FABRIC</b>
+            <div class="road-line"></div>
+            routes traffic between devices
+          </div>
+          <div class="chip">
+            <div class="chip-title"><span>Device B</span><span class="muted">owner</span></div>
+            <div class="memory"><i></i><i class="hot"></i><i></i><i></i><i></i></div>
+            <p class="muted">Owns the requested physical KV page.</p>
+          </div>
+        </div>
+        <div class="callout reveal" style="--i:4">
+          Fabric is not the KV cache and it does not decide ownership. It is only the transport used after the model
+          determines where the required data lives.
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="inner">
+        <div class="eyebrow reveal" style="--i:0">The reason</div>
+        <h2 class="reveal" style="--i:1">Why paging needs remote reads</h2>
+        <p class="lead reveal" style="--i:2">
+          GLM-5.2 assigns each 5,120-token cache bundle to a position-dependent SP owner. A query may run on one device
+          while the selected KV rows live on several other devices.
+        </p>
+        <div class="mesh reveal" style="--i:3">
+          <div class="rank requester">SP 0<br>query</div>
+          <div class="rank">SP 1</div>
+          <div class="rank">SP 2</div>
+          <div class="rank owner">SP 3<br>KV row</div>
+          <div class="rank">SP 4</div>
+          <div class="rank owner">SP 5<br>KV row</div>
+          <div class="rank">SP 6</div>
+          <div class="rank owner">SP 7<br>KV row</div>
+        </div>
+        <div class="mesh-link reveal" style="--i:4"></div>
+        <div class="grid two">
+          <div class="card reveal" style="--i:5;--glow:var(--red)">
+            <h3>Without direct reads</h3>
+            <p class="muted">Gather or copy a large cache prefix onto every requester before computing.</p>
+          </div>
+          <div class="card reveal" style="--i:6;--glow:var(--green)">
+            <h3>With UDM fabric reads</h3>
+            <p class="muted">Read only selected rows directly into the kernel’s local circular buffer.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="inner">
+        <div class="eyebrow reveal" style="--i:0">One request</div>
+        <h2 class="reveal" style="--i:1">What happens when a kernel needs a remote KV row?</h2>
+        <div class="flow reveal" style="--i:2">
+          <div class="node"><b>1. Page table</b><small>logical bundle → physical bundle</small></div>
+          <div class="arrow">→</div>
+          <div class="node"><b>2. Owner</b><small>position → SP rank</small></div>
+          <div class="arrow">→</div>
+          <div class="node"><b>3. UDM read</b><small>remote DRAM address</small></div>
+          <div class="arrow">→</div>
+          <div class="node"><b>4. Local CB</b><small>kernel consumes row directly</small></div>
+        </div>
+        <div class="grid three">
+          <div class="card reveal" style="--i:3">
+            <div class="number accent">No</div>
+            <p>full KV-prefix gather</p>
+          </div>
+          <div class="card reveal" style="--i:4;--glow:var(--green)">
+            <div class="number green">No</div>
+            <p>temporary dense cache copy</p>
+          </div>
+          <div class="card reveal" style="--i:5;--glow:var(--violet)">
+            <div class="number">Only</div>
+            <p>the rows selected by indexer/attention</p>
+          </div>
+        </div>
+        <div class="callout reveal" style="--i:6">
+          This direct path is used twice: first by the paged indexer while scoring keys, then by sparse SDPA while
+          reading the chosen attention keys.
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="inner">
+        <div class="eyebrow reveal" style="--i:0">Important production detail</div>
+        <h2 class="reveal" style="--i:1">Galaxy uses UDM and normal collectives together</h2>
+        <p class="lead reveal" style="--i:2">
+          Production is <code>SP=8, TP=4</code>. UDM handles remote paged-cache reads across SP, while existing
+          all-gather/reduce-scatter operations still exchange model data across TP.
+        </p>
+        <div class="grid two">
+          <div class="card reveal" style="--i:3;--glow:var(--green)">
+            <h3 class="green">UDM traffic</h3>
+            <p>Fine-grained request/response reads: “fetch this exact KV row from SP owner 5.”</p>
+          </div>
+          <div class="card reveal" style="--i:4;--glow:var(--blue)">
+            <h3 class="accent">Collective traffic</h3>
+            <p>Coordinated TP communication: all-gather and reduce-scatter across four tensor-parallel ranks.</p>
+          </div>
+        </div>
+        <div class="callout warning reveal" style="--i:5">
+          QB <code>SP=4, TP=1</code> verifies remote paging but does not fully exercise this coexistence. Galaxy testing
+          is still required to validate UDM plus TP=4 traffic under production load.
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="inner">
+        <div class="eyebrow reveal" style="--i:0">Change map</div>
+        <h2 class="reveal" style="--i:1">The fabric changes fall into four jobs</h2>
+        <div class="stack">
+          <div class="layer reveal" style="--i:2">
+            <strong>1 · Enable & validate</strong><div class="bar"></div><span class="tag">startup</span>
+          </div>
+          <div class="layer reveal" style="--i:3">
+            <strong>2 · Move read data safely</strong><div class="bar"></div><span class="tag">alignment</span>
+          </div>
+          <div class="layer reveal" style="--i:4">
+            <strong>3 · Control concurrency</strong><div class="bar"></div><span class="tag">backpressure</span>
+          </div>
+          <div class="layer reveal" style="--i:5">
+            <strong>4 · Coexist with TP CCL</strong><div class="bar"></div><span class="tag">headers</span>
+          </div>
+          <div class="layer reveal" style="--i:6">
+            <strong>Audit · Remove extras</strong><div class="bar"></div><span class="tag" style="--tag:var(--amber)">cleanup</span>
+          </div>
+        </div>
+        <div class="callout reveal" style="--i:7">
+          These are generic UDM/fabric concerns. They are not GLM math changes; GLM is the first consumer on this branch
+          that needs all of them together.
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="inner">
+        <div class="eyebrow reveal" style="--i:0">Job 1 · Startup</div>
+        <h2 class="reveal" style="--i:1">Make UDM explicit and fail early</h2>
+        <div class="grid three">
+          <div class="card reveal" style="--i:2">
+            <h3>Python enum</h3>
+            <p class="muted">Expose <code>FabricTensixConfig.UDM</code> so the prefill runner can open the correct fabric mode.</p>
+          </div>
+          <div class="card reveal" style="--i:3;--glow:var(--violet)">
+            <h3>Mode getter</h3>
+            <p class="muted">Expose the active UDM state to C++ operations for validation.</p>
+          </div>
+          <div class="card reveal" style="--i:4;--glow:var(--green)">
+            <h3>Operation checks</h3>
+            <p class="muted">Paged indexer and sparse SDPA reject distributed paging if UDM is not active.</p>
+          </div>
+        </div>
+        <div class="callout reveal" style="--i:5">
+          Why: a missing UDM setup should produce a clear host error, not compile a device kernel that later hangs while
+          waiting for a response that can never arrive.
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="inner">
+        <div class="eyebrow reveal" style="--i:0">Job 2 · Correct data movement</div>
+        <h2 class="reveal" style="--i:1">Align the relay’s temporary read buffers</h2>
+        <p class="lead reveal" style="--i:2">
+          A remote read is relayed through a small fabric memory pool before returning to the requesting kernel.
+          Tenstorrent NoC reads require compatible DRAM-alignment offsets.
+        </p>
+        <div class="grid two">
+          <div class="card reveal" style="--i:3;--glow:var(--red)">
+            <h3 class="red">Before</h3>
+            <p>The pool base could begin at an unaligned address even when the source tensor was aligned.</p>
+            <div class="tags"><span class="tag" style="--tag:var(--red)">unsafe offset</span></div>
+          </div>
+          <div class="card reveal" style="--i:4;--glow:var(--green)">
+            <h3 class="green">Now</h3>
+            <p>The builder aligns the pool base and the device code statically verifies the invariant.</p>
+            <div class="tags"><span class="tag">aligned pool</span><span class="tag">compile-time guard</span></div>
+          </div>
+        </div>
+        <div class="callout reveal" style="--i:5">
+          Files: <code>fabric_tensix_builder_impl.cpp</code> aligns the allocation;
+          <code>udm_memory_pool.hpp</code> prevents an invalid configuration from compiling.
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="inner">
+        <div class="eyebrow reveal" style="--i:0">Job 3 · Concurrency</div>
+        <h2 class="reveal" style="--i:1">Do not accept more responses than the relay can track</h2>
+        <p class="lead reveal" style="--i:2">
+          Each remote read reserves a response record. Under many concurrent requests, that finite response FIFO can
+          become full.
+        </p>
+        <div class="grid four">
+          <div class="card reveal" style="--i:3"><div class="number">1</div><p>Read arrives</p></div>
+          <div class="card reveal" style="--i:4"><div class="number">2</div><p>Response slot needed</p></div>
+          <div class="card reveal" style="--i:5;--glow:var(--amber)"><div class="number amber">3</div><p>If full, pause input</p></div>
+          <div class="card reveal" style="--i:6;--glow:var(--green)"><div class="number green">4</div><p>Resume after drain</p></div>
+        </div>
+        <div class="callout reveal" style="--i:7">
+          The relay now consumes an inbound packet only when <code>response_pool.has_space()</code>. Existing fabric
+          flow control then naturally pushes back on the sender instead of overflowing or asserting.
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="inner">
+        <div class="eyebrow reveal" style="--i:0">Job 4 · UDM + TP collectives</div>
+        <h2 class="reveal" style="--i:1">Initialize ordinary collective packets as “posted”</h2>
+        <p class="lead reveal" style="--i:2">
+          In UDM mode, packet headers contain extra request/response metadata. Existing TP collectives populate their
+          normal routing fields, but they do not know about those new UDM fields.
+        </p>
+        <div class="grid two">
+          <div class="card reveal" style="--i:3;--glow:var(--red)">
+            <h3>Uninitialized metadata</h3>
+            <p class="muted">An ordinary collective write might be misread as “send me an acknowledgment,” consuming a response slot incorrectly.</p>
+          </div>
+          <div class="card reveal" style="--i:4;--glow:var(--green)">
+            <h3>Safe default</h3>
+            <p class="muted">New packet headers default writes to <code>posted = 1</code>: send the write, expect no UDM response.</p>
+          </div>
+        </div>
+        <div class="callout reveal" style="--i:5">
+          Actual UDM reads explicitly overwrite their control metadata. The default only protects ordinary CCL traffic,
+          which matters specifically for the production TP=4 configuration.
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="inner">
+        <div class="eyebrow reveal" style="--i:0">Audit result</div>
+        <h2 class="reveal" style="--i:1">What should stay, and what can be trimmed?</h2>
+        <div class="split">
+          <div class="bucket keep reveal" style="--i:2">
+            <h3 class="green">Keep as prerequisites</h3>
+            <ul class="list">
+              <li>Expose UDM startup mode</li>
+              <li>Validate UDM for distributed paged operations</li>
+              <li>Align the UDM response memory pool</li>
+              <li>Backpressure when the response FIFO is full</li>
+              <li>Initialize collective packet headers safely</li>
+              <li>Retain the alignment static assertion</li>
+            </ul>
+          </div>
+          <div class="bucket trim reveal" style="--i:3">
+            <h3 class="amber">Candidates to remove</h3>
+            <ul class="list">
+              <li>Unused Python <code>get_fabric_udm_mode()</code> binding</li>
+              <li>UDM sparse-multicast compatibility with no GLM call site</li>
+              <li>UDM worker-routing extension with no GLM call site</li>
+            </ul>
+          </div>
+        </div>
+        <div class="callout warning reveal" style="--i:4">
+          “Candidate” means code inspection found no paged-prefill call site. It should still be removed and rebuilt in a
+          controlled cleanup change before claiming it is unnecessary for every UDM user.
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="inner">
+        <div class="eyebrow reveal" style="--i:0">Takeaway</div>
+        <h2 class="reveal" style="--i:1">The model needs fabric; the branch does not need every fabric edit</h2>
+        <div class="grid three">
+          <div class="card reveal" style="--i:2">
+            <div class="number accent">Why</div>
+            <p>Fetch selected paged KV rows from remote SP owners without dense cache gathers.</p>
+          </div>
+          <div class="card reveal" style="--i:3;--glow:var(--green)">
+            <div class="number green">Core</div>
+            <p>Alignment, backpressure, safe headers, startup, and validation.</p>
+          </div>
+          <div class="card reveal" style="--i:4;--glow:var(--amber)">
+            <div class="number amber">Next</div>
+            <p>Trim unused compatibility changes and test UDM plus TP=4 on Galaxy.</p>
+          </div>
+        </div>
+        <div class="callout reveal" style="--i:5">
+          Recommended code organization: keep generic UDM correctness changes in a small fabric prerequisite commit or
+          PR, and keep GLM model/kernel paging changes separate.
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="controls">
+    <button class="nav" id="prev" type="button" aria-label="Previous slide">← Previous</button>
+    <div class="dots" id="dots" aria-label="Slide navigation"></div>
+    <button class="nav" id="next" type="button" aria-label="Next slide">Next →</button>
+  </footer>
+  <div class="hint">← → keys · Home · End</div>
+
+  <script>
+    const slides = [...document.querySelectorAll(".slide")];
+    const prev = document.getElementById("prev");
+    const next = document.getElementById("next");
+    const dots = document.getElementById("dots");
+    const progress = document.getElementById("progress");
+    const counter = document.getElementById("counter");
+    let current = 0;
+
+    slides.forEach((_, index) => {
+      const dot = document.createElement("button");
+      dot.type = "button";
+      dot.className = "dot";
+      dot.setAttribute("aria-label", `Go to slide ${index + 1}`);
+      dot.addEventListener("click", () => show(index));
+      dots.appendChild(dot);
+    });
+
+    function show(index) {
+      current = Math.max(0, Math.min(index, slides.length - 1));
+      slides.forEach((slide, i) => {
+        slide.classList.toggle("active", i === current);
+        slide.classList.toggle("before", i < current);
+        slide.setAttribute("aria-hidden", i === current ? "false" : "true");
+      });
+      [...dots.children].forEach((dot, i) => dot.classList.toggle("active", i === current));
+      prev.disabled = current === 0;
+      next.disabled = current === slides.length - 1;
+      progress.style.width = `${((current + 1) / slides.length) * 100}%`;
+      counter.textContent = `${String(current + 1).padStart(2, "0")} / ${String(slides.length).padStart(2, "0")}`;
+      history.replaceState(null, "", `#${current + 1}`);
+    }
+
+    prev.addEventListener("click", () => show(current - 1));
+    next.addEventListener("click", () => show(current + 1));
+    document.addEventListener("keydown", event => {
+      if (["ArrowRight", "PageDown", " "].includes(event.key)) { event.preventDefault(); show(current + 1); }
+      if (["ArrowLeft", "PageUp"].includes(event.key)) { event.preventDefault(); show(current - 1); }
+      if (event.key === "Home") show(0);
+      if (event.key === "End") show(slides.length - 1);
+    });
+    let touchStart = null;
+    document.addEventListener("touchstart", event => { touchStart = event.changedTouches[0].clientX; }, {passive: true});
+    document.addEventListener("touchend", event => {
+      if (touchStart === null) return;
+      const delta = event.changedTouches[0].clientX - touchStart;
+      if (Math.abs(delta) > 55) show(current + (delta < 0 ? 1 : -1));
+      touchStart = null;
+    }, {passive: true});
+
+    const initial = Number.parseInt(location.hash.slice(1), 10);
+    show(Number.isFinite(initial) ? initial - 1 : 0);
+  </script>
+</body>
+</html>

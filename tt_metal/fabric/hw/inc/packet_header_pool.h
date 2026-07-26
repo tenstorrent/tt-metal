@@ -63,9 +63,20 @@ public:
 
         uint32_t allocated_addr = POOL_BASE + current_offset_;
         current_offset_ += HEADER_SIZE * num_headers;
-        header_table[route_id_++] = {
-            reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(allocated_addr), num_headers};
-        return reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(allocated_addr);
+        auto* allocated_headers = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(allocated_addr);
+#if defined(UDM_MODE)
+        // UDM firmware interprets every ordinary fabric write/atomic through
+        // the extended header.  Generic CCL kernels populate only the inherited
+        // routing/NOC fields; default those packets to posted so the relay does
+        // not register a response using otherwise-uninitialized UDM metadata.
+        // UDM read/non-posted APIs overwrite this field and the remaining
+        // control block before sending.
+        for (uint8_t i = 0; i < num_headers; ++i) {
+            allocated_headers[i].udm_control.write.posted = 1;
+        }
+#endif
+        header_table[route_id_++] = {allocated_headers, num_headers};
+        return allocated_headers;
     }
 
     FORCE_INLINE static uint8_t allocate_header_n(uint8_t num_headers) {

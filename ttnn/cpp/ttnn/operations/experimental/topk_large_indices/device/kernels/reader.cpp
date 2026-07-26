@@ -14,15 +14,22 @@ void kernel_main() {
     const uint32_t num_chunks = get_arg_val<uint32_t>(3);
     const uint32_t tail_chunk_bytes = get_arg_val<uint32_t>(4);
     const uint32_t input_page_bytes = get_arg_val<uint32_t>(5);
+    const uint32_t carried_indices_addr = get_arg_val<uint32_t>(6);
+    const uint32_t carried_indices_page_bytes = get_arg_val<uint32_t>(7);
 
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
     constexpr uint32_t chunk_bytes = get_compile_time_arg_val(1);
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(2);
     constexpr uint32_t tiles_per_chunk = get_compile_time_arg_val(3);
-    constexpr auto input_args = TensorAccessorArgs<4>();
+    constexpr uint32_t cb_carried_indices = get_compile_time_arg_val(4);
+    constexpr bool carry_indices = get_compile_time_arg_val(5) != 0;
+    constexpr uint32_t carried_indices_row_bytes = get_compile_time_arg_val(6);
+    constexpr auto input_args = TensorAccessorArgs<7>();
+    constexpr auto carried_indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 
     const auto input = TensorAccessor(input_args, src_addr, input_page_bytes);
     CircularBuffer input_cb(cb_in);
+    CircularBuffer carried_indices_cb(cb_carried_indices);
     Noc noc;
 
     for (uint32_t local_row = 0; local_row < num_rows; ++local_row) {
@@ -48,6 +55,19 @@ void kernel_main() {
             }
             noc.async_read_barrier();
             input_cb.push_back(tiles_per_chunk);
+        }
+        if constexpr (carry_indices) {
+            const auto carried_indices =
+                TensorAccessor(carried_indices_args, carried_indices_addr, carried_indices_page_bytes);
+            carried_indices_cb.reserve_back(1);
+            noc.async_read(
+                carried_indices,
+                carried_indices_cb,
+                carried_indices_page_bytes,
+                {.page_id = row, .offset_bytes = 0},
+                {.offset_bytes = 0});
+            noc.async_read_barrier();
+            carried_indices_cb.push_back(1);
         }
     }
 }

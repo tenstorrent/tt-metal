@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Prefill → KV Migration: Current Contract</title>
+  <style>
+    :root {
+      --ink: #18202a;
+      --muted: #5d6875;
+      --line: #d8dee6;
+      --paper: #ffffff;
+      --wash: #f5f7fa;
+      --blue: #155eef;
+      --amber-bg: #fff7df;
+      --amber-line: #d89b12;
+      --red-bg: #fff0f0;
+      --red-line: #d14343;
+      --green-bg: #ecfdf3;
+      --green-line: #16803c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--wash);
+      font: 15px/1.55 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main {
+      max-width: 1120px;
+      margin: 32px auto;
+      padding: 38px 44px 52px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      box-shadow: 0 8px 30px rgba(24, 32, 42, 0.06);
+    }
+    h1, h2, h3 { line-height: 1.22; }
+    h1 { margin: 0 0 8px; font-size: 30px; }
+    h2 { margin: 38px 0 14px; padding-bottom: 7px; border-bottom: 2px solid var(--line); font-size: 21px; }
+    h3 { margin: 24px 0 8px; font-size: 17px; }
+    p { margin: 8px 0 12px; }
+    ul, ol { margin: 8px 0 14px; padding-left: 24px; }
+    li { margin: 5px 0; }
+    code {
+      padding: 1px 4px;
+      border-radius: 4px;
+      background: #eef1f5;
+      font: 0.9em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      overflow-wrap: anywhere;
+    }
+    .subtitle { color: var(--muted); font-size: 16px; }
+    .scope {
+      margin: 18px 0 6px;
+      padding: 12px 15px;
+      border-left: 4px solid var(--blue);
+      background: #eef4ff;
+    }
+    .callout {
+      margin: 14px 0;
+      padding: 12px 15px;
+      border-left: 4px solid;
+      border-radius: 4px;
+    }
+    .critical { background: var(--red-bg); border-color: var(--red-line); }
+    .warning { background: var(--amber-bg); border-color: var(--amber-line); }
+    .confirmed { background: var(--green-bg); border-color: var(--green-line); }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin: 18px 0;
+    }
+    .flow div {
+      min-height: 118px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-top: 4px solid var(--blue);
+      border-radius: 7px;
+      background: var(--wash);
+    }
+    .flow strong { display: block; margin-bottom: 5px; }
+    table {
+      width: 100%;
+      margin: 12px 0 20px;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    th, td {
+      padding: 9px 10px;
+      border: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: #eef1f5; }
+    .nowrap { white-space: nowrap; }
+    .small { color: var(--muted); font-size: 13px; }
+    .refs li { margin-bottom: 8px; }
+    @media (max-width: 850px) {
+      main { margin: 0; padding: 24px 18px 38px; border: 0; border-radius: 0; }
+      .flow { grid-template-columns: 1fr; }
+      table { display: block; overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Prefill → KV Migration: Current Contract</h1>
+    <div class="subtitle">What prefill provides, how migration resolves KV bytes, and which format assumptions are load-bearing</div>
+  </header>
+
+  <div class="scope">
+    <strong>Scope.</strong> This describes the code as it exists in
+    <code>tt-llm-engine</code> and <code>tt-metal</code>. It focuses on the current
+    cache/address format and the information boundary between prefill and migration.
+    It intentionally does not propose a paging design.
+  </div>
+
+  <h2>1. Executive summary</h2>
+
+  <p>
+    Prefill currently gives migration a <strong>startup-time, exhaustive logical-to-physical
+    snapshot</strong>. For each cache config, slot, layer, and 32-token natural-position
+    chunk, the table identifies an absolute DRAM NoC address, byte count, and replica device
+    group. Prefill separately supplies a FabricNodeId → 64-bit ASIC unique-ID map so the
+    worker can open the correct UMD device.
+  </p>
+
+  <p>
+    After setup, each migration request carries only a UUID, source/destination endpoint and
+    slot, layer range, and token-position ranges. It carries <strong>no addresses, allocation
+    identity, table generation, or per-request page list</strong>. The worker resolves source
+    and destination locations from the two endpoints' previously exchanged tables.
+  </p>
+
+  <div class="callout critical">
+    <strong>Most important dependency.</strong> The installed table must remain valid from
+    publication through every read and completion that uses it. The worker rejects a second
+    <code>SET_TABLE</code>, precomputes sender queues from the first table, and the multi-rank
+    splitter requires a nonzero entry for every configured
+    <code>slot × layer × max-sequence chunk</code>.
+  </div>
+
+  <div class="callout warning">
+    <strong>Current multi-cache gap.</strong> TT-Metal's table/protobuf supports multiple
+    configs, and DeepSeek may publish config 0 = KVPE plus config 1 = index cache. The active
+    DCN splitter, sender, and migration command use the default config only; there is no
+    config ID in <code>MigratePayload</code>. Therefore config 1 is serialized but is not
+    migrated by this path.
+  </div>
+
+  <h2>2. End-to-end data and control flow</h2>
+
+  <div class="flow" aria-label="KV migration flow">
+    <div>
+      <strong>1. Prefill allocates</strong>
+      One max-sequence cache tensor with folded user/layer dimension and 32-token DRAM shards.
+    </div>
+    <div>
+      <strong>2. Prefill describes</strong>
+      Enumerates every logical chunk into a KV address-table protobuf and builds the device map.
+    </div>
+    <div>
+      <strong>3. Worker freezes setup</strong>
+      Imports <code>SET_TABLE</code>, applies the device map, splits by host/rank, exchanges endpoint tables, then reports ready.
+    </div>
+    <div>
+      <strong>4. Scheduler requests</strong>
+      Sends logical source/destination slots plus layer and token rectangles. Layer acknowledgements carry only a counter increment.
+    </div>
+    <div>
+      <strong>5. Worker moves bytes</strong>
+      Looks up source and destination chunks, reads one source replica, and writes to every destination replica using a self-addressed wire header.
+    </div>
+  </div>
+
+  <h3>Startup handoff from prefill</h3>
+
+  <ol>
+    <li>The model runtime builds and serializes the model-specific <code>KvChunkAddressTable</code>.</li>
+    <li>The client places only the protobuf <em>file path</em> in the shared-memory table queue.</li>
+    <li>Prefill sends <code>AssignDevMap(count)</code>, followed by one device-map entry per chip.</li>
+    <li>The worker imports and distributes the table. A second <code>SET_TABLE</code> terminates the worker.</li>
+    <li>On connection, both endpoints exchange their full tables and rank/device ownership. Sender queues are then built.</li>
+    <li><code>WORKER_READY</code> gates request processing on table and device-map readiness.</li>
+  </ol>
+
+  <h3>Per-chunk readiness and migration</h3>
+
+  <p>
+    Prefill sends the runner only three 32-bit values:
+    <code>{slot_id, actual_start, actual_end}</code>. After each layer finishes writing KV,
+    the runner synchronizes device work and increments a shared counter. The acknowledgement
+    has no payload. The scheduler uses FIFO order to interpret acknowledgement number
+    <code>n</code> as layer <code>n</code> of the current chunk, then submits:
+  </p>
+
+  <p>
+    <code>source slot + destination slot + [layer, layer+1) + [migration_start, actual_end)</code>
+  </p>
+
+  <p>
+    A burst UUID groups all layer/chunk members of one request. The source slot remains owned
+    until the destination drains device writes, sends completion acknowledgements, and the
+    scheduler receives <code>MIGRATION_COMPLETE</code>.
+  </p>
+
+  <h2>3. Exact formats migration depends on</h2>
+
+  <h3>KV chunk address table</h3>
+
+  <table>
+    <thead>
+      <tr><th>Part</th><th>Fields / meaning</th><th>Current requirement</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="nowrap"><code>KvChunkAddressTableConfig</code></td>
+        <td><code>num_layers</code>, <code>max_sequence_length</code>, <code>num_slots</code>, <code>chunk_n_tokens</code>, <code>chunk_size_bytes</code></td>
+        <td>Migration currently reads config 0. Source and destination effectively need matching chunk geometry.</td>
+      </tr>
+      <tr>
+        <td>Logical key</td>
+        <td><code>(config, slot, layer, natural token position)</code></td>
+        <td>Position starts are chunk-aligned. Table storage is flattened <code>[slot][layer][position_chunk]</code>.</td>
+      </tr>
+      <tr>
+        <td><code>KvCacheLocation</code></td>
+        <td>16 bytes: <code>uint64 noc_addr</code>, <code>uint32 size_bytes</code>, <code>uint32 device_group_index</code></td>
+        <td>Every requested logical chunk must resolve to a live physical location.</td>
+      </tr>
+      <tr>
+        <td>NoC address</td>
+        <td>Upper 32 bits = DRAM channel/bank; lower 32 bits = device-local absolute address</td>
+        <td>Addresses are consumed as absolute. Migration performs no tensor-relative rebasing.</td>
+      </tr>
+      <tr>
+        <td>Device group</td>
+        <td>Sorted set of FabricNodeIds containing replicas</td>
+        <td>Source reads the first replica. Destination writes identical bytes to every member.</td>
+      </tr>
+      <tr>
+        <td>Host map</td>
+        <td><code>FabricNodeId → hostname</code></td>
+        <td>Required to route remote chunks to the MPI rank that owns each destination device.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Device map and request/wire payloads</h3>
+
+  <table>
+    <thead>
+      <tr><th>Format</th><th>Fields</th><th>What it does not contain</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Device-map entry</td>
+        <td><code>fabric_node_mesh_id</code>, <code>fabric_node_chip_id</code>, 64-bit <code>umd_chip_id</code> (hardware-stable ASIC unique ID)</td>
+        <td>No KV addresses; it only makes FabricNodeIds actionable by UMD/DRISC.</td>
+      </tr>
+      <tr>
+        <td>Prefill metadata</td>
+        <td><code>slot_id</code>, <code>actual_start</code>, <code>actual_end</code></td>
+        <td>No request ID, layer, allocation ID, address, or table generation.</td>
+      </tr>
+      <tr>
+        <td><code>MigratePayload</code></td>
+        <td>UUID, remote endpoint, source/destination slots, half-open layer range, source/destination half-open token ranges, burst phase</td>
+        <td>No config ID, address list, byte size, mapping version, or allocation identity.</td>
+      </tr>
+      <tr>
+        <td>32-byte migration wire header</td>
+        <td>Destination NoC address, UUID, payload bytes, destination mesh/chip, done bit</td>
+        <td>No logical slot/layer/position. The receiver trusts the physical destination in the header.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>4. Current prefill storage geometry</h2>
+
+  <p>
+    The primary MLA cache is allocated as
+    <code>[num_users × num_layers, 1, max_seq_len / SP, head_dim]</code>. The folded outer
+    index is user-major: <code>slot × num_layers + layer</code>. It is stored in DRAM with
+    32-token ND shards distributed round-robin over the device's actual DRAM bank count and
+    replicated across the relevant mesh columns.
+  </p>
+
+  <p>
+    The address-table builder replays that exact physical walk. For each SP row, slot, layer,
+    prefill block, and natural 32-token position it records:
+  </p>
+
+  <p>
+    <code>noc_addr = (bank_id &lt;&lt; 32) | (tensor.buffer_address() + bank_offset)</code>
+  </p>
+
+  <p>
+    <code>bank_id</code> advances round-robin; <code>bank_offset</code> increases by the
+    physical chunk size after a complete bank sweep. Natural token positions are mapped
+    block-cyclically across SP rows, so migration needs the full map, not merely a tensor base
+    and a linear per-token stride.
+  </p>
+
+  <ul>
+    <li>Logical/physical atomicity is 32 tokens.</li>
+    <li>Dense BF8 MLA with head dimension 576 uses 18 BF8 tiles: <code>18 × 1088 = 19,584 bytes</code> per chunk.</li>
+    <li>BF16 row-major cache chunks use <code>32 × head_dim × 2</code> bytes.</li>
+    <li>A final non-aligned logical end is rounded up and causes the enclosing full physical chunk to be copied.</li>
+    <li>Sparse models may have a second cache with a different byte geometry and a compact layer namespace.</li>
+  </ul>
+
+  <h2>5. Critical contract for any changed physical allocation</h2>
+
+  <p>
+    The following information is what migration actually requires from prefill. This is a
+    contract inventory, not a proposed representation.
+  </p>
+
+  <table>
+    <thead>
+      <tr><th>Required information</th><th>Why migration needs it</th><th>Where it exists today</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Cache config identity</td>
+        <td>Distinguishes KVPE, index, K/V head caches, their layer namespaces, and byte geometry.</td>
+        <td>In protobuf entries/configs, but absent from migration commands; only config 0 is consumed.</td>
+      </tr>
+      <tr>
+        <td>Logical owner identity</td>
+        <td>Correlates a request/slot with the physical mapping that was written and acknowledged.</td>
+        <td>Only slot and UUID are carried; no allocation epoch/generation exists.</td>
+      </tr>
+      <tr>
+        <td>Valid logical extent</td>
+        <td>Defines which natural 32-token chunks are populated and safe to read.</td>
+        <td>Scheduler supplies migrated token ranges; the installed table nevertheless describes maximum capacity.</td>
+      </tr>
+      <tr>
+        <td>Per-chunk physical location</td>
+        <td>Identifies FabricNode replica group, DRAM bank/channel, absolute byte address, and byte count.</td>
+        <td>Static <code>KvCacheLocation</code> entries published once before requests.</td>
+      </tr>
+      <tr>
+        <td>Mapping lifetime/version</td>
+        <td>Prevents an acknowledgement or migration from resolving through stale/reused addresses.</td>
+        <td>Implicitly guaranteed by immutable maximum-size storage; no explicit field exists.</td>
+      </tr>
+      <tr>
+        <td>Device and host ownership</td>
+        <td>Resolves FabricNodeId to local ASIC/UMD access and remote MPI rank.</td>
+        <td>Table host map plus separate FabricNodeId → ASIC unique-ID map.</td>
+      </tr>
+      <tr>
+        <td>Read-after-write readiness</td>
+        <td>The migration worker reads out of band from the model's TTNN command queue.</td>
+        <td>Device synchronization followed by anonymous per-layer counter acknowledgements.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Observed breakpoints in the current implementation</h3>
+
+  <ul>
+    <li><strong>Dense completeness:</strong> the multi-rank splitter loops through all configured slots, layers, and maximum-sequence chunks and fatals when <code>size_bytes == 0</code>.</li>
+    <li><strong>Immutable setup:</strong> a second <code>SET_TABLE</code> is fatal; remote tables and per-device sender queues are constructed once.</li>
+    <li><strong>No mapping identity:</strong> neither prefill metadata, layer acknowledgement, nor <code>MigratePayload</code> identifies an allocation or table generation.</li>
+    <li><strong>Uniform geometry:</strong> sender buffer sizing and destination indexing assume compatible source/destination <code>chunk_n_tokens</code> and chunk bytes. Compatibility is not explicitly validated.</li>
+    <li><strong>Per-entry size:</strong> parts of the sender use config-level <code>chunk_size_bytes</code>, while reads and wire headers use entry-level <code>size_bytes</code>; variable per-entry sizes are unsafe.</li>
+    <li><strong>Config 0 only:</strong> multi-config protobuf support is ahead of the active migration command/splitter/sender path.</li>
+    <li><strong>Alignment:</strong> range starts must be 32-token aligned; the final end may be partial but copies the enclosing full chunk.</li>
+    <li><strong>Failure behavior:</strong> missing, stale, or invalid mappings generally trigger <code>TT_FATAL</code>, termination, or scheduler abort rather than a recoverable per-request error.</li>
+  </ul>
+
+  <div class="callout confirmed">
+    <strong>Present integration status.</strong> The current prefill runner explicitly rejects
+    simultaneous non-rectangular cache mode and migration, suppresses the KV table and LayerAck
+    setup in that mode, and the runtime refuses table publication. This matches the contract
+    gap above; it is not merely a missing command-line combination.
+  </div>
+
+  <h2>6. Source map</h2>
+
+  <p class="small">
+    Base A = <code>/localdev/skrstic/metal6/</code><br>
+    Base B = <code>/proj_sw/user_dev/ddjukic/tt-inference-server/tt-media-server/cpp_server/tt-llm-engine/</code>
+  </p>
+
+  <ul class="refs">
+    <li><strong>Table types, lookup rules, flattening:</strong> A<code>tt_metal/api/tt-metalium/internal/disaggregation/kv_chunk_address_table.hpp:31-74,103-126,167-174</code>; A<code>tt_metal/impl/internal/disaggregation/kv_chunk_address_table.cpp:31-53,91-117,167-184</code>.</li>
+    <li><strong>Protobuf fields and multi-config serialization:</strong> A<code>tt_metal/impl/internal/disaggregation/protobuf/kv_chunk_address_table.proto:20-53</code>; A<code>tt_metal/impl/internal/disaggregation/kv_chunk_address_table_protobuf.cpp:21-155</code>.</li>
+    <li><strong>Prefill allocation and address generation:</strong> A<code>models/demos/deepseek_v3_d_p/utils/kv_cache_utils.py:235-303,306-411</code>; A<code>models/demos/deepseek_v3_d_p/tt/runners/kv_chunk_table.py:29-56,67-177</code>.</li>
+    <li><strong>Table/device-map publication:</strong> A<code>models/demos/common/prefill/runners/migration.py:35-73,119-160,187-214</code>.</li>
+    <li><strong>Layer readiness and table build:</strong> A<code>models/demos/deepseek_v3_d_p/tt/tt_prefill_runtime.py:245-300,321-369</code>; A<code>models/demos/common/prefill/runners/prefill_runner.py:782-801,832-885</code>.</li>
+    <li><strong>Scheduler correlation and burst submission:</strong> B<code>src/scheduler/prefill/prefill_scheduler.cpp:699-761,789-943,953-1038</code>; B<code>include/tt_llm_engine/scheduler/prefill/in_flight_chunk_fifo.hpp:16-39</code>.</li>
+    <li><strong>Request and queue formats:</strong> B<code>disaggregation/migration/src/worker/internal_queues.hpp:19-63</code>; B<code>disaggregation/migration/src/worker/shmem_queues.hpp:151-203</code>.</li>
+    <li><strong>One-shot table setup/device map:</strong> B<code>disaggregation/migration/src/worker/control_thread.cpp:1346-1427</code>.</li>
+    <li><strong>Dense split and config-0 behavior:</strong> B<code>disaggregation/migration/src/dcn_table_splitter.cpp:13-79</code>.</li>
+    <li><strong>Sender lookup, read, fan-out, and geometry assumptions:</strong> B<code>disaggregation/migration/src/dcn_sender_backend.cpp:37-142,156-229,300-416,458-491</code>.</li>
+    <li><strong>Physical wire and receiver write:</strong> B<code>disaggregation/migration/include/migration_message.hpp:11-72</code>; B<code>disaggregation/migration/src/dcn_receiver_backend.cpp:139-260,330-350</code>.</li>
+    <li><strong>Endpoint table exchange and completion:</strong> B<code>disaggregation/migration/src/migration_layer.cpp:89-253</code>; B<code>disaggregation/migration/src/worker/data_plane_thread.cpp:456-553,614-712</code>.</li>
+  </ul>
+
+  <p class="small">Prepared from direct code inspection on 2026-07-25.</p>
+</main>
+</body>
+</html>

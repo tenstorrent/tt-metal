@@ -63,6 +63,36 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
         nb::arg("num_layers"),
         nb::arg("kv_actual_global"),
         nb::arg("cluster_axis"));
+
+    ttnn::bind_function<"paged_update_padded_kv_cache", "ttnn.experimental.deepseek_prefill.">(
+        mod,
+        R"doc(
+            Write a prefill slab into a physical KV bundle selected through a persistent device
+            page table.
+
+            ``cache_pool`` has per-device shape
+            ``[num_physical_bundles * num_layers, 1, 5120 / SP, head_dim]`` and uses
+            bundle-major/layer-inner batch linearization. ``page_table`` is a ROW_MAJOR INT32
+            tensor ``[num_slots, max_logical_bundles]``. Each entry maps one global logical
+            5120-token bundle to a physical bundle; its 32-token subpages are addressed
+            deterministically by the writer.
+
+            Page-table contents, ``slot_idx`` and ``kv_actual_global`` are runtime values and do
+            not enter the program hash. A missing (-1) or out-of-range bundle ID is asserted on
+            device and is never used to form a pool address.
+
+            Returns:
+                ttnn.Tensor: handle to ``cache_pool`` updated in place.
+        )doc",
+        &ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::paged_update_padded_kv_cache,
+        nb::arg("cache_pool").noconvert(),
+        nb::arg("input").noconvert(),
+        nb::arg("page_table").noconvert(),
+        nb::arg("slot_idx"),
+        nb::arg("layer_idx"),
+        nb::arg("num_layers"),
+        nb::arg("kv_actual_global"),
+        nb::arg("cluster_axis"));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::detail

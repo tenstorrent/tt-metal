@@ -28,12 +28,28 @@ struct SparseSDPAParams {
     std::optional<BlockCyclicLayout> block_cyclic = std::nullopt;
     bool has_block_cyclic() const { return block_cyclic.has_value(); }
     bool has_scaled_kv() const { return kv_format == transformer::SparseKVFormat::SCALED_FP8; }
+    // GLM-5.2 paged prefill cache.  One compact table entry maps a logical 5120-token
+    // bundle to a physical bundle; each physical bundle contains all 78 primary
+    // layers and is sequence-sharded over `sp`.  The values are compile-time except
+    // cache_batch_idx, which selects the page-table row at dispatch time.
+    struct PagedKVLayout {
+        uint32_t sp;
+        uint32_t sp_axis;
+        uint32_t chunk_local;
+        uint32_t layer_idx;
+        uint32_t num_layers;
+        uint32_t bundle_tokens;
+        uint32_t max_bundles_per_slot;
+    };
+    std::optional<PagedKVLayout> paged_kv = std::nullopt;
+    bool has_paged_kv() const { return paged_kv.has_value(); }
 };
 
 struct SparseSDPAInputs {
     Tensor q;        // [1, H, S, K_DIM] bf16/fp8_e4m3 ROW_MAJOR  (K_DIM = head dim, e.g. 576)
     Tensor kv;       // Plain [B,1,T,K_DIM] or packed scaled-FP8 rows; format is explicit in SparseSDPAParams
     Tensor indices;  // [1, 1, S, TOPK] uint32 ROW_MAJOR  (0xFFFFFFFF = masked)
+    std::optional<Tensor> page_table;  // paged mode: replicated INT32 [slots, max_5120_bundles]
 };
 
 }  // namespace ttnn::prim

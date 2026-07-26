@@ -315,6 +315,7 @@ class TtPrefillTransformer(LightweightModule):
         actual_end: Optional[int] = None,
         cache_user_id: int = 0,
         index_kv_cache: Optional[ttnn.Tensor] = None,
+        paged_cache=None,
     ):
         """
         Forward pass: [embed] -> [block x N] -> [norm -> lm_head -> sample].
@@ -412,6 +413,7 @@ class TtPrefillTransformer(LightweightModule):
                 indexer_indices=inject,
                 return_indexer_indices=reuse,
                 index_kv_cache=index_kv_cache,
+                paged_cache=paged_cache,
             )
             if reuse:
                 h, _, new_idx = ret
@@ -426,6 +428,8 @@ class TtPrefillTransformer(LightweightModule):
                 # Last layer was kv-only — KV cache filled, migration callback
                 # fired, no hidden state flowing forward. Skip norm + lm_head +
                 # sample; no first_token to produce.
+                if indexer_indices is not None:
+                    ttnn.deallocate(indexer_indices)
                 return None, None, intermediates
             if return_intermediates:
                 ttnn.synchronize_device(self.mesh_device)

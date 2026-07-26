@@ -6,6 +6,7 @@
 
 #include <limits>
 #include <optional>
+#include <tuple>
 
 #include <tt_stl/assert.hpp>
 
@@ -28,6 +29,10 @@ inline uint32_t flattened_rows_excluding_last_dim(const ttnn::Shape& shape) {
 
 struct operation_attributes_t {
     uint32_t k{};
+    bool return_values{false};
+    // Logical index represented by input column zero. Runtime-only so successive
+    // bounded paging stripes reuse one compiled program.
+    uint32_t index_offset{0};
     // Restrict the search to the first `valid_length` columns of each row instead of the full last
     // dimension. Lets top-k run over the real prefix of an over-allocated row (whose tail may be stale)
     // without physically slicing the input. nullopt = search the full width. Runtime-only (hash-excluded,
@@ -37,9 +42,12 @@ struct operation_attributes_t {
 
 struct tensor_args_t {
     Tensor input_tensor;
+    // Optional IDs paired element-for-element with input values. The value-preserving
+    // merge form uses these to carry global logical cache positions through TopK.
+    std::optional<Tensor> input_indices;
 };
 
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = tt::tt_metal::TensorSpec;
+using tensor_return_value_t = std::tuple<Tensor, Tensor>;
+using spec_return_value_t = std::tuple<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec>;
 
 }  // namespace ttnn::operations::experimental::topk_large_indices

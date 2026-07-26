@@ -85,9 +85,11 @@ void bind_fabric_api(nb::module_& mod) {
         Values:
             DISABLED: Fabric tensix mux functionality is disabled (default).
             MUX: Enable fabric tensix mux mode for worker → mux → fabric router routing.
+            UDM: Enable the mux and relay extensions required by unified data movement.
         )")
         .value("DISABLED", tt::tt_fabric::FabricTensixConfig::DISABLED)
-        .value("MUX", tt::tt_fabric::FabricTensixConfig::MUX);
+        .value("MUX", tt::tt_fabric::FabricTensixConfig::MUX)
+        .value("UDM", tt::tt_fabric::FabricTensixConfig::UDM);
 
     // custom mapping here for interface stability
     nb::enum_<tt::tt_fabric::FabricUDMMode>(mod, "FabricUDMMode", R"(
@@ -139,6 +141,12 @@ void bind_fabric_api(nb::module_& mod) {
         &tt::tt_fabric::GetFabricConfig,
         R"(
             Returns the currently active global fabric configuration.
+        )");
+    mod.def(
+        "get_fabric_udm_mode",
+        &tt::tt_fabric::GetFabricUDMMode,
+        R"(
+            Returns whether unified data movement is enabled for the active fabric.
         )");
 
     mod.def(

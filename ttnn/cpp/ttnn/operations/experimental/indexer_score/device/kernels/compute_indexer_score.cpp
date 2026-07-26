@@ -22,7 +22,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"  // block-max-pool: compute_kernel_lib::reduce
-#include "indexer_score_common.hpp"  // shared CB indices, compile-time dims, work-unit walk
+#include "indexer_score_common.hpp"                             // shared CB indices, compile-time dims, work-unit walk
 #include "api/compute/experimental/indexer_mul_custom.h"
 
 // qk subblock height (head rows per DEST pass).
@@ -404,8 +404,9 @@ inline void stamp_masked_suffix(
     uint32_t k_tiles_in_unit,
     uint32_t chunk_start_tiles,
     uint32_t straddle_q_tile,
-    uint32_t straddle_jump_tiles) {
-    const uint32_t k_tile0 = span.k_tile_start();
+    uint32_t straddle_jump_tiles,
+    uint32_t key_start_tiles) {
+    const uint32_t k_tile0 = key_start_tiles + span.k_tile_start();
     const uint32_t q_row_abs = span.q_tile_start() + q_row;
     const uint32_t diag_tile =
         iscore::causal_diag_tile(q_row_abs, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles);
@@ -435,6 +436,7 @@ void kernel_main() {
     // Both 0 on every non-boundary device and in the chunk-aligned case, leaving the diagonal linear.
     const uint32_t straddle_q_tile = get_arg_val<uint32_t>(8);
     const uint32_t straddle_jump_tiles = get_arg_val<uint32_t>(9);
+    const uint32_t key_start_tiles = get_arg_val<uint32_t>(10);
     if (num_groups == 0 || num_bands == 0) {
         return;
     }
@@ -512,7 +514,8 @@ void kernel_main() {
                                 k.wait_front(c_end * head_dim_tiles);  // streamed: wait k cols [0, c_end)
                             }
                             for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
-                                matmul_cols_to_acc<cb_q, cb_k, cb_acc_strip>(head_base, r, c, n, r * k_tiles_per_unit + c);
+                                matmul_cols_to_acc<cb_q, cb_k, cb_acc_strip>(
+                                    head_base, r, c, n, r * k_tiles_per_unit + c);
                             }
                         }
                     }
@@ -526,7 +529,8 @@ void kernel_main() {
                             k_tiles_in_unit,
                             chunk_start_tiles,
                             straddle_q_tile,
-                            straddle_jump_tiles);
+                            straddle_jump_tiles,
+                            key_start_tiles);
                     }
                     acc.push_back(unit_strip);
                 } else {
@@ -561,7 +565,8 @@ void kernel_main() {
                             k_tiles_in_unit,
                             chunk_start_tiles,
                             straddle_q_tile,
-                            straddle_jump_tiles);
+                            straddle_jump_tiles,
+                            key_start_tiles);
                     }
                     acc.push_back(unit_strip);
                 }

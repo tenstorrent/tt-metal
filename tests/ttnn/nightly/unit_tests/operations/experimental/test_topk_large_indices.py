@@ -59,6 +59,54 @@ def _assert_topk_matches_torch(torch_input: torch.Tensor, tt_indices: ttnn.Tenso
     _assert_indices(tt_indices, ref_indices, expected_shape)
 
 
+@pytest.mark.parametrize("k,n", [(16, 513), (512, 1024), (2048, 5120)])
+def test_topk_large_values_indices_matches_torch(device, k, n):
+    torch_input = _make_bf16_exact_input(num_rows=2, n=n)
+    tt_values, tt_indices = ttnn.experimental.topk_large_values_indices(_to_device(torch_input, device), k=k)
+
+    ref_values, ref_indices = torch.topk(torch_input.float(), k, dim=-1, largest=True, sorted=True)
+    actual_values = ttnn.to_torch(tt_values).float()
+    assert list(tt_values.shape) == [2, k]
+    assert tt_values.dtype == ttnn.bfloat16
+    assert tt_values.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert_equal(actual_values, ref_values)
+    _assert_indices(tt_indices, ref_indices, [2, k])
+
+
+def test_topk_large_values_indices_applies_unaligned_logical_offset(device):
+    k = 2048
+    index_offset = 5120
+    torch_input = _make_bf16_exact_input(num_rows=2, n=5120)
+    tt_values, tt_indices = ttnn.experimental.topk_large_values_indices(
+        _to_device(torch_input, device), k=k, index_offset=index_offset
+    )
+
+    ref_values, ref_indices = torch.topk(torch_input.float(), k, dim=-1, largest=True, sorted=True)
+    assert_equal(ttnn.to_torch(tt_values).float(), ref_values)
+    _assert_indices(tt_indices, ref_indices + index_offset, [2, k])
+
+
+@pytest.mark.parametrize("n", [3648, 4096])
+def test_topk_large_values_indices_carries_logical_ids_through_merge(device, n):
+    k = 2048
+    torch_input = _make_bf16_exact_input(num_rows=2, n=n)
+    carried_ids = (torch.arange(n, dtype=torch.int64) * 17 + 500_003).repeat(2, 1)
+    tt_ids = ttnn.from_torch(
+        carried_ids,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    tt_values, tt_indices = ttnn.experimental.topk_large_values_indices(
+        _to_device(torch_input, device), k=k, input_indices=tt_ids
+    )
+
+    ref_values, ref_ordinals = torch.topk(torch_input.float(), k, dim=-1, largest=True, sorted=True)
+    ref_ids = torch.gather(carried_ids, dim=-1, index=ref_ordinals)
+    assert_equal(ttnn.to_torch(tt_values).float(), ref_values)
+    _assert_indices(tt_indices, ref_ids, [2, k])
+
+
 @pytest.mark.parametrize(
     "k,num_rows,n",
     [

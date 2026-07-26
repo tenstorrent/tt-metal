@@ -351,7 +351,13 @@ void process_inbound_packet(
     UDMMemoryPoolType& memory_pool,
     RegisteredResponsePoolType& response_pool) {
     bool has_unsent_payload = get_ptr_val(my_channel_free_slots_stream_id.get()) != NUM_BUFFERS;
-    if (has_unsent_payload) {
+    // Every inbound UDM command can register a response: reads always do, and
+    // writes/atomics may be non-posted.  Keep the channel occupied when the
+    // response FIFO is full so the existing fabric flow control backpressures
+    // the worker until process_response() drains a slot.  Consuming first would
+    // violate register_*_response()'s critical has_space() precondition and can
+    // overflow/assert under production-sized concurrent paged-cache reads.
+    if (has_unsent_payload && response_pool.has_space()) {
         size_t buffer_address = channel.get_buffer_address(worker_interface.local_write_counter.get_buffer_index());
         invalidate_l1_cache();
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);

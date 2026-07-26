@@ -47,6 +47,7 @@ def open_mesh_device(mesh_shape: tuple, model_cfg: type, l1_small_size: int = 0)
     `l1_small_size` > 0 carves an L1_SMALL region (needed when an op routes its
     semaphores there, e.g. the Kimi MoE routing all-gather with use_l1_small_for_semaphores)."""
     sp = mesh_shape[0]
+    paged_glm52 = os.environ.get("TT_GLM52_PAGED_PREFILL", "0") == "1"
     fabric_mode = os.environ.get("PREFILL_FABRIC_MODE", "").strip().lower()
     fabric_mode_map = {
         "1d": ttnn.FabricConfig.FABRIC_1D,
@@ -62,22 +63,37 @@ def open_mesh_device(mesh_shape: tuple, model_cfg: type, l1_small_size: int = 0)
         raise ValueError(f"PREFILL_FABRIC_MODE must be one of {sorted(fabric_mode_map)}, got {fabric_mode!r}")
     else:
         fabric_config = ttnn.FabricConfig.FABRIC_1D if sp <= 8 else ttnn.FabricConfig.FABRIC_2D
+    if paged_glm52:
+        if tuple(mesh_shape) not in {(4, 1), (8, 4)}:
+            raise ValueError(
+                "GLM-5.2 paged prefill supports mesh_shape=(4, 1) validation "
+                f"and (8, 4) production, got {tuple(mesh_shape)}"
+            )
+        if fabric_mode and fabric_config != ttnn.FabricConfig.FABRIC_2D:
+            raise ValueError("GLM-5.2 paged prefill requires PREFILL_FABRIC_MODE=2d")
+        fabric_config = ttnn.FabricConfig.FABRIC_2D
     logger.info(f"Fabric config: {fabric_config} (sp={sp}, PREFILL_FABRIC_MODE={fabric_mode or 'unset'})")
 
     fabric_router_config = _create_fabric_router_config(
         max_payload_size=model_cfg.FABRIC_PAYLOAD_SIZE,
     )
+    if paged_glm52:
+        logger.info("GLM-5.2 paged prefill enabled: opening 2D fabric with UDM")
 
     ttnn.set_fabric_config(
         fabric_config,
         ttnn.FabricReliabilityMode.RELAXED_INIT,
-        None,
-        ttnn.FabricTensixConfig.DISABLED,
-        ttnn.FabricUDMMode.DISABLED,
+        2 if paged_glm52 else None,
+        ttnn.FabricTensixConfig.UDM if paged_glm52 else ttnn.FabricTensixConfig.DISABLED,
+        ttnn.FabricUDMMode.ENABLED if paged_glm52 else ttnn.FabricUDMMode.DISABLED,
         ttnn.FabricManagerMode.DEFAULT,
         fabric_router_config,
     )
-    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*mesh_shape), l1_small_size=l1_small_size)
+    return ttnn.open_mesh_device(
+        mesh_shape=ttnn.MeshShape(*mesh_shape),
+        l1_small_size=l1_small_size,
+        dispatch_core_config=ttnn.DispatchCoreConfig(),
+    )
 
 
 def make_global_spec(mesh_shape: tuple, chunk_size: int) -> ttnn.TensorSpec:

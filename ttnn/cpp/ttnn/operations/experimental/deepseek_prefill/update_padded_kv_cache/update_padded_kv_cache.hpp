@@ -39,8 +39,25 @@ ttnn::Tensor update_padded_kv_cache(
     uint32_t kv_actual_global,
     uint32_t cluster_axis);
 
+// Paged variant for 5120-token prefill bundles. `cache_pool` keeps the existing cache-compatible
+// per-device shape [num_physical_bundles * num_layers, 1, 5120 / SP, head_dim], with bundle-major,
+// layer-inner batch linearization. `page_table` is a persistent ROW_MAJOR INT32 device tensor
+// [num_slots, max_logical_bundles] mapping each global logical bundle to a physical bundle ID.
+// Each bundle's 32-token subpages are deterministic. Page-table contents, slot_idx and
+// kv_actual_global are runtime values and do not create new programs.
+ttnn::Tensor paged_update_padded_kv_cache(
+    const ttnn::Tensor& cache_pool,
+    const ttnn::Tensor& input,
+    const ttnn::Tensor& page_table,
+    uint32_t slot_idx,
+    uint32_t layer_idx,
+    uint32_t num_layers,
+    uint32_t kv_actual_global,
+    uint32_t cluster_axis);
+
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache
 
 namespace ttnn {
+using operations::experimental::deepseek_prefill::update_padded_kv_cache::paged_update_padded_kv_cache;
 using operations::experimental::deepseek_prefill::update_padded_kv_cache::update_padded_kv_cache;
 }  // namespace ttnn

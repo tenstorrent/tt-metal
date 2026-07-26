@@ -46,7 +46,7 @@ set -o pipefail
 # pytest's own stdout/stderr pass through unchanged.
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DISPATCH_TIMEOUT=5
+DISPATCH_TIMEOUT="${TT_SAFE_PYTEST_DISPATCH_TIMEOUT:-5}"
 TRIAGE_SCRIPT="${REPO_DIR}/tools/tt-triage.py"
 WATCHER_LOG="${REPO_DIR}/generated/watcher/watcher.log"
 TRIAGE_LLM_DIR="${REPO_DIR}/generated/tt-triage"
@@ -302,11 +302,15 @@ IS_HANG=false
 if [[ -s "$TRIAGE_LOG" ]]; then
     IS_HANG=true
 fi
+IS_CRASH=false
+if [[ $EXIT_CODE -ge 128 ]]; then
+    IS_CRASH=true
+fi
 
 # Only reset device when the failure might have left it dirty.
 # Hangs and crashes corrupt device state. Normal test failures (PCC mismatch,
 # assertion errors) and collection errors don't touch the device.
-if [[ "$IS_HANG" == true ]]; then
+if [[ "$IS_HANG" == true || "$IS_CRASH" == true ]]; then
     echo "SAFE_PYTEST: Resetting device..."
     if tt-smi -r; then
         sleep 2
@@ -316,7 +320,11 @@ if [[ "$IS_HANG" == true ]]; then
         echo "SAFE_PYTEST: Device reset FAILED; leaving device marked dirty"
     fi
 
-    echo "SAFE_PYTEST_RESULT: HANG (exit code: $EXIT_CODE)"
+    if [[ "$IS_HANG" == true ]]; then
+        echo "SAFE_PYTEST_RESULT: HANG (exit code: $EXIT_CODE)"
+    else
+        echo "SAFE_PYTEST_RESULT: CRASH (exit code: $EXIT_CODE)"
+    fi
     echo ""
 
     # Dump full triage log

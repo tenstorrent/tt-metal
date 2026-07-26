@@ -168,6 +168,7 @@ void SetFabricConfig(
     FabricRouterConfig router_config = FabricRouterConfig{});
 
 FabricConfig GetFabricConfig();
+FabricUDMMode GetFabricUDMMode();
 
 namespace experimental {
 size_t get_number_of_available_routing_planes(

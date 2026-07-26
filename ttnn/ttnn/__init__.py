@@ -171,6 +171,7 @@ from ttnn._ttnn.fabric import (
     FabricRouterConfig,
     set_fabric_config,
     get_fabric_config,
+    get_fabric_udm_mode,
     get_tt_fabric_packet_header_size_bytes,
     get_tt_fabric_max_payload_size_bytes,
     get_physical_mesh_shapes,

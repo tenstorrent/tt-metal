@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -377,6 +378,18 @@ class ttMLA:
             self.sp_ccl_topology, self.tp_ccl_topology = topology  # (sp_axis_0, tp_axis_1)
         else:
             self.sp_ccl_topology = self.tp_ccl_topology = topology
+        # Freeze the paged program family at construction so trace capture/replay
+        # cannot switch cache addressing underneath the model.
+        self.paged_prefill_enabled = os.environ.get("TT_GLM52_PAGED_PREFILL", "0") == "1"
+        if self.paged_prefill_enabled:
+            assert (self.sp_factor, self.tp_factor) in {
+                (4, 1),
+                (8, 4),
+            }, f"paged GLM-5.2 supports SP4xTP1 validation and SP8xTP4 production, got SP{self.sp_factor}xTP{self.tp_factor}"
+            assert self.sp_axis == 0 and self.tp_axis == 1, "paged GLM-5.2 requires SP axis 0 and TP axis 1"
+            assert (
+                self.sparse_kv_cache_format == MlaKvCacheFormat.BF16_RM
+            ), "paged sparse SDPA requires the GLM-5.2 BF16 row-major primary cache"
 
         # Ring-attention persistent buffers. Chunked prefill (ring_mla) and the standard ring
         # joint SDPA use disjoint buffer sets, so allocate only the one the configured mode needs --
@@ -991,16 +1004,29 @@ class ttMLA:
         cache_user_id: int,
         cache_layer_idx: int,
         kv_actual_isl: int,
+        paged_cache=None,
     ) -> None:
-        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            cache.storage,
-            values,
-            slot_idx=cache_user_id,
-            layer_idx=cache_layer_idx,
-            num_layers=self.layer_num,
-            kv_actual_global=kv_actual_isl,
-            cluster_axis=self.sp_axis,
-        )
+        if paged_cache is None:
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                cache.storage,
+                values,
+                slot_idx=cache_user_id,
+                layer_idx=cache_layer_idx,
+                num_layers=self.layer_num,
+                kv_actual_global=kv_actual_isl,
+                cluster_axis=self.sp_axis,
+            )
+        else:
+            ttnn.experimental.deepseek_prefill.paged_update_padded_kv_cache(
+                cache.storage,
+                values,
+                paged_cache.device_page_table,
+                slot_idx=cache_user_id,
+                layer_idx=cache_layer_idx,
+                num_layers=paged_cache.num_primary_layers,
+                kv_actual_global=kv_actual_isl,
+                cluster_axis=self.sp_axis,
+            )
 
     def _o_proj_epilogue(self, attn_out: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
         """Shared nlp_concat_heads -> o_proj -> TP reduce-scatter epilogue."""
@@ -1038,6 +1064,7 @@ class ttMLA:
         index_kv_cache: Optional[ttnn.Tensor] = None,
         indexer_indices: Optional[ttnn.Tensor] = None,
         return_indexer_indices: bool = False,
+        paged_cache=None,
     ) -> "ttnn.Tensor | tuple[ttnn.Tensor, Optional[dict]]":
         # Chunked-prefill mode is fixed at construction: self.is_chunked drives buffer allocation in
         # __init__ and the rope variant, and forward honors that flag -- it does not infer the mode from
@@ -1058,6 +1085,7 @@ class ttMLA:
                 kv_actual_isl=actual_start or 0,
                 cache_user_id=cache_user_id,
                 index_kv_cache=index_kv_cache,
+                paged_cache=paged_cache,
             )
 
         seq_len_local = hidden_states.shape[2]
@@ -1103,6 +1131,7 @@ class ttMLA:
                 cache_user_id=cache_user_id,
                 cache_layer_idx=cache_layer_idx,
                 index_kv_cache=index_kv_cache,
+                paged_cache=paged_cache,
             )
         )
 
@@ -1126,6 +1155,7 @@ class ttMLA:
             cache_user_id=cache_user_id,
             seq_len_local=seq_len_local,
             kv_actual_isl=kv_actual_isl,
+            paged_cache=paged_cache,
         )
 
         out = self._o_proj_epilogue(attn_out, seq_len_local)
@@ -1192,6 +1222,7 @@ class ttMLA:
         cache_layer_idx,
         cache_user_id,
         seq_len_local,
+        paged_cache=None,
         **_,
     ):
         cache_batch_idx = self._cache_batch_idx(cache_user_id, cache_layer_idx)
@@ -1217,6 +1248,7 @@ class ttMLA:
         cache_layer_idx,
         cache_user_id,
         seq_len_local,
+        paged_cache=None,
         **_,
     ):
         assert indices is not None, "sparse MLA forward requires indexer top-k indices"
@@ -1235,21 +1267,34 @@ class ttMLA:
             cache_user_id=cache_user_id,
             cache_layer_idx=cache_layer_idx,
             kv_actual_isl=kv_actual_isl,
+            paged_cache=paged_cache,
         )
         # After the write above, KV is populated up to [0, kv_actual_isl + chunk_size_global); the gather
         # only needs that populated prefix (top-k indices never address the unwritten suffix).
         populated_global = kv_actual_isl + seq_len_local * self.sp_factor
-        kvpe_dev = self._gather_kvpe_prefix(
-            kvpe_cache, cache_batch_idx, populated_global=populated_global, chunk_local=seq_len_local
+        kvpe_dev = (
+            kvpe_cache
+            if paged_cache is not None
+            else self._gather_kvpe_prefix(
+                kvpe_cache, cache_batch_idx, populated_global=populated_global, chunk_local=seq_len_local
+            )
         )
         ttnn.deallocate(tt_kvpe)
 
         # Sparse attention runs over latent V; project to v_head_dim afterwards. The prefix is already
         # sliced to this slot (batch-1), so no cache_batch_idx.
         attn_out = self._sparse_mla(
-            tt_q, kvpe_dev, indices, block_cyclic_chunk_local=seq_len_local, cache_batch_idx=None
+            tt_q,
+            kvpe_dev,
+            indices,
+            block_cyclic_chunk_local=seq_len_local,
+            cache_batch_idx=None,
+            paged_cache=paged_cache,
+            cache_layer_idx=cache_layer_idx,
+            cache_user_id=cache_user_id,
         )
-        ttnn.deallocate(kvpe_dev.storage)
+        if paged_cache is None:
+            ttnn.deallocate(kvpe_dev.storage)
         ttnn.deallocate(tt_q)
         return self._apply_wkv_b2(attn_out, seq_len_local)
 
@@ -1262,6 +1307,7 @@ class ttMLA:
         kv_actual_isl: int,
         cache_user_id: int,
         index_kv_cache: Optional[ttnn.Tensor],
+        paged_cache=None,
     ) -> None:
         """Last-layer fast path: fill the migratable KVPE cache, then stop before query/attention/output.
 
@@ -1285,6 +1331,7 @@ class ttMLA:
                 cache_user_id=cache_user_id,
                 cache_layer_idx=cache_layer_idx,
                 index_kbuf=index_kv_cache,
+                paged_cache=paged_cache,
             )
 
         # Reuse the regular KV stem so kv_only and full attention cannot drift in normalization,
@@ -1308,6 +1355,7 @@ class ttMLA:
             cache_user_id=cache_user_id,
             cache_layer_idx=cache_layer_idx,
             kv_actual_isl=kv_actual_isl,
+            paged_cache=paged_cache,
         )
         ttnn.deallocate(tt_kvpe)
 
@@ -1354,6 +1402,9 @@ class ttMLA:
         indices: ttnn.Tensor,
         block_cyclic_chunk_local: Optional[int] = None,
         cache_batch_idx: Optional[int] = None,
+        paged_cache=None,
+        cache_layer_idx: Optional[int] = None,
+        cache_user_id: Optional[int] = None,
     ) -> ttnn.Tensor:
         """Absorbed MQA over the top-k selected latents (FlashMLA sparse contract: no causal mask —
         ``indices`` already encode it via the 0xFFFFFFFF sentinel). Invoked SPMD on the SP×TP mesh:
@@ -1411,18 +1462,30 @@ class ttMLA:
             idx = idx_seq_sharded
         # k_chunk_size must be a multiple of 32 that divides TOPK (prod TOPK=2048 → 128).
         k_chunk = next((c for c in (128, 64, 32) if idx.shape[-1] % c == 0), 32)
-        out = ttnn.transformer.sparse_sdpa(
-            q_rm,
-            kvpe.storage,
-            idx,
-            v_dim=self.kv_lora_rank,
-            kv_format=kvpe.format.sparse_sdpa_format,
-            scale=self.scale,
-            k_chunk_size=k_chunk,
-            block_cyclic_sp_axis=self.sp_axis if block_cyclic_chunk_local is not None else None,
-            block_cyclic_chunk_local=block_cyclic_chunk_local,
-            cache_batch_idx=cache_batch_idx,
-        )
+        sparse_kwargs = {
+            "v_dim": self.kv_lora_rank,
+            "kv_format": kvpe.format.sparse_sdpa_format,
+            "scale": self.scale,
+            "k_chunk_size": k_chunk,
+            "cache_batch_idx": cache_batch_idx,
+        }
+        if paged_cache is not None:
+            assert cache_layer_idx is not None and cache_user_id is not None
+            assert self.paged_prefill_enabled, "paged cache requires TT_GLM52_PAGED_PREFILL=1"
+            assert self.layer_num == 78, "paged GLM-5.2 prefill requires all 78 primary-cache layers"
+            assert kvpe is paged_cache.kvpe, "paged SDPA must read the pool-owned primary cache"
+            sparse_kwargs.update(
+                page_table=paged_cache.device_page_table,
+                paged_layer_idx=cache_layer_idx,
+                paged_sp_axis=self.sp_axis,
+                cache_batch_idx=cache_user_id,
+            )
+        else:
+            sparse_kwargs.update(
+                block_cyclic_sp_axis=self.sp_axis if block_cyclic_chunk_local is not None else None,
+                block_cyclic_chunk_local=block_cyclic_chunk_local,
+            )
+        out = ttnn.transformer.sparse_sdpa(q_rm, kvpe.storage, idx, **sparse_kwargs)
         ttnn.deallocate(q_rm)
         if idx is not indices:
             ttnn.deallocate(idx)

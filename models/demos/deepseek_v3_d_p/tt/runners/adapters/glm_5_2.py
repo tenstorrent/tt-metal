@@ -22,6 +22,7 @@ semaphores go to L1_SMALL (needs the L1_SMALL carve-out at mesh-open).
 
 from __future__ import annotations
 
+import math
 import os
 from typing import Callable
 
@@ -67,6 +68,49 @@ class GLM52Adapter(MLAPrefillAdapter):
             map (GLM-5.1: every layer is full).
 
         The engine owns both, exactly like the dense KVPE cache."""
+        if os.environ.get("TT_GLM52_PAGED_PREFILL", "0") == "1":
+            from models.demos.deepseek_v3_d_p.tt.runners.glm52_paged_kv_cache import (
+                GLM52_KV_BUNDLE_TOKENS,
+                allocate_glm52_paged_kv_cache_pool,
+            )
+
+            if params.chunk_size != GLM52_KV_BUNDLE_TOKENS:
+                raise ValueError(
+                    "TT_GLM52_PAGED_PREFILL requires the GLM-5.2 5120-token compute chunk, " f"got {params.chunk_size}"
+                )
+            sp = params.mesh_shape[params.sp_axis]
+            tp = math.prod(params.mesh_shape) // sp
+            if (sp, tp) not in {(4, 1), (8, 4)}:
+                raise ValueError(
+                    f"TT_GLM52_PAGED_PREFILL supports SP4xTP1 validation and SP8xTP4 production, got SP{sp}xTP{tp}"
+                )
+            if params.first_layer_idx != 0 or params.num_layers != len(hf_config.indexer_types):
+                raise ValueError(
+                    "TT_GLM52_PAGED_PREFILL currently supports one prefill pipeline rank " "owning all GLM-5.2 layers"
+                )
+            # Eight bundles is a conservative four-device QB default.  Production
+            # serving explicitly sizes the fixed physical arena in bundle units;
+            # it is intentionally independent of logical user/context capacity.
+            capacity_env = os.environ.get("TT_GLM52_KV_POOL_BUNDLES", "8")
+            try:
+                configured_capacity = int(capacity_env)
+            except ValueError as error:
+                raise ValueError(
+                    f"TT_GLM52_KV_POOL_BUNDLES must be a positive integer, got {capacity_env!r}"
+                ) from error
+            if configured_capacity <= 0:
+                raise ValueError("TT_GLM52_KV_POOL_BUNDLES must be a positive bundle count")
+            return allocate_glm52_paged_kv_cache_pool(
+                mesh_device=mesh_device,
+                hf_config=hf_config,
+                mesh_shape=params.mesh_shape,
+                sp_axis=params.sp_axis,
+                num_primary_layers=params.num_layers,
+                num_logical_slots=params.num_users,
+                max_sequence_length=params.max_seq_len,
+                capacity_bundles=configured_capacity,
+            )
+
         import ttnn
         from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers
         from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (

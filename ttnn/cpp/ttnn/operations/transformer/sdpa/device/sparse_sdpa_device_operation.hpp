@@ -59,6 +59,8 @@ Tensor sparse_sdpa(
     uint32_t k_chunk_size,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
-    std::optional<BlockCyclicLayout> block_cyclic = std::nullopt);
+    std::optional<BlockCyclicLayout> block_cyclic = std::nullopt,
+    std::optional<SparseSDPAParams::PagedKVLayout> paged_kv = std::nullopt,
+    const std::optional<Tensor>& page_table = std::nullopt);
 
 }  // namespace ttnn::prim
