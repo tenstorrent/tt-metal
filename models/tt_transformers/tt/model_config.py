@@ -561,6 +561,10 @@ class ModelArgs:
 
         self.rms_norm_add_unit_offset = False
         self.embed_scale = None
+        # Logit soft-capping (Gemma-2). None => disabled, so no effect on other models.
+        self.attn_logit_softcapping = None
+        self.final_logit_softcapping = None
+        self.model_type = None
         self.use_hf_rope = use_hf_rope
 
         assert not os.getenv(
@@ -1556,7 +1560,21 @@ class ModelArgs:
 
     @lru_cache(maxsize=None)
     def get_attn_sdpa_decode_program_config(self, prefetcher: Prefetcher = None):
-        """Get the SDPA program config for decode mode."""
+        """Get the SDPA program config for decode mode.
+
+        Gemma-2 (head_dim=256) requires an explicit small KV chunk. With the
+        auto chunk (q=k=0) the flash-decode op runs the whole KV as one large
+        chunk until it no longer fits, then switches to a multi-chunk path whose
+        cross-chunk reduction is numerically wrong for head_dim=256 — producing
+        a sharp accuracy cliff once the context exceeds one chunk. Pinning
+        q_chunk=32 / k_chunk=64 (matching the known-good Gemma-3 decode SDPA in
+        models/demos/gemma4/tt/attention/decode.py) keeps every step on the
+        correct chunked path. Non-Gemma-2 models keep the auto chunk (0, 0).
+        """
+        if self.model_type is not None and str(self.model_type).lower() in ("gemma", "gemma2"):
+            q_chunk, k_chunk = 32, 64
+        else:
+            q_chunk, k_chunk = 0, 0
         if prefetcher is not None:
             sdpa_grid_size = (8, 8)
             start_core = ttnn.CoreCoord(1, 0)
@@ -1567,15 +1585,15 @@ class ModelArgs:
                     start_core, num_sdpa_cores, prefetcher.all_worker_cores_range_set, row_wise=True
                 ),
                 exp_approx_mode=False,
-                q_chunk_size=0,
-                k_chunk_size=0,
+                q_chunk_size=q_chunk,
+                k_chunk_size=k_chunk,
             )
         else:
             return ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 exp_approx_mode=False,
-                q_chunk_size=0,
-                k_chunk_size=0,
+                q_chunk_size=q_chunk,
+                k_chunk_size=k_chunk,
             )
 
     @lru_cache(maxsize=None)
@@ -2412,6 +2430,26 @@ class ModelArgs:
                 "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Phi-4": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Mistral-Small-3.1-24B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "gemma-2-2b": {
+                    "N150": 32,
+                    "N300": 32,
+                    "T3K": 32,
+                    "TG": 32,
+                    "P100": 32,
+                    "P150": 32,
+                    "P150x4": 32,
+                    "P150x8": 32,
+                },
+                "gemma-2-9b": {
+                    "N150": 32,
+                    "N300": 32,
+                    "T3K": 32,
+                    "TG": 32,
+                    "P100": 32,
+                    "P150": 32,
+                    "P150x4": 32,
+                    "P150x8": 32,
+                },
                 "gemma-3-1b": {"N150": 32, "N300": 32, "T3K": 32, "TG": 32, "P150x4": 32},
                 "gemma-3-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "medgemma-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
@@ -2645,7 +2683,13 @@ class ModelArgs:
         return activation_map.get(hidden_activation, ttnn.UnaryOpType.SILU)
 
     def _set_model_specific_params(self):
-        return
+        # Gemma-family text models (gemma, gemma2) store RMSNorm weights as (1 + w)
+        # and scale input embeddings by sqrt(hidden_size). Gemma-3 keeps this in its
+        # own ModelArgs subclass; enabling it here (config-gated) brings up Gemma-2
+        # text models via HF_MODEL without touching any non-Gemma model.
+        if self.model_type is not None and str(self.model_type).lower() in ("gemma", "gemma2"):
+            self.rms_norm_add_unit_offset = True
+            self.embed_scale = self.dim**0.5
 
     def _set_params_from_dict(self, config):
         eos_token_id = config.get("eos_token_id", None)
@@ -2655,6 +2699,10 @@ class ModelArgs:
         text_config = config.get("text_config", config)
         self.eos_token_id = None if isinstance(eos_token_id, int) else eos_token_id
         layer_types = text_config["layer_types"] if "layer_types" in text_config else None
+
+        # Architecture family (e.g. "gemma2", "gemma3", "llama"). Used to enable
+        # architecture-specific behaviour without affecting other models.
+        self.model_type = text_config.get("model_type", config.get("model_type", None))
 
         # Common params with different names between Meta and HF
         self.dim = text_config.get("dim", text_config.get("hidden_size"))
@@ -2765,6 +2813,19 @@ class ModelArgs:
         # Sliding window attention
         self.sliding_window = text_config.get("sliding_window", None)
 
+        # Gemma-2 alternates local (sliding-window) and global attention but, unlike
+        # Gemma-3, its HF config does not provide an explicit `layer_types` list. HF
+        # derives it as `is_sliding = not bool(layer_idx % 2)` (even layers = sliding).
+        # Synthesize the same pattern so the sliding-window path activates per layer.
+        if (
+            self.model_type is not None
+            and str(self.model_type).lower().startswith("gemma2")
+            and self.sliding_window is not None
+            and self.layer_types is None
+        ):
+            self.layer_types = ["sliding_attention" if (i % 2 == 0) else "full_attention" for i in range(self.n_layers)]
+            self.sliding_window_pattern = [lt == "sliding_attention" for lt in self.layer_types]
+
         # RoPE params (transformers 5.x nests these under `rope_parameters`)
         self.rope_theta = get_rope_theta(text_config)
         self.rope_theta_local = get_rope_local_base_freq(text_config)
@@ -2785,6 +2846,11 @@ class ModelArgs:
         )
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
+
+        # Logit soft-capping (Gemma-2): logits -> tanh(logits / cap) * cap.
+        # Values default to None (disabled) for every other model.
+        self.attn_logit_softcapping = text_config.get("attn_logit_softcapping", None)
+        self.final_logit_softcapping = text_config.get("final_logit_softcapping", None)
 
         # Configurable MLP activation type
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)

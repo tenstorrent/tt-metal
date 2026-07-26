@@ -131,6 +131,16 @@ class Attention(LightweightModule):
         self.sdpa_decode_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.SDPA_DECODE, configuration=configuration
         )
+        # Gemma-2 (head_dim=256): use the flash-decode op's internal default compute
+        # config instead of the framework's forced fp32_dest_acc_en/packer_l1_acc. The
+        # forced accumulation settings corrupt the cross-chunk (multi-chunk) online-
+        # softmax reduction for head_dim=256, causing a sharp accuracy cliff once the
+        # context exceeds one KV chunk. Passing None (op default) matches the known-good
+        # Gemma-3 decode SDPA in models/demos/gemma4/tt/attention/decode.py and keeps
+        # accuracy stable across the full context. No effect on non-Gemma-2 models.
+        _model_type = getattr(configuration, "model_type", None)
+        if _model_type is not None and str(_model_type).lower() in ("gemma", "gemma2"):
+            self.sdpa_decode_compute_kernel_cfg = None
         self.li_o_decode_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_O_DECODE, configuration=configuration
         )
