@@ -145,17 +145,24 @@ def _mm_1d_config(device, m, k, n, fused_activation=None):
             fused_activation=fused_activation,
             mcast_in0=True,
         )
-    # PREFILL (M = seq len): compute-bound, different regime — keep the full-grid layout.
-    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    # PREFILL (M = seq len): compute-bound. A 2D-multicast config (split BOTH M and N across the full
+    # grid) is far faster than the 1D full-grid layout at realistic prompt lengths — a sweep at M=416
+    # measured 23-63% per matmul (c_attn -31%, c_proj -50%, mlp_c_fc -23%, mlp_c_proj -63%),
+    # output-neutral (PCC identical). The old 1D layout under-parallelized the M dimension.
+    ibw = next(b for b in (4, 2, 1) if kt % b == 0)  # K-block (tiles); divides Kt in {32, 128}
+    pcm = max(1, math.ceil(mt / gy))
+    pcn = max(1, math.ceil(nt / gx))
+    osw = next(w for w in (4, 2, 1) if pcn % w == 0)  # out_subblock_w divides per_core_N, <=4
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(gx, gy),
-        in0_block_w=4,  # K-block (tiles); divides Kt for all GPT linears (Kt in {32, 128})
+        in0_block_w=ibw,
         out_subblock_h=1,
-        out_subblock_w=1,
-        per_core_M=mt,
-        per_core_N=math.ceil(nt / (gx * gy)),
-        fuse_batch=True,
+        out_subblock_w=osw,
+        per_core_M=pcm,
+        per_core_N=pcn,
+        transpose_mcast=False,
         fused_activation=fused_activation,
-        mcast_in0=True,
+        fuse_batch=False,
     )
 
 

@@ -339,10 +339,16 @@ class TtXttsGptModel(LightweightModule):
         )
         seq = ids_tt.shape[1]
         pos_tt = ttnn.slice(self._text_pos_full, [0, 0], [1, seq])  # [1, seq] uint32, device slice
-        tok = ttnn.to_layout(ttnn.embedding(ids_tt, tok_weight), ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-        pos = ttnn.to_layout(ttnn.embedding(pos_tt, pos_weight), ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Gather both embeddings in ROW_MAJOR, add there, then a SINGLE tilize to TILE (folds the two
+        # per-embedding TilizeWithValPadding ops into one — same trick as decode_on_device).
+        tok = ttnn.embedding(ids_tt, tok_weight, memory_config=ttnn.L1_MEMORY_CONFIG)  # ROW_MAJOR
+        pos = ttnn.embedding(pos_tt, pos_weight, memory_config=ttnn.L1_MEMORY_CONFIG)  # ROW_MAJOR
         ttnn.deallocate(pos_tt)
-        emb = ttnn.add(tok, pos, memory_config=ttnn.L1_MEMORY_CONFIG)
+        emb = ttnn.to_layout(
+            ttnn.add(tok, pos, memory_config=ttnn.L1_MEMORY_CONFIG),
+            ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
         ttnn.deallocate(tok)
         ttnn.deallocate(pos)
         return emb
