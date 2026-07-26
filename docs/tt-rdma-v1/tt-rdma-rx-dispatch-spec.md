@@ -186,6 +186,17 @@ the real fix is **PFC (BH.6)** to keep the sender ≤ drain, staying in the loss
   from the RISC hot path entirely (zero cycles/frame). This is why the wire cksum was moved onto the
   0x04C11DB7 polynomial. On-silicon step: calibrate the CTRL bit-order/reflection selects + init so
   HW `RX_CALCULATED` == the SW `tt_rdma_crc32` for a known frame, *then* trust `RX_CHECK_EN`.
+  - **Probe tool:** `bh1_icrc_probe` (`kernels/bh_rdma_icrc_probe.cpp`, regs in `tt_rdma_eth_icrc.h`).
+    It puts RXQ2 in raw mode, snapshots the POR ICRC config, optionally programs `CTRL`/`RX_INIT` from
+    args, and on each landed frame reports the engine's `RX_CALCULATED`/`RX_RECEIVED` next to the SW
+    `tt_rdma_crc32` of the same header — printing a verdict (`HW_engaged`, `rx_calc==sw_crc`). Run it,
+    fire a known frame from the BF3, and read the verdict. Sweep the 16×16 bit-order combos from a shell
+    loop over the `ctrl_hex` arg (base off POR `0x30700000`); `RX_CHECK_EN` stays off until HW==SW is
+    proven, so a mis-tuned engine can never drop live traffic. **Two possible outcomes, both informative:**
+    (a) some config yields `rx_calc==sw_crc` → bake that config into the RX kernel + flip `RX_CHECK_EN`,
+    CRC leaves the hot path; (b) the engine never engages on raw `0x1AF6` framing (it is built for
+    IPv4/UDP:4791/BTH RoCE packets) → HW offload needs RoCE-shaped frames, so keep the SW check but drop
+    it to a slice-by-4 table (~7 ops/byte vs ~32 bit-serial). The probe tells us which before we commit.
 - **ACK / READ** — `0x40` ACK reception and `0x20/0x21` READ_REQ/RESP not yet implemented on BH RX.
 - **MR carries the full NoC address** — Stage 2b passes the target `(noc_x, noc_y, base)` as kernel
   args; the productized form stores the NoC-encoded `base_noc_addr` in the MR entry (host builds it).

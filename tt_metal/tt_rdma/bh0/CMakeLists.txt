@@ -48,3 +48,8 @@ target_link_libraries(bh1_tx_ring PRIVATE test_metal_common_libs)
 add_executable(bh1_rx_dispatch bh1_rx_dispatch_host.cpp)
 target_include_directories(bh1_rx_dispatch PRIVATE ${PROJECT_SOURCE_DIR})
 target_link_libraries(bh1_rx_dispatch PRIVATE test_metal_common_libs)
+
+# ICRC probe — characterize the ETH-CTRL ROCE_ICRC HW CRC engine (loads bh_rdma_icrc_probe.cpp).
+add_executable(bh1_icrc_probe bh1_icrc_probe_host.cpp)
+target_include_directories(bh1_icrc_probe PRIVATE ${PROJECT_SOURCE_DIR})
+target_link_libraries(bh1_icrc_probe PRIVATE test_metal_common_libs)
