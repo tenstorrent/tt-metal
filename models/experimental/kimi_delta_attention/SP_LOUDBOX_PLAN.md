@@ -225,6 +225,10 @@ state-transfer protocol and measure its components.
   producer (eight local `[T, 128]` heads plus a BF16 local gate) also passes
   eagerly and under trace on both child placements.  Those producer/signaler
   inputs alone therefore do not reproduce the boundary defect.
+  A full 512 KiB FP32 SP socket handoff immediately before the source and
+  destination MRS consumers also passes, including the receiver's first
+  output tile.  The handoff alone is therefore not corrupting Line MRS; the
+  remaining differentiator is KDA's complete interleaved child-trace schedule.
   Capturing the fused primitive's separate matmul output confirms that all
   four local matmul shards are finite when the reduced output fails, so the
   defect is downstream in the Line reduce-scatter consumer rather than KDA,

@@ -7,6 +7,7 @@ import pytest
 import math
 from loguru import logger
 import ttnn
+from models.experimental.kimi_delta_attention.tt.sp_layer import _socket_config
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
@@ -672,3 +673,74 @@ def test_linear_matmul_reduce_scatter_tp4_kda_gated_rms_producer(mesh_device, ch
         clone_reduce_scatter_output=True,
         use_barrier_semaphore=True,
     )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 1024 * 1024}],
+    indirect=True,
+)
+def test_linear_matmul_reduce_scatter_tp4_after_sp_socket_handoff(mesh_device):
+    """Reproduce the two TP4 output consumers after an SP cache handoff.
+
+    The integrated KDA failure affects the second child after it has received
+    the first span's FP32 recurrent cache.  Keep the exact gated-RMS producer,
+    Line MRS parameters, child placement, and socket ordering here, while
+    removing the unrelated KDA recurrence schedule.
+    """
+    source = mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 0))
+    destination = mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 4))
+    send_socket, recv_socket = ttnn.create_socket_pair(source, destination, _socket_config(source.shape))
+    recurrent_state = torch.rand(1, 8, 128, 128)
+    ttnn.experimental.send_async(
+        ttnn.from_torch(
+            recurrent_state,
+            device=source,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.float32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(source),
+        ),
+        send_socket,
+    )
+    ttnn.experimental.recv_async(
+        ttnn.from_torch(
+            torch.zeros_like(recurrent_state),
+            device=destination,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.float32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(destination),
+        ),
+        recv_socket,
+    )
+    common = dict(
+        num_devices=4,
+        rs_input_shape=[1, 1, 640, 2304],
+        mm_shard_dim=2,
+        rs_scatter_dim=3,
+        num_links=2,
+        mm_weights_shape=[1, 1, 4096, 2304],
+        rs_input_dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        matmul_weights_dtype=ttnn.bfloat16,
+        max_in0_block_w=4,
+        use_bias=False,
+        mem_config_input=ttnn.DRAM_MEMORY_CONFIG,
+        mem_config_rs=ttnn.DRAM_MEMORY_CONFIG,
+        mem_config_mm=ttnn.DRAM_MEMORY_CONFIG,
+        rs_topology=ttnn.Topology.Linear,
+        use_non_fused=False,
+        num_iters=1,
+        enable_trace=False,
+        check_first_output_tile=True,
+        populate_allowed_worker_cores=True,
+        use_kda_compute_config=True,
+        input_from_kda_gated_rms=True,
+        use_sub_device_manager=False,
+        clone_reduce_scatter_output=True,
+        use_barrier_semaphore=True,
+    )
+    run_reduce_scatter_impl(source, **common)
+    run_reduce_scatter_impl(destination, **common)
