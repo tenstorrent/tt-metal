@@ -70,52 +70,128 @@ _BLOCK_TAG = "_perf_block_idx"
 _SIGNPOST_PREFIX = "PERF_BLOCK_SIGNPOST:"
 
 
+def _largest_repeated_stack(root, _depth: int = 0, _seen=None):
+    """The largest list/tuple of SAME-TYPED objects reachable from `root` — i.e. the repeated block
+    stack of a model that is not built out of torch containers.
+
+    A TTNN model is typically NOT a torch.nn.Module: models/common/lightweightmodule.py exists
+    precisely to avoid torch's per-call host overhead, and such models hold their decoder blocks in a
+    PLAIN PYTHON LIST (``self.layers = [TransformerBlock(...) for _ in range(n_layers)]``). Looking
+    only for nn.ModuleList therefore finds nothing on most tt-metal models, the probe emits no
+    signposts, and run.py has to fall back to probing depth 2/4/8/16 to discover what the signposts
+    would have said for free.
+
+    Same-typedness is the signal, not the attribute name: a stack is N instances of one class, so no
+    per-model knowledge (and no 'layers'/'blocks' name list) is needed.
+    """
+    if _seen is None:
+        _seen = set()
+    if root is None or _depth > 4 or id(root) in _seen:
+        return None
+    _seen.add(id(root))
+    best = None
+    for value in list(getattr(root, "__dict__", {}).values()):
+        if isinstance(value, (list, tuple)) and len(value) >= 2:
+            kinds = {type(v) for v in value if v is not None and hasattr(v, "__dict__")}
+            if len(kinds) == 1 and (best is None or len(value) > len(best)):
+                best = list(value)
+        elif hasattr(value, "__dict__"):
+            deeper = _largest_repeated_stack(value, _depth + 1, _seen)
+            if deeper is not None and (best is None or len(deeper) > len(best)):
+                best = deeper
+    return best
+
+
+def _tag_stack(stack) -> bool:
+    """Index every block in `stack` so entering one can be attributed to an exact depth."""
+    if not stack:
+        return False
+    tagged = False
+    for i, blk in enumerate(stack):
+        try:
+            setattr(blk, _BLOCK_TAG, i)
+            tagged = True
+        except Exception:  # noqa: BLE001
+            pass
+    return tagged
+
+
 def _install_block_signposts():
     """Emit a real per-block signpost into the op stream at every repeated-block invocation, so a
-    consumer can attribute each op to an exact block (not an inferred boundary). MODEL-AGNOSTIC: the
-    largest nn.ModuleList in the built model is the repeated stack; its children are tagged with an
-    index, and torch.nn.Module.__call__ is wrapped to drop a `PERF_BLOCK_SIGNPOST:<idx>` marker when a
-    tagged block is entered. No per-model code, no markers baked into model source; probe-local only."""
-    try:
-        import torch
-    except Exception:  # noqa: BLE001
-        return
+    consumer can attribute each op to an exact block (not an inferred boundary).
 
-    orig = torch.nn.Module.__call__
+    MODEL-AGNOSTIC, and it must cover BOTH shapes tt-metal models come in:
+
+      torch-shaped      the largest nn.ModuleList is the stack; torch.nn.Module.__call__ is wrapped.
+      TTNN-shaped       blocks subclass LightweightModule (NOT torch.nn.Module) and live in a plain
+                        Python list, so the torch hook never fires for them. LightweightModule.__call__
+                        is wrapped too, and the stack is found by looking for the largest list of
+                        same-typed objects.
+
+    Covering only the torch shape is why llama3_1_8b_p150 reported full_blocks=0 and run.py had to
+    climb a 2/4/8/16 ladder — four extra device probes — to recover depths this would have supplied
+    from the single all-layers probe.
+
+    No per-model code, no markers baked into model source; probe-local only.
+    """
     state = {"tagged": False}
 
-    def _tag(root):
-        best = None
-        for m in root.modules():
-            for _, child in m.named_children():
-                if isinstance(child, torch.nn.ModuleList) and len(child) >= 2:
-                    if best is None or len(child) > len(best):
-                        best = child
-        if best is None:
-            return False
-        for i, blk in enumerate(best):
-            try:
-                setattr(blk, _BLOCK_TAG, i)
-            except Exception:  # noqa: BLE001
-                pass
-        return True
-
-    def wrapped(self, *a, **k):
-        if not state["tagged"]:
-            try:
-                if sum(1 for _ in self.modules()) > 8:
-                    state["tagged"] = _tag(self)
-            except Exception:  # noqa: BLE001
-                pass
+    def _emit(self):
         idx = getattr(self, _BLOCK_TAG, None)
         if idx is not None:
             try:
                 _SEQ.append("%s%d" % (_SIGNPOST_PREFIX, idx))
             except Exception:  # noqa: BLE001
                 pass
-        return orig(self, *a, **k)
 
-    torch.nn.Module.__call__ = wrapped
+    try:
+        import torch
+    except Exception:  # noqa: BLE001
+        torch = None
+
+    if torch is not None:
+        _torch_orig = torch.nn.Module.__call__
+
+        def _torch_tag(root):
+            best = None
+            for m in root.modules():
+                for _, child in m.named_children():
+                    if isinstance(child, torch.nn.ModuleList) and len(child) >= 2:
+                        if best is None or len(child) > len(best):
+                            best = child
+            if best is None:
+                return False
+            return _tag_stack(list(best))
+
+        def _torch_wrapped(self, *a, **k):
+            if not state["tagged"]:
+                try:
+                    if sum(1 for _ in self.modules()) > 8:
+                        state["tagged"] = _torch_tag(self)
+                except Exception:  # noqa: BLE001
+                    pass
+            _emit(self)
+            return _torch_orig(self, *a, **k)
+
+        torch.nn.Module.__call__ = _torch_wrapped
+
+    try:
+        from models.common.lightweightmodule import LightweightModule
+    except Exception:  # noqa: BLE001
+        return
+
+    _lw_orig = LightweightModule.__call__
+
+    def _lw_wrapped(self, *a, **k):
+        if not state["tagged"]:
+            try:
+                state["tagged"] = _tag_stack(_largest_repeated_stack(self))
+            except Exception:  # noqa: BLE001
+                pass
+        _emit(self)
+        return _lw_orig(self, *a, **k)
+
+    LightweightModule.__call__ = _lw_wrapped
 
 
 def main(node: str, case: str | None = None) -> None:
