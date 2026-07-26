@@ -51,14 +51,19 @@ def ccl_persistent_buffers_enabled() -> bool:
 
 
 def default_ccl_topology(mesh_device=None):
-    """Default CCL topology — Ring on P150x8 / P150x4 / P300x2 (matches tt_transformers).
+    """Default CCL topology for Gemma4 TP collectives.
 
     Override with ``GEMMA4_CCL_TOPOLOGY=ring|linear``.
 
-    Measured on 31B / P150x8 / unbounded chunk4k / 128k
-    (``isl_sweep_logs/p150x8_bg_lb/ccl_prefill_ab.tsv``): Ring+sync TTFT
-    ~28.8s vs Linear+sync ~31.0s (~7% win). Async RS+AG is correct but slower
-    than sync on this board — keep ``GEMMA4_CCL_ASYNC=0`` unless re-swept.
+    Policy (when env unset):
+      * **Ring** only on meshes with **≥8 devices** (P150x8 TTFT sweep:
+        Ring+sync ~28.8s vs Linear+sync ~31.0s @ 31B/128k).
+      * **Linear** on smaller meshes (P150x4 / P300x2 opened as 1x4, Galaxy/T3K
+        submeshes, etc.). Ring on 4-device BH drops 12B full-model PCC from
+        ~0.97 → ~0.90 (below the 0.94 threshold).
+
+    Async RS+AG is correct but slower than sync on P150x8 — keep
+    ``GEMMA4_CCL_ASYNC=0`` unless re-swept.
     """
     override = os.environ.get("GEMMA4_CCL_TOPOLOGY", "").strip().lower()
     if override in ("ring", "r"):
@@ -66,32 +71,25 @@ def default_ccl_topology(mesh_device=None):
     if override in ("linear", "line", "l"):
         return ttnn.Topology.Linear
 
+    n = mesh_device.get_num_devices() if mesh_device is not None else 0
+    # Prefer device count when known: Ring needs a closed 8+ loop for quality
+    # on BH 1x4 / P300x2; Ring was only swept for TTFT at TP=8.
+    if n:
+        return ttnn.Topology.Ring if n >= 8 else ttnn.Topology.Linear
+
     try:
         cluster = ttnn.cluster.get_cluster_type()
     except Exception:
         cluster = None
 
-    ring_clusters = ()
-    for name in ("P150_X8", "P150_X4", "P300_X2", "T3K", "GALAXY", "TG", "BLACKHOLE_GALAXY"):
+    # No mesh_device: fall back to cluster type. Prefer Ring only on full
+    # 8-device BH LoudBox; 4-device cluster types default Linear for PCC.
+    ring_when_unknown_n = ()
+    for name in ("P150_X8", "T3K", "GALAXY", "TG", "BLACKHOLE_GALAXY"):
         if hasattr(ttnn.cluster.ClusterType, name):
-            ring_clusters += (getattr(ttnn.cluster.ClusterType, name),)
-
-    if cluster in ring_clusters:
-        # Submeshes smaller than 8 devices on Galaxy/T3K fall back to Linear
-        # (ring needs a closed loop); P150x4/P300x2 are ring-capable as-is.
-        n = mesh_device.get_num_devices() if mesh_device is not None else 0
-        if cluster in (
-            getattr(ttnn.cluster.ClusterType, "T3K", None),
-            getattr(ttnn.cluster.ClusterType, "GALAXY", None),
-            getattr(ttnn.cluster.ClusterType, "TG", None),
-            getattr(ttnn.cluster.ClusterType, "BLACKHOLE_GALAXY", None),
-        ):
-            if n and n < 8:
-                return ttnn.Topology.Linear
+            ring_when_unknown_n += (getattr(ttnn.cluster.ClusterType, name),)
+    if cluster in ring_when_unknown_n:
         return ttnn.Topology.Ring
-
-    if mesh_device is not None and mesh_device.get_num_devices() > 1:
-        return ttnn.Topology.Linear
     return ttnn.Topology.Linear
 
 
