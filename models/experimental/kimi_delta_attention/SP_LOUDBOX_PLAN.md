@@ -324,6 +324,57 @@ state-transfer protocol and measure its components.
   divides the 32 K tiles exactly; do not use a 10-column grid through that
   helper without correcting that generic constraint separately.
 
+## End-to-end execution plan (next slice)
+
+There are two distinct finish lines.  The LoudBox end-to-end proxy is already
+green: SP=2/TP=4 at global T=5120 is **2.854 ms** on the slowest device, below
+the **2.958 ms** primary gate.  The remaining objective is the Galaxy-ready
+layer protocol: SP=8/TP=4, with all four TP ranks performing the same
+device-ordered affine prefix and with the normal TP=4 output CCL intact.
+
+1. **Measure the socket-token barrier before changing it.** Profile its
+   two inter-stage boundaries inside the standalone SP8 affine probe and the
+   SP8 TP1 KDA proof, using a warm eager run and a device timeline.  Success:
+   the device-barrier variant stays PCC-correct, has no runner recovery, and
+   identifies the control-token cost separately from the 1 MiB `(A,B)` payload.
+   This is a measurement step, not an expected layer-speedup: SP=2 has only
+   one sequence boundary, so it cannot demonstrate the SP=8 overlap benefit.
+
+2. **Replace socket control tokens with a compact trace-safe UDM barrier.**
+   Implement a single mesh operation with a gather/release semaphore tree on
+   dedicated fabric workers.  It must be queued after a prefix stage's local
+   composition and before the next stage; it must not use host fences or
+   mesh events.  Success: a single captured eight-rank affine prefix replays
+   at least ten times without fabric credit deadlock.  This removes the
+   current 14 tiny send/receive transfers per boundary and is the prerequisite
+   for a meaningful device-side SP=8 schedule.
+
+3. **Factor the prefix scheduler by `(SP rank, TP rank)`.**  Move the current
+   TP1 affine proof's preparation, terminal-map construction, entry-state
+   installation, and rank-release ordering behind a per-TP-rank interface.
+   Build an `SP8TP4` scheduler that launches four independent eight-rank
+   prefix trees and retains the regular TP=4 tensor layout.  On LoudBox, test
+   the same code in its SP=2/TP=4 projection: it must preserve output,
+   recurrent-state, and convolution-state PCC >= 0.98 at global T=5120 and
+   retain the existing fused Line MRS output path.
+
+4. **Capture the actual E2E SP2×TP4 layer on LB.**  Keep persistent state,
+   sockets, barrier resources, and MRS intermediate buffers at fixed
+   addresses.  Capture/replay the whole layer rather than separate prefix and
+   scan traces, and profile the slowest device over ten warm replays.  The
+   acceptance gate is <= **2.958 ms** (current 2.854 ms); the near-term
+   stretch is <= **2.803 ms**, requiring about **51 us** from the current
+   result.  Any change that misses the primary gate is reverted even if its
+   isolated prefix number improves.
+
+5. **Run the 32-device Galaxy bring-up as a protocol validation, then tune.**
+   First validate one SP8×TP4 layer at global T=5120: PCC >= 0.98, no host
+   state copies, no host stage fences, stable ten-replay trace, and a 1 MiB
+   FP32 `(A,B)` payload per TP rank per prefix distance.  Only after that is
+   stable should we tune overlap of final grouped scans, the final epilogue,
+   and TP=4 MRS.  Galaxy performance targets must be set from its first
+   slowest-device trace rather than extrapolated from the TP1 eager interval.
+
 ## Milestones
 
 1. **Protocol reference and tests.** Add a partitioned PyTorch reference that
