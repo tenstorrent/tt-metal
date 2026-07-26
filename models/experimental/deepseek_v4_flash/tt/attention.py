@@ -1004,5 +1004,5 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                 pool=pool_compressor,
                 row_offset=self.config.sliding_window,
             )
-
+        print(f"kv shape: {kv.shape} on layer {self.layer_idx}")
         return self._attend(q, kv, mask, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos)
