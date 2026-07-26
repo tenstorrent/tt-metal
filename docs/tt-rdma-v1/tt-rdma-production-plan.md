@@ -57,10 +57,18 @@ phase inherits manual bench fragility.
     documented; a deeper HW fix (why `CMD_ONGOING` sticks) is a future investigation, not a bench reset now.
   - **RX resync-on-lap** counts lap events (`n_bad`) and degrades gracefully — done in the RX-ceiling work.
   - Diagnostic tooling is committed clean (counter snapshots) or removed (`risc_touch`).
-- **0.4 CI wiring.** The regression harness runs on a labeled bench runner (nightly/on-PR where HW is
-  available); a HW-less subset (golden vectors, header self-tests, builds) runs on every PR.
+- **0.4 CI wiring. ✅ content DONE.**
+  - **HW-less PR gate:** `tt_metal/tt_rdma/bh0/ci_golden_test.cpp` (+ `ci_hwless.sh`) — the wire-header
+    golden-vector oracle (SEND/WRITE_IMM/ACK byte-exact + canonical CRC-32C), plain `g++`, no HW/tt-metal/
+    DOCA. Catches wire-format / CRC / struct-packing drift before it ships to the chip kernel *or* the DOCA
+    gateway codec. Runs green (4/4) in ~1s anywhere.
+  - **On-silicon suite:** `bringup.sh` → `regression.sh` is the one-command cold-rig gate.
+  - TODO (infra, with the CI team): wire `ci_hwless.sh` into the per-PR GitHub Actions job, and
+    `bringup.sh && regression.sh` into a labeled self-hosted bench runner (nightly / on-label).
 
-Exit gate: a documented, one-command path from cold rig to all current claims re-verified automatically.
+Exit gate: a documented, one-command path from cold rig to all current claims re-verified automatically —
+`bringup.sh` (restore rig) + `regression.sh` (5/5 datapath invariants) + `ci_hwless.sh` (wire oracle). **Met**
+except the GitHub-Actions job wiring (infra task).
 
 ## Phase 1 — Complete the RX protocol (correctness & completeness)
 
