@@ -211,12 +211,10 @@ def run_strided_all_gather_minimal_matmul_impl(
         ternary_a_tensor_mesh_list.append(ternary_a_tensor_mesh)
         ternary_b_tensor_mesh_list.append(ternary_b_tensor_mesh)
 
+        matmul_output = torch.matmul(ag_output_tensor_goldens_list[i], weight_input)
         if use_bias:
-            matmul_output = torch.nn.functional.linear(
-                ag_output_tensor_goldens_list[i], weight_input.T.contiguous(), bias_input
-            )
-        else:
-            matmul_output = torch.matmul(ag_output_tensor_goldens_list[i], weight_input)
+            # Row-broadcast bias: bias_input is [1, N] and broadcasts over the M rows, matching add_bias_block.
+            matmul_output = matmul_output + bias_input
         if use_ternary:
             matmul_output = ternary_a_input + ternary_scalar * matmul_output * ternary_b_input
         # fused_activation is applied last (mutually exclusive with ternary; see the op's validate).
