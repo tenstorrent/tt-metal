@@ -321,13 +321,22 @@ class _Qwen3_32BWHTuning:
 def _resolve_qwen3_32b_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Qwen3_32BWHTuning:
     """Pick WH L1 tuning knobs for Qwen3-32B on T3K.
 
-    Mirrors the 7B port's empirical L1 cutoff (``mlp_prefill_len_cutoff=256`` for the wide FF
-    matmul on Wormhole). ``mlp_decode_spill_w1_to_dram`` is currently off on T3K because per-device
-    FF shards (5120×3456 per chip) are smaller than 7B-on-N300; re-evaluate if decode batch-32
-    trips L1 circular-buffer validation.
+    ``mlp_prefill_len_cutoff=1024`` = the shared engine's own Wormhole default (``mlp_1d.py``:
+    ``512 if is_blackhole() else 1024``) and TTTv1's ``prefill_len_cutoff`` (``model_config.py``).
+    For the folded batch-32-ci FF prefill (``[1,1,B*S,dim]``, B*S=4096 at the 128 bucket) this tiles
+    the wide FF matmul as 4 chunks of 1024 (``per_core_M=4``) instead of 16 chunks of 256
+    (``per_core_M=1``) — 4× fewer / 4× larger sub-matmuls on the ~80%-FLOP FF block, matching TTTv1's
+    blocking (fewer weight refetches, better mcast amortization). The earlier 256 was
+    inherited-conservative from the 7B-on-N300 port (per-device FF shard 9472 ≫ the T3K 32B shard
+    3456), so its tighter-L1 motive does not apply here; 1024 fits — TTTv1 runs it for this exact model
+    on this box and every non-overriding TTTv2 model runs the 1024 engine default. Output is unchanged:
+    the K-contraction / ``in0_block_w`` are independent of the M-tiling, so only ``per_core_M`` changes.
+    ``mlp_decode_spill_w1_to_dram`` is currently off on T3K because per-device FF shards (5120×3456 per
+    chip) are smaller than 7B-on-N300; re-evaluate if decode batch-32 trips L1 circular-buffer
+    validation.
     """
     t = _Qwen3_32BWHTuning(
-        mlp_prefill_len_cutoff=256,
+        mlp_prefill_len_cutoff=1024,
         mlp_decode_spill_w1_to_dram=False,
     )
     t.prefill_minimal_matmul = not os.environ.get("DISABLE_MINIMAL_MATMUL")

@@ -383,14 +383,21 @@ class _Llama33_70BWHTuning:
 def _resolve_llama33_70b_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Llama33_70BWHTuning:
     """Pick WH L1 tuning knobs for Llama-3.3-70B on T3K.
 
-    The 70B FF is wide (intermediate=28672 → 3584 per device on T3K); the prefill FF1/FF3
-    matmul is chunked at ``mlp_prefill_len_cutoff=256`` to bound L1, mirroring the proven
-    Qwen3-32B / Qwen2.5-7B T3K value (256 divides every prefill chunk size: 2048/1024/512;
-    128-token smoke prefill is below the cutoff so it is not reshaped). ``decode_spill_w1_to_dram``
-    stays off; re-evaluate if decode batch-32 trips L1 circular-buffer validation.
+    The 70B FF is wide (intermediate=28672 → 3584 per device on T3K); the prefill FF1/FF3 matmul is
+    chunked at ``mlp_prefill_len_cutoff=1024`` = the shared engine's own Wormhole default (``mlp_1d.py``)
+    and TTTv1's ``prefill_len_cutoff``. For the folded batch-32-ci FF prefill (``[1,1,B*S,dim]``,
+    B*S=4096 at the 128 bucket) this runs 4 chunks of 1024 (``per_core_M=4``) instead of 16 chunks of
+    256 (``per_core_M=1``) — matching TTTv1's blocking on the ~80%-FLOP block (this is the worst model,
+    so the biggest absolute win). 1024 divides every folded prefill length ≥1024 (all power-of-2
+    products of pb∈{1,2,4,8,16,32} × bucket∈{128,512,1024,2048}); shorter folds skip the reshape. The
+    earlier 256 was a 7B-on-N300 inheritance (per-device FF shard 9472 ≫ the T3K 70B shard 3584), so
+    its tighter-L1 motive does not apply here; 1024 fits — TTTv1 runs it for this exact model on this
+    box. Output is unchanged: ``in0_block_w`` / the K-contraction are independent of the M-tiling, so
+    only ``per_core_M`` changes. ``decode_spill_w1_to_dram`` stays off; re-evaluate if decode batch-32
+    trips L1 circular-buffer validation.
     """
     t = _Llama33_70BWHTuning()
-    t.mlp_prefill_len_cutoff = 256
+    t.mlp_prefill_len_cutoff = 1024
     t.mlp_decode_spill_w1_to_dram = False
     t.prefill_minimal_matmul = not os.environ.get("DISABLE_MINIMAL_MATMUL")
     logger.info(
