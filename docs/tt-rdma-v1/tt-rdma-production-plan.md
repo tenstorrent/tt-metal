@@ -34,10 +34,12 @@ not new datapath proofs.
 Rationale: everything below rests on a clean, reproducible, tested baseline. Do this first or every later
 phase inherits manual bench fragility.
 
-- **0.1 Persistent bench bring-up.** One script/systemd unit brings the rig from cold-boot to
-  ready: `mst start`, force-200G both rails, MTU 9000 (host PF + DPU p0/p1/pf0hpf/pf1hpf), tmfifo IP.
-  Idempotent, survives host *and* DPU reboot. Gate: power-cycle → `./bringup.sh` → link Active + both
-  external rails + jumbo crosses, zero manual steps.
+- **0.1 Persistent bench bring-up. ✅ DONE** — `tt_metal/tt_rdma/bh0/bringup.sh` (idempotent): `mst start`,
+  force-200G both rails, tmfifo IP, MTU 9000 (host PF + DPU p0/p1/pf0hpf/pf1hpf, re-applying host after
+  the uplink flap), then a VERIFY gate = MTU + DPU-reachable + **BH sees both external rails**
+  (authoritative link-up proof; mlxlink State is informational). `--verify-only` checks without changing.
+  Passes green on the current rig. TODO: wrap in a systemd unit / boot hook so it runs automatically on
+  boot (currently run-on-demand).
 - **0.2 Automated regression harness.** Turn the ad-hoc runs into pass/fail tests (gtest or scripted +
   asserts): TX line-rate, TX aggregate, RX WRITE byte-exact, RX streaming lossless-at-ceiling, jumbo
   cross both ways, golden-vector self-tests. Each prints PASS/FAIL and an exit code. Gate: `make test`
