@@ -40,7 +40,62 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  preflight:
+    # Decide whether the board is ours to touch, BEFORE any checkout or build. If a human run is
+    # live, this reports idle=false and `verify` is skipped cleanly -- no failure, no issue filed,
+    # nothing queued against the device. Verification simply waits for the next run.
+    runs-on: [self-hosted, tt-verify]
+    timeout-minutes: 5
+    outputs:
+      idle: ${{ steps.check.outputs.idle }}
+    steps:
+      - name: Is the device free?
+        id: check
+        run: |
+          if [ "${{ inputs.force }}" = "true" ]; then
+            echo "idle=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::force=true -- skipping the device-idle check. This can wedge the board."
+            exit 0
+          fi
+
+          REASONS=""
+
+          # Primary signal: does ANY process hold a device node? This catches every holder,
+          # including orphaned or wedged runs whose command line matches no known pattern.
+          for d in /dev/tenstorrent/[0-9]*; do
+            [ -e "$d" ] || continue
+            holders=$(fuser "$d" 2>/dev/null | tr -s ' ') || true
+            [ -n "$holders" ] && REASONS="$REASONS\n  $d held by PID(s):$holders"
+          done
+
+          # Secondary: a known perf/bring-up harness running even if it has not opened a chip yet.
+          BUSY=$(pgrep -af 'agent\.loop|agent\.before_loop|tt_hw_planner|tracy-capture' | grep -v pgrep || true)
+          [ -n "$BUSY" ] && REASONS="$REASONS\n  harness process(es):\n$BUSY"
+
+          # A stale tracy-capture listener breaks any later profile/capture.
+          if command -v ss >/dev/null && ss -ltn 2>/dev/null | grep -q ':8086'; then
+            REASONS="$REASONS\n  stale listener on :8086 (tracy-capture?)"
+          fi
+
+          if [ ! -e /dev/tenstorrent/0 ]; then
+            echo "idle=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::/dev/tenstorrent/0 missing -- no device on this runner. Skipping."
+            exit 0
+          fi
+
+          if [ -n "$REASONS" ]; then
+            echo "idle=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Device is BUSY -- verification postponed to the next run (not a failure)."
+            printf 'busy because:%b\n' "$REASONS"
+            exit 0
+          fi
+
+          echo "idle=true" >> "$GITHUB_OUTPUT"
+          echo "Device is free."
+
   verify:
+    needs: preflight
+    if: needs.preflight.outputs.idle == 'true'
     runs-on: [self-hosted, tt-verify]
     timeout-minutes: 180
     env:
@@ -62,13 +117,23 @@ jobs:
           git log -1 --format='%h %an %ad %s' --date=iso
           echo "upstream merged? $(git merge-base --is-ancestor origin/main HEAD 2>/dev/null && echo yes || echo 'n/a')"
 
-      - name: Device-idle guard
+      - name: Device-idle re-check (races between preflight and here)
         if: ${{ inputs.force != true }}
         run: |
-          # Refuse to touch the device if a human perf/bring-up run is live on this box.
+          # preflight ran minutes ago and a human may have started something since. Cheap re-check
+          # right before we touch the chips. This one DOES fail the job: we already committed to
+          # running, so the safe move is to stop loudly rather than fight for the device.
+          for d in /dev/tenstorrent/[0-9]*; do
+            [ -e "$d" ] || continue
+            holders=$(fuser "$d" 2>/dev/null | tr -s ' ') || true
+            if [ -n "$holders" ]; then
+              echo "::error::$d became busy after preflight (PID(s):$holders) -- aborting before we touch it."
+              exit 1
+            fi
+          done
           BUSY=$(pgrep -af 'agent\.loop|agent\.before_loop|tt_hw_planner|tracy-capture' | grep -v 'pgrep' || true)
           if [ -n "$BUSY" ]; then
-            echo "::error::Device looks busy on this box -- refusing to run. Re-dispatch with force=true only if you are sure."
+            echo "::error::A harness started after preflight -- aborting."
             echo "$BUSY"
             exit 1
           fi
