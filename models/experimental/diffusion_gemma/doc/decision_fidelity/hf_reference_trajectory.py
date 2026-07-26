@@ -32,6 +32,15 @@ def main() -> int:
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--max-new-tokens", type=int, default=256, help="one canvas = one block")
     parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Seed the initial canvas. REQUIRED for comparing step COUNTS across arms: the canvas is "
+        "otherwise redrawn each run, and ref_seed_sweep.py measured 9-15 steps on q106 across 8 "
+        "canvases, so an unseeded step count carries more variance than most effects being tested. "
+        "Step-1 entropy is far more stable (0.35 nats of spread) but seed it anyway.",
+    )
+    parser.add_argument(
         "--pad-prompt-to",
         type=int,
         default=0,
@@ -40,6 +49,15 @@ def main() -> int:
         "to the cache, and the reveal mask reveals [0:padded_len], so TT's canvas ATTENDS them). This "
         "is the fuller TT geometry: the position gap AND the attended pad keys, which are the canvas's "
         "nearest neighbours in RoPE terms. --position-shift reproduces only the gap.",
+    )
+    parser.add_argument(
+        "--pad-side",
+        choices=("right", "left"),
+        default="right",
+        help="Which side --pad-prompt-to appends on. 'right' is what TT does today and detaches the "
+        "canvas from the prompt by the pad count. 'left' keeps the prompt ENDING adjacent to the "
+        "canvas, so the geometry is correct with the padding still present -- the candidate fix, "
+        "since RoPE is relative and a uniform shift of all positions is harmless.",
     )
     parser.add_argument(
         "--position-shift",
@@ -66,10 +84,14 @@ def main() -> int:
     if args.pad_prompt_to:
         pad = (-input_ids.shape[1]) % args.pad_prompt_to
         if pad:
-            input_ids = torch.cat([input_ids, torch.zeros((1, pad), dtype=torch.long)], dim=1)
+            padding = torch.zeros((1, pad), dtype=torch.long)
+            parts = [input_ids, padding] if args.pad_side == "right" else [padding, input_ids]
+            input_ids = torch.cat(parts, dim=1)
+            adjacency = "detached by" if args.pad_side == "right" else "adjacent, pads moved before the prompt;"
             print(
-                f"INJECTED TT prefill padding: +{pad} pad-id-0 tokens -> {input_ids.shape[1]} "
-                f"(canvas now starts at {input_ids.shape[1]}, and the pad keys are attended)",
+                f"INJECTED prefill padding on the {args.pad_side}: +{pad} pad-id-0 tokens -> "
+                f"{input_ids.shape[1]}; canvas {adjacency} {pad if args.pad_side == 'right' else 0} "
+                f"positions from the prompt end",
                 flush=True,
             )
 
@@ -131,6 +153,12 @@ def main() -> int:
 
         decoder.forward = shifted_decoder_forward
         print(f"INJECTED TT geometry: canvas position ids shifted by +{args.position_shift}", flush=True)
+
+    if args.seed is not None:
+        torch.manual_seed(args.seed)
+        if args.device.startswith("cuda"):
+            torch.cuda.manual_seed_all(args.seed)
+        print(f"canvas seeded: {args.seed}", flush=True)
 
     t0 = time.time()
     input_ids = input_ids.to(args.device)

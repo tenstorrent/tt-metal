@@ -47,6 +47,7 @@ def build_canvas_reveal_denoise_mask(
     layer_type: str | None = None,
     sliding_window: int | None = None,
     enforce_sliding_window: bool = False,
+    hidden_prefix_span: tuple[int, int] | None = None,
     neg_inf: float = float("-inf"),
     dtype: torch.dtype = torch.float32,
     device=None,
@@ -65,6 +66,15 @@ def build_canvas_reveal_denoise_mask(
       iff ``j < prompt_len`` (committed). Uncommitted slots ``[prompt_len:p_max]`` are always
       ``neg_inf`` — this is the explicit reveal predicate (do NOT rely on a window to hide them).
     - Canvas key slot ``j'`` in ``[0, canvas_len)`` lives at key columns ``[p_max:p_max+canvas_len]``.
+
+    ``hidden_prefix_span=(lo, hi)`` additionally hides prefix slots ``[lo, hi)`` that are inside the
+    committed span but hold no real token. The prefill pad slots are exactly that case: prefill
+    right-pads the prompt to a tile multiple and writes K/V for the pad tokens, and the reveal
+    predicate is evaluated with the PADDED length, so those keys are revealed even though they are
+    garbage — and they sit immediately before the canvas, making the canvas's nearest context noise.
+    Measured on the reference with the same geometry injected (seeded canvas, otherwise identical):
+    hiding them takes q096 from the 48-step cap back to 20 steps, and q106/q095 from 35 back to
+    12/11, i.e. baseline. See ``doc/decision_fidelity/device_gumbel_restored.md`` section 16.
 
     ``enforce_sliding_window=False`` (Phase 1) → committed keys are all-attend (matches today's
     maskless production denoise path; the reveal is the ONLY masking). ``True`` → additionally
@@ -85,6 +95,11 @@ def build_canvas_reveal_denoise_mask(
     committed = torch.zeros(total_k, dtype=torch.bool, device=device)
     committed[:p_max] = prefix_abs < prompt_len
     committed[p_max:] = True
+    if hidden_prefix_span is not None:
+        lo, hi = (int(v) for v in hidden_prefix_span)
+        if not 0 <= lo <= hi <= p_max:
+            raise ValueError(f"hidden_prefix_span {(lo, hi)} must satisfy 0 <= lo <= hi <= p_max ({p_max})")
+        committed[lo:hi] = False
     allowed = committed.unsqueeze(0).expand(canvas_len, total_k).clone()  # [C, p_max+C]
 
     if enforce_sliding_window and layer_type == "sliding_attention":

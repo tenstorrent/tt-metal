@@ -113,3 +113,74 @@ def test_softmax_invariance_masked_tail_is_noop():
 def test_p_max_must_not_shrink_below_prompt_len(expect_error):
     with expect_error(ValueError):
         build_canvas_reveal_denoise_mask(4096, CANVAS, 2048, layer_type="full_attention")
+
+
+# --------------------------------------------------------------------------------------------
+# hidden prefix span: the prefill pad slots
+#
+# Prefill right-pads the prompt to a tile multiple and writes K/V for the pad tokens, while the
+# reveal predicate uses the PADDED length -- so those garbage keys are revealed, and they sit
+# immediately before the canvas. Injecting that geometry into the reference (seeded canvas,
+# otherwise identical) took q096 to the 48-step cap and q106/q095 to 35 steps; hiding the pads
+# restored 20/12/11, i.e. baseline. See doc/decision_fidelity/device_gumbel_restored.md section 16.
+
+PAD_P_MAX = 4096  # a reveal span wide enough that the pad slots sit well inside it
+PAD_W = 1024  # the real sliding window, for the composition test
+
+
+def test_hidden_span_hides_exactly_those_slots():
+    """270 real tokens padded to 288 inside a 320-slot span: only 270..287 change."""
+    today = build_canvas_reveal_denoise_mask(288, CANVAS, 320)
+    fixed = build_canvas_reveal_denoise_mask(288, CANVAS, 320, hidden_prefix_span=(270, 288))
+    assert (fixed[:, :270] == 0).all(), "real prompt keys must stay revealed"
+    assert (fixed[:, 270:288] == NEG).all(), "pad slots must be hidden"
+    assert torch.equal(fixed[:, 288:], today[:, 288:]), "uncommitted tail and canvas must be untouched"
+    assert (fixed[:, 320:] == 0).all(), "canvas columns are always revealed"
+
+
+def test_hidden_span_is_inert_when_absent():
+    """The mechanism must not change any existing caller until one passes a span."""
+    for prompt_len in (0, 32, 288, PAD_P_MAX):
+        assert torch.equal(
+            build_canvas_reveal_denoise_mask(prompt_len, CANVAS, PAD_P_MAX),
+            build_canvas_reveal_denoise_mask(prompt_len, CANVAS, PAD_P_MAX, hidden_prefix_span=None),
+        ), f"prompt_len={prompt_len}"
+
+
+def test_empty_hidden_span_hides_nothing():
+    """An aligned prompt has no pad slots, so lo == hi, which must be a no-op rather than an error."""
+    assert torch.equal(
+        build_canvas_reveal_denoise_mask(32, CANVAS, PAD_P_MAX),
+        build_canvas_reveal_denoise_mask(32, CANVAS, PAD_P_MAX, hidden_prefix_span=(32, 32)),
+    )
+
+
+@pytest.mark.parametrize("span", [(-1, 8), (8, 4), (0, PAD_P_MAX + 1)])
+def test_hidden_span_bounds_are_validated(span, expect_error):
+    with expect_error(ValueError, match="hidden_prefix_span"):
+        build_canvas_reveal_denoise_mask(PAD_P_MAX, CANVAS, PAD_P_MAX, hidden_prefix_span=span)
+
+
+def test_hidden_span_composes_with_the_retention_window():
+    """Both predicates are per-key, so hiding pads and enforcing retention must intersect.
+
+    A key is attended only if it is committed AND not a pad AND still retained, so the pad slots
+    stay hidden even when they fall inside the retained window.
+    """
+    prompt_len = PAD_P_MAX
+    lo, hi = prompt_len - 4, prompt_len  # pads at the very end, inside any retained window
+    windowed = build_canvas_reveal_denoise_mask(
+        prompt_len, CANVAS, PAD_P_MAX, layer_type="sliding_attention", sliding_window=PAD_W, enforce_sliding_window=True
+    )
+    both = build_canvas_reveal_denoise_mask(
+        prompt_len,
+        CANVAS,
+        PAD_P_MAX,
+        layer_type="sliding_attention",
+        sliding_window=PAD_W,
+        enforce_sliding_window=True,
+        hidden_prefix_span=(lo, hi),
+    )
+    assert (windowed[:, lo:hi] == 0).all(), "precondition: those keys are retained without the span"
+    assert (both[:, lo:hi] == NEG).all(), "pads must be hidden even inside the retained window"
+    assert torch.equal(both[:, :lo], windowed[:, :lo]), "keys outside the span must be unchanged"

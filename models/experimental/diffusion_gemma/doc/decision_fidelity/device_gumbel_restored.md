@@ -650,6 +650,65 @@ Do not thread the padded length into the denoise geometry. Three things currentl
 consumers keep their buffer SHAPES (the RoPE mats and the mask are same-shaped, different content), so
 this stays trace-safe -- it is a content change, like the retention mask in section 10.
 
+## 16. FOUND: the canvas attends the prefill pad keys. Seeded, and the fix is a mask
+
+Sections 13-15 got the framing wrong twice. Both errors are worth stating because each was caused by
+a specific sloppiness.
+
+**Error 1 — unseeded step counts.** `hf_reference_trajectory.py` did not seed the initial canvas, so
+every arm drew a different one. `ref_seed_sweep.py` had already measured 9-15 steps on q106 across 8
+canvases, i.e. more variance than most effects under test, which is why section 14 concluded the
+geometry "does not reproduce the collapse". With the canvas seeded (seed 0, identical across arms;
+q106's baseline reproduces the sweep's 12 steps for seed 0, so the seeding is doing what it claims):
+
+| question | baseline | **pads attended (TT today)** | **pads hidden** | pads moved before the prompt |
+| --- | --- | --- | --- | --- |
+| q106 | 12 | **35** | **12** | 11 |
+| q096 | 18 | **48 = the cap, i.e. FAILS** | **20** | 13 |
+| q095 | 10 | **35** | **11** | 15 |
+
+TT's prefill geometry takes the REFERENCE from 18 steps to the 48-step cap on q096. The collapse
+reproduces in the reference implementation, on the reference's own numerics, from geometry alone.
+
+**Error 2 — there is no positional gap.** Sections 13-15 described the canvas as detached from the
+prompt by the pad count. In RoPE terms the sequence is contiguous: prompt at 0-269, pads at 270-287,
+canvas from 288. Nothing is skipped. The defect is that **the 18 tokens immediately preceding the
+canvas are garbage** (pad id 0), so the canvas's nearest context is noise -- which is what destroys
+the template-prefix anchor of section 13, since those predictions depend on what directly precedes
+them. The distance from the last REAL token is a red herring: hiding the pads leaves the canvas 19
+positions from the prompt's end and converges in 12 steps, exactly baseline.
+
+### The fix: hide the pad slots in the reveal mask
+
+`_pad_prompt_tokens_for_prefill` right-pads to a tile multiple and prefill writes K/V for the pads;
+the reveal predicate `j < prompt_len` is then evaluated with the PADDED length, so those keys are
+revealed. Hiding them is a **content-only change to a same-shaped buffer**, so it is trace-safe in the
+same way the retention mask of section 10 is, and it needs no RoPE change at all.
+
+Two alternatives were considered and rejected:
+
+* **Left-padding** (`torch.cat([padding, prompt_tokens])`) also works on the reference -- 11/13/15
+  steps -- and would be a one-line change. It is rejected because the prefix KV cache reuse decision
+  (APC, #47466) is built on "real tokens then zero-pad": `PrefixKVCache.plan` matches ALIGNED token
+  sequences, so with left padding a shared real-token prefix no longer yields a shared aligned prefix
+  and prefix reuse would essentially stop matching. `tests/test_prefix_cache.py` encodes that
+  assumption in its `_aligned` helper.
+* **Moving the RoPE offset to the true prompt length** was the section 15 proposal. Rejected as both
+  unnecessary (the offset is not the defect) and invasive: committed blocks live at tile-aligned slots,
+  so a true-position RoPE offset would permanently diverge from the slot index and the mask would need
+  a hole anyway.
+
+Landed here: `build_canvas_reveal_denoise_mask(..., hidden_prefix_span=(lo, hi))`, which intersects
+with the committed and retention predicates (all three are per-KEY, no query dependence). It is INERT
+until a caller passes a span -- byte-identical for every existing caller, which the tests pin -- so
+this commit changes no behaviour. Mutation-checked: stubbing the one line that applies the span fails
+`test_hidden_span_hides_exactly_those_slots` and `test_hidden_span_composes_with_the_retention_window`.
+
+Still to do, and it is the part that needs the device: thread `(true_prompt_len, cache_len)` from
+`PromptPrefill` -- which already carries both values -- to the adapter's mask build, then re-run the
+block-0 seven. The prediction is explicit: q106/q096/q095 should go from never-converging to roughly
+baseline step counts, without touching MoE numerics.
+
 ## 6. Reproduce
 
 ```bash
