@@ -2292,6 +2292,31 @@ void sdpa_ring_v2(
     const uint32_t* q_work_bitmap = nullptr) {
     init_sdpa_streaming_semaphores();
 
+    // Sparse-frames: mirror the reader's fully-padded-shard detection. A shard whose Q frames are
+    // all padding attends no k_frame, so the reader disables its aggregate skip and forwards/pushes
+    // every k_chunk (full data-movement participation, like dense). Compute must then DRAIN every
+    // pushed chunk rather than consult the (all-zero) aggregate — otherwise it would leave reader's
+    // pushes stranded in the CBs. This flag forces the drain paths below to drain unconditionally.
+    bool shard_attends_nothing = false;
+    if constexpr (sparse_frames_enabled) {
+        constexpr uint32_t q_frames_per_shard =
+            (frame_seqlen_tiles > 0) ? (q_local_padded_Nt / frame_seqlen_tiles) : 0u;
+        if (q_frames_per_shard > 0) {
+            const uint32_t q_frame_base = (q_frame_offset / q_frames_per_shard) * q_frames_per_shard;
+            shard_attends_nothing = true;
+            for (uint32_t qf_local = 0; qf_local < q_frames_per_shard && shard_attends_nothing; ++qf_local) {
+                const uint32_t qf = q_frame_base + qf_local;
+                for (uint32_t kf = 0; kf < num_frames_padded_compile; ++kf) {
+                    const uint32_t bit_idx = qf * num_frames_padded_compile + kf;
+                    if (((frame_allow_words[bit_idx >> 5] >> (bit_idx & 31u)) & 1u) != 0u) {
+                        shard_attends_nothing = false;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     // is_causal: diagonal stamp only on iter 0 (K is local-frame). Chunked: every iter (absolute coords).
     const bool is_causal_iter = (is_causal_sdpa && (ring_iter == 0)) || chunked_enabled;
@@ -2439,8 +2464,9 @@ void sdpa_ring_v2(
                         break;
                     }
                 }
-                if (aggregate_allowed) {
-                    // Reader pushed but this Q chunk doesn't attend — drain.
+                if (aggregate_allowed || shard_attends_nothing) {
+                    // Reader pushed but this Q chunk doesn't attend — drain. (shard_attends_nothing:
+                    // reader force-pushes every chunk, so the aggregate is all-zero yet we must drain.)
                     CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
                     sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
                     if constexpr (!kt_inplace_v) {
@@ -2564,9 +2590,10 @@ void sdpa_ring_v2(
                                 break;
                             }
                         }
-                        if (!aggregate_allowed) {
+                        if (!aggregate_allowed && !shard_attends_nothing) {
                             continue;  // reader also skipped — nothing to drain
                         }
+                        // shard_attends_nothing: reader force-pushed every chunk, so drain regardless.
                     }
                     // Drain K/V that reader pushed.
                     CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);

@@ -490,6 +490,33 @@ void kernel_main() {
      */
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
+
+    // Sparse-frames: detect a shard whose Q frames are ALL padding (no real Q rows), so no q_frame
+    // attends any k_frame. The per-k_chunk aggregate skip below would then push ZERO chunks for the
+    // whole device — but the skip sits above k_chain.forward and cb_k.push_back, so it also strands
+    // the head-chain multicast and the ring balance every other device depends on (deadlock at the
+    // 720p geometry, where sp=8/nf_padded=24 puts frames 21/22/23 all on the last shard). For such
+    // a shard we disable the skip: it participates fully in data movement (push + forward every
+    // chunk, exactly like dense — a known-good path) while compute still drains the pushed K/V via
+    // its per-q zero-work fast path (no matmul). This lets build_frame_allow_packed keep padded Q
+    // rows honestly all-zero instead of the force-all-1 workaround.
+    bool shard_attends_nothing = false;
+    if constexpr (sparse_frames_enabled == 1) {
+        const uint32_t q_frames_per_shard = q_local_padded_Nt / sparse_frame_seqlen_tiles;
+        const uint32_t q_frame_base = ring_index * q_frames_per_shard;
+        shard_attends_nothing = true;
+        for (uint32_t qf_local = 0; qf_local < q_frames_per_shard && shard_attends_nothing; ++qf_local) {
+            const uint32_t qf = q_frame_base + qf_local;
+            for (uint32_t kf = 0; kf < sparse_num_frames_padded; ++kf) {
+                const uint32_t bit_idx = qf * sparse_num_frames_padded + kf;
+                if (((frame_allow_words[bit_idx >> 5] >> (bit_idx & 31)) & 1u) != 0u) {
+                    shard_attends_nothing = false;
+                    break;
+                }
+            }
+        }
+    }
+
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         // find out which is the latest ring_id that synchronized
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
@@ -674,8 +701,10 @@ void kernel_main() {
                 // (they share the same shard, same q_frame set). Compute still does per-q_chunk
                 // drain for chunks reader pushed but this specific q_chunk doesn't attend.
                 if constexpr (sparse_frames_enabled == 1) {
-                    // Reader-side shard-aggregate skip check.
-                    if (!kv_chunk_is_joint) {
+                    // Reader-side shard-aggregate skip check. Disabled for a fully-padded shard
+                    // (shard_attends_nothing) so it forwards/pushes every chunk like dense; compute
+                    // drains without matmul. See shard_attends_nothing definition above.
+                    if (!kv_chunk_is_joint && !shard_attends_nothing) {
                         const uint32_t k_global_start_tile = kv_local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
                         const uint32_t k_frame = k_global_start_tile / sparse_frame_seqlen_tiles;
                         const uint32_t q_frames_per_shard = q_local_padded_Nt / sparse_frame_seqlen_tiles;

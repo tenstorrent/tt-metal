@@ -117,17 +117,10 @@ def _pack_frame_allow(allow: torch.Tensor) -> list:
             if allow[q, k]:
                 bit_idx = q * nf + k
                 words[bit_idx // 32] |= 1 << (bit_idx % 32)
-    # WORKAROUND (costs ~10% of the sparse win on padded shards): force all-zero allow rows to
-    # all-1. A device whose Q shard is entirely padded (e.g. frames 21-23 on device 7 at
-    # nf_real=21/nf_padded=24) reads all-zero rows, so the reader's shard-aggregate skip pushes
-    # zero K chunks per iter, breaking head-chain lockstep and deadlocking. Attending-all keeps the
-    # chain in sync; padded Q outputs are discarded by the [:, :, :real_n, :] slice downstream, so
-    # real outputs are unaffected. Proper fix: make chain sync robust to per-shard skip divergence.
-    for q in range(nf):
-        if all(allow[q, k].item() == 0 for k in range(nf)):
-            for k in range(nf):
-                bit_idx = q * nf + k
-                words[bit_idx // 32] |= 1 << (bit_idx % 32)
+    # Padded Q rows stay honestly all-zero. A device whose Q shard is entirely padded (e.g. frames
+    # 21-23 on device 7 at nf_real=21/nf_padded=24) has an all-zero allow region; the op detects
+    # this per-shard (reader `shard_attends_nothing`) and has that device participate fully in K/V
+    # data movement while compute skips the matmul — so no allow-table fixup is needed.
     return words
 
 
