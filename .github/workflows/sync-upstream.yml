@@ -98,16 +98,36 @@ jobs:
           git push origin HEAD:feature/tt-hw-planner
           echo "Pushed feature/tt-hw-planner -> latest tt-metal ($SHA)"
 
-      - name: File an issue on conflict/failure
+      - name: File an issue on conflict/failure (comment on the open one instead of duplicating)
         if: failure()
         run: |
-          BODY="Auto-sync to latest tt-metal could not push (unexpected merge conflict). Conflicts: ${{ steps.sync.outputs.conflicts }}. Resolve manually, then verify build+PCC on a TT box. See run logs."
+          BODY="Auto-sync to latest tt-metal could not push (unexpected merge conflict). Conflicts: ${{ steps.sync.outputs.conflicts }}. Resolve manually, then verify build+PCC on a TT box. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           python3 - "$BODY" <<'PY'
-          import json,os,sys,urllib.request
-          data=json.dumps({"title":"Auto-sync to latest tt-metal needs manual attention","body":sys.argv[1]}).encode()
-          req=urllib.request.Request(os.environ["GH_API"]+"/issues",data=data,
-              headers={"Authorization":"token %s"%os.environ["TOKEN"],"Accept":"application/vnd.github+json"})
-          print(urllib.request.urlopen(req).status)
+          # A conflict here needs a human, so it persists across days -- and this workflow runs
+          # daily. Filing unconditionally would leave one identical issue per day until someone
+          # resolves it. Reuse the open one and comment, so the issue list counts problems rather
+          # than mornings.
+          import json, os, sys, urllib.request
+
+          API, TOKEN = os.environ["GH_API"], os.environ["TOKEN"]
+          TITLE = "Auto-sync to latest tt-metal needs manual attention"
+          HDRS = {"Authorization": "token %s" % TOKEN, "Accept": "application/vnd.github+json"}
+
+          def call(url, data=None):
+              req = urllib.request.Request(url, data=data, headers=HDRS)
+              with urllib.request.urlopen(req) as r:
+                  return r.status, (json.load(r) if r.length != 0 else None)
+
+          _, issues = call(API + "/issues?state=open&per_page=100")
+          existing = next((i for i in issues if i["title"] == TITLE and "pull_request" not in i), None)
+
+          if existing:
+              status, _ = call(API + "/issues/%d/comments" % existing["number"],
+                               json.dumps({"body": sys.argv[1]}).encode())
+              print("commented on #%d -> %s" % (existing["number"], status))
+          else:
+              status, new = call(API + "/issues", json.dumps({"title": TITLE, "body": sys.argv[1]}).encode())
+              print("opened #%s -> %s" % (new["number"], status))
           PY
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
