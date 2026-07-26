@@ -219,28 +219,20 @@ run_llama8b_decode_profile() {
     export HF_HUB_OFFLINE=1
     export TRANSFORMERS_OFFLINE=1
 
-    # --num_layers 1: profile a SINGLE decoder layer. The full 32-layer model overflows
-    # the 12000-marker/core device profiler buffer (markers dropped -> op-to-op parsing
-    # fails); one layer keeps op count low enough to parse cleanly and still captures the
-    # repeating decode op sequence to diff between hosts.
     # `|| true`: tracy may exit non-zero on the host<->device op-merge step even when
-    # decode ran fine; don't let that abort before we harvest. The guard below is the
-    # real success check.
+    # decode ran fine (a known device-4 merge assertion); don't let that abort before
+    # we harvest. The decode guard below is the real success check.
     python -m tracy -v -r -p -m pytest models/tt_transformers/demo/simple_text_demo.py \
-        -k "performance-ci-eval-32" --use_prefetcher True --repeat_batches 1 --num_layers 1 \
+        -k "performance-ci-eval-32" --use_prefetcher True --repeat_batches 1 \
         2>&1 | tee $PROFILER_ARTIFACTS_DIR/test_out.log || true
-
-    # Device-only report bypasses the failing host<->device merge and yields the named
-    # ops_perf_results + per_core_op_to_op_times we need for the op-to-op diff.
-    ./tools/tracy/process_ops_logs.py --device-only --date 2>&1 | tail -5 || true
 
     # Harvest: the workflow only uploads generated/test_reports/, so copy the profiler
     # outputs there (skip the huge raw tracy_ops_times.csv / .tracy binary).
     HARVEST=generated/test_reports/llama8b_decode_profile
     mkdir -p "$HARVEST"
-    find $PROFILER_OUTPUT_DIR -name "ops_perf_results_*.csv" -exec cp {} "$HARVEST/" \; 2>/dev/null || true
-    find $PROFILER_OUTPUT_DIR -name "per_core_op_to_op_times_*.csv" -exec cp {} "$HARVEST/" \; 2>/dev/null || true
+    find $PROFILER_ARTIFACTS_DIR/reports -name "ops_perf_results_*.csv" -exec cp {} "$HARVEST/" \; 2>/dev/null || true
     cp $PROFILER_ARTIFACTS_DIR/.logs/cpp_device_perf_report.csv "$HARVEST/" 2>/dev/null || true
+    cp $PROFILER_ARTIFACTS_DIR/.logs/profile_log_device.csv "$HARVEST/" 2>/dev/null || true
     cp $PROFILER_ARTIFACTS_DIR/test_out.log "$HARVEST/" 2>/dev/null || true
     echo "Harvested profiler artifacts:"; ls -la "$HARVEST/" || true
 
