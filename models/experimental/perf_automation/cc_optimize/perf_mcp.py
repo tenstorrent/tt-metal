@@ -928,6 +928,67 @@ def _profile_cache_put(fp: str, prof: dict) -> None:
         pass
 
 
+# --- BUG 1/BUG 5 (2026-07-25) -------------------------------------------------
+# A profile can fail to produce a MEASUREMENT without anything being wrong with the
+# device. Upstream tt-metal writes a HEADERLESS ops csv (exactly b"\r\n") and logs
+# success when the report has zero op rows, so the harness sees "unexpected CSV header
+# ... '\n'". That is a host-side extraction failure: it must be retried and reported as
+# unmeasured, never recorded as a device wedge (which burned the lever and reset the
+# board after two occurrences).
+_MEASUREMENT_FAILURE_MARKERS = (
+    "unexpected csv header",
+    "ops csv missing/empty",
+    "no ops_perf_results",
+    "could not read the test list",
+)
+_ZERO_ROW_RETRIES = int(os.environ.get("PERF_MCP_ZERO_ROW_RETRIES", "2") or "2")
+
+
+def _is_measurement_failure(msg) -> bool:
+    """True when the profile produced no readable measurement (host-side extraction),
+    as opposed to a device crash / hang that genuinely wedged the board."""
+    s = str(msg or "").lower()
+    if any(
+        m in s for m in ("segmentation fault", "core dumped", "aborted", "terminate called", "tt_fatal", "tt_throw")
+    ):
+        return False
+    return any(m in s for m in _MEASUREMENT_FAILURE_MARKERS)
+
+
+def _measurement_failed_result(msg) -> dict:
+    reason = (
+        "MEASUREMENT_FAILED: the profiler returned no readable op rows, so your edit was NOT measured "
+        "(this says nothing about whether the edit is good). The harness already retried. "
+        f"Detail: {str(msg)[-300:]}"
+    )
+    return {"verdict": "MEASUREMENT_FAILED", "measured": False, "retryable": True, "reason": reason}
+
+
+def _profile_with_zero_row_retry(cq=None, retries: int = None) -> dict:
+    """Profile, retrying when the run yields no readable op rows.
+
+    A zero-row profile is transient far more often than not; one retry would have saved
+    all 9 llama attempts on 2026-07-25. Raises the original error once retries are spent
+    so the caller can classify it via _is_measurement_failure().
+    """
+    n = _ZERO_ROW_RETRIES if retries is None else retries
+    last = None
+    for attempt in range(n + 1):
+        try:
+            return _profile_once(cq=cq)
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+            if attempt >= n or not _is_measurement_failure(exc):
+                raise
+            print(
+                f"  [perf-mcp] profile produced no readable op rows "
+                f"({str(exc)[-120:]}); re-profiling {attempt + 1}/{n}",
+                file=sys.stderr,
+                flush=True,
+            )
+    raise last
+
+
 def _profile_once(cq=None) -> dict:
     _cache_on = os.environ.get("PERF_MCP_NO_PROFILE_CACHE") != "1"
     _fp = _model_source_fingerprint() if _cache_on else ""
@@ -1000,7 +1061,7 @@ def profile_model() -> dict:
     roofline target (the achievable floor). Records this as the baseline for measure_candidate.
     Call this first, and again whenever you want a fresh picture."""
     try:
-        prof = _profile_once(cq=1)
+        prof = _profile_with_zero_row_retry(cq=1)
     except Exception as exc:  # noqa: BLE001
         _msg = str(exc)
         if _is_dram_trace_overflow(_msg):
@@ -1068,7 +1129,7 @@ def measure_candidate() -> dict:
     A REJECTED measurement is NEVER a win no matter how fast it looks — do not keep it. Call this
     after every edit; only a 'valid' result that is faster than baseline is a real gain."""
     try:
-        prof = _profile_once(cq=1)
+        prof = _profile_with_zero_row_retry(cq=1)
     except Exception as exc:  # noqa: BLE001
         _msg = str(exc)
         if _is_dram_trace_overflow(_msg):
@@ -1080,6 +1141,10 @@ def measure_candidate() -> dict:
             _reclaim_mesh("measure_candidate")
             _autorecord_wedge(_L1_OVERFLOW_MSG)
             return {"verdict": "REJECTED", "reason": _L1_OVERFLOW_MSG}
+        if _is_measurement_failure(_msg):
+            # host-side extraction failure: NOT a device wedge. Do not mark a device crash
+            # (2 in a row triggers a board reset), do not record a wedge, do not burn the lever.
+            return _measurement_failed_result(_msg)
         _note_device_crash("measure_candidate")  # may tt-smi reset if this is a repeat (wedge)
         _autorecord_wedge(_trace_compat_feedback(f"wedged/crashed when tried: {_msg[-300:]}"))
         return {"verdict": "REJECTED", "reason": _trace_compat_feedback(f"profiler crashed: {_msg[-600:]}")}
@@ -2289,7 +2354,7 @@ def termination_check() -> dict:
     stop' shortcut; NO OR-with-at_floor escape. can_stop is true iff no material op has a reachable
     rung left. Obey can_stop; for each blocking_op do the rung named in its 'next_rung'."""
     try:
-        prof = _profile_once(cq=1)
+        prof = _profile_with_zero_row_retry(cq=1)
     except Exception as exc:  # noqa: BLE001
         _note_device_crash("termination_check")
         return {"can_stop": False, "error": f"profiler crashed: {str(exc)[-500:]}"}

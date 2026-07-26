@@ -8,12 +8,17 @@ overall old->new runtime with the percentage speedup. Pure stdlib; additive (tou
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 
 _LEVEL_COLS = ("grid", "fidelity", "dtype", "shard", "host", "tt-lang", "cpp")
+_ALL_COLS = _LEVEL_COLS + ("other",)  # "other" holds unclassifiable levers; rendered only when used
 _HOST_KINDS = {"trace", "2cq", "structural", "fusion", "fuse", "gather", "sparse", "cache", "kv-cache"}
 
 _REPORT_NAME = "RUN_REPORT.md"
@@ -70,13 +75,106 @@ def module_optimize_block(
     return head + body
 
 
+_LEVEL_ALIAS_CACHE = Path(tempfile.gettempdir()) / "perf_mcp_lever_alias_cache.json"
+
+_LEVEL_SEMANTICS = (
+    "grid = core-grid occupancy / spreading work across cores; "
+    "fidelity = math fidelity (HiFi/LoFi); "
+    "dtype = weight or activation precision (bf16/bf8_b/bf4_b); "
+    "shard = memory sharding, L1 pinning, memory-config changes; "
+    "host = host-side or dispatch-side work, tracing, fusion, caching; "
+    "tt-lang = custom kernel authored in the tt-lang DSL; "
+    "cpp = custom C++ Metalium kernel"
+)
+
+
+def _normalise_kind(kind: str) -> str:
+    """Strip rung/knob prefixes and whitespace so `knob:grid` matches the `grid` column."""
+    k = (kind or "").strip().lower()
+    for pfx in ("knob:", "rung:", "lever:"):
+        if k.startswith(pfx):
+            k = k[len(pfx) :].strip()
+    return k
+
+
 def _level_of(kind: str) -> str:
-    k = (kind or "").lower()
-    if k in ("grid", "dtype", "fidelity", "shard", "tt-lang", "cpp"):
+    """Ladder column for an attempt, deterministic fast path.
+
+    An unrecognised name returns "other" -- never "host", which previously swallowed
+    every `knob:*` lever and any new naming silently. Semantic classification of
+    unknown names lives in classify_level().
+    """
+    k = _normalise_kind(kind)
+    if k in _LEVEL_COLS and k != "host":
         return k
-    if k in _HOST_KINDS:
+    if k in _HOST_KINDS or k == "host":
         return "host"
-    return "host"
+    return "other"
+
+
+def _alias_cache() -> dict:
+    try:
+        return json.loads(_LEVEL_ALIAS_CACHE.read_text())
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _alias_cache_put(key: str, col: str) -> None:
+    try:
+        c = _alias_cache()
+        c[key] = col
+        _LEVEL_ALIAS_CACHE.write_text(json.dumps(c))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _classify_via_agent(kind: str, note: str, op_signature: str) -> str:
+    if os.environ.get("PERF_MCP_NO_AGENT_CLASSIFY") == "1":
+        return "other"
+    claude = shutil.which("claude")
+    if not claude:
+        return "other"
+    prompt = (
+        "Classify ONE optimization attempt into exactly one ladder column.\n\n"
+        f"columns: {', '.join(_LEVEL_COLS)}, other\n"
+        f"semantics: {_LEVEL_SEMANTICS}\n\n"
+        f"attempt label (a HINT only, may be wrong): {kind!r}\n"
+        f"op: {op_signature!r}\n"
+        f"what the attempt actually did: {(note or '(no note)')[:600]!r}\n\n"
+        "Judge from what it DID, not the label. If nothing fits, answer other.\n"
+        'Reply with ONLY: {"column":"<one of the above>"}'
+    )
+    try:
+        r = subprocess.run(
+            [claude, "-p", prompt, "--output-format", "text"], capture_output=True, text=True, timeout=120
+        )
+        out = (r.stdout or "").strip()
+        i, j = out.find("{"), out.rfind("}")
+        col = json.loads(out[i : j + 1]).get("column", "other")
+        return col if (col in _LEVEL_COLS or col == "other") else "other"
+    except Exception:  # noqa: BLE001
+        return "other"
+
+
+def classify_level(kind: str, note: str = "", op_signature: str = "") -> str:
+    """Ladder column derived from what the attempt DID, not from its name.
+
+    `kernel_kind` is a HINT only: reports have carried `tt-lang` on rows whose note
+    described L1 weight-pinning (a shard change). Known names resolve deterministically;
+    anything else is classified once by a Claude Code agent from the note, then cached by
+    content hash so re-renders stay deterministic and cost nothing. Falls back to "other"
+    (never "host") when no agent is available.
+    """
+    det = _level_of(kind)
+    if det != "other":
+        return det
+    key = hashlib.sha1(f"{_normalise_kind(kind)}|{(note or '')[:400]}".encode()).hexdigest()[:16]
+    cached = _alias_cache().get(key)
+    if cached in _LEVEL_COLS or cached == "other":
+        return cached
+    col = _classify_via_agent(kind, note, op_signature)
+    _alias_cache_put(key, col)
+    return col
 
 
 def _ttl_absent() -> bool:
@@ -248,11 +346,11 @@ def render_summary(
         if not isinstance(a, dict):
             continue
         sig = a.get("op_signature", "?")
-        lvl = _level_of(a.get("kernel_kind", ""))
+        lvl = classify_level(a.get("kernel_kind", ""), a.get("note", ""), sig)
         ms = a.get("measured_ms")
         won = bool(a.get("beat_baseline"))
-        op = by_op.setdefault(sig, {c: None for c in _LEVEL_COLS})
-        cur = op[lvl]
+        op = by_op.setdefault(sig, {c: None for c in _ALL_COLS})
+        cur = op.get(lvl)
         # 'win' beats 'try'; track best (lowest) measured ms per cell
         status = "win" if won else ("wedge" if a.get("wedged") else "try")
         if cur is None:
@@ -318,15 +416,16 @@ def render_summary(
         lines.append("")
 
     if by_op:
-        hdr = f"{'op':<34} " + "  ".join(f"{_disp_level(c):<8}" for c in _LEVEL_COLS) + f"  {'best ms':>9}"
+        _cols = list(_LEVEL_COLS) + (["other"] if any(o.get("other") for o in by_op.values()) else [])
+        hdr = f"{'op':<34} " + "  ".join(f"{_disp_level(c):<8}" for c in _cols) + f"  {'best ms':>9}"
         lines.append(hdr)
         lines.append("-" * len(hdr))
         for sig in sorted(by_op):
             op = by_op[sig]
             cells = []
             best = None
-            for c in _LEVEL_COLS:
-                cell = op[c]
+            for c in _cols:
+                cell = op.get(c)
                 if cell is None:
                     cells.append(f"{'—':<8}")
                 else:
@@ -397,7 +496,15 @@ def render_summary(
         shown = ", ".join(_op_label(o, 26) for o in _no_gain[:8]) + (" …" if len(_no_gain) > 8 else "")
         lines.append(f"- {len(_no_gain)} op(s) tried but no lever beat baseline: {shown}")
         lines.append("  -> inspect the per-op device report and consider a hand-written kernel or a structural change.")
-    if baseline_ms and final_ms and final_ms >= baseline_ms:
+    _measured = [a for a in attempts if isinstance(a, dict) and a.get("measured_ms") is not None]
+    _any_win = any(isinstance(a, dict) and a.get("beat_baseline") for a in attempts)
+    if not _measured and attempts:
+        _unmeasured = len(attempts)
+        lines.append(
+            f"- INCONCLUSIVE — {_unmeasured} attempt(s) were made but NONE produced a valid measurement, "
+            "so no statement about speedup or the ttnn floor is possible. See the per-attempt reasons above."
+        )
+    elif baseline_ms and final_ms and final_ms >= baseline_ms and _measured and not _any_win:
         lines.append(
             "- No net speedup recorded — the model may already be at its ttnn floor, or the dominant op needs a custom kernel."
         )

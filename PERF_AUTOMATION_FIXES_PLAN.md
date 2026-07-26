@@ -40,7 +40,7 @@ except Exception as exc:
 
 ---
 
-## BUG 2 — `knob:*` levers mis-bucketed into the `host` column
+## BUG 2 — `knob:*` levers mis-bucketed into the `host` column  [x] IMPLEMENTED 2026-07-25
 
 **Where:** `cc_optimize/summary.py:73`
 
@@ -76,7 +76,7 @@ So the column must be derived from what the attempt actually DID, not from its n
 
 ---
 
-## BUG 3 — false "no net speedup / may already be at its ttnn floor"
+## BUG 3 — false "no net speedup / may already be at its ttnn floor"  [x] IMPLEMENTED 2026-07-25
 
 **Where:** report writer (`cc_optimize/summary.py`, limitations block)
 
@@ -247,6 +247,25 @@ logger.info(f"Device only OPs csv generated at: {allOpsCSVPath}")   # reports SU
 ### OPEN QUESTION (blocked on evidence)
 Why did those 9 candidate profiles yield zero op rows at all? Eliminated: Tracy compiled in (`ENABLE_TRACY=ON`, on by default), `TT_METAL_DEVICE_PROFILER=1` set per profile (`probes.py:843`), fresh out_dir per attempt, no `PERF_MCP_PROFILE_ENV` injection in that run (depth bridge said "ignoring"), nothing killed by the operator. The deciding artifact is the `run0_tracy.log` from a zero-op attempt; those were deleted with their `/tmp/perf_mcp_*` dirs, and the failure has not recurred (0 in ~2 h on a clean tree).
 - [ ] Add capture-on-failure: on CSV/zero-op failure, snapshot the malformed CSV + full `run0_tracy.log` + the `.logs/` inputs to a durable dir before cleanup, so one recurrence is diagnosable and replayable offline.
+
+---
+
+## CLEANUP (separate from the 5 bugs) — post-rebase test failures
+
+After rebasing the branch onto latest tt-metal (991 commits, 2026-07-25), the perf_automation suite is **606 passed / 21 failed**. Proven NOT caused by the BUG 2/3 fixes: A/B with and without the changed `summary.py` gives an identical **9 failed / 45 passed** on the affected files. Two distinct classes:
+
+**(i) ~9 genuine rebase fallout — fail in isolation too**
+- [ ] `tests/test_tp_ladder.py` (2) · `tests/test_gap_a_host_signal.py` (2) · `tests/test_exit_policy.py` (1) · `tests/test_apply.py` (1) · `tests/test_model_files.py` (1) · `tests/test_engine.py` (KeyError at :314) · `tests/test_trace_fix_retry.py` (7)
+- Upstream changed behaviour these assert on; each needs its expectation re-derived against the new tt-metal, not silenced.
+
+**(ii) ~12 test-isolation pollution — pass alone, fail in full-suite order**
+- [ ] `tests/test_config.py` passes **12/12 alone** but fails at :30 and :107 in a full run. Some earlier test leaves global state behind (env var / imported module singleton).
+- Root pattern already seen once and fixed: a test set `PERF_MCP_MANIFEST` to a temp path that was then deleted, and `cc_optimize/perf_mcp.py:45` reads that env var **at import time**, so 18 later files failed collection with `FileNotFoundError`.
+- [ ] Harden the source of the fragility too: `perf_mcp.py` should not read/parse the manifest at module import; make it lazy so a stale env var cannot break unrelated collection.
+- [ ] Add an isolation guard: an autouse fixture that snapshots/restores `PERF_MCP_*`, `TT_PERF_*`, `AGENT_*` env vars around every test.
+
+**Housekeeping**
+- [ ] Benchmark harnesses must live in `models/experimental/perf_automation/benchmarks/`, never `tests/` — pytest imports everything under `tests/` and would execute them. (Already moved: 9 scripts.)
 
 ---
 

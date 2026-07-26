@@ -42,6 +42,9 @@ for name, base in CASES:
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         mani = make_fixture(root, base)
+        _saved = {
+            k: os.environ.get(k) for k in ("PERF_MCP_MANIFEST", "PERF_MCP_MEASURE_BACKSTOP", "PERF_MCP_ROUND_MAX_SEC")
+        }
         os.environ["PERF_MCP_MANIFEST"] = str(mani)
         os.environ.pop("PERF_MCP_MEASURE_BACKSTOP", None)
         os.environ.pop("PERF_MCP_ROUND_MAX_SEC", None)
@@ -58,6 +61,11 @@ for name, base in CASES:
         if bad:
             fails.append((name, verdict))
         print(f"{name:<34}{base:>9.2f}{mb:>18}{rc:>11}{ratio:>12.0f}x  [{scaled}] {verdict}")
+        for _k, _v in _saved.items():
+            if _v is None:
+                os.environ.pop(_k, None)
+            else:
+                os.environ[_k] = _v
 print()
 print(f"RESULT: {len(fails)} of {len(CASES)} model kinds mis-served")
 for n, v in fails:

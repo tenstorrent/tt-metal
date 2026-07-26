@@ -379,7 +379,8 @@ _HOST_XFER_OPS = ("from_torch", "to_torch", "from_device", "to_device")
 def _parse_facts(raw: str, sigs: set | None) -> dict:
     """Extract the UNIVERSAL scorecard facts from an op-sig probe run: TP/DP + shard state (from the
     pipeline's MeshDevice line) and whether the step round-trips to host (host-transfer ops in the op
-    set) — the latter is the fully-on-device (host-free) gate. Model-agnostic: reads the op stream, not a per-model map."""
+    set) — the latter is the fully-on-device (host-free) gate. Model-agnostic: reads the op stream, not a per-model map.
+    """
     facts = {"dp": 1, "tp": 1, "shard_active": False, "host_ops": [], "n_op_types": len(sigs or ())}
     m = re.search(r"DP=(\d+)\s+TP=(\d+)", raw or "")
     if m:
@@ -884,7 +885,9 @@ def _print_scorecard(
         elif on_device:
             L.append("  │ fully on device   : YES  (fully trace-capable)")
         else:
-            L.append("  │ fully on device   : NO   -> full-device trace blocked; host round-trips: %s" % ", ".join(host_ops))
+            L.append(
+                "  │ fully on device   : NO   -> full-device trace blocked; host round-trips: %s" % ", ".join(host_ops)
+            )
         L.append("  │ batch / users     : %s" % batch)
         reason = (
             "probe did not run"
@@ -1371,31 +1374,125 @@ def _baseline_ceiling(repo_root: Path) -> tuple[float, int]:
     return base, ceil
 
 
+# --- BUG 4 (2026-07-25): timers derive from OBSERVED durations, not absolute floors ----
+# The previous form was min(ceil, max(floor, 3*base)) with base = the tracy BASELINE
+# PROFILE duration. `3*base` lost to the 2400/3600 floors for every model whose baseline
+# profile is under ~800 s, so the floors were the de-facto policy and adaptivity was inert.
+# Measured consequences on 2026-07-25: a 3 ms ACE module was granted 3600 s (1139x its
+# work, so a hang idled for an hour), while llama's round -- whose check_pcc gate alone
+# runs ~1400 s -- was killed 4x at the 2400 s floor with `killed holders none`.
+#
+# Now: every bound is a MULTIPLE OF THE OBSERVED COST OF THE OPERATION IT GOVERNS, clamped
+# by a small absolute minimum (measurement noise) and the operator ceiling (manifest
+# config.timeout) -- the only operator-supplied number.
+_OBS_LOG = "observed_durations.json"
+_MIN_TIMER_S = float(os.environ.get("PERF_MCP_MIN_TIMER_S", "30") or "30")
+# how many times an operation's own observed cost it may take before we stop waiting
+# tolerance multiplier per op. "round" is 2.0 because _OP_IN_BASE_UNITS["round"]
+# already estimates the WHOLE cycle (pcc + measure + commit); multiplying a
+# full-cycle estimate again would compound two proxies.
+_OP_MULT = {"profile": 6.0, "pcc": 6.0, "build": 6.0, "round": 2.0, "agent": 8.0}
+# fallback cost of one operation, expressed in baseline-profile units, used until the
+# operation has been observed in its own right
+_OP_IN_BASE_UNITS = {"profile": 1.0, "pcc": 9.0, "build": 6.0, "round": 12.0, "agent": 2.0}
+
+
+def _timer_overrides_active() -> list:
+    """Env overrides that PIN a timer and therefore disable adaptivity. Reported so a
+    pinned timer is never silent (PERF_MCP_MEASURE_BACKSTOP=900 once hard-capped every
+    llama PCC call at 900 s and produced `timed out after 900 seconds` on every attempt)."""
+    keys = (
+        "PERF_MCP_MEASURE_BACKSTOP",
+        "PERF_MCP_ROUND_MAX_SEC",
+        "PERF_MCP_ROUND_STALL_SEC",
+        "PERF_MCP_MEASURE_STALL_SEC",
+        "PERF_MCP_DISCOVER_STALL_SEC",
+    )
+    return [k for k in keys if os.environ.get(k)]
+
+
+def _observed(repo_root: Path, op: str) -> list:
+    """Durations already logged for this operation on this model, newest last."""
+    try:
+        mani = _latest_manifest(repo_root / PERF_DIR)
+        if mani is None:
+            return []
+        data = json.loads((mani.parent / _OBS_LOG).read_text())
+        vals = [float(x) for x in (data.get(op) or []) if float(x) > 0]
+        return vals[-32:]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def record_observed(repo_root: Path, op: str, seconds: float) -> None:
+    """Append a real duration so later timers scale off measured cost, not a proxy."""
+    try:
+        mani = _latest_manifest(repo_root / PERF_DIR)
+        if mani is None or not seconds or seconds <= 0:
+            return
+        f = mani.parent / _OBS_LOG
+        data = {}
+        if f.is_file():
+            data = json.loads(f.read_text()) or {}
+        data.setdefault(op, []).append(round(float(seconds), 3))
+        data[op] = data[op][-64:]
+        f.write_text(json.dumps(data))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _op_cost(repo_root: Path, op: str) -> float:
+    """Best estimate of what ONE `op` costs on this model: p95 of its own observations,
+    else the baseline-profile duration scaled into that operation's units."""
+    obs = _observed(repo_root, op)
+    if obs:
+        s = sorted(obs)
+        return s[min(len(s) - 1, int(0.95 * len(s)))]
+    base, _ = _baseline_ceiling(repo_root)
+    if base > 0:
+        return base * _OP_IN_BASE_UNITS.get(op, 1.0)
+    return 0.0
+
+
+def adaptive_timer(repo_root: Path, op: str, *, env_key: str = "", mult: float = 0.0) -> int:
+    """Budget for one `op`, proportional to that op's observed cost.
+
+    clamp(mult * cost, _MIN_TIMER_S, operator_ceiling). No absolute floor, so a 3 s module
+    gets tens of seconds and an 8B pipeline gets what its own cycle costs.
+    """
+    if env_key:
+        ov = os.environ.get(env_key)
+        if ov:
+            try:
+                return int(ov)
+            except ValueError:
+                pass
+    _, ceil = _baseline_ceiling(repo_root)
+    cost = _op_cost(repo_root, op)
+    m = mult or _OP_MULT.get(op, 4.0)
+    if cost <= 0:
+        return int(min(ceil, max(_MIN_TIMER_S, 600)))  # cold start: no history, no proxy yet
+    return int(min(ceil, max(_MIN_TIMER_S, m * cost)))
+
+
 def _adaptive_cap(repo_root: Path, floor: int, mult: int = 3) -> int:
+    """Retained for callers that pass an explicit floor; the floor is now a CEILING-side
+    hint only and no longer allowed to dominate a measured budget."""
     base, ceil = _baseline_ceiling(repo_root)
     if ceil < floor:
         ceil = floor
-    return min(ceil, max(floor, int(mult * base)))
+    scaled = int(mult * base)
+    return min(ceil, max(int(_MIN_TIMER_S), scaled or floor))
 
 
 def _round_hard_cap(repo_root: Path, stall_sec: int) -> int:
-    override = os.environ.get("PERF_MCP_ROUND_MAX_SEC")
-    if override:
-        try:
-            return int(override)
-        except ValueError:
-            pass
-    return _adaptive_cap(repo_root, max(stall_sec * 4, 2400))
+    """UNPRODUCTIVE bound for one agent round, derived from the observed ROUND cycle."""
+    return adaptive_timer(repo_root, "round", env_key="PERF_MCP_ROUND_MAX_SEC")
 
 
 def _measure_backstop(repo_root: Path) -> int:
-    override = os.environ.get("PERF_MCP_MEASURE_BACKSTOP")
-    if override:
-        try:
-            return int(override)
-        except ValueError:
-            pass
-    return _adaptive_cap(repo_root, 3600)
+    """Hard wall for one on-device measurement, derived from observed PROFILE durations."""
+    return adaptive_timer(repo_root, "profile", env_key="PERF_MCP_MEASURE_BACKSTOP")
 
 
 def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_log: str, stall_sec: int) -> bool:
