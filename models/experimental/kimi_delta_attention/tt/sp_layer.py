@@ -385,6 +385,7 @@ class SP8AffineTP1KimiDeltaAttention:
     def _prepare_convolutions(self, spans: tuple[ttnn.Tensor, ...]) -> tuple:
         """Prepare the short-convolution boundary in causal order on device."""
         convolutions = []
+        pipelined_handoffs = os.getenv("KDA_SP8_PIPELINED_HANDOFFS", "0") == "1"
         for span, (layer, hidden) in enumerate(zip(self.layers, spans, strict=True)):
             convolution = layer.prepare_chunk_convolution(hidden)
             convolutions.append(convolution)
@@ -394,7 +395,15 @@ class SP8AffineTP1KimiDeltaAttention:
                 send_socket, recv_socket = self._convolution_sockets[span]
                 ttnn.experimental.send_async(convolution.new_convolution_state, send_socket)
                 ttnn.experimental.recv_async(destination.convolution_state, recv_socket)
-                self._synchronize()
+                # The destination queue consumes this receive before its own
+                # convolution program and next-hop send.  One final fence is
+                # therefore sufficient for the whole causal relay; retain the
+                # eager mode as a debugging control while validating this
+                # fabric-pipelined variant on LoudBox.
+                if not pipelined_handoffs:
+                    self._synchronize()
+        if pipelined_handoffs:
+            self._synchronize()
         return tuple(convolutions)
 
     def _broadcast_initial_recurrent_state(self) -> None:
@@ -405,6 +414,7 @@ class SP8AffineTP1KimiDeltaAttention:
         necessarily owns that global carry, so propagate it over the ordered
         chain before deriving the per-rank endpoint states.
         """
+        pipelined_handoffs = os.getenv("KDA_SP8_PIPELINED_HANDOFFS", "0") == "1"
         for span in range(_SP8_SIZE - 1):
             source = self.layers[span]
             destination = self.layers[span + 1]
@@ -413,7 +423,135 @@ class SP8AffineTP1KimiDeltaAttention:
             send_socket, recv_socket = self._entry_sockets[span]
             ttnn.experimental.send_async(source.recurrent_state, send_socket)
             ttnn.experimental.recv_async(destination.recurrent_state, recv_socket)
+            if not pipelined_handoffs:
+                self._synchronize()
+        if pipelined_handoffs:
             self._synchronize()
+
+    @staticmethod
+    def _flatten_recurrent_state(state: ttnn.Tensor) -> ttnn.Tensor:
+        return ttnn.reshape(state, (state.shape[0] * state.shape[1], state.shape[2], state.shape[3]))
+
+    def _apply_affine_transform(
+        self, transform_a: ttnn.Tensor, transform_b: ttnn.Tensor, initial_state: ttnn.Tensor
+    ) -> ttnn.Tensor:
+        """Apply a span prefix map on its owning device."""
+        return ttnn.reshape(
+            ttnn.add(
+                ttnn.matmul(
+                    transform_a,
+                    self._flatten_recurrent_state(initial_state),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ),
+                transform_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            ),
+            initial_state.shape,
+        )
+
+    def _queue_entry_handoff(
+        self,
+        source_index: int,
+        transform_a: ttnn.Tensor,
+        transform_b: ttnn.Tensor,
+        prefix_initial_state: ttnn.Tensor,
+        retained_states: list[ttnn.Tensor],
+    ) -> None:
+        """Queue one exclusive-prefix state transfer to the following rank."""
+        destination = self.layers[source_index + 1]
+        assert destination.recurrent_state is not None
+        endpoint = self._apply_affine_transform(transform_a, transform_b, prefix_initial_state)
+        retained_states.append(endpoint)
+        send_socket, recv_socket = self._entry_sockets[source_index]
+        ttnn.experimental.send_async(endpoint, send_socket)
+        ttnn.experimental.recv_async(destination.recurrent_state, recv_socket)
+
+    def _queue_rank_scan(
+        self,
+        rank: int,
+        prepared: tuple,
+        grouped: tuple,
+        grouped_transforms: tuple,
+        groups: int,
+        outputs: list[ttnn.Tensor | None],
+    ) -> None:
+        """Queue one rank's seeded grouped scan after its entry receive."""
+        layer = self.layers[rank]
+        transform_a, transform_b = grouped_transforms[rank]
+        entries = layer.group_entry_states(transform_a, transform_b, groups)
+        raw_output, final_state = layer.group_scan(prepared[rank], grouped[rank], entries)
+        assert final_state is not None
+        outputs[rank] = layer._finish_prepared(prepared[rank], raw_output, final_state, fuse_scan_rms=False)
+
+    def _forward_rank_release(self, spans: tuple[ttnn.Tensor, ...], groups: int) -> tuple[ttnn.Tensor, ...]:
+        """Overlap early-rank scans with the final safe prefix distance.
+
+        The first two Hillis--Steele distances retain their global completion
+        fences.  Before the third and final distance, all of its fabric sends
+        are queued on every source rank.  This permits ranks 0--3 to consume
+        their exclusive entries and scan while those final transfers drain,
+        without allowing a later prefix stage to be starved by KDA work.
+        """
+        self._broadcast_initial_recurrent_state()
+        prefix_initial = tuple(ttnn.clone(layer.recurrent_state) for layer in self.layers)
+        convolutions = self._prepare_convolutions(spans)
+        prepared = tuple(
+            layer.complete_chunk_preparation(convolution) for layer, convolution in zip(self.layers, convolutions)
+        )
+        grouped = tuple(layer.group_prepare(rank_prepared) for layer, rank_prepared in zip(self.layers, prepared))
+        grouped_transforms = tuple(
+            layer.group_summary(rank_grouped) for layer, rank_grouped in zip(self.layers, grouped)
+        )
+        span_transforms = tuple(
+            layer.group_terminal_affine_transform(transform_a, transform_b, groups, batch_size=spans[0].shape[0])
+            for layer, (transform_a, transform_b) in zip(self.layers, grouped_transforms, strict=True)
+        )
+        prefix_a, prefix_b = zip(*span_transforms, strict=True)
+        prefix_a, prefix_b = self.prefix.run_stage(prefix_a, prefix_b, 0, synchronize_transfer=True)
+        prefix_a, prefix_b = self.prefix.run_stage(prefix_a, prefix_b, 1, synchronize_transfer=True)
+        pre_final_a, pre_final_b = prefix_a, prefix_b
+        outputs: list[ttnn.Tensor | None] = [None] * _SP8_SIZE
+        retained_states: list[ttnn.Tensor] = []
+
+        def release_early_ranks(_: int) -> None:
+            # The final stage's sends have already been committed on every
+            # source queue.  These endpoint transfers and scans can therefore
+            # no longer delay any future prefix communication.
+            for source in range(4):
+                self._queue_entry_handoff(
+                    source,
+                    pre_final_a[source],
+                    pre_final_b[source],
+                    prefix_initial[source],
+                    retained_states,
+                )
+            for rank in range(4):
+                self._queue_rank_scan(rank, prepared, grouped, grouped_transforms, groups, outputs)
+
+        prefix_a, prefix_b = self.prefix.run_stage(
+            prefix_a,
+            prefix_b,
+            2,
+            synchronize_transfer=False,
+            after_enqueued=release_early_ranks,
+        )
+        # This drains the final fabric stage and the early scans together.
+        # There is no remaining prefix distance that could suffer backpressure.
+        self._synchronize()
+
+        for source in range(4, _SP8_SIZE - 1):
+            self._queue_entry_handoff(
+                source,
+                prefix_a[source],
+                prefix_b[source],
+                prefix_initial[source],
+                retained_states,
+            )
+        for rank in range(4, _SP8_SIZE):
+            self._queue_rank_scan(rank, prepared, grouped, grouped_transforms, groups, outputs)
+        self._synchronize()
+        assert all(output is not None for output in outputs)
+        return tuple(output for output in outputs if output is not None)
 
     def forward(self, *spans: ttnn.Tensor, mode: str = "chunk") -> tuple[ttnn.Tensor, ...]:
         """Run eight equal chunk spans with a device-resident affine prefix."""
@@ -427,6 +565,8 @@ class SP8AffineTP1KimiDeltaAttention:
         if span_length % 128:
             raise ValueError(f"SP8 affine TP1 requires 128-token-aligned spans, got T={span_length}")
         groups = span_length // (256 if span_length % 256 == 0 else 128)
+        if os.getenv("KDA_SP8_RANK_RELEASE", "0") == "1":
+            return self._forward_rank_release(spans, groups)
         self._broadcast_initial_recurrent_state()
         convolutions = self._prepare_convolutions(spans)
         prepared = tuple(

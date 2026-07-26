@@ -275,6 +275,19 @@ state-transfer protocol and measure its components.
   every prefix distance uses a host synchronization.  It intentionally has
   no TP=4 output CCL.  Its value is a device-resident correctness contract for
   the next TP=4 rank-release scheduler.
+* An opt-in `KDA_SP8_RANK_RELEASE=1` variant now pipelines the incoming
+  recurrent and short-convolution relays (one fence per chain rather than one
+  per hop).  It keeps the first two prefix distances globally ordered, queues
+  every final-distance fabric send, then releases ranks 0--3 to their real
+  grouped KDA scans while that last distance drains.  This passes the same
+  production-rank T=5120 PCC gate and the two-call cache-reuse gate.  The
+  first three-call eager host interval is **56.189 ms/call**, versus
+  **57.473 ms/call** for the matching non-release control (reports
+  `2026_07_26_14_10_32` and `2026_07_26_14_09_40`), a 2.2% improvement.
+  Treat this as directional only: a prior cold-profiler sample was 66.149
+  ms/call, the interval includes host fences and TP=1 epilogues, and no
+  slowest-device replay metric exists for this eager protocol.  It is a
+  stable scheduling experiment, not a new LB or Galaxy performance result.
 * The direct TP=4 output matmul has no safe grid-only win.  An explicit 10x8
   prefill grid passed the full target-shape SP2xTP4 PCC suite, but raised its
   output matmul from about **205 us** to **223 us** and the three-replay
@@ -375,6 +388,11 @@ KDA_SP8_TARGET_SHAPE=1 KDA_SP8_TEST_SEQ=5120 scripts/run_safe_pytest.sh -svv mod
 # SP=8 affine protocol: production TP4-rank state payload (8 heads) with the
 # real 3-stage fabric prefix. This is a PCC gate, not a perf benchmark.
 KDA_SP_PREFIX_LANES=2 KDA_SP8_AFFINE_TARGET_SHAPE=1 scripts/run_safe_pytest.sh -svv models/experimental/kimi_delta_attention/tests/test_sp8_tp1.py::test_sp8_tp1_affine_layer_pcc
+
+# Safe eager rank-release scheduler control and candidate. Compare the Tracy
+# signpost intervals only; neither path is a Galaxy latency estimate.
+PERF_SEQ=5120 PERF_REPS=3 PERF_RANK_RELEASE=0 scripts/run_safe_pytest.sh --profile -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_sp8_rank_release_perf.py
+PERF_SEQ=5120 PERF_REPS=3 PERF_RANK_RELEASE=1 scripts/run_safe_pytest.sh --profile -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_sp8_rank_release_perf.py
 
 # Local TP=4 controls: run both lengths with the same warmed trace procedure.
 PERF_SEQ=640  PERF_TRACE=1 scripts/run_safe_pytest.sh --profile -svv models/experimental/kimi_delta_attention/tests/perf/test_kda_tp4_layer_perf.py
