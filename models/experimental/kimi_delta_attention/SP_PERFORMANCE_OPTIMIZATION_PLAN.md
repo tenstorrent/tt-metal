@@ -279,6 +279,24 @@ The required TP8 comparison rerun is report `2026_07_26_21_57_35`: sessions
 3071.245--3081.919 us. SP2xTP4 is therefore **314.457 us (10.22%)** faster
 at global `T=5120` under the same default causal-convolution configuration.
 
+### 2026-07-26: TP4 8x8 exact-M balance (ruled out by LoudBox capacity)
+
+KDA's `T=2560` local span has 80 M tiles. An 8x8 matmul grid would therefore
+give 64 producers exactly 10 M tiles each, eliminating the four padded M tiles
+of the retained 8x7/12-tile configuration. This was a source-backed capacity
+probe, not a grid sweep. The target-shape PCC gate passed, but the production
+`T=5120` trace could not build: Line RS attempted to allocate logical core
+`(0,10)` and the LoudBox worker grid has no such core. The failure occurs in
+`ReduceScatterFusedOpSignaler::init_reduce_scatter`, before replay, because the
+larger producer grid leaves insufficient rows for the complete Line RS worker
+set at the real shape.
+
+The temporary `KDA_MRS_TP4_GRID_Y=8` diagnostic override was reverted. This
+proves that 8x7 is the maximum viable TP4 producer grid on this LoudBox for the
+full KDA MRS/CCL program; future MRS work must improve the producer/CCL
+dependency, worker partition, or output contract rather than consume another
+CCL row.
+
 ## Measurement contract
 
 Every retained change must satisfy all of the following.
@@ -380,17 +398,26 @@ Prioritized experiments:
 
 **Do not repeat known dead ends:** Ring output collectives deadlocked; the fixed Line MRS is the correct topology. Previous direct sweeps of worker counts, buffer counts, chunk cadence, and the `10x8` output grid did not produce a long-span win. Revisit one only with a new profiler-identified cause, not as a blind parameter sweep.
 
+The 8x8 exact-M grid is also ruled out on LoudBox: it exhausts the logical
+worker-grid rows required by the full Line RS program at `T=5120` (attempted
+core `(0,10)`). 8x7 is therefore the largest valid TP4 producer grid without a
+CCL worker-partition redesign.
+
 **Pipeline design constraint (confirmed from source):** at TP4 the 72 output-N
 tiles form four 18-tile reduce-scatter slices; the 8x7 matmul produces nine N
-tiles per column. However, the current Line RS workers partition a flattened
-`M x 18` slice and process every target slice, while `OpSignaler` releases all
-of them only after all 56 matmul producers finish. A safe pipeline therefore
+tiles per column. The actual KDA MRS has two batches. The matmul writer calls
+`OpSignaler::synchronize_workers_and_signal_op()` once after each whole batch,
+and the Line reader waits with `wait_for_matmul_batch(b)`. It already has a
+coarse batch-0 RS / batch-1 matmul pipeline, but each batch signal still waits
+for all 56 producers. Within a batch, Line RS workers partition a flattened
+`M x 18` slice and process every target slice. A safe finer pipeline therefore
 needs either (a) RS work repartitioned by N-stripe, with a readiness semaphore
 for the two matching matmul columns across all seven M rows, or (b) a per-M-band
 contract that maps each RS worker's flattened range to completed matmul rows.
 Signalling the present global semaphore early would let a worker read unwritten
 tiles and is not an experiment to run. Preserve persistent buffer addresses,
-the two Line directions, and the trace replay contract in either design.
+the two Line directions, the existing batch counter semantics, and the trace
+replay contract in either design.
 
 **Exit criterion:** a standalone retained change reaches <=2.747 ms, or a
 directly coupled bundle reaches <=2.750 ms and then crosses the 15 us evidence
