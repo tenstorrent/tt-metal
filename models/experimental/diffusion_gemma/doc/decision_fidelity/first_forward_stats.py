@@ -12,6 +12,15 @@ So the number to compare is the accept count and the tail that produces it, not 
 collapse signature is accept pinned at 1, which is what "no position below the bound" looks like:
 k=1 is always accepted because its exclusive prefix sum is 0.
 
+How to read the per-layer table, calibrated by running the paired mode on two DIFFERENT reference
+prompts (q106 vs q096, same implementation): per-layer hidden RMS ratios came out 0.985-1.009, so the
+prompt-to-prompt noise floor is about +/-1.5% and a layer departing from 1.0 by more than a few
+percent in a TT-vs-reference comparison is an implementation difference, not prompt variation.
+
+The scalar statistics are NOT prompt-stable in the same way -- across those same two prompts logit_std
+moved 1.088x, logit_min_mean 1.156x and top1_minus_top2_mean 0.609x -- so compare those only against
+the SAME prompt's reference dump, never across prompts.
+
 Usage:
   first_forward_stats.py DUMP.pt [--json OUT.json]
   first_forward_stats.py REF.pt TT.pt          # side-by-side, plus per-layer hidden RMS
