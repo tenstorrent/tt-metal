@@ -201,50 +201,30 @@ state-transfer protocol and measure its components.
   RS median to 451.4 us and the replay span to 2.687 ms (report
   `2026_07_25_21_30_20`).  Do not add further direct-RS scheduling knobs
   without a measured long-span gain.
-* The fused TP4 `matmul_reduce_scatter_async` probe also times out when using
-  the standalone fused-op `(8,6)` matmul grid and reduce-scatter offset
-  `(0,6)` (guarded T=1280 test on 2026-07-25).  This rules out the original
-  `(8,8)/(0,8)` worker-layout conflict; do not reintroduce a KDA-side fused
-  toggle until child-mesh fused-MRS protocol ownership is fixed in CCL.
-* A deeper CCL investigation found that fused MRS unconditionally constructed
-  the Ring reduce-scatter program even when its caller requested `Linear`.
-  The factory now dispatches to the actual Line builder and its runtime
-  override; a focused 1x4 child-mesh regression covers both LoudBox TP=4
-  placements, the T=1280 local span (640 tokens), fp32 activations, and the
-  first 32-token output tile.  That primitive-level test passes.  However,
-  the KDA integration still deterministically corrupts the first output tile
-  of the second span after the SP boundary (finite values but PCC 0.0), even
-  though aggregate output/state PCC can mask it.  One versus two Line links,
-  a post-handoff device fence, and a constrained two-worker footprint have
-  the same failure.  The KDA-side fused probe was removed rather than leaving
-  an opt-in invalid path.  The remaining CCL investigation must reproduce
-  KDA's full interleaved layer schedule around the Line consumer.  The focused
-  primitive now also covers KDA's rank-3-to-local-width reshape, explicit
-  worker grid, Blackhole HiFi4 config, no sub-device manager, barrier
-  semaphore, and persistent-output clone.  Its exact FP32 `kda_gated_rms_norm`
-  producer (eight local `[T, 128]` heads plus a BF16 local gate) also passes
-  eagerly and under trace on both child placements.  Those producer/signaler
-  inputs alone therefore do not reproduce the boundary defect.
-  A full 512 KiB FP32 SP socket handoff immediately before the source and
-  destination MRS consumers also passes, including the receiver's first
-  output tile.  The handoff alone is therefore not corrupting Line MRS; the
-  remaining differentiator is KDA's complete interleaved child-trace schedule.
-  Capturing the fused primitive's separate matmul output confirms that all
-  four local matmul shards are finite when the reduced output fails, so the
-  defect is downstream in the Line reduce-scatter consumer rather than KDA,
-  the matmul producer, or its output-DMA publication.
-  The failure also persists with one or two links, one/two/four workers per
-  direction, and one/two channel buffers; those scheduling settings are not a
-  workaround.  Signed FP32 KDA-like activation and RMS-weight coverage also
-  passes eagerly and under trace on both child placements, ruling out the
-  positive-only primitive test domain.  Conversely, a saved, exact second-span
-  KDA epilogue tensor succeeds through a fresh Line MRS after the SP schedule
-  has drained.  The same tensor fails only when MRS is invoked in the live
-  interleaved SP schedule.  Moving socket endpoints, fencing the first child,
-  and reversing socket/CCL construction order do not change that result.  The
-  next CCL reproducer must therefore retain the timeline: one TP4 child is in
-  fused MRS while the other executes its KDA completion path, rather than only
-  recreating the tensors or socket handoff.
+* The TP=4 fused `matmul_reduce_scatter_async` path initially exposed a real
+  CCL factory error: a request for `Linear` constructed the Ring
+  reduce-scatter program.  The factory now selects the Line builder and its
+  runtime override; focused 1x4 child-mesh tests cover both LoudBox TP=4
+  placements, T=1280 local spans, FP32 activations, and the first output tile.
+* The apparent remaining KDA boundary corruption was a host-layout bug in the
+  diagnostic, not a live-schedule CCL defect.  Fused MRS returns
+  `[B, 1, T, H/TP]`; the test concatenated its flattened values correctly but
+  indexed the singleton dimension as though it were `[B, T, H/TP]`, yielding
+  an empty boundary slice and PCC 0.0.  Normalize the fused result back to
+  `[B, T, H/TP]` before the SP layer consumes it.  The full target-shape
+  SP2xTP4 PCC suite now passes with the TP=4 fused Line MRS enabled.
+* Line MRS needs two input-sized intermediate regions for its forward and
+  backward partial reductions, unlike Ring MRS.  The shared prefill buffer is
+  therefore cached by topology and allocates the required Line intermediate.
+  The next decision is performance, not another CCL correctness investigation.
+  The ten-replay T=5120 child-trace measurement with the corrected fused path
+  is **2.854 ms/forward** median on the slowest device (sessions 2--11;
+  report `2026_07_26_09_22_22`).  This beats the 3.114 ms TP=8 control by
+  8.4% and clears the <=2.958 ms primary LoudBox gate by 104 us (but not the
+  2.803 ms stretch goal).  The first measured replay was a 3.922 ms outlier;
+  the remaining nine span 2.842--2.858 ms.  This supersedes the signposted
+  host-interval figure from `2026_07_26_09_19_57`, which is not the
+  slowest-device firmware metric used by this plan.
 * The direct TP=4 output matmul has no safe grid-only win.  An explicit 10x8
   prefill grid passed the full target-shape SP2xTP4 PCC suite, but raised its
   output matmul from about **205 us** to **223 us** and the three-replay

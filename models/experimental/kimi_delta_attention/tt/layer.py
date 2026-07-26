@@ -612,17 +612,24 @@ class KimiDeltaAttention:
                 compute_kernel_config=self.compute_config,
             )
         output = ttnn.reshape(output, (batch, sequence, config.v_dim))
-        fused_output_collective = self.tensor_parallel_size == 8 and config.v_dim >= 8 * ttnn.TILE_SIZE
+        fused_output_collective = self.tensor_parallel_size in (4, 8) and config.v_dim >= 8 * ttnn.TILE_SIZE
         if fused_output_collective:
             assert self.tt_ccl is not None
+            fused_topology = ttnn.Topology.Ring if self.tensor_parallel_size == 8 else ttnn.Topology.Linear
+            fused_grid, fused_rs_offset = ((8, 8), (0, 8)) if self.tensor_parallel_size == 8 else ((8, 6), (0, 6))
             output = matmul_reduce_scatter_prefill(
                 output,
                 weights.output_projection,
                 self.tt_ccl,
                 self.compute_config,
-                ttnn.Topology.Ring,
+                fused_topology,
                 self.tensor_parallel_size,
                 output.dtype,
+                grid=fused_grid,
+                rs_offset=fused_rs_offset,
+            )
+            output = ttnn.reshape(
+                output, (batch, sequence, self.global_config.hidden_size // self.tensor_parallel_size)
             )
         else:
             output = ttnn.linear(

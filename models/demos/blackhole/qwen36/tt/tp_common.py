@@ -405,29 +405,32 @@ def matmul_reduce_scatter_decode(
     return ttnn.clone(rs_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
-def _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype):
+def _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype, topology):
     """Lazily allocate (and cache on tt_ccl) shared persistent buffers for the prefill fused out-proj.
 
     Prefill M (=chunk seq, e.g. 2048) makes per-layer buffers huge (fp32 [1,1,2048,5120]≈42MB × 64
     layers = infeasible). Prefill runs layers sequentially and each op's output is cloned before the
-    next layer reuses the buffer, so ONE shared set per (M,N,nd,dtype) is safe. Allocated during the
-    pre-capture warmup forward (eager), reused inside the trace. Keyed so variable M/dtype coexist."""
+    next layer reuses the buffer, so ONE shared set per (M,N,nd,dtype,topology) is safe. Allocated during the
+    pre-capture warmup forward (eager), reused inside the trace. Line needs two input-sized intermediate regions."""
     cache = getattr(tt_ccl, "_qwen36_mmrs_prefill_bufs", None)
     if cache is None:
         cache = {}
         tt_ccl._qwen36_mmrs_prefill_bufs = cache
-    key = (M, N, nd, str(dtype))
+    key = (M, N, nd, str(dtype), str(topology))
     if key not in cache:
         mesh = tt_ccl.mesh_device
-        mk = lambda w: ttnn.from_torch(
-            torch.zeros(1, 1, M, w),
+        mk = lambda shape: ttnn.from_torch(
+            torch.zeros(shape),
             device=mesh,
             layout=ttnn.TILE_LAYOUT,
             dtype=dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
         )
-        cache[key] = (mk(N), mk(N // nd))
+        cache[key] = (
+            mk((2 if topology == ttnn.Topology.Linear else 1, 1, M, N)),
+            mk((1, 1, M, N // nd)),
+        )
     return cache[key]
 
 
@@ -440,7 +443,7 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
     [.,M,K_local]; weight [K_local,N]. Returns [1,1,M,N/nd] (cloned; shared buffer survives)."""
     M, K_local = x.shape[-2], x.shape[-1]
     N = weight.shape[-1]
-    interm, out_buf = _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype)
+    interm, out_buf = _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype, topology)
     x4 = ttnn.reshape(x, (1, 1, M, K_local))
     # RS-bound: 2 ethernet links parallelize the fp32 cross-device reduce (P150x4 max; traced_8k win).
     # grid (8,8) leaves rows 8-9 for the 2 RS worker rows.
