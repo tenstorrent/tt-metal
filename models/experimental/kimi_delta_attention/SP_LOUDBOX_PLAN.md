@@ -225,6 +225,14 @@ state-transfer protocol and measure its components.
   the remaining nine span 2.842--2.858 ms.  This supersedes the signposted
   host-interval figure from `2026_07_26_09_19_57`, which is not the
   slowest-device firmware metric used by this plan.
+* A fresh ten-replay post-barrier rerun of the unchanged SP2×TP4 child-trace
+  control confirms the result: sessions 3--11 have a **2.855 ms**
+  slowest-device median (range 2.848--2.860 ms; report
+  `2026_07_26_15_59_04`).  The first two sessions are 3.925 ms cold/warm
+  outliers and are excluded by the same steady-state convention as the prior
+  report.  This is statistically indistinguishable from 2.854 ms, remains
+  8.3% below the 3.114 ms TP8 control, and clears the <= 2.958 ms gate by
+  103 us.
 * The principal Galaxy-scale risk now has a LoudBox probe: an SP=8,
   three-stage Hillis--Steele affine prefix transfers the exact per-TP4-rank
   payload, eight FP32 `[128,128]` A matrices plus eight `[128,128]` B matrices
