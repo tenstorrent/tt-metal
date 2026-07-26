@@ -165,13 +165,23 @@ execute_step_advance_tester       # pass fix_tests after a retry
 execute_step_advance_metal_test
 ```
 
-Run `execute_step_aggregate_results` after functional testing. For `both`,
-never let the second suite hide an earlier failure. The combined functional
-outcome is:
+After an `llk`, `metal`, or `both` route finishes, combine its required suite
+results and then aggregate the counters:
+
+```bash
+execute_step_combine_verification_results
+execute_step_aggregate_results
+```
+
+The combiner writes the compatibility verdict and counters at
+`arch_results.<arch>` while preserving each tester's result under
+`suite_results`. For `both`, the combined functional outcome is:
 
 - failing if either suite fails;
 - `SUCCESS` if at least one suite passes and the other is non-failing;
 - otherwise `COMPILED_ONLY` or `UNVERIFIABLE_IN_LLK_SUITE`.
+
+For `none`, call `execute_step_mark_unverifiable` and skip the combiner.
 
 Handle each suite verdict as follows:
 
