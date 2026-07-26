@@ -1096,6 +1096,7 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
+            height_sharding=height_shard,  # [#48552] match module1 -> height-sharded -> split path (not fused conv_bmm_tilize)
             layer_module="layer1_module2",
         )
 
@@ -1106,6 +1107,7 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
+            height_sharding=height_shard,  # [#48552] match module1 -> height-sharded -> split path
             layer_module="layer1_module3",
         )
 
@@ -1131,6 +1133,7 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
+            height_sharding=height_shard,  # [#48552] match module1 -> height-sharded -> split path
             layer_module="layer2_module2",
         )
 
@@ -1141,6 +1144,7 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
+            height_sharding=height_shard,  # [#48552] match module1 -> height-sharded -> split path
             layer_module="layer2_module3",
         )
 
@@ -1151,6 +1155,7 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
+            height_sharding=height_shard,  # [#48552] match module1 -> height-sharded -> split path
             layer_module="layer2_module4",
         )
 
