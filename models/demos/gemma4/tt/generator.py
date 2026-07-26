@@ -39,6 +39,36 @@ from models.tt_transformers.tt.model_config import determine_device_name
 # (padded_batch × padded_prefill_seq_len).
 GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN = MAX_BATCHED_PREFILL_SEQ_LEN
 
+# Full-attention chunked SDPA (head_dim>=512) requires chunk_start_idx % 128 == 0.
+# vLLM token-chunked continuations can land on unaligned start_pos (e.g. 48);
+# align down and re-prefill the prefix (Galaxy SDPA_CHUNK_ALIGN pattern).
+SDPA_CHUNK_ALIGN = 128
+
+
+def align_num_cached_tokens_to_sdpa(num_cached_per_user: list[int]) -> list[int]:
+    """Align cached-prefix lengths down to ``SDPA_CHUNK_ALIGN`` for chunked SDPA.
+
+    When page_size < align (e.g. 64), rounding down re-computes boundary tokens
+    (harmless: same KV is overwritten). Returns a new list.
+    """
+    aligned = []
+    for idx, n in enumerate(num_cached_per_user):
+        n = int(n)
+        if n > 0:
+            a = (n // SDPA_CHUNK_ALIGN) * SDPA_CHUNK_ALIGN
+            if a != n:
+                logger.info(
+                    "SDPA chunk alignment: user {} cached {} -> {} (aligned to {})",
+                    idx,
+                    n,
+                    a,
+                    SDPA_CHUNK_ALIGN,
+                )
+                n = a
+        aligned.append(n)
+    return aligned
+
+
 # Max users in one true-batched prefill forward. Measured on P150x8 / 12B:
 # B∈{1,2,4} OK; B≥8 wedges indefinitely after the first all_gather (eager or
 # traced). Override with GEMMA4_MAX_BATCHED_PREFILL_USERS (0 = no user cap).
@@ -871,6 +901,9 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
         if not isinstance(prompt_lens_list, list):
             prompt_lens_list = prompt_lens_list.tolist()
         num_cached_per_user = [int(n) for n in start_pos] if start_pos is not None else [0] * len(prompt_lens_list)
+        if start_pos is not None:
+            num_cached_per_user = align_num_cached_tokens_to_sdpa(num_cached_per_user)
+            start_pos = num_cached_per_user
         prefill_seq_lens = [
             get_padded_prefill_len(seq_len - num_cached)
             for seq_len, num_cached in zip(prompt_lens_list, num_cached_per_user)

@@ -474,14 +474,18 @@ def resolve_gemma4_prefill_trace_enable(
     empty_slots=None,
 ) -> bool:
     """Resolve whether prefill trace stays enabled for this batch/prefill shape."""
-    # Batched + bounded: the fill-cap device tensor is a single scalar, so a
-    # captured trace cannot refresh per-user real lengths. Eager batched+bounded
-    # still works via the host-side K/V slice — only disable TRACE here.
-    if can_batch_prefill and batch_size > 1 and getattr(model, "bounded_sliding_kv_cache", False):
+    # Bounded sliding: TRACE capture uses get_last_token=-1 so attention takes the
+    # mid-forward ``paged_fill_cache`` branch (valid_seq_len is None). That fill
+    # before lm_head corrupts token-0 on TP — the same hazard documented on the
+    # eager deferred-fill path (flush only after lm_head). Disable TRACE for all
+    # bounded prefills (B=1 short nightly prompts included); eager deferred-fill
+    # remains. Batched+bounded also cannot refresh the scalar fill-cap tensor.
+    if getattr(model, "bounded_sliding_kv_cache", False):
         if enable_trace:
             logger.info(
-                "Disabling prefill trace for batched+bounded "
-                "(scalar valid_seq_len cap; eager host-slice path remains)."
+                "Disabling prefill trace for bounded sliding "
+                "(TRACE mid-forward paged_fill_cache corrupts token-0 on TP; "
+                "eager deferred-fill path remains)."
             )
         return False
     trace_batch_size = batch_size

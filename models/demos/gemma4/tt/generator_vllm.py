@@ -12,6 +12,7 @@ import ttnn
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator import (
     ChunkedPrefillPageTableGuardMixin,
+    align_num_cached_tokens_to_sdpa,
     max_batched_prefill_users,
     resolve_batched_prefill_chunk_users,
 )
@@ -364,8 +365,12 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         # buffers match runtime (and decode-warmup) shapes.
         #
         # GEMMA4_DISABLE_PREFILL_TRACE=1 keeps prefill fully eager (no capture).
+        # Bounded sliding: never capture prefill TRACE — mid-forward paged_fill
+        # corrupts token-0 on TP (see resolve_gemma4_prefill_trace_enable).
         prefill_forward_fn = None
-        if enable_trace and _gemma4_prefill_trace_unsafe(self.model[0], self._bounded_sliding_kv_cache):
+        if self._bounded_sliding_kv_cache:
+            enable_trace = False
+        elif enable_trace and _gemma4_prefill_trace_unsafe(self.model[0], self._bounded_sliding_kv_cache):
             prefill_forward_fn = self.prefill_forward
         warmup_gemma4_model_prefill(
             self,
@@ -388,6 +393,10 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             if not isinstance(prompt_lens_list, list):
                 prompt_lens_list = prompt_lens_list.tolist()
             num_cached_per_user = [int(n) for n in start_pos] if start_pos is not None else [0] * len(prompt_lens_list)
+            if start_pos is not None:
+                num_cached_per_user = align_num_cached_tokens_to_sdpa(num_cached_per_user)
+                kwargs["start_pos"] = num_cached_per_user
+                start_pos = num_cached_per_user
             prefill_seq_lens = [
                 get_padded_prefill_len(seq_len - num_cached)
                 for seq_len, num_cached in zip(prompt_lens_list, num_cached_per_user)
@@ -1001,6 +1010,13 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             sliding_idxs = self._sliding_layer_indices()
             if sliding_idxs and full_page_tables[sliding_idxs[0]] is not None:
                 kwargs["page_table"] = full_page_tables[sliding_idxs[0]]
+
+        # Align vLLM chunked-prefill continuations to SDPA q_chunk_size (128).
+        # tokens[:, :prompt_lens] still holds the full prefix, so aligning
+        # start_pos down re-prefills the unaligned boundary (Galaxy pattern).
+        start_pos = kwargs.get("start_pos")
+        if start_pos is not None:
+            kwargs["start_pos"] = align_num_cached_tokens_to_sdpa([int(n) for n in start_pos])
 
         t0 = time.perf_counter()
         per_submesh = self._chunk_page_tables_per_dp(full_page_tables)
