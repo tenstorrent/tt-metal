@@ -49,6 +49,7 @@ checkpoint is missing, the test is skipped.
 | `DEEPSEEK_V4_MAX_NEW_TOKENS` | `1024` | Max tokens to generate after the prompt. |
 | `DEEPSEEK_V4_TRACED_DECODE` | `1` (on) | Set to `0` / `false` to use eager host-bound decode instead of captured ttnn traces. |
 | `DEEPSEEK_V4_POOL_EVERY_STEP` | `0` (off) | Re-pool the CSA/HCA compressors on *every* decode step instead of only on the steps that close a window. Slower, and only useful as an A/B reference — the two are bit-identical. See below. |
+| `DEEPSEEK_V4_SDPA_CAUSAL` | `1` (on) | Bound CSA/HCA attention with a causal `cur_pos` instead of an additive mask once the sliding ring is full. Set to `0` to force the mask everywhere. See below. |
 
 ### Compressor pooling schedule
 
@@ -73,6 +74,79 @@ is still captured exactly once.
 holds three traces instead of one. If capture fails or hangs on the full
 43-layer stack, raise `trace_region_size` in the test's `device_params`, or set
 `DEEPSEEK_V4_POOL_EVERY_STEP=1` to collapse back to a single trace.
+
+### Causal SDPA instead of an additive mask
+
+A CSA/HCA layer's KV axis is `[sliding 0..127 | compressor 0..max_seq/cr)`, and
+the valid set at position `pos` is sliding slot `i <= pos` plus compressor window
+`j < (pos+1)//cr`. Once the ring is full (`pos + 1 >= sliding_window`) every
+sliding slot is valid, so the union is the contiguous prefix
+`[0, sliding_window + (pos+1)//cr)` — which a single SDPA-decode `cur_pos`
+describes exactly. That matters because an additive mask is *data*, not control
+flow: the kernel sets `cur_pos` to the end of the buffer in non-causal mode and
+walks every chunk regardless. In causal mode it derives its chunk range from the
+position and skips the rest, so attention cost tracks the actual position rather
+than `max_seq`. It also drops the per-step per-layer head-broadcast of the mask
+row. The kernel generates a partial mask for the final chunk, so this is exact
+even mid-chunk, not rounded to `k_chunk_size`.
+
+Note the `-1` in `sliding_window + (pos+1)//cr - 1`: `(pos+1)//cr` is the *count*
+of closed windows and `cur_pos` is inclusive. Using `sliding_window + pos//cr`
+instead agrees only at window boundaries and otherwise exposes the still-open
+window, which is a silent accuracy loss rather than an error.
+
+Below the sliding window the valid set has a hole (slots `pos+1 .. 127` are
+unwritten), which no single `cur_pos` can express, so those steps keep the mask.
+The op rejects an `attn_mask` in causal mode, so the two are exclusive branches
+and the traced path needs a variant per (SDPA mode, window phase) pair: five with
+the default rates (three causal phases plus the two phases reachable below the
+window — the HCA closure first lands at `pos == 127`, i.e. exactly at the switch,
+so `CSA+HCA` is causal-only). Same trace-memory caveat as above;
+`DEEPSEEK_V4_SDPA_CAUSAL=0` collapses it back to one family.
+
+Measured on the SDPA-decode op alone at the model's shapes (64 heads,
+`head_dim` 512, MQA, `k_chunk_size` 32) with the valid extent held at 136:
+
+| `Skv` | implied `max_seq` | masked | causal | speedup |
+| --- | --- | --- | --- | --- |
+| 640 | 2048 | 187 µs | 187 µs | 1.00x |
+| 2176 | 8192 | 216 µs | 197 µs | 1.10x |
+| 8320 | 32768 | 722 µs | 198 µs | 3.65x |
+
+Causal is flat in `Skv` (work follows the position); masked grows with the
+buffer. **End-to-end this is currently a wash**, and it is worth knowing why: at
+`max_seq` 8192 the per-op saving is only ~20 µs, and on a 4-layer stack (2 of
+which are compressor layers) that is well under 1% of a ~15 ms step. Measured
+69-76 tok/s in both modes at `max_seq` 8192, and 62-70 tok/s in both at 12288.
+Reaching the 3.65x regime needs `max_seq` ~32k, which is blocked by the
+compressor pooling path — see below. So treat the causal path as removing the
+`max_seq` sensitivity in attention, a prerequisite for long contexts, rather than
+as a speedup at today's runnable sizes.
+
+### What still limits `max_seq`
+
+`DeepSeekV4*Compressor._pool` recomputes *every* compressed window from the whole
+fixed cache capacity each time it fires, rather than pooling only the window that
+just closed. So its output is `max_seq // compress_rate` rows tall, and several
+per-row-scaled assumptions downstream break as `max_seq` grows:
+
+- `DeepSeekV4RMSNorm(sharded=True)` width-shards into L1 giving every core the
+  *full* height, so L1 use grows with the row count: ~2.8 MB against a 1.5 MB
+  budget by `max_seq` 32k. Now fixed — the shard is only applied while the tensor
+  is a single tile-row (the single-token decode activations it was written for);
+  taller tensors take the interleaved path, which is also measurably faster past
+  one tile-row (58 µs vs 88 µs at 512 rows).
+- `_apply_rope` shards one tile-row per core, so it caps at
+  `110 cores x 32 = 3520` rows — `fused_partial_rope` requires exactly one
+  tile-row per core, so this is an op-level contract, not a config choice. With
+  CSA's `compress_rate` 4 that puts the ceiling at `max_seq` ~14k
+  (`Target number of cores 257 is greater than total number of available cores
+  110`).
+
+The durable fix for all of these is incremental pooling: compute just the newly
+closed window, RoPE that single row, and write it at index `(pos+1)//cr - 1`.
+That is `O(1)` per closure instead of `O(max_seq)`, matches the HF reference's
+`torch.cat` semantics, and makes both row-count limits above disappear.
 
 ## Run the demo
 
