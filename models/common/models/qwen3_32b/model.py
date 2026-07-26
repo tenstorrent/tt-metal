@@ -86,10 +86,13 @@ class Qwen3_32BExecutorRuntimeConfig:
     # batches models whose prefill_forward threads ``batch_size`` — Qwen3-32B does, below). Qwen3's
     # per-head QK-norm is a row-independent RMSNorm on ``[B, n_heads, S, head_dim]`` (each user's rows
     # normalized independently), so the batched fold is bit-safe. ``max_prefill_batch_size`` caps the
-    # per-group batch (8 = partial batching, design rec); ``disable_batched_prefill`` is the escape
-    # hatch back to the sequential loop; ``max_prefill_chunk_size`` (above) drives the #45234 decline.
+    # per-group batch; 32 folds the whole batch-32 prefill in ONE 32-user pass (TTTv1 structural parity,
+    # generator.py:679-700) so the eager norm+lm_head tail + full-vocab readback run once instead of 4×.
+    # At S=128 the fold is 32*128=4096=2*2048, an exact multiple of MAX_QKV_MM_SEQ_LEN (reshape-safe).
+    # ``disable_batched_prefill`` is the escape hatch back to the sequential loop;
+    # ``max_prefill_chunk_size`` (above) drives the #45234 decline.
     supports_batched_prefill: bool = True
-    max_prefill_batch_size: int = 8
+    max_prefill_batch_size: int = 32
     disable_batched_prefill: bool = False
     # When True (default), batched prefill runs norm+lm_head ONCE per group over the gathered last-token
     # rows (TTTv1 parity); False falls back to the bit-identical per-slot path (one lm_head per user).
