@@ -8108,6 +8108,35 @@ def _warn_on_registry_drift(args=None) -> None:
         pass
 
 
+def _persist_graduated_demos(session_path, dest_root) -> list:
+    """Copy every graduated demo dir from an isolation worktree back to the main
+    tree so in-place downstream stages (emit-e2e / promote, which read the demo
+    dir, not the overlay) see the authoritative post-bring-up state.
+
+    A demo dir is identified by its ``bringup_status.json``; the whole dir is
+    merged (``dirs_exist_ok``) so the graduated stubs AND their ``.last_good_*``
+    graduation snapshots (a module graduated via recompose in the worktree has
+    its snapshot only in the overlay otherwise) land on disk. Returns the list
+    of relative demo paths synced. Never raises."""
+    import shutil
+    from pathlib import Path as _P
+
+    session_path = _P(session_path)
+    dest_root = _P(dest_root)
+    synced: list = []
+    try:
+        for _bs in sorted(session_path.glob("models/**/bringup_status.json")):
+            _src_demo = _bs.parent
+            _rel = _src_demo.relative_to(session_path)
+            _dst_demo = dest_root / _rel
+            _dst_demo.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(_src_demo, _dst_demo, dirs_exist_ok=True)
+            synced.append(str(_rel))
+    except Exception:
+        return synced
+    return synced
+
+
 def cmd_up(args) -> int:
     _quiet_framework_logging()
     _warn_on_registry_drift(args)
@@ -8333,26 +8362,20 @@ def _cmd_up_isolated(args) -> int:
         captured, capture_ok = _capture_worktree_deltas_as_overlay(session.path, args.model_id)
         if capture_ok:
             if rc == 0:
-                # Persist the freshly-written RUN_REPORT.md back to the main
-                # tree BEFORE destroying the worktree. The report lives in the
-                # worktree's demo dir; without this copy it is destroyed with
-                # the worktree and the persistent demo dir keeps a STALE report
-                # (e.g. showing 31/32 after a run that reached 32/32).
-                try:
-                    import shutil
-
-                    for _rpt in sorted(Path(session.path).glob("models/**/RUN_REPORT.md")):
-                        _rel = _rpt.relative_to(session.path)
-                        _dst = Path(prev_cwd) / _rel
-                        _dst.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(_rpt, _dst)
-                        print(f"  [isolation] persisted final RUN_REPORT.md -> {_rel}")
-                except Exception as _rpt_exc:
-                    print(
-                        f"  [isolation] WARN could not persist RUN_REPORT.md: "
-                        f"{type(_rpt_exc).__name__}: {_rpt_exc}",
-                        file=sys.stderr,
-                    )
+                # Persist the freshly-graduated demo dir(s) back to the main tree
+                # BEFORE destroying the worktree. The graduated deliverables
+                # (native/sharded stubs + their `.last_good_*` snapshots +
+                # bringup_status.json + tests + RUN_REPORT.md) live in the
+                # worktree's demo dir; without this copy they are destroyed with
+                # the worktree, only the overlay keeps them, and any in-place
+                # downstream stage (emit-e2e / promote, which read the demo dir,
+                # not the overlay) sees a STALE main tree — e.g. a module that
+                # graduated via recompose in the worktree (its snapshot only in
+                # the overlay) is under-counted as CPU, and the report shows
+                # 31/32 after a run that reached 32/32. A demo dir is identified
+                # by its bringup_status.json.
+                for _rel in _persist_graduated_demos(session.path, prev_cwd):
+                    print(f"  [isolation] persisted graduated demo (stubs+snapshots+status+report) -> {_rel}")
                 print(f"  [isolation] captured {captured} LLM delta(s); destroying worktree")
                 try:
                     _wt_destroy(session)
