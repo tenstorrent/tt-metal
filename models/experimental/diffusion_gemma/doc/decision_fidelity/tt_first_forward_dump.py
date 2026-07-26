@@ -66,14 +66,18 @@ def main() -> int:
 
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=int(os.getenv("DG_TRACE_REGION_SIZE", 0)))
     try:
+        # Only pass num_layers when it is set: build_tt_model_from_checkpoint_inputs branches on
+        # `"num_layers" in model_kwargs`, so passing None would still switch it to the reduced-layer
+        # builder rather than the default full-model path.
+        model_kwargs = {"num_layers": args.num_layers} if args.num_layers is not None else {}
         model_inputs = build_tt_model_from_checkpoint_dir(
             mesh,
             args.checkpoint,
             max_batch_size=1,
             max_seq_len=args.max_seq_len,
-            num_layers=args.num_layers,
             create_kv_cache=True,
             tokenizer_kwargs={"local_files_only": True, "trust_remote_code": True},
+            **model_kwargs,
         )
         tt_model = model_inputs.tt_model
 
