@@ -1,0 +1,16 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 120
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'start'.
+Using operations until 'stop'.
+Detected data from 32 devices. Merging device data...
+Writing CSV output to benchmarks/tracy/ltx_4x8_ring_profiles/transformer_stage2_fused_rms_perf_report.csv
+Warning: Unclassified operation 'WanFusedDistributedRmsnormDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'AllGatherMinimalMatmulAsyncOp' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'RingJointSDPADeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'MinimalMatmulDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'AllGatherAsyncDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'MinimalMatmulStridedReduceScatterAsync' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to benchmarks/tracy/ltx_4x8_ring_profiles/transformer_stage2_fused_rms_perf_report_stacked.csv
+Plotting PNG stacked report to benchmarks/tracy/ltx_4x8_ring_profiles/transformer_stage2_fused_rms_perf_report_stacked.png
