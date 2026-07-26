@@ -78,9 +78,61 @@ def _device_transforms(probe: SP8AffinePrefixProbe) -> tuple[tuple[ttnn.Tensor, 
     )
 
 
+def _release_prefix_outputs(outputs: tuple[tuple[ttnn.Tensor, ...], tuple[ttnn.Tensor, ...]]) -> None:
+    """Release a one-shot eager prefix result after its device queues drain."""
+    for tensor in (*outputs[0], *outputs[1]):
+        ttnn.deallocate(tensor)
+
+
+def _profile_eager(
+    probe: SP8AffinePrefixProbe,
+    repetitions: int,
+    *,
+    device_barrier: bool,
+) -> None:
+    """Profile one fully drained prefix per iteration without trace capture.
+
+    This deliberately measures the host-fenced baseline and the device-token
+    barrier under identical eager semantics.  It is not a slowest-device trace
+    metric; its role is to decide whether the socket barrier is worth replacing
+    with a compact UDM operation.
+    """
+    warm_a, warm_b = _device_transforms(probe)
+    warm_outputs = probe.run(
+        warm_a,
+        warm_b,
+        synchronize_stages=not device_barrier,
+        device_barrier=device_barrier,
+    )
+    probe._synchronize()
+    _release_prefix_outputs(warm_outputs)
+
+    inputs = tuple(_device_transforms(probe) for _ in range(repetitions))
+    mode = "device_barrier" if device_barrier else "host_fenced"
+    signpost(header=f"sp8_affine_prefix_{mode}_start")
+    for transform_a, transform_b in inputs:
+        outputs = probe.run(
+            transform_a,
+            transform_b,
+            synchronize_stages=not device_barrier,
+            device_barrier=device_barrier,
+        )
+        probe._synchronize()
+        _release_prefix_outputs(outputs)
+    signpost(header=f"sp8_affine_prefix_{mode}_stop")
+
+
 def test_sp8_affine_prefix_production_payload_perf(mesh_device: ttnn.MeshDevice) -> None:
     """Measure the three-stage 1 MiB/rank prefix with independent child traces."""
     probe = SP8AffinePrefixProbe(mesh_device)
+    repetitions = int(os.getenv("PERF_REPS", "10"))
+    if os.getenv("PERF_PREFIX_EAGER", "0") == "1":
+        _profile_eager(
+            probe,
+            repetitions,
+            device_barrier=os.getenv("PERF_DEVICE_BARRIER", "0") == "1",
+        )
+        return
     transform_a, transform_b = _device_transforms(probe)
     # Socket binaries must be in the program cache before capture. Queue the
     # warmup without host stage barriers: those barriers use device events,
@@ -96,7 +148,6 @@ def test_sp8_affine_prefix_production_payload_perf(mesh_device: ttnn.MeshDevice)
         ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
     probe._synchronize()
 
-    repetitions = int(os.getenv("PERF_REPS", "10"))
     signpost(header="sp8_affine_prefix_start")
     for _ in range(repetitions):
         for device, trace_id in zip(probe.span_devices, trace_ids, strict=True):

@@ -349,6 +349,15 @@ device-ordered affine prefix and with the normal TP=4 output CCL intact.
    current 14 tiny send/receive transfers per boundary and is the prerequisite
    for a meaningful device-side SP=8 schedule.
 
+   The first comparable eager measurement is positive but deliberately not a
+   layer claim: ten fully drained 1 MiB/rank prefixes took **11.467 ms/prefix**
+   with host fences (report `2026_07_26_14_50_43`) and **8.434 ms/prefix** with
+   the socket-token barrier (report `2026_07_26_14_51_33`), a **26.5%** host
+   interval reduction. Inputs were prepared before the signpost and each
+   iteration drained all eight queues. This proves that the host fences are
+   material; it does *not* prove a slowest-device or traced speedup, since the
+   barrier tokens themselves are ordinary socket operations.
+
 3. **Factor the prefix scheduler by `(SP rank, TP rank)`.**  Move the current
    TP1 affine proof's preparation, terminal-map construction, entry-state
    installation, and rank-release ordering behind a per-TP-rank interface.
