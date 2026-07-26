@@ -385,3 +385,64 @@ def test_synthesize_links_relinks_no_emit_parent_missing_plan(tmp_path: Path, mo
         model_id="test/m", demo_dir=demo_dir, graduated_set={"kid_a", "kid_b"}
     )
     assert linked2 == 0
+
+
+def test_synthesize_rearms_incomplete_locked_target(tmp_path: Path, monkeypatch) -> None:
+    """The resume-stranding bug: a parent that was linked + locked by a prior
+    run's recompose (which removed its no_emit) but never graduated must be
+    RE-ARMED (re-marked no_emit) so parents_ready re-offers it. Removal from
+    the eligible list should only be permanent once it actually graduates."""
+    from scripts.tt_hw_planner import overlay_manager as om
+
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+
+    demo_dir = _make_demo(
+        tmp_path,
+        [
+            {"name": "wrap", "status": "NEW", "submodule_path": "gpt"},
+            {"name": "kid_a", "status": "NEW", "submodule_path": "gpt.a"},
+            {"name": "kid_b", "status": "NEW", "submodule_path": "gpt.b"},
+        ],
+    )
+    # Prior run's state: plan exists (linked), children on device, but wrap is
+    # NOT no_emit (executor removed it) and NOT graduated -> the stranded case.
+    plan = [{"parent_name": "wrap", "children": [
+        {"name": "kid_a", "submodule_path": "gpt.a"},
+        {"name": "kid_b", "submodule_path": "gpt.b"}]}]
+    (demo_dir / "decomposition_plan.json").write_text(json.dumps(plan))
+    assert "wrap" not in om.load_no_emit_tests("test/m")
+
+    linked, notes = synthesize_recompose_links(
+        model_id="test/m", demo_dir=demo_dir, graduated_set={"kid_a", "kid_b"}
+    )
+    assert linked == 1, notes
+    assert any("re-armed" in n for n in notes), notes
+    assert "wrap" in om.load_no_emit_tests("test/m")  # re-armed -> parents_ready will re-offer it
+
+
+def test_synthesize_does_not_rearm_graduated_target(tmp_path: Path, monkeypatch) -> None:
+    """A parent that HAS graduated is never re-armed — removal from the list
+    is permanent once recompose actually completed."""
+    from scripts.tt_hw_planner import overlay_manager as om
+
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+
+    demo_dir = _make_demo(
+        tmp_path,
+        [
+            {"name": "wrap", "status": "NEW", "submodule_path": "gpt"},
+            {"name": "kid_a", "status": "NEW", "submodule_path": "gpt.a"},
+            {"name": "kid_b", "status": "NEW", "submodule_path": "gpt.b"},
+        ],
+    )
+    plan = [{"parent_name": "wrap", "children": [
+        {"name": "kid_a", "submodule_path": "gpt.a"},
+        {"name": "kid_b", "submodule_path": "gpt.b"}]}]
+    (demo_dir / "decomposition_plan.json").write_text(json.dumps(plan))
+
+    # wrap graduated -> must not be re-armed
+    linked, _ = synthesize_recompose_links(
+        model_id="test/m", demo_dir=demo_dir, graduated_set={"wrap", "kid_a", "kid_b"}
+    )
+    assert linked == 0
+    assert "wrap" not in om.load_no_emit_tests("test/m")

@@ -519,15 +519,29 @@ def synthesize_recompose_links(
         kids = _immediate_children(psp)
         if len(kids) < 2:
             continue
-        # Already fully linked (plan entry covers every immediate child) -> nothing to do.
+        on_device = all(_on_device(k.get("name") or "") for k in kids)
         prior = set(existing_links.get(pname) or [])
-        if prior and all((k.get("submodule_path") or "") in prior for k in kids):
+        fully_linked = bool(prior) and all((k.get("submodule_path") or "") in prior for k in kids)
+        if fully_linked:
+            # Already linked. Re-arm an INCOMPLETE recompose target on resume:
+            # a linked, non-graduated parent that is NOT currently no_emit was
+            # un-armed when a prior run's recompose executor removed its no_emit
+            # and locked it -- but it never graduated (that run ended first).
+            # parents_ready only iterates no_emit parents, so without re-arming
+            # it is stranded (linked + locked, never re-offered). Re-mark no_emit
+            # (via the tail) so parents_ready re-offers it this run.
+            if on_device and pname not in no_emit:
+                linked.append(pname)
+                notes.append(
+                    f"[recompose-link] re-armed `{pname}` (already linked, not graduated, un-armed) "
+                    "-> re-offer for recompose"
+                )
             continue
         # Refuse if any child is already claimed by a DIFFERENT parent's
         # formal decomposition -- never fight a real linkage.
         if any((k.get("_added_by_decomposition_of") or pname) != pname for k in kids):
             continue
-        if not all(_on_device(k.get("name") or "") for k in kids):
+        if not on_device:
             continue
         for k in kids:
             k["_added_by_decomposition_of"] = pname
