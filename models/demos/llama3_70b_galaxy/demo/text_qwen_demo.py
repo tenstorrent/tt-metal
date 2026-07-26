@@ -936,8 +936,13 @@ def test_qwen_demo_text(
                 if apc_test and iteration == 0:
                     tt_out_logits_saved_iter_0 = tt_out_logits_saved
             except Exception as e:
-                logger.error(f"Error during decoding: {str(e)}")
-                break
+                # A fault here (e.g. a device hang / TT_THROW) is fatal and unrecoverable:
+                # the device is left in a bad state, so continuing to the post-loop perf/accuracy
+                # bookkeeping only masks the real error (previously surfacing as a confusing
+                # `KeyError: (0, 'compile_decode')` plus a misleading accuracy print). Re-raise so
+                # the true error and traceback are reported.
+                logger.error(f"Error during decoding at iteration {iteration}: {str(e)}")
+                raise
 
             if iteration == 0:  # First iteration will account the compile time
                 profiler.end(f"compile_decode", iteration=batch_idx)
