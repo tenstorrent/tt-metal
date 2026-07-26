@@ -61,3 +61,25 @@ def test_resolve_mesh_shape_honours_the_export_and_falls_back_otherwise(monkeypa
     monkeypatch.setenv("TT_PERF_MESH_ROWS", "2")
     monkeypatch.setenv("TT_PERF_MESH_COLS", "4")
     assert resolve_mesh_shape(default_rows=1, default_cols=1) == (2, 4)
+
+
+def test_skeletons_gate_fabric_on_a_multichip_mesh():
+    """Fabric must not be enabled for a 1x1 run.
+
+    A demo targeting multi-chip shapes hardcodes fabric_config=True. Carried verbatim into a 1x1 perf
+    run, device-open still trains ethernet across every VISIBLE chip -- on a p300c (4 chips) Device 3
+    times out with "Fabric Router Sync: Timeout ... ethernet handshake failed" before the model is
+    built. Measured 2026-07-26: that failure is why TT_MESH_GRAPH_DESC_PATH appeared to be required;
+    with fabric gated, the same run passes with no descriptor and no MESH_DEVICE.
+    """
+    for s in (G._SKELETON_REF, G._SELF_TRACED_SKELETON_REF):
+        assert "_MESH_SHAPE[0] * _MESH_SHAPE[1] > 1" in s, "skeleton does not gate fabric on mesh size"
+        i_gate = s.index("_MESH_SHAPE[0] * _MESH_SHAPE[1] > 1")
+        i_def = s.index("_MESH_SHAPE = resolve_mesh_shape")
+        assert i_def < i_gate, "mesh shape must be resolved BEFORE device params use it"
+
+
+def test_no_skeleton_enables_fabric_unconditionally():
+    for s in _skeletons():
+        assert '_DEV_PARAMS = {"fabric_config": True' not in s
+        assert '"fabric_config": True, "num_command_queues"' not in s

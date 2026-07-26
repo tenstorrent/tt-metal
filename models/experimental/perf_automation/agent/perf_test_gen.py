@@ -38,16 +38,6 @@ PERF_FLUSH_EVERY = int(os.environ.get("TT_PERF_FLUSH_EVERY", "32"))
 _pl = (os.environ.get("TT_PERF_LAYERS") or "").strip()
 PERF_LAYERS = int(_pl) if (_pl.isdigit() and int(_pl) > 0) else None
 
-_PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"
-_DEV_PARAMS = {"l1_small_size": 24576}
-if _PERF_TRACE:
-    # Reserve the trace region at device-open, ONCE, for baseline and every candidate. The tool
-    # measures trace+1cq end to end, so the device opens with 1 command queue by default (no 2-CQ
-    # reservation to OOM under). TT_PERF_NUM_CQ stays a knob for the rare 2-CQ experiment.
-    _DEV_PARAMS["trace_region_size"] = int(os.environ.get("TT_PERF_TRACE_REGION", "23887872"))
-    _DEV_PARAMS["num_command_queues"] = int(os.environ.get("TT_PERF_NUM_CQ", "1"))
-
-
 # TOPOLOGY. --devices/--mesh are planned by the tool and exported as TT_PERF_MESH_ROWS/COLS;
 # resolve_mesh_shape is how a run honours them. Give it the SOURCE's own shape as the default, so an
 # unset env behaves exactly as the demo does. If the source uses a `mesh_device` FIXTURE, keep that
@@ -55,6 +45,22 @@ if _PERF_TRACE:
 # A copied MESH_DEVICE board table on its own cannot see --devices/--mesh.
 from models.experimental.perf_automation.agent.perf_adapter import resolve_mesh_shape
 _MESH_SHAPE = resolve_mesh_shape(default_rows=<source rows>, default_cols=<source cols>)
+
+_PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"
+_DEV_PARAMS = {"l1_small_size": 24576}
+# FABRIC only when the resolved mesh spans MORE THAN ONE chip. A demo that targets multi-chip shapes
+# hardcodes fabric_config=True; carried into a 1x1 run it still trains ethernet across every VISIBLE
+# chip, and on a partly-idle board that times out ("Fabric Router Sync: Timeout ... ethernet handshake
+# failed") before the model is built. Copy the source's other device_params verbatim; gate ONLY fabric.
+if _MESH_SHAPE[0] * _MESH_SHAPE[1] > 1:
+    _DEV_PARAMS["fabric_config"] = True   # only if the SOURCE sets it
+if _PERF_TRACE:
+    # Reserve the trace region at device-open, ONCE, for baseline and every candidate. The tool
+    # measures trace+1cq end to end, so the device opens with 1 command queue by default (no 2-CQ
+    # reservation to OOM under). TT_PERF_NUM_CQ stays a knob for the rare 2-CQ experiment.
+    _DEV_PARAMS["trace_region_size"] = int(os.environ.get("TT_PERF_TRACE_REGION", "23887872"))
+    _DEV_PARAMS["num_command_queues"] = int(os.environ.get("TT_PERF_NUM_CQ", "1"))
+
 @pytest.mark.parametrize("device_params", [_DEV_PARAMS], indirect=True)
 def test_<task>_perf(device_params, device):
     # 1) build the pipeline EXACTLY as demo/demo_<task>.py does
@@ -138,13 +144,6 @@ import pytest
 import ttnn
 # from <model>.tt.<module> import build_pipeline, <self_traced_fn>   # lift both from the demo
 
-_PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"
-_DEV_PARAMS = {"l1_small_size": 24576}
-if _PERF_TRACE:
-    _DEV_PARAMS["trace_region_size"] = int(os.environ.get("TT_PERF_TRACE_REGION", "23887872"))
-    _DEV_PARAMS["num_command_queues"] = int(os.environ.get("TT_PERF_NUM_CQ", "1"))
-
-
 # TOPOLOGY. --devices/--mesh are planned by the tool and exported as TT_PERF_MESH_ROWS/COLS;
 # resolve_mesh_shape is how a run honours them. Give it the SOURCE's own shape as the default, so an
 # unset env behaves exactly as the demo does. If the source uses a `mesh_device` FIXTURE, keep that
@@ -152,6 +151,19 @@ if _PERF_TRACE:
 # A copied MESH_DEVICE board table on its own cannot see --devices/--mesh.
 from models.experimental.perf_automation.agent.perf_adapter import resolve_mesh_shape
 _MESH_SHAPE = resolve_mesh_shape(default_rows=<source rows>, default_cols=<source cols>)
+
+_PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"
+_DEV_PARAMS = {"l1_small_size": 24576}
+# FABRIC only when the resolved mesh spans MORE THAN ONE chip. A demo that targets multi-chip shapes
+# hardcodes fabric_config=True; carried into a 1x1 run it still trains ethernet across every VISIBLE
+# chip, and on a partly-idle board that times out ("Fabric Router Sync: Timeout ... ethernet handshake
+# failed") before the model is built. Copy the source's other device_params verbatim; gate ONLY fabric.
+if _MESH_SHAPE[0] * _MESH_SHAPE[1] > 1:
+    _DEV_PARAMS["fabric_config"] = True   # only if the SOURCE sets it
+if _PERF_TRACE:
+    _DEV_PARAMS["trace_region_size"] = int(os.environ.get("TT_PERF_TRACE_REGION", "23887872"))
+    _DEV_PARAMS["num_command_queues"] = int(os.environ.get("TT_PERF_NUM_CQ", "1"))
+
 @pytest.mark.parametrize("device_params", [_DEV_PARAMS], indirect=True)
 def test_<task>_perf(device_params, device):
     # SELF-RECORDING PIPELINE: the model's own <self_traced_fn> already records its trace (trace+1CQ)
