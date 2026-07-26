@@ -238,6 +238,14 @@ state-transfer protocol and measure its components.
   warning; retain the lane selection as an explicit environment-controlled
   candidate.  This measures prefix transport plus general FP32 composition in
   isolation, not its overlap with real TP=4 KDA scans or a 32-device mesh.
+  An intentionally optimistic overlap-capacity capture then queued eight
+  independent TP=4-rank-shaped local KDA final scans behind stage-zero prefix
+  traffic.  It timed out twice under the guarded runner, including after all
+  socket and KDA programs were warmed, and both failures recovered only after
+  the runner reset the device.  Treat concurrent prefix sockets plus KDA child
+  traces as a current LB runtime/queue limitation, not a measured performance
+  opportunity; it must be resolved with a trace/fabric runtime investigation
+  before attempting an end-to-end SP=8 overlap implementation.
 * The direct TP=4 output matmul has no safe grid-only win.  An explicit 10x8
   prefill grid passed the full target-shape SP2xTP4 PCC suite, but raised its
   output matmul from about **205 us** to **223 us** and the three-replay
