@@ -461,16 +461,12 @@ void kernel_main() {
                             pack_reconfig_l1_acc(0);
                         }
 #ifdef ARCH_QUASAR
-                        // [#48552] Re-seed the Quasar MATH/PACK DEST sync + repoint the pack BD before the
-                        // block-sharded (mcast) tilize. The plain Quasar tilize_init omits llk_math_pack_sync_init,
-                        // so the tilize inherits the prior matmul's stale MATH_PACK semaphore / DEST bank phase ->
-                        // MATH datacopy MOP out of phase with PACK -> ERROR_TRISC1 (MATH) 0x19. This init existed
-                        // only in the height_sharded branch below (which is dead: height-sharded convs take the
-                        // split conv_tilize_only path, not this fused kernel). NOTE: that branch also shows a
-                        // llk_math_set_dvalid CLEARDVALID scrub, but that belongs to the dest-dvalid scheme and is
-                        // hard-blocked by a static_assert on the current semaphore-based tt-metal (uncompilable).
-                        // This path forces SyncFull (#47797), whose serialized DEST handshake should not need the
-                        // scrub the SyncHalf fast-tilize race did. Runs once per tilize group; no hw_configure.
+                        // [#48552 EXPERIMENT] Scrub the prior matmul's stale DEST dvalid + re-seed MATH/PACK
+                        // sync + repoint the pack BD before the block-sharded (mcast) tilize (matmul->tilize
+                        // transition). set_dvalid needs the static_assert in llk_math_common_api.h commented out
+                        // (dest-dvalid scheme not officially enabled) — EXPERIMENT to test if the dvalid scrub
+                        // fixes the 0x19. Paired with a tilize->matmul scrub after matmul_block_init below.
+                        MATH((llk_math_set_dvalid<p_cleardvalid::FPU, DST_SYNC_MODE>()));
                         MATH((llk_math_pack_sync_init()));
                         PACK((llk_pack_init(tilized_in0_cb_id)));
                         PACK((llk_pack_dest_init()));
@@ -491,6 +487,13 @@ void kernel_main() {
 #endif
                         reconfig_data_format(in0_pretilize_cb_id, in1_cb_id, in0_pretilize_cb_id, in0_cb_id);
                         matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+#ifdef ARCH_QUASAR
+                        // [#48552 EXPERIMENT] tilize->matmul scrub: clear the tilize's stale DEST dvalid before
+                        // the matmul MVMUL (the transition that faulted per bsp1.txt — 207 tilize blocks OK,
+                        // then MATH 0x19 in the matmul). Only runs when a tilize just ran. Needs the
+                        // llk_math_common_api.h assert commented out. Pairs with the matmul->tilize scrub above.
+                        MATH((llk_math_set_dvalid<p_cleardvalid::FPU, DST_SYNC_MODE>()));
+#endif
                     }
                 } else {
                     if constexpr (pack_relu && !fuse_bias) {
