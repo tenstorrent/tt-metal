@@ -15,7 +15,14 @@ from .attention import (
     sdpa_causal_cur_pos,
     sdpa_causal_ok,
 )
-from .paged_cache import PagedCacheConfig, build_page_table, build_paged_sliding_pool, page_table_row_to_tt
+from .paged_cache import (
+    PagedCacheFull,
+    PagedGroup,
+    PagedKVManager,
+    PagedLayerView,
+    build_groups,
+    plan_pool_blocks,
+)
 from .common import DeepSeekV4Module, _MASK_NEG, _profile, _trace_capture_guard
 from .decoder_layer import DeepSeekV4DecoderLayer
 from .embedding import DeepSeekV4Embedding
@@ -250,17 +257,17 @@ class DeepSeekV4Model(DeepSeekV4Module):
         if self.layer_devices:
             self.last_device = self.layer_devices[-1]
 
-        # Per-layer decode state (paged in-place sliding K=V + optional compressor projections).
+        # Per-layer decode state (in-place sliding K=V + optional compressor projections).
         self.sliding_window = config.sliding_window
         self._decode_max_seq: Optional[int] = None
         self.kv_caches: list[_StaticLayerCache] = []
-        # Multi-user paged decode (optional; see :meth:`reset_multi_user_paged_caches`).
-        self._multi_user: bool = False
-        self._paged_cfg: Optional[PagedCacheConfig] = None
-        self._page_table_host: Optional[torch.Tensor] = None
-        self._user_kv_caches: list[list[_StaticLayerCache]] = []
-        self._paged_sliding_pools: list[dict[int, ttnn.Tensor]] = []  # per-layer: device_id -> pool
-        self._page_tables_tt: dict[int, ttnn.Tensor] = {}  # device_id -> [num_users, blocks_per_user]
+        # Paged multi-session decode (traced path; see :meth:`prepare_static_decode`).
+        self._paged: Optional[PagedKVManager] = None
+        self._paged_groups: dict[str, PagedGroup] = {}
+        self._active_sid: Optional[int] = None
+        # session id -> (submesh index, layer) -> compressor window buffers, held while
+        # the session is not the active one (see :meth:`activate_session`).
+        self._session_state: dict[int, dict] = {}
 
         self.hc_head = DeepSeekV4HyperHead(
             config,
@@ -455,7 +462,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
     # -- decode KV-cache state -------------------------------------------------- #
     def reset_caches(self, max_seq: int) -> None:
-        """Allocate empty fixed-size paged decode buffers for a fresh sequence.
+        """Allocate empty fixed-size dense decode buffers for a fresh sequence (the
+        eager :meth:`decode` path; the traced path uses :meth:`prepare_static_decode`).
 
         ``max_seq`` is the longest absolute position + 1 the caller will decode
         (prompt + generation), padded to tile / compress-rate multiples as needed.
@@ -472,146 +480,182 @@ class DeepSeekV4Model(DeepSeekV4Module):
             )
             for li in range(self.num_layers)
         ]
-        self._multi_user = False
-        self._paged_cfg = None
-        self._page_table_host = None
-        self._user_kv_caches = []
-        self._paged_sliding_pools = []
-        self._page_tables_tt = {}
 
-    def reset_multi_user_paged_caches(self, max_seq: int, num_users: int = 2, block_size: int = 64) -> None:
-        """Allocate per-user decode state plus shared paged sliding pools (block_size tokens/block).
+    # ------------------------------------------------------------------ #
+    # Paged multi-session decode
+    #
+    # Several conversations share one captured trace. A trace bakes in the
+    # *addresses* of the buffers it touches, so per-session state cannot live in
+    # per-session buffers -- the trace would only ever see the first session's. Two
+    # mechanisms cover the two kinds of state:
+    #
+    #   * The KV caches (all the memory that matters) move behind a block pool per
+    #     layer plus a ``page_table`` tensor per (submesh, layer type). The trace
+    #     addresses the pool and the table; switching sessions rewrites the table's
+    #     *contents* with that session's logical->physical block row. Blocks are
+    #     handed out on demand, so N conversations share a total token budget instead
+    #     of reserving ``N x max_context`` (see :mod:`.paged_cache`).
+    #   * The compressor window buffers (one window of projections, a few KB) stay
+    #     dense and are swapped in and out of the trace-addressed buffers on a
+    #     session switch, which happens per turn rather than per token.
+    #
+    # Everything a session needs is allocated up front by
+    # :meth:`prepare_static_decode`: allocating device buffers once a trace exists on
+    # the device is unsafe, so :meth:`open_session` only claims a pre-built slot and
+    # does host-side book-keeping.
+    # ------------------------------------------------------------------ #
+    @property
+    def paged(self) -> bool:
+        """Is this model set up for paged (multi-session) traced decode?"""
+        return self._paged is not None
 
-        Each user gets isolated compressor projections (CSA/HCA) and a ``page_table`` row
-        mapping into a shared ``[num_users * blocks_per_user, 1, block_size, Dh]`` pool
-        per sliding-attention layer. Switching users reuses the same physical pool without
-        overwriting another user's blocks.
+    @property
+    def active_session(self) -> Optional[int]:
+        return self._active_sid
+
+    def _require_paged(self) -> PagedKVManager:
+        if self._paged is None:
+            raise RuntimeError("call prepare_static_decode(..., num_sessions=N) for paged multi-session decode")
+        return self._paged
+
+    def open_session(self) -> int:
+        """Claim a session slot (its sliding-ring blocks) and return its id.
+
+        Purely host-side: the device buffers were all allocated by
+        :meth:`prepare_static_decode`. A fresh session needs no cache zeroing -- every
+        step masks (or, in causal mode, bounds itself below) the rows it has not
+        written yet, so a recycled block is never read.
         """
-        self._decode_max_seq = max_seq
-        self._multi_user = True
-        self._paged_cfg = PagedCacheConfig(
-            num_users=num_users,
-            max_seq=max_seq,
-            block_size=block_size,
-            sliding_window=self.sliding_window,
-        )
-        self._page_table_host = build_page_table(self._paged_cfg)
-        self.kv_caches = []
+        paged = self._require_paged()
+        if not self._free_session_state:
+            raise PagedCacheFull(f"all {self._max_sessions} session slots are in use")
+        sid = paged.open_session()
+        self._session_state[sid] = self._build_session_state(self._free_session_state.pop())
+        return sid
 
-        self._user_kv_caches = [
-            [
-                build_static_layer_cache(
-                    self.layer_devices[li],
-                    self.sliding_window,
-                    self.config.layer_types[li],
-                    self.config.head_dim,
-                    max_seq,
-                    self.config.compress_rates,
+    def close_session(self, sid: int) -> None:
+        """Release a session's blocks back to the pool."""
+        paged = self._require_paged()
+        if sid == self._active_sid:
+            self._active_sid = None
+        paged.close_session(sid)
+        state = self._session_state.pop(sid, None)
+        if state is not None:
+            self._free_session_state.append(state)
+
+    def reset_session(self, sid: int) -> None:
+        """Rewind a session to position 0: free its compressed blocks and clear its
+        compressor window state (keeping its ring blocks, whose stale rows are masked
+        until rewritten)."""
+        paged = self._require_paged()
+        paged.reset_session(sid)
+        if sid == self._active_sid:
+            self._clear_active_compressor_state()
+        else:
+            self._build_session_state(self._session_state[sid])
+        self._write_page_tables(sid, list(self._paged_groups))
+
+    def activate_session(self, sid: int) -> None:
+        """Make ``sid`` the session the next :meth:`decode_traced` steps belong to:
+        point every page table at its blocks and swap its compressor window state into
+        the buffers the traces address."""
+        paged = self._require_paged()
+        if not paged.has_session(sid):
+            raise KeyError(f"no such session {sid}")
+        if sid == self._active_sid:
+            return
+        if self._active_sid is not None:
+            self._save_active_compressor_state(self._active_sid)
+        self._load_compressor_state(sid)
+        self._active_sid = sid
+        self._write_page_tables(sid, list(self._paged_groups))
+
+    def ensure_session_capacity(self, pos: int) -> None:
+        """Give the active session blocks for every row a step at ``pos`` will touch,
+        refreshing only the page tables whose row actually changed (a compressor group
+        grows one block every ``compress_rate * block_size`` tokens)."""
+        paged = self._require_paged()
+        if self._active_sid is None:
+            raise RuntimeError("call activate_session() before decoding")
+        changed = paged.ensure_capacity(self._active_sid, pos)
+        if changed:
+            self._write_page_tables(self._active_sid, changed)
+
+    def session_usage(self) -> dict:
+        """Per-group ``(blocks used, pool size)``, for status reporting."""
+        return self._require_paged().usage()
+
+    def session_tokens_left(self) -> int:
+        """Tokens the shared pool can still admit across all open sessions."""
+        return self._require_paged().tokens_left()
+
+    # -- paged device state ----------------------------------------------------- #
+    def _paged_view(self, sm: dict, li: int) -> Optional[PagedLayerView]:
+        """The pool + page table layer ``li`` reads its KV through, or ``None`` when
+        this model runs the dense caches."""
+        if self._paged is None:
+            return None
+        group = self._paged_groups[self.config.layer_types[li]]
+        return PagedLayerView(sm["pools"][li], sm["page_tables"][group.layer_type], group.position_modulo)
+
+    def _write_page_tables(self, sid: int, groups) -> None:
+        """Copy ``sid``'s page-table rows into the persistent device tables of every
+        submesh that hosts a layer of those groups."""
+        paged = self._require_paged()
+        for group in groups:
+            row = ttnn.from_torch(paged.page_row(sid, group), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            for sm in self.submeshes_io:
+                table = sm["page_tables"].get(group)
+                if table is not None:
+                    ttnn.copy_host_to_device_tensor(row, table)
+
+    def _compressor_slots(self):
+        """``(submesh, layer, buffer name)`` for every per-session compressor buffer."""
+        for sm in self.submeshes_io:
+            for li, scache in sm["scaches"].items():
+                for name in ("win_kv", "win_gate", "prev_kv", "prev_gate"):
+                    if getattr(scache, name) is not None:
+                        yield sm, li, name
+
+    def _build_session_state(self, into: Optional[dict] = None) -> dict:
+        """A session's held-aside compressor buffers, cleared to their empty values.
+
+        ``prev_gate`` starts at ``_MASK_NEG`` rather than 0 so the first window's
+        absent Ca half carries softmax weight 0 (see :class:`_StaticLayerCache`).
+        ``into`` clears and reuses an existing slot's buffers rather than allocating,
+        which is what keeps :meth:`open_session` safe once traces exist; the allocating
+        form runs only from :meth:`prepare_static_decode`.
+        """
+        state = {} if into is None else into
+        for sm, li, name in self._compressor_slots():
+            key = (sm["index"], li, name)
+            fill = _MASK_NEG if name == "prev_gate" else 0.0
+            if into is None:
+                buf = getattr(sm["scaches"][li], name)
+                state[key] = ttnn.from_torch(
+                    torch.full(list(buf.shape), fill),
+                    dtype=buf.dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=sm["device"],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
-                for li in range(self.num_layers)
-            ]
-            for _ in range(num_users)
-        ]
-
-        self._paged_sliding_pools = []
-        for li in range(self.num_layers):
-            if self.config.layer_types[li] != "sliding_attention":
-                self._paged_sliding_pools.append({})
-                continue
-            dev = self.layer_devices[li]
-            pool = build_paged_sliding_pool(dev, self._paged_cfg, self.config.head_dim)
-            self._paged_sliding_pools.append({dev.id(): pool})
-            if dev.id() not in self._page_tables_tt:
-                self._page_tables_tt[dev.id()] = ttnn.from_torch(
-                    self._page_table_host,
-                    dtype=ttnn.int32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    device=dev,
-                )
-
-    def decode_user(self, user_id: int, token_id: int, pos: int, rope: dict) -> ttnn.Tensor:
-        """Single-token decode for ``user_id`` (requires :meth:`reset_multi_user_paged_caches`)."""
-        if not self._multi_user:
-            raise RuntimeError("call reset_multi_user_paged_caches() before decode_user()")
-        assert self._paged_cfg is not None
-        if user_id < 0 or user_id >= self._paged_cfg.num_users:
-            raise ValueError(f"user_id {user_id} out of range [0, {self._paged_cfg.num_users})")
-
-        ids = torch.tensor([[token_id]], dtype=torch.long)
-        ids_tt = ttnn.from_torch(
-            ids.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.first_device
-        )
-        inputs_embeds = self.embed_tokens(ids_tt)
-        b, s, d = inputs_embeds.shape
-        streams = ttnn.reshape(inputs_embeds, [b, s, 1, d])
-        streams = ttnn.repeat(streams, ttnn.Shape([1, 1, self.config.hc_mult, 1]))
-
-        rope_cache: dict = {}
-        last_submesh_id = 0
-        w = self.sliding_window
-        user_caches = self._user_kv_caches[user_id]
-
-        for li, layer in enumerate(self.layers):
-            if self.use_submeshes:
-                current_submesh_id = self._submesh_id_for_layer(li)
-                if current_submesh_id != last_submesh_id:
-                    streams = self._copy_streams_between_submeshes(streams, last_submesh_id, current_submesh_id)
-                this_device = self.submeshes[current_submesh_id]
             else:
-                this_device = self.first_device
-            layer_type = self.config.layer_types[li]
-            compress_rate = None if layer_type == "sliding_attention" else self.config.compress_rates[layer_type]
-            cos_tt, sin_tt, neg_sin_tt, cos_win_tt, sin_win_tt = self._rope_rows_decode(
-                rope, pos, layer_type, compress_rate, rope_cache, this_device
-            )
-            causal = self._sdpa_causal_at(layer_type, pos)
-            mask = (
-                None
-                if causal
-                else host_decode_mask(w, layer_type, compress_rate, pos, self._decode_max_seq, this_device)
-            )
-            sdpa_cur_pos = int32_pos_tensor(sdpa_causal_cur_pos(w, compress_rate, pos), this_device) if causal else None
+                ttnn.fill(state[key], fill, output_tensor=state[key])
+        return state
 
-            win_slot = win_row = None
-            if compress_rate is not None:
-                slot, wi = _window_indices(compress_rate, pos)
-                win_slot = int32_pos_tensor(slot, this_device)
-                win_row = int32_pos_tensor(w + max(wi, 0), this_device)
+    def _clear_active_compressor_state(self) -> None:
+        """Clear the trace-addressed compressor buffers in place."""
+        for sm, li, name in self._compressor_slots():
+            buf = getattr(sm["scaches"][li], name)
+            ttnn.fill(buf, _MASK_NEG if name == "prev_gate" else 0.0, output_tensor=buf)
 
-            paged_pool = None
-            page_row = None
-            if layer_type == "sliding_attention":
-                pools = self._paged_sliding_pools[li]
-                paged_pool = pools.get(this_device.id())
-                if paged_pool is not None:
-                    page_row = page_table_row_to_tt(self._page_table_host, user_id, this_device)
+    def _save_active_compressor_state(self, sid: int) -> None:
+        for sm, li, name in self._compressor_slots():
+            ttnn.copy(getattr(sm["scaches"][li], name), self._session_state[sid][(sm["index"], li, name)])
 
-            streams = layer.decode(
-                streams,
-                cos_tt,
-                sin_tt,
-                neg_sin_tt,
-                cos_win_tt,
-                sin_win_tt,
-                mask,
-                user_caches[li],
-                int32_pos_tensor(pos % w, this_device),
-                int32_pos_tensor(pos, this_device),
-                input_ids=ids,
-                paged_sliding_pool=paged_pool,
-                page_table=page_row,
-                pool_compressor=self._compressor_pool_due(layer_type, pos),
-                sdpa_cur_pos=sdpa_cur_pos,
-                win_slot=win_slot,
-                win_row=win_row,
-            )
-            last_submesh_id = current_submesh_id
-            _profile(this_device)
-            next_layer_for_device_id = li + self.pipeline_stages
-            if next_layer_for_device_id < self.num_layers:
-                next_layer = self.layers[next_layer_for_device_id]
-                next_layer.self_attn.prefetch_weights()
-        return self.norm(self.hc_head(streams))
+    def _load_compressor_state(self, sid: int) -> None:
+        for sm, li, name in self._compressor_slots():
+            ttnn.copy(self._session_state[sid][(sm["index"], li, name)], getattr(sm["scaches"][li], name))
 
     # -- per-layer RoPE tables / masks ------------------------------------------ #
     def _to_tt(self, t: torch.Tensor, device: ttnn.MeshDevice) -> ttnn.Tensor:
@@ -776,7 +820,38 @@ class DeepSeekV4Model(DeepSeekV4Module):
             self.config.head_dim,
             self._decode_max_seq,
             self.config.compress_rates,
+            paged=self._paged is not None,
         )
+
+    def _build_block_pool(self, li: int, device: ttnn.MeshDevice) -> ttnn.Tensor:
+        """One layer's KV block pool ``[num_blocks, 1, block_size, Dh]`` (all-zero).
+
+        Block ``0`` is the shared zero block every unmapped page-table entry points at,
+        so it must stay zero -- :class:`PagedKVManager` never hands it out.
+        """
+        group = self._paged_groups[self.config.layer_types[li]]
+        num_blocks = self._paged.pools[group.layer_type].num_blocks
+        return ttnn.from_torch(
+            torch.zeros(num_blocks, 1, group.block_size, self.config.head_dim),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _build_page_tables(self, layer_types, device: ttnn.MeshDevice) -> dict:
+        """Persistent ``[1, logical_blocks]`` INT32 page tables, one per layer type on
+        this submesh. The traces bake in these addresses; :meth:`activate_session`
+        rewrites their contents."""
+        return {
+            lt: ttnn.from_torch(
+                torch.zeros(1, self._paged_groups[lt].logical_blocks, dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+            )
+            for lt in layer_types
+        }
 
     def reset_static_caches(self) -> None:
         """Zero every traced-decode cache so a fresh sequence can start at position 0.
@@ -786,6 +861,13 @@ class DeepSeekV4Model(DeepSeekV4Module):
         temporary device allocation is unsafe while a trace exists. (``fill`` still
         logs the allocator's "unsafe with an active trace" warning for its own
         scratch; the cache buffers themselves are untouched by it.)
+
+        ``prev_gate`` is refilled with ``_MASK_NEG`` rather than 0, matching how
+        :func:`build_static_layer_cache` allocates it: it gates window 0's absent Ca
+        half, which a 0 fill would give real softmax weight instead of none.
+
+        In paged mode this only touches the compressor window buffers (the KV caches
+        live in the block pools); use :meth:`reset_session` to rewind one session.
         """
         if not getattr(self, "submeshes_io", None):
             raise RuntimeError("call prepare_static_decode() before reset_static_caches()")
@@ -794,9 +876,17 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 for name in _StaticLayerCache.__slots__:
                     buf = getattr(scache, name)
                     if buf is not None:
-                        ttnn.fill(buf, 0.0, output_tensor=buf)
+                        ttnn.fill(buf, _MASK_NEG if name == "prev_gate" else 0.0, output_tensor=buf)
 
-    def prepare_static_decode(self, rope: dict, max_seq: int, lm_head=None) -> None:
+    def prepare_static_decode(
+        self,
+        rope: dict,
+        max_seq: int,
+        lm_head=None,
+        num_sessions: int = 0,
+        total_tokens: int | None = None,
+        block_size: int = 32,
+    ) -> None:
         """Allocate the traced-decode state (the prompt is prefilled by replaying
         :meth:`decode_traced` once per prompt token into these empty caches).
 
@@ -808,12 +898,33 @@ class DeepSeekV4Model(DeepSeekV4Module):
         pads it) so each compressor's fixed capacity tiles cleanly into windows.
         ``lm_head`` (optional) is folded into the last submesh's trace so a step
         returns logits directly.
+
+        ``num_sessions`` > 0 switches the KV caches to the paged multi-session layout:
+        each layer gets a block pool instead of a dense buffer, sized (with
+        ``total_tokens``, defaulting to one full ``max_seq``) for that many concurrent
+        conversations sharing the budget. Everything a session needs is allocated here,
+        before any trace exists, because allocating on a device that holds a trace is
+        unsafe; :meth:`open_session` then only claims a slot.
         """
         if not self.use_submeshes:
             raise NotImplementedError("traced decode requires use_submeshes=True")
         cfg = self.config
         for cr in {cfg.compress_rates[t] for t in cfg.layer_types[: self.num_layers] if t != "sliding_attention"}:
             assert max_seq % cr == 0, f"max_seq ({max_seq}) must be a multiple of compress_rate {cr}"
+        if num_sessions > 0:
+            self._paged_groups = build_groups(
+                cfg.layer_types[: self.num_layers], cfg.compress_rates, self.sliding_window, max_seq, block_size
+            )
+            pool_blocks = plan_pool_blocks(self._paged_groups, num_sessions, total_tokens or max_seq)
+            self._paged = PagedKVManager(self._paged_groups, pool_blocks)
+            logger.info(
+                "paged decode: "
+                + ", ".join(
+                    f"{name} {pool_blocks[name]} blocks of {g.block_size} "
+                    f"({g.logical_blocks} per session, {g.kv_len}-token axis)"
+                    for name, g in self._paged_groups.items()
+                )
+            )
         self._traced_rope = rope
         self._lm_head_traced = lm_head
         self._decode_max_seq = max_seq
@@ -882,6 +993,10 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 "rope_invfreq": {},
                 "mask_gen": {},
                 "scaches": {li: self._build_static_layer_cache(li, device) for li in layers_k},
+                # Paged mode: one block pool per layer, and one page table per layer
+                # type (every layer of a type shares the mapping, not the data).
+                "pools": {li: self._build_block_pool(li, device) for li in layers_k} if self._paged else {},
+                "page_tables": self._build_page_tables(types, device) if self._paged else {},
                 "pool_crs": self._compress_rates_for(types),
                 "traces": {},  # local variant key -> (trace id, persistent output)
                 "tids": {},  # global variant key -> trace id
@@ -938,6 +1053,12 @@ class DeepSeekV4Model(DeepSeekV4Module):
         # its trace produces the final head output consumed by :meth:`decode_traced`.
         self._output_sm_index = (self.num_layers - 1) % num_sm
         self._traced_captured = False
+
+        # Every session's held-aside compressor buffers, allocated now: once a trace
+        # exists on a device, allocating buffers there can corrupt it, so
+        # :meth:`open_session` may only claim one of these pre-built slots.
+        self._max_sessions = num_sessions
+        self._free_session_state = [self._build_session_state() for _ in range(num_sessions)]
 
     def _device_rope(self, inv_freq: ttnn.Tensor, scaling: float, pos_f: ttnn.Tensor) -> tuple:
         """Generate one decode step's RoPE rows on device from the absolute position.
@@ -1082,7 +1203,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
             a, b, cr = sm["mask_gen"][lt]
             # Bound the KV axis by a position (causal) where this step's valid set is
             # a contiguous prefix, else by the additive mask. Sliding layers take
-            # neither — they run the paged path against their own 128-slot pool.
+            # neither here: their ring is bounded by the absolute position inside
+            # :meth:`DeepSeekV4Attention.decode_static`.
             use_causal = causal and lt != "sliding_attention"
             mask = None if use_causal else self._device_mask(a, b, cr, pos_f)
             sdpa_cur_pos = self._device_causal_pos(cr, pos_f) if use_causal else None
@@ -1115,6 +1237,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 sm["scaches"][li],
                 sliding_pos,
                 compress_pos,
+                paged=self._paged_view(sm, li),
                 hash_token=token if layer.mlp.is_hash else None,
                 pool_compressor=(lt != "sliding_attention" and pool_flags[cfg.compress_rates[lt]]),
                 sdpa_cur_pos=sdpa_cur_pos,
@@ -1275,7 +1398,13 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
         The returned tensor is overwritten by the next call, so consume it (e.g.
         ``ttnn.to_torch``) before decoding the following token.
+
+        In paged mode the step belongs to whichever session is active (see
+        :meth:`activate_session`), and its blocks are grown here as the compressor
+        windows close.
         """
+        if self._paged is not None:
+            self.ensure_session_capacity(pos)
         self._set_step_inputs(token_id, pos)
         if not self._traced_captured:
             self._capture_traces()
@@ -1315,6 +1444,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 "(sampled id and token_in must share a device)"
             )
 
+        if self._paged is not None:
+            self.ensure_session_capacity(start_pos)
         self._set_step_inputs(first_token_id, start_pos)
         if not self._traced_captured:
             self._capture_traces()
@@ -1325,6 +1456,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
         tok_i32: ttnn.Tensor | None = None
         for i in range(n_steps):
             if i > 0:
+                if self._paged is not None:
+                    self.ensure_session_capacity(start_pos + i)
                 # Refresh positions / RoPE / masks (token slot reset to a placeholder)
                 # then re-inject the previous step's device-sampled id into idx 0 of
                 # the fused packet: slice off the placeholder token and re-concatenate
