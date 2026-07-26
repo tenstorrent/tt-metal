@@ -225,6 +225,19 @@ state-transfer protocol and measure its components.
   the remaining nine span 2.842--2.858 ms.  This supersedes the signposted
   host-interval figure from `2026_07_26_09_19_57`, which is not the
   slowest-device firmware metric used by this plan.
+* The principal Galaxy-scale risk now has a LoudBox probe: an SP=8,
+  three-stage Hillis--Steele affine prefix transfers the exact per-TP4-rank
+  payload, eight FP32 `[128,128]` A matrices plus eight `[128,128]` B matrices
+  (512 KiB + 512 KiB = 1 MiB/rank).  All eight inclusive transforms and their
+  nonzero-state entry states pass PCC >= 0.999 against the host composition;
+  there is no host state handoff.  The traced standalone prefix is stable with
+  one socket lane at 2.333 ms (three measured replays; report
+  `2026_07_26_10_29_27`) and two lanes at **1.274 ms** median (ten sessions
+  2--11, range 1.272--1.275 ms; report `2026_07_26_10_31_24`).  Two lanes are
+  correct and 45% faster, but emit the runtime's experimental multi-sender
+  warning; retain the lane selection as an explicit environment-controlled
+  candidate.  This measures prefix transport plus general FP32 composition in
+  isolation, not its overlap with real TP=4 KDA scans or a 32-device mesh.
 * The direct TP=4 output matmul has no safe grid-only win.  An explicit 10x8
   prefill grid passed the full target-shape SP2xTP4 PCC suite, but raised its
   output matmul from about **205 us** to **223 us** and the three-replay
