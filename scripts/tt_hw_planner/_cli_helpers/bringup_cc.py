@@ -148,6 +148,38 @@ def _reinject_orphan_children(model_id: str, demo_dir: Path) -> int:
         return 0
 
 
+def _clear_terminal_state_for_recompose(demo_dir: Path, parent: str) -> List[str]:
+    """Give a recomposed whole-module target a clean slate in the loop state.
+
+    A parent that previously fell back to CPU or was harness-skipped is in the
+    gate's terminal set (``fallback`` / ``harness_skipped``); ``termination_check``
+    skips terminal components outright, so recompose would restore the target
+    but the gate would never hand it any repair rounds (``rounds=0``). Clearing
+    the terminal marks + the stale attempt counters lets the restored parent be
+    worked again as a fresh whole-module port. Never raises."""
+    cleared: List[str] = []
+    try:
+        state_path = Path(os.environ.get("BRINGUP_MCP_STATE", "") or (demo_dir / ".bringup_cc_state.json"))
+        if not state_path.is_file():
+            return cleared
+        st = json.loads(state_path.read_text())
+        for key in ("harness_skipped", "fallback"):
+            vals = st.get(key)
+            if isinstance(vals, list) and parent in vals:
+                st[key] = [v for v in vals if v != parent]
+                cleared.append(key)
+        for key in ("harness_skip_reason", "attempts", "consecutive_same_class", "last_failure_class", "last_failure_text"):
+            m = st.get(key)
+            if isinstance(m, dict) and parent in m:
+                m.pop(parent, None)
+                cleared.append(key)
+        if cleared:
+            state_path.write_text(json.dumps(st, indent=2))
+    except Exception:
+        return cleared
+    return cleared
+
+
 def _reconcile_recompose(model_id: str, demo_dir: Path) -> List[str]:
     try:
         from ..agentic.stale_tests import restore_stale_test
@@ -173,6 +205,7 @@ def _reconcile_recompose(model_id: str, demo_dir: Path) -> List[str]:
         for parent in ready:
             restored = restore_stale_test(demo_dir=demo_dir, component=parent, safe_id=_safe_id(parent))
             remove_no_emit_test(model_id, parent)
+            _cleared = _clear_terminal_state_for_recompose(demo_dir, parent)
             persist_locked_module(
                 model_id,
                 parent,
@@ -183,6 +216,7 @@ def _reconcile_recompose(model_id: str, demo_dir: Path) -> List[str]:
                 f"  [recompose] `{parent}` ready — all children on device; restored as "
                 f"whole-module target, locked against re-decomposition"
                 + (f" (restored {restored.name})" if restored else " (live stub kept)")
+                + (f"; cleared terminal state {_cleared}" if _cleared else "")
             )
         return done
     except Exception as exc:
