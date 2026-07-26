@@ -220,10 +220,11 @@ state-transfer protocol and measure its components.
   an opt-in invalid path.  The remaining CCL investigation must reproduce
   KDA's full interleaved layer schedule around the Line consumer.  The focused
   primitive now also covers KDA's rank-3-to-local-width reshape, explicit
-  worker grid, Blackhole HiFi4 config, on-device producer, no sub-device
-  manager, barrier semaphore, and persistent-output clone; it passes eagerly
-  and under trace on both child placements.  Those producer/signaler inputs
-  alone therefore do not reproduce the boundary defect.
+  worker grid, Blackhole HiFi4 config, no sub-device manager, barrier
+  semaphore, and persistent-output clone.  Its exact FP32 `kda_gated_rms_norm`
+  producer (eight local `[T, 128]` heads plus a BF16 local gate) also passes
+  eagerly and under trace on both child placements.  Those producer/signaler
+  inputs alone therefore do not reproduce the boundary defect.
   Capturing the fused primitive's separate matmul output confirms that all
   four local matmul shards are finite when the reduced output fails, so the
   defect is downstream in the Line reduce-scatter consumer rather than KDA,

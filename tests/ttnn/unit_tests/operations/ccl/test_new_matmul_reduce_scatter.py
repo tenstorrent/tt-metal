@@ -44,11 +44,14 @@ def run_reduce_scatter_impl(
     populate_allowed_worker_cores=False,
     use_kda_compute_config=False,
     input_from_device_producer=False,
+    input_from_kda_gated_rms=False,
     use_sub_device_manager=True,
     clone_reduce_scatter_output=False,
     use_barrier_semaphore=False,
 ):
     torch.manual_seed(0)
+    if input_from_device_producer and input_from_kda_gated_rms:
+        raise ValueError("choose either the multiply or KDA gated-RMS input producer")
 
     tile = (32, 32)
 
@@ -196,43 +199,116 @@ def run_reduce_scatter_impl(
     torch_input_tensor_list = []
 
     for i in range(num_iters):
-        mm_input_shape = [rs_input_shape[0], 1, rs_input_shape[2], mm_weights_shape[2]]
-        mm_input_tensor = torch.rand(mm_input_shape).bfloat16()
-        input_tensors = torch.chunk(mm_input_tensor, num_devices, 3)
-        torch_input_tensor_list.append(input_tensors)
+        if input_from_kda_gated_rms:
+            # This is the exact producer immediately before KDA's TP output
+            # projection: each rank owns eight FP32 [T, 128] value heads and
+            # a BF16 1,024-wide gate, then flattens them to its K-shard.
+            heads_per_device, value_dim = 8, 128
+            assert mm_weights_shape[2] == num_devices * heads_per_device * value_dim
+            rms_input = torch.rand(num_devices * heads_per_device, rs_input_shape[2], value_dim)
+            gate = torch.rand(1, rs_input_shape[2], mm_weights_shape[2]).bfloat16()
+            rms_weight = torch.rand(1, 1, 1, value_dim).bfloat16()
+            gate_by_device = torch.chunk(gate, num_devices, 2)
+            input_tensors = []
+            for device_index, device_heads in enumerate(torch.chunk(rms_input, num_devices, 0)):
+                normalized = device_heads * torch.rsqrt(torch.mean(device_heads.square(), dim=-1, keepdim=True) + 1e-5)
+                normalized = normalized * rms_weight.float().reshape(value_dim)
+                gated = normalized * torch.sigmoid(
+                    gate_by_device[device_index]
+                    .float()
+                    .reshape(rs_input_shape[2], heads_per_device, value_dim)
+                    .permute(1, 0, 2)
+                )
+                input_tensors.append(gated.permute(1, 0, 2).reshape(1, 1, rs_input_shape[2], -1))
+            torch_input_tensor_list.append(input_tensors)
 
-        if input_rank3_then_reshape:
-            input_tensor_mesh = ttnn.from_torch(
-                mm_input_tensor.squeeze(1),
+            rms_input_tensor = ttnn.from_torch(
+                rms_input,
                 device=mesh_device,
                 layout=layout,
-                dtype=rs_input_dtype,
+                dtype=ttnn.float32,
                 memory_config=mem_config_input,
                 mesh_mapper=ttnn.create_mesh_mapper(
                     mesh_device,
                     ttnn.MeshMapperConfig(
-                        [ttnn.PlacementReplicate(), ttnn.PlacementShard(2)], ttnn.MeshShape(1, num_devices)
+                        [ttnn.PlacementReplicate(), ttnn.PlacementShard(0)],
+                        ttnn.MeshShape(1, num_devices),
                     ),
                 ),
+            )
+            gate_tensor = ttnn.from_torch(
+                gate,
+                device=mesh_device,
+                layout=layout,
+                dtype=ttnn.bfloat16,
+                memory_config=mem_config_input,
+                mesh_mapper=ttnn.create_mesh_mapper(
+                    mesh_device,
+                    ttnn.MeshMapperConfig(
+                        [ttnn.PlacementReplicate(), ttnn.PlacementShard(2)],
+                        ttnn.MeshShape(1, num_devices),
+                    ),
+                ),
+            )
+            rms_weight_tensor = ttnn.from_torch(
+                rms_weight,
+                device=mesh_device,
+                layout=layout,
+                dtype=ttnn.bfloat16,
+                memory_config=mem_config_input,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            input_tensor_mesh = ttnn.transformer.kda_gated_rms_norm(
+                rms_input_tensor,
+                gate_tensor,
+                rms_weight_tensor,
+                heads_per_device,
+                epsilon=1e-5,
+                memory_config=mem_config_input,
+                compute_kernel_config=compute_kernel_config,
             )
             input_tensor_mesh = ttnn.reshape(
                 input_tensor_mesh,
                 (1, 1, rs_input_shape[2], mm_weights_shape[2] // num_devices),
             )
         else:
-            input_tensor_mesh = ttnn.from_torch(
-                mm_input_tensor,
-                device=mesh_device,
-                layout=layout,
-                dtype=rs_input_dtype,
-                memory_config=mem_config_input,
-                mesh_mapper=ttnn.create_mesh_mapper(
-                    mesh_device,
-                    ttnn.MeshMapperConfig(
-                        [ttnn.PlacementReplicate(), ttnn.PlacementShard(3)], ttnn.MeshShape(1, num_devices)
+            mm_input_shape = [rs_input_shape[0], 1, rs_input_shape[2], mm_weights_shape[2]]
+            mm_input_tensor = torch.rand(mm_input_shape).bfloat16()
+            input_tensors = torch.chunk(mm_input_tensor, num_devices, 3)
+            torch_input_tensor_list.append(input_tensors)
+
+            if input_rank3_then_reshape:
+                input_tensor_mesh = ttnn.from_torch(
+                    mm_input_tensor.squeeze(1),
+                    device=mesh_device,
+                    layout=layout,
+                    dtype=rs_input_dtype,
+                    memory_config=mem_config_input,
+                    mesh_mapper=ttnn.create_mesh_mapper(
+                        mesh_device,
+                        ttnn.MeshMapperConfig(
+                            [ttnn.PlacementReplicate(), ttnn.PlacementShard(2)], ttnn.MeshShape(1, num_devices)
+                        ),
                     ),
-                ),
-            )
+                )
+                input_tensor_mesh = ttnn.reshape(
+                    input_tensor_mesh,
+                    (1, 1, rs_input_shape[2], mm_weights_shape[2] // num_devices),
+                )
+            else:
+                input_tensor_mesh = ttnn.from_torch(
+                    mm_input_tensor,
+                    device=mesh_device,
+                    layout=layout,
+                    dtype=rs_input_dtype,
+                    memory_config=mem_config_input,
+                    mesh_mapper=ttnn.create_mesh_mapper(
+                        mesh_device,
+                        ttnn.MeshMapperConfig(
+                            [ttnn.PlacementReplicate(), ttnn.PlacementShard(3)], ttnn.MeshShape(1, num_devices)
+                        ),
+                    ),
+                )
 
         tt_input_tensor_mesh_list.append(input_tensor_mesh)
 
@@ -243,10 +319,11 @@ def run_reduce_scatter_impl(
         matmul_input = torch.cat(torch_input_tensor_list[i], dim=3)
         if input_from_device_producer:
             matmul_input = matmul_input * matmul_input
+        matmul_weight = weights_tensor.float() if matmul_input.dtype == torch.float32 else weights_tensor
         if use_bias:
-            matmul_output = torch.matmul(matmul_input, weights_tensor) + bias_tensor_padded
+            matmul_output = torch.matmul(matmul_input, matmul_weight) + bias_tensor_padded
         else:
-            matmul_output = torch.matmul(matmul_input, weights_tensor)
+            matmul_output = torch.matmul(matmul_input, matmul_weight)
         scatter_output = torch.chunk(matmul_output, num_devices, rs_scatter_dim)
         torch_reduce_scatter_output_list.append(scatter_output)
         torch_matmul_output_list.append(matmul_output)
@@ -550,6 +627,47 @@ def test_linear_matmul_reduce_scatter_tp4_child_mesh(mesh_device, child_start, e
         populate_allowed_worker_cores=True,
         use_kda_compute_config=True,
         input_from_device_producer=True,
+        use_sub_device_manager=False,
+        clone_reduce_scatter_output=True,
+        use_barrier_semaphore=True,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 1024 * 1024}],
+    indirect=True,
+)
+@pytest.mark.parametrize("enable_trace", [False, True], ids=["eager", "trace"])
+@pytest.mark.parametrize("child_start", [0, 4], ids=["child_0", "child_4"])
+def test_linear_matmul_reduce_scatter_tp4_kda_gated_rms_producer(mesh_device, child_start, enable_trace):
+    """Exercise Line MRS directly after KDA's FP32 gated-RMS producer."""
+    child_mesh = mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, child_start))
+    run_reduce_scatter_impl(
+        child_mesh,
+        num_devices=4,
+        rs_input_shape=[1, 1, 640, 2304],
+        mm_shard_dim=2,
+        rs_scatter_dim=3,
+        num_links=2,
+        mm_weights_shape=[1, 1, 4096, 2304],
+        rs_input_dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        matmul_weights_dtype=ttnn.bfloat16,
+        max_in0_block_w=4,
+        use_bias=False,
+        mem_config_input=ttnn.DRAM_MEMORY_CONFIG,
+        mem_config_rs=ttnn.DRAM_MEMORY_CONFIG,
+        mem_config_mm=ttnn.DRAM_MEMORY_CONFIG,
+        rs_topology=ttnn.Topology.Linear,
+        use_non_fused=False,
+        num_iters=1,
+        enable_trace=enable_trace,
+        check_first_output_tile=True,
+        populate_allowed_worker_cores=True,
+        use_kda_compute_config=True,
+        input_from_kda_gated_rms=True,
         use_sub_device_manager=False,
         clone_reduce_scatter_output=True,
         use_barrier_semaphore=True,
