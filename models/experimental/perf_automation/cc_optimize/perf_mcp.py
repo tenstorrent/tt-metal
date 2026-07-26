@@ -505,10 +505,15 @@ def _throughput_path():
 
 
 def _report_original_baseline_ms():
+    """The first baseline ever recorded for this (model, task) -- but only if it was profiled at the
+    depth this run is using. A ms figure taken over 2 layers is not comparable to one over 16."""
     try:
         p = _original_baseline_path()
         if p.exists():
-            return round(float(json.loads(p.read_text()).get("device_ms", 0.0)), 4)
+            d = json.loads(p.read_text())
+            _now = (os.environ.get("TT_PERF_LAYERS") or "").strip() or "all"
+            if str(d.get("perf_layers", _now)) == _now:
+                return round(float(d.get("device_ms", 0.0)), 4)
     except Exception:  # noqa: BLE001
         pass
     return _report_baseline_ms()
@@ -1312,7 +1317,15 @@ def profile_model() -> dict:
     _orig = _original_baseline_path()
     if not _orig.exists():
         try:
-            _orig.write_text(json.dumps(prof))
+            # Stamp the DEPTH this was profiled at. The file is written once and never refreshed, so
+            # a later run with a different coverage window would otherwise compare against it blind:
+            # llama3_1_8b_p150 reported "baseline 832.93 -> final 1088.15 (-30.6%)" by pairing a
+            # 2-layer profile from a previous day with a 16-layer one, a regression that never
+            # happened (the run was actually 2149.71 -> 1088.15). A ms figure is only comparable to
+            # another taken over the SAME amount of work.
+            _stamped = dict(prof)
+            _stamped["perf_layers"] = (os.environ.get("TT_PERF_LAYERS") or "").strip() or "all"
+            _orig.write_text(json.dumps(_stamped))
         except Exception:  # noqa: BLE001
             pass
     dev = round(float(prof.get("device_ms", 0.0)), 4)

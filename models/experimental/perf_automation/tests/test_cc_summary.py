@@ -76,7 +76,9 @@ def test_original_baseline_anchors_headline(tmp_path):
         original_baseline_ms=42.60,
         final_override_ms=19.83,
     )
-    assert "42.60 ms  ->  final 19.83 ms" in out
+    assert "42.60 ms  ->  19.83 ms" in out
+    assert "eager per-op device time" in out  # relabelled: a bare "baseline -> final" let a
+    # 2-layer number be compared against a 16-layer one without either depth being visible
     assert "53.5%" in out
     assert "2.15x" in out
 
@@ -90,5 +92,5 @@ def test_final_override_pins_current_not_best_win(tmp_path):
         original_baseline_ms=100.0,
         final_override_ms=80.0,
     )
-    assert "100.00 ms  ->  final 80.00 ms" in out
+    assert "100.00 ms  ->  80.00 ms" in out
     assert "20.0%" in out

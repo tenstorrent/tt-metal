@@ -322,17 +322,24 @@ def _reset_fullpipe_baselines() -> None:
         pass
 
 
-def _read_fullpipe_best_1cq() -> float | None:
-    """Read the best-so-far trace+1cq full-pipeline latency banked by the per-lever
-    check_full_pipeline_latency gate (the 1cq baseline file). This IS the AFTER scoreboard
-    number — the last committed 1cq verdict — so the end-of-run bookend reuses it instead of
-    launching a second full-model device run."""
+def _read_fullpipe_best_1cq():
+    """The best-so-far full-pipeline latency banked by the per-lever gate, as (ms, mode).
+
+    The MODE matters as much as the number. _establish_fullpipe_baseline RE-BASELINES this file when
+    the measurement mode changes, because the stored value then means a different thing (an eager
+    wall-clock over the whole forward vs a trace+1cq per-token step). The BEFORE bookend is captured
+    once and never re-taken, so if the mode moves underneath it the two are different units --
+    subtracting them produced "before 47.10 ms -> after 100.00 ms (-112.3% SLOWER)" on
+    llama3_1_8b_p150, a regression that is not one. Return the mode so the caller can refuse.
+    """
     try:
         p = Path(tempfile.gettempdir()) / "perf_mcp_full_pipeline_baseline_1cq.json"
-        ms = float(json.loads(p.read_text()).get("full_pipeline_ms") or 0.0)
-        return ms if ms > 0 else None
+        d = json.loads(p.read_text())
+        ms = float(d.get("full_pipeline_ms") or 0.0)
+        mode = str(d.get("mode") or d.get("method") or "")
+        return (ms, mode) if ms > 0 else (None, "")
     except Exception:  # noqa: BLE001
-        return None
+        return (None, "")
 
 
 def _fullpipe_e2e(repo_root: Path, mcp_env: dict, devices: str, label: str) -> float | None:
@@ -366,13 +373,14 @@ def _fullpipe_e2e_inner(repo_root: Path, mcp_env: dict, devices: str, label: str
         "for a in ('fn','func','_fn','__wrapped__'):\n"
         "    if hasattr(g,a): g=getattr(g,a); break\n"
         "r=g()\n"
-        "print('FULLPIPE_MS=' + str(r.get('full_pipeline_ms')))"
+        "print('FULLPIPE_MS=' + str(r.get('full_pipeline_ms')))\n"
+        "print('FULLPIPE_MODE=' + str(r.get('mode') or r.get('method') or ''))"
     )
     env = cc_env(repo_root, devices)
     env.update(mcp_env)
     env.setdefault("PERF_MCP_FULLPIPE_SAMPLES", "3")
     print(
-        f"  [optimize/cc] measuring FULL-model end-to-end ({label}) — ALL 52 layers, no tracy (one slow run, minutes)..."
+        f"  [optimize/cc] measuring FULL-model end-to-end ({label}) — ALL layers (uncapped), no tracy (one slow run, minutes)..."
     )
     ms = None
     rc, out = _run_device_proc(
@@ -385,13 +393,16 @@ def _fullpipe_e2e_inner(repo_root: Path, mcp_env: dict, devices: str, label: str
         stall_s=adaptive_timer(repo_root, "profile", env_key="PERF_MCP_MEASURE_STALL_SEC"),
     )
     if rc is None:
-        return None
+        return (None, "")
+    mode = ""
     for line in (out or "").splitlines():
         if line.startswith("FULLPIPE_MS="):
             try:
                 ms = float(line.split("=", 1)[1])
             except Exception:  # noqa: BLE001
                 ms = None
+        if line.startswith("FULLPIPE_MODE="):
+            mode = line.split("=", 1)[1].strip()
         if "[full-pipeline-gate]" in line:
             print("  [optimize/cc] " + line.strip())
             if "PERF_SCORECARD" in line:
@@ -401,8 +412,11 @@ def _fullpipe_e2e_inner(repo_root: Path, mcp_env: dict, devices: str, label: str
                         k, v = tok.split("=", 1)
                         _LAST_SCORECARD[k] = v
     if ms is not None:
-        print(f"  [optimize/cc] FULL-model end-to-end ({label}) = {ms:.1f} ms  (ALL 52 layers, prefill + 1 decode)")
-    return ms
+        print(
+            f"  [optimize/cc] FULL-model end-to-end ({label}) = {ms:.1f} ms"
+            f"  (ALL layers, prefill + 1 decode{', ' + mode if mode else ''})"
+        )
+    return ms, mode
 
 
 _HOST_XFER_OPS = (
@@ -1962,14 +1976,42 @@ def _last_committed_ms(kernel_log_path) -> float | None:
     return ms
 
 
-def _original_baseline_ms(model_name: str, task: str) -> float | None:
+def _original_baseline_ms(model_name: str, task: str, perf_layers: str = "") -> float | None:
+    """The FIRST baseline recorded for this (model, task), or None when it is not comparable.
+
+    The file is written once and never refreshed, so it outlives the profiling window it was taken
+    at. Pairing it with a later run's number produced the headline
+
+        baseline 832.93 ms  ->  final 1088.15 ms   (-30.6%, 0.77x)
+
+    on llama3_1_8b_p150 -- a 2-layer profile from the previous day against a 16-layer one. Nothing had
+    regressed; that run was 2149.71 -> 1088.15. Returning None here makes the caller fall back to THIS
+    run's own baseline, which is always measured over the same work as its final.
+    """
     try:
         import tempfile
 
         p = Path(tempfile.gettempdir()) / ("perf_mcp_orig_baseline_%s_%s.json" % (model_name, task))
-        if p.is_file():
-            d = json.loads(p.read_text())
-            return float(d["device_ms"]) if d.get("device_ms") is not None else None
+        if not p.is_file():
+            return None
+        d = json.loads(p.read_text())
+        if d.get("device_ms") is None:
+            return None
+        want = (perf_layers or os.environ.get("TT_PERF_LAYERS") or "").strip() or "all"
+        got = str(d.get("perf_layers", "")).strip()
+        if not got:
+            print(
+                "  [optimize/cc] original baseline carries no depth stamp; using THIS run's baseline "
+                "for the headline (a cross-depth comparison is not a speedup)"
+            )
+            return None
+        if got != want:
+            print(
+                "  [optimize/cc] original baseline was profiled at TT_PERF_LAYERS=%s but this run uses "
+                "%s; using THIS run's baseline for the headline" % (got, want)
+            )
+            return None
+        return float(d["device_ms"])
     except Exception:  # noqa: BLE001
         pass
     return None
@@ -1993,6 +2035,8 @@ def _emit_summary(
     perf_test: str = "",
     before_ms=None,
     after_ms=None,
+    before_mode: str = "",
+    after_mode: str = "",
 ) -> None:
     import importlib.util
 
@@ -2075,13 +2119,15 @@ def _emit_summary(
         residual=residual,
         before_ms=before_ms,
         after_ms=after_ms,
+        before_mode=before_mode,
+        after_mode=after_mode,
         baseline_profile=(
             json.loads(Path(report_csv).parent.joinpath("baseline_profile.json").read_text())
             if report_csv and Path(report_csv).parent.joinpath("baseline_profile.json").is_file()
             else None
         ),
         finalized=True,
-        original_baseline_ms=_original_baseline_ms(model_name, task),
+        original_baseline_ms=_original_baseline_ms(model_name, task, os.environ.get("TT_PERF_LAYERS", "")),
         final_override_ms=_cur_ms,
         throughput=_throughput,
     )
@@ -2242,7 +2288,7 @@ def optimize_pipeline(
     start_sha = _git(repo_root, "rev-parse", "HEAD")
     mcp_env = cfg["mcpServers"]["perf-mcp"]["env"]
     _reset_fullpipe_baselines()
-    before_ms = _fullpipe_e2e(repo_root, mcp_env, devices, "BEFORE")
+    before_ms, before_mode = _fullpipe_e2e(repo_root, mcp_env, devices, "BEFORE")
     rounds, can_stop, halted = 0, False, False
     stall_sec = adaptive_timer(repo_root, "round", env_key="PERF_MCP_ROUND_STALL_SEC", mult=0.5)
     max_wedge = int(os.environ.get("PERF_MCP_MAX_WEDGE_STRIKES", "2") or "2")
@@ -2292,7 +2338,7 @@ def optimize_pipeline(
     _stop_watcher.set()
     # AFTER bookend: reuse the best committed trace+1cq verdict (the per-lever gate already banked
     # the final number in the 1cq baseline file) — do NOT run the full pipeline again at the end.
-    after_ms = _read_fullpipe_best_1cq()
+    after_ms, after_mode = _read_fullpipe_best_1cq()
     if after_ms is not None:
         print(
             f"  [optimize/cc] FULL-model end-to-end (AFTER) = {after_ms:.1f} ms  "
@@ -2317,6 +2363,8 @@ def optimize_pipeline(
         metric,
         start_sha,
         perf_test=(pipe or {}).get("perf_test", ""),
+        before_mode=before_mode,
+        after_mode=after_mode,
         before_ms=before_ms,
         after_ms=after_ms,
     )

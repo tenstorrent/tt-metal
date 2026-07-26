@@ -145,7 +145,11 @@ def test_baseline_is_never_replaced_by_the_worst_measurement(tmp_path):
     p.write_text(json.dumps(attempts))
     out = S.render_summary(p, 100.0, final_override_ms=105.0, model="m", original_baseline_ms=100.0)
     # 180.00 legitimately appears in the per-attempt table; the HEADLINE is what must be honest.
-    hdr = next(ln for ln in out.splitlines() if "baseline" in ln and "final" in ln)
+    hdr = next(ln for ln in out.splitlines() if "device time" in ln)  # headline was relabelled: it now
+    # names WHAT was measured and over how many layers, because a bare "baseline -> final" hid a
+    # 2-layer number being compared against a 16-layer one.
     assert "180.00" not in hdr, f"the slowest failed experiment was substituted as the baseline: {hdr.strip()}"
     assert "100.00" in hdr, f"headline lost the real baseline: {hdr.strip()}"
-    assert "+" not in hdr.split("final")[1], f"printed a gain for a run that regressed: {hdr.strip()}"
+    assert "+" not in hdr.split("->")[1], f"printed a gain for a run that regressed: {hdr.strip()}"
+    # split on "->" rather than "final": the headline now reads
+    # "eager per-op device time (N layers):  A ms  ->  B ms", naming the measurement and depth

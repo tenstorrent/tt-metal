@@ -302,6 +302,53 @@ def _stages_from_profile(baseline_profile: dict | None) -> list:
     return rows
 
 
+def _same_measurement(before_mode: str, after_mode: str) -> bool:
+    """Are two full-pipeline readings the same KIND of number?
+
+    Only then is their difference a speedup. Unknown on BOTH sides is treated as comparable, because
+    older runs recorded no mode at all and refusing every legacy pair would be noise; a mode known on
+    one side and not the other is NOT assumed to match.
+    """
+    b = (before_mode or "").strip().lower()
+    a = (after_mode or "").strip().lower()
+    if not b and not a:
+        return True
+    return b == a
+
+
+def _depth_label() -> str:
+    """How much of the model the tracy numbers cover. A ms figure means nothing without it: the whole
+    2-layer-vs-16-layer confusion came from a headline that printed neither side's depth."""
+    raw = (os.environ.get("TT_PERF_LAYERS") or "").strip()
+    return "%s layers" % raw if raw.isdigit() and int(raw) > 0 else "all layers"
+
+
+def _all_layers_label() -> str:
+    """Depth of the whole-model gate. It always runs uncapped, so name the real count when the profile
+    reveals it, else say 'all layers' rather than implying a number we do not have."""
+    n = (os.environ.get("PERF_MCP_MODEL_LAYERS") or "").strip()
+    return "all %s layers" % n if n.isdigit() and int(n) > 0 else "all layers"
+
+
+def _baseline_trace_ms(baseline_profile: dict | None):
+    """The trace-pass latency recorded alongside the baseline profile, or None.
+
+    Reported separately from the eager per-op number because they measure different things over the
+    same window -- collapsing them into one figure is how a 'regression' appears out of nowhere.
+    """
+    if not isinstance(baseline_profile, dict):
+        return None
+    for k in ("per_token_ms", "trace_per_token_ms", "trace_ms"):
+        v = baseline_profile.get(k)
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            continue
+        if f > 0:
+            return f
+    return None
+
+
 def _roofline_lines(throughput: dict | None, forward_ms: float | None) -> list:
     """The adaptive 'Roofline & utilization' table. MEASURED values (tok/s, mem BW, utilization,
     at-floor) are computed HERE from the ms actually being reported (`forward_ms`) against the STATIC
@@ -428,6 +475,8 @@ def render_summary(
     after_ms: float | None = None,
     baseline_profile: dict | None = None,
     finalized: bool = True,
+    before_mode: str = "",
+    after_mode: str = "",
     original_baseline_ms: float | None = None,
     final_override_ms: float | None = None,
     throughput: dict | None = None,
@@ -480,22 +529,46 @@ def render_summary(
             "optimizing… — baseline->final speedup is finalized when the module converges (per-attempt detail below is live)"
         )
     elif hdr_base and final_ms and hdr_base > 0:
+        # Say WHAT was measured and OVER HOW MUCH WORK, never a bare "baseline". These are tracy
+        # per-op numbers from the EAGER pass over a capped window; the whole-model trace figure is a
+        # different measurement and gets its own line. Reporting them as one "baseline -> final"
+        # produced "baseline 832.93 -> final 1088.15 (-30.6%)" on llama3_1_8b_p150 by pairing a
+        # 2-layer profile with a 16-layer one -- a regression that never happened.
         pct = (hdr_base - final_ms) / hdr_base * 100.0
         spd = hdr_base / final_ms if final_ms > 0 else 1.0
-        lines.append(f"baseline {hdr_base:.2f} ms  ->  final {final_ms:.2f} ms   ({pct:+.1f}%, {spd:.2f}x)")
+        lines.append(
+            f"eager per-op device time ({_depth_label()}):  {hdr_base:.2f} ms  ->  {final_ms:.2f} ms"
+            f"   ({pct:+.1f}%, {spd:.2f}x)"
+        )
     elif hdr_base:
-        lines.append(f"baseline {hdr_base:.2f} ms  ->  (no measured win recorded)")
+        lines.append(f"eager per-op device time ({_depth_label()}):  {hdr_base:.2f} ms  ->  (no measured win recorded)")
     else:
-        lines.append("baseline/final ms unavailable (no baseline profile found)")
+        lines.append("eager per-op device time: unavailable (no profile found)")
+    _bl_trace = _baseline_trace_ms(baseline_profile)
+    if _bl_trace:
+        lines.append(f"tracy trace pass, same window ({_depth_label()}):  {_bl_trace:.2f} ms")
     _trace_scope = f"module ({task})" if os.environ.get("TT_PERF_MODULE_LEVEL") == "1" else "full-pipeline e2e"
-    if before_ms and after_ms:
+    _all = _all_layers_label()
+    _mode_ok = _same_measurement(before_mode, after_mode)
+    if before_ms and after_ms and _mode_ok:
         _d = (before_ms - after_ms) / before_ms * 100.0 if before_ms else 0.0
         lines.append(
-            f"trace+1CQ {_trace_scope}:  before {before_ms:.2f} ms  ->  after {after_ms:.2f} ms"
+            f"trace+1CQ {_trace_scope} ({_all}):  before {before_ms:.2f} ms  ->  after {after_ms:.2f} ms"
             f"   ({_d:+.1f}% {'faster' if _d >= 0 else 'SLOWER'})"
         )
+    elif before_ms and after_ms:
+        # Different measurement modes are different UNITS -- an eager wall-clock over the whole
+        # forward vs a trace+1cq per-token step. _establish_fullpipe_baseline re-baselines the stored
+        # value when the mode changes, but the BEFORE bookend is captured once and never re-taken, so
+        # the pair can drift apart mid-run. Subtracting them printed "before 47.10 ms -> after
+        # 100.00 ms (-112.3% SLOWER)" on llama3_1_8b_p150. Report both, refuse the delta.
+        lines.append(
+            f"{_trace_scope} ({_all}):  before {before_ms:.2f} ms [{before_mode or 'unknown mode'}]"
+            f"  ->  after {after_ms:.2f} ms [{after_mode or 'unknown mode'}]"
+            "   — NOT COMPARABLE: different measurement modes, no delta computed"
+        )
     elif before_ms:
-        lines.append(f"trace+1CQ {_trace_scope}:  before {before_ms:.2f} ms  ->  (after not measured)")
+        lines.append(f"trace+1CQ {_trace_scope} ({_all}):  before {before_ms:.2f} ms  ->  (after not measured)")
     lines.append("")
 
     if not isinstance(throughput, dict):

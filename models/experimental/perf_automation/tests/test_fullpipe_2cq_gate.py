@@ -122,11 +122,12 @@ def test_read_fullpipe_best_1cq(tmp_path, monkeypatch):
     run = _u.module_from_spec(spec)
     spec.loader.exec_module(run)
     monkeypatch.setattr(run.tempfile, "gettempdir", lambda: str(tmp_path))
-    assert run._read_fullpipe_best_1cq() is None
+    assert run._read_fullpipe_best_1cq() == (None, "")  # now returns (ms, mode): the mode decides
+    # whether the AFTER number is even comparable to the BEFORE bookend
     (tmp_path / "perf_mcp_full_pipeline_baseline_1cq.json").write_text(
         json.dumps({"full_pipeline_ms": 42.5, "method": "trace", "mode": "trace+1cq"})
     )
-    assert run._read_fullpipe_best_1cq() == 42.5
+    assert run._read_fullpipe_best_1cq() == (42.5, "trace+1cq")
 
 
 def test_budget_guidance_present_only_when_2cq(monkeypatch):
