@@ -222,7 +222,20 @@ class PipelineStageAdapter:
             if callable(setup):
                 self._call_with_inputs(setup, None)
             write = getattr(p, "%s_write_inputs" % name, None)
-            stages.append(_Stage(name, step, write if callable(write) else None))
+            # Propagate self_traced: a pipeline that OWNS its capture must be timed natively, never
+            # wrapped in a second begin_trace_capture. The decode fallback below already does this;
+            # omitting it here meant declaring PIPELINE_STAGES turned a working self-traced pipeline
+            # into a nested-capture TT_FATAL.
+            _selft = bool(getattr(p, "%s_self_traced" % name, None) or getattr(p, "self_traced", False))
+            stages.append(
+                _Stage(
+                    name,
+                    step,
+                    write if callable(write) else None,
+                    _selft,
+                    getattr(p, "trace_path", None) if _selft else None,
+                )
+            )
         if stages:
             self.stages = stages
             return

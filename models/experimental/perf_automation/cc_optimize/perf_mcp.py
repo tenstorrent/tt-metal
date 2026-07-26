@@ -1552,6 +1552,54 @@ def _adaptive_run(cmd, cwd, env, label="device run", stall_s=None, backstop=None
     return _AdaptiveResult(rc, "".join(buf))
 
 
+def _grow_trace_region_and_retry(cmd, repo, env, out, r):
+    """Re-run with a bigger trace region while the device reports the capture does not fit.
+
+    Model- and hardware-agnostic: the required size comes from the device's own message, never a
+    guess. Returns the last (output, result).
+    """
+    try:
+        from agent.perf_test_gen import _needed_trace_region, _TRACE_REGION_GROW_ROUNDS
+    except Exception:  # noqa: BLE001
+        return out, r
+    for _ in range(int(_TRACE_REGION_GROW_ROUNDS or 0)):
+        need = _needed_trace_region(out)
+        if need is None:
+            break
+        cur = int(env.get("TT_PERF_TRACE_REGION") or os.environ.get("TT_PERF_TRACE_REGION") or 0)
+        target = max(int(need), cur * 2)
+        if target <= cur:
+            break
+        env["TT_PERF_TRACE_REGION"] = str(target)
+        sys.stderr.write("[perf-mcp] trace region too small; growing to %d B and re-running\n" % target)
+        try:
+            r = _adaptive_run(cmd, repo, env, "full-pipeline")
+        except Exception:  # noqa: BLE001
+            break
+        out = (r.stdout or "") + "\n" + (r.stderr or "")
+    return out, r
+
+
+def _workload_failure_tail(out: str, keep: int = 12) -> str:
+    """The lines from a failed workload that explain WHY, for attaching to the gate's error.
+
+    Prefers real error signatures over the nanobind teardown spam that otherwise fills the tail.
+    """
+    if not out:
+        return ""
+    noise = ("nanobind", "leaked", "reference counting", "skipped remainder")
+    lines = [ln.rstrip() for ln in out.splitlines() if ln.strip() and not any(n in ln.lower() for n in noise)]
+    if not lines:
+        return ""
+    sig = [
+        ln
+        for ln in lines
+        if any(k in ln for k in ("TT_FATAL", "TT_THROW", "Error", "error:", "Traceback", "Exception", "assert"))
+    ]
+    picked = sig[-keep:] if sig else lines[-keep:]
+    return "\n  workload output:\n    " + "\n    ".join(x[:220] for x in picked)
+
+
 def _run_full_pipeline_ms():
     ptr = _MANIFEST.get("perf_test_resolved", {}) or {}
     node = ptr.get("path")
@@ -1591,6 +1639,15 @@ def _run_full_pipeline_ms():
             last_err = f"run failed: {str(exc)[-400:]}"
             continue
         out = (r.stdout or "") + "\n" + (r.stderr or "")
+        # GROW THE TRACE REGION, same as the builder does. The generated test carries a
+        # TT_PERF_TRACE_REGION default that the BUILDER derived while validating at the coverage
+        # depth (2 layers for llama -> 23887872 B). This gate runs the SAME test at
+        # TT_PERF_LAYERS=0, so the capture is ~26x larger and no longer fits -- the run then emits
+        # no TRACE_PER_TOKEN_MS and the whole end-to-end gate reads as a crash. The device states
+        # the exact bytes it needs; grow to that and re-run rather than reusing a value derived for
+        # a different depth. perf_test_gen has had this since a5aa6a96af ("no fixed magic number")
+        # -- it was simply never wired into this path.
+        out, r = _grow_trace_region_and_retry(cmd, repo, env, out, r)
         for line in out.splitlines():
             if "TRACE_PER_TOKEN_MS=" in line:
                 try:
@@ -1659,7 +1716,17 @@ def _run_full_pipeline_ms():
         return statistics.median(walls), "eager", None, None
     if last_err:
         return None, None, last_err, None
-    return None, None, "no TRACE_PER_TOKEN_MS or FORWARD_WALL_MS in output (workload did not run full-pipeline)", None
+    # ATTACH THE EVIDENCE. `out` holds the workload's full stdout+stderr and was being discarded, so
+    # this gate could only ever say "no markers" -- the actual reason (a TT_FATAL, an import error, a
+    # crash before the first print) was written nowhere. Every full-pipeline failure was therefore
+    # undiagnosable without patching the tool, which cost several wrong diagnoses on 2026-07-25/26.
+    return (
+        None,
+        None,
+        "no TRACE_PER_TOKEN_MS or FORWARD_WALL_MS in output (workload did not run full-pipeline)"
+        + _workload_failure_tail(locals().get("out") or ""),
+        None,
+    )
 
 
 _FULLPIPE_GATE_LOG = Path(tempfile.gettempdir()) / "perf_mcp_fullpipe_gate.log"
