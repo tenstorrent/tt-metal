@@ -324,9 +324,12 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.I0: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-30.0, high=30.0)
     ),
-    # i1: modified Bessel I1; poly path valid on |x| <= ~3.75 (asymptotic beyond)
+    # i1: modified Bessel I1. Like i0 above, the kernel hands over to an
+    # asymptotic branch (at |x| > 10), so sample past the handover — at +-3.75
+    # the stimulus stops short of i1's own asymptotic path and never executes it.
+    # That is exactly the gap that let #50465 sit unnoticed in i0.
     MathOperation.I1: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-3.75, high=3.75)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-30.0, high=30.0)
     ),
     # erf / erfc: span both tails and the transition through 0
     MathOperation.Erf: OperandSpecs(
