@@ -170,6 +170,17 @@ device remained about 0.87--0.89 ms, so it did not expose a material latency
 benefit. The forwarding change was reverted and `_ttnn.so` rebuilt; it is
 recorded here to avoid repeating this worker-count hypothesis.
 
+### 2026-07-26: causal-convolution three-block balance (ruled out)
+
+TP4 causal convolution has 96 channel tiles and 80 time tiles. Replacing its
+two 48-tile channel blocks (120 workers, with 40 workers carrying two time
+tiles) with three 32-tile blocks would have aligned Q/K/V boundaries and given
+all 120 workers two equal work items. The target-shape PCC gate passed, but
+report `2026_07_26_21_45_15` measured a **2786.749 us** layer median, only
+3.210 us below the 2789.959 us control. Its causal-convolution median remained
+**453.293 us**. The result is inside replay variation and fails the 15 us
+retention gate, so the 32-tile change was reverted and `_ttnn.so` rebuilt.
+
 ## Measurement contract
 
 Every retained change must satisfy all of the following.
@@ -271,6 +282,18 @@ Prioritized experiments:
 
 **Do not repeat known dead ends:** Ring output collectives deadlocked; the fixed Line MRS is the correct topology. Previous direct sweeps of worker counts, buffer counts, chunk cadence, and the `10x8` output grid did not produce a long-span win. Revisit one only with a new profiler-identified cause, not as a blind parameter sweep.
 
+**Pipeline design constraint (confirmed from source):** at TP4 the 72 output-N
+tiles form four 18-tile reduce-scatter slices; the 8x7 matmul produces nine N
+tiles per column. However, the current Line RS workers partition a flattened
+`M x 18` slice and process every target slice, while `OpSignaler` releases all
+of them only after all 56 matmul producers finish. A safe pipeline therefore
+needs either (a) RS work repartitioned by N-stripe, with a readiness semaphore
+for the two matching matmul columns across all seven M rows, or (b) a per-M-band
+contract that maps each RS worker's flattened range to completed matmul rows.
+Signalling the present global semaphore early would let a worker read unwritten
+tiles and is not an experiment to run. Preserve persistent buffer addresses,
+the two Line directions, and the trace replay contract in either design.
+
 **Exit criterion:** a standalone retained change reaches <=2.775 ms, or a
 directly coupled bundle reaches <=2.750 ms and then crosses the 15 us evidence
 threshold when measured as a whole. Continue toward <=2.750 ms only while
@@ -280,7 +303,8 @@ each retained change meets the 15 us evidence threshold.
 
 **Goal:** after the output tail no longer dominates, re-profile and work only on the new largest dependent union.
 
-The current likely order is causal short convolution, initial projection, then chunk GDN preparation. For causal convolution specifically, test a genuine producer/consumer fusion or cache/layout change before micro-tuning workers: the TP4 two-channel-block implementation exists to fit L1 and is a correctness constraint. Any fusion must retain both convolution-state PCC and the post-boundary-token check.
+The current likely order is causal short convolution, initial projection, then chunk GDN preparation. A three-channel-block balance probe was PCC-clean but
+not retained (3.210 us layer difference; unchanged convolution span). For causal convolution, test a genuine producer/consumer fusion or cache/layout change before further worker micro-tuning: the TP4 two-channel-block implementation exists to fit L1 and is a correctness constraint. Any fusion must retain both convolution-state PCC and the post-boundary-token check.
 
 **Expected gain:** 20--60 us only if the affected portion is exposed on the layer critical path. Its standalone 452 us duration is not a budget that can be added to the output-tail saving.
 
