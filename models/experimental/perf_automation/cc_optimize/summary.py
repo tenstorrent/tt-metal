@@ -12,6 +12,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import sys
 import shutil
 import subprocess
 import tempfile
@@ -255,6 +256,52 @@ def _floor_status(floor_ms: float, measured_ms: float) -> str:
     return str(score(target_from_floor_ms(floor_ms), measured_ms).get("status") or "UNKNOWN")
 
 
+def _throughput_from_profile(baseline_profile: dict | None) -> dict | None:
+    """Compute the roofline-target snapshot from the always-written baseline device profile, so the
+    Roofline section renders deterministically even when the per-profile persist did not fire. Uses the
+    pure-python roofline + perf_target modules via the agent package. Never raises."""
+    if not isinstance(baseline_profile, dict):
+        return None
+    try:
+        _pa = str(Path(__file__).resolve().parent.parent)
+        if _pa not in sys.path:
+            sys.path.insert(0, _pa)
+        from agent import perf_target as _pt
+        from agent import roofline as _rl
+
+        rep = _rl.residual_report(baseline_profile, {})
+        floor = rep.get("modeled_floor_ms")
+        tgt = _pt.target_from_floor_ms(floor)
+        return {
+            "scope": "model",
+            "is_llm_decode": False,
+            "theoretical_tok_s": tgt.theoretical_tok_s,
+            "band": [tgt.band[0], tgt.band[1]],
+            "active_bytes": tgt.active_bytes,
+            "peak_bw_gbps": 0.0,
+            "tp_degree": tgt.tp_degree,
+            "modeled_floor_ms": floor,
+        }
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _stages_from_profile(baseline_profile: dict | None) -> list:
+    """Derive block-level stage rows from the profile op-class buckets, so the Block-level timing table
+    renders deterministically even when no attempt carried per-stage timings."""
+    prof = baseline_profile if isinstance(baseline_profile, dict) else {}
+    rows = []
+    for b in prof.get("buckets") or []:
+        if not isinstance(b, dict):
+            continue
+        rows.append({"name": str(b.get("id", "?")), "ms": float(b.get("device_ms") or 0.0)})
+    if not rows:
+        return []
+    rows.sort(key=lambda r: -r["ms"])
+    rows[0]["dominant"] = True
+    return rows
+
+
 def _roofline_lines(throughput: dict | None, forward_ms: float | None) -> list:
     """The adaptive 'Roofline & utilization' table. MEASURED values (tok/s, mem BW, utilization,
     at-floor) are computed HERE from the ms actually being reported (`forward_ms`) against the STATIC
@@ -451,15 +498,21 @@ def render_summary(
         lines.append(f"trace+1CQ {_trace_scope}:  before {before_ms:.2f} ms  ->  (after not measured)")
     lines.append("")
 
+    if not isinstance(throughput, dict):
+        throughput = _throughput_from_profile(baseline_profile)
     lines.extend(_roofline_lines(throughput, final_ms))
     lines.extend(_baseline_bucket_lines(baseline_profile, report_csv))
 
     _st = next((a for a in reversed(attempts) if isinstance(a, dict) and a.get("stages")), None)
-    if _st:
-        lines.append(
-            f"Block-level timing (per-stage trace) — latest lever on {_op_label(_st.get('op_signature', '?'))}:"
+    _stages = _st["stages"] if _st else _stages_from_profile(baseline_profile)
+    if _stages:
+        _lbl = (
+            f"latest lever on {_op_label(_st.get('op_signature', '?'))}"
+            if _st
+            else "op-class breakdown (latest profile)"
         )
-        lines.extend(_stage_table_lines(_st["stages"]))
+        lines.append(f"Block-level timing (per-stage trace) — {_lbl}:")
+        lines.extend(_stage_table_lines(_stages))
         lines.append("")
 
     if by_op:

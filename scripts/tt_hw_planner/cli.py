@@ -11052,11 +11052,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     popt.add_argument(
         "--target-band",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         dest="target_band",
+        default=True,
         help="stop when the DRAM-bandwidth target band is reached (IN_BAND -> can_stop), so a run ends "
         "at min(band reached, --max-rounds). Full-model: tok/s ceiling from active_bytes; per-module: "
-        "each module's own roofline floor. Off by default (termination unchanged).",
+        "each module's own roofline floor. ON by default; pass --no-target-band to keep optimizing "
+        "past the band.",
     )
     popt.add_argument("-k", "--case", dest="case", help="pytest -k case id override (e.g. device_params0)")
     popt.add_argument(
