@@ -8,6 +8,15 @@ import torch
 from loguru import logger
 
 import ttnn
+
+try:
+    from tracy import signpost
+except ImportError:
+
+    def signpost(*_args, **_kwargs):  # no-op when tracy is unavailable
+        pass
+
+
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -217,6 +226,9 @@ def test_decoder_inference(
         rot_mats = rope_setup.get_rot_mats(current_pos)
         rot_mats_local = None if rope_setup_local is None else rope_setup_local.get_rot_mats(current_pos)
 
+        _prof = i == generation_length - 1  # profile only the last (warmed-up) decode step
+        if _prof:
+            signpost("start")
         # Run TT model
         tt_out = tt_model(
             decode_input,
@@ -231,6 +243,8 @@ def test_decoder_inference(
             tt_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
         )
+        if _prof:
+            signpost("stop")
 
         tt_output_torch = tt_out[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(-1, 1, model_args.dim)
 

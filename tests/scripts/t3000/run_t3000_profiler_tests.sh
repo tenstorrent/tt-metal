@@ -202,48 +202,43 @@ run_multi_host_tracy_smoke() {
 }
 
 run_llama8b_decode_profile() {
-    # Tracy op-by-op decode profile for Llama-3.1-8B (eval-32, prefetcher).
-    # The demo is instrumented with signposts around the decode loop only, ci-eval-32
-    # is cut to 2 decode iterations, and the prefill warmup is skipped (see
-    # models/tt_transformers/demo/simple_text_demo.py). -p scopes capture to the
-    # decode signpost zone.
+    # Tracy op-by-op profile of a single Llama-3.1-8B decoder layer via the
+    # tt_transformers unit test (test_decoder_inference): one TransformerBlock,
+    # decode-only, NO prefill. The full demo overflows the device profiler marker
+    # buffer (op-to-op parsing fails); this unit test has few enough ops that the
+    # host<->device merge succeeds, yielding a named ops_perf_results.csv WITH
+    # "OP TO OP LATENCY" + per_core_op_to_op_times for the cross-host dispatch diff.
+    # A signpost wraps one warmed-up decode step (last iteration).
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
 
-    # Weights: the profiler (wh_llmbox) runner is not a ci-v2 env, so the demo's
-    # model_location_generator download path does not run. Load from the shared HF
-    # cache offline instead (mirrors the working local capture).
+    # Weights: the profiler (wh_llmbox) runner is not a ci-v2 env, so load from the
+    # shared HF cache offline (mirrors the working local capture).
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
     export HF_HOME=/mnt/MLPerf/huggingface
     export HF_HUB_OFFLINE=1
     export TRANSFORMERS_OFFLINE=1
+    export MESH_DEVICE=T3K
 
-    # `|| true`: tracy may exit non-zero on the host<->device op-merge step even when
-    # decode ran fine (a known device-4 merge assertion); don't let that abort before
-    # we harvest. The decode guard below is the real success check.
-    python -m tracy -v -r -p -m pytest models/tt_transformers/demo/simple_text_demo.py \
-        -k "performance-ci-eval-32" --use_prefetcher True --repeat_batches 1 \
+    python -m tracy -v -r -p -m pytest -s \
+        models/tt_transformers/tests/test_decoder.py::test_decoder_inference \
         2>&1 | tee $PROFILER_ARTIFACTS_DIR/test_out.log || true
 
-    # Harvest: the workflow only uploads generated/test_reports/, so copy the profiler
-    # outputs there (skip the huge raw tracy_ops_times.csv / .tracy binary).
-    HARVEST=generated/test_reports/llama8b_decode_profile
+    # Harvest: the workflow only uploads generated/test_reports/.
+    HARVEST=generated/test_reports/llama8b_decoder_profile
     mkdir -p "$HARVEST"
-    find $PROFILER_ARTIFACTS_DIR/reports -name "ops_perf_results_*.csv" -exec cp {} "$HARVEST/" \; 2>/dev/null || true
-    cp $PROFILER_ARTIFACTS_DIR/.logs/cpp_device_perf_report.csv "$HARVEST/" 2>/dev/null || true
-    cp $PROFILER_ARTIFACTS_DIR/.logs/profile_log_device.csv "$HARVEST/" 2>/dev/null || true
+    find $PROFILER_OUTPUT_DIR -name "ops_perf_results_*.csv" -exec cp {} "$HARVEST/" \; 2>/dev/null || true
+    find $PROFILER_OUTPUT_DIR -name "per_core_op_to_op_times_*.csv" -exec cp {} "$HARVEST/" \; 2>/dev/null || true
     cp $PROFILER_ARTIFACTS_DIR/test_out.log "$HARVEST/" 2>/dev/null || true
     echo "Harvested profiler artifacts:"; ls -la "$HARVEST/" || true
 
-    # Guard: fail loudly if decode did not actually run (e.g. weights not found),
-    # so a masked failure does not look like a successful capture.
-    if ! grep -q "tok/s/user" $PROFILER_ARTIFACTS_DIR/test_out.log; then
-        echo "ERROR: decode did not run (no 'tok/s/user' perf line in test_out.log) — model likely failed to load." 1>&2
+    # Guard: the decoder unit test must actually pass (else no valid capture).
+    if ! grep -q "decode iterations Passed" $PROFILER_ARTIFACTS_DIR/test_out.log; then
+        echo "ERROR: decoder unit test did not pass (see test_out.log)." 1>&2
         exit 1
     fi
 }
-
 run_device_profiler_test() {
     remove_default_log_locations
     TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py --noconftest --timeout 360

@@ -11,7 +11,7 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-- name: T3000 Llama-3.1-8B decode op profile (Tracy)
+- name: T3000 Llama-3.1-8B decoder-layer op profile (Tracy)
   cmd: run_llama8b_decode_profile
   skus:
     wh_llmbox:
