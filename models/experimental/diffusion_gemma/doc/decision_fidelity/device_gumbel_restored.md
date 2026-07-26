@@ -595,6 +595,61 @@ Decomposing q106's step-1 entropy:
 The remaining 0.81 nats is what the per-layer hidden RMS comparison is for, and it is now a smaller
 and better-posed target than the 1.31 nats section 9 started from.
 
+## 15. The FULL TT prefill geometry: +0.63 to +1.47 nats, and a quantitative prediction
+
+Section 14 measured a position SHIFT, which is only half of what TT does. TT pads the prompt to a tile
+multiple, writes K/V for the pad tokens, and reveals `[0:padded_len]` -- so its canvas also ATTENDS 18
+pad-id-0 keys, which in RoPE terms are its nearest neighbours. Injecting that whole geometry into the
+reference (`hf_reference_trajectory.py --pad-prompt-to 32`, appending pad-id-0 exactly as
+`_pad_prompt_tokens_for_prefill` does) is the faithful reproduction:
+
+| question | arm | step-1 H | step-2 H | steps to halt |
+| --- | --- | --- | --- | --- |
+| q106 | reference | 3.7945 | 3.2568 | **9** |
+| q106 | position shift only | 4.2946 | 4.5087 | 17 |
+| q106 | **full TT geometry** | **4.4181** | 3.5479 | 15 |
+| q096 | reference | 4.0771 | — | ~13 |
+| q096 | **full TT geometry** | **4.7251** | 4.8339 | **33** |
+| q095 | reference | 3.4311 | — | ~12 |
+| q095 | **full TT geometry** | **4.8974** | 4.4654 | 26 |
+| q106 | TT actual | 5.1022 | 5.5731 | **never (48)** |
+
+So the geometry contributes **+0.63 nats on q106, +0.65 on q096, +1.47 on q095** -- on q095 that is
+almost the entire gap to TT. Section 14's +0.50 understated it by testing the gap without the attended
+pad keys. (Those keys are roughly neutral on their own: 15 steps with them against 17 without, since a
+canvas adjacent to garbage is no worse than a canvas adjacent to nothing.)
+
+It also pushes q096 to **33 of 48 steps**, close enough to the cap that the mechanism is visibly the
+right kind of thing to explain a failure at 48.
+
+### The prediction this makes
+
+The relationship between step-1 entropy and step count is steep in this range: 4.42 -> 15 steps,
+4.73 -> 33 steps, and TT at 5.10 -> more than 48. If the remaining ~0.68 nats on q106 is ordinary
+bf16/TP/MoE backbone drift (the known logits PCC ~0.877), then **removing the geometry error alone
+should drop TT's step-1 entropy by 0.6-1.5 nats and bring the block back under the convergence
+threshold** -- without touching the MoE numerics that #48291 has been stuck on.
+
+That is falsifiable: fix the geometry, re-run the block-0 seven, and either they converge or they do
+not.
+
+### The fix shape
+
+Do not thread the padded length into the denoise geometry. Three things currently share one
+`prompt_len` that has different requirements:
+
+| consumer | needs | today gets |
+| --- | --- | --- |
+| prefix KV read span | tile-aligned (`cache_len`) | 288 ✓ |
+| canvas RoPE offset (`q_rope_offset`) | TRUE prompt length | 288 ✗ (should be 270) |
+| reveal mask content | reveal `[0:true_len]`, hide the rest | reveals `[0:288]` ✗ (pads visible) |
+
+`generate_from_prompt_tokens` passes `prompt_len=prefill.cache_len` and the adapter does
+`self.q_rope_offset = prompt_len`; `PromptPrefill` already carries BOTH values (`prompt_len=270`,
+`cache_len=288`), so the information is there and only the threading conflates them. Both corrected
+consumers keep their buffer SHAPES (the RoPE mats and the mask are same-shaped, different content), so
+this stays trace-safe -- it is a content change, like the retention mask in section 10.
+
 ## 6. Reproduce
 
 ```bash

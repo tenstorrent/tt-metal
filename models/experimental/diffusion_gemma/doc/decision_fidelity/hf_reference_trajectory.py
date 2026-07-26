@@ -32,6 +32,16 @@ def main() -> int:
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--max-new-tokens", type=int, default=256, help="one canvas = one block")
     parser.add_argument(
+        "--pad-prompt-to",
+        type=int,
+        default=0,
+        help="Append pad-id-0 tokens until the prompt is a multiple of N, reproducing TT's prefill "
+        "(_pad_prompt_tokens_for_prefill appends zeros to a tile multiple, those pad K/V are written "
+        "to the cache, and the reveal mask reveals [0:padded_len], so TT's canvas ATTENDS them). This "
+        "is the fuller TT geometry: the position gap AND the attended pad keys, which are the canvas's "
+        "nearest neighbours in RoPE terms. --position-shift reproduces only the gap.",
+    )
+    parser.add_argument(
         "--position-shift",
         type=int,
         default=0,
@@ -52,6 +62,16 @@ def main() -> int:
     )
     input_ids = torch.tensor([list(ids["input_ids"])], dtype=torch.long)
     print(f"prompt tokens: {input_ids.shape[1]}", flush=True)
+
+    if args.pad_prompt_to:
+        pad = (-input_ids.shape[1]) % args.pad_prompt_to
+        if pad:
+            input_ids = torch.cat([input_ids, torch.zeros((1, pad), dtype=torch.long)], dim=1)
+            print(
+                f"INJECTED TT prefill padding: +{pad} pad-id-0 tokens -> {input_ids.shape[1]} "
+                f"(canvas now starts at {input_ids.shape[1]}, and the pad keys are attended)",
+                flush=True,
+            )
 
     trace = []
 
