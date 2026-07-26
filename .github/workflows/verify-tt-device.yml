@@ -122,11 +122,28 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Record what we are verifying
+      - name: Record what we are verifying, and prove it is the tool branch
         run: |
           echo "ref=${{ inputs.ref || 'feature/tt-hw-planner' }}  sha=$(git rev-parse --short HEAD)"
           git log -1 --format='%h %an %ad %s' --date=iso
           echo "upstream merged? $(git merge-base --is-ancestor origin/main HEAD 2>/dev/null && echo yes || echo 'n/a')"
+
+          # TRIPWIRE. The tool lives ONLY on feature/tt-hw-planner; the fork's default branch is a
+          # stale upstream snapshot that contains none of it. If a wrong/empty ref ever gets us the
+          # default branch again, every gate below would pass and prove nothing about the tool --
+          # a silent green. So fail loudly here instead. (This exact bug was live once: on a
+          # schedule event the inputs context is empty, so an unguarded inputs.ref resolved to the
+          # default branch -- a workflow_dispatch input default does NOT apply to scheduled runs.)
+          missing=""
+          for d in scripts/tt_hw_planner models/experimental/perf_automation; do
+            [ -d "$d" ] || missing="$missing $d"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Checked-out tree is NOT the tool branch -- missing:$missing"
+            echo "::error::HEAD=$(git rev-parse HEAD). Refusing to 'verify' a tree with no tool in it."
+            exit 1
+          fi
+          echo "Tool present: this is the tool branch."
 
       - name: Device-idle re-check (races between preflight and here)
         if: ${{ inputs.force != true }}
