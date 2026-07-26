@@ -119,6 +119,9 @@ def _build_and_prefill(mesh_device, text: str):
     prompt_ids: list[int] = list(tokenizer(prompt)["input_ids"])
     real_len = len(prompt_ids)
     max_seq = _pad_to_tile(real_len + max_new_tokens)
+    # ``DEEPSEEK_V4_MAX_SEQ`` widens the fixed buffers beyond what this run needs, so a
+    # max_seq sweep can hold the amount of decode work constant.
+    max_seq = max(int(os.environ.get("DEEPSEEK_V4_MAX_SEQ", max_seq)), max_seq)
     if traced:
         # The fixed compressor buffers tile cleanly into windows only if the
         # capacity is a multiple of every compress-rate, so round the span up.
