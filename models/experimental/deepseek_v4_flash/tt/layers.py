@@ -307,8 +307,17 @@ class DeepSeekV4RMSNorm(DeepSeekV4Module):
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if self.sharded:
             b, s, t, d = x.shape
-            x_mem_config = width_sharded_l1_config(b * s * t, d, x.device())
-            x = ttnn.to_memory_config(x, x_mem_config)
+            rows = b * s * t
+            # The width-sharded L1 layout gives every core the *full* height (one
+            # tile-width each, so only ``d // TILE_SIZE`` cores), which means its L1
+            # footprint grows with the row count. That is a win for the single-token
+            # decode activations it was added for, but the compressor's pooled entries
+            # are ``max_seq // compress_rate`` rows tall: by max_seq 32k the shards plus
+            # rms_norm's own CBs reach ~2.8 MB against a 1.5 MB budget, and even below
+            # that the interleaved path is measurably faster past one tile-row. So only
+            # shard while the whole tensor is a single tile-row.
+            if rows <= ttnn.TILE_SIZE:
+                x = ttnn.to_memory_config(x, width_sharded_l1_config(rows, d, x.device()))
         return ttnn.rms_norm(x, weight=self.weight, epsilon=self.eps)
 
 
