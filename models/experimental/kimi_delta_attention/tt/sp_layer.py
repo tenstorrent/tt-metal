@@ -31,6 +31,26 @@ _SP8_SIZE = 8
 _TP1_SIZE = 1
 
 
+def _validate_sp8_trace_schedule(
+    *, trace_schedule: bool, fabric_tree_barrier: bool, pipelined_handoffs: bool, rank_release: bool
+) -> None:
+    """Reject host-fenced combinations before an SP8 trace is captured.
+
+    A trace only owns device command streams.  Leaving a host synchronization
+    in the causal relay would make capture appear to work while retaining a
+    per-forward host dependency outside the replay.  The fabric atomic tree
+    is the only candidate barrier that is intended to live in that stream.
+    """
+    if not trace_schedule:
+        return
+    if not fabric_tree_barrier:
+        raise ValueError("KDA_SP8_TRACE_SCHEDULE requires KDA_SP_FABRIC_TREE_BARRIER=1")
+    if not pipelined_handoffs:
+        raise ValueError("KDA_SP8_TRACE_SCHEDULE requires KDA_SP8_PIPELINED_HANDOFFS=1")
+    if rank_release:
+        raise ValueError("KDA_SP8_TRACE_SCHEDULE is incompatible with KDA_SP8_RANK_RELEASE=1")
+
+
 @dataclass(frozen=True)
 class SPTPTopology:
     """Map logical sequence/tensor ranks onto a physical mesh.
@@ -505,11 +525,25 @@ class SP8AffineTP1KimiDeltaAttention:
             ttnn.allocate_tensor_on_device(layer.recurrent_state.spec, layer.device) for layer in self.layers
         )
 
+    def enable_trace_stable_state(self) -> None:
+        """Pin every span cache before capturing the fully queued scheduler.
+
+        The affine path receives both the propagated common carry and the
+        exclusive entry state into these buffers.  Making them external keeps
+        their addresses invariant across replay while preserving that queue
+        order.  ``reset_state`` must have run first, just as for the existing
+        SP2 and serial SP8 TP4 trace helpers.
+        """
+        for layer in self.layers:
+            assert layer.recurrent_state is not None
+            assert layer.convolution_state is not None
+            layer.set_external_state(layer.recurrent_state, layer.convolution_state)
+
     def _synchronize(self) -> None:
         for device in self.span_devices:
             ttnn.synchronize_device(device)
 
-    def _prepare_convolutions(self, spans: tuple[ttnn.Tensor, ...]) -> tuple:
+    def _prepare_convolutions(self, spans: tuple[ttnn.Tensor, ...], *, synchronize: bool = True) -> tuple:
         """Prepare the short-convolution boundary in causal order on device."""
         convolutions = []
         pipelined_handoffs = os.getenv("KDA_SP8_PIPELINED_HANDOFFS", "0") == "1"
@@ -529,11 +563,11 @@ class SP8AffineTP1KimiDeltaAttention:
                 # fabric-pipelined variant on LoudBox.
                 if not pipelined_handoffs:
                     self._synchronize()
-        if pipelined_handoffs:
+        if pipelined_handoffs and synchronize:
             self._synchronize()
         return tuple(convolutions)
 
-    def _broadcast_initial_recurrent_state(self) -> None:
+    def _broadcast_initial_recurrent_state(self, *, synchronize: bool = True) -> None:
         """Install rank zero's carry on every rank without a host copy.
 
         An inclusive affine prefix maps the same incoming state through each
@@ -552,7 +586,7 @@ class SP8AffineTP1KimiDeltaAttention:
             ttnn.experimental.recv_async(destination.recurrent_state, recv_socket)
             if not pipelined_handoffs:
                 self._synchronize()
-        if pipelined_handoffs:
+        if pipelined_handoffs and synchronize:
             self._synchronize()
 
     @staticmethod
@@ -696,10 +730,24 @@ class SP8AffineTP1KimiDeltaAttention:
         if span_length % 128:
             raise ValueError(f"SP8 affine TP1 requires 128-token-aligned spans, got T={span_length}")
         groups = span_length // (256 if span_length % 256 == 0 else 128)
-        if os.getenv("KDA_SP8_RANK_RELEASE", "0") == "1":
+        rank_release = os.getenv("KDA_SP8_RANK_RELEASE", "0") == "1"
+        fabric_tree_barrier = os.getenv("KDA_SP_FABRIC_TREE_BARRIER", "0") == "1"
+        trace_schedule = os.getenv("KDA_SP8_TRACE_SCHEDULE", "0") == "1"
+        pipelined_handoffs = os.getenv("KDA_SP8_PIPELINED_HANDOFFS", "0") == "1"
+        _validate_sp8_trace_schedule(
+            trace_schedule=trace_schedule,
+            fabric_tree_barrier=fabric_tree_barrier,
+            pipelined_handoffs=pipelined_handoffs,
+            rank_release=rank_release,
+        )
+        if rank_release:
             return self._forward_rank_release(spans, groups)
-        self._broadcast_initial_recurrent_state()
-        convolutions = self._prepare_convolutions(spans)
+        # In the trace candidate, command-queue dependency replaces these
+        # host drains: each relay receive precedes the next hop's send on its
+        # destination queue, and the final entry receive precedes that rank's
+        # grouped scan.  The default remains deliberately conservative.
+        self._broadcast_initial_recurrent_state(synchronize=not trace_schedule)
+        convolutions = self._prepare_convolutions(spans, synchronize=not trace_schedule)
         prepared = tuple(
             layer.complete_chunk_preparation(convolution) for layer, convolution in zip(self.layers, convolutions)
         )
@@ -720,7 +768,6 @@ class SP8AffineTP1KimiDeltaAttention:
         # socket-token control traffic; it remains separately opt-in until it
         # passes the standalone and full-layer LoudBox gates.
         device_barrier = os.getenv("KDA_SP_DEVICE_BARRIER", "0") == "1"
-        fabric_tree_barrier = os.getenv("KDA_SP_FABRIC_TREE_BARRIER", "0") == "1"
         prefix_a, prefix_b = self.prefix.run(
             span_a,
             span_b,
@@ -760,7 +807,8 @@ class SP8AffineTP1KimiDeltaAttention:
             send_socket, recv_socket = self._entry_sockets[span]
             ttnn.experimental.send_async(span_end_state, send_socket)
             ttnn.experimental.recv_async(destination.recurrent_state, recv_socket)
-        self._synchronize()
+        if not trace_schedule:
+            self._synchronize()
 
         entries = tuple(
             layer.group_entry_states(transform_a, transform_b, groups)

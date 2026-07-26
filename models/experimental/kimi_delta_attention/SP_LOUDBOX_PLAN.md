@@ -469,6 +469,26 @@ a healthy 32-device Galaxy; LoudBox can validate the exact resource-lifetime,
 barrier, TP=4 CCL, and regression behavior but cannot claim native SP8×TP4
 latency.
 
+The native profiler lives at
+`tests/perf/test_kda_sp8_tp4_layer_perf.py`.  Its trace path is deliberately
+strict: it requires all SP ranks to use the fully device-queued affine
+schedule, rather than quietly retaining host fences during capture.
+
+```bash
+# First establish the serial Galaxy control.
+PERF_SEQ=5120 PERF_REPS=10 PERF_TRACE=1 PERF_SP8TP4_AFFINE=0 \
+  scripts/run_safe_pytest.sh --profile -q -s \
+  models/experimental/kimi_delta_attention/tests/perf/test_kda_sp8_tp4_layer_perf.py
+
+# Then capture the complete affine SP8xTP4 layer.  Run only after the atomic
+# barrier stability and PCC gates above are green.
+PERF_SEQ=5120 PERF_REPS=10 PERF_TRACE=1 PERF_SP8TP4_AFFINE=1 \
+  KDA_SP8_TRACE_SCHEDULE=1 KDA_SP_FABRIC_TREE_BARRIER=1 \
+  KDA_SP8_PIPELINED_HANDOFFS=1 KDA_SP_PREFIX_LANES=1 \
+  scripts/run_safe_pytest.sh --profile -q -s \
+  models/experimental/kimi_delta_attention/tests/perf/test_kda_sp8_tp4_layer_perf.py
+```
+
 ## Milestones
 
 1. **Protocol reference and tests.** Add a partitioned PyTorch reference that
