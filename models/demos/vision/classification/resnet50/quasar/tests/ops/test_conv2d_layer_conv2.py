@@ -21,8 +21,13 @@ Sharding per layer (matches what the model uses with the split routing):
   layer4: 512->512, 7x7,   K=144 -> BLOCK_SHARDED   (4.6 MB -> block)
 (module2+ shape: stride 1, pad 1. RELU + folded-BN bias mirrors the model's conv2.)
 
-STATUS: layer1/layer2 exercise the existing (validated) height-sharded split. layer3/layer4 need the
-block-sharded split extension (Program B 2D matmul) — expected to fail until that lands.
+STATUS: layer1/layer2 use the (validated) height-sharded SPLIT path (Program A tilize-only + Program B
+matmul) and PASS. layer3/layer4 are BLOCK_SHARDED, which fundamentally splits K across grid columns and
+reduces across them (in0_num_blocks_w>1) -> incompatible with the single-K-block split -> they run the
+ORIGINAL fused conv_bmm_tilize kernel and hit the Quasar DEST-handshake ERROR_TRISC1 0x19 (the tilize<->
+matmul shared-DEST fault localized to the matmul's 2nd subblock). layer3/layer4 are the LLK-team repro of
+that fused-conv 0x19; layer1/layer2 are the working reference. (SPLIT_PROGRAM is set ONLY for the
+height-sharded split cases; the block cases run the pristine original block conv.)
 
 RUN one layer (emulator, forced JIT):
   TT_METAL_QSR_TC_ISOLATE=1 TT_METAL_FORCE_JIT_COMPILE=1 \
@@ -52,7 +57,8 @@ LAYER_CONV2 = [
     "layer, in_ch, out_ch, spatial, shard_layout, tid", LAYER_CONV2, ids=[c[-1] for c in LAYER_CONV2]
 )
 def test_quasar_layer_conv2(mesh_device, layer, in_ch, out_ch, spatial, shard_layout, tid):
-    """One resnet50 layer's 3x3 conv2 via the split path. Output must match a torch conv2d golden (PCC ~1.0)."""
+    """One resnet50 layer's 3x3 conv2. layer1/2 (height-sharded) take the split path and must PCC ~1.0;
+    layer3/4 (block-sharded) run the original fused conv_bmm_tilize and are the LLK 0x19 repro."""
     device = mesh_device
     torch.manual_seed(0)
 
@@ -99,8 +105,14 @@ def test_quasar_layer_conv2(mesh_device, layer, in_ch, out_ch, spatial, shard_la
         device.arch(), math_fidelity=ttnn.MathFidelity.LoFi, packer_l1_acc=True
     )
 
-    # Engage the split path (Program A tilize-only + Program B matmul); force_conv_no_spill keys off this.
-    os.environ["TT_METAL_QSR_CONV_SPLIT_PROGRAM"] = "1"
+    # Height-sharded (layer1/2): engage the split path (Program A tilize-only + Program B matmul). Block-sharded
+    # (layer3/4): run the ORIGINAL fused block conv (conv_bmm_tilize) -- block-sharding needs cross-column
+    # K-reduction, incompatible with the single-K-block split -- so DO NOT set SPLIT_PROGRAM (this is the
+    # fused-conv 0x19 repro for the LLK team).
+    if shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        os.environ["TT_METAL_QSR_CONV_SPLIT_PROGRAM"] = "1"
+    else:
+        os.environ.pop("TT_METAL_QSR_CONV_SPLIT_PROGRAM", None)
 
     out, [oh, ow], _wb = ttnn.experimental.quasar.conv2d(
         input_tensor=tt_input,
