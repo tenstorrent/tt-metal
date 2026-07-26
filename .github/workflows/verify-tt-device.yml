@@ -5,13 +5,24 @@ name: verify-tt-device
 # cannot prove the merge still builds and still computes correct numbers. This workflow does
 # that on a self-hosted TT box labelled `tt-verify`.
 #
-# MANUAL-ONLY BY DESIGN (workflow_dispatch, no `schedule`, no `workflow_run`): the TT box is an
-# interactive machine that people also drive by hand for perf/bring-up runs. An automatic
-# trigger would seize the device mid-run -- a colliding pytest and trace capture kill each other
-# and can wedge the board, which surfaces as an unexplained hang. So a human dispatches this
-# when the box is known idle. The `device-idle guard` step below is a second line of defence.
+# RUNS DAILY, BUT YIELDS TO HUMANS. The TT box is an interactive machine that people also drive
+# by hand for perf/bring-up runs, and seizing the device mid-run wedges the board (a colliding
+# pytest and trace capture kill each other, which surfaces as an unexplained hang). So the
+# `preflight` job below checks whether anything holds a device node FIRST and, if the box is
+# busy, skips the whole verification cleanly -- no failure, no issue filed, nothing queued
+# against the device. The next daily run picks it up: a busy board postpones verification to
+# tomorrow rather than competing for the chips.
+#
+# Never triggered by the sync itself (no `workflow_run`): a push landing while someone is
+# mid-optimize is exactly when you least want CI grabbing the device.
 
 on:
+  schedule:
+    # 07:00 UTC -- after the 06:00-Berlin sync plus its typical queue drift, so this normally
+    # verifies the branch that sync produced a couple of hours earlier. Plain UTC on purpose:
+    # unlike the sync this job has no reason to be punctual in local time, so it is not worth a
+    # second cron and a DST gate. It shifts by an hour against Berlin twice a year.
+    - cron: "0 7 * * *"
   workflow_dispatch:
     inputs:
       ref:
@@ -104,16 +115,16 @@ jobs:
       TT_METAL_HOME: ${{ github.workspace }}
       PYTHONPATH: ${{ github.workspace }}
     steps:
-      - name: Checkout ${{ inputs.ref }}
+      - name: Checkout ${{ inputs.ref || 'feature/tt-hw-planner' }}
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ inputs.ref || 'feature/tt-hw-planner' }}
           submodules: recursive
           fetch-depth: 0
 
       - name: Record what we are verifying
         run: |
-          echo "ref=${{ inputs.ref }}  sha=$(git rev-parse --short HEAD)"
+          echo "ref=${{ inputs.ref || 'feature/tt-hw-planner' }}  sha=$(git rev-parse --short HEAD)"
           git log -1 --format='%h %an %ad %s' --date=iso
           echo "upstream merged? $(git merge-base --is-ancestor origin/main HEAD 2>/dev/null && echo yes || echo 'n/a')"
 
@@ -204,7 +215,7 @@ jobs:
       - name: File an issue on failure
         if: failure()
         run: |
-          BODY="Device verification of \`${{ inputs.ref }}\` FAILED on runner \`$(hostname)\` (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). The branch was NOT reverted -- inspect the logs, then either fix forward or reset the branch by hand."
+          BODY="Device verification of \`${{ inputs.ref || 'feature/tt-hw-planner' }}\` FAILED on runner \`$(hostname)\` (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). The branch was NOT reverted -- inspect the logs, then either fix forward or reset the branch by hand."
           python3 - "$BODY" <<'PY'
           import json, os, sys, urllib.request
           data = json.dumps({"title": "Device verification of the synced tool branch FAILED",
