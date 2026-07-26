@@ -461,12 +461,11 @@ void kernel_main() {
                             pack_reconfig_l1_acc(0);
                         }
 #ifdef ARCH_QUASAR
-                        // [#48552 EXPERIMENT] Scrub the prior matmul's stale DEST dvalid + re-seed MATH/PACK
-                        // sync + repoint the pack BD before the block-sharded (mcast) tilize (matmul->tilize
-                        // transition). set_dvalid needs the static_assert in llk_math_common_api.h commented out
-                        // (dest-dvalid scheme not officially enabled) — EXPERIMENT to test if the dvalid scrub
-                        // fixes the 0x19. Paired with a tilize->matmul scrub after matmul_block_init below.
-                        MATH((llk_math_set_dvalid<p_cleardvalid::FPU, DST_SYNC_MODE>()));
+                        // [#48552] Re-seed MATH/PACK sync + repoint the pack BD before the block-sharded tilize
+                        // (matmul->tilize). This fixed the tilize side (207 blocks OK). NOTE: the dvalid scrub
+                        // (llk_math_set_dvalid) was tried here AND before the matmul and did NOT help the 0x19 --
+                        // the fault is the SyncFull single-DEST-section datacopy<->pack MOP collision (see
+                        // conv2d_op_sharded_program_factory.cpp #47797 notes), not a stale dvalid.
                         MATH((llk_math_pack_sync_init()));
                         PACK((llk_pack_init(tilized_in0_cb_id)));
                         PACK((llk_pack_dest_init()));
@@ -487,13 +486,6 @@ void kernel_main() {
 #endif
                         reconfig_data_format(in0_pretilize_cb_id, in1_cb_id, in0_pretilize_cb_id, in0_cb_id);
                         matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
-#ifdef ARCH_QUASAR
-                        // [#48552 EXPERIMENT] tilize->matmul scrub: clear the tilize's stale DEST dvalid before
-                        // the matmul MVMUL (the transition that faulted per bsp1.txt — 207 tilize blocks OK,
-                        // then MATH 0x19 in the matmul). Only runs when a tilize just ran. Needs the
-                        // llk_math_common_api.h assert commented out. Pairs with the matmul->tilize scrub above.
-                        MATH((llk_math_set_dvalid<p_cleardvalid::FPU, DST_SYNC_MODE>()));
-#endif
                     }
                 } else {
                     if constexpr (pack_relu && !fuse_bias) {

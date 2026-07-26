@@ -85,15 +85,10 @@ inline constexpr MathFidelity get_effective_math_fidelity() {
  **/
 template <std::uint8_t SET_DEST_DVALID, DstSync DST = DstSync::SyncFull, typename Blocked_ = void>
 inline void llk_math_set_dvalid() {
-    // [#48552 EXPERIMENT] static_assert temporarily commented out to test whether the dest-dvalid CLEARDVALID
-    // scrub fixes the fused conv_bmm_tilize block-sharded tilize<->matmul ERROR_TRISC1 0x19 on Quasar. The
-    // guard forbids mixing the dest-dvalid scheme with the semaphore scheme currently used in tt-metal; this
-    // is a scoped experiment to validate the hypothesis before committing to the split-path work. REVERT this
-    // (restore the static_assert) if the scrub does not help / before merge — do NOT ship with it disabled.
-    // static_assert(
-    //     sizeof(Blocked_) == 0,
-    //     "llk_math_set_dvalid belongs to the dest-dvalid sync scheme, should not be mixed with semaphores which are "
-    //     "currently used in tt-metal.");
+    static_assert(
+        sizeof(Blocked_) == 0,
+        "llk_math_set_dvalid belongs to the dest-dvalid sync scheme, should not be mixed with semaphores which are "
+        "currently used in tt-metal.");
     // Fixed: forward the DST (sync-mode) template arg. _llk_math_set_dvalid_ takes <SET_DEST_DVALID, DST>
     // (DST has no default there), so the old single-arg forward failed to instantiate -- this wrapper was
     // effectively uncallable. DST controls whether both dest banks are cleared (SyncFull) or one (SyncHalf).

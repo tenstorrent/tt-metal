@@ -346,7 +346,15 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // forced on height-sharded to route WH/BH off fast_tilize -- Quasar has no fast_tilize (can_use_fast
     // is already false), so the force serves no purpose on Quasar and may be causing the race. Let Quasar
     // height-sharded fall back to half sync. WH/BH and block-sharded keep full sync.
-    if (block_sharded || (height_sharded && !arch_is_quasar)) {
+    // [#48552 EXPERIMENT] Quasar block-sharded ALSO falls back to SyncHalf (was pinned to SyncFull below).
+    // SyncFull's single DEST section makes tile t+1's datacopy MOP collide with tile t's pack drain ->
+    // ERROR_TRISC1 (MATH) 0x19 in conv_bmm_tilize (207 tilize blocks complete, then the matmul faults; the
+    // dvalid scrub did NOT help). SyncHalf double-buffers DEST across two sections and hides that reuse -- the
+    // SAME reason Quasar height-sharded was already excluded here. The SyncFull #47797 pin fixes a half-sync
+    // mcast-loop deadlock that is documented BH-specific ("works on WH, hangs on BH"); Quasar may not need it.
+    // RISK: if the Quasar block-sharded 2D-mcast loop also deadlocks under SyncHalf, this trades the 0x19 for a
+    // hang -- if so, revert to forcing SyncFull for block_sharded on Quasar.
+    if ((block_sharded || height_sharded) && !arch_is_quasar) {
         dst_full_sync_en = true;
     }
 
