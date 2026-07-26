@@ -91,7 +91,12 @@ void kernel_main() {
             const uint32_t roff = ring_rd(rx_buf, read_pos + 16u, rx_buf_size);  // 32-bit offset (Stage 1/2a)
 
             if (len > TT_RDMA_MAX_PAYLOAD) {
-                ++n_bad;  // implausible length -> framing lost (or ring lapped); stop this batch
+                // Implausible length => the producer lapped the consumer (ring overflow) and read_pos now
+                // points at overwritten/garbage bytes. RESYNC to the current write head: drop the stale
+                // span and resume from now. Graceful degradation under overload (process at the drain
+                // rate, drop the excess) instead of spinning on garbage forever (catastrophic collapse).
+                ++n_bad;
+                read_pos = wp;
                 break;
             }
             uint32_t frame = TT_RDMA_HDR_BYTES + len;

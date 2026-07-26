@@ -130,27 +130,44 @@ Because the sender pushes and the BH can't pull, overrun is handled by, in order
 All numbers are **sender-limited** — the userspace `tt_rdma_bf3_send` caps the wire at ~9 Gbps (3.4 at
 1500 B, 9.2 at jumbo). The BH RX has not been stressed to its own ceiling.
 
-## 8. Performance headroom (the BH RX ceiling is not yet found)
+## 8. Performance (measured 2026-07-24)
 
-Once a fast sender (DOCA/DPA gateway) saturates the wire:
+**Sender is the hard part.** The BF3 is a BlueField DPU in embedded mode, so host-PF raw traffic goes
+through the eSwitch slow path:
+- **Host userspace sender:** ~11 Gbps and ~⅔ of frames dropped after `sendmmsg` accepts them —
+  eSwitch-capped, multi-thread/`sendmmsg` does NOT help (`tt-rdma-eswitch-bypass.md`).
+- **DPU-Arm sender on the uplink `p0`** (eSwitch-bypassed): ~16.7 Gbps, ~98 % delivered — now capped by
+  the Arm userspace CPU, not the eSwitch. This is the fastest sender available without DOCA HW TX.
 
-| Stage | Ceiling |
-|---|---|
-| Wire / MAC cut-through RX | 200 G line rate (same MAC that does 400 G on stock TT-link) |
-| NoC write (one eth core) | fabric-limited, » one rail |
-| **RISC per-frame parse + descriptor** | **~1.5 M frames/s** (from the TX arm rate) → the next ceiling |
+**BH RX WRITE (via `noc_async_write` to Tensix L1), jumbo 4080 B, single rail:**
 
-RDMA routing **forces a per-frame parse** (read rkey/offset to know where to push) — with no HW
-classifier, this is on the RISC. At jumbo 4080 B, ~1.5 M frames/s ≈ **~49 Gbps/rail**, **~98 Gbps across
-both external rails**. Levers to go higher, in order:
-1. **Fast sender first** — required even to reach ~49 G/rail and confirm it.
+| Sender rate | BH RX WRITE | loss |
+|---|---|---|
+| 9.4 Gbps (host) | 8.48 Gbps | 0 (sender-limited) |
+| **15.8 Gbps (DPU 2 thr)** | **15.8 Gbps, 477k frames/s** | **0 — lossless** |
+| ~16.9 Gbps (DPU 4 thr) | ~16 Gbps | a few k drops/s (at the edge) |
+
+**→ Measured BH RX drain ceiling ≈ 15.8 Gbps/rail lossless** (SEND parse ≈ same) — ~2× the earlier
+host-limited 8.5 Gbps. It sits right at the DPU userspace sender's own ~16.7 Gbps ceiling, so the two
+are **co-limited**; a DOCA HW-TX sender is needed to see if the chip goes higher. **~2 rails → ~32 Gbps
+aggregate** by extension.
+
+**Overload behavior (fixed):** past the drain rate the ring laps; a single bad-length frame used to
+`break` the walk forever → catastrophic collapse to ~0. Now the walk **resyncs to the write head on a
+bad frame** (drop the lapped span, resume) → graceful degradation. But under heavy overload the
+lap/resync work competes with draining, so throughput still *degrades* (e.g. 2.2 Gbps at 16.7 Gbps in) —
+the real fix is **PFC (BH.6)** to keep the sender ≤ drain, staying in the lossless regime.
+
+**Levers to raise the ~16 Gbps/rail ceiling toward line rate**, in order:
+1. **DOCA/DPA HW-TX sender** — required even to push past ~16.7 Gbps and find the true chip ceiling.
 2. **Multi-rail** — ~2× (as TX did for its 397 G aggregate).
-3. **Amortize the per-frame descriptor** — coalesce contiguous same-MR frames into one `noc_async_write`;
-   tune the barrier cadence. (Helps the descriptor side, not the parse side.)
-4. **Bigger frames** — more bytes per header (needs MTU > 4080).
-5. **Get the RISC off the per-frame parse** — revive the HW RX classifier (steer by ethertype/flow) or
-   an overlay/DMA-driven path. This is where the gap to line-rate/rail lives; some per-frame RISC work
-   is fundamental unless HW-assisted, because routing needs the header.
+3. **Lower per-poll / per-frame overhead** — coalesce `noc_async_write`s for contiguous same-MR frames,
+   batch the barrier, trim the stats/pace in the hot loop.
+4. **Bigger frames** — more bytes per header (needs MTU > 4080, another DPU-side step).
+5. **PFC** — makes ≤-ceiling operation lossless and removes the resync tax.
+6. **Get the RISC off the per-frame parse** — revive the HW RX classifier (dead code) or an
+   overlay/DMA-driven path; some per-frame RISC work is fundamental unless HW-assisted (routing needs
+   the header). This is where the gap to per-rail line rate ultimately lives.
 
 ## 9. Open questions / follow-ups
 
