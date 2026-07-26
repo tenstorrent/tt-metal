@@ -222,6 +222,39 @@ def _stage_table_lines(stages: list) -> list:
     return out
 
 
+def _achievable_band_ms(floor_ms: float):
+    """The 60-80%-of-ceiling band expressed in ms, or None.
+
+    Derived from the SAME definition the LLM-decode branch uses: perf_target.target_from_floor_ms
+    turns a floor into a rate ceiling and a (lo, hi) rate band, so a slower ms is a LOWER rate --
+    the ms band is therefore [floor/hi_frac, floor/lo_frac]. Sourced from perf_target rather than
+    re-deriving 0.6/0.8 here, so one module owns what "achievable" means.
+    """
+    try:
+        from agent.perf_target import target_from_floor_ms
+    except Exception:  # noqa: BLE001
+        return None
+    tgt = target_from_floor_ms(floor_ms)
+    lo_rate, hi_rate = tgt.band
+    if not (lo_rate and hi_rate):
+        return None
+    return (1000.0 / hi_rate, 1000.0 / lo_rate)
+
+
+def _floor_status(floor_ms: float, measured_ms: float) -> str:
+    """BELOW_BAND | IN_BAND | ABOVE_BAND for a floor-derived (non-decode) target.
+
+    Delegates to perf_target.score so the "measured beat the ceiling -> target suspect, never bank
+    it" judgement lives in ONE place; this table used to re-implement that check and then guess
+    which side was stale.
+    """
+    try:
+        from agent.perf_target import score, target_from_floor_ms
+    except Exception:  # noqa: BLE001
+        return "UNKNOWN"
+    return str(score(target_from_floor_ms(floor_ms), measured_ms).get("status") or "UNKNOWN")
+
+
 def _roofline_lines(throughput: dict | None, forward_ms: float | None) -> list:
     """The adaptive 'Roofline & utilization' table. MEASURED values (tok/s, mem BW, utilization,
     at-floor) are computed HERE from the ms actually being reported (`forward_ms`) against the STATIC
@@ -267,21 +300,37 @@ def _roofline_lines(throughput: dict | None, forward_ms: float | None) -> list:
             if have_floor
             else "  modeled floor       : n/a"
         )
+        # The floor is NOT a goal: its compute term assumes the FULL grid even for an op that ran on
+        # a few cores, and L1/sharded ops fall back to DRAM bandwidth for want of a calibrated L1
+        # peak. No real kernel reaches it, so a bare "% of floor" invites chasing an unreachable
+        # number. Show the same 60-80% ACHIEVABLE band the LLM branch shows -- derived from THIS
+        # floor via perf_target -- so both branches share one definition of "done".
+        _band = _achievable_band_ms(floor) if have_floor else None
+        if _band:
+            out.append(f"  achievable (60-80%) : {_band[0]:.2f} - {_band[1]:.2f} ms")
         out.append(
             f"  measured            : {fm:.2f} ms" if fm else "  measured            : n/a (no valid forward ms)"
         )
         if have_floor and fm:
-            if fm < floor:
-                # measured is FASTER than the modeled floor -> the floor is from a different (stale)
-                # profile than the measured ms; report it honestly instead of a bogus >100% at-floor.
+            status = _floor_status(floor, fm)
+            if status == "ABOVE_BAND":
+                # Measured beat a floor that is unreachable BY CONSTRUCTION, so the two numbers
+                # describe different states -- usually a measurement taken at one profiling depth
+                # against a floor summed at another. Name both sides rather than blaming one: this
+                # line used to assert the FLOOR was stale, and on llama3_1_8b_p150 it was the
+                # MEASUREMENT that was stale (2-layer window vs a 16-layer floor).
                 out.append(
-                    f"  at-floor            : measured {fm:.2f} ms is BELOW the modeled floor {floor:.2f} ms "
-                    "— floor stale/suspect (re-profile to refresh)"
+                    f"  status              : ABOVE_BAND — measured {fm:.2f} ms beats the modeled floor "
+                    f"{floor:.2f} ms, impossible for a single workload: one side is stale/suspect "
+                    "(floor and measurement come from different profiles/depths — re-profile both; "
+                    "never bank this as a win)"
                 )
             else:
+                _hint = "reached the achievable band — done" if status == "IN_BAND" else "keep optimizing"
                 out.append(
                     f"  at-floor            : {floor / fm * 100:.0f}%   ({fm - floor:.2f} ms reachable headroom)"
                 )
+                out.append(f"  status              : {status} — {_hint}")
         out.append("  (tok/s/u — N/A: not an LLM decode pipeline)")
     out.append("")
     return out

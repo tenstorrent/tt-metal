@@ -40,6 +40,23 @@ def test_module_floor_form_when_not_llm():
     assert "tok/s/u — N/A" in out
 
 
+def test_floor_form_shows_the_achievable_band_not_just_the_floor():
+    """The floor is unreachable BY CONSTRUCTION (full-grid compute term, DRAM fallback for L1), so
+    the non-decode table must publish the same 60-80% achievable band the decode branch does --
+    otherwise an operator reads a bare '% of floor' as a goal and chases a number no kernel hits.
+    Band is in ms and INVERTED relative to the rate band: slower ms = lower rate."""
+    out = "\n".join(S._roofline_lines({"is_llm_decode": False, "modeled_floor_ms": 8.90}, 11.82))
+    # 8.90 / 0.80 = 11.125 ; 8.90 / 0.60 = 14.833
+    assert "achievable (60-80%) : 11.12 - 14.83 ms" in out
+    assert "status              : IN_BAND" in out  # 11.82 ms sits inside the band
+
+
+def test_floor_form_below_band_keeps_optimizing():
+    out = "\n".join(S._roofline_lines({"is_llm_decode": False, "modeled_floor_ms": 8.90}, 40.0))
+    assert "status              : BELOW_BAND" in out and "keep optimizing" in out
+    assert "at-floor            : 22%" in out  # 8.90 / 40.0
+
+
 def test_stale_guard_renders_na_not_zero():
     # invalid forward ms must NOT produce a fake 0.0 tok/s/u / 0% — it renders n/a
     out = S._roofline_lines(_LLM, 0.0)
@@ -58,6 +75,12 @@ def test_floor_form_flags_stale_when_measured_below_floor():
     out = "\n".join(S._roofline_lines({"is_llm_decode": False, "modeled_floor_ms": 14.81}, 11.82))
     assert "stale/suspect" in out
     assert "125%" not in out and "at-floor            : 1" not in out  # no >100% number
+    # It must NOT assert WHICH side is stale. On llama3_1_8b_p150 the FLOOR was the fresh number
+    # (16-layer profile) and the MEASUREMENT was the leftover (2-layer window), i.e. the opposite of
+    # the ace_step case above; the verdict comes from perf_target.score, which only knows the pair
+    # is inconsistent.
+    assert "ABOVE_BAND" in out
+    assert "floor stale" not in out
 
 
 def test_llm_form_flags_stale_when_measured_exceeds_ceiling():
