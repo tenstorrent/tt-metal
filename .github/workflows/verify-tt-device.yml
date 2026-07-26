@@ -101,8 +101,23 @@ jobs:
             exit 0
           fi
 
+          # FREE IS NOT THE SAME AS HEALTHY. A board left in a bad state by a killed or wedged run
+          # holds nothing, so every check above passes -- and then the gates die 15 minutes later
+          # with "Read 0xffffffff over PCIe ID N: the board should be reset". Seen for real: a run
+          # spun 100 minutes inside from_torch on a FABRIC_1D_RING mesh and left a chip unresponsive.
+          # Catch it here, cheaply, instead of after a full build.
+          if command -v tt-smi >/dev/null; then
+            if ! timeout 45 tt-smi -s >/dev/null 2>&1; then
+              echo "idle=false" >> "$GITHUB_OUTPUT"
+              echo "::warning::Board looks UNHEALTHY -- tt-smi could not read telemetry (hung or errored)."
+              echo "::warning::This needs a human: reset the board (tt-smi -r ...) before verification can pass."
+              exit 0
+            fi
+            echo "tt-smi telemetry readable."
+          fi
+
           echo "idle=true" >> "$GITHUB_OUTPUT"
-          echo "Device is free."
+          echo "Device is free and responsive."
 
   verify:
     needs: preflight
@@ -229,18 +244,35 @@ jobs:
           . python_env/bin/activate
           pytest -q scripts/tt_hw_planner/tests
 
-      - name: File an issue on failure
+      - name: File an issue on failure (comment on the open one instead of duplicating)
         if: failure()
         run: |
           BODY="Device verification of \`${{ inputs.ref || 'feature/tt-hw-planner' }}\` FAILED on runner \`$(hostname)\` (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). The branch was NOT reverted -- inspect the logs, then either fix forward or reset the branch by hand."
           python3 - "$BODY" <<'PY'
+          # Daily schedule + a persistent cause (a board needing a reset, say) would otherwise open
+          # a fresh identical issue every morning. Reuse the open one and add a comment, so the
+          # issue count tracks distinct problems rather than days elapsed.
           import json, os, sys, urllib.request
-          data = json.dumps({"title": "Device verification of the synced tool branch FAILED",
-                             "body": sys.argv[1]}).encode()
-          req = urllib.request.Request(os.environ["GH_API"] + "/issues", data=data,
-              headers={"Authorization": "token %s" % os.environ["TOKEN"],
-                       "Accept": "application/vnd.github+json"})
-          print(urllib.request.urlopen(req).status)
+
+          API, TOKEN = os.environ["GH_API"], os.environ["TOKEN"]
+          TITLE = "Device verification of the synced tool branch FAILED"
+          HDRS = {"Authorization": "token %s" % TOKEN, "Accept": "application/vnd.github+json"}
+
+          def call(url, data=None):
+              req = urllib.request.Request(url, data=data, headers=HDRS)
+              with urllib.request.urlopen(req) as r:
+                  return r.status, json.load(r) if r.length != 0 else None
+
+          _, issues = call(API + "/issues?state=open&per_page=100")
+          existing = next((i for i in issues if i["title"] == TITLE and "pull_request" not in i), None)
+
+          if existing:
+              status, _ = call(API + "/issues/%d/comments" % existing["number"],
+                               json.dumps({"body": sys.argv[1]}).encode())
+              print("commented on #%d -> %s" % (existing["number"], status))
+          else:
+              status, new = call(API + "/issues", json.dumps({"title": TITLE, "body": sys.argv[1]}).encode())
+              print("opened #%s -> %s" % (new["number"], status))
           PY
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
