@@ -38,6 +38,9 @@ int main(int argc, char** argv) {
     const int hold_s = (argc > 3) ? std::atoi(argv[3]) : 20;
     const uint32_t wrap = (argc > 4) ? std::strtoul(argv[4], nullptr, 0) : 1u;     // 1 = BUF_WRAP streaming (Stage 2a)
     const uint32_t bigring = (argc > 5) ? std::strtoul(argv[5], nullptr, 0) : 1u;  // 1 = 128KB RX ring (Stage 2)
+    // Stage 2b noc_target: 0 = local L1 copy (Stage 1/2a); 1 = loopback (own eth L1 via NoC);
+    // 2 = Tensix worker (0,0) L1 via NoC (off-core, the real RDMA case).
+    const uint32_t noc_target = (argc > 6) ? std::strtoul(argv[6], nullptr, 0) : 0u;
     const uint32_t rx_ring_addr = bigring ? TT_RDMA_RX_RING_BIG_ADDR : TT_RDMA_RX_RING_ADDR;
     const uint32_t rx_ring_size = bigring ? TT_RDMA_RX_RING_BIG_SIZE : TT_RDMA_RX_RING_SIZE;
 
@@ -81,12 +84,43 @@ int main(int argc, char** argv) {
               << "  wrap=" << wrap
               << "\n  BF3: sudo tt_rdma_bf3_send <if> <n> 02:00:00:00:00:02 0x1af6 0x10 <plen> 0x00CAFE42 0\n";
 
+    // Resolve the WRITE landing target by noc_target mode.
+    uint32_t noc_x = 0, noc_y = 0, noc_base = 0;  // noc_base==0 -> local L1 copy in the kernel
+    CoreCoord verify_core = eth_phys;
+    uint32_t verify_addr = kMrTarget;  // Stage 1/2a: local eth L1 (TX_BUF1)
+    const char* mode = "local-copy";
+    if (noc_target == 1) {  // loopback: eth core's own TX_BUF0 via the NoC (proves noc_async_write path)
+        noc_x = (uint32_t)eth_phys.x;
+        noc_y = (uint32_t)eth_phys.y;
+        noc_base = TT_RDMA_TX_BUF0_ADDR;
+        verify_core = eth_phys;
+        verify_addr = TT_RDMA_TX_BUF0_ADDR;
+        mode = "noc-loopback(own eth L1)";
+    } else if (noc_target == 2) {  // off-core: a Tensix worker's L1 via the NoC (the real RDMA case)
+        const CoreCoord w = device->worker_core_from_logical_core(CoreCoord{0, 0});
+        noc_x = (uint32_t)w.x;
+        noc_y = (uint32_t)w.y;
+        noc_base = 0x20000u;  // safe L1 scratch on an idle worker
+        verify_core = w;
+        verify_addr = 0x20000u;
+        mode = "noc-tensix(0,0 L1)";
+    }
+    std::printf(
+        "  WRITE target mode=%s  noc=(%u,%u)+0x%x  verify @core(%u,%u):0x%x\n",
+        mode,
+        noc_x,
+        noc_y,
+        noc_base,
+        (unsigned)verify_core.x,
+        (unsigned)verify_core.y,
+        verify_addr);
+
     // Program MR slot 0 (tt_rdma_mr_entry_t, 8 u32).
     std::vector<uint32_t> mr{kMrTarget, 0u, kMrLen, 0u, kRkey, TT_MR_REMOTE_WRITE, 0u, 0u};
     cluster.write_core(device->id(), eth_phys, mr, TT_RDMA_MR_TABLE_ADDR);
-    // Clear the WRITE landing scratch + the stats region.
+    // Clear the WRITE landing target (on its own core) + the stats region.
     std::vector<uint32_t> zeros(kMrLen / 4, 0u);
-    cluster.write_core(device->id(), eth_phys, zeros, kMrTarget);
+    cluster.write_core(device->id(), verify_core, zeros, verify_addr);
     std::vector<uint32_t> zstats(8, 0u);
     cluster.write_core(device->id(), eth_phys, zstats, (uint32_t)stats_addr);
 
@@ -104,7 +138,10 @@ int main(int argc, char** argv) {
          rx_ring_addr,
          rx_ring_size,
          TT_RDMA_MR_TABLE_ADDR,
-         wrap});
+         wrap,
+         noc_x,
+         noc_y,
+         noc_base});
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
@@ -130,11 +167,13 @@ int main(int argc, char** argv) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 
-    // Verify the WRITE landing: first 8 bytes should be "TTWR" + 0x04,0x05,0x06,0x07.
-    auto land = cluster.read_core<uint32_t>(device->id(), eth_phys, kMrTarget, 4 * sizeof(uint32_t));
+    // Verify the WRITE landing (on the resolved target core): first 8 bytes should be "TTWR" + 0x04..0x07.
+    auto land = cluster.read_core<uint32_t>(device->id(), verify_core, verify_addr, 4 * sizeof(uint32_t));
     std::printf(
-        "  WRITE landing @0x%x [0..3] = %08x %08x %08x %08x  (word0 'TTWR' = 0x52575454)\n",
-        kMrTarget,
+        "  WRITE landing @core(%u,%u):0x%x [0..3] = %08x %08x %08x %08x  (word0 'TTWR' = 0x52575454)\n",
+        (unsigned)verify_core.x,
+        (unsigned)verify_core.y,
+        verify_addr,
         land[0],
         land[1],
         land[2],

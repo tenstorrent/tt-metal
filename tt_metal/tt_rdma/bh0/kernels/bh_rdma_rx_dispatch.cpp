@@ -26,6 +26,8 @@
 
 #include <cstdint>
 
+#include "internal/ethernet/dataflow_api.h"  // noc_async_write, get_noc_addr, noc_async_write_barrier
+
 #include "tt_metal/hw/inc/internal/ethernet/tt_rdma_wire.h"
 #include "tt_metal/hw/inc/internal/ethernet/tt_rdma_l1_layout.h"
 #include "tt_metal/hw/inc/internal/ethernet/tt_rdma_eth_rx.h"
@@ -55,6 +57,14 @@ void kernel_main() {
     const uint32_t rx_buf_size = get_arg_val<uint32_t>(4);
     const uint32_t mr_table = get_arg_val<uint32_t>(5);
     const uint32_t wrap = get_arg_val<uint32_t>(6);
+    // Stage 2b: off-core WRITE landing via noc_async_write. If noc_base != 0, WRITE lands at
+    // get_noc_addr(noc_x, noc_y, noc_base + remote_offset) — a Tensix L1 / DRAM / another core, moved
+    // by the NoC engine (RISC issues one descriptor, does NOT copy bytes). noc_base == 0 -> Stage 1/2a
+    // local L1 copy (ring_copy). This is the RX analog of the TX "RISC arms, HW moves" result.
+    const uint32_t noc_x = get_arg_val<uint32_t>(7);
+    const uint32_t noc_y = get_arg_val<uint32_t>(8);
+    const uint32_t noc_base = get_arg_val<uint32_t>(9);
+    const bool use_noc = (noc_base != 0);
 
     volatile tt_l1_ptr uint32_t* hb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hb_addr);
     volatile tt_l1_ptr uint32_t* stats = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stats_addr);
@@ -103,7 +113,21 @@ void kernel_main() {
                     const uint32_t mr_rkey = mr[4];    // rkey
                     const uint32_t mr_access = mr[5];  // access_flags
                     if (mr_rkey == rkey && (mr_access & TT_MR_REMOTE_WRITE) && (roff + len) <= mr_len) {
-                        ring_copy(mr_base + roff, rx_buf, read_pos + TT_RDMA_HDR_BYTES, rx_buf_size, len);
+                        const uint32_t src_off = (read_pos + TT_RDMA_HDR_BYTES) % rx_buf_size;
+                        if (use_noc) {
+                            // NoC engine moves the payload off-core; RISC issues the descriptor only
+                            // (no per-byte copy). Straddle-split at the ring wrap boundary.
+                            if (src_off + len <= rx_buf_size) {
+                                noc_async_write(rx_buf + src_off, get_noc_addr(noc_x, noc_y, noc_base + roff), len);
+                            } else {
+                                const uint32_t first = rx_buf_size - src_off;
+                                noc_async_write(rx_buf + src_off, get_noc_addr(noc_x, noc_y, noc_base + roff), first);
+                                noc_async_write(
+                                    rx_buf, get_noc_addr(noc_x, noc_y, noc_base + roff + first), len - first);
+                            }
+                        } else {
+                            ring_copy(mr_base + roff, rx_buf, src_off, rx_buf_size, len);
+                        }
                         ++n_write_ok;
                     }
                 }
@@ -114,6 +138,10 @@ void kernel_main() {
             ++total;
             read_pos = wrap ? ((read_pos + frame) % rx_buf_size) : (read_pos + frame);
             avail -= frame;
+        }
+
+        if (use_noc) {
+            noc_async_write_barrier();  // drain this batch's off-core writes (bounds outstanding NoC cmds)
         }
 
         *hb = total;
