@@ -525,17 +525,16 @@ Result conv2d_L1(
     // split is requested, matching the WH/BH config (act_block_w == full_K, reader gather == CB size).
     const bool arch_is_quasar = device->arch() == tt::ARCH::QUASAR;
     const bool split_env_requested = (std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") != nullptr);
-    // [#48552 Stage2] Block-sharded convs also take the split path. For block-sharded, K is split across the
-    // grid columns so each core's per-core K is already act_block_w (a single K-block); we set full_inner_dim
-    // (no reduction-dim slicing) but do NOT rewrite act_block_w to the FULL K (that is the height-sharded
-    // per-core K). ITERATION 1 — validate the 2D geometry on the emulator (layer3/layer4).
+    // [#48552 Stage2] Block-sharded convs also take the split path. CORRECTION (iter1->iter2): block-sharding
+    // splits N (out_channels), NOT K -- the weights keep FULL K height (proven: Program B matmul demanded
+    // b_height=2304=full-K while Program A had tilized only Cin=256 because act_block_w was not rewritten). So
+    // block-sharded needs the SAME full-K activation as height-sharded; set act_block_w = full_K for BOTH. The
+    // N-split lives in Program B's 2D config (per_core_N = N/num_cores_c). full_inner_dim -> single K-block.
     const bool force_conv_no_spill = (!arch_is_quasar || split_env_requested) &&
                                      (height_sharded_conv || block_sharded_conv) && !mm_conv && !conv_is_1d_depthwise &&
                                      (kernel_size[0] > 1) && (full_inner_dim_k_ntiles <= kQuasarConvNoSpillMaxKTiles);
     if (force_conv_no_spill) {
-        if (height_sharded_conv) {
-            opt_conv_op_block_config.act_block_w_ntiles = full_inner_dim_k_ntiles;
-        }
+        opt_conv_op_block_config.act_block_w_ntiles = full_inner_dim_k_ntiles;
         conv_config.full_inner_dim = true;
 
         // The no-spill path grows act_block_w from one filter row to the full K (filter_h*filter_w*Cin).
