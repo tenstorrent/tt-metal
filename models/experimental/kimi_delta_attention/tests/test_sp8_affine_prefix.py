@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 import torch
 
@@ -79,7 +81,14 @@ def test_sp8_affine_prefix_production_tp4_payload(mesh_device: ttnn.MeshDevice) 
     )
 
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        actual_a, actual_b = probe.run(device_a, device_b)
+        device_barrier = os.getenv("KDA_SP_DEVICE_BARRIER", "0") == "1"
+        actual_a, actual_b = probe.run(
+            device_a,
+            device_b,
+            synchronize_stages=not device_barrier,
+            device_barrier=device_barrier,
+        )
+    probe._synchronize()
 
     expected_a: list[torch.Tensor] = []
     expected_b: list[torch.Tensor] = []

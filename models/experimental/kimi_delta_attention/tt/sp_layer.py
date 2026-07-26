@@ -597,7 +597,17 @@ class SP8AffineTP1KimiDeltaAttention:
             for layer, (transform_a, transform_b) in zip(self.layers, grouped_transforms, strict=True)
         )
         span_a, span_b = zip(*span_transforms, strict=True)
-        prefix_a, prefix_b = self.prefix.run(span_a, span_b, synchronize_stages=True)
+        # The default keeps the conservative eager fences.  The opt-in tree
+        # barrier is device-queued after every affine stage's local matmuls,
+        # so no rank can enter the following fabric distance early while the
+        # host remains free to enqueue the rest of the KDA schedule.
+        device_barrier = os.getenv("KDA_SP_DEVICE_BARRIER", "0") == "1"
+        prefix_a, prefix_b = self.prefix.run(
+            span_a,
+            span_b,
+            synchronize_stages=not device_barrier,
+            device_barrier=device_barrier,
+        )
 
         # Each inclusive prefix maps the common initial state to the state at
         # the end of its rank. Send that completed state one hop in parallel so

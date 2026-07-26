@@ -298,6 +298,22 @@ state-transfer protocol and measure its components.
   unsupported during trace capture.  The next real fence-removal target is
   therefore a custom fused fabric protocol with an explicit cross-rank stage
   barrier, rather than an event-only Python scheduler.
+* The first device-queued version of that barrier now exists behind
+  `KDA_SP_DEVICE_BARRIER=1`.  It is intentionally a socket-level prototype,
+  not a new C++ fused operation: after each of the first two affine prefix
+  distances, a reversed binary tree gathers a one-tile completion token at
+  rank 0, then the existing forward trees release it to all ranks.  Queue
+  order places the gather after the local `(A, B)` compositions and the next
+  prefix distance after the release, providing the missing global ordering
+  without `ttnn.synchronize_device` between stages.  The exact 1 MiB/rank
+  affine-prefix PCC test, the two-call SP8 KDA/cache-reuse test, and the
+  production-rank T=5120 KDA PCC test all pass on LB (2026-07-26).  The
+  three-repetition eager scheduler probe also completes without a timeout.
+  This is a correctness/stability result only: it has not yet been profiled
+  as a slowest-device interval, is not yet trace-captured, and two prefix
+  lanes still emit the runtime's multiple-sender-core warning.  The next
+  optimisation step is to replace the 14 control-token transfers per barrier
+  with a compact UDM/custom-kernel gather-release that reuses fabric state.
 * The direct TP=4 output matmul has no safe grid-only win.  An explicit 10x8
   prefill grid passed the full target-shape SP2xTP4 PCC suite, but raised its
   output matmul from about **205 us** to **223 us** and the three-replay
@@ -398,6 +414,11 @@ KDA_SP8_TARGET_SHAPE=1 KDA_SP8_TEST_SEQ=5120 scripts/run_safe_pytest.sh -svv mod
 # SP=8 affine protocol: production TP4-rank state payload (8 heads) with the
 # real 3-stage fabric prefix. This is a PCC gate, not a perf benchmark.
 KDA_SP_PREFIX_LANES=2 KDA_SP8_AFFINE_TARGET_SHAPE=1 scripts/run_safe_pytest.sh -svv models/experimental/kimi_delta_attention/tests/test_sp8_tp1.py::test_sp8_tp1_affine_layer_pcc
+
+# Device-queued SP8 affine prefix barrier: removes the host fences between
+# the first two prefix distances. This remains a PCC/stability gate.
+KDA_SP_DEVICE_BARRIER=1 KDA_SP_PREFIX_LANES=2 scripts/run_safe_pytest.sh -svv models/experimental/kimi_delta_attention/tests/test_sp8_affine_prefix.py::test_sp8_affine_prefix_production_tp4_payload
+KDA_SP_DEVICE_BARRIER=1 KDA_SP_PREFIX_LANES=2 KDA_SP8_AFFINE_TARGET_SHAPE=1 scripts/run_safe_pytest.sh -svv models/experimental/kimi_delta_attention/tests/test_sp8_tp1.py::test_sp8_tp1_affine_layer_pcc
 
 # Safe eager rank-release scheduler control and candidate. Compare the Tracy
 # signpost intervals only; neither path is a Galaxy latency estimate.
