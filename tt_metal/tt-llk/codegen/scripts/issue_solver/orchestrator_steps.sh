@@ -145,7 +145,7 @@ execute_step_validate_input() {
     [ -n "$wt" ] && [ -d "$wt" ] || { echo "REJECT: WORKTREE_DIR missing or not a directory: '$wt'"; return 1; }
     cd "$wt/tt_metal/tt-llk" || { echo "REJECT: cannot cd into $wt/tt_metal/tt-llk"; return 1; }
 
-    local S="$_ORCH_SCRIPTS" mode num title wb tb clb cpr arches arch ok=1
+    local S="$_ORCH_SCRIPTS" mode num title wb tb clb cpr arches arch dirty ok=1
     mode="$(python "$S/state.py" --worktree-dir "$wt" get RUN_MODE)"
     num="$(python "$S/state.py" --worktree-dir "$wt" get ISSUE_NUMBER)"
     title="$(python "$S/state.py" --worktree-dir "$wt" get ISSUE_TITLE)"
@@ -167,6 +167,14 @@ execute_step_validate_input() {
         [ -n "$arch" ] || { echo "REJECT: TARGET_ARCH is empty (single-arch run)"; ok=0; }
     else
         [ -n "$arches" ] || { echo "REJECT: TARGET_ARCHES is empty (multi-arch run)"; ok=0; }
+    fi
+    if ! dirty="$(git -C "$wt" status --porcelain --untracked-files=all 2>/dev/null)"; then
+        echo "REJECT: cannot inspect worktree status"
+        ok=0
+    elif [ -n "$dirty" ]; then
+        echo "REJECT: issue-solver worktree must start clean; unexpected paths:"
+        printf '%s\n' "$dirty"
+        ok=0
     fi
     [ "$ok" = 1 ] || return 1
     echo "OK: RUN_MODE=$mode ISSUE=#$num arch=${arch:-$arches} TEST_BACKEND=$tb"
@@ -498,12 +506,15 @@ execute_step_advance_writer() {
 }
 
 # ===========================================================================
-# Step 3 — record the worker's changed files into state (for tester/reviewer).
+# Step 3 — record the worker's tracked and untracked changed files into state
+# (for tester/reviewer).
 # ===========================================================================
 execute_step_record_changed_files() {
     local _L; _L="$(_LOG)"
-    local wt cf; wt="$(_wt)"
-    cf="$(git -C "$wt" diff --name-only 2>/dev/null || true)"
+    local wt tracked untracked cf; wt="$(_wt)"
+    tracked="$(git -C "$wt" diff --name-only 2>/dev/null || true)"
+    untracked="$(git -C "$wt" ls-files --others --exclude-standard 2>/dev/null || true)"
+    cf="$(printf '%s\n%s\n' "$tracked" "$untracked" | sed '/^$/d' | sort -u)"
     ss CHANGED_FILES "$cf"
     printf '%s\n' "$cf"
 }
@@ -799,33 +810,91 @@ execute_step_write_generated_patch() {
     local _L; _L="$(_LOG)"
     local wt num title; wt="$(_wt)"; num="$(sg ISSUE_NUMBER)"; title="$(sg ISSUE_TITLE)"
     local mode; mode="$(sg RUN_MODE)"
-    local cf cfj base fix
-    cf="$(git -C "$wt" diff --name-only 2>/dev/null | grep -v '/perf_data/' | grep -v '^perf_data/' || true)"
+    local cf cfj base fix packaged tmp_patch
+    # Input validation requires a clean dedicated worktree, so every non-ignored
+    # change now belongs to this run. Stage the whole worktree and exclude only
+    # generated test infrastructure.
+    local -a pathspec=(
+        .
+        ':(exclude,glob)**/perf_data/**'
+        ':(exclude,glob)**/__pycache__/**'
+        ':(exclude)tt_metal/tt-llk/tests/.venv'
+        ':(exclude,glob)tt_metal/tt-llk/tests/.venv/**'
+        ':(exclude)tt_metal/tt-llk/tests/sfpi'
+        ':(exclude,glob)tt_metal/tt-llk/tests/sfpi/**'
+    )
+
+    base="$(sg GIT_COMMIT)"
+    if ! git -C "$wt" rev-parse --verify "${base}^{commit}" >/dev/null 2>&1; then
+        ss OBSTACLE "packaging failed: invalid base commit"
+        execute_step_mark_status failed
+        echo "PACKAGING_FAILED: invalid base commit '$base'" >&2
+        return 1
+    fi
+    ss BASE_COMMIT "$base"
+
+    if ! git -C "$wt" -c advice.addIgnoredFile=false add -A -- "${pathspec[@]}"; then
+        ss OBSTACLE "packaging failed: could not stage the complete fix"
+        execute_step_mark_status failed
+        echo "PACKAGING_FAILED: git add failed" >&2
+        return 1
+    fi
+
+    cf="$(git -C "$wt" diff --cached --name-only)"
     ss CHANGED_FILES "$cf"
     cfj="$(CF="$cf" python -c "import json,os;print(json.dumps([l for l in os.environ['CF'].splitlines() if l]))")"
     ss CHANGED_FILES_JSON "$cfj" --json
 
-    base="$(sg GIT_COMMIT)"
-    ss BASE_COMMIT "$base"
-    local pathspec="tt_metal/tt-llk tt_metal/hw/ckernels tt_metal/hw/inc/api/compute ttnn/cpp/ttnn/operations tests/tt_metal :(exclude,glob)**/perf_data/** :(exclude,glob)**/__pycache__/** :(exclude)tt_metal/tt-llk/tests/.venv :(exclude)tt_metal/tt-llk/tests/sfpi"
-    git -C "$wt" -c advice.addIgnoredFile=false add -A -- $pathspec 2>/dev/null || true
     fix=""
     if ! git -C "$wt" diff --cached --quiet 2>/dev/null; then
         local cm="AI issue-solver: fix #${num} ${title}"
         [ "$mode" = multi ] && cm="AI issue-solver: multi-arch fix #${num} ${title}"
-        git -C "$wt" -c user.name="ai-code-gen" -c user.email="ai-code-gen@tenstorrent.com" \
-            commit -q -m "$cm" 2>/dev/null || true
-        fix="$(git -C "$wt" rev-parse HEAD 2>/dev/null || echo "")"
+        if ! git -C "$wt" -c user.name="ai-code-gen" -c user.email="ai-code-gen@tenstorrent.com" \
+            commit -q -m "$cm"; then
+            ss OBSTACLE "packaging failed: could not commit the complete fix"
+            execute_step_mark_status failed
+            echo "PACKAGING_FAILED: git commit failed; fix remains staged" >&2
+            return 1
+        fi
+        fix="$(git -C "$wt" rev-parse HEAD)"
     fi
     ss FIX_COMMIT "$fix"
+
     if [ -n "$fix" ] && [ "$fix" != "$base" ]; then
-        git -C "$wt" diff --binary "$base" "$fix" > "$_L/generated.patch" 2>/dev/null || true
+        packaged="$(git -C "$wt" diff --name-only "$base" "$fix")"
+        if [ "$packaged" != "$cf" ]; then
+            ss OBSTACLE "packaging failed: committed paths do not match the staged fix"
+            execute_step_mark_status failed
+            echo "PACKAGING_FAILED: staged and committed path sets differ" >&2
+            return 1
+        fi
+
+        tmp_patch="$_L/.generated.patch.$$"
+        if ! git -C "$wt" diff --binary "$base" "$fix" > "$tmp_patch"; then
+            rm -f "$tmp_patch"
+            ss OBSTACLE "packaging failed: could not create generated.patch"
+            execute_step_mark_status failed
+            echo "PACKAGING_FAILED: git diff failed" >&2
+            return 1
+        fi
+        if [ ! -s "$tmp_patch" ]; then
+            rm -f "$tmp_patch"
+            ss OBSTACLE "packaging failed: generated.patch is empty"
+            execute_step_mark_status failed
+            echo "PACKAGING_FAILED: generated.patch is empty" >&2
+            return 1
+        fi
+        if ! _disk_guard mv "$tmp_patch" "$_L/generated.patch"; then
+            rm -f "$tmp_patch"
+            ss OBSTACLE "packaging failed: could not publish generated.patch"
+            execute_step_mark_status failed
+            echo "PACKAGING_FAILED: could not publish generated.patch" >&2
+            return 1
+        fi
     else
-        git -C "$wt" -c advice.addIgnoredFile=false add -AN -- $pathspec 2>/dev/null || true
-        git -C "$wt" diff --binary HEAD -- $pathspec > "$_L/generated.patch" 2>/dev/null || true
-        git -C "$wt" reset -q -- $pathspec 2>/dev/null || true
+        rm -f "$_L/generated.patch"
     fi
-    [ -s "$_L/generated.patch" ] || rm -f "$_L/generated.patch"
+
     echo "FIX_COMMIT=${fix:-none} CHANGED=$(printf '%s' "$cf" | grep -c . || true)"
 }
 
