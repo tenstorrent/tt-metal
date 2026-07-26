@@ -16,12 +16,13 @@ The current accepted control is a complete, child-mesh captured `SP=2 x TP=4` fo
 | --- | ---: |
 | Historical cloned SP2xTP4 control | 2.855 ms (`2026_07_26_15_59_04`) |
 | First direct-output SP2xTP4 control | 2.813 ms (`2026_07_26_21_17_29`) |
-| Retained SP2xTP4 working control | **2.790 ms** (`2026_07_26_21_37_43`) |
-| Retained-control steady-state range | 2.781--2.798 ms |
-| Revalidated TP=8 control at the same global shape | **3.097 ms** (`2026_07_26_21_40_09`) |
-| Improvement versus revalidated TP=8 | **9.9%** |
+| Previous retained SP2xTP4 control | 2.790 ms (`2026_07_26_21_37_43`) |
+| Retained SP2xTP4 working control | **2.762 ms** (`2026_07_26_21_55_50`) |
+| Retained-control steady-state range | 2.756--2.777 ms |
+| Revalidated TP=8 control at the same global shape | **3.076 ms** (`2026_07_26_21_57_35`) |
+| Improvement versus revalidated TP=8 | **10.22%** |
 | Accepted primary gate | <= 2.958 ms |
-| Existing stretch gate | <= 2.803 ms |
+| Existing stretch gate | <= 2.803 ms (**met**) |
 | Strong LB target | <= 2.750 ms |
 | Frontier LB target | <= 2.700 ms |
 
@@ -41,16 +42,16 @@ is the first stage to re-profile and classify before changing its schedule:
 | Chunk GDN preparation | 310 us | Do not tune before the output tail. |
 | Affine prefix | 181 us | Correct and not currently the dominant unhidden span. |
 
-The clone ends only about 37 us after MRS. Therefore, removing the clone by itself can save **at most about 37 us** on the original critical path; it could not by itself reach the original 52 us stretch goal. That work is now retained. Further wins must shorten the fused MRS tail or the next exposed dependent stage.
+The clone ends only about 37 us after MRS. Therefore, removing the clone by itself can save **at most about 37 us** on the original critical path; it could not by itself reach the original 52 us stretch goal. That work is now retained. The causal-convolution accumulator experiment subsequently proved that a local stage can still have an exposed contribution. Further wins must shorten the fused MRS tail or the next re-profiled exposed dependent stage.
 
-| Endpoint | Required saving from 2.790 ms | Required reduction of the current 916 us output-tail union |
+| Endpoint | Required saving from 2.762 ms | Required reduction of the current 916 us output-tail union |
 | --- | ---: | ---: |
-| Existing stretch: 2.803 ms | **met by 13 us** | 1.4% |
-| Next statistical retention point: 2.775 ms | 15 us | 1.6% |
-| Strong LB result: 2.750 ms | 40 us | 4.4% |
-| Frontier LB result: 2.700 ms | 90 us | 9.8% |
+| Existing stretch: 2.803 ms | **met by 41 us** | 4.5% |
+| Next statistical retention point: 2.747 ms | 15 us | 1.6% |
+| Strong LB result: 2.750 ms | 12 us | 1.3% |
+| Frontier LB result: 2.700 ms | 62 us | 6.7% |
 
-`2.750 ms` is the best credible near-term endpoint. `2.700 ms` is a frontier target, not a commitment: it requires a material reduction in the fused output path rather than a cosmetic scheduling change.
+`2.750 ms` is the best credible near-term endpoint. Because a separately retained change still needs 15 us evidence, reaching it alone is not sufficient to retain a new independent micro-change. `2.700 ms` is a frontier target, not a commitment: it requires a material reduction in the fused output path rather than a cosmetic scheduling change.
 
 ## Performance target hierarchy
 
@@ -61,16 +62,81 @@ win.
 
 | Tier | LB slowest-device median | Evidence required | Decision |
 | --- | ---: | --- | --- |
-| Working control | 2.790 ms | Existing PCC and ten-replay report | Starting point for every experiment |
+| Working control | 2.762 ms | PCC/trace gates and two ten-replay reports | Starting point for every experiment |
 | Product stretch | <=2.803 ms | Same measurement contract | **Met** by the retained 8x7 configuration |
-| Statistical improvement | <=2.775 ms | >=15 us versus 2.790 ms, PCC-clean | Next independently retainable step |
+| Statistical improvement | <=2.747 ms | >=15 us versus 2.762 ms, PCC-clean | Next independently retainable step |
 | Strong result | <=2.750 ms | At least two stable profiles and TP8 control rerun | Continue only if the next exposed critical path has a concrete cause |
 | Frontier result | <=2.700 ms | A demonstrated fused producer/CCL or epilogue change | Explore only after the strong path is exhausted |
 
 Small, directly coupled changes may be evaluated as one bundle when neither is
 meaningful on its own. Every other change must clear the 15 us retention
-threshold against the 2.790 ms control; a value merely below 2.803 ms is not
+threshold against the 2.762 ms control; a value merely below 2.803 ms is not
 automatically evidence of an independent improvement.
+
+## Best-performance campaign
+
+This is the ordered LB campaign.  It is deliberately narrow: each row is a
+specific critical-path hypothesis, rather than a parameter sweep.  The result
+of a row is either a retained configuration with a ten-replay result or a
+written negative result.  That is how we know that the reported best result is
+the best one we could defensibly obtain on LoudBox, rather than simply the last
+number observed.
+
+| Order | Change class and hypothesis | Expected exposed layer saving | Retain only if | Primary evidence / implementation area |
+| --- | --- | ---: | --- | --- |
+| A | **Causal-conv accumulator probe (retained).** The four-tap BF16 causal convolution does not need an FP32 destination accumulator for the covered KDA contract, reducing local compute/L1 pressure without changing the rest of KDA. | 28 us measured | Target/trace PCC is clean and two profiles beat the pre-change 2.790 ms control by >=15 us | Default in `tt/layer.py`; `KDA_CAUSAL_CONV_FP32_ACC=1` is the accuracy-control override |
+| B | **MRS producer/RS pipeline design.** Replace the all-producers-complete release with a per-slice readiness contract so a reduce-scatter slice can start only after its matching output tiles exist. | 30--100 us | A source-level dependency proof, PCC/trace stability, then >=15 us layer gain | Fused MRS factory, `OpSignaler`, Line RS worker partition and semaphores |
+| C | **MRS epilogue/output-layout fusion.** Make output pages/layout/persistent ownership exactly match the next consumer, removing an exposed conversion or excess output write. | 15--50 us | A profile shows the dependent union shrinks; no unsafe output alias/deallocation | MRS output spec, consumer layout, trace-owned persistent buffers |
+| D | **Re-profile and optimize the new exposed local stage.** After A--C, choose only the largest *dependent union*: causal convolution, initial projection, or chunk GDN. | 15--60 us | The selected stage is exposed in the slowest-device trace and a change beats its control by >=15 us | Stage-specific factory and profiler timeline |
+| E | **Cross-stage overlap/fusion.** Only once local stages are individually near their limits, overlap a proven producer/consumer boundary or remove a materialized intermediate. | 20--80 us | The layer union decreases; standalone op duration is not accepted as evidence | Adjacent device programs, fixed trace buffers, cache handoff |
+| F | **SP transport re-tuning.** Consider prefix lanes/FIFO/scan schedule only if the re-profile shows transport is exposed after A--E. | 10--40 us | The SP prefix-to-consumer dependency shortens without changing order or host synchronization | `tt/sp_layer.py`, socket transport profile |
+
+The campaign has three concrete LB endpoints:
+
+| Endpoint | Target | Interpretation |
+| --- | ---: | --- |
+| Best current retained result | 2.762 ms | Direct MRS output, 8x7 TP4 producer grid, BF16-destination causal convolution |
+| Next proof point | <=2.747 ms | One independently reproducible >=15 us saving |
+| Strong practical endpoint | <=2.750 ms | 12 us beyond the baseline; the next independent change still needs >=15 us evidence |
+| Frontier endpoint | <=2.700 ms | Requires 62 us; treat as a design project (B/C/E), not tuning |
+
+The sum of the upper bounds in the campaign is **not** a forecast: these
+operations overlap.  The only valid total is the traced slowest-device layer
+span.  A 2.700 ms result is possible only if profiling proves that at least one
+currently serial dependency has been shortened or overlapped.
+
+### Execution protocol for each campaign row
+
+1. Write down the dependency being shortened and the maximum plausible exposed
+   saving before changing code.  If there is no dependency-level hypothesis,
+   do not run the experiment.
+2. Run the focused PCC test with `scripts/run_safe_pytest.sh`, then the
+   two-replay direct-output trace PCC when ownership, layout, cache, or program
+   order changes.
+3. Run the ten-replay `T=5120` child-trace profile.  Compare sessions 3--11
+   against the **2.762 ms** baseline, keep the raw samples and identify the
+   changed dependent union on the slowest device.
+4. Retain only a clean >=15 us improvement.  Re-run it once from a fresh
+   process for the strong-target path; then re-run TP8 before publishing a new
+   SP2xTP4-versus-TP8 comparison.
+5. For a loss, ambiguous result, or a win under 15 us, restore the last
+   retained configuration and add the result to the execution log.  Do not
+   convert noise into a default.
+
+### LB exhaustion and Galaxy handoff
+
+LB optimization is considered exhausted when rows A--F have either been
+retained or ruled out with the protocol above, no remaining slowest-device
+dependent union has a source-backed path to >=15 us, and the best configuration
+has a second confirming profile.  At that point we publish the lowest measured
+LB number, even if it is above the frontier target.
+
+The Galaxy handoff is intentionally not a multiplication of LB latency by four.
+The first native `SP=8 x TP=4` run must establish its own slowest-device trace;
+then transfer retained A--E changes one at a time.  The desired production
+property is the same per-device local work as LB SP2xTP4, while the global
+sequence and SP transport are larger.  Any new exposed prefix/scan cost is a
+Galaxy-specific optimization problem and must not be hidden by an LB claim.
 
 ## Execution log
 
@@ -181,6 +247,38 @@ report `2026_07_26_21_45_15` measured a **2786.749 us** layer median, only
 **453.293 us**. The result is inside replay variation and fails the 15 us
 retention gate, so the 32-tile change was reverted and `_ttnn.so` rebuilt.
 
+### 2026-07-26: BF16-destination causal convolution (retained)
+
+The causal convolution is a four-tap BF16 operation.  Its independent FP32
+destination accumulator was a plausible local compute/L1 cost, whereas the
+rest of the KDA layer continues to use the existing FP32 destination
+configuration.  The experiment was first enabled by
+`KDA_CAUSAL_CONV_FP32_ACC=0`, then made the default after correctness and a
+fresh profile confirmed it.  `KDA_CAUSAL_CONV_FP32_ACC=1` preserves the former
+FP32-destination behavior for accuracy investigations.
+
+* Target-shape PCC, convolution/recurrent state checks, and the two-replay
+  direct-output trace PCC pass. The normal SP2xTP4 suite passes (3 passed; the
+  separately gated trace test skips unless its opt-in variable is set).
+* First profile report `2026_07_26_21_53_17` has slowest-device sessions 3--11
+  `[2761.136, 2763.313, 2770.807, 2770.165, 2760.508, 2765.293, 2758.296,
+  2760.664, 2763.839] us`, median **2763.313 us**. Its slowest causal-conv
+  median is **424.463 us**.
+* Fresh default-configuration report `2026_07_26_21_55_50` has sessions 3--11
+  `[2762.089, 2756.296, 2756.853, 2756.681, 2764.972, 2761.627, 2776.860,
+  2763.296, 2759.221] us`, median **2761.627 us**, range 2756.296--2776.860
+  us. Its causal-conv median is **424.389 us**.
+* The retained 2761.627 us result is **28.332 us (1.02%)** below the 2789.959
+  us 8x7/direct-output control. It clears the 15 us retention threshold in
+  two independent profiles; no standalone causal-convolution duration was
+  added to the layer claim.
+
+The required TP8 comparison rerun is report `2026_07_26_21_57_35`: sessions
+3--11 are `[3073.064, 3071.245, 3074.370, 3077.398, 3081.919, 3077.154,
+3076.084, 3074.819, 3081.248] us`, median **3076.084 us**, range
+3071.245--3081.919 us. SP2xTP4 is therefore **314.457 us (10.22%)** faster
+at global `T=5120` under the same default causal-convolution configuration.
+
 ## Measurement contract
 
 Every retained change must satisfy all of the following.
@@ -188,7 +286,7 @@ Every retained change must satisfy all of the following.
 1. Run the focused functional gate first, including target-shape output, recurrent-state, convolution-state, and boundary-token PCC. Require the existing end-to-end threshold, PCC >= 0.98.
 2. Profile ten child-trace replays at global `T=5120`; take the median of the slowest device in sessions 3--11. Report the raw range and profiler report directory with the result.
 3. Attribute a gain to the union of dependent operations on the slowest device. Never add overlapping operation durations to claim an end-to-end saving.
-4. Retain a change only if it remains below 2.958 ms and improves the 2.790 ms working control by at least 15 us, unless it is a necessary enabler for a separately measured next step. Fifteen microseconds exceeds the observed replay spread enough to avoid accepting noise as an optimization.
+4. Retain a change only if it remains below 2.958 ms and improves the 2.762 ms working control by at least 15 us, unless it is a necessary enabler for a separately measured next step. Fifteen microseconds exceeds the observed replay spread enough to avoid accepting noise as an optimization.
 5. After a retained SP2xTP4 improvement, rerun the TP8 control before making a comparative claim. Keep all existing trace-safety barriers and persistent allocations unless the experiment explicitly validates a replacement.
 
 ```bash
@@ -210,7 +308,7 @@ KDA_SP_SPLIT_AFFINE=1 KDA_SP_SOCKET_LANES=2 \
 ### 0. Freeze and reproduce the baseline
 
 **Status: complete.** Preserve `2.855 ms` as the historical cloned control and
-`2.790 ms` as the retained working control. Before changing code, rerun the
+`2.762 ms` as the retained working control. Before changing code, rerun the
 functional command and one profile if the hardware or runtime environment
 changes. This avoids chasing a board/runtime shift as if it were a code
 regression.
@@ -243,12 +341,12 @@ Try these in order; each is a separate experiment:
 **Exit criterion: complete.** Direct output is PCC-clean across two trace
 replays and saves 42.414 us. It is retained only for owners that preserve the
 persistent output lifetime. It enabled the later 8x7 MRS grid improvement;
-the next independently retained change now needs 15 us beyond 2.790 ms.
+the next independently retained change now needs 15 us beyond 2.762 ms.
 
 ### 3. Reduce the fused TP4 output MRS tail
 
 **Goal:** find a reproducible MRS-side reduction of at least 15 us, then
-continue only while the proven critical path supports progress toward the 40 us
+continue only while the proven critical path supports progress toward the 12 us
 strong-result budget. The product stretch gate is complete; the 15 us minimum
 makes the next change statistically retainable.
 
@@ -294,7 +392,7 @@ Signalling the present global semaphore early would let a worker read unwritten
 tiles and is not an experiment to run. Preserve persistent buffer addresses,
 the two Line directions, and the trace replay contract in either design.
 
-**Exit criterion:** a standalone retained change reaches <=2.775 ms, or a
+**Exit criterion:** a standalone retained change reaches <=2.747 ms, or a
 directly coupled bundle reaches <=2.750 ms and then crosses the 15 us evidence
 threshold when measured as a whole. Continue toward <=2.750 ms only while
 each retained change meets the 15 us evidence threshold.
@@ -305,6 +403,15 @@ each retained change meets the 15 us evidence threshold.
 
 The current likely order is causal short convolution, initial projection, then chunk GDN preparation. A three-channel-block balance probe was PCC-clean but
 not retained (3.210 us layer difference; unchanged convolution span). For causal convolution, test a genuine producer/consumer fusion or cache/layout change before further worker micro-tuning: the TP4 two-channel-block implementation exists to fit L1 and is a correctness constraint. Any fusion must retain both convolution-state PCC and the post-boundary-token check.
+
+The one low-risk local probe still worth measuring before a fusion is the
+opt-in BF16-destination causal-convolution configuration
+`KDA_CAUSAL_CONV_FP32_ACC=0`.  It changes only the causal-convolution compute
+configuration; the layer default remains FP32 destination accumulation.  It is
+not retained on eager PCC alone: it must pass target-shape and two-replay trace
+PCC and clear the same 15 us layer threshold.  If it loses or produces a
+material PCC/state regression, revert the opt-in path and do not trade accuracy
+for its local kernel duration.
 
 **Expected gain:** 20--60 us only if the affected portion is exposed on the layer critical path. Its standalone 452 us duration is not a budget that can be added to the output-tail saving.
 

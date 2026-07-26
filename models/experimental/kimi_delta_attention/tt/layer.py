@@ -105,6 +105,21 @@ class KimiDeltaAttention:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # The long causal convolution is a four-tap BF16 operation.  It has a
+        # PCC-clean, trace-stable faster BF16-destination path, independent of
+        # the layer-wide FP32 accumulator used by the other compute stages.
+        # Keep an explicit FP32 override for accuracy investigations.
+        causal_conv_fp32_acc = os.getenv("KDA_CAUSAL_CONV_FP32_ACC", "0") != "0"
+        self.causal_conv_compute_config = (
+            self.compute_config
+            if causal_conv_fp32_acc
+            else ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+        )
 
     @property
     def _convolution_width(self) -> int:
@@ -244,7 +259,7 @@ class KimiDeltaAttention:
                 config.k_dim,
                 config.v_dim,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.compute_config,
+                compute_kernel_config=self.causal_conv_compute_config,
             )
             return q, k, v, new_state
 
