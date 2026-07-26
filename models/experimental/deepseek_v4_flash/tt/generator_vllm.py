@@ -3,13 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """vLLM generator wrapper for DeepSeek-V4-Flash (Phase 1: functional bringup).
 
-Batch is handled by looping ``DeepSeekV4Model.decode_user`` over user slots and
-prefill replays decode one token at a time. Sampling is done on host by vLLM.
+Each vLLM slot is one paged decode session on the model (see
+``DeepSeekV4Model.activate_session``): the batch is served by activating a slot's
+session and replaying the shared decode trace, so slots share one block pool and one
+capture. Prefill replays decode one token at a time. Sampling is done on host by vLLM.
 """
 
 from __future__ import annotations
 
-import math
 import os
 
 import torch
@@ -17,12 +18,13 @@ import torch
 import ttnn
 from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.model import DeepSeekV4Model
+from models.experimental.deepseek_v4_flash.tt.paged_cache import round_context
 from models.experimental.deepseek_v4_flash.tt.quant import dequantize_weight
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 
 _DEFAULT_MODEL_DIR = "/home/ttuser/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-DSpark"
-_BLOCK_SIZE = 64
+_BLOCK_SIZE = 32
 _WEIGHT_DTYPE = ttnn.bfloat4_b
 
 
@@ -45,9 +47,7 @@ def _build_rope(config, max_seq: int) -> dict:
 
 
 def _round_max_seq(config, max_seq_len: int) -> int:
-    crs = {int(v) for v in config.compress_rates.values()}
-    step = math.lcm(32, _BLOCK_SIZE, *crs) if crs else math.lcm(32, _BLOCK_SIZE)
-    return ((max_seq_len + step - 1) // step) * step
+    return round_context(max_seq_len, set(config.compress_rates.values()), _BLOCK_SIZE)
 
 
 class DeepseekV4FlashForCausalLM:
@@ -57,7 +57,7 @@ class DeepseekV4FlashForCausalLM:
         "supports_sample_on_device": False,
     }
 
-    def __init__(self, model, lm_head, tokenizer, hf_config, rope, max_seq, max_batch_size):
+    def __init__(self, model, lm_head, tokenizer, hf_config, rope, max_seq, max_batch_size, slots):
         self.model = model
         self.lm_head = lm_head
         self.tokenizer = tokenizer
@@ -65,6 +65,7 @@ class DeepseekV4FlashForCausalLM:
         self.rope = rope
         self.max_seq = max_seq
         self.max_batch_size = max_batch_size
+        self.slots = slots  # vLLM slot index -> session id
 
     @classmethod
     def initialize_vllm_model(
@@ -106,21 +107,33 @@ class DeepseekV4FlashForCausalLM:
             cache.file("lm_head") if cache else None,
             dtype=_WEIGHT_DTYPE,
         )
-        model.reset_multi_user_paged_caches(max_seq, num_users=max_batch_size, block_size=_BLOCK_SIZE)
+        # One session per vLLM slot, all sharing the block pool and (lazily captured)
+        # decode traces. ``lm_head`` is folded into the last submesh's trace, so a step
+        # returns logits without a separate host-dispatched matmul.
+        model.prepare_static_decode(
+            rope,
+            max_seq,
+            lm_head=lm_head,
+            num_sessions=max_batch_size,
+            total_tokens=max_batch_size * max_seq,
+            block_size=_BLOCK_SIZE,
+        )
+        slots = [model.open_session() for _ in range(max_batch_size)]
 
-        return cls(model, lm_head, tokenizer, config, rope, max_seq, max_batch_size)
+        return cls(model, lm_head, tokenizer, config, rope, max_seq, max_batch_size, slots)
 
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
         # V4's CSA/HCA compressor caches are per-token projections sized to
         # max_seq // compress_rate, which cannot be expressed in vLLM's uniform
         # (blocks, heads, block_size, head_dim) paged layout. All caches are therefore
-        # owned by the model (reset_multi_user_paged_caches) and the kv_cache /
-        # page_table arguments vLLM passes into forward are ignored.
+        # owned by the model (its own block pools) and the kv_cache / page_table
+        # arguments vLLM passes into forward are ignored.
         return [None] * num_layers
 
-    def _logits(self, user_id: int, token_id: int, pos: int) -> torch.Tensor:
-        hidden = self.model.decode_user(user_id, int(token_id), int(pos), self.rope)
-        return ttnn.to_torch(self.lm_head(hidden)).reshape(-1).float()
+    def _logits(self, slot: int, token_id: int, pos: int) -> torch.Tensor:
+        self.model.activate_session(self.slots[slot])
+        logits = self.model.decode_traced(int(token_id), int(pos))  # lm_head is in-trace
+        return ttnn.to_torch(logits).reshape(-1).float()
 
     def prefill_forward(self, *args, **kwargs):
         tokens = kwargs["tokens"]
@@ -131,10 +144,13 @@ class DeepseekV4FlashForCausalLM:
         max_padded_len = max(int(l) for l in prompt_lens)
         out = torch.zeros(tokens.shape[0], max_padded_len, self.hf_config.vocab_size)
         for i in range(tokens.shape[0]):
-            user_id = int(empty_slots[i]) if empty_slots is not None else i
+            slot = int(empty_slots[i]) if empty_slots is not None else i
+            # A slot handed back by vLLM carries the previous sequence's cache; the
+            # prefill of a new one starts at position 0, so rewind it first.
+            self.model.reset_session(self.slots[slot])
             logits = None
             for pos in range(int(prompt_lens[i])):
-                logits = self._logits(user_id, tokens[i, pos], pos)
+                logits = self._logits(slot, tokens[i, pos], pos)
             if logits is not None:
                 out[i, :] = logits
         return out
