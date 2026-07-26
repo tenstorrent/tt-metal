@@ -13,6 +13,8 @@ implementation target.
 
 - Preserve exact error lines and reproduction commands. Summarize other issue
   context.
+- Determine scope from required changes anywhere in the tt-metal worktree, not
+  from the repository that hosts the issue.
 - Decide scope for each requested architecture before proposing a fix. Set the
   whole issue out of scope only when no requested architecture is in scope.
 - Support classifications with issue or repository evidence.
@@ -55,17 +57,18 @@ runs; otherwise use `TARGET_ARCH`.
 
 ## Analysis Process
 
-1. Determine global and per-architecture scope. Global `in_scope` is true when
-   at least one requested architecture is in scope.
+1. Determine global and per-architecture scope across the entire tt-metal
+   worktree. Global `in_scope` is true when at least one requested architecture
+   is in scope.
 2. Choose `category` and `llk_area` from the artifact schema below.
-4. Set `scope_style`:
+3. Set `scope_style`:
    - `sweep`: the issue requires the same change at every matching site. Run
      one exhaustive search and use its complete result as the coverage list.
    - `targeted`: the issue identifies a specific defect or site. List only
      files supported by evidence.
-5. Set `perf_intent` to `optimize` only when the issue explicitly requires a
+4. Set `perf_intent` to `optimize` only when the issue explicitly requires a
    speedup; otherwise use `maintain`.
-6. Determine `fix_layer` from `.claude/references/metal-integration.md`:
+5. Determine `fix_layer` from `.claude/references/metal-integration.md`:
 
    | Value | Scope |
    |---|---|
@@ -73,12 +76,14 @@ runs; otherwise use `TARGET_ARCH`.
    | `ckernels_api` | Layer 2 under `tt_metal/hw/ckernels/<arch>/metal/llk_api/` |
    | `compute_api` | Layer 3 under `tt_metal/hw/inc/api/compute/` |
    | `ttnn` | Layer 4 compute kernels |
+   | `tt_metal_runtime` | other tt-metal runtime or host integration |
    | `metal_tests` | `tests/tt_metal/**` only |
    | `mixed` | more than one layer |
 
-7. Set `verifiable_in_llk_suite`:
+6. Set `verifiable_in_llk_suite`:
    - `yes`: a source under `tests/sources/**` calls the affected Layer-1 code.
-   - `no`: the change is confined to Layers 2–4 or metal tests.
+   - `no`: the change is confined to Layers 2–4, tt-metal runtime, or metal
+     tests.
    - `partial`: a mixed change has both a reachable Layer-1 part and an
      unreachable higher-layer part.
 
@@ -89,7 +94,7 @@ runs; otherwise use `TARGET_ARCH`.
      tests/sources tests/python_tests
    ```
 
-8. For `no` or `partial`, find the `unit_tests_llk` test that drives a compute
+7. For `no` or `partial`, find the `unit_tests_llk` test that drives a compute
    kernel calling the changed symbol:
 
    ```bash
@@ -105,11 +110,11 @@ runs; otherwise use `TARGET_ARCH`.
    a `*SlowDispatchOnly` fixture and `fast` otherwise. If no metal test reaches
    the symbol, set `target: none` and explain why. The `reason` field is
    downstream evidence; routing scripts do not parse it.
-9. Record likely files, one initial hypothesis with a falsification condition,
+8. Record likely files, one initial hypothesis with a falsification condition,
    and relevant reproduction or regression test candidates.
-10. Request architecture research only for ISA semantics, register layouts,
-    scheduling, hardware contracts, or cross-architecture porting. Use
-    `questions: []` when no research is needed.
+9. Request architecture research only for ISA semantics, register layouts,
+   scheduling, hardware contracts, or cross-architecture porting. Use
+   `questions: []` when no research is needed.
 
 ## Output Artifact
 
@@ -127,12 +132,12 @@ arch_scope:
 
 ## Category
 category: compile_error|test_failure|runtime_error|missing_impl|porting_gap|perf_issue|cleanup_refactor|test_harness|unknown
-llk_area: unpack|math|pack|SFPU|sync/reconfig|test_harness|metal_integration
+llk_area: unpack|math|pack|SFPU|sync/reconfig|test_harness|metal_integration|runtime_integration
 perf_intent: optimize|maintain
 scope_style: sweep|targeted
 
 ## Verification
-fix_layer: llk_lib|ckernels_api|compute_api|ttnn|metal_tests|mixed
+fix_layer: llk_lib|ckernels_api|compute_api|ttnn|tt_metal_runtime|metal_tests|mixed
 verifiable_in_llk_suite: yes|no|partial
 metal_verification:            # required when verifiable_in_llk_suite is no|partial
   target: unit_tests_llk|none
