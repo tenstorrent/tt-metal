@@ -29,19 +29,17 @@ jobs:
     outputs:
       go: ${{ steps.tz.outputs.go }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
       - name: Did the 06:00-Europe/Berlin cron fire?
         id: tz
         run: |
-          OFFSET=$(TZ=Europe/Berlin date +%z)
-          if [ "$OFFSET" = "+0100" ]; then WANT="0 5 * * *"; else WANT="0 4 * * *"; fi
-          FIRED="${{ github.event.schedule }}"
-          if [ "${{ github.event_name }}" != "schedule" ] || [ "$FIRED" = "$WANT" ]; then
-            echo "go=true" >> "$GITHUB_OUTPUT"
-            echo "Proceeding (Berlin offset=$OFFSET, cron fired='$FIRED', event=${{ github.event_name }})."
-          else
-            echo "go=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping: Berlin offset=$OFFSET wants cron '$WANT', but '$FIRED' fired -- off-DST twin."
-          fi
+          GO=$(.github/scripts/berlin_gate.sh "${{ github.event.schedule }}")
+          echo "go=$GO" >> "$GITHUB_OUTPUT"
+          echo "decision: go=$GO (event=${{ github.event_name }}, cron='${{ github.event.schedule }}')"
 
   sync-remote:
     needs: berlin-gate
