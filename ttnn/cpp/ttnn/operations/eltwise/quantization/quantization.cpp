@@ -1,3 +1,4 @@
+// Blackhole + Wormhole coverage: fast path valid on all archs (no LLK change)
 // SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
