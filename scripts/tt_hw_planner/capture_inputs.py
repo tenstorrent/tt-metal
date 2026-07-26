@@ -605,13 +605,13 @@ def capture_real_inputs(
         if (
             _auto_onboard_drv is not None
             and _still_uncaptured
-            and bool(os.environ.get("TT_PLANNER_AUTO_ONBOARD_DRIVER"))
+            and os.environ.get("TT_PLANNER_AUTO_ONBOARD_DRIVER", "1") not in ("0", "false", "False")
         ):
             if verbose:
                 print(
                     f"  [capture] generic framework left {len(_still_uncaptured)} "
-                    f"component(s) un-captured; invoking auto-onboard to draft a "
-                    f"custom driver via LLM (TT_PLANNER_AUTO_ONBOARD_DRIVER=1)",
+                    f"component(s) un-captured (never_fired); invoking auto-onboard to draft a "
+                    f"custom driver via LLM (default on; set TT_PLANNER_AUTO_ONBOARD_DRIVER=0 to disable)",
                     file=sys.stderr,
                 )
             try:
