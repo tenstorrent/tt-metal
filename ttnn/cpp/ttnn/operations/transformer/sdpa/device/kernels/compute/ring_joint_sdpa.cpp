@@ -138,13 +138,6 @@ void kernel_main() {
     for (uint32_t w = 0; w < 32; ++w) {
         frame_allow_words[w] = get_arg_val<uint32_t>(argidx++);
     }
-    // Sparse feature bitmask (runtime, default 0x7F; 0 = dense-equivalent). Bit meanings:
-    //   0: pre-scan frame_allow check (per_q_valid_kv)   2: try_skip_sparse_frames drain
-    //   3: zero-work fast path   4: bitmap-derived is_first/is_last_k
-    //   5: reader shard-aggregate skip   6: writer per-(q_chunk,iter) save/restore skip
-    // (bit 1 is unused — a removed counter-mode path.)
-    const uint32_t sparse_feature_mask = get_arg_val<uint32_t>(argidx++);
-
     // Per-q_chunk work bitmap: bit `ring_iter` set iff q_chunk has attended work in that (mask-
     // active) iter. Host-precomputed; compute and writer read the same. When sparse is disabled the
     // host fills every entry with active_ring_iter_mask, so dense derives identical decisions.
@@ -391,7 +384,6 @@ void kernel_main() {
                 is_first_active_iter,
                 frame_allow_words,
                 q_frame_offset,
-                sparse_feature_mask,
                 q_work_bitmap);
         } else {
             assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();

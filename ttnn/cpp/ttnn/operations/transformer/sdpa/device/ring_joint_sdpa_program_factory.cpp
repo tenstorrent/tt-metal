@@ -2509,8 +2509,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 (sparse_frames_enabled && w < args.frame_allow_packed.size()) ? args.frame_allow_packed[w] : 0u;
             reader_args.push_back(word);
         }
-        // Sparse feature bitmask (all bits enabled). Reader honors bit 5 (shard-aggregate skip).
-        reader_args.push_back(0x7Fu);
 
         reader_kernel.emplace_runtime_args(core, reader_args.args);
 
@@ -2532,17 +2530,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_signaler_args);
         writer_args.append(writer_signaler_args);
 
-        // Sparse-frames extension: append the same 32 uint32 packed frame_allow words + 1
-        // sparse_feature_mask word that reader/compute already receive. Writer uses these to
-        // mirror compute's per_q_valid_kv==0 decisions and skip its per-iter save/restore
-        // protocol on zero-work iters.
+        // Sparse-frames extension: append the same 32 uint32 packed frame_allow words that
+        // reader/compute already receive. The writer does not read them (it uses the precomputed
+        // q_work_bitmap below), but must advance past them to reach the bitmap at the right offset.
         constexpr uint32_t kWriterSparseFramesPackedWords = 32;
         for (uint32_t w = 0; w < kWriterSparseFramesPackedWords; ++w) {
             const uint32_t word =
                 (sparse_frames_enabled && w < args.frame_allow_packed.size()) ? args.frame_allow_packed[w] : 0u;
             writer_args.push_back(word);
         }
-        writer_args.push_back(0x7Fu);  // sparse feature bitmask (all bits enabled)
         // Per-q_chunk work bitmap (num_q_chunks uint32s). Bit `iter` set iff (q_chunk has any
         // attended k_chunk in ring_iter) AND (iter is active in mask). Writer uses this to gate
         // restore push / deferred save / prefetch on zero-work iters, and to detect each q_chunk's
@@ -2590,10 +2586,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 (sparse_frames_enabled && w < args.frame_allow_packed.size()) ? args.frame_allow_packed[w] : 0u;
             compute_args.push_back(word);
         }
-        // Sparse feature bitmask (all bits enabled). Bits: 0 pre-scan, 2 try_skip drain,
-        // 3 zero-work path, 4 bitmap is_first/is_last, 5 reader shard-aggregate skip,
-        // 6 writer save/restore skip (bit 1 unused).
-        compute_args.push_back(0x7Fu);
         // Per-q_chunk work bitmap (num_q_chunks uint32s) — mirrors what writer receives so both
         // kernels make identical per-(q_chunk, iter) decisions about work / no-work.
         for (uint32_t q = 0; q < num_q_chunks; ++q) {

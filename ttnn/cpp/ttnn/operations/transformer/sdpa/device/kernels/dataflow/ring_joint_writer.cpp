@@ -458,12 +458,11 @@ void kernel_main() {
         argidx);
 
     // Sparse-frames runtime args (mirror reader/compute layout). The host always pushes the 32
-    // packed frame_allow words + 1 feature-mask word regardless of whether sparse is enabled. The
-    // writer does not consult frame_allow directly (it uses the precomputed q_work_bitmap below),
-    // so skip past the 32 words rather than reading them into an unused array — but the index must
-    // still advance so sparse_feature_mask / q_work_bitmap land at the right offset.
+    // packed frame_allow words regardless of whether sparse is enabled. The writer does not consult
+    // frame_allow directly (it uses the precomputed q_work_bitmap below), so skip past the 32 words
+    // rather than reading them into an unused array — but the index must still advance so
+    // q_work_bitmap lands at the right offset.
     argidx += 32;  // packed frame_allow words (unused by the writer)
-    const uint32_t sparse_feature_mask = get_arg_val<uint32_t>(argidx++);
 
     // Per-q_chunk work bitmap. bit iter set iff (q_chunk has attended k in ring_iter) AND (iter
     // is mask-active). Host-precomputed to match compute. Writer uses this to gate restore push,
@@ -550,22 +549,18 @@ void kernel_main() {
     uint32_t half_sequence = num_q_chunks / 2;
 
     // Bitmap-derived helpers. All decisions come from q_work_bitmap[q_chunk], which host
-    // precomputed to match compute. Feature bit 6 gates whether writer applies the bitmap
-    // logic — disable to run legacy behavior (per-iter mask decisions).
+    // precomputed to match compute.
     auto q_has_work = [&](uint32_t q_chunk, uint32_t ring_iter) -> bool {
         if constexpr (sparse_frames_enabled != 1) {
             (void)q_chunk;
             (void)ring_iter;
             return true;  // dense: every mask-active iter is a work iter
         } else {
-            if (!(sparse_feature_mask & (1u << 6))) {
-                return true;  // bit 6 off: fall back to legacy per-iter decisions
-            }
             return (q_work_bitmap[q_chunk] >> ring_iter) & 1u;
         }
     };
     auto q_first_work_iter = [&](uint32_t q_chunk) -> uint32_t {
-        // Lowest set bit in the bitmap. Only meaningful when sparse_frames_enabled && bit 6 set.
+        // Lowest set bit in the bitmap. Only meaningful when sparse_frames_enabled.
         return __builtin_ctz(q_work_bitmap[q_chunk]);
     };
     auto q_last_work_iter = [&](uint32_t q_chunk) -> uint32_t {
@@ -734,7 +729,7 @@ void kernel_main() {
                     if (!q_has_work(next_q_chunk, ring_iter)) {
                         return;
                     }
-                    if ((sparse_feature_mask & (1u << 6)) && ring_iter == q_first_work_iter(next_q_chunk)) {
+                    if (ring_iter == q_first_work_iter(next_q_chunk)) {
                         return;
                     }
                 }
@@ -788,12 +783,11 @@ void kernel_main() {
 
                 const bool balanced_skip_q = q_chunk < half_sequence && is_balanced && ring_index < ring_id;
 
-                // Bitmap-derived per-q_chunk work state. Under sparse_frames_enabled + bit 6,
-                // these come from the precomputed q_work_bitmap; otherwise they fall back to
-                // legacy global-mask decisions.
+                // Bitmap-derived per-q_chunk work state. Under sparse_frames_enabled these come
+                // from the precomputed q_work_bitmap; dense falls back to legacy global-mask
+                // decisions.
                 const bool q_has_work_this_iter = q_has_work(q_chunk, ring_iter);
-                const bool sparse_zero_work =
-                    (sparse_frames_enabled == 1) && (sparse_feature_mask & (1u << 6)) && !q_has_work_this_iter;
+                const bool sparse_zero_work = (sparse_frames_enabled == 1) && !q_has_work_this_iter;
                 // Per-q_chunk "is this iter the LAST work iter for this q_chunk?" — replaces
                 // is_last_ring_iter for output-write vs deferred-save decisions. Under sparse,
                 // a q_chunk's last work iter may be earlier than the mask's last active iter
@@ -801,17 +795,15 @@ void kernel_main() {
                 // don't include the shard at mask's last iter). Compute normalizes here (via
                 // is_last_k_of_last_ring_iter derived from the same bitmap); writer writes the
                 // final output here (not at mask's global last-active iter).
-                const bool is_last_work_iter_for_q =
-                    (sparse_frames_enabled == 1) && (sparse_feature_mask & (1u << 6)) && q_has_work_this_iter
-                        ? (ring_iter == q_last_work_iter(q_chunk))
-                        : is_last_ring_iter;
+                const bool is_last_work_iter_for_q = (sparse_frames_enabled == 1) && q_has_work_this_iter
+                                                         ? (ring_iter == q_last_work_iter(q_chunk))
+                                                         : is_last_ring_iter;
                 // Per-q_chunk "first work iter" — controls whether restore push is expected
                 // (no prior save yet on the first work iter). Under legacy semantics, this is
                 // is_first_active_iter (mask-based). Under bitmap semantics, per-q_chunk.
-                const bool is_first_work_iter_for_q =
-                    (sparse_frames_enabled == 1) && (sparse_feature_mask & (1u << 6)) && q_has_work_this_iter
-                        ? (ring_iter == q_first_work_iter(q_chunk))
-                        : is_first_active_iter;
+                const bool is_first_work_iter_for_q = (sparse_frames_enabled == 1) && q_has_work_this_iter
+                                                          ? (ring_iter == q_first_work_iter(q_chunk))
+                                                          : is_first_active_iter;
 
                 const auto qi = get_q_chunk_info<has_joint_q>(
                     q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, q_local_padded_Nt);
@@ -861,28 +853,26 @@ void kernel_main() {
                 if (!single_q_chunk && !is_last_ring_iter && q_index == last_q_index) {
                     bool do_cross_ring_prefetch = true;
                     if constexpr (sparse_frames_enabled == 1) {
-                        if (sparse_feature_mask & (1u << 6)) {
-                            // Look up Q[0]'s q_chunk index (after remap for zigzag).
-                            const uint32_t gq0 = remap_q_index(global_q_start, num_q_chunks, use_zigzag_balancing);
-                            const uint32_t q_chunk_0 = gq0 % num_q_chunks;
-                            // Q[0]'s restore lands on the next ACTIVE ring iter, not ring_iter+1:
-                            // the writer and compute `continue` past inactive iters (active_ring_iter_mask
-                            // bit clear — e.g. the all-OOB shard), so ring_iter+1 may be skipped entirely.
-                            // Gating the prefetch on ring_iter+1 then mis-fires when that iter is inactive
-                            // (its bitmap bit is 0): the prefetch is skipped, but the next active iter still
-                            // restores Q[0] via complete_restore, which then barriers on no reads and pushes
-                            // stale CB data — silently wiping the accumulator built up before the hole
-                            // (per-frame PCC drops on exactly the SP shards whose OOB iter is mid-sequence).
-                            uint32_t next_iter = ring_iter + 1;
-                            while (next_iter < ring_size && !((active_ring_iter_mask >> next_iter) & 1u)) {
-                                next_iter++;
-                            }
-                            // Skip if there is no next active iter, or that iter is zero-work for Q[0]
-                            // (compute's zero-work fast path won't consume the prefetched restore), or it
-                            // is Q[0]'s first work iter (no prior save exists yet to prefetch).
-                            do_cross_ring_prefetch = (next_iter < ring_size) && q_has_work(q_chunk_0, next_iter) &&
-                                                     (next_iter != q_first_work_iter(q_chunk_0));
+                        // Look up Q[0]'s q_chunk index (after remap for zigzag).
+                        const uint32_t gq0 = remap_q_index(global_q_start, num_q_chunks, use_zigzag_balancing);
+                        const uint32_t q_chunk_0 = gq0 % num_q_chunks;
+                        // Q[0]'s restore lands on the next ACTIVE ring iter, not ring_iter+1:
+                        // the writer and compute `continue` past inactive iters (active_ring_iter_mask
+                        // bit clear — e.g. the all-OOB shard), so ring_iter+1 may be skipped entirely.
+                        // Gating the prefetch on ring_iter+1 then mis-fires when that iter is inactive
+                        // (its bitmap bit is 0): the prefetch is skipped, but the next active iter still
+                        // restores Q[0] via complete_restore, which then barriers on no reads and pushes
+                        // stale CB data — silently wiping the accumulator built up before the hole
+                        // (per-frame PCC drops on exactly the SP shards whose OOB iter is mid-sequence).
+                        uint32_t next_iter = ring_iter + 1;
+                        while (next_iter < ring_size && !((active_ring_iter_mask >> next_iter) & 1u)) {
+                            next_iter++;
                         }
+                        // Skip if there is no next active iter, or that iter is zero-work for Q[0]
+                        // (compute's zero-work fast path won't consume the prefetched restore), or it
+                        // is Q[0]'s first work iter (no prior save exists yet to prefetch).
+                        do_cross_ring_prefetch = (next_iter < ring_size) && q_has_work(q_chunk_0, next_iter) &&
+                                                 (next_iter != q_first_work_iter(q_chunk_0));
                     }
                     if (do_cross_ring_prefetch) {
                         prefetch_for(/*pf_q_index=*/0, TRID_FIRST, /*barrier_first=*/true);
@@ -932,9 +922,8 @@ void kernel_main() {
                 if (is_last_work_iter_for_q) {
                     // Output write happens on the q_chunk's LAST WORK iter. Under sparse, this
                     // may be earlier than mask's last-active iter (compute normalizes here via
-                    // is_last_k_of_last_ring_iter derived from the same bitmap). Under dense or
-                    // sparse with bit 6 off, is_last_work_iter_for_q == is_last_ring_iter, so
-                    // behavior matches legacy.
+                    // is_last_k_of_last_ring_iter derived from the same bitmap). Under dense,
+                    // is_last_work_iter_for_q == is_last_ring_iter, so behavior matches legacy.
                     const auto& gen = [&]() -> const auto& {
                         if constexpr (has_joint_q) {
                             if (qi.is_joint_q) {
