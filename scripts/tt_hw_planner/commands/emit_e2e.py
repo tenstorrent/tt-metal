@@ -981,6 +981,27 @@ REQUIRED SHAPE:
         wave = stubs["seamless_m4_t_hifi_gan"](units)                  # TT
         return wave
 
+DECODE HORIZON (autoregressive models — how long to decode; the `N` above):
+  The number of decode steps in the CORRECTNESS/PCC path MUST be grounded in the
+  model, NOT an arbitrary hardcoded constant (a magic `N=40` is a defect — it
+  silently reduces test scope). Decide it in this priority order:
+    1. STOP-TOKEN (preferred): decode until the model's end token, reading the id
+       from config / generation_config (eos_token_id, and any model-specific stop
+       id such as stop_audio_token / stop_text_token). Break when the generated
+       token == that id. ALWAYS keep a safety cap (the config's max context /
+       max_*_tokens) so a non-terminating run can't hang.
+    2. CONFIG LENGTH: if there is no usable stop token, use
+       generation_config.max_new_tokens (or max_length − prompt_len).
+    3. LLM FALLBACK: ONLY if neither a stop token nor a length exists in
+       config/generation_config, choose a reasonable bound yourself AND add a
+       one-line comment stating it was chosen for lack of any model signal.
+  Apply the SAME stop rule to BOTH the TT decode AND the HF golden/reference so
+  they are compared over the SAME, model-grounded length (never force the golden
+  to a count the TT side invented). The reference IS available in the golden
+  helper — use its stop condition. This applies to the PCC/correctness test only;
+  trace+2CQ capture still runs at a FIXED max capacity C (variable-length decode
+  must not make the traced shapes dynamic).
+
 ALLOWED HF USAGE (SETUP / REFERENCE ONLY — NOT the forward path):
   1. hf_model.config.<X> / hf_model.generation_config.<X> — pure attribute reads
   2. weight extraction at build time: hf_model.<X>.<Y>.weight / .bias
