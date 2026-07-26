@@ -14,6 +14,7 @@
 //
 //   sudo tt_rdma_bf3_send <iface> [count] [dst_mac] [ethertype] [opcode] [payload_len] [rkey] [roff]
 //   e.g. WRITE: sudo tt_rdma_bf3_send enp193s0f0np0 256 02:00:00:00:00:02 0x1af6 0x10 256 0x07000042 0
+#include <errno.h>
 #include <arpa/inet.h>
 #include <linux/if_packet.h>
 #include <net/ethernet.h>
@@ -132,25 +133,31 @@ int main(int argc, char** argv) {
     sa.sll_halen = 6;
     memcpy(sa.sll_addr, frame, 6);
 
-    int sent = 0;
+    int sent = 0, failed = 0, first_errno = 0;
     for (int i = 0; i < count; i++) {
         if (opcode != 0) {
             put_u32(frame + 14 + 8, (uint32_t)(i + 1));  // seq = 1..count
         }
-        if (sendto(fd, frame, frame_len, 0, (struct sockaddr*)&sa, sizeof(sa)) == (ssize_t)frame_len) {
+        ssize_t r = sendto(fd, frame, frame_len, 0, (struct sockaddr*)&sa, sizeof(sa));
+        if (r == (ssize_t)frame_len) {
             sent++;
+        } else {
+            failed++;
+            if (first_errno == 0) {
+                first_errno = errno;  // capture WHY jumbo is rejected (EMSGSIZE=90, EINVAL=22, ...)
+            }
         }
     }
     printf(
-        "tt_rdma_bf3_send: sent %d/%d frames on %s dst=%s etype=0x%04x opcode=0x%02x plen=%u rkey=0x%08x\n",
+        "tt_rdma_bf3_send: sent %d/%d (failed %d, first errno=%d '%s') on %s frame_len=%u plen=%u\n",
         sent,
         count,
+        failed,
+        first_errno,
+        first_errno ? strerror(first_errno) : "-",
         iface,
-        dmac_s,
-        etht,
-        opcode,
-        plen,
-        rkey);
+        frame_len,
+        plen);
     close(fd);
     return 0;
 }
