@@ -23,7 +23,8 @@ import ttnn
 
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.reference.denoise_loop import DenoiseTrajectory
-from models.experimental.diffusion_gemma.tt.degeneracy import DegenerateBlockError, check_committed_block
+from models.experimental.diffusion_gemma.tt import degeneracy
+from models.experimental.diffusion_gemma.tt.degeneracy import DegenerateBlockError
 from models.experimental.diffusion_gemma.tt.commit_decode import commit_decode_forward
 from models.experimental.diffusion_gemma.tt.denoise_forward import (
     make_generation_logits_fn_builder_from_checkpoint_state,
@@ -691,7 +692,11 @@ def make_seeded_gumbel_noise_fn(
     _check_random_token_args(batch, canvas_len, vocab_size)
     seed = TS._validate_ttnn_rand_seed(seed)
 
-    def gumbel_noise_for_block(block_idx: int):
+    def gumbel_noise_for_block(block_idx: int, attempt: int = 0):
+        # `attempt` offsets the seed so a retry after a degenerate block draws DIFFERENT noise.
+        # Without it a retry would reproduce the trajectory exactly and be a silent no-op.
+        block_seed = seed + block_idx * 1_000_003 + attempt * 7_919_003
+
         def gumbel_noise_for_step(step: int):
             # Vocab innermost, deliberately. The permuted-vocab variant keeps vocab off ttnn.rand's
             # innermost axis by collapsing every other axis into it -- which for this shape is the
@@ -702,11 +707,12 @@ def make_seeded_gumbel_noise_fn(
             return TS.sample_gumbel_noise(
                 (batch, 1, canvas_len, vocab_size),
                 device=mesh_device,
-                seed=seed + block_idx * 1_000_003 + step,
+                seed=block_seed + step,
             )
 
         return gumbel_noise_for_step
 
+    gumbel_noise_for_block.supports_retry = True
     return gumbel_noise_for_block
 
 
@@ -934,6 +940,8 @@ def denoise_and_commit_block(
     commit_fn: Callable[..., None] | None = None,
     timings: dict[str, float] | None = None,
     stop_token_ids=None,
+    retry_noise_fn=None,
+    retry_init_canvas_fn=None,
 ) -> GeneratedBlock:
     """Denoise one canvas, commit the clean argmax, and advance position.
 
@@ -951,32 +959,56 @@ def denoise_and_commit_block(
     if denoise_block_fn is None:
         denoise_block_fn = _resolve_default_denoise_block_fn()
     _set_q_rope_offset(logits_fn, start_pos)
-    denoise_t0 = time.perf_counter()
-    trajectory = denoise_block_fn(
-        logits_fn,
-        init_canvas,
-        config,
-        gumbel_noise_fn=gumbel_noise_fn,
-        noise_tokens_fn=noise_tokens_fn,
-    )
-    denoise_s = time.perf_counter() - denoise_t0
-    if trajectory.committed is None:
-        raise RuntimeError("denoise trajectory did not produce committed canvas tokens")
-    _validate_committed_block_shape(trajectory.committed, batch_size=1, canvas_length=config.canvas_length)
-    # Before the commit, never after: a degenerate canvas that reaches the KV cache conditions
-    # every later block, which is what makes the degenerate state near-absorbing.
-    degeneracy_stats = check_committed_block(
-        trajectory.committed,
-        block_idx=None,
-        logger=logger,
-        stop_token_ids=(
-            None if stop_token_ids is None else _normalize_eos_token_ids(stop_token_ids, kind="stop_token_ids")
-        ),
-    )
-    if degeneracy_stats:
+    benign_ids = None if stop_token_ids is None else _normalize_eos_token_ids(stop_token_ids, kind="stop_token_ids")
+    policy = degeneracy.resolve_policy()
+
+    # `retry` needs to be able to draw DIFFERENT noise; a retry that reproduces the same trajectory
+    # is a silent no-op, so refuse it up front rather than pretend to retry.
+    max_attempts = 1
+    if policy == "retry":
+        if retry_noise_fn is None or retry_init_canvas_fn is None:
+            raise ValueError(
+                "DG_DEGENERACY_POLICY=retry needs retry_noise_fn and retry_init_canvas_fn; the "
+                "caller owns both the noise factory and the initial canvas, and the denoise path "
+                "consumes the canvas it is given"
+            )
+        if not getattr(retry_noise_fn, "supports_retry", False):
+            raise ValueError(
+                "DG_DEGENERACY_POLICY=retry requires an attempt-aware noise factory (one marked "
+                "supports_retry). The per-step noise functions are pure in (block, step), so "
+                "retrying with this factory would redraw identical noise and change nothing. "
+                "Deterministic sources (argmax) cannot support retry by construction."
+            )
+        max_attempts = 1 + degeneracy.resolve_retries()
+
+    denoise_s = 0.0
+    attempt = 0
+    while True:
+        canvas_for_attempt = init_canvas if attempt == 0 else retry_init_canvas_fn()
+        noise_for_attempt = gumbel_noise_fn if attempt == 0 else retry_noise_fn(attempt)
+        denoise_t0 = time.perf_counter()
+        trajectory = denoise_block_fn(
+            logits_fn,
+            canvas_for_attempt,
+            config,
+            gumbel_noise_fn=noise_for_attempt,
+            noise_tokens_fn=noise_tokens_fn,
+        )
+        denoise_s += time.perf_counter() - denoise_t0
+        if trajectory.committed is None:
+            raise RuntimeError("denoise trajectory did not produce committed canvas tokens")
+        _validate_committed_block_shape(trajectory.committed, batch_size=1, canvas_length=config.canvas_length)
+
+        if policy == "off":
+            degeneracy_stats = {}
+            break
+        # Before the commit, never after: a degenerate canvas that reaches the KV cache conditions
+        # every later block, which is what makes the degenerate state near-absorbing.
+        degeneracy_stats, is_bad = degeneracy.evaluate(trajectory.committed, stop_token_ids=benign_ids)
         logger.info(
-            "DG_DEGENERACY start_pos={} distinct={}/{} top_id={} top_frac={:.4f} max_run={}".format(
+            "DG_DEGENERACY start_pos={} attempt={} distinct={}/{} top_id={} top_frac={:.4f} max_run={}".format(
                 start_pos,
+                attempt,
                 degeneracy_stats["distinct"],
                 degeneracy_stats["tokens"],
                 degeneracy_stats["top_id"],
@@ -984,6 +1016,18 @@ def denoise_and_commit_block(
                 degeneracy_stats["max_run"],
             )
         )
+        if not is_bad:
+            break
+        message = degeneracy.describe(degeneracy_stats)
+        if policy == "warn":
+            logger.warning(message)
+            break
+        attempt += 1
+        if attempt >= max_attempts:
+            # `stop`, or `retry` with every attempt exhausted: never commit it.
+            raise degeneracy.DegenerateBlockError(message, tokens=trajectory.committed, stats=degeneracy_stats)
+        logger.warning(f"{message}; re-denoising with fresh noise (attempt {attempt}/{max_attempts - 1})")
+
     commit_t0 = time.perf_counter()
     commit_fn(
         tt_model,
@@ -1081,6 +1125,12 @@ def generate_blocks(
                     page_table=page_table,
                     page_tables_per_layer=page_tables_per_layer,
                     stop_token_ids=stop_token_ids,
+                    retry_noise_fn=gumbel_noise_fn,
+                    retry_init_canvas_fn=(
+                        (lambda idx=block_idx, pos=next_pos: init_canvas_fn(idx, pos))
+                        if init_canvas_fn is not None
+                        else None
+                    ),
                 )
             except DegenerateBlockError as degenerate:
                 # Uncommitted by construction, so the generation simply ends one block early with

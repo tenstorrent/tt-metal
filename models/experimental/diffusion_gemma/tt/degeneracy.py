@@ -21,7 +21,7 @@ import os
 
 import torch
 
-POLICIES = ("off", "warn", "stop")
+POLICIES = ("off", "warn", "stop", "retry")
 # `stop` is the default: it refuses to commit a collapsed canvas, which is the only setting that
 # actually prevents degenerate output. The `host` Gumbel default removes the FREQUENT corruption
 # but not degeneration itself -- across 10 GPQA docs re-run under it, one still committed a canvas
@@ -135,6 +135,44 @@ def _resolve_int(name: str, default: int) -> int:
     if value <= 0:
         raise ValueError(f"{name} must be positive, got {value}")
     return value
+
+
+DEFAULT_RETRIES = 2
+
+
+def resolve_retries() -> int:
+    """How many extra denoise attempts ``retry`` may spend on one block."""
+    raw = os.environ.get("DG_DEGENERACY_RETRIES")
+    if raw is None or raw == "":
+        return DEFAULT_RETRIES
+    value = int(raw)
+    if value < 1:
+        raise ValueError(f"DG_DEGENERACY_RETRIES must be >= 1, got {value}")
+    return value
+
+
+def evaluate(tokens: torch.Tensor, *, stop_token_ids=None) -> tuple:
+    """Return ``(stats, degenerate)`` for a committed canvas, applying no policy.
+
+    Split out from :func:`check_committed_block` so the commit path can decide between raising,
+    warning and retrying without re-resolving the thresholds itself.
+    """
+    stats = block_degeneracy(tokens)
+    degenerate = is_degenerate(
+        stats,
+        top_frac=_resolve_float("DG_DEGENERACY_TOP_FRAC", DEFAULT_TOP_FRAC),
+        max_run=_resolve_int("DG_DEGENERACY_MAX_RUN", DEFAULT_MAX_RUN),
+        stop_token_ids=stop_token_ids,
+    )
+    return stats, degenerate
+
+
+def describe(stats: dict, *, block_idx: int | None = None) -> str:
+    where = "" if block_idx is None else f" at block {block_idx}"
+    return (
+        f"degenerate committed canvas{where}: {stats['distinct']}/{stats['tokens']} distinct ids, "
+        f"top id {stats['top_id']} covers {stats['top_frac']:.1%}, longest run {stats['max_run']}"
+    )
 
 
 def check_committed_block(

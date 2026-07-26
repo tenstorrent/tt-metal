@@ -403,6 +403,11 @@ class BlockDiffusionServingSession:
                 # Without this the degeneracy check cannot tell a terminating canvas (a wall of
                 # <eos>, which this session is about to stop on anyway) from a degenerate one.
                 stop_token_ids=self.stop_token_ids,
+                # Both are needed by DG_DEGENERACY_POLICY=retry: the noise factory so a retry can
+                # draw different noise, and the canvas factory because the denoise path consumes
+                # the canvas it is handed.
+                retry_noise_fn=self._gumbel_noise_fn,
+                retry_init_canvas_fn=lambda: self._init_canvas_fn(block_idx, start_pos),
             )
         except DegenerateBlockError as degenerate:
             # The canvas was NOT committed. End the request here and return a zero-token terminal
