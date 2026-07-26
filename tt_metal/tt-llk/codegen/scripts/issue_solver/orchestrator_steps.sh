@@ -564,11 +564,105 @@ execute_step_advance_metal_test() {
 }
 
 # ===========================================================================
-# Step 4 — parse the tester/metal-tester per-arch results already written into
-# run.json and roll up the aggregate counters into state. arch_results is the
-# source of truth in run.json (each tester writes it via `metric`); we only
-# aggregate TESTS_TOTAL/TESTS_PASSED here so finalize never depends on an env
-# var that did not survive (the pre-refactor bug).
+# Step 4 — combine the required suite results for each architecture. Testers
+# write only arch_results.<arch>.suite_results.<llk|metal>; this function owns
+# the compatibility verdict/count fields consumed by final status and the
+# dashboard. Missing or unknown required results fail closed as ENV_ERROR.
+# ===========================================================================
+execute_step_combine_verification_results() {
+    local _L; _L="$(_LOG)"
+    local route arches patch
+    route="$(sg VERIFY_ROUTE)"
+    arches="$(sg TARGET_ARCHES_JSON)"
+    case "$route" in llk|metal|both) ;; *) echo "cannot combine VERIFY_ROUTE=$route" >&2; return 1 ;; esac
+
+    patch="$(python - "$_L/run.json" "$arches" "$route" <<'PY'
+import json
+import sys
+
+run_path, arches_json, route = sys.argv[1:4]
+with open(run_path) as f:
+    run = json.load(f)
+
+arches = json.loads(arches_json)
+required = {"llk": ("llk",), "metal": ("metal",), "both": ("llk", "metal")}[route]
+failure_priority = ("COMPILE_FAILED", "TESTS_FAILED", "ENV_ERROR", "SIM_ISA_GAP")
+non_failing = {"SUCCESS", "COMPILED_ONLY", "UNVERIFIABLE_IN_LLK_SUITE"}
+existing = run.get("arch_results") or {}
+updates = {}
+tests_total = 0
+tests_passed = 0
+
+def count(value):
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+for arch in arches:
+    current = existing.get(arch) or {}
+    if current.get("verdict") == "SKIPPED":
+        tests_total += count(current.get("tests_total"))
+        tests_passed += count(current.get("tests_passed"))
+        continue
+
+    suite_results = current.get("suite_results") or {}
+    verdicts = []
+    reasons = []
+    arch_total = 0
+    arch_passed = 0
+    for suite_name in required:
+        suite = suite_results.get(suite_name) or {}
+        verdict = suite.get("verdict")
+        if not verdict:
+            verdict = "ENV_ERROR"
+            reasons.append(f"{suite_name}: missing required suite result")
+        elif verdict not in non_failing and verdict not in failure_priority:
+            reasons.append(f"{suite_name}: unknown verdict {verdict}")
+            verdict = "ENV_ERROR"
+        elif verdict in failure_priority:
+            reasons.append(f"{suite_name}: {suite.get('obstacle') or verdict}")
+        elif suite.get("obstacle"):
+            reasons.append(f"{suite_name}: {suite['obstacle']}")
+        verdicts.append(verdict)
+        arch_total += count(suite.get("tests_total"))
+        arch_passed += count(suite.get("tests_passed"))
+
+    combined = next((value for value in failure_priority if value in verdicts), None)
+    if combined is None:
+        if "SUCCESS" in verdicts:
+            combined = "SUCCESS"
+        elif "COMPILED_ONLY" in verdicts:
+            combined = "COMPILED_ONLY"
+        else:
+            combined = "UNVERIFIABLE_IN_LLK_SUITE"
+
+    updates[arch] = {
+        "status": "done",
+        "verdict": combined,
+        "verification_route": route,
+        "tests_total": arch_total,
+        "tests_passed": arch_passed,
+        "obstacle": "; ".join(reasons) or None,
+    }
+    tests_total += arch_total
+    tests_passed += arch_passed
+
+print(json.dumps({
+    "arch_results": updates,
+    "tests_total": tests_total,
+    "tests_passed": tests_passed,
+}))
+PY
+)" || return 1
+
+    rj metric --patch-json "$patch"
+}
+
+# ===========================================================================
+# Step 4 — roll the combined per-arch counters into state. arch_results is the
+# source of truth in run.json; this keeps finalize independent of shell state
+# that does not survive between Bash calls.
 # ===========================================================================
 execute_step_aggregate_results() {
     local _L; _L="$(_LOG)"

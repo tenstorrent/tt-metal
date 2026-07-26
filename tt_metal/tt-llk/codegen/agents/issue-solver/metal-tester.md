@@ -35,7 +35,7 @@ bg() { python codegen/scripts/state.py --worktree-dir "$WT" get "$1"; }
 
 Read `ISSUE_NUMBER`, `RUN_MODE`, `TARGET_ARCH` or `TARGET_ARCHES_JSON`,
 `TEST_BACKEND`, `METAL_TARGET`, `METAL_FILTER`, `METAL_DISPATCH`,
-`CHANGED_FILES`, `WORKTREE_DIR`, and `LOG_DIR` with `sg`.
+`VERIFY_ROUTE`, `CHANGED_FILES`, `WORKTREE_DIR`, and `LOG_DIR` with `sg`.
 
 For ttsim, read `TTSIM_SO_PATH` (single) or `TTSIM_SO_PATHS` (multi) from
 bootstrap state with `bg`.
@@ -324,15 +324,22 @@ status.
 ## Result Recording
 
 Keep raw output append-only in `metal_build.log` and `metal_run*.log`. Update
-the single `run.json` as each architecture starts and ends, using the same
-`message`, `phase-start`, `metric`, and `phase-end` operations as `tester.md`.
-Patch `arch_results.<arch>` with `status`, `verdict`, `tests_total`,
-`tests_passed`, `gtest_filter`, and `queue_job`. JSON-encode failure evidence;
-do not interpolate raw output into JSON.
+the single `run.json` with a nested metric patch under
+`arch_results.<arch>.suite_results.metal`. Store `status`, `verdict`,
+`tests_total`, `tests_passed`, `gtest_filter`, `queue_job`, and `obstacle`.
+JSON-encode failure evidence; do not interpolate raw output into JSON. Do not
+write the combined architecture verdict or aggregate counts.
 
-Map `SUCCESS` to a passed phase and every other verdict to a failed phase.
-Do not call `phase-end` twice for an already completed phase, and do not
-create per-architecture `run.json` files.
+For a multi-arch `metal` route, start and end the architecture phase using the
+operations and index defined by `tester.md`. For a `both` route, reuse the
+phase started by `tester.md` and close it after the metal result is recorded.
+Its phase result fails if either required suite fails; otherwise it passes,
+including a combined compile-only or unverifiable outcome.
+
+Do not end an already passed phase again. A retry after failure ends the phase
+once after the applicable route completes. Do not create per-architecture
+`run.json` files. Preserve analyzer-owned `SKIPPED` top-level results for
+out-of-scope architectures.
 
 ## Self-Log
 

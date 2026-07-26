@@ -40,7 +40,7 @@ bg() { python codegen/scripts/state.py --worktree-dir "$WT" get "$1"; }
 ```
 
 Read `ISSUE_NUMBER`, `RUN_MODE`, `TARGET_ARCH` or `TARGET_ARCHES_JSON`,
-and `TEST_BACKEND` with `sg`. Derive the artifacts as
+`TEST_BACKEND`, and `VERIFY_ROUTE` with `sg`. Derive the artifacts as
 `codegen/artifacts/issue_<ISSUE_NUMBER>_analysis.md` and
 `codegen/artifacts/issue_<ISSUE_NUMBER>_fix_plan.md`.
 
@@ -107,17 +107,29 @@ parametrizations as validation.
 Keep raw command output append-only in `run.log`/`compile.log`, readable
 attempt history in `agent_tester.md`, and dashboard metrics in `run.json`.
 
-For a single-arch run, patch the final counts into `run.json`:
+For every in-scope architecture, write only the LLK suite result under
+`arch_results.<arch>.suite_results.llk`:
 
-```bash
-python codegen/scripts/run_json_writer.py metric \
-  --log-dir "$LOG_DIR" \
-  --patch-json "{\"tests_total\":${tests_total},\"tests_passed\":${tests_passed}}"
+```json
+{
+  "status": "done",
+  "verdict": "SUCCESS|COMPILE_FAILED|TESTS_FAILED|SIM_ISA_GAP|ENV_ERROR|COMPILED_ONLY",
+  "tests_total": 1,
+  "tests_passed": 1,
+  "queue_jobs": [],
+  "obstacle": null
+}
 ```
 
-For a multi-arch run, update the same `run.json` as each in-scope architecture
-starts and ends. Use the architecture's one-based position in
-`TARGET_ARCHES_JSON` as `phase_index`:
+Use `run_json_writer.py metric` with a nested JSON patch. JSON-encode
+`queue_jobs` and `obstacle`; never interpolate raw failure output. Do not write
+the combined `arch_results.<arch>.verdict` or aggregate counts. The
+orchestrator combines the required LLK and metal suite results after the route
+finishes.
+
+For multi-arch runs, use the architecture's one-based position in
+`TARGET_ARCHES_JSON` as `phase_index`. Start its dashboard phase when
+`VERIFY_ROUTE=llk|both`:
 
 ```bash
 python codegen/scripts/run_json_writer.py message \
@@ -130,17 +142,17 @@ python codegen/scripts/run_json_writer.py phase-start \
   --name "Test ${arch}"
 ```
 
-After each architecture completes, patch its result and the aggregate counts.
-For queued runs, also include `queue_jobs`, an array of the job IDs submitted
-for that architecture; use `[]` otherwise. JSON-encode `obstacle_json` and
-`queue_jobs`; never interpolate raw failure text into JSON. Do not create
-per-architecture sibling `run.json` files.
+After the LLK suite completes, patch its suite result:
 
 ```bash
 python codegen/scripts/run_json_writer.py metric \
   --log-dir "$LOG_DIR" \
-  --patch-json "{\"arch_results\":{\"${arch}\":{\"status\":\"done\",\"verdict\":\"${verdict}\",\"tests_total\":${tests_total},\"tests_passed\":${tests_passed},\"queue_jobs\":${queue_jobs_json},\"obstacle\":${obstacle_json}}},\"tests_total\":${aggregate_total},\"tests_passed\":${aggregate_passed}}"
+  --patch-json "{\"arch_results\":{\"${arch}\":{\"suite_results\":{\"llk\":{\"status\":\"done\",\"verdict\":\"${verdict}\",\"tests_total\":${tests_total},\"tests_passed\":${tests_passed},\"queue_jobs\":${queue_jobs_json},\"obstacle\":${obstacle_json}}}}}}"
+```
 
+For `VERIFY_ROUTE=llk`, end the phase here:
+
+```bash
 python codegen/scripts/run_json_writer.py phase-end \
   --log-dir "$LOG_DIR" \
   --phase "$phase_index" \
@@ -148,11 +160,16 @@ python codegen/scripts/run_json_writer.py phase-end \
   --test-details "$test_details"
 ```
 
-Map `SUCCESS` and `COMPILED_ONLY` to `phase_result=passed`; map test,
-compilation, simulator, and environment failures to `failed`.
-`phase-end` increments `phases_completed`, so do not call it again for a phase
-already recorded as passed. Retests must still replace `arch_results` and
-append their raw and self-log evidence.
+For `VERIFY_ROUTE=both`, leave the phase open; `metal-tester.md` closes it after
+both suite results exist. Map `SUCCESS` and `COMPILED_ONLY` to
+`phase_result=passed`; map other verdicts to `failed`. Because `phase-end`
+increments `phases_completed` for a pass, do not end an already passed phase
+again. A retry after failure starts a new attempt for that phase and ends it
+once after the route completes. Retests still replace their own suite result
+and append raw and self-log evidence.
+
+Do not create per-architecture `run.json` files. Preserve analyzer-owned
+`SKIPPED` top-level results for out-of-scope architectures.
 
 ## Local Compile and Execution
 
