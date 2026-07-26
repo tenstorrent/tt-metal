@@ -493,6 +493,19 @@ def synthesize_recompose_links(
                 kids.append(c)
         return kids
 
+    # Existing (live + archived) parent->children linkage. A parent already
+    # fully linked is skipped (idempotent); a parent that is no_emit/locked
+    # but has NO linkage is the cross-run-resume stranded case -- re-link it
+    # so the recompose path can restore it. Being no_emit/locked alone must
+    # NOT skip, or a resume where the plan file didn't round-trip through the
+    # overlay leaves the parent permanently stuck (no_emit, never recomposed).
+    try:
+        from .final_categorization import _load_decomposition_children
+
+        existing_links = _load_decomposition_children(demo_dir)
+    except Exception:
+        existing_links = {}
+
     plan_entries: List[Dict[str, Any]] = []
     linked: List[str] = []
     notes: List[str] = []
@@ -501,10 +514,14 @@ def synthesize_recompose_links(
         psp = parent.get("submodule_path")
         if not pname or not psp or parent.get("status") != "NEW":
             continue
-        if pname in graduated or pname in no_emit or pname in locked:
+        if pname in graduated:
             continue
         kids = _immediate_children(psp)
         if len(kids) < 2:
+            continue
+        # Already fully linked (plan entry covers every immediate child) -> nothing to do.
+        prior = set(existing_links.get(pname) or [])
+        if prior and all((k.get("submodule_path") or "") in prior for k in kids):
             continue
         # Refuse if any child is already claimed by a DIFFERENT parent's
         # formal decomposition -- never fight a real linkage.

@@ -353,9 +353,11 @@ def test_synthesize_links_skips_when_a_child_not_on_device(tmp_path: Path, monke
     assert "wrap" not in om.load_no_emit_tests("test/m")
 
 
-def test_synthesize_links_skips_leaf_and_already_decomposed(tmp_path: Path, monkeypatch) -> None:
-    """A leaf (no child components) and an already-no_emit parent are both
-    skipped — idempotent, no double-linking."""
+def test_synthesize_links_relinks_no_emit_parent_missing_plan(tmp_path: Path, monkeypatch) -> None:
+    """Cross-run resume self-heal: a parent that is already no_emit but whose
+    plan linkage did not survive (e.g. the plan file didn't round-trip through
+    the overlay) must be RE-LINKED, not skipped — otherwise it stays no_emit
+    forever and never recomposes. Once the plan exists, it's idempotent."""
     from scripts.tt_hw_planner import overlay_manager as om
 
     monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
@@ -369,14 +371,16 @@ def test_synthesize_links_skips_leaf_and_already_decomposed(tmp_path: Path, monk
             {"name": "kid_b", "status": "NEW", "submodule_path": "gpt.b"},
         ],
     )
-    om.persist_no_emit_test("test/m", "wrap", reason="already decomposed")
+    # no_emit set but NO decomposition_plan.json present — the stranded state.
+    om.persist_no_emit_test("test/m", "wrap", reason="prior run, plan lost")
     linked, _ = synthesize_recompose_links(
         model_id="test/m", demo_dir=demo_dir, graduated_set={"kid_a", "kid_b"}
     )
-    # leaf has no children; wrap already no_emit -> nothing new linked
-    assert linked == 0
+    assert linked == 1  # leaf skipped (no children); wrap re-linked despite no_emit
+    plan = json.loads((demo_dir / "decomposition_plan.json").read_text())
+    assert [e for e in plan if e["parent_name"] == "wrap"]
 
-    # second run is a no-op too (idempotent)
+    # now the plan exists -> second run is a no-op (idempotent, no double entry)
     linked2, _ = synthesize_recompose_links(
         model_id="test/m", demo_dir=demo_dir, graduated_set={"kid_a", "kid_b"}
     )

@@ -561,10 +561,14 @@ def run_bringup_cc(
 
     _banner(f"Step 6/6  Bring-up (cc engine) — harness loop on the per-component gate for {model_id}")
 
-    _preflight_capture_real_inputs(model_id, Path(demo_dir))
+    # Reconcile recompose BEFORE capture: restoring a recomposed whole-module
+    # target clears its no_emit mark, so the subsequent capture pass includes
+    # it and refreshes its golden. Doing capture first would skip the still-
+    # no_emit target and leave the restored parent without inputs to test.
     _restore_orphaned_stale_tests(model_id, Path(demo_dir))
     _reinject_orphan_children(model_id, Path(demo_dir))
     _reconcile_recompose(model_id, Path(demo_dir))
+    _preflight_capture_real_inputs(model_id, Path(demo_dir))
 
     def _on_round(round_no, st):
         _restore_orphaned_stale_tests(model_id, Path(demo_dir))
