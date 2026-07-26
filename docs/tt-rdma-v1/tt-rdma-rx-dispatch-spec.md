@@ -137,7 +137,12 @@ through the eSwitch slow path:
 - **Host userspace sender:** ~11 Gbps and ~⅔ of frames dropped after `sendmmsg` accepts them —
   eSwitch-capped, multi-thread/`sendmmsg` does NOT help (`tt-rdma-eswitch-bypass.md`).
 - **DPU-Arm sender on the uplink `p0`** (eSwitch-bypassed): ~16.7 Gbps, ~98 % delivered — now capped by
-  the Arm userspace CPU, not the eSwitch. This is the fastest sender available without DOCA HW TX.
+  the Arm userspace CPU, not the eSwitch.
+- **DOCA `doca_eth_txq` HW-TX (pipelined) on `mlx5_0`**: **~143 Gbps (PHY-measured), near line rate** —
+  the Arm is off the per-frame egress path. This is the real gateway TX leg (`tt-rdma-gateway-sender.md`)
+  and it **proves the sender is no longer the limit: the BH RX is.** At 143 Gbps in, the RX is swamped
+  and resync-thrashes (drops to ~0.5 Gbps) — confirming the ~15.8 Gbps/rail drain ceiling below is the
+  binding constraint, and the ~16 → 143 Gbps gap is RX-side work.
 
 **BH RX WRITE (via `noc_async_write` to Tensix L1), jumbo 4080 B, single rail:**
 
