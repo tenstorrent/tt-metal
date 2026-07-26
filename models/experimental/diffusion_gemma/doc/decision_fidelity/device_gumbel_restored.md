@@ -448,6 +448,23 @@ Two consequences for the localisation:
 `first_forward_stats.py` computes these for either side and prints them paired, with the per-layer
 hidden RMS ratio, so the same statistic is never implemented twice.
 
+### Diagnostic gap: the accept count is not in the halt telemetry
+
+Section 9 quotes TT's per-step accepted count on q106 as 1, 1, 1, ... That came from a dedicated
+probe, and it is NOT reproducible from a normal run: the `DG_TRACE_METRIC` halt payload carries
+`halt_entropy_per_step` and `halt_mismatch_per_step` but no accept count (keys checked on the
+baseline q106 log). Given that the accept count is the statistic that actually decides whether a
+block converges, this is the wrong thing to be missing.
+
+Closing it looks cheap -- `write_halt_scalars` already reads back two `[1,1,1,1]` fp32 scalars per
+step and the accept mask exists on device at that point, so a third scalar rides the same readback --
+but it adds a trace-write target, which must be preallocated before `begin_trace_capture` and warmed
+once eagerly like `canvas_buf`. That is a change to the traced hot path and belongs behind a device
+run, not ahead of one.
+
+For reference, what the baseline telemetry DOES show on q106 block 0 is a mean entropy that declines
+far too slowly to halt: 5.102, 5.573, 5.445, 5.502, 5.461, 5.214, ... 4.077, 3.983 by step 28.
+
 ## 6. Reproduce
 
 ```bash
