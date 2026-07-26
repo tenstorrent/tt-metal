@@ -51,48 +51,71 @@ def test_<task>_perf(device_params, device):
     #    tracks TOTAL device dispatch for ANY op mix. A curated op list under-counts (sdpa/eltwise/
     #    transpose/reduction slip through) and the 12000-marker buffer overflows on some device,
     #    dropping ops -> non-reproducible device_ms. Wrapping by TYPE never misses an op.
-    counter = [0]
-    _orig = []
-    def _draining(fn):
-        def inner(*a, **k):
-            r = fn(*a, **k); counter[0] += 1
-            if PERF_FLUSH_EVERY and counter[0] % PERF_FLUSH_EVERY == 0:
-                try: ttnn.ReadDeviceProfiler(device)   # 'device' = mesh_device on multi-chip
-                except Exception: pass
-            return r
-        return inner
-    _mods = [ttnn] + [getattr(ttnn, _m, None) for _m in ("transformer", "experimental")]
-    for _mod in [_m for _m in _mods if _m is not None]:
-        for _n in dir(_mod):
-            _op = getattr(_mod, _n, None)
-            if type(_op).__name__ == "FastOperation":     # every dispatched ttnn op, by type
-                _orig.append((_mod, _n, _op)); setattr(_mod, _n, _draining(_op))
-    _fw0 = time.monotonic()
-    try:
-        out = ...  # run the pipeline BOUNDED (cap decode via PERF_MAX_NEW_TOKENS, or one forward)
-        try: ttnn.ReadDeviceProfiler(device)
-        except Exception: pass
-    finally:
-        for _mod, _n, _f in _orig: setattr(_mod, _n, _f)
-    print("FORWARD_WALL_MS=%.4f" % ((time.monotonic() - _fw0) * 1000.0))
-    assert out is not None   # perf only — NO PCC
-
-    if _PERF_TRACE:
+    def _eager_forward():
+        counter = [0]
+        _orig = []
+        def _draining(fn):
+            def inner(*a, **k):
+                r = fn(*a, **k); counter[0] += 1
+                if PERF_FLUSH_EVERY and counter[0] % PERF_FLUSH_EVERY == 0:
+                    try: ttnn.ReadDeviceProfiler(device)   # 'device' = mesh_device on multi-chip
+                    except Exception: pass
+                return r
+            return inner
+        _mods = [ttnn] + [getattr(ttnn, _m, None) for _m in ("transformer", "experimental")]
+        for _mod in [_m for _m in _mods if _m is not None]:
+            for _n in dir(_mod):
+                _op = getattr(_mod, _n, None)
+                if type(_op).__name__ == "FastOperation":     # every dispatched ttnn op, by type
+                    _orig.append((_mod, _n, _op)); setattr(_mod, _n, _draining(_op))
+        _fw0 = time.monotonic()
         try:
-            from models.experimental.perf_automation.agent.trace_replay import measure_adapter
-            from models.experimental.perf_automation.agent.perf_adapter import PipelineStageAdapter
+            out = ...  # run the pipeline BOUNDED (cap decode via PERF_MAX_NEW_TOKENS, or one forward)
+            try: ttnn.ReadDeviceProfiler(device)
+            except Exception: pass
+        finally:
+            for _mod, _n, _f in _orig: setattr(_mod, _n, _f)
+        print("FORWARD_WALL_MS=%.4f" % ((time.monotonic() - _fw0) * 1000.0))
+        assert out is not None   # perf only — NO PCC
 
-            def _build_for_perf(dev):
-                from <model>.tt.pipeline import build_pipeline   # lift the real import
-                return build_pipeline(dev)                        # + the same build args the demo uses
-            _prompt_ids = ...
-            # Stage adapter profiles WHATEVER emit-e2e emitted: every PIPELINE_STAGES entry gets
-            # traced (+2CQ where the stage stages its inputs). Falls back to the single decode
-            # contract for pipelines that expose only decode_step.
-            _adapter = PipelineStageAdapter(_build_for_perf, _prompt_ids, batch=1)
-            measure_adapter(_adapter, device, mode="auto")
+    def _traced_forward():
+        from models.experimental.perf_automation.agent.trace_replay import measure_adapter
+        from models.experimental.perf_automation.agent.perf_adapter import PipelineStageAdapter
+
+        def _build_for_perf(dev):
+            from <model>.tt.pipeline import build_pipeline   # lift the real import
+            return build_pipeline(dev)                        # + the same build args the demo uses
+        _prompt_ids = ...
+        # Stage adapter profiles WHATEVER emit-e2e emitted: every PIPELINE_STAGES entry gets
+        # traced (+2CQ where the stage stages its inputs). Falls back to the single decode
+        # contract for pipelines that expose only decode_step.
+        measure_adapter(PipelineStageAdapter(_build_for_perf, _prompt_ids, batch=1), device, mode="auto")
+
+    def _try_traced():
+        try:
+            _traced_forward(); return True
         except Exception as _te:  # noqa: BLE001
             print("TRACE_REPLAY_SKIPPED=%r" % (_te,), flush=True)
+            return False
+
+    # MEASUREMENT ORDER — two consumers, two different needs, and running both is not free.
+    #   TRACY PROFILING RUN (TT_METAL_DEVICE_PROFILER=1, layer-capped): needs BOTH products. The
+    #     op-wrapped eager forward IS the per-op capture; the trace pass supplies
+    #     TRACE_PER_TOKEN_MS for throughput. Two different measurements, so both run.
+    #   FULL-PIPELINE GATE (no tracy, TT_PERF_LAYERS=0, FULL depth): needs exactly ONE whole-model
+    #     latency. Running both builds the model TWICE at full depth on one device -- the second
+    #     build has no memory left for its KV cache and dies before any marker is printed.
+    # So the gate runs TRACE FIRST and only falls back to the eager forward when trace genuinely
+    # could not be measured. That is the designed contract: trace by default, eager as the fallback.
+    _PROFILING = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
+    if _PERF_TRACE and not _PROFILING:
+        if not _try_traced():
+            print("TRACE_REPLAY_FALLBACK=eager  # trace_replay isn't working — timing eagerly", flush=True)
+            _eager_forward()
+    else:
+        _eager_forward()
+        if _PERF_TRACE:
+            _try_traced()
 """
 
 
@@ -1052,10 +1075,16 @@ def generate_perf_test(
         "uses for 'all layers' and emit THAT -- never assume None.\n"
         "- NO PCC / correctness assertions (this is perf only) — just assert the pipeline produced output.\n"
         "- TIME THE FORWARD: keep the skeleton's time.monotonic() bracket around the bounded forward and "
-        'the final print("FORWARD_WALL_MS=...") VERBATIM — the harness reads it as an independent '
-        "end-to-end check on the profiler capture. Do not remove or rename it.\n"
+        'the final print("FORWARD_WALL_MS=...") VERBATIM inside `_eager_forward()` — the harness reads it '
+        "as an independent end-to-end check on the profiler capture. Do not remove or rename it.\n"
+        "- KEEP THE MEASUREMENT ORDER VERBATIM: `_eager_forward()` and `_traced_forward()` are two separate "
+        "functions, and the `_PROFILING` branch at the bottom decides which run. Do NOT inline them back "
+        "into one straight-line body and do NOT call both unconditionally. Under the full-pipeline gate the "
+        "model is built at FULL depth, and calling both means building it TWICE on one device: the second "
+        "build has no memory left for its KV cache and dies before printing any marker, which the gate can "
+        "only report as 'no markers'. Trace is the default path; eager is its FALLBACK.\n"
         "- KEEP the skeleton's trace-replay block VERBATIM in structure: the `_PERF_TRACE`/`_DEV_PARAMS` "
-        "device-param gate near the top AND the trailing `if _PERF_TRACE:` measure_adapter block. This is a "
+        "device-param gate near the top AND the `_traced_forward()` measure_adapter body. This is a "
         "MODEL-AGNOSTIC, GPU-comparable latency (TRACE_PER_TOKEN_MS + per-stage TRACE_STAGE_MS). Do NOT "
         "write a per-model adapter class — the tool ships the generic PipelineStageAdapter, which profiles "
         "WHATEVER emit-e2e emitted: every `PIPELINE_STAGES` entry is traced (+2CQ where the stage exposes "
