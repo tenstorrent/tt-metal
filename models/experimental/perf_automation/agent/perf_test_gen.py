@@ -428,6 +428,51 @@ def _is_eager_terminal(out: str) -> bool:
     return "TRACE_NOT_TRACE_CAPABLE=1" in (out or "")
 
 
+def has_pipeline_stages(root: Path) -> bool:
+    """Does this model expose emit-e2e's PIPELINE_STAGES trace hooks?
+
+    Decides WHICH adapter the generated perf test should use. PipelineStageAdapter is built for
+    models the bring-up tool assembled (it looks for `<stage>_trace_step` hooks); a hand-carved
+    general model has none of that and only exposes the decode_step contract. The skeleton used to
+    hardcode the stage adapter for BOTH, so a general model got an adapter written for a shape it
+    does not have -- and its comment told the authoring agent this was about emit-e2e stages, which
+    is misleading when there are none.
+    """
+    try:
+        for py in list((root / "tt").rglob("*.py")) + list(root.rglob("pipeline*.py")):
+            try:
+                if "PIPELINE_STAGES" in py.read_text(errors="ignore"):
+                    return True
+            except OSError:
+                continue
+    except Exception:  # noqa: BLE001
+        pass
+    return False
+
+
+def skeleton_for(root: Path) -> str:
+    """The structural skeleton with the ADAPTER matched to what this model actually exposes."""
+    if has_pipeline_stages(root):
+        return _SKELETON_REF
+    return (
+        _SKELETON_REF.replace(
+            "from models.experimental.perf_automation.agent.perf_adapter import PipelineStageAdapter",
+            "from models.experimental.perf_automation.agent.perf_adapter import PipelineDecodeAdapter",
+        )
+        .replace(
+            "            # Stage adapter profiles WHATEVER emit-e2e emitted: every PIPELINE_STAGES entry gets\n"
+            "            # traced (+2CQ where the stage stages its inputs). Falls back to the single decode\n"
+            "            # contract for pipelines that expose only decode_step.\n",
+            "            # This model exposes NO PIPELINE_STAGES (it was not assembled by emit-e2e), so profile\n"
+            "            # the single decode contract it does expose: decode_prefill(ids) then decode_step(state).\n",
+        )
+        .replace(
+            "_adapter = PipelineStageAdapter(_build_for_perf, _prompt_ids, batch=1)",
+            "_adapter = PipelineDecodeAdapter(_build_for_perf, _prompt_ids, batch=1)",
+        )
+    )
+
+
 def _pipeline_api_hint(root: Path, demo_src: str) -> str:
     """Feed the model's REAL pipeline API (the build_pipeline factory signature + PIPELINE_STAGES) into
     the prompt so the LLM fills `_build_for_perf` with the actual call, not a guess. Model-agnostic:
@@ -1028,7 +1073,7 @@ def generate_perf_test(
         "open `MeshShape(rows, cols)`. This lets --devices/--mesh reshape the run (single->1x1, N chips->the "
         "planned TP x DP); with the env unset it falls back to the source's own shape. Do NOT hardcode the shape.\n"
         "- Lift the imports + build args straight from the demo above.\n\n"
-        f"Use this structural skeleton (adapt the build+run to the demo):\n{_SKELETON_REF}\n"
+        f"Use this structural skeleton (adapt the build+run to the demo):\n{skeleton_for(root)}\n"
     )
     inproc_ctx = _inline_inprocess_sources(demo_src, root)
     if inproc_ctx:
