@@ -231,15 +231,15 @@ runtime:
     sim_wormhole_b0_galaxy: 10
     sim_blackhole_galaxy: 10
   unit:
-    wh_n150_civ2: 226
+    wh_n150_civ2: 232
     wh_n300_civ2: 99
     wh_llmbox: 20
     bh_p150b_civ2: 214
     bh_p300: 69
-    bh_p150b_civ2_viommu: 5
+    bh_p150b_civ2_viommu: 11
     bh_p100a_civ2_viommu: 74
     bh_loudbox: 20
-    wh_galaxy: 35
+    wh_galaxy: 39
   integration:
     wh_n150_civ2: 360
     bh_p150b_civ2: 360
