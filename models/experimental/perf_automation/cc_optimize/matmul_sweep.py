@@ -21,6 +21,8 @@ import argparse
 import ast
 import json
 import os
+
+from agent.probes import adaptive_op_timeout as _adaptive_op_timeout
 import subprocess
 import sys
 from pathlib import Path
@@ -262,7 +264,8 @@ def enumerate_matmul_sigs(node: str, case: Optional[str] = None, repo_root: Opti
             env=env,
             capture_output=True,
             text=True,
-            timeout=int(os.environ.get("PERF_MCP_MEASURE_STALL_SEC", "900") or "900"),
+            # scales with the shapes/fidelities/dtypes swept, so it is workload-dependent too
+            timeout=int(os.environ.get("PERF_MCP_MEASURE_STALL_SEC") or _adaptive_op_timeout("profile")),
         )
     except Exception as exc:  # noqa: BLE001
         print("[matmul-sweep] op-sig probe failed: %s" % str(exc)[-300:], file=sys.stderr)

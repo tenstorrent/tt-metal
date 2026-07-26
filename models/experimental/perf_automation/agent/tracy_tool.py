@@ -165,7 +165,7 @@ def normalize_memory(mem: str) -> str:
         return "l1_interleaved"
     if "DRAM" in m:
         return "dram_interleaved"
-    return "dram_interleaved"
+    return "unknown"
 
 
 def normalize_grid(cores: float, available: int = DEFAULT_WORKER_CORES) -> str:
@@ -254,7 +254,11 @@ def refine(
     if arch:
         cmd += ["--arch", arch]
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=600)
+        # tt-perf-report post-processing scales with the number of op rows, which scales with the
+        # model -- so this is model-dependent, not a machine constant. Same adaptive chain.
+        from .probes import adaptive_op_timeout
+
+        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=adaptive_op_timeout("profile"))
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         blob = (exc.stderr or "") + (exc.stdout or "")
         if "Unknown math fidelity" not in blob:
@@ -545,9 +549,17 @@ def tracy_tool(
 
     walls: list[float] = []
     raw_csv: Path | None = None
+    _per_run: list = []
     for i in range(runs):
         raw_csv, wall_ms = run_profiled(pcc_path, batch_size, seq_len, profiles_dir, i)
         walls.append(wall_ms)
+        _per_run.append((wall_ms, raw_csv))
+    # Pick the CSV of the run whose wall time IS the reported median, so device_ms and wall_ms
+    # describe the SAME execution. Previously raw_csv was simply whatever the last iteration left,
+    # while wall_ms was medianed -- two different runs reported as one profile.
+    if len(_per_run) > 1:
+        _median_wall = warm_wall_ms(walls)
+        raw_csv = min(_per_run, key=lambda pair: abs(pair[0] - _median_wall))[1]
 
     raw_dest = profiles_dir / "iter_baseline_raw.csv"
     if Path(raw_csv) != raw_dest:

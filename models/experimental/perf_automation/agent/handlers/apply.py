@@ -180,6 +180,33 @@ def _measure_device_ms(ctx):
     vals = [p.get("device_ms") for p in profiles if p.get("device_ms") is not None]
     if not vals:
         return {"status": "crash", "error": "profile had no device_ms"}
+
+    # Run the SAME integrity guard the REMEASURE path uses. Without it this route had none at all,
+    # so a truncated or zero-op capture was handed to the agent as "FASTER -- a real win".
+    rep = min(profiles, key=lambda q: abs((q.get("device_ms") or 0.0) - statistics.median(vals)))
+    if rep.get("capture_partial"):
+        return {"status": "crash", "error": "partial profiler capture: %s" % rep.get("capture_partial")}
+    from .remeasure import _comparable
+
+    try:
+        base = ctx.baseline_profile()
+    except Exception:  # noqa: BLE001
+        base = None
+    if base:
+        try:
+            ok, why = _comparable(base, rep)
+        except Exception as exc:  # noqa: BLE001
+            return {"status": "crash", "error": "measurement integrity UNKNOWN (%s)" % (str(exc)[-200:],)}
+        if not ok:
+            return {"status": "crash", "error": "measurement not comparable: %s" % why}
+    else:
+        # No baseline means there is nothing to compare against, which is NOT the same as a failed
+        # guard: returning crash here pushes the caller into the repair path.
+        return {
+            "status": "ok",
+            "device_ms": round(statistics.median(vals), 4),
+            "comparability": "no baseline profile available - this reading was NOT integrity-checked",
+        }
     return {"status": "ok", "device_ms": round(statistics.median(vals), 4)}
 
 

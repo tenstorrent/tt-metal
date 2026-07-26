@@ -14,6 +14,7 @@ the caller degrades to the one-shot generator.
 
 from __future__ import annotations
 
+import re
 import asyncio
 import os
 from pathlib import Path
@@ -21,7 +22,21 @@ from pathlib import Path
 PERF_RUN_SERVER = "perfrun"
 PERF_RUN_TOOL = "mcp__perfrun__run_perf_test"
 
-_COMPONENT_RUN_TIMEOUT_S = int(os.environ.get("PERF_MCP_COMPONENT_RUN_TIMEOUT_S", "240"))
+
+def _component_run_timeout() -> int:
+    """Budget for one perf-test build run on device, scaled from observed build cost (BUG 4).
+    The fixed 240 s was below llama's real 872 s build and ACE's 408 s."""
+    try:
+        from .probes import adaptive_op_timeout
+
+        return adaptive_op_timeout("build", env_key="PERF_MCP_COMPONENT_RUN_TIMEOUT_S")
+    except Exception:  # noqa: BLE001
+        # 240 s was the defect: llama's real perf-test build takes ~872 s.
+        from .sdk_retry import _operator_ceiling_s
+
+        return int(os.environ.get("PERF_MCP_COMPONENT_RUN_TIMEOUT_S", "") or _operator_ceiling_s())
+
+
 _TIMEOUT_CODES = {124, 137, 143, -9, -15}
 
 _WEDGE_RETRY_GUIDANCE = (
@@ -46,7 +61,11 @@ def _judge_output(rc, out: str) -> str:
     text = out or ""
     if _eager_flag():
         return "PASS_EAGER" if (rc == 0 and "FORWARD_WALL_MS=" in text) else "FAIL"
-    if rc in _TIMEOUT_CODES or "WEDGE" in text:
+    # Was `"WEDGE" in text`: the bare substring anywhere in pytest output -- a comment or a
+    # string in the GENERATED test, and the agent is explicitly told about WEDGE verdicts --
+    # classified every failing run as a device hang, triggering a board reset and the wrong
+    # "your trace touched the host" guidance instead of the real error. Require our own marker.
+    if rc in _TIMEOUT_CODES or re.search(r"^\s*(?:E\s+)?WEDGE(?:[:=]|\b)", text, re.MULTILINE):
         return "WEDGE"
     traced = ("TRACE_PER_TOKEN_MS=" in text) and bool(_parse_trace_path(text))
     if rc == 0 and traced:
@@ -70,7 +89,7 @@ def _run_and_format(node_abs: str, state: dict | None = None) -> str:
     if state is None:
         state = {"wedges": 0, "passed": False}
     env = {"TT_PERF_NUM_CQ": "1", "TT_PERF_TRACE": "0" if _eager_flag() else "1"}
-    rc, out = _run_perf_node(node_abs, env, timeout_s=_COMPONENT_RUN_TIMEOUT_S)
+    rc, out = _run_perf_node(node_abs, env, timeout_s=_component_run_timeout())
     verdict = _judge_output(rc, out)
     if verdict == "WEDGE":
         state["wedges"] += 1
@@ -145,7 +164,9 @@ def build_component_perf_test(root: str | Path, task: str, out_rel: str, prompt_
     from .sdk_retry import run_with_retry
 
     try:
-        from .structural_agent import _DEVICE_CALL_TIMEOUT_S as _agent_timeout
+        from .structural_agent import device_call_timeout_s
+
+        _agent_timeout = device_call_timeout_s()
     except Exception:  # noqa: BLE001
         _agent_timeout = None
 

@@ -41,7 +41,15 @@ def test_records_and_ratchets_best(tmp_path, monkeypatch):
     assert r1["status"] == "ok" and r1["mode"] == "trace+1cq"
 
     r2 = _drive(monkeypatch, 84.0, "trace", "trace+1cq")
-    assert r2["status"] == "ok" and r2["delta_pct"] < 0  # faster 1cq candidate banks as a win
+    assert r2["status"] == "ok" and r2["delta_pct"] < 0  # faster 1cq candidate reads as a win
+    # The COMMITTED best does not move on a reading alone. It used to ratchet down immediately --
+    # before PCC was known and regardless of a later revert -- so a candidate that measured faster
+    # and was then reverted still set the run's AFTER headline while the tree was unchanged. The
+    # reading is held pending and promoted only once a commit is actually observed.
+    assert json.loads((tmp_path / "base_1cq.json").read_text())["full_pipeline_ms"] == 90.0
+    pend = json.loads(perf_mcp._fullpipe_pending_path().read_text())
+    assert pend["full_pipeline_ms"] == 84.0, "the faster reading was not held as pending"
+    assert perf_mcp._promote_fullpipe_pending() is True
     assert json.loads((tmp_path / "base_1cq.json").read_text())["full_pipeline_ms"] == 84.0
 
 

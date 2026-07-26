@@ -54,12 +54,12 @@ VOCABULARY: dict[str, frozenset[str]] = {
             "other",
         }
     ),
-    "bound": frozenset({"dram", "flop", "both", "slow", "host"}),
+    "bound": frozenset({"dram", "flop", "both", "slow", "host", "unknown"}),
     "rank": frozenset({"time", "count"}),
-    "fidelity": frozenset({"lofi", "hifi2", "hifi3", "hifi4", "na"}),
+    "fidelity": frozenset({"lofi", "hifi2", "hifi3", "hifi4", "na", "unknown"}),
     "grid": frozenset({"full", "partial", "tiny"}),
-    "dispatch": frozenset({"ok", "gappy"}),
-    "memory": frozenset({"dram_interleaved", "l1_interleaved", "sharded"}),
+    "dispatch": frozenset({"ok", "gappy", "unknown"}),
+    "memory": frozenset({"dram_interleaved", "l1_interleaved", "sharded", "unknown"}),
     "regime": frozenset({"prefill", "decode", "na"}),
 }
 
@@ -135,8 +135,37 @@ def build_index(playbook_dir: str | os.PathLike[str] = GUIDELINES_DIR) -> list[d
             }
             for dim in DIMENSIONS:
                 entry[dim] = dims.get(dim, [WILDCARD])
+            _unknown = sorted(set(dims) - set(DIMENSIONS) - {"lever_type"})
+            if _unknown:
+                entry["route_warnings"] = [
+                    "unknown route dimension(s) %s in %s#%s -- ignored, NOT treated as a wildcard"
+                    % (", ".join(_unknown), path.name, anchor)
+                ]
+            _bad = []
+            for dim in DIMENSIONS:
+                _vocab = VOCABULARY.get(dim)
+                if not _vocab:
+                    continue
+                for v in entry[dim]:
+                    if v != WILDCARD and v not in _vocab:
+                        _bad.append("%s=%s" % (dim, v))
+            if _bad:
+                entry.setdefault("route_warnings", []).append(
+                    "out-of-vocabulary route value(s) %s in %s#%s" % (", ".join(_bad), path.name, anchor)
+                )
             index.append(entry)
     return index
+
+
+def all_entries(index: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Every indexed lever, unnarrowed. Used when a caller's dimension is out of vocabulary: an
+    honest unnarrowed list beats a silent empty one that reads as 'nothing catalogued'."""
+    return list(index)
+
+
+def index_warnings(index: list[dict[str, Any]]) -> list[str]:
+    """Route-block defects found while indexing (typo'd or out-of-vocab dimensions)."""
+    return [w for e in index for w in (e.get("route_warnings") or [])]
 
 
 def _dim_match(section_values: list[str], query_value: Any) -> bool:

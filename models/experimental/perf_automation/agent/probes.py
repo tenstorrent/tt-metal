@@ -28,12 +28,23 @@ from .environment import EnvironmentError_
 
 
 def adaptive_backstop(floor_default: int = 3600, mult: int = 3, env_key: str = "PERF_MCP_MEASURE_BACKSTOP") -> int:
+    """Hard backstop for a long device operation.
+
+    Was `max(floor_default, mult*baseline)` capped at the ceiling -- and since 3*baseline only beats
+    a 3600 s floor above a ~1200 s baseline, the floor was the de-facto policy for every model
+    actually run, including the PCC gate (the longest operation in a round). Same defect the other
+    timers were fixed for, so it now uses the same chain: observed p95 for this op, else an
+    agent estimate from the model's own evidence, else scaled from its baseline.
+    """
     override = os.environ.get(env_key)
     if override:
         try:
             return int(override)
         except ValueError:
             pass
+    _chained = adaptive_op_timeout("pcc", mult=float(mult))
+    if _chained > 0:
+        return _chained
     floor = floor_default
     ceil = 10800
     base = 0.0
@@ -62,6 +73,99 @@ def adaptive_backstop(floor_default: int = 3600, mult: int = 3, env_key: str = "
 # ---------------------------------------------------------------------------
 # 7.1 environment probe — `tt-smi -s` (TBD(env-script): CLOSED)
 # ---------------------------------------------------------------------------
+
+
+def adaptive_op_timeout(op: str, *, env_key: str = "", mult: float = 0.0) -> int:
+    """Timeout for one operation, scaled from OBSERVED durations for that operation.
+
+    Agent-side counterpart to cc_optimize.run.adaptive_timer (importing run.py from here
+    would be circular). Reads the same observed_durations.json the round writes, falling
+    back to the tracy baseline scaled into the operation's units. No absolute floors --
+    they were the BUG 4 defect: a 240 s build cap vs llama's real 872 s build, and a 300 s
+    agent-call cap on a model whose calls take 900 s, while a 3 ms module got 3600 s.
+    """
+    if env_key:
+        ov = os.environ.get(env_key)
+        if ov:
+            try:
+                return int(ov)
+            except ValueError:
+                pass
+    min_s = float(os.environ.get("PERF_MCP_MIN_TIMER_S", "30") or "30")
+    ceil = 10800.0
+    base = 0.0
+    cost = 0.0
+    mp = os.environ.get("PERF_MCP_MANIFEST")
+    if mp:
+        m = Path(mp)
+        try:
+            cfg = json.loads(m.read_text()).get("config", {}) or {}
+            ceil = float(cfg.get("timeout", ceil) or ceil)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            obs = json.loads((m.parent / "observed_durations.json").read_text()).get(op) or []
+            vals = sorted(float(x) for x in obs if float(x) > 0)
+            if vals:
+                cost = vals[min(len(vals) - 1, int(0.95 * len(vals)))]
+        except Exception:  # noqa: BLE001
+            pass
+        if cost <= 0:
+            try:
+                for ln in (m.parent / "events.jsonl").read_text().splitlines():
+                    if not ln.strip():
+                        continue
+                    e = json.loads(ln)
+                    if e.get("stage") == "tracy_baseline" and e.get("event") == "done" and e.get("seconds"):
+                        base = float(e["seconds"])
+            except Exception:  # noqa: BLE001
+                pass
+
+    if cost > 0:
+        # OBSERVED cost for this very operation on this very model: the only precise input.
+        return int(min(ceil, max(min_s, (mult or 4.0) * cost)))
+
+    # COLD START -- no observation yet. Ask the agent to size it from this model's own evidence
+    # rather than applying a per-op multiplier table, which is a guess about every future model
+    # frozen at authoring time (that table is what put a 240 s cap against llama's 872 s build).
+    est = _agent_seconds(op, base, ceil)
+    if est > 0:
+        return int(min(ceil, max(min_s, est)))
+    # No observation and no agent. Do NOT invent a fixed number (300/240 were the defect) and do
+    # NOT concede the whole ceiling either -- that would let a frozen call sit for hours. Scale from
+    # the model's OWN baseline with one generous factor, so a 3 s module is judged in seconds and an
+    # 8B pipeline gets room for its real work. One constant, no per-operation table.
+    # With no observation AND no agent there is genuinely nothing to derive an op's cost from. The
+    # options are a table of relative op costs (a guess about every future model, frozen at authoring
+    # time -- and dropping it made a tiny module's PCC backstop 37 s where the table implied 170 s),
+    # or conceding the operator's own ceiling. Concede: a budget that is too TIGHT kills healthy work
+    # and wastes the run, while a loose one only delays detection -- and round liveness is judged
+    # separately by watchdog_decide from real evidence, not by this clock.
+    return int(max(min_s, ceil))
+
+
+def _agent_seconds(op: str, baseline_s: float, ceiling_s: float) -> float:
+    """Agent-estimated budget for `op` on this model, cached per (op, baseline)."""
+    try:
+        from . import integrity as _integrity
+    except Exception:  # noqa: BLE001
+        return 0.0
+    model = os.environ.get("PERF_MCP_TASK", "") or "the model under test"
+    known = (
+        "its full profiled baseline run takes %.1f s" % baseline_s
+        if baseline_s > 0
+        else "its baseline duration is not yet known"
+    )
+    return _integrity.ask_number(
+        "A Tenstorrent TTNN performance-optimization tool needs a timeout for ONE operation of kind "
+        "%r on %s, where %s. Operation kinds: 'profile' = one tracy-profiled forward pass; 'pcc' = "
+        "the full end-to-end correctness test; 'build' = generating/compiling and running a perf "
+        "test; 'round' = a complete edit -> correctness -> measure -> commit cycle; 'agent' = one LLM "
+        "call that may use many tool turns. How many seconds should the budget be?" % (op, model, known),
+        lo=30.0,
+        hi=ceiling_s,
+        cache_key="timeout|%s|%s|%d" % (op, model, int(baseline_s)),
+    )
 
 
 def board_to_arch(board_type: str) -> str | None:
@@ -706,9 +810,15 @@ _CSV_STDOUT_RE = re.compile(r"OPs csv generated at:\s*(\S+ops_perf_results_\S+\.
 def _validate_csv(path: Path, log_path: Path) -> None:
     if not path.is_file() or path.stat().st_size == 0:
         raise TracyRunError(f"ops CSV missing/empty: {path}; log: {log_path}")
-    header = path.open().readline()
-    if not header.startswith("OP CODE"):
-        raise TracyRunError(f"unexpected CSV header in {path}: {header[:60]!r}; log: {log_path}")
+    with path.open() as _fh:
+        header = _fh.readline()
+        if not header.startswith("OP CODE"):
+            raise TracyRunError(f"unexpected CSV header in {path}: {header[:60]!r}; log: {log_path}")
+        # A valid header with ZERO data rows used to pass, which is exactly the upstream zero-row
+        # condition: it becomes device_ms 0.0 and then reads as a 100% speedup. Treat it as a
+        # measurement failure (the caller retries) rather than a measurement of nothing.
+        if not any(ln.strip() for ln in _fh):
+            raise TracyRunError(f"ops CSV has a header but NO op rows: {path}; log: {log_path}")
 
 
 def collect_cases(

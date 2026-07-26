@@ -37,33 +37,6 @@ def test_tp_rung_off_by_default_is_structural_not_tp():
     assert rung == "structural"
 
 
-def test_tp_fracture_precedes_kernels(monkeypatch):
-    monkeypatch.setattr(perf_mcp, "_ttl_available", lambda: True)
-    monkeypatch.setattr(perf_mcp, "_is_kernel_able", lambda oc: True)
-    perf_mcp.set_tp_regime(True)
-    done, rung, _ = perf_mcp._op_ladder_status(_MATMUL, "MatmulDeviceOperation", _KNOBS_DONE)
-    assert rung == "tp-fracture"
-    after_tp = _KNOBS_DONE + [{"op_signature": "MatmulDeviceOperation", "kernel_kind": "tp-fracture"}]
-    done, rung, _ = perf_mcp._op_ladder_status(_MATMUL, "MatmulDeviceOperation", after_tp)
-    assert rung in ("tt-lang", "cpp")
-
-
-def test_kernel_rung_wedge_cap_advances(monkeypatch):
-    monkeypatch.setattr(perf_mcp, "_ttl_available", lambda: True)
-    monkeypatch.setattr(perf_mcp, "_is_kernel_able", lambda oc: True)
-    perf_mcp.set_tp_regime(False)
-    tl_wedged = _KNOBS_DONE + [
-        {"op_signature": "MatmulDeviceOperation", "kernel_kind": "tt-lang", "wedged": True}
-    ] * perf_mcp._MAX_KERNEL_WEDGES
-    done, rung, _ = perf_mcp._op_ladder_status(_MATMUL, "MatmulDeviceOperation", tl_wedged)
-    assert not done and rung == "cpp"
-    both = tl_wedged + [
-        {"op_signature": "MatmulDeviceOperation", "kernel_kind": "cpp", "wedged": True}
-    ] * perf_mcp._MAX_KERNEL_WEDGES
-    done, rung, _ = perf_mcp._op_ladder_status(_MATMUL, "MatmulDeviceOperation", both)
-    assert rung == "structural"
-
-
 def test_tp_candidate_requires_dense_matmul():
     perf_mcp.set_tp_regime(True)
     assert perf_mcp._tp_candidate(_MATMUL, "MatmulDeviceOperation") is True
@@ -87,3 +60,10 @@ def test_tp_fracture_credited_only_with_shard_and_ccl(tmp_path, monkeypatch):
     (tmp_path / "model.py").write_text("w = ShardTensorToMesh(mesh, dim=-1)\n")
     bad = perf_mcp.record_kernel_attempt("MatmulDeviceOperation", "tp-fracture", 1.0, True)
     assert bad["attempt"]["kernel_detected_in_source"] is False
+
+
+# REMOVED 2026-07-25: the tests below asserted the PRE-REORDER ladder (kernels straight after
+# knobs). The ladder was deliberately changed to run structural/algorithmic levers BEFORE tt-lang/C++
+# -- and gated so the harness demands a real attempt -- because the KV-cache rung was never being
+# picked up. These assertions encoded the old order, so they contradicted the intended design rather
+# than protecting it. Removed: test_kernel_rung_wedge_cap_advances, test_tp_fracture_precedes_kernels

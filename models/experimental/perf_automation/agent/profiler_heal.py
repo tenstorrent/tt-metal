@@ -96,13 +96,44 @@ def _src_path(root: Path) -> Path:
     return root / "tt_metal" / "impl" / "profiler" / "profiler.cpp"
 
 
+_INEFFECTIVE_SENTINEL = ".perfauto_heal_ineffective"
+
+
 def _loaded_lib(root: Path) -> Path | None:
+    """The libtt_metal.so the RUNTIME actually loads, resolved via ldd on the imported
+    _ttnn.so. Guessing a hardcoded path was the bug: the heal rebuilt one copy and then
+    verified a different one, reported "marker not found in lib", and reverted -- burning
+    ~3 min on every run (observed 2026-07-25)."""
+    ttnn_so = root / "ttnn" / "ttnn" / "_ttnn.so"
+    if ttnn_so.is_file():
+        try:
+            r = subprocess.run(["ldd", str(ttnn_so)], capture_output=True, text=True, timeout=60)
+            for ln in (r.stdout or "").splitlines():
+                if "libtt_metal.so" in ln and "=>" in ln:
+                    cand = Path(ln.split("=>", 1)[1].strip().split(" ")[0])
+                    if cand.is_file():
+                        return cand
+        except Exception:  # noqa: BLE001
+            pass
     for rel in ("build_Release/lib/libtt_metal.so", "build/lib/libtt_metal.so"):
         p = root / rel
         if p.is_file():
             return p
     hits = sorted(root.glob("build*/lib/libtt_metal.so"))
     return hits[0] if hits else None
+
+
+def _heal_marked_ineffective(build: Path) -> bool:
+    return (build / _INEFFECTIVE_SENTINEL).is_file()
+
+
+def _mark_heal_ineffective(build: Path, why: str) -> None:
+    """Record that patch+rebuild does not land on this build, so later runs skip it instead
+    of repeating a known-failing 3-minute rebuild every time."""
+    try:
+        (build / _INEFFECTIVE_SENTINEL).write_text(why[:500])
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _lib_has_marker(lib: Path) -> bool:
@@ -127,7 +158,8 @@ def _rebuild(root: Path, build: Path) -> bool:
                 ["ninja", "-C", str(build), *targets],
                 capture_output=True,
                 text=True,
-                timeout=5400,
+                # a full tt-metal rebuild on a slower machine can exceed a fixed 90 min
+                timeout=_rebuild_timeout(),
             )
         except Exception as exc:
             _log(f"rebuild invocation failed: {exc}")
@@ -153,6 +185,13 @@ def _rebuild(root: Path, build: Path) -> bool:
                     _log(f"could not install {loaded.name}: {exc}")
                     return False
     return True
+
+
+def _rebuild_timeout() -> int:
+    """Budget for the ninja rebuild, on the same adaptive chain as every other timer."""
+    from .probes import adaptive_op_timeout
+
+    return int(adaptive_op_timeout("build", env_key="PERF_HEAL_REBUILD_TIMEOUT_S"))
 
 
 def ensure_profiler_patched(tt_metal_root) -> None:
@@ -192,6 +231,11 @@ def ensure_profiler_patched(tt_metal_root) -> None:
         if build is None:
             _log("no build dir found (wheel/prebuilt install) -> cannot rebuild; run will use stock profiler")
             return
+        if _heal_marked_ineffective(build):
+            _log("patch+rebuild already proven ineffective on this build -> skipping (stock profiler)")
+            if _MARKER not in text:
+                src.write_text(text)
+            return
         if not _rebuild(root, build):
             bak = src.with_name("profiler.cpp.perfauto_bak")
             if bak.is_file() and _MARKER not in text:
@@ -201,6 +245,15 @@ def ensure_profiler_patched(tt_metal_root) -> None:
         if lib is not None and _lib_has_marker(lib):
             _log("profiler patched + rebuilt; mesh profiling will no longer crash on orphan markers")
         else:
-            _log("rebuild done but marker not found in lib; proceeding")
+            # The rebuild did not land in the library the runtime loads. Revert the source and
+            # record it so the next run does not repeat this 3-minute round trip.
+            _log(
+                f"rebuild did not reach the loaded library ({lib}); reverting source and "
+                "disabling further heal attempts on this build (stock profiler is used)"
+            )
+            _mark_heal_ineffective(build, f"marker absent from {lib} after ninja rebuild")
+            bak = src.with_name("profiler.cpp.perfauto_bak")
+            if bak.is_file() and _MARKER not in text:
+                src.write_text(text)
     except Exception as exc:
         _log(f"skipped ({type(exc).__name__}: {exc})")

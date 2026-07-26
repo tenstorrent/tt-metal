@@ -33,6 +33,7 @@ sys.path.insert(0, str(_PKG.parent.parent.parent))  # repo root, so `models...` 
 sys.path.insert(0, str(_PKG))  # the perf_automation dir, so `agent` imports resolve
 
 from agent import gitio, perf_target, promote, roofline, router  # noqa: E402
+from agent import integrity as _integrity  # noqa: E402
 from agent.handlers import remeasure as _rm  # noqa: E402
 from agent.measure import measure_runs  # noqa: E402
 from agent.pcc_runner import run_pcc  # noqa: E402
@@ -56,12 +57,30 @@ if os.environ.get("PERF_MCP_PCC_TEST") and _MANIFEST:
     _MANIFEST["pathmap"]["pcc"]["end_to_end"]["path"] = os.environ["PERF_MCP_PCC_TEST"]
 _MODEL_ROOT = Path(os.environ.get("PERF_MCP_MODEL_ROOT") or _MANIFEST.get("config", {}).get("model_root", "."))
 _ENV = _MANIFEST.get("env", {})
+
+
 # where profile_model stashes the current baseline so measure_candidate can compare structurally
-_BASELINE_PATH = Path(tempfile.gettempdir()) / "perf_mcp_baseline.json"
+def _baseline_path():
+    """Per-(model, task) device_ms baseline. Was a single global file, unlike the already-keyed
+    _original_baseline_path()/_throughput_path(), and nothing reset it at task start -- so the
+    baseline a candidate was compared against could belong to a previous model, a previous
+    module, or a concurrent optimize on the same box. A leftover SLOWER baseline books the
+    first candidate of the new run as a large fake win."""
+    model = _MODEL_ROOT.name if _MODEL_ROOT else "model"
+    task = os.environ.get("PERF_MCP_TASK", "main")
+    return Path(tempfile.gettempdir()) / ("perf_mcp_baseline_%s_%s.json" % (model, task))
+
+
 # The tool is trace+1cq end to end; this is the ONLY full-pipeline baseline (no 2-CQ twin).
 _FULLPIPE_BASELINE_1CQ_PATH = Path(tempfile.gettempdir()) / "perf_mcp_full_pipeline_baseline_1cq.json"
+# Divergence tolerance for the end-to-end gate. This is NOT a licence to commit a regression:
+# it only decides when to shout "diverged". A reading that is slower than the committed best
+# is reported as a regression regardless (see the regressed branch below), because "within 8%
+# of the best ever" used to read as ok and let real latency ratchet upward unnoticed.
 _FULLPIPE_TOL = float(os.environ.get("PERF_MCP_FULLPIPE_TOL", "0.08"))
-_FULLPIPE_SAMPLES = max(1, int(os.environ.get("PERF_MCP_FULLPIPE_SAMPLES", "1")))
+# Must match the BEFORE bookend (run.py sets 3): AFTER = min over 1-sample readings vs
+# BEFORE = median of 3 manufactured the full noise range as a gain on every run.
+_FULLPIPE_SAMPLES = max(1, int(os.environ.get("PERF_MCP_FULLPIPE_SAMPLES", "3")))
 _FULLPIPE_TARGET_MS = float(os.environ.get("PERF_MCP_TARGET_MS", "0") or "0")
 
 # C++-kernel SAFETY: a bad Metalium kernel can WEDGE a device core (tt-lang/ttnn fail gracefully; raw
@@ -287,13 +306,43 @@ _TP_SHARD_MARKERS = ("ShardTensorToMesh", "shard_tensor_to_mesh")
 _CCL_MARKERS = ("all_gather", "reduce_scatter", "all_reduce")
 
 
+def _dirty_model_files() -> set:
+    """Files under the model dir changed since HEAD (staged, unstaged or untracked).
+
+    Kernel evidence has to come from what THIS attempt touched. A repo-wide substring scan meant
+    one orphaned file from a partial revert, or an unrelated all_gather already in the model, made
+    every subsequent attempt read as "kernel detected" -- so ops retired on phantom kernels and
+    can_stop went true without the work being done.
+    """
+    try:
+        repo = gitio.repo_root(_MODEL_ROOT)
+        try:
+            spec = str(_MODEL_ROOT.relative_to(repo))
+        except ValueError:
+            spec = "."
+        out = set()
+        r = gitio._git(["status", "--porcelain", "--", spec], repo)
+        for ln in (r.stdout or "").splitlines():
+            rel = ln[3:].strip().split(" -> ")[-1]
+            if rel:
+                out.add((Path(repo) / rel).resolve())
+        return out
+    except Exception:  # noqa: BLE001
+        return set()
+
+
 def _scan_kernel_evidence() -> dict:
     """Look for real custom-kernel authoring in the model source so a recorded attempt can't be a
-    phantom. Returns {markers, cpp_files, tp_shard, ccl} — empty/False if nothing is present."""
+    phantom. Returns {markers, cpp_files, tp_shard, ccl, scope} — empty/False if nothing is
+    present. Scoped to files changed since HEAD when any are; falls back to the whole model dir
+    only when the tree is clean (nothing to attribute)."""
     found, cpp = set(), []
     tp_shard = ccl = False
+    _dirty = _dirty_model_files()
     try:
         for p in _MODEL_ROOT.rglob("*"):
+            if _dirty and p.resolve() not in _dirty:
+                continue
             if p.is_dir() or p.suffix not in (".py", ".cpp", ".cc", ".h", ".hpp"):
                 continue
             if p.suffix in (".cpp", ".cc"):
@@ -311,7 +360,13 @@ def _scan_kernel_evidence() -> dict:
                 ccl = True
     except Exception:  # noqa: BLE001
         pass
-    return {"markers": sorted(found), "cpp_files": cpp, "tp_shard": tp_shard, "ccl": ccl}
+    return {
+        "markers": sorted(found),
+        "cpp_files": cpp,
+        "tp_shard": tp_shard,
+        "ccl": ccl,
+        "scope": "changed-since-HEAD" if _dirty else "whole-model-dir (clean tree)",
+    }
 
 
 def _load_attempts() -> list:
@@ -329,6 +384,12 @@ def _save_attempts(a: list) -> None:
 
 _LAST_TARGET_PATH = Path(str(_KERNEL_LOG_PATH) + ".target")
 _LAST_TARGET: dict = {}
+
+
+def _normalise_rung(rung) -> str:
+    """`knob:grid` -> `grid`. Rungs are minted prefixed but counted bare, so without this the
+    retry counters never saturate and the ladder re-issues the same rung forever."""
+    return (str(rung or "").strip().lower().split(":")[-1] or "knob").strip()
 
 
 def _persist_target(t) -> None:
@@ -380,7 +441,10 @@ def _autorecord_wedge(reason: str) -> None:
     t = _load_target()
     rec = {
         "op_signature": t.get("op") or "candidate config",
-        "kernel_kind": t.get("rung") or "knob",
+        "kernel_kind": _normalise_rung(t.get("rung")),
+        # An unmeasured attempt is not evidence about the lever. Without this the *_tries
+        # counters treated a host-side measurement failure as "tried and lost on merit".
+        "measurement_failed": _is_confirmed_measurement_failure(reason),
         "measured_ms": None,
         "beat_baseline": False,
         "note": reason,
@@ -407,8 +471,8 @@ def _summary_mod():
 
 def _report_baseline_ms():
     try:
-        if _BASELINE_PATH.exists():
-            return round(float(json.loads(_BASELINE_PATH.read_text()).get("device_ms", 0.0)), 4)
+        if _baseline_path().exists():
+            return round(float(json.loads(_baseline_path().read_text()).get("device_ms", 0.0)), 4)
     except Exception:  # noqa: BLE001
         pass
     return None
@@ -416,8 +480,8 @@ def _report_baseline_ms():
 
 def _read_baseline_profile():
     try:
-        if _BASELINE_PATH.exists():
-            return json.loads(_BASELINE_PATH.read_text())
+        if _baseline_path().exists():
+            return json.loads(_baseline_path().read_text())
     except Exception:  # noqa: BLE001
         pass
     return None
@@ -635,10 +699,18 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
     any other gate 'fired'."""
     matches = [a for a in attempts if _op_match(op_code, a)]
     kinds = {(a.get("kernel_kind") or "").lower() for a in matches}
-    grid_tries = sum(1 for a in matches if (a.get("kernel_kind") or "").lower() == "grid")
-    dtype_tries = sum(1 for a in matches if (a.get("kernel_kind") or "").lower() == "dtype")
-    fidelity_tries = sum(1 for a in matches if (a.get("kernel_kind") or "").lower() == "fidelity")
-    shard_tries = sum(1 for a in matches if (a.get("kernel_kind") or "").lower() == "shard")
+    grid_tries = sum(
+        1 for a in matches if _normalise_rung(a.get("kernel_kind")) == "grid" and not a.get("measurement_failed")
+    )
+    dtype_tries = sum(
+        1 for a in matches if _normalise_rung(a.get("kernel_kind")) == "dtype" and not a.get("measurement_failed")
+    )
+    fidelity_tries = sum(
+        1 for a in matches if _normalise_rung(a.get("kernel_kind")) == "fidelity" and not a.get("measurement_failed")
+    )
+    shard_tries = sum(
+        1 for a in matches if _normalise_rung(a.get("kernel_kind")) == "shard" and not a.get("measurement_failed")
+    )
     grid = (open_op.get("grid") or "").lower()
     wdtype = (open_op.get("weight_dtype") or "").lower()
     fidelity = (open_op.get("fidelity") or "").lower()
@@ -649,13 +721,15 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
     # 2-CQ). Routed via recall_knobs(op_class=host_fallback). Cleared once a measured 'structural'
     # attempt is on file — a trace that doesn't help still counts as tried (bounded, can't hang).
     if bound == "host" or (open_op.get("bucket") or "").lower() == "host_fallback":
-        if not (kinds & {"structural", "trace", "2cq", "trace-2cq"}):
+        if not (kinds & {"structural", "trace", "2cq", "trace-2cq", "trace-capture"}):
             return (
                 False,
                 "trace-2cq",
                 "host/dispatch-bound: recall_knobs(op_class='host_fallback') and apply the "
-                "trace-capture / 2-CQ DISPATCH lever to the generation loop; record_kernel_attempt(...,'trace-2cq',...). "
-                "NOTE: trace/2CQ removes DISPATCH gaps only. If decode is repeat_prefill (no KV-cache), the bulk of "
+                "TRACE-CAPTURE lever to the generation loop; record_kernel_attempt(...,'trace-capture',...). "
+                "This tool measures trace+1CQ end to end (cq is fixed at 1, there is no 2-CQ track), so do NOT "
+                "spend this rung on a second command queue — it cannot be measured here. "
+                "NOTE: trace removes DISPATCH gaps only. If decode is repeat_prefill (no KV-cache), the bulk of "
                 "this bucket is REDUNDANT RECOMPUTE, which trace does NOT remove — that is handled by the SEPARATE "
                 "generation_loop 'kv-cache' target, not here.",
             )
@@ -867,19 +941,78 @@ def _detect_partial_capture(profiles_dir) -> str | None:
                 return txt
         from agent.probes import detect_marker_drop
 
-        for log in sorted(d.glob("*_tracy.log")):
-            hit = detect_marker_drop(log.read_text())
+        _logs = sorted(d.glob("*_tracy.log"))
+        _readable = 0
+        for log in _logs:
+            try:
+                _txt = log.read_text(errors="ignore")
+            except OSError:
+                continue
+            if not _txt.strip():
+                continue
+            _readable += 1
+            hit = detect_marker_drop(_txt)
             if hit:
                 return hit
-    except Exception:
-        return None
+        if not _readable:
+            return "no readable tracy log to check for marker drops -- capture integrity UNKNOWN"
+    except Exception as exc:  # noqa: BLE001
+        # A detector that FAILED did not observe a clean capture. Returning None here (and on a
+        # single ImportError, for the whole session) silently disabled partial-capture detection,
+        # which is what let a truncated capture through as a low device_ms and a false win.
+        return "partial-capture detection FAILED (%s) -- capture integrity UNKNOWN" % (str(exc)[:120],)
     return None
 
 
 _PROFILE_CACHE_DIR = Path(tempfile.gettempdir()) / "perf_mcp_profile_cache"
 
 
-def _model_source_fingerprint() -> str:
+def _win_threshold(base_ms: float, spread_ms=None) -> float:
+    """Smallest delta worth calling a win. SINGLE source of truth: agent.integrity.win_threshold.
+
+    A bare 0.05 ms was unit-agnostic -- on a 2266 ms llama baseline that accepts three thousandths
+    of one percent, far inside this board's thermal drift. It also lived in two modules, so fixing
+    one left the optimize path still banking noise; hence one implementation, imported.
+    """
+    return _integrity.win_threshold(base_ms, spread_ms)
+
+
+_SOURCE_EXTS = (".py", ".cpp", ".hpp", ".h", ".cc", ".cu")
+
+
+def _authored_source_files(root: Path) -> list:
+    """Source files a human (or the agent) authored under `root`, per git.
+
+    Tracked files plus untracked-and-not-ignored ones. Generated artifacts are gitignored, so they
+    are excluded by construction rather than by a list of patterns this code would have to keep
+    guessing at. Falls back to a non-recursive glob only when git cannot answer.
+    """
+    try:
+        repo = gitio.repo_root(root)
+        rel = str(root.relative_to(repo))
+        out = set()
+        for args in (
+            ["ls-files", "--", rel],
+            ["ls-files", "--others", "--exclude-standard", "--", rel],
+        ):
+            r = gitio._git(args, repo)
+            if r.returncode != 0:
+                continue
+            for line in (r.stdout or "").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                f = Path(repo) / line
+                if f.is_file() and f.suffix in _SOURCE_EXTS and "__pycache__" not in f.parts:
+                    out.add(f)
+        if out:
+            return list(out)
+    except Exception:  # noqa: BLE001
+        pass
+    return [f for d in ("_stubs", "tt") for f in (root / d).glob("*.py") if f.is_file()]
+
+
+def _model_source_fingerprint(cq=None) -> str:
     """Cache key for a profiling run: hashes the model's stub/tt source AND the identity
     of the module + perf-test being profiled.
 
@@ -891,16 +1024,38 @@ def _model_source_fingerprint() -> str:
     h = hashlib.sha256()
     try:
         root = _MODEL_ROOT
-        files = sorted(list((root / "_stubs").glob("*.py")) + list((root / "tt").glob("*.py")))
+        # AUTHORED INPUTS ONLY. A plain recursive walk hashes whatever is on disk, including files
+        # the profiling run itself writes, so the key changed as a side effect of measuring and the
+        # cache could never hit. git already distinguishes authored source from generated artifacts:
+        # tracked files, plus untracked ones that .gitignore does not exclude. That also keeps a
+        # hand-authored .cpp / tt-lang kernel IN the key -- the omission that made the custom-kernel
+        # rung unmeasurable, because an authored kernel produced a byte-identical fingerprint and
+        # measure_candidate returned the PRE-kernel cached profile.
+        files = sorted(_authored_source_files(root))
         if not files:
             return ""
         for f in files:
-            h.update(f.name.encode())
+            h.update(str(f.relative_to(root)).encode())
             h.update(f.read_bytes())
     except Exception:
         return ""
     ptr = _MANIFEST.get("perf_test_resolved", {}) or {}
-    for part in (os.environ.get("PERF_MCP_TASK", ""), ptr.get("path", ""), ptr.get("case", "")):
+    # Env that changes WHAT is measured must be in the key: without TT_PERF_TRACE/TT_PERF_LAYERS
+    # a later eager or different-depth run was served the earlier trace-mode profile as its own.
+    _env_keys = (
+        "PERF_MCP_TASK",
+        "TT_PERF_TRACE",
+        "TT_PERF_NUM_CQ",
+        "TT_PERF_LAYERS",
+        "TT_PERF_SEQ_LEN",
+        "PERF_MCP_DEVICES",
+        "PERF_MCP_PROFILE_ENV",
+    )
+    for part in [os.environ.get(k, "") for k in _env_keys] + [
+        ptr.get("path", ""),
+        ptr.get("case", ""),
+        ("cq=%s" % cq) if cq is not None else "",
+    ]:
         h.update(b"\x00")
         h.update(str(part).encode())
     return h.hexdigest()
@@ -944,15 +1099,85 @@ _MEASUREMENT_FAILURE_MARKERS = (
 _ZERO_ROW_RETRIES = int(os.environ.get("PERF_MCP_ZERO_ROW_RETRIES", "2") or "2")
 
 
-def _is_measurement_failure(msg) -> bool:
-    """True when the profile produced no readable measurement (host-side extraction),
-    as opposed to a device crash / hang that genuinely wedged the board."""
+_DEVICE_FAULT_MARKERS = (
+    "segmentation fault",
+    "core dumped",
+    "aborted",
+    "terminate called",
+    "tt_fatal",
+    "tt_throw",
+    "tt_assert",
+    "device watchdog",
+    "hang detected",
+    "fabric router sync: timeout",
+    "harvesting",
+    "umd",
+    "pcie",
+    "eth link",
+    "unrecoverable",
+    "dma",
+)
+
+
+FAULT_DEVICE = "device_fault"
+FAULT_MEASUREMENT = "measurement_failure"
+FAULT_UNKNOWN = "unknown"
+
+
+def classify_failure(msg) -> str:
+    """Was this a DEVICE fault or a failed MEASUREMENT? Judged by an agent, not by substrings.
+
+    Three states (FAULT_DEVICE / FAULT_MEASUREMENT / FAULT_UNKNOWN) because the two decisions this
+    feeds need opposite conservatism: resetting the board needs positive device evidence (a false
+    reset is expensive), while forgiving a lever needs positive measurement-failure evidence
+    (forgiving by default makes every wedge invisible to the ladder).
+
+    The substring lists are the OFFLINE fallback only. They are why this was broken twice already:
+    an allow-list of four markers sent every other host-side fault down the device-wedge path, and
+    the next TT_FATAL / launcher / report-tool failure is phrased a way no list anticipated. The
+    agent reads the actual text; the answer is cached by content hash so a repeat costs nothing.
+    """
     s = str(msg or "").lower()
-    if any(
-        m in s for m in ("segmentation fault", "core dumped", "aborted", "terminate called", "tt_fatal", "tt_throw")
-    ):
-        return False
-    return any(m in s for m in _MEASUREMENT_FAILURE_MARKERS)
+    if not s.strip():
+        return FAULT_UNKNOWN
+
+    verdict = _integrity.classify(
+        s[:400],
+        {FAULT_DEVICE, FAULT_MEASUREMENT},
+        what="failure",
+        evidence=(
+            "device_fault = the accelerator itself faulted, hung or was reset (the board needs "
+            "recovery). measurement_failure = the device was fine but the host could not extract a "
+            "reading (profiler/report/CSV/launcher/parse problem), so the edit was simply not "
+            "measured. Text follows:\n" + s[:400]
+        ),
+    )
+    if verdict in (FAULT_DEVICE, FAULT_MEASUREMENT):
+        return verdict
+
+    # offline / agent-unavailable fallback: positive evidence only, never a default
+    if any(m in s for m in _DEVICE_FAULT_MARKERS):
+        return FAULT_DEVICE
+    if any(m in s for m in _MEASUREMENT_FAILURE_MARKERS):
+        return FAULT_MEASUREMENT
+    return FAULT_UNKNOWN
+
+
+def _is_measurement_failure(msg) -> bool:
+    """Should this be reported as an unmeasured attempt rather than a device wedge?
+
+    True for a known measurement failure AND for UNKNOWN: absent a device-fault signature the board
+    is fine, so calling it a wedge burns the lever, bumps the crash counter and resets the board on
+    repeat (the original BUG 1). This answers the REPORTING question only -- lever accounting uses
+    `_is_confirmed_measurement_failure`, which does not forgive UNKNOWN.
+    """
+    return classify_failure(msg) != FAULT_DEVICE
+
+
+def _is_confirmed_measurement_failure(msg) -> bool:
+    """Positive evidence that no measurement happened. Used for ladder accounting, where forgiving
+    an UNKNOWN attempt would hide every wedge from the retry counters."""
+    return classify_failure(msg) == FAULT_MEASUREMENT
 
 
 def _measurement_failed_result(msg) -> dict:
@@ -991,7 +1216,7 @@ def _profile_with_zero_row_retry(cq=None, retries: int = None) -> dict:
 
 def _profile_once(cq=None) -> dict:
     _cache_on = os.environ.get("PERF_MCP_NO_PROFILE_CACHE") != "1"
-    _fp = _model_source_fingerprint() if _cache_on else ""
+    _fp = _model_source_fingerprint(cq) if _cache_on else ""
     if _fp:
         _hit = _profile_cache_get(_fp)
         if _hit is not None:
@@ -1080,7 +1305,7 @@ def profile_model() -> dict:
                 f"recorded — auto-heal could not get a clean run. Re-profile a smaller/signposted region."
             ),
         }
-    _BASELINE_PATH.write_text(json.dumps(prof))
+    _baseline_path().write_text(json.dumps(prof))
     _orig = _original_baseline_path()
     if not _orig.exists():
         try:
@@ -1156,9 +1381,18 @@ def measure_candidate() -> dict:
             "reason": _trace_compat_feedback(f"partial_capture: profiler dropped markers ({prof['capture_partial']})"),
             "device_ms": dev,
         }
-    if not _BASELINE_PATH.exists():
-        return {"verdict": "valid", "device_ms": dev, "note": "no baseline recorded; call profile_model first"}
-    baseline = json.loads(_BASELINE_PATH.read_text())
+    if not _baseline_path().exists():
+        return {
+            "verdict": "NO_BASELINE",
+            "measured": True,
+            "device_ms": dev,
+            "is_real_gain": False,
+            "reason": (
+                "no baseline recorded, so this reading cannot be compared to anything and is NOT a "
+                "win: call profile_model to establish the baseline, then re-measure."
+            ),
+        }
+    baseline = json.loads(_baseline_path().read_text())
     base_dev = round(float(baseline.get("device_ms", 0.0)), 4)
     # DETERMINISTIC integrity guard (the exact check REMEASURE uses) — GENERALIZED to physics: pass
     # the model's roofline floor so a below-floor (impossible) reading is rejected as a crashed
@@ -1173,7 +1407,7 @@ def measure_candidate() -> dict:
         return {"verdict": "REJECTED", "reason": reason, "device_ms": dev, "baseline_ms": base_dev}
     delta = round(base_dev - dev, 4)
     pct = round((delta / base_dev) * 100.0, 2) if base_dev else 0.0
-    faster = delta > 0.05  # noise floor
+    faster = delta > _win_threshold(base_dev)
     pt_ms = prof.get("per_token_ms")
     base_pt = baseline.get("per_token_ms")
     return {
@@ -1188,7 +1422,13 @@ def measure_candidate() -> dict:
         "per_token_delta_ms": round(base_pt - pt_ms, 6) if (pt_ms and base_pt) else None,
         "tokens_per_sec_per_user": prof.get("tokens_per_sec_per_user"),
         "tokens_per_sec": prof.get("tokens_per_sec"),
-        "note": "FASTER — real gain" if faster else ("SLOWER" if delta < -0.05 else "no gain (within noise)"),
+        # same threshold in both directions -- a 4th hardcoded 0.05 lived here, so a change could be
+        # labelled SLOWER while an equal-sized gain was correctly dismissed as noise.
+        "note": (
+            "FASTER — real gain"
+            if faster
+            else ("SLOWER" if delta < -_win_threshold(base_dev) else "no gain (within noise)")
+        ),
     }
 
 
@@ -1200,8 +1440,13 @@ def check_pcc() -> dict:
     try:
         res = run_pcc(_Ctx())
     except Exception as exc:  # noqa: BLE001
+        _msg = str(exc)[-800:]
+        if _is_measurement_failure(_msg):
+            out = _measurement_failed_result(_msg)
+            out["status"] = "measurement_failed"
+            return out
         _note_device_crash("check_pcc")
-        return {"status": "crash", "error": str(exc)[-800:]}
+        return {"status": "crash", "error": _msg}
     if res.get("status") == "crash":
         _note_device_crash("check_pcc")
     else:
@@ -1247,7 +1492,14 @@ def _adaptive_run(cmd, cwd, env, label="device run", stall_s=None, backstop=None
     import threading as _th
     import time as _t
 
-    stall_s = int(stall_s if stall_s is not None else os.environ.get("PERF_MCP_MEASURE_STALL_SEC", "600") or "600")
+    if stall_s is None:
+        _ov = os.environ.get("PERF_MCP_MEASURE_STALL_SEC")
+        # No caller-supplied budget (full-pipeline run, op-sig probe): derive it, never assume 600 s
+        # of silence means dead -- weight load and kernel compile are legitimately quiet for longer.
+        from agent.probes import adaptive_op_timeout as _aot
+
+        stall_s = int(_ov) if _ov else int(_aot("profile"))
+    stall_s = int(stall_s)
     if backstop is None:
         from agent.probes import adaptive_backstop as _abs
 
@@ -1444,6 +1696,128 @@ def _emit_fullpipe(result: dict) -> dict:
 _FULLPIPE_MODE_RANK = {"eager": 0, "trace": 1, "trace+1cq": 1, "trace+2cq": 2}
 
 
+def _fullpipe_pending_path() -> Path:
+    """A candidate READING, not yet a committed result.
+
+    The committed best used to be ratcheted down by any lower reading -- taken before PCC was
+    known and regardless of a later revert -- and run.py reads that file for the AFTER headline.
+    So a candidate that measured faster and was then reverted for pcc_low still set the run's
+    reported speedup while the tree ended byte-identical to baseline. Readings now land here and
+    are promoted only by an actual commit.
+    """
+    return _FULLPIPE_BASELINE_1CQ_PATH.with_suffix(".pending.json")
+
+
+def _head_sha_quiet() -> str:
+    try:
+        return gitio.head_sha(gitio.repo_root(_MODEL_ROOT)) or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _record_fullpipe_candidate(ms: float, method: str, mode: str) -> None:
+    """Stash a reading as PENDING, stamped with the HEAD it was measured at."""
+    try:
+        _fullpipe_pending_path().write_text(
+            json.dumps({"full_pipeline_ms": ms, "method": method, "mode": mode, "sha": _head_sha_quiet()})
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _promote_fullpipe_if_committed() -> bool:
+    """Promote a pending reading once HEAD has actually moved past the sha it was measured at.
+
+    Promotion must follow the OBSERVABLE FACT that a commit happened, not the code path used to make
+    it. Tying it to the git_commit tool alone meant a win committed any other way (the agent has Bash)
+    would sit pending forever and never reach the AFTER headline -- under-reporting a real gain, the
+    mirror of the bug this split fixes.
+    """
+    try:
+        pend = json.loads(_fullpipe_pending_path().read_text())
+    except Exception:  # noqa: BLE001
+        return False
+    was = str(pend.get("sha") or "")
+    now = _head_sha_quiet()
+    if not was or not now or was == now:
+        return False
+    return _promote_fullpipe_pending()
+
+
+def _promote_fullpipe_pending() -> bool:
+    """Called on a real commit: the pending reading becomes the committed best."""
+    src = _fullpipe_pending_path()
+    try:
+        if not src.exists():
+            return False
+        _FULLPIPE_BASELINE_1CQ_PATH.write_text(src.read_text())
+        src.unlink()
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _discard_fullpipe_pending() -> None:
+    """Called on revert: the reading never became a result."""
+    try:
+        _fullpipe_pending_path().unlink()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _establish_fullpipe_baseline(ms: float, method: str, mode: str) -> None:
+    """Write the committed baseline directly, and drop any pending reading.
+
+    Used only when there is nothing to compare against -- no baseline yet, or the measurement MODE
+    changed so the stored value is a different unit. That is a re-baseline, not a candidate: there
+    is no commit to wait for, and keeping the old number would make every later delta meaningless.
+    """
+    try:
+        _FULLPIPE_BASELINE_1CQ_PATH.write_text(json.dumps({"full_pipeline_ms": ms, "method": method, "mode": mode}))
+    except Exception:  # noqa: BLE001
+        pass
+    _discard_fullpipe_pending()
+
+
+def _fullpipe_verdict_for(ms: float, method: str, mode: str, best: float, base_mode: str) -> dict:
+    """Verdict for a reading against the COMMITTED best, split out so it is testable.
+
+    A mode flip cannot be differenced against the old baseline: the same TRACE_PER_TOKEN_MS
+    field carries per-token decode ms in one mode and a summed pipeline wall in another, so
+    subtracting across a flip fabricated gains like +98.8%. It re-establishes the baseline but
+    must NOT return the agent's bank-a-win status.
+    """
+    if best <= 0:
+        _establish_fullpipe_baseline(ms, method, mode)
+        return {
+            "status": "ok",
+            "delta_pct": None,
+            "note": "no baseline existed; established at this reading — nothing to compare against, so no delta",
+        }
+    if _mode_rank(mode) != _mode_rank(base_mode):
+        _establish_fullpipe_baseline(ms, method, mode)
+        upgrade = _mode_rank(mode) > _mode_rank(base_mode)
+        return {
+            "status": "ok" if upgrade else "rebaselined",
+            "delta_pct": None,
+            "note": (
+                "measurement MODE changed %s -> %s. The two are different UNITS, so no delta is "
+                "computable and none is reported. %s"
+                % (
+                    base_mode,
+                    mode,
+                    (
+                        "This is a genuine fidelity UPGRADE, so it is bankable — commit it; the "
+                        "baseline is re-established at the new mode."
+                        if upgrade
+                        else "This is NOT a win; the baseline is re-established at the new mode."
+                    ),
+                )
+            ),
+        }
+    return {}
+
+
 def _fullpipe_mode(method: str, path: str | None) -> str:
     if method != "trace":
         return "eager"
@@ -1626,8 +2000,12 @@ def check_lever_coverage(op_match: str, stale_dtype: str = "", new_dtype: str = 
     counts, seq = _full_depth_op_probe()
     if not counts:
         return {
-            "status": "skip",
-            "note": "all-layers op-signature probe produced no counts (%s)" % (seq or "no output"),
+            "status": "unknown",
+            "fully_applied": None,
+            "note": (
+                "coverage could NOT be determined -- the all-layers op-signature probe produced no "
+                "counts (%s). This is NOT a pass: do not treat the lever as fully applied." % (seq or "no output")
+            ),
         }
     return compute_lever_coverage(counts, seq, op_match, stale_dtype, new_dtype)
 
@@ -1671,6 +2049,9 @@ def check_full_pipeline_latency() -> dict:
             "gap_to_target_ms": round(ms - tgt, 4),
             "reached_target": ms <= tgt,
         }
+    # A commit may have landed since the last reading (by the tool or by the agent's own git);
+    # promote first so `best` reflects the committed tree rather than a stale pre-commit value.
+    _promote_fullpipe_if_committed()
     base = {}
     if base_path.exists():
         try:
@@ -1697,27 +2078,31 @@ def check_full_pipeline_latency() -> dict:
                 **tgt_fields,
             }
         )
-    if base_mode != mode or best <= 0:
-        base_path.write_text(json.dumps({"full_pipeline_ms": ms, "method": method, "mode": mode}))
+    _special = _fullpipe_verdict_for(ms, method, mode, best, base_mode)
+    if _special:
         return _emit_fullpipe(
             {
-                "status": "ok",
                 "full_pipeline_ms": round(ms, 4),
                 "method": method,
                 "metric": metric,
                 "mode": mode,
                 "cq": cq,
-                "note": "best-so-far recorded · " + cq_note,
+                **_special,
+                "note": (_special.get("note") or "") + " · " + cq_note,
                 **tgt_fields,
             }
         )
     delta_pct = round((ms - best) / best * 100.0, 2) if best > 0 else None
     diverged = ms > best * (1.0 + _FULLPIPE_TOL)
+    # "not more than 8% slower than the best ever seen" was reported as ok, which is the agent's
+    # bank-a-win signal -- so a 7%-slower lever could be committed and, repeated, ratcheted real
+    # latency upward while the reported AFTER stayed at the old minimum. Slower is `regressed`.
+    regressed = (not diverged) and ms > best
     if ms < best:
-        base_path.write_text(json.dumps({"full_pipeline_ms": ms, "method": method, "mode": mode}))
+        _record_fullpipe_candidate(ms, method, mode)
     return _emit_fullpipe(
         {
-            "status": "diverged" if diverged else "ok",
+            "status": "diverged" if diverged else ("regressed" if regressed else "ok"),
             "full_pipeline_ms": round(ms, 4),
             "best_ms": round(best, 4),
             "delta_pct": delta_pct,
@@ -1785,14 +2170,41 @@ def hitl_gate(
     return hitl.await_decision(hdir, timeout=_to)
 
 
+def _untracked_baseline_path() -> Path:
+    model = _MODEL_ROOT.name if _MODEL_ROOT else "model"
+    task = os.environ.get("PERF_MCP_TASK", "main")
+    return Path(tempfile.gettempdir()) / ("perf_mcp_untracked_%s_%s.json" % (model, task))
+
+
+def _write_untracked_baseline() -> None:
+    """Snapshot which files were already untracked at the clean checkpoint, so a later revert can
+    delete ONLY what an edit created and never a pre-existing generated artifact."""
+    try:
+        repo = gitio.repo_root(_MODEL_ROOT)
+        try:
+            spec = _MODEL_ROOT.relative_to(repo)
+        except ValueError:
+            spec = None
+        _untracked_baseline_path().write_text(json.dumps(sorted(gitio.untracked_under(repo, spec))))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _read_untracked_baseline() -> set:
+    try:
+        return set(json.loads(_untracked_baseline_path().read_text()))
+    except Exception:  # noqa: BLE001
+        return set()
+
+
 @mcp.tool()
 def git_head() -> dict:
     """Return the current git HEAD sha of the model repo (your clean checkpoint / revert target)."""
     repo = gitio.repo_root(_MODEL_ROOT)
+    _write_untracked_baseline()
     return {"sha": gitio.head_sha(repo)}
 
 
-@mcp.tool()
 def _record_committed_win(message: str) -> None:
     """Log the just-committed lever as a win against the current target.
 
@@ -1823,6 +2235,7 @@ def _record_committed_win(message: str) -> None:
         pass
 
 
+@mcp.tool()
 def git_commit(message: str) -> dict:
     """Commit the current model-dir changes (scoped to the model dir only — unrelated repo changes
     are left untouched). Use this to BANK a verified win: valid measure + ok pcc (check_pcc) + faster
@@ -1836,6 +2249,8 @@ def git_commit(message: str) -> dict:
     sha = gitio.commit(repo, message, pathspec)
     if sha:
         _record_committed_win(message)
+        _promote_fullpipe_pending()
+        _write_untracked_baseline()
     return {"committed": bool(sha), "sha": sha}
 
 
@@ -1849,7 +2264,17 @@ def git_revert(sha: str) -> dict:
     except ValueError:
         pathspec = None
     gitio.checkout(repo, sha, pathspec)
-    return {"reverted_to": sha}
+    # tracked files are restored above; files the edit CREATED are not, so remove those too
+    _removed = []
+    try:
+        _removed = gitio.remove_new_untracked(repo, _read_untracked_baseline(), pathspec)
+    except Exception:  # noqa: BLE001
+        pass
+    _discard_fullpipe_pending()
+    out = {"reverted_to": sha}
+    if _removed:
+        out["removed_created_files"] = _removed
+    return out
 
 
 def _capture_attempt_diff(max_lines: int = 40) -> str:
@@ -1976,7 +2401,6 @@ def record_kernel_attempt(
     }
 
 
-@mcp.tool()
 def _trace_budget_facts():
     if os.environ.get("TT_PERF_TRACE", "1") != "1":
         return None
@@ -2001,6 +2425,7 @@ def _trace_budget_facts():
     }
 
 
+@mcp.tool()
 def recall_knobs(op_class: str, grid: str = "", bound_by: str = "") -> dict:
     """REUSE-FIRST: return the tested/known knobs already catalogued for this op_class, so you
     APPLY/ADAPT a proven one BEFORE improvising from scratch. Routed deterministically from the
@@ -2037,10 +2462,26 @@ def recall_knobs(op_class: str, grid: str = "", bound_by: str = "") -> dict:
         "host_fallback": "host",
     }
     _GRID_VOCAB = {"full", "partial", "tiny"}
+    # Phase/alias names the tool's OWN instructions hand to the agent ('decode' at the kv-cache
+    # gate, 'generation_loop', 'host') are not router op_class vocabulary. Map them; anything
+    # still unknown returns the UNNARROWED set with a visible note instead of a silent empty.
+    _vocab = router.VOCABULARY.get("op_class", frozenset())
+    _alias_note = ""
+    if oc.lower() not in _vocab:
+        # The caller's op_class is whatever the prompt or the agent used ('decode' at the kv-cache
+        # gate, 'generation_loop', 'host'). Ask what it MEANS rather than keeping an alias table
+        # that misses the next phrasing; UNKNOWN returns the unnarrowed set, never a silent empty.
+        _mapped = _integrity.classify(oc, set(_vocab), what="op_class")
+        if _mapped:
+            _alias_note = "op_class %r resolved to %r" % (oc, _mapped)
+            oc = _mapped
+        else:
+            _alias_note = "op_class %r could not be resolved; returning UNNARROWED levers" % (oc,)
+            oc = ""
     try:
         gdir = str(_PKG / "GUIDELINES")
         index = router.build_index(gdir)
-        q = {"op_class": oc}
+        q = {"op_class": oc} if oc else {}
         g = (grid or "").strip().lower()
         if g in _GRID_VOCAB:
             q["grid"] = g
@@ -2048,11 +2489,16 @@ def recall_knobs(op_class: str, grid: str = "", bound_by: str = "") -> dict:
         if b:
             q["bound"] = b
         try:
-            hits = router.route(index, q)  # raises on out-of-vocab -> fall back below
+            hits = router.route(index, q) if q else router.all_entries(index)
         except Exception:  # noqa: BLE001
             hits = []
         if not hits and len(q) > 1:  # narrowing starved -> never return empty wrongly; op_class-only
-            hits = router.route(index, {"op_class": oc})
+            try:
+                hits = router.route(index, {"op_class": oc})
+            except Exception:  # noqa: BLE001
+                hits = router.all_entries(index)
+        if not hits and not q:
+            hits = router.all_entries(index)
         # tuned learned levers first (most specific to this op), then baseline guidance
         rank = {"GRADUATED_": 0, "LEARNED_": 1}
         hits = sorted(hits, key=lambda h: next((v for k, v in rank.items() if (h.get("file") or "").startswith(k)), 2))
@@ -2140,7 +2586,6 @@ def distill_knob(
         return {"written": None, "graduated": None, "error": str(exc)[-200:]}
 
 
-@mcp.tool()
 def _host_gate(prof: dict, blocking: list, attempts: list) -> dict | None:
     for b in prof.get("buckets") or []:
         if b.get("id") != "host_overhead":
@@ -2253,9 +2698,14 @@ def _decode_gate(prof: dict, attempts: list) -> dict | None:
     }
 
 
-def _reliable_forward_ms(dev: float) -> float:
-    """Prefer the robust trace+1cq per-token (full-pipeline 1cq baseline) over the noisy per-op
-    device_ms for band scoring; fall back to device_ms when no trace number is available."""
+def _reliable_forward_ms(dev: float) -> float | None:
+    """The trace+1cq per-token number, or None when there isn't one.
+
+    Used to fall back to the per-op device_ms, which is a CAPPED-WINDOW measurement (TT_PERF_LAYERS)
+    scored against a full-model tok/s target -- the unit mix this function's own docstring blames
+    for making every module read ABOVE_BAND. Since the caller can set can_stop from the result, a
+    missing trace number must read as "cannot score", not as a number.
+    """
     try:
         b = json.loads(_FULLPIPE_BASELINE_1CQ_PATH.read_text())
         ms = float(b.get("full_pipeline_ms") or 0.0)
@@ -2263,7 +2713,7 @@ def _reliable_forward_ms(dev: float) -> float:
             return ms
     except Exception:  # noqa: BLE001
         pass
-    return dev
+    return None
 
 
 def _load_perf_target_inputs() -> dict | None:
@@ -2289,8 +2739,17 @@ def _perf_target_status(rep: dict, dev: float) -> dict | None:
     try:
         target, scope, is_llm = _select_perf_target(rep)
         measured_ms = _reliable_forward_ms(dev) if is_llm else dev
+        if measured_ms is None:
+            # No trace+1cq per-token number exists, so nothing here is comparable to a full-model
+            # tok/s target. Return no score rather than scoring the capped-window device_ms, which
+            # is what let the stop gate declare a model IN_BAND from a missing tmp file.
+            return None
         s = perf_target.score(target, measured_ms)
         s["scope"] = scope
+        if perf_target.unknown_dtypes():
+            s["ceiling_degraded"] = "unknown dtype(s) %s fell back to the default byte width" % (
+                ", ".join(perf_target.unknown_dtypes()),
+            )
         return s
     except Exception:  # noqa: BLE001
         return None

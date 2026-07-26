@@ -179,6 +179,74 @@ def mock_collect_cases(tt_root, perf_test, env=None):
 # ---- the driver --------------------------------------------------------------
 
 
+def _enforce_pcc_gate_policy(pcc_test, model_root, config) -> None:
+    """Decide where the correctness gate comes from, and STOP when there is no ground truth.
+
+    The gate is the only thing preventing optimize from committing a perf lever that silently
+    degrades the model, so "no usable gate" has to be a stop condition. It was not: a supplied file
+    that declares no threshold got the 0.99 DEFAULT, which satisfied the fatal `no_pcc_threshold`
+    check, and a gate that never prints a PCC then read as a pass on every edit.
+    """
+    from .pcc_gate_policy import GENERATE_FROM_HF, STOP, decide
+
+    model_id = config.get("model_id") or os.environ.get("HF_MODEL") or ""
+    d = decide(pcc_test, model_id or None)
+    act = d["action"]
+    if act == STOP:
+        raise SystemExit("CANNOT CONTINUE — no usable correctness gate.\n      " + d["reason"])
+    if d.get("warning"):
+        print("      correctness gate WARNING: " + d["warning"], file=sys.stderr, flush=True)
+    if act == GENERATE_FROM_HF:
+        print(
+            "      correctness gate: no gate supplied -> generating an HF-referenced PCC gate\n"
+            "        reason: " + d["reason"],
+            file=sys.stderr,
+            flush=True,
+        )
+        node = _generate_pcc_gate(model_root, model_id, config)
+        if not node:
+            raise SystemExit(
+                "CANNOT CONTINUE — could not generate a usable PCC gate for %r.\n      "
+                "PLEASE GIVE A PCC TEST TO RUN OPTIMIZE: pass --pcc-test <file>::<test>. It must "
+                "compare against a reference, print `PCC: <float>`, and declare its own threshold." % (model_id,)
+            )
+        config["pcc_test"] = node
+        print("      generated gate -> %s" % node, file=sys.stderr, flush=True)
+
+
+def _generate_pcc_gate(model_root, model_id, config):
+    """Author + validate an HF-referenced gate. Returns the node id, or None.
+
+    A generated gate is only accepted if it passes on the unedited model AND fails on a perturbed
+    one -- "it ran and passed" proves nothing, since a gate that always passes also passes.
+    """
+    try:
+        from .gitio import repo_root
+        from .pcc_gate_gen import generate_pcc_gate
+        from .perf_test_gen import _claude
+
+        return generate_pcc_gate(
+            model_dir=model_root,
+            model_id=model_id,
+            repo_root=repo_root(model_root),
+            runner=_claude,
+            threshold=float(os.environ.get("PERF_MCP_PCC_MIN", "0.95") or "0.95"),
+            perturb_env=_pcc_perturb_env(),
+        )
+    except Exception as exc:  # noqa: BLE001
+        print("      PCC-gate generation failed: %s" % (str(exc)[-300:],), file=sys.stderr, flush=True)
+        return None
+
+
+def _pcc_perturb_env() -> dict:
+    """Env that deliberately DEGRADES the model, so the gate can be proven able to fail.
+
+    Model-agnostic: a low-precision weight dtype damages the numbers on any TTNN model without
+    changing shapes or the call path, which is exactly the kind of damage a perf lever can do.
+    """
+    return {"TT_PERF_FORCE_WEIGHT_DTYPE": "bfloat4_b", "PERF_PCC_SELFTEST_PERTURB": "1"}
+
+
 def before_loop(
     config: dict[str, Any],
     env_probe: Callable[[], str],
@@ -352,6 +420,12 @@ def before_loop(
         pcc_node_rel, pcc_thr, pcc_abs = resolve_pcc_node(model_root, config["pcc_test"], tt_root)
         pcc_override = {"path": pcc_node_rel, "threshold": pcc_thr}
         print(f"      --pcc-test gate -> {pcc_node_rel} (threshold {pcc_thr})", file=sys.stderr, flush=True)
+        # Pass the RESOLVED absolute path: the raw argument is relative to the invocation directory,
+        # but discovery runs inside an isolated worktree, so checking the raw string reports
+        # "gate not found" for a gate that resolved perfectly well one line above.
+        _enforce_pcc_gate_policy(pcc_abs or config["pcc_test"], model_root, config)
+    else:
+        _enforce_pcc_gate_policy(None, model_root, config)
     pathmap = None
     _last_exc = None
     for _attempt in range(3):
@@ -504,8 +578,17 @@ def before_loop(
             config_ref=str(config.get("config_ref") or ""),
             depth_knob=_bl_knob,
         )
-        if not _bl_cov:
+        _bl_cov_probed = _bl_cov is not None and _bl_cov != 0
+        if _bl_cov is None or _bl_cov == 0:
             _bl_cov = int(os.environ.get("PERF_MCP_DEPTH_DEFAULT_LAYERS", "4"))
+            print(
+                "      depth-bridge WARNING: the coverage probe returned %r, so the baseline is "
+                "profiled at a SUBSTITUTED depth of %d layers. Any candidate measured at a different "
+                "depth is not comparable to it (set PERF_MCP_DEPTH_DEFAULT_LAYERS to pin this)."
+                % (_bl_cov_probed and _bl_cov or None, _bl_cov),
+                file=sys.stderr,
+                flush=True,
+            )
         _bl_full = int((_bl_facts or {}).get("full_signal") or 0)
         _bl_blocks = int((_bl_facts or {}).get("full_blocks") or 0)
         print(
@@ -607,6 +690,13 @@ def before_loop(
     # device_ms = sum of profiled device-kernel time (the optimization target);
     # wall_ms = harness clock incl. compile/setup (reference only);
     # fps / tok_s still TBD(wall-metric-source).
+    if metric_name not in ("device_ms", "wall_ms"):
+        print(
+            "      WARNING: --metric %s is recorded from wall_ms; no profile carries a %r key, so "
+            "downstream comparisons fall back to wall_ms. Prefer device_ms or wall_ms." % (metric_name, metric_name),
+            file=sys.stderr,
+            flush=True,
+        )
     baseline = profile["device_ms"] if metric_name == "device_ms" else profile["wall_ms"]
     target = config.get("target")
     if target is None and metric_name == "device_ms":

@@ -62,6 +62,40 @@ def changed_files(repo, sha: str, pathspec=None) -> list[str]:
     return [ln for ln in r.stdout.splitlines() if ln.strip()]
 
 
+def untracked_under(repo, pathspec=None) -> set:
+    """Untracked files under pathspec, as repo-relative strings."""
+    specs = (
+        ["."]
+        if pathspec is None
+        else ([str(p) for p in pathspec] if isinstance(pathspec, (list, tuple)) else [str(pathspec)])
+    )
+    r = _git(["ls-files", "--others", "--exclude-standard", "--", *specs], repo)
+    if r.returncode != 0:
+        return set()
+    return {ln.strip() for ln in (r.stdout or "").splitlines() if ln.strip()}
+
+
+def remove_new_untracked(repo, baseline: set, pathspec=None) -> list:
+    """Delete untracked files that appeared SINCE `baseline` was snapshotted.
+
+    `git checkout <sha> -- <path>` only rewrites TRACKED files, so a lever that CREATED a new
+    file (a hand-written kernel module, say) survived every revert and its edit stayed in the
+    next measurement -- the documented "revert no-ops" trap. Blanket `git clean` is not an option
+    because a model dir legitimately holds untracked artifacts (generated stubs, caches) that
+    predate the checkpoint; only files that did not exist at checkpoint time are removed.
+    """
+    removed = []
+    for rel in sorted(untracked_under(repo, pathspec) - set(baseline or ())):
+        p = Path(repo) / rel
+        try:
+            if p.is_file():
+                p.unlink()
+                removed.append(rel)
+        except OSError:
+            pass
+    return removed
+
+
 def checkout(repo, sha: str, pathspec=None) -> None:
     """Restore tracked files to their state at `sha` (`git checkout <sha> -- <pathspec>`).
 

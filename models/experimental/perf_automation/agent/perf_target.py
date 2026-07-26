@@ -34,8 +34,66 @@ _BAND_LO_FRAC = 0.60
 _BAND_HI_FRAC = 0.80
 
 
+_UNKNOWN_DTYPES: set = set()
+_SPELLING_ALIASES = {
+    "bfp8_b": "bfloat8_b",
+    "bfp8": "bfloat8_b",
+    "bfp4_b": "bfloat4_b",
+    "bfp4": "bfloat4_b",
+    "bf16": "bfloat16",
+    "fp16": "float16",
+    "float32": "fp32",
+    "f32": "fp32",
+}
+_EXTRA_WIDTHS = {"int8": 1.0, "uint8": 1.0, "fp8": 1.0, "int4": 0.5, "nf4": 0.5, "int32": 4.0}
+
+
+_KNOWN_SPELLINGS = dict(
+    list(BYTES_PER_ELEM.items())
+    + [(k, BYTES_PER_ELEM[v]) for k, v in _SPELLING_ALIASES.items() if v in BYTES_PER_ELEM]
+    + list(_EXTRA_WIDTHS.items())
+)
+
+
 def _bytes_per_elem(dtype) -> float:
-    return BYTES_PER_ELEM.get(str(dtype or "").strip().lower(), _DEFAULT_BYTES_PER_ELEM)
+    """Bytes per element for a dtype spelling.
+
+    A miss used to fall silently to 2.0, so a bf8_b model's active_bytes was overstated ~2x, its
+    theoretical tok/s understated ~2x, and score() could return IN_BAND -> the run stopped
+    declaring success from a string-key miss. Normalise the spellings that actually occur and
+    record anything still unknown so the caller can report a degraded ceiling.
+    """
+    s = str(dtype or "").strip().lower()
+    s = s.rsplit(".", 1)[-1]  # DataType.BFLOAT8_B -> bfloat8_b
+    if s in BYTES_PER_ELEM:
+        return BYTES_PER_ELEM[s]
+    # Known spellings first: free, exact, and correct with no agent available.
+    for cand, width in _KNOWN_SPELLINGS.items():
+        if s == cand:
+            return width
+    # Only a genuinely unrecognised spelling reaches the agent (cached), so new dtype names from a
+    # future model resolve by MEANING instead of silently taking the default byte width.
+    try:
+        from agent import integrity as _integrity
+
+        resolved = _integrity.classify(
+            s,
+            set(BYTES_PER_ELEM),
+            what="dtype",
+            evidence="Tenstorrent/torch tensor element type; map to the equivalent known dtype by bit width.",
+        )
+        if resolved:
+            return BYTES_PER_ELEM[resolved]
+    except Exception:  # noqa: BLE001
+        pass
+    if s:
+        _UNKNOWN_DTYPES.add(s)
+    return _DEFAULT_BYTES_PER_ELEM
+
+
+def unknown_dtypes() -> list:
+    """Dtype spellings that fell back to the default -- the ceiling derived from them is a GUESS."""
+    return sorted(_UNKNOWN_DTYPES)
 
 
 def _scalar(v, default=0):

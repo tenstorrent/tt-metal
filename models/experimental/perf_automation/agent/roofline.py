@@ -240,7 +240,15 @@ def residual_report(profile: dict[str, Any], env: dict[str, Any]) -> dict[str, A
         "total_device_ms": r["total_device_ms"],
         "modeled_floor_ms": r["total_ideal_ms"],  # Σ ttnn-reachable floor of modeled ops
         "residual_gap_ms": r["total_gap_ms"],  # Σ measured - floor still on the table
-        "at_floor": len(open_ops) == 0 and len(modeled) > 0,  # nothing ttnn-reachable left (modeled)
+        # at_floor claims there is no reachable gain LEFT, so it must require that most of the
+        # profile was actually modeled. It used to be true whenever the modeled set had no open
+        # ops -- with degraded roofline inputs that can be 1 op out of hundreds, and the run was
+        # then certified done. n_unmodeled was reported but never consulted.
+        "at_floor": (
+            len(open_ops) == 0
+            and len(modeled) > 0
+            and (len(modeled) / max(1, len(modeled) + int(r["unmodeled_op_count"] or 0))) >= 0.5
+        ),
         "n_open": len(open_ops),
         "n_modeled": len(modeled),
         "n_unmodeled": r["unmodeled_op_count"],

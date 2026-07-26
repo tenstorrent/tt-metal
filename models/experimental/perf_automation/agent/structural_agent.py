@@ -11,11 +11,24 @@ import os
 from pathlib import Path
 from typing import Callable
 
+
 # When on-device tools (check_candidate_edit / measure_candidate) are attached, the agent makes
 # MANY minutes-long device calls (a tracy profile is ~2-3 min; the kernel author made 8 in one
 # session). The 300s hang-watchdog default then kills it mid-iteration AND retries from scratch.
 # Use a far larger wall budget for device-tool agents — still finite, so a true hang is bounded.
-_DEVICE_CALL_TIMEOUT_S = float(os.environ.get("AGENT_DEVICE_CALL_TIMEOUT_S", "3600"))
+def device_call_timeout_s() -> float:
+    """Budget for one agent call that holds a device tool.
+
+    Was a module-level fixed 3600 s. Two problems: a constant cannot adapt (it is evaluated at
+    import, before the manifest env is even set), and 1 h is simultaneously far too long for a 3 s
+    module and too short for a model whose device tools legitimately run longer. Same chain as the
+    rest: this operation's observed p95, else an agent estimate from the model's evidence, else the
+    operator's ceiling.
+    """
+    from .probes import adaptive_op_timeout
+
+    return float(adaptive_op_timeout("agent", env_key="AGENT_DEVICE_CALL_TIMEOUT_S"))
+
 
 # An on-device-tool agent spends many TURNS per author->check->measure cycle (edit, tool call,
 # read result, rethink); the default 60 ran out mid-iteration before it could emit final JSON
@@ -319,7 +332,7 @@ def make_structural_runner(
         # On-device tools make the agent legitimately long-running (each profile/PCC run is minutes);
         # give it a generous wall budget instead of the 300s hang default, which killed + retried it
         # mid-iteration. No device tools -> default (a true stall is still bounded).
-        call_timeout = _DEVICE_CALL_TIMEOUT_S if mcp_servers else None
+        call_timeout = device_call_timeout_s() if mcp_servers else None
         run_with_retry(_go, lambda: (chunks.clear(), usage.clear()), timeout=call_timeout)
 
         response = "\n".join(chunks)

@@ -210,11 +210,11 @@ def make_edit_runner(
                     usage["u"] = _usage_summary(msg)
 
         from .sdk_retry import run_with_retry
-        from .structural_agent import _DEVICE_CALL_TIMEOUT_S
+        from .structural_agent import device_call_timeout_s
 
         # check_candidate_edit makes minutes-long device (PCC) calls; give the editor a generous wall
         # budget when it's attached, instead of the 300s hang default that would kill+retry it.
-        call_timeout = _DEVICE_CALL_TIMEOUT_S if check_server is not None else None
+        call_timeout = device_call_timeout_s() if check_server is not None else None
         run_with_retry(_go, lambda: (chunks.clear(), usage.clear()), timeout=call_timeout)
         result = _validate_edit_result(_extract_json_object("\n".join(chunks)))
         result["model"] = model

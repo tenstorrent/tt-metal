@@ -43,9 +43,28 @@ def _comparable(baseline, iter_profile, tol=0.25, floor_ms=None, floor_margin=0.
     drop heuristic for backward compatibility (conservative)."""
     if iter_profile.get("capture_partial"):
         return False, f"partial_capture: profiler dropped markers ({iter_profile.get('capture_partial')})"
+
+    # DEGENERATE guard, FIRST: zero device time or zero ops is the ABSENCE of a measurement, not a
+    # speed. It raises no exception, so the BUG 5 zero-row retry never fires; the physics guard
+    # below is gated `i_ms > 0` and so skips exactly this case; op_count_inflated only rejects
+    # inflation. Left unguarded, device_ms 0.0 was banked as pct_faster 100.0 / is_real_gain True
+    # and then written as the new baseline, permanently poisoning every later comparison.
+    for _label, _prof in (("candidate", iter_profile), ("baseline", baseline)):
+        _ops = _op_count(_prof)
+        # ZERO OPS is the actual zero-row condition. device_ms is only judged when the key is
+        # PRESENT: many callers build a profile from buckets alone and omit the top-level total,
+        # and treating that absence as 0.0 rejected perfectly good measurements.
+        _ms_present = _prof.get("device_ms") is not None
+        _ms = float(_prof.get("device_ms") or 0.0)
+        if _ops <= 0 or (_ms_present and _ms <= 0.0):
+            return False, (
+                f"zero_op_capture ({_label}): ops={_ops} device_ms="
+                + (f"{_ms:.4f}" if _ms_present else "absent")
+                + " -- the capture produced no ops, so this is a FAILED MEASUREMENT, not a speedup;"
+                " re-profile"
+            )
+
     b_ops = _op_count(baseline)
-    if b_ops == 0:
-        return True, None  # no baseline op count -> nothing to compare against
     i_ops = _op_count(iter_profile)
     if tp_regime:
         i_ops -= _bucket_count(iter_profile, "ccl")
@@ -84,7 +103,17 @@ def _comparable(baseline, iter_profile, tol=0.25, floor_ms=None, floor_margin=0.
                 f"below_roofline_floor: {i_ms:.4f}ms < {floor_margin:.0%} of modeled floor "
                 f"{floor_ms:.4f}ms -- physically impossible, crashed/partial capture (not a fusion)"
             )
-        # complete capture above the floor: an op-count change here is a LEGITIMATE fusion. Accept.
+        # Above the floor an op-count DROP is a legitimate fusion, so it is accepted -- but a
+        # whole bucket disappearing is not a fusion, it is a lost capture, so that check still runs.
+        _ibuckets = {b.get("id") for b in (iter_profile.get("buckets") or [])}
+        _bbuckets = baseline.get("buckets") or []
+        if _bbuckets and _ibuckets:
+            _dom = max(_bbuckets, key=lambda b: b.get("device_ms", 0)).get("id")
+            if _dom and _dom not in _ibuckets:
+                return False, (
+                    f"dominant_bucket_missing: baseline's biggest bucket '{_dom}' is absent from the "
+                    "candidate profile -- a lost capture, not a fusion"
+                )
         return True, None
 
     # BACKWARD-COMPAT (no roofline floor available): the original op-count-drop heuristic.
@@ -172,11 +201,19 @@ def remeasure(ctx) -> str:
         return states.REVERT
 
     metric_name = (ctx.state.get("metric") or {}).get("name", "device_ms")
-    vals = [p.get(metric_name, p["device_ms"]) for p in profiles]
+    # A missing metric key used to fall back to device_ms, so a run configured for one metric was
+    # silently judged on another. Absent is a configuration error, not a value.
+    _missing = [p for p in profiles if p.get(metric_name) is None]
+    if _missing:
+        raise KeyError(
+            "metric %r absent from %d/%d profiles; refusing to substitute device_ms (that comparison "
+            "would be across two different quantities)" % (metric_name, len(_missing), len(profiles))
+        )
+    vals = [p[metric_name] for p in profiles]
     median_val = statistics.median(vals)
     after = round(median_val, 4)
     spread = round(max(vals) - min(vals), 4) if len(vals) > 1 else 0.0
-    rep = min(profiles, key=lambda p: abs(p.get(metric_name, p["device_ms"]) - median_val))  # representative profile
+    rep = min(profiles, key=lambda p: abs(p[metric_name] - median_val))  # representative profile
 
     rel = f"profiles/iter_{ctx.state.get('iteration', 0):02d}_profile.json"
     (ctx.run.dir / rel).write_text(json.dumps(rep, indent=2, sort_keys=True))

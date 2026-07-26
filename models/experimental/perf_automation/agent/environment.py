@@ -77,7 +77,13 @@ def box_facts(box_name: str, mesh: tuple[int, int] | None = None) -> dict[str, A
         raise EnvironmentError_(f"mesh {tuple(mesh)} not canonical for {box.name}; valid: {box.mesh_shapes}")
 
     arch = box.arch.lower()
-    base = dict(ARCH_FACTS.get(arch, ARCH_FACTS["blackhole"]))  # peak_tflops/dram_bw/clock by arch
+    if arch not in ARCH_FACTS:
+        raise EnvironmentError_(
+            "unknown arch %r: refusing to substitute another architecture's peaks (known: %s). "
+            "Silently inheriting Blackhole numbers gives a wrong roofline floor and a wrong tok/s "
+            "ceiling, which drives a wrong at-floor/DONE verdict." % (arch, ", ".join(sorted(ARCH_FACTS)))
+        )
+    base = dict(ARCH_FACTS[arch])  # peak_tflops/dram_bw/clock by arch
     gx, gy = BOX_COMPUTE_GRID.get(box.name, (base.get("grid_x", 13), base.get("grid_y", 10)))
     mesh_chips = int(mesh[0]) * int(mesh[1])
     per_chip_dram_bw = base.get("dram_bw_gbps", 0.0)

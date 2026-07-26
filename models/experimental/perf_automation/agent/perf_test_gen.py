@@ -217,9 +217,25 @@ _DEVICE_UNAVAILABLE = (
 )
 
 
+_NON_TRACE_PATHS = {"eager", "none", "skipped", "off", "n/a", "na", "false", "0", "trace"}
+
+
 def _parse_trace_path(text: str) -> str | None:
-    m = re.search(r"TRACE_REPLAY_PATH=(\S+)", text or "")
-    return m.group(1) if m else None
+    """The declared replay path, or None when it declares NO trace.
+
+    Callers do `bool(_parse_trace_path(out))` to decide `traced`, and bool("eager") is True -- so
+    TRACE_REPLAY_PATH=eager/none/skipped was banked as a trace measurement. The old non-whitespace
+    pattern also truncated "trace 1cq" (the spelling this module's own skeleton emits) to the bare
+    word "trace", which is likewise not a real trace+Ncq path.
+    """
+    m = re.search(r"TRACE_REPLAY_PATH=([^\r\n]+)", text or "")
+    if not m:
+        return None
+    val = m.group(1).strip().strip("'\"").lower()
+    val = re.sub(r"\s+", "+", val)
+    if not val or val.split("+")[0] in _NON_TRACE_PATHS and "cq" not in val:
+        return None
+    return val
 
 
 _TRACE_REGION_NEED_RE = re.compile(r"Creating trace buffers of size (\d+)B.*?only (\d+)B is allocated")
@@ -563,7 +579,9 @@ def validate_generated_perf_test(out_path: Path, task: str, component: bool = Fa
     )
 
 
-def _self_traced_prompt(out_rel: str, task: str, src_label: str, demo_src: str, fns: list, agentic: bool = False) -> str:
+def _self_traced_prompt(
+    out_rel: str, task: str, src_label: str, demo_src: str, fns: list, agentic: bool = False
+) -> str:
     """Dedicated prompt for a SELF-RECORDING pipeline: no measure_adapter instructions anywhere (they'd
     mandate a second, freezing capture). Just: build like the demo, TIME the model's own self-recording
     function, print the markers. Its native path already runs its own trace (measured trace+1cq).
@@ -602,8 +620,7 @@ def _self_traced_prompt(out_rel: str, task: str, src_label: str, demo_src: str, 
         "- NO PCC / correctness asserts. Print, verbatim, `FORWARD_WALL_MS=<ms>`, `TRACE_PER_TOKEN_MS=<ms>` "
         "(the per-call latency), and `TRACE_REPLAY_PATH=trace+1cq`.\n"
         "- Do NOT use measure_adapter / PipelineStageAdapter / begin_trace_capture — the model self-records.\n\n"
-        f"Use this skeleton (adapt build + the function name to the demo):\n{_SELF_TRACED_SKELETON_REF}\n\n"
-        + tail
+        f"Use this skeleton (adapt build + the function name to the demo):\n{_SELF_TRACED_SKELETON_REF}\n\n" + tail
     )
 
 

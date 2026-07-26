@@ -16,7 +16,12 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     b = b - b.mean()
     denom = (a.norm() * b.norm()).item()
     if denom == 0:
-        return 1.0
+        # A zero denominator means one side is CONSTANT after centering. The reference here is
+        # `randn @ w`, which is never constant, so this is the DEVICE output being degenerate --
+        # exactly what a garbled bfloat4_b/LoFi matmul, a deallocated buffer or a silently failed
+        # op produces. Returning 1.0 called that a perfect match, and matmul_sweep.pick_best then
+        # selected the fastest BROKEN config as its PCC-gated recommendation.
+        return 0.0
     return float((a @ b).item() / denom)
 
 

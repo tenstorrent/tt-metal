@@ -21,6 +21,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import sys
 from pathlib import Path
 
 PERF_DIR = "models/experimental/perf_automation"
@@ -180,13 +181,28 @@ def discover(
         int(os.environ.get("PERF_MCP_DISCOVER_TIMEOUT", "10800") or "10800"),
         "discovery",
         capture=False,
-        stall_s=int(os.environ.get("PERF_MCP_DISCOVER_STALL_SEC", "1200") or "1200"),
+        stall_s=adaptive_timer(repo_root, "build", env_key="PERF_MCP_DISCOVER_STALL_SEC"),
     )
     mani = _latest_manifest(perf_dir)
     if mani is None or rc is None:
         return None
-    if rc != 0 and mani.stat().st_mtime < launch_ts:
-        return None
+    if rc != 0:
+        _fresh = mani.stat().st_mtime >= launch_ts
+        _m = {}
+        try:
+            _m = json.loads(mani.read_text())
+        except Exception:  # noqa: BLE001
+            _m = {}
+        _pm = (_m.get("pathmap") or {}) if isinstance(_m, dict) else {}
+        _complete = bool(_pm.get("pipelines") or _pm.get("perf_test")) and bool(_pm.get("pcc"))
+        if not (_fresh and _complete):
+            print(
+                "  [optimize/cc] discovery exited %s and its manifest is %s — refusing to run on a "
+                "partial manifest." % (rc, "incomplete" if _fresh else "stale"),
+                flush=True,
+            )
+            return None
+        print("  [optimize/cc] discovery exited %s but the manifest is complete; continuing." % rc, flush=True)
     return json.loads(mani.read_text())
 
 
@@ -281,7 +297,7 @@ def _gate_status(repo_root: Path, mcp_env: dict, devices: str) -> dict:
         devices,
         _measure_backstop(repo_root),
         "termination_check",
-        stall_s=int(os.environ.get("PERF_MCP_MEASURE_STALL_SEC", "600") or "600"),
+        stall_s=adaptive_timer(repo_root, "profile", env_key="PERF_MCP_MEASURE_STALL_SEC"),
     )
     if rc is None:
         return {"can_stop": False, "halt": False, "reason": ""}
@@ -320,12 +336,28 @@ def _read_fullpipe_best_1cq() -> float | None:
 
 
 def _fullpipe_e2e(repo_root: Path, mcp_env: dict, devices: str, label: str) -> float | None:
+    _fp_t0 = time.monotonic()
+    try:
+        return _fullpipe_e2e_inner(repo_root, mcp_env, devices, label)
+    finally:
+        # BUG 4 (#3): the full-pipeline gate is the dominant cost of a round on a big
+        # model (llama's is ~1400 s); record it so the pcc/round budgets learn from it.
+        try:
+            record_observed(repo_root, "pcc", time.monotonic() - _fp_t0)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _fullpipe_e2e_inner(repo_root: Path, mcp_env: dict, devices: str, label: str) -> float | None:
     """Measure the FULL-model end-to-end (ALL 52 layers, no tracy, prefill + 1 decode) ONCE at trace+1cq
     and print it with `label` (typically the BEFORE bookend). Returns end_to_end_ms or None. This is the
     whole-model SCOREBOARD; the tool is trace+1cq end to end, so the one BEFORE run here establishes the
     same 1cq baseline the per-lever check_full_pipeline_latency then reuses (no separate 2-CQ bookend).
     The device_ms loop metric is the fast 2-layer STEERING signal; this is the verdict. Disable via
     PERF_MCP_FULLPIPE_E2E=0."""
+    # Stale-across-pipelines guard: the dict is only cleared when a PERF_SCORECARD line is parsed,
+    # so a pipeline whose run emits none used to display the PREVIOUS pipeline's throughput.
+    _LAST_SCORECARD.clear()
     if os.environ.get("PERF_MCP_FULLPIPE_E2E", "1") != "1":
         return None
     code = (
@@ -350,7 +382,7 @@ def _fullpipe_e2e(repo_root: Path, mcp_env: dict, devices: str, label: str) -> f
         devices,
         _measure_backstop(repo_root),
         f"full-pipeline ({label})",
-        stall_s=int(os.environ.get("PERF_MCP_MEASURE_STALL_SEC", "600") or "600"),
+        stall_s=adaptive_timer(repo_root, "profile", env_key="PERF_MCP_MEASURE_STALL_SEC"),
     )
     if rc is None:
         return None
@@ -373,7 +405,29 @@ def _fullpipe_e2e(repo_root: Path, mcp_env: dict, devices: str, label: str) -> f
     return ms
 
 
-_HOST_XFER_OPS = ("from_torch", "to_torch", "from_device", "to_device")
+_HOST_XFER_OPS = (
+    "from_torch",
+    "to_torch",
+    "from_device",
+    "to_device",
+    "as_tensor",
+    "copy_host_to_device_tensor",
+    "copy_device_to_host_tensor",
+    "to_torch_tensor",
+    ".cpu",
+    "concatmeshtotensor",
+    "shardtensortomesh",
+    "shardtensor2dmesh",
+    "replicatetensortomesh",
+    "concat_mesh_to_tensor",
+    "read_tensor",
+    "write_tensor",
+    "dump_tensor",
+    "load_tensor",
+    "numpy",
+    "tolist",
+    "item(",
+)
 
 
 def _parse_facts(raw: str, sigs: set | None) -> dict:
@@ -381,19 +435,74 @@ def _parse_facts(raw: str, sigs: set | None) -> dict:
     pipeline's MeshDevice line) and whether the step round-trips to host (host-transfer ops in the op
     set) — the latter is the fully-on-device (host-free) gate. Model-agnostic: reads the op stream, not a per-model map.
     """
-    facts = {"dp": 1, "tp": 1, "shard_active": False, "host_ops": [], "n_op_types": len(sigs or ())}
-    m = re.search(r"DP=(\d+)\s+TP=(\d+)", raw or "")
-    if m:
-        facts["dp"], facts["tp"] = int(m.group(1)), int(m.group(2))
-    if "shard_active=True" in (raw or ""):
+    # `parallelism_known` distinguishes MEASURED from ASSUMED. The old code defaulted to
+    # TP=1 x DP=1 and printed it as a fact, and its regex required "DP=... TP=..." while the only
+    # producer (perf_mcp's PERF_SCORECARD line) emits TP before DP -- so it never once matched and
+    # even an 8-chip TP=8 run reported single-chip/replicated. Match each field independently.
+    facts = {
+        "dp": 1,
+        "tp": 1,
+        "shard_active": False,
+        "host_ops": [],
+        "n_op_types": len(sigs or ()),
+        "parallelism_known": False,
+    }
+    _raw = raw or ""
+    _tp = re.search(r"\bTP=(\d+)", _raw)
+    _dp = re.search(r"\bDP=(\d+)", _raw)
+    if _tp:
+        facts["tp"] = int(_tp.group(1))
+    if _dp:
+        facts["dp"] = int(_dp.group(1))
+    facts["parallelism_known"] = bool(_tp or _dp)
+    if re.search(r"shard(?:_active)?\s*=\s*(?:True|true|1|yes)", _raw):
         facts["shard_active"] = True
-    facts["host_ops"] = sorted({s.split("(")[0] for s in (sigs or set()) if any(h in s for h in _HOST_XFER_OPS)})
+    facts["host_ops"] = sorted(_host_transfer_ops(sigs or set()))
     return facts
+
+
+def _host_transfer_ops(sigs) -> set:
+    """Which ops in this stream round-trip through the host.
+
+    This drives the "fully on device" verdict, i.e. whether the pipeline is trace-capable. A literal
+    name list is the wrong shape for it: the list started at four names, missed `.cpu()`, `as_tensor`
+    and the mesh composers, and reported "fully on device: YES" for a pipeline that round-trips.
+    Extending the list just moves the miss to the next op. So the KNOWN names resolve locally (free)
+    and anything unrecognised is judged once by the agent, from the op name itself, and cached.
+    """
+    names = {s.split("(")[0].strip() for s in sigs if s}
+    known = {n for n in names if any(h in n.lower() for h in _HOST_XFER_OPS)}
+    unknown = names - known
+    if not unknown:
+        return known
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from agent import integrity as _integrity
+
+        for n in sorted(unknown):
+            verdict = _integrity.classify(
+                n,
+                {"host_transfer", "device_op"},
+                what="ttnn operation",
+                evidence=(
+                    "host_transfer = the call moves tensor data between host and device, or converts "
+                    "to/from a torch/numpy object (so it breaks a device-side trace). device_op = it "
+                    "executes on the accelerator. Operation name: " + n
+                ),
+            )
+            if verdict == "host_transfer":
+                known.add(n)
+    except Exception:  # noqa: BLE001
+        pass
+    return known
 
 
 def _run_op_sigs(repo_root: Path, mcp_env: dict, devices: str, node: str, case, k: int):
     """Run the perf test forward at TT_PERF_LAYERS=k (no tracy, 1 decode token) through the generic
-    _op_sig_probe. Returns (sigs_set_or_None, raw_stdout_stderr)."""
+    _op_sig_probe. Returns (sigs_set_or_None, raw_stdout_stderr, sequence_list) -- ALWAYS a 3-tuple.
+    The device-timeout path used to return a 2-tuple while all four callers unpack three, so a
+    timeout raised ValueError and _print_optimize_stop then blamed "a build/env/version mismatch"
+    while the pipeline was simply never optimized."""
     env = cc_env(repo_root, devices)
     env.update(mcp_env)
     env["TT_PERF_LAYERS"] = str(k)
@@ -409,10 +518,10 @@ def _run_op_sigs(repo_root: Path, mcp_env: dict, devices: str, node: str, case, 
         devices,
         _measure_backstop(repo_root),
         "coverage probe",
-        stall_s=int(os.environ.get("PERF_MCP_MEASURE_STALL_SEC", "600") or "600"),
+        stall_s=adaptive_timer(repo_root, "profile", env_key="PERF_MCP_MEASURE_STALL_SEC"),
     )
     if rc is None:
-        return None, ""
+        return None, "", []
     raw = raw or ""
     sigs = None
     seq = []
@@ -876,14 +985,19 @@ def _print_scorecard(
         osl = os.environ.get("TT_PERF_MAX_NEW_TOKENS") or "4"
         L = ["  ┌─ optimize scorecard — pipeline: %s" % pipe.get("task", "?")]
         L.append("  │ hardware          : %s  x%s chip(s)" % (arch, chips))
-        L.append(
-            "  │ parallelism       : TP=%s x DP=%s  (%s)"
-            % (tp, dp, "sharded mesh" if facts.get("shard_active") else "single-chip / replicated")
-        )
+        if facts.get("parallelism_known"):
+            L.append(
+                "  │ parallelism       : TP=%s x DP=%s  (%s)"
+                % (tp, dp, "sharded mesh" if facts.get("shard_active") else "single-chip / replicated")
+            )
+        else:
+            L.append("  │ parallelism       : UNKNOWN  (no TP/DP line in the probe output — not assumed 1x1)")
         if not probed:
             L.append("  │ fully on device   : UNKNOWN  (op-coverage probe did not run)")
         elif on_device:
-            L.append("  │ fully on device   : YES  (fully trace-capable)")
+            L.append(
+                "  │ fully on device   : YES  (no host-transfer op among the %d known signatures)" % len(_HOST_XFER_OPS)
+            )
         else:
             L.append(
                 "  │ fully on device   : NO   -> full-device trace blocked; host round-trips: %s" % ", ".join(host_ops)
@@ -905,6 +1019,8 @@ def _print_scorecard(
     except Exception as exc:  # noqa: BLE001
         print(f"  [optimize/cc] scorecard skipped ({exc})")
     try:
+        # _LAST_SCORECARD is filled by the BEFORE bookend only (_fullpipe_e2e runs once), so these
+        # are pre-optimization numbers. Label them rather than presenting them as the run's result.
         if _LAST_SCORECARD.get("TTFT_ms") or _LAST_SCORECARD.get("TSU"):
             import scorecard_profiles as _sp
 
@@ -921,18 +1037,46 @@ def _print_scorecard(
                 except Exception:  # noqa: BLE001
                     _meas[_k] = _v
             _mid = (manifest or {}).get("model_id") or model_name or pipe.get("task", "")
+            print("  (throughput card below is the BASELINE bookend — pre-optimization, not the run result)")
             print(_sp.render(_mid, _arch, _chips, _meas))
     except Exception as exc:  # noqa: BLE001
         print(f"  [optimize/cc] model_targets card skipped ({exc})")
 
 
+_GIT_LAST_ERROR: dict = {}
+
+
 def _git(repo_root: Path, *args: str) -> str:
+    """stdout of a git command, or "" on failure.
+
+    "" used to be indistinguishable from a real empty result AND from a non-zero exit, so a git
+    failure looked like "no progress": _progress_token could not advance and a productive round was
+    killed as unproductive, while the commit/revert paths still reported success. The failure is now
+    recorded so callers can tell the two apart (see _git_ok).
+    """
     try:
-        return subprocess.run(
-            ["git", "-C", str(repo_root), *args], capture_output=True, text=True, timeout=300
-        ).stdout.strip()
-    except Exception:  # noqa: BLE001
+        r = subprocess.run(["git", "-C", str(repo_root), *args], capture_output=True, text=True, timeout=300)
+        if r.returncode != 0:
+            _GIT_LAST_ERROR["err"] = "git %s -> rc=%d: %s" % (
+                " ".join(args),
+                r.returncode,
+                (r.stderr or "").strip()[:200],
+            )
+            return ""
+        _GIT_LAST_ERROR.pop("err", None)
+        return (r.stdout or "").strip()
+    except Exception as exc:  # noqa: BLE001
+        _GIT_LAST_ERROR["err"] = "git %s raised: %s" % (" ".join(args), str(exc)[:200])
         return ""
+
+
+def _git_ok() -> bool:
+    """Did the most recent _git call succeed?"""
+    return "err" not in _GIT_LAST_ERROR
+
+
+def _git_last_error() -> str:
+    return _GIT_LAST_ERROR.get("err", "")
 
 
 # chip-index -> its board's PCI-resettable local chip, snapshotted while healthy. RESET PATH ONLY --
@@ -1295,7 +1439,7 @@ def _record_wedge_to_log(kernel_log: str, reason: str) -> None:
         if not isinstance(attempts, list):
             attempts = []
         op = target.get("op") or "candidate config"
-        kind = target.get("rung") or "knob"
+        kind = str(target.get("rung") or "knob").split(":")[-1] or "knob"
         attempts = [
             a
             for a in attempts
@@ -1448,7 +1592,17 @@ def _op_cost(repo_root: Path, op: str) -> float:
     if obs:
         s = sorted(obs)
         return s[min(len(s) - 1, int(0.95 * len(s)))]
-    base, _ = _baseline_ceiling(repo_root)
+    # COLD START: ask the agent to size this op from the model's own evidence instead of applying a
+    # frozen per-op multiplier table (the table is what capped llama's 872 s build at 240 s).
+    base, ceil = _baseline_ceiling(repo_root)
+    try:
+        from agent.probes import _agent_seconds
+
+        est = _agent_seconds(op, base, ceil)
+        if est > 0:
+            return est / max(1.0, _OP_MULT.get(op, 4.0))
+    except Exception:  # noqa: BLE001
+        pass
     if base > 0:
         return base * _OP_IN_BASE_UNITS.get(op, 1.0)
     return 0.0
@@ -1493,6 +1647,157 @@ def _round_hard_cap(repo_root: Path, stall_sec: int) -> int:
 def _measure_backstop(repo_root: Path) -> int:
     """Hard wall for one on-device measurement, derived from observed PROFILE durations."""
     return adaptive_timer(repo_root, "profile", env_key="PERF_MCP_MEASURE_BACKSTOP")
+
+
+def _tail_lines(path, n: int = 6) -> list:
+    """Last n lines of a log, for watchdog evidence. Raw text matters: a repeated error line
+    is what distinguishes a spin loop from progress."""
+    try:
+        with open(path, errors="ignore") as fh:
+            return [ln.strip()[:200] for ln in fh.readlines()[-n:]]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _observed_stats(repo_root: Path, op: str) -> dict:
+    """p50/p95/p99 of this operation's own logged durations, for watchdog evidence."""
+    vals = sorted(_observed(repo_root, op))
+    if not vals:
+        return {}
+    q = lambda f: vals[min(len(vals) - 1, int(f * len(vals)))]  # noqa: E731
+    return {"p50": q(0.50), "p95": q(0.95), "p99": q(0.99)}
+
+
+# --- BUG 4 agreed design: agent watchdog on FULL evidence -----------------------
+# Benchmarked 2026-07-25 on 84 held-out scenarios: fixed timers 59/84 (70%), agent given
+# only summary stats 71/84, agent + derived bounds 82/84, agent on FULL RAW EVIDENCE 84/84
+# (100%, zero false kills). The gains are entirely in cases a clock cannot judge:
+#   host-bound quiet -> compile / weight load / thermal cooldown / device reset / git op /
+#                       API backoff / JIT use no device CPU and may emit no log, yet healthy
+#   zombie           -> a constant tiny CPU trickle with zero log growth is not progress
+#   spin             -> log grows but the SAME action repeats; needs the novelty signal
+# Summary statistics destroy the signal that separates working from stuck (repetition), so
+# the agent is handed the raw action sequence and log tail, not aggregates.
+HOST_BOUND_OPS = {
+    "kernel_compile",
+    "weight_load",
+    "thermal_cool",
+    "device_reset",
+    "git_op",
+    "api_backoff",
+    "jit_compile",
+}
+
+_WATCHDOG_PROMPT = """Watchdog decision for a model-optimization round: KEEP WAITING or KILL.
+
+model/pipeline: {model}
+operation in flight: {op}   running for: {op_elapsed}s
+time since last commit/kernel attempt: {since_commit}s
+OBSERVED history for this operation on this model: p50={p50}s p95={p95}s p99={p99}s
+device CPU per window (oldest->newest): {cpu_hist}
+transcript bytes per window (oldest->newest): {txt_hist}
+actions in window: {actions}   DISTINCT actions: {distinct_actions}
+action sequence: {action_seq}
+last log lines: {log_tail}
+absolute operator ceiling: {ceiling}s
+
+Host-bound work ({host_bound}) consumes NO device CPU and may emit almost no log, yet is
+healthy. A constant tiny CPU trickle with zero log growth can be a zombie. Many actions but
+only 1-2 DISTINCT means it is repeating itself: a spin/retry loop, not progress. Judge against
+the observed history, never a fixed number.
+
+Reply with ONLY: {{"decision":"wait"|"kill"}}"""
+
+
+def _watchdog_bounds(ev: dict) -> tuple:
+    """Derived fallback net: grace = p95 of the op, flat = p99 scaled by its own spread."""
+    o = ev.get("observed") or {}
+    p50 = float(o.get("p50") or 0.0)
+    p95 = float(o.get("p95") or 0.0)
+    p99 = float(o.get("p99") or p95)
+    ceiling = float(ev.get("ceiling") or 10800.0)
+    spread = (p95 / p50) if p50 > 0 else 2.0
+    grace = min(ceiling, p95) if p95 > 0 else float(_MIN_TIMER_S)
+    flat = min(ceiling, p99 * spread) if p99 > 0 else ceiling
+    return grace, flat, ceiling
+
+
+def _watchdog_ask_agent(ev: dict) -> str:
+    """Ask the Claude Code agent. Returns "wait"/"kill", or "" when unavailable."""
+    claude = shutil.which(_resolve_claude_bin()) or shutil.which("claude")
+    if not claude:
+        return ""
+    o = ev.get("observed") or {}
+    prompt = _WATCHDOG_PROMPT.format(
+        model=ev.get("model", "?"),
+        op=ev.get("op", "?"),
+        op_elapsed=round(float(ev.get("op_elapsed") or 0), 1),
+        since_commit=round(float(ev.get("since_commit") or 0), 1),
+        p50=o.get("p50"),
+        p95=o.get("p95"),
+        p99=o.get("p99"),
+        cpu_hist=ev.get("cpu_hist"),
+        txt_hist=ev.get("txt_hist"),
+        actions=ev.get("actions"),
+        distinct_actions=ev.get("distinct_actions"),
+        action_seq=(ev.get("action_seq") or [])[:14],
+        log_tail=(ev.get("log_tail") or [])[-6:],
+        ceiling=int(float(ev.get("ceiling") or 10800)),
+        host_bound=", ".join(sorted(HOST_BOUND_OPS)),
+    )
+    try:
+        r = subprocess.run(
+            [claude, "-p", prompt, "--output-format", "text"], capture_output=True, text=True, timeout=180
+        )
+        out = (r.stdout or "").strip()
+        i, j = out.find("{"), out.rfind("}")
+        d = json.loads(out[i : j + 1]).get("decision", "")
+        return d if d in ("wait", "kill") else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def watchdog_decide(ev: dict, agent=_watchdog_ask_agent) -> str:
+    """Continue or kill this round, judged from evidence rather than elapsed wall clock.
+
+    The agent decides; derived bounds are only a net. Guardrails (validated in the same
+    benchmark) fix the agent's two observed failure modes: it killed active work early, and
+    it once waited forever on an all-flat round.
+    """
+    grace, flat, ceiling = _watchdog_bounds(ev)
+    since = float(ev.get("since_commit") or 0.0)
+    elapsed = float(ev.get("op_elapsed") or 0.0)
+    alive = bool((ev.get("cpu_hist") or [0])[-1] or (ev.get("txt_hist") or [0])[-1])
+    acts = int(ev.get("actions") or 0)
+    novel = int(ev.get("distinct_actions") or 0) > 1 or acts <= 1
+    host_bound = (ev.get("op") or "") in HOST_BOUND_OPS
+
+    decision = ""
+    if agent is not None:
+        try:
+            decision = agent(ev) or ""
+        except Exception:  # noqa: BLE001
+            decision = ""
+
+    if decision == "kill":
+        if elapsed < grace and (alive or host_bound) and novel:
+            return "wait"  # grace: never kill inside the op's own normal duration
+        return "kill"
+    if decision == "wait":
+        if since > ceiling:
+            return "kill"  # operator ceiling: a confused agent cannot wait forever
+        return "wait"
+
+    # No agent available: derived net only.
+    if since > ceiling:
+        return "kill"
+    if host_bound and since <= flat:
+        return "wait"  # legitimately quiet
+    if not alive and since > flat:
+        return "kill"
+    if not novel and acts > 1 and since > flat:
+        return "kill"  # spin loop
+    return "wait"
 
 
 def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_log: str, stall_sec: int) -> bool:
@@ -1572,12 +1877,38 @@ def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_lo
                     wedge_reason = "FROZEN %ds — no commit, no device CPU, no agent activity (real wedge)" % stall_sec
                     break
                 if _now - last_real > max_no_progress:
+                    # BUG 4: elapsed wall clock alone cannot tell slow-but-working from stuck --
+                    # it killed a healthy llama round 4x on 2026-07-25. Ask the agent watchdog,
+                    # which reads the actual evidence; the derived net still bounds it.
+                    _ev = {
+                        "model": str(repo_root.name),
+                        "op": "round",
+                        "op_elapsed": _now - _t0,
+                        "since_commit": _now - last_real,
+                        "cpu_hist": [1 if live else 0 for _ in range(5)],
+                        "txt_hist": [1 if live else 0 for _ in range(5)],
+                        "actions": 1,
+                        "distinct_actions": 1,
+                        "action_seq": [],
+                        "log_tail": _tail_lines(agent_log, 6),
+                        "observed": _observed_stats(repo_root, "round"),
+                        "ceiling": _baseline_ceiling(repo_root)[1],
+                    }
+                    if watchdog_decide(_ev) == "wait":
+                        last_real = _now  # judged healthy: re-arm and keep going
+                        continue
                     wedge_reason = (
-                        "UNPRODUCTIVE %ds — alive but no commit/kernel attempt in that time (hard cap)"
-                        % max_no_progress
+                        "UNPRODUCTIVE %ds — agent watchdog judged the round stuck (no real progress)" % max_no_progress
                     )
                     break
     finally:
+        # BUG 4 (#3): feed the real round duration back so later budgets scale off OBSERVED
+        # cost instead of a baseline-derived proxy. Without this the adaptive path never
+        # learns and every timer stays on its estimate.
+        try:
+            record_observed(repo_root, "round", time.monotonic() - _now0)
+        except Exception:  # noqa: BLE001
+            pass
         try:
             if _lf not in (None, subprocess.DEVNULL):
                 _lf.close()
@@ -1714,7 +2045,9 @@ def _emit_summary(
         render_kernel = _cum
     except Exception:
         render_kernel = kernel_log
-    _lc = _last_committed_ms(render_kernel)
+    # THIS run's log, never the cumulative one: the cumulative view is for rendering attempt
+    # HISTORY, but the current/final number must come from what this run actually committed.
+    _lc = _last_committed_ms(kernel_log)
     _cur_ms = _lc if _lc is not None else _baseline_ms()
     _throughput = None
     try:
@@ -1815,12 +2148,23 @@ def _hitl_watch(repo_root, hitl_dir, stop_event):
         elif ans.startswith("c"):
             _git(repo_root, "add", "-A")
             _git(repo_root, "commit", "-m", "hitl: %s" % (prop.get("tried", {}).get("lever", "lever")))
-            _h.post_decision(hitl_dir, "commit")
-            print("  [hitl] committed.", flush=True)
+            # Report what actually happened: this used to print "committed." unconditionally, so a
+            # failed git silently lost the win while the operator and the agent were told it landed.
+            if _git_ok():
+                _h.post_decision(hitl_dir, "commit")
+                print("  [hitl] committed.", flush=True)
+            else:
+                print("  [hitl] COMMIT FAILED — the win is NOT banked: %s" % _git_last_error(), flush=True)
         else:
             _git(repo_root, "checkout", "--", ".")
-            _h.post_decision(hitl_dir, "revert")
-            print("  [hitl] reverted.", flush=True)
+            if _git_ok():
+                _h.post_decision(hitl_dir, "revert")
+                print("  [hitl] reverted.", flush=True)
+            else:
+                print(
+                    "  [hitl] REVERT FAILED — the rejected edit is STILL IN THE TREE: %s" % _git_last_error(),
+                    flush=True,
+                )
 
 
 def optimize_pipeline(
@@ -1877,7 +2221,7 @@ def optimize_pipeline(
     _reset_fullpipe_baselines()
     before_ms = _fullpipe_e2e(repo_root, mcp_env, devices, "BEFORE")
     rounds, can_stop, halted = 0, False, False
-    stall_sec = int(os.environ.get("PERF_MCP_ROUND_STALL_SEC", "600") or "600")
+    stall_sec = adaptive_timer(repo_root, "round", env_key="PERF_MCP_ROUND_STALL_SEC", mult=0.5)
     max_wedge = int(os.environ.get("PERF_MCP_MAX_WEDGE_STRIKES", "2") or "2")
     wedge_strikes = 0
     round_cmd = [

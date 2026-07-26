@@ -36,7 +36,15 @@ def should_promote(ctx) -> bool:
         return False
     d = ctx.state.get("last_decision") or {}
     before, after = d.get("before"), d.get("after")
-    return d.get("result", "keep") == "keep" and (before is None or after is None or after < before)
+    # Every default here used to mean "kept win": a missing `result` defaulted to "keep" and a
+    # missing before/after passed the comparison. So an edit that was never measured could be
+    # distilled into a permanent playbook lever. Promotion now requires positive evidence.
+    if d.get("result") != "keep":
+        return False
+    try:
+        return float(after) < float(before)
+    except (TypeError, ValueError):
+        return False
 
 
 def _slug(bucket: str, model: str) -> str:

@@ -25,13 +25,38 @@ _TRANSIENT_MARKERS = (
     "broken pipe",
 )
 
+
 # Hard per-call wall budget. The SDK spawns a CLI subprocess and streams from it; a stalled
 # round (network / API / CLI) raises NOTHING, so asyncio.run(go()) would block FOREVER and
 # freeze the whole loop (observed: a PLAN call hung 7+ min). asyncio.wait_for bounds each
 # attempt; the TimeoutError is treated as transient and retried, so one stalled round can no
 # longer freeze the loop. Generous default (a legit agentic PLAN reads many files over several
 # turns) but finite; override via AGENT_CALL_TIMEOUT_S.
-_DEFAULT_TIMEOUT_S = float(os.environ.get("AGENT_CALL_TIMEOUT_S", "300"))
+def _operator_ceiling_s() -> float:
+    """The run-level timeout the operator configured, or 3 h."""
+    import json as _json
+    from pathlib import Path as _P
+
+    mp = os.environ.get("PERF_MCP_MANIFEST")
+    if mp:
+        try:
+            return float((_json.loads(_P(mp).read_text()).get("config", {}) or {}).get("timeout") or 10800)
+        except Exception:  # noqa: BLE001
+            pass
+    return 10800.0
+
+
+def _default_timeout() -> float:
+    """Per-attempt agent-call budget, scaled from observed agent-call cost (BUG 4).
+    A fixed 300 s governed EVERY SDK agent call regardless of model size."""
+    try:
+        from .probes import adaptive_op_timeout
+
+        return float(adaptive_op_timeout("agent", env_key="AGENT_CALL_TIMEOUT_S"))
+    except Exception:  # noqa: BLE001
+        # Fixed 300 s was the defect (llama's agent calls run far longer). With no adaptive path
+        # available, concede the operator ceiling rather than invent a tight number.
+        return float(os.environ.get("AGENT_CALL_TIMEOUT_S", "") or _operator_ceiling_s())
 
 
 def is_transient(exc) -> bool:
@@ -52,7 +77,7 @@ def run_with_retry(go, reset=None, attempts=3, base_sleep=0.5, timeout=None):
     hanging forever.
     """
     if timeout is None:
-        timeout = _DEFAULT_TIMEOUT_S
+        timeout = _default_timeout()
     last = None
     for i in range(attempts):
         if reset is not None:

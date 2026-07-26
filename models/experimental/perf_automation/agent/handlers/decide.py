@@ -13,9 +13,22 @@ a constant; the spread is already recorded, so swapping this is a one-line chang
 
 from __future__ import annotations
 
+
 from .. import states
 
-_NOISE_FLOOR = 0.05  # PLACEHOLDER — not a measurement; see progress.txt
+
+def _noise_floor(before, spread=None) -> float:
+    """Smallest difference worth calling a win. SINGLE source of truth: integrity.win_threshold.
+
+    A fixed 0.05 was unit-agnostic, so on a 100 ms model a 0.06 ms delta -- six hundredths of one
+    percent, well inside this hardware's thermal drift -- was banked as a real gain. It also lived
+    in two modules, which is why fixing it here originally left the optimize path untouched.
+    """
+    from ..integrity import win_threshold
+
+    return win_threshold(before, spread)
+
+
 _SUSPICIOUS_GAIN = 0.5  # >50% improvement from ONE lever -> flag for verification
 
 
@@ -34,14 +47,15 @@ def decide(ctx) -> str:
 
     before, after = d.get("before"), d.get("after")
     direction = ctx.state["metric"].get("direction", "min")
+    # The run's own measured spread is already recorded on the decision; use it as the floor
+    # instead of a constant, so a delta inside this hardware's drift is never called a win.
+    floor = _noise_floor(before, d.get("spread"))
+    d["noise_floor_used"] = floor
 
     improved = (
         before is not None
         and after is not None
-        and (
-            (direction == "min" and after <= before - _NOISE_FLOOR)
-            or (direction == "max" and after >= before + _NOISE_FLOOR)
-        )
+        and ((direction == "min" and after <= before - floor) or (direction == "max" and after >= before + floor))
     )
     d["result"] = "keep" if improved else "discard"
     if not improved:

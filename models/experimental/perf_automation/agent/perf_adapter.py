@@ -43,6 +43,7 @@ the perf test's guard then falls back to FORWARD_WALL_MS and the detector report
 from __future__ import annotations
 
 import os
+import sys
 from typing import Callable
 
 
@@ -61,13 +62,25 @@ def resolve_mesh_shape(default_rows: int = 1, default_cols: int = 1) -> tuple[in
     (plan_parallelism -> TP x DP) into TT_PERF_MESH_ROWS/COLS; a model's device-open (or the generated
     perf test's self-open) calls this to honor it, falling back to its own default when unset. This is
     how --devices/--mesh actually reshapes topology: the tool plans, the open reads it here."""
-    try:
-        r = int(os.environ.get("TT_PERF_MESH_ROWS", ""))
-        c = int(os.environ.get("TT_PERF_MESH_COLS", ""))
-        if r >= 1 and c >= 1:
-            return r, c
-    except (TypeError, ValueError):
-        pass
+    _r = (os.environ.get("TT_PERF_MESH_ROWS") or "").strip()
+    _c = (os.environ.get("TT_PERF_MESH_COLS") or "").strip()
+    if _r or _c:
+        # A HALF-set pair used to raise on int("") and fall through to the default, so a planned
+        # TP=4 mesh opened as 1x1 and the single-chip measurement was reported as the planned
+        # topology. Honour whichever side was given rather than discarding both.
+        try:
+            r = int(_r) if _r else int(default_rows)
+            c = int(_c) if _c else int(default_cols)
+            if r >= 1 and c >= 1:
+                return r, c
+        except (TypeError, ValueError):
+            print(
+                "  [perf_adapter] WARNING: TT_PERF_MESH_ROWS/COLS set but unparseable (rows=%r cols=%r); "
+                "falling back to the source default %dx%d -- the measured topology may NOT be the "
+                "planned one" % (_r, _c, default_rows, default_cols),
+                file=sys.stderr,
+                flush=True,
+            )
     return default_rows, default_cols
 
 

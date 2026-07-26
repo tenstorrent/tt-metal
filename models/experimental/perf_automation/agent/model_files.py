@@ -438,8 +438,26 @@ def _validate(pathmap: dict[str, Any], model_root: Path) -> dict[str, Any]:
 _PCC_THR_RE = _re.compile(r"(?:pcc|comp_pcc|assert_with_pcc|allclose)[^0-9]{0,48}(0\.9\d+)", _re.IGNORECASE)
 
 
+def pcc_threshold_is_declared(pcc_file: Path) -> bool:
+    """Does this gate actually DECLARE a PCC threshold?
+
+    A supplied gate with no threshold used to be papered over by the 0.99 default below: the invented
+    number satisfied the `no_pcc_threshold` fatal check, so a file that never computes a PCC at all
+    (e.g. one asserting top-1 token accuracy) was accepted as the correctness gate and the run
+    proceeded, banking wins with correctness never numerically checked.
+    """
+    try:
+        return bool(_PCC_THR_RE.search(pcc_file.read_text(errors="ignore")))
+    except OSError:
+        return False
+
+
 def _extract_pcc_threshold(pcc_file: Path, default: float = 0.99) -> float:
-    """Numeric PCC threshold lifted from the test text (e.g. assert_with_pcc(..., 0.99)); default 0.99."""
+    """Numeric PCC threshold lifted from the test text (e.g. assert_with_pcc(..., 0.99)).
+
+    NOTE: `default` is a FALLBACK, not evidence a threshold exists -- callers gating on whether the
+    supplied file is a real PCC gate must use pcc_threshold_is_declared() instead.
+    """
     try:
         txt = pcc_file.read_text(errors="ignore")
     except OSError:

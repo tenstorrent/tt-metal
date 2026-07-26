@@ -25,24 +25,37 @@ def _write_run(dirpath, timeout=10800, baseline=None):
         )
 
 
-def test_probes_no_manifest_returns_floor(monkeypatch):
+def test_probes_no_manifest_concedes_the_ceiling(monkeypatch):
+    """With no manifest there is no baseline, no observation and (offline) no agent, so nothing can
+    be derived. It concedes the operator ceiling rather than inventing 3600 s: a budget that is too
+    TIGHT kills healthy work, while a loose one only delays detection, and round liveness is judged
+    from evidence by watchdog_decide, not by this clock."""
     monkeypatch.delenv("PERF_MCP_MANIFEST", raising=False)
     monkeypatch.delenv("PERF_MCP_MEASURE_BACKSTOP", raising=False)
-    assert adaptive_backstop(3600) == 3600
+    monkeypatch.setenv("PERF_MCP_NO_AGENT_CLASSIFY", "1")
+    assert adaptive_backstop(3600) == 10800
 
 
-def test_probes_fast_model_floor(tmp_path, monkeypatch):
+def test_probes_uses_observed_cost_when_it_exists(tmp_path, monkeypatch):
+    """The precise input is this operation's OWN observed cost on THIS model. The old contract
+    returned a fixed 3600 s floor here -- 36x the work for a 100 s-baseline model -- which is the
+    defect that made adaptivity inert for every model actually run."""
     monkeypatch.delenv("PERF_MCP_MEASURE_BACKSTOP", raising=False)
+    monkeypatch.setenv("PERF_MCP_NO_AGENT_CLASSIFY", "1")
     rd = tmp_path / "runs" / "r1"
     _write_run(rd, baseline=100.0)
+    (rd / "observed_durations.json").write_text(json.dumps({"pcc": [120.0, 130.0, 125.0]}))
     monkeypatch.setenv("PERF_MCP_MANIFEST", str(rd / "manifest.json"))
-    assert adaptive_backstop(3600) == 3600
+    assert adaptive_backstop(3600) == int(3 * 130.0)
 
 
 def test_probes_heavy_model_scales(tmp_path, monkeypatch):
+    """A heavy model's observed PCC cost drives its own budget, with no fixed floor involved."""
     monkeypatch.delenv("PERF_MCP_MEASURE_BACKSTOP", raising=False)
+    monkeypatch.setenv("PERF_MCP_NO_AGENT_CLASSIFY", "1")
     rd = tmp_path / "runs" / "r1"
     _write_run(rd, timeout=10800, baseline=2167.92)
+    (rd / "observed_durations.json").write_text(json.dumps({"pcc": [2100.0, 2167.92]}))
     monkeypatch.setenv("PERF_MCP_MANIFEST", str(rd / "manifest.json"))
     assert adaptive_backstop(3600) == int(3 * 2167.92)
 
@@ -71,14 +84,16 @@ def test_probes_env_override_wins(tmp_path, monkeypatch):
     assert adaptive_backstop(3600) == 1234
 
 
-def test_probes_corrupt_events_floor(tmp_path, monkeypatch):
+def test_probes_corrupt_events_concedes_ceiling(tmp_path, monkeypatch):
     monkeypatch.delenv("PERF_MCP_MEASURE_BACKSTOP", raising=False)
     rd = tmp_path / "runs" / "r1"
     rd.mkdir(parents=True, exist_ok=True)
     (rd / "manifest.json").write_text(json.dumps({"config": {"timeout": 10800}}))
     (rd / "events.jsonl").write_text("{bad\n\n{}\n")
     monkeypatch.setenv("PERF_MCP_MANIFEST", str(rd / "manifest.json"))
-    assert adaptive_backstop(3600) == 3600
+    # corrupt events -> no baseline, no observation, no agent: concede the ceiling rather than the
+    # old fixed 3600 s floor, which was the de-facto policy for every model actually run.
+    assert adaptive_backstop(3600) == 10800
 
 
 def test_run_measure_backstop_cold_start_is_bounded(tmp_path, monkeypatch):
