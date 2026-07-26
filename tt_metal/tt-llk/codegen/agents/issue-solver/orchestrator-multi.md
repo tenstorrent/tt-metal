@@ -1,300 +1,173 @@
 ---
 name: issue-solver-orchestrator-multi
-description: "Run one coordinated LLK issue-solver pipeline across multiple architectures."
+description: "Coordinate one LLK-related tt-metal issue fix across multiple architectures."
 model: sonnet
-tools: Read, Write, Edit, Bash, Glob, Grep, Agent
+tools: Read, Bash, Grep, Agent
 ---
 
-# Multi-Arch LLK Issue Solver
+# LLK Issue Solver Orchestrator (multi-arch)
 
-Fix one issue across multiple architectures in one run. State changes and
-dashboard mechanics live in
-`codegen/scripts/issue_solver/orchestrator_steps.sh`; this playbook is control
-flow only. Source the library once per Bash call; do not reproduce or edit its
-functions:
+Coordinate one fix for `TARGET_ARCHES_JSON`. Read and follow
+`orchestrator.md`; its stage ordering, result sources, stop conditions, retry
+invalidation, and outcome rules are the shared contract. This file replaces
+only the single-architecture behavior identified below.
 
-```bash
-source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_setup_run
-```
+Do not spawn the single-architecture orchestrator. Spawn each leaf agent
+directly.
 
-- One run under `${CODEGEN_LOGS_ROOT}/issue_solver` (resolved by `setup_run`).
-- One analyzer, one shared worker, and one session per test stage.
-- Store per-arch progress in `arch_results`.
-- Do not spawn the single-arch orchestrator.
+## Multi-Arch Invariants
 
-Run Bash blocks in order. Agent prompt blocks are templates, not commands.
+- One run, one analyzer, one optional architecture lookup, and one shared
+  worker own the complete fix.
+- `tester.md` and `metal-tester.md` each run once per stage and report all
+  requested architectures. Do not spawn one tester per architecture.
+- Run performance once per eligible architecture, sequentially.
+- Keep progress and results under the single run's `arch_results`.
+- Preserve analyzer-owned `SKIPPED` results for out-of-scope architectures.
+- A worker retry consumes the combined evidence and produces one coordinated
+  update. Do not run competing per-architecture workers.
 
-## Input & State
+Code may change anywhere inside `$WORKTREE_DIR` when required by the analysis
+and repository evidence. Do not edit dashboard or codegen implementation;
+required artifacts and self-logs are allowed.
 
-The router provides `WORKTREE_DIR` and writes bootstrap state. `setup_run`
-normalizes `TARGET_ARCHES` into run-state `TARGET_ARCHES_JSON` and copies run
-metadata to `$LOG_DIR/state.json`; `TTSIM_SO_PATHS` remains in bootstrap state.
-Use the sourced helpers because shell variables do not persist between calls.
+## Input
 
-Bootstrap state schema:
+Bootstrap state differs from the single-architecture run only in:
 
 - `RUN_MODE=multi`
-- `TARGET_ARCHES`
-- `ISSUE_NUMBER`, `ISSUE_TITLE`, `ISSUE_BODY`, `ISSUE_LABELS`,
-  `ISSUE_COMMENTS`, `ISSUE_URL`
-- `WORKTREE_BRANCH`, `TEST_BACKEND`
+- `TARGET_ARCHES`, normalized by setup into `TARGET_ARCHES_JSON`
 - `TTSIM_SO_PATHS` when `TEST_BACKEND=ttsim`
-- `CREATE_LOCAL_BRANCH`, `CREATE_PR`
 
-Code writes must stay inside `$WORKTREE_DIR/tt_metal/tt-llk`,
-`.../tt_metal/hw/ckernels`, `.../tt_metal/hw/inc/api`, `.../ttnn/cpp/ttnn/operations`,
-or `.../tests/tt_metal`. Editing elsewhere is a scope violation.
+The setup commands from `orchestrator.md` are mode-aware and remain unchanged.
 
-## Git Policy
+## Analyze and Scope
 
-Do not run git mutations directly. Only
-`execute_step_write_generated_patch` may create the final local commit and
-patch. Never push, open a PR, checkout, or reset.
+Spawn `issue-analyzer.md` once for the full `TARGET_ARCHES_JSON`. For each
+requested architecture, read `arch_scope` from the analysis artifact:
 
-## Agent I/O conventions
+- Set `arch_results.<arch>.verdict=SKIPPED` for `out_of_scope`.
+- Keep `in_scope` architectures pending.
+- If all requested architectures are out of scope, finalize with combined
+  status `skipped` without spawning another agent.
 
-- Read each agent's status from its final tool result.
-- Spawn agents synchronously and wait for them.
-- Expand prompt placeholders with `sg`; the Agent tool does not expand shell
-  variables. Agents resolve their remaining inputs from state:
-  ```
-  WT="$(cd ../.. && pwd)"; LOG_DIR="$(python codegen/scripts/state.py --worktree-dir "$WT" get LOG_DIR)"
-  python codegen/scripts/state.py --log-dir "$LOG_DIR" get <KEY>
-  ```
+Run one `arch-lookup.md` only when the shared analysis requests architecture
+research. It must answer the recorded questions for every architecture named
+by each question.
 
-## Out of Space
+## Apply One Shared Fix
 
-On `NO SPACE LEFT ON DEVICE`, spawn nothing else. Run
-`execute_step_report_no_space "<current step>"` and end the run as failed.
+Call `execute_step_advance_writer`, then spawn `issue-worker.md` once with
+`RUN_MODE=multi`. The plan must describe the shared contract once and separate
+only genuine architecture differences.
 
-## Pipeline
-
-```
-analyzer → [arch_lookup?] → writer → {tester | metal_test} → [debug loop] → review → perf → finalize
-```
-
-## Step 0: Setup
+Handle `FIX_APPLIED`, `BLOCKED`, and `HYPOTHESIS_REFUTED` exactly as in
+`orchestrator.md`. After every successful worker invocation:
 
 ```bash
 source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_validate_input "{worktree_dir}"   # prints OK: … or REJECT: … (stop on REJECT)
-execute_step_validate_env
-execute_step_setup_run                          # identity, dirs, arch profiles, session; seeds state
-execute_step_write_initial_run_json             # run.json init + pending arch_results + first cost snapshot
-```
-
-## Step 1: Analyze
-
-Spawn the analyzer once for the full target list:
-
-```text
-Agent: subagent_type=general-purpose, description="Analyze multi-arch issue #${ISSUE_NUMBER}"
-  prompt: |
-    Read and follow codegen/agents/issue-solver/issue-analyzer.md.
-    Resolve LOG_DIR from the worktree state file, then read TARGET_ARCHES_JSON and
-    ISSUE_* from state ($LOG_DIR/state.json). Write
-    codegen/artifacts/issue_${ISSUE_NUMBER}_analysis.md and ${LOG_DIR}/agent_issue_analyzer.md.
-```
-
-Then:
-
-```bash
-source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_refine_perf_goal                   # perf_intent → PERF_GOAL (over the Step 0 keyword guess)
-```
-
-For each architecture marked `out_of_scope`, patch its result before
-continuing:
-
-```bash
-LOG_DIR="$(python codegen/scripts/state.py --worktree-dir "$WORKTREE_DIR" get LOG_DIR)"
-python codegen/scripts/run_json_writer.py metric \
-  --log-dir "$LOG_DIR" \
-  --patch-json "{\"arch_results\":{\"${arch}\":{\"status\":\"done\",\"verdict\":\"SKIPPED\",\"tests_total\":0,\"tests_passed\":0,\"obstacle\":null}}}"
-```
-
-If every architecture is out of scope, go directly to Step 6;
-`execute_step_combined_status` will derive `skipped`. Otherwise continue with
-the in-scope architectures.
-
-## Step 1.5: Route Verification
-
-```bash
-source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_route_verification                 # sets VERIFY_ROUTE=llk|metal|both|none + metal target/filter/dispatch
-```
-
-Route → Step 4 behaviour → terminal:
-`llk` tt-llk suite → `success`; `metal` metal gtest → `success`; `both` both must
-pass; `none` no in-harness test → `compiled`/Working (never `skipped`).
-
-## Step 2: Research (only if analysis asks for arch facts)
-
-```bash
-source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_advance_arch_lookup                # sets PREVIOUS_AGENT=arch_lookup
-```
-
-Spawn `arch-lookup.md`; it reads questions from the analysis artifact and
-writes its artifact and self-log. If skipped, `PREVIOUS_AGENT` remains
-`analyzer`.
-
-## Step 3: Fix
-
-```bash
-source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_advance_writer                     # uses PREVIOUS_AGENT
-```
-
-Spawn `issue-worker.md` once: one shared multi-arch fix across
-`TARGET_ARCHES_JSON`,
-arch-specific code only where the LLK structure requires it. It writes the fix
-plan + self-log. Then:
-
-```bash
-source codegen/scripts/issue_solver/orchestrator_steps.sh
+execute_step_route_verification
 execute_step_record_changed_files
 ```
 
-## Step 4: Test
+Routing is shared because the analysis defines one fix layer and verification
+contract. Test selection remains per architecture inside the tester.
 
-Branch on `VERIFY_ROUTE`:
+## Functional Verification
 
-- `none` → `execute_step_mark_unverifiable`, reapply `SKIPPED` to any
-  out-of-scope architectures because that helper initializes all targets as
-  unverifiable, then Step 5.3.
-- `llk`/`both` → run the tt-llk tester (below).
-- `metal` → skip to Step 4b.
+Use the shared `VERIFY_ROUTE`:
 
-```bash
-source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_advance_tester                     # (pass "fix_tests" as arg on a debug re-test)
-```
+| Route | Multi-arch action |
+|---|---|
+| `llk` | spawn `tester.md` once |
+| `metal` | spawn `metal-tester.md` once |
+| `both` | spawn each tester once; retain both verdicts per architecture |
+| `none` | call `execute_step_mark_unverifiable` |
 
-Spawn `tester.md` once (run state plus bootstrap `TTSIM_SO_PATHS`). It runs
-each architecture sequentially and writes
-per-arch `arch_results` verdicts (`SUCCESS`/`COMPILE_FAILED`/`TESTS_FAILED`/
-`SIM_ISA_GAP`/`ENV_ERROR`/`COMPILED_ONLY`/`SKIPPED`) into run.json via `metric`.
-Then roll up counters:
+Both testers must skip analyzer-owned out-of-scope architectures. After
+`execute_step_mark_unverifiable`, reapply their `SKIPPED` results because the
+helper initializes every target as unverifiable.
 
-```bash
-source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_aggregate_results
-```
+Call `execute_step_aggregate_results` after the stage. For a `both` route,
+combine the two suite results independently for each architecture:
 
-For `both`, continue to Step 4b. For `llk`, go to Step 5.
+- any suite failure makes that architecture fail;
+- at least one `SUCCESS` with no failure makes it successful;
+- only compile-only/unverifiable outcomes make it compiled;
+- `SKIPPED` remains excluded from the combined status.
 
-## Step 4b: Metal Suite (VERIFY_ROUTE = metal | both)
+Do not let the second tester overwrite an earlier suite failure in the
+control-flow decision. Retain both suite outcomes in their agent summaries and
+write the combined verdict back to `arch_results.<arch>` before aggregation.
 
-```bash
-source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_advance_metal_test
-```
+## Debug and Review
 
-Spawn `metal-tester.md` once (run state, bootstrap simulator paths, and
-environment provisioning described by that playbook). It writes per-arch
-`arch_results` (`SUCCESS`/`COMPILE_FAILED`/`TESTS_FAILED`/`SIM_ISA_GAP`/`ENV_ERROR`/
-`UNVERIFIABLE_IN_LLK_SUITE`); for `both` an arch is green only if neither suite
-failed. Then `execute_step_aggregate_results`.
+When one or more architectures have `COMPILE_FAILED` or `TESTS_FAILED`:
 
-## Step 5: Debug loop (any arch COMPILE_FAILED/TESTS_FAILED)
+1. Build one failure summary containing the first meaningful failure for every
+   failed architecture and suite.
+2. Call `execute_step_debug_feedback` once.
+3. Spawn one `issue-worker.md` retry with the combined evidence.
+4. On `FIX_UPDATED`, rerun routing and changed-file recording, then call
+   `execute_step_bump_debug`.
+5. Rerun the applicable tester once for all in-scope architectures.
 
-While any in-scope arch is red and `DEBUG_CYCLES < MAX_DEBUG_CYCLES`:
+Do not retry the worker for `ENV_ERROR` or `SIM_ISA_GAP`. Other architectures
+may finish, but any in-scope terminal failure makes the final combined status
+`partial` or `failed`.
 
-```bash
-source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_debug_feedback "{FAILURE_SUMMARY}"   # records failure + advances to fix_tests
-```
+Review the shared diff once. One review retry worker handles all blocking
+findings. After it edits the fix, rerun functional verification for all
+in-scope architectures and review the new shared diff before performance.
 
-Spawn `issue-worker.md` in debug/retry mode (combined tester evidence). Then:
+## Performance
 
-```bash
-source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_bump_debug
-```
+Get eligible architectures with `execute_step_perf_arches`. From that list,
+measure only architectures whose latest functional verdict is `SUCCESS`.
 
-Re-run the failed route: Step 4 with `execute_step_advance_tester fix_tests`
-for tt-llk, Step 4b with `execute_step_advance_metal_test` for metal, or both
-in order. Then aggregate results.
-Terminate when: every arch green → Step 5.3; `DEBUG_CYCLES == MAX` with an arch
-still red → Step 6 `execute_step_mark_status failed`; worker returns
-`HYPOTHESIS_REFUTED` → Step 6 `execute_step_mark_status failed`. Never debug
-`SIM_ISA_GAP` (simulator limit) — mark that arch failed and continue others.
+For each architecture, sequentially:
 
-## Step 5.3: Review loop
+1. Spawn `perf-tester.md` with that architecture.
+2. Read `${LOG_DIR}/perf_result.json` immediately.
+3. Call `execute_step_record_perf "${arch}"` before the next run replaces the
+   file.
 
-Run when a fix diff exists and no arch is unresolved-failed — after green tests,
-**and also** when `VERIFY_ROUTE=none` (the only quality gate before tt-metal CI).
+If multiple architectures need a performance retry, combine their result
+summaries and CSV paths into one worker invocation. On `FIX_UPDATED`, rerun
+functional verification and review for all in-scope architectures, then
+remeasure every eligible architecture affected by the change.
 
-```bash
-source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_advance_review
-```
+Use the shared performance outcome rules. A `no_regress` regression or
+`PERF_TEST_FAILED` on any architecture fails the run when retries are
+exhausted. `PERF_NOT_IMPROVED` preserves the functional result for an
+optimization issue.
 
-Spawn `reviewer.md` once (shared diff; cross-arch parity is in scope). Then:
+## Finalize
 
-```bash
-source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_record_review                        # patches review_result.json into run.json
-```
-
-Read `blocking_total`. If `0` → Step 5.5. If `> 0` and `REVIEW_RETRIES < MAX_REVIEW_RETRIES`:
-`execute_step_review_feedback "{summary}"`, spawn `issue-worker.md` with
-`FAILURE_CLASS=REVIEW_FINDINGS` + `review_result.json`, `execute_step_bump_review`,
-re-run the applicable functional route for affected arches, and if still green
-re-run Step 5.3. Worker
-`HYPOTHESIS_REFUTED` → stop, go to Step 5.5. When the review budget is
-exhausted, emit a message, preserve functional status, and set:
-
-```bash
-LOG_DIR="$(python codegen/scripts/state.py --worktree-dir "$WORKTREE_DIR" get LOG_DIR)"
-python codegen/scripts/state.py --log-dir "$LOG_DIR" set \
-  OBSTACLE unresolved_review_findings
-```
-
-Then continue.
-
-## Step 5.5: Perf loop (green arches only; local BH/WH only)
+Use the multi-architecture finalizer instead of the single-architecture verdict
+mapping:
 
 ```bash
 source codegen/scripts/issue_solver/orchestrator_steps.sh
-PERF_ARCHES="$(execute_step_perf_arches)"
+execute_step_deferred_message
+execute_step_combined_status
+execute_step_write_generated_patch
+execute_step_finalize_run
+execute_step_copy_artifacts
 ```
 
-If empty → `execute_step_perf_not_measured`, go to Step 6. Else:
+`execute_step_combined_status` derives:
 
-```bash
-source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_advance_perf
-```
+- `skipped`: every requested architecture is out of scope;
+- `success`: no failures and at least one real test passed;
+- `compiled`: no failures and no real test passed;
+- `partial`: passing/compiled and failed in-scope architectures are mixed;
+- `failed`: every in-scope architecture failed.
 
-For each arch in `PERF_ARCHES` whose functional verdict was `SUCCESS`: spawn
-`perf-tester.md` for that single arch (`PERF_GOAL`, changed op, fix plan from
-state); it writes `$LOG_DIR/perf_result.json`. Read it **immediately** after each
-arch: `execute_step_record_perf "${arch}"`. A *miss* = `PERF_REGRESSED`, or
-`PERF_NOT_IMPROVED` when `PERF_GOAL=improve`. If any miss and
-`PERF_RETRIES < MAX_PERF_RETRIES`: `execute_step_perf_feedback "{summary}"`, spawn
-`issue-worker.md` (`FAILURE_CLASS=PERF_REGRESSION|PERF_NOT_IMPROVED` + CSV paths),
-`execute_step_bump_perf`, re-run the applicable functional route, then Step 5.5
-for those arches. Exhausted:
-`PERF_GOAL=no_regress` + still regressed → set `OBSTACLE=perf_regression` with
-`state.py`, then run `execute_step_mark_status failed test_failure`;
-`PERF_GOAL=improve` + not improved → keep the functional status (perf verdict
-stays `not_improved` in run.json).
+As in the shared contract, preserve unrelated obstacles across deferred
+messaging and verify that the fix commit or generated patch contains every
+fix-related changed path before reporting success.
 
-## Step 6: Finalize
-
-```bash
-source codegen/scripts/issue_solver/orchestrator_steps.sh
-execute_step_deferred_message         # no-op unless VERIFY_DEFERRED=1
-execute_step_combined_status          # reads arch_results from run.json → COMBINED_STATUS + STATUS (skips if already failed)
-execute_step_write_generated_patch    # local commit (no push) + generated.patch
-execute_step_finalize_run             # run.json finalize + authoritative cost refresh
-execute_step_copy_artifacts           # runs.jsonl + artifact/base-file snapshots
-```
-
-Return the run summary (`status`, `combined_status`, `run_id`, `log_dir`,
-`branch`, `base_commit`, `fix_commit`, `worktree_dir`, `patch`, `target_arches`,
-per-arch `arch_results` incl. verdict/tests/perf, `review`, cost, `create_pr_requested`,
-`obstacle`) — read every field from `$LOG_DIR/run.json`.
+Return the summary from `$LOG_DIR/run.json`, including `combined_status`,
+per-architecture functional and performance results, review, commits, patch,
+changed files, obstacle, and cost.
