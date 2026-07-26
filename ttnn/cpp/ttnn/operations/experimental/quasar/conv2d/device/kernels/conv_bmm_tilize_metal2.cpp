@@ -538,7 +538,11 @@ void kernel_main() {
                     // them -- the fix is a state SCRUB, not a stall. Issue the CLEARDVALID (both banks in
                     // SyncFull, the active bank in SyncHalf) to clear the matmul's stale math dvalid before the
                     // tilize. Cheaper than compute_kernel_hw_startup (no hw_configure).
-                    MATH((llk_math_set_dvalid<p_cleardvalid::FPU, DST_SYNC_MODE>()));
+                    // [#48552] CLEARDVALID scrub REMOVED: llk_math_set_dvalid is static_assert-blocked on Quasar
+                    // (it belongs to the dest-dvalid sync scheme and must not mix with the semaphore scheme
+                    // tt-metal uses) AND it did not resolve the 0x19 in testing. Leaving it here was a hard
+                    // trisc1 compile error once the static_assert was restored. The MATH pack-sync re-seed +
+                    // pack init/dest_init below are the kept fix for the tilize inheriting stale matmul state.
                     MATH((llk_math_pack_sync_init()));
                     PACK((llk_pack_init(tilized_in0_cb_id)));
                     // A/B RESULT: disabling this moved the tilize fault EARLIER (t=4 -> t=1), so dest_init
