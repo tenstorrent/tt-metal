@@ -696,6 +696,17 @@ void kernel_main() {
                         uint32_t dst_index = 0;
                         uint32_t in0_index = in0_index_subblock_offset;
                         uint32_t in1_index = in1_index_subblock_offset;
+                        // [#48552] MATH-side matmul localizer: marks the subblock about to run its MVMULs. If MMMV
+                        // prints for (i0,i1) but MMMVOK does NOT, the MATH 0x19 is in that subblock's matmul_block.
+                        // Gated to the first height block (bsp1 faulted there, ~3 MMPACKs in).
+                        if (in0_block_h_i == 0) {
+                            MATH(DPRINT(
+                                "MMMV kb={} i0={} i1={} idw={}\n",
+                                (uint32_t)in0_block_w_i,
+                                (uint32_t)in0_subblock_i,
+                                (uint32_t)in1_subblock_i,
+                                (uint32_t)in0_block_w));
+                        }
                         for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; inner_dim_idx++) {
                             matmul_block(
                                 mm_in0_cb_id,
@@ -709,6 +720,10 @@ void kernel_main() {
                                 in0_block_w);
                             in0_index++;
                             in1_index += in1_block_w;
+                        }
+                        // [#48552] all MVMULs for this subblock completed (MATH survived the matmul_block loop).
+                        if (in0_block_h_i == 0) {
+                            MATH(DPRINT("MMMVOK i0={} i1={}\n", (uint32_t)in0_subblock_i, (uint32_t)in1_subblock_i));
                         }
 
 #ifdef SFPU_OP_INIT_ACTIVATION
@@ -747,15 +762,18 @@ void kernel_main() {
                             // frdim/nf are the pack tile geometry that sets the physical per-tile stride: for a
                             // symmetric 32x32 tile frdim=16, nf=4 -> stride=128 units (=esz). If frdim!=16 or
                             // nf!=4 the stride != esz -> every tile step drifts by a sub-tile amount (root cause).
-                            PACK(DPRINT(
-                                "MMPACK cb={} wptr={} nent={} esz={} nt={} frdim={} nf={}\n",
-                                (uint32_t)curr_matmul_out_cb,
-                                (uint32_t)curr_out_cb.get_write_ptr(),
-                                (uint32_t)curr_out_cb.get_total_num_entries(),
-                                (uint32_t)curr_out_cb.get_entry_size(),
-                                (uint32_t)out_subblock_num_tiles,
-                                (uint32_t)get_output_face_r_dim(curr_matmul_out_cb),
-                                (uint32_t)get_output_num_faces(curr_matmul_out_cb)));
+                            // [#48552] gated to first height block to cut DPRINT volume (ring-overflow -> watcher
+                            // error). frdim/nf dropped (confirmed 16/4). h/kb localize the pack.
+                            if (in0_block_h_i == 0) {
+                                PACK(DPRINT(
+                                    "MMPACK h={} kb={} cb={} wptr={} nent={} esz={}\n",
+                                    (uint32_t)in0_block_h_i,
+                                    (uint32_t)in0_block_w_i,
+                                    (uint32_t)curr_matmul_out_cb,
+                                    (uint32_t)curr_out_cb.get_write_ptr(),
+                                    (uint32_t)curr_out_cb.get_total_num_entries(),
+                                    (uint32_t)curr_out_cb.get_entry_size()));
+                            }
 #ifdef ARCH_QUASAR
                             // QSR matmul-pack DST addressing fix. The Quasar SEQUENTIAL pack
                             // (pack_tile_block -> llk_pack_block -> get_output_tile_index<out_of_order=false>)

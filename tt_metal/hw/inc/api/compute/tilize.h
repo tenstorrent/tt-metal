@@ -287,35 +287,9 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
 template <uint32_t block_ct_dim_ct = 0>
 ALWI void tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
-#ifdef ARCH_QUASAR
-    // DEBUG (conv tilize 0x19 localizer): the LAST TZBLK/TZPK that flushes before the fault tells us how far
-    // the tilize got. Same tilize_block PASSES in test_tilize.py but FAULTS in the conv2d stem -> the code is
-    // fine, the DFB SETUP differs. Dump the tile geometry / formats of both CBs so the two runs can be diffed.
-    // The per-tile PACK stride is set by the OUTPUT tile geometry (face_r_dim * num_faces * entry): if the
-    // conv's ocb (act_tilized, borrowed/aliased) reports frdim != 16 or nf != 4 (a partial/2x2-face tile) the
-    // pack address drifts off the whole-tile grid -> OOB -> ERROR_TRISC1 0x19. Remove after diagnosis.
-    PACK(DPRINT(
-        "TZBLK icb={} ocb={} block={} oti={}\n",
-        (uint32_t)icb,
-        (uint32_t)ocb,
-        (uint32_t)block,
-        (uint32_t)output_tile_index));
-    PACK(DPRINT(
-        "TZCFG-OUT ocb={} out_nf={} out_frdim={} out_narrow={} dstacc={} syncfull={}\n",
-        (uint32_t)ocb,
-        (uint32_t)get_output_num_faces(ocb),
-        (uint32_t)get_output_face_r_dim(ocb),
-        (uint32_t)get_output_narrow_tile(ocb),
-        (uint32_t)DST_ACCUM_MODE,
-        (uint32_t)(DST_SYNC_MODE == DstSync::SyncFull)));
-    UNPACK(DPRINT(
-        "TZCFG-IN icb={} in_srcfmt={} in_dstfmt={} in_nf={} in_frdim={}\n",
-        (uint32_t)icb,
-        (uint32_t)get_operand_src_format(icb),
-        (uint32_t)get_operand_dst_format(icb),
-        (uint32_t)get_operand_num_faces(icb),
-        (uint32_t)get_operand_face_r_dim(icb)));
-#endif
+    // [#48552] Removed the per-tilize-block TZBLK/TZCFG-IN/TZCFG-OUT DPRINT flood (200+ prints/core -> overflowed
+    // the DPRINT ring -> watcher error). Their job is done: tile geometry is correct (frdim=16 nf=4) and the
+    // tilize now completes all blocks; the 0x19 is in the matmul, not the tilize.
 #if defined(ARCH_QUASAR) && defined(QSR_TILIZE_UNPACK_TO_DEST)
     // UnpackToDestEn bypass (tt-metal #49445): the unpacker tilizes DIRECTLY into DEST (UNP_DEST), so the
     // per-tile MATH A2D datacopy MOP (ERROR_TRISC1 0x19, Quasar DEST-section leak) is never issued. Sync is the
