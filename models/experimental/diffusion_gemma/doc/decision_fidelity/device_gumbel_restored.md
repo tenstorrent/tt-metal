@@ -190,6 +190,45 @@ it is that the uncertain ones collapse onto ONE token and form a wall, which the
 Noise is ruled out as the cause of that collapse (fresh noise reproduces it byte-for-byte), so what
 still distinguishes TT is the logits distribution over those unsettled positions.
 
+## 8. CORRECTION: the collapse is NOT mostly inherent -- 94% of it is TT-specific
+
+Sections 4 and 6c read the aggregate rates and concluded that truncation and tail repetition were
+inherent to the model, because the CUDA arm showed 22.7% unanswered and 22.2% tail repetition at
+8192. That conclusion came from comparing rates instead of comparing questions, and it is wrong.
+
+The GPU's 22.7% unanswered at 8192 was mostly a BUDGET artefact: re-running those 45 questions at
+16384 answered 40 of them (§4). Taking the union of the reference's two runs -- the fairest reading
+of "could the reference do this question at all" -- and cross-tabulating question by question
+against the TT arm over the 131 questions where both have results:
+
+| | answered | correct |
+| --- | --- | --- |
+| CUDA reference | **126/131 (96%)** | 97 (74%) |
+| TT (HiFi2, 16K, shipped config) | **64/131 (49%)** | 58 (44%) |
+
+| | TT clean | TT collapsed |
+| --- | --- | --- |
+| reference answered | 66 | **60** |
+| reference failed | 1 | 4 |
+
+**60 of TT's 64 collapses (94%) are on questions the reference answers.** Only 4 questions
+(28, 36, 69, 79) are hard for both -- that is the genuinely inherent set, and it is 3% of the set,
+not 23%.
+
+Nor are the 60 all long-reasoning questions that TT merely lacks room for. The reference's token use
+on them is median 6744, min **1561**, max 14647, and TT's truncation rate at 16K is 0% -- the
+shortest of them takes the reference about six blocks' worth of tokens, well inside TT's budget, and
+TT still collapses.
+
+So the gap is a TT defect surface covering 46% of GPQA-Diamond, not a model ceiling. Treating
+#48291 as an acceptable ceiling was wrong: the reference demonstrates 96% is reachable on this
+checkpoint, with the same 48-step budget, the same thresholds and the same schedule (§3).
+
+What that changes about where to look: a fix does not need to invent new capability, it needs to
+close a numerics gap on prompts that already work elsewhere. The 60 questions are a large, cheap
+reproducer set -- the shortest ones (by reference token use) are the right place to start, since
+they collapse without needing a long context.
+
 ## 6. Reproduce
 
 ```bash
