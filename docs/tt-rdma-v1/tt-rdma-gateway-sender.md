@@ -16,7 +16,19 @@ It is both the true-ceiling-finder for the BH RX and the gateway's TX leg.
 The DOCA path posts send-task *batches* to the NIC's HW TX rings — the Arm never touches per-frame
 egress. Pipelined (multiple batches in flight) it saturates the 200 G uplink.
 
-## Build (on the BlueField Arm — DOCA 3.4, no meson needed)
+## Deploy + build (one command)
+
+The source is vendored in the repo (`tt_metal/tt_rdma/gw/ttblast_sample.c`, the NVIDIA BSD-3 sample +
+TT-RDMA mods) so it survives DPU reboots (the DPU's `/tmp` is wiped). Deploy from the host:
+
+```sh
+tt_metal/tt_rdma/gw/deploy_doca_sender.sh          # scp source + build -> /tmp/doca_ttblast on the DPU
+tt_metal/tt_rdma/gw/deploy_doca_sender.sh --run    # ... then run (mlx5_0 -> BH ext idx2, dst 02:..:02)
+```
+It ensures the host↔DPU tmfifo IP, scp's `ttblast_sample.c`, and builds it on the BlueField Arm against
+the DPU's stock DOCA sample sources. Env overrides: `DPU`, `DPU_PASS`, `DEV`, `DMAC`.
+
+## Build (manual, on the BlueField Arm — DOCA 3.4, no meson needed)
 
 Base sample: `/opt/mellanox/doca/samples/doca_eth/eth_txq_batch_send_ethernet_frames`. Build the
 (modified) sample with gcc + pkg-config (meson is not required):
