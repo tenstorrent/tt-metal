@@ -753,6 +753,24 @@ class DeepSeekV4Model(DeepSeekV4Module):
             self.config.compress_rates,
         )
 
+    def reset_static_caches(self) -> None:
+        """Zero every traced-decode cache so a fresh sequence can start at position 0.
+
+        The captured traces address these buffers directly, so they are zeroed in
+        place: reallocating them would invalidate every capture, and even a
+        temporary device allocation is unsafe while a trace exists. (``fill`` still
+        logs the allocator's "unsafe with an active trace" warning for its own
+        scratch; the cache buffers themselves are untouched by it.)
+        """
+        if not getattr(self, "submeshes_io", None):
+            raise RuntimeError("call prepare_static_decode() before reset_static_caches()")
+        for sm in self.submeshes_io:
+            for scache in sm["scaches"].values():
+                for name in _StaticLayerCache.__slots__:
+                    buf = getattr(scache, name)
+                    if buf is not None:
+                        ttnn.fill(buf, 0.0, output_tensor=buf)
+
     def prepare_static_decode(self, rope: dict, max_seq: int, lm_head=None) -> None:
         """Allocate the traced-decode state (the prompt is prefilled by replaying
         :meth:`decode_traced` once per prompt token into these empty caches).
