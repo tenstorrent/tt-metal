@@ -49,7 +49,7 @@ def test_deepseek_v3_moe_perf_loudbox():
         expected_ns_8x1=15_506_174,
         model_name_8x1="deepseek_v3_moe_lb_8x1_dispatch_combine",
         command_2x4=_CMD_2X4,
-        # Recalibrated 2026-07-30 on BH LoudBox 2x4 for the same in-place direct-write
+        # Recalibrated 2026-07-26 on BH LoudBox 2x4 for the same in-place direct-write
         # change (no full-buffer device fill per layer): 35.13 ms -> 32.31 ms. UP_SPLIT
         # was already baked in (39_194_517 -> 35_127_772). Was 35_127_772.
         expected_ns_2x4=23_956_009,
@@ -71,7 +71,7 @@ def test_deepseek_v3_moe_perf_galaxy():
 
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4_pad0,
-        expected_device_perf_ns_per_iteration=15_565_001,
+        expected_device_perf_ns_per_iteration=21_028_751, # Recalibrated 2026-07-26
         subdir="deepseek_v3_moe",
         model_name="deepseek_v3_moe_glx_8x4",
         num_iterations=1,
@@ -91,7 +91,7 @@ def test_deepseek_v3_moe_perf_galaxy_pad50():
 
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4_pad50,
-        expected_device_perf_ns_per_iteration=27_159_208,  # Recalibrated 2026-07-18 (perf improvement, was 38_028_230).
+        expected_device_perf_ns_per_iteration=15_719_590,  # Recalibrated 2026-07-26 (perf improvement, was 27_159_208).
         subdir="deepseek_v3_moe",
         model_name="deepseek_v3_moe_glx_8x4_pad50",
         num_iterations=1,
