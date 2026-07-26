@@ -91,6 +91,11 @@ class KimiDeltaAttention:
         self.tt_ccl = tt_ccl
         self.chunk_const_tiles = build_fused_const_tiles(mesh_device, _FUSED_CHUNK_SIZE)
         self._prepared_convolution_weights: dict[int, ttnn.Tensor] = {}
+        # Terminal affine-map extraction evaluates each grouped transform at
+        # zero and identity.  The identity must be uploaded outside trace
+        # capture, so retain both probe states by batch size and reuse their
+        # fixed device addresses on every forward/replay.
+        self._terminal_affine_probe_states: dict[int, tuple[ttnn.Tensor, ttnn.Tensor]] = {}
         self.recurrent_state: ttnn.Tensor | None = None
         self.convolution_state: ttnn.Tensor | None = None
         self.use_inplace_state = False
@@ -510,6 +515,39 @@ class KimiDeltaAttention:
         """
         if self.config.head_k_dim != self.config.head_v_dim:
             raise ValueError("terminal affine transform requires matching KDA key/value dimensions")
+        zero, identity = self._terminal_affine_probe_state(batch_size)
+        _, terminal_b = ttnn.transformer.kda_affine_prefix_with_terminal_state(
+            transform_a,
+            transform_b,
+            zero,
+            groups,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_config,
+        )
+        _, terminal_identity = ttnn.transformer.kda_affine_prefix_with_terminal_state(
+            transform_a,
+            transform_b,
+            identity,
+            groups,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_config,
+        )
+        terminal_a = ttnn.subtract(terminal_identity, terminal_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return terminal_a, terminal_b
+
+    def _terminal_affine_probe_state(self, batch_size: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Return persistent zero/identity states for terminal-map extraction.
+
+        ``ttnn.from_torch`` is a host write and is explicitly unsupported
+        during trace capture.  Warmup invokes this helper before capture; all
+        replays then reuse the exact same device tensors.  A layer normally
+        serves one prefill batch size, but retaining a small cache keeps the
+        regular eager API valid if callers switch batch sizes.
+        """
+        if batch_size <= 0:
+            raise ValueError(f"batch_size must be positive, got {batch_size}")
+        if batch_size in self._terminal_affine_probe_states:
+            return self._terminal_affine_probe_states[batch_size]
         batch_heads = batch_size * self.config.num_heads
         state_shape = (batch_heads, self.config.head_k_dim, self.config.head_v_dim)
         zero = ttnn.zeros(
@@ -531,24 +569,8 @@ class KimiDeltaAttention:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             **identity_kwargs,
         )
-        _, terminal_b = ttnn.transformer.kda_affine_prefix_with_terminal_state(
-            transform_a,
-            transform_b,
-            zero,
-            groups,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_config,
-        )
-        _, terminal_identity = ttnn.transformer.kda_affine_prefix_with_terminal_state(
-            transform_a,
-            transform_b,
-            identity,
-            groups,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_config,
-        )
-        terminal_a = ttnn.subtract(terminal_identity, terminal_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return terminal_a, terminal_b
+        self._terminal_affine_probe_states[batch_size] = zero, identity
+        return zero, identity
 
     def group_entry_states(self, transform_a: ttnn.Tensor, transform_b: ttnn.Tensor, groups: int) -> ttnn.Tensor:
         """Return the recurrent state at each grouped scan entry."""

@@ -194,6 +194,41 @@ class SP2TP4KimiDeltaAttention:
             assert layer.convolution_state is not None
             layer.set_external_state(layer.recurrent_state, layer.convolution_state)
 
+    def reset_trace_stable_state(self) -> None:
+        """Zero fixed cache buffers without changing captured program signatures.
+
+        Trace warmup must use ``use_inplace_state=True`` so its programs match
+        capture.  Replacing the state tensors afterwards would create a new
+        device-buffer signature; instead queue device-side zero/copy work and
+        retain the external buffers' addresses for capture and replay.
+        """
+        temporary_zeros: list[ttnn.Tensor] = []
+        for layer in self.layers:
+            assert layer.recurrent_state is not None
+            assert layer.convolution_state is not None
+            if not layer.use_inplace_state:
+                raise ValueError("reset_trace_stable_state requires enable_trace_stable_state first")
+            zero_recurrent = ttnn.zeros(
+                layer.recurrent_state.shape,
+                dtype=layer.recurrent_state.dtype,
+                layout=layer.recurrent_state.layout,
+                device=layer.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            zero_convolution = ttnn.zeros(
+                layer.convolution_state.shape,
+                dtype=layer.convolution_state.dtype,
+                layout=layer.convolution_state.layout,
+                device=layer.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.copy(zero_recurrent, layer.recurrent_state)
+            ttnn.copy(zero_convolution, layer.convolution_state)
+            temporary_zeros.extend((zero_recurrent, zero_convolution))
+        self._synchronize()
+        for tensor in temporary_zeros:
+            ttnn.deallocate(tensor)
+
     def _handoff_causal_state(self) -> None:
         """Copy the completed first-span cache into the second-span cache."""
         source, destination = self.first_layer, self.second_layer
@@ -538,6 +573,41 @@ class SP8AffineTP1KimiDeltaAttention:
             assert layer.recurrent_state is not None
             assert layer.convolution_state is not None
             layer.set_external_state(layer.recurrent_state, layer.convolution_state)
+
+    def reset_trace_stable_state(self) -> None:
+        """Zero fixed cache buffers without changing captured program signatures.
+
+        Trace warmup must use ``use_inplace_state=True`` so its programs match
+        capture.  Replacing the state tensors afterwards would create a new
+        device-buffer signature; instead queue device-side zero/copy work and
+        retain the external buffers' addresses for capture and replay.
+        """
+        temporary_zeros: list[ttnn.Tensor] = []
+        for layer in self.layers:
+            assert layer.recurrent_state is not None
+            assert layer.convolution_state is not None
+            if not layer.use_inplace_state:
+                raise ValueError("reset_trace_stable_state requires enable_trace_stable_state first")
+            zero_recurrent = ttnn.zeros(
+                layer.recurrent_state.shape,
+                dtype=layer.recurrent_state.dtype,
+                layout=layer.recurrent_state.layout,
+                device=layer.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            zero_convolution = ttnn.zeros(
+                layer.convolution_state.shape,
+                dtype=layer.convolution_state.dtype,
+                layout=layer.convolution_state.layout,
+                device=layer.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.copy(zero_recurrent, layer.recurrent_state)
+            ttnn.copy(zero_convolution, layer.convolution_state)
+            temporary_zeros.extend((zero_recurrent, zero_convolution))
+        self._synchronize()
+        for tensor in temporary_zeros:
+            ttnn.deallocate(tensor)
 
     def _synchronize(self) -> None:
         for device in self.span_devices:

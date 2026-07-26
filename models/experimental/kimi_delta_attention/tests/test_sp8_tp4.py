@@ -214,6 +214,7 @@ def test_sp8_tp4_affine_trace_layer_pcc(mesh_device: ttnn.MeshDevice, monkeypatc
     golden_second_output, golden_second_state = kda_forward_reference(hidden, state_dict, config, golden_first_state)
     layer = SP8AffineTP4KimiDeltaAttention(mesh_device, config, state_dict)
     layer.reset_state(batch_size=1)
+    layer.enable_trace_stable_state()
     span = sequence // 8
     span_inputs = tuple(
         ttnn.from_torch(
@@ -235,8 +236,7 @@ def test_sp8_tp4_affine_trace_layer_pcc(mesh_device: ttnn.MeshDevice, monkeypatc
         ttnn.synchronize_device(span_device)
     for output in warm_outputs:
         ttnn.deallocate(output)
-    layer.reset_state(batch_size=1)
-    layer.enable_trace_stable_state()
+    layer.reset_trace_stable_state()
 
     trace_ids = tuple(ttnn.begin_trace_capture(span_device, cq_id=0) for span_device in layer.span_devices)
     outputs = layer.forward(*span_inputs)

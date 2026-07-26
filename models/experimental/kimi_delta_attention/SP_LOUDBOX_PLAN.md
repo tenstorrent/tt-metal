@@ -363,10 +363,13 @@ device-ordered affine prefix and with the normal TP=4 output CCL intact.
    plus a local fixed-address semaphore wait. They are deliberately enqueued
    on the existing 1x1 span submeshes, not on the parent 1x8 mesh, because
    parent-mesh work conflicts with the child meshes that own KDA's command
-   queues. This is still **unvalidated**: the first parent-mesh prototype
-   stalled and left the board PCIe-hung; after recovery it was replaced with
-   the child-mesh design before a fresh silicon run could be made. Do not use
-   it for a performance claim until this exact gate passes repeatedly:
+   queues. The first parent-mesh prototype stalled and left the board PCIe-hung;
+   it was replaced with this child-mesh design. The replacement is now
+   validated on LoudBox (2026-07-26): ten isolated barrier rounds pass, the
+   exact 1 MiB/rank prefix has PCC >= 0.999, and the production-rank SP8×TP1
+   KDA gate passes output/recurrent/convolution PCC >= 0.98. A separately
+   captured prefix also completed ten one-lane replays. This establishes
+   correctness and trace stability, not an end-to-end performance claim:
 
    ```bash
    # Isolate the six-level fabric-atomic barrier; requires ten clean rounds.
@@ -384,6 +387,12 @@ device-ordered affine prefix and with the normal TP=4 output CCL intact.
      KDA_SP8_PIPELINED_HANDOFFS=1 KDA_SP_PREFIX_LANES=1 \
      scripts/run_safe_pytest.sh -q -s \
      models/experimental/kimi_delta_attention/tests/test_sp8_tp1.py::test_sp8_tp1_affine_layer_pcc
+
+   # Complete no-host-fence SP8 TP1 layer capture, including two replayed
+   # calls and both persistent KDA caches, at production-rank work.
+   KDA_SP8_AFFINE_TRACE_TEST=1 KDA_SP8_AFFINE_TRACE_TARGET_SHAPE=1 \
+     scripts/run_safe_pytest.sh -q -s \
+     models/experimental/kimi_delta_attention/tests/test_sp8_tp1.py::test_sp8_tp1_affine_trace_layer_pcc
    ```
 
 3. **Factor the prefix scheduler by `(SP rank, TP rank)`.**  Move the current
