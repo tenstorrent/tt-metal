@@ -295,6 +295,115 @@ seven: **q106, q096, q122, q095, q007, q090, q064**. q106 is the cheapest -- the
 1561 tokens on it. The right next step is a layer-by-layer comparison of that first denoise forward
 against the reference, since the discrepancy is now known to live in a single forward pass.
 
+## 10. The 56 late-block collapses are HF sliding-layer key retention (#51080), already built
+
+Section 9 measured the first-forward entropy gap on the SEVEN questions that collapse on block 0.
+That is 7 of 64 collapses. Locating the other 57 needed a different question: *where* in the
+generation does each collapse happen, relative to anything that changes with the committed prefix?
+
+### The correlation
+
+`promptlen_vs_collapse.py` tokenises every prompt under the same thinking contract and crosses the
+prompt length against the baseline's collapse block. Two things fall out:
+
+| | n | min | median | max |
+| --- | --- | --- | --- | --- |
+| collapsed prompt_len | 64 | 110 | 258 | 2428 |
+| clean prompt_len | 67 | 100 | 205 | 584 |
+
+Prompt length itself separates nothing (median 258 vs 205; only 1 of 64 collapsed prompts is even
+past 1024 tokens). But the *committed prefix* grows 256 tokens per block, and:
+
+    collapse block histogram: 0:7  1:1  3:1  7:1  9:3  10:6  11:4  12:10  13:12  14:15  15:3  17:1
+
+    56 of 64 collapses happen AT OR AFTER the block where the committed prefix crosses 1023.
+     8 of 64 happen before it (7 of those are the block-0 set of section 9).
+
+### Why 1023 is the number
+
+DiffusionGemma is **25 sliding_attention layers and 5 full_attention layers** (`layer_types`,
+window 1024) — 83% sliding, not the 1:1 interleave the plan text suggests. HF's *mask* over the
+canvas is deliberately full ("DiT module doesn't need a sliding mask and has to attend fully to prev
+context and itself", modeling_diffusion_gemma.py), but the *cache* still evicts: sliding layers hold
+only the last `sliding_window - 1` committed keys.
+
+Measured on the reference rather than taken from the docstring (`ref_sliding_retention.py`, A100,
+1500-token prompt):
+
+    layer  type                cached keys   get_mask_sizes(kv_len, kv_off)
+        0  sliding_attention          1023                    (1279, 477)
+        5  full_attention             1500                    (1756, 0)
+
+    retained on sliding layers = 1023 == sliding_window - 1     (not 1024, not the full prompt)
+
+TT's production denoise path is maskless all-attend, so past a 1023-token committed prefix those 25
+layers attend to keys the reference does not have, and the excess grows every block:
+
+| committed prefix | HF sliding keys | TT sliding keys | excess |
+| --- | --- | --- | --- |
+| block 4 (~1290) | 1023 | 1290 | 267 (21%) |
+| block 9 (~2570) | 1023 | 2570 | 1547 (60%) |
+| block 13 (~3600) | 1023 | 3600 | 2577 (72%) |
+
+That growth curve is the shape of the collapse histogram: nothing before the crossing, a slow onset
+around blocks 9-11, and the mass at 12-14.
+
+### The fix was already written and left switched off
+
+`denoise_forward.denoise_sliding_window_enabled` (#51080) implements exactly this retention as
+reveal-mask content, per layer type, and its own docstring says why it shipped OFF:
+
+> Default OFF because it is decision-CHANGING above `prompt_len = 1024` and its gate is a
+> decision-agreement run against fp32 HF (not against today's TT output, which is the defect being
+> corrected). **Flip the default once the fp32 HF agreement run lands.**
+
+So this is not new code, it is a missing gate — and the collapse histogram above is the evidence the
+gate was waiting for. 95 host tests already cover the mask semantics
+(`test_denoise_sliding_window.py`, `test_hf_sliding_window_reference.py`, `test_attention_mask.py`,
+`test_paged_prefix_reveal_mask.py`).
+
+### What the arm does and does not prove
+
+`DG_DENOISE_SLIDING_WINDOW=1` is a SINGLE-arm change against the baseline command: same Gumbel mode,
+thinking, EOS stop, degeneracy policy, seed, context and block budget. It cannot fix the block-0
+seven, because below a 1023-token prefix the window never binds and the mask is bit-identical to
+today's — those 7 stay as the negative control.
+
+## 11. CORRECTION to section 9: 5.1 nats is not a TT-wide offset, it is per-block
+
+Section 9's table is titled as if TT's first denoise forward always lands at 5.09-5.37 while the
+reference lands at 3.75. All five of those TT rows are the same prompt and the same block --
+q106, block 0. Generalising from them was wrong.
+
+A HEALTHY TT block, from the sliding-window arm's q017 (block 12, halt telemetry):
+
+    entropy per step: 3.7167, 3.6057, 3.4377, ... 0.0062, 0.0033   halted after 24 steps
+    mismatch:           251,    141,    139, ...      10,      0
+
+**Step-1 entropy 3.7167 -- the reference's value.** TT does reach reference-quality first forwards;
+5.1 is a property of the blocks that fail, not a constant TT penalty. Section 9's mechanism (accept
+count pinned at 1 => canvas never fills => argmax returns the unigram prior) still stands for the
+block-0 seven; only the "every TT path" framing was too broad.
+
+### Two controls that keep the block-0 gap real
+
+Both were missing when section 9 was written.
+
+*Canvas luck.* HF and TT each draw their own random initial canvas, so the 3.75-vs-5.10 comparison
+was never separated from canvas variance. `ref_seed_sweep.py` runs the reference on q106 over 8
+initial canvases (A100, one model load, ~3 s each):
+
+    step-1 entropy: 3.5311 .. 3.8775   (spread 0.35 nats)
+    converged: 8/8, in 9-15 of 48 steps
+
+The gap is 4x the canvas-variance spread and convergence is 8/8 against TT's 0/5, so canvas luck
+does not explain block 0.
+
+*Prompt padding.* `cache_len` is `prompt_len` rounded up to a 32-multiple, and all seven block-0
+prompts carry 7-31 padding tokens, which looked like a lead. It is not: over all 131 questions the
+CLEAN group has MORE padding on average (18.2 vs 16.3), and eight clean questions sit at the maximum
+29-31 while running 4-17 blocks. Refuted before it was implemented.
+
 ## 6. Reproduce
 
 ```bash
