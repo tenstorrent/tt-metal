@@ -51,7 +51,7 @@ inline void _llk_pack_mop_config_(const std::uint8_t buf_desc_id, const std::uin
 /**
  * @brief Initializes the packer for packing contiguous tiles via Packer 0.
  *
- * Programs the pack MOP and optionally the packer ReLU (mode and threshold) for Packer 0 via cfg_rmw.
+ * Programs the pack MOP.
  *
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  *        stored in the buffer descriptor table, values = 16 - 31
