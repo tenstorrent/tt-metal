@@ -33,7 +33,10 @@ try:
     from ttml.models.deepseek.moe_sparse import SparseMoE
 
     _AVAILABLE = True
-except Exception:
+except ImportError:
+    # Only a genuinely absent/unbuilt ttml/ttnn skips this module. Anything else
+    # (a module that imports but fails to initialize, a broken op registration)
+    # must propagate — swallowing it would turn a real regression into a skip.
     _AVAILABLE = False
 
 

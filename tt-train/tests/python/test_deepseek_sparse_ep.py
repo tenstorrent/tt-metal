@@ -1,0 +1,369 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Correctness of the ``sparse_ep`` MoE path — the production multi-device path.
+
+Two layers of coverage:
+
+* **Dispatch** (single device): ``build_moe_ffn`` picks ``SparseMoE`` when the
+  mesh has no usable EP axis (the EP=1 degenerate case), ``SparseMoEEP`` when it
+  does, ``MoE`` for ``dense``, and rejects anything else. EP=1 ≡ sparse is what
+  lets ``sparse_ep`` be the only sparse mode, so it is asserted directly rather
+  than assumed.
+
+* **Numerics** (multi-device): the routed-expert list is partitioned across an
+  "ep" mesh axis (``SparseMoEEP``), each chip running ``E / D_ep`` experts and
+  all-reducing the partial outputs. One set of host weights is loaded into
+
+    - a replicated ``SparseMoE`` reference holding all E experts, and
+    - an EP-sharded ``SparseMoEEP`` (expert ``e`` lives on shard ``e // e_local``),
+
+  both are run on the same replicated input, and the (replicated) forward output
+  and gate gradient must match within PCC bounds.
+
+The multi-device tests need ``EP_AXIS_SIZE`` chips on the "ep" axis; the
+module-scoped fixture skips them otherwise. Override the axis size with
+``TTML_EP_AXIS_SIZE`` and supply a matching ``TT_MESH_GRAPH_DESC_PATH`` for
+sizes that have no bundled MGD, e.g.
+
+    TTML_EP_AXIS_SIZE=8 TT_MESH_GRAPH_DESC_PATH=<1x8 mgd> pytest test_deepseek_sparse_ep.py
+"""
+
+from __future__ import annotations
+
+import os
+from typing import Optional
+
+import numpy as np
+import pytest
+import torch
+
+import ttnn
+import ttml
+from ttml.models.deepseek.moe import MoE
+from ttml.models.deepseek.moe_sparse import SparseMoE
+from ttml.models.deepseek.moe_sparse_ep import SparseMoEEP
+from ttml.models.deepseek.transformer import build_moe_ffn, resolve_moe_ep_axis
+
+pytestmark = pytest.mark.requires_device
+
+SEED = 2026
+
+# Chips required on the "ep" axis. 2 is the smallest layout that actually
+# exercises sharding (E split over 2 shards); bundled MGDs only cover (1, 2).
+EP_AXIS_SIZE = int(os.environ.get("TTML_EP_AXIS_SIZE", "2"))
+
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+_MGD_FOR_ARCH_AND_SHAPE = {
+    ("blackhole", (1, 2)): os.path.join(_REPO_ROOT, "configs", "mgd", "bh_galaxy_1_2_line_line.textproto"),
+    ("wormhole_b0", (1, 2)): os.path.join(_REPO_ROOT, "configs", "mgd", "n300_1_2_line_line.textproto"),
+}
+
+
+class _Cfg:
+    """Minimal MoE config (only the fields the MoE paths read)."""
+
+    def __init__(self, **kw):
+        self.dim = kw.get("dim", 64)
+        self.moe_inter_dim = kw.get("moe_inter_dim", 64)
+        self.n_routed_experts = kw.get("n_routed_experts", 8)
+        self.n_activated_experts = kw.get("n_activated_experts", 2)
+        self.n_shared_experts = kw.get("n_shared_experts", 0)
+        self.n_expert_groups = kw.get("n_expert_groups", 1)
+        self.n_limited_groups = kw.get("n_limited_groups", 1)
+        self.score_func = kw.get("score_func", "sigmoid")
+        self.route_scale = kw.get("route_scale", 1.0)
+        self.moe_type = kw.get("moe_type", "sparse_ep")
+        self.moe_axis_name = kw.get("moe_axis_name", "ep")
+        self.use_tp = kw.get("use_tp", False)
+
+
+def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
+    a = a.flatten().float()
+    b = b.flatten().float()
+    a = a - a.mean()
+    b = b - b.mean()
+    denom = a.norm() * b.norm()
+    if denom == 0:
+        return 1.0 if a.norm() == b.norm() else 0.0
+    return float((a @ b) / denom)
+
+
+# ---------------------------------------------------------------------------
+# Dispatch: EP=1 degenerates to SparseMoE (single device, no mesh needed)
+# ---------------------------------------------------------------------------
+
+
+class TestMoEDispatch:
+    """``build_moe_ffn`` selection rules, including the EP=1 fallback."""
+
+    def setup_method(self, method):
+        ttml.autograd.AutoContext.get_instance().reset_graph()
+
+    def test_dense_builds_dense_moe(self):
+        assert isinstance(build_moe_ffn(_Cfg(moe_type="dense")), MoE)
+
+    def test_ep1_no_axis_degenerates_to_sparse(self):
+        """moe_axis_name unset → no EP axis → single-device SparseMoE (EP=1)."""
+        cfg = _Cfg(moe_type="sparse_ep", moe_axis_name=None)
+        assert resolve_moe_ep_axis(cfg) is None
+        ffn = build_moe_ffn(cfg)
+        assert isinstance(ffn, SparseMoE) and not isinstance(ffn, SparseMoEEP)
+
+    def test_ep1_size_one_axis_degenerates_to_sparse(self):
+        """An "ep" axis of size 1 is not a usable EP axis → SparseMoE."""
+        cfg = _Cfg(moe_type="sparse_ep", moe_axis_name="ep")
+        mesh = ttml.maybe_mesh()
+        if mesh is not None and mesh.has_axis("ep") and mesh.axis_size("ep") > 1:
+            pytest.skip("mesh has a real EP axis; covered by the multi-device tests")
+        assert resolve_moe_ep_axis(cfg) is None
+        assert isinstance(build_moe_ffn(cfg), SparseMoE)
+
+    def test_unknown_moe_type_raises(self, expect_error):
+        with expect_error(ValueError, "unknown moe_type"):
+            build_moe_ffn(_Cfg(moe_type="sparse_tp"))
+
+
+# ---------------------------------------------------------------------------
+# Multi-device mesh fixture
+# ---------------------------------------------------------------------------
+
+
+def _detect_arch() -> Optional[str]:
+    try:
+        name = ttnn.get_arch_name().lower()
+    except Exception:  # noqa: BLE001
+        return None
+    if "blackhole" in name:
+        return "blackhole"
+    if "wormhole_b0" in name:
+        return "wormhole_b0"
+    return None
+
+
+def _close_device_quietly() -> None:
+    try:
+        ttml.autograd.AutoContext.get_instance().close_device()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _ensure_mgd_path(shape: tuple[int, ...]) -> Optional[str]:
+    """Point TT_MESH_GRAPH_DESC_PATH at a bundled MGD if unset. Returns the old value."""
+    previous = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
+    if previous:
+        return previous
+    arch = _detect_arch()
+    if arch is None:
+        return previous
+    candidate = _MGD_FOR_ARCH_AND_SHAPE.get((arch, shape))
+    if candidate and os.path.isfile(candidate):
+        os.environ["TT_MESH_GRAPH_DESC_PATH"] = candidate
+    return previous
+
+
+def _restore_mgd_path(previous: Optional[str]) -> None:
+    if previous is None:
+        os.environ.pop("TT_MESH_GRAPH_DESC_PATH", None)
+    else:
+        os.environ["TT_MESH_GRAPH_DESC_PATH"] = previous
+
+
+@pytest.fixture(scope="module")
+def ep_mesh():
+    """Open a ``[1, EP_AXIS_SIZE]`` mesh with axes ``("dp", "ep")``."""
+    shape = (1, EP_AXIS_SIZE)
+    previous_mgd = _ensure_mgd_path(shape)
+
+    _close_device_quietly()
+    try:
+        ttml.open_device_mesh(ttml.Mesh(shape, ("dp", "ep")))
+    except Exception as e:  # noqa: BLE001
+        _restore_mgd_path(previous_mgd)
+        pytest.skip(f"sparse_ep tests need {EP_AXIS_SIZE} devices on the 'ep' axis: {e}")
+
+    yield ttml.mesh()
+
+    _close_device_quietly()
+    try:
+        import ttml._mesh as _mesh_mod  # type: ignore[import-not-found]
+
+        _mesh_mod._mesh = None
+    except Exception:  # noqa: BLE001
+        pass
+    _restore_mgd_path(previous_mgd)
+
+
+# ---------------------------------------------------------------------------
+# Multi-device numerics: SparseMoEEP vs replicated SparseMoE
+# ---------------------------------------------------------------------------
+
+
+def _host_weights(cfg: _Cfg, seed: int = SEED):
+    """Deterministic host weights: gate [E, dim] and per-expert w1/w3 [I,H], w2 [H,I]."""
+    g = torch.Generator().manual_seed(seed)
+    E, H, I = cfg.n_routed_experts, cfg.dim, cfg.moe_inter_dim
+    gate = torch.randn(E, H, generator=g) * (H**-0.5)
+    w1 = [torch.randn(I, H, generator=g) * (H**-0.5) for _ in range(E)]
+    w3 = [torch.randn(I, H, generator=g) * (H**-0.5) for _ in range(E)]
+    w2 = [torch.randn(H, I, generator=g) * (I**-0.5) for _ in range(E)]
+    return gate, w1, w3, w2
+
+
+def _4d(arr: np.ndarray) -> np.ndarray:
+    """[out, in] -> [1, 1, out, in], the native LinearLayer weight shape.
+
+    ``set_value`` adopts whatever shape it is handed, so feeding a 2-D array
+    silently reshapes the Parameter and backward then fails with a grad-shape
+    mismatch. Always hand replicated weights the 4-D form.
+    """
+    return arr[None, None]
+
+
+def _set(param, np_arr, mapper, device):
+    """Set a Parameter's underlying tensor from a host array via the given mesh mapper."""
+    t = ttnn.from_torch(
+        torch.from_numpy(np_arr).to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        mesh_mapper=mapper,
+    )
+    t = ttnn.to_layout(t, ttnn.TILE_LAYOUT)
+    param.tensor.set_value(t)
+
+
+@pytest.fixture(scope="module")
+def ep_vs_reference(ep_mesh):
+    """Build a replicated SparseMoE reference and an EP-sharded SparseMoEEP.
+
+    Runs forward and backward once for both and returns the gathered host
+    tensors, so the forward and backward assertions don't pay for it twice.
+    """
+    ep_size = EP_AXIS_SIZE
+    # Keep E a multiple of ep_size so every shard holds e_local = E / ep_size experts.
+    n_experts = 8 if 8 % ep_size == 0 else ep_size * 2
+    cfg = _Cfg(n_routed_experts=n_experts)
+    E = cfg.n_routed_experts
+    e_local = E // ep_size
+
+    ctx = ttml.autograd.AutoContext.get_instance()
+    ctx.reset_graph()
+    ctx.set_seed(SEED)
+    torch.manual_seed(SEED)
+    device = ctx.get_device()
+
+    replicate = ttml.core.distributed.replicate_tensor_to_mesh_mapper(device)
+    ep_shard = ttml.mesh().axis_mapper("ep", tdim=0)  # shard dim0 across ep
+    gather = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
+
+    gate_w, w1, w3, w2 = _host_weights(cfg)
+
+    ref = SparseMoE(cfg)
+    ep = SparseMoEEP(cfg, axis_name="ep")
+    assert ep.e_local == e_local, f"e_local {ep.e_local} != {e_local}"
+
+    # Gate: replicated on both (LinearLayer weight is [1, 1, E, H]).
+    _set(ref.gate.weight, _4d(gate_w.numpy()), replicate, device)
+    _set(ep.gate.weight, _4d(gate_w.numpy()), replicate, device)
+
+    # Experts: reference holds all E (replicated); EP shard r holds global experts
+    # [r*e_local, (r+1)*e_local). For each local index i, build [ep_size,1,I,H]
+    # with slice r = expert (r*e_local + i) and shard dim0.
+    for e in range(E):
+        _set(ref.experts[e].w1.weight, _4d(w1[e].numpy()), replicate, device)
+        _set(ref.experts[e].w3.weight, _4d(w3[e].numpy()), replicate, device)
+        _set(ref.experts[e].w2.weight, _4d(w2[e].numpy()), replicate, device)
+    for i in range(e_local):
+        gate_i = np.stack([w1[r * e_local + i].numpy() for r in range(ep_size)], axis=0)[:, None]
+        up_i = np.stack([w3[r * e_local + i].numpy() for r in range(ep_size)], axis=0)[:, None]
+        down_i = np.stack([w2[r * e_local + i].numpy() for r in range(ep_size)], axis=0)[:, None]
+        _set(ep.w_gate[i], gate_i, ep_shard, device)
+        _set(ep.w_up[i], up_i, ep_shard, device)
+        _set(ep.w_down[i], down_i, ep_shard, device)
+
+    # Same input, replicated across the mesh.
+    B, S = 2, 32
+    g = torch.Generator().manual_seed(SEED + 7)
+    x_np = torch.randn(B, 1, S, cfg.dim, generator=g).numpy().astype(np.float32)
+
+    def make_x():
+        t = ttnn.from_torch(
+            torch.from_numpy(x_np).to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=replicate,
+        )
+        return ttml.autograd.create_tensor(t)
+
+    x_ref, x_ep = make_x(), make_x()
+    ttnn.synchronize_device(device)
+    out_ref = ref(x_ref)
+    out_ep = ep(x_ep)
+    ttnn.synchronize_device(device)
+
+    # Both outputs are replicated across ep (ref: replicated compute; ep: all_reduced).
+    # Gather concatenates the ep replicas along dim0; compare the first B rows.
+    fwd_ref = ttnn.to_torch(out_ref.get_value(), mesh_composer=gather).float()[:B]
+    fwd_ep = ttnn.to_torch(out_ep.get_value(), mesh_composer=gather).float()[:B]
+
+    # Backward: same random upstream into both; compare the replicated gate grad.
+    gg = torch.Generator().manual_seed(SEED + 11)
+    up_np = torch.randn(B, 1, S, cfg.dim, generator=gg).numpy().astype(np.float32)
+
+    def make_up():
+        return ttnn.from_torch(
+            torch.from_numpy(up_np).to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=replicate,
+        )
+
+    out_ref.set_grad(make_up())
+    out_ep.set_grad(make_up())
+    out_ref.backward(False)
+    out_ep.backward(False)
+    ttnn.synchronize_device(device)
+
+    # gate.weight is [1, 1, E, H] and replicated; the gather concatenates the ep
+    # replicas along dim0, so slice replica 0 out of both.
+    grad_ref = ttnn.to_torch(ref.gate.weight.tensor.get_grad(), mesh_composer=gather).float()[:1]
+    grad_ep = ttnn.to_torch(ep.gate.weight.tensor.get_grad(), mesh_composer=gather).float()[:1]
+
+    return {
+        "ep_size": ep_size,
+        "e_local": e_local,
+        "n_experts": E,
+        "fwd_ref": fwd_ref,
+        "fwd_ep": fwd_ep,
+        "grad_ref": grad_ref,
+        "grad_ep": grad_ep,
+    }
+
+
+def test_ep_shards_experts(ep_vs_reference):
+    """Each shard owns exactly E / EP experts — i.e. sharding actually happened."""
+    r = ep_vs_reference
+    assert r["e_local"] * r["ep_size"] == r["n_experts"]
+    assert r["e_local"] < r["n_experts"], "EP axis > 1 must give each shard a strict subset of experts"
+
+
+def test_forward_parity_ep_vs_replicated_sparse(ep_vs_reference):
+    r = ep_vs_reference
+    pcc = _pcc(r["fwd_ref"], r["fwd_ep"])
+    max_abs = float((r["fwd_ref"] - r["fwd_ep"]).abs().max())
+    assert pcc > 0.99, f"forward pcc={pcc:.5f} (max_abs_diff={max_abs:.4f})"
+    assert max_abs < 0.5, f"forward max_abs_diff={max_abs:.4f} (pcc={pcc:.5f})"
+
+
+def test_gate_grad_parity_ep_vs_replicated_sparse(ep_vs_reference):
+    r = ep_vs_reference
+    pcc = _pcc(r["grad_ref"], r["grad_ep"])
+    assert pcc > 0.95, f"gate.weight grad pcc={pcc:.5f}"
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__, "-v"]))

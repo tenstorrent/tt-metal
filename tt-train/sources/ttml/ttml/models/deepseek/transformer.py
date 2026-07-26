@@ -63,6 +63,54 @@ class DeepSeekMLP(AbstractModuleBase):
         )
 
 
+def resolve_moe_ep_axis(config) -> str | None:
+    """Resolve the mesh axis that ``sparse_ep`` partitions experts across.
+
+    Returns ``"tp"`` under full-model TP, else ``config.moe_axis_name`` when it
+    names a real mesh axis of size > 1, else ``None`` (no usable EP axis).
+    """
+    import ttml as _ttml
+
+    if bool(getattr(config, "use_tp", False)):
+        return "tp"
+    axis_name = getattr(config, "moe_axis_name", None)
+    mesh = _ttml.maybe_mesh()
+    if axis_name is not None and mesh is not None and mesh.has_axis(axis_name) and mesh.axis_size(axis_name) > 1:
+        return axis_name
+    return None
+
+
+def build_moe_ffn(config):
+    """Build the MoE FFN implementation selected by ``config.moe_type``.
+
+    ``dense`` is the reference / cross-check path. ``sparse_ep`` degenerates to
+    single-device ``SparseMoE`` (EP size 1) when there is no usable EP axis, so
+    there is no separate ``sparse`` mode. Exposed as a module-level helper so
+    the dispatch — in particular the EP=1 fallback — is testable without
+    building a whole block.
+    """
+    # Lazy imports to avoid circular dependency (moe imports RMSNormLayer from here)
+    from .moe import MoE
+    from .moe_sparse import SparseMoE
+    from .moe_sparse_ep import SparseMoEEP
+
+    moe_type = str(getattr(config, "moe_type", "sparse_ep")).lower()
+    if moe_type == "dense":
+        return MoE(config)
+    if moe_type != "sparse_ep":
+        raise ValueError(
+            f"DeepSeekBlock: unknown moe_type={moe_type!r}; expected one of "
+            f"'dense', 'sparse_ep' (from DeepSeekConfig.moe_type)"
+        )
+
+    axis_name = resolve_moe_ep_axis(config)
+    if axis_name is None:
+        # No usable EP axis (single chip / pure replication):
+        # sparse_ep degenerates to single-device SparseMoE (EP size 1).
+        return SparseMoE(config)
+    return SparseMoEEP(config, axis_name=axis_name)
+
+
 class DeepSeekBlock(AbstractModuleBase):
     """Pre-norm residual transformer block.
 
@@ -71,11 +119,7 @@ class DeepSeekBlock(AbstractModuleBase):
 
     def __init__(self, layer_id: int, config, rope_params) -> None:
         # Lazy imports to avoid circular dependency (mla/moe import RMSNormLayer from here)
-        import ttml as _ttml
         from .mla import MultiHeadLatentAttention
-        from .moe import MoE
-        from .moe_sparse import SparseMoE
-        from .moe_sparse_ep import SparseMoEEP
 
         super().__init__()
         self.attn = MultiHeadLatentAttention(config, rope_params)
@@ -83,39 +127,7 @@ class DeepSeekBlock(AbstractModuleBase):
         if layer_id < config.n_dense_layers:
             self.ffn = DeepSeekMLP(config.dim, config.inter_dim, tp_axis_name="tp" if use_tp else None)
         else:
-            moe_type = str(getattr(config, "moe_type", "sparse_ep")).lower()
-            if moe_type == "dense":
-                self.ffn = MoE(config)
-            elif moe_type == "sparse_ep":
-                # Resolve the EP axis: full-model TP → "tp", else moe_axis_name
-                # if it points at a real axis with size > 1, else no EP axis.
-                mesh = _ttml.maybe_mesh()
-                if use_tp:
-                    moe_axis_name = "tp"
-                else:
-                    tp_name = getattr(config, "moe_axis_name", None)
-                    moe_axis_name = (
-                        tp_name
-                        if (
-                            tp_name is not None
-                            and mesh is not None
-                            and mesh.has_axis(tp_name)
-                            and mesh.axis_size(tp_name) > 1
-                        )
-                        else None
-                    )
-
-                if moe_axis_name is None:
-                    # No usable EP axis (single chip / pure replication):
-                    # sparse_ep degenerates to single-device SparseMoE (EP size 1).
-                    self.ffn = SparseMoE(config)
-                else:
-                    self.ffn = SparseMoEEP(config, axis_name=moe_axis_name)
-            else:
-                raise ValueError(
-                    f"DeepSeekBlock: unknown moe_type={moe_type!r}; expected one of "
-                    f"'dense', 'sparse_ep' (from DeepSeekConfig.moe_type)"
-                )
+            self.ffn = build_moe_ffn(config)
             self.ffn._debug_layer_id = layer_id
         self.attn_norm = RMSNormLayer(config.dim)
         self.ffn_norm = RMSNormLayer(config.dim)

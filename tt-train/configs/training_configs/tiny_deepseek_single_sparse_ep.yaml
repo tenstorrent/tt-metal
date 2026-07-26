@@ -1,5 +1,5 @@
 training_config:
-  project_name: "tt_train_tiny_deepseek_single_sparse"
+  project_name: "tt_train_tiny_deepseek_single_sparse_ep"
   seed: 5489
   batch_size: 8
   num_epochs: 1
