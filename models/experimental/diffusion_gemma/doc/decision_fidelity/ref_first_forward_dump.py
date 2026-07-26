@@ -34,6 +34,15 @@ def main() -> int:
     parser.add_argument("--canvas-seed", type=int, default=0)
     parser.add_argument("--out", default="/tmp/ref_first_forward.pt")
     parser.add_argument("--stats-json", default="/tmp/ref_first_forward_stats.json")
+    parser.add_argument(
+        "--position-shift",
+        type=int,
+        default=0,
+        help="Add N to the canvas position ids only, reproducing TT's padded q_rope_offset "
+        "(TT threads the tile-aligned cache_len, so its canvas starts N positions past the prompt "
+        "instead of adjacent to it). Tests whether that gap alone is enough to destroy the "
+        "template-prefix confidence the accept budget depends on.",
+    )
     args = parser.parse_args()
 
     from transformers import AutoTokenizer
@@ -80,6 +89,26 @@ def main() -> int:
             captured["final_hidden"] = output.detach().to("cpu", torch.bfloat16).clone()
 
     handles.append(decoder.norm.register_forward_hook(norm_hook))
+
+    if args.position_shift:
+        # Shift the CANVAS query positions only. The prompt K/V are already in the cache with their
+        # own positions, so this reproduces exactly TT's geometry: a canvas whose RoPE says it begins
+        # `shift` tokens after the prompt ends, attending to a prompt that ends where it always did.
+        original_decoder_forward = decoder.forward
+
+        def shifted_decoder_forward(*call_args, **call_kwargs):
+            position_ids = call_kwargs.get("decoder_position_ids")
+            if position_ids is not None:
+                call_kwargs["decoder_position_ids"] = position_ids + args.position_shift
+            else:
+                raise RuntimeError(
+                    "decoder_position_ids was None; generate is expected to pass them explicitly, "
+                    "so a shift applied here would silently do nothing"
+                )
+            return original_decoder_forward(*call_args, **call_kwargs)
+
+        decoder.forward = shifted_decoder_forward
+        print(f"INJECTED TT geometry: canvas position ids shifted by +{args.position_shift}", flush=True)
 
     # The logits the sampler actually decides on: softcapped by the model, then temperature-scaled by
     # the logits processor. Capturing them at the stopping criterion is the same tap section 9 used,
@@ -148,6 +177,7 @@ def main() -> int:
             "prompt_ids": input_ids.to("cpu"),
             "canvas_ids": canvas,
             "canvas_seed": args.canvas_seed,
+            "position_shift": args.position_shift,
             "layer_hidden": captured["layers"],
             "final_hidden": captured.get("final_hidden"),
             "entropy": captured.get("entropy"),
@@ -161,6 +191,7 @@ def main() -> int:
             "logits_stats": stats,
             "per_layer": per_layer,
             "canvas_seed": args.canvas_seed,
+            "position_shift": args.position_shift,
             "canvas_head": canvas[0, :16].tolist(),
             "prompt_tokens": int(input_ids.shape[1]),
         },

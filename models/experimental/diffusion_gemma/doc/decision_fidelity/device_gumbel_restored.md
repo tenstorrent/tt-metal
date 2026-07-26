@@ -533,6 +533,68 @@ The test is two device runs on one block-0 prompt, no code change for the first:
    `q_rope_offset`, padded span for the reveal mask) and re-run. Confidence returning at positions
    0-4, and the accept count rising above 1, would be the demonstration.
 
+## 14. The RoPE offset MEASURED: 0.50 of the 1.31 nats, and not the collapse
+
+Section 13 recorded the offset as an untested lead. It is now measured, by injecting TT's geometry
+into the REFERENCE -- shifting only the canvas position ids, leaving the cached prompt K/V where they
+were -- so the mechanism is tested without TT in the loop at all
+(`ref_first_forward_dump.py --position-shift`, `hf_reference_trajectory.py --position-shift`).
+
+### At step 1 the shift reproduces TT's signature exactly
+
+| | accept count | positions < 0.1 nats | mean entropy | positions 0-4 argmax |
+| --- | --- | --- | --- | --- |
+| q106 reference | **6** | 5 | 3.7535 | 100, 45518, 107, 236829, 139 |
+| q106 **+18** | **1** | **0** | 4.0075 | 107, 236829, 236829, 209535, 15526 |
+| q096 reference | **5** | 5 | 4.0771 | 100, 45518, 107, 236829, 139 |
+| q096 **+27** | **1** | **0** | 4.1477 | 818, 2934, 19565, 573, 506 |
+| q095 reference | **7** | 6 | 3.4311 | 100, 45518, 107, 236829, 139 |
+| q095 **+25** | **1** | **0** | 3.6482 | 140, 236829, 139, 23258, 609 |
+
+The template prefix is wiped on all three: positions 0-4 go from ~1e-05..0.05 nats to 1.0-2.3 nats,
+every sub-bound position disappears, and the accept count drops to 1 -- TT's exact signature. Note how
+little the MEAN moves (3.7535 to 4.0075) while the accept count collapses 6 to 1, which is section 12's
+point restated by experiment.
+
+### But the block still converges, so the offset is not the collapse
+
+Letting the shifted reference run the whole block:
+
+| | step-1 H | trajectory | steps |
+| --- | --- | --- | --- |
+| q106 reference | 3.794 | 3.79, 3.26, 2.42, 1.66, 1.12, 0.44, 0.11, 0.012, 0.001 | **9** |
+| q106 **+18** | 4.295 | 4.29, **4.51**, 3.93, 3.84, 3.55, 3.23, 2.92, 2.25, 1.27, 0.64, ... 0.002 | **17** |
+| TT (baseline) | 5.102 | 5.10, **5.57**, 5.44, 5.50, 5.46, 5.21, ... 3.02 at step 48 | **never** |
+| q000 reference | 3.765 | ... | 20 |
+| q000 **+3** | 3.884 | ... | **11** |
+
+The shift reproduces the SHAPE, including the step-2 entropy RISE that TT shows (4.29 to 4.51 against
+TT's 5.10 to 5.57), and it roughly doubles the step count. It does not reproduce the failure: the
+block converges in 17 of 48 steps. And with only 3 padding tokens (q000) the shift is inside the
+noise -- 11 steps against the baseline's 20, i.e. FASTER -- so the harm scales with the gap rather
+than being triggered by any padding at all.
+
+### What this settles
+
+Decomposing q106's step-1 entropy:
+
+    reference                     3.79
+    + TT's padded RoPE offset     4.29   (+0.50)
+    TT actual                     5.10   (+0.81 unexplained)
+
+* The offset is a **real fidelity bug worth fixing on its own**: it is a divergence from the reference
+  (which places the canvas adjacent to an unpadded prompt), it wipes the anchor the accept budget
+  bootstraps from, and it costs roughly 2x the denoise steps on q106 -- which is throughput, not just
+  fidelity, since every block pays for the steps it takes.
+* It is **not sufficient for the collapse**. About 0.81 nats and the failure to converge remain
+  unaccounted for, so section 13's "lead" is confirmed as a contributor and refuted as the cause.
+* It corrects the mechanism story in sections 9 and 12: **accept = 1 at step 1 is not fatal.** The
+  shifted reference also starts at 1 and still converges, because the count RAMPS. What is fatal is a
+  ramp that never starts, so "pinned at 1 for 48 steps" is the signature -- not "1 at step 1".
+
+The remaining 0.81 nats is what the per-layer hidden RMS comparison is for, and it is now a smaller
+and better-posed target than the 1.31 nats section 9 started from.
+
 ## 6. Reproduce
 
 ```bash

@@ -31,6 +31,14 @@ def main() -> int:
     parser.add_argument("--dtype", default="bfloat16", choices=["bfloat16", "float32"])
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--max-new-tokens", type=int, default=256, help="one canvas = one block")
+    parser.add_argument(
+        "--position-shift",
+        type=int,
+        default=0,
+        help="Add N to the canvas position ids only, reproducing TT's padded q_rope_offset. At step 1 "
+        "this alone drops the reference's accept count from 5-7 to 1 and wipes the template-prefix "
+        "anchor; this flag exists to ask the follow-up question, whether the block still CONVERGES.",
+    )
     args = parser.parse_args()
 
     from transformers import AutoTokenizer
@@ -90,7 +98,22 @@ def main() -> int:
     model = model.to(args.device).eval()
     print(f"loaded in {time.time() - t0:.0f}s", flush=True)
 
+    if args.position_shift:
+        decoder = model.model.decoder
+        original_decoder_forward = decoder.forward
+
+        def shifted_decoder_forward(*call_args, **call_kwargs):
+            position_ids = call_kwargs.get("decoder_position_ids")
+            if position_ids is None:
+                raise RuntimeError("decoder_position_ids was None; the shift would silently do nothing")
+            call_kwargs["decoder_position_ids"] = position_ids + args.position_shift
+            return original_decoder_forward(*call_args, **call_kwargs)
+
+        decoder.forward = shifted_decoder_forward
+        print(f"INJECTED TT geometry: canvas position ids shifted by +{args.position_shift}", flush=True)
+
     t0 = time.time()
+    input_ids = input_ids.to(args.device)
     with torch.no_grad():
         out = model.generate(input_ids, max_new_tokens=args.max_new_tokens, do_sample=True)
     elapsed = time.time() - t0
