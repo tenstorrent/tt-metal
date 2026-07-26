@@ -434,13 +434,29 @@ def _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype, topology):
     return cache[key]
 
 
-def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, dtype, grid=(8, 8), rs_offset=(0, 8)):
+def matmul_reduce_scatter_prefill(
+    x,
+    weight,
+    tt_ccl,
+    compute_cfg,
+    topology,
+    nd,
+    dtype,
+    grid=(8, 8),
+    rs_offset=(0, 8),
+    *,
+    clone_output=True,
+):
     """Fused row-parallel out-proj matmul + reduce-scatter for PREFILL (matmul_reduce_scatter_async).
 
     Unlike decode (M=1, where the 2D matmul collapses to ~8 cores and this loses), at prefill M>>1 the
     2D matmul fills the grid, so overlapping the RS with the matmul is a WIN (biggest for the fp32
     GDN-out with its large RS). grid=(8,8): matmul rows 0-7, RS workers rows 8-9. x: K-sharded
-    [.,M,K_local]; weight [K_local,N]. Returns [1,1,M,N/nd] (cloned; shared buffer survives)."""
+    [.,M,K_local]; weight [K_local,N]. By default returns a clone so callers
+    may deallocate it while the shared persistent buffer survives.  A traced
+    caller that keeps the result alive through every replay may opt out of that
+    materialization with ``clone_output=False``.  Such a caller owns the
+    persistent buffer lifetime and must not deallocate the returned tensor."""
     M, K_local = x.shape[-2], x.shape[-1]
     N = weight.shape[-1]
     interm, out_buf = _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype, topology)
@@ -481,7 +497,9 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
         program_config=pc,
         compute_kernel_config=compute_cfg,
     )
-    return ttnn.clone(rs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if clone_output:
+        return ttnn.clone(rs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return rs
 
 
 def sharded_decode_matmul(

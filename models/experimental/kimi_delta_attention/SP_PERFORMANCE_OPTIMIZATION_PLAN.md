@@ -1,4 +1,4 @@
-# KDA sequence-parallel performance optimization plan
+# KDA sequence-parallel best-performance plan
 
 ## Purpose
 
@@ -14,17 +14,22 @@ The current accepted control is a complete, child-mesh captured `SP=2 x TP=4` fo
 
 | Metric | Current value |
 | --- | ---: |
-| Steady-state slowest-device median | **2.855 ms** |
-| Steady-state range | 2.848--2.860 ms |
-| Profiler report | `2026_07_26_15_59_04` |
-| TP=8 control at the same global shape | 3.114 ms |
-| Improvement versus TP=8 | 8.3% |
+| Historical cloned SP2xTP4 control | 2.855 ms (`2026_07_26_15_59_04`) |
+| First direct-output SP2xTP4 control | 2.813 ms (`2026_07_26_21_17_29`) |
+| Retained SP2xTP4 working control | **2.790 ms** (`2026_07_26_21_37_43`) |
+| Retained-control steady-state range | 2.781--2.798 ms |
+| Revalidated TP=8 control at the same global shape | **3.097 ms** (`2026_07_26_21_40_09`) |
+| Improvement versus revalidated TP=8 | **9.9%** |
 | Accepted primary gate | <= 2.958 ms |
 | Existing stretch gate | <= 2.803 ms |
+| Strong LB target | <= 2.750 ms |
+| Frontier LB target | <= 2.700 ms |
 
 The trace used `KDA_SP_SPLIT_AFFINE=1`, two socket lanes, and a 512 KiB socket FIFO. Sessions 1--2 are cold/warm outliers; all comparisons use the median of sessions 3--11 from ten child-trace replays.
 
-The current critical-path view on a representative slow device is:
+The original cloned trace identified the following critical-path candidates on a
+representative slow device. The direct-output report contains no clone, so MRS
+is the first stage to re-profile and classify before changing its schedule:
 
 | Operation / path | Duration | What it means |
 | --- | ---: | --- |
@@ -36,15 +41,134 @@ The current critical-path view on a representative slow device is:
 | Chunk GDN preparation | 310 us | Do not tune before the output tail. |
 | Affine prefix | 181 us | Correct and not currently the dominant unhidden span. |
 
-The clone ends only about 37 us after MRS. Therefore, removing the clone by itself can save **at most about 37 us** on the current critical path; it cannot by itself reach the 52 us stretch goal. A stretch win needs either both clone removal and a modest MRS reduction, or a larger change to the joint output tail.
+The clone ends only about 37 us after MRS. Therefore, removing the clone by itself can save **at most about 37 us** on the original critical path; it could not by itself reach the original 52 us stretch goal. That work is now retained. Further wins must shorten the fused MRS tail or the next exposed dependent stage.
 
-| Endpoint | Required saving from 2.855 ms | Required reduction of the current 916 us output-tail union |
+| Endpoint | Required saving from 2.790 ms | Required reduction of the current 916 us output-tail union |
 | --- | ---: | ---: |
-| Existing stretch: 2.803 ms | 52 us | 5.7% |
-| Strong LB result: 2.750 ms | 105 us | 11.5% |
-| Ambitious LB result: 2.700 ms | 155 us | 16.9% |
+| Existing stretch: 2.803 ms | **met by 13 us** | 1.4% |
+| Next statistical retention point: 2.775 ms | 15 us | 1.6% |
+| Strong LB result: 2.750 ms | 40 us | 4.4% |
+| Frontier LB result: 2.700 ms | 90 us | 9.8% |
 
-`2.750 ms` is the best near-term endpoint worth planning against. `2.700 ms` is aspirational, not a commitment: it requires a material reduction in the fused output path rather than a cosmetic scheduling change.
+`2.750 ms` is the best credible near-term endpoint. `2.700 ms` is a frontier target, not a commitment: it requires a material reduction in the fused output path rather than a cosmetic scheduling change.
+
+## Performance target hierarchy
+
+The purpose is to find the lowest *reproducible* layer latency, not to stop at
+the first number below the historical target. The targets below prevent both
+under-optimizing a now-close stretch target and accepting replay noise as a
+win.
+
+| Tier | LB slowest-device median | Evidence required | Decision |
+| --- | ---: | --- | --- |
+| Working control | 2.790 ms | Existing PCC and ten-replay report | Starting point for every experiment |
+| Product stretch | <=2.803 ms | Same measurement contract | **Met** by the retained 8x7 configuration |
+| Statistical improvement | <=2.775 ms | >=15 us versus 2.790 ms, PCC-clean | Next independently retainable step |
+| Strong result | <=2.750 ms | At least two stable profiles and TP8 control rerun | Continue only if the next exposed critical path has a concrete cause |
+| Frontier result | <=2.700 ms | A demonstrated fused producer/CCL or epilogue change | Explore only after the strong path is exhausted |
+
+Small, directly coupled changes may be evaluated as one bundle when neither is
+meaningful on its own. Every other change must clear the 15 us retention
+threshold against the 2.790 ms control; a value merely below 2.803 ms is not
+automatically evidence of an independent improvement.
+
+## Execution log
+
+### 2026-07-26: direct persistent MRS output
+
+**Status: retained as the first direct-output LoudBox trace configuration.** The profiler
+identified the output `CloneOperation` as the helper's explicit ownership copy:
+the fused MRS API requires a persistent output buffer, while the normal helper
+shares that buffer and must return a separately deallocatable tensor. The
+result is not a reshape/view issue.
+
+`KDA_MRS_DIRECT_OUTPUT=1` now lets a trace-only owner return that persistent
+MRS result directly and retain it through trace replay. The ordinary path
+continues to clone by default, so generic callers may deallocate their output.
+The SP2xTP4 profiler is the explicit owner for the direct mode and does not
+free those aliased outputs.
+
+* The target-shape eager PCC gate and a new two-replay child-trace PCC gate
+  pass. The latter checks both first- and second-call outputs after the
+  device-resident recurrent/convolution cache changes.
+* Ten child-trace replays at global `T=5120` produce no `CloneOperation` rows
+  in report `2026_07_26_21_17_29`.
+* Slowest-device sessions 3--11 are `[2808.091, 2816.711, 2819.827,
+  2820.824, 2811.938, 2812.636, 2811.222, 2813.978, 2810.359] us`; median
+  is **2812.636 us**. This is a **42.414 us (1.49%)** improvement over the
+  2855.050 us cloned control and clears the 15 us retention threshold.
+* At this point it remained 9.636 us above the 2803 us stretch goal. The next
+  experiment was therefore MRS-side scheduling/layout work, not more SP socket
+  tuning.
+
+Run the retained LB configuration with:
+
+```bash
+KDA_MRS_DIRECT_OUTPUT=1 KDA_SP_SPLIT_AFFINE=1 KDA_SP_SOCKET_LANES=2 \
+  KDA_SP_SOCKET_FIFO_BYTES=524288 PERF_SEQ=5120 PERF_REPS=10 \
+  PERF_CHILD_TRACE=1 scripts/run_safe_pytest.sh --profile -q -s \
+  models/experimental/kimi_delta_attention/tests/perf/test_kda_sp2_tp4_layer_perf.py::test_kda_sp2_tp4_layer_device_perf
+```
+
+### 2026-07-26: TP8 comparison rerun
+
+The comparison control was rerun after retaining direct MRS output, as required
+by the measurement contract. Report `2026_07_26_21_24_59` gives slowest-device
+sessions 3--11 of `[3105.559, 3095.442, 3095.908, 3097.722, 3094.181,
+3098.621, 3108.671, 3107.304, 3100.724] us`, with a **3098.621 us** median
+and a 3094.181--3108.671 us range. The 2812.636 us SP2xTP4 result is therefore
+285.985 us (9.23%) faster at the same global `T=5120` shape.
+
+```bash
+PERF_SEQ=5120 PERF_REPS=10 PERF_TRACE=1 \
+  scripts/run_safe_pytest.sh --profile -q -s \
+  models/experimental/kimi_delta_attention/tests/perf/test_kda_tp_layer_perf.py::test_kda_tp_layer_device_perf
+```
+
+### 2026-07-26: TP4 8x7 fused-MRS producer grid (retained)
+
+The fused MRS source shows that each matmul worker calls
+`synchronize_workers_and_signal_op()` only after its complete output region,
+and the master waits for every producer before signalling Line RS. The default
+8x6 grid therefore gives each producer 14 M tiles. Moving only the TP4 grid
+height to seven keeps the eight-column N partition, lowers each producer to 12
+M tiles, and leaves the Line RS allocation below `rs_offset=(0,7)`.
+
+`SP2TP4KimiDeltaAttention` now uses 8x7 by default; `KDA_MRS_TP4_GRID_Y=6`
+is retained solely as the control override. Target-shape PCC, the two-replay
+direct-output trace PCC, and the normal SP2xTP4 suite pass.
+
+* Report `2026_07_26_21_37_43` slowest-device sessions 3--11 are
+  `[2793.523, 2797.547, 2786.255, 2789.959, 2792.539, 2791.667,
+  2781.467, 2788.001, 2783.329] us`; median **2789.959 us**, range
+  2781.467--2797.547 us.
+* This is **22.677 us (0.81%)** faster than the 2812.636 us direct-output
+  control. It clears the 15 us retention threshold and the 2803 us product
+  stretch target by 13.041 us.
+* The slowest MRS median is **855.675 us** (range 846.907--874.227 us), down
+  from roughly 0.87 ms. This supports the producer-grid hypothesis without
+  claiming a tile-level matmul/CCL overlap that the current barrier does not
+  provide.
+
+The TP8 control rerun after this retained change is report
+`2026_07_26_21_40_09`: sessions 3--11 are `[3109.921, 3110.874, 3098.885,
+3088.731, 3095.177, 3090.601, 3096.815, 3095.686, 3102.040] us`, median
+**3096.815 us**. SP2xTP4 is thus **306.856 us (9.91%)** faster at the same
+global T=5120 shape.
+
+### 2026-07-26: fused-MRS worker-policy forwarding (ruled out)
+
+The fused MRS factory retained `DEFAULT_WORKERS_PER_LINK = 1` in its operation
+attributes but did not forward that field to the Line reduce-scatter builder;
+the standalone factory does. Restoring the forwarding was a narrow
+source-backed experiment, not a topology change. It passed target-shape PCC,
+but report `2026_07_26_21_31_56` measured slowest-device sessions 3--11 of
+`[2817.941, 2815.936, 2813.137, 2829.679, 2822.624, 2810.516, 2815.147,
+2815.279, 2808.969] us`, a **2815.279 us** median. That is 2.643 us slower
+than the 2812.636 us working control and has a wider range. The MRS slowest
+device remained about 0.87--0.89 ms, so it did not expose a material latency
+benefit. The forwarding change was reverted and `_ttnn.so` rebuilt; it is
+recorded here to avoid repeating this worker-count hypothesis.
 
 ## Measurement contract
 
@@ -53,7 +177,7 @@ Every retained change must satisfy all of the following.
 1. Run the focused functional gate first, including target-shape output, recurrent-state, convolution-state, and boundary-token PCC. Require the existing end-to-end threshold, PCC >= 0.98.
 2. Profile ten child-trace replays at global `T=5120`; take the median of the slowest device in sessions 3--11. Report the raw range and profiler report directory with the result.
 3. Attribute a gain to the union of dependent operations on the slowest device. Never add overlapping operation durations to claim an end-to-end saving.
-4. Retain a change only if it remains below 2.958 ms and improves the steady-state median by at least 15 us, unless it is a necessary enabler for a separately measured next step. Fifteen microseconds exceeds the observed replay spread enough to avoid accepting noise as an optimization.
+4. Retain a change only if it remains below 2.958 ms and improves the 2.790 ms working control by at least 15 us, unless it is a necessary enabler for a separately measured next step. Fifteen microseconds exceeds the observed replay spread enough to avoid accepting noise as an optimization.
 5. After a retained SP2xTP4 improvement, rerun the TP8 control before making a comparative claim. Keep all existing trace-safety barriers and persistent allocations unless the experiment explicitly validates a replacement.
 
 ```bash
@@ -74,7 +198,11 @@ KDA_SP_SPLIT_AFFINE=1 KDA_SP_SOCKET_LANES=2 \
 
 ### 0. Freeze and reproduce the baseline
 
-**Status: complete.** Preserve the current `2.855 ms` report as the control. Before changing code, rerun the functional command and one profile if the hardware or runtime environment changes. This avoids chasing a board/runtime shift as if it were a code regression.
+**Status: complete.** Preserve `2.855 ms` as the historical cloned control and
+`2.790 ms` as the retained working control. Before changing code, rerun the
+functional command and one profile if the hardware or runtime environment
+changes. This avoids chasing a board/runtime shift as if it were a code
+regression.
 
 ### 1. Make the output-tail dependency explicit
 
@@ -84,7 +212,10 @@ KDA_SP_SPLIT_AFFINE=1 KDA_SP_SOCKET_LANES=2 \
 - Verify whether the MRS result can be normalized to `[B, T, H/TP]` as a view or reshape rather than a materialized copy; preserve the known singleton-dimension handling that fixed the earlier diagnostic bug.
 - Confirm that persistent buffers, trace capture, and SP-boundary handoff do not require the clone to create a fixed-address tensor.
 
-**Exit criterion:** a short trace note names the clone's owner and consumer, and classifies it as removable, replaceable by a persistent destination, or required. This step does not claim a performance gain.
+**Exit criterion: complete.** The clone is the required ownership copy from a
+shared persistent MRS output buffer. The direct trace owner can safely retain
+that buffer instead of cloning it; generic callers still require the default
+clone contract.
 
 ### 2. Remove or hide the clone without changing collective topology
 
@@ -98,23 +229,52 @@ Try these in order; each is a separate experiment:
 
 **Expected critical-path gain:** 0--37 us directly. A larger result is only credible if the profile proves that removing the copy also removes CCL/memory contention. Do not claim that its 830 us duration is an 830 us layer win.
 
-**Exit criterion:** retain only a PCC-clean change with a measured >=15 us end-to-end gain, or record why the clone is semantically required and proceed to step 3.
+**Exit criterion: complete.** Direct output is PCC-clean across two trace
+replays and saves 42.414 us. It is retained only for owners that preserve the
+persistent output lifetime. It enabled the later 8x7 MRS grid improvement;
+the next independently retained change now needs 15 us beyond 2.790 ms.
 
 ### 3. Reduce the fused TP4 output MRS tail
 
-**Goal:** cut at least 30 us from MRS itself after, or together with, the clone work. Combined with the exposed clone tail, that is sufficient to make the 2.803 ms stretch target credible.
+**Goal:** find a reproducible MRS-side reduction of at least 15 us, then
+continue only while the proven critical path supports progress toward the 40 us
+strong-result budget. The product stretch gate is complete; the 15 us minimum
+makes the next change statistically retainable.
+
+**Status: in progress.** The 8x7 source-backed producer-grid change is
+retained; the worker-policy forwarding experiment is ruled out. The remaining
+high-value source change is tile-level producer/collective pipelining: the
+current `OpSignaler` waits for every matmul producer before launching Line RS.
+First establish a safe per-slice readiness contract; do not repeat worker,
+buffer, chunk-count, or grid sweeps without new evidence.
 
 Prioritized experiments:
 
-1. **Fuse the output layout contract.** Avoid a post-MRS layout conversion by having the matmul/MRS output already use the consumer's required shape, page layout, and persistent address.
-2. **Producer/collective pipelining.** Determine whether the output projection can expose tiles to the Line reduce-scatter earlier without changing output numerics or trace order. Measure MRS start time and end time separately; earlier launch that does not shorten the dependent union is not a win.
-3. **Joint matmul/MRS resource tuning.** Change grid, buffering, or tile scheduling only when the profiler identifies an MRS-side idle/bandwidth cause. Tune one dimension at a time and retain the setting only under the measurement contract.
+1. **Prove the MRS limiter.** Inspect the fused MRS factory and profiler
+   counters/timeline to classify the long tail. Verify which worker, link,
+   buffer, and output-grid controls are actually supported by this operation.
+   This is a read-only investigation with a written hypothesis before code is
+   changed.
+2. **Fuse the output layout contract.** Avoid a post-MRS layout conversion by
+   having the matmul/MRS output already use the consumer's required shape,
+   page layout, and persistent address.
+3. **Producer/collective pipelining.** Determine whether the output projection
+   can expose tiles to the Line reduce-scatter earlier without changing output
+   numerics or trace order. Measure MRS start time and end time separately;
+   earlier launch that does not shorten the dependent union is not a win.
+4. **Joint matmul/MRS resource tuning.** Change grid, buffering, or tile
+   scheduling only when the proven limiter exposes a supported control. Tune
+   one dimension at a time and retain the setting only under the measurement
+   contract.
 
 **Expected critical-path gain:** 20--80 us for a justified schedule/layout improvement; 50--150 us is possible only from a real producer--CCL pipeline or epilogue fusion. These are hypotheses to test, not promised gains.
 
 **Do not repeat known dead ends:** Ring output collectives deadlocked; the fixed Line MRS is the correct topology. Previous direct sweeps of worker counts, buffer counts, chunk cadence, and the `10x8` output grid did not produce a long-span win. Revisit one only with a new profiler-identified cause, not as a blind parameter sweep.
 
-**Exit criterion:** reach <=2.803 ms if the output-tail work provides a clean 52 us total saving. Continue toward <=2.750 ms only while each retained change meets the 15 us evidence threshold.
+**Exit criterion:** a standalone retained change reaches <=2.775 ms, or a
+directly coupled bundle reaches <=2.750 ms and then crosses the 15 us evidence
+threshold when measured as a whole. Continue toward <=2.750 ms only while
+each retained change meets the 15 us evidence threshold.
 
 ### 4. Optimize the next unhidden local stage
 

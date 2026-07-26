@@ -40,6 +40,19 @@ pytestmark = [
 ]
 
 
+def _release_outputs(*outputs: ttnn.Tensor) -> None:
+    """Release ordinary outputs, but preserve MRS-owned trace outputs.
+
+    ``KDA_MRS_DIRECT_OUTPUT=1`` returns the fused MRS persistent buffer
+    directly.  It is intentionally retained for the layer lifetime so trace
+    replay cannot observe a freed address; the normal path remains unchanged.
+    """
+    if os.getenv("KDA_MRS_DIRECT_OUTPUT", "0") == "1":
+        return
+    for output in outputs:
+        ttnn.deallocate(output)
+
+
 def _synchronize_spans(layer: SP2TP4KimiDeltaAttention) -> None:
     """Wait on the queues that own the SP=2 x TP=4 work.
 
@@ -64,8 +77,7 @@ def _profile_eager(
     _synchronize_spans(layer)
     signpost(header="sp2_tp4_stop")
     for first_output, second_output in outputs:
-        ttnn.deallocate(first_output)
-        ttnn.deallocate(second_output)
+        _release_outputs(first_output, second_output)
 
 
 def _profile_trace(
@@ -88,8 +100,7 @@ def _profile_trace(
     signpost(header="sp2_tp4_stop")
 
     ttnn.release_trace(mesh_device, trace_id)
-    ttnn.deallocate(first_output)
-    ttnn.deallocate(second_output)
+    _release_outputs(first_output, second_output)
 
 
 def _profile_child_traces(
@@ -124,8 +135,7 @@ def _profile_child_traces(
 
     ttnn.release_trace(first_device, first_trace)
     ttnn.release_trace(second_device, second_trace)
-    ttnn.deallocate(first_output)
-    ttnn.deallocate(second_output)
+    _release_outputs(first_output, second_output)
 
 
 def test_kda_sp2_tp4_layer_device_perf(mesh_device: ttnn.MeshDevice) -> None:
@@ -168,8 +178,7 @@ def test_kda_sp2_tp4_layer_device_perf(mesh_device: ttnn.MeshDevice) -> None:
 
     warm_first, warm_second = layer.forward(first_span, second_span, mode="chunk")
     _synchronize_spans(layer)
-    ttnn.deallocate(warm_first)
-    ttnn.deallocate(warm_second)
+    _release_outputs(warm_first, warm_second)
 
     repetitions = int(os.getenv("PERF_REPS", "3"))
     if os.getenv("PERF_CHILD_TRACE", "0") == "1":

@@ -237,6 +237,23 @@ state-transfer protocol and measure its components.
   [SP_PERFORMANCE_OPTIMIZATION_PLAN.md](SP_PERFORMANCE_OPTIMIZATION_PLAN.md).
   It starts with the fused TP4 output MRS/clone tail, whose dependent union is
   about 916 us, before considering further SP transport tuning.
+* The first output-tail optimization is retained behind
+  `KDA_MRS_DIRECT_OUTPUT=1`: the trace owner preserves the fused MRS persistent
+  result instead of cloning it. Target-shape eager PCC and a two-replay trace
+  PCC gate both pass. It removes all output clone rows and improves the
+  T=5120 sessions-3--11 median from 2.855 ms to **2.813 ms** (report
+  `2026_07_26_21_17_29`), 42 us faster but still 10 us above the 2.803 ms
+  stretch gate. The default remains cloned because ordinary callers may
+  deallocate their returned output.
+* The second retained output-tail optimization makes the TP4 fused MRS matmul
+  grid **8x7** by default (with `KDA_MRS_TP4_GRID_Y=6` kept as a control).
+  The fused MRS source has a global matmul-producer barrier before Line RS;
+  reducing per-producer M tiles from 14 to 12 lowers the T=5120 sessions-3--11
+  median to **2.790 ms** (report `2026_07_26_21_37_43`), 23 us faster than the
+  direct-output control and below the 2.803 ms stretch gate. Target-shape PCC,
+  two-replay direct trace PCC, and the regular SP2xTP4 suite pass. The refreshed
+  TP8 control is 3.097 ms (report `2026_07_26_21_40_09`), making SP2xTP4 9.9%
+  faster at global T=5120.
 * The principal Galaxy-scale risk now has a LoudBox probe: an SP=8,
   three-stage Hillis--Steele affine prefix transfers the exact per-TP4-rank
   payload, eight FP32 `[128,128]` A matrices plus eight `[128,128]` B matrices

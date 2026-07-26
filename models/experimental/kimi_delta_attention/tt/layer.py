@@ -692,7 +692,18 @@ class KimiDeltaAttention:
         if fused_output_collective:
             assert self.tt_ccl is not None
             fused_topology = ttnn.Topology.Ring if self.tensor_parallel_size == 8 else ttnn.Topology.Linear
-            fused_grid, fused_rs_offset = ((8, 8), (0, 8)) if self.tensor_parallel_size == 8 else ((8, 6), (0, 6))
+            if self.tensor_parallel_size == 8:
+                fused_grid, fused_rs_offset = (8, 8), (0, 8)
+            else:
+                # The fused MRS matmul signals Line RS only after every
+                # producer has completed.  Eight by seven reduces the
+                # producer's per-core M work from 14 to 12 tiles while still
+                # leaving sufficient rows for Line RS.  Keep 8x6 available as
+                # a control override for future board-specific comparisons.
+                tp4_grid_y = int(os.getenv("KDA_MRS_TP4_GRID_Y", "7"))
+                if tp4_grid_y not in (6, 7):
+                    raise ValueError(f"KDA_MRS_TP4_GRID_Y must be 6 or 7, got {tp4_grid_y}")
+                fused_grid, fused_rs_offset = (8, tp4_grid_y), (0, tp4_grid_y)
             output = matmul_reduce_scatter_prefill(
                 output,
                 weights.output_projection,
@@ -703,6 +714,11 @@ class KimiDeltaAttention:
                 output.dtype,
                 grid=fused_grid,
                 rs_offset=fused_rs_offset,
+                # MRS needs a persistent output buffer.  The default clone
+                # gives generic callers ownership of a deallocatable result;
+                # the opt-in trace experiment keeps that buffer alive instead
+                # to expose the materialization tail in the profiler.
+                clone_output=os.getenv("KDA_MRS_DIRECT_OUTPUT", "0") != "1",
             )
             output = ttnn.reshape(
                 output, (batch, sequence, self.global_config.hidden_size // self.tensor_parallel_size)

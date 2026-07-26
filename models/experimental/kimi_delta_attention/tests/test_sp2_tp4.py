@@ -145,6 +145,77 @@ def test_sp2_tp4_layer_pcc(mesh_device: ttnn.MeshDevice) -> None:
     assert passed, f"SP=2 TP=4 first post-boundary token PCC {pcc:.6f} < 0.98"
 
 
+def test_sp2_tp4_direct_output_trace_pcc(mesh_device: ttnn.MeshDevice, monkeypatch) -> None:
+    """Validate the no-clone MRS output lifetime across two child-trace replays."""
+    if os.getenv("KDA_SP_DIRECT_OUTPUT_TRACE_TEST", "0") != "1":
+        pytest.skip("set KDA_SP_DIRECT_OUTPUT_TRACE_TEST=1 to run the direct-output trace gate")
+    monkeypatch.setenv("KDA_MRS_DIRECT_OUTPUT", "1")
+    monkeypatch.setenv("KDA_SP_SPLIT_AFFINE", "1")
+    config = KDAConfig(
+        hidden_size=2304,
+        num_heads=32,
+        head_k_dim=128,
+        head_v_dim=128,
+        conv_kernel_size=4,
+        norm_eps=1e-5,
+        chunk_size=32,
+    )
+    sequence = 1280
+    state_dict = random_weights(config)
+    hidden = torch.randn(1, sequence, config.hidden_size, generator=torch.Generator().manual_seed(2607)).to(
+        torch.bfloat16
+    )
+    golden_first, golden_state = kda_forward_reference(hidden, state_dict, config)
+    golden_second, _ = kda_forward_reference(hidden, state_dict, config, golden_state)
+    layer = SP2TP4KimiDeltaAttention(mesh_device, config, state_dict)
+    layer.reset_state(batch_size=1)
+    layer.enable_trace_stable_state()
+    span = sequence // 2
+    span_inputs = tuple(
+        ttnn.from_torch(
+            hidden[:, rank * span : (rank + 1) * span],
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=span_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(span_device),
+        )
+        for rank, span_device in enumerate(layer.span_devices)
+    )
+
+    # Compile before capture, then reset the fixed state buffers without
+    # changing their addresses.  Direct MRS results intentionally stay live:
+    # they alias the persistent output buffers reused by the trace.
+    layer.forward(*span_inputs)
+    for span_device in layer.span_devices:
+        ttnn.synchronize_device(span_device)
+    layer.reset_trace_stable_state()
+
+    traces = tuple(ttnn.begin_trace_capture(span_device, cq_id=0) for span_device in layer.span_devices)
+    outputs = layer.forward(*span_inputs)
+    for span_device, trace_id in zip(layer.span_devices, traces, strict=True):
+        ttnn.end_trace_capture(span_device, trace_id, cq_id=0)
+
+    for expected_name, expected in (("first", golden_first), ("second", golden_second)):
+        for span_device, trace_id in zip(layer.span_devices, traces, strict=True):
+            ttnn.execute_trace(span_device, trace_id, cq_id=0, blocking=False)
+        for span_device in layer.span_devices:
+            ttnn.synchronize_device(span_device)
+        actual = torch.cat(
+            [
+                ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(span_device, dim=-1))
+                for output, span_device in zip(outputs, layer.span_devices, strict=True)
+            ],
+            dim=1,
+        )
+        assert torch.isfinite(actual).all(), f"direct-output {expected_name} replay contains non-finite values"
+        passed, pcc = comp_pcc(expected, actual, pcc=0.98)
+        assert passed, f"direct-output {expected_name} trace replay PCC {pcc:.6f} < 0.98"
+
+    for span_device, trace_id in zip(layer.span_devices, traces, strict=True):
+        ttnn.release_trace(span_device, trace_id)
+
+
 def test_tp4_submeshes_execute_without_handoff(mesh_device: ttnn.MeshDevice) -> None:
     """Isolate both local TP=4 paths from the cross-span fabric handoff."""
     config, _ = _sp_test_shape()

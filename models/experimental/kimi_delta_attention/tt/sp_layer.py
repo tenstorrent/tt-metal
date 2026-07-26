@@ -182,6 +182,11 @@ class SP2TP4KimiDeltaAttention:
         for layer in self.layers:
             layer.reset_state(batch_size)
 
+    def _synchronize(self) -> None:
+        """Drain both child queues owned by this SP=2 layer."""
+        for span_device in self.span_devices:
+            ttnn.synchronize_device(span_device)
+
     def enable_trace_stable_state(self) -> None:
         """Keep both span caches at fixed addresses for captured execution.
 
