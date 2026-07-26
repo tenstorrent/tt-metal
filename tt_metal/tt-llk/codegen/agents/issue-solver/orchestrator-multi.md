@@ -82,7 +82,15 @@ Use the shared `VERIFY_ROUTE`:
 | `llk` | spawn `tester.md` once |
 | `metal` | spawn `metal-tester.md` once |
 | `both` | spawn each tester once; retain both verdicts per architecture |
-| `none` | call `execute_step_mark_unverifiable` |
+| `missing` | send one combined `MISSING_TEST_COVERAGE` retry to the shared worker |
+| `none` | call `execute_step_mark_unverifiable`; valid only when verification is not applicable |
+
+When routing returns `missing`, call `execute_step_coverage_feedback`, spawn
+one shared worker with `FAILURE_CLASS=MISSING_TEST_COVERAGE`, and consume one
+debug retry. The worker must add runnable coverage for every affected in-scope
+architecture, update the analysis coverage states, and return `FIX_UPDATED`.
+Then bump the debug counter, rerun routing, and record changed files. Do not
+convert missing per-architecture coverage to `SKIPPED` or `none`.
 
 Both testers must skip analyzer-owned out-of-scope architectures. After
 `execute_step_mark_unverifiable`, reapply their `SKIPPED` results because the
@@ -105,6 +113,8 @@ dashboard-compatible verdict and counters to `arch_results.<arch>`. For
 - `SKIPPED` remains excluded from the combined status.
 
 For `none`, call `execute_step_mark_unverifiable` and skip the combiner.
+`none` means runtime verification is genuinely not applicable; lack of an
+existing test routes to `missing`.
 
 ## Debug and Review
 
@@ -114,6 +124,8 @@ When one or more architectures have `COMPILE_FAILED` or `TESTS_FAILED`:
    failed architecture and suite.
 2. Call `execute_step_debug_feedback` once.
 3. Spawn one `issue-worker.md` retry with the combined evidence.
+   Use `FAILURE_CLASS=MISSING_TEST_COVERAGE` when any required suite had no
+   applicable selector or selected zero tests.
 4. On `FIX_UPDATED`, rerun routing and changed-file recording, then call
    `execute_step_bump_debug`.
 5. Rerun the applicable tester once for all in-scope architectures.
