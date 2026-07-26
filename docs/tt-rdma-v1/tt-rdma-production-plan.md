@@ -40,10 +40,12 @@ phase inherits manual bench fragility.
   (authoritative link-up proof; mlxlink State is informational). `--verify-only` checks without changing.
   Passes green on the current rig. TODO: wrap in a systemd unit / boot hook so it runs automatically on
   boot (currently run-on-demand).
-- **0.2 Automated regression harness.** Turn the ad-hoc runs into pass/fail tests (gtest or scripted +
-  asserts): TX line-rate, TX aggregate, RX WRITE byte-exact, RX streaming lossless-at-ceiling, jumbo
-  cross both ways, golden-vector self-tests. Each prints PASS/FAIL and an exit code. Gate: `make test`
-  green from a clean rig.
+- **0.2 Automated regression harness. ✅ core DONE** — `tt_metal/tt_rdma/bh0/regression.sh`: asserted
+  PASS/FAIL + exit code for the core invariants — T1 golden wire-header vectors, T2 TX egress (frames on
+  the wire), T3 RX inbound WRITE byte-exact (dispatch + MR + noc_async_write to Tensix, landing == "TTWR"),
+  T4 RX streaming lossless (BUF_WRAP, bad==0). Uses 256B host-sender frames so correctness gates don't
+  depend on jumbo/DPU state. Runs green (5/5) on the rig. TODO: add TX-aggregate (2-rail), jumbo-both-ways,
+  and RX-ceiling perf assertions (perf tests, separate from correctness); fold into a `make test` target.
 - **0.3 Close known rough edges.** `risc_touch` hang (remove or guard), TX `pace`→real accept-ahead
   (characterize the unpaced wedge, replace the spin-pace), RX resync-on-lap tuned + counted, all the
   "uncommitted diagnostic" tooling either committed clean or removed.
