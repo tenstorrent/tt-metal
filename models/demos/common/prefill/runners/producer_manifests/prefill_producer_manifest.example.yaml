@@ -2,19 +2,22 @@
 #
 # Drive with:
 #   python -m models.demos.common.prefill.runners.prefill_producer \
-#     --manifest models/demos/common/prefill/runners/topology_configuration/prefill_producer_example.yaml
+#     --manifest models/demos/common/prefill/runners/producer_manifests/prefill_producer_manifest.example.yaml
 #
 # Precedence (lowest -> highest): typed block below  <  a raw key in the `env:` block  <  a PREFILL_* var
 # exported in the shell  <  a CLI flag (--migrations). The manifest is applied via setdefault, so anything
 # you export still wins. Every field is OPTIONAL — omit it to take the default shown. Fields marked
 # [MATCH RUNNER] MUST equal the runner's values (wire layout / ack counts / IPC paths won't line up else).
 # This file sets everything explicitly for documentation; a real manifest only needs the few you change.
+#
+# MODEL-AGNOSTIC: every value below is the documented DEFAULT, not a tuned config for any one model. Set
+# the `model:` block (and the trace paths) to whatever you are actually running.
 
 # ---------------------------------------------------------------------------
 model:
-  variant: glm_5_1          # PREFILL_MODEL           (default: deepseek_v3_d_p) registry key in adapter.py
-  num_layers: 78            # PREFILL_NUM_LAYERS      (default: 61)    [MATCH RUNNER] per-layer ack count
-  max_seq_len: 56320        # PREFILL_MAX_SEQ_LEN     (default: 61440) [MATCH RUNNER] per-user cache tokens
+  variant: deepseek_v3_d_p  # PREFILL_MODEL           (default: deepseek_v3_d_p) registry key in adapter.py
+  num_layers: 61            # PREFILL_NUM_LAYERS      (default: 61)    [MATCH RUNNER] per-layer ack count
+  max_seq_len: 61440        # PREFILL_MAX_SEQ_LEN     (default: 61440) [MATCH RUNNER] per-user cache tokens
   chunk_size: 5120          # PREFILL_CHUNK_SIZE      (default: 5120)  [MATCH RUNNER] tokens per push
 
 # ---------------------------------------------------------------------------
@@ -32,14 +35,14 @@ workload:
   duration_s: "inf"         # PREFILL_PRODUCER_DURATION_S  (default: inf) wall-clock bound
   interleave: round_robin   # PREFILL_PRODUCER_INTERLEAVE  (default: random) "random" | "round_robin"
   check_pcc: false          # PREFILL_PRODUCER_CHECK_PCC   (default: false) producer-side per-slot read-back PCC
-  trace_dir: /mnt/models/deepseek-prefill-cache/golden/structured_traces/glm_51_code_debug_55k_vllm
+  trace_dir: /path/to/golden/traces/prompt_a
                             # PREFILL_TRACE_DIR (default: the adapter's prefill_trace_default) shared prompt
   # slot_prompts -> PREFILL_PRODUCER_SLOT_TRACES (default: unset => single shared trace_dir on every slot).
   # Per-slot prompt (tokens + golden), index = slot_id; depth derived from each prompt's real length.
   # Overrides trace_dir + chunks for those slots. Cycles by slot % count if fewer entries than num_users.
   # slot_prompts:
-  #   - /mnt/.../structured_traces/glm_51_55k_vllm             # slot 0
-  #   - /mnt/.../structured_traces/glm_51_code_debug_55k_vllm  # slot 1
+  #   - /path/to/golden/traces/prompt_a  # slot 0
+  #   - /path/to/golden/traces/prompt_b  # slot 1
 
 # ---------------------------------------------------------------------------
 # Real KV migration issued BY the producer (opt-in). Needs a live migration_endpoint the runner already

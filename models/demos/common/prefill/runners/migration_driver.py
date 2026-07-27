@@ -45,12 +45,12 @@ three-terminal flow is unchanged; only terminal C's manifest selects whether mig
     # B) prefill runner (wait for WORKER_READY)
     cd $TT_METAL_HOME
     ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
-      models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_glm51_1galaxy_migrate.yaml \
+      models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_1rank.yaml \
       $HOST:1
 
     # C) producer; migration runs iff the manifest sets migration.issue (or you pass --migrate)
     python3 -m models.demos.common.prefill.runners.prefill_producer \
-      --manifest models/demos/common/prefill/runners/topology_configuration/<MANIFEST>.yaml
+      --manifest models/demos/common/prefill/runners/producer_manifests/<MANIFEST>.yaml
 
 Env (all also settable from the producer manifest's typed ``migration:`` block — see
 ``apply_manifest_env``; an explicitly exported env var always wins):
@@ -495,7 +495,14 @@ class MigrationDriver:
         dst==src (PREFILL_MIGRATE_PAIRWISE=1). Takes the SAME triples list ``_issue`` consumed, so the
         sentinel matches exactly what was migrated. Returns the (src, dst) pairs written."""
         if not triples:
-            raise ValueError("no migrations completed; refusing to publish an empty DONE sentinel")
+            raise ValueError(
+                "migration is enabled but the mapping resolved to zero pairs, so there is no DONE sentinel "
+                "to publish (an empty one would make the runner validate nothing and report success). "
+                "Prefill itself succeeded — this is a CONFIG problem: either no slot ended up resident, or "
+                "every PREFILL_MIGRATION_PAIRS src was skipped for holding no data. Check that the producer "
+                "actually prefilled the src slots you asked to migrate, or turn migration off "
+                "(PREFILL_PRODUCER_ISSUE_MIGRATION=0 / migration.issue: false)."
+            )
         pairs = [(src, dst) for (src, dst, _) in triples]
         with open(self.done_file, "w") as f:
             for s, d in pairs:
