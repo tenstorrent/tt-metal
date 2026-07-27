@@ -145,6 +145,9 @@ int main(int argc, char** argv) {
     // Perf hook (arg[12] readlat=N>0): with opcode 0x20 (READ_REQ), measure the READ round-trip latency
     // -- send a READ_REQ, wait for the BH's READ_RESP (0x21) on the wire, time it, N times -> percentiles.
     const int readlat = (argc > 12) ? atoi(argv[12]) : 0;
+    // arg[13] imm: override imm_data (e.g. CONTROL 0xF0 sub-opcode: 1=REGISTER, 2=DEREGISTER). Sentinel
+    // 0xFFFFFFFF => auto (magic for _IMM opcodes, else 0).
+    const uint32_t imm_arg = (argc > 13) ? (uint32_t)strtoul(argv[13], NULL, 0) : 0xFFFFFFFFu;
 
     unsigned dm[6] = {0};
     if (sscanf(dmac_s, "%x:%x:%x:%x:%x:%x", &dm[0], &dm[1], &dm[2], &dm[3], &dm[4], &dm[5]) != 6) {
@@ -200,10 +203,11 @@ int main(int argc, char** argv) {
         put_u32(h + 8, 1);  // seq (fixed; the BH kernel does not order-check)
         put_u32(h + 12, rkey);
         put_u64(h + 16, roff);
-        put_u32(h + 24, is_imm ? 0xC0DE1257u : 0u);  // imm_data (recognizable magic for _IMM opcodes)
+        const uint32_t imm_val = (imm_arg != 0xFFFFFFFFu) ? imm_arg : (is_imm ? 0xC0DE1257u : 0u);
+        put_u32(h + 24, imm_val);                    // imm_data (override via arg[13]; else magic for _IMM, else 0)
         put_u32(h + 28, tt_crc32(h, 28) ^ crc_xor);  // header_cksum over bytes [0..27] (BADCRC corrupts it)
-        if (opcode == 0x20u || opcode == 0x40u) {
-            // READ_REQ / ACK: HEADER-ONLY on the wire (wire-protocol §1). The length field carries the
+        if (opcode == 0x20u || opcode == 0x40u || opcode == 0xF0u) {
+            // READ_REQ / ACK / CONTROL: HEADER-ONLY on the wire (wire-protocol §1). The length field carries the
             // request size / ack_seq; no payload follows. Pad to 48 B post-L2 (32 hdr + 16 zero pad) so the
             // 62 B frame (+FCS=66) clears the 64 B Ethernet runt minimum — else the MAC pads it and the RX
             // kernel's header-only framing desyncs. Must match TT_RDMA_HDR_ONLY_BYTES (tt_rdma_wire.h).

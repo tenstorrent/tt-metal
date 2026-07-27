@@ -160,6 +160,26 @@ if wait_up "$OUT"; then
     || fail "MR access-control (miss=${miss:-0} access=${acc:-0} bounds=${bnd:-0} write_ok=${wok:-?})"
 else fail "RX kernel did not come up (T10)"; kill $DPID 2>/dev/null; fi
 
+echo "== T11: RX CONTROL MR register/deregister lifecycle (register enables WRITE, dereg disables) =="
+OUT=$D/rx9.txt
+timeout 115 "$BIN/bh1_rx_dispatch" 1 ext 18 1 1 0 1 a0:88:c2:11:dd:74 1 >"$OUT" 2>&1 &   # local land, ctrl_enable=1
+DPID=$!
+if wait_up "$OUT"; then
+  RK=0x03BEEF01  # slot 3
+  sudo -n "$ALLOW" $P0 5 $DMAC 0x1af6 0x10 256 $RK 0 >/dev/null 2>&1; sleep 1            # WRITE pre-register -> miss
+  sudo -n "$ALLOW" $P0 3 $DMAC 0x1af6 0xF0 4096 $RK 0x67e00 1 1 0 0 1 >/dev/null 2>&1; sleep 1  # REGISTER slot 3
+  sudo -n "$ALLOW" $P0 5 $DMAC 0x1af6 0x10 256 $RK 0 >/dev/null 2>&1; sleep 1            # WRITE post-register -> lands
+  sudo -n "$ALLOW" $P0 3 $DMAC 0x1af6 0xF0 0 $RK 0 1 1 0 0 2 >/dev/null 2>&1; sleep 1    # DEREGISTER slot 3
+  sudo -n "$ALLOW" $P0 5 $DMAC 0x1af6 0x10 256 $RK 0 >/dev/null 2>&1; sleep 1            # WRITE post-dereg -> miss
+  wait $DPID
+  line=$(grep "ctrl=" "$OUT" | grep -v info | tail -1)
+  gv(){ echo "$line" | grep -oE "$1=[0-9]+" | cut -d= -f2; }
+  reg=$(gv mr_reg); dereg=$(gv mr_dereg); wok=$(gv write_ok); miss=$(gv rkey_miss)
+  [ "${reg:-0}" -ge 1 ] && [ "${dereg:-0}" -ge 1 ] && [ "${wok:-0}" -ge 1 ] && [ "${miss:-0}" -ge 5 ] \
+    && pass "CONTROL MR lifecycle (reg=$reg dereg=$dereg; register->write_ok=$wok, empty/dereg->rkey_miss=$miss)" \
+    || fail "CONTROL MR lifecycle (reg=${reg:-0} dereg=${dereg:-0} write_ok=${wok:-0} rkey_miss=${miss:-0})"
+else fail "RX kernel did not come up (T11)"; kill $DPID 2>/dev/null; fi
+
 echo "======================================================"
 echo "REGRESSION: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ] && { echo "== ALL GREEN =="; exit 0; } || { echo "== FAILURES =="; exit 1; }

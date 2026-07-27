@@ -46,6 +46,8 @@ int main(int argc, char** argv) {
     // Phase 1.3 read-target (noc_target==4): READ_RESP frames egress to this MAC (the initiator).
     // Default = BF3 pciconf1 port0 (enp193s0f0np0) MAC; capture on that rail with tcpdump ether proto 0x1af6.
     const char* dst_mac_s = (argc > 8) ? argv[8] : "a0:88:c2:11:dd:74";
+    const uint32_t ctrl_enable =
+        (argc > 9) ? std::strtoul(argv[9], nullptr, 0) : 0u;  // 1.6b: allow CONTROL MR reg/dereg
     const uint32_t rx_ring_addr = bigring ? TT_RDMA_RX_RING_BIG_ADDR : TT_RDMA_RX_RING_ADDR;
     const uint32_t rx_ring_size = bigring ? TT_RDMA_RX_RING_BIG_SIZE : TT_RDMA_RX_RING_SIZE;
 
@@ -182,6 +184,8 @@ int main(int argc, char** argv) {
 
     // Program MR slot 0 (tt_rdma_mr_entry_t, 8 u32). Grant both WRITE + READ so the same slot serves
     // the WRITE tests and the READ-target mode (rkey/access/bounds are enforced in the kernel).
+    // Zero the whole 64-slot MR table first (deterministic: unused slots are invalid rkey=0).
+    cluster.write_core(device->id(), eth_phys, std::vector<uint32_t>(TT_RDMA_MR_SLOTS * 8, 0u), TT_RDMA_MR_TABLE_ADDR);
     std::vector<uint32_t> mr{kMrTarget, 0u, kMrLen, 0u, kRkey, TT_MR_REMOTE_WRITE | TT_MR_REMOTE_READ, 0u, 0u};
     cluster.write_core(device->id(), eth_phys, mr, TT_RDMA_MR_TABLE_ADDR);
     // Phase 1.6 access-control test fixture: MR slot 1 = READ-only (rkey 0x01ABCD01). A WRITE to it must
@@ -202,7 +206,7 @@ int main(int argc, char** argv) {
     // Clear the WRITE landing target (on its own core) + the stats region.
     std::vector<uint32_t> zeros(kMrLen / 4, 0u);
     cluster.write_core(device->id(), verify_core, zeros, verify_addr);
-    std::vector<uint32_t> zstats(17, 0u);
+    std::vector<uint32_t> zstats(20, 0u);
     cluster.write_core(device->id(), eth_phys, zstats, (uint32_t)stats_addr);
     // Clear the SEND/completion ring + prod_idx on its core.
     if (noc_target == 3 || noc_target == 5) {
@@ -239,7 +243,8 @@ int main(int argc, char** argv) {
          dst_mac_lo,
          rd_src_x,
          rd_src_y,
-         rd_src_base});
+         rd_src_base,
+         ctrl_enable});
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
@@ -249,10 +254,11 @@ int main(int argc, char** argv) {
     std::cout << "BH.2-RX: dispatch kernel up. Now send TT-RDMA frames from the BF3. Stats:\n";
 
     for (int s = 0; s < hold_s; ++s) {
-        auto st = cluster.read_core<uint32_t>(device->id(), eth_phys, (uint32_t)stats_addr, 17 * sizeof(uint32_t));
+        auto st = cluster.read_core<uint32_t>(device->id(), eth_phys, (uint32_t)stats_addr, 20 * sizeof(uint32_t));
         std::printf(
             "  t=%2ds  total=%u send=%u write=%u write_ok=%u unknown=%u bad=%u crc_err=%u last_op=0x%02x read_pos=%u "
-            "read_req=%u read_resp=%u ack=%u ack_seq=%u wimm=%u  rkey_miss=%u rkey_access=%u rkey_bounds=%u\n",
+            "read_req=%u read_resp=%u ack=%u ack_seq=%u wimm=%u  rkey_miss=%u rkey_access=%u rkey_bounds=%u "
+            "ctrl=%u mr_reg=%u mr_dereg=%u\n",
             s,
             st[0],
             st[1],
@@ -270,7 +276,10 @@ int main(int argc, char** argv) {
             st[13],
             st[14],
             st[15],
-            st[16]);
+            st[16],
+            st[17],
+            st[18],
+            st[19]);
         std::fflush(stdout);
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }

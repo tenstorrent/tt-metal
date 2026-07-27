@@ -157,6 +157,11 @@ void kernel_main() {
     const uint32_t rd_src_y = get_arg_val<uint32_t>(20);
     const uint32_t rd_src_base = get_arg_val<uint32_t>(21);
     uint32_t n_read_req = 0, n_read_resp = 0;
+    // Phase 1.6b: CONTROL (0xF0) MR register/deregister over the wire. PRIVILEGED -- gated by ctrl_enable
+    // (arg22). Production MUST authenticate CONTROL: a spoofed CONTROL could map an rkey to arbitrary
+    // memory, so only the trusted gateway on this private link may modify the MR table. Default OFF.
+    const uint32_t ctrl_enable = get_arg_val<uint32_t>(22);
+    uint32_t n_ctrl = 0, n_mr_reg = 0, n_mr_dereg = 0;
     // Phase 1.4: ACK (0x40) reception + cumulative-ACK accounting. An inbound ACK carries the peer's
     // cumulative ack_seq in the seq field (header-only frame). We track the highest ack_seq seen with
     // wraparound-safe signed comparison -- the "acked up to" watermark the TX/initiator side reads to
@@ -209,7 +214,7 @@ void kernel_main() {
             // READ_REQ / ACK are HEADER-ONLY on the wire (wire-protocol §1: "payload absent for
             // READ_REQ/ACK") — their length field is semantic (request_len / ack_seq), not payload
             // present. So the on-wire frame stride excludes the payload for those opcodes.
-            const bool hdr_only = (op == TT_OP_READ_REQ || op == TT_OP_ACK);
+            const bool hdr_only = (op == TT_OP_READ_REQ || op == TT_OP_ACK || op == TT_OP_CONTROL);
             uint32_t frame;
             if (hdr_only) {
                 frame = TT_RDMA_HDR_ONLY_BYTES;  // fixed 48B (runt-pad-safe, 16-aligned); len is semantic
@@ -351,6 +356,33 @@ void kernel_main() {
                 if ((int32_t)(ack_seq - ack_watermark) > 0) {  // wraparound-safe "newer than watermark"
                     ack_watermark = ack_seq;
                 }
+            } else if (op == TT_OP_CONTROL) {
+                ++n_ctrl;
+                // MR register/deregister (privileged; gated). Header carries: rkey (slot in top byte),
+                // remote_offset = base_noc_addr, length = mr_len, imm = sub-opcode (1=REGISTER, 2=DEREG).
+                if (ctrl_enable) {
+                    const uint32_t subop = hw[6];
+                    const uint32_t slot = rkey >> 24;
+                    if (slot < TT_RDMA_MR_SLOTS) {
+                        volatile tt_l1_ptr uint32_t* mr =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mr_table + slot * 32u);
+                        if (subop == 1u) {  // REGISTER: write the MR entry from the frame fields.
+                            mr[0] = hw[4];  // base_noc_addr lo (remote_offset lo)
+                            mr[1] = hw[5];  // base_noc_addr hi
+                            mr[2] = len;    // length
+                            mr[3] = 0u;
+                            mr[4] = rkey;  // rkey (incl. generation byte)
+                            mr[5] =
+                                TT_MR_REMOTE_WRITE | TT_MR_REMOTE_READ;  // access (v1 full; from-frame = refinement)
+                            mr[6] = 0u;
+                            mr[7] = 0u;
+                            ++n_mr_reg;
+                        } else if (subop == 2u) {  // DEREGISTER: invalidate (rkey=0 -> rkey_miss thereafter)
+                            mr[4] = 0u;
+                            ++n_mr_dereg;
+                        }
+                    }
+                }
             } else {
                 ++n_unknown;
             }
@@ -382,6 +414,9 @@ void kernel_main() {
         stats[14] = n_rkey_miss;
         stats[15] = n_rkey_access;
         stats[16] = n_rkey_bounds;
+        stats[17] = n_ctrl;
+        stats[18] = n_mr_reg;
+        stats[19] = n_mr_dereg;
 
         if (stop != nullptr && *stop != 0) {
             break;
