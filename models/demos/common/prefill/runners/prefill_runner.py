@@ -175,6 +175,11 @@ _gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", ADAPTER.default_g
 # When on (default), the last transformer layer runs kv-only: it fills the KV cache for migration and
 # skips its Q/SDPA/wo, FFN/MoE, final norm, and LM head. In a pipeline only the last rank applies it.
 KV_ONLY_LAST_LAYER = os.environ.get("PREFILL_KV_ONLY_LAST_LAYER", "1") == "1"
+# Build the DFlash speculative-drafter context KV cache during this prefill (opt-in, default OFF). The
+# checkpoint path is read from the existing DFLASH_HF_MODEL env by the runtime. Every rank builds its owned
+# fc slices; the last rank builds the drafter KV tail + cache. The tap reads each chip's own SP-sharded seq
+# slice (no gather). Requires DFLASH_HF_MODEL to be set when enabled.
+DFLASH_ENABLED = os.environ.get("PREFILL_DFLASH", "0") == "1"
 # Measurement-only: synchronize the device after each chunk's forward and log the isolated per-rank
 # compute (CHUNK_COMPUTE). Off in production — the sync serializes dispatch and kills pipeline overlap.
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
@@ -758,6 +763,8 @@ def _print_config() -> None:
         ("PREFILL_NUM_LAYERS", str(NUM_LAYERS)),
         ("PREFILL_PP_LAYER_COUNTS", os.environ.get("PREFILL_PP_LAYER_COUNTS", "<even split>")),
         ("PREFILL_KV_ONLY_LAST_LAYER", str(KV_ONLY_LAST_LAYER)),
+        ("PREFILL_DFLASH", str(DFLASH_ENABLED)),
+        ("DFLASH_HF_MODEL", os.environ.get("DFLASH_HF_MODEL", "<unset>")),
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
         ("PREFILL_STANDALONE_NCHUNKS", str(NUM_CHUNKS)),
         ("PREFILL_MAX_SEQ_LEN", str(MAX_SEQ_LEN)),
@@ -836,6 +843,9 @@ def main() -> None:
         # headless: its last layer runs KV-only and no norm/LM-head is built. Only the last rank does
         # this (single-rank inherits it); PREFILL_KV_ONLY_LAST_LAYER can force it off.
         kv_only_last_layer=is_last_rank and KV_ONLY_LAST_LAYER,
+        # NOT gated on is_last_rank: every rank builds its owned fc slices; the runtime derives the
+        # last-rank KV tail from is_last_rank. The drafter checkpoint path comes from DFLASH_HF_MODEL.
+        dflash_enabled=DFLASH_ENABLED,
         weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
         sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
     )
@@ -875,7 +885,10 @@ def _serve_standalone(
     d2d_in = d2d_out = None
     if num_ranks > 1:
         mesh_device.clear_loaded_sub_device_manager()
-        d2d_in, d2d_out = build_d2d_pipeline_endpoints(mesh_device, rank, num_ranks, CHUNK_SIZE, hf_config.hidden_size)
+        # DFlash packs the drafter's FC partial alongside the hidden (concat on the feature dim, Part E),
+        # so the D2D activation is 2H wide when enabled; the non-dflash path (every other model) stays H.
+        d2d_activation_width = hf_config.hidden_size * (2 if DFLASH_ENABLED else 1)
+        d2d_in, d2d_out = build_d2d_pipeline_endpoints(mesh_device, rank, num_ranks, CHUNK_SIZE, d2d_activation_width)
         # The chained D2D socket rendezvous finishes at staggered times per rank. Without this barrier
         # rank 0 enters its produce loop first, fills the socket, and stalls ~6s waiting for the
         # downstream ranks to enter their consume loops — moving that skew out of the timed chunk loop.
@@ -901,6 +914,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     """
 
     single_rank = num_ranks == 1
+    # DFlash packs the drafter's FC partial alongside the hidden (concat on the feature dim, Part E), so
+    # the D2D activation is 2H wide when enabled; the non-dflash path (every other model) stays H.
+    d2d_activation_width = hf_config.hidden_size * (2 if DFLASH_ENABLED else 1)
 
     ttnn.distributed_context_barrier()  # warm-up: all ranks finish compile before chunks flow
 
@@ -929,7 +945,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     d2d_in = d2d_out = None
     if num_ranks > 1:
         mesh_device.clear_loaded_sub_device_manager()
-        d2d_in, d2d_out = build_d2d_pipeline_endpoints(mesh_device, rank, num_ranks, CHUNK_SIZE, hf_config.hidden_size)
+        d2d_in, d2d_out = build_d2d_pipeline_endpoints(mesh_device, rank, num_ranks, CHUNK_SIZE, d2d_activation_width)
         # The chained D2D socket rendezvous finishes at staggered times per rank. Without this barrier
         # a rank can reach the loop's first fabric-link lease while an upstream/downstream rank is still
         # in rendezvous, deadlocking the lease handshake before any chunk flows.
@@ -1187,7 +1203,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             kv_caches,
             rank,
             num_ranks,
-            hidden_size=hf_config.hidden_size,
+            hidden_size=d2d_activation_width,
             h2d_service=h2d_service,
             d2d_in=d2d_in,
             d2d_out=d2d_out,
