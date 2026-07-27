@@ -432,3 +432,41 @@ def test_single_routed_expert_k3_saturated(
         pcc_threshold=pcc_threshold,
         min_cap_frac=min_cap_frac,
     )
+
+
+# Grid-padding geometry. The op splits the hidden dim across GRID_X=11 column cores as
+# per_core_N_gu = ceil(hidden_tiles / 11); the down matmul's K dim is that GRID-padded
+# hidden, one down K-block per column core. Padded weight tiles are never fetched from
+# DRAM, so the kernel must skip them in BOTH directions — reduction (down K) and free
+# (gate/up N) — or it MACs stale L1. These hidden dims push both skips to their limit:
+#   384 -> 12 hidden tiles, per_core_N_gu 2: 5 whole cores are pure padding, so 5 down
+#          K-blocks are entirely skipped AND those 5 cores do ZERO gate/up work
+#   416 -> 13 hidden tiles, per_core_N_gu 2: 4 whole cores are pure padding, plus one
+#          core straddling the boundary — a partly-reduced down K-block and a partly-
+#          real N subblock that must still be computed (the ceil, not floor, case)
+# emb 7168 additionally leaves the highest-gx core with a partly-real down N subblock.
+# No shipped model reaches any of this: they leave at most ONE all-padding core
+# (minimax_m27, gptoss_120b) or none. A padded position that did get reduced would pull
+# stale L1 into every output column, so the NaN/Inf asserts in run_single_routed_expert
+# are the check for the reduction dim; a wrongly SKIPPED real column instead drops
+# output silently, which only PCC catches. Both matter here.
+_GRID_PAD_HIDDEN = [384, 416]
+
+
+@pytest.mark.parametrize("hidden_dim", _GRID_PAD_HIDDEN, ids=lambda h: f"hidden{h}")
+@pytest.mark.parametrize("active_tokens", _ISL_FUNCTIONAL_SWEEP, ids=lambda a: f"isl-{a}")
+@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+def test_single_routed_expert_grid_padding(
+    device,
+    active_tokens: int,
+    hidden_dim: int,
+    x_row_major: bool,
+):
+    run_single_routed_expert(
+        device,
+        _ISL_ALLOCATED_TOKENS,
+        DeepSeekV3Config.EMB_SIZE,
+        hidden_dim,
+        active_tokens=active_tokens,
+        x_row_major=x_row_major,
+    )

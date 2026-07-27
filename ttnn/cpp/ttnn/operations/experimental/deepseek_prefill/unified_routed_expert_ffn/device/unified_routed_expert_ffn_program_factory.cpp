@@ -1006,6 +1006,26 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             up_done_sem_id,                        // 8
         };
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
+
+        // Compute: how many of this core's N subblocks hold REAL output columns.
+        // per_core_N is the GRID-ceil'd width, so the highest-gx cores own phantom
+        // columns past the true N; their weights are never read from DRAM, so
+        // MACing them just burns cycles on stale L1. A subblock straddling the
+        // boundary still has real columns, hence the ceil — only wholly-phantom
+        // subblocks are skipped. The compute keeps its FULL-width reserve/push
+        // (cb_activated feeds the fixed-size activated mcast, cb_out the writer's
+        // fixed-size drain); this bounds the MAC only.
+        const uint32_t valid_n_gu = std::min(
+            per_core_N_gu,
+            (N_gate_tiles_full > my_nt_gu * per_core_N_gu) ? N_gate_tiles_full - my_nt_gu * per_core_N_gu : 0u);
+        const uint32_t valid_n_d = std::min(
+            per_core_N_d,
+            (N_down_tiles_full > my_nt_d * per_core_N_d) ? N_down_tiles_full - my_nt_d * per_core_N_d : 0u);
+        std::vector<uint32_t> compute_args = {
+            (valid_n_gu + gu_out_subblock_w - 1) / gu_out_subblock_w,  // 0 gu valid N subblocks
+            (valid_n_d + d_out_subblock_w - 1) / d_out_subblock_w,     // 1 down valid N subblocks
+        };
+        tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, compute_args);
     }
 
     return cached_program_t{

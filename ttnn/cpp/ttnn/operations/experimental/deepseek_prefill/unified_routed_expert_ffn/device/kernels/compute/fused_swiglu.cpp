@@ -121,6 +121,7 @@ FORCE_INLINE void matmul_phase(
     uint32_t partials_cb_id,
     uint32_t final_cb_id,
     uint32_t m_subblocks,
+    uint32_t n_subblocks,
     uint32_t down_bias_cb_id = 0) {
     // sb_m indexes tile-rows directly, so m_subblocks (a tile-row count) bounds it
     // only at unit subblock height.
@@ -134,6 +135,12 @@ FORCE_INLINE void matmul_phase(
     // full-width (M-independent). Rows past m_subblocks are never written by the
     // reader's (bounded) activated mcast, so they are simply not computed — no MAC,
     // no pack, no partials slot.
+    //
+    // n_subblocks bounds the OTHER free dim the same way: subblocks past it are
+    // wholly phantom output columns (col >= N_down_tiles_full) whose weights the
+    // reader never fetched, so MACing them would only multiply stale L1. Unlike the
+    // M bound this does NOT shrink EFF_OUT — the partials ring and the final_cb
+    // push stay full width, since the writer drains a fixed subblock count.
     const uint32_t EFF_M = m_subblocks;
     const uint32_t EFF_OUT = m_subblocks * in1_num_subblocks * out_subblock_num_tiles;
     // Reconfig packer for partials format (previous phase's final_cb format
@@ -187,31 +194,35 @@ FORCE_INLINE void matmul_phase(
             for (uint32_t sb_m = 0; sb_m < EFF_M; ++sb_m) {
                 int in1_index_subblock_offset = 0;
                 for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
-                    tile_regs_acquire();
-                    {
-                        uint32_t in0_index = in0_index_subblock_offset;
-                        uint32_t in1_index = in1_index_subblock_offset;
-                        for (uint32_t inner_dim = 0; inner_dim < k_steps; ++inner_dim) {
-                            matmul_block(
-                                in0_cb_id,
-                                in1_cb_id,
-                                in0_index,
-                                in1_index,
-                                /*dst_index=*/0,
-                                /*transpose=*/0,
-                                out_subblock_w,
-                                out_subblock_h,
-                                in0_block_w);
-                            in0_index += 1;
-                            in1_index += in1_per_core_w;
+                    // Phantom-column subblocks: no MAC, no pack. The slot counters still
+                    // advance so the surviving subblocks keep their absolute partials slots.
+                    if (sb_n < n_subblocks) {
+                        tile_regs_acquire();
+                        {
+                            uint32_t in0_index = in0_index_subblock_offset;
+                            uint32_t in1_index = in1_index_subblock_offset;
+                            for (uint32_t inner_dim = 0; inner_dim < k_steps; ++inner_dim) {
+                                matmul_block(
+                                    in0_cb_id,
+                                    in1_cb_id,
+                                    in0_index,
+                                    in1_index,
+                                    /*dst_index=*/0,
+                                    /*transpose=*/0,
+                                    out_subblock_w,
+                                    out_subblock_h,
+                                    in0_block_w);
+                                in0_index += 1;
+                                in1_index += in1_per_core_w;
+                            }
                         }
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+                            pack_tile<true>(i, partials_cb_id, partials_slot_idx + i);
+                        }
+                        tile_regs_release();
                     }
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-                        pack_tile<true>(i, partials_cb_id, partials_slot_idx + i);
-                    }
-                    tile_regs_release();
                     partials_slot_idx += out_subblock_num_tiles;
 
                     in1_index_subblock_offset += out_subblock_w;
@@ -344,7 +355,8 @@ FORCE_INLINE void matmul_phase_fused_gu(
     uint32_t partials_up_cb_id,
     uint32_t gate_intermed_cb_id,
     uint32_t up_intermed_cb_id,
-    uint32_t m_subblocks) {
+    uint32_t m_subblocks,
+    uint32_t n_subblocks) {
     // No real_k_tiles bound here, unlike the down phase: the host asserts
     // K_gate_tiles % in0_block_w == 0, so the gate/up K-loop covers the reduction
     // dim exactly and there is no padded K position to skip. This phase's padding
@@ -424,59 +436,66 @@ FORCE_INLINE void matmul_phase_fused_gu(
         for (uint32_t sb_m = 0; sb_m < EFF_M; ++sb_m) {
             int in1_index_subblock_offset = 0;
             for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
-                // --- Gate matmul: x * gate -> partials_gu ---
-                tile_regs_acquire();
-                {
-                    uint32_t in0_index = in0_index_subblock_offset;
-                    uint32_t in1_index = in1_index_subblock_offset;
-                    for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
-                        matmul_block(
-                            x_cb_id,
-                            gate_cb_id,
-                            in0_index,
-                            in1_index,
-                            /*dst_index=*/0,
-                            /*transpose=*/0,
-                            out_subblock_w,
-                            out_subblock_h,
-                            in0_block_w);
-                        in0_index += 1;
-                        in1_index += in1_per_core_w;
+                // Phantom-column subblocks (col >= N_gate_tiles_full): the reader/writer
+                // never fetched those weight tiles, so both matmuls would just multiply
+                // stale L1. Skip the MAC and the pack; the slot counters still advance so
+                // the surviving subblocks keep their absolute partials slots, and the
+                // pushed EFF_OUT stays full width for the activated mcast.
+                if (sb_n < n_subblocks) {
+                    // --- Gate matmul: x * gate -> partials_gu ---
+                    tile_regs_acquire();
+                    {
+                        uint32_t in0_index = in0_index_subblock_offset;
+                        uint32_t in1_index = in1_index_subblock_offset;
+                        for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
+                            matmul_block(
+                                x_cb_id,
+                                gate_cb_id,
+                                in0_index,
+                                in1_index,
+                                /*dst_index=*/0,
+                                /*transpose=*/0,
+                                out_subblock_w,
+                                out_subblock_h,
+                                in0_block_w);
+                            in0_index += 1;
+                            in1_index += in1_per_core_w;
+                        }
                     }
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-                    pack_tile<true>(i, partials_gu_cb_id, partials_slot_idx + i);
-                }
-                tile_regs_release();
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+                        pack_tile<true>(i, partials_gu_cb_id, partials_slot_idx + i);
+                    }
+                    tile_regs_release();
 
-                // --- Up matmul: x * up -> partials_up (same x, different in1) ---
-                tile_regs_acquire();
-                {
-                    uint32_t in0_index = in0_index_subblock_offset;
-                    uint32_t in1_index = in1_index_subblock_offset;
-                    for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
-                        matmul_block(
-                            x_cb_id,
-                            up_cb_id,
-                            in0_index,
-                            in1_index,
-                            /*dst_index=*/0,
-                            /*transpose=*/0,
-                            out_subblock_w,
-                            out_subblock_h,
-                            in0_block_w);
-                        in0_index += 1;
-                        in1_index += in1_per_core_w;
+                    // --- Up matmul: x * up -> partials_up (same x, different in1) ---
+                    tile_regs_acquire();
+                    {
+                        uint32_t in0_index = in0_index_subblock_offset;
+                        uint32_t in1_index = in1_index_subblock_offset;
+                        for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
+                            matmul_block(
+                                x_cb_id,
+                                up_cb_id,
+                                in0_index,
+                                in1_index,
+                                /*dst_index=*/0,
+                                /*transpose=*/0,
+                                out_subblock_w,
+                                out_subblock_h,
+                                in0_block_w);
+                            in0_index += 1;
+                            in1_index += in1_per_core_w;
+                        }
                     }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+                        pack_tile<true>(i, partials_up_cb_id, partials_slot_idx + i);
+                    }
+                    tile_regs_release();
                 }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-                    pack_tile<true>(i, partials_up_cb_id, partials_slot_idx + i);
-                }
-                tile_regs_release();
                 partials_slot_idx += out_subblock_num_tiles;
 
                 in1_index_subblock_offset += out_subblock_w;
@@ -732,6 +751,13 @@ FORCE_INLINE void multiply_phase(
 }  // namespace
 
 void kernel_main() {
+    // Per-core valid N-subblock counts. per_core_N is the GRID-ceil'd width, so the
+    // highest-gx cores own phantom output columns whose weights were never fetched;
+    // these bound the MAC to the subblocks holding real columns. Runtime (not
+    // compile-time) because they vary per core and one kernel serves the whole grid.
+    const uint32_t gu_valid_n_subblocks = get_arg_val<uint32_t>(0);
+    const uint32_t d_valid_n_subblocks = get_arg_val<uint32_t>(1);
+
     // Phase 1 (gate)
     constexpr uint32_t g_in0_block_w = get_compile_time_arg_val(0);
     constexpr uint32_t g_in0_num_subblocks = get_compile_time_arg_val(1);
@@ -927,7 +953,8 @@ void kernel_main() {
             cb_partials_up,
             cb_gate_intermed,
             cb_up_intermed,
-            /*m_subblocks=*/re_m_valid);
+            /*m_subblocks=*/re_m_valid,
+            /*n_subblocks=*/gu_valid_n_subblocks);
 
 #ifdef FUSED_BINARY_ACT
         // Phase 3: fused activation on the raw bf16 accumulators -> cb_activated.
@@ -976,6 +1003,12 @@ void kernel_main() {
             /*apply_silu_on_final=*/false,
             /*d_per_core_N=*/d_in1_per_core_w,
             /*real_k_tiles=*/d_K_down_tiles>(
-            cb_in0_down_full, cb_in1_down, cb_partials_d, cb_out, /*m_subblocks=*/re_m_valid, cb_down_bias);
+            cb_in0_down_full,
+            cb_in1_down,
+            cb_partials_d,
+            cb_out,
+            /*m_subblocks=*/re_m_valid,
+            /*n_subblocks=*/d_valid_n_subblocks,
+            cb_down_bias);
     }  // end chunk loop
 }
