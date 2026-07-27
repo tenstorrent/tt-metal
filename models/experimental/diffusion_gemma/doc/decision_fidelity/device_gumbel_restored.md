@@ -725,6 +725,91 @@ Still to do, and it is the part that needs the device: thread `(true_prompt_len,
 block-0 seven. The prediction is explicit: q106/q096/q095 should go from never-converging to roughly
 baseline step counts, without touching MoE numerics.
 
+## 17. GATE RESULT: the retention mask, 64 collapsed questions, and the default flip
+
+`gate/gpqa_sw_arm.sh` ran `DG_DENOISE_SLIDING_WINDOW=1` as the ONLY variable against the shipped
+baseline command, over exactly the 64 questions that collapsed in that baseline. Baseline on these 64
+was 0 answered, 64 collapsed.
+
+### Outcome, 61 of 64 (three were re-run after a mid-arm mistake, see below)
+
+| | count | |
+| --- | --- | --- |
+| **cleanly fixed** (no guard fire) | **49** | |
+| block-0 set | 7 | the OTHER defect's target (section 16); this arm's negative control |
+| reference also fails | 2 | q028, q069 — never this fix's target |
+| reference rambles to a wrong answer | 1 | q126 (reference: 11233 tokens, wrong) |
+| residual after both fixes | 2 | q127, q128 |
+
+Against the CUDA reference on the same 61 questions:
+
+| | TT (retention on) | reference |
+| --- | --- | --- |
+| answered | **47 / 61** | 57 / 61 |
+| correct | **28 / 61** | 38 / 61 |
+
+and on the 47 TT answered: TT correct 60%, reference correct 64%, **agreement 68%**, median token ratio
+TT/reference **0.91**. So TT is not merely emitting something — it is spending the reference's token
+budget and landing near the reference's accuracy, having previously emitted nothing at all on every
+one of these.
+
+The 10-question gap in "answered" (47 vs 57) decomposes exactly: 7 block-0 + 2 residual + 1 shared
+rambling. If the pad fix lands the block-0 seven, this arm's set goes to ~54 of 61 answered.
+
+### The negative control held on all seven
+
+The seven block-0 collapses have prompt_len 167-481, far below the 1023 where retention binds, so the
+mask content is identical and their behaviour must not change. All seven fired at the **same block as
+the baseline** (`moved +0`), and the collapse signatures match exactly — q007 for instance is
+`19/256 distinct ids, top id 236770 covers 67.6%, longest run 30` in BOTH arms.
+
+That rules out a whole class of alternative explanations. If the flag were helping by some diffuse
+route -- less attention noise, a different accumulation order -- it would have moved these too.
+
+### Dose-response, not just on/off
+
+q127 is the only one of the 64 whose PROMPT alone exceeds 1023 (2428 tokens), so retention binds for
+it from block 0 and its baseline excess-key exposure was the largest in the set. It also gained the
+most: collapse moved from block 3 to block 33, ten times the output. The two other late residuals
+moved +20 and +15. Improvement tracking exposure is stronger evidence for the mechanism than a binary
+fixed/not-fixed count.
+
+### Throughput: the same fix is 1.53x
+
+Blocks that cannot settle burn all 48 denoise steps and still commit an unsettled canvas, so the
+fidelity defect was also a throughput defect. Over 22 paired questions:
+
+| | baseline | retention on |
+| --- | --- | --- |
+| blocks that halt | 238/330 = **72%** | 518/520 = **100%** |
+| steady denoise steps/block | — | **0.717x** |
+| steady per-block latency | — | **0.652x → 1.53x faster** |
+| block throughput | 11.6 tok/blk/s | **17.6 tok/blk/s** |
+
+It also unlocks `DG_DENOISE_SLIDING_SPAN`, which refuses to engage without the retention mask and cuts
+SDPA key rows per step by 2.43x bit-identically -- so this gate opens a second perf lever that could
+not previously be evaluated at all.
+
+### What is NOT fixed, stated plainly
+
+* **q128** is the one question where retention did nothing: baseline block 9, arm block 8, and the
+  reference answers it correctly in 9663 tokens. Not explained by either defect.
+* **q127** improved hugely but still collapses at block 33.
+* q126/q127/q128 all collapse into the SAME token, `\n` (107), 1-3 distinct ids on the canvas. The
+  block-0 set collapses into different tokens (`1`, `*`, ...). Two different degeneracies: the block-0
+  set never fills its canvas, while these three fall into a newline loop deep in a long generation —
+  a regime where the reference is also weak (q126: 11233 tokens to a wrong answer; q069 and q028: the
+  full 16384 with no answer at all).
+
+### A mistake in the run, and what it cost
+
+Three questions (q091, q110, q129) exited 1 with `TypeError: ... unexpected keyword argument
+'true_prompt_len'` because I edited `tt/denoise_forward.py` WHILE the arm was running and each
+question launches a fresh process that imports current source. The tree was restored, those three
+results deleted, and they are re-run by the same resumable script. The rule that follows: never edit
+source the running experiment imports — the arm's later stages now wait on an explicit sentinel file
+so source edits happen with the device idle.
+
 ## 6. Reproduce
 
 ```bash
