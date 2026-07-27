@@ -34,7 +34,7 @@ from models.experimental.hunyuan_image_3_0.ttnn.vae.pointwise import HunyuanPoin
 from models.experimental.hunyuan_image_3_0.ttnn.vae.resnet_conv import HunyuanResnetConvPair
 from models.tt_dit.utils.conv3d import aligned_channels
 from models.experimental.hunyuan_image_3_0.ttnn.vae.spatial import gather_hw, partition_hw, norm_sharded
-from models.experimental.hunyuan_image_3_0.ttnn.vae.decoder_weights import (
+from models.experimental.hunyuan_image_3_0.ttnn.vae.weights import (
     init_conv_in as init_conv_in_weights,
     init_decoder_tail as init_decoder_tail_weights,
     init_decoder_up as init_decoder_up_weights,
