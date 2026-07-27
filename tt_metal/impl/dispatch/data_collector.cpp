@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/fmt.hpp>
+#include <tt_stl/indestructible.hpp>
 #include "data_collector.hpp"
 #include <algorithm>
 #include <enchantum/enchantum.hpp>
@@ -132,12 +133,18 @@ void DataCollector::RecordKernelGroup(
 
 void DataCollector::RecordProgramRun(uint64_t program_id) { program_id_to_call_count[program_id]++; }
 
+DataCollector::KernelSourceStore& DataCollector::kernel_source_store() {
+    static ttsl::Indestructible<KernelSourceStore> store;
+    return store.get();
+}
+
 void DataCollector::RecordProgramMetadata(ProgramImpl& program) {
     // The real-time profiler currently narrows the runtime ID to 16 bits, so we do the same here.
     uint16_t runtime_id = static_cast<uint16_t>(program.get_runtime_id());
     uint64_t program_id = program.get_id();
-    std::lock_guard<std::mutex> lock(kernel_source_mutex_);
-    auto [it, inserted] = program_id_to_kernel_sources_.try_emplace(program_id);
+    auto& store = kernel_source_store();
+    std::lock_guard<std::mutex> lock(store.mutex);
+    auto [it, inserted] = store.program_id_to_kernel_sources.try_emplace(program_id);
     if (inserted) {
         auto& kernel_sources = it->second;
         const auto& hal = env_.get_hal();
@@ -145,7 +152,7 @@ void DataCollector::RecordProgramMetadata(ProgramImpl& program) {
             for (const auto& [handle, kernel] : program.get_kernels(i)) {
                 // insert(const string&) allocates only on a miss; on a hit it just returns the
                 // existing node, so this allocation is only done once per unique source.
-                const std::string& stored_path = *unique_kernel_sources_.insert(kernel->kernel_source().source_).first;
+                const std::string& stored_path = *store.paths.insert(kernel->kernel_source().source_).first;
                 kernel_sources.emplace_back(stored_path);
             }
         }

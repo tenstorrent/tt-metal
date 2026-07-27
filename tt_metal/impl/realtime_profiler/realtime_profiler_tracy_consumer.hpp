@@ -4,27 +4,27 @@
 
 #pragma once
 
-#include <chrono>
 #include <cstdint>
-#include <unordered_map>
 #include <vector>
 #include <tracy/TracyTTDevice.hpp>
 #include "context/context_types.hpp"
-#include "realtime_profiler_consumer.hpp"
+#include <tt-metalium/experimental/realtime_profiler.hpp>
 
 namespace tt::tt_metal {
 
 // Renders program records as Tracy device zones and calibrates Tracy from the host/device clock-sync stream. Every
-// hook is serialized on this consumer's dedicated delivery thread.
-class RealtimeProfilerTracyConsumer final : public RealtimeProfilerConsumer {
+// hook is serialized on this consumer's own thread.
+class RealtimeProfilerTracyConsumer {
 public:
     explicit RealtimeProfilerTracyConsumer(ContextId context_id) : context_id_(context_id) {}
-    ~RealtimeProfilerTracyConsumer() override;
+
+    void set_handle(experimental::ProgramRealtimeProfilerCallbackHandle handle) { handle_ = handle; }
+    ~RealtimeProfilerTracyConsumer();
 
     RealtimeProfilerTracyConsumer(const RealtimeProfilerTracyConsumer&) = delete;
     RealtimeProfilerTracyConsumer& operator=(const RealtimeProfilerTracyConsumer&) = delete;
 
-    void on_records(const tt::tt_metal::experimental::ProgramRealtimeRecordBatch& batch) override;
+    void on_records(const tt::tt_metal::experimental::ProgramRealtimeRecordBatch& batch);
 
 private:
     // Establish a chip's Tracy context on its first record, then recalibrate whenever the record's device_cycle_offset
@@ -43,21 +43,8 @@ private:
     void PublishDeviceProfilerSyncAnchor(
         uint32_t chip_id, int64_t host_anchor, uint64_t device_anchor, double frequency);
 
-    void RecordSkippedZoneWithEndBeforeStart(
-        const tt::tt_metal::experimental::ProgramRealtimeRecord& record, int64_t delta);
-    void MaybeEmitSkippedZoneSummary();
-
-    struct SkippedEndBeforeStartStats {
-        uint64_t total_skipped = 0;
-        uint64_t suppressed_since_last_summary = 0;
-        bool logged_first_detail = false;
-        std::unordered_map<uint32_t, uint64_t> count_by_runtime_id;
-        std::unordered_map<uint32_t, uint64_t> count_by_chip_id;
-        std::chrono::steady_clock::time_point last_summary_time{};
-        static constexpr std::chrono::seconds kSummaryInterval{30};
-    };
-
     ContextId context_id_;
+    experimental::ProgramRealtimeProfilerCallbackHandle handle_ = 0;
     bool host_clock_checked_ = false;
     bool host_clock_valid_ = false;
     // Per-chip Tracy state, indexed by chip_id. chip_ids are small and dense, so a flat vector keeps the per-record
@@ -68,7 +55,6 @@ private:
             0;  // last clock_sync.device_cycle_offset seen; a change signals a host<->device re-anchor
     };
     std::vector<PerChip> chips_;
-    SkippedEndBeforeStartStats skipped_end_before_start_stats_;
 };
 
 }  // namespace tt::tt_metal

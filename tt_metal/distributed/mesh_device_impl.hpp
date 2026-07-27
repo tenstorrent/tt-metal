@@ -63,6 +63,7 @@ class SubDeviceManagerTracker;
 class ThreadPool;
 struct TraceDescriptor;
 class DriscL1Arena;
+class RealtimeProfilerReceiver;
 
 namespace distributed {
 
@@ -71,7 +72,6 @@ class MeshDeviceView;
 struct MeshTraceBuffer;
 class MeshCommandQueueBase;
 class MeshDevice;
-class RealtimeProfilerManager;
 class TensorPrefetcherManager;
 
 namespace multihost {
@@ -155,9 +155,9 @@ private:
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
 
     // Owns this MeshDevice's real-time profiler producers (per-device sockets, receiver thread, and record ring).
-    // Constructed by init_realtime_profiler_socket() and torn down in close_impl() before the rest of the mesh shutdown
+    // Constructed by init_realtime_profiler() and torn down in close_impl() before the rest of the mesh shutdown
     // so its receiver thread observes a live device.
-    std::unique_ptr<RealtimeProfilerManager> realtime_profiler_;
+    std::unique_ptr<RealtimeProfilerReceiver> realtime_profiler_;
 
     // DRISC L1 arena for DRAM-sender GlobalCircularBuffer pages_sent allocations.
     // Constructed eagerly in initialize_impl() when the HAL exposes programmable
@@ -303,8 +303,8 @@ public:
         size_t worker_l1_size,
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false);
-    void init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device);
-    RealtimeProfilerManager* get_realtime_profiler() const;
+    void init_realtime_profiler(const std::shared_ptr<MeshDevice>& mesh_device);
+    RealtimeProfilerReceiver* get_realtime_profiler() const;
 
     // DRISC L1 arena. Consumed by the DRAM-sender GlobalCircularBuffer ctor for
     // pages_sent allocations. Constructed eagerly in initialize_impl() when the

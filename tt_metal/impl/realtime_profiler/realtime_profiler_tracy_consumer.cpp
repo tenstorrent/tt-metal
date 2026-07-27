@@ -2,12 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#if defined(TRACY_ENABLE)
+
 #include "realtime_profiler_tracy_consumer.hpp"
 
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
 
-#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <limits>
@@ -15,8 +16,6 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <utility>
-#include <vector>
 
 #include <client/TracyProfiler.hpp>
 #include <common/TracyTTDeviceData.hpp>
@@ -29,29 +28,6 @@
 namespace tt::tt_metal {
 
 namespace {
-
-constexpr size_t kMaxSummaryEntries = 8;
-
-template <typename Key>
-std::string FormatTopCounts(const std::unordered_map<Key, uint64_t>& counts) {
-    if (counts.empty()) {
-        return "none";
-    }
-    std::vector<std::pair<Key, uint64_t>> entries(counts.begin(), counts.end());
-    std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
-    std::string result;
-    const size_t limit = std::min(entries.size(), kMaxSummaryEntries);
-    for (size_t i = 0; i < limit; ++i) {
-        if (i > 0) {
-            result += ", ";
-        }
-        result += fmt::format("{}×{}", entries[i].first, entries[i].second);
-    }
-    if (entries.size() > kMaxSummaryEntries) {
-        result += fmt::format(", ... (+{} more)", entries.size() - kMaxSummaryEntries);
-    }
-    return result;
-}
 
 tracy::TTDeviceMarker make_marker(
     const tt::tt_metal::experimental::ProgramRealtimeRecord& record,
@@ -76,9 +52,10 @@ tracy::TTDeviceMarker make_marker(
 }  // namespace
 
 void RealtimeProfilerTracyConsumer::on_records(const tt::tt_metal::experimental::ProgramRealtimeRecordBatch& batch) {
-    // Nothing consumes the markers with no server attached, and emitting one per record (millions/s under load) makes
-    // Tracy buffer unboundedly, starving every other Tracy-emitting thread (see TTTracyConnected).
-    if (!TTTracyConnected()) {
+    // Past its connect-timeout window Tracy has dropped its backlog and refuses new connections, so nothing emitted
+    // from here can ever be read.
+    if (tracy::GetProfiler().IsEmitSuppressed()) {
+        experimental::UnregisterProgramRealtimeProfilerCallback(handle_);
         return;
     }
 
@@ -110,31 +87,24 @@ void RealtimeProfilerTracyConsumer::CalibrateFromRecord(
         return;
     }
 
-    if (record.frequency <= 0.0) {
-        return;  // leave the chip uncalibrated so the next valid record retries
-    }
     s.last_seen_offset = record.clock_sync.device_cycle_offset;
 
-    // Re-steer the Tracy context on every offset change (the servo re-anchor, ~20/s) so its view tracks the servo
-    // instead of lagging a throttle window behind it. clock_sync maps device cycles to CLOCK_MONOTONIC ns (frequency is
-    // cycles/ns); recover the host anchor, then convert it into Tracy's rdtsc CPU-tick domain (only here, off the
-    // per-record path — see HostMonoNsToTracyCpuTicks).
-    const int64_t host_anchor_mono_ns = std::llround(
-        (static_cast<double>(record.start_timestamp) - static_cast<double>(record.clock_sync.device_cycle_offset)) /
-        record.frequency);
-    const int64_t host_anchor = HostMonoNsToTracyCpuTicks(host_anchor_mono_ns);
+    // Re-steer the Tracy context on every offset change (a resync re-anchor, ~20/s) so its view tracks the mapping
+    // instead of lagging a throttle window behind it. clock_sync maps device cycles to CLOCK_MONOTONIC ns; recover the
+    // host anchor, then convert it into Tracy's rdtsc CPU-tick domain (only here, off the per-record path — see
+    // HostMonoNsToTracyCpuTicks).
+    const int64_t host_anchor = HostMonoNsToTracyCpuTicks(record.host_start_ns());
+    const double frequency = record.frequency;
 
     if (first) {
-        s.ctx = AddDevice(record.chip_id, host_anchor, static_cast<double>(record.start_timestamp), record.frequency);
+        s.ctx = AddDevice(record.chip_id, host_anchor, static_cast<double>(record.start_timestamp), frequency);
     } else {
-        CalibrateDevice(record.chip_id, host_anchor, record.start_timestamp, record.frequency);
+        CalibrateDevice(record.chip_id, host_anchor, record.start_timestamp, frequency);
     }
-    PublishDeviceProfilerSyncAnchor(record.chip_id, host_anchor, record.start_timestamp, record.frequency);
+    PublishDeviceProfilerSyncAnchor(record.chip_id, host_anchor, record.start_timestamp, frequency);
 }
 
 RealtimeProfilerTracyConsumer::~RealtimeProfilerTracyConsumer() {
-    MaybeEmitSkippedZoneSummary();
-
     for (auto& c : chips_) {
         if (c.ctx != nullptr) {
             TracyTTDestroy(c.ctx);
@@ -209,15 +179,10 @@ void RealtimeProfilerTracyConsumer::PublishDeviceProfilerSyncAnchor(
     if (!profiler_state_manager) {
         return;
     }
-    {
-        std::lock_guard<std::recursive_mutex> lock(profiler_state_manager->device_profiler_map_mutex);
-        auto it = profiler_state_manager->device_profiler_map.find(chip_id);
-        if (it == profiler_state_manager->device_profiler_map.end()) {
-            return;
-        }
-        it->second.realtime_sync_line = tt::tt_metal::DeviceProfiler::RealtimeSyncLine{
-            static_cast<double>(host_anchor), static_cast<double>(device_anchor), frequency};
-    }
+    profiler_state_manager->set_realtime_sync_anchor(
+        static_cast<ChipId>(chip_id),
+        DeviceProfiler::RealtimeSyncLine{
+            static_cast<double>(host_anchor), static_cast<double>(device_anchor), frequency});
     log_debug(
         tt::LogMetal,
         "[Real-time profiler] Device-profiler clock anchor for device {}: "
@@ -228,78 +193,7 @@ void RealtimeProfilerTracyConsumer::PublishDeviceProfilerSyncAnchor(
         frequency);
 }
 
-void RealtimeProfilerTracyConsumer::RecordSkippedZoneWithEndBeforeStart(
-    const tt::tt_metal::experimental::ProgramRealtimeRecord& record, int64_t delta) {
-    auto& stats = skipped_end_before_start_stats_;
-    stats.total_skipped++;
-
-    if (!stats.logged_first_detail) {
-        stats.logged_first_detail = true;
-        stats.last_summary_time = std::chrono::steady_clock::now();
-        log_warning(
-            tt::LogMetal,
-            "[Real-time profiler] Skipping zone with end < start: runtime_id={}, chip_id={}, "
-            "start_timestamp={}, end_timestamp={} (delta={})",
-            record.runtime_id,
-            record.chip_id,
-            record.start_timestamp,
-            record.end_timestamp,
-            delta);
-        return;
-    }
-
-    stats.suppressed_since_last_summary++;
-    stats.count_by_runtime_id[record.runtime_id]++;
-    stats.count_by_chip_id[record.chip_id]++;
-    const auto now = std::chrono::steady_clock::now();
-    if (now - stats.last_summary_time >= SkippedEndBeforeStartStats::kSummaryInterval) {
-        MaybeEmitSkippedZoneSummary();
-    }
-}
-
-void RealtimeProfilerTracyConsumer::MaybeEmitSkippedZoneSummary() {
-    auto& stats = skipped_end_before_start_stats_;
-    if (stats.total_skipped == 0) {
-        return;
-    }
-    if (stats.suppressed_since_last_summary == 0) {
-        return;
-    }
-
-    log_warning(
-        tt::LogMetal,
-        "[Real-time profiler] Skipped {} additional zones with end < start ({} total); programs: {}; chips: {}",
-        stats.suppressed_since_last_summary,
-        stats.total_skipped,
-        FormatTopCounts(stats.count_by_runtime_id),
-        FormatTopCounts(stats.count_by_chip_id));
-
-    stats.suppressed_since_last_summary = 0;
-    stats.count_by_runtime_id.clear();
-    stats.count_by_chip_id.clear();
-    stats.last_summary_time = std::chrono::steady_clock::now();
-}
-
 void RealtimeProfilerTracyConsumer::HandleRecord(const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
-    if (record.end_timestamp < record.start_timestamp) {
-        auto delta = static_cast<int64_t>(record.end_timestamp) - static_cast<int64_t>(record.start_timestamp);
-        constexpr int64_t kStartupRaceThreshold = -100000;
-        if (delta > kStartupRaceThreshold) {
-            // Small negative delta from deterministic startup race: compute kernel
-            // detects dispatch_d's stream-register clearing before dispatch_s records
-            // the first start timestamp. Benign — silently skip.
-            log_debug(
-                tt::LogMetal,
-                "[Real-time profiler] Skipping startup zone with end < start: "
-                "runtime_id={}, delta={}",
-                record.runtime_id,
-                delta);
-        } else {
-            RecordSkippedZoneWithEndBeforeStart(record, delta);
-        }
-        return;
-    }
-
     TracyTTCtx ctx = GetContext(record.chip_id);
     if (!ctx) {
         return;
@@ -329,3 +223,5 @@ void RealtimeProfilerTracyConsumer::CalibrateDevice(
 }
 
 }  // namespace tt::tt_metal
+
+#endif  // TRACY_ENABLE

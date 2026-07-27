@@ -12,10 +12,9 @@
 namespace tt::tt_metal::experimental {
 
 struct ProgramRealtimeClockSync {
-    int64_t device_cycle_offset;  // Clock offset: a device timestamp maps to std::chrono::steady_clock host time as
+    int64_t device_cycle_offset;  // Clock offset; a device timestamp maps to std::chrono::steady_clock host time as
                                   // host_ns = (timestamp - device_cycle_offset) / frequency
-    uint64_t sync_error_ns;       // Estimated sync mapping error; assumes the
-                                  // device clock frequency is stable.
+    uint64_t sync_error_ns;       // Estimated sync mapping error; assumes device clock frequency is stable.
 };
 
 struct ProgramRealtimeRecord {
@@ -26,8 +25,31 @@ struct ProgramRealtimeRecord {
     uint64_t end_timestamp;                            // Device end timestamp (raw ticks)
     double frequency;                                  // Device clock frequency (cycles per ns)
     ProgramRealtimeClockSync clock_sync;               // Device-to-host clock mapping for this record
-    std::span<const std::string_view> kernel_sources;  // Kernel source paths; valid until
-                                                       // MetalContext teardown or reinitialization.
+    std::span<const std::string_view> kernel_sources;  // Kernel source paths; valid for the
+                                                       // lifetime of the process.
+
+    [[nodiscard]] constexpr double duration_ns() const {
+        return static_cast<double>(end_timestamp - start_timestamp) / frequency;
+    }
+
+    // Program start on the host's std::chrono::steady_clock, in ns.
+    [[nodiscard]] constexpr int64_t host_start_ns() const {
+        return static_cast<int64_t>(
+            (static_cast<double>(start_timestamp) - static_cast<double>(clock_sync.device_cycle_offset)) / frequency);
+    }
+
+    // Program end on the host's std::chrono::steady_clock, in ns.
+    [[nodiscard]] constexpr int64_t host_end_ns() const {
+        return static_cast<int64_t>(
+            (static_cast<double>(end_timestamp) - static_cast<double>(clock_sync.device_cycle_offset)) / frequency);
+    }
+
+    // The device timestamp (raw ticks) a host std::chrono::steady_clock time maps to. Accurate only near this record;
+    // a host time far from this record's window carries more error than clock_sync.sync_error_ns reports.
+    [[nodiscard]] constexpr uint64_t device_timestamp_at(int64_t host_ns) const {
+        return static_cast<uint64_t>(
+            static_cast<double>(host_ns) * frequency + static_cast<double>(clock_sync.device_cycle_offset));
+    }
 };
 
 struct ProgramRealtimeRecordBatch {
@@ -47,7 +69,7 @@ using ProgramRealtimeProfilerCallbackHandle = uint64_t;
 // clang-format off
 /**
  * Register a callback to be invoked when real-time profiler data arrives from a device.
- * Multiple callbacks can be registered; they are invoked concurrently, each on its own delivery thread. If a
+ * Multiple callbacks can be registered; they are invoked concurrently, each on its own thread. If a
  * callback shares a resource with other callbacks, access it in a thread-safe way (e.g. with a lock).
  * Callbacks that are too slow to keep up with incoming profiler data may miss records; this
  * is reported by ProgramRealtimeRecordBatch::dropped.
@@ -61,7 +83,8 @@ ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(Pr
 /**
  * Unregister a previously registered callback by its handle.
  *
- * This call blocks until any in-flight invocation of that callback has completed.
+ * This call blocks until any in-flight invocation of that callback has completed. A callback may also unregister
+ * itself; such a call returns immediately, and the callback is not invoked again after its current invocation ends.
  */
 void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHandle handle);
 

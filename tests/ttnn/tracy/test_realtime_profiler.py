@@ -633,14 +633,12 @@ def test_host_device_correlation(tmp_path):
         matched_host_count >= len(host_op_ids) - allowed_missing
     ), f"Not all host messages matched: {matched_host_count}/{len(host_op_ids)}"
 
-    # Sanity: kernel record timestamps.  Allow a small negative delta for the
-    # deterministic startup race where the compute kernel detects dispatch_d's
-    # stream-register clearing before dispatch_s records the first start.
-    startup_race_threshold = 100_000
+    # Sanity: kernel record timestamps.  The host receiver drops any record whose end precedes its start, so
+    # every delivered record must form a valid duration.
     for rec in device_records:
         if rec["runtime_id"] in matched_ids:
             delta = int(rec["end_timestamp"]) - int(rec["start_timestamp"])
-            assert delta >= -startup_race_threshold, (
+            assert delta >= 0, (
                 f"Invalid timestamps for runtime_id={rec['runtime_id']}: "
                 f"end={rec['end_timestamp']} < start={rec['start_timestamp']} (delta={delta})"
             )

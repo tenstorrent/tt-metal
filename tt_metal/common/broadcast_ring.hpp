@@ -253,11 +253,6 @@ public:
          */
         [[nodiscard]] uint64_t dropped() const noexcept { return dropped_; }
 
-        /** @brief Returns true when at least one published item remains unread. */
-        [[nodiscard]] bool has_data() const noexcept {
-            return cursor_ < shared_state_->head.load(std::memory_order_acquire);
-        }
-
         Reader(const Reader&) = delete;
         Reader& operator=(const Reader&) = delete;
         Reader(Reader&& other) noexcept :
@@ -340,7 +335,7 @@ public:
 
 private:
     // avoids futex sleeps during short publish gaps
-    static constexpr uint32_t kWaitSpinIterations = 2048;
+    static constexpr uint32_t kWaitSpinIterations = 512;
 
     static constexpr bool kStoreNoexcept =
         kTriviallyCopyable || (std::is_nothrow_copy_constructible_v<T> && std::is_nothrow_copy_assignable_v<T>);

@@ -13,7 +13,7 @@ during execution, enabling 1:1 correlation between host-side Tracy zones
 | **dispatch_s** (signal source) | `cq_dispatch_subordinate.cpp` | NCRISC | NOC 1 |
 | **BRISC reader** (fast path) | `cq_realtime_profiler.cpp` | reserved profiler tensix BRISC | NOC 0 |
 | **NCRISC pusher** (slow path) | `cq_realtime_profiler_push.cpp` | reserved profiler tensix NCRISC | NOC 1 |
-| **host manager** | `realtime_profiler_manager.cpp` | CPU threads | PCIe |
+| **host receiver** | `realtime_profiler_receiver.cpp` | CPU threads | PCIe |
 
 The data mover is split across two RISCs on a reserved dedicated tensix core — an otherwise-unused core taken from the back of the dispatch core pool.
 The BRISC reader pulls timestamps off dispatch_s and drops them into an L1 ring
@@ -105,7 +105,7 @@ every record arrives with the device ring and host D2H FIFO never filling.
 
 ## Implementation Notes
 
-- Each MeshDevice manager runs a receiver thread that drains device→host pages and
+- Each MeshDevice's `RealtimeProfilerReceiver` runs a receiver thread that drains device→host pages and
   publishes decoded records onto its own `BroadcastRing`. A context-wide service
   owns one delivery thread per consumer; that thread reads every attached manager
   ring and delivers record batches to that consumer (each record self-carries its

@@ -19,11 +19,14 @@
 // IsProgramRealtimeProfilerActive().
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -31,6 +34,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -49,11 +53,13 @@
 
 #include "impl/context/metal_context.hpp"
 #include "impl/device/device_manager.hpp"
+#include "impl/realtime_profiler/realtime_profiler_service.hpp"
 #include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 namespace {
 
+using namespace std::chrono_literals;
 using tt::tt_metal::experimental::IsProgramRealtimeProfilerActive;
 using tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle;
 using tt::tt_metal::experimental::ProgramRealtimeRecord;
@@ -135,6 +141,111 @@ void enqueue_sanity_program(
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/false);
 }
 
+// The two tests below drive RealtimeProfilerService directly instead of opening a mesh, because neither property can be
+// observed through a device. A MeshDevice contributes exactly one record ring, so no device test can show a consumer
+// servicing several of them; and blocking inside a callback to catch unregister mid-flight needs a ring the test drives
+// by hand. Everything else about the service and its ring is covered by the device tests below and by
+// tests/tt_metal/tt_metal/misc/test_broadcast_ring.cpp.
+experimental::ProgramRealtimeRecord make_service_record(uint32_t runtime_id, uint32_t chip_id) {
+    return experimental::ProgramRealtimeRecord{
+        .runtime_id = runtime_id,
+        .chip_id = chip_id,
+        .start_timestamp = runtime_id * 10,
+        .end_timestamp = runtime_id * 10 + 5,
+        .frequency = 1.0,
+        .clock_sync = {.device_cycle_offset = 0, .sync_error_ns = 0},
+        .kernel_sources = {},
+    };
+}
+
+// The central claim of the producer/consumer split: each consumer gets one delivery thread, and that single thread
+// services every attached ring. A multi-MeshDevice run depends on this to fan records from all meshes into one
+// callback.
+TEST(RealtimeProfilerSanity, OneConsumerThreadReadsEveryAttachedRing) {
+    RealtimeProfilerService service;
+    RealtimeProfilerRecordRing ring_a(16);
+    RealtimeProfilerRecordRing ring_b(16);
+
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::set<uint32_t> received_runtime_ids;
+    std::set<std::thread::id> callback_threads;
+    const auto handle = service.register_consumer([&](const ProgramRealtimeRecordBatch& batch) {
+        {
+            std::lock_guard lock(mutex);
+            callback_threads.insert(std::this_thread::get_id());
+            for (const auto& record : batch.records) {
+                received_runtime_ids.insert(record.runtime_id);
+            }
+        }
+        cv.notify_all();
+    });
+
+    service.attach_ring(ring_a, 8);
+    service.attach_ring(ring_b, 8);
+    const experimental::ProgramRealtimeRecord records_a[] = {make_service_record(1, 1), make_service_record(2, 1)};
+    const experimental::ProgramRealtimeRecord records_b[] = {make_service_record(3, 2), make_service_record(4, 2)};
+    ring_a.writer().publish_batch(records_a);
+    ring_b.writer().publish_batch(records_b);
+    service.wake_consumers();
+
+    {
+        std::unique_lock lock(mutex);
+        ASSERT_TRUE(cv.wait_for(lock, 5s, [&] { return received_runtime_ids.size() == 4; }))
+            << "records from both rings should reach the consumer";
+        EXPECT_EQ(received_runtime_ids, (std::set<uint32_t>{1, 2, 3, 4}));
+        EXPECT_EQ(callback_threads.size(), 1u) << "a consumer must be served by exactly one delivery thread";
+    }
+
+    service.detach_ring(ring_a);
+    service.detach_ring(ring_b);
+    service.unregister_consumer(handle);
+}
+
+// UnregisterProgramRealtimeProfilerCallback documents that it blocks until any in-flight invocation of that callback
+// has returned, so a caller can free state the callback captured as soon as it returns.
+TEST(RealtimeProfilerSanity, UnregisterWaitsForInFlightCallback) {
+    RealtimeProfilerService service;
+    RealtimeProfilerRecordRing ring(8);
+    service.attach_ring(ring, 4);
+
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool callback_started = false;
+    bool release_callback = false;
+    const auto handle = service.register_consumer([&](const ProgramRealtimeRecordBatch&) {
+        std::unique_lock lock(mutex);
+        callback_started = true;
+        cv.notify_all();
+        cv.wait(lock, [&] { return release_callback; });
+    });
+
+    ring.writer().publish(make_service_record(1, 1));
+    service.wake_consumers();
+    {
+        std::unique_lock lock(mutex);
+        ASSERT_TRUE(cv.wait_for(lock, 5s, [&] { return callback_started; }));
+    }
+
+    std::atomic<bool> unregister_returned = false;
+    std::thread unregister_thread([&] {
+        service.unregister_consumer(handle);
+        unregister_returned.store(true, std::memory_order_release);
+    });
+    std::this_thread::sleep_for(20ms);
+    EXPECT_FALSE(unregister_returned.load(std::memory_order_acquire))
+        << "unregister must not return while the callback is still running";
+
+    {
+        std::lock_guard lock(mutex);
+        release_callback = true;
+    }
+    cv.notify_all();
+    unregister_thread.join();
+    EXPECT_TRUE(unregister_returned.load(std::memory_order_acquire));
+    service.detach_ring(ring);
+}
+
 TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
     constexpr int kDeviceId = 0;
 
@@ -197,8 +308,7 @@ TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
             << "RT record sync_error_ns should be set by the init sync handshake (runtime_id=" << rec.runtime_id << ")";
 
         if (rec.frequency > 0.0 && rec.end_timestamp > rec.start_timestamp) {
-            uint64_t duration_cycles = rec.end_timestamp - rec.start_timestamp;
-            double duration_ns = static_cast<double>(duration_cycles) / rec.frequency;
+            const double duration_ns = rec.duration_ns();
             EXPECT_LT(duration_ns, kMaxDurationNs)
                 << "RT record duration is implausibly large (runtime_id=" << rec.runtime_id << ", chip=" << rec.chip_id
                 << ", duration_ns=" << duration_ns << ")";
@@ -596,14 +706,11 @@ TEST(RealtimeProfilerSanity, RecordHostTimeFallsInDispatchWindow) {
         if (it == windows.end() || rec.frequency <= 0.0) {
             continue;
         }
-        min_freq = (checked == 0) ? rec.frequency : std::min(min_freq, rec.frequency);
-        max_freq = (checked == 0) ? rec.frequency : std::max(max_freq, rec.frequency);
-        const double host_start_ns =
-            (static_cast<double>(rec.start_timestamp) - static_cast<double>(rec.clock_sync.device_cycle_offset)) /
-            rec.frequency;
-        const double host_end_ns =
-            (static_cast<double>(rec.end_timestamp) - static_cast<double>(rec.clock_sync.device_cycle_offset)) /
-            rec.frequency;
+        const double frequency = rec.frequency;
+        min_freq = (checked == 0) ? frequency : std::min(min_freq, frequency);
+        max_freq = (checked == 0) ? frequency : std::max(max_freq, frequency);
+        const double host_start_ns = static_cast<double>(rec.host_start_ns());
+        const double host_end_ns = static_cast<double>(rec.host_end_ns());
         const double before_ns = static_cast<double>(it->second.before_ticks);
         const double after_ns = static_cast<double>(it->second.after_ticks);
 

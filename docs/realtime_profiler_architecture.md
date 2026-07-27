@@ -66,8 +66,6 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
 +-----------------------------------------------------------------------------+
 ```
 
-> **Note:** the profiler core runs two kernels — a BRISC *reader* (`cq_realtime_profiler.cpp`) that NOC-reads each timestamp pair from dispatch_s into an L1 ring buffer, and an NCRISC *pusher* (`cq_realtime_profiler_push.cpp`) that drains the ring to the host over the D2H socket and services the sync handshake (§3). The single loop drawn above is split across those two kernels so the reader never blocks on the PCIe push.
-
 ---
 
 ## 2. Data Flow: Program Timestamp to Host
@@ -142,8 +140,10 @@ Layout: `tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h`. HAL: `tt::tt_metal::
 |-----------|--------|
 | Dispatch_s (timestamp record + signal) | `tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate.cpp`, `realtime_profiler.hpp` |
 | Profiler-core kernels (BRISC reader + NCRISC pusher/sync) | `tt_metal/impl/dispatch/kernels/cq_realtime_profiler.cpp`, `cq_realtime_profiler_push.cpp` |
-| Host init, sync, receiver thread | `realtime_profiler_manager.cpp` |
+| Host init and receiver thread (per MeshDevice) | `tt_metal/impl/realtime_profiler/realtime_profiler_receiver.cpp` |
+| Clock mapping: fit, re-anchor policy, drift, error bar | `realtime_profiler_clock_model.cpp` |
+| Sync handshake transport, servo, calibration cache | `realtime_profiler_clock_sync.cpp` |
 | Shared struct + HAL accessors | `realtime_profiler_msgs.h` → `realtime_profiler_msgs` (generated) |
 | Public API (register / unregister / is-active) | `tt_metal/impl/realtime_profiler/realtime_profiler.cpp` |
-| Record fan-out (service, Tracy, user callbacks) | `tt_metal/impl/realtime_profiler/realtime_profiler_service.cpp`, `realtime_profiler_consumer.hpp`, `realtime_profiler_tracy_consumer.cpp` |
+| Record fan-out (service, Tracy, user callbacks) | `tt_metal/impl/realtime_profiler/realtime_profiler_service.cpp`, `realtime_profiler_tracy_consumer.cpp` |
 | Kernel-source metadata (runtime_id → sources) | `tt_metal/impl/dispatch/data_collector.cpp` |

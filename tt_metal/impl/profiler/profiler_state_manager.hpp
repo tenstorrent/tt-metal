@@ -53,6 +53,10 @@ public:
     void signal_debug_dump_read();
     uint32_t calculate_optimal_num_threads_for_device_profiler_thread_pool() const;
 
+    // Anchors a device's Tracy zones to the real-time profiler's clock fit, if that device is being profiled.
+    // host_anchor is in Tracy CPU ticks; see DeviceProfiler::RealtimeSyncLine.
+    void set_realtime_sync_anchor(ChipId device_id, const DeviceProfiler::RealtimeSyncLine& anchor);
+
     void mark_trace_begin(ChipId device_id, uint32_t trace_id);
     void mark_trace_end(ChipId device_id, uint32_t trace_id);
     void mark_trace_replay(ChipId device_id, uint32_t trace_id);

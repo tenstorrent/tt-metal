@@ -35,18 +35,10 @@ struct realtime_profiler_msg_t {
     struct realtime_profiler_timestamp_t kernel_end_a;
     struct realtime_profiler_timestamp_t kernel_start_b;
     struct realtime_profiler_timestamp_t kernel_end_b;
-    volatile uint32_t sync_request;
-    volatile uint32_t sync_host_timestamp;
-    // Host sync-ACK slot: after capturing WALL_CLOCK the device NOC-writes device_time then the handshake token into
-    // the host buffer at [sync_ack_host_addr_hi:lo] (a direct device->host write that bypasses the record FIFO), so the
-    // host times the round trip and reads device_time by polling its own memory instead of reading device L1. Filled by
-    // the host at init.
-    volatile uint32_t sync_ack_pcie_xy_enc;
-    volatile uint32_t sync_ack_host_addr_lo;
-    volatile uint32_t sync_ack_host_addr_hi;
-    // Device WALL_CLOCK [lo, hi] captured each sync, staged in L1 as the source for the NOC write into the host ACK
-    // buffer (copied there just before the token; the host no longer reads it from L1).
-    volatile uint32_t sync_ack_device_time[2];
+    volatile uint32_t sync_ack_device_time[2];  // device WALL_CLOCK [lo, hi] staged for the ACK write
+    volatile uint32_t sync_request;             // completeness token staged for the ACK write
+    volatile uint32_t sync_host_timestamp;      // host->device token; nonzero means a handshake is pending
+    volatile uint32_t sync_ack_host_addr[2];    // host ACK buffer address [lo, hi], filled by the host at init
     volatile uint32_t program_id_fifo[32];
     volatile uint32_t program_id_fifo_start;
     volatile uint32_t program_id_fifo_end;

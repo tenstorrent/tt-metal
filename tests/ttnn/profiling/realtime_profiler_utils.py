@@ -32,18 +32,12 @@ def profile_realtime_program(
             if profile_records and not collect_all:
                 return
 
-            start_timestamp = int(record.start_timestamp)
-            end_timestamp = int(record.end_timestamp)
-            frequency = float(record.frequency)
-            if frequency <= 0 or end_timestamp <= start_timestamp:
-                continue
-
             profile_records.append(
                 {
                     "runtime_id": int(record.runtime_id),
                     "chip_id": int(record.chip_id),
-                    "duration_ns": (end_timestamp - start_timestamp) / frequency,
-                    "kernel_sources": tuple(str(source) for source in record.kernel_sources),
+                    "duration_ns": record.duration_ns,
+                    "kernel_sources": tuple(record.kernel_sources),
                 }
             )
 

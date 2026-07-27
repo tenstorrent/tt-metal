@@ -167,7 +167,7 @@ void py_device_module_types(nb::module_& m_device) {
         .def_ro(
             "sync_error_ns",
             &tt::tt_metal::experimental::ProgramRealtimeClockSync::sync_error_ns,
-            "Estimated sync mapping error; assumes the device clock frequency is stable");
+            "Estimated sync mapping error: half the round trip of the handshake the mapping was last anchored on");
 
     nb::class_<tt::tt_metal::experimental::ProgramRealtimeRecord>(
         m_device, "ProgramRealtimeRecord", "Record containing real-time profiler data from a device.")
@@ -190,11 +190,27 @@ void py_device_module_types(nb::module_& m_device) {
             "Device-to-host clock mapping for this record")
         .def_ro("chip_id", &tt::tt_metal::experimental::ProgramRealtimeRecord::chip_id, "Device chip ID")
         .def_prop_ro(
+            "duration_ns", &tt::tt_metal::experimental::ProgramRealtimeRecord::duration_ns, "On-device duration, in ns")
+        .def_prop_ro(
+            "host_start_ns",
+            &tt::tt_metal::experimental::ProgramRealtimeRecord::host_start_ns,
+            "Program start on the host's time.monotonic_ns() clock, in ns")
+        .def_prop_ro(
+            "host_end_ns",
+            &tt::tt_metal::experimental::ProgramRealtimeRecord::host_end_ns,
+            "Program end on the host's time.monotonic_ns() clock, in ns")
+        .def(
+            "device_timestamp_at",
+            &tt::tt_metal::experimental::ProgramRealtimeRecord::device_timestamp_at,
+            nb::arg("host_ns"),
+            "The device timestamp (raw ticks) a time.monotonic_ns() host time maps to; accurate only for host times "
+            "near this record")
+        .def_prop_ro(
             "kernel_sources",
             [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
                 return std::vector<std::string>(record.kernel_sources.begin(), record.kernel_sources.end());
             },
-            "Kernel source paths associated with this runtime ID; valid until the callback returns");
+            "Kernel source paths associated with this runtime ID");
 
     nb::class_<PythonProgramRealtimeRecordBatch>(
         m_device, "ProgramRealtimeRecordBatch", "Batch of real-time profiler records delivered to a callback.")

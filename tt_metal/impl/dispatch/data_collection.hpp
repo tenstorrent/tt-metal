@@ -10,7 +10,6 @@
 #include <optional>
 #include <span>
 #include <string_view>
-#include <tt-metalium/experimental/realtime_profiler.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include "program/program_impl.hpp"
 
@@ -26,10 +25,6 @@ enum data_collector_t {
     DISPATCH_DATA_RTARGS,
     DISPATCH_DATA_BINARY,
 };
-
-// Aliases to the public experimental types for internal use.
-using ProgramRealtimeRecord = tt::tt_metal::experimental::ProgramRealtimeRecord;
-using ProgramRealtimeRecordBatch = tt::tt_metal::experimental::ProgramRealtimeRecordBatch;
 
 /* Record a single dispatch write, to be dumped with stats on program exit. Should only be called once per transaction
  * per program (if a program is enqueued multiple times, don't call this multiple times).

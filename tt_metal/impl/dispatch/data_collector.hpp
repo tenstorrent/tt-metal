@@ -66,7 +66,7 @@ public:
         uint32_t num_available_worker_cores = 0);
     std::optional<tt::ProgramSubDeviceInfo> GetProgramSubDevice(tt::ChipId device_id, uint64_t runtime_id) const;
     // Look up kernel source paths by runtime_id; empty span if the runtime_id is unknown.
-    // The returned span is valid until MetalContext teardown or reinitialization.
+    // The returned span is valid for the lifetime of the process.
     std::span<const std::string_view> GetKernelSourcesForRuntimeId(uint16_t runtime_id) const noexcept {
         const auto* sources = runtime_id_to_kernel_sources_[runtime_id].load(std::memory_order_acquire);
         return sources != nullptr ? std::span<const std::string_view>(*sources) : std::span<const std::string_view>{};
@@ -89,11 +89,14 @@ private:
     std::map<uint64_t, std::vector<DispatchData>> program_id_to_dispatch_data;
     std::map<uint64_t, std::map<HalProgrammableCoreType, std::vector<KernelGroupData>>> program_id_to_kernel_groups;
     std::map<uint64_t, int> program_id_to_call_count;
-    // Kernel source bookkeeping for the real-time profiler. Guarded because the dispatch thread writes and
-    // the real-time profiler receiver thread reads.
-    mutable std::mutex kernel_source_mutex_;
-    std::unordered_set<std::string> unique_kernel_sources_;
-    std::unordered_map<uint64_t, std::vector<std::string_view>> program_id_to_kernel_sources_;
+    // Lives for the whole process, so the spans handed to callbacks carry no lifetime caveat.
+    struct KernelSourceStore {
+        std::mutex mutex;
+        std::unordered_set<std::string> paths;
+        // Keys never repeat: ProgramImpl::program_counter is process-wide and only ever increments.
+        std::unordered_map<uint64_t, std::vector<std::string_view>> program_id_to_kernel_sources;
+    };
+    static KernelSourceStore& kernel_source_store();
     std::array<std::atomic<const std::vector<std::string_view>*>, kRuntimeIdSlots> runtime_id_to_kernel_sources_{};
     std::map<std::pair<tt::ChipId, uint64_t>, tt::ProgramSubDeviceInfo> runtime_id_to_sub_device;
     mutable std::mutex runtime_id_to_sub_device_mutex_;

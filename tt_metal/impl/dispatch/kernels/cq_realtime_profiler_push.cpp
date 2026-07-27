@@ -14,6 +14,8 @@
 #include "risc_common.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
+#include <cstddef>
+
 #include "hostdev/realtime_profiler_msgs.h"
 // Uncomment to compile in ncrisc_debug L1 heartbeats (RT_PROF_NCRISC_DBG_* in realtime_profiler_ring_buffer.hpp):
 // #define RT_PROFILER_NCRISC_DEBUG
@@ -95,16 +97,18 @@ __attribute__((noinline)) void push_entries_to_host(
     RT_PROF_NCRISC_DBG_INC(ring_buffer, push_write_barrier_exit_count);
 }
 
-// Service a host clock-sync handshake, moved here from the BRISC so the drop-critical dispatch_s read path is never
-// stalled by sync work. Capture the reserved core's wall clock, then NOC-write it to the host ACK buffer followed by
-// the handshake token one word past it (barrier between so the token lands last). The host polls the token in its own
-// memory and reads device_time from the same buffer, so no blocking host->device read is needed per handshake. The ACK
-// keeps the host-provided PinnedMemory encoding (sync_ack_pcie_xy_enc); only the servicing core changed.
-__attribute__((noinline)) void realtime_profiler_service_sync() {
+// Service a host clock-sync handshake. Capture the wall clock, NOC-write it to the host ACK buffer, then the token
+// one word before it. The host stops timing the round trip when the timestamp lands and waits for the token only to
+// know both of its words are there, so the token's write never widens the measured interval.
+//
+// NOC PCIe writes require src and dst to share the low 4 bits (NOC_PCIE_WRITE_ALIGNMENT_BYTES = 16). device_time goes
+// first so it lands at the ACK buffer base, 8-byte aligned, and the PCIe path carries it as one transfer instead of
+// splitting a write that straddles the boundary; the token follows it two words in.
+static_assert(offsetof(realtime_profiler_msg_t, sync_ack_device_time) % 16 == 0);
+static_assert(offsetof(realtime_profiler_msg_t, sync_request) % 16 == 8);
+
+__attribute__((noinline)) void realtime_profiler_service_sync(uint32_t pcie_xy_enc) {
     const uint32_t host_time = rt_profiler_msg->sync_host_timestamp;
-    if (host_time == 0) {
-        return;
-    }
 
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
     const uint32_t time_lo = p_reg[WALL_CLOCK_LOW_INDEX];
@@ -115,41 +119,26 @@ __attribute__((noinline)) void realtime_profiler_service_sync() {
     rt_profiler_msg->sync_ack_device_time[1] = time_hi;
 
     rt_profiler_msg->sync_request = host_time;
-    if (rt_profiler_msg->sync_ack_pcie_xy_enc != 0) {
-        const uint64_t ack_pcie_addr = (static_cast<uint64_t>(rt_profiler_msg->sync_ack_host_addr_hi) << 32) |
-                                       static_cast<uint64_t>(rt_profiler_msg->sync_ack_host_addr_lo);
-#ifdef RT_PROFILER_PCIE_NOC_X
-        // WH: the NCRISC is on NOC 1, so re-encode the PCIe core the same way the record path does. The host-stored
-        // sync_ack_pcie_xy_enc is the NOC-0 encoding (used only as an "ACK word exists" flag here) and would not route.
-        const uint32_t ack_pcie_xy_enc = pcie_xy_enc_noc1;
-#else
-        const uint32_t ack_pcie_xy_enc = rt_profiler_msg->sync_ack_pcie_xy_enc;
-#endif
-        noc_write_init_state<write_cmd_buf>(noc_index, NOC_UNICAST_WRITE_VC);
-        // device_time [lo, hi] first, then the token, barrier between so the token is visible to the host only after
-        // device_time lands; the host then reads device_time from the same ACK buffer, replacing a blocking
-        // host->device read per handshake. device_time goes one word in (host offset 4): its L1 source
-        // (sync_ack_device_time) sits at 4 mod 16, and NOC PCIe writes require src and dst to share the low 4 bits
-        // (NOC_PCIE_WRITE_ALIGNMENT_BYTES=16), so the dst must also be 4 mod 16. The token source (sync_request) is
-        // 16-aligned, so the token lands at the base (word 0). Host layout: kSyncAckTokenWord in
-        // realtime_profiler_manager.cpp.
-        noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
-            noc_index,
-            reinterpret_cast<uint32_t>(&rt_profiler_msg->sync_ack_device_time[0]),
-            ack_pcie_xy_enc,
-            ack_pcie_addr + sizeof(uint32_t),
-            2 * sizeof(uint32_t),
-            1);
-        noc_async_write_barrier();
-        noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
-            noc_index,
-            reinterpret_cast<uint32_t>(&rt_profiler_msg->sync_request),
-            ack_pcie_xy_enc,
-            ack_pcie_addr,
-            sizeof(uint32_t),
-            1);
-        noc_async_write_barrier();
-    }
+    const uint64_t ack_pcie_addr = (static_cast<uint64_t>(rt_profiler_msg->sync_ack_host_addr[1]) << 32) |
+                                   static_cast<uint64_t>(rt_profiler_msg->sync_ack_host_addr[0]);
+    // write_reg_cmd_buf, the conventional buffer for small writes, is untouched by the record-push path, so the state
+    // set up at kernel start survives and the handshake never re-initialises it.
+    noc_wwrite_with_state<noc_mode, write_reg_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
+        noc_index,
+        reinterpret_cast<uint32_t>(&rt_profiler_msg->sync_ack_device_time[0]),
+        pcie_xy_enc,
+        ack_pcie_addr,
+        2 * sizeof(uint32_t),
+        1);
+    noc_async_write_barrier();
+    noc_wwrite_with_state<noc_mode, write_reg_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
+        noc_index,
+        reinterpret_cast<uint32_t>(&rt_profiler_msg->sync_request),
+        pcie_xy_enc,
+        ack_pcie_addr + 2 * sizeof(uint32_t),
+        sizeof(uint32_t),
+        1);
+    noc_async_write_barrier();
 
     rt_profiler_msg->sync_host_timestamp = 0;
 }
@@ -198,6 +187,8 @@ void kernel_main() {
     RT_PROF_NCRISC_DBG_SET(ring_buffer, pcie_xy_enc, pcie_xy_enc);
     RT_PROF_NCRISC_DBG_SET(ring_buffer, fifo_addr_lo, data_addr_lo);
 
+    noc_write_init_state<write_reg_cmd_buf>(noc_index, NOC_UNICAST_WRITE_VC);
+
     RT_PROF_NCRISC_DBG_SET(ring_buffer, stage, RT_PROFILER_NCRISC_STAGE_MAIN_LOOP);
     uint32_t loop_count = 0;
     uint32_t push_count = 0;
@@ -208,7 +199,7 @@ void kernel_main() {
         RT_PROF_NCRISC_DBG_SET(ring_buffer, loop_iteration, loop_count);
 
         if (rt_profiler_msg->sync_host_timestamp != 0) {
-            realtime_profiler_service_sync();
+            realtime_profiler_service_sync(pcie_xy_enc);
         }
 
         const uint32_t read_index = ring_buffer->read_index;

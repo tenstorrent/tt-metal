@@ -4,7 +4,11 @@
 
 #include "realtime_profiler_service.hpp"
 
+#include <algorithm>
 #include <exception>
+#include <iterator>
+#include <memory>
+#include <mutex>
 #include <ranges>
 #include <span>
 #include <string>
@@ -18,23 +22,50 @@
 
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
+#if defined(TRACY_ENABLE)
+#include "realtime_profiler_tracy_consumer.hpp"
+#endif
+
 namespace tt::tt_metal {
 
 namespace {
 
-thread_local bool g_in_realtime_profiler_consumer = false;
-
-constexpr uint32_t kWaitSpinIterations = 2048;
+constexpr uint32_t kWaitSpinIterations = 512;
 
 }  // namespace
+
+RealtimeProfilerService& realtime_profiler_service() {
+    // Destroyed at exit rather than kept alive indefinitely: the destructor stops and joins every consumer thread.
+    static RealtimeProfilerService service;
+    return service;
+}
+
+void register_builtin_realtime_profiler_consumers() {
+    [[maybe_unused]] static const bool registered = [] {
+#if defined(TRACY_ENABLE)
+        // Bound to DEFAULT_CONTEXT_ID: slot 0 is reserved for the silicon context and mock contexts start at 1
+        // (find_free_context_id_locked), so that is the only context the profiler can run on.
+        auto tracy_consumer = std::make_shared<RealtimeProfilerTracyConsumer>(DEFAULT_CONTEXT_ID);
+        tracy_consumer->set_handle(experimental::RegisterProgramRealtimeProfilerCallback(
+            [tracy_consumer](const experimental::ProgramRealtimeRecordBatch& batch) {
+                tracy_consumer->on_records(batch);
+            }));
+#endif
+        return true;
+    }();
+}
 
 RealtimeProfilerService::~RealtimeProfilerService() {
     {
         std::lock_guard lock(topology_mutex_);
-        TT_FATAL(
-            max_batch_records_by_ring_.empty(),
-            "RealtimeProfilerService destroyed with {} attached ring(s)",
-            max_batch_records_by_ring_.size());
+        if (!attached_rings_.empty()) {
+            log_warning(
+                tt::LogMetal,
+                "[Real-time profiler] Service destroyed with {} ring(s) still attached; a MeshDevice outlived the "
+                "MetalContext. Close all devices before teardown.",
+                attached_rings_.size());
+            attached_rings_.clear();
+        }
     }
 
     while (true) {
@@ -46,30 +77,24 @@ RealtimeProfilerService::~RealtimeProfilerService() {
             }
             registration = consumers_.extract(consumers_.begin());
         }
-        stop_registration(std::move(registration));
+        destroy_consumer(registration.mapped());
     }
 }
 
 tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle RealtimeProfilerService::register_consumer(
-    std::unique_ptr<RealtimeProfilerConsumer> consumer) {
-    TT_FATAL(consumer != nullptr, "Cannot register a null real-time profiler consumer");
-    TT_FATAL(
-        !g_in_realtime_profiler_consumer,
-        "A real-time profiler consumer must not register consumers from its delivery thread");
+    tt::tt_metal::experimental::ProgramRealtimeProfilerCallback callback) {
+    TT_FATAL(callback != nullptr, "Cannot register a null real-time profiler callback");
+    reap_retired_consumers();
 
     std::lock_guard lock(topology_mutex_);
     const auto handle = next_consumer_handle_++;
-    auto [it, inserted] = consumers_.try_emplace(handle, handle, std::move(consumer));
-    TT_FATAL(inserted, "Duplicate real-time profiler consumer handle {}", handle);
-    auto& registration = it->second;
-
-    for (const auto& [ring, max_batch_records] : max_batch_records_by_ring_) {
-        const bool reader_inserted =
-            registration.readers.try_emplace(ring, ring->make_reader(), max_batch_records).second;
-        TT_FATAL(reader_inserted, "Duplicate real-time profiler ring during consumer registration");
-    }
+    auto it = consumers_.try_emplace(handle, handle, std::move(callback)).first;
 
     try {
+        auto& registration = it->second;
+        for (const auto& [ring, max_batch_records] : attached_rings_) {
+            registration.readers.emplace_back(ring, ring->make_reader(), max_batch_records);
+        }
         registration.thread =
             std::jthread([this, &registration](std::stop_token stop_token) { run_consumer(stop_token, registration); });
     } catch (...) {
@@ -81,37 +106,45 @@ tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle RealtimeProfil
 
 void RealtimeProfilerService::unregister_consumer(
     tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle handle) {
-    TT_FATAL(
-        !g_in_realtime_profiler_consumer,
-        "A real-time profiler consumer must not unregister consumers from its delivery thread");
+    if (current_registration_ != nullptr &&
+        current_registration_->handle == handle) {  // a callback unregistering itself
+        current_registration_->retired.store(true, std::memory_order_release);
+        current_registration_->control_pending.store(true, std::memory_order_release);
+        return;
+    }
 
     ConsumerMap::node_type registration;
     {
         std::lock_guard lock(topology_mutex_);
         registration = consumers_.extract(handle);
     }
-    stop_registration(std::move(registration));
+    if (registration) {
+        destroy_consumer(registration.mapped());
+    }
+    reap_retired_consumers();
 }
 
 void RealtimeProfilerService::attach_ring(RealtimeProfilerRecordRing& ring, size_t max_batch_records) {
-    TT_FATAL(max_batch_records > 0, "Real-time profiler consumer batch size must be nonzero");
-    TT_FATAL(
-        max_batch_records <= ring.capacity(),
-        "Real-time profiler consumer batch size {} exceeds ring capacity {}",
-        max_batch_records,
-        ring.capacity());
-
     {
         std::lock_guard topology_lock(topology_mutex_);
-        const bool inserted = max_batch_records_by_ring_.emplace(&ring, max_batch_records).second;
-        TT_FATAL(inserted, "Real-time profiler ring is already attached");
+        attached_rings_.emplace(&ring, max_batch_records);
 
-        for (auto& registration : consumers_ | std::views::values) {
-            std::lock_guard control_lock(registration.control_mutex);
-            const bool reader_inserted =
-                registration.readers_to_add.try_emplace(&ring, ring.make_reader(), max_batch_records).second;
-            TT_FATAL(reader_inserted, "Real-time profiler ring reader is already pending attachment");
-            registration.control_pending.store(true, std::memory_order_release);
+        try {
+            for (auto& registration : consumers_ | std::views::values) {
+                std::lock_guard control_lock(registration.control_mutex);
+                if (registration.retired.load(std::memory_order_acquire)) {
+                    continue;
+                }
+                registration.readers_to_add.emplace_back(&ring, ring.make_reader(), max_batch_records);
+                registration.control_pending.store(true, std::memory_order_release);
+            }
+        } catch (...) {
+            for (auto& registration : consumers_ | std::views::values) {
+                std::lock_guard control_lock(registration.control_mutex);
+                std::erase_if(registration.readers_to_add, [&](const RingReader& r) { return r.ring == &ring; });
+            }
+            attached_rings_.erase(&ring);
+            throw;
         }
     }
     wake_consumers();
@@ -120,11 +153,13 @@ void RealtimeProfilerService::attach_ring(RealtimeProfilerRecordRing& ring, size
 void RealtimeProfilerService::detach_ring(RealtimeProfilerRecordRing& ring) {
     {
         std::lock_guard topology_lock(topology_mutex_);
-        const size_t erased = max_batch_records_by_ring_.erase(&ring);
-        TT_FATAL(erased == 1, "Cannot detach an unknown real-time profiler ring");
+        attached_rings_.erase(&ring);
 
         for (auto& registration : consumers_ | std::views::values) {
             std::lock_guard control_lock(registration.control_mutex);
+            if (registration.retired.load(std::memory_order_acquire)) {
+                continue;
+            }
             registration.rings_to_drain.push_back(&ring);
             registration.control_pending.store(true, std::memory_order_release);
         }
@@ -141,111 +176,95 @@ void RealtimeProfilerService::wake_consumers() noexcept {
 
 bool RealtimeProfilerService::is_active() const {
     std::lock_guard lock(topology_mutex_);
-    return !max_batch_records_by_ring_.empty();
+    return !attached_rings_.empty();
 }
 
 void RealtimeProfilerService::run_consumer(
     std::stop_token stop_token, RealtimeProfilerService::ConsumerRegistration& registration) {
-    g_in_realtime_profiler_consumer = true;
+    current_registration_ = &registration;
     const std::string thread_name = fmt::format("RtProfConsumer{}", registration.handle);
     tracy::SetThreadName(thread_name.c_str());
 
     std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord> records;
-    std::unordered_map<RealtimeProfilerRecordRing*, RingReader> readers_to_add;
+    std::vector<RingReader> readers_to_add;
     std::vector<RealtimeProfilerRecordRing*> rings_to_drain;
+    // Losses seen across all readers since the last batch was handed to the callback. Drops can be noticed on a reader
+    // that has nothing to deliver, so they are carried until a batch exists to report them on.
+    uint64_t pending_dropped = 0;
 
-    auto invoke_records = [&](std::span<const tt::tt_metal::experimental::ProgramRealtimeRecord> batch,
-                              uint64_t dropped) {
+    auto invoke_callback = [&](std::span<const tt::tt_metal::experimental::ProgramRealtimeRecord> batch,
+                               uint64_t dropped) {
         TTZoneScopedDNC(RT_PROFILER, "Callback", 0xF032E6);
         TTZoneValueD(RT_PROFILER, batch.size());
         if (TTZoneIsActiveD(RT_PROFILER) && dropped > 0) {
             const auto dropped_txt = fmt::format("dropped {}", dropped);
             TTZoneTextD(RT_PROFILER, dropped_txt.c_str(), dropped_txt.size());
         }
-        const tt::tt_metal::experimental::ProgramRealtimeRecordBatch argument{batch, dropped};
+        const tt::tt_metal::experimental::ProgramRealtimeRecordBatch argument{.records = batch, .dropped = dropped};
         try {
-            registration.consumer->on_records(argument);
+            registration.callback(argument);
         } catch (const std::exception& e) {
-            log_warning(tt::LogMetal, "[Real-time profiler] Record consumer threw an exception: {}", e.what());
+            log_warning(tt::LogMetal, "[Real-time profiler] Record callback threw an exception: {}", e.what());
         } catch (...) {
-            log_warning(tt::LogMetal, "[Real-time profiler] Record consumer threw an unknown exception");
+            log_warning(tt::LogMetal, "[Real-time profiler] Record callback threw an unknown exception");
         }
     };
 
     while (!stop_token.stop_requested()) {
-        // Snapshot before checking any work condition so a concurrent publication/control update cannot be lost.
+        // we snapshot before checking any work condition so a concurrent publication/control isn't missed
         const uint32_t wake_token = wake_generation_.load(std::memory_order_acquire);
 
         if (registration.control_pending.load(std::memory_order_acquire)) {
+            bool retired = false;
             {
                 std::lock_guard control_lock(registration.control_mutex);
                 readers_to_add.swap(registration.readers_to_add);
                 rings_to_drain.swap(registration.rings_to_drain);
+                retired = registration.retired.load(std::memory_order_acquire);
                 registration.control_pending.store(false, std::memory_order_release);
             }
 
-            while (!readers_to_add.empty()) {
-                auto node = readers_to_add.extract(readers_to_add.begin());
-                auto result = registration.readers.insert(std::move(node));
-                TT_FATAL(result.inserted, "Duplicate real-time profiler reader attached to a consumer");
+            if (retired) {
+                registration.readers.clear();
+                break;
             }
 
+            std::ranges::move(readers_to_add, std::back_inserter(registration.readers));
+            readers_to_add.clear();
+
             for (auto* ring : rings_to_drain) {
-                auto it = registration.readers.find(ring);
-                TT_FATAL(it != registration.readers.end(), "Missing real-time profiler reader during detach");
-                it->second.draining = true;
+                auto it = std::ranges::find(registration.readers, ring, &RingReader::ring);
+                if (it != registration.readers.end()) {
+                    it->draining = true;
+                }
             }
             rings_to_drain.clear();
         }
 
-        bool made_progress = false;
+        bool made_progress = false;  // for deciding if we should wait
 
-        auto read_pass = [&](bool draining) {
-            for (auto it = registration.readers.begin(); it != registration.readers.end();) {
-                RingReader& ring_reader = it->second;
-                if (ring_reader.draining != draining) {
-                    ++it;
-                    continue;
-                }
+        for (auto it = registration.readers.begin(); it != registration.readers.end();) {
+            RingReader& ring_reader = *it;
 
-                if (records.size() < ring_reader.max_batch_records) {
-                    records.resize(ring_reader.max_batch_records);
-                }
-                std::span<tt::tt_metal::experimental::ProgramRealtimeRecord> batch;
-                {
-                    TTZoneScopedDN(RT_PROFILER, "ReadBatch");
-                    batch = ring_reader.reader.read_batch(std::span(records).first(ring_reader.max_batch_records));
-                }
-                const uint64_t dropped_total = ring_reader.reader.dropped();
-                registration.pending_dropped += dropped_total - ring_reader.observed_dropped;
-                ring_reader.observed_dropped = dropped_total;
-
-                if (!batch.empty()) {
-                    invoke_records(batch, std::exchange(registration.pending_dropped, 0));
-                    made_progress = true;
-                    if (stop_token.stop_requested()) {
-                        return;
-                    }
-                }
-
-                if (ring_reader.draining && !ring_reader.reader.has_data()) {
-                    it = registration.readers.erase(it);
-                    made_progress = true;
-                    continue;
-                }
-                if (ring_reader.reader.has_data()) {
-                    made_progress = true;
-                }
-                ++it;
+            if (records.size() < ring_reader.max_batch_records) {
+                records.resize(ring_reader.max_batch_records);
             }
-        };
+            const std::span<tt::tt_metal::experimental::ProgramRealtimeRecord> batch =
+                ring_reader.reader.read_batch(std::span(records).first(ring_reader.max_batch_records));
+            const uint64_t dropped_total = ring_reader.reader.dropped();
+            pending_dropped += dropped_total - ring_reader.observed_dropped;
+            ring_reader.observed_dropped = dropped_total;
 
-        // Closing managers have finite backlogs and should not wait behind unrelated active rings.
-        read_pass(true);
-        if (stop_token.stop_requested()) {
-            break;
+            if (!batch.empty()) {
+                invoke_callback(batch, std::exchange(pending_dropped, 0));
+                made_progress = true;
+            } else if (ring_reader.draining) {
+                it = registration.readers.erase(it);
+                made_progress = true;
+                continue;
+            }
+            ++it;
         }
-        read_pass(false);
         if (stop_token.stop_requested()) {
             break;
         }
@@ -254,43 +273,61 @@ void RealtimeProfilerService::run_consumer(
             continue;
         }
 
-        for (uint32_t spin = 0; spin < kWaitSpinIterations; ++spin) {
-            if (stop_token.stop_requested() || registration.control_pending.load(std::memory_order_acquire) ||
-                wake_generation_.load(std::memory_order_acquire) != wake_token) {
-                break;
-            }
+        const auto still_idle = [&] {
+            return !stop_token.stop_requested() && !registration.control_pending.load(std::memory_order_acquire) &&
+                   wake_generation_.load(std::memory_order_acquire) == wake_token;
+        };
+        for (uint32_t spin = 0; spin < kWaitSpinIterations && still_idle(); ++spin) {
             ttsl::pause();
         }
-        if (!stop_token.stop_requested() && !registration.control_pending.load(std::memory_order_acquire) &&
-            wake_generation_.load(std::memory_order_acquire) == wake_token) {
+        if (still_idle()) {
             TTZoneScopedDN(RT_PROFILER, "Wait");
             wake_generation_.wait(wake_token, std::memory_order_acquire);
         }
     }
 
-    g_in_realtime_profiler_consumer = false;
+    current_registration_ = nullptr;
 }
 
-void RealtimeProfilerService::stop_registration(ConsumerMap::node_type registration) {
-    if (registration.empty()) {
+void RealtimeProfilerService::reap_retired_consumers() {
+    // A consumer thread reaping would join itself; it is never the one that cleans up.
+    if (current_registration_ != nullptr) {
         return;
     }
-    auto& value = registration.mapped();
-    value.thread.request_stop();
+    std::vector<ConsumerMap::node_type> retired;
+    {
+        std::lock_guard lock(topology_mutex_);
+        for (auto it = consumers_.begin(); it != consumers_.end();) {
+            const auto next = std::next(it);
+            if (it->second.retired.load(std::memory_order_acquire)) {
+                retired.push_back(consumers_.extract(it));
+            }
+            it = next;
+        }
+    }
+    // Outside the lock: destroy_consumer joins.
+    for (auto& node : retired) {
+        destroy_consumer(node.mapped());
+    }
+}
+
+void RealtimeProfilerService::destroy_consumer(ConsumerRegistration& registration) {
+    registration.thread.request_stop();
     wake_consumers();
-    if (value.thread.joinable()) {
-        value.thread.join();
+    if (registration.thread.joinable()) {
+        registration.thread.join();
     }
 
     uint64_t dropped = 0;
-    for (const auto& reader : value.readers | std::views::values) {
-        dropped += reader.reader.dropped();
+    for (const auto& ring_reader : registration.readers) {
+        dropped += ring_reader.reader.dropped();
     }
-    for (const auto& reader : value.readers_to_add | std::views::values) {
-        dropped += reader.reader.dropped();
+    for (const auto& ring_reader : registration.readers_to_add) {
+        dropped += ring_reader.reader.dropped();
     }
     if (dropped != 0) {
-        log_warning(tt::LogMetal, "[Real-time profiler] Consumer {} dropped {} record(s)", value.handle, dropped);
+        log_warning(
+            tt::LogMetal, "[Real-time profiler] Consumer {} dropped {} record(s)", registration.handle, dropped);
     }
 }
 

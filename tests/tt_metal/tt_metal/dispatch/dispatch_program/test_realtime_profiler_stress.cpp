@@ -35,7 +35,7 @@
 #include <tt-metalium/experimental/realtime_profiler.hpp>
 
 #include "tt_metal/common/env_lib.hpp"
-#include "tt_metal/distributed/realtime_profiler_manager.hpp"
+#include "tt_metal/impl/realtime_profiler/realtime_profiler_receiver.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
@@ -80,25 +80,11 @@ constexpr double kMaxStressDurationNs = 1'000'000'000.0;
 // Quiesce + drain window before unregistering the callback.
 constexpr auto kPostQuiesceDrain = std::chrono::milliseconds(2000);
 
-// Allowed slack for the deterministic startup race where the compute kernel
-// detects dispatch_d's stream-register clearing before dispatch_s has
-// recorded the first start_timestamp, producing one record where
-// end_timestamp < start_timestamp by a handful of cycles. Same value the
-// host/device correlation test tolerates (see test_realtime_profiler.py
-// :: test_host_device_correlation, "startup_race_threshold") and the same
-// value the production Tracy handler uses to distinguish "benign" from
-// "noisy" skips (see realtime_profiler_tracy_consumer.cpp,
-// kStartupRaceThreshold).
-constexpr uint64_t kStartupRaceSlackCycles = 100'000;
-
-// Hard upper bound on the fraction of records that can come back with
-// end_timestamp < start_timestamp before this test fails. The production
-// host receiver already silently skips any such record on the Tracy path
-// (see realtime_profiler_tracy_consumer.cpp:HandleRecord), so a tiny number
-// of these is tolerated by the live system; we only want this test to flag
-// a *regression* where the corruption rate balloons (e.g. an off-by-one in
-// rt_ring_full leading to systemic slot reuse). Empirically the live
-// system produces ~1 such record per ~4000 launches on Blackhole p100a
+// Hard upper bound on the fraction of records the receiver has to discard for having
+// end_timestamp < start_timestamp. Those records are dropped before
+// publication (see RealtimeProfilerReceiver::publish_pages), so a few are tolerated by the live system; this test
+// only flags a *regression* where the corruption rate balloons (e.g. an off-by-one in rt_ring_full leading to
+// systemic slot reuse). Empirically the live system produces ~1 such record per ~4000 launches on Blackhole p100a
 // (rate ≈ 0.025%); 1% gives ~40x headroom over the observed baseline.
 constexpr double kMaxBadTimestampFraction = 0.01;
 
@@ -183,6 +169,11 @@ distributed::MeshWorkload build_blank_kernel_workload(const std::shared_ptr<dist
     return workload;
 }
 
+std::shared_ptr<distributed::MeshDevice> open_unit_mesh() {
+    return distributed::MeshDevice::create_unit_mesh(
+        /*device_id=*/0, DEFAULT_L1_SMALL_SIZE, kTraceRegionSize, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
+}
+
 std::shared_ptr<distributed::MeshDevice> open_full_mesh() {
     return distributed::MeshDevice::create(
         distributed::MeshDeviceConfig(std::nullopt),
@@ -206,16 +197,13 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
         mesh_device->close();
         GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
     }
-    const auto* rt = mesh_device->impl().get_realtime_profiler();
+    auto* rt = mesh_device->impl().get_realtime_profiler();
     ASSERT_NE(rt, nullptr);
     const uint64_t num_active_devices = rt->num_active_devices();
 
     uint64_t stress_records = 0;
-    uint64_t startup_race_skips = 0;
-    uint64_t large_negative_skips = 0;
     uint64_t bad_frequency = 0;
     uint64_t implausible_duration = 0;
-    int64_t worst_negative_delta = 0;
     uint64_t max_callback_batch = 0;
     StressSyncErrorHistogram sync_hist;
     ProgramRealtimeProfilerCallbackHandle handle =
@@ -227,23 +215,14 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
                 }
                 ++stress_records;
                 sync_hist.add(rec.clock_sync.sync_error_ns);
-                if (rec.end_timestamp < rec.start_timestamp) {
-                    const uint64_t neg_delta = rec.start_timestamp - rec.end_timestamp;
-                    if (neg_delta <= kStartupRaceSlackCycles) {
-                        ++startup_race_skips;
-                    } else {
-                        ++large_negative_skips;
-                        worst_negative_delta = std::min(-static_cast<int64_t>(neg_delta), worst_negative_delta);
-                    }
-                }
+                // The receiver never publishes a record whose end precedes its start, so every delivered record must
+                // form a plausible duration.
+                ASSERT_GE(rec.end_timestamp, rec.start_timestamp)
+                    << "receiver published a record with end < start (runtime_id=" << rec.runtime_id << ")";
                 if (!(rec.frequency > 0.0)) {
                     ++bad_frequency;
-                } else if (rec.end_timestamp >= rec.start_timestamp) {
-                    const double duration_ns =
-                        static_cast<double>(rec.end_timestamp - rec.start_timestamp) / rec.frequency;
-                    if (duration_ns >= kMaxStressDurationNs) {
-                        ++implausible_duration;
-                    }
+                } else if (rec.duration_ns() >= kMaxStressDurationNs) {
+                    ++implausible_duration;
                 }
             }
         });
@@ -306,7 +285,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     std::this_thread::sleep_for(kPostQuiesceDrain);
     const uint32_t peak_fifo_pages = rt->peak_fifo_pages();
     const uint32_t fifo_capacity_pages = rt->host_fifo_capacity_pages();
-    const uint32_t ring_full_waits = rt->ring_full_wait_count();
+    const uint32_t ring_full_waits = rt->read_ring_full_wait_count();
     const uint64_t published_batches = rt->num_published_batches();
     const double mean_publish_batch =
         published_batches ? static_cast<double>(rt->num_published_records()) / published_batches : 0.0;
@@ -319,8 +298,8 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     log_info(
         tt::LogTest,
         "[RT profiler stress] {} stress records across {} active device(s) over {} replays, max_callback_batch={}, "
-        "mean_publish_batch={:.1f}, peak_fifo={}/{} pages, ring_full_waits={}, {} startup-race skips, {} "
-        "large-negative-delta skips (worst delta = {} cycles), {} bad-frequency, {} implausible-duration; "
+        "mean_publish_batch={:.1f}, peak_fifo={}/{} pages, ring_full_waits={}, {} "
+        "malformed-timestamp drops, {} bad-frequency, {} implausible-duration; "
         "sync error us: p50={:.2f} p90={:.2f} p99={:.2f} max={:.2f}",
         stress_records,
         num_active_devices,
@@ -330,9 +309,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
         peak_fifo_pages,
         fifo_capacity_pages,
         ring_full_waits,
-        startup_race_skips,
-        large_negative_skips,
-        worst_negative_delta,
+        rt->num_malformed_records(),
         bad_frequency,
         implausible_duration,
         sync_hist.percentile_us(0.50),
@@ -351,16 +328,16 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     EXPECT_EQ(ring_full_waits, 0u)
         << "device ring reached capacity; the receiver drained it slower than the device filled it";
 
-    const uint64_t max_allowed_large_negative =
+    const uint64_t malformed_records = rt->num_malformed_records();
+    const uint64_t max_allowed_malformed =
         static_cast<uint64_t>(static_cast<double>(stress_records) * kMaxBadTimestampFraction);
-    EXPECT_LE(large_negative_skips, max_allowed_large_negative)
-        << large_negative_skips << " stress record(s) had end_timestamp < start_timestamp by more than "
-        << kStartupRaceSlackCycles << " cycles, exceeding the allowed budget of " << max_allowed_large_negative
-        << " (= " << (kMaxBadTimestampFraction * 100.0) << "% of " << stress_records << " stress records). "
-        << "These are torn 64-bit reads or stale-slot residue from BRISC writing the timestamp slot before "
-        << "bumping write_index; the production Tracy handler silently drops them. A spike here means the "
-        << "corruption rate has become systemic — most likely an off-by-one in the rt_ring_full check or a "
-        << "missing memory barrier between slot write and write_index increment.";
+    EXPECT_LE(malformed_records, max_allowed_malformed)
+        << "the receiver discarded " << malformed_records << " record(s) with a malformed timestamp, exceeding the "
+        << "allowed budget of " << max_allowed_malformed << " (= " << (kMaxBadTimestampFraction * 100.0) << "% of "
+        << stress_records << " stress records). These are torn 64-bit reads or stale-slot residue from BRISC writing "
+        << "the timestamp slot before bumping write_index. A spike here means the corruption rate has become "
+        << "systemic — most likely an off-by-one in the rt_ring_full check or a missing memory barrier between slot "
+        << "write and write_index increment.";
     EXPECT_EQ(bad_frequency, 0u) << bad_frequency << " stress record(s) had a non-positive frequency";
     EXPECT_EQ(implausible_duration, 0u) << implausible_duration
                                         << " stress record(s) reported duration >= " << kMaxStressDurationNs
@@ -372,7 +349,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
 TEST(RealtimeProfilerStress, CallbackDeliveryLatency) {
     using namespace std::chrono_literals;
     constexpr uint32_t kPacedId = 0x6AC0;
-    constexpr std::array<std::chrono::microseconds, 5> kGaps = {5us, 50us, 200us, 1000us, 5000us};
+    constexpr std::array<std::chrono::microseconds, 6> kGaps = {5us, 50us, 200us, 1000us, 5000us, 5us};
     constexpr uint32_t kOpsPerGap = 100;
     constexpr double kMaxPacedLatencyP50Us = 300.0;
     constexpr double kMaxPacedLatencyP99Us = 1'000.0;
@@ -539,7 +516,7 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
         GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
     }
     const uint64_t num_devices = mesh_device->num_devices();
-    const auto* rt = mesh_device->impl().get_realtime_profiler();
+    auto* rt = mesh_device->impl().get_realtime_profiler();
     ASSERT_NE(rt, nullptr);
 
     distributed::MeshWorkload workload = build_blank_kernel_workload(mesh_device);
