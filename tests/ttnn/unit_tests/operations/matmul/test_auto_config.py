@@ -264,11 +264,12 @@ def test_auto_config_model_shapes_correct_and_not_slower_than_default(
         else None
     )
 
-    # (1) Correctness through the public auto-config entrypoint.
+    # (1) Correctness through the public auto-config entrypoint.  auto_config defaults to False
+    # (opt-in), so pass it explicitly here to exercise the tuned path rather than the base op.
     if is_linear:
-        out = ttnn.to_torch(ttnn.linear(a, b, bias=tt_bias, dtype=dtype))
+        out = ttnn.to_torch(ttnn.linear(a, b, bias=tt_bias, dtype=dtype, auto_config=True))
     else:
-        out = ttnn.to_torch(ttnn.matmul(a, b, dtype=dtype))
+        out = ttnn.to_torch(ttnn.matmul(a, b, dtype=dtype, auto_config=True))
     assert_numeric_metrics(golden, out, pcc_threshold=pcc, check_allclose=False, check_frobenius=False, check_ulp=False)
 
     # (2) Measured default vs auto-tuned, from one benchmarking session.

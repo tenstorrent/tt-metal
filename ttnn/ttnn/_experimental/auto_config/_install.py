@@ -29,8 +29,11 @@ _DISABLE_INSTALL_ENV = "TTNN_AUTO_MATMUL_DISABLE_INSTALL"
 # base op docstrings without forming a definition list or colliding with their existing
 # ``Keyword Args:`` section (which would break the Sphinx docs build under ``-W``).
 _AUTO_CONFIG_DOC_SUFFIX = """.. note::
-   This entrypoint also accepts an ``auto_config`` keyword argument (``bool``, default ``True``)
-   that enables measured auto-selection and persistent caching of matmul recipes. When explicit
+   This entrypoint also accepts an ``auto_config`` keyword argument (``bool``, default ``False``)
+   that enables measured auto-selection and persistent caching of matmul recipes. It is opt-in:
+   with the default, the call is a plain passthrough to the base op -- identical numerics to a
+   stock ``ttnn.matmul`` / ``ttnn.linear`` -- so installing the wrapper never changes the result
+   of an existing caller. Pass ``auto_config=True`` to opt in. When explicit
    low-level placement or program-configuration arguments (``program_config``, ``core_grid``,
    ``compute_kernel_config`` or ``output_tile``) are supplied, auto-configuration is bypassed and
    the requested configuration is used directly.
@@ -68,7 +71,7 @@ def _matmul_wrapper_impl(
     optional_output_tensor=None,
     global_cb=None,
     sub_device_id=None,
-    auto_config=True,
+    auto_config=False,
     queue_id=None,
     cq_id=None,
 ):
@@ -120,7 +123,7 @@ def _linear_wrapper_impl(
     optional_output_tensor=None,
     global_cb=None,
     sub_device_id=None,
-    auto_config=True,
+    auto_config=False,
     queue_id=None,
     cq_id=None,
 ):
