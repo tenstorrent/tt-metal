@@ -52,20 +52,30 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_mesh_workload(
     tt::tt_metal::distributed::Synchronize(
         mesh_device, std::nullopt, subdevice_ids);  // interaction with subdevice needs to be investigated
 
-    // Ring contiguous fast path only: the "shortcut" staging buffer used by the 2nd-last iteration
-    // (see rs-contiguous-interm-design). Allocated once per program build and reused for the lifetime
-    // of the cached program via shared_variables_t; nullopt when not applicable.
+    // Contiguous staging layout only: the "shortcut" buffer used by the 2nd-last iteration (see
+    // rs-contiguous-interm-design). Allocated once per program build and reused for the lifetime of
+    // the cached program via shared_variables_t; nullopt when the tiled layout is in use. This op
+    // sizes its intermediate as an input-shaped tiled tensor (compute_output_specs), so the layout is
+    // read off that tensor rather than assumed from topology + dim.
     const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config);
     const uint32_t target_ring_size =
         ::ttnn::ccl::get_topological_dimension(tensor_args.input_tensor, operation_attributes.cluster_axis);
     std::optional<Tensor> shortcut_tensor;
-    if (auto shortcut_spec = ttnn::experimental::ccl::reduce_scatter_ring_shortcut_staging_spec(
+    if (ttnn::experimental::ccl::reduce_scatter_use_contiguous_interm(
             tensor_args.input_tensor,
+            tensor_return_value.at(0),
             operation_attributes.topology,
             operation_attributes.dim,
             target_ring_size,
             fp32_dest_acc_en)) {
-        shortcut_tensor = create_device_tensor(*shortcut_spec, mesh_device);
+        shortcut_tensor = create_device_tensor(
+            *ttnn::experimental::ccl::reduce_scatter_ring_shortcut_staging_spec(
+                tensor_args.input_tensor,
+                operation_attributes.topology,
+                operation_attributes.dim,
+                target_ring_size,
+                fp32_dest_acc_en),
+            mesh_device);
     }
 
     for (const auto& coord : tensor_coords.coords()) {

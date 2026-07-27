@@ -97,6 +97,30 @@ std::optional<tt::tt_metal::TensorSpec> reduce_scatter_ring_shortcut_staging_spe
     uint32_t ring_size,
     bool fp32_dest_acc_en);
 
+// True when `tensor` is laid out exactly as `spec` describes in every respect the kernels depend on
+// (logical shape, dtype, layout, buffer type).
+bool reduce_scatter_tensor_matches_spec(const ttnn::Tensor& tensor, const tt::tt_metal::TensorSpec& spec);
+
+// Chooses which intermediate staging layout a given reduce-scatter call uses.
+//
+// The chunk-paged ("contiguous") layout only exists for Ring + scatter dim != 0. Within that:
+//   - no caller-provided intermediate: contiguous. The op allocates the staging buffer itself, so
+//     there is no reason to fall back to the slower tiled layout.
+//   - caller-provided intermediate: whichever layout its TensorSpec matches. This lets a caller
+//     holding an input-shaped persistent buffer keep using the tiled path.
+// Returns false for every other configuration (Linear, scatter dim 0, or a caller-provided
+// input-shaped intermediate).
+//
+// An intermediate matching neither layout is rejected by validate_on_program_cache_miss, so by the
+// time the program factory calls this the answer is unambiguous.
+bool reduce_scatter_use_contiguous_interm(
+    const ttnn::Tensor& input_tensor,
+    const std::optional<ttnn::Tensor>& optional_intermediate_tensor,
+    ttnn::ccl::Topology topology,
+    uint32_t dim,
+    uint32_t ring_size,
+    bool fp32_dest_acc_en);
+
 // Maps an ND tensor shape + dim to a canonical 4D (normalized_dim, C, B) representation.
 // Requires rank >= 3.
 std::tuple<uint32_t, uint32_t, uint32_t> reduce_scatter_map_nd_to_4d(const ttnn::Shape& shape, uint32_t dim);

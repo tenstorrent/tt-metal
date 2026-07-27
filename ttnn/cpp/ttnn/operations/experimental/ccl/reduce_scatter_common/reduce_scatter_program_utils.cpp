@@ -207,6 +207,31 @@ std::optional<tt::tt_metal::TensorSpec> reduce_scatter_ring_shortcut_staging_spe
             tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM)));
 }
 
+bool reduce_scatter_tensor_matches_spec(const ttnn::Tensor& tensor, const tt::tt_metal::TensorSpec& spec) {
+    return tensor.logical_shape() == spec.logical_shape() && tensor.dtype() == spec.data_type() &&
+           tensor.layout() == spec.layout() &&
+           tensor.memory_config().buffer_type() == spec.memory_config().buffer_type();
+}
+
+bool reduce_scatter_use_contiguous_interm(
+    const ttnn::Tensor& input_tensor,
+    const std::optional<ttnn::Tensor>& optional_intermediate_tensor,
+    ttnn::ccl::Topology topology,
+    uint32_t dim,
+    uint32_t ring_size,
+    bool fp32_dest_acc_en) {
+    const auto stage_spec =
+        reduce_scatter_ring_interm_staging_spec(input_tensor, topology, dim, ring_size, fp32_dest_acc_en);
+    if (!stage_spec.has_value()) {
+        // Linear, or Ring with scatter dim 0: the chunk-paged layout does not exist here.
+        return false;
+    }
+    if (!optional_intermediate_tensor.has_value()) {
+        return true;
+    }
+    return reduce_scatter_tensor_matches_spec(*optional_intermediate_tensor, *stage_spec);
+}
+
 std::tuple<uint32_t, uint32_t, uint32_t> reduce_scatter_map_nd_to_4d(const ttnn::Shape& shape, uint32_t dim) {
     TT_FATAL(shape.rank() > 2, "Expected rank 3 or greater");
 

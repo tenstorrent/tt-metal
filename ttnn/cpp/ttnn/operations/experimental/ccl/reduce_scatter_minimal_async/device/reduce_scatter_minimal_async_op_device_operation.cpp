@@ -45,54 +45,80 @@ void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.output_mem_config,
         tensor_args.optional_output_tensor);
 
-    // Validate intermediate tensor if provided
+    // Validate intermediate tensor if provided.
+    //
+    // The ring path (scatter dim != 0) supports two intermediate layouts, and a caller-provided
+    // buffer selects between them by matching one of the two specs:
+    //   - the chunk-paged contiguous staging buffer (UINT8 row-major interleaved DRAM), or
+    //   - an input-shaped tiled intermediate.
+    // Anything matching neither is rejected here, so reduce_scatter_use_contiguous_interm can treat
+    // "does it match the staging spec" as a decision downstream.
     const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config);
+    const auto stage_spec = ttnn::experimental::ccl::reduce_scatter_ring_interm_staging_spec(
+        input_tensor,
+        operation_attributes.topology,
+        operation_attributes.dim,
+        operation_attributes.ring_size,
+        fp32_dest_acc_en);
+    const bool use_contiguous = ttnn::experimental::ccl::reduce_scatter_use_contiguous_interm(
+        input_tensor,
+        tensor_args.optional_intermediate_tensor,
+        operation_attributes.topology,
+        operation_attributes.dim,
+        operation_attributes.ring_size,
+        fp32_dest_acc_en);
+
     if (tensor_args.optional_intermediate_tensor.has_value()) {
         const auto& interm = tensor_args.optional_intermediate_tensor.value();
-        // On the contiguous ring fast path the intermediate is a chunk-paged staging tensor (UINT8,
-        // row-major, interleaved DRAM), not input-shaped, so the legacy layout check does not apply.
-        // Validate against the staging spec instead and point callers at the allocation helper.
-        auto stage_spec = ttnn::experimental::ccl::reduce_scatter_ring_interm_staging_spec(
-            input_tensor,
-            operation_attributes.topology,
-            operation_attributes.dim,
-            operation_attributes.ring_size,
-            fp32_dest_acc_en);
-        if (stage_spec.has_value()) {
-            TT_FATAL(interm.storage_type() == StorageType::DEVICE, "Persistent intermediate tensor must be on device");
-            TT_FATAL(
-                interm.logical_shape() == stage_spec->logical_shape() && interm.dtype() == stage_spec->data_type() &&
-                    interm.layout() == stage_spec->layout() &&
-                    interm.memory_config().buffer_type() == stage_spec->memory_config().buffer_type(),
-                "Persistent intermediate does not match the contiguous reduce-scatter staging layout (expected "
-                "shape {}, UINT8 row-major interleaved DRAM). Allocate it with "
-                "reduce_scatter_minimal_async_create_intermediate_buffer.",
-                stage_spec->logical_shape());
+        TT_FATAL(interm.storage_type() == StorageType::DEVICE, "Persistent intermediate tensor must be on device");
+        if (use_contiguous) {
+            // Matched the staging spec; reduce_scatter_use_contiguous_interm already compared shape,
+            // dtype, layout and buffer type against it.
         } else {
+            if (stage_spec.has_value()) {
+                // The contiguous layout was available and this buffer is not it, so the caller must
+                // be asking for the tiled path. Report both options if it is neither.
+                TT_FATAL(
+                    interm.padded_shape() == input_tensor.padded_shape() && interm.layout() == input_tensor.layout() &&
+                        interm.dtype() == input_tensor.dtype(),
+                    "Persistent intermediate matches neither reduce-scatter intermediate layout. Expected either "
+                    "the contiguous chunk-paged staging buffer (shape {}, UINT8, row-major, interleaved DRAM; "
+                    "allocate it with reduce_scatter_minimal_async_create_intermediate_buffer) or an input-shaped "
+                    "tiled intermediate (padded shape {}, dtype {}, layout {}). Got padded shape {}, dtype {}, "
+                    "layout {}.",
+                    stage_spec->logical_shape(),
+                    input_tensor.padded_shape(),
+                    input_tensor.dtype(),
+                    input_tensor.layout(),
+                    interm.padded_shape(),
+                    interm.dtype(),
+                    interm.layout());
+            }
             ttnn::experimental::ccl::validate_intermediate_tensor(
                 input_tensor, interm, operation_attributes.optional_intermediate_mem_config);
         }
     }
 
-    // Validate shortcut tensor if provided (ring contiguous fast path only; see
-    // reduce_scatter_ring_shortcut_staging_spec).
+    // Validate shortcut tensor if provided. It only exists on the contiguous path, so it is invalid
+    // both where that path does not apply and where a tiled intermediate opted out of it.
     if (tensor_args.optional_shortcut_tensor.has_value()) {
         const auto& shortcut = tensor_args.optional_shortcut_tensor.value();
+        TT_FATAL(
+            use_contiguous,
+            "A persistent shortcut tensor was provided but this call does not use the contiguous reduce-scatter "
+            "staging layout ({}); the shortcut tensor is not applicable.",
+            stage_spec.has_value() ? "the provided persistent intermediate selects the tiled layout"
+                                   : "requires Ring topology and scatter dim != 0");
         auto shortcut_spec = ttnn::experimental::ccl::reduce_scatter_ring_shortcut_staging_spec(
             input_tensor,
             operation_attributes.topology,
             operation_attributes.dim,
             operation_attributes.ring_size,
             fp32_dest_acc_en);
-        TT_FATAL(
-            shortcut_spec.has_value(),
-            "A persistent shortcut tensor was provided but this configuration does not use the contiguous "
-            "reduce-scatter fast path (Ring topology, scatter dim != 0); the shortcut tensor is not applicable.");
+        TT_FATAL(shortcut_spec.has_value(), "shortcut staging spec must apply whenever the contiguous path is used");
         TT_FATAL(shortcut.storage_type() == StorageType::DEVICE, "Persistent shortcut tensor must be on device");
         TT_FATAL(
-            shortcut.logical_shape() == shortcut_spec->logical_shape() &&
-                shortcut.dtype() == shortcut_spec->data_type() && shortcut.layout() == shortcut_spec->layout() &&
-                shortcut.memory_config().buffer_type() == shortcut_spec->memory_config().buffer_type(),
+            ttnn::experimental::ccl::reduce_scatter_tensor_matches_spec(shortcut, *shortcut_spec),
             "Persistent shortcut tensor does not match the contiguous reduce-scatter shortcut staging layout "
             "(expected shape {}, UINT8 row-major interleaved DRAM). Allocate it with "
             "reduce_scatter_minimal_async_create_intermediate_buffer.",
@@ -122,16 +148,25 @@ std::vector<tt::tt_metal::TensorSpec> ReduceScatterMinimalAsyncDeviceOperation::
     // Contiguous ring fast path: the intermediate is a chunk-paged, row-major, interleaved-DRAM staging
     // buffer (page = one chunk = tile_granularity tiles). This lets the writer send whole chunks with a
     // single contiguous fused-unicast per packet instead of scatter-writes. The same spec is used to
-    // allocate caller-provided persistent buffers (reduce_scatter_ring_interm_staging_spec). See
+    // allocate caller-provided persistent buffers (reduce_scatter_ring_interm_staging_spec). A
+    // caller-provided input-shaped intermediate opts back into the tiled layout below. See
     // rs-contiguous-interm-design.
     const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config);
-    if (auto stage_spec = ttnn::experimental::ccl::reduce_scatter_ring_interm_staging_spec(
+    if (ttnn::experimental::ccl::reduce_scatter_use_contiguous_interm(
             input_tensor,
+            tensor_args.optional_intermediate_tensor,
             operation_attributes.topology,
             operation_attributes.dim,
             operation_attributes.ring_size,
             fp32_dest_acc_en)) {
-        return {*stage_spec, output_spec};
+        return {
+            *ttnn::experimental::ccl::reduce_scatter_ring_interm_staging_spec(
+                input_tensor,
+                operation_attributes.topology,
+                operation_attributes.dim,
+                operation_attributes.ring_size,
+                fp32_dest_acc_en),
+            output_spec};
     }
 
     auto inter_shape = input_tensor.padded_shape();

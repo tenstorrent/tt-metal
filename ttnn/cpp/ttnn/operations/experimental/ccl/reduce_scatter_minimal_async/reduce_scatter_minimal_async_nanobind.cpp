@@ -38,6 +38,33 @@ void bind_reduce_scatter_minimal_async(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
             topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
 
+        Intermediate staging layouts:
+            On the ring path (Ring topology, scatter dim != 0) the op supports two layouts for its
+            intermediate buffer, and picks between them from the buffer it is handed:
+
+            * Contiguous (chunk-paged). The intermediate is a row-major, interleaved-DRAM staging
+              tensor whose page holds a whole chunk, so a chunk's tiles are contiguous at the
+              destination. The writer sends each chunk as a single fused-unicast write instead of a
+              scatter write, and the reader reads it back in one coalesced transaction instead of one
+              per tile. Requires a companion "shortcut" buffer; allocate both with
+              reduce_scatter_minimal_async_create_intermediate_buffer.
+            * Tiled. The intermediate mirrors the input tensor's shape and tiled addressing, one tile
+              per page. This is the only layout available for Linear topology or scatter dim 0.
+
+            Selection rule:
+
+            * No persistent intermediate passed in persistent_output_buffers: the op allocates the
+              contiguous staging buffer itself and uses the contiguous path.
+            * A persistent intermediate passed in: whichever layout its TensorSpec matches. A buffer
+              matching neither layout is rejected with an error naming both.
+
+            The contiguous path mainly helps small datatypes. With bfloat8_b a tile is 1088 bytes, so
+            tile-granular DRAM traffic sits below the NoC-to-DRAM transaction-size knee (~2 KB) and
+            leaves bandwidth on the table; coalescing a whole chunk into one transaction roughly
+            doubles the intermediate readback throughput. Wider datatypes (bfloat16, float32) already
+            clear that knee per tile, so the gain there is smaller. Prefer the contiguous path unless
+            you have an existing input-shaped persistent buffer you need to keep using.
+
         Returns:
             ttnn.Tensor: the output tensor.
 
@@ -78,8 +105,14 @@ void bind_reduce_scatter_minimal_async(nb::module_& mod) {
         `cluster_axis`, and `compute_kernel_config` arguments must match those passed to
         reduce_scatter_minimal_async.
 
-        Raises if the configuration does not use the contiguous path; for the legacy path the intermediate
-        has the input tensor's shape and can be allocated directly, and no shortcut buffer is needed.
+        Passing the returned intermediate is what selects the contiguous path; hand
+        reduce_scatter_minimal_async an input-shaped intermediate instead and it uses the tiled layout.
+        See the reduce_scatter_minimal_async docstring for the full selection rule and for when the
+        contiguous path is worth it (chiefly small datatypes such as bfloat8_b).
+
+        Raises if the configuration cannot use the contiguous path at all (Linear topology, or scatter
+        dim 0); there the intermediate has the input tensor's shape, can be allocated directly, and
+        needs no shortcut buffer.
 
         Returns:
             List[ttnn.Tensor]: [intermediate_buffer, shortcut_buffer], both allocated on the input

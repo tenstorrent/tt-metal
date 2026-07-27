@@ -515,12 +515,15 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     // Contiguous fast path: when enabled, the intermediate is a chunk-paged row-major staging tensor
-    // (allocated by compute_output_specs) and the writer sends whole chunks with fused-unicast writes
-    // instead of scatter. The sizing must match compute_output_specs exactly, so both derive it from the
-    // same helper. See rs-contiguous-interm-design.
+    // and the writer sends whole chunks with fused-unicast writes instead of scatter. The sizing must
+    // match compute_output_specs exactly, so both derive it from the same helper. Which layout applies
+    // is read off the intermediate tensor actually in use (either caller-provided or the one
+    // compute_output_specs sized), so this cannot disagree with what was allocated. See
+    // rs-contiguous-interm-design.
     const auto staging = ttnn::experimental::ccl::reduce_scatter_ring_interm_staging_params(
         input_tensor, topology, dim, ring_size, fp32_dest_acc_en);
-    const bool use_contiguous_interm = staging.use_contiguous;
+    const bool use_contiguous_interm = ttnn::experimental::ccl::reduce_scatter_use_contiguous_interm(
+        input_tensor, intermediate_tensor, topology, dim, ring_size, fp32_dest_acc_en);
     if (use_contiguous_interm) {
         TT_FATAL(
             staging.tile_granularity == tile_granularity,
@@ -622,7 +625,11 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         slice_Wt,
         fuse_op,
         normalized_dim);
-    if (use_contiguous_interm) {
+    if (normalized_dim != 0) {
+        // Staging-layout switch consumed by the unified ring reader. chunks_per_channel is only read
+        // by the chunk-paged branch, but the named arg must always be present for the kernel to
+        // compile, so it is passed unconditionally.
+        reader_named_compile_args["contiguous_interm"] = use_contiguous_interm ? 1 : 0;
         reader_named_compile_args["chunks_per_channel"] = staging.chunks_per_channel;
     }
 
@@ -631,18 +638,22 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
-    if (use_contiguous_interm) {
-        TT_FATAL(shortcut_tensor.has_value(), "contiguous-interm path requires a shortcut staging tensor");
-        tt::tt_metal::TensorAccessorArgs(shortcut_tensor->buffer()).append_to(reader_compile_args);
+    if (normalized_dim != 0) {
+        TT_FATAL(
+            !use_contiguous_interm || shortcut_tensor.has_value(),
+            "contiguous-interm path requires a shortcut staging tensor");
+        // Shortcut staging accessor. Only the chunk-paged branch reads it; the tiled branch gets the
+        // output tensor's args as a placeholder (paired with a null address below) so that both
+        // branches share one compile-time/runtime arg layout.
+        const auto& shortcut_accessor_source = use_contiguous_interm ? *shortcut_tensor : output_tensor;
+        tt::tt_metal::TensorAccessorArgs(shortcut_accessor_source.buffer()).append_to(reader_compile_args);
     }
 
-    std::string reader_kernel_path =
-        normalized_dim == 0     ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
-                                  "device/kernels/dim_zero_ring_reduce_scatter_minimal_async_reader.cpp"
-        : use_contiguous_interm ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
-                                  "device/kernels/ring_contig_reduce_scatter_minimal_async_reader.cpp"
-                                : "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
-                                  "device/kernels/ring_reduce_scatter_minimal_async_reader.cpp";
+    std::string reader_kernel_path = normalized_dim == 0
+                                         ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
+                                           "device/kernels/dim_zero_ring_reduce_scatter_minimal_async_reader.cpp"
+                                         : "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
+                                           "device/kernels/ring_reduce_scatter_minimal_async_reader.cpp";
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -671,7 +682,10 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         slice_Ht,
         slice_Wt,
         normalized_dim);
-    if (use_contiguous_interm) {
+    if (normalized_dim != 0) {
+        // Staging-layout switch consumed by the unified ring writer. The chunk-paged sizing args are
+        // only read by that branch, but must always be present for the kernel to compile.
+        writer_named_compile_args["contiguous_interm"] = use_contiguous_interm ? 1 : 0;
         writer_named_compile_args["chunks_per_channel"] = staging.chunks_per_channel;
         writer_named_compile_args["interm_tiles_per_packet"] = staging.interm_tiles_per_packet;
     }
@@ -686,17 +700,17 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     writer_compile_args.insert(writer_compile_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
     tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
-    if (use_contiguous_interm) {
-        tt::tt_metal::TensorAccessorArgs(shortcut_tensor->buffer()).append_to(writer_compile_args);
+    if (normalized_dim != 0) {
+        // See the reader above: placeholder accessor args keep one arg layout for both branches.
+        const auto& shortcut_accessor_source = use_contiguous_interm ? *shortcut_tensor : output_tensor;
+        tt::tt_metal::TensorAccessorArgs(shortcut_accessor_source.buffer()).append_to(writer_compile_args);
     }
 
-    std::string writer_kernel_path =
-        normalized_dim == 0     ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
-                                  "device/kernels/dim_zero_ring_reduce_scatter_minimal_async_writer.cpp"
-        : use_contiguous_interm ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
-                                  "device/kernels/ring_contig_reduce_scatter_minimal_async_writer.cpp"
-                                : "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
-                                  "device/kernels/ring_reduce_scatter_minimal_async_writer.cpp";
+    std::string writer_kernel_path = normalized_dim == 0
+                                         ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
+                                           "device/kernels/dim_zero_ring_reduce_scatter_minimal_async_writer.cpp"
+                                         : "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
+                                           "device/kernels/ring_reduce_scatter_minimal_async_writer.cpp";
 
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -805,12 +819,9 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                         start_tiles_to_read,                      // start_tiles_to_read
                         start_pages_read_in_row,                  // start_pages_read_in_row
                         start_row_offset,                         // start_row_offset
+                        // shortcut_tensor_address; 0 (unread) on the tiled staging layout
+                        use_contiguous_interm ? shortcut_tensor->buffer()->address() : 0,
                     };
-                    if (use_contiguous_interm) {
-                        // shortcut_tensor_address: only the contig kernel variant reads this trailing
-                        // arg, so it must stay after everything the legacy kernel already expects.
-                        reader_rt_args.push_back(shortcut_tensor->buffer()->address());
-                    }
                 }
                 if (fuse_op) {
                     fused_op_signaler->push_reduce_scatter_fused_op_rt_args(reader_rt_args);
@@ -857,12 +868,10 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                         start_row_offset,         // start_row_offset
                         start_tiles_read,         // start_tiles_read
                         start_tiles_to_read,      // tiles_to_read
+                        // shortcut_tensor_address; 0 (unread) on the tiled staging layout. Precedes
+                        // the mux/fabric-connection args appended after this block.
+                        use_contiguous_interm ? shortcut_tensor->buffer()->address() : 0,
                     };
-                    if (use_contiguous_interm) {
-                        // shortcut_tensor_address: appended before the mux/fabric-connection args
-                        // below, which are themselves appended after this block.
-                        writer_rt_args.push_back(shortcut_tensor->buffer()->address());
-                    }
                 }
                 if (num_mux_cores_per_direction_per_link) {
                     // V2 fabric mux client connection: this worker is channel `worker` on its
@@ -1808,24 +1817,32 @@ RingReduceScatterMeshWorkloadFactory::cached_mesh_workload_t RingReduceScatterMe
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    // Ring contiguous fast path only: the "shortcut" staging buffer used by the 2nd-last iteration to
-    // stage one direction's contribution ahead of schedule (instead of scatter-writing it directly
-    // into the tiled output tensor). A caller-provided persistent buffer (allocated via
+    // Contiguous staging layout only: the "shortcut" buffer used by the 2nd-last iteration to stage
+    // one direction's contribution ahead of schedule (instead of scatter-writing it directly into the
+    // tiled output tensor). A caller-provided persistent buffer (allocated via
     // reduce_scatter_minimal_async_create_intermediate_buffer) takes priority; otherwise allocate one
     // internally, once per program build (this function runs once per program-cache miss), reused for
-    // the lifetime of the cached program via shared_variables_t. nullopt when the contiguous path does
-    // not apply (Linear, or Ring with scatter dim 0). See rs-contiguous-interm-design.
+    // the lifetime of the cached program via shared_variables_t. nullopt when the tiled layout is in
+    // use (Linear, Ring with scatter dim 0, or a caller-provided input-shaped intermediate). See
+    // rs-contiguous-interm-design.
+    const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config);
+    const bool use_contiguous_interm = ttnn::experimental::ccl::reduce_scatter_use_contiguous_interm(
+        tensor_args.input_tensor,
+        tensor_return_value.at(0),
+        operation_attributes.topology,
+        operation_attributes.dim,
+        operation_attributes.ring_size,
+        fp32_dest_acc_en);
     std::optional<Tensor> shortcut_tensor = tensor_args.optional_shortcut_tensor;
-    if (!shortcut_tensor.has_value()) {
-        const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config);
-        if (auto shortcut_spec = ttnn::experimental::ccl::reduce_scatter_ring_shortcut_staging_spec(
-                tensor_args.input_tensor,
-                operation_attributes.topology,
-                operation_attributes.dim,
-                operation_attributes.ring_size,
-                fp32_dest_acc_en)) {
-            shortcut_tensor = create_device_tensor(*shortcut_spec, tensor_args.input_tensor.device());
-        }
+    if (use_contiguous_interm && !shortcut_tensor.has_value()) {
+        auto shortcut_spec = ttnn::experimental::ccl::reduce_scatter_ring_shortcut_staging_spec(
+            tensor_args.input_tensor,
+            operation_attributes.topology,
+            operation_attributes.dim,
+            operation_attributes.ring_size,
+            fp32_dest_acc_en);
+        TT_FATAL(shortcut_spec.has_value(), "shortcut staging spec must apply whenever the contiguous path is used");
+        shortcut_tensor = create_device_tensor(*shortcut_spec, tensor_args.input_tensor.device());
     }
 
     for (const auto& coord : tensor_coords.coords()) {

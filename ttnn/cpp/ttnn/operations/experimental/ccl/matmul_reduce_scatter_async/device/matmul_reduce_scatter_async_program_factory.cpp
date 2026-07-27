@@ -30,18 +30,27 @@ MatmulReduceScatterAsyncProgramFactory::create_mesh_workload(
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_vars;
 
-    // Ring contiguous fast path only: the "shortcut" staging buffer used by the 2nd-last iteration
-    // (see rs-contiguous-interm-design). Allocated once per program build and reused for the lifetime
-    // of the cached program via shared_variables_t (folded into reduce_scatter_artifacts); nullopt
-    // when not applicable. compute_kernel_config matches the std::nullopt passed to the builder below.
+    // Contiguous staging layout only: the "shortcut" buffer used by the 2nd-last iteration (see
+    // rs-contiguous-interm-design). Allocated once per program build and reused for the lifetime of
+    // the cached program via shared_variables_t (folded into reduce_scatter_artifacts); nullopt when
+    // the tiled layout is in use. Which layout applies is read off the persistent intermediate the
+    // caller supplied. compute_kernel_config matches the std::nullopt passed to the builder below.
     std::optional<Tensor> shortcut_tensor;
-    if (auto shortcut_spec = ttnn::experimental::ccl::reduce_scatter_ring_shortcut_staging_spec(
+    if (ttnn::experimental::ccl::reduce_scatter_use_contiguous_interm(
             output_tensors.mm,
+            tensor_args.persistent_intermediate,
             args.reduce_scatter_params.topology,
             args.reduce_scatter_params.dim,
             args.reduce_scatter_params.ring_size,
             /*fp32_dest_acc_en=*/ttnn::get_fp32_dest_acc_en(std::nullopt))) {
-        shortcut_tensor = create_device_tensor(*shortcut_spec, output_tensors.mm.device());
+        shortcut_tensor = create_device_tensor(
+            *ttnn::experimental::ccl::reduce_scatter_ring_shortcut_staging_spec(
+                output_tensors.mm,
+                args.reduce_scatter_params.topology,
+                args.reduce_scatter_params.dim,
+                args.reduce_scatter_params.ring_size,
+                /*fp32_dest_acc_en=*/ttnn::get_fp32_dest_acc_en(std::nullopt)),
+            output_tensors.mm.device());
     }
 
     for (const auto& coord : tensor_coords.coords()) {

@@ -40,6 +40,7 @@ def run_reduce_scatter_impl(
     num_buffers_per_channel=None,
     verify_output=True,
     use_new=False,
+    contiguous_staging=None,
 ):
     use_sub_devices = False
     torch.manual_seed(0)
@@ -77,12 +78,21 @@ def run_reduce_scatter_impl(
     if rs_topology == ttnn.Topology.Linear:
         # Line RS requires double-sized input for forward/backward
         intermediate_shape.insert(0, 2)
-    # Ring / scatter-dim != 0 uses the contiguous fast path: the intermediate is a chunk-paged staging
+    # Ring / scatter-dim != 0 can use the contiguous fast path: the intermediate is a chunk-paged staging
     # buffer (not input-shaped) and the 2nd-last ring iteration stages one direction's contribution into
     # a second "shortcut" staging buffer instead of scatter-writing into the tiled output. Both must be
-    # allocated via the op's own sizing helper (input-shaped tensors fail validation on this path); other
-    # configs keep the legacy input-shaped intermediate and have no shortcut buffer.
-    use_contiguous_staging = rs_topology == ttnn.Topology.Ring and dim != 0
+    # allocated via the op's own sizing helper; other configs use an input-shaped tiled intermediate and
+    # have no shortcut buffer.
+    #
+    # The op picks the path from the intermediate it is handed, so on the ring path a caller may opt into
+    # the tiled layout by passing contiguous_staging=False. Everywhere else the tiled layout is the only
+    # option, and asking for the contiguous one is unsupported.
+    if contiguous_staging is None:
+        contiguous_staging = rs_topology == ttnn.Topology.Ring and dim != 0
+    use_contiguous_staging = contiguous_staging
+    assert not (
+        use_contiguous_staging and not (rs_topology == ttnn.Topology.Ring and dim != 0)
+    ), "contiguous staging requires Ring topology and scatter dim != 0"
 
     ##### All gather input setup #####
     logger.info(f"Reduce scatter shape: {rs_input_shape}")
@@ -1453,3 +1463,78 @@ def test_reduce_scatter_async_2x4_non_flat_mesh(mesh_device, input_shape):
     assert torch.allclose(
         torch_reference, torch_output, atol=1e-1, rtol=1e-2
     ), "Output mismatch between torch and ttnn reduce-scatter"
+
+
+# The ring path (scatter dim != 0) supports two intermediate staging layouts, and the op picks between
+# them from the intermediate it is handed: a chunk-paged contiguous staging buffer, or an input-shaped
+# tiled one. With no persistent intermediate the op allocates the contiguous buffer itself. The kernels
+# select the matching addressing scheme through the `contiguous_interm` compile-time arg, so both
+# layouts need coverage to stay correct.
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "rs_input_shape, dim, layout, rs_input_dtype",
+    [
+        ([1, 1, 128, 2048], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 512, 1024], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([2, 1, 256, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        ([1, 8, 128, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+    ],
+    ids=["dim3", "dim2", "batch2_dim3", "dim1"],
+)
+@pytest.mark.parametrize(
+    "use_persistent_buffers, contiguous_staging",
+    [
+        (False, None),
+        (True, True),
+        (True, False),
+    ],
+    ids=["no_persistent_interm", "persistent_contiguous_interm", "persistent_tiled_interm"],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_rs",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params, rs_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1540000}, ttnn.Topology.Ring),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_ring"],
+)
+def test_reduce_scatter_async_ring_intermediate_staging(
+    mesh_device,
+    num_links,
+    rs_input_shape,
+    dim,
+    layout,
+    rs_input_dtype,
+    use_persistent_buffers,
+    contiguous_staging,
+    mem_config_input,
+    mem_config_rs,
+    rs_topology,
+):
+    run_reduce_scatter_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        rs_input_shape,
+        dim,
+        num_links,
+        rs_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_rs,
+        rs_topology=rs_topology,
+        enable_trace=False,
+        num_iters=2,
+        use_persistent_buffers=use_persistent_buffers,
+        contiguous_staging=contiguous_staging,
+    )
