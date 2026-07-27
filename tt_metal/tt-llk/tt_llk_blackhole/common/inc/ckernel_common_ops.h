@@ -69,3 +69,35 @@
         0 /*RowSearch*/,                                                                                  \
         0 /*SearchCacheFlush*/,                                                                           \
         1 /*Last*/)
+
+#define TTI_UNPACR_COMMON_EXPLICIT_CONTEXT_AND_COUNTER(Unpack_block_selection, AddrMode, CfgContextId, AddrCntContextId, SetDatValid) \
+    TTI_UNPACR(                                                                                                                       \
+        Unpack_block_selection,                                                                                                       \
+        AddrMode,                                                                                                                     \
+        0 /*CfgContextCntInc*/,                                                                                                       \
+        CfgContextId,                                                                                                                 \
+        AddrCntContextId,                                                                                                             \
+        1 /*OvrdThreadId*/,                                                                                                           \
+        SetDatValid,                                                                                                                  \
+        0 /*srcb_bcast*/,                                                                                                             \
+        0 /*ZeroWrite2*/,                                                                                                             \
+        0 /*AutoIncContextID*/,                                                                                                       \
+        0 /*RowSearch*/,                                                                                                              \
+        0 /*SearchCacheFlush*/,                                                                                                       \
+        1 /*Last*/)
+
+#define TT_OP_UNPACR_COMMON_EXPLICIT_CONTEXT_AND_COUNTER(Unpack_block_selection, AddrMode, CfgContextId, AddrCntContextId, SetDatValid) \
+    TT_OP_UNPACR(                                                                                                                       \
+        Unpack_block_selection,                                                                                                         \
+        AddrMode,                                                                                                                       \
+        0 /*CfgContextCntInc*/,                                                                                                         \
+        CfgContextId,                                                                                                                   \
+        AddrCntContextId,                                                                                                               \
+        1 /*OvrdThreadId*/,                                                                                                             \
+        SetDatValid,                                                                                                                    \
+        0 /*srcb_bcast*/,                                                                                                               \
+        0 /*ZeroWrite2*/,                                                                                                               \
+        0 /*AutoIncContextID*/,                                                                                                         \
+        0 /*RowSearch*/,                                                                                                                \
+        0 /*SearchCacheFlush*/,                                                                                                         \
+        1 /*Last*/)
