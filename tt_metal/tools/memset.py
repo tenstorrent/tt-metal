@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-# TEMP: throwaway no-op to trigger merge-gate build for in-place wheel testing; remove before merge.
-
 import argparse
 from subprocess import Popen, PIPE
 import argparse
