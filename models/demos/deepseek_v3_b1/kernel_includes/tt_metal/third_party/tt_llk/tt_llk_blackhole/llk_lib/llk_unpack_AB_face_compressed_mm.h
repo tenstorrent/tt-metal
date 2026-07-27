@@ -199,7 +199,7 @@ inline void _llk_unpack_AB_face_compressed_mm_uninit_(const std::uint32_t unpA_n
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1111);  // reset CH0 XY counters for both unpackers to leave them in a clean state
 }
 
-template <std::uint32_t ct_dim = 1, bool clear_src = true, bool finalize = true>
+template <std::uint32_t ct_dim = 1, bool clear_src = true, bool finalize = true, bool data_follows_meta = false>
 inline void _llk_unpack_AB_face_compressed_mm_(
     const std::uint32_t base_address_b, const std::uint32_t base_address_meta, const std::uint32_t kt_dim) {
     volatile std::uint32_t* cfg = get_cfg_pointer();
@@ -214,14 +214,36 @@ inline void _llk_unpack_AB_face_compressed_mm_(
     const bool odd_block = (full_iters % 16) >= 8;
     const std::uint32_t* meta_ptr = pre_meta_ptr + 1 + 2 * (full_iters / 8) + 2;
 
+    // data_follows_meta: the caller guarantees the data section is packed immediately after the
+    // metadata section in one buffer, so chunk-metadata words hold their exp-section address as
+    // an OFFSET from the data section's start instead of an absolute L1 address. That base is
+    // derivable here with no extra argument -- base_address_meta anchors the blob and every
+    // subsection extent is already computed above, so the metadata's end is the data's start.
+    // The metadata must end on a 16B (Tensix word) boundary; the round-up is a no-op when the
+    // producer honours that and stops a silent sub-word shift when it does not.
+    //
+    // data_follows_meta == false (default) leaves the original contract untouched: base is 0, so
+    // chunk words are consumed as absolute addresses exactly as before, bit for bit.
+    std::uint32_t data_base16 = 0;
+    if constexpr (data_follows_meta) {
+        const std::uint32_t meta_end =
+            reinterpret_cast<std::uint32_t>(meta_ptr + full_iters + (rem_iters != 0 ? 1 : 0));
+        data_base16 = ((meta_end + 15) & ~15u) >> 4;
+    }
+
+    // Rebase a chunk word's 24-bit address field. Mask AFTER the add: the producer stores the
+    // field pre-biased by -(Y_OFF+1), so a section at offset 0 wraps negative and the 24-bit
+    // truncation is what cancels it. Y_OFF (high 8 bits) is read separately via >> 24.
+    auto chunk_base = [data_base16](std::uint32_t w) { return ((w & 0x00FFFFFF) + data_base16) & 0x00FFFFFF; };
+
     wait_for_next_context(1);
     reset_config_context();
 
     if constexpr (clear_src) {
         TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
     }
-    cfg[THCON_SEC0_REG3_Base_address_ADDR32] = pre_meta_ptr[1] & 0x00FFFFFF;
-    cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = pre_meta_ptr[2] & 0x00FFFFFF;
+    cfg[THCON_SEC0_REG3_Base_address_ADDR32] = chunk_base(pre_meta_ptr[1]);
+    cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = chunk_base(pre_meta_ptr[2]);
     TT_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, (0b10 << 16) | (pre_meta_ptr[1] >> 24));
     TT_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, (0b11 << 16) | (pre_meta_ptr[2] >> 24));
     cfg[THCON_SEC1_REG3_Base_address_ADDR32] = base_address_b;
@@ -271,8 +293,8 @@ inline void _llk_unpack_AB_face_compressed_mm_(
         for (std::uint32_t i = 0; i < 4; ++i, ++c) {
             emit_word(meta_ptr[c]);
         }
-        cfg[THCON_SEC0_REG3_Base_cntx2_address_ADDR32] = pre_meta_ptr[3 + 4 * b] & 0x00FFFFFF;
-        cfg[THCON_SEC0_REG3_Base_cntx3_address_ADDR32] = pre_meta_ptr[4 + 4 * b] & 0x00FFFFFF;
+        cfg[THCON_SEC0_REG3_Base_cntx2_address_ADDR32] = chunk_base(pre_meta_ptr[3 + 4 * b]);
+        cfg[THCON_SEC0_REG3_Base_cntx3_address_ADDR32] = chunk_base(pre_meta_ptr[4 + 4 * b]);
         for (std::uint32_t i = 0; i < 4; ++i, ++c) {
             emit_word(meta_ptr[c]);
         }
@@ -282,8 +304,8 @@ inline void _llk_unpack_AB_face_compressed_mm_(
         for (std::uint32_t i = 0; i < 4; ++i, ++c) {
             emit_word(meta_ptr[c]);
         }
-        cfg[THCON_SEC0_REG3_Base_address_ADDR32] = pre_meta_ptr[5 + 4 * b] & 0x00FFFFFF;
-        cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = pre_meta_ptr[6 + 4 * b] & 0x00FFFFFF;
+        cfg[THCON_SEC0_REG3_Base_address_ADDR32] = chunk_base(pre_meta_ptr[5 + 4 * b]);
+        cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = chunk_base(pre_meta_ptr[6 + 4 * b]);
         for (std::uint32_t i = 0; i < 4; ++i, ++c) {
             emit_word(meta_ptr[c]);
         }
@@ -296,8 +318,8 @@ inline void _llk_unpack_AB_face_compressed_mm_(
         for (std::uint32_t i = 0; i < 4; ++i, ++c) {
             emit_word(meta_ptr[c]);
         }
-        cfg[THCON_SEC0_REG3_Base_cntx2_address_ADDR32] = pre_meta_ptr[3 + 4 * full_blocks] & 0x00FFFFFF;
-        cfg[THCON_SEC0_REG3_Base_cntx3_address_ADDR32] = pre_meta_ptr[4 + 4 * full_blocks] & 0x00FFFFFF;
+        cfg[THCON_SEC0_REG3_Base_cntx2_address_ADDR32] = chunk_base(pre_meta_ptr[3 + 4 * full_blocks]);
+        cfg[THCON_SEC0_REG3_Base_cntx3_address_ADDR32] = chunk_base(pre_meta_ptr[4 + 4 * full_blocks]);
         for (std::uint32_t i = 0; i < 4; ++i, ++c) {
             emit_word(meta_ptr[c]);
         }

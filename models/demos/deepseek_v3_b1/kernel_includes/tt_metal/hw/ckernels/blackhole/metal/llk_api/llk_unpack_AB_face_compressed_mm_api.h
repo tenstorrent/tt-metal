@@ -37,7 +37,7 @@ inline void llk_unpack_AB_face_compressed_mm_init(const std::uint32_t operand0, 
     _llk_unpack_AB_face_compressed_mm_init_<transpose>(operandB_face_r_dim);
 }
 
-template <std::uint32_t ct_dim = 1, bool clear_src = true, bool finalize = true>
+template <std::uint32_t ct_dim = 1, bool clear_src = true, bool finalize = true, bool data_follows_meta = false>
 inline void llk_unpack_AB_face_compressed_mm(
     const std::uint32_t operand0,
     const std::uint32_t operand1,
@@ -48,7 +48,8 @@ inline void llk_unpack_AB_face_compressed_mm(
     const std::uint32_t operandB_id = get_operand_id(operand0);
     const std::uint32_t base_address_B = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
 
-    _llk_unpack_AB_face_compressed_mm_<ct_dim, clear_src, finalize>(base_address_B, base_address_meta, kt_dim);
+    _llk_unpack_AB_face_compressed_mm_<ct_dim, clear_src, finalize, data_follows_meta>(
+        base_address_B, base_address_meta, kt_dim);
 }
 
 inline void llk_unpack_AB_face_compressed_mm_uninit(const std::uint32_t operand0, const std::uint32_t operand1) {
