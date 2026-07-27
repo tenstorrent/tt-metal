@@ -499,9 +499,6 @@ all_gather_minimal_matmul_async_factory_helper(
             num_workers_per_link);
     }
     uint32_t num_mux_cores = num_links * 2;  // 2 being the number of directions
-    TT_FATAL(
-        (transpose_core_grid ? full_grid_size.y : full_grid_size.x) >= num_mux_cores,
-        "The are not enough cores for the number of mux cores requested");
 
     // In-column fsdp mux row for a given (group, dir): dir SWAPPED (flip) AND the result shifted up by
     // one cyclically within the 2*num_links packed rows. The flip swaps which direction owns the
@@ -534,15 +531,42 @@ all_gather_minimal_matmul_async_factory_helper(
         "Scheme-4 single-row mux interleave assumes num_workers_per_link==2 (got {})",
         num_workers_per_link);
     const uint32_t single_mux_row = full_grid_size.y - 1;
+
+    // A mux must sit at the far end of the in0 forwarding chains it serves, adjacent to that chain's
+    // two fabric-sender cores, and its index must run along the axis perpendicular to the chain:
+    //
+    //   transposed     -> in0 chains are vertical COLUMNS spanning y (initial_endpoint = top_core),
+    //                     so the far end is the bottom row and the link index runs along x.
+    //   non-transposed -> in0 chains are horizontal ROWS spanning x (initial_endpoint = left_core),
+    //                     so the far end is the right column and the link index runs along y.
+    //
+    // Keeping every mux on the bottom row in the non-transposed case would leave all but one row's
+    // senders up to full_grid_size.y - 1 hops from their mux and funnel all of those fabric writes
+    // onto a single row. The single-row interleave scheme below is x-indexed in both orientations
+    // by construction (it packs all muxes onto one row on purpose).
+    //
+    // Mirrors fsdp_mux_in_column above: the column layout is only available when the matmul grid
+    // leaves the last column free. On a full-width grid that column holds workers, so fall back to
+    // the bottom-row layout -- still correct, just farther from the senders.
+    const bool in0_mux_in_column = !single_row_muxes && !transpose_core_grid && (grid_size.x < full_grid_size.x);
+    const bool mux_index_on_x = !in0_mux_in_column;
+    TT_FATAL(
+        (mux_index_on_x ? full_grid_size.x : full_grid_size.y) >= num_mux_cores,
+        "There are not enough cores along the mux axis ({}) for the number of mux cores requested ({})",
+        mux_index_on_x ? full_grid_size.x : full_grid_size.y,
+        num_mux_cores);
+
     const auto in0_mux_logical = [&](uint32_t link, uint32_t dir) -> tt::tt_metal::CoreCoord {
         if (single_row_muxes) {
             return tt::tt_metal::CoreCoord(num_workers_per_link * link + 1, single_mux_row);  // odd col 2g+1 (NOC_0 +x-aligned)
         }
-        uint32_t x = (num_workers_per_link * (link + 1)) - (1 - dir);
-        if (x >= full_grid_size.x) {
-            x -= full_grid_size.x;
+        uint32_t idx = (num_workers_per_link * (link + 1)) - (1 - dir);
+        const uint32_t wrap = in0_mux_in_column ? full_grid_size.y : full_grid_size.x;
+        if (idx >= wrap) {
+            idx -= wrap;
         }
-        return tt::tt_metal::CoreCoord(x, full_grid_size.y - 1);
+        return in0_mux_in_column ? tt::tt_metal::CoreCoord(full_grid_size.x - 1, idx)
+                                 : tt::tt_metal::CoreCoord(idx, full_grid_size.y - 1);
     };
     const auto fsdp_mux_logical = [&](uint32_t link, uint32_t dir) -> tt::tt_metal::CoreCoord {
         if (single_row_muxes) {
@@ -1220,6 +1244,20 @@ all_gather_minimal_matmul_async_factory_helper(
         auto in1_prev_core = clamped_prev(in1_core_order, in1_core_order_index);
         auto in1_next_core = clamped_next(in1_core_order, in1_core_order_index);
 
+        // Fabric senders sit beside the mux at the in0 chain's far (high-coordinate) end. The chain
+        // direction follows in0_noc: increasing on NOC_0 (transposed), decreasing on NOC_1
+        // (non-transposed). With an increasing chain the far end is the tail, so the senders are at
+        // size-1 / size-2. With a decreasing chain build_core_order_for_axis emits
+        // [endpoint, L-1, L-2, ...], so the far end is reached immediately and the senders are at
+        // indices 1 / 2. Derive both from the same predicate that sets the direction so host
+        // dispatch, mux wiring and the kernel's own role test all agree on the same two cores.
+        const bool in0_increasing = (in0_noc == tt::tt_metal::NOC::NOC_0);
+        const uint32_t in0_fwd_idx = in0_increasing ? static_cast<uint32_t>(in0_core_order.size() - 1) : 1u;
+        const uint32_t in0_bwd_idx = in0_increasing ? static_cast<uint32_t>(in0_core_order.size() - 2) : 2u;
+        const bool in0_is_fabric_core = (in0_core_order_index == in0_fwd_idx) || (in0_core_order_index == in0_bwd_idx);
+        const auto in0_fwd_core = in0_core_order.at(in0_fwd_idx);
+        const auto in0_bwd_core = in0_core_order.at(in0_bwd_idx);
+
         auto in0_prev_core_physical = device->worker_core_from_logical_core(in0_prev_core);
         auto in0_next_core_physical = device->worker_core_from_logical_core(in0_next_core);
         auto in1_prev_core_physical = device->worker_core_from_logical_core(in1_prev_core);
@@ -1265,10 +1303,11 @@ all_gather_minimal_matmul_async_factory_helper(
             in0_injector_virtual_core.x,
             in0_injector_virtual_core.y,
             in0_core_order_index,
-            in0_core_order.size()};
-        if (in0_core_order_index > (in0_core_order.size() - 3)) {
+            in0_core_order.size(),
+            in0_fwd_idx,
+            in0_bwd_idx};
+        if (in0_is_fabric_core) {
             uint32_t worker_idx = in0_idx % num_workers_per_link;
-            auto last_in0_core = in0_core_order.back();
 
             // Actual client count on this core's mux: the senders share a mux per group of
             // num_workers_per_link along the in0 sender axis. The last group is short when the
@@ -1281,13 +1320,16 @@ all_gather_minimal_matmul_async_factory_helper(
             // direction it actually sends in. (Previously both directions were registered, with
             // the unused one returning nullptr from build_and_connect — wasting 5 semaphores per
             // core for nothing.)
-            // Core at size-2 → backward fabric sender → backward mux only.
-            // Core at size-1 → forward  fabric sender → forward  mux only.
-            const bool is_in0_backward_sender = (in0_core_order_index == (in0_core_order.size() - 2));
+            // Core at in0_bwd_idx → backward fabric sender → backward mux only.
+            // Core at in0_fwd_idx → forward  fabric sender → forward  mux only.
+            // The termination master is worker 0 of this core's link group, on the same chain-axis
+            // coordinate as the sender itself -- derive it from the actual sender core rather than
+            // from the chain tail, which is only the far end when the chain runs increasing.
+            const bool is_in0_backward_sender = (in0_core_order_index == in0_bwd_idx);
             if (is_in0_backward_sender) {
                 auto termination_master_logical_core_backward =
-                    transpose_core_grid ? tt::tt_metal::CoreCoord(in0_idx - worker_idx, last_in0_core.y - 1)
-                                        : tt::tt_metal::CoreCoord(last_in0_core.x - 1, in0_idx - worker_idx);
+                    transpose_core_grid ? tt::tt_metal::CoreCoord(in0_idx - worker_idx, in0_bwd_core.y)
+                                        : tt::tt_metal::CoreCoord(in0_bwd_core.x, in0_idx - worker_idx);
                 tt::tt_metal::CoreCoord termination_master_virtual_core_backward =
                     device->worker_core_from_logical_core(termination_master_logical_core_backward);
 
@@ -1307,10 +1349,10 @@ all_gather_minimal_matmul_async_factory_helper(
                     in0_term_sync_id,
                     in0_args);
             } else {
-                // Forward fabric sender (in0_core_order_index == size - 1).
-                auto termination_master_logical_core_forward = transpose_core_grid
-                                                                   ? tt::tt_metal::CoreCoord(in0_idx - worker_idx, last_in0_core.y)
-                                                                   : tt::tt_metal::CoreCoord(last_in0_core.x, in0_idx - worker_idx);
+                // Forward fabric sender (in0_core_order_index == in0_fwd_idx).
+                auto termination_master_logical_core_forward =
+                    transpose_core_grid ? tt::tt_metal::CoreCoord(in0_idx - worker_idx, in0_fwd_core.y)
+                                        : tt::tt_metal::CoreCoord(in0_fwd_core.x, in0_idx - worker_idx);
                 tt::tt_metal::CoreCoord termination_master_virtual_core_forward =
                     device->worker_core_from_logical_core(termination_master_logical_core_forward);
 
@@ -1334,7 +1376,7 @@ all_gather_minimal_matmul_async_factory_helper(
         if (in0_core_order_index == 0) {
             // in0 sender
             SetRuntimeArgs(program, in0_sender_kernels_id, core, in0_args);
-        } else if (in0_core_order_index > (in0_core_order.size() - 3)) {
+        } else if (in0_is_fabric_core) {
             // in0 receiver fabric
             SetRuntimeArgs(program, in0_receiver_fabric_kernels_id, core, in0_args);
         } else {
