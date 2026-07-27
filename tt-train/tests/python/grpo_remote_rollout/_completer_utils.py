@@ -13,7 +13,15 @@ from pathlib import Path
 from typing import Any
 
 import torch
+import ttml
+import ttnn
 from transformers import AutoTokenizer
+from ttml.common.config import DeviceConfig, load_config
+from utils.llama_ttt_presets import (
+    bf16_attn_bfp8_mlp_optimizations,
+    llama_stop_and_pad,
+)
+from utils.ttt_generation_worker import TttGenerationWorker
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1b_1dev.yaml"
@@ -28,8 +36,6 @@ REPO_ROOT = Path(__file__).resolve().parents[5]  # .../tt-metal
 
 def load_device_config(device_config_rel: str = TTML_DEVICE_CONFIG_REL):
     """Parse the ttml training yaml; return ``(DeviceConfig, raw_dict)``."""
-    from ttml.common.config import DeviceConfig, load_config
-
     raw = load_config(os.path.join(REPO_ROOT, device_config_rel))
     return DeviceConfig(raw), raw
 
@@ -37,8 +43,6 @@ def load_device_config(device_config_rel: str = TTML_DEVICE_CONFIG_REL):
 def open_device(device_config) -> Any:
     """Open the ttml ``AutoContext`` mesh (enabling fabric when multi-device);
     return the ``ttnn.MeshDevice``. Pair with :func:`close_device`."""
-    import ttml
-
     if device_config.total_devices() > 1:
         ttml.core.distributed.enable_fabric(device_config.total_devices())
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
@@ -48,8 +52,6 @@ def open_device(device_config) -> Any:
 
 def close_device() -> None:
     """Close the ``AutoContext`` device opened by :func:`open_device`."""
-    import ttml
-
     ttml.autograd.AutoContext.get_instance().close_device()
 
 
@@ -92,12 +94,6 @@ def build_completer(
     Heavy when ``dummy_weights=False`` (loads real HF weights); call from a
     module-scoped fixture so the cost is paid once per file.
     """
-    from utils.llama_ttt_presets import (
-        bf16_attn_bfp8_mlp_optimizations,
-        llama_stop_and_pad,
-    )
-    from utils.ttt_generation_worker import TttGenerationWorker
-
     if dummy_weights:
         # Skip the gated HF tokenizer; stop/pad IDs are immaterial here.
         stop_token_ids: Any = ()
@@ -137,8 +133,6 @@ def open_completer(
     Cleanup order matters: drop the completer (freeing its on-device tensors),
     GC, then close the mesh.
     """
-    import ttnn
-
     device_config, _ = load_device_config()
     # HARDWARE-SPECIFIC: open via ttnn (not ttml AutoContext) with ETH dispatch
     # so tt-transformers keeps the full 8x8 tensix grid (WORKER dispatch leaves
@@ -170,8 +164,6 @@ def as_update_input(t, mesh_device):
     4D ``bfloat16`` ``ttnn.Tensor``, mesh-replicated, DRAM-interleaved,
     ``TILE_LAYOUT``. Casts non-bf16 and makes non-contiguous inputs contiguous.
     """
-    import ttnn
-
     if t.dtype != torch.bfloat16:
         t = t.to(torch.bfloat16)
     while t.dim() < 4:
@@ -189,8 +181,6 @@ def as_update_input(t, mesh_device):
 def to_torch_2d(t):
     """``ttnn.to_torch`` + strip leading unit dims to the natural ``(rows,
     cols)`` shape (TTT buffers are stored 4D as ``(1, 1, rows, cols)``)."""
-    import ttnn
-
     out = ttnn.to_torch(t)
     while out.dim() > 2 and out.shape[0] == 1:
         out = out.squeeze(0)
