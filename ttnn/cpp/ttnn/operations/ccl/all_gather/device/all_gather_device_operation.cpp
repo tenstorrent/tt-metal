@@ -68,7 +68,8 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
         auto output_shape = output_tensor.padded_shape();
         auto input_shape = input_tensor.padded_shape();
         auto expected_output_shape = input_shape;
-        expected_output_shape[args.dim] *= args.num_devices;
+        const int32_t rank_diff = static_cast<int32_t>(input_shape.rank()) - rank;
+        expected_output_shape[args.dim + rank_diff] *= args.num_devices;
         TT_FATAL(
             output_shape.size() == input_shape.size(),
             "Output tensor shape should have same number of dimensions as input tensor but has {}",

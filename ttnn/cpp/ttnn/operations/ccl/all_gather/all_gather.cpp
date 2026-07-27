@@ -64,10 +64,13 @@ std::pair<bool, std::string> use_composite_all_gather(
         }
     }
 
-    // Tiled, padded on the gather dim.
-    if (input_tensor.layout() == ttnn::Layout::TILE &&
-        input_tensor.logical_shape()[gather_dim] != input_tensor.padded_shape()[gather_dim]) {
-        return {true, "input tensor has tile padding on the gather dim"};
+    // Logical_shape and padded_shape do not always have the same rank when rank < 2
+    if (input_tensor.layout() == ttnn::Layout::TILE) {
+        const auto& padded_shape = input_tensor.padded_shape();
+        const int32_t rank_diff = static_cast<int32_t>(padded_shape.rank()) - rank;
+        if (input_tensor.logical_shape()[gather_dim] != padded_shape[gather_dim + rank_diff]) {
+            return {true, "input tensor has tile padding on the gather dim"};
+        }
     }
 
     // Output memory_config forces an unrelated re-shard: happens when output shard width isn't
@@ -103,6 +106,10 @@ ttnn::Tensor all_gather(
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     bool use_l1_small_for_semaphores) {
+    // Validate the gather dim before anything indexes the shape with it
+    const int32_t input_rank = static_cast<int32_t>(input_tensor.logical_shape().rank());
+    TT_FATAL(dim >= -input_rank && dim < input_rank, "Invalid gather dim {} for {}D input tensor", dim, input_rank);
+
     // Throw deprecation notice
     if (num_links.has_value() || topology.has_value() || chunks_per_sync.has_value() ||
         num_workers_per_link.has_value() || num_buffers_per_channel.has_value() || use_l1_small_for_semaphores) {
