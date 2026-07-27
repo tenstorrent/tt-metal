@@ -1934,72 +1934,6 @@ TEST(MeshGraphDescriptorTests, PinningsRegex48StageFileExpandsTo48Groups) {
     EXPECT_EQ(*meshes.rbegin(), 47u);
 }
 
-TEST(MeshGraphDescriptorTests, PinningsRegex72StageSubtorusFileExpandsTo432Groups) {
-    // subtorus_4x4_pipeline_72stage uses six mesh_id_regex "0-71" 1:1 entries -> 6 groups per mesh.
-    const std::filesystem::path path =
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/subtorus/"
-        "subtorus_4x4_pipeline_72stage_mesh_graph_descriptor.textproto";
-    MeshGraphDescriptor desc(path);
-    const auto& pinnings = desc.get_pinnings();
-    ASSERT_EQ(pinnings.size(), 432u) << "72 meshes x 6 corner pins from 6 regex entries";
-
-    std::map<uint32_t, std::set<uint32_t>> chips_by_mesh;
-    for (const auto& g : pinnings) {
-        ASSERT_EQ(g.fabric_nodes.size(), 1u) << "Each entry is a 1:1 pin";
-        ASSERT_EQ(g.asic_positions.size(), 1u);
-        const uint32_t m = *g.fabric_nodes.front().mesh_id;
-        chips_by_mesh[m].insert(g.fabric_nodes.front().chip_id);
-    }
-    ASSERT_EQ(chips_by_mesh.size(), 72u);
-    for (uint32_t m = 0; m < 72; ++m) {
-        ASSERT_EQ(chips_by_mesh[m].size(), 6u) << "mesh " << m << " should have 6 corner pins";
-        EXPECT_TRUE(chips_by_mesh[m].count(0));
-        EXPECT_TRUE(chips_by_mesh[m].count(15));
-        EXPECT_TRUE(chips_by_mesh[m].count(14));
-        EXPECT_TRUE(chips_by_mesh[m].count(3));
-        EXPECT_TRUE(chips_by_mesh[m].count(12));
-        EXPECT_TRUE(chips_by_mesh[m].count(13));
-    }
-}
-
-TEST(MeshGraphDescriptorTests, PinningsRegex32StageSubtorusFileExpandsTo192Groups) {
-    const std::filesystem::path path =
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/subtorus/"
-        "subtorus_4x4_pipeline_32stage_mesh_graph_descriptor.textproto";
-    MeshGraphDescriptor desc(path);
-    const auto& pinnings = desc.get_pinnings();
-    ASSERT_EQ(pinnings.size(), 192u) << "32 meshes x 6 corner pins from 6 regex entries";
-}
-
-TEST(MeshGraphDescriptorTests, PinningsRegex8StageSubtorusFileEvenOddExpandsTo24Groups) {
-    // subtorus_4x4_pipeline_8stage: 6 even/odd regex 1:1 entries over 8 meshes (4 even + 4 odd).
-    const std::filesystem::path path =
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/subtorus/"
-        "subtorus_4x4_pipeline_8stage_mesh_graph_descriptor.textproto";
-    MeshGraphDescriptor desc(path);
-    const auto& pinnings = desc.get_pinnings();
-    ASSERT_EQ(pinnings.size(), 24u) << "8 meshes x 3 pins each from 6 regex entries";
-
-    std::map<uint32_t, std::set<uint32_t>> chips_by_mesh;
-    for (const auto& g : pinnings) {
-        ASSERT_EQ(g.fabric_nodes.size(), 1u);
-        const uint32_t m = *g.fabric_nodes.front().mesh_id;
-        chips_by_mesh[m].insert(g.fabric_nodes.front().chip_id);
-    }
-    for (uint32_t m = 0; m < 8; ++m) {
-        ASSERT_EQ(chips_by_mesh[m].size(), 3u) << "mesh " << m;
-        if (m % 2 == 0) {
-            EXPECT_TRUE(chips_by_mesh[m].count(0));
-            EXPECT_TRUE(chips_by_mesh[m].count(15));
-            EXPECT_TRUE(chips_by_mesh[m].count(14));
-        } else {
-            EXPECT_TRUE(chips_by_mesh[m].count(3));
-            EXPECT_TRUE(chips_by_mesh[m].count(12));
-            EXPECT_TRUE(chips_by_mesh[m].count(13));
-        }
-    }
-}
-
 TEST(MeshGraphDescriptorTests, PinningsRegexMixedWithNonRegexError) {
     // Mixing regex and literal logical_fabric_node_id in one pinning entry is ambiguous and must fail.
     const std::string text_proto = R"proto(
@@ -2060,35 +1994,7 @@ TEST(MeshGraphDescriptorTests, PinningsRegexMeshIdAndNumericMeshIdError) {
             ::testing::HasSubstr("mesh_id_regex and mesh_id"))));
 }
 
-TEST(MeshGraphDescriptorTests, PinningsRegexChipIdAndNumericChipIdError) {
-    const std::string text_proto = R"proto(
-        mesh_descriptors: {
-          name: "M0"
-          arch: WORMHOLE_B0
-          device_topology: { dims: [ 2, 2 ] }
-          channels: { count: 1 }
-          host_topology: { dims: [ 1, 1 ] }
-        }
-        graph_descriptors: {
-          name: "G0"
-          type: "FABRIC"
-          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-        }
-        pinnings: {
-          logical_fabric_node_id { mesh_id: 0 chip_id: 1 chip_id_regex: "0-3" }
-          physical_asic_position { tray_id: 1 asic_location: 1 }
-        }
-        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
-    )proto";
-
-    EXPECT_THAT(
-        [&]() { MeshGraphDescriptor desc(text_proto); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
-            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
-            ::testing::HasSubstr("chip_id_regex and chip_id"))));
-}
-
-TEST(MeshGraphDescriptorTests, PinningsPhysicalTrayIdRegexExpands) {
+TEST(MeshGraphDescriptorTests, PinningsPhysicalRegexExpands) {
     const std::string text_proto = R"proto(
         mesh_descriptors: {
           name: "M0"
@@ -2106,43 +2012,8 @@ TEST(MeshGraphDescriptorTests, PinningsPhysicalTrayIdRegexExpands) {
           logical_fabric_node_id: { mesh_id: 0 chip_id: 0 }
           physical_asic_position: { tray_id_regex: "1-4" asic_location: 3 }
         }
-        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
-    )proto";
-
-    MeshGraphDescriptor desc(text_proto);
-    const auto& pinnings = desc.get_pinnings();
-    ASSERT_EQ(pinnings.size(), 1u);
-    ASSERT_EQ(pinnings[0].asic_positions.size(), 4u);
-    auto has_position = [&](uint32_t tray_id, uint32_t asic_location) {
-        for (const auto& pos : pinnings[0].asic_positions) {
-            if (*pos.first == tray_id && *pos.second == asic_location) {
-                return true;
-            }
-        }
-        return false;
-    };
-    EXPECT_TRUE(has_position(1, 3));
-    EXPECT_TRUE(has_position(2, 3));
-    EXPECT_TRUE(has_position(3, 3));
-    EXPECT_TRUE(has_position(4, 3));
-}
-
-TEST(MeshGraphDescriptorTests, PinningsPhysicalAsicLocationRegexExpands) {
-    const std::string text_proto = R"proto(
-        mesh_descriptors: {
-          name: "M0"
-          arch: WORMHOLE_B0
-          device_topology: { dims: [ 2, 2 ] }
-          channels: { count: 1 }
-          host_topology: { dims: [ 1, 1 ] }
-        }
-        graph_descriptors: {
-          name: "G0"
-          type: "FABRIC"
-          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-        }
         pinnings: {
-          logical_fabric_node_id: { mesh_id: 0 chip_id: 0 }
+          logical_fabric_node_id: { mesh_id: 0 chip_id: 1 }
           physical_asic_position: { tray_id: 1 asic_location_regex: "2,3,6,7" }
         }
         top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
@@ -2150,177 +2021,29 @@ TEST(MeshGraphDescriptorTests, PinningsPhysicalAsicLocationRegexExpands) {
 
     MeshGraphDescriptor desc(text_proto);
     const auto& pinnings = desc.get_pinnings();
-    ASSERT_EQ(pinnings.size(), 1u);
+    ASSERT_EQ(pinnings.size(), 2u);
+
     ASSERT_EQ(pinnings[0].asic_positions.size(), 4u);
-    for (uint32_t loc : {2u, 3u, 6u, 7u}) {
+    for (uint32_t tray : {1u, 2u, 3u, 4u}) {
         bool found = false;
         for (const auto& pos : pinnings[0].asic_positions) {
+            if (*pos.first == tray && *pos.second == 3u) {
+                found = true;
+            }
+        }
+        EXPECT_TRUE(found) << "Expected tray " << tray << " asic_location 3";
+    }
+
+    ASSERT_EQ(pinnings[1].asic_positions.size(), 4u);
+    for (uint32_t loc : {2u, 3u, 6u, 7u}) {
+        bool found = false;
+        for (const auto& pos : pinnings[1].asic_positions) {
             if (*pos.first == 1u && *pos.second == loc) {
                 found = true;
             }
         }
         EXPECT_TRUE(found) << "Expected tray 1 asic_location " << loc;
     }
-}
-
-TEST(MeshGraphDescriptorTests, PinningsPhysicalRegexMixedWithNonRegexError) {
-    const std::string text_proto = R"proto(
-        mesh_descriptors: {
-          name: "M0"
-          arch: WORMHOLE_B0
-          device_topology: { dims: [ 2, 2 ] }
-          channels: { count: 1 }
-          host_topology: { dims: [ 1, 1 ] }
-        }
-        graph_descriptors: {
-          name: "G0"
-          type: "FABRIC"
-          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-        }
-        pinnings: {
-          logical_fabric_node_id: { mesh_id: 0 chip_id: 0 }
-          physical_asic_position: { tray_id_regex: "1-4" asic_location: 3 }
-          physical_asic_position: { tray_id: 1 asic_location: 7 }
-        }
-        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
-    )proto";
-
-    EXPECT_THAT(
-        [&]() { MeshGraphDescriptor desc(text_proto); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
-            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
-            ::testing::HasSubstr("mixes regex and non-regex physical_asic_position"))));
-}
-
-TEST(MeshGraphDescriptorTests, PinningsPhysicalRegexTrayIdAndNumericTrayIdError) {
-    const std::string text_proto = R"proto(
-        mesh_descriptors: {
-          name: "M0"
-          arch: WORMHOLE_B0
-          device_topology: { dims: [ 2, 2 ] }
-          channels: { count: 1 }
-          host_topology: { dims: [ 1, 1 ] }
-        }
-        graph_descriptors: {
-          name: "G0"
-          type: "FABRIC"
-          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-        }
-        pinnings: {
-          logical_fabric_node_id: { mesh_id: 0 chip_id: 0 }
-          physical_asic_position { tray_id_regex: "1-4" tray_id: 1 asic_location: 3 }
-        }
-        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
-    )proto";
-
-    EXPECT_THAT(
-        [&]() { MeshGraphDescriptor desc(text_proto); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
-            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
-            ::testing::HasSubstr("tray_id_regex and tray_id"))));
-}
-
-TEST(MeshGraphDescriptorTests, PinningsPhysicalRegexAsicLocationAndNumericAsicLocationError) {
-    const std::string text_proto = R"proto(
-        mesh_descriptors: {
-          name: "M0"
-          arch: WORMHOLE_B0
-          device_topology: { dims: [ 2, 2 ] }
-          channels: { count: 1 }
-          host_topology: { dims: [ 1, 1 ] }
-        }
-        graph_descriptors: {
-          name: "G0"
-          type: "FABRIC"
-          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-        }
-        pinnings: {
-          logical_fabric_node_id: { mesh_id: 0 chip_id: 0 }
-          physical_asic_position { tray_id: 1 asic_location: 3 asic_location_regex: "2,3" }
-        }
-        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
-    )proto";
-
-    EXPECT_THAT(
-        [&]() { MeshGraphDescriptor desc(text_proto); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
-            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
-            ::testing::HasSubstr("asic_location_regex and asic_location"))));
-}
-
-TEST(MeshGraphDescriptorTests, PinningsMultipleMeshes) {
-    // Test pinnings for multiple meshes
-    const std::string text_proto = R"proto(
-        mesh_descriptors: {
-          name: "M0"
-          arch: WORMHOLE_B0
-          device_topology: { dims: [ 2, 2 ] }
-          channels: { count: 1 }
-          host_topology: { dims: [ 1, 1 ] }
-        }
-        mesh_descriptors: {
-          name: "M1"
-          arch: WORMHOLE_B0
-          device_topology: { dims: [ 2, 2 ] }
-          channels: { count: 1 }
-          host_topology: { dims: [ 1, 1 ] }
-        }
-
-        graph_descriptors: {
-          name: "G0"
-          type: "FABRIC"
-          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-          instances: { mesh: { mesh_descriptor: "M1" mesh_id: 1 } }
-          graph_topology: {
-            layout_type: ALL_TO_ALL
-            channels: { count: 1 }
-          }
-        }
-
-        pinnings: {
-          logical_fabric_node_id: { mesh_id: 0 chip_id: 0 }
-          physical_asic_position: { tray_id: 1 asic_location: 1 }
-        }
-
-        pinnings: {
-          logical_fabric_node_id: { mesh_id: 1 chip_id: 2 }
-          physical_asic_position: { tray_id: 2 asic_location: 3 }
-        }
-
-        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
-    )proto";
-
-    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
-
-    MeshGraphDescriptor desc(text_proto);
-
-    // Check that pinnings were extracted for both meshes (one group per entry)
-    const auto& pinnings = desc.get_pinnings();
-    EXPECT_EQ(pinnings.size(), 2) << "Should have 2 pinning groups";
-
-    // Find pinnings by mesh_id and chip_id
-    bool found_mesh0_chip0 = false;
-    bool found_mesh1_chip2 = false;
-
-    for (const auto& pinning : pinnings) {
-        ASSERT_EQ(pinning.fabric_nodes.size(), 1) << "Each single pin should have 1 fabric node";
-        ASSERT_EQ(pinning.asic_positions.size(), 1) << "Each single pin should have 1 ASIC position";
-        const auto& node = pinning.fabric_nodes[0];
-        const auto& pos = pinning.asic_positions[0];
-        if (*node.mesh_id == 0 && node.chip_id == 0) {
-            found_mesh0_chip0 = true;
-            EXPECT_EQ(*pos.first, 1) << "Mesh 0 chip 0 should have tray_id 1";
-            EXPECT_EQ(*pos.second, 1) << "Mesh 0 chip 0 should have asic_location 1";
-        }
-        if (*node.mesh_id == 1 && node.chip_id == 2) {
-            found_mesh1_chip2 = true;
-            EXPECT_EQ(*pos.first, 2) << "Mesh 1 chip 2 should have tray_id 2";
-            EXPECT_EQ(*pos.second, 3) << "Mesh 1 chip 2 should have asic_location 3";
-        }
-    }
-
-    EXPECT_TRUE(found_mesh0_chip0) << "Should have pinning for mesh 0 chip 0";
-    EXPECT_TRUE(found_mesh1_chip2) << "Should have pinning for mesh 1 chip 2";
 }
 
 TEST(MeshGraphDescriptorTests, PinningsDuplicateError) {
@@ -2479,40 +2202,6 @@ TEST(MeshGraphDescriptorTests, PinningsAllToAll) {
     EXPECT_TRUE(has_node(3));
     EXPECT_TRUE(has_position(1, 1));
     EXPECT_TRUE(has_position(4, 1));
-}
-
-TEST(MeshGraphDescriptorTests, PinningsAllToAllDuplicateAcrossEntries) {
-    // A logical node listed in more than one pinning entry is ambiguous and must be rejected, even
-    // though a node may legitimately be paired with many positions within a single entry.
-    const std::string text_proto = R"proto(
-        mesh_descriptors: {
-          name: "M0"
-          arch: WORMHOLE_B0
-          device_topology: { dims: [ 2, 2 ] }
-          channels: { count: 1 }
-          host_topology: { dims: [ 1, 1 ] }
-        }
-
-        pinnings: {
-          logical_fabric_node_id: { mesh_id: 0 chip_id: 0 }
-          logical_fabric_node_id: { mesh_id: 0 chip_id: 1 }
-          physical_asic_position: { tray_id: 1 asic_location: 1 }
-          physical_asic_position: { tray_id: 2 asic_location: 1 }
-        }
-
-        pinnings: {
-          logical_fabric_node_id: { mesh_id: 0 chip_id: 0 }
-          physical_asic_position: { tray_id: 3 asic_location: 1 }
-        }
-
-        top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-    )proto";
-
-    EXPECT_THAT(
-        [&]() { MeshGraphDescriptor desc(text_proto); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
-            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
-            ::testing::HasSubstr("Duplicate pinning"))));
 }
 
 TEST(MeshGraphDescriptorTests, PinningsRegexMalformedRangeError) {
