@@ -825,10 +825,10 @@ def indexer_mm_flops(valid_tiles, heads):
     return valid_tiles * heads * (32 * 32) * (2 * GLX_DIM)
 
 
-# Perf run helpers at the deployed LoFi dtypes (bfp8 q + bfp8 k). Each builds its inputs and dispatches the
-# op once, returning the output -- the same shape as the SDPA sprint's run_sdpa closure. test_indexer_score_
-# math_util profiles one call with the real-time device profiler (one dispatch -> one record). No accuracy
-# check -- these exist solely to be profiled.
+# Perf run helpers at the deployed dtypes. DSA uses bfp8 q + bfp8 k (LoFi), while MiniMax-M3 uses bf16 q +
+# bfp8 k (HiFi2). Each builds its inputs and dispatches the op once, returning the output -- the same shape as
+# the SDPA sprint's run_sdpa closure. test_indexer_score_math_util profiles one call with the real-time device
+# profiler (one dispatch -> one record). No accuracy check -- these exist solely to be profiled.
 
 
 def run_indexer_sp7(device, heads):
@@ -1239,10 +1239,10 @@ def m3_valid_tiles():
 
 
 def run_indexer_m3(device):
-    """One SP=8 x TP=4 M3 device (1 group, 640 q, 55296 kv, raw dot, scale=1/sqrt(d), bfp8 q and k).
+    """One SP=8 x TP=4 M3 device (1 group, 640 q, 55296 kv, raw dot, scale=1/sqrt(d), bf16 q + bfp8 k).
     Dispatches indexer_score_msa once and returns the output. No accuracy check."""
     q, k, _ = make_inputs(1, M3_DIM, M3_SQ, M3_T)
-    q_dev = to_device(q, device, dtype=ttnn.bfloat8_b)
+    q_dev = to_device(q, device, dtype=ttnn.bfloat16)
     k_dev = to_device(k, device, dtype=ttnn.bfloat8_b)
     # Deployed config: block_size=128 fuses the per-128-key block max (the writer emits the tiny block-score
     # tensor, not the full ~70 MB score that made the unfused path memory-bound). QC=2 + grid-aligned q/K
@@ -1260,10 +1260,10 @@ def run_indexer_m3(device):
 
 
 # ---------------------------------------------------------------------------
-# The math-utilization band checks (CI runs these on the IOMMU-enabled BH sku), all at the deployed LoFi dtypes
-# (bfp8 q + bfp8 k): the deployed TP=4/SP=8 shapes GLM5, DSv32 and MiniMax-M3 at sp_rank 7, plus the resharded
-# TP=1/SP=32 grid-fill shapes glm5_tp1 and dsv32_tp1 (block-split, fullest causal). Each profiles one dispatch
-# of its op with the real-time device profiler, reads the device kernel duration, computes
+# The math-utilization band checks (CI runs these on the IOMMU-enabled BH sku): deployed TP=4/SP=8 shapes
+# GLM5 and DSv32 at LoFi, MiniMax-M3 at HiFi2, plus the resharded TP=1/SP=32 grid-fill shapes glm5_tp1 and
+# dsv32_tp1 at LoFi (block-split, fullest causal). Each profiles one dispatch of its op with the real-time
+# device profiler, reads the device kernel duration, computes
 # math_util = matmul FLOPs / (cores x device cycles x matmul peak), and asserts it within +/-
 # INDEXER_PERF_MARGIN of the value measured on a Blackhole dev board. mm_flops is a thunk so the shape-derived
 # FLOP count is evaluated at run time; run_fn takes the device, runs the op, and returns its output.
@@ -1271,24 +1271,27 @@ def run_indexer_m3(device):
 # lower expected util than the multi-head DSA cases.)
 # ---------------------------------------------------------------------------
 _MATH_UTIL_CASES = [
-    # (case_id, run_fn(device) -> op output, mm_flops_thunk, expected_util) -- LoFi (bfp8 q and k)
+    # (case_id, run_fn(device) -> op output, mm_flops_thunk, expected_util, math_fidelity)
     (
         "glm5",
         lambda device: run_indexer_sp7(device, 8),
         lambda: indexer_mm_flops(sp7_valid_tiles(), 8),
         36.48,
+        "LoFi",
     ),
     (
         "dsv32",
         lambda device: run_indexer_sp7(device, 16),
         lambda: indexer_mm_flops(sp7_valid_tiles(), 16),
         64.11,
+        "LoFi",
     ),
     (
         "minimax_m3",
         run_indexer_m3,
         lambda: m3_valid_tiles() * (32 * 32) * (2 * M3_DIM),
-        21.62,
+        42.9,
+        "HiFi2",
     ),
     # Block-split grid fill: GLM5/DSv32 resharded TP=1/SP=32 -- a short 160-query chunk (QC=1, 5 q-groups) the
     # scheduler spreads across num_blocks=2 row-blocks (110 cores); without the fill these would use only 55
@@ -1300,27 +1303,29 @@ _MATH_UTIL_CASES = [
         lambda device: run_indexer_short(device, 64),
         lambda: indexer_mm_flops(short_valid_tiles(), 64),
         70.72,
+        "LoFi",
     ),
     (
         "glm5_tp1",
         lambda device: run_indexer_short(device, 32),
         lambda: indexer_mm_flops(short_valid_tiles(), 32),
         64.98,
+        "LoFi",
     ),
 ]
 
 
 @pytest.mark.parametrize(
-    "case_id, run_fn, mm_flops_thunk, expected_util",
+    "case_id, run_fn, mm_flops_thunk, expected_util, math_fidelity",
     _MATH_UTIL_CASES,
     ids=[c[0] for c in _MATH_UTIL_CASES],
 )
 @pytest.mark.requires_host_iommu
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
-def test_indexer_score_math_util(device, case_id, run_fn, mm_flops_thunk, expected_util):
-    """Per-deployment LoFi (bfp8 q and k) matmul math utilization via real-time device program records,
-    asserted within +/- INDEXER_PERF_MARGIN: GLM5 / DSv32 / MiniMax-M3 at the deployed TP=4/SP=8, plus
+def test_indexer_score_math_util(device, case_id, run_fn, mm_flops_thunk, expected_util, math_fidelity):
+    """Per-deployment matmul math utilization via real-time device program records, asserted within +/-
+    INDEXER_PERF_MARGIN: GLM5 / DSv32 / MiniMax-M3 at the deployed TP=4/SP=8, plus
     glm5_tp1 / dsv32_tp1 at the resharded TP=1/SP=32 grid-fill shapes. Profiles one dispatch of the case's op
     with the real-time device profiler and compares the achieved math_util to the expected value (measured on
     a BH dev board). Marked requires_host_iommu so the marker-selected IOMMU job runs it and broad non-IOMMU
@@ -1333,14 +1338,15 @@ def test_indexer_score_math_util(device, case_id, run_fn, mm_flops_thunk, expect
     _, perf_record = profile_realtime_program(device, lambda: run_fn(device))
     duration_ns = perf_record["duration_ns"]
     core_count = INDEXER_PERF_CORES
-    peak = _MM_FLOPS_PER_CYCLE_PER_CORE["LoFi"]
+    peak = _MM_FLOPS_PER_CYCLE_PER_CORE[math_fidelity]
     cycles = duration_ns * _BH_CLOCK_GHZ
     utilization = (mm_flops_thunk() / (core_count * cycles * peak)) * 100 if core_count > 0 else 0.0
 
     lower = expected_util * (1 - INDEXER_PERF_MARGIN)
     upper = expected_util * (1 + INDEXER_PERF_MARGIN)
     logger.info(
-        f"indexer_score math util {case_id} (LoFi): duration={duration_ns / 1e6:.3f} ms, cores={core_count}, "
+        f"indexer_score math util {case_id} ({math_fidelity}): duration={duration_ns / 1e6:.3f} ms, "
+        f"cores={core_count}, "
         f"math_util={utilization:.2f}% (expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}])"
     )
     assert lower <= utilization <= upper, (

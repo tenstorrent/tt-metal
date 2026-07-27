@@ -143,18 +143,17 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                 uint32_t limit_s = per_risc_ptr->limit[i] >> cb_addr_shift;
                 // ring_size (TRISC): linear span limit_s - base for this TC—the same bound legacy wr_ptr/rd_ptr used.
                 // In STRIDED layouts that span includes other producers' interleaved entries between this TC's tiles.
+                // uint32 L1 units (full Quasar L1). Cursor byte-offset is derived from *_entry_idx (not stored).
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
                 dfb_interface.tc_slots[i].base_addr = base;
-                dfb_interface.tc_slots[i].wr_offset = 0;
-                dfb_interface.tc_slots[i].ring_size = static_cast<uint16_t>(limit_s - base);
+                dfb_interface.tc_slots[i].ring_size = limit_s - base;
                 dfb_interface.tc_slots[i].packed_tile_counter = per_risc_ptr->packed_tile_counter[i];
                 dfb_interface.tc_slots[i].base_entry_idx = static_cast<uint16_t>(
                     (base - dfb_interface.tc_slots[0].base_addr) / dfb_interface.entry_size);
                 dfb_interface.tc_slots[i].wr_entry_idx = dfb_interface.tc_slots[i].base_entry_idx;
 #elif defined(COMPILE_FOR_TRISC)
                 dfb_interface.tc_slots[i].base_addr = base;
-                dfb_interface.tc_slots[i].rd_offset = 0;
-                dfb_interface.tc_slots[i].ring_size = static_cast<uint16_t>(limit_s - base);
+                dfb_interface.tc_slots[i].ring_size = limit_s - base;
                 dfb_interface.tc_slots[i].packed_tile_counter = per_risc_ptr->packed_tile_counter[i];
                 dfb_interface.tc_slots[i].base_entry_idx = static_cast<uint16_t>(
                     (base - dfb_interface.tc_slots[0].base_addr) / dfb_interface.entry_size);
