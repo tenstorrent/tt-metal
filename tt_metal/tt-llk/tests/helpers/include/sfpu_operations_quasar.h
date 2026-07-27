@@ -197,7 +197,14 @@ void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_fo
  *        @ref call_zero_comp_operation_quasar), float-only ops ignore it.
  * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for the same op.
  */
-template <SfpuType OPERATION, DstSync DST_SYNC, bool is_fp32_dest_acc_en, bool APPROX = false, int ITERATIONS = SFPU_ITERATIONS>
+template <
+    SfpuType OPERATION,
+    DstSync DST_SYNC,
+    bool is_fp32_dest_acc_en,
+    bool APPROX                    = false,
+    int ITERATIONS                 = SFPU_ITERATIONS,
+    DataFormat TYPECAST_IN_FORMAT  = DataFormat::Float32,
+    DataFormat TYPECAST_OUT_FORMAT = DataFormat::Float16_b>
 void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_format = DataFormat::Float32)
 {
     if constexpr (OPERATION == SfpuType::abs)
@@ -297,10 +304,6 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
-        // Typecast is parameterized by the (input,output) DataFormat pair, which the test
-        // bakes in as the compile-time constants TYPECAST_IN_FORMAT / TYPECAST_OUT_FORMAT (set
-        // by the TYPECAST_FORMATS variant). The functor picks the conversion sequence from the
-        // pair at compile time.
         SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_typecast, (TYPECAST_IN_FORMAT, TYPECAST_OUT_FORMAT, ITERATIONS), dst_index, VectorMode::RC);
     }
     else
