@@ -81,10 +81,48 @@ class RMSNorm(nn.Module):
             ttnn.deallocate(tt_gathered_stats)
             return tt_output
         else:
+            # Decode single-row case ([1,1,1,W] padded to [.,.,32,W]): the default
+            # interleaved path auto-selects a SINGLE core to reduce all W/32 tiles
+            # (~40us, 3% BW). Width-shard across cores + sharded program config
+            # parallelizes the reduction (swept best = 9 cores for W=2880). The
+            # shard HEIGHT must be the padded tile height (32), not the logical H=1.
+            W = x.shape[-1]
+            H = x.shape[-2]
+            TILE = ttnn.TILE_SIZE
+            Wt = W // TILE
+            ncores = 9 if Wt % 9 == 0 else next((c for c in (10, 6, 5, 3) if Wt % c == 0), 1)
+            if (
+                x.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+                and H <= TILE
+                and ncores > 1
+                and W % TILE == 0
+            ):
+                grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ncores - 1, 0))})
+                # shard shape uses padded tile height (TILE), width split across cores
+                shard_spec = ttnn.ShardSpec(grid, [TILE, W // ncores], ttnn.ShardOrientation.ROW_MAJOR)
+                sharded_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+                x_sh = ttnn.to_memory_config(x, sharded_mem)
+                pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(ncores, 1),
+                    subblock_w=1,
+                    block_h=1,
+                    block_w=Wt // ncores,
+                    inplace=False,
+                )
+                out_sh = ttnn.rms_norm(
+                    x_sh,
+                    weight=self.tt_weight,
+                    epsilon=self.eps,
+                    program_config=pc,
+                    memory_config=sharded_mem,
+                )
+                x_sh.deallocate(True)
+                tt_output = ttnn.sharded_to_interleaved(out_sh, ttnn.DRAM_MEMORY_CONFIG)
+                out_sh.deallocate(True)
+                return tt_output
             tt_output = ttnn.rms_norm(
                 x,
                 weight=self.tt_weight,
                 epsilon=self.eps,
-                # program_config=program_config,
             )
             return tt_output
