@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Device-profiler harness for the target-shape TP=8 KDA layer."""
+"""Device-profiler harness for target-shape TP8 and 2D SP KDA layouts."""
 
 import os
+import time
 
 import pytest
 import torch
@@ -19,7 +20,6 @@ pytestmark = [
     run_for_blackhole(),
     pytest.mark.perf,
     pytest.mark.timeout(0),
-    pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True),
     pytest.mark.parametrize(
         "device_params",
         [
@@ -39,15 +39,18 @@ def _profile_eager(
     layer: KimiDeltaAttention,
     hidden: ttnn.Tensor,
     repetitions: int,
-) -> None:
+) -> float:
     outputs: list[ttnn.Tensor] = []
     signpost(header="start")
+    start = time.perf_counter()
     for _ in range(repetitions):
         outputs.append(layer.forward(hidden, mode="chunk"))
     ttnn.synchronize_device(mesh_device)
+    elapsed = time.perf_counter() - start
     signpost(header="stop")
     for output in outputs:
         ttnn.deallocate(output)
+    return elapsed / repetitions
 
 
 def _profile_trace(
@@ -55,7 +58,7 @@ def _profile_trace(
     layer: KimiDeltaAttention,
     hidden: ttnn.Tensor,
     repetitions: int,
-) -> None:
+) -> float:
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     output = layer.forward(hidden, mode="chunk")
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
@@ -63,18 +66,27 @@ def _profile_trace(
     ttnn.synchronize_device(mesh_device)
 
     signpost(header="start")
+    start = time.perf_counter()
     for _ in range(repetitions):
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
     ttnn.synchronize_device(mesh_device)
+    elapsed = time.perf_counter() - start
     signpost(header="stop")
 
     ttnn.release_trace(mesh_device, trace_id)
     ttnn.deallocate(output)
+    return elapsed / repetitions
 
 
-def test_kda_tp_layer_device_perf(mesh_device: ttnn.MeshDevice) -> None:
-    """Profile warm target-shape TP=8 prefill; invoke through Tracy for attribution."""
-    sequence = int(os.getenv("PERF_SEQ", "640"))
+@pytest.mark.parametrize(
+    "mesh_device,tensor_parallel_axis",
+    [((1, 8), 1), ((2, 4), 1), ((2, 4), 0)],
+    indirect=["mesh_device"],
+    ids=["TP8", "SP2xTP4", "SP4xTP2"],
+)
+def test_kda_tp_layer_device_perf(mesh_device: ttnn.MeshDevice, tensor_parallel_axis: int) -> None:
+    """Profile ten warm target-shape trace replays for TP8 and both 2D SP layouts."""
+    sequence = int(os.getenv("PERF_SEQ", "5120"))
     if sequence % 32:
         raise ValueError(f"PERF_SEQ must be divisible by 32, got {sequence}")
     config = KDAConfig(
@@ -95,9 +107,19 @@ def test_kda_tp_layer_device_perf(mesh_device: ttnn.MeshDevice) -> None:
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device,
+            dims=tuple(1 if axis == 1 - tensor_parallel_axis else None for axis in range(2)),
+            mesh_shape=tuple(mesh_device.shape),
+        ),
     )
-    layer = KimiDeltaAttention(mesh_device, config, random_weights(config), tt_ccl=TT_CCL(mesh_device))
+    layer = KimiDeltaAttention(
+        mesh_device,
+        config,
+        random_weights(config),
+        tt_ccl=TT_CCL(mesh_device),
+        tensor_parallel_axis=tensor_parallel_axis,
+    )
     layer.reset_state(batch_size=1)
     assert layer.recurrent_state is not None
     assert layer.convolution_state is not None
@@ -107,8 +129,15 @@ def test_kda_tp_layer_device_perf(mesh_device: ttnn.MeshDevice) -> None:
     ttnn.synchronize_device(mesh_device)
     ttnn.deallocate(warm_output)
 
-    repetitions = int(os.getenv("PERF_REPS", "3"))
+    repetitions = int(os.getenv("PERF_REPS", "10"))
     if os.getenv("PERF_TRACE", "0") == "1":
-        _profile_trace(mesh_device, layer, hidden_tt, repetitions)
+        wall_seconds = _profile_trace(mesh_device, layer, hidden_tt, repetitions)
     else:
-        _profile_eager(mesh_device, layer, hidden_tt, repetitions)
+        wall_seconds = _profile_eager(mesh_device, layer, hidden_tt, repetitions)
+    sp_axis = 1 - tensor_parallel_axis
+    sp_size = tuple(mesh_device.shape)[sp_axis]
+    tp_size = tuple(mesh_device.shape)[tensor_parallel_axis]
+    print(
+        f"KDA SP{sp_size}xTP{tp_size} B=1 T={sequence}: "
+        f"wall={wall_seconds * 1e3:.3f} ms/replay over {repetitions} replays"
+    )
