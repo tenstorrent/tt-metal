@@ -707,6 +707,8 @@ Although device-side sampling works with `HY_TOPK=32`, the rewritten prompts are
 
 Device sampling with `HY_TOPK=32` is therefore considered **experimental**. Improving prompt quality while using TTNN device sampling is planned for future work.
 
+In CI (bh_quietbox_2), Hunyuan MoE expert .tensorbin load-cache is much slower than on a local disk run, even though both use the same Expert weights (load-cache) path. Local (NVMe / page cache) completes one layer’s 16 experts in ~0.3 s at 48.5 it/s; CI reading TT_CACHE_PATH from /mnt/MLPerf (NFS via yyz4-mnt-models) runs at ~2.48 s/it, so the same 16 experts take ~40 s — about 100× slower per expert. That I/O cost repeats on each layer’s first expert ensure, so NFS-bound weight load dominates CI wall time versus local.
+
 
 
 #### Mixed-Precision Execution

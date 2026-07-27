@@ -20,7 +20,7 @@
 #
 # Expert weight disk cache (same technique as DeepSeek-V3 d_p / MiniMax-M3):
 # ``TtRoutedExpert`` writes/loads per-local-expert ``.tensorbin`` files under
-# ``weight_cache_path`` (from ``TT_DIT_CACHE_DIR``). First process converts host
+# ``weight_cache_path`` (from ``TT_CACHE_PATH``). First process converts host
 # torch -> device and populates the cache; later processes skip the host stack /
 # transpose when the cache is complete and load tilized tensors directly.
 #

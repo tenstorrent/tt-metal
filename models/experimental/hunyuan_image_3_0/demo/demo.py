@@ -137,8 +137,8 @@ TORCH_DENOISE = os.environ.get("HY_TORCH_BACKBONE", os.environ.get("HY_DIT_HOST"
 
 _INDEX = WEIGHTS / "model.safetensors.index.json"
 # Persist pre-tilized mesh weights across runs (see README § Weight cache).
-if not os.environ.get("TT_DIT_CACHE_DIR"):
-    os.environ["TT_DIT_CACHE_DIR"] = str(Path.home() / ".cache" / "tt-dit")
+if not os.environ.get("TT_CACHE_PATH"):
+    os.environ["TT_CACHE_PATH"] = str(Path.home() / ".cache" / "tt-dit")
 if not _INDEX.is_file():
     raise SystemExit(
         f"Base HunyuanImage-3 weights not found at {_INDEX}\n"
