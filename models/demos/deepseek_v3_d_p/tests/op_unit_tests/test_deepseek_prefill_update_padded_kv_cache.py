@@ -30,12 +30,14 @@ KVPE_HEAD_DIM = 576
 # (cache dtype, layout). bfloat8_b/bfloat4_b are block-float (TILE only); fp8_e4m3 is ROW_MAJOR only
 # (Blackhole); bf16 covers the row-major page math in a lossless dtype. The tests assert bit-exact
 # equality against the input read back, so no per-dtype tolerance is needed.
+# These tests drive the per-element-tensor (metadata) path, which is TILE-only (see the device-op
+# guard added when rebasing the metadata overload onto main's newer ROW_MAJOR support). main's
+# ROW_MAJOR support is scalar-only; row-major coverage, if needed, belongs in a dedicated scalar-path
+# test rather than through the metadata path.
 DTYPE_LAYOUT_CASES = [
     (ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
-    (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
-    (ttnn.fp8_e4m3, ttnn.ROW_MAJOR_LAYOUT),
 ]
-DTYPE_LAYOUT_IDS = ["bfp8_tile", "bf16_rm", "fp8_rm"]
+DTYPE_LAYOUT_IDS = ["bfp8_tile"]
 
 
 def _make_input(torch_chunk, dtype, layout, mesh_device, mesh_mapper):
