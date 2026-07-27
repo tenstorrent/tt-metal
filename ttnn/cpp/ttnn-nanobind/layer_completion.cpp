@@ -2,10 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Standalone nanobind module (`_layer_completion`) for the pipelined-prefill layer-completion
-// aggregation feature. Exposed via ttnn._experimental.layer_completion. Binds the host-local ring
+// Bindings for the pipelined-prefill layer-completion aggregation feature: the host-local ring
 // (LayerCompletionQueue), the per-host router (LayerCompletionRouter), and the test-only scheduler
-// stand-in consumer (LayerCompletionConsumer).
+// stand-in consumer (LayerCompletionConsumer). Folded into the main ttnn module (`_ttnn`) as the
+// `layer_completion` submodule via bind_layer_completion_api(); it was previously a standalone
+// `_layer_completion` extension. The tt_metal types are consumed via the sanctioned
+// `tt_metal/api/internal/disaggregation/` surface.
+
+#include "ttnn-nanobind/layer_completion.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -23,9 +27,11 @@
 #include <internal/disaggregation/layer_completion_queue.hpp>
 #include <internal/disaggregation/layer_completion_router.hpp>
 
+namespace ttnn::layer_completion {
+
 namespace nb = nanobind;
 
-NB_MODULE(_layer_completion, mod) {  // NOLINT(performance-unnecessary-value-param)
+void bind_layer_completion_api(nb::module_& mod) {
     using tt::tests::prefill_test::LayerCompletionConsumer;
     using tt::tt_metal::internal::LayerCompletionMessage;
     using tt::tt_metal::internal::LayerCompletionQueue;
@@ -128,3 +134,5 @@ NB_MODULE(_layer_completion, mod) {  // NOLINT(performance-unnecessary-value-par
         .def_prop_ro("total", &LayerCompletionConsumer::total)
         .def_prop_ro("reached_expected", &LayerCompletionConsumer::reached_expected);
 }
+
+}  // namespace ttnn::layer_completion
