@@ -42,7 +42,7 @@ Optional fields, used when the entry's substance requires them:
 ### Cautions
 
 - [Avoid varargs unless absolutely necessary](#caution-avoid-varargs-unless-absolutely-necessary)
-- [Modifying a shared dataflow kernel](#caution-modifying-a-shared-dataflow-kernel)
+- [Porting a shared kernel](#caution-porting-a-shared-kernel)
 
 ---
 
@@ -511,22 +511,70 @@ Shorthand: **read as an indexed-collection element → vararg; nameable as a dis
 
 ---
 
-## Caution: Modifying a shared dataflow kernel
+## Caution: Porting a shared kernel
 
-**Category**: Caution
+**Category**: Caution (sanctioned scope-boundary exception)
 
-**Recognition signal**: A port modifies a kernel source that lives outside the op's own directory — typically a reader / writer in `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/` or similar. Common shared kernels include `reader_unary_interleaved_start_id.cpp`, `writer_unary_interleaved_start_id.cpp`, `reader_unary_reduce_universal_start_id.cpp`, and `writer_unary_sharded.cpp` (under `data_movement/sharded/device/kernels/dataflow/`).
+**Recognition signal**: the same kernel source is bound by **more than one program factory that will not convert in the same change**. Converting the file in place breaks every binder you leave behind. Three shapes — and the title notwithstanding, this entry governs **compute kernels as well as dataflow ones**; what matters is that ops share the file, not what kind of kernel it is:
 
-**Decision**: Pick one of two paths, based on whether all consumers of the kernel can co-migrate to Metal 2.0 in the same PR (or a bundled set of PRs):
+- **Borrowed** — your factory binds a kernel source living in *another* op's directory. Typically a reader / writer under `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/` or similar; frequently-shared examples are `reader_unary_interleaved_start_id.cpp`, `writer_unary_interleaved_start_id.cpp`, `reader_unary_reduce_universal_start_id.cpp`, and `writer_unary_sharded.cpp` (under `data_movement/sharded/device/kernels/dataflow/`). The [legacy-inventory step](../port/metal2_port.md#legacy-inventory) flags these by path.
+- **Lent** — the kernel lives in **your own** op's directory, and other ops bind it too. Nothing about the path warns you: the file sits inside your writeable surface, so converting it in place feels safe, and it breaks every borrower the moment you do.
+- **Intra-op** — two factories of *your own* op bind the same kernel and you are porting one of them (the [atomic-unit note](../port/metal2_port.md#read-this-first) routes this case here). Same rungs; the fork simply lands in your own directory, and the "remaining consumers" are your op's other factories.
 
-1. **In-place modification** — when every consumer op of the kernel is being ported to Metal 2.0 in the same PR or bundled set. Modify the kernel source and update each consumer's factory consistently. Before editing, grep for all consumers (`grep -rl <kernel-filename> ttnn/cpp/ttnn/operations/`) and verify each one is in the bundled set.
+**Census — run it, then disambiguate it.** Before Metal-2.0-ifying *any* kernel source, find out who else binds it:
 
-2. **Fork with `_metal2` suffix** — the typical answer during the bulk-port window, when consumers cannot all co-migrate. Copy the kernel into a `_metal2`-suffixed file alongside the original (e.g., `writer_unary_interleaved_start_id_metal2.cpp` next to the legacy `writer_unary_interleaved_start_id.cpp`). Modify the copy for Metal 2.0 — named bindings, `dfb::name`, `tensor::name`, named RTAs. Reference the new file from the ported factory's `KernelSpec::source`. The legacy copy stays in place for unmigrated consumers.
+```bash
+grep -rl <kernel-filename> ttnn/cpp/ttnn/operations/
+```
 
-   **Sunset:** delete the legacy copy when the last unmigrated consumer ports. The `_metal2` suffix is a load-bearing signal during this window — anyone touching the legacy copy should see the suffix and consider whether the change also belongs on the fork.
+Do **not** read the hit list as a consumer list. A hit counts only if it is a factory binding that file as a kernel source. Discard: build files (`CMakeLists.txt`); another op's **same-named private copy** — check the bound *path*, not the filename; and prose or comments that merely name the file, including inside other forks. Grepping the full path instead looks tighter but is **lossy** — factories often assemble the path from two string literals, so a path grep silently misses them. Grep the filename, then check each hit.
 
-   **Drift discipline:** until sunset, bug fixes to the legacy copy should be evaluated for the `_metal2` copy. The fork is intentionally short-lived; keeping the two in sync is the cost of unblocking the bulk-port wave without coordinating dozens of consumer PRs.
+**Decision**: work the rungs in order; take the first that applies.
 
-A kernel-source change that compiles cleanly for the porting op but breaks a sibling op's CTA layout is one of the failure modes that escapes the recipe's anti-pattern self-audit — it's *not* in the ported op's own files. The legacy-inventory step explicitly notes any cross-op kernel sources, and the port report records the touch under "Open items for downstream" with the chosen path (in-place co-migration list, or fork) so the next sibling-op porter sees the coordination signal.
+1. **Reuse an existing `_metal2` fork.** Look for one before doing anything else: a sibling of the original, same stem plus a `_metal2` suffix (`awesome_kernel_metal2.cpp` next to `awesome_kernel.cpp`). If it's there, an earlier port already converted this kernel — **point your `KernelSpec::source` at it and adopt its binding names**. Do not make a second copy, and do not copy it into your own op's directory.
 
-**Excluded from "cross-op"**: kernel-lib (`ttnn/cpp/ttnn/kernel_lib/`) and standard framework APIs (`tt_metal/hw/inc/api/...`) — these are out of porter scope by the [recipe's scope boundary](../port/metal2_port.md#read-this-first) and the porter does not modify them. Cross-op kernels are sources living in *another op's* kernel directory.
+   **Check fit before committing to reuse**: the fork's `dfb::` / `tensor::` binding names, its named-arg set, any `#ifdef`s it gates on (your factory must supply the matching `defines`), and which tensor each `tensor::name` refers to. If it fits, the fork's names are now *your* constraint — rename on your side, in your factory's spec.
+
+   **`_metal2` files under `experimental/quasar/**` do not count.** Those belong to whole-op pre-port *copies*: they sit beside that copy's own duplicate of the kernel, serve only that copy's factories, and predate the settled conventions ([recipe — don't use ported ops as templates](../port/metal2_port.md#read-this-first)). At least one carries idioms the current whitelist forbids (a stale `circular_buffer.h` include, `cb_*` naming). Do not bind them, do not count them for this check, do not copy their binding names. Those duplicate copies are pre-existing debt that sits outside this convention — the tree may already hold several copies of your kernel, and that is **not** a reason to skip rung 2.
+
+2. **Create the fork.** No fork exists — you are the first port to reach this kernel, so making it is part of your port. Copy the original **into the same directory as the original**, keeping the stem and adding the `_metal2` suffix. That directory is a peer op's for a *borrowed* kernel and your own for a *lent* or *intra-op* one; either way the fork goes beside the file it forks, never relocated into your op's tree to keep the diff local. Convert the copy (named bindings, `dfb::name`, `tensor::name`, named RTAs), point your `KernelSpec::source` at it, and leave the original untouched apart from the pointer comment below. The legacy copy keeps serving every binder that hasn't ported.
+
+   **Sanctioned exception note**: for a borrowed kernel, this writes into another op's directory, which the [scope boundary](../port/metal2_port.md#read-this-first) otherwise forbids. The carve-out is exactly two edits: **add** `<stem>_metal2.cpp` beside the original, and **add** the pointer comment to the original. Nothing else there is yours — not the legacy kernel's logic, not the peer op's factory, not its tests. The boundary exists to stop you silently changing code another op depends on; adding a file next to it, and a comment saying so, does neither. One port may exercise this carve-out more than once, in more than one peer directory — that is expected, not a sign you have overrun the exception.
+
+   **No build-system change is needed for the new file.** Op kernel sources are installed by per-family `file(GLOB_RECURSE kernels …)` patterns that already cover the directory the original sits in, so the fork is picked up on its own. Do not add an explicit entry to the peer op's `CMakeLists.txt` — a few such per-file entries exist, but they are redundant leftovers, and adding one is an out-of-scope edit to another op's build file.
+
+3. **Convert in place.** Only when your **invoker explicitly assigns you the bundled port** — every binding factory named, and you convert all of them in the same change. A consumer list in the audit brief is a **sunset and coordination list, not authorization**: the auditor is told to enumerate binders precisely so the fork's sunset is trackable, and reading that list as a licence to convert the file in place is the failure this rung exists to prevent. Confirm the assigned set against the census above before touching the file. TTNN-side gating means binder sets mostly *cannot* co-migrate today, so rung 2 is the normal answer and this rung is rare.
+
+**The fork is checked in.** It commits with the port, like any other file the port creates — it is not a local scratch copy. That is what lets the next porter of a sharing op find it at rung 1. Temporary in intent, permanent in the tree until sunset.
+
+**Name the bindings for the kernel, not for your op.** Whatever names the *first* fork uses become the interface every later consumer inherits. Take them from the kernel's own role vocabulary (`dfb::in_tiles`, `tensor::src`), not from the local variables your op's legacy factory happened to use (`dfb::cb_id_resharded_in0`). When the kernel's own locals or comments already have a word for the thing (`src_addr` → `tensor::src`), use that word — it is the closest thing to a neutral tiebreaker. A fork named after one consumer's internals is one the next consumer can't reuse — and renaming it isn't a move they're allowed to make (next paragraph), so the cost of getting this wrong lands on someone else.
+
+**A fork that already has a consumer is read-only to you.** The misfit runs in both directions — the fork reads a named arg your factory doesn't supply, or your factory needs a value the fork doesn't read, or a binding's meaning doesn't match yours. In every direction: **do not edit the fork, and do not fork the fork.**
+
+- **First, re-derive the need from the legacy factory.** Most "this kernel needs one more arg" turns out to be a mis-derivation — if your op genuinely needed different kernel behaviour, the legacy op would already have had its own kernel. Check what the legacy factory actually passed at this call site: the value is often already there under another name (a per-core page offset folded into a start index), or it is dead plumbing the kernel never read, or your inventory bound the wrong source. Any of those resolves without touching the fork.
+- **If the need is real, stop.** You cannot see the test coverage of the ops already bound to the fork, and the change is not as safe as it looks: an unconditional new named arg **breaks every other consumer's build**, because each factory's own `runtime_arg_schema` generates the `args::` declarations for its build of that source ([migration guide — Kernel Argument Retrieval Syntax](migration_guide.md#kernel-argument-retrieval-syntax)). Under legacy positional RTAs appending an arg was tolerable; named args make it strictly breaking.
+- **The `#ifdef` escape is also closed.** Guarding the new read with a `KernelSpec::defines` conditional ([whitelist rule 6](../port/metal2_port.md#kernel-side-whitelist)) *does* keep the other consumers compiling — which is exactly why it's a trap. It converts one shared kernel into per-consumer dialects inside a single file, decided unilaterally by someone who can't test the consumers. Not a workaround; the same stop applies.
+- **A fork with no visible consumer is not fair game either.** An orphan usually means an in-flight port that hasn't merged, which no grep of your checkout can see.
+
+Record a **Handoff point** in `METAL2_PORT_REPORT.md`: the fork's path, what your factory needs, why the existing shape doesn't provide it, and what you ruled out in the re-derivation. If that kernel is essential to the factory you are porting, the factory capitulates — a reported outcome, not a failure ([§When the discipline doesn't fit](../port/metal2_port.md#when-the-discipline-doesnt-fit)).
+
+**Leave a pointer in the legacy original.** On rung 2 only — if you are reusing a fork at rung 1 and the original has no pointer comment, leave it alone; that is not your edit to make. On rung 2, add a comment at the top of the legacy file; nothing else in it changes:
+
+```cpp
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// <stem>_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file serves
+// the consumers still on the legacy API. Until the last of them migrates and
+// this file is retired, changes here likely belong in the fork too.
+```
+
+The `_metal2` suffix only reaches someone who lists the directory; the comment reaches whoever opens the file to change it — the person the drift discipline below actually depends on.
+
+**Sunset:** when the last consumer migrates, the legacy copy is deleted and the fork takes over its name. That cleanup is not the porter's to perform, but the porter feeds it — record the still-unmigrated consumers in the port report, so the port that turns out to be the last one can see that it was.
+
+**Drift discipline:** until sunset, a fix to either copy should be evaluated for the other. The convention leans on these kernels being shared *and* quiet — forking an actively-developed kernel would make the sync cost real — and on the pointer comment plus the suffix being the only things that make the pairing visible.
+
+**Concurrent ports collide by design.** Two porters reaching the same un-forked kernel at once both create `<stem>_metal2.cpp`, and git raises an add/add conflict at merge rather than quietly yielding two forks. Resolve by keeping one — usually whichever is already reviewed — and repointing the other factory's `KernelSpec::source` and binding names at it. A conflict here is the convention working.
+
+A kernel-source change that compiles cleanly for the porting op but breaks a sibling op's CTA layout is one of the failure modes that escapes the recipe's anti-pattern self-audit — it's *not* in the ported op's own files. The legacy-inventory step explicitly notes any shared kernel sources, and the port report records the touch under "Open items for downstream" with the rung taken (reuse / fork / in-place) so the next sibling-op porter sees the coordination signal.
+
+**Excluded from "shared kernel"**: kernel-lib (`ttnn/cpp/ttnn/kernel_lib/`) and standard framework APIs (`tt_metal/hw/inc/api/...`) — these are out of porter scope by the [recipe's scope boundary](../port/metal2_port.md#read-this-first), are never forked, and the porter does not modify them. This entry covers kernels owned by *ops*, under `ttnn/cpp/ttnn/operations/`.
