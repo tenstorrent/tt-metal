@@ -9,7 +9,6 @@ import socket
 from dataclasses import dataclass
 from enum import Enum
 
-import torch
 from loguru import logger
 
 import ttnn
@@ -667,29 +666,49 @@ def allocate_dflash_kv_cache(
     with the caller lets it drive cache lifecycle (the migration hand-off to the decode mesh) and dtype
     (default bf8/``bfloat8_b`` to match the decode KV cache; see ``init_kvpe_cache``).
 
-    Host shape ``[num_hidden_layers, num_key_value_heads, cache_seq, head_dim]``, TP-sharded on kv-head
-    (dim 1) and SP-sharded on seq (dim 2) so each SP chip owns ``cache_seq/sp`` tokens (the
-    decode/migration layout, no redundant per-SP copies). Returns ``(k_cache, v_cache)``."""
-    shape = (config.num_hidden_layers, config.num_key_value_heads, cache_seq, config.head_dim)
-    shard = [None, None]
-    shard[tp_axis] = 1  # kv-head dim across TP
-    shard[sp_axis] = 2  # seq dim across SP → per-chip [.., cache_seq/sp, ..]
-    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard)
-    zeros = torch.zeros(*shape, dtype=torch.bfloat16)
-    k_cache = ttnn.from_torch(
-        zeros,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=dtype,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=mapper,
+    Global (logical) shape ``[num_hidden_layers, num_key_value_heads, cache_seq, head_dim]``, TP-sharded on
+    kv-head (dim 1) and SP-sharded on seq (dim 2) so each SP chip owns ``cache_seq/sp`` tokens (the
+    decode/migration layout, no redundant per-SP copies). Allocated + zeroed on device (DRAMZeroFill) with
+    no host tensor / H2D copy. Returns ``(k_cache, v_cache)``.
+
+    NOTE: the interleaved DRAM format here is provisional pending decode alignment — see the
+    ND_DRAM_SHARDED ``TODO`` in the body."""
+    sp = mesh_device.shape[sp_axis]
+    tp = mesh_device.shape[tp_axis]
+    assert (
+        config.num_key_value_heads % tp == 0
+    ), f"num_key_value_heads ({config.num_key_value_heads}) must divide across tp ({tp})"
+    assert cache_seq % sp == 0, f"cache_seq ({cache_seq}) must divide across sp ({sp})"
+
+    # Per-device (post-shard) shape: kv-head split across TP (dim 1), seq split across SP (dim 2).
+    local_shape = ttnn.Shape(
+        [config.num_hidden_layers, config.num_key_value_heads // tp, cache_seq // sp, config.head_dim]
     )
-    v_cache = ttnn.from_torch(
-        zeros,  # from_torch(device=…) copies host→device without mutating the input, so K and V can share it
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=dtype,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=mapper,
-    )
-    return k_cache, v_cache
+    # 2D-shard topology matching ShardTensor2dMesh (seq on sp_axis -> dim 2, kv-head on tp_axis -> dim 1) so
+    # the readback composer (ConcatMesh2dToTensor, read_dims=(2,1)) reconstructs the global cache — the same
+    # layout the old from_torch(mesh_mapper=…) path produced (cf. DRAMZeroFill.allocate_kv_cache_on_device).
+    dist_shape = ttnn.MeshShape(mesh_device.shape[0], mesh_device.shape[1])
+    placements = [None, None]
+    placements[sp_axis] = ttnn.PlacementShard(2)  # seq dim across SP
+    placements[tp_axis] = ttnn.PlacementShard(1)  # kv-head dim across TP
+    coords = [
+        ttnn.MeshCoordinate([coord[i] for i in range(coord.dims())]) for coord in ttnn.MeshCoordinateRange(dist_shape)
+    ]
+
+    def _alloc_zeroed() -> ttnn.Tensor:
+        # Allocate + zero on device (DRAMZeroFill) instead of a host torch.zeros + H2D copy: the drafter
+        # cache scales with the sequence and the host pack/transfer of the full cache is slow (mirrors
+        # init_kvpe_cache above). The shard topology is stamped after the fill.
+        # TODO: switch this interleaved DRAM (DRAM_MEMORY_CONFIG) to ND_DRAM_SHARDED to align with the
+        # decode-side drafter KV-cache layout for the migration hand-off (cf. init_kvpe_cache's NdShardSpec
+        # + create_kv_chunk_address_table_ds).
+        cache = ttnn.allocate_tensor_on_device(
+            local_shape, dtype, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
+        )
+        DRAMZeroFill.op(cache)
+        cache.update_tensor_topology(ttnn.TensorTopology(dist_shape, placements, coords))
+        return cache
+
+    # K and V are independent caches → two separate on-device zero-fills (the old path shared one host
+    # buffer across two from_torch copies).
+    return _alloc_zeroed(), _alloc_zeroed()
