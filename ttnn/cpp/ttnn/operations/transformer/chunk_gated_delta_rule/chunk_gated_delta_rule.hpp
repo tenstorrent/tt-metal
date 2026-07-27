@@ -81,7 +81,10 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     const std::optional<ttnn::Tensor>& rms_gate = std::nullopt,
     const std::optional<ttnn::Tensor>& rms_weight = std::nullopt,
     float rms_epsilon = 1e-5f,
-    uint32_t summary_group_chunks = 8);
+    uint32_t summary_group_chunks = 8,
+    const std::optional<uint32_t>& sequence_parallel_axis = std::nullopt,
+    const std::optional<ttnn::Tensor>& affine_identity = std::nullopt,
+    const std::optional<ttnn::Tensor>& affine_zero = std::nullopt);
 
 /**
  * Logarithmic affine prefix over sequence partitions of one 2D mesh tensor.

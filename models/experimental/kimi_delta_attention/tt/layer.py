@@ -50,6 +50,9 @@ class KimiDeltaAttention:
         self.device = mesh_device
         self.tensor_parallel_axis = tensor_parallel_axis
         self.sequence_parallel_axis = 1 - tensor_parallel_axis
+        self.sequence_parallel_size = (
+            tuple(mesh_device.shape)[self.sequence_parallel_axis] if isinstance(mesh_device, ttnn.MeshDevice) else 1
+        )
         self.summary_group_chunks = summary_group_chunks
         self.weights: KDAWeights = load_kda_weights(
             mesh_device,
@@ -60,6 +63,10 @@ class KimiDeltaAttention:
         )
         self.tensor_parallel_size = self.weights.tensor_parallel_size
         self.global_config = config
+        if self.sequence_parallel_size > 1 and config.head_k_dim != config.head_v_dim:
+            raise ValueError(
+                f"sequence-parallel KDA currently requires K == V, got {config.head_k_dim} and {config.head_v_dim}"
+            )
         self.config = replace(config, num_heads=config.num_heads // self.tensor_parallel_size)
         if self.tensor_parallel_size > 1 and tt_ccl is None:
             raise ValueError("tt_ccl is required for tensor-parallel KDA")
@@ -68,6 +75,8 @@ class KimiDeltaAttention:
         self._prepared_convolution_weights: dict[int, ttnn.Tensor] = {}
         self.recurrent_state: ttnn.Tensor | None = None
         self.convolution_state: ttnn.Tensor | None = None
+        self.affine_identity: ttnn.Tensor | None = None
+        self.affine_zero: ttnn.Tensor | None = None
         self.use_inplace_state = False
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -80,11 +89,41 @@ class KimiDeltaAttention:
     def _convolution_width(self) -> int:
         return self.config.q_dim + self.config.k_dim + self.config.v_dim
 
+    def _allocate_affine_constants(self, batch_size: int) -> None:
+        if self.sequence_parallel_size == 1:
+            self.affine_identity = None
+            self.affine_zero = None
+            return
+        state_shape = (
+            batch_size,
+            self.config.num_heads,
+            self.config.head_k_dim,
+            self.config.head_v_dim,
+        )
+        identity = torch.eye(self.config.head_k_dim, dtype=torch.float32).reshape(1, 1, *state_shape[-2:])
+        identity = identity.expand(state_shape).contiguous()
+        self.affine_identity = ttnn.from_torch(
+            identity,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self.affine_zero = ttnn.zeros(
+            state_shape,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     def reset_state(self, batch_size: int | None = None) -> None:
         """Allocate zero cache for a batch, or release logical ownership."""
         if batch_size is None:
             self.recurrent_state = None
             self.convolution_state = None
+            self.affine_identity = None
+            self.affine_zero = None
             self.use_inplace_state = False
             return
         if batch_size <= 0:
@@ -112,6 +151,7 @@ class KimiDeltaAttention:
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        self._allocate_affine_constants(batch_size)
         self.use_inplace_state = False
 
     def set_external_state(
@@ -142,6 +182,7 @@ class KimiDeltaAttention:
             raise ValueError(f"convolution_state dtype {convolution_state.dtype} != {ttnn.bfloat16}")
         self.recurrent_state = recurrent_state
         self.convolution_state = convolution_state
+        self._allocate_affine_constants(batch)
         self.use_inplace_state = True
 
     def _validate_forward(
@@ -159,8 +200,19 @@ class KimiDeltaAttention:
             )
         batch = hidden_states.shape[0]
         sequence = hidden_states.shape[1]
+        if self.sequence_parallel_size > 1 and mode == "recurrent":
+            raise NotImplementedError("recurrent mode is not supported when sequence parallelism is enabled")
         if mode == "recurrent" and sequence != 1:
             raise ValueError(f"recurrent mode requires T=1, got T={sequence}")
+        if self.sequence_parallel_size > 1 and mode == "chunk":
+            if sequence % ttnn.TILE_SIZE != 0:
+                raise ValueError(f"sequence-parallel chunk KDA requires local T divisible by 32, got T={sequence}")
+            local_chunks = sequence // ttnn.TILE_SIZE
+            if local_chunks % self.summary_group_chunks != 0:
+                raise ValueError(
+                    f"local chunk count {local_chunks} must be divisible by "
+                    f"summary_group_chunks {self.summary_group_chunks}"
+                )
         if mode == "chunk" and chunk_size not in (None, 32):
             raise ValueError(f"chunk KDA currently requires chunk_size=32, got {chunk_size}")
         if valid_len is not None and valid_len != sequence:
@@ -191,11 +243,19 @@ class KimiDeltaAttention:
             ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        new_state = ttnn.slice(
-            qkv_row_major,
-            (0, sequence - (config.conv_kernel_size - 1), 0),
-            (1, sequence, channels),
-        )
+        if self.sequence_parallel_size > 1:
+            state_row_major, new_state = ttnn.transformer.kda_convolution_halo(
+                qkv_row_major,
+                state_row_major,
+                sequence_parallel_axis=self.sequence_parallel_axis,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            new_state = ttnn.slice(
+                qkv_row_major,
+                (0, sequence - (config.conv_kernel_size - 1), 0),
+                (1, sequence, channels),
+            )
         if self.convolution_state.layout != ttnn.ROW_MAJOR_LAYOUT:
             new_state = ttnn.to_layout(
                 new_state,
@@ -385,8 +445,7 @@ class KimiDeltaAttention:
         use_group_prefix = (
             head_major
             and mode != "recurrent"
-            and sequence >= 5120
-            and sequence % 256 == 0
+            and (self.sequence_parallel_size > 1 or (sequence >= 5120 and sequence % 256 == 0))
             and os.getenv("QWEN_KDA_SERIAL_SCAN") is None
         )
         fuse_scan_rms = (
@@ -411,6 +470,9 @@ class KimiDeltaAttention:
                 rms_weight=weights.norm if fuse_scan_rms else None,
                 rms_epsilon=config.norm_eps,
                 summary_group_chunks=self.summary_group_chunks,
+                sequence_parallel_axis=(self.sequence_parallel_axis if self.sequence_parallel_size > 1 else None),
+                affine_identity=self.affine_identity,
+                affine_zero=self.affine_zero,
             )
         if new_recurrent_state.dtype != config.recurrent_state_dtype:
             new_recurrent_state = ttnn.typecast(new_recurrent_state, config.recurrent_state_dtype)
@@ -450,7 +512,9 @@ class KimiDeltaAttention:
             )
         output = ttnn.reshape(output, (batch, sequence, config.v_dim))
         fused_output_collective = (
-            self.tensor_parallel_size > 1 and mode == "chunk" and config.v_dim >= 8 * ttnn.TILE_SIZE
+            self.tensor_parallel_size > 1
+            and mode == "chunk"
+            and (self.sequence_parallel_size > 1 or config.v_dim >= 8 * ttnn.TILE_SIZE)
         )
         if fused_output_collective:
             assert self.tt_ccl is not None

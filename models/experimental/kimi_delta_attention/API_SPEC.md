@@ -37,6 +37,9 @@ class KimiDeltaAttention:
         config: KDAConfig,
         state_dict: Mapping[str, torch.Tensor],
         tensor_cache_path: Path | None = None,
+        tt_ccl: TT_CCL | None = None,
+        tensor_parallel_axis: int = 1,
+        summary_group_chunks: int = 8,
     ) -> None: ...
 
     def forward(
@@ -123,20 +126,33 @@ chunk boundary must not affect outputs through `valid_len` or the final state.
 
 ## Distribution contract
 
-- Whole heads are partitioned evenly across devices. Each device owns complete
-  `[K,V]` states for its local heads; recurrence has no collective.
+- A 2D mesh is interpreted using `tensor_parallel_axis` (`0` or `1`); the
+  sequence-parallel axis is the other axis. For a physical `(2,4)` mesh,
+  `tensor_parallel_axis=1` means SP2×TP4 and `tensor_parallel_axis=0` means
+  SP4×TP2. The physical mesh is not reshaped.
+- Input and output are sequence-sharded over SP. Input hidden states are
+  replicated over TP; output hidden states are sharded over TP.
+- Weights are replicated over SP and sharded over TP. Persistent recurrent and
+  convolution states are replicated over SP and head-sharded over TP.
+- Whole heads are partitioned evenly over TP. Each device owns complete `[K,V]`
+  states for its local heads.
 - Input q/k/v, decay, beta, and output-gate projections are column parallel.
-- Output projection is row parallel and returns the caller's expected hidden
-  sharding via reduce-scatter (or all-reduce when the caller requires
-  replication).
+- Output projection is row parallel and reduce-scatters only along the TP axis.
+- `summary_group_chunks` counts fixed 32-token KDA chunks. It must be positive,
+  the local SP partition's chunk count must be divisible by it, and
+  `B * local_heads * local_groups` must fit the available worker cores.
+- SP requires `K == V` in this implementation. Cross-partition recurrence uses
+  a logarithmic distributed affine prefix; no all-gather is used in production.
+- SP supports chunk-prefill only. Recurrent/decode mode is rejected when SP>1.
 - Collective topology/configuration belongs to the caller/model integration;
   this layer accepts the configured CCL handle rather than creating fabric.
 
 ## Errors
 
 - Reject unsupported mode, nonpositive dimensions, head counts not divisible
-  by mesh size, wrong hidden width, `T != 1` in recurrent mode, invalid
-  `valid_len`, missing weights, and state-shape/dtype mismatch.
+  by TP, wrong hidden width, `T != 1` in recurrent mode, recurrent mode with
+  SP>1, `K != V` with SP>1, invalid local group divisibility, insufficient
+  worker cores, invalid `valid_len`, missing weights, and state-shape/dtype mismatch.
 - Error messages include the offending logical shape and expected shape.
 
 ## Correctness gates

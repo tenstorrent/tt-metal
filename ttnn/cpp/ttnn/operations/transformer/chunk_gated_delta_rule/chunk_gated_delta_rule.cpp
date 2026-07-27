@@ -473,7 +473,10 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     const std::optional<ttnn::Tensor>& rms_gate,
     const std::optional<ttnn::Tensor>& rms_weight,
     float rms_epsilon,
-    uint32_t summary_group_chunks) {
+    uint32_t summary_group_chunks,
+    const std::optional<uint32_t>& sequence_parallel_axis,
+    const std::optional<ttnn::Tensor>& affine_identity,
+    const std::optional<ttnn::Tensor>& affine_zero) {
     const auto& qs = q_in.logical_shape();
     const auto& vs = v_in.logical_shape();
     const auto& gs = g_in.logical_shape();
@@ -491,6 +494,11 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     TT_FATAL(!flat_qk || qs[2] == H * K, "chunk_kda flat q/k width {} must equal H*K={}*{}", qs[2], H, K);
     TT_FATAL(!flat_v || vs[2] % H == 0, "chunk_kda flat v width {} must be divisible by H={}", vs[2], H);
     const uint32_t V = flat_v ? (vs[2] / H) : vs[3];
+    const bool distributed_prefix = sequence_parallel_axis.has_value();
+    TT_FATAL(
+        distributed_prefix == affine_identity.has_value() && distributed_prefix == affine_zero.has_value(),
+        "sequence_parallel_axis, affine_identity, and affine_zero must be provided together");
+    TT_FATAL(!distributed_prefix || *sequence_parallel_axis < 2, "sequence_parallel_axis must be 0 or 1");
     TT_FATAL(chunk_size == 32, "chunk_kda currently requires chunk_size=32, got {}", chunk_size);
     TT_FATAL(
         k_in.logical_shape() == qs && qs[0] == B && qs[1] == T &&
@@ -612,11 +620,12 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
         true,
         prep_bf16_mask);
     std::optional<std::vector<ttnn::Tensor>> grouped_scan;
+    std::optional<ttnn::Tensor> distributed_final_state;
     // Configurable affine-summary construction: contiguous chunks become one
     // independent pseudo-head. Running the proven recurrence from zero gives B; running
     // from I gives A+B. State-only mode drains token outputs without materializing them.
     const bool use_persistent_group_prefix = NC >= 160 && std::getenv("QWEN_KDA_SERIAL_SCAN") == nullptr;
-    const bool build_group_summaries = std::getenv("QWEN_KDA_GROUP_SUMMARY") != nullptr ||
+    const bool build_group_summaries = distributed_prefix || std::getenv("QWEN_KDA_GROUP_SUMMARY") != nullptr ||
                                        std::getenv("QWEN_KDA_GROUP_PREFIX") != nullptr || use_persistent_group_prefix;
     if (build_group_summaries) {
         TT_FATAL(summary_group_chunks > 0, "summary_group_chunks must be positive");
@@ -677,11 +686,45 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
             true);
         auto summary_a = summaries[0];
         auto summary_b = summaries[1];
-        if (std::getenv("QWEN_KDA_GROUP_PREFIX") != nullptr || use_persistent_group_prefix) {
+        if (distributed_prefix || std::getenv("QWEN_KDA_GROUP_PREFIX") != nullptr || use_persistent_group_prefix) {
             TT_FATAL(s0.has_value(), "group-prefix scan requires initial state");
-            const auto prefix_mem =
-                std::getenv("QWEN_KDA_PREFIX_DRAM") == nullptr ? ttnn::L1_MEMORY_CONFIG : ttnn::DRAM_MEMORY_CONFIG;
-            if (use_persistent_group_prefix) {
+            const auto prefix_mem = distributed_prefix
+                                        ? out_mem
+                                        : (std::getenv("QWEN_KDA_PREFIX_DRAM") == nullptr ? ttnn::L1_MEMORY_CONFIG
+                                                                                          : ttnn::DRAM_MEMORY_CONFIG);
+            if (distributed_prefix) {
+                auto summary_a_grouped = ttnn::reshape(summary_a, ttnn::Shape({BH, groups_per_head, K, K}));
+                auto summary_b_grouped = ttnn::reshape(summary_b, ttnn::Shape({BH, groups_per_head, K, V}));
+                auto [local_prefix_a, local_prefix_b] = inclusive_affine_prefix(
+                    summary_a_grouped, summary_b_grouped, groups_per_head, prefix_mem, kernel_cfg);
+                auto partition_a = ttnn::reshape(
+                    slice_group_axis(local_prefix_a, groups_per_head - 1, groups_per_head, prefix_mem),
+                    ttnn::Shape({BH, K, K}));
+                auto partition_b = ttnn::reshape(
+                    slice_group_axis(local_prefix_b, groups_per_head - 1, groups_per_head, prefix_mem),
+                    ttnn::Shape({BH, K, V}));
+                auto identity = ttnn::reshape(*affine_identity, ttnn::Shape({BH, K, K}));
+                auto zero = ttnn::reshape(*affine_zero, ttnn::Shape({BH, K, V}));
+                auto [partition_entry_state, final_state] = kda_distributed_affine_prefix(
+                    partition_a, partition_b, *s0, identity, zero, *sequence_parallel_axis, out_mem, kernel_cfg);
+                distributed_final_state = final_state;
+                auto group_initial_states = ttnn::prim::kda_affine_prefix(
+                    summary_a, summary_b, partition_entry_state, groups_per_head, prefix_mem, kernel_cfg);
+                grouped_scan = ttnn::prim::chunk_gdn_scan(
+                    grouped[0],
+                    grouped[1],
+                    grouped[2],
+                    grouped[3],
+                    grouped[4],
+                    grouped[5],
+                    grouped[6],
+                    group_initial_states,
+                    C,
+                    true,
+                    out_mem,
+                    kernel_cfg,
+                    true);
+            } else if (use_persistent_group_prefix) {
                 auto group_initial_states =
                     ttnn::prim::kda_affine_prefix(summary_a, summary_b, *s0, groups_per_head, prefix_mem, kernel_cfg);
                 grouped_scan = ttnn::prim::chunk_gdn_scan(
@@ -744,6 +787,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
             (*grouped_scan)[1] = ttnn::reshape(
                 slice_group_axis(all_final_states, groups_per_head - 1, groups_per_head, prefix_mem),
                 ttnn::Shape({BH, K, V}));
+            if (distributed_final_state.has_value()) {
+                (*grouped_scan)[1] = *distributed_final_state;
+            }
         }
     }
     std::vector<ttnn::Tensor> scan;

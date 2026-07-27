@@ -124,6 +124,9 @@ def chunk_kda_recurrence(
     rms_weight: ttnn.Tensor | None = None,
     rms_epsilon: float = 1e-5,
     summary_group_chunks: int = 8,
+    sequence_parallel_axis: int | None = None,
+    affine_identity: ttnn.Tensor | None = None,
+    affine_zero: ttnn.Tensor | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Execute chunk-parallel KDA with FP32 recurrent state."""
     key_dim = q.shape[-1] // beta.shape[-1] if len(q.shape) == 3 else q.shape[-1]
@@ -150,6 +153,9 @@ def chunk_kda_recurrence(
         rms_weight=rms_weight,
         rms_epsilon=rms_epsilon,
         summary_group_chunks=summary_group_chunks,
+        sequence_parallel_axis=sequence_parallel_axis,
+        affine_identity=affine_identity,
+        affine_zero=affine_zero,
     )
     assert final_state is not None
     if len(q.shape) == 4:
