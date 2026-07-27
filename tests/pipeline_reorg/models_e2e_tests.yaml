@@ -851,7 +851,7 @@
   model: wan-2.2-t2v
   model_family: Wan
   skus:
-    bh_sc4-mgd:
+    bh_sc4:
       timeout: 40
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
@@ -872,7 +872,7 @@
   model: wan-2.2-i2v
   model_family: Wan
   skus:
-    bh_sc4-mgd:
+    bh_sc4:
       timeout: 60
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
