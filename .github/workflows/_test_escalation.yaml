@@ -76,37 +76,28 @@ jobs:
           jq '[.[] | select(.deleted != true) | .id]' "$MEMBERS_FILE" > "${RUNNER_TEMP}/active_ids.json"
           echo "Fetched $(jq length "$MEMBERS_FILE") users across $PAGE_COUNT pages; $(jq length "${RUNNER_TEMP}/active_ids.json") active."
 
-      - name: Exclude metal-infra members from active set
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.CODEOWNERS_PING_BOT }}
-          METAL_INFRA_USERGROUP: ${{ vars.METAL_INFRA_USERGROUP }}
+      - name: Exclude metal-infra blacklist from active set
         run: |
           set -euo pipefail
-          if [ -z "${METAL_INFRA_USERGROUP:-}" ]; then
-            echo "::warning::METAL_INFRA_USERGROUP not set; skipping metal-infra reassignment."
-            exit 0
-          fi
+          # Our Slack token can't read user groups, so metal-infra membership is
+          # maintained by hand as the `blacklist:` section of .github/TESTOWNERS.
+          # Removing those IDs from the active set makes their tests get flagged
+          # for reassignment, exactly like a departed owner would be.
+          BLACKLIST="${RUNNER_TEMP}/blacklist_ids.json"
 
-          RESP="$(mktemp)"
-          curl -s -X GET \
-            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
-            "https://slack.com/api/usergroups.users.list?usergroup=${METAL_INFRA_USERGROUP}" > "$RESP"
+          # Blacklist entries are the only "- U..." list items in TESTOWNERS
+          # (team leads are "key: @handle" lines), so this matches just them.
+          IDS="$(grep -oE '^[[:space:]]*-[[:space:]]*U[A-Z0-9]+' .github/TESTOWNERS | grep -oE 'U[A-Z0-9]+' || true)"
+          echo "$IDS" | jq -R 'select(length > 0)' | jq -s 'unique' > "$BLACKLIST"
+          echo "metal-infra blacklist: $(jq length "$BLACKLIST") id(s)"
 
-          if [ "$(jq -r '.ok' "$RESP")" != "true" ]; then
-            echo "::error::Failed to fetch metal-infra usergroup: $(jq -r '.error // "unknown error"' "$RESP")"
-            exit 1
-          fi
-
-          jq '.users' "$RESP" > "${RUNNER_TEMP}/infra_ids.json"
-          echo "metal-infra members: $(jq length "${RUNNER_TEMP}/infra_ids.json")"
-
-          # active := active - infra  (array difference removes infra members).
+          # active := active - blacklist  (array difference removes blacklisted IDs).
           jq -n \
             --slurpfile active "${RUNNER_TEMP}/active_ids.json" \
-            --slurpfile infra "${RUNNER_TEMP}/infra_ids.json" \
-            '$active[0] - $infra[0]' > "${RUNNER_TEMP}/active_ids.trimmed.json"
+            --slurpfile blacklist "$BLACKLIST" \
+            '$active[0] - $blacklist[0]' > "${RUNNER_TEMP}/active_ids.trimmed.json"
           mv "${RUNNER_TEMP}/active_ids.trimmed.json" "${RUNNER_TEMP}/active_ids.json"
-          echo "Active after excluding infra: $(jq length "${RUNNER_TEMP}/active_ids.json")"
+          echo "Active after excluding blacklist: $(jq length "${RUNNER_TEMP}/active_ids.json")"
 
       - name: Detect deactivated test owners
         id: detect

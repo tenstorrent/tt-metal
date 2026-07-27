@@ -39,7 +39,7 @@
   name: Galaxy Fabric tests
   model: fabric
   team: scaleout
-  owner_id: UJ45FEC7M # Allan Liu
+  owner_id: U08EE956Q8Z # Allan Liu
   auto_triage: true
   cmd: |
     mkdir -p generated/test_reports
@@ -56,7 +56,7 @@
   name: Galaxy Multi-Process tests
   model: multiprocess
   team: scaleout
-  owner_id: U03NG0A5ND7 # Aditya Saigal
+  owner_id: U0709049XNK # Aditya Saigal
   auto_triage: false
   cmd: |
     python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
