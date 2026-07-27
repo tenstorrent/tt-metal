@@ -4,6 +4,8 @@
 #include "tt_metal/fabric/builder/router_connection_mapping.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 
+#include <array>
+
 namespace tt::tt_fabric {
 
 std::vector<ConnectionTarget> RouterConnectionMapping::get_downstream_targets(
@@ -51,9 +53,103 @@ RoutingDirection RouterConnectionMapping::get_opposite_direction(RoutingDirectio
     }
 }
 
+std::vector<RoutingDirection> RouterConnectionMapping::express_outbound_directions(
+    RoutingDirection direction, EdgeCapability ingress_capability) {
+    static constexpr std::array<RoutingDirection, 4> k_cardinals = {
+        RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W};
+
+    // A boundary landing is a route root rather than a packet already in its X phase, so it may begin
+    // Y even when its local port is E or W. Every non-self output stays available to it.
+    const bool is_landing = ingress_capability == EdgeCapability::INTERMESH;
+
+    std::vector<RoutingDirection> outbound;
+    if (direction == RoutingDirection::Z) {
+        // Arrived over an express chord and still in the Y phase: continue Y cardinally, or turn onto
+        // X. Z itself is excluded because that would return the packet over the link it arrived on.
+        outbound.assign(k_cardinals.begin(), k_cardinals.end());
+        return outbound;
+    }
+
+    if (is_x_axis_direction(direction) && !is_landing) {
+        // Ordinary X ingress: dimension order forbids returning to Y, so the only legal output is the
+        // opposite X direction, continuing around the X ring.
+        outbound.push_back(get_opposite_direction(direction));
+        return outbound;
+    }
+
+    // Y ingress, or an intermesh landing: continue on the opposite cardinal first, then the two
+    // orthogonal turns, then the express chord.
+    outbound.push_back(get_opposite_direction(direction));
+    for (const auto candidate : k_cardinals) {
+        if (candidate != direction && candidate != get_opposite_direction(direction)) {
+            outbound.push_back(candidate);
+        }
+    }
+    outbound.push_back(RoutingDirection::Z);
+    return outbound;
+}
+
 RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
-    Topology topology, RoutingDirection direction, bool has_z, bool enable_vc1, bool enable_mesh_pass_through) {
+    Topology topology,
+    RoutingDirection direction,
+    bool has_z,
+    bool enable_vc1,
+    bool enable_mesh_pass_through,
+    bool express_routing_enabled,
+    EdgeCapability ingress_capability) {
     RouterConnectionMapping mapping;
+
+    // Express routing changes which local transitions are legal, so it gets its own construction.
+    // Without it the wiring below is left exactly as it was: today's 2D routing is already
+    // dimension-ordered, so its wired-but-unused X->Y arcs are harmless, and removing them would
+    // change downstream counts, stream assignment, and L1 layout on every existing 2D configuration.
+    if (express_routing_enabled && (topology == Topology::Mesh || topology == Topology::Torus)) {
+        const auto outbound = express_outbound_directions(direction, ingress_capability);
+
+        for (const auto egress : outbound) {
+            TT_FATAL(
+                egress != direction,
+                "Router facing {} would be wired back over the link it arrived on",
+                static_cast<int>(direction));
+        }
+
+        const size_t vc0_limit =
+            builder_config::get_vc0_downstream_edm_count(/*is_2D_routing=*/true, /*express=*/true);
+        TT_FATAL(
+            outbound.size() <= vc0_limit,
+            "Express VC0 outbound direction count ({}) exceeds the downstream EDM count ({})",
+            outbound.size(),
+            vc0_limit);
+
+        // Cardinal and express outputs are realized on every carrier VC, not just VC0. Traffic that
+        // has crossed a mesh boundary stays on VC1 through every later mesh, and a landed carrier can
+        // still decode a Z action, so a Z output with no VC1 express sender would be unroutable.
+        // target_vc always equals the source VC here: there is no VC1->VC0 landing crossover.
+        for (uint32_t vc : {0u, 1u}) {
+            if (vc == 1 && !enable_vc1) {
+                continue;
+            }
+            // VC0 reserves sender channel 0 for the local worker; VC1 has no worker channel.
+            const uint32_t target_channel_base = (vc == 0) ? 1 : 0;
+            for (size_t i = 0; i < outbound.size(); ++i) {
+                mapping.add_target(
+                    vc,
+                    0,  // single receiver channel per VC
+                    ConnectionTarget(
+                        ConnectionType::INTRA_MESH,
+                        vc,
+                        static_cast<uint32_t>(target_channel_base + i),
+                        outbound[i]));
+            }
+        }
+
+        // An intermesh Z router is a different edge from an express chord, so it keeps its own
+        // capability-specific template rather than being folded into the shared maps above.
+        if (has_z) {
+            add_mesh_to_z_targets(mapping, topology, enable_vc1, enable_mesh_pass_through);
+        }
+        return mapping;
+    }
 
     // VC0 receiver_channel channels for mesh routers
     // Channel 0: Reserved for local/internal use
@@ -153,6 +249,15 @@ RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
 
     // If this device has a Z router, add MESH_TO_Z connection
     if (has_z) {
+        add_mesh_to_z_targets(mapping, topology, enable_vc1, enable_mesh_pass_through);
+    }
+
+    return mapping;
+}
+
+void RouterConnectionMapping::add_mesh_to_z_targets(
+    RouterConnectionMapping& mapping, Topology topology, bool enable_vc1, bool enable_mesh_pass_through) {
+    {
         // Mesh routers use the next available sender channel (after base mesh channels) for MESH_TO_Z
         // 1D: base channels from builder_config::num_sender_channels_1d_linear
         // 2D: base channels from builder_config::num_sender_channels_2d_mesh
@@ -192,8 +297,6 @@ RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
                     RoutingDirection::Z));  // Target is Z router
         }
     }
-
-    return mapping;
 }
 
 RouterConnectionMapping RouterConnectionMapping::for_z_router() {

@@ -79,4 +79,30 @@ bool has_intramesh_express_edge(const ControlPlane& control_plane, FabricNodeId 
     return has_z_edge_crossing_mesh(control_plane, local, /*want_crossing=*/false);
 }
 
+bool is_y_axis_direction(RoutingDirection direction) {
+    return direction == RoutingDirection::N || direction == RoutingDirection::S || direction == RoutingDirection::Z;
+}
+
+bool is_x_axis_direction(RoutingDirection direction) {
+    return direction == RoutingDirection::E || direction == RoutingDirection::W;
+}
+
+bool is_static_dor_forbidden(
+    RoutingDirection ingress,
+    EdgeCapability ingress_capability,
+    RoutingDirection egress,
+    EdgeCapability egress_capability) {
+    // Only an ordinary same-mesh X edge puts a packet in its X phase. An INTERMESH port is a landing
+    // root even when its local compass letter is E or W, so it is not an X ingress.
+    const bool is_intramesh_x_ingress =
+        ingress_capability == EdgeCapability::INTRAMESH_CARDINAL && is_x_axis_direction(ingress);
+
+    const bool is_intramesh_y_egress =
+        (egress_capability == EdgeCapability::INTRAMESH_CARDINAL && (egress == RoutingDirection::N ||
+                                                                    egress == RoutingDirection::S)) ||
+        (egress_capability == EdgeCapability::INTRAMESH_EXPRESS && egress == RoutingDirection::Z);
+
+    return is_intramesh_x_ingress && is_intramesh_y_egress;
+}
+
 }  // namespace tt::tt_fabric

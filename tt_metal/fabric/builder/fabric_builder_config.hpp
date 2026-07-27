@@ -99,6 +99,11 @@ static constexpr std::size_t num_max_receiver_channels =
 
 static constexpr std::size_t num_downstream_edms_vc0 = 1;
 static constexpr std::size_t num_downstream_edms_2d_vc0 = 3;
+// With express routing, a Y-facing VC0 receiver can fan out to four downstream routers rather than
+// three: continue Y cardinally, take the express chord, and turn onto either X direction. The stream
+// register for that fourth edge already exists (vc_0_free_slots_from_downstream_edge_4), so this
+// widening needs no new flow-control resource.
+static constexpr std::size_t num_downstream_edms_2d_vc0_express = 4;
 static constexpr std::size_t num_downstream_edms_2d_vc1 = 3;  // XY intermesh: 3 mesh directions
 static constexpr std::size_t num_downstream_edms_2d_vc1_with_z = 4;  // Z intermesh: 3 mesh + Z
 static constexpr std::size_t num_downstream_edms_1d = num_downstream_edms_vc0;
@@ -118,7 +123,7 @@ uint32_t get_num_tensix_sender_channels(Topology topology, tt::tt_fabric::Fabric
 
 uint32_t get_downstream_edm_count(bool is_2D_routing);
 
-uint32_t get_vc0_downstream_edm_count(bool is_2D_routing);
+uint32_t get_vc0_downstream_edm_count(bool is_2D_routing, bool express_routing_enabled = false);
 
 uint32_t get_vc1_downstream_edm_count(bool is_2D_routing);
 

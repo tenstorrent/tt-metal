@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "tt_metal/fabric/builder/connection_registry.hpp"
+#include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
@@ -94,6 +95,11 @@ public:
      * @param enable_mesh_pass_through EXPERIMENTAL: when set (and has_z), also forwards VC1 traffic to
      *        the local Z router (MESH_TO_Z on VC1) so inter-mesh traffic can pass through this mesh
      *        toward a further mesh (A->B->C) instead of sinking here. Reuses VC1; not deadlock-safe.
+     * @param express_routing_enabled When set, build the express transition set instead: cardinal and
+     *        express Z outputs on every carrier VC, with an ordinary X ingress unwired from intramesh
+     *        Y egress so dimension order holds. Non-express wiring is left byte-for-byte as it was.
+     * @param ingress_capability Capability of this router's own edge. Only consulted under express
+     *        routing, where an INTERMESH landing on an E/W port stays eligible to begin Y.
      * @return Configured RouterConnectionMapping for mesh router
      */
     static RouterConnectionMapping for_mesh_router(
@@ -101,7 +107,18 @@ public:
         RoutingDirection direction,
         bool has_z,
         bool enable_vc1 = false,
-        bool enable_mesh_pass_through = false);
+        bool enable_mesh_pass_through = false,
+        bool express_routing_enabled = false,
+        EdgeCapability ingress_capability = EdgeCapability::INTRAMESH_CARDINAL);
+
+    /**
+     * @brief Legal outbound directions for one express-routing mesh router
+     *
+     * Exposed for regression: the transition set is the whole point of the express wiring, so it is
+     * checked directly rather than only through the assembled mapping.
+     */
+    static std::vector<RoutingDirection> express_outbound_directions(
+        RoutingDirection direction, EdgeCapability ingress_capability);
 
     /**
      * @brief Factory method for Z router connection mapping
@@ -145,6 +162,12 @@ private:
      * @brief Helper to compute opposite direction for mesh routers
      */
     static RoutingDirection get_opposite_direction(RoutingDirection dir);
+
+    /**
+     * @brief Add the MESH_TO_Z targets that reach a local intermesh Z router
+     */
+    static void add_mesh_to_z_targets(
+        RouterConnectionMapping& mapping, Topology topology, bool enable_vc1, bool enable_mesh_pass_through);
 };
 
 }  // namespace tt::tt_fabric

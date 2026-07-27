@@ -48,4 +48,20 @@ bool has_intermesh_z_edge(const ControlPlane& control_plane, FabricNodeId local)
 // Does this node terminate a same-mesh express chord?
 bool has_intramesh_express_edge(const ControlPlane& control_plane, FabricNodeId local);
 
+// Which axis a direction belongs to: N/S/Z are Y, E/W are X (builder contract section 4.2.1).
+bool is_y_axis_direction(RoutingDirection direction);
+bool is_x_axis_direction(RoutingDirection direction);
+
+// Would forwarding from `ingress` to `egress` violate the fixed Y-before-X dimension order?
+//
+// True only for an ordinary same-mesh X ingress turning back into an intramesh Y egress. Dimension
+// order is what keeps X resources from ever waiting on Y ones, which the deadlock-freedom argument
+// relies on, so such a producer is never wired.
+//
+// An INTERMESH ingress is deliberately exempt even on an E or W port: a boundary landing is a route
+// root rather than a packet already in its X phase, so it may legally begin Y.
+bool is_static_dor_forbidden(
+    RoutingDirection ingress, EdgeCapability ingress_capability, RoutingDirection egress,
+    EdgeCapability egress_capability);
+
 }  // namespace tt::tt_fabric

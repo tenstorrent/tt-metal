@@ -297,10 +297,16 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         // router (MESH_TO_Z on VC1) so inter-mesh traffic can traverse intermediate meshes (A->B->C).
         bool enable_mesh_pass_through = intermesh_config.requires_vc1_mesh_pass_through;
         // The MESH_TO_Z connection exists to reach an intermesh Z router, so it follows the intermesh
-        // Z edge rather than the presence of any Z port. An express chord is wired as an ordinary
-        // same-VC cardinal/Z transition instead, which arrives with the express wiring work.
+        // Z edge rather than the presence of any Z port. An express chord is instead wired as an
+        // ordinary same-VC cardinal/Z transition by the express path below.
         connection_mapping = RouterConnectionMapping::for_mesh_router(
-            topology, location.direction, has_intermesh_z, enable_vc1, enable_mesh_pass_through);
+            topology,
+            location.direction,
+            has_intermesh_z,
+            enable_vc1,
+            enable_mesh_pass_through,
+            control_plane.express_routing_enabled(local_node.mesh_id),
+            edge_capability);
     }
 
     // Compute injection channel flags at router level BEFORE creating builders
