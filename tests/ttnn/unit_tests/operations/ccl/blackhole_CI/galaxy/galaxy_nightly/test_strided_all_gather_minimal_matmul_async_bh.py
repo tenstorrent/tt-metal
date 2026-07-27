@@ -212,27 +212,36 @@ def test_strided_all_gather_minimal_matmul_async(
 @skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize(
-    "ltx_layer, K, N, chunks, use_bias, activation, use_ternary, M_block, K_block, N_block, subblock_h, subblock_w",
+    "ltx_layer, M, K, N, chunks, use_bias, activation, use_ternary, M_block, K_block, N_block, subblock_h, subblock_w",
     [
+        # M is the full (SP=8) sequence length; per-device M = M / 8 (e.g. 38912 -> 4864, 9728 -> 1216).
         # M_block/K_block/N_block/subblock_h/subblock_w are in TILES. Video block (K = video_dim = 4096);
         # q_out folds to_q / to_out(plain) / cross-attn q. N is the PER-DEVICE output width (full N / TP=4),
         # since shard_weights=False replicates a per-device-sized weight (K is full, gathered by the AG).
         # Multi-N-block configs (v_qkv/v_kv/v_ff1 and audio) are commented out: with N_blocks/core > 1 the split
         # write takes the deferred path, which is not split-aware and deadlocks. These are the wide-N (compute-
         # bound) matmuls, so the fabric-bound AG-overlap path doesn't matter for them and we don't care to run them.
-        # ("v_qkv", 4096, 3072, 3, True, None, False, 16, 8, 4, 2, 2),
-        # ("v_kv", 4096, 2048, 2, True, None, False, 16, 8, 4, 2, 2),
-        ("v_q_out", 4096, 1024, 1, True, None, False, 16, 8, 4, 2, 2),
-        ("v_out_addcmul", 4096, 1024, 1, True, None, True, 16, 8, 4, 2, 2),
-        # ("v_ff1", 4096, 4096, 1, True, "gelu_tanh", False, 16, 8, 4, 2, 2),
-        # ("v_gate", 4096, 8, 1, True, None, False, 16, 8, 1, 2, 1),  # to_gate_logits: N = num_heads/TP = 8 (sub-tile) — TODO
+        # ("v_qkv", 38912, 4096, 3072, 3, True, None, False, 16, 8, 4, 2, 2), good
+        # ("v_kv", 38912, 4096, 2048, 2, True, None, False, 16, 8, 4, 2, 2), check this dont see it on device
+        ("v_q_out", 38912, 4096, 1024, 1, True, None, False, 16, 8, 4, 2, 2),
+        ("v_q_out_addcmul", 38912, 4096, 1024, 1, True, None, True, 16, 8, 4, 2, 2),
+        ("v_q_out_s1", 9728, 4096, 1024, 1, True, None, False, 16, 8, 4, 2, 2),
+        ("v_q_out_addcmul_s1", 9728, 4096, 1024, 1, True, None, True, 16, 8, 4, 2, 2),
+        # ("v_out_addcmul", 38912, 4096, 1024, 1, True, None, True, 16, 8, 4, 2, 2),
+        # ("v_ff1", 38912, 4096, 4096, 1, True, "gelu_tanh", False, 16, 8, 4, 2, 2),
+        ("v_gate", 38912, 4096, 8, 1, True, None, False, 16, 8, 1, 2, 1),
+        ("v_gate_s1", 9728, 4096, 8, 1, True, None, False, 16, 8, 1, 2, 1),
         # Audio block (K = audio_dim = 2048), same fusion structure with halved dims.
-        # ("a_qkv", 2048, 1536, 3, True, None, False, 16, 8, 4, 2, 2),
-        # ("a_kv", 2048, 1024, 2, True, None, False, 16, 8, 4, 2, 2),
-        ("a_q_out", 2048, 512, 1, True, None, False, 16, 8, 4, 2, 2),
-        ("a_out_addcmul", 2048, 512, 1, True, None, True, 16, 8, 4, 2, 2),
-        # ("a_ff1", 2048, 2048, 1, True, "gelu_tanh", False, 16, 8, 4, 2, 2),
-        # ("a_gate", 2048, 8, 1, True, None, False, 16, 8, 1, 2, 1),  # to_gate_logits: N = num_heads/TP = 8 (sub-tile) — TODO
+        # ("a_qkv", 38912, 2048, 1536, 3, True, None, False, 16, 8, 4, 2, 2),
+        ("a_kv", 38912, 2048, 1024, 2, True, None, False, 16, 8, 4, 2, 2),
+        ("a_kv_s1", 9728, 2048, 1024, 2, True, None, False, 16, 8, 4, 2, 2),
+        # ("a_q_out", 38912, 2048, 512, 1, True, None, False, 16, 8, 4, 2, 2),
+        # ("a_out_addcmul", 38912, 2048, 512, 1, True, None, True, 16, 8, 4, 2, 2),
+        # ("a_ff1", 38912, 2048, 2048, 1, True, "gelu_tanh", False, 16, 8, 4, 2, 2),
+        ("a_gate", 38912, 2048, 8, 1, True, None, False, 16, 8, 1, 2, 1),
+        ("a_gate_s1", 9728, 2048, 8, 1, True, None, False, 16, 8, 1, 2, 1),
+        ("a2v_attn_s1", 9728, 4096, 512, 1, True, None, False, 16, 8, 1, 2, 1),
+        ("a2v_attn_s2", 38912, 4096, 512, 1, True, None, False, 16, 8, 1, 2, 1),
     ],
     ids=[
         # "v_qkv",
@@ -275,6 +284,7 @@ def test_strided_all_gather_minimal_matmul_async(
 def test_strided_all_gather_minimal_matmul_ltx_configs(
     mesh_device,
     ltx_layer,
+    M,
     K,
     N,
     chunks,
@@ -300,7 +310,7 @@ def test_strided_all_gather_minimal_matmul_ltx_configs(
     run_strided_all_gather_minimal_matmul_impl(
         mesh_device,
         mesh_device.get_num_devices(),
-        38912,  # M (sequence, sharded on SP=8) -- reuses the wan1 ragged-M-block shape for all configs
+        M,  # M (sequence, sharded on SP=8)
         K,  # video_dim=4096 or audio_dim=2048, gathered across TP=4
         N,
         3,  # dim (AG/K shard axis)
