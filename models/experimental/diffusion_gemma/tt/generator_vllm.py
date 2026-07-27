@@ -792,7 +792,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                 dram=dram,
             )
             self._sessions[row] = session
-            blocks.append(emission.tokens.reshape(1, self.canvas_length))
+            blocks.append(self._emission_block(emission, session, row))
         return torch.cat(blocks, dim=0)
 
     def decode_forward(
@@ -835,15 +835,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                 # Request already emitted a stop token; pad with the stop id.
                 # (With the serving contract above this is dead for max_num_seqs=1,
                 # but a batched session may still self-finish; guard for empty.)
-                stop_id = 0
-                if session.stop_token_ids:
-                    ids = (
-                        session.stop_token_ids
-                        if isinstance(session.stop_token_ids, (list, tuple))
-                        else [session.stop_token_ids]
-                    )
-                    stop_id = int(ids[0])
-                blocks.append(torch.full((1, self.canvas_length), stop_id, dtype=torch.long))
+                blocks.append(self._stop_block(session))
                 continue
             try:
                 emission = session.decode_block()
@@ -872,8 +864,47 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                 halted=emission.halted,
                 stop=emission.stop,
             )
-            blocks.append(emission.tokens.reshape(1, self.canvas_length))
+            blocks.append(self._emission_block(emission, session, row))
         return torch.cat(blocks, dim=0)
+
+    def _stop_block(self, session) -> torch.Tensor:
+        """A full ``[1, canvas_length]`` block of the session's stop id.
+
+        Used wherever a row has no real tokens to contribute but must still fill its slot: a session
+        that already finished, and a terminal emission from the degeneracy guard.
+        """
+        stop_id = 0
+        if session.stop_token_ids:
+            ids = (
+                session.stop_token_ids
+                if isinstance(session.stop_token_ids, (list, tuple))
+                else [session.stop_token_ids]
+            )
+            stop_id = int(ids[0])
+        return torch.full((1, self.canvas_length), stop_id, dtype=torch.long)
+
+    def _emission_block(self, emission, session, row: int) -> torch.Tensor:
+        """One row's ``[1, canvas_length]`` contribution for a block emission.
+
+        A ZERO-token emission is the degeneracy guard's terminal signal: the canvas was refused and
+        NOT committed, so the request ends here and keeps the healthy blocks it already produced
+        (``serving.decode_block``). Every row must still fill its slot, so it pads with the stop id
+        exactly as the already-finished path does. Reshaping the empty tensor instead is what killed
+        EngineCore on the first degenerate block of a served run.
+        """
+        count = int(emission.tokens.numel())
+        if count == 0:
+            logger.info(
+                f"[DiffusionGemma vLLM] row={row} block={emission.block_idx} terminal (canvas refused); "
+                f"emitting a stop-id block and ending the request"
+            )
+            return self._stop_block(session)
+        if count != self.canvas_length:
+            raise RuntimeError(
+                f"decode_block returned {count} tokens for row {row} block {emission.block_idx}; "
+                f"expected 0 (terminal) or {self.canvas_length} (a full canvas)"
+            )
+        return emission.tokens.reshape(1, self.canvas_length)
 
     def release_request(self, row: int) -> None:
         """Drop a finished request, preserving any model-lifetime up-front capture."""

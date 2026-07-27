@@ -20,6 +20,9 @@ import os
 from types import SimpleNamespace
 
 import pytest
+import torch
+
+import pytest
 
 from models.experimental.diffusion_gemma.tt import serving
 
@@ -201,3 +204,74 @@ def test_serving_smoke_emits_blocks_and_advances_position():
     assert metrics["mean_block_latency_s"] > 0.0
     assert metrics["tokens_per_block_per_s"] > 0.0
     assert len(metrics["per_block_latency_s"]) == metrics["blocks_emitted"]
+
+
+# --------------------------------------------------------------------------------------------
+# vLLM row contract for a TERMINAL (zero-token) emission
+#
+# serving.decode_block ends a request on a degenerate canvas by returning a ZERO-token emission with
+# stop=True, so the caller keeps the healthy blocks it already produced. generator_vllm reshaped that
+# unconditionally into [1, canvas_length] and killed EngineCore on the first degenerate block of a
+# served run (tt-shield 30269947661): "shape '[1, 256]' is invalid for input of size 0". The graceful
+# path was graceful only in the smoke driver and fatal in serving, the one place it exists for.
+#
+# The contract these pin: every row contributes exactly one [1, canvas_length] block, a terminal
+# emission fills it with the stop id, and an emission that is neither empty nor a full canvas is an
+# error rather than a confusing reshape.
+
+
+class _TerminalEmission:
+    def __init__(self, count, block_idx=3):
+        self.tokens = torch.zeros(count, dtype=torch.long)
+        self.block_idx = block_idx
+
+
+class _SessionStub:
+    def __init__(self, stop_token_ids=None):
+        self.stop_token_ids = stop_token_ids
+
+
+def _wrapper(canvas_length=256):
+    """A generator_vllm wrapper shell exposing only the emission-block helpers."""
+    GV = pytest.importorskip("models.experimental.diffusion_gemma.tt.generator_vllm")
+    wrapper = object.__new__(GV.DiffusionGemmaForCausalLM)
+    wrapper.canvas_length = canvas_length
+    return wrapper
+
+
+def test_terminal_emission_fills_the_row_with_the_stop_id():
+    """A refused canvas must still fill its [1, C] slot, not raise on reshaping 0 elements."""
+    wrapper = _wrapper()
+    block = wrapper._emission_block(_TerminalEmission(0), _SessionStub(stop_token_ids=[106, 1]), row=0)
+    assert block.shape == (1, 256)
+    assert (block == 106).all(), "should pad with the session's FIRST stop id"
+
+
+def test_terminal_emission_without_stop_ids_falls_back_to_zero():
+    wrapper = _wrapper()
+    block = wrapper._emission_block(_TerminalEmission(0), _SessionStub(stop_token_ids=None), row=0)
+    assert block.shape == (1, 256) and (block == 0).all()
+
+
+def test_bare_int_stop_token_id_is_accepted():
+    """stop_token_ids may be a bare int rather than a sequence; indexing one would raise."""
+    wrapper = _wrapper()
+    block = wrapper._emission_block(_TerminalEmission(0), _SessionStub(stop_token_ids=106), row=0)
+    assert (block == 106).all()
+
+
+def test_full_canvas_emission_passes_through_unchanged():
+    wrapper = _wrapper(canvas_length=4)
+    emission = _TerminalEmission(0)
+    emission.tokens = torch.tensor([7, 8, 9, 10], dtype=torch.long)
+    block = wrapper._emission_block(emission, _SessionStub(), row=0)
+    assert block.shape == (1, 4) and block.tolist() == [[7, 8, 9, 10]]
+
+
+def test_partial_emission_is_an_error_not_a_reshape(expect_error):
+    """Neither empty nor a full canvas means something upstream is wrong; say so with the size."""
+    wrapper = _wrapper(canvas_length=4)
+    emission = _TerminalEmission(0)
+    emission.tokens = torch.tensor([1, 2], dtype=torch.long)
+    with expect_error(RuntimeError, match="returned 2 tokens"):
+        wrapper._emission_block(emission, _SessionStub(), row=0)
