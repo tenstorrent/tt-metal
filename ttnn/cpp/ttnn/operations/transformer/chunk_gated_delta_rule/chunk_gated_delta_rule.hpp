@@ -101,6 +101,14 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> kda_distributed_affine_prefix(
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 
+/** Exchange the three-row causal-convolution carry along the SP mesh axis. */
+std::tuple<ttnn::Tensor, ttnn::Tensor> kda_convolution_halo(
+    const ttnn::Tensor& projected_qkv,
+    const ttnn::Tensor& initial_carry,
+    uint32_t sequence_parallel_axis,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+
 /** Fused per-head RMSNorm and sigmoid gate for tile-aligned KDA prefill. */
 ttnn::Tensor kda_gated_rms_norm(
     const ttnn::Tensor& input,

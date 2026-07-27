@@ -124,6 +124,17 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none());
 
+    ttnn::bind_function<"kda_convolution_halo", "ttnn.transformer.">(
+        mod,
+        "Exchange causal-convolution carry between SP neighbors and replicate the final carry.",
+        &ttnn::transformer::kda_convolution_halo,
+        nb::arg("projected_qkv").noconvert(),
+        nb::arg("initial_carry").noconvert(),
+        nb::kw_only(),
+        nb::arg("sequence_parallel_axis"),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
+
     ttnn::bind_function<"kda_gated_rms_norm", "ttnn.transformer.">(
         mod,
         "Fused per-head RMSNorm and sigmoid gate for tile-aligned KDA prefill.",

@@ -886,6 +886,78 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> kda_distributed_affine_prefix(
     return {entry_state, final_state};
 }
 
+std::tuple<ttnn::Tensor, ttnn::Tensor> kda_convolution_halo(
+    const ttnn::Tensor& projected_qkv,
+    const ttnn::Tensor& initial_carry,
+    uint32_t sequence_parallel_axis,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    TT_FATAL(sequence_parallel_axis < 2, "sequence_parallel_axis must be 0 or 1");
+    const auto qkv_shape = projected_qkv.logical_shape();
+    const auto carry_shape = initial_carry.logical_shape();
+    TT_FATAL(qkv_shape.rank() == 3 && carry_shape.rank() == 3, "KDA convolution halo expects rank-3 tensors");
+    TT_FATAL(
+        qkv_shape[0] == carry_shape[0] && qkv_shape[2] == carry_shape[2],
+        "KDA convolution halo requires matching batch and channel dimensions");
+    const uint32_t history = carry_shape[1];
+    TT_FATAL(history > 0 && qkv_shape[1] >= history, "KDA convolution halo requires 0 < history <= local T");
+    TT_FATAL(projected_qkv.dtype() == initial_carry.dtype(), "KDA convolution halo requires matching dtypes");
+    TT_FATAL(projected_qkv.layout() == initial_carry.layout(), "KDA convolution halo requires matching layouts");
+    for (const auto* tensor : {&projected_qkv, &initial_carry}) {
+        TT_FATAL(
+            tensor->memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "KDA convolution halo requires interleaved tensors");
+    }
+
+    auto* mesh_device = projected_qkv.device();
+    TT_FATAL(mesh_device != nullptr, "KDA convolution halo requires a mesh device");
+    const auto mesh_shape = mesh_device->shape();
+    TT_FATAL(mesh_shape.dims() == 2, "KDA convolution halo requires a 2D mesh");
+    const uint32_t sp_size = mesh_shape[sequence_parallel_axis];
+    const uint32_t tp_size = mesh_shape[1 - sequence_parallel_axis];
+    TT_FATAL(sp_size > 1, "KDA convolution halo requires SP > 1");
+    const auto out_mem = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
+    auto coordinate = [sequence_parallel_axis](uint32_t sp_rank, uint32_t tp_rank) {
+        return sequence_parallel_axis == 0 ? MeshCoordinate(sp_rank, tp_rank) : MeshCoordinate(tp_rank, sp_rank);
+    };
+
+    auto local_final_carry = ttnn::slice(
+        projected_qkv,
+        ttnn::SmallVector<int32_t>{0, static_cast<int32_t>(qkv_shape[1] - history), 0},
+        ttnn::SmallVector<int32_t>{
+            static_cast<int32_t>(qkv_shape[0]), static_cast<int32_t>(qkv_shape[1]), static_cast<int32_t>(qkv_shape[2])},
+        ttnn::SmallVector<int32_t>{1, 1, 1},
+        out_mem);
+
+    auto partition_carry = ttnn::clone(initial_carry, std::nullopt, out_mem, compute_kernel_config);
+    for (uint32_t tp_rank = 0; tp_rank < tp_size; ++tp_rank) {
+        for (uint32_t destination = 1; destination < sp_size; ++destination) {
+            partition_carry = ttnn::point_to_point(
+                local_final_carry,
+                coordinate(destination, tp_rank),
+                coordinate(destination - 1, tp_rank),
+                ttnn::ccl::Topology::Linear,
+                partition_carry,
+                std::nullopt);
+        }
+    }
+
+    auto final_carry = ttnn::clone(initial_carry, std::nullopt, out_mem, compute_kernel_config);
+    for (uint32_t tp_rank = 0; tp_rank < tp_size; ++tp_rank) {
+        const auto sender_coord = coordinate(sp_size - 1, tp_rank);
+        for (uint32_t destination = 0; destination < sp_size; ++destination) {
+            final_carry = ttnn::point_to_point(
+                local_final_carry,
+                coordinate(destination, tp_rank),
+                sender_coord,
+                ttnn::ccl::Topology::Linear,
+                final_carry,
+                std::nullopt);
+        }
+    }
+    return {partition_carry, final_carry};
+}
+
 ttnn::Tensor kda_gated_rms_norm(
     const ttnn::Tensor& input,
     const ttnn::Tensor& gate,
