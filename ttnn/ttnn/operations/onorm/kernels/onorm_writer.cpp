@@ -22,7 +22,9 @@
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 void kernel_main() {
-    constexpr uint32_t cb_out_tiles = 16;
+    // CB slot map — injected as a preprocessor define from the ONE host-side
+    // source of truth (`_CB_SLOTS` in onorm_program_descriptor.py).
+    constexpr uint32_t cb_out_tiles = ONORM_CB_OUT_TILES;
 
     // --- Blocking Model parameters (compile-time; one source of truth on host) ---
     constexpr uint32_t flat_tiles = get_compile_time_arg_val(0);           // FLAT / TILE_W

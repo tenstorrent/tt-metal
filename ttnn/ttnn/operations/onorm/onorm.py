@@ -25,7 +25,7 @@ import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .onorm_program_descriptor import TILE_H, create_program_descriptor
+from .onorm_program_descriptor import TILE_H, TILE_W, create_program_descriptor
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +187,27 @@ def onorm(
     assert weight_shape[-1] == head_dim and all(
         d == 1 for d in weight_shape[:-1]
     ), f"onorm: weight must be [1, ..., 1, V={head_dim}], got {weight_shape}"
+    # V must be a whole number of tile widths.  The head-major -> flat re-tile
+    # (untilize -> row-major -> tilize) relies on head h's V values being
+    # *exactly* the row-major span [h*V, (h+1)*V); a V that does not fill whole
+    # tiles interleaves TILE padding into that span and silently mis-maps every
+    # flat feature index.  (The RMSNorm scaler 1/V would still be right — this
+    # is a layout failure, not an arithmetic one, so it has no numeric signal.)
+    assert (
+        head_dim % TILE_W == 0
+    ), f"onorm: V must be a multiple of the tile width ({TILE_W}) for the in-kernel re-tile; got V={head_dim}"
     assert float(epsilon) > 0.0, f"onorm: epsilon must be > 0, got {epsilon}"
+
+    # Placement contract.  `memory_config` is not a TARGET axis, so this is a
+    # host assert rather than an axis refusal: the work split, the CB budget and
+    # the reader/writer are all written against interleaved buffers.  A sharded
+    # input would still read correctly through TensorAccessor but its resident
+    # L1 is invisible to the CB budget below, so it can OOM without a signal.
+    for name, tensor in (("o", o), ("gate", gate), ("weight", weight)):
+        assert not tensor.memory_config().is_sharded(), (
+            f"onorm: {name} must be interleaved (got {tensor.memory_config()}). "
+            f"Sharded placement is not a declared axis of this op."
+        )
 
     device = o.device()
     output = ttnn.allocate_tensor_on_device(

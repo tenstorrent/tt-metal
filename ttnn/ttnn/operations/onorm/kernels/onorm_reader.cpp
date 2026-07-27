@@ -51,10 +51,12 @@ FORCE_INLINE void stream_tiles(const Accessor& acc, uint32_t first_tile, uint32_
 }  // namespace
 
 void kernel_main() {
-    constexpr uint32_t cb_o_tiles = 0;
-    constexpr uint32_t cb_gate_tiles = 1;
-    constexpr uint32_t cb_weight = 2;
-    constexpr uint32_t cb_scaler = 8;
+    // CB slot map — injected as preprocessor defines from the ONE host-side
+    // source of truth (`_CB_SLOTS` in onorm_program_descriptor.py).
+    constexpr uint32_t cb_o_tiles = ONORM_CB_O_TILES;
+    constexpr uint32_t cb_gate_tiles = ONORM_CB_GATE_TILES;
+    constexpr uint32_t cb_weight = ONORM_CB_WEIGHT;
+    constexpr uint32_t cb_scaler = ONORM_CB_SCALER;
 
     // --- Blocking Model parameters (compile-time; one source of truth on host) ---
     constexpr uint32_t v_tiles = get_compile_time_arg_val(0);              // V / TILE_W

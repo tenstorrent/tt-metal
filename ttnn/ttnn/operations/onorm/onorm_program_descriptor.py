@@ -95,6 +95,27 @@ CB_RM_FLAT_ROWS = 29  # compute -> compute : ROW-MAJOR flat feature rows (re-til
 CB_FLAT_TILES = 30  # compute -> compute : flat token-major tiles
 CB_GATE_SIG = 31  # compute -> compute : sigmoid(gate), materialised so the FPU feeds off L1
 
+# The kernels do NOT restate these numbers.  They are injected as preprocessor
+# defines (below) so this block is the single source of truth for the slot map:
+# re-numbering a CB here lands in the kernels automatically, and a kernel that
+# references a slot this dict does not define fails to compile instead of
+# silently addressing the wrong buffer.
+_CB_SLOTS = {
+    "ONORM_CB_O_TILES": CB_O_TILES,
+    "ONORM_CB_GATE_TILES": CB_GATE_TILES,
+    "ONORM_CB_WEIGHT": CB_WEIGHT,
+    "ONORM_CB_SCALER": CB_SCALER,
+    "ONORM_CB_OUT_TILES": CB_OUT_TILES,
+    "ONORM_CB_SUMSQ": CB_SUMSQ,
+    "ONORM_CB_RSTD": CB_RSTD,
+    "ONORM_CB_NORMED": CB_NORMED,
+    "ONORM_CB_ONORM": CB_ONORM,
+    "ONORM_CB_RM_FLAT_ROWS": CB_RM_FLAT_ROWS,
+    "ONORM_CB_FLAT_TILES": CB_FLAT_TILES,
+    "ONORM_CB_GATE_SIG": CB_GATE_SIG,
+}
+_CB_DEFINES = [(name, str(index)) for name, index in _CB_SLOTS.items()]
+
 
 def _div_up(a: int, b: int) -> int:
     """Ceiling division (ttnn.div_up is not exposed in every build)."""
@@ -207,8 +228,14 @@ def create_program_descriptor(
         tokens % TOKENS_PER_BLOCK == 0
     ), f"onorm: T={tokens} must be a multiple of TOKENS_PER_BLOCK={TOKENS_PER_BLOCK}"
 
-    tile_bytes = o.buffer_page_size()  # every CB is one bf16 tile per page
-    assert gate.buffer_page_size() == tile_bytes and output.buffer_page_size() == tile_bytes
+    # Every CB is one tile per page, and the reader/writer address all four
+    # buffers with that same `page_bytes` CT arg — so all four must agree.
+    tile_bytes = o.buffer_page_size()
+    for name, tensor in (("gate", gate), ("weight", weight), ("output", output)):
+        assert tensor.buffer_page_size() == tile_bytes, (
+            f"onorm: {name} page size {tensor.buffer_page_size()} B differs from o's {tile_bytes} B; "
+            f"the kernels stream every tensor with one shared page_bytes compile-time arg"
+        )
 
     # ================= 2. WORK DISTRIBUTION =================
     _, all_cores, assignment = _grid_assignment(device, num_token_blocks)
@@ -241,7 +268,9 @@ def create_program_descriptor(
     for cb_index in (CB_O_TILES, CB_GATE_TILES, CB_OUT_TILES):
         assert cb_pages[cb_index] % DM_BLOCK_TILES == 0, (
             f"onorm: CB {cb_index} has {cb_pages[cb_index]} pages, not a multiple of "
-            f"DM_BLOCK_TILES={DM_BLOCK_TILES}"
+            f"DM_BLOCK_TILES={DM_BLOCK_TILES}. Either pick a DM_BLOCK_TILES that divides "
+            f"it (a power of two always does), or raise O_DEPTH / NORM_CHUNK_TOKENS so "
+            f"cb_o_tiles ({cb_pages[CB_O_TILES]} pages) becomes a multiple of it."
         )
 
     total_cb_bytes = sum(cb_pages.values()) * tile_bytes
@@ -330,6 +359,7 @@ def create_program_descriptor(
         kernel_source=str(KERNEL_DIR / "onorm_reader.cpp"),
         core_ranges=all_cores,
         compile_time_args=reader_ct_args,
+        defines=_CB_DEFINES,
         runtime_args=reader_rt_args,
         config=ttnn.ReaderConfigDescriptor(),
     )
@@ -337,6 +367,7 @@ def create_program_descriptor(
         kernel_source=str(KERNEL_DIR / "onorm_writer.cpp"),
         core_ranges=all_cores,
         compile_time_args=writer_ct_args,
+        defines=_CB_DEFINES,
         runtime_args=writer_rt_args,
         config=ttnn.WriterConfigDescriptor(),
     )
@@ -344,6 +375,7 @@ def create_program_descriptor(
         kernel_source=str(KERNEL_DIR / "onorm_compute.cpp"),
         core_ranges=all_cores,
         compile_time_args=compute_ct_args,
+        defines=_CB_DEFINES,
         runtime_args=compute_rt_args,
         config=_compute_config_descriptor(compute_kernel_config),
     )

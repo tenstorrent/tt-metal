@@ -55,18 +55,22 @@
 namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
-    constexpr uint32_t cb_o_tiles = 0;
-    constexpr uint32_t cb_gate_tiles = 1;
-    constexpr uint32_t cb_weight = 2;
-    constexpr uint32_t cb_scaler = 8;
-    constexpr uint32_t cb_out_tiles = 16;
-    constexpr uint32_t cb_sumsq = 24;
-    constexpr uint32_t cb_rstd = 25;
-    constexpr uint32_t cb_normed = 27;
-    constexpr uint32_t cb_onorm = 28;
-    constexpr uint32_t cb_rm_flat_rows = 29;
-    constexpr uint32_t cb_flat_tiles = 30;
-    constexpr uint32_t cb_gate_sig = 31;
+    // CB slot map — injected as preprocessor defines from the ONE host-side
+    // source of truth (`_CB_SLOTS` in onorm_program_descriptor.py).  These are
+    // deliberately NOT literals here: a slot number restated in two files
+    // drifts the moment either side is renumbered.
+    constexpr uint32_t cb_o_tiles = ONORM_CB_O_TILES;
+    constexpr uint32_t cb_gate_tiles = ONORM_CB_GATE_TILES;
+    constexpr uint32_t cb_weight = ONORM_CB_WEIGHT;
+    constexpr uint32_t cb_scaler = ONORM_CB_SCALER;
+    constexpr uint32_t cb_out_tiles = ONORM_CB_OUT_TILES;
+    constexpr uint32_t cb_sumsq = ONORM_CB_SUMSQ;
+    constexpr uint32_t cb_rstd = ONORM_CB_RSTD;
+    constexpr uint32_t cb_normed = ONORM_CB_NORMED;
+    constexpr uint32_t cb_onorm = ONORM_CB_ONORM;
+    constexpr uint32_t cb_rm_flat_rows = ONORM_CB_RM_FLAT_ROWS;
+    constexpr uint32_t cb_flat_tiles = ONORM_CB_FLAT_TILES;
+    constexpr uint32_t cb_gate_sig = ONORM_CB_GATE_SIG;
 
     // --- Blocking Model parameters (compile-time; one source of truth on host) ---
     constexpr uint32_t nb = get_compile_time_arg_val(0);                   // NORM_CHUNK_TOKENS
