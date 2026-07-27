@@ -164,13 +164,26 @@ class TtHCACompressor(_TtHCABase):
             **kwargs,
         )
 
-    def forward(self, hidden_states, position_ids: torch.Tensor, seq_len_actual: int | None = None):
+    def forward(
+        self,
+        hidden_states,
+        position_ids: torch.Tensor,
+        seq_len_actual: int | None = None,
+        first_window_position: int = 0,
+        total_entries: int | None = None,
+    ):
         """``hidden_states``: TTNN [B, 1, S_pad/sp, hidden/tp] (seq host-padded to a multiple of
         compress_rate*sp via ``prepare_input``). ``position_ids``: torch [B, S_real] (real positions).
         ``seq_len_actual``: real pre-pad length; only ``T_real = S_real // compress_rate`` compressed
         entries survive (pad-derived windows are trimmed). ``None`` -> no padding (single-shot: use the
-        full seq). Returns ``compressed_kv`` [B, 1, T_real, head_dim] (TP-replicated, SP-gathered) and
-        host ``block_bias`` [B, 1, S_real, T_real] (or None)."""
+        full seq). ``first_window_position``: global token position of this call's FIRST window
+        (``entry_count * compress_rate`` under chunked prefill) — without it a later chunk would rotate
+        its entries as if the sequence restarted.
+
+        Returns ``compressed_kv`` [B, 1, S_pad/compress_rate, head_dim] (TP-replicated, SP-gathered) —
+        one entry per padded window, so the width follows the tensor, not the real length. Trailing
+        pad-derived entries are left in: the caller knows only the first ``S_real/compress_rate`` are
+        real and the mask drops the rest. Also returns host ``block_bias`` [B, 1, S_real, entries]."""
         input_shape = tuple(hidden_states.shape)
         if len(input_shape) != 4 or input_shape[1] != 1:
             raise ValueError(f"Expected hidden_states shape [B, 1, S, hidden], got {input_shape}")
@@ -239,13 +252,18 @@ class TtHCACompressor(_TtHCABase):
             nope_dim = self.head_dim - self.rope_head_dim
             nope = ttnn.slice(compressed, [0, 0, 0, 0], [batch, 1, n_windows, nope_dim])
             rope = ttnn.slice(compressed, [0, 0, 0, nope_dim], [batch, 1, n_windows, self.head_dim])
-            positions = (torch.arange(n_windows * self.sp_factor) * self.compress_rate).unsqueeze(0)
+            positions = (
+                torch.arange(n_windows * self.sp_factor) * self.compress_rate + first_window_position
+            ).unsqueeze(0)
             cos, sin = self._cos_sin(positions)
             rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
             compressed_kv = ttnn.concat([nope, rope], dim=-1)
 
-            # SP all-gather the per-chip windows -> full T_pad global, replicated; then trim the
-            # pad-derived tail so only the T_real real compressed entries survive.
+            # SP all-gather the per-chip windows -> the full padded window count, replicated. The block is
+            # deliberately NOT trimmed to the real entry count: its width then depends only on the (fixed)
+            # chunk width, so a short final chunk presents the same shape as a full one and adds no
+            # program. How many of these entries are real is carried by the caller's entry_count and the
+            # attention mask -infs the rest; only a FINAL chunk may be short, so nothing reads them later.
             if self.sp_factor > 1:
                 compressed_kv = ttnn.experimental.all_gather_async(
                     compressed_kv,
@@ -259,16 +277,34 @@ class TtHCACompressor(_TtHCABase):
                     topology=self.ccl_topology,
                     cluster_axis=self.sp_axis,
                 )
-            if t_real < compressed_kv.shape[2]:
-                compressed_kv = ttnn.slice(compressed_kv, [0, 0, 0, 0], [batch, 1, t_real, self.head_dim])
         else:
             compressed_kv = self._from_torch(torch.zeros(batch, 1, 0, self.head_dim))
 
+        # block_bias must span every compressed entry the queries can see -- under chunked prefill that
+        # includes earlier chunks' entries, not just this call's (matching the reference, whose bias is
+        # built over the running cache). total_entries=None -> single-shot, where the two coincide.
+        bias_entries = t_real if total_entries is None else total_entries
         block_bias = None
-        if seq_len_actual > 1 and t_real > 0:
-            block_bias = hca_block_bias(position_ids, t_real, self.compress_rate)
+        if seq_len_actual > 1 and bias_entries > 0:
+            block_bias = hca_block_bias(position_ids, bias_entries, self.compress_rate)
 
         return compressed_kv, block_bias
+
+
+class TtHCAState:
+    """Per-layer chunked-prefill state, carried across chunks and handed to ``TtHCA.forward``
+    (owned by the caller, like MLA's ``kvpe_cache`` — not hidden inside the module).
+
+    Both device tensors keep a FIXED shape for the whole prefill; only their contents advance. That is
+    what lets one compiled program serve every chunk. ``entry_count`` / ``kv_actual`` say how much of
+    each is real — the attention mask reads them to ``-inf`` the rest.
+    """
+
+    def __init__(self, compressed_kv, sliding_carry):
+        self.compressed_kv = compressed_kv  # [B, 1, compressed_capacity, head_dim]; first entry_count real
+        self.sliding_carry = sliding_carry  # [B, 1, sliding_window, head_dim]; the raw KV a new chunk looks back into
+        self.entry_count = 0  # compressed entries emitted so far
+        self.kv_actual = 0  # real tokens consumed so far
 
 
 class TtHCA(_TtHCABase):
@@ -371,6 +407,21 @@ class TtHCA(_TtHCABase):
         self.wo_b = self._to_tt_linear_weight(o_b_proj_weight, tp_shard_dim=2)
 
         self.trans_mat = self._from_torch(get_rot_transformation_mat())
+
+    def alloc_state(self, max_seq_len: int, batch: int = 1) -> TtHCAState:
+        """Allocate this layer's chunked-prefill state, sized once for the longest context it will serve
+        (``max_seq_len`` — the same serving-capacity knob the runner resolves for the KV cache, so the
+        capacity lives with the cache rather than with the layer). Both tensors then keep that shape for
+        every chunk, which is what lets one compiled program serve the whole prefill.
+
+        Contents start zeroed and nothing is read before it is written: the mask keys off
+        ``entry_count`` / ``kv_actual`` and -infs everything past them, including chunk 0's empty carry."""
+        entries = -(-int(max_seq_len) // self.compressor.compress_rate)
+        capacity = -(-entries // ttnn.TILE_SIZE) * ttnn.TILE_SIZE  # cache writes land on tile boundaries
+        return TtHCAState(
+            compressed_kv=self._from_torch(torch.zeros(batch, 1, capacity, self.head_dim)),
+            sliding_carry=self._from_torch(torch.zeros(batch, 1, self.sliding_window, self.head_dim)),
+        )
 
     @classmethod
     def from_reference(cls, device, reference, config, **kwargs) -> "TtHCA":
@@ -496,22 +547,35 @@ class TtHCA(_TtHCABase):
         rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
         return ttnn.concat([nope, rope], dim=-1)
 
-    def _attn_mask(self, batch: int, seq_len: int, block_bias: torch.Tensor, sk_pad: int):
-        """Combined additive mask [B, 1, S, sk_pad] (TILE): sliding-window causal (width
-        ``sliding_window``) over the S main keys, block_bias over the T compressed keys, then
-        -inf over the [S+T, sk_pad) tile-padding so SDPA ignores the zero-padded KV columns.
-        ``seq_len`` is the GLOBAL query length. Built on host with global indices; on a mesh it is
-        SP-sharded on the query rows (dim 2) to match the SP-sharded q (head-independent -> TP-replicated,
-        full over the key columns since every query attends all keys)."""
+    def _attn_mask(
+        self,
+        batch: int,
+        seq_len: int,
+        block_bias: torch.Tensor,
+        sk_pad: int,
+        kv_actual: int = 0,
+        carry_len: int = 0,
+    ):
+        """Combined additive mask [B, 1, S, sk_pad] (TILE) over the key layout
+        ``[carry | chunk | compressed | tile-pad]``: sliding-window causal across the raw keys,
+        block_bias across the compressed ones, -inf over the rest.
+
+        ``seq_len`` is the GLOBAL query length of this chunk; ``kv_actual`` the global position of its
+        first query; ``carry_len`` how many raw keys precede it (0 in single-shot and in chunk 0).
+        Built on host from global positions; on a mesh it is SP-sharded on the query rows (dim 2) to
+        match the SP-sharded q — head-independent so TP-replicated, and full over the key columns
+        since every query attends all keys."""
         t_len = block_bias.shape[-1]
-        i = torch.arange(seq_len).view(seq_len, 1)
-        j = torch.arange(seq_len).view(1, seq_len)
-        allowed = (j <= i) & (i - j < self.sliding_window)
-        main = torch.zeros(seq_len, seq_len).masked_fill(~allowed, float("-inf"))
+        raw = carry_len + seq_len  # carry and chunk keys are CONTIGUOUS in global positions
+        i = torch.arange(seq_len).view(-1, 1) + kv_actual  # global query positions
+        j = torch.arange(raw).view(1, -1) + (kv_actual - carry_len)  # global key positions
+        # Same sliding-causal rule as ever, just read in global positions; j >= 0 drops the carry
+        # columns of the very first chunk, where those positions do not exist yet.
+        allowed = (j >= 0) & (j <= i) & (i - j < self.sliding_window)
         full = torch.full((batch, 1, seq_len, sk_pad), float("-inf"))
-        full[..., :seq_len] = main.view(1, 1, seq_len, seq_len)
+        full[..., :raw] = torch.zeros(seq_len, raw).masked_fill(~allowed, float("-inf")).view(1, 1, seq_len, raw)
         # block_bias covers the real query rows; padded query rows (if any) keep -inf and are discarded.
-        full[:, :, : block_bias.shape[2], seq_len : seq_len + t_len] = block_bias.to(torch.float32)
+        full[:, :, : block_bias.shape[2], raw : raw + t_len] = block_bias.to(torch.float32)
         mesh_mapper = None
         if self.is_mesh and self.sp_factor > 1:
             dims = [None, None]
@@ -519,15 +583,31 @@ class TtHCA(_TtHCABase):
             mesh_mapper = ttnn.ShardTensor2dMesh(self.device, mesh_shape=tuple(self.device.shape), dims=dims)
         return self._from_torch(full, mesh_mapper=mesh_mapper)
 
-    def _attention(self, q, sliding_kv, compressed_kv, block_bias: torch.Tensor, position_ids: torch.Tensor):
+    def _attention(
+        self,
+        q,
+        sliding_kv,
+        compressed_kv,
+        block_bias: torch.Tensor,
+        position_ids: torch.Tensor,
+        carry=None,
+        kv_actual: int = 0,
+    ):
         """Attention core (reference L833/843/718-746/869). Inputs: ``q`` [B, num_heads/tp, S/sp, 512],
         ``sliding_kv`` [B,1,S/sp,512] (SP-sharded), ``compressed_kv`` [B,1,T,512] (replicated),
-        ``block_bias`` host torch [B,1,S,T], ``position_ids`` torch [B,S]. SP-gathers the sliding KV to
-        full S, concats the (replicated) compressed KV, runs single-device SDPA per chip (q SP+TP-sharded,
-        KV replicated, mask SP-sharded, sink TP-sharded), then undoes V's RoPE. Returns [B, num_heads/tp, S/sp, 512]."""
+        ``block_bias`` host torch [B,1,S,T], ``position_ids`` torch [B,S]. ``carry`` [B,1,sliding_window,512]
+        is the previous chunk's raw KV tail (chunked prefill; None in single-shot), ``kv_actual`` the global
+        position of this chunk's first query. SP-gathers the sliding KV to full S, concats
+        ``[carry | sliding | compressed | pad]``, runs single-device SDPA per chip (q SP+TP-sharded, KV
+        replicated, mask SP-sharded, sink TP-sharded), then undoes V's RoPE.
+
+        Returns ``(attn, next_carry)`` — attn [B, num_heads/tp, S/sp, 512], and the last ``sliding_window``
+        rows of the gathered sliding KV, which is what the NEXT chunk needs to look back into. The carry
+        can only be taken here: before the gather those rows live on the last SP chip alone."""
         batch, seq_local = q.shape[0], q.shape[2]
         seq_len = seq_local * self.sp_factor  # global query/main-key length
         num_heads_local = self.num_heads // self.tp_factor
+        carry_len = 0 if carry is None else carry.shape[2]
 
         # Every query attends all keys, so the single-device SDPA needs the full sliding KV on each chip:
         # gather the SP-sharded sliding KV to full S (compressed KV is already replicated).
@@ -543,16 +623,23 @@ class TtHCA(_TtHCABase):
                 cluster_axis=self.sp_axis,
             )
 
-        # Pad the concatenated KV seq (S + T) up to a multiple of 32: SDPA tile-pads a
+        # The next chunk's look-back: the tail of THIS chunk's raw KV, now that it is gathered.
+        next_carry = ttnn.slice(
+            sliding_kv,
+            [0, 0, seq_len - self.sliding_window, 0],
+            [batch, 1, seq_len, self.head_dim],
+        )
+
+        # Pad the concatenated KV seq (carry + S + T) up to a multiple of 32: SDPA tile-pads a
         # non-aligned Sk with ZEROS and a provided mask's pad columns default to 0 (= attend),
         # polluting the softmax -- pad explicitly and mark those columns -inf in _attn_mask.
-        sk = seq_len + compressed_kv.shape[2]
+        sk = carry_len + seq_len + compressed_kv.shape[2]
         sk_pad = ((sk + 31) // 32) * 32
-        parts = [sliding_kv, compressed_kv]
+        parts = [sliding_kv, compressed_kv] if carry is None else [carry, sliding_kv, compressed_kv]
         if sk_pad > sk:
             parts.append(self._from_torch(torch.zeros(batch, 1, sk_pad - sk, self.head_dim)))
         kv = ttnn.concat(parts, dim=2)
-        mask = self._attn_mask(batch, seq_len, block_bias, sk_pad)
+        mask = self._attn_mask(batch, seq_len, block_bias, sk_pad, kv_actual=kv_actual, carry_len=carry_len)
 
         attn = ttnn.transformer.scaled_dot_product_attention(
             q,
@@ -562,6 +649,12 @@ class TtHCA(_TtHCABase):
             is_causal=False,
             scale=self.scaling,
             attention_sink=self.sinks_sdpa,
+            program_config=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
+                q_chunk_size=32,
+                k_chunk_size=int(__import__("os").environ.get("HCA_KCHUNK", "32")),
+                exp_approx_mode=False,
+            ),
         )
 
         nope_dim = self.head_dim - self.rope_head_dim
@@ -569,7 +662,7 @@ class TtHCA(_TtHCABase):
         rope = ttnn.slice(attn, [0, 0, 0, nope_dim], [batch, num_heads_local, seq_local, self.head_dim])
         cos, sin = self._cos_sin(position_ids, negate_sin=True)
         rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
-        return ttnn.concat([nope, rope], dim=-1)
+        return ttnn.concat([nope, rope], dim=-1), next_carry
 
     def _o_proj(self, attn):
         """Grouped output projection (reference L871-873). ``attn`` [B, num_heads/tp, S/sp, head_dim]
@@ -611,21 +704,54 @@ class TtHCA(_TtHCABase):
             )
         return out
 
-    def forward(self, hidden_states, position_ids: torch.Tensor, seq_len_actual: int | None = None):
-        """Full HCA block (prefill, single-shot), mirrors ``DeepseekV4Attention.forward``.
+    def forward(
+        self,
+        hidden_states,
+        position_ids: torch.Tensor,
+        seq_len_actual: int | None = None,
+        state: TtHCAState | None = None,
+    ):
+        """One HCA chunk, mirrors ``DeepseekV4Attention.forward``.
+
         ``hidden_states`` TTNN [B, 1, S_pad/sp, hidden/tp] (seq host-padded to compress_rate*sp via
-        ``prepare_input``); ``position_ids`` torch [B, S_real]; ``seq_len_actual`` the real pre-pad length
-        (``None`` -> nothing was padded). Returns [B, 1, S_pad/sp, hidden/tp] — the caller reads the first
-        S_real rows; the padded tail is causally masked everywhere it could leak."""
+        ``prepare_input``); ``position_ids`` torch [B, S_real] holding this chunk's GLOBAL positions;
+        ``seq_len_actual`` its real pre-pad length. ``state`` carries the compressed-KV cache and the raw
+        look-back across chunks and is advanced in place; ``None`` means single-shot, which is simply a
+        one-chunk prefill — a state sized to this call is made here so the compute path is identical
+        either way (no separate single-shot branch).
+
+        Returns [B, 1, S_pad/sp, hidden/tp]; the caller keeps the first S_real rows."""
+        batch = hidden_states.shape[0]
         seq_pad_global = hidden_states.shape[2] * self.sp_factor
+        compress_rate = self.compressor.compress_rate
+        real_len = seq_pad_global if seq_len_actual is None else seq_len_actual
+
+        # Prefill serves one request per call (concurrent users get their own state), matching MLA --
+        # which assumes the same but only says so in a comment, so a batched input there fails silently.
+        assert batch == 1, f"HCA prefill expects batch 1, got {batch}"
 
         # Below one full compression window there is no compressed KV at all (block_bias would be None
         # and the attention core has no compressed columns to mask). Fail here rather than deeper in.
-        compress_rate = self.compressor.compress_rate
-        real_len = seq_pad_global if seq_len_actual is None else seq_len_actual
         assert real_len >= compress_rate, (
             f"HCA prefill needs at least one full compression window: got seq_len {real_len} < "
             f"compress_rate {compress_rate}"
+        )
+
+        if state is None:
+            state = self.alloc_state(real_len, batch=batch)
+
+        n_new = real_len // compress_rate
+        total_entries = state.entry_count + n_new
+        capacity = state.compressed_kv.shape[2]
+        assert total_entries <= capacity, (
+            f"compressed cache full: {total_entries} entries > capacity {capacity}; allocate the state "
+            f"with a larger max_seq_len"
+        )
+        # The cache write copies whole tiles, so a chunk may only start on a tile boundary. Chunk 0 always
+        # does (offset 0); later chunks require chunk_len % (compress_rate * TILE_SIZE) == 0.
+        assert state.entry_count % ttnn.TILE_SIZE == 0, (
+            f"compressed cache write offset {state.entry_count} is not tile-aligned; chunk length must be "
+            f"a multiple of compress_rate * TILE_SIZE ({compress_rate * ttnn.TILE_SIZE})"
         )
 
         # The stems/undo-RoPE need one position per PADDED row (the rope op matches cos/sin to the tensor
@@ -637,6 +763,28 @@ class TtHCA(_TtHCABase):
 
         q = self._q_stem(hidden_states, pos_padded)
         sliding_kv = self._kv_stem(hidden_states, pos_padded)
-        compressed_kv, block_bias = self.compressor(hidden_states, position_ids, seq_len_actual=seq_len_actual)
-        attn = self._attention(q, sliding_kv, compressed_kv, block_bias, pos_padded)
+        new_entries, block_bias = self.compressor(
+            hidden_states,
+            position_ids,
+            seq_len_actual=seq_len_actual,
+            first_window_position=state.entry_count * compress_rate,
+            total_entries=total_entries,
+        )
+        # Publish this chunk's entries into the fixed-capacity cache; attention then reads the whole
+        # cache every chunk (constant shape) and the mask -infs everything past total_entries.
+        ttnn.kv_cache.fill_cache_for_user_(state.compressed_kv, new_entries, 0, update_idx=state.entry_count)
+
+        attn, next_carry = self._attention(
+            q,
+            sliding_kv,
+            state.compressed_kv,
+            block_bias,
+            pos_padded,
+            carry=state.sliding_carry,
+            kv_actual=state.kv_actual,
+        )
+
+        state.entry_count = total_entries
+        state.kv_actual += real_len
+        state.sliding_carry = next_carry
         return self._o_proj(attn)
