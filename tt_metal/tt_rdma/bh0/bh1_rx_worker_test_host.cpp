@@ -186,26 +186,39 @@ int main(int argc, char** argv) {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
     }
 
-    // Exactly-once check: every produced frame is owned by exactly one worker (i mod N), so at the design
-    // load processed + lapped should account for all produced frames, with lapped==0 when the pool keeps up.
+    // Read the workers' self-consistent produced_seen (all read the same live PKT_END_CNT). The
+    // exactly-once invariant is processed + lapped == produced_seen (every frame index handled once,
+    // either processed or skipped-as-lapped) -- this is what the worker-side accounting must satisfy, NOT
+    // the stale host est[2] sample. Coverage = processed / produced_seen = the fraction the pool kept up
+    // with; lapped>0 means too few workers for this frame RATE (small frames = high fps = worst case).
+    uint64_t produced_seen = 0;
+    for (uint32_t i = 0; i < nworkers; ++i) {
+        auto w = rd(wphys[i]);
+        if (w[5] > produced_seen) {
+            produced_seen = w[5];
+        }
+        std::printf("    worker %u: processed=%u lapped=%u produced_seen=%u\n", i, w[3], w[4], w[5]);
+    }
     const uint64_t accounted = fin_processed + fin_lapped;
-    const double cover = fin_produced ? 100.0 * (double)fin_processed / (double)fin_produced : 0.0;
+    const double cover = produced_seen ? 100.0 * (double)fin_processed / (double)produced_seen : 0.0;
+    const bool exactly_once = (accounted == produced_seen);  // no frame double-processed or dropped-unaccounted
     std::printf(
         "\n  === Phase 3.1b RESULT (bounded multi-consumer claim) ===\n"
-        "  %u workers: consumed peak %.1f Gbps  processed=%llu / produced=%u (%.1f%%)  lapped=%llu  eth drop=%u\n"
-        "  exactly-once: processed+lapped=%llu vs produced=%u  |  %s\n",
+        "  %u workers: consumed peak %.1f Gbps  processed=%llu / produced_seen=%llu (%.1f%% kept up)  lapped=%llu  eth "
+        "drop=%u\n"
+        "  exactly-once (processed+lapped==produced): %llu vs %llu -> %s  |  %s\n",
         nworkers,
         peak_gbps,
         (unsigned long long)fin_processed,
-        fin_produced,
+        (unsigned long long)produced_seen,
         cover,
         (unsigned long long)fin_lapped,
         max_drop,
         (unsigned long long)accounted,
-        fin_produced,
-        (fin_lapped == 0 && fin_processed >= fin_produced * 0.98)
-            ? "LOSSLESS: pool consumed all production exactly once"
-            : "workers fell behind (lapped>0) -> add workers");
+        (unsigned long long)produced_seen,
+        exactly_once ? "HOLDS" : "VIOLATED",
+        (fin_lapped == 0) ? "LOSSLESS: pool kept up (no lapping)"
+                          : "pool fell behind for this frame RATE -> add workers or use jumbo (fewer fps)");
 
     cluster.write_core(device->id(), eth_phys, std::vector<uint32_t>{1u}, TT_RDMA_STOP_ADDR);
     for (uint32_t i = 0; i < nworkers; ++i) {
