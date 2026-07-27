@@ -15,7 +15,7 @@
 #   INPUT_BAKE_FILE, INPUT_TARGETS, INPUT_SET_LINES, INPUT_UBUNTU_VERSION,
 #   INPUT_PYTHON_VERSION, INPUT_RETRIES, INPUT_RETRY_DELAY_SECONDS,
 #   INPUT_USE_DEFAULT_BUILDER, INPUT_VALIDATE_IMAGES, INPUT_ENABLE_ATTESTATIONS,
-#   INPUT_ENRICH_SBOM, INPUT_HARBOR_PREFIX, INPUT_SBOM_GENERATOR_IMAGE,
+#   INPUT_ENRICH_SBOM, INPUT_HARBOR_PREFIX, INPUT_SYFT_SCANNER_IMAGE,
 #   INPUT_ORAS_IMAGE
 #
 # Requires: docker (buildx), jq, numfmt; oras + syft are installed on demand for
@@ -48,12 +48,14 @@ ORAS_SHA256="${ORAS_SHA256:-9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917c
 # auth-walling anonymous pulls from CI runner IPs, both attempts failed the
 # same way (UNAUTHORIZED / dial-tcp timeout).
 #
-# Preferred fix: callers pass sbom-generator-image (INPUT_SBOM_GENERATOR_IMAGE)
+# Preferred fix: callers pass syft-scanner-image (INPUT_SYFT_SCANNER_IMAGE)
 # pointing at our own self-hosted copy on GHCR (dockerfile/Dockerfile.tools'
 # syft-scanner target, an unmodified re-publish of the upstream Apache-2.0
 # image - see docker-bake.hcl). That gets the SAME Harbor pull-through +
 # GHCR-direct-fallback treatment as every other tool image below, with no
-# Docker Hub dependency at all.
+# Docker Hub dependency at all. (Named after the tool it contains, not its
+# functional role as buildx's SBOM generator - every other tool image here
+# is named the same way, e.g. ccache/mold/oras.)
 #
 # Callers that haven't been migrated yet fall back to the previous fix:
 # Harbor does NOT proxy docker.io (only ghcr.io - see check-harbor.yaml /
@@ -64,13 +66,13 @@ ORAS_SHA256="${ORAS_SHA256:-9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917c
 # anonymous, unauthenticated mirror of Docker Hub. Its direct-docker.io
 # fallback path runs authenticated (see the "Login to Docker Hub" step in
 # publish-release-image.yaml) instead of anonymous.
-SBOM_GENERATOR_PATH="docker/buildkit-syft-scanner:stable-1"
-if [ -n "${INPUT_SBOM_GENERATOR_IMAGE}" ]; then
-  SBOM_GENERATOR_PRIMARY="${INPUT_HARBOR_PREFIX}${INPUT_SBOM_GENERATOR_IMAGE}"
-  SBOM_GENERATOR_FALLBACK="${INPUT_SBOM_GENERATOR_IMAGE}"
+SYFT_SCANNER_PATH="docker/buildkit-syft-scanner:stable-1"
+if [ -n "${INPUT_SYFT_SCANNER_IMAGE}" ]; then
+  SYFT_SCANNER_PRIMARY="${INPUT_HARBOR_PREFIX}${INPUT_SYFT_SCANNER_IMAGE}"
+  SYFT_SCANNER_FALLBACK="${INPUT_SYFT_SCANNER_IMAGE}"
 else
-  SBOM_GENERATOR_PRIMARY="mirror.gcr.io/${SBOM_GENERATOR_PATH}"
-  SBOM_GENERATOR_FALLBACK="docker.io/${SBOM_GENERATOR_PATH}"
+  SYFT_SCANNER_PRIMARY="mirror.gcr.io/${SYFT_SCANNER_PATH}"
+  SYFT_SCANNER_FALLBACK="docker.io/${SYFT_SCANNER_PATH}"
 fi
 
 # Populated by parse_inputs; referenced by later functions.
@@ -111,16 +113,17 @@ parse_inputs() {
 }
 
 # --- append attestation --set entries for each target to the named array ---
-# Usage: append_attestation_sets <array-name> [sbom-generator-image]
+# Usage: append_attestation_sets <array-name> [generator-image]
 # Emits the provenance/SBOM attest overrides (or the disabled variants) so both
 # the primary bake and the Harbor fallback share identical attestation shaping.
-# sbom-generator-image defaults to the mirror.gcr.io primary; the fallback
-# call passes SBOM_GENERATOR_FALLBACK (direct, authenticated docker.io)
-# explicitly, mirroring the Harbor-stripped/GHCR-direct split the caller
-# already does for context set-lines.
+# generator-image defaults to the syft-scanner primary; the fallback
+# call passes SYFT_SCANNER_FALLBACK (direct, GHCR-authenticated, or
+# authenticated docker.io for un-migrated callers) explicitly, mirroring the
+# Harbor-stripped/GHCR-direct split the caller already does for context
+# set-lines.
 append_attestation_sets() {
   local -n _sets="$1"
-  local generator_image="${2:-$SBOM_GENERATOR_PRIMARY}"
+  local generator_image="${2:-$SYFT_SCANNER_PRIMARY}"
   local t
   if [ "${INPUT_ENABLE_ATTESTATIONS}" = "true" ]; then
     for t in "${CLEAN_TARGETS[@]}"; do
@@ -142,7 +145,7 @@ build_bake_sets() {
   for s in "${SET_LINES[@]}"; do
     [ -n "$s" ] && BAKE_SETS+=(--set "$s")
   done
-  append_attestation_sets BAKE_SETS "${SBOM_GENERATOR_PRIMARY}"
+  append_attestation_sets BAKE_SETS "${SYFT_SCANNER_PRIMARY}"
 }
 
 # --- download a release tarball, verify its sha256, install one named binary ---
@@ -260,7 +263,7 @@ run_bake_with_retries() {
           FALLBACK_SETS+=(--set "$stripped")
         fi
       done
-      append_attestation_sets FALLBACK_SETS "${SBOM_GENERATOR_FALLBACK}"
+      append_attestation_sets FALLBACK_SETS "${SYFT_SCANNER_FALLBACK}"
       docker buildx bake -f "${INPUT_BAKE_FILE}" "${FALLBACK_SETS[@]}" "${CLEAN_TARGETS[@]}" \
         && bake_success=true || last_bake_exit=$?
       if [ "$bake_success" = "true" ]; then

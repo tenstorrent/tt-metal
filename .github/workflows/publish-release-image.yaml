@@ -63,7 +63,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Login to Docker Hub
         # Backstops docker/buildkit-syft-scanner (BuildKit's SBOM attestation
-        # scanner - see manual-docker-bake.sh's SBOM_GENERATOR_FALLBACK): the
+        # scanner - see manual-docker-bake.sh's SYFT_SCANNER_FALLBACK): the
         # primary pull now goes through mirror.gcr.io (anonymous, no rate
         # limit), but if that ever fails, bake retries by pulling the same
         # image directly from docker.io - anonymous docker.io pulls from CI
@@ -141,7 +141,7 @@ jobs:
           # two are consumed directly by manual-docker-bake.sh itself (SBOM
           # attest generator, oras binary for SBOM enrichment), so they're
           # passed through as their own action inputs instead of set-lines.
-          echo "sbom-generator-image=$(echo "$TOOL_TAGS" | jq -r '."syft-scanner-tag"')" >> "$GITHUB_OUTPUT"
+          echo "syft-scanner-image=$(echo "$TOOL_TAGS" | jq -r '."syft-scanner-tag"')" >> "$GITHUB_OUTPUT"
           echo "oras-image=$(echo "$TOOL_TAGS" | jq -r '."oras-tag"')" >> "$GITHUB_OUTPUT"
       - name: Build and push (skipped for dry run)
         if: ${{ !inputs.dry-run }}
@@ -149,7 +149,7 @@ jobs:
         with:
           targets: ${{ inputs.image }}
           set-lines: ${{ steps.bake.outputs.set }}
-          sbom-generator-image: ${{ steps.bake.outputs.sbom-generator-image }}
+          syft-scanner-image: ${{ steps.bake.outputs.syft-scanner-image }}
           oras-image: ${{ steps.bake.outputs.oras-image }}
           harbor-prefix: ${{ inputs.harbor-prefix }}
       - name: Get image digest
