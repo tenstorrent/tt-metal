@@ -24,7 +24,8 @@ performance mode.
 | `_decode_summary.csv` | Per-op-category rollup for that iteration (13 rows — start here). |
 | `_decode_ops.csv` | Every individual op in that iteration, machine readable. |
 | `_decode_breakdown.png` | Stacked device-time chart for that iteration. |
-| `_full_report.txt.gz` | The whole capture: compile, prefill, decode. For prefill questions. |
+| `_prefill_report.txt` | One steady-state prefill pass at ISL=128. |
+| `_full_report.txt.gz` | The whole capture: compile, prefill, decode. |
 
 The raw Tracy `ops_perf_results_*.csv` inputs are 35–73 MB each and are **not**
 committed. Regenerate them with the capture commands at the bottom of this file.
@@ -90,6 +91,38 @@ not core-limited, which is why core-grid sweeps produced almost nothing and why
 a 16-core FF experiment actually regressed 17 %.
 
 ---
+
+## Prefill
+
+`_prefill_report.txt` holds the last steady-state prefill pass at ISL=128 (the
+capture contains ~10 passes; warmup and compile ones are excluded).
+
+| | prefill device time | measured TTFT | matmul share | matmul FLOPs util |
+| --- | --- | --- | --- | --- |
+| `gemma2-9B_1xp150` | 63.0 ms | 69.2 ms | 62.4 % | 39.5 % |
+| `gemma2-9B_2xp150` | 32.6 ms | 50.4 ms | 44.0 % | 39.4 % |
+| `gemma2-27B_2xp150` | 74.3 ms | 95.2 ms | 56.6 % | 39.3 % |
+
+**Prefill is healthy and is not the bottleneck at these lengths.** At ISL=128 /
+OSL=200 it is only ~1.2–1.4 % of end-to-end wall time; the other ~99 % is decode.
+Optimising prefill today would be invisible in the throughput number.
+
+Two things are nonetheless worth recording for when long context matters:
+
+- **Prefill runs entirely DRAM-interleaved**, while decode is fully width-sharded.
+  Every prefill op re-reads activations from DRAM. That is why LayerNorm costs
+  15–25 % of prefill here versus 4–8 % in decode.
+- **Matmul FLOPs utilisation sits at ~39 % in all three configs**, with a wide
+  per-op spread (min ~30 %, max ~70 %). The high performers show the hardware can
+  do much better on the same pass; the low ones are program-config bound.
+
+Prefill only draws level with decode somewhere around ISL ≈ 8K at OSL=200, so
+these are long-context items, not current work.
+
+Note that TP=2 helps prefill far more than decode: TTFT improves 1.37x
+(69 → 50 ms) whereas decode throughput improves only ~1.03x. Prefill is
+compute-bound, so splitting the work across two chips genuinely helps, while
+decode is bandwidth-bound and pays a collective tax instead.
 
 ## Other findings worth keeping
 
