@@ -222,7 +222,8 @@ def run_all_gather_impl(
         else:
             torch_input = torch.randint(0, 100, ag_output_shape, dtype=torch_dtype)
 
-        # Convert golden from torch dtype to ttnn dtype, so we can check pcc==1.0 for a lossless copy
+        # torch -> ttnn dtype conversion may be lossy, so exclude that to isolate if CCL is lossy
+        # (i.e. by converting golden to ttnn dtype we can expect pcc==1.0 for any dtype)
         ag_output_tensor = ttnn.to_torch(ttnn.from_torch(torch_input, dtype=ag_input_dtype, layout=layout))
         ag_output_tensor_goldens_list.append(ag_output_tensor)
 
