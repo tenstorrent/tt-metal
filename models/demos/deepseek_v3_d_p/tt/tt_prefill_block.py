@@ -227,9 +227,14 @@ class TtPrefillBlock(LightweightModule):
         kv_only: bool = False,
         routing_use_l1_small_for_semaphores: bool = False,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
+        overlap_shared_expert_with_dispatch: bool = True,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
+        # Overlap the shared expert with dispatch via a sub-device manager (default). Must be False
+        # for ttnn trace capture: load/clear_sub_device_manager resets worker state inside forward,
+        # which begin_trace_capture forbids.
+        self.overlap_shared_expert_with_dispatch = overlap_shared_expert_with_dispatch
         # In chunked prefill the flat KV-cache slot is cache_user_id * layer_num + cache_layer_idx, so
         # layer_num must be the model's actual layer count — there is no safe default to fall back to.
         assert not is_chunked or layer_num is not None, "chunked prefill requires layer_num (model layer count)"
@@ -332,6 +337,7 @@ class TtPrefillBlock(LightweightModule):
                 dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
                 is_balanced=is_balanced,
+                overlap_shared_expert_with_dispatch=self.overlap_shared_expert_with_dispatch,
             )
         else:
             # emb_dim/hidden_dim default to DSv3/Kimi's 7168/18432 in TtFfn; pass the variant's real dims
@@ -372,6 +378,7 @@ class TtPrefillBlock(LightweightModule):
         layer_idx=0,
         routing_use_l1_small_for_semaphores=False,
         is_balanced=False,
+        overlap_shared_expert_with_dispatch=True,
     ):
         mesh_config = extract_mesh_config(mesh_device)
         sp_factor = mesh_device.shape[sp_axis]
@@ -419,10 +426,30 @@ class TtPrefillBlock(LightweightModule):
             route_scale=model_cfg.ROUTE_SCALE,
             weight_cache_path=weight_cache_path,
             layer_idx=layer_idx,
-            overlap_shared_expert_with_dispatch=True,
+            overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
             routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
             is_balanced=is_balanced,
         )
+
+    def set_trace_controller(self, controller):
+        """Forward a SubDeviceTraceController to this block's MoE (sub-device-swap segmentation) and to
+        its MLA (per-layer migration-ack segmentation; only acts when the controller carries an ack
+        callback). No-op for dense / kv-only FFNs, whose FFN has no sub-device overlap to trace around."""
+        # Stored so the block's migration-ack site (below, in forward) can route through the controller
+        # (trace path) instead of calling on_layer_complete directly — see the ack comment in forward.
+        self._trace_controller = controller
+        ffn = getattr(self, "ffn", None)
+        if ffn is not None and hasattr(ffn, "set_trace_controller"):
+            ffn.set_trace_controller(controller)
+        mla = getattr(self, "mla", None)
+        if mla is not None and hasattr(mla, "set_trace_controller"):
+            mla.set_trace_controller(controller)
+
+    def release_sub_device_managers(self):
+        """Remove this block's MoE overlap sub-device manager before mesh close (no-op otherwise)."""
+        ffn = getattr(self, "ffn", None)
+        if ffn is not None and hasattr(ffn, "release_sub_device_manager"):
+            ffn.release_sub_device_manager()
 
     def forward(
         self,
@@ -443,6 +470,7 @@ class TtPrefillBlock(LightweightModule):
         indexer_indices: Optional[ttnn.Tensor] = None,
         return_indexer_indices: bool = False,
         index_kv_cache: Optional[ttnn.Tensor] = None,
+        metadata: Optional[ttnn.Tensor] = None,
     ):
         """
         Args:
@@ -496,6 +524,7 @@ class TtPrefillBlock(LightweightModule):
             indexer_indices=indexer_indices,
             return_indexer_indices=return_indexer_indices,
             index_kv_cache=index_kv_cache,
+            metadata=metadata,
         )
         kv_intermediates = None
         mla_indices = None  # GLM-5.2 reuse: this layer's top-k indices (full layer) for downstream shared layers
@@ -515,23 +544,46 @@ class TtPrefillBlock(LightweightModule):
         # without the flush it could copy pre-zero data. layer_idx is GLOBAL (the scheduler orders acks
         # across pipeline ranks); cache_layer_idx is the LOCAL per-rank cache slot.
         if on_layer_complete is not None:
-            assert actual_end is not None, "actual_end required when on_layer_complete is set"
+            assert actual_end is not None or metadata is not None, "actual_end or metadata required for zero_pad"
             # zero_padded_kv_cache is a DENSE (TILE) kvpe-cache op. A DSA-sparse model's kvpe cache is
             # bf16/fp8 ROW_MAJOR (sparse_sdpa reads it natively) and the op asserts TILE, so skip it for
             # sparse.
             cache_tensor = kvpe_cache.storage
             if cache_tensor.layout == ttnn.TILE_LAYOUT:
-                ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
-                    cache_tensor,
-                    cache_user_id,
-                    cache_layer_idx,
-                    self.mla.layer_num,
-                    actual_end,
-                    seq_len_local * self.mla.sp_factor,
-                    self.mla.sp_axis,
-                )
-            ttnn.synchronize_device(self.mesh_device)
-            on_layer_complete(self.mla.layer_idx)
+                if metadata is not None:
+                    # Per-element-tensor (trace-safe) path: slot_idx (metadata[0]) + valid_global=actual_end
+                    # (metadata[2]), each its own 1-element uint32 tensor read on-device.
+                    ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+                        cache_tensor,
+                        metadata[0],  # slot_idx tensor
+                        metadata[2],  # valid_global (= actual_end) tensor
+                        cache_layer_idx,
+                        self.mla.layer_num,
+                        seq_len_local * self.mla.sp_factor,
+                        self.mla.sp_axis,
+                    )
+                else:
+                    ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+                        cache_tensor,
+                        cache_user_id,
+                        cache_layer_idx,
+                        self.mla.layer_num,
+                        actual_end,
+                        seq_len_local * self.mla.sp_factor,
+                        self.mla.sp_axis,
+                    )
+            # Trace path: route the ack through the controller. At capture it splits the trace here (a host
+            # shm bump cannot live inside a trace); at replay the controller fires the ack between the two
+            # segments, after the first segment's writes flush (execute_trace blocking). Non-trace:
+            # synchronize then call directly. The controller takes precedence iff it carries an ack callback
+            # (runner trace path); the test path sets a controller WITHOUT an ack callback, so has_layer_ack()
+            # is False (and on_layer_complete is None there, so neither fires).
+            tc = getattr(self, "_trace_controller", None)
+            if tc is not None and tc.has_layer_ack():
+                tc.layer_ack(self.mla.layer_idx)
+            else:
+                ttnn.synchronize_device(self.mesh_device)
+                on_layer_complete(self.mla.layer_idx)
 
         if self.kv_only:
             # KV cache filled (by MLA), migration callback fired. The block
