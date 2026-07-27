@@ -39,6 +39,28 @@ SYFT_SHA256="${SYFT_SHA256:-d654f678b709eb53c393d38519d5ed7d2e57205529404018614c
 ORAS_VERSION="${ORAS_VERSION:-1.3.3}"
 ORAS_SHA256="${ORAS_SHA256:-9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59}"
 
+# BuildKit's own default SBOM scanner image, run as a container to generate
+# the `type=sbom` attestation. Previously left for BuildKit to resolve on its
+# own, which meant an unauthenticated, unmirrored pull straight from
+# docker.io on every attested build (primary attempt AND the Harbor-stripped
+# fallback attempt, identically) - once Docker Hub started rate-limiting/
+# auth-walling anonymous pulls from CI runner IPs, both attempts failed the
+# same way (UNAUTHORIZED / dial-tcp timeout).
+#
+# Harbor does NOT proxy docker.io (only ghcr.io - see check-harbor.yaml /
+# INPUT_HARBOR_PREFIX), so this can't be routed through the Harbor prefix like
+# the ghcr.io-hosted tool images. Instead this follows the same precedent
+# already used elsewhere in this repo for Docker Hub images (see
+# dockerfile/Dockerfile's `mirror.gcr.io/ubuntu` base and
+# llk-build-docker-images.sh's LLK_UBUNTU_BASE_IMAGE): Google's public,
+# anonymous, unauthenticated mirror of Docker Hub. The direct-docker.io
+# fallback path is kept as a second line of defense and now runs
+# authenticated (see the "Login to Docker Hub" step in
+# publish-release-image.yaml) instead of anonymous.
+SBOM_GENERATOR_PATH="docker/buildkit-syft-scanner:stable-1"
+SBOM_GENERATOR_PRIMARY="mirror.gcr.io/${SBOM_GENERATOR_PATH}"
+SBOM_GENERATOR_FALLBACK="docker.io/${SBOM_GENERATOR_PATH}"
+
 # Populated by parse_inputs; referenced by later functions.
 CLEAN_TARGETS=()
 SET_LINES=()
@@ -77,16 +99,21 @@ parse_inputs() {
 }
 
 # --- append attestation --set entries for each target to the named array ---
-# Usage: append_attestation_sets <array-name>
+# Usage: append_attestation_sets <array-name> [sbom-generator-image]
 # Emits the provenance/SBOM attest overrides (or the disabled variants) so both
 # the primary bake and the Harbor fallback share identical attestation shaping.
+# sbom-generator-image defaults to the mirror.gcr.io primary; the fallback
+# call passes SBOM_GENERATOR_FALLBACK (direct, authenticated docker.io)
+# explicitly, mirroring the Harbor-stripped/GHCR-direct split the caller
+# already does for context set-lines.
 append_attestation_sets() {
   local -n _sets="$1"
+  local generator_image="${2:-$SBOM_GENERATOR_PRIMARY}"
   local t
   if [ "${INPUT_ENABLE_ATTESTATIONS}" = "true" ]; then
     for t in "${CLEAN_TARGETS[@]}"; do
       _sets+=(--set "${t}.attest=type=provenance,mode=max")
-      _sets+=(--set "${t}.attest=type=sbom")
+      _sets+=(--set "${t}.attest=type=sbom,generator=${generator_image}")
     done
   else
     for t in "${CLEAN_TARGETS[@]}"; do
@@ -103,7 +130,7 @@ build_bake_sets() {
   for s in "${SET_LINES[@]}"; do
     [ -n "$s" ] && BAKE_SETS+=(--set "$s")
   done
-  append_attestation_sets BAKE_SETS
+  append_attestation_sets BAKE_SETS "${SBOM_GENERATOR_PRIMARY}"
 }
 
 # --- download a release tarball, verify its sha256, install one named binary ---
@@ -194,7 +221,7 @@ run_bake_with_retries() {
           FALLBACK_SETS+=(--set "$stripped")
         fi
       done
-      append_attestation_sets FALLBACK_SETS
+      append_attestation_sets FALLBACK_SETS "${SBOM_GENERATOR_FALLBACK}"
       docker buildx bake -f "${INPUT_BAKE_FILE}" "${FALLBACK_SETS[@]}" "${CLEAN_TARGETS[@]}" \
         && bake_success=true || last_bake_exit=$?
       if [ "$bake_success" = "true" ]; then
