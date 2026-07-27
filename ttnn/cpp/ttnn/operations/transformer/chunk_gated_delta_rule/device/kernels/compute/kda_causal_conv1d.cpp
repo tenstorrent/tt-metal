@@ -10,7 +10,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
 void kernel_main() {
-    constexpr uint32_t Ct = get_compile_time_arg_val(0);
+    constexpr uint32_t block_ct = get_compile_time_arg_val(0);
     constexpr uint32_t act_rm_cb = 0;
     constexpr uint32_t act_tile_cb = 1;
     constexpr uint32_t weights_cb = 2;
@@ -24,29 +24,29 @@ void kernel_main() {
     DataflowBuffer partial_a(partial_a_cb);
     DataflowBuffer partial_b(partial_b_cb);
     DataflowBuffer output(output_cb);
-    weights.wait_front(4 * Ct);
     binary_op_init_common(act_tile_cb, weights_cb, partial_a_cb);
     silu_tile_init();
 
     for (uint32_t item = 0; item < mt_count; ++item) {
+        weights.wait_front(4 * block_ct);
         for (uint32_t tap = 0; tap < 4; ++tap) {
-            compute_kernel_lib::tilize<Ct, act_rm_cb, act_tile_cb>(1);
-            activation.wait_front(Ct);
+            compute_kernel_lib::tilize<block_ct, act_rm_cb, act_tile_cb>(1);
+            activation.wait_front(block_ct);
 
             DataflowBuffer source_partial = (tap == 1 || tap == 3) ? partial_a : partial_b;
             DataflowBuffer destination = tap == 0 || tap == 2 ? partial_a : (tap == 1 ? partial_b : output);
             const uint32_t source_partial_cb = source_partial.get_id();
             const uint32_t destination_cb = destination.get_id();
             if (tap != 0) {
-                source_partial.wait_front(Ct);
+                source_partial.wait_front(block_ct);
             }
 
-            for (uint32_t ct = 0; ct < Ct; ++ct) {
+            for (uint32_t ct = 0; ct < block_ct; ++ct) {
                 tile_regs_acquire();
                 reconfig_data_format_srca(act_tile_cb);
                 reconfig_data_format_srcb(weights_cb);
                 mul_bcast_rows_init_short(act_tile_cb, weights_cb);
-                mul_tiles_bcast_rows(act_tile_cb, weights_cb, ct, tap * Ct + ct, 0);
+                mul_tiles_bcast_rows(act_tile_cb, weights_cb, ct, tap * block_ct + ct, 0);
 
                 if (tap != 0) {
                     reconfig_data_format_srca(source_partial_cb);
@@ -68,7 +68,8 @@ void kernel_main() {
                 destination.push_back(1);
                 tile_regs_release();
             }
-            activation.pop_front(Ct);
+            activation.pop_front(block_ct);
         }
+        weights.pop_front(4 * block_ct);
     }
 }

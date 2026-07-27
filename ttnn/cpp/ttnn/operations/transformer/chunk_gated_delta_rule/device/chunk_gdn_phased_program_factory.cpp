@@ -830,7 +830,13 @@ tt::tt_metal::ProgramDescriptor KdaCausalConvProgramFactory::create_descriptor(
     const uint32_t Ct = Qt + Kt + Vt;
     const uint32_t channels = attrs.q_width + attrs.k_width + attrs.v_width;
     const uint32_t row_bytes = channels * sizeof(uint16_t);
-    auto dist = distribute_prep(in.input.device()->compute_with_storage_grid_size(), Mt, ~0u);
+    // Preserve the single-block TP8 case. Wider local head shards use smaller blocks so the nine CBs coexist in L1.
+    uint32_t block_ct = Ct <= 48 ? Ct : 24u;
+    while (Ct % block_ct != 0) {
+        --block_ct;
+    }
+    const uint32_t num_blocks = Ct / block_ct;
+    auto dist = distribute_prep(in.input.device()->compute_with_storage_grid_size(), Mt * num_blocks, ~0u);
     const auto& cores = dist.core_set;
 
     ProgramDescriptor desc;
@@ -844,22 +850,22 @@ tt::tt_metal::ProgramDescriptor KdaCausalConvProgramFactory::create_descriptor(
                 .data_format = tt::DataFormat::Float16_b,
                 .page_size = tile_size}}}});
     };
-    add_tile_cb(act_rm_cb, Ct);
-    add_tile_cb(act_tile_cb, Ct);
-    add_tile_cb(weights_cb, 4 * Ct);
-    add_tile_cb(partial_a_cb, Ct);
-    add_tile_cb(partial_b_cb, Ct);
-    add_tile_cb(output_cb, Ct);
+    add_tile_cb(act_rm_cb, block_ct);
+    add_tile_cb(act_tile_cb, block_ct);
+    add_tile_cb(weights_cb, 4 * block_ct);
+    add_tile_cb(partial_a_cb, block_ct);
+    add_tile_cb(partial_b_cb, block_ct);
+    add_tile_cb(output_cb, block_ct);
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/";
-    std::vector<uint32_t> reader_ct = {Ct, channels, row_bytes};
+    std::vector<uint32_t> reader_ct = {block_ct, channels, row_bytes, num_blocks};
     TensorAccessorArgs(*in.input.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.state.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.tap0.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.tap1.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.tap2.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.tap3.buffer()).append_to(reader_ct);
-    std::vector<uint32_t> writer_ct = {Qt, Kt, Vt};
+    std::vector<uint32_t> writer_ct = {Qt, Kt, Vt, block_ct, num_blocks};
     TensorAccessorArgs(*outputs[0].buffer()).append_to(writer_ct);
     TensorAccessorArgs(*outputs[1].buffer()).append_to(writer_ct);
     TensorAccessorArgs(*outputs[2].buffer()).append_to(writer_ct);
@@ -880,7 +886,7 @@ tt::tt_metal::ProgramDescriptor KdaCausalConvProgramFactory::create_descriptor(
     compute.kernel_source = kdir + "compute/kda_causal_conv1d.cpp";
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = cores;
-    compute.compile_time_args = {Ct};
+    compute.compile_time_args = {block_ct};
     compute.config = compute_cfg(in.input.device()->arch(), attrs.compute_kernel_config);
 
     for (uint32_t i = 0; i < dist.cores.size(); ++i) {
