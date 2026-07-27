@@ -186,6 +186,26 @@ constexpr uint32_t prefetch_q_log_minsize = 4;
 
 const uint32_t scratch_db_top[2] = {scratch_db_base0, scratch_db_base1};
 
+// relay_paged streams through a ring of scratch buffers rather than a plain double buffer. With two buffers the
+// loop has to globally flush every outstanding write to the dispatcher before it can refill the buffer it is
+// about to read into, because that buffer sourced the immediately preceding write; that flush costs ~10% of the
+// prefetcher's time on large transfers. A third buffer makes the write being waited on two iterations old, so
+// the wait is normally already satisfied by the time it is reached. Three measured best on Wormhole; four is
+// slower because the buffers get small enough to coarsen the read/write overlap.
+// The ring shares the L1 region used by the legacy double buffer above; only one scheme is live per command.
+// A page has to fit in a single buffer, so the ring is only usable for pages up to scratch_db_ring_buf_size.
+// Larger pages keep the historical two-buffer split: process_relay_paged_cmd_large is only correct for
+// page_size > scratch_db_half_size (it computes page_size - amt_read, which underflows below that), so the
+// range in between must stay on this loop rather than being pushed down to the large-page path.
+constexpr uint32_t scratch_db_max_nbuf = 3;
+// Align down so the ring works for a scratch size that does not divide evenly by the buffer count; an unaligned
+// buffer stride would misalign every NoC read and write issued from it.
+constexpr uint32_t scratch_db_buf_align = 4096;
+constexpr uint32_t scratch_db_ring_buf_size =
+    (scratch_db_size / scratch_db_max_nbuf) / scratch_db_buf_align * scratch_db_buf_align;
+static_assert(scratch_db_max_nbuf >= 2, "relay_paged needs at least a double buffer");
+static_assert(scratch_db_ring_buf_size > 0, "prefetch scratch is too small for the configured buffer count");
+
 // Currently capping the same as dispatch
 constexpr uint32_t max_read_packed_cmd =
     CQ_PREFETCH_CMD_RELAY_PAGED_PACKED_MAX_SUB_CMDS * sizeof(CQPrefetchRelayPagedPackedSubCmd) / sizeof(uint32_t);
@@ -1075,12 +1095,17 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
             cmd_ptr, downstream_data_ptr, page_id, base_addr, page_size, pages, length_adjust);
     }
 
+    // Use the deeper ring when a page fits in one of its buffers, otherwise fall back to the two-buffer split.
+    const uint32_t scratch_db_nbuf = (page_size <= scratch_db_ring_buf_size) ? scratch_db_max_nbuf : 2;
+    const uint32_t scratch_db_buf_size =
+        (scratch_db_nbuf == scratch_db_max_nbuf) ? scratch_db_ring_buf_size : scratch_db_half_size;
+
     auto addr_gen = TensorAccessor(tensor_accessor::make_interleaved_dspec<is_dram>(), base_addr, page_size);
 
     // First step - read into DB0
     uint64_t read_wlength = (uint64_t)pages * page_size;
-    uint32_t scratch_read_addr = scratch_db_top[0];
-    uint32_t amt_to_read = (scratch_db_half_size > read_wlength) ? read_wlength : scratch_db_half_size;
+    uint32_t scratch_read_addr = scratch_db_base;
+    uint32_t amt_to_read = (scratch_db_buf_size > read_wlength) ? read_wlength : scratch_db_buf_size;
     uint32_t amt_read = 0;
     while (amt_to_read >= page_size) {
         uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
@@ -1099,25 +1124,35 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
     std::atomic_signal_fence(std::memory_order_acq_rel);
     noc_async_read_barrier();
 
-    // Second step - read into DB[x], write from DB[x], toggle x, iterate
+    // Second step - read into buf[next], write from buf[cur], advance around the ring, iterate
     // Writes are fast, reads are slow
-    uint32_t db_toggle = 0;
+    uint32_t db_cur = 0;
     uint32_t scratch_write_addr;
+    // Value of the nonposted-writes-issued counter right after the write that last sourced from each buffer.
+    // Waiting on it before refilling that buffer replaces the global flush.
+    uint32_t buf_writes_issued[scratch_db_max_nbuf] = {};
+    uint32_t buf_written_mask = 0;
     read_wlength -= amt_read;
     while (read_wlength != 0) {
         uint32_t read_length = (read_wlength > max_batch_size) ? max_batch_size : static_cast<uint32_t>(read_wlength);
         read_wlength -= read_length;
         while (read_length != 0) {
-            // This ensures that writes from prior iteration are done
-            // TODO(pgk); we can do better on WH w/ tagging
-            noc_async_writes_flushed();
+            uint32_t db_next = db_cur + 1;
+            if (db_next == scratch_db_nbuf) {
+                db_next = 0;
+            }
 
-            db_toggle ^= 1;
-            scratch_read_addr = scratch_db_top[db_toggle];
-            scratch_write_addr = scratch_db_top[db_toggle ^ 1];
+            // Only the write that previously sourced from buf[db_next] has to be out of the way, not every
+            // outstanding write. With more than two buffers that write is several iterations old.
+            if (buf_written_mask & (1u << db_next)) {
+                while (!noc_nonposted_writes_sent_at_count(noc_index, buf_writes_issued[db_next]));
+            }
+
+            scratch_read_addr = scratch_db_base + db_next * scratch_db_buf_size;
+            scratch_write_addr = scratch_db_base + db_cur * scratch_db_buf_size;
 
             uint32_t amt_to_write = amt_read;
-            amt_to_read = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
+            amt_to_read = (scratch_db_buf_size > read_length) ? read_length : scratch_db_buf_size;
             amt_read = 0;
             while (amt_to_read >= page_size) {
                 uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
@@ -1132,11 +1167,15 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
             uint32_t npages =
                 write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
             DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr, /*round_to_page_size*/ true);
+            buf_writes_issued[db_cur] = noc_get_nonposted_writes_issued(noc_index);
+            buf_written_mask |= (1u << db_cur);
 
             read_length -= amt_read;
 
             // TODO(pgk); we can do better on WH w/ tagging
             noc_async_read_barrier();
+
+            db_cur = db_next;
         }
     }
 
@@ -1144,7 +1183,7 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
     // Note that we may write less than full pages despite reading full pages based on length_adjust
     // Expectation is that the gain from reading less is small to 0, revisit as needed
     ASSERT(length_adjust < page_size);
-    scratch_write_addr = scratch_db_top[db_toggle];
+    scratch_write_addr = scratch_db_base + db_cur * scratch_db_buf_size;
     uint32_t amt_to_write = amt_read - length_adjust;
     uint32_t npages = write_pages_to_dispatcher<1, true>(downstream_data_ptr, scratch_write_addr, amt_to_write);
 
