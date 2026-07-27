@@ -68,6 +68,35 @@ void validate_runtime_args(
     const auto& mesh_view = cache.device()->get_view();
     TT_FATAL(mesh_view.is_mesh_2d(), "update_padded_kv_cache requires a 2D mesh");
 
+    // Metadata-path invariant: the two per-request tensors are supplied together or not at all.
+    // The path is selected on `slot_idx.has_value()`, but create_descriptor / override_runtime_arguments
+    // dereference `kv_actual_global` unconditionally whenever slot_idx is set — a mismatched optional
+    // state would crash there, so reject it up front with a clear message.
+    TT_FATAL(
+        tensor_args.slot_idx.has_value() == tensor_args.kv_actual_global.has_value(),
+        "metadata tensors slot_idx and kv_actual_global must be supplied together (got slot_idx={}, "
+        "kv_actual_global={})",
+        tensor_args.slot_idx.has_value(),
+        tensor_args.kv_actual_global.has_value());
+    // Validate the structural properties the writer kernel assumes of each metadata tensor (device,
+    // UINT32, ROW_MAJOR, single-element, non-sharded) here, so a malformed tensor fails host-side with a
+    // clear message instead of a hard-to-debug device-side read. Values stay off the host dispatch path.
+    if (tensor_args.slot_idx.has_value()) {
+        auto validate_meta = [](const Tensor& meta, const char* name) {
+            TT_FATAL(meta.storage_type() == StorageType::DEVICE, "metadata tensor {} must be on device", name);
+            TT_FATAL(meta.dtype() == DataType::UINT32, "metadata tensor {} must be UINT32", name);
+            TT_FATAL(meta.layout() == Layout::ROW_MAJOR, "metadata tensor {} must be ROW_MAJOR", name);
+            TT_FATAL(
+                meta.logical_volume() == 1,
+                "metadata tensor {} must be a single element (got {})",
+                name,
+                meta.logical_volume());
+            TT_FATAL(!meta.is_sharded(), "metadata tensor {} must not be sharded", name);
+        };
+        validate_meta(tensor_args.slot_idx.value(), "slot_idx");
+        validate_meta(tensor_args.kv_actual_global.value(), "kv_actual_global");
+    }
+
     if (!tensor_args.slot_idx.has_value()) {
         // The writer divides kv_actual_global by TILE_HEIGHT to get its tile offset, so it must be aligned.
         TT_FATAL(
