@@ -1083,10 +1083,14 @@ int main(uint64_t hartid) {
          * in a local and never re-reads it). This was the whole bug. */
         uint64_t packed = host_base; /* socket0 fifo lo32 | socket1 fifo lo32 << 32 (hugepage dev addrs) */
         uint64_t total = hring_words * 4ull;
-        /* OR in the PCIe-outbound routing (NOC_XY_PCIE_ENCODING bit60). The socket FIFO now lives in the
-         * hugepage/sysmem channel (D2HSocket forces the hugepage path for L2CPU senders), reachable at
-         * pcie_base|offset exactly like the raw ring. get_noc_addr gave a bare sysmem offset (hi=0). */
-        uint64_t pbase = 0x1000000000000000ull;
+        /* pbase=0: the packed value IS the D2HSocket FIFO's complete device address (get_noc_addr). On
+         * IOMMU-enabled boards (e.g. P300) the socket buffer is a SEPARATE IOMMU-backed pinned alloc and
+         * get_noc_addr returns its full IOVA (e.g. 0x3f000000, hi=0) -- use it AS-IS. OR-ing the channel-0
+         * aperture base (0x1000000000000000) here misrouted the posted write to the channel-0 hugepage
+         * instead of the socket buffer -> host FIFO never filled -> deadlock. (The host already errors if
+         * get_noc_addr has nonzero hi bits, so lo32 is the whole address.) WAS 0x1000000000000000 (channel-0
+         * aperture; correct only on pre-IOMMU boards where get_noc_addr was a bare hugepage offset). */
+        uint64_t pbase = 0x0ull;
         /* P_HOST_BASE packs the two sockets' FIFO lo32 offsets: socket0 in [31:0], socket1 in [63:32] (both
          * hi=0 from get_noc_addr on BH). Reconstruct each full PCIe addr as pbase|lo32 (bit60 outbound routing).
          * For nread=1 only sk_fifo[0] is used (socket1 lo32 is 0 -> unused). NOTE: pbase|lo32 == pcie_base+lo32
