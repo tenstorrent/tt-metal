@@ -58,3 +58,8 @@ target_link_libraries(bh1_icrc_probe PRIVATE test_metal_common_libs)
 add_executable(bh1_ingest_probe bh1_ingest_probe_host.cpp)
 target_include_directories(bh1_ingest_probe PRIVATE ${PROJECT_SOURCE_DIR})
 target_link_libraries(bh1_ingest_probe PRIVATE test_metal_common_libs)
+
+# L1 bandwidth test (experiment 2) — eth L1 concurrent write+read (loads bh_rdma_l1_drainer.cpp).
+add_executable(bh1_l1_bw_test bh1_l1_bw_test_host.cpp)
+target_include_directories(bh1_l1_bw_test PRIVATE ${PROJECT_SOURCE_DIR})
+target_link_libraries(bh1_l1_bw_test PRIVATE test_metal_common_libs)
