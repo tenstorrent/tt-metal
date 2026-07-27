@@ -635,3 +635,252 @@ DEST inflates, so R2 and R1b compound rather than compete.
     combo added; the over-budget combos re-pinned to `G=1` (see issue 2).
   - Full op suite: **418 / 418**; golden suite **11 / 11**; `--dev` clean (no watcher asserts,
     no races) and the production-timing run agrees.
+
+---
+
+## Refinement 3 — Re-tune the compute block surface against the final structure
+
+- **Date**: 2026-07-27
+- **Type**: perf (no SUPPORTED / EXCLUSIONS change; `[x]` full)
+
+### Headline
+
+**1.205× on B=1/T=640 and 1.095× on B=8/T=640**, the two shapes the phase's
+"Done when" names, with **no cell of the config-spanning guard set regressing** and the
+output **bit-identical** to what Refinement 2 shipped (`torch.equal`, 5 cells).
+
+| guard cell | R2 ns | R3 ns | speedup | cores R2→R3 |
+|---|---|---|---|---|
+| B=1,T=32 default | 12,131 | 12,227 | 0.992× † | 32 → 32 |
+| B=1,T=64 default | 14,892 | 14,896 | 1.000× † | 64 → 64 |
+| B=1,T=128 default | 22,805 | 22,830 | 0.999× † | 64 → 64 |
+| B=1,T=640 default | 73,989 | **61,421** | **1.205×** | 96 → 80 |
+| B=8,T=640 default | 371,071 | **338,739** | **1.095×** | 110 → 110 |
+| B=1,T=640 `math_approx_mode` | 73,784 | 61,880 | 1.192× | 96 → 80 |
+| B=1,T=640 `LoFi` | 72,574 | 60,344 | 1.203× | 96 → 80 |
+| B=1,T=640 `fp32_dest_acc_en=True` | 83,260 | 71,988 | 1.157× | 96 → 80 |
+
+† These three cells are **byte-identical program descriptors** in both arms — every
+compute-side knob is clamped to the floor by their group size and `RECONFIG_MODE`
+matches — so their ≤0.8 % deltas are this harness's measured noise floor, not an
+effect. Medians of 5 trial-major interleaved trials in ONE process, max spread 6.3 %.
+
+Cumulative against the Phase-0 baseline: B=1/T=32 **16.0×**, B=1/T=64 13.2×,
+B=1/T=128 8.5×, B=1/T=640 **3.98×**, B=8/T=640 **1.59×**.
+
+### What was done
+
+**Lever 1 — `RECONFIG_MODE` (data-format reconfig off): built, proved bit-exact,
+measured three times, and it is a WASH. Kept as a live knob, shipped at `"on"`.**
+
+One host knob resolves into five helper-enum values in one place in the compute
+kernel (`binary_reconfig` / `pack_reconfig` / `copy_reconfig` / `reduce_reconfig` /
+`tilize_reconfig` / `untilize_reconfig`), so all 18 call sites move together and
+"reconfig off" is one decision rather than eighteen that can drift. The wire is the
+same idiom `SIGMOID_ENGINE` uses (`_RECONFIG_MODE_CODES` → `ONORM_RECONFIG_*`
+defines → `static_assert`), so no integer is restated across the host/kernel seam.
+
+| round | boundaries/block | cells favouring "off" | max abs delta | trial spread |
+|---|---|---|---|---|
+| R2 block surface (n8/g64) | 13 | 6 of 8 | 0.79 % | 0.4–5.4 % |
+| mid-R3 surface (n4/g16) | 29 | 6 of 8 | 0.85 % | 0.4–5.3 % |
+| final surface (n2/g8, G=4) | 57 | 4 of 8 | 1.40 % | 0.4–4.9 % |
+
+Every delta is inside the trial spread, and the **boundary count grew 4.4×** across
+the three rounds without the lever appearing — so this is the mechanism identified,
+not an unfinished measurement. The reason: after R2 the phases are chained through
+the cross-core exchange, and all three TRISCs plus the writer run within ~1 % of the
+kernel duration (B=8/T=640: BRISC 331.6 / TRISC1 330.9 / kernel 331.9 µs), so the
+compute threads' register MMIO hides inside stalls they already pay. The catalog's
+1.19× came from a single-core *pure-compute* chain where nothing hides.
+
+It is **kept, not reverted**, and shipped at the trivial byte-identical default
+`"on"` — which is also the setting that carries no precondition. `"off"` is
+`torch.equal`-identical to `"on"` at 6 cells × 3 group sizes, free in L1, and one
+assignment away; the host additionally *asserts* its precondition (all four tensors
+share `o.dtype`) rather than only documenting it, so a future dtype-widening
+refinement trips an assert instead of silently corrupting output.
+
+**Lever 2 — co-tune the block factors: `NORM_CHUNK_TOKENS` 8 → 2 and
+`GATE_CHUNK_TILES` 64 → 8. This is the whole win, and it went the OPPOSITE way to
+the catalog.**
+
+The catalog's `compute_block_size` mechanism (amortize a fixed per-invocation cost
+over more tiles) is real but is not what these knobs control here: every phase of
+this kernel sits between two NoC streams, so the chunk size sets the **pipeline fill
+depth before the next stage can start**. `GATE_CHUNK_TILES` is how many SFPU tile-ops
+elapse before the writer gets its first output tile (a 64-tile chunk stalls the
+writer for ~64 sigmoids, then dumps 64 tiles with no compute to overlap);
+`NORM_CHUNK_TOKENS` is how many tokens compute untilizes before the exchange can
+start. Finer therefore wins — until the fill saving is spent and the catalog's
+per-invocation cost takes over, which is what makes the surface single-peaked.
+
+Sweep at the final structure, both cells where the knobs are unclamped, vs the
+shipped (n2/g8) setting — reproducible from the committed `test_onorm_block_sweep.py`:
+
+| candidate | B=1/T=640 (G=4) | B=8/T=640 (G=2) |
+|---|---|---|
+| **n2/g8 (shipped)** | **1.0000×** | **1.0000×** |
+| n2/g16 | 0.977× | 1.0015× |
+| n2/g32 | 0.858× | 0.986× |
+| n2/g64 | 0.860× | 0.917× |
+| n2/g4 | 0.985× | 0.985× |
+| n1/g16 | 0.927× | 0.985× |
+| n4/g16 | 0.877× | 1.0148× |
+| n8/g16 | 0.799× | 0.980× |
+| n16/g16 | 0.800× | 0.933× |
+| n8/g64 (= what R2 shipped) | 0.785× | 0.908× |
+
+The two cells' peaks differ on the norm axis (B=1/T=640 wants 2, B=8/T=640 wants 4),
+and the knob is global, so it is a **priced trade, taken**: norm 2 costs B=8/T=640
+1.5 % and gains B=1/T=640 12.3 %. On the gate axis 8 wins outright (+2.3 % / −0.15 %).
+`GATE_DEST_TILES` was re-swept a third time (R1 selected it, R1b re-swept it) and 4
+is still optimal (d8 0.983–0.994×, d2 1.002–1.006×). `DM_DEPTH` was re-swept upward
+and 8 is a clear **regression** (0.944×, compounding to 0.930× with `O_DEPTH=3` +
+`RM_LOCAL_DEPTH=3`) — the reader already runs ahead of a consumer gated by the
+exchange, so more prefetch depth only costs L1 bandwidth. `O_DEPTH` / `RM_LOCAL_DEPTH`
+re-measured within noise (1.0007× / 1.0001×) and stay at 2.
+
+**`TOKENS_PER_BLOCK` is deliberately NOT raised, and the reason is now written at the
+knob**: the host asserts `T % TOKENS_PER_BLOCK == 0`, so 64 would drop support for
+every T that is an odd multiple of 32 (T=32, 96, 160 — all admitted by the op's
+contract and all exercised by the suites). It stays a live knob that
+`test_onorm_knobs.py` turns; the coarsening it offers is not worth supported shapes,
+and R2 already spent this axis' coarseness on parallelism at a far better rate.
+
+**The lever-2 sweep forced a third change: the `auto` dispatch policy was
+recalibrated, because the block factors and the group size are ONE surface.**
+
+The clamps make every compute-side knob a function of the group size
+(`norm_chunk = min(NORM_CHUNK_TOKENS, TOKENS_PER_BLOCK/G)` etc.), so re-sweeping the
+block factors moved the group curve — exactly what R2's outcome asked R3 to check.
+At the new block factors **B=1/T=640's optimum moved from G=32 to G=4** (G=4 gained
+2.57× → 3.28×, because G≥8 was already at the floor by clamping and only G≤4 could
+benefit), and R2's objective mispicked it. The fix adds the term R2's objective
+omitted:
+
+    cost(g) = blocks_per_group(g) * (1/g + EXCHANGE_COST_PER_BLOCK)
+
+The payload (DRAM + compute) genuinely divides by `g`; the **exchange does not** — its
+message count per core per block is fixed at `TOKENS_PER_BLOCK` whatever `g` is, only
+the message size shrinks. G=32 was buying a 12 % smaller payload share (0.219 vs
+0.25) by serialising **seven** blocks per group instead of one, i.e. paying the
+per-block exchange 7× to save 12 % of the payload — a trade the g-free objective
+cannot see. `EXCHANGE_COST_PER_BLOCK = 0.05` is **calibrated, not invented**: the
+measured curves pin it to `0.006 < k < 0.5` (below, B=1/T=640 reverts to G=32 and
+loses 1.06×; above, B=8/T=640 falls back to G=1 and loses R2's 1.32×), 0.05 sits ~8×
+inside both bounds, and `test_auto_policy_agrees_with_the_measured_optimum` asserts
+the policy reproduces the measured argmin per shape so the constant cannot drift into
+a decoration. R2's explicit "ties go to the smaller group" is now **implicit** in the
+model and was deleted as a special case. Final curve (speedup vs G=1):
+
+| shape | blocks | g=2 | g=4 | g=8 | g=16 | g=32 | measured best | policy |
+|---|---|---|---|---|---|---|---|---|
+| B=1,T=32 | 1 | 1.96× | 3.77× | 6.82× | 10.90× | **16.52×** | 32 | 32 ✓ |
+| B=1,T=128 | 4 | 1.95× | 3.70× | 6.38× | **8.83×** | 7.81× | 16 | 16 ✓ |
+| B=1,T=640 | 20 | 1.92× | **3.28×** | 2.87× | 2.51× | 2.72× | 4 | 4 ✓ |
+| B=8,T=640 | 160 | 1.28× | **1.30×** | 1.14× | 0.91× | 0.83× | 4 | 2 (−1.4 %) |
+
+**Lever 3 — the `weight` mcast rider: dropped, per its own stated condition.** The
+rider is explicitly conditional ("if R2 has already stood up `mcast_pipe` wiring,
+swapping this producer is a reader-only change… drop it if it is not [nearly free]").
+That condition is **false**: R2 documented three independent reasons `mcast_pipe`
+cannot express its exchange (one `dst_l1` for all receivers vs a scatter;
+single-sender-per-receiver vs all-to-all; strided payload on both sides) and used the
+`Noc`/`Semaphore<>` object APIs directly. So there is no wiring to reuse — taking the
+rider would mean standing up a `SenderPipe`/`ReceiverPipe` topology plus
+`ttnn.Mcast2D` host wiring and a third semaphore for a tensor the phase itself sizes
+at ~0.7 % of traffic. Not nearly free ⇒ dropped, unbuilt, and recorded here.
+
+**L1 got much cheaper as a side effect** (finer chunks mean smaller intermediates),
+which is headroom a future refinement can spend:
+
+| shape | G | tok/core | cols/core | norm_chunk | gate_chunk | L1 pages | KB |
+|---|---|---|---|---|---|---|---|
+| B=1,T=32 / T=64 | 32 | 1 | 4 | 1 | 4 | 107 | 214 |
+| B=1,T=128 | 16 | 2 | 8 | 2 | 8 | 145 | 290 |
+| B=1,T=640 | 4 | 8 | 32 | 2 | 8 | 193 | 386 |
+| B=8,T=640 | 2 | 16 | 64 | 2 | 8 | 257 | 514 |
+
+(R2's worst case was 533 pages / 1066 KB; the L1-budget assert and its escape-route
+message are unchanged and still bind — `test_knob_over_budget_is_rejected_with_guidance`
+passes at both over-budget combos.)
+
+- **Accuracy achieved**: PCC = **0.999988**, rel-RMS = **0.0056–0.0057**, max_abs
+  0.0472–0.0487, mean_abs 0.0018, got/true ratio median **1.0026–1.0028** (p5 0.9946 /
+  p95 1.0111) across B×T = 1×32 / 1×128 / 1×640 / 4×256 — **identical to R1b's and
+  R2's recorded numbers to every digit**, as required. Stronger than that:
+  `test_r3_surface_is_bit_identical_to_r2` asserts `torch.equal` between the R2 and R3
+  configurations on all five default guard cells, so R3 is a **pure perf change** with
+  zero numerical movement. `test_onorm_precision_baseline.py` 4/4.
+
+- **Golden test progress**: **11 / 11 passing** (5/5 registry cells + 6 numerics
+  regression tests), unchanged. `supported_fail = xpass_drift = xfail_wrong_mode = 0`.
+  No SUPPORTED / EXCLUSIONS change — this is a perf refinement.
+
+- **Issues encountered**:
+  1. **Both catalog levers behaved unlike the catalog, in opposite directions.**
+     Reconfig-off (measured up to 1.19× in `compute_block_size`) is a wash here, and
+     block *coarsening* (measured 1.65× there) is a **loss** (0.79–0.91×) while
+     *fining* is the win. Both have the same root cause — this op's phases are
+     NoC-coupled, so per-invocation register cost hides in stalls while pipeline-fill
+     latency does not. Recorded at both knobs so the next reader does not re-derive it.
+  2. **The block factors and the dispatch policy could not be tuned separately.**
+     Because the descriptor clamps every block factor to `TOKENS_PER_BLOCK/G`, the
+     first block sweep ran on a shape (B=1/T=640) whose knobs were *all pinned to the
+     floor* and looked inert; only after the policy moved it to G=4 did its knobs
+     become live — and then its optimum differed from B=8/T=640's, forcing the priced
+     trade. Tuning the two in sequence would have converged to a worse point; the
+     final answer needed two passes over the 2-D surface.
+  3. **`GATE_CHUNK_TILES` and `NORM_CHUNK_TOKENS` have different optima per shape**
+     while being global knobs. Resolved by pricing the trade rather than by adding a
+     shape-dependent heuristic (a second auto-policy would need its own calibration
+     and its own guard set; the measured cost of the simple choice is 1.5 % on one cell).
+  4. **A 1.4 % policy residual at B=8/T=640 is left unfitted, deliberately.** G=4
+     measures 1.4 % faster than the policy's G=2 there, and **no** value of
+     `EXCHANGE_COST_PER_BLOCK` can express it: the two have identical payload terms
+     (3 blocks × ½ = 6 blocks × ¼) and G=4 serialises twice the exchanges, so any
+     `k>0` must prefer G=2. Chasing it would mean a second tie-break term fitted to
+     noise-adjacent data on one cell. Recorded instead (R2 recorded the same closeness
+     at 3.5 %).
+
+- **Next levers, priced but out of this phase's scope** (for whoever queues the next one):
+  * **The op is no longer SFPU-bound.** Re-ablating the sigmoid at the final surface:
+    it is **9.0 %** of B=8/T=640 (29.7 of 331.5 µs) and 29.4 % of B=1/T=640 — down
+    from R1's 62 %. R1/R1b/R2 spent that lever; the remainder is now dataflow.
+  * **B=8/T=640 is near the DRAM roofline**: 126 MB of DRAM traffic in 338.7 µs ≈
+    **372 GB/s**. Headroom exists but it is a bandwidth story, not a compute one.
+  * **B=1/T=640's residue is the exchange's small messages.** At G=4 each core sends
+    `TOKENS_PER_BLOCK` scatter messages per block of `8192/G` bytes; the sharp lever is
+    coalescing them (one strided transfer per destination per chunk instead of one per
+    token row), which would also be the complementary step that finally makes
+    `RECONFIG_MODE = "off"` pay by putting compute back on the critical path.
+
+- **Tests added**:
+  - `tests/ttnn/unit_tests/operations/onorm/test_onorm_reconfig.py` (**new**, 8 cases)
+    — `RECONFIG_MODE` bit-neutrality (`torch.equal` on/off at 6 cells × 3 group sizes,
+    since the boundary count per block varies with the group size: 8 at G=32 vs 57 at
+    G=4), the unknown-value host guard, and `test_reconfig_trial`, the paired on/off
+    device-ns vehicle over the whole guard set.
+  - `tests/ttnn/unit_tests/operations/onorm/test_onorm_block_sweep.py` (**new**, 130
+    cases) — the 2-D block-factor sweep on both cells where the knobs are unclamped,
+    with the clamp table documented in the module docstring, plus the depth sweep
+    (`DM_DEPTH` / `O_DEPTH` / `RM_LOCAL_DEPTH`) on two shapes.
+  - `tests/ttnn/unit_tests/operations/onorm/test_onorm_r3_guard.py` (**new**, 6 cases)
+    — the paired R2-vs-R3 guard set over all 8 config-spanning cells (the `r2` arm pins
+    all five knobs R3 moved, including `EXCHANGE_COST_PER_BLOCK = 0` which reproduces
+    R2's *policy* exactly, so the comparison is the whole R3 delta), plus
+    `test_r3_surface_is_bit_identical_to_r2`.
+  - `test_onorm_retile_group.py` — `_expected_auto` updated to the new objective (it is
+    the independent restatement that keeps the policy honest), and
+    **`test_auto_policy_agrees_with_the_measured_optimum`** added: it pins
+    `EXCHANGE_COST_PER_BLOCK` to the measured argmin per shape, so the calibration
+    constant is guarded by data rather than by a comment.
+  - `test_onorm_knobs.py` — `KNOB_SETTINGS` gained `RECONFIG_MODE` (both values),
+    `EXCHANGE_COST_PER_BLOCK` (0.0 and 0.5, the window's ends), `GATE_DEST_TILES`
+    (1, 8), and the now-non-default coarser/finer block values (`NORM_CHUNK_TOKENS`
+    1/4/8/16, `GATE_CHUNK_TILES` 4/32/64/128); `COMBOS` gained the whole pre-R3 block
+    surface as one combo, so the guard set's `r2` arm is pinned as a *correct*
+    configuration and not merely a slower one.
+  - Full op suite: **617 / 617** (production timing) and 107 / 107 under `--dev`
+    (watcher clean, no asserts, no races); golden suite **11 / 11**.

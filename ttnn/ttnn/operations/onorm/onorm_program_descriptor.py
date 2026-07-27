@@ -33,9 +33,94 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 # counts, kernel loop bounds and the grid all derive from them.
 
 # --- block factors ---
+#
+# TOKENS_PER_BLOCK is PINNED at the tile height, not merely defaulted to it: the
+# host asserts `T % TOKENS_PER_BLOCK == 0` (a partial last block would read past
+# `o`, whose token axis is un-padded), so raising it to 64 would DROP support for
+# every T that is an odd multiple of 32 — T=32, 96, 160 … — all of which the op's
+# contract (`T % 32 == 0`) admits and the golden suite exercises. It is a live knob
+# (`test_onorm_knobs.py` turns it, at a T that divides), but Refinement 3 does not
+# raise the shipped value: the coarsening it would buy costs supported shapes, and
+# Refinement 2 already spent this axis' coarseness on parallelism at a far better
+# rate (8-16x, by SPLITTING a block across cores rather than fusing two).
 TOKENS_PER_BLOCK = 32  # tokens per work unit (= one output tile-row: the re-tile floor)
-NORM_CHUNK_TOKENS = 8  # tokens per normalize sub-pass (coarsest that fits L1, §6.2)
-GATE_CHUNK_TILES = 64  # output tiles per gate-chain invocation (phase C block factor)
+#
+# NORM_CHUNK_TOKENS / GATE_CHUNK_TILES — the two compute-side block factors.
+#
+# REFINEMENT 3 re-swept both against the post-R2 structure and moved them DOWN
+# (8 -> 2 and 64 -> 8), which is the opposite of the direction the catalog's
+# `compute_block_size` entry recommends. That entry's mechanism — amortize a fixed
+# per-invocation cost (reconfig + LLK init/uninit + pipeline fill/drain) over more
+# tiles — is real but is NOT what these two knobs control here, because unlike that
+# example's pure-compute chain, every phase of this kernel sits between two NoC
+# streams (the reader's `o`/`gate`, the writer's `out`, and R2's cross-core
+# exchange). What the chunk size actually sets is the PIPELINE FILL DEPTH before
+# the next stage can start:
+#
+#   * `GATE_CHUNK_TILES` gates how long the writer waits for its first output
+#     tile: P7b sigmoids the WHOLE chunk before P7c multiplies any of it, so a
+#     64-tile chunk means ~64 SFPU tile-ops (the op's slowest phase) elapse before
+#     one byte can be written, and the writer then has to drain 64 tiles with no
+#     compute to overlap. A 16-tile chunk quarters that fill and lets the writer's
+#     DRAM writes overlap the next chunk's sigmoid.
+#   * `NORM_CHUNK_TOKENS` does the same for the re-tile: it is how many tokens
+#     compute untilizes before the writer can start scattering them to the group.
+#
+# BOTH knobs are per-core REQUESTS the descriptor clamps to the slice this core
+# owns (`tokens_per_core = TOKENS_PER_BLOCK/G`, `flat_tiles_per_core`), so what is
+# reachable depends on the group size the `auto` policy picks — which is why this
+# sweep and `EXCHANGE_COST_PER_BLOCK`'s had to be run TOGETHER (a 2-D surface, not
+# two independent knobs), and why doing it before Refinement 2 would have been
+# thrown away.
+#
+# MEASURED, sweep 1 — B=8/T=640 at its policy pick G=2 (`tokens_per_core` 16,
+# `flat_tiles_per_core` 64: both knobs fully unclamped). Speedup vs the R2 defaults
+# (n8/g64), median of 5 trial-major interleaved trials, spread <= 2.5 %:
+#
+#   gate chunk ->     g64      g32      g16      g8       g4
+#   norm 16         0.993x      -        -        -        -
+#   norm 8          1.0000x   1.085x   1.082x   1.086x   1.071x
+#   norm 4          1.027x    1.125x  *1.125x*  1.121x     -
+#   norm 2            -         -      1.106x   0.985x     -
+#   norm 1            -         -      1.096x     -        -
+#
+# MEASURED, sweep 2 — B=1/T=640 at ITS policy pick G=4 (`tokens_per_core` 8,
+# `flat_tiles_per_core` 32: unclamped for the FIRST time, because pre-R3 this shape
+# sat at G=32 where both knobs were pinned to the floor — the two sweeps and the
+# policy recalibration are one problem, which is why they are one phase).
+#
+# Final surface, both cells, speedup vs the SHIPPED (n2/g8) setting — the committed
+# `test_onorm_block_sweep.py` reproduces this table (medians of 5 interleaved
+# trials, spread <= 2.2 %):
+#
+#   candidate     B=1/T=640 (G=4)     B=8/T=640 (G=2)
+#   n2/g8  SHIP     1.0000x             1.0000x
+#   n2/g16          0.977x              1.0015x
+#   n2/g32          0.858x              0.986x
+#   n2/g64          0.860x              0.917x
+#   n2/g4           0.985x              0.985x
+#   n1/g16          0.927x              0.985x
+#   n4/g16          0.877x              1.0148x
+#   n8/g16          0.799x              0.980x
+#   n16/g16         0.800x              0.933x
+#   n8/g64  (=R2)   0.785x              0.908x
+#
+# The surface is single-peaked in both knobs on both cells — coarsening loses badly
+# (n8/g64, i.e. R2's corner, is 0.79x / 0.91x) and over-fining loses mildly (n1, g4)
+# once the pipeline-fill saving is spent and the per-invocation cost the catalog
+# describes takes over — but the two cells' PEAKS DIFFER on the norm axis: B=1/T=640
+# wants norm 2, B=8/T=640 wants norm 4 (1.0148x). The knob is global, so that is a
+# priced trade: shipping norm 2 costs B=8/T=640 1.5 % and gains B=1/T=640 12.3 %.
+# Taken. On the gate axis, 8 wins outright (B=1/T=640 +2.3 %, B=8/T=640 -0.15 %,
+# i.e. a tie there) and is also the cheaper `cb_gate_sig`.
+#
+# Net effect of this retune plus the policy recalibration it forced: **1.205x on
+# B=1/T=640 and 1.095x on B=8/T=640**, no cell of the config-spanning guard set
+# regressing (`test_onorm_r3_guard.py`; the three smallest cells are byte-identical
+# between the two arms — every knob is clamped there — so their <= 0.8 % deltas are
+# that harness's noise floor, measured).
+NORM_CHUNK_TOKENS = 2  # tokens per normalize sub-pass (perf-selected: R3)
+GATE_CHUNK_TILES = 8  # output tiles per gate-chain invocation (perf-selected: R3)
 
 # ---------------------------------------------------------------------------
 # Cross-core re-tile group size (Refinement 2) — the parallelism knob
@@ -93,7 +178,50 @@ RETILE_GROUP_CORES = "auto"
 # 32 is the cap, and the `_work` objective is what keeps the shapes that would
 # LOSE at 32 (B=8/T=640: 0.87x) away from it.  Lower this to bound the exchange's
 # message count if a future arch has a costlier NoC handshake.
+#
+# REFINEMENT 3 re-measured the whole curve against its retuned block surface (same
+# harness, medians of 5 interleaved trials, spread <= 5.2 %).  The cap is unchanged
+# — B=1/T=32 still peaks at 32 (now 16.31x) — but two cells moved enough to change
+# the policy's pick, because the new block factors only bite at g <= 4 (at g >= 8
+# the clamps already produced them):
+#
+#   shape        g=2     g=4     g=8     g=16    g=32    best
+#   B=1,T=32    1.96x   3.77x   6.82x  10.90x  16.52x    32   (unchanged)
+#   B=1,T=128   1.95x   3.70x   6.38x   8.83x   7.81x    16   (unchanged)
+#   B=1,T=640   1.92x  *3.28x*  2.87x   2.51x   2.72x     4   (was 32: g=4 gained
+#                                                              2.57 -> 3.28x)
+#   B=8,T=640   1.28x   1.30x   1.14x   0.91x   0.83x     2   (was 2, still 2 — but
+#                                                              see the residual note)
+#
+# RESIDUAL, recorded rather than fitted away: at B=8/T=640 g=4 now measures 1.4 %
+# faster than the policy's g=2 pick (332,600 vs 337,300 ns, spreads 0.1 / 0.7 %).
+# No value of `EXCHANGE_COST_PER_BLOCK` can express it — g=2 and g=4 have the SAME
+# payload term there (3 blocks x 1/2 == 6 blocks x 1/4) and g=4 serialises twice as
+# many exchanges, so any k>0 must prefer g=2. Chasing 1.5 % on one cell with a
+# second tie-break term would be fitting noise-adjacent data, so it is left as a
+# known gap (Refinement 2 recorded the same g2-vs-g4 closeness at 3.5 %).
 MAX_RETILE_GROUP_CORES = 32
+
+# The `auto` policy's exchange term (Refinement 3) — the one tuning constant in
+# `_retile_group_cores`'s objective, in units of "one core's time for one whole
+# unsplit token-block".  It prices ONE block's worth of cross-core exchange
+# (`TOKENS_PER_BLOCK` scatter messages plus the two semaphore round-trips), which
+# is the cost a larger group does NOT divide down and which Refinement 2's
+# objective omitted.  See `_retile_group_cores` for the model and the measurement
+# that fixes it.
+#
+# CALIBRATION.  The measured group curves (4 shapes x 6 group sizes, medians of 5
+# interleaved trials) pin it to the window **0.006 < k < 0.5**:
+#   * below 0.006 the policy reverts to R2's behaviour and mispicks B=1/T=640
+#     (g=32 instead of the measured-best g=4, costing 1.060x);
+#   * above 0.5 the exchange term swamps the payload term and B=8/T=640 falls back
+#     to g=1, losing R2's measured 1.32x there.
+# 0.05 sits ~8x inside both bounds, so it is robust to a shape whose payload/latency
+# ratio differs by an order of magnitude in either direction.  Re-derive it by
+# re-running `test_onorm_retile_group.py::test_group_trial` and checking which k
+# reproduces the measured argmin per shape (`test_auto_policy_*` pins the objective
+# itself, so a bad k shows up as a failing policy test, not as silent slowness).
+EXCHANGE_COST_PER_BLOCK = 0.05
 
 # Depth of `cb_rm_local` in normalize-chunk units (`group_cores > 1` only).  The
 # staging buffer between compute's untilize (producer) and the writer's scatter
@@ -119,11 +247,25 @@ DM_BLOCK_TILES = 8
 # DM_DEPTH deepens cb_gate_tiles / cb_out_tiles so the reader can prefetch (and the
 # writer drain) a group while compute works on the previous one.  4 is measured
 # above; DM_DEPTH=2 at DM_BLOCK_TILES=8 leaves 1.035x on the table.
+#
+# REFINEMENT 3 re-swept it UPWARD against the final block surface and 4 is still
+# the optimum — 8 is a clear REGRESSION (B=8/T=640: 0.944x; combined with
+# O_DEPTH=3 + RM_LOCAL_DEPTH=3 it compounds to 0.930x, spread <= 0.5 %).  Depth 8
+# lets the reader run four groups ahead of a consumer that is gated by the
+# cross-core exchange, so the prefetch buys nothing and its 32 extra pages of L1
+# per stream cost real bandwidth.  This is the one knob in this file whose sweep
+# found the shipped value to be a genuine local MAXIMUM in both directions.
 DM_DEPTH = 4
 # O_DEPTH deepens cb_o_tiles. Kept at 2: the reader is NOT the critical path at
 # these settings (at the new defaults, B=1/T=640: NCRISC 83.5us vs 88.0us compute
 # vs 93.1us kernel), and O_DEPTH=3 measured within noise while costing +128 KB of
 # L1. This stays a live knob for a future shape where the reader IS the bound.
+#
+# REFINEMENT 3 re-swept it against the final block surface: still within noise
+# (B=8/T=640, 1.0007x at 0.7 % spread), and the reader is still off the critical
+# path there (NCRISC 331 us vs BRISC 371 us).  Unchanged, and cheaper than it was:
+# the finer NORM_CHUNK_TOKENS shrinks cb_o_tiles from 64 to 32 pages, so a future
+# refinement that DOES need depth 3 now pays 16 pages for it instead of 32.
 O_DEPTH = 2
 
 # --- P7b sigmoid engine (Refinement 1) ---
@@ -184,15 +326,89 @@ SIGMOID_ENGINE = "math"
 # headroom (the ceiling is derived, not hardcoded) for Refinement 3 to re-sweep
 # against the final structure; the shipped VALUE is the measured optimum.
 #
+# REFINEMENT 3 did that re-sweep against the final block surface (n4/g16, 16-bit
+# DEST, cross-core split) and R1b's result CARRIES: 4 is still the optimum, with
+# d8 a tie (0.9988x) and d2 a small loss (0.9962x) at B=8/T=640, spread <= 0.6 %.
+# Unchanged — but note this knob is now clamped by `gate_chunk_tiles` on more
+# cells than before, since R3 lowered GATE_CHUNK_TILES to 16 and the under-filled
+# shapes clamp it to 4 (where GATE_DEST_TILES=4 IS the whole gate chunk).
+#
 # This is the REQUESTED value — `_dest_tile_limit()` clamps it per compute
 # config, so a caller who asks for `fp32_dest_acc_en=True` still gets a legal
 # window from the same knob.
 GATE_DEST_TILES = 4
 
+# --- Data-format reconfig at every helper boundary (Refinement 3, lever 1) ---
+# Every helper in the compute kernel reconfigures the unpacker's srcA/srcB and the
+# packer's output data format on entry, by default — `BinaryDataFormatReconfig`,
+# `CopyTileReconfig`, `PackTileReconfig`, `ReduceDataFormatReconfigMode`,
+# `ReconfigureRegisterDatatypeMode`.  That is the safe default because a helper
+# cannot know what format the previous phase left programmed.
+#
+# In THIS kernel it is pure waste: all twelve CBs are `o.dtype` (see the CB block
+# below — the format comes from ONE expression, not per-CB literals), so the
+# format never changes at any boundary, and `compute_kernel_hw_startup` already
+# programmed it once at boot.  `master.md` -> `compute_block_size` measures the
+# wasted MMIO at **up to 1.19x**, "largest where there are the most transitions",
+# and this kernel has 25 helper invocations per token-block.  The design chose the
+# uniform `Float16_b` format SPECIFICALLY to make this a legal knob-turn
+# (`op_design.md` §1.5 + risk 11, which names it `RECONFIG_MODE`).
+#
+#   "on"  -- every helper reconfigures formats on entry.  The Phase-0 shape;
+#            byte-identical to everything R1/R1b/R2 measured, and the setting a
+#            future refinement MUST return to if `SUPPORTED["dtype"]` ever widens
+#            past one value (see the CORRECTNESS PRECONDITION below).
+#   "off" -- the reconfig calls are compile-time elided; the boot-time format
+#            programming carries the whole kernel.
+#
+# CORRECTNESS PRECONDITION for "off": the data format must be genuinely constant
+# across every helper boundary.  It is today and cannot change under us —
+# `SUPPORTED["dtype"]` in onorm.py is single-valued (`[ttnn.bfloat16]`) and every
+# CB below takes `data_format=o.dtype` from that one expression.  `validate()` is
+# what enforces it at runtime.  **If a future refinement widens `SUPPORTED["dtype"]`
+# (or gives any CB a format of its own — e.g. risk 11's "promote `cb_rstd` to
+# Float32" precision lever), this knob must go back to "on", or become conditional
+# on the formats actually being equal.**  The same note is repeated at the point
+# the kernel consumes it.
+#
+# MEASURED, three times, and it is a WASH — so the shipped value is "on", the
+# trivial setting that adds no precondition, and "off" stays a live knob:
+#
+#   round                          boundaries/block   cells favouring "off"   |delta| max
+#   R2 block surface (n8/g64)            13                   6 of 8            0.79 %
+#   mid-R3 surface   (n4/g16)            29                   6 of 8            0.85 %
+#   final surface    (n2/g16, G=4)       57                   4 of 8            1.40 %
+#
+# (Blackhole p150, config-spanning guard set, medians of 5 trial-major interleaved
+# trials per arm; trial spread 0.4-5.4 %, i.e. every delta above is INSIDE the
+# noise.)  The lever is real and it does remove instructions — it is just not on
+# the critical path: all three TRISCs and the writer run within ~1 % of the kernel
+# duration (BRISC 331.6 / TRISC 330.8 / kernel 331.9 us at B=8/T=640), because
+# after Refinement 2 the phases are chained through the cross-core exchange, so
+# the compute threads' MMIO hides in stalls they were already paying.  The
+# catalog's 1.19x came from a single-core PURE-COMPUTE chain where nothing hides.
+# Note the boundary count grew 4.4x over the three rounds and the lever still did
+# not appear — that is the mechanism confirmed, not an unfinished measurement.
+#
+# It is kept, not deleted, because it is the right lever the moment the balance
+# changes: it is BIT-EXACT (`test_onorm_reconfig.py` asserts `torch.equal` against
+# "on" at 6 cells x 3 group sizes), free in L1, and one assignment away.  The
+# complementary step that would make it pay is anything that puts the compute
+# threads back ON the critical path — coalescing the exchange's small-message
+# scatter (see changelog.md's "next levers"), or a shape/arch where the SFPU and
+# NoC are faster relative to register MMIO.
+RECONFIG_MODE = "on"
+
 # Wire codes for SIGMOID_ENGINE.  The kernel branches on the integer; this dict
 # is the single source of truth for the mapping (the kernel's ONORM_SIGMOID_*
 # defines are emitted from it below, so neither side restates a literal).
 _SIGMOID_ENGINE_CODES = {"math": 0, "pack": 1, "ablate": 2}
+
+# Wire codes for RECONFIG_MODE, carried exactly like the sigmoid engine's: emitted
+# as ONORM_RECONFIG_* defines from this one dict, so the kernel's static_assert and
+# its `if`-free constexpr selection compare against names rather than re-typed
+# integers.
+_RECONFIG_MODE_CODES = {"off": 0, "on": 1}
 
 # Ablation guard.  "ablate" produces WRONG output by construction, so it must be
 # opted into explicitly *as well as* selected.  A stray SIGMOID_ENGINE="ablate"
@@ -279,18 +495,19 @@ _CB_SLOTS = {
 # as preprocessor defines from this one dict, so the kernel's `if constexpr`
 # ladder compares against names, never against re-typed integers.
 _SIGMOID_DEFINES = [(f"ONORM_SIGMOID_{name.upper()}", str(code)) for name, code in _SIGMOID_ENGINE_CODES.items()]
+_RECONFIG_DEFINES = [(f"ONORM_RECONFIG_{name.upper()}", str(code)) for name, code in _RECONFIG_MODE_CODES.items()]
 
 
 def _kernel_defines(group_cores: int):
-    """The kernels' preprocessor wire: CB slot map + SIGMOID_ENGINE codes.
+    """The kernels' preprocessor wire: CB slot map + SIGMOID_ENGINE / RECONFIG_MODE codes.
 
-    One source of truth for both.  ``ONORM_CB_RM_LOCAL`` is resolved here (see
+    One source of truth for all three.  ``ONORM_CB_RM_LOCAL`` is resolved here (see
     ``_CB_SLOTS``): it aliases ``CB_RM_FLAT_ROWS`` in the single-core-per-block
     path and is its own staging CB once the block is split across cores.
     """
     slots = dict(_CB_SLOTS)
     slots["ONORM_CB_RM_LOCAL"] = CB_RM_LOCAL if group_cores > 1 else CB_RM_FLAT_ROWS
-    return [(name, str(index)) for name, index in slots.items()] + _SIGMOID_DEFINES
+    return [(name, str(index)) for name, index in slots.items()] + _SIGMOID_DEFINES + _RECONFIG_DEFINES
 
 
 # ===========================================================================
@@ -342,11 +559,13 @@ def _retile_group_cores(device, num_token_blocks: int, tokens_per_block: int, fl
 
     A legal group size must divide BOTH split axes: ``tokens_per_block`` (the
     normalize half's token slice) and ``flat_tiles`` (the gate half's output
-    column slice).  ``"auto"`` is the dispatch policy: take the largest legal
-    power of two that fits in the grid capacity left over after every token-block
-    already has a core, capped by ``MAX_RETILE_GROUP_CORES`` — so the exchange is
-    paid for only with cores that would otherwise be idle, and a core-saturated
-    shape stays on the byte-identical ``group_cores == 1`` path.
+    column slice).  ``"auto"`` is the dispatch policy: the legal power of two, up
+    to ``MAX_RETILE_GROUP_CORES``, that minimises the slowest group's critical
+    path ``blocks_per_group * (1/g + EXCHANGE_COST_PER_BLOCK)`` — the payload
+    divides by the group size, the exchange does not.  See ``_work`` below for the
+    model and the measurements that calibrate it; ``group_cores == 1`` (no
+    exchange, byte-identical to the pre-Refinement-2 path) is always a candidate,
+    so a shape the split cannot help stays on it.
     """
     grid_size = device.compute_with_storage_grid_size()
     total_cores = grid_size.x * grid_size.y
@@ -364,29 +583,59 @@ def _retile_group_cores(device, num_token_blocks: int, tokens_per_block: int, fl
         )
         return group_cores
 
-    # The objective is the CRITICAL-PATH work per core, in whole-block units:
+    # The objective is the slowest group's CRITICAL PATH, per serial block, as a
+    # multiple of the time one core needs for one whole block:
     #
-    #     work(g) = ceil(num_token_blocks / num_groups(g)) / g
+    #     cost(g) = blocks_per_group(g) * (1/g + EXCHANGE_COST_PER_BLOCK)
+    #     blocks_per_group(g) = ceil(num_token_blocks / num_groups(g))
     #
-    # — the slowest group's serial block count, divided by the fraction of a block
-    # each of its members actually does.  Minimising it captures both effects the
-    # measurements show, in one number:
-    #   * OCCUPANCY at a small block count (T=32: 1 block, so work(g) = 1/g falls
-    #     all the way to the cap — measured 16.1x at g=32);
-    #   * LOAD BALANCE at a large one, which the naive "spend only spare cores"
-    #     policy misses entirely.  B=8/T=640 has 160 blocks on 110 cores, so at
-    #     g=1 fifty cores carry TWO blocks and sixty carry one: work(1) = 2.
-    #     g=2 gives 55 groups x 3 blocks at half a block each = 1.5, i.e. a 1.33x
-    #     shorter critical path on a shape a spare-capacity rule calls "saturated".
-    #     Measured 1.22x.
-    # Ties go to the SMALLER group: same critical-path work, but fewer exchange
-    # messages per unit of it (the message COUNT per core per block is fixed at
-    # TOKENS_PER_BLOCK, so per unit of work it grows with g) and a shallower serial
-    # block loop, hence fewer per-block exchange barriers.  Measured: at B=1/T=128
-    # g=16 and g=32 tie on work and g=16 is 1.12x faster.
+    # Two terms, because a block costs a core two structurally different things:
+    #   * the PAYLOAD (DRAM reads, normalize, sigmoid, multiply, DRAM writes),
+    #     which the two-axis split genuinely DIVIDES by g — the `1/g`; and
+    #   * the EXCHANGE (Refinement 2's all-to-all row-major scatter), which it does
+    #     NOT: the message COUNT per core per block is fixed at TOKENS_PER_BLOCK
+    #     whatever g is (`tokens_per_core * g == TOKENS_PER_BLOCK`), and only the
+    #     message SIZE shrinks — so this term is per-block, not per-block-over-g.
+    # Both are then repeated once per block in the group's serial block loop, hence
+    # the common `blocks_per_group` factor.
+    #
+    # The two effects that shape the answer:
+    #   * OCCUPANCY at a small block count (T=32: 1 block, so cost(g) = 1/g + k
+    #     falls all the way to the cap — measured 16.3x at g=32);
+    #   * LOAD BALANCE at a large one, which a naive "spend only spare cores" policy
+    #     misses entirely.  B=8/T=640 has 160 blocks on 110 cores, so at g=1 fifty
+    #     cores carry TWO blocks: cost(1) = 2*(1+k).  g=2 gives 55 groups x 3 blocks
+    #     at half a block each = 3*(0.5+k), a shorter critical path on a shape a
+    #     spare-capacity rule calls "saturated".  Measured 1.32x.
+    #
+    # REFINEMENT 3 ADDED THE EXCHANGE TERM.  Refinement 2 shipped this objective
+    # WITHOUT it (`work(g) = blocks_per_group / g`) plus a tie-break to the smaller
+    # group.  Re-swept against R3's block surface, that version mispicks exactly one
+    # measured cell — and it is a named target shape:
+    #
+    #   B=1/T=640, 20 blocks (median of 5 interleaved trials, spread <= 3.2 %)
+    #     g:            1        2        4        8       16       32
+    #     ns:      197,421  105,655  *69,980*  76,531   79,304   74,176
+    #     work(g):    1.0      0.5     0.25     0.25     0.25     0.219   -> picks 32
+    #     cost(g):   1.05     0.55     0.30     0.35     0.45     0.569   -> picks 4  (measured best)
+    #
+    # g=32 buys a 12 % smaller payload share (0.219 vs 0.25) by serialising SEVEN
+    # blocks per group instead of one — i.e. it pays the per-block exchange 7 times
+    # to save 12 % of the payload, which is a loss the g-free objective cannot see.
+    # With the exchange term the policy picks g=4 and gains **1.060x** on that cell,
+    # and the ordering the model predicts matches the measured ordering exactly on
+    # B=1/T=32, B=1/T=128 and B=8/T=640 (and picks the measured winner on all four).
+    #
+    # The tie-break is now IMPLICIT and no longer a special case: when two group
+    # sizes tie on `blocks_per_group` the `1/g` term still prefers the larger g,
+    # and when they tie on `work` but not on `blocks_per_group` the exchange term
+    # prefers the one that serialises fewer blocks — which is what R2's explicit
+    # "ties go to the smaller group" was standing in for (B=1/T=128: g=16 over g=32,
+    # measured 1.12x, and still 1.12x here).
     def _work(g: int) -> float:
         num_groups = min(num_token_blocks, total_cores // g)
-        return _div_up(num_token_blocks, num_groups) / g
+        blocks_per_group = _div_up(num_token_blocks, num_groups)
+        return blocks_per_group * (1.0 / g + EXCHANGE_COST_PER_BLOCK)
 
     best = 1
     candidate = 2
@@ -515,6 +764,12 @@ def create_program_descriptor(
         f"{sorted(_SIGMOID_ENGINE_CODES)}. 'math' and 'pack' are the two shipping "
         f"engines; 'ablate' is a measurement-only setting that produces WRONG output."
     )
+    assert RECONFIG_MODE in _RECONFIG_MODE_CODES, (
+        f"onorm: RECONFIG_MODE={RECONFIG_MODE!r} is not one of {sorted(_RECONFIG_MODE_CODES)}. "
+        f"'off' elides the per-helper data-format reconfig (legal only while every CB "
+        f"shares one format, which SUPPORTED['dtype'] being single-valued guarantees); "
+        f"'on' keeps it."
+    )
     assert SIGMOID_ENGINE != "ablate" or ALLOW_SIGMOID_ABLATION, (
         "onorm: SIGMOID_ENGINE='ablate' drops the sigmoid and produces NUMERICALLY "
         "WRONG output. It exists only for /perf-measure ablation profiling. Set "
@@ -554,6 +809,17 @@ def create_program_descriptor(
         assert tensor.buffer_page_size() == tile_bytes, (
             f"onorm: {name} page size {tensor.buffer_page_size()} B differs from o's {tile_bytes} B; "
             f"the kernels stream every tensor with one shared page_bytes compile-time arg"
+        )
+        # RECONFIG_MODE == "off" elides the per-helper data-format reconfig, which
+        # is legal ONLY while every CB carries one and the same format.  Every CB
+        # below takes `data_format=o.dtype`, so the premise is exactly "all four
+        # tensors share o's dtype" — machine-checked here rather than merely
+        # documented, so a future dtype-widening refinement trips this assert
+        # instead of silently producing garbage.
+        assert RECONFIG_MODE == "on" or tensor.dtype == o.dtype, (
+            f"onorm: RECONFIG_MODE='off' requires one uniform data format across every CB, "
+            f"but {name}.dtype={tensor.dtype} differs from o.dtype={o.dtype}. Set "
+            f"RECONFIG_MODE='on' (per-helper format reconfig) to support mixed formats."
         )
 
     # ================= 2. WORK DISTRIBUTION =================
@@ -712,6 +978,7 @@ def create_program_descriptor(
         gate_chunks_per_block,
         _SIGMOID_ENGINE_CODES[SIGMOID_ENGINE],
         gate_dest_tiles,  # the config-clamped effective window, not the raw request
+        _RECONFIG_MODE_CODES[RECONFIG_MODE],
     ]
 
     o_addr = o.buffer_address()

@@ -128,6 +128,45 @@ void kernel_main() {
     // `InputLifecycle::Streaming` did.  Above 1 the chain stages that many tiles in
     // DEST per acquire/commit/wait/release round-trip.
     constexpr uint32_t gate_dest_tiles = get_compile_time_arg_val(8);
+
+    // --- Data-format reconfig at every helper boundary (RECONFIG_MODE knob) ---
+    // Each helper below reconfigures the unpacker's srcA/srcB and/or the packer's
+    // output data format on entry, because a helper cannot know what the previous
+    // phase left programmed.  In THIS kernel the format never changes: all twelve
+    // CBs are `o.dtype` and `compute_kernel_hw_startup` programmed it once at boot,
+    // so every one of those reconfigs is wasted MMIO at each of the
+    // `norm_chunks*5 + 1 + 2*gate_chunks` phase boundaries per token-block.
+    //
+    // The knob is resolved ONCE into the five enum values below and every phase
+    // uses them, so "reconfig off" is one decision, not eighteen call-site edits
+    // that can drift apart.  The ONORM_RECONFIG_* codes are defines emitted from
+    // the host's `_RECONFIG_MODE_CODES`; this file never restates the integers.
+    //
+    // CORRECTNESS PRECONDITION: `reconfig == false` is correct only while the data
+    // format is genuinely constant across every boundary.  It is today —
+    // `SUPPORTED["dtype"]` in onorm.py is single-valued and every CB takes
+    // `data_format=o.dtype` from one host expression (which the descriptor also
+    // asserts).  **If a future refinement widens `SUPPORTED["dtype"]`, or gives any
+    // single CB a format of its own (e.g. op_design.md risk 11's "promote cb_rstd
+    // to Float32" precision lever), RECONFIG_MODE must go back to "on" or become
+    // conditional on the two formats at each boundary actually matching.**
+    constexpr uint32_t reconfig_mode = get_compile_time_arg_val(9);
+    static_assert(
+        reconfig_mode == ONORM_RECONFIG_ON || reconfig_mode == ONORM_RECONFIG_OFF, "onorm: unknown RECONFIG_MODE code");
+    constexpr bool reconfig = (reconfig_mode == ONORM_RECONFIG_ON);
+
+    constexpr auto binary_reconfig =
+        reconfig ? ckl::BinaryDataFormatReconfig::Input : ckl::BinaryDataFormatReconfig::None;
+    constexpr auto pack_reconfig = reconfig ? ckl::PackTileReconfig::Output : ckl::PackTileReconfig::None;
+    constexpr auto copy_reconfig = reconfig ? ckl::CopyTileReconfig::Input : ckl::CopyTileReconfig::None;
+    constexpr auto reduce_reconfig =
+        reconfig ? ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT : ckl::ReduceDataFormatReconfigMode::NONE;
+    constexpr auto tilize_reconfig = reconfig
+                                         ? ckl::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure
+                                         : ckl::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure;
+    constexpr auto untilize_reconfig =
+        reconfig ? ckl::untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure
+                 : ckl::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure;
     // The gate walk is 1-D (`EltwiseShape::tiles`), so its iteration count IS the
     // tile count and `OperandKind::Block` is the only kind `Chunked` is legal with
     // (eltwise_chain.hpp:359-372) — a chunk-scaled wait on a Scalar-kind operand
@@ -169,18 +208,14 @@ void kernel_main() {
                         ckl::BroadcastDim::None,
                         ckl::InputLifecycle::HeldBulk,
                         ckl::InputLifecycle::HeldBulk,
-                        ckl::BinaryDataFormatReconfig::Input,
+                        binary_reconfig,
                         ckl::Dst::D0,
                         ckl::OperandKind::Block,
                         ckl::OperandKind::Block,
                         ckl::TileOffset::Unset,
                         ckl::TileOffset::Unset,
                         ckl::DestAccumulation::Enabled>{},
-                    ckl::PackTile<
-                        cb_sumsq,
-                        ckl::OutputLifecycle::DestAccumulation,
-                        ckl::PackTileReconfig::Output,
-                        ckl::Dst::D0>{});
+                    ckl::PackTile<cb_sumsq, ckl::OutputLifecycle::DestAccumulation, pack_reconfig, ckl::Dst::D0>{});
             }
 
             // ---- P2: mean over V (via the 1/V scaler tile) + eps + rsqrt ----
@@ -196,7 +231,7 @@ void kernel_main() {
                     cb_scaler,
                     cb_rstd,
                     ckl::ReduceInputPolicy::BulkWaitBulkPop,
-                    ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                    reduce_reconfig,
                     ckl::ReduceAlgorithm::Auto>(
                     ckl::ReduceInputBlockShape::of(1, 1, nb),
                     ckl::ReduceInputMemoryLayout::contiguous(),
@@ -219,8 +254,8 @@ void kernel_main() {
                     ckl::InputLifecycle::Bulk,
                     ckl::InputLifecycle::Bulk,
                     ckl::OutputLifecycle::Streaming,
-                    ckl::BinaryDataFormatReconfig::Input,
-                    ckl::PackTileReconfig::Output,
+                    binary_reconfig,
+                    pack_reconfig,
                     ckl::OperandKind::Block,
                     ckl::OperandKind::Col>(ckl::EltwiseShape::grid(nb, v_tiles));
             }
@@ -240,8 +275,8 @@ void kernel_main() {
                     ckl::InputLifecycle::Bulk,
                     ckl::InputLifecycle::HeldBulk,
                     ckl::OutputLifecycle::Streaming,
-                    ckl::BinaryDataFormatReconfig::Input,
-                    ckl::PackTileReconfig::Output,
+                    binary_reconfig,
+                    pack_reconfig,
                     ckl::OperandKind::Block,
                     ckl::OperandKind::Row>(ckl::EltwiseShape::grid(nb, v_tiles));
             }
@@ -260,7 +295,13 @@ void kernel_main() {
             // same and the bytes it emits are the same.
             {
                 MaybeDeviceZoneScope("onorm_p6_untilize");
-                ckl::untilize<v_tiles, cb_onorm, cb_rm_local>(nb);
+                ckl::untilize<
+                    v_tiles,
+                    cb_onorm,
+                    cb_rm_local,
+                    ckl::untilize_config::InitUninitMode::InitAndUninit,
+                    ckl::untilize_config::WaitMode::WaitBlock,
+                    untilize_reconfig>(nb);
             }
         }
 
@@ -269,7 +310,13 @@ void kernel_main() {
         // (the whole block's FLAT width when the block is not split).
         {
             MaybeDeviceZoneScope("onorm_p7a_tilize");
-            ckl::tilize<cols_per_core, cb_rm_flat_rows, cb_flat_tiles>(tile_rows_per_block);
+            ckl::tilize<
+                cols_per_core,
+                cb_rm_flat_rows,
+                cb_flat_tiles,
+                ckl::tilize_config::InitUninitMode::InitAndUninit,
+                ckl::tilize_config::WaitMode::WaitBlock,
+                tilize_reconfig>(tile_rows_per_block);
         }
 
         for (uint32_t g = 0; g < gate_chunks; ++g) {
@@ -292,8 +339,8 @@ void kernel_main() {
                         cb_gate_sig,
                         ckl::InputLifecycle::Chunked,
                         ckl::OutputLifecycle::Chunked,
-                        ckl::CopyTileReconfig::Input,
-                        ckl::PackTileReconfig::Output,
+                        copy_reconfig,
+                        pack_reconfig,
                         ckl::OperandKind::Block>(gate_shape);
                 } else if constexpr (sigmoid_engine == ONORM_SIGMOID_PACK) {
                     // PACK thread (TRISC2): the same 6-entry-LUT sigmoid, issued
@@ -343,8 +390,8 @@ void kernel_main() {
                         cb_gate_sig,
                         ckl::InputLifecycle::Chunked,
                         ckl::OutputLifecycle::Chunked,
-                        ckl::CopyTileReconfig::Input,
-                        ckl::PackTileReconfig::Output,
+                        copy_reconfig,
+                        pack_reconfig,
                         ckl::OperandKind::Block>(gate_shape);
                 }
             }
@@ -370,8 +417,8 @@ void kernel_main() {
                     ckl::InputLifecycle::Chunked,
                     ckl::InputLifecycle::Chunked,
                     ckl::OutputLifecycle::Chunked,
-                    ckl::BinaryDataFormatReconfig::Input,
-                    ckl::PackTileReconfig::Output,
+                    binary_reconfig,
+                    pack_reconfig,
                     ckl::OperandKind::Block,
                     ckl::OperandKind::Block>(gate_shape);
             }

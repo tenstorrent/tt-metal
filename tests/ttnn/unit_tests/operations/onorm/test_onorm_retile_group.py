@@ -139,13 +139,17 @@ def test_group_size_is_bit_identical_to_single_core(device, restore_knobs, group
 def _expected_auto(total_cores, num_token_blocks, tokens_per_block, flat_tiles, cap):
     """Independent restatement of the `auto` objective (see `_retile_group_cores`).
 
-    Minimise the slowest group's critical-path work in whole-block units,
-    ``ceil(blocks / num_groups(g)) / g``; ties go to the smaller group.
+    Minimise the slowest group's critical path per serial block,
+    ``blocks_per_group * (1/g + EXCHANGE_COST_PER_BLOCK)``: the payload divides by
+    the group size, the cross-core exchange does not (its message count per core
+    per block is fixed at ``TOKENS_PER_BLOCK``).  Exact ties go to the smaller
+    group.  Refinement 3 added the second term — see the descriptor for the
+    measurement that calibrates it.
     """
 
     def work(g):
         num_groups = min(num_token_blocks, total_cores // g)
-        return -(-num_token_blocks // num_groups) / g
+        return -(-num_token_blocks // num_groups) * (1.0 / g + pd.EXCHANGE_COST_PER_BLOCK)
 
     best, g = 1, 2
     while g <= cap:
@@ -181,6 +185,42 @@ def test_auto_policy_minimises_critical_path_work(device, restore_knobs, shape, 
     assert_with_pcc(ref, out, PCC)
 
 
+@pytest.mark.parametrize(
+    "num_token_blocks, measured_best_group",
+    # MEASURED argmin of `DEVICE KERNEL DURATION [ns]` over g in {1,2,4,8,16,32}
+    # (test_group_trial below, medians of 5 interleaved trials, Blackhole p150,
+    # 11x10 grid), at the Refinement 3 block surface:
+    #   1 block  (B=1/T=32):  12,100 ns at g=32  (16.52x vs g=1)
+    #   4 blocks (B=1/T=128): 22,700 ns at g=16  ( 8.83x)
+    #   20 blocks(B=1/T=640): 61,200 ns at g=4   ( 3.28x)  <- moved from 32 by R3
+    #   160blocks(B=8/T=640):337,300 ns at g=2   ( 1.28x)  (g=4 is 1.4 % faster; see
+    #                                                       the residual note in the
+    #                                                       descriptor — no k can
+    #                                                       express it)
+    [(1, 32), (4, 16), (20, 4), (160, 2)],
+    ids=lambda v: str(v),
+)
+def test_auto_policy_agrees_with_the_measured_optimum(device, restore_knobs, num_token_blocks, measured_best_group):
+    """`EXCHANGE_COST_PER_BLOCK` is CALIBRATED, not invented — this pins it.
+
+    The policy's one tuning constant is only meaningful if the objective it feeds
+    actually selects the group size that measured fastest.  This asserts that for
+    every shape in the guard set, on the grid those numbers were taken on.  A
+    future edit to the constant (or to the objective) that stops reproducing the
+    measurement fails here instead of silently shipping a slower dispatch.
+    """
+    grid = device.compute_with_storage_grid_size()
+    if grid.x * grid.y != 110:
+        pytest.skip(f"measured argmins are for a 110-core grid; this grid has {grid.x * grid.y}")
+    pd.RETILE_GROUP_CORES = "auto"
+    got = pd._retile_group_cores(device, num_token_blocks, pd.TOKENS_PER_BLOCK, FLAT // 32)
+    assert got == measured_best_group, (
+        f"auto picked g={got} for {num_token_blocks} token-blocks, but g={measured_best_group} "
+        f"measured fastest. Re-run test_group_trial and re-calibrate "
+        f"EXCHANGE_COST_PER_BLOCK (currently {pd.EXCHANGE_COST_PER_BLOCK})."
+    )
+
+
 def test_auto_policy_never_regresses_the_objective(device, restore_knobs):
     """Sweep block counts across the grid boundary; `auto` must never lose.
 
@@ -197,7 +237,7 @@ def test_auto_policy_never_regresses_the_objective(device, restore_knobs):
 
         def work(cores_per_group):
             num_groups = min(blocks, total // cores_per_group)
-            return -(-blocks // num_groups) / cores_per_group
+            return -(-blocks // num_groups) * (1.0 / cores_per_group + pd.EXCHANGE_COST_PER_BLOCK)
 
         assert work(g) <= work(1), f"blocks={blocks}: auto picked g={g}, worse than g=1"
 

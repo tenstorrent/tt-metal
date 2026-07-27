@@ -419,7 +419,7 @@ config-spanning guard set improves; none regresses. Evidence in `changelog.md`.
 
 ---
 
-### [ ] Refinement 3 — Re-tune the compute block surface against the final structure
+### [x] Refinement 3 — Re-tune the compute block surface against the final structure
 
 **Type**: perf
 
@@ -483,3 +483,62 @@ interleaved trials per candidate, with spread) is recorded in `changelog.md`; no
 the config-spanning guard set; `test_onorm_knobs.py` and the golden suite are green; and
 `test_onorm_precision_baseline.py` still passes — reconfig-off must be bit-neutral (PCC unchanged),
 so any PCC movement from lever 1 is a bug, not a trade.
+
+**OUTCOME (full)** — **1.205× on B=1/T=640 and 1.095× on B=8/T=640** (the two shapes this
+phase names), every other cell of the config-spanning guard set unchanged-or-faster, and the
+output **bit-identical** to Refinement 2's (`torch.equal`, 5 cells) — a pure perf change.
+Cumulative vs Phase 0: 16.0× / 13.2× / 8.5× / **3.98×** / **1.59×**. Evidence in `changelog.md`.
+
+- **Lever 2 is the whole win, and it went the OPPOSITE way to the catalog.**
+  `NORM_CHUNK_TOKENS` 8 → **2** and `GATE_CHUNK_TILES` 64 → **8**; R2's corner (n8/g64)
+  measures **0.785× / 0.908×** on the two live cells. The catalog's amortize-a-fixed-cost
+  mechanism is real but is not what these knobs control here: every phase sits between two
+  NoC streams, so the chunk size sets the **pipeline fill before the next stage can start**
+  (a 64-tile gate chunk stalls the writer for ~64 SFPU tile-ops, then dumps 64 tiles with no
+  compute to overlap). Finer wins until the fill saving is spent — the surface is
+  single-peaked in both knobs on both cells. The two cells' norm-axis peaks DIFFER (2 vs 4)
+  and the knob is global, so that is a priced trade, taken: −1.5 % on B=8/T=640 for +12.3 %
+  on B=1/T=640. `GATE_DEST_TILES` re-swept a third time → still 4. `DM_DEPTH` 8 is a
+  **regression** (0.944×): the reader already runs ahead of a consumer gated by the exchange.
+- **The sweep forced a third change the phase did not list, because R2 handed it over: the
+  `auto` dispatch policy.** The clamps make every block factor a function of `G`, so the two
+  are ONE surface — and at the new factors B=1/T=640's optimum moved **G=32 → G=4** (G=4
+  gained 2.57 → 3.28×; G≥8 was already at the floor by clamping, so only G≤4 could move),
+  which R2's objective mispicked. Fixed by adding the term it omitted:
+  `cost(g) = blocks_per_group * (1/g + EXCHANGE_COST_PER_BLOCK)` — the payload divides by
+  `g`, the **exchange does not** (its message count per core per block is fixed at
+  `TOKENS_PER_BLOCK`). G=32 was paying the per-block exchange 7× to save 12 % of the payload.
+  `k = 0.05` is **calibrated**, not invented: the measured curves pin it to `0.006 < k < 0.5`
+  and `test_auto_policy_agrees_with_the_measured_optimum` asserts the policy reproduces the
+  measured argmin per shape. R2's explicit tie-break is now implicit in the model.
+- **Lever 1 (`RECONFIG_MODE` off) is correct, bit-exact, and a measured WASH — kept as a live
+  knob at the trivial default `"on"`, not reverted.** Three rounds at 13 / 29 / **57**
+  boundaries per block: every delta inside the trial spread (max 1.4 %, spread up to 5.4 %).
+  The boundary count grew 4.4× without the lever appearing, so this is the mechanism
+  identified, not an unfinished measurement: after R2 all three TRISCs and the writer run
+  within ~1 % of the kernel duration (BRISC 331.6 / TRISC1 330.9 / kernel 331.9 µs), so the
+  compute threads' register MMIO hides in stalls they already pay — the catalog's 1.19× came
+  from a single-core *pure-compute* chain where nothing hides. `"off"` is `torch.equal`-identical
+  to `"on"` at 6 cells × 3 group sizes and the host now **asserts** its uniform-dtype
+  precondition rather than only documenting it. The complementary step that would make it pay
+  is named in `changelog.md` (coalesce the exchange's small messages → compute back on the
+  critical path).
+- **Lever 3 (`weight` mcast rider) dropped per its own stated condition.** It is conditional
+  on R2 having stood up `mcast_pipe` wiring; R2 documented three reasons `mcast_pipe` cannot
+  express its exchange and used the `Noc`/`Semaphore<>` object APIs directly. With no wiring
+  to reuse, a `SenderPipe`/`ReceiverPipe` + `ttnn.Mcast2D` topology for ~0.7 % of traffic is
+  not "nearly free" ⇒ not built.
+- **`TOKENS_PER_BLOCK` deliberately NOT raised, now documented at the knob**: the host asserts
+  `T % TOKENS_PER_BLOCK == 0`, so 64 would drop support for every T that is an odd multiple of
+  32 (T=32/96/160 — all inside the op's contract and all exercised). Raising it trades
+  supported shapes for coarseness R2 already bought more cheaply by *splitting* a block.
+- **L1 fell to 107–257 pages (214–514 KB)** from R2's 533-page worst case — the finer chunks
+  shrink every intermediate — which is headroom for the next phase. The budget assert and its
+  escape-route message still bind.
+- **Recorded, not fitted away**: a 1.4 % residual at B=8/T=640 (G=4 beats the policy's G=2)
+  that **no** `k` can express — the two have identical payload terms and G=4 serialises twice
+  the exchanges. **Next levers, priced**: the sigmoid is now only **9 %** of B=8/T=640 (down
+  from R1's 62 %), that shape sits at **≈372 GB/s** of DRAM traffic, and B=1/T=640's residue
+  is the exchange's small-message scatter.
+
+---

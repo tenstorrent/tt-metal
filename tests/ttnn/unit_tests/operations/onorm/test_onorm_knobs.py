@@ -36,12 +36,30 @@ PCC = 0.995
 # (name, value) pairs. Every one must divide/relate correctly per the host
 # asserts in the descriptor; that is part of what is under test.
 KNOB_SETTINGS = [
-    # --- per-core normalize sub-block: 8 (default) -> 4 (finer) and 16 (coarser) ---
+    # --- per-core normalize sub-block: 2 (default) -> 1 (floor), 4/8/16 (coarser) ---
+    ("NORM_CHUNK_TOKENS", 1),
     ("NORM_CHUNK_TOKENS", 4),
+    ("NORM_CHUNK_TOKENS", 8),
     ("NORM_CHUNK_TOKENS", 16),
-    # --- gate-chain block factor ---
+    # --- gate-chain block factor: 16 (default) -> 4 (floor) and coarser ---
+    ("GATE_CHUNK_TILES", 4),
     ("GATE_CHUNK_TILES", 32),
+    ("GATE_CHUNK_TILES", 64),
     ("GATE_CHUNK_TILES", 128),  # the whole flat tile-row in one invocation
+    # --- per-DEST-window tiles in the two gate phases (R1's knob) ---
+    ("GATE_DEST_TILES", 1),
+    ("GATE_DEST_TILES", 8),
+    # --- data-format reconfig at every helper boundary (R3 lever 1) ---
+    # Both settings must be numerically correct; `test_onorm_reconfig.py` is what
+    # additionally proves they are BIT-identical to each other.
+    ("RECONFIG_MODE", "on"),
+    ("RECONFIG_MODE", "off"),
+    # --- the `auto` dispatch policy's exchange term (R3) ---
+    # 0.0 is exactly Refinement 2's objective; 0.5 is the top of the calibrated
+    # window (above it a saturated shape falls back to group 1).  Both must be
+    # correct, since both are legal policy calibrations.
+    ("EXCHANGE_COST_PER_BLOCK", 0.0),
+    ("EXCHANGE_COST_PER_BLOCK", 0.5),
     # --- NoC group size (reader AND writer, one knob for both halves) ---
     ("DM_BLOCK_TILES", 1),  # the documented latency-bound trap
     ("DM_BLOCK_TILES", 2),
@@ -84,6 +102,16 @@ COMBOS = [
     # group size, so the same setting that needs two knobs lowered at group 1 fits
     # untouched at group 4.
     {"RETILE_GROUP_CORES": 4, "TOKENS_PER_BLOCK": 64, "NORM_CHUNK_TOKENS": 16, "GATE_CHUNK_TILES": 32},
+    # The whole pre-Refinement-3 block surface at once (what R2 shipped), which is
+    # also the `r2` arm of test_onorm_r3_guard.py — it must stay CORRECT, not just
+    # slower, so the guard set is comparing two working configurations.
+    {
+        "NORM_CHUNK_TOKENS": 8,
+        "GATE_CHUNK_TILES": 64,
+        "GATE_DEST_TILES": 4,
+        "RECONFIG_MODE": "on",
+        "EXCHANGE_COST_PER_BLOCK": 0.0,
+    },
 ]
 
 # Knob settings that legitimately do NOT fit L1. The host budget assert must
@@ -109,6 +137,9 @@ def restore_knobs():
             "TOKENS_PER_BLOCK",
             "NORM_CHUNK_TOKENS",
             "GATE_CHUNK_TILES",
+            "GATE_DEST_TILES",
+            "RECONFIG_MODE",
+            "EXCHANGE_COST_PER_BLOCK",
             "DM_BLOCK_TILES",
             "DM_DEPTH",
             "O_DEPTH",
