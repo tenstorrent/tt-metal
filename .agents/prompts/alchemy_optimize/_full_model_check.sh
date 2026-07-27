@@ -24,7 +24,22 @@ if [ -z "$PCC" ]; then
   exit 2
 fi
 if awk -v p="$PCC" -v t="$THRESHOLD" 'BEGIN{exit !(p+0 >= t+0)}'; then
-  echo "PASS: full-model PCC=$PCC >= $THRESHOLD"; exit 0
+  echo "PASS: full-model PCC=$PCC >= $THRESHOLD"
+  # Best-effort: publish this passing stage to GitHub so progress is visible per stage.
+  # Code only (git add -u = tracked files); the 5.3G tensors are untracked. Never affects exit code.
+  ( TTM="$(git -C "$GD" rev-parse --show-toplevel 2>/dev/null)"
+    if [ -n "$TTM" ]; then
+      git -C "$TTM" add -u openai/gpt-oss-20b/model/graph_0 2>/dev/null
+      if git -C "$TTM" -c core.hooksPath=/dev/null commit -q \
+           -m "optimize ${STAGE:-stage}: full-model check PASS (PCC=$PCC ${TPS})" 2>/dev/null; then
+        git -C "$TTM" push -q origin HEAD:mvasiljevic/gpt-oss-optimize 2>/dev/null \
+          && echo "published ${STAGE:-stage} -> github mvasiljevic/gpt-oss-optimize" \
+          || echo "commit made but push failed (non-fatal)"
+      else
+        echo "nothing new to commit for ${STAGE:-stage} (non-fatal)"
+      fi
+    fi ) || true
+  exit 0
 else
   echo "FAIL(critical): full-model PCC=$PCC < $THRESHOLD — optimization regressed correctness"; exit 2
 fi
