@@ -63,9 +63,10 @@ ORAS_SHA256="${ORAS_SHA256:-9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917c
 # same precedent used elsewhere in this repo for Docker Hub images (see
 # dockerfile/Dockerfile's `mirror.gcr.io/ubuntu` base and
 # llk-build-docker-images.sh's LLK_UBUNTU_BASE_IMAGE): Google's public,
-# anonymous, unauthenticated mirror of Docker Hub. Its direct-docker.io
-# fallback path runs authenticated (see the "Login to Docker Hub" step in
-# publish-release-image.yaml) instead of anonymous.
+# anonymous, unauthenticated mirror of Docker Hub. There is no org Docker Hub
+# account/credentials to authenticate its direct-docker.io fallback path
+# with, so that fallback stays anonymous - a last resort only reached if
+# mirror.gcr.io itself is unavailable.
 SYFT_SCANNER_PATH="docker/buildkit-syft-scanner:stable-1"
 if [ -n "${INPUT_SYFT_SCANNER_IMAGE}" ]; then
   SYFT_SCANNER_PRIMARY="${INPUT_HARBOR_PREFIX}${INPUT_SYFT_SCANNER_IMAGE}"

@@ -61,20 +61,6 @@ jobs:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Login to Docker Hub
-        # Backstops docker/buildkit-syft-scanner (BuildKit's SBOM attestation
-        # scanner - see manual-docker-bake.sh's SYFT_SCANNER_FALLBACK): the
-        # primary pull now goes through mirror.gcr.io (anonymous, no rate
-        # limit), but if that ever fails, bake retries by pulling the same
-        # image directly from docker.io - anonymous docker.io pulls from CI
-        # runner IPs are rate-limited/auth-walled, so this login makes that
-        # fallback attempt actually able to succeed instead of failing the
-        # same way. Requires the DOCKERHUB_USERNAME/DOCKERHUB_TOKEN org secrets.
-        uses: docker/login-action@v3
-        with:
-          registry: https://docker.io
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
