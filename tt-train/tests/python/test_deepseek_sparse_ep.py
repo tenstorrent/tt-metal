@@ -4,47 +4,44 @@
 
 """Correctness of the ``sparse_ep`` MoE path — the production multi-device path.
 
-Two layers of coverage:
+The routed-expert list is partitioned across an "ep" mesh axis
+(``SparseMoEEP``), each chip running ``E / D_ep`` experts and all-reducing the
+partial outputs. One set of host weights is loaded into
 
-* **Dispatch** (single device): ``build_moe_ffn`` picks ``SparseMoE`` when the
-  mesh has no usable EP axis (the EP=1 degenerate case), ``SparseMoEEP`` when it
-  does, ``MoE`` for ``dense``, and rejects anything else. EP=1 ≡ sparse is what
-  lets ``sparse_ep`` be the only sparse mode, so it is asserted directly rather
-  than assumed.
+  * a replicated ``SparseMoE`` reference holding all E experts, and
+  * an EP-sharded ``SparseMoEEP`` (expert ``e`` lives on shard ``e // e_local``),
 
-* **Numerics** (multi-device): the routed-expert list is partitioned across an
-  "ep" mesh axis (``SparseMoEEP``), each chip running ``E / D_ep`` experts and
-  all-reducing the partial outputs. One set of host weights is loaded into
+both are run on the same replicated input, and the (replicated) forward output
+and gate gradient must match within PCC bounds.
 
-    - a replicated ``SparseMoE`` reference holding all E experts, and
-    - an EP-sharded ``SparseMoEEP`` (expert ``e`` lives on shard ``e // e_local``),
-
-  both are run on the same replicated input, and the (replicated) forward output
-  and gate gradient must match within PCC bounds.
-
-The multi-device tests need ``EP_AXIS_SIZE`` chips on the "ep" axis; the
-module-scoped fixture skips them otherwise. Override the axis size with
-``TTML_EP_AXIS_SIZE`` and supply a matching ``TT_MESH_GRAPH_DESC_PATH`` for
-sizes that have no bundled MGD, e.g.
+Needs ``EP_AXIS_SIZE`` chips on the "ep" axis; the module-scoped fixture skips
+otherwise. Override the axis size with ``TTML_EP_AXIS_SIZE`` and supply a
+matching ``TT_MESH_GRAPH_DESC_PATH`` for sizes that have no bundled MGD, e.g.
 
     TTML_EP_AXIS_SIZE=8 TT_MESH_GRAPH_DESC_PATH=<1x8 mgd> pytest test_deepseek_sparse_ep.py
+
+Multi-device only: this module opens a mesh, so it must not share a process with
+tests that open a default single-device context first — reopening the device as
+a mesh afterwards leaves the fabric routers half-initialized.
 """
 
 from __future__ import annotations
 
 import os
+import sys
 from typing import Optional
 
 import numpy as np
 import pytest
 import torch
 
+sys.path.insert(0, os.path.dirname(__file__))
+from tests.ttnn.utils_for_testing import assert_with_pcc  # noqa: E402
+
 import ttnn
 import ttml
-from ttml.models.deepseek.moe import MoE
 from ttml.models.deepseek.moe_sparse import SparseMoE
 from ttml.models.deepseek.moe_sparse_ep import SparseMoEEP
-from ttml.models.deepseek.transformer import build_moe_ffn, resolve_moe_ep_axis
 
 pytestmark = pytest.mark.requires_device
 
@@ -74,55 +71,9 @@ class _Cfg:
         self.n_limited_groups = kw.get("n_limited_groups", 1)
         self.score_func = kw.get("score_func", "sigmoid")
         self.route_scale = kw.get("route_scale", 1.0)
+        # Read by MoE.__init__ to decide EP sharding across moe_axis_name.
         self.moe_type = kw.get("moe_type", "sparse_ep")
         self.moe_axis_name = kw.get("moe_axis_name", "ep")
-        self.use_tp = kw.get("use_tp", False)
-
-
-def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
-    a = a.flatten().float()
-    b = b.flatten().float()
-    a = a - a.mean()
-    b = b - b.mean()
-    denom = a.norm() * b.norm()
-    if denom == 0:
-        return 1.0 if a.norm() == b.norm() else 0.0
-    return float((a @ b) / denom)
-
-
-# ---------------------------------------------------------------------------
-# Dispatch: EP=1 degenerates to SparseMoE (single device, no mesh needed)
-# ---------------------------------------------------------------------------
-
-
-class TestMoEDispatch:
-    """``build_moe_ffn`` selection rules, including the EP=1 fallback."""
-
-    def setup_method(self, method):
-        ttml.autograd.AutoContext.get_instance().reset_graph()
-
-    def test_dense_builds_dense_moe(self):
-        assert isinstance(build_moe_ffn(_Cfg(moe_type="dense")), MoE)
-
-    def test_ep1_no_axis_degenerates_to_sparse(self):
-        """moe_axis_name unset → no EP axis → single-device SparseMoE (EP=1)."""
-        cfg = _Cfg(moe_type="sparse_ep", moe_axis_name=None)
-        assert resolve_moe_ep_axis(cfg) is None
-        ffn = build_moe_ffn(cfg)
-        assert isinstance(ffn, SparseMoE) and not isinstance(ffn, SparseMoEEP)
-
-    def test_ep1_size_one_axis_degenerates_to_sparse(self):
-        """An "ep" axis of size 1 is not a usable EP axis → SparseMoE."""
-        cfg = _Cfg(moe_type="sparse_ep", moe_axis_name="ep")
-        mesh = ttml.maybe_mesh()
-        if mesh is not None and mesh.has_axis("ep") and mesh.axis_size("ep") > 1:
-            pytest.skip("mesh has a real EP axis; covered by the multi-device tests")
-        assert resolve_moe_ep_axis(cfg) is None
-        assert isinstance(build_moe_ffn(cfg), SparseMoE)
-
-    def test_unknown_moe_type_raises(self, expect_error):
-        with expect_error(ValueError, "unknown moe_type"):
-            build_moe_ffn(_Cfg(moe_type="sparse_tp"))
 
 
 # ---------------------------------------------------------------------------
@@ -353,16 +304,14 @@ def test_ep_shards_experts(ep_vs_reference):
 
 def test_forward_parity_ep_vs_replicated_sparse(ep_vs_reference):
     r = ep_vs_reference
-    pcc = _pcc(r["fwd_ref"], r["fwd_ep"])
+    assert_with_pcc(r["fwd_ref"], r["fwd_ep"], pcc=0.99)
     max_abs = float((r["fwd_ref"] - r["fwd_ep"]).abs().max())
-    assert pcc > 0.99, f"forward pcc={pcc:.5f} (max_abs_diff={max_abs:.4f})"
-    assert max_abs < 0.5, f"forward max_abs_diff={max_abs:.4f} (pcc={pcc:.5f})"
+    assert max_abs < 0.5, f"forward max_abs_diff={max_abs:.4f}"
 
 
 def test_gate_grad_parity_ep_vs_replicated_sparse(ep_vs_reference):
     r = ep_vs_reference
-    pcc = _pcc(r["grad_ref"], r["grad_ep"])
-    assert pcc > 0.95, f"gate.weight grad pcc={pcc:.5f}"
+    assert_with_pcc(r["grad_ref"], r["grad_ep"], pcc=0.95)
 
 
 if __name__ == "__main__":
