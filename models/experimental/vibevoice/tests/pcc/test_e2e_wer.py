@@ -12,9 +12,11 @@ TT then replays the reference token stream (``forced_token_ids``) with ``_post_d
 hooked so TT's LM is fed the REFERENCE embedding each step (no drift), while TT still renders its
 own audio.
 
-Whisper (``WHISPER_MODEL``) transcribes both waveforms and WER (TT vs reference) is reported by
-cumulative transcript-word prefix (32, 64, 128, …). Report-only: asserts audio is finite and
-transcripts non-empty. ``TF_MAX_NEW_TOKENS`` (env ``VV_WER_MAX_NEW_TOKENS``, default 512) caps AR steps.
+Whisper (``WHISPER_MODEL``) transcribes both waveforms and the full-transcript WER (TT vs reference)
+is gated against ``TF_WER_THRESHOLD`` (env ``VV_WER_THRESHOLD``); the test also asserts audio is
+finite and transcripts non-empty. Because teacher forcing removes feedback drift the WER is
+length-stable, so one ceiling holds across ISL. ``TF_MAX_NEW_TOKENS`` (env ``VV_WER_MAX_NEW_TOKENS``,
+default 512) caps AR steps.
 """
 
 import contextlib
@@ -52,6 +54,11 @@ TF_DEMO_ID = "4p_climate_45min"
 # AR-step cap (override with VV_WER_MAX_NEW_TOKENS; the fp32 CPU reference free-runs the same
 # input, so keep it modest — e.g. 32 for a quick smoke test).
 TF_MAX_NEW_TOKENS = int(os.environ.get("VV_WER_MAX_NEW_TOKENS", "512"))
+
+# Teacher-forced WER gate (override with VV_WER_THRESHOLD). Both waveforms are transcribed and WER'd,
+# so this covers TT's full audio path (diffusion + acoustic decode) plus Whisper noise. Teacher
+# forcing removes feedback drift, so the WER is length-stable and one ceiling holds across ISL.
+TF_WER_THRESHOLD = float(os.environ.get("VV_WER_THRESHOLD", "0.30"))
 
 
 @contextlib.contextmanager
@@ -240,6 +247,7 @@ def test_e2e_wer_teacher_forced(mesh_device):
     # Teacher-forcing feeds the reference embedding every frame, so there is no feedback drift to
     # track over length — the single full-transcript WER is the meaningful number.
     overall = round(_wer(ref_words, tt_words), 4)
+    passed = overall <= TF_WER_THRESHOLD
 
     metrics = {
         "mode": "teacher_forced_ref_embedding",
@@ -251,6 +259,8 @@ def test_e2e_wer_teacher_forced(mesh_device):
         "ref_word_count": len(ref_words),
         "tt_word_count": len(tt_words),
         "overall_tt_vs_ref": overall,
+        "wer_threshold": TF_WER_THRESHOLD,
+        "passed": passed,
         "ref_transcript": " ".join(ref_words),
         "tt_transcript": " ".join(tt_words),
     }
@@ -259,5 +269,11 @@ def test_e2e_wer_teacher_forced(mesh_device):
     print(
         f"\n[tf] TEACHER-FORCED WER (bf16 ref embedding -> TT LM), demo={TF_DEMO_ID} cap={TF_MAX_NEW_TOKENS}\n"
         f"[tf] ref {ref_speech.numel() / SR:.1f}s ({len(ref_words)}w) | tt {tt_speech.numel() / SR:.1f}s ({len(tt_words)}w)\n"
-        f"[tf] overall tt_vs_ref={overall:.4f}  artifacts -> {_OUT_DIR}"
+        f"[tf] overall tt_vs_ref={overall:.4f} threshold<={TF_WER_THRESHOLD:.3f} -> {'PASS' if passed else 'FAIL'}"
+        f"  artifacts -> {_OUT_DIR}"
+    )
+
+    assert passed, (
+        f"teacher-forced WER {overall:.4f} > threshold {TF_WER_THRESHOLD:.3f} "
+        f"(demo={TF_DEMO_ID}, cap={TF_MAX_NEW_TOKENS}, ref_words={len(ref_words)}, tt_words={len(tt_words)})"
     )
