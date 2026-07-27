@@ -36,7 +36,7 @@ if str(PCC_DIR) not in sys.path:
 from models.experimental.hunyuan_image_3_0.ref.generate import generate_text
 from models.experimental.hunyuan_image_3_0.ref.recaption import decode_cot_text
 from models.experimental.hunyuan_image_3_0.ref.weights import INSTRUCT_MODEL_DIR, load_tensors
-from models.experimental.hunyuan_image_3_0.ttnn.ar_dual_cq import (
+from models.experimental.hunyuan_image_3_0.ttnn.dual_cq import (
     ArDualCQCoordinator,
     device_num_command_queues,
     open_recaption_mesh,

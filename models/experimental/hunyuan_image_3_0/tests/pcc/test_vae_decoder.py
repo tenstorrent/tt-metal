@@ -26,7 +26,7 @@ from models.experimental.hunyuan_image_3_0.ref.vae.decoder import (
     load_norm_out as load_ref_norm_out,
     load_up_block as load_ref_up_block,
 )
-from models.experimental.hunyuan_image_3_0.ttnn.vae.decoder_weights import (
+from models.experimental.hunyuan_image_3_0.ttnn.vae.weights import (
     load_conv_out as load_tt_conv_out,
     load_norm_out as load_tt_norm_out,
     load_up_block as load_tt_up_block,

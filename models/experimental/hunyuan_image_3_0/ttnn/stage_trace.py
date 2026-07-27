@@ -18,7 +18,7 @@ import time
 import torch
 import ttnn
 
-from models.experimental.hunyuan_image_3_0.ttnn.ar_dual_cq import COMPUTE_CQ, IO_CQ
+from models.experimental.hunyuan_image_3_0.ttnn.dual_cq import COMPUTE_CQ, IO_CQ
 from models.experimental.hunyuan_image_3_0.ttnn.matmul_utils import spill_resident_emb_to_dram
 from models.experimental.hunyuan_image_3_0.ttnn.pipeline import (
     HunyuanTtDenoiseStep,

@@ -20,7 +20,7 @@ from models.experimental.hunyuan_image_3_0.ref.attention.mask import (
     build_attention_mask_query_row,
     to_additive,
 )
-from models.experimental.hunyuan_image_3_0.ttnn.ar_dual_cq import (
+from models.experimental.hunyuan_image_3_0.ttnn.dual_cq import (
     COMPUTE_CQ,
     ArDualCQCoordinator,
     logits_host_to_torch,

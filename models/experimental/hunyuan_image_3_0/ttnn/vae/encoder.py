@@ -29,7 +29,7 @@ from models.experimental.hunyuan_image_3_0.ttnn.vae.decoder import (
     encoder_head_shortcut_bthwc,
 )
 from models.experimental.hunyuan_image_3_0.ttnn.vae.spatial import norm_sharded
-from models.experimental.hunyuan_image_3_0.ttnn.vae.encoder_weights import (
+from models.experimental.hunyuan_image_3_0.ttnn.vae.weights import (
     init_encoder_conv_in as init_encoder_conv_in_weights,
     init_encoder_down as init_encoder_down_weights,
     init_encoder_head as init_encoder_head_weights,

@@ -95,8 +95,7 @@ from models.experimental.hunyuan_image_3_0.ttnn.model import HunyuanTtModel, def
 from models.experimental.hunyuan_image_3_0.ttnn.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
 from models.experimental.hunyuan_image_3_0.ttnn.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
 from models.experimental.hunyuan_image_3_0.ttnn.pipeline import HunyuanTtDenoiseStep, denoise_loop, decode_latent
-from models.experimental.hunyuan_image_3_0.ttnn.denoise_dual_cq import open_denoise_mesh
-from models.experimental.hunyuan_image_3_0.ttnn.vae_dual_cq import open_vae_mesh
+from models.experimental.hunyuan_image_3_0.ttnn.dual_cq import open_denoise_mesh, open_vae_mesh
 from models.experimental.hunyuan_image_3_0.ttnn.scheduler import HunyuanTtScheduler
 
 # Host ref TimestepEmbedder for the gen-timestep / guidance / timestep_r continuous tokens
