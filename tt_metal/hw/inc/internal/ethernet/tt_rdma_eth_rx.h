@@ -26,10 +26,17 @@
 #define TT_ETH_RXQ0_BASE 0xFFB94000u
 #define TT_ETH_RXQ_STRIDE 0x1000u
 #define TT_ETH_RXQ_CTRL 0x00u  // bit1 = packet_mode (0x2), bit2 = buf_wrap (0x4) -- per eth_core_a_reg.h masks
+#define TT_ETH_RXQ_BYTE_CNT 0x04u             // total bytes received by the MAC (32b, wraps fast at line rate)
 #define TT_ETH_RXQ_BUF_PTR 0x08u              // words written by HW so far (advances on RX)
 #define TT_ETH_RXQ_BUF_START_WORD_ADDR 0x0Cu  // L1 WORD address (byte>>4) where frames land
 #define TT_ETH_RXQ_BUF_SIZE_WORDS 0x10u
+#define TT_ETH_RXQ_WORD_CNT 0x14u       // total 16-B words received (÷ line-rate wrap slower than BYTE_CNT)
+#define TT_ETH_RXQ_PKT_START_CNT 0x24u  // SOP count
+#define TT_ETH_RXQ_PKT_END_CNT 0x28u    // EOP (landed-frame) count
 #define TT_ETH_RXQ_PACKET_DROP_CNT 0x4Cu
+#define TT_ETH_RXQ_OUTSTANDING_WR_CNT 0x50u
+// ETH-CTRL RX packet-buffer FIFO fullness (ingress backpressure signal). Express/Preemptible pair.
+#define TT_ETH_RXPKT_BUF_P_STAT 0xFFB980F4u  // rx_afifo_fullness[15:0], pktinfo_fifo_fullness[22:16]
 #define TT_ETH_RXQ_CTRL_RAW_NOWRAP 0x0u  // packet_mode=0(b1), buf_wrap=0(b2) -> raw, fill from start (Stage 1)
 #define TT_ETH_RXQ_CTRL_RAW_WRAP 0x4u    // packet_mode=0(b1), buf_wrap=1(b2) -> raw, HW wraps at buf end (Stage 2)
 // NB: buf_wrap is BIT 2 (0x4), not bit 1. Bit 1 (0x2) is packet_mode -- setting 0x2 for "wrap" silently

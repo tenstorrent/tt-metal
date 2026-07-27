@@ -105,12 +105,15 @@ program on another RISC/Tensix**, or a clean-sheet HW engine. (b2) is the real o
 
 ## 5. De-risking experiment ladder (cheapest first)
 
-1. **Ingress-ceiling test (one-line kernel change, decides the whole question).** Replace the entire
-   per-frame body with `read_pos = wp` (RISC parses *nothing*), fire the 143 G DOCA sender, read
-   `ETH_RXQ_PACKET_DROP_CNT` (@ `+0x4C`) and the `BUF_PTR` advance rate. **If the MAC + L1 ring absorb
-   ~143 G with drop ≈ 0** → the ingress datapath is not the limit, the whole 16→143 G gap is RISC
-   control-plane, and architecture (B) can reach line rate. **If the ring drops with the RISC idle** →
-   ingress itself is a ceiling and it's a deeper HW problem. *This is the single most decisive test.*
+1. **Ingress-ceiling test (one-line kernel change, decides the whole question). ✅ DONE 2026-07-26 —
+   GREEN.** Tool: `bh1_ingest_probe` (`kernels/bh_rdma_ingest_probe.cpp`) — RISC does zero per-frame work,
+   only snapshots the raw MAC RX counters. Driven by the DOCA HW-TX sender (~198 Gbps jumbo). **Result:
+   peak MAC→L1 ingress 198.3 Gbps (99% of 200 G line rate), `PACKET_DROP_CNT` = 0, ingress AFIFO
+   fullness = 0** — 19.2 M jumbo frames landed drop-free (`PKT_END_CNT` Δ ≈ 19.2 M). **The MAC→L1 write
+   side is NOT the ceiling** — it absorbs line rate with the RISC idle. Therefore the entire ~16→200 G RX
+   gap is downstream (RISC control-plane + the L1→MR drain), and architecture (B) — classifier + Tensix
+   drainer pool — is viable on the ingress side. (Bandwidth derived from `PKT_END_CNT`×landed-bytes;
+   `WORD_CNT`/`BYTE_CNT` under-count in raw-wrap mode on this HW.)
 2. **ROCE_ICRC engagement (already tooled: `bh1_icrc_probe`).** Does the engine engage on raw 0x1AF6
    framing? Yes → flip `RX_CHECK_EN`, CRC leaves the hot path (~25%+ headroom immediately). No → slice-by-4
    SW table (~7 ops/byte vs ~32 bit-serial). Either result is decision-grade.

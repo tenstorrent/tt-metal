@@ -53,3 +53,8 @@ target_link_libraries(bh1_rx_dispatch PRIVATE test_metal_common_libs)
 add_executable(bh1_icrc_probe bh1_icrc_probe_host.cpp)
 target_include_directories(bh1_icrc_probe PRIVATE ${PROJECT_SOURCE_DIR})
 target_link_libraries(bh1_icrc_probe PRIVATE test_metal_common_libs)
+
+# Ingest probe (experiment 1) — RX ingress-ceiling go/no-go (loads bh_rdma_ingest_probe.cpp).
+add_executable(bh1_ingest_probe bh1_ingest_probe_host.cpp)
+target_include_directories(bh1_ingest_probe PRIVATE ${PROJECT_SOURCE_DIR})
+target_link_libraries(bh1_ingest_probe PRIVATE test_metal_common_libs)
