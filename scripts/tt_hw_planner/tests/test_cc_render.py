@@ -24,12 +24,18 @@ def test_render_drops_framework_frames():
 
 
 def test_render_assistant_tool_and_text():
+    """Rendered agent lines carry the `[agent] ` marker (added when agent chatter was moved off the
+    terminal and into the full log -- the prefix is what makes those lines filterable). This test
+    pinned the pre-marker format and had been red ever since."""
+    from scripts.tt_hw_planner.cc_harness import _AGENT_LINE
+
     r, n = _render_cc_event(
         '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"pytest x"}}]}}'
     )
-    assert r == "  → Bash: pytest x" and n == 1
+    assert r == _AGENT_LINE + "→ Bash: pytest x" and n == 1
     r2, n2 = _render_cc_event('{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}]}}')
-    assert r2 == "  hello" and n2 == 0
+    assert r2 == _AGENT_LINE + "hello" and n2 == 0
+    assert r.startswith(_AGENT_LINE) and r2.startswith(_AGENT_LINE), "the filter marker must lead every agent line"
 
 
 def _fake_claude(tmp_path):

@@ -365,11 +365,13 @@ def test_wiring_14_adapt_canonical_wrapper_stub_is_working_not_notimpl() -> None
     assert "_get_torch_submodule" not in _exec_only
     assert "HF_MODEL_ID" not in _exec_only
 
-    # Gating: autofill_stubs must check tt_reuse_target + status==ADAPT
     bringup_loop_src = _read("scripts/tt_hw_planner/bringup_loop.py")
     assert "_render_canonical_import_stub" in bringup_loop_src
-    assert "canonical-wrapper:" in bringup_loop_src  # action label
-    assert '_comp_status == "ADAPT"' in bringup_loop_src  # gating
+    assert "canonical-wrapper:" in bringup_loop_src
+    assert '_comp_status == "REUSE"' in bringup_loop_src
+    assert (
+        '_comp_status == "ADAPT"' not in bringup_loop_src
+    ), "ADAPT must NOT take the canonical-import path -- it needs an editable copy"
 
 
 # ---------------------------------------------------------------------------
@@ -386,16 +388,23 @@ def test_wiring_15_adapt_components_use_refinement_directive() -> None:
     ops" prompt as NEW components and the LLM rewrites the canonical
     class instead of refining args. Caught in the Qwen2.5-14B 2026-06-01
     verification: even when stubs WRAPPED the canonical, the LLM rewrote
-    them in subsequent iters because the prompt said "implement"."""
+    them in subsequent iters because the prompt said "implement".
+
+    Asserted by INTENT, not by exact copy: the directive is prose that gets reworded (it grew an
+    INVESTIGATION ORDER section, which dropped the literal "Make a tiny edit" / "1-3 lines"
+    phrasing), and pinning those strings fails on every edit while saying nothing about whether the
+    directive still forbids a rewrite."""
     from scripts.tt_hw_planner.cli import _refinement_directive
 
     text = _refinement_directive("models/tt_transformers/tt/attention.py", pcc_value=0.5)
 
-    # Refinement-specific language present
     assert "REFINEMENT TARGET (ADAPT" in text
     assert "ALREADY EXISTS" in text
-    assert "Make a tiny edit" in text
-    assert "1-3 lines" in text
+    lowered = text.lower()
+    assert "do not write a new class" in lowered, "the directive must forbid replacing the canonical impl"
+    assert "do not bypass the canonical" in lowered, "the directive must forbid re-implementing forward"
+    assert "config-level edits" in lowered, "the directive must steer toward small config edits"
+    assert "rewritten instead of refined" in lowered, "the directive must warn that a rewrite is rejected"
 
     # PCC value surfaced for trajectory-aware reasoning
     assert "0.5000" in text

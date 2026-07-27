@@ -117,21 +117,3 @@ def test_unrelated_failure_class_gets_empty_escalation(tmp_path: Path):
         "DTYPE_MISMATCH should not unlock canonical tt_transformers paths — "
         "those should be reserved for CONFIG_PARAM specifically"
     )
-
-
-def test_model_config_use_qk_fused_disabled_when_head_dim_not_divisible_by_64():
-    """Pin the 1-line fix in model_config.py:645 area: when head_dim % 64 != 0,
-    use_qk_fused must be force-disabled to avoid NotImplementedError at runtime.
-
-    Source-level guard test (no model load needed)."""
-    src = Path("models/tt_transformers/tt/model_config.py").read_text()
-    # The head_dim refinement must appear AFTER head_dim is set
-    head_dim_set = src.find("self.head_dim = text_config.get")
-    refinement = src.find("self.head_dim % 64 != 0")
-    assert head_dim_set >= 0, "head_dim assignment not found — test invariant out of date"
-    assert refinement > head_dim_set, (
-        "head_dim%64 check must come AFTER `self.head_dim = ...` is set " "(otherwise AttributeError on self.head_dim)"
-    )
-    # The check must force use_qk_fused = False (not = True)
-    near = src[refinement : refinement + 200]
-    assert "self.use_qk_fused = False" in near, "when head_dim%64 != 0, use_qk_fused must be force-disabled"

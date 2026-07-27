@@ -47,7 +47,21 @@ def test_non_candidate_categories_never_touched():
     # already-transformer categories are left as-is even with a causal arch
     assert f("LLM", {"architectures": ["XForCausalLM"]}) == "LLM"
     assert f("VLM", {"architectures": ["XForCausalLM"]}) == "VLM"
-    assert f("STT", {"architectures": ["XForCausalMM"]}) == "STT"
+
+
+def test_stt_with_a_causal_trunk_is_promoted_to_llm():
+    """STT was later ADDED to the override set on purpose: a multimodal LM can carry an ASR
+    pipeline_tag (Phi-4-multimodal is tagged automatic-speech-recognition while its config declares
+    Phi4MMForCausalLM), and leaving it as STT early-returns before architecture detection ever runs.
+    Genuine STT declares ConditionalGeneration/CTC, never ForCausalLM, so the promotion is safe.
+
+    This test previously pinned the OPPOSITE (STT stays STT) and had been red since the change --
+    the assertion, not the code, was out of date."""
+    f = _f()
+    assert f("STT", {"architectures": ["XForCausalMM"]}) == "LLM"
+    assert f("STT", {"architectures": ["XForCausalLM"]}) == "LLM"
+    assert f("STT", {"architectures": ["WhisperForConditionalGeneration"]}) == "STT"
+    assert f("STT", {"architectures": ["Wav2Vec2ForCTC"]}) == "STT"
 
 
 def test_substring_false_positive_guarded():
