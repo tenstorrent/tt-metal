@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 #
-# TT_DIT_CACHE_DIR integration for the HunyuanImage-3.0 transformer backbone.
+# TT_CACHE_PATH integration for the HunyuanImage-3.0 transformer backbone.
 #
 # Mirrors the tt_dit DiT stack caching model: on first load, each weight tensor is
 # converted from PyTorch -> TTNN (with the correct mesh sharding) and written as a
@@ -18,8 +18,8 @@ import ttnn
 
 
 def cache_root() -> Path | None:
-    """Return ``TT_DIT_CACHE_DIR`` when set, else ``None`` (caching disabled)."""
-    root = os.environ.get("TT_DIT_CACHE_DIR")
+    """Return ``TT_CACHE_PATH`` when set, else ``None`` (caching disabled)."""
+    root = os.environ.get("TT_CACHE_PATH")
     return Path(root) if root else None
 
 
@@ -60,7 +60,7 @@ def transformer_cache_dir(
     Resolve the on-disk cache directory for the resident transformer stack.
 
     Layout (same convention as tt_dit):
-        ``$TT_DIT_CACHE_DIR/<model_name>/transformer/<parallel_mesh_dtype_key>/``
+        ``$TT_CACHE_PATH/<model_name>/transformer/<parallel_mesh_dtype_key>/``
 
     Individual weight files are named after their checkpoint keys, e.g.
     ``model.layers.0.self_attn.qkv_proj.weight_dtype_BFLOAT8_B_layout_TILE.tensorbin``.
@@ -91,7 +91,7 @@ def resolve_transformer_cache(
     """
     Return the cache directory to pass as ``weight_cache_path`` to ``HunyuanTtModel``.
 
-    Explicit ``weight_cache_path`` wins; otherwise derive from ``TT_DIT_CACHE_DIR``.
+    Explicit ``weight_cache_path`` wins; otherwise derive from ``TT_CACHE_PATH``.
     """
     if weight_cache_path is not None:
         return Path(weight_cache_path)
