@@ -126,7 +126,10 @@ class RMSNorm(nn.Module):
                         memory_config=sharded_mem,
                     )
                     x_sh.deallocate(True)
-                    tt_output = ttnn.sharded_to_interleaved(out_sh, ttnn.DRAM_MEMORY_CONFIG)
+                    # Convert back to L1 interleaved (not DRAM): keeps the norm output
+                    # on-chip for the downstream matmul/router instead of round-tripping
+                    # through DRAM. L1 has far higher aggregate BW than DRAM.
+                    tt_output = ttnn.sharded_to_interleaved(out_sh, ttnn.L1_MEMORY_CONFIG)
                     out_sh.deallocate(True)
                     return tt_output
                 except Exception:
