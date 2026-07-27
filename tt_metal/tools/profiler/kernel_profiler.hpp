@@ -577,10 +577,20 @@ inline __attribute__((always_inline)) void increment_trace_count() { traceCount+
 
 // KERNEL wrapper: REPORTS, as an ordinary scope -- same profileScope path as DeviceZoneScopedN, so a real
 // model run shows a "<RISC>-KERNEL" span per kernel invocation alongside any op-level zones.
+// Toggle kept as a bisect handle: set X280_KERNEL_WRAPPER_ZONE 0 to make this silent again. It was used to
+// clear this change of a ResNet teardown hang in wait_for_dispatch_cores -- the hang reproduces with the
+// wrapper zone OFF too, so it is NOT caused by emitting KERNEL zones (see FINDINGS / the perf_debug
+// teardown note). Useful because the SPSC ring is lossless-BLOCKING: any core emitting into a ring that
+// nobody drains wedges forever, so "who is emitting" is always worth being able to bisect.
+#define X280_KERNEL_WRAPPER_ZONE 1
+#if X280_KERNEL_WRAPPER_ZONE
 #define DeviceZoneScopedMainChildN(name)                                       \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
     kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
+#else
+#define DeviceZoneScopedMainChildN(name) (void(sizeof(name)))
+#endif
 
 #define DeviceZoneScopedSumN1(name)                                            \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \

@@ -58,11 +58,23 @@ public:
 
 private:
     // Fixed drain config -- the silicon-validated defaults (see test_x280_realprof / the knee + Tracy sweeps):
-    // 2 reader harts + 2 relay harts (dual relay), one 4 MiB D2HSocket FIFO per relay, adaptive per-core drain.
+    // 2 reader harts + 2 relay harts (dual relay), one 12 MiB D2HSocket FIFO per relay, adaptive per-core drain.
     static constexpr uint32_t kNRead = 2;
-    static constexpr uint32_t kNRelay = 2;            // dual relay
-    static constexpr uint32_t kNSockets = 2;          // one D2H FIFO per relay
-    static constexpr uint32_t kHRingWords = 1048576;  // 4 MiB / socket (multi-window; see the 4 MiB knee finding)
+    static constexpr uint32_t kNRelay = 2;   // dual relay
+    static constexpr uint32_t kNSockets = 2; // one D2H FIFO per relay
+    // 12 MiB / socket. RAISED from 4 MiB (1048576 words), which was sized from a "4 MiB knee" measurement
+    // that later proved to be 4 MiB's OWN floor, not the hardware's. On a host-bound box 4 MiB pins the FIFO
+    // at 100%: relay hostfull 415k -> reader spsc-wait 155M -> producers stall, reader copy% 0.8 (spinning),
+    // X280 wall 1921M cyc. At 12 MiB: hostfull 0, spsc-wait 0, copy% 52, wall 30M cyc. Matches the
+    // test_x280_realprof --hring default. This is also the CEILING: NOC_2M_WINDOW_COUNT=224 with
+    // SOCKET_WIN_BASE=208 leaves 16 TLB windows and the FW maps nwin=ceil((in_off+bytes+64)/2MiB) consecutive
+    // windows per socket, so kNSockets * nwin <= 16 (12 MiB -> nwin=7 -> 14). Raising further needs
+    // SOCKET_WIN_BASE moved too.
+    static constexpr uint32_t kHRingWords = 3145728;
+    // Per-read page cap, matching test_x280_realprof's --maxpages default. Without it one read can pull the
+    // WHOLE FIFO (196607 pages at 12 MiB) into a single decode pass before the sender is acked, which stalls
+    // the relay behind one long host turn; capping keeps read/ack cadence tight.
+    static constexpr uint32_t kMaxPagesPerRead = 1024;
     static constexpr uint32_t kPageSize = 64;
     static constexpr uint32_t kNRisc = 5;
 

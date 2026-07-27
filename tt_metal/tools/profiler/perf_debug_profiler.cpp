@@ -289,6 +289,9 @@ void PerfDebugProfiler::drain_loop(DeviceCtx& ctx, uint32_t sock_idx) {
         if (np >= fifo_pages) {
             np = fifo_pages - 1u;  // never read more than the FIFO holds (pages_available can spike)
         }
+        if (np > kMaxPagesPerRead) {
+            np = kMaxPagesPerRead;  // bound one host turn; the loop takes the rest next iteration
+        }
         if (ddbg && dbg_iters < 40) {
             log_info(tt::LogMetal, "[drain sock={}] iter={} np={} fifo_pages={}", sock_idx, dbg_iters, np, fifo_pages);
         }
