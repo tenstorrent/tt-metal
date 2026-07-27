@@ -167,8 +167,9 @@ def apply_cli_args(args) -> None:
 def create_driver(*, chunk_size: int, num_layers: int, default_dst_slot_offset: int):
     """Build a ``MigrationDriver`` from the env, or return ``None`` when migration is not enabled.
 
-    ``None`` is the whole opt-out: the producer's two call sites are guarded on it, so an unset
-    PREFILL_PRODUCER_ISSUE_MIGRATION leaves the push/PCC path byte-for-byte unchanged.
+    ``None`` is the whole opt-out: ``start``/``finish`` both accept it and do nothing, so with
+    PREFILL_PRODUCER_ISSUE_MIGRATION unset the producer runs its push/PCC path and never attaches a
+    client, opens a queue, or writes a sidecar.
 
     ``chunk_size`` / ``num_layers`` are passed in rather than re-read from PREFILL_CHUNK_SIZE /
     PREFILL_NUM_LAYERS so the driver can never disagree with the transport the producer actually used.
@@ -372,7 +373,7 @@ class MigrationDriver:
                     continue
                 check_dst(src, dst)
                 triples.append((src, dst, real_len))
-        else:  # uniform offset fallback (preserves the pre-arbitrary behavior)
+        else:  # no explicit mapping: uniform dst = src + offset over every resident slot
             for src in sorted(stats.resident):
                 real_len = real_len_of(src)
                 if real_len <= 0:
@@ -467,8 +468,9 @@ class MigrationDriver:
         (element 2 of each triple) is exactly the resident prompt length that was migrated, and the src slot's
         last prompt token is ``pool[real_len - 1]`` of the trace the producer already loaded.
 
-        Gated on ``PREFILL_MIGRATION_HANDOFF_PATH``: unset => skip entirely, so the loopback /
-        runner-validation flow is byte-for-byte unaffected. Written atomically (tmp + os.replace)."""
+        Gated on ``PREFILL_MIGRATION_HANDOFF_PATH``: unset => write nothing, which is what a loopback run
+        wants since the runner validates on-device and needs no sidecar. Written atomically (tmp +
+        os.replace) so the decode side never reads a partial file."""
         if not self.handoff_path:
             return
         if slot_traces is None or pools_by_trace is None:
