@@ -69,12 +69,13 @@ struct QsrDfbRingPos {
     uint8_t tc_idx;
 };
 using PartialsRingPos = QsrDfbRingPos;
+// [#48552] f6b15a removed DFBTCSlot.wr_offset/rd_offset (cursor derived from *_entry_idx); snapshot/restore
+// only *_entry_idx now (PartialsRingPos.offset[] unused). Mirrors conv_bmm_tilize_metal2.cpp.
 #define QSR_SNAPSHOT_WR(pos, cb)                                   \
     do {                                                           \
         LocalDFBInterface& _qd = get_local_dfb_interface(cb);      \
         for (uint8_t _qi = 0; _qi < _qd.num_tcs_to_rr; ++_qi) {    \
             (pos).entry_idx[_qi] = _qd.tc_slots[_qi].wr_entry_idx; \
-            (pos).offset[_qi] = _qd.tc_slots[_qi].wr_offset;       \
         }                                                          \
         (pos).entry_ptr = _qd.wr_entry_ptr;                        \
         (pos).tc_idx = _qd.tc_idx;                                 \
@@ -84,7 +85,6 @@ using PartialsRingPos = QsrDfbRingPos;
         LocalDFBInterface& _qd = get_local_dfb_interface(cb);      \
         for (uint8_t _qi = 0; _qi < _qd.num_tcs_to_rr; ++_qi) {    \
             _qd.tc_slots[_qi].wr_entry_idx = (pos).entry_idx[_qi]; \
-            _qd.tc_slots[_qi].wr_offset = (pos).offset[_qi];       \
         }                                                          \
         _qd.wr_entry_ptr = (pos).entry_ptr;                        \
         _qd.tc_idx = (pos).tc_idx;                                 \
@@ -94,7 +94,6 @@ using PartialsRingPos = QsrDfbRingPos;
         LocalDFBInterface& _qd = get_local_dfb_interface(cb);      \
         for (uint8_t _qi = 0; _qi < _qd.num_tcs_to_rr; ++_qi) {    \
             (pos).entry_idx[_qi] = _qd.tc_slots[_qi].rd_entry_idx; \
-            (pos).offset[_qi] = _qd.tc_slots[_qi].rd_offset;       \
         }                                                          \
         (pos).tc_idx = _qd.tc_idx;                                 \
     } while (0)
@@ -103,7 +102,6 @@ using PartialsRingPos = QsrDfbRingPos;
         LocalDFBInterface& _qd = get_local_dfb_interface(cb);      \
         for (uint8_t _qi = 0; _qi < _qd.num_tcs_to_rr; ++_qi) {    \
             _qd.tc_slots[_qi].rd_entry_idx = (pos).entry_idx[_qi]; \
-            _qd.tc_slots[_qi].rd_offset = (pos).offset[_qi];       \
         }                                                          \
         _qd.tc_idx = (pos).tc_idx;                                 \
     } while (0)
