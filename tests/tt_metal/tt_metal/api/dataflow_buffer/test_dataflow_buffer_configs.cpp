@@ -1922,6 +1922,32 @@ TEST_F(MeshDeviceFixture, TensixDMTest1xDFB4Bx4B_blk4_impl_rejected_2_0) {
     expect_tensix_blocked_implicit_consumer_rejected(this->devices_.at(0), /*num_threads=*/4, /*num_entries=*/32);
 }
 
+// --- REJECTED CONFIG: implicit BLOCKED whose txn window doesn't cover every tile counter ---
+// The ISR credits all of a RISC's tile counters equally each time a txn ID retires, but a BLOCKED
+// endpoint advances its counter only every block_size entries. With P=1, C=4, block_size=4 and 16
+// entries the producer gets 4 counters and num_entries_per_txn_id = 8, so one txn window fills only
+// 2 of the 4 sub-rings while all 4 counters are credited — consumers 2 and 3 would read entries that
+// were never written. compute_txn_descriptor rejects it (see the block_size * num_tcs_per_risc check).
+// The explicit twin (DMTest1xDFB1Bx4B_blk4) is unaffected and passes: it posts its own credits.
+TEST_F(MeshDeviceFixture, DMTest1xDFB1Bx4B_blk4_impl_rejected_2_0) {
+    auto& mesh_device = this->devices_.at(0);
+    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 path is Quasar-only";
+    }
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 1,
+        .num_consumers = 4,
+        .pap = m2::DFBAccessPattern::BLOCKED,
+        .cap = m2::DFBAccessPattern::BLOCKED,
+        .implicit_sync = true,
+        .num_entries = 16,
+        .block_size = 4,
+    };
+    EXPECT_ANY_THROW(run_single_dfb_program_2_0(mesh_device, params));
+}
+
 // B10 — a BLOCKED binding with block_size == 0 is rejected. BLOCKED is now supported (Phase 3),
 // so the lowering gate is gone; what remains is the host validation that block_size must be > 0
 // iff the access pattern is BLOCKED (check_block_size_validity in program_spec.cpp). This config

@@ -204,7 +204,8 @@ static dfb_txn_id_descriptor_t compute_txn_descriptor(
     bool is_producer,
     const std::vector<uint8_t>& txn_ids,
     uint8_t num_tcs_per_risc,
-    ::dfb::AccessPattern access_pattern) {
+    ::dfb::AccessPattern access_pattern,
+    uint32_t block_size) {
     uint8_t num_prods_or_cons = is_producer ? num_producers : num_consumers;
     uint8_t num_txn_ids = static_cast<uint8_t>(txn_ids.size());
 
@@ -260,6 +261,25 @@ static dfb_txn_id_descriptor_t compute_txn_descriptor(
         per_txn,
         num_tcs_per_risc);
     uint8_t per_txn_per_tc = per_txn / num_tcs_per_risc;
+
+    // When a transaction ID retires, the ISR posts per_txn_per_tc credits to EVERY tile counter this
+    // RISC round-robins over (dataflow_buffer_isr.h), so a txn's entries must be spread evenly across
+    // them. A BLOCKED side advances its counter only every block_size entries, so its entries cycle
+    // over the counters with period block_size * num_tcs_per_risc; the spread is even only when that
+    // period divides per_txn. Otherwise the trailing counters are credited for entries that were never
+    // written and their consumers read stale L1. Reject rather than corrupt (falling back to a per-entry
+    // cadence would silently change the BLOCKED ordering instead).
+    if (block_size > 1 && num_tcs_per_risc > 1) {
+        TT_FATAL(
+            per_txn % (block_size * num_tcs_per_risc) == 0,
+            "BLOCKED DFB with implicit sync: num_entries_per_txn_id {} must be divisible by block_size * "
+            "num_tcs_per_risc = {} * {}. The ISR credits every tile counter equally, but a BLOCKED endpoint "
+            "only advances its counter every block_size entries, so counters would be credited for entries "
+            "that were never written. Use explicit sync on this side, or change block_size / the thread counts.",
+            per_txn,
+            block_size,
+            num_tcs_per_risc);
+    }
 
     dfb_txn_id_descriptor_t desc = {};
     desc.num_txn_ids = num_txn_ids;
@@ -819,6 +839,15 @@ static void validate_ring_extent(const DataflowBufferImpl& dfb) {
 static dfb_txn_id_descriptor_t make_txn_descriptor(
     const DataflowBufferImpl& dfb, bool is_producer, const std::vector<uint8_t>& txn_ids, uint8_t num_tcs) {
     const DataflowBufferConfig& config = dfb.config;
+    // Mirror serialize_for_core: the device only uses a per-block counter cadence when the ring itself is
+    // BLOCKED; a BLOCKED endpoint on a STRIDED/ALL ring keeps the per-entry cadence, so its effective
+    // block size is 1 here too.
+    const uint32_t effective_block_size = config.cap == ::dfb::AccessPattern::BLOCKED
+                                              ? std::max<uint32_t>(
+                                                    is_producer ? config.producer_block_size
+                                                                : config.consumer_block_size,
+                                                    1u)
+                                              : 1u;
     return compute_txn_descriptor(
         config.num_entries,
         config.num_producers,
@@ -826,7 +855,8 @@ static dfb_txn_id_descriptor_t make_txn_descriptor(
         is_producer,
         txn_ids,
         num_tcs,
-        is_producer ? config.pap : config.cap);
+        is_producer ? config.pap : config.cap,
+        effective_block_size);
 }
 
 void DataflowBufferImpl::update_size(std::optional<uint32_t> new_entry_size, std::optional<uint32_t> new_num_entries) {
