@@ -123,7 +123,7 @@ uint32_t get_input_channels_alignment(
 }
 
 TensorMemoryLayout get_effective_input_shard_layout(const ttnn::Tensor& input_tensor, const Conv2dConfig& conv_config) {
-    const bool has_existing_shards = tt::tt_metal::is_device_tensor(input_tensor) && input_tensor.is_sharded();
+    const bool has_existing_shards = ttnn::is_device_tensor(input_tensor) && input_tensor.is_sharded();
     const bool preserve_existing_shards =
         has_existing_shards && !conv_config.reshard_if_not_optimal && !conv_config.override_sharding_config;
     if (preserve_existing_shards || (has_existing_shards && !conv_config.shard_layout.has_value())) {
