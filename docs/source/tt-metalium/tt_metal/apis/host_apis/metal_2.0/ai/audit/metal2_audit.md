@@ -32,9 +32,10 @@ In either case, the audit's deliverable is the report.
 This guide is **not** for the following adjacent tasks. If your task is one of these, stop and surface the mismatch to the user — do not use this guide:
 
 - **Porting from Gen1 to Quasar** (different target architecture, different threading model). Out of scope entirely.
-- **Porting legacy Quasar tests** (those built against the temporary `experimental::quasar::CreateKernel` / `experimental::dfb::CreateDataflowBuffer` APIs) to Metal 2.0. A separate guide will cover that case; it is not this guide.
 
 If you are unsure whether your task fits the in-scope description, ask the user before proceeding.
+
+**`ttnn/cpp/ttnn/operations/experimental/quasar/` is out of bounds — for the audit as much as for the port.** That directory holds *copies* of ops carrying deliberately hacky shortcut ports, done to unblock downstream work; they are not production ports and don't model one. The ports this audit gates are the opposite kind of work — landing *in place, on `main`*, under production model code that must come through undisturbed. You will trip over that directory more than the porter does, because you grep broadly: a quasar copy of the op you're auditing, a `*_metal2.cpp` kernel that looks like a solved version of your problem. **Don't read them, and don't let one into your report or brief** — not as a precedent, not as a naming source, not as evidence that some construct is portable. That code looks fine and isn't: shipped quasar kernels carry idioms the port recipe forbids (a stale `api/dataflow/circular_buffer.h` include, `cb_*` handle naming) sitting inline with code that reads perfectly well. Nothing in that tree is a finding about the op in front of you. *(Warning the porter **off** that directory is not "letting one into your brief" — a negative pointer is the opposite of using one as a source, and is welcome where it saves the porter a wrong turn.)*
 
 **Operating principle**: Your job is to identify gaps, not to invent solutions for unimplemented features.
 
