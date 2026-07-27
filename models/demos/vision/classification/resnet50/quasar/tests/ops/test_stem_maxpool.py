@@ -54,6 +54,16 @@ CHANNELS = 64
 _SHAPES = [
     pytest.param(8, 8, "8x8", id="8x8"),  # matches the known craq-sim repro; smallest / fastest
     pytest.param(16, 16, "16x16", id="16x16"),
+    # [#48552] REAL stem size (112x112 = 12544 = 392 tiles, tile-aligned). The full model HANGS here in
+    # compute_pool_2d (pool-reduce dest-sync, smsg G semaphore-wait) -- a DIFFERENT failure from the 28x28
+    # edge bug. This is the repro for the model's stem-maxpool deadlock (LLK: pool-reduce dest-sync).
+    pytest.param(
+        112,
+        112,
+        "112x112",
+        id="112x112",
+        marks=pytest.mark.timeout(600),
+    ),
     pytest.param(
         28,
         28,
