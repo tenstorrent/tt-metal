@@ -82,7 +82,8 @@ LayerNormPreAllGatherDeviceOperation::spec_return_value_t LayerNormPreAllGatherD
     output_shape[3] = num_tiles_w * tile_width;
 
     auto output_dtype = args.dtype.value_or(input_tensor.dtype());
-    return TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::TILE), input_tensor.memory_config()));
+    return tt::tt_metal::TensorSpec(
+        output_shape, TensorLayout(output_dtype, PageConfig(Layout::TILE), input_tensor.memory_config()));
 }
 
 LayerNormPreAllGatherDeviceOperation::tensor_return_value_t LayerNormPreAllGatherDeviceOperation::create_output_tensors(

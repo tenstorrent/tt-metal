@@ -617,10 +617,12 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
     out_shape[3] = v_head_dim;
 
     return {
-        TensorSpec(out_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
+            out_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
+        tt::tt_metal::TensorSpec(
             joint_output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
-        TensorSpec(stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
+        tt::tt_metal::TensorSpec(
+            stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
 }
 
 RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(

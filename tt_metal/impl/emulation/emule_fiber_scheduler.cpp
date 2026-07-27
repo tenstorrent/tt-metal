@@ -36,7 +36,7 @@ namespace tt::tt_metal::emule_fiber {
 
 namespace {
 
-enum class FiberState : uint8_t { Ready, Running, Parked, LatencyParked, Done };
+enum class FiberState : uint8_t { Ready, Running, Parked, QuiescenceDeferred, Done };
 
 struct Fiber {
     ucontext_t ctx{};
@@ -85,8 +85,9 @@ struct FiberSchedulerImpl {
     std::vector<std::deque<Fiber*>> ready_;            // per-worker ready queues (fibers are
                                                        // pinned: ready_[w] holds only home==w)
     std::unordered_map<const void*, Fiber*> parked_;   // key -> intrusive list head
-    std::vector<Fiber*> latency_parked_;               // fibers modeling NOC read latency:
-                                                       // released only at quiescence (below)
+    std::vector<Fiber*> quiescence_deferred_;          // fibers deferred to quiescence: re-queued
+                                                       // at lowest priority, released only once the
+                                                       // scheduler reaches quiescence (below)
     std::vector<std::unique_ptr<Fiber>> all_;          // ownership of every spawned fiber
 
     unsigned K_ = 1;           // persistent pool size (read once at pool creation)
@@ -147,6 +148,8 @@ void FiberSchedulerImpl::install_fiber(Fiber* f) {
     __emule_self = f->owned_ctx.get();       // the single thread_local repoint
     my_x[0] = my_x[1] = f->id.phys_x;        // restore the silicon-named coords
     my_y[0] = my_y[1] = f->id.phys_y;
+    // Per-fiber ASAN state (e.g. the Object-Intent resolved-range log) lives in the ctx
+    // above, so it swaps in with __emule_self — nothing else to restore here. See tt-emule #241.
 }
 
 void FiberSchedulerImpl::worker_main(unsigned w) {
@@ -192,16 +195,18 @@ void FiberSchedulerImpl::inner_loop(unsigned w) {
             // at W>1 (a worker counts itself idle before re-observing a just-enqueued
             // fiber). See tt-emule docs/fiber-engine.md.
             if (idle_ == W_ && running_ == 0 && !any_ready()) {
-                // Read-latency model: a latency-parked fiber is an in-flight read. At
-                // quiescence the read "completes" — release them all (lowest priority),
-                // reproducing the silicon ordering some kernels lean on.
+                // Quiescence-defer release: a deferred fiber was re-queued at lowest
+                // priority to run only once every other runnable fiber has. We are at
+                // that quiescence point now — release them all back to ready. Clients
+                // use this to reproduce a silicon ordering (e.g. argmax's first read
+                // barrier, or a two-producer cb_wait_front letting its co-producer run).
                 // See tt-emule docs/fiber-engine.md.
-                if (!latency_parked_.empty()) {
-                    for (Fiber* f : latency_parked_) {
+                if (!quiescence_deferred_.empty()) {
+                    for (Fiber* f : quiescence_deferred_) {
                         f->state = FiberState::Ready;
                         ready_[f->home].push_back(f);
                     }
-                    latency_parked_.clear();
+                    quiescence_deferred_.clear();
                     cv_.notify_all();
                     --idle_;
                     continue;
@@ -264,17 +269,19 @@ void FiberScheduler::park_locked(const void* key) {
     swapcontext(&f->ctx, &t_sched);          // -> worker loop (mu_ held); resumes mu_-UNLOCKED
 }
 
-void FiberScheduler::latency_park() {
-    // Model NOC read latency: defer the current fiber as lowest-priority "in-flight" work,
-    // released only at quiescence (see worker_loop). No key, no predicate; takes mu_ itself
-    // and hands it to the worker loop across the switch (mirrors park_locked).
+void FiberScheduler::quiescence_park() {
+    // Defer the current fiber to scheduler quiescence: re-queue it at lowest priority,
+    // released only once every other runnable fiber has run (see worker_loop). No key, no
+    // predicate; takes mu_ itself and hands it to the worker loop across the switch (mirrors
+    // park_locked). Clients use it to reproduce a silicon ordering (argmax's first read
+    // barrier; a two-producer cb_wait_front letting its co-producer run).
     Fiber* f = t_current;
     if (!f) {
-        return;  // read barriers only run inside a fiber; insurance against a host-side call
+        return;  // only meaningful inside a fiber; insurance against a host-side call
     }
     p_->mu_.lock();
-    f->state = FiberState::LatencyParked;
-    p_->latency_parked_.push_back(f);
+    f->state = FiberState::QuiescenceDeferred;
+    p_->quiescence_deferred_.push_back(f);
     swapcontext(&f->ctx, &t_sched);          // -> worker loop (mu_ held); resumes mu_-UNLOCKED
 }
 
@@ -379,8 +386,8 @@ std::string FiberSchedulerImpl::dump_parked() {
             os << " waiting on " << (name ? name : "sync object") << " (key " << key << ")\n";
         }
     }
-    if (!latency_parked_.empty()) {
-        os << "  " << latency_parked_.size() << " fiber(s) in read-latency flight\n";
+    if (!quiescence_deferred_.empty()) {
+        os << "  " << quiescence_deferred_.size() << " fiber(s) deferred to quiescence\n";
     }
     return os.str();
 }
@@ -438,7 +445,9 @@ void FiberScheduler::run_until_idle() {
     }
 
     unsigned W;
-    {
+    {   // Publish counters + progress, W_, the ready queues, and ++generation_ in ONE mu_ critical
+        // section, so a worker released for a generation never pairs a new W_ with a stale generation_.
+        // See tt-emule docs/fiber-engine.md §9.4 (the workers_done_ overshoot / done_cv_ wedge it avoids).
         std::lock_guard<std::mutex> g(p_->mu_);
         p_->active_ = static_cast<unsigned>(p_->all_.size());
         if (p_->active_ == 0) {
@@ -450,10 +459,11 @@ void FiberScheduler::run_until_idle() {
         p_->deadlock_ = false;
         p_->abort_flag_ = false;
         p_->first_eptr_ = nullptr;
-        p_->latency_parked_.clear();
+        p_->quiescence_deferred_.clear();
+        p_->progress_.store(0);
+        p_->resumptions_.store(0);
         // Activate W = min(K, fiber count) workers; pin each fiber round-robin across [0,W).
         // Surplus workers (>= W) stay parked on start_cv_, so a tiny program pays no herd.
-        // See tt-emule docs/fiber-engine.md.
         W = std::min<unsigned>(p_->K_, p_->active_);
         p_->W_ = W;
         p_->ready_.assign(W, {});
@@ -462,22 +472,19 @@ void FiberScheduler::run_until_idle() {
             f->home = static_cast<unsigned>(i % W);
             p_->ready_[f->home].push_back(f);
         }
+        ++p_->generation_;
     }
-    p_->progress_.store(0);
-    p_->resumptions_.store(0);
     if (std::getenv("TT_EMULE_FIBER_LOG_N")) {
         std::fprintf(stderr, "[EMULE FIBER] program: %u fibers on W=%u of K=%u workers\n",
                      p_->active_, W, p_->K_);
     }
 
+    // Watchdog before notify_all so it covers the run; created after the dispatch block so a throw
+    // there can't leave a joinable thread. (A spurious start_cv_ wakeup could start a worker in the
+    // brief gap before this line — benign: the watchdog spawns at once and a hang can't complete that fast.)
     p_->run_active_.store(true, std::memory_order_release);
     std::thread wd([this] { p_->watchdog(); });
 
-    // Launch: bump the generation under mu_ (after the watchdog is up), then wake the pool.
-    {
-        std::lock_guard<std::mutex> g(p_->mu_);
-        ++p_->generation_;
-    }
     p_->start_cv_.notify_all();
     {   // Block the dispatch thread until every active worker has finished this run.
         std::unique_lock<std::mutex> lk(p_->mu_);
@@ -504,7 +511,7 @@ void FiberScheduler::run_until_idle() {
         }
         p_->ready_.clear();
         p_->parked_.clear();
-        p_->latency_parked_.clear();
+        p_->quiescence_deferred_.clear();
         p_->all_.clear();   // frees Fiber stacks via ~Fiber
     }
 

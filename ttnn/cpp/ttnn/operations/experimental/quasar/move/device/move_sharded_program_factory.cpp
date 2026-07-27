@@ -17,6 +17,7 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::prim::qsr {
 
@@ -24,18 +25,21 @@ using namespace tt::tt_metal;
 namespace m2 = tt::tt_metal::experimental;
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 // Metal 2.0 resource names (ProgramSpec scope).
 const m2::KernelSpecName READER{"reader"};
 const m2::TensorParamName INPUT{"input"};
 const m2::TensorParamName OUTPUT{"output"};
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts MoveShardedProgramFactory::create_program_artifacts(
     const MoveOperationAttributes& /*operation_attributes*/,
     const MoveTensorArgs& tensor_args,
     Tensor& tensor_return_value) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;  // resolve the file-local ids/helpers below
     using namespace tt::constants;
 
     const Tensor& input = tensor_args.input_tensor;
@@ -88,6 +92,13 @@ ttnn::device_operation::ProgramArtifacts MoveShardedProgramFactory::create_progr
     spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()});
     spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()});
 
+    // Preserve the legacy processor/NOC selection (RISCV_1 / NOC_1) via an explicit Gen1Config.
+    m2::DataMovementHardwareConfig reader_hw;
+    if (input.device()->arch() == tt::ARCH::QUASAR) {
+        reader_hw = m2::DataMovementGen2Config{};
+    } else {
+        reader_hw = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+    }
     m2::KernelSpec reader{
         .unique_id = READER,
         .source =
@@ -98,14 +109,7 @@ ttnn::device_operation::ProgramArtifacts MoveShardedProgramFactory::create_progr
                 m2::TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"},
                 m2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"},
             },
-        // Preserve the legacy processor/NOC selection (RISCV_1 / NOC_1) via an explicit Gen1Config;
-        // the role hint is set UNSPECIFIED when an explicit Gen1Config is provided.
-        .hw_config =
-            m2::DataMovementHardwareConfig{
-                .role = m2::DataMovementRoleHint::UNSPECIFIED,
-                .gen1_config =
-                    m2::DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1}},
+        .hw_config = std::move(reader_hw),
     };
 
     reader.runtime_arg_schema.runtime_arg_names = m2::Group<std::string>{"total_size_bytes"};
@@ -128,8 +132,7 @@ ttnn::device_operation::ProgramArtifacts MoveShardedProgramFactory::create_progr
 
     const auto cores = corerange_to_cores(shard_grid, std::nullopt, true);
     for (const auto& core : cores) {
-        reader_run_args.runtime_arg_values.push_back(
-            m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"total_size_bytes", total_size_bytes}}});
+        reader_run_args.runtime_arg_values["total_size_bytes"][core] = total_size_bytes;
     }
 
     run_args.kernel_run_args.push_back(std::move(reader_run_args));

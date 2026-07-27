@@ -8,3 +8,10 @@ set(TTNN_OP_RAND_SRCS
 )
 
 set(TTNN_OP_RAND_API_HEADERS rand.hpp)
+
+# Registered on the shared `ttnn` Python module target from
+# ttnn/cpp/ttnn/operations/rand/CMakeLists.txt (see the `if(TARGET ttnn)` block there).
+# Listed here rather than inline in CMakeLists.txt so that
+# add/remove/rename doesn't touch a file with metalium-developers-infra
+# as a required co-owner.
+set(TTNN_OP_RAND_NANOBIND_SRCS rand_nanobind.cpp)

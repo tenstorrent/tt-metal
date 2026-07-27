@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <atomic>
 #include <cstddef>
 #include <future>
 #include <type_traits>
@@ -269,7 +270,9 @@ private:
     TaskQueue tasks_;
     std::thread worker;
     std::atomic<int> task_counter_ = 0;
-    bool shutdown_ = false;
+    // Accessed from both the worker thread (read, worker loop) and the main thread (write, destructor).
+    // Atomic to avoid a data race; the surrounding task_counter_ operations provide the ordering.
+    std::atomic<bool> shutdown_ = false;
     mutable std::exception_ptr stored_exception_;
     // Variables managing the linear backoff strategy used by worker threads
     // when waiting on a task to be inserted in the queue

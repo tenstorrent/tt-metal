@@ -60,7 +60,7 @@ struct AllToAllDispatchDeviceOperation {
         const std::optional<std::array<Tensor, 2>> optional_output_tensors;
     };
 
-    using spec_return_value_t = std::array<ttnn::TensorSpec, 2>;
+    using spec_return_value_t = std::array<tt::tt_metal::TensorSpec, 2>;
 
     using tensor_return_value_t = std::array<Tensor, 2>;
 

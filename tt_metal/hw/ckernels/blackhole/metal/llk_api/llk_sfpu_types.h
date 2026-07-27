@@ -136,6 +136,7 @@ enum class SfpuType {
     gcd,
     lcm,
     softshrink,
+    tanhshrink,
     hardshrink,
     hardsigmoid,
     threshold,
@@ -168,4 +169,10 @@ enum class SfpuType {
     polygamma,
     mish,
     ne,
+    digamma,
+    identity,
+    sqrt_custom,
+    tanh_derivative_lut,
+    rsqrt_compat,
+    expm1_cw,
 };

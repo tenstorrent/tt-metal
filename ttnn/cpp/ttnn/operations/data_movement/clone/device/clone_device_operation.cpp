@@ -51,7 +51,7 @@ void CloneOperation::validate_on_program_cache_miss(
 CloneOperation::spec_return_value_t CloneOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         input.logical_shape(),
         tt::tt_metal::TensorLayout::fromPaddedShape(
             operation_attributes.dtype,

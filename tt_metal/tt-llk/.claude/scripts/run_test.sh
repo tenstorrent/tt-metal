@@ -35,6 +35,7 @@
 #   --lock-timeout N  Seconds to wait for the lock (default: 900)
 #   --sim-path PATH   Override TT_UMD_SIMULATOR_PATH
 #                     (default: /proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-<arch>-1x3)
+#   --speed-of-light  Pass pytest --speed-of-light (compile-time formats / SOL path).
 #   --no-split        Skip compile-producer step; run pytest --run-simulator without
 #                     --compile-consumer (combined compile+run in one pytest invocation).
 #                     Use for issue-solver tests that don't pre-build ELFs.
@@ -112,6 +113,7 @@ LOCKFILE=""  # set in _validate based on ARCH if not user-overridden
 LOCK_TIMEOUT="900"
 SIM_PATH=""
 NO_SPLIT="false"
+SPEED_OF_LIGHT="false"
 LOG_DIR=""
 PROGRESS_ENABLED="false"
 PROGRESS_INTERVAL="30"
@@ -134,6 +136,7 @@ while [[ $# -gt 0 ]]; do
     --log-dir)       LOG_DIR="$2";       shift 2 ;;
     --progress)      PROGRESS_ENABLED="true"; shift ;;
     --progress-interval) PROGRESS_INTERVAL="$2"; shift 2 ;;
+    --speed-of-light) SPEED_OF_LIGHT="true"; shift ;;
     --no-split)      NO_SPLIT="true";    shift   ;;
     --verbose|-v)    VERBOSE="true";     shift   ;;
     --help|-h)
@@ -428,7 +431,7 @@ _do_count() {
 
 _do_compile() {
   _validate
-  _vlog "compile: ${TEST_FILE} (arch=${ARCH}, -n ${JOBS}${K_FILTER:+, -k '${K_FILTER}'})"
+  _vlog "compile: ${TEST_FILE} (arch=${ARCH}, -n ${JOBS}${K_FILTER:+, -k '${K_FILTER}'}$([[ "$SPEED_OF_LIGHT" == true ]] && echo ', sol'))"
 
   # The two-phase flow requires compile and simulate to filter to the same set:
   # simulate's --compile-consumer reads per-variant artifacts that producer
@@ -443,6 +446,7 @@ _do_compile() {
   else
     pytest_args=("$TEST_FILE")
   fi
+  [[ "$SPEED_OF_LIGHT" == "true" ]] && pytest_args=(--speed-of-light "${pytest_args[@]}")
 
   # Background pytest so the progress ticker can run alongside. If progress is
   # disabled we still pay the (negligible) cost of background+wait — keeps the
@@ -522,6 +526,7 @@ _do_simulate() {
     pytest_flags="${pytest_flags} --run-simulator --port=${PORT}"
   fi
   [[ "$NO_SPLIT" == "false" ]] && pytest_flags="${pytest_flags} --compile-consumer"
+  [[ "$SPEED_OF_LIGHT" == "true" ]] && pytest_flags="${pytest_flags} --speed-of-light"
   [[ -n "$MAXFAIL" ]] && pytest_flags="${pytest_flags} --maxfail=${MAXFAIL}"
 
   # Determine the test target (file, -k filter, or single variant by ID)

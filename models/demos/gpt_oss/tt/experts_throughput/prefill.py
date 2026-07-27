@@ -123,6 +123,7 @@ class DeepSeekPrefillConfig:
             cluster_axis=0,
             num_links=num_links,
             topology=topology,
+            num_workers_per_sender=1,
         )
 
         self.combine_module = TtCombineModule(

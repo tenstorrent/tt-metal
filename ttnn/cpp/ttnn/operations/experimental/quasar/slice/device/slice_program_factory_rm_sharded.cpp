@@ -12,6 +12,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -273,7 +274,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
         .compile_time_args =
             {{"stick_size_padded", static_cast<uint32_t>(stick_size_padded)},
              {"stick_size_unpadded", static_cast<uint32_t>(stick_size_unpadded)}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch()),
         .advanced_options = {.num_runtime_varargs = max_varargs},
     };
 

@@ -11,6 +11,7 @@ import torch
 import ttnn
 import math
 
+from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_equal, assert_allclose, assert_with_pcc
 
 pytestmark = pytest.mark.use_module_device
@@ -47,6 +48,42 @@ def test_copy_uint16(shape, device):
     ttnn.copy(input_tensor, output_tensor)
     assert output_tensor.shape == input_tensor.shape
     assert_equal(ttnn.to_torch(input_tensor), ttnn.to_torch(output_tensor))
+
+
+def test_copy_fp8_e4m3_row_major_sharded_to_interleaved(device):
+    """FP8 copy is an opaque row-page move; compare exactly after widening both sides to BF16."""
+    if not is_blackhole():
+        pytest.skip("FP8_E4M3 is Blackhole-only")
+
+    torch.manual_seed(2005)
+    shape = [1, 1, 32, 64]
+    source = torch.randn(shape, dtype=torch.bfloat16)
+    shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    shard_spec = ttnn.ShardSpec(shard_grid, (32, 64), ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    source_bf16 = ttnn.from_torch(
+        source,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=sharded_memory_config,
+    )
+    source_fp8 = ttnn.typecast(source_bf16, ttnn.fp8_e4m3)
+    destination_bf16 = ttnn.from_torch(
+        torch.zeros_like(source),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    destination_fp8 = ttnn.typecast(destination_bf16, ttnn.fp8_e4m3)
+
+    ttnn.copy(source_fp8, destination_fp8)
+
+    expected = ttnn.to_torch(ttnn.typecast(source_fp8, ttnn.bfloat16))
+    actual = ttnn.to_torch(ttnn.typecast(destination_fp8, ttnn.bfloat16))
+    assert_equal(expected, actual)
 
 
 # Test for block sharding
@@ -2042,8 +2079,6 @@ def test_copy_rm_legacy_2d_sharded_to_interleaved(
 def test_copy_rm_interleaved_to_nd_sharded_large_row(
     device, tensor_shape, shard_shape, grid, shard_orientation, buffer_type
 ):
-    if os.environ.get("TT_METAL_SIMULATOR"):
-        pytest.skip("Skipping large row test on ttsim to avoid timeout")
     num_device_dram_banks = device.dram_grid_size().x
     required_banks = grid.num_cores()
     if required_banks > num_device_dram_banks:
@@ -2081,8 +2116,6 @@ def test_copy_rm_interleaved_to_nd_sharded_large_row(
 def test_copy_rm_interleaved_to_legacy_2D_sharded_large_row(
     device, tensor_shape, shard_shape, grid, shard_orientation, buffer_type
 ):
-    if os.environ.get("TT_METAL_SIMULATOR"):
-        pytest.skip("Skipping large row test on ttsim to avoid timeout")
     num_device_dram_banks = device.dram_grid_size().x
     required_banks = grid.num_cores()
     if required_banks > num_device_dram_banks:
@@ -2129,8 +2162,6 @@ def test_copy_rm_interleaved_to_legacy_2D_sharded_large_row(
 def test_copy_rm_nd_sharded_to_interleaved_large_row(
     device, tensor_shape, shard_shape, grid, shard_orientation, buffer_type
 ):
-    if os.environ.get("TT_METAL_SIMULATOR"):
-        pytest.skip("Skipping large row test on ttsim to avoid timeout")
     num_device_dram_banks = device.dram_grid_size().x
     required_banks = grid.num_cores()
     if required_banks > num_device_dram_banks:

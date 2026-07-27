@@ -39,6 +39,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
 
@@ -96,6 +97,10 @@ void kernel_main() {
     constexpr uint32_t in0_block_w_gu = get_compile_time_arg_val(21);
     constexpr uint32_t K_gate_tiles = get_compile_time_arg_val(22);
     constexpr uint32_t writer_split_up = get_compile_time_arg_val(23);
+    // When the compute tail-skips the last down block's K padding, the down
+    // matmul never reduces the N-OOB hidden columns, so the `up` read can skip
+    // zero-filling them. Derived identically to the reader's down_k_tail_skip.
+    constexpr bool down_k_tail_skip = get_compile_time_arg_val(24) != 0;
 
     constexpr uint32_t d_out_subblock_num_tiles = d_out_subblock_h * d_out_subblock_w;
     constexpr uint32_t d_in1_num_subblocks_M = per_core_M / d_out_subblock_h;
@@ -112,7 +117,7 @@ void kernel_main() {
     // out, then start (direct-write), then up (UP_SPLIT). The accessors are
     // constructed unconditionally; start_acc is used only when direct_write,
     // up_acc only when writer_split_up.
-    constexpr uint32_t out_accessor_offset = 24;
+    constexpr uint32_t out_accessor_offset = 25;
     constexpr auto out_args = TensorAccessorArgs<out_accessor_offset>();
     const auto out_acc = TensorAccessor(out_args, output_addr, cb_out_buf.get_tile_size());
 
@@ -159,17 +164,15 @@ void kernel_main() {
     }
 
     // ---- UP_SPLIT up-weight read setup ----
-    // The writer reads `up` from DRAM on NoC 1 (kUpNoc) concurrent with the
+    // The writer reads `up` from DRAM on NoC 1 concurrent with the
     // reader's NoC-0 `gate` read, into the gy=0 sender's cb_in1_up slot; the
     // reader multicasts it on NoC 0. A local same-core (BRISC reader <-> NCRISC
     // writer) handshake orders the two: up_go (reader: slot reserved) and
     // up_done (writer: up landed in L1), monotonic counters.
-    constexpr uint8_t kUpNoc = 1;
+    Noc noc_up(1);
     const uint32_t up_tile_bytes = get_tile_size(cb_in1_up);
-    volatile tt_l1_ptr uint32_t* up_go_local =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(up_go_sem_id));
-    volatile tt_l1_ptr uint32_t* up_done_local =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(up_done_sem_id));
+    Semaphore<> up_go_sem(up_go_sem_id);
+    Semaphore<> up_done_sem(up_done_sem_id);
     uint32_t up_seq = 0;
 
     for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
@@ -188,11 +191,12 @@ void kernel_main() {
                 // reader's cadence: cb_in1_up is double-buffered, one push per
                 // K-block, so the live slot is base + (up_seq-1)%2 * slot.
                 constexpr uint32_t kUpNumSlots = 2;
-                const uint32_t up_cb_base = get_write_ptr(cb_in1_up);
+                CircularBuffer cb_in1_up_buf(cb_in1_up);
+                const uint32_t up_cb_base = cb_in1_up_buf.get_write_ptr();
                 const uint32_t up_slot_bytes = g_in1_block_num_tiles * up_tile_bytes;
                 for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
                     ++up_seq;
-                    noc_semaphore_wait_min(up_go_local, up_seq);
+                    up_go_sem.wait_min(up_seq);
                     uint32_t l1_w_up = up_cb_base + ((up_seq - 1) % kUpNumSlots) * up_slot_bytes;
                     for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
                         for (uint32_t n = 0; n < per_core_N_gu; ++n) {
@@ -200,19 +204,26 @@ void kernel_main() {
                             const uint32_t col = my_nt_gu * per_core_N_gu + n;
                             if (col < N_gate_tiles_full) {
                                 const uint32_t tile_idx = row * N_gate_tiles_full + col;
-                                noc_async_read_page(tile_idx, up_acc, l1_w_up, /*offset=*/0, kUpNoc);
+                                noc_up.async_read(
+                                    up_acc, CoreLocalMem<uint32_t>(l1_w_up), up_tile_bytes, {.page_id = tile_idx}, {});
                             } else {
-                                volatile tt_l1_ptr uint64_t* p =
-                                    reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_up);
-                                for (uint32_t i = 0; i < up_tile_bytes / 8; ++i) {
-                                    p[i] = 0;
+                                // N-OOB hidden padding column: garbage up output feeds the
+                                // down matmul's K reduction, so keep it zero UNLESS the down
+                                // tail-skips the last block's padding (down_k_tail_skip) —
+                                // then this column is never reduced and the garbage is dropped.
+                                if constexpr (!down_k_tail_skip) {
+                                    volatile tt_l1_ptr uint64_t* p =
+                                        reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_up);
+                                    for (uint32_t i = 0; i < up_tile_bytes / 8; ++i) {
+                                        p[i] = 0;
+                                    }
                                 }
                             }
                             l1_w_up += up_tile_bytes;
                         }
                     }
-                    noc_async_read_barrier(kUpNoc);
-                    *up_done_local = up_seq;
+                    noc_up.async_read_barrier();
+                    up_done_sem.set(up_seq);
                 }
             }
         }

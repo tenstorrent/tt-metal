@@ -45,6 +45,16 @@ class LTXAttention(Module):
         (True, 4864, 256): (192, 256),  # audio->video cross-attn, stage 2
     }
 
+    # V2A cross ring-SDPA q_chunk (per-device audio Q = audio_N / sp_factor), keyed by
+    # (is_blackhole, sp, tp); assumes audio_N=256. k_chunk reuses the self-attn ring value; misses
+    # fall back to the self-attn ring q_chunk.
+    # TODO: audio_N depends on video duration (ceil(round((num_frames/fps)*25), 32*sp)); derive
+    # q_chunk from the actual Q shard (q_BHNE.shape[2]) instead of hardcoding per mesh.
+    cross_ring_sdpa_q_chunk_map = {
+        (True, 4, 2): 64,  # BH 2x4
+        (True, 8, 4): 32,  # BH 4x8
+    }
+
     def __init__(
         self,
         *,
@@ -180,6 +190,16 @@ class LTXAttention(Module):
             for (b, q, kv), chunk in self.sdpa_chunk_by_shape.items()
             if b == mesh_key[0]
         }
+
+        # V2A cross ring SDPA: q_chunk matched to the per-device audio Q; k_chunk reuses the
+        # self-attn ring value.
+        cross_ring_q_chunk = self.cross_ring_sdpa_q_chunk_map.get(mesh_key, ring_sdpa_chunk_size[0])
+        self.cross_ring_sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.sdpa_worker_grid,
+            q_chunk_size=cross_ring_q_chunk,
+            k_chunk_size=ring_sdpa_chunk_size[1],
+            exp_approx_mode=False,
+        )
 
         # All SDPA (ring + cross) runs HiFi2, matching the Wan attention config.
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -378,6 +398,7 @@ class LTXAttention(Module):
         attn_mask: ttnn.Tensor | None = None,
         skip_qk: bool = False,
         kv_replicated: bool = False,
+        kv_logical_n: int | None = None,
     ) -> ttnn.Tensor:
         """Same interface as WanAttention.forward(); pass k_rope_cos/sin for separate K RoPE
         in A2V/V2A cross-attention."""
@@ -446,7 +467,10 @@ class LTXAttention(Module):
         is_cross = prompt_1BLP is not None
         sp_factor = self.parallel_config.sequence_parallel.factor
         _k_cos_pe = k_rope_cos if k_rope_cos is not None else rope_cos
-        if is_cross and sp_factor > 1:
+        # V2A cross: K/V stay SP-sharded (caller passes the sharded K-rope and kv_logical_n) so the
+        # ring SDPA fuses the gather instead of an explicit K/V all-gather + local SDPA.
+        use_ring_cross = is_cross and sp_factor > 1 and not kv_replicated and kv_logical_n is not None
+        if is_cross and sp_factor > 1 and not use_ring_cross:
             sp_axis = self.parallel_config.sequence_parallel.mesh_axis
             if kv_replicated:
                 need_gather = False
@@ -460,7 +484,7 @@ class LTXAttention(Module):
                 v_BHNE = self.ccl_manager.all_gather_persistent_buffer(v_BHNE, dim=2, mesh_axis=sp_axis)
 
         if rope_cos is not None:
-            _k_cos = _k_cos_pe if _k_cos_pe is not None else rope_cos
+            _k_cos = _k_cos_pe
             _k_sin = k_rope_sin if k_rope_sin is not None else rope_sin
             q_BHNE = ttnn.experimental.rotary_embedding_llama(
                 q_BHNE, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
@@ -474,7 +498,7 @@ class LTXAttention(Module):
             spatial_BHNE = v_BHNE
         elif prompt_1BLP is None:
             if sp_factor > 1 and attn_mask is None:
-                spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+                spatial_BHNE, _prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                     q_BHNE,
                     k_BHNE,
                     v_BHNE,
@@ -527,6 +551,34 @@ class LTXAttention(Module):
                     program_config=self.sdpa_program_config,
                     compute_kernel_config=self.sdpa_compute_kernel_config,
                 )
+        elif use_ring_cross:
+            # Short audio Q attends non-causally to the SP-sharded video K/V; is_cross fuses the
+            # K/V gather into the ring SDPA. Output is the per-device Q shard (same as local SDPA).
+            sp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis
+            spatial_BHNE, _prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+                q_BHNE,
+                k_BHNE,
+                v_BHNE,
+                self.dummy_joint_input,
+                self.dummy_joint_input,
+                self.dummy_joint_input,
+                persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(k_BHNE.shape, 2, sp_mesh_axis),
+                persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(v_BHNE.shape, 2, sp_mesh_axis),
+                joint_strategy="rear",
+                logical_n=kv_logical_n,
+                is_cross=True,
+                program_config=self.cross_ring_sdpa_program_config,
+                compute_kernel_config=self.sdpa_compute_kernel_config,
+                dim=2,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(sp_mesh_axis),
+                num_links=self.ccl_manager.num_links,
+                cluster_axis=sp_mesh_axis,
+                mesh_device=self.mesh_device,
+                topology=self.ccl_manager.topology,
+                subdevice_id=self.ccl_manager.ccl_sub_device_id,
+                ccl_core_grid_offset=(self.sdpa_worker_grid[0], 0),
+                use_column_major_ccl=True,
+            )
         else:
             # Cross-attention: K/V full-seq, Q SP-sharded so local SDPA returns the local shard.
             spatial_BHNE = ttnn.transformer.scaled_dot_product_attention(

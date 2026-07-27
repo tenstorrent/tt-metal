@@ -44,21 +44,6 @@ using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
 
 struct KernelAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
-    // Enqueue-loop invariant kernel arguments
-    ////////////////////////////////////////////////////////////////////////////////
-
-    // Designate certain runtime arguments and common runtime arguments as enqueue-loop
-    // invariant. This permits the same argument value to be reused across multiple Program
-    // enqueues via UpdateProgramRunArgs, which can improve performance in enqueue loops.
-    // By default, every runtime argument and common runtime argument is expected to be
-    // re-specified (via SetProgramRunArgs) on every enqueue.
-    //
-    // CAUTION: This feature is unsafe if used incorrectly! The onus is on the programmer
-    // to ensure that the designated arguments remain valid across enqueues.
-    Group<std::string> enqueue_invariant_runtime_args;
-    Group<std::string> enqueue_invariant_common_runtime_args;
-
-    ////////////////////////////////////////////////////////////////////////////////
     // Varargs
     ////////////////////////////////////////////////////////////////////////////////
 
@@ -121,6 +106,39 @@ struct DFBAdvancedOptions {
     //   - All members must target the same node set
     //     (derived from their bound kernels' WorkUnitSpecs).
     Group<DFBSpecName> alias_with;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // DFB multi-bindings
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // A DFB is a software FIFO. By default, a DFB instance (i.e., a DFB on a
+    // particular node) must have exactly one producer kernel instance and exactly
+    // one consumer kernel instance.
+    //
+    // This invariant holds at the INSTANCE level; a *DFBSpec* (spanning multiple
+    // nodes) can have more than one KernelSpec producer or more consumer bindings,
+    // as long as every node's DFB instance has one producer and one consumer.
+    // (This enables, for example, a grid-spanning compute kernel to be fed data by
+    // different types of producer kernels on different nodes.)
+    //
+    // "Multi-binding" refers to a DFB instance that has more than one producer
+    // and/or more than one consumer kernel instance. Gen1 hardware (Wormhole and
+    // Blackhole) is technically capable of supporting multi-binding: a DFB lowers
+    // to a plain circular buffer there, so the FIFO pointers are shared L1 state
+    // that any number of producer/consumer RISCs can drive.
+    // However, this configuration is unsafe and its use is discouraged.
+    //
+    // CAUTION:
+    // Multi-binding a DFB instance is UNSAFE in most circumstances.
+    // The kernel logic must explicitly ensure access safety and synchronization.
+    // Multi-binding forfeits the protections of the FIFO synchronization mechanics.
+    // There is a high likelihood of race conditions and non-deterministic behavior.
+    //
+    // NOTE:
+    // This feature is included for backwards compatibility with legacy APIs.
+    // It is NOT supported on Gen2 architectures: setting this flag on a Gen2
+    // target is a hard error, whether or not any instance is actually multi-bound.
+    bool allow_instance_multi_binding = false;
 };
 
 struct AdvancedKernelRunArgs {
@@ -154,22 +172,6 @@ struct SemaphoreAdvancedOptions {
 };
 
 struct TensorParameterAdvancedOptions {
-    ////////////////////////////////////////////////////////////////////////////////
-    // Enqueue-loop invariance
-    ////////////////////////////////////////////////////////////////////////////////
-
-    // Designate this TensorParameter as enqueue-loop invariant.
-    // Permits the same MeshTensor argument to be reused across multiple Program
-    // enqueues via UpdateProgramRunArgs. By default, a TensorParameter is expected to
-    // be re-specified on every enqueue.
-    //
-    // CAUTION:
-    // The user is responsible for managing the MeshTensor argument's lifetime and
-    // ensuring that it remains valid across enqueues. Undefined behavior will result
-    // if the MeshTensor goes out of scope (and its device memory is deallocated),
-    // and you try to re-enqueue the Program with the now-stale MeshTensor argument.
-    bool enqueue_invariant = false;
-
     ////////////////////////////////////////////////////////////////////////////////
     // TensorSpec match relaxation options
     ////////////////////////////////////////////////////////////////////////////////

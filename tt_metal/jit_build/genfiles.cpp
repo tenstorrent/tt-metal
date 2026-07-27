@@ -38,6 +38,7 @@
 #include "jit_build_settings.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "impl/kernels/kernel_source.hpp"
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace tt::tt_metal {
 enum class UnpackToDestMode : uint8_t;
@@ -835,9 +836,8 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
 
 // clang-format off
 void jit_build_genfiles_descriptors(const JitBuildEnv& env, const JitBuildOptions& options) {
-    //ZoneScoped;
-    //const std::string tracyPrefix = "generate_descriptors_";
-    //ZoneName((tracyPrefix + options.name).c_str(), options.name.length() + tracyPrefix.length());
+    TTZoneScopedDN(JIT, "generate_descriptors");
+    TTZoneTextD(JIT, options.name.c_str(), options.name.length());
     fs::create_directories(options.path);
     generate_all_descriptors(env, options);
 }
