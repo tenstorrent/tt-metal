@@ -76,10 +76,7 @@ void py_module_types(nb::module_& m) {
     m.def_submodule("sample");
     m.def_submodule("swiglu");
     m.def_submodule("unary");
-    auto py_metal = m.def_submodule("metal");
-    // Backwards-compatible alias for sparse MoE tests/branches that still use
-    // ttml.ops.metal_ops.* while main exposes ttml.ops.metal.*.
-    m.attr("metal_ops") = py_metal;
+    m.def_submodule("metal");
 }
 
 void py_module(nb::module_& m) {

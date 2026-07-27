@@ -251,7 +251,7 @@ def _build_deepseek(cfg: ModelConfig, use_tp: bool) -> Model:
 
     # Resolve the expert-sharding axis for sparse_ep: "tp" under full-model TP, else
     # the axis resolved from device_config.moe_axis (set on the spec in main()). With no usable
-    # axis the library falls back to single-chip SparseMoE, so a missing axis is not an error.
+    # axis SparseMoEEP runs at EP size 1, so a missing axis is not an error.
     moe_axis_name = None
     if spec.moe_type == "sparse_ep":
         moe_axis_name = "tp" if use_tp else spec.moe_axis_name

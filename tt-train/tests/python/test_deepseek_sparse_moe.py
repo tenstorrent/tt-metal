@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Forward + backward parity: SparseMoE vs the dense MoE composite.
+"""Forward + backward parity: SparseMoEEP (at EP size 1) vs the dense MoE composite.
 
 Builds two MoE modules from the same config, copies weights from the
 dense one into the sparse one, and checks that forward outputs and all
@@ -30,7 +30,7 @@ try:
     import ttnn
     import ttml
     from ttml.models.deepseek.moe import MoE
-    from ttml.models.deepseek.moe_sparse import SparseMoE
+    from ttml.models.deepseek.moe_sparse_ep import SparseMoEEP
 
     _AVAILABLE = True
 except ImportError:
@@ -67,13 +67,36 @@ def _copy_param(src_param, dst_param):
     dst_param.tensor.set_value(src_param.tensor.get_value())
 
 
+def _reshape_like(src_param, dst_param):
+    """src [1,1,O,I] -> dst's shape. EP stores experts as (D,1,O,I) with D == 1."""
+    t = ttnn.to_torch(src_param.tensor.get_value())
+    dst_shape = list(dst_param.tensor.get_value().shape)
+    return ttnn.from_torch(
+        t.reshape(dst_shape),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=_device(),
+    )
+
+
 def _copy_moe_weights(src: MoE, dst: MoE) -> None:
-    """Mirror every Parameter from src into dst (gate, experts, shared)."""
+    """Mirror every Parameter from src into dst (gate, experts, shared).
+
+    The dense source keeps experts as ``experts[e].w1/w2/w3`` LinearLayers; the
+    EP destination keeps them as ``w_gate/w_up/w_down[i]`` of shape (D, 1, O, I).
+    At EP size 1 (D == 1) the two hold the same values in different shapes.
+    """
     _copy_param(src.gate.weight, dst.gate.weight)
-    for e in range(src.num_experts):
-        _copy_param(src.experts[e].w1.weight, dst.experts[e].w1.weight)
-        _copy_param(src.experts[e].w2.weight, dst.experts[e].w2.weight)
-        _copy_param(src.experts[e].w3.weight, dst.experts[e].w3.weight)
+    if getattr(dst, "w_gate", None):
+        for e in range(src.num_experts):
+            dst.w_gate[e].tensor.set_value(_reshape_like(src.experts[e].w1.weight, dst.w_gate[e]))
+            dst.w_up[e].tensor.set_value(_reshape_like(src.experts[e].w3.weight, dst.w_up[e]))
+            dst.w_down[e].tensor.set_value(_reshape_like(src.experts[e].w2.weight, dst.w_down[e]))
+    else:
+        for e in range(src.num_experts):
+            _copy_param(src.experts[e].w1.weight, dst.experts[e].w1.weight)
+            _copy_param(src.experts[e].w2.weight, dst.experts[e].w2.weight)
+            _copy_param(src.experts[e].w3.weight, dst.experts[e].w3.weight)
     if src.shared_experts is not None:
         _copy_param(src.shared_experts.w1.weight, dst.shared_experts.w1.weight)
         _copy_param(src.shared_experts.w2.weight, dst.shared_experts.w2.weight)
@@ -125,7 +148,7 @@ class TestSparseVsDenseMoE:
             route_scale=1.0,
         )
         dense = MoE(cfg)
-        sparse = SparseMoE(cfg)
+        sparse = SparseMoEEP(cfg)
         _copy_moe_weights(dense, sparse)
 
         x_dense = _make_input(B=B, S=S, dim=cfg.dim, seed=SEED)
@@ -154,7 +177,7 @@ class TestSparseVsDenseMoE:
             route_scale=1.0,
         )
         dense = MoE(cfg)
-        sparse = SparseMoE(cfg)
+        sparse = SparseMoEEP(cfg)
         _copy_moe_weights(dense, sparse)
 
         x_dense = _make_input(B=B, S=S, dim=cfg.dim, seed=SEED)
@@ -194,10 +217,11 @@ class TestSparseVsDenseMoE:
 
         _grad_pcc("gate.weight", dense.gate.weight, sparse.gate.weight, pcc=0.95)
 
+        # EP stores expert weights as w_gate/w_up/w_down (= dense w1/w3/w2).
         for e in range(cfg.n_routed_experts):
-            _grad_pcc(f"experts[{e}].w1", dense.experts[e].w1.weight, sparse.experts[e].w1.weight, pcc=0.95)
-            _grad_pcc(f"experts[{e}].w2", dense.experts[e].w2.weight, sparse.experts[e].w2.weight, pcc=0.95)
-            _grad_pcc(f"experts[{e}].w3", dense.experts[e].w3.weight, sparse.experts[e].w3.weight, pcc=0.95)
+            _grad_pcc(f"experts[{e}].w1", dense.experts[e].w1.weight, sparse.w_gate[e], pcc=0.95)
+            _grad_pcc(f"experts[{e}].w2", dense.experts[e].w2.weight, sparse.w_down[e], pcc=0.95)
+            _grad_pcc(f"experts[{e}].w3", dense.experts[e].w3.weight, sparse.w_up[e], pcc=0.95)
 
         # Input gradient — end-to-end through everything (routing weights,
         # gather, group, FFN, ungroup, shared experts). gate.weight grad

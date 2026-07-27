@@ -8,7 +8,7 @@ The routed-expert list is partitioned across an "ep" mesh axis
 (``SparseMoEEP``), each chip running ``E / D_ep`` experts and all-reducing the
 partial outputs. One set of host weights is loaded into
 
-  * a replicated ``SparseMoE`` reference holding all E experts, and
+  * a replicated dense ``MoE`` reference holding all E experts, and
   * an EP-sharded ``SparseMoEEP`` (expert ``e`` lives on shard ``e // e_local``),
 
 both are run on the same replicated input, and the (replicated) forward output
@@ -40,7 +40,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc  # noqa: E402
 
 import ttnn
 import ttml
-from ttml.models.deepseek.moe_sparse import SparseMoE
+from ttml.models.deepseek.moe import MoE
 from ttml.models.deepseek.moe_sparse_ep import SparseMoEEP
 
 pytestmark = pytest.mark.requires_device
@@ -147,7 +147,7 @@ def ep_mesh():
 
 
 # ---------------------------------------------------------------------------
-# Multi-device numerics: SparseMoEEP vs replicated SparseMoE
+# Multi-device numerics: SparseMoEEP vs replicated dense MoE
 # ---------------------------------------------------------------------------
 
 
@@ -187,7 +187,7 @@ def _set(param, np_arr, mapper, device):
 
 @pytest.fixture(scope="module")
 def ep_vs_reference(ep_mesh):
-    """Build a replicated SparseMoE reference and an EP-sharded SparseMoEEP.
+    """Build a replicated dense MoE reference and an EP-sharded SparseMoEEP.
 
     Runs forward and backward once for both and returns the gathered host
     tensors, so the forward and backward assertions don't pay for it twice.
@@ -211,7 +211,9 @@ def ep_vs_reference(ep_mesh):
 
     gate_w, w1, w3, w2 = _host_weights(cfg)
 
-    ref = SparseMoE(cfg)
+    # Dense MoE reference: keeps all E experts replicated on every chip (an EP
+    # module would shard them, which is the thing under test).
+    ref = MoE(_Cfg(n_routed_experts=cfg.n_routed_experts, moe_type="dense", moe_axis_name=None))
     ep = SparseMoEEP(cfg, axis_name="ep")
     assert ep.e_local == e_local, f"e_local {ep.e_local} != {e_local}"
 
@@ -302,16 +304,37 @@ def test_ep_shards_experts(ep_vs_reference):
     assert r["e_local"] < r["n_experts"], "EP axis > 1 must give each shard a strict subset of experts"
 
 
+def _assert_close(label: str, ref: torch.Tensor, got: torch.Tensor, *, pcc: float, atol: float, rtol: float) -> None:
+    """PCC plus an absolute/relative bound.
+
+    PCC alone is scale- and offset-invariant: a result that is uniformly scaled,
+    or off by a constant, still correlates perfectly. The magnitude bound is what
+    catches a mis-scaled all_reduce (e.g. summing instead of averaging, or
+    double-counting a shard), which is the realistic EP failure mode.
+    """
+    diff = (ref - got).abs()
+    max_abs = float(diff.max())
+    scale = float(ref.abs().max())
+    tol = atol + rtol * scale
+    assert_with_pcc(ref, got, pcc=pcc)
+    assert max_abs <= tol, (
+        f"{label}: max_abs_diff={max_abs:.5f} exceeds tol={tol:.5f} "
+        f"(atol={atol} + rtol={rtol} * ref_absmax={scale:.5f}); "
+        f"mean_abs_diff={float(diff.mean()):.5f}"
+    )
+
+
 def test_forward_parity_ep_vs_replicated_sparse(ep_vs_reference):
     r = ep_vs_reference
-    assert_with_pcc(r["fwd_ref"], r["fwd_ep"], pcc=0.99)
-    max_abs = float((r["fwd_ref"] - r["fwd_ep"]).abs().max())
-    assert max_abs < 0.5, f"forward max_abs_diff={max_abs:.4f}"
+    # bf16 accumulation over E experts; tolerance scales with the output range.
+    _assert_close("forward", r["fwd_ref"], r["fwd_ep"], pcc=0.99, atol=0.05, rtol=0.05)
 
 
 def test_gate_grad_parity_ep_vs_replicated_sparse(ep_vs_reference):
     r = ep_vs_reference
-    assert_with_pcc(r["grad_ref"], r["grad_ep"], pcc=0.95)
+    # Gradients are noisier than activations: routing puts a different subset of
+    # tokens through each expert, so per-element spread is wider than forward.
+    _assert_close("gate.weight grad", r["grad_ref"], r["grad_ep"], pcc=0.95, atol=0.1, rtol=0.1)
 
 
 if __name__ == "__main__":

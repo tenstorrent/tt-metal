@@ -84,14 +84,13 @@ def build_moe_ffn(config):
     """Build the MoE FFN implementation selected by ``config.moe_type``.
 
     ``dense`` is the reference / cross-check path. ``sparse_ep`` degenerates to
-    single-device ``SparseMoE`` (EP size 1) when there is no usable EP axis, so
+    ``SparseMoEEP`` at EP size 1 when there is no usable EP axis, so
     there is no separate ``sparse`` mode. Exposed as a module-level helper so
     the dispatch — in particular the EP=1 fallback — is testable without
     building a whole block.
     """
     # Lazy imports to avoid circular dependency (moe imports RMSNormLayer from here)
     from .moe import MoE
-    from .moe_sparse import SparseMoE
     from .moe_sparse_ep import SparseMoEEP
 
     moe_type = str(getattr(config, "moe_type", "sparse_ep")).lower()
@@ -103,12 +102,9 @@ def build_moe_ffn(config):
             f"'dense', 'sparse_ep' (from DeepSeekConfig.moe_type)"
         )
 
-    axis_name = resolve_moe_ep_axis(config)
-    if axis_name is None:
-        # No usable EP axis (single chip / pure replication):
-        # sparse_ep degenerates to single-device SparseMoE (EP size 1).
-        return SparseMoE(config)
-    return SparseMoEEP(config, axis_name=axis_name)
+    # SparseMoEEP covers both cases: with no usable EP axis it runs at EP size 1,
+    # owning every expert and skipping the EP collectives.
+    return SparseMoEEP(config, axis_name=resolve_moe_ep_axis(config))
 
 
 class DeepSeekBlock(AbstractModuleBase):

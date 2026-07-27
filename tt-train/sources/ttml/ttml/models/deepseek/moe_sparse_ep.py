@@ -19,14 +19,14 @@ Each chip in the EP cluster stores and runs ``E / D_ep`` experts. Per chip:
     5. moe_ungroup → partial dense output [B, 1, S, H]
     6. all_reduce across EP axis sums the partials
 
-Compare to:
+Disjoint expert subsets per device; replicated input/routing/scores; per-chip
+divergence starts at moe_group via ``leids``. Saves expert-weight memory
+linearly in D_ep — each chip allocates 1/D_ep of the routed-expert weights
+rather than a full replica.
 
-    SparseMoE     — all experts on every device, no collectives.
-    SparseMoEEP   — disjoint expert subsets per device; replicated input/
-                    routing/scores; per-chip divergence starts at moe_group
-                    via ``leids``. Saves expert-weight memory linearly in
-                    D_ep (each chip allocates 1/D_ep of the routed-expert
-                    weights vs. the SparseMoE layout which replicates).
+At EP size 1 (no mesh, or an axis of size 1) this chip owns every expert: the
+EP collectives are identities and are skipped, so the same class covers the
+single-device sparse case and there is no separate ``SparseMoE``.
 """
 
 from __future__ import annotations
@@ -60,7 +60,13 @@ class SparseMoEEP(MoE):
             axis_name = getattr(config, "moe_axis_name", None) or "tp"
         super().__init__(config, moe_axis_name=axis_name)
         self.axis_name = axis_name
-        self.cluster_axis = ttml.mesh().axis_index(axis_name)
+        mesh = ttml.maybe_mesh()
+        # EP size 1 (no mesh, or an axis of size 1) is the degenerate case: this
+        # chip owns every expert, so the EP collectives below are identities and
+        # are skipped. They would otherwise throw -- all_reduce / all_gather
+        # reject the single-device case outright.
+        self.ep_size = mesh.axis_size(axis_name) if (mesh is not None and mesh.has_axis(axis_name)) else 1
+        self.cluster_axis = mesh.axis_index(axis_name) if self.ep_size > 1 else None
         # self._leids is built by MoE.__init__, sharded across this EP axis so
         # shard r holds global IDs [r*E_local, (r+1)*E_local).
 
@@ -71,8 +77,14 @@ class SparseMoEEP(MoE):
         # across it — all_gather the full batch so every chip's local experts
         # see all tokens (re-scattered at the end). No-op otherwise: EP normally
         # sits on an axis independent of DP, where the input is already replicated.
-        mesh = ttml.mesh()
-        dp_gather = mesh.has_axis("dp") and mesh.axis_size("dp") > 1 and mesh.axis_index("dp") == self.cluster_axis
+        mesh = ttml.maybe_mesh()
+        dp_gather = (
+            self.ep_size > 1
+            and mesh is not None
+            and mesh.has_axis("dp")
+            and mesh.axis_size("dp") > 1
+            and mesh.axis_index("dp") == self.cluster_axis
+        )
         if dp_gather:
             x = ttml.ops.distributed.all_gather(x, 0, self.cluster_axis, ttml.ops.distributed.GradOutputType.SHARDED)
 
@@ -92,8 +104,14 @@ class SparseMoEEP(MoE):
         # because each chip's moe_group.bw produces a partial gradient covering
         # only the contribution from its local experts; without the broadcast
         # those partials would be dropped before reaching the routing path.
-        x_bc = ttml.ops.distributed.broadcast(x, self.cluster_axis)
-        scores_for_routing_bc = ttml.ops.distributed.broadcast(scores_for_routing, self.cluster_axis)
+        # At EP size 1 there are no partials to combine, so the broadcast is an
+        # identity in both directions and is skipped.
+        if self.ep_size > 1:
+            x_bc = ttml.ops.distributed.broadcast(x, self.cluster_axis)
+            scores_for_routing_bc = ttml.ops.distributed.broadcast(scores_for_routing, self.cluster_axis)
+        else:
+            x_bc = x
+            scores_for_routing_bc = scores_for_routing
 
         # ── moe_group with per-shard leids ──
         # Each chip filters routing to its own E_local experts. The resulting
@@ -139,8 +157,10 @@ class SparseMoEEP(MoE):
         # noop_backward=True: each chip's partial contributes equally to the
         # replicated output, so dL/d(partial_chip) = dL/d(output) flows back
         # identically to every chip — no second collective in backward.
-        output = ttml.ops.distributed.all_reduce(output, noop_backward=True, cluster_axis=self.cluster_axis)
-        output = self._memory_snapshot(output, "AFTER_ALL_REDUCE")
+        # At EP size 1 this chip already holds the complete sum over all experts.
+        if self.ep_size > 1:
+            output = ttml.ops.distributed.all_reduce(output, noop_backward=True, cluster_axis=self.cluster_axis)
+            output = self._memory_snapshot(output, "AFTER_ALL_REDUCE")
 
         # Shared experts: not EP-sharded by default — they replicate work and
         # don't need an all_reduce. If a downstream change makes them EP/TP,

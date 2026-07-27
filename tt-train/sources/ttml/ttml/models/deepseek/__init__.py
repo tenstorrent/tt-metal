@@ -52,7 +52,7 @@ class DeepSeekConfig:
     #   sparse_ep — moe_group/ungroup sparse dispatch with expert-parallel experts
     # sparse_ep partitions the expert list across the "tp" axis (use_tp) or
     # moe_axis_name; with no such axis (single chip) it degenerates to
-    # single-device sparse (EP size 1) via SparseMoE.
+    # single-device sparse (EP size 1) via SparseMoEEP.
     moe_type: Literal["dense", "sparse_ep"] = "sparse_ep"
     # MLA (q_lora_rank=0 means direct Q projection without LoRA bottleneck)
     q_lora_rank: int = 256

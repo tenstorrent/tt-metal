@@ -153,12 +153,14 @@ class MoE(AbstractModuleBase):
         #   (dense / plain sparse / no axis) build replicated dense Expert modules.
         moe_type = str(getattr(config, "moe_type", "sparse_ep")).lower()
         ep_sharded = moe_axis_name is not None and moe_type == "sparse_ep"
+        # No mesh / no such axis is the EP-size-1 case: this chip owns every
+        # expert. The (D, 1, I, H) parameters are then built with D == 1 and no
+        # mesh mapper, so the sparse_ep path works unchanged on one chip.
+        _mesh = ttml.maybe_mesh()
+        has_axis = ep_sharded and _mesh is not None and _mesh.has_axis(moe_axis_name)
 
         if ep_sharded:
-            mesh = ttml.maybe_mesh()
-            if mesh is None or not mesh.has_axis(moe_axis_name):
-                raise ValueError(f"MoE: moe_axis_name={moe_axis_name!r} requires an open mesh with that axis")
-            D = mesh.axis_size(moe_axis_name)
+            D = _mesh.axis_size(moe_axis_name) if has_axis else 1
             E = config.n_routed_experts
             if E % D != 0:
                 raise ValueError(
@@ -170,7 +172,7 @@ class MoE(AbstractModuleBase):
             # Mapper shards dim 0 of the init tensor across the EP mesh axis.
             # Init shape (D, 1, I, H) → each EP shard gets (1, 1, I, H), i.e.
             # the i-th Parameter on shard r holds global expert r*E_local + i.
-            mapper = ttml.mesh().axis_mapper(moe_axis_name, tdim=0)
+            mapper = ttml.mesh().axis_mapper(moe_axis_name, tdim=0) if has_axis else None
             k_in = math.sqrt(1.0 / H)
             init_gate = ttml.init.uniform(-k_in, k_in)
             k_mid = math.sqrt(1.0 / I)
@@ -232,7 +234,7 @@ class MoE(AbstractModuleBase):
         # EP shards it across the expert axis (each chip sees its local
         # [r*E_local, (r+1)*E_local) slice); every other layout leaves the
         # mapper None so it is replicated. Only the sparse variants read it.
-        leids_mapper = ttml.mesh().axis_mapper(moe_axis_name, tdim=0) if ep_sharded else None
+        leids_mapper = ttml.mesh().axis_mapper(moe_axis_name, tdim=0) if (ep_sharded and has_axis) else None
         self._leids = ttnn.from_torch(
             torch.arange(config.n_routed_experts, dtype=torch.int32),
             dtype=ttnn.uint16,
