@@ -1,0 +1,3 @@
+# tt-perf-report exports are evidence artifacts, not build output.
+# The repo-root .gitignore excludes *.csv globally; keep these.
+!*.csv
