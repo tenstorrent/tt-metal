@@ -599,9 +599,11 @@ def test_update_padded_kv_cache_tp_sharded(
     so the sharding lives entirely in the op (`tp_axis`) -- the caller passes an unsharded-across-TP
     input.
 
-    Equivalence to the SP path: order the chips linear = sp_coord*tp + tp_coord and it is exactly
-    single-axis block-cyclic over F chips with per-chip chunk Cl = chunk_local/tp. We therefore reuse
-    `_rotated_chip_positions(kv_actual, F, Cl)` unchanged.
+    Equivalence to the SP path: order the chips linear = sp_coord*tp + tp_coord and the CACHE is exactly
+    single-axis block-cyclic over F chips with per-chip chunk Cl = chunk_local/tp -- so the readback
+    inversion below uses (F, Cl). The INPUT, however, is rotated coarsely at (sp, chunk_local): the two
+    granularities are the whole subtlety of this op, and they only coincide when kv_actual is
+    stripe-aligned (see the per-iteration comment below).
 
     - non_padded: two full-chunk iterations (chunk-aligned, no rotation -> every chip writes at the
       current slab base).
@@ -687,13 +689,17 @@ def test_update_padded_kv_cache_tp_sharded(
     kv_actual = 0
     for it, new_actual_isl in enumerate(new_actual_isls):
         # F-chip block-cyclic rotation (linearized sp*tp). positions[L][r] is the natural global token
-        # that logical chip L's r-th written row carries. Physically SP chip j owns logical chips
-        # [j*tp, (j+1)*tp): its chunk_local input rows are flat[j*chunk_local:(j+1)*chunk_local], and
-        # the op on chip (j, k) reads window k -> logical chip j*tp+k. So the single chip-concat `flat`
-        # array, sharded across SP into chunk_local-row pieces, feeds exactly the right window to each
-        # (sp, tp) chip.
-        positions = _rotated_chip_positions(kv_actual, F, Cl)
-        flat = [positions[L][r] for L in range(F) for r in range(Cl)]  # L-major == SP-shard order
+        # Input rotation is COARSE (sp, chunk_local) -- the caller's contract, not the cache's layout.
+        # The hidden states are seq-sharded across SP only (TP shards hidden), so the serving runtime
+        # can only rotate at chunk_local granularity, and the SAME rows are the query rows, whose causal
+        # geometry is defined on that coarse window. The op therefore receives SP chip j's whole coarse
+        # window (TP-replicated) and derives which of those rows belong to its own fine stripe.
+        #
+        # This is deliberately NOT the fine (F, Cl) rotation: that would hand each chip a contiguous
+        # 1/tp slice, but no real caller produces it, and assuming it silently mis-assigns rows whenever
+        # kv_actual is not stripe-aligned (regression: PCC 0.62 on the model-level rotated maxedge case).
+        positions = _rotated_chip_positions(kv_actual, sp, chunk_local)
+        flat = [positions[j][r] for j in range(sp) for r in range(chunk_local)]  # SP-shard order
         valid_end = kv_actual + new_actual_isl
         logger.info(
             f"  iter {it}: kv_actual={kv_actual} new_isl={new_actual_isl} valid_end={valid_end} "

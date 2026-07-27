@@ -819,12 +819,16 @@ def init_mla_kv_cache(
     sp_axis,
     num_kvpe_cache_layers,
     num_users=1,
+    tp_axis=None,
 ) -> MlaKvCache:
     """Allocate and zero a persistent MLA cache in the selected physical format.
 
     Homogeneous formats store the config-derived logical row directly. Scaled FP8 owns one
     ND-sharded mixed-format row per token. Physical DRAM usage is derived from the tensor's
     aligned page size, not the logical row width.
+
+    tp_axis: GLM-5.2 KV dedup, forwarded to init_kvpe_cache -- see its docstring. None (default) is
+        the old TP-replicated layout.
     """
     cache_format = MlaKvCacheFormat(cache_format)
     geometry = MlaKvCacheGeometry.from_config(hf_config)
@@ -840,6 +844,7 @@ def init_mla_kv_cache(
         sp_axis=sp_axis,
         num_kvpe_cache_layers=num_kvpe_cache_layers,
         num_users=num_users,
+        tp_axis=tp_axis,
     )
     return MlaKvCache(format=cache_format, storage=storage, geometry=geometry)
 
