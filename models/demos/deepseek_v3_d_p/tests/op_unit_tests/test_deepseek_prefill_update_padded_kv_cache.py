@@ -30,14 +30,17 @@ KVPE_HEAD_DIM = 576
 # (cache dtype, layout). bfloat8_b/bfloat4_b are block-float (TILE only); fp8_e4m3 is ROW_MAJOR only
 # (Blackhole); bf16 covers the row-major page math in a lossless dtype. The tests assert bit-exact
 # equality against the input read back, so no per-dtype tolerance is needed.
-# These tests drive the per-element-tensor (metadata) path, which is TILE-only (see the device-op
-# guard added when rebasing the metadata overload onto main's newer ROW_MAJOR support). main's
-# ROW_MAJOR support is scalar-only; row-major coverage, if needed, belongs in a dedicated scalar-path
-# test rather than through the metadata path.
+# (cache dtype, layout). bfloat8_b/bfloat4_b are block-float (TILE only); fp8_e4m3 is ROW_MAJOR only
+# (Blackhole); bf16 covers the row-major page math in a lossless dtype. TILE drives the per-element-
+# tensor (metadata) path; ROW_MAJOR uses the scalar signature -- the metadata path is TILE-only (see the
+# device-op guard added when rebasing onto main's newer ROW_MAJOR support), so these tests keep full
+# dtype/layout coverage without running metadata on row-major (via the _update_kv helper below).
 DTYPE_LAYOUT_CASES = [
     (ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+    (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    (ttnn.fp8_e4m3, ttnn.ROW_MAJOR_LAYOUT),
 ]
-DTYPE_LAYOUT_IDS = ["bfp8_tile"]
+DTYPE_LAYOUT_IDS = ["bfp8_tile", "bf16_rm", "fp8_rm"]
 
 
 def _make_input(torch_chunk, dtype, layout, mesh_device, mesh_mapper):
@@ -184,15 +187,16 @@ def test_update_padded_kv_cache_single_device(mesh_device, dtype, layout):
                 .to(torch.bfloat16)
                 .reshape(new_isl_global, KVPE_HEAD_DIM)
             )
-            slot_t, kv_t = _make_meta_tensors(mesh_device, kv_actual_global=0, slot_idx=u)
-            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            _update_kv(
                 kv_cache,
                 tt_input,
-                slot_t,
-                kv_t,
+                slot_idx=u,
+                kv_actual_global=0,
                 layer_idx=l,
                 num_layers=num_layers,
                 cluster_axis=sp_axis,
+                layout=layout,
+                mesh_device=mesh_device,
             )
 
     ttnn.synchronize_device(mesh_device)
@@ -233,6 +237,29 @@ def _make_scalar_tensor(mesh_device, value):
 def _make_meta_tensors(mesh_device, kv_actual_global, slot_idx):
     """Build the two per-element tensors (slot_idx, kv_actual_global) the traceable path consumes."""
     return _make_scalar_tensor(mesh_device, slot_idx), _make_scalar_tensor(mesh_device, kv_actual_global)
+
+
+def _update_kv(kv_cache, tt_input, *, slot_idx, kv_actual_global, layer_idx, num_layers, cluster_axis, layout, mesh_device):
+    """Drive update_padded_kv_cache the right way for the layout: TILE uses the per-element-tensor
+    (metadata) path; ROW_MAJOR uses the scalar signature -- the metadata path is TILE-only (device-op
+    guard). Keeps bf16_rm / fp8_rm coverage on the scalar path without invoking metadata on row-major."""
+    if layout == ttnn.TILE_LAYOUT:
+        slot_t, kv_t = _make_meta_tensors(mesh_device, kv_actual_global=kv_actual_global, slot_idx=slot_idx)
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            kv_cache, tt_input, slot_t, kv_t, layer_idx=layer_idx, num_layers=num_layers, cluster_axis=cluster_axis
+        )
+        ttnn.deallocate(slot_t)
+        ttnn.deallocate(kv_t)
+    else:  # ROW_MAJOR: scalar signature (metadata path is TILE-only)
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            kv_cache,
+            tt_input,
+            slot_idx=slot_idx,
+            layer_idx=layer_idx,
+            num_layers=num_layers,
+            kv_actual_global=kv_actual_global,
+            cluster_axis=cluster_axis,
+        )
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 4), (2, 4), (8, 4)], ids=["1x4", "2x4", "8x4"], indirect=True)
@@ -322,15 +349,16 @@ def test_update_padded_kv_cache_single_iteration_prefill(
             )
             # Exact reference: the input read back in natural order (same encode/decode as the cache).
             expected[(u, l)] = ttnn.to_torch(tt_input, mesh_composer=composer).to(torch.bfloat16)[0, 0]
-            slot_t, kv_t = _make_meta_tensors(mesh_device, kv_actual_global=0, slot_idx=u)
-            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            _update_kv(
                 kv_cache,
                 tt_input,
-                slot_t,
-                kv_t,
+                slot_idx=u,
+                kv_actual_global=0,
                 layer_idx=l,
                 num_layers=num_layers,
                 cluster_axis=sp_axis,
+                layout=layout,
+                mesh_device=mesh_device,
             )
 
     ttnn.synchronize_device(mesh_device)
@@ -532,15 +560,16 @@ def test_update_padded_kv_cache_multi_iteration_prefill(
                 # scatter its valid rows into the natural-order reference.
                 inp_rb = ttnn.to_torch(tt_input, mesh_composer=composer).to(torch.bfloat16)[0, 0]
                 expected[(u, l)][flat_t[valid_rows]] = inp_rb[valid_rows]
-                slot_t, kv_t = _make_meta_tensors(mesh_device, kv_actual_global=kv_actual, slot_idx=u)
-                ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                _update_kv(
                     kv_cache,
                     tt_input,
-                    slot_t,
-                    kv_t,
+                    slot_idx=u,
+                    kv_actual_global=kv_actual,
                     layer_idx=l,
                     num_layers=num_layers,
                     cluster_axis=sp_axis,
+                    layout=layout,
+                    mesh_device=mesh_device,
                 )
         kv_actual = valid_end
 
@@ -593,7 +622,10 @@ def test_update_padded_kv_cache_multi_iteration_prefill(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("dtype, layout", DTYPE_LAYOUT_CASES, ids=DTYPE_LAYOUT_IDS)
+# This test compares the metadata (tensor) path against the scalar path, so it is inherently TILE-only
+# (the metadata path is TILE-only; ROW_MAJOR has no metadata path). Row-major scalar correctness is
+# covered by the other tests via _update_kv.
+@pytest.mark.parametrize("dtype, layout", [(ttnn.bfloat8_b, ttnn.TILE_LAYOUT)], ids=["bfp8_tile"])
 @pytest.mark.timeout(0)
 def test_update_padded_kv_cache_metadata_matches_scalar(mesh_device, dtype, layout):
     """The per-element-tensor (traceable) path and the scalar path must produce bit-identical caches.

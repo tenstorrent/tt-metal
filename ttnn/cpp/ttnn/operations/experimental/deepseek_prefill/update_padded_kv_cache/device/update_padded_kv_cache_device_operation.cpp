@@ -350,8 +350,9 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
             Wt,
             cache_HtWt,
             cache_CHtWt,
-            slot_idx_addr,
-            kv_actual_global_addr,
+            slot_idx_addr,          // smuggled-rta-ok: 1-element metadata tensor DRAM addr; the writer reads
+                                    // slot_idx on-device from it (trace-safe; value kept out of the program hash)
+            kv_actual_global_addr,  // smuggled-rta-ok: 1-element metadata tensor DRAM addr; read on-device
         });
     } else {
         writer_kernel.emplace_common_runtime_args({
