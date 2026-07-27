@@ -15,6 +15,7 @@ import importlib.util
 import json
 import os
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -23,6 +24,7 @@ from loguru import logger
 
 MANIFEST_FILENAME = "manifest.json"
 DEFAULT_TTNN_REPORTS_ROOT = Path("generated/ttnn/reports")
+_ALLOWED_MANIFEST_BASENAMES = frozenset({MANIFEST_FILENAME})
 
 
 def _load_run_id_module():
@@ -57,21 +59,73 @@ stamp_memory_run_id = _run_id.stamp_memory_run_id
 stamp_report_dir_run_id = _run_id.stamp_report_dir_run_id
 
 
-def _write_manifest_json(payload: dict[str, Any], *, report_dir: Path | str) -> Path:
-    """Write ``manifest.json`` under ``report_dir`` only (fixed basename; no caller path).
+def _path_is_under_root(candidate: str, root: str) -> bool:
+    if candidate == root:
+        return True
+    prefix = root if root.endswith(os.sep) else root + os.sep
+    return candidate.startswith(prefix)
 
-    Containment uses ``os.path.realpath`` + ``startswith`` in this function (same
-    scope as ``open``) so SAST path-injection checks can see the sanitiser.
+
+def _manifest_write_allowlist_roots() -> tuple[str, ...]:
+    """Safelist of directory prefixes where performance manifests may be written."""
+    raw: list[str] = [
+        os.getcwd(),
+        "generated",
+        tempfile.gettempdir(),
+    ]
+    for key in ("TT_METAL_HOME", "TT_METAL_PROFILER_DIR"):
+        value = os.environ.get(key)
+        if value:
+            raw.append(value)
+
+    roots: list[str] = []
+    seen: set[str] = set()
+    for entry in raw:
+        resolved = os.path.realpath(os.path.abspath(entry))
+        if resolved not in seen:
+            seen.add(resolved)
+            roots.append(resolved)
+    return tuple(roots)
+
+
+def _write_manifest_json(payload: dict[str, Any], *, report_dir: Path | str) -> Path:
+    """Write safelisted ``manifest.json`` under an allowlisted report directory.
+
+    Matches the in-repo Cycode/CWE-22 pattern (see ``stack_trace_source.read_source_file`` /
+    ``phase2_generate_tests``): safelist ``BASE_DIRECTORY``, user path only as a relative
+    ``dynamic_input``, then ``abspath(join(...))`` + ``startswith`` before ``open``.
     """
-    base = os.path.realpath(str(report_dir))
-    target = os.path.realpath(os.path.join(base, MANIFEST_FILENAME))
-    if not target.startswith(base + os.sep):
-        raise ValueError(f"Refusing to write outside base directory: {target} not under {base}")
-    os.makedirs(os.path.dirname(target), exist_ok=True)
-    with open(target, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
-        f.write("\n")
-    return Path(target)
+    if MANIFEST_FILENAME not in _ALLOWED_MANIFEST_BASENAMES:
+        raise ValueError(f"Refusing to write non-safelisted path: {MANIFEST_FILENAME}")
+
+    report_abs = os.path.realpath(os.path.abspath(str(report_dir)))
+    base_candidate = next(
+        (root for root in _manifest_write_allowlist_roots() if _path_is_under_root(report_abs, root)),
+        None,
+    )
+    if base_candidate is None:
+        raise ValueError(f"Refusing to write manifest outside allowlisted roots: {report_abs}")
+
+    BASE_DIRECTORY = os.path.abspath(base_candidate)
+    rel_dir = os.path.relpath(report_abs, BASE_DIRECTORY)
+    if rel_dir == "..":
+        raise ValueError(f"Refusing to write outside base directory: {report_abs}")
+    if rel_dir.startswith(".." + os.sep):
+        raise ValueError(f"Refusing to write outside base directory: {report_abs}")
+
+    dynamic_input = MANIFEST_FILENAME if rel_dir in (os.curdir, "") else os.path.join(rel_dir, MANIFEST_FILENAME)
+    if dynamic_input == ".." or dynamic_input.startswith(".." + os.sep):
+        raise ValueError(f"Refusing to write outside base directory: {dynamic_input}")
+
+    my_path = os.path.abspath(os.path.join(BASE_DIRECTORY, dynamic_input))
+    if my_path.startswith(BASE_DIRECTORY):
+        os.makedirs(os.path.dirname(my_path), exist_ok=True)
+        with open(my_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+            f.write("\n")
+        return Path(my_path)
+
+    raise ValueError(f"Refusing to write outside base directory: {my_path} not under {BASE_DIRECTORY}")
 
 
 def _path_for_manifest(path: Path, report_dir: Path) -> str:

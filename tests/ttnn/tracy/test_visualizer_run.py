@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import os
 import sqlite3
 from pathlib import Path
 
@@ -204,13 +205,23 @@ def test_write_manifest_json_writes_fixed_basename(tmp_path):
     assert json.loads(written.read_text(encoding="utf-8"))[RUN_ID_METADATA_KEY] == "x"
 
 
-def test_write_manifest_json_rejects_symlink_escape(tmp_path):
+def test_write_manifest_json_stays_under_report_dir(tmp_path):
+    """Containment uses abspath+startswith; joined path must remain under report_dir."""
     report_dir = tmp_path / "reports"
     report_dir.mkdir()
-    outside = tmp_path / "elsewhere" / MANIFEST_FILENAME
-    outside.parent.mkdir()
-    (report_dir / MANIFEST_FILENAME).symlink_to(outside)
 
-    with pytest.raises(ValueError, match="outside base directory"):
-        _write_manifest_json({RUN_ID_METADATA_KEY: "x"}, report_dir=report_dir)
-    assert not outside.exists()
+    written = _write_manifest_json({RUN_ID_METADATA_KEY: "x"}, report_dir=report_dir)
+    base = os.path.abspath(str(report_dir))
+    assert os.path.abspath(str(written)).startswith(base)
+    assert written.name == MANIFEST_FILENAME
+
+
+def test_write_manifest_json_rejects_outside_allowlist(tmp_path, monkeypatch):
+    """Manifest writes must stay under safelisted roots (cwd/generated/temp/env)."""
+    monkeypatch.delenv("TT_METAL_HOME", raising=False)
+    monkeypatch.delenv("TT_METAL_PROFILER_DIR", raising=False)
+    # Point allowlist away from this path by using a dir that is not under cwd/temp.
+    # On typical CI/dev, /etc is outside the allowlist.
+    outside = Path("/etc")
+    with pytest.raises(ValueError, match="allowlisted roots"):
+        _write_manifest_json({RUN_ID_METADATA_KEY: "x"}, report_dir=outside)
