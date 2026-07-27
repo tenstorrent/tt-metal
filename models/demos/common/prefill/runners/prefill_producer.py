@@ -19,10 +19,10 @@ CHIP_IN_USE lock the runner already holds, and deadlock.
 can be unit-tested with no device and reproduced deterministically.
 
 Config — a YAML manifest (like the runner's PREFILL_MANIFEST) or PREFILL_* env vars. Point at a
-  manifest with ``--manifest <path>`` (or PREFILL_PRODUCER_MANIFEST); it is applied at startup via
-  setdefault, so any explicitly exported PREFILL_* env var still overrides it. Typed blocks map to the
+  manifest with ``--manifest <path>`` (or PREFILL_PRODUCER_MANIFEST); main() applies it via setdefault
+  (importing this module applies nothing), so any exported PREFILL_* env var still wins. Typed blocks map to the
   env vars documented below; a verbatim ``env:`` block passes any raw PREFILL_* key through (and wins
-  over the typed blocks). See topology_configuration/prefill_producer_manifest.example.yaml. Schema:
+  over the typed blocks). See producer_manifests/prefill_producer_manifest.example.yaml. Schema:
     model:     {variant, num_layers, max_seq_len, chunk_size}
     transport: {sp, tp, h2d_service_id, connect_timeout_s}
     workload:  {num_users, chunks, max_requests, duration_s, interleave, p_gap, p_burst, gap_ms,
@@ -58,7 +58,7 @@ Env — transport (must match the runner): PREFILL_SP / PREFILL_TP / PREFILL_CHU
 Usage:
     # From a manifest (env still overrides individual knobs):
     python -m models.demos.common.prefill.runners.prefill_producer \
-      --manifest models/demos/common/prefill/runners/topology_configuration/producer_manifest_example.yaml
+      --manifest models/demos/common/prefill/runners/producer_manifests/prefill_producer_manifest.example.yaml
     # 1 user, full depth, with PCC:
     PREFILL_PRODUCER_CHUNKS=11 PREFILL_PRODUCER_CHECK_PCC=1 \
       python -m models.demos.common.prefill.runners.prefill_producer
@@ -91,9 +91,12 @@ def _apply_manifest_env(manifest_path: str) -> None:
     """Populate the PREFILL_* env from a YAML producer manifest (setdefault => an explicitly exported
     env var still wins). Mirrors the runner's _apply_manifest_env: a verbatim ``env:`` passthrough
     (applied FIRST, so a raw PREFILL_* key wins over the typed mapping) plus typed ``model`` /
-    ``transport`` / ``workload`` blocks mapped to the same env vars the module constants and
-    _config_from_env() read. The typed ``migration`` block is delegated to ``migration_driver``. MUST run
-    before those reads (see the call below)."""
+    ``transport`` / ``workload`` blocks mapped to the same env vars _load_env_config() and
+    _config_from_env() read. The typed ``migration`` block is delegated to ``migration_driver``.
+
+    Called ONLY from main(), and necessarily before those two reads — see the call site. Deliberately not
+    invoked at import: this is the one function here that mutates os.environ, and a plain
+    ``import prefill_producer`` must not silently apply a manifest just because the env names one."""
     import yaml
 
     with open(manifest_path) as f:
@@ -150,37 +153,28 @@ def _apply_manifest_env(manifest_path: str) -> None:
     logger.info(f"[producer] applied manifest {manifest_path}")
 
 
-def _resolve_manifest_path() -> str:
-    """Manifest path from ``--manifest``/``-m`` on the CLI (honored only when this module is run as a
-    script, so importing it — e.g. from a unit test — never parses a host process's argv) or, failing
-    that, the PREFILL_PRODUCER_MANIFEST env var. CLI wins."""
-    if __name__ == "__main__":
-        argv = sys.argv[1:]
-        for i, arg in enumerate(argv):
-            if arg in ("--manifest", "-m") and i + 1 < len(argv):
-                return argv[i + 1]
-            if arg.startswith("--manifest="):
-                return arg.split("=", 1)[1]
-    return os.environ.get("PREFILL_PRODUCER_MANIFEST", "")
-
-
-# Apply the manifest BEFORE the module-level constant + _config_from_env() reads below (setdefault, so
-# env still wins). No-op when neither --manifest nor PREFILL_PRODUCER_MANIFEST is given.
-_manifest_path = _resolve_manifest_path()
-if _manifest_path:
-    _apply_manifest_env(_manifest_path)
-
 # PrefillMetadata on the wire: 3 x uint32 = [slot_id, actual_start, actual_end].
 METADATA_SIZE_BYTES = 12
 
-SP_AXIS = int(os.environ.get("PREFILL_SP", 8))
-TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
-GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
-CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
-MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 60 * 1024))
-NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
 
-ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
+def _load_env_config() -> None:
+    """(Re)bind the transport/model constants below from the CURRENT environment.
+
+    Called once at import so a plain ``import prefill_producer`` still yields usable constants, and again
+    from ``main()`` right after the manifest is applied — the manifest only reaches the env at that point,
+    so the import-time values would otherwise be pre-manifest defaults. Importing this module never
+    MUTATES the environment; only ``main()`` does, via _apply_manifest_env."""
+    global SP_AXIS, TP_AXIS, GLOBAL_MESH_SHAPE, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER
+    SP_AXIS = int(os.environ.get("PREFILL_SP", 8))
+    TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
+    GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
+    CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
+    MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 60 * 1024))
+    NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
+    ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
+
+
+_load_env_config()
 
 
 def _pack_metadata(slot_id: int, actual_start: int, actual_end: int) -> bytes:
@@ -891,8 +885,8 @@ def _resolve_slot_prompts(cfg: ProducerConfig):
 
 
 def main() -> None:
-    # The manifest (--manifest / PREFILL_PRODUCER_MANIFEST) is already applied at import, before the
-    # module constants were read; parse here too so `--help` documents it and unknown args error out.
+    # argparse is the SINGLE place argv is read: --manifest defaults to PREFILL_PRODUCER_MANIFEST, so one
+    # parse covers both sources and unknown args still error out.
     parser = argparse.ArgumentParser(
         prog="prefill_producer",
         description="H2D producer for the prefill runner. Config comes from a YAML manifest "
@@ -907,6 +901,13 @@ def main() -> None:
     )
     migration_driver.add_cli_arguments(parser)  # --migrate / --migrations
     args = parser.parse_args()
+
+    # Apply the manifest HERE, not at import: importing this module must never mutate os.environ. Order
+    # matters — the manifest lands in the env first, then _load_env_config() re-reads the module constants
+    # (bound to pre-manifest defaults at import) and _config_from_env() reads the schedule knobs.
+    if args.manifest:
+        _apply_manifest_env(args.manifest)
+    _load_env_config()
 
     cfg = _config_from_env()
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
@@ -931,7 +932,7 @@ def main() -> None:
     )
 
     # Per-slot prompts: each slot pushes tokens from (and is PCC'd against) its own trace. With no
-    # PREFILL_PRODUCER_SLOT_TRACES this is one shared trace for all slots (unchanged behavior).
+    # PREFILL_PRODUCER_SLOT_TRACES every slot shares one trace (PREFILL_TRACE_DIR / the adapter default).
     slot_traces, slot_lengths, pools_by_trace = _resolve_slot_prompts(cfg)
     cfg.slot_lengths = slot_lengths  # None => synthetic schedule depth; else depth per prompt length
 
@@ -970,8 +971,9 @@ def main() -> None:
         pools_by_trace=pools_by_trace,
     )
 
-    # Pre-existing producer-only golden PCC (PREFILL_PRODUCER_CHECK_PCC), for standalone/non-migration
-    # runs. NOT part of the migration flow — migration KV is validated by the runner, not here.
+    # Producer-side golden PCC (PREFILL_PRODUCER_CHECK_PCC): reads each resident slot's KV back over UMD
+    # and compares it to that slot's golden. Independent of migration — migrated KV is validated by the
+    # RUNNER on-device, never here — so this covers standalone runs and the src slots of a migrating one.
     verify_ok = True
     if cfg.verify and kv_table is not None:
         try:
