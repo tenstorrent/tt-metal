@@ -26,10 +26,11 @@ Forward (2D vocab-parallel), given SP-seq-sharded tokens ``[1, 1, s_local]`` (ro
 ``[r*s_local:(r+1)*s_local]``) and per-device weight ``[vocab/sp, emb_dim/tp]`` (row r owns vocab rows
 ``[r*vocab/sp:(r+1)*vocab/sp]``):
   1. SP all-gather the tokens so every row sees all ``s_total`` positions;
-  2. per-row MASKED lookup: subtract the row's vocab-start (signed — out-of-range tokens go negative),
-     keep only the in-range indices, zero the out-of-range rows. Index math runs in fp32 (exact for token
-     IDs <= 2^24); int32 would work too, but the lookup index is cast to uint32 either way — ttnn.embedding
-     requires uint32;
+  2. per-row SENTINEL lookup: each vocab shard is stored padded as [zero, real slice, zero]; shift the
+     token by the row's start (r*vocab_local - 1) and clamp to [0, vocab_local+1] — in-range tokens hit
+     real rows, out-of-range tokens clamp onto a zero sentinel, so no output mask is needed. Index math in
+     fp32 (signed subtract, exact for IDs <= 2^24); int32 would work too, but the index is cast to uint32
+     either way — ttnn.embedding requires uint32;
   3. SP reduce-scatter on the seq dim: sums across the SP vocab shards (each token is resolved by exactly
      one row) AND scatters seq back to per-row shards -> ``[1, 1, s_local, emb_dim / tp]``;
   4. TP all-gather on emb_dim -> ``[1, 1, s_local, emb_dim]`` — same output contract as the 1D path.
@@ -117,8 +118,10 @@ class TtParallelEmbedding(LightweightModule):
             )
             shard_dims[self.sp_axis] = 0  # vocab
             self.vocab_local = vocab_size // sp
-            # Per-SP-row vocab start (r * vocab/sp), replicated across the TP cols. fp32: the offset can
-            # exceed bf16 integer exactness (>256), and the masked index math below runs in fp32.
+            # Per-SP-row sentinel-shifted vocab start (r*vocab_local - 1), replicated across the TP cols.
+            # The -1 pairs with the zero-row padding below: in-range tokens map to real weight rows
+            # 1..vocab_local, out-of-range tokens clamp onto the zero sentinels (rows 0 / vocab_local+1).
+            # fp32: signed (the subtract goes negative for out-of-range tokens) and exact for IDs <= 2^24.
             self.vocab_start = self._build_vocab_start(mesh_device, sp, self.vocab_local)
         else:
             self.vocab_local = vocab_size
@@ -134,11 +137,18 @@ class TtParallelEmbedding(LightweightModule):
             mesh_mapper=mesh_mapper,
             cache_file_name=cache_file_name,
         )
+        if shard_vocab_on_sp:
+            # Sentinel zero-rows: pad each per-device vocab shard on the vocab dim with one zero row at top
+            # and bottom -> [vocab_local+2, emb/tp], so out-of-range tokens clamp onto a zero row (removes
+            # the output mask). Done on-device at load; the cached .tensorbin stays un-padded (reused as-is).
+            pad = [(0, 0)] * len(self.weight.shape)
+            pad[-2] = (1, 1)  # vocab dim
+            self.weight = ttnn.pad(self.weight, pad, value=0.0)
 
     def _build_vocab_start(self, mesh_device, sp, vocab_local):
-        """Per-SP-row scalar vocab-start tensor [1,1,1,1] (value r*vocab_local on row r), replicated
-        across the TP cols. fp32 for exact index arithmetic."""
-        starts = torch.arange(sp, dtype=torch.float32).reshape(sp, 1, 1, 1) * float(vocab_local)
+        """Per-SP-row scalar vocab-start tensor [1,1,1,1] (value r*vocab_local - 1 on row r), replicated
+        across the TP cols. fp32 for exact signed index arithmetic; the -1 is the sentinel shift."""
+        starts = torch.arange(sp, dtype=torch.float32).reshape(sp, 1, 1, 1) * float(vocab_local) - 1.0
         shard_dims = [None, None]
         shard_dims[self.sp_axis] = 0  # give each SP row its own scalar
         return ttnn.from_torch(
@@ -175,23 +185,18 @@ class TtParallelEmbedding(LightweightModule):
             tok4d = self.mesh_config.allgather(tok4d, self.ccl_manager, axis=self.sp_axis, dim=3)
         s_total = tok4d.shape[-1]
 
-        # 2) Masked lookup against this row's vocab slice. Index math in fp32 (exact for IDs <= 2^24).
-        tok_f = ttnn.typecast(tok4d, ttnn.float32)  # [1,1,1,s_total]
-        local_f = ttnn.subtract(tok_f, self.vocab_start)  # broadcast per-SP-row start
-        in_lo = ttnn.ge(local_f, 0.0)
-        in_hi = ttnn.lt(local_f, float(self.vocab_local))
-        mask = ttnn.multiply(in_lo, in_hi)  # {0.,1.} [1,1,1,s_total]
-        local_idx = ttnn.multiply(local_f, mask)  # out-of-range -> index 0 (zeroed by mask below)
-        local_idx = ttnn.typecast(local_idx, ttnn.uint32)  # ttnn.embedding requires UINT32 indices
-        local_idx = ttnn.reshape(local_idx, [1, 1, s_total])
+        # 2) Per-row SENTINEL lookup. The weight shard is [zero, real vocab slice, zero] (padded in
+        #    __init__), so shifting the token by the row's start (r*vocab_local - 1) and clamping to
+        #    [0, vocab_local+1] lands in-range tokens on real rows 1..vocab_local and clamps out-of-range
+        #    tokens onto a zero sentinel row (0 or vocab_local+1) — no output mask needed. Index math in
+        #    fp32 (signed subtract, exact for IDs <= 2^24); final index cast to uint32 (embedding needs it).
+        local = ttnn.subtract(ttnn.typecast(tok4d, ttnn.float32), self.vocab_start)  # token - (r*vocab_local - 1)
+        local = ttnn.minimum(ttnn.maximum(local, 0.0), float(self.vocab_local + 1))  # clamp -> sentinels
+        local_idx = ttnn.reshape(ttnn.typecast(local, ttnn.uint32), [1, 1, s_total])
 
         emb = ttnn.embedding(local_idx, self.weight, layout=ttnn.TILE_LAYOUT, dtype=self.dtype)
         if len(emb.shape) == 3:
             emb = ttnn.unsqueeze_to_4D(emb)  # [1,1,s_total,emb_dim/tp]
-
-        # Zero the rows for tokens outside this SP shard's vocab range (broadcast mask over emb_dim/tp).
-        mask_seq = ttnn.reshape(ttnn.typecast(mask, self.dtype), [1, 1, s_total, 1])
-        emb = ttnn.multiply(emb, mask_seq)
 
         # 3) SP reduce-scatter on the seq dim: sum across vocab shards (each token resolved by exactly one
         #    SP row) AND scatter seq back to per-row shards -> [1,1,s_local,emb_dim/tp].
