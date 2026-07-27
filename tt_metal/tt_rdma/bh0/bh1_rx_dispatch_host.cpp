@@ -465,6 +465,13 @@ int main(int argc, char** argv) {
             land[3]);
     }
 
+    // Phase 2.1 PFC observability: base-FW macpcs_results.spare[9] @ L1 0x7CDCC = the XOFF-assert count
+    // (eth_service_pfc_pause fired). Non-zero => the PFC runtime driver drove TX_FLOW_CONTROL under RX load.
+    {
+        auto xoff = cluster.read_core<uint32_t>(device->id(), eth_phys, 0x7CDCCu, sizeof(uint32_t));
+        std::printf("  PFC: spare[9] XOFF-assert count = %u (>0 => pause driver fired)\n", xoff.empty() ? 0u : xoff[0]);
+    }
+
     const std::vector<uint32_t> stop_val{1u};
     cluster.write_core(device->id(), eth_phys, stop_val, TT_RDMA_STOP_ADDR);
     distributed::Finish(cq);
