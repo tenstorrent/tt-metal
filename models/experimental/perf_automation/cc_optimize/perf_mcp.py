@@ -1497,6 +1497,7 @@ def profile_model() -> dict:
                 f"recorded — auto-heal could not get a clean run. Re-profile a smaller/signposted region."
             ),
         }
+    prof.setdefault("perf_layers", (os.environ.get("TT_PERF_LAYERS") or "").strip() or "all")
     _baseline_path().write_text(json.dumps(prof))
     _orig = _original_baseline_path()
     if not _orig.exists() and _is_credible_profile(prof):

@@ -348,11 +348,39 @@ def _same_measurement(before_mode: str, after_mode: str) -> bool:
     return bool(a.comparable_to(b))
 
 
-def _depth_label() -> str:
+def _depth_label(profile: dict | None = None) -> str:
     """How much of the model the tracy numbers cover. A ms figure means nothing without it: the whole
-    2-layer-vs-16-layer confusion came from a headline that printed neither side's depth."""
-    raw = (os.environ.get("TT_PERF_LAYERS") or "").strip()
+    2-layer-vs-16-layer confusion came from a headline that printed neither side's depth.
+
+    Read the depth the PROFILE was stamped with, not this process's env. The depth is exported into
+    the profiling SUBPROCESS, so the renderer's own TT_PERF_LAYERS is usually empty -- which made the
+    label fall through to "all layers" for a run profiled at 16, printing a depth that was simply
+    wrong. Env stays as the fallback for profiles written before stamping.
+    """
+    raw = ""
+    if isinstance(profile, dict):
+        raw = str(profile.get("perf_layers") or "").strip()
+    if not raw:
+        raw = (os.environ.get("TT_PERF_LAYERS") or "").strip()
     return "%s layers" % raw if raw.isdigit() and int(raw) > 0 else "all layers"
+
+
+_IMPLAUSIBLE_RATIO = float(os.environ.get("PERF_MCP_HEADLINE_MAX_RATIO", "100") or "100")
+
+
+def _implausible_pair(before: float, after: float) -> bool:
+    """Are these two numbers too far apart to be measurements of the SAME work?
+
+    A per-op eager total cannot legitimately move by two orders of magnitude; when it appears to, the
+    anchor is from a different run, depth, or model. llama3_1_8b_p150 rendered
+    `0.06 ms -> 648.17 ms (-1062476.1%, 0.00x)` -- arithmetic performed faithfully on an anchor that
+    belonged to another run. Printing a number that large is never informative, and it reads as a
+    catastrophic regression rather than as the missing baseline it actually is.
+    """
+    if not before or not after or before <= 0 or after <= 0:
+        return False
+    hi, lo = max(before, after), min(before, after)
+    return (hi / lo) > _IMPLAUSIBLE_RATIO
 
 
 def _all_layers_label() -> str:
@@ -571,6 +599,13 @@ def render_summary(
         lines.append(
             "optimizing… — baseline->final speedup is finalized when the module converges (per-attempt detail below is live)"
         )
+    elif hdr_base and final_ms and hdr_base > 0 and _implausible_pair(hdr_base, final_ms):
+        lines.append(
+            f"eager per-op device time ({_depth_label(baseline_profile)}):  {hdr_base:.2f} ms  ->  "
+            f"{final_ms:.2f} ms   — NOT COMPARABLE: these differ by more than "
+            f"{_IMPLAUSIBLE_RATIO:.0f}x, so the baseline is not a measurement of this run's work "
+            f"(stale or foreign anchor); no delta computed"
+        )
     elif hdr_base and final_ms and hdr_base > 0:
         # Say WHAT was measured and OVER HOW MUCH WORK, never a bare "baseline". These are tracy
         # per-op numbers from the EAGER pass over a capped window; the whole-model trace figure is a
@@ -580,16 +615,18 @@ def render_summary(
         pct = (hdr_base - final_ms) / hdr_base * 100.0
         spd = hdr_base / final_ms if final_ms > 0 else 1.0
         lines.append(
-            f"eager per-op device time ({_depth_label()}):  {hdr_base:.2f} ms  ->  {final_ms:.2f} ms"
+            f"eager per-op device time ({_depth_label(baseline_profile)}):  {hdr_base:.2f} ms  ->  {final_ms:.2f} ms"
             f"   ({pct:+.1f}%, {spd:.2f}x)"
         )
     elif hdr_base:
-        lines.append(f"eager per-op device time ({_depth_label()}):  {hdr_base:.2f} ms  ->  (no measured win recorded)")
+        lines.append(
+            f"eager per-op device time ({_depth_label(baseline_profile)}):  {hdr_base:.2f} ms  ->  (no measured win recorded)"
+        )
     else:
         lines.append("eager per-op device time: unavailable (no profile found)")
     _bl_trace = _baseline_trace_ms(baseline_profile)
     if _bl_trace:
-        lines.append(f"tracy trace pass, BASELINE, same window ({_depth_label()}):  {_bl_trace:.2f} ms")
+        lines.append(f"tracy trace pass, BASELINE, same window ({_depth_label(baseline_profile)}):  {_bl_trace:.2f} ms")
     _trace_scope = f"module ({task})" if os.environ.get("TT_PERF_MODULE_LEVEL") == "1" else "full-pipeline e2e"
     _all = _all_layers_label()
     _mode_ok = _same_measurement(before_mode, after_mode)
