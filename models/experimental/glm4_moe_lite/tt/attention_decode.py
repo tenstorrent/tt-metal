@@ -532,7 +532,11 @@ def flash_mla_and_output(
             v = ttnn.permute(v, (0, 2, 1, 3))
             v = ttnn.reshape(v, (1, batch, 1, flat_dim))
             v = ttnn.permute(v, (0, 2, 1, 3))
-        attn_out_partial = mlp_linear(v, w.w_o, device=device, cfg=cfg)
+        # TP decode path: an ordinary matmul, so it needs the interleaved copy when
+        # prefetch has made w_o DRAM-sharded. (Prefetch rejects TP up front, so this is
+        # belt-and-braces rather than a live combination.)
+        _w_o_tp = w.w_o_interleaved if getattr(w, "w_o_interleaved", None) is not None else w.w_o
+        attn_out_partial = mlp_linear(v, _w_o_tp, device=device, cfg=cfg)
         ttnn.deallocate(v, force=False)
         attn_out = ttnn.all_reduce(
             attn_out_partial,

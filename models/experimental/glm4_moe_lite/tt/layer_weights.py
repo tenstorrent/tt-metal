@@ -435,6 +435,13 @@ class DecoderLayerTTWeights:
     # Optional fused attention projection (q_a + kv_a) for one matmul.
     w_q_kv_a: Optional[ttnn.Tensor] = None
 
+    # Interleaved companion to w_o, populated ONLY when GlobalCB prefetch is on. In that
+    # mode w_o is DRAM-WIDTH_SHARDED for the ring matmul, which an ordinary matmul cannot
+    # consume ("Only L1 buffers can have an associated circular buffer"). Prefill runs on
+    # the full grid with an ordinary matmul, so it needs this copy. Costs ~11.1 MB/layer
+    # in bf8 (~522 MB across 47 layers, per device).
+    w_o_interleaved: Optional[ttnn.Tensor] = None
+
     # Optional fused gate+up projection for shared expert MLP (one matmul instead of two).
     w_mlp_gate_up: Optional[ttnn.Tensor] = None
 
@@ -804,6 +811,15 @@ def convert_decoder_layer_weights(
             cache_file=c("w_o", f"{attn_variant}_pfdram{len(prefetch_dram_cores)}x{prefetch_ring_cores}"),
             dtype=dense_dtype,
         )
+        # Prefill still needs an interleaved copy: it runs on the full grid with an
+        # ordinary matmul, which cannot consume the DRAM-sharded layout.
+        w_o_interleaved = _linear_weight_tt(
+            device=device,
+            torch_weight_out_in=_w_o_torch,
+            cache_file=c("w_o", attn_variant),
+            dtype=dense_dtype,
+            mesh_mapper=attn_row_mapper,
+        )
     else:
         w_o = _linear_weight_tt(
             device=device,
@@ -812,6 +828,7 @@ def convert_decoder_layer_weights(
             dtype=dense_dtype,
             mesh_mapper=attn_row_mapper,
         )
+        w_o_interleaved = None
     if _env_dram_sharded_attn():
         w_q_a = _maybe_dram_shard_linear_weight(w_q_a, device)
         w_q_b = _maybe_dram_shard_linear_weight(w_q_b, device)
@@ -1029,6 +1046,7 @@ def convert_decoder_layer_weights(
         w_kv_b1=w_kv_b1,
         w_kv_b2=w_kv_b2,
         w_o=w_o,
+        w_o_interleaved=w_o_interleaved,
         w_mlp_gate=w_mlp_gate,
         w_mlp_up=w_mlp_up,
         w_mlp_down=w_mlp_down,

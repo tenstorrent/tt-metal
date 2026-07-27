@@ -1052,12 +1052,17 @@ def run_decoder_layer_prefill_update_cache_tt(
     else:
         v = ttnn.permute(v, (0, 2, 1, 3))  # [B,S_pad,H,v_head_dim]
         v = ttnn.reshape(v, (1, 1, total_seq, int(num_heads * hparams.v_head_dim)))  # [1,1,B*S_pad,H*v_head_dim]
+    # Under GlobalCB prefetch, w_o is DRAM-WIDTH_SHARDED for the decode ring matmul and
+    # an ordinary matmul cannot consume it ("Only L1 buffers can have an associated
+    # circular buffer"). Prefill runs on the full grid with an ordinary matmul, so it
+    # takes the interleaved companion; w_o_interleaved is None when prefetch is off.
+    _w_o_prefill = w.w_o_interleaved if getattr(w, "w_o_interleaved", None) is not None else w.w_o
     if tp_enabled:
         attn_out = _tp_row_parallel_linear_from_replicated(
-            v, w.w_o
+            v, _w_o_prefill
         )  # [1,1,B*S_pad,hidden] — w_o stays row-parallel even with ATTN_DP
     else:
-        attn_out = _mlp_linear(v, w.w_o)  # [1,1,B*S_pad,hidden]
+        attn_out = _mlp_linear(v, _w_o_prefill)  # [1,1,B*S_pad,hidden]
     ttnn.deallocate(v, force=False)
 
     x_attn_out = residual + attn_out
