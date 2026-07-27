@@ -35,11 +35,10 @@ def pytest_addoption(parser):
         type=int,
         default=_DEFAULT_MAX_PREFILL,
         help=(
-            "Maximum prefill seq_len to run. Tests parametrized over "
-            "PREFILL_BUCKETS skip lengths above this cap; the demo skips "
-            "buckets above this cap in test_demo_prefill_lengths. Default: "
-            f"{_DEFAULT_MAX_PREFILL}. Set higher (up to 262144) to exercise "
-            "long-context kernels."
+            "Maximum prefill seq_len for unit-test PREFILL_BUCKETS and short "
+            f"demo buckets (test_demo / batch_prefill). Default: {_DEFAULT_MAX_PREFILL}. "
+            "Does not apply to test_demo_long_context / text_demo_v2 long-context-* "
+            "rows — select those with ``-k long-context-*``."
         ),
     )
 
