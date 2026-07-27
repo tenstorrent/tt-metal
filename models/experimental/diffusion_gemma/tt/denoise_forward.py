@@ -107,6 +107,7 @@ def build_device_canvas_reveal_mask(
     layer_type: str | None = None,
     sliding_window: int | None = None,
     enforce_sliding_window: bool = False,
+    hidden_prefix_span: tuple[int, int] | None = None,
     dtype=ttnn.bfloat16,
 ):
     """Build a constant-shape ``[1, 1, C, p_max + C]`` reveal mask on device (Phase 1).
@@ -123,6 +124,7 @@ def build_device_canvas_reveal_mask(
         layer_type=layer_type,
         sliding_window=sliding_window,
         enforce_sliding_window=enforce_sliding_window,
+        hidden_prefix_span=hidden_prefix_span,
         neg_inf=NEG,
         dtype=torch.float32,
     ).view(1, 1, canvas_len, p_max + canvas_len)
@@ -267,6 +269,40 @@ def sliding_read_offset(prompt_len: int, span: int, p_max: int) -> int:
     if lo % ttnn.TILE_SIZE != 0:
         raise ValueError(f"bounded sliding read offset must be tile aligned, got {lo}")
     return lo
+
+
+def hide_prefill_pads_enabled() -> bool:
+    """Whether the reveal mask hides the prefill pad slots (block-0 fidelity).
+
+    ``generate._pad_prompt_tokens_for_prefill`` right-pads the prompt to a tile multiple and prefill
+    writes K/V for those pad tokens, while the reveal predicate is evaluated with the PADDED length --
+    so the canvas attends up to 31 garbage keys sitting IMMEDIATELY before it, making its nearest
+    context noise. That is what destroys the thinking-template prefix at canvas positions 0-4, which
+    is the whole accept budget the first block bootstraps from.
+
+    Injecting the same geometry into the HF reference (seeded canvas, otherwise identical) takes it
+    from 18 denoise steps to the 48-step CAP on q096, and from 12/10 to 35/35 on q106/q095; hiding the
+    pads restores 20/12/11, i.e. baseline. See ``doc/decision_fidelity/device_gumbel_restored.md``
+    section 16.
+
+    Default OFF pending its device gate, since it is decision-changing for every prompt whose length
+    is not a 32-multiple. Prompts that ARE aligned have no pad slots, so the mask is unchanged there.
+    """
+    return os.environ.get("DG_DENOISE_HIDE_PREFILL_PADS", "0").lower() in ("1", "true", "yes", "on")
+
+
+def prefill_pad_span(true_prompt_len: int | None, padded_prompt_len: int | None):
+    """Prefix slots holding prefill pad tokens, ``[true_prompt_len, padded_prompt_len)``.
+
+    Returns ``None`` when there is nothing to hide -- the gate is off, the true length is unknown, or
+    the prompt was already tile-aligned -- so callers can pass the result straight through.
+    """
+    if not hide_prefill_pads_enabled() or true_prompt_len is None or padded_prompt_len is None:
+        return None
+    true_len, padded = int(true_prompt_len), int(padded_prompt_len)
+    if true_len <= 0 or true_len > padded:
+        raise ValueError(f"true_prompt_len {true_len} must be in (0, padded_prompt_len {padded}]")
+    return None if true_len == padded else (true_len, padded)
 
 
 def denoise_sliding_window_enabled() -> bool:
@@ -1322,6 +1358,7 @@ class DenoiseLogitsAdapter:
         self_conditioning_compute_kernel_config=None,
         q_rope_offset: int | None = None,
         prompt_len: int | None = None,
+        true_prompt_len: int | None = None,
         max_denoise_steps: int | None = None,
         temperature_start: float = 0.8,
         temperature_end: float = 0.4,
@@ -1367,6 +1404,9 @@ class DenoiseLogitsAdapter:
         self._reveal_p_max = None
         self._reveal_canvas_len = None
         self._reveal_enforce_window = False
+        # Prefill pad slots to hide, in ABSOLUTE prefix positions, so this stays fixed for the whole
+        # request while prompt_len grows by a canvas per committed block.
+        self._reveal_pad_span = prefill_pad_span(true_prompt_len, prompt_len)
         # TP-sharded denoise terminal (DG_TERMINAL_SHARDED). Persistent constants allocated OUTSIDE
         # any trace by ``prepare_sharded_terminal``: per-device vocab offset + vocab-row-sharded
         # tied embedding table. Default off keeps the full-vocab replicated terminal.
@@ -1557,6 +1597,12 @@ class DenoiseLogitsAdapter:
         if layer_type == "sliding_attention":
             sliding_window = _sliding_window_for_denoise(self.tt_model, self._sliding_reference_layer_idx())
             span = self._sliding_span()
+            if span is not None and getattr(self, "_reveal_pad_span", None) is not None:
+                raise NotImplementedError(
+                    "DG_DENOISE_HIDE_PREFILL_PADS with a bounded sliding span needs its own mask: the "
+                    "bounded read is built for (span, lo), so pad slots would have to be mapped into "
+                    "that window rather than hidden by absolute position"
+                )
             if span is not None:
                 # Bounded read: prefix column r maps to absolute lo + r, so the mask must be
                 # built for (span, lo) rather than the full p_max. lo is recomputed here from the
@@ -1578,6 +1624,7 @@ class DenoiseLogitsAdapter:
             layer_type=layer_type,
             sliding_window=sliding_window,
             enforce_sliding_window=self._reveal_enforce_window and layer_type == "sliding_attention",
+            hidden_prefix_span=getattr(self, "_reveal_pad_span", None),
         )
 
     def _sliding_reference_layer_idx(self) -> int:
@@ -1838,7 +1885,7 @@ class DenoiseLogitsAdapter:
         """Return True when ``logits`` is retained for next-step self-conditioning."""
         return self.prev_logits is logits
 
-    def rebind_prompt(self, prompt_len: int) -> None:
+    def rebind_prompt(self, prompt_len: int, *, true_prompt_len: int | None = None) -> None:
         """Bind a startup-captured reveal-mask trace to a newly prefetched request.
 
         The model-owned KV cache head has already been overwritten by the request prefill.
@@ -1864,6 +1911,9 @@ class DenoiseLogitsAdapter:
         resetter(prompt_len)
         self.prompt_len = prompt_len
         self.q_rope_offset = prompt_len
+        # A new request has its own pad count, so this must be recomputed BEFORE the mask refresh
+        # below rather than carried over from the previous request.
+        self._reveal_pad_span = prefill_pad_span(true_prompt_len, prompt_len)
         self.update_reveal_mask_buffer(prompt_len)
         self.update_canvas_rope_buffers(prompt_len)
         # A new request overwrote the cache head, so the bounded-window buffers hold the previous
@@ -1933,6 +1983,7 @@ def make_denoise_logits_adapter_from_kv_cache(
     self_conditioning_embedding_weight=None,
     self_conditioning_compute_kernel_config=None,
     q_rope_offset: int | None = None,
+    true_prompt_len: int | None = None,
     max_denoise_steps: int | None = None,
     temperature_start: float = 0.8,
     temperature_end: float = 0.4,
@@ -1956,6 +2007,7 @@ def make_denoise_logits_adapter_from_kv_cache(
         self_conditioning_compute_kernel_config=self_conditioning_compute_kernel_config,
         q_rope_offset=prompt_len if q_rope_offset is None else q_rope_offset,
         prompt_len=prompt_len,
+        true_prompt_len=true_prompt_len,
         max_denoise_steps=max_denoise_steps,
         temperature_start=temperature_start,
         temperature_end=temperature_end,
@@ -1974,6 +2026,7 @@ def make_denoise_logits_adapter_from_checkpoint_state(
     eps: float | None = None,
     seq_len_start: int = 0,
     q_rope_offset: int | None = None,
+    true_prompt_len: int | None = None,
     self_conditioning_dtype=ttnn.bfloat16,
     self_conditioning_compute_kernel_config=None,
     max_denoise_steps: int | None = None,
@@ -2012,6 +2065,7 @@ def make_denoise_logits_adapter_from_checkpoint_state(
         self_conditioning_embedding_weight=embedding_weight_tt,
         self_conditioning_compute_kernel_config=self_conditioning_compute_kernel_config,
         q_rope_offset=q_rope_offset,
+        true_prompt_len=true_prompt_len,
         max_denoise_steps=max_denoise_steps,
         temperature_start=temperature_start,
         temperature_end=temperature_end,
@@ -2057,10 +2111,17 @@ def make_generation_logits_fn_builder_from_remapped_state(
         page_table=None,
         page_tables_per_layer=None,
     ):
-        del prompt_tokens, page_table, page_tables_per_layer
+        del page_table, page_tables_per_layer
+        # prompt_tokens is the UNPADDED prompt, so its length is the true one; prompt_len here is the
+        # tile-aligned cache_len that prefill wrote.
+        # `prompt_tokens` used to be discarded here, so nothing ever constrained its type and
+        # callers/tests may pass a sentinel. Ask for a shape instead of assuming one.
+        prompt_shape = getattr(prompt_tokens, "shape", None)
+        true_prompt_len = int(prompt_shape[-1]) if prompt_shape is not None else None
         return adapter_builder(
             tt_model,
             prompt_len=prompt_len,
+            true_prompt_len=true_prompt_len,
             backbone_state=backbone_state,
             self_conditioning_state=self_conditioning_state,
             **adapter_kwargs,

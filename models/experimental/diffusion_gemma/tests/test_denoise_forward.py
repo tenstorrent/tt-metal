@@ -978,6 +978,10 @@ def test_make_denoise_logits_adapter_from_checkpoint_state_builds_full_adapter_i
     assert calls["adapter"][0] is model
     assert calls["adapter"][1] == {
         "prompt_len": 64,
+        # The prefill pad span rides down next to the PADDED prompt_len
+        # (DG_DENOISE_HIDE_PREFILL_PADS); None here because this builder is called without the
+        # unpadded prompt_tokens the true length would come from.
+        "true_prompt_len": None,
         "seq_len_start": 32,
         "self_conditioning": "self-conditioning",
         "self_conditioning_embedding_weight": "embedding-tt",
@@ -1082,6 +1086,7 @@ def test_make_generation_logits_fn_builder_from_remapped_state_matches_generate_
         "model",
         {
             "prompt_len": 64,
+            "true_prompt_len": None,
             "backbone_state": backbone_state,
             "self_conditioning_state": self_conditioning_state,
             "config": "config",

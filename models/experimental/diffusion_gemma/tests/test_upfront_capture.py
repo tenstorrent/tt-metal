@@ -149,7 +149,9 @@ def test_session_reset_detaches_borrowed_persistent_adapter_without_releasing_it
 
 def test_session_prefill_rebinds_injected_adapter_instead_of_building(monkeypatch):
     rebound = []
-    adapter = SimpleNamespace(rebind_prompt=lambda n: rebound.append(n))
+    # rebind_prompt now also takes the request's TRUE prompt length, so the reveal mask can hide
+    # that request's prefill pad slots instead of carrying the previous request's span.
+    adapter = SimpleNamespace(rebind_prompt=lambda n, *, true_prompt_len=None: rebound.append(n))
     session = object.__new__(serving.BlockDiffusionServingSession)
     session.tt_model = SimpleNamespace()
     session.page_table = None

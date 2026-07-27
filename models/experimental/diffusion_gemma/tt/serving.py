@@ -343,7 +343,7 @@ class BlockDiffusionServingSession:
         self.prefill_reused = bool(plan is not None and plan.reuse)
         if self._persistent_adapter is not None:
             logger.info(f"DG_UPFRONT_MARK rebind_begin cache_len={cache_len}")
-            self._persistent_adapter.rebind_prompt(cache_len)
+            self._persistent_adapter.rebind_prompt(cache_len, true_prompt_len=prompt_len)
             logger.info(f"DG_UPFRONT_MARK rebind_end cache_len={cache_len}")
             self._logits_fn = self._persistent_adapter
         else:
