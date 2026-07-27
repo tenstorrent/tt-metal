@@ -80,6 +80,127 @@ constexpr bool can_use_fast_tilize() {
 }
 
 // =============================================================================
+// StreamMode::PerTile implementation (used by tilize() when stream_mode == PerTile)
+// =============================================================================
+//
+// Packs + push_back one output tile at a time so the OUTPUT DFB can be a small (~2-tile)
+// double-buffer. Bit-identical tiled bytes to the atomic path — this is only a different
+// output-CB flow-control granularity. Kept in a detail namespace so tilize() has a single
+// public entry point; the atomic body of tilize() is left untouched.
+namespace tilize_stream_detail {
+
+// Unpack-and-tilize a SINGLE tile out of a block_ct_dim-wide row-major stripe.
+// The row stride is arch-divergent: on Blackhole it is baked into the unpacker's
+// address generator by tilize_init() and NOT passed per call (2-arg); on Wormhole
+// it must be passed on every call (3-arg). Either way the stride stays the full
+// row width so tile_index selects the correct column-tile.
+#ifndef ARCH_QUASAR
+ALWI void unpack_tilize_one_tile(uint32_t icb, uint32_t tile_index, uint32_t block_ct_dim) {
+#ifdef ARCH_BLACKHOLE
+    (void)block_ct_dim;
+    UNPACK((llk_unpack_tilize(icb, tile_index)));
+#else
+    UNPACK((llk_unpack_tilize(icb, tile_index, block_ct_dim)));
+#endif
+}
+#endif  // !ARCH_QUASAR
+
+template <
+    uint32_t block_width_tiles,
+    uint32_t input_dfb,
+    uint32_t output_dfb,
+    tilize_config::InitUninitMode init_uninit_mode,
+    tilize_config::WaitMode wait_mode,
+    tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode>
+ALWI void run(uint32_t num_blocks, std::optional<uint32_t> total_input_pages) {
+#ifdef ARCH_QUASAR
+    // Dependent-false: fires only when PerTile streaming is actually instantiated on Quasar,
+    // not merely by parsing this header. Quasar has no proven tile-granular tilize path.
+    static_assert(input_dfb == 0xFFFFFFFFu, "StreamMode::PerTile is not supported on Quasar; use StreamMode::Atomic.");
+    (void)num_blocks;
+    (void)total_input_pages;
+#else
+    // Streaming supports symmetric tile-sized pages only (no asymmetric total_input_pages).
+    ASSERT(!total_input_pages.has_value());
+
+    constexpr bool use_unpack_reconfig =
+        (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure) ||
+        (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure);
+    constexpr bool use_pack_reconfig =
+        (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::PackReconfigure) ||
+        (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure);
+
+    // Tilize input must not be a block float format (see tilize()).
+    UNPACK(ASSERT(!is_block_float_format(unpack_src_format[input_dfb])));
+
+    // Streaming always takes the regular (non-fast) tilize path — the fast path is not
+    // tile-granular. So only srcA is used; reconfigure srcA/pack accordingly.
+    if constexpr (use_unpack_reconfig) {
+        reconfig_data_format_srca(input_dfb);
+    }
+    if constexpr (use_pack_reconfig) {
+        pack_reconfig_data_format(output_dfb);
+    }
+
+    // tilize_init bakes ROW STRIDE == block_width_tiles into the unpacker address
+    // generator ONCE (kept by every per-tile llk_unpack_tilize call below).
+    if constexpr (
+        init_uninit_mode == tilize_config::InitUninitMode::InitAndUninit ||
+        init_uninit_mode == tilize_config::InitUninitMode::InitOnly) {
+        tilize_init(input_dfb, block_width_tiles, output_dfb);
+    }
+
+    // The input DFB must hold the full row-major stripe; the output DFB needs only a
+    // single reserved tile at a time (2 recommended for double-buffering).
+    UNPACK(ASSERT(get_dfb_num_pages(input_dfb) >= block_width_tiles));
+    PACK(ASSERT(get_dfb_num_pages(output_dfb) >= 1));
+
+    DataflowBuffer in_dfb(input_dfb);
+    DataflowBuffer out_dfb(output_dfb);
+
+    if constexpr (wait_mode == tilize_config::WaitMode::WaitUpfront) {
+        in_dfb.wait_front(block_width_tiles * num_blocks);
+    }
+
+    for (uint32_t block = 0; block < num_blocks; ++block) {
+        if constexpr (wait_mode == tilize_config::WaitMode::WaitBlock) {
+            in_dfb.wait_front(block_width_tiles);
+        }
+
+        // Pack one tile at a time into a freshly reserved 1-tile output slot.
+        for (uint32_t k = 0; k < block_width_tiles; ++k) {
+            out_dfb.reserve_back(1);
+
+            unpack_tilize_one_tile(input_dfb, k, block_width_tiles);
+
+            MATH((llk_math_wait_for_dest_available()));
+            MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
+                0 /*dst index*/, input_dfb)));
+            MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+
+            PACK((llk_packer_wait_for_math_done()));
+            PACK((llk_pack<DST_ACCUM_MODE, true /*out_of_order*/, PackMode::Default>(
+                0 /*tile index*/, output_dfb, 0 /*output tile index*/)));
+            PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+
+            out_dfb.push_back(1);
+        }
+
+        // Deferred pop: the block base must stay fixed across the whole unpack loop.
+        in_dfb.pop_front(block_width_tiles);
+    }
+
+    if constexpr (
+        init_uninit_mode == tilize_config::InitUninitMode::InitAndUninit ||
+        init_uninit_mode == tilize_config::InitUninitMode::UninitOnly) {
+        tilize_uninit(input_dfb, output_dfb);
+    }
+#endif  // ARCH_QUASAR
+}
+
+}  // namespace tilize_stream_detail
+
+// =============================================================================
 // Main Function Implementation
 // =============================================================================
 
@@ -91,7 +212,8 @@ template <
     tilize_config::WaitMode wait_mode,
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode,
     tilize_config::Fp32Mode fp32_mode,
-    tilize_config::RemapMode remap_mode>
+    tilize_config::RemapMode remap_mode,
+    tilize_config::StreamMode stream_mode>
 ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages) {
     // Compile-time validation
     static_assert(block_width_tiles > 0, "block_width_tiles must be greater than 0");
@@ -101,6 +223,16 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
 
     // Runtime parameter validation
     ASSERT(num_blocks > 0);
+
+    // StreamMode::PerTile — pack + push_back one output tile at a time so the OUTPUT DFB can be a
+    // small double-buffer (~2 tiles) instead of a full W-wide tile-row. Produces BIT-IDENTICAL tiled
+    // bytes to the atomic path (same regular-tilize LLK datapath). Dispatched here as an early return;
+    // the atomic body below is left exactly as-is. See tilize_stream_detail::run for the mechanics.
+    if constexpr (stream_mode == tilize_config::StreamMode::PerTile) {
+        tilize_stream_detail::run<block_width_tiles, input_dfb, output_dfb, init_uninit_mode, wait_mode, reconfig_mode>(
+            num_blocks, total_input_pages);
+        return;
+    }
 
     // Determine if we're using fast tilize mode (automatic detection based on tile size, sync mode, and data format).
     // Fp32Mode::Lossless disables fast tilize only for fp32 inputs to preserve exact values
