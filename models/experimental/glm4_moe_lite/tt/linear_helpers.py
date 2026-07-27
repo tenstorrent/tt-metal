@@ -22,6 +22,11 @@ from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfi
 # be clamped without importing the prefetcher module on the hot path.
 WORKER_GRID_X = 6
 
+# SDPA runs on a narrower slice: columns 0-3 only. The prefetcher's GlobalCB occupies
+# ~696 KB of L1 on the receiver cores (columns 4-5), and SDPA's circular buffers do not
+# fit alongside it -- see the note at its construction in attention_decode.
+SDPA_GRID_X = 4
+
 # Memoised worker CoreRangeSets, keyed by device grid. Built once per grid shape rather
 # than per call: the decode path asks for this at ~30 sites x 47 layers per token.
 _WORKER_SCG_CACHE: dict[tuple[int, int], Any] = {}
@@ -146,6 +151,12 @@ def mlp_linear(
             kwargs["program_config"] = compute_1d_prog_cfg(
                 device, b, m_total, max_grid_x=WORKER_GRID_X if cfg.prefetch else None
             )
+    if cfg.prefetch and "program_config" not in kwargs:
+        # No explicit program config (batched weights like the per-head w_kv_b1, where
+        # b_batch > 1) means ttnn picks its own grid -- which is the full device grid and
+        # so is rejected by the worker SubDevice. core_grid confines it instead.
+        grid = device.compute_with_storage_grid_size()
+        kwargs["core_grid"] = ttnn.CoreGrid(y=int(grid.y), x=min(WORKER_GRID_X, int(grid.x)))
     return ttnn.linear(a, b, **kwargs)
 
 

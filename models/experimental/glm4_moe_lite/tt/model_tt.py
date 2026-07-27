@@ -353,10 +353,14 @@ class Glm4MoeLiteDenseOnlyTT:
 
             if os.environ.get("GLM4_MOE_LITE_TP", "").strip() == "1":
                 raise ValueError("GLM4_MOE_LITE_PREFETCH is incompatible with TP (w_o must be replicated).")
+            # GLM4_MOE_LITE_PREFETCH_CB_TILES is a diagnostic override for L1-budget
+            # experiments; the real size is derived from the prefetched weight.
+            _cb_tiles = int(os.environ.get("GLM4_MOE_LITE_PREFETCH_CB_TILES", "0").strip() or "0") or None
             prefetcher = Glm4MoeLitePrefetcherSetup(
                 device,
                 n_tensors_per_layer=1,  # w_o only; see prefetcher_setup.ring_feasibility
                 n_layers=num_layers_to_run,
+                global_cb_tiles=_cb_tiles,
             )
             logger.info("GLM prefetch enabled: o_proj via {}-core ring", prefetcher.RING_CORES)
 

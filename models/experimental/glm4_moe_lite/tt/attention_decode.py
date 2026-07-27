@@ -21,6 +21,7 @@ import torch
 import ttnn
 from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 from models.experimental.glm4_moe_lite.tt.linear_helpers import (
+    SDPA_GRID_X,
     attn_linear,
     mlp_linear,
     tp_row_parallel_linear,
@@ -41,9 +42,15 @@ def _safe_slice(
     ends: list[int],
     *,
     skip_clones: bool,
+    sub_core_grids: Any | None = None,
 ) -> ttnn.Tensor:
-    """Slice with optional defensive clone to avoid aliasing bugs."""
-    result = ttnn.slice(tensor, starts, ends)
+    """Slice with optional defensive clone to avoid aliasing bugs.
+
+    sub_core_grids confines the slice to the GlobalCB prefetcher's worker cores; None
+    (the default) keeps full-grid behaviour. ttnn.slice already supports this, unlike
+    permute -- see linear_helpers.worker_sub_core_grids.
+    """
+    result = ttnn.slice(tensor, starts, ends, sub_core_grids=sub_core_grids)
     if not skip_clones:
         cloned = ttnn.clone(result, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return cloned
@@ -103,13 +110,18 @@ def kv_cache_update(
         if w_q_kv_a is not None:
             qkv = attn_linear(x, w_q_kv_a, device=device, cfg=cfg, force_no_tp=cfg.attn_dp)
             q_a = _safe_slice(
-                qkv, [0, 0, 0, 0], [1, 1, batch, int(hparams.q_lora_rank)], skip_clones=cfg.skip_defensive_clones
+                qkv,
+                [0, 0, 0, 0],
+                [1, 1, batch, int(hparams.q_lora_rank)],
+                skip_clones=cfg.skip_defensive_clones,
+                sub_core_grids=worker_sub_core_grids(device, cfg),
             )
             kv = _safe_slice(
                 qkv,
                 [0, 0, 0, int(hparams.q_lora_rank)],
                 [1, 1, batch, int(hparams.q_lora_rank) + kvpe_dim],
                 skip_clones=cfg.skip_defensive_clones,
+                sub_core_grids=worker_sub_core_grids(device, cfg),
             )
             if not cfg.skip_defensive_clones:
                 ttnn.deallocate(qkv, force=False)
@@ -118,10 +130,18 @@ def kv_cache_update(
             kv = attn_linear(x, w.w_kv_a, device=device, cfg=cfg, force_no_tp=cfg.attn_dp)
 
         kv_nope = _safe_slice(
-            kv, [0, 0, 0, 0], [1, 1, batch, int(hparams.kv_lora_rank)], skip_clones=cfg.skip_defensive_clones
+            kv,
+            [0, 0, 0, 0],
+            [1, 1, batch, int(hparams.kv_lora_rank)],
+            skip_clones=cfg.skip_defensive_clones,
+            sub_core_grids=worker_sub_core_grids(device, cfg),
         )
         kv_rope = _safe_slice(
-            kv, [0, 0, 0, int(hparams.kv_lora_rank)], [1, 1, batch, kvpe_dim], skip_clones=cfg.skip_defensive_clones
+            kv,
+            [0, 0, 0, int(hparams.kv_lora_rank)],
+            [1, 1, batch, kvpe_dim],
+            skip_clones=cfg.skip_defensive_clones,
+            sub_core_grids=worker_sub_core_grids(device, cfg),
         )
         if not cfg.skip_defensive_clones and kv is not None:
             ttnn.deallocate(kv, force=False)
@@ -145,7 +165,7 @@ def kv_cache_update(
         if kv is not None:
             ttnn.deallocate(kv, force=False)
 
-        kvpe_new = ttnn.concat([kv_nope, kv_rope], dim=-1)
+        kvpe_new = ttnn.concat([kv_nope, kv_rope], dim=-1, sub_core_grids=worker_sub_core_grids(device, cfg))
         ttnn.deallocate(kv_nope, force=False)
         ttnn.deallocate(kv_rope, force=False)
 
@@ -282,12 +302,14 @@ def q_projection(
         [0, 0, 0, 0],
         [1, int(hparams.num_attention_heads), batch, int(hparams.qk_nope_head_dim)],
         skip_clones=cfg.skip_defensive_clones,
+        sub_core_grids=worker_sub_core_grids(device, cfg),
     )
     q_rope = _safe_slice(
         q,
         [0, 0, 0, int(hparams.qk_nope_head_dim)],
         [1, int(hparams.num_attention_heads), batch, int(hparams.qk_head_dim)],
         skip_clones=cfg.skip_defensive_clones,
+        sub_core_grids=worker_sub_core_grids(device, cfg),
     )
     if not cfg.skip_defensive_clones:
         ttnn.deallocate(q, force=False)
@@ -321,7 +343,9 @@ def q_projection(
     if q is not None:
         ttnn.deallocate(q, force=False)
 
-    q_kvpe = ttnn.concat([q_nope, q_rope], dim=-1)  # [1,H,B,kvpe_dim]
+    q_kvpe = ttnn.concat(
+        [q_nope, q_rope], dim=-1, sub_core_grids=worker_sub_core_grids(device, cfg)
+    )  # [1,H,B,kvpe_dim]
     ttnn.deallocate(q_nope, force=False)
     ttnn.deallocate(q_rope, force=False)
 
@@ -370,20 +394,48 @@ def flash_mla_and_output(
     else:
         scale = float(int(hparams.qk_head_dim) ** -0.5)
 
+    # Under the GlobalCB prefetcher, SDPA must be confined to the worker SubDevice.
+    # SDPAProgramConfig carries sub_core_grids for exactly this; the grid size it is
+    # given must shrink to match, or the kernel group still spans the sender columns.
+    _dev_grid = device.compute_with_storage_grid_size()
+    if cfg.prefetch:
+        # SDPA is confined to columns 0-3, NOT the full worker range 0-5, deliberately.
+        # The GlobalCB is 696 KB of L1 on the receiver cores, which are columns 4-5 --
+        # inside the worker SubDevice. Running SDPA there too overflows L1:
+        #   "Statically allocated circular buffers clash with L1 buffers on [(0,0)-(5,8)];
+        #    L1 buffer at 705248, static circular buffer region ends at 1176928"
+        # Shrinking k_chunk_size only got the CBs to 1033568, still ~330 KB over. Keeping
+        # SDPA off the receiver columns gives it the full L1 per core instead.
+        _sdpa_x = min(SDPA_GRID_X, int(_dev_grid.x))
+        _sdpa_grid = ttnn.CoreCoord(_sdpa_x, int(_dev_grid.y))
+        _sdpa_scg = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_sdpa_x - 1, int(_dev_grid.y) - 1))]
+        )
+    else:
+        _sdpa_grid = _dev_grid
+        _sdpa_scg = None
     sdpa_program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        compute_with_storage_grid_size=_sdpa_grid,
+        sub_core_grids=_sdpa_scg,
         q_chunk_size=0,
         k_chunk_size=cfg.mla_k_chunk_size,
         exp_approx_mode=False,
     )
     compute_kernel_config = cfg.mla_compute_kernel_config()
     flash_mla_memcfg = ttnn.DRAM_MEMORY_CONFIG
-    grid_size = device.compute_with_storage_grid_size()
+    # One user per core, so the cap shrinks with the confined grid too.
+    grid_size = _sdpa_grid
     max_sdpa_users = int(grid_size.x) * int(grid_size.y)
     q_is_sharded = False
 
-    # Optional Q sharding
-    if cfg.shard_q and batch <= max_sdpa_users:
+    # Optional Q sharding.
+    #
+    # Forced under prefetch: SDPA's sub_core_grids path requires a sharded Q or output
+    # ("is_q_sharded || is_output_sharded", sdpa_decode_program_factory.cpp:258), and
+    # sub_core_grids is in turn required to keep SDPA inside the worker SubDevice. The
+    # shard is laid out over `grid_size`, which is already the confined grid above, so
+    # it lands inside worker columns 0-5.
+    if (cfg.shard_q or cfg.prefetch) and batch <= max_sdpa_users:
         num_cores = int(grid_size.x) * int(grid_size.y)
         height = batch * num_heads
         tiles_h = max(1, (height + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE)
@@ -485,7 +537,7 @@ def flash_mla_and_output(
                 ttnn.deallocate(q_chunk, force=False)
                 ttnn.deallocate(page_table_chunk, force=False)
                 ttnn.deallocate(positions_chunk, force=False)
-            attn_latent = ttnn.concat(chunks, dim=1)
+            attn_latent = ttnn.concat(chunks, dim=1, sub_core_grids=worker_sub_core_grids(device, cfg))
             for chunk in chunks:
                 ttnn.deallocate(chunk, force=False)
         if v_cache is not None:
@@ -512,6 +564,7 @@ def flash_mla_and_output(
         [0, 0, 0, 0],
         [1, batch, num_heads, int(hparams.kv_lora_rank)],
         skip_clones=cfg.skip_defensive_clones,
+        sub_core_grids=worker_sub_core_grids(device, cfg),
     )
     if not cfg.skip_defensive_clones:
         ttnn.deallocate(attn_latent_padded, force=False)
