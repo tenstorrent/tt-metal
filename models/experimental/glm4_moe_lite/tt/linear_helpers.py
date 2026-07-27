@@ -17,6 +17,11 @@ from typing import Any
 import ttnn
 from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig
 
+# Width of the GlobalCB prefetcher's worker SubDevice (columns 0-5 of the 8x9 grid).
+# Matches prefetcher_setup.get_glm_core_ranges; kept here so matmul program configs can
+# be clamped without importing the prefetcher module on the hot path.
+WORKER_GRID_X = 6
+
 
 def compute_1d_prog_cfg(
     device: Any,
@@ -24,8 +29,17 @@ def compute_1d_prog_cfg(
     m_total: int,
     *,
     in0_block_w: int | None = None,
+    max_grid_x: int | None = None,
 ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
-    """Compute 1D multicast program config for decode matmuls (M <= 1 tile)."""
+    """Compute 1D multicast program config for decode matmuls (M <= 1 tile).
+
+    max_grid_x: clamp the grid's width. Required under the GlobalCB prefetcher's worker
+      SubDevice (columns 0-5): this config is otherwise derived from the FULL device grid
+      (8x9 on Galaxy), so the resulting kernel group spills onto the sender columns and
+      every such matmul fails with
+          TT_FATAL: Kernel group cores do not match sub device cores for TENSIX
+      Clamping to 6 keeps the grid inside the worker rectangle.
+    """
     K = int(b_weight.shape[-2])
     N = int(b_weight.shape[-1])
     m_tiles = max(1, (m_total + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE)
@@ -33,6 +47,8 @@ def compute_1d_prog_cfg(
     n_tiles = (N + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
     grid = device.compute_with_storage_grid_size()
     grid_x, grid_y = int(grid.x), int(grid.y)
+    if max_grid_x is not None:
+        grid_x = min(grid_x, int(max_grid_x))
     num_cores = grid_x * grid_y
 
     if n_tiles < grid_x:
@@ -99,7 +115,11 @@ def mlp_linear(
         for i in range(len(b.shape) - 2):
             b_batch *= int(b.shape[i])
         if m_total <= ttnn.TILE_SIZE and b_batch == 1:
-            kwargs["program_config"] = compute_1d_prog_cfg(device, b, m_total)
+            # WORKER_GRID_X when prefetch is on: the prefetcher's worker SubDevice is
+            # columns 0-5, and an unclamped grid spills onto the sender columns.
+            kwargs["program_config"] = compute_1d_prog_cfg(
+                device, b, m_total, max_grid_x=WORKER_GRID_X if cfg.prefetch else None
+            )
     return ttnn.linear(a, b, **kwargs)
 
 

@@ -26,12 +26,20 @@ _SHARDED_NORM = os.environ.get("GLM4_MOE_LITE_SHARDED_NORM", "1").strip() != "0"
 _NORM_L1 = os.environ.get("GLM4_MOE_LITE_NORM_L1", "1").strip() == "1"
 
 
-def _maybe_sharded_norm(x, norm_module, mode: str, hidden_size: int, num_cores: int = 8):
+def _maybe_sharded_norm(x, norm_module, mode: str, hidden_size: int, num_cores: int = 8, worker_core_grid=None):
     """Width-sharded multi-core RMSNorm for decode (speed play; ported from glm4_moe/REAP).
 
     Flash's hidden_size fits single-core, so this is opt-in via GLM4_MOE_LITE_SHARDED_NORM=1
     (default off -> the module's normal single-core path, unchanged behaviour). Spreads the
     norm across `num_cores` to parallelise, at the cost of a shard/unshard round trip.
+
+    worker_core_grid: (gx, gy) to confine the shard to a rectangle anchored at origin.
+      Needed under the GlobalCB prefetcher's worker SubDevice: the default layout is a
+      1 x num_cores ROW at y=0, which for num_cores=8 spans x=0..7 and so lands on the
+      sender columns (6, 7), producing
+          TT_FATAL: Kernel group cores do not match sub device cores for TENSIX
+      Passing (4, 2) keeps all 8 cores inside worker columns 0-5, so the 8-way
+      parallelism -- and the ~4% decode win it buys -- survives the SubDevice split.
     """
     if not _SHARDED_NORM:
         return norm_module(x, mode=mode)
@@ -39,19 +47,32 @@ def _maybe_sharded_norm(x, norm_module, mode: str, hidden_size: int, num_cores: 
     h_logical = int(x.shape[-2])
     h = ((h_logical + 31) // 32) * 32
     tiles_w_total = hidden_size // 32
-    while num_cores > 1 and tiles_w_total % num_cores != 0:
-        num_cores -= 1
+    if worker_core_grid is not None:
+        gx, gy = int(worker_core_grid[0]), int(worker_core_grid[1])
+        num_cores = gx * gy
+        if tiles_w_total % num_cores != 0:
+            raise ValueError(
+                f"worker_core_grid {(gx, gy)} gives {num_cores} cores, which does not divide "
+                f"{tiles_w_total} width tiles for hidden_size={hidden_size}"
+            )
+        grid_dims = [gx, gy]
+        core_hi = ttnn.CoreCoord(gx - 1, gy - 1)
+    else:
+        while num_cores > 1 and tiles_w_total % num_cores != 0:
+            num_cores -= 1
+        grid_dims = [num_cores, 1]
+        core_hi = ttnn.CoreCoord(num_cores - 1, 0)
     tile_h = h // 32
     tiles_per_core = tiles_w_total // num_cores
     subblock_w = 4
     while subblock_w > 1 and tiles_per_core % subblock_w != 0:
         subblock_w -= 1
     shard_w = hidden_size // num_cores
-    core_range = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))])
+    core_range = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), core_hi)])
     shard_spec = ttnn.ShardSpec(core_range, [h, shard_w], ttnn.ShardOrientation.ROW_MAJOR)
     sharded_mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
     program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[num_cores, 1],
+        compute_with_storage_grid_size=grid_dims,
         subblock_w=subblock_w,
         block_h=tile_h,
         block_w=tiles_per_core,
@@ -538,12 +559,18 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             t = ttnn.permute(t, (0, 2, 1, 3))
             return t
 
+    # Under the GlobalCB prefetcher every decode op must fit inside worker columns 0-5,
+    # so the sharded norm needs a rectangle that avoids the sender columns.
+    _norm_grid = prefetch.norm_core_grid if prefetch is not None else None
+
     # ---- Input LayerNorm ----
     if use_signpost:
         signpost(f"L{layer_idx}_attn-start")
     residual = x_embed_tok
     t0 = time.perf_counter() if profile is not None else 0.0
-    x = _maybe_sharded_norm(x_embed_tok, w.input_layernorm, "decode", int(hparams.hidden_size))
+    x = _maybe_sharded_norm(
+        x_embed_tok, w.input_layernorm, "decode", int(hparams.hidden_size), worker_core_grid=_norm_grid
+    )
     _profile_add(profile, "norm_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     # ---- KV Cache Update ----
@@ -637,7 +664,9 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         signpost(f"L{layer_idx}_moe-start")
     residual = x_attn_out
     t0 = time.perf_counter() if profile is not None else 0.0
-    x = _maybe_sharded_norm(x_attn_out, w.post_attention_layernorm, "decode", int(hparams.hidden_size))
+    x = _maybe_sharded_norm(
+        x_attn_out, w.post_attention_layernorm, "decode", int(hparams.hidden_size), worker_core_grid=_norm_grid
+    )
     _profile_add(profile, "mlp_norm_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     use_moe = moe_runtime is not None and getattr(w, "moe", None) is not None

@@ -190,8 +190,11 @@ class Glm4MoeLitePrefetcherSetup:
 
         # Worker grids for re-gridding decode ops once the SubDevice is active.
         self.worker_scg = self.worker_core_range_set
-        # hidden=2048 = 64 tiles; the committed sharded norm uses 8 cores.
-        self.norm_core_range = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))])
+        # Sharded RMSNorm grid, as (gx, gy). hidden=2048 = 64 tiles across 8 cores.
+        # Must be a rectangle inside worker columns 0-5: the norm's default layout is a
+        # 1x8 ROW at y=0, which spans x=0..7 and lands on the sender columns (6, 7).
+        # 4x2 keeps all 8 cores in columns 0-3, preserving the 8-way parallelism.
+        self.norm_core_grid = (4, 2)
 
         self.prefetcher_sub_device_id = ttnn.SubDeviceId(0)
         self.worker_sub_device_id = ttnn.SubDeviceId(1)

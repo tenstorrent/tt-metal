@@ -45,16 +45,50 @@ def run_tt_embedding(
     token_ids: torch.Tensor,
     tt_weight: ttnn.Tensor,
     output_layout: ttnn.Layout = ttnn.TILE_LAYOUT,
+    host_weight: Optional[torch.Tensor] = None,
 ) -> ttnn.Tensor:
     """
     Run embedding lookup on TT.
 
     token_ids:
       torch int32/64 tensor on CPU, shape [B, S] (or [S]).
+
+    host_weight:
+      When provided, the lookup is done on the HOST and only the gathered rows are
+      uploaded, instead of running `ttnn.embedding` on device.
+
+      This exists for the GlobalCB prefetch path. Once the prefetcher's SubDevice
+      manager is loaded, every device op must fit inside worker columns 0-5, and
+      `ttnn.embedding` over the full 154880-row vocab spreads across the whole grid:
+
+          TT_FATAL: Kernel group cores do not match sub device cores for TENSIX
+          program.cpp: num_intersections == num_cores
+
+      `ttnn.embedding` exposes no core_grid / sub_core_grids argument, so it cannot be
+      confined -- hence the host gather. The uploaded payload is tiny at decode
+      (batch x hidden, ~4 KB at batch=1) and the caller already sends token ids from
+      host each step, so this adds no meaningful traffic.
     """
     if token_ids.ndim == 1:
         token_ids = token_ids.unsqueeze(0)
     assert token_ids.ndim == 2, f"expected [B,S] token ids, got shape={tuple(token_ids.shape)}"
+
+    if host_weight is not None:
+        ids = token_ids.to(dtype=torch.long)
+        if (ids < 0).any():
+            raise ValueError("token_ids must be non-negative for embedding lookup")
+        # [B,S] -> [1,1,B*S,hidden], matching ttnn.embedding's output shape.
+        rows = host_weight[ids.reshape(-1)]
+        rows = rows.reshape(1, 1, int(ids.numel()), int(host_weight.shape[-1]))
+        is_mesh = device.__class__.__name__ == "MeshDevice"
+        return ttnn.from_torch(
+            rows,
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=output_layout,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh else None,
+        )
 
     # embedding expects non-negative indices.
     if token_ids.dtype != torch.int32:

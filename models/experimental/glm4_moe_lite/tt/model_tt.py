@@ -37,6 +37,7 @@ from models.experimental.glm4_moe_lite.tt.layer_weights import (
     _linear_weight_tt,
     convert_decoder_layer_weights,
 )
+from models.experimental.glm4_moe_lite.tt.linear_helpers import WORKER_GRID_X
 from models.experimental.glm4_moe_lite.tt.tt_embedding import convert_embedding_weight_to_tt, run_tt_embedding
 from models.experimental.glm4_moe_lite.tt.weights import LazyStateDict, load_glm_lazy_state_dict
 
@@ -234,6 +235,10 @@ class Glm4MoeLiteDenseOnlyTT:
     # SubDevice manager itself is NOT loaded here -- ensure_ready() defers that until
     # after prefill, which needs the full grid.
     prefetcher: Any | None = None
+    # Host copy of the embedding weight, retained ONLY under prefetch. ttnn.embedding
+    # cannot be confined to the worker SubDevice (no core_grid argument), so the decode
+    # lookup moves to the host. ~634 MB of host RAM for the bf16 154880x2048 table.
+    embed_w_host: Any | None = None
 
     @classmethod
     def create(
@@ -255,12 +260,15 @@ class Glm4MoeLiteDenseOnlyTT:
         state = load_glm_lazy_state_dict(snapshot_dir, num_layers=int(hparams.num_hidden_layers))
 
         embed_cache = cache_dir / "embed_w"
+        _embed_w_torch = state["model.embed_tokens.weight"]
         embed_w = convert_embedding_weight_to_tt(
             device=device,
-            embed_weight=state["model.embed_tokens.weight"],
+            embed_weight=_embed_w_torch,
             cache_file_name=embed_cache,
             dtype=ttnn.bfloat16,
         )
+        # Under prefetch the decode embedding is looked up on host (see run_tt_embedding).
+        embed_w_host = _embed_w_torch if os.environ.get("GLM4_MOE_LITE_PREFETCH", "").strip() == "1" else None
 
         # Shared RoPE cache across all layers.
         rope = make_rope_tensors(
@@ -469,6 +477,7 @@ class Glm4MoeLiteDenseOnlyTT:
             enable_moe=enable_moe,
             moe_runtime=moe_runtime,
             prefetcher=prefetcher,
+            embed_w_host=embed_w_host,
             batch_expand=os.environ.get("GLM4_MOE_LITE_BATCH_EXPAND", "").strip() == "1",
             mtp_enabled=mtp_enabled,
             mtp_enorm=mtp_enorm,
@@ -1304,7 +1313,9 @@ class Glm4MoeLiteDenseOnlyTT:
             # Debug-only: skip KV cache update + all decoder layers and return
             # logits from (embed -> final_norm -> lm_head) only. This is useful
             # for isolating nondeterminism in low-level matmul/readback paths.
-            x = run_tt_embedding(device=self.device, token_ids=tokens, tt_weight=self.embed_w)
+            x = run_tt_embedding(
+                device=self.device, token_ids=tokens, tt_weight=self.embed_w, host_weight=self.embed_w_host
+            )
             if x.layout != ttnn.TILE_LAYOUT:
                 x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
             x = ttnn.reshape(x, (1, active, 1, int(self.hparams.hidden_size)))
@@ -1434,8 +1445,17 @@ class Glm4MoeLiteDenseOnlyTT:
         # and only enable decode-mode when tracing (or explicitly requested).
         grid_size = self.device.compute_with_storage_grid_size()
         max_decode_rope_users = int(grid_size.x) * int(grid_size.y)
+        if self.prefetcher is not None:
+            # Only the sharded decode-mode RoPE can be confined to the worker SubDevice.
+            # The interleaved fallback (rotary_embedding_llama with is_decode_mode=False)
+            # takes the full grid and asserts, so force the decode path under prefetch --
+            # including in the eager warmup, which is called with enable_trace=False.
+            # The user cap also shrinks: worker columns 0-5, not the full 8x9 grid.
+            max_decode_rope_users = WORKER_GRID_X * int(grid_size.y)
         use_decode_rope = (
-            enable_trace or os.environ.get("GLM4_MOE_LITE_USE_DECODE_ROPE", "").strip() == "1"
+            enable_trace
+            or self.prefetcher is not None
+            or os.environ.get("GLM4_MOE_LITE_USE_DECODE_ROPE", "").strip() == "1"
         ) and active <= max_decode_rope_users
         cos_decode = sin_decode = trans_decode = rope_sharded_cfg = None
         if use_decode_rope:
@@ -1461,23 +1481,35 @@ class Glm4MoeLiteDenseOnlyTT:
         if _SIGNPOST_ENABLED:
             signpost("embed-start")
         t0 = time.perf_counter() if profile_on else 0.0
-        x = run_tt_embedding(device=self.device, token_ids=tokens, tt_weight=self.embed_w)
-        if x.layout != ttnn.TILE_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        x = ttnn.reshape(x, (1, active, 1, int(self.hparams.hidden_size)))
-        x = ttnn.permute(x, (0, 2, 1, 3))  # [1,1,B,D]
-        # Some TT tile-layout ops materialize/preserve tile padding in the logical
-        # shape. Keep the decode batch dimension tight so downstream kernels (MoE,
-        # FlashMLA, RoPE) do not execute inflated work on padded lanes.
-        #
-        # `slice` can return a view that aliases the source buffer (no refcounting).
-        # Materialize the sliced tensor and then free the padded source to avoid
-        # intermittent use-after-free corruption during decode.
-        x_view = ttnn.slice(x, [0, 0, 0, 0], [1, 1, active, int(self.hparams.hidden_size)])
-        x_tight = ttnn.clone(x_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # NOTE: `x_view` may alias `x`; do not deallocate it separately.
-        ttnn.deallocate(x, force=False)
-        x = x_tight
+        x = run_tt_embedding(
+            device=self.device, token_ids=tokens, tt_weight=self.embed_w, host_weight=self.embed_w_host
+        )
+        if self.embed_w_host is not None:
+            # Host lookup already produced [1,1,active,hidden] in TILE layout -- exactly
+            # what the to_layout/reshape/permute/slice/clone chain below is for. Skipping
+            # it is not just an optimization: to_layout and permute are full-grid ops and
+            # assert under the prefetcher's worker SubDevice, which is the same reason the
+            # lookup moved to host in the first place.
+            assert list(x.shape) == [1, 1, active, int(self.hparams.hidden_size)], (
+                f"host embedding shape {list(x.shape)} != expected " f"{[1, 1, active, int(self.hparams.hidden_size)]}"
+            )
+        else:
+            if x.layout != ttnn.TILE_LAYOUT:
+                x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+            x = ttnn.reshape(x, (1, active, 1, int(self.hparams.hidden_size)))
+            x = ttnn.permute(x, (0, 2, 1, 3))  # [1,1,B,D]
+            # Some TT tile-layout ops materialize/preserve tile padding in the logical
+            # shape. Keep the decode batch dimension tight so downstream kernels (MoE,
+            # FlashMLA, RoPE) do not execute inflated work on padded lanes.
+            #
+            # `slice` can return a view that aliases the source buffer (no refcounting).
+            # Materialize the sliced tensor and then free the padded source to avoid
+            # intermittent use-after-free corruption during decode.
+            x_view = ttnn.slice(x, [0, 0, 0, 0], [1, 1, active, int(self.hparams.hidden_size)])
+            x_tight = ttnn.clone(x_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # NOTE: `x_view` may alias `x`; do not deallocate it separately.
+            ttnn.deallocate(x, force=False)
+            x = x_tight
         if profile_on:
             decode_profile["embed_s"] = decode_profile.get("embed_s", 0.0) + (time.perf_counter() - t0)
         if _SIGNPOST_ENABLED:
