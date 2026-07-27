@@ -11,7 +11,7 @@ namespace ckernel::math
 {
 
 // Number of rows for MATH functions
-constexpr static std::uint32_t ELTWISE_MATH_ROWS = MATH_ROWS; // 8 for quasar, 4 for trinity
+constexpr static std::uint32_t ELTWISE_MATH_ROWS = MATH_ROWS; // 8 for quasar, 4 for quasar automotive
 constexpr static std::uint32_t MOVE_MATH_ROWS[3] = {8, 4, 1};
 constexpr static unsigned int SFP_ROWS           = 2;
 
@@ -107,6 +107,10 @@ inline void _sfpu_load_config32_(const std::uint32_t dest, const std::uint32_t u
 inline void _init_sfpu_config_reg_()
 {
     TTI_SFPCONFIG(0, 0xF, 1);
+    // Quasar simulator doesn't apply the SFPU const-lreg reset default at boot.
+    // Reload programmable constant LREG11 = -1.0 (its RTL reset default) each launch: config_dest=0xB,
+    // instr_mod1[0]=1 loads the default. sfpi materializes -1.0 and subtract-based float compares via LREG11.
+    TTI_SFPCONFIG(0, 0xB, 1);
 }
 
 /**

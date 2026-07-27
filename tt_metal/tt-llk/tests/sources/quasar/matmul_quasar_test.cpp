@@ -225,7 +225,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         tdma_desc_dst.reg_data_format         = static_cast<std::uint8_t>(formats.pack_src);
 
         _configure_buf_desc_table_(tdma_desc_dst.buf_desc_id, tdma_desc_dst.buf_desc);
-        _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc_dst);
+        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc_dst, ckernel::ReluConfig::none());
         _llk_pack_matmul_init_(buf_desc_id_dst, RT_DIM, CT_DIM, 1); // Use destination buffer descriptor for packing output
         PROFILER_SYNC();
     }

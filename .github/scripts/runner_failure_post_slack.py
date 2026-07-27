@@ -17,6 +17,8 @@ from runner_failure_common import (
     RecentJob,
     UNKNOWN_RUNNER,
     format_signature_summary,
+    load_triggering_failures_json,
+    scan_result_from_dict,
 )
 
 
@@ -67,39 +69,6 @@ def slack_config_from_channel(slack_channel: str | None) -> SlackConfig | None:
     return SlackConfig(token=token, channel=slack_channel)
 
 
-def job_from_dict(value: dict[str, Any]) -> RecentJob:
-    return RecentJob(
-        owner_repo=str(value.get("owner_repo") or ""),
-        workflow=str(value.get("workflow") or ""),
-        workflow_id=str(value.get("workflow_id") or ""),
-        run_id=str(value.get("run_id") or ""),
-        run_attempt=str(value.get("run_attempt") or ""),
-        run_url=str(value.get("run_url") or ""),
-        job_id=str(value.get("job_id") or ""),
-        name=str(value.get("name") or ""),
-        runner_name=str(value.get("runner_name") or ""),
-        status=str(value.get("status") or ""),
-        conclusion=str(value.get("conclusion") or ""),
-        html_url=str(value.get("html_url") or ""),
-        started_at=str(value.get("started_at") or ""),
-        completed_at=str(value.get("completed_at") or ""),
-    )
-
-
-def scan_result_from_dict(value: dict[str, Any]) -> JobScanResult:
-    raw_signatures = value.get("signatures")
-    signatures: tuple[str, ...] = ()
-    if isinstance(raw_signatures, list):
-        signatures = tuple(str(item) for item in raw_signatures if item)
-    return JobScanResult(
-        job=job_from_dict(value),
-        log_status=str(value.get("log_status") or ""),
-        log_checked=bool(value.get("log_checked")),
-        signature_labels=signatures,
-        fabric_missing_links=str(value.get("fabric_missing_links") or ""),
-    )
-
-
 def load_report_json(path: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -134,23 +103,6 @@ def runner_job_count_from_report(report: dict[str, Any], scan_results: list[JobS
     return len(scan_results)
 
 
-def load_triggering_failures_json(path: Path | None) -> list[JobScanResult]:
-    if path is None:
-        return []
-
-    try:
-        raw_values = json.loads(path.read_text(encoding="utf-8"))
-    except OSError as exc:
-        raise RuntimeError(f"Unable to read triggering failures JSON {path}: {exc}") from exc
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Unable to parse triggering failures JSON {path}: {exc}") from exc
-
-    if not isinstance(raw_values, list):
-        raise RuntimeError(f"Triggering failures JSON {path} must contain a list.")
-
-    return [scan_result_from_dict(value) for value in raw_values if isinstance(value, dict)]
-
-
 def slack_escape(value: str) -> str:
     return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -159,6 +111,30 @@ def slack_link(url: str, label: str) -> str:
     if not url:
         return slack_escape(label)
     return f"<{url}|{slack_escape(label)}>"
+
+
+def workflow_run_url_from_env() -> str:
+    explicit_url = os.environ.get("RUNNER_FAILURE_WORKFLOW_URL", "").strip()
+    if explicit_url:
+        return explicit_url
+
+    repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    run_id = os.environ.get("GITHUB_RUN_ID", "").strip()
+    if not repository or not run_id:
+        return ""
+
+    server_url = (os.environ.get("GITHUB_SERVER_URL") or "https://github.com").rstrip("/")
+    run_url = f"{server_url}/{repository}/actions/runs/{run_id}"
+    run_attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "").strip()
+    if run_attempt:
+        run_url = f"{run_url}/attempts/{run_attempt}"
+    return run_url
+
+
+def details_target_text(workflow_run_url: str) -> str:
+    if not workflow_run_url:
+        return "thread \U0001F9F5"
+    return f"{slack_link(workflow_run_url, 'workflow run')} and thread \U0001F9F5"
 
 
 def truncate_for_slack(value: str, max_length: int = MAX_SLACK_TEXT_LENGTH) -> str:
@@ -474,13 +450,17 @@ def post_runner_log_table_for_slack(
     runner: str,
     results: list[JobScanResult],
     thread_ts: str,
+    workflow_run_url: str = "",
 ) -> None:
     table_rows, skipped_rows = compact_slack_runner_table_rows(results)
     compaction_note = ""
     if skipped_rows:
         job_word = "job" if skipped_rows == 1 else "jobs"
+        workflow_reference = (
+            slack_link(workflow_run_url, "workflow run") if workflow_run_url else "workflow summary/artifact"
+        )
         compaction_note = (
-            f" Slack collapsed {skipped_rows} no-hit {job_word}; " "the full table is in the workflow summary/artifact."
+            f" Slack collapsed {skipped_rows} no-hit {job_word}; " f"the full table is in the {workflow_reference}."
         )
     heading = (
         f"Full log signature table for `{slack_escape(runner)}`: "
@@ -539,27 +519,29 @@ def post_runner_report_from_report(
     report_failures = [result for result in scan_results if result.signature_labels]
     triggering_results = triggering_failures or []
     triggering_report_failures = [result for result in triggering_results if result.signature_labels]
+    workflow_run_url = workflow_run_url_from_env()
+    details_text = details_target_text(workflow_run_url)
 
     if report_failures:
         parent_text = (
             f"Detected runner failure on `{slack_escape(runner_name)}`: "
             f"Out of {runner_job_count} jobs in the last {hours}h "
             f"{slack_escape(format_signature_summary(report_failures))}. "
-            "Details in thread \U0001F9F5"
+            f"Details in {details_text}"
         )
     elif triggering_report_failures:
         parent_text = (
             f"Detected runner failure on `{slack_escape(runner_name)}`: "
             f"triggering scan found {slack_escape(format_signature_summary(triggering_report_failures))}. "
             f"The in-depth report covered {runner_job_count} jobs in the last {hours}h. "
-            "Details in thread \U0001F9F5"
+            f"Details in {details_text}"
         )
     else:
         parent_text = (
             f"Runner report for `{slack_escape(runner_name)}`: "
             f"Out of {runner_job_count} jobs in the last {hours}h "
             "no known runner-failure signatures found. "
-            "Details in thread \U0001F9F5"
+            f"Details in {details_text}"
         )
 
     thread_ts = post_slack_message(slack_config, parent_text)
@@ -574,6 +556,7 @@ def post_runner_report_from_report(
         runner=runner_name,
         results=scan_results,
         thread_ts=thread_ts,
+        workflow_run_url=workflow_run_url,
     )
     print(f"Posted Slack runner report for {runner_name}.")
 
