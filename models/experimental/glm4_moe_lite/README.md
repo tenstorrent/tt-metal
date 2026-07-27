@@ -42,7 +42,7 @@ models/experimental/glm4_moe_lite/
 │   ├── run_sweep_isl_batch.py        # ISL × batch sweep
 │   ├── run_pre_sdpa_kernel_check.py  # Standalone pre-SDPA kernel check
 │   └── run_fused_kv_branch_check.py  # Standalone fused-KV-branch kernel check
-└── tests/                     # PCC & integration tests (16 files)
+└── tests/                     # PCC & integration tests (12 files)
 ```
 
 > Multi-token prediction lives in `model_tt._mtp_forward_eager`, not a separate module.
@@ -61,8 +61,11 @@ models/experimental/glm4_moe_lite/
    - [Greedy Debug Script (single run)](#greedy-debug-script-single-run)
    - [Batch & ISL Sweep](#batch--isl-sweep)
 2. [Performance](#performance)
-3. [Script & CLI Options](#script--cli-options)
-4. [Environment Variables](#environment-variables)
+3. [Testing](#testing)
+   - [Full-model smoke test (start here)](#full-model-smoke-test-start-here)
+   - [Component tests](#component-tests)
+4. [Script & CLI Options](#script--cli-options)
+5. [Environment Variables](#environment-variables)
    - [Default-On Optimizations](#default-on-optimizations)
    - [Feature Toggles](#feature-toggles)
    - [Performance Tuning](#performance-tuning)
@@ -189,6 +192,55 @@ zero runtime effect today. The per-op integration spec is kept as a local (untra
 working document, `GLOBALCB_PREFETCH_PORT_PLAN.md`, in this directory; it is also in
 git history at commit `b43bc892`. **Re-profile the current 51.3 ms configuration before
 acting on those op shares** — they were captured on the pre-optimization stack.
+
+---
+
+## Testing
+
+Everything here is opt-in behind env gates — this model is **not in CI**, so nothing
+runs automatically. Without gates set, `pytest tests/` collects 62 tests and runs the
+3 that need neither a device nor weights (`test_weights.py`).
+
+### Full-model smoke test (start here)
+
+`tests/test_full_model_smoke_optional.py` is the regression guard for the whole
+optimization stack: one traced greedy run of the full 47-layer model, asserting both a
+**decode-latency ceiling** and a **known-answer coherence check**. The pairing is the
+point — a numerical regression can run at full speed and emit garbage (see
+`FUSED_KV_BRANCH`), which a latency test alone would pass.
+
+```bash
+TT_ENABLE_HW_TESTS=1 TT_ENABLE_LARGE_MODEL_TESTS=1 \
+  pytest models/experimental/glm4_moe_lite/tests/test_full_model_smoke_optional.py -s
+```
+
+~2 minutes on a warm weight cache. It drives `debug_run_full_tt_greedy.py` in a
+subprocess so it exercises the shipping configuration rather than a parallel
+reimplementation, and it inherits the environment rather than pinning flags.
+
+Thresholds (measured 50.1 ms/token, spread 0.7 ms, on a 32-chip Galaxy 4x8):
+
+| Level | Default | Behaviour |
+| --- | --- | --- |
+| Hard ceiling | 55.0 ms | **Fails.** Catches ≥10% / compound regressions. |
+| Advisory | 52.0 ms | Warns, still passes. Catches a single lost optimization (BF8 dense ≈7% → ~53.6 ms). |
+
+Override with `GLM4_MOE_LITE_SMOKE_MAX_DECODE_MS`; mesh via
+`GLM4_MOE_LITE_SMOKE_MESH_{ROWS,COLS}`. Calibrated on one machine — tighten the ceiling
+toward the advisory once there is multi-machine history.
+
+### Component tests
+
+| Gate | Covers |
+| --- | --- |
+| `TT_ENABLE_HW_TESTS=1` | Needs a device: embedding, MLA decode boundaries (parametrized over bf16/bf8 KV) |
+| `TT_ENABLE_LARGE_MODEL_TESTS=1` | Needs real weights: layer-0 prefill/decode PCC vs the torch reference, MoE routed experts |
+| `TT_ENABLE_MULTI_DEVICE_TESTS=1` | `test_tt_moe_layer1_mesh_optional.py` — includes the 36-config CCL equality gate (links × topology × buffered × tokens) that cleared the fused-collective-epilogue work |
+| `TT_ENABLE_GOLDEN_TESTS=1` | 2-layer truncated model vs offline golden token IDs |
+
+The layer-0 PCC tests additionally skip unless `transformers.models.glm4_moe` is
+importable; the pinned transformers 4.53.0 does not ship it, so they self-skip with an
+explanatory reason rather than aborting collection.
 
 ---
 
