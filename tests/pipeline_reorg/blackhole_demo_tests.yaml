@@ -138,7 +138,7 @@
     python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_100min --trace
   skus:
     bh_p150b_civ2:
-      timeout: 120
+      timeout: 80
   team: models
   model-name: vibevoice-1.5b
 
@@ -152,7 +152,7 @@
     pytest -v models/experimental/vibevoice/tests/pcc/test_e2e_wer.py
   skus:
     bh_p150b_civ2:
-      timeout: 60
+      timeout: 25
   team: models
   model-name: vibevoice-1.5b
 
@@ -165,6 +165,6 @@
     pytest -v models/experimental/vibevoice/tests/pcc/test_e2e_sim.py
   skus:
     bh_p150b_civ2:
-      timeout: 45
+      timeout: 25
   team: models
   model-name: vibevoice-1.5b
