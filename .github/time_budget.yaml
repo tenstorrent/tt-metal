@@ -277,9 +277,6 @@ llk:
   perf:
     wh_n150_civ2: 1200
     bh_p150b_civ2: 1200
-  # Nightly determinism sweep. Repeating each variant 100x measured at roughly
-  # +5 min over a single-run pass of the whole suite on 12 xdist workers, so this
-  # is the pr_gate shape with headroom for slower runners.
   bit_exact:
     wh_n150_civ2: 90
     bh_p150b_civ2: 180
