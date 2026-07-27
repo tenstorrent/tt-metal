@@ -11,13 +11,7 @@ import ttml
 
 
 class SliceLastDim(ttml.autograd.Function):
-    """Differentiable truncation of the last dimension: ``y = x[..., :width]``.
-
-    Forward keeps the first ``width`` elements along the last axis of a rank-4
-    tensor and drops the tail. Backward routes the upstream gradient back into
-    those first ``width`` positions and zero-fills the dropped tail, restoring
-    the input's original last-dim size.
-    """
+    """Differentiable truncation of the last dimension: ``y = x[..., :width]``."""
 
     @staticmethod
     def forward(ctx, x, width):
