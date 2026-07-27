@@ -95,11 +95,10 @@ extern uint32_t sumIDs[SUM_COUNT];
 
 constexpr uint32_t NOC_ALIGNMENT_FACTOR = 4;
 
-#if (PROFILE_KERNEL & PROFILER_OPT_DO_TRACE_ONLY) && !(defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC))
-constexpr bool TRACE_ON_TENSIX = true;
-#else
-constexpr bool TRACE_ON_TENSIX = false;
-#endif
+// TRACE-ONLY mode (PROFILER_OPT_DO_TRACE_ONLY / TRACE_ON_TENSIX) has been REMOVED from this producer.
+// It gated the FW/KERNEL wrapper markers behind a per-replay state machine and forced myRiscID=0; the X280
+// path does not use it and it only obscured the live code. The parked DRAM producer
+// (kernel_profiler_push.hpp) still has the original implementation if it is ever needed back.
 #if (PROFILE_KERNEL & PROFILER_OPT_DO_SUM)
 constexpr bool DO_SUM = true;
 #else
@@ -110,10 +109,6 @@ constexpr bool DO_SUM = false;
 // (Kept because noc_event_profiler.hpp references kernel_profiler::NON_DROPPING.)
 constexpr bool NON_DROPPING = false;
 
-constexpr uint32_t TRACE_MARK_FW_START = (1 << 31);
-constexpr uint32_t TRACE_MARK_KERNEL_START = (1 << 30);
-constexpr uint32_t TRACE_MARK_ALL_ENDS = (1 << 29);
-
 constexpr int WALL_CLOCK_HIGH_INDEX = 1;
 constexpr int WALL_CLOCK_LOW_INDEX = 0;
 
@@ -123,11 +118,7 @@ volatile tt_l1_ptr uint32_t* profiler_control_buffer =
 volatile tt_l1_ptr profiler_msg_buffer_t* profiler_data_buffer =
     reinterpret_cast<volatile tt_l1_ptr profiler_msg_buffer_t*>(GET_MAILBOX_ADDRESS_DEV(profiler.buffer));
 
-#if (PROFILE_KERNEL & PROFILER_OPT_DO_TRACE_ONLY)
-constexpr uint32_t myRiscID = 0;
-#else
 constexpr uint32_t myRiscID = PROCESSOR_INDEX;
-#endif
 
 // SPSC ring geometry for this RISC.
 constexpr uint32_t RING_CAPACITY = PROFILER_L1_VECTOR_SIZE;                // words (= data[] length)
@@ -461,10 +452,8 @@ struct profileScope {
 // The KERNEL wrapper (index 1) no longer needs a special type at all -- DeviceZoneScopedMainChildN now
 // uses the ordinary profileScope above, so it reports exactly like any DeviceZoneScopedN zone.
 // (get_const_id(id, ZONE_START) == id & 0xFFFF since ZONE_START==0, so the wire format is identical.)
-// NOTE: this drops the TRACE_ON_TENSIX (PROFILER_OPT_DO_TRACE_ONLY) state machine that the old
-// profileScopeGuaranteed implemented, which gated the FW/KERNEL markers to one emission per trace replay.
-// Under trace-only profiling the KERNEL zone will now mark on EVERY replay. The parked DRAM producer
-// (kernel_profiler_push.hpp) still carries the original gated implementation if it is needed back.
+// (The old profileScopeGuaranteed also implemented the TRACE_ON_TENSIX replay state machine; trace-only
+// mode has since been removed from this producer entirely -- see the note near the top of the file.)
 struct profileScopeLifecycle {
     inline __attribute__((always_inline)) profileScopeLifecycle() { init_profiler(); }
     inline __attribute__((always_inline)) ~profileScopeLifecycle() { finish_profiler(); }
@@ -525,21 +514,7 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
     mark_time(get_id(event_id, TS_EVENT));
 }
 
-inline __attribute__((always_inline)) void increment_trace_count() {
-    if constexpr (!TRACE_ON_TENSIX) {
-        traceCount++;
-    }
-}
-
-__attribute__((noinline)) void trace_only_init() {
-    if constexpr (TRACE_ON_TENSIX) {
-        traceCount++;
-        set_host_counter(traceCount);
-        profiler_control_buffer[TRACE_REPLAY_STATUS] = TRACE_MARK_FW_START;
-        // Do NOT poke data[ID_HH] here: it is a live ring slot in the SPSC backend and the X280
-        // drain does not consume it, so the write only corrupts a marker word (see set_host_counter).
-    }
-}
+inline __attribute__((always_inline)) void increment_trace_count() { traceCount++; }
 
 }  // namespace kernel_profiler
 
@@ -617,25 +592,16 @@ __attribute__((noinline)) void trace_only_init() {
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
     kernel_profiler::profileScopeAccumulate<hash, 1> zone = kernel_profiler::profileScopeAccumulate<hash, 1>();
 
-#define DeviceZoneSetCounter(counter)                  \
-    if constexpr (!kernel_profiler::TRACE_ON_TENSIX) { \
-        kernel_profiler::set_host_counter(counter);    \
-    }
+#define DeviceZoneSetCounter(counter) kernel_profiler::set_host_counter(counter);
 
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_AERISC)
-#define DeviceProfilerInit()                          \
-    if constexpr (kernel_profiler::TRACE_ON_TENSIX) { \
-        kernel_profiler::init_profiler();             \
-    }                                                 \
-    kernel_profiler::traceCount = 0;
+#define DeviceProfilerInit() kernel_profiler::traceCount = 0;
 #else
-#define DeviceProfilerInit()                          \
-    if constexpr (kernel_profiler::TRACE_ON_TENSIX) { \
-        kernel_profiler::init_profiler();             \
-    }
+#define DeviceProfilerInit()
 #endif
 
-#define DeviceTraceOnlyProfilerInit() kernel_profiler::trace_only_init();
+// Trace-only mode is gone; the hook stays (firmware calls it) but does nothing.
+#define DeviceTraceOnlyProfilerInit()
 
 #define DeviceIncrementTraceCount() kernel_profiler::increment_trace_count();
 
