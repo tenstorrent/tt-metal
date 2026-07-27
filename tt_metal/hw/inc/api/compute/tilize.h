@@ -228,9 +228,13 @@ ALWI void tilizeA_B_reduce_init_short(uint32_t icb0, uint32_t icb1_scaler, uint3
     PACK((llk_pack_init(ocb)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>(ocb)));
 #else
-    MATH((llk_math_pack_sync_init()));
-    PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init()));
+    // [#48552] Quasar: match the LLK team's canonical tilizeA_B_reduce_init_short (UNPACK tilizeA_B + MATH
+    // reduce ONLY -- no MATH pack-sync / PACK init / PACK dest_init). Their minimal version passes
+    // test_max_pool2d_strided_reduce.py; the MATH<->PACK dest-sync we previously set up here is the prime
+    // suspect for the compute_pool_2d pool-reduce dest-sync DEADLOCK at the real stem size (112x112,
+    // test_stem_maxpool.py -k 112x112). If maxpool passes with this, flip _MAXPOOL_ON_DEVICE back to True.
+    // ocb is unused on Quasar now (kept for the WH/BH branch above).
+    (void)ocb;
 #endif
 }
 #endif  // (REDUCE_OP && REDUCE_DIM) || __DOXYGEN__
