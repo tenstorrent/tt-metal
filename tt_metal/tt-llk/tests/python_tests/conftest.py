@@ -156,6 +156,18 @@ def pytest_addoption(parser):
     )
 
     parser.addoption(
+        "--bit-exact-runs",
+        action="store",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Execute each test variant N times on device and assert every run "
+        "produces a bit-identical result buffer. Use to check the hardware "
+        "returns the same output for the same input (e.g. --bit-exact-runs=20). "
+        "Default 1 (no repetition).",
+    )
+
+    parser.addoption(
         "--compile-producer",
         action="store_true",
         help="Only compile *.elf(s) for every test variant selected and store them on path specified",
@@ -322,6 +334,12 @@ def pytest_configure(config):
         os.environ["TT_METAL_DISABLE_SFPLOADMACRO"] = "1"
 
     config.coverage_enabled = config.getoption("--coverage", default=False)
+
+    bit_exact_runs = config.getoption("--bit-exact-runs", default=1)
+    if bit_exact_runs < 1:
+        raise pytest.UsageError(f"--bit-exact-runs must be >= 1, got {bit_exact_runs}")
+    TestConfig.BIT_EXACT_RUNS = bit_exact_runs
+
     TestConfig.DUMP_RAW_COUNTERS = config.getoption(
         "--dump-raw-counters", default=False
     )
