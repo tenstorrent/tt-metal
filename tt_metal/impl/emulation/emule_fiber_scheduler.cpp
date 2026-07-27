@@ -125,6 +125,13 @@ struct FiberSchedulerImpl {
     uint64_t last_progress_resump_ = 0;
     uint64_t last_deadlock_repoll_progress_ = UINT64_MAX;  // sentinel = never re-polled
 
+    // Host-wait liveness bound (reset per persistent SEQUENCE in run_persistent, NOT per launch).
+    // Counts consecutive pumps that returned HostWait having advanced nothing (progress_ == 0). A
+    // wedged kernel whose socket the host never feeds would otherwise loop host<->pump forever with
+    // no diagnostic; pump() escalates to a tier-1 deadlock after kHostWaitNoProgressLimit such pumps.
+    // See tt-emule docs/socket-emulation.md.
+    uint64_t host_wait_no_progress_pumps_ = 0;
+
     size_t stack_bytes_ = 1u << 20;          // 1 MB default
 
     // Persistent worker pool, created once and reused: threads block on start_cv_
@@ -676,6 +683,7 @@ void FiberScheduler::run_until_idle() {
 
 RunOutcome FiberScheduler::run_persistent() {
     p_->persistent_ = true;
+    p_->host_wait_no_progress_pumps_ = 0;   // start of a fresh host-wait sequence
     launch_and_wait(/*initial=*/true);
     if (p_->host_wait_) {
         return RunOutcome::HostWait;   // fibers parked awaiting host socket I/O — ALIVE, no teardown
@@ -709,6 +717,22 @@ RunOutcome FiberScheduler::pump() {
     }
     launch_and_wait(/*initial=*/false);
     if (p_->host_wait_) {
+        // Liveness bound: a pump that advanced nothing (progress_ == 0) while still parked on a socket
+        // wait is a no-progress cycle. If the host keeps pumping a wedged kernel whose socket never
+        // advances, escalate to the tier-1 deadlock after kHostWaitNoProgressLimit consecutive
+        // no-progress pumps instead of looping host<->pump forever with no diagnostic. Any forward
+        // progress resets the count, so a slow-but-advancing feed is unaffected. Keying on global
+        // progress_ (not the awaited socket) leaves a residual masking window — WA-3, see
+        // tt-emule-blaze/.claude/skills/workarounds.
+        static const uint64_t kHostWaitNoProgressLimit = env_size("TT_EMULE_HOST_WAIT_STALL_LIMIT", 8192);
+        if (p_->progress_.load() == 0) {
+            if (++p_->host_wait_no_progress_pumps_ >= kHostWaitNoProgressLimit) {
+                p_->deadlock_ = true;
+                teardown_and_throw();  // reuses the tier-1 quiescent-deadlock diagnostic (dump_parked)
+            }
+        } else {
+            p_->host_wait_no_progress_pumps_ = 0;
+        }
         return RunOutcome::HostWait;
     }
     teardown_and_throw();

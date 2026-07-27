@@ -344,7 +344,15 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
     if (noc_addr >= get_pcie_base_cached(device_id)) {
         auto* sw_emu = get_sw_emulated_chip(static_cast<tt::ChipId>(device_id));
         auto* sysmem = sw_emu ? static_cast<tt::umd::SimulationSysmemManager*>(sw_emu->get_sysmem_manager()) : nullptr;
-        return sysmem ? static_cast<uint8_t*>(sysmem->get_mapped_host_ptr(noc_addr, /*size=*/1)) : nullptr;
+        // A host-facing address (>= pcie_base) is by construction on an emule chip that has a
+        // SimulationSysmemManager, so a null manager is a contract violation, not a resolvable miss.
+        // (A buffer miss still returns nullptr below — callers like noc_semaphore_set_remote rely on it.)
+        TT_FATAL(
+            sysmem != nullptr,
+            "emule: host-facing NOC address 0x{:x} on chip {} has no SimulationSysmemManager.",
+            noc_addr,
+            device_id);
+        return static_cast<uint8_t*>(sysmem->get_mapped_host_ptr(noc_addr, /*size=*/1));
     }
 
     uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
@@ -1491,16 +1499,20 @@ static std::map<std::string, std::string> build_kernel_defines(
         }
         for (auto& cb_impl : cb_impls) {
             for (uint8_t idx : cb_impl->local_buffer_indices()) {
-                if (idx < EMULE_NUM_CBS) {
-                    // Calculate tile size from the CB's data format.
-                    const auto& tile = cb_impl->tile(idx);
-                    tile_sizes[idx] = tile.has_value() ? tile->get_tile_size(cb_impl->data_format(idx))
-                                                       : Tile().get_tile_size(cb_impl->data_format(idx));
-                    cb_formats[idx] = static_cast<uint8_t>(cb_impl->data_format(idx));
-                    if (tile.has_value()) {
-                        tile_r_dim[idx] = tile->get_height();
-                        tile_c_dim[idx] = tile->get_width();
-                    }
+                TT_FATAL(
+                    idx < EMULE_NUM_CBS,
+                    "CB index {} exceeds the emulated CB ceiling ({}); the host CircularBufferConfig must cap "
+                    "at the arch's NUM_CIRCULAR_BUFFERS.",
+                    idx,
+                    EMULE_NUM_CBS);
+                // Calculate tile size from the CB's data format.
+                const auto& tile = cb_impl->tile(idx);
+                tile_sizes[idx] = tile.has_value() ? tile->get_tile_size(cb_impl->data_format(idx))
+                                                   : Tile().get_tile_size(cb_impl->data_format(idx));
+                cb_formats[idx] = static_cast<uint8_t>(cb_impl->data_format(idx));
+                if (tile.has_value()) {
+                    tile_r_dim[idx] = tile->get_height();
+                    tile_c_dim[idx] = tile->get_width();
                 }
             }
         }
@@ -2709,7 +2721,13 @@ static void init_core_cb_sync(
     bool configured[EMULE_NUM_CBS] = {};
     auto configure = [&](const std::shared_ptr<CircularBufferImpl>& cb_impl, const CoreCoord& lc) {
         for (uint8_t idx : cb_impl->local_buffer_indices()) {
-            if (idx >= EMULE_NUM_CBS || configured[idx]) {
+            TT_FATAL(
+                idx < EMULE_NUM_CBS,
+                "CB index {} exceeds the emulated CB ceiling ({}); the host CircularBufferConfig must cap "
+                "at the arch's NUM_CIRCULAR_BUFFERS.",
+                idx,
+                EMULE_NUM_CBS);
+            if (configured[idx]) {
                 continue;
             }
             uint32_t cb_addr = cb_impl->address();
