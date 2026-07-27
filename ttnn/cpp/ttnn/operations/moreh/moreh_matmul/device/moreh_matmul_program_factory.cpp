@@ -398,7 +398,7 @@ ttnn::device_operation::ProgramArtifacts MorehMatmulOperation::MultiCoreProgramF
         // input_stride[8], other_stride[8], output_stride[8], input_not_bcast[8], other_not_bcast[8]
         .runtime_arg_schema = {.runtime_arg_names = {"output_tile_start_idx", "num_output_tiles"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
-        .advanced_options = {.num_runtime_varargs = 5 * static_cast<uint32_t>(tt::tt_metal::MAX_NUM_DIMENSIONS)},
+        .advanced_options = {.num_runtime_varargs = 5 * static_cast<uint32_t>(ttnn::MAX_NUM_DIMENSIONS)},
     };
 
     KernelSpec writer{
@@ -499,7 +499,7 @@ ttnn::device_operation::ProgramArtifacts MorehMatmulOperation::MultiCoreProgramF
             // output_stride[8]
             .runtime_arg_schema = {.runtime_arg_names = {"output_tile_start_idx"}},
             .hw_config = std::move(compute_hw),
-            .advanced_options = {.num_runtime_varargs = static_cast<uint32_t>(tt::tt_metal::MAX_NUM_DIMENSIONS)},
+            .advanced_options = {.num_runtime_varargs = static_cast<uint32_t>(ttnn::MAX_NUM_DIMENSIONS)},
         };
     };
 
@@ -527,7 +527,7 @@ ttnn::device_operation::ProgramArtifacts MorehMatmulOperation::MultiCoreProgramF
     // node-invariant, and read positionally in a loop -> runtime varargs (patterns catalog:
     // homogeneous literal-count array). Same values on every node; built once here.
     std::vector<uint32_t> reader_varargs;
-    reader_varargs.reserve(5 * tt::tt_metal::MAX_NUM_DIMENSIONS);
+    reader_varargs.reserve(5 * ttnn::MAX_NUM_DIMENSIONS);
     reader_varargs.insert(reader_varargs.end(), input_stride.begin(), input_stride.end());
     reader_varargs.insert(reader_varargs.end(), other_stride.begin(), other_stride.end());
     reader_varargs.insert(reader_varargs.end(), output_stride.begin(), output_stride.end());
