@@ -836,7 +836,8 @@
     export HF_HOME=/mnt/MLPerf/huggingface HUNYUAN_MODEL_DIR=/mnt/MLPerf/huggingface/tencent/HunyuanImage-3.0
     export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_cache/tencent/HunyuanImage-3.0
     export HF_HUB_OFFLINE=0
-    export HY_STEPS=8
+    export HY_STEPS=50
+    export HY_VERBOSE=1
     pytest --timeout 10800 -s models/experimental/hunyuan_image_3_0/demo/test_demo.py
   model: hunyuan-image-3.0
   skus:
