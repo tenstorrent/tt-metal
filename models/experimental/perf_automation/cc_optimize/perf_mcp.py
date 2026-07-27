@@ -504,6 +504,63 @@ def _throughput_path():
     return Path(tempfile.gettempdir()) / ("perf_mcp_throughput_%s_%s.json" % (model, task))
 
 
+_MIN_CREDIBLE_DEVICE_MS = float(os.environ.get("PERF_MCP_MIN_CREDIBLE_MS", "1.0") or "1.0")
+# A profile whose total is far below the sum of its own buckets recorded only a fragment of the run.
+_BUCKET_AGREEMENT_FRAC = 0.5
+
+
+def _is_credible_profile(prof: dict) -> bool:
+    """Is this profile a believable measurement of the model, or an empty capture?
+
+    The only quality check before this was capture_partial -- did the profiler DROP markers. A run
+    that drops nothing but RECORDS almost nothing looks clean and is accepted. On llama3_1_8b_p150
+    one such capture reported device_ms=0.0612 with its op buckets totalling 2.657 ms, against a real
+    profile of 2464 ms. That is 61 microseconds for an 8B model.
+
+    It mattered because of WHERE it landed. The rolling baseline is overwritten by the next profile,
+    so a bad one self-corrects; the ORIGINAL baseline is written once and never refreshed, so the
+    garbage becomes the permanent anchor for every future headline -- it would have printed
+    "0.06 ms -> 714.94 ms" as the result of a run that actually achieved 2464 -> 715.
+
+    Comparability is not plausibility: that value carried a correct depth stamp and a correct method,
+    and passed both guards. This one asks whether the number can be true at all.
+
+    Two ways a profile fails: it reports no time, or the total disagrees with the sum of its own
+    parts (a capture that recorded a handful of ops and called it the whole model).
+    """
+    try:
+        dev = float(prof.get("device_ms") or 0.0)
+    except (TypeError, ValueError):
+        return False
+    if dev < _MIN_CREDIBLE_DEVICE_MS:
+        print(
+            "  [perf-mcp] original baseline NOT pinned: device_ms=%.4f is not a credible measurement "
+            "(a profile this small is an empty capture, not a fast model)" % dev,
+            file=sys.stderr,
+            flush=True,
+        )
+        return False
+    buckets = prof.get("buckets") or []
+    if buckets:
+        total = 0.0
+        for b in buckets:
+            if not isinstance(b, dict):
+                continue
+            try:
+                total += float(b.get("device_ms") or 0.0)
+            except (TypeError, ValueError):
+                continue
+        if total > 0 and dev < total * _BUCKET_AGREEMENT_FRAC:
+            print(
+                "  [perf-mcp] original baseline NOT pinned: device_ms=%.4f is far below the sum of its "
+                "own op buckets (%.4f) -- the capture is incomplete" % (dev, total),
+                file=sys.stderr,
+                flush=True,
+            )
+            return False
+    return True
+
+
 def _report_original_baseline_ms():
     """The first baseline ever recorded for this (model, task) -- but only if it was profiled at the
     depth this run is using. A ms figure taken over 2 layers is not comparable to one over 16."""
@@ -1315,7 +1372,7 @@ def profile_model() -> dict:
         }
     _baseline_path().write_text(json.dumps(prof))
     _orig = _original_baseline_path()
-    if not _orig.exists():
+    if not _orig.exists() and _is_credible_profile(prof):
         try:
             # Stamp the DEPTH this was profiled at. The file is written once and never refreshed, so
             # a later run with a different coverage window would otherwise compare against it blind:
