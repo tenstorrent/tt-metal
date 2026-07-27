@@ -95,13 +95,10 @@ parse_inputs() {
 
 # --- append attestation --set entries for each target to the named array ---
 # Usage: append_attestation_sets <array-name> [generator-image]
-# Emits the provenance/SBOM attest overrides (or the disabled variants) so both
-# the primary bake and the Harbor fallback share identical attestation shaping.
-# generator-image defaults to the syft-scanner primary; the fallback
-# call passes SYFT_SCANNER_FALLBACK (direct, GHCR-authenticated, or
-# authenticated docker.io for un-migrated callers) explicitly, mirroring the
-# Harbor-stripped/GHCR-direct split the caller already does for context
-# set-lines.
+# Emits the provenance/SBOM attest overrides (or the disabled variants) so
+# both the primary bake and the Harbor fallback share identical attestation
+# shaping. generator-image defaults to SYFT_SCANNER_PRIMARY; the fallback
+# call passes SYFT_SCANNER_FALLBACK instead.
 append_attestation_sets() {
   local -n _sets="$1"
   local generator_image="${2:-$SYFT_SCANNER_PRIMARY}"
