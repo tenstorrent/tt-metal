@@ -348,3 +348,95 @@ def test_fill_pad_sharded(device, fill_value, shape, shard_scheme, dtype):
     padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
 
     assert_quality(padded_torch_tensor, padded_torch_output_tensor)
+
+
+def _make_l1_sharded_memory_config(shape, shard_scheme):
+    """Build an L1-sharded memory config for fill_pad cache-hit tests."""
+    padded_shape = list(shape)
+    padded_shape[-2] = (padded_shape[-2] + 31) // 32 * 32
+    padded_shape[-1] = (padded_shape[-1] + 31) // 32 * 32
+
+    num_cores_x = 8
+    num_cores_y = 7
+    num_cores = num_cores_x * num_cores_y
+    shard_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))]
+    )
+
+    tiles_per_2d = padded_shape[-2] * padded_shape[-1] / (32 * 32)
+    dims_b4_last_dim = 1
+    for dim in shape[:-2]:
+        dims_b4_last_dim *= dim
+
+    if shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        shard_shape = (dims_b4_last_dim, 32 * math.ceil((math.ceil(padded_shape[-1] / 32) / num_cores)))
+    elif shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        tile_widths_per_core = math.ceil(dims_b4_last_dim / num_cores)
+        shard_shape = (32 * tile_widths_per_core, padded_shape[-1])
+    elif shard_scheme == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        tile_widths_per_core = math.ceil(dims_b4_last_dim / num_cores_x)
+        shard_shape = (32 * tile_widths_per_core, 32 * math.ceil((padded_shape[-1] / 32 / num_cores_y)))
+    else:
+        shard_shape = (math.ceil(math.sqrt(tiles_per_2d)), math.ceil(math.sqrt(tiles_per_2d)))
+
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(shard_scheme, ttnn.BufferType.L1, shard_spec)
+
+
+@pytest.mark.parametrize(
+    "factory_case",
+    [
+        "dram_interleaved",
+        "l1_height_sharded",
+        "l1_block_sharded",
+    ],
+)
+def test_fill_pad_program_cache_addr_change(device, factory_case):
+    """Program-cache hit path: re-running fill_implicit_tile_padding on freshly allocated
+    inputs (different buffer addresses) must hit the same cached program and stay correct.
+
+    Guards Metal 2.0 TensorBinding CRTA re-resolution for both factories:
+    FillPadProgramFactory (DRAM interleaved) and FillPadL1ShardedProgramFactory (L1 sharded).
+    """
+    shape = (17, 17)  # exercises both right and bottom implicit tile padding
+    fill_value = 1.5
+    dtype = ttnn.bfloat16
+    torch_dtype = ttnn_dtype_to_torch_dtype[dtype]
+    output_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    if factory_case == "dram_interleaved":
+        input_mem_config = ttnn.DRAM_MEMORY_CONFIG
+    elif factory_case == "l1_height_sharded":
+        input_mem_config = _make_l1_sharded_memory_config(shape, ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
+    else:
+        input_mem_config = _make_l1_sharded_memory_config(shape, ttnn.TensorMemoryLayout.BLOCK_SHARDED)
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    keep_alive = []
+    input_addrs = set()
+    entries = None
+    for i in range(4):
+        torch.manual_seed(1000 + i)
+        torch_input_tensor, padded_torch_tensor = create_nd_padded_tiled_tensor(shape, 32, fill_value, torch_dtype)
+        input_tensor = ttnn.to_device(
+            ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT),
+            device,
+            memory_config=input_mem_config,
+        )
+        input_addrs.add(input_tensor.buffer_address())
+
+        output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, memory_config=output_mem_config)
+        padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
+        keep_alive += [input_tensor, output_tensor]
+
+        assert_quality(padded_torch_tensor, padded_torch_output_tensor)
+        if i == 0:
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries, "fill_pad must reuse the cached program on a hit"
+
+    assert entries == 1, "fill_pad should build exactly one program for a fixed config"
+    assert len(input_addrs) == 4, "each dispatch must land on a distinct input buffer address"
+    device.disable_and_clear_program_cache()
