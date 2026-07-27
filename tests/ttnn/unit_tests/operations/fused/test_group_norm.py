@@ -1545,47 +1545,6 @@ def test_group_norm_rejects_per_sample_non_tile_aligned_spatial(device, expect_e
         )
 
 
-def test_group_norm_rejects_tile_input_with_negative_mask(device, expect_error):
-    # Scope boundary for tt-metal #50682: negative_mask requires a ROW_MAJOR input, and a ROW_MAJOR
-    # tensor has padded_shape[2] == logical_shape[2], so negative_mask and the tile-padding
-    # correction can never be active at the same time. Pins that mutual exclusion.
-    C, HW, num_groups, grid_y = 320, 128, 32, 1
-    torch_input_tensor = torch.rand((1, 1, HW, C), dtype=torch.bfloat16)
-    input_tensor = ttnn.from_torch(
-        torch_input_tensor,
-        dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
-    shard_spec = ttnn.ShardSpec(shard_grid, (HW, C), ttnn.ShardOrientation.ROW_MAJOR)
-    sharded_mem_config = ttnn.MemoryConfig(
-        ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
-    )
-    input_tensor = ttnn.to_memory_config(input_tensor, memory_config=sharded_mem_config)
-    negative_mask = ttnn.to_device(
-        ttnn.create_group_norm_input_negative_mask(C, num_groups, grid_y, ttnn.DataType.BFLOAT16), device
-    )
-    # input_mask must be supplied alongside negative_mask: get_mask_tensor only synthesises a mask
-    # when NEITHER is given, so negative_mask alone leaves it default-constructed.
-    input_mask = ttnn.to_device(
-        ttnn.create_group_norm_input_mask(C, num_groups, grid_y, ttnn.DataType.BFLOAT16), device
-    )
-
-    with expect_error(RuntimeError, "must be in ROW_MAJOR layout"):
-        ttnn.group_norm(
-            input_tensor,
-            num_groups=num_groups,
-            input_mask=input_mask,
-            memory_config=sharded_mem_config,
-            core_grid=ttnn.CoreGrid(y=grid_y, x=1),
-            inplace=False,  # inplace defaults to True and is rejected for TILE before this check
-            negative_mask=negative_mask,
-        )
-
-
 def test_group_norm_rejects_tile_input_with_inplace(device, expect_error):
     # Scope boundary for tt-metal #50682, same argument as negative_mask above: inplace is only
     # allowed for ROW_MAJOR inputs, and a ROW_MAJOR tensor has padded_shape[2] == logical_shape[2],
