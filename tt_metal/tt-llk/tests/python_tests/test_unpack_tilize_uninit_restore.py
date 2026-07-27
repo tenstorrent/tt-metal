@@ -26,9 +26,7 @@ and the result diverges from ``TilizeGolden(src_A, num_faces)``.
 that no existing tilize test reaches.
 """
 
-import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import TilizeGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, format_dict
@@ -60,13 +58,6 @@ def test_unpack_tilize_uninit_restore(
     dest_acc,
     num_faces,
 ):
-    # BH unpack_tilize does not support num_faces=1 (LLK asserts num_faces in {2, 4}).
-    # WH supports num_faces=1. Tracked in https://github.com/tenstorrent/tt-metal/issues/50707.
-    if num_faces == 1 and get_chip_architecture() == ChipArchitecture.BLACKHOLE:
-        pytest.skip(
-            "BH unpack_tilize does not support num_faces=1; see https://github.com/tenstorrent/tt-metal/issues/50707"
-        )
-
     torch_format = format_dict[formats.output_format]
     input_dimensions = [32, 32]
 

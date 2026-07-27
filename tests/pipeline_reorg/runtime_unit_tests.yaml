@@ -15,7 +15,7 @@
 - name: runtime_fast_dispatch_on_eth
   cmd: |
     [ "$ARCH_NAME" = "wormhole_b0" ] && export TT_METAL_GTEST_ETH_DISPATCH=1
-    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='-*NIGHTLY_*'
+    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='-*NIGHTLY_*:RealtimeProfiler*'
   skus:
     wh_n150_civ2:
       timeout: 10
@@ -35,6 +35,16 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+- name: runtime_rt_profiler
+  cmd: ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='RealtimeProfiler*'
+  skus:
+    wh_n150_civ2:
+      timeout: 6
+    bh_p150b_civ2_viommu:
+      timeout: 6
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -366,9 +376,11 @@
       --gtest_filter='UnitMeshCQSingleCardBufferFixture.ShardedBufferLarge*ReadWrites'
     TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch \
       --gtest_filter='UnitMeshMultiCQMultiDevice*Fixture.*'
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch \
+      --gtest_filter='RealtimeProfilerStress.*'
   skus:
     wh_galaxy:
-      timeout: 15
+      timeout: 19
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 

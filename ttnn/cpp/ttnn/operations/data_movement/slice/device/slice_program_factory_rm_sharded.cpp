@@ -254,6 +254,7 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
     // sizing in its own cache entry.  On cache hit, the framework copies runtime
     // args and patches dynamic CB addresses (.buffer is set below); CB sizing
     // itself is not re-applied — it is carried by the cached descriptor.
+    // CB order here (src0, then c_16) is mirrored positionally by override_runtime_arguments; keep in sync.
     constexpr uint8_t src0_cb_index = 0;
     desc.cbs.push_back(CBDescriptor{
         .total_size = shard_height_padded * stick_size_padded,
@@ -327,14 +328,25 @@ void SliceDeviceOperation::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Re-derive the descriptor from the SAME factory the miss path picks (single source of truth), then
-    // re-apply its rt-args + tensor-backed CB addresses to the cached program. No rebuild (still a hit).
+    const auto factory = select_program_factory(operation_attributes, tensor_args);
+
+    // Height-sharded RM reader args depend only on shapes/slice_start/shard specs, all cache-keyed, so
+    // on a hit the only thing that changes is the two CB addresses. Patch those in O(1) instead of
+    // rebuilding all per-core args (which scaled host cost with the core grid). CBs: src0, then c_16.
+    if (std::holds_alternative<SliceRmShardedProgramFactory>(factory)) {
+        tt::tt_metal::ProgramDescriptor cb_addr_only;
+        cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = tensor_args.input.buffer()});
+        cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = tensor_return_value.buffer()});
+        tt::tt_metal::apply_descriptor_runtime_args(program, cb_addr_only);
+        return;
+    }
+
+    // Other factories bake buffer addresses into their runtime args, so re-derive and re-apply.
     auto desc = std::visit(
-        [&](auto&& factory) {
-            return std::decay_t<decltype(factory)>::create_descriptor(
-                operation_attributes, tensor_args, tensor_return_value);
+        [&](auto&& f) {
+            return std::decay_t<decltype(f)>::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
         },
-        select_program_factory(operation_attributes, tensor_args));
+        factory);
     tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 
