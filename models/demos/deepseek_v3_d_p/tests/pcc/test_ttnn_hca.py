@@ -526,9 +526,65 @@ def test_hca_output(device, batch, seq_len):
 
     assert out.shape == out_ref.shape, f"shape mismatch: tt {tuple(out.shape)} vs ref {tuple(out_ref.shape)}"
 
-    pcc_passed, pcc_message = assert_with_pcc(out_ref.to(torch.float32), out.to(torch.float32), pcc=0.99)
+    pcc_passed, pcc_message = assert_with_pcc(out_ref.to(torch.float32), out.to(torch.float32), pcc=0.999)
     logger.debug(f"output proj PCC: {pcc_message}")
     assert pcc_passed, f"HCA output proj PCC test failed: {pcc_message}"
+
+    logger.debug("PCC test passed!")
+
+
+@pytest.mark.parametrize("seq_len", [512, 2048, 5120], ids=["seq512", "seq2k", "seq5120"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    _MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+def test_hca_output_mesh(mesh_device, device_params, num_links, topology, seq_len):
+    """Mesh/TP/SP PCC for TtHCA._o_proj: groups partition the heads, so the batched o_a_proj is purely
+    local (o_groups/tp groups per chip); o_b_proj is contraction-parallel and TP reduce-scattered, so the
+    output lands as [B, 1, S/sp, hidden/tp]. Compared against the full unsharded output path."""
+    torch.manual_seed(42)
+
+    batch = 1
+    config = _flash_config()
+    nh, hd = config.num_attention_heads, config.head_dim
+    logger.debug(f"mesh={tuple(mesh_device.shape)} seq_len={seq_len} o_groups={config.o_groups}")
+
+    ref = DeepseekV4Attention(config, layer_idx=0).eval()
+    attn = torch.randn(batch, nh, seq_len, hd)  # TtHCA._attention output layout [B, H, S, D]
+
+    with torch.no_grad():
+        grouped = attn.transpose(1, 2).reshape(batch, seq_len, config.o_groups, -1)
+        grouped = ref.o_a_proj(grouped).flatten(2)
+        out_ref = ref.o_b_proj(grouped)  # [B, S, hidden]
+
+    tt_model = TtHCA.from_reference(
+        mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology, ccl_num_links=num_links
+    )
+    ms = tuple(mesh_device.shape)
+    attn_tt = ttnn.from_torch(
+        attn,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=ms, dims=(2, 1)),  # seq @ SP, heads @ TP
+    )
+
+    signpost("HCA_START")
+    out_tt = tt_model._o_proj(attn_tt)
+    signpost("HCA_END")
+    out = ttnn.to_torch(
+        out_tt, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=ms, dims=(2, 3))
+    ).squeeze(
+        1
+    )  # sp -> seq (dim2), tp -> hidden (dim3)
+    logger.debug(f"TTNN output shape: {tuple(out.shape)}")
+
+    assert out.shape == out_ref.shape, f"shape mismatch: tt {tuple(out.shape)} vs ref {tuple(out_ref.shape)}"
+
+    pcc_passed, pcc_message = assert_with_pcc(out_ref.to(torch.float32), out.to(torch.float32), pcc=0.999)
+    logger.debug(f"mesh output proj PCC: {pcc_message}")
+    assert pcc_passed, f"HCA mesh output proj PCC test failed: {pcc_message}"
 
     logger.debug("PCC test passed!")
 

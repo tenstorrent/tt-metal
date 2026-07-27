@@ -354,11 +354,21 @@ class TtHCA(_TtHCABase):
 
         # Grouped output projection: o_a_proj is block-diagonal (o_groups independent
         # (num_heads*head_dim/o_groups) -> o_lora_rank blocks); o_b_proj mixes to hidden.
+        # Groups partition the heads, so a TP chip owns whole groups: keep o_a as ONE batched
+        # [1, o_groups, in_per_group, o_lora_rank] weight sharded on the group axis (dim 1) and run a
+        # single batched matmul -- each chip applies only its own groups, no collective.
         self.o_groups = int(o_groups)
         in_per_group = self.num_heads * self.head_dim // self.o_groups
-        o_a_grouped = o_a_proj_weight.detach().view(self.o_groups, -1, in_per_group)
-        self.wo_a = [self._to_tt_linear_weight(o_a_grouped[g]) for g in range(self.o_groups)]
-        self.wo_b = self._to_tt_linear_weight(o_b_proj_weight)
+        o_a_grouped = o_a_proj_weight.detach().view(self.o_groups, -1, in_per_group).transpose(1, 2).unsqueeze(0)
+        o_a_mapper = None
+        if self.is_mesh and self.tp_factor > 1:
+            o_a_dims = [None, None]
+            o_a_dims[self.tp_axis] = 1
+            o_a_mapper = ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=o_a_dims)
+        self.wo_a = self._from_torch(o_a_grouped, mesh_mapper=o_a_mapper)
+        # o_b_proj contracts over all o_groups*o_lora_rank columns while a chip holds only its own
+        # groups' slice -> contraction(row)-parallel, reduce-scattered in _o_proj.
+        self.wo_b = self._to_tt_linear_weight(o_b_proj_weight, tp_shard_dim=2)
 
         self.trans_mat = self._from_torch(get_rot_transformation_mat())
 
@@ -562,20 +572,44 @@ class TtHCA(_TtHCABase):
         return ttnn.concat([nope, rope], dim=-1)
 
     def _o_proj(self, attn):
-        """Grouped output projection (reference L871-873). ``attn`` [B, num_heads, S, head_dim]
-        -> reshape heads into o_groups blocks -> per-group o_a_proj (block-diagonal) -> concat
-        -> o_b_proj. Returns [B, 1, S, hidden]."""
+        """Grouped output projection (reference L871-873). ``attn`` [B, num_heads/tp, S/sp, head_dim]
+        -> heads regrouped into the chip's own o_groups/tp blocks -> batched o_a_proj (block-diagonal,
+        purely local: groups partition heads) -> o_b_proj (contraction-parallel) -> TP reduce-scatter.
+        Returns [B, 1, S/sp, hidden/tp] — the same layout the block takes as input."""
         batch, _, seq_len, _ = attn.shape
-        x = ttnn.permute(attn, (0, 2, 1, 3))  # [B, S, num_heads, head_dim]
-        x = ttnn.reshape(x, [batch, 1, seq_len, self.num_heads * self.head_dim])  # [B, 1, S, num_heads*head_dim]
-
         in_per_group = self.num_heads * self.head_dim // self.o_groups
-        groups = []
-        for g in range(self.o_groups):
-            xg = ttnn.slice(x, [0, 0, 0, g * in_per_group], [batch, 1, seq_len, (g + 1) * in_per_group])
-            groups.append(ttnn.linear(xg, self.wo_a[g], memory_config=self.memory_config))
-        grouped = ttnn.concat(groups, dim=-1)  # [B, 1, S, o_groups * o_lora_rank]
-        return ttnn.linear(grouped, self.wo_b, memory_config=self.memory_config)  # [B, 1, S, hidden]
+        groups_local = self.o_groups // self.tp_factor
+
+        x = ttnn.permute(attn, (0, 2, 1, 3))  # [B, S, num_heads/tp, head_dim]
+        x = ttnn.reshape(x, [batch, seq_len, groups_local, in_per_group])  # heads folded into whole groups
+        # Group axis must be dim 1 to batch the matmul over it; the matmul broadcasts in1 only when dim0
+        # matches, so fold batch into the row axis instead of relying on a dim-0 broadcast.
+        x = ttnn.permute(x, (2, 0, 1, 3))  # [groups_local, B, S, in_per_group]
+        x = ttnn.reshape(x, [1, groups_local, batch * seq_len, in_per_group])
+
+        grouped = ttnn.linear(x, self.wo_a, memory_config=self.memory_config)  # [1, groups_local, B*S, o_lora_rank]
+        o_lora_rank = grouped.shape[-1]
+        grouped = ttnn.reshape(grouped, [groups_local, batch, seq_len, o_lora_rank])
+        grouped = ttnn.permute(grouped, (1, 2, 0, 3))  # [B, S, groups_local, o_lora_rank]
+        grouped = ttnn.reshape(grouped, [batch, 1, seq_len, groups_local * o_lora_rank])
+
+        out = ttnn.linear(grouped, self.wo_b, memory_config=self.memory_config)  # partial-sum [B,1,S,hidden]
+
+        # Contraction-parallel o_b -> partial sums. Reduce-scatter (NOT a full all-reduce) both sums them
+        # and slices the result to hidden/tp, which is exactly the layout the next block expects.
+        if self.tp_factor > 1:
+            out = ttnn.experimental.reduce_scatter_minimal_async(
+                out,
+                persistent_output_buffers=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.tp_ccl_topology,
+                cluster_axis=self.tp_axis,
+            )
+        return out
 
     def forward(self, hidden_states, position_ids: torch.Tensor):
         """Full HCA block (prefill, single-shot), mirrors ``DeepseekV4Attention.forward``.
