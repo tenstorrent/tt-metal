@@ -86,18 +86,26 @@ int main(int argc, char** argv) {
         stride,
         ring_size / stride);
 
-    // Per-worker MR table: slot 0 valid (rkey, REMOTE_WRITE, 1 MB len).
+    // Phase 3.1b SHARED MR table: ONE table on the eth core (control-plane-owned); workers cache it and
+    // refresh on a generation bump. kWMr on each worker is now just the worker's LOCAL cache.
+    const uint32_t kSharedMr = TT_RDMA_MR_TABLE_ADDR;  // shared table on the eth core
+    // Generation counter lives in the SAME MR-table region (unused slot 63, word 0) -- proven host-writable
+    // + worker-readable (slot 0 works). The RCB/DBG regions are owned/churned by the base FW so writes there
+    // didn't reach the workers. The worker never uses slot 63 as an MR (test rkey -> slot 0).
+    const uint32_t kMrGen = kSharedMr + 63u * 32u;
     std::vector<uint32_t> mrtab(kMrSlots * 8, 0u);
-    mrtab[2] = 0x100000u;  // length lo
-    mrtab[4] = kRkey;      // rkey
-    mrtab[5] = 0x2u;       // access = REMOTE_WRITE
+    mrtab[2] = 0x100000u;  // slot 0 length lo (1 MB)
+    mrtab[4] = kRkey;      // slot 0 rkey
+    mrtab[5] = 0x2u;       // slot 0 access = REMOTE_WRITE
+    mrtab[63 * 8] = 1u;    // slot 63 word 0 = MR generation = 1
 
-    std::vector<uint32_t> z9(9, 0u), z6(6, 0u);
+    std::vector<uint32_t> z9(9, 0u), z7(7, 0u);
     cluster.write_core(device->id(), eth_phys, z9, (uint32_t)eth_stats_addr);
+    cluster.write_core(device->id(), eth_phys, mrtab, kSharedMr);  // shared table (incl. gen=1 in slot 63)
     for (uint32_t i = 0; i < nworkers; ++i) {
-        cluster.write_core(device->id(), wphys[i], z6, kWStats);
+        cluster.write_core(device->id(), wphys[i], z7, kWStats);
         cluster.write_core(device->id(), wphys[i], std::vector<uint32_t>{0u}, kWStop);
-        cluster.write_core(device->id(), wphys[i], mrtab, kWMr);
+        cluster.write_core(device->id(), wphys[i], mrtab, kWMr);  // pre-seed the local cache (refreshed anyway)
     }
 
     Program program = CreateProgram();
@@ -126,7 +134,9 @@ int main(int argc, char** argv) {
              kWScratch,
              kWMr,
              kMrSlots,
-             (uint32_t)eth_stats_addr + 8u});  // produce head = ingest kernel's PKT_END_CNT (stats[2])
+             (uint32_t)eth_stats_addr + 8u,  // produce head = ingest kernel's PKT_END_CNT (stats[2])
+             kSharedMr,                      // shared MR table on the eth core
+             kMrGen});                       // MR generation counter on the eth core
     }
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
@@ -137,14 +147,15 @@ int main(int argc, char** argv) {
     std::printf("BH-rx-worker: up. Fire the DOCA sender now.\n");
 
     auto rd = [&](const CoreCoord& c) {
-        return cluster.read_core<uint32_t>(device->id(), c, kWStats, 6 * sizeof(uint32_t));
+        return cluster.read_core<uint32_t>(device->id(), c, kWStats, 7 * sizeof(uint32_t));
     };
     uint64_t prev_sum = 0;
     bool have_prev = false;
     double peak_gbps = 0.0;
     uint32_t max_drop = 0;
     uint64_t fin_processed = 0, fin_lapped = 0;
-    uint32_t fin_produced = 0;
+    uint64_t valid_at_change = 0;  // aggregate valid captured right when we invalidate the shared MR
+    bool mr_changed = false;
     const int steps = hold_s * 4;
     for (int s = 0; s < steps; ++s) {
         uint64_t sum = 0, valid = 0, processed = 0, lapped = 0;
@@ -161,7 +172,20 @@ int main(int argc, char** argv) {
         }
         fin_processed = processed;
         fin_lapped = lapped;
-        fin_produced = est[2];  // PKT_END_CNT = total frames the MAC wrote to L1
+
+        // Halfway through: mutate the SHARED MR table centrally (invalidate slot 0's rkey) + bump the
+        // generation. Correct shared-table behavior: all workers refresh their cache and slot-0 WRITEs
+        // stop validating -> aggregate `valid` freezes, and every worker's cached_gen advances to 2.
+        if (!mr_changed && s == steps / 2) {
+            cluster.write_core(device->id(), eth_phys, std::vector<uint32_t>{0u}, kSharedMr + 4u * 4u);  // slot0 rkey=0
+            cluster.write_core(device->id(), eth_phys, std::vector<uint32_t>{2u}, kMrGen);               // gen -> 2
+            valid_at_change = valid;
+            mr_changed = true;
+            std::printf(
+                "  >> [t=%2ds] invalidated shared MR slot 0 (rkey->0), gen->2; valid was %llu\n",
+                (s + 1) / 4,
+                (unsigned long long)valid);
+        }
         if (have_prev) {
             const double gbps = (double)(sum - prev_sum) * 8.0 / 0.25 / 1e9;
             if (gbps > peak_gbps) {
@@ -191,14 +215,31 @@ int main(int argc, char** argv) {
     // either processed or skipped-as-lapped) -- this is what the worker-side accounting must satisfy, NOT
     // the stale host est[2] sample. Coverage = processed / produced_seen = the fraction the pool kept up
     // with; lapped>0 means too few workers for this frame RATE (small frames = high fps = worst case).
-    uint64_t produced_seen = 0;
+    uint64_t produced_seen = 0, final_valid = 0;
+    uint32_t workers_on_gen2 = 0;
     for (uint32_t i = 0; i < nworkers; ++i) {
         auto w = rd(wphys[i]);
         if (w[5] > produced_seen) {
             produced_seen = w[5];
         }
-        std::printf("    worker %u: processed=%u lapped=%u produced_seen=%u\n", i, w[3], w[4], w[5]);
+        final_valid += w[2];
+        if (w[6] == 2u) {
+            ++workers_on_gen2;
+        }
+        std::printf(
+            "    worker %u: processed=%u lapped=%u produced_seen=%u cached_gen=%u\n", i, w[3], w[4], w[5], w[6]);
     }
+    // Shared-MR-table check: after the central invalidate, every worker must have refreshed to gen 2 and
+    // slot-0 WRITEs must have stopped validating (final_valid ~ valid_at_change -- froze at the change).
+    const bool shared_mr_ok =
+        (workers_on_gen2 == nworkers) && mr_changed && (final_valid <= valid_at_change + (uint64_t)nworkers * 64u);
+    std::printf(
+        "  shared MR table: %u/%u workers refreshed to gen 2; valid froze %llu -> %llu after invalidate -> %s\n",
+        workers_on_gen2,
+        nworkers,
+        (unsigned long long)valid_at_change,
+        (unsigned long long)final_valid,
+        shared_mr_ok ? "SHARED-TABLE OK (central update seen by all workers)" : "SHARED-TABLE FAIL");
     const uint64_t accounted = fin_processed + fin_lapped;
     const double cover = produced_seen ? 100.0 * (double)fin_processed / (double)produced_seen : 0.0;
     const bool exactly_once = (accounted == produced_seen);  // no frame double-processed or dropped-unaccounted

@@ -25,7 +25,8 @@
 void kernel_main() {
     // arg0 stats(u32[6]: bytes_lo,bytes_hi,valid,processed,lapped,produced)  arg1 stop  arg2 eth noc_x
     // arg3 noc_y  arg4 ring base  arg5 ring size  arg6 stride  arg7 worker id  arg8 num workers
-    // arg9 scratch L1  arg10 MR table L1  arg11 mr slots  arg12 produce-head L1 addr on the eth core
+    // arg9 scratch L1  arg10 MR table LOCAL cache L1  arg11 mr slots  arg12 produce-head L1 addr on eth
+    // arg13 SHARED MR table L1 addr on the eth core (control-plane-owned)  arg14 MR generation L1 addr on eth
     const uint32_t stats_addr = get_arg_val<uint32_t>(0);
     const uint32_t stop_addr = get_arg_val<uint32_t>(1);
     const uint32_t src_x = get_arg_val<uint32_t>(2);
@@ -39,6 +40,8 @@ void kernel_main() {
     const uint32_t mr_table = get_arg_val<uint32_t>(10);
     const uint32_t mr_slots = get_arg_val<uint32_t>(11);
     const uint32_t phead_addr = get_arg_val<uint32_t>(12);  // eth L1 addr of PKT_END_CNT (monotonic produced)
+    const uint32_t shared_mr_addr = get_arg_val<uint32_t>(13);  // eth L1: control-plane-owned MR table
+    const uint32_t mr_gen_addr = get_arg_val<uint32_t>(14);     // eth L1: MR generation counter
 
     volatile tt_l1_ptr uint32_t* stats = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stats_addr);
     volatile tt_l1_ptr uint32_t* stop =
@@ -49,13 +52,27 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* sc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
     // Local mirror of the produce head; NoC-read from the eth core's published PKT_END_CNT.
     volatile tt_l1_ptr uint32_t* ph = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + 0x1000u);
+    // Local mirror of the MR generation counter (separate scratch slot from the produce head).
+    volatile tt_l1_ptr uint32_t* mg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + 0x1010u);
 
     const uint32_t nslots = ring_size / stride;  // whole frames that fit (avoid straddle)
     uint32_t next_idx = wid;                     // monotonic frame index this worker owns next
     uint32_t produced = 0;
+    uint32_t cached_gen = 0xFFFFFFFFu;  // force a shared-MR-table cache load on the first poll
     uint64_t bytes = 0;
     uint32_t valid = 0, processed = 0, lapped = 0, poll = 0;
     for (;;) {
+        // Shared MR table: read the control-plane-owned generation; on change, refresh the LOCAL cache
+        // from the single shared table on the eth core (RISC1 writes it on CONTROL registration; workers
+        // read). Between changes the per-frame lookup uses the local cache (no per-frame NoC read).
+        noc_async_read(get_noc_addr(src_x, src_y, mr_gen_addr), scratch + 0x1010u, 4u);
+        noc_async_read_barrier();
+        if (mg[0] != cached_gen) {
+            noc_async_read(get_noc_addr(src_x, src_y, shared_mr_addr), mr_table, mr_slots * 32u);
+            noc_async_read_barrier();
+            cached_gen = mg[0];
+        }
+
         // Refresh the produce head (PKT_END_CNT) from the eth core. Cheap: one NoC read per claim batch.
         noc_async_read(get_noc_addr(src_x, src_y, phead_addr), scratch + 0x1000u, 4u);
         noc_async_read_barrier();
@@ -101,6 +118,7 @@ void kernel_main() {
             stats[3] = processed;
             stats[4] = lapped;
             stats[5] = produced;
+            stats[6] = cached_gen;  // MR-table generation this worker has cached (proves shared-table refresh)
             if (stop != nullptr && *stop != 0) {
                 break;
             }
@@ -112,4 +130,5 @@ void kernel_main() {
     stats[3] = processed;
     stats[4] = lapped;
     stats[5] = produced;
+    stats[6] = cached_gen;
 }
