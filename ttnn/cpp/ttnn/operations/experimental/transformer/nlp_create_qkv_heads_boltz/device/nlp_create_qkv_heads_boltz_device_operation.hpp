@@ -69,14 +69,13 @@ struct NlpCreateHeadsBoltzDeviceOperation {
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    // Re-apply the Sharded factory's computed input-buffer addresses on every cache hit.
-    // The Sharded reader/writer bake raw base addresses AND per-core `base + head_offset` start
-    // addresses as uint32 runtime args; a plain Buffer* binding can only express the bare base, so
-    // these address-derived slots are refreshed here instead (the output CBs are patched via their
-    // `.buffer` bindings).  Defined in nlp_create_qkv_heads_boltz_program_factory.cpp so it can reuse
-    // the shared per-core arg builder that create_descriptor() uses. Interleaved returns no dynamic
-    // args.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+    // Re-apply per-dispatch state on every cache hit via override_runtime_arguments() by re-running
+    // the selected factory's create_descriptor (single source of truth). The Sharded factory bakes
+    // address-derived Q/KV base+start slots that a plain Buffer* binding cannot express; re-deriving
+    // the descriptor re-applies them (Interleaved binds its buffers via emplace_runtime_args and its
+    // rebuild is a no-op re-application). Defined in nlp_create_qkv_heads_boltz_program_factory.cpp.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program&,
         const operation_attributes_t&,
         const tensor_args_t&,
         tensor_return_value_t&,
