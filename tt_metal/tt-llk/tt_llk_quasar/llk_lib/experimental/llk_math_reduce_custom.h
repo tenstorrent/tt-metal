@@ -115,15 +115,13 @@ inline void _llk_math_reduce_block_max_row_mop_config_(const TensorShape& tensor
     LLK_ASSERT(!is_fp32_dest_acc_en, "32-bit DEST block reduce_max_row not supported on Quasar yet");
 
     const bool two_face_rows = (tensor_shape.num_faces_r_dim > 1);
-    // Per face-row pair: GMPOOL(CLR_SRCA_VLD) reads a face and steps SrcA, GMPOOL(CLR_NONE) reads the
-    // next face into the SAME slot (this CLR_SRCA_VLD/CLR_NONE pattern is rigid: a CLR_SRCA_VLD on the
-    // second pool, or a SETRWC(CLR_A) between the pairs, breaks the pool and zeros DEST). To make the
-    // second pair read F2 & F3 (not F1 & F2), the first pair's second pool uses ADDR_MOD_2, which
-    // steps the SrcA read by one face (FACE_R_DIM) via addr-mod instead of a CLR. F0&F1 -> slot0
-    // (DEST row 0), F2&F3 -> slot1 (DEST row 32); the trailing SETRWC(CLR_A) advances to the next
-    // tile and resets SrcA/SrcB counters (SrcB back to the resident scaler F0). DEST is parked
-    // (pools use no dest incr), so slots accumulate the running max across the block.
-    const std::uint32_t pool_len = (two_face_rows ? 5u : 3u);
+    // CHECKPOINT / KNOWN-INCOMPLETE. This "pool both face-rows into DEST, transpose once" structure
+    // (ported from WH/BH) is structurally wrong for Quasar: advancing SrcA to face-row 1 BEFORE
+    // transposing face-row 0 either wipes DEST (any CLR_SRCA_VLD / SETRWC(CLR_A) / CLEARDVALID) or
+    // clobbers F2,F3 (ZEROSRC). ZEROSRC is the least-wrong (slot0 exact, F2,F3 a few cols short).
+    // Correct fix needs a redesign to native reduce_row's transpose-BEFORE-advance rhythm; see the
+    // project notes. Left at the ZEROSRC checkpoint pending that.
+    const std::uint32_t pool_len = (two_face_rows ? 6u : 3u);
 
     load_replay_buf(
         0,
@@ -135,18 +133,13 @@ inline void _llk_math_reduce_block_max_row_mop_config_(const TensorShape& tensor
         {
             // Face-row 0 (F0 & F1) -> slot0 (DEST row 0).
             TTI_GMPOOL(p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
+            TTI_GMPOOL(p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
             if (two_face_rows)
             {
-                // F1 -> slot0; ADDR_MOD_2 steps SrcA F1 -> F2 so the next pair reads F2 & F3.
-                TTI_GMPOOL(p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_2, p_gpool::INDEX_DIS, 0);
+                TTI_ZEROSRC(0, 0, 0, 0, p_zerosrc::READ_BANK, p_zerosrc::CURR_BANK, p_zerosrc::CLR_A);
                 // Face-row 1 (F2 & F3) -> slot1 (DEST row 32).
                 TTI_GMPOOL(p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, REDUCE_BLOCK_SLOT1_DST);
                 TTI_GMPOOL(p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, REDUCE_BLOCK_SLOT1_DST);
-            }
-            else
-            {
-                // Tiny tile: single face-row, F0 & F1 -> slot0.
-                TTI_GMPOOL(p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
             }
             TTI_SETRWC(p_setrwc::CLR_A, 0, 0, p_setrwc::SET_AB);
         });

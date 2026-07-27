@@ -33,10 +33,11 @@ inline void _llk_math_reduce_block_max_row_mop_config_runtime_(const std::uint32
     LLK_ASSERT(!is_fp32_dest_acc_en, "32-bit DEST block reduce_max_row not supported on Quasar yet");
 
     const bool two_face_rows = (tensor_shape.num_faces_r_dim > 1);
-    // (CLR_SRCA_VLD, CLR_NONE) per face-row pair; the first pair's second pool uses ADDR_MOD_2 to step
-    // SrcA F1 -> F2 so the second pair reads F2 & F3. See the compile-time header for the full
-    // explanation.
-    const std::uint32_t pool_len = (two_face_rows ? 5u : 3u);
+    // CHECKPOINT (known-incomplete): ZEROSRC advance between the pool pairs -- slot0 (F0,F1) exact,
+    // slot1 (F2,F3) a few columns short. This "pool both face-rows then transpose once" structure is
+    // structurally wrong for Quasar (see the compile-time header / project notes); left here as the
+    // least-wrong checkpoint pending the transpose-before-advance redesign.
+    const std::uint32_t pool_len = (two_face_rows ? 6u : 3u);
 
     load_replay_buf(
         0,
@@ -47,15 +48,12 @@ inline void _llk_math_reduce_block_max_row_mop_config_runtime_(const std::uint32
         [two_face_rows]
         {
             TTI_GMPOOL(p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
+            TTI_GMPOOL(p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
             if (two_face_rows)
             {
-                TTI_GMPOOL(p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_2, p_gpool::INDEX_DIS, 0);
+                TTI_ZEROSRC(0, 0, 0, 0, p_zerosrc::READ_BANK, p_zerosrc::CURR_BANK, p_zerosrc::CLR_A);
                 TTI_GMPOOL(p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, REDUCE_BLOCK_SLOT1_DST);
                 TTI_GMPOOL(p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, REDUCE_BLOCK_SLOT1_DST);
-            }
-            else
-            {
-                TTI_GMPOOL(p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
             }
             TTI_SETRWC(p_setrwc::CLR_A, 0, 0, p_setrwc::SET_AB);
         });
