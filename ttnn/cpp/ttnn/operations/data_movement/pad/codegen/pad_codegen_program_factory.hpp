@@ -25,8 +25,6 @@ struct PadCodegenProgramFactory {
 // Packs one pad word in the output tensor's physical scalar format. Transcribed from
 // ops/pad/builder.py's ``_pack_pad_value`` (float32 keeps the exact IEEE-754 bit pattern;
 // bfloat16 round-to-nearest-even's it into both halves of the word; int32/uint32 truncate).
-// Shared by the program factory (to build ArgsPad's packed_pad_val) and is_demoted() (to
-// recover which raw ledger value a cache-hit's packed_pad_value corresponds to).
 uint32_t pack_pad_value(tt::tt_metal::DataType dtype, float value);
 
 // RM-only batch shrink for the wide-stick L1 cliff. Transcribed from
