@@ -66,9 +66,6 @@ class LlamaConfig:
     runner_type: RunnerType = RunnerType.Default
     weight_tying: WeightTyingType = WeightTyingType.Disabled
     rope_scaling: LlamaRopeScalingConfig = field(default_factory=LlamaRopeScalingConfig)
-    # Tensor-parallel strategy: NONE / TENSOR / TENSOR_SEQUENCE (the latter adds Megatron
-    # sequence parallelism, sharding the residual stream along the sequence across the "tp"
-    # axis in the norm/dropout/residual regions).
     tp_strategy: TPStrategy = TPStrategy.NONE
     embedding_placement: EmbeddingPlacement = EmbeddingPlacement.Replicated
 
@@ -135,7 +132,6 @@ class LlamaConfig:
                 )
 
         if self.tp_strategy.sequence_parallel:
-            # No embedding-side collective to fuse the sequence scatter into.
             if self.embedding_placement == EmbeddingPlacement.Replicated:
                 raise ValueError(
                     "sequence parallelism needs the embedding output sharded along the sequence, "
@@ -143,8 +139,7 @@ class LlamaConfig:
                     "VocabParallel or FeatureParallel, or use TPStrategy.TENSOR."
                 )
             # Each TP rank owns S/tp_size sequence positions and the sequence
-            # reduce-scatter requires the per-shard tile count to divide the ring:
-            # (S/32) % tp_size == 0, i.e. S % (32*tp_size) == 0.
+            # reduce-scatter requires the per-shard tile count to divide the ring.
             tp_size = ttml.mesh().axis_size("tp")
             if self.max_position_embeddings % (32 * tp_size) != 0:
                 raise ValueError(
@@ -162,19 +157,12 @@ class Llama(AbstractModuleBase):
         self.config = config
 
         if config.tp_strategy.tensor_parallel:
-            # Pad the vocab so the LM head's sharded output rows are
-            # tile-aligned: ColumnParallelLinear shards dim 2 across TP, so
-            # each shard needs to be divisible by 32.  The trailing padded
-            # columns are kept on-device and handled by the downstream
-            # vocab_parallel_cross_entropy_loss, so ``config.vocab_size`` is
-            # free to be arbitrary.
+            # Each device shard needs to be divisible by 32.
             tp_size = ttml.mesh().axis_size("tp")
             align = lcm(32, tp_size)
             self.padded_vocab_size = ((config.vocab_size + align - 1) // align) * align
-            # gather_output=False: keep the LM head output vocab-sharded
-            # ([B,1,S,padded_V/tp_size] per device) so callers can route through
-            # ttml.ops.distributed.vocab_parallel_cross_entropy_loss without an
-            # all-gather of the full vocab dimension.
+            # No gather after LM head, because vocab_parallel_cross_entropy_loss
+            # expects a vocab-sharded tensor.
             self.fc = ColumnParallelLinear(
                 config.hidden_size,
                 self.padded_vocab_size,
@@ -188,10 +176,6 @@ class Llama(AbstractModuleBase):
                 axis_name="tp",
             )
             if config.embedding_placement == EmbeddingPlacement.VocabParallel:
-                # Shard the embedding table on the vocab dim to mirror the LM head:
-                # each device keeps only its vocab slice instead of a full replicated
-                # table, and the matching layout allows a tied weight (below).
-                #
                 # Under SP the embedding output is reduce-scattered along the
                 # sequence so the first block receives a sequence-sharded residual.
                 self.tok_emb = VocabParallelEmbedding(
@@ -202,11 +186,6 @@ class Llama(AbstractModuleBase):
                     axis_name="tp",
                 )
             elif config.embedding_placement == EmbeddingPlacement.FeatureParallel:
-                # Shard the embedding table on the feature (hidden) dim: a fully
-                # local lookup plus an all-gather, no id masking. Its layout does
-                # not match the vocab-parallel LM head, so weight tying is
-                # unavailable (validated in LlamaConfig.__post_init__).
-                #
                 # Under SP the gathered full-hidden embedding is additionally
                 # scattered along the sequence, so the first block receives a
                 # sequence-sharded residual.
@@ -290,10 +269,6 @@ class Llama(AbstractModuleBase):
         padded_seq_len = ((actual_seq_len + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
 
         if self.config.tp_strategy.sequence_parallel:
-            # SP shards the embedding output along the sequence, so the post-embedding
-            # unpad-slice (on the now-sharded sequence dim) is not expressible. Require
-            # the sequence to already be tile*tp aligned so no pad/slice is needed; the
-            # sequence reduce-scatter needs the same alignment anyway.
             tp_size = ttml.mesh().axis_size("tp")
             if actual_seq_len % (TILE_SIZE * tp_size) != 0:
                 raise ValueError(
@@ -333,16 +308,8 @@ class Llama(AbstractModuleBase):
 
         out = self.ln_fc(out)
         logits = self.fc(out)
-        # Both paths pad the vocab to a tile multiple, so padded_vocab_size may
-        # exceed vocab_size -- but only the non-TP path drops that padding here:
-        #   - non-TP: `fc` is a plain LinearLayer returning the full-vocab logits
-        #     [B,1,S,padded_V] to the caller, which feeds an ordinary
-        #     cross_entropy_loss expecting exactly vocab_size columns -> slice.
-        #   - TP: `fc` is ColumnParallelLinear(gather_output=False), so the logits
-        #     stay vocab-sharded ([B,1,S,padded_V/tp] per rank). The padding lives
-        #     only in the last rank's shard and is handled inside
-        #     vocab_parallel_cross_entropy_loss; a uniform last-dim slice would be
-        #     meaningless on a sharded tensor. So do NOT slice under TP.
+        # Under TP the padding is handled inside
+        # vocab_parallel_cross_entropy_loss.
         if not self.config.tp_strategy.tensor_parallel and self.padded_vocab_size != self.config.vocab_size:
             logits = SliceLastDim.apply(logits, self.config.vocab_size)
         return logits
