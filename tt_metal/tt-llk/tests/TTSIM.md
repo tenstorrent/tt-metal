@@ -105,3 +105,8 @@ the most common format and no SFPU/tilize paths.
   tt-umd. The fix that advances the sim clock on host writes
   (TTSimTTDevice::write_to_device) is required; upgrade to a release
   that contains it.
+- `Simulator binary not found at: <dir>/run.sh` — you reached the **RTL**
+  simulator path, not ttsim. `init_ttexalens(simulation_directory=...)` is for
+  the RTL flow; ttsim is opened with
+  `tt_umd.create_simulation_tt_device("<path>/libttsim_wh.so")`, or by setting
+  `TT_METAL_SIMULATOR` and letting the harness do it.

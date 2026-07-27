@@ -68,10 +68,29 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_digamma() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
+
+        // Small-x recurrence. Below the LUT fit range the rational saturates at
+        // a0/b0 (-337671.9 for the bf16 fit) while digamma(x) -> -inf as x -> 0+,
+        // so the op silently returns a finite constant for an unbounded function.
+        // digamma(x) = digamma(x+1) - 1/x is exact, and one step lands x+1 in
+        // [1, 1.01], comfortably inside the fit range. The reciprocal is already
+        // programmed for the large-x branch below.
+        //
+        // The shift is folded into the LUT argument rather than evaluated in a
+        // second rational body: the evaluator is fully inlined, so a duplicate
+        // call costs LLK instruction space for a branch that only differs in
+        // its input.
+        sfpi::vFloat lut_arg = x;
+        v_if(x < 0.01f) { lut_arg = x + 1.0f; }
+        v_endif;
+
         // Piecewise-rational LUT, fit on [0.01, 102].
         sfpi::vFloat result =
             piecewise_rational_eval<DIGAMMA_NUM_DEGREE, DIGAMMA_DEN_DEGREE, DIGAMMA_NUM_SEGMENTS, DIGAMMA_LUT_SIZE>(
-                DIGAMMA_LUT, x);
+                DIGAMMA_LUT, lut_arg);
+
+        v_if(x < 0.01f) { result = result - sfpu_reciprocal_iter<2>(x); }
+        v_endif;
 
         // Large-x asymptotic (Bernoulli series). Above the LUT fit range the rational
         // extrapolates poorly (issue #45520: "behaves bad for x>1000"); the asymptotic
