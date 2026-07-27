@@ -129,7 +129,10 @@ def _mm_1d_config(device, m, k, n, fused_activation=None):
         # accumulation enough to flip borderline greedy argmax picks in free-running decode
         # (exact-match prefix regressed 16/16 -> 10/16), so ibw=4 preserves exact output.
         ibw = next(b for b in (4, 2, 1) if kt % b == 0)
-        pcn = 2 if nt <= 32 else (3 if nt <= 64 else 4)
+        # per_core_N picked from a decode (M=32) core-count sweep (output-neutral — PCC identical
+        # across all pcn): c_proj/mlp_c_proj (nt=32) want pcn=3 (11 cores, -9%/-2% vs pcn=2),
+        # c_attn (nt=96) pcn=4, mlp_c_fc (nt=128) pcn=6 (26 cores, -2% vs pcn=4).
+        pcn = 3 if nt <= 32 else (4 if nt <= 96 else 6)
         osw = 2 if pcn % 2 == 0 else 1
         ncols = math.ceil(nt / pcn)
         cx = min(gx, ncols)
