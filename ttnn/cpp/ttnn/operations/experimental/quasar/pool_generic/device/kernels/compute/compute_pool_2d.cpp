@@ -1,7 +1,5 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
-// [#48552 DIAGNOSTIC] DFB credit APIs (wait_front/reserve_back/push_back/pop_front) commented out to bisect the maxpool
-// hang (DFB-credit vs compute dest-sync). REVERT AFTER.
 
 #include <cstdint>
 
@@ -187,7 +185,7 @@ void kernel_main() {
 
     // wait for initialization to complete
     if constexpr (one_scalar_per_core) {
-        // [#48552 DIAG] DFB API removed:         in_scalar_cb_0.wait_front(1);
+        in_scalar_cb_0.wait_front(1);
     }
 
     // if max out sticks is non-zero then this will be used as the number of out sticks for every core
@@ -224,10 +222,10 @@ void kernel_main() {
         DataflowBuffer curr_in_cb = in_cb_0;
 #endif
         if constexpr (!one_scalar_per_core) {
-            // [#48552 DIAG] DFB API removed:             curr_scalar_cb.wait_front(1);
+            curr_scalar_cb.wait_front(1);
         }
         if (is_output_tiled && !tilize_stick_counter) {
-            // [#48552 DIAG] DFB API removed:             out_cb.reserve_back(in_ntiles_c);
+            out_cb.reserve_back(in_ntiles_c);
         }
         for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
             const bool last_c_block = c_i == in_nblocks_c - 1;
@@ -249,7 +247,7 @@ void kernel_main() {
                 PACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE10u));
                 PACK(WATCHER_RING_BUFFER_PUSH((uint32_t)n));
                 PACK(WATCHER_RING_BUFFER_PUSH((uint32_t)c_i));
-                // [#48552 DIAG] DFB API removed:                 out_cb.reserve_back(output_faces);
+                out_cb.reserve_back(output_faces);
             }
 #endif
             // Re-init the fused tilize+reduce for THIS stick/c-block through the compute API rather than
@@ -271,7 +269,7 @@ void kernel_main() {
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE12u));
                 UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)chunk));
-                // [#48552 DIAG] DFB API removed:                 curr_in_cb.wait_front(1);
+                curr_in_cb.wait_front(1);
                 // [DIAG] reduce-input geometry (Bug 1 straddle check): rd = strided-read base, esz = bytes
                 // per entry, t2r = tiles this reduce strides over. If the strided row walk for t2r tiles
                 // exceeds esz it reads into the next entry (wrong rows). First few sticks only (flood guard).
@@ -295,7 +293,7 @@ void kernel_main() {
                 for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
                     reduce_tile_math<REDUCE_OP, REDUCE_DIM>(math_tile_idx, num_faces_in_input_tile);
                 }
-                // [#48552 DIAG] DFB API removed:                 curr_in_cb.pop_front(1);
+                curr_in_cb.pop_front(1);
             }
             tile_regs_commit();
             PACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE13u));
@@ -308,25 +306,26 @@ void kernel_main() {
 #ifdef OUTPUT_TILED
                 if (last_c_block) {
                     pack_untilize_dest<partial_iter_output_tiles>(pre_tilize_cb_id, 1, 0);
-                    // [#48552 DIAG] DFB API removed: pre_tilize_cb.push_back(partial_iter_output_tiles);
+                    pre_tilize_cb.push_back(partial_iter_output_tiles);
                     tilize_stick_counter++;
                     tilize_stick_total++;
                 } else {
                     pack_untilize_dest<max_tiles_per_iter>(pre_tilize_cb_id, 1, 0);
-                    // [#48552 DIAG] DFB API removed:                     pre_tilize_cb.push_back(max_tiles_per_iter);
+                    pre_tilize_cb.push_back(max_tiles_per_iter);
                 }
                 tile_regs_release();
 
                 bool last_tile = num_out_sticks_this_core - tilize_stick_total < last_tile_height;
                 if (tilize_stick_counter == TILE_HEIGHT || (last_tile && tilize_stick_counter == last_tile_height)) {
                     if (last_tile && last_tile_height != TILE_HEIGHT) {
-                        // [#48552 DIAG] DFB API removed: pre_tilize_cb.wait_front(last_tile_height * in_ntiles_c); if
-                        // the last tile is not whole we won't have pushed enough sticks, so we need to push some filler
-                        // sticks to reach TILE_HEIGHT to make sure the CB pointers are correct before calling tilize
+                        pre_tilize_cb.wait_front(last_tile_height * in_ntiles_c);
+                        // if the last tile is not whole we won't have pushed enough sticks, so we need to
+                        // push some filler sticks to reach TILE_HEIGHT to make sure the CB pointers are correct
+                        // before calling tilize
                         uint32_t filler_stick_tiles =
                             (TILE_HEIGHT - last_tile_height) *
                             ((in_nblocks_c - 1) * max_tiles_per_iter + partial_iter_output_tiles);
-                        // [#48552 DIAG] DFB API removed: pre_tilize_cb.push_back(filler_stick_tiles);
+                        pre_tilize_cb.push_back(filler_stick_tiles);
                     }
                     PACK((pack_untilize_uninit(pre_tilize_cb_id)));
 
@@ -340,8 +339,8 @@ void kernel_main() {
                     // advance by the same number of bytes per round so their rd/wr pointers
                     // stay aligned. The producer-view wait_front/pop_front/reserve_back below
                     // continues to drive the producer pointer ledger.
-                    // [#48552 DIAG] DFB API removed:                     fast_tilize_cb.push_back(in_ntiles_c);
-                    // [#48552 DIAG] DFB API removed:                     fast_tilize_cb.wait_front(in_ntiles_c);
+                    fast_tilize_cb.push_back(in_ntiles_c);
+                    fast_tilize_cb.wait_front(in_ntiles_c);
 
 #ifndef ARCH_QUASAR
                     fast_tilize_init(fast_tilize_cb_id, in_ntiles_c, out_cb_id);
@@ -372,13 +371,11 @@ void kernel_main() {
                     tilize_uninit(fast_tilize_cb_id, out_cb_id);
 #endif
 
-                    // [#48552 DIAG] DFB API removed:                     out_cb.push_back(in_ntiles_c);
-                    // [#48552 DIAG] DFB API removed:                     fast_tilize_cb.pop_front(in_ntiles_c);
-                    // [#48552 DIAG] DFB API removed:                     fast_tilize_cb.reserve_back(in_ntiles_c);
-                    // [#48552 DIAG] DFB API removed:                     pre_tilize_cb.pop_front(TILE_HEIGHT *
-                    // in_ntiles_c);
-                    // [#48552 DIAG] DFB API removed:                     pre_tilize_cb.reserve_back(TILE_HEIGHT *
-                    // in_ntiles_c);
+                    out_cb.push_back(in_ntiles_c);
+                    fast_tilize_cb.pop_front(in_ntiles_c);
+                    fast_tilize_cb.reserve_back(in_ntiles_c);
+                    pre_tilize_cb.pop_front(TILE_HEIGHT * in_ntiles_c);
+                    pre_tilize_cb.reserve_back(TILE_HEIGHT * in_ntiles_c);
 
                     tilize_stick_counter = 0;
 
@@ -432,7 +429,7 @@ void kernel_main() {
                 // base_l1 grew. Each c-block packs its channel slice into this shared stick below; the whole
                 // stick is pushed once on the last c-block so the DM reader consumes exactly one stick per pop.
                 if (first_c_block) {
-                    // [#48552 DIAG] DFB API removed:                     curr_scratch_cb.reserve_back(scratch_npages);
+                    curr_scratch_cb.reserve_back(scratch_npages);
                 }
 #if DEBUG_PRINT == 1
                 // Which scratch CB and where does compute pack THIS stick? Compare wptr to the reader's
@@ -506,8 +503,7 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
                     PACK(TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::NOTHING, p_stall::PACK));
 #endif
-                    // [#48552 DIAG] DFB API removed:                     curr_scratch_cb.push_back(scratch_npages);  //
-                    // hand off to the DM reader, which writes the output
+                    curr_scratch_cb.push_back(scratch_npages);  // hand off to the DM reader, which writes the output
                 }
 #else
                 // Production RM path: narrow pack straight into out_cb (already reserved above). Pair the
@@ -520,7 +516,7 @@ void kernel_main() {
                     pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0);
                 }
                 tile_regs_release();
-// [#48552 DIAG] DFB API removed:                 out_cb.push_back(output_faces);
+                out_cb.push_back(output_faces);
 #endif
 #if DEBUG_PRINT == 1
                 PACK(DPRINT(
@@ -533,7 +529,7 @@ void kernel_main() {
             }
         }
         if constexpr (!one_scalar_per_core) {
-            // [#48552 DIAG] DFB API removed:             curr_scalar_cb.pop_front(1);
+            curr_scalar_cb.pop_front(1);
         }
     }
 }
