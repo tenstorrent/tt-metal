@@ -29,8 +29,12 @@ applied automatically because they live in the shared model code that
 ``Gemma4Generator.from_pretrained`` builds.
 
 Usage:
-    HF_MODEL=google/gemma-4-31B-it pytest \
+    HF_MODEL=google/gemma-4-31B-it MESH_DEVICE=P150x8 pytest \
         models/demos/gemma4/demo/text_demo_v2.py -k "batch-1" -sv
+
+    # Long-context (defaults pick bounded/chunk for coherency):
+    MESH_DEVICE=P150x8 HF_MODEL=google/gemma-4-31B-it pytest \
+        models/demos/gemma4/demo/text_demo_v2.py -k "long-context-128k" -s --timeout 1800
 
     # Override prompts / lengths from the CLI:
     HF_MODEL=google/gemma-4-31B-it pytest \
@@ -56,7 +60,7 @@ from models.demos.gemma4.demo.sampling_utils import (
     model_can_sample_on_device,
 )
 from models.demos.gemma4.tt.generator import Gemma4Generator
-from models.demos.gemma4.tt.generator_trace import should_auto_enable_bounded_sliding
+from models.demos.gemma4.tt.generator_trace import resolve_gemma4_demo_long_context
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
@@ -314,12 +318,13 @@ def _device_params():
             True,
         ),
         # NOTE on long-context-32k/64k/128k/256k (see GEMMA4_LONG_CONTEXT_POLICY):
-        #   Per-(model, device) cutovers on QB2 (P150x4 / P300x2):
-        #     31B: bounded @ 64k, chunked @ 256k
-        #     12B/26B-A4B: unbounded through 128k; bounded(+chunked) @ 256k
-        #     E2B/E4B: unbounded through 256k (HF native max_pos is 128k)
+        #   Coherence target: 4k–128k on QB2 + LoudBox (12B/31B) and P150 (≤12B).
+        #   Defaults (MESH_DEVICE + HF_MODEL) — no extra env needed:
+        #     QB2: 31B bounded @ 64k, chunk=2048 @ ≥128k; 12B/26B unbound→128k
+        #     P150x8: 31B/26B unbound→64k, bounded+chunk=2048 @ ≥128k
+        #             (unbounded 128k → "lapped…"); 12B/E2B/E4B unbound→256k
         #   Override: GEMMA4_BOUNDED_SLIDING, GEMMA4_GEN_PREFILL_CHUNK,
-        #   GEMMA4_DEMO_SINGLE_CHUNK.
+        #   GEMMA4_DEMO_SINGLE_CHUNK (avoid for quality).
         (  # long-context-32k
             "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",
             True,
@@ -516,19 +521,16 @@ def test_demo_text(
         PagedAttentionConfig(block_size=block_size, max_num_blocks=page_max_num_blocks) if paged_attention else None
     )
 
-    # Sliding-cache mode from GEMMA4_LONG_CONTEXT_POLICY (per model × device).
-    # Override bounded with GEMMA4_BOUNDED_SLIDING=0/1.
-    _bs_env = os.environ.get("GEMMA4_BOUNDED_SLIDING")
-    if _bs_env is None:
-        bounded_sliding = should_auto_enable_bounded_sliding(max_seq_len, mesh_device, model_path)
-    else:
-        bounded_sliding = _bs_env.lower() in ("1", "true", "yes")
-    bounded_sliding = bounded_sliding and paged_attention
+    # Sliding-cache + prefill chunk from GEMMA4_LONG_CONTEXT_POLICY (model × device).
+    # Override: GEMMA4_BOUNDED_SLIDING, GEMMA4_GEN_PREFILL_CHUNK.
+    lc = resolve_gemma4_demo_long_context(max_seq_len, mesh_device, model_path, paged_attention=paged_attention)
+    bounded_sliding = lc["bounded_sliding"]
 
     # ── Model (all optimizations applied inside create_tt_model) ───────────
     logger.info(
         f"Loading Gemma4 from {model_path} (layers={num_layers or 'all'}, max_seq_len={max_seq_len}, "
-        f"bounded_sliding={bounded_sliding})..."
+        f"bounded_sliding={bounded_sliding}, prefill_chunk={lc['prefill_chunk']}, "
+        f"policy={lc['policy_source']})..."
     )
     generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
         mesh_device=mesh_device,
