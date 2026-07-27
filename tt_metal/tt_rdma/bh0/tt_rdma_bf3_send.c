@@ -142,6 +142,9 @@ int main(int argc, char** argv) {
     // frame. Positional (not env) so it survives the allowlisted `sudo` (which strips the environment).
     const int badcrc = (argc > 11) ? atoi(argv[11]) : 0;
     const uint32_t crc_xor = badcrc ? 0xFFFFFFFFu : 0u;
+    // Perf hook (arg[12] readlat=N>0): with opcode 0x20 (READ_REQ), measure the READ round-trip latency
+    // -- send a READ_REQ, wait for the BH's READ_RESP (0x21) on the wire, time it, N times -> percentiles.
+    const int readlat = (argc > 12) ? atoi(argv[12]) : 0;
 
     unsigned dm[6] = {0};
     if (sscanf(dmac_s, "%x:%x:%x:%x:%x:%x", &dm[0], &dm[1], &dm[2], &dm[3], &dm[4], &dm[5]) != 6) {
@@ -217,6 +220,89 @@ int main(int argc, char** argv) {
             }
             frame_len = 14u + 32u + plen;
         }
+    }
+
+    // ---- READ round-trip latency: send READ_REQ, time until READ_RESP (0x21) returns. ----
+    if (readlat > 0) {
+        struct sockaddr_ll sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sll_family = AF_PACKET;
+        sa.sll_ifindex = ifindex;
+        sa.sll_halen = 6;
+        memcpy(sa.sll_addr, frame, 6);
+        if (bind(fd, (struct sockaddr*)&sa, sizeof(sa)) < 0) {
+            perror("bind");
+        }
+        // Promiscuous: the READ_RESP's dst MAC is the initiator's, not this host's, so the NIC would
+        // otherwise filter it out (tcpdump sees it only because it enables promisc).
+        struct packet_mreq pmr;
+        memset(&pmr, 0, sizeof(pmr));
+        pmr.mr_ifindex = ifindex;
+        pmr.mr_type = PACKET_MR_PROMISC;
+        setsockopt(fd, SOL_PACKET, PACKET_ADD_MEMBERSHIP, &pmr, sizeof(pmr));
+        struct timeval rto = {0, 50000};  // 50 ms recv timeout per sample
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rto, sizeof(rto));
+        double* us = (double*)malloc((size_t)readlat * sizeof(double));
+        int got = 0;
+        unsigned char rb[4200];
+        for (int i = 0; i < readlat; i++) {
+            struct timespec t0, t1;
+            clock_gettime(CLOCK_MONOTONIC, &t0);
+            if (sendto(fd, frame, frame_len, 0, (struct sockaddr*)&sa, sizeof(sa)) != (ssize_t)frame_len) {
+                continue;
+            }
+            int done = 0;
+            for (;;) {
+                ssize_t r = recv(fd, rb, sizeof(rb), 0);
+                if (r < 0) {
+                    break;  // 50ms timeout -> drop this sample
+                }
+                if (r >= 14 + 32 && rb[12] == 0x1a && rb[13] == 0xf6 && rb[14] == 0x21) {
+                    done = 1;
+                    break;  // READ_RESP (op 0x21)
+                }
+                clock_gettime(CLOCK_MONOTONIC, &t1);
+                double e = (t1.tv_sec - t0.tv_sec) * 1e6 + (t1.tv_nsec - t0.tv_nsec) / 1e3;
+                if (e > 50000.0) {
+                    break;
+                }
+            }
+            if (done) {
+                clock_gettime(CLOCK_MONOTONIC, &t1);
+                us[got++] = (t1.tv_sec - t0.tv_sec) * 1e6 + (t1.tv_nsec - t0.tv_nsec) / 1e3;
+            }
+        }
+        if (got == 0) {
+            printf("readlat: 0/%d responses (is the BH in read-target mode?)\n", readlat);
+            free(us);
+            close(fd);
+            return 1;
+        }
+        // sort for percentiles (simple insertion sort; N is small)
+        for (int a = 1; a < got; a++) {
+            double v = us[a];
+            int b = a - 1;
+            while (b >= 0 && us[b] > v) {
+                us[b + 1] = us[b];
+                b--;
+            }
+            us[b + 1] = v;
+        }
+        double sum = 0;
+        for (int a = 0; a < got; a++) {
+            sum += us[a];
+        }
+        printf(
+            "readlat: n=%d  min=%.1f  p50=%.1f  avg=%.1f  p99=%.1f  max=%.1f  (us round-trip)\n",
+            got,
+            us[0],
+            us[got / 2],
+            sum / got,
+            us[(int)(got * 0.99)],
+            us[got - 1]);
+        free(us);
+        close(fd);
+        return 0;
     }
 
     // ---- BLAST path: N threads x sendmmsg(batch) to saturate the wire. ----

@@ -1,0 +1,4 @@
+# TT-RDMA perf baseline (us round-trip, Gbps)
+p50=51.5
+p99=87.0
+bw=12.5
