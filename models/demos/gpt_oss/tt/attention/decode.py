@@ -163,13 +163,19 @@ def decode_forward(
     tt_sdpa_out = ttnn.experimental.nlp_concat_heads_decode(tt_sdpa_tensor, num_heads=num_local_heads)
     tt_sdpa_tensor.deallocate(True)
 
+    # Fuse the o_proj bias-add and the bf8 output cast into the linear (bias= and
+    # dtype=) instead of a separate add + typecast. Removes 2 ops/layer (~48 op
+    # launches/token) to cut trace-execute dispatch overhead (the dominant decode
+    # cost). Output goes to L1 interleaved (matches the prior post-add layout).
     tt_out = ttnn.linear(
-        tt_sdpa_out, weights.o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        tt_sdpa_out,
+        weights.o_proj,
+        bias=weights.o_proj_bias,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
     tt_sdpa_out.deallocate(True)
-    tt_out = ttnn.add(tt_out, weights.o_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-    tt_out = ttnn.typecast(tt_out, ttnn.bfloat8_b)
 
     # Calculate padded hidden size for tile-aligned CCL operations.
     local_hidden = hidden_size // mesh_config.tp
