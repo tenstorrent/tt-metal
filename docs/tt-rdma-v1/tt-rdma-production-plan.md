@@ -161,6 +161,23 @@ apps work. This is the impl-plan G.x MVP and the reason the project exists.
 - **4.5 Translation tiering** — T1 Arm (correctness) → T2 zero-copy header-only → **T3 DPA** (line-rate,
   in-datapath) per `tt-rdma-dpa-gateway-spec.md`. Each tier measured.
 
+### 4F — ext-TT-RDMA ↔ TT-fabric bridge (inbound cross-chip landing)
+
+Makes the node a **mesh** endpoint: an inbound op lands on an MR on *any* TT chip behind the gateway, not
+just the edge chip. Closes the "tight bridge" gap (`bidirectional-mesh-gap.md`, `impl-plan §11.1`). Full
+design + caveats: **`tt-rdma-fabric-bridge-design.md`**. Depends on 1.6 (MR lifecycle) + 3.1 (Tensix
+drainer pool). Key insight: TT-fabric already routes + lands cross-chip with completions, and the drainer
+workers are Tensix cores = native fabric clients — so the bridge is MR entries carrying a **fabric-global
+address `{mesh,chip,noc_addr}`** + a one-branch fabric write (`udm::fabric_fast_write_any_len`) in the drainer.
+
+- **4F.1** Fabric-global MR entry (`is_local` fast path) + cluster MR-registration service (interior-chip MR → edge `rkey` table).
+- **4F.2** Drainer fabric-write branch; validate byte-exact on a 2-chip mesh (edge + interior) via the DOCA sender.
+- **4F.3** Completion: fabric-barrier-gated CQE + deferred ACK reflecting the *interior* landing.
+- **4F.4** **Measure cross-chip inbound BW** (interior MR, 1..k hops) — TT-fabric is RISC store-and-forward,
+  so remote-MR is fabric-BW-bound (local-MR stays the measured 200 G). Establishes the remote-MR tier.
+- **4F.5** Reliability (fabric-hop failure + retransmit), MR-across-chips consistency, and the coexistence
+  gate (custom external-rail RX kernel + stock TT-fabric EDM on the same chip's different eth cores).
+
 ## Phase 5 — Full production (SDK, scale, ops, sign-off)
 
 - **5.1 Host SDK** — `TtRdmaEndpoint` (`register_mr`/`post_send_*`/`poll_cq`) retargeted to BH, productized,
