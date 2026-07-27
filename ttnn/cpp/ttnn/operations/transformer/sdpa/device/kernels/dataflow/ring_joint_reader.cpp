@@ -244,9 +244,12 @@ void kernel_main() {
     constexpr uint32_t kv_meta_args_offset =
         kv_pad_from_metadata ? meta_args.next_compile_time_args_offset() : meta_args_offset;
     constexpr auto kv_meta_args = TensorAccessorArgs<kv_meta_args_offset>();
-    constexpr uint32_t chains_base_offset = kv_pad_from_metadata ? kv_meta_args.next_compile_time_args_offset()
-                                            : slot_from_metadata ? meta_args.next_compile_time_args_offset()
-                                                                 : post_tensor_args_offset;
+    // Split to avoid a nested conditional operator: first resolve the base when kv_pad is absent, then
+    // override it when kv_pad_from_metadata appends kv_actual_isl's accessor after slot's.
+    constexpr uint32_t chains_base_no_kv_pad =
+        slot_from_metadata ? meta_args.next_compile_time_args_offset() : post_tensor_args_offset;
+    constexpr uint32_t chains_base_offset =
+        kv_pad_from_metadata ? kv_meta_args.next_compile_time_args_offset() : chains_base_no_kv_pad;
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);

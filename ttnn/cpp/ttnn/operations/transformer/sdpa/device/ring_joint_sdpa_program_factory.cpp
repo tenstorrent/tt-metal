@@ -650,6 +650,12 @@ namespace {
 // create_workload_descriptor() can loop coords and reuse this body verbatim. The
 // op-specific name suffix avoids Unity-build collisions with the sibling ring
 // sdpa factories that share the same helper signature.
+//
+// This is a single-pass builder whose branches (chunked vs full, metadata vs scalar, forward/backward
+// ring halves) are tightly coupled through shared local offsets, so it reads clearest as one body. The
+// per-element-tensor metadata overload added the last few branches that nudged it just past the repo
+// cognitive-complexity threshold; suppress here rather than split the coupled body.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const RingJointSDPAParams& args,
     const RingJointSDPAInputs& tensor_args,
