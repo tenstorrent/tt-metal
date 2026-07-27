@@ -43,9 +43,16 @@ phase inherits manual bench fragility.
 - **0.2 Automated regression harness. ✅ core DONE** — `tt_metal/tt_rdma/bh0/regression.sh`: asserted
   PASS/FAIL + exit code for the core invariants — T1 golden wire-header vectors, T2 TX egress (frames on
   the wire), T3 RX inbound WRITE byte-exact (dispatch + MR + noc_async_write to Tensix, landing == "TTWR"),
-  T4 RX streaming lossless (BUF_WRAP, bad==0). Uses 256B host-sender frames so correctness gates don't
-  depend on jumbo/DPU state. Runs green (5/5) on the rig. TODO: add TX-aggregate (2-rail), jumbo-both-ways,
-  and RX-ceiling perf assertions (perf tests, separate from correctness); fold into a `make test` target.
+  T4 RX streaming lossless (BUF_WRAP, bad==0), T5 CRC drop, T6 SEND-ring, T7 READ round-trip, T8 ACK
+  cumulative, T9 WRITE_IMM completion. Uses small host-sender frames so correctness gates don't depend on
+  jumbo/DPU state. Runs green (**9/9**) on the rig.
+- **0.2b Per-phase PERF gate. ✅ DONE** — `tt_metal/tt_rdma/bh0/perf.sh` (companion to regression.sh):
+  measures **latency** (READ round-trip p50/p99, host-only) + **bandwidth** (RX WRITE processing rate,
+  rate-matched DPU sender) and flags a **regression vs a recorded baseline** (`perf_baseline.txt`; lat
+  +25%, bw −15% tolerances). **Baseline: p50 ≈ 51 µs, bw ≈ 12.5 Gbps (crc-on).** Standing rule: **every
+  phase change runs `regression.sh` (correctness) AND `perf.sh` (BW+latency non-regression)** before the
+  item is ticked. NB perf.sh never SIGTERMs a kernel — an abrupt kill wedges the eth core (needs
+  `tt-smi -r` + re-force BF3 200G); it sizes hold_s + waits for the clean stop-flag shutdown.
 - **0.3 Close known rough edges. ✅ mostly DONE.**
   - **`risc_touch` removed** from the TX ring kernel + host — it was a diagnostic red herring that hangs
     the TXQ (busy-waits a stuck `CMD_ONGOING`); a footgun that must not ship. TX egress re-verified after
@@ -207,7 +214,9 @@ address `{mesh,chip,noc_addr}`** + a one-branch fabric write (`udm::fabric_fast_
 
 ## Working discipline (applies to every phase)
 
-1. **Test before tick.** Each item lands with its automated regression test in the same change.
+1. **Test before tick.** Each item lands with its automated regression test in the same change, and runs
+   **both** gates: `regression.sh` (correctness, byte-exact) **and** `perf.sh` (BW + latency vs baseline).
+   A correctness pass with a perf regression is not done.
 2. **Reproducible from cold.** If it needs a manual bench step, it isn't done — script it (Phase 0.1).
 3. **Error paths are features.** Every drop/failure has a defined behavior + a counter + a test.
 4. **Commit small, push, keep the branch green.** Each item is a reviewable change on
