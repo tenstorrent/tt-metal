@@ -16,7 +16,6 @@ def toy_tilize_untilize(
     input_tensor: ttnn.Tensor,
     *,
     use_row_granularity: bool = False,
-    use_streaming_tilize: bool = False,
     memory_config: ttnn.MemoryConfig = None,
 ) -> ttnn.Tensor:
     assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT, "Input must be ROW_MAJOR"
@@ -32,10 +31,5 @@ def toy_tilize_untilize(
         output_memory_config,
     )
 
-    program_descriptor = create_program_descriptor(
-        input_tensor,
-        output_tensor,
-        use_row_granularity=use_row_granularity,
-        use_streaming_tilize=use_streaming_tilize,
-    )
+    program_descriptor = create_program_descriptor(input_tensor, output_tensor, use_row_granularity=use_row_granularity)
     return ttnn.generic_op([input_tensor, output_tensor], program_descriptor)

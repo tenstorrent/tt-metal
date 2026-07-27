@@ -14,7 +14,6 @@ void kernel_main() {
     constexpr uint32_t num_blocks = get_compile_time_arg_val(1);
     constexpr uint32_t use_row_granularity = get_compile_time_arg_val(2);
     constexpr uint32_t total_num_rows = get_compile_time_arg_val(3);
-    constexpr uint32_t use_streaming_tilize = get_compile_time_arg_val(4);
     constexpr uint32_t tile_h = 32;
 
     compute_kernel_hw_startup(cb_rm_in, cb_tilized);
@@ -34,20 +33,6 @@ void kernel_main() {
                 compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
                 compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
                 compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1, rows_this_block);
-        } else if constexpr (use_streaming_tilize) {
-            // Symmetric + streaming: per-tile pack + push_back(1) via StreamMode::PerTile.
-            // Bit-identical tiled output to the atomic path below; proven in the
-            // streaming_tilize programming example with a 2-tile output CB.
-            compute_kernel_lib::tilize<
-                width_tiles,
-                cb_rm_in,
-                cb_tilized,
-                compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-                compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
-                compute_kernel_lib::tilize_config::Fp32Mode::Fast,
-                compute_kernel_lib::tilize_config::RemapMode::Configure,
-                compute_kernel_lib::tilize_config::StreamMode::PerTile>(1);
         } else {
             // Symmetric: input CB has tile-sized pages
             compute_kernel_lib::tilize<

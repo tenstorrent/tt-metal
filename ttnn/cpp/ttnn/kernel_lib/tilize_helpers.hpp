@@ -77,36 +77,6 @@ enum class RemapMode : uint8_t {
     AssumeConfigured  // Caller already configured remap for this kernel
 };
 
-// Controls the OUTPUT flow-control granularity of tilize().
-//
-// Both modes produce BIT-IDENTICAL tiled bytes (same regular/fast tilize LLK datapath) —
-// this only changes how the output CB is reserved/pushed.
-//
-//   Atomic  (default): reserves the whole block_width_tiles tile-row in the output CB,
-//                      tilizes it, and pushes all W tiles at once. The output CB must
-//                      therefore be able to hold a full tile-row.
-//
-//   PerTile          : reserves / packs / pushes the output CB ONE tile at a time
-//                      (reserve_back(1) -> unpack+datacopy+pack tile -> push_back(1)).
-//                      This lets the OUTPUT CB be a small double-buffer (~2 tiles) even
-//                      for very wide rows. Use it when a downstream consumer drains the
-//                      tiled output incrementally and you want to avoid materializing the
-//                      whole row-major-to-tiled tile-row in L1.
-//
-//                      Constraints: the INPUT CB must still hold the full block_width_tiles
-//                      row-major stripe (the unpacker's tilize address generator strides
-//                      across the whole row on every tile — that stripe is the working set,
-//                      only the OUTPUT side is streamed). Always uses the regular (non-fast)
-//                      tilize primitives — the fast path is not tile-granular — so Fp32Mode
-//                      has no effect here. Symmetric tile-sized pages only (no asymmetric
-//                      total_input_pages). Not supported on Quasar (a static_assert fires if
-//                      instantiated there). The arch-divergent per-tile llk_unpack_tilize
-//                      (Blackhole 2-arg vs Wormhole 3-arg) is handled internally.
-enum class StreamMode : uint8_t {
-    Atomic,  // Default — reserve/tilize/push the whole tile-row (output CB holds W tiles)
-    PerTile  // Pack + push_back one output tile at a time (output CB can be a ~2-tile double-buffer)
-};
-
 }  // namespace tilize_config
 
 /**
@@ -145,21 +115,6 @@ enum class StreamMode : uint8_t {
  *   remap_mode       — BH DEST remap setup control (default: Configure).
  *                       Configure: helper configures remap when the selected tilize path needs it.
  *                       AssumeConfigured: caller already enabled BH DEST remap and no intervening code changes it.
- *   stream_mode      — Output flow-control granularity (default: Atomic). LAST template param.
- *                       Atomic:  reserve/tilize/push the whole block_width_tiles tile-row at once —
- *                                the output CB must hold a full W-wide tile-row.
- *                       PerTile: pack + push_back ONE output tile at a time (reserve_back(1) ->
- *                                unpack+datacopy+pack -> push_back(1)). Use it when a downstream
- *                                consumer drains the tiled output incrementally, so the OUTPUT CB
- *                                can be a small double-buffer (~2 tiles) instead of the full W-wide
- *                                tile-row. Produces BIT-IDENTICAL tiled bytes to Atomic.
- *                                Constraints: the INPUT CB must STILL hold the full W-tile row-major
- *                                stripe (that stripe is the tilize working set — only the output side
- *                                is streamed); always uses the regular (non-fast) primitives so
- *                                fp32_mode has no effect; symmetric tile-sized pages only (no
- *                                total_input_pages); the arch-divergent per-tile llk_unpack_tilize
- *                                (BH 2-arg vs WH 3-arg) is handled internally; not supported on Quasar
- *                                (a static_assert fires if instantiated there).
  *
  * ── Block Geometry ─────────────────────────────────────────────────────────
  *
@@ -228,17 +183,6 @@ enum class StreamMode : uint8_t {
  *          tilize_config::WaitMode::WaitBlock,
  *          tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
  *          tilize_config::Fp32Mode::Lossless>(num_blocks);
- *
- *   // 8. Streaming output — pack + push_back one tile at a time so dfb_out can be a
- *   //    small (~2-tile) double-buffer. StreamMode is the LAST template param, so the
- *   //    intervening defaults must be spelled out. dfb_in still holds the full W-tile stripe.
- *   compute_kernel_lib::tilize<block_w, dfb_in, dfb_out,
- *          tilize_config::InitUninitMode::InitAndUninit,
- *          tilize_config::WaitMode::WaitBlock,
- *          tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
- *          tilize_config::Fp32Mode::Fast,
- *          tilize_config::RemapMode::Configure,
- *          tilize_config::StreamMode::PerTile>(num_blocks);
  */
 template <
     uint32_t block_width_tiles,
@@ -249,8 +193,7 @@ template <
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
         tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
     tilize_config::Fp32Mode fp32_mode = tilize_config::Fp32Mode::Fast,
-    tilize_config::RemapMode remap_mode = tilize_config::RemapMode::Configure,
-    tilize_config::StreamMode stream_mode = tilize_config::StreamMode::Atomic>
+    tilize_config::RemapMode remap_mode = tilize_config::RemapMode::Configure>
 ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages = std::nullopt);
 
 }  // namespace compute_kernel_lib

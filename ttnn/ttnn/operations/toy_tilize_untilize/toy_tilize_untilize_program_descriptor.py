@@ -18,7 +18,6 @@ def create_program_descriptor(
     input_tensor: ttnn.Tensor,
     output_tensor: ttnn.Tensor,
     use_row_granularity: bool = False,
-    use_streaming_tilize: bool = False,
 ) -> ttnn.ProgramDescriptor:
     # --- Tensor metadata ---
     row_bytes = input_tensor.buffer_page_size()
@@ -122,8 +121,7 @@ def create_program_descriptor(
 
     # --- Compute kernel ---
     fp32_dest = input_tensor.dtype == ttnn.float32
-    streaming_flag = 1 if use_streaming_tilize else 0
-    compute_ct_args = [width_tiles, num_blocks, granularity_flag, total_num_rows, streaming_flag]
+    compute_ct_args = [width_tiles, num_blocks, granularity_flag, total_num_rows]
 
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "compute.cpp"),
