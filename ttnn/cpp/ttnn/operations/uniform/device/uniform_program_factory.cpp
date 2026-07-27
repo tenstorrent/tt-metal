@@ -179,29 +179,18 @@ ProgramDescriptor UniformDeviceOperation::create_descriptor(
     return desc;
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> UniformDeviceOperation::get_dynamic_runtime_args(
+void UniformDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
-    const tensor_args_t& /*tensor_args*/,
+    const tensor_args_t& tensor_args,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // compute is kernel 1; its runtime args are {seed, f2u_from, f2u_to, tile_offset, units_per_core}.
-    // seed/from/to are excluded from the hash and re-applied here; the rest are static.
-    constexpr uint32_t kComputeKernelIdx = 1;
-    auto cores = uniform_work_split(output).cores;
-
-    const float eps = 1e-6f;
-    const uint32_t f2u_from = std::bit_cast<uint32_t>(operation_attributes.from);
-    const uint32_t f2u_to = std::bit_cast<uint32_t>(operation_attributes.to - eps);
-
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    dynamic_args.reserve(cores.size() * 3);
-    for (int i = 0; i < static_cast<int>(cores.size()); ++i) {
-        const uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
-        dynamic_args.push_back({kComputeKernelIdx, cores[i], 0, seed});
-        dynamic_args.push_back({kComputeKernelIdx, cores[i], 1, f2u_from});
-        dynamic_args.push_back({kComputeKernelIdx, cores[i], 2, f2u_to});
-    }
-    return dynamic_args;
+    // Re-derive the descriptor from the single source of truth (create_descriptor) and re-apply its
+    // per-core runtime args (incl. hash-excluded seed/from/to) + tensor-backed CB/buffer addresses to
+    // the cached program. No program rebuild; supersedes get_dynamic/resolve_bindings and is correct
+    // under in-place aliasing (#48928).
+    auto desc = create_descriptor(operation_attributes, tensor_args, output);
+    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 
 }  // namespace ttnn::operations::uniform

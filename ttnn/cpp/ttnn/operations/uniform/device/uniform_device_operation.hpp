@@ -48,9 +48,10 @@ struct UniformDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     // seed/from/to are excluded from the program hash (so calls differing only in those values
-    // cache-hit instead of recompiling); they are DYNAMIC and re-applied to the cached program on
-    // every dispatch. Must mirror the compute-kernel runtime args built in create_descriptor().
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+    // cache-hit instead of recompiling); they are re-applied to the cached program on every hit via
+    // override_runtime_arguments() by re-running create_descriptor() (single source of truth). See the .cpp.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& output,
