@@ -630,7 +630,7 @@ CMBF2D_TAG = os.environ.get("CMBF2D_TAG", "")
 # it is measuring). Off for headline numbers, on to explain them.
 CMBF2D_STALL = int(os.environ.get("CMBF2D_STALL", "0"))
 # Producer loop variant bitmask; see CombineFabric2dParams::variant for the bit meanings.
-CMBF2D_VARIANT = int(os.environ.get("CMBF2D_VARIANT", "0"))
+CMBF2D_VARIANT = int(os.environ.get("CMBF2D_VARIANT", "3"))
 
 
 def _cmbf2d_bwinfo_path():
