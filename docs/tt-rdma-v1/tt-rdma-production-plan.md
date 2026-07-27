@@ -121,6 +121,13 @@ No opcode left behind; every path tested + error-handled.
 - **1.6 MR table lifecycle** — CONTROL-opcode register/deregister, rkey `(slot<<24)|rand|gen` generation
   + rotation, 64-slot management, and **access-control enforcement tests** (rkey_miss / rkey_access /
   rkey_bounds / rkey_wrap each provably dropped + counted). Security-relevant — no shortcut.
+  - **1.6a Access-control enforcement. Done.** WRITE validation refactored into separately-counted drop
+    classes — `rkey_miss` (slot OOR / rkey incl. generation mismatch), `rkey_access` (no REMOTE_WRITE),
+    `rkey_bounds` (roff+len > mr_len); each an unauthorized WRITE provably **not landed** (stats[14..16]).
+    Silicon-validated, regression **T10** (15 each → miss/access/bounds=15, write_ok=0; valid path T3 still
+    lands write_ok=40). Both gates green (regression 12/12, perf OK).
+  - **1.6b Pending.** CONTROL-opcode (0xF0) MR register/deregister over the wire + rkey generation/rotation
+    (reuse detection) + 64-slot management tests. Also the MR-registration plumbing 3.1b + 4F.1 extend.
 
 Exit gate: all 8 v1 opcodes exercised end-to-end with automated byte-exact + error-path tests.
 
