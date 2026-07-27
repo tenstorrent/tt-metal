@@ -56,11 +56,12 @@ def default_ccl_topology(mesh_device=None):
     Override with ``GEMMA4_CCL_TOPOLOGY=ring|linear``.
 
     Policy (when env unset):
-      * **Ring** only on meshes with **≥8 devices** (P150x8 TTFT sweep:
-        Ring+sync ~28.8s vs Linear+sync ~31.0s @ 31B/128k).
-      * **Linear** on smaller meshes (P150x4 / P300x2 opened as 1x4, Galaxy/T3K
-        submeshes, etc.). Ring on 4-device BH drops 12B full-model PCC from
-        ~0.97 → ~0.90 (below the 0.94 threshold).
+      * **Ring** only on **Blackhole** meshes with **≥8 devices** (P150x8 TTFT
+        sweep: Ring+sync ~28.8s vs Linear+sync ~31.0s @ 31B/128k).
+      * **Linear** everywhere else — including Wormhole T3K 1x8. Ring on WH
+        drops 26B-A4B ``test_full_model`` PCC below the TEMP 0.76 gate
+        (~0.7505 vs ~0.77/0.94 with Linear / main). Ring on 4-device BH also
+        drops 12B full-model PCC (~0.97 → ~0.90).
 
     Async RS+AG is correct but slower than sync on P150x8 — keep
     ``GEMMA4_CCL_ASYNC=0`` unless re-swept.
@@ -72,20 +73,22 @@ def default_ccl_topology(mesh_device=None):
         return ttnn.Topology.Linear
 
     n = mesh_device.get_num_devices() if mesh_device is not None else 0
-    # Prefer device count when known: Ring needs a closed 8+ loop for quality
-    # on BH 1x4 / P300x2; Ring was only swept for TTFT at TP=8.
+    # Ring TTFT win was swept on BH P150x8 only. WH T3K is also n=8 but must
+    # stay Linear for MoE PCC (matches main's hardcoded Linear all-reduce).
     if n:
-        return ttnn.Topology.Ring if n >= 8 else ttnn.Topology.Linear
+        if n >= 8 and is_blackhole():
+            return ttnn.Topology.Ring
+        return ttnn.Topology.Linear
 
     try:
         cluster = ttnn.cluster.get_cluster_type()
     except Exception:
         cluster = None
 
-    # No mesh_device: fall back to cluster type. Prefer Ring only on full
-    # 8-device BH LoudBox; 4-device cluster types default Linear for PCC.
+    # No mesh_device: Ring only on full 8-device BH LoudBox / BH Galaxy.
+    # Do not treat WH T3K / Galaxy cluster types as Ring defaults.
     ring_when_unknown_n = ()
-    for name in ("P150_X8", "T3K", "GALAXY", "TG", "BLACKHOLE_GALAXY"):
+    for name in ("P150_X8", "BLACKHOLE_GALAXY"):
         if hasattr(ttnn.cluster.ClusterType, name):
             ring_when_unknown_n += (getattr(ttnn.cluster.ClusterType, name),)
     if cluster in ring_when_unknown_n:
