@@ -61,8 +61,15 @@ def decode_forward(
     # produced silent corruption (every odd Q/K/V head returned the previous
     # user's row).
     qkv_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mesh_config.tp > 1 else ttnn.DRAM_MEMORY_CONFIG
-    xqkv_fused = ttnn.matmul(hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=qkv_memory_config)
-    ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
+    # Fuse the qkv bias into the matmul (ttnn.linear bias=) instead of a separate
+    # in-place add, removing one op/layer.
+    xqkv_fused = ttnn.linear(
+        hidden_states,
+        weights.wqkv,
+        bias=weights.wqkv_bias,
+        dtype=ttnn.bfloat16,
+        memory_config=qkv_memory_config,
+    )
 
     # Split into Q, K, V heads
     num_local_heads = mesh_config.shard_size(config.num_heads)
