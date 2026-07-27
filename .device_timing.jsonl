@@ -107,3 +107,12 @@
 {"source":"run_safe_pytest","pid":391201,"started_at_ms":1785170789168,"wait_ms":3,"run_ms":27868,"test_path":"tests/ttnn/unit_tests/operations/onorm/test_onorm.py","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
 {"source":"run_safe_pytest","pid":392641,"started_at_ms":1785170991894,"wait_ms":3,"run_ms":163720,"test_path":"tests/ttnn/unit_tests/operations/onorm/","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
 {"source":"run_safe_pytest","pid":393724,"started_at_ms":1785171155627,"wait_ms":4,"run_ms":17875,"test_path":"eval/golden_tests/onorm/","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
+{"event": "phase", "phase": "refinement_1b", "state": "end", "at_ms": 1785171241408}
+{"event": "phase", "phase": "refinement_1b_golden", "state": "start", "at_ms": 1785171242079}
+{"source":"eval_test_runner","pid":395371,"started_at_ms":1785171242084,"wait_ms":3929,"run_ms":26663,"test_path":"eval/golden_tests/onorm/","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
+{"event": "phase", "phase": "refinement_1b_golden", "state": "end", "at_ms": 1785171272680}
+{"source":"run_safe_pytest","pid":396143,"started_at_ms":1785171277027,"wait_ms":4,"run_ms":165248,"test_path":"tests/ttnn/unit_tests/operations/onorm/test_onorm.py","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
+{"event": "phase", "phase": "refinement_2", "state": "start", "at_ms": 1785171442291}
+{"source":"run_safe_pytest","pid":401177,"started_at_ms":1785172508004,"wait_ms":3,"run_ms":25107,"test_path":"tests/ttnn/unit_tests/operations/onorm/test_onorm_retile_group.py::test_group_size_correct[b1t128-g1]","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
+{"source":"run_safe_pytest","pid":401704,"started_at_ms":1785172537614,"wait_ms":4,"run_ms":24510,"test_path":"tests/ttnn/unit_tests/operations/onorm/test_onorm_retile_group.py::test_group_size_correct[b1t128-g2]","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
+{"source":"run_safe_pytest","pid":402218,"started_at_ms":1785172566772,"wait_ms":3,"run_ms":32558,"test_path":"tests/ttnn/unit_tests/operations/onorm/test_onorm_retile_group.py","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}

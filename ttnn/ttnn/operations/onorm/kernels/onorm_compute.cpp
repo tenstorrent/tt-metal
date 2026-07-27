@@ -88,18 +88,32 @@ void kernel_main() {
     constexpr uint32_t cb_rstd = ONORM_CB_RSTD;
     constexpr uint32_t cb_normed = ONORM_CB_NORMED;
     constexpr uint32_t cb_onorm = ONORM_CB_ONORM;
+    // ROW-MAJOR staging for the re-tile.  `cb_rm_local` is where THIS core's
+    // untilized token rows land, and `cb_rm_flat_rows` is the [TOKENS_PER_BLOCK,
+    // cols_per_core*TILE_W] stripe this core tilizes.  When the token-block is not
+    // split across cores (RETILE_GROUP_CORES == 1) the host makes them the SAME
+    // slot — compute untilizes straight into the stripe it later tilizes, exactly
+    // as before Refinement 2.  When it IS split, `cb_rm_local` is a separate
+    // staging CB the writer drains and scatters, and `cb_rm_flat_rows` is filled
+    // by REMOTE writers (see onorm_writer.cpp) — so this kernel's view of both is
+    // identical either way and no code here branches on the group size.
+    constexpr uint32_t cb_rm_local = ONORM_CB_RM_LOCAL;
     constexpr uint32_t cb_rm_flat_rows = ONORM_CB_RM_FLAT_ROWS;
     constexpr uint32_t cb_flat_tiles = ONORM_CB_FLAT_TILES;
     constexpr uint32_t cb_gate_sig = ONORM_CB_GATE_SIG;
 
     // --- Blocking Model parameters (compile-time; one source of truth on host) ---
-    constexpr uint32_t nb = get_compile_time_arg_val(0);                   // NORM_CHUNK_TOKENS
-    constexpr uint32_t norm_chunks = get_compile_time_arg_val(1);          // TOKENS_PER_BLOCK / nb
+    // Every count here is PER CORE: with the token-block split across
+    // RETILE_GROUP_CORES cores, `norm_chunks` covers this core's token slice and
+    // `cols_per_core` its flat output column slice.  At group size 1 both are the
+    // whole block.
+    constexpr uint32_t nb = get_compile_time_arg_val(0);                   // NORM_CHUNK_TOKENS (clamped)
+    constexpr uint32_t norm_chunks = get_compile_time_arg_val(1);          // tokens_per_core / nb
     constexpr uint32_t v_tiles = get_compile_time_arg_val(2);              // V / TILE_W
-    constexpr uint32_t flat_tiles = get_compile_time_arg_val(3);           // FLAT / TILE_W
+    constexpr uint32_t cols_per_core = get_compile_time_arg_val(3);        // flat_tiles / group_cores
     constexpr uint32_t tile_rows_per_block = get_compile_time_arg_val(4);  // TOKENS_PER_BLOCK / TILE_H
-    constexpr uint32_t gate_chunk_tiles = get_compile_time_arg_val(5);     // GATE_CHUNK_TILES
-    constexpr uint32_t gate_chunks = get_compile_time_arg_val(6);          // flat/block ÷ gate_chunk_tiles
+    constexpr uint32_t gate_chunk_tiles = get_compile_time_arg_val(5);     // GATE_CHUNK_TILES (clamped)
+    constexpr uint32_t gate_chunks = get_compile_time_arg_val(6);          // this core's out tiles ÷ chunk
     // Which TRISC issues the op's whole SFPU volume (SIGMOID_ENGINE knob).  The
     // ONORM_SIGMOID_* codes are defines emitted from the host's
     // `_SIGMOID_ENGINE_CODES` — this file never restates the integers.
@@ -235,20 +249,27 @@ void kernel_main() {
             // ---- P6: head-major -> row-major.  Each of the `nb` blocks
             // untilizes one token's [HV, V] tile-row into a contiguous 32x V
             // row-major region whose linear index h*V + c IS the flat feature
-            // index.  cb_rm_flat_rows ACCUMULATES across the chunk loop and is
-            // only complete (one full [tokens_per_block, FLAT] stripe) after the
-            // last chunk.
+            // index — i.e. that token's whole flat feature row.
+            //
+            // Where those rows go depends on whether the token-block is split:
+            // at group size 1 cb_rm_local IS cb_rm_flat_rows, so the rows
+            // ACCUMULATE across the chunk loop into the [tokens_per_block, FLAT]
+            // stripe P7a tilizes.  When split, cb_rm_local is a staging buffer the
+            // writer drains per chunk and scatters column-wise, and P7a's stripe is
+            // filled by the group's writers instead.  Either way this call is the
+            // same and the bytes it emits are the same.
             {
                 MaybeDeviceZoneScope("onorm_p6_untilize");
-                ckl::untilize<v_tiles, cb_onorm, cb_rm_flat_rows>(nb);
+                ckl::untilize<v_tiles, cb_onorm, cb_rm_local>(nb);
             }
         }
 
         // ---- P7a: row-major -> flat token-major.  The tilize row stride IS
-        // `flat_tiles`, which is exactly the stripe P6 built.
+        // `cols_per_core` tiles, which is exactly the stripe width this core owns
+        // (the whole block's FLAT width when the block is not split).
         {
             MaybeDeviceZoneScope("onorm_p7a_tilize");
-            ckl::tilize<flat_tiles, cb_rm_flat_rows, cb_flat_tiles>(tile_rows_per_block);
+            ckl::tilize<cols_per_core, cb_rm_flat_rows, cb_flat_tiles>(tile_rows_per_block);
         }
 
         for (uint32_t g = 0; g < gate_chunks; ++g) {

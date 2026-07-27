@@ -37,6 +37,63 @@ TOKENS_PER_BLOCK = 32  # tokens per work unit (= one output tile-row: the re-til
 NORM_CHUNK_TOKENS = 8  # tokens per normalize sub-pass (coarsest that fits L1, §6.2)
 GATE_CHUNK_TILES = 64  # output tiles per gate-chain invocation (phase C block factor)
 
+# ---------------------------------------------------------------------------
+# Cross-core re-tile group size (Refinement 2) — the parallelism knob
+# ---------------------------------------------------------------------------
+#
+# `TOKENS_PER_BLOCK` is a HARD floor on the work unit: the head-major -> flat
+# re-tile fuses exactly one tile-row of tokens into one output tile-row, so
+# `B * ceil(T / TOKENS_PER_BLOCK)` is all the parallelism a per-block split can
+# ever expose.  At the shapes a decode / short-prefill caller issues that number
+# is tiny (T=32 -> 1 block, T=128 -> 4), so up to 109 of 110 cores sat idle while
+# the latency stayed at the single-core block time.
+#
+# This knob splits ONE token-block across `group_cores` cores in TWO axes at
+# once, joined by a single row-major all-to-all exchange per block:
+#
+#   * the NORMALIZE half is split on the TOKEN axis — core `c` of the group owns
+#     tokens [c*tokens_per_core, (c+1)*tokens_per_core) and reads only its own
+#     slice of `o` (no read amplification);
+#   * the GATE half is split on the FLAT-COLUMN axis — core `c` owns output tile
+#     columns [c*cols_per_core, (c+1)*cols_per_core), reads only its own slice of
+#     `gate` and writes only its own slice of `out` (no read/write amplification);
+#   * the two are joined because a token's untilized row-major feature row is
+#     CONTIGUOUS in flat-feature order, so column-owner `d`'s share of token row
+#     `t` is exactly one contiguous `chunk_bytes` slice of it.  Every core writes
+#     its `tokens_per_core` rows' worth of each of the `group_cores` chunks into
+#     the owning core's `cb_rm_flat_rows` at row offset `t * chunk_bytes` — the
+#     design's lamp #1 (`op_design.md` §1.5, "cross-core re-tile"), which works
+#     precisely because `cb_rm_flat_rows` is a plain row-major L1 stripe
+#     addressed by token row and a remote writer filling row `t` honours exactly
+#     the contract the local untilize already honoured.
+#
+# `group_cores = 1` is the trivial, byte-identical default path: no exchange, no
+# semaphores, `cb_rm_local` IS `cb_rm_flat_rows` (see `_kernel_defines`), and
+# every derived quantity collapses to its pre-Refinement-2 value.  So the knob
+# costs nothing where it does not pay, which is what lets the dispatch policy
+# below fall back to it.
+#
+# "auto" (the default) is the DISPATCH POLICY the refinement asks for: pay the
+# exchange only with cores that would otherwise be idle.  It takes the largest
+# legal power of two that fits in the SPARE grid capacity
+# (`total_cores // num_token_blocks`), capped by MAX_RETILE_GROUP_CORES.  So a
+# core-saturated shape (B=8/T=640: 160 blocks > 110 cores) gets `group_cores=1`
+# and is bit- and byte-identical to Refinement 1b, while B=1/T=32 (1 block) gets
+# the full cap.  An int pins the group size for measurement / regression tests.
+RETILE_GROUP_CORES = "auto"
+
+# Ceiling on the "auto" group size.  MEASURED (Blackhole p150, median of 5
+# trial-major interleaved trials) — see changelog.md Refinement 2 for the sweep.
+MAX_RETILE_GROUP_CORES = 8
+
+# Depth of `cb_rm_local` in normalize-chunk units (`group_cores > 1` only).  The
+# staging buffer between compute's untilize (producer) and the writer's scatter
+# (consumer); depth 2 lets compute build chunk i+1 while the writer scatters
+# chunk i.  Costs `v_tiles * norm_chunk_tokens` pages per unit of depth, and it
+# is funded many times over by `cb_rm_flat_rows` / `cb_flat_tiles` shrinking by
+# `group_cores`.
+RM_LOCAL_DEPTH = 2
+
 # Tiles per noc_async_read / noc_async_write group — ONE barrier per group, so
 # this many transfers are in flight at once.  Used by BOTH dataflow halves (the
 # reader's `o`/`gate` streams and the writer's output stream read the same CT arg),
@@ -175,9 +232,10 @@ CB_SCALER = 8  # reader  -> compute : reduce scaler (1/V), held
 CB_OUT_TILES = 16  # compute -> writer  : finished flat output tiles
 CB_SUMSQ = 24  # compute -> compute : per-token partial sum of squares
 CB_RSTD = 25  # compute -> compute : rsqrt(mean + eps), col-0 valid
+CB_RM_LOCAL = 26  # compute -> writer   : ROW-MAJOR rows this core untilized, awaiting scatter
 CB_NORMED = 27  # compute -> compute : o * rstd
 CB_ONORM = 28  # compute -> compute : o * rstd * weight (untilize input)
-CB_RM_FLAT_ROWS = 29  # compute -> compute : ROW-MAJOR flat feature rows (re-tile working set)
+CB_RM_FLAT_ROWS = 29  # writer  -> compute : ROW-MAJOR flat feature rows (re-tile working set)
 CB_FLAT_TILES = 30  # compute -> compute : flat token-major tiles
 CB_GATE_SIG = 31  # compute -> compute : sigmoid(gate), materialised so the FPU feeds off L1
 
@@ -186,6 +244,13 @@ CB_GATE_SIG = 31  # compute -> compute : sigmoid(gate), materialised so the FPU 
 # re-numbering a CB here lands in the kernels automatically, and a kernel that
 # references a slot this dict does not define fails to compile instead of
 # silently addressing the wrong buffer.
+#
+# `ONORM_CB_RM_LOCAL` is the one slot whose value depends on the cross-core
+# re-tile group size, so it is added by `_kernel_defines()` rather than listed
+# here: at `group_cores == 1` it ALIASES `CB_RM_FLAT_ROWS` (compute untilizes
+# straight into the stripe it later tilizes — the pre-Refinement-2 path, one CB,
+# no copy), and only at `group_cores > 1` does it become its own staging buffer
+# whose consumer is the writer's scatter.
 _CB_SLOTS = {
     "ONORM_CB_O_TILES": CB_O_TILES,
     "ONORM_CB_GATE_TILES": CB_GATE_TILES,
@@ -200,14 +265,35 @@ _CB_SLOTS = {
     "ONORM_CB_FLAT_TILES": CB_FLAT_TILES,
     "ONORM_CB_GATE_SIG": CB_GATE_SIG,
 }
-_CB_DEFINES = [(name, str(index)) for name, index in _CB_SLOTS.items()]
 
 # The SIGMOID_ENGINE wire codes travel the same way as the CB slot map: emitted
 # as preprocessor defines from this one dict, so the kernel's `if constexpr`
 # ladder compares against names, never against re-typed integers.
 _SIGMOID_DEFINES = [(f"ONORM_SIGMOID_{name.upper()}", str(code)) for name, code in _SIGMOID_ENGINE_CODES.items()]
 
-_KERNEL_DEFINES = _CB_DEFINES + _SIGMOID_DEFINES
+
+def _kernel_defines(group_cores: int):
+    """The kernels' preprocessor wire: CB slot map + SIGMOID_ENGINE codes.
+
+    One source of truth for both.  ``ONORM_CB_RM_LOCAL`` is resolved here (see
+    ``_CB_SLOTS``): it aliases ``CB_RM_FLAT_ROWS`` in the single-core-per-block
+    path and is its own staging CB once the block is split across cores.
+    """
+    slots = dict(_CB_SLOTS)
+    slots["ONORM_CB_RM_LOCAL"] = CB_RM_LOCAL if group_cores > 1 else CB_RM_FLAT_ROWS
+    return [(name, str(index)) for name, index in slots.items()] + _SIGMOID_DEFINES
+
+
+# ===========================================================================
+# Semaphores (cross-core re-tile exchange only; `group_cores > 1`)
+# ===========================================================================
+#
+# Two MONOTONE counters per core, both created with initial value 0 on the host
+# and never reset by a kernel — the target is `(blk + 1) * group_cores`, so a
+# member that races ahead into the next block can never clobber a value another
+# member has not observed yet (which a set-to-0 reset would).
+SEM_RM_FREE = 0  # receiver -> senders : "my re-tile stripe is free for this block"
+SEM_RM_DATA = 1  # senders -> receiver : "my chunks for your stripe have landed"
 
 
 def _div_up(a: int, b: int) -> int:
@@ -242,33 +328,91 @@ def _compute_config_descriptor(compute_kernel_config) -> ttnn.ComputeConfigDescr
     )
 
 
-def _grid_assignment(device, num_token_blocks):
-    """Spread the token-blocks over the whole compute grid.
+def _retile_group_cores(device, num_token_blocks: int, tokens_per_block: int, flat_tiles: int) -> int:
+    """Resolve ``RETILE_GROUP_CORES`` — how many cores cooperate on one token-block.
+
+    A legal group size must divide BOTH split axes: ``tokens_per_block`` (the
+    normalize half's token slice) and ``flat_tiles`` (the gate half's output
+    column slice).  ``"auto"`` is the dispatch policy: take the largest legal
+    power of two that fits in the grid capacity left over after every token-block
+    already has a core, capped by ``MAX_RETILE_GROUP_CORES`` — so the exchange is
+    paid for only with cores that would otherwise be idle, and a core-saturated
+    shape stays on the byte-identical ``group_cores == 1`` path.
+    """
+    grid_size = device.compute_with_storage_grid_size()
+    total_cores = grid_size.x * grid_size.y
+
+    def _legal(g: int) -> bool:
+        return 1 <= g <= total_cores and tokens_per_block % g == 0 and flat_tiles % g == 0
+
+    if RETILE_GROUP_CORES != "auto":
+        group_cores = int(RETILE_GROUP_CORES)
+        assert _legal(group_cores), (
+            f"onorm: RETILE_GROUP_CORES={group_cores} is not a legal cross-core re-tile group size. "
+            f"It must be in 1..{total_cores} and divide BOTH TOKENS_PER_BLOCK={tokens_per_block} "
+            f"(the token slice each core normalizes) and flat_tiles={flat_tiles} (the output column "
+            f"slice each core gates and writes). Use a power of two."
+        )
+        return group_cores
+
+    spare = total_cores // max(num_token_blocks, 1)
+    ceiling = min(spare, MAX_RETILE_GROUP_CORES)
+    group_cores = 1
+    while group_cores * 2 <= ceiling and _legal(group_cores * 2):
+        group_cores *= 2
+    return group_cores
+
+
+def _grid_assignment(device, num_token_blocks, group_cores):
+    """Spread the token-blocks over the whole compute grid, ``group_cores`` per block.
 
     ``row_wise=True`` is mandatory: the default column-major layout puts every
     core on the same shared NoC links (measured 2.91x slower on a DRAM<->DRAM
-    stream).  Both ``split_work_to_cores`` and ``corerange_to_cores`` must use
-    the same ordering, otherwise the running ``start_block`` lands on the wrong
-    core.
+    stream).  It matters twice over here — the exchange group is a *contiguous
+    run* of that same row-wise core order, so a group of `group_cores` cores sits
+    inside one grid row wherever the row is wide enough, and the all-to-all stays
+    a short-hop exchange along one row instead of crossing shared column links.
+
+    ``split_work_to_cores`` still owns the grid -> core-set mapping (it is asked
+    for exactly ``num_groups * group_cores`` cores, one unit each, so it returns
+    that many cores in row-wise order); the blocks-over-groups split is the same
+    ``base``/``remainder`` distribution it would apply itself, lifted one level up
+    from cores to groups.  At ``group_cores == 1`` the two coincide exactly and
+    this reproduces the pre-Refinement-2 assignment core-for-core.
+
+    Returns ``(num_cores, all_cores, assignment)`` where each assignment entry is
+    ``(core, slice_index, start_block, num_blocks, group_coords)`` and
+    ``group_coords`` is the group's ``[x0, y0, x1, y1, ...]`` VIRTUAL NoC coords,
+    in slice order, identical for every member.
     """
     grid_size = device.compute_with_storage_grid_size()
-    (
-        num_cores,
-        all_cores,
-        core_group_1,
-        core_group_2,
-        blocks_per_core_g1,
-        blocks_per_core_g2,
-    ) = ttnn.split_work_to_cores(grid_size, num_token_blocks, row_wise=True)
+    total_cores = grid_size.x * grid_size.y
 
+    num_groups = min(num_token_blocks, total_cores // group_cores)
+    assert num_groups >= 1, (
+        f"onorm: RETILE_GROUP_CORES={group_cores} needs at least that many cores, but the grid has "
+        f"only {total_cores}. Lower RETILE_GROUP_CORES."
+    )
+    cores_needed = num_groups * group_cores
+
+    num_cores, all_cores, _, _, _, _ = ttnn.split_work_to_cores(grid_size, cores_needed, row_wise=True)
+    assert num_cores == cores_needed, f"onorm: asked for {cores_needed} cores, split gave {num_cores}"
+    core_list = ttnn.corerange_to_cores(all_cores, None, True)
+    assert len(core_list) == cores_needed
+
+    blocks_per_group, remainder = divmod(num_token_blocks, num_groups)
     assignment = []
     start_block = 0
-    for group, per_core in ((core_group_1, blocks_per_core_g1), (core_group_2, blocks_per_core_g2)):
-        if per_core == 0:
-            continue
-        for core in ttnn.corerange_to_cores(group, None, True):
-            assignment.append((core, start_block, per_core))
-            start_block += per_core
+    for g in range(num_groups):
+        num_blocks = blocks_per_group + (1 if g < remainder else 0)
+        members = core_list[g * group_cores : (g + 1) * group_cores]
+        group_coords = []
+        for core in members:
+            virtual = device.worker_core_from_logical_core(core)
+            group_coords += [virtual.x, virtual.y]
+        for slice_index, core in enumerate(members):
+            assignment.append((core, slice_index, start_block, num_blocks, group_coords))
+        start_block += num_blocks
     assert (
         start_block == num_token_blocks
     ), f"onorm: work split covered {start_block} of {num_token_blocks} token-blocks"
@@ -297,20 +441,39 @@ def create_program_descriptor(
     blocks_per_batch = _div_up(tokens, TOKENS_PER_BLOCK)
     num_token_blocks = batch * blocks_per_batch
 
-    # Per-block tile counts. The kernels derive these from the same knobs (as
-    # `o_tiles_per_block` / `flat_tiles_per_block`); only the flat one is needed
-    # host-side, for CB sizing.
-    flat_tiles_per_block = tile_rows_per_block * flat_tiles
-    norm_chunks_per_block = TOKENS_PER_BLOCK // NORM_CHUNK_TOKENS
-    gate_chunks_per_block = flat_tiles_per_block // GATE_CHUNK_TILES
+    # --- cross-core re-tile group: how many cores share ONE token-block ---
+    # (Refinement 2.  `group_cores == 1` is the pre-Refinement-2 path exactly.)
+    group_cores = _retile_group_cores(device, num_token_blocks, TOKENS_PER_BLOCK, flat_tiles)
+    # The two split axes of one token-block. Everything per-core below derives
+    # from these two and nothing restates a whole-block quantity.
+    tokens_per_core = TOKENS_PER_BLOCK // group_cores  # normalize half: token slice
+    cols_per_core = flat_tiles // group_cores  # gate half: output column slice
+
+    # Per-core (not per-block) tile counts. The kernels derive the same values
+    # from the same knobs; only the flat one is needed host-side, for CB sizing.
+    flat_tiles_per_core = tile_rows_per_block * cols_per_core
+    # A core with `tokens_per_core` tokens cannot run a coarser normalize chunk
+    # than that, and a core with `flat_tiles_per_core` output tiles cannot run a
+    # coarser gate chunk — so both block factors are REQUESTS the descriptor
+    # clamps, the same idiom GATE_DEST_TILES uses for the DEST budget. Clamping
+    # (rather than asserting) is what keeps both knobs live and independent of the
+    # group size: raising `group_cores` never turns a legal knob setting into a
+    # host assert, it just stops the chunk growing past the slice it must fit in.
+    norm_chunk_tokens = min(NORM_CHUNK_TOKENS, tokens_per_core)
+    gate_chunk_tiles = min(GATE_CHUNK_TILES, flat_tiles_per_core)
+    norm_chunks_per_block = tokens_per_core // norm_chunk_tokens
+    gate_chunks_per_block = flat_tiles_per_core // gate_chunk_tiles
 
     # --- knob consistency (a violated knob relation is a silent wrong answer) ---
     assert TOKENS_PER_BLOCK % TILE_H == 0, "TOKENS_PER_BLOCK must be a multiple of the tile height"
-    assert (
-        TOKENS_PER_BLOCK % NORM_CHUNK_TOKENS == 0
-    ), f"NORM_CHUNK_TOKENS={NORM_CHUNK_TOKENS} must divide TOKENS_PER_BLOCK={TOKENS_PER_BLOCK}"
-    assert flat_tiles_per_block % GATE_CHUNK_TILES == 0, (
-        f"GATE_CHUNK_TILES={GATE_CHUNK_TILES} must divide the block's " f"{flat_tiles_per_block} flat output tiles"
+    assert tokens_per_core % norm_chunk_tokens == 0, (
+        f"NORM_CHUNK_TOKENS={NORM_CHUNK_TOKENS} (clamped to {norm_chunk_tokens}) must divide the "
+        f"{tokens_per_core} tokens this core owns (TOKENS_PER_BLOCK={TOKENS_PER_BLOCK} / "
+        f"RETILE_GROUP_CORES={group_cores}); use a power of two"
+    )
+    assert flat_tiles_per_core % gate_chunk_tiles == 0, (
+        f"GATE_CHUNK_TILES={GATE_CHUNK_TILES} (clamped to {gate_chunk_tiles}) must divide the "
+        f"{flat_tiles_per_core} flat output tiles this core owns; use a power of two"
     )
     assert 1 <= DM_BLOCK_TILES <= 8, "DM_BLOCK_TILES is a 1..8 knob"
     assert SIGMOID_ENGINE in _SIGMOID_ENGINE_CODES, (
@@ -334,11 +497,13 @@ def create_program_descriptor(
         f"onorm: GATE_DEST_TILES={GATE_DEST_TILES} must be 1..{_DEST_TILE_LIMIT_16B} "
         f"(DEST_AUTO_LIMIT under half sync, 16-bit DEST — the widest this op ever gets)."
     )
-    gate_dest_tiles = min(GATE_DEST_TILES, dest_tile_limit)
-    assert GATE_CHUNK_TILES % gate_dest_tiles == 0, (
+    # ...and it can never exceed the gate chunk it subdivides, which the cross-core
+    # column split shrinks (`flat_tiles / group_cores`).
+    gate_dest_tiles = min(GATE_DEST_TILES, dest_tile_limit, gate_chunk_tiles)
+    assert gate_chunk_tiles % gate_dest_tiles == 0, (
         f"onorm: the effective GATE_DEST_TILES={gate_dest_tiles} (requested "
         f"{GATE_DEST_TILES}, clamped to this config's DEST limit {dest_tile_limit}) "
-        f"must divide GATE_CHUNK_TILES={GATE_CHUNK_TILES}; use a power of two."
+        f"must divide the effective GATE_CHUNK_TILES={gate_chunk_tiles}; use a power of two."
     )
     assert DM_DEPTH >= 2 and O_DEPTH >= 2, "streaming depths must be >= 2 to overlap read with compute"
     # `o`'s token axis is un-padded (tiled dims are (HV, V)) while gate/out's IS
@@ -358,7 +523,7 @@ def create_program_descriptor(
         )
 
     # ================= 2. WORK DISTRIBUTION =================
-    _, all_cores, assignment = _grid_assignment(device, num_token_blocks)
+    _, all_cores, assignment = _grid_assignment(device, num_token_blocks, group_cores)
 
     # ================= 3. CIRCULAR BUFFERS =================
     # Streaming input/output CBs get `DM_BLOCK_TILES * DM_DEPTH` (the
@@ -366,22 +531,33 @@ def create_program_descriptor(
     # helpers get the full block they must hold (both helpers own all three
     # TRISCs, so they cannot pipeline).  Nothing here scales with B or T.
     cb_pages = {
-        CB_O_TILES: v_tiles * NORM_CHUNK_TOKENS * O_DEPTH,
+        CB_O_TILES: v_tiles * norm_chunk_tokens * O_DEPTH,
         CB_GATE_TILES: DM_BLOCK_TILES * DM_DEPTH,
         CB_WEIGHT: v_tiles,
         CB_SCALER: 1,
         CB_OUT_TILES: DM_BLOCK_TILES * DM_DEPTH,
-        CB_SUMSQ: NORM_CHUNK_TOKENS,
-        CB_RSTD: NORM_CHUNK_TOKENS,
-        CB_NORMED: v_tiles * NORM_CHUNK_TOKENS,
-        CB_ONORM: v_tiles * NORM_CHUNK_TOKENS,
-        # EXACTLY one block's worth: the tilize address generator assumes one
-        # contiguous [TOKENS_PER_BLOCK, FLAT] row-major stripe, so a larger CB
-        # would let the ring wrap mid-block.
-        CB_RM_FLAT_ROWS: flat_tiles_per_block,
-        CB_FLAT_TILES: flat_tiles_per_block,
-        CB_GATE_SIG: GATE_CHUNK_TILES,
+        CB_SUMSQ: norm_chunk_tokens,
+        CB_RSTD: norm_chunk_tokens,
+        CB_NORMED: v_tiles * norm_chunk_tokens,
+        CB_ONORM: v_tiles * norm_chunk_tokens,
+        # EXACTLY the stripe this core tilizes, and no more: the tilize address
+        # generator assumes ONE contiguous [TOKENS_PER_BLOCK, cols_per_core*TILE_W]
+        # row-major stripe of row stride `cols_per_core*TILE_W` elements, so a
+        # larger CB would let the ring wrap mid-block.  At group_cores == 1 this is
+        # the whole [TOKENS_PER_BLOCK, FLAT] block, as before; the cross-core column
+        # split narrows the stripe by exactly `group_cores`, which is why the
+        # exchange COSTS no L1 and in fact frees a lot of it.
+        CB_RM_FLAT_ROWS: flat_tiles_per_core,
+        CB_FLAT_TILES: flat_tiles_per_core,
+        CB_GATE_SIG: gate_chunk_tiles,
     }
+    if group_cores > 1:
+        # The scatter staging buffer: compute untilizes one normalize chunk's
+        # row-major token rows into it, the writer scatters them and pops.  Only
+        # exists when the block IS split — at group_cores == 1 the define
+        # ONORM_CB_RM_LOCAL aliases CB_RM_FLAT_ROWS and compute untilizes straight
+        # into the stripe it later tilizes (one CB, no copy, no exchange).
+        cb_pages[CB_RM_LOCAL] = v_tiles * norm_chunk_tokens * RM_LOCAL_DEPTH
 
     # The reader/writer transfer whole DM_BLOCK_TILES groups out of one
     # get_write_ptr / get_read_ptr, so a group must never straddle the ring wrap.
@@ -413,8 +589,9 @@ def create_program_descriptor(
         f"({l1_available} B). "
         f"Lower GATE_CHUNK_TILES first (currently {GATE_CHUNK_TILES} — a pure perf/L1 "
         f"trade), then NORM_CHUNK_TOKENS (currently {NORM_CHUNK_TOKENS}). "
-        f"CB_RM_FLAT_ROWS / CB_FLAT_TILES are not reducible (they are the re-tile "
-        f"working set)."
+        f"CB_RM_FLAT_ROWS / CB_FLAT_TILES are the re-tile working set and are not "
+        f"reducible at a fixed RETILE_GROUP_CORES (currently {group_cores}) — but "
+        f"RAISING RETILE_GROUP_CORES divides both of them by the group size."
     )
 
     cbs = [
@@ -438,7 +615,9 @@ def create_program_descriptor(
     reader_ct_args = [
         v_tiles,
         TOKENS_PER_BLOCK,
+        tokens_per_core,
         flat_tiles,
+        cols_per_core,
         tile_rows_per_block,
         blocks_per_batch,
         tokens,
@@ -451,24 +630,33 @@ def create_program_descriptor(
     reader_ct_args.extend(ttnn.TensorAccessorArgs(gate).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(weight).get_compile_time_args())
 
-    # Writer (BRISC / NoC1) — all DRAM writes.
+    # Writer (BRISC / NoC1) — all DRAM writes, plus the cross-core re-tile
+    # scatter (also a write, so it belongs on NoC1 with them).
     writer_ct_args = [
         flat_tiles,
+        cols_per_core,
         tile_rows_per_block,
         blocks_per_batch,
         token_tile_rows,
         DM_BLOCK_TILES,
         tile_bytes,
+        group_cores,
+        tokens_per_core,
+        norm_chunk_tokens,
+        norm_chunks_per_block,
+        v_tiles,
+        SEM_RM_FREE,
+        SEM_RM_DATA,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output).get_compile_time_args())
 
     compute_ct_args = [
-        NORM_CHUNK_TOKENS,
+        norm_chunk_tokens,
         norm_chunks_per_block,
         v_tiles,
-        flat_tiles,
+        cols_per_core,
         tile_rows_per_block,
-        GATE_CHUNK_TILES,
+        gate_chunk_tiles,
         gate_chunks_per_block,
         _SIGMOID_ENGINE_CODES[SIGMOID_ENGINE],
         gate_dest_tiles,  # the config-clamped effective window, not the raw request
@@ -483,16 +671,20 @@ def create_program_descriptor(
     reader_rt_args = ttnn.RuntimeArgs()
     writer_rt_args = ttnn.RuntimeArgs()
     compute_rt_args = ttnn.RuntimeArgs()
-    for core, start_block, num_blocks in assignment:
-        reader_rt_args[core.x][core.y] = [o_addr, gate_addr, weight_addr, start_block, num_blocks]
-        writer_rt_args[core.x][core.y] = [out_addr, start_block, num_blocks]
+    for core, slice_index, start_block, num_blocks, group_coords in assignment:
+        reader_rt_args[core.x][core.y] = [o_addr, gate_addr, weight_addr, start_block, num_blocks, slice_index]
+        # `group_coords` is the whole exchange group's virtual NoC coords in slice
+        # order; every member carries the same list and indexes it by destination.
+        writer_rt_args[core.x][core.y] = [out_addr, start_block, num_blocks, slice_index, *group_coords]
         compute_rt_args[core.x][core.y] = [num_blocks, eps_bits]
+
+    kernel_defines = _kernel_defines(group_cores)
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "onorm_reader.cpp"),
         core_ranges=all_cores,
         compile_time_args=reader_ct_args,
-        defines=_KERNEL_DEFINES,
+        defines=kernel_defines,
         runtime_args=reader_rt_args,
         config=ttnn.ReaderConfigDescriptor(),
     )
@@ -500,7 +692,7 @@ def create_program_descriptor(
         kernel_source=str(KERNEL_DIR / "onorm_writer.cpp"),
         core_ranges=all_cores,
         compile_time_args=writer_ct_args,
-        defines=_KERNEL_DEFINES,
+        defines=kernel_defines,
         runtime_args=writer_rt_args,
         config=ttnn.WriterConfigDescriptor(),
     )
@@ -508,13 +700,26 @@ def create_program_descriptor(
         kernel_source=str(KERNEL_DIR / "onorm_compute.cpp"),
         core_ranges=all_cores,
         compile_time_args=compute_ct_args,
-        defines=_KERNEL_DEFINES,
+        defines=kernel_defines,
         runtime_args=compute_rt_args,
         config=_compute_config_descriptor(compute_kernel_config),
     )
 
+    # Two monotone counters, only when the block is actually split.  The initial 0
+    # MUST come from the host: a member increments a REMOTE core's cell with no
+    # happens-before edge to that core's kernel start, so any kernel-side init
+    # would race and could clobber an early increment.
+    semaphores = (
+        [
+            ttnn.SemaphoreDescriptor(id=SEM_RM_FREE, core_ranges=all_cores, initial_value=0),
+            ttnn.SemaphoreDescriptor(id=SEM_RM_DATA, core_ranges=all_cores, initial_value=0),
+        ]
+        if group_cores > 1
+        else []
+    )
+
     return ttnn.ProgramDescriptor(
         kernels=[reader_kernel, writer_kernel, compute_kernel],
-        semaphores=[],
+        semaphores=semaphores,
         cbs=cbs,
     )
