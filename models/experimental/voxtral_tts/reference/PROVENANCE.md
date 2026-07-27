@@ -162,17 +162,26 @@ No `vllm`, `vllm_omni`, `mistral_common`, `transformers`, `einops`, `safetensors
   identical, zero shape mismatches). All three block `main()`s run and write goldens. The
   backbone's incremental KV-cache path reproduces its full causal forward at PCC 1.000000, and
   the codec's staged path matches its full path at PCC 1.000000.
-- **End-to-end: done, and it produces correct speech.** `voxtral_pipeline_ref.py` chains all
-  three blocks. Whisper-base transcribes the output at **0.0% WER** for two different presets:
+- **End-to-end from RAW TEXT: done, and it produces correct speech.** `voxtral_pipeline_ref.py`
+  chains tokenizer + all three blocks. Whisper-base transcribes every output at **0.0% WER**:
 
-  | voice | frames | audio | stop | WER |
-  |---|---|---|---|---|
-  | `neutral_male` | 64 | 5.12 s | natural `[END_AUDIO]` | 0.0% |
-  | `cheerful_female` | 97 | 7.76 s | natural `[END_AUDIO]` | 0.0% |
+  | text | voice | frames | audio | stop | WER |
+  |---|---|---|---|---|---|
+  | 24 words (en) | `neutral_male` | 64 | 5.12 s | natural `[END_AUDIO]` | 0.0% |
+  | 24 words (en) | `cheerful_female` | 97 | 7.76 s | natural `[END_AUDIO]` | 0.0% |
+  | **125 words (en)** | `neutral_male` | **469** | **37.52 s** | natural `[END_AUDIO]` | **0.0% (125/125)** |
+  | 10 words (**fr**) | `fr_female` | 41 | 3.28 s | natural `[END_AUDIO]` | 0.0% (whisper-small, `language="fr"`) |
 
-  Same text, materially different durations — the voice conditioning is doing real work.
-  CPU cost (12 threads, fp32): ~5.7 s to load, ~2 s prefill at P=200, **0.83 s/frame**, codec
-  ~0.3 s. That is ~10x slower than real time, which is fine for a reference.
+  Same text on two voices gives materially different durations, so the conditioning is doing
+  real work. CPU cost (12 threads, fp32): ~5.7 s load, 2–3 s prefill, **0.83–0.95 s/frame**
+  (drifting up with KV-cache length), codec 0.3–1.8 s. ~12x slower than real time — fine for a
+  reference.
+
+- **Long text needs NO splitting**, unlike XTTS-v2. The 125-word paragraph that forced XTTS into
+  4 sentence chunks (its 605-audio-code ceiling = 28 s) runs here as a single 469-frame pass at
+  0.0% WER. Two reasons: the frame rate is 12.5 Hz rather than 21.53 Hz, and the window is
+  ~1500 frames (~120 s) rather than 605 codes. Also tekken is far denser — 139 text tokens for
+  the paragraph that cost XTTS 391.
 - **Numerical vs upstream: still NOT done.** Everything above is self-consistency plus an
   end-to-end intelligibility check — strong evidence the architecture is right, but not a
   per-block PCC gate against vLLM-Omni. That needs `vllm` + `vllm-omni` + `flash-attn` in a
