@@ -35,7 +35,7 @@ per-layer MoE efficiency gap — not the weight floor — are the binding constr
 
 | quantity | value | source |
 |---|---|---|
-| sparse MoE (on-device dispatch, trace-safe) | **10.54 ms/layer** (13.0× vs dense 137.6) | `perf_progress.md` Lever A; `bench_ondevice_dispatch.py` |
+| sparse MoE (on-device dispatch, trace-safe) | **10.54 ms/layer** (13.0× vs dense 137.6) — ⚠ **both numbers are `capacity=32`**; at the shipped `capacity=256` the same-process measurement is 9.11–9.21 ms/layer and the 13.0× denominator is `gemma4`'s serial per-expert prefill path, not a well-configured dense matmul (`winter_borrow_20260727.md`) | `perf_progress.md` Lever A; `bench_ondevice_dispatch.py` |
 | per-layer denoise (sparse MoE + attn/norm/router/shared) | ~11 ms/layer | `path_to_30tps.md` (a) |
 | per denoise step (30L, traced, F=fixed overhead) | **~379 ms** (461 ms measured L2/L4 fit) | `path_to_30tps.md`; `prof_denoise_step.py` |
 | — fixed overhead (embed + self-cond + LM-head + final norm + terminal sampling) | **49.24 ms/step** | §3c |

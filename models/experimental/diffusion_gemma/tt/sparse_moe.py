@@ -29,6 +29,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 
+from loguru import logger
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
 from models.experimental.diffusion_gemma.tt.expert_operations import apply_geglu
@@ -513,14 +514,27 @@ def _build_capacity_dispatch_impl(dense_routing, num_experts, capacity, top_k):
 # either dtype. Drives in0_block_w=22 for gate/up (per_core_N=6) and in0_block_w=2 for down (per_core_N=88).
 _IN1_BLOCK_TILE_BUDGET = 176
 
+# Full per-core L1 circular-buffer budget. The in1-only budget above is necessary but NOT sufficient:
+# it says nothing about the in0 block or the output/partials block, both of which scale with per_core_M.
+# At the C=32 capacity these builders were tuned for, per_core_M is 1 tile and the omission is harmless;
+# at the shipped C=256 the down matmul's out+partials block alone is 2*8*88 tiles = 2.9 MB and overflows
+# L1 — which is why the tuned configs were gated off for every capacity but 32 and have therefore been
+# inert on the production path. Model all the CBs so the geometry can be made legal at any capacity
+# instead of abandoned.
+#   bf16 tile = 2 KB. bfp8_b/bfp4_b tiles are smaller, so pricing every CB at bf16 is conservative.
+_L1_TILE_BYTES = 2048
+_L1_CB_BUDGET_BYTES = 1_400_000
+
 _TUNED_CONFIG_CACHE = {}
 
 
 def tuned_configs_enabled():
-    """OPT-004 tuned program configs are ON by default (3.47x full-MoE forward vs auto-config, PCC
-    0.99967 vs untuned, trace-safe). The auto-config gate/up matmul is ~13x slower (~17 GB/s vs the
-    tuned ~235 GB/s ≈ 92% of the weight-traffic roofline), so a run that forgets the flag would
-    silently take the slow path. Set ``DG_SPARSE_MOE_TUNED=0`` to force the byte-identical fallback."""
+    """OPT-004 tuned program configs are ON by default (trace-safe; PCC 0.99967 vs untuned).
+
+    The 3.47x full-MoE and ~13x gate/up numbers this docstring used to quote were measured at
+    ``capacity=32``. They are NOT a claim about the shipped ``capacity=256`` geometry, which ran
+    auto-config from 2026-07-15 until the L1-aware builders landed and has its own measurement.
+    Set ``DG_SPARSE_MOE_TUNED=0`` to force the byte-identical auto-config fallback."""
     return os.environ.get("DG_SPARSE_MOE_TUNED", "1") != "0"
 
 
@@ -582,10 +596,35 @@ def _largest_divisor_leq(n, cap):
     return best
 
 
-def _pick_in0_block_w(k_tiles, per_core_n):
-    """Largest divisor of Kt keeping the in1 block within ``_IN1_BLOCK_TILE_BUDGET`` tiles."""
+def _cb_tiles(per_core_m, per_core_n, in0_block_w, out_block_h=None, out_block_w=None):
+    """Per-core CB tiles a reuse/mcast matmul holds: double-buffered in0 + in1, then out + partials.
+
+    ``out_block_*`` default to the full per-core output block (what the batched reuse factory uses
+    and what our 2D builder asks for); pass smaller values to price a sub-blocked output.
+    """
+    out_h = per_core_m if out_block_h is None else out_block_h
+    out_w = per_core_n if out_block_w is None else out_block_w
+    return 2 * per_core_m * in0_block_w + 2 * in0_block_w * per_core_n + 2 * out_h * out_w
+
+
+def _cb_fits_l1(per_core_m, per_core_n, in0_block_w, out_block_h=None, out_block_w=None) -> bool:
+    return _cb_tiles(per_core_m, per_core_n, in0_block_w, out_block_h, out_block_w) * _L1_TILE_BYTES <= (
+        _L1_CB_BUDGET_BYTES
+    )
+
+
+def _pick_in0_block_w(k_tiles, per_core_n, per_core_m=1, out_block_h=None, out_block_w=None):
+    """Largest divisor of Kt that fits both the in1 budget and the full per-core CB budget.
+
+    Walks the K-block down through divisors of Kt — a smaller ``in0_block_w`` costs K passes but is
+    the only knob that shrinks in0 and in1 together. Returns 1 when nothing larger fits; the caller
+    is responsible for deciding whether the resulting config is still worth using.
+    """
     cap = max(1, _IN1_BLOCK_TILE_BUDGET // max(1, per_core_n))
-    return _largest_divisor_leq(k_tiles, cap)
+    kw = _largest_divisor_leq(k_tiles, cap)
+    while kw > 1 and not _cb_fits_l1(per_core_m, per_core_n, kw, out_block_h, out_block_w):
+        kw = _largest_divisor_leq(k_tiles, kw - 1)
+    return kw
 
 
 def _pick_out_subblock(per_core_m, per_core_n, max_prod=8):
@@ -604,16 +643,37 @@ def _device_grid(mesh):
     return int(g.x), int(g.y)
 
 
+def _pick_per_core_m(m_tiles, per_core_n, k_tiles):
+    """Largest divisor of Mt whose whole CB set fits L1 once ``in0_block_w`` has been walked down.
+
+    The reuse factory forces ``per_core_N == Nt``, so the output block can only be shrunk by handing
+    each core fewer M tiles. That stays legal — ``split_work_to_cores`` just distributes
+    ``(Mt / per_core_M) * E`` smaller blocks instead of E full-expert blocks — and it is what makes
+    the down matmul (per_core_N = 88 tiles) expressible at capacities above 32.
+    Returns ``None`` when even one M tile per core overflows, so the caller can fall back to the
+    auto-config rather than emit a program config the device will reject.
+    """
+    for per_core_m in sorted(_divisors(m_tiles), reverse=True):
+        kw = _pick_in0_block_w(k_tiles, per_core_n, per_core_m)
+        if _cb_fits_l1(per_core_m, per_core_n, kw):
+            return per_core_m
+    return None
+
+
 def tuned_batched_expert_config(mesh, m_tiles, k_tiles, n_tiles):
     """Program config for a batched ``[1,E,C,·] @ [1,E,·,·]`` expert matmul (gate/up/down).
 
-    per_core_M = Mt (one expert per output block -> E=128 blocks distributed over the grid),
-    per_core_N = Nt (forced by the reuse factory), in0_block_w = largest K divisor within L1.
+    per_core_N = Nt (forced by the reuse factory); per_core_M is the largest divisor of Mt that
+    keeps the per-core CBs inside L1 (Mt itself at the C=32 geometry these were tuned for, so that
+    config is unchanged); in0_block_w is the largest K divisor that then still fits.
+    Returns ``None`` when no legal geometry fits.
     """
     gx, gy = _device_grid(mesh)
-    per_core_M = m_tiles
     per_core_N = n_tiles
-    in0_block_w = _pick_in0_block_w(k_tiles, per_core_N)
+    per_core_M = _pick_per_core_m(m_tiles, per_core_N, k_tiles)
+    if per_core_M is None:
+        return None
+    in0_block_w = _pick_in0_block_w(k_tiles, per_core_N, per_core_M)
     sh, sw = _pick_out_subblock(per_core_M, per_core_N)
     return ttnn.MatmulMultiCoreReuseProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
@@ -625,22 +685,44 @@ def tuned_batched_expert_config(mesh, m_tiles, k_tiles, n_tiles):
     )
 
 
+def _pick_out_block(per_core_m, per_core_n, k_tiles):
+    """Largest (out_block_h, out_block_w) dividing the per-core output block that fits L1.
+
+    The 2D mcast factory sizes the output CB from ``out_block_*``, not from ``per_core_*``, so a
+    tall per-core block (the gather matmul is ~103 M tiles per core at C=256) is expressible as long
+    as it is emitted in smaller output blocks. Returns ``None`` when nothing fits.
+    """
+    for out_h in sorted(_divisors(per_core_m), reverse=True):
+        for out_w in sorted(_divisors(per_core_n), reverse=True):
+            kw = _pick_in0_block_w(k_tiles, per_core_n, per_core_m, out_h, out_w)
+            if _cb_fits_l1(per_core_m, per_core_n, kw, out_h, out_w):
+                return out_h, out_w
+    return None
+
+
 def tuned_2d_matmul_config(mesh, m_tiles, k_tiles, n_tiles):
-    """2D systolic program config for the gather / combine matmuls (M over grid.y, N over grid.x)."""
+    """2D systolic program config for the gather / combine matmuls (M over grid.y, N over grid.x).
+
+    Returns ``None`` when no output blocking keeps the per-core CBs inside L1.
+    """
     import math
 
     gx, gy = _device_grid(mesh)
     per_core_M = math.ceil(m_tiles / gy)
     per_core_N = math.ceil(n_tiles / gx)
-    in0_block_w = _pick_in0_block_w(k_tiles, per_core_N)
-    sh, sw = _pick_out_subblock(per_core_M, per_core_N)
+    blocking = _pick_out_block(per_core_M, per_core_N, k_tiles)
+    if blocking is None:
+        return None
+    out_block_h, out_block_w = blocking
+    in0_block_w = _pick_in0_block_w(k_tiles, per_core_N, per_core_M, out_block_h, out_block_w)
+    sh, sw = _pick_out_subblock(out_block_h, out_block_w)
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
         in0_block_w=in0_block_w,
         out_subblock_h=sh,
         out_subblock_w=sw,
-        out_block_h=per_core_M,
-        out_block_w=per_core_N,
+        out_block_h=out_block_h,
+        out_block_w=out_block_w,
         per_core_M=per_core_M,
         per_core_N=per_core_N,
         transpose_mcast=False,
@@ -653,6 +735,8 @@ def build_tuned_configs(mesh, E, C, H, I, S):
     """Build (and cache) the 5 OPT-004 program configs for the real per-device shapes.
 
     Returns a dict with keys ``gate_up`` / ``down`` (batched) and ``gather`` / ``combine`` (2D).
+    A matmul whose geometry cannot be made to fit L1 is **omitted** rather than emitted as an
+    illegal config, so that matmul keeps the auto-config path while the others stay tuned.
     Pure host-side construction (no device writes) so it is trace-safe; cached by (mesh, shapes).
     """
     gx, gy = _device_grid(mesh)
@@ -662,7 +746,7 @@ def build_tuned_configs(mesh, E, C, H, I, S):
         return cfgs
     EC = E * C
     t = TILE
-    cfgs = {
+    candidates = {
         # gate/up: gathered[1,E,C,H] @ w[1,E,H,I]  -> M=C, K=H, N=I
         "gate_up": tuned_batched_expert_config(mesh, C // t, H // t, I // t),
         # down: down_input[1,E,C,I] @ w[1,E,I,H]   -> M=C, K=I, N=H
@@ -672,6 +756,13 @@ def build_tuned_configs(mesh, E, C, H, I, S):
         # combine: comb[1,1,S,EC] @ down_flat[1,1,EC,H] -> M=S, K=EC, N=H
         "combine": tuned_2d_matmul_config(mesh, S // t, EC // t, H // t),
     }
+    cfgs = {name: cfg for name, cfg in candidates.items() if cfg is not None}
+    dropped = sorted(name for name, cfg in candidates.items() if cfg is None)
+    if dropped:
+        logger.warning(
+            f"OPT-004 tuned MoE geometry does not fit L1 for {dropped} at capacity {C}; "
+            "those matmuls keep the auto-config path."
+        )
     _TUNED_CONFIG_CACHE[key] = cfgs
     return cfgs
 
@@ -2011,10 +2102,14 @@ def sparse_experts_forward(
     EC = E * C
     ckcfg = compute_kernel_config or default_sparse_moe_compute_kernel_config()
 
-    # OPT-004 tuned matmul geometry (opt-in). None -> the auto-config path (bit-identical prototype).
+    # OPT-004 tuned matmul geometry. None (or a missing key) -> the auto-config path for that matmul.
+    # This used to be gated on ``C == DEFAULT_CAPACITY``; since the capacity default moved to the
+    # canvas length (256) on 2026-07-15 that equality was never true in production, so the tuned
+    # geometry silently stopped running. The builders now walk the blocking down to something L1-legal
+    # at any capacity and omit only what genuinely does not fit.
     tuned = (
         build_tuned_configs(hidden_states.device(), E, C, H, weights.intermediate_size_per_device, S)
-        if tuned_configs_enabled() and C == DEFAULT_CAPACITY
+        if tuned_configs_enabled()
         else None
     )
 
@@ -2038,7 +2133,7 @@ def sparse_experts_forward(
         hidden_states,
         memory_config=_l1_or_dram(l1_gather),
         compute_kernel_config=ckcfg,
-        program_config=(tuned["gather"] if tuned else None),
+        program_config=(tuned.get("gather") if tuned else None),
     )
     disp_t.deallocate(True)
     gathered = ttnn.reshape(dispatched, (1, E, C, H))
@@ -2063,7 +2158,7 @@ def sparse_experts_forward(
         down_flat,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         compute_kernel_config=ckcfg,
-        program_config=(tuned["combine"] if tuned else None),
+        program_config=(tuned.get("combine") if tuned else None),
     )
     if not ablate_dispatch:
         comb.deallocate(True)

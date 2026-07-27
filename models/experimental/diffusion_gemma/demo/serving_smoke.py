@@ -85,6 +85,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
+        "--entropy-stop-threshold",
+        type=float,
+        default=None,
+        help="override DiffusionConfig.entropy_stop_threshold (default 0.005). Pass a negative "
+        "value to disable the stable-and-confident early halt so every block runs the full "
+        "--max-denoising-steps. Required for a per-step latency A/B: a lever that changes the "
+        "numerics also changes where the halt fires, so arms otherwise compare different amounts "
+        "of work (observed 48-step arms halting at 9/2/2 steps).",
+    )
+    parser.add_argument(
         "--disable-eos-stop",
         action="store_true",
         help="do not halt on committed EOS/stop tokens (surfaces visible non-EOS text for the "
@@ -175,7 +185,10 @@ def run(args) -> dict:
         # The controller re-reads DG_DENOISE_REVEAL_PMAX; register the resolved span so an
         # unset env var derives from --max-seq-len instead of hard-failing.
         set_default_reveal_pmax(reveal_pmax)
-    config = DiffusionConfig(canvas_length=args.canvas_length, max_denoise_steps=denoise_steps)
+    config_kwargs = {"canvas_length": args.canvas_length, "max_denoise_steps": denoise_steps}
+    if args.entropy_stop_threshold is not None:
+        config_kwargs["entropy_stop_threshold"] = args.entropy_stop_threshold
+    config = DiffusionConfig(**config_kwargs)
     tokenizer_kwargs = {"local_files_only": True} if args.local_files_only else None
 
     mesh_device = _open_mesh_device(args.mesh)

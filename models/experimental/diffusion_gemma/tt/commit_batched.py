@@ -505,7 +505,7 @@ def _sdpa_causal_masked(tt_q, tt_k, tt_v, *, attn_mask, head_dim, chunk_size: in
     q_seq_len = tt_q.shape[-2]
     k_seq_len = tt_k.shape[-2]
     if q_seq_len <= chunk_size:
-        program_config = _denoise_sdpa_program_config(head_dim, q_seq_len, k_seq_len)
+        program_config = _denoise_sdpa_program_config(head_dim, q_seq_len, k_seq_len, device=tt_q.device())
         try:
             return ttnn.transformer.scaled_dot_product_attention(
                 tt_q,

@@ -33,6 +33,7 @@ from models.demos.gemma4.tt.attention.operations import (
     apply_output_projection,
     apply_per_head_norm,
     apply_qkv_projection,
+    apply_rope,
     concat_heads,
     split_qkv_heads_prefill,
 )
@@ -106,27 +107,78 @@ def _is_distinct_buffer(converted, source) -> bool:
         return False
 
 
-def _denoise_sdpa_program_config(head_dim, q_seq_len, k_seq_len):
+def _resolve_sdpa_grid(device):
+    """Resolve the SDPA compute grid from ``DG_SDPA_GRID`` (default ``device``).
+
+    ``device`` takes the full compute-with-storage grid — what ttnn itself picks when no program
+    config is supplied. ``8x1`` reproduces the historical pin; ``<x>x<y>`` pins an explicit grid.
+
+    The pin cost real work. The denoise SDPA issues ``B * NQH * ceil(C / q_chunk)`` work units —
+    ``1 * 4 * 8 = 32`` for the 256-token canvas — so an 8-core grid ran 4 serial rounds on a device
+    whose compute grid is ~110 cores. It was not a tuning decision either: both branches of the
+    ``head_dim >= 512`` split it came from set the identical ``(8, 1)``, i.e. it was a stale copy of
+    a Gemma4 config. ``doc/optimize_perf/qchunk_sweep_20260724.md`` annotated "half of the 8×1 grid
+    idle" and then swept only the q-chunk; ``return_lse_kernel_plan.md`` recorded "the task brief
+    said grid (8,4); the live code is (8,1) — reconcile before build" and it was never reconciled.
+
+    Measured 2026-07-27 (30L, traced up-front, canvas 256, reveal_pmax 4096, 3 interleaved reps):
+    **−8.9% traced block latency, committed tokens bit-identical.** Bit-exactness is expected —
+    the grid regroups the Q axis across cores and leaves the flash K-reduction untouched
+    (``k_chunk_size`` unchanged) — and it was confirmed by an identical ``committed_sha256``.
+    See ``doc/optimize_perf/winter_borrow_20260727.md``.
+
+    Falls back to the pin when the device cannot be queried, so a mock/None device keeps the
+    previous behaviour instead of raising.
+    """
+    spec = os.environ.get("DG_SDPA_GRID", "device").strip().lower()
+    if spec == "device":
+        if device is None:
+            return ttnn.CoreCoord(8, 1)
+        try:
+            grid = device.compute_with_storage_grid_size()
+        except Exception:  # mock devices / meta tensors have no compute grid
+            return ttnn.CoreCoord(8, 1)
+        return ttnn.CoreCoord(int(grid.x), int(grid.y))
+    try:
+        gx, gy = (int(part) for part in spec.split("x", 1))
+    except ValueError as exc:
+        raise ValueError(f"DG_SDPA_GRID must be 'device' or '<x>x<y>', got {spec!r}") from exc
+    return ttnn.CoreCoord(gx, gy)
+
+
+def _sdpa_exp_approx_mode() -> bool:
+    """Whether the SDPA softmax may use the fast exp approximation.
+
+    ttnn's own default is ``true``; DiffusionGemma has always forced ``false``.
+    Kept off by default because it perturbs the softmax and every denoise
+    decision is committed as a clean argmax with no temperature cushion.
+    """
+    return os.environ.get("DG_SDPA_EXP_APPROX", "0").strip().lower() not in ("0", "false", "no", "off")
+
+
+def _denoise_sdpa_program_config(head_dim, q_seq_len, k_seq_len, *, device=None):
     """SDPAProgramConfig for the rectangular non-causal denoise SDPA.
 
-    Mirrors the Gemma4 prefill tuning (head_dim-dependent grid + default chunks)
-    but allows ``q_seq_len != k_seq_len`` (canvas Q vs prompt+canvas K), so chunk
-    sizes must independently divide each axis.
+    Mirrors the Gemma4 prefill tuning (default 32-tile chunks) but allows
+    ``q_seq_len != k_seq_len`` (canvas Q vs prompt+canvas K), so chunk sizes must
+    independently divide each axis. ``head_dim`` no longer selects the grid: both
+    branches of the old head_dim split set the identical ``(8, 1)``, so the split
+    was a stale copy of a Gemma4 tuning rather than a live decision.
     """
-    if head_dim >= 512:
-        grid = ttnn.CoreCoord(8, 1)
-        dq, dk = 32, 32
-    else:
-        grid = ttnn.CoreCoord(8, 1)
-        dq, dk = 32, 32
-    q_chunk = int(os.environ.get("GEMMA4_PREFILL_SDPA_QCHUNK", dq))
-    k_chunk = int(os.environ.get("GEMMA4_PREFILL_SDPA_KCHUNK", dk))
+    grid = _resolve_sdpa_grid(device)
+    q_chunk = int(os.environ.get("GEMMA4_PREFILL_SDPA_QCHUNK", TILE_SIZE))
+    k_chunk = int(os.environ.get("GEMMA4_PREFILL_SDPA_KCHUNK", TILE_SIZE))
     return ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=grid,
         q_chunk_size=_largest_tile_divisor(q_seq_len, q_chunk),
         k_chunk_size=_largest_tile_divisor(k_seq_len, k_chunk),
-        exp_approx_mode=False,
+        exp_approx_mode=_sdpa_exp_approx_mode(),
     )
+
+
+def _rope_fused_enabled() -> bool:
+    """Whether the denoise path uses the fused ``ttnn.experimental.rotary_embedding``."""
+    return os.environ.get("DG_ROPE_FUSED", "0").strip().lower() not in ("0", "false", "no", "off")
 
 
 def _slice_rope_cache(cache, start, length):
@@ -183,6 +235,27 @@ def _apply_rope_chunked(
 
     seq_len = tensor.shape[-2]
     num_heads = tensor.shape[1]
+
+    # Fused RoPE (DG_ROPE_FUSED, default off). ``apply_rope_dram`` spends 8 ops per call —
+    # 2 cache slices, 2 tensor slices, a negate, a concat and 2 multiplies plus an add — which is
+    # ~480 ops per denoise step across Q/K and 30 layers. ``ttnn.experimental.rotary_embedding`` is
+    # one op and is what the backbone's own prefill and our chunked prefill already use
+    # (chunked_prefill.py:369). It has no start-offset argument in sequence mode, so the cache is
+    # pre-sliced to the canvas positions first — the same trick chunked prefill uses. Off by default
+    # until the numerics are pinned against the hand-rolled path: the fused kernel very likely
+    # accumulates differently, and every denoise decision is committed as a clean argmax.
+    if _rope_fused_enabled():
+        cos = _slice_rope_cache(cos_cache, start_offset, seq_len)
+        sin = _slice_rope_cache(sin_cache, start_offset, seq_len)
+        out = apply_rope(tensor, cos, sin)
+        if cos is not cos_cache:
+            cos.deallocate(True)
+        if sin is not sin_cache:
+            sin.deallocate(True)
+        if out is not tensor:
+            tensor.deallocate(True)
+        return out
+
     if seq_len <= chunk_size and num_heads <= head_chunk_size:
         return apply_rope_dram(tensor, start_offset)
 
@@ -241,7 +314,7 @@ def _sdpa_q_chunked(tt_q, tt_k, tt_v, *, attn_mask=None, head_dim, chunk_size: i
     ):
         chunk_size = q_seq_len
     if q_seq_len <= chunk_size:
-        program_config = _denoise_sdpa_program_config(head_dim, q_seq_len, k_seq_len)
+        program_config = _denoise_sdpa_program_config(head_dim, q_seq_len, k_seq_len, device=tt_q.device())
         kwargs = {
             "is_causal": False,
             "scale": 1.0,

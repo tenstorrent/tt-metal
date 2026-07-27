@@ -44,7 +44,20 @@ Current guardrails:
   token-gather path is the optimized default (~5× faster/step than dense-128; MoE is ~89% of the
   denoise step). `DG_SPARSE_MOE=0` now **fails loud** (`RuntimeError`) — the ~5×-slower dense-128
   reference is no longer a silent runtime fallback; set `DG_ALLOW_DENSE_MOE=1` to run it explicitly
-  for A/B / PCC baselines. `DG_SPARSE_MOE_TUNED` remains default-on (OPT-004 matmul geometry).
+  for A/B / PCC baselines. **Correction 2026-07-27:** the "~5× faster/step than dense-128" figure
+  was measured at `DG_SPARSE_MOE_CAPACITY=32` against `gemma4`'s serial per-expert prefill
+  `sparse_matmul`. At the shipped `capacity=256` the gather (`sparse_moe.py`, `disp^T @ hidden`) and
+  combine (`comb @ down_flat`) matmuls add ~89% more MACs on top of an expert MAC count that is
+  *identical* to a dense concat-experts matmul, so the sparse path is not a win at the capacity we
+  serve; it has not been re-measured against a well-configured dense baseline. See
+  `winter_borrow_20260727.md`.
+- `DG_SPARSE_MOE_TUNED` is default-on (OPT-004 matmul geometry). **Correction 2026-07-27:** from
+  2026-07-15 (`746cfe53cb6`, which moved the capacity default to the canvas length) until
+  2026-07-27 the tuned configs were additionally gated on `C == DEFAULT_CAPACITY` (=32) and so were
+  **inert on the production path** — every MoE matmul ran the auto-config. The gate is gone; the
+  builders now walk the per-core blocking down to something L1-legal at any capacity and omit only
+  what genuinely does not fit (logged as a warning). The "3.47× / ~13×" numbers quoted for this
+  flag are C=32 measurements and are not a claim about C=256.
 - The current pure full-depth 64K-build artifact is
   `context_window_prefill_only_chunkedlong_20260713_msl65536.{json,md}`:
   1K 0.78 s, 4K 1.37 s, 8K 4.15 s, 16K 5.55 s, 32K 10.84 s, 64K 35.58 s.
