@@ -87,6 +87,15 @@ public:
     // still belong to the X ring, so this is never a per-chip bit.
     bool has_protected_ring(uint32_t row, RoutingDimension dimension) const;
 
+    // Does this dimension carry any protected ring anywhere in the mesh?
+    //
+    // Deliberately distinct from the per-node query above. Whether flow control is compiled into a
+    // router is a mesh-wide property of the axis: answering it per node would silently elide the
+    // guard on leaf chips, and since that flag also gates first-level ACK and the credit path, the
+    // effect would reach past flow control. Eliding it is only safe once the corresponding VC proof
+    // allows it.
+    bool dimension_has_protected_ring(RoutingDimension dimension) const;
+
     // Is the directed edge leaving `row` through `egress` a cyclic resource of some protected ring?
     bool is_protected_ring_edge(uint32_t row, RoutingDirection egress) const;
 

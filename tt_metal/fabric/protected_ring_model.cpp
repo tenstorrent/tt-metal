@@ -517,6 +517,13 @@ bool ProtectedRingModel::has_protected_ring(uint32_t row, RoutingDimension dimen
     return false;
 }
 
+bool ProtectedRingModel::dimension_has_protected_ring(RoutingDimension dimension) const {
+    if (dimension == RoutingDimension::X) {
+        return x_ring_closed_;
+    }
+    return !families_.empty();
+}
+
 bool ProtectedRingModel::is_protected_ring_edge(uint32_t row, RoutingDirection egress) const {
     if (is_x_direction(egress)) {
         return x_ring_closed_;

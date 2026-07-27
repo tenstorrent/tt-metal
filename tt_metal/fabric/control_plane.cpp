@@ -4002,6 +4002,12 @@ bool ControlPlane::has_protected_ring_in_axis_of(FabricNodeId node, RoutingDirec
         .has_protected_ring(row, is_x ? RoutingDimension::X : RoutingDimension::Y);
 }
 
+bool ControlPlane::mesh_has_protected_ring_in_axis_of(MeshId mesh_id, RoutingDirection axis_direction) const {
+    const bool is_x = axis_direction == RoutingDirection::E || axis_direction == RoutingDirection::W;
+    return this->get_protected_ring_model(mesh_id).dimension_has_protected_ring(
+        is_x ? RoutingDimension::X : RoutingDimension::Y);
+}
+
 bool ControlPlane::is_protected_ring_edge(FabricNodeId local, RoutingDirection egress) const {
     const auto row = this->get_mesh_graph().chip_to_coordinate(local.mesh_id, local.chip_id)[0];
     return this->get_protected_ring_model(local.mesh_id).is_protected_ring_edge(row, egress);

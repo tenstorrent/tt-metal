@@ -341,7 +341,22 @@ const FabricBuilderContext& FabricContext::get_builder_context() const {
     return *builder_context_;
 }
 
-bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions direction) const {
+bool FabricContext::need_deadlock_avoidance_support(
+    const ControlPlane& control_plane, const FabricNodeId& fabric_node_id, eth_chan_directions direction) const {
+    // With express routing the topology token no longer answers this. Express chords can close a
+    // protected ring on an axis the descriptor advertises as a line: the two- and three-Galaxy
+    // carve-outs have no cardinal end wrap on Y, yet their retained wraps still form one spanning
+    // ring. Deciding from Topology::Torus would return false there and drop the bubble on a ring that
+    // genuinely needs it, so ask whether the axis actually carries protected rings.
+    //
+    // The question is per axis, not per chip. A per-node answer would elide the guard on leaf chips,
+    // and this flag also selects first-level ACK and the upstream credit path, so that would change
+    // more than flow control. Leaf elision waits on the corresponding VC safety proof.
+    if (control_plane.express_routing_enabled(fabric_node_id.mesh_id)) {
+        return control_plane.mesh_has_protected_ring_in_axis_of(
+            fabric_node_id.mesh_id, control_plane.eth_direction_to_routing_direction(direction));
+    }
+
     if (topology_ == Topology::Ring) {
         return true;
     }

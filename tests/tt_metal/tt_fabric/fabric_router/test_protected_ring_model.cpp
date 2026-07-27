@@ -230,6 +230,43 @@ TEST(ProtectedRingModelTest, OrientationReversalIsNeverAllowed) {
     EXPECT_FALSE(model.continuation_allowed(2, RoutingDirection::N, RoutingDirection::N));
 }
 
+// --- Axis-level ring presence (drives whether a router compiles in flow control) ---
+
+TEST(ProtectedRingModelTest, CarveOutWithoutEndWrapStillReportsAYRing) {
+    // The case the topology token gets wrong. A two-Galaxy carve-out has no cardinal end wrap, so its
+    // Y axis is not a torus, yet the retained wraps still close one spanning protected ring. Deciding
+    // from the topology enum would drop the bubble on a ring that needs it.
+    const auto model = derive(projection(16, /*end_wrap=*/false, {{2, 5}, {6, 9}, {10, 13}, {0, 7}, {8, 15}}));
+
+    EXPECT_FALSE(model.families().empty());
+    EXPECT_TRUE(model.dimension_has_protected_ring(RoutingDimension::Y));
+}
+
+TEST(ProtectedRingModelTest, AxisLevelQueryDoesNotElideOnLeaves) {
+    // Distinct from the per-node query: row 3 is a leaf and sits on no Y ring, but the axis still
+    // carries one. Answering per node here would disable flow control on that chip's Y routers, and
+    // that flag also gates first-level ACK and the credit path.
+    const auto model = derive(quad_galaxy_projection());
+
+    EXPECT_FALSE(model.has_protected_ring(3, RoutingDimension::Y));
+    EXPECT_TRUE(model.dimension_has_protected_ring(RoutingDimension::Y));
+}
+
+TEST(ProtectedRingModelTest, NoYRingWithoutExpressTopology) {
+    const auto model = derive(projection(8, /*end_wrap=*/true, {}));
+
+    EXPECT_FALSE(model.dimension_has_protected_ring(RoutingDimension::Y));
+    EXPECT_TRUE(model.dimension_has_protected_ring(RoutingDimension::X));
+}
+
+TEST(ProtectedRingModelTest, OpenXRingReportsNoXAxisRing) {
+    const auto p = projection(8, /*end_wrap=*/true, {{2, 5}});
+    const auto model = ProtectedRingModel::derive(p, k_num_cols, /*x_ring_closed=*/false);
+
+    EXPECT_FALSE(model.dimension_has_protected_ring(RoutingDimension::X));
+    EXPECT_TRUE(model.dimension_has_protected_ring(RoutingDimension::Y));
+}
+
 // --- Fail-closed behaviour ---
 
 TEST(ProtectedRingModelTest, MultipleExpressNeighboursPerRowIsRejected) {

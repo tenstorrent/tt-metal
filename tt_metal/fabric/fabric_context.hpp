@@ -58,7 +58,13 @@ public:
     tt::tt_fabric::Topology get_fabric_topology() const { return topology_; }
     bool is_2D_routing_enabled() const { return is_2D_routing_enabled_; }
     bool is_bubble_flow_control_enabled() const { return bubble_flow_control_enabled_; }
-    bool need_deadlock_avoidance_support(eth_chan_directions direction) const;
+    // Whether a router on this axis needs protected (bubble) flow control compiled in.
+    //
+    // Express meshes derive it from whether the axis actually carries protected rings, since express
+    // chords can close a ring on an axis that is not a torus. Other meshes keep the topology-derived
+    // answer unchanged.
+    bool need_deadlock_avoidance_support(
+        const ControlPlane& control_plane, const FabricNodeId& fabric_node_id, eth_chan_directions direction) const;
     bool is_ubb_galaxy() const { return is_ubb_galaxy_; }
 
     // ============ Mesh Type Queries ============

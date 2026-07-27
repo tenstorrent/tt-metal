@@ -249,6 +249,14 @@ public:
     // is never a single per-chip bit.
     bool has_protected_ring_in_axis_of(FabricNodeId node, RoutingDirection axis_direction) const;
 
+    // Does the axis that `axis_direction` belongs to carry any protected ring anywhere in this mesh?
+    //
+    // Used to decide whether a router compiles in protected flow control at all, which is a property
+    // of the axis rather than of one chip. Asking the per-node question instead would disable the
+    // guard on leaf chips, and that flag also gates first-level ACK and the credit path, so the
+    // effect would reach beyond flow control.
+    bool mesh_has_protected_ring_in_axis_of(MeshId mesh_id, RoutingDirection axis_direction) const;
+
     // Is the directed edge leaving `local` through `egress` a cyclic resource of a protected ring?
     bool is_protected_ring_edge(FabricNodeId local, RoutingDirection egress) const;
 
