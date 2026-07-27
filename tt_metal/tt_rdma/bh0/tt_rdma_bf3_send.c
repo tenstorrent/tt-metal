@@ -148,6 +148,10 @@ int main(int argc, char** argv) {
     // arg[13] imm: override imm_data (e.g. CONTROL 0xF0 sub-opcode: 1=REGISTER, 2=DEREGISTER). Sentinel
     // 0xFFFFFFFF => auto (magic for _IMM opcodes, else 0).
     const uint32_t imm_arg = (argc > 13) ? (uint32_t)strtoul(argv[13], NULL, 0) : 0xFFFFFFFFu;
+    // arg[14] readresp=N>0: act as a READ RESPONDER for BH-initiator READ tests -- receive N READ_REQ
+    // (0x20) frames from the BH, reply each with a READ_RESP (0x21) carrying the echoed tag/seq + a
+    // 'READ' payload of the requested length. dst_mac (arg[3]) is the BH RXQ2 MAC (02:...:02).
+    const int readresp = (argc > 14) ? atoi(argv[14]) : 0;
 
     unsigned dm[6] = {0};
     if (sscanf(dmac_s, "%x:%x:%x:%x:%x:%x", &dm[0], &dm[1], &dm[2], &dm[3], &dm[4], &dm[5]) != 6) {
@@ -224,6 +228,67 @@ int main(int argc, char** argv) {
             }
             frame_len = 14u + 32u + plen;
         }
+    }
+
+    // ---- READ RESPONDER: reflect BH's READ_REQ (0x20) as a READ_RESP (0x21). For BH-initiator tests. ----
+    if (readresp > 0) {
+        struct sockaddr_ll sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sll_family = AF_PACKET;
+        sa.sll_ifindex = ifindex;
+        sa.sll_halen = 6;
+        memcpy(sa.sll_addr, frame, 6);  // dst = BH RXQ2 (02:...:02)
+        if (bind(fd, (struct sockaddr*)&sa, sizeof(sa)) < 0) {
+            perror("bind");
+        }
+        struct packet_mreq pmr;
+        memset(&pmr, 0, sizeof(pmr));
+        pmr.mr_ifindex = ifindex;
+        pmr.mr_type = PACKET_MR_PROMISC;  // BH's READ_REQ dst MAC is the initiator's, not ours
+        setsockopt(fd, SOL_PACKET, PACKET_ADD_MEMBERSHIP, &pmr, sizeof(pmr));
+        struct timeval rto = {5, 0};  // give up after 5s idle
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rto, sizeof(rto));
+        unsigned char rb[4200];
+        int served = 0;
+        while (served < readresp) {
+            ssize_t r = recv(fd, rb, sizeof(rb), 0);
+            if (r < 0) {
+                break;  // idle timeout
+            }
+            if (r < 14 + 32 || rb[12] != 0x1a || rb[13] != 0xf6 || rb[14] != 0x20) {
+                continue;  // not a READ_REQ
+            }
+            const unsigned char* rq = rb + 14;                // request header
+            uint16_t tag = (uint16_t)(rq[2] | (rq[3] << 8));  // correlation tag
+            uint32_t req_len = rq[4] | (rq[5] << 8) | (rq[6] << 16) | (rq[7] << 24);
+            uint32_t rseq = rq[8] | (rq[9] << 8) | (rq[10] << 16) | (rq[11] << 24);
+            if (req_len > 4080u) {
+                req_len = 4080u;
+            }
+            unsigned char* h = frame + 14;  // build READ_RESP into the pre-addressed frame (dst=BH)
+            h[0] = 0x21;                    // READ_RESP
+            h[1] = 0x01;
+            put_u16(h + 2, tag);      // echo tag for the initiator's correlation
+            put_u32(h + 4, req_len);  // payload length
+            put_u32(h + 8, rseq);     // echo seq
+            put_u32(h + 12, 0);       // rkey unused
+            put_u64(h + 16, 0);       // roff unused
+            put_u32(h + 24, 0);       // imm
+            put_u32(h + 28, tt_crc32(h, 28));
+            unsigned char* pay = frame + 14 + 32;
+            pay[0] = 'R';
+            pay[1] = 'E';
+            pay[2] = 'A';
+            pay[3] = 'D';
+            for (unsigned i = 4; i < req_len; i++) {
+                pay[i] = (unsigned char)(i & 0xff);
+            }
+            sendto(fd, frame, 14u + 32u + req_len, 0, (struct sockaddr*)&sa, sizeof(sa));
+            served++;
+        }
+        printf("readresp: served %d/%d READ_REQ -> READ_RESP\n", served, readresp);
+        close(fd);
+        return 0;
     }
 
     // ---- READ round-trip latency: send READ_REQ, time until READ_RESP (0x21) returns. ----

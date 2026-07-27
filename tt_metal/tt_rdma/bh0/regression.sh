@@ -180,6 +180,23 @@ if wait_up "$OUT"; then
     || fail "CONTROL MR lifecycle (reg=${reg:-0} dereg=${dereg:-0} write_ok=${wok:-0} rkey_miss=${miss:-0})"
 else fail "RX kernel did not come up (T11)"; kill $DPID 2>/dev/null; fi
 
+echo "== T12: RX READ initiator -- BH sends READ_REQ, correlates READ_RESP by tag, lands payload =="
+OUT=$D/rx10.txt
+timeout 40 "$BIN/bh1_rx_dispatch" 1 ext 16 1 1 6 1 >"$OUT" 2>&1 &   # noc_target=6 (read-initiator)
+DPID=$!
+if wait_up "$OUT"; then
+  sudo -n "$ALLOW" $P0 1 $DMAC 0x1af6 0x21 256 0 0 1 1 0 0 0 10 >/dev/null 2>&1 &   # READ responder (10 replies)
+  RPID=$!
+  wait $DPID
+  kill $RPID 2>/dev/null; wait $RPID 2>/dev/null
+  ln=$(grep "READ-initiator: sent" "$OUT" | tail -1)
+  ro=$(grep "resp_ok=" "$OUT" | grep -v info | tail -1 | grep -oE 'resp_ok=[0-9]+' | cut -d= -f2)
+  bx=$(echo "$ln" | grep -oE '[0-9]+/[0-9]+' | head -1); n=$(echo "$bx" | cut -d/ -f1); m=$(echo "$bx" | cut -d/ -f2)
+  [ "${ro:-0}" -ge 8 ] && [ "${n:-0}" -ge 8 ] && [ "${m:-0}" -gt 0 ] \
+    && pass "READ initiator correlation (resp_ok=$ro, $n/$m landed byte-exact)" \
+    || fail "READ initiator ($ln / resp_ok=${ro:-0})"
+else fail "RX kernel did not come up (T12)"; kill $DPID 2>/dev/null; fi
+
 echo "======================================================"
 echo "REGRESSION: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ] && { echo "== ALL GREEN =="; exit 0; } || { echo "== FAILURES =="; exit 1; }

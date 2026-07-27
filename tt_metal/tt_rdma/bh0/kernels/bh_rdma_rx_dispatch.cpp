@@ -162,6 +162,17 @@ void kernel_main() {
     // memory, so only the trusted gateway on this private link may modify the MR table. Default OFF.
     const uint32_t ctrl_enable = get_arg_val<uint32_t>(22);
     uint32_t n_ctrl = 0, n_mr_reg = 0, n_mr_dereg = 0;
+    // Phase 1.3b: READ initiator. On a host doorbell (init_go @ RCB+0x8), BH sends init_nreqs READ_REQ
+    // frames (TX to dst_mac, tag 1..N), recording corr[tag] = {land dst, len} in TT_RDMA_READ_CORR. When
+    // a READ_RESP (0x21) returns, its tag looks up corr[tag] and the payload lands at the recorded dst --
+    // the initiator-side correlation. Land target = rd_src_x/y/base (reused). init_enable == 0 -> off.
+    const uint32_t init_enable = get_arg_val<uint32_t>(23);
+    const uint32_t init_nreqs = get_arg_val<uint32_t>(24);
+    const uint32_t init_rkey = get_arg_val<uint32_t>(25);
+    const uint32_t init_len = get_arg_val<uint32_t>(26);
+    volatile tt_l1_ptr uint32_t* init_go = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(TT_RDMA_RCB_ADDR + 0x8u);
+    const uint32_t corr_base = TT_RDMA_READ_CORR_ADDR;  // tag-indexed {dst, len, valid} x 16B
+    uint32_t init_done = 0, n_init_req = 0, n_resp_ok = 0, n_resp_unmatched = 0;
     // Phase 1.4: ACK (0x40) reception + cumulative-ACK accounting. An inbound ACK carries the peer's
     // cumulative ack_seq in the seq field (header-only frame). We track the highest ack_seq seen with
     // wraparound-safe signed comparison -- the "acked up to" watermark the TX/initiator side reads to
@@ -177,16 +188,43 @@ void kernel_main() {
     }
 
     tt_rdma_rxq_init(TT_RDMA_RX_QUEUE, rx_buf, rx_buf_size, wrap);  // raw; L2-stripped landing
-    if (read_enable) {  // configure TXQ2 raw egress once (static dst MAC + 0x1AF6) for READ_RESP frames
+    if (read_enable || init_enable) {  // configure TXQ2 raw egress once (dst MAC + 0x1AF6) for READ_RESP/READ_REQ
         const uint64_t dst_mac = ((uint64_t)dst_mac_hi << 32) | (uint64_t)dst_mac_lo;
         tt_rdma_txpkt_config(TT_RDMA_TX_QUEUE, dst_mac, (uint16_t)TT_RDMA_ETHERTYPE);
         tt_rdma_set_max_pkt_size(TT_RDMA_TX_QUEUE, TT_RDMA_MAX_PAYLOAD + TT_RDMA_HDR_BYTES);
+    }
+    if (init_enable) {
+        *init_go = 0;  // host raises this once the READ responder is listening
     }
 
     uint32_t read_pos = 0;  // byte position in the ring (mod buf_size in wrap mode)
     uint32_t n_send = 0, n_write = 0, n_write_ok = 0, n_unknown = 0, n_bad = 0, n_crc_err = 0, total = 0, last_op = 0;
 
     for (;;) {
+        // READ initiator: on the host doorbell, emit init_nreqs READ_REQ frames and record correlation
+        // entries. Done once. Each REQ: tag = i+1, land dst = rd_src_base + i*init_len (distinct slots).
+        if (init_enable && !init_done && *init_go) {
+            for (uint32_t i = 0; i < init_nreqs; ++i) {
+                const uint32_t tag = i + 1u;
+                volatile tt_l1_ptr uint32_t* c = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(corr_base + tag * 16u);
+                c[0] = rd_src_base + i * init_len;  // land dst (offset within the land region)
+                c[1] = init_len;                    // expected length
+                c[2] = 1u;                          // valid / outstanding
+                // Build a header-only READ_REQ (0x20) in TX_BUF0 and fire it.
+                volatile tt_l1_ptr uint32_t* rq = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(TT_RDMA_TX_BUF0_ADDR);
+                rq[0] = (uint32_t)TT_OP_READ_REQ | ((uint32_t)TT_RDMA_VERSION << 8) | (tag << 16);
+                rq[1] = init_len;  // request_len (semantic; header-only on the wire)
+                rq[2] = tag;       // seq (echoed back)
+                rq[3] = init_rkey;
+                rq[4] = 0u;
+                rq[5] = 0u;
+                rq[6] = 0u;
+                rq[7] = tt_rdma_crc32(reinterpret_cast<const uint8_t*>(TT_RDMA_TX_BUF0_ADDR), 28u);
+                tt_rdma_send_raw(TT_RDMA_TX_QUEUE, TT_RDMA_TX_BUF0_ADDR, TT_RDMA_HDR_ONLY_BYTES);
+                ++n_init_req;
+            }
+            init_done = 1u;
+        }
         const uint32_t wp = tt_rdma_rxq_bufptr(TT_RDMA_RX_QUEUE);  // bytes written by HW
         uint32_t avail = wrap ? ((wp + rx_buf_size - read_pos) % rx_buf_size) : (wp - read_pos);
 
@@ -383,6 +421,29 @@ void kernel_main() {
                         }
                     }
                 }
+            } else if (op == TT_OP_READ_RESP) {
+                // Initiator-side correlation: match the response to an outstanding READ_REQ by tag, land the
+                // fetched payload at the recorded destination, and consume the correlation entry.
+                const uint32_t tag = (hw[0] >> 16) & 0xFFFFu;
+                volatile tt_l1_ptr uint32_t* c =
+                    (tag != 0u && tag < 128u) ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(corr_base + tag * 16u)
+                                              : nullptr;
+                if (c != nullptr && c[2] == 1u && len <= c[1]) {
+                    const uint32_t dst = c[0];
+                    const uint32_t src_off = (read_pos + TT_RDMA_HDR_BYTES) % rx_buf_size;
+                    if (src_off + len <= rx_buf_size) {
+                        noc_async_write(rx_buf + src_off, get_noc_addr(rd_src_x, rd_src_y, dst), len);
+                    } else {
+                        const uint32_t first = rx_buf_size - src_off;
+                        noc_async_write(rx_buf + src_off, get_noc_addr(rd_src_x, rd_src_y, dst), first);
+                        noc_async_write(rx_buf, get_noc_addr(rd_src_x, rd_src_y, dst + first), len - first);
+                    }
+                    noc_async_write_barrier();
+                    c[2] = 0u;  // consume the outstanding-request entry
+                    ++n_resp_ok;
+                } else {
+                    ++n_resp_unmatched;  // no outstanding request for this tag (stale / spurious)
+                }
             } else {
                 ++n_unknown;
             }
@@ -417,6 +478,9 @@ void kernel_main() {
         stats[17] = n_ctrl;
         stats[18] = n_mr_reg;
         stats[19] = n_mr_dereg;
+        stats[20] = n_init_req;
+        stats[21] = n_resp_ok;
+        stats[22] = n_resp_unmatched;
 
         if (stop != nullptr && *stop != 0) {
             break;

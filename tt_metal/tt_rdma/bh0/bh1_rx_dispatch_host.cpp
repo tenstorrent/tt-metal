@@ -144,9 +144,12 @@ int main(int argc, char** argv) {
     // Phase 1.3 READ-target mode (noc_target == 4): the kernel answers READ_REQ by NoC-reading a
     // pre-filled data buffer (Tensix 0,0 L1) and TXing a READ_RESP back to dst_mac. Verify on the wire
     // with tcpdump on the receiving rail (ether proto 0x1af6, op byte 0x21, 'READ' pattern).
+    // noc_target == 6 (Phase 1.3b READ INITIATOR) reuses the dst_mac + Tensix land target below, but sets
+    // init_enable instead of read_enable: BH sends READ_REQ and lands the READ_RESP payloads here.
     uint32_t read_enable = 0, dst_mac_hi = 0, dst_mac_lo = 0, rd_src_x = 0, rd_src_y = 0, rd_src_base = 0;
+    uint32_t init_enable = 0, init_nreqs = 0, init_rkey = 0, init_len = 0;
     CoreCoord rd_core = eth_phys;
-    if (noc_target == 4) {
+    if (noc_target == 4 || noc_target == 6) {
         unsigned m[6] = {0};
         if (std::sscanf(dst_mac_s, "%x:%x:%x:%x:%x:%x", &m[0], &m[1], &m[2], &m[3], &m[4], &m[5]) != 6) {
             std::fprintf(stderr, "bad dst mac '%s'\n", dst_mac_s);
@@ -160,17 +163,33 @@ int main(int argc, char** argv) {
         rd_core = w;
         rd_src_x = (uint32_t)w.x;
         rd_src_y = (uint32_t)w.y;
-        rd_src_base = 0x40000u;  // read source on the worker L1 (distinct from write 0x20000, ring 0x30000)
-        read_enable = 1u;
-        mode = "read-target(tensix 0,0 L1)";
-        std::printf(
-            "  READ-target: src core(%u,%u) base 0x%x  READ_RESP -> %s (hi=0x%x lo=0x%x)\n",
-            rd_src_x,
-            rd_src_y,
-            rd_src_base,
-            dst_mac_s,
-            dst_mac_hi,
-            dst_mac_lo);
+        rd_src_base = 0x40000u;  // read source (target) / land region (initiator) on the worker L1
+        read_enable = (noc_target == 4) ? 1u : 0u;
+        if (noc_target == 6) {
+            init_enable = 1u;
+            init_nreqs = 10u;
+            init_rkey = kRkey;
+            init_len = 256u;
+            mode = "read-initiator(BH sends READ_REQ, lands RESP)";
+            std::printf(
+                "  READ-initiator: %u reqs -> %s, land @core(%u,%u):0x%x len %u\n",
+                init_nreqs,
+                dst_mac_s,
+                rd_src_x,
+                rd_src_y,
+                rd_src_base,
+                init_len);
+        } else {
+            mode = "read-target(tensix 0,0 L1)";
+            std::printf(
+                "  READ-target: src core(%u,%u) base 0x%x  READ_RESP -> %s (hi=0x%x lo=0x%x)\n",
+                rd_src_x,
+                rd_src_y,
+                rd_src_base,
+                dst_mac_s,
+                dst_mac_hi,
+                dst_mac_lo);
+        }
     }
     std::printf(
         "  WRITE target mode=%s  noc=(%u,%u)+0x%x  verify @core(%u,%u):0x%x\n",
@@ -203,10 +222,15 @@ int main(int argc, char** argv) {
         }
         cluster.write_core(device->id(), rd_core, pat, rd_src_base);
     }
+    // READ-initiator: clear the land region (the READ_RESP payloads land here, to be verified).
+    if (noc_target == 6) {
+        cluster.write_core(
+            device->id(), rd_core, std::vector<uint32_t>((init_nreqs * init_len) / 4 + 4, 0u), rd_src_base);
+    }
     // Clear the WRITE landing target (on its own core) + the stats region.
     std::vector<uint32_t> zeros(kMrLen / 4, 0u);
     cluster.write_core(device->id(), verify_core, zeros, verify_addr);
-    std::vector<uint32_t> zstats(20, 0u);
+    std::vector<uint32_t> zstats(23, 0u);
     cluster.write_core(device->id(), eth_phys, zstats, (uint32_t)stats_addr);
     // Clear the SEND/completion ring + prod_idx on its core.
     if (noc_target == 3 || noc_target == 5) {
@@ -244,7 +268,11 @@ int main(int argc, char** argv) {
          rd_src_x,
          rd_src_y,
          rd_src_base,
-         ctrl_enable});
+         ctrl_enable,
+         init_enable,
+         init_nreqs,
+         init_rkey,
+         init_len});
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
@@ -254,11 +282,15 @@ int main(int argc, char** argv) {
     std::cout << "BH.2-RX: dispatch kernel up. Now send TT-RDMA frames from the BF3. Stats:\n";
 
     for (int s = 0; s < hold_s; ++s) {
-        auto st = cluster.read_core<uint32_t>(device->id(), eth_phys, (uint32_t)stats_addr, 20 * sizeof(uint32_t));
+        // READ-initiator: ring the doorbell at s==4 -- by now the external READ responder is listening.
+        if (noc_target == 6 && s == 4) {
+            cluster.write_core(device->id(), eth_phys, std::vector<uint32_t>{1u}, TT_RDMA_RCB_ADDR + 0x8u);
+        }
+        auto st = cluster.read_core<uint32_t>(device->id(), eth_phys, (uint32_t)stats_addr, 23 * sizeof(uint32_t));
         std::printf(
             "  t=%2ds  total=%u send=%u write=%u write_ok=%u unknown=%u bad=%u crc_err=%u last_op=0x%02x read_pos=%u "
             "read_req=%u read_resp=%u ack=%u ack_seq=%u wimm=%u  rkey_miss=%u rkey_access=%u rkey_bounds=%u "
-            "ctrl=%u mr_reg=%u mr_dereg=%u\n",
+            "ctrl=%u mr_reg=%u mr_dereg=%u  init_req=%u resp_ok=%u resp_unm=%u\n",
             s,
             st[0],
             st[1],
@@ -279,7 +311,10 @@ int main(int argc, char** argv) {
             st[16],
             st[17],
             st[18],
-            st[19]);
+            st[19],
+            st[20],
+            st[21],
+            st[22]);
         std::fflush(stdout);
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
@@ -332,6 +367,22 @@ int main(int argc, char** argv) {
                 good ? "OK" : "BAD");
         }
         std::printf("  ring: %u/%u shown slots valid\n", ok, nshow);
+    } else if (noc_target == 6) {
+        // READ-initiator: each matched READ_RESP landed its payload ('READ'...) at land+i*init_len.
+        auto fin = cluster.read_core<uint32_t>(device->id(), eth_phys, (uint32_t)stats_addr, 23 * sizeof(uint32_t));
+        uint32_t ok = 0;
+        for (uint32_t i = 0; i < init_nreqs; ++i) {
+            auto p = cluster.read_core<uint32_t>(device->id(), rd_core, rd_src_base + i * init_len, sizeof(uint32_t));
+            const bool good = (!p.empty() && p[0] == 0x44414552u);  // 'READ'
+            ok += good ? 1u : 0u;
+        }
+        std::printf(
+            "  READ-initiator: sent %u READ_REQ, matched %u READ_RESP (unmatched %u), %u/%u landed 'READ' byte-exact\n",
+            fin[20],
+            fin[21],
+            fin[22],
+            ok,
+            init_nreqs);
     } else {
         // Verify the WRITE landing (on the resolved target core): first 8 bytes should be "TTWR" + 0x04..0x07.
         auto land = cluster.read_core<uint32_t>(device->id(), verify_core, verify_addr, 4 * sizeof(uint32_t));
