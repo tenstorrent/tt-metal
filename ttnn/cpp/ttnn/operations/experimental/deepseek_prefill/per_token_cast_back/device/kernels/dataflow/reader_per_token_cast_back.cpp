@@ -65,6 +65,7 @@ void kernel_main() {
     // Element offset of the scale tail within each scale-source row. 0 for a plain (M, H/128) scale
     // tensor; = metadata_len - H/128 (skip the routing header) for the metadata path.
     constexpr uint32_t scale_col_offset = get_compile_time_arg_val(16);
+    constexpr uint32_t max_dispatch_buffer_tokens = get_compile_time_arg_val(18);
     constexpr uint32_t ACCESSOR_CT_BASE = 19;
 #else
     // Plain path: the scale is a FLOAT32 (M, H/128) tensor read from column 0.
@@ -131,6 +132,10 @@ void kernel_main() {
         if (region_end > total_valid_rows) {
             total_valid_rows = region_end;
         }
+    }
+
+    if (total_valid_rows > max_dispatch_buffer_tokens) {
+        total_valid_rows = max_dispatch_buffer_tokens;
     }
 
     // Split the work across the cores: this core takes a contiguous slice of the flattened compute-block space.

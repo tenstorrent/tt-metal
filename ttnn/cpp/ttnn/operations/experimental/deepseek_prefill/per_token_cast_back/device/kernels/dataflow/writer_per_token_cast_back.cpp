@@ -46,6 +46,7 @@ void kernel_main() {
     constexpr uint32_t cb_table_scratch = get_compile_time_arg_val(6);
     constexpr uint32_t num_cores = get_compile_time_arg_val(7);
     constexpr uint32_t experts_per_chip = get_compile_time_arg_val(8);
+    constexpr uint32_t max_dispatch_buffer_tokens = get_compile_time_arg_val(10);
     constexpr uint32_t ACCESSOR_CT_BASE = 11;
 #else
     constexpr uint32_t ACCESSOR_CT_BASE = 4;
@@ -96,6 +97,10 @@ void kernel_main() {
         if (region_end > total_valid_rows) {
             total_valid_rows = region_end;
         }
+    }
+
+    if (total_valid_rows > max_dispatch_buffer_tokens) {
+        total_valid_rows = max_dispatch_buffer_tokens;
     }
 
     // Balanced split over the FLATTENED compute-block space (identical formula to the reader), so the
