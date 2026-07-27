@@ -174,6 +174,21 @@ the real fix is **PFC (BH.6)** to keep the sender ≤ drain, staying in the loss
    overlay/DMA-driven path; some per-frame RISC work is fundamental unless HW-assisted (routing needs
    the header). This is where the gap to per-rail line rate ultimately lives.
 
+### TX vs RX asymmetry (measured 2026-07-26)
+
+The RX ceiling above is a **RISC** limit; the TX side has no such limit. Measured on the same rail:
+
+| Direction | Path | BW | Bound by |
+|---|---|---|---|
+| **RX inbound** (WRITE landing; also READ-RESP-in when BH is the READ initiator) | RISC parse + MR + NoC land | **~13 Gbps** (crc on) / **≥18 Gbps** (crc off) | **RISC** per-frame (header parse + CRC + NoC descriptor) |
+| **TX outbound** (READ-RESP-out when BH is the READ target; BH-initiated WRITE) | TX ring, HW-driven | **~200 Gbps (line rate)** — measured 199.8 Gbps on `enp193s0f0np0`, idle baseline 0 | **HW** (RISC only arms the ring) |
+
+**Implication for READ (§ milestone RX.5b / plan 1.3):** a one-sided READ is **never TX-bound**. When BH
+is the READ *target*, the response *data* egresses at ~200 G, so throughput is set by the RISC ingesting
+each `READ_REQ` + issuing the NoC read/response — the same RX-class parse path (~13–18 Gbps). When BH is
+the READ *initiator*, the returned data lands via RX and tracks the inbound ceiling directly. So READ
+throughput will track the RX number, not the 200 G TX number.
+
 ## 9. Open questions / follow-ups
 
 - **SEND landing** — **Done (1.2a, on-core → NoC target).** SEND/SEND_IMM now publish an `RxWqeRing`
