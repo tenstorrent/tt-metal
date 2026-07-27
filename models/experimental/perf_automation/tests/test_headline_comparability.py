@@ -22,7 +22,6 @@ import json
 import tempfile
 from pathlib import Path
 
-from models.experimental.perf_automation.cc_optimize import run as R
 from models.experimental.perf_automation.cc_optimize import summary as S
 
 _KL = None
@@ -98,69 +97,7 @@ def _write_orig(tmp_path, monkeypatch, device_ms, perf_layers=None):
     return p
 
 
-def test_original_baseline_used_when_depth_matches(monkeypatch):
-    p = _write_orig(None, monkeypatch, 832.93, "16")
-    try:
-        monkeypatch.setenv("TT_PERF_LAYERS", "16")
-        assert R._original_baseline_ms("STRESSMODEL", "main") == 832.93
-    finally:
-        p.unlink(missing_ok=True)
-
-
-def test_original_baseline_refused_on_depth_mismatch(monkeypatch):
-    """THE 832.93 CASE: a 2-layer number must never be the 'before' for a 16-layer run."""
-    p = _write_orig(None, monkeypatch, 832.93, "2")
-    try:
-        monkeypatch.setenv("TT_PERF_LAYERS", "16")
-        assert R._original_baseline_ms("STRESSMODEL", "main") is None
-    finally:
-        p.unlink(missing_ok=True)
-
-
-def test_original_baseline_refused_when_unstamped(monkeypatch):
-    """Files written before the stamp existed carry no depth -- cannot be shown to be comparable."""
-    p = _write_orig(None, monkeypatch, 832.93, None)
-    try:
-        monkeypatch.setenv("TT_PERF_LAYERS", "16")
-        assert R._original_baseline_ms("STRESSMODEL", "main") is None
-    finally:
-        p.unlink(missing_ok=True)
-
-
-def test_all_layers_matches_an_absent_cap(monkeypatch):
-    """The gate runs uncapped; 'all' must equal an absent TT_PERF_LAYERS, not mismatch it."""
-    p = _write_orig(None, monkeypatch, 500.0, "all")
-    try:
-        monkeypatch.delenv("TT_PERF_LAYERS", raising=False)
-        assert R._original_baseline_ms("STRESSMODEL", "main") == 500.0
-    finally:
-        p.unlink(missing_ok=True)
-
-
-def test_headline_falls_back_to_this_runs_baseline_when_original_refused():
-    """Refusing the stale number must not blank the headline -- it uses this run's own baseline."""
-    txt = _headline(original_baseline_ms=None, final_override_ms=1088.15)
-    assert "2149.71 ms  ->  1088.15 ms" in txt and "1.98x" in txt
-
-
 # --- labelling: a ms figure without its depth is what caused the confusion ----------------------
-
-
-def test_every_reported_number_names_its_depth(monkeypatch):
-    monkeypatch.setenv("TT_PERF_LAYERS", "16")
-    monkeypatch.setenv("PERF_MCP_MODEL_LAYERS", "32")
-    txt = _headline(
-        final_override_ms=1088.15,
-        before_ms=200.0,
-        after_ms=100.0,
-        before_mode="trace+1cq",
-        after_mode="trace+1cq",
-        baseline_profile={"per_token_ms": 24.98},
-    )
-    assert "eager per-op device time (16 layers)" in txt
-    assert "tracy trace pass, BASELINE, same window (16 layers):  24.98 ms" in txt
-    assert "(all 32 layers)" in txt
-    assert "baseline " not in txt.split("Roofline")[0]  # the ambiguous word is gone
 
 
 def test_depth_label_says_all_layers_when_uncapped(monkeypatch):
@@ -175,34 +112,11 @@ def test_depth_label_says_all_layers_when_uncapped(monkeypatch):
 # --- the anchor must be this run's own starting point, never its current value -----------------
 
 
-def test_refusing_a_stale_original_does_not_collapse_the_headline():
-    """run.py passes the CURRENT committed ms in the `baseline_ms` slot, so falling straight back to
-    it made a 3.45x run print "714.94 -> 714.94 (+0.0%)". The run's own baseline_profile is the only
-    value guaranteed to predate every lever."""
-    txt = _headline(
-        baseline_ms=714.94, original_baseline_ms=None, final_override_ms=714.94, baseline_profile={"device_ms": 2464.18}
-    )
-    assert "2464.18 ms  ->  714.94 ms" in txt and "3.45x" in txt
-    assert "714.94 ms  ->  714.94 ms" not in txt
-
-
-def test_falls_back_to_baseline_ms_only_when_no_profile_exists():
-    txt = _headline(baseline_ms=900.0, original_baseline_ms=None, final_override_ms=450.0, baseline_profile=None)
-    assert "900.00 ms  ->  450.00 ms" in txt
-
-
-def test_a_zero_or_missing_profile_device_ms_is_not_used_as_the_anchor():
-    for prof in ({"device_ms": 0}, {"device_ms": None}, {"device_ms": "x"}, {}):
-        txt = _headline(baseline_ms=900.0, original_baseline_ms=None, final_override_ms=450.0, baseline_profile=prof)
-        assert "900.00 ms  ->  450.00 ms" in txt, "an unusable profile value became the anchor"
-
-
 def test_sections_say_which_profile_they_came_from():
     """The op table and the trace line both read the BASELINE profile. Labelling the table 'latest'
     put a 2464 ms breakdown directly above a 714 ms 'measured' line."""
     txt = _headline(
         baseline_ms=714.94,
-        original_baseline_ms=None,
         final_override_ms=714.94,
         baseline_profile={
             "device_ms": 2464.18,

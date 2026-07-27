@@ -65,7 +65,7 @@ _ENV = _MANIFEST.get("env", {})
 # where profile_model stashes the current baseline so measure_candidate can compare structurally
 def _baseline_path():
     """Per-(model, task) device_ms baseline. Was a single global file, unlike the already-keyed
-    _original_baseline_path()/_throughput_path(), and nothing reset it at task start -- so the
+    the measurement ledger / _throughput_path(), and nothing reset it at task start -- so the
     baseline a candidate was compared against could belong to a previous model, a previous
     module, or a concurrent optimize on the same box. A leftover SLOWER baseline books the
     first candidate of the new run as a large fake win."""
@@ -75,7 +75,7 @@ def _baseline_path():
 
 
 # The tool is trace+1cq end to end; this is the ONLY full-pipeline baseline (no 2-CQ twin).
-# KEYED by (model, task), like _baseline_path() and _original_baseline_path(). It was a single global
+# KEYED by (model, task), like _baseline_path() and the measurement ledger. It was a single global
 # file, so anything on the box could overwrite a live run's AFTER number: on 2026-07-27 a unit test
 # writing a fixture value of 100.0 to the real path landed in a 10-hour optimize run whose every
 # actual reading was ~23.9 ms, and two concurrent optimize runs would have done the same to each
@@ -604,12 +604,6 @@ def _read_baseline_profile():
     return None
 
 
-def _original_baseline_path():
-    model = _MODEL_ROOT.name if _MODEL_ROOT else "model"
-    task = os.environ.get("PERF_MCP_TASK", "main")
-    return Path(tempfile.gettempdir()) / ("perf_mcp_orig_baseline_%s_%s.json" % (model, task))
-
-
 def _throughput_path():
     """Per-(model, task) path for the STATIC roofline-target snapshot the report renders. Keyed like
     the baseline path so a per-module run never reads another module's target."""
@@ -675,19 +669,46 @@ def _is_credible_profile(prof: dict) -> bool:
     return True
 
 
-def _report_original_baseline_ms():
-    """The first baseline ever recorded for this (model, task) -- but only if it was profiled at the
-    depth this run is using. A ms figure taken over 2 layers is not comparable to one over 16."""
+def _ledger():
+    """The measurement ledger (cc_optimize/measurements.py), loaded by path so the MCP server keeps
+    working under a bare sys.path."""
+    global _LEDGER_MOD
     try:
-        p = _original_baseline_path()
-        if p.exists():
-            d = json.loads(p.read_text())
-            _now = (os.environ.get("TT_PERF_LAYERS") or "").strip() or "all"
-            if str(d.get("perf_layers", _now)) == _now:
-                return round(float(d.get("device_ms", 0.0)), 4)
+        return _LEDGER_MOD
+    except NameError:
+        pass
+    import importlib.util as _ilu
+
+    _p = Path(__file__).with_name("measurements.py")
+    _spec = _ilu.spec_from_file_location("tt_measurements", str(_p))
+    _m = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_m)
+    globals()["_LEDGER_MOD"] = _m
+    return _m
+
+
+def _ledger_record(prof: dict) -> None:
+    """Append this profile's eager per-op total to the ledger, with the depth it was taken at.
+
+    PHASE is decided by the ledger's own history, not by a caller flag: the first eager reading ever
+    taken for this (model, task) is the BEFORE, everything after is an AFTER. That is what makes the
+    original survive a rerun -- a second optimize on an already-optimized model appends an 'after',
+    it cannot overwrite the original 'before'.
+    """
+    try:
+        led = _ledger()
+        ms = prof.get("device_ms")
+        depth = str(prof.get("perf_layers") or "all")
+        seen = led.first(led.KIND_EAGER, led.PHASE_BEFORE)
+        phase = led.PHASE_AFTER if seen else led.PHASE_BEFORE
+        if phase == led.PHASE_BEFORE and not _is_credible_profile(prof):
+            return
+        led.record(led.KIND_EAGER, phase, ms, depth=depth, mode="eager", source="profile_model")
+        _tr = _baseline_trace_ms_from(prof) if "_baseline_trace_ms_from" in globals() else None
+        if _tr:
+            led.record(led.KIND_TRACE_PASS, phase, _tr, depth=depth, mode="tracy-trace", source="profile_model")
     except Exception:  # noqa: BLE001
         pass
-    return _report_baseline_ms()
 
 
 def _merge_cumulative(cum_path, attempts) -> list:
@@ -1499,20 +1520,7 @@ def profile_model() -> dict:
         }
     prof.setdefault("perf_layers", (os.environ.get("TT_PERF_LAYERS") or "").strip() or "all")
     _baseline_path().write_text(json.dumps(prof))
-    _orig = _original_baseline_path()
-    if not _orig.exists() and _is_credible_profile(prof):
-        try:
-            # Stamp the DEPTH this was profiled at. The file is written once and never refreshed, so
-            # a later run with a different coverage window would otherwise compare against it blind:
-            # llama3_1_8b_p150 reported "baseline 832.93 -> final 1088.15 (-30.6%)" by pairing a
-            # 2-layer profile from a previous day with a 16-layer one, a regression that never
-            # happened (the run was actually 2149.71 -> 1088.15). A ms figure is only comparable to
-            # another taken over the SAME amount of work.
-            _stamped = dict(prof)
-            _stamped["perf_layers"] = (os.environ.get("TT_PERF_LAYERS") or "").strip() or "all"
-            _orig.write_text(json.dumps(_stamped))
-        except Exception:  # noqa: BLE001
-            pass
+    _ledger_record(prof)
     dev = round(float(prof.get("device_ms", 0.0)), 4)
     target, at_floor, residual_gap, open_ops = None, None, None, []
     try:

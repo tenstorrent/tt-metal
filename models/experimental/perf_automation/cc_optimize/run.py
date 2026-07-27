@@ -424,7 +424,49 @@ def _fullpipe_e2e_inner(repo_root: Path, mcp_env: dict, devices: str, label: str
             f"  [optimize/cc] FULL-model end-to-end ({label}) = {ms:.1f} ms"
             f"  (ALL layers, prefill + 1 decode{', ' + mode if mode else ''})"
         )
+        _ledger_fullpipe(ms, mode, label)
     return ms, mode
+
+
+def _ledger():
+    """The measurement ledger (cc_optimize/measurements.py), loaded by path."""
+    global _LEDGER_MOD
+    try:
+        return _LEDGER_MOD
+    except NameError:
+        pass
+    import importlib.util as _ilu
+
+    _p = Path(__file__).with_name("measurements.py")
+    _spec = _ilu.spec_from_file_location("tt_measurements", str(_p))
+    _m = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_m)
+    globals()["_LEDGER_MOD"] = _m
+    return _m
+
+
+def _ledger_fullpipe(ms: float, mode: str, label: str) -> None:
+    """Record the whole-model gate reading AT THE MOMENT IT IS TAKEN, with the mode it was taken in.
+
+    The mode matters more than the number: the BEFORE bookend is captured once and never re-taken,
+    so an eager BEFORE could sit next to a trace+1cq AFTER and be subtracted, printing
+    `before 47.10 ms -> after 100.00 ms (-112.3% SLOWER)`. Stored side by side with their modes,
+    that pair is refused instead of computed. The first such reading ever taken for this
+    (model, task) is the BEFORE and survives every rerun."""
+    try:
+        led = _ledger()
+        seen = led.first(led.KIND_FULLPIPE, led.PHASE_BEFORE)
+        phase = led.PHASE_AFTER if seen else led.PHASE_BEFORE
+        led.record(
+            led.KIND_FULLPIPE,
+            phase,
+            ms,
+            depth="all",
+            mode=mode or "unknown",
+            source="fullpipe-gate:%s" % (label or ""),
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 _HOST_XFER_OPS = (
@@ -2027,45 +2069,6 @@ def _comparable(value, stored_depth: str, want_depth: str):
     return Reading(value, depth=stored_depth).comparable_to(Reading(value, depth=want_depth))
 
 
-def _original_baseline_ms(model_name: str, task: str, perf_layers: str = "") -> float | None:
-    """The FIRST baseline recorded for this (model, task), or None when it is not comparable.
-
-    The file is written once and never refreshed, so it outlives the profiling window it was taken
-    at. Pairing it with a later run's number produced the headline
-
-        baseline 832.93 ms  ->  final 1088.15 ms   (-30.6%, 0.77x)
-
-    on llama3_1_8b_p150 -- a 2-layer profile from the previous day against a 16-layer one. Nothing had
-    regressed; that run was 2149.71 -> 1088.15. Returning None here makes the caller fall back to THIS
-    run's own baseline, which is always measured over the same work as its final.
-    """
-    try:
-        import tempfile
-
-        p = Path(tempfile.gettempdir()) / ("perf_mcp_orig_baseline_%s_%s.json" % (model_name, task))
-        if not p.is_file():
-            return None
-        d = json.loads(p.read_text())
-        if d.get("device_ms") is None:
-            return None
-        want = (perf_layers or os.environ.get("TT_PERF_LAYERS") or "").strip() or "all"
-        got = str(d.get("perf_layers", "")).strip()
-        # ONE definition of "may these be compared" -- integrity.Reading, shared with the report
-        # renderer. Hand-rolling the axis comparison here is what let each site drift: four separate
-        # bespoke checks, each fixed after it had already published a wrong number.
-        verdict = _comparable(d["device_ms"], got, want)
-        if not verdict.is_pass:
-            print(
-                "  [optimize/cc] original baseline not usable as the headline anchor: %s; using "
-                "THIS run's baseline instead" % verdict.reason
-            )
-            return None
-        return float(d["device_ms"])
-    except Exception:  # noqa: BLE001
-        pass
-    return None
-
-
 def _prune_legacy_reports(demo_dir: Path) -> None:
     for legacy in ("E2E_REPORT.md", "summary.md"):
         try:
@@ -2187,7 +2190,6 @@ def _emit_summary(
             else None
         ),
         finalized=True,
-        original_baseline_ms=_original_baseline_ms(model_name, task, os.environ.get("TT_PERF_LAYERS", "")),
         final_override_ms=_cur_ms,
         throughput=_throughput,
     )

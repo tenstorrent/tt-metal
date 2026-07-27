@@ -302,21 +302,6 @@ def _stages_from_profile(baseline_profile: dict | None) -> list:
     return rows
 
 
-def _run_baseline_ms(baseline_profile: dict | None):
-    """THIS run's own starting measurement, from the profile captured before any lever was applied.
-
-    Distinct from the `baseline_ms` argument, which run.py fills with the CURRENT committed value --
-    a name that invites exactly the mistake of treating it as the run's starting point.
-    """
-    if not isinstance(baseline_profile, dict):
-        return None
-    try:
-        v = float(baseline_profile.get("device_ms") or 0.0)
-    except (TypeError, ValueError):
-        return None
-    return v if v > 0 else None
-
-
 def _reading(value, mode: str = "", stage: str = "", depth: str = ""):
     """Wrap a ms value with its provenance. Delegates to integrity.Reading so DEPTH, MODE and STAGE
     are defined once for the whole tool rather than re-checked ad hoc at each render site -- every
@@ -348,6 +333,65 @@ def _same_measurement(before_mode: str, after_mode: str) -> bool:
     return bool(a.comparable_to(b))
 
 
+def _ledger():
+    """The measurement ledger (cc_optimize/measurements.py), loaded by path."""
+    global _LEDGER_MOD
+    try:
+        return _LEDGER_MOD
+    except NameError:
+        pass
+    import importlib.util as _ilu
+
+    _p = Path(__file__).with_name("measurements.py")
+    _spec = _ilu.spec_from_file_location("tt_measurements", str(_p))
+    _m = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_m)
+    globals()["_LEDGER_MOD"] = _m
+    return _m
+
+
+def _ledger_pair(kind: str):
+    """(before, after) for one measurement kind, straight from the ledger.
+
+    THE POINT: these carry their own depth and mode, so the report never has to infer what a number
+    measured, and there is no chain to fall through when one is missing. `first` is the earliest
+    reading ever taken for this (model, task), so it is the TRUE original even on the fifth rerun.
+    """
+    try:
+        led = _ledger()
+        return led.first(kind, led.PHASE_BEFORE), led.last(kind, led.PHASE_AFTER)
+    except Exception:  # noqa: BLE001
+        return None, None
+
+
+def _ledger_line(kind: str, title: str):
+    """Render one before/after line from the ledger, or None when it has nothing to say."""
+    try:
+        led = _ledger()
+        a, b = _ledger_pair(kind)
+        if not a or not b:
+            return None
+        av, bv = a.get("value_ms"), b.get("value_ms")
+        depth = a.get("depth") or "unknown"
+        dl = "all layers" if str(depth) == "all" else "%s layers" % depth
+        ok, why = led.comparable(a, b)
+        if not ok:
+            return "%s (%s):  before %.2f ms [%s]  ->  after %.2f ms [%s]   — NOT COMPARABLE: %s" % (
+                title,
+                dl,
+                av,
+                a.get("mode") or "unknown mode",
+                bv,
+                b.get("mode") or "unknown mode",
+                why,
+            )
+        pct = led.delta_pct(a, b)
+        spd = (av / bv) if bv else 1.0
+        return "%s (%s):  %.2f ms  ->  %.2f ms   (%+.1f%%, %.2fx)" % (title, dl, av, bv, pct, spd)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _depth_label(profile: dict | None = None) -> str:
     """How much of the model the tracy numbers cover. A ms figure means nothing without it: the whole
     2-layer-vs-16-layer confusion came from a headline that printed neither side's depth.
@@ -363,24 +407,6 @@ def _depth_label(profile: dict | None = None) -> str:
     if not raw:
         raw = (os.environ.get("TT_PERF_LAYERS") or "").strip()
     return "%s layers" % raw if raw.isdigit() and int(raw) > 0 else "all layers"
-
-
-_IMPLAUSIBLE_RATIO = float(os.environ.get("PERF_MCP_HEADLINE_MAX_RATIO", "100") or "100")
-
-
-def _implausible_pair(before: float, after: float) -> bool:
-    """Are these two numbers too far apart to be measurements of the SAME work?
-
-    A per-op eager total cannot legitimately move by two orders of magnitude; when it appears to, the
-    anchor is from a different run, depth, or model. llama3_1_8b_p150 rendered
-    `0.06 ms -> 648.17 ms (-1062476.1%, 0.00x)` -- arithmetic performed faithfully on an anchor that
-    belonged to another run. Printing a number that large is never informative, and it reads as a
-    catastrophic regression rather than as the missing baseline it actually is.
-    """
-    if not before or not after or before <= 0 or after <= 0:
-        return False
-    hi, lo = max(before, after), min(before, after)
-    return (hi / lo) > _IMPLAUSIBLE_RATIO
 
 
 def _all_layers_label() -> str:
@@ -540,7 +566,6 @@ def render_summary(
     finalized: bool = True,
     before_mode: str = "",
     after_mode: str = "",
-    original_baseline_ms: float | None = None,
     final_override_ms: float | None = None,
     throughput: dict | None = None,
 ) -> str:
@@ -580,11 +605,8 @@ def render_summary(
     # wrong: run.py passes the CURRENT committed ms in that slot, so refusing a stale original made a
     # 3.45x run print "714.94 -> 714.94 (+0.0%)". This run's own baseline_profile.json is written once
     # at the start and is the only value guaranteed to predate every lever.
-    hdr_base = original_baseline_ms
-    if hdr_base is None:
-        hdr_base = _run_baseline_ms(baseline_profile)
-    if hdr_base is None:
-        hdr_base = baseline_ms
+    _base_row = _ledger_pair(_ledger().KIND_EAGER)[0]
+    hdr_base = float(_base_row["value_ms"]) if _base_row else None
     # The baseline is a measured fact, never a derived one. This used to substitute the SLOWEST
     # measurement ever recorded whenever the real baseline was not better than the final -- i.e.
     # precisely when the run achieved NOTHING -- so 100 -> 105 with a 180 ms failed experiment
@@ -599,31 +621,9 @@ def render_summary(
         lines.append(
             "optimizing… — baseline->final speedup is finalized when the module converges (per-attempt detail below is live)"
         )
-    elif hdr_base and final_ms and hdr_base > 0 and _implausible_pair(hdr_base, final_ms):
-        lines.append(
-            f"eager per-op device time ({_depth_label(baseline_profile)}):  {hdr_base:.2f} ms  ->  "
-            f"{final_ms:.2f} ms   — NOT COMPARABLE: these differ by more than "
-            f"{_IMPLAUSIBLE_RATIO:.0f}x, so the baseline is not a measurement of this run's work "
-            f"(stale or foreign anchor); no delta computed"
-        )
-    elif hdr_base and final_ms and hdr_base > 0:
-        # Say WHAT was measured and OVER HOW MUCH WORK, never a bare "baseline". These are tracy
-        # per-op numbers from the EAGER pass over a capped window; the whole-model trace figure is a
-        # different measurement and gets its own line. Reporting them as one "baseline -> final"
-        # produced "baseline 832.93 -> final 1088.15 (-30.6%)" on llama3_1_8b_p150 by pairing a
-        # 2-layer profile with a 16-layer one -- a regression that never happened.
-        pct = (hdr_base - final_ms) / hdr_base * 100.0
-        spd = hdr_base / final_ms if final_ms > 0 else 1.0
-        lines.append(
-            f"eager per-op device time ({_depth_label(baseline_profile)}):  {hdr_base:.2f} ms  ->  {final_ms:.2f} ms"
-            f"   ({pct:+.1f}%, {spd:.2f}x)"
-        )
-    elif hdr_base:
-        lines.append(
-            f"eager per-op device time ({_depth_label(baseline_profile)}):  {hdr_base:.2f} ms  ->  (no measured win recorded)"
-        )
     else:
-        lines.append("eager per-op device time: unavailable (no profile found)")
+        _eager = _ledger_line(_ledger().KIND_EAGER, "eager per-op device time")
+        lines.append(_eager or "eager per-op device time: not measured (no ledger reading for this run)")
     _bl_trace = _baseline_trace_ms(baseline_profile)
     if _bl_trace:
         lines.append(f"tracy trace pass, BASELINE, same window ({_depth_label(baseline_profile)}):  {_bl_trace:.2f} ms")

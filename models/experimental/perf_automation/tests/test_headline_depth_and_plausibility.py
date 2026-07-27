@@ -55,18 +55,37 @@ def test_depth_label_falls_back_to_env_for_unstamped_profiles(monkeypatch):
     assert m._depth_label({}) == "8 layers"
 
 
-def test_a_pair_two_orders_of_magnitude_apart_is_implausible():
+def _render(tmp_path, monkeypatch, baseline_device_ms, final_ms, perf_layers):
+    """Drive the REAL renderer, not its helpers. The helper unit tests above all passed while the
+    rendered line was still wrong -- the defects lived in how render_summary combined them."""
+    import json
+
     m = _summary()
-    assert m._implausible_pair(0.06, 648.17) is True
-
-
-def test_a_real_speedup_is_plausible():
-    m = _summary()
-    assert m._implausible_pair(2464.18, 648.17) is False
-    assert m._implausible_pair(648.17, 2464.18) is False
-
-
-def test_missing_or_zero_readings_are_not_flagged_as_implausible():
-    m = _summary()
-    for a, b in ((0.0, 5.0), (5.0, 0.0), (None, 5.0), (5.0, None)):
-        assert m._implausible_pair(a, b) is False
+    monkeypatch.delenv("TT_PERF_LAYERS", raising=False)
+    kl = tmp_path / "kernel_log.json"
+    kl.write_text(
+        json.dumps(
+            [
+                {
+                    "op_signature": "MatmulDeviceOperation",
+                    "kernel_kind": "dtype",
+                    "measured_ms": final_ms,
+                    "beat_baseline": True,
+                }
+            ]
+        )
+    )
+    prof = {"device_ms": baseline_device_ms, "perf_layers": perf_layers, "buckets": []}
+    out = m.render_summary(
+        kl,
+        baseline_ms=baseline_device_ms,
+        model="llama3_1_8b_p150",
+        task="main",
+        before_ms=48.38,
+        after_ms=22.77,
+        baseline_profile=prof,
+        before_mode="trace+1cq",
+        after_mode="trace+1cq",
+        finalized=True,
+    )
+    return next(ln for ln in str(out).splitlines() if "eager per-op" in ln)

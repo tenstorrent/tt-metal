@@ -140,7 +140,7 @@ def test_no_baseline_yet_is_still_recorded_cleanly(tmp_path):
 # --------------------------------------------------------------------------- F
 
 
-def test_baseline_is_never_replaced_by_the_worst_measurement(tmp_path):
+def test_baseline_is_never_replaced_by_the_worst_measurement(tmp_path, monkeypatch):
     """A run that regressed must not print a speedup against an invented baseline."""
     from cc_optimize import summary as S
 
@@ -150,7 +150,15 @@ def test_baseline_is_never_replaced_by_the_worst_measurement(tmp_path):
     ]
     p = tmp_path / "kernlog.json"
     p.write_text(json.dumps(attempts))
-    out = S.render_summary(p, 100.0, final_override_ms=105.0, model="m", original_baseline_ms=100.0)
+    import importlib.util as _ilu
+
+    monkeypatch.setenv("PERF_MCP_LEDGER", str(tmp_path / "led.jsonl"))
+    _sp = _ilu.spec_from_file_location("meas_int_ut", Path(S.__file__).with_name("measurements.py"))
+    _m = _ilu.module_from_spec(_sp)
+    _sp.loader.exec_module(_m)
+    _m.record(_m.KIND_EAGER, _m.PHASE_BEFORE, 100.0, depth="16", mode="eager", source="test")
+    _m.record(_m.KIND_EAGER, _m.PHASE_AFTER, 105.0, depth="16", mode="eager", source="test")
+    out = S.render_summary(p, 100.0, final_override_ms=105.0, model="m")
     # 180.00 legitimately appears in the per-attempt table; the HEADLINE is what must be honest.
     hdr = next(ln for ln in out.splitlines() if "device time" in ln)  # headline was relabelled: it now
     # names WHAT was measured and over how many layers, because a bare "baseline -> final" hid a
