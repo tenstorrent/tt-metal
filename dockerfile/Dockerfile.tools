@@ -56,21 +56,10 @@ ARG OMPI_COMMIT_SHA=29341e55efaabf7a6968444b4bb6f1f1fb40d664
 ARG ORAS_VERSION=1.3.3
 ARG ORAS_SHA256=9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59
 
-# Declared here (before the file's first FROM) rather than next to its own
-# FROM line further down: an ARG is only usable to parameterize a FROM's
-# image reference when it's declared before the Dockerfile's FIRST FROM -
-# ARGs declared between two later stages are scoped to the preceding stage
-# and are NOT visible to the next stage's FROM line.
-#
-# Pinned by digest, not tag: tags are mutable and can be repointed by the
-# upstream maintainer (accidentally or via supply-chain compromise), while a
-# digest is an immutable content hash - the FROM line below resolves the
-# exact bytes this digest names, regardless of what "1.11.0" points to later.
-# SYFT_SCANNER_VERSION is kept only as a human-readable label for the
-# version this digest corresponds to; it is not itself used to resolve the
-# image. Verified via Docker Hub's registry API
-# (docker/buildkit-syft-scanner:1.11.0 -> this digest) and confirmed
-# mirror.gcr.io serves byte-identical content for the same digest.
+# Declared here (before the file's first FROM) so it's usable in the
+# syft-scanner FROM line further down. Pinned by digest, not tag, to guard
+# against supply-chain compromise; SYFT_SCANNER_VERSION is just a
+# human-readable label for the version this digest corresponds to.
 ARG SYFT_SCANNER_VERSION=1.11.0
 ARG SYFT_SCANNER_DIGEST=sha256:79e7b013cbec16bbb436f312819a49a4a57752b2270c1a9332ae1a10fcc82a68
 
@@ -460,6 +449,4 @@ COPY --from=oras-builder /install/ /install/
 # publish-release-image.yaml for why that limit matters here.
 #############################################################
 
-# Pinned by digest (SYFT_SCANNER_DIGEST above), not the ${SYFT_SCANNER_VERSION}
-# tag - see the ARG block near the top of this file for why.
 FROM mirror.gcr.io/docker/buildkit-syft-scanner@${SYFT_SCANNER_DIGEST} AS syft-scanner
