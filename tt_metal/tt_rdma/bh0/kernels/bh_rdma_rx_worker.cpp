@@ -96,15 +96,25 @@ void kernel_main() {
             noc_async_read_barrier();
             const uint32_t w0 = sc[0];
             const uint32_t len = sc[1];
+            const uint32_t roff = sc[4];  // remote_offset within the MR
             const uint32_t rkey = sc[3];
             const uint32_t op = w0 & 0xFFu;
             const uint32_t mslot = rkey >> 24;
+            bool landed = false;
             if (mslot < mr_slots) {
                 volatile tt_l1_ptr uint32_t* mr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mr_table + mslot * 32u);
-                if (mr[4] == rkey && (mr[5] & 0x2u) && len <= mr[2] && (op == 0x10u || op == 0x11u)) {
+                if (mr[4] == rkey && (mr[5] & 0x2u) && (roff + len) <= mr[2] && (op == 0x10u || op == 0x11u)) {
+                    // 3.1c: land the payload at the MR destination (a second NoC write -> ~2x the per-frame
+                    // data work). MR entry: mr[0]=base L1 addr, mr[6]/mr[7]=dest NoC core x/y. Dest =
+                    // base + remote_offset. Payload is at scratch+32 (after the 32B header).
+                    noc_async_write(scratch + 32u, get_noc_addr(mr[6], mr[7], mr[0] + roff), len);
+                    landed = true;
                     ++valid;
                 }
+            }
+            if (landed) {
+                noc_async_write_barrier();  // drain the landing before scratch is reused by the next read
             }
             bytes += stride;
             ++processed;

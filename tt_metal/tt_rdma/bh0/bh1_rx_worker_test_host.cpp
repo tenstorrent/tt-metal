@@ -93,11 +93,19 @@ int main(int argc, char** argv) {
     // + worker-readable (slot 0 works). The RCB/DBG regions are owned/churned by the base FW so writes there
     // didn't reach the workers. The worker never uses slot 63 as an MR (test rkey -> slot 0).
     const uint32_t kMrGen = kSharedMr + 63u * 32u;
+    // 3.1c remote-dest landing: MR slot 0 points at a landing region on a Tensix core NOT in the pool
+    // (row 1). Workers noc_write each valid payload there. Verify byte-exact 'TTWR' after the run.
+    const CoreCoord land = device->worker_core_from_logical_core(CoreCoord{0, 1});
+    const uint32_t kLandBase = 0x70000u;
     std::vector<uint32_t> mrtab(kMrSlots * 8, 0u);
-    mrtab[2] = 0x100000u;  // slot 0 length lo (1 MB)
-    mrtab[4] = kRkey;      // slot 0 rkey
-    mrtab[5] = 0x2u;       // slot 0 access = REMOTE_WRITE
-    mrtab[63 * 8] = 1u;    // slot 63 word 0 = MR generation = 1
+    mrtab[0] = kLandBase;         // slot 0 base L1 addr on the dest core
+    mrtab[2] = 0x100000u;         // slot 0 length lo (1 MB)
+    mrtab[4] = kRkey;             // slot 0 rkey
+    mrtab[5] = 0x2u;              // slot 0 access = REMOTE_WRITE
+    mrtab[6] = (uint32_t)land.x;  // slot 0 dest NoC core x
+    mrtab[7] = (uint32_t)land.y;  // slot 0 dest NoC core y
+    mrtab[63 * 8] = 1u;           // slot 63 word 0 = MR generation = 1
+    cluster.write_core(device->id(), land, std::vector<uint32_t>(8, 0u), kLandBase);  // clear the landing spot
 
     std::vector<uint32_t> z9(9, 0u), z7(7, 0u);
     cluster.write_core(device->id(), eth_phys, z9, (uint32_t)eth_stats_addr);
@@ -240,6 +248,20 @@ int main(int argc, char** argv) {
         (unsigned long long)valid_at_change,
         (unsigned long long)final_valid,
         shared_mr_ok ? "SHARED-TABLE OK (central update seen by all workers)" : "SHARED-TABLE FAIL");
+    // 3.1c remote-dest landing: the payload must have landed byte-exact at the MR dest (off-core, not just
+    // compute-local). Sender roff=0 -> every WRITE lands at kLandBase; check word0 = 'TTWR' (0x52575454).
+    auto lz = cluster.read_core<uint32_t>(device->id(), land, kLandBase, 4 * sizeof(uint32_t));
+    const bool land_ok = (!lz.empty() && lz[0] == 0x52575454u);
+    std::printf(
+        "  remote-dest landing @core(%u,%u):0x%x [0..3] = %08x %08x %08x %08x -> %s\n",
+        (unsigned)land.x,
+        (unsigned)land.y,
+        kLandBase,
+        lz[0],
+        lz[1],
+        lz[2],
+        lz[3],
+        land_ok ? "LANDED byte-exact (TTWR)" : "LAND FAIL");
     const uint64_t accounted = fin_processed + fin_lapped;
     const double cover = produced_seen ? 100.0 * (double)fin_processed / (double)produced_seen : 0.0;
     const bool exactly_once = (accounted == produced_seen);  // no frame double-processed or dropped-unaccounted
