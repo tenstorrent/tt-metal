@@ -68,13 +68,15 @@ def _debug_tensor_mem(label: str, t: ttnn.Tensor) -> None:
 ###############################debugging###############################
 
 
-def _to_device_rm(torch_tensor, device):
-    """torch -> ttnn bf16 ROW_MAJOR tensor on device (weight table for ttnn.embedding)."""
+def _to_device_rm(torch_tensor, device, memory_config=None):
+    """torch -> ttnn bf16 ROW_MAJOR tensor on device (weight table for ttnn.embedding).
+    ``memory_config`` (L1) keeps the lookup table on-chip so the embedding gather reads from L1."""
     return ttnn.from_torch(
         torch_tensor.to(torch.bfloat16),
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         dtype=ttnn.bfloat16,
+        memory_config=memory_config,
     )
 
 
@@ -83,10 +85,15 @@ class TtXttsGptModel(LightweightModule):
         super().__init__()
         self.device = device
 
-        # Token + learned-position embedding tables (row-major for ttnn.embedding).
-        self.text_emb_weight = _to_device_rm(state_dict["gpt.text_embedding.weight"], device)
+        # Token + learned-position embedding tables (row-major for ttnn.embedding). The PREFILL tables
+        # (text token + text position) live in L1 so the prefill embedding gather reads on-chip; the
+        # DECODE tables (mel) stay in DRAM — they feed the traced hot loop where L1 residents are
+        # riskier, and they buy nothing there (decode gathers a single row).
+        self.text_emb_weight = _to_device_rm(state_dict["gpt.text_embedding.weight"], device, ttnn.L1_MEMORY_CONFIG)
         self.mel_emb_weight = _to_device_rm(state_dict["gpt.mel_embedding.weight"], device)
-        self.text_pos_weight = _to_device_rm(state_dict["gpt.text_pos_embedding.emb.weight"], device)
+        self.text_pos_weight = _to_device_rm(
+            state_dict["gpt.text_pos_embedding.emb.weight"], device, ttnn.L1_MEMORY_CONFIG
+        )
         self.mel_pos_weight = _to_device_rm(state_dict["gpt.mel_pos_embedding.emb.weight"], device)
 
         # The 30 decoder blocks + ln_f.
@@ -295,6 +302,7 @@ class TtXttsGptModel(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
             dtype=ttnn.uint32,
+            memory_config=ttnn.L1_MEMORY_CONFIG,  # small index table; keep on-chip for the prefill slice
         )
         # KV cache stays in DRAM: it's a large persistent buffer (~31 MB at max_seq=256 across 30
         # layers) AND — decisively — the traced decode does an in-place cache write
@@ -327,7 +335,11 @@ class TtXttsGptModel(LightweightModule):
         write, kept OUTSIDE any trace capture)."""
         print(f"[TtXttsGptModel.text_ids_to_device] text_ids={list(text_ids.shape)}")
         return ttnn.from_torch(
-            text_ids.to(torch.int32), layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device, dtype=ttnn.uint32
+            text_ids.to(torch.int32),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            dtype=ttnn.uint32,
+            memory_config=ttnn.L1_MEMORY_CONFIG,  # ids in L1 so the token-embedding gather's in0 is on-chip
         )
 
     def _embed_dev(self, ids_tt, tok_weight, pos_weight):
@@ -338,7 +350,9 @@ class TtXttsGptModel(LightweightModule):
             f"[TtXttsGptModel._embed_dev] ids_tt={list(ids_tt.shape)} tok_weight={list(tok_weight.shape)} pos_weight={list(pos_weight.shape)}"
         )
         seq = ids_tt.shape[1]
-        pos_tt = ttnn.slice(self._text_pos_full, [0, 0], [1, seq])  # [1, seq] uint32, device slice
+        pos_tt = ttnn.slice(
+            self._text_pos_full, [0, 0], [1, seq], memory_config=ttnn.L1_MEMORY_CONFIG
+        )  # [1, seq] uint32, device slice (L1)
         # Gather both embeddings in ROW_MAJOR, add there, then a SINGLE tilize to TILE (folds the two
         # per-embedding TilizeWithValPadding ops into one — same trick as decode_on_device).
         tok = ttnn.embedding(ids_tt, tok_weight, memory_config=ttnn.L1_MEMORY_CONFIG)  # ROW_MAJOR
@@ -362,6 +376,8 @@ class TtXttsGptModel(LightweightModule):
             f"[TtXttsGptModel.prefill_on_device] text_ids_tt={list(text_ids_tt.shape)} cond_latents={list(cond_latents.shape) if cond_latents is not None else None}"
         )
         text_emb = self._embed_dev(text_ids_tt, self.text_emb_weight, self.text_pos_weight)
+        # concat output is L1; cond_latents is read straight from wherever the caller put it (no extra
+        # reshard/Copy op — a DRAM in0 here is fine, it's a one-time read).
         prefix = ttnn.concat(
             [cond_latents, text_emb], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG
         )  # [1, n_cond+text, hidden]
