@@ -46,9 +46,22 @@ def _is_sparse_layer(hf_config, layer_idx: int) -> bool:
     return bool(freq[layer_idx]) if freq is not None and layer_idx < len(freq) else False
 
 
-def weight_cache_is_complete(weight_cache_path, hf_config, num_layers: int, expert_weight_dtype) -> bool:
-    """True iff the tilized cache at ``weight_cache_path`` holds every tensor the model builds for
-    layers 0..num_layers-1 (so the caller may pass an empty state_dict and skip the bf16 source read).
+def weight_cache_is_complete(
+    weight_cache_path,
+    hf_config,
+    num_layers: int,
+    expert_weight_dtype,
+    first_layer_idx: int = 0,
+    is_first_rank: bool = True,
+    is_last_rank: bool = True,
+) -> bool:
+    """True iff the tilized cache at ``weight_cache_path`` holds every tensor the model builds for THIS
+    instance's slice (so the caller may pass an empty state_dict and skip the bf16 source read).
+
+    Layers are checked at GLOBAL indices ``first_layer_idx .. first_layer_idx+num_layers-1`` (cache keys are
+    global). A pipeline rank builds the embedding only on the first rank and the final norm + LM head only
+    on the last, so those top-level tensors are required only for the rank that loads them. All defaults =>
+    single-rank (embed + all layers 0..num_layers-1 + norm + LM head), unchanged.
 
     Conservative: a missing file returns False (the caller then loads weights normally — slow but
     correct). A populated cache returns True quickly (one directory walk)."""
@@ -75,14 +88,20 @@ def weight_cache_is_complete(weight_cache_path, hf_config, num_layers: int, expe
 
     use_qk_norm = bool(getattr(hf_config, "use_qk_norm", True))
 
-    # Top-level (embed / final norm / lm head). The token embedding is now the SHARDED parallel table
-    # (see tt/parallel_embedding.py), cached under a distinct key from the old replicated layout — and a
-    # further-distinct key when 2D vocab-sharding is enabled (M3_EMBED_SHARD_VOCAB=1).
+    # Top-level tensors are rank-scoped: embed only on the first rank, final norm + LM head only on the
+    # last (a middle rank builds neither and never loads them). The token embedding is the SHARDED parallel
+    # table (tt/parallel_embedding.py), cached under a layout-specific key (1D hidden-only vs 2D vocab+hidden;
+    # both distinct from the old replicated "model.embed_tokens.weight").
     from models.demos.minimax_m3.tt.parallel_embedding import cache_name_for, embed_shard_2d
 
-    required = [cache_name_for(embed_shard_2d()), "lm_head_padded_pow2.weight", "norm/weight"]
+    required = []
+    if is_first_rank:
+        required.append(cache_name_for(embed_shard_2d()))
+    if is_last_rank:
+        required += ["lm_head_padded_pow2.weight", "norm/weight"]
 
-    for L in range(num_layers):
+    for local_L in range(num_layers):
+        L = first_layer_idx + local_L  # GLOBAL layer index — cache keys are global
         base = f"model.layers.{L}"
         required += [
             f"{base}/input_layernorm/weight",

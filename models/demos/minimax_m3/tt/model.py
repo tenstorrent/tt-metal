@@ -112,6 +112,9 @@ class Model:
         ep_seq_len_per_chip=1024,
         expert_weight_dtype=ttnn.bfloat4_b,
         sequence_parallel=False,
+        first_layer_idx=0,
+        is_first_rank=True,
+        is_last_rank=True,
     ):
         """
         Initialize MiniMax-M3 model
@@ -124,6 +127,14 @@ class Model:
             dtype: Data type for tensors (default: bfloat16)
             tensor_cache_path: Path for tensor caching
             mesh_config: Mesh configuration for parallelization
+            first_layer_idx: GLOBAL index of this instance's first decoder layer. Non-zero for a
+                pipeline-parallel rank owning a layer slice; drives weight-cache keys + the per-layer
+                dense/MoE/sparse selection (all keyed off the model-wide config lists). The KV-cache slot
+                still uses the LOCAL index (0-based within this instance).
+            is_first_rank / is_last_rank: pipeline-parallel placement. The embedding is built only on the
+                first rank and the final norm + LM head + sampling only on the last; a middle rank builds
+                only its layer slice and forwards the hidden state. Both True (default) => a single-rank
+                instance builds the whole model unchanged.
         """
         self.mesh_device = mesh_device
         self.vocab_size = hf_config.vocab_size
@@ -133,6 +144,9 @@ class Model:
         self.max_local_batch_size = max_local_batch_size
         self.users_row_sharded = users_row_sharded
         self.sequence_parallel = sequence_parallel
+        self.first_layer_idx = first_layer_idx
+        self.is_first_rank = is_first_rank
+        self.is_last_rank = is_last_rank
 
         self.ccl_manager = ccl_manager
 
@@ -155,39 +169,43 @@ class Model:
         self.sin_matrix = self.rope_setup.sin_matrix
         self.transformation_mats = self.rope_setup.get_both_trans_mats()
 
-        # Parallel (sharded) token embedding: the [vocab, hidden] table is sharded on hidden across the
-        # TP cols and replicated across the SP rows, so each device stores only [vocab, hidden/tp] —
-        # ~1.72 GiB/device less than a fully-replicated table. forward() does the local emb-dim-slice
-        # lookup then a managed TP all-gather to rebuild the full-hidden, TP-replicated residual stream
-        # the decoder layers expect (kept bf16 so the residual stream keeps full dynamic range).
-        # Sharding mode (2D vocab+hidden by default; M3_EMBED_SHARD_VOCAB=0 for 1D hidden-only). 2D shards
-        # vocab across the SP rows too (~0.5 GiB/device less) for two SP-axis CCL ops per chunk (measured
-        # perf-neutral, KV-PCC bit-identical) — see tt/parallel_embedding.py.
-        shard_vocab = embed_shard_2d()
-        if state_dict:
-            embedding_weight = substate(state_dict, "model.embed_tokens")["weight"]  # [vocab, hidden]
+        # Embedding: FIRST RANK ONLY (later pipeline ranks receive an already-embedded hidden state).
+        # Parallel (sharded) token embedding: the [vocab, hidden] table is sharded on hidden across the TP
+        # cols and (2D/default) on vocab across the SP rows, so each device stores only a slice — far less
+        # than a fully-replicated table. forward() does the local emb-dim-slice lookup then a managed TP
+        # all-gather to rebuild the full-hidden, TP-replicated residual stream (kept bf16 for dynamic range).
+        # Sharding mode: 2D vocab+hidden by default; M3_EMBED_SHARD_VOCAB=0 for 1D hidden-only — see
+        # tt/parallel_embedding.py (2D adds ~0.5 GiB/device saving for two SP-axis CCL ops per chunk).
+        if is_first_rank:
+            shard_vocab = embed_shard_2d()
+            if state_dict:
+                embedding_weight = substate(state_dict, "model.embed_tokens")["weight"]  # [vocab, hidden]
+            else:
+                embedding_weight = None  # cache-only: the sharded .tensorbin is loaded on a cache hit
+            self.embedding = TtParallelEmbedding(
+                mesh_device,
+                self.vocab_size,
+                hf_config.hidden_size,
+                self.mesh_config,
+                self.ccl_manager,
+                torch_weight=embedding_weight,
+                cache_file_name=get_cache_file_name(tensor_cache_path, cache_name_for(shard_vocab)),
+                dtype=ttnn.bfloat16,
+                shard_vocab_on_sp=shard_vocab,
+            )
         else:
-            embedding_weight = None  # cache-only: the sharded .tensorbin is loaded on a cache hit
-        self.embedding = TtParallelEmbedding(
-            mesh_device,
-            self.vocab_size,
-            hf_config.hidden_size,
-            self.mesh_config,
-            self.ccl_manager,
-            torch_weight=embedding_weight,
-            cache_file_name=get_cache_file_name(tensor_cache_path, cache_name_for(shard_vocab)),
-            dtype=ttnn.bfloat16,
-            shard_vocab_on_sp=shard_vocab,
-        )
+            self.embedding = None
+        # Global layer index (first_layer_idx + local) drives weight-cache keys + dense/MoE/sparse
+        # selection; the local index drives the KV-cache slot. They coincide for single-rank.
         self.layers = [
             DecoderLayer(
                 mesh_device,
                 hf_config,
-                substate(state_dict, f"model.layers.{layer_idx}"),
-                layer_idx,
+                substate(state_dict, f"model.layers.{first_layer_idx + local_idx}"),
+                first_layer_idx + local_idx,
                 ccl_manager,
                 dtype=dtype,
-                tensor_cache_path=get_cache_file_name(tensor_cache_path, f"model.layers.{layer_idx}"),
+                tensor_cache_path=get_cache_file_name(tensor_cache_path, f"model.layers.{first_layer_idx + local_idx}"),
                 mesh_config=self.mesh_config,
                 transformation_mats=self.transformation_mats,
                 max_local_batch_size=max_local_batch_size,
@@ -196,9 +214,23 @@ class Model:
                 ep_seq_len_per_chip=ep_seq_len_per_chip,
                 expert_weight_dtype=expert_weight_dtype,
                 sequence_parallel=sequence_parallel,
+                cache_layer_idx=local_idx,
             )
-            for layer_idx in range(hf_config.num_hidden_layers)
+            for local_idx in range(hf_config.num_hidden_layers)
         ]
+        # Final norm + LM head + sampling: last rank only (a non-last rank forwards its hidden state).
+        if not is_last_rank:
+            self.norm = None
+            self.lm_head_weight = None
+            self.sampling = None
+            self._supports_on_device_sampling = False
+            self._prefill_sampling_active = False
+            self.sampling_dp = 1
+            logger.info(
+                f"MiniMax-M3 Model built (pipeline rank slice, no tail): layers [{first_layer_idx}, "
+                f"{first_layer_idx + hf_config.num_hidden_layers}) is_first={is_first_rank}"
+            )
+            return
         self.norm = RMSNorm(
             mesh_device,
             hf_config,
@@ -330,6 +362,11 @@ class Model:
             # Per-layer migration seam (no-op unless a pipeline supplies a callback).
             if on_layer_complete is not None:
                 on_layer_complete(i)
+
+        # Non-last rank: hand the hidden state to the next rank (the norm/lm_head tail is last-rank only).
+        if not self.is_last_rank:
+            return hidden_states
+
         logits = hidden_states
 
         if get_last_token != -1:

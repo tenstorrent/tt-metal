@@ -65,6 +65,9 @@ public:
     // Map a DRAM view + hardware subchannel to the logical CoreCoord used by CreateKernel(DramConfig).
     // logical.y indexes dram_bank_endpoint_coords (worker endpoint first), not the raw subchannel id.
     tt::tt_metal::CoreCoord get_logical_dram_core_for_subchannel(int dram_view, int subchannel) const;
+    tt::tt_metal::CoreCoord get_physical_dispatch_engine_core_from_logical(const tt::tt_metal::CoreCoord& logical_coord) const;
+    uint32_t get_num_dispatch_engine_cores() const;
+
     tt::tt_metal::CoreCoord get_physical_core_from_logical_core(const tt::tt_metal::CoreCoord& logical_coord, const tt::CoreType& core_type) const;
 
     tt::tt_metal::CoreCoord get_dram_grid_size() const;

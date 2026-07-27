@@ -1422,7 +1422,7 @@ uint32_t process_stall(uintptr_t cmd_ptr) {
 
     WAYPOINT("PSW");
     volatile tt_l1_ptr uint32_t* sem_addr =
-        uncached_l1_ptr<uint32_t>(get_semaphore<fd_core_type>(my_downstream_sync_sem_id));
+        uncached_l1_ptr<uint32_t>(get_semaphore<programmable_core_type>(my_downstream_sync_sem_id));
     uint32_t heartbeat = 0;
     do {
         invalidate_l1_cache();
@@ -2692,9 +2692,9 @@ void kernel_main_d() {
 #if !defined(ARCH_QUASAR)
     // On Quasar, relay to the dispatcher is a same-core uncached memcpy; no NOC init-state needed.
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchRelayInlineState::downstream_write_cmd_buf>(
-        0, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), 0, my_noc_index);
+        0, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), 0, 1, my_noc_index);
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchSRelayInlineState::downstream_write_cmd_buf>(
-        0, get_noc_addr_helper(dispatch_s_noc_xy, downstream_data_ptr_s), 0, my_noc_index);
+        0, get_noc_addr_helper(dispatch_s_noc_xy, downstream_data_ptr_s), 0, 1, my_noc_index);
 #endif
 #endif
 
