@@ -85,6 +85,34 @@ pause — mlx5 makes global pause and PFC mutually exclusive, and PFC is the RoC
 PFC-class→queue mapping, so per-priority losslessness may not be independently achievable — only global
 (all-class) pause is meaningful until the RX buffer is partitioned per class.
 
+## HW eval result (2026-07-27) — flashed + activated, but the AFIFO signal is WRONG for this loss
+Flashed the `pfc_enable=1` bundle (blob-swap), activated with `tt-smi -r`. Findings:
+- **FW is stable:** regression **17/17** on the PFC FW; link trains at 200G on both rails; survives a
+  200G DPU overload without wedging (clean-shutdown via resync-on-bad). The gated static config + runtime
+  driver do **no harm**.
+- **But PFC never engaged under real overload.** DPU-side blast (bypasses the eSwitch cap that limits the
+  host sender to ~2.3G) drove the BH RX past its drain ceiling: **`bad=169862`** frames dropped,
+  `crc_err=4845` — yet **`spare[9]=0`** (XOFF never asserted).
+- **Root cause:** the loss is **L1-ring lapping** (the single RISC1 dispatch drains at ~13–18G vs ~200G
+  ingress; the consumer falls behind and the HW overwrites unread ring data). The MAC ingest AFIFO
+  (`rx_afifo_fullness`, the driver's signal) **stays below the watermark** because the HW keeps writing to
+  L1 regardless of the consumer — the AFIFO never backs up on a ring-lap. So the driver's signal cannot
+  see the bottleneck, and pause is never triggered.
+
+**Consequence — PFC-on-AFIFO is not the lossless-RX fix here.** The RX overload loss is a *consumer-drain*
+problem, not a *MAC-ingest* problem. Two real fixes:
+1. **RISC1-driven PFC on L1-ring occupancy** — have the RX dispatch kernel (which knows `wp - read_pos`)
+   assert `TX_FLOW_CONTROL.tx_fc_pause` when its ring passes a high-water. This makes RX **lossless but
+   throttled to ~the drain rate (13–18G)** — a valid interim for correctness, not for line rate. (The
+   static MAC config already built is exactly what this needs; only the *trigger* moves from the base-FW
+   AFIFO poll to the RISC1 ring-occupancy check.)
+2. **Tensix drainer pool (Phase 3.1)** — fan the per-frame work out so the consumer keeps up at line rate;
+   this is the real 200G-lossless answer. PFC then only backstops residual/burst pressure.
+
+The `rx_afifo_fullness` driver stays (gated, harmless) as the MAC-ingest backstop, but it is **not** the
+line-rate-RX solution. Next step for Phase 2.1: move the pause trigger into the RISC1 kernel (ring
+occupancy) for the lossless-but-throttled interim, and/or proceed to Phase 3.1.
+
 ## Acceptance gate (Phase 2.1)
 With `pfc_enable=1` flashed and the runtime driver in place, driving the 143G+ DPU sender:
 - MAC pause TX counters (`TX_PAUSE_XOFF_DUR_SHDW_CNT`, `PFCPAUSE*FRAMESTXD` MIB) non-zero under overload.

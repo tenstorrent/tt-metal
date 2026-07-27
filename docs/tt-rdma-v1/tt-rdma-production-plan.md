@@ -153,6 +153,13 @@ it lands with the host SDK, not the RX kernel. The on-core SEND→ring mechanism
   watermark-tuned) and BF3 PFC-on-priority config (mlx5 makes 802.3x vs PFC mutually exclusive). Full
   recipe + interop caveats + acceptance gate in **`tt-rdma-pfc-bringup.md`**. Gate (unchanged): pause
   counters non-zero under overload, 0 buffer-discard, RX lossless at ≤ ceiling with the 143G sender.
+  - **HW eval (2026-07-27): flashed + activated + regression 17/17 + survives 200G overload — but PFC
+    never engaged.** Real DPU overload gave `bad=169862`, `spare[9]=0` (XOFF never fired). The loss is
+    **L1-ring lapping** (single-RISC1 drain ceiling), which `rx_afifo_fullness` doesn't track (the MAC
+    writes to L1 regardless of the consumer). **PFC-on-AFIFO can't see this bottleneck.** Fix: drive the
+    pause from **RISC1 L1-ring occupancy** (lossless but throttled to ~drain rate) — the static MAC config
+    is already there, only the trigger moves — and/or go to Phase 3.1 (drainer pool) for line-rate. This
+    reinforces 3.1: the RX bottleneck is consumer-drain, not MAC-ingest.
 - **2.2 Software reliability (Phase R)** for the external/raw path — **DONE & silicon-validated.** The
   TT↔TT HW retransmit (`eth_enable_packet_mode`) is TT-only; against a BF3 the far end isn't a TT ETH_TXQ,
   so reliability lives in the RISC1 kernel. Both roles built + gated behind the correctness reference:
