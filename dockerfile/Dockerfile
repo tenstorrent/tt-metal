@@ -1,4 +1,5 @@
-# syntax=docker/dockerfile:1.7
+# syntax=mirror.gcr.io/docker/dockerfile@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+# (docker/dockerfile:1.7, pinned by digest - see dockerfile/Dockerfile.tools' syft-scanner target for why, and manual-docker-bake.sh)
 # TT-Metalium Dockerfile
 # Optimized with multi-stage builds for tool and Python dependency caching.
 #

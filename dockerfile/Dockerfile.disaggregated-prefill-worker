@@ -1,4 +1,6 @@
-# syntax=docker/dockerfile:1
+# syntax=mirror.gcr.io/docker/dockerfile@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
+# (docker/dockerfile:1, currently resolves to 1.24 - pinned by digest to preserve that exact
+# version rather than silently floating; see dockerfile/Dockerfile's syntax line for why)
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
