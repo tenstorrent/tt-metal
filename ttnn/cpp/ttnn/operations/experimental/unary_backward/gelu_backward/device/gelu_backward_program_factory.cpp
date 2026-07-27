@@ -132,12 +132,6 @@ tt::tt_metal::ProgramDescriptor GeluBackwardProgramFactory::create_descriptor(
     compute_desc.kernel_source = compute_kernel_path;
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_cores;
-    if (fp32_dest_acc_en) {
-        // Select the four-slot tanh schedule before template instantiation. DEST capacity is
-        // otherwise exposed as a generated constexpr, which cannot discard the six-slot types
-        // during preprocessing.
-        compute_desc.defines.emplace_back("FP32_DEST_ACC_EN", "1");
-    }
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = MathFidelity::HiFi4,
         .fp32_dest_acc_en = fp32_dest_acc_en,

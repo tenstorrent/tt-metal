@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"
 
@@ -16,13 +15,9 @@ void kernel_main() {
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_in1 = tt::CBIndex::c_1;
-    DataflowBuffer dfb_in1_obj(cb_in1);  // zero tile
     constexpr auto cb_out0 = tt::CBIndex::c_16;
-    constexpr uint32_t onetile = 1;
-    constexpr uint32_t dst0 = 0;
 
     compute_kernel_hw_startup(cb_in1, cb_in0, cb_out0);
-    dfb_in1_obj.wait_front(onetile);
 
     constexpr bool has_bcast = ht_need_bcast || wt_need_bcast;
     constexpr auto bcast_dim = (ht_need_bcast && wt_need_bcast) ? ckl::BroadcastDim::Scalar
@@ -30,25 +25,27 @@ void kernel_main() {
                                : wt_need_bcast                  ? ckl::BroadcastDim::Col
                                                                 : ckl::BroadcastDim::None;
 
-    for (uint32_t i = 0; i < num_output_tiles; i++) {
-        ckl::eltwise_chain(
-            ckl::EltwiseShape::tiles(onetile),
-            ckl::OptionalChainElement<
-                has_bcast,
-                ckl::BinaryFpu<
-                    ckl::input(cb_in1, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
-                    ckl::input(
-                        cb_in0, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-                    ckl::BinaryFpuOp::Add,
-                    bcast_dim>>{},
-            ckl::OptionalChainElement<
-                !has_bcast,
-                ckl::CopyTile<
-                    ckl::input(
-                        cb_in0, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-                    ckl::Dst::D0>>{},
-            ckl::PackTile<ckl::output(
-                cb_out0, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
-    }
-    dfb_in1_obj.pop_front(onetile);
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::tiles(num_output_tiles),
+        ckl::OptionalChainElement<
+            has_bcast,
+            ckl::BinaryFpu<
+                ckl::input(
+                    cb_in1,
+                    ckl::WaitPolicy::Upfront,
+                    ckl::PopPolicy::AtEnd,
+                    ckl::OperandKind::Scalar,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    cb_in0, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+                ckl::BinaryFpuOp::Add,
+                bcast_dim>>{},
+        ckl::OptionalChainElement<
+            !has_bcast,
+            ckl::CopyTile<
+                ckl::input(
+                    cb_in0, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+                ckl::Dst::D0>>{},
+        ckl::PackTile<ckl::output(
+            cb_out0, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
 }

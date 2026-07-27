@@ -44,9 +44,6 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(8);
     constexpr uint32_t n_heads = get_compile_time_arg_val(9);
     constexpr uint32_t rotary_Ht = get_compile_time_arg_val(10);
-    constexpr auto sin_cos_lifecycle = RELOAD_IMPL == 0 ? ckl::WaitPolicy::None,
-                   ckl::PopPolicy::None                 : ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd;
-    constexpr auto sin_cos_offset = RELOAD_IMPL == 0 ? ckl::TileOffset::Set : ckl::TileOffset::Unset;
     constexpr auto bulk_block_input = [](uint32_t cb) {
         return ckl::input(
             cb,
@@ -58,22 +55,15 @@ void kernel_main() {
     constexpr auto bulk_output = [](uint32_t cb) {
         return ckl::output(cb, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled);
     };
-    constexpr auto in_input = ckl::input(
-        in_cb,
-        ckl::WaitPolicy::None,
-        ckl::PopPolicy::AtEnd,
-        ckl::OperandKind::Block,
-        ckl::DataFormatReconfig::Disabled);
-    constexpr auto rotated_input = bulk_block_input(rotated_in_interm_cb);
-    constexpr auto sin_input = ckl::input(
-        sin_cb, sin_cos_lifecycle, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled, sin_cos_offset);
-    constexpr auto cos_input = ckl::input(
-        cos_cb, sin_cos_lifecycle, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled, sin_cos_offset);
-    constexpr auto sin_interm_input = bulk_block_input(sin_interm_cb);
-    constexpr auto cos_interm_input = bulk_block_input(cos_interm_cb);
-    constexpr auto sin_output = bulk_output(sin_interm_cb);
-    constexpr auto cos_output = bulk_output(cos_interm_cb);
-    constexpr auto rotary_output = bulk_output(out_cb);
+    constexpr auto sin_cos_input = [](uint32_t cb) {
+        return ckl::input(
+            cb,
+            RELOAD_IMPL == 0 ? ckl::WaitPolicy::None : ckl::WaitPolicy::Upfront,
+            RELOAD_IMPL == 0 ? ckl::PopPolicy::None : ckl::PopPolicy::AtEnd,
+            ckl::OperandKind::Block,
+            ckl::DataFormatReconfig::Disabled,
+            RELOAD_IMPL == 0 ? ckl::TileOffset::Set : ckl::TileOffset::Unset);
+    };
 
     CircularBuffer in_cb_obj(in_cb);
     CircularBuffer cos_cb_obj(cos_cb);
@@ -139,22 +129,36 @@ void kernel_main() {
                 mul_tiles_init(rotated_in_interm_cb, sin_cb);
                 ckl::eltwise_chain<ckl::SetupOwner::Caller>(
                     ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
-                    ckl::BinaryFpu<rotated_input, sin_input, ckl::BinaryFpuOp::Mul, ckl::BroadcastDim::None>{
-                        0u, sin_cos_row_cnt * Wt},
-                    ckl::PackTile<sin_output>{});
+                    ckl::BinaryFpu<
+                        bulk_block_input(rotated_in_interm_cb),
+                        sin_cos_input(sin_cb),
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::BroadcastDim::None>{0u, sin_cos_row_cnt * Wt},
+                    ckl::PackTile<bulk_output(sin_interm_cb)>{});
 
                 reconfig_data_format(rotated_in_interm_cb, in_cb, sin_cb, cos_cb);
                 pack_reconfig_data_format(sin_interm_cb, cos_interm_cb);
                 ckl::eltwise_chain<ckl::SetupOwner::Caller>(
                     ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
-                    ckl::BinaryFpu<in_input, cos_input, ckl::BinaryFpuOp::Mul, ckl::BroadcastDim::None>{
-                        0u, sin_cos_row_cnt * Wt},
-                    ckl::PackTile<cos_output>{});
+                    ckl::BinaryFpu<
+                        ckl::input(
+                            in_cb,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::AtEnd,
+                            ckl::OperandKind::Block,
+                            ckl::DataFormatReconfig::Disabled),
+                        sin_cos_input(cos_cb),
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::BroadcastDim::None>{0u, sin_cos_row_cnt * Wt},
+                    ckl::PackTile<bulk_output(cos_interm_cb)>{});
 
                 reconfig_data_format(in_cb, cos_interm_cb, cos_cb, sin_interm_cb);
                 pack_reconfig_data_format(cos_interm_cb, out_cb);
-                ckl::add<cos_interm_input, sin_interm_input, rotary_output, ckl::BroadcastDim::None>(
-                    ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
+                ckl::add<
+                    bulk_block_input(cos_interm_cb),
+                    bulk_block_input(sin_interm_cb),
+                    bulk_output(out_cb),
+                    ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 
 #if RELOAD_IMPL == 0
                 // no-reload needs to increment this counter

@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Production kernel line changes</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #090c10;
+      --panel: #11171d;
+      --panel-raised: #171f27;
+      --line: #2b3742;
+      --text: #edf3f7;
+      --muted: #94a5b2;
+      --added: #64dca6;
+      --removed: #ff7979;
+      --accent: #75baff;
+      --radius: 14px;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 12% -8%, rgba(100, 220, 166, .12), transparent 31rem),
+        radial-gradient(circle at 88% 0, rgba(117, 186, 255, .10), transparent 28rem),
+        var(--bg);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    button, input, select { font: inherit; }
+    code, .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+
+    .shell {
+      width: min(1500px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 52px 0 72px;
+    }
+
+    .eyebrow {
+      color: var(--accent);
+      font: 700 11px/1.4 "SFMono-Regular", Consolas, monospace;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 980px;
+      margin: 12px 0 18px;
+      font-size: clamp(42px, 7vw, 82px);
+      line-height: .95;
+      letter-spacing: -.055em;
+    }
+
+    .lede {
+      max-width: 920px;
+      margin: 0;
+      color: var(--muted);
+      font-size: clamp(15px, 2vw, 19px);
+      line-height: 1.6;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin: 30px 0 22px;
+    }
+
+    .stat {
+      min-height: 110px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: linear-gradient(145deg, rgba(23, 31, 39, .94), rgba(13, 18, 23, .97));
+    }
+
+    .stat strong {
+      display: block;
+      font: 750 30px/1.1 "SFMono-Regular", Consolas, monospace;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .stat span {
+      display: block;
+      margin-top: 9px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .positive { color: var(--added); }
+    .negative { color: var(--removed); }
+
+    .scope {
+      margin: 0 0 18px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(17, 23, 29, .72);
+    }
+
+    .scope summary {
+      padding: 12px 14px;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    .scope p {
+      margin: 0;
+      padding: 0 14px 14px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .toolbar {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) minmax(190px, auto) auto;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius) var(--radius) 0 0;
+      background: #090c10;
+    }
+
+    .control {
+      min-height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      padding: 0 12px;
+      color: var(--text);
+      background: var(--panel);
+      outline: none;
+    }
+
+    .control:focus { border-color: var(--accent); }
+
+    .count {
+      display: grid;
+      place-items: center;
+      min-width: 116px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      color: var(--muted);
+      background: var(--panel);
+      font: 650 12px "SFMono-Regular", Consolas, monospace;
+    }
+
+    .table-wrap {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-top: 0;
+      border-radius: 0 0 var(--radius) var(--radius);
+      background: rgba(13, 18, 23, .9);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    thead {
+      background: #141b22;
+      box-shadow: 0 1px 0 var(--line);
+    }
+
+    th {
+      padding: 0;
+      color: var(--muted);
+      text-align: left;
+      white-space: nowrap;
+      font-size: 11px;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+
+    th button {
+      width: 100%;
+      border: 0;
+      padding: 13px 12px;
+      color: inherit;
+      background: transparent;
+      cursor: pointer;
+      text-align: inherit;
+      text-transform: inherit;
+      letter-spacing: inherit;
+    }
+
+    th button:hover, th button:focus-visible { color: var(--text); }
+    th[data-direction="asc"] button::after { content: "  ↑"; color: var(--accent); }
+    th[data-direction="desc"] button::after { content: "  ↓"; color: var(--accent); }
+
+    td {
+      border-top: 1px solid rgba(43, 55, 66, .7);
+      padding: 11px 12px;
+      vertical-align: middle;
+    }
+
+    tbody tr:hover { background: rgba(117, 186, 255, .055); }
+
+    .path {
+      min-width: 520px;
+      overflow-wrap: anywhere;
+      font: 12px/1.45 "SFMono-Regular", Consolas, monospace;
+    }
+
+    .row-number {
+      width: 58px;
+      color: var(--muted);
+      text-align: right;
+      font: 600 12px "SFMono-Regular", Consolas, monospace;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .kind {
+      min-width: 120px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .number {
+      width: 92px;
+      text-align: right;
+      font: 650 12px "SFMono-Regular", Consolas, monospace;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .bar-cell { width: 180px; min-width: 150px; }
+    .bar {
+      display: grid;
+      grid-template-columns: var(--add-share) var(--remove-share);
+      width: 100%;
+      height: 7px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #202a33;
+    }
+
+    .bar .add { background: var(--added); }
+    .bar .remove { background: var(--removed); }
+
+    .empty {
+      padding: 44px 20px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    footer {
+      padding-top: 20px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    @media (max-width: 900px) {
+      .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .toolbar { grid-template-columns: 1fr; }
+      .path { min-width: 360px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <div class="eyebrow">Git diff · production kernels only</div>
+    <h1>Kernel line changes</h1>
+    <p class="lede">
+      Sortable per-file additions and removals between
+      <code>218b627e3044a15c759f2957201a473f2b48fa2b</code> and
+      <code>fd63a1fb08c2faa1502972a1265c3cb383c476ee</code>.
+    </p>
+
+    <section class="summary" aria-label="Filtered totals">
+      <div class="stat"><strong id="stat-files">141</strong><span>production files</span></div>
+      <div class="stat"><strong id="stat-added" class="positive">+13,110</strong><span>lines added</span></div>
+      <div class="stat"><strong id="stat-removed" class="negative">−9,827</strong><span>lines removed</span></div>
+      <div class="stat"><strong id="stat-net" class="positive">+3,283</strong><span>net lines</span></div>
+      <div class="stat"><strong id="stat-churn">22,937</strong><span>total churn</span></div>
+    </section>
+
+    <details class="scope">
+      <summary>Scope definition</summary>
+      <p>
+        Includes production sources under <code>ttnn/cpp/ttnn/kernel/compute</code>,
+        operation <code>kernel/</code> and <code>kernels/</code> directories, and
+        <code>ttnn/cpp/ttnn/kernel_lib</code>. Any path containing a
+        <code>test/</code> or <code>tests/</code> directory is excluded. Binary files are excluded
+        because Git does not report line counts for them.
+      </p>
+    </details>
+
+    <div class="toolbar">
+      <input id="search" class="control" type="search" placeholder="Filter by path…" autocomplete="off">
+      <select id="kind-filter" class="control" aria-label="Filter by kernel kind">
+        <option value="all">All production kernels</option>
+        <option value="device">Device kernels</option>
+        <option value="library">Kernel library</option>
+      </select>
+      <div id="visible-count" class="count">141 shown</div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th class="row-number"><span>#</span></th>
+            <th data-key="path"><button type="button">File</button></th>
+            <th data-key="kind"><button type="button">Kind</button></th>
+            <th data-key="added"><button type="button">Added</button></th>
+            <th data-key="removed"><button type="button">Removed</button></th>
+            <th data-key="net"><button type="button">Net</button></th>
+            <th data-key="churn" data-direction="desc"><button type="button">Churn</button></th>
+            <th><span class="mono">+/− share</span></th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+
+    <footer>
+      Generated 2026-07-27 from <code>git diff --numstat</code>. Click a column heading to
+      sort; click it again to reverse direction.
+    </footer>
+  </main>
+
+  <script id="kernel-data" type="text/plain">
+3257	0	ttnn/cpp/ttnn/kernel_lib/eltwise_chain.inl
+535	0	ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp
+484	0	ttnn/cpp/ttnn/kernel/compute/moreh_common.hpp
+366	0	ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.inl
+274	316	ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_small_kernel.cpp
+268	489	ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/moreh_layer_norm_backward_input_grad_large_kernel.cpp
+260	350	ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_large_kernel.cpp
+252	331	ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp
+241	347	ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/moreh_layer_norm_backward_input_grad_small_kernel.cpp
+209	307	ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp
+200	276	ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_large_tensor.cpp
+191	0	ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp
+173	280	ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp
+165	0	ttnn/cpp/ttnn/kernel_lib/eltwise_optional.inl
+163	0	ttnn/cpp/ttnn/kernel_lib/eltwise_activations.inl
+154	180	ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/kernels/moreh_adam.cpp
+146	153	ttnn/cpp/ttnn/operations/moreh/moreh_adamw/device/kernels/moreh_adamw.cpp
+132	101	ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/kernels/compute/eltwise_bw_gelu_approx_tanh.cpp
+131	172	ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/layernorm_post_allgather.cpp
+120	0	ttnn/cpp/ttnn/kernel_lib/eltwise_math.inl
+118	0	ttnn/cpp/ttnn/kernel_lib/eltwise_special.inl
+112	111	ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/compute/rotary_embedding_hf_sharded.cpp
+107	152	ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp
+100	214	ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/moreh_layer_norm_backward_gamma_beta_grad_kernel.cpp
+100	148	ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm_sharded_v2.cpp
+100	0	ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp
+99	135	ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/device/kernels/compute/layernorm_post_allgather_welford.cpp
+98	116	ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_h.cpp
+98	0	ttnn/cpp/ttnn/kernel_lib/eltwise_misc.inl
+97	117	ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_w.cpp
+95	0	ttnn/cpp/ttnn/kernel_lib/eltwise_ternary.inl
+94	261	ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/running_statistics_sfpu_kernel.cpp
+92	0	ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.inl
+91	0	ttnn/cpp/ttnn/kernel_lib/eltwise_bcast.inl
+89	145	ttnn/cpp/ttnn/operations/moreh/moreh_norm_backward/device/kernels/moreh_norm_backward_kernel.cpp
+88	172	ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/attention/compute/softmax.cpp
+78	173	ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/attention/compute/softmax_sharded.cpp
+76	146	ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_welford.cpp
+73	158	ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_kernel.cpp
+72	221	ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_sfpu_kernel.cpp
+70	0	ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_extended.hpp
+68	107	ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/device/kernels/moreh_clip_grad_norm_step1_kernel.cpp
+66	122	ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/moreh_norm_h/kernels/moreh_norm_h_kernel.cpp
+66	30	ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/running_statistics_kernel.cpp
+66	0	ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp
+65	88	ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/layernorm_post_allgather_welford.cpp
+64	122	ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/moreh_norm_w/kernels/moreh_norm_w_kernel.cpp
+64	121	ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/lgamma_kernel.cpp
+64	0	ttnn/cpp/ttnn/kernel_lib/eltwise_activations.hpp
+62	0	ttnn/cpp/ttnn/kernel_lib/eltwise_predicates.inl
+60	0	ttnn/cpp/ttnn/kernel_lib/eltwise_predicates.hpp
+57	0	ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.inl
+56	133	ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/rmsnorm_post_allgather.cpp
+54	122	ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_h/kernels/moreh_norm_h_kernel.cpp
+54	121	ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_w/kernels/moreh_norm_w_kernel.cpp
+53	159	ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/compute/rms_compute.cpp
+53	98	ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/compute/rotary_embedding.cpp
+53	0	ttnn/cpp/ttnn/kernel_lib/eltwise_special.hpp
+52	106	ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/moreh_norm_other/kernels/moreh_norm_other_kernel.cpp
+51	62	ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_h_large.cpp
+51	54	ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_w.cpp
+50	35	ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/rotary_embedding_llama_sharded.cpp
+50	0	ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.hpp
+49	92	ttnn/cpp/ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/kernels/compute/rmsnorm_post_allgather.cpp
+49	91	ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/lgamma_fast_kernel.cpp
+48	0	ttnn/cpp/ttnn/kernel_lib/eltwise_fill.inl
+47	130	ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step2/device/kernels/moreh_nll_loss_step2_kernel.cpp
+47	37	ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/rotary_embedding_llama.cpp
+47	0	ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp
+47	0	ttnn/cpp/ttnn/kernel_lib/eltwise_rounding.inl
+46	61	ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_c_large.cpp
+46	54	ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_addcmul_int_sfpu.cpp
+45	113	ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_large_tensor_welford.cpp
+45	82	ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/moreh_nll_loss_backward_kernel.cpp
+45	0	ttnn/cpp/ttnn/kernel_lib/eltwise_rand.inl
+43	105	ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_nc/kernels/moreh_norm_nc_kernel.cpp
+43	60	ttnn/cpp/ttnn/operations/moreh/moreh_abs_pow/device/kernels/moreh_abs_pow_kernel.cpp
+43	53	ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_w_large.cpp
+43	0	ttnn/cpp/ttnn/kernel_lib/eltwise_trig.hpp
+42	62	ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_where_no_bcast.cpp
+40	44	ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/where_tss_kernel.cpp
+38	72	ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/layernorm_pre_allgather_2d.cpp
+36	59	ttnn/cpp/ttnn/operations/moreh/moreh_sgd/device/kernels/moreh_sgd.cpp
+35	83	ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/compute/rotary_embedding_hf.cpp
+34	49	ttnn/cpp/ttnn/operations/eltwise/unary_backward/gelu_bw/device/kernels/compute/eltwise_bw_gelu_poly.cpp
+34	45	ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/kernels/compute/eltwise_bw_gelu_poly.cpp
+34	0	ttnn/cpp/ttnn/kernel_lib/eltwise_trig.inl
+33	58	ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/logit_kernel.cpp
+33	44	ttnn/cpp/ttnn/operations/eltwise/unary_backward/tanh_bw/device/kernels/compute/eltwise_bw_tanh_deriv.cpp
+33	32	ttnn/cpp/ttnn/operations/moreh/moreh_dot_backward/device/kernels/moreh_dot_backward.cpp
+32	42	ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/moreh_softmax_backward_h_large.cpp
+32	42	ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/moreh_softmax_backward_w_large.cpp
+32	0	ttnn/cpp/ttnn/kernel_lib/eltwise_bcast.hpp
+32	0	ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_int.hpp
+32	0	ttnn/cpp/ttnn/kernel_lib/eltwise_ternary.hpp
+31	57	ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_addc_ops_fpu.cpp
+30	60	ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/layernorm_pre_allgather.cpp
+30	43	ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/hardswish_kernel.cpp
+30	25	ttnn/cpp/ttnn/operations/moreh/moreh_sum_backward/device/kernels/moreh_sum_backward.cpp
+30	0	ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_minmax.hpp
+29	45	ttnn/cpp/ttnn/operations/moreh/moreh_mean_backward/device/kernels/moreh_mean_backward.cpp
+28	37	ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_h.cpp
+28	0	ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp
+26	52	ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/rmsnorm_pre_allgather.cpp
+26	41	ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/moreh_dot.cpp
+26	0	ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_basic.hpp
+26	0	ttnn/cpp/ttnn/kernel_lib/eltwise_op_params.hpp
+25	38	ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step3/device/kernels/moreh_clip_grad_norm_step3_kernel.cpp
+25	37	ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_w.cpp
+24	0	ttnn/cpp/ttnn/kernel_lib/eltwise_rounding.hpp
+23	32	ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/moreh_softmax_backward_c_large.cpp
+21	86	ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/compute/rotary_embedding_single_tile.cpp
+21	32	ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_h.cpp
+21	25	ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp
+20	51	ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step2/device/kernels/moreh_clip_grad_norm_step2_kernel.cpp
+20	39	ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_hw.cpp
+20	36	ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/compute/dropout_kernel.cpp
+20	27	ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/compute/eltwise_copy.cpp
+20	16	ttnn/cpp/ttnn/operations/experimental/bcast_to/device/kernels/compute/compute_interleaved_col_bcast_to.cpp
+20	16	ttnn/cpp/ttnn/operations/experimental/bcast_to/device/kernels/compute/compute_interleaved_row_bcast_to.cpp
+20	16	ttnn/cpp/ttnn/operations/experimental/bcast_to/device/kernels/compute/compute_interleaved_scalar_bcast_to.cpp
+20	0	ttnn/cpp/ttnn/kernel_lib/eltwise_rand.hpp
+19	38	ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/logsigmoid_kernel.cpp
+19	21	ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/compute_kernel.cpp
+18	41	ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/compute/rotary_embedding_hf_single_tile_sharded.cpp
+18	38	ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_nc.cpp
+18	25	ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/moreh_softmax_backward_h.cpp
+18	25	ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/moreh_softmax_backward_w.cpp
+16	31	ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp
+14	0	ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp
+13	25	ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_identity_kernel.cpp
+10	20	ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/kernels/compute/rotary_embedding_llama_sharded.cpp
+10	15	ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/kernels/compute/rotary_embedding_llama_sharded_row_major.cpp
+9	21	ttnn/cpp/ttnn/operations/uniform/device/kernels/compute_uniform.cpp
+8	0	ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_basic.inl
+8	0	ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_extended.inl
+8	0	ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_int.inl
+8	0	ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu_minmax.inl
+3	1	ttnn/cpp/ttnn/kernel_lib/dfb_helpers_compute.hpp
+1	1	ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp
+0	153	ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/chain_llk.hpp
+  </script>
+
+  <script>
+    const source = document.getElementById("kernel-data").textContent.trim();
+    const rows = source.split("\n").map((line) => {
+      const [added, removed, path] = line.split("\t");
+      const add = Number(added);
+      const del = Number(removed);
+      const kind = path.startsWith("ttnn/cpp/ttnn/kernel_lib/") ? "library" : "device";
+      return {
+        path,
+        kind,
+        added: add,
+        removed: del,
+        net: add - del,
+        churn: add + del,
+      };
+    });
+
+    const body = document.getElementById("rows");
+    const search = document.getElementById("search");
+    const kindFilter = document.getElementById("kind-filter");
+    const headers = [...document.querySelectorAll("th[data-key]")];
+    const formatter = new Intl.NumberFormat("en-US");
+    let sort = { key: "churn", direction: "desc" };
+
+    function signed(value) {
+      if (value > 0) return `+${formatter.format(value)}`;
+      if (value < 0) return `−${formatter.format(Math.abs(value))}`;
+      return "0";
+    }
+
+    function filteredRows() {
+      const query = search.value.trim().toLowerCase();
+      const selectedKind = kindFilter.value;
+      return rows.filter((row) => {
+        const matchesText = !query || row.path.toLowerCase().includes(query);
+        const matchesKind = selectedKind === "all" || row.kind === selectedKind;
+        return matchesText && matchesKind;
+      });
+    }
+
+    function compare(a, b) {
+      const left = a[sort.key];
+      const right = b[sort.key];
+      const result = typeof left === "string"
+        ? left.localeCompare(right)
+        : left - right;
+      if (result !== 0) return sort.direction === "asc" ? result : -result;
+      return a.path.localeCompare(b.path);
+    }
+
+    function updateSummary(visible) {
+      const totals = visible.reduce((sum, row) => {
+        sum.added += row.added;
+        sum.removed += row.removed;
+        return sum;
+      }, { added: 0, removed: 0 });
+      const net = totals.added - totals.removed;
+
+      document.getElementById("stat-files").textContent = formatter.format(visible.length);
+      document.getElementById("stat-added").textContent = `+${formatter.format(totals.added)}`;
+      document.getElementById("stat-removed").textContent = `−${formatter.format(totals.removed)}`;
+      const netElement = document.getElementById("stat-net");
+      netElement.textContent = signed(net);
+      netElement.className = net < 0 ? "negative" : "positive";
+      document.getElementById("stat-churn").textContent = formatter.format(totals.added + totals.removed);
+      document.getElementById("visible-count").textContent = `${formatter.format(visible.length)} shown`;
+    }
+
+    function render() {
+      const visible = filteredRows().sort(compare);
+      updateSummary(visible);
+
+      if (!visible.length) {
+        body.innerHTML = '<tr><td class="empty" colspan="8">No production kernel paths match this filter.</td></tr>';
+        return;
+      }
+
+      const maxChurn = Math.max(...visible.map((row) => row.churn), 1);
+      body.innerHTML = visible.map((row, index) => {
+        const addWidth = row.churn ? (row.added / maxChurn) * 100 : 0;
+        const removeWidth = row.churn ? (row.removed / maxChurn) * 100 : 0;
+        const netClass = row.net < 0 ? "negative" : row.net > 0 ? "positive" : "";
+        const label = row.kind === "library" ? "Kernel library" : "Device kernel";
+        return `
+          <tr>
+            <td class="row-number">${formatter.format(index + 1)}</td>
+            <td class="path">${row.path}</td>
+            <td class="kind">${label}</td>
+            <td class="number positive">+${formatter.format(row.added)}</td>
+            <td class="number negative">−${formatter.format(row.removed)}</td>
+            <td class="number ${netClass}">${signed(row.net)}</td>
+            <td class="number">${formatter.format(row.churn)}</td>
+            <td class="bar-cell">
+              <div class="bar" style="--add-share:${addWidth}%; --remove-share:${removeWidth}%"
+                   title="+${row.added} / −${row.removed}">
+                <span class="add"></span><span class="remove"></span>
+              </div>
+            </td>
+          </tr>`;
+      }).join("");
+    }
+
+    headers.forEach((header) => {
+      header.querySelector("button").addEventListener("click", () => {
+        const key = header.dataset.key;
+        sort = {
+          key,
+          direction: sort.key === key && sort.direction === "desc" ? "asc" : "desc",
+        };
+        headers.forEach((item) => {
+          delete item.dataset.direction;
+          item.removeAttribute("aria-sort");
+        });
+        header.dataset.direction = sort.direction;
+        header.setAttribute("aria-sort", sort.direction === "asc" ? "ascending" : "descending");
+        render();
+      });
+    });
+
+    search.addEventListener("input", render);
+    kindFilter.addEventListener("change", render);
+    render();
+  </script>
+</body>
+</html>
