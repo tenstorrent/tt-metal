@@ -290,7 +290,7 @@ python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_100min \
 # omit --max_new_tokens for until-EOS / max_length_times×ISL (same as the sweep)
 ```
 
-## CI (nightly, single P150)
+## CI
 
 VibeVoice is wired into the **Blackhole demo tests** pipeline
 ([`.github/workflows/blackhole-demo-tests.yaml`](../../../.github/workflows/blackhole-demo-tests.yaml)
@@ -302,9 +302,18 @@ depends on the P150b runner-pool size.
 
 | Job | Command | Gate | Timeout |
 |-----|---------|------|---------|
-| demo `4p_climate_100min` | `demo.py --demo 4p_climate_100min --trace` | full long-form render completes | 120 min |
-| e2e WER | `pytest tests/pcc/test_e2e_wer.py` (`VV_WER_MAX_NEW_TOKENS=256`) | TT-vs-reference WER ≤ 0.05 | 60 min |
-| speaker similarity | `pytest tests/pcc/test_e2e_sim.py` | SIM target floor 0.5 / margin 0.05 | 45 min |
+| demo `4p_climate_100min` | `demo.py --demo 4p_climate_100min --trace` | full long-form render completes | 80 min |
+| e2e WER | `pytest tests/pcc/test_e2e_wer.py` (`VV_WER_MAX_NEW_TOKENS=256`) | TT-vs-reference WER ≤ 0.05 | 25 min |
+| speaker similarity | `pytest tests/pcc/test_e2e_sim.py` | SIM target floor 0.5 / margin 0.05 | 25 min |
+
+> **Timeout budget caveat.** The `models → demo → bh_p150b_civ2` pipeline has a **130-minute**
+> total budget (`.github/time_budget.yaml`), enforced as the *sum* of the per-job timeouts at
+> matrix-load time. The three jobs are split to fit exactly (80 + 25 + 25 = 130), so the
+> long-form `4p_climate_100min` render gets only **80 min**. A full render is ~60–75 min of
+> device time, so under load / measurement variance **the demo job may hit its 80-min timeout**.
+> If it does, either raise the demo budget (ping `#tt-metal-infra`) and bump the demo timeout, or
+> cap the render (`--max_new_tokens` / `--isl`). WER (~20 min incl. downloads) and sim comfortably
+> fit their 25-min slices.
 
 Weights (`microsoft/VibeVoice-1.5B`) + demo text/voices auto-download and cache under `HF_HOME`;
 WER/sim additionally pull Whisper (`openai/whisper-medium`) and the SV model
