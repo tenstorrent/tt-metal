@@ -87,11 +87,15 @@ class DeepSeekR1Qwen14BExecutorRuntimeConfig:
     # below). DeepSeek-R1-Distill-Qwen-14B is a standard dense Qwen2.5 attention (NO QK-norm — the HF
     # checkpoint has no q_norm/k_norm weights, so ``_qk_norm_cfg`` resolves to None), so every prefill op
     # is row-independent and the batched fold is bit-safe (same as the qwen25_7b / coder-32b ports).
-    # ``max_prefill_batch_size`` caps the per-group batch (8 = partial batching, design rec);
+    # ``max_prefill_batch_size`` caps the per-group batch; 32 folds the whole batch-32 prefill in ONE
+    # 32-user pass (TTTv1 structural parity) so the eager norm+lm_head tail + full-vocab readback run
+    # once instead of 4×. At the natural 128 bucket the fold is 32*128=4096=2*2048, an exact multiple of
+    # MAX_QKV_MM_SEQ_LEN (reshape-safe), and 4096 % mlp_prefill_len_cutoff(1024) == 0 for the FF reshape;
+    # the DRAM guard (padded_batch*seq < 128K) passes with 4096. Holds on both SKUs (N300 and T3K).
     # ``disable_batched_prefill`` is the escape hatch back to the sequential loop;
     # ``max_prefill_chunk_size`` (above) drives the #45234 chunked-prompt decline.
     supports_batched_prefill: bool = True
-    max_prefill_batch_size: int = 8
+    max_prefill_batch_size: int = 32
     disable_batched_prefill: bool = False
     # When True (default), batched prefill runs norm+lm_head ONCE per group over the gathered last-token
     # rows (TTTv1 parity); False falls back to the bit-identical per-slot path (one lm_head per user).
@@ -304,14 +308,24 @@ class _DSR1WHTuning:
 
 
 def _resolve_ds_r1_wh_tuning(*, num_dev: int, max_batch_size: int) -> _DSR1WHTuning:
-    """Pick WH L1 tuning knobs for DeepSeek-R1-Distill-Qwen-14B on N300.
+    """Pick WH L1 tuning knobs for DeepSeek-R1-Distill-Qwen-14B on N300 / T3K.
 
-    Mirrors the 7B / Coder-32B port empirical L1 cutoff (``mlp_prefill_len_cutoff=256`` for the
-    wide FF matmul on Wormhole). ``mlp_decode_spill_w1_to_dram`` is currently off; re-evaluate
-    if decode batch-32 trips L1 circular-buffer validation on N300.
+    ``mlp_prefill_len_cutoff=1024`` = the shared engine's own Wormhole default (``mlp_1d.py``:
+    ``512 if is_blackhole() else 1024``) and TTTv1's ``prefill_len_cutoff``. For the folded batch-32-ci
+    FF prefill (``[1,1,B*S,dim]``, B*S=32*128=4096 at the natural 128 bucket) this tiles the FF matmul as
+    4 chunks of 1024 (``per_core_M=4``) instead of 16 chunks of 256 (``per_core_M=1``) — 4× fewer / 4×
+    larger sub-matmuls on the ~80%-FLOP FF block (better weight-mcast amortization, fewer device inter-op
+    boundaries), matching TTTv1's blocking. The earlier 256 was inherited-conservative from the
+    7B-on-N300 port, whose per-device FF shard (9472) is far wider than this checkpoint's on either SKU:
+    intermediate 13824 gives 6912/device on N300 (below mistral_7b's 7168, which already runs 1024 on
+    N300) and only 1728/device on T3K, so the tighter-L1 motive does not apply. Output is unchanged:
+    ``in0_block_w`` and the K-contraction order are independent of the M-tiling, so only ``per_core_M``
+    changes. ``mlp_decode_spill_w1_to_dram`` is currently off; re-evaluate if decode batch-32 trips L1
+    circular-buffer validation on N300 — decode never reads ``prefill_len_cutoff`` (it uses the separate
+    DRAM-sharded program configs), so this cutoff change cannot affect it.
     """
     t = _DSR1WHTuning(
-        mlp_prefill_len_cutoff=256,
+        mlp_prefill_len_cutoff=1024,
         mlp_decode_spill_w1_to_dram=False,
     )
     t.prefill_minimal_matmul = not os.environ.get("DISABLE_MINIMAL_MATMUL")
