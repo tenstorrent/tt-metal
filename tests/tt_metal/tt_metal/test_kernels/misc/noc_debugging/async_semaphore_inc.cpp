@@ -27,5 +27,7 @@ void kernel_main() {
     noc_async_atomic_barrier();
 #elif defined(USE_FULL_BARRIER)
     noc_async_full_barrier();
+#elif defined(USE_WRITE_BARRIER)
+    noc_async_write_barrier();
 #endif
 }

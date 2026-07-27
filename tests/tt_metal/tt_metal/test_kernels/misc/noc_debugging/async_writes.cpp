@@ -53,6 +53,8 @@ void kernel_main() {
         noc.async_write_barrier<NocOptions::TXN_ID>({.trid = 1});
 #elif defined(USE_FULL_BARRIER)
         noc.async_full_barrier();
+#elif defined(USE_ATOMIC_BARRIER)
+        noc.async_atomic_barrier();
 #endif
     }
 
@@ -60,6 +62,8 @@ void kernel_main() {
     noc.async_full_barrier();
 #elif defined(USE_TRID_BARRIER)
     noc.async_write_barrier<NocOptions::TXN_ID>({.trid = 1});
+#elif defined(USE_ATOMIC_BARRIER)
+    noc.async_atomic_barrier();
 #else
     noc.async_write_barrier();
 #endif

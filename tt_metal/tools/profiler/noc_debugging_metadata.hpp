@@ -35,12 +35,13 @@ struct alignas(uint64_t) NocDebuggingEventMetadata {
     void setEventType(NocDebugEventType type) { event_type = static_cast<uint64_t>(type); }
 
     void setLockedRegion(uint32_t locked_address_base, uint32_t num_bytes) {
+        constexpr uint32_t max_field_value = 0xFFFFFF;
 #if defined(DEVICE_DEBUG_DUMP)
-        ASSERT(locked_address_base <= 0xFFFFFF);
-        ASSERT(num_bytes <= 0xFFFFFF);
+        ASSERT(locked_address_base <= max_field_value);
+        ASSERT(num_bytes <= max_field_value);
 #endif
-        locked_addr = locked_address_base;
-        locked_size = num_bytes;
+        locked_addr = locked_address_base > max_field_value ? max_field_value : locked_address_base;
+        locked_size = num_bytes > max_field_value ? max_field_value : num_bytes;
     }
 
     uint32_t getLockedAddressBase() const { return static_cast<uint32_t>(locked_addr); }

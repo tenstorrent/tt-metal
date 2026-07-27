@@ -214,7 +214,8 @@ void RunSemaphoreIncTest(
     NOCDebuggingFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     bool use_barrier,
-    bool use_full_barrier = false) {
+    bool use_full_barrier = false,
+    bool use_wrong_write_barrier = false) {
     auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
 
     CoreCoord grid_start = {0, 0};
@@ -247,6 +248,8 @@ void RunSemaphoreIncTest(
         defines["USE_ATOMIC_BARRIER"] = "1";
     } else if (use_full_barrier) {
         defines["USE_FULL_BARRIER"] = "1";
+    } else if (use_wrong_write_barrier) {
+        defines["USE_WRITE_BARRIER"] = "1";
     }
 
     tt_metal::CreateKernel(
@@ -633,6 +636,62 @@ void RunFullBarrierWritesSingleCore(
     }
 }
 
+// Single core + single RISC issues writes and then only an atomic barrier. An atomic barrier waits on a NIU
+// counter separate from writes, so it must NOT drain the pending writes: they must remain reported as unflushed at
+// kernel end. This guards the barrier/counter separation (write vs atomic) from a future regression that would let
+// an atomic barrier clear writes. The mirror case (a write barrier must not drain atomics) is covered by
+// SemaphoreIncWriteBarrierDoesNotFlush.
+void RunAtomicBarrierWritesSingleCore(
+    NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
+    if (compute_grid_size.x < 2) {
+        GTEST_SKIP() << "Single-core atomic-barrier write test requires a compute grid at least 2 columns wide";
+    }
+
+    const CoreCoord writer_core = {0, 0};
+    const CoreCoord dest_core = {1, 0};
+    auto writer_virtual = mesh_device->worker_core_from_logical_core(writer_core);
+    auto dest_virtual = mesh_device->worker_core_from_logical_core(dest_core);
+
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    tt_metal::Program program = tt_metal::CreateProgram();
+
+    constexpr uint32_t buffer_page_size = 4096;
+    distributed::DeviceLocalBufferConfig l1_config{
+        .page_size = buffer_page_size, .buffer_type = tt::tt_metal::BufferType::L1};
+    distributed::ReplicatedBufferConfig buffer_config{.size = buffer_page_size};
+    auto l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
+
+    std::map<std::string, std::string> defines = {
+        {"L1_BUFFER_ADDR", std::to_string(l1_buffer->address())},
+        {"OTHER_CORE_X", std::to_string(dest_virtual.x)},
+        {"OTHER_CORE_Y", std::to_string(dest_virtual.y)},
+        {"DST_ADDR", std::to_string(l1_buffer->address())},
+        {"NUM_ITERATIONS", "10"},
+        {"USE_ATOMIC_BARRIER", "1"},
+    };
+
+    tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_writes.cpp",
+        CoreRange(writer_core),
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
+
+    workload.add_program(device_range, std::move(program));
+    fixture->RunProgram(mesh_device, workload);
+    ReadMeshDeviceProfilerResults(*mesh_device);
+
+    for (IDevice* device : mesh_device->get_devices()) {
+        EXPECT_TRUE(fixture->has_unflushed_write_issue(device->id(), writer_virtual, 0))
+            << "An atomic barrier must not flush pending writes (writes use a NIU counter separate from atomics); "
+               "the writes should still be reported as unflushed at kernel end.";
+    }
+}
+
 void RunReadsTest(
     NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device, bool use_barrier) {
     auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
@@ -818,6 +877,18 @@ TEST_F(NOCDebuggingFixture, WritesWithFullBarrier) {
     }
 }
 
+// An atomic barrier must not drain pending writes (writes and atomics use separate NIU counters): the writes must
+// still be reported as unflushed at kernel end.
+TEST_F(NOCDebuggingFixture, AtomicBarrierDoesNotFlushWrites) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice<NOCDebuggingFixture>(
+            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunAtomicBarrierWritesSingleCore(fixture, mesh_device);
+            },
+            mesh_device);
+    }
+}
+
 // Transaction-id writes are modeled as ordinary address-keyed writes: the same-src-without-barrier issue must
 // still be detected (no barrier), and a regular write barrier must still clear them (with barrier).
 TEST_F(NOCDebuggingFixture, TridWritesNoBarrier) {
@@ -902,6 +973,24 @@ TEST_F(NOCDebuggingFixture, SemaphoreIncWithFullBarrier) {
         this->RunTestOnDevice<NOCDebuggingFixture>(
             [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunSemaphoreIncTest(fixture, mesh_device, /*use_barrier=*/false, /*use_full_barrier=*/true);
+            },
+            mesh_device);
+    }
+}
+
+// A write barrier must not drain outstanding atomics (writes and atomics use separate NIU counters): issuing a
+// write barrier instead of an atomic barrier must still leave the increments reported as unflushed. Mirror of
+// AtomicBarrierDoesNotFlushWrites.
+TEST_F(NOCDebuggingFixture, SemaphoreIncWriteBarrierDoesNotFlush) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice<NOCDebuggingFixture>(
+            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunSemaphoreIncTest(
+                    fixture,
+                    mesh_device,
+                    /*use_barrier=*/false,
+                    /*use_full_barrier=*/false,
+                    /*use_wrong_write_barrier=*/true);
             },
             mesh_device);
     }

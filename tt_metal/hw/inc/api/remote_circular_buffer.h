@@ -624,6 +624,7 @@ public:
 #if defined(DEVICE_DEBUG_DUMP) && defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
         const RemoteReceiverCBInterface& remote_cb = get_remote_receiver_cb_interface(remote_cb_index_);
         uint32_t addr = remote_cb.fifo_start_addr;
+        ASSERT(addr != 0);
         uint32_t num_bytes = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.config_ptr)[3];
         RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::CB_LOCK, addr, num_bytes);
         return Lock([addr, num_bytes]() {

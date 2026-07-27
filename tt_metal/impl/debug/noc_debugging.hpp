@@ -7,6 +7,7 @@
 #include <bitset>
 #include <compare>
 #include <cstdint>
+#include <map>
 #include <mutex>
 #include <umd/device/types/xy_pair.hpp>
 #include <unordered_map>
@@ -36,6 +37,19 @@ struct NocWriteEvent {
     int8_t mcast_end_dst_x;
     int8_t mcast_end_dst_y;
     bool has_source_buffer = true;  // False for writes that carry no L1 source buffer
+    bool has_valid_dst = true;      // False for stateful writes (WRITE_WITH_STATE / WRITE_WITH_TRID_WITH_STATE)
+};
+
+struct NocWriteSetStateEvent {
+    int8_t src_x;
+    int8_t src_y;
+    int8_t dst_x;
+    int8_t dst_y;
+    uint32_t num_bytes;  // 0 for the trid variant (its size is supplied at the with-state call)
+    bool is_mcast;
+    int8_t mcast_end_dst_x;
+    int8_t mcast_end_dst_y;
+    uint8_t noc;
 };
 
 struct NocReadEvent {
@@ -120,6 +134,7 @@ struct ScopedLockEvent {
 
 using NOCDebugEvent = std::variant<
     NocWriteEvent,
+    NocWriteSetStateEvent,
     NocReadEvent,
     NocReadBarrierEvent,
     NocWriteBarrierEvent,
@@ -258,8 +273,24 @@ private:
         std::array<bool, MAX_NOCS> any_posted_writes{};
         std::array<bool, MAX_NOCS> any_nonposted_writes{};
 
-        // Captures which buffers are marked as locked for each RISC
-        std::array<std::set<LockedBufferInfo>, MAX_PROCESSORS> locked_buffers{};
+        // Captures which buffers are marked as locked for each RISC, with a refcount so nested or duplicate
+        // scoped locks over the same region don't collapse to one entry (which would let the first unlock clear a
+        // region an outer lock still holds). A region is locked while its count is > 0; the entry is erased at 0.
+        std::array<std::map<LockedBufferInfo, uint32_t>, MAX_PROCESSORS> locked_buffers{};
+
+        // Destination programmed by the most recent WRITE_SET_STATE per (processor, noc). Subsequent stateful writes
+        // (WRITE_WITH_STATE / WRITE_WITH_TRID_WITH_STATE), whose own event records the destination core as a
+        // placeholder, resolve their real destination from here.
+        struct WriteStateInfo {
+            int8_t dst_x = 0;
+            int8_t dst_y = 0;
+            int8_t mcast_end_dst_x = 0;
+            int8_t mcast_end_dst_y = 0;
+            uint32_t num_bytes = 0;
+            bool is_mcast = false;
+            bool valid = false;  // false until a WRITE_SET_STATE has been seen on this (processor, noc)
+        };
+        std::array<std::array<WriteStateInfo, MAX_NOCS>, MAX_PROCESSORS> current_write_state{};
 
         // Latest RISC timestamp for each processor
         std::array<uint64_t, MAX_PROCESSORS> latest_risc_timestamp{};
@@ -267,11 +298,13 @@ private:
         // Keep track of reported issues for each processor
         std::array<NOCDebugIssue, MAX_PROCESSORS> issue{};
 
-        // Check if a NOC write hit a locked buffer in this core
-        const LockedBufferInfo* get_noc_write_to_lock_buffer(const NocWriteEvent& event) const;
+        // Check if a NOC write of [write_start, write_start + write_size) hit a locked buffer in this core
+        const LockedBufferInfo* get_noc_write_to_lock_buffer(uint32_t write_start, uint32_t write_size) const;
     };
 
     void handle_write_event(tt_cxy_pair core, int processor_id, uint64_t timestamp, NocWriteEvent event);
+    void handle_write_set_state_event(
+        tt_cxy_pair core, int processor_id, uint64_t timestamp, NocWriteSetStateEvent event);
     void handle_read_event(tt_cxy_pair core, int processor_id, uint64_t timestamp, NocReadEvent event);
     void handle_read_barrier_event(tt_cxy_pair core, int processor_id, uint64_t timestamp, NocReadBarrierEvent event);
     void handle_write_barrier_event(tt_cxy_pair core, int processor_id, uint64_t timestamp, NocWriteBarrierEvent event);

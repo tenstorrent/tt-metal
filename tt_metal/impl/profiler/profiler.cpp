@@ -146,6 +146,13 @@ NOCDebugEvent make_noc_debug_event(
                                 event.noc_xfer_type == EMD::NocEventType::SEMAPHORE_SET_REMOTE;
             bool is_mcast = event.noc_xfer_type == EMD::NocEventType::WRITE_MULTICAST ||
                             event.noc_xfer_type == EMD::NocEventType::SEMAPHORE_SET_MULTICAST;
+            // Stateful writes program their destination core in an earlier WRITE_SET_STATE / WRITE_WITH_TRID_SET_STATE
+            // call, so the dst_x/dst_y recorded on this event are the placeholder (0,0), not a real destination. Flag
+            // that so the write-to-locked check resolves the real destination core (and size) from the tracked write
+            // state (see NOCDebugState::handle_write_set_state_event) instead of these placeholder fields. The
+            // destination address itself is real here -- the with-state call records dst_local_l1_addr.
+            bool has_valid_dst = event.noc_xfer_type != EMD::NocEventType::WRITE_WITH_STATE &&
+                                 event.noc_xfer_type != EMD::NocEventType::WRITE_WITH_TRID_WITH_STATE;
             return NOCDebugEvent(NocWriteEvent{
                 trailer.getSrcAddr(),
                 trailer.getDstAddr(),
@@ -160,7 +167,9 @@ NOCDebugEvent make_noc_debug_event(
                 is_semaphore,
                 is_mcast,
                 event.mcast_end_dst_x,
-                event.mcast_end_dst_y});
+                event.mcast_end_dst_y,
+                /*has_source_buffer=*/true,
+                has_valid_dst});
         }
         case EMD::NocEventType::WRITE_INLINE:
             // An inline dword write: a small write whose value is an immediate register, so it carries no L1
@@ -182,7 +191,25 @@ NOCDebugEvent make_noc_debug_event(
                 /*is_mcast=*/false,
                 event.mcast_end_dst_x,
                 event.mcast_end_dst_y,
-                /*has_source_buffer=*/false});
+                /*has_source_buffer=*/false,
+                /*has_valid_dst=*/true});
+        case EMD::NocEventType::WRITE_SET_STATE: [[fallthrough]];
+        case EMD::NocEventType::WRITE_WITH_TRID_SET_STATE:
+            // A stateful-write set-state: it programs the destination core (and, for the non-trid variant, the size)
+            // that later WRITE_WITH_STATE / WRITE_WITH_TRID_WITH_STATE writes reuse. Those writes record their own
+            // destination core as a placeholder, so the host tracks this event and resolves the real destination from
+            // it (see handle_write_set_state_event). num_bytes is the programmed size for WRITE_SET_STATE and 0 for
+            // the trid variant (whose size arrives at the with-state call). Stateful writes are unicast.
+            return NOCDebugEvent(NocWriteSetStateEvent{
+                src_x,
+                src_y,
+                event.dst_x,
+                event.dst_y,
+                event.getNumBytes(),
+                /*is_mcast=*/false,
+                event.mcast_end_dst_x,
+                event.mcast_end_dst_y,
+                static_cast<uint8_t>(event.noc_type == EMD::NocType::NOC_1)});
         case EMD::NocEventType::READ_BARRIER_END: [[fallthrough]];
         case EMD::NocEventType::READ_BARRIER_WITH_TRID:
             // READ_BARRIER_WITH_TRID is folded in with READ_BARRIER_END: a future per-trid model could treat it

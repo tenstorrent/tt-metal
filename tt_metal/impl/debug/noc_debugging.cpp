@@ -97,24 +97,63 @@ void NOCDebugState::handle_write_event(tt_cxy_pair core, int processor_id, uint6
         state.issue[processor_id].set_issue(issue_type);
     }
 
-    // Check if the write hit a locked buffer in the destination core
-    tt_cxy_pair dst_core{core.chip, static_cast<size_t>(event.dst_x), static_cast<size_t>(event.dst_y)};
-    if (has_state(dst_core)) {
-        CoreDebugState& dst_state = get_state(dst_core);
-        if (const auto* locked_buf = dst_state.get_noc_write_to_lock_buffer(event); locked_buf != nullptr) {
-            NOCDebugIssueType issue_type;
-            if (locked_buf->lock_type == NOCDebugState::LockedBufferInfo::LockType::MEM) {
-                issue_type.base_type = NOCDebugIssueBaseType::WRITE_TO_LOCKED_CORE_LOCAL_MEM;
-            } else {
-                issue_type.base_type = NOCDebugIssueBaseType::WRITE_TO_LOCKED_CB;
+    // Check if the write hit a locked buffer in the destination core(s). For a stateful write the destination core
+    // was programmed by an earlier WRITE_SET_STATE, so event.dst_x/dst_y are placeholders (0,0): resolve the real
+    // destination coords (and, for the non-trid variant, the size) from the tracked write state. The destination
+    // address always comes from the write event itself (the with-state call carries dst_local_l1_addr).
+    // Coords are non-negative NOC grid coordinates; cast through uint8_t so the signed int8_t fields widen without
+    // a signed-char conversion warning (the -1 sentinel in an unused mcast_end field maps to 255 but is never read).
+    bool have_dst = true;
+    int dst_x = static_cast<uint8_t>(event.dst_x);
+    int dst_y = static_cast<uint8_t>(event.dst_y);
+    int mcast_end_x = static_cast<uint8_t>(event.mcast_end_dst_x);
+    int mcast_end_y = static_cast<uint8_t>(event.mcast_end_dst_y);
+    bool dst_is_mcast = event.is_mcast;
+    uint32_t write_addr = event.dst_addr;
+    uint32_t write_size = event.num_bytes;
+    if (!event.has_valid_dst) {
+        const CoreDebugState::WriteStateInfo& ws = state.current_write_state[processor_id][noc_id];
+        have_dst = ws.valid;  // a stateful write with no preceding set_state has no resolvable destination
+        dst_x = static_cast<uint8_t>(ws.dst_x);
+        dst_y = static_cast<uint8_t>(ws.dst_y);
+        mcast_end_x = static_cast<uint8_t>(ws.mcast_end_dst_x);
+        mcast_end_y = static_cast<uint8_t>(ws.mcast_end_dst_y);
+        dst_is_mcast = ws.is_mcast;
+        // The non-trid stateful write records num_bytes == 0 (its size lives in the set_state); the trid variant
+        // carries its own size, so prefer a non-zero event size and fall back to the tracked one.
+        if (write_size == 0) {
+            write_size = ws.num_bytes;
+        }
+    }
+    if (have_dst) {
+        // For a multicast write, dst is the rectangle start corner and mcast_end_* the end corner (the two can be
+        // reversed on NOC1), so check every core in the inclusive bounding box; a unicast write is a 1x1 box.
+        const int x_lo = dst_is_mcast ? std::min(dst_x, mcast_end_x) : dst_x;
+        const int x_hi = dst_is_mcast ? std::max(dst_x, mcast_end_x) : dst_x;
+        const int y_lo = dst_is_mcast ? std::min(dst_y, mcast_end_y) : dst_y;
+        const int y_hi = dst_is_mcast ? std::max(dst_y, mcast_end_y) : dst_y;
+        for (int x = x_lo; x <= x_hi; ++x) {
+            for (int y = y_lo; y <= y_hi; ++y) {
+                tt_cxy_pair dst_core{core.chip, static_cast<size_t>(x), static_cast<size_t>(y)};
+                if (!has_state(dst_core)) {
+                    continue;  // a core that never produced events holds no tracked lock (also skips invalid coords)
+                }
+                const auto* locked_buf = get_state(dst_core).get_noc_write_to_lock_buffer(write_addr, write_size);
+                if (locked_buf == nullptr) {
+                    continue;
+                }
+                NOCDebugIssueType issue_type;
+                issue_type.base_type = (locked_buf->lock_type == NOCDebugState::LockedBufferInfo::LockType::MEM)
+                                           ? NOCDebugIssueBaseType::WRITE_TO_LOCKED_CORE_LOCAL_MEM
+                                           : NOCDebugIssueBaseType::WRITE_TO_LOCKED_CB;
+                issue_type.issue_address = write_addr;
+                issue_type.issue_size = write_size;
+                issue_type.src_x = event.src_x;
+                issue_type.src_y = event.src_y;
+                issue_type.dst_x = static_cast<uint8_t>(x);
+                issue_type.dst_y = static_cast<uint8_t>(y);
+                state.issue[processor_id].set_issue(issue_type);
             }
-            issue_type.issue_address = event.dst_addr;
-            issue_type.issue_size = event.num_bytes;
-            issue_type.src_x = event.src_x;
-            issue_type.src_y = event.src_y;
-            issue_type.dst_x = event.dst_x;
-            issue_type.dst_y = event.dst_y;
-            state.issue[processor_id].set_issue(issue_type);
         }
     }
 
@@ -133,6 +172,26 @@ void NOCDebugState::handle_write_event(tt_cxy_pair core, int processor_id, uint6
             state.any_nonposted_writes[noc_id] = true;
         }
     }
+    update_latest_risc_timestamp(core, processor_id, timestamp);
+}
+
+void NOCDebugState::handle_write_set_state_event(
+    tt_cxy_pair core, int processor_id, uint64_t timestamp, NocWriteSetStateEvent event) {
+    CoreDebugState& state = get_state(core);
+    uint8_t noc_id = event.noc;
+
+    // Record the destination programmed for this (processor, noc) so subsequent stateful writes can resolve their
+    // real destination core. Events are processed in timestamp order, so a set_state always lands before the writes
+    // that reuse it, and a later set_state overwrites this one.
+    CoreDebugState::WriteStateInfo& ws = state.current_write_state[processor_id][noc_id];
+    ws.dst_x = event.dst_x;
+    ws.dst_y = event.dst_y;
+    ws.mcast_end_dst_x = event.mcast_end_dst_x;
+    ws.mcast_end_dst_y = event.mcast_end_dst_y;
+    ws.num_bytes = event.num_bytes;
+    ws.is_mcast = event.is_mcast;
+    ws.valid = true;
+
     update_latest_risc_timestamp(core, processor_id, timestamp);
 }
 
@@ -244,16 +303,17 @@ void NOCDebugState::handle_scoped_lock_event(
     tt_cxy_pair core, int processor_id, uint64_t timestamp, ScopedLockEvent event) {
     CoreDebugState& state = get_state(core);
 
-    // Merge intervals is not required.
-    // for unlocking, the start and end address of the request will be the same as from the lock request.
-    // if multiple locks and unlocks are requested for the same buffer, then only one will be removed as eventually
-    // the Lock destructor will release the lock
+    // Merge intervals is not required: an unlock carries the same start/size as its matching lock. Refcount per
+    // region so nested or duplicate locks over the same region are only released once the matching number of
+    // unlocks arrive (the outermost Lock destructor); the entry is erased when the count reaches zero. Decrement
+    // only when the region is actually tracked so a stray/unmatched unlock can't underflow the count.
     auto& bufs = state.locked_buffers[processor_id];
     auto lock_type = detail::get_lock_type(event.event_type);
+    const LockedBufferInfo key{event.locked_address_base, event.num_bytes, lock_type};
     if (event.is_lock()) {
-        bufs.insert({event.locked_address_base, event.num_bytes, lock_type});
-    } else {
-        bufs.erase({event.locked_address_base, event.num_bytes, lock_type});
+        ++bufs[key];
+    } else if (auto it = bufs.find(key); it != bufs.end() && --it->second == 0) {
+        bufs.erase(it);
     }
 
     update_latest_risc_timestamp(core, processor_id, timestamp);
@@ -474,6 +534,9 @@ void NOCDebugState::process_accumulated_events_all_chips() {
                 if constexpr (std::is_same_v<T, NocWriteEvent>) {
                     tt_cxy_pair key{chip_id, {static_cast<size_t>(e.src_x), static_cast<size_t>(e.src_y)}};
                     handle_write_event(key, processor_id, timestamp, e);
+                } else if constexpr (std::is_same_v<T, NocWriteSetStateEvent>) {
+                    tt_cxy_pair key{chip_id, {static_cast<size_t>(e.src_x), static_cast<size_t>(e.src_y)}};
+                    handle_write_set_state_event(key, processor_id, timestamp, e);
                 } else if constexpr (std::is_same_v<T, NocReadEvent>) {
                     tt_cxy_pair key{chip_id, {static_cast<size_t>(e.dst_x), static_cast<size_t>(e.dst_y)}};
                     handle_read_event(key, processor_id, timestamp, e);
@@ -505,12 +568,12 @@ void NOCDebugState::process_accumulated_events_all_chips() {
 }
 
 const NOCDebugState::LockedBufferInfo* NOCDebugState::CoreDebugState::get_noc_write_to_lock_buffer(
-    const NocWriteEvent& event) const {
-    const uint32_t write_start = event.dst_addr;
-    const uint32_t write_end = event.dst_addr + event.num_bytes;
+    uint32_t write_start, uint32_t write_size) const {
+    const uint32_t write_end = write_start + write_size;
     const auto& bufs = this->locked_buffers;
     for (auto proc_id = 0; proc_id < CoreDebugState::MAX_PROCESSORS; ++proc_id) {
-        for (const auto& buf : bufs[proc_id]) {
+        for (const auto& entry : bufs[proc_id]) {
+            const LockedBufferInfo& buf = entry.first;
             const uint32_t buf_end = buf.address + buf.size;
             if (write_end > buf.address && buf_end > write_start) {
                 return &buf;
