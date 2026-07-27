@@ -63,6 +63,13 @@ ARG ORAS_SHA256=9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59
 ARG SYFT_SCANNER_VERSION=1.11.0
 ARG SYFT_SCANNER_DIGEST=sha256:79e7b013cbec16bbb436f312819a49a4a57752b2270c1a9332ae1a10fcc82a68
 
+# Same reasoning as SYFT_SCANNER_VERSION/DIGEST above, for the Dockerfile
+# syntax frontend. 1.4.3 is the minimum minor version (plus its latest
+# patch) covering every syntax feature used across dockerfile/* - see the
+# dockerfile-frontend target and dockerfile/Dockerfile's syntax line.
+ARG DOCKERFILE_FRONTEND_VERSION=1.4.3
+ARG DOCKERFILE_FRONTEND_DIGEST=sha256:9ba7531bd80fb0a858632727cf7a112fbfd19b17e94c4e84ced81e24ef1a0dbc
+
 # NOTE: SFPI version/hash are NOT defined here as ARGs.
 # The single source of truth for SFPI version information is:
 #   - tt_metal/sfpi-version (version number, hashes for all platforms)
@@ -450,3 +457,26 @@ COPY --from=oras-builder /install/ /install/
 #############################################################
 
 FROM mirror.gcr.io/docker/buildkit-syft-scanner@${SYFT_SCANNER_DIGEST} AS syft-scanner
+
+#############################################################
+# dockerfile-frontend - the `# syntax=docker/dockerfile:...` frontend image
+# BuildKit pulls to parse a Dockerfile, re-hosted verbatim from upstream
+# (github.com/moby/buildkit, Apache-2.0 - same clean redistribution story as
+# syft-scanner). Same single-stage passthrough as syft-scanner, and for the
+# same reason: it's resolved by BuildKit itself as a literal `# syntax=`
+# image reference, not consumed via COPY, and must be byte-identical to
+# upstream. Sourced via mirror.gcr.io so this one-time tool-image build has
+# no docker.io dependency either.
+#
+# Referenced by our OWN ghcr.io tag (not mirror.gcr.io directly) from the
+# `# syntax=` line in dockerfile/Dockerfile, Dockerfile.manylinux, and
+# Dockerfile.disaggregated-prefill-worker: mirror.gcr.io itself timed out
+# from self-hosted runners (run 30311500019, job 90136329854) the same way
+# docker.io previously did, and unlike the SBOM generator, a `# syntax=`
+# line is resolved before any bake/Harbor-fallback logic runs, so it has no
+# retry path if its one hardcoded reference is ever unreachable. ghcr.io is
+# the one external destination that has been reliable throughout this
+# investigation (every job here already authenticates to it).
+#############################################################
+
+FROM mirror.gcr.io/docker/dockerfile@${DOCKERFILE_FRONTEND_DIGEST} AS dockerfile-frontend

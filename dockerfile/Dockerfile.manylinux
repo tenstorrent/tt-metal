@@ -1,6 +1,6 @@
-# syntax=mirror.gcr.io/docker/dockerfile@sha256:9ba7531bd80fb0a858632727cf7a112fbfd19b17e94c4e84ced81e24ef1a0dbc
-# (docker/dockerfile:1.4.3, the minimum version covering every syntax feature used across
-# dockerfile/* - see dockerfile/Dockerfile's syntax line for why)
+# syntax=ghcr.io/tenstorrent/tt-metal/tt-metalium/tools/dockerfile-frontend:1.4.3
+# (docker/dockerfile:1.4.3, re-hosted on our own ghcr.io - see dockerfile/Dockerfile's syntax
+# line for why)
 # ManyLinux Dockerfile
 # Uses pre-built tool images for ccache, mold, SFPI, and OpenMPI (ULFM).
 # Tool layers are injected via docker-bake.hcl contexts.

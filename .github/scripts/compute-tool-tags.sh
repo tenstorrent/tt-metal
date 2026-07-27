@@ -30,6 +30,7 @@ OPENMPI_VERSION=$(grep -E "^ARG OMPI_VERSION=" dockerfile/Dockerfile.tools | hea
 SFPI_VERSION=$(grep -E "^sfpi_version=" tt_metal/sfpi-version | cut -d"'" -f2)
 ORAS_VERSION=$(grep -E "^ARG ORAS_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 SYFT_SCANNER_VERSION=$(grep -E "^ARG SYFT_SCANNER_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
+DOCKERFILE_FRONTEND_VERSION=$(grep -E "^ARG DOCKERFILE_FRONTEND_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 
 # Compute hashes for each tool (version + install script)
 for tool in ccache mold doxygen clangbuildanalyzer gdb cmake yq zstd oras; do
@@ -40,9 +41,10 @@ done
 # Handle special cases (sfpi and openmpi) separately
 SFPI_HASH=$(cat dockerfile/scripts/install-sfpi.sh tt_metal/sfpi-version | sha1sum | cut -d' ' -f1 | head -c 12)
 OPENMPI_HASH=$(cat dockerfile/scripts/install-openmpi.sh .github/scripts/install-slurm.sh | sha1sum | cut -d' ' -f1 | head -c 12)
-# syft-scanner has no install script of its own (single-stage passthrough of
-# an upstream image - see Dockerfile.tools) - version alone fully determines
-# its content, so no hash suffix is needed or meaningful.
+# syft-scanner and dockerfile-frontend have no install script of their own
+# (single-stage passthroughs of an upstream image - see Dockerfile.tools) -
+# version alone fully determines their content, so no hash suffix is needed
+# or meaningful.
 
 # Generate canonical tags: ghcr.io/<repo>/tt-metalium/tools/<tool>:<version>-<hash>
 BASE="ghcr.io/${REPO}/tt-metalium/tools"
@@ -60,6 +62,7 @@ jq -n \
   --arg openmpi "${BASE}/openmpi:${OPENMPI_VERSION}-${OPENMPI_HASH}" \
   --arg oras "${BASE}/oras:${ORAS_VERSION}-${ORAS_HASH}" \
   --arg syftscanner "${BASE}/syft-scanner:${SYFT_SCANNER_VERSION}" \
+  --arg dockerfilefrontend "${BASE}/dockerfile-frontend:${DOCKERFILE_FRONTEND_VERSION}" \
   '{
     "ccache-tag": $ccache,
     "mold-tag": $mold,
@@ -72,5 +75,6 @@ jq -n \
     "sfpi-tag": $sfpi,
     "openmpi-tag": $openmpi,
     "oras-tag": $oras,
-    "syft-scanner-tag": $syftscanner
+    "syft-scanner-tag": $syftscanner,
+    "dockerfile-frontend-tag": $dockerfilefrontend
   }'

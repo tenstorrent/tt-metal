@@ -179,8 +179,17 @@ target "syft-scanner" {
   tags       = ["tool-syft-scanner:local"]
 }
 
+# Single-stage passthrough re-hosting docker/dockerfile (the `# syntax=`
+# frontend image), same reasoning as syft-scanner above.
+target "dockerfile-frontend" {
+  context    = "."
+  dockerfile = "dockerfile/Dockerfile.tools"
+  target     = "dockerfile-frontend"
+  tags       = ["tool-dockerfile-frontend:local"]
+}
+
 group "tools" {
-  targets = ["ccache", "clangbuildanalyzer", "cmake", "doxygen", "gdb", "mold", "openmpi", "oras", "sfpi", "syft-scanner", "yq", "zstd"]
+  targets = ["ccache", "clangbuildanalyzer", "cmake", "dockerfile-frontend", "doxygen", "gdb", "mold", "openmpi", "oras", "sfpi", "syft-scanner", "yq", "zstd"]
 }
 
 # =============================================================================

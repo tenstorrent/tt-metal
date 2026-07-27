@@ -1,8 +1,11 @@
-# syntax=mirror.gcr.io/docker/dockerfile@sha256:9ba7531bd80fb0a858632727cf7a112fbfd19b17e94c4e84ced81e24ef1a0dbc
-# (docker/dockerfile:1.4.3 - the minimum version (plus its latest patch) covering every syntax
-# feature used across dockerfile/*: COPY/ADD --link needs >=1.4, everything else (RUN --mount
-# type=cache/bind/secret and --mount=from=<context>) needs far less. Pinned by digest - see
-# dockerfile/Dockerfile.tools' syft-scanner target for why, and manual-docker-bake.sh)
+# syntax=ghcr.io/tenstorrent/tt-metal/tt-metalium/tools/dockerfile-frontend:1.4.3
+# (docker/dockerfile:1.4.3 - the minimum version covering every syntax feature used across
+# dockerfile/*: COPY/ADD --link needs >=1.4, everything else (RUN --mount type=cache/bind/secret
+# and --mount=from=<context>) needs far less. Re-hosted on our own ghcr.io (see
+# dockerfile/Dockerfile.tools' dockerfile-frontend target) rather than mirror.gcr.io directly:
+# mirror.gcr.io timed out from self-hosted runners the same way docker.io previously did, and a
+# `# syntax=` line has no fallback if its one hardcoded reference is ever unreachable - ghcr.io
+# is the one external destination that's been reliable throughout this investigation)
 # TT-Metalium Dockerfile
 # Optimized with multi-stage builds for tool and Python dependency caching.
 #
