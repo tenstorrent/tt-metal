@@ -133,6 +133,13 @@ void kernel_main() {
     constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(28);
     // Byte size of one row-major x element: x is bf16 in the row-major path.
     constexpr uint32_t X_RM_ELEM_BYTES = get_compile_time_arg_val(29);
+    // SHARD_GRID_N: the ND-shard grid's N extent (the program factory passes GRID_X).
+    // Under WEIGHTS_ND_SHARDED the weights are DRAM ND-sharded with a one-tile-row
+    // shard whose width is exactly this core's N slice, so one request per K-row
+    // fetches the whole slice. The linear ROUND_ROBIN_1D shard id is
+    // k * SHARD_GRID_N + my_nt, so consecutive K-rows land in DIFFERENT banks —
+    // the bank rotation is what buys the bandwidth.
+    constexpr uint32_t SHARD_GRID_N = get_compile_time_arg_val(30);
     // UP_SPLIT iff the reader multicasts up but does not read it from DRAM.
     constexpr bool up_split = (reader_mcasts_up != 0) && (reader_reads_up == 0);
 
@@ -153,7 +160,7 @@ void kernel_main() {
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t num_blocks_d = K_down_tiles_padded / in0_block_w_d;
 
-    constexpr uint32_t x_accessor_offset = 30;
+    constexpr uint32_t x_accessor_offset = 31;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
     // Row-major x accessor (x_is_row_major): x is a ROW_MAJOR bf16 buffer whose
@@ -615,6 +622,24 @@ void kernel_main() {
                 // DRAM read gate region first.
                 uint32_t l1_w_gate = cb_in1_gate_obj.get_write_ptr();
                 const uint32_t gate_block_start = l1_w_gate;
+#ifdef WEIGHTS_ND_SHARDED
+                {
+                    // One request per K-row: the shard IS this core's per_core_N_gu-wide
+                    // slice, contiguous in one bank, and lands in the k-major / n-minor
+                    // order the CB expects. per_core_N_gu * GRID_X may exceed the real N
+                    // (11 * 6 = 66 vs 64), which the shard grid covers with a partially
+                    // valid last shard; those hidden columns are dropped downstream
+                    // exactly as the interleaved path's zero-fill was.
+                    constexpr uint32_t gate_slice_bytes = per_core_N_gu * 576;  // bfp4 tile
+                    for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
+                        const uint32_t krow = kb * in0_block_w_gu + k;
+                        const uint64_t src =
+                            gate_acc.get_shard_noc_addr(krow * SHARD_GRID_N + my_nt_gu, 0, noc_read.get_noc_id());
+                        noc_async_read(src, l1_w_gate, gate_slice_bytes, noc_read.get_noc_id());
+                        l1_w_gate += gate_slice_bytes;
+                    }
+                }
+#else
                 for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
                     for (uint32_t n = 0; n < per_core_N_gu; ++n) {
                         const uint32_t row = kb * in0_block_w_gu + k;
@@ -636,9 +661,10 @@ void kernel_main() {
                         l1_w_gate += gate_tile_bytes;
                     }
                 }
-                // `up` slot. LEGACY: reader reads it on NoC 0. UP_SPLIT: writer
-                // already read it on NoC 1; reader just takes the L1 start and
-                // waits on up_done (below) before mcasting.
+#endif  // WEIGHTS_ND_SHARDED
+        // `up` slot. LEGACY: reader reads it on NoC 0. UP_SPLIT: writer
+        // already read it on NoC 1; reader just takes the L1 start and
+        // waits on up_done (below) before mcasting.
                 uint32_t up_block_start = 0;
                 if constexpr (reader_mcasts_up) {
                     up_block_start = cb_in1_up_obj.get_write_ptr();
@@ -795,6 +821,24 @@ void kernel_main() {
                 in1_ready_sem.set(0);
                 uint32_t l1_w = cb_in1_down_obj.get_write_ptr();
                 in1_block_start = l1_w;
+#ifdef WEIGHTS_ND_SHARDED
+                {
+                    // One request per K-row, as for gate above. K-OOB rows
+                    // (krow >= K_down_tiles) are left UNWRITTEN, matching the
+                    // interleaved path: the compute bounds its K-loop by
+                    // real_k_tiles, so they are never reduced.
+                    constexpr uint32_t down_slice_bytes = per_core_N_d * 576;  // bfp4 tile
+                    for (uint32_t k = 0; k < in0_block_w_d; ++k) {
+                        const uint32_t krow = kb * in0_block_w_d + k;
+                        if (krow < K_down_tiles) {
+                            const uint64_t src =
+                                down_acc.get_shard_noc_addr(krow * SHARD_GRID_N + my_nt_d, 0, noc_read.get_noc_id());
+                            noc_async_read(src, l1_w, down_slice_bytes, noc_read.get_noc_id());
+                        }
+                        l1_w += down_slice_bytes;
+                    }
+                }
+#else
                 for (uint32_t k = 0; k < in0_block_w_d; ++k) {
                     for (uint32_t n = 0; n < per_core_N_d; ++n) {
                         const uint32_t row = kb * in0_block_w_d + k;
@@ -814,6 +858,7 @@ void kernel_main() {
                         l1_w += down_tile_bytes;
                     }
                 }
+#endif  // WEIGHTS_ND_SHARDED
             }
 
             // Step 3: in1_down sender finishes — barrier on the DRAM reads it

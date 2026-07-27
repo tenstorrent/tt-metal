@@ -21,6 +21,30 @@ bool is_dram_interleaved(const ttnn::Tensor& t) {
     return mem.buffer_type() == tt::tt_metal::BufferType::DRAM &&
            mem.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
 }
+
+// Weights may instead be DRAM ND-sharded, which lets the reader fetch a whole
+// (K-row x per-core-N) slice in ONE request instead of one per tile.
+//
+// The shard shape must be a single tile-row tall. That is what makes consecutive
+// K-rows land in DIFFERENT DRAM banks: shards are distributed ROUND_ROBIN_1D, so
+// shard id = k * shard_grid_N + gx maps to bank id % num_banks, which advances
+// with k. Bank rotation is the whole point — measured on a P150, a core pinned to
+// one bank saturates near 30 GB/s no matter how large the request (13/27/55 KB all
+// land at ~245 GB/s aggregate), while the same bytes read with the bank rotating
+// reach ~370 GB/s. A taller shard (e.g. one per K-block) would be one request but
+// would pin the core to a bank, which measured no faster than plain interleaved.
+bool is_dram_nd_sharded_by_tile_row(const ttnn::Tensor& t) {
+    const auto& mem = t.memory_config();
+    if (mem.buffer_type() != tt::tt_metal::BufferType::DRAM || !mem.created_with_nd_shard_spec()) {
+        return false;
+    }
+    const auto& spec = mem.nd_shard_spec();
+    if (!spec.has_value()) {
+        return false;
+    }
+    const auto& shard_shape = spec->shard_shape;
+    return shard_shape.rank() >= 2 && shard_shape[-2] == tt::constants::TILE_HEIGHT;
+}
 }  // namespace
 
 void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
@@ -107,6 +131,12 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     // contract AND must be identical in shape/dtype to expert 0 (the program is
     // built once for all experts, and the kernels reuse one accessor layout
     // descriptor per role with only the base address varying per expert).
+    //
+    // Placement may be DRAM-interleaved (one tile per page, one request per tile)
+    // or DRAM ND-sharded with a one-tile-row-tall shard (one request per K-row
+    // covers this core's whole N slice). Every role of every expert must agree:
+    // the reader picks the path once at compile time.
+    const bool weights_nd_sharded = is_dram_nd_sharded_by_tile_row(t.gate_projs[0]);
     for (uint32_t e = 0; e < op.experts_per_chip; ++e) {
         for (const auto& [name, w, ref] :
              std::initializer_list<std::tuple<const char*, const ttnn::Tensor&, const ttnn::Tensor&>>{
@@ -115,7 +145,20 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
                  {"down_proj", t.down_projs[e], t.down_projs[0]}}) {
             TT_FATAL(w.storage_type() == ttnn::StorageType::DEVICE, "{}[{}] must be on device", name, e);
             TT_FATAL(w.layout() == tt::tt_metal::Layout::TILE, "{}[{}] must be TILE layout", name, e);
-            TT_FATAL(is_dram_interleaved(w), "{}[{}] must be DRAM-interleaved", name, e);
+            TT_FATAL(
+                is_dram_interleaved(w) || is_dram_nd_sharded_by_tile_row(w),
+                "{}[{}] must be DRAM-interleaved or DRAM ND-sharded with a {}-row-tall shard, got {}",
+                name,
+                e,
+                tt::constants::TILE_HEIGHT,
+                w.memory_config());
+            TT_FATAL(
+                is_dram_nd_sharded_by_tile_row(w) == weights_nd_sharded,
+                "{}[{}]: every expert's gate/up/down must share one weight memory layout (gate_proj[0] is "
+                "{}sharded)",
+                name,
+                e,
+                weights_nd_sharded ? "" : "not ");
             TT_FATAL(
                 w.padded_shape() == ref.padded_shape() && w.dtype() == ref.dtype(),
                 "{}[{}] shape/dtype ({}, {}) must match expert 0 ({}, {}) — all experts share one program",

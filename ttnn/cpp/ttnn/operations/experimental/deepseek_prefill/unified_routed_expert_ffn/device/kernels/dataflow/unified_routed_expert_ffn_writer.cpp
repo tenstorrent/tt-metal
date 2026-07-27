@@ -93,6 +93,9 @@ void kernel_main() {
     constexpr uint32_t in0_block_w_gu = get_compile_time_arg_val(17);
     constexpr uint32_t K_gate_tiles = get_compile_time_arg_val(18);
     constexpr uint32_t writer_split_up = get_compile_time_arg_val(19);
+    // See the reader: under WEIGHTS_ND_SHARDED a whole K-row `up` slice is one
+    // request. SHARD_GRID_N is the shard grid's N extent (= GRID_X).
+    constexpr uint32_t SHARD_GRID_N = get_compile_time_arg_val(20);
 
     constexpr uint32_t d_out_subblock_num_tiles = d_out_subblock_h * d_out_subblock_w;
     // Full compile-time M-subblock count of cb_out. The writer DRAINS all of them
@@ -110,7 +113,7 @@ void kernel_main() {
     // Accessor compile-arg stream order (host appends in this exact order):
     // out, then start, then up (UP_SPLIT). The accessors are constructed
     // unconditionally; up_acc is used only when writer_split_up.
-    constexpr uint32_t out_accessor_offset = 20;
+    constexpr uint32_t out_accessor_offset = 21;
     constexpr auto out_args = TensorAccessorArgs<out_accessor_offset>();
     const auto out_acc = TensorAccessor(out_args, output_addr, cb_out_buf.get_tile_size());
 
@@ -204,6 +207,22 @@ void kernel_main() {
                         ++up_seq;
                         up_go_sem.wait_min(up_seq);
                         uint32_t l1_w_up = up_cb_base + ((up_seq - 1) % kUpNumSlots) * up_slot_bytes;
+#ifdef WEIGHTS_ND_SHARDED
+                        // One request per K-row: the shard IS this core's whole N
+                        // slice, contiguous in one bank. The N-OOB tail inside the
+                        // slice is left as read — the down matmul never reduces it
+                        // (compute bounds its K-loop by real_k_tiles).
+                        {
+                            constexpr uint32_t up_slice_bytes = per_core_N_gu * 576;  // bfp4 tile
+                            for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
+                                const uint32_t krow = kb * in0_block_w_gu + k;
+                                const uint64_t src =
+                                    up_acc.get_shard_noc_addr(krow * SHARD_GRID_N + my_nt_gu, 0, noc_up.get_noc_id());
+                                noc_async_read(src, l1_w_up, up_slice_bytes, noc_up.get_noc_id());
+                                l1_w_up += up_slice_bytes;
+                            }
+                        }
+#else
                         for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
                             for (uint32_t n = 0; n < per_core_N_gu; ++n) {
                                 const uint32_t row = kb * in0_block_w_gu + k;
@@ -223,6 +242,7 @@ void kernel_main() {
                                 l1_w_up += up_tile_bytes;
                             }
                         }
+#endif  // WEIGHTS_ND_SHARDED
                         noc_up.async_read_barrier();
                         up_done_sem.set(up_seq);
                     }

@@ -398,6 +398,39 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // per weight role covers every expert (identical shape/layout), and the
     // kernels build a per-expert accessor from that descriptor + the per-expert
     // base address (passed as a runtime-arg).
+    //
+    // Weights are either DRAM-interleaved (page = tile, so a core's per_core_N-wide
+    // slice of a K-row is per_core_N separate requests landing in per_core_N
+    // different banks) or DRAM ND-sharded with a one-tile-row-tall shard, where that
+    // whole slice IS one shard: contiguous in a single bank, so ONE request. With
+    // ROUND_ROBIN_1D distribution, shard id = k * shard_grid_N + gx, so consecutive
+    // K-rows rotate banks — which is what actually buys bandwidth (a core pinned to
+    // one bank saturates near 30 GB/s regardless of request size).
+    //
+    // Validation already checked the shard is TILE_HEIGHT tall and that every
+    // expert's three weights agree; here we only need the shard WIDTH to equal this
+    // core's N slice, because the reader reads exactly one shard per K-row into the CB.
+    const auto& gate_mem = t.gate_projs[0].memory_config();
+    const bool weights_nd_sharded = gate_mem.created_with_nd_shard_spec();
+    if (weights_nd_sharded) {
+        const auto check_shard_width = [](const ttnn::Tensor& w, uint32_t expect_tiles, const char* name) {
+            const auto& shape = w.memory_config().nd_shard_spec()->shard_shape;
+            TT_FATAL(
+                shape[-1] == expect_tiles * TILE,
+                "{}: ND shard width must be per_core_N ({} tiles = {} elements) so the reader can fetch a "
+                "K-row slice in one request, got {}",
+                name,
+                expect_tiles,
+                expect_tiles * TILE,
+                shape[-1]);
+        };
+        for (uint32_t e = 0; e < experts_per_chip; ++e) {
+            check_shard_width(t.gate_projs[e], per_core_N_gu, "gate_proj");
+            check_shard_width(t.up_projs[e], per_core_N_gu, "up_proj");
+            check_shard_width(t.down_projs[e], per_core_N_d, "down_proj");
+        }
+    }
+
     auto* x_buffer = t.x.buffer();
     auto* gate_buffer = t.gate_projs[0].buffer();
     auto* up_buffer = t.up_projs[0].buffer();
@@ -668,6 +701,14 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // X_RM_ELEM_BYTES — byte size of one row-major x element (x is bf16 in
         // the row-major path).
         tt::datum_size(tt::DataFormat::Float16_b),
+        // GRID_X — the ND shard grid's N extent, so the reader can form the linear
+        // shard id (k * GRID_X + gx) without needing the accessor's rank. Whether the
+        // sharded path is taken at all is a DEFINE (WEIGHTS_ND_SHARDED), not a
+        // compile-time arg: TensorAccessor exposes get_shard_noc_addr only on its
+        // sharded specialisation, and `if constexpr` in a non-template context still
+        // type-checks the discarded branch, so the interleaved build would fail to
+        // compile. A define removes the branch from the translation unit outright.
+        GRID_X,
     };
     tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
@@ -685,6 +726,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // offset after start_args.next_compile_time_args_offset(). Only present when
     // fuse_bias — a distinct program (FUSE_BIAS define is in the cache key).
     std::map<std::string, std::string> reader_defines{};
+    if (weights_nd_sharded) {
+        reader_defines["WEIGHTS_ND_SHARDED"] = "1";
+    }
     if (fuse_bias) {
         reader_ct_args.push_back(CB_GATE_BIAS);
         reader_ct_args.push_back(CB_UP_BIAS);
@@ -736,6 +780,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         in0_block_w_gu,                       // 17
         K_gate_tiles,                         // 18
         static_cast<uint32_t>(up_mode == 2),  // 19 writer_split_up
+        // GRID_X doubles as the ND-shard grid's N extent for the writer's
+        // one-request-per-K-row shard id.
+        GRID_X,  // 20
     };
     // Accessor compile-arg stream order MUST match the writer kernel:
     // out, then start, then up (UP_SPLIT).
@@ -744,12 +791,16 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // up accessor follows start; used only when the writer handles `up`.
     tt::tt_metal::TensorAccessorArgs(up_buffer).append_to(writer_ct_args);
 
+    std::map<std::string, std::string> writer_defines{};
+    if (weights_nd_sharded) {
+        writer_defines["WEIGHTS_ND_SHARDED"] = "1";
+    }
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/"
         "unified_routed_expert_ffn_writer.cpp",
         core_range_set,
-        tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_ct_args, writer_defines));
 
     // Compute kernel compile-time args: positional + named CB ids.
     std::vector<uint32_t> compute_ct_args = {
