@@ -211,6 +211,11 @@ def get_devices(test_module):
         return default_device()
 
 
+# Single-host clusters top out at 8 devices (N150=1, N300=2, T3K=8); more than
+# this means a multi-host Galaxy box, where the persistent job device is enabled.
+_SINGLE_HOST_MAX_DEVICES = 8
+
+
 def _is_galaxy_job() -> bool:
     """Whether this job runs on Galaxy — the only place the per-module device
     reopen force-reinitializes dispatch and wedges a core, so the only place the
@@ -226,7 +231,7 @@ def _is_galaxy_job() -> bool:
     try:
         import ttnn
 
-        return ttnn.get_num_devices() > 8
+        return ttnn.get_num_devices() > _SINGLE_HOST_MAX_DEVICES
     except Exception:
         return False
 
@@ -301,6 +306,10 @@ def get_github_pipeline_id() -> int | None:
 # Sentinel the parent sends to end the persistent worker (a module task is a
 # (module_name, serialized_vector) tuple, so this string never collides).
 _WORKER_CLOSE = "__worker_close__"
+# Grace period (seconds) to let the persistent job worker drain and close its
+# device after _WORKER_CLOSE before it is force-killed.
+_WORKER_JOIN_TIMEOUT_S = 30
+_WORKER_KILL_GRACE_S = 5
 
 
 def run(input_queue, output_queue, config: SweepsConfig):
@@ -1059,7 +1068,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
             try:
                 if p.is_alive():
                     input_queue.put(_WORKER_CLOSE)
-                    p.join(timeout=30)
+                    p.join(timeout=_WORKER_JOIN_TIMEOUT_S)
             except Exception:
                 pass
             if p.is_alive():
@@ -1327,11 +1336,11 @@ def run_sweeps(
             try:
                 if wp is not None and wp.is_alive():
                     job_worker["input_queue"].put(_WORKER_CLOSE)
-                    wp.join(timeout=30)
+                    wp.join(timeout=_WORKER_JOIN_TIMEOUT_S)
             except Exception:
                 pass
             if wp is not None and wp.is_alive():
-                _kill_child(wp, 5)
+                _kill_child(wp, _WORKER_KILL_GRACE_S)
         if not config.dry_run:
             result_dest.finalize_run(run_id, final_status)
             logger.info(f"Finalized run with status: {final_status}")

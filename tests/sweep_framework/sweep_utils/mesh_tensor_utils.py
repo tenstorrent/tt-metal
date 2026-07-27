@@ -201,6 +201,12 @@ def shard_grid_bounds(mc):
 # ttnn.close_mesh_device(), so caching + a deferred-close guard here is
 # transparent to the modules (a module that opens its own device just gets the
 # cached one; its per-module close is deferred to job end / config change).
+# Device-count boundary between single-host clusters (N150=1, N300=2, T3K=8) and
+# multi-host Galaxy (32 chips). Galaxy is the only place the per-module device
+# reopen wedges a dispatch core, so job-level device reuse is gated to clusters
+# with MORE than this many devices.
+_SINGLE_HOST_MAX_DEVICES = 8
+
 _JOB_DEVICE = None
 _JOB_DEVICE_KEY = None
 _orig_close_mesh_device = ttnn.close_mesh_device
@@ -220,7 +226,7 @@ def _job_device_enabled() -> bool:
     if os.environ.get("TTNN_SWEEP_JOB_DEVICE_FORCE") == "1":
         return True
     try:
-        return ttnn.get_num_devices() > 8
+        return ttnn.get_num_devices() > _SINGLE_HOST_MAX_DEVICES
     except Exception:
         return False
 
@@ -242,7 +248,7 @@ def _job_device_key(mesh_shape, l1_small_size, dispatch_core_axis, prefer_eth):
         disp = ("default",)
     else:
         try:
-            single_host = ttnn.get_num_devices() <= 8
+            single_host = ttnn.get_num_devices() <= _SINGLE_HOST_MAX_DEVICES
         except Exception:
             single_host = False
         if single_host and prefer_eth:
@@ -475,7 +481,7 @@ def _create_mesh_device_uncached(
     # ETH dispatch cores can't be allocated and a failed ETH open re-inits
     # MetalContext and wedges the command queue, so leave those on WORKER.
     try:
-        _single_host = ttnn.get_num_devices() <= 8
+        _single_host = ttnn.get_num_devices() <= _SINGLE_HOST_MAX_DEVICES
     except Exception:
         _single_host = False
     # prefer_eth=False lets a caller opt out of ETH dispatch. conv2d needs WORKER
