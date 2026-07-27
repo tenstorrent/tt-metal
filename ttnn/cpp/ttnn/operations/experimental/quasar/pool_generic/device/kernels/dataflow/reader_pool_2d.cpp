@@ -1,5 +1,7 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
+// [#48552 DIAGNOSTIC] DFB credit APIs (wait_front/reserve_back/push_back/pop_front) commented out to bisect the maxpool
+// hang (DFB-credit vs compute dest-sync). REVERT AFTER.
 
 #include <sys/types.h>
 
@@ -68,7 +70,7 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 (c_i == in_nblocks_c - 1) ? in_nbytes_c - c_i * MAX_BYTES_PER_REDUCTION : MAX_BYTES_PER_REDUCTION;
         }
 
-        in_cb.reserve_back(1);
+        // [#48552 DIAG] DFB API removed:         in_cb.reserve_back(1);
         uint32_t write_offset = 0;
         uint32_t processed_sticks = 0;
         // page zeroing is only necessary for tiled block output format so that scale is not affected by
@@ -170,8 +172,8 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                     if ((processed_sticks % max_sticks_for_reduction) == 0 ||
                         processed_sticks == total_elems_to_reduce) {
                         noc.async_read_barrier();
-                        in_cb.push_back(1);
-                        in_cb.reserve_back(1);
+                        // [#48552 DIAG] DFB API removed:                         in_cb.push_back(1);
+                        // [#48552 DIAG] DFB API removed:                         in_cb.reserve_back(1);
                         write_offset = 0;
                         // If next is last chunk, fill whole buffer with the init_value. note for max pool we do
                         // not need to fill the CB for the partial chunk since as long as we have N>1 chunks we
@@ -213,7 +215,7 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
         }
         if constexpr (!is_large_kernel) {
             noc.async_read_barrier();
-            in_cb.push_back(1);
+            // [#48552 DIAG] DFB API removed:             in_cb.push_back(1);
         }
     }
 }
@@ -333,10 +335,10 @@ void kernel_main() {
     if constexpr (is_avg_pool || need_to_initialize_in_cb || force_max_clear) {
         if constexpr (reader_id == 0) {
             fill_with_val(clear_value_cb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
-            clear_value_cb.push_back(1);
+            // [#48552 DIAG] DFB API removed:             clear_value_cb.push_back(1);
         }
         if constexpr (reader_id == 1) {
-            clear_value_cb.wait_front(1);
+            // [#48552 DIAG] DFB API removed:             clear_value_cb.wait_front(1);
         }
         // for average pool clear out tiles runs in loop, no need to initialize here
         if constexpr (!is_avg_pool || !is_large_kernel) {
@@ -402,7 +404,7 @@ void kernel_main() {
         // varies per reduce, decorrelated output (low PCC). Mirrors the in_cb / scratch->out write-backs.
         flush_l2_cache_range(static_cast<uintptr_t>(in_scalar_cb.get_write_ptr()), static_cast<size_t>(FACE_WIDTH) * 2);
 #endif
-        in_scalar_cb.push_back(1);
+        // [#48552 DIAG] DFB API removed:         in_scalar_cb.push_back(1);
     }
     const uint32_t core_nhw_index = get_arg(args::core_nhw_index);
 
@@ -416,9 +418,9 @@ void kernel_main() {
             cfg_noc.async_read(
                 reader_indices_accessor, reader_indices_cb, reader_page_size, {.page_id = core_nhw_index}, {});
             cfg_noc.async_read_barrier();
-            reader_indices_cb.push_back(1);
+            // [#48552 DIAG] DFB API removed:             reader_indices_cb.push_back(1);
         } else {
-            reader_indices_cb.wait_front(1);
+            // [#48552 DIAG] DFB API removed:             reader_indices_cb.wait_front(1);
         }
     }
     uint32_t reader_indices_l1_addr = reader_indices_cb.get_read_ptr();
@@ -447,9 +449,9 @@ void kernel_main() {
                 const auto config_accessor = TensorAccessor(tensor::config);
                 cfg_noc.async_read(config_accessor, config_cb, config_page_size, {.page_id = core_nhw_index}, {});
                 cfg_noc.async_read_barrier();
-                config_cb.push_back(1);
+                // [#48552 DIAG] DFB API removed:                 config_cb.push_back(1);
             } else {
-                config_cb.wait_front(1);
+                // [#48552 DIAG] DFB API removed:                 config_cb.wait_front(1);
             }
         }
         config_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(config_l1_addr);
@@ -560,7 +562,7 @@ void kernel_main() {
             // ROW_MAJOR path's broken narrow pack, so it must be skipped here -- otherwise this wait_front
             // blocks forever on a push that will never come (the actual bug behind this fix).
 #ifndef OUTPUT_TILED
-            scratch_cb.wait_front(scratch_npages);
+            // [#48552 DIAG] DFB API removed:             scratch_cb.wait_front(scratch_npages);
             {
                 const uint32_t global_stick =
                     use_split_reader ? (2u * out_stick_counter + reader_id) : out_stick_counter;
@@ -621,7 +623,7 @@ void kernel_main() {
                     DPRINT("\n");
                 }
             }
-            scratch_cb.pop_front(scratch_npages);
+// [#48552 DIAG] DFB API removed:             scratch_cb.pop_front(scratch_npages);
 #endif  // !OUTPUT_TILED
             out_stick_counter++;
             if (use_split_reader && ind == end) {
