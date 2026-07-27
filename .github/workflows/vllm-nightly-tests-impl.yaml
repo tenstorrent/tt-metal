@@ -75,10 +75,12 @@ jobs:
           #     "owner_id": "U08TJ70UFRT"
           #   },
           #
-          # [WH-T3K] Gemma4-31B: serve max_model_len=32768. GEMMA4_MAX_TOKENS_ALL_USERS
-          # must match that (see Run server step) — a 256k all-user pool OOMs DRAM
-          # on Wormhole during KV init (run 30270375854). Prior decode hang tracked
-          # in https://github.com/tenstorrent/tt-metal/issues/49494.
+          # [WH-T3K] Gemma4-31B: Wormhole T3K (LoudBox/QuietBox) has 12 GB GDDR6
+          # per ASIC vs BH P150 32 GB — do not mirror BH QB2/LB 256k serve.
+          # max_model_len=32768 + full-ISL chunk OOMs prefill scratch after KV
+          # fill (run 30291376571); 256k pool OOMs at KV init (30270375854).
+          # Serve 16k with chunked prefill=2048; GEMMA4_MAX_TOKENS_ALL_USERS
+          # must match max_model_len (Run server step). Decode hang #49494.
           #
           # Disabled due to Metal timeout in reduce-scatter async tests
           # https://github.com/tenstorrent/vllm/issues/416
@@ -194,7 +196,7 @@ jobs:
               "arch": "arch-wormhole_b0",
               "mesh-device": "T3K",
               "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
-              "additional-server-args": "--max_model_len 32768 --max_num_seqs 1 --async-scheduling",
+              "additional-server-args": "--max_model_len 16384 --max_num_seqs 1 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
             },
@@ -629,7 +631,7 @@ jobs:
               export GEMMA4_TRACE_PREFILL_SEQ_LENS=128
               # 31B/12B: hybrid-OFF allocates a full-length KV buffer per layer, so
               # the all-user pool must match the served max_model_len (BH 256k /
-              # WH-T3K 32k). Blindly pinning 262144 OOMs Wormhole T3K (run
+              # WH-T3K 16k). Blindly pinning 262144 OOMs Wormhole T3K (run
               # 30270375854). See tt-metal #49257 / #49083.
               if [ "$HF_MODEL" = "google/gemma-4-31B-it" ] || [ "$HF_MODEL" = "google/gemma-4-12B-it" ]; then
                 MAX_MODEL_LEN=""
@@ -643,6 +645,11 @@ jobs:
                 export GEMMA4_VLLM_SINGLE_CHUNK=0
                 export GEMMA4_DEMO_SINGLE_CHUNK=0
                 export GEMMA4_CHUNKED_PREFILL_TRACE=1
+                # WH T3K 31B: pin metal prefill chunk to 2048 (12 GB/ASIC headroom).
+                if [ "$HF_MODEL" = "google/gemma-4-31B-it" ] && [ "${{ matrix.test-group.mesh-device }}" = "T3K" ]; then
+                  export GEMMA4_GEN_PREFILL_CHUNK=2048
+                  echo "Gemma4 WH-T3K: GEMMA4_GEN_PREFILL_CHUNK=$GEMMA4_GEN_PREFILL_CHUNK"
+                fi
                 echo "Gemma4 KV pool: GEMMA4_MAX_TOKENS_ALL_USERS=$GEMMA4_MAX_TOKENS_ALL_USERS (from max_model_len=${MAX_MODEL_LEN:-default})"
               fi
               ;;

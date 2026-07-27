@@ -323,6 +323,7 @@ def _device_params():
         #     QB2: 31B bounded @ 64k, chunk=2048 @ ≥128k; 12B/26B unbound→128k
         #     P150x8: 31B/26B unbound→64k, bounded+chunk=2048 @ ≥128k
         #             (unbounded 128k → "lapped…"); 12B/E2B/E4B unbound→256k
+        #     P150: E2B/E4B unbound→256k; 12B bounded+chunked @ ≥64k →256k
         #   Override: GEMMA4_BOUNDED_SLIDING, GEMMA4_GEN_PREFILL_CHUNK,
         #   GEMMA4_DEMO_SINGLE_CHUNK (avoid for quality).
         (  # long-context-32k
