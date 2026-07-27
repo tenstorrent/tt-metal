@@ -614,8 +614,6 @@ static void validate_ring_extent(const DataflowBufferImpl& dfb) {
     const uint16_t capacity = dfb.capacity;
     const uint32_t stride_in_entries = dfb.stride_in_entries;
     const uint32_t id = dfb.id;
-    // TRISC pack/unpack store the ring extent in uint16_t L1-aligned units; only Quasar (tile-counter
-    // hardware) has this constraint, and only when a Tensix RISC participates in the DFB.
     if (!MetalContext::instance().hal().has_tile_counter_registers()) {
         return;
     }
@@ -624,13 +622,36 @@ static void validate_ring_extent(const DataflowBufferImpl& dfb) {
         return;
     }
     const uint64_t ring_bytes = static_cast<uint64_t>(config.entry_size) * (stride_in_entries * (capacity - 1U) + 1U);
-    const uint32_t l1_align = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t l1_align = hal.get_alignment(HalMemType::L1);
+    const uint32_t unreserved_l1_size =
+        hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     TT_FATAL(
         ring_bytes % l1_align == 0,
         "DFB {}: ring size in bytes ({}) must be a multiple of L1 alignment ({})",
         id,
         ring_bytes,
         l1_align);
+    const uint64_t entry_size_trisc_units = static_cast<uint64_t>(config.entry_size) / l1_align;
+    TT_FATAL(
+        entry_size_trisc_units <= std::numeric_limits<uint16_t>::max(),
+        "DFB {}: TRISC entry_size ({} L1 units of {} bytes) exceeds uint16_t; reduce entry_size",
+        id,
+        entry_size_trisc_units,
+        l1_align);
+    const uint64_t stride_size_trisc_units = entry_size_trisc_units * stride_in_entries;
+    TT_FATAL(
+        stride_size_trisc_units <= std::numeric_limits<uint16_t>::max(),
+        "DFB {}: TRISC stride_size ({} L1 units of {} bytes) exceeds uint16_t; reduce entry_size or stride",
+        id,
+        stride_size_trisc_units,
+        l1_align);
+    TT_FATAL(
+        stride_in_entries <= std::numeric_limits<uint8_t>::max(),
+        "DFB {}: stride_in_entries ({}) exceeds uint8_t (TRISC stride_size_tiles); reduce producers/consumers",
+        id,
+        stride_in_entries);
+
     const uint64_t ring_trisc_units = ring_bytes / l1_align;
     TT_FATAL(
         ring_trisc_units > 0U,
@@ -639,12 +660,19 @@ static void validate_ring_extent(const DataflowBufferImpl& dfb) {
         ring_bytes,
         l1_align);
     TT_FATAL(
-        ring_trisc_units < 65536U,
-        "DFB {}: TRISC ring extent ({} L1 units of {} bytes) exceeds uint16_t; reduce capacity, stride, or "
+        ring_trisc_units <= std::numeric_limits<uint32_t>::max(),
+        "DFB {}: TRISC ring extent ({} L1 units of {} bytes) exceeds uint32_t; reduce capacity, stride, or "
         "entry_size",
         id,
         ring_trisc_units,
         l1_align);
+    TT_FATAL(
+        ring_bytes <= unreserved_l1_size,
+        "DFB {}: ring size ({} bytes) exceeds Tensix unreserved L1 size ({} bytes); reduce capacity, stride, or "
+        "entry_size",
+        id,
+        ring_bytes,
+        unreserved_l1_size);
 }
 
 static dfb_txn_id_descriptor_t make_txn_descriptor(
@@ -1083,7 +1111,7 @@ void ProgramImpl::finalize_single_dfb_config(
             "(different Neos). Un-scoped Tensix-to-Tensix DFBs are not allowed.");
     }
 
-    // TRISC pack/unpack store ring extent in uint16_t L1-aligned units; host must reject oversized rings.
+    // TRISC pack/unpack store ring extent in uint32_t L1-aligned units; host rejects rings > L1 / uint32.
     validate_ring_extent(*dfb);
 
     dfb->risc_mask = config.producer_risc_mask | config.consumer_risc_mask;
