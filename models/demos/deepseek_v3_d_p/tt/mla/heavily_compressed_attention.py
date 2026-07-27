@@ -611,12 +611,32 @@ class TtHCA(_TtHCABase):
             )
         return out
 
-    def forward(self, hidden_states, position_ids: torch.Tensor):
+    def forward(self, hidden_states, position_ids: torch.Tensor, seq_len_actual: int | None = None):
         """Full HCA block (prefill, single-shot), mirrors ``DeepseekV4Attention.forward``.
-        ``hidden_states`` TTNN [B, 1, S, hidden]; ``position_ids`` torch [B, S]. Returns
-        [B, 1, S, hidden]: query/kv stems -> compressor -> attention core -> output proj."""
-        q = self._q_stem(hidden_states, position_ids)
-        sliding_kv = self._kv_stem(hidden_states, position_ids)
-        compressed_kv, block_bias = self.compressor(hidden_states, position_ids)
-        attn = self._attention(q, sliding_kv, compressed_kv, block_bias, position_ids)
+        ``hidden_states`` TTNN [B, 1, S_pad/sp, hidden/tp] (seq host-padded to compress_rate*sp via
+        ``prepare_input``); ``position_ids`` torch [B, S_real]; ``seq_len_actual`` the real pre-pad length
+        (``None`` -> nothing was padded). Returns [B, 1, S_pad/sp, hidden/tp] — the caller reads the first
+        S_real rows; the padded tail is causally masked everywhere it could leak."""
+        seq_pad_global = hidden_states.shape[2] * self.sp_factor
+
+        # Below one full compression window there is no compressed KV at all (block_bias would be None
+        # and the attention core has no compressed columns to mask). Fail here rather than deeper in.
+        compress_rate = self.compressor.compress_rate
+        real_len = seq_pad_global if seq_len_actual is None else seq_len_actual
+        assert real_len >= compress_rate, (
+            f"HCA prefill needs at least one full compression window: got seq_len {real_len} < "
+            f"compress_rate {compress_rate}"
+        )
+
+        # The stems/undo-RoPE need one position per PADDED row (the rope op matches cos/sin to the tensor
+        # seq), so extend the real positions; the compressor keeps the real ones (they drive block_bias).
+        pos_padded = position_ids
+        if position_ids.shape[1] < seq_pad_global:
+            tail = torch.arange(1, seq_pad_global - position_ids.shape[1] + 1).unsqueeze(0)
+            pos_padded = torch.cat([position_ids, position_ids[:, -1:] + tail], dim=1)
+
+        q = self._q_stem(hidden_states, pos_padded)
+        sliding_kv = self._kv_stem(hidden_states, pos_padded)
+        compressed_kv, block_bias = self.compressor(hidden_states, position_ids, seq_len_actual=seq_len_actual)
+        attn = self._attention(q, sliding_kv, compressed_kv, block_bias, pos_padded)
         return self._o_proj(attn)

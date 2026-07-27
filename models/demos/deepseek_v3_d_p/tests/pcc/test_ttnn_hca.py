@@ -649,3 +649,84 @@ def test_hca_forward(device, batch, seq_len):
     assert pcc_passed, f"HCA block PCC test failed: {pcc_message}"
 
     logger.debug("PCC test passed!")
+
+
+# Real (pre-pad) prompt lengths for the full mesh block: prepare_input pads each up to compress_rate*sp,
+# so arbitrary lengths are allowed. Deliberately mixes rate-aligned, tile-aligned-only and fully ragged
+# values to exercise the pad + trim + mask path end to end.
+_MESH_FORWARD_SEQ = [128, 129, 641, 900, 1025, 1500, 2048, 3000, 4096, 5120]
+
+
+@pytest.mark.parametrize("seq_len", _MESH_FORWARD_SEQ, ids=[f"seq{s}" for s in _MESH_FORWARD_SEQ])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    _MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+def test_hca_forward_mesh(mesh_device, device_params, num_links, topology, seq_len):
+    """Full TtHCA block on the mesh for an ARBITRARY prompt length: prepare_input host-pads the seq to
+    compress_rate*sp, the block runs SP+TP sharded end to end, and the first seq_len output rows are
+    compared against the unpadded DeepseekV4Attention.forward. This is where padding-awareness is proven:
+    pad-derived compressed entries are trimmed and pad key/query rows are masked out."""
+    torch.manual_seed(42)
+
+    batch = 1
+    config = _flash_config()
+    config._attn_implementation = "eager"  # V4 is eager-only (sinks); force it for the reference
+    sw = config.sliding_window
+    sp_factor = mesh_device.shape[0]
+    compress_rate = config.compress_rates["heavily_compressed_attention"]
+
+    ref = DeepseekV4Attention(config, layer_idx=0).eval()
+    assert ref.compressor is not None, "layer_idx=0 must be a heavily_compressed_attention layer"
+    with torch.no_grad():
+        ref.q_a_norm.weight.uniform_(0.5, 1.5)
+        ref.kv_norm.weight.uniform_(0.5, 1.5)
+        ref.sinks.normal_(0.0, 1.0)
+        ref.compressor.position_bias.normal_(0.0, 0.02)
+        ref.compressor.kv_norm.weight.uniform_(0.5, 1.5)
+
+    hidden = torch.randn(batch, seq_len, config.hidden_size)
+    position_ids = torch.arange(seq_len).unsqueeze(0).expand(batch, -1)
+
+    with torch.no_grad():
+        cos, sin = ref.compressor.rotary_emb(hidden, position_ids=position_ids, layer_type="compress")
+        i = torch.arange(seq_len).view(seq_len, 1)
+        j = torch.arange(seq_len).view(1, seq_len)
+        attn_mask = torch.zeros(seq_len, seq_len).masked_fill(~((j <= i) & (i - j < sw)), float("-inf"))
+        attn_mask = attn_mask.view(1, 1, seq_len, seq_len).expand(batch, 1, seq_len, seq_len)
+        out_ref, _ = ref(hidden, {"compress": (cos, sin)}, position_ids, attn_mask, past_key_values=None)
+
+    tt_model = TtHCA.from_reference(
+        mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology, ccl_num_links=num_links
+    )
+
+    hidden_padded, seq_len_actual = TtHCA.prepare_input(hidden, sp_factor, compress_rate)
+    logger.debug(f"mesh={tuple(mesh_device.shape)} S_real={seq_len_actual} S_pad={hidden_padded.shape[1]}")
+    ms = tuple(mesh_device.shape)
+    tt_input = ttnn.from_torch(
+        hidden_padded.unsqueeze(1),
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=ms, dims=(2, 3)),  # seq @ SP, hidden @ TP
+    )
+
+    signpost("HCA_START")
+    out_tt = tt_model(tt_input, position_ids, seq_len_actual=seq_len_actual)
+    signpost("HCA_END")
+    out = ttnn.to_torch(
+        out_tt, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=ms, dims=(2, 3))
+    ).squeeze(
+        1
+    )  # sp -> seq (dim2), tp -> hidden (dim3)
+    out = out[:, :seq_len_actual]  # drop the padded tail
+    logger.debug(f"TTNN output shape: {tuple(out.shape)}")
+
+    assert out.shape == out_ref.shape, f"shape mismatch: tt {tuple(out.shape)} vs ref {tuple(out_ref.shape)}"
+
+    pcc_passed, pcc_message = assert_with_pcc(out_ref.to(torch.float32), out.to(torch.float32), pcc=0.998)
+    logger.debug(f"mesh HCA block PCC: {pcc_message}")
+    assert pcc_passed, f"HCA mesh block PCC test failed: {pcc_message}"
+
+    logger.debug("PCC test passed!")
