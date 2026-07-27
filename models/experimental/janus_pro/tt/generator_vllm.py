@@ -204,6 +204,33 @@ class JanusForConditionalGeneration(JanusMultimodalGenerator, SupportsMultiModal
             images += [t[i : i + 1] for i in range(t.shape[0])]
         return images or None
 
+    def _get_prefill_user_page_table(
+        self,
+        page_table,
+        kv_cache,
+        prefill_len,
+        trace_enabled=False,
+        prefill_seq_len=None,
+        use_batched_prefill=False,
+        user_id=None,
+        padded_batch_size=None,
+        use_full_prompt_len=False,
+    ):
+        # Janus pads prefill compute to a power of two, while vLLM allocates KV
+        # blocks only for the real prompt. Exposing padded columns can reuse
+        # stale block IDs and overwrite live cache entries.
+        return super()._get_prefill_user_page_table(
+            page_table,
+            kv_cache,
+            prefill_len,
+            trace_enabled=trace_enabled,
+            prefill_seq_len=prefill_seq_len,
+            use_batched_prefill=use_batched_prefill,
+            user_id=user_id,
+            padded_batch_size=padded_batch_size,
+            use_full_prompt_len=True,
+        )
+
     def prefill_forward(self, *args, **kwargs):
         tokens = kwargs["tokens"]
         prompt_lens = kwargs["prompt_lens"]
@@ -232,10 +259,6 @@ class JanusForConditionalGeneration(JanusMultimodalGenerator, SupportsMultiModal
             page_table=page_table,
             kv_cache=kv_cache,
         )
-
-    def decode_forward(self, *args, **kwargs):
-        # Image tokens only exist in prefill; decode is the plain text path.
-        return super(JanusMultimodalGenerator, self).decode_forward(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
