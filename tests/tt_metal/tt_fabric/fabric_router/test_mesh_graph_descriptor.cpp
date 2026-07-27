@@ -8,6 +8,7 @@
 #include <vector>
 #include <string>
 #include <cstdio>
+#include <cstdlib>
 #include <set>
 #include <map>
 #include <unordered_set>
@@ -1899,13 +1900,22 @@ TEST(MeshGraphDescriptorTests, PinningsMeshIdRegexEvenOddParity) {
     }
 }
 
-TEST(MeshGraphDescriptorTests, PinningsRegex48StageFileExpandsTo48Groups) {
-    // The real pipeline_sweep 48-stage file uses two even/odd regex entries that must expand back to
-    // 48 groups (24 even + 24 odd), 5 corner chips each, with parity-dependent asic_location.
-    const std::filesystem::path path =
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/pipeline_sweep/"
-        "sweep_4x4_pipeline_48stage_mesh_graph_descriptor.textproto";
-    MeshGraphDescriptor desc(path);
+TEST(MeshGraphDescriptorTests, PinningsRegex48StageGeneratedExpandsTo48Groups) {
+    // Generate a 48-stage 4x4 pipeline MGD with pinnings via the sweep script, then verify regex expansion.
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME must be set";
+
+    const std::filesystem::path mgd_path =
+        std::filesystem::temp_directory_path() / "sweep_4x4_pipeline_48stage_mesh_graph_descriptor.textproto";
+    const std::string gen_cmd = std::string("python3 ") + tt_metal_home +
+                                "/tests/scripts/multihost/gen_pipeline_sweep_mgds.py"
+                                " --shape 4x4 --stages 48 --hosts 2 --pinnings"
+                                " --out " +
+                                mgd_path.string();
+    ASSERT_EQ(std::system(gen_cmd.c_str()), 0) << "Failed to generate pipeline sweep MGD: " << gen_cmd;
+    ASSERT_TRUE(std::filesystem::exists(mgd_path));
+
+    MeshGraphDescriptor desc(mgd_path);
     const auto& pinnings = desc.get_pinnings();
     ASSERT_EQ(pinnings.size(), 48u) << "48 per-mesh groups from 2 regex entries";
 
