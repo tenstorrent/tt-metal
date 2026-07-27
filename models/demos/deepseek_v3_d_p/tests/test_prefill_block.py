@@ -32,7 +32,7 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import load_moe_weights_from_hf
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
-from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import indexer_layer_is_reused, num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
@@ -854,6 +854,17 @@ def test_kimi_prefill_block(
 GLM_BLOCK_OUTPUT_PCC = 0.98
 
 
+def _first_full_moe_layer(config):
+    # First MoE layer (>= first_k_dense_replace) that OWNS a full indexer. A GLM-5.2 "shared" indexer
+    # layer reuses a prior full layer's top-k, which an isolated single block cannot supply; a full
+    # layer computes its own. glm_5_1 has no indexer_types -> every layer is full -> returns
+    # first_k_dense_replace (3). glm_5_2 layers 3-5 are shared -> returns 6.
+    idx = config.first_k_dense_replace
+    while indexer_layer_is_reused(config, idx):
+        idx += 1
+    return idx
+
+
 def _glm_norm_weight(hidden, seed):
     return (torch.randn(hidden, generator=torch.Generator().manual_seed(seed)) * 0.1 + 1.0).to(torch.bfloat16)
 
@@ -948,9 +959,7 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
-@pytest.mark.parametrize(
-    "layer_type, layer_idx", [("dense", 0), ("moe", GLM51Config.NUM_DENSE_LAYERS)], ids=["dense", "moe"]
-)
+@pytest.mark.parametrize("layer_type", ["dense", "moe"], ids=["dense", "moe"])
 @pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
@@ -963,7 +972,6 @@ def test_glm_prefill_block(
     topology,
     seq_len,
     layer_type,
-    layer_idx,
     model_path,
     weight_cache_path,
 ):
@@ -971,13 +979,10 @@ def test_glm_prefill_block(
     is_moe = layer_type == "moe"
     config = config_only
     config.max_seq_len = seq_len
-    # GLM-5.2 MoE single-block: skipped. The block feeds a RANDOM input, which drives GLM's
-    # near-degenerate top-8 MoE gate to select different experts on device vs the CPU reference at an
-    # isolated layer (block PCC collapses to ~0.1 though the same layer scores ~0.995 in-context in
-    # test_glm_prefill_transformer). Not an op/weight bug — a random-input artifact of the degenerate
-    # gate. GLM-5.2 MoE is covered by test_glm_prefill_transformer; the device gate by test_ttnn_moe.
-    if is_moe and getattr(config, "indexer_types", None) is not None:
-        pytest.skip("GLM-5.2 single-block MoE unreliable under degenerate gate on random input (see comment)")
+    # MoE runs at the first FULL-indexer MoE layer so the block owns its top-k: a GLM-5.2 "shared"
+    # indexer layer reuses a prior full layer's indices, which an isolated single block cannot supply
+    # (ReuseIndexer.forward raises). glm_5_1 -> first_k_dense_replace (3); glm_5_2 -> 6 (3-5 shared).
+    layer_idx = _first_full_moe_layer(config) if is_moe else 0
     hidden = config.hidden_size
     sp_axis, tp_axis = 0, 1
     mesh_shape = list(mesh_device.shape)
@@ -994,6 +999,17 @@ def test_glm_prefill_block(
         init_checker(effective_cache)  # required before check_cache_complete / pattern_exists
         use_pretrained = TtPrefillBlock.check_cache_complete(effective_cache, layer_idx, not is_moe, experts_per_chip)
     logger.info(f"[glm block {layer_type}] use_pretrained={use_pretrained} (ttnn cache={effective_cache})")
+
+    # Real-weight isolated MoE block: skip. A random block input drives GLM's trained near-degenerate
+    # top-8 gate to pick different experts on device vs the CPU reference (block PCC collapses to ~0.1),
+    # though the same layer scores ~0.995 in-context in test_glm_prefill_transformer. Not an op/weight
+    # bug — a real-weight-gate x random-input artifact. On RANDOM weights the gate is non-degenerate and
+    # the block matches (~0.99), so CI (empty cache -> random) still exercises the MoE path here; the
+    # real-weight MoE gate is covered by test_glm_prefill_transformer and test_ttnn_moe.
+    if is_moe and use_pretrained:
+        pytest.skip(
+            "isolated real-weight MoE block diverges under the degenerate top-8 gate on random input (see comment)"
+        )
 
     if use_pretrained:
         # Device loads real weights from the cache; reference uses matching host weights from the checkpoint.

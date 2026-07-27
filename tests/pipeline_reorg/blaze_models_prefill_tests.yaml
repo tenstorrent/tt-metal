@@ -180,17 +180,18 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - DSA MLA (GLM-5.1 + GLM-5.2 indexer reuse)"
+- name: "Blaze - DSA MLA (GLM-5.2)"
   cmd: |
     export MESH_DEVICE=TG
-    export GLM51_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/glm_5_1_mla_ref_cache
+    export GLM52_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/glm_5_2_mla_ref_cache
     export DS_SPARSE_FABRIC=fabric2d
-    # GLM-5.1 sparse MLA (indexer + sparse SDPA) vs the MLACPU reference, plus the GLM-5.2 indexer-reuse
-    # equivalence case (inject a prior-layer top-k == recompute). Random weights + on-the-fly CPU truth
-    # -> no staged weights. Reuse shares the warm sparse-MLA JIT for this job (same op graph; glm_5_2 == glm_5_1 dims).
+    # GLM-5.2 sparse MLA (indexer + sparse SDPA) vs the MLACPU reference. The glm_5_2 variant sweep at the
+    # 8x4 anchor already includes the indexer-reuse equivalence case (SPARSE_REUSE_CASES is glm_5_2-only),
+    # so no separate -k clause is needed. Random weights + on-the-fly CPU truth -> no staged weights.
+    # (The glm_5_1-only kv_only case is intentionally not run here; GLM-5.1 is fully retired from CI.)
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "(glm_5_1 and 8x4 and fabric2d) or indexer_reuse" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "glm_5_2 and 8x4 and fabric2d" -vvv --tb=short
     '
   test_type: dsa_mla_glm
   test_group: module
@@ -204,7 +205,7 @@
 - name: "Blaze - GLM MoE"
   cmd: |
     export MESH_DEVICE=TG
-    # GLM-5.1 256-expert MoE (device gate, DEVICE_FP32) vs the CPU MoE reference; random weights.
+    # GLM-5.2 256-expert MoE (device gate, DEVICE_FP32) vs the CPU MoE reference; random weights.
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe -k "mesh-8x4 and (pcc-device-glm-256 or perf-device-glm-256)" -vvv --tb=short
@@ -218,20 +219,20 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - GLM-5.1 Prefill Block"
+- name: "Blaze - GLM-5.2 Prefill Block"
   cmd: |
     export MESH_DEVICE=TG
-    export GLM51_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.1-FP8/
-    export TT_GLM51_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/GLM-5.1-Cache/CI
-    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/glm_51_code_debug_55k_vllm
-    export GLM51_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/glm_5_1_mla_ref_cache
-    # Fused GLM-5.1 decoder block (sparse-SDPA MLA + norm/residual + dense/MoE FFN, layers 0 and 3) vs the
-    # composed CPU reference on the fabric2d transport. Real weights via the prebuilt ttnn cache when present
-    # (random fallback otherwise; never rebuilds). -k glm51 so the shared glm_5_2 parametrization is not run
-    # here: its MoE block is skipped under the degenerate gate, and GLM-5.2 is covered by the DSA-MLA/MoE jobs.
+    export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8/
+    export TT_GLM52_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/GLM-5.2-Cache/CI
+    # Fused GLM-5.2 decoder block (sparse-SDPA MLA + norm/residual + dense/MoE FFN, layers 0 and 6) vs the
+    # composed CPU reference on the fabric2d transport. The CI ttnn cache dir is empty, so both blocks build
+    # RANDOM weights (never rebuilds): the dense block matches directly, and the MoE block runs at the first
+    # FULL-indexer layer (6; GLM-5.2 layers 3-5 reuse a prior layer's indexer top-k, which an isolated block
+    # cannot supply) where the non-degenerate random gate agrees with the reference. -k glm52 runs both the
+    # dense and MoE parametrizations.
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_glm_prefill_block -k "seq5120 and fabric2d-mesh-8x4 and glm51" -vvv --tb=short --timeout=300
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_glm_prefill_block -k "seq5120 and fabric2d-mesh-8x4 and glm52" -vvv --tb=short --timeout=300
     '
   test_type: glm_prefill_block
   test_group: module
