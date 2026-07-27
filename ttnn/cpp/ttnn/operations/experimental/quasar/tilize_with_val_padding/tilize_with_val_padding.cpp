@@ -83,7 +83,7 @@ ttnn::Tensor tilize_with_val_padding(
     // Handle empty tensors - no tiling needed for tensors with no data
     if (input_tensor.physical_volume() == 0) {
         // Create output tensor with same properties
-        TensorSpec spec(
+        tt::tt_metal::TensorSpec spec(
             output_padded_shape,
             TensorLayout(
                 output_dtype.value_or(input_tensor.dtype()),
@@ -133,7 +133,7 @@ ttnn::Tensor tilize_with_val_padding(
     // Handle empty tensors - no tiling needed for tensors with no data
     if (input_tensor.physical_volume() == 0) {
         // Create output tensor with same properties
-        TensorSpec spec(
+        tt::tt_metal::TensorSpec spec(
             ttnn::Shape{output_padded_shape},
             TensorLayout(
                 output_dtype.value_or(input_tensor.dtype()),
@@ -172,7 +172,7 @@ ttnn::Tensor tilize_with_zero_padding(
     // Handle empty tensors - no tiling needed for tensors with no data
     if (input_tensor.physical_volume() == 0) {
         // Create output tensor with same properties
-        TensorSpec spec(
+        tt::tt_metal::TensorSpec spec(
             padded_shape,
             TensorLayout(
                 output_dtype.value_or(input_tensor.dtype()),

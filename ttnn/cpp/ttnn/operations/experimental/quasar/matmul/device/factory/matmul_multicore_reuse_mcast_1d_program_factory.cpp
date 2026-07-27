@@ -86,7 +86,7 @@ uint32_t get_preferred_noc(
 
 MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_program_and_create_override_variables(
     tt_metal::Program& program,
-    const tt::tt_metal::Tensor& a,
+    const ttnn::Tensor& a,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -1105,7 +1105,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
 MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_program_and_create_override_variables(
     tt_metal::Program& program,
-    const tt::tt_metal::Tensor& a,
+    const ttnn::Tensor& a,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -1955,8 +1955,8 @@ enum class CORE_TYPE : uint32_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 }
 
 MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0_program_and_create_override_variables(
     tt_metal::Program& program,
-    const tt::tt_metal::Tensor& a,
-    const std::vector<tt::tt_metal::Tensor>& b_tensors,
+    const ttnn::Tensor& a,
+    const std::vector<ttnn::Tensor>& b_tensors,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -2923,7 +2923,7 @@ void override_program_parameters(
 // that the factory's create_descriptor entry has been ported to create_program_artifacts (Metal 2.0).
 // [[maybe_unused]] suppresses -Wunused-function until it is removed in a follow-up cleanup.
 [[maybe_unused]] static ProgramDescriptor create_program_mcast_in0_descriptor(
-    const tt::tt_metal::Tensor& a,
+    const ttnn::Tensor& a,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -3948,7 +3948,7 @@ void override_program_parameters(
 // See note on create_program_mcast_in0_descriptor: legacy builder, no longer called after the
 // create_program_artifacts port. [[maybe_unused]] suppresses -Wunused-function pending removal.
 [[maybe_unused]] static ProgramDescriptor create_program_mcast_in1_descriptor(
-    const tt::tt_metal::Tensor& a,
+    const ttnn::Tensor& a,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -5341,7 +5341,7 @@ m2::KernelSpec make_compute_kernel(
 // mcast_in0 (ProgramArtifacts). Mirrors create_program_mcast_in0_descriptor.
 // ---------------------------------------------------------------------------------------------------
 ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
-    const tt::tt_metal::Tensor& a,
+    const ttnn::Tensor& a,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -6399,7 +6399,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
 // mcast_in1 (ProgramArtifacts). Mirrors create_program_mcast_in1_descriptor.
 // ---------------------------------------------------------------------------------------------------
 ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
-    const tt::tt_metal::Tensor& a,
+    const ttnn::Tensor& a,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,

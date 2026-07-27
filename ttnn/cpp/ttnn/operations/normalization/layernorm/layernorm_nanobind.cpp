@@ -293,7 +293,7 @@ void bind_normalization_layernorm_device_operation(nb::module_& mod) {
                 tensor_args (LayerNormInputs): Input tensors.
 
             Returns:
-                ttnn.TensorSpec: The output tensor specification.
+                ttnn.tt::tt_metal::TensorSpec: The output tensor specification.
             )doc")
         .def_static(
             "select_program_factory",

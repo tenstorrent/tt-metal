@@ -305,12 +305,13 @@ ExpRingJointSDPAResultSpec ExpRingJointSDPADeviceOperation::compute_output_specs
     stats_shape[2] = (input.padded_shape()[2] + joint_padded_seq) * 2;
 
     return {
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             input.logical_shape(),
             TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             joint_output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
-        TensorSpec(stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
+        tt::tt_metal::TensorSpec(
+            stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
 }
 
 ExpRingJointSDPAResult ExpRingJointSDPADeviceOperation::create_output_tensors(

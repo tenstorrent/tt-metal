@@ -211,8 +211,6 @@ class TtMoe(LightweightModule):
         self.seq_len_per_chip = seq_len_per_chip
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
-        self.overlap_shared_expert_with_dispatch = overlap_shared_expert_with_dispatch
-
         # Unpack row/col CCL config
         if isinstance(num_links, tuple):
             self.row_num_links, self.col_num_links = num_links
@@ -223,6 +221,29 @@ class TtMoe(LightweightModule):
             self.row_topology, self.col_topology = topology
         else:
             self.row_topology = self.col_topology = topology
+
+        self.overlap_shared_expert_with_dispatch = overlap_shared_expert_with_dispatch
+
+        # The shared expert, WHEN OVERLAPPED with dispatch, runs on disjoint Tensix sub-devices that
+        # still SHARE the EDM fabric routers. In that case its TP-axis reduce-scatter must stay Linear
+        # even when the TP axis is a ring: a *ring* reduce-scatter concurrent with dispatch makes the
+        # two ops' wrap-link traffic form a cyclic EDM buffer-credit dependency and deadlocks (the
+        # shared-expert reduce_scatter wedges on its batch_ready_sem barrier at
+        # ring_reduce_scatter_minimal_async_writer.cpp). This mirrors the proven FABRIC_2D_TORUS_Y
+        # path, where the overlapped shared expert is Linear (col axis unwrapped) while dispatch
+        # rings on SP. The forcing is gated on the overlap flag: with overlap disabled the reduce-
+        # scatter runs alone (no concurrent dispatch on the shared routers), so Ring is safe and kept.
+        # Every other TP-axis collective (MLA, dense FFN, gate, pre-dispatch all-gather, post-combine
+        # reduce) is never overlapped and keeps col_topology (Ring).
+        force_shared_expert_linear = (
+            self.overlap_shared_expert_with_dispatch and self.col_topology == ttnn.Topology.Ring
+        )
+        self.shared_expert_topology = ttnn.Topology.Linear if force_shared_expert_linear else self.col_topology
+        if force_shared_expert_linear:
+            logger.info(
+                "TtMoe: shared-expert reduce-scatter forced to Linear (overlapped with dispatch on a "
+                "TP-ring fabric) to avoid an EDM deadlock; other TP collectives keep Ring"
+            )
 
         # Always create dispatch table at init (static tensor) - needed by gate and dispatch module
         expert_dispatch_table = ExpertMapping.create_dispatch_table(
@@ -240,6 +261,8 @@ class TtMoe(LightweightModule):
             route_scale=route_scale,
         )
         gate_config.ccl_config["NUM_LINKS"] = self.col_num_links if isinstance(num_links, tuple) else num_links
+        # The gate all-reduce runs on the TP axis (cluster_axis=TP_AXIS), so it follows col_topology.
+        gate_config.ccl_config["TOPOLOGY"] = self.col_topology
 
         # Handle cache-only case (gate_weights=None)
         if gate_weights is not None:
@@ -288,7 +311,7 @@ class TtMoe(LightweightModule):
         # When overlap is disabled, both ops run sequentially on the full grid and no
         # sub-device manager is created.
         # ========================================
-        if overlap_shared_expert_with_dispatch:
+        if self.overlap_shared_expert_with_dispatch:
             dispatch_sd_rows = 1
             grid = mesh_device.compute_with_storage_grid_size()
             grid_x, grid_y = grid.x, grid.y
@@ -390,7 +413,7 @@ class TtMoe(LightweightModule):
             hidden_dim=hidden_dim,
             torch_weights=shared_expert_weights,
             num_links=self.col_num_links,
-            topology=self.col_topology,
+            topology=self.shared_expert_topology,
             activations_dtype=shared_expert_activations_dtype,
             weights_dtype=shared_expert_weights_dtype,
             weight_cache_path=weight_cache_path,

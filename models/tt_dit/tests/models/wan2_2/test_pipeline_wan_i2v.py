@@ -39,19 +39,16 @@ def create_fractal_image(width: int, height: int) -> Image.Image:
     [
         [(2, 2), (2, 2), 0, 1, 2, False, line_params_req_exact_devices, ttnn.Topology.Linear, True],
         [(2, 4), (2, 4), 0, 1, 1, True, line_params_req_exact_devices, ttnn.Topology.Linear, True],
-        # BH on 2x4 with dynamic_load to avoid init-time DRAM OOM
         [(2, 4), (2, 4), 1, 0, 2, True, line_params_req_exact_devices, ttnn.Topology.Linear, False],
-        # WH (ring) on 4x8
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params_req_exact_devices, ttnn.Topology.Ring, True],
-        # BH (linear) on 4x8
         [(4, 8), (4, 8), 1, 0, 2, False, line_params_req_exact_devices, ttnn.Topology.Linear, False],
     ],
     ids=[
-        "2x2sp0tp1",
-        "2x4sp0tp1",
-        "bh_2x4sp1tp0",
-        "wh_4x8sp1tp0",
-        "bh_4x8sp1tp0",
+        "2x2sp0tp1nl2_linear_is_fsdp1",
+        "2x4sp0tp1nl1_linear_is_fsdp1",
+        "2x4sp1tp0nl2_linear_is_fsdp0",  # BH on 2x4 with dynamic_load to avoid init-time DRAM OOM
+        "4x8sp1tp0nl4_ring_is_fsdp1",  # WH (ring) on 4x8
+        "4x8sp1tp0nl2_linear_is_fsdp0",  # BH (linear) on 4x8
     ],
     indirect=["mesh_device", "device_params"],
 )
