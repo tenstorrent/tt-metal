@@ -117,6 +117,8 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         if constexpr (fuse_pre_add) {
             for (auto block : generic::blocks(Wt, blk)) {
+                const auto block_shape =
+                    ckl::EltwiseShape::tiles(block.size(), ckl::BlockingSettings{block.full_block_size()});
                 if constexpr (welford_fp32_alias) {
                     cb_x_welford_obj.reserve_back(block.full_block_size());
                 }
@@ -124,7 +126,7 @@ void kernel_main() {
                     ckl::input(cb_in, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
                     ckl::input(cb_inb, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
                     ckl::output(cb_x, ckl::OutputLifecycle::Chunked),
-                    ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk));
+                    ckl::BroadcastDim::None>(block_shape);
                 if constexpr (welford_fp32_alias) {
                     cb_x_welford_obj.push_back(block.full_block_size());
                 }
@@ -287,8 +289,10 @@ void kernel_main() {
         // Remainder of the layernorm operation
         cb_ex2pe_obj.wait_front(onetile);
         for (auto block : generic::blocks(Wt, blk)) {
+            const auto block_shape =
+                ckl::EltwiseShape::tiles(block.size(), ckl::BlockingSettings{block.full_block_size()});
             ckl::eltwise_chain(
-                ckl::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk),
+                block_shape,
                 ckl::BinaryFpu<
                     ckl::input(
                         cb_xmm,
@@ -304,7 +308,7 @@ void kernel_main() {
             if constexpr (do_gamma) {
                 constexpr uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
                 ckl::eltwise_chain(
-                    ckl::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk),
+                    block_shape,
                     ckl::BinaryFpu<
                         ckl::input(cb_fusion, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
                         ckl::input(
@@ -319,7 +323,7 @@ void kernel_main() {
             }
             if constexpr (do_beta) {
                 ckl::eltwise_chain(
-                    ckl::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk),
+                    block_shape,
                     ckl::BinaryFpu<
                         ckl::input(cb_fusion, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
                         ckl::input(

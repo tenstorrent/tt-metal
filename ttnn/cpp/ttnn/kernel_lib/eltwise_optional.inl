@@ -69,6 +69,7 @@ ALWI void apply_runtime_branch(
          ht,
          wt,
          inner_count,
+         inner_count,
          chain_lane_width,
          Ht,
          Wt),

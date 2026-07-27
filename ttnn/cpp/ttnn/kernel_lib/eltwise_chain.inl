@@ -55,21 +55,73 @@ inline constexpr OutputLifecycle OutputLifecycle::ReserveNonePushEnd = {ReserveP
 inline constexpr OutputLifecycle OutputLifecycle::L1Accumulation = {ReservePolicy::OneUpfront, PushPolicy::OneAtEnd};
 inline constexpr OutputLifecycle OutputLifecycle::DestAccumulation = {ReservePolicy::PerOuter, PushPolicy::PerOuter};
 
-constexpr EltwiseShape::EltwiseShape(uint32_t H, uint32_t W, uint32_t blk) : Ht(H), Wt(W), block_size(blk) {}
+constexpr BlockingSettings::BlockingSettings(uint32_t block_size, BlockTailSync tail_sync) :
+    block_size(block_size), total_tiles(0), tail_sync(tail_sync) {}
 
-constexpr EltwiseShape::EltwiseShape(uint32_t n_tiles) : Ht(1), Wt(n_tiles), block_size(1) {}
+constexpr BlockingSettings::BlockingSettings(uint32_t block_size, uint32_t total_tiles, BlockTailSync tail_sync) :
+    block_size(block_size), total_tiles(total_tiles), tail_sync(tail_sync) {}
 
-constexpr EltwiseShape EltwiseShape::tiles(uint32_t n, uint32_t blk) { return {1, n, blk}; }
+constexpr uint32_t BlockingSettings::total_tiles_or(uint32_t shape_total_tiles) const {
+    return total_tiles == 0 ? shape_total_tiles : total_tiles;
+}
 
-constexpr EltwiseShape EltwiseShape::grid(uint32_t H, uint32_t W, uint32_t blk) { return {H, W, blk}; }
+constexpr uint32_t BlockingSettings::num_blocks(uint32_t Ht, uint32_t Wt) const {
+    ASSERT(block_size > 0);
+    ASSERT(Ht > 0);
+    ASSERT(Wt > 0);
+    ASSERT(total_tiles_or(Ht * Wt) == Ht * Wt);
+    return Ht * ((Wt / block_size) + (Wt % block_size != 0));
+}
 
-constexpr EltwiseShape EltwiseShape::of(uint32_t r, uint32_t c) { return {r, c, 1}; }
+constexpr uint32_t BlockingSettings::physical_tiles(uint32_t Ht, uint32_t Wt) const {
+    return num_blocks(Ht, Wt) * block_size;
+}
 
-constexpr EltwiseShape EltwiseShape::row(uint32_t c) { return {1, c, 1}; }
+constexpr uint32_t BlockingSettings::last_block_size(uint32_t Ht, uint32_t Wt) const {
+    ASSERT(block_size > 0);
+    ASSERT(Ht > 0);
+    ASSERT(Wt > 0);
+    ASSERT(total_tiles_or(Ht * Wt) == Ht * Wt);
+    const uint32_t remainder = Wt % block_size;
+    return remainder == 0 ? block_size : remainder;
+}
 
-constexpr EltwiseShape EltwiseShape::col(uint32_t r) { return {r, 1, 1}; }
+constexpr EltwiseShape::EltwiseShape(uint32_t H, uint32_t W, uint32_t blk) :
+    Ht(H), Wt(W), block_size(blk), tail_sync(BlockTailSync::ValidTiles), blocking_total_tiles(0) {}
 
-constexpr EltwiseShape EltwiseShape::single() { return {1, 1, 1}; }
+constexpr EltwiseShape::EltwiseShape(uint32_t n_tiles) :
+    Ht(1), Wt(n_tiles), block_size(1), tail_sync(BlockTailSync::ValidTiles), blocking_total_tiles(0) {}
+
+constexpr TypedEltwiseShape<EltwiseShapeKind::Tiles> EltwiseShape::tiles(uint32_t n, uint32_t blk) {
+    return {1, n, blk};
+}
+
+constexpr TypedEltwiseShape<EltwiseShapeKind::Tiles> EltwiseShape::tiles(uint32_t n, BlockingSettings blocking) {
+    TypedEltwiseShape<EltwiseShapeKind::Tiles> shape{1, n, blocking.block_size};
+    shape.tail_sync = blocking.tail_sync;
+    shape.blocking_total_tiles = blocking.total_tiles_or(n);
+    return shape;
+}
+
+constexpr TypedEltwiseShape<EltwiseShapeKind::Grid> EltwiseShape::grid(uint32_t H, uint32_t W, uint32_t blk) {
+    return {H, W, blk};
+}
+
+constexpr TypedEltwiseShape<EltwiseShapeKind::Grid> EltwiseShape::grid(
+    uint32_t H, uint32_t W, BlockingSettings blocking) {
+    TypedEltwiseShape<EltwiseShapeKind::Grid> shape{H, W, blocking.block_size};
+    shape.tail_sync = blocking.tail_sync;
+    shape.blocking_total_tiles = blocking.total_tiles_or(H * W);
+    return shape;
+}
+
+constexpr TypedEltwiseShape<EltwiseShapeKind::Grid> EltwiseShape::of(uint32_t r, uint32_t c) { return {r, c, 1}; }
+
+constexpr TypedEltwiseShape<EltwiseShapeKind::Grid> EltwiseShape::row(uint32_t c) { return {1, c, 1}; }
+
+constexpr TypedEltwiseShape<EltwiseShapeKind::Grid> EltwiseShape::col(uint32_t r) { return {r, 1, 1}; }
+
+constexpr TypedEltwiseShape<EltwiseShapeKind::Tiles> EltwiseShape::single() { return {1, 1, 1}; }
 
 constexpr bool is_legal_input_lifecycle(InputLifecycle lc) noexcept {
     return lc == InputLifecycle::Streaming || lc == InputLifecycle::Chunked || lc == InputLifecycle::Bulk ||
@@ -176,7 +228,8 @@ struct OutputSpecConfig {
     using ReconfigField = ConfigField<DataFormatReconfig, PushField::end, DataFormatReconfig::Enabled>;
     using ReluField = ConfigField<PackRelu, ReconfigField::end, PackRelu::Zero>;
     using L1AccumulationField = ConfigField<L1Accumulation, ReluField::end, L1Accumulation::SeedFirst>;
-    using DestAccumulationField = ConfigField<DestAccumulation, L1AccumulationField::end, DestAccumulation::Enabled>;
+    using DestAccumulationField =
+        ConfigField<DestAccumulation, L1AccumulationField::end, DestAccumulation::WholeShape>;
     using OffsetField = ConfigField<TileOffset, DestAccumulationField::end, TileOffset::Strided>;
 
     static constexpr uint32_t used_bits = OffsetField::end;
@@ -312,7 +365,7 @@ struct BinaryFpuConfig {
         ConfigField<uint16_t, BroadcastField::end, static_cast<uint16_t>(InputSpecConfig::storage_mask)>;
     using BInputField = ConfigField<uint16_t, AInputField::end, static_cast<uint16_t>(InputSpecConfig::storage_mask)>;
     using DstField = ConfigField<Dst, BInputField::end, Dst::D15>;
-    using AccumulationField = ConfigField<DestAccumulation, DstField::end, DestAccumulation::Enabled>;
+    using AccumulationField = ConfigField<DestAccumulation, DstField::end, DestAccumulation::WholeShape>;
 
     uint32_t bits;
 
@@ -984,7 +1037,7 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
             Policy == OutputLifecycle::CallerManaged,
         "PackTile: DEST accumulation requires OutputLifecycle::DestAccumulation or CallerManaged");
     static_assert(
-        Policy != OutputLifecycle::DestAccumulation || DestAccumulationMode == DestAccumulation::Enabled,
+        Policy != OutputLifecycle::DestAccumulation || DestAccumulationMode != DestAccumulation::Disabled,
         "PackTile: OutputLifecycle::DestAccumulation requires DEST accumulation");
     static_assert(
         L1AccumulationMode == L1Accumulation::Disabled || DestAccumulationMode == DestAccumulation::Disabled,
@@ -1010,7 +1063,7 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
     static constexpr bool uses_l1_accumulation = L1AccumulationMode != L1Accumulation::Disabled;
     static constexpr bool seeds_l1_accumulation = L1AccumulationMode == L1Accumulation::SeedFirst;
     static constexpr bool manages_l1_accumulation_lifecycle = Policy == OutputLifecycle::L1Accumulation;
-    static constexpr bool uses_dest_accumulation_lifecycle = DestAccumulationMode == DestAccumulation::Enabled;
+    static constexpr bool uses_dest_accumulation_lifecycle = DestAccumulationMode != DestAccumulation::Disabled;
     static constexpr bool manages_dest_accumulation_lifecycle = Policy == OutputLifecycle::DestAccumulation;
     static constexpr bool uses_pack_relu = Relu != PackRelu::Disabled;
     static constexpr bool is_upfront = (Policy == OutputLifecycle::Bulk);
@@ -1152,7 +1205,7 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
         is_one_of_v<APolicy, InputLifecycle::Bulk, InputLifecycle::HeldBulk, InputLifecycle::Pipelined> ||
         is_one_of_v<BPolicy, InputLifecycle::Bulk, InputLifecycle::HeldBulk, InputLifecycle::Pipelined>;
     static constexpr bool same_dfb = (CbA == CbB);
-    static constexpr bool uses_dest_accumulation = (Accumulation == DestAccumulation::Enabled);
+    static constexpr bool uses_dest_accumulation = (Accumulation != DestAccumulation::Disabled);
     static constexpr Dst accumulated_dst_slot = DstSlot;
 
     // Per-side local-vs-absolute index resolution. When the two operands declare
@@ -1194,7 +1247,7 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
     static ALWI void init() {
         // Op-specific init.
         if constexpr (Bcast == BroadcastDim::None) {
-            constexpr bool acc_to_dest = Accumulation == DestAccumulation::Enabled;
+            constexpr bool acc_to_dest = Accumulation != DestAccumulation::Disabled;
             if constexpr (Op == BinaryFpuOp::Add) {
                 add_tiles_init(CbA, CbB, acc_to_dest);
             } else if constexpr (Op == BinaryFpuOp::Sub) {
@@ -1214,10 +1267,10 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
                                                            : ckernel::EltwiseBinaryType::ELWMUL;
             if constexpr (Op == BinaryFpuOp::Mul) {
                 MATH((llk_math_eltwise_binary_init<et, bt, MATH_FIDELITY>(
-                    CbA, CbB, Accumulation == DestAccumulation::Enabled)));
+                    CbA, CbB, Accumulation != DestAccumulation::Disabled)));
             } else {
                 MATH((llk_math_eltwise_binary_init<et, bt, MathFidelity::LoFi>(
-                    CbA, CbB, Accumulation == DestAccumulation::Enabled)));
+                    CbA, CbB, Accumulation != DestAccumulation::Disabled)));
             }
             UNPACK((llk_unpack_AB_init<bt>(CbA, CbB)));
         }
@@ -1253,7 +1306,7 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
         const uint32_t b_idx =
             tile_base_value<OffsetB>(b.tile_base) + detail::idx<BIndex, OffsetB>(b_flat, ht, b_wt, b.row_stride);
         const uint32_t dst =
-            Accumulation == DestAccumulation::Enabled ? to_u32(DstSlot) : to_u32(DstSlot) + slot_offset;
+            Accumulation != DestAccumulation::Disabled ? to_u32(DstSlot) : to_u32(DstSlot) + slot_offset;
         if constexpr (Bcast == BroadcastDim::None) {
             if constexpr (Op == BinaryFpuOp::Add) {
                 add_tiles(CbA, CbB, a_idx, b_idx, dst);
@@ -1546,6 +1599,7 @@ struct ElemDesc {
     bool seeds_l1_accumulation;
     bool manages_l1_accumulation_lifecycle;
     bool uses_dest_accumulation;
+    DestAccumulation dest_accumulation_mode;
     Dst accumulated_dst_slot;
     bool uses_dest_accumulation_lifecycle;
     bool manages_dest_accumulation_lifecycle;
@@ -1591,6 +1645,15 @@ constexpr bool uses_dest_accumulation_of() {
         return E::uses_dest_accumulation;
     }
     return false;
+}
+template <class E>
+constexpr DestAccumulation dest_accumulation_mode_of() {
+    if constexpr (is_binary_fpu_op_v<E>) {
+        return E::Accumulation;
+    } else if constexpr (is_pack_tile_op_v<E>) {
+        return E::DestAccumulationMode;
+    }
+    return DestAccumulation::Disabled;
 }
 template <class E>
 constexpr Dst accumulated_dst_slot_of() {
@@ -1725,6 +1788,7 @@ constexpr ElemDesc describe() {
         seeds_l1_accumulation_of<E>(),
         manages_l1_accumulation_lifecycle_of<E>(),
         uses_dest_accumulation_of<E>(),
+        dest_accumulation_mode_of<E>(),
         accumulated_dst_slot_of<E>(),
         uses_dest_accumulation_lifecycle_of<E>(),
         manages_dest_accumulation_lifecycle_of<E>(),
@@ -1885,6 +1949,28 @@ constexpr bool ct_any_dest_accumulation(const ElemDesc* d, int n) {
     }
     return false;
 }
+constexpr bool ct_dest_accumulation_modes_consistent(const ElemDesc* d, int n) {
+    DestAccumulation mode = DestAccumulation::Disabled;
+    for (int i = 0; i < n; ++i) {
+        if (d[i].dest_accumulation_mode == DestAccumulation::Disabled) {
+            continue;
+        }
+        if (mode == DestAccumulation::Disabled) {
+            mode = d[i].dest_accumulation_mode;
+        } else if (mode != d[i].dest_accumulation_mode) {
+            return false;
+        }
+    }
+    return true;
+}
+constexpr DestAccumulation ct_dest_accumulation_mode(const ElemDesc* d, int n) {
+    for (int i = 0; i < n; ++i) {
+        if (d[i].dest_accumulation_mode != DestAccumulation::Disabled) {
+            return d[i].dest_accumulation_mode;
+        }
+    }
+    return DestAccumulation::Disabled;
+}
 constexpr uint32_t ct_dest_accumulation_slot_count(const ElemDesc* d, int n) {
     bool seen[DEST_AUTO_LIMIT] = {};
     uint32_t count = 0;
@@ -2033,6 +2119,8 @@ struct ChainTraits {
     static constexpr bool pack_dfbs_consistent = ct_pack_dfbs_consistent(d, N);
     static constexpr uint32_t managed_l1_accumulation_lifecycles = ct_managed_l1_accumulation_lifecycles(d, N);
     static constexpr bool any_dest_accumulation = ct_any_dest_accumulation(d, N);
+    static constexpr bool dest_accumulation_modes_consistent = ct_dest_accumulation_modes_consistent(d, N);
+    static constexpr DestAccumulation dest_accumulation_mode = ct_dest_accumulation_mode(d, N);
     static constexpr uint32_t dest_accumulation_slot_count = ct_dest_accumulation_slot_count(d, N);
     static constexpr uint32_t pack_writer_count = ct_pack_writer_count(d, N);
     static constexpr bool dest_accumulation_pack_matches = ct_dest_accumulation_pack_matches(d, N);
@@ -2553,7 +2641,8 @@ template <
     bool PackHetero>
 struct ComputeFacts {};
 
-ALWI void elem_apply_compute(UnselectedElement, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) {}
+ALWI void elem_apply_compute(
+    UnselectedElement, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) {}
 
 template <
     class ElemT,
@@ -2571,6 +2660,7 @@ ALWI void elem_apply_compute(
     [[maybe_unused]] uint32_t ht,
     [[maybe_unused]] uint32_t wt,
     [[maybe_unused]] uint32_t inner_count,
+    [[maybe_unused]] uint32_t chunk_sync_count,
     [[maybe_unused]] uint32_t chain_lane_width,
     [[maybe_unused]] uint32_t Ht,
     [[maybe_unused]] uint32_t Wt) {
@@ -2592,7 +2682,7 @@ ALWI void elem_apply_compute(
             } else if constexpr (ElemT::APolicy.wait_policy == WaitPolicy::Cumulative) {
                 emit_wait<true>(ElemT::dfb_a_id(), i_flat + inner_count);
             } else if constexpr (ElemT::APolicy.wait_policy == WaitPolicy::PerChunk) {
-                emit_wait<true>(ElemT::dfb_a_id(), inner_count);
+                emit_wait<true>(ElemT::dfb_a_id(), chunk_sync_count);
             }
             if constexpr (!ElemT::same_dfb) {
                 if constexpr (ElemT::BPolicy.wait_policy == WaitPolicy::PerTile) {
@@ -2600,7 +2690,7 @@ ALWI void elem_apply_compute(
                 } else if constexpr (ElemT::BPolicy.wait_policy == WaitPolicy::Cumulative) {
                     emit_wait<true>(ElemT::dfb_b_id(), i_flat + inner_count);
                 } else if constexpr (ElemT::BPolicy.wait_policy == WaitPolicy::PerChunk) {
-                    emit_wait<true>(ElemT::dfb_b_id(), inner_count);
+                    emit_wait<true>(ElemT::dfb_b_id(), chunk_sync_count);
                 }
             }
         } else {
@@ -2609,7 +2699,7 @@ ALWI void elem_apply_compute(
             } else if constexpr (ElemT::Policy.wait_policy == WaitPolicy::Cumulative) {
                 emit_wait<true>(ElemT::dfb, i_flat + inner_count);
             } else if constexpr (ElemT::Policy.wait_policy == WaitPolicy::PerChunk) {
-                emit_wait<true>(ElemT::dfb, inner_count);
+                emit_wait<true>(ElemT::dfb, chunk_sync_count);
             }
         }
         if constexpr (EmitMathInit) {
@@ -2636,20 +2726,20 @@ ALWI void elem_apply_compute(
             if constexpr (ElemT::APolicy.pop_policy == PopPolicy::PerTile) {
                 emit_pop<true>(ElemT::dfb_a_id(), 1);
             } else if constexpr (ElemT::APolicy.pop_policy == PopPolicy::PerChunk) {
-                emit_pop<true>(ElemT::dfb_a_id(), inner_count);
+                emit_pop<true>(ElemT::dfb_a_id(), chunk_sync_count);
             }
             if constexpr (!ElemT::same_dfb) {
                 if constexpr (ElemT::BPolicy.pop_policy == PopPolicy::PerTile) {
                     emit_pop<true>(ElemT::dfb_b_id(), 1);
                 } else if constexpr (ElemT::BPolicy.pop_policy == PopPolicy::PerChunk) {
-                    emit_pop<true>(ElemT::dfb_b_id(), inner_count);
+                    emit_pop<true>(ElemT::dfb_b_id(), chunk_sync_count);
                 }
             }
         } else {
             if constexpr (ElemT::Policy.pop_policy == PopPolicy::PerTile) {
                 emit_pop<true>(ElemT::dfb, 1);
             } else if constexpr (ElemT::Policy.pop_policy == PopPolicy::PerChunk) {
-                emit_pop<true>(ElemT::dfb, inner_count);
+                emit_pop<true>(ElemT::dfb, chunk_sync_count);
             }
         }
     } else if constexpr (is_dest_only_op_v<ElemT>) {
@@ -2666,7 +2756,8 @@ ALWI void elem_apply_compute(
 template <bool AnyPackRelu, uint32_t PrevPack, uint32_t LastPackCb, bool PackHetero>
 struct PackFacts {};
 
-ALWI void elem_apply_pack(UnselectedElement, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) {}
+ALWI void elem_apply_pack(
+    UnselectedElement, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) {}
 
 template <class ElemT, bool AnyPackRelu, uint32_t PrevPack, uint32_t LastPackCb, bool PackHetero>
 ALWI void elem_apply_pack(
@@ -2675,6 +2766,7 @@ ALWI void elem_apply_pack(
     [[maybe_unused]] uint32_t ht,
     [[maybe_unused]] uint32_t wt,
     [[maybe_unused]] uint32_t inner_count,
+    [[maybe_unused]] uint32_t chunk_sync_count,
     [[maybe_unused]] uint32_t chain_lane_width,
     [[maybe_unused]] uint32_t Ht,
     [[maybe_unused]] uint32_t Wt) {
@@ -2685,7 +2777,7 @@ ALWI void elem_apply_pack(
     if constexpr (ElemT::Policy.reserve_policy == ReservePolicy::PerTile) {
         emit_reserve<true>(ElemT::dfb, 1);
     } else if constexpr (ElemT::Policy.reserve_policy == ReservePolicy::PerChunk) {
-        emit_reserve<true>(ElemT::dfb, inner_count);
+        emit_reserve<true>(ElemT::dfb, chunk_sync_count);
     }
     if constexpr (AnyPackRelu) {
         elem.configure_relu();
@@ -2697,7 +2789,7 @@ ALWI void elem_apply_pack(
     if constexpr (ElemT::Policy.push_policy == PushPolicy::PerTile) {
         emit_push<true>(ElemT::dfb, 1);
     } else if constexpr (ElemT::Policy.push_policy == PushPolicy::PerChunk) {
-        emit_push<true>(ElemT::dfb, inner_count);
+        emit_push<true>(ElemT::dfb, chunk_sync_count);
     }
 }
 
@@ -2845,6 +2937,9 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
             detail::ChainTraits<Es...>::any_dest_accumulation_lifecycle,
         "eltwise_chain: DEST accumulation must be enabled on both BinaryFpu and output(...)");
     static_assert(
+        detail::ChainTraits<Es...>::dest_accumulation_modes_consistent,
+        "eltwise_chain: BinaryFpu and output(...) must use the same DEST accumulation mode");
+    static_assert(
         !detail::ChainTraits<Es...>::any_dest_accumulation ||
             detail::ChainTraits<Es...>::dest_accumulation_slot_count == 1,
         "eltwise_chain: DEST accumulation requires one sticky DEST slot");
@@ -2936,10 +3031,17 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
                                           ? chain_transient_lane_width_v<Chain>
                                           : chain_lane_width_v<Chain>;
     uint32_t block_size = shape.block_size;
+    ASSERT(shape.Ht > 0);
+    ASSERT(shape.Wt > 0);
+    ASSERT(block_size > 0);
+    ASSERT(shape.blocking_total_tiles == 0 || shape.blocking_total_tiles == shape.Ht * shape.Wt);
+    const bool synchronize_full_blocks = shape.tail_sync == BlockTailSync::FullBlock;
     if constexpr (!chain_supports_block_v<Chain>) {
+        ASSERT(!synchronize_full_blocks || block_size == 1);
         block_size = 1;
     } else {
         constexpr uint32_t max_block = chain_max_block_v<Chain>;
+        ASSERT(!synchronize_full_blocks || block_size <= max_block);
         if (block_size > max_block) {
             block_size = max_block;
         }
@@ -2951,9 +3053,18 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
     (detail::emit_wait_upfront(detail::select_element<detail::waits_upfront<Es>()>(elts), Ht, Wt), ...);
     (detail::emit_reserve_upfront(detail::select_element<detail::reserves_upfront<Es>()>(elts), Ht, Wt), ...);
 
-    constexpr bool dest_accumulation = detail::ChainTraits<Es...>::any_dest_accumulation;
+    constexpr DestAccumulation dest_accumulation_mode = detail::ChainTraits<Es...>::dest_accumulation_mode;
+    constexpr bool dest_accumulation = dest_accumulation_mode != DestAccumulation::Disabled;
+    constexpr bool per_row_dest_accumulation = dest_accumulation_mode == DestAccumulation::PerRow;
+    constexpr bool whole_shape_dest_accumulation = dest_accumulation_mode == DestAccumulation::WholeShape;
     if constexpr (detail::ChainTraits<Es...>::any_l1_accumulation) {
         pack_reconfig_l1_acc(detail::ChainTraits<Es...>::any_seed_first_l1_accumulation ? 0 : 1);
+    }
+    if constexpr (whole_shape_dest_accumulation) {
+        (detail::emit_reserve_per_row<detail::ChainTraits<Es...>::d[Is].reserve_per_outer>(
+             detail::ChainTraits<Es...>::d[Is].pack_dfb),
+         ...);
+        tile_regs_acquire();
     }
     for (uint32_t ht = 0; ht < Ht; ++ht) {
         const uint32_t row_base = ht * Wt;
@@ -2962,7 +3073,7 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
              detail::ChainTraits<Es...>::d[Is].wait_b_per_outer>(
              detail::ChainTraits<Es...>::d[Is].outer_input_a_cb, detail::ChainTraits<Es...>::d[Is].outer_input_b_cb),
          ...);
-        if constexpr (dest_accumulation) {
+        if constexpr (per_row_dest_accumulation) {
             (detail::emit_reserve_per_row<detail::ChainTraits<Es...>::d[Is].reserve_per_outer>(
                  detail::ChainTraits<Es...>::d[Is].pack_dfb),
              ...);
@@ -2970,6 +3081,8 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
         }
         for (uint32_t wt_base = 0; wt_base < Wt; wt_base += block_size) {
             const uint32_t inner_count = (wt_base + block_size <= Wt) ? block_size : (Wt - wt_base);
+            const uint32_t chunk_sync_count =
+                synchronize_full_blocks && inner_count < block_size ? block_size : inner_count;
             const uint32_t i_flat = row_base + wt_base;
             if constexpr (!dest_accumulation) {
                 tile_regs_acquire();
@@ -2989,6 +3102,7 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
                  ht,
                  wt_base,
                  inner_count,
+                 chunk_sync_count,
                  chain_lane_w,
                  Ht,
                  Wt),
@@ -3018,6 +3132,7 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
                          ht,
                          wt_base,
                          inner_count,
+                         chunk_sync_count,
                          chain_lane_w,
                          Ht,
                          Wt),
@@ -3026,7 +3141,7 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
                 tile_regs_release();
             }
         }
-        if constexpr (dest_accumulation) {
+        if constexpr (per_row_dest_accumulation) {
             tile_regs_commit();
             tile_regs_wait();
             (detail::elem_apply_pack(
@@ -3041,6 +3156,7 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
                  ht,
                  0,
                  1,
+                 1,
                  0,
                  Ht,
                  Wt),
@@ -3054,6 +3170,31 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
              detail::ChainTraits<Es...>::d[Is].pop_a_per_outer,
              detail::ChainTraits<Es...>::d[Is].pop_b_per_outer>(
              detail::ChainTraits<Es...>::d[Is].outer_input_a_cb, detail::ChainTraits<Es...>::d[Is].outer_input_b_cb),
+         ...);
+    }
+    if constexpr (whole_shape_dest_accumulation) {
+        tile_regs_commit();
+        tile_regs_wait();
+        (detail::elem_apply_pack(
+             detail::select_element<
+                 is_pack_tile_op_v<Es>,
+                 detail::PackFacts<
+                     detail::ChainTraits<Es...>::any_pack_relu,
+                     detail::ChainTraits<Es...>::prev.pack[Is],
+                     detail::ChainTraits<Es...>::last_pack_cb,
+                     detail::ChainTraits<Es...>::pack_hetero>>(elts),
+             0,
+             0,
+             0,
+             1,
+             1,
+             0,
+             Ht,
+             Wt),
+         ...);
+        tile_regs_release();
+        (detail::emit_push_per_row<detail::ChainTraits<Es...>::d[Is].push_per_outer>(
+             detail::ChainTraits<Es...>::d[Is].pack_dfb),
          ...);
     }
     if constexpr (detail::ChainTraits<Es...>::any_l1_accumulation) {
@@ -3086,8 +3227,13 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
 // Chain = this call emits it; Caller = the caller emitted it once, outside its loop (see the
 // SetupOwner enum doc). It never changes which init is hoistable. (default lives on the
 // declaration in eltwise_chain.hpp.)
-template <SetupOwner SO, class... Es>
-ALWI void eltwise_chain(EltwiseShape shape, Es... elts) {
+template <SetupOwner SO, EltwiseShapeKind Kind, class... Es>
+ALWI void eltwise_chain(TypedEltwiseShape<Kind> shape, Es... elts) {
+    static_assert(
+        Kind != EltwiseShapeKind::Tiles ||
+            detail::ChainTraits<Es...>::dest_accumulation_mode != DestAccumulation::PerRow,
+        "eltwise_chain: DestAccumulation::PerRow requires EltwiseShape::grid(...); "
+        "use DestAccumulation::WholeShape with EltwiseShape::tiles(...)");
     eltwise_chain_impl<SO>(std::index_sequence_for<Es...>{}, shape, elts...);
 }
 

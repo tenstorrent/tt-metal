@@ -20,6 +20,6 @@ void kernel_main() {
             BinaryFpuOp::Add,
             BroadcastDim::None,
             Dst::D0,
-            DestAccumulation::Enabled>{},
+            DestAccumulation::WholeShape>{},
         PackTile<output(cb_out)>{});
 }

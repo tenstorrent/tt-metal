@@ -119,6 +119,15 @@ def test_dest_output_without_accumulation_illegal(device, expect_error):
     )
 
 
+def test_dest_per_row_tiles_illegal(device, expect_error):
+    _expect_build_failure(
+        device,
+        expect_error,
+        "dest_per_row_tiles.cpp",
+        "DestAccumulation::PerRow requires EltwiseShape::grid",
+    )
+
+
 def test_pack_relu_with_l1_illegal(device, expect_error):
     _expect_build_failure(
         device,

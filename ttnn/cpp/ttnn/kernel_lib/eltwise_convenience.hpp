@@ -39,14 +39,29 @@ namespace compute_kernel_lib {
 // Defaults: no broadcast, both operands per-tile streaming.
 // ---------------------------------------------------------------------------
 
-template <InputSpec AInput, InputSpec BInput, OutputSpec Output, BroadcastDim Bcast = BroadcastDim::None>
-ALWI void add(EltwiseShape shape);
+template <
+    InputSpec AInput,
+    InputSpec BInput,
+    OutputSpec Output,
+    BroadcastDim Bcast = BroadcastDim::None,
+    EltwiseShapeKind Kind>
+ALWI void add(TypedEltwiseShape<Kind> shape);
 
-template <InputSpec AInput, InputSpec BInput, OutputSpec Output, BroadcastDim Bcast = BroadcastDim::None>
-ALWI void sub(EltwiseShape shape);
+template <
+    InputSpec AInput,
+    InputSpec BInput,
+    OutputSpec Output,
+    BroadcastDim Bcast = BroadcastDim::None,
+    EltwiseShapeKind Kind>
+ALWI void sub(TypedEltwiseShape<Kind> shape);
 
-template <InputSpec AInput, InputSpec BInput, OutputSpec Output, BroadcastDim Bcast = BroadcastDim::None>
-ALWI void mul(EltwiseShape shape);
+template <
+    InputSpec AInput,
+    InputSpec BInput,
+    OutputSpec Output,
+    BroadcastDim Bcast = BroadcastDim::None,
+    EltwiseShapeKind Kind>
+ALWI void mul(TypedEltwiseShape<Kind> shape);
 
 // ---------------------------------------------------------------------------
 // FPU square — x * x, via BinaryFpu reading the one input buffer for both operands
@@ -55,30 +70,30 @@ ALWI void mul(EltwiseShape shape);
 // operand lifecycle / index instead of separate A/B.
 // ---------------------------------------------------------------------------
 
-template <InputSpec Input, OutputSpec Output>
-ALWI void square(EltwiseShape shape);
+template <InputSpec Input, OutputSpec Output, EltwiseShapeKind Kind>
+ALWI void square(TypedEltwiseShape<Kind> shape);
 
 // ---------------------------------------------------------------------------
 // SFPU unary — CopyTile(D0) -> SfpuOp -> PackTile(D0). SfpuOp is the (DEST-only) op type.
 // ---------------------------------------------------------------------------
 
-template <class SfpuOp, InputSpec Input, OutputSpec Output>
-ALWI void unary(EltwiseShape shape);
+template <class SfpuOp, InputSpec Input, OutputSpec Output, EltwiseShapeKind Kind>
+ALWI void unary(TypedEltwiseShape<Kind> shape);
 
 // ---------------------------------------------------------------------------
 // SFPU binary — two CopyTile loads (D0, D1) -> SfpuBinOp -> PackTile(D0).
 // SfpuBinOp is a DEST-only SFPU binary op type (e.g. DivBinary<>, BinaryMax<>).
 // ---------------------------------------------------------------------------
 
-template <class SfpuBinOp, InputSpec AInput, InputSpec BInput, OutputSpec Output>
-ALWI void binary_sfpu(EltwiseShape shape);
+template <class SfpuBinOp, InputSpec AInput, InputSpec BInput, OutputSpec Output, EltwiseShapeKind Kind>
+ALWI void binary_sfpu(TypedEltwiseShape<Kind> shape);
 
 // ---------------------------------------------------------------------------
 // Pure copy — CopyTile(D0) -> PackTile(D0).
 // ---------------------------------------------------------------------------
 
-template <InputSpec Input, OutputSpec Output>
-ALWI void copy(EltwiseShape shape);
+template <InputSpec Input, OutputSpec Output, EltwiseShapeKind Kind>
+ALWI void copy(TypedEltwiseShape<Kind> shape);
 
 }  // namespace compute_kernel_lib
 

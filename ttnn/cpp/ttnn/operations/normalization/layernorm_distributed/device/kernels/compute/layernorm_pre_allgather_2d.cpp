@@ -87,13 +87,13 @@ void kernel_main() {
                 ckl::BinaryFpuOp::Add,
                 ckl::BroadcastDim::None,
                 ckl::Dst::D0,
-                ckl::DestAccumulation::Enabled>{},
+                ckl::DestAccumulation::WholeShape>{},
             ckl::PackTile<ckl::output(
                 cb_out_final_id,
                 ckl::OutputLifecycle::DestAccumulation,
                 ckl::DataFormatReconfig::Enabled,
                 ckl::PackRelu::Disabled,
                 ckl::L1Accumulation::Disabled,
-                ckl::DestAccumulation::Enabled)>{});
+                ckl::DestAccumulation::WholeShape)>{});
     }
 }

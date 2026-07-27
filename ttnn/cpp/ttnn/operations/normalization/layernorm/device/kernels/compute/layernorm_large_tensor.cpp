@@ -168,6 +168,8 @@ void kernel_main() {
         //              n
         const bool last_tile_is_partial = W % tile_width > 0;
         for (auto block : generic::blocks(Wt, block_size)) {
+            const auto block_shape =
+                ckl::EltwiseShape::tiles(block.size(), ckl::BlockingSettings{block.full_block_size()});
 #ifdef TILIZE_IN
             tilize_row_major_block(cb_in_rm_obj, cb_in_obj, block_size, block);
 #ifdef RMSNORM
@@ -177,7 +179,7 @@ void kernel_main() {
 #endif
 #endif
             ckl::eltwise_chain(
-                ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()),
+                block_shape,
                 ckl::OptionalChainElement<
                     is_rmsnorm,  // RMSNORM: copy x (no mean subtraction)
                     ckl::CopyTile<
@@ -272,6 +274,8 @@ void kernel_main() {
         //(---------------*𝛄)+ß
         //  √(Var(X)+ε)
         for (auto block : generic::blocks(Wt, block_size)) {
+            const auto block_shape =
+                ckl::EltwiseShape::tiles(block.size(), ckl::BlockingSettings{block.full_block_size()});
 #ifdef TILIZE_IN
             // Reader supplies this second pass of data after the variance data.
             tilize_row_major_block(cb_in_rm_obj, cb_in_obj, block_size, block);
@@ -286,7 +290,7 @@ void kernel_main() {
             cb_ex_obj.wait_front(1);
 #endif
             ckl::eltwise_chain(
-                ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()),
+                block_shape,
                 ckl::OptionalChainElement<
                     is_rmsnorm,  // RMSNORM: copy x (no mean subtraction)
                     ckl::CopyTile<
@@ -308,7 +312,7 @@ void kernel_main() {
                 ckl::PackTile<ckl::output(cb_xmm, ckl::OutputLifecycle::Chunked)>{});
 
             ckl::eltwise_chain(
-                ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()),
+                block_shape,
                 ckl::BinaryFpu<
                     ckl::input(cb_xmm, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
                     ckl::input(cb_ex2pe, ckl::InputLifecycle::HeldBulk),
@@ -320,7 +324,7 @@ void kernel_main() {
             if constexpr (do_gamma == 1) {
                 constexpr auto cb_gamma_out = do_beta ? cb_fusion : cb_out;
                 ckl::eltwise_chain(
-                    ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()),
+                    block_shape,
                     ckl::BinaryFpu<
                         ckl::input(cb_fusion, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
                         ckl::input(cb_gamma, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
@@ -331,7 +335,7 @@ void kernel_main() {
             }
             if constexpr (do_beta == 1) {
                 ckl::eltwise_chain(
-                    ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()),
+                    block_shape,
                     ckl::BinaryFpu<
                         ckl::input(cb_fusion, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
                         ckl::input(cb_beta, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),

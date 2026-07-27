@@ -15,7 +15,8 @@ KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/dest_accumulation/dest_accumulation.cpp
 
 @pytest.mark.parametrize("block_size", [1, 2, 8])
 @pytest.mark.parametrize("caller_managed", [False, True])
-def test_dest_accumulation(device, block_size, caller_managed):
+@pytest.mark.parametrize("whole_shape", [False, True])
+def test_dest_accumulation(device, block_size, caller_managed, whole_shape):
     n = 8
     num_outputs = 3
     total_input_tiles = n * num_outputs
@@ -24,8 +25,9 @@ def test_dest_accumulation(device, block_size, caller_managed):
 
     torch_a, tt_a = lib.make_input([1, 1, 32, 32 * total_input_tiles], dtype, device, seed=1701)
     torch_b, tt_b = lib.make_input([1, 1, 32, 32 * total_input_tiles], dtype, device, seed=1702)
+    output_tiles = 1 if whole_shape else num_outputs
     tt_out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, 1, 32, 32 * num_outputs]),
+        ttnn.Shape([1, 1, 32, 32 * output_tiles]),
         dtype,
         ttnn.TILE_LAYOUT,
         device,
@@ -35,14 +37,16 @@ def test_dest_accumulation(device, block_size, caller_managed):
     program = ttnn.ProgramDescriptor(
         kernels=[
             lib.build_reader_kernel([tt_a, tt_b], total_input_tiles, core_grid),
-            lib.build_writer_1out_kernel(tt_out, num_outputs, core_grid),
-            lib.build_compute_kernel(KERNEL, [n, block_size, int(caller_managed), num_outputs], core_grid),
+            lib.build_writer_1out_kernel(tt_out, output_tiles, core_grid),
+            lib.build_compute_kernel(
+                KERNEL, [n, block_size, int(caller_managed), num_outputs, int(whole_shape)], core_grid
+            ),
         ],
         semaphores=[],
         cbs=[
             lib.cb_descriptor(0, dtype, total_input_tiles, core_grid),
             lib.cb_descriptor(1, dtype, total_input_tiles, core_grid),
-            lib.cb_descriptor(16, dtype, num_outputs, core_grid),
+            lib.cb_descriptor(16, dtype, output_tiles, core_grid),
         ],
     )
     out = ttnn.to_torch(ttnn.generic_op([tt_a, tt_b, tt_out], program)).to(torch.float32)
@@ -50,7 +54,12 @@ def test_dest_accumulation(device, block_size, caller_managed):
     a_tiles = torch.stack(torch_a.to(torch.float32).split(32, dim=-1)).reshape(num_outputs, n, 1, 1, 32, 32)
     b_tiles = torch.stack(torch_b.to(torch.float32).split(32, dim=-1)).reshape(num_outputs, n, 1, 1, 32, 32)
     reduced = (a_tiles + b_tiles).sum(dim=1)
-    golden = torch.cat([reduced[i] for i in range(num_outputs)], dim=-1)
-    pcc_ok, message = comp_pcc(golden, out, lib.pcc_threshold([dtype]))
-    logger.info(f"DEST accumulation block={block_size}, caller_managed={caller_managed} | {message}")
+    golden = reduced.sum(dim=0) if whole_shape else torch.cat([reduced[i] for i in range(num_outputs)], dim=-1)
+    # Whole-shape reduction preserves one hardware DEST accumulation across all rows, so its
+    # addition order intentionally differs from torch's tree reduction over the reshaped tensor.
+    threshold = 0.999 if whole_shape else lib.pcc_threshold([dtype])
+    pcc_ok, message = comp_pcc(golden, out, threshold)
+    logger.info(
+        f"DEST accumulation block={block_size}, caller_managed={caller_managed}, whole_shape={whole_shape} | {message}"
+    )
     assert pcc_ok, message

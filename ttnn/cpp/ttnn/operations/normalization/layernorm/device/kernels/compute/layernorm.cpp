@@ -137,8 +137,8 @@ void kernel_main() {
     // Intermediate buffers need to be reserved/pushed/popped
     // in full blocks
     const auto total_buffer_size = generic::blocks(Wt, block_size).total_with_remainder();
-    // Intermediate producers and consumers operate on full blocks, including the padded tail.
-    constexpr uint32_t Wt_padded = ((Wt + block_size - 1) / block_size) * block_size;
+    // Math follows the valid width; Chunked lifecycles still exchange a fixed-size tail block.
+    constexpr auto row_shape = ckl::EltwiseShape::tiles(Wt, ckl::BlockingSettings{block_size});
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #ifdef TILIZE_IN
@@ -160,7 +160,7 @@ void kernel_main() {
             ckl::input(cb_in, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
             ckl::input(cb_inb, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
             ckl::output(cb_x, ckl::OutputLifecycle::Chunked),
-            ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
+            ckl::BroadcastDim::None>(row_shape);
 #ifndef RMSNORM
         reconfig_data_format(cb_in, cb_x, cb_inb, cb_scaler);
 #else
@@ -185,7 +185,7 @@ void kernel_main() {
             ckl::input(cb_x, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
             ckl::input(cb_ex, ckl::InputLifecycle::CallerManaged),
             ckl::output(cb_xmm, ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled),
-            ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
+            ckl::BroadcastDim::Col>(row_shape);
         cb_ex_obj.pop_front(1);
 
 #ifndef FUSE_PRE_ADD
@@ -196,8 +196,7 @@ void kernel_main() {
         // Preserve cb_xmm for the normalization pass; the variance path consumes only its square.
         ckl::square<
             ckl::input(cb_xmm, ckl::InputLifecycle::HeldCumulative, ckl::OperandKind::Block),
-            ckl::output(cb_xmm2, ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled)>(
-            ckl::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
+            ckl::output(cb_xmm2, ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled)>(row_shape);
 #if defined RMSNORM and not defined FUSED_PRE_ADD
         reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
 #endif
@@ -221,8 +220,10 @@ void kernel_main() {
 
         // (x-E[x]) / sqrt(Var[x] + eps) * gamma + beta
         for (auto block : generic::blocks(Wt, block_size)) {
+            const auto block_shape =
+                ckl::EltwiseShape::tiles(block.size(), ckl::BlockingSettings{block.full_block_size()});
             ckl::eltwise_chain(
-                ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()),
+                block_shape,
                 ckl::BinaryFpu<
                     ckl::input(
                         cb_xmm,
@@ -239,7 +240,7 @@ void kernel_main() {
             if constexpr (do_gamma) {
                 constexpr uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
                 ckl::eltwise_chain(
-                    ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()),
+                    block_shape,
                     ckl::BinaryFpu<
                         ckl::input(cb_fusion, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
                         ckl::input(
@@ -255,7 +256,7 @@ void kernel_main() {
             }
             if constexpr (do_beta) {
                 ckl::eltwise_chain(
-                    ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()),
+                    block_shape,
                     ckl::BinaryFpu<
                         ckl::input(cb_fusion, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
                         ckl::input(

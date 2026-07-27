@@ -93,12 +93,13 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     }
 
     for (auto block : generic::blocks(Wt, blk)) {
+        const auto block_shape = ckl::EltwiseShape::tiles(block.size(), ckl::BlockingSettings{block.full_block_size()});
         // Keep pre-add in a separate CB to avoid the transpose_dest aliasing issue.
         ckl::add<
             ckl::input(cb_in, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
             ckl::input(cb_inb, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
             ckl::output(cb_interm_pre_add, ckl::OutputLifecycle::Chunked),
-            ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()));
+            ckl::BroadcastDim::None>(block_shape);
 
         // Now run Welfords in these blk number of tiles
         cb_interm_pre_add_obj.wait_front(block.full_block_size());
@@ -483,6 +484,8 @@ void kernel_main() {
         CircularBuffer cb_x_welford_obj_eltwise(cb_x_welford);
 
         for (auto block : generic::blocks(Wt, blk)) {
+            const auto block_shape =
+                ckl::EltwiseShape::tiles(block.size(), ckl::BlockingSettings{block.full_block_size()});
             // Last block may only be partially-filled,
             // and only tiles that have data in them are
             // processed, but need to sync with reader on full blocks
@@ -548,7 +551,7 @@ void kernel_main() {
                     ckl::input(cb_xmm_id, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
                     ckl::input(cb_gamma, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
                     ckl::output(cb_gamma_out, ckl::OutputLifecycle::Chunked),
-                    ckl::BroadcastDim::Row>(ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()));
+                    ckl::BroadcastDim::Row>(block_shape);
             }
 
             if constexpr (do_beta == 1) {
@@ -557,7 +560,7 @@ void kernel_main() {
                     ckl::input(cb_beta_input, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
                     ckl::input(cb_beta, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
                     ckl::output(cb_out, ckl::OutputLifecycle::Chunked),
-                    ckl::BroadcastDim::Row>(ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()));
+                    ckl::BroadcastDim::Row>(block_shape);
             }
         }
 

@@ -62,6 +62,10 @@ void kernel_main() {
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
     constexpr uint32_t tile_w_minux_group_size = tile_width - num_cols_per_group;
+    // group_row_offset is the signed difference encoded in uint32_t by the host. Modular
+    // addition reconstructs the original group size for both positive and negative offsets.
+    constexpr uint32_t full_group_size = (block_w_minus_one * tile_width) + group_row_offset;
+    constexpr uint32_t group_start_stride = full_group_size % tile_width;
 
     // dst regs
     constexpr uint32_t dst0 = 0;
@@ -227,7 +231,14 @@ void kernel_main() {
     index_b_offset = 0;
     for (uint32_t b = 0; b < batch; ++b) {
         index_g_offset = 0;
+        uint32_t group_start_offset = 0;
         for (uint32_t g = 0; g < group; ++g) {
+            const uint32_t valid_block_w = (group_start_offset + full_group_size + tile_width - 1) / tile_width;
+            const uint32_t synchronized_block_w = ((valid_block_w + subblock_w - 1) / subblock_w) * subblock_w;
+            const uint32_t math_block_w = synchronized_block_w == block_w ? valid_block_w : block_w;
+            const auto valid_group_shape =
+                ckl::EltwiseShape::grid(block_h, math_block_w, ckl::BlockingSettings{subblock_w});
+
             // mask input
             index_h_offset = index_b_offset + index_g_offset;
             reconfig_data_format_srcb(cb_in0_id, cb_input_mask_id);
@@ -264,31 +275,26 @@ void kernel_main() {
                 index_h_offset += per_core_N;
             }
             cb_x.push_back(block_hw);
-            reconfig_data_format_srcb(cb_input_mask_id, cb_ones_id);
-
             // Partial-E[x]
-            index_h_offset = 0;
-            mul_tiles_init(cb_x_id, cb_ones_id);
-            cb_ex2pe.reserve_back(1);
-            tile_regs_acquire();
             cb_x.wait_front(block_hw);
-            cb_ones.wait_front(1);
-
-            index_h_offset = 0;
             // Accumulate into dest directly by using mul_tiles (tile * 1 is accumulated into dest)
             // Alternative is to use reduce_tile multiple times, but this showed to be more precise and faster.
-            for (uint32_t h = 0; h < block_h; ++h) {
-                for (uint32_t w = 0; w < block_w; ++w) {
-                    uint32_t index = index_h_offset + w;
-                    mul_tiles(cb_x_id, cb_ones_id, index, 0, dst0);
-                }
-                index_h_offset += block_w;
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_ex2pe_id);
-            tile_regs_release();
-            cb_ex2pe.push_back(1);
+            ckl::eltwise_chain(
+                valid_group_shape,
+                ckl::BinaryFpu<
+                    strided_block_input(cb_x_id),
+                    ckl::input(cb_ones_id, ckl::InputLifecycle::HeldBulk),
+                    ckl::BinaryFpuOp::Mul,
+                    ckl::BroadcastDim::None,
+                    ckl::Dst::D0,
+                    ckl::DestAccumulation::WholeShape>{ckl::StridedTileRange{0, block_w}},
+                ckl::PackTile<ckl::output(
+                    cb_ex2pe_id,
+                    ckl::OutputLifecycle::DestAccumulation,
+                    ckl::DataFormatReconfig::Enabled,
+                    ckl::PackRelu::Disabled,
+                    ckl::L1Accumulation::Disabled,
+                    ckl::DestAccumulation::WholeShape)>{});
 
             // reduce only one final tile
             //
@@ -322,40 +328,33 @@ void kernel_main() {
                 ckl::input(cb_x_id, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
                 ckl::input(cb_ex_global_id, ckl::InputLifecycle::Bulk),
                 ckl::output(cb_x_id, ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled),
-                ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::grid(block_h, block_w, subblock_w));
+                ckl::BroadcastDim::Scalar>(valid_group_shape);
 
             ckl::mul<
                 ckl::input(cb_x_id, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
-                ckl::input(cb_input_mask_id, ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Row),
+                ckl::input(cb_input_mask_id, ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Row),
                 ckl::output(cb_x_id, ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled),
-                ckl::BroadcastDim::None>(ckl::EltwiseShape::grid(block_h, block_w, subblock_w));
-            reconfig_data_format_srcb(cb_input_mask_id, cb_x_id);
-
+                ckl::BroadcastDim::None>(valid_group_shape);
+            cb_input_mask.pop_front(block_w);
             // (x - E[x])^2
-            index_h_offset = 0;
-            mul_tiles_init(cb_x_id, cb_x_id);
             cb_x.wait_front(block_hw);
-
-            tile_regs_acquire();
-            cb_ex2pe.reserve_back(1);
-
-            for (uint32_t i = 0; i < block_h; i++) {
-                index_subblock_w_offset = 0;
-                for (uint32_t j = 0; j < num_subblocks_w; j++) {
-                    for (uint32_t w = 0; w < subblock_w; w++) {
-                        uint32_t index = w + index_subblock_w_offset + index_h_offset;
-                        mul_tiles(cb_x_id, cb_x_id, index, index, dst0);
-                    }
-
-                    index_subblock_w_offset += subblock_w;
-                }
-                index_h_offset += block_w;
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_ex2pe_id);
-            tile_regs_release();
-            cb_ex2pe.push_back(1);
+            ckl::eltwise_chain(
+                valid_group_shape,
+                ckl::BinaryFpu<
+                    strided_block_input(cb_x_id),
+                    strided_block_input(cb_x_id),
+                    ckl::BinaryFpuOp::Mul,
+                    ckl::BroadcastDim::None,
+                    ckl::Dst::D0,
+                    ckl::DestAccumulation::WholeShape>{
+                    ckl::StridedTileRange{0, block_w}, ckl::StridedTileRange{0, block_w}},
+                ckl::PackTile<ckl::output(
+                    cb_ex2pe_id,
+                    ckl::OutputLifecycle::DestAccumulation,
+                    ckl::DataFormatReconfig::Enabled,
+                    ckl::PackRelu::Disabled,
+                    ckl::L1Accumulation::Disabled,
+                    ckl::DestAccumulation::WholeShape)>{});
 
             // If modifying this code, see the long comment at the first REDUCE_SCALAR
             // pack into cb_ex_partial earlier in this kernel.
@@ -395,7 +394,7 @@ void kernel_main() {
                 ckl::input(cb_x_id, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
                 ckl::input(cb_ex2pe_id, ckl::InputLifecycle::Bulk),
                 ckl::output(cb_x_id, ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled),
-                ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::tiles(block_hw, subblock_w));
+                ckl::BroadcastDim::Scalar>(valid_group_shape);
             cb_x.wait_front(block_hw);
             //  add or copy with previous output results
             uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
@@ -498,6 +497,11 @@ void kernel_main() {
                     row_offset += num_cols_per_group;
                     index_g_offset += block_w_minus_two;
                 }
+            }
+
+            group_start_offset += group_start_stride;
+            if (group_start_offset >= tile_width) {
+                group_start_offset -= tile_width;
             }
         }
         index_b_offset += num_tiles_per_batch;
