@@ -453,9 +453,9 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
         auto adjacency_map_logical_multi_mesh =
             ::tt::tt_metal::experimental::tt_fabric::build_logical_multi_mesh_adjacency_graph(mesh_graph_);
 
-        // Build TopologyMappingConfig pinnings before physical-graph enrichment so PGD<->MGD matching sees them.
+        // TopologyMappingConfig::pinnings holds many-to-many groups (not flat 1:1 pairs). Append MGD
+        // groups directly — same AsicPinningGroup type as get_pinnings() — for PGD matching and solve.
         ::tt::tt_metal::experimental::tt_fabric::TopologyMappingConfig config;
-
         config.pinnings = pinning_groups_;
 
         // Append MGD pinnings when available (same many-to-many group shape).

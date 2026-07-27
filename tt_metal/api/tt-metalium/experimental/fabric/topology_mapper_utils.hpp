@@ -47,7 +47,12 @@ using AsicPosition = tt::tt_metal::ASICPosition;
 // Map from AsicID to its physical position (TrayID, ASICLocation); used for pinning validation and anchors.
 using AsicPositionMap = std::map<tt::tt_metal::AsicID, AsicPosition>;
 
-// MGD many-to-many pinning group (same type as MeshGraphDescriptor::get_pinnings()).
+// MGD many-to-many pinning group — same type as MeshGraphDescriptor::get_pinnings().
+//
+// API change (this PR): was std::pair<AsicPosition, FabricNodeId> (one physical position pinned to one
+// logical node). Now each PinningConstraint is an all-to-all group: any listed fabric node may map to
+// any listed ASIC position; { {node}, {pos} } is the old 1:1 case. Passed through unchanged from MGD
+// parsing to TopologyMappingConfig, ControlPlane, and generate_rank_bindings.
 using PinningConstraint = ::tt::tt_fabric::AsicPinningGroup;
 
 // Galaxy corner pinnings for a single mesh, ensuring QSFP links align with the fabric mesh corner nodes
