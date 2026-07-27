@@ -31,19 +31,27 @@ models/experimental/glm4_moe_lite/
 │   ├── perf_defaults.py       #   Validated winning flag set (single source of truth)
 │   ├── prefetcher_setup.py    #   GlobalCB DRAM-prefetcher SubDevice setup (WIP, unwired)
 │   ├── weights.py             #   Weight loading / caching
-│   ├── mtp_forward.py         #   Multi-token prediction (layer 47)
 │   ├── generator_vllm.py      #   vLLM integration
-│   └── ...                    #   embedding, trace state, debug runtime, torch refs
-├── fused_ops/                 # Custom device kernels
-│   ├── kv_cache_branch/       #   DKV + RMSNorm + RoPE fused kernel (see warning below)
-│   ├── pre_sdpa/              #   Pre-SDPA fused kernel
-│   └── q_concat_transpose/    #   Q concat + transpose fused kernel
-├── scripts/                   # Run & sweep scripts
+│   └── ...                    #   embedding, debug runtime, torch reference impls
+├── fused_ops/                 # Custom device kernels — NONE currently on the hot path
+│   ├── kv_cache_branch/       #   DKV + RMSNorm + RoPE (gated off: numerically incorrect)
+│   ├── pre_sdpa/              #   Pre-SDPA (not referenced by the model)
+│   └── q_concat_transpose/    #   Q concat + transpose (not referenced by the model)
+├── scripts/                   # Run, sweep, and kernel-check scripts
 │   ├── debug_run_full_tt_greedy.py   # Single-run debug / benchmark
-│   └── run_sweep_isl_batch.py        # ISL × batch sweep
-├── experiments/               # Sweep results, plots, port plans (checked in selectively)
-└── tests/                     # PCC & integration tests (18 files)
+│   ├── run_sweep_isl_batch.py        # ISL × batch sweep
+│   ├── run_pre_sdpa_kernel_check.py  # Standalone pre-SDPA kernel check
+│   └── run_fused_kv_branch_check.py  # Standalone fused-KV-branch kernel check
+└── tests/                     # PCC & integration tests (16 files)
 ```
+
+> Multi-token prediction lives in `model_tt._mtp_forward_eager`, not a separate module.
+>
+> `experiments/` is a **local scratch directory** for sweep output, profiler runs, and
+> plots. It is gitignored in full — summarise results here in the README instead. It
+> interacts badly with the root `.gitignore` (`*.log` and `*.csv` are dropped globally),
+> so `git add experiments/...` will silently commit plots while omitting the CSV they
+> came from.
 
 ---
 
@@ -122,7 +130,10 @@ python models/experimental/glm4_moe_lite/scripts/run_sweep_isl_batch.py \
 ## Performance
 
 Measured on 32-chip WH Galaxy (4x8 mesh), traced sampling decode, default flag set.
-Source: `experiments/sweep_isl_batch_complete_20260724/`.
+Reproduce with the sweep command above. The raw run that these figures come from was
+captured on 2026-07-24; its plots and rendered table are in git history at commit
+`30c7605a` (`experiments/sweep_isl_batch_complete_20260724/`, since removed — that
+directory is local scratch and no longer tracked).
 
 ### Decode latency, ms/token (batch=1)
 
@@ -147,8 +158,9 @@ unreachable cells fail in the DRAM bank allocator
 is 64 at ISL=512, 32 at ISL=1024, 16 at ISL=2048, 8 at ISL=4096, 4 at ISL=8192, and
 1 at ISL>=16384. Reducing `--min-cache-tokens` or using `--kv-cache-dtype bf8`
 extends the reachable region (bf8 KV has known accuracy degradation — see the dtype
-table). Full per-cell data, including aggregate TPS at every reachable ISL and the
-per-cell failure detail, is in `experiments/sweep_isl_batch_complete_20260724/`.
+table). The sweep records per-cell failure detail in its `sweep_results.csv` /
+`sweep_table.md` output rather than aborting, so re-running it regenerates the full
+matrix.
 
 ### Optimization history (batch=1 decode)
 
@@ -173,8 +185,9 @@ The largest remaining decode bucket is matmul (~39.5% of step time at ~20% M=1
 bandwidth efficiency, per pre-optimization profiling). The GlobalCB DRAM weight
 prefetcher is the planned attack — `tt/prefetcher_setup.py` has the validated
 SubDevice + GlobalCB foundation, but it is **not wired into the model** and has
-zero runtime effect today. See `experiments/GLOBALCB_PREFETCH_PORT_PLAN.md` for the
-per-op integration spec. **Re-profile the current 51.3 ms configuration before
+zero runtime effect today. The per-op integration spec is kept as a local (untracked)
+working document, `GLOBALCB_PREFETCH_PORT_PLAN.md`, in this directory; it is also in
+git history at commit `b43bc892`. **Re-profile the current 51.3 ms configuration before
 acting on those op shares** — they were captured on the pre-optimization stack.
 
 ---

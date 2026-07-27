@@ -405,9 +405,9 @@ class Glm4MoeLiteDenseOnlyTT:
             mtp_shared_head_w = _linear_weight_tt(
                 device=device,
                 torch_weight_out_in=mtp_state["model.layers.47.shared_head.head.weight"],
-                cache_file=mtp_cache / f"shared_head_w_{lm_head_variant}"
-                if lm_head_variant
-                else mtp_cache / "shared_head_w",
+                cache_file=(
+                    mtp_cache / f"shared_head_w_{lm_head_variant}" if lm_head_variant else mtp_cache / "shared_head_w"
+                ),
                 dtype=dense_dtype,
                 mesh_mapper=lm_head_mapper,
             )

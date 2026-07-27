@@ -14,6 +14,15 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 
 from models.experimental.glm4_moe_lite.tt.layer0_tt import run_layer0_prefill_tt
 from models.experimental.glm4_moe_lite.tt.reference_layer0 import run_layer0_reference
+
+from models.experimental.glm4_moe_lite.tt.reference_layer0 import (
+    GLM4_MOE_REFERENCE_ERROR,
+    HAS_GLM4_MOE_REFERENCE,
+)
+
+# The torch reference needs transformers.models.glm4_moe. Skip at module scope rather
+# than letting the import blow up, which would abort collection for the whole file.
+pytestmark = pytest.mark.skipif(not HAS_GLM4_MOE_REFERENCE, reason=GLM4_MOE_REFERENCE_ERROR)
 from models.experimental.glm4_moe_lite.tt.weights import find_missing_shards, resolve_best_effort_snapshot_dir
 
 

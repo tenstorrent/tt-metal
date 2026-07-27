@@ -12,7 +12,25 @@ import torch
 from torch import nn
 from transformers import AutoTokenizer
 from transformers.models.deepseek_v3.modeling_deepseek_v3 import DeepseekV3Attention
-from transformers.models.glm4_moe.modeling_glm4_moe import Glm4MoeMLP, Glm4MoeRMSNorm, Glm4MoeRotaryEmbedding
+
+# transformers.models.glm4_moe landed after 4.53 (the version currently pinned in
+# python_env), so this import raises ModuleNotFoundError there. Import it lazily and
+# re-raise as ImportError with a usable message: a module-level failure here aborts
+# pytest *collection* of every test that touches this reference implementation, which
+# means the `TT_ENABLE_HW_TESTS` skip guards on those tests never get a chance to run.
+try:
+    from transformers.models.glm4_moe.modeling_glm4_moe import Glm4MoeMLP, Glm4MoeRMSNorm, Glm4MoeRotaryEmbedding
+
+    HAS_GLM4_MOE_REFERENCE = True
+    GLM4_MOE_REFERENCE_ERROR = ""
+except ModuleNotFoundError as _e:  # pragma: no cover - depends on installed transformers
+    Glm4MoeMLP = Glm4MoeRMSNorm = Glm4MoeRotaryEmbedding = None  # type: ignore[assignment]
+    HAS_GLM4_MOE_REFERENCE = False
+    GLM4_MOE_REFERENCE_ERROR = (
+        f"transformers.models.glm4_moe is unavailable ({_e}). The torch reference for "
+        "GLM-4.7-Flash layer 0 needs a transformers build that ships Glm4Moe* modules; "
+        "upgrade transformers to run the PCC tests that compare against it."
+    )
 
 from models.experimental.glm4_moe_lite.tt.weights import LazyStateDict, load_glm_lazy_state_dict
 
