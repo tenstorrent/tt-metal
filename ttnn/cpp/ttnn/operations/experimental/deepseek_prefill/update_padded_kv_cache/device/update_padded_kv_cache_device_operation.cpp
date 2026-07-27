@@ -122,6 +122,15 @@ void UpdatePaddedKvCacheDeviceOperation::validate_on_program_cache_miss(
     if (input.dtype() == DataType::FP8_E4M3) {
         TT_FATAL(input.layout() == Layout::ROW_MAJOR, "FP8_E4M3 requires ROW_MAJOR layout");
     }
+    // The per-element-tensor (metadata) path is implemented for TILE only: its writer derives the
+    // page-row unit from the tile boundary. ROW_MAJOR must use the scalar signature. (Guard added when
+    // rebasing the metadata overload onto main's newer ROW_MAJOR support.)
+    if (tensor_args.slot_idx.has_value()) {
+        TT_FATAL(
+            input.layout() == Layout::TILE,
+            "update_padded_kv_cache per-element-tensor (metadata) path supports TILE layout only; use the "
+            "scalar signature for ROW_MAJOR");
+    }
 
     const auto& cache_shape = cache.padded_shape();
     const auto& input_shape = input.padded_shape();
