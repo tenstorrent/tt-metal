@@ -1963,11 +1963,26 @@ def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_lo
     return True
 
 
+def _baseline_name() -> str:
+    """Filename of the rolling baseline, KEYED by (model, task) to match perf_mcp._baseline_path().
+
+    This read used to hardcode the unkeyed "perf_mcp_baseline.json". perf_mcp writes the keyed file,
+    so the two never referred to the same run: whatever model last profiled anywhere on the box
+    supplied the "before" number. llama3_1_8b_p150 reported `eager per-op (all layers): 0.06 ms ->
+    648.17 ms (-1062476.1%)` -- a sub-millisecond anchor from an unrelated run against a real
+    648 ms reading, while this run's own baseline sat in the keyed file at 2464.18 ms. Same defect
+    as the full-pipeline scoreboard: a file any other process can write is not this run's baseline.
+    """
+    model = os.environ.get("PERF_MCP_MODEL_NAME") or Path(os.environ.get("PERF_MCP_MODEL_ROOT", "") or "model").name
+    task = os.environ.get("PERF_MCP_TASK", "main")
+    return "perf_mcp_baseline_%s_%s.json" % (model, task)
+
+
 def _baseline_ms() -> float | None:
     try:
         import tempfile
 
-        d = json.loads((Path(tempfile.gettempdir()) / "perf_mcp_baseline.json").read_text())
+        d = json.loads((Path(tempfile.gettempdir()) / _baseline_name()).read_text())
         return float(d["device_ms"]) if d.get("device_ms") is not None else None
     except Exception:  # noqa: BLE001
         return None

@@ -659,7 +659,10 @@ def before_loop(
     try:
         import tempfile as _tf
 
-        (Path(_tf.gettempdir()) / "perf_mcp_baseline.json").write_text(json.dumps(profile))
+        _bl_model = os.environ.get("PERF_MCP_MODEL_NAME") or Path(model_root).name or "model"
+        _bl_task = os.environ.get("PERF_MCP_TASK", "main")
+        _bl_name = "perf_mcp_baseline_%s_%s.json" % (_bl_model, _bl_task)
+        (Path(_tf.gettempdir()) / _bl_name).write_text(json.dumps(profile))
     except Exception:  # noqa: BLE001
         pass
     _bk = {b.get("id"): int(b.get("count", 0)) for b in (profile.get("buckets") or [])}

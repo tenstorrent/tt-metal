@@ -1,65 +1,77 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-def test_pure_call_returns_normally(monkeypatch):
-    import types
-
-    fake_ttnn = types.SimpleNamespace(to_torch=lambda *a, **k: None, from_torch=lambda *a, **k: None)
-    monkeypatch.setitem(__import__("sys").modules, "ttnn", fake_ttnn)
-
-    from scripts.tt_hw_planner._cli_helpers.purity_probe import assert_pure_on_device
-
-    def pure_fn(x):
-        return x * 2
-
-    assert assert_pure_on_device(pure_fn, 21) == 42
+import contextlib
+import sys
+import types
 
 
-def test_to_torch_call_raises_purity_violation(monkeypatch):
-    import types
+@contextlib.contextmanager
+def fake_ttnn_module():
+    """Install a stub `ttnn` for the duration of the test and PUT THE REAL ONE BACK.
 
-    fake_ttnn = types.SimpleNamespace(to_torch=lambda *a, **k: None, from_torch=lambda *a, **k: None)
-    import sys
-
-    sys.modules["ttnn"] = fake_ttnn
-
-    from scripts.tt_hw_planner._cli_helpers.purity_probe import PurityViolation, assert_pure_on_device
-
-    def dirty_fn(x):
-        import ttnn
-
-        ttnn.to_torch(x)
-        return x
-
-    err = None
+    Leaving the stub in sys.modules poisons every later test in the session: the root conftest has
+    an autouse fixture that does `import ttnn` and reads ttnn.CONFIG, which a SimpleNamespace does
+    not have. Two tests here replaced sys.modules["ttnn"] and never restored it, which errored 387
+    downstream tests at setup -- they never ran at all, and their failures were invisible.
+    """
+    fake = types.SimpleNamespace(to_torch=lambda *a, **k: None, from_torch=lambda *a, **k: None)
+    had = "ttnn" in sys.modules
+    saved = sys.modules.get("ttnn")
+    sys.modules["ttnn"] = fake
     try:
-        assert_pure_on_device(dirty_fn, 1)
-    except PurityViolation as e:
-        err = e
-    assert err is not None, "expected PurityViolation to be raised"
-    assert "ttnn.to_torch" in str(err)
+        yield fake
+    finally:
+        if had:
+            sys.modules["ttnn"] = saved
+        else:
+            sys.modules.pop("ttnn", None)
 
 
-def test_from_torch_also_flagged(monkeypatch):
-    import sys
-    import types
+def test_pure_call_returns_normally():
+    with fake_ttnn_module():
+        from scripts.tt_hw_planner._cli_helpers.purity_probe import assert_pure_on_device
 
-    fake_ttnn = types.SimpleNamespace(to_torch=lambda *a, **k: None, from_torch=lambda *a, **k: None)
-    sys.modules["ttnn"] = fake_ttnn
+        def pure_fn(x):
+            return x * 2
 
-    from scripts.tt_hw_planner._cli_helpers.purity_probe import PurityViolation, assert_pure_on_device
+        assert assert_pure_on_device(pure_fn, 21) == 42
 
-    def dirty_fn():
-        import ttnn
 
-        ttnn.from_torch(None)
+def test_to_torch_call_raises_purity_violation():
+    with fake_ttnn_module():
+        from scripts.tt_hw_planner._cli_helpers.purity_probe import PurityViolation, assert_pure_on_device
 
-    err = None
-    try:
-        assert_pure_on_device(dirty_fn)
-    except PurityViolation as e:
-        err = e
-    assert err is not None, "expected PurityViolation to be raised"
-    assert "from_torch" in str(err)
+        def dirty_fn(x):
+            import ttnn
+
+            ttnn.to_torch(x)
+            return x
+
+        err = None
+        try:
+            assert_pure_on_device(dirty_fn, 1)
+        except PurityViolation as e:
+            err = e
+        assert err is not None, "expected PurityViolation to be raised"
+        assert "ttnn.to_torch" in str(err)
+
+
+def test_from_torch_also_flagged():
+    with fake_ttnn_module():
+        from scripts.tt_hw_planner._cli_helpers.purity_probe import PurityViolation, assert_pure_on_device
+
+        def dirty_fn():
+            import ttnn
+
+            ttnn.from_torch(None)
+
+        err = None
+        try:
+            assert_pure_on_device(dirty_fn)
+        except PurityViolation as e:
+            err = e
+        assert err is not None, "expected PurityViolation to be raised"
+        assert "ttnn.from_torch" in str(err)
 
 
 def test_bringup_gate_now_flags_free_form_torch_compute():
