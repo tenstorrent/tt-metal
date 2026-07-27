@@ -385,7 +385,7 @@ def test_ternary_scalar_distinguishes_cache_entries(device):
     addcmul(a, b, c, value) packs `value` (scalar_input_a) into the compute-kernel runtime args.
     The scalar is intentionally EXCLUDED from to_hash()/compute_program_hash (so calls differing
     only in the scalar cache-hit instead of recompiling) but must be re-applied to the cached
-    program on every dispatch via TernaryDeviceOperation::get_dynamic_runtime_args(). Pins both
+    program on every dispatch via TernaryDeviceOperation::override_runtime_arguments(). Pins both
     halves of the contract:
       * a different scalar must NOT grow the cache  -> guards against re-adding the scalar to the
         hash (the recompile-per-scalar hack).
@@ -442,7 +442,7 @@ def test_ternary_addcmul_cache_hit_refreshes_operand_addresses(device):
     second same-shaped call whose operand lived in a DIFFERENT buffer ran against the first call's
     stale addresses and returned silent garbage (PCC ~0). Here the operands are distinct
     ttnn.chunk() slices of a single parent tensor, so they are the same shape but different buffers.
-    TernaryDeviceOperation::get_dynamic_runtime_args() must refresh reader slots 0/1/2 and writer
+    TernaryDeviceOperation::override_runtime_arguments() must refresh reader slots 0/1/2 and writer
     slot 0 on every dispatch.
     """
     device.enable_program_cache()
@@ -487,5 +487,62 @@ def test_ternary_addcmul_cache_hit_refreshes_operand_addresses(device):
 
     assert_with_pcc(reference(0), ttnn.to_torch(out0).float(), 0.99)
     assert_with_pcc(reference(2), ttnn.to_torch(out1).float(), 0.99)
+
+    device.disable_and_clear_program_cache()
+
+
+def test_ternary_addcmul_cache_hit_inplace_readdresses(device):
+    """Regression guard for the ternary IN-PLACE cache-hit path (the exact #48928 failure mode).
+
+    This is the migration from the deprecated get_dynamic_runtime_args() cache-hit hook to
+    TernaryDeviceOperation::override_runtime_arguments(), which re-derives the whole program from
+    TernaryProgramFactory::create_descriptor() on every cache hit -- so all tensor-backed
+    reader/writer buffer addresses are re-applied, INCLUDING the aliased output==input_a case.
+
+    An in-place addcmul (output_tensor aliases input_a) is dispatched twice at the SAME shape, so the
+    second call is a program-cache HIT that reuses the first program WITHOUT rebuild. Each dispatch
+    allocates fresh operands that are kept alive, so the cached program sees DIFFERENT buffer
+    addresses on the hit -- including the aliased output/input_a address. The legacy resolve_bindings
+    bailed on this ambiguous aliasing and left the addresses frozen at first miss, so the hit ran
+    against stale buffers and returned silent garbage (PCC ~0). Asserts (a) numerically-correct output
+    on the hit for the new operands and (b) the program-cache entry count does NOT grow.
+    """
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    shape = (1, 1, 256, 256)
+    value = 2.0
+    keep_alive = []  # hold refs so each dispatch's tensors get fresh (different) addresses
+
+    def inplace_addcmul(seed):
+        torch.manual_seed(seed)
+        a = torch.rand(shape, dtype=torch.bfloat16)
+        b = torch.rand(shape, dtype=torch.bfloat16)
+        c = torch.rand(shape, dtype=torch.bfloat16)
+        tt_a = ttnn.from_torch(a, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        tt_b = ttnn.from_torch(b, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        tt_c = ttnn.from_torch(c, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        # In-place: output_tensor aliases input_a. addcmul(a, b, c, value) = a + value * b * c.
+        tt_out = ttnn.addcmul(tt_a, tt_b, tt_c, value=value, output_tensor=tt_a)
+        # Prove it is ACTUALLY in-place; otherwise the aliasing path is never exercised and a future
+        # change that allocated a fresh output would still pass PCC + single-cache-entry.
+        assert tt_out.buffer_address() == tt_a.buffer_address()
+        keep_alive.extend([tt_a, tt_b, tt_c, tt_out])
+        golden = a.float() + value * b.float() * c.float()
+        return golden, ttnn.to_torch(tt_out).float()
+
+    # First call compiles the in-place addcmul program.
+    ref1, out1 = inplace_addcmul(0)
+    entries_after_first = device.num_program_cache_entries()
+    assert_with_pcc(ref1, out1, 0.99)
+
+    # Cache HIT at the same shape with fresh, differently-addressed operands (incl. the aliased
+    # output/input_a): the program must be reused (no new entry) yet still produce correct values.
+    ref2, out2 = inplace_addcmul(1)
+    assert device.num_program_cache_entries() == entries_after_first, (
+        "in-place addcmul at the same shape must reuse the cached program (no new cache entry) -- a "
+        "new entry means the program was rebuilt, masking whether addresses are re-applied on the hit"
+    )
+    assert_with_pcc(ref2, out2, 0.99)
 
     device.disable_and_clear_program_cache()
