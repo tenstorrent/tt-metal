@@ -13,6 +13,7 @@
 
 #ifdef LLK_TRISC_UNPACK
 
+#include "cfg_defines.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
@@ -39,6 +40,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
             }
+        }
+        else if constexpr (unpack_to_dest)
+        {
+            // L1_TO_L1 may leave UNP_DEST waiting for inactive SFPU/PACK clients.
+            // Isolated/congested UNP_DEST execution must not inherit that chain.
+            auto cfg                                         = (volatile std::uint32_t*)TENSIX_CFG_BASE;
+            cfg[UNPACK_TO_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
         }
 
         if constexpr (unpack_to_dest)
@@ -90,7 +98,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (!unpack_to_dest)
             {
-                _perf_unpack_loop_set_valid<true, false>(loop_factor * num_tiles);
+                if constexpr (is_fp32_dest_acc_en)
+                {
+                    // Quasar's 32-bit A2D datacopy is ELWADD and consumes SrcA
+                    // plus the dummy SrcB dvalid emitted by the unpack MOP.
+                    _perf_unpack_loop_set_valid<true, true>(loop_factor * num_tiles);
+                }
+                else
+                {
+                    _perf_unpack_loop_set_valid<true, false>(loop_factor * num_tiles);
+                }
             }
         }
         else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
@@ -148,6 +165,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
             }
         }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            // FPU datacopy (when present) and SFPU execute sequentially on this
+            // thread. Keep them on one Dest bank instead of creating a dvalid
+            // chain whose producer would also wait for inactive UNPACK/PACK.
+            auto cfg                                    = (volatile std::uint32_t*)TENSIX_CFG_BASE;
+            cfg[MATH_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+            cfg[SFPU_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+        }
         if (src_format == DataFormat::Int32)
         {
             _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(src_format, src_format);
@@ -172,7 +198,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (!unpack_to_dest)
             {
-                _perf_math_loop_clear_valid<true, false>(loop_factor * num_tiles);
+                if constexpr (is_fp32_dest_acc_en)
+                {
+                    _perf_math_loop_clear_valid<true, true>(loop_factor * num_tiles);
+                }
+                else
+                {
+                    _perf_math_loop_clear_valid<true, false>(loop_factor * num_tiles);
+                }
             }
         }
         else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)

@@ -59,7 +59,8 @@ def _generate_perf_cases():
                     ("float", ((formats, dest_acc), binary_op, mathop)),
                     id=(
                         f"float-{binary_op.lower()}-"
-                        f"{formats.input_format.name}-{dest_acc.name}"
+                        f"{formats.input_format.name}-{formats.output_format.name}-"
+                        f"{dest_acc.name}"
                     ),
                 )
             )
