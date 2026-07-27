@@ -8,6 +8,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include <memory>
+#include <set>
 #include <unordered_set>
 
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
@@ -740,6 +741,54 @@ TEST_F(TopologyMapperTest, PinningHonorsFixedAsicPositionOnDualGalaxyMesh_2pins)
     auto mapped_asic_for_node1 = topology_mapper_with_pins.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 1));
     EXPECT_TRUE(contains(potential_mapped_asics, mapped_asic_for_node0));
     EXPECT_TRUE(contains(potential_mapped_asics2, mapped_asic_for_node1));
+}
+
+TEST_F(TopologyMapperTest, PinningManyToManyTwoByTwoGroupOnDualGalaxyMesh) {
+    const std::filesystem::path galaxy_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto";
+
+    auto mesh_graph = MeshGraph(get_cluster(), galaxy_mesh_graph_desc_path.string());
+
+    LocalMeshBinding local_mesh_binding;
+    if (*get_distributed_context().rank() == 0) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{0};
+    } else {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{1};
+    }
+
+    const AsicPosition pinned_asic{1, 1};
+    const AsicPosition pinned_asic2{1, 5};
+
+    // One many-to-many group: nodes (0,0) and (0,1) may map to either pinned ASIC position.
+    std::vector<AsicPinningGroup> pins = {{
+        {FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 1)},
+        {pinned_asic, pinned_asic2},
+    }};
+
+    TopologyMapper topology_mapper_with_pins(
+        get_cluster(), get_distributed_context(), mesh_graph, *physical_system_descriptor_, local_mesh_binding, pins);
+
+    const auto mapped_asic_for_node0 =
+        topology_mapper_with_pins.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 0));
+    const auto mapped_asic_for_node1 =
+        topology_mapper_with_pins.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 1));
+    EXPECT_NE(mapped_asic_for_node0, mapped_asic_for_node1) << "Bijection: distinct nodes must map to distinct ASICs";
+
+    std::set<tt::tt_metal::AsicID> mapped_asics{mapped_asic_for_node0, mapped_asic_for_node1};
+    std::set<tt::tt_metal::AsicID> expected_asics;
+    for (const auto& [asic_id, _] : physical_system_descriptor_->get_asic_descriptors()) {
+        const auto tray = physical_system_descriptor_->get_tray_id(asic_id);
+        const auto loc = physical_system_descriptor_->get_asic_location(asic_id);
+        if ((tray == pinned_asic.first && loc == pinned_asic.second) ||
+            (tray == pinned_asic2.first && loc == pinned_asic2.second)) {
+            expected_asics.insert(asic_id);
+        }
+    }
+    EXPECT_EQ(mapped_asics, expected_asics)
+        << "Both nodes must land on the two pinned ASIC positions from the many-to-many group";
 }
 
 TEST_F(TopologyMapperTest, PinningThrowsOnBadAsicPositionGalaxyMesh) {

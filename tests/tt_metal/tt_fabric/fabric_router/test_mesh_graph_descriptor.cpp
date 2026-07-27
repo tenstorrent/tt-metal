@@ -2515,4 +2515,94 @@ TEST(MeshGraphDescriptorTests, PinningsAllToAllDuplicateAcrossEntries) {
             ::testing::HasSubstr("Duplicate pinning"))));
 }
 
+TEST(MeshGraphDescriptorTests, PinningsRegexMalformedRangeError) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+        }
+        pinnings: {
+          logical_fabric_node_id: { mesh_id_regex: "1-" chip_id: 0 }
+          physical_asic_position: { tray_id: 1 asic_location: 1 }
+        }
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    EXPECT_THAT(
+        [&]() { MeshGraphDescriptor desc(text_proto); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+            ::testing::HasSubstr("malformed range token"))));
+}
+
+TEST(MeshGraphDescriptorTests, PinningsRegexInvalidRegexError) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+        }
+        pinnings: {
+          logical_fabric_node_id: { mesh_id_regex: "[unclosed" chip_id: 0 }
+          physical_asic_position: { tray_id: 1 asic_location: 1 }
+        }
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    EXPECT_THAT(
+        [&]() { MeshGraphDescriptor desc(text_proto); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+            ::testing::HasSubstr("invalid regex"))));
+}
+
+TEST(MeshGraphDescriptorTests, PinningsRegexOverlappingMeshIdsDuplicateError) {
+    // mesh_id_regex "0-2" and "2-3" both match mesh 2 -> duplicate after expansion.
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 2 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 3 } }
+        }
+        pinnings: {
+          logical_fabric_node_id: { mesh_id_regex: "0-2" chip_id: 0 }
+          physical_asic_position: { tray_id: 1 asic_location: 1 }
+        }
+        pinnings: {
+          logical_fabric_node_id: { mesh_id_regex: "2-3" chip_id: 0 }
+          physical_asic_position: { tray_id: 2 asic_location: 1 }
+        }
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    EXPECT_THAT(
+        [&]() { MeshGraphDescriptor desc(text_proto); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate pinning for fabric node")));
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests

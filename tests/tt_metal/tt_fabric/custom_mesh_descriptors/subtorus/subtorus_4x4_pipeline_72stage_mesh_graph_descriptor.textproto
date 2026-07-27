@@ -559,4 +559,3 @@ pinnings {
   logical_fabric_node_id { mesh_id_regex: "0-71" chip_id: 13 }
   physical_asic_position { tray_id: 1 asic_location: 6 }
 }
-

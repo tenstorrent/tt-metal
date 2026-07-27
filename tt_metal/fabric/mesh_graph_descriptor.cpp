@@ -1584,59 +1584,140 @@ void MeshGraphDescriptor::print_all_nodes() {
 }
 
 namespace {
-// Expand a pinning id pattern against a domain of valid ids. Supports:
-//   - inclusive numeric range   "0-8"          -> 0..8
-//   - comma list of the above   "0,2,4-6"      -> 0,2,4,5,6
-//   - std::regex (full match)   "\\d*[02468]"  -> every id whose decimal string matches
-// The result is the subset of `domain` (in domain order) selected by the pattern.
-std::vector<uint32_t> expand_id_pattern(const std::string& pattern, const std::vector<uint32_t>& domain) {
+struct IdPatternResult {
+    std::vector<uint32_t> ids;
+    std::string error;
+};
+
+std::string trim_id_pattern(const std::string& pattern) {
     auto b = pattern.find_first_not_of(" \t");
     auto e = pattern.find_last_not_of(" \t");
-    std::string p = (b == std::string::npos) ? std::string{} : pattern.substr(b, e - b + 1);
-    std::vector<uint32_t> out;
+    return (b == std::string::npos) ? std::string{} : pattern.substr(b, e - b + 1);
+}
+
+bool is_range_list_pattern(const std::string& p) { return p.find_first_not_of("0123456789,- \t") == std::string::npos; }
+
+// Validate range/list/regex syntax without expanding against a domain.
+void validate_id_pattern_syntax(
+    const std::string& pattern, const std::string& field_label, std::vector<std::string>& errors) {
+    const std::string p = trim_id_pattern(pattern);
     if (p.empty()) {
-        return out;
+        errors.push_back(fmt::format("{} is empty", field_label));
+        return;
     }
 
-    // Pure digits/commas/dashes -> treat as a range/list; anything else -> regex.
-    if (p.find_first_not_of("0123456789,- \t") == std::string::npos) {
-        std::set<uint32_t> want;
+    if (is_range_list_pattern(p)) {
         std::stringstream ss(p);
         std::string tok;
         while (std::getline(ss, tok, ',')) {
-            auto dash = tok.find('-');
+            const auto dash = tok.find('-');
             try {
                 if (dash == std::string::npos) {
-                    want.insert(static_cast<uint32_t>(std::stoul(tok)));
+                    if (tok.find_first_not_of("0123456789 \t") != std::string::npos || tok.empty()) {
+                        errors.push_back(fmt::format("{} has malformed token '{}'", field_label, tok));
+                    } else {
+                        (void)std::stoul(tok);
+                    }
                 } else {
-                    auto lo = static_cast<uint32_t>(std::stoul(tok.substr(0, dash)));
-                    auto hi = static_cast<uint32_t>(std::stoul(tok.substr(dash + 1)));
-                    for (uint32_t v = lo; v <= hi; ++v) {
-                        want.insert(v);
+                    if (dash == 0 || dash + 1 >= tok.size()) {
+                        errors.push_back(fmt::format("{} has malformed range token '{}'", field_label, tok));
+                        continue;
+                    }
+                    const auto lo = static_cast<uint32_t>(std::stoul(tok.substr(0, dash)));
+                    const auto hi = static_cast<uint32_t>(std::stoul(tok.substr(dash + 1)));
+                    if (lo > hi) {
+                        errors.push_back(fmt::format("{} has inverted range '{}' in token '{}'", field_label, p, tok));
                     }
                 }
             } catch (const std::exception&) {
+                errors.push_back(fmt::format("{} has malformed token '{}'", field_label, tok));
             }
         }
-        for (uint32_t id : domain) {
-            if (want.count(id) != 0) {
-                out.push_back(id);
-            }
-        }
-        return out;
+        return;
     }
 
     try {
-        std::regex re(p);
-        for (uint32_t id : domain) {
-            if (std::regex_match(std::to_string(id), re)) {
-                out.push_back(id);
+        (void)std::regex(p);
+    } catch (const std::regex_error& e) {
+        errors.push_back(fmt::format("{} has invalid regex '{}': {}", field_label, p, e.what()));
+    }
+}
+
+// Expand a pinning id pattern against a domain of valid ids. Supports:
+//   - inclusive numeric range   "0-8"          -> ids in domain within 0..8
+//   - comma list of the above   "0,2,4-6"      -> ids in domain matching any token
+//   - std::regex (full match)   "\\d*[02468]"  -> every id whose decimal string matches
+// The result is the subset of `domain` (in domain order) selected by the pattern.
+IdPatternResult expand_id_pattern(const std::string& pattern, const std::vector<uint32_t>& domain) {
+    const std::string p = trim_id_pattern(pattern);
+    IdPatternResult result;
+    if (p.empty()) {
+        result.error = "id pattern is empty";
+        return result;
+    }
+
+    // Pure digits/commas/dashes -> treat as a range/list; anything else -> regex.
+    if (is_range_list_pattern(p)) {
+        struct TokenSpec {
+            bool is_range = false;
+            uint32_t single = 0;
+            uint32_t lo = 0;
+            uint32_t hi = 0;
+        };
+        std::vector<TokenSpec> specs;
+        std::stringstream ss(p);
+        std::string tok;
+        while (std::getline(ss, tok, ',')) {
+            const auto dash = tok.find('-');
+            try {
+                if (dash == std::string::npos) {
+                    if (tok.find_first_not_of("0123456789 \t") != std::string::npos || tok.empty()) {
+                        result.error = fmt::format("malformed token '{}'", tok);
+                        return result;
+                    }
+                    specs.push_back({false, static_cast<uint32_t>(std::stoul(tok)), 0, 0});
+                } else {
+                    if (dash == 0 || dash + 1 >= tok.size()) {
+                        result.error = fmt::format("malformed range token '{}'", tok);
+                        return result;
+                    }
+                    const auto lo = static_cast<uint32_t>(std::stoul(tok.substr(0, dash)));
+                    const auto hi = static_cast<uint32_t>(std::stoul(tok.substr(dash + 1)));
+                    if (lo > hi) {
+                        result.error = fmt::format("inverted range in token '{}'", tok);
+                        return result;
+                    }
+                    specs.push_back({true, 0, lo, hi});
+                }
+            } catch (const std::exception&) {
+                result.error = fmt::format("malformed token '{}'", tok);
+                return result;
             }
         }
-    } catch (const std::regex_error&) {
-        // Invalid regex -> no matches.
+
+        for (uint32_t id : domain) {
+            for (const auto& spec : specs) {
+                const bool matches = spec.is_range ? (id >= spec.lo && id <= spec.hi) : (id == spec.single);
+                if (matches) {
+                    result.ids.push_back(id);
+                    break;
+                }
+            }
+        }
+        return result;
     }
-    return out;
+
+    try {
+        const std::regex re(p);
+        for (uint32_t id : domain) {
+            if (std::regex_match(std::to_string(id), re)) {
+                result.ids.push_back(id);
+            }
+        }
+    } catch (const std::regex_error& e) {
+        result.error = fmt::format("invalid regex '{}': {}", p, e.what());
+    }
+    return result;
 }
 
 constexpr uint32_t kPhysicalIdDomainMax = 255;
@@ -1654,17 +1735,35 @@ const std::vector<uint32_t>& physical_id_domain() {
 }
 
 std::vector<AsicPosition> expand_physical_asic_positions(
-    const google::protobuf::RepeatedPtrField<proto::PhysicalAsicPosition>& physical_positions) {
+    const google::protobuf::RepeatedPtrField<proto::PhysicalAsicPosition>& physical_positions, std::string& error) {
     const auto& domain = physical_id_domain();
     std::vector<AsicPosition> positions;
     std::set<std::pair<uint32_t, uint32_t>> seen;
     for (const auto& physical_pos : physical_positions) {
-        const std::vector<uint32_t> trays = physical_pos.tray_id_regex().empty()
-                                                ? std::vector<uint32_t>{physical_pos.tray_id()}
-                                                : expand_id_pattern(physical_pos.tray_id_regex(), domain);
-        const std::vector<uint32_t> asic_locs = physical_pos.asic_location_regex().empty()
-                                                    ? std::vector<uint32_t>{physical_pos.asic_location()}
-                                                    : expand_id_pattern(physical_pos.asic_location_regex(), domain);
+        std::vector<uint32_t> trays;
+        if (physical_pos.tray_id_regex().empty()) {
+            trays = {physical_pos.tray_id()};
+        } else {
+            IdPatternResult tray_result = expand_id_pattern(physical_pos.tray_id_regex(), domain);
+            if (!tray_result.error.empty()) {
+                error = fmt::format("tray_id_regex: {}", tray_result.error);
+                return {};
+            }
+            trays = std::move(tray_result.ids);
+        }
+
+        std::vector<uint32_t> asic_locs;
+        if (physical_pos.asic_location_regex().empty()) {
+            asic_locs = {physical_pos.asic_location()};
+        } else {
+            IdPatternResult loc_result = expand_id_pattern(physical_pos.asic_location_regex(), domain);
+            if (!loc_result.error.empty()) {
+                error = fmt::format("asic_location_regex: {}", loc_result.error);
+                return {};
+            }
+            asic_locs = std::move(loc_result.ids);
+        }
+
         for (uint32_t tray : trays) {
             for (uint32_t loc : asic_locs) {
                 if (seen.insert({tray, loc}).second) {
@@ -1714,8 +1813,11 @@ void MeshGraphDescriptor::populate_pinnings() {
     // one (fabric_node -> asic_positions) entry per node -- so no downstream interface changes. A
     // single-node/single-position entry reproduces the classic one-to-one pin.
     for (const auto& pinning : proto_->pinnings()) {
+        std::string expand_error;
         // Physical positions are shared by every group produced from this entry (regex-expanded when used).
-        const std::vector<AsicPosition> positions = expand_physical_asic_positions(pinning.physical_asic_position());
+        const std::vector<AsicPosition> positions =
+            expand_physical_asic_positions(pinning.physical_asic_position(), expand_error);
+        TT_FATAL(expand_error.empty(), "Failed to expand physical ASIC positions: {}", expand_error);
 
         // Fast path: no regex fields anywhere in this entry -> preserve the original single-group behavior.
         if (!pinning_entry_uses_regex(pinning)) {
@@ -1734,9 +1836,18 @@ void MeshGraphDescriptor::populate_pinnings() {
         std::map<uint32_t, std::vector<uint32_t>> mesh_to_chips;  // ordered mesh -> ordered unique chips
         std::map<uint32_t, std::set<uint32_t>> seen_chips;
         for (const auto& n : pinning.logical_fabric_node_id()) {
-            const std::vector<uint32_t> meshes = n.mesh_id_regex().empty()
-                                                     ? std::vector<uint32_t>{n.mesh_id()}
-                                                     : expand_id_pattern(n.mesh_id_regex(), all_mesh_ids);
+            std::vector<uint32_t> meshes;
+            if (n.mesh_id_regex().empty()) {
+                meshes = {n.mesh_id()};
+            } else {
+                IdPatternResult mesh_result = expand_id_pattern(n.mesh_id_regex(), all_mesh_ids);
+                TT_FATAL(
+                    mesh_result.error.empty(),
+                    "Failed to expand mesh_id_regex '{}': {}",
+                    n.mesh_id_regex(),
+                    mesh_result.error);
+                meshes = std::move(mesh_result.ids);
+            }
             for (uint32_t m : meshes) {
                 std::vector<uint32_t> chips;
                 if (n.chip_id_regex().empty()) {
@@ -1749,7 +1860,13 @@ void MeshGraphDescriptor::populate_pinnings() {
                     for (uint32_t c = 0; c < cc; ++c) {
                         chip_domain.push_back(c);
                     }
-                    chips = expand_id_pattern(n.chip_id_regex(), chip_domain);
+                    IdPatternResult chip_result = expand_id_pattern(n.chip_id_regex(), chip_domain);
+                    TT_FATAL(
+                        chip_result.error.empty(),
+                        "Failed to expand chip_id_regex '{}': {}",
+                        n.chip_id_regex(),
+                        chip_result.error);
+                    chips = std::move(chip_result.ids);
                 }
                 for (uint32_t c : chips) {
                     if (seen_chips[m].insert(c).second) {
@@ -1766,6 +1883,20 @@ void MeshGraphDescriptor::populate_pinnings() {
             }
             group.asic_positions = positions;
             pinnings_.push_back(std::move(group));
+        }
+    }
+
+    // A logical fabric node may appear in at most one pinning group after regex expansion.
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> fabric_node_pinning_count;
+    for (const auto& group : pinnings_) {
+        for (const auto& node : group.fabric_nodes) {
+            const auto key = std::make_pair(*node.mesh_id, node.chip_id);
+            fabric_node_pinning_count[key]++;
+            TT_FATAL(
+                fabric_node_pinning_count[key] <= 1,
+                "Duplicate pinning for fabric node (mesh_id: {}, chip_id: {}) after regex expansion",
+                key.first,
+                key.second);
         }
     }
 }
@@ -1804,6 +1935,14 @@ void MeshGraphDescriptor::validate_pinnings(
         }
 
         for (const auto& logical_node_id : pinning.logical_fabric_node_id()) {
+            if (!logical_node_id.mesh_id_regex().empty()) {
+                validate_id_pattern_syntax(
+                    logical_node_id.mesh_id_regex(), "logical_fabric_node_id.mesh_id_regex", error_messages);
+            }
+            if (!logical_node_id.chip_id_regex().empty()) {
+                validate_id_pattern_syntax(
+                    logical_node_id.chip_id_regex(), "logical_fabric_node_id.chip_id_regex", error_messages);
+            }
             if (!logical_node_id.mesh_id_regex().empty() && logical_node_id.has_mesh_id()) {
                 error_messages.push_back(
                     "logical_fabric_node_id sets both mesh_id_regex and mesh_id; use one or the other");
@@ -1830,6 +1969,14 @@ void MeshGraphDescriptor::validate_pinnings(
         }
 
         for (const auto& physical_pos : pinning.physical_asic_position()) {
+            if (!physical_pos.tray_id_regex().empty()) {
+                validate_id_pattern_syntax(
+                    physical_pos.tray_id_regex(), "physical_asic_position.tray_id_regex", error_messages);
+            }
+            if (!physical_pos.asic_location_regex().empty()) {
+                validate_id_pattern_syntax(
+                    physical_pos.asic_location_regex(), "physical_asic_position.asic_location_regex", error_messages);
+            }
             if (!physical_pos.tray_id_regex().empty() && physical_pos.has_tray_id()) {
                 error_messages.push_back(
                     "physical_asic_position sets both tray_id_regex and tray_id; use one or the other");
