@@ -1245,8 +1245,79 @@ Captures: `tracy_captures/rp_{1,2,4}node_mq10k.tracy`, `rp_{1,4}node_d1000.tracy
 `rp_d2h_waits.tracy`, `rp_emit_breakdown.tracy`. Inspect X280 contexts with
 `tools/x280_bm/tracy_ctx_inspect/tracy_ctx_inspect <cap>` (grep `X280 (`).
 
+## §25 — P300 port: IOMMU D2HSocket fix + D2H FIFO sizing is what sets the knee (bh-06, 2026-07-27)
+
+First X280 bring-up on a **P300** (2-chip card, 1 chip visible; bh-06). Two board-specific blockers, then a
+result that reframes what the "830 knee" actually measures.
+
+**(1) Device open — CUSTOM cluster needs a mesh-graph descriptor.** A P300 presenting 1 chip is classified
+`ClusterType::CUSTOM` → `TT_FATAL: Custom fabric mesh graph descriptor path must be specified`. Fix: point
+`TT_MESH_GRAPH_DESC_PATH` at a single-chip Blackhole descriptor —
+`tt_metal/fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.textproto` (`device_topology [1,1]`;
+p300's is `[1,2]`, hence the 2-chip expectation). The residual "Using CUSTOM cluster type" line is then a
+harmless warning.
+
+**(2) D2HSocket transport — OR-ing the channel-0 aperture onto an IOVA (fixed).** On an IOMMU-enabled board
+the D2HSocket host FIFO is a **separate IOMMU-backed pinned allocation**, and `get_noc_addr` returns its
+*complete* device IOVA (e.g. `0x3f000000`, hi=0). `relay_run_socket` was OR-ing the channel-0 aperture base
+`0x1000000000000000` onto it, so posted writes landed in the **channel-0 hugepage** instead of the socket
+buffer → host FIFO never filled → producers back-pressured → deadlock / drain-0. Fix: `pbase = 0` (the packed
+lo32 IS the full address; the host already errors if hi≠0). Isolation that cracked it: ruled out prime,
+coords (virtual==translated), NoC reads (`--calib` fits at 1.5 ns residual), the readers (drained all 44 KB
+from worker L1, host-verified at `prof_l1=0xb50`), relay-hart boot (boot verifies every hart), the PCIe tile
+(socket `enc[14]=0x613` == raw `pcie_enc`) — and `--raw` was lossless throughout, proving PCIe itself was
+fine. The clincher: dumping channel-0 sysmem showed the relay's markers + `bytes_sent=0xb880` sitting at
+chan0 offset `0x3f000000`, i.e. written correctly but to the wrong buffer.
+
+**★ (3) The D2H FIFO size — not drain capacity — is what sets the 0-stall knee.** At the stock 4 MiB/socket,
+bh-06 did **not** reproduce bh-11's 830 knee: 3210 stalls, and the chain was host-bound (relay `hostfull`
+415k/427k → reader `spsc-wait` 155M/161M → producers stall; X280 wall 1921M cyc, reader copy 0.8% = spinning).
+Sweeping proddelay did **not** clear it — 830→3210, 1200→891, 1800→696, 2500→1112 — a **stall floor ~700–1100**
+that slower producers can't drain away. *A floor that ignores production rate is a buffering limit, not a
+throughput limit.* Raising ONLY the FIFO to **12 MiB/socket (`--hring 3145728`)** reproduces the knee exactly:
+
+| @ proddelay 830, 1 node, 2 readers + 2 relays + 2 sockets | 4 MiB (default) | **12 MiB** |
+|---|---|---|
+| X280-STALL | 3210 | **0** |
+| markers | lossless | **3300000 / 3300000 exact** |
+| relay hostfull | 415k / 427k | **0** |
+| reader spsc-wait | 155M / 161M | **0** |
+| reader cyc/word — copy% | 4.3 — 0.8% (spinning) | 4.5 — **52%** (working) |
+| X280 wall | 1921M cyc | **30M cyc** (64× faster) |
+| D2H FIFO high-water | 100% (pinned) | 59% / 87% |
+
+`--mqcap` is **irrelevant** here: with `--mqcap 268435456` the MPMC peaked at **2 batches** (push-blocks 0).
+The single load-bearing variable is the D2H FIFO. Why bh-06 needs 12 MiB where bh-11 sufficed at 4: the host
+drain is slower/burstier — this container has only **6 CPU cores** — so the FIFO needs more slack to absorb
+it. Consistent with §24 (the D2H FIFO is the back-pressure source; 8 flushers were needed to relieve it).
+
+**CEILING = 12 MiB/socket.** `NOC_2M_WINDOW_COUNT=224` and `SOCKET_WIN_BASE=208` leave **16** TLB windows, and
+the FW maps `nwin = ceil((in_off + fifo_bytes + 64) / 2 MiB)` consecutive windows per socket → 2 sockets ×
+nwin ≤ 16. Note the old note "4 MiB ≈ 850 == the drain floor" was really *4 MiB's* floor, not the hardware's.
+
+Canonical bh-06 knee run (0 stalls, lossless):
+
+```
+TT_METAL_DEVICE_PROFILER=1 TT_METAL_NO_RT_PROFILER=1 timeout 300 \
+  ./build_Release/programming_examples/test_x280_realprof \
+  --reset --nodes 1 --nread 2 --nmarkers 3000 --proddelay 830 \
+  --hring 3145728 --mqcap 268435456
+```
+
+Other P300 bring-up steps: ECC prime per cluster via tt-metal (no tt-llm-engine needed) —
+`./build_Release/programming_examples/profiler/test_x280_profcons --primeecc --l2cpu N --device 0` then
+`tt-smi -r 0`; X280 FW is gitignored so it must be built — `make -C tools/x280_bm build/lim_idle.bin
+build/profzone.bin` (auto-downloads the riscv64-elf toolchain to `/localdev/$USER/x280-toolchain`);
+`tracy-capture` lives at `build_Release/tools/profiler/bin/`. Socket-mode captures verified post-fix:
+single-node 3.3M lossless (X280-STALL 12590 @ proddelay 300, == bh-11) and **4-node 3.32M lossless with all
+4 L2CPU clusters draining** (X280-STALL 10761) — note those multi-node runs predate the FIFO finding and
+still used the 4 MiB default, so their stall counts are inflated by it.
+
 ## Gotchas (saved time → don't relearn)
 
+- **A stall FLOOR that doesn't fall as you slow the producer = a BUFFER limit, not a drain-rate limit.**
+  Sweeping `--proddelay` to chase a knee is wasted effort in that regime; size the D2H FIFO (`--hring`)
+  instead. Cost a full proddelay sweep before the buffer was suspected (§25).
 - **`tt-smi -r` does NOT clear LIM SRAM** → a re-run of the same FW sees the prior
   run's `DONE_MAGIC` and reads results prematurely. Host must zero the result/done
   region before releasing the FW.
