@@ -27,8 +27,7 @@ Config — a YAML manifest (like the runner's PREFILL_MANIFEST) or PREFILL_* env
     transport: {sp, tp, h2d_service_id, connect_timeout_s}
     workload:  {num_users, chunks, max_requests, duration_s, interleave, p_gap, p_burst, gap_ms,
                 mid_end_prob, seed, check_pcc, trace_dir, slot_prompts}
-    migration: {issue, dest_endpoint_id, dst_slot_offset, pairs, timeout_ms, done_file,
-                client_dir, cmd_queue, table_queue, resp_queue, table_path, device_map_path}
+    migration: see runners/migration_driver.py — that module owns the whole block and its env vars
     env:       {ANY_PREFILL_KEY: value}   # escape hatch for anything unmodeled
 
 Env — schedule knobs (flat; the defaults describe a 1-user, 11-chunk, in-order run):
@@ -51,30 +50,8 @@ Env — schedule knobs (flat; the defaults describe a 1-user, 11-chunk, in-order
                                  schedule for all slots.
   PREFILL_SEND_SHUTDOWN          "1" to close the stream with an all -1 sentinel so the runner exits
                                  gracefully after the run (sent after the KV read; default 0). PR #48718.
-Env — real KV migration issued BY the producer (needs a live migration_endpoint the runner has
-  already driven to WORKER_READY). The producer submits + migrates + writes the DONE sentinel; it does
-  NOT validate KV — the RUNNER does that on-device via validate_after_prefill (PREFILL_VALIDATE_MIGRATION=1),
-  which polls the sentinel and PCCs each pair (src vs golden, dst vs golden, and/or dst==src). The
-  producer attaches a MigrationLayerClient and issues migrate() per source slot after prefill +
-  ack drain (Python client exposes no burst API, so no overlap with prefill like the C++ scheduler):
-  PREFILL_PRODUCER_ISSUE_MIGRATION  "1" to attach a MigrationLayerClient and migrate slot KV after
-                                    prefill (default 0 = no migration).
-  PREFILL_MIGRATION_DEST_ENDPOINT_ID  destination endpoint id for migrate() (default 1). Equal to the
-                                    endpoint's OWN id => loopback (routed to the internal B worker);
-                                    a different id => cross-endpoint (requires the pairing/connect).
-  PREFILL_MIGRATION_PAIRS           arbitrary any-src -> any-dst mapping as "src:dst,src:dst,..." (e.g.
-                                    "0:5,1:2,3:7"). When set, migrates exactly these pairs (each src must
-                                    be a resident/prefilled slot; dst must fit the KV table; duplicate src
-                                    fans out). Also settable via ``--migrations`` (CLI wins) or the
-                                    manifest ``migration.pairs`` list. Overrides DST_SLOT_OFFSET.
-  PREFILL_MIGRATION_DST_SLOT_OFFSET  offset fallback used ONLY when PREFILL_MIGRATION_PAIRS is unset:
-                                    dst_slot = src_slot + offset (default = PREFILL_NUM_USERS, i.e. src
-                                    slots [0,N) migrate to dst slots [N,2N); the runner's KV table must
-                                    have >= 2N slots).
-  PREFILL_MIGRATION_TIMEOUT_MS      per-migration wait_complete timeout (default 3600000).
-  MIGRATION_DONE_FILE               path of the DONE sentinel the runner polls (default /tmp/migration_done.sentinel).
-  Queues + client come from the runner's migration env: PREFILL_MIGRATION_{CMD,TABLE,RESP}_QUEUE and
-  PREFILL_MIGRATION_CLIENT_DIR (resolved via runners.migration).
+Migration — opt-in, and entirely out of this module: see runners/migration_driver.py for its env vars,
+  manifest block and CLI flags. Off by default; this module just calls start()/finish() around prefill.
 Env — transport (must match the runner): PREFILL_SP / PREFILL_TP / PREFILL_CHUNK_SIZE /
   PREFILL_MAX_SEQ_LEN / PREFILL_NUM_LAYERS / PREFILL_H2D_SERVICE_ID / PREFILL_H2D_CONNECT_TIMEOUT.
 
@@ -106,6 +83,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
+from models.demos.common.prefill.runners import migration_driver
 from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, resolve_trace_dir
 
 
@@ -113,8 +91,9 @@ def _apply_manifest_env(manifest_path: str) -> None:
     """Populate the PREFILL_* env from a YAML producer manifest (setdefault => an explicitly exported
     env var still wins). Mirrors the runner's _apply_manifest_env: a verbatim ``env:`` passthrough
     (applied FIRST, so a raw PREFILL_* key wins over the typed mapping) plus typed ``model`` /
-    ``transport`` / ``workload`` / ``migration`` blocks mapped to the same env vars the module
-    constants and _config_from_env() read. MUST run before those reads (see the call below)."""
+    ``transport`` / ``workload`` blocks mapped to the same env vars the module constants and
+    _config_from_env() read. The typed ``migration`` block is delegated to ``migration_driver``. MUST run
+    before those reads (see the call below)."""
     import yaml
 
     with open(manifest_path) as f:
@@ -165,34 +144,8 @@ def _apply_manifest_env(manifest_path: str) -> None:
     if gap_ms is not None:
         sd("PREFILL_PRODUCER_GAP_MS", gap_ms if isinstance(gap_ms, str) else ",".join(str(x) for x in gap_ms))
 
-    migration = manifest.get("migration") or {}
-    sd_bool("PREFILL_PRODUCER_ISSUE_MIGRATION", migration.get("issue"))
-    sd("PREFILL_MIGRATION_DEST_ENDPOINT_ID", migration.get("dest_endpoint_id"))
-    sd("PREFILL_MIGRATION_DST_SLOT_OFFSET", migration.get("dst_slot_offset"))
-    # Arbitrary src->dst mapping. Accept a "src:dst,src:dst" string, or a list of {src, dst} dicts /
-    # [src, dst] pairs / "src:dst" strings; all normalize to the PREFILL_MIGRATION_PAIRS env string.
-    pairs = migration.get("pairs")
-    if pairs is not None:
-        if isinstance(pairs, str):
-            sd("PREFILL_MIGRATION_PAIRS", pairs)
-        else:
-            parts = []
-            for p in pairs:
-                if isinstance(p, dict):
-                    parts.append(f"{p['src']}:{p['dst']}")
-                elif isinstance(p, (list, tuple)):
-                    parts.append(f"{p[0]}:{p[1]}")
-                else:
-                    parts.append(str(p))  # already a "src:dst" string
-            sd("PREFILL_MIGRATION_PAIRS", ",".join(parts))
-    sd("PREFILL_MIGRATION_TIMEOUT_MS", migration.get("timeout_ms"))
-    sd("MIGRATION_DONE_FILE", migration.get("done_file"))
-    sd("PREFILL_MIGRATION_CLIENT_DIR", migration.get("client_dir"))
-    sd("PREFILL_MIGRATION_CMD_QUEUE", migration.get("cmd_queue"))
-    sd("PREFILL_MIGRATION_TABLE_QUEUE", migration.get("table_queue"))
-    sd("PREFILL_MIGRATION_RESP_QUEUE", migration.get("resp_queue"))
-    sd("PREFILL_MIGRATION_TABLE_PATH", migration.get("table_path"))
-    sd("PREFILL_MIGRATION_DEVICE_MAP_PATH", migration.get("device_map_path"))
+    # 3) the typed `migration:` block is owned by the migration driver, not this module.
+    migration_driver.apply_manifest_env(manifest)
 
     logger.info(f"[producer] applied manifest {manifest_path}")
 
@@ -226,15 +179,6 @@ GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
 CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
 MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 60 * 1024))
 NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
-
-# Real KV migration issued by the producer (opt-in). See the module docstring's migration env block.
-ISSUE_MIGRATION = os.environ.get("PREFILL_PRODUCER_ISSUE_MIGRATION", "0") == "1"
-MIGRATION_DEST_ENDPOINT_ID = int(os.environ.get("PREFILL_MIGRATION_DEST_ENDPOINT_ID", "1"))
-# The producer's OWN endpoint id (prefill side). dest == src => loopback (src/dst share one table);
-# dest != src => cross-endpoint P->D (dst lives in the remote decode table). Drives which mapping
-# invariants apply in _resolve_migration_pairs.
-MIGRATION_SRC_ENDPOINT_ID = int(os.environ.get("PREFILL_MIGRATION_SRC_ENDPOINT_ID", "1"))
-MIGRATION_TIMEOUT_MS = int(os.environ.get("PREFILL_MIGRATION_TIMEOUT_MS", "3600000"))
 
 ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
 
@@ -944,215 +888,6 @@ def _resolve_slot_prompts(cfg: ProducerConfig):
     return slot_traces, slot_lengths, pools_by_trace
 
 
-def _attach_migration_client():
-    """Attach a MigrationLayerClient to the migration endpoint's queues to ISSUE real slot->slot
-    KV migrations from the producer.
-
-    Reuses runners.migration's queue-name / client-import resolution (PREFILL_MIGRATION_{CMD,TABLE,
-    RESP}_QUEUE + PREFILL_MIGRATION_CLIENT_DIR). Does NOT send SET_TABLE / device map / wait_ready:
-    the runner already drove the endpoint to WORKER_READY (migration.publish_table_and_wait_ready)
-    and released its setup client, leaving the cmd queue free for us — exactly the handoff the C++
-    PrefillScheduler relies on. Returns the client (do NOT call shutdown() on it: the endpoint's
-    lifetime is owned by the launcher, not this producer)."""
-    from models.demos.common.prefill.runners.migration import _import_migration_client, _resolve_queue_names
-
-    cmd_q, table_q, resp_q = _resolve_queue_names()
-    ml = _import_migration_client().MigrationLayerClient(cmd_q, table_q, resp_q)
-    logger.info(f"[producer] migration client attached: cmd={cmd_q} table={table_q} resp={resp_q}")
-    return ml
-
-
-def _resolve_migration_pairs(
-    stats: "RunStats", *, dst_slot_offset: int, num_slots: int = None, cross_endpoint: bool = False
-) -> list:
-    """Resolve the concrete ``(src_slot, dst_slot, real_len)`` migrations to perform, ONE list shared by
-    both the migrate step and the DONE sentinel so the two can never drift apart.
-
-    Two ways to describe the mapping:
-      * Explicit — PREFILL_MIGRATION_PAIRS="src:dst,src:dst,..." (a manifest ``migration.pairs`` list or
-        the ``--migrations`` CLI flag both feed this env var). Drives ARBITRARY any-src -> any-dst
-        migrations; each src must be a resident slot (it has KV to migrate) and dst must fit the table.
-        Duplicate src is allowed (fan-out: migrate one slot to several dsts).
-      * Offset (fallback, no explicit pairs) — every resident src slot -> src + dst_slot_offset.
-
-    ``real_len`` is the SRC slot's resident non-pad token count (min(chunks_pushed*CHUNK_SIZE,
-    actual_isl)), matching the KV the runner wrote; slots with no data are skipped. If ``num_slots`` is
-    known (from the KV table), dst is bounds-checked so a too-large dst fails here with a clear message
-    instead of a cryptic device-side error at migrate time."""
-
-    def real_len_of(src: int) -> int:
-        chunks_pushed, actual_isl = stats.resident[src]
-        return min(chunks_pushed * CHUNK_SIZE, actual_isl)
-
-    def check_dst(src: int, dst: int) -> None:
-        if dst < 0:
-            raise ValueError(f"migration dst slot {dst} (src {src}) is negative")
-        # The bound below is the PREFILL table's slot count -- only meaningful for loopback (dst lives in
-        # this same table). Cross-endpoint dst lives in the DECODE table, whose size the producer doesn't
-        # know, so skip it there (a too-large dst still fails clearly device-side at migrate time).
-        if not cross_endpoint and num_slots is not None and dst >= num_slots:
-            raise ValueError(
-                f"migration dst slot {dst} (src {src}) is out of range: the KV table has {num_slots} "
-                f"slot(s) [0,{num_slots}). Grow PREFILL_NUM_USERS or pick a smaller dst."
-            )
-
-    spec = os.environ.get("PREFILL_MIGRATION_PAIRS", "").strip()
-    triples = []
-    if spec:  # explicit arbitrary mapping
-        for tok in spec.split(","):
-            tok = tok.strip()
-            if not tok:
-                continue
-            if ":" not in tok:
-                raise ValueError(f"PREFILL_MIGRATION_PAIRS entry {tok!r} must be 'src:dst' (got no ':')")
-            src_s, dst_s = tok.split(":", 1)
-            src, dst = int(src_s), int(dst_s)
-            if src not in stats.resident:
-                raise ValueError(
-                    f"migration src slot {src} is not resident (resident slots: {sorted(stats.resident)}); "
-                    f"only slots the producer prefilled hold KV to migrate."
-                )
-            real_len = real_len_of(src)
-            if real_len <= 0:
-                logger.warning(f"[producer] migration src slot {src} has no resident data; skipping {src}:{dst}")
-                continue
-            check_dst(src, dst)
-            triples.append((src, dst, real_len))
-    else:  # uniform offset fallback (preserves the pre-arbitrary behavior)
-        for src in sorted(stats.resident):
-            real_len = real_len_of(src)
-            if real_len <= 0:
-                continue
-            dst = src + dst_slot_offset
-            check_dst(src, dst)
-            triples.append((src, dst, real_len))
-
-    # Reject mappings that sequential single-shot migration cannot execute correctly. Each migrate() reads
-    # its SRC slot from device DRAM at migrate time and there is no staging buffer, so:
-    #   * a dst that is ALSO a src (overlap) -> an earlier migration overwrites a slot a later pair still
-    #     reads (swaps 0:1,1:0, chains 0:1,1:2), migrating wrong KV;
-    #   * a duplicate dst -> only the last write survives, yet the DONE sentinel asks the runner to validate
-    #     EVERY pair.
-    # Disjoint src/dst sets — the intended case, e.g. 0:3,1:2 or src [0,N) -> dst [N,2N) — are unaffected.
-    srcs = [s for (s, _, _) in triples]
-    dsts = [d for (_, d, _) in triples]
-    dup_dsts = sorted({d for d in dsts if dsts.count(d) > 1})
-    if dup_dsts:
-        raise ValueError(
-            f"migration has duplicate dst slot(s) {dup_dsts}: multiple pairs target the same slot, so only "
-            f"the last survives while every pair would be validated. Give each migration a distinct dst."
-        )
-    # src/dst overlap corrupts KV ONLY in loopback, where src and dst share one table so an earlier
-    # migration can overwrite a slot a later pair still reads. Cross-endpoint src (this prefill table) and
-    # dst (the decode table) are independent address spaces, so src N -> dst N is the normal case there.
-    overlap = sorted(set(srcs) & set(dsts))
-    if overlap and not cross_endpoint:
-        raise ValueError(
-            f"migration src/dst overlap on slot(s) {overlap}: a slot is both a source and a destination, so "
-            f"sequential migration would overwrite a slot a later pair still reads (e.g. swap 0:1,1:0 or "
-            f"chain 0:1,1:2 corrupt KV). Use disjoint src/dst slots (e.g. src [0,N) -> dst [N,2N)); a mapping "
-            f"that needs staging through a free slot is not supported by this single-shot driver."
-        )
-    return triples
-
-
-def _issue_migrations(
-    ml, triples: list, *, dest_endpoint_id: int, timeout_ms: int, migration_layers: list = None
-) -> int:
-    """Migrate each resolved ``(src_slot, dst_slot, real_len)`` triple's KV, blocking on completion.
-
-    ``migration_layers`` selects which layer rows move:
-      * None (default): one single-shot migrate() over the whole ``[0, NUM_LAYERS)`` layer range per
-        pair -- correct when the dest table is contiguous 0..N (loopback, or a full decode).
-      * A list (PREFILL_MIGRATION_LAYERS, e.g. [0, 3]): one migrate() PER listed layer, range
-        ``[L, L+1)``. Because migrate()'s layer range is symmetric (src row == dst row), this EXTRACTS
-        specific layers from the full contiguous SOURCE table (row i = layer i) into the SAME rows of a
-        layer-id-indexed dest -- the cross-endpoint P->D case where a reduced decode holds only {0,3}.
-        The list MUST match the decode side's gathered layer ids.
-
-    dest_endpoint_id == the endpoint's own id => loopback (internal B worker); a different id =>
-    cross-endpoint (needs the pairing/connect out of band). Must run while the runner is alive (before
-    any SHUTDOWN sentinel): the endpoint reads source KV from device DRAM. Returns the number of pairs
-    migrated."""
-    layer_ranges = [(int(l), int(l) + 1) for l in migration_layers] if migration_layers else [(0, NUM_LAYERS)]
-    migrated = 0
-    next_uuid = 1
-    for src_slot, dst_slot, real_len in triples:
-        for layer_start, layer_end in layer_ranges:
-            logger.info(
-                f"[producer] MIGRATE slot {src_slot} -> {dst_slot} ep={dest_endpoint_id} "
-                f"layers=[{layer_start},{layer_end}) pos=[0,{real_len})"
-            )
-            uuid = next_uuid
-            next_uuid += 1
-            token = ml.migrate(
-                uuid=uuid,
-                remote_endpoint_id=dest_endpoint_id,
-                src_slot=src_slot,
-                dst_slot=dst_slot,
-                layer_start=layer_start,
-                layer_end_exclusive=layer_end,
-                pos_start=0,
-                pos_end_exclusive=real_len,
-            )
-            ml.wait_complete(token, timeout_ms)  # self-polls when no poll thread is running
-        logger.success(
-            f"[producer] MIGRATE slot {src_slot} -> {dst_slot} complete ({len(layer_ranges)} layer range(s))"
-        )
-        migrated += 1
-    logger.info(f"[producer] migrations complete: {migrated} pair(s)")
-    return migrated
-
-
-def _write_migration_done_sentinel(triples: list) -> list:
-    """Write the migration DONE sentinel — one ``src dst`` line per migrated pair — that the runner's
-    validate_after_prefill (PREFILL_VALIDATE_MIGRATION=1) polls for. This is the SAME handshake the
-    llm-engine scheduler/driver used (prefill_scheduler_driver wrote this file after migrating). Once it
-    appears, the runner PCC-validates each pair ON-DEVICE: src vs golden + dst vs golden (burst), and/or
-    dst==src (PREFILL_MIGRATE_PAIRWISE=1). Takes the SAME triples list `_issue_migrations` consumed, so
-    the sentinel matches exactly what was migrated. Returns the (src, dst) pairs written."""
-    done_file = os.environ.get("MIGRATION_DONE_FILE", "/tmp/migration_done.sentinel")
-    if not triples:
-        raise ValueError("no migrations completed; refusing to publish an empty DONE sentinel")
-    pairs = [(src, dst) for (src, dst, _) in triples]
-    with open(done_file, "w") as f:
-        for s, d in pairs:
-            f.write(f"{s} {d}\n")
-    logger.success(f"[producer] wrote migration DONE sentinel {done_file} ({len(pairs)} pair(s)): {pairs}")
-    return pairs
-
-
-def _write_migration_handoff(triples: list, slot_traces: dict, pools_by_trace: dict) -> None:
-    """Write the JSON handoff the DECODE-side consumer reads (blaze run_decode_from_migrated): one entry
-    per migrated pair as ``{"slots": [{dst_slot, prompt_len, last_prompt_token}, ...]}``. ``first_token``
-    is intentionally omitted -- the decode side derives it from the migrated KV.
-
-    This exists for CROSS-ENDPOINT P->D: unlike loopback (where the prefill-side runner validates the KV
-    on-device and needs no prompt metadata), the destination galaxy has no way to know each slot's prompt
-    length / last token, so it cannot pick the decode start position without this sidecar. ``real_len``
-    (element 2 of each triple) is exactly the resident prompt length that was migrated, and the src slot's
-    last prompt token is ``pool[real_len - 1]`` of the trace the producer already loaded.
-
-    Gated on ``PREFILL_MIGRATION_HANDOFF_PATH``: unset => skip entirely, so the loopback / runner-validation
-    flow is byte-for-byte unaffected. Written atomically (tmp + os.replace) and BEFORE the DONE sentinel
-    (see the call site) so a consumer that wakes on DONE always finds a complete handoff."""
-    import json
-
-    handoff_path = os.environ.get("PREFILL_MIGRATION_HANDOFF_PATH", "")
-    if not handoff_path:
-        return
-    slots = []
-    for src, dst, real_len in triples:
-        pool = pools_by_trace[slot_traces[src]]
-        last_tok = int(pool[real_len - 1]) if 1 <= real_len <= len(pool) else int(pool[-1])
-        slots.append({"dst_slot": int(dst), "prompt_len": int(real_len), "last_prompt_token": last_tok})
-    tmp = handoff_path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump({"slots": slots}, f)
-    os.replace(tmp, handoff_path)  # atomic: the decode side never reads a half-written handoff
-    logger.success(f"[producer] wrote migration handoff {handoff_path} ({len(slots)} slot(s)): {slots}")
-
-
 def main() -> None:
     # The manifest (--manifest / PREFILL_PRODUCER_MANIFEST) is already applied at import, before the
     # module constants were read; parse here too so `--help` documents it and unknown args error out.
@@ -1168,16 +903,8 @@ def main() -> None:
         default=os.environ.get("PREFILL_PRODUCER_MANIFEST"),
         help="Path to the producer YAML manifest (applied at startup; exported env vars override it).",
     )
-    parser.add_argument(
-        "--migrations",
-        default=None,
-        help="Arbitrary src->dst migration mapping as 'src:dst,src:dst,...' (e.g. '0:5,1:2,3:7'). Overrides "
-        "PREFILL_MIGRATION_PAIRS / the manifest and the uniform PREFILL_MIGRATION_DST_SLOT_OFFSET fallback.",
-    )
+    migration_driver.add_cli_arguments(parser)  # --migrate / --migrations
     args = parser.parse_args()
-    # CLI wins over env/manifest for the migration mapping (env/manifest set this via setdefault).
-    if args.migrations is not None:
-        os.environ["PREFILL_MIGRATION_PAIRS"] = args.migrations
 
     cfg = _config_from_env()
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
@@ -1196,28 +923,10 @@ def main() -> None:
     kv_table = _read_kv_chunk_table(timeout_s)
     ack_channel = _connect_layer_ack_channel(timeout_s)
 
-    # Opt-in: attach a migration client so we can issue real slot->slot migrations after prefill.
-    # Attach here (post-connect) so it fails fast if the endpoint isn't up, before we push chunks.
-    ml = _attach_migration_client() if ISSUE_MIGRATION else None
-    dst_slot_offset = int(os.environ.get("PREFILL_MIGRATION_DST_SLOT_OFFSET", str(cfg.num_users)))
-
-    # CROSS-ENDPOINT pairing (P->D): pair this prefill endpoint with the decode endpoint NOW -- right
-    # after attach, BEFORE the long prefill -- so the decode's PUBLISHER connect_to (which blocks
-    # waiting for us) rendezvous's promptly instead of risking a connect timeout during prefill.
-    # Without this, both endpoints self-loopback and migrate() aborts "No remote table found for
-    # destination". Convention matches the decode side + smoke test: lower id = PUBLISHER (accepts),
-    # higher = CONNECTOR (initiates); both sides derive ONE service_name from the id pair.
-    if ml is not None and MIGRATION_DEST_ENDPOINT_ID != MIGRATION_SRC_ENDPOINT_ID:
-        _pub = min(MIGRATION_SRC_ENDPOINT_ID, MIGRATION_DEST_ENDPOINT_ID)
-        _con = max(MIGRATION_SRC_ENDPOINT_ID, MIGRATION_DEST_ENDPOINT_ID)
-        _svc = f"pd-migration-ep{_pub}-ep{_con}"
-        _role = "PUBLISHER" if MIGRATION_SRC_ENDPOINT_ID == _pub else "CONNECTOR"
-        logger.info(
-            f"[producer] cross-endpoint pairing: connect_to(remote_ep={MIGRATION_DEST_ENDPOINT_ID}, "
-            f"role={_role}, service={_svc}) own_ep={MIGRATION_SRC_ENDPOINT_ID}"
-        )
-        ml.connect_to(remote_endpoint_id=MIGRATION_DEST_ENDPOINT_ID, role=_role, service_name=_svc)
-        logger.success(f"[producer] cross-endpoint pairing established with remote_ep={MIGRATION_DEST_ENDPOINT_ID}")
+    # Opt-in migration; None when off (see runners/migration_driver.py).
+    migrator = migration_driver.start(
+        args, chunk_size=CHUNK_SIZE, num_layers=NUM_LAYERS, default_dst_slot_offset=cfg.num_users
+    )
 
     # Per-slot prompts: each slot pushes tokens from (and is PCC'd against) its own trace. With no
     # PREFILL_PRODUCER_SLOT_TRACES this is one shared trace for all slots (unchanged behavior).
@@ -1250,36 +959,14 @@ def main() -> None:
     # Wait for the runner's per-layer LayerAcks: NUM_LAYERS per chunk, for every chunk pushed.
     _drain_layer_acks(ack_channel, NUM_LAYERS * stats.total_pushes)
 
-    # Migrate over the migration layer now that the KV is fully resident, then hand the (src, dst) pairs
-    # to the runner. Like the llm-engine scheduler driver, the producer does NOT validate KV — the runner
-    # does that ON-DEVICE (src vs golden, dst vs golden, and/or dst==src) in validate_after_prefill once
-    # PREFILL_VALIDATE_MIGRATION=1 sees the sentinel. The mapping is either an arbitrary src:dst list
-    # (PREFILL_MIGRATION_PAIRS / --migrations) or, absent that, every resident src -> src+dst_slot_offset.
-    if ml is not None:
-        num_slots = kv_table.config().num_slots if kv_table is not None else None
-        cross_endpoint = MIGRATION_DEST_ENDPOINT_ID != MIGRATION_SRC_ENDPOINT_ID
-        triples = _resolve_migration_pairs(
-            stats, dst_slot_offset=dst_slot_offset, num_slots=num_slots, cross_endpoint=cross_endpoint
-        )
-        # PREFILL_MIGRATION_LAYERS="0,3" => extract only those layers (one migrate per layer) into a
-        # layer-id-indexed decode table; unset => migrate the whole [0,NUM_LAYERS) range in one shot.
-        _ml_spec = os.environ.get("PREFILL_MIGRATION_LAYERS", "").strip()
-        migration_layers = [int(x) for x in _ml_spec.split(",") if x.strip()] if _ml_spec else None
-        if migration_layers:
-            logger.info(f"[producer] migrating layer subset {migration_layers} (one migrate per layer)")
-        _issue_migrations(
-            ml,
-            triples,
-            dest_endpoint_id=MIGRATION_DEST_ENDPOINT_ID,
-            timeout_ms=MIGRATION_TIMEOUT_MS,
-            migration_layers=migration_layers,
-        )
-        # Cross-endpoint P->D: write the decode-side JSON handoff (dst_slot/prompt_len/last_prompt_token)
-        # BEFORE the DONE sentinel, so a consumer that wakes on DONE always finds a complete handoff.
-        # No-op unless PREFILL_MIGRATION_HANDOFF_PATH is set => loopback/runner-validation flow unchanged.
-        _write_migration_handoff(triples, slot_traces, pools_by_trace)
-        # Same handshake the llm-engine driver used: write the (src, dst) pairs; the runner validates.
-        _write_migration_done_sentinel(triples)
+    # Migrate now that the KV is fully resident (no-op when migration is off).
+    migration_driver.finish(
+        migrator,
+        stats,
+        num_slots=kv_table.config().num_slots if kv_table is not None else None,
+        slot_traces=slot_traces,
+        pools_by_trace=pools_by_trace,
+    )
 
     # Pre-existing producer-only golden PCC (PREFILL_PRODUCER_CHECK_PCC), for standalone/non-migration
     # runs. NOT part of the migration flow — migration KV is validated by the runner, not here.
