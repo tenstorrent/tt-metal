@@ -48,9 +48,10 @@ struct BernoulliDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     // seed is excluded from the program hash (so calls differing only in seed cache-hit); it is
-    // DYNAMIC and re-applied to the cached program on every dispatch. Must mirror the compute-kernel
-    // seed runtime arg built in create_descriptor().
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+    // re-applied to the cached program on every hit via override_runtime_arguments() by re-running
+    // create_descriptor() (single source of truth). See the .cpp.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& output,

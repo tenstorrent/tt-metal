@@ -200,23 +200,18 @@ ProgramDescriptor BernoulliDeviceOperation::create_descriptor(
     return desc;
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> BernoulliDeviceOperation::get_dynamic_runtime_args(
+void BernoulliDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
-    const tensor_args_t& /*tensor_args*/,
+    const tensor_args_t& tensor_args,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // compute is kernel 2 (reader 0, writer 1); its args are {seed, tile_offset, units_per_core}.
-    // Only the per-call seed is re-applied.
-    constexpr uint32_t kComputeKernelIdx = 2;
-    auto cores = bernoulli_work_split(output).cores;
-
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    dynamic_args.reserve(cores.size());
-    for (int i = 0; i < static_cast<int>(cores.size()); ++i) {
-        const uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
-        dynamic_args.push_back({kComputeKernelIdx, cores[i], 0, seed});
-    }
-    return dynamic_args;
+    // Re-derive the descriptor from the single source of truth (create_descriptor) and re-apply its
+    // per-core runtime args (incl. hash-excluded seed) + tensor-backed CB/buffer addresses to the
+    // cached program. No program rebuild; supersedes get_dynamic/resolve_bindings and is correct
+    // under in-place aliasing (#48928).
+    auto desc = create_descriptor(operation_attributes, tensor_args, output);
+    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 
 }  // namespace ttnn::operations::bernoulli
