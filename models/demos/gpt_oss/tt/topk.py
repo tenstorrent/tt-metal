@@ -52,13 +52,16 @@ class TopKRouter:
         self.tensor_cache_path = tensor_cache_path
         torch_weight = state_dict["weight"].transpose(0, 1) if state_dict else None
         torch_bias = state_dict["bias"].unsqueeze(0) if state_dict else None
+        # Router weight (hidden x 32) + bias are tiny (~184KB) and read every decode
+        # token. Pin them in L1 (not DRAM) so the per-token router matmul reads from
+        # on-chip memory (far higher aggregate BW than DRAM).
         self.weight = ttnn.as_tensor(
             torch_weight,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
             cache_file_name=get_cache_file_name(tensor_cache_path, "weight"),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         self.bias = ttnn.as_tensor(
             torch_bias,
@@ -66,7 +69,7 @@ class TopKRouter:
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
             cache_file_name=get_cache_file_name(tensor_cache_path, "bias"),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         # Keep compute_config=None for linear (known quality-safe default)
