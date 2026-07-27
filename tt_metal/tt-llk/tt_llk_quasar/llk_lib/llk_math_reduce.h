@@ -254,14 +254,15 @@ inline void _llk_math_reduce_row_mop_config_(const TensorShape& tensor_shape)
                                                       ? (tensor_shape.total_num_faces() >> 1)
                                                       : tensor_shape.total_num_faces();
 
-    std::uint32_t replay_buf_len = 7 + NUM_FIDELITY_PHASES;
+    constexpr std::uint32_t fidelity_slots = RUN_FID_LOOPS ? NUM_FIDELITY_PHASES : 0;
+    std::uint32_t replay_buf_len           = 7 + fidelity_slots;
     if (tensor_shape.total_num_faces() > 1 && tensor_shape.num_faces_c_dim >= tensor_shape.num_faces_r_dim)
     {
         if (tensor_shape.total_num_faces() == NUM_FACES)
         {
             replay_buf_len++;
         }
-        replay_buf_len += NUM_FIDELITY_PHASES + 1U;
+        replay_buf_len += fidelity_slots + 1U;
     }
 
     if (tensor_shape.face_r_dim > ELTWISE_MATH_ROWS)
