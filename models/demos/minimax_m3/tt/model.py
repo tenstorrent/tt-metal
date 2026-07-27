@@ -169,13 +169,8 @@ class Model:
         self.sin_matrix = self.rope_setup.sin_matrix
         self.transformation_mats = self.rope_setup.get_both_trans_mats()
 
-        # Embedding: FIRST RANK ONLY (later pipeline ranks receive an already-embedded hidden state).
-        # Parallel (sharded) token embedding: the [vocab, hidden] table is sharded on hidden across the TP
-        # cols and (2D/default) on vocab across the SP rows, so each device stores only a slice — far less
-        # than a fully-replicated table. forward() does the local emb-dim-slice lookup then a managed TP
-        # all-gather to rebuild the full-hidden, TP-replicated residual stream (kept bf16 for dynamic range).
-        # Sharding mode: 2D vocab+hidden by default; M3_EMBED_SHARD_VOCAB=0 for 1D hidden-only — see
-        # tt/parallel_embedding.py (2D adds ~0.5 GiB/device saving for two SP-axis CCL ops per chunk).
+        # Sharded token embedding — first rank only (later pipeline ranks get an already-embedded hidden
+        # state). Default 2D (vocab+hidden sharded); M3_EMBED_SHARD_VOCAB=0 for 1D. See tt/parallel_embedding.py.
         if is_first_rank:
             shard_vocab = embed_shard_2d()
             if state_dict:

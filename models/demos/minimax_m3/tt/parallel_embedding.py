@@ -26,16 +26,18 @@ Forward (2D vocab-parallel), given SP-seq-sharded tokens ``[1, 1, s_local]`` (ro
 ``[r*s_local:(r+1)*s_local]``) and per-device weight ``[vocab/sp, emb_dim/tp]`` (row r owns vocab rows
 ``[r*vocab/sp:(r+1)*vocab/sp]``):
   1. SP all-gather the tokens so every row sees all ``s_total`` positions;
-  2. per-row MASKED lookup: subtract the row's vocab-start, keep only in-range indices (index math in
-     fp32 — token IDs <= ~2^24 are exact — so we avoid ttnn's thin int32 elementwise support), zero the
-     out-of-range rows of the result;
+  2. per-row MASKED lookup: subtract the row's vocab-start (signed — out-of-range tokens go negative),
+     keep only the in-range indices, zero the out-of-range rows. Index math runs in fp32 (exact for token
+     IDs <= 2^24); int32 would work too, but the lookup index is cast to uint32 either way — ttnn.embedding
+     requires uint32;
   3. SP reduce-scatter on the seq dim: sums across the SP vocab shards (each token is resolved by exactly
      one row) AND scatters seq back to per-row shards -> ``[1, 1, s_local, emb_dim / tp]``;
   4. TP all-gather on emb_dim -> ``[1, 1, s_local, emb_dim]`` — same output contract as the 1D path.
 
 Weight caching mirrors every other M3 weight: a per-tensor tilized ``.tensorbin`` via
 ``ttnn.as_tensor(cache_file_name=)``. On a cache hit ``torch_weight`` is ignored (may be ``None``). The
-1D and 2D layouts use DISTINCT cache keys so a stale layout is never loaded as the other.
+1D and 2D layouts use distinct cache keys (``_1d`` / ``_2d`` — neither a prefix of the other) so a stale
+layout is never loaded as the other.
 """
 
 import os
@@ -46,9 +48,11 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
-# Cache keys for the SHARDED embed table. Distinct from "model.embed_tokens.weight" (the old replicated
-# layout) AND from each other, so a stale .tensorbin is never loaded under the wrong sharding.
-EMBED_CACHE_NAME = "model.embed_tokens.weight_parallel"
+# Cache keys for the SHARDED embed table. Distinct from the old replicated "model.embed_tokens.weight",
+# and — critically — neither key is a prefix of the other: weight_cache_is_complete matches by startswith,
+# so a bare "..._parallel" would false-positive on a "..._parallel_2d" .tensorbin (and vice versa). The
+# _1d/_2d suffixes keep the prefixes disjoint.
+EMBED_CACHE_NAME = "model.embed_tokens.weight_parallel_1d"
 EMBED_CACHE_NAME_2D = "model.embed_tokens.weight_parallel_2d"
 
 # The single toggle between the two sharding modes. 2D (vocab+hidden) is the default; the whole model —
@@ -178,7 +182,7 @@ class TtParallelEmbedding(LightweightModule):
         in_hi = ttnn.lt(local_f, float(self.vocab_local))
         mask = ttnn.multiply(in_lo, in_hi)  # {0.,1.} [1,1,1,s_total]
         local_idx = ttnn.multiply(local_f, mask)  # out-of-range -> index 0 (zeroed by mask below)
-        local_idx = ttnn.typecast(local_idx, ttnn.uint32)
+        local_idx = ttnn.typecast(local_idx, ttnn.uint32)  # ttnn.embedding requires UINT32 indices
         local_idx = ttnn.reshape(local_idx, [1, 1, s_total])
 
         emb = ttnn.embedding(local_idx, self.weight, layout=ttnn.TILE_LAYOUT, dtype=self.dtype)
@@ -192,16 +196,7 @@ class TtParallelEmbedding(LightweightModule):
         # 3) SP reduce-scatter on the seq dim: sum across vocab shards (each token resolved by exactly one
         #    SP row) AND scatter seq back to per-row shards -> [1,1,s_local,emb_dim/tp].
         if sp > 1:
-            emb = ttnn.experimental.reduce_scatter_minimal_async(
-                emb,
-                dim=2,
-                multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(),
-                num_links=self.ccl_manager.num_links,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.ccl_manager.topology,
-                cluster_axis=self.sp_axis,
-                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(),
-            )
+            emb = self.mesh_config.reduce_scatter(emb, self.ccl_manager, dim=2, axis=self.sp_axis)
 
         # 4) TP all-gather on emb_dim -> [1,1,s_local,emb_dim] (full hidden, TP-replicated).
         if tp > 1:
