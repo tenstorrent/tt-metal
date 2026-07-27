@@ -197,9 +197,8 @@ class TestLoraInjection:
         for block in lora_model.model.blocks:
             assert isinstance(block.attention.qkv_linear, LoraLinear)
             assert isinstance(block.attention.out_linear, LinearLayer)
-            assert isinstance(block.mlp.w1, LinearLayer)
+            assert isinstance(block.mlp.w_gate_up, LinearLayer)
             assert isinstance(block.mlp.w2, LinearLayer)
-            assert isinstance(block.mlp.w3, LinearLayer)
 
     def test_target_modules_replaced_nanogpt(self, toy_gpt_config):
         model = create_nanogpt(toy_gpt_config)
@@ -591,7 +590,7 @@ class TestLoraForwardPass:
         lora_config = LoraConfig(
             rank=4,
             alpha=8.0,
-            target_modules=["qkv_linear", "out_linear", "w1", "w2", "w3"],
+            target_modules=["qkv_linear", "out_linear", "w_gate_up", "w2"],
         )
         lora_model = LoraModel(model, lora_config)
         lora_model.eval()
