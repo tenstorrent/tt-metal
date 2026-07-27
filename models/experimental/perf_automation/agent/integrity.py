@@ -21,6 +21,17 @@ decision that should never have been site-local.
        bool(_parse_trace_path(out))  -> bool("eager") is True -> eager banked as trace
      RULE: absence of the marker is UNKNOWN, not OK.
 
+  5. A NUMBER COMPARED WITHOUT ITS PROVENANCE (2026-07-27 audit).
+       baseline 832.93 -> final 1088.15 (-30.6%)   2-layer profile vs a 16-layer one
+       before 47.10 -> after 100.00 (-112.3%)      eager wall-clock vs trace+1cq per-token
+       0.0612 ms pinned as the permanent baseline  an empty capture, correctly stamped
+       714.94 -> 714.94 (+0.0%)                    anchor fell back to the CURRENT value
+     Four separate headlines, all reporting a change that never happened, all fixed one at a time
+     with a bespoke check -- which is how the fifth arrives. A ms figure is meaningless without the
+     work it covers (DEPTH), the method that produced it (MODE) and where in the run it was taken
+     (STAGE). Two numbers may only be differenced when all three agree.
+     RULE: carry provenance with the value; refuse the delta, never guess.
+
 And one cross-cutting lesson worth its own primitive: a single predicate with a default was used for
 two decisions needing OPPOSITE conservatism ("reset the board?" vs "was this lever fairly tried?").
 Fixing one broke the other. Three states, each caller picking its own safe side, is the fix.
@@ -285,6 +296,89 @@ class Measurement:
 
     def __repr__(self) -> str:
         return "Measurement(%s)" % (self._value if self.ok else "unmeasured: " + self.reason)
+
+
+class Reading:
+    """A measured ms value together with everything needed to know what it may be compared to.
+
+    Every reporting bug found in the 2026-07-27 audit was the same shape: a bare float, correct in
+    isolation, differenced against another bare float that measured something else. Naming the axes
+    once -- and refusing the subtraction when they disagree -- removes the whole class rather than the
+    instance, so a number added to the report later inherits the guard instead of needing its own.
+
+    depth  how much of the model the number covers ("16", "all"). The roofline floor SUMS per-op
+           floors over the profiled window, and device_ms scales with it, so a 2-layer figure is
+           simply a different quantity from a 16-layer one.
+    mode   how it was produced ("eager", "trace+1cq"). The same field carries a per-token decode step
+           in one mode and a whole-forward wall clock in another.
+    stage  when in the run it was taken ("baseline", "current"). An anchor must predate every lever;
+           falling back to the current value silently reports +0.0%.
+    """
+
+    __slots__ = ("value", "depth", "mode", "stage", "source")
+
+    def __init__(self, value, depth: str = "", mode: str = "", stage: str = "", source: str = ""):
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            v = None
+        self.value = v if (v is not None and v > 0) else None
+        self.depth = _norm_axis(depth)
+        self.mode = _norm_axis(mode)
+        self.stage = _norm_axis(stage)
+        self.source = source
+
+    @property
+    def ok(self) -> bool:
+        return self.value is not None
+
+    def __bool__(self) -> bool:
+        return self.ok
+
+    def comparable_to(self, other) -> "Verdict":
+        """May these two be differenced? PASS / FAIL / UNKNOWN, and UNKNOWN is never truthy.
+
+        An axis unknown on BOTH sides is tolerated -- legacy readings carry no provenance and refusing
+        every one of them would be noise. An axis known on ONE side only is NOT assumed to match: that
+        is precisely the case where a mode or depth changed underneath a value captured earlier.
+        """
+        if not isinstance(other, Reading):
+            return Verdict.unknown("not a Reading")
+        if not self.ok or not other.ok:
+            return Verdict.unknown("one side has no usable measurement")
+        for axis in ("depth", "mode", "stage"):
+            a, b = getattr(self, axis), getattr(other, axis)
+            if a and b and a != b:
+                return Verdict.failed("%s differs: %s vs %s" % (axis, a, b))
+            if bool(a) != bool(b):
+                return Verdict.unknown("%s known on one side only (%r vs %r)" % (axis, a, b))
+        return Verdict.passed("comparable")
+
+    def delta_pct_vs(self, other):
+        """Improvement of THIS reading against `other` as a percentage, or None when not comparable.
+
+        None is the whole point: the callers that fabricated regressions all computed a percentage
+        from two numbers they had no business subtracting.
+        """
+        if not self.comparable_to(other).is_pass:
+            return None
+        return (other.value - self.value) / other.value * 100.0
+
+    def label(self) -> str:
+        """How the value should be written in a report: never bare."""
+        if not self.ok:
+            return "n/a"
+        bits = [
+            b for b in (self.depth and "%s layers" % self.depth if self.depth.isdigit() else self.depth, self.mode) if b
+        ]
+        return "%.2f ms%s" % (self.value, (" [%s]" % ", ".join(bits)) if bits else "")
+
+    def __repr__(self) -> str:
+        return "Reading(%s, depth=%r, mode=%r, stage=%r)" % (self.value, self.depth, self.mode, self.stage)
+
+
+def _norm_axis(v) -> str:
+    return str(v or "").strip().lower()
 
 
 _WIN_FRAC = float(os.environ.get("PERF_MCP_WIN_FRAC", "0.01") or "0.01")

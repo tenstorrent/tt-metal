@@ -302,18 +302,50 @@ def _stages_from_profile(baseline_profile: dict | None) -> list:
     return rows
 
 
-def _same_measurement(before_mode: str, after_mode: str) -> bool:
-    """Are two full-pipeline readings the same KIND of number?
+def _run_baseline_ms(baseline_profile: dict | None):
+    """THIS run's own starting measurement, from the profile captured before any lever was applied.
 
-    Only then is their difference a speedup. Unknown on BOTH sides is treated as comparable, because
-    older runs recorded no mode at all and refusing every legacy pair would be noise; a mode known on
-    one side and not the other is NOT assumed to match.
+    Distinct from the `baseline_ms` argument, which run.py fills with the CURRENT committed value --
+    a name that invites exactly the mistake of treating it as the run's starting point.
     """
-    b = (before_mode or "").strip().lower()
-    a = (after_mode or "").strip().lower()
-    if not b and not a:
-        return True
-    return b == a
+    if not isinstance(baseline_profile, dict):
+        return None
+    try:
+        v = float(baseline_profile.get("device_ms") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    return v if v > 0 else None
+
+
+def _reading(value, mode: str = "", stage: str = "", depth: str = ""):
+    """Wrap a ms value with its provenance. Delegates to integrity.Reading so DEPTH, MODE and STAGE
+    are defined once for the whole tool rather than re-checked ad hoc at each render site -- every
+    reporting bug in the 2026-07-27 audit was a bare float compared against another bare float."""
+    try:
+        _pa = str(Path(__file__).resolve().parent.parent)
+        if _pa not in sys.path:
+            sys.path.insert(0, _pa)
+        from agent.integrity import Reading
+
+        return Reading(value, depth=depth or _raw_depth(), mode=mode, stage=stage)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _raw_depth() -> str:
+    raw = (os.environ.get("TT_PERF_LAYERS") or "").strip()
+    return raw if raw.isdigit() and int(raw) > 0 else "all"
+
+
+def _same_measurement(before_mode: str, after_mode: str) -> bool:
+    """Are two full-pipeline readings the same KIND of number? Thin wrapper over Reading so the rule
+    lives in one place; kept as a predicate because the render site reads better that way."""
+    a = _reading(1.0, mode=before_mode)
+    b = _reading(1.0, mode=after_mode)
+    if a is None or b is None:  # integrity unavailable: fall back to the literal comparison
+        x, y = (before_mode or "").strip().lower(), (after_mode or "").strip().lower()
+        return x == y
+    return bool(a.comparable_to(b))
 
 
 def _depth_label() -> str:
@@ -441,7 +473,10 @@ def _baseline_bucket_lines(baseline_profile: dict | None, report_csv: str = "") 
     buckets = prof.get("buckets") if isinstance(prof, dict) else None
     if not buckets:
         return []
-    out = ["Op breakdown — device time by op class (latest profile · what to target, ranked):"]
+    # Says BASELINE, because that is what it reads. It was labelled "latest profile" while sourcing
+    # baseline_profile["buckets"], so the table summed to the starting 2464 ms directly above a
+    # "measured: 714.94 ms" roofline -- two different points in the run, presented as one.
+    out = ["Op breakdown — device time by op class (BASELINE profile · what to target, ranked):"]
     hdr = f"{'op class':<15} {'device_ms':>10} {'%':>6} {'count':>7} {'bound':>6}  dominant op (shape)"
     out.append(hdr)
     out.append("-" * min(len(hdr) + 30, 118))
@@ -513,7 +548,15 @@ def render_summary(
         if isinstance(a, dict) and a.get("beat_baseline") and a.get("measured_ms") is not None
     ]
     final_ms = final_override_ms if final_override_ms is not None else (min(win_ms) if win_ms else baseline_ms)
-    hdr_base = original_baseline_ms if original_baseline_ms is not None else baseline_ms
+    # ANCHOR for the headline, most trustworthy first. Falling straight back to `baseline_ms` is
+    # wrong: run.py passes the CURRENT committed ms in that slot, so refusing a stale original made a
+    # 3.45x run print "714.94 -> 714.94 (+0.0%)". This run's own baseline_profile.json is written once
+    # at the start and is the only value guaranteed to predate every lever.
+    hdr_base = original_baseline_ms
+    if hdr_base is None:
+        hdr_base = _run_baseline_ms(baseline_profile)
+    if hdr_base is None:
+        hdr_base = baseline_ms
     # The baseline is a measured fact, never a derived one. This used to substitute the SLOWEST
     # measurement ever recorded whenever the real baseline was not better than the final -- i.e.
     # precisely when the run achieved NOTHING -- so 100 -> 105 with a 180 ms failed experiment
@@ -546,7 +589,7 @@ def render_summary(
         lines.append("eager per-op device time: unavailable (no profile found)")
     _bl_trace = _baseline_trace_ms(baseline_profile)
     if _bl_trace:
-        lines.append(f"tracy trace pass, same window ({_depth_label()}):  {_bl_trace:.2f} ms")
+        lines.append(f"tracy trace pass, BASELINE, same window ({_depth_label()}):  {_bl_trace:.2f} ms")
     _trace_scope = f"module ({task})" if os.environ.get("TT_PERF_MODULE_LEVEL") == "1" else "full-pipeline e2e"
     _all = _all_layers_label()
     _mode_ok = _same_measurement(before_mode, after_mode)
@@ -577,12 +620,20 @@ def render_summary(
     lines.extend(_baseline_bucket_lines(baseline_profile, report_csv))
 
     _st = next((a for a in reversed(attempts) if isinstance(a, dict) and a.get("stages")), None)
+    if _st:
+        lines.append(
+            f"Block-level timing (per-stage trace) — latest lever on {_op_label(_st.get('op_signature', '?'))}:"
+        )
+        lines.extend(_stage_table_lines(_st["stages"]))
+        lines.append("")
+
+    _st = next((a for a in reversed(attempts) if isinstance(a, dict) and a.get("stages")), None)
     _stages = _st["stages"] if _st else _stages_from_profile(baseline_profile)
     if _stages:
         _lbl = (
             f"latest lever on {_op_label(_st.get('op_signature', '?'))}"
             if _st
-            else "op-class breakdown (latest profile)"
+            else "op-class breakdown (BASELINE profile)"
         )
         lines.append(f"Block-level timing (per-stage trace) — {_lbl}:")
         lines.extend(_stage_table_lines(_stages))

@@ -317,9 +317,17 @@ def _reset_fullpipe_baselines() -> None:
     trace+1cq end to end) and the one every compute win is banked against; an old higher-rank
     entry left behind would veto every candidate for the whole run without ever being overwritten."""
     try:
-        (Path(tempfile.gettempdir()) / "perf_mcp_full_pipeline_baseline_1cq.json").unlink()
+        (Path(tempfile.gettempdir()) / _fullpipe_1cq_name()).unlink()
     except Exception:
         pass
+
+
+def _fullpipe_1cq_name() -> str:
+    """Filename of the full-pipeline scoreboard, keyed by (model, task) to match perf_mcp. An unkeyed
+    global file let a stray process overwrite a live run's AFTER number."""
+    model = os.environ.get("PERF_MCP_MODEL_NAME") or Path(os.environ.get("PERF_MCP_MODEL_ROOT", "model")).name
+    task = os.environ.get("PERF_MCP_TASK", "main")
+    return "perf_mcp_full_pipeline_baseline_1cq_%s_%s.json" % (model, task)
 
 
 def _read_fullpipe_best_1cq():
@@ -333,7 +341,7 @@ def _read_fullpipe_best_1cq():
     llama3_1_8b_p150, a regression that is not one. Return the mode so the caller can refuse.
     """
     try:
-        p = Path(tempfile.gettempdir()) / "perf_mcp_full_pipeline_baseline_1cq.json"
+        p = Path(tempfile.gettempdir()) / _fullpipe_1cq_name()
         d = json.loads(p.read_text())
         ms = float(d.get("full_pipeline_ms") or 0.0)
         mode = str(d.get("mode") or d.get("method") or "")
@@ -2104,6 +2112,17 @@ def _emit_summary(
         _tp = Path(_tf.gettempdir()) / ("perf_mcp_throughput_%s_%s.json" % (model_name, task))
         if _tp.exists():
             _throughput = json.loads(_tp.read_text())
+            # The roofline floor sums per-op floors over the PROFILED window, so it is only
+            # comparable to a measurement taken at the same depth. This snapshot survives between
+            # runs; drop it when the window moved rather than render a floor from a different scope.
+            _wl = (os.environ.get("TT_PERF_LAYERS") or "").strip() or "all"
+            _sl = str((_throughput or {}).get("perf_layers", "")).strip()
+            if _sl and _sl != _wl:
+                print(
+                    "  [optimize/cc] roofline snapshot was computed at TT_PERF_LAYERS=%s but this run "
+                    "uses %s; omitting the floor rather than comparing across depths" % (_sl, _wl)
+                )
+                _throughput = None
     except Exception:  # noqa: BLE001
         _throughput = None
     text = mod.render_summary(

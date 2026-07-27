@@ -75,7 +75,18 @@ def _baseline_path():
 
 
 # The tool is trace+1cq end to end; this is the ONLY full-pipeline baseline (no 2-CQ twin).
-_FULLPIPE_BASELINE_1CQ_PATH = Path(tempfile.gettempdir()) / "perf_mcp_full_pipeline_baseline_1cq.json"
+# KEYED by (model, task), like _baseline_path() and _original_baseline_path(). It was a single global
+# file, so anything on the box could overwrite a live run's AFTER number: on 2026-07-27 a unit test
+# writing a fixture value of 100.0 to the real path landed in a 10-hour optimize run whose every
+# actual reading was ~23.9 ms, and two concurrent optimize runs would have done the same to each
+# other. A scoreboard that any other process can write is not a scoreboard.
+def _fullpipe_baseline_1cq_path():
+    model = _MODEL_ROOT.name if _MODEL_ROOT else "model"
+    task = os.environ.get("PERF_MCP_TASK", "main")
+    return Path(tempfile.gettempdir()) / ("perf_mcp_full_pipeline_baseline_1cq_%s_%s.json" % (model, task))
+
+
+_FULLPIPE_BASELINE_1CQ_PATH = _fullpipe_baseline_1cq_path()
 # Divergence tolerance for the end-to-end gate. This is NOT a licence to commit a regression:
 # it only decides when to shout "diverged". A reading that is slower than the committed best
 # is reported as a regression regardless (see the regressed branch below), because "within 8%
@@ -2931,6 +2942,11 @@ def _persist_throughput(rep: dict) -> None:
             "peak_bw_gbps": float((_ENV or {}).get("dram_bw_gbps", 0.0)),
             "tp_degree": target.tp_degree,
             "modeled_floor_ms": rep.get("modeled_floor_ms"),
+            # The floor is a SUM OVER THE PROFILED OPS, so it scales with the window it was computed
+            # at. This snapshot is keyed by (model, task) and persists across runs, so without the
+            # depth a 2-layer floor can be rendered against a 16-layer measurement -- the same defect
+            # that produced the 832.93-vs-1088.15 headline, one section lower in the report.
+            "perf_layers": (os.environ.get("TT_PERF_LAYERS") or "").strip() or "all",
         }
         _throughput_path().write_text(json.dumps(snap))
     except Exception:  # noqa: BLE001

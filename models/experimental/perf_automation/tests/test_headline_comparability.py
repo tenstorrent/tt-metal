@@ -158,7 +158,7 @@ def test_every_reported_number_names_its_depth(monkeypatch):
         baseline_profile={"per_token_ms": 24.98},
     )
     assert "eager per-op device time (16 layers)" in txt
-    assert "tracy trace pass, same window (16 layers):  24.98 ms" in txt
+    assert "tracy trace pass, BASELINE, same window (16 layers):  24.98 ms" in txt
     assert "(all 32 layers)" in txt
     assert "baseline " not in txt.split("Roofline")[0]  # the ambiguous word is gone
 
@@ -170,3 +170,46 @@ def test_depth_label_says_all_layers_when_uncapped(monkeypatch):
     assert S._depth_label() == "all layers"
     monkeypatch.setenv("TT_PERF_LAYERS", "8")
     assert S._depth_label() == "8 layers"
+
+
+# --- the anchor must be this run's own starting point, never its current value -----------------
+
+
+def test_refusing_a_stale_original_does_not_collapse_the_headline():
+    """run.py passes the CURRENT committed ms in the `baseline_ms` slot, so falling straight back to
+    it made a 3.45x run print "714.94 -> 714.94 (+0.0%)". The run's own baseline_profile is the only
+    value guaranteed to predate every lever."""
+    txt = _headline(
+        baseline_ms=714.94, original_baseline_ms=None, final_override_ms=714.94, baseline_profile={"device_ms": 2464.18}
+    )
+    assert "2464.18 ms  ->  714.94 ms" in txt and "3.45x" in txt
+    assert "714.94 ms  ->  714.94 ms" not in txt
+
+
+def test_falls_back_to_baseline_ms_only_when_no_profile_exists():
+    txt = _headline(baseline_ms=900.0, original_baseline_ms=None, final_override_ms=450.0, baseline_profile=None)
+    assert "900.00 ms  ->  450.00 ms" in txt
+
+
+def test_a_zero_or_missing_profile_device_ms_is_not_used_as_the_anchor():
+    for prof in ({"device_ms": 0}, {"device_ms": None}, {"device_ms": "x"}, {}):
+        txt = _headline(baseline_ms=900.0, original_baseline_ms=None, final_override_ms=450.0, baseline_profile=prof)
+        assert "900.00 ms  ->  450.00 ms" in txt, "an unusable profile value became the anchor"
+
+
+def test_sections_say_which_profile_they_came_from():
+    """The op table and the trace line both read the BASELINE profile. Labelling the table 'latest'
+    put a 2464 ms breakdown directly above a 714 ms 'measured' line."""
+    txt = _headline(
+        baseline_ms=714.94,
+        original_baseline_ms=None,
+        final_override_ms=714.94,
+        baseline_profile={
+            "device_ms": 2464.18,
+            "per_token_ms": 33.89,
+            "buckets": [{"id": "matmul", "device_ms": 1010.23, "count": 5600}],
+        },
+    )
+    assert "BASELINE profile" in txt
+    assert "tracy trace pass, BASELINE" in txt
+    assert "latest profile" not in txt

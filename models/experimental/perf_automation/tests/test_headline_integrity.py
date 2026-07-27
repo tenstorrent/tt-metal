@@ -53,6 +53,13 @@ def _fresh_perf_mcp(tmp_path, **env):
         mod = importlib.util.module_from_spec(spec)
         sys.modules["perf_mcp_headline_ut"] = mod
         spec.loader.exec_module(mod)
+        # Point every /tmp-rooted path at tmp_path EXPLICITLY. Setting TMPDIR above is not enough:
+        # perf_mcp computes these at import time via tempfile.gettempdir(), which CACHES its result,
+        # so by the time this fixture runs some earlier test has already resolved it to the real /tmp
+        # and the intended isolation silently does nothing. These tests then wrote 100.0 into the REAL
+        # scoreboard -- which is exactly what corrupted a live 10-hour optimize run on 2026-07-27,
+        # making its AFTER number 100.0 when every measurement was ~23.9 ms.
+        mod._FULLPIPE_BASELINE_1CQ_PATH = tmp_path / "fullpipe_baseline_1cq.json"
         return mod
     finally:
         for k, v in saved.items():

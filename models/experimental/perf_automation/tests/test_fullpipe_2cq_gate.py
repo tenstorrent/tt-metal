@@ -107,9 +107,12 @@ def test_reset_clears_1cq_baseline(tmp_path, monkeypatch):
     run = _u.module_from_spec(spec)
     spec.loader.exec_module(run)
     monkeypatch.setattr(run.tempfile, "gettempdir", lambda: str(tmp_path))
-    (tmp_path / "perf_mcp_full_pipeline_baseline_1cq.json").write_text("{}")
+    # the scoreboard is keyed by (model, task) now -- an unkeyed global file let any process on
+    # the box overwrite a live run's AFTER number
+    _f = tmp_path / run._fullpipe_1cq_name()
+    _f.write_text("{}")
     run._reset_fullpipe_baselines()
-    assert not (tmp_path / "perf_mcp_full_pipeline_baseline_1cq.json").exists()
+    assert not _f.exists()
 
 
 def test_read_fullpipe_best_1cq(tmp_path, monkeypatch):
@@ -124,7 +127,7 @@ def test_read_fullpipe_best_1cq(tmp_path, monkeypatch):
     monkeypatch.setattr(run.tempfile, "gettempdir", lambda: str(tmp_path))
     assert run._read_fullpipe_best_1cq() == (None, "")  # now returns (ms, mode): the mode decides
     # whether the AFTER number is even comparable to the BEFORE bookend
-    (tmp_path / "perf_mcp_full_pipeline_baseline_1cq.json").write_text(
+    (tmp_path / run._fullpipe_1cq_name()).write_text(
         json.dumps({"full_pipeline_ms": 42.5, "method": "trace", "mode": "trace+1cq"})
     )
     assert run._read_fullpipe_best_1cq() == (42.5, "trace+1cq")
