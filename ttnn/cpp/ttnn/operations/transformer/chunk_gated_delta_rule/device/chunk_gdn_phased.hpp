@@ -284,6 +284,59 @@ Tensor kda_gated_rms_norm(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config);
 
+// Four-tap causal convolution whose QKV input is the leading channels of a
+// tiled fused projection.  The implementation keeps the projection tiled and
+// emits the tiled QKV result plus the row-major three-token carry state.
+struct KdaTiledCausalConvParams {
+    uint32_t sequence;
+    uint32_t projected_width;
+    uint32_t q_width;
+    uint32_t k_width;
+    uint32_t v_width;
+    tt::tt_metal::MemoryConfig output_mem_config;
+    DeviceComputeKernelConfig compute_kernel_config;
+};
+
+struct KdaTiledCausalConvInputs {
+    Tensor projected;
+    Tensor state;
+    Tensor tap0;
+    Tensor tap1;
+    Tensor tap2;
+    Tensor tap3;
+};
+
+struct KdaTiledCausalConvProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const KdaTiledCausalConvParams&, const KdaTiledCausalConvInputs&, std::vector<Tensor>&);
+};
+
+struct KdaTiledCausalConvOperation {
+    using operation_attributes_t = KdaTiledCausalConvParams;
+    using tensor_args_t = KdaTiledCausalConvInputs;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
+    using tensor_return_value_t = std::vector<Tensor>;
+    using program_factory_t = std::variant<KdaTiledCausalConvProgramFactory>;
+
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+};
+
+std::vector<Tensor> kda_tiled_causal_conv1d(
+    const Tensor& projected,
+    const Tensor& state,
+    const Tensor& tap0,
+    const Tensor& tap1,
+    const Tensor& tap2,
+    const Tensor& tap3,
+    uint32_t q_width,
+    uint32_t k_width,
+    uint32_t v_width,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const DeviceComputeKernelConfig& compute_kernel_config);
+
 struct KdaCausalConvParams {
     uint32_t sequence;
     uint32_t q_width;

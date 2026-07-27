@@ -962,4 +962,141 @@ tt::tt_metal::ProgramDescriptor KdaCausalConvProgramFactory::create_descriptor(
     return desc;
 }
 
+tt::tt_metal::ProgramDescriptor KdaTiledCausalConvProgramFactory::create_descriptor(
+    const KdaTiledCausalConvParams& attrs, const KdaTiledCausalConvInputs& in, std::vector<Tensor>& outputs) {
+    constexpr uint32_t act_rm_cb = tt::CBIndex::c_0;
+    constexpr uint32_t act_tile_cb = tt::CBIndex::c_1;
+    constexpr uint32_t weights_cb = tt::CBIndex::c_2;
+    constexpr uint32_t partial_a_cb = tt::CBIndex::c_3;
+    constexpr uint32_t partial_b_cb = tt::CBIndex::c_4;
+    constexpr uint32_t output_cb = tt::CBIndex::c_5;
+    constexpr uint32_t prefix_cb = tt::CBIndex::c_6;
+    constexpr uint32_t state_cb = tt::CBIndex::c_7;
+    constexpr uint32_t projected_tiles_cb = tt::CBIndex::c_8;
+    constexpr uint32_t projected_rm_cb = tt::CBIndex::c_9;
+    constexpr uint32_t previous_tiles_cb = tt::CBIndex::c_10;
+    constexpr uint32_t previous_rm_cb = tt::CBIndex::c_11;
+    const uint32_t Mt = attrs.sequence / TILE_HEIGHT;
+    const uint32_t Qt = attrs.q_width / TILE_WIDTH;
+    const uint32_t Kt = attrs.k_width / TILE_WIDTH;
+    const uint32_t Vt = attrs.v_width / TILE_WIDTH;
+    const uint32_t Ct = Qt + Kt + Vt;
+    const uint32_t Pt = (attrs.projected_width + TILE_WIDTH - 1) / TILE_WIDTH;
+    const uint32_t row_bytes = (attrs.q_width + attrs.k_width + attrs.v_width) * sizeof(uint16_t);
+
+    // TP=4 uses C_t=96.  Cache one 48-tile block per worker, allowing the
+    // two blocks to independently consume the tiled projection and write
+    // disjoint tile/state ranges without exceeding Blackhole L1.
+    constexpr uint32_t max_channel_tiles_per_worker = 48;
+    const uint32_t channel_blocks = Ct > max_channel_tiles_per_worker && Ct % max_channel_tiles_per_worker == 0
+                                        ? Ct / max_channel_tiles_per_worker
+                                        : 1;
+    const uint32_t worker_Ct = Ct / channel_blocks;
+    const uint32_t worker_row_bytes = worker_Ct * TILE_WIDTH * sizeof(uint16_t);
+    auto dist = channel_blocks == 1 ? distribute_prep(in.projected.device()->compute_with_storage_grid_size(), Mt, ~0u)
+                                    : distribute_channel_blocks(
+                                          in.projected.device()->compute_with_storage_grid_size(), Mt, channel_blocks);
+    const auto& cores = dist.core_set;
+
+    ProgramDescriptor desc;
+    auto add_tile_cb = [&](uint32_t idx, uint32_t tiles) {
+        const uint32_t tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = tiles * tile_size,
+            .core_ranges = cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(idx),
+                .data_format = tt::DataFormat::Float16_b,
+                .page_size = tile_size}}}});
+    };
+    add_tile_cb(act_rm_cb, worker_Ct);
+    add_tile_cb(act_tile_cb, worker_Ct);
+    add_tile_cb(weights_cb, 4 * worker_Ct);
+    add_tile_cb(partial_a_cb, worker_Ct);
+    add_tile_cb(partial_b_cb, worker_Ct);
+    add_tile_cb(output_cb, worker_Ct);
+    auto add_row_cb = [&](uint32_t idx) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = 3 * worker_row_bytes,
+            .core_ranges = cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(idx),
+                .data_format = tt::DataFormat::Float16_b,
+                .page_size = worker_row_bytes}}}});
+    };
+    add_row_cb(prefix_cb);
+    add_row_cb(state_cb);
+    add_tile_cb(projected_tiles_cb, worker_Ct);
+    add_tile_cb(projected_rm_cb, worker_Ct);
+    // A worker beginning after time tile zero untilizes the preceding tiled
+    // projection row locally.  This is intentionally a correctness-first
+    // bridge: it avoids depending on raw packed-face extraction.
+    add_tile_cb(previous_tiles_cb, worker_Ct);
+    add_tile_cb(previous_rm_cb, worker_Ct);
+
+    const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/";
+    std::vector<uint32_t> reader_ct = {Ct, worker_Ct, Pt, row_bytes, worker_row_bytes, Mt};
+    TensorAccessorArgs(*in.projected.buffer()).append_to(reader_ct);
+    TensorAccessorArgs(*in.state.buffer()).append_to(reader_ct);
+    TensorAccessorArgs(*in.tap0.buffer()).append_to(reader_ct);
+    TensorAccessorArgs(*in.tap1.buffer()).append_to(reader_ct);
+    TensorAccessorArgs(*in.tap2.buffer()).append_to(reader_ct);
+    TensorAccessorArgs(*in.tap3.buffer()).append_to(reader_ct);
+    std::vector<uint32_t> writer_ct = {Qt, Kt, Vt, Ct, worker_Ct, row_bytes, worker_row_bytes, Mt};
+    TensorAccessorArgs(*outputs[0].buffer()).append_to(writer_ct);
+    TensorAccessorArgs(*outputs[1].buffer()).append_to(writer_ct);
+    TensorAccessorArgs(*outputs[2].buffer()).append_to(writer_ct);
+    TensorAccessorArgs(*outputs[3].buffer()).append_to(writer_ct);
+
+    KernelDescriptor reader;
+    reader.kernel_source = kdir + "dataflow/reader_kda_tiled_causal_conv1d.cpp";
+    reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader.core_ranges = cores;
+    reader.compile_time_args = reader_ct;
+    reader.config = ReaderConfigDescriptor{};
+    KernelDescriptor writer;
+    writer.kernel_source = kdir + "dataflow/writer_kda_tiled_causal_conv1d.cpp";
+    writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer.core_ranges = cores;
+    writer.compile_time_args = writer_ct;
+    writer.config = WriterConfigDescriptor{};
+    KernelDescriptor compute;
+    compute.kernel_source = kdir + "compute/kda_tiled_causal_conv1d.cpp";
+    compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute.core_ranges = cores;
+    compute.compile_time_args = {worker_Ct};
+    compute.config = compute_cfg(in.projected.device()->arch(), attrs.compute_kernel_config);
+
+    for (uint32_t i = 0; i < dist.cores.size(); ++i) {
+        const auto& core = dist.cores[i];
+        const uint32_t mt_start = dist.wi_start[i] % Mt;
+        const uint32_t write_state = mt_start + dist.wi_count[i] == Mt;
+        reader.emplace_runtime_args(
+            core,
+            {dist.wi_start[i],
+             dist.wi_count[i],
+             write_state,
+             in.projected.buffer(),
+             in.state.buffer(),
+             in.tap0.buffer(),
+             in.tap1.buffer(),
+             in.tap2.buffer(),
+             in.tap3.buffer()});
+        writer.emplace_runtime_args(
+            core,
+            {dist.wi_start[i],
+             dist.wi_count[i],
+             write_state,
+             outputs[0].buffer(),
+             outputs[1].buffer(),
+             outputs[2].buffer(),
+             outputs[3].buffer()});
+        compute.emplace_runtime_args(core, {dist.wi_count[i], mt_start != 0});
+    }
+    desc.kernels.push_back(std::move(reader));
+    desc.kernels.push_back(std::move(writer));
+    desc.kernels.push_back(std::move(compute));
+    return desc;
+}
+
 }  // namespace ttnn::prim

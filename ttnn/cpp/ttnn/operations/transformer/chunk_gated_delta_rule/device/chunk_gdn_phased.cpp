@@ -480,6 +480,87 @@ Tensor kda_gated_rms_norm(
     return results[0];
 }
 
+KdaTiledCausalConvOperation::program_factory_t KdaTiledCausalConvOperation::select_program_factory(
+    const operation_attributes_t&, const tensor_args_t&) {
+    return KdaTiledCausalConvProgramFactory{};
+}
+
+void KdaTiledCausalConvOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& attrs, const tensor_args_t& in) {
+    check(in.projected, "projected", DataType::BFLOAT16);
+    TT_FATAL(in.projected.layout() == Layout::TILE, "kda_tiled_causal_conv1d: projected must be TILE layout");
+    TT_FATAL(in.state.layout() == Layout::ROW_MAJOR, "kda_tiled_causal_conv1d: state must be ROW_MAJOR");
+    TT_FATAL(in.state.dtype() == DataType::BFLOAT16, "kda_tiled_causal_conv1d: state must be BFLOAT16");
+    TT_FATAL(in.state.buffer() != nullptr, "kda_tiled_causal_conv1d: state must be on device");
+    check(in.tap0, "tap0", DataType::BFLOAT16);
+    check(in.tap1, "tap1", DataType::BFLOAT16);
+    check(in.tap2, "tap2", DataType::BFLOAT16);
+    check(in.tap3, "tap3", DataType::BFLOAT16);
+    const auto& ps = in.projected.logical_shape();
+    const auto& ss = in.state.logical_shape();
+    TT_FATAL(ps.rank() == 3 && ps[0] == 1, "projected must be [1,T,W]");
+    const uint32_t qkv_width = attrs.q_width + attrs.k_width + attrs.v_width;
+    TT_FATAL(ss.rank() == 3 && ss[0] == 1 && ss[1] == 3 && ss[2] == qkv_width, "state shape mismatch");
+    TT_FATAL(ps[1] == attrs.sequence && ps[2] == attrs.projected_width, "projected shape mismatch");
+    TT_FATAL(attrs.sequence % TILE_HEIGHT == 0 && qkv_width % TILE_WIDTH == 0, "T and QKV width must be tile aligned");
+    TT_FATAL(
+        attrs.q_width % TILE_WIDTH == 0 && attrs.k_width % TILE_WIDTH == 0 && attrs.v_width % TILE_WIDTH == 0,
+        "Q/K/V widths must be tile aligned");
+    TT_FATAL(qkv_width <= attrs.projected_width, "QKV prefix exceeds projected width");
+    TT_FATAL(in.tap0.logical_volume() == qkv_width, "tap0 width mismatch");
+    TT_FATAL(in.tap1.logical_volume() == qkv_width, "tap1 width mismatch");
+    TT_FATAL(in.tap2.logical_volume() == qkv_width, "tap2 width mismatch");
+    TT_FATAL(in.tap3.logical_volume() == qkv_width, "tap3 width mismatch");
+}
+
+KdaTiledCausalConvOperation::spec_return_value_t KdaTiledCausalConvOperation::compute_output_specs(
+    const operation_attributes_t& attrs, const tensor_args_t&) {
+    const auto tiled_layout = TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), attrs.output_mem_config);
+    const auto row_major_layout =
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), attrs.output_mem_config);
+    return {
+        TensorSpec(Shape({1, attrs.sequence, attrs.q_width}), tiled_layout),
+        TensorSpec(Shape({1, attrs.sequence, attrs.k_width}), tiled_layout),
+        TensorSpec(Shape({1, attrs.sequence, attrs.v_width}), tiled_layout),
+        TensorSpec(Shape({1, 3, attrs.q_width + attrs.k_width + attrs.v_width}), row_major_layout)};
+}
+
+KdaTiledCausalConvOperation::tensor_return_value_t KdaTiledCausalConvOperation::create_output_tensors(
+    const operation_attributes_t& attrs, const tensor_args_t& in) {
+    auto specs = compute_output_specs(attrs, in);
+    return {
+        create_device_tensor(specs[0], in.projected.device()),
+        create_device_tensor(specs[1], in.projected.device()),
+        create_device_tensor(specs[2], in.projected.device()),
+        create_device_tensor(specs[3], in.projected.device())};
+}
+
+std::vector<Tensor> kda_tiled_causal_conv1d(
+    const Tensor& projected,
+    const Tensor& state,
+    const Tensor& tap0,
+    const Tensor& tap1,
+    const Tensor& tap2,
+    const Tensor& tap3,
+    uint32_t q_width,
+    uint32_t k_width,
+    uint32_t v_width,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const auto& shape = projected.logical_shape();
+    return ttnn::device_operation::launch<KdaTiledCausalConvOperation>(
+        KdaTiledCausalConvParams{
+            .sequence = static_cast<uint32_t>(shape[1]),
+            .projected_width = static_cast<uint32_t>(shape[2]),
+            .q_width = q_width,
+            .k_width = k_width,
+            .v_width = v_width,
+            .output_mem_config = output_mem_config,
+            .compute_kernel_config = compute_kernel_config},
+        KdaTiledCausalConvInputs{
+            .projected = projected, .state = state, .tap0 = tap0, .tap1 = tap1, .tap2 = tap2, .tap3 = tap3});
+}
+
 KdaCausalConvOperation::program_factory_t KdaCausalConvOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
     return KdaCausalConvProgramFactory{};

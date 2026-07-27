@@ -115,6 +115,46 @@ def test_untilize_with_unpadding_reuses_cache_when_only_width_l1_heuristic_chang
     assert device.cache_entries_counter.total == 1
 
 
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 400000}], indirect=True)
+def test_untilize_with_unpadding_wide_input_narrow_output_block_interleaved_trace(device, isolate_program_cache):
+    """Regression for a block-interleaved writer overrun on width unpadding.
+
+    This is the KDA projection-to-QKV boundary: the factory's wide-row
+    heuristic selects the block-interleaved program for a tiled 4,232-channel
+    input, while only the leading 3,072 channels are requested.  Whole tiles
+    past the output width must be consumed from the CB without writing past the
+    destination row, both eagerly and in a captured replay.
+    """
+    torch.manual_seed(0)
+    input_shape = [1, 2560, 4232]
+    output_end = [0, 2559, 3071]
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+    expected = torch_input[..., : output_end[-1] + 1]
+
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    eager_output = ttnn.untilize_with_unpadding(
+        input_tensor, output_tensor_end=output_end, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    assert_equal(ttnn.to_torch(eager_output), expected)
+
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    trace_output = ttnn.untilize_with_unpadding(
+        input_tensor, output_tensor_end=output_end, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+    ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+    ttnn.release_trace(device, trace_id)
+
+    assert_equal(ttnn.to_torch(trace_output), expected)
+
+
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize(
     "shape, output_end, shard_shape, num_cores",

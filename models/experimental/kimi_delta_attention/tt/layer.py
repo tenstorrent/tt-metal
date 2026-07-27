@@ -110,6 +110,13 @@ class KimiDeltaAttention:
         # the layer-wide FP32 accumulator used by the other compute stages.
         # Keep an explicit FP32 override for accuracy investigations.
         causal_conv_fp32_acc = os.getenv("KDA_CAUSAL_CONV_FP32_ACC", "0") != "0"
+        # Experimental long-prefill producer: consume the QKV prefix directly
+        # from the tiled input projection.  Kept opt-in until its long-sequence
+        # PCC and trace gates have passed on LoudBox.
+        self.tiled_projection_causal_conv = os.getenv("KDA_TILED_PROJECTION_CAUSAL_CONV", "0") != "0"
+        self.tiled_projection_causal_conv_min_sequence = int(
+            os.getenv("KDA_TILED_PROJECTION_CAUSAL_CONV_MIN_SEQUENCE", "640")
+        )
         self.causal_conv_compute_config = (
             self.compute_config
             if causal_conv_fp32_acc
@@ -120,6 +127,13 @@ class KimiDeltaAttention:
                 packer_l1_acc=True,
             )
         )
+        # The prefill projection has a QKV prefix followed by auxiliary gate
+        # channels.  The default path slices the tiled prefix and untilizes it
+        # for causal convolution.  The generic wide-input/narrow-output
+        # untilize writer has a regression test at the exact KDA shape and
+        # this path is PCC/trace-clean with two retained LB profiles.  Keep an
+        # explicit opt-out for accuracy and regression investigations.
+        self.fuse_qkv_untilize = os.getenv("KDA_FUSED_QKV_UNTILIZE", "1") != "0"
 
     @property
     def _convolution_width(self) -> int:
@@ -229,10 +243,14 @@ class KimiDeltaAttention:
         config = self.config
         channels = self._convolution_width
         input_length = sequence + config.conv_kernel_size - 1
-        qkv_row_major = ttnn.to_layout(
-            qkv,
-            ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        qkv_row_major = (
+            qkv
+            if qkv.layout == ttnn.ROW_MAJOR_LAYOUT
+            else ttnn.to_layout(
+                qkv,
+                ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         )
         state_row_major = ttnn.to_layout(
             convolution_state,
@@ -331,6 +349,61 @@ class KimiDeltaAttention:
         v = _slice_width(output, config.q_dim + config.k_dim, channels)
         return q, k, v, new_state
 
+    def _qkv_for_prefill_causal_convolution(self, projected: ttnn.Tensor, batch: int, sequence: int) -> ttnn.Tensor:
+        """Materialize the leading QKV channels required by prefill convolution.
+
+        The auxiliary projections still consume ``projected``, so this cannot
+        narrow the input-projection result itself.  In opt-in mode, use the
+        generic unpadding path to convert directly from the tiled full
+        projection to the row-major QKV prefix; otherwise preserve the
+        established tiled-slice-plus-untilize contract.
+        """
+        if self.fuse_qkv_untilize:
+            return ttnn.untilize_with_unpadding(
+                projected,
+                output_tensor_end=(batch - 1, sequence - 1, self._convolution_width - 1),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        return _slice_width(projected, 0, self._convolution_width)
+
+    def _tiled_projection_causal_conv1d_prefill(
+        self,
+        projected: ttnn.Tensor,
+        sequence: int,
+        convolution_state: ttnn.Tensor | None = None,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """Experimental direct tiled-projection producer for long prefill.
+
+        The custom op emits direct tiled Q/K/V outputs and the three-row carry
+        while retaining the full projection for the auxiliary gate branch.
+        """
+        if convolution_state is None:
+            assert self.convolution_state is not None
+            convolution_state = self.convolution_state
+        config = self.config
+        state_row_major = ttnn.to_layout(
+            convolution_state,
+            ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        q, k, v, new_state = ttnn.transformer.kda_tiled_causal_conv1d(
+            projected,
+            state_row_major,
+            *self.weights.convolution_taps,
+            config.q_dim,
+            config.k_dim,
+            config.v_dim,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.causal_conv_compute_config,
+        )
+        if convolution_state.layout != ttnn.ROW_MAJOR_LAYOUT:
+            new_state = ttnn.to_layout(
+                new_state,
+                convolution_state.layout,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        return q, k, v, new_state
+
     def prepare_chunk(
         self,
         hidden_states: ttnn.Tensor,
@@ -366,8 +439,13 @@ class KimiDeltaAttention:
             memory_config=memory_config,
             compute_kernel_config=self.compute_config,
         )
-        qkv = _slice_width(projected, 0, self._convolution_width)
-        q, k, v, new_convolution_state = self._causal_conv1d_prefill(qkv, sequence, convolution_state)
+        if self.tiled_projection_causal_conv and sequence >= self.tiled_projection_causal_conv_min_sequence:
+            q, k, v, new_convolution_state = self._tiled_projection_causal_conv1d_prefill(
+                projected, sequence, convolution_state
+            )
+        else:
+            qkv = self._qkv_for_prefill_causal_convolution(projected, batch, sequence)
+            q, k, v, new_convolution_state = self._causal_conv1d_prefill(qkv, sequence, convolution_state)
         return PreparedKDAConvolution(
             batch=batch,
             sequence=sequence,
