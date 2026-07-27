@@ -1335,40 +1335,32 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         check_block_size_validity(endpoints.producers, "PRODUCER");
         check_block_size_validity(endpoints.consumers, "CONSUMER");
 
-        // Cross-role BLOCKED consistency. The supported BLOCKED-involving pairings are:
-        //   - BLOCKED -> BLOCKED  (symmetric, or integer-ratio asymmetric fan-in/out via the
-        //     tile-counter round-robin over contiguous sub-rings)
-        //   - BLOCKED-producer -> ALL-consumer  (the producer block-bursts into the existing ALL
-        //     broadcast ring; every consumer reads every block, free-after-all-ack)
-        //   - BLOCKED-producer -> STRIDED-consumer  (the producer reads block_size contiguous DRAM
-        //     pages but pushes per-tile, so the existing STRIDED round-robin scatters each tile into
-        //     the consumer's interleaved slot; no remapper, no credit-path change)
-        // Any BLOCKED *consumer* under a non-BLOCKED producer is NOT yet supported. (Within-role
-        // agreement is enforced above, so the first record of each role is representative.) For
-        // BLOCKED->ALL the producer's block_size>0 is already validated per-binding, and
-        // num_entries % (block_size * num_producers) == 0 is enforced device-side in the ALL/STRIDED case.
+        // Cross-role BLOCKED legality:
+        //   - BLOCKED -> BLOCKED is allowed
+        //   - BLOCKED-producer -> ALL-consumer is allowed
+        //   - BLOCKED-producer -> STRIDED-consumer is allowed
+        //   - Any non-BLOCKED producer feeding a BLOCKED consumer is not allowed.
+        //
+        // BLOCKED -> BLOCKED also requires matching block_size and an integer
+        // producer/consumer thread-count ratio.
+        // BLOCKED -> ALL and BLOCKED -> STRIDED reuse the existing ALL/STRIDED paths.
         if (!endpoints.producers.empty() && !endpoints.consumers.empty()) {
             const auto& prod = endpoints.producers.front();
             const auto& cons = endpoints.consumers.front();
             const bool prod_blocked = prod.binding->access_pattern == DFBAccessPattern::BLOCKED;
             const bool cons_blocked = cons.binding->access_pattern == DFBAccessPattern::BLOCKED;
             if (prod_blocked || cons_blocked) {
-                // BLOCKED-producer -> ALL- or STRIDED-consumer ride the existing broadcast/round-robin
-                // credit paths (not the symmetric sub-ring pairing), so they are exempt from the
-                // BLOCKED->BLOCKED constraints below. Note the device contract differs per case:
-                // BLOCKED->STRIDED requires an integer producer/consumer thread-count ratio, which IS
-                // re-enforced device-side in calculate_num_tile_counters' STRIDED branch (TT_FATAL on a
-                // non-integer ratio). BLOCKED->ALL requires NO ratio (the ALL branch keys only on
-                // num_producers / num_consumers<=4, not their ratio), so do not rely on a ratio check for it.
+                // BLOCKED->ALL and BLOCKED->STRIDED are both allowed and reuse the existing
+                // ALL/STRIDED consumer paths.
                 const bool blocked_to_all = prod_blocked && cons.binding->access_pattern == DFBAccessPattern::ALL;
                 const bool blocked_to_strided =
                     prod_blocked && cons.binding->access_pattern == DFBAccessPattern::STRIDED;
                 if (!blocked_to_all && !blocked_to_strided) {
                     TT_FATAL(
                         prod_blocked && cons_blocked,
-                        "DFB '{}': a BLOCKED endpoint must pair as BLOCKED->BLOCKED or "
-                        "BLOCKED-producer->ALL-consumer (producer '{}' is {}, consumer '{}' is {}); other "
-                        "mixed-BLOCKED combinations are not yet supported.",
+                        "DFB '{}': a BLOCKED endpoint must pair as BLOCKED->BLOCKED, "
+                        "BLOCKED-producer->ALL-consumer, or BLOCKED-producer->STRIDED-consumer (producer '{}' is "
+                        "{}, consumer '{}' is {}); other mixed-BLOCKED combinations are not yet supported.",
                         dfb.unique_id,
                         prod.kernel->unique_id,
                         prod_blocked ? "BLOCKED" : "non-BLOCKED",

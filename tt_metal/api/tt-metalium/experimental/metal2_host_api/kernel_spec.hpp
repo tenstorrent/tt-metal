@@ -133,19 +133,17 @@ struct KernelSpec {
         // for multi-threaded kernels; at num_threads == 1 all patterns are equivalent.)
         //   STRIDED: a kernel thread accesses every N-th entry (where N = num_threads)
         //   ALL:     each kernel thread accesses every DFB entry
-        //   BLOCKED: a kernel thread accesses a contiguous block of block_size entries, then strides
-        //            by block_size * num_threads to its next block (set block_size via DFBBinding,
-        //            BlockedProducerOf, or BlockedConsumerOf)
+        //   BLOCKED: a kernel thread accesses a contiguous block of block_size entries, then
+        //            strides by block_size * num_threads to its next block
         enum class AccessPattern { STRIDED, ALL, BLOCKED };
 
         DFBSpecName dfb_spec_name;   // identify the DFB within the ProgramSpec
         std::string accessor_name;   // DFB accessor name (used in the kernel source code)
         EndpointType endpoint_type;  // producer or consumer
         AccessPattern access_pattern = AccessPattern::STRIDED;
-        // Tiles per block; meaningful (and required) only when access_pattern == BLOCKED.
-        // A block is the contiguous strip of entries a thread accesses before striding by
-        // block_size * num_threads. Must be 0 for STRIDED/ALL.
-        uint32_t block_size = 0;
+        uint32_t block_size = 0;   // number of DFB entries per block
+                                   // only meaningful when access_pattern == BLOCKED;
+                                   // set to 0 otherwise.
     };
     Group<DFBBinding> dfb_bindings;
 
@@ -247,8 +245,8 @@ using ScratchpadBinding = KernelSpec::ScratchpadBinding;
 
 // Ergonomic alternatives to writing a designated-initializer DFBBinding{...}
 
-// Creates a DFB producer binding with a STRIDED access pattern (the common case).
-// For a BLOCKED producer (single-burst sub-block fill), use BlockedProducerOf below.
+// Creates a DFB producer binding with a STRIDED access pattern
+// (All DFB producers are STRIDED)
 inline DFBBinding ProducerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
     return DFBBinding{
         .dfb_spec_name = std::move(dfb_spec_name),
