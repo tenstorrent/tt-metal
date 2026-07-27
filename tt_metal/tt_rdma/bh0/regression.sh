@@ -89,6 +89,26 @@ if wait_up "$OUT"; then
     || fail "RX SEND-ring (prod_idx=${prod:-0}, ${n:-0}/${m:-0} byte-exact)"
 else fail "RX kernel did not come up (T6)"; kill $DPID 2>/dev/null; fi
 
+echo "== T7: RX READ_REQ -> READ_RESP round-trip (MR read + TX egress, byte-exact on the wire) =="
+OUT=$D/rx5.txt; PCAP=$D/read.pcap
+sudo -n tcpdump -i $P0 -w "$PCAP" -c 40 'ether proto 0x1af6' >/dev/null 2>&1 &
+TCP=$!
+sleep 1
+timeout 115 "$BIN/bh1_rx_dispatch" 1 ext 8 1 1 4 1 >"$OUT" 2>&1 &   # noc_target=4 (READ-target)
+DPID=$!
+if wait_up "$OUT"; then
+  sudo -n "$ALLOW" $P0 5 $DMAC 0x1af6 0x20 256 $RKEY 0 >/dev/null 2>&1   # 5 READ_REQ, request 256B
+  sleep 2
+  wait $DPID
+  sudo -n pkill -x tcpdump 2>/dev/null; wait $TCP 2>/dev/null
+  rr=$(grep "read_resp=" "$OUT" | grep -v info | tail -1 | grep -oE 'read_resp=[0-9]+' | cut -d= -f2)
+  # a READ_RESP (op 0x21) frame carrying the 'READ' pattern (52 45 41 44) must be on the wire
+  resp=$(sudo -n tcpdump -r "$PCAP" -nn -X 2>/dev/null | grep -c "5245 4144")
+  [ "${rr:-0}" -ge 4 ] && [ "${resp:-0}" -ge 1 ] \
+    && pass "RX READ round-trip (read_resp=$rr, $resp READ_RESP frames byte-exact)" \
+    || fail "RX READ round-trip (read_resp=${rr:-0}, resp_frames=${resp:-0})"
+else fail "RX kernel did not come up (T7)"; kill $DPID 2>/dev/null; sudo -n pkill -x tcpdump 2>/dev/null; fi
+
 echo "======================================================"
 echo "REGRESSION: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ] && { echo "== ALL GREEN =="; exit 0; } || { echo "== FAILURES =="; exit 1; }

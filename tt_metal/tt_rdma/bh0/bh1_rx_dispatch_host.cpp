@@ -43,6 +43,9 @@ int main(int argc, char** argv) {
     // 2 = Tensix worker (0,0) L1 via NoC (off-core, the real RDMA case).
     const uint32_t noc_target = (argc > 6) ? std::strtoul(argv[6], nullptr, 0) : 0u;
     const uint32_t crc_check = (argc > 7) ? std::strtoul(argv[7], nullptr, 0) : 1u;  // 1 = validate CRC-32 (Phase 1.1)
+    // Phase 1.3 read-target (noc_target==4): READ_RESP frames egress to this MAC (the initiator).
+    // Default = BF3 pciconf1 port0 (enp193s0f0np0) MAC; capture on that rail with tcpdump ether proto 0x1af6.
+    const char* dst_mac_s = (argc > 8) ? argv[8] : "a0:88:c2:11:dd:74";
     const uint32_t rx_ring_addr = bigring ? TT_RDMA_RX_RING_BIG_ADDR : TT_RDMA_RX_RING_ADDR;
     const uint32_t rx_ring_size = bigring ? TT_RDMA_RX_RING_BIG_SIZE : TT_RDMA_RX_RING_SIZE;
 
@@ -126,6 +129,38 @@ int main(int argc, char** argv) {
         std::printf(
             "  SEND-ring: core(%u,%u) base 0x%x slots %u prodidx 0x%x\n", sr_x, sr_y, sr_base, sr_slots, sr_prodidx);
     }
+
+    // Phase 1.3 READ-target mode (noc_target == 4): the kernel answers READ_REQ by NoC-reading a
+    // pre-filled data buffer (Tensix 0,0 L1) and TXing a READ_RESP back to dst_mac. Verify on the wire
+    // with tcpdump on the receiving rail (ether proto 0x1af6, op byte 0x21, 'READ' pattern).
+    uint32_t read_enable = 0, dst_mac_hi = 0, dst_mac_lo = 0, rd_src_x = 0, rd_src_y = 0, rd_src_base = 0;
+    CoreCoord rd_core = eth_phys;
+    if (noc_target == 4) {
+        unsigned m[6] = {0};
+        if (std::sscanf(dst_mac_s, "%x:%x:%x:%x:%x:%x", &m[0], &m[1], &m[2], &m[3], &m[4], &m[5]) != 6) {
+            std::fprintf(stderr, "bad dst mac '%s'\n", dst_mac_s);
+            return 2;
+        }
+        const uint64_t mac = ((uint64_t)m[0] << 40) | ((uint64_t)m[1] << 32) | ((uint64_t)m[2] << 24) |
+                             ((uint64_t)m[3] << 16) | ((uint64_t)m[4] << 8) | (uint64_t)m[5];
+        dst_mac_hi = (uint32_t)(mac >> 32);
+        dst_mac_lo = (uint32_t)(mac & 0xFFFFFFFFu);
+        const CoreCoord w = device->worker_core_from_logical_core(CoreCoord{0, 0});
+        rd_core = w;
+        rd_src_x = (uint32_t)w.x;
+        rd_src_y = (uint32_t)w.y;
+        rd_src_base = 0x40000u;  // read source on the worker L1 (distinct from write 0x20000, ring 0x30000)
+        read_enable = 1u;
+        mode = "read-target(tensix 0,0 L1)";
+        std::printf(
+            "  READ-target: src core(%u,%u) base 0x%x  READ_RESP -> %s (hi=0x%x lo=0x%x)\n",
+            rd_src_x,
+            rd_src_y,
+            rd_src_base,
+            dst_mac_s,
+            dst_mac_hi,
+            dst_mac_lo);
+    }
     std::printf(
         "  WRITE target mode=%s  noc=(%u,%u)+0x%x  verify @core(%u,%u):0x%x\n",
         mode,
@@ -136,13 +171,24 @@ int main(int argc, char** argv) {
         (unsigned)verify_core.y,
         verify_addr);
 
-    // Program MR slot 0 (tt_rdma_mr_entry_t, 8 u32).
-    std::vector<uint32_t> mr{kMrTarget, 0u, kMrLen, 0u, kRkey, TT_MR_REMOTE_WRITE, 0u, 0u};
+    // Program MR slot 0 (tt_rdma_mr_entry_t, 8 u32). Grant both WRITE + READ so the same slot serves
+    // the WRITE tests and the READ-target mode (rkey/access/bounds are enforced in the kernel).
+    std::vector<uint32_t> mr{kMrTarget, 0u, kMrLen, 0u, kRkey, TT_MR_REMOTE_WRITE | TT_MR_REMOTE_READ, 0u, 0u};
     cluster.write_core(device->id(), eth_phys, mr, TT_RDMA_MR_TABLE_ADDR);
+    // Pre-fill the READ source with a recognizable pattern: word0 = 'READ' (0x44414552), then i&0xff.
+    if (noc_target == 4) {
+        std::vector<uint32_t> pat(kMrLen / 4, 0u);
+        pat[0] = 0x44414552u;  // 'R','E','A','D' little-endian
+        for (size_t i = 1; i < pat.size(); ++i) {
+            pat[i] = (uint32_t)((4 * i) & 0xff) | (((4 * i + 1) & 0xff) << 8) | (((4 * i + 2) & 0xff) << 16) |
+                     (((4 * i + 3) & 0xff) << 24);
+        }
+        cluster.write_core(device->id(), rd_core, pat, rd_src_base);
+    }
     // Clear the WRITE landing target (on its own core) + the stats region.
     std::vector<uint32_t> zeros(kMrLen / 4, 0u);
     cluster.write_core(device->id(), verify_core, zeros, verify_addr);
-    std::vector<uint32_t> zstats(9, 0u);
+    std::vector<uint32_t> zstats(11, 0u);
     cluster.write_core(device->id(), eth_phys, zstats, (uint32_t)stats_addr);
     // Clear the SEND ring + prod_idx on its core.
     if (noc_target == 3) {
@@ -173,7 +219,13 @@ int main(int argc, char** argv) {
          sr_y,
          sr_base,
          sr_slots,
-         sr_prodidx});
+         sr_prodidx,
+         read_enable,
+         dst_mac_hi,
+         dst_mac_lo,
+         rd_src_x,
+         rd_src_y,
+         rd_src_base});
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
@@ -183,9 +235,10 @@ int main(int argc, char** argv) {
     std::cout << "BH.2-RX: dispatch kernel up. Now send TT-RDMA frames from the BF3. Stats:\n";
 
     for (int s = 0; s < hold_s; ++s) {
-        auto st = cluster.read_core<uint32_t>(device->id(), eth_phys, (uint32_t)stats_addr, 9 * sizeof(uint32_t));
+        auto st = cluster.read_core<uint32_t>(device->id(), eth_phys, (uint32_t)stats_addr, 11 * sizeof(uint32_t));
         std::printf(
-            "  t=%2ds  total=%u send=%u write=%u write_ok=%u unknown=%u bad=%u crc_err=%u last_op=0x%02x read_pos=%u\n",
+            "  t=%2ds  total=%u send=%u write=%u write_ok=%u unknown=%u bad=%u crc_err=%u last_op=0x%02x read_pos=%u "
+            "read_req=%u read_resp=%u\n",
             s,
             st[0],
             st[1],
@@ -195,7 +248,9 @@ int main(int argc, char** argv) {
             st[5],
             st[6],
             st[7],
-            st[8]);
+            st[8],
+            st[9],
+            st[10]);
         std::fflush(stdout);
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }

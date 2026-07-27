@@ -31,6 +31,7 @@
 #include "tt_metal/hw/inc/internal/ethernet/tt_rdma_wire.h"
 #include "tt_metal/hw/inc/internal/ethernet/tt_rdma_l1_layout.h"
 #include "tt_metal/hw/inc/internal/ethernet/tt_rdma_eth_rx.h"
+#include "tt_metal/hw/inc/internal/ethernet/tt_rdma_eth_tx.h"     // tt_rdma_send_raw (READ_RESP egress)
 #include "tt_metal/hw/inc/internal/ethernet/tt_rdma_hdr_build.h"  // tt_rdma_crc32 (header validation)
 
 // Wrap-aware word read from the ring (off is 4-B aligned; buf_size % 16 == 0 keeps it in-bounds).
@@ -86,6 +87,19 @@ void kernel_main() {
     constexpr uint32_t TT_RXWQE_PAYLOAD_OFF = 0x20u;
     constexpr uint32_t TT_RXWQE_OWNED_BY_HOST = (1u << 8);  // flags byte at slot+0x14, bit0 (word bit8)
     uint32_t sr_prod = 0;
+    // Phase 1.3: READ target. When read_enable, a READ_REQ (0x20, header-only on the wire; the length
+    // field is the request size) triggers: MR lookup (REMOTE_READ + bounds) -> noc_async_read the bytes
+    // from the read source (rd_src_x,y,base + remote_offset) into a TX scratch buffer -> build a
+    // READ_RESP (0x21) header (tag echoed for initiator correlation) -> tt_rdma_send_raw back to the
+    // initiator (dst_mac). READ egress uses TXQ2 (separate block from RXQ2). read_enable == 0 -> READ_REQ
+    // is only counted (unchanged; keeps the WRITE/SEND tests).
+    const uint32_t read_enable = get_arg_val<uint32_t>(16);
+    const uint32_t dst_mac_hi = get_arg_val<uint32_t>(17);
+    const uint32_t dst_mac_lo = get_arg_val<uint32_t>(18);
+    const uint32_t rd_src_x = get_arg_val<uint32_t>(19);
+    const uint32_t rd_src_y = get_arg_val<uint32_t>(20);
+    const uint32_t rd_src_base = get_arg_val<uint32_t>(21);
+    uint32_t n_read_req = 0, n_read_resp = 0;
 
     volatile tt_l1_ptr uint32_t* hb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hb_addr);
     volatile tt_l1_ptr uint32_t* stats = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stats_addr);
@@ -96,6 +110,11 @@ void kernel_main() {
     }
 
     tt_rdma_rxq_init(TT_RDMA_RX_QUEUE, rx_buf, rx_buf_size, wrap);  // raw; L2-stripped landing
+    if (read_enable) {  // configure TXQ2 raw egress once (static dst MAC + 0x1AF6) for READ_RESP frames
+        const uint64_t dst_mac = ((uint64_t)dst_mac_hi << 32) | (uint64_t)dst_mac_lo;
+        tt_rdma_txpkt_config(TT_RDMA_TX_QUEUE, dst_mac, (uint16_t)TT_RDMA_ETHERTYPE);
+        tt_rdma_set_max_pkt_size(TT_RDMA_TX_QUEUE, TT_RDMA_MAX_PAYLOAD + TT_RDMA_HDR_BYTES);
+    }
 
     uint32_t read_pos = 0;  // byte position in the ring (mod buf_size in wrap mode)
     uint32_t n_send = 0, n_write = 0, n_write_ok = 0, n_unknown = 0, n_bad = 0, n_crc_err = 0, total = 0, last_op = 0;
@@ -125,8 +144,17 @@ void kernel_main() {
                 read_pos = wp;
                 break;
             }
-            uint32_t frame = TT_RDMA_HDR_BYTES + len;
-            frame = (frame + 15u) & ~15u;  // 16-B aligned stride
+            // READ_REQ / ACK are HEADER-ONLY on the wire (wire-protocol §1: "payload absent for
+            // READ_REQ/ACK") — their length field is semantic (request_len / ack_seq), not payload
+            // present. So the on-wire frame stride excludes the payload for those opcodes.
+            const bool hdr_only = (op == TT_OP_READ_REQ || op == TT_OP_ACK);
+            uint32_t frame;
+            if (hdr_only) {
+                frame = TT_RDMA_HDR_ONLY_BYTES;  // fixed 48B (runt-pad-safe, 16-aligned); len is semantic
+            } else {
+                frame = TT_RDMA_HDR_BYTES + len;
+                frame = (frame + 15u) & ~15u;  // 16-B aligned stride
+            }
             if (frame > avail) {
                 break;  // frame not fully landed yet
             }
@@ -212,6 +240,39 @@ void kernel_main() {
                         ++n_write_ok;
                     }
                 }
+            } else if (op == TT_OP_READ_REQ) {
+                ++n_read_req;
+                // READ target: fetch len bytes from the MR's read source and send them back as READ_RESP.
+                // `len` is the request size (header-only frame). tag is echoed for initiator correlation.
+                if (read_enable) {
+                    const uint32_t slot = rkey >> 24;
+                    if (slot < TT_RDMA_MR_SLOTS && len <= TT_RDMA_MAX_PAYLOAD) {
+                        volatile tt_l1_ptr uint32_t* mr =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mr_table + slot * 32u);
+                        const uint32_t mr_len = mr[2];
+                        const uint32_t mr_rkey = mr[4];
+                        const uint32_t mr_access = mr[5];
+                        if (mr_rkey == rkey && (mr_access & TT_MR_REMOTE_READ) && (roff + len) <= mr_len) {
+                            const uint32_t tx = TT_RDMA_TX_BUF0_ADDR;  // [32B hdr][payload] staged in L1
+                            // Fetch the requested bytes from the read source into the TX payload area.
+                            noc_async_read(get_noc_addr(rd_src_x, rd_src_y, rd_src_base + roff), tx + 32u, len);
+                            noc_async_read_barrier();
+                            // Build the READ_RESP (0x21) header in place (tag echoed; length = fetched bytes).
+                            volatile tt_l1_ptr uint32_t* rh = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tx);
+                            const uint32_t tag = (hw[0] >> 16) & 0xFFFFu;
+                            rh[0] = (uint32_t)TT_OP_READ_RESP | ((uint32_t)TT_RDMA_VERSION << 8) | (tag << 16);
+                            rh[1] = len;    // payload length (present on the wire for READ_RESP)
+                            rh[2] = hw[2];  // seq echoed
+                            rh[3] = 0u;     // rkey unused on response
+                            rh[4] = 0u;     // remote_offset unused
+                            rh[5] = 0u;
+                            rh[6] = 0u;  // imm
+                            rh[7] = tt_rdma_crc32(reinterpret_cast<const uint8_t*>(tx), 28u);
+                            tt_rdma_send_raw(TT_RDMA_TX_QUEUE, tx, TT_RDMA_HDR_BYTES + len);
+                            ++n_read_resp;
+                        }
+                    }
+                }
             } else {
                 ++n_unknown;
             }
@@ -235,6 +296,8 @@ void kernel_main() {
         stats[6] = n_crc_err;
         stats[7] = last_op;
         stats[8] = read_pos;
+        stats[9] = n_read_req;
+        stats[10] = n_read_resp;
 
         if (stop != nullptr && *stop != 0) {
             break;

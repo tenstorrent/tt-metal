@@ -15,6 +15,12 @@
 
 #define TT_RDMA_ETHERTYPE 0x1AF6u  // v1. 0x1AF4/5 = legacy soak; 0x1AF7 = qpn variant (mesh-spec §7.3)
 #define TT_RDMA_HDR_BYTES 32u
+// Header-only opcodes (READ_REQ, ACK) carry no semantic payload, but a bare 32B-header frame is a
+// 46B-payload runt (< the 64B Ethernet minimum incl. FCS) and the MAC pads it — breaking header-only
+// framing on RX (the pad is invisible to the header). So header-only frames are padded to a fixed,
+// 16-aligned, non-runt post-L2-strip size: 48 B (32 header + 16 pad). 14 (L2) + 48 = 62 on the wire,
+// +4 FCS = 66 ≥ 64, so the MAC never runt-pads. Both the sender and the RX kernel use this stride.
+#define TT_RDMA_HDR_ONLY_BYTES 48u
 #define TT_RDMA_VERSION 1u
 #define TT_RDMA_MAX_PAYLOAD 4080u  // jumbo ceiling: 4096 works, 9216 hangs (README open-Q #1)
 #define TT_RDMA_PAYLOAD_ALIGN 16u

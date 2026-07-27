@@ -198,15 +198,24 @@ int main(int argc, char** argv) {
         put_u64(h + 16, roff);
         put_u32(h + 24, 0);
         put_u32(h + 28, tt_crc32(h, 28) ^ crc_xor);  // header_cksum over bytes [0..27] (BADCRC corrupts it)
-        unsigned char* pay = frame + 14 + 32;
-        pay[0] = 'T';
-        pay[1] = 'T';
-        pay[2] = 'W';
-        pay[3] = 'R';
-        for (unsigned i = 4; i < plen; i++) {
-            pay[i] = (unsigned char)(i & 0xff);
+        if (opcode == 0x20u || opcode == 0x40u) {
+            // READ_REQ / ACK: HEADER-ONLY on the wire (wire-protocol §1). The length field carries the
+            // request size / ack_seq; no payload follows. Pad to 48 B post-L2 (32 hdr + 16 zero pad) so the
+            // 62 B frame (+FCS=66) clears the 64 B Ethernet runt minimum — else the MAC pads it and the RX
+            // kernel's header-only framing desyncs. Must match TT_RDMA_HDR_ONLY_BYTES (tt_rdma_wire.h).
+            memset(frame + 14 + 32, 0, 16);
+            frame_len = 14u + 48u;
+        } else {
+            unsigned char* pay = frame + 14 + 32;
+            pay[0] = 'T';
+            pay[1] = 'T';
+            pay[2] = 'W';
+            pay[3] = 'R';
+            for (unsigned i = 4; i < plen; i++) {
+                pay[i] = (unsigned char)(i & 0xff);
+            }
+            frame_len = 14u + 32u + plen;
         }
-        frame_len = 14u + 32u + plen;
     }
 
     // ---- BLAST path: N threads x sendmmsg(batch) to saturate the wire. ----

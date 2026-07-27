@@ -92,6 +92,13 @@ No opcode left behind; every path tested + error-handled.
     on the host SDK side, and raise the host-visible CQE.
 - **1.3 READ_REQ / READ_RESP** — target-side READ handler (NoC read from MR → RESP frame via TXQ),
   initiator correlation; round-trip byte-exact test.
+  - **1.3a Done (target side).** READ_REQ → MR lookup (REMOTE_READ + bounds) → `noc_async_read` →
+    READ_RESP (tag+seq echoed, valid CRC) → `tt_rdma_send_raw` to the initiator. Byte-exact on the wire,
+    regression **T7** (5/5 READ_RESP frames, op 0x21, 'READ' pattern). RX kernel now bidirectional.
+    Fixed a runt-padding framing bug: header-only opcodes (READ_REQ/ACK) are padded to 48 B
+    (`TT_RDMA_HDR_ONLY_BYTES`) so the MAC never runt-pads them (which desyncs header-only framing).
+  - **1.3b Pending.** Initiator side: BH issues READ_REQ and correlates the RESP by tag (needs a
+    read-correlation table, `TT_RDMA_READ_CORR`).
 - **1.4 ACK (0x40)** reception + cumulative-ACK accounting (pairs with Phase 2 reliability).
 - **1.5 WRITE_IMM / imm_data** completions.
 - **1.6 MR table lifecycle** — CONTROL-opcode register/deregister, rkey `(slot<<24)|rand|gen` generation

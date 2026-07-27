@@ -223,7 +223,14 @@ throughput will track the RX number, not the 200 G TX number.
     CRC leaves the hot path; (b) the engine never engages on raw `0x1AF6` framing (it is built for
     IPv4/UDP:4791/BTH RoCE packets) → HW offload needs RoCE-shaped frames, so keep the SW check but drop
     it to a slice-by-4 table (~7 ops/byte vs ~32 bit-serial). The probe tells us which before we commit.
-- **ACK / READ** — `0x40` ACK reception and `0x20/0x21` READ_REQ/RESP not yet implemented on BH RX.
+- **READ (`0x20`/`0x21`)** — **Done (target side, 1.3).** A READ_REQ triggers MR lookup (REMOTE_READ +
+  bounds) → `noc_async_read` the requested bytes from the read source → build a READ_RESP (tag+seq
+  echoed, valid CRC) → `tt_rdma_send_raw` back to the initiator on TXQ2. Validated byte-exact on the
+  wire (regression T7: 5/5 READ_RESP frames, op 0x21, payload = the MR pattern). The RX kernel is now
+  **bidirectional** (dispatch + TX response). Framing note: READ_REQ/ACK are header-only on the wire,
+  so they're padded to `TT_RDMA_HDR_ONLY_BYTES` (48 B) to clear the 64 B Ethernet runt minimum — a bare
+  32 B header gets MAC-padded and desyncs header-only framing. **Pending:** initiator-side correlation
+  (BH issuing READ_REQ and matching RESP by tag) and `0x40` ACK reception.
 - **MR carries the full NoC address** — Stage 2b passes the target `(noc_x, noc_y, base)` as kernel
   args; the productized form stores the NoC-encoded `base_noc_addr` in the MR entry (host builds it).
 - **Overflow handling** — a single bad-length frame currently `break`s the whole walk; on a lapped ring
@@ -237,5 +244,6 @@ throughput will track the RX number, not the 200 G TX number.
 - **RX.3** — 128 KB ring (lossless jumbo absorb). **Done.**
 - **RX.4 (Stage 2b, core of BH.3)** — MR table + WRITE via `noc_async_write` off-core (8.5 Gbps). **Done.**
 - **RX.5** — CRC-32 header validation (SW). **Done.** HW `ROCE_ICRC` offload — follow-up.
-- **RX.5b** — SEND→host RxWqeRing; ACK/READ. Pending.
+- **RX.5b** — SEND→RxWqeRing (on-core). **Done** (T6); host-hugepage swap pending.
+- **RX.5c** — READ_REQ→READ_RESP target side (MR read + TX egress). **Done** (T7). ACK + READ initiator pending.
 - **RX.6** — PFC-lossless (BH.6) + resync-on-bad; fast gateway sender to find the real ceiling. Pending.
