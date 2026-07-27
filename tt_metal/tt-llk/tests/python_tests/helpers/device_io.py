@@ -36,12 +36,13 @@ MAX_TRANSFER_BYTES = 2048
 def _splitting_helps(device_id: int) -> bool:
     from ttexalens import check_context
 
+    context = check_context()
     try:
-        return not check_context().devices[device_id]._umd_device.can_use_dma
-    except Exception:
-        # Rather than guess at a ttexalens internal that moved, keep splitting:
-        # it is a large win without DMA and only a small loss with it.
+        can_use_dma = context.devices[device_id]._umd_device.can_use_dma
+    except AttributeError:
+        # If the private ttexalens API moves, conservatively keep splitting.
         return True
+    return not can_use_dma
 
 
 def read_from_device(
