@@ -135,7 +135,7 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: Release
-      build-wheel: true
+      build-inplace-wheel: true
       platform: "Ubuntu 22.04"
       enable-lto: false
       skip-tt-train: false
