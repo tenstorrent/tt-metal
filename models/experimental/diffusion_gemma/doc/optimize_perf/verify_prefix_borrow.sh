@@ -26,7 +26,7 @@ NUM_LAYERS="${NUM_LAYERS:-}"     # empty = full 30
 MAX_SEQ_LEN="${MAX_SEQ_LEN:-2048}"
 PMAX="${PMAX:-${MAX_SEQ_LEN}}"
 NUM_BLOCKS="${NUM_BLOCKS:-3}"
-TRACE_REGION_SIZE="${TRACE_REGION_SIZE:-12884901888}"
+TRACE_REGION_SIZE="${TRACE_REGION_SIZE:-6442450944}" # 6 GiB. Measured 2026-07-27: the 48 up-front traces need 3.04 GiB at reveal_pmax=4096 (3 GiB fails, 4 GiB is the floor), so the historical 12 GiB reserved ~8 GiB of DRAM that nothing could allocate. Scale this WITH reveal_pmax - it is not a universal constant. See doc/optimize_perf/bisect_trace_region.sh
 OUT_DIR="${OUT_DIR:-/tmp/dg_prefix_borrow}"
 
 mkdir -p "$OUT_DIR"

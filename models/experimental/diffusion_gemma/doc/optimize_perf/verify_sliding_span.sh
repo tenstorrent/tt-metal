@@ -26,7 +26,7 @@ DG_CKPT="${DG_CKPT:-/home/zni/dg_models/diffusiongemma-26B-A4B-it}"
 MESH="${MESH:-P150x4}"
 MAX_SEQ_LEN="${MAX_SEQ_LEN:-4096}"
 NUM_BLOCKS="${NUM_BLOCKS:-6}"
-TRACE_REGION_SIZE="${TRACE_REGION_SIZE:-12884901888}"
+TRACE_REGION_SIZE="${TRACE_REGION_SIZE:-6442450944}" # 6 GiB. Measured 2026-07-27: the 48 up-front traces need 3.04 GiB at reveal_pmax=4096 (3 GiB fails, 4 GiB is the floor), so the historical 12 GiB reserved ~8 GiB of DRAM that nothing could allocate. Scale this WITH reveal_pmax - it is not a universal constant. See doc/optimize_perf/bisect_trace_region.sh
 OUT_DIR="${OUT_DIR:-/tmp/dg_sliding_span}"
 
 mkdir -p "$OUT_DIR"

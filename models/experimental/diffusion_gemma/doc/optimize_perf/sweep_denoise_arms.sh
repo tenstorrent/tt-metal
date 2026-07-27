@@ -39,7 +39,7 @@ REPS="${REPS:-3}"
 UPFRONT="${UPFRONT:-0}"
 REVEAL_PMAX="${REVEAL_PMAX:-}"
 GUMBEL_MODE="${GUMBEL_MODE:-}"
-TRACE_REGION_SIZE="${TRACE_REGION_SIZE:-12884901888}"
+TRACE_REGION_SIZE="${TRACE_REGION_SIZE:-6442450944}" # 6 GiB. Measured 2026-07-27: the 48 up-front traces need 3.04 GiB at reveal_pmax=4096 (3 GiB fails, 4 GiB is the floor), so the historical 12 GiB reserved ~8 GiB of DRAM that nothing could allocate. Scale this WITH reveal_pmax - it is not a universal constant. See doc/optimize_perf/bisect_trace_region.sh
 # The shipped degeneracy guard ends a request at the first collapsed block. That is right for
 # serving and wrong for a latency A/B: arms would emit different block counts and the steady-state
 # mean would be taken over different work. Off by default here; the arms are compared on

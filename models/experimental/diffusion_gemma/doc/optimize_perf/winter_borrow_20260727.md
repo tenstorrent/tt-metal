@@ -16,7 +16,8 @@ nothing here rests on it. Every number below is ours.
 | 3 | encoder `layer_scalar` divergence guard | added, fail-loud | checkpoint measured tied (max\|Δ\| = 0.0 over 30 layers) |
 | 4 | `DG_ROPE_FUSED` — fused `ttnn.experimental.rotary_embedding` on the denoise path | added, **default off** | −0.2% (noise) and decision-changing ⇒ not worth flipping |
 | 5 | `DG_SDPA_EXP_APPROX` — ttnn's own SDPA softmax default, which we had hard-coded off | added, **default off** | decision-changing; unswept before today |
-| 6 | `DG_MOE_CONCAT` — concat-experts MoE | added, **default off** | see §5 |
+| 6 | `DG_MOE_CONCAT` — concat-experts MoE | added, **default off** pending the quality gate | **−29.9%** traced block at 30L; see §5 |
+| 6b | `DG_TRACE_REGION_SIZE` 12 GiB → 6 GiB in the harness/gate scripts | done | 48 traces measure 3.04 GiB, not the 1.44 GiB our own doc claimed; see §8 |
 | 7 | `DG_SKIP` — in-graph component zeroing | added, measurement-only | see §6 |
 | 8 | `ttnn.topk` width-cliff coverage | test added | see §7 |
 | 9 | `--entropy-stop-threshold` on `serving_smoke` | added | required for any per-step A/B; see §2 |
@@ -38,6 +39,15 @@ of work. `serving_smoke` grew `--entropy-stop-threshold`; a negative value disab
 number below is with the halt off and `denoise_steps_per_block = [48, 48, 48]` verified per arm.
 
 The sweep script now prints the per-arm step counts next to the latency for exactly this reason.
+
+**Two things worth recording from the invalid run, because they are about the shipped path.** With
+the halt at its shipped 0.005, this prompt ran `[9, 2, 2]` denoise steps and blocks 1 and 2 produced
+the *identical* `per_block_sha256` — the model emitting the same degenerate block twice, the #48291
+signature. And in that regime the block is roughly 55% denoise / 45% commit (2.38 s/block at ~660
+ms/step plus a ~1.0 s commit), so a denoise-step lever has materially less end-to-end leverage than
+a 48-step budget implies: the −8.8% below becomes roughly −6% on a block that halts at 2 steps. The
+per-step number is still the right thing to optimize — it is what a non-degenerate model would
+spend its time in — but the two should not be quoted interchangeably.
 
 ## 2. Results
 
@@ -154,7 +164,40 @@ bf16 = **~7.7 GiB over 30 layers**. The originals cannot be freed — prefill an
 ragged top-8 path over them. `down_cat` should be free (same byte order at bf16 TILE);
 `verify_down_concat_is_free` checks that on device instead of assuming it.
 
-7.7 GiB does not fit beside a 12 GiB trace reservation, which is why §8 comes first.
+7.7 GiB does not fit beside a 12 GiB trace reservation, which is why §8 came first.
+
+### Measured — this is the largest lever found
+
+Same harness, 30L, `reveal_pmax = 4096`, 48 forced steps, `DG_TRACE_REGION_SIZE = 4 GiB`, 2 reps:
+
+| arm | n | steady s/block | per-rep | ms/step | vs sparse |
+|---|---|---|---|---|---|
+| `sparse` (shipped token-gather) | 2 | 31.737 | 31.442 / 32.033 | 661 | — |
+| `concat` (`DG_MOE_CONCAT=1`) | 2 | **22.234** | 22.317 / 22.150 | **463** | **−29.9%** |
+
+Stacked on the SDPA grid fix, against the path production ran this morning (`auto`, 8×1 grid,
+34.642 s/block): **22.234 s/block = −35.8%, a 1.56× speedup, 722 → 463 ms/step.**
+
+All 30 layers built their concat weights; free DRAM went 27.87 GiB → 14.41 (model) → 4.93 (concat),
+i.e. the relayout cost **7.8 GiB**, matching the estimate. At the new 6 GiB trace default that
+leaves only ~2.9 GiB, so **concat currently wants the 4 GiB reservation, not 6 GiB** — the two
+levers are coupled and must be set together.
+
+The output is coherent, which matters as much as the latency: `sparse` opens "A diffusion language
+model is a generative model that creates text by starting with a sequence of random noise and
+iteratively refining it into coherent…", `concat` "Diffusion language model is a generative model
+that creates text by starting with a sequence of noise and iteratively refining it into a coherent
+sen…". Different trajectory, same content — this is a fast path, not a broken one.
+
+**A 2L/6L extrapolation would have missed this and nearly did.** At 2 layers the delta reads −5.5%
+and at 6 layers −5.4%, and the implied per-layer slope difference is ~0.6 ms — which would have
+projected ~−3% at 30 layers. The real answer is −30%. At small layer counts the fixed terminal and
+self-conditioning cost dominates and the DRAM/L1 pressure is different, so the MoE is simply not
+the bottleneck being measured. Measure the lever at the depth it ships at.
+
+**Still default off.** −30% is worth having, but this changes the committed tokens by more than any
+other lever here, and the model is already in a decision-fidelity hole (#48291). It needs the
+absolute GPQA arm against the CUDA bar in §11 before the default flips.
 
 ## 6. `DG_SKIP` — pricing a component's traced cost
 
@@ -181,13 +224,32 @@ is exactly 32768 — a Galaxy 4×8 bring-up lands on it, and a wrong argmax inde
 temperature cushion. `tests/test_device_topk_width_cliff.py` pins the widths we serve as exact and
 records the others.
 
-## 8. Trace region — ~10 GiB/chip of reserved-but-unusable DRAM
+## 8. Trace region — 8 GiB/chip of reserved-but-unusable DRAM (measured; the 1.44 GiB figure is wrong too)
 
-Every serving script and gate reserves `DG_TRACE_REGION_SIZE = 12 GiB`, sized from an estimate that
-our own later measurement refuted: `doc/vllm_integration/traced_serving.md` measures the 48 resident
-traces at **~1.41–1.44 GiB/chip** and calls the ~168 MB/trace estimate "confirmed WRONG". The
-reservation is carved from DRAM whether used or not. `doc/optimize_perf/bisect_trace_region.sh`
-walks the ladder down and stops one step above the first failure.
+Every serving script and gate reserved `DG_TRACE_REGION_SIZE = 12 GiB`, sized from an estimate that
+`doc/vllm_integration/traced_serving.md` later refuted by measuring the 48 resident traces at
+~1.41–1.44 GiB/chip. **That correction is also wrong at the span we serve.**
+`doc/optimize_perf/bisect_trace_region.sh`, 30L, `reveal_pmax = 4096`:
+
+| reservation | result | free DRAM after build |
+|---|---|---|
+| 12 GiB | OK | 4.702 GiB |
+| 8 GiB | OK | 8.702 GiB |
+| 6 GiB | OK | 10.702 GiB |
+| 4 GiB | OK | 12.702 GiB |
+| 3 GiB | **FAIL** — `TT_FATAL: Creating trace buffers of size 3259146240B … but only 3221225472B is allocated` | — |
+
+So the 48 traces need **3.04 GiB** at this span, not 1.44 GiB, and the reservation was ~8 GiB of
+DRAM that nothing could allocate — the free pool tracks the reservation one-for-one. The harness and
+gate scripts now default to **6 GiB** (≈2× the measured requirement); 4 GiB is the verified floor.
+
+The number is not a constant: the trace buffer scales with the captured op set and with
+`reveal_pmax`, which is exactly how the 1.44 GiB figure came to disagree with this one. Re-run the
+bisect when either changes rather than carrying a fixed value forward — that is the mistake this
+whole item is.
+
+This is also the DRAM the concat-experts MoE (§5) needs: 4.70 GiB free cannot hold its +7.7 GiB,
+10.70 GiB can.
 
 ## 9. Encoder `layer_scalar` — checked, and it is tied
 
@@ -230,7 +292,29 @@ checkpoint diverges, so this cannot become a silent correctness bug.
   it. Winter's shim serializes on one lock, so it adds no capability and would miss the
   degeneracy-guard terminal contract.
 
-## 11. Open
+## 11. Where this leaves us against CUDA
+
+Measured the same day on `ssh a100` (one NVIDIA A100 80GB PCIe, bf16, upstream vLLM, single stream,
+same prompt, 768 tokens, default sampler — the reference server idle):
+
+| | s per 256-token block | tok/s |
+|---|---|---|
+| A100 80GB, 1 GPU | **0.54 – 0.62** | 410 – 473 |
+| QB2, 4× Blackhole, shipped early-halt path | ~2.3 | ~108 |
+
+So today TT is **~4× slower per block than a single A100**, on 4 chips — ~17× per chip. The levers
+in this document move the forced-48-step block by 1.56×, which is real and does not close that gap.
+
+Two caveats that cut in opposite directions and should be stated together: the TT blocks in that
+comparison halt after 2–9 denoise steps and blocks 1–2 emit *identical* committed tokens, so TT is
+partly "fast" for the wrong reason (#48291); and the A100 number is single-stream on an 80 GB part
+that holds the whole model, so it is a latency comparison, not a cost or throughput one.
+
+GPQA-Diamond on the same reference server, 198 samples, flexible-extract: **70.71%** and **70.20%**
+across two repetitions (thinking, 262k) — a 0.5 pp spread, which is the resolution any TT quality
+arm has to beat before a difference means anything.
+
+## 12. Open
 
 * The GPQA arm for the two decision-changing defaults (tuned MoE geometry) — the CUDA reference bar
   is GPQA-Diamond flexible-extract **70.7%** (thinking, 262k), with the reference's own run-to-run

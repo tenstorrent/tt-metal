@@ -38,7 +38,7 @@ DG_CKPT="${DG_CKPT:-/home/zni/dg_models/diffusiongemma-26B-A4B-it}"
 MESH="${MESH:-P150x4}"
 MAX_SEQ_LEN="${MAX_SEQ_LEN:-2048}"
 NUM_BLOCKS="${NUM_BLOCKS:-5}"
-TRACE_REGION_SIZE="${TRACE_REGION_SIZE:-12884901888}"
+TRACE_REGION_SIZE="${TRACE_REGION_SIZE:-6442450944}" # 6 GiB; see bisect_trace_region.sh (48 traces = 3.04 GiB at reveal_pmax=4096)
 OUT_DIR="${OUT_DIR:-/tmp/dg_sliding_window}"
 
 mkdir -p "$OUT_DIR"

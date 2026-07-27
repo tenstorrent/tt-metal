@@ -57,7 +57,7 @@ MODEL_NAME="${MODEL_NAME:-google/diffusiongemma-26B-A4B-it}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
 MAX_GEN_TOKS="${MAX_GEN_TOKS:-1536}"
 THINKING_MODE="${THINKING_MODE:-1}"
-TRACE_REGION_SIZE="${TRACE_REGION_SIZE:-12884901888}" # 12 GiB
+TRACE_REGION_SIZE="${TRACE_REGION_SIZE:-6442450944}" # 6 GiB. Measured 2026-07-27: the 48 up-front traces need 3.04 GiB at reveal_pmax=4096 (3 GiB fails, 4 GiB is the floor), so the historical 12 GiB reserved ~8 GiB of DRAM that nothing could allocate. Scale this WITH reveal_pmax - it is not a universal constant. See doc/optimize_perf/bisect_trace_region.sh
 RESET_BEFORE="${RESET_BEFORE:-1}"
 RESET_AFTER="${RESET_AFTER:-1}"
 READY_TIMEOUT_S="${READY_TIMEOUT_S:-900}"
