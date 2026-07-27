@@ -126,59 +126,16 @@ void kernel_main() {
     constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
     constexpr uint32_t tile_width = get_named_compile_time_arg_val("TILE_WIDTH");
 
-    // ---------------------------------------------------------------------------------------
-    // Non-tile-aligned H*W correction (tt-metal #50682) -- canonical derivation.
-    // Referenced from the three program factories and from groupnorm_sharded_v2.cpp.
-    //
-    // Notation, per (batch, group):
-    //   L = logical_hw  real flattened height (H*W)
-    //   P = padded_hw   L rounded up to the tile height; P - L trailing rows are tile padding
-    //   c = channels in the group;  x_i = the L*c real elements;  m = E[x], v = Var[x]
-    //
-    // PRECONDITION: the P - L tile-padding rows hold exact zeros. Every TILE-layout producer in
-    // the flow (from_torch, tilize_with_zero_padding, to_layout) zero-fills them. The op already
-    // depended on this before the fix -- it reduced over those rows unconditionally -- so this
-    // adds no new assumption, but the correction below is only exact while it holds.
-    //
-    // (a) MEAN. Pass 1 sums all P*c rows; the padding contributes 0, so the numerator is already
-    //     the true sum. Only the divisor is wrong: the reduce scaler divides by P*c, not L*c.
-    //     The AVG/REDUCE_SCALAR LLK applies the scaler twice (row, then column), so the host
-    //     ships sqrt of the reciprocal:
-    //         scaler = 1 / sqrt(reduce_factor_w * L/P)   =>   total divisor L*c
-    //     After this the mean is exact:  E[x] = m.
-    //
-    // (b) VARIANCE. Pass 2 centers every row, re-applies the channel input_mask, squares, and
-    //     reduces. A padding row holds 0, so it centers to (0 - m) and squares to m^2, and the
-    //     channel mask keeps it inside the group's c columns. There are (P - L)*c such elements,
-    //     and the divisor is now L*c, so what the reduce produces is
-    //         Var_computed = v + ((P - L)/L) * m^2 = v + K*m^2,   K = P/L - 1
-    //     The bias is exactly K*E[x]^2, and E[x] is already in cb_ex_global, so we subtract it
-    //     before (Var + eps). K arrives as a scalar tile in cb_k, stamped by the writer.
-    //
-    // PRECISION. This reintroduces a cancellation that the two-pass algorithm otherwise avoids:
-    // the reduce stores v + K*m^2 in bfloat16 (im_data_format is BFLOAT16) and we then subtract
-    // K*m^2 back off, so the residual error grows with K and with r = m^2/v. Measured on
-    // Blackhole against torch (max abs error; the usual group_norm tolerance is 0.065-0.08):
-    //
-    //   K (pad fraction)   0.12(H*W=200)  0.60(H*W=40)  1.00(H*W=16)  3.00(H*W=8)
-    //   uniform[0,1) data      0.040          0.048         0.093        0.157
-    //
-    // Real shapes sit at K <= 0.6 and stay in tolerance (XTTS-v2 is H*W=269, K=0.07); K >= 1
-    // means the padding is at least half a tile. For reference, the same H*W=40 case measured
-    // 0.884 BEFORE this correction, so it is a large improvement at every K.
-    //
-    // The mean sensitivity is mostly NOT specific to this correction: the fused bf16 kernel
-    // degrades with a large mean even for tile-aligned shapes (H*W=224 control measures 0.042 /
-    // 0.158 / 0.308 at input shift 0 / 4 / 8). At K=0.12 this correction costs nothing at shift 0
-    // (0.040 vs 0.042) and about 3.4x the control at shift 4 (0.539 vs 0.158).
-    //
-    // Exactness at any K, and removal of the zero-padding precondition above, would require
-    // masking the padding rows of cb_xmm after centering rather than correcting analytically.
-    // That is a larger change to both this loop nest and the sharded one -- see #50682.
-    //
-    // For tile-aligned inputs P == L, so has_pad_correction is false and this whole path is
-    // compiled out; the kernel is byte-identical to before.
-    // ---------------------------------------------------------------------------------------
+    // Non-tile-aligned H*W (#50682). With L = logical_hw, P = padded_hw, the P - L tile-padding
+    // rows are reduced over as if they were data. Assuming they hold zeros (every TILE-layout
+    // producer zero-fills them), pass 1's numerator is already the true sum, so only the divisor
+    // is wrong: the writer rescales the reduce scaler by sqrt(P/L) to divide by the real count.
+    // Pass 2 then centers each padding row to (0 - E[x]) and squares it, leaving a bias of
+    // exactly K*E[x]^2 with K = P/L - 1, which is subtracted below. Aligned inputs have P == L,
+    // so has_pad_correction is false and the whole path is compiled out.
+    // The subtraction reintroduces a cancellation the two-pass algorithm otherwise avoids: the
+    // reduce stores v + K*E[x]^2 in bfloat16, so accuracy degrades as K and E[x]^2/v grow. Real
+    // shapes (K <= 0.6) stay in tolerance; masking cb_xmm's padding rows instead would be exact.
     constexpr uint32_t logical_hw = get_named_compile_time_arg_val("logical_hw");
     constexpr uint32_t padded_hw = get_named_compile_time_arg_val("padded_hw");
     constexpr bool has_pad_correction = padded_hw != logical_hw;
@@ -201,9 +158,8 @@ void kernel_main() {
     constexpr uint32_t dfb_beta_id = tt::CBIndex::c_6;
     constexpr uint32_t dfb_input_mask_id = tt::CBIndex::c_28;
 
-    // Non-tile-aligned H*W correction scratch/scalar CBs (only used when has_pad_correction).
-    // cb_k holds the scalar K = padded_hw/logical_hw - 1 (generated by the writer);
-    // cb_msq / cb_kmsq are single-tile scratch for E[x]^2 and the corrected variance.
+    // #50682 pad-correction CBs, allocated only when has_pad_correction. cb_k holds K from the
+    // writer; cb_msq / cb_kmsq are single-tile scratch.
     constexpr uint32_t cb_k_id = tt::CBIndex::c_1;
     constexpr uint32_t cb_msq_id = tt::CBIndex::c_7;
     constexpr uint32_t cb_kmsq_id = tt::CBIndex::c_11;
@@ -581,15 +537,9 @@ void kernel_main() {
             dfb_ex2_global.wait_front(1);
             dfb_ex2pe.reserve_back(1);
 
-            // Non-tile-aligned H*W variance correction (tt-metal #50682).
-            // The variance reduction included the tile-padding rows of the last H*W tile
-            // (input 0 -> after centering (0 - E[x]) -> squared E[x]^2, kept for the group's
-            // channels by the channel input_mask). With the reduce scaler already rescaled to
-            // divide by the real element count, the residual bias is exactly K*E[x]^2 per group
-            // (K = padded_hw/logical_hw - 1). Subtract it before (Var + eps).
-            // E[x] lives in cb_ex_global; K is the scalar in cb_k (written by the writer).
-            // The corrected variance is staged into cb_msq; when there is no correction the
-            // existing cb_ex2_global feeds (Var + eps) unchanged, so aligned inputs are untouched.
+            // Var := Var - K*E[x]^2, staged through cb_msq so (Var + eps) below is unchanged for
+            // aligned inputs. cb_ex_global still holds E[x] here (it is popped after the output
+            // loop); cb_k holds K. Binary ops read from CBs, hence the round trips.
             constexpr uint32_t cb_var_src_id = has_pad_correction ? cb_msq_id : dfb_ex2_global_id;
             if constexpr (has_pad_correction) {
                 cb_k.wait_front(1);

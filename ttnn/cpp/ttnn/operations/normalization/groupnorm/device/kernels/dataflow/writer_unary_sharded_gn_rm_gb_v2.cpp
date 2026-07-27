@@ -126,9 +126,8 @@ void kernel_main() {
             if (i == 0 and b == 0) {
                 constexpr uint32_t dfb_in_2 = tt::CBIndex::c_2;
 #ifdef PAD_CORRECTION
-                // Non-tile-aligned H*W (tt-metal #50682): use the host-precomputed corrected
-                // reduce scaler (= 1/sqrt(reduce_factor_w * logical_hw/padded_hw)) and write the
-                // K = padded_hw/logical_hw - 1 scalar into cb_k for the compute kernel.
+                // Non-tile-aligned H*W (#50682): host-precomputed corrected reduce scaler, plus
+                // K into cb_k for the compute kernel's variance correction.
                 constexpr uint32_t cb_k_id = tt::CBIndex::c_18;
                 const float pad_corrected_scaler = __builtin_bit_cast(float, get_arg_val<uint32_t>(8));
                 dataflow_kernel_lib::prepare_reduce_scaler<

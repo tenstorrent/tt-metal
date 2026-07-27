@@ -67,11 +67,8 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
         a.padded_shape()[2],
         tile_height);
 
-    // Non-tile-aligned H*W (tt-metal #50682) is handled by the two-pass kernels only; the Welford
-    // kernels still reduce over the tile-padding rows and are silently wrong for these shapes.
-    // ttnn::group_norm routes such requests to the two-pass path before reaching here, so this
-    // only fires for direct ttnn::prim::group_norm callers -- who would otherwise get the bug back
-    // with no diagnostic. Reject loudly instead.
+    // ttnn::group_norm routes non-tile-aligned Welford requests to the two-pass path, so this
+    // only fires for direct ttnn::prim callers, who would otherwise silently hit #50682.
     TT_FATAL(
         !(args.use_welford && (a.logical_shape()[2] % tile_height != 0)),
         "group_norm: use_welford is not supported for non-tile-aligned H*W ({} % {} != 0) -- the "

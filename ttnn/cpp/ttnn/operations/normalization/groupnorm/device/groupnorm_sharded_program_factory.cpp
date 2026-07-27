@@ -562,12 +562,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         };
     }
 
-    // Non-tile-aligned H*W correction (tt-metal #50682). See the derivation in
-    // kernels/compute/groupnorm.cpp. Rescale the per-group reduce scaler to divide by the real
-    // element count and pass K = padded_hw/logical_hw - 1 so the compute kernel subtracts the
-    // residual variance bias K*E[x]^2. Byte-identical when logical_hw == padded_hw.
-    // Gated on !use_welford: the Welford kernels do not implement the correction, and
-    // ttnn::group_norm routes non-tile-aligned Welford requests to this two-pass path.
+    // Non-tile-aligned H*W (#50682): rescale the reduce scaler to divide by the real element
+    // count and pass K for the compute kernel's variance correction; see compute/groupnorm.cpp.
+    // Kernels re-derive the flag from (padded_hw != logical_hw), so pass logical == padded when
+    // the correction is off, otherwise the flag could disagree with the CB allocation and hang.
     const uint32_t logical_hw = static_cast<uint32_t>(a.logical_shape()[2]);
     const uint32_t padded_hw = static_cast<uint32_t>(a.padded_shape()[2]);
     const bool has_pad_correction = !use_welford && (logical_hw != padded_hw);
@@ -577,10 +575,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     const uint32_t pad_scaler_bits = std::bit_cast<uint32_t>(pad_scaler);
     const float pad_k = static_cast<float>(padded_hw) / static_cast<float>(logical_hw) - 1.0f;
     const uint32_t pad_k_bits = std::bit_cast<uint32_t>(pad_k);
-    // The compute kernel derives its own `has_pad_correction` from (padded_hw != logical_hw).
-    // Feed it logical_hw == padded_hw whenever the correction is disabled here, so the kernel-side
-    // flag can never disagree with the writer's PAD_CORRECTION define (a disagreement would hang
-    // the compute kernel on cb_k.wait_front, since nothing would ever fill cb_k).
     const uint32_t compute_logical_hw = has_pad_correction ? logical_hw : padded_hw;
 
     // writer defines
@@ -700,9 +694,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         mcast_sender_compute_compile_time_args.push_back(num_datum_row_per_group);  // num_cols_per_group
     }
     mcast_sender_compute_compile_time_args.push_back(tile_width);
-    // Non-tile-aligned H*W correction (#50682). Appended last, so the index depends on whether the
-    // conditional num_cols_per_group arg above was pushed: 25/26 without Welford, 26/27 with it.
-    // Only the two-pass kernel reads them; the Welford kernel ignores the extra trailing args.
+    // #50682. Appended last: index is 25/26 without Welford, 26/27 with it (the conditional arg
+    // above shifts them). Only the two-pass kernel reads them.
     mcast_sender_compute_compile_time_args.push_back(compute_logical_hw);
     mcast_sender_compute_compile_time_args.push_back(padded_hw);
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args = {
@@ -739,7 +732,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         mcast_receiver_compute_compile_time_args.push_back(num_datum_row_per_group);  // num_cols_per_group
     }
     mcast_receiver_compute_compile_time_args.push_back(tile_width);
-    // Non-tile-aligned H*W correction (#50682); see the sender-side note above.
     mcast_receiver_compute_compile_time_args.push_back(compute_logical_hw);
     mcast_receiver_compute_compile_time_args.push_back(padded_hw);
     // compute kernel
@@ -1137,9 +1129,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         }}},
     });
 
-    // Non-tile-aligned H*W correction scalars/scratch (tt-metal #50682): cb_k (c_18) holds the
-    // K scalar written by the writer; cb_msq (c_19) and cb_kmsq (c_20) are single-tile scratch
-    // used by the compute kernel. Only allocated when the flattened height is not tile-aligned.
+    // #50682 pad-correction scalars/scratch: cb_k written by the writer, cb_msq / cb_kmsq scratch.
     if (has_pad_correction) {
         for (uint32_t pad_cb_index : {tt::CBIndex::c_18, tt::CBIndex::c_19, tt::CBIndex::c_20}) {
             desc.cbs.push_back(CBDescriptor{
@@ -1304,7 +1294,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         writer_mcast_sender_args.push_back(gamma_tile_start_id);
         writer_mcast_sender_args.push_back(beta_tile_start_id);
         writer_mcast_sender_args.push_back(input_mask_tile_start_id);
-        // args 8, 9: non-tile-aligned H*W correction scalars (only read when PAD_CORRECTION).
+        // args 8, 9: only read when PAD_CORRECTION.
         writer_mcast_sender_args.push_back(pad_scaler_bits);
         writer_mcast_sender_args.push_back(pad_k_bits);
         writer_desc.emplace_runtime_args(core, writer_mcast_sender_args);

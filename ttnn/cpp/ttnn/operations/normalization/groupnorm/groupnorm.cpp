@@ -218,16 +218,14 @@ Tensor group_norm(
         nhw,
         ttnn::types::TILE_SIZE);
 
-    // Non-tile-aligned H*W correction (tt-metal #50682) is implemented for the two-pass
-    // kernels but not for the Welford kernels (their transposed-tile layout and tile-unit
-    // sample count make the padding rows hard to exclude). Route a non-tile-aligned Welford
-    // request to the (now-correct) two-pass path so results match torch; the optional
-    // reciprocals LUT is Welford-only, so drop it as well.
+    // The #50682 non-tile-aligned correction exists only on the two-pass path: the Welford
+    // kernels transpose H*W into the tile columns and track the sample count in tile units, so
+    // the padding rows cannot be excluded there. Route such requests to the two-pass path and
+    // drop the Welford-only reciprocals LUT.
     std::optional<Tensor> effective_reciprocals = reciprocals;
     const uint32_t tile_height_align = input_tensor.tensor_spec().tile().get_height();
     if (use_welford && (input_shape[2] % tile_height_align != 0)) {
-        // Warn once per process, not per invocation: group_norm sits inside per-token / per-step
-        // model loops, so an unconditional log_warning here floods the log with one line per call.
+        // Once per process: group_norm runs inside per-step model loops.
         static std::once_flag welford_fallback_warned;
         std::call_once(welford_fallback_warned, [&] {
             log_warning(

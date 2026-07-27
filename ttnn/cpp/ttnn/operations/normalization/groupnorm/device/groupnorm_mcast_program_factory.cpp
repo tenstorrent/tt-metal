@@ -515,18 +515,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         .noc = reader_noc,
     };
 
-    // Non-tile-aligned H*W correction (tt-metal #50682): rescale the per-group reduce scaler
-    // to divide by the real element count and pass K = padded_hw/logical_hw - 1 for the
-    // compute kernel's variance-bias subtraction. See the derivation in
-    // kernels/compute/groupnorm.cpp. Byte-identical when logical_hw == padded_hw.
-    // Gated on !use_welford: the Welford kernels do not implement the correction, and
-    // ttnn::group_norm routes non-tile-aligned Welford requests to this two-pass path.
+    // Non-tile-aligned H*W (#50682): rescale the reduce scaler to divide by the real element
+    // count and pass K for the compute kernel's variance correction; see compute/groupnorm.cpp.
+    // Kernels re-derive the flag from (padded_hw != logical_hw), so pass logical == padded when
+    // the correction is off, otherwise the flag could disagree with the CB allocation and hang.
     const uint32_t logical_hw = static_cast<uint32_t>(a.logical_shape()[2]);
     const uint32_t padded_hw = static_cast<uint32_t>(a.padded_shape()[2]);
     const bool has_pad_correction = !use_welford && (logical_hw != padded_hw);
-    // Kernels derive their own flag from (padded_hw != logical_hw). Feed them logical_hw ==
-    // padded_hw when the correction is off, so the kernel-side flag can never disagree with the
-    // CB allocation below (a disagreement would hang the compute kernel on cb_k.wait_front).
     const uint32_t kernel_logical_hw = has_pad_correction ? logical_hw : padded_hw;
     const float pad_k = static_cast<float>(padded_hw) / static_cast<float>(logical_hw) - 1.0f;
     const uint32_t pad_k_bits = std::bit_cast<uint32_t>(pad_k);
@@ -862,10 +857,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         }}},
     });
 
-    // Non-tile-aligned H*W correction scalars/scratch (tt-metal #50682): cb_k (c_1) holds the
-    // K scalar written by the writer; cb_msq (c_7) and cb_kmsq (c_11) are single-tile scratch
-    // used by the compute kernel. Only allocated when the flattened height is not tile-aligned
-    // (two-pass path only; Welford is separate).
+    // #50682 pad-correction scalars/scratch: cb_k written by the writer, cb_msq / cb_kmsq scratch.
     if (has_pad_correction) {
         for (uint32_t pad_cb_index : {tt::CBIndex::c_1, tt::CBIndex::c_7, tt::CBIndex::c_11}) {
             desc.cbs.push_back(CBDescriptor{

@@ -55,15 +55,9 @@ void kernel_main() {
     constexpr uint32_t group_row_offset = get_compile_time_arg_val(23);
     constexpr uint32_t tile_width = get_compile_time_arg_val(24);
 
-    // Non-tile-aligned H*W correction (tt-metal #50682): real vs tile-padded flattened height.
-    // Canonical derivation, precondition (padding rows must be exact zeros) and the bfloat16
-    // precision caveat all live in kernels/compute/groupnorm.cpp -- read that first.
-    // In short: the writer rescales the reduce scaler to divide by the real element count, and
-    // the variance carries a residual bias of exactly K*E[x]^2 per group (K = padded_hw/logical_hw
-    // - 1) which is subtracted at the rsqrt step. The one difference from the interleaved kernel
-    // is scheduling: this kernel consumes the mean (cb_ex_global) during centering, so K*E[x]^2
-    // must be computed up front, before centering, and stashed in cb_kmsq until the rsqrt step.
-    // Skipped entirely when tile-aligned.
+    // Non-tile-aligned H*W (#50682); derivation and precision caveat in compute/groupnorm.cpp.
+    // Unlike the interleaved kernel this one consumes the mean during centering, so K*E[x]^2 is
+    // computed before centering and stashed in cb_kmsq until the rsqrt step.
     constexpr uint32_t logical_hw = get_compile_time_arg_val(25);
     constexpr uint32_t padded_hw = get_compile_time_arg_val(26);
     constexpr bool has_pad_correction = padded_hw != logical_hw;
@@ -97,9 +91,8 @@ void kernel_main() {
     constexpr uint32_t dfb_ex2pe_id = tt::CBIndex::c_17;
     constexpr uint32_t dfb_ones_id = tt::CBIndex::c_26;
 
-    // Non-tile-aligned H*W correction CBs (only used when has_pad_correction).
-    // cb_k: K scalar (written by the writer). cb_msq: transient E[x]^2 scratch.
-    // cb_kmsq: K*E[x]^2, produced before centering and consumed at the rsqrt step.
+    // #50682 pad-correction CBs. cb_k holds K from the writer; cb_msq is transient scratch;
+    // cb_kmsq carries K*E[x]^2 across the centering loop.
     constexpr uint32_t cb_k_id = tt::CBIndex::c_18;
     constexpr uint32_t cb_msq_id = tt::CBIndex::c_19;
     constexpr uint32_t cb_kmsq_id = tt::CBIndex::c_20;
@@ -321,9 +314,7 @@ void kernel_main() {
             }
             dfb_ex_global.wait_front(1);
 
-            // Non-tile-aligned H*W (tt-metal #50682): the sharded kernel consumes the mean
-            // (cb_ex_global) during centering below, so compute and stash K*E[x]^2 now, while
-            // cb_ex_global still holds E[x]. It is subtracted from the variance at the rsqrt step.
+            // Stash K*E[x]^2 while cb_ex_global still holds E[x]; centering below consumes it.
             if constexpr (has_pad_correction) {
                 cb_k.wait_front(1);
                 // cb_msq = E[x]^2
@@ -459,8 +450,7 @@ void kernel_main() {
             dfb_ex_global.wait_front(1);
             dfb_ex2pe.reserve_back(1);
 
-            // Non-tile-aligned H*W: Var := Var - K*E[x]^2 (staged into cb_msq). Byte-identical
-            // for tile-aligned inputs, where (Var + eps) reads cb_ex_global unchanged.
+            // Var := Var - K*E[x]^2, staged through cb_msq so (Var + eps) is unchanged when aligned.
             constexpr uint32_t cb_var_src_id = has_pad_correction ? cb_msq_id : dfb_ex_global_id;
             if constexpr (has_pad_correction) {
                 cb_kmsq.wait_front(1);
