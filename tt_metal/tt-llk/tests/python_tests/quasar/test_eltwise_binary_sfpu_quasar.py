@@ -16,6 +16,7 @@ from helpers.llk_params import (
     DestAccumulation,
     ImpliedMathFormat,
     MathOperation,
+    PerfRunType,
     UnpackerEngine,
     format_dict,
 )
@@ -27,6 +28,7 @@ from helpers.param_config import (
     parametrize,
     runtime,
 )
+from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
     StimuliSpec,
@@ -41,7 +43,9 @@ from helpers.test_variant_parameters import (
     DEST_INDEX,
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
+    LOOP_FACTOR,
     NUM_FACES,
+    PERF_RUN_TYPE,
     SFPU_BINARY_OP,
     SFPU_TILE_INDICES,
     TEST_FACE_DIMS,
@@ -83,6 +87,11 @@ def _run_sfpu_binary_llk_golden(
     binary_op,
     prepare_stimuli,
     post_check=None,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
 ):
     """Shared driver for the unpack-to-dest, LLK-golden binary SFPU ops.
 
@@ -116,10 +125,13 @@ def _run_sfpu_binary_llk_golden(
         torch_format_out
     )
 
-    configuration = TestConfig(
-        _CPP_SOURCE,
-        formats,
-        templates=[
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
+    test_config_kwargs = {
+        "test_name": _CPP_SOURCE,
+        "formats": formats,
+        "templates": [
             SFPU_BINARY_OP(binary_op),
             IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
@@ -130,14 +142,15 @@ def _run_sfpu_binary_llk_golden(
             # TYPECAST_OUT_FORMAT, so every build that includes it must define them.
             TYPECAST_FORMATS(),
         ],
-        runtimes=[
+        "runtimes": [
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),
             TEST_FACE_DIMS(),
             DEST_INDEX(0),
             SFPU_TILE_INDICES(src0_idx, src1_idx, dst_idx),
+            LOOP_FACTOR(loop_factor),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
@@ -149,10 +162,21 @@ def _run_sfpu_binary_llk_golden(
             num_faces=num_faces,
             twos_complement=formats.input_format.is_integer(),
         ),
-        unpack_to_dest=True,
-        dest_acc=dest_acc,
-    )
+        "unpack_to_dest": True,
+        "dest_acc": dest_acc,
+    }
 
+    if is_perf:
+        PerfConfig(run_types=list(run_types), **test_config_kwargs).run(perf_report)
+        return
+
+    configuration = TestConfig(
+        **{
+            **test_config_kwargs,
+            "templates": test_config_kwargs["templates"]
+            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
+        }
+    )
     res_from_L1 = configuration.run().result
     assert len(res_from_L1) == len(golden_tensor)
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format_out)
@@ -208,7 +232,17 @@ _INT_OPS = [
     "data_format, dest_acc", [(DataFormat.Int32, DestAccumulation.Yes)]
 )
 def test_eltwise_binary_sfpu_int_quasar(
-    data_format, dest_acc, binary_op, mathop, clamp_inputs, tile_indices
+    data_format,
+    dest_acc,
+    binary_op,
+    mathop,
+    clamp_inputs,
+    tile_indices,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
 ):
     """Binary SFPU integer ops (add, mul, gt, lt, le, ge), Int32."""
     formats = InputOutputFormat(input_format=data_format, output_format=data_format)
@@ -222,6 +256,10 @@ def test_eltwise_binary_sfpu_int_quasar(
         prepare_stimuli=lambda f, dims, s0, s1, op: _prepare_int_stimuli(
             f, dims, s0, s1, op, clamp_inputs
         ),
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
     )
 
 
@@ -323,7 +361,16 @@ _FLOAT_OPS = [
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_float_quasar(
-    formats_dest_acc, implied_math_format, tile_indices, binary_op, mathop
+    formats_dest_acc,
+    implied_math_format,
+    tile_indices,
+    binary_op,
+    mathop,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
 ):
     """Binary SFPU float ops (add, sub, mul, div)."""
     formats, dest_acc = formats_dest_acc
@@ -339,6 +386,10 @@ def test_eltwise_binary_sfpu_float_quasar(
         binary_op,
         prepare_stimuli=_prepare_float_stimuli,
         post_check=post_check,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
     )
 
 
@@ -448,6 +499,11 @@ def _run_max_min(
     spec,
     tile_indices,
     is_int,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
 ):
     binary_op = "MAX" if is_max_op else "MIN"
     src0_idx, src1_idx, dst_idx = tile_indices
@@ -516,10 +572,13 @@ def _run_max_min(
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
     )
 
-    configuration = TestConfig(
-        _CPP_SOURCE,
-        formats,
-        templates=[
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
+    test_config_kwargs = {
+        "test_name": _CPP_SOURCE,
+        "formats": formats,
+        "templates": [
             SFPU_BINARY_OP(binary_op),
             IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
@@ -532,14 +591,15 @@ def _run_max_min(
             # TYPECAST_OUT_FORMAT, so every build that includes it must define them.
             TYPECAST_FORMATS(),
         ],
-        runtimes=[
+        "runtimes": [
             TILE_COUNT(tile_cnt),
             NUM_FACES(num_faces),
             TEST_FACE_DIMS(),
             DEST_INDEX(0),
             SFPU_TILE_INDICES(src0_idx, src1_idx, dst_idx),
+            LOOP_FACTOR(loop_factor),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             buffer_A_combined,
             formats.input_format,
             buffer_B_dummy,  # dummy buffer_B (unused by kernel)
@@ -551,11 +611,22 @@ def _run_max_min(
             num_faces=num_faces,
             sfpu=True,
         ),
-        unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
-        disable_format_inference=disable_format_inference,
-    )
+        "unpack_to_dest": unpack_to_dest,
+        "dest_acc": dest_acc,
+        "disable_format_inference": disable_format_inference,
+    }
 
+    if is_perf:
+        PerfConfig(run_types=list(run_types), **test_config_kwargs).run(perf_report)
+        return
+
+    configuration = TestConfig(
+        **{
+            **test_config_kwargs,
+            "templates": test_config_kwargs["templates"]
+            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
+        }
+    )
     res_from_L1 = configuration.run().result
     assert len(res_from_L1) == len(golden_tensor)
     res_tensor = torch.tensor(res_from_L1, dtype=output_torch_fmt)
@@ -580,6 +651,11 @@ def _run_max_min(
 def test_eltwise_binary_sfpu_max_min_float_quasar(
     formats_dest_acc_implied_math_is_max_input_dims,
     tile_indices,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
 ):
     """Binary SFPU max/min (float + MX)."""
     formats, dest_acc, implied_math_format, is_max_op, input_dimensions = (
@@ -595,6 +671,10 @@ def test_eltwise_binary_sfpu_max_min_float_quasar(
         spec,
         tile_indices,
         is_int=False,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
     )
 
 
@@ -610,6 +690,11 @@ def test_eltwise_binary_sfpu_max_min_float_quasar(
 def test_eltwise_binary_sfpu_max_min_int32_quasar(
     formats_dest_acc_implied_math_is_max_input_dims,
     tile_indices,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
 ):
     """Binary SFPU max/min (Int32)."""
     formats, dest_acc, _implied_math_format, is_max_op, input_dimensions = (
@@ -626,4 +711,8 @@ def test_eltwise_binary_sfpu_max_min_int32_quasar(
         spec,
         tile_indices,
         is_int=True,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
     )
