@@ -17,6 +17,8 @@ from models.common.utility_functions import is_blackhole, is_watcher_enabled, ru
 
 
 DEVICE_PARAMS_L1_SMALL_SIZE = [{"l1_small_size": 0}]
+# atol for the #50682 non-tile-aligned regressions, matching the tile-aligned specify_grid cases.
+NON_TILE_ALIGNED_ATOL = 0.08
 WELFORD_MODES = ("legacy", "welford_normal", "welford_reciprocal")
 
 GROUP_NORM_DRAM_SHAPES = [
@@ -394,6 +396,14 @@ def test_group_norm_no_input_mask_DRAM(
     )
 
 
+def measure_group_norm_non_tile_aligned_DRAM(device, *args, **kwargs):
+    # The two characterization tests below deliberately do NOT use assert_numeric_metrics: their
+    # purpose is to pin a single measured max-abs number and show how it moves with the padding
+    # fraction / input mean, which a multi-metric assert would obscure.
+    expected, actual = run_group_norm_non_tile_aligned_DRAM(device, *args, **kwargs)
+    return (actual.float() - expected.float()).abs().max().item()
+
+
 def run_group_norm_non_tile_aligned_DRAM(
     device,
     N,
@@ -478,7 +488,7 @@ def run_group_norm_non_tile_aligned_DRAM(
     ttnn.synchronize_device(device)
     output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor))
 
-    return (output_tensor.float() - torch_output_tensor.float()).abs().max().item()
+    return torch_output_tensor, output_tensor
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
@@ -492,12 +502,11 @@ def test_group_norm_non_tile_aligned_DRAM(device, N, C, H, W, num_groups, use_we
     if device.core_grid.y == 7:
         pytest.skip()
 
-    # PCC is invariant to the per-group affine drift this bug caused, so assert max abs error
-    # directly. Pre-fix values were >= ~0.36; the fused kernel must now match torch within the
-    # same bfloat16 tolerance the tile-aligned cases use.
-    max_abs_err = run_group_norm_non_tile_aligned_DRAM(device, N, C, H, W, num_groups, use_welford)
-    logger.info(f"non-tile-aligned H*W={W * H} max_abs_err={max_abs_err}")
-    assert max_abs_err < 0.08, f"max abs error {max_abs_err} too high for non-tile-aligned H*W={W * H} (see #50682)"
+    expected, actual = run_group_norm_non_tile_aligned_DRAM(device, N, C, H, W, num_groups, use_welford)
+    # rtol is left at its default rather than the 0.060 used for the tile-aligned cases: this bug
+    # was a per-group affine drift, so PCC cannot see it and a value-proportional tolerance would
+    # partly absorb it. atol is the discriminator here (pre-fix this shape measured ~0.36).
+    assert_numeric_metrics(expected, actual, atol=NON_TILE_ALIGNED_ATOL, frobenius_threshold=0.03)
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
@@ -513,9 +522,8 @@ def test_group_norm_non_tile_aligned_per_sample_DRAM(device, N, C, H, W, num_gro
     assert (H * W) % 32 != 0, "per-sample H*W must be non-tile-aligned"
     assert (N * H * W) % 32 == 0, "N*H*W should look aligned -- that is the point of this case"
 
-    max_abs_err = run_group_norm_non_tile_aligned_DRAM(device, N, C, H, W, num_groups, use_welford=False)
-    logger.info(f"per-sample non-tile-aligned N={N} H*W={W * H} max_abs_err={max_abs_err}")
-    assert max_abs_err < 0.08, f"max abs error {max_abs_err} too high for N={N} H*W={W * H} (see #50682)"
+    expected, actual = run_group_norm_non_tile_aligned_DRAM(device, N, C, H, W, num_groups, use_welford=False)
+    assert_numeric_metrics(expected, actual, atol=NON_TILE_ALIGNED_ATOL, frobenius_threshold=0.03)
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
@@ -543,7 +551,7 @@ def test_group_norm_non_tile_aligned_explicit_grid_DRAM(
 
     assert (H * W) % 32 != 0, "per-sample H*W must be non-tile-aligned"
 
-    max_abs_err = run_group_norm_non_tile_aligned_DRAM(
+    expected, actual = run_group_norm_non_tile_aligned_DRAM(
         device,
         N,
         C,
@@ -555,17 +563,9 @@ def test_group_norm_non_tile_aligned_explicit_grid_DRAM(
         cores_x=cores_x,
         num_out_blocks=num_out_blocks,
     )
-    logger.info(
-        f"explicit grid {cores_x}x{cores_y} N={N} H*W={W * H} num_out_blocks={num_out_blocks} "
-        f"max_abs_err={max_abs_err}"
-    )
-    # 0.085 rather than the 0.08 used elsewhere: chunking the reduction into num_out_blocks
-    # changes how the per-block partial sums round in bfloat16, and run_group_norm_DRAM already
-    # allows 0.085 for exactly this reason on the aligned path. Measured 0.039-0.061 here.
-    assert max_abs_err < 0.085, (
-        f"max abs error {max_abs_err} too high for N={N} H*W={W * H} num_out_blocks={num_out_blocks} "
-        f"grid={cores_x}x{cores_y} (see #50682)"
-    )
+    # Chunking into num_out_blocks changes how the per-block partial sums round, so use the same
+    # relaxed atol run_group_norm_DRAM already allows for that on the aligned path.
+    assert_numeric_metrics(expected, actual, atol=0.085, frobenius_threshold=0.03)
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
@@ -579,7 +579,7 @@ def test_group_norm_non_tile_aligned_padding_fraction_DRAM(device, N, C, H, W, n
     if device.core_grid.y == 7:
         pytest.skip()
 
-    max_abs_err = run_group_norm_non_tile_aligned_DRAM(device, N, C, H, W, num_groups, use_welford=False)
+    max_abs_err = measure_group_norm_non_tile_aligned_DRAM(device, N, C, H, W, num_groups, use_welford=False)
     logger.info(f"padding-fraction K={K} H*W={W * H} max_abs_err={max_abs_err}")
     assert max_abs_err < max_err, (
         f"max abs error {max_abs_err} exceeds the recorded {max_err} at K={K} (H*W={W * H}); the "
@@ -596,11 +596,10 @@ def test_group_norm_non_tile_aligned_no_input_mask_DRAM(device, N, C, H, W, num_
     if device.core_grid.y == 7:
         pytest.skip()
 
-    max_abs_err = run_group_norm_non_tile_aligned_DRAM(
+    expected, actual = run_group_norm_non_tile_aligned_DRAM(
         device, N, C, H, W, num_groups, use_welford=False, use_input_mask=False
     )
-    logger.info(f"non-tile-aligned no-input-mask H*W={W * H} max_abs_err={max_abs_err}")
-    assert max_abs_err < 0.08, f"max abs error {max_abs_err} too high for H*W={W * H} no-input-mask (see #50682)"
+    assert_numeric_metrics(expected, actual, atol=NON_TILE_ALIGNED_ATOL, frobenius_threshold=0.03)
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
@@ -621,13 +620,13 @@ def test_group_norm_non_tile_aligned_shifted_input_DRAM(device, input_shift, max
         pytest.skip()
 
     C, num_groups = 1024, 32
-    measured = run_group_norm_non_tile_aligned_DRAM(
+    measured = measure_group_norm_non_tile_aligned_DRAM(
         device, 1, C, 1, 200, num_groups, use_welford=False, input_shift=input_shift
     )
     if aligned_ref is not None:
         # H*W=224 is tile-aligned, so has_pad_correction is false and this is the op's own
         # bfloat16 baseline at the same mean-to-spread ratio.
-        aligned = run_group_norm_non_tile_aligned_DRAM(
+        aligned = measure_group_norm_non_tile_aligned_DRAM(
             device, 1, C, 1, 224, num_groups, use_welford=False, input_shift=input_shift
         )
         logger.info(

@@ -321,17 +321,29 @@ def test_group_norm_height_sharded_non_tile_aligned(device, N, C, H, W, num_grou
     output_tensor = ttnn.to_memory_config(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor))
 
-    max_abs_err = (output_tensor.float() - torch_output_tensor.float()).abs().max().item()
-    logger.info(f"sharded non-tile-aligned H*W={W * H} max_abs_err={max_abs_err}")
-    assert max_abs_err < 0.08, f"max abs error {max_abs_err} too high for non-tile-aligned H*W={W * H} (see #50682)"
+    # rtol is left at its default: this bug was a per-group affine drift, which PCC cannot see and
+    # a value-proportional tolerance would partly absorb, so atol is the discriminator.
+    assert_numeric_metrics(torch_output_tensor, output_tensor, atol=0.08, frobenius_threshold=0.03)
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups, grid_y, grid_x", BLOCK_SHARDED_NON_TILE_ALIGNED_CASES)
-def test_group_norm_block_sharded_non_tile_aligned(device, N, C, H, W, num_groups, grid_y, grid_x):
+@pytest.mark.parametrize(
+    "use_welford, out_row_major",
+    [(False, False), (True, False), (False, True)],
+    ids=["legacy", "welford_routed", "row_major_out"],
+)
+def test_group_norm_block_sharded_non_tile_aligned(
+    device, N, C, H, W, num_groups, grid_y, grid_x, use_welford, out_row_major
+):
     # Regression for tt-metal #50682 on the block-sharded two-pass path with a non-tile-aligned
     # flattened height. grid_x > 1 splits the padded H*W across M-cores (padding tail on the
-    # last M-core), exercising the multi-core sharded correction.
+    # last M-core), exercising the multi-core sharded correction. use_welford=True must be routed
+    # to the two-pass path by ttnn::group_norm. out_row_major selects the UNTILIZE_OUT path, which
+    # runs after the corrected rsqrt and so must not change the result.
+    #
+    # negative_mask is deliberately not covered: it requires a ROW_MAJOR input, and a ROW_MAJOR
+    # tensor has padded_shape[2] == logical_shape[2], so the correction is never active for it.
     torch.manual_seed(0)
     if device.core_grid.x < grid_x or device.core_grid.y < grid_y:
         pytest.skip(f"device grid too small for {grid_x}x{grid_y}")
@@ -396,16 +408,15 @@ def test_group_norm_block_sharded_non_tile_aligned(device, N, C, H, W, num_group
         bias=beta_t,
         memory_config=sharded_mem_config,
         core_grid=grid_size,
-        output_layout=ttnn.TILE_LAYOUT,
+        output_layout=ttnn.ROW_MAJOR_LAYOUT if out_row_major else ttnn.TILE_LAYOUT,
         inplace=False,
-        use_welford=False,
+        use_welford=use_welford,
     )
     output_tensor = ttnn.to_memory_config(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor))
+    output_tensor = output_tensor.reshape(N, 1, -1, C)[:, :, : W * H, :]
 
-    max_abs_err = (output_tensor.float() - torch_output_tensor.float()).abs().max().item()
-    logger.info(f"block-sharded non-tile-aligned H*W={W * H} grid={grid_x}x{grid_y} max_abs_err={max_abs_err}")
-    assert max_abs_err < 0.08, f"max abs error {max_abs_err} too high for non-tile-aligned H*W={W * H} (see #50682)"
+    assert_numeric_metrics(torch_output_tensor, output_tensor, atol=0.08, frobenius_threshold=0.03)
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)

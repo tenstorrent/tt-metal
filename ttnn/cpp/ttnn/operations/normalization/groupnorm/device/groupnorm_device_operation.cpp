@@ -67,17 +67,6 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
         a.padded_shape()[2],
         tile_height);
 
-    // ttnn::group_norm routes non-tile-aligned Welford requests to the two-pass path, so this
-    // only fires for direct ttnn::prim callers, who would otherwise silently hit #50682.
-    TT_FATAL(
-        !(args.use_welford && (a.logical_shape()[2] % tile_height != 0)),
-        "group_norm: use_welford is not supported for non-tile-aligned H*W ({} % {} != 0) -- the "
-        "Welford kernels reduce over the tile-padding rows and produce silently wrong statistics "
-        "(#50682). Call ttnn::group_norm, which routes this shape to the two-pass path, or pass "
-        "use_welford=false.",
-        a.logical_shape()[2],
-        tile_height);
-
     if (a.is_sharded()) {
         const auto& shard_spec = a.shard_spec().value();
         const auto bbox = shard_spec.grid.bounding_box();

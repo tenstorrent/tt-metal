@@ -221,7 +221,8 @@ Tensor group_norm(
     // The #50682 non-tile-aligned correction exists only on the two-pass path: the Welford
     // kernels transpose H*W into the tile columns and track the sample count in tile units, so
     // the padding rows cannot be excluded there. Route such requests to the two-pass path and
-    // drop the Welford-only reciprocals LUT.
+    // drop the Welford-only reciprocals LUT. This is the only place that enforces it, so a new
+    // direct ttnn::prim::group_norm caller would need its own guard.
     std::optional<Tensor> effective_reciprocals = reciprocals;
     const uint32_t tile_height_align = input_tensor.tensor_spec().tile().get_height();
     if (use_welford && (input_shape[2] % tile_height_align != 0)) {
