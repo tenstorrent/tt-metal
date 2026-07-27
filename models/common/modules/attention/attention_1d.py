@@ -411,7 +411,8 @@ class Attention1D(LightweightModule):
         x = _load_input_device_tensor(x, self.config, mode="prefill")
         cfg = self.config
 
-        batch_size = x.shape[0]
+        if batch_size is None:  # todo)) work on removing this argument
+            batch_size = x.shape[0]
         if batch_size > 1:
             x = ttnn.reshape(x, [1, 1, x.shape[-2] * x.shape[-3] * x.shape[0], -1])
 
