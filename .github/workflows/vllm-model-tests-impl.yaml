@@ -327,7 +327,7 @@ jobs:
               export GEMMA4_TRACE_PREFILL_SEQ_LENS=128
               # 31B/12B: hybrid-OFF allocates a full-length KV buffer per layer, so
               # the all-user pool must match the served max_model_len (BH 256k /
-              # WH-T3K 32k). Blindly pinning 262144 OOMs Wormhole T3K (run
+              # WH-T3K 16k). Blindly pinning 262144 OOMs Wormhole T3K (run
               # 30270375854). See tt-metal #49257 / #49083.
               if [ "$HF_MODEL" = "google/gemma-4-31B-it" ] || [ "$HF_MODEL" = "google/gemma-4-12B-it" ]; then
                 MAX_MODEL_LEN=""
@@ -341,6 +341,11 @@ jobs:
                 export GEMMA4_VLLM_SINGLE_CHUNK=0
                 export GEMMA4_DEMO_SINGLE_CHUNK=0
                 export GEMMA4_CHUNKED_PREFILL_TRACE=1
+                # WH T3K 31B: pin metal prefill chunk to 2048 (12 GB/ASIC headroom).
+                if [ "$HF_MODEL" = "google/gemma-4-31B-it" ] && [ "${{ matrix.test-group.mesh-device }}" = "T3K" ]; then
+                  export GEMMA4_GEN_PREFILL_CHUNK=2048
+                  echo "Gemma4 WH-T3K: GEMMA4_GEN_PREFILL_CHUNK=$GEMMA4_GEN_PREFILL_CHUNK"
+                fi
                 echo "Gemma4 KV pool: GEMMA4_MAX_TOKENS_ALL_USERS=$GEMMA4_MAX_TOKENS_ALL_USERS (from max_model_len=${MAX_MODEL_LEN:-default})"
               fi
               ;;

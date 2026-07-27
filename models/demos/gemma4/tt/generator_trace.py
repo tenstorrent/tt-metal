@@ -70,12 +70,10 @@ def chunked_prefill_trace_enabled() -> bool:
 # reference, and exactly the unbounded full-sequence prefill op that wedges the
 # fetch queue at ISL>=8192 (#49083) or OOMs a whole-length trace.
 #
-# 4096 is the largest chunk validated on QB2 to both trace safely
+# 4096 is the largest chunk validated on QB2/P150x8 to both trace safely
 # (<= GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN) and clear the #49083 wedge
-# (repro_prefill_hang.py, REPRO_ISLS=8192,8192 -> ALL_DONE, no wedge/OOM). It is
-# NOT applied to other boards (Wormhole T3K/TG, single-chip Blackhole, etc.),
-# where neither the wedge nor this number was validated — those keep the
-# caller's prior default (see resolve_gemma4_prefill_chunk_size).
+# (repro_prefill_hang.py, REPRO_ISLS=8192,8192 -> ALL_DONE, no wedge/OOM).
+# WH T3K uses a tighter per-board ``prefill_chunk`` (2048) — see policy table.
 GEMMA4_DEFAULT_PREFILL_CHUNK = 4096
 
 # Per-(model, device) long-context policy.
@@ -140,22 +138,26 @@ GEMMA4_LONG_CONTEXT_POLICY = {
             ],
             "source": "measured",
         },
+        # WH LoudBox / QuietBox (T3K): 12 GB GDDR6 per ASIC (n150/n300) vs
+        # BH P150 32 GB; T3K mesh 1×8 ≈ 96 GB total vs BH LB 256 GB / QB2 128 GB
+        # (docs.tenstorrent.com wormhole + t3000 / quietbox specs). Hybrid-OFF
+        # full-length KV + full-ISL prefill scratch OOM at max_model_len=32768
+        # (vLLM nightly run 30291376571: banks ~full, chunk=32768). Keep multi-
+        # chunk=2048 and auto-bound earlier than BH; serve ≤16k until hybrid KV.
         "T3K": {
-            "unbounded_isl_max": 65536,
-            "bounded_isl_min": 65536,
-            "chunked_bounded_isl_min": 262144,
-            "prefill_chunk": _CHUNK,
-            # Mirror QB2 coherency tier until WH is re-measured.
-            "prefill_chunk_by_isl": [
-                {"isl_min": 131072, "chunk": 2048, "require_bounded": True},
-            ],
-            "source": "placeholder",
+            "unbounded_isl_max": 16384,
+            "bounded_isl_min": 32768,
+            "chunked_bounded_isl_min": 32768,
+            "prefill_chunk": 2048,
+            "prefill_chunk_by_isl": [],
+            "source": "inferred",
         },
     },
     # Dense 12B — HF max_pos=256k. QB2: unbounded 64k+128k PASSED; unbounded 256k OOM.
     # P150x8: unbounded 64k+128k+256k PASSED (isl_sweep_logs/p150x8_bg_lb).
     # Single P150: unbounded 32k OK; 64k+ unbounded KV OOM (~22GB sliding pool) —
-    # auto-bound sliding + chunked prefill through 256k (256k already measured PASS).
+    # auto-bound + multi-chunk (4096) through full HF 256k (measured PASS + coherent
+    # gen in isl_sweep_logs/full_matrix N150/P150 64k/128k/256k reruns).
     "12B": {
         _QB2: {
             "unbounded_isl_max": 131072,
@@ -164,8 +166,7 @@ GEMMA4_LONG_CONTEXT_POLICY = {
             "prefill_chunk": _CHUNK,
             "source": "measured",
         },
-        # Single P150 / N150: unbounded sliding KV OOMs above ~32k; auto-bound
-        # + multi-chunk (4096) through 256k. Target coherent generation through 128k.
+        # Single P150: full ISL 256k via bounded sliding + chunked prefill.
         "P150": {
             "unbounded_isl_max": 32768,
             "bounded_isl_min": 65536,
@@ -209,7 +210,7 @@ GEMMA4_LONG_CONTEXT_POLICY = {
     },
     # MatFormer E4B — HF max_pos=128k native; demo can force higher. QB2: unbounded
     # 64k+128k+256k PASSED. P150x8: same (isl_sweep_logs/p150x8_bg_lb).
-    # Single P150: chunked prefill through 256k; coherent through 128k.
+    # Single P150: unbounded through 256k measured (full_matrix N150 alias).
     "E4B": {
         _QB2: {
             "unbounded_isl_max": 262144,
@@ -219,9 +220,9 @@ GEMMA4_LONG_CONTEXT_POLICY = {
             "source": "measured",
         },
         "P150": {
-            "unbounded_isl_max": 131072,
-            "bounded_isl_min": 262144,
-            "chunked_bounded_isl_min": 65536,
+            "unbounded_isl_max": 262144,
+            "bounded_isl_min": 524288,
+            "chunked_bounded_isl_min": 524288,
             "prefill_chunk": _CHUNK,
             "source": "measured",
         },
@@ -237,7 +238,7 @@ GEMMA4_LONG_CONTEXT_POLICY = {
     # 64k+128k+256k PASSED. P150x8: same (isl_sweep_logs/p150x8_bg_lb).
     # Also use_double_wide_mlp on KV-shared layers (2× intermediate).
     # Prefer multi-chunk (4096): single-chunk 64k+ warmup can hang on P150x8.
-    # Single P150: chunked prefill through 256k; coherent through 128k.
+    # Single P150: unbounded through 256k measured (full_matrix N150 alias).
     "E2B": {
         _QB2: {
             "unbounded_isl_max": 262144,
@@ -247,9 +248,9 @@ GEMMA4_LONG_CONTEXT_POLICY = {
             "source": "measured",
         },
         "P150": {
-            "unbounded_isl_max": 131072,
-            "bounded_isl_min": 262144,
-            "chunked_bounded_isl_min": 65536,
+            "unbounded_isl_max": 262144,
+            "bounded_isl_min": 524288,
+            "chunked_bounded_isl_min": 524288,
             "prefill_chunk": _CHUNK,
             "source": "measured",
         },
