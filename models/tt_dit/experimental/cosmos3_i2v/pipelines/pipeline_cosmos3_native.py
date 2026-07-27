@@ -224,6 +224,12 @@ class NativeLayerProxy(nn.Module):
 
         und_shape = tuple(und_seq.shape)
         gen_shape = tuple(gen_seq.shape)
+        print(
+            f"[dbg-shapes] und={tuple(und_seq.shape)} gen={tuple(gen_seq.shape)} "
+            f"cos_und={tuple(cos_und.shape)} sin_und={tuple(sin_und.shape)} "
+            f"cos_gen={tuple(cos_gen.shape)} sp_factor={self._sp_factor} sp_axis={self._sp_axis}",
+            flush=True,
+        )
 
         und_key = id(und_seq)
         if self._und_cache_key != und_key:
@@ -327,11 +333,15 @@ class NativeLayerProxy(nn.Module):
             _t_trunk_done = _time.perf_counter()
             print(f"[timing] proxy tid={_tid:04x} trunk={(_t_trunk_done - _t_uploads_done) * 1000:.1f}ms", flush=True)
 
-        # und_out is unused by I2V (only gen velocity feeds the scheduler — see
-        # `learn-cosmos3-i2v-trunk-roundtrips.md`). Skip the download. Return a
-        # zero-element placeholder so the legacy caller signature is preserved;
-        # callers that need und_out must reinstate this download.
-        und_out = und_seq.new_empty((0, und_seq.shape[-1]))
+        # The reference transformer forward concatenates und_out+gen_out and indexes
+        # the joint tensor with absolute vision indices, so und_out must carry its real
+        # rows (an empty placeholder shortens the joint tensor and the indices overflow).
+        # und is replicated across chips (never sp-sharded), so this is a cheap download.
+        und_out = (
+            self._from_replicated_ttnn(und_out_tt, (und_seq.shape[0], und_seq.shape[-1]))
+            .to(und_seq.dtype)
+            .to(und_seq.device)
+        )
 
         # gen output last-dim differs from input: hidden_size on the legacy path
         # (no device proj_out), patch_latent_dim when proj_out is on device.
@@ -554,8 +564,17 @@ def build_cosmos3_i2v_native_pipeline(
     cache_namespace: str = "cosmos3-i2v",
     enable_device_proj_out: bool = False,
     enable_device_proj_in: bool = False,
+    vae_decoder_device: ttnn.MeshDevice | None = None,
+    pre_decode_hook=None,
 ):
     """Construct the native-trunk Cosmos3 I2V pipeline.
+
+    vae_decoder_device, when set, builds the VAE *decoder* on this mesh instead
+    of `device`. native-cfg passes the full parent mesh so decode runs on all
+    chips (the encoder stays on `device`, since it runs before the trunk frees
+    the submeshes). pre_decode_hook runs once before the first decode — used to
+    close the CFG submeshes so the parent mesh is free (concurrent parent+submesh
+    device use deadlocks).
 
     Args:
         device: Open ttnn MeshDevice (e.g. 1x8 LoudBox or 4x8 BH Galaxy).
@@ -707,14 +726,34 @@ def build_cosmos3_i2v_native_pipeline(
         def _make_tt_decoder(height: int, width: int, num_frames: int):
             if _vae_decoder_holder["adapter"] is not None:
                 return _vae_decoder_holder["adapter"]
+            dec_parallel_config = vae_parallel_config
+            dec_ccl_manager = vae_ccl_manager
+            if vae_decoder_device is not None:
+                # Free the CFG submeshes first — the parent mesh can only be driven
+                # once its children are closed.
+                if pre_decode_hook is not None:
+                    pre_decode_hook()
+                dec_shape = tuple(vae_decoder_device.shape)
+                dec_tp_axis = _tp_key_vae(range(len(dec_shape)), key=lambda i: dec_shape[i])
+                dec_sp_axis = 1 - dec_tp_axis if len(dec_shape) == 2 else 0
+                dec_parallel_config = VaeHWParallelConfig.from_tuples(
+                    height=(dec_shape[dec_tp_axis], dec_tp_axis),
+                    width=(dec_shape[dec_sp_axis] if len(dec_shape) == 2 else 1, dec_sp_axis),
+                )
+                dec_ccl_manager = _CCLManager(
+                    mesh_device=vae_decoder_device,
+                    num_links=num_links,
+                    topology=ttnn.Topology.Linear,
+                )
             print(
-                f"[native-pipeline] TT VAE decoder: lazy-init H={height} W={width} F={num_frames}",
+                f"[native-pipeline] TT VAE decoder: lazy-init H={height} W={width} F={num_frames} "
+                f"mesh={tuple((vae_decoder_device or device).shape)}",
                 flush=True,
             )
             adapter = Cosmos3VAEDecoderAdapter(
                 checkpoint_name=hf_repo,
-                parallel_config=vae_parallel_config,
-                ccl_manager=vae_ccl_manager,
+                parallel_config=dec_parallel_config,
+                ccl_manager=dec_ccl_manager,
                 height=height,
                 width=width,
                 num_frames=num_frames,

@@ -104,7 +104,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--pipeline",
         default="native-cfg",
-        choices=["native-cfg"],
+        choices=["native-cfg", "native"],
         help=(
             "Pipeline factory. 'native-cfg' runs the 64-layer trunk + final RMSNorms on "
             "device, splits the mesh's smaller axis into two submeshes, and runs the "
@@ -294,22 +294,42 @@ def main(argv: list[str] | None = None) -> int:
     mesh = open_mesh(mesh_shape)
     try:
         t0 = time.time()
-        from models.tt_dit.experimental.cosmos3_i2v.pipelines.pipeline_cosmos3_native_cfg import (
-            build_cosmos3_i2v_native_cfg_pipeline,
-        )
+        if args.pipeline == "native":
+            # Single trunk on the whole mesh (TP=8, SP=4 on a 4x8). No CFG-parallel
+            # submeshes — cond/uncond run sequentially on one trunk, and the VAE shares
+            # the same mesh, so trunk+VAE happen in one pipeline with no submesh handoff.
+            from models.tt_dit.experimental.cosmos3_i2v.pipelines.pipeline_cosmos3_native import (
+                build_cosmos3_i2v_native_pipeline,
+            )
 
-        pipe = build_cosmos3_i2v_native_cfg_pipeline(
-            mesh,
-            dtype=torch.bfloat16,
-            use_tt_vae=not args.no_tt_vae,
-            num_links=args.num_links,
-            flow_shift=args.flow_shift,
-            trunk_weight_dtype=weight_dtype,
-            vae_decoder_t_chunk_size=args.vae_decoder_t_chunk_size,
-            vae_encoder_t_chunk_size=args.vae_encoder_t_chunk_size,
-            serial_dispatch=args.cfg_serial_dispatch,
-            enable_device_proj_in=args.device_proj_in,
-        )
+            pipe = build_cosmos3_i2v_native_pipeline(
+                mesh,
+                dtype=torch.bfloat16,
+                use_tt_vae=not args.no_tt_vae,
+                num_links=args.num_links,
+                flow_shift=args.flow_shift,
+                trunk_weight_dtype=weight_dtype,
+                vae_decoder_t_chunk_size=args.vae_decoder_t_chunk_size,
+                vae_encoder_t_chunk_size=args.vae_encoder_t_chunk_size,
+                enable_device_proj_in=args.device_proj_in,
+            )
+        else:
+            from models.tt_dit.experimental.cosmos3_i2v.pipelines.pipeline_cosmos3_native_cfg import (
+                build_cosmos3_i2v_native_cfg_pipeline,
+            )
+
+            pipe = build_cosmos3_i2v_native_cfg_pipeline(
+                mesh,
+                dtype=torch.bfloat16,
+                use_tt_vae=not args.no_tt_vae,
+                num_links=args.num_links,
+                flow_shift=args.flow_shift,
+                trunk_weight_dtype=weight_dtype,
+                vae_decoder_t_chunk_size=args.vae_decoder_t_chunk_size,
+                vae_encoder_t_chunk_size=args.vae_encoder_t_chunk_size,
+                serial_dispatch=args.cfg_serial_dispatch,
+                enable_device_proj_in=args.device_proj_in,
+            )
         print(f"[generate] pipeline built and weights placed in {time.time() - t0:.1f}s", flush=True)
 
         t1 = time.time()
