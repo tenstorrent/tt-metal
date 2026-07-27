@@ -75,7 +75,7 @@ RingIntermStagingParams reduce_scatter_ring_interm_staging_params(
 // interleaved DRAM, page = one chunk). Returns nullopt when the contiguous path does not apply.
 // Single source of truth shared by compute_output_specs and the python-exposed allocation helper, so
 // an internally allocated intermediate and a caller-provided persistent buffer are byte-identical.
-std::optional<ttnn::TensorSpec> reduce_scatter_ring_interm_staging_spec(
+std::optional<tt::tt_metal::TensorSpec> reduce_scatter_ring_interm_staging_spec(
     const ttnn::Tensor& input_tensor,
     ttnn::ccl::Topology topology,
     uint32_t dim,
@@ -90,7 +90,7 @@ std::optional<ttnn::TensorSpec> reduce_scatter_ring_interm_staging_spec(
 // chunks_per_channel pages): each device receives exactly one such contribution, from exactly one
 // neighbor, at exactly one iteration, so no ring-position axis is needed. Returns nullopt when the
 // contiguous path does not apply. See rs-contiguous-interm-design.
-std::optional<ttnn::TensorSpec> reduce_scatter_ring_shortcut_staging_spec(
+std::optional<tt::tt_metal::TensorSpec> reduce_scatter_ring_shortcut_staging_spec(
     const ttnn::Tensor& input_tensor,
     ttnn::ccl::Topology topology,
     uint32_t dim,

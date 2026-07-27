@@ -162,7 +162,7 @@ RingIntermStagingParams reduce_scatter_ring_interm_staging_params(
         page_bytes};
 }
 
-std::optional<ttnn::TensorSpec> reduce_scatter_ring_interm_staging_spec(
+std::optional<tt::tt_metal::TensorSpec> reduce_scatter_ring_interm_staging_spec(
     const ttnn::Tensor& input_tensor,
     ttnn::ccl::Topology topology,
     uint32_t dim,
@@ -176,7 +176,7 @@ std::optional<ttnn::TensorSpec> reduce_scatter_ring_interm_staging_spec(
     // Opaque byte-staging: row-major UINT8, page (row) = one chunk (page_bytes). Interleaved DRAM so
     // chunks spread across banks. UINT8 makes page bytes == width with no element-size divisibility
     // constraint; page_bytes is DRAM-aligned (asserted in the program factory).
-    return ttnn::TensorSpec(
+    return tt::tt_metal::TensorSpec(
         ttnn::Shape({params.total_chunks, params.page_bytes}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT8,
@@ -184,7 +184,7 @@ std::optional<ttnn::TensorSpec> reduce_scatter_ring_interm_staging_spec(
             tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM)));
 }
 
-std::optional<ttnn::TensorSpec> reduce_scatter_ring_shortcut_staging_spec(
+std::optional<tt::tt_metal::TensorSpec> reduce_scatter_ring_shortcut_staging_spec(
     const ttnn::Tensor& input_tensor,
     ttnn::ccl::Topology topology,
     uint32_t dim,
@@ -199,7 +199,7 @@ std::optional<ttnn::TensorSpec> reduce_scatter_ring_shortcut_staging_spec(
     // axis: total_chunks == ring_size * slice_C * chunks_per_channel, so this region is exactly
     // slice_C * chunks_per_channel pages, addressed as (c * chunks_per_channel + chunk-in-channel).
     const uint32_t shortcut_chunks = params.total_chunks / ring_size;
-    return ttnn::TensorSpec(
+    return tt::tt_metal::TensorSpec(
         ttnn::Shape({shortcut_chunks, params.page_bytes}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT8,
