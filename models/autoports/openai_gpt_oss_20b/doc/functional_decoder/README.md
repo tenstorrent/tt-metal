@@ -1,5 +1,10 @@
 # GPT-OSS 20B functional decoder
 
+> 🗄️ **OLD / SUPERSEDED EXPERIMENT (2026-07-25).** Single-device decoder translated directly from the
+> EmitPy package. This is the earlier autoport lineage that fed the old `optimized_decoder`; the current
+> prettify→optimize pipeline does **not** use it (it optimizes the *prettified multichip* model on
+> ttnn-models branch `mvasiljevic/gpt-oss-optimize`). See the autoport top-level `../../README.md`.
+
 This artifact is a correctness-first, dense, single-device translation of the
 pre-generated TTNN EmitPy package at `/home/mvasiljevic/emit-gptoss`. Both
 shipped paths are implemented. No MLIR conversion, `ir_to_emit.sh`, or emit
