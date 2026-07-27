@@ -19,6 +19,8 @@
 
 #include "api/dataflow/dataflow_api.h"
 
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+
 void kernel_main() {
     constexpr uint32_t cb_out_tiles = 16;
 
@@ -49,6 +51,7 @@ void kernel_main() {
         // Output shares `gate`'s (T, FLAT) tiling, so the token axis is tile-padded.
         const uint32_t first_tile = (b * token_tile_rows + r * tile_rows_per_block) * flat_tiles;
 
+        MaybeDeviceZoneScope("onorm_write_out");
         uint32_t done = 0;
         while (done < flat_tiles_per_block) {
             const uint32_t remaining = flat_tiles_per_block - done;

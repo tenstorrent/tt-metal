@@ -24,6 +24,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 namespace {
@@ -88,6 +89,7 @@ void kernel_main() {
     // ---- once per core: the reuse-shared weight row (v_tiles tiles, never popped) ----
     cb_reserve_back(cb_weight, v_tiles);
     {
+        MaybeDeviceZoneScope("onorm_read_weight");
         const uint32_t l1_write_addr = get_write_ptr(cb_weight);
         for (uint32_t i = 0; i < v_tiles; ++i) {
             noc_async_read(weight_acc.get_noc_addr(i), l1_write_addr + i * page_bytes, page_bytes);
@@ -105,8 +107,11 @@ void kernel_main() {
         float f;
     } inv_v;
     inv_v.u = inv_v_bits;
-    dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
-        inv_v.f);
+    {
+        MaybeDeviceZoneScope("onorm_fill_scaler");
+        dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+            inv_v.f);
+    }
 
     // ---- this core's token-blocks ----
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
@@ -116,10 +121,16 @@ void kernel_main() {
 
         // `o` is tiled over (HV, V), so its token axis is UN-padded.
         const uint32_t o_first_tile = (b * tokens_total + r * tokens_per_block) * v_tiles;
-        stream_tiles<cb_o_tiles, dm_block_tiles, page_bytes>(o_acc, o_first_tile, o_tiles_per_block);
+        {
+            MaybeDeviceZoneScope("onorm_read_o");
+            stream_tiles<cb_o_tiles, dm_block_tiles, page_bytes>(o_acc, o_first_tile, o_tiles_per_block);
+        }
 
         // `gate` is tiled over (T, FLAT), so its token axis IS tile-padded (Tt).
         const uint32_t gate_first_tile = (b * token_tile_rows + r * tile_rows_per_block) * flat_tiles;
-        stream_tiles<cb_gate_tiles, dm_block_tiles, page_bytes>(gate_acc, gate_first_tile, flat_tiles_per_block);
+        {
+            MaybeDeviceZoneScope("onorm_read_gate");
+            stream_tiles<cb_gate_tiles, dm_block_tiles, page_bytes>(gate_acc, gate_first_tile, flat_tiles_per_block);
+        }
     }
 }

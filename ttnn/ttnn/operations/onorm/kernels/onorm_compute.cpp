@@ -46,6 +46,7 @@
 #include "api/compute/eltwise_unary/rsqrt.h"
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_activations.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
@@ -100,81 +101,93 @@ void kernel_main() {
             // v_tiles inputs and is packed once.  `HeldBulk` on both operands
             // waits for the chunk's o tiles but does NOT pop them — P4 needs
             // them again.  With fp32_dest_acc_en the accumulate is fp32.
-            ckl::eltwise_chain(
-                ckl::EltwiseShape::grid(nb, v_tiles),
-                ckl::BinaryFpu<
-                    cb_o_tiles,
-                    cb_o_tiles,
-                    ckl::BinaryFpuOp::Mul,
-                    ckl::BroadcastDim::None,
-                    ckl::InputLifecycle::HeldBulk,
-                    ckl::InputLifecycle::HeldBulk,
-                    ckl::BinaryDataFormatReconfig::Input,
-                    ckl::Dst::D0,
-                    ckl::OperandKind::Block,
-                    ckl::OperandKind::Block,
-                    ckl::TileOffset::Unset,
-                    ckl::TileOffset::Unset,
-                    ckl::DestAccumulation::Enabled>{},
-                ckl::PackTile<
-                    cb_sumsq,
-                    ckl::OutputLifecycle::DestAccumulation,
-                    ckl::PackTileReconfig::Output,
-                    ckl::Dst::D0>{});
+            {
+                MaybeDeviceZoneScope("onorm_p1_sumsq");
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::grid(nb, v_tiles),
+                    ckl::BinaryFpu<
+                        cb_o_tiles,
+                        cb_o_tiles,
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::BroadcastDim::None,
+                        ckl::InputLifecycle::HeldBulk,
+                        ckl::InputLifecycle::HeldBulk,
+                        ckl::BinaryDataFormatReconfig::Input,
+                        ckl::Dst::D0,
+                        ckl::OperandKind::Block,
+                        ckl::OperandKind::Block,
+                        ckl::TileOffset::Unset,
+                        ckl::TileOffset::Unset,
+                        ckl::DestAccumulation::Enabled>{},
+                    ckl::PackTile<
+                        cb_sumsq,
+                        ckl::OutputLifecycle::DestAccumulation,
+                        ckl::PackTileReconfig::Output,
+                        ckl::Dst::D0>{});
+            }
 
             // ---- P2: mean over V (via the 1/V scaler tile) + eps + rsqrt ----
             // `o`'s tiled row axis is HV, so the reduction is over W (= V):
             // REDUCE_ROW with Ht = 1, Wt = 1 and `nb` batches.  A REDUCE_COL
             // here would silently reduce across heads.
-            ckl::reduce<
-                PoolType::SUM,
-                ReduceDim::REDUCE_ROW,
-                cb_sumsq,
-                cb_scaler,
-                cb_rstd,
-                ckl::ReduceInputPolicy::BulkWaitBulkPop,
-                ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-                ckl::ReduceAlgorithm::Auto>(
-                ckl::ReduceInputBlockShape::of(1, 1, nb),
-                ckl::ReduceInputMemoryLayout::contiguous(),
-                ckl::NoAccumulation{},
-                eps_then_rsqrt);
+            {
+                MaybeDeviceZoneScope("onorm_p2_reduce_eps_rsqrt");
+                ckl::reduce<
+                    PoolType::SUM,
+                    ReduceDim::REDUCE_ROW,
+                    cb_sumsq,
+                    cb_scaler,
+                    cb_rstd,
+                    ckl::ReduceInputPolicy::BulkWaitBulkPop,
+                    ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                    ckl::ReduceAlgorithm::Auto>(
+                    ckl::ReduceInputBlockShape::of(1, 1, nb),
+                    ckl::ReduceInputMemoryLayout::contiguous(),
+                    ckl::NoAccumulation{},
+                    eps_then_rsqrt);
+            }
 
             // ---- P4: normalize.  cb_rstd is a REDUCE_ROW result (col-0 valid)
             // so it broadcasts back across columns => BroadcastDim::Col, indexed
             // by row (OperandKind::Col).  `Bulk` on cb_o_tiles performs the
             // deferred pop of P1's held window — that release is what lets
             // O_DEPTH = 2 prefetch the next chunk.
-            ckl::mul<
-                cb_o_tiles,
-                cb_rstd,
-                cb_normed,
-                ckl::BroadcastDim::Col,
-                ckl::InputLifecycle::Bulk,
-                ckl::InputLifecycle::Bulk,
-                ckl::OutputLifecycle::Streaming,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::PackTileReconfig::Output,
-                ckl::OperandKind::Block,
-                ckl::OperandKind::Col>(ckl::EltwiseShape::grid(nb, v_tiles));
+            {
+                MaybeDeviceZoneScope("onorm_p4_normalize");
+                ckl::mul<
+                    cb_o_tiles,
+                    cb_rstd,
+                    cb_normed,
+                    ckl::BroadcastDim::Col,
+                    ckl::InputLifecycle::Bulk,
+                    ckl::InputLifecycle::Bulk,
+                    ckl::OutputLifecycle::Streaming,
+                    ckl::BinaryDataFormatReconfig::Input,
+                    ckl::PackTileReconfig::Output,
+                    ckl::OperandKind::Block,
+                    ckl::OperandKind::Col>(ckl::EltwiseShape::grid(nb, v_tiles));
+            }
 
             // ---- P5: * weight.  weight is [1, V] (row-0 valid) so it
             // broadcasts down the rows => BroadcastDim::Row, indexed by column
             // tile (OperandKind::Row).  Row/Col kinds require a non-draining
             // lifecycle, hence HeldBulk: the weight is re-waited every chunk and
             // never popped.
-            ckl::mul<
-                cb_normed,
-                cb_weight,
-                cb_onorm,
-                ckl::BroadcastDim::Row,
-                ckl::InputLifecycle::Bulk,
-                ckl::InputLifecycle::HeldBulk,
-                ckl::OutputLifecycle::Streaming,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::PackTileReconfig::Output,
-                ckl::OperandKind::Block,
-                ckl::OperandKind::Row>(ckl::EltwiseShape::grid(nb, v_tiles));
+            {
+                MaybeDeviceZoneScope("onorm_p5_weight_scale");
+                ckl::mul<
+                    cb_normed,
+                    cb_weight,
+                    cb_onorm,
+                    ckl::BroadcastDim::Row,
+                    ckl::InputLifecycle::Bulk,
+                    ckl::InputLifecycle::HeldBulk,
+                    ckl::OutputLifecycle::Streaming,
+                    ckl::BinaryDataFormatReconfig::Input,
+                    ckl::PackTileReconfig::Output,
+                    ckl::OperandKind::Block,
+                    ckl::OperandKind::Row>(ckl::EltwiseShape::grid(nb, v_tiles));
+            }
 
             // ---- P6: head-major -> row-major.  Each of the `nb` blocks
             // untilizes one token's [HV, V] tile-row into a contiguous 32x V
@@ -182,19 +195,28 @@ void kernel_main() {
             // index.  cb_rm_flat_rows ACCUMULATES across the chunk loop and is
             // only complete (one full [tokens_per_block, FLAT] stripe) after the
             // last chunk.
-            ckl::untilize<v_tiles, cb_onorm, cb_rm_flat_rows>(nb);
+            {
+                MaybeDeviceZoneScope("onorm_p6_untilize");
+                ckl::untilize<v_tiles, cb_onorm, cb_rm_flat_rows>(nb);
+            }
         }
 
         // ---- P7a: row-major -> flat token-major.  The tilize row stride IS
         // `flat_tiles`, which is exactly the stripe P6 built.
-        ckl::tilize<flat_tiles, cb_rm_flat_rows, cb_flat_tiles>(tile_rows_per_block);
+        {
+            MaybeDeviceZoneScope("onorm_p7a_tilize");
+            ckl::tilize<flat_tiles, cb_rm_flat_rows, cb_flat_tiles>(tile_rows_per_block);
+        }
 
         for (uint32_t g = 0; g < gate_chunks; ++g) {
             // ---- P7b: sigmoid(gate) on the SFPU.  The op owns the sigmoid
             // (gate arrives pre-sigmoid) and normalization has already happened.
             // The result is deliberately PACKED TO L1 rather than kept in DEST —
             // see P7c.
-            ckl::unary<ckl::Sigmoid<>, cb_gate_tiles, cb_gate_sig>(ckl::EltwiseShape::tiles(gate_chunk_tiles));
+            {
+                MaybeDeviceZoneScope("onorm_p7b_sigmoid");
+                ckl::unary<ckl::Sigmoid<>, cb_gate_tiles, cb_gate_sig>(ckl::EltwiseShape::tiles(gate_chunk_tiles));
+            }
 
             // ---- P7c: the gate multiply, on the **FPU**, fed from L1 by the
             // unpacker.  This is the op's highest-volume multiply (every output
@@ -203,7 +225,10 @@ void kernel_main() {
             // into an FPU consumer measures 0.82x while the L1 round-trip is
             // 1.22x faster.  Hence the deliberate cb_gate_sig hop.  Do NOT
             // collapse P7b/P7c into one DEST-resident chain.
-            ckl::mul<cb_flat_tiles, cb_gate_sig, cb_out_tiles>(ckl::EltwiseShape::tiles(gate_chunk_tiles));
+            {
+                MaybeDeviceZoneScope("onorm_p7c_gate_mul");
+                ckl::mul<cb_flat_tiles, cb_gate_sig, cb_out_tiles>(ckl::EltwiseShape::tiles(gate_chunk_tiles));
+            }
         }
     }
 }

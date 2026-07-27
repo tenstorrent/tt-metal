@@ -36,15 +36,45 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 TOKENS_PER_BLOCK = 32  # tokens per work unit (= one output tile-row: the re-tile floor)
 NORM_CHUNK_TOKENS = 8  # tokens per normalize sub-pass (coarsest that fits L1, §6.2)
 GATE_CHUNK_TILES = 64  # output tiles per gate-chain invocation (phase C block factor)
-DM_BLOCK_TILES = 4  # tiles per noc_async_read/write group (one barrier per group)
+
+# Tiles per noc_async_read / noc_async_write group — ONE barrier per group, so
+# this many transfers are in flight at once.  Used by BOTH dataflow halves (the
+# reader's `o`/`gate` streams and the writer's output stream read the same CT arg),
+# so raising it widens both sides together.
+# MEASURED (Blackhole p150, 11x10 grid, tests/.../test_onorm_trials.py, 5-7
+# interleaved trials/config, <=1% spread): raising 4 -> 8 together with
+# DM_DEPTH 2 -> 4 is 1.164x at 2 cores, 1.163x at 4, 1.108x at 20, 1.061x at 110.
+# The win shrinks as cores rise because the op approaches the DRAM roofline
+# (~412 GB/s aggregate at B=8/T=640, ~80% of Blackhole peak), which is exactly the
+# behaviour op_design.md §1.4 predicts.
+DM_BLOCK_TILES = 8
 
 # --- buffer depths (in block-factor units) ---
-DM_DEPTH = 2  # depth of cb_gate_tiles / cb_out_tiles, in DM_BLOCK_TILES units
-O_DEPTH = 2  # depth of cb_o_tiles, in NORM_CHUNK_TOKENS-chunk units
+# DM_DEPTH deepens cb_gate_tiles / cb_out_tiles so the reader can prefetch (and the
+# writer drain) a group while compute works on the previous one.  4 is measured
+# above; DM_DEPTH=2 at DM_BLOCK_TILES=8 leaves 1.035x on the table.
+DM_DEPTH = 4
+# O_DEPTH deepens cb_o_tiles. Kept at 2: the reader is NOT the critical path at
+# these settings (NCRISC 92.7us vs 102.3us kernel at the old default), and
+# O_DEPTH=3 measured within noise while costing +128 KB of L1.
+O_DEPTH = 2
 
 # --- hardware tile geometry (not a knob) ---
 TILE_H = 32
 TILE_W = 32
+
+# L1 headroom held back from the CB budget.  `get_max_worker_l1_unreserved_size()`
+# reports the unreserved L1 span, but the statically-allocated CB region starts
+# ABOVE a per-program base (kernel binaries, runtime args, profiler buffers), so
+# the CB total that the runtime actually validates is larger than the sum of our
+# pages.  Measured on Wormhole: a 741-page (1517568 B) CB set was reported by the
+# runtime as growing to 1628928 B against a max L1 of 1572864 B — i.e. a 111360 B
+# base, so the real CB ceiling is 1572864 - 111360 = 1461504 B, which is
+# get_max_worker_l1_unreserved_size() - 70656.  Holding back 72 KB makes this
+# file's budget assert — which names the knobs to lower, and in what order — fire
+# BEFORE the runtime's own bare "beyond max L1 size" throw, without rejecting knob
+# settings that genuinely do fit.
+_L1_CB_BASE_RESERVE = 72 * 1024
 
 
 # ===========================================================================
@@ -212,9 +242,9 @@ def create_program_descriptor(
         )
 
     total_cb_bytes = sum(cb_pages.values()) * tile_bytes
-    # The CB-available slice of L1 (total L1 minus the unreserved base), i.e. the
-    # actual budget the knobs must fit inside.
-    l1_available = ttnn.get_max_worker_l1_unreserved_size()
+    # The CB-available slice of L1 (unreserved L1 minus the CB-region base), i.e.
+    # the actual budget the knobs must fit inside.
+    l1_available = ttnn.get_max_worker_l1_unreserved_size() - _L1_CB_BASE_RESERVE
     assert total_cb_bytes <= l1_available, (
         f"onorm: CB footprint {total_cb_bytes} B exceeds the CB-available L1 per core "
         f"({l1_available} B). "
