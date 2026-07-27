@@ -4,6 +4,8 @@ This catalog accumulates patterns and anti-patterns observed during Metal 2.0 op
 
 Each entry is self-contained. New entries land here as they're discovered during ports.
 
+**These entries outrank ported code you find in the tree — and `ttnn/cpp/ttnn/operations/experimental/quasar/` is out of bounds outright.** That directory holds copies of ops carrying deliberately hacky shortcut ports made to unblock downstream work; they are not production ports, they carry idioms these entries forbid, and they are not a source of patterns, binding names, or worked examples. Close the file if a search lands you there. See the port recipe's [scope note](../port/metal2_port.md#read-this-first).
+
 ## Conventions
 
 Entry shape — load-bearing fields, in order:
@@ -531,7 +533,7 @@ Do **not** read the hit list as a consumer list. A hit counts only if it is a fa
 
 **Decision**: work the rungs in order; take the first that applies.
 
-1. **Reuse an existing `_metal2` fork.** Look for one before doing anything else: a sibling of the original, same stem plus a `_metal2` suffix (`awesome_kernel_metal2.cpp` next to `awesome_kernel.cpp`). If it's there, an earlier port already converted this kernel — **point your `KernelSpec::source` at it and adopt its binding names**. Do not make a second copy, and do not copy it into your own op's directory.
+1. **Reuse an existing `_metal2` fork.** Look for one before doing anything else — and run this check **locationally**: `ls` the original's directory and look for a sibling with the same stem plus a `_metal2` suffix (`awesome_kernel_metal2.cpp` next to `awesome_kernel.cpp`). Do **not** run it as a tree-wide filename grep; a grep returns `_metal2` hits from the out-of-bounds quasar tree, which are not siblings of anything and not forks in this sense (see the clause below). If a sibling is there, an earlier port already converted this kernel — **point your `KernelSpec::source` at it and adopt its binding names**. Do not make a second copy, and do not copy it into your own op's directory.
 
    **Check fit before committing to reuse**: the fork's `dfb::` / `tensor::` binding names, its named-arg set, any `#ifdef`s it gates on (your factory must supply the matching `defines`), and which tensor each `tensor::name` refers to. If it fits, the fork's names are now *your* constraint — rename on your side, in your factory's spec.
 
