@@ -80,9 +80,18 @@ AICLK was 1.35 GHz in both good and bad runs, so it is not a clock/throttling ef
 ## Ruled out on evidence
 
 - **`ad81807b191`** — Revert #49473, restoring the BH `Fp8_e4m3` `unpack_tilize`
-  face-pair protocol (i.e. undoing a *perf feature*). Tempting, but the 07-23 run at
-  **2.58s predates #49473 entirely** (it merged 07-23 16:12), so removing that feature
-  cannot cost 16%.
+  face-pair protocol (i.e. undoing a *perf feature*). Ruled out twice over:
+  1. **It was mandatory correctness work, not a perf change, so it is not actionable.**
+     #49473 broke PCC on main: its inline two-context `unpack_tilize` corrupted the
+     gathered K tiles consumed by `ttnn.transformer.sparse_sdpa` with
+     `SparseKVFormat.SCALED_FP8`, giving PCC ~0.0. The revert is what restored a
+     correct main. Even if it did cost per-chunk time, re-landing #49473 as-is is not
+     an option — any perf recovered there has to come from a *correct*
+     reimplementation of the fp8 tilize fast path, which is separate work from this
+     regression hunt. Do not spend a bisect probe on it.
+  2. Independently, the numbers say it is not the culprit anyway: the 07-23 run at
+     **2.58s predates #49473 entirely** (it merged 07-23 16:12), so this test never
+     benefited from the fast path, and removing it cannot cost 16%.
 - **`01d5894f4c8`** — `moe_compute` non-tile-aligned fix. The diff is only
   `floor(n/2)` -> `ceil(n/2)` for a BRISC token capacity and two CB sizes; no work
   redistribution. Also this model's MoE goes through
@@ -213,7 +222,7 @@ clusters:
 ### Window, in first-parent order
 
 ```
- 1  ad81807b191  09:34  Revert #49473: restore Blackhole FP8_E4M3 tilize protocol (#50989)   [ruled out]
+ 1  ad81807b191  09:34  Revert #49473: restore Blackhole FP8_E4M3 tilize protocol (#50989)   [ruled out: forced PCC fix, not actionable]
  2  0981c4a9396  09:55  quasar sfpu: non-approx reciprocal
  3  a07ef0b5fa4  10:27  trace manifest validation script
  4  2848c65adea  11:18  [LLK] Convert Blackhole complex SFPU kernels to SFPI (#49926)
