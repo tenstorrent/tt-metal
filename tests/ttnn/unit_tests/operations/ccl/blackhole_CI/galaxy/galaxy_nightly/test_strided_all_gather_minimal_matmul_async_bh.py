@@ -233,8 +233,8 @@ def test_strided_all_gather_minimal_matmul_async(
         ("v_gate_s1", 9728, 4096, 8, 1, True, None, False, 16, 8, 1, 2, 1),
         # Audio block (K = audio_dim = 2048), same fusion structure with halved dims.
         # ("a_qkv", 38912, 2048, 1536, 3, True, None, False, 16, 8, 4, 2, 2),
-        ("a_kv", 38912, 2048, 1024, 2, True, None, False, 16, 8, 4, 2, 2),
-        ("a_kv_s1", 9728, 2048, 1024, 2, True, None, False, 16, 8, 4, 2, 2),
+        ("a_kv", 38912, 2048, 1024, 1, True, None, False, 16, 8, 4, 2, 2),
+        ("a_kv_s1", 9728, 2048, 1024, 1, True, None, False, 16, 8, 4, 2, 2),
         # ("a_q_out", 38912, 2048, 512, 1, True, None, False, 16, 8, 4, 2, 2),
         # ("a_out_addcmul", 38912, 2048, 512, 1, True, None, True, 16, 8, 4, 2, 2),
         # ("a_ff1", 38912, 2048, 2048, 1, True, "gelu_tanh", False, 16, 8, 4, 2, 2),
