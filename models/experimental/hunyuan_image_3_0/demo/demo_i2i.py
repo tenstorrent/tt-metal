@@ -175,8 +175,8 @@ USE_DISTIL = os.environ.get("HY_DISTIL", "0") == "1"
 SCALING = VAE_SCALING_FACTOR
 
 # Persist pre-tilized mesh weights across runs (see README § Weight cache).
-if not os.environ.get("TT_DIT_CACHE_DIR"):
-    os.environ["TT_DIT_CACHE_DIR"] = str(Path.home() / ".cache" / "tt-dit")
+if not os.environ.get("TT_CACHE_PATH"):
+    os.environ["TT_CACHE_PATH"] = str(Path.home() / ".cache" / "tt-dit")
 
 # --- lightweight per-stage timing (mirrors demo.py) -------------------------
 _TIMINGS = []

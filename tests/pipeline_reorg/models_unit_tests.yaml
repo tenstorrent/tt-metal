@@ -1120,7 +1120,7 @@
 - name: HunyuanImage-3.0 unit tests
   cmd: |
     export HF_HOME=/mnt/MLPerf/huggingface HUNYUAN_MODEL_DIR=/mnt/MLPerf/huggingface/tencent/HunyuanImage-3.0
-    export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_cache/tencent/HunyuanImage-3.0 HY_SKIP_WEIGHT_DOWNLOAD=1
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tencent/HunyuanImage-3.0 HY_SKIP_WEIGHT_DOWNLOAD=1
     pytest --timeout 900 models/experimental/hunyuan_image_3_0/tests/pcc/test_denoise.py -m "not slow"
   model: hunyuan-image-3.0
   skus:

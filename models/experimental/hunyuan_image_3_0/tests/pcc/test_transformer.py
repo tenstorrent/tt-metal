@@ -305,7 +305,7 @@ def test_decoder_layer_production_pcc(device, mode, seq_len, image_infos, label)
 # Transformer weight-cache helpers (no device)
 # ---------------------------------------------------------------------------
 def test_transformer_cache_dir_key(monkeypatch):
-    monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
+    monkeypatch.setenv("TT_CACHE_PATH", "/tmp/TT_CACHE")
     path = transformer_cache_dir(
         model_name="hunyuan-image-3.0",
         mesh_shape=(2, 2),
@@ -324,7 +324,7 @@ def test_transformer_cache_dir_key(monkeypatch):
 
 
 def test_cache_disabled_without_env(monkeypatch):
-    monkeypatch.delenv("TT_DIT_CACHE_DIR", raising=False)
+    monkeypatch.delenv("TT_CACHE_PATH", raising=False)
     assert not cache_dir_is_set()
     assert (
         transformer_cache_dir(

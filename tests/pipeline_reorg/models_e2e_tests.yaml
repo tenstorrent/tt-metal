@@ -827,7 +827,7 @@
 - name: HunyuanImage-3.0 T2I e2e tests
   cmd: |
     export HF_HOME=/mnt/MLPerf/huggingface HUNYUAN_MODEL_DIR=/mnt/MLPerf/huggingface/tencent/HunyuanImage-3.0
-    export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_cache/tencent/HunyuanImage-3.0
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tencent/HunyuanImage-3.0
     export HF_HUB_OFFLINE=0
     export HY_STEPS=50
     export HY_VERBOSE=1
