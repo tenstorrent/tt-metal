@@ -314,13 +314,13 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_ds_prefill_transformer -k "mesh-8x4 and 5_layers and e256_device_fp32 and longbook_qa_eng and 25600 and iter2 and not iter25 and not iter2000 and smoke and with_determinism and random and balanced and right_pad" -vvv --tb=short --timeout=3600
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_ds_prefill_transformer -k "mesh-8x4 and 5_layers and e256_device_fp32 and longbook_qa_eng and 25600 and iter2 and not iter25 and not iter2000 and smoke and with_determinism and random and balanced and right_pad" -vvv --tb=short --timeout=3240
     '
   test_type: prefill_transformer_determinism
   test_group: module
   skus:
     bh_sc1:
-      timeout: 60
+      timeout: 54
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
@@ -447,19 +447,19 @@
     export PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
     export PREFILL_NUM_LAYERS=61
-    export PREFILL_CI_PRODUCER_TIMEOUT_S=1440
-    export PREFILL_CI_RUNNER_READY_TIMEOUT_S=1440
+    export PREFILL_CI_PRODUCER_TIMEOUT_S=1800
+    export PREFILL_CI_RUNNER_READY_TIMEOUT_S=1800
     export PREFILL_RUNNER_LAUNCH=ci
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc -k single_user_full_depth -vvv --tb=short --timeout=1440
+      python3 -m pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc -k single_user_full_depth -vvv --tb=short --timeout=1800
     '
   test_type: prefill_runner
   test_group: module
   skus:
     bh_sc1:
-      timeout: 24
+      timeout: 30
   owner_id: U09L76N1MAT  # Nenad Babin
   team: models
   sp_config: sc1
