@@ -1469,6 +1469,19 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
     if (realtime_profiler_) {
         return;
     }
+    // The perf-debug (X280) profiler REPLACES this one -- do not run both. They are not independent:
+    // RealtimeProfilerManager reserves a tensix core, owns its own D2H socket + dispatch handshake, and
+    // consumes the SAME per-RISC SPSC profiler rings the X280 firmware drains. Two consumers on one SPSC
+    // ring see each other's partial reads (observed: ~1800 "zone with end < start" warnings per ResNet
+    // run), and its shutdown interleaves with dispatch teardown.
+    // NOTE: TT_METAL_NO_RT_PROFILER is read NOWHERE in the tree -- it never disabled anything. This gate
+    // is the actual off switch, keyed on the same variable that turns the X280 path on.
+    const char* pd = std::getenv("TT_METAL_PERF_DEBUG_PROFILER");
+    if (pd != nullptr && *pd != '\0' && *pd != '0') {
+        log_info(
+            tt::LogMetal, "[perf-debug profiler] enabled -- legacy realtime profiler is disabled for this run.");
+        return;
+    }
     realtime_profiler_ = std::make_unique<RealtimeProfilerManager>(mesh_device);
 }
 

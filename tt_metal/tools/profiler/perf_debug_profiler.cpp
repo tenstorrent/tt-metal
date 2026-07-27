@@ -101,9 +101,12 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
     if (!devices_.empty()) {
         log_info(
             tt::LogMetal,
-            "[perf-debug profiler] active on {} device(s): X280 drain (2 readers + 2 relays, 4 MiB sockets, "
+            "[perf-debug profiler] active on {} device(s): X280 drain ({} readers + {} relays, {} MiB sockets, "
             "adaptive) -> Tracy",
-            devices_.size());
+            devices_.size(),
+            kNRead,
+            kNRelay,
+            (static_cast<uint64_t>(kHRingWords) * 4) / (1024 * 1024));
     }
 }
 
@@ -374,15 +377,16 @@ void PerfDebugProfiler::drain_loop(DeviceCtx& ctx, uint32_t sock_idx) {
                 tracy_->HandleWorkerZone(pkt);
             });
     }
-    if (ddbg) {
-        log_info(
-            tt::LogMetal,
-            "[drain sock={} EXIT] iters={} pages_read={} markers_emitted={}",
-            sock_idx,
-            dbg_iters,
-            dbg_pages,
-            dbg_emit);
-    }
+    // Always report the per-socket drain totals: this is the only way to tell a healthy capture from a
+    // silently-empty one. pages_read==0 means the X280 relayed nothing (bad boot / wrong grid);
+    // markers_emitted is the device-zone count that actually reached Tracy.
+    log_info(
+        tt::LogMetal,
+        "[perf-debug profiler] socket {} drained: {} pages, {} markers -> Tracy ({} drain iterations)",
+        sock_idx,
+        dbg_pages,
+        dbg_emit,
+        dbg_iters);
 }
 
 void PerfDebugProfiler::stop() {
