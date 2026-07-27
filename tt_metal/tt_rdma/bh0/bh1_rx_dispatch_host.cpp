@@ -188,7 +188,7 @@ int main(int argc, char** argv) {
     // Clear the WRITE landing target (on its own core) + the stats region.
     std::vector<uint32_t> zeros(kMrLen / 4, 0u);
     cluster.write_core(device->id(), verify_core, zeros, verify_addr);
-    std::vector<uint32_t> zstats(11, 0u);
+    std::vector<uint32_t> zstats(13, 0u);
     cluster.write_core(device->id(), eth_phys, zstats, (uint32_t)stats_addr);
     // Clear the SEND ring + prod_idx on its core.
     if (noc_target == 3) {
@@ -235,10 +235,10 @@ int main(int argc, char** argv) {
     std::cout << "BH.2-RX: dispatch kernel up. Now send TT-RDMA frames from the BF3. Stats:\n";
 
     for (int s = 0; s < hold_s; ++s) {
-        auto st = cluster.read_core<uint32_t>(device->id(), eth_phys, (uint32_t)stats_addr, 11 * sizeof(uint32_t));
+        auto st = cluster.read_core<uint32_t>(device->id(), eth_phys, (uint32_t)stats_addr, 13 * sizeof(uint32_t));
         std::printf(
             "  t=%2ds  total=%u send=%u write=%u write_ok=%u unknown=%u bad=%u crc_err=%u last_op=0x%02x read_pos=%u "
-            "read_req=%u read_resp=%u\n",
+            "read_req=%u read_resp=%u ack=%u ack_seq=%u\n",
             s,
             st[0],
             st[1],
@@ -250,7 +250,9 @@ int main(int argc, char** argv) {
             st[7],
             st[8],
             st[9],
-            st[10]);
+            st[10],
+            st[11],
+            st[12]);
         std::fflush(stdout);
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }

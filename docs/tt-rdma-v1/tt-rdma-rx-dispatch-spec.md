@@ -254,5 +254,6 @@ throughput will track the RX number, not the 200 G TX number.
 - **RX.4 (Stage 2b, core of BH.3)** — MR table + WRITE via `noc_async_write` off-core (8.5 Gbps). **Done.**
 - **RX.5** — CRC-32 header validation (SW). **Done.** HW `ROCE_ICRC` offload — follow-up.
 - **RX.5b** — SEND→RxWqeRing (on-core). **Done** (T6); host-hugepage swap pending.
-- **RX.5c** — READ_REQ→READ_RESP target side (MR read + TX egress). **Done** (T7). ACK + READ initiator pending.
+- **RX.5c** — READ_REQ→READ_RESP target side (MR read + TX egress). **Done** (T7).
+- **RX.5d** — ACK (0x40) reception + cumulative-ACK watermark. **Done** (T8). READ initiator + WRITE_IMM completions pending.
 - **RX.6** — PFC-lossless (BH.6) + resync-on-bad; fast gateway sender to find the real ceiling. Pending.

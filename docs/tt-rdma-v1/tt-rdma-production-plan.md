@@ -99,7 +99,12 @@ No opcode left behind; every path tested + error-handled.
     (`TT_RDMA_HDR_ONLY_BYTES`) so the MAC never runt-pads them (which desyncs header-only framing).
   - **1.3b Pending.** Initiator side: BH issues READ_REQ and correlates the RESP by tag (needs a
     read-correlation table, `TT_RDMA_READ_CORR`).
-- **1.4 ACK (0x40)** reception + cumulative-ACK accounting (pairs with Phase 2 reliability).
+- **1.4 ACK (0x40)** reception + cumulative-ACK accounting (pairs with Phase 2 reliability). **Done.**
+  Inbound ACK carries the peer's cumulative `ack_seq` in the seq field (header-only frame); the RX kernel
+  tracks the highest via wraparound-safe signed compare (the "acked-up-to" watermark the TX/initiator side
+  reads to free retransmit buffers). Validated on silicon (regression **T8**): 40 fresh ACKs → watermark
+  40; 20 stale ACKs (seq ≤ 40) → watermark held at 40 (advance-on-newer + ignore-stale). Publishes
+  `ack` count + `ack_seq` watermark.
 - **1.5 WRITE_IMM / imm_data** completions.
 - **1.6 MR table lifecycle** — CONTROL-opcode register/deregister, rkey `(slot<<24)|rand|gen` generation
   + rotation, 64-slot management, and **access-control enforcement tests** (rkey_miss / rkey_access /

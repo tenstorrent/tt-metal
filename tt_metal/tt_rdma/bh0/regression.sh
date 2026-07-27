@@ -109,6 +109,23 @@ if wait_up "$OUT"; then
     || fail "RX READ round-trip (read_resp=${rr:-0}, resp_frames=${resp:-0})"
 else fail "RX kernel did not come up (T7)"; kill $DPID 2>/dev/null; sudo -n pkill -x tcpdump 2>/dev/null; fi
 
+echo "== T8: RX ACK reception + cumulative-ACK accounting (monotonic watermark, stale ignored) =="
+OUT=$D/rx6.txt
+timeout 115 "$BIN/bh1_rx_dispatch" 1 ext 8 1 1 0 1 >"$OUT" 2>&1 &
+DPID=$!
+if wait_up "$OUT"; then
+  sudo -n "$ALLOW" $P0 40 $DMAC 0x1af6 0x40 0 0 0 >/dev/null 2>&1   # ACK seq 1..40 -> watermark 40
+  sleep 1
+  sudo -n "$ALLOW" $P0 20 $DMAC 0x1af6 0x40 0 0 0 >/dev/null 2>&1   # ACK seq 1..20 STALE (<=40)
+  wait $DPID
+  line=$(grep "ack=" "$OUT" | grep -v info | tail -1)
+  ack=$(echo "$line" | grep -oE 'ack=[0-9]+' | head -1 | cut -d= -f2)
+  aseq=$(echo "$line" | grep -oE 'ack_seq=[0-9]+' | cut -d= -f2)
+  [ "${aseq:-0}" = 40 ] && [ "${ack:-0}" -ge 50 ] \
+    && pass "RX ACK cumulative (ack=$ack, watermark=$aseq held vs stale)" \
+    || fail "RX ACK cumulative (ack=${ack:-0}, ack_seq=${aseq:-0}, want watermark=40)"
+else fail "RX kernel did not come up (T8)"; kill $DPID 2>/dev/null; fi
+
 echo "======================================================"
 echo "REGRESSION: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ] && { echo "== ALL GREEN =="; exit 0; } || { echo "== FAILURES =="; exit 1; }

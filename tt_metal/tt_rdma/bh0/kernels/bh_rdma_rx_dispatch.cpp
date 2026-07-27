@@ -100,6 +100,11 @@ void kernel_main() {
     const uint32_t rd_src_y = get_arg_val<uint32_t>(20);
     const uint32_t rd_src_base = get_arg_val<uint32_t>(21);
     uint32_t n_read_req = 0, n_read_resp = 0;
+    // Phase 1.4: ACK (0x40) reception + cumulative-ACK accounting. An inbound ACK carries the peer's
+    // cumulative ack_seq in the seq field (header-only frame). We track the highest ack_seq seen with
+    // wraparound-safe signed comparison -- the "acked up to" watermark the TX/initiator side reads to
+    // free retransmit buffers + complete sends. Monotonic: stale / duplicate / reordered ACKs are ignored.
+    uint32_t n_ack = 0, ack_watermark = 0;
 
     volatile tt_l1_ptr uint32_t* hb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hb_addr);
     volatile tt_l1_ptr uint32_t* stats = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stats_addr);
@@ -273,6 +278,12 @@ void kernel_main() {
                         }
                     }
                 }
+            } else if (op == TT_OP_ACK) {
+                ++n_ack;
+                const uint32_t ack_seq = hw[2];                // cumulative ack_seq rides in the seq field
+                if ((int32_t)(ack_seq - ack_watermark) > 0) {  // wraparound-safe "newer than watermark"
+                    ack_watermark = ack_seq;
+                }
             } else {
                 ++n_unknown;
             }
@@ -298,6 +309,8 @@ void kernel_main() {
         stats[8] = read_pos;
         stats[9] = n_read_req;
         stats[10] = n_read_resp;
+        stats[11] = n_ack;
+        stats[12] = ack_watermark;
 
         if (stop != nullptr && *stop != 0) {
             break;
