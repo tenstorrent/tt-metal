@@ -1747,6 +1747,23 @@ void MeshGraphDescriptor::validate_pinnings(
             error_messages.push_back("Pinning entry has no physical_asic_position");
         }
 
+        // A single pinning entry must not mix regex and non-regex logical_fabric_node_id fields.
+        // Allowing both would make expansion ambiguous (literal nodes vs pattern-expanded nodes in
+        // the same group).
+        bool has_regex_node = false;
+        bool has_non_regex_node = false;
+        for (const auto& logical_node_id : pinning.logical_fabric_node_id()) {
+            if (!logical_node_id.mesh_id_regex().empty() || !logical_node_id.chip_id_regex().empty()) {
+                has_regex_node = true;
+            } else {
+                has_non_regex_node = true;
+            }
+        }
+        if (has_regex_node && has_non_regex_node) {
+            error_messages.push_back(
+                "Pinning entry mixes regex and non-regex logical_fabric_node_id fields; use separate entries");
+        }
+
         for (const auto& logical_node_id : pinning.logical_fabric_node_id()) {
             // Regex entries are expanded later against the instantiated domain; their numeric
             // mesh_id/chip_id are unused, so skip exact-duplicate tracking for them.

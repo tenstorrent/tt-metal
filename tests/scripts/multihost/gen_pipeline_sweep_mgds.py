@@ -93,19 +93,37 @@ top_level_instance {{ graph {{ graph_descriptor: "G0" graph_id: 0 }} }}
 """
 
 
-def _pinnings_4x4(stages: int) -> str:
-    out = []
-    for i in range(stages):
-        positions = POS_EVEN if i % 2 == 0 else POS_ODD
-        out.append(f"# mesh_id {i}")
-        out.append("pinnings {")
-        for chip_id in PIN_CHIPS:
-            out.append(f"  logical_fabric_node_id {{ mesh_id: {i} chip_id: {chip_id} }}")
-        for tray_id, asic_location in positions:
-            out.append(f"  physical_asic_position {{ tray_id: {tray_id} asic_location: {asic_location} }}")
-        out.append("}")
-        out.append("")
-    return "\n".join(out).rstrip() + "\n"
+def _pinnings_4x4_regex() -> str:
+    # Two regex entries (even/odd mesh-id parity) replace {stages} identical per-mesh all-to-all blocks.
+    even_chips = "\n".join(
+        f'  logical_fabric_node_id {{ mesh_id_regex: "[0-9]*[02468]" chip_id: {c} }}' for c in PIN_CHIPS
+    )
+    even_pos = "\n".join(f"  physical_asic_position {{ tray_id: {t} asic_location: {a} }}" for t, a in POS_EVEN)
+    odd_chips = "\n".join(
+        f'  logical_fabric_node_id {{ mesh_id_regex: "[0-9]*[13579]" chip_id: {c} }}' for c in PIN_CHIPS
+    )
+    odd_pos = "\n".join(f"  physical_asic_position {{ tray_id: {t} asic_location: {a} }}" for t, a in POS_ODD)
+    return f"""# --- Pinnings ---------------------------------------------------------------
+# All-to-all corner pinning per mesh: the logical corner chips (0, 1, 3, 12, 15) may map to any of
+# the tray/asic positions in the set. The solver enforces a bijection, so each chip lands on a
+# distinct ASIC. The position set alternates by mesh-id parity to match the 1x2 split-host galaxy
+# wiring, so the per-mesh blocks collapse to just two regex entries below.
+#
+# mesh_id_regex expands PER matched mesh (one all-to-all group each). '[0-9]*[02468]' = even mesh ids,
+# '[0-9]*[13579]' = odd mesh ids. (Ranges like "0-8" and comma lists like "0,2,4-6" are also supported.)
+
+# Even mesh ids -> asic_location 3 column
+pinnings {{
+{even_chips}
+{even_pos}
+}}
+
+# Odd mesh ids -> asic_location 2 column
+pinnings {{
+{odd_chips}
+{odd_pos}
+}}
+"""
 
 
 def build_4x4(stages: int) -> str:
@@ -138,12 +156,7 @@ graph_descriptors {{
 # --- Instantiation ----------------------------------------------------------
 top_level_instance {{ graph {{ graph_descriptor: "G0" graph_id: 0 }} }}
 
-# --- Pinnings ---------------------------------------------------------------
-# All-to-all corner pinning per mesh: the logical corner chips (0, 1, 3, 12, 15) may map to any of the
-# tray/asic positions in the set. The solver enforces a bijection, so each chip lands on a distinct ASIC.
-# The position set alternates by mesh-id parity to match the 1x2 split-host galaxy wiring.
-
-{_pinnings_4x4(stages)}"""
+{_pinnings_4x4_regex()}"""
 
 
 def main() -> None:

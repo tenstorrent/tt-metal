@@ -9,6 +9,7 @@
 #include <string>
 #include <cstdio>
 #include <set>
+#include <map>
 #include <unordered_set>
 #include <fstream>
 
@@ -1933,6 +1934,103 @@ TEST(MeshGraphDescriptorTests, PinningsRegex48StageFileExpandsTo48Groups) {
     EXPECT_EQ(*meshes.rbegin(), 47u);
 }
 
+TEST(MeshGraphDescriptorTests, PinningsRegex72StageSubtorusFileExpandsTo432Groups) {
+    // subtorus_4x4_pipeline_72stage uses six mesh_id_regex "0-71" 1:1 entries -> 6 groups per mesh.
+    const std::filesystem::path path =
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/subtorus/"
+        "subtorus_4x4_pipeline_72stage_mesh_graph_descriptor.textproto";
+    MeshGraphDescriptor desc(path);
+    const auto& pinnings = desc.get_pinnings();
+    ASSERT_EQ(pinnings.size(), 432u) << "72 meshes x 6 corner pins from 6 regex entries";
+
+    std::map<uint32_t, std::set<uint32_t>> chips_by_mesh;
+    for (const auto& g : pinnings) {
+        ASSERT_EQ(g.fabric_nodes.size(), 1u) << "Each entry is a 1:1 pin";
+        ASSERT_EQ(g.asic_positions.size(), 1u);
+        const uint32_t m = *g.fabric_nodes.front().mesh_id;
+        chips_by_mesh[m].insert(g.fabric_nodes.front().chip_id);
+    }
+    ASSERT_EQ(chips_by_mesh.size(), 72u);
+    for (uint32_t m = 0; m < 72; ++m) {
+        ASSERT_EQ(chips_by_mesh[m].size(), 6u) << "mesh " << m << " should have 6 corner pins";
+        EXPECT_TRUE(chips_by_mesh[m].count(0));
+        EXPECT_TRUE(chips_by_mesh[m].count(15));
+        EXPECT_TRUE(chips_by_mesh[m].count(14));
+        EXPECT_TRUE(chips_by_mesh[m].count(3));
+        EXPECT_TRUE(chips_by_mesh[m].count(12));
+        EXPECT_TRUE(chips_by_mesh[m].count(13));
+    }
+}
+
+TEST(MeshGraphDescriptorTests, PinningsRegex32StageSubtorusFileExpandsTo192Groups) {
+    const std::filesystem::path path =
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/subtorus/"
+        "subtorus_4x4_pipeline_32stage_mesh_graph_descriptor.textproto";
+    MeshGraphDescriptor desc(path);
+    const auto& pinnings = desc.get_pinnings();
+    ASSERT_EQ(pinnings.size(), 192u) << "32 meshes x 6 corner pins from 6 regex entries";
+}
+
+TEST(MeshGraphDescriptorTests, PinningsRegex8StageSubtorusFileEvenOddExpandsTo24Groups) {
+    // subtorus_4x4_pipeline_8stage: 6 even/odd regex 1:1 entries over 8 meshes (4 even + 4 odd).
+    const std::filesystem::path path =
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/subtorus/"
+        "subtorus_4x4_pipeline_8stage_mesh_graph_descriptor.textproto";
+    MeshGraphDescriptor desc(path);
+    const auto& pinnings = desc.get_pinnings();
+    ASSERT_EQ(pinnings.size(), 24u) << "8 meshes x 3 pins each from 6 regex entries";
+
+    std::map<uint32_t, std::set<uint32_t>> chips_by_mesh;
+    for (const auto& g : pinnings) {
+        ASSERT_EQ(g.fabric_nodes.size(), 1u);
+        const uint32_t m = *g.fabric_nodes.front().mesh_id;
+        chips_by_mesh[m].insert(g.fabric_nodes.front().chip_id);
+    }
+    for (uint32_t m = 0; m < 8; ++m) {
+        ASSERT_EQ(chips_by_mesh[m].size(), 3u) << "mesh " << m;
+        if (m % 2 == 0) {
+            EXPECT_TRUE(chips_by_mesh[m].count(0));
+            EXPECT_TRUE(chips_by_mesh[m].count(15));
+            EXPECT_TRUE(chips_by_mesh[m].count(14));
+        } else {
+            EXPECT_TRUE(chips_by_mesh[m].count(3));
+            EXPECT_TRUE(chips_by_mesh[m].count(12));
+            EXPECT_TRUE(chips_by_mesh[m].count(13));
+        }
+    }
+}
+
+TEST(MeshGraphDescriptorTests, PinningsRegexMixedWithNonRegexError) {
+    // Mixing regex and literal logical_fabric_node_id in one pinning entry is ambiguous and must fail.
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+        }
+        pinnings: {
+          logical_fabric_node_id: { mesh_id_regex: "0-1" chip_id: 0 }
+          logical_fabric_node_id: { mesh_id: 0 chip_id: 3 }
+          physical_asic_position: { tray_id: 1 asic_location: 1 }
+        }
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    EXPECT_THAT(
+        [&]() { MeshGraphDescriptor desc(text_proto); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+            ::testing::HasSubstr("mixes regex and non-regex"))));
+}
+
 TEST(MeshGraphDescriptorTests, PinningsMultipleMeshes) {
     // Test pinnings for multiple meshes
     const std::string text_proto = R"proto(
@@ -2110,6 +2208,8 @@ TEST(MeshGraphDescriptorTests, FindingB_DirectionalDeviceLevelStrictIntermeshIsR
             ::testing::HasSubstr("directional inter-mesh connection"),
             ::testing::HasSubstr("not fully supported"),
             ::testing::HasSubstr("50292"))));
+}
+
 TEST(MeshGraphDescriptorTests, PinningsAllToAll) {
     // A single pinning entry listing 2 logical nodes and 2 physical positions is stored as one
     // many-to-many group (any listed node may map to any listed position).
