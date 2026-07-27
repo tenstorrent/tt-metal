@@ -17,15 +17,6 @@ import os
 import sys
 from collections import OrderedDict
 
-BRAIN_FOOTER = (
-    "@brAIn Please review all listed tests and the reassigned owners. Please "
-    "update the `owner` field of all identified tests to match the slack "
-    "credentials of the newly indicated owner. If an owner field does not "
-    "exist, please create one. The owner entry should follow an "
-    "<owner_slack_id> # <owner_name> pattern. For credentials of the new test "
-    "owner, please consult .github/TESTOWNERS"
-)
-
 
 def _blob_url(repo, ref, file, line):
     """Permalink to a file line on GitHub (line falls back to the file top)."""
@@ -76,7 +67,6 @@ def render_issue(owners, repo, ref):
             lines.append(f"- [{name}]({url})")
         lines.append("")
 
-    lines.append(BRAIN_FOOTER)
     return "\n".join(lines)
 
 

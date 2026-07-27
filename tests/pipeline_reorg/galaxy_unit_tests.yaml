@@ -102,7 +102,7 @@
   name: Galaxy tttv2 tests
   model: tttv2
   team: models
-  owner_id: U07RY6B5FLJ # Gongyu Wang
+  owner_id: U08JFM3CFA4 # Gongyu Wang
   auto_triage: true
   cmd: |
     mkdir -p generated/test_reports

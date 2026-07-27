@@ -40,7 +40,7 @@ jobs:
           # Owner mapping:
           # Pavle Petrovic (U08E1JCDVNX), Salar Hosseini Khorasgani (U08CEGF78ET) - Llama models
           # Djordje Ivanovic (U053W15B6JF) - Qwen3-32B models
-          # Gongyu Wang (U07RY6B5FLJ) - Qwen 2.5 VL models
+          # Gongyu Wang (U08JFM3CFA4) - Qwen 2.5 VL models
           # Sarva Sanjay (U08H31YMN4Q) - Qwen 3 VL models
           # Ambrose Ling (U08GELBB1AP) - BH tests
           # Tomasz Cheda (U091SNDA4TS) - Structured output tests
