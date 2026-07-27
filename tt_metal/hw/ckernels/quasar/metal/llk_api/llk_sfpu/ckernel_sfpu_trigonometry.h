@@ -12,8 +12,8 @@
 #include "ckernel_sfpu_sqrt_custom.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_log1p.h"
-#include "sfpu/ckernel_sfpu_log.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_log.h"
+#include "ckernel_sfpu_polyval.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -852,8 +852,8 @@ void atan_init() {
         sfpi::vConstFloatPrgm1 = 0x1.999384p-3f;
         sfpi::vConstFloatPrgm2 = -0x1.555552p-2f;
     } else {
-        // sfpu_atan_bf16 uses _sfpu_reciprocal_<2>.
-        _init_sfpu_reciprocal_<false>();
+        // sfpu_atan_bf16 uses _sfpu_reciprocal_<2>, which refines with vConstFloatPrgm0.
+        _init_reciprocal_<false>();
     }
 }
 
