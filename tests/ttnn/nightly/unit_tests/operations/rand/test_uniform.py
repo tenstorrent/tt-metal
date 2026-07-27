@@ -176,6 +176,46 @@ def test_uniform_seed_distinguishes_cache_entries(device):
     device.disable_and_clear_program_cache()
 
 
+def test_uniform_range_reapplied_on_cache_hit(device):
+    """Guards that from/to (like seed) are re-applied to the cached program on a cache HIT.
+
+    from/to/seed are excluded from compute_program_hash, so calls differing only in those values
+    cache-hit instead of recompiling. override_runtime_arguments() must re-derive and re-apply the
+    per-core f2u_from/f2u_to compute-kernel runtime args on every hit (via create_descriptor).
+    seed-only tests above hold from/to fixed, so they would not catch a frozen range arg. Pins:
+      * changing only from/to must NOT grow the cache -> guards against re-adding them to the hash.
+      * changing from/to must move the output into the new range -> guards against a frozen range
+        arg on the in-place cache-hit fast path.
+    """
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    shape = (256, 256)
+    npu = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.float32), device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
+    )
+
+    ttnn.uniform(npu, 0.0, 1.0, 1234)
+    out_lo = ttnn.to_torch(npu).float().clone()
+    entries_first = device.num_program_cache_entries()
+
+    # from/to are hash-excluded -> this is a cache HIT even though the range differs.
+    ttnn.uniform(npu, 100.0, 200.0, 1234)
+    out_hi = ttnn.to_torch(npu).float().clone()
+    entries_second = device.num_program_cache_entries()
+
+    assert entries_first > 0
+    assert (
+        entries_second == entries_first
+    ), "changing only from/to must NOT add a cache entry -- they are dynamic, not hashed"
+    assert out_lo.min() >= 0.0 and out_lo.max() < 1.0, "initial from/to range not respected"
+    assert (
+        out_hi.min() >= 100.0 and out_hi.max() < 200.0
+    ), "from/to not re-applied on the cache-hit fast path (frozen range runtime arg)"
+
+    device.disable_and_clear_program_cache()
+
+
 @pytest.mark.parametrize(
     "shape",
     [[512, 512], [5, 2, 4, 70, 40]],
