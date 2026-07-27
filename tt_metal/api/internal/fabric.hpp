@@ -6,6 +6,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <umd/device/types/core_coordinates.hpp>
