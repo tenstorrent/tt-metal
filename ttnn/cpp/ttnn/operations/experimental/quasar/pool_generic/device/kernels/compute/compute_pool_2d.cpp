@@ -1,6 +1,14 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+// [#48552 DIAGNOSTIC] compute removed to bisect maxpool hang (compute vs dataflow); revert after.
+// Every compute LLK/API call (tilizeA_B_reduce_init[_short], unpack_tilizeA_B_block, reduce_tile_math,
+// tile_regs_acquire/commit/wait/release, pack_untilize_dest[_init], TTI_STALLWAIT pack-drain) is commented
+// out; the DataflowBuffer CB credit ops (wait_front / reserve_back / push_back / pop_front) and the loop
+// structure that drives them are preserved UNCHANGED, so the reader->compute->writer pipeline still cycles
+// with zero compute math. If the maxpool still hangs -> the hang is in the dataflow/CB-credit/NOC path;
+// if it clears -> the hang is the compute reduce/DEST-sync. NB: the OUTPUT_TILED path is #ifdef-gated out
+// for the ROW_MAJOR stem maxpool build, so its compute is not compiled here (not gutted).
 #include <cstdint>
 
 #include "api/compute/pack_untilize.h"
@@ -174,10 +182,15 @@ void kernel_main() {
 #else
     constexpr uint32_t pack_target_cb_id = tilize_untilize_cb;
 #endif
-    tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
-        in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, pack_target_cb_id);
-
-    pack_untilize_dest_init<max_tiles_per_iter>(pack_target_cb_id);
+    // [#48552 DIAG] compute removed:
+    // tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
+    //     in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, pack_target_cb_id);
+    // pack_untilize_dest_init<max_tiles_per_iter>(pack_target_cb_id);
+    // Keep these decls used now that the only consumers (the compute inits/reduce above) are removed:
+    (void)pack_target_cb_id;
+    (void)neginf_srca_maxpool;
+    (void)zero_srca_avgpool;
+    (void)num_faces_in_input_tile;
 
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
@@ -262,10 +275,17 @@ void kernel_main() {
             // llk_*_hw_configure, and re-running hw_configure per c-block corrupts unpacker state (UNPACKER
             // fault). Re-initing only some engines desynced them (Risc IB interrupt, watcher 0x19, on MATH then
             // PACK); the short compute API keeps unpack+math in lockstep without the illegal per-block reconfig.
-            tilizeA_B_reduce_init_short<neginf_srca_maxpool, zero_srca_avgpool>(
-                curr_in_cb_id, curr_scalar_cb_id, tiles_to_reduce, pack_target_cb_id);
+            // [#48552 DIAG] compute removed:
+            // tilizeA_B_reduce_init_short<neginf_srca_maxpool, zero_srca_avgpool>(
+            //     curr_in_cb_id, curr_scalar_cb_id, tiles_to_reduce, pack_target_cb_id);
             MATH(WATCHER_RING_BUFFER_PUSH(0xC0FFEE11u));
-            tile_regs_acquire();
+            // [#48552 DIAG] tile_regs_acquire();
+            // [#48552 DIAG] these are now referenced only by the removed compute (and DPRINT args, which
+            // may compile out) -> mark used so -Werror=unused doesn't fire with compute stripped:
+            (void)output_faces;
+            (void)tiles_to_reduce;
+            (void)curr_in_cb_id;
+            (void)curr_scalar_cb_id;
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE12u));
                 UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)chunk));
@@ -285,19 +305,17 @@ void kernel_main() {
                         (uint32_t)tiles_to_reduce,
                         (uint32_t)in_ntiles_c));
                 }
-                unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                    curr_in_cb_id,
-                    curr_scalar_cb_id,
-                    tiles_to_reduce,
-                    0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/);
-                for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
-                    reduce_tile_math<REDUCE_OP, REDUCE_DIM>(math_tile_idx, num_faces_in_input_tile);
-                }
+                // [#48552 DIAG] compute removed (unpack-tilize + reduce); CB drain preserved:
+                // unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
+                //     curr_in_cb_id, curr_scalar_cb_id, tiles_to_reduce, 0);
+                // for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
+                //     reduce_tile_math<REDUCE_OP, REDUCE_DIM>(math_tile_idx, num_faces_in_input_tile);
+                // }
                 curr_in_cb.pop_front(1);
             }
-            tile_regs_commit();
+            // [#48552 DIAG] tile_regs_commit();
             PACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE13u));
-            tile_regs_wait();
+            // [#48552 DIAG] tile_regs_wait();
             if constexpr (is_output_tiled) {
                 // TILED output: accumulate sticks and perform tilization when needed.
                 // pre_tilize_cb_id / fast_tilize_cb_id are only emitted under OUTPUT_TILED; even
@@ -421,6 +439,7 @@ void kernel_main() {
                 const uint32_t curr_scratch_cb_id = scratch_cb_id_0;
                 DataflowBuffer curr_scratch_cb = scratch_cb_0;
 #endif
+                (void)curr_scratch_cb_id;  // [#48552 DIAG] used only by removed pack / DPRINT args
                 // Model A (wide-reduction fix): the scratch CB holds ONE contiguous full-width (in_ntiles_c)
                 // output stick, so reserve it ONCE per stick (on the first c-block) -- NOT per c-block.
                 // Reserving/pushing a full stick per c-block advanced wr_entry_idx mid-stick, overran the
@@ -469,15 +488,17 @@ void kernel_main() {
                 //   c0 -> block_c_index 0            -> tiles 0..3
                 //   c1 -> block_c_index 4/2 = 2      -> tiles 4..5
                 // Init width must equal pack width per c-block (pack_untilize.h contract), so init per c-block.
-                if (last_c_block) {
-                    pack_untilize_dest_init<partial_iter_output_tiles, in_ntiles_c>(curr_scratch_cb_id);
-                    pack_untilize_dest<partial_iter_output_tiles, in_ntiles_c>(
-                        curr_scratch_cb_id, 1, (c_i * max_tiles_per_iter) / partial_iter_output_tiles);
-                } else {
-                    pack_untilize_dest_init<max_tiles_per_iter, in_ntiles_c>(curr_scratch_cb_id);
-                    pack_untilize_dest<max_tiles_per_iter, in_ntiles_c>(curr_scratch_cb_id, 1, c_i);
-                }
-                tile_regs_release();
+                // [#48552 DIAG] compute removed (pack-untilize into the scratch stick + tile_regs_release);
+                // the scratch reserve_back (above) / push_back (below) CB credits are preserved:
+                // if (last_c_block) {
+                //     pack_untilize_dest_init<partial_iter_output_tiles, in_ntiles_c>(curr_scratch_cb_id);
+                //     pack_untilize_dest<partial_iter_output_tiles, in_ntiles_c>(
+                //         curr_scratch_cb_id, 1, (c_i * max_tiles_per_iter) / partial_iter_output_tiles);
+                // } else {
+                //     pack_untilize_dest_init<max_tiles_per_iter, in_ntiles_c>(curr_scratch_cb_id);
+                //     pack_untilize_dest<max_tiles_per_iter, in_ntiles_c>(curr_scratch_cb_id, 1, c_i);
+                // }
+                // tile_regs_release();
                 if (last_c_block) {
                     // Push the whole stick once, after every c-block has packed its slice, so the DM reader
                     // consumes exactly one full stick per wait_front/pop_front(scratch_npages) -- the previous
@@ -500,9 +521,10 @@ void kernel_main() {
                     // so it must be arch-gated to compile at all. NB: TTI_STALLWAIT expands to a bare __asm__
                     // statement, so it must NOT be wrapped in the expression-form PACK((...)) parens -- PACK(...)
                     // is variadic, so the comma-separated p_stall args pass straight through as one asm statement.
-#ifdef ARCH_QUASAR
-                    PACK(TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::NOTHING, p_stall::PACK));
-#endif
+                    // [#48552 DIAG] pack-drain removed (no pack to drain):
+                    // #ifdef ARCH_QUASAR
+                    //     PACK(TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::NOTHING, p_stall::PACK));
+                    // #endif
                     curr_scratch_cb.push_back(scratch_npages);  // hand off to the DM reader, which writes the output
                 }
 #else
