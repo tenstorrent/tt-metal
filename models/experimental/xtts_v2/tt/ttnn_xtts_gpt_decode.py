@@ -59,8 +59,16 @@ class TTNNGPTDecoder(TTNNGPTCore):
 
         zeros = torch.zeros(1, cfg.n_head, self.max_seq, cfg.head_dim)
         for _ in range(cfg.n_layer):
-            self.k_cache.append(ttnn.from_torch(zeros, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device))
-            self.v_cache.append(ttnn.from_torch(zeros, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device))
+            self.k_cache.append(
+                ttnn.from_torch(
+                    zeros, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=self.mesh_mapper
+                )
+            )
+            self.v_cache.append(
+                ttnn.from_torch(
+                    zeros, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=self.mesh_mapper
+                )
+            )
 
     def reset(self):
         """Start a new sequence. Positions are overwritten as we decode, and SDPA-decode
@@ -145,11 +153,15 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
         self.max_seq = ((max_seq + 63) // 64) * 64
         zeros = torch.zeros(1, cfg.n_head, self.max_seq, cfg.head_dim)
         self.k_cache = [
-            ttnn.from_torch(zeros, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            ttnn.from_torch(
+                zeros, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=self.mesh_mapper
+            )
             for _ in range(cfg.n_layer)
         ]
         self.v_cache = [
-            ttnn.from_torch(zeros, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            ttnn.from_torch(
+                zeros, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=self.mesh_mapper
+            )
             for _ in range(cfg.n_layer)
         ]
         # paged_update_cache requires a height-sharded token input (1 core for B=1).
@@ -159,9 +171,13 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
             ttnn.BufferType.L1,
             ttnn.ShardSpec(grid, (32, cfg.head_dim), ttnn.ShardOrientation.ROW_MAJOR),
         )
-        self._pos = ttnn.from_torch(torch.zeros(1, dtype=torch.int32), device=device)
+        self._pos = ttnn.from_torch(torch.zeros(1, dtype=torch.int32), device=device, mesh_mapper=self.mesh_mapper)
         self._in = ttnn.from_torch(
-            torch.zeros(1, 1, cfg.n_embd), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            torch.zeros(1, 1, cfg.n_embd),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=self.mesh_mapper,
         )
         self.trace_id = None
         self._out = None
@@ -204,17 +220,15 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
         for c in self.k_cache + self.v_cache:
             ttnn.copy(ttnn.zeros_like(c, memory_config=ttnn.DRAM_MEMORY_CONFIG), c)
 
-    def _set_pos(self, p):
+    def set_pos(self, pos):
+        """Set the KV-cache write/attend position (cache-state control; host int -> device _pos)."""
         import torch
 
-        ttnn.copy_host_to_device_tensor(ttnn.from_torch(torch.tensor([p], dtype=torch.int32)), self._pos)
-
-    def _set_input(self, emb):
-        ttnn.copy_host_to_device_tensor(ttnn.from_torch(emb, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), self._in)
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(torch.tensor([pos], dtype=torch.int32)), self._pos)
 
     def capture(self):
         """Compile (warmup) then capture the decode step into a trace. Resets caches after."""
-        self._set_pos(0)
+        self.set_pos(0)
         self._step_ops(self._in)  # warmup compile (trace cannot compile new programs)
         ttnn.synchronize_device(self.device)
         self.trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
@@ -223,23 +237,12 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
         ttnn.synchronize_device(self.device)
         self.reset_caches()
 
-    def step(self, emb, pos, read=True):
-        """emb: torch [1,1,1024]; pos: int. Returns latent torch [1,1,1024] if read."""
-        self._set_input(emb)
-        self._set_pos(pos)
+    def step_device(self, emb_dev, pos):
+        """Device-in -> device-out decode primitive: copy the (device) embedding into the stable
+        trace input, set the position, replay the trace, and return the (device) latent output.
+        No host<->device transfer and no loop -- the driver owns from_torch/to_torch, the mesh
+        mapping, and the decode loop (see ttnn_xtts_gpt_generate.traced_decode_sequence)."""
+        ttnn.copy(emb_dev, self._in)
+        self.set_pos(pos)
         ttnn.execute_trace(self.device, self.trace_id, cq_id=0, blocking=False)
-        if read:
-            import torch
-
-            return ttnn.to_torch(self._out).to(torch.float32)
-        return None
-
-    def decode_sequence(self, inputs_embeds):
-        """Feed a torch [1,S,1024] sequence token-by-token; return latents [1,S,1024]."""
-        import torch
-
-        self.reset_caches()
-        lat = [
-            self.step(inputs_embeds[:, t : t + 1, :].contiguous(), t, read=True) for t in range(inputs_embeds.shape[1])
-        ]
-        return torch.cat(lat, dim=1)
+        return self._out

@@ -38,6 +38,7 @@ from models.experimental.xtts_v2.reference.xtts_speaker_ref import (
     NUM_FILTERS,
     load_speaker_state,
 )
+from models.experimental.xtts_v2.tt.ttnn_xtts_gpt import mesh_replicate_mapper
 
 BN_EPS = 1e-5
 IN_EPS = 1e-5  # InstanceNorm1d eps
@@ -63,20 +64,21 @@ def _bn_affine(w, b, rm, rv, eps=BN_EPS):
 
 def preprocess_speaker_parameters(device, ckpt_path=None, conv_dtype=ttnn.bfloat16, lin_dtype=ttnn.bfloat16):
     w = load_speaker_state(ckpt_path) if ckpt_path else load_speaker_state()
+    mapper = mesh_replicate_mapper(device)  # None on a single card; replicate on a mesh
 
     def conv_w(name):  # conv weight [out,in,kh,kw] -> ttnn host row-major
-        return ttnn.from_torch(w[name], dtype=conv_dtype)
+        return ttnn.from_torch(w[name], dtype=conv_dtype, mesh_mapper=mapper)
 
     def bias4(x):  # conv bias -> [1,1,1,out]
-        return ttnn.from_torch(x.reshape(1, 1, 1, -1), dtype=conv_dtype)
+        return ttnn.from_torch(x.reshape(1, 1, 1, -1), dtype=conv_dtype, mesh_mapper=mapper)
 
     def affine_nhwc(scale, shift):  # per-channel affine tiles [1,1,1,C] for NHWC
         return {
             "scale": ttnn.from_torch(
-                scale.reshape(1, 1, 1, -1), dtype=conv_dtype, layout=ttnn.TILE_LAYOUT, device=device
+                scale.reshape(1, 1, 1, -1), dtype=conv_dtype, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper
             ),
             "shift": ttnn.from_torch(
-                shift.reshape(1, 1, 1, -1), dtype=conv_dtype, layout=ttnn.TILE_LAYOUT, device=device
+                shift.reshape(1, 1, 1, -1), dtype=conv_dtype, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper
             ),
         }
 
@@ -87,15 +89,23 @@ def preprocess_speaker_parameters(device, ckpt_path=None, conv_dtype=ttnn.bfloat
         return affine_nhwc(scale, shift)
 
     def linT(name):  # nn.Linear weight [out,in] -> ttnn [in,out]
-        return ttnn.from_torch(w[name].t().contiguous(), dtype=lin_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        return ttnn.from_torch(
+            w[name].t().contiguous(), dtype=lin_dtype, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper
+        )
 
     def conv1d_linT(name):  # Conv1d weight [out,in,1] -> ttnn [in,out] (1x1 conv == linear)
         return ttnn.from_torch(
-            w[name].squeeze(-1).t().contiguous(), dtype=lin_dtype, layout=ttnn.TILE_LAYOUT, device=device
+            w[name].squeeze(-1).t().contiguous(),
+            dtype=lin_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=mapper,
         )
 
     def vec(x):  # bias [n] -> ttnn [1,n]
-        return ttnn.from_torch(x.reshape(1, -1), dtype=lin_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        return ttnn.from_torch(
+            x.reshape(1, -1), dtype=lin_dtype, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper
+        )
 
     p = {
         "conv1_w": conv_w("conv1.weight"),
@@ -152,8 +162,12 @@ def preprocess_speaker_parameters(device, ckpt_path=None, conv_dtype=ttnn.bfloat
     p["attn"] = {
         "w1": conv1d_linT("attention.0.weight"),
         "b1": vec(w["attention.0.bias"]),
-        "bn_scale": ttnn.from_torch(a_scale.reshape(1, 1, -1), dtype=lin_dtype, layout=ttnn.TILE_LAYOUT, device=device),
-        "bn_shift": ttnn.from_torch(a_shift.reshape(1, 1, -1), dtype=lin_dtype, layout=ttnn.TILE_LAYOUT, device=device),
+        "bn_scale": ttnn.from_torch(
+            a_scale.reshape(1, 1, -1), dtype=lin_dtype, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper
+        ),
+        "bn_shift": ttnn.from_torch(
+            a_shift.reshape(1, 1, -1), dtype=lin_dtype, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper
+        ),
         "w2": conv1d_linT("attention.3.weight"),
         "b2": vec(w["attention.3.bias"]),
     }
@@ -165,6 +179,7 @@ def preprocess_speaker_parameters(device, ckpt_path=None, conv_dtype=ttnn.bfloat
 class TTNNSpeakerEncoder:
     def __init__(self, device, parameters):
         self.device = device
+        self.mesh_mapper = mesh_replicate_mapper(device)  # None on a single card; replicate on a mesh
         self.p = parameters
         self.cc = _compute_config()
         self.conv_config = ttnn.Conv2dConfig(weights_dtype=ttnn.bfloat16)

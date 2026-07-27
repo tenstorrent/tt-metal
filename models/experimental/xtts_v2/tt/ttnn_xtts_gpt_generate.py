@@ -24,6 +24,26 @@ from models.experimental.xtts_v2.tt.ttnn_xtts_gpt import TTNNGPTConfig
 from models.experimental.xtts_v2.tt.ttnn_xtts_gpt_decode import TTNNGPTDecoder
 
 
+def traced_decode_sequence(decoder, inputs_embeds, dtype=ttnn.bfloat16):
+    """Driver for TTNNGPTTracedDecoder: feed a torch [1,S,1024] sequence token-by-token and
+    return the latents torch [1,S,1024]. Owns the host<->device I/O (from_torch with the
+    decoder's mesh_mapper, to_torch) and the loop; the model exposes only the device-in ->
+    device-out `step_device` primitive. Teacher-forced (no sampling) -- for the free-running
+    generation loop with a sampling head, drive `step_device` directly (see the pipeline)."""
+    decoder.reset_caches()
+    lat = []
+    for t in range(inputs_embeds.shape[1]):
+        emb_dev = ttnn.from_torch(
+            inputs_embeds[:, t : t + 1, :].contiguous(),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=decoder.device,
+            mesh_mapper=decoder.mesh_mapper,
+        )
+        lat.append(ttnn.to_torch(decoder.step_device(emb_dev, t)).to(torch.float32))
+    return torch.cat(lat, dim=1)
+
+
 class TTNNGPTGenerator:
     def __init__(
         self,

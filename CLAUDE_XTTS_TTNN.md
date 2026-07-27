@@ -100,6 +100,18 @@ sample rates.
    *lookup* (token id → 1024-d vector) is tensor-friendly and could live on device, but it's
    cheap and currently folds into the GPT input stage.
 
+### Mesh / data-parallel readiness (2026-07-23)
+Target serving shape: **pure DP, one request per chip, batch 32 on a 1x32 mesh** (small models
+fit per chip → no tensor-parallelism, zero cross-chip comm). Model code stays DP-flavor-agnostic;
+the pipeline/inference-stack picks SPMD-over-mesh vs independent `(1,1)` replicas. Status:
+- **Mesh weight/state threading: done across all 5 blocks** — GPT, conditioning, speaker, HiFi-GAN
+  all use a guarded `mesh_replicate_mapper` (replicate on a mesh, no-op on `(1,1)`; PCCs unchanged).
+- **Model/driver I/O boundary: done** — only the GPT (autoregressive loop) needed lifting; it now
+  exposes `step_device` (device-in/out) with the loop + `from_torch`/`to_torch` in the driver. The
+  other blocks are single-shot forwards, already device-in/device-out.
+- **Remaining (pipeline-level):** input shard / output gather, per-chip state, continuous-batching
+  scheduler. Full design + contract in **`CLAUDE_XTTS_GPT.md` → "Mesh / data-parallel serving"**.
+
 ---
 
 ## Model Overview (XTTS-v2)
