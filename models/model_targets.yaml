@@ -159,7 +159,7 @@ targets:
               decode_t/s/u: 17.16
               decode_t/s: 549.0
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 32
             seq_len: 1024
@@ -169,7 +169,7 @@ targets:
               decode_t/s/u: 15.24
               decode_t/s: 487.0
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 32
             seq_len: 2048
@@ -179,7 +179,7 @@ targets:
               decode_t/s/u: 13.91
               decode_t/s: 445.0
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
       wh_llmbox_perf:
         entries:
@@ -191,7 +191,7 @@ targets:
               decode_t/s/u: 14.6
               decode_t/s: 3737.0
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 256
             seq_len: 1024
@@ -201,7 +201,7 @@ targets:
               decode_t/s/u: 13.2
               decode_t/s: 3379.0
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 256
             seq_len: 2048
@@ -211,7 +211,7 @@ targets:
               decode_t/s/u: 12.4
               decode_t/s: 3174.0
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
       wh_galaxy_perf:
         entries:
@@ -223,7 +223,7 @@ targets:
               decode_t/s/u: 6.9
               decode_t/s: 7065.6
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 1024
             seq_len: 1024
@@ -233,7 +233,7 @@ targets:
               decode_t/s/u: 6.3
               decode_t/s: 6451.2
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 1024
             seq_len: 2048
@@ -243,7 +243,7 @@ targets:
               decode_t/s/u: 6.6
               decode_t/s: 6758.4
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
   gemma-3-27b:
     aliases: ["gemma-3-27b", "google/gemma-3-27b-it", "gemma-3-27b-vision"]
@@ -1050,7 +1050,7 @@ targets:
               decode_t/s: 12.0
               decode_t_s_tolerance: 0.2
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 32
             seq_len: 2048
@@ -1073,7 +1073,7 @@ targets:
               decode_t/s: 347.6
               decode_t_s_tolerance: 0.2
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
       p300x2:
         entries:
@@ -1082,7 +1082,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
   qwen2.5-7b:
     aliases: ["Qwen2.5-7B", "Qwen/Qwen2.5-7B-Instruct"]
@@ -1149,7 +1149,7 @@ targets:
               decode_t/s: 22.0
               decode_t_s_tolerance: 0.2
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 32
             seq_len: 2048
@@ -1159,7 +1159,7 @@ targets:
               decode_t/s/u: 17.76
               decode_t/s: 568.19
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
       p300x2:
         entries:
@@ -1168,7 +1168,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
   qwen3-32b:
     aliases: ["Qwen3-32B", "Qwen/Qwen3-32B"]
