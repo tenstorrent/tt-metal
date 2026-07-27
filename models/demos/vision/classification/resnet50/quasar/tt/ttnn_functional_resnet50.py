@@ -103,6 +103,13 @@ def fit_width_sharded_cores(width_elems, desired_cores, device):
 # INTERLEAVED DRAM -> the add/next-conv falls to the unported legacy ProgramFactory ->
 # "DataMovementKernel not supported on Quasar"). Flip any entry to host-bypass a single conv for debug.
 _CONV_ON_DEVICE = {"stem": True, "conv1": True, "conv2": True, "conv3": True, "downsample": True}
+# [#48552] The Quasar stem max_pool2d DEADLOCKS at the real stem size (112x112=12544) in compute_pool_2d
+# (pool-reduce dest-sync; smsg G semaphore-wait) -- a pre-existing LLK item (repro: test_stem_maxpool.py
+# -k 112x112). _MAXPOOL_ON_DEVICE=False computes the 3x3/s2/p1 maxpool on HOST from the device input and
+# re-uploads height-sharded ROW_MAJOR (same style as the stem conv1 host fallback), so maxpool doesn't block
+# layer1..4 from running on device (lets us validate the layer3 height split end-to-end). Flip back to True
+# once the LLK pool-reduce dest-sync hang is fixed.
+_MAXPOOL_ON_DEVICE = False
 
 
 def _host_conv2d(
@@ -1044,17 +1051,56 @@ class resnet50:
             ttnn.deallocate(fold_output_tensor)
         x = _log_op("stem_conv1", x)
 
-        x = ttnn.experimental.quasar.max_pool2d(
-            input_tensor=x,
-            batch_size=self.batch_size,
-            input_h=x_height,
-            input_w=x_width,
-            channels=self.conv1_output_channels,
-            kernel_size=[3, 3],
-            stride=[2, 2],
-            padding=[1, 1],
-            dilation=[1, 1],
-        )
+        if _MAXPOOL_ON_DEVICE:
+            x = ttnn.experimental.quasar.max_pool2d(
+                input_tensor=x,
+                batch_size=self.batch_size,
+                input_h=x_height,
+                input_w=x_width,
+                channels=self.conv1_output_channels,
+                kernel_size=[3, 3],
+                stride=[2, 2],
+                padding=[1, 1],
+                dilation=[1, 1],
+            )
+        else:
+            # [#48552] HOST maxpool bypass (see _MAXPOOL_ON_DEVICE): the Quasar max_pool2d deadlocks at the
+            # real stem size (compute_pool_2d pool-reduce dest-sync -- LLK item). Read the device input back,
+            # run the 3x3/s2/p1 maxpool on host, and re-upload height-sharded ROW_MAJOR (same style as the
+            # stem conv1 host fallback) so layer1..4 still run on device.
+            logger.warning("[QSR] stem max_pool2d HOST bypass active (_MAXPOOL_ON_DEVICE=False)")
+            _mp = (
+                ttnn.to_torch(ttnn.from_device(x))
+                .float()
+                .reshape(self.batch_size, x_height, x_width, self.conv1_output_channels)
+                .permute(0, 3, 1, 2)  # NHWC -> NCHW
+            )
+            _mp = torch.nn.functional.max_pool2d(_mp, kernel_size=3, stride=2, padding=1)
+            _oh, _ow = int(_mp.shape[2]), int(_mp.shape[3])
+            _flat = (
+                _mp.permute(0, 2, 3, 1)
+                .reshape(1, 1, self.batch_size * _oh * _ow, self.conv1_output_channels)
+                .contiguous()
+            )
+            _nhw = self.batch_size * _oh * _ow
+            _grid = device.compute_with_storage_grid_size()
+            _maxc = _grid.x * _grid.y
+            _nc = max(c for c in range(1, _maxc + 1) if _nhw % c == 0)
+            _mem = ttnn.create_sharded_memory_config(
+                shape=(1, 1, _nhw // _nc, self.conv1_output_channels),
+                core_grid=ttnn.num_cores_to_corerangeset(_nc, _grid, True),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            ttnn.deallocate(x)
+            x = ttnn.from_torch(
+                _flat.to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=_mem,
+            )
         x = _log_op("stem_maxpool", x)
 
         x_height = 56
