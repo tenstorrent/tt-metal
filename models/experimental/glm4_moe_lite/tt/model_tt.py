@@ -228,6 +228,12 @@ class Glm4MoeLiteDenseOnlyTT:
     _decode_trace_states: dict[int, _DecodeTraceSamplingState] = field(init=False, default_factory=dict)
     # Per-step batch-expansion metadata (set during decode, consumed by trace input copy)
     _batch_expand_num_main: int = 0
+    # ---- GlobalCB DRAM weight prefetcher (GLM4_MOE_LITE_PREFETCH=1) ----
+    # Constructed at create() when the flag is on, because w_o's DRAM layout depends on
+    # the prefetcher's bank set and so must be known before weight conversion. The
+    # SubDevice manager itself is NOT loaded here -- ensure_ready() defers that until
+    # after prefill, which needs the full grid.
+    prefetcher: Any | None = None
 
     @classmethod
     def create(
@@ -327,6 +333,24 @@ class Glm4MoeLiteDenseOnlyTT:
             )
         num_layers_to_run = int(num_layers_env) if num_layers_env else int(hparams.num_hidden_layers)
         num_layers_to_run = max(1, min(num_layers_to_run, int(hparams.num_hidden_layers)))
+
+        # ---- GlobalCB DRAM weight prefetcher (opt-in) ----
+        # Built here, before any weight conversion, because w_o's DRAM shard layout is
+        # derived from the prefetcher's bank set. Construction is cheap and touches no
+        # device state beyond reading the grid; the SubDevice manager and GlobalCB are
+        # created later by ensure_ready(), after prefill.
+        prefetcher = None
+        if os.environ.get("GLM4_MOE_LITE_PREFETCH", "").strip() == "1":
+            from models.experimental.glm4_moe_lite.tt.prefetcher_setup import Glm4MoeLitePrefetcherSetup
+
+            if os.environ.get("GLM4_MOE_LITE_TP", "").strip() == "1":
+                raise ValueError("GLM4_MOE_LITE_PREFETCH is incompatible with TP (w_o must be replicated).")
+            prefetcher = Glm4MoeLitePrefetcherSetup(
+                device,
+                n_tensors_per_layer=1,  # w_o only; see prefetcher_setup.ring_feasibility
+                n_layers=num_layers_to_run,
+            )
+            logger.info("GLM prefetch enabled: o_proj via {}-core ring", prefetcher.RING_CORES)
 
         enable_moe = os.environ.get("GLM4_MOE_LITE_ENABLE_MOE", "").strip() == "1"
         moe_runtime = None
@@ -444,6 +468,7 @@ class Glm4MoeLiteDenseOnlyTT:
             num_layers_to_run=num_layers_to_run,
             enable_moe=enable_moe,
             moe_runtime=moe_runtime,
+            prefetcher=prefetcher,
             batch_expand=os.environ.get("GLM4_MOE_LITE_BATCH_EXPAND", "").strip() == "1",
             mtp_enabled=mtp_enabled,
             mtp_enorm=mtp_enorm,
@@ -460,6 +485,7 @@ class Glm4MoeLiteDenseOnlyTT:
         if w is not None:
             return w
 
+        prefetcher = getattr(self, "prefetcher", None)
         w = convert_decoder_layer_weights(
             device=self.device,
             state=self.state,
@@ -468,10 +494,38 @@ class Glm4MoeLiteDenseOnlyTT:
             cache_dir=self.cache_dir / "layers",
             force_shared_expert_dense=False,
             enable_moe=self.enable_moe,
+            prefetch_dram_cores=None if prefetcher is None else prefetcher.dram_cores,
+            prefetch_ring_cores=0 if prefetcher is None else prefetcher.RING_CORES,
         )
 
         self.layer_weights[layer_idx] = w
         return w
+
+    def register_prefetch_weights(self) -> None:
+        """Convert every layer and register its w_o with the prefetcher, in layer order.
+
+        Order is part of the contract: dram_prefetcher walks the address list in the
+        order tensors were inserted, so layer N's ring matmul only reads layer N's
+        weight if registration followed layer order. Layer weights are converted
+        lazily, so this forces all of them first rather than relying on prefill having
+        happened to touch every layer in sequence.
+
+        Must run before ensure_ready(), which snapshots the addresses into the
+        sender-core address tensor.
+        """
+        prefetcher = getattr(self, "prefetcher", None)
+        if prefetcher is None:
+            return
+        if prefetcher.tensors:
+            return  # already registered
+        for layer_idx in range(int(self.num_layers_to_run)):
+            w = self._ensure_layer_weights(layer_idx)
+            prefetcher.insert_tensor(w.w_o)
+        logger.info(
+            "GLM prefetch: registered {} w_o tensors across {} layers",
+            len(prefetcher.tensors),
+            self.num_layers_to_run,
+        )
 
     def _profile_record(
         self,

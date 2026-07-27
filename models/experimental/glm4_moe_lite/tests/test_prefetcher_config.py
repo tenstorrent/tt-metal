@@ -123,3 +123,53 @@ def test_receiver_contract_is_two_per_sender() -> None:
 def test_non_tile_aligned_shapes_are_rejected() -> None:
     assert ring_feasibility(5120, 2047) == []
     assert ring_feasibility(1000, 2048) == []
+
+
+# --- DRAM shard layout for the prefetched weight -------------------------------
+#
+# _prefetch_dram_shard_weight_tt splits the weight's N across the PREFETCHER's bank
+# set (8 cores), not the full 12-bank DRAM grid. The shard math is replicated here
+# because getting it wrong yields a layout the ring matmul and dram_prefetcher
+# disagree about, which is another deadlock rather than an error.
+
+PREFETCH_DRAM_BANKS = 8
+
+
+def _dram_shard_width(K: int, N: int, ring: int, banks: int = PREFETCH_DRAM_BANKS) -> tuple[int, int, int]:
+    """Mirror of the padding + bank-split arithmetic. Returns (K_pad, N_pad, width)."""
+
+    def round_up(x: int, mult: int) -> int:
+        return ((x + mult - 1) // mult) * mult
+
+    k_pad = round_up(math.ceil(K / ring), TILE) * ring
+    n_pad = round_up(math.ceil(N / ring), TILE) * ring
+    return k_pad, n_pad, n_pad // banks
+
+
+def test_oproj_needs_no_padding_and_divides_the_banks() -> None:
+    k_pad, n_pad, width = _dram_shard_width(*W_O, 16)
+    assert (k_pad, n_pad) == W_O, "o_proj should need no padding at ring 16"
+    assert width == 256, "2048 / 8 banks = 256 per bank"
+    assert n_pad % PREFETCH_DRAM_BANKS == 0
+
+
+def test_dram_shard_padding_rounds_up_to_ring_times_tile() -> None:
+    """A shape needing padding pads N up to a multiple of ring*TILE, not just TILE."""
+    k_pad, n_pad, _ = _dram_shard_width(5120, 2080, 16)
+    assert n_pad == 2560, f"2080 -> ceil(2080/16)=130 -> round_up(130,32)=160 -> 160*16=2560, got {n_pad}"
+    assert k_pad == 5120
+
+
+def test_bank_count_is_not_the_full_dram_grid() -> None:
+    """The regression this guards: sharding o_proj over all 12 DRAM banks.
+
+    The bank count is half of the sender/receiver contract -- 12 banks x 2 receivers
+    is the 24-core ring that deadlocks. It must stay 8.
+    """
+    assert PREFETCH_DRAM_BANKS == 8
+    assert 24 not in ring_feasibility(*W_O, max_cores=24)
+    # Fortunately o_proj's N does not divide the full 12-bank grid (2048 % 12 == 8), so
+    # _prefetch_dram_shard_weight_tt's explicit bank-divisibility guard raises rather
+    # than silently building a layout the ring matmul disagrees with.
+    assert W_O[1] % 12 != 0
+    assert W_O[1] % PREFETCH_DRAM_BANKS == 0

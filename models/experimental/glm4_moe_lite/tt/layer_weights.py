@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -192,6 +193,82 @@ def _linear_weight_tt(
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=mesh_mapper if is_mesh_device else None,
+        cache_file_name=None if cache_file is None else Path(cache_file),
+    )
+
+
+def _prefetch_dram_shard_weight_tt(
+    *,
+    device,
+    torch_weight_out_in: torch.Tensor,
+    dram_cores: list,
+    ring_cores: int,
+    cache_file: Optional[Path] = None,
+    dtype: ttnn.DataType = ttnn.bfloat8_b,
+) -> ttnn.Tensor:
+    """Build a linear weight DRAM-WIDTH_SHARDED across the prefetcher's DRAM banks.
+
+    This is the layout `ttnn.dram_prefetcher` reads from: the weight's N dimension is
+    split across exactly the banks the prefetcher's sender cores are paired with, so
+    each sender streams a contiguous slice into the GlobalCB.
+
+    Differs from `_maybe_dram_shard_linear_weight` in two ways that matter:
+      - it shards over the PREFETCHER's bank list (8 cores), not the full DRAM grid
+        (12). The bank count is part of the sender/receiver contract; using all 12
+        would build a 24-core ring that divides neither of o_proj's dimensions and
+        deadlocks. See prefetcher_setup for the full story.
+      - it builds the sharded tensor directly from torch via as_tensor, rather than
+        round-tripping through host to dodge interleaved_to_sharded's TENSIX
+        coordinate limits. as_tensor writes straight to DRAM banks, so the round trip
+        is unnecessary here. This is what the canonical upstream harness does.
+
+    K and N are padded up to a multiple of (ring_cores * TILE) when needed, matching
+    the harness; o_proj (5120 x 2048, ring 16) needs no padding.
+    """
+    if torch_weight_out_in.ndim != 2:
+        raise ValueError(f"expected 2D weight, got shape={tuple(torch_weight_out_in.shape)}")
+    tile = ttnn.TILE_SIZE
+
+    # HF [out, in] -> TT [1, 1, K, N]
+    w = torch_weight_out_in.transpose(-2, -1).contiguous()
+    k, n = int(w.shape[0]), int(w.shape[1])
+
+    def _round_up(x: int, mult: int) -> int:
+        return ((x + mult - 1) // mult) * mult
+
+    k_padded = _round_up(math.ceil(k / ring_cores), tile) * ring_cores
+    n_padded = _round_up(math.ceil(n / ring_cores), tile) * ring_cores
+    if (k_padded, n_padded) != (k, n):
+        padded = torch.zeros((k_padded, n_padded), dtype=w.dtype)
+        padded[:k, :n] = w
+        w = padded
+
+    num_banks = len(dram_cores)
+    if n_padded % num_banks:
+        raise ValueError(f"padded N={n_padded} does not divide across {num_banks} prefetcher DRAM banks")
+
+    dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in dram_cores])
+    mem_cfg = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(
+            dram_core_range_set,
+            [k_padded, n_padded // num_banks],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    w = w.unsqueeze(0).unsqueeze(0)
+    is_mesh_device = _is_mesh_device(device)
+    return ttnn.as_tensor(
+        w,
+        device=device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=mem_cfg,
+        # Attention weights are replicated (attn_row_mapper is None unless TP is on,
+        # and prefetch is incompatible with TP).
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         cache_file_name=None if cache_file is None else Path(cache_file),
     )
 
@@ -517,6 +594,8 @@ def convert_decoder_layer_weights(
     cache_dir: Optional[Path] = None,
     force_shared_expert_dense: bool = False,
     enable_moe: bool = False,
+    prefetch_dram_cores: Optional[list] = None,
+    prefetch_ring_cores: int = 0,
 ) -> DecoderLayerTTWeights:
     """Convert weights for a single decoder layer.
 
@@ -710,18 +789,38 @@ def convert_decoder_layer_weights(
     )
 
     # w_o stays row-parallel even when ATTN_DP=1 (it MUST have all_reduce for correctness).
-    w_o = _linear_weight_tt(
-        device=device,
-        torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.o_proj.weight"],
-        cache_file=c("w_o", attn_variant),
-        dtype=dense_dtype,
-        mesh_mapper=attn_row_mapper,
-    )
+    _w_o_torch = state[f"model.layers.{layer_idx}.self_attn.o_proj.weight"]
+    if prefetch_dram_cores is not None:
+        # GlobalCB prefetch: o_proj is read from the GlobalCB by a ring matmul, so it
+        # must live DRAM-WIDTH_SHARDED across the prefetcher's banks. Separate cache
+        # key -- the layout differs from the interleaved copy, and reusing the key
+        # would hand the ring matmul an interleaved tensor.
+        assert attn_row_mapper is None, "GlobalCB prefetch requires replicated w_o (TP must be off)"
+        w_o = _prefetch_dram_shard_weight_tt(
+            device=device,
+            torch_weight_out_in=_w_o_torch,
+            dram_cores=prefetch_dram_cores,
+            ring_cores=prefetch_ring_cores,
+            cache_file=c("w_o", f"{attn_variant}_pfdram{len(prefetch_dram_cores)}x{prefetch_ring_cores}"),
+            dtype=dense_dtype,
+        )
+    else:
+        w_o = _linear_weight_tt(
+            device=device,
+            torch_weight_out_in=_w_o_torch,
+            cache_file=c("w_o", attn_variant),
+            dtype=dense_dtype,
+            mesh_mapper=attn_row_mapper,
+        )
     if _env_dram_sharded_attn():
         w_q_a = _maybe_dram_shard_linear_weight(w_q_a, device)
         w_q_b = _maybe_dram_shard_linear_weight(w_q_b, device)
         w_kv_a = _maybe_dram_shard_linear_weight(w_kv_a, device)
-        w_o = _maybe_dram_shard_linear_weight(w_o, device)
+        # w_o is already DRAM-sharded over the PREFETCHER's bank set when prefetch is
+        # on; re-sharding it over the full 12-bank DRAM grid would silently destroy the
+        # layout the ring matmul and dram_prefetcher agree on.
+        if prefetch_dram_cores is None:
+            w_o = _maybe_dram_shard_linear_weight(w_o, device)
 
     # ---- MLP (dense or shared expert as dense) ----
     dense_layer = layer_idx < int(hparams.first_k_dense_replace)
