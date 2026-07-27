@@ -1,0 +1,7 @@
+# Large profiler/trace dumps — evidence kept as small perf-report CSVs, not raw dumps
+*.tracy
+tracy_ops_times.csv
+profile_log_device.csv
+**/.logs/
+shard_advise/decision_trace/
+shard_advise/pipeline.log
