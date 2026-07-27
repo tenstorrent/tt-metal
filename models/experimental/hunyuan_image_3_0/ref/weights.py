@@ -221,6 +221,24 @@ def resolve_base_model_dir() -> Path:
     return ensure_base_weights()
 
 
+def try_find_instruct_model_dir() -> Path | None:
+    """Return Instruct checkpoint if a local index exists; never download.
+
+    Prefer this over ``INSTRUCT_MODEL_DIR`` / ``resolve_instruct_model_dir`` when a
+    caller only wants Instruct *if already staged* (e.g. I2I helpers that fall back
+    to base weights). Offline CI that only stages base must not raise here.
+    """
+    if override := os.environ.get(ENV_INSTRUCT):
+        path = Path(override)
+        if (path / _WEIGHT_INDEX).is_file():
+            return path
+        return None
+    snap = find_hf_snapshot(HF_REPO_INSTRUCT)
+    if snap is not None and (snap / _WEIGHT_INDEX).is_file():
+        return snap
+    return None
+
+
 def resolve_instruct_model_dir() -> Path:
     """Resolve Instruct weights; download to HF hub cache when missing/incomplete."""
     return _resolve_complete_or_ensure(

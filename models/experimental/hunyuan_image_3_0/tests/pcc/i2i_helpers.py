@@ -33,27 +33,28 @@ from models.experimental.hunyuan_image_3_0.ref.tokenizer import (
     scatter_distill_step_embeds,
 )
 from models.experimental.hunyuan_image_3_0.ref.transformer_layer import HunyuanImage3DecoderLayer as RefLayer
-from models.experimental.hunyuan_image_3_0.ref.weights import INSTRUCT_MODEL_DIR, MODEL_DIR
+from models.experimental.hunyuan_image_3_0.ref.weights import MODEL_DIR, try_find_instruct_model_dir
 
 PROMPT = "a cat on a mat"
 I2I_IMAGE_SIZE = int(os.environ.get("HY_I2I_SIZE", str(IMAGE_BASE_SIZE)))
 NUM_LAYERS = int(os.environ.get("HY_NUM_LAYERS", "2"))
 CFG_FACTOR = int(os.environ.get("HY_CFG", "1"))
 VIT_LAYERS = int(os.environ.get("HY_VIT_LAYERS", "1"))
-I2I_WEIGHTS = (
-    INSTRUCT_MODEL_DIR
-    if os.environ.get("HY_I2I_INSTRUCT", "1") != "0" and (INSTRUCT_MODEL_DIR / "model.safetensors.index.json").is_file()
-    else MODEL_DIR
-)
-USE_INSTRUCT_I2I = I2I_WEIGHTS == INSTRUCT_MODEL_DIR
+# Prefer Instruct when already staged; never trigger a download/ensure for it.
+# Offline CI often stages only base weights — fall back so denoise import/collection
+# (and -m "not slow") still works.
+_instruct = try_find_instruct_model_dir() if os.environ.get("HY_I2I_INSTRUCT", "1") != "0" else None
+I2I_WEIGHTS = _instruct if _instruct is not None else MODEL_DIR
+USE_INSTRUCT_I2I = _instruct is not None
 
-_WMAP = json.load(open(I2I_WEIGHTS / "model.safetensors.index.json"))["weight_map"]
+_index_path = I2I_WEIGHTS / "model.safetensors.index.json"
+_WMAP = json.load(open(_index_path))["weight_map"] if _index_path.is_file() else {}
 _OPEN: dict = {}
 _REF_LAYERS: dict = {}
 
 
 def has_weights():
-    return (I2I_WEIGHTS / "model.safetensors.index.json").is_file()
+    return bool(_WMAP) and _index_path.is_file()
 
 
 def pcc(a, b):

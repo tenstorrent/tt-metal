@@ -32,7 +32,6 @@ if str(PCC_DIR) not in sys.path:
 
 import ttnn
 from models.experimental.hunyuan_image_3_0.ref.weights import load_prefixed_state_dict, resolve_base_model_dir
-from models.experimental.hunyuan_image_3_0.tests.pcc import i2i_helpers as i2i
 from models.experimental.hunyuan_image_3_0.ttnn.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
 from models.experimental.hunyuan_image_3_0.ttnn.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
 from models.experimental.hunyuan_image_3_0.ttnn.model import HunyuanTtModel
@@ -59,6 +58,19 @@ LAYOUT_SLOW = [("prod", PIPELINE_LAYOUT_PROD)]
 
 I2I_STEPS = int(os.environ.get("HY_STEPS", "2"))
 I2I_GUIDANCE = float(os.environ.get("HY_GUIDANCE", "5.0"))
+
+# Lazy: i2i_helpers may prefer Instruct weights. Keep base-only CI (-m "not slow")
+# from importing it during collection of the fast denoise tests.
+_i2i = None
+
+
+def _i2i_mod():
+    global _i2i
+    if _i2i is None:
+        from models.experimental.hunyuan_image_3_0.tests.pcc import i2i_helpers as _i2i_helpers
+
+        _i2i = _i2i_helpers
+    return _i2i
 
 
 @pytest.fixture(scope="function")
@@ -170,7 +182,16 @@ def test_denoise_loop_resident_mesh(mesh_device, tag, layout):
 # ---------------------------------------------------------------------------
 # I2I denoise step (test_i2i_denoise_step.py)
 # ---------------------------------------------------------------------------
+def _require_i2i():
+    """Import i2i helpers at test time; skip if no local checkpoint."""
+    i2i = _i2i_mod()
+    if not i2i.has_weights():
+        pytest.skip("Hunyuan I2I checkpoint not available")
+    return i2i
+
+
 def _i2i_denoise_step_run(device):
+    i2i = _require_i2i()
     host = i2i.build_host_bundle(cfg_factor=1)
     c = i2i.model_cfg()
     down_sd = i2i.load_prefix("patch_embed")
@@ -263,7 +284,6 @@ def _i2i_denoise_step_run(device):
     return p, d, thr, host["seq_len"], i2i.NUM_LAYERS
 
 
-@pytest.mark.skipif(not i2i.has_weights(), reason="Hunyuan I2I checkpoint not available")
 @pytest.mark.slow
 def test_i2i_denoise_step_pcc(device):
     p, d, thr, seq_len, layers = _i2i_denoise_step_run(device)
@@ -271,7 +291,6 @@ def test_i2i_denoise_step_pcc(device):
     assert p >= thr
 
 
-@pytest.mark.skipif(not i2i.has_weights(), reason="Hunyuan I2I checkpoint not available")
 @pytest.mark.skipif(int(os.environ.get("HY_NUM_LAYERS", "2")) != 32, reason="requires HY_NUM_LAYERS=32")
 @pytest.mark.slow
 def test_i2i_denoise_step_production_32l_pcc(device):
@@ -285,9 +304,9 @@ def test_i2i_denoise_step_production_32l_pcc(device):
 # ---------------------------------------------------------------------------
 # I2I denoise loop + CFG (test_i2i_denoise_loop.py)
 # ---------------------------------------------------------------------------
-@pytest.mark.skipif(not i2i.has_weights(), reason="Hunyuan I2I checkpoint not available")
 @pytest.mark.slow
 def test_i2i_denoise_loop_cfg_pcc(device):
+    i2i = _require_i2i()
     host = i2i.build_host_bundle(cfg_factor=2)
     assert host["uncond"] is not None
     c = i2i.model_cfg()
