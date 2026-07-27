@@ -240,6 +240,14 @@ void kernel_main() {
     };
 #endif
 
+    // ---- TEST-ONLY in0-read ablation flag. Appended at index 17 by the factory ONLY for the unfused/
+    // single-output diagnostic build (mask != 0); never present in production, so this read + the guard
+    // below compile to nothing in the mask-0 binary. 1 => skip this core's in0 DRAM read (leave stale L1,
+    // preserve CB reserve/push/pop, pointer advance, barrier, ring forwarding, semaphores, compute). ----
+#if defined(SKIP_ALL_IN0_DRAM_READS) || defined(SKIP_REDUNDANT_IN0_DRAM_READS)
+    const uint32_t in0_skip = get_arg_val<uint32_t>(17);
+#endif
+
     // ---- PHASE 1: in0 ring all-gather (balanced tails: read only valid M rows / valid K, else zero) ----
     {
         RA_ZONE("Z_RING");
@@ -257,7 +265,16 @@ void kernel_main() {
                     for (uint32_t k = 0; k < K_block; ++k) {
                         const uint32_t l = sb * K_block + k;  // capacity-local K index within the slice
                         if (m < valid_m && l < valid_k) {
+#if defined(SKIP_ALL_IN0_DRAM_READS) || defined(SKIP_REDUNDANT_IN0_DRAM_READS)
+                            // Diagnostic: skip ONLY the DRAM read; leave the L1 slot's stale contents and
+                            // keep the pointer advance / loop / barrier / push / ring forwarding intact so
+                            // downstream work is measured unchanged (output is intentionally invalid).
+                            if (!in0_skip) {
+                                noc_async_read_page((m_start + m) * Kt + (k_start + l), in0, p);
+                            }
+#else
                             noc_async_read_page((m_start + m) * Kt + (k_start + l), in0, p);
+#endif
                         } else {
                             zero_tile(p);  // pad M row or K tail -> local zero (no DRAM read)
                         }
