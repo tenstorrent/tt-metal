@@ -850,6 +850,63 @@ Flipping the pad default now would put two changed defaults into that arm at onc
 would not be attributable to either. It stays gated until the window's regression lands and the pad
 fix gets a regression arm of its own.
 
+## 19. REGRESSION ARM AND VERDICT: repairs 52, regresses 1, default stays ON
+
+The retention default was flipped after the collapsed-question arm and BEFORE this one, which broke
+the criterion written into the flip patch itself ("apply only once BOTH arms have reported"). A
+genuine regression then appeared on the second question of this arm, which is exactly what that
+criterion existed to catch. The decision was therefore held open until the arm finished, with a
+stated commitment to revert if the rate came out high. It did not.
+
+### The 67 questions that were already clean, retention ON
+
+| | |
+| --- | --- |
+| **new collapses** | **1 / 67 (q103)** |
+| answered | 65 / 67 |
+| **correct** | **56 / 67** |
+| reference correct, same set | 58 / 67 |
+| agrees with the reference | 58 / 67 |
+| blocks that halt | 447 / 453 = **99%** |
+
+### Verdict
+
+| | |
+| --- | --- |
+| repairs | **52** of the 64 collapsed |
+| regresses | **1** of the 67 clean |
+| net | **+51** |
+
+Across all 131 questions, TT's correct count goes from **58 (44%)** under the shipped baseline
+(section 8) to **86 (66%)**, against the reference's 97 (74%). On the clean set alone TT is within two
+questions of the reference. The default stays ON, with q103 recorded as a known regression rather
+than rounded away.
+
+### The one regression, characterised
+
+q103 was correct under the baseline (answer B, gold B, 15 blocks, 14/15 halting) and collapses at
+block 8 with retention on: 1/256 distinct ids, all token `1`. Its first three blocks are step-for-step
+identical to the baseline (24, 20, 19) and divergence begins at block 3 -- exactly where its committed
+prefix crosses 1023 and the mask starts binding. So this is the mechanism acting, not a bug in it: on
+this question the reference's own geometry sends the trajectory somewhere worse. The reference answers
+it in 2374 tokens.
+
+It reproduced identically across a machine reboot (same block, same signature), which also
+independently confirmed that the regenerated prompts are exact -- a different prompt could not collapse
+on the same block.
+
+### Two infrastructure events, and how they were kept out of the numbers
+
+1. The box rebooted and cleared `/tmp`, destroying the 131-question baseline, both arms' results and
+   the rendered prompts. Everything committed survived. The prompts were regenerated from the A100's
+   `gpqa_run.py` and verified 198/198 against the surviving gold oracle; the recovery script and
+   oracle are committed so this is cheap next time.
+2. A device fault (`SIGBUS`, "Non-existent physical address", inside UMD `write32_to_device`) killed
+   one question and corrupted two more before `tt-smi -r` cleared it. Those three were excluded and
+   re-run, distinguishable from real failures by exit code 135, a stack inside UMD rather than model
+   code, and `window_active=0` -- the marker that says the run never even reached the flag it was
+   supposed to be testing. That last check is why it is in the monitor filter.
+
 ## 6. Reproduce
 
 ```bash
