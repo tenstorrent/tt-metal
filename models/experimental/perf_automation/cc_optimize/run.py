@@ -2766,6 +2766,7 @@ def run_cc_optimize(
     _decide_parallelism_route(demo_dir, manifest, repo_root, metric, devices, model_id_hint)
     model_rel = os.path.relpath(demo_dir, repo_root)
     model_name = Path(demo_dir).name
+    os.environ.setdefault("PERF_MCP_MODEL_NAME", model_name or "model")
     _cfg_ref = _resolve_model_id(demo_dir, model_id_hint) or str(demo_dir)
     pipes = pipelines_from_manifest(manifest, model_rel)
     is_mm = manifest.get("pathmap", {}).get("is_multimodal")

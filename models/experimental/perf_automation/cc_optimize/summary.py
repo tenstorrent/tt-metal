@@ -319,7 +319,7 @@ def _ledger():
     return _m
 
 
-def _ledger_pair(kind: str):
+def _ledger_pair(kind: str, model: str = "", task: str = ""):
     """(before, after) for one measurement kind, straight from the ledger.
 
     THE POINT: these carry their own depth and mode, so the report never has to infer what a number
@@ -328,16 +328,19 @@ def _ledger_pair(kind: str):
     """
     try:
         led = _ledger()
-        return led.first(kind, led.PHASE_BEFORE), led.last(kind, led.PHASE_AFTER)
+        return (
+            led.first(kind, led.PHASE_BEFORE, model=model, task=task),
+            led.last(kind, led.PHASE_AFTER, model=model, task=task),
+        )
     except Exception:  # noqa: BLE001
         return None, None
 
 
-def _ledger_line(kind: str, title: str):
+def _ledger_line(kind: str, title: str, model: str = "", task: str = ""):
     """Render one before/after line from the ledger, or None when it has nothing to say."""
     try:
         led = _ledger()
-        a, b = _ledger_pair(kind)
+        a, b = _ledger_pair(kind, model, task)
         if not a or not b:
             return None
         av, bv = a.get("value_ms"), b.get("value_ms")
@@ -563,7 +566,7 @@ def render_summary(
     # wrong: run.py passes the CURRENT committed ms in that slot, so refusing a stale original made a
     # 3.45x run print "714.94 -> 714.94 (+0.0%)". This run's own baseline_profile.json is written once
     # at the start and is the only value guaranteed to predate every lever.
-    _base_row = _ledger_pair(_ledger().KIND_EAGER)[0]
+    _base_row = _ledger_pair(_ledger().KIND_EAGER, model, task)[0]
     hdr_base = float(_base_row["value_ms"]) if _base_row else None
     # The baseline is a measured fact, never a derived one. This used to substitute the SLOWEST
     # measurement ever recorded whenever the real baseline was not better than the final -- i.e.
@@ -580,13 +583,13 @@ def render_summary(
             "optimizing… — baseline->final speedup is finalized when the module converges (per-attempt detail below is live)"
         )
     else:
-        _eager = _ledger_line(_ledger().KIND_EAGER, "eager per-op device time")
+        _eager = _ledger_line(_ledger().KIND_EAGER, "eager per-op device time", model, task)
         lines.append(_eager or "eager per-op device time: not measured (no ledger reading for this run)")
     _bl_trace = _baseline_trace_ms(baseline_profile)
     if _bl_trace:
         lines.append(f"tracy trace pass, BASELINE, same window ({_depth_label(baseline_profile)}):  {_bl_trace:.2f} ms")
     _trace_scope = f"module ({task})" if os.environ.get("TT_PERF_MODULE_LEVEL") == "1" else "full-pipeline e2e"
-    _fp = _ledger_line(_ledger().KIND_FULLPIPE, "trace+1CQ %s" % _trace_scope)
+    _fp = _ledger_line(_ledger().KIND_FULLPIPE, "trace+1CQ %s" % _trace_scope, model, task)
     if _fp:
         lines.append(_fp)
     lines.append("")

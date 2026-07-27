@@ -59,6 +59,12 @@ if os.environ.get("PERF_MCP_PCC_TEST") and _MANIFEST:
     _MANIFEST.setdefault("pathmap", {}).setdefault("pcc", {}).setdefault("end_to_end", {})
     _MANIFEST["pathmap"]["pcc"]["end_to_end"]["path"] = os.environ["PERF_MCP_PCC_TEST"]
 _MODEL_ROOT = Path(os.environ.get("PERF_MCP_MODEL_ROOT") or _MANIFEST.get("config", {}).get("model_root", "."))
+# PUBLISH the key every per-run artifact is named after. perf_mcp derived it from _MODEL_ROOT while
+# run.py and the ledger read PERF_MCP_MODEL_NAME -- which nothing ever set, so those fell back to the
+# literal "model". Reader and writer then pointed at different files (perf_mcp_baseline_model_main.json
+# appeared beside the real one) and every model would have shared one "model" ledger: the unkeyed bug
+# under a new name. One authoritative source, exported once, read by all three processes.
+os.environ.setdefault("PERF_MCP_MODEL_NAME", _MODEL_ROOT.name or "model")
 _ENV = _MANIFEST.get("env", {})
 
 
@@ -699,14 +705,17 @@ def _ledger_record(prof: dict) -> None:
         led = _ledger()
         ms = prof.get("device_ms")
         depth = str(prof.get("perf_layers") or "all")
-        seen = led.first(led.KIND_EAGER, led.PHASE_BEFORE)
+        _mname = _MODEL_ROOT.name if _MODEL_ROOT else ""
+        seen = led.first(led.KIND_EAGER, led.PHASE_BEFORE, model=_mname)
         phase = led.PHASE_AFTER if seen else led.PHASE_BEFORE
         if phase == led.PHASE_BEFORE and not _is_credible_profile(prof):
             return
-        led.record(led.KIND_EAGER, phase, ms, depth=depth, mode="eager", source="profile_model")
+        led.record(led.KIND_EAGER, phase, ms, depth=depth, mode="eager", source="profile_model", model=_mname)
         _tr = _baseline_trace_ms_from(prof) if "_baseline_trace_ms_from" in globals() else None
         if _tr:
-            led.record(led.KIND_TRACE_PASS, phase, _tr, depth=depth, mode="tracy-trace", source="profile_model")
+            led.record(
+                led.KIND_TRACE_PASS, phase, _tr, depth=depth, mode="tracy-trace", source="profile_model", model=_mname
+            )
     except Exception:  # noqa: BLE001
         pass
 
