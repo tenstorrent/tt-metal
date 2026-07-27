@@ -148,6 +148,7 @@ MGD_BLITZ_144="models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_ring_14
 # --- Pipeline-sweep MGDs (generated) ---------------------------------------
 # Ring-pipeline MGDs swept on the SC36 mock by the bh-pipeline-sweep group. Regenerate with:
 #   python3 tests/scripts/multihost/gen_pipeline_sweep_mgds.py
+# Pinnings and stage counts live in tests/scripts/multihost/pipeline_sweep_config.yaml.
 # 2x4 = device [4,2] RING,LINE (8 ASICs/stage, single-host, no pinnings).
 # 4x4 = device [4,4] RING,RING, alternating single-host [1,1] / split-host [2,1] with corner pinnings
 #       (16 ASICs/stage). The largest ring of each shape exactly fills the 1152-ASIC SC36 mock
