@@ -78,6 +78,30 @@ O_DEPTH = 2
 #               onorm.py is what keeps it out of the public entry point.
 SIGMOID_ENGINE = "math"
 
+# Tiles per DEST window in the gate phases (P7b sigmoid AND its 1:1 twin P7c, the
+# FPU multiply).  This is the `compute_block_size` catalog lever applied to the
+# op's hottest loop: the SFPU vector-op count per tile is fixed by the hardware,
+# but the *per-DEST-window* cost — tile_regs acquire/commit/wait/release, the SFPU
+# call setup, the unpack/math/pack pipeline fill and drain — is paid once per
+# window, and Phase 0 opened one window PER TILE (`InputLifecycle::Streaming`
+# clamps the chain's block_size to 1).  Raising this coarsens both gate phases
+# together; they are paired 1:1 by design, so blocking one alone would just move
+# the per-window cost to the other half.
+#
+# Ceiling is the DEST budget: `DEST_AUTO_LIMIT` is 4 tiles under the default
+# `fp32_dest_acc_en=True` + half sync.  The chain clamps a larger request down at
+# runtime, but the assert below rejects it loudly instead.
+#
+# MEASURED (Blackhole p150, median of 5 trial-major interleaved trials,
+# tests/.../test_onorm_sigmoid_engine.py): 1 -> 2 -> 4 is monotonic at
+# 1.000x -> 1.004x -> 1.006x (B1/T128), 1.000x -> 1.004x -> 1.005x (B1/T640),
+# 1.000x -> 1.002x -> 1.005x (B8/T640) — the amortize-a-fixed-cost signature, and
+# above the <=0.1% trial spread.  It is SMALL because the phase is dominated by
+# the SFPU payload itself, not by per-window overhead: with the sigmoid ablated
+# away the same knob is worth 1.016x (B1/T128), which is the per-window cost this
+# lever actually removes.  Free in L1 (no CB changes), so 4 is the default.
+GATE_DEST_TILES = 4
+
 # Wire codes for SIGMOID_ENGINE.  The kernel branches on the integer; this dict
 # is the single source of truth for the mapping (the kernel's ONORM_SIGMOID_*
 # defines are emitted from it below, so neither side restates a literal).
@@ -92,6 +116,9 @@ ALLOW_SIGMOID_ABLATION = False
 # --- hardware tile geometry (not a knob) ---
 TILE_H = 32
 TILE_W = 32
+# DEST_AUTO_LIMIT for this op's compute config (fp32_dest_acc_en=True + half sync)
+# — dest_helpers.hpp:95-99.  The ceiling on any per-DEST-window tile count.
+_DEST_TILE_LIMIT = 4
 
 # L1 headroom held back from the CB budget.  `get_max_worker_l1_unreserved_size()`
 # reports the unreserved L1 span, but the statically-allocated CB region starts
@@ -266,6 +293,14 @@ def create_program_descriptor(
         "WRONG output. It exists only for /perf-measure ablation profiling. Set "
         "onorm_program_descriptor.ALLOW_SIGMOID_ABLATION = True to opt in."
     )
+    assert 1 <= GATE_DEST_TILES <= _DEST_TILE_LIMIT, (
+        f"onorm: GATE_DEST_TILES={GATE_DEST_TILES} must be 1..{_DEST_TILE_LIMIT} "
+        f"(DEST_AUTO_LIMIT under fp32_dest_acc_en + half sync)."
+    )
+    assert GATE_CHUNK_TILES % GATE_DEST_TILES == 0, (
+        f"onorm: GATE_DEST_TILES={GATE_DEST_TILES} must divide "
+        f"GATE_CHUNK_TILES={GATE_CHUNK_TILES}; lower GATE_DEST_TILES to a power of two."
+    )
     assert DM_DEPTH >= 2 and O_DEPTH >= 2, "streaming depths must be >= 2 to overlap read with compute"
     # `o`'s token axis is un-padded (tiled dims are (HV, V)) while gate/out's IS
     # tile-padded (tiled dims are (T, FLAT)).  T % TOKENS_PER_BLOCK == 0 is what
@@ -317,6 +352,17 @@ def create_program_descriptor(
             f"DM_BLOCK_TILES={DM_BLOCK_TILES}. Either pick a DM_BLOCK_TILES that divides "
             f"it (a power of two always does), or raise O_DEPTH / NORM_CHUNK_TOKENS so "
             f"cb_o_tiles ({cb_pages[CB_O_TILES]} pages) becomes a multiple of it."
+        )
+
+    # A gate-phase DEST window stages GATE_DEST_TILES tiles at once, so every CB
+    # those two phases wait on / reserve must hold at least that many pages.
+    # cb_gate_tiles (DM_BLOCK_TILES * DM_DEPTH) and cb_out_tiles are the tightest.
+    for cb_index in (CB_GATE_TILES, CB_GATE_SIG, CB_FLAT_TILES, CB_OUT_TILES):
+        assert cb_pages[cb_index] >= GATE_DEST_TILES, (
+            f"onorm: GATE_DEST_TILES={GATE_DEST_TILES} exceeds CB {cb_index}'s "
+            f"{cb_pages[cb_index]} pages — a DEST window would wait on more tiles than "
+            f"the CB can hold and deadlock. Raise DM_BLOCK_TILES / DM_DEPTH, or lower "
+            f"GATE_DEST_TILES."
         )
 
     total_cb_bytes = sum(cb_pages.values()) * tile_bytes
@@ -386,6 +432,7 @@ def create_program_descriptor(
         GATE_CHUNK_TILES,
         gate_chunks_per_block,
         _SIGMOID_ENGINE_CODES[SIGMOID_ENGINE],
+        GATE_DEST_TILES,
     ]
 
     o_addr = o.buffer_address()

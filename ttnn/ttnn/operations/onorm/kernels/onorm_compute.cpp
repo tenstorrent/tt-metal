@@ -108,6 +108,17 @@ void kernel_main() {
         sigmoid_engine == ONORM_SIGMOID_MATH || sigmoid_engine == ONORM_SIGMOID_PACK ||
             sigmoid_engine == ONORM_SIGMOID_ABLATE,
         "onorm: unknown SIGMOID_ENGINE code");
+    // Tiles per DEST window in the two gate phases (GATE_DEST_TILES knob).  At 1
+    // this is byte-identical to Phase 0: `InputLifecycle::Chunked` with a block of
+    // one waits one tile / pops one tile per outer iter, exactly as
+    // `InputLifecycle::Streaming` did.  Above 1 the chain stages that many tiles in
+    // DEST per acquire/commit/wait/release round-trip.
+    constexpr uint32_t gate_dest_tiles = get_compile_time_arg_val(8);
+    // The gate walk is 1-D (`EltwiseShape::tiles`), so its iteration count IS the
+    // tile count and `OperandKind::Block` is the only kind `Chunked` is legal with
+    // (eltwise_chain.hpp:359-372) — a chunk-scaled wait on a Scalar-kind operand
+    // would out-run the window and deadlock.
+    constexpr auto gate_shape = ckl::EltwiseShape::tiles(gate_chunk_tiles, gate_dest_tiles);
 
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
     const uint32_t eps_bits = get_arg_val<uint32_t>(1);  // fp32 bit pattern of epsilon
@@ -252,8 +263,17 @@ void kernel_main() {
                 MaybeDeviceZoneScope("onorm_p7b_sigmoid");
                 if constexpr (sigmoid_engine == ONORM_SIGMOID_MATH) {
                     // MATH thread (TRISC1): the helper's own chain is
-                    // CopyTile(D0) -> sigmoid_tile(D0) -> PackTile.
-                    ckl::unary<ckl::Sigmoid<>, cb_gate_tiles, cb_gate_sig>(ckl::EltwiseShape::tiles(gate_chunk_tiles));
+                    // CopyTile(D0) -> sigmoid_tile(D0) -> PackTile, run
+                    // `gate_dest_tiles` tiles per DEST window.
+                    ckl::unary<
+                        ckl::Sigmoid<>,
+                        cb_gate_tiles,
+                        cb_gate_sig,
+                        ckl::InputLifecycle::Chunked,
+                        ckl::OutputLifecycle::Chunked,
+                        ckl::CopyTileReconfig::Input,
+                        ckl::PackTileReconfig::Output,
+                        ckl::OperandKind::Block>(gate_shape);
                 } else if constexpr (sigmoid_engine == ONORM_SIGMOID_PACK) {
                     // PACK thread (TRISC2): the same 6-entry-LUT sigmoid, issued
                     // at the pack stage.  See the HELPER SUBSTITUTION note at the
@@ -267,20 +287,27 @@ void kernel_main() {
                     using SigmoidPack = ckl::ActivationInitHelper<KernelActivation::SIGMOID>;
                     SigmoidPack::init();
                     copy_tile_init(cb_gate_tiles);
-                    for (uint32_t t = 0; t < gate_chunk_tiles; ++t) {
-                        cb_wait_front(cb_gate_tiles, 1);
-                        cb_reserve_back(cb_gate_sig, 1);
+                    // Same `gate_dest_tiles` DEST window as the two chain-driven
+                    // engines, so the knob means one thing across all three.
+                    for (uint32_t t = 0; t < gate_chunk_tiles; t += gate_dest_tiles) {
+                        cb_wait_front(cb_gate_tiles, gate_dest_tiles);
+                        cb_reserve_back(cb_gate_sig, gate_dest_tiles);
                         tile_regs_acquire();
-                        copy_tile(cb_gate_tiles, 0, 0);
+                        for (uint32_t j = 0; j < gate_dest_tiles; ++j) {
+                            copy_tile(cb_gate_tiles, j, j);
+                        }
                         tile_regs_commit();
                         // REPLACES tile_regs_wait(): does the math/pack SEMWAIT,
                         // flips the packer dest offset, runs sigmoid_tile_pack on
-                        // TRISC2, then stalls the packer on SFPU completion.
-                        ckl::apply_activation_from_pack<KernelActivation::SIGMOID>(1);
-                        pack_tile(0, cb_gate_sig);
+                        // TRISC2 for each DEST tile, then stalls the packer on
+                        // SFPU completion.
+                        ckl::apply_activation_from_pack<KernelActivation::SIGMOID>(gate_dest_tiles);
+                        for (uint32_t j = 0; j < gate_dest_tiles; ++j) {
+                            pack_tile(j, cb_gate_sig);
+                        }
                         tile_regs_release();
-                        cb_push_back(cb_gate_sig, 1);
-                        cb_pop_front(cb_gate_tiles, 1);
+                        cb_push_back(cb_gate_sig, gate_dest_tiles);
+                        cb_pop_front(cb_gate_tiles, gate_dest_tiles);
                     }
                 } else {
                     // ABLATION (measurement only, numerically WRONG): the sigmoid
@@ -290,7 +317,14 @@ void kernel_main() {
                     // — the number the /perf-measure ablation method asks for, and
                     // the one a per-phase zone (which includes cb_wait_front) cannot
                     // give.
-                    ckl::copy<cb_gate_tiles, cb_gate_sig>(ckl::EltwiseShape::tiles(gate_chunk_tiles));
+                    ckl::copy<
+                        cb_gate_tiles,
+                        cb_gate_sig,
+                        ckl::InputLifecycle::Chunked,
+                        ckl::OutputLifecycle::Chunked,
+                        ckl::CopyTileReconfig::Input,
+                        ckl::PackTileReconfig::Output,
+                        ckl::OperandKind::Block>(gate_shape);
                 }
             }
 
@@ -301,9 +335,24 @@ void kernel_main() {
             // into an FPU consumer measures 0.82x while the L1 round-trip is
             // 1.22x faster.  Hence the deliberate cb_gate_sig hop.  Do NOT
             // collapse P7b/P7c into one DEST-resident chain.
+            //
+            // P7c is P7b's 1:1 twin, so it carries the SAME `gate_dest_tiles`
+            // block factor.  Coarsening one gate phase alone would just push the
+            // per-DEST-window cost onto the other half of the pair.
             {
                 MaybeDeviceZoneScope("onorm_p7c_gate_mul");
-                ckl::mul<cb_flat_tiles, cb_gate_sig, cb_out_tiles>(ckl::EltwiseShape::tiles(gate_chunk_tiles));
+                ckl::mul<
+                    cb_flat_tiles,
+                    cb_gate_sig,
+                    cb_out_tiles,
+                    ckl::BroadcastDim::None,
+                    ckl::InputLifecycle::Chunked,
+                    ckl::InputLifecycle::Chunked,
+                    ckl::OutputLifecycle::Chunked,
+                    ckl::BinaryDataFormatReconfig::Input,
+                    ckl::PackTileReconfig::Output,
+                    ckl::OperandKind::Block,
+                    ckl::OperandKind::Block>(gate_shape);
             }
         }
     }

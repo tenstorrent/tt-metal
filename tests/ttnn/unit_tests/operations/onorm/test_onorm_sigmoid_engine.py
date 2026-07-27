@@ -57,11 +57,16 @@ ENGINES = ["math", "pack", "ablate"]
 SHIPPING_ENGINES = ["math", "pack"]
 
 
+# Tiles per DEST window in the two gate phases.  1 is the Phase-0 (byte-identical)
+# setting; 4 is DEST_AUTO_LIMIT under fp32_dest_acc_en + half sync.
+DEST_TILES = [1, 2, 4]
+
+
 @pytest.fixture
 def restore_engine():
-    saved = (pd.SIGMOID_ENGINE, pd.ALLOW_SIGMOID_ABLATION)
+    saved = (pd.SIGMOID_ENGINE, pd.ALLOW_SIGMOID_ABLATION, pd.GATE_DEST_TILES)
     yield
-    pd.SIGMOID_ENGINE, pd.ALLOW_SIGMOID_ABLATION = saved
+    pd.SIGMOID_ENGINE, pd.ALLOW_SIGMOID_ABLATION, pd.GATE_DEST_TILES = saved
 
 
 def _inputs(batch, tokens):
@@ -79,12 +84,12 @@ def _reference(t_o, t_g, t_w, batch, tokens):
     return ref.reshape(batch, tokens, FLAT) * torch.sigmoid(t_g.to(torch.float32))
 
 
-def _run(device, batch, tokens, check):
+def _run(device, batch, tokens, check, cfg=None):
     t_o, t_g, t_w = _inputs(batch, tokens)
     o = ttnn.from_torch(t_o, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     g = ttnn.from_torch(t_g, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     w = ttnn.from_torch(t_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    out = onorm(o, g, w, compute_kernel_config=default_compute_kernel_config())
+    out = onorm(o, g, w, compute_kernel_config=cfg or default_compute_kernel_config())
     got = ttnn.to_torch(out).to(torch.float32)
     if check:
         assert_with_pcc(_reference(t_o, t_g, t_w, batch, tokens), got, PCC)
@@ -103,6 +108,32 @@ def test_engine_correct(device, restore_engine, engine, batch, tokens):
     _run(device, batch, tokens, check=True)
 
 
+@pytest.mark.parametrize("engine", SHIPPING_ENGINES)
+@pytest.mark.parametrize("dest_tiles", DEST_TILES)
+@pytest.mark.parametrize("batch, tokens", [(1, 32), (1, 128)])
+def test_gate_dest_tiles_correct(device, restore_engine, engine, dest_tiles, batch, tokens):
+    """Every legal (SIGMOID_ENGINE, GATE_DEST_TILES) cell gives the same answer.
+
+    The two knobs are orthogonal by construction — the engine picks WHICH TRISC
+    issues the SFPU, the block factor picks HOW MANY tiles share a DEST window —
+    so the cross product is what proves neither silently constrains the other.
+    """
+    pd.SIGMOID_ENGINE = engine
+    pd.GATE_DEST_TILES = dest_tiles
+    _run(device, batch, tokens, check=True)
+
+
+def test_gate_dest_tiles_over_limit_rejected(device, restore_engine, expect_error):
+    """A GATE_DEST_TILES above the DEST budget is refused, naming the limit."""
+    pd.GATE_DEST_TILES = 8
+    t_o, t_g, t_w = _inputs(1, 32)
+    o = ttnn.from_torch(t_o, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    g = ttnn.from_torch(t_g, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    w = ttnn.from_torch(t_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(AssertionError, "GATE_DEST_TILES"):
+        onorm(o, g, w)
+
+
 def test_ablation_is_guarded(device, restore_engine, expect_error):
     """`ablate` must not be reachable without the explicit opt-in flag."""
     pd.SIGMOID_ENGINE = "ablate"
@@ -119,14 +150,108 @@ def test_ablation_is_guarded(device, restore_engine, expect_error):
 # 2. Measurement — trial-major interleaved across engine x shape.
 # ---------------------------------------------------------------------------
 
-TRIAL_CASES = [(t, b, tok, engine) for t in range(N_TRIALS) for (b, tok) in SHAPES for engine in ENGINES]
+# (engine, gate_dest_tiles) candidates.  "math"/1 is the Phase-0 control.
+CANDIDATES = [("math", 1), ("math", 2), ("math", 4), ("pack", 1), ("ablate", 1), ("ablate", 4)]
+
+TRIAL_CASES = [
+    (t, b, tok, engine, dest) for t in range(N_TRIALS) for (b, tok) in SHAPES for (engine, dest) in CANDIDATES
+]
 
 
-@pytest.mark.parametrize("trial, batch, tokens, engine", TRIAL_CASES, ids=lambda v: str(v))
-def test_engine_trial(device, restore_engine, trial, batch, tokens, engine):
+@pytest.mark.parametrize("trial, batch, tokens, engine, dest_tiles", TRIAL_CASES, ids=lambda v: str(v))
+def test_engine_trial(device, restore_engine, trial, batch, tokens, engine, dest_tiles):
     pd.SIGMOID_ENGINE = engine
+    pd.GATE_DEST_TILES = dest_tiles
     pd.ALLOW_SIGMOID_ABLATION = engine == "ablate"
     # The ablation engine is numerically wrong on purpose — it is a payload stub,
     # not a candidate.  The shipping engines are still correctness-gated here so
     # the sweep cannot win by being wrong.
     _run(device, batch, tokens, check=engine != "ablate")
+
+
+# ---------------------------------------------------------------------------
+# 3. Information-only: how much of the SFPU cost is the 32-bit DEST?
+# ---------------------------------------------------------------------------
+#
+# op_requirements.md Refinement 1 constraint (a) forbids *reaching for*
+# `fp32_dest_acc_en=False` as a shipping lever without preserving P1's fp32
+# sum-of-squares accumulation by another mechanism.  It does not forbid
+# MEASURING it — and the size of that prize is exactly what a follow-up
+# refinement needs in order to decide whether the "other mechanism" is worth
+# building.  These cases are a measurement, never a shipping configuration:
+# `default_compute_kernel_config()` is untouched.
+
+_FP32_ON = default_compute_kernel_config()
+_FP32_OFF = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=False,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=False,
+    dst_full_sync_en=False,
+)
+
+DEST_ACC_CASES = [
+    (t, b, tok, label)
+    for t in range(N_TRIALS)
+    for (b, tok) in [(1, 640)]
+    for label in ["fp32_dest_on", "fp32_dest_off", "fp32_dest_off_ablate"]
+]
+
+
+@pytest.mark.parametrize("trial, batch, tokens, label", DEST_ACC_CASES, ids=lambda v: str(v))
+def test_dest_acc_trial(device, restore_engine, trial, batch, tokens, label):
+    """Prices the sigmoid's SFPU payload under a 16-bit vs 32-bit DEST.
+
+    Note `fp32_dest_acc_en=False` raises DEST_AUTO_LIMIT from 4 to 8, so this is
+    also the only configuration where a GATE_DEST_TILES above 4 would be legal.
+    """
+    pd.SIGMOID_ENGINE = "ablate" if label.endswith("ablate") else "math"
+    pd.ALLOW_SIGMOID_ABLATION = label.endswith("ablate")
+    cfg = _FP32_ON if label == "fp32_dest_on" else _FP32_OFF
+    _run(device, batch, tokens, check=not label.endswith("ablate"), cfg=cfg)
+
+
+# ---------------------------------------------------------------------------
+# 4. Non-regression guard set for the adopted GATE_DEST_TILES default.
+# ---------------------------------------------------------------------------
+#
+# op_requirements.md's "config-spanning guard set": the shape/occupancy span
+# (1 / 4 / 20 / 110 cores) plus the config span (math_approx_mode, LoFi).  Each
+# cell is measured at BOTH the Phase-0 block factor (1) and the adopted one (4),
+# trial-major interleaved, so "no regression" is a paired comparison rather than
+# a comparison against a number from another process.
+
+_LOFI = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.LoFi,
+    math_approx_mode=False,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=False,
+    dst_full_sync_en=False,
+)
+_APPROX = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=True,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=False,
+    dst_full_sync_en=False,
+)
+
+GUARD_CELLS = [
+    ((1, 32), "default"),
+    ((1, 128), "default"),
+    ((1, 640), "default"),
+    ((8, 640), "default"),
+    ((1, 640), "approx"),
+    ((1, 640), "lofi"),
+]
+_GUARD_CFGS = {"default": _FP32_ON, "approx": _APPROX, "lofi": _LOFI}
+
+GUARD_CASES = [
+    (t, shape, cfg_name, dest) for t in range(N_TRIALS) for (shape, cfg_name) in GUARD_CELLS for dest in (1, 4)
+]
+
+
+@pytest.mark.parametrize("trial, shape, cfg_name, dest_tiles", GUARD_CASES, ids=lambda v: str(v))
+def test_guard_set_trial(device, restore_engine, trial, shape, cfg_name, dest_tiles):
+    pd.GATE_DEST_TILES = dest_tiles
+    _run(device, shape[0], shape[1], check=True, cfg=_GUARD_CFGS[cfg_name])

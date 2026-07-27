@@ -113,7 +113,7 @@ amortization) are void and are re-opened by Refinement 3.
 
 ---
 
-### [ ] Refinement 1 — Get `sigmoid(gate)` off the saturated MATH thread
+### [~] Refinement 1 — Get `sigmoid(gate)` off the saturated MATH thread
 
 **Type**: perf
 
@@ -167,6 +167,106 @@ P7b's share actually fell; no regression across the config-spanning guard set; t
 green; and `test_onorm_precision_baseline.py` still passes with its numbers recorded in
 `changelog.md` (a `fast_and_approx` sigmoid *will* move them — it must stay inside PCC ≥ 0.9995
 and rel-RMS < 0.02).
+
+**OUTCOME (partial)** — both named leads were implemented, measured and closed; the
+premise behind them turned out to be unavailable in hardware. Evidence in `changelog.md`.
+
+- **Ablation first.** A third `SIGMOID_ENGINE` value, `"ablate"`, removes the sigmoid
+  payload while keeping every CB wait/push, DEST window and NoC transfer. It confirms the
+  phase is genuine SFPU work and not a `cb_wait_front` stall: B=1/T=640 drops 244,495 →
+  92,212 ns. The sigmoid really is **152 µs (62 %)**, and 37 ns/vector-op × 32 vector-ops
+  × 128 tiles matches the catalog's measured Blackhole SFPU rate (`sfpu_tile_scope`:
+  ~24 ns rsqrt, ~28 ns recip per vector op). There is no misconfiguration to fix.
+- **Lead 1 (pack thread) — built, correct, measured 0.991–0.994× on all three shapes.**
+  It is kept as a live non-default `SIGMOID_ENGINE = "pack"` knob. It does not win, and
+  the reason is structural rather than tunable: a Tensix has **one SFPU**, shared by MATH
+  and PACK, and DEST half-sync pins the two threads to within one window — so relocating
+  the SFPU volume relocates the bottleneck instead of overlapping it, and the pack path
+  additionally pays `apply_activation_from_pack`'s SEMWAIT + dest-offset-flip + WAIT_SFPU.
+  The premise "PACK is comparatively idle" is true of the *thread* and false of the
+  *engine*. This closes lead 1 — no configuration of it can pay.
+- **Lead 2 (`fast_and_approx`) — provably a no-op, no measurement possible.** The LLK's
+  `_calculate_sigmoid_` / `_init_sigmoid_` **ignore `APPROXIMATION_MODE`** on both
+  Blackhole and Wormhole B0 (`tt_llk_*/common/inc/sfpu/ckernel_sfpu_sigmoid.h`): accurate
+  and fast are the same 6-entry LUT. There is no `SigmoidFast` to build. Closed.
+- **Third lever, found and adopted: `GATE_DEST_TILES`.** Phase 0 opened one DEST window
+  *per tile* in both gate phases (`InputLifecycle::Streaming` clamps the chain's
+  `block_size` to 1). Moving both P7b **and** its 1:1 twin P7c to `InputLifecycle::Chunked`
+  makes the tiles-per-DEST-window a knob, adopted at **4** (`DEST_AUTO_LIMIT` under
+  `fp32_dest_acc_en` + half sync). Monotonic 1 → 2 → 4 and **1.003–1.006× on every cell of
+  the config-spanning guard set**, no cell regressing, free in L1. Small because the phase
+  is dominated by the SFPU payload, not per-window overhead — with the sigmoid ablated the
+  same knob is worth 1.016×.
+- **Not done here, and why:** the one large remaining lever is the DEST width, which
+  constraint (a) explicitly fences off. It is now *priced* rather than guessed — see
+  Refinement 1b. `cb_gate_sig` was **not** eliminated (the pack engine still materialises
+  it), so its 64 pages are not new headroom for Refinement 3.
+
+---
+
+### [ ] Refinement 1b — Cash the 16-bit DEST: 1.208×, with P1's fp32 sum-of-squares preserved
+
+**Type**: perf
+
+**Goal**: Refinement 1 established that `sigmoid(gate)`'s 152 µs is irreducible SFPU
+*throughput* — one SFPU per core, no approximation variant, per-window overhead already
+amortised. Exactly one lever moves it on a fixed core count, and R1 measured it instead of
+guessing at it:
+
+| B=1/T=640, median of 5 interleaved trials | whole kernel | sigmoid payload (vs its own ablation) |
+|---|---|---|
+| `fp32_dest_acc_en=True` (today's default) | 244,312 ns | **152,167 ns** |
+| `fp32_dest_acc_en=False` | **202,256 ns (1.208×)** | **109,354 ns (1.39×)** |
+
+**28 % of the sigmoid's cost is the 32-bit DEST**, and the non-sigmoid remainder is
+unchanged (92.1 → 92.9 µs), so the win is specifically the SFPU's. Note this is much
+larger than the 1.095× Phase 0 recorded for the same flag.
+
+Measured precision cost of the flip (4 shapes, `probes/probe_005.py`):
+
+| | PCC | rel-RMS | got/true median |
+|---|---|---|---|
+| fp32 DEST on | 0.999993 | 0.0037 | 0.9997 |
+| fp32 DEST off | **0.999988** | **0.0056** | 1.0026 |
+
+Both sit comfortably inside Refinement 1's own stated bar (PCC ≥ 0.9995, rel-RMS < 0.02) —
+rel-RMS is 3.5× under the limit — and the got/true spread stays centred on 1.0, so this is
+rounding, not a scale bug.
+
+**The work is not "flip the flag".** `eval/prompts/onorm.txt` directs fp32 sum-of-squares
+accumulation in DST, and R1's constraint (a) forbids flipping it silently. Two routes, in
+order of preference:
+
+1. **Preserve P1's fp32 accumulation by another mechanism** and take the 16-bit DEST for
+   everything else. P1 is the only fp32-sensitive step: it DEST-accumulates `o²` over
+   `V_TILES = 4` tiles (`DestAccumulation::Enabled` → `OutputLifecycle::DestAccumulation`).
+   Candidates: the packer's L1 accumulator (`PackTileL1Accumulation` — but the catalog
+   records it as fp32-DEST-only, so check that first), a `Float32` `cb_sumsq` with the
+   accumulation moved out of DEST, or the `row_reduce_accumulate` catalog entry's
+   `dest_accum_pairs` shape. Note `fp32_dest_acc_en` is a whole-kernel compile-time
+   config, so "per-phase fp32" means changing *where* the accumulation lives, not the flag.
+2. **Explicit documented deviation** with the numbers above, if route 1 costs more than it
+   saves. This needs sign-off — it is a contract change, not a knob turn.
+
+Free rider: `fp32_dest_acc_en=False` raises `DEST_AUTO_LIMIT` from 4 to 8, so
+`GATE_DEST_TILES` could then go to 8. Re-sweep it (`_DEST_TILE_LIMIT` in
+`onorm_program_descriptor.py` is the one place that constant lives).
+
+**Verifier notes**: ordered immediately after its parent and **before Refinement 2**, per
+the partial-tick protocol. Like R1 it is per-tile and topology-independent, so it survives
+R2's work-split change unchanged. Everything R1 built is reusable: the ablation engine
+prices the sigmoid payload on its own, and
+`test_onorm_sigmoid_engine.py::test_dest_acc_trial` already measures both DEST widths
+trial-major interleaved.
+
+**Done when**: measured device-ns improves on B=1/T=640 and B=8/T=640 with the chosen
+mechanism landed as the default; `test_onorm_precision_baseline.py` passes with the new
+numbers recorded in `changelog.md` and inside PCC ≥ 0.9995 / rel-RMS < 0.02; the
+`fp32_dest_acc_en=True` path still works for a caller who asks for it (it is a public
+`compute_kernel_config` field, so it cannot become a lie); no regression across the
+config-spanning guard set; and the golden suite plus `test_onorm_knobs.py` are green. If
+route 2 is taken, the deviation must be written into `changelog.md` and
+`default_compute_kernel_config()`'s docstring, naming the contract line it departs from.
 
 ---
 
@@ -247,8 +347,10 @@ P7a 3.6 — becomes the critical path, and it is spread over **25 helper invocat
    where there are the most transitions". The uniform `Float16_b` format was chosen by the design
    *specifically* to make this a legal one-line-per-helper knob-turn (`op_design.md` §1.5, risk 11).
 2. **Co-tune the block factors.** `NORM_CHUNK_TOKENS` (8), `GATE_CHUNK_TILES` (64),
-   `TOKENS_PER_BLOCK` (32), `O_DEPTH` (2), `DM_BLOCK_TILES` (8), `DM_DEPTH` (4). Only the two DM
-   knobs have ever been *perf*-selected; the compute-side factors were chosen from an L1-budget
+   `TOKENS_PER_BLOCK` (32), `O_DEPTH` (2), `DM_BLOCK_TILES` (8), `DM_DEPTH` (4), and
+   `GATE_DEST_TILES` (4, added and perf-selected by R1 — its ceiling is `_DEST_TILE_LIMIT`,
+   which rises from 4 to 8 if R1b lands the 16-bit DEST, so re-sweep it then). Only the two DM
+   knobs and `GATE_DEST_TILES` have ever been *perf*-selected; the compute-side factors were chosen from an L1-budget
    argument that assumed the op was DRAM-bound. Same `compute_block_size` mechanism: coarser blocks
    amortize the per-invocation fixed cost, whole tiles are the granularity floor, and the curve has
    diminishing returns — so name the direction, sweep, and take the measured optimum.
@@ -273,8 +375,9 @@ Four constraints:
   CB-available L1) the two re-tile buffers are already 256 pages, and they scale with
   `TOKENS_PER_BLOCK`. `TOKENS_PER_BLOCK = 64` only fits once `NORM_CHUNK_TOKENS` or
   `GATE_CHUNK_TILES` comes down — the assert enforces the order (`GATE_CHUNK_TILES` first, then
-  `NORM_CHUNK_TOKENS`). If R1 eliminated `cb_gate_sig`, its 64 pages are new headroom; spend them
-  here.
+  `NORM_CHUNK_TOKENS`). **R1 did NOT eliminate `cb_gate_sig`** — its `pack` engine still
+  materialises it, and the design's FPU-fed-from-L1 argument for P7c is unchanged — so its 64
+  pages are *not* new headroom. Do not budget for them.
 - Raising `TOKENS_PER_BLOCK` **reduces the core count** at small `T` (it coarsens the work unit).
   After R2 the two interact directly — do not tune `TOKENS_PER_BLOCK` on B=8/T=640 alone and then
   regress B=1/T=64.
