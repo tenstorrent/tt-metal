@@ -51,6 +51,11 @@ below). One reference file per block, mirroring the XTTS-v2 layout.
 | 2 | Flow-matching acoustic transformer | 390M | `voxtral_flow_ref.py` | `h [B,3072]` → `audio_codes [B,37]` |
 | 3 | Codec decoder | ~150M | `voxtral_codec_ref.py` | `codes [B,37,T]` → `waveform [B,1,T*1920]` @ 24 kHz |
 | — | Codec encoder | ~150M | **not portable** | weights absent from the release |
+| — | End-to-end chain | — | `voxtral_pipeline_ref.py` | prompt ids + voice preset → 24 kHz WAV |
+
+Tokenization lives in `scripts/dump_prompt_ids.py`, the **only** non-torch-only file (it needs
+`mistral-common` for tekken + the TTS chat template; run it in a throwaway venv). Same boundary
+as the XTTS-v2 reference, whose tokenizer also sat outside the ported blocks.
 
 `voxtral_common_ref.py` holds what all three share: the safetensors reader, the config constants,
 `rms_norm` / `swiglu` / `gqa_attention` / RoPE / `fold_weight_norm`, the 37-codebook offsets, and
@@ -113,16 +118,40 @@ No `vllm`, `vllm_omni`, `mistral_common`, `transformers`, `einops`, `safetensors
    value and doubles it per upsample. Derived in `decoder_window_sizes()` rather than hard-coded.
 10. **Semantic codebook is stored as EMA running sums**, not the codebook: the usable table is
     `embedding_sum / cluster_usage.clamp(min=1e-5)`.
+11. **The audio-placeholder count in the prompt is VOICE-SPECIFIC.** `encode_speech_request`
+    emits one `audio_token_id` (24) per frame of that voice's reference clip, and the presets
+    range from ar_male at 67 frames (5.4 s) to neutral_female at 218 (17.4 s). A prompt dumped
+    for one voice cannot be reused with another; the pipeline asserts the counts match rather
+    than silently misaligning the conditioning.
+12. **A voice preset is `[T_ref, 3072]` bf16 — already embedded** into the backbone's space, so
+    it bypasses both the absent codec encoder and the 37-codebook embedding. Splicing rule:
+    every `audio_token_id` position takes the next preset row, everything else is a
+    `tok_embeddings` lookup.
 
 ## Validation status
 
-- **Structural + wiring: done.** 45 tests pass with no checkpoint present. Every weight the
+- **Structural + wiring: done.** 57 tests pass with no checkpoint present. Every weight the
   references ask for exists in the released manifest at the right shape; both small blocks map
-  1:1 onto their checkpoint tensors in *both* directions; and all three blocks run end-to-end at
-  real widths on random weights (the backbone on a shortened stack, since 26 layers of fp32 do not
-  fit in RAM), covering every matmul dimension, head split and reshape.
-- **Numerical vs upstream: NOT done.** Three tests are skipped pending the 8 GB download, and even
-  those only check self-consistency (KV-cache path == full forward, FSQ round-trip, finite output).
-  A true PCC=1.0 gate against vLLM-Omni needs `vllm` + `vllm-omni` + `flash-attn` in a separate
-  venv, comparing block-by-block against dumped activations. That is the next step, and no accuracy
-  claim should be made before it.
+  1:1 onto their checkpoint tensors in *both* directions; all three blocks run at real widths on
+  random weights (the backbone on a shortened stack, since 26 layers of fp32 do not fit in RAM);
+  and the hand-written safetensors reader round-trips bf16/fp32/fp16/int64 bit-exactly.
+- **Real weights: done.** The reader matches the 8 GB checkpoint on all 386 tensors (key sets
+  identical, zero shape mismatches). All three block `main()`s run and write goldens. The
+  backbone's incremental KV-cache path reproduces its full causal forward at PCC 1.000000, and
+  the codec's staged path matches its full path at PCC 1.000000.
+- **End-to-end: done, and it produces correct speech.** `voxtral_pipeline_ref.py` chains all
+  three blocks. Whisper-base transcribes the output at **0.0% WER** for two different presets:
+
+  | voice | frames | audio | stop | WER |
+  |---|---|---|---|---|
+  | `neutral_male` | 64 | 5.12 s | natural `[END_AUDIO]` | 0.0% |
+  | `cheerful_female` | 97 | 7.76 s | natural `[END_AUDIO]` | 0.0% |
+
+  Same text, materially different durations — the voice conditioning is doing real work.
+  CPU cost (12 threads, fp32): ~5.7 s to load, ~2 s prefill at P=200, **0.83 s/frame**, codec
+  ~0.3 s. That is ~10x slower than real time, which is fine for a reference.
+- **Numerical vs upstream: still NOT done.** Everything above is self-consistency plus an
+  end-to-end intelligibility check — strong evidence the architecture is right, but not a
+  per-block PCC gate against vLLM-Omni. That needs `vllm` + `vllm-omni` + `flash-attn` in a
+  separate venv comparing against dumped activations, and remains the next step. 0.0% WER does
+  not rule out a subtly wrong op that the model is robust to.

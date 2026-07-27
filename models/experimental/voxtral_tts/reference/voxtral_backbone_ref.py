@@ -182,6 +182,43 @@ def reference_prefill_then_step(inputs_embeds, w, step_embeds, n_layers=N_LAYERS
     return prefill_hidden, torch.cat(outs, dim=1)
 
 
+class IncrementalBackbone:
+    """Stateful prefill + single-step decode over a KV-cache.
+
+    `reference_prefill_then_step` runs a fixed list of steps; the real generation loop has to
+    interleave Block 2 between steps, so it needs this. Deliberately shaped like a TTNN traced
+    decoder (build once -> prefill -> step per token) so the port is a drop-in at this seam."""
+
+    def __init__(self, w, n_layers=N_LAYERS):
+        self.w, self.n_layers = w, n_layers
+        self.cache, self.pos = {}, 0
+
+    def reset(self):
+        self.cache, self.pos = {}, 0
+
+    @torch.no_grad()
+    def prefill(self, inputs_embeds):
+        """[1, P, 3072] -> hidden of the LAST position only [1, 1, 3072] (all Block 2 ever sees)."""
+        P = inputs_embeds.shape[1]
+        cis = rope_cis(P, HEAD_DIM, ROPE_THETA, offset=self.pos)
+        bias = causal_bias(P, inputs_embeds.dtype)
+        x = inputs_embeds
+        for i in range(self.n_layers):
+            x = _layer(x, self.w, f"layers.{i}.", cis, bias, self.cache)
+        self.pos += P
+        return rms_norm(x[:, -1:], self.w["norm"], NORM_EPS)
+
+    @torch.no_grad()
+    def step(self, emb):
+        """[1, 1, 3072] -> hidden [1, 1, 3072]. No mask: every cached position is in the past."""
+        cis = rope_cis(1, HEAD_DIM, ROPE_THETA, offset=self.pos)
+        x = emb
+        for i in range(self.n_layers):
+            x = _layer(x, self.w, f"layers.{i}.", cis, None, self.cache)
+        self.pos += 1
+        return rms_norm(x, self.w["norm"], NORM_EPS)
+
+
 @torch.no_grad()
 def text_logits(hidden, w):
     """Tied text head, for the EOS/text path only (Block 2 owns the semantic code head)."""
