@@ -20,7 +20,6 @@ call sites only need to change their import.
 """
 
 import struct
-from functools import lru_cache
 
 from ttexalens.tt_exalens_lib import convert_coordinate
 from ttexalens.tt_exalens_lib import read_from_device as _read_from_device
@@ -32,17 +31,22 @@ from ttexalens.tt_exalens_lib import write_words_to_device as _write_words_to_de
 MAX_TRANSFER_BYTES = 2048
 
 
-@lru_cache(maxsize=None)
-def _splitting_helps(device_id: int) -> bool:
-    from ttexalens import check_context
+def _splitting_helps(coordinate) -> bool:
+    """Whether this coordinate's device lacks the DMA path that makes splitting
+    unnecessary.
 
-    context = check_context()
+    Read off the resolved coordinate rather than the global context, so that a
+    caller passing an explicit ``context`` (or an already-resolved coordinate as
+    ``location``) is answered for the device that will actually perform the
+    transfer. This is a couple of attribute lookups and is only reached for
+    transfers already large enough to be worth splitting, so it is not cached.
+    """
     try:
-        can_use_dma = context.devices[device_id]._umd_device.can_use_dma
+        return not coordinate.device._umd_device.can_use_dma
     except AttributeError:
-        # If the private ttexalens API moves, conservatively keep splitting.
+        # If the private ttexalens API moves, conservatively keep splitting: it
+        # is a large win without DMA and only a small loss with it.
         return True
-    return not can_use_dma
 
 
 def read_from_device(
@@ -55,7 +59,7 @@ def read_from_device(
     use_4B_mode=None,
     safe_mode=None,
 ):
-    if num_bytes <= MAX_TRANSFER_BYTES or not _splitting_helps(device_id):
+    if num_bytes <= MAX_TRANSFER_BYTES:
         return _read_from_device(
             location,
             addr,
@@ -69,6 +73,18 @@ def read_from_device(
 
     # Resolve once so each chunk skips re-parsing the "x,y" location string.
     coordinate = convert_coordinate(location, device_id, context)
+    if not _splitting_helps(coordinate):
+        return _read_from_device(
+            coordinate,
+            addr,
+            device_id,
+            num_bytes,
+            context,
+            noc_id,
+            use_4B_mode,
+            safe_mode,
+        )
+
     return b"".join(
         _read_from_device(
             coordinate,
@@ -97,12 +113,17 @@ def write_to_device(
     if isinstance(data, list):
         data = bytes(data)
 
-    if len(data) <= MAX_TRANSFER_BYTES or not _splitting_helps(device_id):
+    if len(data) <= MAX_TRANSFER_BYTES:
         return _write_to_device(
             location, addr, data, device_id, context, noc_id, use_4B_mode, safe_mode
         )
 
     coordinate = convert_coordinate(location, device_id, context)
+    if not _splitting_helps(coordinate):
+        return _write_to_device(
+            coordinate, addr, data, device_id, context, noc_id, use_4B_mode, safe_mode
+        )
+
     for offset in range(0, len(data), MAX_TRANSFER_BYTES):
         _write_to_device(
             coordinate,
@@ -127,7 +148,7 @@ def read_words_from_device(
     safe_mode=None,
 ):
     num_bytes = 4 * word_count
-    if num_bytes <= MAX_TRANSFER_BYTES or not _splitting_helps(device_id):
+    if num_bytes <= MAX_TRANSFER_BYTES:
         return _read_words_from_device(
             location,
             addr,
