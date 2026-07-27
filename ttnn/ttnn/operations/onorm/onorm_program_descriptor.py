@@ -55,8 +55,9 @@ DM_BLOCK_TILES = 8
 # above; DM_DEPTH=2 at DM_BLOCK_TILES=8 leaves 1.035x on the table.
 DM_DEPTH = 4
 # O_DEPTH deepens cb_o_tiles. Kept at 2: the reader is NOT the critical path at
-# these settings (NCRISC 92.7us vs 102.3us kernel at the old default), and
-# O_DEPTH=3 measured within noise while costing +128 KB of L1.
+# these settings (at the new defaults, B=1/T=640: NCRISC 83.5us vs 88.0us compute
+# vs 93.1us kernel), and O_DEPTH=3 measured within noise while costing +128 KB of
+# L1. This stays a live knob for a future shape where the reader IS the bound.
 O_DEPTH = 2
 
 # --- hardware tile geometry (not a knob) ---
@@ -67,7 +68,7 @@ TILE_W = 32
 # reports the unreserved L1 span, but the statically-allocated CB region starts
 # ABOVE a per-program base (kernel binaries, runtime args, profiler buffers), so
 # the CB total that the runtime actually validates is larger than the sum of our
-# pages.  Measured on Wormhole: a 741-page (1517568 B) CB set was reported by the
+# pages.  Measured on Blackhole p150: a 741-page (1517568 B) CB set was reported by the
 # runtime as growing to 1628928 B against a max L1 of 1572864 B — i.e. a 111360 B
 # base, so the real CB ceiling is 1572864 - 111360 = 1461504 B, which is
 # get_max_worker_l1_unreserved_size() - 70656.  Holding back 72 KB makes this
@@ -182,7 +183,9 @@ def create_program_descriptor(
     blocks_per_batch = _div_up(tokens, TOKENS_PER_BLOCK)
     num_token_blocks = batch * blocks_per_batch
 
-    o_tiles_per_block = TOKENS_PER_BLOCK * v_tiles
+    # Per-block tile counts. The kernels derive these from the same knobs (as
+    # `o_tiles_per_block` / `flat_tiles_per_block`); only the flat one is needed
+    # host-side, for CB sizing.
     flat_tiles_per_block = tile_rows_per_block * flat_tiles
     norm_chunks_per_block = TOKENS_PER_BLOCK // NORM_CHUNK_TOKENS
     gate_chunks_per_block = flat_tiles_per_block // GATE_CHUNK_TILES
@@ -344,10 +347,6 @@ def create_program_descriptor(
         runtime_args=compute_rt_args,
         config=_compute_config_descriptor(compute_kernel_config),
     )
-
-    # `o_tiles_per_block` is derived here and consumed by the reader as
-    # TOKENS_PER_BLOCK * v_tiles; keeping the name documents the ledger.
-    assert o_tiles_per_block == TOKENS_PER_BLOCK * v_tiles
 
     return ttnn.ProgramDescriptor(
         kernels=[reader_kernel, writer_kernel, compute_kernel],
