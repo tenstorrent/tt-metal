@@ -39,19 +39,29 @@ class _FakeMesh:
 def test_ccl_topology_linear_on_4_device_mesh(monkeypatch):
     """QB2 / P300x2 opened as 1x4: Ring drops 12B full-model PCC below 0.94."""
     monkeypatch.delenv("GEMMA4_CCL_TOPOLOGY", raising=False)
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: True)
     assert default_ccl_topology(_FakeMesh(4)) == ttnn.Topology.Linear
 
 
-def test_ccl_topology_ring_on_8_device_mesh(monkeypatch):
-    """LoudBox P150x8: Ring remains the TTFT-swept default."""
+def test_ccl_topology_ring_on_bh_8_device_mesh(monkeypatch):
+    """LoudBox P150x8: Ring remains the TTFT-swept default on Blackhole."""
     monkeypatch.delenv("GEMMA4_CCL_TOPOLOGY", raising=False)
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: True)
     assert default_ccl_topology(_FakeMesh(8)) == ttnn.Topology.Ring
+
+
+def test_ccl_topology_linear_on_wh_8_device_mesh(monkeypatch):
+    """WH T3K 1x8: keep Linear — Ring regresses 26B-A4B full-model PCC < 0.76."""
+    monkeypatch.delenv("GEMMA4_CCL_TOPOLOGY", raising=False)
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: False)
+    assert default_ccl_topology(_FakeMesh(8)) == ttnn.Topology.Linear
 
 
 def test_ccl_topology_env_override_beats_device_count(monkeypatch):
     monkeypatch.setenv("GEMMA4_CCL_TOPOLOGY", "ring")
     assert default_ccl_topology(_FakeMesh(4)) == ttnn.Topology.Ring
     monkeypatch.setenv("GEMMA4_CCL_TOPOLOGY", "linear")
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: True)
     assert default_ccl_topology(_FakeMesh(8)) == ttnn.Topology.Linear
 
 
