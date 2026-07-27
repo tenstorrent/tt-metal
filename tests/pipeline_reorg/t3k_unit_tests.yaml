@@ -75,7 +75,7 @@
   skus:
     wh_llmbox:
       timeout: 25
-  owner_id: U07RY6B5FLJ # Gongyu Wang
+  owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
   model-name: tttv2 modules
 

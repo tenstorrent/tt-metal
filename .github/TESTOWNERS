@@ -17,7 +17,7 @@
 
 teams:
   models:   @mtairum           # U03PUAKE719, Miguel Tairum
-  ttnn:     @ayerofieiev-tt    # U076Z1JJUQZ, Artem Yerofieiev
+  ttnn:     @dgomezTT.         # U089NPHL0GN, Diego Gomez
   runtime:  @msudumbrekar-TT   # U099A7FMKL2, Manish Sudumbrekar
   scaleout: @cfjchu            # U07D5N7QL4U, Joseph Chu
   llk:      @ndivnicTT         # U09UC143684, Nemanja Divnic
