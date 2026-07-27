@@ -59,6 +59,23 @@ public:
     bool is_l1() const;
     bool is_dram() const;
 
+    // Returns a copy of this config re-sharded with `memory_layout` and `shard_spec`.
+    //
+    // Use this instead of re-running a constructor when an op needs to override the shard
+    // geometry of a config it was handed. Constructing a fresh MemoryConfig from a few
+    // fields silently drops every field the caller did not name -- including experimental
+    // state such as per-core allocation, which is private and easy to forget. This copies
+    // *this first, so any field not overridden below (present or future) is carried over.
+    //
+    // The stale `nd_shard_spec_` is cleared: it describes the shard being replaced.
+    // TensorSpec repopulates it from the new legacy spec where an equivalent exists.
+    //
+    // A single-argument `with_shard_spec(shard_spec)` was removed in #45706 because it left
+    // `memory_layout_` describing the *old* sharding while the spec described the new one
+    // (see #42827). Taking both together is what stops them disagreeing.
+    [[nodiscard]] MemoryConfig with_shard_spec(
+        TensorMemoryLayout memory_layout, std::optional<ShardSpec> shard_spec) const;
+
     static constexpr auto attribute_names = std::forward_as_tuple(
         "memory_layout", "buffer_type", "shard_spec", "nd_shard_spec", "created_with_nd_shard_spec");
     auto attribute_values() const {

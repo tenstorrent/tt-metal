@@ -3,6 +3,7 @@
 
 #include <cstdint>
 
+#include <tt_stl/assert.hpp>
 #include <tt_stl/reflection.hpp>
 
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
@@ -40,6 +41,25 @@ MemoryConfig MemoryConfig::create_with_prepopulated_shard_specs(
     bool created_with_nd_shard_spec) {
     return MemoryConfig(
         memory_layout, buffer_type, std::move(shard_spec), std::move(nd_shard_spec), created_with_nd_shard_spec);
+}
+
+MemoryConfig MemoryConfig::with_shard_spec(
+    TensorMemoryLayout memory_layout, std::optional<ShardSpec> shard_spec) const {
+    MemoryConfig result = *this;
+    result.memory_layout_ = memory_layout;
+    result.shard_spec_ = std::move(shard_spec);
+    result.nd_shard_spec_ = std::nullopt;
+    result.created_with_nd_shard_spec_ = false;
+    if (result.per_core_allocation_) {
+        // Re-check the per-core invariants against the new layout rather than silently
+        // dropping the bit -- a caller re-sharding a per-core config into something
+        // per-core cannot express has a bug we want to surface, not paper over.
+        TT_FATAL(
+            result.is_sharded() && result.shard_spec_.has_value(),
+            "with_shard_spec cannot re-shard a per_core_allocation config into memory layout {} without a shard spec",
+            memory_layout);
+    }
+    return result;
 }
 
 bool MemoryConfig::is_sharded() const {

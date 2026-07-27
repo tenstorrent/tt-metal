@@ -238,10 +238,9 @@ tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_sp
             shard_shape = {fused_height, shard_spec.shape[1]};
         }
         shard_spec.shape = shard_shape;
-        auto mem_config = tt::tt_metal::MemoryConfig(
-            input_tensor_a.memory_config().memory_layout(),
-            operation_attributes.output_mem_config.buffer_type(),
-            shard_spec);
+        // Output inherits the input's shard spec; the rest of the caller's config is preserved.
+        auto mem_config = operation_attributes.output_mem_config.with_shard_spec(
+            input_tensor_a.memory_config().memory_layout(), shard_spec);
 
         return tt::tt_metal::TensorSpec(
             output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), mem_config));

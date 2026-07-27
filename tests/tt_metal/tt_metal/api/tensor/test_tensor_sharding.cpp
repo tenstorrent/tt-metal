@@ -272,3 +272,70 @@ TEST_F(MemoryConfigEqualityTest, NotEqualOperator_NdShardSpec) {
     EXPECT_TRUE(a != b);
     EXPECT_FALSE(a != a);
 }
+
+// with_shard_spec exists so that ops overriding a caller's shard geometry cannot silently
+// discard the rest of the caller's config. Constructing a fresh MemoryConfig from a handful
+// of fields is what dropped the experimental per-core allocation bit in
+// https://github.com/tenstorrent/tt-metal/issues/51133.
+TEST_F(MemoryConfigEqualityTest, OverridesLayoutAndShardSpec) {
+    MemoryConfig config(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec_a_);
+
+    MemoryConfig resharded = config.with_shard_spec(TensorMemoryLayout::WIDTH_SHARDED, shard_spec_b_);
+
+    EXPECT_EQ(resharded.memory_layout(), TensorMemoryLayout::WIDTH_SHARDED);
+    EXPECT_EQ(resharded.shard_spec(), shard_spec_b_);
+}
+
+TEST_F(MemoryConfigEqualityTest, PreservesBufferType) {
+    MemoryConfig config(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec_a_);
+
+    MemoryConfig resharded = config.with_shard_spec(TensorMemoryLayout::WIDTH_SHARDED, shard_spec_b_);
+
+    EXPECT_EQ(resharded.buffer_type(), BufferType::L1);
+}
+
+TEST_F(MemoryConfigEqualityTest, PreservesPerCoreAllocation) {
+    MemoryConfig config(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec_a_);
+    experimental::per_core_allocation::set_per_core_allocation(config, true);
+
+    MemoryConfig resharded = config.with_shard_spec(TensorMemoryLayout::WIDTH_SHARDED, shard_spec_b_);
+
+    EXPECT_TRUE(experimental::per_core_allocation::is_per_core_allocation(resharded));
+}
+
+TEST_F(MemoryConfigEqualityTest, LeavesPerCoreAllocationUnsetWhenSourceLacksIt) {
+    MemoryConfig config(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec_a_);
+
+    MemoryConfig resharded = config.with_shard_spec(TensorMemoryLayout::WIDTH_SHARDED, shard_spec_b_);
+
+    EXPECT_FALSE(experimental::per_core_allocation::is_per_core_allocation(resharded));
+}
+
+TEST_F(MemoryConfigEqualityTest, ClearsStaleNdShardSpecProvenance) {
+    // The nd spec describes the shard being replaced, so it must not survive.
+    // TensorSpec repopulates it from the new legacy spec where an equivalent exists.
+    MemoryConfig config = MemoryConfig::create_with_prepopulated_shard_specs(
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        BufferType::L1,
+        shard_spec_a_,
+        nd_shard_spec_a_,
+        /*created_with_nd_shard_spec=*/true);
+
+    MemoryConfig resharded = config.with_shard_spec(TensorMemoryLayout::WIDTH_SHARDED, shard_spec_b_);
+
+    EXPECT_FALSE(resharded.nd_shard_spec().has_value());
+    EXPECT_FALSE(resharded.created_with_nd_shard_spec());
+}
+
+TEST_F(MemoryConfigEqualityTest, RejectsReshardingPerCoreConfigToInterleaved) {
+    // Surfacing the impossible request beats silently downgrading to a lockstep allocation.
+    MemoryConfig config(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec_a_);
+    experimental::per_core_allocation::set_per_core_allocation(config, true);
+
+    EXPECT_THAT(
+        std::function<void()>([&config]() {
+            [[maybe_unused]] auto resharded = config.with_shard_spec(TensorMemoryLayout::INTERLEAVED, std::nullopt);
+        }),
+        ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("cannot re-shard a per_core_allocation config into memory layout")));
+}

@@ -179,11 +179,9 @@ tt::tt_metal::TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_spe
         auto shard_spec = input_tensor.shard_spec().value();
         shard_spec.shape[0] =
             operation_attributes.output_padded_shape.volume() / operation_attributes.output_padded_shape[-1];
-        auto mem_config = tt::tt_metal::MemoryConfig(
-            input_tensor.memory_config().memory_layout(),
-            operation_attributes.output_mem_config.buffer_type(),
-            shard_spec);  // If the input is using the legacy sharded optimized program
-                          // factory, the output has the same shard spec as the input.
+        // Output inherits the input's shard spec; the rest of the caller's config is preserved.
+        auto mem_config = operation_attributes.output_mem_config.with_shard_spec(
+            input_tensor.memory_config().memory_layout(), shard_spec);
         return tt::tt_metal::TensorSpec(
             input_shape,
             TensorLayout::fromPaddedShape(
