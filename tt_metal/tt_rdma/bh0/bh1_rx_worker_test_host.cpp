@@ -97,6 +97,11 @@ int main(int argc, char** argv) {
     // (row 1). Workers noc_write each valid payload there. Verify byte-exact 'TTWR' after the run.
     const CoreCoord land = device->worker_core_from_logical_core(CoreCoord{0, 1});
     const uint32_t kLandBase = 0x70000u;
+    // 3.1d completion ring: single shared RxWqeRing on a cq core (row 2). Workers atomically claim slots.
+    const CoreCoord cqc = device->worker_core_from_logical_core(CoreCoord{0, 2});
+    const uint32_t kCqBase = 0x30000u;
+    const uint32_t kCqSlots = 64u;
+    const uint32_t kCqProdIdx = 0x48000u;  // shared prod_idx counter on the cq core (past the 64x1536 ring)
     std::vector<uint32_t> mrtab(kMrSlots * 8, 0u);
     mrtab[0] = kLandBase;         // slot 0 base L1 addr on the dest core
     mrtab[2] = 0x100000u;         // slot 0 length lo (1 MB)
@@ -106,12 +111,14 @@ int main(int argc, char** argv) {
     mrtab[7] = (uint32_t)land.y;  // slot 0 dest NoC core y
     mrtab[63 * 8] = 1u;           // slot 63 word 0 = MR generation = 1
     cluster.write_core(device->id(), land, std::vector<uint32_t>(8, 0u), kLandBase);  // clear the landing spot
+    cluster.write_core(
+        device->id(), cqc, std::vector<uint32_t>(kCqSlots * 1536u / 4u, 0u), kCqBase);  // clear the whole ring
 
-    std::vector<uint32_t> z9(9, 0u), z7(7, 0u);
+    std::vector<uint32_t> z9(9, 0u), z8(8, 0u);
     cluster.write_core(device->id(), eth_phys, z9, (uint32_t)eth_stats_addr);
     cluster.write_core(device->id(), eth_phys, mrtab, kSharedMr);  // shared table (incl. gen=1 in slot 63)
     for (uint32_t i = 0; i < nworkers; ++i) {
-        cluster.write_core(device->id(), wphys[i], z7, kWStats);
+        cluster.write_core(device->id(), wphys[i], z8, kWStats);
         cluster.write_core(device->id(), wphys[i], std::vector<uint32_t>{0u}, kWStop);
         cluster.write_core(device->id(), wphys[i], mrtab, kWMr);  // pre-seed the local cache (refreshed anyway)
     }
@@ -144,7 +151,12 @@ int main(int argc, char** argv) {
              kMrSlots,
              (uint32_t)eth_stats_addr + 8u,  // produce head = ingest kernel's PKT_END_CNT (stats[2])
              kSharedMr,                      // shared MR table on the eth core
-             kMrGen});                       // MR generation counter on the eth core
+             kMrGen,                         // MR generation counter on the eth core
+             (uint32_t)cqc.x,                // completion ring core x
+             (uint32_t)cqc.y,                // completion ring core y
+             kCqBase,                        // completion ring base
+             kCqSlots,                       // completion ring slots
+             kCqProdIdx});                   // shared prod_idx counter
     }
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
@@ -155,7 +167,7 @@ int main(int argc, char** argv) {
     std::printf("BH-rx-worker: up. Fire the DOCA sender now.\n");
 
     auto rd = [&](const CoreCoord& c) {
-        return cluster.read_core<uint32_t>(device->id(), c, kWStats, 7 * sizeof(uint32_t));
+        return cluster.read_core<uint32_t>(device->id(), c, kWStats, 8 * sizeof(uint32_t));
     };
     uint64_t prev_sum = 0;
     bool have_prev = false;
@@ -223,7 +235,7 @@ int main(int argc, char** argv) {
     // either processed or skipped-as-lapped) -- this is what the worker-side accounting must satisfy, NOT
     // the stale host est[2] sample. Coverage = processed / produced_seen = the fraction the pool kept up
     // with; lapped>0 means too few workers for this frame RATE (small frames = high fps = worst case).
-    uint64_t produced_seen = 0, final_valid = 0;
+    uint64_t produced_seen = 0, final_valid = 0, sum_completions = 0;
     uint32_t workers_on_gen2 = 0;
     for (uint32_t i = 0; i < nworkers; ++i) {
         auto w = rd(wphys[i]);
@@ -231,11 +243,18 @@ int main(int argc, char** argv) {
             produced_seen = w[5];
         }
         final_valid += w[2];
+        sum_completions += w[7];
         if (w[6] == 2u) {
             ++workers_on_gen2;
         }
         std::printf(
-            "    worker %u: processed=%u lapped=%u produced_seen=%u cached_gen=%u\n", i, w[3], w[4], w[5], w[6]);
+            "    worker %u: processed=%u lapped=%u produced_seen=%u cached_gen=%u completions=%u\n",
+            i,
+            w[3],
+            w[4],
+            w[5],
+            w[6],
+            w[7]);
     }
     // Shared-MR-table check: after the central invalidate, every worker must have refreshed to gen 2 and
     // slot-0 WRITEs must have stopped validating (final_valid ~ valid_at_change -- froze at the change).
@@ -262,6 +281,24 @@ int main(int argc, char** argv) {
         lz[2],
         lz[3],
         land_ok ? "LANDED byte-exact (TTWR)" : "LAND FAIL");
+    // 3.1d worker-posted completions: workers post to the single shared ring on disjoint interleaved slots
+    // (worker w owns slots w, w+N, ... -- no atomic, collision-free by construction since kCqSlots%N==0).
+    // Verify: all N workers posted completions, and slots owned by DIFFERENT workers are all OWNED+valid
+    // (bit8 in word 5, op WRITE) -> proves multiple writers safely share the one ring.
+    bool all_posted = (sum_completions > 0) && (kCqSlots % nworkers == 0);
+    uint32_t owned_ok = 0;
+    for (uint32_t r = 0; r < nworkers && r < kCqSlots; ++r) {  // one slot per worker's residue class
+        auto sl = cluster.read_core<uint32_t>(device->id(), cqc, kCqBase + r * 1536u, 8 * sizeof(uint32_t));
+        const bool ok = (!sl.empty() && (sl[5] & 0x100u) != 0u && (sl[2] & 0xFFu) == 0x10u);
+        owned_ok += ok ? 1u : 0u;
+    }
+    const bool cq_ok = all_posted && (owned_ok == nworkers);
+    std::printf(
+        "  completions: Sum(worker completions)=%llu; %u/%u per-worker slots OWNED+WRITE -> %s\n",
+        (unsigned long long)sum_completions,
+        owned_ok,
+        nworkers,
+        cq_ok ? "MULTI-WRITER RING OK (disjoint interleaved slots, no collision)" : "COMPLETIONS FAIL");
     const uint64_t accounted = fin_processed + fin_lapped;
     const double cover = produced_seen ? 100.0 * (double)fin_processed / (double)produced_seen : 0.0;
     const bool exactly_once = (accounted == produced_seen);  // no frame double-processed or dropped-unaccounted

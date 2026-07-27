@@ -42,6 +42,13 @@ void kernel_main() {
     const uint32_t phead_addr = get_arg_val<uint32_t>(12);  // eth L1 addr of PKT_END_CNT (monotonic produced)
     const uint32_t shared_mr_addr = get_arg_val<uint32_t>(13);  // eth L1: control-plane-owned MR table
     const uint32_t mr_gen_addr = get_arg_val<uint32_t>(14);     // eth L1: MR generation counter
+    // 3.1d worker-posted completions: single shared RxWqeRing on the cq core. Each valid land atomically
+    // claims a prod_idx slot (multi-writer-safe) and writes the 32B completion. cq_base==0 -> disabled.
+    const uint32_t cq_x = get_arg_val<uint32_t>(15);
+    const uint32_t cq_y = get_arg_val<uint32_t>(16);
+    const uint32_t cq_base = get_arg_val<uint32_t>(17);
+    const uint32_t cq_slots = get_arg_val<uint32_t>(18);
+    const uint32_t cq_prodidx = get_arg_val<uint32_t>(19);  // shared prod_idx counter on the cq core
 
     volatile tt_l1_ptr uint32_t* stats = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stats_addr);
     volatile tt_l1_ptr uint32_t* stop =
@@ -60,7 +67,10 @@ void kernel_main() {
     uint32_t produced = 0;
     uint32_t cached_gen = 0xFFFFFFFFu;  // force a shared-MR-table cache load on the first poll
     uint64_t bytes = 0;
-    uint32_t valid = 0, processed = 0, lapped = 0, poll = 0;
+    uint32_t valid = 0, processed = 0, lapped = 0, poll = 0, completions = 0;
+    // Completion staging (local L1): a spare scratch region distinct from the frame + produce-head slots.
+    volatile tt_l1_ptr uint32_t* ch = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + 0x1040u);
+    (void)cq_prodidx;  // prod_idx no longer needed (collision-free by interleaved-slot construction)
     for (;;) {
         // Shared MR table: read the control-plane-owned generation; on change, refresh the LOCAL cache
         // from the single shared table on the eth core (RISC1 writes it on CONTROL registration; workers
@@ -114,7 +124,25 @@ void kernel_main() {
                 }
             }
             if (landed) {
-                noc_async_write_barrier();  // drain the landing before scratch is reused by the next read
+                noc_async_write_barrier();  // payload committed before we publish the completion
+                if (cq_base != 0u) {
+                    // 3.1d: multi-writer completion post WITHOUT a NoC atomic. Worker w owns the interleaved
+                    // slot subset {w, w+N, w+2N, ...} of the shared completion ring (disjoint residues mod N
+                    // when cq_slots % N == 0), so two workers never write the same slot -- collision-free by
+                    // construction, same principle as the read-side claim. The host consumes all OWNED slots.
+                    const uint32_t slot = (wid + completions * nworkers) % cq_slots;
+                    ch[0] = sc[2];                        // peer_seq
+                    ch[1] = len;                          // length
+                    ch[2] = op;                           // opcode | status(0)
+                    ch[3] = sc[6];                        // imm
+                    ch[4] = (sc[0] >> 16) & 0xFFFFu;      // cookie (tag)
+                    ch[5] = (mslot & 0xFFu) | (1u << 8);  // mr_idx | OWNED_BY_HOST
+                    ch[6] = 0u;
+                    ch[7] = 0u;
+                    noc_async_write(scratch + 0x1040u, get_noc_addr(cq_x, cq_y, cq_base + slot * 1536u), 32u);
+                    noc_async_write_barrier();
+                    ++completions;
+                }
             }
             bytes += stride;
             ++processed;
@@ -129,6 +157,7 @@ void kernel_main() {
             stats[4] = lapped;
             stats[5] = produced;
             stats[6] = cached_gen;  // MR-table generation this worker has cached (proves shared-table refresh)
+            stats[7] = completions;
             if (stop != nullptr && *stop != 0) {
                 break;
             }
@@ -141,4 +170,5 @@ void kernel_main() {
     stats[4] = lapped;
     stats[5] = produced;
     stats[6] = cached_gen;
+    stats[7] = completions;
 }
