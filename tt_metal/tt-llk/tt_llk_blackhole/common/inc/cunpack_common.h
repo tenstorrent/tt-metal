@@ -706,7 +706,7 @@ __attribute__((noinline, optimize("no-jump-tables"))) bool is_unpacker_format_co
     }
 }
 
-template <bool is_fp32_dest_acc_en, bool row_pool = false, bool fpu_srnd_en = false, bool pack_srnd_en = false, bool disable_src_zero_flag = false>
+template <bool is_fp32_dest_acc_en, bool row_pool = false, bool fpu_srnd_en = false, bool pack_srnd_en = false>
 inline void configure_unpack_AB(
     const std::uint32_t unpA_src_format,
     const std::uint32_t unpB_src_format,
