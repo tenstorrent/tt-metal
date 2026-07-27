@@ -351,6 +351,18 @@ class Glm4MoeLitePrefetcherSetup:
 
         Do NOT synchronize: the prefetcher fills the GlobalCB and then stalls with no
         consumer, so synchronize_device would hang. Just free the garbage output.
+
+        ORDERING TRAP -- this is only safe when the NEXT thing to execute contains
+        consumers of the GlobalCB. dram_prefetcher stalls until something drains it, so
+
+            compile_prefetch(); start_prefetch()      # <-- DEADLOCKS
+
+        with no consuming matmul in between. Verified the hard way: 2935% CPU spin and
+        a Galaxy reset. The traced model path is safe because start_prefetch() is issued
+        inside trace capture, which records rather than executes, and the compile-time
+        stall drains when the traced consumers replay. Any non-traced use (unit tests,
+        bring-up scripts) must skip compile_prefetch entirely and issue exactly one
+        start_prefetch immediately followed by its matmuls.
         """
         assert self._tt_tensors is not None, "call ensure_ready() before compile_prefetch()"
         self.mesh_device.set_sub_device_stall_group([self.prefetcher_sub_device_id, self.worker_sub_device_id])
@@ -374,16 +386,30 @@ class Glm4MoeLitePrefetcherSetup:
         ttnn.deallocate(garbage)
 
     def teardown(self):
-        """Reset the SubDevice manager (restore full-grid dispatch)."""
+        """Restore full-grid dispatch by unloading and removing the SubDevice manager.
+
+        Order matters: a loaded manager cannot be removed. Skipping
+        clear_loaded_sub_device_manager() makes remove fail with
+        "Cannot remove active sub device manager", which -- if swallowed -- silently
+        leaves every subsequent op confined to worker columns 0-5. That is a
+        particularly nasty failure for this model, because prefill needs the full grid.
+
+        Exceptions are logged rather than dropped, for the same reason: this ran
+        "successfully" for a while purely because the failure was being hidden.
+        """
         try:
             self.mesh_device.reset_sub_device_stall_group()
-        except Exception:
-            pass
+        except Exception as e:  # pragma: no cover - device state dependent
+            logger.warning("Flash prefetcher: reset_sub_device_stall_group failed: {}", e)
         if self.mesh_sub_device_manager_id is not None:
             try:
+                self.mesh_device.clear_loaded_sub_device_manager()
+            except Exception as e:  # pragma: no cover
+                logger.warning("Flash prefetcher: clear_loaded_sub_device_manager failed: {}", e)
+            try:
                 self.mesh_device.remove_sub_device_manager(self.mesh_sub_device_manager_id)
-            except Exception:
-                pass
+            except Exception as e:  # pragma: no cover
+                logger.warning("Flash prefetcher: remove_sub_device_manager failed: {}", e)
         self.mesh_sub_device_manager_id = None
         self._sub_device_loaded = False
         self._tt_tensors = None

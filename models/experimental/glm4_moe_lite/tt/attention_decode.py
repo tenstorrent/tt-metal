@@ -336,10 +336,16 @@ def flash_mla_and_output(
     page_table_tt: ttnn.Tensor,
     tt_positions: ttnn.Tensor,
     profile: dict[str, float] | None = None,
+    prefetch: Any | None = None,
 ) -> ttnn.Tensor:
     """Run FlashMLA decode, then kv_b2 + head-flatten + w_o.
 
     Returns attn_out [1,1,B,hidden].
+
+    `prefetch` is a live Glm4MoeLitePrefetcherSetup (or None). When supplied, w_o is
+    read from the GlobalCB via a gather_in0 ring matmul instead of DRAM. Only o_proj
+    is routed this way: it is the largest 2D decode weight and the only MLA weight
+    whose tile shape admits the 16-core ring (see prefetcher_setup.ring_feasibility).
     """
     kvpe_dim = int(hparams.kv_lora_rank + hparams.qk_rope_head_dim)
     num_heads = int(hparams.num_attention_heads)
@@ -554,8 +560,14 @@ def flash_mla_and_output(
             v = ttnn.permute(v, (0, 2, 1, 3))
             v = ttnn.reshape(v, (1, batch, 1, int(num_heads * hparams.v_head_dim)))
             v = ttnn.permute(v, (0, 2, 1, 3))
-        attn_out = attn_linear(v, w.w_o, device=device, cfg=cfg)
+        attn_out = attn_linear(v, w.w_o, device=device, cfg=cfg, prefetch=prefetch)
         ttnn.deallocate(v, force=False)
+        if prefetch is not None:
+            # The ring matmul returns a WIDTH_SHARDED-on-ring-cores tensor; the rest of
+            # the decode path expects the ordinary interleaved decode activation layout.
+            attn_out_ring = attn_out
+            attn_out = ttnn.to_memory_config(attn_out_ring, cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(attn_out_ring, force=False)
 
     _profile_add(profile, "attn_out_s", time.perf_counter() - t0 if profile is not None else 0.0)
     return attn_out

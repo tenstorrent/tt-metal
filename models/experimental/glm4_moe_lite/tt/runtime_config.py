@@ -99,6 +99,13 @@ class Glm4RuntimeConfig:
     dram_sharded_mlp: bool
     sharded_mlp: bool
 
+    # --- GlobalCB DRAM weight prefetch ---
+    # Off by default: requires the SubDevice split, which confines every decode op to
+    # worker columns 0-5. The live prefetcher state (GlobalCB, sub-device id, ring
+    # program/memory configs) is carried on the mutable Glm4MoeLitePrefetcherSetup
+    # object, since this dataclass is frozen.
+    prefetch: bool
+
     # --- Matmul config ---
     explicit_prog_cfg: bool
 
@@ -176,6 +183,7 @@ class Glm4RuntimeConfig:
             dram_sharded_attn=dram_sharded and _env_bool("GLM4_MOE_LITE_DRAM_SHARDED_ATTN"),
             dram_sharded_mlp=dram_sharded_mlp_val,
             sharded_mlp=sharded_mlp_standalone,
+            prefetch=_env_bool("GLM4_MOE_LITE_PREFETCH"),
             # Matmul config. The helper only applies this to one-tile, non-batched
             # matmuls; validated on Galaxy B1 at 58.1 -> 54.2 ms/token.
             explicit_prog_cfg=_env_bool("GLM4_MOE_LITE_EXPLICIT_PROG_CFG", default=True),

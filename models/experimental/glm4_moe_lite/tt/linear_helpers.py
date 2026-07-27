@@ -291,6 +291,48 @@ def dram_sharded_mlp(
     return result_dram
 
 
+def ring_prefetch_linear(
+    a: ttnn.Tensor,
+    b: ttnn.Tensor,
+    *,
+    program_config: Any,
+    input_mem_cfg: ttnn.MemoryConfig,
+    output_mem_cfg: ttnn.MemoryConfig,
+    global_cb: Any,
+    sub_device_id: Any,
+    compute_kernel_config: Any,
+    dtype: ttnn.DataType = ttnn.bfloat16,
+) -> ttnn.Tensor:
+    """gather_in0 ring matmul consuming weights streamed into a GlobalCB.
+
+    Three things differ from the ordinary decode path and all three matter:
+
+    - `ttnn.matmul`, NOT `ttnn.linear`. gather_in0 has no bias support; any bias must
+      be applied separately afterwards. (Flash's attention projections are bias-free,
+      so there is nothing to re-apply here.)
+    - the activation must be resharded to WIDTH_SHARDED on exactly the ring cores, so
+      the matmul's CB core set is a subset of global_cb.all_cores().
+    - the output memory config is explicit and also ring-sharded.
+
+    The program config must come from Glm4MoeLitePrefetcherSetup.make_ring_config,
+    which enforces that the ring width divides both matmul dimensions. A ring that
+    does not divide deadlocks on device rather than raising -- never hand-build one.
+    """
+    a_ring = ttnn.to_memory_config(a, input_mem_cfg)
+    out = ttnn.matmul(
+        a_ring,
+        b,
+        program_config=program_config,
+        memory_config=output_mem_cfg,
+        compute_kernel_config=compute_kernel_config,
+        global_cb=global_cb,
+        sub_device_id=sub_device_id,
+        dtype=dtype,
+    )
+    ttnn.deallocate(a_ring, force=False)
+    return out
+
+
 def attn_linear(
     a: ttnn.Tensor,
     b: ttnn.Tensor,
@@ -298,12 +340,29 @@ def attn_linear(
     device: Any,
     cfg: Glm4RuntimeConfig,
     force_no_tp: bool = False,
+    prefetch: Any | None = None,
 ) -> ttnn.Tensor:
     """Attention projection linear. Routes to DRAM-sharded or standard path based on config.
 
     When force_no_tp=True, skip mesh_partition and all_reduce (weight is replicated).
+
+    `prefetch` is a Glm4MoeLitePrefetcherSetup whose GlobalCB holds this weight; when
+    supplied the ring path is used. Only wired for o_proj today -- the caller decides,
+    because only some weights admit a legal ring (see ring_feasibility).
     """
     use_tp = cfg.tp_enabled and not force_no_tp
+    if prefetch is not None:
+        assert not use_tp, "ring prefetch is not supported with TP (weights must be replicated)"
+        return ring_prefetch_linear(
+            a,
+            b,
+            program_config=prefetch.oproj_program_config,
+            input_mem_cfg=prefetch.oproj_input_mem_cfg,
+            output_mem_cfg=prefetch.oproj_output_mem_cfg,
+            global_cb=prefetch.global_circular_buffer,
+            sub_device_id=prefetch.worker_sub_device_id,
+            compute_kernel_config=cfg.mlp_compute_kernel_config(),
+        )
     if cfg.dram_sharded_attn:
         if use_tp:
             a_tp = ttnn.mesh_partition(a, dim=3, cluster_axis=cfg.tp_axis)
