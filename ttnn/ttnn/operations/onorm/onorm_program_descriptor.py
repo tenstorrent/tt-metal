@@ -60,6 +60,35 @@ DM_DEPTH = 4
 # L1. This stays a live knob for a future shape where the reader IS the bound.
 O_DEPTH = 2
 
+# --- P7b sigmoid engine (Refinement 1) ---
+# `sigmoid(gate)` is the op's whole SFPU volume: `flat_tiles_per_block` tile-ops
+# per token-block, all of them issued by ONE TRISC.  This knob names which one.
+#
+#   "math"   -- sigmoid_tile on the MATH thread, inside the `unary<Sigmoid<>>`
+#               eltwise chain.  The Phase-0 shape; the default.
+#   "pack"   -- sigmoid_tile_pack on the PACK thread (TRISC2) at the chain's pack
+#               stage, via `apply_activation_from_pack`.  Same arithmetic (the
+#               same LLK 6-entry LUT), different issuing thread.
+#   "ablate" -- MEASUREMENT ONLY.  Drops the sigmoid entirely and copies `gate`
+#               straight through, keeping every CB wait/push, every DEST window
+#               and every NoC transfer identical.  The output is NUMERICALLY
+#               WRONG by construction; this exists so `/perf-measure`'s ablation
+#               method can price the SFPU payload against the surrounding
+#               scaffolding.  Never a shipping setting -- `validate_knobs()` in
+#               onorm.py is what keeps it out of the public entry point.
+SIGMOID_ENGINE = "math"
+
+# Wire codes for SIGMOID_ENGINE.  The kernel branches on the integer; this dict
+# is the single source of truth for the mapping (the kernel's ONORM_SIGMOID_*
+# defines are emitted from it below, so neither side restates a literal).
+_SIGMOID_ENGINE_CODES = {"math": 0, "pack": 1, "ablate": 2}
+
+# Ablation guard.  "ablate" produces WRONG output by construction, so it must be
+# opted into explicitly *as well as* selected.  A stray SIGMOID_ENGINE="ablate"
+# left behind in a config therefore fails loudly at descriptor-build time rather
+# than silently shipping garbage from the public entry point.
+ALLOW_SIGMOID_ABLATION = False
+
 # --- hardware tile geometry (not a knob) ---
 TILE_H = 32
 TILE_W = 32
@@ -115,6 +144,13 @@ _CB_SLOTS = {
     "ONORM_CB_GATE_SIG": CB_GATE_SIG,
 }
 _CB_DEFINES = [(name, str(index)) for name, index in _CB_SLOTS.items()]
+
+# The SIGMOID_ENGINE wire codes travel the same way as the CB slot map: emitted
+# as preprocessor defines from this one dict, so the kernel's `if constexpr`
+# ladder compares against names, never against re-typed integers.
+_SIGMOID_DEFINES = [(f"ONORM_SIGMOID_{name.upper()}", str(code)) for name, code in _SIGMOID_ENGINE_CODES.items()]
+
+_KERNEL_DEFINES = _CB_DEFINES + _SIGMOID_DEFINES
 
 
 def _div_up(a: int, b: int) -> int:
@@ -220,6 +256,16 @@ def create_program_descriptor(
         f"GATE_CHUNK_TILES={GATE_CHUNK_TILES} must divide the block's " f"{flat_tiles_per_block} flat output tiles"
     )
     assert 1 <= DM_BLOCK_TILES <= 8, "DM_BLOCK_TILES is a 1..8 knob"
+    assert SIGMOID_ENGINE in _SIGMOID_ENGINE_CODES, (
+        f"onorm: SIGMOID_ENGINE={SIGMOID_ENGINE!r} is not one of "
+        f"{sorted(_SIGMOID_ENGINE_CODES)}. 'math' and 'pack' are the two shipping "
+        f"engines; 'ablate' is a measurement-only setting that produces WRONG output."
+    )
+    assert SIGMOID_ENGINE != "ablate" or ALLOW_SIGMOID_ABLATION, (
+        "onorm: SIGMOID_ENGINE='ablate' drops the sigmoid and produces NUMERICALLY "
+        "WRONG output. It exists only for /perf-measure ablation profiling. Set "
+        "onorm_program_descriptor.ALLOW_SIGMOID_ABLATION = True to opt in."
+    )
     assert DM_DEPTH >= 2 and O_DEPTH >= 2, "streaming depths must be >= 2 to overlap read with compute"
     # `o`'s token axis is un-padded (tiled dims are (HV, V)) while gate/out's IS
     # tile-padded (tiled dims are (T, FLAT)).  T % TOKENS_PER_BLOCK == 0 is what
@@ -339,6 +385,7 @@ def create_program_descriptor(
         tile_rows_per_block,
         GATE_CHUNK_TILES,
         gate_chunks_per_block,
+        _SIGMOID_ENGINE_CODES[SIGMOID_ENGINE],
     ]
 
     o_addr = o.buffer_address()
@@ -359,7 +406,7 @@ def create_program_descriptor(
         kernel_source=str(KERNEL_DIR / "onorm_reader.cpp"),
         core_ranges=all_cores,
         compile_time_args=reader_ct_args,
-        defines=_CB_DEFINES,
+        defines=_KERNEL_DEFINES,
         runtime_args=reader_rt_args,
         config=ttnn.ReaderConfigDescriptor(),
     )
@@ -367,7 +414,7 @@ def create_program_descriptor(
         kernel_source=str(KERNEL_DIR / "onorm_writer.cpp"),
         core_ranges=all_cores,
         compile_time_args=writer_ct_args,
-        defines=_CB_DEFINES,
+        defines=_KERNEL_DEFINES,
         runtime_args=writer_rt_args,
         config=ttnn.WriterConfigDescriptor(),
     )
@@ -375,7 +422,7 @@ def create_program_descriptor(
         kernel_source=str(KERNEL_DIR / "onorm_compute.cpp"),
         core_ranges=all_cores,
         compile_time_args=compute_ct_args,
-        defines=_CB_DEFINES,
+        defines=_KERNEL_DEFINES,
         runtime_args=compute_rt_args,
         config=_compute_config_descriptor(compute_kernel_config),
     )

@@ -136,7 +136,12 @@ struct ActivationApplyHelper {
             relu_max_tile_pack(tile_index, max);
         } else if constexpr (ACT == KernelActivation::SIGMOID) {
             // Enhanced: PARAM0 is vector mode, PARAM1 is fast_approximate
-            constexpr int vec_mode = (PARAM0 == 1) ? VectorMode::R : (PARAM0 == 2) ? VectorMode::C : VectorMode::RC;
+            // `VectorMode` is a scoped enum and `sigmoid_tile_pack`'s first template
+            // parameter is typed `VectorMode` — deducing this as `int` made the
+            // SIGMOID branch fail to compile the moment it was instantiated.
+            constexpr VectorMode vec_mode = (PARAM0 == 1)   ? VectorMode::R
+                                            : (PARAM0 == 2) ? VectorMode::C
+                                                            : VectorMode::RC;
             sigmoid_tile_pack<vec_mode, PARAM1 != 0>(tile_index);
         } else if constexpr (ACT == KernelActivation::HARDSIGMOID) {
             hardsigmoid_tile_pack(tile_index);
