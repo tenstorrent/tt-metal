@@ -118,6 +118,10 @@ def make_rope_tensors(
         "trans_matrix": trans,
         "cos_matrix_host": cos_host,
         "sin_matrix_host": sin_host,
+        # Needed by the GlobalCB prefetch path, which builds the decode RoPE inputs on
+        # host: ttnn.repeat (used to tile this per user) is a full-grid op and cannot be
+        # confined to the worker SubDevice.
+        "trans_matrix_host": trans_t.cpu(),
     }
 
 

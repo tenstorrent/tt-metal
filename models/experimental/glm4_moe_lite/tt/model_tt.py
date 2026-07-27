@@ -1471,6 +1471,11 @@ class Glm4MoeLiteDenseOnlyTT:
                 trans_matrix=self.rope["trans_matrix"],
                 batch=active,
                 rope_dim=int(self.hparams.qk_rope_head_dim),
+                # Under prefetch, build these on host: the device path uses transpose and
+                # repeat, which cannot be confined to the worker SubDevice.
+                host_rope=self.rope if self.prefetcher is not None else None,
+                positions=positions if self.prefetcher is not None else None,
+                max_grid_x=WORKER_GRID_X if self.prefetcher is not None else None,
             )
         if profile_on:
             decode_profile["prep_inputs_s"] = decode_profile.get("prep_inputs_s", 0.0) + (time.perf_counter() - t0)

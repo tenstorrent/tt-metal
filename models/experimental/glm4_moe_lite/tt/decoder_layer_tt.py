@@ -107,8 +107,22 @@ def prepare_decode_rope_inputs_for_rotary_llama_decode_mode_tt(
     trans_matrix: ttnn.Tensor,  # [1,1,32,32] TILE
     batch: int,
     rope_dim: int,
+    host_rope: dict | None = None,
+    positions: torch.Tensor | None = None,
+    max_grid_x: int | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.MemoryConfig]:
-    """Prepare HEIGHT_SHARDED cos/sin/trans inputs for decode-mode rotary_embedding_llama."""
+    """Prepare HEIGHT_SHARDED cos/sin/trans inputs for decode-mode rotary_embedding_llama.
+
+    host_rope / positions / max_grid_x are for the GlobalCB prefetch path. Under the
+    worker SubDevice the device-side construction below cannot be used at all: it goes
+    through ttnn.transpose (for cos/sin) and ttnn.repeat (to tile trans_matrix per user),
+    neither of which accepts a core-grid argument, so both take the full grid and fail
+    with "Kernel group cores do not match sub device cores".
+
+    Given host copies of the cos/sin matrices and the trans matrix, the same tensors are
+    built directly in the target sharded layout by a plain host->device write, which
+    involves no compute op and so no grid at all. The payload is tiny (batch x rope_dim).
+    """
     batch = int(batch)
     rope_dim = int(rope_dim)
     if batch <= 0:
@@ -117,6 +131,11 @@ def prepare_decode_rope_inputs_for_rotary_llama_decode_mode_tt(
         raise ValueError("rope_dim must be > 0")
 
     grid_size = device.compute_with_storage_grid_size()
+    if max_grid_x is not None:
+        # Confine the per-user core set to the worker rectangle. num_cores_to_corerangeset
+        # lays cores out row-wise across the grid width, so an unclamped width puts users
+        # >= 6 onto the sender columns.
+        grid_size = ttnn.CoreCoord(min(int(grid_size.x), int(max_grid_x)), int(grid_size.y))
     user_grid = ttnn.num_cores_to_corerangeset(int(batch), grid_size, row_wise=True)
 
     rope_sharded_cfg = ttnn.create_sharded_memory_config(
@@ -126,6 +145,49 @@ def prepare_decode_rope_inputs_for_rotary_llama_decode_mode_tt(
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
+
+    trans_mat_mem_config = ttnn.create_sharded_memory_config(
+        shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
+        core_grid=user_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    if host_rope is not None:
+        if positions is None:
+            raise ValueError("positions is required when host_rope is provided")
+        is_mesh = device.__class__.__name__ == "MeshDevice"
+        mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh else None
+        idx = positions.to(torch.int64).clamp_min(0).reshape(-1)[:batch]
+
+        def _host_sharded(matrix_host: torch.Tensor) -> ttnn.Tensor:
+            # [1,1,S,D] -> gather B rows -> [1,B,1,D], the post-transpose decode layout.
+            rows = matrix_host.reshape(-1, rope_dim)[idx]
+            rows = rows.reshape(1, batch, 1, rope_dim).to(torch.bfloat16)
+            return ttnn.from_torch(
+                rows,
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=rope_sharded_cfg,
+                mesh_mapper=mapper,
+            )
+
+        cos_decode = _host_sharded(host_rope["cos_matrix_host"])
+        sin_decode = _host_sharded(host_rope["sin_matrix_host"])
+        # Tile the 32x32 transform per user on host instead of via ttnn.repeat.
+        trans_host = host_rope["trans_matrix_host"].reshape(1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE)
+        trans_rep = trans_host.expand(1, batch, ttnn.TILE_SIZE, ttnn.TILE_SIZE).contiguous().to(torch.bfloat16)
+        trans_decode = ttnn.from_torch(
+            trans_rep,
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=trans_mat_mem_config,
+            mesh_mapper=mapper,
+        )
+        return cos_decode, sin_decode, trans_decode, rope_sharded_cfg
 
     # Match the DeepSeek decode pattern:
     # - Input cos/sin from gather/embedding is [1, 1, B, rope_dim]
@@ -138,13 +200,6 @@ def prepare_decode_rope_inputs_for_rotary_llama_decode_mode_tt(
     cos_decode = ttnn.interleaved_to_sharded(cos_decode, rope_sharded_cfg)
     sin_decode = ttnn.interleaved_to_sharded(sin_decode, rope_sharded_cfg)
 
-    trans_mat_mem_config = ttnn.create_sharded_memory_config(
-        shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
-        core_grid=user_grid,
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
     trans_decode = ttnn.repeat(trans_matrix, ttnn.Shape((1, 1, batch, 1)))
     trans_decode = ttnn.interleaved_to_sharded(trans_decode, trans_mat_mem_config)
 
