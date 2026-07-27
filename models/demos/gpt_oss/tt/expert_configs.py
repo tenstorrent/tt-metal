@@ -27,9 +27,12 @@ class GPTOSSProgramConfig(ProgramConfig):
     decode_down_in0_block_w: int = 12
 
     # Prefill
-    prefill_gate_up_cores: tuple[int, int] = (3, 4)
+    # Same 2880x2880 expert GEMM as decode (Nt=90); on single p150 (TP=1) the old
+    # galaxy grids (12/30 cores) left prefill sparse_matmul at ~7.3ms/3.9ms per op
+    # (tracy: 888ms = ~80% of device time). Match decode's 90-core (10x9) grid.
+    prefill_gate_up_cores: tuple[int, int] = (10, 9)
     prefill_gate_up_in0_block_w: int = 30
-    prefill_down_cores: tuple[int, int] = (5, 6)
+    prefill_down_cores: tuple[int, int] = (10, 9)
     prefill_down_in0_block_w: int = 12
 
     # Memory
