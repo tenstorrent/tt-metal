@@ -354,6 +354,24 @@ _MATERIAL_GAP_ENV_SET = "PERF_MCP_MATERIAL_GAP_MS" in os.environ
 _MATERIAL_GAP_FRAC = float(os.environ.get("PERF_MCP_MATERIAL_GAP_FRAC", "0.03"))
 _MATERIAL_GAP_FLOOR = float(os.environ.get("PERF_MCP_MATERIAL_GAP_FLOOR", "0.05"))
 _MAX_KNOB_RETRIES = int(os.environ.get("PERF_MCP_MAX_KNOB_RETRIES", "2"))
+
+_KNOB_ORDER = {
+    "memory": ("grid", "dtype", "shard", "fidelity"),
+    "compute": ("grid", "fidelity", "dtype", "shard"),
+    "dispatch": ("grid", "fidelity", "dtype", "shard"),
+    "": ("grid", "dtype", "shard", "fidelity"),
+}
+
+_KNOB_REASON = {
+    "grid": lambda g, f, w: "occupy the FULL core grid (grid=%s) via a full-grid program_config; "
+    "record_kernel_attempt(...,'grid',...) even on a no-gain" % (g or "unknown"),
+    "fidelity": lambda g, f, w: "lower the math fidelity (now %s) HiFi4->HiFi2->LoFi; "
+    "record_kernel_attempt(...,'fidelity',...) to mark it tried (even on a PCC revert / no-gain)" % (f or "unknown"),
+    "dtype": lambda g, f, w: "lower the weight dtype (now %s) to bf8_b/bf4_b; "
+    "record_kernel_attempt(...,'dtype',...) even on a PCC revert / no-gain" % (w or "unknown"),
+    "shard": lambda g, f, w: "shard this op's weights/activations into L1 (height/width shard) to cut DRAM "
+    "reads; record_kernel_attempt(...,'shard',...) to mark it tried (even on a no-gain)",
+}
 _MAX_KERNEL_WEDGES = int(os.environ.get("PERF_MCP_MAX_KERNEL_WEDGES", "3"))
 
 
@@ -850,6 +868,21 @@ def _trace_compat_feedback(raw_reason: str) -> str:
 def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool, str, str]:
     """DETERMINISTIC ladder gate for ONE open op. Returns (done, rung, reason).
 
+    bound_by sets PRIORITY, never MEMBERSHIP. The bound-conditional gates below decide which rung is
+    tried FIRST -- fidelity speeds the math engine, so it cannot help an op waiting on DRAM bytes and
+    should not lead there. They must not decide which rungs are tried AT ALL: bound_by is a roofline
+    ESTIMATE, ops are rarely purely one-bound, and `compute` is only ever computed for matmuls, so no
+    reduction/eltwise op can be compute-bound however it behaves. Used as a filter, that silently
+    deleted levers for a whole run -- llama3_1_8b_p150 recorded 0 fidelity attempts across 133, and
+    its two costliest ops (TopK, 631ms + 489ms at HiFi2) were structurally ineligible for the rung.
+    It also dropped every knob for dispatch-bound ops, which matched no gate at all.
+
+    So after the bound-appropriate rungs are exhausted, the completeness sweep offers each remaining
+    knob ONCE (not _MAX_KNOB_RETRIES -- a floor, not a second search) before the op may clear. This
+    is the rule record_kernel_attempt already applies to the expensive kernel rungs: a measured
+    attempt REPLACES "I reasoned it won't help". The cheapest knob on the ladder should not be the
+    only one exempt from it. Host-bucket entries stay exempt: they are not device ops.
+
     The optimize ladder is knob -> fusion -> tt-lang -> C++. This enforces the climb ORDER from the
     op's OWN profile tags + the recorded kernel attempts — the agent CANNOT skip a rung, and a kernel
     attempt does NOT clear an op while a cheaper lever is still untried. An op is DONE only when the
@@ -901,31 +934,29 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
             "This does NOT clear a repeat_prefill RECOMPUTE gap: if the generation_loop 'kv-cache' target is still "
             "blocking, the residual here is redundant recompute, reducible ONLY by a KV-cache (NOT irreducible).",
         )
-    # BOX (1) KNOBS — exhaust the cheap levers IN ORDER before any kernel. A knob is satisfied when
-    # the profile tag shows it applied, OR a record_kernel_attempt of that knob-kind is on file (so a
-    # PCC-failed/ineffective knob can be marked 'tried' and not loop forever).
-    if grid and grid != "full" and grid_tries < _MAX_KNOB_RETRIES:
-        return (False, "knob:grid", f"occupy the FULL core grid (grid={grid}) via a full-grid program_config")
-    if bound == "compute" and fidelity_tries < _MAX_KNOB_RETRIES:
-        return (
-            False,
-            "knob:fidelity",
-            f"lower the math fidelity (now {fidelity or 'unknown'}) HiFi4->HiFi2->LoFi on this compute-bound op; "
-            "record_kernel_attempt(...,'fidelity',...) to mark it tried (even on a PCC revert / no-gain)",
-        )
-    if is_matmul and bound == "memory" and wdtype not in ("bf8_b", "bf4_b") and dtype_tries < _MAX_KNOB_RETRIES:
-        return (
-            False,
-            "knob:dtype",
-            f"lower the weight dtype (now {wdtype or 'unknown'}) to bf8_b/bf4_b; if PCC fails, record_kernel_attempt(...,'dtype',...) to mark it tried",
-        )
-    if bound == "memory" and shard_tries < _MAX_KNOB_RETRIES:
-        return (
-            False,
-            "knob:shard",
-            "shard this memory-bound op's weights/activations into L1 (height/width shard) to cut DRAM reads; "
-            "record_kernel_attempt(...,'shard',...) to mark it tried (even on a no-gain)",
-        )
+    tries = {"grid": grid_tries, "fidelity": fidelity_tries, "dtype": dtype_tries, "shard": shard_tries}
+    applicable = {
+        "grid": grid != "full",
+        "fidelity": True,
+        "dtype": is_matmul,
+        "shard": True,
+    }
+    preferred = {
+        "grid": True,
+        "fidelity": bound == "compute",
+        "dtype": bound == "memory" and is_matmul and wdtype not in ("bf8_b", "bf4_b"),
+        "shard": bound == "memory",
+    }
+    order = _KNOB_ORDER.get(bound) or _KNOB_ORDER[""]
+    for want_preferred in (True, False):
+        for knob in order:
+            if not applicable[knob] or preferred[knob] is not want_preferred:
+                continue
+            if tries[knob] >= (_MAX_KNOB_RETRIES if want_preferred else 1):
+                continue
+            lead = "" if want_preferred else "LOW-PRIORITY SWEEP (bound_by=%s): " % (bound or "unknown")
+            return (False, "knob:" + knob, lead + _KNOB_REASON[knob](grid, fidelity, wdtype))
+
     if _tp_candidate(open_op, op_code) and "tp-fracture" not in kinds:
         return (
             False,

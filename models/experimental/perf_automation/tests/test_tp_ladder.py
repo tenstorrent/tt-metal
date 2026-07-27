@@ -14,6 +14,8 @@ _KERNELS_DONE = [
 _KNOBS_DONE = [
     {"op_signature": "MatmulDeviceOperation", "kernel_kind": "shard"},
     {"op_signature": "MatmulDeviceOperation", "kernel_kind": "shard"},
+    {"op_signature": "MatmulDeviceOperation", "kernel_kind": "fidelity"},
+    {"op_signature": "MatmulDeviceOperation", "kernel_kind": "dtype"},
 ]
 _ALL_DONE = _KNOBS_DONE + _KERNELS_DONE
 _MATMUL = {"grid": "full", "weight_dtype": "bf8_b", "bound_by": "memory"}
