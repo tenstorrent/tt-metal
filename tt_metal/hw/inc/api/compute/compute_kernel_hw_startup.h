@@ -77,9 +77,12 @@ enum class SrcOrder : uint8_t {
 template <SrcOrder src_order = SrcOrder::Regular>
 ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
 #ifdef ARCH_QUASAR
-    // Bump the MOP timeout once at the top of every compute kernel (runs on all compute threads; 0x40000
-    // is enough headroom for the slow-producer stalls without the excess of 1M cycles).
-    asm volatile("csrw %0, %1" : : "i"(CSR_TIMEOUT_COUNT), "r"(0x40000));
+    // Bump the MOP timeout once at the top of every compute kernel (runs on all compute threads). 0x40000
+    // was enough for the wide-tilize/pool cases, but the sliced-stem Program-B matmul intermittently stalls
+    // longer (a #47797-family NOC-ack race: MATH waits on operands that sometimes don't arrive), tripping
+    // 0x19 at 0x40000. [#48552] Bumped to 0x100000 to give the race more slack -- a MITIGATION, not a fix
+    // (a true frozen-NOC hang would still trip eventually; real fix is the runtime #47797 NOC-ack work).
+    asm volatile("csrw %0, %1" : : "i"(CSR_TIMEOUT_COUNT), "r"(0x100000));
 #endif
     // Map the operands onto the physical source registers. For SrcOrder::Reverse (matmul) in0 (icb0)
     // lands in SrcB and in1 (icb1) lands in SrcA, so the per-source state below is programmed with the
