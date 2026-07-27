@@ -476,6 +476,8 @@ int main(int argc, char** argv) {
         uint32_t bcx0 = 0, bcy0 = 0, bcx1 = 0, bcy1 = 0;  // this band's logical column range (full cy)
         uint32_t num_cores = 0, NL = 0;                   // this band's cores / lanes
         uint64_t nharts = 0;
+        uint64_t hart_base = 0;  // global offset into hz_raw (sum of prior nodes' nharts); node0=0. Keeps each
+                                 // node's harts in a disjoint hz_raw range so multi-node X280 zones don't collide.
         // per-(node,socket) flusher tallies, sized ndh (== sockets this node owns)
         std::vector<uint64_t> fl_mk, fl_start, fl_end, fl_prog_ok, fl_ts_bad, fl_unbal, fl_stall, fl_pages;
     };
@@ -769,6 +771,13 @@ int main(int argc, char** argv) {
                 (unsigned long long)bcfg.host_base);
         }
     }
+    // Assign each node a disjoint hart range in the shared hz_raw (X280 in-band zone buffer). node0=[0..nharts),
+    // node1=[nharts..2*nharts), ... so both clusters' harts land in their own lanes/context, not on top of node0.
+    uint64_t total_harts = 0;
+    for (int n = 0; n < nodes; n++) {
+        node[n].hart_base = total_harts;
+        total_harts += node[n].nharts;
+    }
     // Node 0 aliases for the raw/offline single-node paths (raw is nodes==1-only) + the pipeline profile below.
     X280Driver& drv = *node[0].drv;
     uint64_t nharts = node[0].nharts;
@@ -1032,7 +1041,13 @@ int main(int argc, char** argv) {
         uint64_t rdc;
         uint32_t meta;
     };
-    std::vector<std::vector<HZMark>> hz_raw(nharts);
+    std::vector<std::vector<HZMark>> hz_raw(total_harts);  // all nodes' harts (per-node disjoint range via hart_base)
+    // TRUE global-min device ts, tracked by the flushers as they decode (drain order ~ production order, so it
+    // settles almost immediately -- before any record is consumed). The Tracy consumer anchors ts_base on this so
+    // no zone clamps: multi-node bands are offset in wall-clock time and a late-CONSUMED band would otherwise
+    // fall below a first-consumed-marker origin (whole X280 lanes -> dur=0). Filtered to ts with the high half
+    // set (>= 2^32) so a pre-STICKY_TIMER partial reconstruction can't seed a bogus tiny min.
+    std::atomic<uint64_t> g_min_ts{~0ull};
     // Flusher for node nc's socket h: drain ring/FIFO h IN ORDER, demux (dispatch bulk/per-risc) + decode into
     // fully-resolved device records + per-lane seq verify (this socket owns its band's lanes), push record
     // batches to the ONE shared MPMC. Demux MUST live here (sticky-src is in-order per stream); records are
@@ -1049,6 +1064,8 @@ int main(int argc, char** argv) {
         std::vector<int32_t> depth;
         std::vector<uint64_t> last_ts;
         uint64_t mk = 0, starts = 0, ends = 0, prog_ok = 0, ts_bad = 0, stall = 0, ts_bad_stall = 0, ts_bad_big = 0;
+        uint64_t loc_min = ~0ull;  // this socket's min marker ts (feeds the shared g_min_ts anchor)
+        uint32_t maxnp = 0;        // D2H FIFO high-water (pages) seen by this socket, for the end-of-run report
         bool done = false;
     };
     std::vector<FlushState> fs;
@@ -1147,8 +1164,18 @@ int main(int argc, char** argv) {
                 last_ts[lane] = ts;
             }
             mk++;
+            // Feed the global-min anchor. Only ts with the high half set (>= 2^32) count -- a marker decoded
+            // before its lane's first STICKY_TIMER reconstructs with cur_hi=0 (bogus tiny ts). The shared atomic
+            // is touched only when THIS socket finds a new local min (rare after the first few markers), so the
+            // hot path stays a single predictable compare.
+            if (ts < s.loc_min && ts >= (1ull << 32)) {
+                s.loc_min = ts;
+                uint64_t prev = g_min_ts.load(std::memory_order_relaxed);
+                while (ts < prev && !g_min_ts.compare_exchange_weak(prev, ts, std::memory_order_relaxed)) {
+                }
+            }
             // Per-node arrays (cur_hi/depth/last_ts) index by the band-LOCAL lane; the Rec pushed to the shared
-            // MPMC must carry the GLOBAL lane so a single (core,risc) maps to one Tracy thread across nodes.
+            // ring must carry the GLOBAL lane so a single (core,risc) maps to one Tracy thread across nodes.
             uint32_t glane = lh[lane].glane;
             *bcur++ = Rec{.ts = ts, .lane = glane, .type = type, .zone = zone, .prog = cur_prog};
         };
@@ -1158,6 +1185,10 @@ int main(int argc, char** argv) {
             // bytes_acked). Pages are 16-word aligned, NOT packet-aligned, so prepend the residual partial
             // packet carried from the last read; the walk below consumes whole packets and re-saves the tail.
             uint32_t np = nc.socks[h]->pages_available();
+            if (np > s.maxnp) {
+                s.maxnp = np;  // D2H FIFO high-water, sampled BEFORE the max_pages_per_read cap -> true occupancy.
+                               // Near 100% => the socket buffer is the back-pressure source (see --hring).
+            }
             if (np == 0) {
                 if (device_done.load()) {  // FW idle => sender's final bytes_sent is in; FIFO drained => done
                     s.done = true;
@@ -1285,8 +1316,9 @@ int main(int argc, char** argv) {
                     }
                     uint32_t hart = pp_x280_hart(w0);
                     uint64_t rdc = ((uint64_t)buf[p + 2] << 32) | buf[p + 1];
-                    if (hart < hz_raw.size()) {
-                        hz_raw[hart].push_back({rdc, pp_low27(w0)});  // START,END alternate; teardown pairs (2i,2i+1)
+                    uint64_t ghart = nc.hart_base + hart;  // node-local hart (0..3) -> global hz_raw slot
+                    if (ghart < hz_raw.size()) {
+                        hz_raw[ghart].push_back({rdc, pp_low27(w0)});  // START,END alternate; teardown pairs (2i,2i+1)
                     }
                     p += 3;
                 } else {  // 2 words: PROG / marker (emit resolves)
@@ -1348,6 +1380,10 @@ int main(int argc, char** argv) {
                     printf("  [writer] WALL TIMEOUT (120 s no progress)\n");
                     break;
                 }
+                // Every socket came back empty: the writer is STARVED waiting on the device. If this zone is
+                // ~absent while the device HOST-WAITs, the writer is never starved => the D2H FIFO is the
+                // bottleneck (staying full) and --hring is the lever, not host-side drain rate.
+                ZoneScopedNC("sock-idle", 0x7D6608);  // dark yellow
                 std::this_thread::sleep_for(backoff);
                 backoff += std::max(backoff / 4, std::chrono::microseconds{1});
                 backoff = std::min(backoff, std::chrono::microseconds{100});
@@ -1367,6 +1403,16 @@ int main(int argc, char** argv) {
             s.nc->fl_ts_bad[s.h] = s.ts_bad;
             s.nc->fl_unbal[s.h] = unbal;
             s.nc->fl_stall[s.h] = s.stall;
+            if (socket_mode) {
+                uint32_t fifo_pages = s.nc->socks[s.h]->get_fifo_curr_size() / s.nc->socks[s.h]->get_page_size();
+                printf(
+                    "  [socket %llu] D2H FIFO high-water: %u / %u pages (%.0f%% full)  [near 100%% => the socket "
+                    "buffer is the back-pressure source -> raise --hring]\n",
+                    (unsigned long long)s.h,
+                    s.maxnp,
+                    fifo_pages,
+                    fifo_pages ? 100.0 * (double)s.maxnp / (double)fifo_pages : 0.0);
+            }
         }
     };
     // Consumer = a BroadcastRing Reader: sees the full record stream, oldest-first. Drains until `stop` (writer
@@ -1504,7 +1550,14 @@ int main(int argc, char** argv) {
                     continue;
                 }
                 if (!anchored) {
-                    ts_base = r.ts;  // rebase origin: this FIRST decoded marker -> device gpuTime 0
+                    // Rebase origin = the TRUE global-min ts, tracked by the writer as it DECODES (drain order ~
+                    // production order, so it settles before the first record is consumed) -- NOT this first
+                    // CONSUMED marker, which is not the earliest and clamped whole X280 lanes to dur=0 in
+                    // multi-node (a node's early band arrives in a late-consumed read).
+                    ts_base = g_min_ts.load(std::memory_order_relaxed);
+                    if (ts_base == ~0ull || r.ts < ts_base) {
+                        ts_base = r.ts;  // fallback if the writer min isn't in yet
+                    }
                     anchored = true;
                     // Anchor host_start = NOW (real Tracy time of the first marker's arrival). This is the
                     // closest cheap proxy for "the device started producing", so device zones land on the same
@@ -1855,38 +1908,13 @@ int main(int argc, char** argv) {
         // zones, and push them into a per-X280 Tracy context (harts = lanes, distinct color). Text-dump too.
         // Must run BEFORE tracy_handler.reset() so the contexts still exist.
         if (do_hartzones) {
-            const uint32_t Nc = pz::kProfzoneCalibN;
-            std::vector<uint64_t> raw((size_t)Nc * 3);
-            drv.read_block(raw.data(), Nc * 3 * sizeof(uint64_t), pz::kProfzoneCalibBase);
-            std::vector<uint64_t> rts(Nc);
-            for (uint32_t i = 0; i < Nc; i++) {
-                rts[i] = raw[i * 3 + 2];
-            }
-            std::sort(rts.begin(), rts.end());
-            uint64_t rt_cut = rts[Nc / 2] + rts[Nc / 2] / 2;
-            uint64_t x_base = raw[0], t_base = raw[1];
-            double sx = 0, st = 0, sxx = 0, sxt = 0;
-            uint32_t nfit = 0;
-            for (uint32_t i = 0; i < Nc; i++) {
-                if (raw[i * 3 + 2] > rt_cut) {
-                    continue;
-                }
-                double x = (double)(raw[i * 3 + 0] - x_base), t = (double)(raw[i * 3 + 1] - t_base);
-                sx += x;
-                st += t;
-                sxx += x * x;
-                sxt += x * t;
-                nfit++;
-            }
-            double a = (sxt * nfit - sx * st) / (sxx * nfit - sx * sx);
-            double bb = (st - a * sx) / nfit;
             double aiclk_mhz = cluster.get_device_aiclk(device_id);
-            auto map_ts = [&](uint64_t x) -> uint64_t { return (uint64_t)(a * (double)(x - x_base) + bb) + t_base; };
-            CoreCoord l2t = pz::x280_l2cpu_tile(node[0].l2cpu);
-            printf("\n=== X280 hart zones (--hartzones; a=%.5f) ===\n", a);
-            // All harts share ONE Tracy context "X280 (x,y)"; each hart is a distinct LANE, labeled by the
-            // RiscType it carries (X280_RD0.., X280_RELAY0.. -> "rd0"/"relay0" via GetRiscName in the GUI, which
-            // needed the widened RiscType). Per-hart lane colors; BULK/WAIT recolored so stalls stand out.
+            printf("\n=== X280 hart zones (--hartzones) ===\n");
+            // Each hart is a distinct LANE, labeled by the RiscType it carries (X280_RD0.., X280_RELAY0.. ->
+            // "rd0"/"relay0" via GetRiscName in the GUI). Per-hart lane colors; BULK/WAIT recolored so stalls
+            // stand out. For MULTI-NODE, EACH cluster gets its OWN Tracy context "X280 (x,y)" at its L2CPU tile,
+            // with its OWN rdcycle->Tensix calibration read from that cluster's LIM -- so both clusters' drainers
+            // appear as separate contexts (they don't collide on node0's lanes).
             static const uint32_t kHartColor[4] = {
                 0xE67E22u /* rd0 orange */,
                 0xF1C40Fu /* rd1 yellow */,
@@ -1895,15 +1923,72 @@ int main(int argc, char** argv) {
             const uint32_t kBulkColor = 0xE74C3Cu;      // red: reader adaptive-switched to BULK
             const uint32_t kHostWaitColor = 0x34495Eu;  // dark slate: relay blocked on a full host FIFO
             const uint32_t kSpscWaitColor = 0x8E44ADu;  // purple: reader blocked on a full LIM STAGE (relay behind)
-            for (uint64_t h = 0; h < nharts; h++) {
-                const char* role = (h < nread) ? "READ" : "RELAY";
-                std::string hname =
-                    (h < nread) ? ("X280 rd" + std::to_string(h)) : ("X280 relay" + std::to_string(h - nread));
-                const std::vector<HZMark>& mk = hz_raw[h];  // in-band {rdcycle,meta} START,END pairs
-                if (mk.empty()) {
-                    printf("  hart%llu (%s): 0 zones\n", (unsigned long long)h, role);
-                    continue;
+            for (int nidx = 0; nidx < nodes; nidx++) {
+                NodeCtx& nc = node[nidx];
+                // Per-cluster rdcycle->Tensix calibration: read THIS cluster's boot-time calib samples from its LIM.
+                const uint32_t Nc = pz::kProfzoneCalibN;
+                std::vector<uint64_t> raw((size_t)Nc * 3);
+                nc.drv->read_block(raw.data(), Nc * 3 * sizeof(uint64_t), pz::kProfzoneCalibBase);
+                std::vector<uint64_t> rts(Nc);
+                for (uint32_t i = 0; i < Nc; i++) {
+                    rts[i] = raw[i * 3 + 2];
                 }
+                std::sort(rts.begin(), rts.end());
+                uint64_t rt_cut = rts[Nc / 2] + rts[Nc / 2] / 2;
+                uint64_t x_base = raw[0], t_base = raw[1];
+                double sx = 0, st = 0, sxx = 0, sxt = 0;
+                uint32_t nfit = 0;
+                for (uint32_t i = 0; i < Nc; i++) {
+                    if (raw[i * 3 + 2] > rt_cut) {
+                        continue;
+                    }
+                    double x = (double)(raw[i * 3 + 0] - x_base), t = (double)(raw[i * 3 + 1] - t_base);
+                    sx += x;
+                    st += t;
+                    sxx += x * x;
+                    sxt += x * t;
+                    nfit++;
+                }
+                double a = (sxt * nfit - sx * st) / (sxx * nfit - sx * sx);
+                double bb = (st - a * sx) / nfit;
+                auto map_ts = [&](uint64_t x) -> uint64_t {
+                    return (uint64_t)(a * (double)(x - x_base) + bb) + t_base;
+                };
+                CoreCoord l2t = pz::x280_l2cpu_tile(nc.l2cpu);
+                // Per-node rebase origin. Each cluster calibrates against its OWN band's reference core
+                // (MBOX_COORDS core 0), whose raw wall clock is offset from the RISC-marker timeline by a
+                // CONSTANT (the calib intercept). Rebasing this node's X280 zones on the node's own minimum
+                // cancels that constant, so its lanes align with its own RISC band -- and don't clamp below a
+                // shared origin (which collapsed a whole cluster's lanes to dur=0 in multi-node).
+                uint64_t node_min = ~0ull, node_max = 0;
+                for (uint64_t lh2 = 0; lh2 < nc.nharts; lh2++) {
+                    for (const HZMark& m : hz_raw[nc.hart_base + lh2]) {
+                        uint64_t t = map_ts(m.rdc);
+                        node_min = std::min(node_min, t);
+                        node_max = std::max(node_max, t);
+                    }
+                }
+                if (node_min == ~0ull) {
+                    node_min = x280_ts_base;  // no zones this node
+                }
+                printf(
+                    "  [node%d l2cpu%d tile(%u,%u); a=%.5f] X280 span %.1f ms, rebased on node_min\n",
+                    nidx,
+                    nc.l2cpu,
+                    (unsigned)l2t.x,
+                    (unsigned)l2t.y,
+                    a,
+                    (double)(node_max - node_min) / (aiclk_mhz * 1e3));
+                for (uint64_t lh2 = 0; lh2 < nc.nharts; lh2++) {
+                    uint64_t h = nc.hart_base + lh2;  // global slot in hz_raw for this node's local hart lh2
+                    const char* role = (lh2 < nread) ? "READ" : "RELAY";
+                    std::string hname = (lh2 < nread) ? ("X280 rd" + std::to_string(lh2))
+                                                      : ("X280 relay" + std::to_string(lh2 - nread));
+                    const std::vector<HZMark>& mk = hz_raw[h];  // in-band {rdcycle,meta} START,END pairs
+                    if (mk.empty()) {
+                        printf("  hart%llu (%s): 0 zones\n", (unsigned long long)h, role);
+                        continue;
+                    }
                 // Push markers ONE AT A TIME (not paired) so the handler's per-lane stack nests them -- the
                 // reader emits a SPSC-WAIT child inside a BULK parent (parent-START, child-START, child-END,
                 // parent-END). busy = sum of top-level zone spans (depth returns to 0).
@@ -1940,24 +2025,24 @@ int main(int argc, char** argv) {
                                              : (kind == 3) ? " SPSC-WAIT"
                                                            : "";
                         std::string zn = hname + suffix;
-                        // hart -> its lane RiscType: readers X280_RD0+h, relays X280_RELAY0+(h-nread)
-                        uint32_t lane_risc = (h < nread)
-                                                 ? ((uint32_t)tracy::RiscType::X280_RD0 + (uint32_t)h)
-                                                 : ((uint32_t)tracy::RiscType::X280_RELAY0 + (uint32_t)(h - nread));
+                        // hart -> lane RiscType (node-LOCAL lh2): readers X280_RD0+lh2, relays X280_RELAY0+(lh2-nread)
+                        uint32_t lane_risc =
+                            (lh2 < nread) ? ((uint32_t)tracy::RiscType::X280_RD0 + (uint32_t)lh2)
+                                          : ((uint32_t)tracy::RiscType::X280_RELAY0 + (uint32_t)(lh2 - nread));
                         tt::tt_metal::perf_debug::WorkerZonePacket zp{};
                         zp.chip_id = (uint32_t)device_id;
                         zp.is_x280 = true;
-                        // ONE shared context (same coord); lanes distinguished by risc. ctx_name empty ->
-                        // handler names it "X280 (x,y)".
+                        // Per-CLUSTER context (l2t = this node's L2CPU tile); lanes distinguished by risc.
+                        // ctx_name empty -> handler names it "X280 (x,y)".
                         zp.color = (kind == 1)   ? kBulkColor
                                    : (kind == 2) ? kHostWaitColor
                                    : (kind == 3) ? kSpscWaitColor
-                                                 : kHartColor[h & 3];
+                                                 : kHartColor[lh2 & 3];
                         zp.core_noc0_x = (uint32_t)l2t.x;
                         zp.core_noc0_y = (uint32_t)l2t.y;
-                        zp.risc = lane_risc;  // per-hart lane within the single X280 context
+                        zp.risc = lane_risc;  // per-hart lane within this cluster's X280 context
                         zp.name = zn;
-                        zp.timestamp = (ts >= x280_ts_base) ? ts - x280_ts_base : 0;
+                        zp.timestamp = (ts >= node_min) ? ts - node_min : 0;  // per-node origin (see node_min)
                         zp.is_start = (is_start != 0u);
                         tracy_handler->HandleWorkerZone(zp);
                     }
@@ -1973,7 +2058,8 @@ int main(int argc, char** argv) {
                     nhwait,
                     nz - nbulk - nswait - nhwait,
                     (unsigned long long)(busy_ns / 1000));
-            }
+                }  // hart loop (lh2)
+            }  // node loop (nidx)
         }
 #if defined(TRACY_ENABLE)
         if (do_tracy && tracy_handler) {
