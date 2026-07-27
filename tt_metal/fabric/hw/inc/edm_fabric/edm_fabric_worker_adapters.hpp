@@ -794,7 +794,7 @@ private:
 
     template <EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_impl(uint32_t cb_id, uint32_t num_pages, uint32_t page_size) {
-        uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
+        uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr(this->send_noc);
         ASSERT(num_pages * page_size <= this->buffer_size_bytes);
         send_chunk<blocking_mode>(cb_id, num_pages, page_size, buffer_address, this->send_noc);
         post_send_payload_increment_pointers(this->send_noc);
