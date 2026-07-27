@@ -28,22 +28,6 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
 namespace {
 constexpr uint32_t TILE = tt::constants::TILE_HEIGHT;
 
-// Perf-investigation toggles (env-var gated, default off). These strip work
-// from the JIT-compiled kernels to isolate DRAM I/O from compute:
-//   RE_SKIP_MATMUL      -> compute kernel skips the matmul MAC inner loops
-//                          (keeps all CB handshakes/packs), leaving the I/O floor.
-//   RE_SKIP_OUTPUT_WRITE -> writer skips the output DRAM write (keeps cb_out
-//                          drain), isolating the down-matmul write-bandwidth cost.
-// Both produce incorrect output and must never be set in production runs.
-//
-// Deliberately not tt::parse_env<bool>: that uses std::stoi and throws on any
-// non-numeric value, whereas these dev toggles accept any truthy string
-// (e.g. RE_SKIP_MATMUL=1 / on / yes) and treat unset or "0" as off.
-bool env_flag_set(const char* name) {
-    const char* v = std::getenv(name);
-    return v != nullptr && v[0] != '\0' && v[0] != '0';
-}
-
 // CB index allocation (kept stable across kernels via named compile-time args).
 constexpr uint32_t CB_IN0_X = tt::CBIndex::c_0;
 constexpr uint32_t CB_IN1_GATE = tt::CBIndex::c_1;
@@ -699,12 +683,6 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         tt::tt_metal::TensorAccessorArgs(t.down_bias->buffer()).append_to(reader_ct_args);
         reader_defines["FUSE_BIAS"] = "1";
     }
-    // Perf-investigation toggle (see env_flag_set): skip weight DRAM reads to
-    // quantify the read-bound ceiling (reads stripped, mcasts/handshakes kept).
-    const bool skip_weight_read = env_flag_set("RE_SKIP_WEIGHT_READ");
-    if (skip_weight_read) {
-        reader_defines["RE_SKIP_WEIGHT_READ"] = "1";
-    }
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/"
@@ -764,21 +742,12 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // up accessor follows start; used only when the writer handles `up`.
     tt::tt_metal::TensorAccessorArgs(up_buffer).append_to(writer_ct_args);
 
-    // Perf-investigation toggles (see env_flag_set): strip the output DRAM write
-    // and/or the `up` weight DRAM read (the latter for the read-bound ceiling).
-    std::map<std::string, std::string> writer_defines{};
-    if (env_flag_set("RE_SKIP_OUTPUT_WRITE")) {
-        writer_defines["RE_SKIP_OUTPUT_WRITE"] = "1";
-    }
-    if (skip_weight_read) {
-        writer_defines["RE_SKIP_WEIGHT_READ"] = "1";
-    }
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/"
         "unified_routed_expert_ffn_writer.cpp",
         core_range_set,
-        tt::tt_metal::WriterDataMovementConfig(writer_ct_args, writer_defines));
+        tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
     // Compute kernel compile-time args: positional + named CB ids.
     std::vector<uint32_t> compute_ct_args = {
@@ -874,11 +843,6 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // FUSE_BIAS: add gate/up bias (broadcast across rows) before the
         // SwiGLU-OAI activation and down bias after the down matmul (gpt-oss).
         compute_defines["FUSE_BIAS"] = "1";
-    }
-    // Perf-investigation toggle (see env_flag_set): strip the matmul MAC.
-    const bool skip_matmul = env_flag_set("RE_SKIP_MATMUL");
-    if (skip_matmul) {
-        compute_defines["RE_SKIP_MATMUL"] = "1";
     }
 
     auto compute_kernel_id = tt::tt_metal::CreateKernel(

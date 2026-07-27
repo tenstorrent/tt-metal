@@ -174,10 +174,6 @@ FORCE_INLINE void matmul_phase(
                 uint32_t dst_index = 0;
                 uint32_t in0_index = in0_index_subblock_offset;
                 uint32_t in1_index = in1_index_subblock_offset;
-                // RE_SKIP_MATMUL (perf-investigation only): drop the MAC so the kernel
-                // still cycles all CB handshakes / packs but does no matmul compute,
-                // isolating the DRAM-I/O floor. Output is garbage.
-                //
                 // rows [m_subblocks, EFF_M) of cb_in0_down_full are NOT written by the
                 // reader's (bounded) activated mcast, so skip the whole subblock MAC for
                 // them (checked once here, not per K-inner iteration) rather than feed
@@ -186,7 +182,6 @@ FORCE_INLINE void matmul_phase(
                 // and the writer discards them via its row<per_core_M / row<count guards.
                 if (sb_m < m_subblocks) {
                     for (uint32_t inner_dim = 0; inner_dim < k_steps; ++inner_dim) {
-#ifndef RE_SKIP_MATMUL
                         matmul_block(
                             in0_cb_id,
                             in1_cb_id,
@@ -197,7 +192,6 @@ FORCE_INLINE void matmul_phase(
                             out_subblock_w,
                             out_subblock_h,
                             in0_block_w);
-#endif
                         in0_index += 1;
                         in1_index += in1_per_core_w;
                     }
@@ -414,7 +408,6 @@ FORCE_INLINE void matmul_phase_fused_gu(
                     uint32_t in0_index = in0_index_subblock_offset;
                     uint32_t in1_index = in1_index_subblock_offset;
                     for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
-#ifndef RE_SKIP_MATMUL
                         matmul_block(
                             x_cb_id,
                             gate_cb_id,
@@ -425,7 +418,6 @@ FORCE_INLINE void matmul_phase_fused_gu(
                             out_subblock_w,
                             out_subblock_h,
                             in0_block_w);
-#endif
                         in0_index += 1;
                         in1_index += in1_per_core_w;
                     }
@@ -443,7 +435,6 @@ FORCE_INLINE void matmul_phase_fused_gu(
                     uint32_t in0_index = in0_index_subblock_offset;
                     uint32_t in1_index = in1_index_subblock_offset;
                     for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
-#ifndef RE_SKIP_MATMUL
                         matmul_block(
                             x_cb_id,
                             up_cb_id,
@@ -454,7 +445,6 @@ FORCE_INLINE void matmul_phase_fused_gu(
                             out_subblock_w,
                             out_subblock_h,
                             in0_block_w);
-#endif
                         in0_index += 1;
                         in1_index += in1_per_core_w;
                     }

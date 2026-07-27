@@ -604,14 +604,12 @@ void kernel_main() {
                         const uint32_t col = my_nt_gu * per_core_N_gu + n;
                         if (col < N_gate_tiles_full) {
                             const uint32_t tile_idx = row * N_gate_tiles_full + col;
-#ifndef RE_SKIP_WEIGHT_READ
                             noc_read.async_read(
                                 gate_acc,
                                 CoreLocalMem<uint32_t>(l1_w_gate),
                                 gate_tile_bytes,
                                 {.page_id = tile_idx},
                                 {});
-#endif
                         } else {
                             // N-OOB hidden padding column (col >= N_gate_tiles_full ==
                             // down's K_down_tiles). Its garbage gate output feeds the down
@@ -803,10 +801,8 @@ void kernel_main() {
                         const uint32_t col = my_nt_d * per_core_N_d + n;
                         if (row < K_down_tiles && col < N_down_tiles_full) {
                             const uint32_t tile_idx = row * N_down_tiles_full + col;
-#ifndef RE_SKIP_WEIGHT_READ
                             noc_read.async_read(
                                 down_acc, CoreLocalMem<uint32_t>(l1_w), down_tile_bytes, {.page_id = tile_idx}, {});
-#endif
                         } else if (row >= K_down_tiles) {
                             // K-OOB (reduction dim): the matmul may still read these, so keep
                             // them zero — 0 * (stale/Inf weight) would NaN a valid output col.

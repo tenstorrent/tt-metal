@@ -215,12 +215,8 @@ void kernel_main() {
                             const uint32_t col = my_nt_gu * per_core_N_gu + n;
                             if (col < N_gate_tiles_full) {
                                 const uint32_t tile_idx = row * N_gate_tiles_full + col;
-#ifndef RE_SKIP_WEIGHT_READ
-                                // RE_SKIP_WEIGHT_READ (perf-investigation only): skip the
-                                // DRAM read, keep pointer advance for the read-bound ceiling.
                                 noc_up.async_read(
                                     up_acc, CoreLocalMem<uint32_t>(l1_w_up), up_tile_bytes, {.page_id = tile_idx}, {});
-#endif
                             } else {
                                 // N-OOB hidden padding column: garbage up output feeds the
                                 // down matmul's K reduction, so keep it zero UNLESS the down
@@ -294,18 +290,12 @@ void kernel_main() {
                             ASSERT(dst_row < dst_M_tiles);
                             if (dst_row < dst_M_tiles) {
                                 const uint32_t tile_idx = dst_row * N_down_tiles_full + col;
-#ifndef RE_SKIP_OUTPUT_WRITE
-                                // RE_SKIP_OUTPUT_WRITE (perf-investigation only): drop the
-                                // output DRAM write while still draining cb_out (below), so
-                                // the down matmul's write-bandwidth cost is isolated. Output
-                                // in DRAM is left stale.
                                 noc.async_write(
                                     cb_out_buf,
                                     out_acc,
                                     out_tile_bytes,
                                     {.offset_bytes = subblock_tile_offset},
                                     {.page_id = tile_idx});
-#endif
                             }
                         }
                         subblock_tile_offset += out_tile_bytes;
