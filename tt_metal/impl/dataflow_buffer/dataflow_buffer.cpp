@@ -453,11 +453,16 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
         this->config.num_entries,
         std::numeric_limits<uint16_t>::max());
     init.num_entries = static_cast<uint16_t>(this->config.num_entries);
-    // Default a non-BLOCKED side (block_size 0 in the config) to 1 here, so the device can assign
-    // LocalDFBInterface::block_size unconditionally. block_size==1 makes the per-block tile-counter
-    // advance fire every entry (i.e. the non-BLOCKED cadence).
-    init.producer_block_size = static_cast<uint8_t>(this->config.producer_block_size ? this->config.producer_block_size : 1u);
-    init.consumer_block_size = static_cast<uint8_t>(this->config.consumer_block_size ? this->config.consumer_block_size : 1u);
+    // block_size only reaches the implicit-sync commit path, where it makes the tile counter round-robin
+    // once per BLOCK instead of once per entry. That is correct only when the ring is partitioned into
+    // contiguous BLOCKED sub-rings, i.e. cap == BLOCKED. A BLOCKED producer feeding a STRIDED or ALL
+    // consumer rides the interleaved/broadcast ring and must keep the per-entry cadence, so send 1 there.
+    // 1 is also the non-BLOCKED default, letting the device assign block_size unconditionally.
+    const bool blocked_ring = this->config.cap == ::dfb::AccessPattern::BLOCKED;
+    init.producer_block_size =
+        blocked_ring ? static_cast<uint8_t>(std::max<uint32_t>(this->config.producer_block_size, 1u)) : uint8_t{1};
+    init.consumer_block_size =
+        blocked_ring ? static_cast<uint8_t>(std::max<uint32_t>(this->config.consumer_block_size, 1u)) : uint8_t{1};
 
     log_debug(
         tt::LogMetal,

@@ -410,35 +410,43 @@ DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB3Bx3A_blk4, 3, 3, 4, 24)
 // identity at P==1; a deterministic permutation at P>1 (the block read order does not cancel the
 // per-tile round-robin). First cut covers C ≥ P at an integer ratio; num_entries % (block_size*P)==0
 // and num_entries % max(P,C)==0.
-#define DFB_BLOCKED_STRIDED_TEST_2_0(suffix, num_p, num_c, blk, entries) \
-    TEST_F(MeshDeviceFixture, suffix##_2_0) {                            \
-        M2SingleDFBParams params{                                        \
-            .producer_type = M2PorCType::DM,                             \
-            .consumer_type = M2PorCType::DM,                             \
-            .num_producers = (num_p),                                    \
-            .num_consumers = (num_c),                                    \
-            .pap = m2::DFBAccessPattern::BLOCKED,                        \
-            .cap = m2::DFBAccessPattern::STRIDED,                        \
-            .implicit_sync = false,                                      \
-            .num_entries = (entries),                                    \
-            .block_size = (blk),                                         \
-        };                                                               \
-        run_single_dfb_program_2_0(this->devices_.at(0), params);        \
+#define DFB_BLOCKED_STRIDED_TEST_2_0(suffix, num_p, num_c, blk, entries, impl) \
+    TEST_F(MeshDeviceFixture, suffix##_2_0) {                                  \
+        M2SingleDFBParams params{                                              \
+            .producer_type = M2PorCType::DM,                                   \
+            .consumer_type = M2PorCType::DM,                                   \
+            .num_producers = (num_p),                                          \
+            .num_consumers = (num_c),                                          \
+            .pap = m2::DFBAccessPattern::BLOCKED,                              \
+            .cap = m2::DFBAccessPattern::STRIDED,                              \
+            .implicit_sync = (impl),                                           \
+            .num_entries = (entries),                                          \
+            .block_size = (blk),                                               \
+        };                                                                     \
+        run_single_dfb_program_2_0(this->devices_.at(0), params);              \
     }
 // Single-producer (P==1): per-tile pushes walk the consumers' interleaved slots in order → identity,
 // regardless of C. Smallest case first (P=1,C=2,bs=2,entries=4) then deeper interleave / larger block.
-DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB1Bx2S_blk2_e4, 1, 2, 2, 4)
-DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB1Bx1S_blk4, 1, 1, 4, 16)
-DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB1Bx2S_blk4, 1, 2, 4, 16)
-DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB1Bx4S_blk4, 1, 4, 4, 16)
+DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB1Bx2S_blk2_e4, 1, 2, 2, 4, false)
+DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB1Bx1S_blk4, 1, 1, 4, 16, false)
+DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB1Bx2S_blk4, 1, 2, 4, 16, false)
+DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB1Bx4S_blk4, 1, 4, 4, 16, false)
 // Multi-producer (P>1, C≥P integer ratio): a deterministic permutation (golden simulates the round-robin).
-DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB2Bx2S_blk4, 2, 2, 4, 16)
-DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB2Bx4S_blk4, 2, 4, 4, 16)
+DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB2Bx2S_blk4, 2, 2, 4, 16, false)
+DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB2Bx4S_blk4, 2, 4, 4, 16, false)
 // Fan-in (P>C, integer ratio): the golden now handles P>C (each producer feeds one consumer; the consumer
 // round-robins its P/C feeding producers). Closes the P>C BLOCKED→STRIDED gap for DM→DM.
-DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB2Bx1S_blk4, 2, 1, 4, 16)
-DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB4Bx1S_blk4, 4, 1, 4, 16)
-DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB4Bx2S_blk4, 4, 2, 4, 16)
+DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB2Bx1S_blk4, 2, 1, 4, 16, false)
+DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB4Bx1S_blk4, 4, 1, 4, 16, false)
+DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB4Bx2S_blk4, 4, 2, 4, 16, false)
+
+// IMPLICIT sync. The consumer is STRIDED, so the ring is interleaved and the producer must credit its
+// consumer tile-counters once per ENTRY, not once per block — serialize_for_core sends block_size 1 for a
+// non-BLOCKED ring precisely so the implicit commit keeps that cadence. C > P is the case that exercises
+// it (the producer round-robins over C/P counters; at C <= P it holds a single one and the cadence is moot).
+DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB1Bx2S_blk4_impl, 1, 2, 4, 16, true)
+DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB1Bx4S_blk4_impl, 1, 4, 4, 16, true)
+DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB2Bx4S_blk4_impl, 2, 4, 4, 16, true)
 
 // --- BLOCKED-producer → STRIDED-consumer (Trisc→DM, explicit sync) ---
 // A Tensix producer only POSTS credits over a host-flat-prefilled ring (ring[s]=input[s]); it never

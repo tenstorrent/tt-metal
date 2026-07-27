@@ -84,7 +84,7 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
     | dfb_initializer_per_risc_t | risc 0
     | dfb_initializer_per_risc_t | risc 1
     ...
-    (36 + (62 * 12)) * 16 = 12480 bytes
+    (38 + (62 * 12)) * 16 = 12512 bytes
 */
 struct dfb_txn_id_descriptor_t {
     uint8_t txn_ids[dfb::NUM_TXN_IDS];
