@@ -4,10 +4,6 @@
 
 #include "pad_codegen_supported.hpp"
 
-#include <algorithm>
-#include <array>
-#include <initializer_list>
-
 #include <tt-metalium/constants.hpp>
 
 #include "pad_codegen_program_factory.hpp"
@@ -72,83 +68,37 @@ bool supported_by_codegen(const PadCodegenParams& operation_attributes, const Pa
 bool is_demoted(const PadCodegenParams& operation_attributes, const PadCodegenInputs& tensor_args) {
     const Tensor& input = tensor_args.input;
     if (input.layout() != Layout::ROW_MAJOR) {
-        // Every entry in the perf-demoted ledger is row_major; TILE never demotes.
+        // supported_by_codegen() admits TILE only for whole-tile back-pads, so every transfer the
+        // tiled reader issues is a whole tile page and it can never reach a staging fallback.
         return false;
     }
-    const DataType dtype = input.dtype();
-    // tensor_args.input is always the 4D-unsqueezed tensor (try_pad_codegen builds
-    // PadCodegenInputs from input_4d), so logical_shape()[0..3] is N,C,H,W directly -- matching
-    // the ledger's shapes requires N/C too, not just H/W: several ledger entries (and, more
-    // importantly, non-demoted sweep points outside the ledger) share the same H/W bucket
-    // (H=32, W=32, front=0, out=64x64) but differ in C -- an H/W-only match would either miss the
-    // C=3 ledger entry below or wrongly demote an unrelated C=1 config that happens to land in
-    // the same bucket.
-    const auto& in_shape = input.logical_shape();
-    const uint32_t N = in_shape[0];
-    const uint32_t C = in_shape[1];
-    const uint32_t H = in_shape[2];
-    const uint32_t W = in_shape[3];
-    const auto& a = operation_attributes;
 
-    auto shape_is = [&](uint32_t n,
-                        uint32_t c,
-                        uint32_t h,
-                        uint32_t w,
-                        uint32_t fn,
-                        uint32_t fc,
-                        uint32_t fh,
-                        uint32_t fw,
-                        uint32_t no,
-                        uint32_t co,
-                        uint32_t ho,
-                        uint32_t wo) {
-        return N == n && C == c && H == h && W == w && a.front_n == fn && a.front_c == fc && a.front_h == fh &&
-               a.front_w == fw && a.N_out == no && a.C_out == co && a.H_out == ho && a.W_out == wo;
-    };
-    auto value_is = [&](float raw) { return a.packed_pad_value == pack_pad_value(dtype, raw); };
-    auto dtype_in = [&](std::initializer_list<DataType> set) {
-        return std::find(set.begin(), set.end(), dtype) != set.end();
-    };
-    const std::initializer_list<DataType> kAllFourDtypes = {
-        DataType::BFLOAT16, DataType::FLOAT32, DataType::INT32, DataType::UINT32};
-    // known_bad_golden (manifest): native's RM pad-value packing switch has no FLOAT32 case and
-    // silently reuses BFLOAT16, corrupting any nonzero float32 fill -- these points are dropped
-    // from correctness measurement entirely (no reliable native golden), so they never reach a
-    // generic-vs-native device comparison and can never appear in the demoted ledger.
-    const std::initializer_list<DataType> kNonzeroDemotableDtypes = {
-        DataType::BFLOAT16, DataType::INT32, DataType::UINT32};
-
-    // Four back-only-pad row_major shapes, each demoted at value=0 for all four dtypes and at
-    // value=3 for all dtypes except float32 (see kNonzeroDemotableDtypes above). Transcribed
-    // verbatim from the phase-7 perf-demoted ledger (measurements.demoted), not from any sweep --
-    // see porting-guide.md's "Deriving is_demoted()".
-    struct DemotedShape {
-        uint32_t n, c, h, w, front_n, front_c, front_h, front_w, n_out, c_out, h_out, w_out;
-    };
-    constexpr std::array<DemotedShape, 4> kDemotedShapes{{
-        // [1, 1, 64, 64]|padding=[[0,0],[0,0],[0,15],[0,31]]
-        {1, 1, 64, 64, 0, 0, 0, 0, 1, 1, 79, 95},
-        // [1, 32, 32]|padding=[[0,0],[0,7],[0,9]] (3D: unsqueeze_to_4D prepends N=1)
-        {1, 1, 32, 32, 0, 0, 0, 0, 1, 1, 39, 41},
-        // [32, 32]|padding=[[4,2],[0,6]] (2D: unsqueeze_to_4D prepends N=1, C=1)
-        {1, 1, 32, 32, 0, 0, 4, 0, 1, 1, 38, 38},
-        // [64, 64]|padding=[[0,31],[0,15]] (2D: unsqueeze_to_4D prepends N=1, C=1)
-        {1, 1, 64, 64, 0, 0, 0, 0, 1, 1, 95, 79},
-    }};
-
-    for (const auto& s : kDemotedShapes) {
-        if (!shape_is(
-                s.n, s.c, s.h, s.w, s.front_n, s.front_c, s.front_h, s.front_w, s.n_out, s.c_out, s.h_out, s.w_out)) {
-            continue;
-        }
-        if (value_is(0) && dtype_in(kAllFourDtypes)) {
-            return true;
-        }
-        if (value_is(3) && dtype_in(kNonzeroDemotableDtypes)) {
-            return true;
-        }
+    // Native's RM pad-value packing has no FLOAT32 case and falls through to the BFLOAT16 one, so
+    // it fills with a bf16-rounded constant for every nonzero float32 value (3.0 lands as
+    // 3.00392, 65536.0 as 65679.0) while codegen is exact. Demoting these would buy speed with a
+    // wrong answer, so they stay on codegen at whatever the staging path costs. Only float32 is
+    // affected; bfloat16/int32/uint32 fills are byte-exact on both paths.
+    if (input.dtype() == DataType::FLOAT32 && operation_attributes.packed_pad_value != 0) {
+        return false;
     }
-    return false;
+
+    // Mirror of NEEDS_STAGE in reader_pad_rm_interleaved.cpp, evaluated from the same host
+    // expressions the program factory feeds it. Off its fast path that reader pays, per stick, a
+    // pad prefill read, an aligned DRAM read and a RISC memmove, with a barrier after each read,
+    // so nothing pipelines: measured 0.51-0.76x of native on Blackhole, holding to at least 1.3MB
+    // rather than amortizing away, against 1.23-1.46x for the fast path itself. The gate is the
+    // NOC granularity, so it moves with the buffer: a width that stages against a 64B DRAM
+    // alignment can take the fast path against a 32B one.
+    //
+    // tensor_args.input is always the 4D-unsqueezed tensor (try_pad_codegen builds
+    // PadCodegenInputs from input_4d), so logical_shape()[3] is W directly.
+    const uint32_t W = input.logical_shape()[3];
+    const uint32_t elem_size = input.element_size();
+    const uint32_t alignment = input.buffer()->alignment();
+    const uint32_t stick_size = W * elem_size;
+    const uint32_t front_pad_w_bytes = operation_attributes.front_w * elem_size;
+    const uint32_t back_pad_w_bytes = (operation_attributes.W_out - W - operation_attributes.front_w) * elem_size;
+    return front_pad_w_bytes > 0 || stick_size % alignment != 0 || back_pad_w_bytes % alignment != 0;
 }
 
 ImplementationSelector parse_implementation(std::string_view implementation) {
