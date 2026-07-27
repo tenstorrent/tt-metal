@@ -716,101 +716,69 @@ def _load_token_pool(trace_dir, num_tokens: int) -> list:
 
 
 # ---------------------------------------------------------------------------
-# Multi-rank coordination (device-less; NFS files, no MPI)
+# Multi-rank coordination (device-less; MPI collectives, no sync files)
 #
-# One producer runs per host, mirroring the pipeline runner's ranks. The master (rank 0, co-located
-# with the runner's first rank) is the only one that feeds tokens over H2D and owns the aggregated
-# LayerAck channel; every rank reads its OWN host's KV back and PCCs only the layers resident on its
-# machine (the merged table + a host-local device map filter to the local layers automatically).
-# Coordination is two NFS sentinels: the master publishes GO (with the resident-slot map) once every
-# layer of every chunk has acked, and each validator writes DONE when its read-back finishes. The
-# master waits for all DONEs BEFORE sending the runner's shutdown sentinel, so the mesh/DRAM stays
-# alive while validators are still reading.
+# One producer runs per host under an MPI launcher (mpirun-ulfm), mirroring the pipeline runner's
+# ranks. rank 0 is the master (co-located with the runner's first rank): it alone feeds tokens over
+# H2D and owns the aggregated LayerAck channel. Every rank reads its OWN host's KV back and PCCs only
+# the layers resident on its machine (the merged table + a host-local device map filter to the local
+# layers automatically). Coordination is two collectives over the distributed context (host-side MPI,
+# NO mesh device): the master broadcasts the resident-slot map once every layer of every chunk has
+# acked — this releases the validators (GO) — then an allgather of each rank's PCC ok-flag both waits
+# for every validator's read-back to finish (DONE) and folds the verdicts, so the master holds the
+# runner's shutdown sentinel until the mesh/DRAM is safe to tear down.
 # ---------------------------------------------------------------------------
 
 
 def _mr_config():
-    """(role, rank, world_size, sync_dir). Single-rank default: master / 0 / 1 / "" (no coordination)."""
-    return (
-        os.environ.get("PREFILL_PRODUCER_ROLE", "master"),
-        int(os.environ.get("PREFILL_PRODUCER_RANK", "0")),
-        int(os.environ.get("PREFILL_PRODUCER_WORLD_SIZE", "1")),
-        os.environ.get("PREFILL_PRODUCER_SYNC_DIR", ""),
-    )
+    """(role, rank, world_size). Under an MPI launcher (OMPI_COMM_WORLD_SIZE > 1) initialize the
+    distributed context and take rank/size from it — rank 0 is the master. Standalone (the single-rank
+    de-risk, no mpirun) skips MPI entirely: master / 0 / 1, no coordination."""
+    if int(os.environ.get("OMPI_COMM_WORLD_SIZE", "1")) <= 1:
+        return ("master", 0, 1)
+    if not ttnn.distributed_context_is_initialized():
+        ttnn.init_distributed_context()
+    rank = int(ttnn.distributed_context_get_rank())
+    size = int(ttnn.distributed_context_get_size())
+    return ("master" if rank == 0 else "validator", rank, size)
 
 
-def _clear_sync(sync_dir: str, world_size: int) -> None:
-    """Master clears stale GO/DONE sentinels from a prior run so a validator can't read the last run's."""
-    for name in ["go.json"] + [f"done_rank{r}.json" for r in range(world_size)]:
-        p = os.path.join(sync_dir, name)
-        if os.path.exists(p):
-            os.remove(p)
+def _mr_bcast_resident(rank: int, resident: dict) -> dict:
+    """Broadcast the master's resident-slot map (slot_id -> (chunks_pushed, actual_isl)) to every rank
+    via allgather_int — element [0] of each allgather is rank 0's contribution, giving a broadcast built
+    from the only collective ttnn exposes. Doubles as the GO barrier: a validator blocks in the first
+    allgather until the master arrives (which happens only after it has drained every LayerAck).
+    Non-master ranks pass {} and receive the map. All ranks must issue the same number of allgathers in
+    the same order, so the slot count is broadcast first and then each slot's three ints."""
+    items = sorted(resident.items()) if rank == 0 else []
+    n = ttnn.distributed_context_allgather_int(len(items) if rank == 0 else 0)[0]
+    out: dict = {}
+    for k in range(n):
+        slot_id, chunks, isl = (items[k][0], items[k][1][0], items[k][1][1]) if rank == 0 else (0, 0, 0)
+        slot_id = ttnn.distributed_context_allgather_int(slot_id)[0]
+        chunks = ttnn.distributed_context_allgather_int(chunks)[0]
+        isl = ttnn.distributed_context_allgather_int(isl)[0]
+        out[slot_id] = (chunks, isl)
+    return out
 
 
-def _write_go(sync_dir: str, resident: dict) -> None:
-    import json
-
-    payload = {str(slot): [chunks, isl] for slot, (chunks, isl) in resident.items()}
-    tmp = os.path.join(sync_dir, "go.json.tmp")
-    with open(tmp, "w") as f:
-        json.dump(payload, f)
-    os.replace(tmp, os.path.join(sync_dir, "go.json"))  # atomic: a validator never sees partial JSON
-    logger.info(f"[producer] GO published ({len(payload)} resident slots) -> {sync_dir}/go.json")
+def _mr_allgather_verdict(ok: bool) -> list:
+    """Collective: every rank contributes its PCC ok-flag and receives all of them. Doubles as the DONE
+    barrier — the master cannot proceed to the shutdown sentinel until every validator has reached here
+    (i.e. finished its read-back)."""
+    return [bool(v) for v in ttnn.distributed_context_allgather_int(1 if ok else 0)]
 
 
-def _wait_go(sync_dir: str, timeout_s: float) -> dict:
-    import json
-
-    path = os.path.join(sync_dir, "go.json")
-    deadline = time.perf_counter() + timeout_s
-    while not os.path.exists(path):
-        if time.perf_counter() > deadline:
-            raise TimeoutError(f"[producer] GO sentinel {path} not seen after {timeout_s}s")
-        time.sleep(0.2)
-    with open(path) as f:
-        raw = json.load(f)
-    return {int(slot): tuple(v) for slot, v in raw.items()}
-
-
-def _write_done(sync_dir: str, rank: int, ok: bool) -> None:
-    import json
-
-    tmp = os.path.join(sync_dir, f"done_rank{rank}.json.tmp")
-    with open(tmp, "w") as f:
-        json.dump({"ok": ok}, f)
-    os.replace(tmp, os.path.join(sync_dir, f"done_rank{rank}.json"))
-
-
-def _wait_all_done(sync_dir: str, ranks: list, timeout_s: float) -> dict:
-    import json
-
-    deadline = time.perf_counter() + timeout_s
-    verdicts: dict = {}
-    while len(verdicts) < len(ranks):
-        for r in ranks:
-            if r in verdicts:
-                continue
-            p = os.path.join(sync_dir, f"done_rank{r}.json")
-            if os.path.exists(p):
-                with open(p) as f:
-                    verdicts[r] = json.load(f)
-        if len(verdicts) < len(ranks) and time.perf_counter() > deadline:
-            raise TimeoutError(f"[producer] only {len(verdicts)}/{len(ranks)} validators reported after {timeout_s}s")
-        if len(verdicts) < len(ranks):
-            time.sleep(0.3)
-    return verdicts
-
-
-def _run_validator(rank: int, world_size: int, sync_dir: str) -> None:
-    """Non-master path: no H2D feed. Read the merged table (shared/NFS), wait for the master's GO, PCC
-    this host's local layers, then write DONE. Exits non-zero on PCC failure."""
+def _run_validator(rank: int, world_size: int) -> None:
+    """Non-master path: no H2D feed. Read the merged table, wait for the master's GO (the resident-map
+    broadcast), PCC this host's local layers, then join the verdict allgather (the master reads the
+    result). Exits non-zero on PCC failure."""
     cfg = _config_from_env()
     timeout_s = int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60"))
-    go_timeout = float(os.environ.get("PREFILL_PRODUCER_GO_TIMEOUT_S", "1800"))
     logger.info(f"[producer] validator rank={rank}/{world_size}: read-back only (no H2D feed)")
 
     kv_table = _read_kv_chunk_table(timeout_s)
-    resident = _wait_go(sync_dir, go_timeout)
+    resident = _mr_bcast_resident(rank, {})
     logger.info(f"[producer] validator rank={rank}: GO received, {len(resident)} resident slots")
 
     stats = RunStats(resident=resident, total_pushes=0, push_ms=[], completed=0, wall_s=0.0)
@@ -825,19 +793,17 @@ def _run_validator(rank: int, world_size: int, sync_dir: str) -> None:
             logger.error(f"[producer] validator KV read/PCC failed: {type(e).__name__}: {e}")
             ok = False
 
-    _write_done(sync_dir, rank, ok)
+    _mr_allgather_verdict(ok)  # DONE barrier + verdict fold
     logger.info(f"[producer] validator rank={rank}: DONE ok={ok}")
     if not ok:
         sys.exit(1)
 
 
 def main() -> None:
-    role, mr_rank, world_size, sync_dir = _mr_config()
+    role, mr_rank, world_size = _mr_config()
     if role == "validator":
-        _run_validator(mr_rank, world_size, sync_dir)
+        _run_validator(mr_rank, world_size)
         return
-    if world_size > 1:
-        _clear_sync(sync_dir, world_size)
 
     cfg = _config_from_env()
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
@@ -897,10 +863,10 @@ def main() -> None:
     _drain_layer_acks(ack_channel, NUM_LAYERS * stats.total_pushes)
 
     # Multi-rank: all layers of all chunks are now written across every stage's DRAM. Release the
-    # validators (they PCC their own host's layers). Publish BEFORE the master's own read-back so the
-    # reads overlap across hosts.
+    # validators (they PCC their own host's layers) by broadcasting the resident-slot map. Do it BEFORE
+    # the master's own read-back so the reads overlap across hosts; the broadcast is the GO barrier.
     if world_size > 1:
-        _write_go(sync_dir, stats.resident)
+        _mr_bcast_resident(mr_rank, stats.resident)
 
     # Opt-in: read the generated KV back per resident slot and PCC-check vs the golden trace.
     verify_ok = True
@@ -914,14 +880,14 @@ def main() -> None:
         logger.error("[producer] PREFILL_PRODUCER_CHECK_PCC=1 but no KV chunk table available; skipping PCC.")
         verify_ok = False
 
-    # Multi-rank: wait for every validator's read-back to finish BEFORE the shutdown sentinel below tears
-    # the mesh/DRAM down (a validator still reading a torn-down device would fail). Fold their verdicts in.
+    # Multi-rank: the verdict allgather is the DONE barrier — it can't return until every validator has
+    # finished its read-back, so the shutdown sentinel below won't tear the mesh/DRAM down while one is
+    # still reading. Fold every rank's verdict (including this master's own, contributed as element [0]).
     if world_size > 1:
-        go_timeout = float(os.environ.get("PREFILL_PRODUCER_GO_TIMEOUT_S", "1800"))
-        verdicts = _wait_all_done(sync_dir, list(range(1, world_size)), go_timeout)
-        for r, v in sorted(verdicts.items()):
-            logger.info(f"[producer] validator rank={r}: ok={v.get('ok')}")
-            verify_ok = verify_ok and bool(v.get("ok"))
+        verdicts = _mr_allgather_verdict(verify_ok)
+        for r, v in enumerate(verdicts):
+            logger.info(f"[producer] rank={r}: ok={v}")
+        verify_ok = all(verdicts)
 
     # Optional graceful shutdown (PR #48718): close the stream with an all -1 PrefillMetadata sentinel so
     # the runner breaks its request loop and tears down cleanly instead of blocking to SIGKILL. Sent LAST,
