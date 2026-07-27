@@ -41,32 +41,12 @@ ORAS_VERSION="${ORAS_VERSION:-1.3.3}"
 ORAS_SHA256="${ORAS_SHA256:-9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59}"
 
 # BuildKit's own default SBOM scanner image, run as a container to generate
-# the `type=sbom` attestation. Previously left for BuildKit to resolve on its
-# own, which meant an unauthenticated, unmirrored pull straight from
-# docker.io on every attested build (primary attempt AND the Harbor-stripped
-# fallback attempt, identically) - once Docker Hub started rate-limiting/
-# auth-walling anonymous pulls from CI runner IPs, both attempts failed the
-# same way (UNAUTHORIZED / dial-tcp timeout).
-#
-# Preferred fix: callers pass syft-scanner-image (INPUT_SYFT_SCANNER_IMAGE)
-# pointing at our own self-hosted copy on GHCR (dockerfile/Dockerfile.tools'
-# syft-scanner target, an unmodified re-publish of the upstream Apache-2.0
-# image - see docker-bake.hcl). That gets the SAME Harbor pull-through +
-# GHCR-direct-fallback treatment as every other tool image below, with no
-# Docker Hub dependency at all. (Named after the tool it contains, not its
-# functional role as buildx's SBOM generator - every other tool image here
-# is named the same way, e.g. ccache/mold/oras.)
-#
-# Callers that haven't been migrated yet fall back to the previous fix:
-# Harbor does NOT proxy docker.io (only ghcr.io - see check-harbor.yaml /
-# INPUT_HARBOR_PREFIX), so the un-migrated primary attempt instead uses the
-# same precedent used elsewhere in this repo for Docker Hub images (see
-# dockerfile/Dockerfile's `mirror.gcr.io/ubuntu` base and
-# llk-build-docker-images.sh's LLK_UBUNTU_BASE_IMAGE): Google's public,
-# anonymous, unauthenticated mirror of Docker Hub. There is no org Docker Hub
-# account/credentials to authenticate its direct-docker.io fallback path
-# with, so that fallback stays anonymous - a last resort only reached if
-# mirror.gcr.io itself is unavailable.
+# the `type=sbom` attestation. If a caller passes syft-scanner-image (a
+# self-hosted GHCR copy - see docker-bake.hcl's syft-scanner target), it's
+# pulled through Harbor with a direct-GHCR fallback, same as every other
+# tool image below. Otherwise falls back to an anonymous mirror.gcr.io pull
+# with an anonymous docker.io retry (no Docker Hub account to authenticate
+# with).
 SYFT_SCANNER_PATH="docker/buildkit-syft-scanner:stable-1"
 if [ -n "${INPUT_SYFT_SCANNER_IMAGE}" ]; then
   SYFT_SCANNER_PRIMARY="${INPUT_HARBOR_PREFIX}${INPUT_SYFT_SCANNER_IMAGE}"
