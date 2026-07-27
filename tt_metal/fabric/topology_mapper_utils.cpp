@@ -86,12 +86,9 @@ std::vector<PinningConstraint> get_galaxy_fixed_asic_position_pinnings_for_mesh(
 
 namespace {
 
-// Apply MGD/galaxy pinning groups to the intra-mesh solver.
-//
-// Each PinningConstraint (AsicPinningGroup) becomes one add_required_constraint(fabric_nodes, asic_ids)
-// call — the many-to-many solver overload. Previously, 1:1 pins were added as separate (node, asic)
-// pairs; now a single proto pinnings { ... } block maps to one group constraint. Galaxy corner pins
-// are 1:many groups (one node, several allowed tray positions).
+// Apply many-to-many pinning groups as a single required constraint per group. When
+// `validate_logical_nodes` is true (map_mesh_to_physical), missing logical nodes or ASIC positions fail;
+// otherwise absent physical positions are skipped (multi-mesh solve path).
 std::optional<std::string> apply_pinning_groups(
     ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
     const std::vector<PinningConstraint>& pinning_groups,

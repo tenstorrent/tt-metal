@@ -109,7 +109,7 @@ TopologyMappingResult run_topology_mapping(
         config.asic_positions[asic_id] = std::make_pair(desc.tray_id, desc.asic_location);
     }
 
-    // Append MGD many-to-many pinning groups (AsicPinningGroup) — same path as control_plane Phase 2.
+    // Append MGD many-to-many pinning groups directly (same as control plane).
     const auto& mgd_pinnings = mgd.get_pinnings();
     config.pinnings.insert(config.pinnings.end(), mgd_pinnings.begin(), mgd_pinnings.end());
 

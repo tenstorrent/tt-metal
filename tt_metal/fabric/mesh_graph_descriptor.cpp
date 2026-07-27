@@ -1808,9 +1808,10 @@ void MeshGraphDescriptor::populate_pinnings() {
     // Extract pinnings from the top-level pinnings section, preserving the many-to-many grouping.
     //
     // Each AsicPinning entry may list multiple logical fabric nodes and multiple physical ASIC
-    // positions (all-to-all). We keep the group intact as AsicPinningGroup; downstream passes
-    // vector<AsicPinningGroup> through TopologyMappingConfig::PinningConstraint unchanged.
-    // A single-node/single-position entry is the classic 1:1 pin.
+    // positions (all-to-all). We keep the group intact here: any listed node may map to any listed
+    // position. Downstream consumers enumerate each group into the existing 1:many pinning format --
+    // one (fabric_node -> asic_positions) entry per node -- so no downstream interface changes. A
+    // single-node/single-position entry reproduces the classic one-to-one pin.
     for (const auto& pinning : proto_->pinnings()) {
         std::string expand_error;
         // Physical positions are shared by every group produced from this entry (regex-expanded when used).

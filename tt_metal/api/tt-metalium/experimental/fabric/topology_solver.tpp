@@ -324,12 +324,6 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
         return false;
     }
 
-    // Many-to-many pinning group: each target may map to any global in global_nodes (intersected with
-    // prior constraints). Unlike the old implementation, we do NOT mark globals as exclusively reserved
-    // for this target set — unused globals in the group stay available to other targets. Injectivity
-    // (distinct targets -> distinct globals) is still enforced when the mapping is materialized.
-    // Returns false when |targets| > |globals| (cannot assign injectively).
-
     // Save current state before modifying (for rollback if validation fails)
     std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state;
     for (const auto& target_node : target_nodes) {
@@ -661,8 +655,7 @@ bool MappingConstraints<TargetNode, GlobalNode>::is_valid_mapping(TargetNode tar
         return false;
     }
 
-    // Check if this global node is reserved by a legacy many-to-many constraint merge
-    // (reserved_global_nodes_ is no longer populated for new pinning groups; kept for older paths).
+    // Check if this global node is reserved by a many-to-many constraint
     auto reserved_it = reserved_global_nodes_.find(global);
     if (reserved_it != reserved_global_nodes_.end()) {
         // This global node is reserved - check if the target node is allowed to map to it
