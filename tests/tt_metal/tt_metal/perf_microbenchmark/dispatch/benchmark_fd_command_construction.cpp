@@ -12,7 +12,10 @@
 //   * Host program building (#5)  - assembling a ProgramSpec descriptor (kernels/DFBs/sems/
 //                                    RTA schema) before it is compiled into a Program.
 //   * Enqueue program      (#6)   - EnqueueMeshWorkload command construction.
-//   * Enqueue r/w buffer   (#6)   - EnqueueWriteMeshBuffer / EnqueueReadMeshBuffer construction.
+//   * Enqueue write buffer (#6)   - EnqueueWriteMeshBuffer command construction.
+//   * Read buffer (e2e)    (#6)   - blocking EnqueueReadMeshBuffer; a bandwidth-bound end-to-end
+//                                    readback (the non-blocking host-only path is noise), kept as a
+//                                    companion transfer signal rather than a host-construction metric.
 //   * Trace                (#6)   - trace capture construction + replay host cost.
 //   * Mutable updates      (#7)   - SetProgramRunArgs / UpdateProgramRunArgs (RTAs, common
 //                                    RTAs) and DFB size overrides (entry_size / num_entries).
@@ -360,12 +363,14 @@ void BM_enqueue_write_buffer(benchmark::State& state, BufferType buffer_type) {
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////
-// #6 Enqueue read buffer: time a blocking EnqueueReadMeshBuffer (read command construction +
-// device readback). enqueue_read_mesh_buffer only supports blocking, and the non-blocking
-// shard path builds a single tiny descriptor whose host cost is pure noise; the blocking
-// end-to-end read is bandwidth-bound and stable, mirroring benchmark_rw_buffer's read.
+// #6 Read buffer (end-to-end): time a blocking EnqueueReadMeshBuffer. This measures the full
+// device->host readback, NOT host command construction: enqueue_read_mesh_buffer only supports
+// blocking, and the non-blocking shard path builds a single tiny descriptor whose host cost is
+// pure noise. The blocking read is bandwidth-bound and stable, mirroring benchmark_rw_buffer's
+// read; it is kept here as a companion transfer signal, distinct from the host-construction
+// benchmarks (hence the explicit "_e2e" name).
 //////////////////////////////////////////////////////////////////////////////////////////
-void BM_enqueue_read_buffer(benchmark::State& state, BufferType buffer_type) {
+void BM_read_buffer_e2e(benchmark::State& state, BufferType buffer_type) {
     auto device = open_device();
     auto& cq = device->mesh_command_queue();
 
@@ -651,12 +656,12 @@ BENCHMARK_CAPTURE(BM_enqueue_write_buffer, l1, BufferType::L1)
     ->Iterations(DEFAULT_ITERATIONS)
     ->UseManualTime();
 
-// --- #6 enqueue read buffer (blocking, bandwidth-dominated, stable; single run) ---
-BENCHMARK_CAPTURE(BM_enqueue_read_buffer, dram, BufferType::DRAM)
+// --- #6 read buffer end-to-end (blocking, bandwidth-dominated, stable; single run) ---
+BENCHMARK_CAPTURE(BM_read_buffer_e2e, dram, BufferType::DRAM)
     ->Apply(PageSizeArgs)
     ->Iterations(DEFAULT_ITERATIONS)
     ->UseManualTime();
-BENCHMARK_CAPTURE(BM_enqueue_read_buffer, l1, BufferType::L1)
+BENCHMARK_CAPTURE(BM_read_buffer_e2e, l1, BufferType::L1)
     ->Apply(PageSizeArgs)
     ->Iterations(DEFAULT_ITERATIONS)
     ->UseManualTime();
