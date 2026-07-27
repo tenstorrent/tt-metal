@@ -37,11 +37,11 @@ struct UpdateKVCacheOperation {
 
     // batch_idx, update_idx and batch_offset are excluded from compute_program_hash (so calls
     // differing only in them cache-hit), yet the factories bake the values they derive
-    // (cache_start_id, tile_update_offset, batch_read_offset) into runtime args. Those must be
-    // re-applied to the cached program on every dispatch or they freeze at the first cache-miss
-    // value — corrupting the write offset. The buffer base addresses are handled separately by the
-    // Buffer* bindings the factories declare via emplace_runtime_args.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+    // (cache_start_id, tile_update_offset, batch_read_offset) into runtime args. Those are re-applied
+    // to the cached program on every hit via override_runtime_arguments() by re-running the selected
+    // factory's create_descriptor (single source of truth). See the .cpp.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value,
