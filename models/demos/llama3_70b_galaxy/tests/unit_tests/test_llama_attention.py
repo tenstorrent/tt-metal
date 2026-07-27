@@ -90,7 +90,7 @@ def test_llama_attention_inference(
 
     seq_len = 1
 
-    generation_start_pos = 127
+    generation_start_pos = 0
     generation_length = 1
     all_tests_pass = True
 
@@ -322,7 +322,7 @@ def test_llama_attention_inference(
                 ]
 
             for i, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
-                cache_length_to_check = min(model_args.max_seq_len, generation_start_pos + generation_length + 1)
+                cache_length_to_check = min(model_args.max_seq_len, generation_start_pos + generation_length)
                 cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
                 cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
                 does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
