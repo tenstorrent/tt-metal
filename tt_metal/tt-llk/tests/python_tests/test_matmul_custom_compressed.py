@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import numpy as np
+import pytest
 from helpers.compressed_utils import (  # noqa: F401 (autouse fixture — imported to activate in this module)
     DEEPSEEK_T420,
     FMT_CODE,
@@ -14,6 +15,8 @@ from helpers.compressed_utils import (  # noqa: F401 (autouse fixture — import
 )
 from helpers.param_config import parametrize
 from helpers.tile_constants import DEFAULT_TILE_C_DIM
+
+from conftest import blackhole_only
 
 
 def promote_assignment(assignment, ct):
@@ -127,6 +130,8 @@ SHAPES = BASE_SHAPES + DEEPSEEK_SHAPES + EXT_SHAPES
 MULTI_FORMATS = BASE_MULTI_FORMATS  # EXT_MULTI_FORMATS is not supported in face version
 
 
+@blackhole_only
+@pytest.mark.nightly
 @parametrize(
     shape=SHAPES,
     formats=SINGLE_FORMATS,
@@ -137,6 +142,8 @@ def test_matmul_custom_compressed_single(shape, formats):
     run_tile_compressed(M, K, N, assignment)
 
 
+@blackhole_only
+@pytest.mark.nightly
 @parametrize(
     shape=SHAPES,
     formats=MULTI_FORMATS,
@@ -147,6 +154,8 @@ def test_matmul_custom_compressed_random(shape, formats):
     run_tile_compressed(M, K, N, assignment)
 
 
+@blackhole_only
+@pytest.mark.nightly
 @parametrize(
     shape=SHAPES,
     formats=MULTI_FORMATS,
@@ -157,6 +166,8 @@ def test_matmul_custom_compressed_clustered(shape, formats):
     run_tile_compressed(M, K, N, assignment)
 
 
+@blackhole_only
+@pytest.mark.nightly
 @parametrize(
     shape=SHAPES,
     formats=MULTI_FORMATS,
@@ -177,6 +188,7 @@ def test_matmul_custom_compressed_interleaved(shape, formats, interleave_n):
 # Exact-count (not sampled) so the small shapes below still hit the target shares.
 
 
+@blackhole_only
 @parametrize(
     shape=DEEPSEEK_SHAPES,
     seed=[0],

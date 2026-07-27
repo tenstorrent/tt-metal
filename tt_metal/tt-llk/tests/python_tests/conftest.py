@@ -792,6 +792,21 @@ skip_for_quasar = pytest.mark.skipif(
     reason="Test is not supported on Quasar architecture",
 )
 
+wormhole_only = pytest.mark.skipif(
+    get_chip_architecture() != ChipArchitecture.WORMHOLE,
+    reason="Test is only supported on Wormhole architecture",
+)
+
+blackhole_only = pytest.mark.skipif(
+    get_chip_architecture() != ChipArchitecture.BLACKHOLE,
+    reason="Test is only supported on Blackhole architecture",
+)
+
+quasar_only = pytest.mark.skipif(
+    get_chip_architecture() != ChipArchitecture.QUASAR,
+    reason="Test is only supported on Quasar architecture",
+)
+
 skip_for_coverage = pytest.mark.skipif(
     "config.coverage_enabled",
     reason="Coverage shouldn't be ran with this test",
