@@ -8,6 +8,7 @@ the fsm loop). Graduation writes the `.py.last_good_native` snapshot, so `auto-u
 emit-e2e` keep chaining exactly as before. `promote` = the same driver with `only`/resume semantics
 handled by the gate (already-graduated components are skipped because their snapshot exists).
 """
+
 from __future__ import annotations
 
 import json
@@ -168,7 +169,13 @@ def _clear_terminal_state_for_recompose(demo_dir: Path, parent: str) -> List[str
             if isinstance(vals, list) and parent in vals:
                 st[key] = [v for v in vals if v != parent]
                 cleared.append(key)
-        for key in ("harness_skip_reason", "attempts", "consecutive_same_class", "last_failure_class", "last_failure_text"):
+        for key in (
+            "harness_skip_reason",
+            "attempts",
+            "consecutive_same_class",
+            "last_failure_class",
+            "last_failure_text",
+        ):
             m = st.get(key)
             if isinstance(m, dict) and parent in m:
                 m.pop(parent, None)
@@ -520,24 +527,31 @@ def run_bringup_cc(
         print(f"  | {mmss:<5} | {event:<13} | {mod:<50} | {f'{gn}/{total}':<9} | {left:<4} |")
 
     def _announce_graduations(st):
+        from ..final_categorization import effective_component_tally
+
         cur_g = set(st.get("graduated") or [])
         cur_s = set(st.get("shard_graduated") or [])
         comps = _read_components()
-        total = len(comps) if comps else max(_seen["total"], len(cur_g))
+        try:
+            gcount, total = effective_component_tally(model_id, Path(demo_dir), cur_g)
+        except Exception:
+            gcount, total = len(cur_g), max(_seen["total"], len(cur_g))
+        if total <= 0:
+            gcount, total = len(cur_g), max(_seen["total"], len(cur_g))
         decomp = _read_decomposed()
 
         # DECOMPOSITION: a parent newly entered the decomposed set (children spawned -> total grew)
         for parent in sorted(decomp - _seen["decomposed"]):
             children = sorted(c for c in (comps - _seen["comps"]) if c != parent)
             k = len(children) if children else max(total - _seen["total"], 0)
-            _prog_row("⊕ DECOMPOSED", f"{parent} → {k} children", len(cur_g), total)
+            _prog_row("⊕ DECOMPOSED", f"{parent} → {k} children", gcount, total)
 
         # GRADUATIONS (running count); a component that was decomposed and now graduates = RECOMPOSED parent
         for c in sorted(cur_g - _seen["grad"]):
             recomposed = c in (decomp | _seen["decomp_ever"])
-            _prog_row("↻ RECOMPOSED" if recomposed else "✓ GRADUATED", c, len(cur_g), total)
+            _prog_row("↻ RECOMPOSED" if recomposed else "✓ GRADUATED", c, gcount, total)
         for c in sorted(cur_s - _seen["shard"]):
-            _prog_row("✓ SHARD-GRAD", c, len(cur_g), total)
+            _prog_row("✓ SHARD-GRAD", c, gcount, total)
 
         _seen["grad"], _seen["shard"] = cur_g, cur_s
         _seen["comps"], _seen["decomposed"], _seen["total"] = comps, decomp, total

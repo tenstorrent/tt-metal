@@ -35,7 +35,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-
 _ON_DEVICE = "ON_DEVICE"
 _KERNEL_MISSING = "KERNEL_MISSING"
 _PENDING = "PENDING"
@@ -201,9 +200,12 @@ def build_final_categorization(
 
     kernel_missing_set = {n for n, e in skipped.items() if (e.get("category") or "").upper() == _KERNEL_MISSING}
     decomp_children = _load_decomposition_children(demo_dir)
+    absorbed = absorbed_decomposition_children(demo_dir, graduated_set)
 
     report = CategorizationReport()
     for comp in new_components:
+        if comp in absorbed:
+            continue
         if comp in graduated_set:
             report.on_device.append(comp)
             continue
@@ -361,6 +363,42 @@ def _load_decomposition_children(demo_dir: Path) -> Dict[str, List[str]]:
             if parent and paths:
                 out[parent] = paths
     return out
+
+
+def absorbed_decomposition_children(demo_dir: Path, graduated_set) -> Set[str]:
+    """Names of decomposition-children that have been rolled up into a recomposed parent which has
+    itself graduated (passed its own whole-module test). Such children are internal pieces of the
+    graduated parent: their stub files stay on disk (the parent imports them, and so may other
+    parents), but they are excluded from the top-level component tally so a recompose collapses the
+    count back to the pre-decomposition surface instead of double-counting the parent AND its pieces.
+    A child is absorbed only once its parent is graduated; while the parent is still PENDING the
+    children keep counting on their own."""
+    status_path = Path(demo_dir) / "bringup_status.json"
+    try:
+        status = json.loads(status_path.read_text())
+    except Exception:
+        return set()
+    grad = set(graduated_set or ())
+    absorbed: Set[str] = set()
+    for entry in status.get("components", []) or []:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "").strip()
+        parent = str(entry.get("_added_by_decomposition_of") or "").strip()
+        if name and parent and parent in grad:
+            absorbed.add(name)
+    return absorbed
+
+
+def effective_component_tally(model_id, demo_dir: Path, graduated_set=None) -> "tuple[int, int]":
+    """Single source of truth for the (graduated, total) top-level component tally. Both the live
+    bring-up progress counter and RUN_REPORT derive their numbers from here (via
+    build_final_categorization), so the two surfaces cannot disagree and both collapse identically
+    when a recomposed parent absorbs its decomposition-children. Returns (0, 0) when the demo has no
+    categorizable status yet (caller falls back to a raw count)."""
+    rep = build_final_categorization(model_id=model_id, demo_dir=demo_dir, graduated_set=graduated_set)
+    total = len(rep.on_device) + len(rep.pending) + len(rep.kernel_missing) + len(rep.cpu_reuse)
+    return len(rep.on_device), total
 
 
 def _infer_graduated_from_disk(demo_dir: Path, components: List[str]) -> List[str]:
