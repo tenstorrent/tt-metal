@@ -901,8 +901,16 @@ def test_gpt_oss_demo(
                     # ttnn.argmax requires bf16/fp32 input.
                     if tl.dtype not in (ttnn.bfloat16, ttnn.float32):
                         tl = ttnn.typecast(tl, ttnn.bfloat16)
-                    tt_am = ttnn.argmax(tl, dim=-1)
-                    out_tok = ttnn.to_torch(tt_am).reshape(-1)[: out_tok.shape[0]].to(torch.int32).view(-1)
+                    # argmax on a TILE-layout [.,.,32,~201K] tensor is ~8ms (reduces all
+                    # 32 padded batch rows in tiled form). Slice to the active batch and
+                    # convert to ROW_MAJOR first: argmax over a row-major 1-row vector is
+                    # ~0.2ms (a ~40x cheaper reduction). Net ~8ms/token saved.
+                    nb = out_tok.shape[0]
+                    V = tl.shape[-1]
+                    tl_rows = ttnn.slice(tl, (0, 0, 0, 0), (1, 1, nb, V))
+                    tl_rm = ttnn.to_layout(tl_rows, ttnn.ROW_MAJOR_LAYOUT)
+                    tt_am = ttnn.argmax(tl_rm, dim=-1)
+                    out_tok = ttnn.to_torch(tt_am).reshape(-1)[:nb].to(torch.int32).view(-1)
                     ttnn.deallocate(tt_am)
                 except Exception:
                     # Robust fallback: full host readback + CPU argmax.
