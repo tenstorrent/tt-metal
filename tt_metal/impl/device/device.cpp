@@ -772,6 +772,11 @@ CoreCoord Device::physical_worker_core_from_logical_core(const CoreCoord& logica
     return soc_desc.get_physical_tensix_core_from_logical(logical_core);
 }
 
+CoreCoord Device::physical_core_from_logical_core(const CoreCoord& logical_core, const tt::CoreType& core_type) const {
+    const metal_SocDescriptor& soc_desc = MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(this->id_);
+    return soc_desc.get_physical_core_from_logical_core(logical_core, core_type);
+}
+
 std::vector<CoreCoord> Device::worker_cores_from_logical_cores(const std::vector<CoreCoord>& logical_cores) const {
     std::vector<CoreCoord> worker_cores(logical_cores.size());
     for (std::size_t idx = 0; idx < logical_cores.size(); idx++) {

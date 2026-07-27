@@ -162,6 +162,17 @@ ALL_MESH_CONFIGS = [
         "fabric2d-torus-xy-8x4-2link",
         reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
     ),
+    # 2-link TORUS_XY — the CombineFabric2D isolated-fabric experiment develops against this.
+    _mesh_param(
+        (8, 4),
+        ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        get_max_payload_size(),
+        2,
+        ttnn.Topology.Ring,
+        "mesh-8x4",
+        "fabric2d-torus-xy-8x4-2link",
+        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
+    ),
 ]
 
 

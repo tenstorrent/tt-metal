@@ -609,3 +609,34 @@ def test_externally_owned_cases(
         use_fp8_output=False,
         num_links=num_links,
     )
+
+
+# ---------------------------------------------------------------------------
+# CombineFabric2D — isolated fabric-transfer experiment (see cmb-f2d plan).
+# Not a PCC test: it runs the new op and we inspect Tracy zones from the run.
+# Select the config with: -k 'fabric2d-torus-xy-8x4-2link'
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    ALL_MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+def test_combine_fabric2d(mesh_device, device_params, num_links, topology):
+    num_devices = mesh_device.get_num_devices()
+    logger.debug(
+        f"combine_fabric2d: shape={tuple(mesh_device.shape)} num_devices={num_devices} "
+        f"num_links={num_links} topology={topology}"
+    )
+    ttnn.visualize_mesh_device(mesh_device)
+
+    num_tokens = 100
+    signpost(f"combine_fabric2d start num_links={num_links} num_tokens={num_tokens}")
+    output = ttnn.experimental.deepseek_prefill.combine_fabric2d(
+        mesh_device,
+        num_links=num_links,
+        num_tokens=num_tokens,
+    )
+    ttnn.synchronize_device(mesh_device)
+    signpost("combine_fabric2d end")
+
+    logger.debug(f"✅ combine_fabric2d ran, output shape={tuple(output.shape)}")
