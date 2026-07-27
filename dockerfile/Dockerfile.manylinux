@@ -1,5 +1,5 @@
-# syntax=mirror.gcr.io/docker/dockerfile@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
-# (docker/dockerfile:1.7, pinned by digest - see dockerfile/Dockerfile's syntax line)
+# syntax=mirror.gcr.io/docker/dockerfile@sha256:0adf442eae370b6087e08edc7c50b552d80ddf261576f4ebd6421006b2461f12
+# (docker/dockerfile:1.25, the latest release - pinned by digest - see dockerfile/Dockerfile's syntax line)
 # ManyLinux Dockerfile
 # Uses pre-built tool images for ccache, mold, SFPI, and OpenMPI (ULFM).
 # Tool layers are injected via docker-bake.hcl contexts.
