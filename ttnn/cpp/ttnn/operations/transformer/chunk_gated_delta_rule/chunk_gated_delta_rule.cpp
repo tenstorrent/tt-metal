@@ -17,6 +17,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/repeat_interleave/repeat_interleave.hpp"
@@ -25,6 +26,7 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/point_to_point/point_to_point.hpp"
 #include "ttnn/device.hpp"
 #include <tt-metalium/work_split.hpp>
 
@@ -793,6 +795,95 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     output = ttnn::reshape(output, ttnn::Shape({B, H, T, V}));
     output = ttnn::permute(output, ttnn::SmallVector<int64_t>{0, 2, 1, 3});
     return {output, final_state};
+}
+
+std::tuple<ttnn::Tensor, ttnn::Tensor> kda_distributed_affine_prefix(
+    const ttnn::Tensor& transform_a,
+    const ttnn::Tensor& transform_b,
+    const ttnn::Tensor& initial_state,
+    const ttnn::Tensor& identity_a,
+    const ttnn::Tensor& zero_b,
+    uint32_t sequence_parallel_axis,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    TT_FATAL(sequence_parallel_axis < 2, "sequence_parallel_axis must be 0 or 1");
+    TT_FATAL(
+        transform_a.logical_shape() == transform_b.logical_shape() &&
+            transform_a.logical_shape() == initial_state.logical_shape() &&
+            transform_a.logical_shape() == identity_a.logical_shape() &&
+            transform_a.logical_shape() == zero_b.logical_shape(),
+        "distributed KDA affine prefix requires equal batched [K,K] tensor shapes");
+    TT_FATAL(transform_a.logical_shape().rank() >= 3, "distributed KDA affine prefix expects batched matrices");
+    TT_FATAL(
+        transform_a.logical_shape()[-2] == transform_a.logical_shape()[-1],
+        "distributed KDA affine prefix currently requires K == V");
+    for (const auto* tensor : {&transform_a, &transform_b, &initial_state, &identity_a, &zero_b}) {
+        TT_FATAL(tensor->dtype() == DataType::FLOAT32, "distributed KDA affine prefix requires FP32 tensors");
+        TT_FATAL(tensor->layout() == Layout::TILE, "distributed KDA affine prefix requires TILE tensors");
+        TT_FATAL(
+            tensor->memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "distributed KDA affine prefix requires interleaved tensors");
+    }
+
+    auto* mesh_device = transform_a.device();
+    TT_FATAL(mesh_device != nullptr, "distributed KDA affine prefix requires a mesh device");
+    const auto mesh_shape = mesh_device->shape();
+    TT_FATAL(mesh_shape.dims() == 2, "distributed KDA affine prefix requires a 2D mesh");
+    const uint32_t sp_size = mesh_shape[sequence_parallel_axis];
+    const uint32_t tp_size = mesh_shape[1 - sequence_parallel_axis];
+    TT_FATAL(sp_size > 1, "distributed KDA affine prefix requires SP > 1");
+    const auto out_mem = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
+    auto coordinate = [sequence_parallel_axis](uint32_t sp_rank, uint32_t tp_rank) {
+        return sequence_parallel_axis == 0 ? MeshCoordinate(sp_rank, tp_rank) : MeshCoordinate(tp_rank, sp_rank);
+    };
+    auto shift_predecessors = [&](const ttnn::Tensor& source, const ttnn::Tensor& default_value, uint32_t distance) {
+        auto shifted = ttnn::clone(default_value, std::nullopt, out_mem, compute_kernel_config);
+        for (uint32_t tp_rank = 0; tp_rank < tp_size; ++tp_rank) {
+            for (uint32_t destination = distance; destination < sp_size; ++destination) {
+                const auto sender_coord = coordinate(destination - distance, tp_rank);
+                const auto receiver_coord = coordinate(destination, tp_rank);
+                shifted = ttnn::point_to_point(
+                    source, receiver_coord, sender_coord, ttnn::ccl::Topology::Linear, shifted, std::nullopt);
+            }
+        }
+        return shifted;
+    };
+    auto matmul_fp32 = [&](const ttnn::Tensor& lhs, const ttnn::Tensor& rhs) {
+        return ttnn::matmul(
+            lhs, rhs, false, false, out_mem, DataType::FLOAT32, std::nullopt, std::nullopt, compute_kernel_config);
+    };
+
+    auto prefix_a = transform_a;
+    auto prefix_b = transform_b;
+    for (uint32_t distance = 1; distance < sp_size; distance *= 2) {
+        auto predecessor_a = shift_predecessors(prefix_a, identity_a, distance);
+        auto predecessor_b = shift_predecessors(prefix_b, zero_b, distance);
+        auto composed_b = matmul_fp32(prefix_a, predecessor_b);
+        prefix_a = matmul_fp32(prefix_a, predecessor_a);
+        prefix_b = ttnn::add(composed_b, prefix_b, std::nullopt, out_mem);
+    }
+
+    auto entry_a = shift_predecessors(prefix_a, identity_a, 1);
+    auto entry_b = shift_predecessors(prefix_b, zero_b, 1);
+    auto entry_state = matmul_fp32(entry_a, initial_state);
+    entry_state = ttnn::add(entry_state, entry_b, std::nullopt, out_mem);
+
+    auto inclusive_state = matmul_fp32(prefix_a, initial_state);
+    inclusive_state = ttnn::add(inclusive_state, prefix_b, std::nullopt, out_mem);
+    auto final_state = ttnn::clone(zero_b, std::nullopt, out_mem, compute_kernel_config);
+    for (uint32_t tp_rank = 0; tp_rank < tp_size; ++tp_rank) {
+        const auto sender_coord = coordinate(sp_size - 1, tp_rank);
+        for (uint32_t destination = 0; destination < sp_size; ++destination) {
+            final_state = ttnn::point_to_point(
+                inclusive_state,
+                coordinate(destination, tp_rank),
+                sender_coord,
+                ttnn::ccl::Topology::Linear,
+                final_state,
+                std::nullopt);
+        }
+    }
+    return {entry_state, final_state};
 }
 
 ttnn::Tensor kda_gated_rms_norm(

@@ -106,6 +106,24 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("rms_epsilon") = 1e-5f,
         nb::arg("summary_group_chunks") = 8);
 
+    ttnn::bind_function<"kda_distributed_affine_prefix", "ttnn.transformer.">(
+        mod,
+        R"doc(
+        Compose one affine KDA partition summary per SP rank with a logarithmic
+        causal prefix. Returns each rank entry state and the global final state
+        replicated over the SP mesh axis.
+        )doc",
+        &ttnn::transformer::kda_distributed_affine_prefix,
+        nb::arg("transform_a").noconvert(),
+        nb::arg("transform_b").noconvert(),
+        nb::arg("initial_state").noconvert(),
+        nb::arg("identity_a").noconvert(),
+        nb::arg("zero_b").noconvert(),
+        nb::kw_only(),
+        nb::arg("sequence_parallel_axis"),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
+
     ttnn::bind_function<"kda_gated_rms_norm", "ttnn.transformer.">(
         mod,
         "Fused per-head RMSNorm and sigmoid gate for tile-aligned KDA prefill.",

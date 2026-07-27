@@ -83,6 +83,24 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     float rms_epsilon = 1e-5f,
     uint32_t summary_group_chunks = 8);
 
+/**
+ * Logarithmic affine prefix over sequence partitions of one 2D mesh tensor.
+ *
+ * Each rank owns one local partition transform S_out = A @ S_in + B.
+ * identity_a and zero_b are caller-owned, trace-stable constants with the
+ * same local shape as A/B. Returns each partition entry state and the global
+ * final state replicated along sequence_parallel_axis.
+ */
+std::tuple<ttnn::Tensor, ttnn::Tensor> kda_distributed_affine_prefix(
+    const ttnn::Tensor& transform_a,
+    const ttnn::Tensor& transform_b,
+    const ttnn::Tensor& initial_state,
+    const ttnn::Tensor& identity_a,
+    const ttnn::Tensor& zero_b,
+    uint32_t sequence_parallel_axis,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+
 /** Fused per-head RMSNorm and sigmoid gate for tile-aligned KDA prefill. */
 ttnn::Tensor kda_gated_rms_norm(
     const ttnn::Tensor& input,
