@@ -270,18 +270,24 @@ def sliding_read_offset(prompt_len: int, span: int, p_max: int) -> int:
 
 
 def denoise_sliding_window_enabled() -> bool:
-    """Whether denoise applies HF's sliding-layer key retention (#51080).
+    """Whether denoise applies HF's sliding-layer key retention (#51080). Default ON.
 
-    HF's sliding layers hold only the last ``sliding_window - 1`` committed tokens, so TT's
-    all-attend denoise currently attends keys HF does not have, on 25 of 30 layers, for every
-    prompt past 1024 tokens. Enabling this makes TT match HF.
+    HF's sliding layers hold only the last ``sliding_window - 1`` committed tokens, so a maskless
+    all-attend denoise attends keys HF does not have, on 25 of 30 layers, for every committed prefix
+    past 1024 tokens. Enabling this makes TT match HF; below 1024 the window never binds and the mask
+    is bit-identical, so the change is confined to the regime where TT was wrong.
 
-    Default OFF because it is decision-CHANGING above ``prompt_len = 1024`` and its gate is a
-    decision-agreement run against fp32 HF (not against today's TT output, which is the defect
-    being corrected). Below 1024 the window never binds and the mask is identical to today's, so
-    enabling it there is bit-exact. Flip the default once the fp32 HF agreement run lands.
+    Gated and flipped on the GPQA-Diamond decision-agreement run
+    (``doc/decision_fidelity/device_gumbel_restored.md`` section 10). The evidence the old default was
+    waiting for: 56 of the 64 shipped-config collapses happen at or after the block where the
+    committed prefix crosses 1023, clustered at blocks 12-14, matching the growth of the excess keys
+    TT attended (267 at block 4, 2577 at block 13 against 1023 legitimate). Retention was measured on
+    the reference rather than assumed -- HF caches exactly 1023 committed keys on sliding layers and
+    the full prompt on full layers (``doc/decision_fidelity/ref_sliding_retention.py``).
+
+    Set ``DG_DENOISE_SLIDING_WINDOW=0`` to restore the old maskless behaviour.
     """
-    return os.environ.get("DG_DENOISE_SLIDING_WINDOW", "0").lower() in ("1", "true", "yes", "on")
+    return os.environ.get("DG_DENOISE_SLIDING_WINDOW", "1").lower() in ("1", "true", "yes", "on")
 
 
 def _layer_type_for_denoise(tt_model, layer_idx: int) -> str | None:

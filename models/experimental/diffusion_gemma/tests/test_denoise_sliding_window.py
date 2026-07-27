@@ -44,10 +44,16 @@ def _reveal(prompt_len, *, layer_type, enforce):
     )
 
 
-def test_flag_defaults_off(monkeypatch):
-    """Decision-changing above prompt_len=W-1, so it must stay opt-in until gated."""
+def test_flag_defaults_on_and_zero_opts_out(monkeypatch):
+    """Gated by the GPQA decision-agreement run, so retention is now the default.
+
+    56 of 64 shipped-config collapses were at or after the block whose committed prefix crosses
+    W-1; below that the mask is bit-identical, so the flip only changes the regime that was wrong.
+    """
     monkeypatch.delenv("DG_DENOISE_SLIDING_WINDOW", raising=False)
-    assert DF.denoise_sliding_window_enabled() is False
+    assert DF.denoise_sliding_window_enabled() is True
+    monkeypatch.setenv("DG_DENOISE_SLIDING_WINDOW", "0")
+    assert DF.denoise_sliding_window_enabled() is False, "the maskless path must stay reachable"
     monkeypatch.setenv("DG_DENOISE_SLIDING_WINDOW", "1")
     assert DF.denoise_sliding_window_enabled() is True
 
@@ -207,7 +213,9 @@ def test_sliding_layer_needs_mask_threshold_is_window_minus_one():
 def test_span_gate_requires_the_retention_mask(monkeypatch):
     """A bounded read without the retention mask would CHANGE visibility, not implement it."""
     monkeypatch.setenv("DG_DENOISE_SLIDING_SPAN", "1")
-    monkeypatch.delenv("DG_DENOISE_SLIDING_WINDOW", raising=False)
+    # Explicit "0", not delenv: the retention mask defaults ON now, so unsetting would satisfy the
+    # dependency instead of removing it, and the test would stop testing anything.
+    monkeypatch.setenv("DG_DENOISE_SLIDING_WINDOW", "0")
     assert DF.denoise_sliding_span_enabled() is False, "span must not engage without the window mask"
     monkeypatch.setenv("DG_DENOISE_SLIDING_WINDOW", "1")
     assert DF.denoise_sliding_span_enabled() is True
