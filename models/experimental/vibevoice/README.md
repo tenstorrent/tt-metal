@@ -100,6 +100,43 @@ python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_45min --max_
 | `--trace` (default) | `VV_TRACE_SEGMENT=1` | whole segment, device-driven (llama shape) | fused frame replayed per frame; ~1.4 GB trace region + 2 CQs |
 | `--no-trace` | `VV_TRACE_SEGMENT=0` | eager AR loop | for debugging / A/B |
 
+### Host operations (trace-accelerated run)
+
+
+**1. Steady-state frame — runs every AR step.**
+
+| Op | Type | Used for |
+|----|------|----------|
+| host pos/neg mirror `+=1` | hostCPU | keep host position counters synced to on-device `plus_one` (to pick RoPE rows) |
+| RoPE write ×4 (cos/sin pos+neg) | H2D ×4 | per-position rotary embeddings for pos & neg LM attention |
+| noise write | H2D | this frame's diffusion init noise |
+| `to_torch(audio_chunk)` | D2H | pull frame audio to host |
+| `loopbreaker.update` | hostCPU | anti-repetition detector (long-context drift safeguard) |
+| `_emit_audio` (append) | hostCPU | accumulate frame audio into the waveform |
+| `to_torch(token_idx)` | D2H | read constrained-argmax → next token; AR control |
+| `_gen_tokens.append` / `valid_ids[idx]` / `noise[i]` | hostCPU | token record; local→global id; select noise row |
+
+**2. Segment boundary — runs only when a new speaker segment starts.**
+
+| Op | Type | Used for |
+|----|------|----------|
+| inter-segment token readbacks (`speech_end`/text/`speech_start` argmax) | D2H | advance AR control across boundary/text tokens |
+| frame-0 `write_int` pos/neg + seed-hidden copy | H2D+D2D | rewind device positions; seed loop-carried hidden from segment-start hidden |
+| `_sf_zero_conv` | H2D | reset acoustic/semantic conv streaming caches for the new segment |
+| `_boot` host writes (RoPE + embed for neg-prefill) | H2D | seed the negative-CFG condition for the segment's first frame |
+
+**3. One-time — runs once per `generate()` call.**
+
+| Op | Type | Used for |
+|----|------|----------|
+| voice-clone encode (per speaker, per chunk): audio up / latents down | H2D/D2H | encode the reference voices → acoustic latents |
+| scale/bias + `feats=(lat+bias)*scale` | hostCPU | normalize latents before the acoustic connector |
+| embed scatter (embeds→host→scatter→up) | D2H→host→H2D | build prefill `inputs_embeds` (voice embeds into speech slots) |
+| `reset_*_cache` | H2D | reset conv streaming caches for a fresh generation |
+| `torch.randn(max_steps,…)` | hostCPU | pre-draw all diffusion init noise (RNG-aligned) |
+| first `_greedy_argmax` | D2H | first token after prefill |
+| `cat(audio_chunks)` / build `sequences` / output | hostCPU | assemble final waveform + token sequence |
+
 ## Speaker similarity (SIM) test
 
 `tests/pcc/test_e2e_sim.py` checks that on-device TTNN generation preserves the *cloned speaker's
