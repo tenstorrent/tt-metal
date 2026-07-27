@@ -20,10 +20,10 @@ constexpr bool runtime_conditional_element_supported() {
     } else if constexpr (is_dest_only_op_v<Inner>) {
         return true;
     } else if constexpr (is_binary_fpu_op_v<Inner>) {
-        return !Inner::uses_dest_accumulation && Inner::APolicy == InputLifecycle::CallerManaged &&
-               (Inner::same_dfb || Inner::BPolicy == InputLifecycle::CallerManaged);
+        return !Inner::uses_dest_accumulation && Inner::AWait == WaitPolicy::None && Inner::APop == PopPolicy::None &&
+               (Inner::same_dfb || (Inner::BWait == WaitPolicy::None && Inner::BPop == PopPolicy::None));
     } else if constexpr (is_cb_reader_op_v<Inner>) {
-        return Inner::Policy == InputLifecycle::CallerManaged;
+        return Inner::Wait == WaitPolicy::None && Inner::Pop == PopPolicy::None;
     } else {
         return false;
     }

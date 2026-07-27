@@ -26,23 +26,24 @@ ALWI void update_running_stat() {
     ckl::eltwise_chain(
         ckl::EltwiseShape::single(),
         ckl::BinaryFpu<
-            ckl::input(cb_one, ckl::InputLifecycle::CallerManaged),
-            ckl::input(cb_momentum, ckl::InputLifecycle::CallerManaged),
+            ckl::input(cb_one, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+            ckl::input(cb_momentum, ckl::WaitPolicy::None, ckl::PopPolicy::None),
             BinaryFpuOp::Sub,
             ckl::BroadcastDim::None>{},  // D0 = 1 - momentum
         ckl::DestReuseBinary<ckl::input(cb_old), BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>{},  // D0 = (1 -
                                                                                                          // momentum) *
                                                                                                          // old_stat
         ckl::BinaryFpu<
-            ckl::input(cb_momentum, ckl::InputLifecycle::CallerManaged),
+            ckl::input(cb_momentum, ckl::WaitPolicy::None, ckl::PopPolicy::None),
             ckl::input(cb_batch),
             BinaryFpuOp::Mul,
             ckl::BroadcastDim::None,
             D::D1>{},                           // D1 = momentum * batch_stat
         ckl::AddBinary<D::D0, D::D1, D::D0>{},  // D0 = D0 + D1
-        ckl::PackTile<ckl::output(cb_updated, ckl::OutputLifecycle::Bulk)>{},
-        ckl::
-            OptionalChainElement<AlsoOut0, ckl::PackTile<ckl::output(cb_out0, ckl::OutputLifecycle::CallerManaged)>>{});
+        ckl::PackTile<ckl::output(cb_updated, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{},
+        ckl::OptionalChainElement<
+            AlsoOut0,
+            ckl::PackTile<ckl::output(cb_out0, ckl::ReservePolicy::None, ckl::PushPolicy::None)>>{});
 }
 
 void kernel_main() {

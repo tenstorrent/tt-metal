@@ -1,0 +1,928 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Critical Review — Eltwise Chain vs 218b627e</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #080b0e;
+      --panel: #10151a;
+      --panel-2: #151c22;
+      --line: #29343d;
+      --text: #edf3f7;
+      --muted: #9baab5;
+      --high: #ff6b63;
+      --medium: #ffb454;
+      --low: #65b8ff;
+      --accent: #78e6bd;
+      --code: #091015;
+      --radius: 14px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 8% -5%, rgba(255, 107, 99, .12), transparent 31rem),
+        radial-gradient(circle at 92% 4%, rgba(101, 184, 255, .09), transparent 27rem),
+        var(--bg);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.55;
+    }
+
+    code, pre, .mono {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    a { color: var(--accent); }
+    .shell {
+      width: min(1260px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 32px 0 80px;
+    }
+
+    .hero {
+      padding: 66px 0 46px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .eyebrow {
+      color: var(--accent);
+      font: 700 11px/1.4 "SFMono-Regular", Consolas, monospace;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 980px;
+      margin: 14px 0 22px;
+      font-size: clamp(46px, 7vw, 92px);
+      line-height: .94;
+      letter-spacing: -.065em;
+    }
+
+    .lede {
+      max-width: 850px;
+      margin: 0;
+      color: var(--muted);
+      font-size: clamp(16px, 2vw, 20px);
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 9px;
+      margin-top: 28px;
+    }
+
+    .pill, .severity {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 7px 11px;
+      color: var(--muted);
+      background: rgba(16, 21, 26, .82);
+      font: 650 11px "SFMono-Regular", Consolas, monospace;
+    }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin: 28px 0 0;
+    }
+
+    .stat {
+      min-height: 120px;
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: linear-gradient(145deg, rgba(21, 28, 34, .92), rgba(12, 17, 21, .96));
+    }
+
+    .stat strong {
+      display: block;
+      font: 700 34px/1 "SFMono-Regular", Consolas, monospace;
+    }
+
+    .stat span {
+      display: block;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    nav {
+      position: sticky;
+      z-index: 10;
+      top: 0;
+      display: flex;
+      gap: 7px;
+      padding: 12px 0;
+      overflow-x: auto;
+      border-bottom: 1px solid var(--line);
+      background: rgba(8, 11, 14, .93);
+      backdrop-filter: blur(18px);
+    }
+
+    nav a {
+      flex: 0 0 auto;
+      padding: 7px 10px;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      color: var(--muted);
+      text-decoration: none;
+      font: 650 11px "SFMono-Regular", Consolas, monospace;
+    }
+
+    nav a:hover { color: var(--text); border-color: var(--line); }
+    section { scroll-margin-top: 70px; padding-top: 58px; }
+
+    .section-head {
+      display: grid;
+      grid-template-columns: minmax(220px, .6fr) minmax(0, 1fr);
+      gap: 30px;
+      align-items: end;
+      margin-bottom: 22px;
+    }
+
+    h2 {
+      margin: 8px 0 0;
+      font-size: clamp(32px, 5vw, 56px);
+      line-height: 1;
+      letter-spacing: -.05em;
+    }
+
+    .section-head p { margin: 0; color: var(--muted); }
+
+    .finding-list { display: grid; gap: 16px; }
+    .finding {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: linear-gradient(145deg, rgba(21, 28, 34, .93), rgba(11, 16, 20, .97));
+      overflow: hidden;
+    }
+
+    .finding.high { border-left: 4px solid var(--high); }
+    .finding.medium { border-left: 4px solid var(--medium); }
+    .finding.low { border-left: 4px solid var(--low); }
+
+    .finding-head {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 14px;
+      align-items: start;
+      padding: 22px 24px 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .index {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      color: var(--muted);
+      font: 700 13px "SFMono-Regular", Consolas, monospace;
+    }
+
+    .finding h3 {
+      margin: 0;
+      font-size: 21px;
+      line-height: 1.25;
+      letter-spacing: -.025em;
+    }
+
+    .finding-subtitle {
+      margin: 7px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .severity.high { color: var(--high); }
+    .severity.medium { color: var(--medium); }
+    .severity.low { color: var(--low); }
+
+    .finding-body {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(300px, .8fr);
+      gap: 22px;
+      padding: 24px;
+    }
+
+    .finding-body h4 {
+      margin: 0 0 9px;
+      color: var(--accent);
+      font: 700 11px "SFMono-Regular", Consolas, monospace;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .finding-body p { margin: 0 0 18px; color: #cad4db; }
+    .finding-body ul { margin: 0; padding-left: 19px; color: #cad4db; }
+    .finding-body li + li { margin-top: 7px; }
+
+    .evidence {
+      display: grid;
+      gap: 10px;
+      align-content: start;
+    }
+
+    pre {
+      margin: 0;
+      padding: 16px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--code);
+      color: #d6e3ea;
+      font-size: 12px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+    }
+
+    .refs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 12px;
+    }
+
+    .refs a {
+      padding: 6px 8px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: rgba(9, 16, 21, .74);
+      text-decoration: none;
+      font: 600 10px "SFMono-Regular", Consolas, monospace;
+    }
+
+    .fix {
+      margin-top: 18px;
+      padding: 15px 16px;
+      border: 1px solid rgba(120, 230, 189, .25);
+      border-radius: 10px;
+      background: rgba(120, 230, 189, .055);
+    }
+
+    .fix strong {
+      color: var(--accent);
+      font: 700 11px "SFMono-Regular", Consolas, monospace;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
+
+    .fix p { margin: 7px 0 0; }
+
+    .method {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+
+    .method-card {
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+    }
+
+    .method-card strong {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+
+    .method-card p { margin: 0; color: var(--muted); font-size: 13px; }
+
+    .priority-table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+    }
+
+    .priority-table th, .priority-table td {
+      padding: 13px 15px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      font-size: 13px;
+    }
+
+    .priority-table th {
+      color: var(--muted);
+      font: 700 10px "SFMono-Regular", Consolas, monospace;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .priority-table tr:last-child td { border-bottom: 0; }
+    footer {
+      margin-top: 62px;
+      padding-top: 22px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    @media (max-width: 900px) {
+      .summary, .method { grid-template-columns: 1fr 1fr; }
+      .finding-body, .section-head { grid-template-columns: 1fr; }
+      .finding-head { grid-template-columns: auto 1fr; }
+      .finding-head .severity { grid-column: 2; justify-self: start; }
+    }
+
+    @media (max-width: 580px) {
+      .shell { width: min(100% - 20px, 1260px); }
+      .hero { padding-top: 42px; }
+      .summary, .method { grid-template-columns: 1fr; }
+      .finding-head, .finding-body { padding: 17px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="hero" id="top">
+      <div class="eyebrow">Critical code review · 2026-07-27</div>
+      <h1>Eltwise chain review</h1>
+      <p class="lede">
+        Detailed review of the working tree against
+        <span class="mono">218b627e3044a15c759f2957201a473f2b48fa2b</span>.
+        The change introduces a large compile-time chain abstraction and migrates many compute kernels onto it.
+        The main risks are semantic: lifecycle ownership, DEST capacity, addressing, and initialization state.
+        This report also records the implemented follow-up for the first three findings and the API redesign.
+      </p>
+      <div class="meta">
+        <span class="pill">Comparison base: 218b627e</span>
+        <span class="pill">Direct wait/pop + reserve/push API</span>
+        <span class="pill">193-test aggregate pass</span>
+        <span class="pill">Wormhole device validation</span>
+      </div>
+      <div class="summary">
+        <div class="stat"><strong style="color:var(--high)">3</strong><span>High-severity correctness or hang risks</span></div>
+        <div class="stat"><strong style="color:var(--medium)">3</strong><span>Medium-severity API or lifecycle defects</span></div>
+        <div class="stat"><strong style="color:var(--low)">1</strong><span>Low-severity public API inconsistency</span></div>
+        <div class="stat"><strong>7</strong><span>Total actionable findings</span></div>
+      </div>
+    </header>
+
+    <nav aria-label="Report navigation">
+      <a href="#findings">Findings</a>
+      <a href="#f1">01 DEST capacity</a>
+      <a href="#f2">02 BulkDrain</a>
+      <a href="#f3">03 Strided bcast</a>
+      <a href="#f4">04 Pack collision</a>
+      <a href="#f5">05 Init hoisting</a>
+      <a href="#f6">06 Dest reuse API</a>
+      <a href="#f7">07 Exp API</a>
+      <a href="#follow-up">Follow-up</a>
+      <a href="#priority">Priority</a>
+      <a href="#validation">Validation</a>
+    </nav>
+
+    <section id="findings">
+      <div class="section-head">
+        <div>
+          <div class="eyebrow">Review results</div>
+          <h2>Findings</h2>
+        </div>
+        <p>
+          Severity reflects the worst credible outcome from a valid public API instantiation.
+          “High” means a silent wrong result, deadlock, or non-terminating device loop is reachable.
+        </p>
+      </div>
+
+      <div class="finding-list">
+        <article class="finding high" id="f1">
+          <header class="finding-head">
+            <div class="index">01</div>
+            <div>
+              <h3>Oversized DEST footprints can make the device loop non-terminating</h3>
+              <p class="finding-subtitle">Missing slot validation combines with a zero-valued block clamp.</p>
+            </div>
+            <span class="severity high"><span class="dot"></span>High</span>
+          </header>
+          <div class="finding-body">
+            <div>
+              <h4>Problem</h4>
+              <p>
+                The CRTP bases validate their DEST slots, but hand-written elements such as
+                <code>Where</code>, <code>LgammaAdjusted</code>, <code>Lerp</code>,
+                <code>SnakeBeta</code>, <code>Addcmul</code>, and <code>Addcdiv</code> only compute a
+                <code>lane_width</code>. They do not assert that the referenced slots fit
+                <code>DEST_AUTO_LIMIT</code>.
+              </p>
+              <h4>Failure path</h4>
+              <ul>
+                <li>An element reports <code>lane_width &gt; DEST_AUTO_LIMIT</code>.</li>
+                <li><code>chain_max_block_value()</code> performs integer division and returns zero.</li>
+                <li>The runtime clamp assigns <code>block_size = 0</code>.</li>
+                <li>The inner walk uses <code>wt_base += block_size</code>, so it never advances.</li>
+              </ul>
+              <div class="fix">
+                <strong>Recommended fix</strong>
+                <p>
+                  Add a central compile-time assertion that every chain has a positive
+                  <code>chain_max_block_v</code> and that its lane footprint fits DEST. Keep per-element
+                  assertions for precise diagnostics, but do not rely on every future element remembering them.
+                </p>
+              </div>
+            </div>
+            <div class="evidence">
+              <pre><code>// Valid type syntax, invalid physical footprint:
+Where&lt;DF, Dst::D0, Dst::D1, Dst::D2, Dst::D8&gt;
+
+max_block = DEST_AUTO_LIMIT / lane_width; // 8 / 9 == 0
+block_size = max_block;                   // becomes 0
+
+for (...; wt_base &lt; Wt; wt_base += block_size) {
+    // never advances
+}</code></pre>
+              <div class="refs">
+                <a href="../ttnn/cpp/ttnn/kernel_lib/eltwise_special.inl">eltwise_special.inl:48</a>
+                <a href="../ttnn/cpp/ttnn/kernel_lib/eltwise_chain.inl">eltwise_chain.inl:1493</a>
+                <a href="../ttnn/cpp/ttnn/kernel_lib/eltwise_chain.inl">eltwise_chain.inl:3043</a>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="finding high" id="f2">
+          <header class="finding-head">
+            <div class="index">02</div>
+            <div>
+              <h3><code>BulkDrain</code> bypasses duplicate upfront-reader validation</h3>
+              <p class="finding-subtitle">Two definitions of “upfront” disagree inside the same planner.</p>
+            </div>
+            <span class="severity high"><span class="dot"></span>High</span>
+          </header>
+          <div class="finding-body">
+            <div>
+              <h4>Problem</h4>
+              <p>
+                <code>BulkDrain</code> is defined as an upfront wait followed by per-tile pops.
+                The execution path recognizes the upfront wait, but the metadata used by
+                <code>ct_reader_collide()</code> omits <code>BulkDrain</code> from
+                <code>is_upfront</code>.
+              </p>
+              <h4>Impact</h4>
+              <p>
+                Two reader elements can therefore share the same CB under <code>BulkDrain</code>.
+                Each emits a full-window wait and each pops one page per iteration. The second element
+                reads from the already-advanced front, and the chain attempts to consume twice the supplied
+                number of pages. Depending on producer timing, this is a wrong-result or hang.
+              </p>
+              <div class="fix">
+                <strong>Recommended fix</strong>
+                <p>
+                  Eliminate the separate hand-maintained <code>is_upfront</code> list. Derive collision
+                  behavior directly from <code>wait_policy</code> and <code>pop_policy</code>, which are
+                  the actual execution facts.
+                </p>
+              </div>
+            </div>
+            <div class="evidence">
+              <pre><code>BulkDrain = {
+    WaitPolicy::Upfront,
+    PopPolicy::PerTile
+};
+
+// Execution:
+waits_upfront() == true
+
+// Collision planner:
+is_upfront == false  // BulkDrain omitted</code></pre>
+              <div class="refs">
+                <a href="../ttnn/cpp/ttnn/kernel_lib/eltwise_chain.inl">eltwise_chain.inl:39</a>
+                <a href="../ttnn/cpp/ttnn/kernel_lib/eltwise_chain.inl">eltwise_chain.inl:977</a>
+                <a href="../ttnn/cpp/ttnn/kernel_lib/eltwise_chain.inl">eltwise_chain.inl:1853</a>
+                <a href="../ttnn/cpp/ttnn/kernel_lib/eltwise_chain.inl">eltwise_chain.inl:2365</a>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="finding high" id="f3">
+          <header class="finding-head">
+            <div class="index">03</div>
+            <div>
+              <h3><code>UnaryBcast</code> accepts strided addressing but cannot receive a stride</h3>
+              <p class="finding-subtitle">The public configuration compiles and silently produces repeated tile indices.</p>
+            </div>
+            <span class="severity high"><span class="dot"></span>High</span>
+          </header>
+          <div class="finding-body">
+            <div>
+              <h4>Problem</h4>
+              <p>
+                A <code>UnaryBcast</code> input configured with <code>TileOffset::Strided</code> and
+                <code>CallerManaged</code> passes the current validation. Unlike the other reader types,
+                however, <code>UnaryBcastImpl</code> has no constructor taking
+                <code>StridedTileRange</code>. The inherited <code>row_stride</code> remains zero.
+              </p>
+              <h4>Resulting indices</h4>
+              <ul>
+                <li>Block indexing becomes <code>base + row * 0 + column</code>, repeating each row.</li>
+                <li>Col indexing becomes <code>base + row * 0</code>, always selecting the base tile.</li>
+                <li>No compile-time or runtime error signals that the requested addressing was ignored.</li>
+              </ul>
+              <div class="fix">
+                <strong>Recommended fix</strong>
+                <p>
+                  Add the missing <code>StridedTileRange</code> constructor and the same explicit
+                  Strided/CallerManaged assertion used by the other readers, or reject Strided for
+                  <code>UnaryBcast</code> until it is implemented.
+                </p>
+              </div>
+            </div>
+            <div class="evidence">
+              <pre><code>static_assert(
+    Offset == TileOffset::Unset ||
+    is_legal_input_lifecycle_with_base(Policy));
+
+// Only these exist:
+UnaryBcastImpl();
+UnaryBcastImpl(uint32_t base);
+
+// But exec consumes row_stride, which stays 0:
+idx&lt;IndexMode, Offset&gt;(..., row_stride);</code></pre>
+              <div class="refs">
+                <a href="../ttnn/cpp/ttnn/kernel_lib/eltwise_bcast.inl">eltwise_bcast.inl:54</a>
+                <a href="../ttnn/cpp/ttnn/kernel_lib/eltwise_bcast.inl">eltwise_bcast.inl:67</a>
+                <a href="../ttnn/cpp/ttnn/kernel_lib/eltwise_bcast.inl">eltwise_bcast.inl:100</a>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="finding medium" id="f4">
+          <header class="finding-head">
+            <div class="index">04</div>
+            <div>
+              <h3>Pack collision detection checks the source slot, not the output address</h3>
+              <p class="finding-subtitle">Different DEST slots do not make same-CB output windows distinct.</p>
+            </div>
+            <span class="severity medium"><span class="dot"></span>Medium-high</span>
+          </header>
+          <div class="finding-body">
+            <div>
+              <h4>Problem</h4>
+              <p>
+                Two <code>PackTile</code> elements are considered colliding only when both their CB and
+                DEST slot match. For walk-addressed lifecycles, the output index is based on the chain
+                position and optional tile offset—not the source DEST slot.
+              </p>
+              <h4>Risky cases</h4>
+              <ul>
+                <li><code>Bulk</code>: both writers reserve the same CB upfront and pack the same index range.</li>
+                <li><code>CallerManaged</code>: both write the caller-owned window at identical indices.</li>
+                <li><code>ReserveNonePushEnd</code>: both can overwrite the same pre-reserved pages.</li>
+              </ul>
+              <p>
+                L1/DEST accumulation may intentionally combine writes, but ordinary output lifecycles need
+                a different collision rule.
+              </p>
+              <div class="fix">
+                <strong>Recommended fix</strong>
+                <p>
+                  Model collisions using CB identity plus output addressing/lifecycle. Conservatively reject
+                  same-CB writers for walk-addressed ordinary outputs, with narrowly defined exceptions for
+                  supported accumulation modes.
+                </p>
+              </div>
+            </div>
+            <div class="evidence">
+              <pre><code>// Current rule:
+same_pack_cb &amp;&amp; same_pack_dst_slot
+
+// But for Bulk/CallerManaged:
+out_idx = base + i_flat;
+
+// Two different source slots still write
+// the same (CB, out_idx).</code></pre>
+              <div class="refs">
+                <a href="../ttnn/cpp/ttnn/kernel_lib/eltwise_chain.inl">eltwise_chain.inl:1020</a>
+                <a href="../ttnn/cpp/ttnn/kernel_lib/eltwise_chain.inl">eltwise_chain.inl:1870</a>
+                <a href="../ttnn/cpp/ttnn/kernel_lib/eltwise_chain.inl">eltwise_chain.inl:2851</a>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="finding medium" id="f5">
+          <header class="finding-head">
+            <div class="index">05</div>
+            <div>
+              <h3>Init hoisting assumes type equality implies equal runtime initialization</h3>
+              <p class="finding-subtitle">That assumption is false for seeded, instance-stateful operations.</p>
+            </div>
+            <span class="severity medium"><span class="dot"></span>Medium</span>
+          </header>
+          <div class="finding-body">
+            <div>
+              <h4>Problem</h4>
+              <p>
+                Hoist uniformity compares operation types using <code>std::is_same_v</code>. Yet the design
+                explicitly permits instance methods for initialization, and both <code>Dropout</code> and
+                <code>RandTile</code> seed hardware state from runtime object members.
+              </p>
+              <h4>Failure scenario</h4>
+              <p>
+                Two same-type <code>Dropout&lt;Dst::D0&gt;</code> elements with different seeds are considered
+                uniform. Both init calls run before any compute, so the second seed is active when the first
+                operation executes. <code>RandTile</code> is excluded from the SFPU-uniformity predicate but is
+                still selected by the broader DEST-only hoist condition, allowing the same last-init-wins behavior.
+              </p>
+              <div class="fix">
+                <strong>Recommended fix</strong>
+                <p>
+                  Introduce an explicit element trait such as <code>boot_hoistable_init</code>, defaulting
+                  conservatively. Seeded or otherwise stateful elements should initialize immediately before
+                  their execution stage unless their state equivalence is provable.
+                </p>
+              </div>
+            </div>
+            <div class="evidence">
+              <pre><code>// Planner considers only type identity:
+std::is_same_v&lt;Rep, E&gt;
+
+// But init reads instance state:
+void Dropout::init() const {
+    dropout_kernel_init(seed);
+}
+
+// Hoist fold runs every selected init before walk.</code></pre>
+              <div class="refs">
+                <a href="../ttnn/cpp/ttnn/kernel_lib/eltwise_chain.inl">eltwise_chain.inl:2248</a>
+                <a href="../ttnn/cpp/ttnn/kernel_lib/eltwise_chain.inl">eltwise_chain.inl:3022</a>
+                <a href="../ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.inl">eltwise_scalar.inl:60</a>
+                <a href="../ttnn/cpp/ttnn/kernel_lib/eltwise_rand.inl">eltwise_rand.inl:28</a>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="finding medium" id="f6">
+          <header class="finding-head">
+            <div class="index">06</div>
+            <div>
+              <h3><code>DestReuseBinary::DstOut</code> is exposed but never used for output</h3>
+              <p class="finding-subtitle">The public API promises a two-slot operation over an intrinsically in-place LLK.</p>
+            </div>
+            <span class="severity medium" style="color:var(--accent)"><span class="dot"></span>Resolved</span>
+          </header>
+          <div class="finding-body">
+            <div>
+              <h4>Problem</h4>
+              <p>
+                The alias accepts separate <code>DstIn</code> and <code>DstOut</code> template arguments.
+                The underlying <code>binary_dest_reuse_tiles</code> operation reads and writes the same DEST
+                index, and <code>exec()</code> passes only <code>DstIn</code>. <code>DstOut</code> affects
+                nothing except the calculated lane width.
+              </p>
+              <h4>Impact</h4>
+              <p>
+                A caller using different input and output slots receives a successful compilation but the value
+                remains in <code>DstIn</code>. A later operation or <code>PackTile&lt;..., DstOut&gt;</code>
+                reads stale data.
+              </p>
+              <div class="fix">
+                <strong>Implemented</strong>
+                <p>
+                  <code>DstOut</code> was removed from the public alias and packed configuration. One
+                  <code>DstSlot</code> now identifies the slot that is both read and overwritten.
+                </p>
+              </div>
+            </div>
+            <div class="evidence">
+              <div class="eyebrow">Original reviewed code</div>
+              <pre><code>DestReuseBinary&lt;Input, Op, Reuse, DstIn, DstOut&gt;
+
+// Execution only uses DstIn:
+binary_dest_reuse_tiles(
+    Cb, in_idx, to_u32(DstIn) + slot_offset);
+
+// DstOut appears only in lane_width.</code></pre>
+              <div class="refs">
+                <a href="../ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp">eltwise_chain.hpp:543</a>
+                <a href="../ttnn/cpp/ttnn/kernel_lib/eltwise_chain.inl">eltwise_chain.inl:1408</a>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="finding low" id="f7">
+          <header class="finding-head">
+            <div class="index">07</div>
+            <div>
+              <h3><code>Exp</code> exposes an approximation parameter that deliberately does nothing</h3>
+              <p class="finding-subtitle">The signature suggests control that the implementation does not provide.</p>
+            </div>
+            <span class="severity low" style="color:var(--accent)"><span class="dot"></span>Resolved</span>
+          </header>
+          <div class="finding-body">
+            <div>
+              <h4>Problem</h4>
+              <p>
+                <code>Exp&lt;approx, fast, Slot&gt;</code> exposes two <code>Approx</code> parameters, but the
+                second one is intentionally ignored. Neighboring wrappers use similarly named parameters to
+                control generated LLK behavior, so callers have little reason to expect this one to be inert.
+              </p>
+              <h4>API cost</h4>
+              <ul>
+                <li>Call sites such as <code>Exp&lt;Fast, Fast&gt;</code> imply two independent choices.</li>
+                <li>Different instantiations generate different C++ types despite identical behavior.</li>
+                <li>Type-based hoisting can treat behaviorally identical operations as non-uniform.</li>
+              </ul>
+              <div class="fix">
+                <strong>Implemented</strong>
+                <p>
+                  The inert <code>fast</code> parameter was removed. The canonical signature is now
+                  <code>Exp&lt;approx, Slot&gt;</code>, and all migrated call sites use it.
+                </p>
+              </div>
+            </div>
+            <div class="evidence">
+              <div class="eyebrow">Original reviewed code</div>
+              <pre><code>template &lt;Approx approx,
+          Approx fast,  // accepted
+          Dst Slot&gt;
+struct Exp {
+    // only approx is forwarded
+    exp_tile&lt;approx == Approx::Fast&gt;(...);
+};</code></pre>
+              <div class="refs">
+                <a href="../ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp">eltwise_math.hpp:20</a>
+                <a href="../ttnn/cpp/ttnn/kernel_lib/eltwise_math.inl">eltwise_math.inl:21</a>
+              </div>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section id="follow-up">
+      <div class="section-head">
+        <div>
+          <div class="eyebrow">Implemented after review</div>
+          <h2>Follow-up</h2>
+        </div>
+        <p>
+          The requested changes remove the composite input/output lifecycle API, derive ownership from the
+          policies returned by each element’s <code>input()</code>/<code>output()</code> metadata, and bring
+          <code>UnaryBcast</code> back onto the canonical LLK path.
+        </p>
+      </div>
+      <table class="priority-table">
+        <thead>
+          <tr><th>Area</th><th>State</th><th>Implementation detail</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Oversized DEST</td>
+            <td><span class="severity high" style="color:var(--accent)"><span class="dot"></span>Resolved</span></td>
+            <td>
+              <code>eltwise_chain_impl</code> now requires <code>chain_max_block_v&lt;Chain&gt; &gt; 0</code>.
+              This central guard covers custom and hand-written elements, and a negative compile kernel proves
+              that an element wider than physical DEST is rejected.
+            </td>
+          </tr>
+          <tr>
+            <td>Input ownership</td>
+            <td><span class="severity high" style="color:var(--accent)"><span class="dot"></span>Resolved</span></td>
+            <td>
+              Per-element <code>is_upfront</code> copies and their detection traits were removed. Duplicate-reader
+              planning derives ownership independently for A and B from <code>InputSpec.wait</code> and
+              <code>InputSpec.pop</code>; <code>(Upfront, PerTile)</code> is now covered by a negative collision test.
+            </td>
+          </tr>
+          <tr>
+            <td>Lifecycle API</td>
+            <td><span class="severity medium" style="color:var(--accent)"><span class="dot"></span>Redesigned</span></td>
+            <td>
+              Public <code>InputLifecycle</code> and <code>OutputLifecycle</code> enums were removed. Callers pass
+              two explicit values: <code>input(cb, WaitPolicy, PopPolicy, ...)</code> and
+              <code>output(cb, ReservePolicy, PushPolicy, ...)</code>. Pair-wrapper predicates such as
+              <code>input_policy_is</code>/<code>output_policy_is</code> were also removed; branches compare the
+              fields directly. The centralized allow-lists are expressed as switches over their controlling enum,
+              and operand-kind validation lists the accepted wait/pop combinations directly—without invented
+              intermediate classifications or a second Row/Col check.
+            </td>
+          </tr>
+          <tr>
+            <td>UnaryBcast</td>
+            <td><span class="severity high" style="color:var(--accent)"><span class="dot"></span>Resolved</span></td>
+            <td>
+              Investigation found a hand-copied short init that had drifted from the canonical LLK, including
+              obsolete Quasar templates, a different assertion mechanism, and a missing
+              <code>state_configure</code> sentinel. A shared <code>unary_bcast_init_short</code> now owns that
+              sequence. Strided construction is explicit, and Col/Row/Scalar device tests each produced PCC 1.0.
+            </td>
+          </tr>
+          <tr>
+            <td>PackTile L1 accumulation</td>
+            <td><span class="severity medium" style="color:var(--accent)"><span class="dot"></span>Additional fix</span></td>
+            <td>
+              Regression testing exposed a separate address bug: caller-managed L1 accumulation advanced
+              <code>out_idx</code> even though accumulation must remain pinned. Output walking is now disabled
+              whenever L1 accumulation is enabled; managed and caller-managed tests both pass at PCC ≈ 0.99984.
+            </td>
+          </tr>
+          <tr>
+            <td>Operation APIs</td>
+            <td><span class="severity low" style="color:var(--accent)"><span class="dot"></span>Simplified</span></td>
+            <td>
+              <code>DestReuseBinary</code> now exposes one DEST slot because the LLK overwrites its input slot;
+              the unused <code>DstOut</code> field and config bits are gone. <code>Exp</code> now exposes only
+              <code>approx</code> and <code>Slot</code>; its behaviorally inert second approximation parameter
+              and all corresponding call-site arguments were removed.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="priority">
+      <div class="section-head">
+        <div>
+          <div class="eyebrow">Open review items</div>
+          <h2>Remaining priority</h2>
+        </div>
+        <p>
+          The requested DEST, ownership, lifecycle-API, UnaryBcast, and operation-signature work is complete.
+          These original findings remain outside that requested scope.
+        </p>
+      </div>
+      <table class="priority-table">
+        <thead>
+          <tr><th>Order</th><th>Work</th><th>Reason</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="mono">1</td><td>Model output collisions by address and reserve/push ownership</td><td>Protects upfront and caller-managed output windows.</td></tr>
+          <tr><td class="mono">2</td><td>Add explicit init-hoistability metadata</td><td>Makes runtime-stateful operations safe and makes the optimization contract auditable.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="validation">
+      <div class="section-head">
+        <div>
+          <div class="eyebrow">Checks performed</div>
+          <h2>Validation</h2>
+        </div>
+        <p>
+          Validation covers compile-time rejection, functional behavior, policy combinations, and formatting.
+          The bare-metal profiler wrappers are a separate execution mode and were not run inside the aggregate
+          device fixture.
+        </p>
+      </div>
+      <div class="method">
+        <div class="method-card">
+          <strong>Functional aggregate</strong>
+          <p>
+            193 kernel-lib tests passed together. The one timing-sensitive throughput test was excluded from that
+            aggregate and passed separately after an initial noisy measurement.
+          </p>
+        </div>
+        <div class="method-card">
+          <strong>Compile-time guards</strong>
+          <p>
+            All 16 negative compile tests passed, including the new oversized-DEST and duplicate
+            <code>(Upfront, PerTile)</code> reader cases.
+          </p>
+        </div>
+        <div class="method-card">
+          <strong>Static checks and scope</strong>
+          <p>
+            <code>git diff --check</code> and Python <code>compileall</code> passed. Nine bare-metal profiler
+            wrappers were excluded because they spawn nested pytest/device sessions; all of their underlying
+            functional configurations passed.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      Generated for <span class="mono">/localdev/astancov/tt-metal</span> · comparison base
+      <span class="mono">218b627e3044a15c759f2957201a473f2b48fa2b</span>.
+    </footer>
+  </main>
+</body>
+</html>

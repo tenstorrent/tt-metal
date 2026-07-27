@@ -44,17 +44,26 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(8);
     constexpr uint32_t n_heads = get_compile_time_arg_val(9);
     constexpr uint32_t rotary_Ht = get_compile_time_arg_val(10);
-    constexpr auto sin_cos_lifecycle =
-        RELOAD_IMPL == 0 ? ckl::InputLifecycle::CallerManaged : ckl::InputLifecycle::Bulk;
+    constexpr auto sin_cos_lifecycle = RELOAD_IMPL == 0 ? ckl::WaitPolicy::None,
+                   ckl::PopPolicy::None                 : ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd;
     constexpr auto sin_cos_offset = RELOAD_IMPL == 0 ? ckl::TileOffset::Set : ckl::TileOffset::Unset;
     constexpr auto bulk_block_input = [](uint32_t cb) {
-        return ckl::input(cb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled);
+        return ckl::input(
+            cb,
+            ckl::WaitPolicy::Upfront,
+            ckl::PopPolicy::AtEnd,
+            ckl::OperandKind::Block,
+            ckl::DataFormatReconfig::Disabled);
     };
     constexpr auto bulk_output = [](uint32_t cb) {
-        return ckl::output(cb, ckl::OutputLifecycle::ReserveNonePushEnd, ckl::DataFormatReconfig::Disabled);
+        return ckl::output(cb, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled);
     };
-    constexpr auto in_input =
-        ckl::input(in_cb, ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled);
+    constexpr auto in_input = ckl::input(
+        in_cb,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::AtEnd,
+        ckl::OperandKind::Block,
+        ckl::DataFormatReconfig::Disabled);
     constexpr auto rotated_input = bulk_block_input(rotated_in_interm_cb);
     constexpr auto sin_input = ckl::input(
         sin_cb, sin_cos_lifecycle, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled, sin_cos_offset);

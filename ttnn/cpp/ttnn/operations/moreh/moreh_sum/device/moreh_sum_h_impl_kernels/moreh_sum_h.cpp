@@ -62,13 +62,17 @@ void kernel_main() {
             if constexpr (do_mask_h) {
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(onetile),
-                    ckl::CopyTile<ckl::input(cb_input, ckl::InputLifecycle::Streaming, kDataFormatReconfig)>{},
+                    ckl::CopyTile<ckl::input(
+                        cb_input, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
                     ckl::CopyTile<
-                        ckl::input(cb_mask_h, ckl::InputLifecycle::CallerManaged, kDataFormatReconfig),
+                        ckl::input(cb_mask_h, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
                         ckl::Dst::D1>{},
                     ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
                     ckl::PackTile<ckl::output(
-                        cb_masked_input, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
+                        cb_masked_input,
+                        ckl::ReservePolicy::PerTile,
+                        ckl::PushPolicy::PerTile,
+                        kDataFormatReconfig)>{});
 
                 // Phase 2 with masked input: Reduce final masked tile with accumulation
                 ckl::reduce<REDUCE_OP, REDUCE_DIM, cb_masked_input, cb_scaler, cb_out>(

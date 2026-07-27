@@ -75,7 +75,7 @@ void kernel_main() {
             ckl::EltwiseShape::tiles(onetile),
             ckl::BinaryFpu<
                 ckl::input(cb_var),
-                ckl::input(cb_eps, ckl::InputLifecycle::CallerManaged),
+                ckl::input(cb_eps, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                 ckl::BinaryFpuOp::Add,
                 ckl::BroadcastDim::None>{},
             ckl::Rsqrt<ckl::Approx::Exact, LEGACY_RSQRT ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
@@ -85,23 +85,24 @@ void kernel_main() {
         constexpr uint32_t normed_output_cb = do_gamma ? cb_x_normed : cb_out;
 
         ckl::mul<
-            ckl::input(cb_norm_x_input, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-            ckl::input(cb_recip_sqrt_var, ckl::InputLifecycle::Bulk),
-            ckl::output(normed_output_cb, ckl::OutputLifecycle::Bulk),
+            ckl::input(cb_norm_x_input, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+            ckl::input(cb_recip_sqrt_var, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+            ckl::output(normed_output_cb, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd),
             ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/blk));
 
         if constexpr (do_gamma) {
             ckl::mul<
-                ckl::input(cb_x_normed, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                ckl::input(cb_gamma, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Block),
-                ckl::output(cb_times_gamma_out, ckl::OutputLifecycle::Bulk),
+                ckl::input(cb_x_normed, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                ckl::input(cb_gamma, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Block),
+                ckl::output(cb_times_gamma_out, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd),
                 ckl::BroadcastDim::Row>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/blk));
 
             if constexpr (do_beta) {
                 ckl::add<
-                    ckl::input(cb_times_gamma_out, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                    ckl::input(cb_beta, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Block),
-                    ckl::output(cb_out, ckl::OutputLifecycle::Bulk),
+                    ckl::input(
+                        cb_times_gamma_out, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                    ckl::input(cb_beta, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Block),
+                    ckl::output(cb_out, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd),
                     ckl::BroadcastDim::Row>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/blk));
             }
         }

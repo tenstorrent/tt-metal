@@ -45,9 +45,9 @@ void kernel_main() {
             } else {
                 ckl::binary_sfpu<
                     ckl::BinaryMax<>,
-                    ckl::input(cb_in0, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
-                    ckl::input(cb_max, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
-                    ckl::output(cb_max, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>(
+                    ckl::input(cb_in0, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                    ckl::input(cb_max, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                    ckl::output(cb_max, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
                     ckl::EltwiseShape::tiles(onetile));
             }
         }

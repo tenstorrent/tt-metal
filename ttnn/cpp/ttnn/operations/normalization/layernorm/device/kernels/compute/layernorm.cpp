@@ -157,9 +157,9 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
         // The reader streams block-sized chunks, so waiting for the whole row would deadlock.
         ckl::add<
-            ckl::input(cb_in, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
-            ckl::input(cb_inb, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
-            ckl::output(cb_x, ckl::OutputLifecycle::Chunked),
+            ckl::input(cb_in, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+            ckl::input(cb_inb, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+            ckl::output(cb_x, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk),
             ckl::BroadcastDim::None>(row_shape);
 #ifndef RMSNORM
         reconfig_data_format(cb_in, cb_x, cb_inb, cb_scaler);
@@ -182,9 +182,10 @@ void kernel_main() {
 
         // x - E[x]; the mean stays resident for the whole row.
         ckl::sub<
-            ckl::input(cb_x, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
-            ckl::input(cb_ex, ckl::InputLifecycle::CallerManaged),
-            ckl::output(cb_xmm, ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled),
+            ckl::input(cb_x, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+            ckl::input(cb_ex, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+            ckl::output(
+                cb_xmm, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk, ckl::DataFormatReconfig::Disabled),
             ckl::BroadcastDim::Col>(row_shape);
         cb_ex_obj.pop_front(1);
 
@@ -195,8 +196,10 @@ void kernel_main() {
 
         // Preserve cb_xmm for the normalization pass; the variance path consumes only its square.
         ckl::square<
-            ckl::input(cb_xmm, ckl::InputLifecycle::HeldCumulative, ckl::OperandKind::Block),
-            ckl::output(cb_xmm2, ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled)>(row_shape);
+            ckl::input(cb_xmm, ckl::WaitPolicy::Cumulative, ckl::PopPolicy::None, ckl::OperandKind::Block),
+            ckl::output(
+                cb_xmm2, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk, ckl::DataFormatReconfig::Disabled)>(
+            row_shape);
 #if defined RMSNORM and not defined FUSED_PRE_ADD
         reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
 #endif
@@ -212,7 +215,7 @@ void kernel_main() {
             ckl::EltwiseShape::single(),
             ckl::BinaryFpu<
                 ckl::input(cb_ex2),
-                ckl::input(cb_eps, ckl::InputLifecycle::CallerManaged),
+                ckl::input(cb_eps, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                 ckl::BinaryFpuOp::Add,
                 ckl::BroadcastDim::None>{},
             ckl::Rsqrt<ckl::Approx::Exact, LEGACY_RSQRT ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
@@ -227,48 +230,53 @@ void kernel_main() {
                 ckl::BinaryFpu<
                     ckl::input(
                         cb_xmm,
-                        ckl::InputLifecycle::HeldBulk,
+                        ckl::WaitPolicy::Upfront,
+                        ckl::PopPolicy::None,
                         ckl::OperandKind::Block,
                         ckl::DataFormatReconfig::Enabled,
                         ckl::TileOffset::Set),
-                    ckl::input(cb_ex2pe, ckl::InputLifecycle::HeldBulk),
+                    ckl::input(cb_ex2pe, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
                     ckl::BinaryFpuOp::Mul,
                     ckl::BroadcastDim::Col>{block.start(), 0u},
                 ckl::OptionalChainElement<activate_after_normalize, FusedActivation>{},
-                ckl::PackTile<ckl::output(cb_im_or_out, ckl::OutputLifecycle::Chunked)>{});
+                ckl::PackTile<ckl::output(cb_im_or_out, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk)>{});
 
             if constexpr (do_gamma) {
                 constexpr uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
                 ckl::eltwise_chain(
                     block_shape,
                     ckl::BinaryFpu<
-                        ckl::input(cb_fusion, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+                        ckl::input(
+                            cb_fusion, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
                         ckl::input(
                             cb_gamma,
-                            ckl::InputLifecycle::HeldBulk,
+                            ckl::WaitPolicy::Upfront,
+                            ckl::PopPolicy::None,
                             ckl::OperandKind::Block,
                             ckl::DataFormatReconfig::Enabled,
                             ckl::TileOffset::Set),
                         ckl::BinaryFpuOp::Mul,
                         ckl::BroadcastDim::Row>{0u, block.start()},
                     ckl::OptionalChainElement<activate_after_gamma, FusedActivation>{},
-                    ckl::PackTile<ckl::output(cb_outg, ckl::OutputLifecycle::Chunked)>{});
+                    ckl::PackTile<ckl::output(cb_outg, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk)>{});
             }
             if constexpr (do_beta) {
                 ckl::eltwise_chain(
                     block_shape,
                     ckl::BinaryFpu<
-                        ckl::input(cb_fusion, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+                        ckl::input(
+                            cb_fusion, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
                         ckl::input(
                             cb_beta,
-                            ckl::InputLifecycle::HeldBulk,
+                            ckl::WaitPolicy::Upfront,
+                            ckl::PopPolicy::None,
                             ckl::OperandKind::Block,
                             ckl::DataFormatReconfig::Enabled,
                             ckl::TileOffset::Set),
                         ckl::BinaryFpuOp::Add,
                         ckl::BroadcastDim::Row>{0u, block.start()},
                     ckl::OptionalChainElement<fused_activation_enabled, FusedActivation>{},
-                    ckl::PackTile<ckl::output(cb_out, ckl::OutputLifecycle::Chunked)>{});
+                    ckl::PackTile<ckl::output(cb_out, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk)>{});
             }
         }
         cb_ex2pe_obj.pop_front(1);

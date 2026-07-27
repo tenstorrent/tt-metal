@@ -78,7 +78,8 @@ void kernel_main() {
                     compute_kernel_lib::EltwiseShape::tiles(onetile),
                     compute_kernel_lib::CopyTile<compute_kernel_lib::input(tt::CBIndex::c_0)>{},
                     compute_kernel_lib::CopyTile<
-                        compute_kernel_lib::input(cb_mask_w, compute_kernel_lib::InputLifecycle::CallerManaged),
+                        compute_kernel_lib::input(
+                            cb_mask_w, compute_kernel_lib::WaitPolicy::None, compute_kernel_lib::PopPolicy::None),
                         compute_kernel_lib::Dst::D1>{},
                     compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
                     compute_kernel_lib::PackTile<compute_kernel_lib::output(cb_masked_input)>{});

@@ -229,74 +229,20 @@ enum class SetupOwner {
 };
 
 // =============================================================================
-// 1c. Input and output lifecycle
+// 1c. Input and output CB synchronization policies
 // =============================================================================
 
-enum class WaitPolicy : uint8_t;
-enum class PopPolicy : uint8_t;
-enum class ReservePolicy : uint8_t;
-enum class PushPolicy : uint8_t;
+/// When the chain waits for an input CB.
+enum class WaitPolicy : uint8_t { None, PerTile, PerChunk, PerOuter, Upfront, Cumulative };
 
-struct InputLifecycle {
-    WaitPolicy wait_policy;
-    PopPolicy pop_policy;
+/// When the chain pops an input CB.
+enum class PopPolicy : uint8_t { None, PerTile, PerChunk, PerOuter, AtEnd };
 
-    constexpr bool operator==(InputLifecycle other) const noexcept;
-    constexpr bool operator!=(InputLifecycle other) const noexcept;
+/// When the chain reserves an output CB.
+enum class ReservePolicy : uint8_t { None, PerTile, PerChunk, Upfront, PerOuter, OneUpfront };
 
-    // Wait and pop one tile per iteration.
-    static const InputLifecycle Streaming;
-    // Wait and pop one block_size-tile chunk per iteration.
-    static const InputLifecycle Chunked;
-    // Wait for the full operand window upfront and pop it at chain exit.
-    static const InputLifecycle Bulk;
-    // Wait for a growing window per iteration and pop the full window at chain exit.
-    static const InputLifecycle Pipelined;
-    // The caller owns both wait and pop.
-    static const InputLifecycle CallerManaged;
-    // Wait for the full walk upfront and pop one tile per iteration.
-    static const InputLifecycle BulkDrain;
-    // Wait for the full operand window upfront and do not pop it.
-    static const InputLifecycle HeldBulk;
-    // Wait for a growing window per iteration and do not pop it.
-    static const InputLifecycle HeldCumulative;
-    // Wait for one tile per iteration and do not pop it.
-    static const InputLifecycle HeldStream;
-    // Do not wait; pop the full operand window at chain exit.
-    static const InputLifecycle DeferredPop;
-    // Do not wait; pop one tile per iteration.
-    static const InputLifecycle NoWaitPop;
-    // Wait and pop one tile per outer row.
-    static const InputLifecycle OuterStream;
-};
-
-struct OutputLifecycle {
-    ReservePolicy reserve_policy;
-    PushPolicy push_policy;
-
-    constexpr bool operator==(OutputLifecycle other) const noexcept;
-    constexpr bool operator!=(OutputLifecycle other) const noexcept;
-
-    // Reserve and push one tile per iteration.
-    static const OutputLifecycle Streaming;
-    // Reserve and push one block_size-tile chunk per iteration.
-    static const OutputLifecycle Chunked;
-    // Reserve the full output window upfront and push it at chain exit.
-    static const OutputLifecycle Bulk;
-    // Reserve the full output window upfront and push one tile per iteration.
-    static const OutputLifecycle ReserveAllPushPerTile;
-    // Reserve the full output window upfront and push one chunk per iteration.
-    static const OutputLifecycle ReserveAllPushPerChunk;
-    // The caller owns both reserve and push.
-    static const OutputLifecycle CallerManaged;
-    // Do not reserve; push the full output window at chain exit.
-    static const OutputLifecycle ReserveNonePushEnd;
-    // Reserve one persistent accumulator tile at entry and push it at exit.
-    static const OutputLifecycle L1Accumulation;
-    // Manage the single-tile DEST-accumulation output. PerRow reserves/pushes once per
-    // grid row; WholeShape reserves/pushes once for the complete shape.
-    static const OutputLifecycle DestAccumulation;
-};
+/// When the chain pushes an output CB.
+enum class PushPolicy : uint8_t { None, PerTile, PerChunk, AtEnd, PerOuter, OneAtEnd };
 
 /// Which tile of an input operand to read at each step of the (Ht x Wt) walk.
 /// Pick the one that matches how your input maps onto the output:
@@ -306,7 +252,7 @@ struct OutputLifecycle {
 ///   - Scalar — contribute index 0 every step, pinning the read to the operand's base tile
 ///              (`TileOffset::Set` may make that base nonzero). This is inter-tile indexing, not a
 ///              hardware scalar broadcast; it is independent of `BroadcastDim`.
-/// The size aspect only matters with a Bulk-style (upfront-wait) lifecycle, where the kind also sets
+/// The size aspect only matters with an upfront-wait policy, where the kind also sets
 /// how many tiles are waited/popped upfront: Scalar 1, Row Wt, Col Ht, Block Ht x Wt.
 /// The 1D tiles(n) shape allows only Block and Scalar; Row and Col need the 2D grid(H, W) shape.
 /// The output is always Block, so there is no output kind.
@@ -331,13 +277,12 @@ enum class OperandKind : uint8_t {
 //     `base + r * row_stride + c`, Col to `base + r * row_stride`, while Row and
 //     Scalar retain their ordinary column/pinned behavior.
 //
-// `Set` is restricted to Bulk-family / CallerManaged lifecycles (single upfront wait,
-// single end pop or none). Iter-dependent counts (Streaming / Chunked / Cumulative /
-// Held{Stream,Cumulative} / NoWaitPop) can't compose with a runtime base. Caller must
+// `Set` is restricted to upfront/deferred-pop or caller-managed wait/pop pairs.
+// Iter-dependent wait/pop counts can't compose with a runtime base. Caller must
 // size the CB for `base + window`; the chain inflates its wait/reserve/pop/push counts
 // by `base` at runtime.
 //
-// `Strided` is restricted to CallerManaged lifecycles: a gapped window cannot be
+// `Strided` is restricted to caller-managed `(None, None)` policies: a gapped window cannot be
 // represented by a single wait/pop/reserve/push count, so the enclosing kernel owns it.
 
 enum class TileOffset : uint8_t { Unset, Set, Strided };
@@ -379,7 +324,8 @@ enum class PackRelu : bool { Disabled = false, Zero = true };
 
 struct InputSpec {
     uint32_t cb_id;
-    InputLifecycle lifecycle;
+    WaitPolicy wait;
+    PopPolicy pop;
     OperandKind index;
     DataFormatReconfig reconfig;
     TileOffset offset;
@@ -387,7 +333,8 @@ struct InputSpec {
 
 struct OutputSpec {
     uint32_t cb_id;
-    OutputLifecycle lifecycle;
+    ReservePolicy reserve;
+    PushPolicy push;
     DataFormatReconfig reconfig;
     PackRelu relu;
     L1Accumulation l1_accumulation;
@@ -396,28 +343,31 @@ struct OutputSpec {
 };
 
 /// Bind one input buffer id to its configuration.
-/// Defaults: Streaming lifecycle, Scalar indexing, reconfig enabled, and no tile offset.
+/// Defaults: wait/pop per tile, Scalar indexing, reconfig enabled, and no tile offset.
 constexpr InputSpec input(
     uint32_t cb_id,
-    InputLifecycle lifecycle = InputLifecycle::Streaming,
+    WaitPolicy wait = WaitPolicy::PerTile,
+    PopPolicy pop = PopPolicy::PerTile,
     OperandKind index = OperandKind::Scalar,
     DataFormatReconfig reconfig = DataFormatReconfig::Enabled,
     TileOffset offset = TileOffset::Unset) noexcept;
-constexpr InputSpec input(uint32_t cb_id, InputLifecycle lifecycle, DataFormatReconfig reconfig) noexcept;
-constexpr InputSpec input(uint32_t cb_id, InputLifecycle lifecycle, OperandKind index, TileOffset offset) noexcept;
+constexpr InputSpec input(uint32_t cb_id, WaitPolicy wait, PopPolicy pop, DataFormatReconfig reconfig) noexcept;
+constexpr InputSpec input(
+    uint32_t cb_id, WaitPolicy wait, PopPolicy pop, OperandKind index, TileOffset offset) noexcept;
 
 /// Bind one output buffer id to its configuration.
-/// Defaults: Streaming lifecycle, reconfig enabled, no accumulation, no pack ReLU,
+/// Defaults: reserve/push per tile, reconfig enabled, no accumulation, no pack ReLU,
 /// and no tile offset.
 constexpr OutputSpec output(
     uint32_t cb_id,
-    OutputLifecycle lifecycle = OutputLifecycle::Streaming,
+    ReservePolicy reserve = ReservePolicy::PerTile,
+    PushPolicy push = PushPolicy::PerTile,
     DataFormatReconfig reconfig = DataFormatReconfig::Enabled,
     PackRelu relu = PackRelu::Disabled,
     L1Accumulation l1_accumulation = L1Accumulation::Disabled,
     DestAccumulation dest_accumulation = DestAccumulation::Disabled,
     TileOffset offset = TileOffset::Unset) noexcept;
-constexpr OutputSpec output(uint32_t cb_id, OutputLifecycle lifecycle, TileOffset offset) noexcept;
+constexpr OutputSpec output(uint32_t cb_id, ReservePolicy reserve, PushPolicy push, TileOffset offset) noexcept;
 
 // =============================================================================
 // 2. DEST slot enum — capped at compile-time DEST capacity
@@ -512,7 +462,7 @@ constexpr uint32_t binary_fpu_config_bits(
     BinaryFpuOp op, BroadcastDim bcast, InputSpec a, InputSpec b, Dst dst, DestAccumulation accumulation) noexcept;
 
 constexpr uint32_t dest_reuse_binary_config_bits(
-    BinaryFpuOp op, DestReuseType reuse, InputSpec input_spec, Dst dst_in, Dst dst_out) noexcept;
+    BinaryFpuOp op, DestReuseType reuse, InputSpec input_spec, Dst dst) noexcept;
 
 template <uint32_t Cb, uint32_t ConfigBits>
 struct CopyTileImpl;
@@ -540,9 +490,11 @@ using BinaryFpu = detail::BinaryFpuImpl<
     BInput.cb_id,
     detail::binary_fpu_config_bits(Op, Bcast, AInput, BInput, DstSlot, Accumulation)>;
 
-template <InputSpec Input, BinaryFpuOp Op, DestReuseType ReuseType, Dst DstIn = Dst::D0, Dst DstOut = Dst::D0>
-using DestReuseBinary = detail::
-    DestReuseBinaryImpl<Input.cb_id, detail::dest_reuse_binary_config_bits(Op, ReuseType, Input, DstIn, DstOut)>;
+/// Apply an FPU binary operation between one CB input and `DstSlot`.
+/// The LLK operation is in-place in DEST: it reads and overwrites the same slot.
+template <InputSpec Input, BinaryFpuOp Op, DestReuseType ReuseType, Dst DstSlot = Dst::D0>
+using DestReuseBinary =
+    detail::DestReuseBinaryImpl<Input.cb_id, detail::dest_reuse_binary_config_bits(Op, ReuseType, Input, DstSlot)>;
 
 template <OutputSpec Output, Dst DstSlot = Dst::D0>
 using PackTile = detail::PackTileImpl<Output.cb_id, detail::pack_tile_config_bits(Output, DstSlot)>;
@@ -571,9 +523,9 @@ using PackTile = detail::PackTileImpl<Output.cb_id, detail::pack_tile_config_bit
 /// a non-hoist-safe chain.
 ///
 /// Index-mode (OperandKind) and block-mode behavior match the enum docs above: Block /
-/// Row / Col / Scalar pick the per-iter tile index; any `is_upfront` element takes the
-/// upfront-block path; Streaming chains clamp block_size to 1. `BlockTailSync` affects only
-/// Chunked lifecycle counts. Row/Col need a non-streaming policy.
+/// Row / Col / Scalar pick the per-iter tile index; input policies that own a staged CB
+/// window take the upfront-block path; Streaming chains clamp block_size to 1.
+/// `BlockTailSync` affects only per-chunk synchronization counts. Row/Col need a non-streaming policy.
 template <SetupOwner SO = SetupOwner::Chain, EltwiseShapeKind Kind, class... Es>
 ALWI void eltwise_chain(TypedEltwiseShape<Kind> shape, Es... elts);
 

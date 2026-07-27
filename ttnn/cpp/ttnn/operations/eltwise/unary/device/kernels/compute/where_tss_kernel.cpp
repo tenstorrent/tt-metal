@@ -42,7 +42,7 @@ void kernel_main() {
         ckl::EltwiseShape::tiles(num_tiles),
         // cond -> D0. Single CB read: Streaming (wait 1 / pop 1 per iter), Scalar index.
         ckl::CopyTile<
-            ckl::input(cb_input, ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+            ckl::input(cb_input, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D0>{},
         // true_value -> D1 (inactive flavor folds to a FillTileTag no-op).
         // kWhereDF carries main's #48602 fix: Int32 for int32 inputs, UInt32 for uint32 inputs.
@@ -53,5 +53,6 @@ void kernel_main() {
         ckl::OptionalChainElement<kIsFloat, ckl::FillBitcast<ckl::Dst::D2>>{packed_scalar2},
         // where(D0, D1, D2) -> D0.
         ckl::Where<kWhereDF, ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{},
-        ckl::PackTile<ckl::output(cb_output, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+        ckl::PackTile<ckl::output(
+            cb_output, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
 }

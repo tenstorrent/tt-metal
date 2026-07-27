@@ -60,20 +60,23 @@ void kernel_main() {
         for (uint32_t col_idx = 0; col_idx < Wt; ++col_idx) {
             ckl::eltwise_chain(
                 ckl::EltwiseShape::single(),
-                ckl::CopyTile<ckl::input(cb_x, ckl::InputLifecycle::Streaming, kDataFormatReconfig)>{},
+                ckl::CopyTile<ckl::input(
+                    cb_x, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
                 ckl::runtime_if(
                     do_mask_w && (col_idx == Wt - 1),
                     ckl::CopyTile<
                         ckl::input(
                             cb_mask_w,
-                            ckl::InputLifecycle::CallerManaged,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::None,
                             ckl::OperandKind::Scalar,
                             kDataFormatReconfig,
                             ckl::TileOffset::Set),
                         ckl::Dst::D1>{},
                     ckl::Mask<>{}),
                 ckl::Abs<>{},
-                ckl::PackTile<ckl::output(cb_xabs, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
+                ckl::PackTile<ckl::output(
+                    cb_xabs, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
             power_tile_to_cb<cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_y>(p, p_is_negative);
         }

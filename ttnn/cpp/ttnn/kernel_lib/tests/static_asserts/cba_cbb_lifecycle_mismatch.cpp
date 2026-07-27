@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Negative compile test: BinaryFpu reading the SAME CB for both operands must use the same input
-// lifecycle because the chain dedups the B-side wait/pop against A. Bulk and HeldBulk are each
-// legal with Scalar, so only the same-CB-lifecycle guard fires.
-// MUST fail to compile with "same InputLifecycle".
+// wait/pop pair because the chain dedups the B-side wait/pop against A. (Upfront, AtEnd) and
+// (Upfront, None) are each legal with Scalar, so only the same-CB-policy guard fires.
+// MUST fail to compile with "same wait/pop policies".
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
@@ -21,8 +21,8 @@ void kernel_main() {
     eltwise_chain(
         EltwiseShape::tiles(n),
         BinaryFpu<
-            input(cb_in, InputLifecycle::Bulk),
-            input(cb_in, InputLifecycle::HeldBulk),
+            input(cb_in, WaitPolicy::Upfront, PopPolicy::AtEnd),
+            input(cb_in, WaitPolicy::Upfront, PopPolicy::None),
             BinaryFpuOp::Add,
             BroadcastDim::None>{},
         PackTile<output(cb_out)>{});

@@ -28,13 +28,22 @@ void kernel_main() {
         shape,
         ckl::CopyTile<
             ckl::input(
-                cb_grad_out, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled),
+                cb_grad_out,
+                ckl::WaitPolicy::PerChunk,
+                ckl::PopPolicy::PerChunk,
+                ckl::OperandKind::Block,
+                ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D0>{},
         ckl::CopyTile<
             ckl::input(
-                cb_input, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled),
+                cb_input,
+                ckl::WaitPolicy::PerChunk,
+                ckl::PopPolicy::PerChunk,
+                ckl::OperandKind::Block,
+                ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D1>{},
         ckl::TanhDerivative<ckl::Approx::Exact, ckl::Dst::D1>{},
         ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
-        ckl::PackTile<ckl::output(cb_grad_in, ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled)>{});
+        ckl::PackTile<ckl::output(
+            cb_grad_in, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk, ckl::DataFormatReconfig::Disabled)>{});
 }

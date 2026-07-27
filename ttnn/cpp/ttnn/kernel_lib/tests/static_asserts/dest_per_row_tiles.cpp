@@ -15,15 +15,16 @@ void kernel_main() {
     eltwise_chain(
         EltwiseShape::tiles(n),
         BinaryFpu<
-            input(cb_a, InputLifecycle::Bulk, OperandKind::Block),
-            input(cb_b, InputLifecycle::Bulk, OperandKind::Block),
+            input(cb_a, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
+            input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
             BinaryFpuOp::Add,
             BroadcastDim::None,
             Dst::D0,
             DestAccumulation::PerRow>{},
         PackTile<output(
             cb_out,
-            OutputLifecycle::DestAccumulation,
+            ReservePolicy::PerOuter,
+            PushPolicy::PerOuter,
             DataFormatReconfig::Enabled,
             PackRelu::Disabled,
             L1Accumulation::Disabled,

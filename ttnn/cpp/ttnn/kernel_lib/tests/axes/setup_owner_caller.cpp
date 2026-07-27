@@ -26,7 +26,7 @@ void kernel_main() {
     // Chain written once; SetupOwner::Caller emits no init/reconfig — it reuses the setup above.
     eltwise_chain<SetupOwner::Caller>(
         EltwiseShape::tiles(n),
-        CopyTile<input(cb_in, InputLifecycle::Streaming, DataFormatReconfig::Disabled), Dst::D0>{},
+        CopyTile<input(cb_in, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled), Dst::D0>{},
         Exp<>{},
-        PackTile<output(cb_out, OutputLifecycle::Streaming, DataFormatReconfig::Disabled)>{});
+        PackTile<output(cb_out, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{});
 }

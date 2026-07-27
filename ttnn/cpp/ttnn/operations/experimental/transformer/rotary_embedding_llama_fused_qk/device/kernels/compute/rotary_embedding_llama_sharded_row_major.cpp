@@ -89,9 +89,9 @@ void kernel_main() {
         rotated_in_interm_cb_obj.push_back(Wt);
 
         ckl::mul<
-            ckl::input(rotated_in_interm_cb, ckl::InputLifecycle::Bulk),
-            ckl::input(sin_cb, ckl::InputLifecycle::CallerManaged),
-            ckl::output(sin_interm_cb, ckl::OutputLifecycle::ReserveNonePushEnd),
+            ckl::input(rotated_in_interm_cb, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+            ckl::input(sin_cb, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+            ckl::output(sin_interm_cb, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd),
             ckl::BroadcastDim::None>(ckl::EltwiseShape::single());
 
         mul_tiles_init(in_cb, cos_cb);

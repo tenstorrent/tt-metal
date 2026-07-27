@@ -21,17 +21,35 @@ void kernel_main() {
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
         if (has_input_grad) {
             ckl::mul<
-                ckl::input(tt::CBIndex::c_2, ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
-                ckl::input(tt::CBIndex::c_0, ckl::InputLifecycle::CallerManaged, ckl::DataFormatReconfig::Disabled),
-                ckl::output(tt::CBIndex::c_16, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    tt::CBIndex::c_2,
+                    ckl::WaitPolicy::PerTile,
+                    ckl::PopPolicy::PerTile,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    tt::CBIndex::c_0, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+                ckl::output(
+                    tt::CBIndex::c_16,
+                    ckl::ReservePolicy::PerTile,
+                    ckl::PushPolicy::PerTile,
+                    ckl::DataFormatReconfig::Disabled),
                 ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::tiles(onetile));
         }
 
         if (has_other_grad) {
             ckl::mul<
-                ckl::input(tt::CBIndex::c_1, ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
-                ckl::input(tt::CBIndex::c_0, ckl::InputLifecycle::CallerManaged, ckl::DataFormatReconfig::Disabled),
-                ckl::output(tt::CBIndex::c_17, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    tt::CBIndex::c_1,
+                    ckl::WaitPolicy::PerTile,
+                    ckl::PopPolicy::PerTile,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    tt::CBIndex::c_0, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+                ckl::output(
+                    tt::CBIndex::c_17,
+                    ckl::ReservePolicy::PerTile,
+                    ckl::PushPolicy::PerTile,
+                    ckl::DataFormatReconfig::Disabled),
                 ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::tiles(onetile));
         }
     }

@@ -29,10 +29,10 @@ void kernel_main() {
         ckl::EltwiseShape::tiles(num_tiles),
         // x -> D0 (owns the wait), x -> D1.
         ckl::CopyTile<
-            ckl::input(cb_input, ckl::InputLifecycle::HeldStream, ckl::DataFormatReconfig::Disabled),
+            ckl::input(cb_input, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D0>{},
         ckl::CopyTile<
-            ckl::input(cb_input, ckl::InputLifecycle::CallerManaged, ckl::DataFormatReconfig::Disabled),
+            ckl::input(cb_input, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D1>{},
         // D0 = stirling(x)
         ckl::LgammaStirling<ckl::Dst::D0>{},
@@ -43,10 +43,10 @@ void kernel_main() {
         ckl::Sin<ckl::Dst::D1>{},
         // reload x -> D2, D3 ; D3 = floor(x) ; D2 = (x == floor(x))
         ckl::CopyTile<
-            ckl::input(cb_input, ckl::InputLifecycle::CallerManaged, ckl::DataFormatReconfig::Disabled),
+            ckl::input(cb_input, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D2>{},
         ckl::CopyTile<
-            ckl::input(cb_input, ckl::InputLifecycle::CallerManaged, ckl::DataFormatReconfig::Disabled),
+            ckl::input(cb_input, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D3>{},
         ckl::Floor<ckl::Dst::D3>{},
         ckl::EqBinary<ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D2>{},
@@ -58,8 +58,9 @@ void kernel_main() {
         ckl::Log<ckl::Approx::Exact, ckl::Dst::D1>{},
         // reload x -> D2 (owns the pop) ; D0 = adjusted(stirling=D0, logsin=D1, x=D2)
         ckl::CopyTile<
-            ckl::input(cb_input, ckl::InputLifecycle::NoWaitPop, ckl::DataFormatReconfig::Disabled),
+            ckl::input(cb_input, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D2>{},
         ckl::LgammaAdjusted<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{},
-        ckl::PackTile<ckl::output(cb_output, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+        ckl::PackTile<ckl::output(
+            cb_output, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
 }

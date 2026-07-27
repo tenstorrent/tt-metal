@@ -27,21 +27,22 @@ ALWI void mul_tiles_chain(uint32_t in1_idx) {
         eltwise_chain(
             EltwiseShape::single(),
             BinaryFpu<
-                input(in0_cb, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
+                input(in0_cb, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
                 input(
                     in1_cb,
-                    InputLifecycle::HeldBulk,
+                    WaitPolicy::Upfront,
+                    PopPolicy::None,
                     OperandKind::Scalar,
                     DataFormatReconfig::Disabled,
                     compute_kernel_lib::TileOffset::Set),
                 BinaryFpuOp::Mul,
                 BroadcastDim::Row>{0u, in1_idx},
-            PackTile<output(out_cb, OutputLifecycle::Streaming, DataFormatReconfig::Disabled)>{});
+            PackTile<output(out_cb, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{});
     } else {
         (void)in1_idx;
-        mul<input(in0_cb, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
-            input(in1_cb, InputLifecycle::Streaming, DataFormatReconfig::Disabled),
-            output(out_cb, OutputLifecycle::Streaming, DataFormatReconfig::Disabled),
+        mul<input(in0_cb, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
+            input(in1_cb, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
+            output(out_cb, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled),
             BroadcastDim::None>(EltwiseShape::single());
     }
 }
@@ -115,7 +116,8 @@ void kernel_main() {
             if (j < half_Wt) {
                 compute_kernel_lib::mul<
                     compute_kernel_lib::input(rotated_in_cb),
-                    compute_kernel_lib::input(scalar_cb, compute_kernel_lib::InputLifecycle::CallerManaged),
+                    compute_kernel_lib::input(
+                        scalar_cb, compute_kernel_lib::WaitPolicy::None, compute_kernel_lib::PopPolicy::None),
                     compute_kernel_lib::output(rotated_in_interm_cb),
                     compute_kernel_lib::BroadcastDim::Scalar>(compute_kernel_lib::EltwiseShape::tiles(onetile));
                 reconfig_data_format_srcb(scalar_cb, updated_sin_cb);

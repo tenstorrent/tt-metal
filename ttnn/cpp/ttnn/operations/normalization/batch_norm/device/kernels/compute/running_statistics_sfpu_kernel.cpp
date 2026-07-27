@@ -26,9 +26,9 @@ ALWI void update_running_stat() {
     using ckl::AddBinary;
     using ckl::MulBinary;
     using ckl::SubBinary;
-    constexpr auto CM = ckl::InputLifecycle::CallerManaged;
-    constexpr auto STREAM = ckl::InputLifecycle::Streaming;
-    constexpr auto OUT_CM = ckl::OutputLifecycle::CallerManaged;
+    constexpr auto CM = ckl::WaitPolicy::None, ckl::PopPolicy::None;
+    constexpr auto STREAM = ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile;
+    constexpr auto OUT_CM = ckl::ReservePolicy::None, ckl::PushPolicy::None;
     constexpr auto SCALAR = ckl::OperandKind::Scalar;
 
     ckl::eltwise_chain(
@@ -42,7 +42,7 @@ ALWI void update_running_stat() {
         ckl::CopyTile<ckl::input(cb_batch, STREAM, SCALAR), D::D2>{},
         MulBinary<D::D1, D::D2, D::D1>{},  // D1 = momentum * batch_stat
         AddBinary<D::D0, D::D1, D::D0>{},  // D0 = (1 - momentum) * old + momentum * batch
-        ckl::PackTile<ckl::output(cb_updated, ckl::OutputLifecycle::Bulk)>{},
+        ckl::PackTile<ckl::output(cb_updated, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{},
         ckl::OptionalChainElement<AlsoOut0, ckl::PackTile<ckl::output(cb_out0, OUT_CM)>>{});
 }
 

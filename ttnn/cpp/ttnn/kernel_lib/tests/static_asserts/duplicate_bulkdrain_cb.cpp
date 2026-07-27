@@ -1,13 +1,12 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-//
 // SPDX-License-Identifier: Apache-2.0
 
-// Negative compile test: Block index mode with per-tile wait/pop is illegal — a Block walker
-// reads an absolute CB-front index, but Streaming pops per tile so the front shifts and the index
-// reads the wrong tile. is_legal_input_policy_for_kind rejects (Block, PerTile, PerTile).
-// MUST fail to compile with "CopyTile: (IndexMode, Policy) is illegal for Block".
+// Negative compile test: BulkDrain waits for the full input window upfront, so
+// two independently managed readers cannot share the same CB front.
+// MUST fail to compile with "two CB-reader elements share a CB".
 
 #include <cstdint>
+
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
 void kernel_main() {
@@ -20,6 +19,7 @@ void kernel_main() {
     using namespace compute_kernel_lib;
     eltwise_chain(
         EltwiseShape::tiles(n),
-        CopyTile<input(cb_in, WaitPolicy::PerTile, PopPolicy::PerTile, OperandKind::Block), Dst::D0>{},
+        CopyTile<input(cb_in, WaitPolicy::Upfront, PopPolicy::PerTile), Dst::D0>{},
+        CopyTile<input(cb_in, WaitPolicy::Upfront, PopPolicy::PerTile), Dst::D1>{},
         PackTile<output(cb_out)>{});
 }

@@ -17,6 +17,7 @@ void kernel_main() {
     eltwise_chain(
         EltwiseShape::tiles(n),
         CopyTile<input(cb_in)>{},
-        PackTile<output(cb_relu, OutputLifecycle::Streaming, DataFormatReconfig::Enabled, PackRelu::Zero)>{},
+        PackTile<output(
+            cb_relu, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Enabled, PackRelu::Zero)>{},
         PackTile<output(cb_linear)>{});
 }

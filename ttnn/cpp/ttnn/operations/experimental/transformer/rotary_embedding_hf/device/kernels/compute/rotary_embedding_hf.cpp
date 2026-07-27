@@ -15,9 +15,9 @@ namespace ckl = compute_kernel_lib;
 template <uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb>
 ALWI void mul_tiles_chain() {
     ckl::mul<
-        ckl::input(in0_cb, ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
-        ckl::input(in1_cb, ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
-        ckl::output(out_cb, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+        ckl::input(in0_cb, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+        ckl::input(in1_cb, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+        ckl::output(out_cb, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
         ckl::BroadcastDim::None>(ckl::EltwiseShape::single());
 }
 
@@ -46,7 +46,7 @@ void kernel_main() {
             if (j < half_Wt) {
                 ckl::mul<
                     ckl::input(rotated_in_cb),
-                    ckl::input(scalar_cb, ckl::InputLifecycle::CallerManaged),
+                    ckl::input(scalar_cb, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                     ckl::output(rotated_in_interm_cb),
                     ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::tiles(onetile));
                 reconfig_data_format_srcb(scalar_cb, sin_cb);

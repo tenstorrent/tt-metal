@@ -21,13 +21,15 @@ void kernel_main() {
 
     using ManagedPack = PackTile<output(
         cb_acc,
-        OutputLifecycle::L1Accumulation,
+        ReservePolicy::OneUpfront,
+        PushPolicy::OneAtEnd,
         DataFormatReconfig::Disabled,
         PackRelu::Disabled,
         L1Accumulation::SeedFirst)>;
     using CallerManagedPack = PackTile<output(
         cb_acc,
-        OutputLifecycle::CallerManaged,
+        ReservePolicy::None,
+        PushPolicy::None,
         DataFormatReconfig::Disabled,
         PackRelu::Disabled,
         L1Accumulation::SeedFirst)>;
@@ -36,13 +38,13 @@ void kernel_main() {
         accumulator.reserve_back(1);
         eltwise_chain(
             EltwiseShape::tiles(n),
-            CopyTile<input(cb_in, InputLifecycle::Streaming, DataFormatReconfig::Disabled), Dst::D0>{},
+            CopyTile<input(cb_in, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled), Dst::D0>{},
             CallerManagedPack{});
         accumulator.push_back(1);
     } else {
         eltwise_chain(
             EltwiseShape::tiles(n),
-            CopyTile<input(cb_in, InputLifecycle::Streaming, DataFormatReconfig::Disabled), Dst::D0>{},
+            CopyTile<input(cb_in, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled), Dst::D0>{},
             ManagedPack{});
     }
 

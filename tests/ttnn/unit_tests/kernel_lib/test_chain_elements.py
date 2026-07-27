@@ -22,6 +22,7 @@ import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
 DEST_REUSE = "ttnn/cpp/ttnn/kernel_lib/tests/axes/dest_reuse.cpp"
 DEST_REUSE_PARAM = "ttnn/cpp/ttnn/kernel_lib/tests/axes/dest_reuse_param.cpp"
 TERNARY_WHERE = "ttnn/cpp/ttnn/kernel_lib/tests/axes/ternary_where.cpp"
+UNARY_BCAST = "ttnn/cpp/ttnn/kernel_lib/tests/axes/unary_bcast.cpp"
 
 # reuse selector -> name; op selector -> (name, torch fn applied as `lhs op rhs`)
 _REUSE = {0: "DEST_TO_SRCA", 1: "DEST_TO_SRCB"}
@@ -119,4 +120,45 @@ def test_ternary_where(device):
     out = ttnn.to_torch(output).to(torch.float32)
     pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([dt]))
     logger.info(f"Where ternary | {msg}")
+    assert pcc_ok, msg
+
+
+@pytest.mark.parametrize("dim", [1, 2, 3], ids=["col", "row", "scalar"])
+def test_unary_bcast(device, dim):
+    """UnaryBcast replicates one column, row, or scalar within each tile."""
+    n = 4
+    dt = ttnn.bfloat16
+    shape = [1, 1, 32, 32 * n]
+    core_grid = lib.single_core_grid()
+
+    torch.manual_seed(1401)
+    host = torch.randn(shape, dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(
+        host,
+        dtype=dt,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dt, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
+    cbs = [lib.cb_descriptor(0, dt, 2, core_grid), lib.cb_descriptor(16, dt, 2, core_grid)]
+    reader = lib.build_reader_kernel([tt_in], n, core_grid)
+    writer = lib.build_writer_1out_kernel(tt_out, n, core_grid)
+    compute = lib.build_compute_kernel(UNARY_BCAST, [n, dim], core_grid)
+
+    program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
+    output = ttnn.generic_op([tt_in, tt_out], program)
+
+    tiles = host.to(torch.float32).reshape(1, 1, 32, n, 32).permute(0, 1, 3, 2, 4)
+    if dim == 1:
+        golden_tiles = tiles[..., :1].expand_as(tiles)
+    elif dim == 2:
+        golden_tiles = tiles[..., :1, :].expand_as(tiles)
+    else:
+        golden_tiles = tiles[..., :1, :1].expand_as(tiles)
+    golden = golden_tiles.permute(0, 1, 3, 2, 4).reshape(shape)
+
+    out = ttnn.to_torch(output).to(torch.float32)
+    pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([dt]))
+    logger.info(f"UnaryBcast dim={dim} | {msg}")
     assert pcc_ok, msg

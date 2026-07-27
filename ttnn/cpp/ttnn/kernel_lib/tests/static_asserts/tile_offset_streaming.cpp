@@ -21,7 +21,13 @@ void kernel_main() {
     eltwise_chain(
         EltwiseShape::tiles(n),
         CopyTile<
-            input(cb_in, InputLifecycle::Streaming, OperandKind::Scalar, DataFormatReconfig::Enabled, TileOffset::Set),
+            input(
+                cb_in,
+                WaitPolicy::PerTile,
+                PopPolicy::PerTile,
+                OperandKind::Scalar,
+                DataFormatReconfig::Enabled,
+                TileOffset::Set),
             Dst::D0>{0},
         PackTile<output(cb_out)>{});
 }

@@ -7,7 +7,7 @@ PackTile lifecycle / CB-synchronization (output side). Run under --dev.
 
 The output lifecycle decides whether the chain or the CALLER emits cb_reserve_back / cb_push_back.
 A miscount hangs the writer (BRISC) or overwrites an unpushed tile. out_lifecycle.cpp does an
-identity copy with a selectable OutputLifecycle and supplies the caller-side edge where needed.
+identity copy with selectable reserve/push policies and supplies the caller-side edge where needed.
 
 Covers the 5 well-defined cells (Streaming, Bulk, ReserveAllPushPerTile, CallerManaged,
 ReserveNonePushEnd); Chunked is covered by the blocking suite.

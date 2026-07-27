@@ -76,31 +76,35 @@ void kernel_main() {
         ckl::eltwise_chain(
             ckl::EltwiseShape::single(),
             ckl::BinaryFpu<
-                ckl::input(cb_correct_xpow, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
+                ckl::input(cb_correct_xpow, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                 ckl::input(
                     cb_y,
-                    ckl::InputLifecycle::CallerManaged,
+                    ckl::WaitPolicy::None,
+                    ckl::PopPolicy::None,
                     ckl::OperandKind::Scalar,
                     kDataFormatReconfig,
                     ckl::TileOffset::Set),
                 ckl::BinaryFpuOp::Mul,
                 kBcast>{},
-            ckl::PackTile<ckl::output(cb_tmp4, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
+            ckl::PackTile<ckl::output(
+                cb_tmp4, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
         // x^(p - 1) * y * dy -> cb_tmp5
         ckl::eltwise_chain(
             ckl::EltwiseShape::single(),
             ckl::BinaryFpu<
-                ckl::input(cb_tmp4, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
+                ckl::input(cb_tmp4, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                 ckl::input(
                     cb_dy,
-                    ckl::InputLifecycle::CallerManaged,
+                    ckl::WaitPolicy::None,
+                    ckl::PopPolicy::None,
                     ckl::OperandKind::Scalar,
                     kDataFormatReconfig,
                     ckl::TileOffset::Set),
                 ckl::BinaryFpuOp::Mul,
                 kBcast>{},
-            ckl::PackTile<ckl::output(cb_tmp5, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
+            ckl::PackTile<ckl::output(
+                cb_tmp5, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
         // 1 / y^p
         power_and_recip_tile_to_cb<cb_y, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_recip_ypow>(p, p_is_negative);
@@ -109,11 +113,12 @@ void kernel_main() {
         ckl::eltwise_chain(
             ckl::EltwiseShape::single(),
             ckl::BinaryFpu<
-                ckl::input(cb_tmp5, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
-                ckl::input(cb_recip_ypow, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
+                ckl::input(cb_tmp5, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                ckl::input(cb_recip_ypow, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                 ckl::BinaryFpuOp::Mul,
                 kBcast>{},
-            ckl::PackTile<ckl::output(cb_tmp4, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
+            ckl::PackTile<ckl::output(
+                cb_tmp4, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
         cb_dy_obj.pop_front(onetile);
 

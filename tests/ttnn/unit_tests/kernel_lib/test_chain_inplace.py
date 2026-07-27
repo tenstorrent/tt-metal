@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-In-place (output side): which (InputLifecycle, OutputLifecycle) pairs let a chain read AND write the
+In-place (output side): which input wait/pop and output reserve/push pairs let a chain read AND write the
 SAME CB, overwriting a resident buffer with no second CB. Run under --dev.
 
 In-place is CB-self-deadlock-prone: the packer's reserve can't succeed while the reader's tiles
@@ -25,7 +25,7 @@ import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
 
 KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/lifecycle/inplace_chain.cpp"
 
-# Selector -> (InputLifecycle + OutputLifecycle) pair (must match inplace_chain.cpp).
+# Selector -> input wait/pop + output reserve/push pair (must match inplace_chain.cpp).
 INPLACE_LIFECYCLES = {
     0: "BulkDrain+Streaming",  # front rotation
     1: "Chunked+Chunked",  # chunk lockstep

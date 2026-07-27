@@ -78,15 +78,17 @@ void kernel_main() {
             const bool mask_this = do_mask_w && (col_idx == Wt - 1);
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
-                ckl::CopyTile<ckl::input(cb_x, ckl::InputLifecycle::Streaming, kDataFormatReconfig)>{},
+                ckl::CopyTile<ckl::input(
+                    cb_x, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
                 ckl::runtime_if(
                     mask_this,
                     ckl::CopyTile<
-                        ckl::input(cb_mask_w, ckl::InputLifecycle::CallerManaged, kDataFormatReconfig),
+                        ckl::input(cb_mask_w, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
                         ckl::Dst::D1>{},
                     ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{}),
                 ckl::Abs<ckl::Dst::D0>{},
-                ckl::PackTile<ckl::output(cb_xabs, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
+                ckl::PackTile<ckl::output(
+                    cb_xabs, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
             power_tile_to_cb<cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_correct_xpow>(p, p_is_negative);
 

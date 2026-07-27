@@ -53,15 +53,15 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         if constexpr (FUSE_PRE_ADD) {
             ckl::add<
-                ckl::input(cb_in0_id, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
-                ckl::input(cb_res_id, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
-                ckl::output(cb_inp_id, ckl::OutputLifecycle::Chunked),
+                ckl::input(cb_in0_id, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                ckl::input(cb_res_id, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                ckl::output(cb_inp_id, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk),
                 ckl::BroadcastDim::None>(squaring_shape);
         }
 
         ckl::square<
-            ckl::input(cb_inp_id, ckl::InputLifecycle::HeldCumulative, ckl::OperandKind::Block),
-            ckl::output(cb_x2_id, ckl::OutputLifecycle::Chunked)>(squaring_shape);
+            ckl::input(cb_inp_id, ckl::WaitPolicy::Cumulative, ckl::PopPolicy::None, ckl::OperandKind::Block),
+            ckl::output(cb_x2_id, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk)>(squaring_shape);
 
         // sum(x**2)
         ckl::reduce<
@@ -82,15 +82,16 @@ void kernel_main() {
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(num_cores_y),
             ckl::BinaryFpu<
-                ckl::input(cb_x2_merge_id, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                ckl::input(cb_zero_id, ckl::InputLifecycle::HeldBulk),
+                ckl::input(cb_x2_merge_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                ckl::input(cb_zero_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
                 ckl::BinaryFpuOp::Add,
                 ckl::BroadcastDim::None,
                 ckl::Dst::D0,
                 ckl::DestAccumulation::WholeShape>{},
             ckl::PackTile<ckl::output(
                 cb_out_final_id,
-                ckl::OutputLifecycle::DestAccumulation,
+                ckl::ReservePolicy::PerOuter,
+                ckl::PushPolicy::PerOuter,
                 ckl::DataFormatReconfig::Enabled,
                 ckl::PackRelu::Disabled,
                 ckl::L1Accumulation::Disabled,

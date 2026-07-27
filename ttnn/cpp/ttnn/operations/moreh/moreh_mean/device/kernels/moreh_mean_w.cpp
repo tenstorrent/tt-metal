@@ -79,13 +79,17 @@ void kernel_main() {
             if constexpr (do_mask_w) {
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(onetile),
-                    ckl::CopyTile<ckl::input(tt::CBIndex::c_0, ckl::InputLifecycle::Streaming, kDataFormatReconfig)>{},
+                    ckl::CopyTile<ckl::input(
+                        tt::CBIndex::c_0, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
                     ckl::CopyTile<
-                        ckl::input(cb_mask_w, ckl::InputLifecycle::CallerManaged, kDataFormatReconfig),
+                        ckl::input(cb_mask_w, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
                         ckl::Dst::D1>{},
                     ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
                     ckl::PackTile<ckl::output(
-                        cb_masked_input, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
+                        cb_masked_input,
+                        ckl::ReservePolicy::PerTile,
+                        ckl::PushPolicy::PerTile,
+                        kDataFormatReconfig)>{});
                 cb_input = cb_masked_input;
             }
 

@@ -65,7 +65,7 @@ void kernel_main() {
                 ckl::CopyTile<ckl::input(cb_x)>{},
                 ckl::runtime_if(
                     mask_this,
-                    ckl::CopyTile<ckl::input(cb_mask_w, ckl::InputLifecycle::CallerManaged), ckl::Dst::D1>{},
+                    ckl::CopyTile<ckl::input(cb_mask_w, ckl::WaitPolicy::None, ckl::PopPolicy::None), ckl::Dst::D1>{},
                     MaskOp{}),
                 ckl::OptionalChainElement<is_zero, ckl::UnaryNe<ckl::Dst::D0>>{0u},
                 ckl::OptionalChainElement<!is_zero, ckl::Abs<ckl::Dst::D0>>{},

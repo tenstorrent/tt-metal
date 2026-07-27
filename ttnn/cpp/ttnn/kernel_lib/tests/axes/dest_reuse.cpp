@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // DestReuseBinary element coverage: out = (A + B) * C, reusing the DEST result as an FPU operand.
-//   D0 = A + B (BinaryFpu) ; D0 = DEST(D0) * C (DestReuseBinary Mul, DEST_TO_SRCA) ; pack D0
+//   D1 = A + B (BinaryFpu) ; D1 = DEST(D1) * C (DestReuseBinary Mul, DEST_TO_SRCA) ; pack D1
 // DestReuseBinary feeds DEST back into the FPU instead of a second CB read. The (A+B)*C golden fails
-// if the DEST operand is mis-routed.
+// if the DEST operand is mis-routed. Using D1 also proves that dest reuse writes back to its input slot.
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
@@ -22,7 +22,7 @@ void kernel_main() {
     using namespace compute_kernel_lib;
     eltwise_chain(
         EltwiseShape::tiles(n),
-        BinaryFpu<input(cb_a), input(cb_b)>{},
-        DestReuseBinary<input(cb_c), BinaryFpuOp::Mul, DestReuseType::DEST_TO_SRCA>{},
-        PackTile<output(cb_out)>{});
+        BinaryFpu<input(cb_a), input(cb_b), BinaryFpuOp::Add, BroadcastDim::None, Dst::D1>{},
+        DestReuseBinary<input(cb_c), BinaryFpuOp::Mul, DestReuseType::DEST_TO_SRCA, Dst::D1>{},
+        PackTile<output(cb_out), Dst::D1>{});
 }

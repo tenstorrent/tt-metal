@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Functional validation for InputLifecycle::OuterStream — the streamed outer-axis broadcast.
+Functional validation for WaitPolicy::PerOuter, PopPolicy::PerOuter — the streamed outer-axis broadcast.
 
 A BinaryFpu chain over grid(Ht, Wt):
   cb_a: Streaming   + Scalar  -> one tile per (ht, wt), front-read, popped per tile

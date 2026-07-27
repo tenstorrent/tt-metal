@@ -123,9 +123,9 @@ void kernel_main() {
                     cb_x_welford_obj.reserve_back(block.full_block_size());
                 }
                 ckl::add<
-                    ckl::input(cb_in, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
-                    ckl::input(cb_inb, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
-                    ckl::output(cb_x, ckl::OutputLifecycle::Chunked),
+                    ckl::input(cb_in, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                    ckl::input(cb_inb, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                    ckl::output(cb_x, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk),
                     ckl::BroadcastDim::None>(block_shape);
                 if constexpr (welford_fp32_alias) {
                     cb_x_welford_obj.push_back(block.full_block_size());
@@ -265,9 +265,10 @@ void kernel_main() {
 
         cb_ex_obj.wait_front(onetile);
         ckl::sub<
-            ckl::input(cb_x, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
-            ckl::input(cb_ex, ckl::InputLifecycle::CallerManaged),
-            ckl::output(cb_xmm, ckl::OutputLifecycle::ReserveAllPushPerChunk, ckl::DataFormatReconfig::Disabled),
+            ckl::input(cb_x, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+            ckl::input(cb_ex, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+            ckl::output(
+                cb_xmm, ckl::ReservePolicy::Upfront, ckl::PushPolicy::PerChunk, ckl::DataFormatReconfig::Disabled),
             ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(total_buffer_size, /*block_size=*/blk));
         cb_ex_obj.pop_front(1);
         cb_xmm_obj.wait_front(total_buffer_size);
@@ -280,11 +281,12 @@ void kernel_main() {
             ckl::EltwiseShape::tiles(onetile),
             ckl::BinaryFpu<
                 ckl::input(cb_ex2),
-                ckl::input(cb_eps, ckl::InputLifecycle::CallerManaged),
+                ckl::input(cb_eps, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                 ckl::BinaryFpuOp::Add,
                 ckl::BroadcastDim::None>{},
             ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::Off, ckl::Dst::D0>{},
-            ckl::PackTile<ckl::output(cb_ex2pe, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+            ckl::PackTile<ckl::output(
+                cb_ex2pe, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
 
         // Remainder of the layernorm operation
         cb_ex2pe_obj.wait_front(onetile);
@@ -296,45 +298,50 @@ void kernel_main() {
                 ckl::BinaryFpu<
                     ckl::input(
                         cb_xmm,
-                        ckl::InputLifecycle::HeldBulk,
+                        ckl::WaitPolicy::Upfront,
+                        ckl::PopPolicy::None,
                         ckl::OperandKind::Block,
                         ckl::DataFormatReconfig::Enabled,
                         ckl::TileOffset::Set),
-                    ckl::input(cb_ex2pe, ckl::InputLifecycle::CallerManaged),
+                    ckl::input(cb_ex2pe, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                     ckl::BinaryFpuOp::Mul,
                     ckl::BroadcastDim::Col>{block.start(), 0u},
-                ckl::PackTile<ckl::output(cb_im_or_out, ckl::OutputLifecycle::Chunked)>{});
+                ckl::PackTile<ckl::output(cb_im_or_out, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk)>{});
 
             if constexpr (do_gamma) {
                 constexpr uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
                 ckl::eltwise_chain(
                     block_shape,
                     ckl::BinaryFpu<
-                        ckl::input(cb_fusion, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+                        ckl::input(
+                            cb_fusion, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
                         ckl::input(
                             cb_gamma,
-                            ckl::InputLifecycle::HeldBulk,
+                            ckl::WaitPolicy::Upfront,
+                            ckl::PopPolicy::None,
                             ckl::OperandKind::Block,
                             ckl::DataFormatReconfig::Enabled,
                             ckl::TileOffset::Set),
                         ckl::BinaryFpuOp::Mul,
                         ckl::BroadcastDim::Row>{0u, block.start()},
-                    ckl::PackTile<ckl::output(cb_outg, ckl::OutputLifecycle::Chunked)>{});
+                    ckl::PackTile<ckl::output(cb_outg, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk)>{});
             }
             if constexpr (do_beta) {
                 ckl::eltwise_chain(
                     block_shape,
                     ckl::BinaryFpu<
-                        ckl::input(cb_fusion, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+                        ckl::input(
+                            cb_fusion, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
                         ckl::input(
                             cb_beta,
-                            ckl::InputLifecycle::HeldBulk,
+                            ckl::WaitPolicy::Upfront,
+                            ckl::PopPolicy::None,
                             ckl::OperandKind::Block,
                             ckl::DataFormatReconfig::Enabled,
                             ckl::TileOffset::Set),
                         ckl::BinaryFpuOp::Add,
                         ckl::BroadcastDim::Row>{0u, block.start()},
-                    ckl::PackTile<ckl::output(cb_out, ckl::OutputLifecycle::Chunked)>{});
+                    ckl::PackTile<ckl::output(cb_out, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk)>{});
             }
         }
         cb_ex2pe_obj.pop_front(onetile);

@@ -38,18 +38,31 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(8);
     constexpr uint32_t Ht = get_compile_time_arg_val(9);  // How many rows (tiles) in n_heads dimension
     constexpr auto bulk_block_input = [](uint32_t cb) {
-        return ckl::input(cb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled);
+        return ckl::input(
+            cb,
+            ckl::WaitPolicy::Upfront,
+            ckl::PopPolicy::AtEnd,
+            ckl::OperandKind::Block,
+            ckl::DataFormatReconfig::Disabled);
     };
     constexpr auto held_block_input = [](uint32_t cb) {
         return ckl::input(
-            cb, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled);
+            cb,
+            ckl::WaitPolicy::Upfront,
+            ckl::PopPolicy::None,
+            ckl::OperandKind::Block,
+            ckl::DataFormatReconfig::Disabled);
     };
     constexpr auto bulk_output = [](uint32_t cb) {
-        return ckl::output(cb, ckl::OutputLifecycle::ReserveNonePushEnd, ckl::DataFormatReconfig::Disabled);
+        return ckl::output(cb, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled);
     };
     constexpr auto rotated_input = bulk_block_input(rotated_in_interm_cb);
-    constexpr auto in_input =
-        ckl::input(in_cb, ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled);
+    constexpr auto in_input = ckl::input(
+        in_cb,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::AtEnd,
+        ckl::OperandKind::Block,
+        ckl::DataFormatReconfig::Disabled);
     constexpr auto sin_input = held_block_input(sin_cb);
     constexpr auto cos_input = held_block_input(cos_cb);
     constexpr auto sin_interm_input = bulk_block_input(sin_interm_cb);

@@ -64,9 +64,12 @@ void kernel_main() {
             // |x|
             ckl::eltwise_chain(
                 ckl::EltwiseShape::single(),
-                ckl::CopyTile<ckl::input(cb_x, ckl::InputLifecycle::Streaming, kDataFormatReconfig), ckl::Dst::D0>{},
+                ckl::CopyTile<
+                    ckl::input(cb_x, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                    ckl::Dst::D0>{},
                 ckl::Abs<ckl::Dst::D0>{},
-                ckl::PackTile<ckl::output(cb_xabs, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
+                ckl::PackTile<ckl::output(
+                    cb_xabs, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
             power_tile_to_cb<cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_correct_xpow>(p, p_is_negative);
 

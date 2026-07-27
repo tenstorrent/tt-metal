@@ -21,11 +21,13 @@ void kernel_main() {
     constexpr compute_kernel_lib::InputSpec default_input = compute_kernel_lib::input(cb_a);
     constexpr compute_kernel_lib::OutputSpec default_output = compute_kernel_lib::output(cb_out);
     static_assert(default_input.cb_id == cb_a);
-    static_assert(default_input.lifecycle == compute_kernel_lib::InputLifecycle::Streaming);
+    static_assert(default_input.wait == compute_kernel_lib::WaitPolicy::PerTile);
+    static_assert(default_input.pop == compute_kernel_lib::PopPolicy::PerTile);
     static_assert(default_input.index == compute_kernel_lib::OperandKind::Scalar);
     static_assert(default_input.offset == compute_kernel_lib::TileOffset::Unset);
     static_assert(default_input.reconfig == compute_kernel_lib::DataFormatReconfig::Enabled);
-    static_assert(default_output.lifecycle == compute_kernel_lib::OutputLifecycle::Streaming);
+    static_assert(default_output.reserve == compute_kernel_lib::ReservePolicy::PerTile);
+    static_assert(default_output.push == compute_kernel_lib::PushPolicy::PerTile);
     static_assert(default_output.cb_id == cb_out);
     static_assert(default_output.reconfig == compute_kernel_lib::DataFormatReconfig::Enabled);
     static_assert(default_output.relu == compute_kernel_lib::PackRelu::Disabled);
@@ -36,12 +38,18 @@ void kernel_main() {
     using SrcAOnly = compute_kernel_lib::BinaryFpu<
         compute_kernel_lib::input(cb_a),
         compute_kernel_lib::input(
-            cb_b, compute_kernel_lib::InputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled),
+            cb_b,
+            compute_kernel_lib::WaitPolicy::PerTile,
+            compute_kernel_lib::PopPolicy::PerTile,
+            compute_kernel_lib::DataFormatReconfig::Disabled),
         compute_kernel_lib::BinaryFpuOp::Add,
         compute_kernel_lib::BroadcastDim::None>;
     using SrcBOnly = compute_kernel_lib::BinaryFpu<
         compute_kernel_lib::input(
-            cb_a, compute_kernel_lib::InputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled),
+            cb_a,
+            compute_kernel_lib::WaitPolicy::PerTile,
+            compute_kernel_lib::PopPolicy::PerTile,
+            compute_kernel_lib::DataFormatReconfig::Disabled),
         compute_kernel_lib::input(cb_b),
         compute_kernel_lib::BinaryFpuOp::Add,
         compute_kernel_lib::BroadcastDim::None>;

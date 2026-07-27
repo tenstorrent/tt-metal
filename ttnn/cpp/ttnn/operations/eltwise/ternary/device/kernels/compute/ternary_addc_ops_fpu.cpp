@@ -21,13 +21,14 @@ inline void run_addcmul(uint32_t num_tiles, uint32_t scalar_arg) {
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(num_tiles),
         ckl::BinaryFpu<
-            ckl::input(cb_in1, ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
-            ckl::input(cb_in2, ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+            ckl::input(cb_in1, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+            ckl::input(cb_in2, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
             ckl::BinaryFpuOp::Mul,
             ckl::BroadcastDim::None>{},
         ckl::runtime_if(scalar_arg != 1u, ckl::MulUnary<ckl::Dst::D0>{scalar_arg}),
         ckl::DestReuseBinary<ckl::input(cb_in0), ckl::BinaryFpuOp::Add, ckl::DestReuseType::DEST_TO_SRCA>{},
-        ckl::PackTile<ckl::output(cb_out, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+        ckl::PackTile<ckl::output(
+            cb_out, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
 }
 
 void kernel_main() {

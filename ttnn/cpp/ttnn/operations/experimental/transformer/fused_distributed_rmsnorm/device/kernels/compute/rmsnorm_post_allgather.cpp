@@ -102,7 +102,7 @@ void kernel_main() {
             ckl::EltwiseShape::single(),
             ckl::BinaryFpu<
                 ckl::input(reduce_result_cb),
-                ckl::input(epsilon_cb, ckl::InputLifecycle::CallerManaged),
+                ckl::input(epsilon_cb, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                 ckl::BinaryFpuOp::Add,
                 ckl::BroadcastDim::None>{},
             ckl::Rsqrt<ckl::Approx::Exact, use_legacy_rsqrt ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
@@ -115,9 +115,9 @@ void kernel_main() {
         cb_reduce_result.wait_front(1);
         for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
             ckl::mul<
-                ckl::input(input_cb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                ckl::input(reduce_result_cb, ckl::InputLifecycle::CallerManaged),
-                ckl::output(mul_rms_result_cb, ckl::OutputLifecycle::Bulk),
+                ckl::input(input_cb, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                ckl::input(reduce_result_cb, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                ckl::output(mul_rms_result_cb, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd),
                 ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(block_size, block_size));
 
             /**
@@ -129,16 +129,22 @@ void kernel_main() {
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(block_size, /*block_size=*/block_size),
                     ckl::BinaryFpu<
-                        ckl::input(mul_rms_result_cb, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+                        ckl::input(
+                            mul_rms_result_cb,
+                            ckl::WaitPolicy::PerChunk,
+                            ckl::PopPolicy::PerChunk,
+                            ckl::OperandKind::Block),
                         ckl::input(
                             weight_cb,
-                            ckl::InputLifecycle::CallerManaged,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::None,
                             ckl::OperandKind::Block,
                             ckl::DataFormatReconfig::Enabled,
                             ckl::TileOffset::Set),
                         ckl::BinaryFpuOp::Mul,
                         ckl::BroadcastDim::Row>{0u, col_tile},
-                    ckl::PackTile<ckl::output(mul_weight_result_cb, ckl::OutputLifecycle::Chunked)>{});
+                    ckl::PackTile<ckl::output(
+                        mul_weight_result_cb, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk)>{});
             }
 
             /**
@@ -223,9 +229,11 @@ void kernel_main() {
                 cb_rotated_input.push_back(block_size);
 
                 ckl::add<
-                    ckl::input(intermediate_cb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                    ckl::input(rotated_input_cb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                    ckl::output(output_cb, ckl::OutputLifecycle::Bulk),
+                    ckl::input(
+                        intermediate_cb, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                    ckl::input(
+                        rotated_input_cb, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                    ckl::output(output_cb, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd),
                     ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(block_size, block_size));
 
                 // Reconfigure for mul_bcast_col

@@ -98,7 +98,8 @@ void kernel_main() {
                         ckl::EltwiseShape::single(),
                         ckl::CopyTile<ckl::input(
                             cb_x,
-                            ckl::InputLifecycle::CallerManaged,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::None,
                             ckl::OperandKind::Scalar,
                             kDataFormatReconfig,
                             ckl::TileOffset::Set)>{first_tile},
@@ -107,7 +108,8 @@ void kernel_main() {
                             ckl::CopyTile<
                                 ckl::input(
                                     cb_mask_h,
-                                    ckl::InputLifecycle::CallerManaged,
+                                    ckl::WaitPolicy::None,
+                                    ckl::PopPolicy::None,
                                     ckl::OperandKind::Scalar,
                                     kDataFormatReconfig,
                                     ckl::TileOffset::Set),
@@ -118,13 +120,15 @@ void kernel_main() {
                             ckl::CopyTile<
                                 ckl::input(
                                     cb_mask_w,
-                                    ckl::InputLifecycle::CallerManaged,
+                                    ckl::WaitPolicy::None,
+                                    ckl::PopPolicy::None,
                                     ckl::OperandKind::Scalar,
                                     kDataFormatReconfig,
                                     ckl::TileOffset::Set),
                                 ckl::Dst::D1>{first_tile},
                             ckl::Mask<>{}),
-                        ckl::PackTile<ckl::output(cb_xsum, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
+                        ckl::PackTile<ckl::output(
+                            cb_xsum, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
                 } else {
                     // I use cb_ex temporarily.
                     constexpr auto cb_tmp = cb_ex;
@@ -132,7 +136,8 @@ void kernel_main() {
                         ckl::EltwiseShape::single(),
                         ckl::CopyTile<ckl::input(
                             cb_x,
-                            ckl::InputLifecycle::CallerManaged,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::None,
                             ckl::OperandKind::Scalar,
                             kDataFormatReconfig,
                             ckl::TileOffset::Set)>{j},
@@ -141,7 +146,8 @@ void kernel_main() {
                             ckl::CopyTile<
                                 ckl::input(
                                     cb_mask_h,
-                                    ckl::InputLifecycle::CallerManaged,
+                                    ckl::WaitPolicy::None,
+                                    ckl::PopPolicy::None,
                                     ckl::OperandKind::Scalar,
                                     kDataFormatReconfig,
                                     ckl::TileOffset::Set),
@@ -152,22 +158,25 @@ void kernel_main() {
                             ckl::CopyTile<
                                 ckl::input(
                                     cb_mask_w,
-                                    ckl::InputLifecycle::CallerManaged,
+                                    ckl::WaitPolicy::None,
+                                    ckl::PopPolicy::None,
                                     ckl::OperandKind::Scalar,
                                     kDataFormatReconfig,
                                     ckl::TileOffset::Set),
                                 ckl::Dst::D1>{first_tile},
                             ckl::Mask<>{}),
-                        ckl::PackTile<ckl::output(cb_tmp, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
+                        ckl::PackTile<ckl::output(
+                            cb_tmp, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
                     ckl::eltwise_chain(
                         ckl::EltwiseShape::single(),
                         ckl::BinaryFpu<
-                            ckl::input(cb_xsum, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
-                            ckl::input(cb_tmp, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
+                            ckl::input(cb_xsum, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                            ckl::input(cb_tmp, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                             ckl::BinaryFpuOp::Add,
                             ckl::BroadcastDim::None>{},
-                        ckl::PackTile<ckl::output(cb_xsum, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
+                        ckl::PackTile<ckl::output(
+                            cb_xsum, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
                 }
             }  // block_size loop
             cb_x_obj.pop_front(block_size);
@@ -192,9 +201,14 @@ void kernel_main() {
          */
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx += block_size) {
             ckl::sub<
-                ckl::input(cb_x, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block, kDataFormatReconfig),
-                ckl::input(cb_ex, ckl::InputLifecycle::CallerManaged, kDataFormatReconfig),
-                ckl::output(cb_xmm, ckl::OutputLifecycle::Bulk, kDataFormatReconfig),
+                ckl::input(
+                    cb_x,
+                    ckl::WaitPolicy::Upfront,
+                    ckl::PopPolicy::AtEnd,
+                    ckl::OperandKind::Block,
+                    kDataFormatReconfig),
+                ckl::input(cb_ex, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
+                ckl::output(cb_xmm, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
                 is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar>(
                 ckl::EltwiseShape::tiles(block_size, block_size));
 
@@ -206,13 +220,15 @@ void kernel_main() {
                     const uint32_t w_idx = inner_idx + j;
                     ckl::eltwise_chain(
                         ckl::EltwiseShape::single(),
-                        ckl::CopyTile<ckl::input(cb_xmm, ckl::InputLifecycle::Streaming, kDataFormatReconfig)>{},
+                        ckl::CopyTile<ckl::input(
+                            cb_xmm, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
                         ckl::runtime_if(
                             do_mask_h && need_to_do_mask_h(w_idx, origin_Ht, origin_Wt),
                             ckl::CopyTile<
                                 ckl::input(
                                     cb_mask_h,
-                                    ckl::InputLifecycle::CallerManaged,
+                                    ckl::WaitPolicy::None,
+                                    ckl::PopPolicy::None,
                                     ckl::OperandKind::Scalar,
                                     kDataFormatReconfig,
                                     ckl::TileOffset::Set),
@@ -223,13 +239,15 @@ void kernel_main() {
                             ckl::CopyTile<
                                 ckl::input(
                                     cb_mask_w,
-                                    ckl::InputLifecycle::CallerManaged,
+                                    ckl::WaitPolicy::None,
+                                    ckl::PopPolicy::None,
                                     ckl::OperandKind::Scalar,
                                     kDataFormatReconfig,
                                     ckl::TileOffset::Set),
                                 ckl::Dst::D1>{first_tile},
                             ckl::Mask<>{}),
-                        ckl::PackTile<ckl::output(cb_xmm, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
+                        ckl::PackTile<ckl::output(
+                            cb_xmm, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
                 }  // block_size loop
             }
 
@@ -238,8 +256,13 @@ void kernel_main() {
              * cb_xmm2
              */
             ckl::square<
-                ckl::input(cb_xmm, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block, kDataFormatReconfig),
-                ckl::output(cb_xmm2, ckl::OutputLifecycle::Bulk, kDataFormatReconfig)>(
+                ckl::input(
+                    cb_xmm,
+                    ckl::WaitPolicy::Upfront,
+                    ckl::PopPolicy::AtEnd,
+                    ckl::OperandKind::Block,
+                    kDataFormatReconfig),
+                ckl::output(cb_xmm2, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig)>(
                 ckl::EltwiseShape::tiles(block_size, block_size));
 
             /*
@@ -249,14 +272,16 @@ void kernel_main() {
             for (uint32_t j = 0; j < block_size; j++) {
                 if (inner_idx == 0 && j == 0) {
                     ckl::copy<
-                        ckl::input(cb_xmm2, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
-                        ckl::output(cb_xmm2sum, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>(
+                        ckl::input(cb_xmm2, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                        ckl::output(
+                            cb_xmm2sum, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
                         ckl::EltwiseShape::single());
                 } else {
                     ckl::add<
-                        ckl::input(cb_xmm2sum, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
-                        ckl::input(cb_xmm2, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
-                        ckl::output(cb_xmm2sum, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>(
+                        ckl::input(cb_xmm2sum, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                        ckl::input(cb_xmm2, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                        ckl::output(
+                            cb_xmm2sum, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
                         ckl::EltwiseShape::single());
                 }
             }  // block_size loop
@@ -276,12 +301,13 @@ void kernel_main() {
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
             ckl::BinaryFpu<
-                ckl::input(cb_var, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
-                ckl::input(cb_eps, ckl::InputLifecycle::CallerManaged, kDataFormatReconfig),
+                ckl::input(cb_var, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                ckl::input(cb_eps, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
                 ckl::BinaryFpuOp::Add,
                 ckl::BroadcastDim::None>{},
             ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::Off, ckl::Dst::D0>{},
-            ckl::PackTile<ckl::output(cb_recip_std, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
+            ckl::PackTile<ckl::output(
+                cb_recip_std, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
         if constexpr (rstd_has_value) {
             copy_tile_to_cb<cb_recip_std, cb_rstd>(first_tile, 0);
@@ -301,9 +327,14 @@ void kernel_main() {
              * cb_reuse(==cb_xmm)
              */
             ckl::sub<
-                ckl::input(cb_x, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block, kDataFormatReconfig),
-                ckl::input(cb_ex, ckl::InputLifecycle::CallerManaged, kDataFormatReconfig),
-                ckl::output(cb_reuse, ckl::OutputLifecycle::Bulk, kDataFormatReconfig),
+                ckl::input(
+                    cb_x,
+                    ckl::WaitPolicy::Upfront,
+                    ckl::PopPolicy::AtEnd,
+                    ckl::OperandKind::Block,
+                    kDataFormatReconfig),
+                ckl::input(cb_ex, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
+                ckl::output(cb_reuse, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
                 is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar>(
                 ckl::EltwiseShape::tiles(block_size, block_size));
 
@@ -313,9 +344,15 @@ void kernel_main() {
              */
             constexpr auto cb_gamma_beta_or_out = (gamma_has_value || beta_has_value) ? cb_gamma_beta : cb_out;
             ckl::mul<
-                ckl::input(cb_reuse, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block, kDataFormatReconfig),
-                ckl::input(cb_recip_std, ckl::InputLifecycle::CallerManaged, kDataFormatReconfig),
-                ckl::output(cb_gamma_beta_or_out, ckl::OutputLifecycle::Bulk, kDataFormatReconfig),
+                ckl::input(
+                    cb_reuse,
+                    ckl::WaitPolicy::Upfront,
+                    ckl::PopPolicy::AtEnd,
+                    ckl::OperandKind::Block,
+                    kDataFormatReconfig),
+                ckl::input(cb_recip_std, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
+                ckl::output(
+                    cb_gamma_beta_or_out, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
                 is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar>(
                 ckl::EltwiseShape::tiles(block_size, block_size));
 
@@ -326,9 +363,18 @@ void kernel_main() {
                                  : (is_lastdim_layernorm ? ckl::BroadcastDim::Row : ckl::BroadcastDim::None);
                 ckl::mul<
                     ckl::input(
-                        cb_gamma_beta_or_out, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block, kDataFormatReconfig),
-                    ckl::input(cb_gamma, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block, kDataFormatReconfig),
-                    ckl::output(cb_outg, ckl::OutputLifecycle::Bulk, kDataFormatReconfig),
+                        cb_gamma_beta_or_out,
+                        ckl::WaitPolicy::Upfront,
+                        ckl::PopPolicy::AtEnd,
+                        ckl::OperandKind::Block,
+                        kDataFormatReconfig),
+                    ckl::input(
+                        cb_gamma,
+                        ckl::WaitPolicy::Upfront,
+                        ckl::PopPolicy::AtEnd,
+                        ckl::OperandKind::Block,
+                        kDataFormatReconfig),
+                    ckl::output(cb_outg, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
                     gamma_bcast>(ckl::EltwiseShape::tiles(block_size, block_size));
             }
 
@@ -337,9 +383,19 @@ void kernel_main() {
                     is_groupnorm ? ckl::BroadcastDim::Scalar
                                  : (is_lastdim_layernorm ? ckl::BroadcastDim::Row : ckl::BroadcastDim::None);
                 ckl::add<
-                    ckl::input(cb_gamma_beta, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block, kDataFormatReconfig),
-                    ckl::input(cb_beta, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block, kDataFormatReconfig),
-                    ckl::output(cb_out, ckl::OutputLifecycle::Bulk, kDataFormatReconfig),
+                    ckl::input(
+                        cb_gamma_beta,
+                        ckl::WaitPolicy::Upfront,
+                        ckl::PopPolicy::AtEnd,
+                        ckl::OperandKind::Block,
+                        kDataFormatReconfig),
+                    ckl::input(
+                        cb_beta,
+                        ckl::WaitPolicy::Upfront,
+                        ckl::PopPolicy::AtEnd,
+                        ckl::OperandKind::Block,
+                        kDataFormatReconfig),
+                    ckl::output(cb_out, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
                     beta_bcast>(ckl::EltwiseShape::tiles(block_size, block_size));
             }
         }  // num_inner loop

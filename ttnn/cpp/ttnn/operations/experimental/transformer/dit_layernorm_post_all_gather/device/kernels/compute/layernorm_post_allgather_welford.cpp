@@ -80,11 +80,12 @@ void kernel_main() {
             ckl::BinaryFpu<
                 ckl::input(
                     cb_stats_reduced,
-                    ckl::InputLifecycle::HeldBulk,
+                    ckl::WaitPolicy::Upfront,
+                    ckl::PopPolicy::None,
                     ckl::OperandKind::Scalar,
                     ckl::DataFormatReconfig::Enabled,
                     ckl::TileOffset::Set),
-                ckl::input(cb_eps, ckl::InputLifecycle::CallerManaged),
+                ckl::input(cb_eps, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                 ckl::BinaryFpuOp::Add,
                 ckl::BroadcastDim::None>{1, 0u},
             ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::On, ckl::Dst::D0>{},
@@ -93,17 +94,18 @@ void kernel_main() {
         // Process tiles across width in blocks
         for (uint32_t col_tile = 0; col_tile < Wt; col_tile += block_size) {
             ckl::sub<
-                ckl::input(cb_inp, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                ckl::input(cb_stats_reduced, ckl::InputLifecycle::CallerManaged),
-                ckl::output(cb_intermediate, ckl::OutputLifecycle::Bulk),
+                ckl::input(cb_inp, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                ckl::input(cb_stats_reduced, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                ckl::output(cb_intermediate, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd),
                 ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(block_size, /*block_size=*/block_size));
 
             constexpr uint32_t norm_target_cb = (do_gamma || do_beta) ? cb_intermediate : cb_out;
             cb_wait_front(cb_recip_sqrt_var, 1);
             ckl::mul<
-                ckl::input(cb_intermediate, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
-                ckl::input(cb_recip_sqrt_var, ckl::InputLifecycle::CallerManaged),
-                ckl::output(norm_target_cb, ckl::OutputLifecycle::Chunked),
+                ckl::input(
+                    cb_intermediate, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                ckl::input(cb_recip_sqrt_var, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                ckl::output(norm_target_cb, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk),
                 ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(block_size, /*block_size=*/block_size));
 
             if constexpr (do_gamma) {
@@ -112,16 +114,22 @@ void kernel_main() {
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(block_size, /*block_size=*/block_size),
                     ckl::BinaryFpu<
-                        ckl::input(norm_target_cb, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
+                        ckl::input(
+                            norm_target_cb,
+                            ckl::WaitPolicy::PerChunk,
+                            ckl::PopPolicy::PerChunk,
+                            ckl::OperandKind::Block),
                         ckl::input(
                             cb_gamma,
-                            ckl::InputLifecycle::CallerManaged,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::None,
                             ckl::OperandKind::Block,
                             ckl::DataFormatReconfig::Enabled,
                             ckl::TileOffset::Set),
                         ckl::BinaryFpuOp::Mul,
                         ckl::BroadcastDim::Row>{0u, col_tile},
-                    ckl::PackTile<ckl::output(gamma_out_cb, ckl::OutputLifecycle::Chunked)>{});
+                    ckl::PackTile<ckl::output(
+                        gamma_out_cb, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk)>{});
             }
 
             // 4) optional beta (only if gamma was provided)
@@ -130,16 +138,18 @@ void kernel_main() {
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(block_size, /*block_size=*/block_size),
                     ckl::BinaryFpu<
-                        ckl::input(cb_intermediate, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                        ckl::input(
+                            cb_intermediate, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
                         ckl::input(
                             cb_beta,
-                            ckl::InputLifecycle::CallerManaged,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::None,
                             ckl::OperandKind::Block,
                             ckl::DataFormatReconfig::Enabled,
                             ckl::TileOffset::Set),
                         ckl::BinaryFpuOp::Add,
                         ckl::BroadcastDim::Row>{0u, col_tile},
-                    ckl::PackTile<ckl::output(cb_out, ckl::OutputLifecycle::Bulk)>{});
+                    ckl::PackTile<ckl::output(cb_out, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{});
             }
         }
 

@@ -37,8 +37,10 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_tmp_weight, cb_tmp_input, cb_output);
 
     if constexpr (has_divisor) {
-        ckl::unary<ckl::Recip<D::D0>, ckl::input(cb_divisor, ckl::InputLifecycle::Bulk), ckl::output(cb_divisor_recip)>(
-            ckl::EltwiseShape::single());
+        ckl::unary<
+            ckl::Recip<D::D0>,
+            ckl::input(cb_divisor, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+            ckl::output(cb_divisor_recip)>(ckl::EltwiseShape::single());
     }
 
     constexpr auto weight_mul = ckl::OptionalChainElement<
@@ -53,7 +55,7 @@ void kernel_main() {
             ckl::EltwiseShape::tiles(per_core_tile_cnt),
             ckl::BinaryFpu<
                 ckl::input(cb_tmp_input),
-                ckl::input(cb_divisor_recip, ckl::InputLifecycle::Bulk),
+                ckl::input(cb_divisor_recip, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
                 ckl::BinaryFpuOp::Mul,
                 ckl::BroadcastDim::Scalar>{},
             negate,

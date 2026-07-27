@@ -212,7 +212,8 @@ void kernel_main() {
     constexpr auto strided_col_input = [](uint32_t cb) {
         return ckl::input(
             cb,
-            ckl::InputLifecycle::CallerManaged,
+            ckl::WaitPolicy::None,
+            ckl::PopPolicy::None,
             ckl::OperandKind::Col,
             ckl::DataFormatReconfig::Disabled,
             ckl::TileOffset::Strided);
@@ -220,7 +221,8 @@ void kernel_main() {
     constexpr auto offset_scalar_input = [](uint32_t cb) {
         return ckl::input(
             cb,
-            ckl::InputLifecycle::CallerManaged,
+            ckl::WaitPolicy::None,
+            ckl::PopPolicy::None,
             ckl::OperandKind::Scalar,
             ckl::DataFormatReconfig::Disabled,
             ckl::TileOffset::Set);
@@ -228,7 +230,8 @@ void kernel_main() {
     constexpr auto strided_output = [](uint32_t cb) {
         return ckl::output(
             cb,
-            ckl::OutputLifecycle::CallerManaged,
+            ckl::ReservePolicy::None,
+            ckl::PushPolicy::None,
             ckl::DataFormatReconfig::Disabled,
             ckl::PackRelu::Disabled,
             ckl::L1Accumulation::Disabled,
@@ -328,12 +331,16 @@ void kernel_main() {
                 reconfig_data_format_srcb(cb_in0_id, cb_input_mask_id);
                 ckl::mul<
 #ifdef TILIZE_IN
-                    ckl::input(cb_in_id, ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block),
+                    ckl::input(cb_in_id, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
 #else
-                    ckl::input(cb_in0_id, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
+                    ckl::input(cb_in0_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
 #endif
-                    ckl::input(cb_input_mask_id, ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Row),
-                    ckl::output(cb_x_id, ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled),
+                    ckl::input(cb_input_mask_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Row),
+                    ckl::output(
+                        cb_x_id,
+                        ckl::ReservePolicy::Upfront,
+                        ckl::PushPolicy::AtEnd,
+                        ckl::DataFormatReconfig::Disabled),
                     ckl::BroadcastDim::None>(ckl::EltwiseShape::grid(out_block_h_actual, block_w, subblock_w));
                 if constexpr (extra_out_block) {
                     if (out_block_index == (num_out_blocks_padded - 1)) {
@@ -395,8 +402,12 @@ void kernel_main() {
                 cb_ex_global.wait_front(1);
                 ckl::sub<
                     ckl::input(cb_in0_id),
-                    ckl::input(cb_ex_global_id, ckl::InputLifecycle::CallerManaged),
-                    ckl::output(cb_xmm_id, ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled),
+                    ckl::input(cb_ex_global_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                    ckl::output(
+                        cb_xmm_id,
+                        ckl::ReservePolicy::Upfront,
+                        ckl::PushPolicy::AtEnd,
+                        ckl::DataFormatReconfig::Disabled),
                     ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::grid(out_block_h_actual, block_w, subblock_w));
                 if constexpr (extra_out_block) {
                     if (out_block_index == (num_out_blocks_padded - 1)) {
@@ -408,9 +419,13 @@ void kernel_main() {
 
                 reconfig_data_format_srcb(cb_ex_global_id, cb_input_mask_id);
                 ckl::mul<
-                    ckl::input(cb_xmm_id, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                    ckl::input(cb_input_mask_id, ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Row),
-                    ckl::output(cb_x_id, ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled),
+                    ckl::input(cb_xmm_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                    ckl::input(cb_input_mask_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Row),
+                    ckl::output(
+                        cb_x_id,
+                        ckl::ReservePolicy::Upfront,
+                        ckl::PushPolicy::AtEnd,
+                        ckl::DataFormatReconfig::Disabled),
                     ckl::BroadcastDim::None>(ckl::EltwiseShape::grid(out_block_h_actual, block_w, subblock_w));
                 if constexpr (extra_out_block) {
                     if (out_block_index == (num_out_blocks_padded - 1)) {
@@ -422,8 +437,12 @@ void kernel_main() {
 
                 reconfig_data_format_srcb(cb_input_mask_id, cb_x_id);
                 ckl::square<
-                    ckl::input(cb_x_id, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                    ckl::output(cb_xmm_id, ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled)>(
+                    ckl::input(cb_x_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                    ckl::output(
+                        cb_xmm_id,
+                        ckl::ReservePolicy::Upfront,
+                        ckl::PushPolicy::AtEnd,
+                        ckl::DataFormatReconfig::Disabled)>(
                     ckl::EltwiseShape::grid(out_block_h_actual, block_w, subblock_w));
                 if constexpr (extra_out_block) {
                     if (out_block_index == (num_out_blocks_padded - 1)) {
@@ -472,12 +491,15 @@ void kernel_main() {
                 ckl::EltwiseShape::single(),
                 ckl::BinaryFpu<
                     ckl::input(cb_ex2_global_id),
-                    ckl::input(cb_eps_id, ckl::InputLifecycle::CallerManaged),
+                    ckl::input(cb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                     ckl::BinaryFpuOp::Add,
                     ckl::BroadcastDim::None>{},
                 ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::On, ckl::Dst::D0>{},
                 ckl::PackTile<ckl::output(
-                    cb_ex2pe_id, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+                    cb_ex2pe_id,
+                    ckl::ReservePolicy::PerTile,
+                    ckl::PushPolicy::PerTile,
+                    ckl::DataFormatReconfig::Disabled)>{});
             // End Variance Calc
 
             bool start_copy_or_add = copy_or_add;
@@ -498,8 +520,12 @@ void kernel_main() {
                 cb_ex_global.wait_front(1);
                 ckl::sub<
                     ckl::input(cb_in0_id),
-                    ckl::input(cb_ex_global_id, ckl::InputLifecycle::CallerManaged),
-                    ckl::output(cb_xmm_id, ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled),
+                    ckl::input(cb_ex_global_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                    ckl::output(
+                        cb_xmm_id,
+                        ckl::ReservePolicy::Upfront,
+                        ckl::PushPolicy::AtEnd,
+                        ckl::DataFormatReconfig::Disabled),
                     ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::grid(out_block_h_actual, block_w, subblock_w));
                 if constexpr (extra_out_block) {
                     if (out_block_index == (num_out_blocks_padded - 1)) {
@@ -511,9 +537,13 @@ void kernel_main() {
 
                 reconfig_data_format_srcb(cb_ex_global_id, cb_input_mask_id);
                 ckl::mul<
-                    ckl::input(cb_xmm_id, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                    ckl::input(cb_input_mask_id, ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Row),
-                    ckl::output(cb_x_id, ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled),
+                    ckl::input(cb_xmm_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                    ckl::input(cb_input_mask_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Row),
+                    ckl::output(
+                        cb_x_id,
+                        ckl::ReservePolicy::Upfront,
+                        ckl::PushPolicy::AtEnd,
+                        ckl::DataFormatReconfig::Disabled),
                     ckl::BroadcastDim::None>(ckl::EltwiseShape::grid(out_block_h_actual, block_w, subblock_w));
                 if constexpr (extra_out_block) {
                     if (out_block_index == (num_out_blocks_padded - 1)) {
@@ -525,9 +555,13 @@ void kernel_main() {
 
                 cb_ex2pe.wait_front(1);
                 ckl::mul<
-                    ckl::input(cb_x_id, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                    ckl::input(cb_ex2pe_id, ckl::InputLifecycle::CallerManaged),
-                    ckl::output(cb_xmm_id, ckl::OutputLifecycle::Bulk, ckl::DataFormatReconfig::Disabled),
+                    ckl::input(cb_x_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                    ckl::input(cb_ex2pe_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                    ckl::output(
+                        cb_xmm_id,
+                        ckl::ReservePolicy::Upfront,
+                        ckl::PushPolicy::AtEnd,
+                        ckl::DataFormatReconfig::Disabled),
                     ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::grid(out_block_h_actual, block_w, subblock_w));
                 if constexpr (extra_out_block) {
                     if (out_block_index == (num_out_blocks_padded - 1)) {

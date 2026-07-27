@@ -26,13 +26,15 @@ void kernel_main() {
         EltwiseShape::grid(Ht, Wt),
         CopyTile<input(
             cb_in,
-            InputLifecycle::CallerManaged,
+            WaitPolicy::None,
+            PopPolicy::None,
             OperandKind::Block,
             DataFormatReconfig::Disabled,
             TileOffset::Strided)>{StridedTileRange{input_base, input_stride}},
         PackTile<output(
             cb_out,
-            OutputLifecycle::CallerManaged,
+            ReservePolicy::None,
+            PushPolicy::None,
             DataFormatReconfig::Disabled,
             PackRelu::Disabled,
             L1Accumulation::Disabled,

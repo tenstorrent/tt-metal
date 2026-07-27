@@ -44,7 +44,7 @@ void kernel_main() {
             } else {
                 ckl::add<
                     ckl::input(cb_in0),
-                    ckl::input(cb_in1, ckl::InputLifecycle::CallerManaged),
+                    ckl::input(cb_in1, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                     ckl::output(cb_intermed0),
                     ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(onetile));
             }
@@ -54,7 +54,7 @@ void kernel_main() {
 
         ckl::mul<
             ckl::input(cb_intermed0),
-            ckl::input(cb_scalar, ckl::InputLifecycle::CallerManaged),
+            ckl::input(cb_scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None),
             ckl::output(cb_out0),
             ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::tiles(onetile));
     }

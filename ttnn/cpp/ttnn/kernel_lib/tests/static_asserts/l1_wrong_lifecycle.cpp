@@ -17,7 +17,8 @@ void kernel_main() {
         CopyTile<input(cb_in)>{},
         PackTile<output(
             cb_out,
-            OutputLifecycle::Streaming,
+            ReservePolicy::PerTile,
+            PushPolicy::PerTile,
             DataFormatReconfig::Enabled,
             PackRelu::Disabled,
             L1Accumulation::Enabled)>{});

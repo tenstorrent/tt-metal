@@ -95,14 +95,16 @@ void kernel_main() {
             ckl::BinaryFpu<
                 ckl::input(
                     cb_n_recip_n,
-                    ckl::InputLifecycle::CallerManaged,
+                    ckl::WaitPolicy::None,
+                    ckl::PopPolicy::None,
                     ckl::OperandKind::Scalar,
                     kDataFormatReconfig,
                     ckl::TileOffset::Set),
-                ckl::input(cb_rstd, ckl::InputLifecycle::CallerManaged, kDataFormatReconfig),
+                ckl::input(cb_rstd, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
                 ckl::BinaryFpuOp::Mul,
                 is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar>{1u, 0u},
-            ckl::PackTile<ckl::output(cb_recip_nrstd, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
+            ckl::PackTile<ckl::output(
+                cb_recip_nrstd, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
         // y = (x - mean) * rstd
         for (uint32_t wt = 0; wt < Wt; wt++) {
@@ -112,8 +114,8 @@ void kernel_main() {
             ckl::eltwise_chain(
                 ckl::EltwiseShape::single(),
                 ckl::BinaryFpu<
-                    ckl::input(cb_x, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
-                    ckl::input(cb_mean, ckl::InputLifecycle::CallerManaged, kDataFormatReconfig),
+                    ckl::input(cb_x, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                    ckl::input(cb_mean, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
                     ckl::BinaryFpuOp::Sub,
                     is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar>{},
                 ckl::runtime_if(
@@ -121,7 +123,8 @@ void kernel_main() {
                     ckl::CopyTile<
                         ckl::input(
                             cb_mask_h_w,
-                            ckl::InputLifecycle::CallerManaged,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::None,
                             ckl::OperandKind::Scalar,
                             kDataFormatReconfig,
                             ckl::TileOffset::Set),
@@ -132,20 +135,22 @@ void kernel_main() {
                     ckl::CopyTile<
                         ckl::input(
                             cb_mask_h_w,
-                            ckl::InputLifecycle::CallerManaged,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::None,
                             ckl::OperandKind::Scalar,
                             kDataFormatReconfig,
                             ckl::TileOffset::Set),
                         ckl::Dst::D1>{1},
                     ckl::Mask<>{}),
-                ckl::PackTile<ckl::output(cb_xmm, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
+                ckl::PackTile<ckl::output(
+                    cb_xmm, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
             // Compute cb_y
             // (x - mean) * rstd
             ckl::mul<
-                ckl::input(cb_xmm, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
-                ckl::input(cb_rstd, ckl::InputLifecycle::CallerManaged, kDataFormatReconfig),
-                ckl::output(cb_y, ckl::OutputLifecycle::Streaming, kDataFormatReconfig),
+                ckl::input(cb_xmm, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                ckl::input(cb_rstd, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
+                ckl::output(cb_y, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig),
                 is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::single());
         }  // Wt loop
 
@@ -159,19 +164,21 @@ void kernel_main() {
                 ckl::OptionalChainElement<
                     gamma_has_value,
                     ckl::BinaryFpu<
-                        ckl::input(cb_dy, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
-                        ckl::input(cb_gamma, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
+                        ckl::input(cb_dy, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                        ckl::input(cb_gamma, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                         ckl::BinaryFpuOp::Mul,
                         gamma_bcast>>{},
                 ckl::OptionalChainElement<
                     !gamma_has_value,
-                    ckl::CopyTile<ckl::input(cb_dy, ckl::InputLifecycle::Streaming, kDataFormatReconfig)>>{},
+                    ckl::CopyTile<ckl::input(
+                        cb_dy, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>>{},
                 ckl::runtime_if(
                     do_mask_h && need_to_do_mask_h(wt, origin_Ht, origin_Wt),
                     ckl::CopyTile<
                         ckl::input(
                             cb_mask_h_w,
-                            ckl::InputLifecycle::CallerManaged,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::None,
                             ckl::OperandKind::Scalar,
                             kDataFormatReconfig,
                             ckl::TileOffset::Set),
@@ -182,13 +189,15 @@ void kernel_main() {
                     ckl::CopyTile<
                         ckl::input(
                             cb_mask_h_w,
-                            ckl::InputLifecycle::CallerManaged,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::None,
                             ckl::OperandKind::Scalar,
                             kDataFormatReconfig,
                             ckl::TileOffset::Set),
                         ckl::Dst::D1>{1},
                     ckl::Mask<>{}),
-                ckl::PackTile<ckl::output(cb_dycopy, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
+                ckl::PackTile<ckl::output(
+                    cb_dycopy, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
         }  // Wt loop
 
         // Compute cb_dyadd
@@ -199,26 +208,29 @@ void kernel_main() {
                 ckl::copy<
                     ckl::input(
                         cb_dycopy,
-                        ckl::InputLifecycle::CallerManaged,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::None,
                         ckl::OperandKind::Scalar,
                         kDataFormatReconfig,
                         ckl::TileOffset::Set),
-                    ckl::output(cb_dyadd, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>(
+                    ckl::output(cb_dyadd, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
                     ckl::EltwiseShape::single());
             } else {
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::single(),
                     ckl::BinaryFpu<
-                        ckl::input(cb_dyadd, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
+                        ckl::input(cb_dyadd, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                         ckl::input(
                             cb_dycopy,
-                            ckl::InputLifecycle::CallerManaged,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::None,
                             ckl::OperandKind::Scalar,
                             kDataFormatReconfig,
                             ckl::TileOffset::Set),
                         ckl::BinaryFpuOp::Add,
                         ckl::BroadcastDim::None>{0, wt},
-                    ckl::PackTile<ckl::output(cb_dyadd, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
+                    ckl::PackTile<ckl::output(
+                        cb_dyadd, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
             }
         }  // Wt loop
         // We don't pop cb_dycopy here.
@@ -237,31 +249,34 @@ void kernel_main() {
                 ckl::BinaryFpu<
                     ckl::input(
                         cb_y,
-                        ckl::InputLifecycle::CallerManaged,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::None,
                         ckl::OperandKind::Scalar,
                         kDataFormatReconfig,
                         ckl::TileOffset::Set),
                     ckl::input(
                         cb_dycopy,
-                        ckl::InputLifecycle::CallerManaged,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::None,
                         ckl::OperandKind::Scalar,
                         kDataFormatReconfig,
                         ckl::TileOffset::Set),
                     ckl::BinaryFpuOp::Mul,
                     ckl::BroadcastDim::None>{wt, wt},
-                ckl::PackTile<ckl::output(cb_ydy, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
+                ckl::PackTile<ckl::output(
+                    cb_ydy, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
             // Compute cb_ydyadd
             if (wt == 0) {
                 ckl::copy<
-                    ckl::input(cb_ydy, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
-                    ckl::output(cb_ydyadd, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>(
+                    ckl::input(cb_ydy, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                    ckl::output(cb_ydyadd, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
                     ckl::EltwiseShape::single());
             } else {
                 ckl::add<
-                    ckl::input(cb_ydyadd, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
-                    ckl::input(cb_ydy, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
-                    ckl::output(cb_ydyadd, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>(
+                    ckl::input(cb_ydyadd, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                    ckl::input(cb_ydy, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                    ckl::output(cb_ydyadd, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
                     ckl::EltwiseShape::single());
             }
         }  // Wt loop
@@ -283,24 +298,26 @@ void kernel_main() {
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
                 ckl::BinaryFpu<
-                    ckl::input(cb_n_recip_n, ckl::InputLifecycle::CallerManaged, kDataFormatReconfig),
+                    ckl::input(cb_n_recip_n, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
                     ckl::input(
                         cb_dycopy,
-                        ckl::InputLifecycle::CallerManaged,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::None,
                         ckl::OperandKind::Scalar,
                         kDataFormatReconfig,
                         ckl::TileOffset::Set),
                     ckl::BinaryFpuOp::Mul,
                     ckl::BroadcastDim::None>{0u, wt},
-                ckl::PackTile<ckl::output(cb_ndy, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
+                ckl::PackTile<ckl::output(
+                    cb_ndy, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
             // cb_ndymdysum
             // n * dy - Sum[dy]
             constexpr auto cb_ndymdysum = cb_tmp2;
             ckl::sub<
-                ckl::input(cb_ndy, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
-                ckl::input(cb_dysum, ckl::InputLifecycle::CallerManaged, kDataFormatReconfig),
-                ckl::output(cb_ndymdysum, ckl::OutputLifecycle::Streaming, kDataFormatReconfig),
+                ckl::input(cb_ndy, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                ckl::input(cb_dysum, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
+                ckl::output(cb_ndymdysum, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig),
                 is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar>(
                 ckl::EltwiseShape::tiles(onetile));
 
@@ -312,29 +329,31 @@ void kernel_main() {
                 ckl::BinaryFpu<
                     ckl::input(
                         cb_y,
-                        ckl::InputLifecycle::CallerManaged,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::None,
                         ckl::OperandKind::Scalar,
                         kDataFormatReconfig,
                         ckl::TileOffset::Set),
-                    ckl::input(cb_ydysum, ckl::InputLifecycle::CallerManaged, kDataFormatReconfig),
+                    ckl::input(cb_ydysum, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
                     ckl::BinaryFpuOp::Mul,
                     is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar>{wt, 0u},
-                ckl::PackTile<ckl::output(cb_yydysum, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
+                ckl::PackTile<ckl::output(
+                    cb_yydysum, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
             // Compute cb_tmp1
             // (n * dy - Sum[dy]) - (y * Sum[y * dy])
             ckl::sub<
-                ckl::input(cb_ndymdysum, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
-                ckl::input(cb_yydysum, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
-                ckl::output(cb_tmp1, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>(
+                ckl::input(cb_ndymdysum, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                ckl::input(cb_yydysum, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                ckl::output(cb_tmp1, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
                 ckl::EltwiseShape::tiles(onetile));
 
             // Compute cb_dx
             // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (rstd / n)
             ckl::mul<
-                ckl::input(cb_tmp1, ckl::InputLifecycle::Streaming, kDataFormatReconfig),
-                ckl::input(cb_recip_nrstd, ckl::InputLifecycle::CallerManaged, kDataFormatReconfig),
-                ckl::output(cb_dx, ckl::OutputLifecycle::Streaming, kDataFormatReconfig),
+                ckl::input(cb_tmp1, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
+                ckl::input(cb_recip_nrstd, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
+                ckl::output(cb_dx, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig),
                 ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(onetile));
         }  // Wt loop
         cb_dycopy_obj.pop_front(Wt);

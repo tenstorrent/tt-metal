@@ -73,9 +73,10 @@ void kernel_main() {
         }
 
         ckl::sub<
-            ckl::input(cb_in0, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block, kDataFormatReconfig),
-            ckl::input(cb_max, ckl::InputLifecycle::Bulk, kDataFormatReconfig),
-            ckl::output(cb_x_m_max, ckl::OutputLifecycle::Bulk, kDataFormatReconfig),
+            ckl::input(
+                cb_in0, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block, kDataFormatReconfig),
+            ckl::input(cb_max, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, kDataFormatReconfig),
+            ckl::output(cb_x_m_max, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
             ckl::BroadcastDim::Row>(ckl::EltwiseShape::tiles(Ht));
 
         cb_x_m_max_obj.wait_front(Ht);
@@ -88,27 +89,36 @@ void kernel_main() {
             ckl::EltwiseShape::tiles(Ht - 1),
             ckl::CopyTile<
                 ckl::input(
-                    cb_x_m_max, ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block, kDataFormatReconfig),
+                    cb_x_m_max,
+                    ckl::WaitPolicy::None,
+                    ckl::PopPolicy::None,
+                    ckl::OperandKind::Block,
+                    kDataFormatReconfig),
                 ckl::Dst::D0>{},
             ckl::OptionalChainElement<!is_softmax, ckl::Negative<ckl::Dst::D0>>{},
-            ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
-            ckl::PackTile<ckl::output(cb_exps, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
+            ckl::Exp<ckl::Approx::Exact, ckl::Dst::D0>{},
+            ckl::PackTile<ckl::output(
+                cb_exps, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
         ckl::eltwise_chain(
             ckl::EltwiseShape::single(),
             ckl::CopyTile<
                 ckl::input(
                     cb_x_m_max,
-                    ckl::InputLifecycle::CallerManaged,
+                    ckl::WaitPolicy::None,
+                    ckl::PopPolicy::None,
                     ckl::OperandKind::Block,
                     kDataFormatReconfig,
                     ckl::TileOffset::Set),
                 ckl::Dst::D0>{Ht - 1},
             ckl::OptionalChainElement<!is_softmax, ckl::Negative<ckl::Dst::D0>>{},
-            ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
-            ckl::CopyTile<ckl::input(cb_mask, ckl::InputLifecycle::CallerManaged, kDataFormatReconfig), ckl::Dst::D1>{},
+            ckl::Exp<ckl::Approx::Exact, ckl::Dst::D0>{},
+            ckl::CopyTile<
+                ckl::input(cb_mask, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
+                ckl::Dst::D1>{},
             ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
-            ckl::PackTile<ckl::output(cb_exps, ckl::OutputLifecycle::Streaming, kDataFormatReconfig)>{});
+            ckl::PackTile<ckl::output(
+                cb_exps, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
 #ifdef LOG
         // log(sum) - pop tiles after reduce
@@ -147,15 +157,17 @@ void kernel_main() {
         cb_x_m_max_obj.wait_front(Ht);
 #ifdef LOG
         ckl::sub<
-            ckl::input(cb_x_m_max, ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block, kDataFormatReconfig),
-            ckl::input(cb_recipsumexps, ckl::InputLifecycle::Bulk, kDataFormatReconfig),
-            ckl::output(cb_out0, ckl::OutputLifecycle::Bulk, kDataFormatReconfig),
+            ckl::input(
+                cb_x_m_max, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block, kDataFormatReconfig),
+            ckl::input(cb_recipsumexps, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, kDataFormatReconfig),
+            ckl::output(cb_out0, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
             ckl::BroadcastDim::Row>(ckl::EltwiseShape::tiles(Ht));
 #else
         ckl::mul<
-            ckl::input(cb_exps, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block, kDataFormatReconfig),
-            ckl::input(cb_recipsumexps, ckl::InputLifecycle::Bulk, kDataFormatReconfig),
-            ckl::output(cb_out0, ckl::OutputLifecycle::Bulk, kDataFormatReconfig),
+            ckl::input(
+                cb_exps, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block, kDataFormatReconfig),
+            ckl::input(cb_recipsumexps, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, kDataFormatReconfig),
+            ckl::output(cb_out0, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig),
             ckl::BroadcastDim::Row>(ckl::EltwiseShape::tiles(Ht));
 #endif
         cb_x_m_max_obj.pop_front(Ht);

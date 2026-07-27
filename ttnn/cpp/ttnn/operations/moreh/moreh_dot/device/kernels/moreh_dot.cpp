@@ -21,7 +21,11 @@ void kernel_main() {
         ckl::mul<
             ckl::input(tt::CBIndex::c_0),
             ckl::input(tt::CBIndex::c_1),
-            ckl::output(tt::CBIndex::c_24, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+            ckl::output(
+                tt::CBIndex::c_24,
+                ckl::ReservePolicy::PerTile,
+                ckl::PushPolicy::PerTile,
+                ckl::DataFormatReconfig::Disabled),
             ckl::BroadcastDim::None>(ckl::EltwiseShape::tiles(onetile));
 
         // reduce-w

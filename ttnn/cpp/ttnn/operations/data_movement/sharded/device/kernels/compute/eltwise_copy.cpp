@@ -18,8 +18,14 @@ void kernel_main() {
 
     compute_kernel_lib::copy<
         compute_kernel_lib::input(
-            cb_in, compute_kernel_lib::InputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled),
+            cb_in,
+            compute_kernel_lib::WaitPolicy::PerTile,
+            compute_kernel_lib::PopPolicy::PerTile,
+            compute_kernel_lib::DataFormatReconfig::Disabled),
         compute_kernel_lib::output(
-            cb_out, compute_kernel_lib::OutputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled)>(
+            cb_out,
+            compute_kernel_lib::ReservePolicy::PerTile,
+            compute_kernel_lib::PushPolicy::PerTile,
+            compute_kernel_lib::DataFormatReconfig::Disabled)>(
         compute_kernel_lib::EltwiseShape::tiles(per_core_tile_cnt));
 }

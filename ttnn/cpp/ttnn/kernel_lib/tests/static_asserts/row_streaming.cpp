@@ -4,7 +4,7 @@
 
 // Negative compile test: a Row/Col broadcast index requires a non-streaming policy
 // (the caller must stage all broadcast tiles upfront; a streaming front-advance breaks the re-read).
-// MUST fail to compile with "non-streaming policy".
+// MUST fail to compile with "input wait/pop pair is incompatible with operand kind".
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
@@ -19,6 +19,6 @@ void kernel_main() {
     using namespace compute_kernel_lib;
     eltwise_chain(
         EltwiseShape::tiles(n),
-        CopyTile<input(cb_in, InputLifecycle::Streaming, OperandKind::Row), Dst::D0>{},
+        CopyTile<input(cb_in, WaitPolicy::PerTile, PopPolicy::PerTile, OperandKind::Row), Dst::D0>{},
         PackTile<output(cb_out)>{});
 }

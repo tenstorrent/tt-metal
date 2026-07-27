@@ -14,7 +14,7 @@
  * and the broadcast / held-operand cases stay a single call:
  *
  *     mul<input(dfb_a), input(dfb_b), output(dfb_out)>(EltwiseShape::tiles(n));
- *     sub<input(dfb_x), input(dfb_row, InputLifecycle::HeldStream), output(dfb_out),
+ *     sub<input(dfb_x), input(dfb_row, WaitPolicy::PerTile, PopPolicy::None), output(dfb_out),
  *         BroadcastDim::Col>(shape);
  *     unary<Exp<>, input(dfb_in), output(dfb_out)>(EltwiseShape::tiles(n));
  *     binary_sfpu<DivBinary<>, input(dfb_a), input(dfb_b), output(dfb_out)>(EltwiseShape::tiles(n));

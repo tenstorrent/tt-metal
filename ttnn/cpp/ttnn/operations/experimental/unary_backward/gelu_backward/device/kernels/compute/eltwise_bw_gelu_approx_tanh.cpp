@@ -31,16 +31,17 @@ ALWI void gelu_tanh_chain(uint32_t num_tiles) {
             ckl::EltwiseShape::tiles(num_tiles),
             // grad_out -> D0 ; x -> D1 (wait owner) / D2 / D5 (pop owner)
             ckl::CopyTile<
-                ckl::input(cb_grad_out, ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    cb_grad_out, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
                 D::D0>{},
             ckl::CopyTile<
-                ckl::input(cb_input, ckl::InputLifecycle::HeldStream, ckl::DataFormatReconfig::Disabled),
+                ckl::input(cb_input, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
                 D::D1>{},
             ckl::CopyTile<
-                ckl::input(cb_input, ckl::InputLifecycle::CallerManaged, ckl::DataFormatReconfig::Disabled),
+                ckl::input(cb_input, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
                 D::D2>{},
             ckl::CopyTile<
-                ckl::input(cb_input, ckl::InputLifecycle::NoWaitPop, ckl::DataFormatReconfig::Disabled),
+                ckl::input(cb_input, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
                 D::D5>{},
             // z = beta * (x + kappa * x^3)
             ckl::Square<D::D1>{},                   // D1 = x^2
@@ -79,7 +80,10 @@ ALWI void gelu_tanh_chain(uint32_t num_tiles) {
             ckl::AddBinary<D::D1, D::D2, D::D1>{},
             ckl::MulBinary<D::D0, D::D1, D::D0>{},
             ckl::PackTile<ckl::output(
-                cb_grad_in, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+                cb_grad_in,
+                ckl::ReservePolicy::PerTile,
+                ckl::PushPolicy::PerTile,
+                ckl::DataFormatReconfig::Disabled)>{});
     }
 #else
     {
@@ -88,10 +92,10 @@ ALWI void gelu_tanh_chain(uint32_t num_tiles) {
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(num_tiles),
             ckl::CopyTile<
-                ckl::input(cb_input, ckl::InputLifecycle::HeldStream, ckl::DataFormatReconfig::Disabled),
+                ckl::input(cb_input, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
                 D::D1>{},
             ckl::CopyTile<
-                ckl::input(cb_input, ckl::InputLifecycle::CallerManaged, ckl::DataFormatReconfig::Disabled),
+                ckl::input(cb_input, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
                 D::D2>{},
             ckl::Square<D::D1>{},
             ckl::MulBinary<D::D1, D::D2, D::D1>{},
@@ -118,16 +122,20 @@ ALWI void gelu_tanh_chain(uint32_t num_tiles) {
             ckl::FillScalar<D::D3>{kBeta / 2.0f},
             ckl::MulBinary<D::D2, D::D3, D::D2>{},
             ckl::CopyTile<
-                ckl::input(cb_grad_out, ckl::InputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled),
+                ckl::input(
+                    cb_grad_out, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
                 D::D0>{},
             ckl::CopyTile<
-                ckl::input(cb_input, ckl::InputLifecycle::NoWaitPop, ckl::DataFormatReconfig::Disabled),
+                ckl::input(cb_input, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
                 D::D3>{},
             ckl::MulBinary<D::D2, D::D3, D::D2>{},
             ckl::AddBinary<D::D1, D::D2, D::D1>{},
             ckl::MulBinary<D::D0, D::D1, D::D0>{},
             ckl::PackTile<ckl::output(
-                cb_grad_in, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+                cb_grad_in,
+                ckl::ReservePolicy::PerTile,
+                ckl::PushPolicy::PerTile,
+                ckl::DataFormatReconfig::Disabled)>{});
     }
 #endif
 }

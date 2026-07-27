@@ -42,12 +42,13 @@ void calc_numeric_stable(uint32_t Wt, uint32_t ndst) {
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(Wt, ndst),
         ckl::BinaryFpu<
-            ckl::input(cb_in, ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block),
-            ckl::input(cb_max, ckl::InputLifecycle::Bulk),
+            ckl::input(cb_in, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+            ckl::input(cb_max, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
             ckl::BinaryFpuOp::Sub,
             ckl::BroadcastDim::Col>{},
-        ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Approx::Exact, ckl::Dst::D0>{},
-        ckl::PackTile<ckl::output(cb_out, ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled)>{});
+        ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>{},
+        ckl::PackTile<ckl::output(
+            cb_out, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk, ckl::DataFormatReconfig::Disabled)>{});
     cb_out_obj.wait_front(Wt);
 }
 
@@ -115,7 +116,7 @@ void kernel_main() {
 #if FUSED_SCALE_MASK
         ckl::mul<
             ckl::input(cb_in0),
-            ckl::input(cb_fused_scale, ckl::InputLifecycle::CallerManaged),
+            ckl::input(cb_fused_scale, ckl::WaitPolicy::None, ckl::PopPolicy::None),
             ckl::output(cb_scale_mask),
             ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::tiles(Wt));
 #ifdef CAUSAL_MASK
@@ -129,14 +130,13 @@ void kernel_main() {
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(Wt, ndst),
             ckl::BinaryFpu<
-                ckl::input(cb_scale_mask, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
-                ckl::input(cb_fused_attn, ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block),
+                ckl::input(cb_scale_mask, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                ckl::input(cb_fused_attn, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block),
                 ckl::BinaryFpuOp::Add,
                 mask_bcast>{},
-            ckl::OptionalChainElement<
-                !numeric_stable,
-                ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Approx::Exact, ckl::Dst::D0>>{},
-            ckl::PackTile<ckl::output(cb_x, ckl::OutputLifecycle::Chunked, ckl::DataFormatReconfig::Disabled)>{});
+            ckl::OptionalChainElement<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
+            ckl::PackTile<ckl::output(
+                cb_x, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk, ckl::DataFormatReconfig::Disabled)>{});
 
 // add numeric_stable
 // fuse exp with sub tiles
@@ -172,21 +172,23 @@ void kernel_main() {
                 ckl::CopyTile<ckl::input(cb_in0)>{},
                 ckl::OptionalChainElement<
                     !numeric_stable,
-                    ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Approx::Exact, ckl::Dst::D0>>{},
-                ckl::PackTile<ckl::output(cb_x, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+                    ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
+                ckl::PackTile<ckl::output(
+                    cb_x, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
 
             ckl::eltwise_chain(
                 ckl::EltwiseShape::single(),
                 ckl::BinaryFpu<
                     ckl::input(cb_in0),
-                    ckl::input(cb_mask_padded, ckl::InputLifecycle::HeldBulk),
+                    ckl::input(cb_mask_padded, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
                     ckl::BinaryFpuOp::Add,
                     ckl::BroadcastDim::Row>{},  // cb_mask_padded: held scalar, chain waits(1), no
                                                 // pop
                 ckl::OptionalChainElement<
                     !numeric_stable,
-                    ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Approx::Exact, ckl::Dst::D0>>{},
-                ckl::PackTile<ckl::output(cb_x, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+                    ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
+                ckl::PackTile<ckl::output(
+                    cb_x, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
 
 // add numeric_stable
 // fuse exp with sub tiles
@@ -201,9 +203,10 @@ void kernel_main() {
             calc_numeric_stable<cb_in0, cb_max_scaler, cb_max, cb_exps>(Wt, ndst);
 #else
             ckl::unary<
-                ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Approx::Exact, ckl::Dst::D0>,
+                ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>,
                 ckl::input(cb_in0),
-                ckl::output(cb_exps, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>(
+                ckl::output(
+                    cb_exps, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>(
                 ckl::EltwiseShape::tiles(Wt));
 #endif
         }
@@ -226,9 +229,9 @@ void kernel_main() {
             });
 
         ckl::mul<
-            ckl::input(cb_exps, ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block),
-            ckl::input(cb_recipsumexps, ckl::InputLifecycle::Bulk),
-            ckl::output(cb_out0, ckl::OutputLifecycle::Chunked),
+            ckl::input(cb_exps, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+            ckl::input(cb_recipsumexps, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+            ckl::output(cb_out0, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk),
             ckl::BroadcastDim::Col>(ckl::EltwiseShape::tiles(Wt, ndst));
     }  // NCHt loop
     // The scaler tiles are each waited once and reused across the whole NCHt loop; pop them at

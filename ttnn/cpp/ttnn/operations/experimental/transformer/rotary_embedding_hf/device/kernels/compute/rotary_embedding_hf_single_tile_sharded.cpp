@@ -28,7 +28,7 @@ void kernel_main() {
     constexpr uint32_t heads_per_batch_t = get_compile_time_arg_val(8);
     constexpr uint32_t batch_per_core = get_compile_time_arg_val(9);
     constexpr auto pre_reserved_output = [](uint32_t cb) {
-        return ckl::output(cb, ckl::OutputLifecycle::ReserveNonePushEnd);
+        return ckl::output(cb, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd);
     };
 
     CircularBuffer in_cb(in_cb_id);
@@ -74,12 +74,12 @@ void kernel_main() {
 
             ckl::mul<
                 ckl::input(rotated_in_interm_cb_id),
-                ckl::input(sin_cb_id, ckl::InputLifecycle::HeldBulk),
+                ckl::input(sin_cb_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
                 pre_reserved_output(sin_interm_cb_id),
                 ckl::BroadcastDim::Row>(ckl::EltwiseShape::single());
             ckl::mul<
-                ckl::input(in_cb_id, ckl::InputLifecycle::DeferredPop),
-                ckl::input(cos_cb_id, ckl::InputLifecycle::HeldBulk),
+                ckl::input(in_cb_id, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd),
+                ckl::input(cos_cb_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
                 pre_reserved_output(cos_interm_cb_id),
                 ckl::BroadcastDim::Row>(ckl::EltwiseShape::single());
             ckl::add<ckl::input(cos_interm_cb_id), ckl::input(sin_interm_cb_id), pre_reserved_output(out_cb_id)>(

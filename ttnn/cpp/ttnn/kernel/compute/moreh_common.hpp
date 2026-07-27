@@ -39,10 +39,16 @@ inline constexpr auto moreh_data_format_reconfig = ckl::DataFormatReconfig::Disa
 
 template <uint32_t Cb>
 inline constexpr auto moreh_input = ckl::input(
-    Cb, ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Scalar, moreh_data_format_reconfig, ckl::TileOffset::Set);
+    Cb,
+    ckl::WaitPolicy::None,
+    ckl::PopPolicy::None,
+    ckl::OperandKind::Scalar,
+    moreh_data_format_reconfig,
+    ckl::TileOffset::Set);
 
 template <uint32_t Cb>
-inline constexpr auto moreh_output = ckl::output(Cb, ckl::OutputLifecycle::Streaming, moreh_data_format_reconfig);
+inline constexpr auto moreh_output =
+    ckl::output(Cb, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, moreh_data_format_reconfig);
 
 ALWI void pack_tile_with_dt(uint32_t ifrom_dst, DataflowBuffer icb) {
 #if defined FP32_DEST_ACC_EN
@@ -540,7 +546,7 @@ ALWI void power_tile_to_cb_impl(uint32_t p, bool p_is_negative) {
     // x^p
     ckl::eltwise_chain(
         ckl::EltwiseShape::single(),
-        ckl::CopyTile<ckl::input(CbX, ckl::InputLifecycle::HeldStream, moreh_data_format_reconfig)>{},
+        ckl::CopyTile<ckl::input(CbX, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, moreh_data_format_reconfig)>{},
         ckl::OptionalChainElement<AbsX, ckl::Abs<>>{},
         ckl::PowerIterative<>{p},
         ckl::runtime_if(p_is_negative, ckl::Recip<>{}),
@@ -549,7 +555,7 @@ ALWI void power_tile_to_cb_impl(uint32_t p, bool p_is_negative) {
     // log(x)
     ckl::eltwise_chain(
         ckl::EltwiseShape::single(),
-        ckl::CopyTile<ckl::input(CbX, ckl::InputLifecycle::Streaming, moreh_data_format_reconfig)>{},
+        ckl::CopyTile<ckl::input(CbX, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, moreh_data_format_reconfig)>{},
         ckl::OptionalChainElement<AbsX, ckl::Abs<>>{},
         ckl::Log<>{},
         ckl::PackTile<moreh_output<CbLogX>>{});
@@ -558,8 +564,8 @@ ALWI void power_tile_to_cb_impl(uint32_t p, bool p_is_negative) {
     ckl::eltwise_chain(
         ckl::EltwiseShape::single(),
         ckl::BinaryFpu<
-            ckl::input(CbLogX, ckl::InputLifecycle::Streaming, moreh_data_format_reconfig),
-            ckl::input(CbDecimal, ckl::InputLifecycle::CallerManaged, moreh_data_format_reconfig),
+            ckl::input(CbLogX, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, moreh_data_format_reconfig),
+            ckl::input(CbDecimal, ckl::WaitPolicy::None, ckl::PopPolicy::None, moreh_data_format_reconfig),
             ckl::BinaryFpuOp::Mul,
             ckl::BroadcastDim::None>{},
         ckl::Exp<>{},
@@ -569,8 +575,9 @@ ALWI void power_tile_to_cb_impl(uint32_t p, bool p_is_negative) {
     ckl::eltwise_chain(
         ckl::EltwiseShape::single(),
         ckl::BinaryFpu<
-            ckl::input(CbXpow, ckl::InputLifecycle::Streaming, moreh_data_format_reconfig),
-            ckl::input(CbExpLogXMulDecimal, ckl::InputLifecycle::Streaming, moreh_data_format_reconfig),
+            ckl::input(CbXpow, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, moreh_data_format_reconfig),
+            ckl::input(
+                CbExpLogXMulDecimal, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, moreh_data_format_reconfig),
             ckl::BinaryFpuOp::Mul,
             ckl::BroadcastDim::None>{},
         ckl::OptionalChainElement<RecipFinal, ckl::Recip<>>{},

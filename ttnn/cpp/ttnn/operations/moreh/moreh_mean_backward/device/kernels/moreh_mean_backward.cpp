@@ -45,7 +45,7 @@ void kernel_main() {
             ckl::OptionalChainElement<
                 has_bcast,
                 ckl::BinaryFpu<
-                    ckl::input(cb_in1, ckl::InputLifecycle::CallerManaged),
+                    ckl::input(cb_in1, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                     ckl::input(cb_in0),
                     ckl::BinaryFpuOp::Add,
                     bcast_dim>>{},
@@ -54,7 +54,7 @@ void kernel_main() {
 
         ckl::mul<
             ckl::input(cb_intermed0),
-            ckl::input(cb_scalar, ckl::InputLifecycle::CallerManaged),
+            ckl::input(cb_scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None),
             ckl::output(cb_out0),
             ckl::BroadcastDim::Scalar>(ckl::EltwiseShape::tiles(onetile));
     }

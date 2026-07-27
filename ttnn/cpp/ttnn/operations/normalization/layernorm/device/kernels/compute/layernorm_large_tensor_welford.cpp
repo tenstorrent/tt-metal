@@ -96,9 +96,9 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         const auto block_shape = ckl::EltwiseShape::tiles(block.size(), ckl::BlockingSettings{block.full_block_size()});
         // Keep pre-add in a separate CB to avoid the transpose_dest aliasing issue.
         ckl::add<
-            ckl::input(cb_in, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
-            ckl::input(cb_inb, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
-            ckl::output(cb_interm_pre_add, ckl::OutputLifecycle::Chunked),
+            ckl::input(cb_in, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+            ckl::input(cb_inb, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+            ckl::output(cb_interm_pre_add, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk),
             ckl::BroadcastDim::None>(block_shape);
 
         // Now run Welfords in these blk number of tiles
@@ -457,11 +457,12 @@ void kernel_main() {
             ckl::EltwiseShape::tiles(onetile),
             ckl::BinaryFpu<
                 ckl::input(cb_ex2),
-                ckl::input(cb_eps, ckl::InputLifecycle::CallerManaged),
+                ckl::input(cb_eps, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                 ckl::BinaryFpuOp::Add,
                 ckl::BroadcastDim::None>{},
             ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::Off, ckl::Dst::D0>{},
-            ckl::PackTile<ckl::output(cb_ex2pe, ckl::OutputLifecycle::Streaming, ckl::DataFormatReconfig::Disabled)>{});
+            ckl::PackTile<ckl::output(
+                cb_ex2pe, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
 
         ckl::unary_bcast<ckl::BroadcastDim::Col, ckl::input(cb_ex2pe), ckl::output(cb_ex2pe)>(
             ckl::EltwiseShape::tiles(onetile));
@@ -548,18 +549,19 @@ void kernel_main() {
             if constexpr (do_gamma == 1) {
                 constexpr auto cb_gamma_out = do_beta ? cb_fusion : cb_out;
                 ckl::mul<
-                    ckl::input(cb_xmm_id, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
-                    ckl::input(cb_gamma, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
-                    ckl::output(cb_gamma_out, ckl::OutputLifecycle::Chunked),
+                    ckl::input(cb_xmm_id, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                    ckl::input(cb_gamma, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                    ckl::output(cb_gamma_out, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk),
                     ckl::BroadcastDim::Row>(block_shape);
             }
 
             if constexpr (do_beta == 1) {
                 constexpr auto cb_beta_input = do_gamma ? cb_fusion : cb_xmm_id;
                 ckl::add<
-                    ckl::input(cb_beta_input, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
-                    ckl::input(cb_beta, ckl::InputLifecycle::Chunked, ckl::OperandKind::Block),
-                    ckl::output(cb_out, ckl::OutputLifecycle::Chunked),
+                    ckl::input(
+                        cb_beta_input, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                    ckl::input(cb_beta, ckl::WaitPolicy::PerChunk, ckl::PopPolicy::PerChunk, ckl::OperandKind::Block),
+                    ckl::output(cb_out, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk),
                     ckl::BroadcastDim::Row>(block_shape);
             }
         }

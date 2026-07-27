@@ -32,18 +32,31 @@ void kernel_main() {
     constexpr uint32_t half_Wt = Wt / 2;
     (void)Ht;
     constexpr auto bulk_block_input = [](uint32_t cb) {
-        return ckl::input(cb, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled);
+        return ckl::input(
+            cb,
+            ckl::WaitPolicy::Upfront,
+            ckl::PopPolicy::AtEnd,
+            ckl::OperandKind::Block,
+            ckl::DataFormatReconfig::Disabled);
     };
     constexpr auto held_block_input = [](uint32_t cb) {
         return ckl::input(
-            cb, ckl::InputLifecycle::HeldBulk, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled);
+            cb,
+            ckl::WaitPolicy::Upfront,
+            ckl::PopPolicy::None,
+            ckl::OperandKind::Block,
+            ckl::DataFormatReconfig::Disabled);
     };
     constexpr auto bulk_output = [](uint32_t cb) {
-        return ckl::output(cb, ckl::OutputLifecycle::ReserveNonePushEnd, ckl::DataFormatReconfig::Disabled);
+        return ckl::output(cb, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled);
     };
     constexpr auto rotated_input = bulk_block_input(rotated_in_interm_cb);
-    constexpr auto in_input =
-        ckl::input(in_cb, ckl::InputLifecycle::DeferredPop, ckl::OperandKind::Block, ckl::DataFormatReconfig::Disabled);
+    constexpr auto in_input = ckl::input(
+        in_cb,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::AtEnd,
+        ckl::OperandKind::Block,
+        ckl::DataFormatReconfig::Disabled);
     constexpr auto sin_input = held_block_input(sin_cb);
     constexpr auto cos_input = held_block_input(cos_cb);
     constexpr auto sin_interm_input = bulk_block_input(sin_interm_cb);
@@ -90,18 +103,24 @@ void kernel_main() {
                 ckl::EltwiseShape::tiles(half_Wt, /*block_size=*/half_Wt),
                 ckl::BinaryFpu<
                     ckl::input(
-                        in_cb, ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block, ckl::TileOffset::Set),
-                    ckl::input(scalar_cb, ckl::InputLifecycle::CallerManaged),
+                        in_cb,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::None,
+                        ckl::OperandKind::Block,
+                        ckl::TileOffset::Set),
+                    ckl::input(scalar_cb, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                     ckl::BinaryFpuOp::Mul,
                     ckl::BroadcastDim::Scalar>{half_Wt, 0u},
                 ckl::CopyTile<
-                    ckl::input(in_cb, ckl::InputLifecycle::CallerManaged, ckl::OperandKind::Block),
+                    ckl::input(in_cb, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block),
                     ckl::Dst::D1>{},
                 ckl::PackTile<
-                    ckl::output(rotated_in_interm_cb, ckl::OutputLifecycle::CallerManaged, ckl::TileOffset::Set),
+                    ckl::output(
+                        rotated_in_interm_cb, ckl::ReservePolicy::None, ckl::PushPolicy::None, ckl::TileOffset::Set),
                     ckl::Dst::D0>{0u},
                 ckl::PackTile<
-                    ckl::output(rotated_in_interm_cb, ckl::OutputLifecycle::CallerManaged, ckl::TileOffset::Set),
+                    ckl::output(
+                        rotated_in_interm_cb, ckl::ReservePolicy::None, ckl::PushPolicy::None, ckl::TileOffset::Set),
                     ckl::Dst::D1>{half_Wt});
             rotated_in_interm_cb_obj.push_back(Wt);
 

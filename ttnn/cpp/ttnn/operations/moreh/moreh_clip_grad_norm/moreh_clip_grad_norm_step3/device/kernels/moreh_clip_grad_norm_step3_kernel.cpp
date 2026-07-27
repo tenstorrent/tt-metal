@@ -16,12 +16,19 @@ void kernel_main() {
 
     compute_kernel_lib::mul<
         compute_kernel_lib::input(
-            cb_x, compute_kernel_lib::InputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled),
+            cb_x,
+            compute_kernel_lib::WaitPolicy::PerTile,
+            compute_kernel_lib::PopPolicy::PerTile,
+            compute_kernel_lib::DataFormatReconfig::Disabled),
         compute_kernel_lib::input(
             cb_clip_coef_clamped,
-            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::WaitPolicy::Upfront,
+            compute_kernel_lib::PopPolicy::AtEnd,
             compute_kernel_lib::DataFormatReconfig::Disabled),
         compute_kernel_lib::output(
-            cb_y, compute_kernel_lib::OutputLifecycle::Streaming, compute_kernel_lib::DataFormatReconfig::Disabled),
+            cb_y,
+            compute_kernel_lib::ReservePolicy::PerTile,
+            compute_kernel_lib::PushPolicy::PerTile,
+            compute_kernel_lib::DataFormatReconfig::Disabled),
         compute_kernel_lib::BroadcastDim::Scalar>(compute_kernel_lib::EltwiseShape::tiles(num_tiles));
 }

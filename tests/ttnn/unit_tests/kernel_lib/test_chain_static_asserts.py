@@ -12,6 +12,8 @@ ttnn.generic_op's JIT build). No device work happens, but generic_op needs a dev
 so the `device` fixture is still requested.
 """
 
+import re
+
 import ttnn
 from loguru import logger
 import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
@@ -36,14 +38,19 @@ def _expect_build_failure(device, expect_error, kernel_name, expected_msg):
     compute = lib.build_compute_kernel(f"{KERNEL_DIR}/{kernel_name}", [n], core_grid)
     program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
 
-    with expect_error(Exception, expected_msg):
+    with expect_error(Exception, re.escape(expected_msg)):
         ttnn.generic_op([tt_in, tt_out], program)
     logger.info(f"{kernel_name}: correctly rejected at compile time ('{expected_msg}')")
 
 
 def test_block_streaming_illegal(device, expect_error):
-    """Block index + Streaming lifecycle is the absolute-index footgun — must not compile."""
-    _expect_build_failure(device, expect_error, "copytile_block_streaming.cpp", "is illegal for Block")
+    """Block index + per-tile wait/pop is the absolute-index footgun — must not compile."""
+    _expect_build_failure(
+        device,
+        expect_error,
+        "copytile_block_streaming.cpp",
+        "input wait/pop pair is incompatible with operand kind",
+    )
 
 
 def test_packtile_collision_illegal(device, expect_error):
@@ -51,9 +58,34 @@ def test_packtile_collision_illegal(device, expect_error):
     _expect_build_failure(device, expect_error, "packtile_collision.cpp", "two PackTile elements collide")
 
 
+def test_oversized_dest_footprint_illegal(device, expect_error):
+    """An element wider than physical DEST cannot produce a nonzero block size."""
+    _expect_build_failure(
+        device,
+        expect_error,
+        "oversized_dest_footprint.cpp",
+        "DEST footprint exceeds the available DEST capacity",
+    )
+
+
+def test_duplicate_bulkdrain_cb_illegal(device, expect_error):
+    """BulkDrain is an upfront wait and must participate in duplicate-reader detection."""
+    _expect_build_failure(
+        device,
+        expect_error,
+        "duplicate_bulkdrain_cb.cpp",
+        "two CB-reader elements share a CB",
+    )
+
+
 def test_row_streaming_illegal(device, expect_error):
-    """Row/Col broadcast index + Streaming policy — must not compile."""
-    _expect_build_failure(device, expect_error, "row_streaming.cpp", "non-streaming policy")
+    """Row/Col broadcast index + per-tile wait/pop — must not compile."""
+    _expect_build_failure(
+        device,
+        expect_error,
+        "row_streaming.cpp",
+        "input wait/pop pair is incompatible with operand kind",
+    )
 
 
 def test_tile_offset_streaming_illegal(device, expect_error):
@@ -67,8 +99,8 @@ def test_cba_cbb_index_mismatch_illegal(device, expect_error):
 
 
 def test_cba_cbb_lifecycle_mismatch_illegal(device, expect_error):
-    """BinaryFpu same CB for both operands with mismatched lifecycles — must not compile."""
-    _expect_build_failure(device, expect_error, "cba_cbb_lifecycle_mismatch.cpp", "same InputLifecycle")
+    """BinaryFpu same CB for both operands with mismatched wait/pop pairs — must not compile."""
+    _expect_build_failure(device, expect_error, "cba_cbb_lifecycle_mismatch.cpp", "same wait/pop policies")
 
 
 def test_setupowner_caller_not_hoistable_illegal(device, expect_error):
@@ -88,7 +120,7 @@ def test_l1_lifecycle_without_accumulation_illegal(device, expect_error):
         device,
         expect_error,
         "l1_lifecycle_without_accumulation.cpp",
-        "OutputLifecycle::L1Accumulation requires L1 accumulation",
+        "(OneUpfront, OneAtEnd) requires L1 accumulation",
     )
 
 
@@ -97,7 +129,7 @@ def test_l1_wrong_lifecycle_illegal(device, expect_error):
         device,
         expect_error,
         "l1_wrong_lifecycle.cpp",
-        "L1 accumulation requires OutputLifecycle::L1Accumulation or CallerManaged",
+        "L1 accumulation requires (OneUpfront, OneAtEnd) or caller-managed (None, None)",
     )
 
 

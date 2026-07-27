@@ -47,15 +47,15 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         if constexpr (FUSE_PRE_ADD) {
             ckl::add<
-                ckl::input(cb_in0, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                ckl::input(cb_res, ckl::InputLifecycle::Bulk, ckl::OperandKind::Block),
-                ckl::output(cb_inp, ckl::OutputLifecycle::Bulk),
+                ckl::input(cb_in0, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                ckl::input(cb_res, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                ckl::output(cb_inp, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd),
                 ckl::BroadcastDim::None>(squaring_shape);
         }
 
         ckl::square<
-            ckl::input(cb_inp, ckl::InputLifecycle::Pipelined, ckl::OperandKind::Block),
-            ckl::output(cb_x2, ckl::OutputLifecycle::Bulk)>(squaring_shape);
+            ckl::input(cb_inp, ckl::WaitPolicy::Cumulative, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+            ckl::output(cb_x2, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(squaring_shape);
 
         ckl::reduce<
             PoolType::AVG,
