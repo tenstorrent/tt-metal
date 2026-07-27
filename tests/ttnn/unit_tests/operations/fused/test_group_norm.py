@@ -306,18 +306,22 @@ def test_group_norm_height_sharded_non_tile_aligned(device, N, C, H, W, num_grou
     )
     input_tensor = ttnn.to_memory_config(input_tensor, sharded_mem_config)
 
-    output_tensor = ttnn.group_norm(
-        input_tensor,
-        num_groups=num_groups,
-        input_mask=input_mask_tensor,
-        weight=gamma_t,
-        bias=beta_t,
-        memory_config=sharded_mem_config,
-        core_grid=grid_size,
-        output_layout=ttnn.TILE_LAYOUT,
-        inplace=False,
-        use_welford=False,
-    )
+    # Twice, like run_group_norm_DRAM: the sharded path ships the corrected reduce scaler and K as
+    # RUNTIME args, so a program-cache hit on the second call must not lose or stale them.
+    for _ in range(2):
+        output_tensor = ttnn.group_norm(
+            input_tensor,
+            num_groups=num_groups,
+            input_mask=input_mask_tensor,
+            weight=gamma_t,
+            bias=beta_t,
+            memory_config=sharded_mem_config,
+            core_grid=grid_size,
+            output_layout=ttnn.TILE_LAYOUT,
+            inplace=False,
+            use_welford=False,
+        )
+        ttnn.synchronize_device(device)
     output_tensor = ttnn.to_memory_config(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor))
 
@@ -400,18 +404,22 @@ def test_group_norm_block_sharded_non_tile_aligned(
     )
     input_tensor = ttnn.to_memory_config(input_tensor, sharded_mem_config)
 
-    output_tensor = ttnn.group_norm(
-        input_tensor,
-        num_groups=num_groups,
-        input_mask=input_mask_tensor,
-        weight=gamma_t,
-        bias=beta_t,
-        memory_config=sharded_mem_config,
-        core_grid=grid_size,
-        output_layout=ttnn.ROW_MAJOR_LAYOUT if out_row_major else ttnn.TILE_LAYOUT,
-        inplace=False,
-        use_welford=use_welford,
-    )
+    # Twice: the sharded path ships the corrected reduce scaler and K as RUNTIME args, so a
+    # program-cache hit on the second call must not lose or stale them.
+    for _ in range(2):
+        output_tensor = ttnn.group_norm(
+            input_tensor,
+            num_groups=num_groups,
+            input_mask=input_mask_tensor,
+            weight=gamma_t,
+            bias=beta_t,
+            memory_config=sharded_mem_config,
+            core_grid=grid_size,
+            output_layout=ttnn.ROW_MAJOR_LAYOUT if out_row_major else ttnn.TILE_LAYOUT,
+            inplace=False,
+            use_welford=use_welford,
+        )
+        ttnn.synchronize_device(device)
     output_tensor = ttnn.to_memory_config(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor))
     output_tensor = output_tensor.reshape(N, 1, -1, C)[:, :, : W * H, :]
