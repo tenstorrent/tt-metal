@@ -104,7 +104,8 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
         sub_device_id,
         reduce_scatter_fused_op_signaler,
         args.reduce_scatter_params.chunks_per_sync,
-        args.reduce_scatter_params.num_workers_per_link,
+        args.reduce_scatter_params.cluster_axis.has_value() ? args.reduce_scatter_params.num_workers_per_link
+                                                            : std::nullopt,
         args.reduce_scatter_params.num_buffers_per_channel,
         args.reduce_scatter_core_grid_offset,
         resolved_reduce_scatter_compute_kernel_config);

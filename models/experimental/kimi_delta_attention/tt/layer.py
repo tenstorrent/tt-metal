@@ -526,7 +526,7 @@ class KimiDeltaAttention:
                 ttnn.Topology.Ring,
                 self.tensor_parallel_size,
                 output.dtype,
-                cluster_axis=self.tensor_parallel_axis,
+                cluster_axis=None if self.sequence_parallel_size == 1 else self.tensor_parallel_axis,
             )
         else:
             output = ttnn.linear(

@@ -11,6 +11,7 @@
 
 void kernel_main() {
     constexpr uint32_t block_ct = get_compile_time_arg_val(0);
+    constexpr uint32_t num_blocks = get_compile_time_arg_val(1);
     constexpr uint32_t act_rm_cb = 0;
     constexpr uint32_t act_tile_cb = 1;
     constexpr uint32_t weights_cb = 2;
@@ -27,8 +28,13 @@ void kernel_main() {
     binary_op_init_common(act_tile_cb, weights_cb, partial_a_cb);
     silu_tile_init();
 
-    for (uint32_t item = 0; item < mt_count; ++item) {
+    if constexpr (num_blocks == 1) {
         weights.wait_front(4 * block_ct);
+    }
+    for (uint32_t item = 0; item < mt_count; ++item) {
+        if constexpr (num_blocks > 1) {
+            weights.wait_front(4 * block_ct);
+        }
         for (uint32_t tap = 0; tap < 4; ++tap) {
             compute_kernel_lib::tilize<block_ct, act_rm_cb, act_tile_cb>(1);
             activation.wait_front(block_ct);
@@ -70,6 +76,8 @@ void kernel_main() {
             }
             activation.pop_front(block_ct);
         }
-        weights.pop_front(4 * block_ct);
+        if constexpr (num_blocks > 1) {
+            weights.pop_front(4 * block_ct);
+        }
     }
 }

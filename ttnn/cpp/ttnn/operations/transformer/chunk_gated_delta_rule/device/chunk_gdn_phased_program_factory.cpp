@@ -886,7 +886,7 @@ tt::tt_metal::ProgramDescriptor KdaCausalConvProgramFactory::create_descriptor(
     compute.kernel_source = kdir + "compute/kda_causal_conv1d.cpp";
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = cores;
-    compute.compile_time_args = {block_ct};
+    compute.compile_time_args = {block_ct, num_blocks};
     compute.config = compute_cfg(in.input.device()->arch(), attrs.compute_kernel_config);
 
     for (uint32_t i = 0; i < dist.cores.size(); ++i) {

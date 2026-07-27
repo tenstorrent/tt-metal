@@ -39,13 +39,7 @@ void kernel_main() {
 
     CircularBuffer weights(2);
     CircularBuffer activation(0);
-    constexpr uint32_t block_row_bytes = block_ct * 32 * sizeof(uint16_t);
-    constexpr uint32_t block_offset_scale = 32 * sizeof(uint16_t);
-    for (uint32_t item = 0; item < mt_count; ++item) {
-        const uint32_t work = mt_start + item;
-        const uint32_t mt = work / num_blocks;
-        const uint32_t ct_start = (work % num_blocks) * block_ct;
-
+    auto load_weights = [&](uint32_t ct_start) {
         weights.reserve_back(4 * block_ct);
         auto weight_dst = use<CircularBuffer::AddrSelector::WRITE_PTR>(weights);
         for (uint32_t ct = 0; ct < block_ct; ++ct) {
@@ -68,6 +62,20 @@ void kernel_main() {
         }
         noc.async_read_barrier();
         weights.push_back(4 * block_ct);
+    };
+    if constexpr (num_blocks == 1) {
+        load_weights(0);
+    }
+    constexpr uint32_t block_row_bytes = block_ct * 32 * sizeof(uint16_t);
+    constexpr uint32_t block_offset_scale = 32 * sizeof(uint16_t);
+    for (uint32_t item = 0; item < mt_count; ++item) {
+        const uint32_t work = mt_start + item;
+        const uint32_t mt = work / num_blocks;
+        const uint32_t ct_start = (work % num_blocks) * block_ct;
+
+        if constexpr (num_blocks > 1) {
+            load_weights(ct_start);
+        }
 
         for (uint32_t tap = 0; tap < 4; ++tap) {
             activation.reserve_back(block_ct);
