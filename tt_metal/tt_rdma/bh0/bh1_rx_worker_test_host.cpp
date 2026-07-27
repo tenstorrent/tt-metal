@@ -92,10 +92,10 @@ int main(int argc, char** argv) {
     mrtab[4] = kRkey;      // rkey
     mrtab[5] = 0x2u;       // access = REMOTE_WRITE
 
-    std::vector<uint32_t> z9(9, 0u), z4(4, 0u);
+    std::vector<uint32_t> z9(9, 0u), z6(6, 0u);
     cluster.write_core(device->id(), eth_phys, z9, (uint32_t)eth_stats_addr);
     for (uint32_t i = 0; i < nworkers; ++i) {
-        cluster.write_core(device->id(), wphys[i], z4, kWStats);
+        cluster.write_core(device->id(), wphys[i], z6, kWStats);
         cluster.write_core(device->id(), wphys[i], std::vector<uint32_t>{0u}, kWStop);
         cluster.write_core(device->id(), wphys[i], mrtab, kWMr);
     }
@@ -125,7 +125,8 @@ int main(int argc, char** argv) {
              nworkers,
              kWScratch,
              kWMr,
-             kMrSlots});
+             kMrSlots,
+             (uint32_t)eth_stats_addr + 8u});  // produce head = ingest kernel's PKT_END_CNT (stats[2])
     }
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
@@ -136,24 +137,31 @@ int main(int argc, char** argv) {
     std::printf("BH-rx-worker: up. Fire the DOCA sender now.\n");
 
     auto rd = [&](const CoreCoord& c) {
-        return cluster.read_core<uint32_t>(device->id(), c, kWStats, 4 * sizeof(uint32_t));
+        return cluster.read_core<uint32_t>(device->id(), c, kWStats, 6 * sizeof(uint32_t));
     };
     uint64_t prev_sum = 0;
     bool have_prev = false;
     double peak_gbps = 0.0;
     uint32_t max_drop = 0;
+    uint64_t fin_processed = 0, fin_lapped = 0;
+    uint32_t fin_produced = 0;
     const int steps = hold_s * 4;
     for (int s = 0; s < steps; ++s) {
-        uint64_t sum = 0, valid = 0;
+        uint64_t sum = 0, valid = 0, processed = 0, lapped = 0;
         for (uint32_t i = 0; i < nworkers; ++i) {
             auto w = rd(wphys[i]);
             sum += ((uint64_t)w[1] << 32) | (uint64_t)w[0];
             valid += w[2];
+            processed += w[3];
+            lapped += w[4];
         }
         auto est = cluster.read_core<uint32_t>(device->id(), eth_phys, (uint32_t)eth_stats_addr, 9 * sizeof(uint32_t));
         if (est[3] > max_drop) {
             max_drop = est[3];
         }
+        fin_processed = processed;
+        fin_lapped = lapped;
+        fin_produced = est[2];  // PKT_END_CNT = total frames the MAC wrote to L1
         if (have_prev) {
             const double gbps = (double)(sum - prev_sum) * 8.0 / 0.25 / 1e9;
             if (gbps > peak_gbps) {
@@ -164,25 +172,40 @@ int main(int argc, char** argv) {
         have_prev = true;
         if ((s % 4) == 3) {
             std::printf(
-                "  t=%2ds  processed peak %6.1f Gbps  valid_frames=%llu  eth drop=%u  eth frames=%u\n",
+                "  t=%2ds  consumed peak %6.1f Gbps  processed=%llu lapped=%llu produced(PKT_END)=%u  valid=%llu  eth "
+                "drop=%u\n",
                 (s + 1) / 4,
                 peak_gbps,
+                (unsigned long long)processed,
+                (unsigned long long)lapped,
+                est[2],
                 (unsigned long long)valid,
-                est[3],
-                est[2]);
+                est[3]);
             std::fflush(stdout);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
     }
 
+    // Exactly-once check: every produced frame is owned by exactly one worker (i mod N), so at the design
+    // load processed + lapped should account for all produced frames, with lapped==0 when the pool keeps up.
+    const uint64_t accounted = fin_processed + fin_lapped;
+    const double cover = fin_produced ? 100.0 * (double)fin_processed / (double)fin_produced : 0.0;
     std::printf(
-        "\n  === EXPERIMENT 3 RESULT ===\n"
-        "  %u Tensix workers processed (read+parse+rkey->MR+validate) peak %.1f Gbps   eth drop: %u\n"
-        "  Verdict: %s single-link-200G RX with this pool size (compute-local landing; remote MR dest ~2x workers).\n",
+        "\n  === Phase 3.1b RESULT (bounded multi-consumer claim) ===\n"
+        "  %u workers: consumed peak %.1f Gbps  processed=%llu / produced=%u (%.1f%%)  lapped=%llu  eth drop=%u\n"
+        "  exactly-once: processed+lapped=%llu vs produced=%u  |  %s\n",
         nworkers,
         peak_gbps,
+        (unsigned long long)fin_processed,
+        fin_produced,
+        cover,
+        (unsigned long long)fin_lapped,
         max_drop,
-        (peak_gbps >= 200.0) ? ">=200 Gbps -> SUFFICIENT for" : "<200 Gbps -> need more workers for");
+        (unsigned long long)accounted,
+        fin_produced,
+        (fin_lapped == 0 && fin_processed >= fin_produced * 0.98)
+            ? "LOSSLESS: pool consumed all production exactly once"
+            : "workers fell behind (lapped>0) -> add workers");
 
     cluster.write_core(device->id(), eth_phys, std::vector<uint32_t>{1u}, TT_RDMA_STOP_ADDR);
     for (uint32_t i = 0; i < nworkers; ++i) {

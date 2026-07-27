@@ -7,20 +7,25 @@
 // validate), and counts processed / valid bytes. The pool's aggregate processed rate = how much RDMA
 // landing throughput N Tensix workers deliver for one 200G link -> sizes the production drainer pool.
 //
-// Static round-robin on fixed-size frames needs NO cross-worker coordination: worker w handles frame
-// indices w, w+N, w+2N, ... The DOCA test sender emits uniform jumbo frames so a fixed stride aligns.
-// (A variable-size production ring needs an atomic multi-consumer head; that's a correctness layer on
-// top, not a throughput change.) Landing here is compute-local (1 NoC read); a remote MR dest would add
-// a second NoC write (~2x the per-frame data work) -> roughly 2x the workers.
+// Phase 3.1b — CORRECT multi-consumer drainer (was exp3's blind round-robin). Fixed-size frames need NO
+// NoC atomic: worker w statically owns frame indices {w, w+N, w+2N, ...}, so the partition is disjoint +
+// complete by construction. The correctness layer added here is the **produce-head bound**: the eth
+// ingest kernel publishes PKT_END_CNT (a monotonic HW count of frames fully written to L1); a worker only
+// processes frame index i once i < produced, so it consumes REAL production exactly once (no reprocessing
+// of unrefilled slots -> the throughput number is now honest) and never runs ahead of the MAC.
+// Lapping guard: if produced outruns a worker's next index by more than the ring depth, the MAC has
+// overwritten the claimed slot -> skip forward to the freshest owned index and count the gap as lapped.
+// (A variable-size ring would need an atomic multi-consumer head instead; fixed frames don't.)
+// Landing here is compute-local (1 NoC read); a remote MR dest (3.1c) adds a second NoC write.
 
 #include <cstdint>
 
 #include "internal/ethernet/dataflow_api.h"
 
 void kernel_main() {
-    // arg0 stats(u32[4]: bytes_lo,bytes_hi,valid,iters)  arg1 stop flag  arg2 eth src noc_x  arg3 noc_y
-    // arg4 ring base  arg5 ring size  arg6 frame stride bytes  arg7 worker id  arg8 num workers
-    // arg9 scratch L1 addr  arg10 MR table L1 addr (local, host-written)  arg11 mr slots
+    // arg0 stats(u32[6]: bytes_lo,bytes_hi,valid,processed,lapped,produced)  arg1 stop  arg2 eth noc_x
+    // arg3 noc_y  arg4 ring base  arg5 ring size  arg6 stride  arg7 worker id  arg8 num workers
+    // arg9 scratch L1  arg10 MR table L1  arg11 mr slots  arg12 produce-head L1 addr on the eth core
     const uint32_t stats_addr = get_arg_val<uint32_t>(0);
     const uint32_t stop_addr = get_arg_val<uint32_t>(1);
     const uint32_t src_x = get_arg_val<uint32_t>(2);
@@ -33,6 +38,7 @@ void kernel_main() {
     const uint32_t scratch = get_arg_val<uint32_t>(9);
     const uint32_t mr_table = get_arg_val<uint32_t>(10);
     const uint32_t mr_slots = get_arg_val<uint32_t>(11);
+    const uint32_t phead_addr = get_arg_val<uint32_t>(12);  // eth L1 addr of PKT_END_CNT (monotonic produced)
 
     volatile tt_l1_ptr uint32_t* stats = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stats_addr);
     volatile tt_l1_ptr uint32_t* stop =
@@ -41,43 +47,60 @@ void kernel_main() {
         *stop = 0;
     }
     volatile tt_l1_ptr uint32_t* sc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
+    // Local mirror of the produce head; NoC-read from the eth core's published PKT_END_CNT.
+    volatile tt_l1_ptr uint32_t* ph = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + 0x1000u);
 
     const uint32_t nslots = ring_size / stride;  // whole frames that fit (avoid straddle)
-    uint32_t slot = wid % nslots;
+    uint32_t next_idx = wid;                     // monotonic frame index this worker owns next
+    uint32_t produced = 0;
     uint64_t bytes = 0;
-    uint32_t valid = 0, iters = 0;
+    uint32_t valid = 0, processed = 0, lapped = 0, poll = 0;
     for (;;) {
-        const uint32_t off = slot * stride;
-        // Land the frame into local L1 (this NoC read IS the compute-local landing).
-        noc_async_read(get_noc_addr(src_x, src_y, ring_base + off), scratch, stride);
+        // Refresh the produce head (PKT_END_CNT) from the eth core. Cheap: one NoC read per claim batch.
+        noc_async_read(get_noc_addr(src_x, src_y, phead_addr), scratch + 0x1000u, 4u);
         noc_async_read_barrier();
-        // Parse the 32B header from the landed copy.
-        const uint32_t w0 = sc[0];
-        const uint32_t len = sc[1];
-        const uint32_t rkey = sc[3];
-        const uint32_t op = w0 & 0xFFu;
-        // Real MR-table resolve: index by rkey>>24, read the entry, validate rkey + access + bounds.
-        const uint32_t mslot = rkey >> 24;
-        if (mslot < mr_slots) {
-            volatile tt_l1_ptr uint32_t* mr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mr_table + mslot * 32u);
-            const uint32_t mr_len = mr[2];
-            const uint32_t mr_rkey = mr[4];
-            const uint32_t mr_access = mr[5];
-            if (mr_rkey == rkey && (mr_access & 0x2u) && len <= mr_len &&
-                (op == 0x10u || op == 0x11u)) {  // WRITE / WRITE_IMM
-                ++valid;
+        produced = ph[0];
+
+        // Lapping guard: if the MAC has advanced > (nslots - N) frames past our next index, our claimed
+        // slot is already overwritten -> jump to the freshest index we own and count the skipped gap.
+        if ((uint32_t)(produced - next_idx) > (nslots - nworkers)) {
+            const uint32_t fresh = (produced > nslots) ? (produced - nslots) : 0u;
+            uint32_t aligned = fresh + ((wid + nworkers - (fresh % nworkers)) % nworkers);  // next owned idx >= fresh
+            if (aligned > next_idx) {
+                lapped += (aligned - next_idx) / nworkers;
+                next_idx = aligned;
             }
         }
-        bytes += stride;
-        slot += nworkers;
-        if (slot >= nslots) {
-            slot -= nslots;
+
+        // Process every produced frame this worker owns, up to the head.
+        while (next_idx < produced) {
+            const uint32_t off = (next_idx % nslots) * stride;
+            noc_async_read(get_noc_addr(src_x, src_y, ring_base + off), scratch, stride);
+            noc_async_read_barrier();
+            const uint32_t w0 = sc[0];
+            const uint32_t len = sc[1];
+            const uint32_t rkey = sc[3];
+            const uint32_t op = w0 & 0xFFu;
+            const uint32_t mslot = rkey >> 24;
+            if (mslot < mr_slots) {
+                volatile tt_l1_ptr uint32_t* mr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mr_table + mslot * 32u);
+                if (mr[4] == rkey && (mr[5] & 0x2u) && len <= mr[2] && (op == 0x10u || op == 0x11u)) {
+                    ++valid;
+                }
+            }
+            bytes += stride;
+            ++processed;
+            next_idx += nworkers;
         }
-        if ((++iters & 0x3Fu) == 0) {
+
+        if ((++poll & 0x1Fu) == 0) {
             stats[0] = (uint32_t)(bytes & 0xFFFFFFFFu);
             stats[1] = (uint32_t)(bytes >> 32);
             stats[2] = valid;
-            stats[3] = iters;
+            stats[3] = processed;
+            stats[4] = lapped;
+            stats[5] = produced;
             if (stop != nullptr && *stop != 0) {
                 break;
             }
@@ -86,5 +109,7 @@ void kernel_main() {
     stats[0] = (uint32_t)(bytes & 0xFFFFFFFFu);
     stats[1] = (uint32_t)(bytes >> 32);
     stats[2] = valid;
-    stats[3] = iters;
+    stats[3] = processed;
+    stats[4] = lapped;
+    stats[5] = produced;
 }
