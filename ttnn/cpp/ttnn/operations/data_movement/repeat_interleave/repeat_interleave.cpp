@@ -13,7 +13,9 @@
 
 namespace ttnn {
 
-// repeat interleave supports repeats as 1 to inf, dim between 0 to 2
+// repeat interleave supports repeats as 1 to inf, and any dim in [-rank, rank) for a tensor of
+// arbitrary rank. `dim` is resolved via get_normalized_index (so negative dims are supported), and
+// the last dim is handled by transposing it to the second-to-last position and recursing.
 ttnn::Tensor repeat_interleave(
     const ttnn::Tensor& input_a, uint32_t repeat, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> combined_tensors;
@@ -37,6 +39,12 @@ ttnn::Tensor repeat_interleave(
         return typecast ? ttnn::typecast(result, input_a.dtype(), mem_config) : result;
     }
 
+    // This op is composed of unsqueeze -> concat -> reshape, which are run in ROW_MAJOR layout below so that
+    // the concat dimension is not subject to tile (32x32) padding. BFLOAT8_B/BFLOAT4_B/UINT8 cannot be laid out
+    // in ROW_MAJOR (block-float formats are TILE-only; UINT8 reshape is unsupported), so they are typecast up to
+    // BFLOAT16 for the duration of the op and cast back to the original dtype at the end. The bf16 round-trip is
+    // numerically lossless for these formats. A pure TILE-preserving path works for BFLOAT16/BFLOAT8_B but fails
+    // for BFLOAT4_B (tensor_spec TILE constraint) and UINT8 (reshape), so the typecast path is kept for them.
     ttnn::Tensor rm_input = input_a;
     bool typecast =
         input_a.dtype() == DataType::BFLOAT8_B ||
