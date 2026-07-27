@@ -453,47 +453,21 @@ struct profileScope {
     inline __attribute__((always_inline)) ~profileScope() { mark_time(get_const_id(timer_id, ZONE_END)); }
 };
 
-template <uint32_t timer_id, uint32_t index>
-struct profileScopeGuaranteed {
-    inline __attribute__((always_inline)) profileScopeGuaranteed() {
-        if constexpr (TRACE_ON_TENSIX) {
-            uint32_t trace_replay_status = profiler_control_buffer[TRACE_REPLAY_STATUS];
-            if constexpr (index == 0) {
-#if !defined(COMPILE_FOR_TRISC)
-                if (trace_replay_status & TRACE_MARK_FW_START) {
-                    mark_time(get_const_id(timer_id, ZONE_START));
-                    profiler_control_buffer[TRACE_REPLAY_STATUS] = TRACE_MARK_KERNEL_START;
-                }
-#endif
-            } else {
-                if (trace_replay_status & TRACE_MARK_KERNEL_START) {
-                    mark_time(get_const_id(timer_id, ZONE_START));
-                    profiler_control_buffer[TRACE_REPLAY_STATUS] = TRACE_MARK_ALL_ENDS;
-                }
-            }
-        } else {
-            if constexpr (index == 0) {
-                init_profiler();
-            }
-            // FW/KER wrapper zone emission DISABLED for the X280 real-profiler runs: keep the
-            // init_profiler/finish_profiler lifecycle (ring init, zoneValid publish gate, RUN_COUNTER) but
-            // drop the "<RISC>-FW" (index 0) / "<RISC>-KERNEL" (index 1) START/END markers, so only the user
-            // DeviceZoneScopedN zones (profileScope) reach the capture. Re-enable by uncommenting.
-            // mark_time(get_const_id(timer_id, ZONE_START));
-        }
-    }
-    inline __attribute__((always_inline)) ~profileScopeGuaranteed() {
-        if constexpr (TRACE_ON_TENSIX) {
-            if (profiler_control_buffer[TRACE_REPLAY_STATUS] == TRACE_MARK_ALL_ENDS) {
-                mark_time(get_const_id(timer_id, ZONE_END));
-            }
-        } else {
-            // mark_time(get_const_id(timer_id, ZONE_END));  // FW/KER wrapper zone disabled -- see ctor
-            if constexpr (index == 0) {
-                finish_profiler();
-            }
-        }
-    }
+// FW-wrapper scope (what DeviceZoneScopedMainN used to be, via profileScopeGuaranteed<hash,0>).
+// It owns the profiler LIFECYCLE ONLY -- ring init + zoneValid publish gate + RUN_COUNTER on the way in,
+// finish/publish on the way out -- and deliberately emits NO markers, so no "<RISC>-FW" zone appears.
+// This must still wrap every kernel: without init_profiler()/finish_profiler() the ring is never set up
+// and NOTHING (including plain DeviceZoneScopedN) is published.
+// The KERNEL wrapper (index 1) no longer needs a special type at all -- DeviceZoneScopedMainChildN now
+// uses the ordinary profileScope above, so it reports exactly like any DeviceZoneScopedN zone.
+// (get_const_id(id, ZONE_START) == id & 0xFFFF since ZONE_START==0, so the wire format is identical.)
+// NOTE: this drops the TRACE_ON_TENSIX (PROFILER_OPT_DO_TRACE_ONLY) state machine that the old
+// profileScopeGuaranteed implemented, which gated the FW/KERNEL markers to one emission per trace replay.
+// Under trace-only profiling the KERNEL zone will now mark on EVERY replay. The parked DRAM producer
+// (kernel_profiler_push.hpp) still carries the original gated implementation if it is needed back.
+struct profileScopeLifecycle {
+    inline __attribute__((always_inline)) profileScopeLifecycle() { init_profiler(); }
+    inline __attribute__((always_inline)) ~profileScopeLifecycle() { finish_profiler(); }
 };
 
 template <uint32_t timer_id, uint32_t index>
@@ -620,15 +594,18 @@ __attribute__((noinline)) void trace_only_init() {
 
 #define DeviceValidateProfiler(condition) kernel_profiler::set_profiler_zone_valid(condition);
 
-#define DeviceZoneScopedMainN(name)                                            \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
-    kernel_profiler::profileScopeGuaranteed<hash, 0> zone = kernel_profiler::profileScopeGuaranteed<hash, 0>();
+// FW wrapper: DISABLED as a zone -- lifecycle only, emits no markers (so no "<RISC>-FW" in the capture).
+// Keeps init_profiler()/finish_profiler(), which every kernel needs for the ring to exist at all.
+// No hash/DO_PRAGMA here on purpose: nothing is reported, so no source location needs registering.
+#define DeviceZoneScopedMainN(name) \
+    kernel_profiler::profileScopeLifecycle zone_fw_lifecycle = kernel_profiler::profileScopeLifecycle();
 
+// KERNEL wrapper: REPORTS, as an ordinary scope -- same profileScope path as DeviceZoneScopedN, so a real
+// model run shows a "<RISC>-KERNEL" span per kernel invocation alongside any op-level zones.
 #define DeviceZoneScopedMainChildN(name)                                       \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
-    kernel_profiler::profileScopeGuaranteed<hash, 1> zone = kernel_profiler::profileScopeGuaranteed<hash, 1>();
+    kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
 
 #define DeviceZoneScopedSumN1(name)                                            \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
