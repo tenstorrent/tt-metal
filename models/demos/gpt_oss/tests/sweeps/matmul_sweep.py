@@ -37,9 +37,17 @@ from __future__ import annotations
 import argparse
 import csv
 import itertools
+import json
+import os
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
+
+try:
+    from tqdm import tqdm
+except Exception:  # tqdm optional
+    tqdm = None
 
 import torch
 
@@ -414,6 +422,12 @@ def main():
         "--in0-block-w", type=int, nargs="*", default=[], help="fix matmul1d/2d in0_block_w (tiles); empty=all divisors"
     )
     ap.add_argument("--csv", type=str, default="", help="write results CSV to this path")
+    ap.add_argument(
+        "--progress-file",
+        type=str,
+        default="",
+        help="write a live JSON progress file (default: <csv>.progress.json, or ./matmul_sweep.progress.json)",
+    )
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
@@ -469,10 +483,57 @@ def main():
             **t.extra,
         }
 
+    # Resolve progress-file path: explicit flag > alongside CSV > cwd.
+    if args.progress_file:
+        progress_path = Path(args.progress_file)
+    elif args.csv:
+        progress_path = Path(args.csv).with_suffix(".progress.json")
+    else:
+        progress_path = Path("matmul_sweep.progress.json")
+    progress_path.parent.mkdir(parents=True, exist_ok=True)
+
+    total = len(trials)
+    start_ts = time.perf_counter()
+
+    def write_progress(done, current_label, finished=False):
+        """Atomically write a small JSON snapshot so an external observer can poll
+        sweep progress at any time (elapsed, ETA, per-status counts)."""
+        elapsed = time.perf_counter() - start_ts
+        rate = done / elapsed if elapsed > 0 and done > 0 else 0.0
+        remaining = total - done
+        eta = remaining / rate if rate > 0 else None
+        snap = {
+            "updated": datetime.now(timezone.utc).isoformat(),
+            "pid": os.getpid(),
+            "gemm": f"A[{args.M},{args.K}]@B[{args.K},{args.N}]",
+            "grid": args.grid,
+            "total": total,
+            "done": done,
+            "remaining": remaining,
+            "percent": round(100.0 * done / total, 2) if total else 100.0,
+            "ran": n_ok,
+            "skipped_oom": n_skip,
+            "fatal": n_fatal,
+            "elapsed_s": round(elapsed, 1),
+            "eta_s": round(eta, 1) if eta is not None else None,
+            "avg_s_per_trial": round(1.0 / rate, 3) if rate > 0 else None,
+            "current": current_label,
+            "finished": finished,
+            "csv": str(Path(args.csv)) if args.csv else None,
+        }
+        tmp = progress_path.with_suffix(progress_path.suffix + ".tmp")
+        with open(tmp, "w") as f:
+            json.dump(snap, f, indent=2)
+        os.replace(tmp, progress_path)
+
+    write_progress(0, "(starting)")
+    print(f"# progress file: {progress_path}", flush=True)
+
     dev = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
     rows = []
     best = {}
     n_ok = n_skip = n_fatal = 0
+    bar = tqdm(total=total, unit="cfg", dynamic_ncols=True) if tqdm is not None else None
     try:
         for i, t in enumerate(trials):
             full = (
@@ -509,8 +570,17 @@ def main():
                 n_fatal += 1
                 if not _device_alive(dev):
                     print("# device no longer responsive - aborting sweep, writing partial results", flush=True)
+                    write_progress(i + 1, full)
                     break
+            # End of iteration (all non-break paths): update live progress.
+            if bar is not None:
+                bar.update(1)
+                bar.set_postfix_str(f"ok={n_ok} skip={n_skip} fatal={n_fatal}", refresh=False)
+            write_progress(i + 1, full)
     finally:
+        if bar is not None:
+            bar.close()
+        write_progress(min(n_ok + n_skip + n_fatal, total), "(done)", finished=True)
         try:
             ttnn.close_mesh_device(dev)
         except Exception:

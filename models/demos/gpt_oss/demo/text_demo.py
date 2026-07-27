@@ -471,6 +471,12 @@ def test_gpt_oss_demo(
     mesh_shape = tuple(mesh_device.shape)
     test_id = request.node.callspec.id if hasattr(request.node, "callspec") else request.node.name
     is_seqlen_sweep = "seqlen-sweep" in test_id
+    # Profiling-only CLI overrides (see models/demos/gpt_oss/conftest.py). Default runs unaffected.
+    if request.config.getoption("--gpt-oss-decode-trace-off"):
+        enable_decode_trace = False
+    _max_tokens_override = request.config.getoption("--gpt-oss-max-tokens")
+    if _max_tokens_override and _max_tokens_override > 0:
+        max_generated_tokens = _max_tokens_override
     # On single-row meshes (T3K, LoudBox), cap max_seq_len at 64k for seqlen-sweep so steps >64k are skipped
     actual_max_seq_len = min(max_seq_len, 64 * 1024) if (is_seqlen_sweep and mesh_shape[0] == 1) else max_seq_len
     if mesh_shape[0] == 1:

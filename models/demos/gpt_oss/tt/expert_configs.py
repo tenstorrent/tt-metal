@@ -17,9 +17,13 @@ class GPTOSSProgramConfig(ProgramConfig):
     """
 
     # Decode
-    decode_gate_up_cores: tuple[int, int] = (3, 4)
+    # Grids tuned via models/demos/gpt_oss/tests/sweeps/moe_sparse_matmul_sweep.py on
+    # a single p150 (TP=1, Nt=90). Sweep found latency scales monotonically with core
+    # count; 90 cores (10x9) is the fastest PCC-passing config for both projections
+    # (gate_up 0.38ms vs 0.95ms@12cores; down 0.38ms vs 0.55ms@30cores), PCC ~0.9934.
+    decode_gate_up_cores: tuple[int, int] = (10, 9)
     decode_gate_up_in0_block_w: int = 30
-    decode_down_cores: tuple[int, int] = (5, 6)
+    decode_down_cores: tuple[int, int] = (10, 9)
     decode_down_in0_block_w: int = 12
 
     # Prefill
