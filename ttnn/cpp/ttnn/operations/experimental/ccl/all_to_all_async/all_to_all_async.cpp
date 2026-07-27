@@ -19,6 +19,7 @@ ttnn::Tensor all_to_all_async(
     const int32_t in_dim,
     const int32_t out_dim,
     const GlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
@@ -30,7 +31,15 @@ ttnn::Tensor all_to_all_async(
         // but the composite implementation is unable to reuse it. So overwrite persistent_output_buffer
         // to point to the real output buffer internally created by the composite implementation.
         persistent_output_buffer = composite_common::composite_all_to_all(
-            input_tensor, in_dim, out_dim, num_links, memory_config, subdevice_id);
+            input_tensor,
+            in_dim,
+            out_dim,
+            num_links,
+            memory_config,
+            subdevice_id,
+            /*use_l1_small_for_semaphores*/ false,
+            multi_device_global_semaphore,
+            barrier_semaphore);
         return persistent_output_buffer;
     }
     auto input_shape = input_tensor.logical_shape();

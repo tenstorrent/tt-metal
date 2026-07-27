@@ -75,6 +75,7 @@ void bind_all_to_all_async(nb::module_& mod) {
         nb::arg("in_dim"),
         nb::arg("out_dim"),
         nb::arg("multi_device_global_semaphore"),
+        nb::arg("barrier_semaphore") = nb::none(),
         nb::kw_only(),
         nb::arg("num_links") = 1,
         nb::arg("memory_config") = nb::none(),
