@@ -14,7 +14,7 @@
 #include <cstdint>
 
 #include "chunked_prefill_utils.hpp"    // chunked_kv_global_tile_for_local
-#include "../../ring_id_sequencer.hpp"  // RingIdSequencer
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_id_sequencer.hpp"  // RingIdSequencer
 
 namespace ttnn::operations::transformer::sdpa::ring_joint {
 
