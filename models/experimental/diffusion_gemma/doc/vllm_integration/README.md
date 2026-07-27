@@ -23,6 +23,7 @@ export DG_TRACE_REGION_SIZE=<validated-positive-reservation>                 # r
 export DG_DENOISE_REVEAL_PMAX=<positive-tile-aligned-served-cap>             # optional; derived from --max-model-len
 export DG_VLLM_GUMBEL_MODE=device                                            # default; ~1.48x faster than `host`
 export DG_VLLM_MAX_DENOISE_STEPS=48
+export DG_DENOISE_SLIDING_WINDOW=1                                           # default ON since 2026-07-27; redundant but explicit
 ```
 
 Reveal masking, non-lazy startup capture, and window-1 early halt are intrinsic. Every aligned
@@ -37,6 +38,28 @@ Reserve it with `--additional-config` `tt.trace_region_size` and mirror the same
 `DG_DENOISE_REVEAL_PMAX` is optional: when unset the fixed span is the tile-rounded `--max-model-len`
 and the derived value is logged; an explicit env value still wins, and both paths share the same
 validation (positive, tile-aligned, fits prompt + one canvas, within the allocated KV span).
+
+`DG_DENOISE_SLIDING_WINDOW` defaults to **`1`** since 2026-07-27 (#51080). HF's sliding layers retain
+only the last `sliding_window - 1` = 1023 committed tokens and **25 of DiffusionGemma's 30 layers are
+sliding**, so without the retention mask the denoise path attends keys the reference has evicted, and
+the excess grows with every committed block. Below a 1023-token committed prefix the mask is
+bit-identical, so the change is confined to the regime where TT was wrong.
+
+Its GPQA-Diamond decision-agreement gate: over the 64 questions that collapsed under the previous
+config it repaired **52** and regressed **1** of the 67 already-clean ones, moving TT from **58/131**
+correct to **86/131** against the CUDA reference's 97/131. It is also a throughput fix — a block that
+cannot settle burns all 48 denoise steps and still commits an unsettled canvas — taking blocks that
+halt from **72% to 99%** and per-block latency to **0.652x (~1.53x faster)**. Set `0` for the old
+maskless path. Evidence: `doc/decision_fidelity/device_gumbel_restored.md` sections 10, 17 and 19,
+with the gate scripts under `doc/decision_fidelity/gate/`.
+
+`DG_DENOISE_HIDE_PREFILL_PADS` is **default OFF and not yet shippable**. Prefill right-pads the prompt
+to a tile multiple and writes K/V for the pad tokens while the reveal predicate uses the padded
+length, so the canvas attends up to 31 garbage keys immediately before itself. Hiding them fixed
+**7 of 7** block-0 collapses on device, and injecting the same geometry into the HF reference
+reproduces the failure there (q096 hits the 48-step cap), but its own clean-question regression arm
+(`doc/decision_fidelity/gate/padfix_regression_arm.sh`) has not run. Do not enable it in a serving
+spec until it does.
 
 `DG_VLLM_GUMBEL_MODE` defaults to **`device`**, the on-device permuted-vocab RNG: **~53.6 vs ~36.3
 tokens/block/s** against `host` (~1.48x), since it removes the per-step host RNG and its replicated
