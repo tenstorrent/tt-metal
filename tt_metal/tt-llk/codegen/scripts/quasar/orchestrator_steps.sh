@@ -206,7 +206,7 @@ execute_step_setup_run() {
     local S="$_ORCH_SCRIPTS" wt
     wt="$(_wt)"
 
-    local START_TIME KERNEL_NAME TARGET_ARCH WORKTREE_BRANCH SFPI_MODE LOCK_TESTS HIDE_EXISTING_KERNEL LOG_DIR_BASE
+    local START_TIME KERNEL_NAME TARGET_ARCH WORKTREE_BRANCH SFPI_MODE LOCK_TESTS REMOVE_TESTS HIDE_EXISTING_KERNEL LOG_DIR_BASE
     local RUN_ID LOG_DIR GIT_COMMIT CODEGEN_VERSION PROMPT BATCH_ID MODEL RUN_TYPE
     START_TIME="$(python "$S/state.py" --worktree-dir "$wt" get START_TIME)"; START_TIME="${START_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
     KERNEL_NAME="$(python "$S/state.py" --worktree-dir "$wt" get KERNEL_NAME)"
@@ -214,6 +214,7 @@ execute_step_setup_run() {
     WORKTREE_BRANCH="$(python "$S/state.py" --worktree-dir "$wt" get WORKTREE_BRANCH)"
     SFPI_MODE="$(python "$S/state.py" --worktree-dir "$wt" get SFPI_MODE)"
     LOCK_TESTS="$(python "$S/state.py" --worktree-dir "$wt" get LOCK_TESTS)"; LOCK_TESTS="${LOCK_TESTS:-false}"
+    REMOVE_TESTS="$(python "$S/state.py" --worktree-dir "$wt" get REMOVE_TESTS)"; REMOVE_TESTS="${REMOVE_TESTS:-false}"
     HIDE_EXISTING_KERNEL="$(python "$S/state.py" --worktree-dir "$wt" get HIDE_EXISTING_KERNEL)"; HIDE_EXISTING_KERNEL="${HIDE_EXISTING_KERNEL:-false}"
     LOG_DIR_BASE="$(python "$S/state.py" --worktree-dir "$wt" get LOG_DIR_BASE)"
     # Reuse begin_setup's identity if the router threaded it into worktree state;
@@ -245,6 +246,7 @@ execute_step_setup_run() {
     ss WORKTREE_BRANCH "$WORKTREE_BRANCH"
     ss SFPI_MODE       "$SFPI_MODE" --json
     ss LOCK_TESTS     "$LOCK_TESTS" --json
+    ss REMOVE_TESTS   "$REMOVE_TESTS" --json
     ss HIDE_EXISTING_KERNEL "$HIDE_EXISTING_KERNEL" --json
     ss RUN_ID          "$RUN_ID"
     ss START_TIME      "$START_TIME"
@@ -342,6 +344,47 @@ execute_step_hide_existing_kernel() {
         echo "hide_existing_kernel: removed ${removed} file(s), committed on worktree branch"
     else
         echo "hide_existing_kernel: no tracked ${kn} files to hide"
+    fi
+}
+
+# ===========================================================================
+# Step 1c — remove the op's existing dedicated tests so the tester authors them
+# fresh. When REMOVE_TESTS=true, git-remove AND commit the op's arch-specific
+# dedicated test files (Python test + C++ source) on the worktree branch. Only
+# whole dedicated files are removed; ops that register into a shared unified
+# SFPU test have no dedicated file, so none is removed and the tester replaces
+# the op's registrations in author-fresh mode. No-op unless the flag is set.
+# base_commit (GIT_COMMIT, captured at setup BEFORE this) is unchanged, so the
+# final generated.patch still diffs against origin/main.
+# Run AFTER execute_step_set_kernel_identity and BEFORE the analyzer.
+# ===========================================================================
+execute_step_remove_existing_tests() {
+    local _L; _L="$(_LOG)"
+    local remove; remove="$(sg REMOVE_TESTS 2>/dev/null || echo false)"
+    if [ "$remove" != "true" ]; then echo "remove_existing_tests: not requested — skipping"; return 0; fi
+    local wt kn arch; wt="$(_wt)"; kn="$(sg KERNEL_NAME)"; arch="$(sg TARGET_ARCH)"
+    # Dedicated files are arch-specific and op-anchored; patterns tolerate a prefix
+    # (e.g. test_sfpu_where_quasar.py) but never match a shared unified test. Keep the
+    # wildcards quoted so git expands them as repo-root-relative pathspecs — the shell's
+    # cwd is already inside tt_metal/tt-llk, so shell globbing would double the prefix
+    # and match nothing. git ls-files returns only tracked matches.
+    local -a patterns=(
+        "tt_metal/tt-llk/tests/python_tests/${arch}/test_*${kn}*_${arch}.py"
+        "tt_metal/tt-llk/tests/sources/${arch}/*${kn}*_test.cpp"
+    )
+    local removed=0 pat f
+    for pat in "${patterns[@]}"; do
+        while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            git -C "$wt" rm -q -f -- "$f" && { removed=$((removed + 1)); echo "  removed: $f"; }
+        done < <(git -C "$wt" ls-files -- "$pat")
+    done
+    if [ "$removed" -gt 0 ]; then
+        git -C "$wt" -c user.name=llk_code_gen -c user.email=llk_code_gen@tenstorrent.com \
+            commit -q -m "codegen: remove existing ${kn} tests for regeneration" || true
+        echo "remove_existing_tests: removed ${removed} file(s), committed on worktree branch"
+    else
+        echo "remove_existing_tests: no dedicated ${kn} test files — tester re-authors shared registrations"
     fi
 }
 

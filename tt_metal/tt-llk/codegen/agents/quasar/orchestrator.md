@@ -185,6 +185,14 @@ EXECUTE the following. When `HIDE_EXISTING_KERNEL=true` it git-removes and commi
 execute_step_hide_existing_kernel
 ```
 
+## Step 2c: Remove Existing Tests (test regeneration)
+
+EXECUTE the following. When `REMOVE_TESTS=true` it git-removes and commits the op's dedicated arch-specific test files (Python test + C++ source) on the worktree branch, so the tester authors them fresh; ops that register into a shared unified SFPU test have no dedicated file to remove and are re-authored in place. No-op when the flag is unset:
+
+```bash
+execute_step_remove_existing_tests
+```
+
 ---
 
 ## Step 3: Failure Tracking
@@ -375,6 +383,11 @@ Agent tool:
     playbook: treat the existing test as the immutable source of truth — never
     author, extend, register, or modify any test, golden, or input-prep; only run
     the existing test and debug the kernel.
+
+    If REMOVE_TESTS=true (read it from state), author the op's test fresh from the
+    analysis spec then run and debug — this overrides LOCK_TESTS. Step 2c already
+    removed the op's dedicated test files; replace any registrations left in a
+    shared unified SFPU test.
 ```
 
 - WAIT for the Tester finish and return `PASS`, `STUCK`, or `ENV_ERROR`.

@@ -7,10 +7,11 @@ tools: Read, Write, Edit, Bash, Glob, Grep, mcp__atlassian__getConfluencePage
 
 # LLK Tester Agent
 
-You run after the kernel exists (freshly written, or copied verbatim by the analyzer). It already compiles. Your mission is to prove it is **functionally correct**, and to fix the **kernel** when it is not. Take one of two paths by `LOCK_TESTS` (from Inputs):
+You run after the kernel exists (freshly written, or copied verbatim by the analyzer). It already compiles. Your mission is to prove it is **functionally correct**, and to fix the **kernel** when it is not. Take one of these paths by `REMOVE_TESTS` and `LOCK_TESTS` (from Inputs):
 
-- **`LOCK_TESTS=true`** — the test already exists in the repo. Run it as-is; when it fails, debug the kernel and **never change the test** (see § Test-Locked Mode).
-- **`LOCK_TESTS=false`** — no test exists yet. Author/extend the target test from the analysis spec (Step 1), then run it and fix the kernel until it passes.
+- **`REMOVE_TESTS=true`** — author the target test fresh from the analysis spec (Step 1), then run it and fix the kernel until it passes. This overrides `LOCK_TESTS`; the orchestrator already removed the op's dedicated test files, so replace any registrations left in a shared unified SFPU test.
+- **`LOCK_TESTS=true`** (and `REMOVE_TESTS` unset) — the test already exists in the repo. Run it as-is; when it fails, debug the kernel and **never change the test** (see § Test-Locked Mode).
+- **both unset** — Author/extend the target test from the analysis spec (Step 1), then run it and fix the kernel until it passes.
 
 You own the whole test-and-fix loop.
 
@@ -33,8 +34,9 @@ GENERATED_KERNEL="$($ST --log-dir "$LOG_DIR" get GENERATED_KERNEL)"
 CYCLE="$($ST            --log-dir "$LOG_DIR" get CYCLE)"
 SKIP_WRITER="$($ST      --log-dir "$LOG_DIR" get SKIP_WRITER)"
 LOCK_TESTS="$($ST      --log-dir "$LOG_DIR" get LOCK_TESTS)"
+REMOVE_TESTS="$($ST    --log-dir "$LOG_DIR" get REMOVE_TESTS)"
 
-for v in LOG_DIR KERNEL_NAME KERNEL_TYPE TARGET_ARCH GENERATED_KERNEL CYCLE LOCK_TESTS; do
+for v in LOG_DIR KERNEL_NAME KERNEL_TYPE TARGET_ARCH GENERATED_KERNEL CYCLE LOCK_TESTS REMOVE_TESTS; do
     echo "$v=${!v:-<empty>}"
 done
 ```
@@ -47,7 +49,7 @@ done
 
 ## Test-Locked Mode (`LOCK_TESTS=true`)
 
-When `LOCK_TESTS` is `true` (from Inputs), the existing test is the immutable source of truth. Skip all test authoring: do **not** run Step 1 §1A.2–§1A.4 or §1B, and do **not** author, extend, register, or modify any test, golden, `SfpuType`/`BinaryOp`/`MathOperation` enum, dispatcher branch, or input-prep. Replace Step 1 with: locate the existing test (SFPU → the unified category test per §1A.1; math/pack/unpack → the per-op file `test_{op}_{arch}.py`), then run the §1D collection smoke to confirm it selects the op's variants. If the test is absent, the `count` is `0`, or the op is unregistered, report `STUCK` (category `TEST_MISSING`) with that as the signature — do not create it. Steps 2–5 are unchanged: run the existing test, diagnose, and fix the **kernel** only. Treat a `HARNESS_INCOMPATIBILITY` as a terminal `STUCK` — do not author a native test source.
+This mode applies only when `REMOVE_TESTS` is unset; when `REMOVE_TESTS=true`, ignore this section and author the test fresh (Step 1). When `LOCK_TESTS` is `true` (from Inputs), the existing test is the immutable source of truth. Skip all test authoring: do **not** run Step 1 §1A.2–§1A.4 or §1B, and do **not** author, extend, register, or modify any test, golden, `SfpuType`/`BinaryOp`/`MathOperation` enum, dispatcher branch, or input-prep. Replace Step 1 with: locate the existing test (SFPU → the unified category test per §1A.1; math/pack/unpack → the per-op file `test_{op}_{arch}.py`), then run the §1D collection smoke to confirm it selects the op's variants. If the test is absent, the `count` is `0`, or the op is unregistered, report `STUCK` (category `TEST_MISSING`) with that as the signature — do not create it. Steps 2–5 are unchanged: run the existing test, diagnose, and fix the **kernel** only. Treat a `HARNESS_INCOMPATIBILITY` as a terminal `STUCK` — do not author a native test source.
 
 ---
 
