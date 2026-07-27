@@ -99,12 +99,9 @@ def _make_tp_mapper(shard_type):
 def _orient_kv(k: np.ndarray, v: np.ndarray, kv_out: int, hidden: int):
     """Orient K/V to ``[kv_out, hidden]`` (rows = output features).
 
-    HF stores ``k_proj``/``v_proj`` as ``[kv_out, hidden]``; the transpose branch
-    only fires for a genuinely ``[hidden, kv_out]`` layout. The first branch must
-    POSITIVELY match the already-correct shape (``k.shape[0] == kv_out``): for a
-    multi-head (non-GQA) checkpoint ``kv_out == hidden``, so K is square and a
-    ``!=``-based test would wrongly fall through to the transpose branch and
-    silently corrupt K/V. Raises on any other shape rather than mis-orienting.
+    HF stores ``k_proj``/``v_proj`` as ``[kv_out, hidden]``. If we detect a transpose
+    weight shaped ``[hidden, kv_out]``, we un-transpose it. Raises on any other shape
+    rather than mis-orienting.
 
     Returns ``(k, v)`` oriented as ``[kv_out, hidden]``.
     """

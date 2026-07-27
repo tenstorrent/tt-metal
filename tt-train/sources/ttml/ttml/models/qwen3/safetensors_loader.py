@@ -95,7 +95,7 @@ def _repermute_norm_weights(w: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-def _pad_to_tile(arr: np.ndarray, tgt_rows: int, tgt_cols: int) -> np.ndarray:
+def _pad_to_target(arr: np.ndarray, tgt_rows: int, tgt_cols: int) -> np.ndarray:
     src_rows, src_cols = arr.shape
     if src_rows == tgt_rows and src_cols == tgt_cols:
         return arr
@@ -126,7 +126,7 @@ def _assign(param, arr_4d: np.ndarray) -> None:
     param.assign(ttml.autograd.Tensor.from_numpy(arr_4d, layout=ttnn.Layout.TILE))
 
 
-def _fit_to_param(arr: np.ndarray, param, hf_name: str) -> np.ndarray:
+def _fit_to_param_shape(arr: np.ndarray, param, hf_name: str) -> np.ndarray:
     """Transpose/pad/crop ``arr`` to the destination parameter's (tile-padded) shape.
 
     Mirrors the inline shape handling in :func:`load_from_safetensors` so the
@@ -145,7 +145,7 @@ def _fit_to_param(arr: np.ndarray, param, hf_name: str) -> np.ndarray:
                 f"  Warning: cropping {hf_name} from ({r}x{c}) to fit ttml ({tgt_rows}x{tgt_cols}); "
                 f"check that Qwen3Config matches the HF checkpoint."
             )
-        return _pad_to_tile(arr, tgt_rows, tgt_cols)
+        return _pad_to_target(arr, tgt_rows, tgt_cols)
     if arr.ndim == 1:
         tgt_dim = shape[-1]
         src_dim = arr.shape[0]
@@ -405,7 +405,7 @@ def load_from_safetensors(model, safetensors_path, config) -> None:
             arr = _unpermute_norm_weights(arr)
 
         param = parameters[ttml_name]
-        arr = _fit_to_param(arr, param, hf_name)
+        arr = _fit_to_param_shape(arr, param, hf_name)
         _assign(param, _to_bf16_4d(arr))
         loaded.add(ttml_name)
 
@@ -427,7 +427,7 @@ def load_from_safetensors(model, safetensors_path, config) -> None:
             continue
         fused = _fuse_kv(kv["k"], kv["v"], config.num_key_value_heads)
         param = parameters[ttml_name]
-        fused = _fit_to_param(fused, param, f"model.layers.{layer_idx}.self_attn.kv_proj.{kind}")
+        fused = _fit_to_param_shape(fused, param, f"model.layers.{layer_idx}.self_attn.kv_proj.{kind}")
         _assign(param, _to_bf16_4d(fused))
         loaded.add(ttml_name)
 

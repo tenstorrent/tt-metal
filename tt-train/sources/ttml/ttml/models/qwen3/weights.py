@@ -256,7 +256,7 @@ def load_weights_from_hf(
     mapping, transforms = build_weight_mapping_single(config, root_prefix, tie_word_embeddings)
 
     # For a materialized FSDP-sharded parameter, ``.shape()`` returns the LOCAL
-    # per-device shape, not the global tensor shape. ``_prepare`` pads each HF
+    # per-device shape, not the global tensor shape. ``_prepare_hf_weights`` pads each HF
     # weight to ``ttml_shapes[name]`` and (in the sharded path) hands the result
     # to ``Tensor.from_numpy(full_np, ..., mapper)``, where the mapper expects
     # the GLOBAL tensor and slices the per-device shards itself. So in the
@@ -282,7 +282,7 @@ def load_weights_from_hf(
                 # The param is genuinely sharded on some mesh axis. Scale the
                 # local per-device shape back up to the global shape on each
                 # sharded dim using the live distribution shape, writing it back
-                # into ``ttml_shapes`` so ``_prepare`` pads to the global shape
+                # into ``ttml_shapes`` so ``_prepare_hf_weights`` pads to the global shape
                 # (the mapper re-slices the per-device shards). Then reuse the
                 # mapper Sharding built from that same topology.
                 for axis_idx, placement in enumerate(sharding.placements):
@@ -294,7 +294,7 @@ def load_weights_from_hf(
                 # single-device: global == local shape, fan the full host copy out.
                 sharded_mappers[name] = replicate_mapper
 
-    def _prepare(hf_name, ttml_name):
+    def _prepare_hf_weights(hf_name, ttml_name):
         # CPU-only prep (float cast, permutation, padding). The device transfer
         # (torch_to_ttml) is done serially in the main loop below for BOTH
         # paths: running those device ops concurrently across worker threads
@@ -353,7 +353,9 @@ def load_weights_from_hf(
     skipped: List[str] = []
 
     with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = [(hf_name, ttml_name, pool.submit(_prepare, hf_name, ttml_name)) for hf_name, ttml_name in items]
+        futures = [
+            (hf_name, ttml_name, pool.submit(_prepare_hf_weights, hf_name, ttml_name)) for hf_name, ttml_name in items
+        ]
         for hf_name, ttml_name, future in futures:
             prepared = future.result()
             if prepared is None:
@@ -363,7 +365,7 @@ def load_weights_from_hf(
                 continue
             # ``prepared`` is a padded host torch weight from the worker thread;
             # the device transfer below runs serially in the main thread (TTNN
-            # device ops are not thread-safe -- see the note in ``_prepare``).
+            # device ops are not thread-safe -- see the note in ``_prepare_hf_weights``).
             param = ttml_params[ttml_name]
             if sharded:
                 # ``prepared`` is the padded GLOBAL-shape host weight (see above).

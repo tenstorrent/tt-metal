@@ -483,7 +483,7 @@ def load_weights_from_hf_distributed(
     tp_size = get_tp_size(shard_dim)
     ttml_shapes = {name: list(ttml_params[name].shape()) for name in ttml_params}
 
-    def _prepare(hf_name, ttml_name):
+    def _prepare_hf_weights(hf_name, ttml_name):
         """CPU-only prep: returns (weight_np, shard_type) ready for transfer.
 
         Device ops (from_numpy -> tilize / shard onto the mesh) are NOT
@@ -579,7 +579,9 @@ def load_weights_from_hf_distributed(
     # commit and trips the "Expected Program Binaries to be committed to DRAM"
     # assert).
     with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = [(hf_name, ttml_name, pool.submit(_prepare, hf_name, ttml_name)) for hf_name, ttml_name in items]
+        futures = [
+            (hf_name, ttml_name, pool.submit(_prepare_hf_weights, hf_name, ttml_name)) for hf_name, ttml_name in items
+        ]
 
         for hf_name, ttml_name, future in tqdm(
             futures,
