@@ -3531,14 +3531,33 @@ void pump_device() {
     // parked in HostWait (set by run_mesh_dispatch). The host advanced a socket credit word by a raw
     // L1 store, so pump() blanket-re-polls the parked fibers to re-check predicates. When every fiber
     // reaches Done the pump returns Completed — run the mesh cleanup run_mesh_dispatch deferred.
+    //
+    // Serialize: a host program drives H2D and D2H on separate threads, so both credit-wait loops can
+    // call pump_device() concurrently; the single resumable run + g_emule_host_wait are not reentrant.
+    static std::mutex pump_mu;
+    std::lock_guard<std::mutex> pump_lk(pump_mu);
     if (!g_emule_host_wait) {
         return;
     }
-    auto oc = tt::tt_metal::emule_fiber::FiberScheduler::instance().pump();
-    if (oc == tt::tt_metal::emule_fiber::RunOutcome::Completed) {
+#if defined(__x86_64__) && defined(__linux__)
+    // pump() re-enters kernel bodies; run_mesh_dispatch's guard was destroyed at its HostWait return,
+    // so reinstall the SIGFPE->RISC-V divide/overflow handler for the resumed execution.
+    EmuleSigfpeGuard sigfpe_guard;
+#endif
+    try {
+        auto oc = tt::tt_metal::emule_fiber::FiberScheduler::instance().pump();
+        if (oc == tt::tt_metal::emule_fiber::RunOutcome::Completed) {
+            g_emule_host_wait = false;
+            g_emule_mesh_defer = false;
+            g_mesh_dfb_keep.clear();
+        }
+    } catch (...) {
+        // pump() threw (kernel exception / host-wait stall deadlock) — the scheduler registry is torn
+        // down; drop the mesh keepalives + host-wait/defer flags so a later dispatch starts clean.
         g_emule_host_wait = false;
         g_emule_mesh_defer = false;
         g_mesh_dfb_keep.clear();
+        throw;
     }
 }
 

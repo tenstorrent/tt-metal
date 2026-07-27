@@ -497,7 +497,7 @@ std::string FiberSchedulerImpl::dump_parked() {
             if (ctx && ctx->cbs) {
                 auto base = reinterpret_cast<uintptr_t>(ctx->cbs);
                 auto k = reinterpret_cast<uintptr_t>(key);
-                if (k >= base && k < base + sizeof(tt_emule::CBSyncState) * 32) {
+                if (k >= base && k < base + sizeof(tt_emule::CBSyncState) * __EMULE_CTX_MAX_CBS) {
                     // Print the CB's live counters: distinguishes "producer never pushed"
                     // (occupied==0, producer==null) from "pushed but this waiter not woken"
                     // (occupied>=waited) — the rigorous discriminator for a CB lost-wakeup.
@@ -642,6 +642,9 @@ void FiberScheduler::launch_and_wait(bool initial) {
             if (p_->active_ == 0) {
                 return;   // nothing to run; the pool stays parked
             }
+            // Clear the captured kernel exception only on a fresh run; a HostWait return bypasses
+            // teardown_and_throw (its sole consumer), so it must survive across pump quanta.
+            p_->first_eptr_ = nullptr;
         }
         p_->idle_ = 0;
         p_->running_ = 0;
@@ -649,7 +652,6 @@ void FiberScheduler::launch_and_wait(bool initial) {
         p_->deadlock_ = false;
         p_->abort_flag_ = false;
         p_->host_wait_ = false;
-        p_->first_eptr_ = nullptr;
         // Per-run recovery watermarks — reset alongside progress_/resumptions_ (below).
         // A stale last_deadlock_repoll_progress_ from a prior run can collide with this
         // run's quiescence progress and skip the recovery re-poll → spurious deadlock.
