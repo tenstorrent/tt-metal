@@ -324,10 +324,19 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     std::vector<bool> router_injection_flags;
     router_injection_flags.reserve(total_router_channels);
 
+    // Express routing derives each producer's effect from the protected-ring facts. The cardinal
+    // axis-turn heuristic cannot express it: at an express node the same Z output is transit when fed
+    // by the ring and an acquisition when fed by a leaf attachment, and both share one axis pair.
+    // Non-express meshes keep the heuristic untouched.
+    const bool express_injection = control_plane.express_routing_enabled(local_node.mesh_id);
+
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
         uint32_t num_channels_in_vc = channel_mapping.get_num_sender_channels_for_vc(vc);
         auto vc_injection_flags =
-            compute_sender_channel_injection_flags_for_vc(topology, eth_direction, vc, num_channels_in_vc);
+            express_injection ? compute_sender_channel_injection_flags_for_express(
+                                    control_plane, local_node, eth_direction, vc, num_channels_in_vc, edge_capability)
+                              : compute_sender_channel_injection_flags_for_vc(
+                                    topology, eth_direction, vc, num_channels_in_vc);
 
         // Flatten into router-level vector
         for (uint32_t ch_idx = 0; ch_idx < num_channels_in_vc; ++ch_idx) {
@@ -532,6 +541,57 @@ size_t ComputeMeshRouterBuilder::get_noc_y() const { return erisc_builder_->get_
 
 size_t ComputeMeshRouterBuilder::get_configured_risc_count() const {
     return erisc_builder_->get_configured_risc_count();
+}
+
+std::vector<bool> ComputeMeshRouterBuilder::compute_sender_channel_injection_flags_for_express(
+    const ControlPlane& control_plane,
+    const FabricNodeId& local_node,
+    eth_chan_directions direction,
+    uint32_t vc,
+    uint32_t num_channels,
+    EdgeCapability egress_capability) {
+    std::vector<bool> injection_flags(num_channels, false);
+
+    // This router transmits over its own link, so its direction is the egress. Each sender channel is
+    // fed by one upstream producer, and the channel index identifies which ingress that is.
+    const auto egress = control_plane.eth_direction_to_routing_direction(direction);
+    const auto queries = make_protected_ring_queries(control_plane, local_node);
+
+    // Only VC0 carries a local worker; VC1 producers are all forwarding paths.
+    if (vc == 0) {
+        injection_flags.at(get_worker_connected_sender_channel()) =
+            is_injection_effect(classify_worker_effect(queries, egress));
+    }
+
+    const uint32_t first_forwarding_channel = (vc == 0) ? 1 : 0;
+    for (uint32_t ch_idx = first_forwarding_channel; ch_idx < num_channels; ++ch_idx) {
+        // VC1 has no worker channel, so its producer slots are shifted down by one relative to the
+        // direction table, which is indexed from VC0's layout.
+        const uint32_t direction_slot = (vc == 0) ? ch_idx : ch_idx + 1;
+        if (direction_slot >= static_cast<uint32_t>(eth_chan_directions::COUNT)) {
+            continue;  // beyond the four possible non-self producers
+        }
+
+        const auto ingress_eth = builder::get_sender_channel_direction(direction, direction_slot);
+        if (ingress_eth == eth_chan_directions::COUNT) {
+            continue;  // this slot has no producer direction
+        }
+        const auto ingress = control_plane.eth_direction_to_routing_direction(ingress_eth);
+
+        const auto ingress_capability = capability_in_direction(control_plane, local_node, ingress);
+        if (!ingress_capability.has_value()) {
+            continue;  // no neighbour that way, so nothing is wired into this slot
+        }
+
+        const auto effect =
+            classify_producer_effect(queries, ingress, *ingress_capability, egress, egress_capability);
+        injection_flags.at(ch_idx) = is_injection_effect(effect);
+    }
+
+    // Each sender channel is fed by exactly one producer direction, so an ENTER/REMAIN alias on one
+    // concrete sender cannot arise here by construction. It would only become possible if several
+    // producers were ever mapped onto one channel.
+    return injection_flags;
 }
 
 std::vector<bool> ComputeMeshRouterBuilder::compute_sender_channel_injection_flags_for_vc(

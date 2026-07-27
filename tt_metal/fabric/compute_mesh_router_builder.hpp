@@ -17,6 +17,7 @@ namespace tt::tt_fabric {
 
 // Forward declarations
 class FabricDatamoverBuilderBase;
+class ControlPlane;
 
 /**
  * ComputeMeshRouterBuilder
@@ -146,6 +147,30 @@ private:
      */
     static std::vector<bool> compute_sender_channel_injection_flags_for_vc(
         Topology topology, eth_chan_directions direction, uint32_t vc, uint32_t num_channels);
+
+    /**
+     * Injection flags for an express-routing mesh, derived from protected-ring facts.
+     *
+     * Replaces the cardinal axis-turn heuristic above, which cannot represent express routing: at an
+     * express node the same Z output is same-ring transit when fed by the ring and a ring acquisition
+     * when fed by a leaf attachment, and both producers share one axis pair. Each producer's total
+     * effect is derived instead, and only an acquisition becomes an injection channel.
+     *
+     * @param control_plane Source of the protected-ring predicates
+     * @param local_node The chip this router belongs to
+     * @param direction The router's own direction, which is its egress edge
+     * @param vc The virtual channel to compute flags for
+     * @param num_channels Number of channels in this VC
+     * @param egress_capability Capability of this router's own edge
+     * @return Array indicating which sender channels are injection channels for this VC
+     */
+    static std::vector<bool> compute_sender_channel_injection_flags_for_express(
+        const ControlPlane& control_plane,
+        const FabricNodeId& local_node,
+        eth_chan_directions direction,
+        uint32_t vc,
+        uint32_t num_channels,
+        EdgeCapability egress_capability);
 
     /**
      * Map router-level injection flags to a child builder variant's channel space.

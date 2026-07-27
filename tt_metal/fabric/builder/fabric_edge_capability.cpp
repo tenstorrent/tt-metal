@@ -87,6 +87,90 @@ bool is_x_axis_direction(RoutingDirection direction) {
     return direction == RoutingDirection::E || direction == RoutingDirection::W;
 }
 
+std::optional<EdgeCapability> capability_in_direction(
+    const ControlPlane& control_plane, FabricNodeId local, RoutingDirection direction) {
+    const auto neighbors = control_plane.get_chip_neighbors(local, direction);
+    for (const auto& [neighbor_mesh, chips] : neighbors) {
+        if (chips.empty()) {
+            continue;
+        }
+        // discover_channels() rejects more than one neighbor mesh per direction, so the first entry is
+        // the only one.
+        return classify_fabric_edge(control_plane, local, FabricNodeId(neighbor_mesh, chips.front()), direction);
+    }
+    return std::nullopt;
+}
+
+const char* to_string(ProtectedDomainEffect effect) {
+    switch (effect) {
+        case ProtectedDomainEffect::NON_RING: return "NON_RING";
+        case ProtectedDomainEffect::REMAIN: return "REMAIN";
+        case ProtectedDomainEffect::ENTER: return "ENTER";
+        case ProtectedDomainEffect::NON_CANONICAL: return "NON_CANONICAL";
+    }
+    return "UNKNOWN";
+}
+
+bool is_injection_effect(ProtectedDomainEffect effect) { return effect == ProtectedDomainEffect::ENTER; }
+
+ProtectedRingQueries make_protected_ring_queries(const ControlPlane& control_plane, FabricNodeId local) {
+    ProtectedRingQueries queries;
+    queries.is_protected_ring_edge = [&control_plane, local](RoutingDirection egress) {
+        return control_plane.is_protected_ring_edge(local, egress);
+    };
+    queries.are_same_directed_ring_edges = [&control_plane, local](RoutingDirection ingress, RoutingDirection egress) {
+        return control_plane.are_same_directed_ring_edges(local, ingress, egress);
+    };
+    queries.continuation_allowed = [&control_plane, local](RoutingDirection ingress, RoutingDirection egress) {
+        return control_plane.continuation_allowed(local, ingress, egress);
+    };
+    return queries;
+}
+
+ProtectedDomainEffect classify_worker_effect(const ProtectedRingQueries& queries, RoutingDirection egress) {
+    return queries.is_protected_ring_edge(egress) ? ProtectedDomainEffect::ENTER : ProtectedDomainEffect::NON_RING;
+}
+
+ProtectedDomainEffect classify_producer_effect(
+    const ProtectedRingQueries& queries,
+    RoutingDirection ingress,
+    EdgeCapability ingress_capability,
+    RoutingDirection egress,
+    EdgeCapability egress_capability) {
+    TT_FATAL(
+        !is_static_dor_forbidden(ingress, ingress_capability, egress, egress_capability),
+        "Producer {} -> {} violates dimension order but is still wired. Connection mapping should have unwired it, so "
+        "the maps and this derivation disagree.",
+        static_cast<int>(ingress),
+        static_cast<int>(egress));
+
+    if (!queries.is_protected_ring_edge(egress)) {
+        return ProtectedDomainEffect::NON_RING;
+    }
+
+    if (ingress_capability == EdgeCapability::INTERMESH) {
+        // A landed carrier holds no position on this mesh's rings, so its first protected egress is an
+        // acquisition. The landing map rebuild itself does not acquire anything.
+        return ProtectedDomainEffect::ENTER;
+    }
+
+    if (queries.are_same_directed_ring_edges(ingress, egress)) {
+        return ProtectedDomainEffect::REMAIN;
+    }
+
+    if (is_y_axis_direction(ingress) != is_y_axis_direction(egress)) {
+        // A dimension change. Dimension order leaves Y->X as the only legal case here, and the first
+        // X hop acquires the X ring.
+        return ProtectedDomainEffect::ENTER;
+    }
+
+    if (queries.continuation_allowed(ingress, egress)) {
+        return ProtectedDomainEffect::ENTER;
+    }
+
+    return ProtectedDomainEffect::NON_CANONICAL;
+}
+
 bool is_static_dor_forbidden(
     RoutingDirection ingress,
     EdgeCapability ingress_capability,
