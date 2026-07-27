@@ -2317,10 +2317,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Common arg 3: kv_actual_isl DRAM address (reader reads kv_actual_isl = kv_actual_isl_tensor[0]
         // when kv_pad_from_metadata). Both 1-element tensors share one accessor (meta_args).
         reader_kernel.emplace_common_runtime_args(
-            {tensor_args.slot_id->buffer()->address(),
+            {tensor_args.slot_id->buffer()->address(),  // smuggled-rta-ok: metadata tensor addr (on-device)
              args.kv_cache_num_layers,
              args.kv_cache_layer_idx,
-             tensor_args.kv_actual_isl->buffer()->address()});
+             tensor_args.kv_actual_isl->buffer()->address()});  // smuggled-rta-ok: metadata tensor addr (on-device)
     }
 
     KernelDescriptor writer_kernel{};
@@ -2334,7 +2334,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Trace-safe KV-pad derivation: the kv_actual_isl tensor's raw DRAM address is common runtime arg 0;
     // the writer reads kv_actual_isl = kv_actual_isl_tensor[0] from it on-device (mirrors the reader).
     if (kv_pad_from_metadata) {
-        writer_kernel.emplace_common_runtime_args({tensor_args.kv_actual_isl->buffer()->address()});
+        writer_kernel.emplace_common_runtime_args(
+            {tensor_args.kv_actual_isl->buffer()->address()});  // smuggled-rta-ok: metadata tensor addr (on-device)
     }
 
     KernelDescriptor compute_kernel{};
