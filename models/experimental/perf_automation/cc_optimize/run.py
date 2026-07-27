@@ -1984,6 +1984,28 @@ def _last_committed_ms(kernel_log_path) -> float | None:
     return ms
 
 
+def _comparable(value, stored_depth: str, want_depth: str):
+    """Verdict on whether a stored ms value may anchor a comparison at `want_depth`.
+
+    Delegates to integrity.Reading so DEPTH means the same thing here as in the report renderer. An
+    UNSTAMPED value is UNKNOWN, never assumed to match: the file predates the stamp, so it could be
+    from any window -- that is how a 2-layer number anchored a 16-layer run.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from agent.integrity import Reading, Verdict
+    except Exception:  # noqa: BLE001
+
+        class _V:  # minimal stand-in so a missing import never silently accepts
+            is_pass = False
+            reason = "integrity unavailable"
+
+        return _V()
+    if not stored_depth:
+        return Verdict.unknown("no depth stamp, so the window it was profiled at is unknown")
+    return Reading(value, depth=stored_depth).comparable_to(Reading(value, depth=want_depth))
+
+
 def _original_baseline_ms(model_name: str, task: str, perf_layers: str = "") -> float | None:
     """The FIRST baseline recorded for this (model, task), or None when it is not comparable.
 
@@ -2007,16 +2029,14 @@ def _original_baseline_ms(model_name: str, task: str, perf_layers: str = "") -> 
             return None
         want = (perf_layers or os.environ.get("TT_PERF_LAYERS") or "").strip() or "all"
         got = str(d.get("perf_layers", "")).strip()
-        if not got:
+        # ONE definition of "may these be compared" -- integrity.Reading, shared with the report
+        # renderer. Hand-rolling the axis comparison here is what let each site drift: four separate
+        # bespoke checks, each fixed after it had already published a wrong number.
+        verdict = _comparable(d["device_ms"], got, want)
+        if not verdict.is_pass:
             print(
-                "  [optimize/cc] original baseline carries no depth stamp; using THIS run's baseline "
-                "for the headline (a cross-depth comparison is not a speedup)"
-            )
-            return None
-        if got != want:
-            print(
-                "  [optimize/cc] original baseline was profiled at TT_PERF_LAYERS=%s but this run uses "
-                "%s; using THIS run's baseline for the headline" % (got, want)
+                "  [optimize/cc] original baseline not usable as the headline anchor: %s; using "
+                "THIS run's baseline instead" % verdict.reason
             )
             return None
         return float(d["device_ms"])
@@ -2117,7 +2137,7 @@ def _emit_summary(
             # runs; drop it when the window moved rather than render a floor from a different scope.
             _wl = (os.environ.get("TT_PERF_LAYERS") or "").strip() or "all"
             _sl = str((_throughput or {}).get("perf_layers", "")).strip()
-            if _sl and _sl != _wl:
+            if _sl and not _comparable(1.0, _sl, _wl).is_pass:
                 print(
                     "  [optimize/cc] roofline snapshot was computed at TT_PERF_LAYERS=%s but this run "
                     "uses %s; omitting the floor rather than comparing across depths" % (_sl, _wl)
