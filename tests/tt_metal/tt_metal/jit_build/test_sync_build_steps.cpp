@@ -58,7 +58,7 @@ void via_std_async(std::function<void()> fn, std::vector<std::shared_future<void
     events.emplace_back(std::async(std::launch::async, std::move(fn)).share());
 }
 
-void via_launch_build_step(std::function<void()> fn, std::vector<std::shared_future<void>>& events) {
+void via_launch_build_step(const std::function<void()>& fn, std::vector<std::shared_future<void>>& events) {
     launch_build_step(fn, events);
 }
 
@@ -70,7 +70,7 @@ void via_launch_build_step(std::function<void()> fn, std::vector<std::shared_fut
 void expect_drains_all_in_flight_steps(const Launcher& launch, bool uses_executor) {
     constexpr int kSiblings = 3;  // in-flight steps that must not be abandoned
 
-    if (uses_executor && detail::GetExecutor().num_workers() < static_cast<size_t>(kSiblings + 2)) {
+    if (uses_executor && detail::GetExecutor().num_workers() < static_cast<size_t>(kSiblings) + 2) {
         GTEST_SKIP() << "executor has too few workers to keep sibling build steps concurrently in flight";
     }
 
@@ -153,14 +153,10 @@ void expect_drains_all_in_flight_steps(const Launcher& launch, bool uses_executo
     sync_thread.join();
 
     // A naive early return would not have waited for the siblings; make sure every step
-    // has actually finished before asserting on `completed` (shared_future::get() may
-    // be called again and simply returns once ready).
+    // has actually finished before asserting on `completed`. wait() (unlike get()) does
+    // not rethrow events[0]'s stored build failure -- already accounted for below.
     for (auto& event : events) {
-        try {
-            event.get();
-        } catch (...) {
-            // events[0] rethrows its build failure here; ignore -- already accounted for.
-        }
+        event.wait();
     }
 
     EXPECT_TRUE(static_cast<bool>(sync_exc)) << "sync_build_steps must rethrow the build failure";
@@ -195,6 +191,7 @@ TEST(SyncBuildStepsTest, NoThrowWhenAllStepsSucceed) {
     constexpr int kSteps = 4;
     std::atomic<int> counter{0};
     std::vector<std::shared_future<void>> events;
+    events.reserve(kSteps);
     for (int i = 0; i < kSteps; ++i) {
         events.emplace_back(std::async(std::launch::async, [&counter] { counter.fetch_add(1); }).share());
     }
