@@ -1,5 +1,8 @@
-# syntax=mirror.gcr.io/docker/dockerfile@sha256:0adf442eae370b6087e08edc7c50b552d80ddf261576f4ebd6421006b2461f12
-# (docker/dockerfile:1.25, the latest release - pinned by digest - see dockerfile/Dockerfile.tools' syft-scanner target for why, and manual-docker-bake.sh)
+# syntax=mirror.gcr.io/docker/dockerfile@sha256:9ba7531bd80fb0a858632727cf7a112fbfd19b17e94c4e84ced81e24ef1a0dbc
+# (docker/dockerfile:1.4.3 - the minimum version (plus its latest patch) covering every syntax
+# feature used across dockerfile/*: COPY/ADD --link needs >=1.4, everything else (RUN --mount
+# type=cache/bind/secret and --mount=from=<context>) needs far less. Pinned by digest - see
+# dockerfile/Dockerfile.tools' syft-scanner target for why, and manual-docker-bake.sh)
 # TT-Metalium Dockerfile
 # Optimized with multi-stage builds for tool and Python dependency caching.
 #

@@ -1,6 +1,7 @@
-# syntax=mirror.gcr.io/docker/dockerfile@sha256:0adf442eae370b6087e08edc7c50b552d80ddf261576f4ebd6421006b2461f12
-# (docker/dockerfile:1.25, the latest release - was untagged `docker/dockerfile:1`
-# (floating, then resolving to 1.24) - pinned by digest; see dockerfile/Dockerfile's syntax line for why)
+# syntax=mirror.gcr.io/docker/dockerfile@sha256:9ba7531bd80fb0a858632727cf7a112fbfd19b17e94c4e84ced81e24ef1a0dbc
+# (docker/dockerfile:1.4.3, the minimum version covering every syntax feature used across
+# dockerfile/* - was untagged `docker/dockerfile:1` (floating); see dockerfile/Dockerfile's
+# syntax line for why)
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
