@@ -127,3 +127,4 @@ jobs:
           set-lines: ${{ steps.bake.outputs.set }}
           ubuntu-version: ${{ steps.bake.outputs.ubuntu-version }}
           python-version: ${{ steps.bake.outputs.python-version }}
+          enable-attestations: false

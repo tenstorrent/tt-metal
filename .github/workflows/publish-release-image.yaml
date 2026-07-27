@@ -130,6 +130,7 @@ jobs:
           targets: ${{ inputs.image }}
           set-lines: ${{ steps.bake.outputs.set }}
           harbor-prefix: ${{ inputs.harbor-prefix }}
+          enable-attestations: false
       - name: Get image digest
         if: ${{ !inputs.dry-run }}
         id: get-digest

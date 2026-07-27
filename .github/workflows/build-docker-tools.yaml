@@ -107,3 +107,4 @@ jobs:
           set-lines: |
             ${{ matrix.tool }}.tags=${{ matrix.tag }}
             ${{ matrix.tool }}.output=${{ env.BAKE_OUTPUT }}
+          enable-attestations: false

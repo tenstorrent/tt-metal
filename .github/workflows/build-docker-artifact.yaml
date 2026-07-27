@@ -444,6 +444,7 @@ jobs:
           ubuntu-version: ${{ fromJson(needs.metadata.outputs.platform_data).version }}
           python-version: ${{ fromJson(needs.metadata.outputs.platform_data).python_version }}
           harbor-prefix: ${{ inputs.harbor-prefix }}
+          enable-attestations: false
 
   # Build ManyLinux image (runs in parallel with Ubuntu)
   manylinux:
@@ -522,6 +523,7 @@ jobs:
           targets: manylinux
           set-lines: ${{ steps.bake.outputs.set }}
           harbor-prefix: ${{ inputs.harbor-prefix }}
+          enable-attestations: false
 
   build-llk-images:
     name: "🐳️ Build LLK Docker images"
