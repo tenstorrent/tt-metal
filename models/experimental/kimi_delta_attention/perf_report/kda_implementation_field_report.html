@@ -45,6 +45,18 @@ section{margin:54px 0}h2{font-size:30px;letter-spacing:-.03em;margin:0 0 8px}h3{
 .stage:not(:nth-child(4n))::after{content:"→";position:absolute;right:-13px;top:48%;z-index:2;color:var(--cyan);font-size:20px}
 .stage .n{color:var(--cyan);font:700 11px ui-monospace,monospace}.stage h3{margin-top:9px}.stage p{color:#aebdcc;font-size:12px}
 .shape{display:block;color:#d6e1eb;font:11px/1.45 ui-monospace,monospace;border-top:1px solid var(--line);padding-top:9px}
+.exec-shell{position:relative;height:680px;overflow:hidden;background:#070a0e;border:1px solid var(--line)}
+#execGraph{width:100%;height:100%;cursor:grab}#execGraph:active{cursor:grabbing}
+.g-edge{fill:none;stroke:#617184;stroke-width:3;marker-end:url(#arrow)}.g-edge.secondary{stroke:#8b6fae;stroke-dasharray:8 5}
+.g-node rect{stroke:#506174;stroke-width:2}.g-node.compute rect{fill:#371d24}.g-node.data rect{fill:#142b35;stroke:#338b94}
+.g-node:hover rect,.g-node:focus rect{stroke:var(--cyan);stroke-width:4}.g-node text{fill:#f2f6f9;pointer-events:none}.g-node .node-title{font:800 15px Inter,system-ui,sans-serif}.g-node .node-op{fill:#b9c6d2;font:11px ui-monospace,monospace}.g-node .node-time{fill:#ffb5a9;font:750 14px ui-monospace,monospace}.g-node .node-floor{fill:#9ee8cf;font:700 13px ui-monospace,monospace}
+.tensor-label{cursor:pointer}.tensor-label rect{fill:#0e141c;stroke:#526172;stroke-width:1.5}.tensor-label:hover rect,.tensor-label:focus rect{stroke:var(--cyan);stroke-width:3}
+.tensor-label text{fill:#dce6ef;font:12px ui-monospace,monospace;pointer-events:none}.tensor-label .tensor-name{fill:var(--cyan);font-weight:800}
+.graph-tools{position:absolute;right:12px;top:12px;display:flex;gap:5px}.graph-tools button{background:#111923;color:var(--ink);border:1px solid #637286;padding:7px 10px;cursor:pointer}
+.graph-key{display:flex;gap:18px;flex-wrap:wrap;color:var(--muted);font-size:12px;margin:10px 0}.graph-key b{color:var(--ink)}
+.graph-detail{margin-top:12px;min-height:132px;background:var(--panel);border:1px solid var(--line);padding:16px;display:grid;grid-template-columns:1.15fr .85fr;gap:20px}
+.graph-detail p{margin:5px 0;color:#b9c6d2}.graph-detail code{color:#dce8f1}.timing-pair{display:grid;grid-template-columns:1fr 1fr;gap:8px}.timing-pair div{padding:10px;background:#0b1016;border:1px solid var(--line)}
+.timing-pair strong{display:block;font-size:23px}.timing-pair .measured strong{color:#ff9b8d}.timing-pair .floor strong{color:#83e2bd}
 .correction{border-left:4px solid var(--amber);background:#18181a;padding:13px 15px;margin:9px 0}.correction b{color:var(--amber)}
 .equation{font:15px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;background:#090c10;border:1px solid var(--line);padding:15px;overflow:auto;color:#dce7f1}
 .core-panels{display:grid;grid-template-columns:1fr 1fr;gap:16px}.core-panel{background:var(--panel);border:1px solid var(--line);padding:17px}
@@ -65,7 +77,7 @@ table.ledger{width:100%;border-collapse:collapse;background:var(--panel);min-wid
 details{border-top:1px solid var(--line);padding:13px 0}summary{cursor:pointer;font-weight:750}pre{white-space:pre-wrap;background:#070a0e;border:1px solid #202a36;padding:14px;overflow:auto;color:#cdd9e4;font:11px/1.45 ui-monospace,monospace}
 .footnote{color:var(--muted);font-size:11px}.source-list li{margin:8px 0}
 footer{margin-top:60px;border-top:1px solid var(--line);padding:22px 0;color:var(--muted)}
-@media(max-width:1000px){header,.split,.core-panels{grid-template-columns:1fr}.cards,.pipeline{grid-template-columns:repeat(2,1fr)}.thirds{grid-template-columns:1fr}.stage:nth-child(2n)::after{display:none}.stage:not(:nth-child(2n))::after{display:block}.ribbon{grid-template-columns:1fr}.arrow{transform:rotate(90deg);text-align:center}}
+@media(max-width:1000px){header,.split,.core-panels,.graph-detail{grid-template-columns:1fr}.cards,.pipeline{grid-template-columns:repeat(2,1fr)}.thirds{grid-template-columns:1fr}.stage:nth-child(2n)::after{display:none}.stage:not(:nth-child(2n))::after{display:block}.ribbon{grid-template-columns:1fr}.arrow{transform:rotate(90deg);text-align:center}}
 @media(max-width:600px){.wrap{padding:16px}.cards,.pipeline{grid-template-columns:1fr}.stage::after{display:none!important}.verdict{grid-template-columns:1fr}.core-grid{gap:2px}.core{font-size:0}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
 </style>
@@ -136,8 +148,24 @@ Sout = Diag(dl) · Sin + kdecᵀ · Vnew</div>
   </div>
 </section>
 
+<section id="execution-graph">
+  <div class="kicker">02 · source-verified execution graph</div>
+  <h2>Compute nodes connected by the tensors they exchange</h2>
+  <p class="section-lede">This is the actual T=5,120 retained path. Solid edges are primary tensor flow; dashed violet edges are state or bypass dependencies. Every edge labels logical dimensions, dtype, layout, memory, and TP distribution. Every compute node shows measured Tracy time and an analytic hardware lower bound.</p>
+  <div class="graph-key">
+    <span><b>Measured</b> = ten-replay, device-collapsed Tracy median</span>
+    <span><b>Floor</b> = max(compute, minimum traffic, or CCL bound), summed only for operations inside that node</span>
+    <span><b>Not a prediction:</b> floors omit launch, synchronization, congestion, and non-minimal traffic</span>
+  </div>
+  <div class="exec-shell">
+    <svg id="execGraph" role="img" aria-label="KDA T5120 compute graph with tensor edges and measured versus theoretical timings"></svg>
+    <div class="graph-tools"><button data-gz="in">+</button><button data-gz="out">−</button><button data-gz="reset">reset</button></div>
+  </div>
+  <div class="graph-detail" id="graphDetail"></div>
+</section>
+
 <section id="distribution">
-  <div class="kicker">02 · physical distribution</div>
+  <div class="kicker">03 · physical distribution</div>
   <h2>Who owns what, and where it runs</h2>
   <p class="section-lede">Sequence is replicated because splitting it would insert an ordered state handoff at every partition. Whole-head TP keeps recurrence and persistent state communication-free.</p>
   <div class="ribbon">
@@ -166,7 +194,7 @@ Sout = Diag(dl) · Sin + kdecᵀ · Vnew</div>
 </section>
 
 <section id="decisions">
-  <div class="kicker">03 · optimization evidence</div>
+  <div class="kicker">04 · optimization evidence</div>
   <h2>What worked, what did not</h2>
   <p class="section-lede">The final endpoint is an owner-sharded versus interleaved-L1 affine-summary A/B on the same hardware and harness; the earlier dtype sweep remains in the ledger. CSV hashes and exact commands are recorded; the harness predates run manifests, so the report explicitly distinguishes source-equivalent fresh traces from historical measurements.</p>
   <div class="filter" id="statusFilter">
@@ -181,7 +209,7 @@ Sout = Diag(dl) · Sin + kdecᵀ · Vnew</div>
 </section>
 
 <section id="roofline">
-  <div class="kicker">04 · roofline diagnosis</div>
+  <div class="kicker">05 · roofline diagnosis</div>
   <h2>Grouped prefix removes the serial wall; compute remains far away and CCL is essentially there</h2>
   <p class="section-lede">Blackhole HiFi4 peak is 152.064 TFLOP/s per chip; DRAM is 512 GB/s, giving a 297 FLOP/byte ridge. The whole-layer compute percentage uses the 8-chip mesh peak and executed FLOPs. CCL uses the effective two-link payload roofline.</p>
   <div class="split">
@@ -216,7 +244,7 @@ Sout = Diag(dl) · Sin + kdecᵀ · Vnew</div>
 </section>
 
 <section id="evidence">
-  <div class="kicker">05 · evidence and limits</div>
+  <div class="kicker">06 · evidence and limits</div>
   <h2>What is measured, what is inferred</h2>
   <div class="split">
     <div class="panel">
@@ -298,6 +326,45 @@ against the measured effective two-link roofline used by the branch analysis.</p
     "t640":{"label":"T=640","tokens":640,"wall_us":619.594,"control_wall_us":659.024,"control_label":"FP32 storage","active_us":586.404,"graph_us":586.404,"compute":8.97,"control_compute":8.43,"ccl":34.90,"flops":67.594,"mmrs_us":147.864,"prep_items":80,"prep_cores":80,"prep_us":75.868,"scan_cores":16,"scan_us":67.765,"recurrence_us":143.633,"control_recurrence_us":183.096,"rms_us":19.255,"chunks":20},
     "t5120":{"label":"T=5,120","tokens":5120,"wall_us":3183.263,"control_wall_us":3200.471,"control_label":"interleaved-L1 summaries","active_us":3125.218,"graph_us":3125.384,"compute":14.15,"control_compute":14.07,"ccl":39.67,"flops":547.765,"mmrs_us":1040.837,"prep_items":640,"prep_cores":110,"prep_us":306.372,"scan_cores":80,"summary_us":134.928,"prefix_us":116.670,"scan_us":354.407,"recurrence_us":660.779,"control_recurrence_us":679.819,"rms_us":84.775,"chunks":160}
   },
+  "graph":{
+    "canvas":{"w":3720,"h":1050},
+    "measured_total_us":3125.3844375,
+    "nodes":[
+      {"id":"input","label":"hidden input","kind":"data","x":30,"y":390,"subtitle":"mesh-replicated source","source":"test_kda_tp_layer_perf.py:89-99"},
+      {"id":"projection","label":"fused input projection","kind":"compute","x":330,"y":390,"measured_us":524.9455,"floor_us":338.231,"ops":"MatmulDeviceOperation","source":"layer.py:291-296","theory":"51.43 GFLOP per chip divided by the 152.064 TFLOP/s HiFi4 peak. Compute dominates the minimum DRAM traffic.","work":"110-core TP-local GEMM; grouped output columns"},
+      {"id":"convolution","label":"QKV causal convolution","kind":"compute","x":720,"y":100,"measured_us":598.992,"floor_us":197.7,"ops":"Slice + Untilize + Slice + KdaCausalConvOperation","source":"layer.py:297-302; chunk_gdn_phased.cpp:448-511","theory":"Minimum crop, untilize, QKV, carry, and output traffic is about 101.2 MB per chip; 101.2 MB / 512 GB/s = 197.7 us. Launches, halos, and repeated reads are excluded.","work":"110-core 32-token blocks; direct Q/K/V outputs"},
+      {"id":"aux","label":"auxiliary gates + layout","kind":"compute","x":720,"y":650,"measured_us":180.9665,"floor_us":60.9,"ops":"3 Slice + Sigmoid + Matmul + BinaryNg + Typecast + Transpose + Reshape","source":"layer.py:328-370; recurrence.py:115-151","theory":"Sum of minimum traffic/compute floors: 25.8 us auxiliary slicing, 33.8 us decay/beta math, and 1.3 us beta layout.","work":"decay rank, output gate, beta; TP-local four-head contract"},
+      {"id":"prep","label":"chunk preparation","kind":"compute","x":1150,"y":390,"measured_us":306.372,"floor_us":166.4,"ops":"ChunkGdnPrepOperation","source":"chunk_gated_delta_rule.cpp:568-610","theory":"Roofline model: about 0.960 GFLOP at 11.28 FLOP/B implies about 85.1 MB; the 512 GB/s traffic floor is 166.4 us.","work":"640 head-chunks over 110 cores; HiFi4 FP32 accumulation"},
+      {"id":"summary","label":"affine summaries","kind":"compute","x":1530,"y":390,"measured_us":134.928,"floor_us":30.9,"ops":"ChunkGdnScanOperation (summary_pair)","source":"chunk_gated_delta_rule.cpp:611-664","theory":"Two-state summary work is about 4.698 GFLOP per chip; 4.698 / 152.064 TFLOP/s = 30.9 us. NOC and CB movement are excluded.","work":"80 whole-V owners; eight chunks per group"},
+      {"id":"prefix","label":"receiver-owned affine prefix","kind":"compute","x":1910,"y":390,"measured_us":116.670,"floor_us":15.2,"ops":"KdaAffinePrefixOperation","source":"chunk_gated_delta_rule.cpp:665-671","theory":"About 2.315 GFLOP of distance-1/2/4/8 affine composition divided by chip peak gives a 15.2 us compute floor.","work":"80 owners; inbound L1 slots and stage barriers"},
+      {"id":"state_in","label":"recurrent state S0","kind":"data","x":1910,"y":60,"subtitle":"persistent local state","source":"chunk_gated_delta_rule.cpp:559-566"},
+      {"id":"scan","label":"grouped final scan","kind":"compute","x":2290,"y":390,"measured_us":102.809,"floor_us":15.5,"ops":"ChunkGdnScanOperation + final-state Slice","source":"chunk_gated_delta_rule.cpp:672-731","theory":"The grouped final recurrence retains about 2.349 GFLOP per chip; the compute-peak floor is 15.45 us. Prepared-tensor reads and output writes are excluded.","work":"80 whole-V owners; eight ordered chunks per owner"},
+      {"id":"rms","label":"gated RMS epilogue","kind":"compute","x":2670,"y":390,"measured_us":84.775,"floor_us":51.2,"ops":"KdaGatedRmsOperation","source":"layer.py:416-425","theory":"At least about 26.2 MB of raw output, gate, weight, and normalized output traffic; 26.2 MB / 512 GB/s = 51.2 us.","work":"107 cores; six token rows per busiest core"},
+      {"id":"mmrs","label":"output GEMM + Ring RS","kind":"compute","x":3050,"y":390,"measured_us":1071.8704375,"floor_us":435.9,"ops":"MatmulReduceScatterAsync + Clone","source":"layer.py:440-454","theory":"Fused boundary floor is max(79.4 us local GEMM, 412.877 us Ring payload) plus a 23.0 us minimum clone traffic floor = 435.9 us.","work":"8x8 GEMM grid; four Ring senders; FP32 partials"},
+      {"id":"output","label":"layer output shard","kind":"data","x":3430,"y":390,"subtitle":"hidden TP8 shard","source":"layer.py:440-477"},
+      {"id":"commit","label":"persistent state copies","kind":"compute","x":2670,"y":750,"measured_us":3.056,"floor_us":1.1,"ops":"2 x CopyDeviceOperation","source":"layer.py:479-490","theory":"Minimum read plus write traffic for recurrent state and three-row convolution carry is about 0.54 MB, or about 1.1 us at 512 GB/s.","work":"recurrent and convolution state update"},
+      {"id":"state_out","label":"next-layer state","kind":"data","x":3050,"y":750,"subtitle":"persistent TP-local state","source":"layer.py:479-490"}
+    ],
+    "edges":[
+      {"from":"input","to":"projection","name":"hidden_states","shape":"[1,5120,2304]","type":"BF16 · TILE · DRAM","dist":"replicated on TP8","lx":185,"ly":340},
+      {"from":"projection","to":"convolution","name":"qkv projected","shape":"[1,5120,1536]","type":"BF16 · TILE · DRAM","dist":"TP8: 4 whole heads/chip","lx":525,"ly":190},
+      {"from":"projection","to":"aux","name":"auxiliary columns","shape":"[1,5120,644] logical","type":"BF16 · TILE · DRAM","dist":"decay rank replicated; gate/beta TP-local","lx":525,"ly":660},
+      {"from":"convolution","to":"prep","name":"Q, K, V","shape":"3 x [1,5120,512]","type":"BF16 · TILE · DRAM","dist":"TP8: 4 heads/chip","lx":930,"ly":190},
+      {"from":"aux","to":"prep","name":"decay gate + beta","shape":"g [1,5120,512]; beta [1,5120,4]","type":"BF16 · TILE · DRAM","dist":"TP8: 4 heads/chip","lx":925,"ly":665},
+      {"from":"prep","to":"summary","name":"prepared bundle","shape":"v_beta/kd/q_decay/intra/k_dec_t/dl/t_inv; BH=4, NC=160","type":"mixed FP32/BF16 · TILE · L1","dist":"interleaved; 640 head-chunks","lx":1340,"ly":325},
+      {"from":"prep","to":"scan","name":"prepared group views","shape":"80 groups x 8 chunks; C=32, K=V=128","type":"mixed FP32/BF16 · TILE · L1","dist":"same 80 whole-V owners","lx":1710,"ly":650,"secondary":true},
+      {"from":"summary","to":"prefix","name":"A, B summaries","shape":"2 x [80,128,128]","type":"FP32 · TILE · HEIGHT_SHARDED L1","dist":"one [128,128] shard/owner","lx":1720,"ly":325},
+      {"from":"state_in","to":"prefix","name":"initial recurrent state","shape":"[4,128,128]","type":"FP32 · TILE · DRAM","dist":"four TP-local heads","lx":1920,"ly":225,"secondary":true},
+      {"from":"prefix","to":"scan","name":"group-entry states","shape":"[80,128,128]","type":"FP32 · TILE · interleaved L1","dist":"20 groups/head x 4 heads","lx":2100,"ly":325},
+      {"from":"scan","to":"rms","name":"raw KDA output","shape":"[4,160,32,128] = [4,5120,128]","type":"FP32 · TILE · DRAM","dist":"four TP-local heads","lx":2480,"ly":325},
+      {"from":"aux","to":"rms","name":"output gate","shape":"[1,5120,512]","type":"BF16 · TILE · DRAM","dist":"TP8: four heads/chip","lx":1830,"ly":870,"secondary":true},
+      {"from":"rms","to":"mmrs","name":"normalized local values","shape":"[1,5120,512]","type":"FP32 · TILE · DRAM","dist":"TP8 input-feature shard","lx":2860,"ly":325},
+      {"from":"mmrs","to":"output","name":"layer output","shape":"[1,5120,288]","type":"FP32 · TILE · DRAM","dist":"hidden dim TP8 shard of 2304","lx":3240,"ly":325},
+      {"from":"convolution","to":"commit","name":"new convolution carry","shape":"[1,3,1536]","type":"BF16 · ROW_MAJOR · DRAM","dist":"TP-local channels","lx":1580,"ly":925,"secondary":true},
+      {"from":"scan","to":"commit","name":"final recurrent state","shape":"[4,128,128]","type":"FP32 · TILE · DRAM","dist":"four TP-local heads","lx":2460,"ly":700,"secondary":true},
+      {"from":"commit","to":"state_out","name":"persistent states","shape":"S [4,128,128] + carry [1,3,1536]","type":"FP32 TILE + BF16 ROW_MAJOR","dist":"TP-local; no collective","lx":2860,"ly":700,"secondary":true}
+    ]
+  },
   "decisions":[
     {"status":"retain","scope":"Long scan","name":"Receiver-owned affine prefix","result":"3262.281 → 3216.229 µs","delta":-1.41,"reason":"One-pass summaries plus a persistent distance-1/2/4/8 prefix and eight-chunk final scan replace the 160-step serial chain while preserving PCC.","tier":"fresh matched trace + correctness"},
     {"status":"retain","scope":"Long scan","name":"L1 group-entry states","result":"3211.482 → 3195.611 µs","delta":-0.49,"reason":"Prefix and grouped scan share the same 80-owner map; distributed L1 removes the 5 MiB DRAM boundary.","tier":"fresh matched trace + correctness"},
@@ -347,6 +414,50 @@ const DATA=JSON.parse(document.getElementById("report-data").textContent);
 let scenario="t640", status="all", sortKey="status", sortAsc=true;
 const $=id=>document.getElementById(id);
 const fmt=n=>n.toLocaleString(undefined,{maximumFractionDigits:3});
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
+const GRAPH_BASE={x:0,y:0,w:DATA.graph.canvas.w,h:DATA.graph.canvas.h};
+let graphView={...GRAPH_BASE},graphDrag=null;
+const graphNodes=Object.fromEntries(DATA.graph.nodes.map(n=>[n.id,n]));
+function graphPorts(a,b){
+  const aw=250,ah=125,bw=250,bh=125,dx=b.x-a.x,dy=b.y-a.y;
+  if(Math.abs(dx)>=Math.abs(dy))return dx>=0?[a.x+aw,a.y+ah/2,b.x,b.y+bh/2]:[a.x,a.y+ah/2,b.x+bw,b.y+bh/2];
+  return dy>=0?[a.x+aw/2,a.y+ah,b.x+bw/2,b.y]:[a.x+aw/2,a.y,b.x+bw/2,b.y+bh];
+}
+function graphPath(edge){
+  const [x1,y1,x2,y2]=graphPorts(graphNodes[edge.from],graphNodes[edge.to]);
+  if(Math.abs(x2-x1)>=Math.abs(y2-y1)){const bend=(x1+x2)/2;return `M ${x1} ${y1} C ${bend} ${y1}, ${bend} ${y2}, ${x2} ${y2}`}
+  const bend=(y1+y2)/2;return `M ${x1} ${y1} C ${x1} ${bend}, ${x2} ${bend}, ${x2} ${y2}`;
+}
+function setGraphView(){$("execGraph").setAttribute("viewBox",`${graphView.x} ${graphView.y} ${graphView.w} ${graphView.h}`)}
+function showGraphNode(id){
+  const n=graphNodes[id],detail=$("graphDetail");
+  if(n.kind==="data"){detail.innerHTML=`<div><h3>${esc(n.label)}</h3><p>${esc(n.subtitle)}</p><p><b>Role:</b> graph boundary / persistent data</p><p><b>Source:</b> <code>${esc(n.source)}</code></p></div>`;return}
+  detail.innerHTML=`<div><h3>${esc(n.label)}</h3><p>${esc(n.work)}</p><p><b>Operations:</b> <code>${esc(n.ops)}</code></p><p><b>Source:</b> <code>${esc(n.source)}</code></p></div><div><div class="timing-pair"><div class="measured"><strong>${fmt(n.measured_us)} µs</strong>measured</div><div class="floor"><strong>${fmt(n.floor_us)} µs</strong>analytic floor</div></div><p><b>Gap:</b> ${(n.measured_us/n.floor_us).toFixed(2)}× floor</p><p><b>Floor model:</b> ${esc(n.theory)}</p></div>`;
+}
+function showGraphEdge(index){
+  const e=DATA.graph.edges[index];
+  $("graphDetail").innerHTML=`<div><h3>${esc(e.name)}</h3><p>${esc(graphNodes[e.from].label)} → ${esc(graphNodes[e.to].label)}</p><p>Tensor edge; click a node for its execution timing.</p></div><div><p><b>Dimensions:</b> <code>${esc(e.shape)}</code></p><p><b>Type / layout / memory:</b> <code>${esc(e.type)}</code></p><p><b>Distribution:</b> ${esc(e.dist)}</p></div>`;
+}
+function renderGraph(){
+  const svg=$("execGraph");
+  const edges=DATA.graph.edges.map((e,i)=>`<g class="tensor-label" data-edge="${i}" tabindex="0" role="button" aria-label="${esc(e.name)} tensor"><path class="g-edge${e.secondary?" secondary":""}" d="${graphPath(e)}" marker-end="url(#arrow)"/><rect x="${e.lx-150}" y="${e.ly-39}" width="300" height="78" rx="9"/><text x="${e.lx}" y="${e.ly-20}" text-anchor="middle"><tspan class="tensor-name">${esc(e.name)}</tspan><tspan x="${e.lx}" dy="17">${esc(e.shape)}</tspan><tspan x="${e.lx}" dy="17">${esc(e.type)}</tspan><tspan x="${e.lx}" dy="17">${esc(e.dist)}</tspan></text></g>`).join("");
+  const nodes=DATA.graph.nodes.map(n=>{
+    const compute=n.kind==="compute",opLabel=compute&&n.ops.length>30?`${n.ops.slice(0,29)}…`:n.ops;
+    const timing=compute?`<text x="${n.x+15}" y="${n.y+86}"><tspan class="node-time">measured ${fmt(n.measured_us)} µs</tspan><tspan x="${n.x+15}" dy="20" class="node-floor">floor ${fmt(n.floor_us)} µs · ${(n.measured_us/n.floor_us).toFixed(2)}×</tspan></text>`:`<text x="${n.x+15}" y="${n.y+84}" class="floor">${esc(n.subtitle)}</text>`;
+    return `<g class="g-node ${n.kind}" data-node="${esc(n.id)}" tabindex="0" role="button"><rect x="${n.x}" y="${n.y}" width="250" height="125" rx="15"/><text x="${n.x+15}" y="${n.y+29}" class="node-title">${esc(n.label)}</text><text x="${n.x+15}" y="${n.y+54}" class="node-op">${esc(compute?opLabel:n.kind)}</text>${timing}</g>`;
+  }).join("");
+  svg.innerHTML=`<defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 Z"/></marker></defs><g>${edges}${nodes}</g>`;
+  setGraphView();
+  svg.onclick=e=>{const node=e.target.closest&&e.target.closest("[data-node]"),edge=e.target.closest&&e.target.closest("[data-edge]");if(node)showGraphNode(node.dataset.node);else if(edge)showGraphEdge(Number(edge.dataset.edge))};
+  svg.onkeydown=e=>{if(e.key!=="Enter"&&e.key!==" ")return;const node=e.target.closest&&e.target.closest("[data-node]"),edge=e.target.closest&&e.target.closest("[data-edge]");if(node)showGraphNode(node.dataset.node);else if(edge)showGraphEdge(Number(edge.dataset.edge))};
+  showGraphNode("projection");
+}
+function zoomGraph(factor){
+  const cx=graphView.x+graphView.w/2,cy=graphView.y+graphView.h/2;
+  graphView.w=Math.max(900,Math.min(GRAPH_BASE.w,graphView.w*factor));graphView.h=graphView.w*GRAPH_BASE.h/GRAPH_BASE.w;
+  graphView.x=cx-graphView.w/2;graphView.y=cy-graphView.h/2;setGraphView();
+}
+function resetGraph(){graphView={...GRAPH_BASE};setGraphView()}
 function card(label,value,sub,pct=0){return `<div class="card"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div><div class="meter"><i style="width:${Math.min(100,pct)}%"></i></div></div>`}
 function renderCards(){
   const d=DATA.scenarios[scenario];
@@ -407,6 +518,18 @@ document.querySelectorAll("#statusFilter button").forEach(b=>b.onclick=()=>{
 document.querySelectorAll(".ledger th[data-sort]").forEach(h=>h.onclick=()=>{
   if(sortKey===h.dataset.sort)sortAsc=!sortAsc;else{sortKey=h.dataset.sort;sortAsc=true}renderDecisions();
 });
+document.querySelectorAll(".graph-tools button").forEach(b=>b.onclick=()=>{
+  if(b.dataset.gz==="in")zoomGraph(.8);else if(b.dataset.gz==="out")zoomGraph(1.25);else resetGraph();
+});
+$("execGraph").onmousedown=e=>{graphDrag={x:e.clientX,y:e.clientY,view:{...graphView}}};
+$("execGraph").onmousemove=e=>{
+  if(!graphDrag)return;const box=$("execGraph").getBoundingClientRect();
+  graphView.x=graphDrag.view.x-(e.clientX-graphDrag.x)*graphDrag.view.w/box.width;
+  graphView.y=graphDrag.view.y-(e.clientY-graphDrag.y)*graphDrag.view.h/box.height;setGraphView();
+};
+$("execGraph").onmouseup=$("execGraph").onmouseleave=()=>{graphDrag=null};
+globalThis.__KDA_IMPL_REPORT__={renderGraph,showGraphNode,showGraphEdge,zoomGraph,resetGraph,getGraphView:()=>({...graphView})};
+renderGraph();
 renderAll();
 </script>
 </body>
