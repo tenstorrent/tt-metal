@@ -1018,7 +1018,13 @@ template <bool posted = false>
 FORCE_INLINE void noc_async_write_one_packet_with_state(
     uint32_t src_local_l1_addr, uint32_t dst_local_l1_addr, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT_WITH_ADDR(
-        NocEventType::WRITE_WITH_STATE, src_local_l1_addr, dst_local_l1_addr, 0, -1, posted, noc);
+        NocEventType::WRITE_WITH_STATE,
+        src_local_l1_addr,
+        static_cast<uint64_t>(dst_local_l1_addr),
+        0,
+        -1,
+        posted,
+        noc);
 
     // In order to sanitize, need to grab full noc addr + xfer size from state.
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc, dst_local_l1_addr, src_local_l1_addr);
@@ -2551,7 +2557,13 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
     uint8_t cmd_buf = write_cmd_buf,
     uint8_t noc = noc_index) {
     RECORD_NOC_EVENT_WITH_ADDR(
-        NocEventType::WRITE_WITH_TRID_WITH_STATE, src_local_l1_addr, dst_local_l1_addr, size, -1, posted, noc);
+        NocEventType::WRITE_WITH_TRID_WITH_STATE,
+        src_local_l1_addr,
+        static_cast<uint64_t>(dst_local_l1_addr),
+        size,
+        -1,
+        posted,
+        noc);
 
     // In order to sanitize, need to grab full noc addr + xfer size from state.
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE(noc, dst_local_l1_addr, src_local_l1_addr, size);
