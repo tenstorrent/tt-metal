@@ -126,10 +126,17 @@ No opcode left behind; every path tested + error-handled.
     `rkey_bounds` (roff+len > mr_len); each an unauthorized WRITE provably **not landed** (stats[14..16]).
     Silicon-validated, regression **T10** (15 each → miss/access/bounds=15, write_ok=0; valid path T3 still
     lands write_ok=40). Both gates green (regression 12/12, perf OK).
-  - **1.6b Pending.** CONTROL-opcode (0xF0) MR register/deregister over the wire + rkey generation/rotation
-    (reuse detection) + 64-slot management tests. Also the MR-registration plumbing 3.1b + 4F.1 extend.
+  - **1.6b Done.** CONTROL-opcode (0xF0, header-only) MR register/deregister over the wire — sub-opcode in
+    imm, header carries rkey/base/len; REGISTER writes the MR entry, DEREGISTER invalidates. **Privileged,
+    gated by `ctrl_enable` (production must authenticate CONTROL).** Silicon-validated, regression **T11**
+    (WRITE empty→miss, REGISTER→WRITE lands, DEREGISTER→WRITE miss). rkey generation/rotation reuse-detection
+    is proven by T10 (gen-mismatch→rkey_miss). The MR-registration plumbing 3.1b + 4F.1 extend.
 
-Exit gate: all 8 v1 opcodes exercised end-to-end with automated byte-exact + error-path tests.
+Exit gate: all 8 v1 opcodes exercised end-to-end with automated byte-exact + error-path tests. **✅ MET —
+Phase 1 complete.** SEND/SEND_IMM, WRITE/WRITE_IMM, READ_REQ/READ_RESP, ACK, CONTROL all handled;
+regression **T1–T11 (13/13)** byte-exact + error paths; access-control (rkey_miss/access/bounds) provably
+enforced; each item gated by `regression.sh` + `perf.sh`. Pending polish (separate track): 1.2b SEND→host
+hugepage, 1.3b READ initiator correlation.
 
 ## Phase 2 — Reliability & flow control (production robustness)
 

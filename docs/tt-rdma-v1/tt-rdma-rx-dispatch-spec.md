@@ -258,5 +258,7 @@ throughput will track the RX number, not the 200 G TX number.
 - **RX.5d** — ACK (0x40) reception + cumulative-ACK watermark. **Done** (T8).
 - **RX.5e** — WRITE_IMM (0x11) payload land + imm completion slot (shared `rxwqe_publish`). **Done** (T9).
 - **RX.5f** — MR access-control enforcement: rkey_miss / rkey_access / rkey_bounds drop + count. **Done** (T10).
-  Remaining: SEND→host hugepage (1.2b), READ initiator (1.3b), CONTROL MR register/dereg + rkey rotation (1.6b).
+- **RX.5g** — CONTROL (0xF0) MR register/deregister over the wire, gated by `ctrl_enable`. **Done** (T11).
+  **Phase 1 complete** (all v1 opcodes, T1–T11 13/13). Remaining polish: SEND→host hugepage (1.2b), READ
+  initiator correlation (1.3b).
 - **RX.6** — PFC-lossless (BH.6) + resync-on-bad; fast gateway sender to find the real ceiling. Pending.
