@@ -131,12 +131,11 @@ def _patch_model_args(
     model_args.max_batch_size = max_batch_size
     model_args.max_seq_len = max_seq_len
     model_args.max_context_len = max_seq_len
-    # Prefill chunking — default to policy multi-chunk (4096). Measured on
-    # P150x8 / 31B / 128k unbounded (isl_sweep_logs/p150x8_bg_lb/prefill_chunk_ab.tsv):
-    #   chunk=4096 → TTFT ~31s; 8192 ~47s; 16384 ~52s; single full-ISL ~60s.
-    # Unbounded+4k also keeps long-context generation coherent (no trailing "la la").
+    # Prefill chunking — default to policy multi-chunk (usually 4096).
+    # P150x8 / 31B / 128k unbounded + chunk=4096 is fast (TTFT ~31s) but collapses
+    # to "lapped…"; policy auto-bounds at 128k and selects chunk=2048 (QB2 path).
     # Overrides: GEMMA4_GEN_PREFILL_CHUNK=<n>, GEMMA4_DEMO_SINGLE_CHUNK=1 (legacy
-    # full-ISL single chunk for A/B / correctness).
+    # full-ISL single chunk for A/B / correctness — avoid on long ISL).
     _chunk_override = int(os.environ.get("GEMMA4_GEN_PREFILL_CHUNK", "0"))
     _force_single = os.environ.get("GEMMA4_DEMO_SINGLE_CHUNK", "0") != "0"
     _needs_chunk_for_dram = (not _force_single) and should_auto_enable_chunked_bounded(

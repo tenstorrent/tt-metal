@@ -125,17 +125,19 @@ GEMMA4_LONG_CONTEXT_POLICY = {
             ],
             "source": "measured",
         },
-        # P150x8 (isl_sweep_logs/p150x8_bg_lb): unbounded allocates through 128k
-        # (256k DRAM OOM); bounded single-chunk 256k PASS. Prefer **unbounded +
-        # multi-chunk prefill (4096)** at 128k: TTFT ~31s vs ~60s single-chunk,
-        # and coherent generation (unbounded single-chunk had trailing "la la").
-        # Auto-bounded only at 256k for DRAM. Force GEMMA4_BOUNDED_SLIDING=1 or
-        # GEMMA4_DEMO_SINGLE_CHUNK=1 to override.
+        # P150x8: unbounded 128k multi-chunk (4096) still collapses to
+        # "lapped lapped…" (full_matrix LB + 2026-07-27 repro). QB2 128k with
+        # bounded + chunk=2048 is coherent — mirror that cutover here.
+        # 256k still needs bounded for DRAM. Override: GEMMA4_BOUNDED_SLIDING=0/1.
         "P150x8": {
-            "unbounded_isl_max": 131072,
-            "bounded_isl_min": 262144,
-            "chunked_bounded_isl_min": 262144,  # multi-chunk default anyway; at 256k needed for DRAM
+            "unbounded_isl_max": 65536,
+            "bounded_isl_min": 131072,  # auto bounded at 128k+ for coherence
+            "chunked_bounded_isl_min": 262144,  # DRAM: multi-chunk required at 256k
             "prefill_chunk": _CHUNK,
+            "prefill_chunk_by_isl": [
+                # Same as QB2: bounded @ ≥128k with chunk=4096 → token-0 garbage.
+                {"isl_min": 131072, "chunk": 2048, "require_bounded": True},
+            ],
             "source": "measured",
         },
         "T3K": {
@@ -143,6 +145,10 @@ GEMMA4_LONG_CONTEXT_POLICY = {
             "bounded_isl_min": 65536,
             "chunked_bounded_isl_min": 262144,
             "prefill_chunk": _CHUNK,
+            # Mirror QB2 coherency tier until WH is re-measured.
+            "prefill_chunk_by_isl": [
+                {"isl_min": 131072, "chunk": 2048, "require_bounded": True},
+            ],
             "source": "placeholder",
         },
     },
@@ -158,6 +164,8 @@ GEMMA4_LONG_CONTEXT_POLICY = {
             "prefill_chunk": _CHUNK,
             "source": "measured",
         },
+        # Single P150 / N150: unbounded sliding KV OOMs above ~32k; auto-bound
+        # + multi-chunk (4096) through 256k. Target coherent generation through 128k.
         "P150": {
             "unbounded_isl_max": 32768,
             "bounded_isl_min": 65536,
@@ -187,24 +195,33 @@ GEMMA4_LONG_CONTEXT_POLICY = {
             "prefill_chunk": _CHUNK,
             "source": "measured",
         },
-        # P150x8: unbounded allocates through 128k; 256k bus-error/OOM; bounded
-        # single-chunk 256k PASS. Same as 31B: prefer unbounded + multi-chunk
-        # prefill (4096) for TTFT; auto-bounded at 256k for DRAM.
+        # P150x8: same coherency cutover as 31B (unbounded 128k → garbage).
         "P150x8": {
-            "unbounded_isl_max": 131072,
-            "bounded_isl_min": 262144,
+            "unbounded_isl_max": 65536,
+            "bounded_isl_min": 131072,
             "chunked_bounded_isl_min": 262144,
             "prefill_chunk": _CHUNK,
+            "prefill_chunk_by_isl": [
+                {"isl_min": 131072, "chunk": 2048, "require_bounded": True},
+            ],
             "source": "measured",
         },
     },
     # MatFormer E4B — HF max_pos=128k native; demo can force higher. QB2: unbounded
     # 64k+128k+256k PASSED. P150x8: same (isl_sweep_logs/p150x8_bg_lb).
+    # Single P150: chunked prefill through 256k; coherent through 128k.
     "E4B": {
         _QB2: {
             "unbounded_isl_max": 262144,
             "bounded_isl_min": 524288,  # beyond measured 256k
             "chunked_bounded_isl_min": 524288,
+            "prefill_chunk": _CHUNK,
+            "source": "measured",
+        },
+        "P150": {
+            "unbounded_isl_max": 131072,
+            "bounded_isl_min": 262144,
+            "chunked_bounded_isl_min": 65536,
             "prefill_chunk": _CHUNK,
             "source": "measured",
         },
@@ -220,11 +237,19 @@ GEMMA4_LONG_CONTEXT_POLICY = {
     # 64k+128k+256k PASSED. P150x8: same (isl_sweep_logs/p150x8_bg_lb).
     # Also use_double_wide_mlp on KV-shared layers (2× intermediate).
     # Prefer multi-chunk (4096): single-chunk 64k+ warmup can hang on P150x8.
+    # Single P150: chunked prefill through 256k; coherent through 128k.
     "E2B": {
         _QB2: {
             "unbounded_isl_max": 262144,
             "bounded_isl_min": 524288,  # beyond measured 256k
             "chunked_bounded_isl_min": 524288,
+            "prefill_chunk": _CHUNK,
+            "source": "measured",
+        },
+        "P150": {
+            "unbounded_isl_max": 131072,
+            "bounded_isl_min": 262144,
+            "chunked_bounded_isl_min": 65536,
             "prefill_chunk": _CHUNK,
             "source": "measured",
         },
@@ -318,6 +343,27 @@ def should_auto_enable_bounded_sliding(max_seq_len: int, mesh_device=None, model
     return max_seq_len >= int(policy["bounded_isl_min"])
 
 
+def resolve_gemma4_bounded_sliding(
+    max_seq_len: int,
+    mesh_device=None,
+    model_name_or_path=None,
+    *,
+    paged_attention: bool = True,
+) -> bool:
+    """Demo/vLLM shared bounded-sliding resolution (policy + env override).
+
+    ``GEMMA4_BOUNDED_SLIDING`` unset → ``should_auto_enable_bounded_sliding``.
+    Set to 1/true/yes → force on; any other value → force off.
+    Always requires paged attention.
+    """
+    _bs_env = os.environ.get("GEMMA4_BOUNDED_SLIDING")
+    if _bs_env is None:
+        bounded = should_auto_enable_bounded_sliding(max_seq_len, mesh_device, model_name_or_path)
+    else:
+        bounded = _bs_env.lower() in ("1", "true", "yes")
+    return bool(bounded and paged_attention)
+
+
 def should_auto_enable_chunked_bounded(
     max_seq_len: int, mesh_device=None, model_name_or_path=None, *, bounded_sliding: bool = False
 ) -> bool:
@@ -326,6 +372,43 @@ def should_auto_enable_chunked_bounded(
         return False
     policy = get_gemma4_long_context_policy(mesh_device, model_name_or_path)
     return max_seq_len >= int(policy["chunked_bounded_isl_min"])
+
+
+def resolve_gemma4_demo_long_context(
+    max_seq_len: int,
+    mesh_device=None,
+    model_name_or_path=None,
+    *,
+    paged_attention: bool = True,
+    non_qb2_default=None,
+) -> dict:
+    """Resolve bounded + prefill chunk for demos (MESH_DEVICE / HF model aware).
+
+    Returns keys: bounded_sliding, prefill_chunk, needs_chunked_bounded, policy_source.
+    Both ``text_demo`` and ``text_demo_v2`` should use this so default commands
+    pick the same coherency/perf cutovers without extra env knobs.
+    """
+    if non_qb2_default is None:
+        non_qb2_default = GEMMA4_DEFAULT_PREFILL_CHUNK
+    bounded = resolve_gemma4_bounded_sliding(
+        max_seq_len, mesh_device, model_name_or_path, paged_attention=paged_attention
+    )
+    chunk = resolve_gemma4_prefill_chunk_size(
+        max_seq_len,
+        mesh_device=mesh_device,
+        non_qb2_default=non_qb2_default,
+        model_name_or_path=model_name_or_path,
+        bounded_sliding=bounded,
+    )
+    policy = get_gemma4_long_context_policy(mesh_device, model_name_or_path)
+    return {
+        "bounded_sliding": bounded,
+        "prefill_chunk": int(chunk),
+        "needs_chunked_bounded": should_auto_enable_chunked_bounded(
+            max_seq_len, mesh_device, model_name_or_path, bounded_sliding=bounded
+        ),
+        "policy_source": str(policy.get("source", "")),
+    }
 
 
 def _is_qb2(mesh_device) -> bool:
@@ -369,15 +452,22 @@ def resolve_gemma4_prefill_chunk_size(
     ``long_prefill_token_threshold`` to this same resolved value for the
     configured ``max_context``.
 
-    P150x8 / 31B / 128k unbounded (prefill_chunk_ab.tsv): chunk=4096 ~31s TTFT
-    vs full-ISL single ~60s; quality OK.
+    P150x8 / 31B: unbounded chunk=4096 is fast (~31s TTFT) but quality collapses
+    at 128k; bounded + chunk=2048 (same tier as QB2) is the coherency path.
     """
     override = int(os.environ.get("GEMMA4_GEN_PREFILL_CHUNK", "0"))
     if override > 0:
         return override
     policy = get_gemma4_long_context_policy(mesh_device, model_name_or_path)
     source = str(policy.get("source", ""))
-    if _is_qb2(mesh_device) or source.startswith("measured"):
+    # measured / placeholder / inferred entries (and any board with ISL tiers)
+    # share the policy chunk table so demo defaults stay coherent without env.
+    use_policy_chunk = (
+        _is_qb2(mesh_device)
+        or source.startswith(("measured", "placeholder", "inferred"))
+        or bool(_prefill_chunk_isl_tiers(policy))
+    )
+    if use_policy_chunk:
         chunk = int(policy["prefill_chunk"])
         for tier in sorted(
             _prefill_chunk_isl_tiers(policy),
