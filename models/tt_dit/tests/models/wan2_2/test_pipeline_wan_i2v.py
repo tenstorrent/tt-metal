@@ -16,6 +16,7 @@ import ttnn
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt, WanPipelineI2V
+from models.tt_dit.utils.vbench import assert_vbench_quality
 
 from ....utils.test import (
     line_params_req_exact_devices,
@@ -82,6 +83,7 @@ def test_pipeline_inference(
     height,
     is_fsdp,
     no_prompt,
+    request,
 ):
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
@@ -127,6 +129,45 @@ def test_pipeline_inference(
 
     prompt = "The cat in the hat runs up the hill to the house."
 
+    def check_output_sanity(frames):
+        """Guard against a distributed I2V path that 'runs' but emits corrupt/blank/frozen frames.
+
+        These are cheap, reference-free statistical checks (shape, finiteness, range, spatial
+        variance, temporal motion) -- not a full quality gate. A richer VBench gate (video-intrinsic
+        metrics, a better fit for I2V than CLIP since the CI seed image is a fractal) is a follow-up.
+        Thresholds sit well below any real video so they only fire on genuinely broken output.
+        """
+        if isinstance(frames, torch.Tensor):
+            frames = frames.cpu().numpy()
+        frames = np.asarray(frames)
+
+        # Geometry: the distributed VAE decode must produce the full requested video.
+        expected_shape = (num_frames, height, width, 3)
+        assert frames.shape == expected_shape, f"Unexpected output shape {frames.shape}, expected {expected_shape}"
+
+        # No NaN/Inf. uint8 can't carry them, but guard in case the pipeline hands back a float buffer.
+        if np.issubdtype(frames.dtype, np.floating):
+            assert np.isfinite(frames).all(), "Output video contains NaN/Inf"
+
+        vmin, vmax = int(frames.min()), int(frames.max())
+        assert 0 <= vmin and vmax <= 255, f"Output outside uint8 range: [{vmin}, {vmax}]"
+
+        # Not a flat/blank buffer (all-black or a single constant colour) -- a common corruption mode.
+        global_std = float(frames.std())
+        assert global_std > 1.0, f"Output has near-zero variance (std={global_std:.3f}); frames look blank/corrupt"
+
+        # Temporal motion: I2V must animate the seed image, not repeat one static frame.
+        # int16 cast avoids uint8 wraparound in the difference.
+        mean_frame_delta = float(np.abs(np.diff(frames.astype(np.int16), axis=0)).mean())
+        assert (
+            mean_frame_delta > 0.5
+        ), f"Consecutive frames are near-identical (mean delta={mean_frame_delta:.3f}); video appears frozen/static"
+
+        logger.info(
+            f"Output sanity OK: shape={frames.shape}, range=[{vmin},{vmax}], "
+            f"std={global_std:.2f}, mean_frame_delta={mean_frame_delta:.2f}"
+        )
+
     def run(*, prompt, number, seed):
         logger.info(f"Running inference with prompt: '{prompt}'")
         logger.info(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
@@ -154,6 +195,8 @@ def test_pipeline_inference(
 
         # Remove batch dimension
         frames = frames[0]
+        if int(ttnn.distributed_context_get_rank()) == 0:
+            check_output_sanity(frames)
         output_filename = f"wan_i2v_{width}x{height}_{number}.mp4"
         try:
             from models.tt_dit.utils.video import export_to_video
@@ -163,8 +206,39 @@ def test_pipeline_inference(
         except ImportError:
             logger.info("Could not export video - imageio_ffmpeg not available")
 
+    vbench_thresholds_by_height = {
+        720: {
+            "subject_consistency": 0.92,
+            "background_consistency": 0.93,
+            "motion_smoothness": 0.955,
+            "dynamic_degree": 1.0,
+            "imaging_quality": 0.645,
+        },
+        480: {
+            "subject_consistency": 0.94,
+            "background_consistency": 0.96,
+            "motion_smoothness": 0.97,
+            "dynamic_degree": 1.0,
+            "imaging_quality": 0.545,
+        },
+    }
+
+    def check_output_with_vbench(prompt, number):
+        if int(ttnn.distributed_context_get_rank()) == 0:
+            output_filename = f"wan_i2v_{width}x{height}_{number}.mp4"
+            thresholds = vbench_thresholds_by_height[height]
+            try:
+                assert_vbench_quality(output_filename, prompt=prompt, thresholds=thresholds)
+                logger.info("VBench i2v gate PASSED (provisional thresholds, not yet enforced)")
+            except Exception as e:
+                # Provisional gate: never fail CI on it yet. Broad catch covers both a threshold miss
+                # (AssertionError) and an env without vbench installed (RuntimeError) -- e.g. the
+                # wh_galaxy unit leg, which shares this file. Drop the try/except when enforcing.
+                logger.warning(f"VBench i2v gate not enforced (provisional); would-be result:\n{e}")
+
     if no_prompt:
         run(prompt=prompt, number=0, seed=42)
+        check_output_with_vbench(prompt, 0)
     else:
         for i in itertools.count():
             new_prompt = input("Enter the input prompt, or q to exit: ")
@@ -173,3 +247,4 @@ def test_pipeline_inference(
             if prompt[0] == "q":
                 break
             run(prompt=prompt, number=i, seed=i)
+            check_output_with_vbench(prompt, i)
