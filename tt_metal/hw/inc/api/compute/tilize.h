@@ -324,7 +324,7 @@ ALWI void fast_tilize_init_with_dt_impl(uint32_t icb, uint32_t full_dim, uint32_
     // leave SrcB in a prior matmul-weights config that's incompatible with the
     // fast-tilize path, producing garbage output.
     UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(icb, icb)));
-    MATH((llk_math_reconfig_data_format<true, true>(icb, icb)));
+    MATH((llk_math_reconfig_data_format<true /*is_fp32_dest_acc_en*/, false /*skip_int8: derive int8 state*/>(icb, icb)));
 
     fast_tilize_init_impl<configure_remap>(icb, full_dim, ocb);
 }

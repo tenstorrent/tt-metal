@@ -50,7 +50,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_route
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import (
     cache_half_pccs,
     gather_cache_tp0,
@@ -181,7 +181,7 @@ def _record_kv_cache_pcc(
     [:total_len] against the golden kv_post_transform trace ([nope | pe], the pe half re-based to the
     device Meta interleave via cache_half_pccs). Per-layer cache — slot == layer."""
     logger.info("Device KV cache vs golden kv_post_transform:")
-    cache_full = gather_cache_tp0(tt_kvpe_cache, mesh_device)  # [num_layers, seq_len_cache, kvpe]
+    cache_full = gather_cache_tp0(tt_kvpe_cache.storage, mesh_device)  # [num_layers, seq_len_cache, kvpe]
     p = blockcyclic_positions(sp, CHUNK, seq_len_cache)
     cache_min_pcc = {}
     for i in range(num_layers):
@@ -284,7 +284,7 @@ def _preload_kvpe_prefix_from_trace(
         layout=host_layout,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=cache_shard_dims),
     )
-    ttnn.copy_host_to_device_tensor(cache_host_tt, tt_kvpe_cache)
+    ttnn.copy_host_to_device_tensor(cache_host_tt, tt_kvpe_cache.storage)
     ttnn.synchronize_device(mesh_device)
 
 
@@ -434,8 +434,9 @@ def run_chunked_transformer_padded(
     gc.collect()
     profiler.end("tt_transformer_creation")
 
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_dim,
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=seq_len_cache,
         mesh_shape=mesh_shape,
@@ -625,16 +626,16 @@ def run_chunked_transformer(
     # natively; mla.forward asserts) — NOT the init_kvpe_cache bfloat8_b/TILE default that dense
     # ring_mla wants. Match the cache format to the path.
     has_indexer = resolve_has_indexer(config)
-    kvpe_dtype_layout = dict(dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) if has_indexer else {}
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_dim,
+    cache_format = MlaKvCacheFormat.BF16_RM if has_indexer else MlaKvCacheFormat.BFP8_TILE
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=cache_format,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=SEQ_CACHE,
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=num_layers,
         num_users=1,
-        **kvpe_dtype_layout,
     )
 
     # Sparse (DSA) layers read a block-cyclic indexer key cache that is caller-owned and passed into
@@ -676,8 +677,8 @@ def run_chunked_transformer(
             config.kv_lora_rank,
             mesh_device,
             sp_axis,
-            kvpe_dtype_layout.get("dtype", ttnn.bfloat8_b),
-            kvpe_dtype_layout.get("layout", ttnn.TILE_LAYOUT),
+            cache_format.storage_dtype,
+            cache_format.storage_layout,
         )
         if tt_index_kv_cache is not None:
             _preload_indexer_k_prefix_from_trace(
@@ -1268,16 +1269,16 @@ def run_chunked_transformer_no_pcc(
     # (sparse_sdpa reads it natively; mla.forward asserts) — NOT the init_kvpe_cache bfloat8_b/TILE
     # default that dense ring_mla wants. Match the cache format to the path (dense variants keep the
     # default). Same distinction as run_chunked_transformer.
-    kvpe_dtype_layout = dict(dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) if resolve_has_indexer(config) else {}
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_dim,
+    cache_format = MlaKvCacheFormat.BF16_RM if resolve_has_indexer(config) else MlaKvCacheFormat.BFP8_TILE
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=cache_format,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=SEQ_CACHE_NOPCC,
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=num_layers,
         num_users=1,
-        **kvpe_dtype_layout,
     )
 
     # Sparse (DSA) layers read a block-cyclic indexer key cache that is caller-owned and passed into
@@ -1314,8 +1315,8 @@ def run_chunked_transformer_no_pcc(
             config.kv_lora_rank,
             mesh_device,
             sp_axis,
-            kvpe_dtype_layout.get("dtype", ttnn.bfloat8_b),
-            kvpe_dtype_layout.get("layout", ttnn.TILE_LAYOUT),
+            cache_format.storage_dtype,
+            cache_format.storage_layout,
         )
         if tt_index_kv_cache is not None:
             _preload_indexer_k_prefix_from_trace(

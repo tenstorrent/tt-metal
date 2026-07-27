@@ -4363,20 +4363,31 @@ class UntilizeGolden:
 
 @register_golden
 class TilizeGolden:
-    def __call__(self, operand, dimensions, data_format, num_faces=4):
+    def __call__(
+        self, operand, dimensions, data_format, num_faces=4, tile_dimensions=None
+    ):
         from helpers.llk_params import format_dict
+        from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
         from helpers.tilize_untilize import tilize_block
 
         # Validate the number of faces
         if not (1 <= num_faces <= 4):
             raise ValueError(f"`num_faces` must be between 1 and 4, got {num_faces}")
 
-        # Always do full tilization first
-        result = tilize_block(operand, dimensions, data_format)
+        # Always do full tilization first. When tile_dimensions is provided, tilize_block
+        # derives the face layout (face_r_dim / num_faces) from the tile geometry.
+        result = tilize_block(
+            operand, dimensions, data_format, tile_dimensions=tile_dimensions
+        )
         torch_format = format_dict[data_format]
 
-        # Then select the appropriate number of faces from the tilized result
-        if num_faces < FACES_PER_TILE:
+        # Legacy partial-face selection only applies to standard 32x32 tiles; tiny-tile
+        # layouts already carry the correct face count from tile_dimensions.
+        is_standard_tile = tile_dimensions is None or tuple(tile_dimensions) == (
+            DEFAULT_TILE_R_DIM,
+            DEFAULT_TILE_C_DIM,
+        )
+        if is_standard_tile and num_faces < FACES_PER_TILE:
             elements_per_tile_needed = num_faces * ELEMENTS_PER_FACE
             tile_cnt = result.numel() // ELEMENTS_PER_TILE
             result = result.reshape(tile_cnt, ELEMENTS_PER_TILE)[

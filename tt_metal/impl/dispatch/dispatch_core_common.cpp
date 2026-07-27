@@ -11,6 +11,11 @@
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 
+namespace tt::tt_metal::detail {
+CoreType resolve_dispatch_core_type(
+    tt::tt_metal::MetalEnvImpl& env, ChipId device_id, const DispatchCoreConfig& dispatch_core_config);
+}  // namespace tt::tt_metal::detail
+
 namespace tt::tt_metal {
 
 DispatchCoreAxis DispatchCoreConfig::get_default_axis() {
@@ -47,6 +52,11 @@ CoreType get_core_type_from_config(const DispatchCoreConfig& config) {
         case DispatchCoreType::ETH: return CoreType::ETH;
         default: TT_THROW("invalid dispatch core type");
     }
+}
+
+CoreType resolve_dispatch_core_type(
+    tt::tt_metal::MetalEnvImpl& env, ChipId device_id, const DispatchCoreConfig& dispatch_core_config) {
+    return ::tt::tt_metal::detail::resolve_dispatch_core_type(env, device_id, dispatch_core_config);
 }
 
 DispatchCoreConfig get_dispatch_core_config() {

@@ -144,7 +144,7 @@ struct Rope {
             constexpr uint32_t Wt = CTArgs::Wt;
             constexpr uint32_t Ht = CTArgs::Ht;
             // Assumes all intermediate and output CBs are configured the same
-            reconfig_data_format_srcb<false, true>(args.in_cb);
+            reconfig_data_format_srcb</*is_tile_dim_reconfig_en=*/true>(args.in_cb);
             pack_reconfig_data_format<true>(args.out_cb);
 
             // ================================================================
@@ -161,7 +161,7 @@ struct Rope {
             // Main loop: process Ht heads, each head consumes Wt tiles
             // ================================================================
             for (uint32_t ht = 0; ht < Ht; ht++) {
-                reconfig_data_format_srca<false, true>(args.trans_mat_cb);
+                reconfig_data_format_srca</*is_tile_dim_reconfig_en=*/true>(args.trans_mat_cb);
                 matmul_init(args.in_cb, args.trans_mat_cb);
 
                 // Reserve intermediate and output buffers
@@ -191,7 +191,7 @@ struct Rope {
                 // ============================================================
                 // Step 2: cos_interm = input * cos (broadcast multiply)
                 // ============================================================
-                reconfig_data_format_srca<false, true>(args.in_cb);
+                reconfig_data_format_srca</*is_tile_dim_reconfig_en=*/true>(args.in_cb);
                 mul_bcast_rows_init_short(args.in_cb, args.cos_sin_cb);
                 tile_regs_acquire();
                 for (uint32_t j = 0; j < Wt; ++j) {
