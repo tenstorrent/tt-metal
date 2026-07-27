@@ -302,37 +302,6 @@ def _stages_from_profile(baseline_profile: dict | None) -> list:
     return rows
 
 
-def _reading(value, mode: str = "", stage: str = "", depth: str = ""):
-    """Wrap a ms value with its provenance. Delegates to integrity.Reading so DEPTH, MODE and STAGE
-    are defined once for the whole tool rather than re-checked ad hoc at each render site -- every
-    reporting bug in the 2026-07-27 audit was a bare float compared against another bare float."""
-    try:
-        _pa = str(Path(__file__).resolve().parent.parent)
-        if _pa not in sys.path:
-            sys.path.insert(0, _pa)
-        from agent.integrity import Reading
-
-        return Reading(value, depth=depth or _raw_depth(), mode=mode, stage=stage)
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def _raw_depth() -> str:
-    raw = (os.environ.get("TT_PERF_LAYERS") or "").strip()
-    return raw if raw.isdigit() and int(raw) > 0 else "all"
-
-
-def _same_measurement(before_mode: str, after_mode: str) -> bool:
-    """Are two full-pipeline readings the same KIND of number? Thin wrapper over Reading so the rule
-    lives in one place; kept as a predicate because the render site reads better that way."""
-    a = _reading(1.0, mode=before_mode)
-    b = _reading(1.0, mode=after_mode)
-    if a is None or b is None:  # integrity unavailable: fall back to the literal comparison
-        x, y = (before_mode or "").strip().lower(), (after_mode or "").strip().lower()
-        return x == y
-    return bool(a.comparable_to(b))
-
-
 def _ledger():
     """The measurement ledger (cc_optimize/measurements.py), loaded by path."""
     global _LEDGER_MOD
@@ -407,13 +376,6 @@ def _depth_label(profile: dict | None = None) -> str:
     if not raw:
         raw = (os.environ.get("TT_PERF_LAYERS") or "").strip()
     return "%s layers" % raw if raw.isdigit() and int(raw) > 0 else "all layers"
-
-
-def _all_layers_label() -> str:
-    """Depth of the whole-model gate. It always runs uncapped, so name the real count when the profile
-    reveals it, else say 'all layers' rather than implying a number we do not have."""
-    n = (os.environ.get("PERF_MCP_MODEL_LAYERS") or "").strip()
-    return "all %s layers" % n if n.isdigit() and int(n) > 0 else "all layers"
 
 
 def _baseline_trace_ms(baseline_profile: dict | None):
@@ -560,12 +522,8 @@ def render_summary(
     perf_test: str = "",
     report_csv: str = "",
     residual: dict | None = None,
-    before_ms: float | None = None,
-    after_ms: float | None = None,
     baseline_profile: dict | None = None,
     finalized: bool = True,
-    before_mode: str = "",
-    after_mode: str = "",
     final_override_ms: float | None = None,
     throughput: dict | None = None,
 ) -> str:
@@ -628,27 +586,9 @@ def render_summary(
     if _bl_trace:
         lines.append(f"tracy trace pass, BASELINE, same window ({_depth_label(baseline_profile)}):  {_bl_trace:.2f} ms")
     _trace_scope = f"module ({task})" if os.environ.get("TT_PERF_MODULE_LEVEL") == "1" else "full-pipeline e2e"
-    _all = _all_layers_label()
-    _mode_ok = _same_measurement(before_mode, after_mode)
-    if before_ms and after_ms and _mode_ok:
-        _d = (before_ms - after_ms) / before_ms * 100.0 if before_ms else 0.0
-        lines.append(
-            f"trace+1CQ {_trace_scope} ({_all}):  before {before_ms:.2f} ms  ->  after {after_ms:.2f} ms"
-            f"   ({_d:+.1f}% {'faster' if _d >= 0 else 'SLOWER'})"
-        )
-    elif before_ms and after_ms:
-        # Different measurement modes are different UNITS -- an eager wall-clock over the whole
-        # forward vs a trace+1cq per-token step. _establish_fullpipe_baseline re-baselines the stored
-        # value when the mode changes, but the BEFORE bookend is captured once and never re-taken, so
-        # the pair can drift apart mid-run. Subtracting them printed "before 47.10 ms -> after
-        # 100.00 ms (-112.3% SLOWER)" on llama3_1_8b_p150. Report both, refuse the delta.
-        lines.append(
-            f"{_trace_scope} ({_all}):  before {before_ms:.2f} ms [{before_mode or 'unknown mode'}]"
-            f"  ->  after {after_ms:.2f} ms [{after_mode or 'unknown mode'}]"
-            "   — NOT COMPARABLE: different measurement modes, no delta computed"
-        )
-    elif before_ms:
-        lines.append(f"trace+1CQ {_trace_scope} ({_all}):  before {before_ms:.2f} ms  ->  (after not measured)")
+    _fp = _ledger_line(_ledger().KIND_FULLPIPE, "trace+1CQ %s" % _trace_scope)
+    if _fp:
+        lines.append(_fp)
     lines.append("")
 
     if not isinstance(throughput, dict):

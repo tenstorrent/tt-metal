@@ -2180,10 +2180,6 @@ def _emit_summary(
         perf_test=perf_test,
         report_csv=report_csv,
         residual=residual,
-        before_ms=before_ms,
-        after_ms=after_ms,
-        before_mode=before_mode,
-        after_mode=after_mode,
         baseline_profile=(
             json.loads(Path(report_csv).parent.joinpath("baseline_profile.json").read_text())
             if report_csv and Path(report_csv).parent.joinpath("baseline_profile.json").is_file()
@@ -2429,10 +2425,6 @@ def optimize_pipeline(
         metric,
         start_sha,
         perf_test=(pipe or {}).get("perf_test", ""),
-        before_mode=before_mode,
-        after_mode=after_mode,
-        before_ms=before_ms,
-        after_ms=after_ms,
     )
     return {"task": task, "rounds": rounds, "can_stop": can_stop, "halted": halted}
 

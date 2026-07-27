@@ -53,38 +53,6 @@ def _headline(**kw):
 # --- the full-pipeline pair: mode must match --------------------------------------------------
 
 
-def test_same_mode_reports_a_delta():
-    txt = _headline(before_ms=200.0, after_ms=100.0, before_mode="trace+1cq", after_mode="trace+1cq")
-    assert "before 200.00 ms  ->  after 100.00 ms" in txt
-    assert "+50.0% faster" in txt
-    assert "NOT COMPARABLE" not in txt
-
-
-def test_different_modes_refuse_the_delta():
-    """THE 47.10 -> 100.00 CASE."""
-    txt = _headline(before_ms=47.10, after_ms=100.00, before_mode="eager", after_mode="trace+1cq")
-    assert "NOT COMPARABLE" in txt
-    assert "-112.3%" not in txt and "SLOWER" not in txt
-    assert "[eager]" in txt and "[trace+1cq]" in txt  # both sides named
-
-
-def test_mode_known_on_one_side_only_is_not_assumed_to_match():
-    for b, a in (("trace+1cq", ""), ("", "trace+1cq")):
-        txt = _headline(before_ms=200.0, after_ms=100.0, before_mode=b, after_mode=a)
-        assert "NOT COMPARABLE" in txt, "assumed a match with mode %r vs %r" % (b, a)
-
-
-def test_legacy_pair_with_no_modes_still_reports():
-    """Older runs recorded no mode; refusing every one of them would be noise."""
-    txt = _headline(before_ms=200.0, after_ms=100.0, before_mode="", after_mode="")
-    assert "+50.0% faster" in txt and "NOT COMPARABLE" not in txt
-
-
-def test_mode_comparison_is_case_and_space_insensitive():
-    assert S._same_measurement(" Trace+1CQ ", "trace+1cq") is True
-    assert S._same_measurement("eager", "trace+1cq") is False
-
-
 # --- the tracy pair: depth must match ----------------------------------------------------------
 
 
