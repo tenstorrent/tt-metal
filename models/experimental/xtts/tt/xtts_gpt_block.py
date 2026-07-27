@@ -32,9 +32,25 @@ NEG_INF = -1e30  # additive attention-mask fill for masked-out (future) position
 
 # Per-weight block-float width for the decode matmuls (memory-bound: fewer weight bytes = faster).
 # bfloat4_b (4-bit) halves the DRAM stream vs bfloat8_b but is lower precision — only the weights
-# that keep the accuracy gates go here. Determined empirically (see the bfp4 sweep); the rest stay
-# bfloat8_b. Names are the c_attn / c_proj / mlp_c_fc / mlp_c_proj suffixes.
-_BFP4_WEIGHTS = {"attn.c_attn.weight", "attn.c_proj.weight"}
+# that keep the accuracy gates go here. The rest stay bfloat8_b. Names are the c_attn / c_proj /
+# mlp_c_fc / mlp_c_proj suffixes.
+#
+# NOW EMPTY (everything bfloat8_b). ``attn.c_attn.weight`` and ``attn.c_proj.weight`` were bfp4,
+# chosen against the block-decode PCC/Frobenius test + an end-to-end EXACT-CODE-MATCH test. Codes
+# can match while the latents drift, and it is the latents — not the codes — that the vocoder turns
+# into audio, so that gate could not see this: with those two at bfp4, test_tt_inference's
+# end-to-end spectrogram-magnitude PCC sat at 0.9840-0.9866 (below its 0.99 bar) for as long as the
+# test has existed; promoting both to bfloat8_b takes it to 0.99468, the first config to pass. GPT
+# latent PCC also improves (test_tt_gpt_generate 0.99883 -> 0.99954). c_attn produces the K/V that
+# persist in the KV cache, so its error compounds across every subsequent decode step, which is why
+# a per-step-looking 4-bit choice cost this much end-to-end.
+# Promoting c_attn ALONE (c_proj left at bfp4) measured WORSE end-to-end (0.97276) than either
+# endpoint — do not treat these two as independently tunable without re-measuring the pair.
+# Cost: two weight streams double per decode step (~63 MB/step over 30 layers). NOT yet measured in
+# device time — eager-mode host dispatch (~150 ms/token) swamps it in wall-clock, and a full decode
+# overflows the device profiler's marker buffer, so it needs a ReadDeviceProfiler drain in the
+# generate loop to measure. If decode throughput regresses, measure that before reverting.
+_BFP4_WEIGHTS: set[str] = set()
 L1 = ttnn.L1_MEMORY_CONFIG  # keep activations in L1 (weights stay in DRAM); the profiler flags the
 # decode matmuls' input-0 as DRAM-resident — an L1 activation avoids that per-matmul DRAM read.
 

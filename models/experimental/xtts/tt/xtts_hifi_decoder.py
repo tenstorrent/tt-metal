@@ -26,10 +26,12 @@ from models.experimental.xtts.reference.xtts_hifi_decoder import (
 from models.experimental.xtts.tt.xtts_hifigan import TtHifiganGenerator
 
 TILE = 32
-# Tuned resample-matmul config (test_hifi_upsampler_matmul_sweep.py, Blackhole):
-# a 2D-multicast config with per_core_N=3 (N=1024 -> gx=11) + M spread over rows, HiFi2,
-# fp32_dest_acc off, and an L1 output — 4.80us -> 1.46us on the profiled L=32 shape. The
-# grid is derived per shape so other latent lengths stay legal (falls back to auto if not).
+# Tuned resample-matmul config (test_hifi_decoder_matmul_sweep.py, Blackhole): a 2D-multicast
+# config with per_core_N=3 (N=1024 -> gx=11) + M spread over rows, HiFi2, fp32_dest_acc off, and
+# an L1 BLOCK_SHARDED output — 4.80us -> 1.44us on the profiled L=32 shape. That sweep re-confirmed
+# this geometry over the full memory-placement cross-product and found the sharded output to be the
+# remaining lever (see _out_memory_config). The grid is derived per shape so other latent lengths
+# stay legal (falls back to auto if not).
 _MATMUL_PER_CORE_N = 3
 
 
@@ -93,6 +95,16 @@ class TtLatentUpsampler(LightweightModule):
             fuse_batch=False,
         )
 
+    @staticmethod
+    def _out_memory_config(program_config):
+        """L1 BLOCK_SHARDED output (shard derived by the op from the program-config grid) — 2.75us ->
+        1.44us on the profiled shape at the same geometry (test_hifi_decoder_matmul_sweep.py); it is
+        the single biggest lever on this matmul. Needs a program config for the op to derive the shard
+        from, so the auto path keeps L1 interleaved."""
+        if program_config is None:
+            return ttnn.L1_MEMORY_CONFIG
+        return ttnn.MemoryConfig(memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED, buffer_type=ttnn.BufferType.L1)
+
     def forward(self, x_blc: ttnn.Tensor) -> ttnn.Tensor:
         batch_size, length_in, channels = x_blc.shape
         assert batch_size == 1, "latent upsampler assumes batch size 1"
@@ -108,13 +120,13 @@ class TtLatentUpsampler(LightweightModule):
             x,
             program_config=program_config,
             compute_kernel_config=self._compute_kernel_config,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=self._out_memory_config(program_config),
         )
         ttnn.deallocate(x)
-        y2 = ttnn.reshape(y, [1, length_out, channels])
-        out = ttnn.to_layout(y2, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(y2)
-        return out
+        # Return the TILE result directly. conv_pre (ttnn.conv1d) consumes a TILE input as-is (the
+        # whole vocoder chain stays TILE and would only reshard this again), so the previous
+        # untilize->ROW_MAJOR round-trip is dropped — one UntilizeWithUnpadding removed.
+        return ttnn.reshape(y, [1, length_out, channels])
 
 
 class TtHifiDecoder(LightweightModule):
