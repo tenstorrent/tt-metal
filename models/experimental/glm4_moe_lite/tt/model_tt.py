@@ -1556,6 +1556,10 @@ class Glm4MoeLiteDenseOnlyTT:
                 positions_draft_tt=positions_draft_tt,
                 layer_idx=layer_idx,
                 use_signpost=_SIGNPOST_ENABLED,
+                # GlobalCB prefetch (None unless GLM4_MOE_LITE_PREFETCH=1). Only the main
+                # decode path gets it: the MTP layer's w_o is not registered with the
+                # prefetcher, so routing MTP through the ring would read a stale address.
+                prefetch=self.prefetcher,
             )
             if layer_profile is not None:
                 for key, value in layer_profile.items():
@@ -2785,6 +2789,10 @@ class Glm4MoeLiteDenseOnlyTT:
                 positions_main_tt=state.positions_main_tt,
                 positions_draft_tt=state.positions_draft_tt,
                 layer_idx=layer_idx,
+                # GlobalCB prefetch (None unless GLM4_MOE_LITE_PREFETCH=1). Only the main
+                # decode path gets it: the MTP layer's w_o is not registered with the
+                # prefetcher, so routing MTP through the ring would read a stale address.
+                prefetch=self.prefetcher,
             )
             ttnn.deallocate(x, force=False)
             x = x_next
@@ -2819,7 +2827,28 @@ class Glm4MoeLiteDenseOnlyTT:
         page_table_width = int(page_table.shape[1])
         state = self._get_or_create_trace_state(batch=batch, page_table_width=page_table_width)
 
+        # ---- GlobalCB prefetch: activate before ANY warmup ----
+        # The SubDevice manager must be loaded before the compile warmup so that warmup
+        # ops build buffers with the same configuration trace capture will see. Deferred
+        # until here (rather than model init) because prefill needs the full grid.
+        #
+        # Weight registration must precede ensure_ready(), which snapshots the weight
+        # addresses into the sender-core address tensor.
+        if self.prefetcher is not None:
+            self.register_prefetch_weights()
+            self.prefetcher.ensure_ready()
+
         # Warm-up compile run (no trace) to keep compilation out of capture.
+        #
+        # PREFETCH ORDERING: every decode pass containing ring matmuls needs its own
+        # dram_prefetcher issue in front of it. The prefetcher streams exactly n_layers
+        # tensors and then stalls, so one issue feeds exactly one pass over the layers.
+        # Flash warms up TWICE (this decode, then _decode_step_tt_logits below), which
+        # is one more pass than REAP has -- hence a fill around each, rather than a
+        # single compile_prefetch(). compile_prefetch() is deliberately unused here: it
+        # exists to seed the program cache, and these warmup issues already do that,
+        # while its consumer-less stall is exactly the deadlock documented on it.
+        _pf_warm = self.prefetcher.start_prefetch() if self.prefetcher is not None else None
         _ = self.decode(
             tokens=tokens,
             start_pos=start_pos,
@@ -2828,6 +2857,8 @@ class Glm4MoeLiteDenseOnlyTT:
             sampling_params=None,
             enable_trace=False,
         )
+        if _pf_warm is not None:
+            self.prefetcher.stop_prefetch(_pf_warm)
         ttnn.synchronize_device(self.device)
 
         self._copy_decode_trace_inputs(state=state, tokens=tokens, start_pos=start_pos, page_table=page_table)
@@ -2835,7 +2866,11 @@ class Glm4MoeLiteDenseOnlyTT:
 
         # Warm-up the trace path itself (not captured) so ops like `ttnn.embedding`
         # do any one-time compilation/program uploads outside trace capture.
+        # Second pass over the layers, so it needs its own prefetcher fill.
+        _pf_warm2 = self.prefetcher.start_prefetch() if self.prefetcher is not None else None
         logits_warm = self._decode_step_tt_logits(state=state, kv_cache=kv_cache)
+        if _pf_warm2 is not None:
+            self.prefetcher.stop_prefetch(_pf_warm2)
         # Warm-up any sampling ops we plan to run inside the trace. After trace
         # capture, allocating device buffers becomes unsafe, so sampling must be
         # fully trace-contained.
@@ -2868,6 +2903,10 @@ class Glm4MoeLiteDenseOnlyTT:
         ttnn.synchronize_device(self.device)
 
         trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+        # Issue the prefetcher INSIDE the trace so every replayed decode step streams
+        # its own weights. Both the dram_prefetcher issue and the matching deallocate
+        # are captured; nothing here executes until the trace replays.
+        _pf_trace = self.prefetcher.start_prefetch() if self.prefetcher is not None else None
         logits_tt = self._decode_step_tt_logits(state=state, kv_cache=kv_cache)
         # Capture greedy sampling inside the trace to avoid allocating any
         # device buffers while an active trace exists.
@@ -2886,6 +2925,8 @@ class Glm4MoeLiteDenseOnlyTT:
             else:
                 top1_values_tt = max_out
                 top1_indices_tt = ttnn.argmax(logits_rm_view, dim=3, keepdim=False, use_multicore=True)
+        if _pf_trace is not None:
+            self.prefetcher.stop_prefetch(_pf_trace)
         ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
         ttnn.synchronize_device(self.device)
 

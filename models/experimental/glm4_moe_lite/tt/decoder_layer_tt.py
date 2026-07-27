@@ -424,6 +424,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     positions_draft_tt: ttnn.Tensor | None = None,
     layer_idx: int = -1,
     use_signpost: bool = False,
+    prefetch: Any | None = None,
 ) -> ttnn.Tensor:
     """Run one decode step for a single decoder layer and update its KVPE cache.
 
@@ -617,6 +618,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         page_table_tt=page_table_tt,
         tt_positions=tt_positions,
         profile=profile,
+        prefetch=prefetch,
     )
     if use_signpost:
         signpost(f"L{layer_idx}_flash_mla-end")
