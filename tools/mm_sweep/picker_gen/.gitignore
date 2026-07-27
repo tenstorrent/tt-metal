@@ -1,2 +1,3 @@
 jobs/
 *.log
+*.rerun
