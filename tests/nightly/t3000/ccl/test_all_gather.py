@@ -20,7 +20,6 @@ def is_unsupported_case(
     dim,
     mem_config,
     num_devices,
-    num_links,
     input_dtype,
     layout,
     tile,
@@ -37,39 +36,42 @@ def is_unsupported_case(
     if tile != (32, 32) and input_dtype != ttnn.bfloat16:
         return True, "Tiny tile only supports bfloat16"
 
+    if layout == ttnn.TILE_LAYOUT:
+        # Average elem size, since block float tiles pack a shared exponent per tile
+        elem_size = ttnn.Tile(tile).get_tile_size(input_dtype) / (tile[0] * tile[1])
+    else:
+        elem_size = ttnn.element_size(input_dtype)
+
+    def tensor_size_bytes(shape):
+        padded = list(shape)
+        if layout == ttnn.TILE_LAYOUT:
+            padded[-2] = math.ceil(padded[-2] / tile[0]) * tile[0]
+            padded[-1] = math.ceil(padded[-1] / tile[1]) * tile[1]
+        return math.prod(padded) * elem_size
+
     ## Check that we can readback results
-    fast_dispatch_page_size_limit = 55 * 1024
-    # Row-major: bytes/element is exact
-    rm_elem_size_map = {
-        ttnn.uint32: 4,
-        ttnn.bfloat16: 2,
-        ttnn.fp8_e4m3: 1,
-    }
-    # Tile-layout bytes/element are averages that include the shared exponent block
-    tile_elem_size_map = {
-        ttnn.uint32: 4,
-        ttnn.bfloat16: 2,
-        ttnn.bfloat8_b: 1088 / 1024,
-        ttnn.bfloat4_b: 576 / 1024,
-        ttnn.fp8_e4m3: 1,
-    }
-    elem_size_map = tile_elem_size_map if layout == ttnn.TILE_LAYOUT else rm_elem_size_map
-    elem_size = elem_size_map.get(input_dtype, 4)
-    if layout == ttnn.ROW_MAJOR_LAYOUT and (output_shape[dim] * elem_size) > fast_dispatch_page_size_limit:
+    if layout == ttnn.ROW_MAJOR_LAYOUT:
+        if mem_config.shard_spec is not None and mem_config.memory_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+            page_width = mem_config.shard_spec.shape[-1]
+        elif mem_config.nd_shard_spec is not None:
+            page_width = mem_config.nd_shard_spec.shard_shape[-1]
+        else:
+            page_width = output_shape[-1]
         # Fast dispatch currently can't breakup readback of large pages into multiple smaller pages and is
-        # limited to ~55K pages.
-        return True, "Fast dispatch can't support reading back this page size in one shot"
+        # limited to ~55K pages. Reference: BufferReadDispatchParams in tt_metal/impl/buffers/dispatch.hpp,
+        # and calculate_max_prefetch_data_size_bytes().
+        fast_dispatch_page_size_limit = 55 * 1024
+        if page_width * elem_size > fast_dispatch_page_size_limit:
+            return True, "Fast dispatch can't support reading back this page size in one shot"
 
     # Check that we can fit in L1 (if L1 config)
-    tensor_size_bytes = elem_size
-    for i in output_shape:
-        tensor_size_bytes *= i
     L1_util = 0
     if mem_config.buffer_type == ttnn.BufferType.L1:
-        L1_util = L1_util + tensor_size_bytes
-    if mem_config_input is not None:
-        if mem_config_input.buffer_type == ttnn.BufferType.L1:
-            L1_util += tensor_size_bytes / num_devices
+        L1_util += tensor_size_bytes(output_shape)
+    if mem_config_input is not None and mem_config_input.buffer_type == ttnn.BufferType.L1:
+        input_shape = list(output_shape)
+        input_shape[dim] //= num_devices
+        L1_util += tensor_size_bytes(input_shape)
 
     if L1_util > num_l1_banks * 1536 * 1024:
         return True, "Test_Infrastructure_Skip L1 test requires more memory than the total available in the device"
@@ -80,14 +82,6 @@ def is_unsupported_case(
             True,
             f"Output shape {output_shape} incompatible with {num_devices} on dim {dim} because some chips will have no tensor",
         )
-
-    if (
-        output_shape == [8, 8, 256, 384]
-        and dim == 1
-        and layout == ttnn.TILE_LAYOUT
-        and (input_dtype == ttnn.bfloat8_b or tile != (32, 32))
-    ):
-        return True, "Known failure"
 
     return False, ""
 
@@ -145,7 +139,6 @@ def run_all_gather_impl(
         dim,
         mem_config_ag,
         replicate,
-        num_links,
         ag_input_dtype,
         layout,
         tile,
