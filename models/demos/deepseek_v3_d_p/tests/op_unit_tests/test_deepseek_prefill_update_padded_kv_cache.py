@@ -29,9 +29,7 @@ KVPE_HEAD_DIM = 576
 
 # (cache dtype, layout). bfloat8_b/bfloat4_b are block-float (TILE only); fp8_e4m3 is ROW_MAJOR only
 # (Blackhole); bf16 covers the row-major page math in a lossless dtype. The tests assert bit-exact
-# equality against the input read back, so no per-dtype tolerance is needed.
-# (cache dtype, layout). bfloat8_b/bfloat4_b are block-float (TILE only); fp8_e4m3 is ROW_MAJOR only
-# (Blackhole); bf16 covers the row-major page math in a lossless dtype. TILE drives the per-element-
+# equality against the input read back, so no per-dtype tolerance is needed. TILE drives the per-element-
 # tensor (metadata) path; ROW_MAJOR uses the scalar signature -- the metadata path is TILE-only (see the
 # device-op guard added when rebasing onto main's newer ROW_MAJOR support), so these tests keep full
 # dtype/layout coverage without running metadata on row-major (via the _update_kv helper below).
@@ -239,7 +237,9 @@ def _make_meta_tensors(mesh_device, kv_actual_global, slot_idx):
     return _make_scalar_tensor(mesh_device, slot_idx), _make_scalar_tensor(mesh_device, kv_actual_global)
 
 
-def _update_kv(kv_cache, tt_input, *, slot_idx, kv_actual_global, layer_idx, num_layers, cluster_axis, layout, mesh_device):
+def _update_kv(
+    kv_cache, tt_input, *, slot_idx, kv_actual_global, layer_idx, num_layers, cluster_axis, layout, mesh_device
+):
     """Drive update_padded_kv_cache the right way for the layout: TILE uses the per-element-tensor
     (metadata) path; ROW_MAJOR uses the scalar signature -- the metadata path is TILE-only (device-op
     guard). Keeps bf16_rm / fp8_rm coverage on the scalar path without invoking metadata on row-major."""
