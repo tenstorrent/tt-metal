@@ -251,16 +251,18 @@ def test_resolve_legacy_kv_cache_returns_new_immutable_config():
     adapter = _adapter(paged_config=base)
 
     resolved = adapter.resolve_legacy_kv_cache_config(
-        (64, 8, 32, 128),
+        (129, 8, 64, 128),
         torch.bfloat16,
         32,
     )
 
     assert resolved is not base
     assert base.num_blocks is None
-    assert resolved.num_blocks == 64
-    assert resolved.block_size == base.block_size
-    assert resolved.max_num_blocks == base.max_num_blocks
+    assert base.block_size == 32
+    assert base.max_num_blocks == 128
+    assert resolved.num_blocks == 129
+    assert resolved.block_size == 64
+    assert resolved.max_num_blocks == 129
     assert resolved.dtype == base.dtype
     assert resolved.memory_config == base.memory_config
 
@@ -268,10 +270,10 @@ def test_resolve_legacy_kv_cache_returns_new_immutable_config():
 @pytest.mark.parametrize(
     ("shape", "dtype", "num_layers", "message"),
     [
-        ((64, 8, 16, 128), torch.bfloat16, 32, "block size"),
+        ((64, 8, 0, 128), torch.bfloat16, 32, "block_size"),
         ((64, 4, 32, 128), torch.bfloat16, 32, "KV heads"),
         ((64, 8, 32, 64), torch.bfloat16, 32, "head dimension"),
-        ((129, 8, 32, 128), torch.bfloat16, 32, "max_num_blocks"),
+        ((0, 8, 32, 128), torch.bfloat16, 32, "num_blocks"),
         ((64, 8, 32, 128), torch.float32, 32, "dtype"),
         ((64, 8, 32, 128), torch.bfloat16, 31, "layer count"),
     ],

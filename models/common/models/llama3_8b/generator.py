@@ -16,7 +16,7 @@ from models.common.models.llama3_8b.executor import Llama3ExecutorConfig, build_
 from models.common.models.llama3_8b.hf_adaptor import from_pretrained
 from models.common.models.llama3_8b.model import Llama31_8BPagedAttentionConfig
 
-_VLLM_BLOCK_SIZE = 32
+_PROVISIONAL_BLOCK_SIZE = 32
 
 
 @dataclass(frozen=True)
@@ -72,7 +72,6 @@ class Llama3Generator:
         "supports_async_decode": True,
         "supports_sample_on_device": True,
         "accepts_trace_mode": True,
-        "required_block_size": _VLLM_BLOCK_SIZE,
     }
     requires_prefill_trace_warmup = True
 
@@ -243,12 +242,14 @@ def build_llama3_generator(config: Llama3GeneratorConfig) -> Llama3Generator:
     if len(submeshes) != config.tt_data_parallel:
         raise ValueError(f"Expected {config.tt_data_parallel} submeshes, got {len(submeshes)}")
 
-    max_num_blocks = (config.max_seq_len + _VLLM_BLOCK_SIZE - 1) // _VLLM_BLOCK_SIZE + per_lane_max_batch_size
+    max_num_blocks = (
+        config.max_seq_len + _PROVISIONAL_BLOCK_SIZE - 1
+    ) // _PROVISIONAL_BLOCK_SIZE + per_lane_max_batch_size
     lanes = []
     try:
         for submesh in submeshes:
             paged_attention_config = Llama31_8BPagedAttentionConfig(
-                block_size=_VLLM_BLOCK_SIZE,
+                block_size=_PROVISIONAL_BLOCK_SIZE,
                 max_num_blocks=max_num_blocks,
             )
             llm = from_pretrained(
@@ -267,7 +268,7 @@ def build_llama3_generator(config: Llama3GeneratorConfig) -> Llama3Generator:
                 trace=TraceConfig(mode=config.trace_mode),
                 warmup=WarmupConfig(),
                 paged_kv_cache=PagedKVCacheConfig(
-                    block_size=_VLLM_BLOCK_SIZE,
+                    block_size=_PROVISIONAL_BLOCK_SIZE,
                     max_num_blocks=max_num_blocks,
                     dtype=model_kv_cache_dtypes[0],
                 ),

@@ -48,7 +48,7 @@ class PagedKVCacheManager:
     """Own one model-bound paged KV-cache allocation from configure to release.
 
     ``Llama3Executor`` constructs the manager from model-owned layer metadata.
-    vLLM may resolve the final block count once through `configure`, then
+    vLLM may resolve the final block geometry once through `configure`, then
     `allocate` binds the physical tensors to the model. Program
     compilation borrows `bound_context`; request execution may present
     only the exact handle returned by `allocate`.
@@ -110,10 +110,12 @@ class PagedKVCacheManager:
         if not config.is_resolved():
             raise ValueError("Replacement PagedKVCacheConfig must contain num_blocks")
 
-        for field in ("block_size", "max_num_blocks", "dtype", "memory_config"):
+        for field in ("dtype", "memory_config"):
             if getattr(config, field) != getattr(self._config, field):
-                raise ValueError(f"Resolved PagedKVCacheConfig may only replace num_blocks; {field} changed")
+                raise ValueError(f"Resolved PagedKVCacheConfig cannot replace {field}")
 
+        _, _, model_paged_configs = _model_contract(self._model)
+        self._validate_static_model_contract(config, model_paged_configs)
         self._config = config
         self._configuration_replaced = True
         self._state = "configured"

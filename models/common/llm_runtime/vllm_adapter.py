@@ -143,12 +143,8 @@ class VLLMAdapter:
         config = self.config.paged_kv_cache
         if num_blocks <= 0:
             raise ValueError("KV cache num_blocks must be positive")
-        if num_blocks > int(config.max_num_blocks):
-            raise ValueError(f"KV cache num_blocks={num_blocks} exceeds max_num_blocks={config.max_num_blocks}")
-        if block_size != int(config.block_size):
-            raise ValueError(
-                f"vLLM KV block size {block_size} does not match configured block size {config.block_size}"
-            )
+        if block_size <= 0:
+            raise ValueError("KV cache block_size must be positive")
         if (
             self.config.expected_kv_heads_per_device is not None
             and kv_heads != self.config.expected_kv_heads_per_device
@@ -176,7 +172,12 @@ class VLLMAdapter:
                 f"PagedKVCacheConfig is already resolved to {configured_num_blocks} blocks; "
                 f"vLLM requested {num_blocks}"
             )
-        return dataclasses.replace(config, num_blocks=num_blocks)
+        return dataclasses.replace(
+            config,
+            block_size=block_size,
+            max_num_blocks=num_blocks,
+            num_blocks=num_blocks,
+        )
 
     # Private implementation
 

@@ -14,6 +14,7 @@ from models.common.llm_runtime.execution import EagerExecutor, TracedExecutor
 from models.common.llm_runtime.lane_group import LaneGroupExecutor
 from models.common.models.llama3_8b import executor as llama_executor
 from models.common.models.llama3_8b import generator as llama_generator
+from models.common.models.llama3_8b import model as llama_model
 from models.common.tests.demos.llama3_8b import demo as llama_demo
 
 
@@ -32,7 +33,10 @@ def _model(*, max_batch_size=4, max_seq_len=4096):
         head_dim=128,
         kv_cache_dtype=ttnn.bfloat8_b,
         paged_attention_config=paged,
+        use_vllm_paged_kv_cache=True,
+        kv_cache=None,
     )
+    attention_module = SimpleNamespace(config=attention, kv_cache=None)
     model = SimpleNamespace(
         config=SimpleNamespace(
             mesh_device=_Mesh(),
@@ -42,11 +46,21 @@ def _model(*, max_batch_size=4, max_seq_len=4096):
             num_devices=1,
             block_configs=(SimpleNamespace(attention_config=attention),),
         ),
-        layers=(SimpleNamespace(attention=SimpleNamespace(config=attention)),),
+        layers=(SimpleNamespace(attention=attention_module),),
         iter_executor_named_modules=lambda: (),
         vocab_size=128,
         num_devices=1,
     )
+
+    def configure_paged_attention(*, block_size, max_num_blocks):
+        assert attention.kv_cache is None
+        assert attention_module.kv_cache is None
+        attention.paged_attention_config = SimpleNamespace(
+            block_size=block_size,
+            max_num_blocks=max_num_blocks,
+        )
+
+    model.configure_paged_attention = configure_paged_attention
     return model
 
 
@@ -117,10 +131,10 @@ def test_vllm_capacity_resolution_reconfigures_existing_runtime_owners_before_al
 
     executor.configure_paged_kv_cache(
         PagedKVCacheConfig(
-            block_size=32,
-            max_num_blocks=132,
+            block_size=16,
+            max_num_blocks=200,
             dtype=ttnn.bfloat8_b,
-            num_blocks=64,
+            num_blocks=200,
         )
     )
 
@@ -136,10 +150,33 @@ def test_vllm_capacity_resolution_reconfigures_existing_runtime_owners_before_al
         )
         == owner_ids
     )
-    assert executor.page_table_layout.raw_capacity_width == 64
+    assert executor.config.paged_kv_cache is executor.kv_cache_manager.config
+    assert executor.kv_cache_manager.config.block_size == 16
+    assert executor.kv_cache_manager.config.max_num_blocks == executor.kv_cache_manager.config.num_blocks == 200
+    assert executor.model.layers[0].attention.config.paged_attention_config.block_size == 16
+    assert executor.model.layers[0].attention.config.paged_attention_config.max_num_blocks == 200
+    assert executor.page_table_layout.block_size == 16
+    assert executor.page_table_layout.raw_capacity_width == 200
     assert executor.prefill_runtime.config.page_table_layout is executor.page_table_layout
     assert executor.decode_runtime.config.page_table_layout is executor.page_table_layout
     assert executor.warmup.config.page_table_layout is executor.page_table_layout
+    assert (
+        executor.prefill_runtime.config.max_page_table_capacity_width
+        == executor.decode_runtime.config.max_page_table_capacity_width
+        == executor.warmup.config.max_page_table_capacity_width
+        == executor.page_table_layout.raw_capacity_width
+    )
+    assert (
+        executor.prefill_runtime.config.max_prefill_page_table_width
+        == executor.warmup.config.max_prefill_page_table_width
+        == executor.page_table_layout.prefill_width
+    )
+    assert (
+        executor.prefill_runtime.config.max_decode_page_table_width
+        == executor.decode_runtime.config.max_decode_page_table_width
+        == executor.warmup.config.max_decode_page_table_width
+        == executor.page_table_layout.decode_width
+    )
 
     def fake_allocate():
         assert executor._runtime_configuration_sealed
@@ -148,6 +185,34 @@ def test_vllm_capacity_resolution_reconfigures_existing_runtime_owners_before_al
 
     monkeypatch.setattr(executor.kv_cache_manager, "allocate", fake_allocate)
     assert executor.allocate_kv_cache() == ["allocated"]
+
+
+def test_model_reconfigures_construction_and_live_attention_without_allocating():
+    construction_paged = llama_model.Llama31_8BPagedAttentionConfig(block_size=32, max_num_blocks=132)
+    live_paged = llama_model.Llama31_8BPagedAttentionConfig(block_size=32, max_num_blocks=132)
+    construction_attention = SimpleNamespace(
+        use_vllm_paged_kv_cache=True,
+        paged_attention_config=construction_paged,
+    )
+    live_attention = SimpleNamespace(
+        use_vllm_paged_kv_cache=True,
+        paged_attention_config=live_paged,
+        kv_cache=None,
+    )
+    model = object.__new__(llama_model.Llama3Transformer1D)
+    model.config = SimpleNamespace(
+        block_configs=(SimpleNamespace(attention_config=construction_attention),),
+    )
+    model.layers = (SimpleNamespace(attention=SimpleNamespace(config=live_attention, kv_cache=None)),)
+
+    model.configure_paged_attention(block_size=16, max_num_blocks=200)
+
+    assert construction_attention.paged_attention_config.block_size == 16
+    assert construction_attention.paged_attention_config.max_num_blocks == 200
+    assert live_attention.paged_attention_config.block_size == 16
+    assert live_attention.paged_attention_config.max_num_blocks == 200
+    assert live_attention.kv_cache is None
+    assert model.layers[0].attention.kv_cache is None
 
 
 def test_late_vllm_capacity_resolution_fails_before_mutating_kv_configuration(expect_error):

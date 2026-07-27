@@ -102,11 +102,21 @@ def test_unresolved_config_accepts_one_resolved_replacement(expect_error):
         manager.configure(replace(resolved, num_blocks=5))
 
 
-def test_resolved_replacement_may_change_only_num_blocks(expect_error):
-    manager = PagedKVCacheManager(FakeModel(), cache_config())
+def test_resolved_replacement_accepts_model_aligned_external_geometry(expect_error):
+    model = FakeModel()
+    manager = PagedKVCacheManager(model, cache_config())
 
-    with expect_error(ValueError, "block_size changed"):
-        manager.configure(cache_config(block_size=16, num_blocks=4))
+    for block in model.config.block_configs:
+        block.attention_config.paged_attention_config.block_size = 16
+        block.attention_config.paged_attention_config.max_num_blocks = 12
+    manager.configure(cache_config(block_size=16, max_num_blocks=12, num_blocks=12))
+
+    assert manager.config.block_size == 16
+    assert manager.config.max_num_blocks == manager.config.num_blocks == 12
+
+    other = PagedKVCacheManager(FakeModel(), cache_config())
+    with expect_error(ValueError, "dtype"):
+        other.configure(cache_config(dtype=ttnn.bfloat16, num_blocks=4))
 
 
 def test_pre_resolved_config_starts_configured_and_cannot_be_replaced(expect_error):

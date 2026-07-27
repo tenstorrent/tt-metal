@@ -187,12 +187,25 @@ class Llama3Executor:
         return None
 
     def configure_paged_kv_cache(self, config: PagedKVCacheConfig) -> None:
-        """Resolve late KV capacity before the first allocation."""
+        """Resolve vLLM-owned KV geometry before the first allocation."""
 
         self._ensure_active()
         if self._runtime_configuration_sealed:
             raise RuntimeError("runtime configuration is sealed")
+        if not isinstance(config, PagedKVCacheConfig):
+            raise TypeError("config must be a PagedKVCacheConfig")
+        if self.kv_cache_manager.config.is_resolved():
+            raise RuntimeError("paged KV cache configuration is already resolved")
+        if config.dtype != self.kv_cache_manager.config.dtype:
+            raise ValueError("resolved paged KV cache cannot change dtype")
+        if config.memory_config != self.kv_cache_manager.config.memory_config:
+            raise ValueError("resolved paged KV cache cannot change memory_config")
+        self.model.configure_paged_attention(
+            block_size=config.block_size,
+            max_num_blocks=config.max_num_blocks,
+        )
         self.kv_cache_manager.configure(config)
+        self.config = replace(self.config, paged_kv_cache=config)
         self._refresh_page_table_layout()
 
     def allocate_kv_cache(
@@ -399,12 +412,40 @@ class Llama3Executor:
     def _refresh_page_table_layout(self) -> None:
         # vLLM reaches this boundary after choosing the physical block count and
         # before PagedKVCacheManager.allocate(), compilation, warmup, or tracing.
-        # Replace small immutable geometry configs while preserving every runtime
-        # and resource owner's identity.
+        # Re-resolve complete immutable configs so their normal construction
+        # checks and capacity ceilings describe vLLM's authoritative geometry.
+        # Runtime and resource-owner identities remain unchanged.
         layout = self._resolve_page_table_layout()
-        self.prefill_runtime.configure_page_table_layout(layout)
-        self.decode_runtime.configure_page_table_layout(layout)
-        self.warmup.configure_page_table_layout(layout)
+        current_prefill = self.prefill_runtime.config
+        prefill_config = PrefillRuntimeConfig.resolve(
+            model=self.model,
+            output_reader=self.output_reader,
+            page_table_layout=layout,
+            max_batch_size=current_prefill.max_batch_size,
+            max_prefill_chunk_size=current_prefill.max_prefill_chunk_size,
+            device_sampling_enabled=current_prefill.device_sampling_enabled,
+            can_enable_trace=current_prefill.can_enable_trace,
+        )
+        current_decode = self.decode_runtime.config
+        decode_config = DecodeRuntimeConfig.resolve(
+            model=self.model,
+            output_reader=self.output_reader,
+            lane_capacity=current_decode.lane_capacity,
+            page_table_layout=layout,
+            device_sampling_enabled=current_decode.device_sampling_enabled,
+            force_greedy_top_k=current_decode.force_greedy_top_k,
+        )
+        warmup_config = WarmupCoordinatorConfig.resolve(
+            warmup=self.warmup.config.warmup,
+            trace=self.config.trace,
+            prefill=prefill_config,
+            decode=decode_config,
+            prefill_sequence_lengths=self.warmup.config.prefill_sequence_lengths,
+        )
+
+        self.prefill_runtime.config = prefill_config
+        self.decode_runtime.config = decode_config
+        self.warmup.config = warmup_config
         self.page_table_layout = layout
 
     def _seal_runtime_configuration(self) -> None:

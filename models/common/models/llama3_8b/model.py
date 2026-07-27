@@ -27,7 +27,7 @@ models/common/models/executor.py.
 """
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import torch
@@ -480,6 +480,29 @@ class Llama3Transformer1D(LightweightModule):
             yield "final_norm", self.norm
         if hasattr(self, "lm_head"):
             yield "lm_head", self.lm_head
+
+    def configure_paged_attention(self, *, block_size: int, max_num_blocks: int) -> None:
+        """Replace provisional external-cache geometry before KV tensors exist."""
+
+        for name, value in (("block_size", block_size), ("max_num_blocks", max_num_blocks)):
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+
+        live_configs = tuple(layer.attention.config for layer in self.layers)
+        for layer, config in enumerate(live_configs):
+            if not config.use_vllm_paged_kv_cache or config.paged_attention_config is None:
+                raise RuntimeError(f"Model layer {layer} is not configured for externally managed paged KV cache")
+            if config.kv_cache is not None or getattr(self.layers[layer].attention, "kv_cache", None) is not None:
+                raise RuntimeError(f"Model layer {layer} already has a bound KV cache")
+
+        construction_configs = tuple(block.attention_config for block in self.config.block_configs)
+        attention_configs = tuple({id(config): config for config in (*construction_configs, *live_configs)}.values())
+        for config in attention_configs:
+            config.paged_attention_config = replace(
+                config.paged_attention_config,
+                block_size=block_size,
+                max_num_blocks=max_num_blocks,
+            )
 
     def set_kv_cache(self, kv_cache: list | None):
         """Bind or unbind the static KV-cache pool transactionally."""
