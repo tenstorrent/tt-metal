@@ -1,0 +1,33 @@
+/goal STAGE 2/3 per-kind optimize: discover the per-kind block classes in the prettified multichip gpt-oss model_ttnn.py and optimize each separately (precision, sharding, layout, program configs), keeping the full-model check green (PCC>=0.98) after every kind.
+
+CONTEXT — you are the OPTIMIZE half of a prettify->optimize pipeline. The model has already been
+"prettified": a REAL multi-device (4x Blackhole, tensor-parallel, 1x4 mesh) TTNN gpt-oss model whose flat
+codegen forward was refactored into labeled per-kind layer classes. It ALREADY passes a full-model
+correctness test. Your job is to make it FASTER on-device while keeping that test green.
+
+TARGET (edit these files IN PLACE — this is the actual model, do NOT reinvent it or shrink shapes/precision):
+  /home/mvasiljevic/project-alchemy/ttnn-models/openai/gpt-oss-20b/model/graph_0/model_ttnn.py   # modularized TTNN model: class ModelTTNN + per-kind block classes
+                           # (read the file to see which kinds exist — e.g. an attention block class and
+                           #  a MoE/MLP block class; do NOT assume a fixed set)
+  /home/mvasiljevic/project-alchemy/ttnn-models/openai/gpt-oss-20b/model/graph_0/params.py, consteval.py, utils.py, main.py
+
+FULL-MODEL CHECK (run this yourself after every change; it is also the runner-side gate for this stage):
+  cd /home/mvasiljevic/project-alchemy/ttnn-models/openai/gpt-oss-20b/model/graph_0 && source /home/mvasiljevic/_env.sh && PYTHONPATH=. python3 -m pytest main.py -s
+  It prints "PCC: <x>" (correlation vs a CPU golden) and traced TPS. BASELINE: PCC=0.999743, trace TPS~730.
+  A change is acceptable ONLY if PCC stays >= 0.98 (aim to keep ~0.999). Report TPS before/after.
+
+GROUND RULES: keep the multichip (1x4 TP) distribution — never collapse it to single device. Keep the
+per-kind class structure. Optimize the ACTUAL classes in place (or add sibling *Optimized classes wired
+into ModelTTNN), never a from-scratch reimplementation. Measure on the real shapes/mesh. Do NOT lower the
+model's precision/context contract to fake a speedup. Before finishing, RUN the full-model check and paste
+its PCC + TPS.
+
+STAGE 2 of 3 — PER-KIND OPTIMIZE. First DISCOVER the distinct per-kind block classes in model_ttnn.py by
+reading it (do not assume which model this is or a fixed set of kinds). Then optimize EACH kind SEPARATELY
+with the $optimize skill: sweep precision/fidelity per tensor group ($datatype-sweep), pick on-device L1
+sharding/layout and program configs ($shard-advise) for that block's dense matmuls, and tune data movement.
+Treat each kind as its own optimization unit; after optimizing a kind, RE-RUN the full-model check and keep
+the change only if PCC stays >= 0.98. Do all kinds present. This goal is model-agnostic: it optimizes
+whatever kinds it finds, not a hard-coded one. Report per-kind PCC + trace TPS deltas.
+
+$optimize $shard-advise $datatype-sweep

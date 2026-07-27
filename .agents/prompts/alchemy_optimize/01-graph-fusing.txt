@@ -1,0 +1,31 @@
+/goal STAGE 1/3 graph-fusing: improve the graph topology of the prettified multichip gpt-oss model_ttnn.py (reduce ops, fuse, cut data movement) while the full-model check stays green (PCC>=0.98).
+
+CONTEXT — you are the OPTIMIZE half of a prettify->optimize pipeline. The model has already been
+"prettified": a REAL multi-device (4x Blackhole, tensor-parallel, 1x4 mesh) TTNN gpt-oss model whose flat
+codegen forward was refactored into labeled per-kind layer classes. It ALREADY passes a full-model
+correctness test. Your job is to make it FASTER on-device while keeping that test green.
+
+TARGET (edit these files IN PLACE — this is the actual model, do NOT reinvent it or shrink shapes/precision):
+  /home/mvasiljevic/project-alchemy/ttnn-models/openai/gpt-oss-20b/model/graph_0/model_ttnn.py   # modularized TTNN model: class ModelTTNN + per-kind block classes
+                           # (read the file to see which kinds exist — e.g. an attention block class and
+                           #  a MoE/MLP block class; do NOT assume a fixed set)
+  /home/mvasiljevic/project-alchemy/ttnn-models/openai/gpt-oss-20b/model/graph_0/params.py, consteval.py, utils.py, main.py
+
+FULL-MODEL CHECK (run this yourself after every change; it is also the runner-side gate for this stage):
+  cd /home/mvasiljevic/project-alchemy/ttnn-models/openai/gpt-oss-20b/model/graph_0 && source /home/mvasiljevic/_env.sh && PYTHONPATH=. python3 -m pytest main.py -s
+  It prints "PCC: <x>" (correlation vs a CPU golden) and traced TPS. BASELINE: PCC=0.999743, trace TPS~730.
+  A change is acceptable ONLY if PCC stays >= 0.98 (aim to keep ~0.999). Report TPS before/after.
+
+GROUND RULES: keep the multichip (1x4 TP) distribution — never collapse it to single device. Keep the
+per-kind class structure. Optimize the ACTUAL classes in place (or add sibling *Optimized classes wired
+into ModelTTNN), never a from-scratch reimplementation. Measure on the real shapes/mesh. Do NOT lower the
+model's precision/context contract to fake a speedup. Before finishing, RUN the full-model check and paste
+its PCC + TPS.
+
+STAGE 1 of 3 — GRAPH FUSING (topology). Use the $graph-fusing skill on model_ttnn.py to improve the graph
+structure: reduce op count, fuse where valid, and remove needless data movement / layout conversions and
+resharding — without changing the multichip distribution or the per-kind class structure. This is a
+topology pass BEFORE knob tuning. Keep the full-model check green (PCC >= 0.98). When done, run the
+full-model check and report PCC + trace TPS vs the baseline.
+
+$graph-fusing

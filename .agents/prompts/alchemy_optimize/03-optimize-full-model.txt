@@ -1,0 +1,33 @@
+/goal STAGE 3/3 optimize-full-model: integrate the per-kind optimizations across the whole prettified multichip gpt-oss model, chain L1-resident ops on the residual stream, and deliver the final traced full-model result (PCC>=0.98, report TPS vs baseline ~730).
+
+CONTEXT — you are the OPTIMIZE half of a prettify->optimize pipeline. The model has already been
+"prettified": a REAL multi-device (4x Blackhole, tensor-parallel, 1x4 mesh) TTNN gpt-oss model whose flat
+codegen forward was refactored into labeled per-kind layer classes. It ALREADY passes a full-model
+correctness test. Your job is to make it FASTER on-device while keeping that test green.
+
+TARGET (edit these files IN PLACE — this is the actual model, do NOT reinvent it or shrink shapes/precision):
+  /home/mvasiljevic/project-alchemy/ttnn-models/openai/gpt-oss-20b/model/graph_0/model_ttnn.py   # modularized TTNN model: class ModelTTNN + per-kind block classes
+                           # (read the file to see which kinds exist — e.g. an attention block class and
+                           #  a MoE/MLP block class; do NOT assume a fixed set)
+  /home/mvasiljevic/project-alchemy/ttnn-models/openai/gpt-oss-20b/model/graph_0/params.py, consteval.py, utils.py, main.py
+
+FULL-MODEL CHECK (run this yourself after every change; it is also the runner-side gate for this stage):
+  cd /home/mvasiljevic/project-alchemy/ttnn-models/openai/gpt-oss-20b/model/graph_0 && source /home/mvasiljevic/_env.sh && PYTHONPATH=. python3 -m pytest main.py -s
+  It prints "PCC: <x>" (correlation vs a CPU golden) and traced TPS. BASELINE: PCC=0.999743, trace TPS~730.
+  A change is acceptable ONLY if PCC stays >= 0.98 (aim to keep ~0.999). Report TPS before/after.
+
+GROUND RULES: keep the multichip (1x4 TP) distribution — never collapse it to single device. Keep the
+per-kind class structure. Optimize the ACTUAL classes in place (or add sibling *Optimized classes wired
+into ModelTTNN), never a from-scratch reimplementation. Measure on the real shapes/mesh. Do NOT lower the
+model's precision/context contract to fake a speedup. Before finishing, RUN the full-model check and paste
+its PCC + TPS.
+
+STAGE 3 of 3 — OPTIMIZE FULL MODEL (final stage). Integrate the per-kind optimizations across the whole
+model: chain L1-resident ops along the decode residual stream (norm -> attn -> residual -> MLP -> output)
+on a consistent shard spec where feasible so material ops don't fall back to interleaved/1-core, reconcile
+any remaining collectives/resharding at the module boundaries, and confirm the traced full-model path.
+main.py already captures a ttnn trace and prints TPS. Deliver the FINAL optimized multichip model: the
+full-model check must pass (PCC >= 0.98) and report the trace TPS before (baseline ~730) and after. Use
+$full-model + $optimize. This is the terminal optimize-full-model stage.
+
+$optimize $full-model
