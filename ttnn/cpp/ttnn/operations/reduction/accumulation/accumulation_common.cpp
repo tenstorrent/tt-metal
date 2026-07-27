@@ -81,6 +81,15 @@ void validate_output_tensor(const Tensor& input_tensor, const Tensor& output_ten
         "Shape mismatch: input tensor shape {} does not match output tensor shape {}.",
         input_tensor.logical_shape(),
         output_tensor.logical_shape());
+    // The accumulation and permute device ops that now write directly into the preallocated output only have
+    // interleaved, tiled kernels; neither validates the layout/memory_layout of the provided output tensor. Assert
+    // the assumption here so a non-tile or sharded preallocated output fails early and clearly, rather than
+    // producing undefined behaviour when the op writes through its buffer.
+    TT_FATAL(
+        output_tensor.layout() == Layout::TILE, "Preallocated output tensor must have TILE layout.");
+    TT_FATAL(
+        output_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "Preallocated output tensor must have INTERLEAVED memory layout.");
 }
 
 Tensor accumulation_invoke(
