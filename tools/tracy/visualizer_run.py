@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -56,19 +57,27 @@ stamp_memory_run_id = _run_id.stamp_memory_run_id
 stamp_report_dir_run_id = _run_id.stamp_report_dir_run_id
 
 
-def _write_json(path: Path, payload: dict[str, Any], *, base_dir: Path) -> None:
-    """Write JSON only when ``path`` resolves under ``base_dir`` as ``manifest.json``."""
-    base = Path(base_dir).resolve()
-    target = Path(path).resolve()
-    if target.name != MANIFEST_FILENAME:
-        raise ValueError(f"Refusing to write non-manifest path: {target}")
-    if not target.is_relative_to(base):
-        raise ValueError(f"Refusing to write outside base directory: {target} not under {base}")
+def _safe_manifest_path(report_dir: Path | str) -> str:
+    """Return a realpath to ``manifest.json`` under ``report_dir``, or raise if it escapes.
 
-    target.parent.mkdir(parents=True, exist_ok=True)
+    Uses ``os.path.realpath`` + ``startswith`` so SAST tools recognise the containment check.
+    Basename is a fixed constant — never taken from caller input.
+    """
+    base = os.path.realpath(str(report_dir))
+    target = os.path.realpath(os.path.join(base, MANIFEST_FILENAME))
+    if not target.startswith(base + os.sep):
+        raise ValueError(f"Refusing to write outside base directory: {target} not under {base}")
+    return target
+
+
+def _write_manifest_json(payload: dict[str, Any], *, report_dir: Path | str) -> Path:
+    """Write ``manifest.json`` under ``report_dir`` only (fixed basename; no caller path)."""
+    target = _safe_manifest_path(report_dir)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
     with open(target, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
         f.write("\n")
+    return Path(target)
 
 
 def _path_for_manifest(path: Path, report_dir: Path) -> str:
@@ -117,8 +126,7 @@ def write_performance_manifest(
     if device_log.is_file():
         payload["device_log"] = _path_for_manifest(device_log, report_dir)
 
-    manifest_path = report_dir / MANIFEST_FILENAME
-    _write_json(manifest_path, payload, base_dir=report_dir)
+    manifest_path = _write_manifest_json(payload, report_dir=report_dir)
     logger.info(f"Visualizer run_id={run_id} written to {manifest_path}")
     return manifest_path
 

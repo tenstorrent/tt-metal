@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from tracy.visualizer_run import (
+    MANIFEST_FILENAME,
     RUN_ID_METADATA_KEY,
     TT_METAL_RUN_ID_ENV,
     find_memory_report_dir,
@@ -19,7 +20,8 @@ from tracy.visualizer_run import (
     peek_run_id,
     stamp_memory_run_id,
     stamp_report_dir_run_id,
-    _write_json,
+    _safe_manifest_path,
+    _write_manifest_json,
     write_performance_manifest,
 )
 
@@ -191,21 +193,25 @@ def test_stamp_report_dir_run_id_noop_without_db(monkeypatch, tmp_path):
     assert stamp_report_dir_run_id(tmp_path / "missing", is_primary_rank=True) is None
 
 
-def test_write_json_rejects_path_outside_base_dir(tmp_path):
-    base = tmp_path / "reports"
-    base.mkdir()
-    outside = tmp_path / "elsewhere" / "manifest.json"
+def test_write_manifest_json_writes_fixed_basename(tmp_path):
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+
+    written = _write_manifest_json({RUN_ID_METADATA_KEY: "x"}, report_dir=report_dir)
+
+    assert written.name == MANIFEST_FILENAME
+    assert written.parent == report_dir.resolve()
+    assert written.is_file()
+    assert json.loads(written.read_text(encoding="utf-8"))[RUN_ID_METADATA_KEY] == "x"
+
+
+def test_safe_manifest_path_rejects_symlink_escape(tmp_path):
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    outside = tmp_path / "elsewhere" / MANIFEST_FILENAME
+    outside.parent.mkdir()
+    (report_dir / MANIFEST_FILENAME).symlink_to(outside)
 
     with pytest.raises(ValueError, match="outside base directory"):
-        _write_json(outside, {RUN_ID_METADATA_KEY: "x"}, base_dir=base)
+        _safe_manifest_path(report_dir)
     assert not outside.exists()
-
-
-def test_write_json_rejects_non_manifest_filename(tmp_path):
-    base = tmp_path / "reports"
-    base.mkdir()
-    bad = base / "not_manifest.json"
-
-    with pytest.raises(ValueError, match="non-manifest"):
-        _write_json(bad, {RUN_ID_METADATA_KEY: "x"}, base_dir=base)
-    assert not bad.exists()
