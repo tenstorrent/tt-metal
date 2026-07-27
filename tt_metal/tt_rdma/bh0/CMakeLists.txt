@@ -63,3 +63,8 @@ target_link_libraries(bh1_ingest_probe PRIVATE test_metal_common_libs)
 add_executable(bh1_l1_bw_test bh1_l1_bw_test_host.cpp)
 target_include_directories(bh1_l1_bw_test PRIVATE ${PROJECT_SOURCE_DIR})
 target_link_libraries(bh1_l1_bw_test PRIVATE test_metal_common_libs)
+
+# Full-processing drainer pool (experiment 3) — read+parse+rkey->MR (loads bh_rdma_rx_worker.cpp).
+add_executable(bh1_rx_worker_test bh1_rx_worker_test_host.cpp)
+target_include_directories(bh1_rx_worker_test PRIVATE ${PROJECT_SOURCE_DIR})
+target_link_libraries(bh1_rx_worker_test PRIVATE test_metal_common_libs)
