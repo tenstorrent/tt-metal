@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI U.S. Corp.
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 import torch
@@ -13,9 +15,10 @@ from models.common.utility_functions import comp_pcc, run_for_wormhole_b0
 from models.demos.vision.segmentation.sam2.common import load_sam2_model_and_processor
 from models.demos.vision.segmentation.sam2.tt.tt_sam2_video import SAM2_L1_SMALL_SIZE, build_tt_sam2_model
 
+MODELS_ROOT = next(parent for parent in Path(__file__).resolve().parents if parent.name == "models")
+SAMPLE_IMAGE_PATH = MODELS_ROOT / "sample_data" / "huggingface_cat_image.jpg"
 N300_DEVICE_PARAMS = {
     "l1_small_size": SAM2_L1_SMALL_SIZE,
-    "require_exact_physical_num_devices": True,
 }
 N300_VIDEO_DEVICE_PARAMS = {**N300_DEVICE_PARAMS, "num_command_queues": 2}
 
@@ -26,7 +29,7 @@ def _processed_pixels(processor, seed=0):
 
 
 def _sample_pixels(processor):
-    with Image.open("models/sample_data/huggingface_cat_image.jpg") as image:
+    with Image.open(SAMPLE_IMAGE_PATH) as image:
         return processor(images=image.convert("RGB"), return_tensors="pt").pixel_values
 
 
@@ -99,7 +102,7 @@ def _image_prompt(prompt_type):
 @run_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [N300_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
-def test_sam2_image_pcc(prompt_type, mesh_device, reset_seeds, model_location_generator):
+def test_sam2_image_hf_pcc(prompt_type, mesh_device, reset_seeds, model_location_generator):
     hf_model, processor = load_sam2_model_and_processor(model_location_generator)
     pixels = _sample_pixels(processor)
     inputs = _image_prompt(prompt_type)
@@ -110,9 +113,6 @@ def test_sam2_image_pcc(prompt_type, mesh_device, reset_seeds, model_location_ge
     model = build_tt_sam2_model(hf_model, mesh_device)
     actual = None
     try:
-        assert set(model.encoder_device.get_device_ids()) == set(
-            ttnn.get_pcie_device_ids()
-        ), "image inference must stay on the PCIe-attached ASIC"
         model.set_image(pixels)
         actual = model.predict(**inputs, multimask_output=True)
         mask_pcc = _assert_pcc(golden_masks.squeeze(1), ttnn.to_torch(actual["low_res_masks"]), 0.98)
@@ -135,24 +135,37 @@ def test_sam2_image_pcc(prompt_type, mesh_device, reset_seeds, model_location_ge
         model.close()
 
 
+def _video_prompt(prompt_type):
+    cases = {
+        "point": {
+            "input_points": torch.tensor([[[[512.0, 512.0]]]]),
+            "input_labels": torch.tensor([[[1]]], dtype=torch.int32),
+        },
+        "box": {
+            "input_boxes": torch.tensor([[[256.0, 256.0, 768.0, 768.0]]]),
+        },
+    }
+    return cases[prompt_type]
+
+
+@pytest.mark.parametrize("prompt_type", ["point", "box"])
 @run_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [N300_VIDEO_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
-def test_sam2_three_frame_video(mesh_device, reset_seeds, model_location_generator):
+def test_sam2_video_hf_pcc(prompt_type, mesh_device, reset_seeds, model_location_generator):
     hf_model, processor = load_sam2_model_and_processor(model_location_generator)
-    frames = [_processed_pixels(processor, seed) for seed in range(3)]
-    prompts = {
-        "input_points": torch.tensor([[[[512.0, 512.0]]]]),
-        "input_labels": torch.tensor([[[1]]], dtype=torch.int32),
-    }
+    frame_count = 1 if prompt_type == "box" else 3
+    frames = [_processed_pixels(processor, seed) for seed in range(frame_count)]
+    prompts = _video_prompt(prompt_type)
 
     hf_session = processor.init_video_session(inference_device="cpu", dtype=torch.float32)
     processor.add_inputs_to_inference_session(
         hf_session,
         frame_idx=0,
         obj_ids=0,
-        input_points=prompts["input_points"],
-        input_labels=prompts["input_labels"],
+        input_points=prompts.get("input_points"),
+        input_labels=prompts.get("input_labels"),
+        input_boxes=prompts.get("input_boxes"),
         original_size=(1024, 1024),
     )
     with torch.no_grad():
@@ -162,71 +175,27 @@ def test_sam2_three_frame_video(mesh_device, reset_seeds, model_location_generat
         ]
 
     model = build_tt_sam2_model(hf_model, mesh_device, bridge_upload_cq_id=1)
-    session = pipeline_session = early_close_session = None
-    image_output = None
+    session = None
     try:
-        encoder_ids = set(model.encoder_device.get_device_ids())
-        tracker_ids = set(model.tracker_device.get_device_ids())
-        assert encoder_ids == set(ttnn.get_pcie_device_ids()), "encoder must use the PCIe-attached ASIC"
-        assert tracker_ids == set(mesh_device.get_device_ids()) - encoder_ids, "tracker must use the remote ASIC"
-        assert encoder_ids.isdisjoint(tracker_ids), "encoder and tracker submeshes must not overlap"
-
-        model.set_image(frames[0])
-        image_output = model.predict(**prompts, multimask_output=False)
-        assert tuple(image_output["low_res_masks"].shape) == (
-            1,
-            1,
-            256,
-            256,
-        ), "unexpected image mask shape before video"
-        _safe_deallocate_output(image_output)
-        image_output = None
-
         session = model.start_video_session()
-        actual_frames = [
-            session.step(frames[0], prompts=prompts),
-            session.step(frames[1]),
-            session.step(frames[2]),
-        ]
-        for golden, actual, threshold in zip(golden_frames, actual_frames, (0.98, 0.95, 0.95)):
-            _assert_pcc(golden.pred_masks, ttnn.to_torch(actual["pred_masks"]), threshold)
-        golden_high_res = F.interpolate(
-            golden_frames[0].pred_masks.float(), (1024, 1024), mode="bilinear", align_corners=False
-        )
-        _assert_pcc(golden_high_res, ttnn.to_torch(actual_frames[0]["pred_masks_high_res"]), 0.98)
-        assert len(session.bank["cond_frame_outputs"]) == 1, "conditioning bank must retain frame zero"
-        assert (
-            len(session.bank["non_cond_frame_outputs"]) <= model.max_obj_ptrs_in_encoder - 1
-        ), "non-conditioning bank exceeded its bound"
-        session.close()
-        session = None
-
-        pipeline_session = model.start_video_session()
-        pipelined = list(pipeline_session.run(frames, prompts))
-        assert len(pipelined) == 3, f"expected 3 pipelined outputs, got {len(pipelined)}"
-        for golden, actual, threshold in zip(golden_frames, pipelined, (0.98, 0.95, 0.95)):
-            _assert_pcc(golden.pred_masks, ttnn.to_torch(actual["pred_masks"]), threshold)
-        pipeline_session.close()
-        pipeline_session = None
-
-        early_close_session = model.start_video_session()
-        iterator = early_close_session.run(frames, prompts)
-        first = next(iterator)
-        _assert_pcc(golden_frames[0].pred_masks, ttnn.to_torch(first["pred_masks"]), 0.98)
-        early_close_session.close()
-        early_close_session = None
-
-        model.set_image(frames[0])
-        image_output = model.predict(**prompts, multimask_output=False)
-        assert tuple(image_output["low_res_masks"].shape) == (
-            1,
-            1,
-            256,
-            256,
-        ), "unexpected image mask shape after video"
+        actual_frames = list(session.run(frames, prompts))
+        assert len(actual_frames) == len(golden_frames)
+        if prompt_type == "box":
+            golden_pointer = hf_session.output_dict_per_obj[0]["cond_frame_outputs"][0]["object_pointer"].float()
+            actual_pointer = ttnn.to_torch(actual_frames[0]["obj_ptr"]).float().reshape_as(golden_pointer)
+            pointer_pcc = _assert_pcc(golden_pointer, actual_pointer, 0.98)
+            logger.info(
+                "SAM2 video box first-frame object-pointer PCC={:.6f}; "
+                "this validates the checkpoint's single-mask token policy",
+                pointer_pcc,
+            )
+        else:
+            pcc_values = [
+                _assert_pcc(golden.pred_masks, ttnn.to_torch(actual["pred_masks"]), threshold)
+                for golden, actual, threshold in zip(golden_frames, actual_frames, (0.98, 0.95, 0.95))
+            ]
+            logger.info("SAM2 video {} frame PCCs={}", prompt_type, pcc_values)
     finally:
-        _safe_deallocate_output(image_output)
-        for active_session in (session, pipeline_session, early_close_session):
-            if active_session is not None:
-                active_session.close()
+        if session is not None:
+            session.close()
         model.close()

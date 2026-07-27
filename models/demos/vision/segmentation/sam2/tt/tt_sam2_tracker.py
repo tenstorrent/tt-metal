@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI U.S. Corp., for the TTNN port. Reference code © Meta Platforms, Inc. (Apache-2.0).
 # SPDX-License-Identifier: Apache-2.0
-"""Remote-ASIC SAM2 memory conditioning and mask tracking."""
+"""SAM2 memory conditioning and mask tracking on the second N300 device."""
 
 import torch
 
@@ -73,6 +73,7 @@ class TtSam2Tracker:
         self,
         parameters,
         device,
+        config,
         *,
         num_maskmem,
         max_obj_ptrs_in_encoder,
@@ -84,6 +85,10 @@ class TtSam2Tracker:
         self.max_obj_ptrs_in_encoder = max_obj_ptrs_in_encoder
         self.hidden_dim = 256
         self.mem_dim = 64
+        self.multimask_output_in_sam = bool(config.multimask_output_in_sam)
+        self.multimask_output_for_tracking = bool(config.multimask_output_for_tracking)
+        self.multimask_min_pt_num = int(config.multimask_min_pt_num)
+        self.multimask_max_pt_num = int(config.multimask_max_pt_num)
         self.feat_tokens = 4096
         self._output_cq_id = output_cq_id
         self._mask_upsampler = None
@@ -341,7 +346,26 @@ class TtSam2Tracker:
         ]
         return best_low, best_token, selection_to_free
 
-    def _forward_sam_heads(self, pix_feat_seq, enc, prompt_inputs):
+    @staticmethod
+    def _num_prompt_points(prompt_inputs):
+        if prompt_inputs is None:
+            return 0
+        point_coords = prompt_inputs["point_coords"]
+        boxes = prompt_inputs["boxes"]
+        num_points = 0 if point_coords is None else int(point_coords.shape[-2])
+        if boxes is not None:
+            num_points += 2 * int(boxes.shape[-2])
+        return num_points
+
+    def _use_multimask(self, is_initial_conditioning_frame, prompt_inputs):
+        num_points = self._num_prompt_points(prompt_inputs)
+        return (
+            self.multimask_output_in_sam
+            and (is_initial_conditioning_frame or self.multimask_output_for_tracking)
+            and self.multimask_min_pt_num <= num_points <= self.multimask_max_pt_num
+        )
+
+    def _forward_sam_heads(self, pix_feat_seq, enc, prompt_inputs, multimask_output):
         sparse = None
         if prompt_inputs is not None:
             sparse = self.prompt_encoder.embed_sparse(
@@ -354,10 +378,15 @@ class TtSam2Tracker:
             image_pe=self.dense_pe_seq,
             sparse_prompt_embeddings=sparse,
             dense_prompt_embeddings=self.no_mask_dense_seq,
-            multimask_output=True,
+            multimask_output=multimask_output,
             high_res_features=enc.high_res,
         )
-        best_low, best_token, selection_to_free = self._select_best_mask(masks, ious_dev, sam_tokens)
+        if multimask_output:
+            best_low, best_token, selection_to_free = self._select_best_mask(masks, ious_dev, sam_tokens)
+        else:
+            best_low = masks
+            best_token = ttnn.reshape(sam_tokens, (1, self.hidden_dim))
+            selection_to_free = [ious_dev]
         tiled_obj_score = (
             obj_score if obj_score.layout == ttnn.TILE_LAYOUT else ttnn.to_layout(obj_score, ttnn.TILE_LAYOUT)
         )
@@ -500,8 +529,9 @@ class TtSam2Tracker:
         )
         return host_mask, ttnn.record_event(self.device, self._output_cq_id)
 
-    def _finish_track_step(self, enc, pix_feat, prompt_inputs):
-        heads = self._forward_sam_heads(pix_feat, enc, prompt_inputs)
+    def _finish_track_step(self, frame_idx, enc, pix_feat, prompt_inputs):
+        multimask_output = self._use_multimask(frame_idx == 0, prompt_inputs)
+        heads = self._forward_sam_heads(pix_feat, enc, prompt_inputs, multimask_output)
         high_res_host, high_res_read_event = self._begin_mask_readback(heads["high_res"])
         ttnn.deallocate(pix_feat)
         maskmem_features = self._encode_new_memory(
@@ -529,7 +559,7 @@ class TtSam2Tracker:
         if self._closed:
             raise RuntimeError("SAM2 tracker is closed")
         pix_feat = self._prepare_memory_conditioned_features(frame_idx, enc, bank)
-        return self._finish_track_step(enc, pix_feat, prompt_inputs)
+        return self._finish_track_step(frame_idx, enc, pix_feat, prompt_inputs)
 
     def close(self):
         if self._closed:

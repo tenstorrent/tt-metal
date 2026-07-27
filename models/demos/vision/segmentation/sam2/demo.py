@@ -51,6 +51,10 @@ body{font:16px system-ui;margin:2rem;background:#171717;color:#eee} main{max-wid
 button,input,select{font:inherit;margin:0 .5rem .5rem 0} #status{margin:.5rem 0;color:#bbb}
 progress{width:min(500px,90vw)} #stage{position:relative;display:inline-block;margin-top:.5rem}
 #stage img,#stage video{display:block;max-width:95vw;max-height:70vh} #prompt{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair;touch-action:none}
+#keyboard-prompts{width:fit-content;max-width:95vw;margin:.15rem 0 .5rem;font-size:.875rem;color:#ccc}
+#keyboard-prompts summary{cursor:pointer;color:#9fd0ff} #keyboard-prompts fieldset{display:inline-block;border:1px solid #555;margin:.4rem .4rem 0 0;padding:.35rem .5rem}
+#keyboard-prompts label{display:inline-block;margin-right:.35rem} #keyboard-prompts input{width:5.5rem}
+#prompt:focus{outline:3px solid #65b8ff;outline-offset:2px}
 a{display:block;margin-top:1rem;color:#65b8ff} [hidden]{display:none!important}
 </style>
 <main>
@@ -64,9 +68,28 @@ a{display:block;margin-top:1rem;color:#65b8ff} [hidden]{display:none!important}
 </select>
 <button id="clear" disabled>Clear prompts</button>
 <button id="track" hidden disabled>Run tracking</button>
-<div id="status">Choose an image, video, or webcam.</div>
+<details id="keyboard-prompts">
+  <summary>Keyboard prompt controls</summary>
+  <div id="prompt-help">Enter coordinates in the source image, then add a point or set a box.</div>
+  <fieldset>
+    <legend>Point</legend>
+    <label>X <input id="point-x" type="number" min="0" step="1"></label>
+    <label>Y <input id="point-y" type="number" min="0" step="1"></label>
+    <label>Type <select id="point-label"><option value="1">Positive</option><option value="0">Negative</option></select></label>
+    <button id="add-point" type="button" disabled>Add point</button>
+  </fieldset>
+  <fieldset>
+    <legend>Box</legend>
+    <label>X0 <input id="box-x0" type="number" min="0" step="1"></label>
+    <label>Y0 <input id="box-y0" type="number" min="0" step="1"></label>
+    <label>X1 <input id="box-x1" type="number" min="0" step="1"></label>
+    <label>Y1 <input id="box-y1" type="number" min="0" step="1"></label>
+    <button id="set-box" type="button" disabled>Set box</button>
+  </fieldset>
+</details>
+<div id="status" role="status" aria-live="polite">Choose an image, video, or webcam.</div>
 <progress id="progress" hidden></progress>
-<div id="stage" hidden><img id="image"><video id="video" muted playsinline hidden></video><canvas id="prompt"></canvas></div>
+<div id="stage" hidden><img id="image" alt="SAM2 preview and segmentation result"><video id="video" muted playsinline hidden></video><canvas id="prompt" tabindex="0" role="img" aria-label="Segmentation prompt canvas. Use the collapsed keyboard prompt controls to enter exact coordinates."></canvas></div>
 <a id="download" hidden>Download result</a>
 </main>
 <script>
@@ -74,6 +97,9 @@ const file=document.querySelector('#file'),webcam=document.querySelector('#webca
 const track=document.querySelector('#track'),status=document.querySelector('#status'),progress=document.querySelector('#progress');
 const stage=document.querySelector('#stage'),image=document.querySelector('#image'),video=document.querySelector('#video');
 const prompt=document.querySelector('#prompt'),download=document.querySelector('#download'),capture=document.createElement('canvas');
+const keyboardPrompts=document.querySelector('#keyboard-prompts'),pointX=document.querySelector('#point-x'),pointY=document.querySelector('#point-y');
+const pointLabel=document.querySelector('#point-label'),addPointButton=document.querySelector('#add-point');
+const boxX0=document.querySelector('#box-x0'),boxY0=document.querySelector('#box-y0'),boxX1=document.querySelector('#box-x1'),boxY1=document.querySelector('#box-y1'),setBoxButton=document.querySelector('#set-box');
 // LIVE_MAX_DEPTH and LIVE_BATCH mirror the server's bounded reorder window.
 const LIVE_MIN_DEPTH=2,LIVE_START_DEPTH=3,LIVE_MAX_DEPTH=6,LIVE_BATCH=5,LIVE_FRAME_MS=1000/30;
 const LIVE_IDLE_SLACK_MS=2,LIVE_QUEUE_STREAK=3,LIVE_DEPTH_HOLD_BATCHES=6;
@@ -90,12 +116,17 @@ function controls(){
   file.disabled=webcam.disabled=busy||live;tool.disabled=busy||live||!loaded||finished;
   clear.disabled=busy||live||!loaded||(!points.length&&!boxPrompt&&!finished);
   track.hidden=!videoInput;track.disabled=busy||(!live&&(!maskReady||finished));track.textContent=live?'Stop tracking':'Run tracking';
-  prompt.style.pointerEvents=busy||live||!loaded||finished?'none':'auto';
+  const promptDisabled=busy||live||!loaded||finished;prompt.style.pointerEvents=promptDisabled?'none':'auto';
+  for(const control of keyboardPrompts.querySelectorAll('input,select,button'))control.disabled=promptDisabled;
 }
 function setBusy(value,message){if(value)operation++;busy=value;if(message)status.textContent=message;if(!value)progress.hidden=true;controls();return operation;}
 function configureStage(width,height){
   sourceWidth=width;sourceHeight=height;const scale=Math.min(1,1600/width,1200/height);
   prompt.width=Math.max(1,Math.round(width*scale));prompt.height=Math.max(1,Math.round(height*scale));
+  for(const input of [pointX,boxX0,boxX1])input.max=width-1;
+  for(const input of [pointY,boxY0,boxY1])input.max=height-1;
+  pointX.value=Math.round(width/2);pointY.value=Math.round(height/2);
+  boxX0.value=Math.round(width/4);boxY0.value=Math.round(height/4);boxX1.value=Math.round(3*width/4);boxY1.value=Math.round(3*height/4);
 }
 function resetSelection(){
   points=[];boxPrompt=dragStart=draftBox=dragPointer=null;loaded=maskReady=finished=false;
@@ -142,13 +173,30 @@ async function segment(){
   finally{setBusy(false);}
   return success;
 }
-async function addPoint(event,label){
+function coordinateValue(input,maximum){
+  const value=Number(input.value);if(!Number.isFinite(value))throw Error('Enter valid prompt coordinates.');
+  return Math.max(0,Math.min(maximum,Math.round(value)));
+}
+async function addPointAt(x,y,label){
   if(busy||!loaded||finished)return;
   if(points.length>=16){status.textContent='At most 16 points are supported.';return;}
-  const [x,y]=coordinates(event);points.push([x,y,label]);draw();if(!await segment()){points.pop();draw();}
+  points.push([x,y,label]);draw();if(!await segment()){points.pop();draw();}
 }
+async function addPoint(event,label){const [x,y]=coordinates(event);await addPointAt(x,y,label);}
 prompt.onclick=event=>{if(tool.value==='positive')addPoint(event,1);else if(tool.value==='negative')addPoint(event,0);};
 prompt.oncontextmenu=event=>{event.preventDefault();addPoint(event,0);};
+addPointButton.onclick=async()=>{
+  try{await addPointAt(coordinateValue(pointX,sourceWidth-1),coordinateValue(pointY,sourceHeight-1),Number(pointLabel.value));}
+  catch(error){status.textContent=error.message;}
+};
+setBoxButton.onclick=async()=>{
+  if(busy||!loaded||finished)return;
+  try{
+    const candidate=orderedBox([coordinateValue(boxX0,sourceWidth-1),coordinateValue(boxY0,sourceHeight-1)],[coordinateValue(boxX1,sourceWidth-1),coordinateValue(boxY1,sourceHeight-1)]);
+    if(candidate[2]-candidate[0]<=2||candidate[3]-candidate[1]<=2)throw Error('Box width and height must each exceed 2 pixels.');
+    const previousBox=boxPrompt;boxPrompt=candidate;draw();if(!await segment()){boxPrompt=previousBox;draw();}
+  }catch(error){status.textContent=error.message;}
+};
 function cancelDrag(){dragStart=draftBox=dragPointer=null;draw();}
 prompt.onpointerdown=event=>{
   if(busy||tool.value!=='box')return;

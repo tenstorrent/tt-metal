@@ -55,6 +55,7 @@ class TtSam2VideoModel:
         self.tracker = TtSam2Tracker(
             tracker_parameters,
             tracker_device,
+            cfg,
             num_maskmem=num_maskmem,
             max_obj_ptrs_in_encoder=max_obj_ptrs_in_encoder,
             output_cq_id=bridge_upload_cq_id,
@@ -460,23 +461,32 @@ class TtSam2VideoSession:
                     self.model._active_video_session = None
 
 
-def _validate_n300_device(device) -> None:
+def _validate_n300_device(device) -> int:
     arch_name = ttnn.get_arch_name()
     if "wormhole_b0" not in arch_name:
         raise ValueError(f"SAM2 N300 requires Wormhole B0, got {arch_name}")
 
     mesh_shape = tuple(device.shape)
     device_ids = tuple(device.get_device_ids())
-    pcie_device_ids = tuple(ttnn.get_pcie_device_ids())
     if mesh_shape not in ((1, 2), (2, 1)) or len(device_ids) != 2:
-        raise ValueError(f"SAM2 requires an exact two-ASIC N300 mesh, got shape {mesh_shape} and IDs {device_ids}")
-    if ttnn.get_num_devices() != 2:
-        raise ValueError(f"SAM2 requires exactly two discovered N300 ASICs, got {ttnn.get_num_devices()}")
-    if len(pcie_device_ids) != 1 or pcie_device_ids[0] not in device_ids:
+        raise ValueError(f"SAM2 requires a two-device N300 mesh, got shape {mesh_shape} and IDs {device_ids}")
+
+    cluster_type = ttnn.cluster.get_cluster_type()
+    supported_cluster_types = {
+        ttnn.cluster.ClusterType.N300,
+        ttnn.cluster.ClusterType.N300_2x2,
+        ttnn.cluster.ClusterType.CUSTOM,
+    }
+    if cluster_type not in supported_cluster_types:
+        raise ValueError(f"SAM2 requires an N300 topology, got {cluster_type}")
+
+    selected_pcie_ids = tuple(device_id for device_id in ttnn.get_pcie_device_ids() if device_id in device_ids)
+    if len(selected_pcie_ids) != 1:
         raise ValueError(
-            "SAM2 requires an N300 with one PCIe-attached ASIC and one remote ASIC; "
-            f"got mesh IDs {device_ids} and PCIe IDs {pcie_device_ids}"
+            "SAM2 requires one PCIe-attached device and one remote device in the selected N300 mesh; "
+            f"got mesh IDs {device_ids} and selected PCIe IDs {selected_pcie_ids}"
         )
+    return selected_pcie_ids[0]
 
 
 def build_tt_sam2_model(
@@ -492,10 +502,9 @@ def build_tt_sam2_model(
         preprocess_sam2_video_tracker_parameters,
     )
 
-    _validate_n300_device(device)
+    pcie_device_id = _validate_n300_device(device)
 
     owned_submeshes = tuple(device.create_submeshes(ttnn.MeshShape(1, 1)))
-    pcie_device_id = tuple(ttnn.get_pcie_device_ids())[0]
     if tuple(owned_submeshes[0].get_device_ids()) == (pcie_device_id,):
         encoder_device, tracker_device = owned_submeshes
     else:

@@ -66,7 +66,7 @@ class HostTensorBridge:
         if tuple(sender_device.shape) != (1, 1) or tuple(receiver_device.shape) != (1, 1):
             raise ValueError("SAM2 host bridge endpoints must be unit meshes")
         if set(sender_device.get_device_ids()) & set(receiver_device.get_device_ids()):
-            raise ValueError("SAM2 host bridge endpoints must use different ASICs")
+            raise ValueError("SAM2 host bridge endpoints must use different devices")
         if upload_cq_id not in (0, 1):
             raise ValueError(f"SAM2 host bridge upload queue must be 0 or 1, got {upload_cq_id}")
         self.sender_device = sender_device
