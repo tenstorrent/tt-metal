@@ -5,7 +5,7 @@
 CPU reference for the XTTS-v2 GPT transformer core (Block 3), plus a golden-tensor
 generator for the TTNN PCC test.
 
-Block boundary under test (see CLAUDE_XTTS_GPT.md):
+Block boundary under test:
 
     inputs_embeds [1, S, 1024]
         -> GPT2 stack (30 blocks, causal)      (gpt.gpt.h.*)
@@ -22,7 +22,7 @@ Reference weights: the real coqui/XTTS-v2 checkpoint (model.pth). We only touch 
 transformer-core tensors (gpt.gpt.h.*, gpt.gpt.ln_f.*, gpt.final_norm.*).
 
 Run to (re)generate goldens:
-    python models/experimental/xtts_v2/reference/xtts_gpt_ref.py --ckpt /localdev/acicovic/xtts_ref/model.pth
+    python models/experimental/xtts_v2/reference/xtts_gpt_ref.py --ckpt {path-to-model.pth}
 """
 
 import argparse
@@ -44,7 +44,26 @@ GPT_CONFIG = dict(
     vocab_size=256,  # unused (wte bypassed via inputs_embeds)
 )
 
-DEFAULT_CKPT = "/localdev/acicovic/xtts_ref/model.pth"
+# Checkpoint resolution (mirrors tt-metal's HF_MODEL convention): an explicit path wins,
+# then $XTTS_CKPT (a local file), otherwise coqui/XTTS-v2's model.pth is pulled from the HF
+# hub (and cached by huggingface_hub). Resolved lazily at load time -- importing this module
+# never downloads. Override the repo id with $XTTS_HF_MODEL.
+XTTS_HF_REPO = os.getenv("XTTS_HF_MODEL", "coqui/XTTS-v2")
+DEFAULT_CKPT = None  # sentinel: resolve_ckpt() selects the source at load time
+
+
+def resolve_ckpt(ckpt_path=None):
+    """Resolve the XTTS-v2 checkpoint path: explicit arg > $XTTS_CKPT > HF hub download."""
+    if ckpt_path:
+        return ckpt_path
+    env = os.getenv("XTTS_CKPT")
+    if env:
+        return env
+    from huggingface_hub import hf_hub_download
+
+    return hf_hub_download(repo_id=XTTS_HF_REPO, filename="model.pth")
+
+
 GOLDEN_DIR = os.path.join(os.path.dirname(__file__), "..", "golden", "gpt")
 
 
@@ -84,9 +103,9 @@ def _install_tts_stub():
         sys.modules.setdefault(name, _StubMod(name))
 
 
-def load_full_state(ckpt_path):
+def load_full_state(ckpt_path=None):
     _install_tts_stub()
-    sd = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    sd = torch.load(resolve_ckpt(ckpt_path), map_location="cpu", weights_only=False)
     state = sd["model"] if isinstance(sd, dict) and "model" in sd else sd
     return {k: v for k, v in state.items() if hasattr(v, "shape")}
 
