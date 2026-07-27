@@ -132,15 +132,6 @@ RUNNER_PROFILES = {
         "tt_smi_cmd": "tt-smi -glx_reset_auto",
         "matrix_output_key": "galaxy",
     },
-    "galaxy-g04glx03": {
-        "arch": "wormhole_b0",
-        # Folded onto the shared wh_galaxy SKU; the dedicated g04glx03 host label
-        # is not a separate logical SKU in infra's abstraction layer.
-        "sku": "wh_galaxy",
-        "runner_label": "g04glx03",
-        "tt_smi_cmd": "tt-smi -r",
-        "matrix_output_key": "galaxy",
-    },
 }
 
 
