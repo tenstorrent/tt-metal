@@ -31,9 +31,16 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_quasar_layer2_module1_downsample(mesh_device):
-    """layer2_module1 downsample: 1x1, in=256, out=512, stride 2, input 56x56, HEIGHT_SHARDED. The output
-    MUST be 512 channels; if it comes back 256 the conv is dropping the channel expansion (the model bug)."""
+@pytest.mark.parametrize(
+    "shard",
+    [ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.TensorMemoryLayout.BLOCK_SHARDED],
+    ids=["height", "block"],
+)
+def test_quasar_layer2_module1_downsample(mesh_device, shard):
+    """layer2_module1 downsample: 1x1, in=256, out=512, stride 2, input 56x56. The output MUST be 512
+    channels; if it comes back 256 the conv is dropping the channel expansion. The model uses HEIGHT here
+    (input_height 56 != 28); the 'block' case tests whether BLOCK sharding gets the channel count right (if
+    so, the fix is to force BLOCK for this stride-2 channel-expanding downsample)."""
     device = mesh_device
     torch.manual_seed(0)
 
@@ -75,7 +82,7 @@ def test_quasar_layer2_module1_downsample(mesh_device):
     # Verbatim from run_downsample_if_req (input_height 56 != 28 -> HEIGHT_SHARDED).
     conv_config = ttnn.Conv2dConfig(
         weights_dtype=ttnn.bfloat16,
-        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        shard_layout=shard,
         deallocate_activation=True,
         reallocate_halo_output=True,
         act_block_h_override=32,
