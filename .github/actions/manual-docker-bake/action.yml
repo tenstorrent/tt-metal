@@ -68,25 +68,11 @@ inputs:
     required: false
     default: ""
   syft-scanner-image:
-    description: >-
-      Canonical (unprefixed) ghcr.io tag for a self-hosted copy of syft-scanner
-      (dockerfile/Dockerfile.tools' syft-scanner target - an unmodified
-      re-publish of docker/buildkit-syft-scanner, used as buildx's SBOM
-      attest generator). When set, it's pulled through harbor-prefix like
-      every other tool image, falling back to a direct (already
-      GHCR-authenticated) pull instead of docker.io. When empty (the
-      default), falls back to a public mirror.gcr.io pull with an
-      authenticated docker.io retry - see manual-docker-bake.sh for the full
-      rationale.
+    description: "Canonical ghcr.io tag for our self-hosted syft-scanner (BuildKit's SBOM scanner), used to generate the SBOM attestation."
     required: false
     default: ""
   oras-image:
-    description: >-
-      Canonical (unprefixed) ghcr.io tag for a self-hosted copy of oras
-      (dockerfile/Dockerfile.tools' oras target), used to extract the oras
-      binary for SBOM enrichment instead of downloading a release tarball
-      from github.com on every run. When empty (the default), falls back to
-      the pinned GitHub-release download.
+    description: "Canonical ghcr.io tag for our self-hosted oras (OCI registry CLI), used for SBOM enrichment."
     required: false
     default: ""
 
