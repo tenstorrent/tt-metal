@@ -255,5 +255,7 @@ throughput will track the RX number, not the 200 G TX number.
 - **RX.5** — CRC-32 header validation (SW). **Done.** HW `ROCE_ICRC` offload — follow-up.
 - **RX.5b** — SEND→RxWqeRing (on-core). **Done** (T6); host-hugepage swap pending.
 - **RX.5c** — READ_REQ→READ_RESP target side (MR read + TX egress). **Done** (T7).
-- **RX.5d** — ACK (0x40) reception + cumulative-ACK watermark. **Done** (T8). READ initiator + WRITE_IMM completions pending.
+- **RX.5d** — ACK (0x40) reception + cumulative-ACK watermark. **Done** (T8).
+- **RX.5e** — WRITE_IMM (0x11) payload land + imm completion slot (shared `rxwqe_publish`). **Done** (T9).
+  Remaining: SEND→host hugepage (1.2b), READ initiator correlation (1.3b), MR lifecycle + access tests (1.6).
 - **RX.6** — PFC-lossless (BH.6) + resync-on-bad; fast gateway sender to find the real ceiling. Pending.

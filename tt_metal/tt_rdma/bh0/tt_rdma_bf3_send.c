@@ -189,14 +189,15 @@ int main(int argc, char** argv) {
             plen = 4080u;
         }
         unsigned char* h = frame + 14;
+        const int is_imm = (opcode == 0x02u || opcode == 0x11u);  // SEND_IMM / WRITE_IMM
         h[0] = (unsigned char)opcode;
-        h[1] = 0x01;
+        h[1] = (unsigned char)(0x01u | (is_imm ? 0x10u : 0u));  // version_flags: ver=1, bit4=IMM_PRESENT
         put_u16(h + 2, 0);
         put_u32(h + 4, plen);
         put_u32(h + 8, 1);  // seq (fixed; the BH kernel does not order-check)
         put_u32(h + 12, rkey);
         put_u64(h + 16, roff);
-        put_u32(h + 24, 0);
+        put_u32(h + 24, is_imm ? 0xC0DE1257u : 0u);  // imm_data (recognizable magic for _IMM opcodes)
         put_u32(h + 28, tt_crc32(h, 28) ^ crc_xor);  // header_cksum over bytes [0..27] (BADCRC corrupts it)
         if (opcode == 0x20u || opcode == 0x40u) {
             // READ_REQ / ACK: HEADER-ONLY on the wire (wire-protocol §1). The length field carries the

@@ -101,7 +101,7 @@ int main(int argc, char** argv) {
         verify_core = eth_phys;
         verify_addr = TT_RDMA_TX_BUF0_ADDR;
         mode = "noc-loopback(own eth L1)";
-    } else if (noc_target == 2) {  // off-core: a Tensix worker's L1 via the NoC (the real RDMA case)
+    } else if (noc_target == 2 || noc_target == 5) {  // off-core Tensix L1 via NoC (the real RDMA case)
         const CoreCoord w = device->worker_core_from_logical_core(CoreCoord{0, 0});
         noc_x = (uint32_t)w.x;
         noc_y = (uint32_t)w.y;
@@ -114,10 +114,13 @@ int main(int argc, char** argv) {
     // Phase 1.2a SEND-ring mode (noc_target == 3): the kernel publishes SEND frames as RxWqeRing slots
     // on a Tensix worker's L1 (NoC target = stand-in for the productized host hugepage). We verify slot
     // bytes + the producer index after the run. WRITE landing is unused in this mode.
+    // noc_target == 5 (Phase 1.5 WRITE_IMM) reuses this ring as the completion ring, alongside the
+    // off-core WRITE landing set above (mode 2 path). A WRITE_IMM lands the payload at the MR AND raises
+    // a length-0 completion slot carrying imm_data here.
     uint32_t sr_x = 0, sr_y = 0, sr_base = 0, sr_slots = 0, sr_prodidx = 0;
     constexpr uint32_t kSlotBytes = 1536u;
     CoreCoord sr_core = eth_phys;
-    if (noc_target == 3) {
+    if (noc_target == 3 || noc_target == 5) {
         const CoreCoord w = device->worker_core_from_logical_core(CoreCoord{0, 0});
         sr_core = w;
         sr_x = (uint32_t)w.x;
@@ -125,9 +128,15 @@ int main(int argc, char** argv) {
         sr_base = 0x30000u;                             // ring base on the worker L1
         sr_slots = 8u;                                  // small ring for the test
         sr_prodidx = 0x30000u + sr_slots * kSlotBytes;  // prod_idx just past the slots
-        mode = "send-ring(tensix 0,0 L1)";
+        mode = (noc_target == 5) ? "write-imm(land tensix + completion ring)" : "send-ring(tensix 0,0 L1)";
         std::printf(
-            "  SEND-ring: core(%u,%u) base 0x%x slots %u prodidx 0x%x\n", sr_x, sr_y, sr_base, sr_slots, sr_prodidx);
+            "  %s: ring core(%u,%u) base 0x%x slots %u prodidx 0x%x\n",
+            (noc_target == 5) ? "WRITE_IMM" : "SEND-ring",
+            sr_x,
+            sr_y,
+            sr_base,
+            sr_slots,
+            sr_prodidx);
     }
 
     // Phase 1.3 READ-target mode (noc_target == 4): the kernel answers READ_REQ by NoC-reading a
@@ -188,10 +197,10 @@ int main(int argc, char** argv) {
     // Clear the WRITE landing target (on its own core) + the stats region.
     std::vector<uint32_t> zeros(kMrLen / 4, 0u);
     cluster.write_core(device->id(), verify_core, zeros, verify_addr);
-    std::vector<uint32_t> zstats(13, 0u);
+    std::vector<uint32_t> zstats(14, 0u);
     cluster.write_core(device->id(), eth_phys, zstats, (uint32_t)stats_addr);
-    // Clear the SEND ring + prod_idx on its core.
-    if (noc_target == 3) {
+    // Clear the SEND/completion ring + prod_idx on its core.
+    if (noc_target == 3 || noc_target == 5) {
         std::vector<uint32_t> zring((sr_slots * kSlotBytes) / 4 + 4, 0u);
         cluster.write_core(device->id(), sr_core, zring, sr_base);
     }
@@ -235,10 +244,10 @@ int main(int argc, char** argv) {
     std::cout << "BH.2-RX: dispatch kernel up. Now send TT-RDMA frames from the BF3. Stats:\n";
 
     for (int s = 0; s < hold_s; ++s) {
-        auto st = cluster.read_core<uint32_t>(device->id(), eth_phys, (uint32_t)stats_addr, 13 * sizeof(uint32_t));
+        auto st = cluster.read_core<uint32_t>(device->id(), eth_phys, (uint32_t)stats_addr, 14 * sizeof(uint32_t));
         std::printf(
             "  t=%2ds  total=%u send=%u write=%u write_ok=%u unknown=%u bad=%u crc_err=%u last_op=0x%02x read_pos=%u "
-            "read_req=%u read_resp=%u ack=%u ack_seq=%u\n",
+            "read_req=%u read_resp=%u ack=%u ack_seq=%u wimm=%u\n",
             s,
             st[0],
             st[1],
@@ -252,55 +261,60 @@ int main(int argc, char** argv) {
             st[9],
             st[10],
             st[11],
-            st[12]);
+            st[12],
+            st[13]);
         std::fflush(stdout);
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 
-    if (noc_target == 3) {
-        // SEND-ring verification: read prod_idx + each populated slot; assert per-slot header fields and
-        // byte-exact payload ("TTWR" + 0x04..). prod_idx is the completion count the host would consume.
+    if (noc_target == 3 || noc_target == 5) {
+        // Mode 5 (WRITE_IMM): the payload landed at the MR — verify it too (byte-exact TTWR).
+        if (noc_target == 5) {
+            auto land = cluster.read_core<uint32_t>(device->id(), verify_core, verify_addr, 4 * sizeof(uint32_t));
+            std::printf(
+                "  WRITE_IMM payload landing @core(%u,%u):0x%x [0..3] = %08x %08x %08x %08x  (word0 'TTWR')\n",
+                (unsigned)verify_core.x,
+                (unsigned)verify_core.y,
+                verify_addr,
+                land[0],
+                land[1],
+                land[2],
+                land[3]);
+        }
+        // Completion-ring verification: read prod_idx + each populated slot. mode 3 = SEND (payload in
+        // slot, TTWR); mode 5 = WRITE_IMM completion (length 0, imm carried).
         auto pi = cluster.read_core<uint32_t>(device->id(), sr_core, sr_prodidx, sizeof(uint32_t));
         const uint32_t prod = pi.empty() ? 0u : pi[0];
-        std::printf("  SEND-ring prod_idx = %u (delivered SEND slots)\n", prod);
-        // Diagnostic: always dump slot 0 header + payload, regardless of prod_idx.
-        {
-            auto h0 = cluster.read_core<uint32_t>(device->id(), sr_core, sr_base, 8 * sizeof(uint32_t));
-            auto p0 = cluster.read_core<uint32_t>(device->id(), sr_core, sr_base + 0x20u, 4 * sizeof(uint32_t));
-            std::printf(
-                "  [diag] slot0 hdr = %08x %08x %08x %08x %08x %08x  pay = %08x %08x\n",
-                h0[0],
-                h0[1],
-                h0[2],
-                h0[3],
-                h0[4],
-                h0[5],
-                p0[0],
-                p0[1]);
-        }
+        std::printf("  ring prod_idx = %u (delivered completion slots)\n", prod);
         const uint32_t nshow = std::min<uint32_t>(prod, sr_slots);
         uint32_t ok = 0;
         for (uint32_t s = 0; s < nshow; ++s) {
             const uint32_t slot_base = sr_base + s * kSlotBytes;
             auto hdr = cluster.read_core<uint32_t>(device->id(), sr_core, slot_base, 8 * sizeof(uint32_t));
-            auto pay = cluster.read_core<uint32_t>(device->id(), sr_core, slot_base + 0x20u, 2 * sizeof(uint32_t));
+            auto pay = cluster.read_core<uint32_t>(device->id(), sr_core, slot_base + 0x20u, 1 * sizeof(uint32_t));
             const uint32_t opcode = hdr[2] & 0xFFu;
+            const uint32_t imm = hdr[3];
             const bool owned = (hdr[5] & 0x100u) != 0u;
-            const bool paylo = (pay[0] == 0x52575454u);  // 'TTWR'
-            const bool good = owned && (opcode == TT_OP_SEND || opcode == TT_OP_SEND_IMM) && paylo;
+            bool good;
+            if (noc_target == 5) {  // WRITE_IMM completion: op 0x11, length 0, imm = the magic
+                good = owned && opcode == TT_OP_WRITE_IMM && hdr[1] == 0u && imm == 0xC0DE1257u;
+            } else {  // SEND: op SEND(_IMM), payload TTWR in the slot
+                good = owned && (opcode == TT_OP_SEND || opcode == TT_OP_SEND_IMM) && pay[0] == 0x52575454u;
+            }
             ok += good ? 1u : 0u;
             std::printf(
-                "    slot %u: seq=%u len=%u op=0x%02x owned=%d cookie=%u pay[0]=%08x %s\n",
+                "    slot %u: seq=%u len=%u op=0x%02x imm=%08x owned=%d cookie=%u pay[0]=%08x %s\n",
                 s,
                 hdr[0],
                 hdr[1],
                 opcode,
+                imm,
                 owned ? 1 : 0,
                 hdr[4],
                 pay[0],
                 good ? "OK" : "BAD");
         }
-        std::printf("  SEND-ring: %u/%u shown slots byte-exact (word0 'TTWR' = 0x52575454)\n", ok, nshow);
+        std::printf("  ring: %u/%u shown slots valid\n", ok, nshow);
     } else {
         // Verify the WRITE landing (on the resolved target core): first 8 bytes should be "TTWR" + 0x04..0x07.
         auto land = cluster.read_core<uint32_t>(device->id(), verify_core, verify_addr, 4 * sizeof(uint32_t));

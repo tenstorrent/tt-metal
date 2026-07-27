@@ -105,7 +105,12 @@ No opcode left behind; every path tested + error-handled.
   reads to free retransmit buffers). Validated on silicon (regression **T8**): 40 fresh ACKs → watermark
   40; 20 stale ACKs (seq ≤ 40) → watermark held at 40 (advance-on-newer + ignore-stale). Publishes
   `ack` count + `ack_seq` watermark.
-- **1.5 WRITE_IMM / imm_data** completions.
+- **1.5 WRITE_IMM / imm_data** completions. **Done.** A WRITE_IMM (0x11, `version_flags.IMM`) lands the
+  payload at the MR (like WRITE) **and** raises a receiver completion: a length-0 RxWqeRing slot carrying
+  `imm_data`, `mr_table_idx` = the target MR slot (host-sdk §3). The SEND publish was refactored into a
+  shared `rxwqe_publish` helper (SEND passes payload; WRITE_IMM passes length 0 + imm). Validated on
+  silicon (regression **T9**): payload byte-exact at the MR + completion slots with `op=0x11, len=0,
+  imm=0xC0DE1257, owned`. Sender sets the IMM flag + imm for `_IMM` opcodes.
 - **1.6 MR table lifecycle** — CONTROL-opcode register/deregister, rkey `(slot<<24)|rand|gen` generation
   + rotation, 64-slot management, and **access-control enforcement tests** (rkey_miss / rkey_access /
   rkey_bounds / rkey_wrap each provably dropped + counted). Security-relevant — no shortcut.

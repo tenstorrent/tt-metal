@@ -48,6 +48,63 @@ static inline void ring_copy(uint32_t dst_byte, uint32_t buf, uint32_t src_off, 
     }
 }
 
+// RxWqeRing slot layout (host-sdk §3): 64 slots x 1536 B; per-slot 32B header then payload.
+constexpr uint32_t TT_RXWQE_SLOT_BYTES = 1536u;
+constexpr uint32_t TT_RXWQE_PAYLOAD_OFF = 0x20u;
+constexpr uint32_t TT_RXWQE_OWNED_BY_HOST = (1u << 8);  // flags byte at slot+0x14, bit0 (word bit8)
+
+// Publish one RxWqeRing completion slot (host-sdk §3) to a NoC target and bump the producer index the
+// host polls. `length` is the IN-SLOT payload length: SEND passes its payload len (copied into the slot
+// from the ring at src_off, straddle-split at the wrap); WRITE_IMM passes 0 (payload already landed at
+// the MR — the slot is completion-only, carrying `imm`). Header + prod_idx are staged in TX_BUF0 L1
+// scratch because noc_async_write's source must be RDMA-L1, not the RISC stack (proven on silicon).
+static inline void rxwqe_publish(
+    uint32_t sr_x,
+    uint32_t sr_y,
+    uint32_t sr_base,
+    uint32_t sr_slots,
+    uint32_t sr_prodidx,
+    uint32_t* sr_prod,
+    uint32_t peer_seq,
+    uint32_t length,
+    uint32_t opcode,
+    uint32_t imm,
+    uint32_t cookie,
+    uint32_t mr_idx,
+    uint32_t rx_buf,
+    uint32_t src_off,
+    uint32_t rx_buf_size) {
+    const uint32_t slot = *sr_prod % sr_slots;
+    const uint32_t slot_base = sr_base + slot * TT_RXWQE_SLOT_BYTES;
+    if (length > 0) {  // payload -> slot+0x20 (SEND); straddle-split at the ring wrap
+        const uint32_t pay_dst = slot_base + TT_RXWQE_PAYLOAD_OFF;
+        if (src_off + length <= rx_buf_size) {
+            noc_async_write(rx_buf + src_off, get_noc_addr(sr_x, sr_y, pay_dst), length);
+        } else {
+            const uint32_t first = rx_buf_size - src_off;
+            noc_async_write(rx_buf + src_off, get_noc_addr(sr_x, sr_y, pay_dst), first);
+            noc_async_write(rx_buf, get_noc_addr(sr_x, sr_y, pay_dst + first), length - first);
+        }
+    }
+    noc_async_write_barrier();  // payload commits before header (host-sdk: OWNED written last)
+    volatile tt_l1_ptr uint32_t* sh = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(TT_RDMA_TX_BUF0_ADDR);
+    sh[0] = peer_seq;                                   // +0x00 peer_seq
+    sh[1] = length;                                     // +0x04 length (0 for WRITE_IMM)
+    sh[2] = (opcode & 0xFFu);                           // +0x08 opcode | status(0)<<8
+    sh[3] = imm;                                        // +0x0C immediate
+    sh[4] = cookie;                                     // +0x10 cookie <- tag
+    sh[5] = (mr_idx & 0xFFu) | TT_RXWQE_OWNED_BY_HOST;  // +0x14 mr_table_idx | flags=OWNED_BY_HOST
+    sh[6] = 0u;
+    sh[7] = 0u;
+    noc_async_write(TT_RDMA_TX_BUF0_ADDR, get_noc_addr(sr_x, sr_y, slot_base), 32u);
+    noc_async_write_barrier();
+    ++(*sr_prod);  // bump producer index (host polls this = the completion)
+    volatile tt_l1_ptr uint32_t* pi = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(TT_RDMA_TX_BUF0_ADDR + 0x40u);
+    *pi = *sr_prod;
+    noc_async_write(TT_RDMA_TX_BUF0_ADDR + 0x40u, get_noc_addr(sr_x, sr_y, sr_prodidx), 4u);
+    noc_async_write_barrier();
+}
+
 void kernel_main() {
     // arg0 = hb L1 addr (total frames dispatched)   arg1 = stop flag   arg2 = stats base (8 u32)
     // arg3 = rx buffer L1 byte addr   arg4 = rx buffer size bytes   arg5 = MR table L1 byte addr
@@ -83,10 +140,8 @@ void kernel_main() {
     const uint32_t sr_slots = get_arg_val<uint32_t>(14);
     const uint32_t sr_prodidx = get_arg_val<uint32_t>(15);
     const bool use_send_ring = (sr_base != 0);
-    constexpr uint32_t TT_RXWQE_SLOT_BYTES = 1536u;  // host-sdk §3: 64 slots x 1536 B
-    constexpr uint32_t TT_RXWQE_PAYLOAD_OFF = 0x20u;
-    constexpr uint32_t TT_RXWQE_OWNED_BY_HOST = (1u << 8);  // flags byte at slot+0x14, bit0 (word bit8)
     uint32_t sr_prod = 0;
+    uint32_t n_write_imm = 0;  // Phase 1.5: WRITE_IMM frames that raised an imm completion
     // Phase 1.3: READ target. When read_enable, a READ_REQ (0x20, header-only on the wire; the length
     // field is the request size) triggers: MR lookup (REMOTE_READ + bounds) -> noc_async_read the bytes
     // from the read source (rd_src_x,y,base + remote_offset) into a TX scratch buffer -> build a
@@ -177,43 +232,24 @@ void kernel_main() {
             if (op == TT_OP_SEND || op == TT_OP_SEND_IMM) {
                 ++n_send;
                 if (use_send_ring) {
-                    // Publish this SEND as one RxWqeRing slot (host-sdk §3). One in-flight slot at a
-                    // time (barrier per stage) — correctness-first; the productized path pipelines.
-                    const uint32_t slot = sr_prod % sr_slots;
-                    const uint32_t slot_base = sr_base + slot * TT_RXWQE_SLOT_BYTES;
+                    // Publish this SEND as one RxWqeRing slot (host-sdk §3) — payload rides in the slot.
                     const uint32_t src_off = (read_pos + TT_RDMA_HDR_BYTES) % rx_buf_size;
-                    const uint32_t pay_dst = slot_base + TT_RXWQE_PAYLOAD_OFF;
-                    if (len > 0) {  // payload -> slot+0x20 (straddle-split at the ring wrap)
-                        if (src_off + len <= rx_buf_size) {
-                            noc_async_write(rx_buf + src_off, get_noc_addr(sr_x, sr_y, pay_dst), len);
-                        } else {
-                            const uint32_t first = rx_buf_size - src_off;
-                            noc_async_write(rx_buf + src_off, get_noc_addr(sr_x, sr_y, pay_dst), first);
-                            noc_async_write(rx_buf, get_noc_addr(sr_x, sr_y, pay_dst + first), len - first);
-                        }
-                    }
-                    noc_async_write_barrier();  // payload commits before header (host-sdk: OWNED written last)
-                    // Stage the 32B slot header + prod_idx in LOCAL L1 scratch (TX_BUF0, idle during RX):
-                    // noc_async_write needs its source in the RDMA L1 region, NOT the RISC stack (a stack
-                    // source silently does not land — proven on silicon: payload landed, stack header did not).
-                    volatile tt_l1_ptr uint32_t* sh =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(TT_RDMA_TX_BUF0_ADDR);
-                    sh[0] = hw[2];                           // peer_seq
-                    sh[1] = len;                             // length
-                    sh[2] = (op & 0xFFu);                    // opcode | status(0)<<8
-                    sh[3] = hw[6];                           // immediate (SEND_IMM)
-                    sh[4] = (hw[0] >> 16) & 0xFFFFu;         // cookie <- tag
-                    sh[5] = 0xFFu | TT_RXWQE_OWNED_BY_HOST;  // mr_idx=0xFF | flags=OWNED_BY_HOST
-                    sh[6] = 0u;
-                    sh[7] = 0u;
-                    noc_async_write(TT_RDMA_TX_BUF0_ADDR, get_noc_addr(sr_x, sr_y, slot_base), 32u);
-                    noc_async_write_barrier();
-                    ++sr_prod;  // bump producer index (host polls this = the completion)
-                    volatile tt_l1_ptr uint32_t* pi_scratch =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(TT_RDMA_TX_BUF0_ADDR + 0x40u);
-                    *pi_scratch = sr_prod;
-                    noc_async_write(TT_RDMA_TX_BUF0_ADDR + 0x40u, get_noc_addr(sr_x, sr_y, sr_prodidx), 4u);
-                    noc_async_write_barrier();
+                    rxwqe_publish(
+                        sr_x,
+                        sr_y,
+                        sr_base,
+                        sr_slots,
+                        sr_prodidx,
+                        &sr_prod,
+                        /*peer_seq=*/hw[2],
+                        /*length=*/len,
+                        /*opcode=*/op,
+                        /*imm=*/hw[6],
+                        /*cookie=*/(hw[0] >> 16) & 0xFFFFu,
+                        /*mr_idx=*/0xFFu,
+                        rx_buf,
+                        src_off,
+                        rx_buf_size);
                     ++n_write_ok;  // reuse write_ok as the "delivered to a NoC target" counter
                 }
             } else if (op == TT_OP_WRITE || op == TT_OP_WRITE_IMM) {
@@ -243,6 +279,31 @@ void kernel_main() {
                             ring_copy(mr_base + roff, rx_buf, src_off, rx_buf_size, len);
                         }
                         ++n_write_ok;
+                        // Phase 1.5: WRITE_IMM (0x11) additionally raises a receiver completion carrying
+                        // imm_data. The payload already landed at the MR; the completion is a length-0
+                        // RxWqeRing slot with mr_table_idx = the target MR slot (host-sdk §3).
+                        if (op == TT_OP_WRITE_IMM && use_send_ring) {
+                            if (use_noc) {
+                                noc_async_write_barrier();  // ensure the off-core WRITE landed before the completion
+                            }
+                            rxwqe_publish(
+                                sr_x,
+                                sr_y,
+                                sr_base,
+                                sr_slots,
+                                sr_prodidx,
+                                &sr_prod,
+                                /*peer_seq=*/hw[2],
+                                /*length=*/0u,
+                                /*opcode=*/op,
+                                /*imm=*/hw[6],
+                                /*cookie=*/(hw[0] >> 16) & 0xFFFFu,
+                                /*mr_idx=*/slot,
+                                rx_buf,
+                                0u,
+                                rx_buf_size);
+                            ++n_write_imm;
+                        }
                     }
                 }
             } else if (op == TT_OP_READ_REQ) {
@@ -311,6 +372,7 @@ void kernel_main() {
         stats[10] = n_read_resp;
         stats[11] = n_ack;
         stats[12] = ack_watermark;
+        stats[13] = n_write_imm;
 
         if (stop != nullptr && *stop != 0) {
             break;

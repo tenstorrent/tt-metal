@@ -81,8 +81,8 @@ DPID=$!
 if wait_up "$OUT"; then
   sudo -n "$ALLOW" $P0 20 $DMAC 0x1af6 0x01 256 0 0 >/dev/null 2>&1   # 20 SEND frames, distinct seqs
   wait $DPID
-  prod=$(grep "prod_idx =" "$OUT" | tail -1 | grep -oE 'prod_idx = [0-9]+' | grep -oE '[0-9]+')
-  bx=$(grep "shown slots byte-exact" "$OUT" | tail -1)   # "SEND-ring: N/M shown slots byte-exact"
+  prod=$(grep "prod_idx =" "$OUT" | tail -1 | grep -oE '[0-9]+' | head -1)
+  bx=$(grep "ring: " "$OUT" | tail -1)   # "  ring: N/M shown slots valid"
   n=$(echo "$bx" | grep -oE '[0-9]+/[0-9]+' | cut -d/ -f1); m=$(echo "$bx" | grep -oE '[0-9]+/[0-9]+' | cut -d/ -f2)
   [ "${prod:-0}" -ge 20 ] && [ "${m:-0}" -gt 0 ] && [ "${n:-0}" = "${m:-1}" ] \
     && pass "RX SEND-ring (prod_idx=$prod, $n/$m slots byte-exact)" \
@@ -125,6 +125,23 @@ if wait_up "$OUT"; then
     && pass "RX ACK cumulative (ack=$ack, watermark=$aseq held vs stale)" \
     || fail "RX ACK cumulative (ack=${ack:-0}, ack_seq=${aseq:-0}, want watermark=40)"
 else fail "RX kernel did not come up (T8)"; kill $DPID 2>/dev/null; fi
+
+echo "== T9: RX WRITE_IMM -- payload lands at MR AND raises an imm completion slot =="
+OUT=$D/rx7.txt
+timeout 115 "$BIN/bh1_rx_dispatch" 1 ext 8 1 1 5 1 >"$OUT" 2>&1 &   # noc_target=5 (write-imm)
+DPID=$!
+if wait_up "$OUT"; then
+  sudo -n "$ALLOW" $P0 20 $DMAC 0x1af6 0x11 256 $RKEY 0 >/dev/null 2>&1   # 20 WRITE_IMM frames
+  wait $DPID
+  land=$(grep "WRITE_IMM payload landing" "$OUT" | tail -1)
+  wimm=$(grep "wimm=" "$OUT" | grep -v info | tail -1 | grep -oE 'wimm=[0-9]+' | cut -d= -f2)
+  ringok=$(grep "ring: " "$OUT" | tail -1 | grep -oE '[0-9]+/[0-9]+' | head -1)
+  n=$(echo "$ringok" | cut -d/ -f1); m=$(echo "$ringok" | cut -d/ -f2)
+  echo "$land" | grep -q "= 52575454 " && pass "WRITE_IMM payload byte-exact (TTWR)" || fail "WRITE_IMM landing ($land)"
+  [ "${wimm:-0}" -ge 15 ] && [ "${m:-0}" -gt 0 ] && [ "${n:-0}" = "${m:-1}" ] \
+    && pass "WRITE_IMM imm completion (wimm=$wimm, $n/$m slots imm-valid)" \
+    || fail "WRITE_IMM completion (wimm=${wimm:-0}, ${n:-0}/${m:-0})"
+else fail "RX kernel did not come up (T9)"; kill $DPID 2>/dev/null; fi
 
 echo "======================================================"
 echo "REGRESSION: $PASS passed, $FAIL failed"
