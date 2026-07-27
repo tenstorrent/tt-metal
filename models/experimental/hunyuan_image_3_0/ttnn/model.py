@@ -127,9 +127,9 @@ class HunyuanTtModel(LightweightModule):
                               match the image-generation call site.
             weight_cache_path: Optional explicit cache directory for pre-tilized
                               ``.tensorbin`` weights. When ``None`` and
-                              ``TT_DIT_CACHE_DIR`` is set, a path is derived from
+                              ``TT_CACHE_PATH`` is set, a path is derived from
                               mesh shape, parallelism, dtype, and ``bf16_layers``.
-            model_cache_name: Subdirectory under ``TT_DIT_CACHE_DIR`` for this
+            model_cache_name: Subdirectory under ``TT_CACHE_PATH`` for this
                               checkpoint variant (e.g. ``hunyuan-image-3.0-instruct``).
         """
         super().__init__()
@@ -159,7 +159,7 @@ class HunyuanTtModel(LightweightModule):
         if self.weight_cache_path is not None:
             self.weight_cache_path.mkdir(parents=True, exist_ok=True)
             if os.environ.get("HY_VERBOSE", "1") != "0":
-                print(f"[backbone] TT_DIT cache dir: {self.weight_cache_path}", flush=True)
+                print(f"[backbone] TT cache dir: {self.weight_cache_path}", flush=True)
 
         # Token embedding table (ROW_MAJOR weight; ttnn.embedding emits TILE).
         # bf8/bf4 require TILE layout and cannot back a ROW_MAJOR embedding table.

@@ -96,12 +96,12 @@ def device():
 
 @pytest.fixture(scope="function")
 def device_trace():
-    prev = os.environ.pop("TT_DIT_CACHE_DIR", None)
+    prev = os.environ.pop("TT_CACHE_PATH", None)
     dev = ttnn.open_device(device_id=0, l1_small_size=32768, trace_region_size=TRACE_REGION)
     yield dev
     _close_device(dev)
     if prev is not None:
-        os.environ["TT_DIT_CACHE_DIR"] = prev
+        os.environ["TT_CACHE_PATH"] = prev
 
 
 @pytest.fixture(scope="function")
