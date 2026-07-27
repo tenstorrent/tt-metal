@@ -58,6 +58,98 @@ _CONV_FIDELITY_FP32 = ttnn.MathFidelity.HiFi4
 # convs only. Bit-exact: double-buffering changes how the conv streams data, not the math.
 _INTERLEAVED_CONV_DB = {"enable_act_double_buffer": True, "enable_weights_double_buffer": True}
 
+TILE = 32
+
+# Best (grid_x, grid_y, per_core_N, out_subblock_w, fp32_dest_acc, fidelity) per speaker-conditioning
+# output width N, from test_hifi_decoder_matmul_sweep.py (Blackhole, grid 11x10; all M=32, K=512),
+# which re-tuned these across the full DRAM / L1-interleaved / L1-sharded cross-product for in0, in1
+# and out. The dominant levers are HiFi2 + the tuned grid/out_subblock geometry (~2.2x vs the conv1d
+# auto matmul the profiler flagged SLOW), then reading in0 (g) from L1 rather than DRAM: per shape
+# 4.06 / 3.01 / 2.54 / 2.40 / 2.16us vs 4.89 / 3.92 / 3.64 / 3.30 / 2.43us, i.e. 18.2 -> 14.2us over
+# the five. g is L1 height-sharded and all five run BEFORE the conv chain (see forward) so that copy
+# is freed before the first conv — keeping g in L1 *across* the chain is what clashed the interleaved
+# resblock convs' circular buffers on long sequences. The outputs stay in DRAM: the sweep's further
+# ~2.6us from an L1 block-sharded out is given straight back by the ShardedToInterleaved its
+# consumers (a broadcast add, a conv cond_bias) would then need.
+# PCC held >=0.9999 per shape in the sweep (full-decoder PCC re-validated in test_hifi_decoder).
+_COND_MM_CFG = {
+    512: (8, 1, 2, 2, False, "HiFi2"),  # cond_layer
+    256: (8, 1, 1, 1, False, "HiFi2"),  # conds[0]
+    128: (4, 1, 1, 1, False, "HiFi2"),  # conds[1]
+    64: (2, 1, 1, 1, False, "HiFi2"),  # conds[2]
+    32: (1, 1, 1, 1, False, "HiFi2"),  # conds[3]
+}
+
+
+class TtCondProj(LightweightModule):
+    """A 1x1 speaker-conditioning projection (``cond_layer`` / ``conds[i]``) as an explicit,
+    per-shape-tuned ``ttnn.linear`` (``g @ Wᵀ + b``) instead of the ``ttnn.conv1d`` dispatch.
+
+    A 1x1 conv over the length-1 speaker embedding IS this matmul (``g[1,512] @ [512,N]``); conv1d
+    ran it on an auto config the profiler flagged SLOW. The tuned program-config + HiFi2 + an L1
+    in0 (from test_hifi_decoder_matmul_sweep.py) is ~2.9x faster on these shapes at PCC >=0.9999.
+    Pure device matmul with a fused bias epilogue — trace-safe (no host transfer)."""
+
+    def __init__(self, device, weight, bias):
+        super().__init__()
+        self.device = device
+        out_ch, in_ch, k = weight.shape
+        assert k == 1, f"cond proj expects a 1x1 conv weight, got k={k}"
+        assert out_ch in _COND_MM_CFG, f"no tuned cond-matmul config for N={out_ch}"
+        assert in_ch % TILE == 0, f"K={in_ch} must be tile-aligned"
+        self.n = out_ch
+        self.k = in_ch
+        # conv weight [out, in, 1] -> matmul in1 [in, out] = [K, N] (applied as g @ Wᵀ), bf16 in DRAM.
+        w = weight.squeeze(-1).transpose(0, 1).contiguous()  # [in, out]
+        self.tt_weight = ttnn.from_torch(
+            w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        self.tt_bias = None
+        if bias is not None:
+            self.tt_bias = ttnn.from_torch(
+                bias.reshape(1, -1).float(),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        gx, gy, per_core_N, osw, fp32_acc, fid = _COND_MM_CFG[out_ch]
+        self.program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+            in0_block_w=in_ch // TILE,  # Kt (single K-block)
+            out_subblock_h=1,
+            out_subblock_w=osw,
+            out_block_h=1,
+            out_block_w=per_core_N,
+            per_core_M=1,  # M = 32 (g tile-padded from length 1) -> Mt = 1
+            per_core_N=per_core_N,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=True,  # required for a sharded in0; Mt is 1 either way for this rank-2 g
+        )
+        self.compute_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=getattr(ttnn.MathFidelity, fid),
+            math_approx_mode=False,
+            fp32_dest_acc_en=fp32_acc,
+            packer_l1_acc=True,
+        )
+
+    def forward(self, g_mm):
+        # g_mm: [1, K] TILE, L1 height-sharded by the caller and shared across all five projections
+        # (one [TILE, K] shard — every shape has Mt = 1). Returns [1, N] TILE (fp32) in DRAM; see
+        # _COND_MM_CFG for why the output does not follow in0 into L1. The caller reshapes it for the
+        # downstream add / cond-bias fold.
+        return ttnn.linear(
+            g_mm,
+            self.tt_weight,
+            bias=self.tt_bias,
+            program_config=self.program_config,
+            compute_kernel_config=self.compute_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.float32,
+        )
+
 
 def _shard_plan(stage_i, kernel_size):
     """(sharded, act_double_buffer) for a resblock at upsample ``stage_i`` with ``kernel_size``.
@@ -256,6 +348,15 @@ class TtHifiganGenerator(LightweightModule):
         # up to ~100 mel frames (-24.7% device time vs stage-3-only), where random
         # latents ~N(0, 0.5) misleadingly suggested it fails — see tests. Stage 0 stays
         # fp32 (its wide 256-ch conv is where bf16 costs the most PCC for the least time).
+        #
+        # Widening this to all four stages was tried and REJECTED on listening: it measured
+        # -10.9% decoder device time and looked fine on aggregate metrics (spectrogram-mag PCC
+        # 0.99707 vs 0.99747, and it even improved end-to-end spec PCC), but it added an audible
+        # robotic/metallic edge. Reverting only conv_pre/cond_layer/conv_post to fp32 (keeping
+        # stage 0 bf16) did NOT clear it either, so stage 0 is implicated, not just the output
+        # convs. Corroborating spectral evidence: broadband spectral flatness rose 0.30739 ->
+        # 0.30958 and >6kHz energy share 0.19720 -> 0.19873. Aggregate PCC — waveform OR
+        # spectrogram — did not predict this; only listening did.
         if bf16_stages is None:
             bf16_stages = {i for i in range(1, self.num_upsamples)}
 
@@ -274,13 +375,9 @@ class TtHifiganGenerator(LightweightModule):
             math_fidelity=_CONV_FIDELITY_FP32,
             conv_config_overrides=_INTERLEAVED_CONV_DB,
         )
-        self.cond_layer = TtConv1d(
-            device,
-            state_dict["cond_layer.weight"],
-            state_dict["cond_layer.bias"],
-            math_fidelity=_CONV_FIDELITY_FP32,
-            conv_config_overrides=_INTERLEAVED_CONV_DB,
-        )
+        # Speaker-conditioning projections (1x1 convs over the length-1 embedding g) run as
+        # per-shape-tuned explicit matmuls — see TtCondProj / _COND_MM_CFG.
+        self.cond_layer = TtCondProj(device, state_dict["cond_layer.weight"], state_dict["cond_layer.bias"])
 
         # ups[i] consumes the *previous* stage's MRF mean (stages >=1) via leaky_relu; fold that
         # mean's 1/num_kernels scale into ups[i>=1]'s weights so the per-stage ttnn.mul is dropped
@@ -298,17 +395,24 @@ class TtHifiganGenerator(LightweightModule):
             )
             for i in range(self.num_upsamples)
         ]
+        # conds[i](g) is a length-1 per-channel constant folded into ups[i]'s bias (see forward);
+        # its fp32 output feeds that fold directly. Tuned explicit matmul (TtCondProj), like cond_layer.
         self.conds = [
-            TtConv1d(
-                device,
-                state_dict[f"conds.{i}.weight"],
-                state_dict[f"conds.{i}.bias"],
-                activations_dtype=act_dtype(i),
-                math_fidelity=conv_fid(i),
-                conv_config_overrides=_INTERLEAVED_CONV_DB,
-            )
+            TtCondProj(device, state_dict[f"conds.{i}.weight"], state_dict[f"conds.{i}.bias"])
             for i in range(self.num_upsamples)
         ]
+        # in0 placement shared by all five projections: a single [TILE, K] L1 shard on one core
+        # (every shape has Mt = 1, so the height-shard grid is 1x1). Built once here; the per-forward
+        # copy of g is made and freed inside forward.
+        self._g_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+                [TILE, self.cond_layer.k],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
 
         self.resblocks = []
         for i in range(self.num_upsamples):
@@ -410,14 +514,21 @@ class TtHifiganGenerator(LightweightModule):
         return z_sum
 
     def forward(self, x, g):
-        # Deep conv chain — the vocoder's memory-dominant path, whose activation
-        # footprint grows with output length. Each temporary is freed the moment the
-        # next op consumes it; ``g``/``g_t`` are never freed (reused by every cond layer).
-        # cond_layer/conds are 1x1 convs (matmuls); each would otherwise tilize ``g`` from
-        # ROW_MAJOR internally, so tilize it ONCE here and hand the TILE copy to all 5 — turns
-        # 5 TilizeWithValPadding ops into 1 (verified same result). Pure device op: trace-safe.
-        g_t = ttnn.to_layout(g, ttnn.TILE_LAYOUT)
-        cond_global = self.cond_layer(g_t)  # [N, 1, 512], broadcasts over T
+        # Deep conv chain — the vocoder's memory-dominant path, whose activation footprint grows
+        # with output length. Each temporary is freed the moment the next op consumes it.
+        # cond_layer/conds are 1x1 projections of the length-1 speaker embedding g, run as tuned
+        # matmuls (TtCondProj). Reshape g to [1, 512] and tile it ONCE, shared by all five, and read
+        # it from L1 (18.2 -> 14.2us over the five; see _COND_MM_CFG). All five run HERE, ahead of the
+        # conv chain, so the L1 copy of g is freed before the first conv rather than competing with
+        # the interleaved resblock convs' circular buffers for the whole chain. conds[i] depends only
+        # on g, so hoisting it out of the loop is value-identical. Trace-safe (no host transfer).
+        g_mm = ttnn.to_layout(ttnn.reshape(g, [1, g.shape[-1]]), ttnn.TILE_LAYOUT)
+        g_l1 = ttnn.to_memory_config(g_mm, self._g_mem_config)
+        ttnn.deallocate(g_mm)
+        cond_global = ttnn.reshape(self.cond_layer(g_l1), [1, 1, self.cond_layer.n])  # [1,1,512], broadcasts over T
+        # conds[i](g) is a length-1 per-channel constant, folded into ups[i]'s bias epilogue below.
+        cond_biases = [ttnn.reshape(c(g_l1), [1, 1, 1, c.n]) for c in self.conds]
+        ttnn.deallocate(g_l1)
         pre = self.conv_pre(x)
         ttnn.deallocate(x)  # upsampler output, not reused after conv_pre
         o = ttnn.add(pre, cond_global)
@@ -427,18 +538,12 @@ class TtHifiganGenerator(LightweightModule):
         for i in range(self.num_upsamples):
             a = ttnn.leaky_relu(o, negative_slope=LRELU_SLOPE)
             ttnn.deallocate(o)
-            # ``conds[i](g)`` is a length-1, per-channel constant, so ``ups[i](a) +
-            # conds[i](g)`` is just a per-channel bias add — fold it into the ups conv's
-            # fused bias epilogue instead of a separate full-length broadcast add.
-            cg = self.conds[i](g_t)  # [1, 1, C_i]
-            cg = ttnn.reshape(cg, [1, 1, 1, cg.shape[-1]])
-            if cg.dtype != ttnn.float32:
-                cg = ttnn.typecast(cg, ttnn.float32)
-            o = self.ups[i](a, cond_bias=cg)
+            # ``conds[i](g)`` is a length-1, per-channel constant, so ``ups[i](a) + conds[i](g)`` is
+            # just a per-channel bias add — fold it into the ups conv's fused bias epilogue.
+            o = self.ups[i](a, cond_bias=cond_biases[i])
             ttnn.deallocate(a)
-            ttnn.deallocate(cg)
+            ttnn.deallocate(cond_biases[i])
             o = self._mrf(i, o)  # sum the 3 resblocks (mean folded into weights); frees o
-        ttnn.deallocate(g_t)  # our tiled copy of g; last used by conds[-1] above
         a = ttnn.leaky_relu(o, negative_slope=FINAL_LRELU_SLOPE)
         ttnn.deallocate(o)
         p = self.conv_post(a)
