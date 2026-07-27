@@ -32,6 +32,7 @@ batch a `ceil(T/32) x 128` tile grid).
 | `DM_BLOCK_TILES` | tiles per `noc_async_read`/`write` group (one barrier per group) | **4** | measured sweet spot 4–8; `block=1` is the 6.5 GB/s trap (`examples/double_buffer/report.md:31,36,96-102`) |
 | `DM_DEPTH` | `cb_gate_tiles`, `cb_out_tiles` depth (in `DM_BLOCK_TILES` units) | **2** | depth-2 is sufficient in every measured cell (17.9 GB/s/core = the single-core NoC ceiling for 2 KB transactions); deeper is unmeasured (`double_buffer/report.md:39-42,119-120`) |
 | `O_DEPTH` | `cb_o_tiles` depth (in `NORM_CHUNK_TOKENS`-chunk units) | **2** | reader fills chunk *i+1* while compute holds chunk *i* (the sum-of-squares pass must keep `o` resident for the later normalize pass) |
+| `GATE_CHUNK_TILES` | output tiles per gate-chain invocation (phase C block factor) | **64** = `FLAT_TILES/2` | the gate chain is two *sequential* helpers, so its intermediate `cb_gate_sig` must hold a whole chunk (§8). 64 keeps that at 128 KB while costing only 4 helper calls per block; `FLAT_TILES` (one call) would cost 256 KB, `32` would cost 8 calls. Must divide `FLAT_TILES`. |
 
 ### 1.3 The scheme phase-1 commits to
 
@@ -115,13 +116,40 @@ every one of them exact (`HV=32`, `V=128`, `T % 32 == 0`, `FLAT=4096`).
 | `compute_kernel_config` | `ttnn.DeviceComputeKernelConfig` | no | — | `default_compute_kernel_config()` | host-only → `ComputeConfigDescriptor` |
 | `TOKENS_PER_BLOCK` | knob (CT) | — | multiple of 32 | 32 | CT to all three kernels |
 | `NORM_CHUNK_TOKENS` | knob (CT) | — | divides `TOKENS_PER_BLOCK` | 8 | CT to compute |
+| `GATE_CHUNK_TILES` | knob (CT) | — | divides `FLAT_TILES` | 64 | CT to compute |
 | `DM_BLOCK_TILES` | knob (CT) | — | 1..8 | 4 | CT to reader/writer |
 | `DM_DEPTH`, `O_DEPTH` | knob (host) | — | >= 2 | 2 | host CB sizing only |
 
 `default_compute_kernel_config()` is a **single exported factory** in
 `ttnn/ttnn/operations/onorm/onorm.py`; the entry point resolves `None` through it
-and nowhere else. It must set **`fp32_dest_acc_en=True`** (the sum-of-squares
-accumulates in fp32 DEST) and `math_fidelity=HiFi4`, `math_approx_mode=False`.
+and nowhere else. It must set all four fields:
+
+| Field | Value | Why this exact value |
+|-------|-------|----------------------|
+| `fp32_dest_acc_en` | **`True`** | the sum-of-squares accumulates in fp32 DEST (P1) — the precision-sensitive step, per contract |
+| `math_fidelity` | `HiFi4` | bf16 x bf16 mantissas fully retained on every FPU multiply; the op is DRAM-bound so the extra FPU passes are free |
+| `math_approx_mode` | `False` | exact `rsqrt` / `sigmoid` |
+| `dst_full_sync_en` | **`False`** | **load-bearing for performance, not a precision choice.** `can_use_fast_tilize()` tests `!get_dst_full_sync_enabled()` (`tilize_helpers.inl:66-79`), so enabling full sync silently drops P7a's 128-tile re-tile onto the slow tilize path on **every core, every block**. See risk 14. |
+
+Note the interaction: `fp32_dest_acc_en=True` with half-sync gives
+`DEST_AUTO_LIMIT = 4` (`dest_helpers.hpp:95-99`), which is exactly what
+`untilize<V_TILES=4>` needs for the single-pass `pack_untilize` path
+(`untilize_helpers.inl:78-87`).
+
+**Config type contract (pinned — do not guess).** The public parameter is a
+`ttnn.DeviceComputeKernelConfig`, per the required signature, so
+`default_compute_kernel_config()` returns a **`ttnn.WormholeComputeKernelConfig`**
+(the concrete `DeviceComputeKernelConfig` variant carrying the four fields above).
+`ttnn.generic_op`'s kernel descriptor, however, takes a
+`ttnn.ComputeConfigDescriptor`. The program descriptor therefore **translates
+field-by-field** — `math_fidelity`, `fp32_dest_acc_en`, `math_approx_mode`,
+`dst_full_sync_en` — into a fresh `ComputeConfigDescriptor` at exactly one place,
+and the entry point resolves `None` through the factory before that translation.
+The acceptance test exercises both ends of this path
+(`test_onorm_compute_kernel_config` passes a caller-built
+`WormholeComputeKernelConfig`; `test_onorm_default_compute_kernel_config_is_exported`
+passes the factory's own output), so a design that accepts only one of the two
+types fails the spec.
 
 ## 4. Tensors
 
@@ -175,12 +203,12 @@ records (`INVALID = []`) — TARGET is a single `(bf16, TILE)` cell.
 ```
 DRAM  o[b, 32r..32r+31, :, :]  ──NoC0(reader)──▶ cb_o_tiles          (tiles, head-major)
 DRAM  weight[1,1,1,V]          ──NoC0(reader)──▶ cb_weight           (tiles, row-0 valid; once per core)
-                                   reader fills  cb_scaler           (bf16 reduce scaler, 1.0; once per core)
+                                   reader fills  cb_scaler           (bf16 reduce scaler = 1/V; once per core)
 
 compute (per NORM_CHUNK_TOKENS tokens):
    cb_o_tiles ──DEST-accumulate o² over V_TILES──▶ cb_sumsq          (1 tile / token)
-   cb_sumsq   ──reduce_mean<REDUCE_ROW>(1/V)────▶ cb_rms_mean        (col-0 valid)
-   cb_rms_mean ──+eps, rsqrt (SFPU, one DEST win)▶ cb_rstd
+   cb_sumsq   ──reduce<SUM,REDUCE_ROW>(scaler=1/V)
+              ──── + eps + rsqrt fused in the SAME DEST window ────▶ cb_rstd   (col-0 valid)
    cb_o_tiles x cb_rstd  (bcast Col) ──────────▶ cb_normed
    cb_normed  x cb_weight (bcast Row) ─────────▶ cb_onorm            ← head-major, normalized, scaled
    cb_onorm   ──pack_untilize<V_TILES>─────────▶ cb_rm_flat_rows     ← ROW-MAJOR: token t's 4096
@@ -189,8 +217,10 @@ compute (per NORM_CHUNK_TOKENS tokens):
 
 compute (once per token-block):
    cb_rm_flat_rows ──tilize<FLAT_TILES>────────▶ cb_flat_tiles       ← flat token-major tiles
-   cb_gate_tiles ──sigmoid──┐
-   cb_flat_tiles ───────────┴─mul_binary(DEST)─▶ cb_out_tiles
+
+compute (per GATE_CHUNK_TILES output tiles):
+   cb_gate_tiles ──sigmoid (SFPU, DEST)────────▶ cb_gate_sig         ← packed to L1 on purpose
+   cb_flat_tiles x cb_gate_sig ──FPU mul_tiles─▶ cb_out_tiles        ← FPU, NOT SFPU (§9)
 
 DRAM  gate[b, 32r..32r+31, :]  ──NoC0(reader)──▶ cb_gate_tiles
 cb_out_tiles ──NoC1(writer)──▶ DRAM out[b, 32r..32r+31, :]
@@ -261,16 +291,21 @@ Every page is a `Float16_b` tile = 2048 B. `NC = NORM_CHUNK_TOKENS`.
 | `cb_weight` | `V_TILES` | 4 | 8192 |
 | `cb_scaler` | 1 | 1 | 2048 |
 | `cb_sumsq` | `NC` | 8 | 16384 |
-| `cb_rms_mean` | `NC` | 8 | 16384 |
 | `cb_rstd` | `NC` | 8 | 16384 |
 | `cb_normed` | `V_TILES * NC` | 32 | 65536 |
 | `cb_onorm` | `V_TILES * NC` | 32 | 65536 |
 | `cb_rm_flat_rows` | `FLAT_TILES` | 128 | 262144 |
 | `cb_flat_tiles` | `FLAT_TILES` | 128 | 262144 |
+| `cb_gate_sig` | `GATE_CHUNK_TILES` | 64 | 131072 |
 | `cb_out_tiles` | `DM_BLOCK_TILES * DM_DEPTH` | 8 | 16384 |
-| **total** | | **429** | **878 592 B ≈ 858 KB** |
+| **total** | | **485** | **993 280 B ≈ 970 KB** |
 
-Against ~1.34 MB of CB-available L1 that is ~64 %, leaving ~480 KB headroom.
+Against ~1.34 MB of CB-available L1 that is ~72 %, leaving ~370 KB headroom.
+The host **must** assert this total against `device.l1_size_per_core()` minus the
+unreserved base, and the error message must name the knobs to lower and their
+order: `GATE_CHUNK_TILES` first (it is a pure perf/L1 trade), then
+`NORM_CHUNK_TOKENS`. `cb_rm_flat_rows` and `cb_flat_tiles` are **not** reducible
+(§6.1).
 This is the sizing argument for `NORM_CHUNK_TOKENS = 8` being the *coarse*
 default rather than a minimal one:
 
@@ -306,15 +341,15 @@ Every CB is `Float16_b` (`ttnn.bfloat16`), page size `ttnn.tile_size(ttnn.bfloat
 | `cb_o_tiles` | 0 | 2048 | `V_TILES * NORM_CHUNK_TOKENS * O_DEPTH` | Float16_b | reader | compute | per chunk (held across the sum-of-squares and normalize passes, popped by the normalize pass) |
 | `cb_gate_tiles` | 1 | 2048 | `DM_BLOCK_TILES * DM_DEPTH` | Float16_b | reader | compute | streaming, phase C only |
 | `cb_weight` | 2 | 2048 | `V_TILES` | Float16_b | reader | compute | **persistent for the whole kernel** — waited each chunk, never popped |
-| `cb_scaler` | 8 | 2048 | 1 | Float16_b | reader | compute | persistent (filled once at kernel start, never popped) |
+| `cb_scaler` | 8 | 2048 | 1 | Float16_b | reader | compute | persistent (filled once at kernel start with `1/V`, never popped) |
 | `cb_out_tiles` | 16 | 2048 | `DM_BLOCK_TILES * DM_DEPTH` | Float16_b | compute | writer | streaming, phase C only |
 | `cb_sumsq` | 24 | 2048 | `NORM_CHUNK_TOKENS` | Float16_b | compute | compute | per chunk |
-| `cb_rms_mean` | 25 | 2048 | `NORM_CHUNK_TOKENS` | Float16_b | compute | compute | per chunk |
-| `cb_rstd` | 26 | 2048 | `NORM_CHUNK_TOKENS` | Float16_b | compute | compute | per chunk |
+| `cb_rstd` | 25 | 2048 | `NORM_CHUNK_TOKENS` | Float16_b | compute | compute | per chunk — holds `rsqrt(mean+eps)`, **col-0 valid** |
 | `cb_normed` | 27 | 2048 | `V_TILES * NORM_CHUNK_TOKENS` | Float16_b | compute | compute | per chunk |
 | `cb_onorm` | 28 | 2048 | `V_TILES * NORM_CHUNK_TOKENS` | Float16_b | compute | compute | per chunk (untilize input) |
 | `cb_rm_flat_rows` | 29 | 2048 | `FLAT_TILES` | Float16_b (**row-major payload**) | compute | compute | per token-block — the re-tile working set; must be **exactly** `FLAT_TILES` pages (§6.1) |
 | `cb_flat_tiles` | 30 | 2048 | `FLAT_TILES` | Float16_b | compute | compute | per token-block (sequential-helper intermediate ⇒ full block, §6.1) |
+| `cb_gate_sig` | 31 | 2048 | `GATE_CHUNK_TILES` | Float16_b | compute | compute | per gate chunk — `sigmoid(gate)` deliberately materialized in L1 so the **FPU** unpacker feeds the multiply (§9, P7c) |
 
 Rationale per class: streaming input/output CBs get `DM_BLOCK_TILES * DM_DEPTH`
 (the double-buffer knob); intermediates between two *sequential* helpers get the
@@ -328,17 +363,17 @@ the `V_TILES`-wide reuse-shared operand.
 | CB | pushes / block | waits & pops / block | Where |
 |----|----------------|----------------------|-------|
 | `cb_o_tiles` | reader: `NCH * V_TILES*NB` = 128 | P1 `HeldBulk` waits `V_TILES*NB`, pops 0; P4 `Bulk` waits `V_TILES*NB`, pops `V_TILES*NB` ⇒ 128 popped | P1/P4 |
-| `cb_gate_tiles` | reader: `FLAT_TILES` = 128 | P7 `Streaming`: 128 waits, 128 pops | P7 |
+| `cb_gate_tiles` | reader: `FLAT_TILES` = 128 | P7b `Streaming`: 128 waits, 128 pops | P7b |
 | `cb_weight` | reader: `V_TILES` **once per core** | P5 `HeldBulk`: waits `V_TILES`, pops 0 (idempotent re-wait each chunk) | P5 |
 | `cb_scaler` | reader: 1 **once per core** | reduce waits 1, pops 0 | P2 |
 | `cb_sumsq` | P1: `NB` per chunk ⇒ `NCH*NB` = 32 | P2 `BulkWaitBulkPop` (Wt=1): 1 wait + 1 pop per row ⇒ 32 | P1/P2 |
-| `cb_rms_mean` | P2: 32 | P3 `Streaming`: 32 waits, 32 pops | P2/P3 |
-| `cb_rstd` | P3: 32 | P4 `Bulk`/`Col` (window `Ht=NB`): `NB` waits + `NB` pops per chunk ⇒ 32 | P3/P4 |
+| `cb_rstd` | P2: `NB` per chunk ⇒ 32 | P4 `Bulk`/`Col` (window `Ht=NB`): `NB` waits + `NB` pops per chunk ⇒ 32 | P2/P4 |
 | `cb_normed` | P4: `V_TILES*NB` per chunk ⇒ 128 | P5 `Bulk`/`Block`: `V_TILES*NB` waits + pops per chunk ⇒ 128 | P4/P5 |
 | `cb_onorm` | P5: 128 | P6 `untilize`, `WaitBlock`: `V_TILES` waits + pops per block x `NB` blocks x `NCH` ⇒ 128 | P5/P6 |
 | `cb_rm_flat_rows` | P6: `V_TILES` per untilize block ⇒ 128 pages | P7a `tilize`, `WaitBlock`, `num_blocks=1`: waits `FLAT_TILES`=128, pops 128 | P6/P7a |
-| `cb_flat_tiles` | P7a: 128 (Atomic: one reserve/push of `FLAT_TILES`) | P7b `Streaming`: 128 waits, 128 pops | P7a/P7b |
-| `cb_out_tiles` | P7b: 128 | writer: 128 waits, 128 pops | P7b/writer |
+| `cb_flat_tiles` | P7a: 128 (Atomic: one reserve/push of `FLAT_TILES`) | P7c `Streaming`: `GATE_CHUNK_TILES` waits + pops per chunk x `FLAT_TILES/GATE_CHUNK_TILES` chunks ⇒ 128 | P7a/P7c |
+| `cb_gate_sig` | P7b: `GATE_CHUNK_TILES` per chunk ⇒ 128 | P7c `Streaming`: 128 waits, 128 pops | P7b/P7c |
+| `cb_out_tiles` | P7c: 128 | writer: 128 waits, 128 pops | P7c/writer |
 
 Every row balances. Every CB has **exactly one** producer kernel and **one**
 consumer kernel; `cb_flat_tiles` is *not* written in place by phase C precisely
@@ -353,15 +388,15 @@ the compute kernel; the only raw APIs are the reader/writer `TensorAccessor` +
 | Phase | Type | Function | File:Line | Template Params / Args | Input CB | Output CB | Requirements |
 |-------|------|----------|-----------|------------------------|----------|-----------|--------------|
 | boot | helper | `compute_kernel_hw_startup(icb0, icb1, ocb)` | `tilize_helpers.hpp:119-123`, `reduce_helpers_compute.hpp:30-35` | `(cb_o_tiles, cb_weight, cb_onorm)` | — | — | **exactly once**, first statement of `MAIN()`, never in a loop. One boot is enough for all phases because every CB shares `Float16_b`. |
-| reader: scaler | helper | `dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<cb_scaler, PoolType::SUM, ReduceDim::REDUCE_ROW>()` | `reduce_helpers_dataflow.hpp:98-100` | pool-type-aware overload (**not** the legacy 1-arg form); SUM ⇒ scaler 1.0 | — | `cb_scaler` | bf16 CB; once per core, before any reduce |
+| reader: scaler | helper | `dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, PoolType::SUM, ReduceDim::REDUCE_ROW>(inv_V)` | `reduce_helpers_dataflow.hpp:58-60` | pool-type-aware overload (**not** the legacy 1-arg form). `inv_V` = fp32 bits of `1/V`, a **CT arg** computed once on the host — the divisor stays explicit and caller-supplied, never derived from tile geometry | — | `cb_scaler` | bf16 CB; once per core, before any reduce. `V = 128` is tile-aligned ⇒ single scaler tile, **no** partial-scaler pair, `ReducePartialScaler::none()` |
 | **P1** sum-of-squares | helper | `eltwise_chain(EltwiseShape::grid(NB, V_TILES), BinaryFpu<cb_o_tiles, cb_o_tiles, BinaryFpuOp::Mul, BroadcastDim::None, InputLifecycle::HeldBulk, InputLifecycle::HeldBulk, BinaryDataFormatReconfig::Input, Dst::D0, OperandKind::Block, OperandKind::Block, TileOffset::Unset, TileOffset::Unset, DestAccumulation::Enabled>{}, PackTile<cb_sumsq, OutputLifecycle::DestAccumulation, PackTileReconfig::Output, Dst::D0>{}))` | `eltwise_chain.hpp:710-711`, `eltwise_chain.inl:2657-2708` (DEST-accum walk), `:809-818` (accum requires `Dst::D0`) | **`NB` = `NORM_CHUNK_TOKENS` is the block knob**; `V_TILES` = reduction width | `cb_o_tiles` | `cb_sumsq` | one outer row per token: `D0` sticky across that row's `V_TILES` inputs, packed once, reset by the next row's acquire. `HeldBulk` keeps `o` for P4. `fp32_dest_acc_en=True` ⇒ the accumulate is fp32. |
-| **P2** mean over V | helper | `reduce_mean<ReduceDim::REDUCE_ROW, cb_sumsq, cb_scaler, cb_rms_mean, ReduceInputPolicy::BulkWaitBulkPop, ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT, ReduceAlgorithm::AccumulateViaAdd>(ReduceInputBlockShape::of(1, 1, NB), /*n_reduced=*/V)` | `reduce_helpers_compute.hpp:576-590`; `ReduceInputBlockShape::of` `:215-217`; `AccumulateViaAdd` contract `:126-151` | **`NB` is the batch knob** (one call per chunk, not per token) | `cb_sumsq`, `cb_scaler` | `cb_rms_mean` | `n_reduced = V = V_TILES*32` is the **true element count**, supplied explicitly (never derived from tile geometry). `Wt = 1`, where a single reduce is the fastest datapath (`master.md:133-137`). Output valid region = **column 0**. |
-| **P3** `+eps`, `rsqrt` | helper | `eltwise_chain(EltwiseShape::tiles(NB), CopyTile<cb_rms_mean, Dst::D0, InputLifecycle::Streaming>{}, AddUnary<Dst::D0>{eps_bits}, Rsqrt<>{}, PackTile<cb_rstd, OutputLifecycle::Streaming>{})` | `eltwise_chain.hpp:710`; `AddUnary` `eltwise_scalar.inl:46-56`; `Rsqrt` `eltwise_math.hpp:38`/`eltwise_math.inl:56` | `eps_bits` = fp32 bit pattern of `epsilon`, an RT arg | `cb_rms_mean` | `cb_rstd` | one DEST-sync window for both SFPU ops (the catalog's only *winning* fusion shape: SFPU consumer, `master.md:88-89`) |
+| **P2** mean over V **+ `eps` + `rsqrt`, fused** | helper | `reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_sumsq, cb_scaler, cb_rstd, ReduceInputPolicy::BulkWaitBulkPop, ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT, ReduceAlgorithm::Auto>(ReduceInputBlockShape::of(1, 1, NB), ReduceInputMemoryLayout::contiguous(), NoAccumulation{}, post_op)` | `reduce_helpers_compute.hpp:522-538`; `ReduceInputBlockShape::of` `:215-217`; `post_reduce_op` contract `:422-427`, worked example `:498-508` | **`NB` is the batch knob** (one call per chunk, not per token). `post_op` = `[eps_bits](uint32_t dst){ binop_with_scalar_tile_init(); add_unary_tile(dst, eps_bits); rsqrt_tile_init(); rsqrt_tile(dst); }` | `cb_sumsq`, `cb_scaler` | `cb_rstd` | The `1/V` scaler tile turns the SUM into the mean, so the divisor is explicit and host-supplied. `Wt = 1` ⇒ `ReduceAlgorithm::Auto` resolves to `ReduceTile`, the fastest datapath at 1–2 tiles (`master.md:133-137`). **The `+eps`/`rsqrt` epilogue runs inside the reduce's own DEST window** — this is the catalog's one *winning* fusion shape (reduce + SFPU post-op, **1.01–1.07x**, `master.md:88-89`) and it removes both a whole phase per chunk (~320 ns each) and an entire intermediate CB versus a separate `eltwise_chain` pass. `post_reduce_op` is called once per output with `dst_idx=0` (`:424`). Output valid region = **column 0**. |
 | **P4** normalize | helper | `mul<cb_o_tiles, cb_rstd, cb_normed, BroadcastDim::Col, InputLifecycle::Bulk, InputLifecycle::Bulk, OutputLifecycle::Streaming, BinaryDataFormatReconfig::Input, PackTileReconfig::Output, OperandKind::Block, OperandKind::Col>(EltwiseShape::grid(NB, V_TILES))` | `eltwise_convenience.hpp:81-98`; `BroadcastDim` semantics `eltwise_chain.hpp:523-534`; `OperandKind` `:336-351` | `NB` x `V_TILES` grid; `rstd` indexed by **row** (`Col` kind = index by `ht`) | `cb_o_tiles`, `cb_rstd` | `cb_normed` | `cb_rstd` is a REDUCE_ROW result (col-0 valid) ⇒ **`BroadcastDim::Col`**. `Bulk` on `cb_o_tiles` performs the deferred pop of P1's held window. |
 | **P5** weight scale | helper | `mul<cb_normed, cb_weight, cb_onorm, BroadcastDim::Row, InputLifecycle::Bulk, InputLifecycle::HeldBulk, OutputLifecycle::Streaming, BinaryDataFormatReconfig::Input, PackTileReconfig::Output, OperandKind::Block, OperandKind::Row>(EltwiseShape::grid(NB, V_TILES))` | `eltwise_convenience.hpp:81-98`; `is_legal_kind_lifecycle(Row, HeldBulk)` `eltwise_chain.hpp:359-382` | `weight` indexed by **column tile** (`Row` kind = index by `wt`) | `cb_normed`, `cb_weight` | `cb_onorm` | `weight` is `[1, V]`-shaped (row-0 valid) ⇒ **`BroadcastDim::Row`**; no pre-broadcast pass is needed. `Row` kind **requires** a non-draining lifecycle ⇒ `HeldBulk`. |
 | **P6** head-major → row-major | helper | `untilize<V_TILES, cb_onorm, cb_rm_flat_rows, InitUninitMode::InitAndUninit, WaitMode::WaitBlock, ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(NB)` | `untilize_helpers.hpp:145-154` (decl), `:97-104` (block geometry) | **`V_TILES` is the block-width knob; `NB` the block count** | `cb_onorm` | `cb_rm_flat_rows` | each of the `NB` blocks emits one token's 32x128 contiguous row-major region = that token's flat feature row. Symmetric (tile-sized) pages both sides. |
 | **P7a** row-major → flat tiles | helper | `tilize<FLAT_TILES, cb_rm_flat_rows, cb_flat_tiles, InitUninitMode::InitAndUninit, WaitMode::WaitBlock, ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure, Fp32Mode::Fast, RemapMode::Configure, StreamMode::Atomic>(1)` | `tilize_helpers.hpp:243-254` (decl), `:80-108` (`StreamMode`), `:164-170` (block geometry) | **`FLAT_TILES` is the block-width knob** (and *is* the row stride) | `cb_rm_flat_rows` | `cb_flat_tiles` | `num_blocks = TOKENS_PER_BLOCK/32 = 1`. `Atomic` (not `PerTile`) — see §6.1 for the deadlock proof. Symmetric pages ⇒ `total_input_pages` omitted. |
-| **P7b** sigmoid-gate + multiply | helper | `eltwise_chain(EltwiseShape::tiles(FLAT_TILES), CopyTile<cb_gate_tiles, Dst::D0, InputLifecycle::Streaming>{}, Sigmoid<Dst::D0>{}, CopyTile<cb_flat_tiles, Dst::D1, InputLifecycle::Streaming>{}, MulBinary<Dst::D0, Dst::D1, Dst::D0>{}, PackTile<cb_out_tiles, OutputLifecycle::Streaming, PackTileReconfig::Output, Dst::D0>{})` | `eltwise_chain.hpp:710`; `Sigmoid` `eltwise_activations.inl:31-34`; `MulBinary` `eltwise_binary_sfpu.hpp:54-60` | one call for all `FLAT_TILES` tiles ⇒ one init | `cb_gate_tiles`, `cb_flat_tiles` | `cb_out_tiles` | **the op owns the sigmoid** (`gate` is pre-sigmoid) and normalization happens first. Sigmoid + multiply share ONE DEST window, so `sigmoid(gate)` is never materialized in L1. Uses `Dst::D0`/`D1` only ⇒ safe under `fp32_dest_acc_en` (`DEST_AUTO_LIMIT` = 4). |
+| **P7b** `sigmoid(gate)` | helper | `unary<Sigmoid<>, cb_gate_tiles, cb_gate_sig, InputLifecycle::Streaming, OutputLifecycle::Streaming, CopyTileReconfig::Input, PackTileReconfig::Output>(EltwiseShape::tiles(GATE_CHUNK_TILES))` | `eltwise_convenience.hpp:126-139`; `Sigmoid` `eltwise_activations.hpp:24` / `eltwise_activations.inl:31-34` | **`GATE_CHUNK_TILES` is the block knob**; called `FLAT_TILES/GATE_CHUNK_TILES` times per block | `cb_gate_tiles` | `cb_gate_sig` | **the op owns the sigmoid** (`gate` is pre-sigmoid), and normalization (P1–P5) happens strictly first. The result is deliberately **packed to L1** rather than kept in DEST — see P7c. |
+| **P7c** gate multiply | helper | `mul<cb_flat_tiles, cb_gate_sig, cb_out_tiles, BroadcastDim::None, InputLifecycle::Streaming, InputLifecycle::Streaming, OutputLifecycle::Streaming, BinaryDataFormatReconfig::Input, PackTileReconfig::Output>(EltwiseShape::tiles(GATE_CHUNK_TILES))` | `eltwise_convenience.hpp:81-98` | same `GATE_CHUNK_TILES` block knob, paired 1:1 with P7b | `cb_flat_tiles`, `cb_gate_sig` | `cb_out_tiles` | **FPU `mul_tiles`, fed from L1 by the unpacker.** This is the highest-volume multiply in the op (every one of the `FLAT_TILES` output tiles of every block), so the engine choice dominates: an SFPU multiply is a measured **0.58x** loss (+~22 000 ns of math), and DEST-reuse into an FPU consumer is **0.82x** while the L1 round-trip is **1.22x faster** (`compute_fusion/README.md:79,90-97,125,134`; `master.md:88-96`). The catalog's verbatim prescription for exactly this SFPU-then-FPU shape: "pack the intermediate to L1 and let the unpacker feed it back… Never use the SFPU for what the FPU does." Uses `Dst::D0` only ⇒ safe under `fp32_dest_acc_en` (`DEST_AUTO_LIMIT` = 4). |
 | reader / writer | raw_api | `TensorAccessor` + `noc_async_read_tile` / `noc_async_write_tile` + one `noc_async_{read,write}_barrier` per `DM_BLOCK_TILES` group | `tech_reports/tensor_accessor/tensor_accessor.md` | `TensorAccessorArgs` go **last** in the CT-arg list, one per tensor slot | — | — | **Helpers considered and rejected:** `mcast_pipe.hpp` (`ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp:1`) — it implements NoC *multicast + semaphore handshake*; phase 1 has no cross-core operand sharing (every stream is disjoint per core), so there is no multicast to perform. `tilize_helpers_dataflow.hpp` — dataflow-side tilize; both re-tile steps here must run on the compute engine because they sit between compute phases. No `kernel_lib` helper wraps plain interleaved-DRAM tile streaming. |
 
 **Not used, and why (mandatory justifications):**
@@ -373,8 +408,34 @@ the compute kernel; the only raw APIs are the reader/writer `TensorAccessor` +
   `post_reduce_op`, applied *after* the reduction, `:421-427`). P1 therefore
   materializes the squares, and does so with the *cheaper* DEST-accumulate shape
   rather than a `V_TILES`-wide `cb_sq` + wide reduce.
-* `streaming_reduce_helpers.hpp`: not needed — the whole reduction (`V_TILES` = 4
-  tiles) is resident, so there is no streaming/accumulate-across-calls case.
+* `reduce_mean<...>` (`reduce_helpers_compute.hpp:576-590`) for P2: **rejected in
+  favour of `reduce<PoolType::SUM>` + a `1/V` scaler tile.** `reduce_mean`'s
+  parameter list has **no `post_reduce_op`** slot (compare `:585-590` with
+  `reduce<>`'s `:533-538`), so it cannot host the `+eps`/`rsqrt` epilogue; using it
+  forces a separate `eltwise_chain` pass (one extra helper invocation per chunk,
+  ~320 ns each, plus a whole extra `NORM_CHUNK_TOKENS`-page intermediate CB) and
+  gives up the reduce+SFPU-post-op fusion that the catalog measures as the one
+  shape where fusing *wins* (1.01–1.07x, `master.md:88-89`). Nothing is lost on the
+  explicit-divisor front: the `1/V` scaler is a host-computed CT arg, exactly as
+  caller-supplied as `n_reduced` would be.
+* `streaming_reduce_helpers.hpp` `transform_in_place` (`:95-111`) for the
+  `+eps`/`rsqrt` step: it is documented as a "1-tile in-place transform on a
+  **1-page** CB" (`streaming_reduce_helpers.hpp:26`), but `cb_rstd` holds
+  `NORM_CHUNK_TOKENS` = 8 pages, so it would need 8 invocations per chunk and still
+  could not fuse into the reduce's DEST window. Superseded by P2's `post_reduce_op`.
+  (The rest of `streaming_reduce_helpers.hpp` is also unneeded — the whole
+  reduction, `V_TILES` = 4 tiles, is resident, so there is no
+  accumulate-across-calls case. Note its `accumulate_reduce*` wrappers are stale
+  against the current `reduce<>` template signature; do not call them.)
+* `binary_sfpu<MulBinary<...>>` / `MulBinary` in DEST
+  (`eltwise_binary_sfpu.hpp`) for the gate multiply (P7c): **rejected — measured
+  0.58x.** The multiply is a plain elementwise product of two L1 tensors, which is
+  FPU work; running it on the SFPU costs ~22 000 ns of extra math per measured
+  cell (`compute_fusion/README.md:79,97,134`) on *every* output tile of *every*
+  block — the largest single compute volume in the op. Fusing
+  `sigmoid`→multiply through DEST (`DestReuseBinary`) is also a loss for the same
+  reason P4+P5 stay split (0.82x vs a 1.22x-faster L1 round-trip). Hence the
+  deliberate `cb_gate_sig` L1 hop between P7b and P7c.
 * `DestReuseBinary` to fuse P4+P5 into one chain: measured **loss**. Fusing
   through DEST into an **FPU** consumer is 0.82–1.02x, and the L1 round-trip is
   1.22x *faster*, with a per-tile premium of 464 ns @ n=8 → 2301 ns @ n=32
@@ -392,20 +453,28 @@ the compute kernel; the only raw APIs are the reader/writer `TensorAccessor` +
 ## 10. Compute Phases
 
 Loop structure: `for block in [start_block, start_block + num_blocks)` →
-`for chunk in [0, TOKENS_PER_BLOCK / NORM_CHUNK_TOKENS)` → P1..P6 → then P7a/P7b
-once per block. `NB = NORM_CHUNK_TOKENS`.
+`for chunk in [0, TOKENS_PER_BLOCK / NORM_CHUNK_TOKENS)` → P1..P6 → then P7a once
+per block → `for gchunk in [0, FLAT_TILES / GATE_CHUNK_TILES)` → P7b/P7c.
+`NB = NORM_CHUNK_TOKENS`, `GC = GATE_CHUNK_TILES`.
+
+Helper invocations per token-block:
+`NCH*5 + 1 + 2*(FLAT_TILES/GC)` = `4*5 + 1 + 2*2` = **25**. Keeping this count low
+is why `NORM_CHUNK_TOKENS` and `GATE_CHUNK_TILES` default **coarse** (§6.2) — the
+measured fixed cost is ~320 ns per extra invocation
+(`compute_block_size/README.md:92-103`).
 
 | # | Operation | Helper? | Input CB (tiles, state) | Output CB (tiles) | CB State After |
 |---|-----------|---------|--------------------------|-------------------|----------------|
 | P1 | `o²` DEST-accumulated over `V_TILES` per token | yes (`eltwise_chain` + `DestAccumulation`) | `cb_o_tiles` (`V_TILES*NB`, waited upfront, **not popped**) | `cb_sumsq` (`NB`) | `cb_o_tiles` still holds the chunk (needed by P4) |
-| P2 | `mean(o²)` over `V` | yes (`reduce_mean`) | `cb_sumsq` (`NB`, 1/row), `cb_scaler` (1, held) | `cb_rms_mean` (`NB`, **col-0 valid**) | `cb_sumsq` drained; `cb_scaler` intact |
-| P3 | `rsqrt(mean + eps)` | yes (`eltwise_chain`) | `cb_rms_mean` (`NB`) | `cb_rstd` (`NB`, col-0 valid) | `cb_rms_mean` drained |
+| P2 | `rsqrt(mean(o²) + eps)` — reduce **and** epilogue in one DEST window | yes (`reduce` + `post_reduce_op`) | `cb_sumsq` (`NB`, 1/row), `cb_scaler` (1, held) | `cb_rstd` (`NB`, **col-0 valid**) | `cb_sumsq` drained; `cb_scaler` intact |
 | P4 | `o * rstd` (bcast Col) | yes (`mul`) | `cb_o_tiles` (`V_TILES*NB`), `cb_rstd` (`NB`, Col-indexed) | `cb_normed` (`V_TILES*NB`) | **`cb_o_tiles` and `cb_rstd` both drained** — the chunk's `o` is released here, which is what lets `O_DEPTH=2` prefetch the next chunk |
+| — | *(P1..P6 above repeat per chunk; P7a..P7c below run once per token-block)* | | | | |
 | P5 | `* weight` (bcast Row) | yes (`mul`) | `cb_normed` (`V_TILES*NB`), `cb_weight` (`V_TILES`, Row-indexed, held) | `cb_onorm` (`V_TILES*NB`) | `cb_normed` drained; `cb_weight` intact for every later chunk/block |
 | P6 | untilize head-major → row-major | yes (`untilize<V_TILES>`) | `cb_onorm` (`V_TILES` per block x `NB` blocks) | `cb_rm_flat_rows` (+`V_TILES*NB` pages) | `cb_onorm` drained; `cb_rm_flat_rows` **accumulates across all chunks** and is only complete after the last chunk |
 | — | *(chunk loop repeats)* | | | | after `TOKENS_PER_BLOCK/NB` chunks `cb_rm_flat_rows` holds exactly `FLAT_TILES` pages |
 | P7a | tilize row-major → flat token-major | yes (`tilize<FLAT_TILES>`, `num_blocks=1`) | `cb_rm_flat_rows` (`FLAT_TILES`) | `cb_flat_tiles` (`FLAT_TILES`) | `cb_rm_flat_rows` fully drained back to the buffer base (required — §6.1) |
-| P7b | `flat * sigmoid(gate)` | yes (`eltwise_chain`) | `cb_flat_tiles` (`FLAT_TILES`), `cb_gate_tiles` (streaming) | `cb_out_tiles` (streaming) | both drained; ready for the next block |
+| P7b | `sigmoid(gate)` (SFPU) | yes (`unary<Sigmoid<>>`) | `cb_gate_tiles` (`GC`, streaming) | `cb_gate_sig` (`GC`) | `cb_gate_tiles` slot freed for the reader |
+| P7c | `flat * sigmoid(gate)` (**FPU**) | yes (`mul`) | `cb_flat_tiles` (`GC`, streaming), `cb_gate_sig` (`GC`, streaming) | `cb_out_tiles` (streaming) | both drained; after `FLAT_TILES/GC` gchunks `cb_flat_tiles` is fully drained ⇒ ready for the next block |
 
 ## 11. Broadcast Verification
 
@@ -414,7 +483,8 @@ once per block. `NB = NORM_CHUNK_TOKENS`.
 | P1 | `mul_tiles(cb_o_tiles, cb_o_tiles)` (square, DEST-accumulating) | All `[H,W]` | All `[H,W]` (same buffer) | `None` |
 | P4 | `mul_tiles_bcast(cb_o_tiles, cb_rstd)` | All `[H,W]` | **Col0** (REDUCE_ROW output) | **`Col`** |
 | P5 | `mul_tiles_bcast(cb_normed, cb_weight)` | All `[H,W]` | **Row0** (1-D `[V]` operand) | **`Row`** |
-| P7b | `mul_binary_tile(D0, D1)` (SFPU, DEST↔DEST) | All `[H,W]` | All `[H,W]` | n/a (no CB operand) |
+| P7b | `sigmoid_tile(D0)` (SFPU unary) | All `[H,W]` | n/a (unary) | n/a |
+| P7c | `mul_tiles(cb_flat_tiles, cb_gate_sig)` (**FPU**) | All `[H,W]` | All `[H,W]` | `None` |
 
 `BroadcastDim` names the axis that is **broadcast**, not the one reduced
 (`eltwise_chain.hpp:523-528`): a REDUCE_ROW result is column-shaped and
@@ -445,13 +515,16 @@ the rows with `Row`.
    a 2-D `EltwiseShape::grid(...)`. `Streaming`/`HeldStream` on the weight or
    rstd operand is a compile error, and a 1-D `tiles(n)` shape makes `Row`/`Col`
    meaningless.
-7. **`fp32_dest_acc_en=True` halves `DEST_AUTO_LIMIT` to 4.** Every chain here
-   uses `Dst::D0`/`D1` only. Do not introduce `D4+`.
-8. **`epsilon` reaches the kernel as a raw fp32 bit pattern.**
-   `AddUnary`'s `param0` is the bit pattern, not a float
-   (`eltwise_scalar.inl:46-54`); pack it on the host with
-   `struct.unpack("I", struct.pack("f", eps))[0]`. `epsilon` is applied to the
-   **mean of squares** before `rsqrt`, matching
+7. **`fp32_dest_acc_en=True` halves `DEST_AUTO_LIMIT` to 4**
+   (`dest_helpers.hpp:95-99`). Every chain here uses `Dst::D0`/`D1` only; do not
+   introduce `D4+`. This also makes `untilize<V_TILES=4>` fit the single-pass
+   `pack_untilize` path *exactly* (`untilize_helpers.inl:78-87`) — widening
+   `V_TILES` silently moves P6 onto the slower block-based path.
+8. **`epsilon` reaches the kernel as a raw fp32 bit pattern**, consumed by
+   `add_unary_tile(dst, eps_bits)` inside P2's `post_reduce_op` lambda
+   (`binop_with_scalar_tile_init()` must precede it). Pack it on the host with
+   `struct.unpack("I", struct.pack("f", eps))[0]` and pass it as an RT arg.
+   `epsilon` is applied to the **mean of squares** before `rsqrt`, matching
    `torch: x * rsqrt(mean(x²) + eps)`.
 9. **`row_wise=True`.** The `split_work_to_cores` default is column-major and
    measured 2.91x slower here (§7).
@@ -460,12 +533,63 @@ the rows with `Row`.
     switch P5 to a non-broadcast multiply.
 11. **Uniform `Float16_b` across all 12 CBs is load-bearing**, not incidental:
     it is what makes the `RECONFIG_MODE` knob (§1.5) a legal one-line
-    knob-turn. Introducing an fp32 intermediate CB forfeits that and buys
-    nothing measurable (the sum-of-squares already accumulates in fp32 DEST; the
-    bf16 round-trip of the 4-term partial contributes ≈0.04 % relative error to
-    `rstd`, far below the bf16 output quantization itself).
+    knob-turn, and it lets one `compute_kernel_hw_startup` serve every phase.
+    The precision cost is bounded and deliberate: the sum-of-squares accumulates
+    in fp32 DEST (contract-required), and P2's fused epilogue means the statistic
+    makes **one** bf16 round-trip, not two — `cb_rstd` is the only stats CB left.
+    That single pack quantizes `rstd` at bf16 resolution (~2⁻⁹ ≈ 0.2 % worst
+    case), applied *coherently* to all `V` channels of one head, which is the same
+    order as the bf16 quantization of the output elements themselves and well
+    inside the bf16 golden tolerance (PCC 0.995 / RMS 0.04,
+    `eval/golden_tests/onorm/helpers.py:82-86`). **If measured PCC lands
+    marginal, promoting `cb_rstd` alone to `Float32` (+16 KB, `NC` pages) is the
+    first precision lever** — it costs only that CB's reconfig, not the uniformity
+    of the rest.
 12. **No `ttnn.reshape` / `to_layout` / `tilize` / `untilize` in the Python entry
     point.** The head-major → flat conversion is P6+P7a, in-kernel, by contract.
 13. **`num_token_blocks` uses `ceil` per batch.** `B * ceil(T/32)`, never
     `floor(B*T/32)` — even though the contract makes `T % 32 == 0`, a future
-    non-tile-aligned `T` is exactly where that formula breaks.
+    non-tile-aligned `T` is exactly where that formula breaks. Related asymmetry
+    to keep in mind for that future: in `o` the tiled dims are `(HV, V)`, so `o`'s
+    token axis is **un-padded** (`B*T*V_TILES` pages), while in `gate`/`out` the
+    tiled dims are `(T, FLAT)`, so their token axis **is** tile-padded
+    (`B*Tt*FLAT_TILES` pages). `T % 32 == 0` is what makes the two views coincide.
+14. **`dst_full_sync_en` must be `False`** (§3). It is not a neutral
+    precision/DEST-capacity knob here: `can_use_fast_tilize()` gates on
+    `!get_dst_full_sync_enabled()` (`tilize_helpers.inl:66-79`), so flipping it
+    drops P7a's `FLAT_TILES`-wide re-tile off the fast-tilize datapath on every
+    core, every block — a silent, uniform slowdown with no correctness signal.
+    Also: do **not** tag `cb_rm_flat_rows` with
+    `UnpackToDestMode::UnpackToDestFp32` — combined with fast tilize it silently
+    corrupts output (`tilize_helpers.inl:259-266`).
+15. **The gate multiply must stay on the FPU.** P7b/P7c are split across an L1
+    CB *on purpose* (§9). Collapsing them into one chain with a DEST-resident
+    SFPU `MulBinary` is the single most expensive mistake available in this kernel:
+    it is a measured **0.58x** on the op's largest compute volume (every output
+    tile of every block) — enough to turn a DRAM-bound op compute-bound.
+
+## 13. Structural impossibilities and one feature-spec defect to fold in
+
+`INVALID` lives in `eval/golden_tests/onorm/feature_spec.py` and is correctly
+empty: TARGET is the single `(bfloat16, TILE_LAYOUT)` cell, so there is nothing
+structurally impossible for the harness to skip. **The op file must not declare or
+check `INVALID`**, and no new `INVALID` candidate is proposed here.
+
+One **defect in the golden suite** that the implementer will hit and that is *not*
+mine to edit — fold it in with another `/golden-tests` invocation:
+
+> `eval/golden_tests/onorm/feature_spec.py:75` — `INPUTS[4]` is
+> `((2, 64, HV, V), (2, 64, FLAT), (2, 1, 1, V))`. The weight shape `(2, 1, 1, V)`
+> contradicts both the documented contract `weight : [1, 1, 1, V]` (same file,
+> `:63`) and the reference implementation: `pytorch_onorm` does
+> `weight.to(torch.float32).reshape(-1)` (`helpers.py:50`), which yields **2·V =
+> 256** elements for that shape, so `normed[2,64,32,128] * weight[256]` raises a
+> torch broadcast error. Because `run_onorm` computes `expected` *before* building
+> any device tensor (`helpers.py:108`), this case fails inside the harness and
+> never reaches the op at all. It should read `(1, 1, 1, V)`.
+
+The op-side contract is unaffected: `weight` must have `shape[-1] == V` with every
+leading dim `== 1`, enforced by a host assert (not an axis refusal — weight rank is
+not a TARGET axis). The acceptance test at
+`tests/ttnn/unit_tests/operations/onorm/test_onorm.py` uses `(1, 1, 1, V)` for
+every case, `B = 2` included, so it is unaffected by the defect.
