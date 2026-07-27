@@ -67,40 +67,36 @@ void kernel_main() {
     // *size* granularity that empirically governs pad correctness (see below).
     constexpr uint32_t dram_alignment = get_compile_time_arg_val(src_args.next_compile_time_args_offset() + 1);
 
-    // FAST-PATH SAFETY PREDICATE.
+    // NOC TRANSFER GRANULARITY.
     //
-    // The fast path issues pure-NOC reads and NO RISC memmove: it is the only path
-    // that hits pad's perf target (~0.7-0.9x vs ttnn on the common tile-aligned
-    // pad). It is SAFE only when every NOC read it issues has a *size* that is a
-    // multiple of the HW DRAM alignment (dram_alignment: 64B on Blackhole, 32B on
-    // Wormhole). This is the empirically-measured NOC-read granularity on silicon:
+    // Every NOC read issued below must move a *size* that is a multiple of the HW DRAM
+    // alignment (dram_alignment: 64B on Blackhole, 32B on Wormhole). This is the
+    // empirically-measured granularity on silicon, and 16B L1 alignment is NOT enough:
     //   - Aligned W=512 + 64B back-pad (both 64B multiples): pcc = 1.0 (correct).
     //   - Aligned W=256 + 32B back-pad (32B is 16B-aligned but NOT 64B): pcc~0.87
     //     -> a sub-dram_alignment back-pad NOC read corrupts.
     //   - int32 W=100 -> 400B stick (16B-aligned, NOT 64B): pcc~0.01 -> a
     //     sub-dram_alignment data read corrupts.
-    // 16B (L1) alignment is therefore INSUFFICIENT; the true granularity is
-    // dram_alignment for BOTH the DRAM data read and the L1<->L1 pad reads.
+    // It binds the L1<->L1 pad reads as well as the DRAM data read, and it binds destination
+    // addresses as well as sizes -- hence the dram_alignment page pitch the factory hands us,
+    // which is what keeps every l1_addr below on a granule boundary.
     //
-    // On the fast path the three NOC reads it can issue are:
-    //   - data read: moves stick_size            -> require stick_size % A == 0
-    //   - back-pad read: moves back_pad_w_bytes   -> require back_pad_w_bytes % A == 0
-    //   - pad-only full-stick fill: moves stick_size_out = stick_size + back_pad_w_bytes
-    //     (front_pad_w_bytes == 0 on the fast path) -> automatically % A == 0 when
-    //     both parts are.
-    // With A = dram_alignment, requiring the data read and back-pad read sizes to be
-    // A-multiples makes EVERY fast-path NOC transfer (size AND destination address,
-    // since l1_addr + stick_size is then A-aligned too) an A-multiple by construction
-    // -- provably safe on any arch, because A is that arch's native NOC granularity.
-    //
-    // Anything else routes through the staging path (aligned DRAM read of
-    // in_read_size + full-stick pad pre-fill + RISC memmove of exactly stick_size),
-    // which is byte-exact for any width/offset:
-    //   - front W-pad (data would land at a non-A-aligned offset),
-    //   - non-A-aligned input stick (data read size not an A-multiple),
-    //   - any back W-pad whose size is not an A-multiple (e.g. 20 cols bf16 -> 40B).
-    constexpr bool NEEDS_STAGE =
-        (front_pad_w_bytes > 0) || (stick_size % dram_alignment != 0) || (back_pad_w_bytes % dram_alignment != 0);
+    // Only the DATA placement can force staging. A front W-pad lands data at a
+    // non-A-aligned offset, and a non-A-aligned input stick makes the DRAM read size
+    // itself illegal; neither is expressible as NOC reads, so both fall back to an
+    // aligned read into scratch plus a RISC memmove. A ragged *pad* region does not
+    // force it: pad bytes have no source to honour, so the A-multiple part rides the
+    // NOC and the sub-A remainder is written by RISC, which has no granularity rule.
+    // That distinction is worth 1.25-1.57x of native on Blackhole where staging gives 0.51-0.76x.
+    constexpr bool NEEDS_STAGE = (front_pad_w_bytes > 0) || (stick_size % dram_alignment != 0);
+
+    // Split points for the two pad fills: NOC the whole A-multiples, RISC the remainder. Each
+    // remainder sits at an A-multiple offset from an A-aligned page, so the stores are word-aligned
+    // and land clear of the granule any concurrent NOC read on this page can settle into.
+    constexpr uint32_t back_pad_noc_bytes = (back_pad_w_bytes / dram_alignment) * dram_alignment;
+    constexpr uint32_t back_pad_tail_bytes = back_pad_w_bytes - back_pad_noc_bytes;
+    constexpr uint32_t pad_stick_noc_bytes = (stick_size_out / dram_alignment) * dram_alignment;
+    constexpr uint32_t pad_stick_tail_bytes = stick_size_out - pad_stick_noc_bytes;
 
     // No explicit page-size override: the 2-arg TensorAccessor derives the
     // tensor's real bank-page pitch from its spec (align(stick, buffer align);
@@ -134,21 +130,20 @@ void kernel_main() {
 
             if (is_data) {
                 if constexpr (NEEDS_STAGE) {
-                    // Robust path for front W-pad and/or non-16B-aligned input
-                    // widths. If there is any W-pad, pre-fill the whole output
-                    // stick with the pad value (covers front AND back W-pad). Then
-                    // DRAM-read the ALIGNED input page (in_read_size bytes) into the
-                    // aligned staging CB and RISC-memmove only the stick_size real
-                    // bytes into place at l1_addr + front_pad_w_bytes. Every NOC
-                    // transfer here uses an aligned source address and the placement
-                    // copy is byte-granular, so this is correct for any width/offset.
-                    // Uses cb_stage (not cb_pad) so the pad value buffer stays
-                    // intact. Mirrors the repeat/expand aligned-DRAM-read + local-
-                    // copy convention. (front-pad-only case is byte-identical to the
-                    // original front-pad path.)
+                    // Data placement the NOC cannot express: pre-fill the whole output stick with
+                    // the pad value, read the A-aligned input page into scratch, then RISC-memmove
+                    // the stick_size real bytes into place. Byte-granular, so correct at any width
+                    // or offset. Scratch is cb_stage, not cb_pad, so the pad constant survives.
+                    //
+                    // The pre-fill and the DRAM read address disjoint buffers, so they share one
+                    // barrier; only the memmove depends on both.
                     if constexpr (front_pad_w_bytes > 0 || back_pad_w_bytes > 0) {
-                        noc_async_read(pad_noc_addr, l1_addr, stick_size_out);
-                        noc_async_read_barrier();
+                        if constexpr (pad_stick_noc_bytes > 0) {
+                            noc_async_read(pad_noc_addr, l1_addr, pad_stick_noc_bytes);
+                        }
+                        if constexpr (pad_stick_tail_bytes > 0) {
+                            fill_with_val<pad_stick_tail_bytes>(l1_addr + pad_stick_noc_bytes, packed_pad_val);
+                        }
                     }
                     uint32_t stage_addr = get_write_ptr(cb_stage);
                     noc_async_read(s.get_noc_addr(src_stick), stage_addr, in_read_size);
@@ -158,19 +153,23 @@ void kernel_main() {
                         reinterpret_cast<void*>(get_read_ptr(cb_stage)),
                         static_cast<size_t>(stick_size));
                 } else {
-                    // Fast path: 16B-aligned input width, back-only (or no) W-pad.
-                    // Data starts at l1_addr (aligned); the back-W-pad L1 read
-                    // lands at l1_addr + stick_size (16B-aligned) and the DRAM read
-                    // moves a 16B-aligned size. Byte-identical to the original.
                     noc_async_read(s.get_noc_addr(src_stick), l1_addr, stick_size);
-                    if constexpr (back_pad_w_bytes > 0) {
-                        noc_async_read(pad_noc_addr, l1_addr + stick_size, back_pad_w_bytes);
+                    if constexpr (back_pad_noc_bytes > 0) {
+                        noc_async_read(pad_noc_addr, l1_addr + stick_size, back_pad_noc_bytes);
+                    }
+                    if constexpr (back_pad_tail_bytes > 0) {
+                        fill_with_val<back_pad_tail_bytes>(l1_addr + stick_size + back_pad_noc_bytes, packed_pad_val);
                     }
                 }
                 src_stick++;
             } else {
                 // Full pad stick: fill from pad constant buffer
-                noc_async_read(pad_noc_addr, l1_addr, stick_size_out);
+                if constexpr (pad_stick_noc_bytes > 0) {
+                    noc_async_read(pad_noc_addr, l1_addr, pad_stick_noc_bytes);
+                }
+                if constexpr (pad_stick_tail_bytes > 0) {
+                    fill_with_val<pad_stick_tail_bytes>(l1_addr + pad_stick_noc_bytes, packed_pad_val);
+                }
             }
 
             l1_addr += stick_size_out_aligned;
