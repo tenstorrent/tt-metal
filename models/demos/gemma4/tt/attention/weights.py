@@ -160,7 +160,10 @@ def load_attention_weights(
     oproj_k = q_per_dev
     oproj_n = hidden_size
 
-    dram_shard = _DRAM_SHARD_ATTN and tp > 1
+    # MoE (26B-A4B): sharded QKV/O-proj decode matmuls regress layer-decode PCC
+    # on BH 1x4 (~0.93 vs 0.99). Dense models keep the opt.
+    is_moe = bool(getattr(config, "enable_moe_block", False))
+    dram_shard = _DRAM_SHARD_ATTN and tp > 1 and not is_moe
     qkv_cache = get_cache_file_name(tensor_cache_path, f"wqkv{tp_suffix}{dtype_suffix}")
     oproj_cache = get_cache_file_name(tensor_cache_path, f"o_proj{o_proj_cache_suffix}{tp_suffix}{dtype_suffix}")
     qkv_cache_ws = (qkv_cache + ".ws") if qkv_cache else None
