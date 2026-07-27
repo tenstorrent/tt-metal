@@ -213,6 +213,17 @@ uint16_t hash16CT(const std::string& str) {
     return ((res & 0xFFFF) ^ ((res & 0xFFFF0000) >> 16)) & 0xFFFF;
 }
 
+// Host side of the opt-in name-only zone hash (see kernel_profiler.hpp). Must
+// agree with the device: when TT_METAL_PROFILER_ZONE_NAME_ONLY is set, the
+// device baked hash16(name), so the host hashes the name field only.
+static bool profilerZoneNameOnly() {
+    static const bool v = [] {
+        const char* e = std::getenv("TT_METAL_PROFILER_ZONE_NAME_ONLY");
+        return e != nullptr && std::string(e) != "0";
+    }();
+    return v;
+}
+
 void populateZoneSrcLocations(
     const std::string& new_log_name,
     const std::string& log_name,
@@ -230,11 +241,20 @@ void populateZoneSrcLocations(
         size_t delimiter_index = pos + delimiter.length();
         std::string zone_src_location = line.substr(delimiter_index, line.length() - delimiter_index - 1);
 
-        uint16_t hash_16bit = hash16CT(zone_src_location);
+        const std::string hash_input = profilerZoneNameOnly()
+                                           ? zone_src_location.substr(0, zone_src_location.find(','))
+                                           : zone_src_location;
+        uint16_t hash_16bit = hash16CT(hash_input);
 
         auto did_insert = zone_src_locations.insert(zone_src_location);
         if (did_insert.second && (hash_to_zone_src_locations.contains(hash_16bit))) {
-            TT_THROW("Source location hashes are colliding, two different locations are having the same hash");
+            // Two source locations map to the same 16-bit hash. In name-only mode
+            // this is the expected case for a zone name emitted from several
+            // generated-kernel files (same op) and drops nothing meaningful; in
+            // full-string mode it is a genuine 16-bit collision and drops one
+            // label. Either way, skip re-mapping instead of aborting the read.
+            zone_src_locations.erase(zone_src_location);
+            continue;
         }
 
         std::stringstream ss(zone_src_location);

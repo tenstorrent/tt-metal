@@ -31,9 +31,23 @@
 #define PROFILER_MSG __FILE__ "," $Line ",KERNEL_PROFILER"
 #define PROFILER_MSG_NAME(name) name "," PROFILER_MSG
 
+// Opt-in (compile define -DPROFILER_ZONE_NAME_ONLY, driven by the runtime env
+// var TT_METAL_PROFILER_ZONE_NAME_ONLY): hash only the zone name, not the full
+// "name,file,line,KERNEL_PROFILER" source string. A large fused program (e.g.
+// blaze GPT-OSS) emits the same zone name from many content-hashed generated
+// kernel files, inflating the number of distinct 16-bit ids and causing
+// collisions; hashing the name alone collapses those duplicates. The #pragma
+// message still emits the full source location so the host log keeps file/line
+// for display. The host (profiler.cpp) matches this via the same env var.
+#if defined(PROFILER_ZONE_NAME_ONLY)
+#define PROFILER_ZONE_HASH_SRC(name) name
+#else
+#define PROFILER_ZONE_HASH_SRC(name) PROFILER_MSG_NAME(name)
+#endif
+
 #define SrcLocNameToHash(name)                   \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));
+    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_ZONE_HASH_SRC(name));
 
 #if defined(PROFILE_KERNEL) && \
     (!defined(DISPATCH_KERNEL) || (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_DISPATCH_CORES)))
@@ -650,13 +664,13 @@ __attribute__((noinline)) void trace_only_init() {
 
 #define DeviceZoneScopedN(name)                                                \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
+    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_ZONE_HASH_SRC(name)); \
     kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
 
 #define DeviceTimestampedData(name, data)                                          \
     {                                                                              \
         DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
-        auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
+        auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_ZONE_HASH_SRC(name)); \
         kernel_profiler::timeStampedData<hash>(data);                              \
     }
 
@@ -667,14 +681,14 @@ __attribute__((noinline)) void trace_only_init() {
 
 #define DeviceZoneScopedN(name)                                                          \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                         \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));           \
+    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_ZONE_HASH_SRC(name));           \
     kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH> zone = \
         kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH>();
 
 #define DeviceTimestampedData(name, data)                                                            \
     {                                                                                                \
         DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                                 \
-        auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));                   \
+        auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_ZONE_HASH_SRC(name));                   \
         kernel_profiler::timeStampedData<hash, kernel_profiler::DoingDispatch::DISPATCH_META>(data); \
     }
 
@@ -695,22 +709,22 @@ __attribute__((noinline)) void trace_only_init() {
 
 #define DeviceZoneScopedMainN(name)                                            \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
+    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_ZONE_HASH_SRC(name)); \
     kernel_profiler::profileScopeGuaranteed<hash, 0> zone = kernel_profiler::profileScopeGuaranteed<hash, 0>();
 
 #define DeviceZoneScopedMainChildN(name)                                       \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
+    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_ZONE_HASH_SRC(name)); \
     kernel_profiler::profileScopeGuaranteed<hash, 1> zone = kernel_profiler::profileScopeGuaranteed<hash, 1>();
 
 #define DeviceZoneScopedSumN1(name)                                            \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
+    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_ZONE_HASH_SRC(name)); \
     kernel_profiler::profileScopeAccumulate<hash, 0> zone = kernel_profiler::profileScopeAccumulate<hash, 0>();
 
 #define DeviceZoneScopedSumN2(name)                                            \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
+    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_ZONE_HASH_SRC(name)); \
     kernel_profiler::profileScopeAccumulate<hash, 1> zone = kernel_profiler::profileScopeAccumulate<hash, 1>();
 
 #define DeviceZoneSetCounter(counter)                  \

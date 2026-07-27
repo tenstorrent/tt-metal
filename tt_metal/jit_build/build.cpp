@@ -219,6 +219,14 @@ void JitBuildEnv::init(
 
         this->defines_ += "-DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=" +
                           std::to_string(config.profiler_dram_bank_size_per_risc_bytes) + " ";
+
+        // Opt-in: hash only the zone name (not name,file,line) to avoid 16-bit
+        // zone-id collisions in large fused programs. Must match the host
+        // (profiler.cpp) which reads the same env var.
+        if (const char* zone_name_only = std::getenv("TT_METAL_PROFILER_ZONE_NAME_ONLY");
+            zone_name_only != nullptr && std::string(zone_name_only) != "0") {
+            this->defines_ += "-DPROFILER_ZONE_NAME_ONLY ";
+        }
     }
     if (rtoptions.get_profiler_noc_events_enabled()) {
         // force profiler on if noc events are being profiled
