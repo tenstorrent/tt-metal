@@ -1395,7 +1395,10 @@ class TTVibeVoiceGenerator:
         neg_pos, neg_start_hidden = self._reset_neg_cache(kv_cache_neg)
         neg_prev_diffusion_token: Optional[int] = None  # delayed token for negative CFG
 
-        sequences = input_ids.clone()
+        # Generated token ids collected as a host list (O(1) append) and concatenated to input_ids
+        # once after the loop — avoids the per-frame torch.cat that reallocated an O(seq_len) tensor
+        # every AR step (device-idle host bookkeeping in the steady loop).
+        _gen_tokens: List[int] = []
         # On-device streaming: each diffusion step decodes its audio chunk via the
         # acoustic decoder's causal cache; we accumulate the chunks to form the
         # final waveform (identical structure to the reference streaming decode).
@@ -1458,10 +1461,7 @@ class TTVibeVoiceGenerator:
         _t_decode_start = time.perf_counter()
         for step in range(max_steps):
             current_token = next_token
-            sequences = torch.cat(
-                [sequences, torch.tensor([[current_token]], dtype=torch.long)],
-                dim=-1,
-            )
+            _gen_tokens.append(current_token)
             _vv_debug(f"step {step + 1}/{max_steps}: emit {self._token_label(current_token)}")
 
             if self._trace_segment and forced_tokens is None and current_token == self.speech_diffusion_id:
@@ -1649,6 +1649,11 @@ class TTVibeVoiceGenerator:
         else:
             speech_waveform = torch.zeros(0)
 
+        sequences = (
+            torch.cat([input_ids, torch.tensor([_gen_tokens], dtype=torch.long)], dim=-1)
+            if _gen_tokens
+            else input_ids.clone()
+        )
         ar_tokens = sequences.shape[1] - input_ids.shape[1]
         _vv_debug(
             f"generate() done: ar_tokens={ar_tokens} diffusion_frames={diffusion_frames} "
