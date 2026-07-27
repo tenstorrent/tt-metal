@@ -133,12 +133,29 @@ class TopKRouter:
         # Use L1 for decode (small tensors), DRAM for prefill (large sequences)
         is_decode = actual_tokens <= 128
         mem_config = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
+        # The decode router matmul (M=32,K=2880,N=32) auto-selects a SINGLE core
+        # (~62us, the N=32=1-tile output can't split, K=2880 reduced serially).
+        # Swept 1D config splits the M rows / K reduction across cores (mcast_in0=False).
+        router_pc = None
+        if is_decode and actual_tokens == 32 and hidden_states.shape[-1] % 32 == 0:
+            ncores = 10
+            router_pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(ncores, 1),
+                in0_block_w=9,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=max(1, (actual_tokens // 32)),
+                per_core_N=1,
+                fuse_batch=True,
+                mcast_in0=False,
+            )
         router_logits = ttnn.linear(
             hidden_states,
             self.weight,
             bias=self.bias,
             memory_config=mem_config,
             compute_kernel_config=self.compute_config,
+            program_config=router_pc,
         )
 
         expert_indices, expert_weights = topk_router(
