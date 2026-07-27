@@ -381,7 +381,7 @@ def _make_scalar_tensor(mesh_device, value):
     )
 
 
-@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
+@pytest.mark.parametrize("mesh_device", _MESHES, ids=_MESH_IDS, indirect=True)
 @pytest.mark.parametrize("slot_idx,valid_global", _EQUIV_CASES, ids=_EQUIV_IDS)
 @pytest.mark.timeout(0)
 def test_zero_padded_kv_cache_tensor_matches_scalar(mesh_device, slot_idx, valid_global):
