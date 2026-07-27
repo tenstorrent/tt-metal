@@ -50,7 +50,11 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                 num_layers (int): Total layers folded into the cache batch dim. Structural —
                     fixed for the lifetime of the workload.
                 kv_actual_global (int): prior valid global KV length in tokens. Tile-aligned.
-                cluster_axis (int): Cluster axis along which the cache is sharded (0 or 1).
+                cluster_axis (int): SP cluster axis along which the cache is sharded (0 or 1).
+                tp_axis (int, optional): Second (TP) axis to additionally shard the cache across
+                    (GLM-5.2 KV dedup). When given, ``input`` must be TP-replicated (identical on
+                    every TP chip) and single-head; each chip persists only its own ``1/tp`` seq
+                    window. Must differ from ``cluster_axis``. Default None = pure SP-only sharding.
 
             Returns:
                 ttnn.Tensor: handle to `cache` with the new slab written in place.
@@ -62,7 +66,8 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
         nb::arg("layer_idx"),
         nb::arg("num_layers"),
         nb::arg("kv_actual_global"),
-        nb::arg("cluster_axis"));
+        nb::arg("cluster_axis"),
+        nb::arg("tp_axis") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::detail
