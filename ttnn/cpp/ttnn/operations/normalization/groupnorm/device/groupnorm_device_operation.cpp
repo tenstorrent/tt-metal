@@ -67,6 +67,20 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
         a.padded_shape()[2],
         tile_height);
 
+    // Non-tile-aligned H*W (tt-metal #50682) is handled by the two-pass kernels only; the Welford
+    // kernels still reduce over the tile-padding rows and are silently wrong for these shapes.
+    // ttnn::group_norm routes such requests to the two-pass path before reaching here, so this
+    // only fires for direct ttnn::prim::group_norm callers -- who would otherwise get the bug back
+    // with no diagnostic. Reject loudly instead.
+    TT_FATAL(
+        !(args.use_welford && (a.logical_shape()[2] % tile_height != 0)),
+        "group_norm: use_welford is not supported for non-tile-aligned H*W ({} % {} != 0) -- the "
+        "Welford kernels reduce over the tile-padding rows and produce silently wrong statistics "
+        "(#50682). Call ttnn::group_norm, which routes this shape to the two-pass path, or pass "
+        "use_welford=false.",
+        a.logical_shape()[2],
+        tile_height);
+
     if (a.is_sharded()) {
         const auto& shard_spec = a.shard_spec().value();
         const auto bbox = shard_spec.grid.bounding_box();

@@ -56,11 +56,14 @@ void kernel_main() {
     constexpr uint32_t tile_width = get_compile_time_arg_val(24);
 
     // Non-tile-aligned H*W correction (tt-metal #50682): real vs tile-padded flattened height.
-    // When padded_hw > logical_hw the reduction ran over padded (zero) rows; the writer rescales
-    // the reduce scaler to divide by the real count, and the variance carries a residual bias of
-    // K*E[x]^2 per group (K = padded_hw/logical_hw - 1) which is subtracted at the rsqrt step.
-    // Because the sharded kernel consumes the mean (cb_ex_global) during centering, K*E[x]^2 is
-    // computed up front (before centering) and stashed in cb_kmsq. Skipped when tile-aligned.
+    // Canonical derivation, precondition (padding rows must be exact zeros) and the bfloat16
+    // precision caveat all live in kernels/compute/groupnorm.cpp -- read that first.
+    // In short: the writer rescales the reduce scaler to divide by the real element count, and
+    // the variance carries a residual bias of exactly K*E[x]^2 per group (K = padded_hw/logical_hw
+    // - 1) which is subtracted at the rsqrt step. The one difference from the interleaved kernel
+    // is scheduling: this kernel consumes the mean (cb_ex_global) during centering, so K*E[x]^2
+    // must be computed up front, before centering, and stashed in cb_kmsq until the rsqrt step.
+    // Skipped entirely when tile-aligned.
     constexpr uint32_t logical_hw = get_compile_time_arg_val(25);
     constexpr uint32_t padded_hw = get_compile_time_arg_val(26);
     constexpr bool has_pad_correction = padded_hw != logical_hw;

@@ -6,6 +6,7 @@
 #include "groupnorm_program_utils.hpp"
 
 #include <bit>
+#include <cmath>
 #include <map>
 #include <string>
 #include <optional>
@@ -664,10 +665,18 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     // reduction otherwise runs over the padded (zero) rows. We (a) rescale the per-group c_2
     // reduce scaler so the mean/variance divide by the real element count, and (b) pass
     // K = padded_hw/logical_hw - 1 so the compute kernel can subtract the residual variance
-    // bias K*E[x]^2. Both are passed as float bits in named compile args; when logical_hw ==
-    // padded_hw the writer keeps the original compile-time scaler path (byte-identical).
+    // bias K*E[x]^2. See the derivation in kernels/compute/groupnorm.cpp. Both are passed as float
+    // bits in named compile args; when logical_hw == padded_hw the writer keeps the original
+    // compile-time scaler path (byte-identical).
+    // Gated on !use_welford: the Welford kernels do not implement the correction, and
+    // ttnn::group_norm routes non-tile-aligned Welford requests to this two-pass path.
     const uint32_t logical_hw = static_cast<uint32_t>(a.logical_shape()[2]);
     const uint32_t padded_hw = static_cast<uint32_t>(a.padded_shape()[2]);
+    const bool has_pad_correction = !use_welford && (logical_hw != padded_hw);
+    // Kernels derive their own flag from (padded_hw != logical_hw). Feed them logical_hw ==
+    // padded_hw when the correction is off, so the kernel-side flag can never disagree with the
+    // CB allocation below (a disagreement would hang the compute kernel on cb_k.wait_front).
+    const uint32_t kernel_logical_hw = has_pad_correction ? logical_hw : padded_hw;
     const float pad_k = static_cast<float>(padded_hw) / static_cast<float>(logical_hw) - 1.0f;
     const uint32_t pad_k_bits = std::bit_cast<uint32_t>(pad_k);
     auto pad_scaler_bits = [&](uint32_t reduce_factor_w) {
@@ -703,7 +712,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"groupnorm_mode", groupnorm_mode},
         {"reduce_factor_w", reduce_factor_w_group_1},
         {"reduce_factor_c", reduce_factor_c_group_1},
-        {"logical_hw", logical_hw},
+        {"logical_hw", kernel_logical_hw},
         {"padded_hw", padded_hw},
         {"pad_scaler_bits", pad_scaler_bits(reduce_factor_w_group_1)},
         {"pad_k_bits", pad_k_bits},
@@ -736,7 +745,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"groupnorm_mode", groupnorm_mode},
         {"reduce_factor_w", reduce_factor_w_group_2},
         {"reduce_factor_c", reduce_factor_c_group_2},
-        {"logical_hw", logical_hw},
+        {"logical_hw", kernel_logical_hw},
         {"padded_hw", padded_hw},
         {"pad_scaler_bits", pad_scaler_bits(reduce_factor_w_group_2)},
         {"pad_k_bits", pad_k_bits},
@@ -831,7 +840,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"num_rows_per_group", num_rows_per_batch_per_core_group_1},
         {"TILE_WIDTH", tile_width},
         {"reciprocal_size", num_reciprocals},
-        {"logical_hw", logical_hw},
+        {"logical_hw", kernel_logical_hw},
         {"padded_hw", padded_hw},
     };
 
@@ -866,7 +875,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"num_rows_per_group", num_rows_per_batch_per_core_group_2},
         {"TILE_WIDTH", tile_width},
         {"reciprocal_size", num_reciprocals},
-        {"logical_hw", logical_hw},
+        {"logical_hw", kernel_logical_hw},
         {"padded_hw", padded_hw},
     };
 
@@ -1096,7 +1105,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     // K scalar written by the writer; cb_msq (c_7) and cb_kmsq (c_11) are single-tile scratch
     // used by the compute kernel to form E[x]^2 and the corrected variance. Only allocated
     // when the flattened height is not tile-aligned (two-pass path only; Welford is separate).
-    if (!use_welford && logical_hw != padded_hw) {
+    if (has_pad_correction) {
         for (uint32_t pad_cb_index : {tt::CBIndex::c_1, tt::CBIndex::c_7, tt::CBIndex::c_11}) {
             desc.cbs.push_back(CBDescriptor{
                 .total_size = single_tile_size,

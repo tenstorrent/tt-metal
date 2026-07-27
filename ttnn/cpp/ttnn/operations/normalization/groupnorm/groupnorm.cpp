@@ -7,6 +7,8 @@
 #include "groupnorm_grid_utils.hpp"
 #include "groupnorm_input_mask.hpp"
 
+#include <mutex>
+
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 
@@ -224,12 +226,18 @@ Tensor group_norm(
     std::optional<Tensor> effective_reciprocals = reciprocals;
     const uint32_t tile_height_align = input_tensor.tensor_spec().tile().get_height();
     if (use_welford && (input_shape[2] % tile_height_align != 0)) {
-        log_warning(
-            tt::LogOp,
-            "group_norm: use_welford is not supported for non-tile-aligned H*W ({} % {} != 0); "
-            "falling back to the two-pass path, which handles this case correctly (#50682).",
-            input_shape[2],
-            tile_height_align);
+        // Warn once per process, not per invocation: group_norm sits inside per-token / per-step
+        // model loops, so an unconditional log_warning here floods the log with one line per call.
+        static std::once_flag welford_fallback_warned;
+        std::call_once(welford_fallback_warned, [&] {
+            log_warning(
+                tt::LogOp,
+                "group_norm: use_welford is not supported for non-tile-aligned H*W ({} % {} != 0); "
+                "falling back to the two-pass path, which handles this case correctly (#50682). "
+                "This warning is emitted once per process.",
+                input_shape[2],
+                tile_height_align);
+        });
         use_welford = false;
         effective_reciprocals = std::nullopt;
     }

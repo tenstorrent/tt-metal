@@ -283,11 +283,17 @@ def test_group_norm_height_sharded_non_tile_aligned(device, N, C, H, W, num_grou
     gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, grid_size.y)
     beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, grid_size.y)
     gamma_t = ttnn.from_torch(
-        gamma, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device,
+        gamma,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     beta_t = ttnn.from_torch(
-        beta, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device,
+        beta,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -359,11 +365,17 @@ def test_group_norm_block_sharded_non_tile_aligned(device, N, C, H, W, num_group
     gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, grid_size.y)
     beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, grid_size.y)
     gamma_t = ttnn.from_torch(
-        gamma, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device,
+        gamma,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     beta_t = ttnn.from_torch(
-        beta, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device,
+        beta,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 

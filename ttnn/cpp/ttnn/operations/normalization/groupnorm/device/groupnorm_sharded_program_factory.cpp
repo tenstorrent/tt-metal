@@ -562,19 +562,26 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         };
     }
 
-    // Non-tile-aligned H*W correction (tt-metal #50682). When the real flattened height
-    // (logical_hw) is not a multiple of the tile height the reduction otherwise runs over the
-    // tile-padding rows. Rescale the per-group reduce scaler to divide by the real element count
-    // and pass K = padded_hw/logical_hw - 1 so the compute kernel subtracts the residual variance
-    // bias K*E[x]^2. Byte-identical when logical_hw == padded_hw.
+    // Non-tile-aligned H*W correction (tt-metal #50682). See the derivation in
+    // kernels/compute/groupnorm.cpp. Rescale the per-group reduce scaler to divide by the real
+    // element count and pass K = padded_hw/logical_hw - 1 so the compute kernel subtracts the
+    // residual variance bias K*E[x]^2. Byte-identical when logical_hw == padded_hw.
+    // Gated on !use_welford: the Welford kernels do not implement the correction, and
+    // ttnn::group_norm routes non-tile-aligned Welford requests to this two-pass path.
     const uint32_t logical_hw = static_cast<uint32_t>(a.logical_shape()[2]);
     const uint32_t padded_hw = static_cast<uint32_t>(a.padded_shape()[2]);
-    const bool has_pad_correction = logical_hw != padded_hw;
+    const bool has_pad_correction = !use_welford && (logical_hw != padded_hw);
     const uint32_t reduce_factor_w_val = num_rows_per_batch_per_core * num_datum_row_per_group;
     const float pad_scaler = 1.0f / std::sqrt(static_cast<float>(reduce_factor_w_val) *
                                               static_cast<float>(logical_hw) / static_cast<float>(padded_hw));
     const uint32_t pad_scaler_bits = std::bit_cast<uint32_t>(pad_scaler);
-    const uint32_t pad_k_bits = std::bit_cast<uint32_t>(static_cast<float>(padded_hw) / static_cast<float>(logical_hw) - 1.0f);
+    const float pad_k = static_cast<float>(padded_hw) / static_cast<float>(logical_hw) - 1.0f;
+    const uint32_t pad_k_bits = std::bit_cast<uint32_t>(pad_k);
+    // The compute kernel derives its own `has_pad_correction` from (padded_hw != logical_hw).
+    // Feed it logical_hw == padded_hw whenever the correction is disabled here, so the kernel-side
+    // flag can never disagree with the writer's PAD_CORRECTION define (a disagreement would hang
+    // the compute kernel on cb_k.wait_front, since nothing would ever fill cb_k).
+    const uint32_t compute_logical_hw = has_pad_correction ? logical_hw : padded_hw;
 
     // writer defines
     std::map<std::string, std::string> writer_defines;
@@ -693,8 +700,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         mcast_sender_compute_compile_time_args.push_back(num_datum_row_per_group);  // num_cols_per_group
     }
     mcast_sender_compute_compile_time_args.push_back(tile_width);
-    mcast_sender_compute_compile_time_args.push_back(logical_hw);  // arg 25
-    mcast_sender_compute_compile_time_args.push_back(padded_hw);   // arg 26
+    // Non-tile-aligned H*W correction (#50682). Appended last, so the index depends on whether the
+    // conditional num_cols_per_group arg above was pushed: 25/26 without Welford, 26/27 with it.
+    // Only the two-pass kernel reads them; the Welford kernel ignores the extra trailing args.
+    mcast_sender_compute_compile_time_args.push_back(compute_logical_hw);
+    mcast_sender_compute_compile_time_args.push_back(padded_hw);
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args = {
         0,
         static_cast<uint32_t>(gamma.has_value()),
@@ -729,8 +739,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         mcast_receiver_compute_compile_time_args.push_back(num_datum_row_per_group);  // num_cols_per_group
     }
     mcast_receiver_compute_compile_time_args.push_back(tile_width);
-    mcast_receiver_compute_compile_time_args.push_back(logical_hw);  // arg 25
-    mcast_receiver_compute_compile_time_args.push_back(padded_hw);   // arg 26
+    // Non-tile-aligned H*W correction (#50682); see the sender-side note above.
+    mcast_receiver_compute_compile_time_args.push_back(compute_logical_hw);
+    mcast_receiver_compute_compile_time_args.push_back(padded_hw);
     // compute kernel
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
