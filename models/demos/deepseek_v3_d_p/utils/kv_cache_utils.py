@@ -9,6 +9,7 @@ import socket
 from dataclasses import dataclass
 from enum import Enum
 
+import torch
 from loguru import logger
 
 import ttnn
