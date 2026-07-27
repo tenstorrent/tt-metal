@@ -1012,7 +1012,7 @@
       python3 -m pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "4x32sp1tp0nl2_ring_is_fsdp0 and 14b-720p"
   model: wan-2.2-t2v
   skus:
-    bh_sc4-mgd:
+    bh_sc4:
       timeout: 40
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
