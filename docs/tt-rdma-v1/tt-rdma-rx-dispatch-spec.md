@@ -259,6 +259,7 @@ throughput will track the RX number, not the 200 G TX number.
 - **RX.5e** — WRITE_IMM (0x11) payload land + imm completion slot (shared `rxwqe_publish`). **Done** (T9).
 - **RX.5f** — MR access-control enforcement: rkey_miss / rkey_access / rkey_bounds drop + count. **Done** (T10).
 - **RX.5g** — CONTROL (0xF0) MR register/deregister over the wire, gated by `ctrl_enable`. **Done** (T11).
-  **Phase 1 complete** (all v1 opcodes, T1–T11 13/13). Remaining polish: SEND→host hugepage (1.2b), READ
-  initiator correlation (1.3b).
+- **RX.5h** — READ initiator: BH issues READ_REQ, correlates READ_RESP by tag, lands payload. **Done** (T12).
+  **Phase 1 complete** (all v1 opcodes + both READ directions, T1–T12 14/14). Only deferred: SEND→host
+  hugepage (1.2b), which lands with the host SDK (`map_hugepage_to_noc`), not the RX kernel.
 - **RX.6** — PFC-lossless (BH.6) + resync-on-bad; fast gateway sender to find the real ceiling. Pending.

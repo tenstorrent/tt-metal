@@ -104,8 +104,10 @@ No opcode left behind; every path tested + error-handled.
     regression **T7** (5/5 READ_RESP frames, op 0x21, 'READ' pattern). RX kernel now bidirectional.
     Fixed a runt-padding framing bug: header-only opcodes (READ_REQ/ACK) are padded to 48 B
     (`TT_RDMA_HDR_ONLY_BYTES`) so the MAC never runt-pads them (which desyncs header-only framing).
-  - **1.3b Pending.** Initiator side: BH issues READ_REQ and correlates the RESP by tag (needs a
-    read-correlation table, `TT_RDMA_READ_CORR`).
+  - **1.3b Done.** Initiator side: on a host doorbell BH emits READ_REQ frames (tag 1..N), records
+    `corr[tag]={dst,len}` in `TT_RDMA_READ_CORR`, and on each READ_RESP looks up the tag and lands the
+    payload at the recorded destination. Silicon-validated, regression **T12** (10 sent, 10 matched by
+    tag, 10/10 landed 'READ' byte-exact). New sender `readresp` mode is the peer responder.
 - **1.4 ACK (0x40)** reception + cumulative-ACK accounting (pairs with Phase 2 reliability). **Done.**
   Inbound ACK carries the peer's cumulative `ack_seq` in the seq field (header-only frame); the RX kernel
   tracks the highest via wraparound-safe signed compare (the "acked-up-to" watermark the TX/initiator side
@@ -134,9 +136,11 @@ No opcode left behind; every path tested + error-handled.
 
 Exit gate: all 8 v1 opcodes exercised end-to-end with automated byte-exact + error-path tests. **✅ MET —
 Phase 1 complete.** SEND/SEND_IMM, WRITE/WRITE_IMM, READ_REQ/READ_RESP, ACK, CONTROL all handled;
-regression **T1–T11 (13/13)** byte-exact + error paths; access-control (rkey_miss/access/bounds) provably
-enforced; each item gated by `regression.sh` + `perf.sh`. Pending polish (separate track): 1.2b SEND→host
-hugepage, 1.3b READ initiator correlation.
+regression **T1–T12 (14/14)** byte-exact + error paths; access-control (rkey_miss/access/bounds) provably
+enforced; READ works both target (T7) and **initiator** (T12) side; each item gated by `regression.sh` +
+`perf.sh`. **Only deferred item: 1.2b SEND→host hugepage** (NoC→PCIe), which needs the host-SDK
+`map_hugepage_to_noc` plumbing (`ExternalIfaceSender`) — not cleanly reachable from the test harness, so
+it lands with the host SDK, not the RX kernel. The on-core SEND→ring mechanism (1.2a, T6) is done.
 
 ## Phase 2 — Reliability & flow control (production robustness)
 
