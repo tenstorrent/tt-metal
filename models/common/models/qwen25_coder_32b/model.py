@@ -86,11 +86,16 @@ class Qwen25Coder32BExecutorRuntimeConfig:
     # batches models whose prefill_forward threads ``batch_size`` — Qwen2.5-Coder-32B does, below).
     # Qwen2.5-Coder is a standard dense Qwen2.5 attention (NO QK-norm), so every prefill op is
     # row-independent and the batched fold is bit-safe (same as the qwen25_7b port).
-    # ``max_prefill_batch_size`` caps the per-group batch (8 = partial batching, design rec);
-    # ``disable_batched_prefill`` is the escape hatch back to the sequential loop;
+    # ``max_prefill_batch_size`` caps the per-group batch; 32 folds the whole batch-32 prefill in ONE
+    # 32-user pass (TTTv1 structural parity) so the eager norm+lm_head tail + full-vocab readback run
+    # once instead of 4×. At the natural 128 bucket the fold is 32*128=4096=2*2048, an exact multiple of
+    # MAX_QKV_MM_SEQ_LEN (reshape-safe), and 4096 % mlp_prefill_len_cutoff(1024) == 0 for the FF reshape;
+    # the DRAM guard (padded_batch*seq < 128K) passes with 4096. This model already runs the 1024 engine
+    # default for the FF cutoff (_resolve_coder_32b_wh_tuning), so the fold is the only prefill lever
+    # applied here. ``disable_batched_prefill`` is the escape hatch back to the sequential loop;
     # ``max_prefill_chunk_size`` (above) drives the #45234 chunked-prompt decline.
     supports_batched_prefill: bool = True
-    max_prefill_batch_size: int = 8
+    max_prefill_batch_size: int = 32
     disable_batched_prefill: bool = False
     # When True (default), batched prefill runs norm+lm_head ONCE per group over the gathered last-token
     # rows (TTTv1 parity); False falls back to the bit-identical per-slot path (one lm_head per user).
