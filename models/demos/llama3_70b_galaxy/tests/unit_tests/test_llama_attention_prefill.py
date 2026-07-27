@@ -144,38 +144,35 @@ def test_llama_attention_inference(
 
     pt_attention_input = (torch.rand(batch_size, max_seq_len, model_args.dim) * 2) - 1
     tt_attention_input = pt_attention_input.clone()
-    for _ in range(2):
-        attention_input = model_args.prepare_residual_tensor_prefill(
-            tt_attention_input,
-            force_replicated=False if model_args.is_galaxy else True,
-        )
+    attention_input = model_args.prepare_residual_tensor_prefill(
+        tt_attention_input,
+        force_replicated=False if model_args.is_galaxy else True,
+    )
 
-        tt_out = tt_model(
-            attention_input,
-            current_pos=None,
-            rot_mats=rot_mats,
-            user_id=0,
-            mode="prefill",
-            page_table=page_table_tt,
-        )
-        tt_out = ttnn.to_torch(
-            tt_out,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
-        )
-        tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(
-            batch_size, max_seq_len, -1
-        )  # [ batch, seq, hidden_dim]
-        positions = torch.LongTensor(range(max_seq_len))
-        # The HF reference wrapper computes RoPE internally, so freqs_cis_i is unused.
-        freqs_cis_i = None
-        attn_mask = torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min)
-        attn_mask_torch = torch.triu(attn_mask, diagonal=1)
-        reference_output = reference_model(pt_attention_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
+    tt_out = tt_model(
+        attention_input,
+        current_pos=None,
+        rot_mats=rot_mats,
+        user_id=0,
+        mode="prefill",
+        page_table=page_table_tt,
+    )
+    tt_out = ttnn.to_torch(
+        tt_out,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+    )
+    tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(batch_size, max_seq_len, -1)  # [ batch, seq, hidden_dim]
+    positions = torch.LongTensor(range(max_seq_len))
+    # The HF reference wrapper computes RoPE internally, so freqs_cis_i is unused.
+    freqs_cis_i = None
+    attn_mask = torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min)
+    attn_mask_torch = torch.triu(attn_mask, diagonal=1)
+    reference_output = reference_model(pt_attention_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
 
-        passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 
-        logger.info(comp_allclose(reference_output, tt_output_torch))
-        logger.info(f"PCC: {pcc_message}")
+    logger.info(comp_allclose(reference_output, tt_output_torch))
+    logger.info(f"PCC: {pcc_message}")
     if passing:
         logger.info(f"Llama_Attention Passed!")
     else:

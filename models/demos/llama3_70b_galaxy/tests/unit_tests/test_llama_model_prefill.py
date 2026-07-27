@@ -88,9 +88,7 @@ def test_llama_model_inference(
     # Use instruct weights instead of general weights
     instruct = True
 
-    model_args = TtModelArgs(
-        mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len, dummy_weights=True
-    )
+    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len)
     model_args.use_prefetcher = False
     model_args.n_layers = 1
     logger.info("Loading weights...")
