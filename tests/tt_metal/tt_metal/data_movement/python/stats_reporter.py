@@ -136,10 +136,10 @@ class StatsReporter:
                 )
 
                 # Add test-specific headers
-                header_test_type_keys = set()
+                header_test_type_keys = list()
                 for test_type, test_type_attributes in self.test_type_attributes.items():
                     if test_type.replace("_", " ").title() in test_name:
-                        header_test_type_keys = set(test_type_attributes["attributes"].keys())
+                        header_test_type_keys = list(test_type_attributes["attributes"].keys())
                         header.extend(header_test_type_keys)
                         break
 
