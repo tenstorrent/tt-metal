@@ -58,7 +58,8 @@ TF_MAX_NEW_TOKENS = int(os.environ.get("VV_WER_MAX_NEW_TOKENS", "512"))
 # Teacher-forced WER gate (override with VV_WER_THRESHOLD). Both waveforms are transcribed and WER'd,
 # so this covers TT's full audio path (diffusion + acoustic decode) plus Whisper noise. Teacher
 # forcing removes feedback drift, so the WER is length-stable and one ceiling holds across ISL.
-TF_WER_THRESHOLD = float(os.environ.get("VV_WER_THRESHOLD", "0.30"))
+# Measured WER is ~0.01; the gate sits at 0.05 for margin against Whisper/seed jitter.
+TF_WER_THRESHOLD = float(os.environ.get("VV_WER_THRESHOLD", "0.05"))
 
 
 @contextlib.contextmanager
