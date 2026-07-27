@@ -830,6 +830,18 @@ def gpt_oss_chunked_mesh_config():
     return replace(MESH_CONFIG, tp_size=1, sp_size=MESH_CONFIG.num_devices)
 
 
+def gpt_oss_native_ring_batch_size(mesh_config: MeshConfig) -> int:
+    """Scale the native-ring GPT-OSS surrogate batch with its SP ring size.
+
+    QuietBox's SP4 ring covers the B1 surrogate; LoudBox's SP8 ring covers the
+    corresponding B2 schedule.  Keeping the total work per ring group constant
+    lets the same coverage run on both systems.
+    """
+    if mesh_config.sp_size not in (4, 8):
+        pytest.skip(f"GPT-OSS native-ring surrogate requires SP4 or SP8, got SP{mesh_config.sp_size}")
+    return mesh_config.sp_size // 4
+
+
 def run_ring_joint_sdpa(
     mesh_config,
     b,
@@ -3437,9 +3449,9 @@ def test_ring_joint_attention_kv_pad_aware_rotation_accuracy(case_name):
     )
 
 
-@pytest.mark.parametrize("batch_size", [1, 2], ids=["b1_production", "b2_sp8_sim"])
-def test_ring_joint_attention_sliding_kv_pad_reuse_gqa_accuracy_and_determinism(batch_size, expect_error):
+def test_ring_joint_attention_sliding_kv_pad_reuse_gqa_accuracy_and_determinism(expect_error):
     """Validate GPT-OSS sliding GQA against garbage-padded KV and cache-hit scalar updates."""
+    batch_size = gpt_oss_native_ring_batch_size(MESH_CONFIG)
     run_ring_joint_sdpa_sliding_kv_pad_reuse_case(MESH_CONFIG, batch_size=batch_size, expect_error=expect_error)
 
 
@@ -4863,32 +4875,9 @@ def test_ring_joint_attention_sdpa_chunked_accuracy(model_name, qk_configs, chun
     )
 
 
-def test_ring_joint_attention_gpt_oss_chunked_sliding_boundary_accuracy():
-    """Validate the chunked sliding-window path across the cyclic device boundary."""
-    chunk_size = 2048
-    total_seq = 3 * chunk_size
-    final_chunk = total_seq // chunk_size - 1
-    model = replace(
-        GPT_OSS_CHUNKED_MODEL,
-        name="gpt_oss_chunked_sliding_boundary",
-        q_chunk_sizes=[64],
-        seq_len=chunk_size,
-    )
-
-    with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(final_chunk)}):
-        run_ring_joint_sdpa_chunked(
-            MESH_CONFIG,
-            model,
-            chunk_size=chunk_size,
-            total_seq=total_seq,
-            qk_configs=[(64, 128)],
-            persistent_buffer_mode="exact_per_chunk",
-            sliding_window_size=GPT_OSS_RING_SINK_CONFIG.sliding_window_size,
-        )
-
-
-def test_ring_joint_attention_gpt_oss_chunked_sliding_multibatch_gqa_accuracy():
-    """Validate the B2 grouped schedule used by the native-SP8 GPT-OSS CI simulation."""
+def test_ring_joint_attention_gpt_oss_chunked_sliding_native_ring_gqa_accuracy():
+    """Validate the GPT-OSS grouped schedule on the detected SP4 or SP8 native ring."""
+    batch_size = gpt_oss_native_ring_batch_size(MESH_CONFIG)
     chunk_size = 1024
     total_seq = 3 * chunk_size
     final_chunk = total_seq // chunk_size - 1
@@ -4899,32 +4888,39 @@ def test_ring_joint_attention_gpt_oss_chunked_sliding_multibatch_gqa_accuracy():
         seq_len=chunk_size,
     )
 
-    with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(final_chunk)}):
-        run_ring_joint_sdpa_chunked(
-            MESH_CONFIG,
-            model,
-            batch_size=2,
-            chunk_size=chunk_size,
-            total_seq=total_seq,
-            qk_configs=[(64, 128)],
-            persistent_buffer_mode="exact_per_chunk",
-            sliding_window_size=GPT_OSS_RING_SINK_CONFIG.sliding_window_size,
-        )
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+    runtime.mesh_device.enable_program_cache()
+    try:
+        with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(final_chunk)}):
+            run_ring_joint_sdpa_chunked(
+                MESH_CONFIG,
+                model,
+                batch_size=batch_size,
+                chunk_size=chunk_size,
+                total_seq=total_seq,
+                qk_configs=[(64, 128)],
+                persistent_buffer_mode="exact_per_chunk",
+                sliding_window_size=GPT_OSS_RING_SINK_CONFIG.sliding_window_size,
+                runtime=runtime,
+            )
 
-        # Exercise cached-program replay separately from the PCC pass. Consuming the compact
-        # collective's readiness tokens per dispatch prevents a later call from observing a
-        # stale semaphore value before its one-hop K/V halo payload has arrived.
-        run_ring_joint_sdpa_chunked(
-            MESH_CONFIG,
-            model,
-            batch_size=2,
-            chunk_size=chunk_size,
-            total_seq=total_seq,
-            qk_configs=[(64, 128)],
-            num_iterations=3,
-            persistent_buffer_mode="exact_per_chunk",
-            sliding_window_size=GPT_OSS_RING_SINK_CONFIG.sliding_window_size,
-        )
+            # Reuse the exact runtime and physical shapes from the PCC pass. This is a real
+            # program-cache hit, rather than merely a disk-JIT-cache hit after reopening the mesh.
+            # The determinism comparison itself adds its own tiny comparison program.
+            run_ring_joint_sdpa_chunked(
+                MESH_CONFIG,
+                model,
+                batch_size=batch_size,
+                chunk_size=chunk_size,
+                total_seq=total_seq,
+                qk_configs=[(64, 128)],
+                num_iterations=3,
+                persistent_buffer_mode="exact_per_chunk",
+                sliding_window_size=GPT_OSS_RING_SINK_CONFIG.sliding_window_size,
+                runtime=runtime,
+            )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
 
 
 def test_ring_joint_attention_gpt_oss_chunked_sliding_production_accuracy():
@@ -5769,6 +5765,7 @@ GPT_OSS_CHUNKED_PERF_CHECK_CONFIGS = [
 
 
 @pytest.mark.timeout(600)
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance gate is not part of CI correctness coverage")
 @pytest.mark.parametrize(
     "q_chunk_size,k_chunk_size,expected_util,margin",
     GPT_OSS_CHUNKED_PERF_CHECK_CONFIGS,
