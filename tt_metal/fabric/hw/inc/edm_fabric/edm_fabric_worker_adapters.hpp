@@ -668,8 +668,11 @@ struct WorkerToFabricEdmSenderBase {
 
     // NoC used for the entire worker->fabric path (open handshake, packet sends, close). Overridable
     // per-connection so callers can steer this path off a NoC lane reserved by e.g. a persistent
-    // linked mcast (#1819). Defaults to the RISC's fabric worker NoC for byte-identical legacy behavior.
-    uint8_t send_noc = get_fabric_worker_noc();
+    // linked mcast (#1819). Set by build_from_args()/init() (both default to get_fabric_worker_noc()
+    // for byte-identical legacy behavior); left uninitialized here like the other members so the
+    // class keeps a trivial default constructor (static-storage instances of this type -- e.g.
+    // CQRelayClient's embedded WorkerToFabricMuxSender -- are declared before init() ever runs).
+    uint8_t send_noc;
 
 private:
     template <bool STATEFUL_NOC>
