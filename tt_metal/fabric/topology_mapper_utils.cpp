@@ -1625,12 +1625,6 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
     const PhysicalMultiMeshGraph& physical_graph,
     const AdjacencyGraph<MeshId>& mesh_logical_level_graph,
     ::tt::tt_fabric::MappingConstraints<MeshId, MeshId>& inter_mesh_constraints) {
-    // A/B knob: TT_TOPO_DISABLE_MINHOST=1 skips the minimal-host cover entirely (no host-group cap,
-    // no minimize) so the solver just finds any valid embedding -- for isolating sparse-cluster cost.
-    if (const char* e = std::getenv("TT_TOPO_DISABLE_MINHOST"); e != nullptr && e[0] != '\0' && e[0] != '0') {
-        log_info(tt::LogFabric, "Inter-mesh host alignment: DISABLED via TT_TOPO_DISABLE_MINHOST");
-        return;
-    }
     if (config.hostname_to_asics.empty()) {
         return;
     }
@@ -2044,16 +2038,6 @@ std::optional<std::string> add_pinning_constraints(
 // the logical FabricNodeId being solved for. Each pinned position is resolved to concrete ASIC(s) via
 // `asic_positions_to_asic_ids` and then restricted to `physical_mesh_node_set` (this physical mesh's sub-graph),
 // so a preference can never reference an out-of-mesh node. No-op when there is no pinning for this physical mesh.
-// FIXME: FIGURE OUT WHY THIS IS NOT WORKING FOR 4x4!!!!
-// NOTE: The MGD pinning schema now supports many-to-many (all-to-all) pinnings -- a single AsicPinning entry may
-// bind multiple logical FabricNodeIds to multiple physical ASIC positions (see AsicPinning in
-// mesh_graph_descriptor.proto). MeshGraphDescriptor stores each entry as a many-to-many group; consumers
-// (ControlPlane / generate_rank_bindings / TopologyMapper) enumerate a group into the 1:many pinning format
-// (one (node -> positions) entry per node), which add_pinning_constraints() below turns into one
-// add_required_constraint(node, {asic_ids}) per node, so each listed node may map to any listed position.
-// FIXME: Additionally support wildcard/regex matching in the logical-node and physical-position selectors (e.g. pin
-// `mesh_id: * chip_id: 0..15` to a set of tray/asic-location positions matched by pattern) so a whole family of pins
-// can be expressed compactly instead of enumerating each pin by hand.
 void add_pgd_pinning_preferred_constraints(
     ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
     const std::map<MeshId, std::map<LogicalChipId, AsicPosition>>& mesh_pgd_pinnings,
