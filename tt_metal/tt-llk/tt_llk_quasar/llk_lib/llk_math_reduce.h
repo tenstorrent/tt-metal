@@ -248,21 +248,20 @@ template <PoolType POOL_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_reduce_row_mop_config_(const TensorShape& tensor_shape)
 {
     constexpr bool RUN_FID_LOOPS = (MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi && (POOL_TYPE == PoolType::AVG || POOL_TYPE == PoolType::SUM));
-    constexpr std::uint32_t NUM_FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : to_underlying(MATH_FIDELITY_TYPE) - 1;
+    constexpr std::uint32_t NUM_FIDELITY_PHASES = RUN_FID_LOOPS ? (to_underlying(MATH_FIDELITY_TYPE) - 1) : 0;
     constexpr std::uint32_t MOP_OUTER_LOOP      = 1;
     const std::uint32_t MOP_INNER_LOOP          = (tensor_shape.total_num_faces() >= 2 && !(tensor_shape.num_faces_c_dim < tensor_shape.num_faces_r_dim))
                                                       ? (tensor_shape.total_num_faces() >> 1)
                                                       : tensor_shape.total_num_faces();
 
-    constexpr std::uint32_t fidelity_slots = RUN_FID_LOOPS ? NUM_FIDELITY_PHASES : 0;
-    std::uint32_t replay_buf_len           = 7 + fidelity_slots;
+    std::uint32_t replay_buf_len = 7 + NUM_FIDELITY_PHASES;
     if (tensor_shape.total_num_faces() > 1 && tensor_shape.num_faces_c_dim >= tensor_shape.num_faces_r_dim)
     {
         if (tensor_shape.total_num_faces() == NUM_FACES)
         {
             replay_buf_len++;
         }
-        replay_buf_len += fidelity_slots + 1U;
+        replay_buf_len += NUM_FIDELITY_PHASES + 1U;
     }
 
     if (tensor_shape.face_r_dim > ELTWISE_MATH_ROWS)
