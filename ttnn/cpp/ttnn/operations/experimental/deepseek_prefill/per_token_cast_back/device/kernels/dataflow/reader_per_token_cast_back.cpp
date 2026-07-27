@@ -238,11 +238,11 @@ void kernel_main() {
                         block_idx_b = 0;
                         tok_off += scale_aligned_page_bytes;
                     }
-                    col0_off += FACE_W_BYTES;
-                    ++s;
                 }
-                face_base_off += FACE_ROW_STRIDE_BYTES;
+                col0_off += FACE_W_BYTES;
+                ++s;
             }
+            face_base_off += FACE_ROW_STRIDE_BYTES;
         }
         cb_scale_bcast_obj.push_back(1);
         cb_input_e4m3_obj.push_back(tiles_per_block);
