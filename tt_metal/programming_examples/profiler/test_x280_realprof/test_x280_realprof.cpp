@@ -25,6 +25,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cerrno>
+#include <unistd.h>  // execv: TRACY_NO_EXIT self-default re-exec (see top of main)
 #include <fstream>
 #include <map>
 #include <mutex>
@@ -202,19 +204,52 @@ struct BatchQ {
 };
 
 int main(int argc, char** argv) {
+    // ---- TRACY_NO_EXIT self-default: MUST be the first thing we do. ----
+    // Without TRACY_NO_EXIT=1 the Tracy client exits as soon as it thinks it is done, cutting the tail of the
+    // queue -> a truncated capture. It cannot be set from here the normal way: Tracy reads it in
+    // Profiler::Profiler() (TracyProfiler.cpp), a static-init-priority-105 object inside the shared library,
+    // which runs BEFORE main() and before any constructor this executable could register. setenv() here is
+    // therefore too late. The only way to get it in place is to put it in the environment and start over, so
+    // when --tracy is requested and the var is absent we set it and re-exec ourselves. Nothing has been
+    // initialized at this point, so the restart is free; the getenv guard makes it strictly once.
+    {
+        bool want_tracy = false;
+        for (int i = 1; i < argc; i++) {
+            if (std::strcmp(argv[i], "--tracy") == 0) {
+                want_tracy = true;
+                break;
+            }
+        }
+        const char* ne = std::getenv("TRACY_NO_EXIT");
+        if (want_tracy && !(ne && ne[0] == '1')) {
+            setenv("TRACY_NO_EXIT", "1", 1);
+            execv("/proc/self/exe", argv);  // only returns on failure
+            fprintf(
+                stderr,
+                "[tracy] WARNING: could not re-exec to set TRACY_NO_EXIT=1 (%s) -- the capture may be "
+                "truncated. Re-run with TRACY_NO_EXIT=1 in the environment.\n",
+                std::strerror(errno));
+        }
+    }
     using namespace tt::tt_metal;
     setvbuf(stdout, nullptr, _IOLBF, 0);
     int device_id = 0, l2cpu = 0, pll = 1000, nodes = 1;  // --nodes N: drive N L2CPU clusters in parallel (1-4)
     uint64_t nmarkers = 2000, nread = 2, ts_step = 0x1000000ull, ndrain = 1;
     uint32_t max_pages_per_read = 1024;  // --maxpages: per-socket page cap per read (0 = unbounded, drain whole FIFO)
     uint64_t win_stride = DEFAULT_WIN_STRIDE;  // --winmb: host-ring budget (rings share it); capped by chan_sz/2
-    uint32_t prog_id = 0xA5A5A5A5u, hring_words = 1048576, prod_delay = 0;  // 4 MiB/ring (nwin=3: data spans 2
-    // windows, the +64 B SENT trailer spills into a 3rd -> 3 TLB windows/ring, so nread<=2 at the default).
-    // Sized for LIVE TRACY capture, the production case: with a connected tracy-capture the Tracy serialize+send
-    // is a slow/bursty sink that fills the host ring, so ring size sets the knee. Sweep (nread=2 dualrelay, capture
-    // connected): 256 KB knee ~4400, 1 MB ~2800, 2 MiB ~1000, 4 MiB ~850 == the no-Tracy drain floor (~830) -> live
-    // Tracy is essentially free at 4 MiB. Below ~600 every size craters to the worker-L1-ring floor
-    // (total_markers/256) that no host buffer can beat. (4 MiB-64 = 1048560 keeps it to nwin=2 -> nread<=4 if needed.)
+    uint32_t prog_id = 0xA5A5A5A5u, hring_words = 3145728, prod_delay = 950;
+    // ---- DEFAULTS BELOW ARE MEASURED, NOT GUESSED (bh-06 / P300, 1.35 GHz, 6-core host). ----
+    // hring_words = 3145728 -> 12 MiB D2H FIFO per socket. The 4 MiB default this replaced was too small on a
+    // host-bound box: the FIFO pinned at 100%, the relay chronically host-blocked (hostfull 415k), the reader
+    // then spsc-waited (155M cyc) and the producers stalled. At 12 MiB: hostfull 0, spsc-wait 0, reader copy%
+    // 0.8 -> 52, X280 wall 1921M -> 30M cyc. 12 MiB is also the CEILING: NOC_2M_WINDOW_COUNT=224 with
+    // SOCKET_WIN_BASE=208 leaves 16 TLB windows and the FW maps nwin=ceil((in_off+bytes+64)/2MiB) per socket,
+    // so 2 sockets x nwin <= 16. Raise --hring only if you also move SOCKET_WIN_BASE.
+    // prod_delay = 950 -> the measured 0-stall knee WITH live Tracy attached (no --stagger; stagger only hides
+    // the synchronized-burst peak that a real same-kernel-everywhere workload actually has). Unstaggered knee
+    // is 930 without Tracy / 950 with it -- live Tracy costs ~2% of producer rate, because the BroadcastRing
+    // writer never blocks on the slow Tracy sink. Below the knee the stall count is BIMODAL (~0 or ~9300),
+    // so a single sub-knee sample tells you nothing; see FINDINGS §25. Pass --proddelay 0 for max rate.
     bool col_split = false;        // --colsplit: split the multi-node grid by COLUMN (default is by ROW). With
                                    // per-node NoC planes this puts each cluster on one SIDE of NoC col 8 reading
                                    // on the plane that reaches its side without a torus wrap (see band-split note).
@@ -251,9 +286,14 @@ int main(int argc, char** argv) {
     int mpmc = 0;              // --mpmc M: real host pipeline -- 2 per-socket flush+demux threads -> record MPMC
                                // -> M consumer threads (0 = old offline capture+demux path)
     int cwork = 0;             // --cwork N: busy-wait N iters/record in each consumer (simulate Tracy-emit load)
-    int mq_cap = 1 << 20;      // --mqcap N: BroadcastRing capacity in RECORDS (rounded up to a power of two).
-                               // Deeper absorbs consumer bursts before back-pressuring the drain (64->640 took
-                               // --csv from ~438 knee stalls to 0). ~BATCH_RECS*N*sizeof(Rec) max footprint.
+    int mq_cap = 4194304;      // --mqcap N: BroadcastRing capacity in RECORDS (rounded up to a power of two).
+                               // 4M records (~100 MB at 24 B/Rec) -- deliberately ABOVE a default run's total
+                               // (3000 markers x 550 lanes x 2 = 3.3M records) so the whole run fits. The ring
+                               // DROPS rather than blocking when the reader lags, so an undersized ring loses
+                               // data SILENTLY: at the old 1<<20 default a live-Tracy capture reported
+                               // "3300000 decoded / 1041892 consumed *** LOSS ***" (68% dropped, and the .tracy
+                               // was 2.3 MB instead of 7 MB). Always check the "reader dropped:" line; if you
+                               // raise --nmarkers or the lane count, raise this to match.
     bool do_tracy = false;     // --tracy: emit decoded zones into Tracy (via RealtimeProfilerTracyHandler) so
                                // they visualize. Uses ONE consumer (per-lane START/END order must be serial).
     bool socket_mode = true;   // DEFAULT: relay drains into one tt-metal D2HSocket per relay (the production D2H
