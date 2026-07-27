@@ -43,6 +43,11 @@ _WORKER = (
     "test_single_routed_expert.py::test_single_routed_expert_isl_sweep"
 )
 _LAYOUT_ID = "x_rm"  # Blackhole fused-tilize production fast path (ROW_MAJOR bf16 input)
+# Weight-layout id of the worker case to measure. The worker now sweeps DRAM-interleaved
+# and DRAM ND-sharded weights, so the -k filter MUST pin one: without it a single perf
+# invocation runs both, the ops CSV holds two FFN rows, and the harness sums them into a
+# ~2x "measured" value. Baselines below are for the interleaved (default) layout.
+_WEIGHTS_ID = "w_interleaved"
 
 # Per-(model, active) UnifiedRoutedExpertFfnDeviceOperation device time in ns, measured
 # on a Blackhole P150 (2026-07-27). Recalibrate on the perf CI runner (device times are HW-dependent).
@@ -80,7 +85,7 @@ def _k_filter(model: str, active: int) -> str:
     layout. Disambiguate substring collisions in the pytest ``-k`` match — e.g.
     ``isl-512`` is a substring of ``isl-5120`` — by excluding any other sweep value
     whose id contains this one."""
-    parts = [f"{model}-isl-{active}", _LAYOUT_ID]
+    parts = [f"{model}-isl-{active}", _LAYOUT_ID, _WEIGHTS_ID]
     parts += [
         f"not isl-{other}" for other in _ISL_EXHAUSTIVE_SWEEP if other != active and f"isl-{active}" in f"isl-{other}"
     ]
@@ -96,7 +101,7 @@ def _perf_params():
                 pytest.param(
                     command,
                     {_OP_CODE: _EXPECTED_NS[(model, active)]},
-                    f"single_routed_expert_{model}_isl{active}_{_LAYOUT_ID}",
+                    f"single_routed_expert_{model}_isl{active}_{_LAYOUT_ID}_{_WEIGHTS_ID}",
                     id=f"{model}-isl-{active}",
                 )
             )

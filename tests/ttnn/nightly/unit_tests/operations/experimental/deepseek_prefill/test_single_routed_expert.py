@@ -43,6 +43,7 @@ def run_single_routed_expert(
     hidden_dim: int,
     active_tokens: int = None,
     x_row_major: bool = False,
+    weights_dram_sharded: bool = False,
 ):
     """
     Simplest scenario: 1 chip, 1 expert. Shared body for the per-model entrypoints below — they
@@ -130,6 +131,7 @@ def run_single_routed_expert(
         torch_weights=[weights],  # List with single expert weights
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
+        weights_dram_sharded=weights_dram_sharded,
         activation=ttnn.RoutedExpertActivation.Silu,
     )
 
@@ -261,6 +263,10 @@ def test_single_routed_expert_functional(
     _isl_params(_ISL_EXHAUSTIVE_SWEEP, only_models=_ISL_EXHAUSTIVE_MODELS),
 )
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+# DRAM ND-sharded weights let the FFN reader fetch a whole K-row weight slice in one
+# NoC request instead of one per tile, with the shard->bank round-robin rotating banks
+# across K-rows. Both layouts are swept so the interleaved path stays covered.
+@pytest.mark.parametrize("weights_dram_sharded", [False, True], ids=["w_interleaved", "w_ndshard"])
 @pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
 def test_single_routed_expert_isl_sweep(
     device,
@@ -269,6 +275,7 @@ def test_single_routed_expert_isl_sweep(
     emb_dim: int,
     hidden_dim: int,
     x_row_major: bool,
+    weights_dram_sharded: bool,
 ):
     run_single_routed_expert(
         device,
@@ -277,4 +284,5 @@ def test_single_routed_expert_isl_sweep(
         hidden_dim,
         active_tokens=active_tokens,
         x_row_major=x_row_major,
+        weights_dram_sharded=weights_dram_sharded,
     )
