@@ -19,6 +19,7 @@ from tracy.visualizer_run import (
     get_or_create_run_id,
     inject_run_id_into_env,
     peek_run_id,
+    read_db_run_id,
     stamp_memory_run_id,
     stamp_report_dir_run_id,
     _write_manifest_json,
@@ -101,6 +102,13 @@ def test_write_performance_manifest_noop_without_env(monkeypatch, tmp_path):
 def test_stamp_memory_run_id_missing_file_returns_none(monkeypatch, tmp_path):
     monkeypatch.setenv(TT_METAL_RUN_ID_ENV, "missing-db")
     assert stamp_memory_run_id(tmp_path / "nope.sqlite") is None
+
+
+def test_read_db_run_id_missing_file_does_not_create(tmp_path):
+    missing = tmp_path / "absent" / "db.sqlite"
+    assert read_db_run_id(missing) is None
+    assert not missing.exists()
+    assert not missing.parent.exists()
 
 
 def test_stamp_memory_and_manifest_share_run_id(monkeypatch, tmp_path):

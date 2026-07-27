@@ -46,9 +46,17 @@ def inject_run_id_into_env(env: MutableMapping[str, str]) -> str:
 
 
 def read_db_run_id(db_path: Path | str) -> Optional[str]:
-    """Return ``report_metadata`` run_id from a memory ``db.sqlite``, if present."""
+    """Return ``report_metadata`` run_id from a memory ``db.sqlite``, if present.
+
+    Does not create the database file when it is missing.
+    """
+    db_path = Path(db_path)
+    if not db_path.is_file():
+        return None
+
     try:
-        conn = sqlite3.connect(Path(db_path))
+        # URI mode=ro refuses to create a missing file (defence in depth).
+        conn = sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True)
         try:
             cursor = conn.cursor()
             cursor.execute(
