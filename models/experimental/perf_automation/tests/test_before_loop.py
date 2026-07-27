@@ -21,15 +21,49 @@ FACTORY = lambda perf, case: mock_run_profiled
 
 
 @pytest.fixture
-def model_root(tmp_path):
+def model_root(tmp_path, monkeypatch):
+    """A model dir with BOTH a perf test and a usable correctness gate.
+
+    The gate stub is required, not decoration: before_loop now refuses to start when neither a
+    --pcc-test nor a cached HF reference is available, because without ground truth optimize is free
+    to commit a lever that silently degrades the model. These tests exercise manifest / telemetry /
+    metric-default behaviour, none of which is about the gate, so they supply the cheapest gate that
+    satisfies the policy -- a file declaring a numeric PCC threshold.
+    """
     (tmp_path / "model").mkdir()
     (tmp_path / "model" / "test_e2e.py").write_text("# perf test stub\n")
     (tmp_path / "model" / "attention.py").write_text("# attn stub\n")
+    (tmp_path / "model" / "test_pcc.py").write_text(
+        "def test_pcc():\n"
+        "    pcc = 1.0\n"
+        "    print(f'PCC: {pcc}')\n"
+        "    assert_with_pcc(expected, actual, 0.99)\n"
+    )
+    (tmp_path / "model" / "test_e2e.py").write_text("def test_perf():\n    pass\n")
+
+    from agent import perf_test_gen as _ptg
+
+    monkeypatch.setattr(
+        _ptg,
+        "generate_perf_test",
+        lambda root, task, case=None, force=False, source_abs=None, source_kind="": str(Path(root) / "test_e2e.py"),
+    )
     return tmp_path / "model"
 
 
+def _pcc_gate(model_root):
+    return "%s::test_pcc" % (Path(model_root) / "test_pcc.py")
+
+
 def _run(tmp_path, model_root, config_extra=None, runner=None):
-    config = {"model_root": str(model_root), "metric": "wall_ms", "direction": "min", "target": 12.0, "runs": 3}
+    config = {
+        "model_root": str(model_root),
+        "metric": "wall_ms",
+        "direction": "min",
+        "target": 12.0,
+        "runs": 3,
+        "pcc_test": _pcc_gate(model_root),
+    }
     config.update(config_extra or {})
     return before_loop(
         config,
@@ -146,7 +180,7 @@ def test_manifest_written_even_when_tracy_fails(tmp_path, model_root):
 
         return rp
 
-    config = {"model_root": str(model_root), "metric": "wall_ms", "runs": 1}
+    config = {"model_root": str(model_root), "metric": "wall_ms", "runs": 1, "pcc_test": _pcc_gate(model_root)}
     with pytest.raises(RuntimeError, match="device exploded"):  # allow-pytest.raises: no expect_error fixture
         before_loop(
             config,
@@ -176,7 +210,7 @@ def test_devices_single_recorded_in_manifest(tmp_path, model_root):
 
 def test_default_metric_is_device_time(tmp_path, model_root):
     # call before_loop directly with NO metric key, so the default is exercised
-    config = {"model_root": str(model_root), "runs": 1}
+    config = {"model_root": str(model_root), "runs": 1, "pcc_test": _pcc_gate(model_root)}
     result = before_loop(
         config,
         mock_env_probe,

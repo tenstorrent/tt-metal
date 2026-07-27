@@ -66,13 +66,13 @@ def test_rejects_empty_case(tmp_path):
     _mock_tree(tmp_path)
     bad = dict(GOOD)
     bad["perf_test"] = {"path": "tests/test_e2e.py", "case": ""}
-    with pytest.raises(ModelFilesError, match="case"):
+    with pytest.raises(ModelFilesError, match="case"):  # allow-pytest.raises: no expect_error fixture
         read_model_files(tmp_path, runner=lambda p: json.dumps(bad))
 
 
 def test_rejects_non_json(tmp_path):
     _mock_tree(tmp_path)
-    with pytest.raises(ModelFilesError):
+    with pytest.raises(ModelFilesError):  # allow-pytest.raises: no expect_error fixture
         read_model_files(tmp_path, runner=lambda p: "not json")
 
 
@@ -80,7 +80,7 @@ def test_rejects_missing_end_to_end(tmp_path):
     _mock_tree(tmp_path)
     bad = dict(GOOD)
     bad["pcc"] = {"attention": "tests/test_attention.py"}
-    with pytest.raises(ModelFilesError):
+    with pytest.raises(ModelFilesError):  # allow-pytest.raises: no expect_error fixture
         read_model_files(tmp_path, runner=lambda p: json.dumps(bad))
 
 
@@ -88,12 +88,12 @@ def test_rejects_path_off_tree(tmp_path):
     _mock_tree(tmp_path)
     bad = dict(GOOD)
     bad["pcc"] = {"end_to_end": "tests/does_not_exist.py"}
-    with pytest.raises(ModelFilesError):
+    with pytest.raises(ModelFilesError):  # allow-pytest.raises: no expect_error fixture
         read_model_files(tmp_path, runner=lambda p: json.dumps(bad))
 
 
 def test_runner_required(tmp_path):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError):  # allow-pytest.raises: no expect_error fixture
         read_model_files(tmp_path)
 
 
@@ -126,7 +126,7 @@ def test_e2e_without_threshold_is_fatal(tmp_path):
     _mock_tree(tmp_path)
     bad = dict(GOOD)
     bad["pcc"] = {"end_to_end": "tests/test_e2e.py"}
-    with pytest.raises(ModelFilesError, match="no_pcc_threshold"):
+    with pytest.raises(ModelFilesError, match="no_pcc_threshold"):  # allow-pytest.raises: no expect_error fixture
         read_model_files(tmp_path, runner=lambda p: json.dumps(bad))
 
 
@@ -141,7 +141,7 @@ def test_threshold_out_of_range_rejected(tmp_path):
     _mock_tree(tmp_path)
     bad = dict(GOOD)
     bad["pcc"] = {"end_to_end": {"path": "tests/test_e2e.py", "threshold": 1.5}}
-    with pytest.raises(ModelFilesError, match="threshold"):
+    with pytest.raises(ModelFilesError, match="threshold"):  # allow-pytest.raises: no expect_error fixture
         read_model_files(tmp_path, runner=lambda p: json.dumps(bad))
 
 
@@ -149,15 +149,30 @@ def test_regen_reconciles_baseline_to_pipeline_perf_test(tmp_path, monkeypatch):
     """Under PERF_REGEN_PERF_TEST=1 the baseline target MUST be the deterministic pipeline perf
     test, not the discovery sub-agent's pick. Regression guard for the nemotron case where the
     sub-agent chose the prefill-only test_perf.py while the real pipeline test was test_*_perf.py
-    -> a prefill baseline instead of the decode-inclusive whole pipeline."""
-    _mock_tree(tmp_path)
-    # the deterministic pipeline test (found by _enumerate_pipelines' 'main' fallback)
-    e2e = tmp_path / "tests" / "e2e"
-    e2e.mkdir(parents=True)
-    (e2e / "test_main_perf.py").write_text("def test_main_perf(device):\n    pass\n")
+    -> a prefill baseline instead of the decode-inclusive whole pipeline.
 
+    The pipeline signal is `demo/demo.py`, from which the perf test is REGENERATED every run
+    (_enumerate_pipelines: "ALWAYS generated from scratch off the demo, never an existing test
+    reused"). This test used to hand-place tests/e2e/test_main_perf.py and rely on a 'main' fallback
+    that scanned for it; that fallback is gone, so the setup discovered nothing and the assertion
+    failed against the sub-agent's pick. Supply the demo and stub the generator, so what is asserted
+    is the live guarantee: regen wins over the sub-agent.
+    """
+    _mock_tree(tmp_path)
+    (tmp_path / "demo").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "demo" / "demo.py").write_text("def main():\n    pass\n")
+    generated = tmp_path / "tests" / "e2e" / "test_main_perf.py"
+    generated.parent.mkdir(parents=True, exist_ok=True)
+    generated.write_text("def test_main_perf(device):\n    pass\n")
+
+    from agent import perf_test_gen as _ptg
+
+    monkeypatch.setattr(
+        _ptg,
+        "generate_perf_test",
+        lambda root, task, demo_rel=None, force=False, **kw: "tests/e2e/test_main_perf.py::test_main_perf",
+    )
     monkeypatch.setenv("PERF_REGEN_PERF_TEST", "1")
-    # sub-agent picks a DIFFERENT (would-be partial) test
     result = read_model_files(tmp_path, runner=lambda p: json.dumps(GOOD))
     assert result["perf_test"]["path"] == "tests/e2e/test_main_perf.py", "baseline must be the pipeline test"
     assert result["perf_test"]["case"] == "test_main_perf"
