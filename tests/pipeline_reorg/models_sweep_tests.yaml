@@ -33,6 +33,30 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+- name: Llama 3.1-8B e2e tests (watcher)
+  cmd: |
+    export TT_METAL_WATCHER=60
+    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+    pytest --timeout 840 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    # The DRAM prefetcher does not yet support more than one repeat batch (issue #47820):
+    # cover the eval repeat-batch loop with the prefetcher DISABLED (perf reporting skipped
+    # so only the prefetcher run sets perf), and cover the prefetcher path with a SINGLE
+    # repeat batch (this run reports/validates perf). See #47820 for the multi-batch work.
+    pytest --timeout 1200 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32" --skip_perf_report
+    pytest --timeout 1200 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32" --use_prefetcher True --repeat_batches 1
+    pytest --timeout 840 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching" --use_hf_rope
+  model: llama3.1-8b
+  model_family: Llama
+  skus:
+    wh_n150:
+      timeout: 40
+      tier: 1
+    bh_p150:
+      timeout: 40
+      tier: 1
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
 - name: Llama 3.3-70B prefix-caching benchmark
   cmd: |
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ MESH_DEVICE=TG
@@ -57,6 +81,21 @@
       timeout: 25
       tier: 2
     # bh_quietbox_2 descoped: 70B prefill exceeds Blackhole 4-device L1 (circular-buffer clash). See #48533.
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Llama 3.3-70B e2e tests (Galaxy, watcher)
+  cmd: |
+    export TT_METAL_WATCHER=60
+    export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG
+    pytest --timeout 1800 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "ci-token-matching"
+    pytest --timeout 1800 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat2"
+  model: llama3.3-70b-galaxy
+  model_family: Llama
+  skus:
+    wh_galaxy_perf:
+      timeout: 60
+      tier: 1
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -90,4 +129,22 @@
       timeout: 10
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: GPT-OSS 120B e2e tests (watcher)
+  cmd: |
+    export TT_METAL_WATCHER=60
+    export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ TT_MM_THROTTLE_PERF=2
+    # Tensor cache is pre-built on the NAS — skip loading model weights by default.
+    # Check mlperf-write-access in the workflow to load weights and regenerate the cache.
+    SKIP_MODEL_LOAD="--skip-model-load"
+    [ "${MLPERF_READ_ONLY:-true}" = "false" ] && SKIP_MODEL_LOAD=""
+    pytest models/demos/gpt_oss/demo/text_demo.py --timeout 2400 $SKIP_MODEL_LOAD
+  model: gpt-oss-120b
+  model_family: GPT-OSS
+  skus:
+    wh_galaxy_perf:
+      timeout: 60
+      tier: 1
+  owner_id: U08TJ70UFRT # Harry Andrews
   team: models
