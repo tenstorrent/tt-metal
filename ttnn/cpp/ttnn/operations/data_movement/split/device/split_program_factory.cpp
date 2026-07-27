@@ -148,13 +148,13 @@ ttnn::device_operation::ProgramArtifacts SplitProgramFactory::create_program_art
     Group<WorkUnitSpec> work_units;
     std::vector<KernelRunArgs> writer_run_args;
     writer_run_args.reserve(num_chunks);
-    std::vector<TensorParamName> out_names;
-    out_names.reserve(num_chunks);
+    std::vector<TensorParamName> out_param_names;
+    out_param_names.reserve(num_chunks);
 
     for (uint32_t chunk_id = 0; chunk_id < num_chunks; chunk_id++) {
         const KernelSpecName writer_name{"writer_" + std::to_string(chunk_id)};
         const TensorParamName out_name{"out_" + std::to_string(chunk_id)};
-        out_names.push_back(out_name);
+        out_param_names.push_back(out_name);
 
         kernels.push_back(KernelSpec{
             .unique_id = writer_name,
@@ -255,7 +255,8 @@ ttnn::device_operation::ProgramArtifacts SplitProgramFactory::create_program_art
     }
     run_args.tensor_args.emplace(IN0, TensorArgument{input_tensor.mesh_tensor()});
     for (uint32_t chunk_id = 0; chunk_id < num_chunks; chunk_id++) {
-        run_args.tensor_args.emplace(out_names[chunk_id], TensorArgument{tensor_return_value[chunk_id].mesh_tensor()});
+        run_args.tensor_args.emplace(
+            out_param_names[chunk_id], TensorArgument{tensor_return_value[chunk_id].mesh_tensor()});
     }
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
