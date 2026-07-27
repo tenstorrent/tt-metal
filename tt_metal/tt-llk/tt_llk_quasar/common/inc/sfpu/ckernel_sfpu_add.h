@@ -16,7 +16,7 @@ namespace sfpu
 {
 template <
     bool APPROXIMATION_MODE,
-    int ITERATIONS                 = 8,
+    int ITERATIONS                 = SFPU_ITERATIONS,
     DataFormat FMT                 = DataFormat::Int32,
     int INSTRUCTION_MODE           = 0,
     bool SIGN_MAGNITUDE_FORMAT     = false,

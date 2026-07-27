@@ -68,7 +68,7 @@ inline void _init_binary_max_min_() {
 template <
     DataFormat FMT,
     bool IS_MAX_OP = true,
-    int ITERATIONS = 8,
+    int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
 inline void calculate_binary_max_min(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
