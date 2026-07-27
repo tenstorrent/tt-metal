@@ -77,12 +77,25 @@ SAMPLES_PER_FRAME = 1920  # 240-sample patch x 8 upsample
 
 
 def load_prompt(path):
-    """JSON dump of mistral_common's tokenized.tokens (+ the special ids it used)."""
+    """JSON dump of mistral_common's tokenized.tokens (+ the special ids it used).
+
+    Kept as an alternative to --text so a prompt produced by the real mistral_common can be
+    replayed byte-for-byte; --text uses our own tekken reimplementation, which is validated to
+    produce identical ids (tests/test_tokenizer_ref.py)."""
     with open(path) as f:
         d = json.load(f)
     aid = d.get("audio_token_id", AUDIO_TOKEN_ID)
     assert aid == AUDIO_TOKEN_ID, f"prompt dump says audio_token_id={aid}, pipeline assumes {AUDIO_TOKEN_ID}"
     return torch.tensor(d["ids"], dtype=torch.long), d.get("text", ""), d.get("voice")
+
+
+def build_prompt_from_text(text, voice):
+    """text + voice -> prompt ids, using our own tekken reimplementation (no mistral_common)."""
+    from models.experimental.voxtral_tts.reference.voxtral_tokenizer_ref import TekkenTokenizer
+
+    tok = TekkenTokenizer()
+    assert tok.audio_token_id == AUDIO_TOKEN_ID
+    return torch.tensor(tok.build_prompt(text, voice), dtype=torch.long)
 
 
 def load_voice(name, voice_dir=VOICE_DIR):
@@ -159,9 +172,10 @@ def save_wav(wav, path=OUT_WAV, sr=SAMPLING_RATE):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", default=DEFAULT_CKPT)
-    ap.add_argument("--prompt-ids", required=True, help="JSON dump of mistral_common tokenized.tokens")
-    ap.add_argument("--voice", default=None, help="preset name; defaults to the one in the dump")
-    ap.add_argument("--max-frames", type=int, default=150, help="12.5 frames = 1s of audio")
+    ap.add_argument("--text", default=None, help="raw text (tokenized by our tekken reimplementation)")
+    ap.add_argument("--prompt-ids", default=None, help="alternative: JSON dump of mistral_common ids")
+    ap.add_argument("--voice", default="neutral_male", help="one of the 20 presets")
+    ap.add_argument("--max-frames", type=int, default=750, help="12.5 frames = 1s; model's native cap is ~1500")
     ap.add_argument("--cfg-alpha", type=float, default=CFG_ALPHA)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default=OUT_WAV)
@@ -170,8 +184,14 @@ def main():
 
     if args.threads:
         torch.set_num_threads(args.threads)
-    ids, text, dump_voice = load_prompt(args.prompt_ids)
-    voice_name = args.voice or dump_voice
+    if (args.text is None) == (args.prompt_ids is None):
+        ap.error("give exactly one of --text or --prompt-ids")
+    if args.text is not None:
+        text, voice_name = args.text, args.voice
+        ids = build_prompt_from_text(text, voice_name)
+    else:
+        ids, text, dump_voice = load_prompt(args.prompt_ids)
+        voice_name = dump_voice or args.voice
     print(f"[pipeline] text: {text!r}")
     print(f"[pipeline] prompt {len(ids)} ids, {int((ids == AUDIO_TOKEN_ID).sum())} audio placeholders "
           f"| voice {voice_name!r} | {N_DECODING_STEPS} Euler steps, cfg {args.cfg_alpha} "
