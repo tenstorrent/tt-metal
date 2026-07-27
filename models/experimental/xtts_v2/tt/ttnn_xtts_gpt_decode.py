@@ -164,12 +164,16 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
             )
             for _ in range(cfg.n_layer)
         ]
-        # paged_update_cache requires a height-sharded token input (1 core for B=1).
-        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
-        self._shard = ttnn.MemoryConfig(
+        # paged_fused_update_cache does K+V in one kernel but needs them on non-overlapping cores;
+        # nlp_create_qkv_heads_decode places both K and V on core (0,0), so move V to core (1,0) first.
+        self._v_cfg1 = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
-            ttnn.ShardSpec(grid, (32, cfg.head_dim), ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))}),
+                (32, cfg.head_dim),
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
         )
         self._pos = ttnn.from_torch(torch.zeros(1, dtype=torch.int32), device=device, mesh_mapper=self.mesh_mapper)
         self._in = ttnn.from_torch(
@@ -187,18 +191,17 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
         for li in range(cfg.n_layer):
             b = self.params["blocks"][li]
             qkv = self._linear(self._layer_norm(x, b["ln_1"]), b["c_attn"])
-            q = ttnn.reshape(qkv[:, :, 0 : cfg.n_embd], (1, 1, cfg.n_head, cfg.head_dim))
-            k = ttnn.reshape(qkv[:, :, cfg.n_embd : 2 * cfg.n_embd], (1, 1, cfg.n_head, cfg.head_dim))
-            v = ttnn.reshape(qkv[:, :, 2 * cfg.n_embd : 3 * cfg.n_embd], (1, 1, cfg.n_head, cfg.head_dim))
-            ttnn.experimental.paged_update_cache(
-                self.k_cache[li],
-                ttnn.interleaved_to_sharded(k, self._shard),
-                update_idxs_tensor=self._pos,
-                page_table=None,
+            # Fused per-head Q/K/V split: outputs are height-sharded in L1 (K/V feed the cache-update
+            # directly, Q feeds sdpa_decode) -- replaces 3 slice + 3 reshape + 2 interleaved_to_sharded.
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+                ttnn.reshape(qkv, (1, 1, 1, 3 * cfg.n_embd)), num_heads=cfg.n_head, num_kv_heads=cfg.n_head
             )
-            ttnn.experimental.paged_update_cache(
+            # Fused K+V cache write in one kernel (V moved to core (1,0) so K/V don't overlap).
+            ttnn.experimental.paged_fused_update_cache(
+                self.k_cache[li],
+                k,
                 self.v_cache[li],
-                ttnn.interleaved_to_sharded(v, self._shard),
+                ttnn.to_memory_config(v, self._v_cfg1),
                 update_idxs_tensor=self._pos,
                 page_table=None,
             )
