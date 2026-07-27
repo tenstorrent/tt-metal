@@ -83,20 +83,24 @@ class LlamaMLP(AbstractModuleBase):
         if intermediate_size is None:
             intermediate_size = compute_swiglu_intermediate_size(embedding_size)
 
+        # Fused gate+up: one [2*I, E] weight, rows [0:I) = gate, [I:2*I) = up.
+        gate_up_size = 2 * intermediate_size
         if use_tp:
-            # Gate (w1) and up (w3) projections are column-parallel (output sharded);
-            # down projection (w2) is row-parallel (input sharded).
-            self.w1 = ColumnParallelLinear(
+            # Each device's gate|up half is I/tp wide and must stay tile-aligned (multiple of 32).
+            tp_size = ttml.mesh().axis_size("tp")
+            if intermediate_size % tp_size != 0:
+                raise ValueError(
+                    f"intermediate_size ({intermediate_size}) must be divisible by the "
+                    f"tensor-parallel size ({tp_size})"
+                )
+            if (intermediate_size // tp_size) % 32 != 0:
+                raise ValueError(
+                    f"per-device intermediate shard ({intermediate_size // tp_size}) must be a "
+                    f"multiple of 32 so the packed gate|up halves stay tile-aligned"
+                )
+            self.w_gate_up = ColumnParallelLinear(
                 embedding_size,
-                intermediate_size,
-                has_bias=False,
-                gather_output=False,
-                sequence_parallel=sequence_parallel,
-                axis_name="tp",
-            )
-            self.w3 = ColumnParallelLinear(
-                embedding_size,
-                intermediate_size,
+                gate_up_size,
                 has_bias=False,
                 gather_output=False,
                 sequence_parallel=sequence_parallel,
@@ -111,14 +115,9 @@ class LlamaMLP(AbstractModuleBase):
                 axis_name="tp",
             )
         else:
-            self.w1 = LinearLayer(
+            self.w_gate_up = LinearLayer(
                 embedding_size,
-                intermediate_size,
-                False,
-            )
-            self.w3 = LinearLayer(
-                embedding_size,
-                intermediate_size,
+                gate_up_size,
                 False,
             )
             self.w2 = LinearLayer(
@@ -136,26 +135,14 @@ class LlamaMLP(AbstractModuleBase):
         Returns:
             Output tensor after MLP
         """
-        if not self.use_tp:
-            dropout_prob = 0.0 if self.get_run_mode() == RunMode.EVAL else self.dropout_prob
-            return ttml.ops.swiglu.swiglu(
-                input,
-                self.w1.weight.tensor,
-                self.w2.weight.tensor,
-                self.w3.weight.tensor,
-                dropout_prob,
-            )
-
-        # TP path: ColumnParallelLinear / RowParallelLinear inject collectives
-        # between matmuls, which the fused op cannot express.
-        swished = ttml.ops.unary.silu(self.w1(input))
-        gate = self.w3(input)
-        gated = ttml.ops.binary.mul(swished, gate)
-        x = self.w2(gated)
+        gu = self.w_gate_up(input)
+        h = ttml.ops.swiglu_packed.swiglu_packed(gu)
+        x = self.w2(h)
 
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
-            # SP: per-device seed so each sequence shard is masked independently.
-            x = ttml.ops.dropout.dropout(x, self.dropout_prob, use_per_device_seed=self.sequence_parallel)
+            # Distinct mask per device only when each holds distinct data.
+            use_per_device_seed = self.sequence_parallel if self.use_tp else True
+            x = ttml.ops.dropout.dropout(x, self.dropout_prob, use_per_device_seed=use_per_device_seed)
 
         return x
 
