@@ -51,11 +51,34 @@ below). One reference file per block, mirroring the XTTS-v2 layout.
 | 2 | Flow-matching acoustic transformer | 390M | `voxtral_flow_ref.py` | `h [B,3072]` → `audio_codes [B,37]` |
 | 3 | Codec decoder | ~150M | `voxtral_codec_ref.py` | `codes [B,37,T]` → `waveform [B,1,T*1920]` @ 24 kHz |
 | — | Codec encoder | ~150M | **not portable** | weights absent from the release |
-| — | End-to-end chain | — | `voxtral_pipeline_ref.py` | prompt ids + voice preset → 24 kHz WAV |
+| — | Tokenizer + prompt assembly | — | `voxtral_tokenizer_ref.py` | text + voice name → prompt ids |
+| — | End-to-end chain | — | `voxtral_pipeline_ref.py` | **raw text** + voice preset → 24 kHz WAV |
 
-Tokenization lives in `scripts/dump_prompt_ids.py`, the **only** non-torch-only file (it needs
-`mistral-common` for tekken + the TTS chat template; run it in a throwaway venv). Same boundary
-as the XTTS-v2 reference, whose tokenizer also sat outside the ported blocks.
+### Tokenizer
+
+`voxtral_tokenizer_ref.py` reimplements tekken (byte-level BPE) and the TTS prompt template
+straight from `tekken.json`, replacing `mistral_common` — the same move the XTTS-v2 reference
+made against coqui's tokenizer. **Validated by exact token-id equality** with
+`mistral_common` 1.11.7 across 15 prompts spanning 8 languages, digits, symbols, emoji,
+tabs/newlines and a 125-word paragraph over 10 voices; the ground truth is vendored at
+`tests/prompt_fixture.json` so the tests need no mistral-common.
+
+Prompt layout, reverse-engineered then confirmed by round-trip:
+
+```
+<s>(1) [BEGIN_AUDIO](25) [AUDIO](24) x N [NEXT_AUDIO_TEXT](36) <text ids> [REPEAT_AUDIO_TEXT](35) [BEGIN_AUDIO](25)
+```
+
+N comes from `tekken.json`'s `audio.voice_num_audio_tokens[voice]`, so the placeholder count is
+known without loading a preset. Regular token ids are `rank + 1000` (ids 0..999 are special);
+`tekken.json` ships 150000 vocab entries but only the first 130072 are in the released
+vocabulary, since the embedding table is 131072 wide.
+
+**One dependency beyond torch:** `regex`. tekken's split pattern uses Unicode property classes
+(`\p{L}`, `\p{Lu}`, `\p{N}`, `\p{M}`) which stdlib `re` cannot parse at all. Approximating them
+with ASCII classes tokenizes English identically and then silently diverges on anything
+accented, so the dependency is the honest choice. `scripts/dump_prompt_ids.py` (which does need
+mistral-common) is retained only for regenerating the fixture and for byte-for-byte replay.
 
 `voxtral_common_ref.py` holds what all three share: the safetensors reader, the config constants,
 `rms_norm` / `swiglu` / `gqa_attention` / RoPE / `fold_weight_norm`, the 37-codebook offsets, and
