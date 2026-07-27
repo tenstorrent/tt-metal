@@ -90,11 +90,15 @@ class Qwen25_72BExecutorRuntimeConfig:
     # batches models whose prefill_forward threads ``batch_size`` — Qwen2.5-72B does, below).
     # Qwen2.5-72B is a standard dense Qwen2.5 attention (NO QK-norm), so every prefill op is
     # row-independent and the batched fold is bit-safe (same as the qwen25_7b / Coder-32B ports).
-    # ``max_prefill_batch_size`` caps the per-group batch (8 = partial batching, design rec);
-    # ``disable_batched_prefill`` is the escape hatch back to the sequential loop;
-    # ``max_prefill_chunk_size`` (above) drives the #45234 chunked-prompt decline.
+    # ``max_prefill_batch_size`` caps the per-group batch; 32 folds the whole batch-32 prefill in ONE
+    # 32-user pass (TTTv1 structural parity) so the eager norm+lm_head tail + full-vocab readback run
+    # once instead of 4×. At the natural 128 bucket the fold is 32*128=4096=2*2048, an exact multiple of
+    # MAX_QKV_MM_SEQ_LEN (reshape-safe), and 4096 % mlp_prefill_len_cutoff(1024) == 0 for the FF reshape;
+    # the DRAM guard (padded_batch*seq < 128K) passes with 4096. ``disable_batched_prefill`` is the escape
+    # hatch back to the sequential loop; ``max_prefill_chunk_size`` (above) drives the #45234
+    # chunked-prompt decline.
     supports_batched_prefill: bool = True
-    max_prefill_batch_size: int = 8
+    max_prefill_batch_size: int = 32
     disable_batched_prefill: bool = False
     # When True (default), batched prefill runs norm+lm_head ONCE per group over the gathered last-token
     # rows (TTTv1 parity); False falls back to the bit-identical per-slot path (one lm_head per user).
@@ -299,13 +303,22 @@ class _Qwen25_72BWHTuning:
 def _resolve_qwen_72b_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Qwen25_72BWHTuning:
     """Pick WH L1 tuning knobs for Qwen2.5-72B-Instruct on T3K.
 
-    Mirrors the empirical L1 cutoff used by the other large T3K ports (``mlp_prefill_len_cutoff=256``
-    for the wide FF matmul on Wormhole; Llama-3.3-70B shares the 80-layer / hidden-8192 topology).
-    ``mlp_decode_spill_w1_to_dram`` starts off; re-evaluate if decode batch-32 trips L1
-    circular-buffer validation (per-device FF shard is 8192×3696 in BFP4).
+    ``mlp_prefill_len_cutoff=1024`` = the shared engine's own Wormhole default (``mlp_1d.py``:
+    ``512 if is_blackhole() else 1024``) and TTTv1's ``prefill_len_cutoff``. For the folded batch-32-ci
+    FF prefill (``[1,1,B*S,dim]``, B*S=32*128=4096 at the natural 128 bucket) this tiles the wide FF
+    matmul as 4 chunks of 1024 (``per_core_M=4``) instead of 16 chunks of 256 (``per_core_M=1``) — 4×
+    fewer / 4× larger sub-matmuls on the ~80%-FLOP FF block (better weight-mcast amortization, fewer
+    device inter-op boundaries), matching TTTv1's blocking. The earlier 256 was inherited-conservative
+    from the 7B-on-N300 port (per-device FF shard 9472 ≫ this model's T3K shard 3696), so its tighter-L1
+    motive does not apply here; 1024 fits — it is proven on the same-topology Llama-3.3-70B (shard 3584)
+    and the T3K 32B (3456) on this box, and TTTv1 runs 1024 for this exact model. Output is unchanged:
+    ``in0_block_w`` and the K-contraction order are independent of the M-tiling, so only ``per_core_M``
+    changes. ``mlp_decode_spill_w1_to_dram`` starts off; re-evaluate if decode batch-32 trips L1
+    circular-buffer validation (per-device FF shard is 8192×3696 in BFP4) — decode is unaffected by the
+    cutoff (it uses the separate DRAM-sharded prg configs, which never read ``prefill_len_cutoff``).
     """
     t = _Qwen25_72BWHTuning(
-        mlp_prefill_len_cutoff=256,
+        mlp_prefill_len_cutoff=1024,
         mlp_decode_spill_w1_to_dram=False,
     )
     t.prefill_minimal_matmul = not os.environ.get("DISABLE_MINIMAL_MATMUL")
