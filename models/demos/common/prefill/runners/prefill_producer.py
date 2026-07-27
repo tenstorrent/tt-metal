@@ -699,8 +699,13 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     """Read slot `slot_id`'s KV over [0, real_len) via the table and validate it. Config 0 (the KVPE
     cache) is PCC'd vs the golden trace. For a sparse/DSA model the merged table also carries config 1
     (the index-key cache), which is PCC'd vs the golden indexer key. Returns the min PCC across both
-    caches / all layers; raises on an index-cache read failure."""
-    from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import _load_golden_index_k, _load_golden_kv_post
+    caches / all layers, or across config 0 alone when the trace carries no indexer-key golden (warned,
+    not fatal — see below). Raises on an index-cache READ failure."""
+    from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import (
+        _load_golden_index_k,
+        _load_golden_kv_post,
+        index_golden_present,
+    )
     from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -739,20 +744,17 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     # only the full-indexer layers on GLM-5.2, so iterate its OWN layer count, not NUM_LAYERS. The index
     # cache is bf8 TILE, and the golden is already in the device rope frame (no re-interleave, unlike pe).
     #
-    # Some golden traces carry the KVPE golden but NOT the indexer-key golden (dsa/indexer_k_layer_* — some
-    # vllm dumps store only dsa/dsa_topk_indices_layer_*). Without it there is nothing to PCC config 1
-    # against, so warn and skip rather than crash on torch.cat([]) in _load_golden_index_k.
-    from pathlib import Path as _Path
+    # A trace can carry the KVPE golden but no indexer-key golden (some vllm dumps store only
+    # dsa/dsa_topk_indices_layer_*). There is then nothing to PCC config 1 against, so warn and return the
+    # config-0 PCC rather than failing the slot: the KVPE result is still a valid check.
+    if table.num_configs() > 1:
+        if not index_golden_present(trace_dir):
+            logger.warning(
+                f"[producer] slot {slot_id}: table has an index config but {trace_dir} carries no "
+                f"indexer-key golden; validating the KVPE cache only (device index cache NOT checked)."
+            )
+            return min_pcc
 
-    _index_golden_present = (_Path(str(trace_dir)) / "dsa").is_dir() and any(
-        (_Path(str(trace_dir)) / "dsa").glob("indexer_k_layer_*")
-    )
-    if table.num_configs() > 1 and not _index_golden_present:
-        raise FileNotFoundError(
-            f"table has an index config but {trace_dir}/dsa has no indexer_k_layer_* golden; "
-            "cannot validate the device index cache for this slot"
-        )
-    if table.num_configs() > 1 and _index_golden_present:
         index_head_dim = ADAPTER.model_config.INDEX_HEAD_DIM
         n_index_layers = table.config(1).num_layers
         index_decode = _decoder_for_config(table, 1, index_head_dim)  # bf8 TILE on GLM-5.1/5.2
