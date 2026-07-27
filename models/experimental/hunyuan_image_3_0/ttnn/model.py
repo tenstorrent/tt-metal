@@ -185,11 +185,14 @@ class HunyuanTtModel(LightweightModule):
 
         self.layers = []
         verbose = os.environ.get("HY_VERBOSE", "1") != "0"
+        t_all = time.time()
+        layer_times = []
         for i in range(num_layers):
             if verbose:
                 print(f"[backbone] loading layer {i + 1}/{num_layers} ...", flush=True)
             t_layer = time.time()
             sd = layer_loader(i)
+            t_read = time.time() - t_layer
             layer_dtype = ttnn.bfloat16 if i in bf16_layers else weight_dtype
             layer = HunyuanTtDecoderLayer(
                 device,
@@ -232,10 +235,27 @@ class HunyuanTtModel(LightweightModule):
             self.layers.append(layer)
             del sd
             gc.collect()
+            dt = time.time() - t_layer
+            layer_times.append(dt)
             if verbose:
-                dt = time.time() - t_layer
                 note = " (bf8 upload is slow; not stuck)" if layer_dtype != ttnn.bfloat16 and dt > 5 else ""
-                print(f"[backbone] layer {i + 1}/{num_layers} ready ({dt:.1f}s){note}", flush=True)
+                dtype_tag = "bf16" if layer_dtype == ttnn.bfloat16 else "bf8"
+                print(
+                    f"[backbone] layer {i + 1}/{num_layers} ready ({dt:.1f}s: "
+                    f"read {t_read:.1f}s + build/upload {dt - t_read:.1f}s, {dtype_tag}) "
+                    f"cumulative {time.time() - t_all:.1f}s{note}",
+                    flush=True,
+                )
+
+        if verbose and layer_times:
+            total = time.time() - t_all
+            print(
+                f"[backbone] weight load summary: {num_layers} layers in {total:.1f}s "
+                f"(mean {total / num_layers:.1f}s, min {min(layer_times):.1f}s, max {max(layer_times):.1f}s)",
+                flush=True,
+            )
+            per_layer = " ".join(f"L{i}={t:.1f}s" for i, t in enumerate(layer_times))
+            print(f"[backbone] per-layer load times: {per_layer}", flush=True)
 
         self.ln_f = None
         if apply_final_norm:
