@@ -12,7 +12,7 @@ import torch
 import ttnn
 
 from models.experimental.hunyuan_image_3_0.ref.attention.mask import build_attention_mask, to_additive
-from models.experimental.hunyuan_image_3_0.ttnn.ar_dual_cq import COMPUTE_CQ
+from models.experimental.hunyuan_image_3_0.ttnn.dual_cq import COMPUTE_CQ
 
 
 def prefill_chunk_size() -> int:

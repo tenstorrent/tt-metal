@@ -1,16 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from .i2i import (
-    build_i2i_inputs_embeds,
-    encode_cond_vision,
-    inject_cond_vision,
-)
 from .i2i_bundle import (
     CondEncodeCache,
     apply_cond_encode_cache,
     build_cond_encode_cache_tt,
+    build_i2i_inputs_embeds,
     build_i2i_inputs_embeds_tt,
+    encode_cond_vision,
+    inject_cond_vision,
     load_tt_cond_patch_embed,
     load_tt_cond_timestep_embedders,
     get_tt_vae_encoder,

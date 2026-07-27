@@ -53,7 +53,7 @@ __all__ = [
     "device_sampling_enabled",
 ]
 
-from models.experimental.hunyuan_image_3_0.ttnn.ar_dual_cq import (  # noqa: E402
+from models.experimental.hunyuan_image_3_0.ttnn.dual_cq import (  # noqa: E402
     ArDualCQCoordinator,
     recaption_2cq_enabled,
 )
