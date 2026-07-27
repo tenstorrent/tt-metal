@@ -144,11 +144,28 @@ it lands with the host SDK, not the RX kernel. The on-core SEND→ring mechanism
 
 ## Phase 2 — Reliability & flow control (production robustness)
 
-- **2.1 PFC-lossless (BH.6)** — Rianta PFC bring-up (`eth_init.cpp:538` TODO). **The one base-FW change
-  + reflash** (human reboot per CLAUDE.md). Gate: pause counters non-zero under overload, 0 buffer-discard,
-  RX lossless at ≤ ceiling with the 143G sender.
-- **2.2 Software reliability (Phase R)** for the external/raw path — cumulative-ACK + retransmit;
-  selective-ACK (v1.1) for lossy fabrics. Auto-on for one-sided WRITE/READ.
+- **2.1 PFC-lossless (BH.6)** — Rianta PFC bring-up (was the `eth_init.cpp` TODO). **Static MAC config
+  written + gated + compile-clean** (`bh-erisc-fpga eth_init.cpp`, gated on the new `pfc_enable` boot
+  param, default OFF → dead-code-eliminated, working TT-TT links unaffected). Programs station addr, TX
+  pause quanta (`MAC_PAUSE_TIME`/`MAC_PFC_TIME`), the TX enable set (`TX_MAC_FC_CONFIG0`), and RX honoring
+  (`RX_MAC_FC_CONFIG`). **NOT YET HW-VALIDATED — needs a human reflash + bench.** Still TODO on the bench:
+  the runtime XOFF driver (poll `RXPKT_BUF` fullness → assert ETH-CTRL `TX_FLOW_CONTROL.tx_fc_pause`,
+  watermark-tuned) and BF3 PFC-on-priority config (mlx5 makes 802.3x vs PFC mutually exclusive). Full
+  recipe + interop caveats + acceptance gate in **`tt-rdma-pfc-bringup.md`**. Gate (unchanged): pause
+  counters non-zero under overload, 0 buffer-discard, RX lossless at ≤ ceiling with the 143G sender.
+- **2.2 Software reliability (Phase R)** for the external/raw path — **DONE & silicon-validated.** The
+  TT↔TT HW retransmit (`eth_enable_packet_mode`) is TT-only; against a BF3 the far end isn't a TT ETH_TXQ,
+  so reliability lives in the RISC1 kernel. Both roles built + gated behind the correctness reference:
+  - **2.2a receiver** — cumulative-ACK generation with a **reorder-tolerant receive window**
+    (selective-repeat). Discovered on silicon that the host-NIC TX path reorders frames *even paced*
+    (observed `1 3 4..10 2 11..`); a strict Go-Back-N receiver rejected the whole window behind one late
+    frame, so a 2048-bit window buffers early frames and advances `rx_last` over the contiguous prefix.
+    Coalesced ACK via TX_BUF1; on genuine loss the watermark stalls + dup-ACKs. **Regression T13a/T13b.**
+  - **2.2b initiator** — single-timer **Go-Back-N retransmit**: RTO via `eth_read_wall_clock` (1 GHz),
+    resend the un-acked suffix on timeout, freed by the inbound `ack_watermark`. **Regression T14** (drop
+    one frame → `n_retx=1`, all 32 eventually acked).
+  - Selective-ACK (v1.1) for lossy fabrics is a future refinement; the reorder window already gives the
+    receive-side of it. Auto-on for one-sided WRITE/READ is host-SDK policy (lands with the SDK).
 - **2.3 Overload & fault matrix** — ring overflow, lapping, link flap, partner timeout, malformed bursts;
   each has a defined, tested, graceful behavior (never a wedge, never silent corruption).
 - **2.4 Long soak** — 1h+ sustained both directions; assert no counter drift, no admit-rate decay, no

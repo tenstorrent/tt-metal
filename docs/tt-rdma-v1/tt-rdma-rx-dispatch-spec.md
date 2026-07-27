@@ -262,4 +262,21 @@ throughput will track the RX number, not the 200 G TX number.
 - **RX.5h** — READ initiator: BH issues READ_REQ, correlates READ_RESP by tag, lands payload. **Done** (T12).
   **Phase 1 complete** (all v1 opcodes + both READ directions, T1–T12 14/14). Only deferred: SEND→host
   hugepage (1.2b), which lands with the host SDK (`map_hugepage_to_noc`), not the RX kernel.
-- **RX.6** — PFC-lossless (BH.6) + resync-on-bad; fast gateway sender to find the real ceiling. Pending.
+- **RX.7a** — Software-ARQ **receiver** (Phase 2.2a): reorder-tolerant cumulative-ACK generation.
+  `arq_enable` (arg27) turns it on (`noc_target=7`). Each reliable data op (SEND/WRITE +_IMM) carries a
+  1-based seq in `hw[2]`; the kernel tracks `rx_last` = highest **contiguous** seq via a 2048-bit receive
+  window (`recv_bm`) — early/reordered frames are buffered and drained over the contiguous prefix, not
+  rejected. Cumulative ACK (0x40, `rx_last` in `hw[2]`) is coalesced (`ack_coal`, arg28) and staged in
+  **TX_BUF1** (never clobbers TX_BUF0). On genuine loss the watermark stalls at the hole and dup-ACKs.
+  **Why the window:** the host-NIC TX path reorders frames *even when paced* (observed arrival order
+  `1 3 4..10 2 11..`); a strict Go-Back-N receiver rejected everything behind one late frame. Stats
+  `[23]=arq_ack_tx [24]=rx_last [25]=ooo [26]=dup`. **Done** (T13a reorder-tolerant FULL-ACK, T13b loss
+  stall + dup-ACK).
+- **RX.7b** — Software-ARQ **initiator** (Phase 2.2b): Go-Back-N retransmit. `arq_init_enable` (arg29,
+  `noc_target=8`) makes BH send `init_nreqs` reliable WRITEs (seq 1..N) on the doorbell, then single-timer
+  Go-Back-N: RTO = `arq_rto_cycles` (arg30; wall-clock at 1 GHz via `eth_read_wall_clock`), resend the
+  un-acked suffix (`ack_watermark+1..N`) on timeout, freed by the inbound cumulative ACK. `arq_send_write`
+  rewrites only the header+CRC per (re)transmit (payload filled once). Stat `[27]=n_retx`. **Done** (T14 —
+  responder drops one frame → `n_retx=1`, all 32 eventually acked).
+- **RX.6** — PFC-lossless (Phase 2.1): static MAC config **written + gated** (`pfc_enable`, base-FW), the
+  runtime XOFF driver + BF3 PFC config are the bench follow-ups. See `tt-rdma-pfc-bringup.md`. Pending HW.
