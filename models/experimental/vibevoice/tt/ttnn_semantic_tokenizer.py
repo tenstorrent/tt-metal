@@ -395,14 +395,18 @@ class TTConv1d:
                 x_ctx = ttnn.pad(x_ctx, [(0, 0), (0, 0), (0, extra_pad), (0, 0)], value=0.0)
             x = x_ctx
             T_padded = cp + T + extra_pad
+            # Cache/concat already materialised the pad; conv sees the full width.
+            input_width = T_padded
+            conv_padding: tuple = (0, 0)
         else:
+            # Non-streaming: keep TILE and fold causal/extra pad into conv2d's native
+            # [pad_top, pad_bottom, pad_left, pad_right] — kills Untilize→Pad and cheapens I2S.
             extra_pad = self._extra_right_pad(T)
             T_padded = T + cp + extra_pad
-            if cp > 0 or extra_pad > 0:
-                # ttnn.pad front padding requires ROW_MAJOR layout
-                if x.layout != ttnn.ROW_MAJOR_LAYOUT:
-                    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-                x = ttnn.pad(x, [(0, 0), (0, 0), (cp, extra_pad), (0, 0)], value=0.0)
+            if x.layout != ttnn.TILE_LAYOUT:
+                x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+            input_width = T
+            conv_padding = (0, 0, cp, extra_pad)
 
         # VV_CONV_SINGLE_BLOCK=1: force the depthwise conv (groups>1) onto the single-height-block
         # path (act_block_h >= full output height) — the ONE code path in compute_depthwise_conv1d.cpp
@@ -427,7 +431,7 @@ class TTConv1d:
         # Reuse the weight prepared for this exact geometry if we've seen it; otherwise prepare from
         # the host original.  The prepared layout depends on T_padded and on whether the single-block
         # override is applied (act_block_h), so both go in the key.
-        geo_key = (T_padded, _conv_cfg is not None)
+        geo_key = (T_padded, _conv_cfg is not None, use_cache)
         w_in, b_in = self._prepared.get(geo_key, (self.weight, self.bias))
         x_out, [_, w_out], [w_prep, b_prep] = ttnn.conv2d(
             input_tensor=x,
@@ -438,10 +442,10 @@ class TTConv1d:
             out_channels=self.out_ch,
             batch_size=B,
             input_height=1,
-            input_width=T_padded,
+            input_width=input_width,
             kernel_size=(1, self.K),
             stride=(1, self.stride),
-            padding=(0, 0),
+            padding=conv_padding,
             groups=self.groups,
             return_output_dim=True,
             return_weights_and_bias=True,
@@ -610,7 +614,7 @@ class TTSemanticTokenizer:
     All convolutions, norms, and linear ops run on device via TTConv1d / TTBlock1DDevice.
     Device must be opened with l1_small_size=32768 for conv support on Blackhole.
 
-    Input:  [B, 1, 1, T] raw audio
+    Input:  [B, 1, T, 1] NHWC (preferred) or [B, 1, 1, T] (reshaped once on device)
     Output: [B, 1, T_enc, vae_dim]
     """
 
@@ -622,7 +626,6 @@ class TTSemanticTokenizer:
         self._stages = [[TTBlock1DDevice(bw, device) for bw in stage_blocks] for stage_blocks in weights.stages]
 
         if weights.final_norm_w is not None:
-            C = weights.final_norm_w.shape[0]
             self._final_norm_w = _norm_w_tt(weights.final_norm_w, device)
         else:
             self._final_norm_w = None
@@ -657,19 +660,24 @@ class TTSemanticTokenizer:
         """Encode audio to semantic latents (all ops on device).
 
         Args:
-            audio:  [B, 1, 1, T] raw audio tensor on device.
+            audio:  [B, 1, T, 1] NHWC preferred (avoids a device ReshapeView), or
+                    [B, 1, 1, T] which is reshaped once. TILE layout preferred.
             golden: optional [B, vae_dim, T_enc] torch reference tensor.
                     If provided, PCC between TTNN output and golden is printed.
             use_cache: stream this chunk using the per-conv causal caches.
             is_final_chunk: add ceil-alignment right-pad on the final chunk only.
         """
         B = audio.shape[0]
-        T = audio.shape[-1]
-
-        # [B, 1, 1, T] → [B, 1, T, 1] NHWC for TTConv1d
-        x = ttnn.reshape(audio, [B, 1, T, 1])
+        # Prefer host/upload as [B, 1, T, 1]; only reshape the legacy [B, 1, 1, T] layout.
+        if audio.shape[2] == 1 and audio.shape[3] != 1:
+            T = int(audio.shape[3])
+            x = ttnn.reshape(audio, [B, 1, T, 1])
+        else:
+            x = audio
         if x.dtype != ttnn.bfloat16:
             x = ttnn.typecast(x, ttnn.bfloat16)
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
         for i, stage_blocks in enumerate(self._stages):
             x = self._downsample_convs[i](x, use_cache=use_cache, is_final_chunk=is_final_chunk)
