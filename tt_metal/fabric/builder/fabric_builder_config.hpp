@@ -113,6 +113,14 @@ static constexpr std::size_t max_downstream_edms = 8;
 // 2D mesh directions (N, E, S, W)
 static constexpr uint32_t num_mesh_directions_2d = 4;
 
+// Slots an injection channel's downstream receiver must have for bubble flow control to work: it only
+// sends when it sees this many free, so a smaller receiver stalls it permanently.
+//
+// Must match BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS on the device side, which the
+// host cannot include. That constant is already duplicated in fabric_router_mux_extension.cpp, so this
+// is the third copy; they have to move together.
+static constexpr uint32_t bubble_flow_control_protected_receiver_min_slots = 2;
+
 uint32_t get_sender_channel_count(bool is_2D_routing);
 
 uint32_t get_receiver_channel_count(bool is_2D_routing);

@@ -1077,6 +1077,35 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     const bool final_enable_deadlock_avoidance =
         base_enable_deadlock_avoidance && !vc0_is_terminal_or_source_only_after_trim;
     const bool final_enable_first_level_ack_vc0 = final_enable_deadlock_avoidance;
+
+    // Bubble flow control requires the immediate downstream receiver to hold at least two slots: an
+    // injection channel only sends when it sees that many free, so with a single-slot receiver the
+    // condition can never hold and that sender stalls forever.
+    //
+    // Nothing tied slot selection to this. The allocator walks an ordered table and takes the first
+    // option that fits the available channel buffering, and its smallest option gives one receiver
+    // slot -- so the requirement has been satisfied only incidentally, by the larger options fitting.
+    // A tight L1 budget could select that last option under bubble flow control and hang instead.
+    //
+    // Checked per VC and only where bubble flow control is actually enabled, so a configuration that
+    // gives VC1 a single slot still passes as long as the VCs that need the guard have two.
+    if (final_enable_deadlock_avoidance) {
+        constexpr uint32_t k_bfc_protected_receiver_min_slots =
+            builder_config::bubble_flow_control_protected_receiver_min_slots;
+        constexpr size_t k_bfc_vc = 0;  // v1 enables bubble flow control on VC0 only
+        constexpr size_t k_receiver_channel = 0;
+        const size_t remote_slots =
+            static_channel_allocator->get_remote_receiver_channel_number_of_slots(k_bfc_vc, k_receiver_channel);
+        TT_FATAL(
+            remote_slots >= k_bfc_protected_receiver_min_slots,
+            "Bubble flow control is enabled on VC{} but its downstream receiver has only {} buffer slot(s); at least "
+            "{} are required or injection channels can never send. The channel allocator selected a buffer-slot "
+            "option too small for this configuration, so either the available channel buffering must grow or bubble "
+            "flow control must not be enabled here.",
+            k_bfc_vc,
+            remote_slots,
+            k_bfc_protected_receiver_min_slots);
+    }
     // Preserve the existing explicit single-sender behavior, allow the same
     // fast path when trimming collapses a wider VC0 router to the worker-only
     // shape, and optionally enable a terminal-only speedy receiver when the

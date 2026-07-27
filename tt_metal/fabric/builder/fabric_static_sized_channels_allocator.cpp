@@ -50,6 +50,18 @@ size_t FabricStaticSizedChannelsAllocator::get_receiver_channel_number_of_slots(
     return receiver_channels_num_buffers[vc_id][channel_id];
 }
 
+size_t FabricStaticSizedChannelsAllocator::get_remote_receiver_channel_number_of_slots(
+    size_t vc_id, size_t channel_id) const {
+    TT_FATAL(
+        vc_id < builder_config::MAX_NUM_VCS, "VC ID {} out of bounds (max {})", vc_id, builder_config::MAX_NUM_VCS);
+    TT_FATAL(
+        channel_id < remote_receiver_channels_num_buffers[vc_id].size(),
+        "Remote receiver channel ID {} out of bounds for VC{}",
+        channel_id,
+        vc_id);
+    return remote_receiver_channels_num_buffers[vc_id][channel_id];
+}
+
 size_t FabricStaticSizedChannelsAllocator::get_receiver_channel_base_address(size_t vc_id, size_t channel_id) const {
     TT_FATAL(
         vc_id < builder_config::MAX_NUM_VCS, "VC ID {} out of bounds (max {})", vc_id, builder_config::MAX_NUM_VCS);

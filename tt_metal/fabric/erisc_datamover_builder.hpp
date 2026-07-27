@@ -107,6 +107,14 @@ Receiver channel side registers are defined here to receive free-slot credits fr
                                    South Router
 */
 struct StreamRegAssignments {
+    // An ethernet core has 32 NOC overlay stream registers, and the assignments below consume all of
+    // them. That is a hardware limit rather than a convention -- ETH_NOC_NUM_STREAMS in
+    // noc_overlay_parameters.h, and 32 on Wormhole, Blackhole, and Quasar alike, while Tensix cores get
+    // 64. Mirrored here because that header is architecture-private and not visible to host code.
+    //
+    // There is no headroom: a new consumer has to free an existing register, not assume a spare.
+    static constexpr uint32_t num_eth_stream_registers = 32;
+
     // Stream registers used as auto-increment counters. Writing to these increments the register value.
     struct IncrementOnWrite {
         // Packet send/ack/complete stream IDs
