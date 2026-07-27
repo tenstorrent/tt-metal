@@ -58,9 +58,9 @@ void kernel_main() {
     }
     volatile tt_l1_ptr uint32_t* sc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
     // Local mirror of the produce head; NoC-read from the eth core's published PKT_END_CNT.
-    volatile tt_l1_ptr uint32_t* ph = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + 0x1000u);
+    volatile tt_l1_ptr uint32_t* ph = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + 0x3000u);
     // Local mirror of the MR generation counter (separate scratch slot from the produce head).
-    volatile tt_l1_ptr uint32_t* mg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + 0x1010u);
+    volatile tt_l1_ptr uint32_t* mg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + 0x3010u);
 
     const uint32_t nslots = ring_size / stride;  // whole frames that fit (avoid straddle)
     uint32_t next_idx = wid;                     // monotonic frame index this worker owns next
@@ -69,13 +69,13 @@ void kernel_main() {
     uint64_t bytes = 0;
     uint32_t valid = 0, processed = 0, lapped = 0, poll = 0, completions = 0;
     // Completion staging (local L1): a spare scratch region distinct from the frame + produce-head slots.
-    volatile tt_l1_ptr uint32_t* ch = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + 0x1040u);
+    volatile tt_l1_ptr uint32_t* ch = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + 0x3040u);
     (void)cq_prodidx;  // prod_idx no longer needed (collision-free by interleaved-slot construction)
     for (;;) {
         // Shared MR table: read the control-plane-owned generation; on change, refresh the LOCAL cache
         // from the single shared table on the eth core (RISC1 writes it on CONTROL registration; workers
         // read). Between changes the per-frame lookup uses the local cache (no per-frame NoC read).
-        noc_async_read(get_noc_addr(src_x, src_y, mr_gen_addr), scratch + 0x1010u, 4u);
+        noc_async_read(get_noc_addr(src_x, src_y, mr_gen_addr), scratch + 0x3010u, 4u);
         noc_async_read_barrier();
         if (mg[0] != cached_gen) {
             noc_async_read(get_noc_addr(src_x, src_y, shared_mr_addr), mr_table, mr_slots * 32u);
@@ -84,7 +84,7 @@ void kernel_main() {
         }
 
         // Refresh the produce head (PKT_END_CNT) from the eth core. Cheap: one NoC read per claim batch.
-        noc_async_read(get_noc_addr(src_x, src_y, phead_addr), scratch + 0x1000u, 4u);
+        noc_async_read(get_noc_addr(src_x, src_y, phead_addr), scratch + 0x3000u, 4u);
         noc_async_read_barrier();
         produced = ph[0];
 
@@ -139,7 +139,7 @@ void kernel_main() {
                     ch[5] = (mslot & 0xFFu) | (1u << 8);  // mr_idx | OWNED_BY_HOST
                     ch[6] = 0u;
                     ch[7] = 0u;
-                    noc_async_write(scratch + 0x1040u, get_noc_addr(cq_x, cq_y, cq_base + slot * 1536u), 32u);
+                    noc_async_write(scratch + 0x3040u, get_noc_addr(cq_x, cq_y, cq_base + slot * 1536u), 32u);
                     noc_async_write_barrier();
                     ++completions;
                 }
