@@ -394,53 +394,11 @@ if(WITH_PYTHON_BINDINGS)
     # .. set important linker flags
     nanobind_link_options(ttnn)
 
-    # `_layer_completion` nanobind extension for the pipelined-prefill layer-completion
-    # aggregation feature. Exposed via ttnn._experimental.layer_completion. Links only
-    # TT::Metalium. All layer-completion types are included via
-    # the `tt_metal/api/internal/disaggregation/` surface (`<internal/disaggregation/...>`), resolved
-    # through TT::Metalium's PUBLIC `api/` include root — no direct reaches into tt_metal/distributed/.
-    add_library(layer_completion_ext SHARED)
-    target_sources(layer_completion_ext PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/layer_completion.cpp)
-    target_link_libraries(
-        layer_completion_ext
-        PRIVATE
-            TT::Nanobind
-            TT::Metalium
-    )
-    nanobind_compile_options(layer_completion_ext)
-    nanobind_link_options(layer_completion_ext)
-    set_target_properties(
-        layer_completion_ext
-        PROPERTIES
-            OUTPUT_NAME
-                layer_completion
-            PREFIX
-                "_"
-            CXX_VISIBILITY_PRESET
-                "default"
-            LIBRARY_OUTPUT_DIRECTORY
-                ${CMAKE_CURRENT_BINARY_DIR}
-            BUILD_RPATH
-                "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
-            INSTALL_RPATH
-                "$ORIGIN"
-    )
-
-    add_custom_command(
-        TARGET layer_completion_ext
-        POST_BUILD
-        COMMAND
-            ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:layer_completion_ext>"
-            "${PROJECT_SOURCE_DIR}/ttnn/ttnn/_experimental/$<TARGET_FILE_NAME:layer_completion_ext>"
-    )
-
-    install(
-        TARGETS
-            layer_completion_ext
-        LIBRARY
-            DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            COMPONENT ttnn-runtime
-    )
+    # NOTE: the pipelined-prefill layer-completion bindings (LayerCompletionQueue/Router/Consumer) are
+    # compiled INTO _ttnn (see cpp/ttnn-nanobind/layer_completion.cpp + sources.cmake) and exposed as the
+    # ttnn._ttnn.layer_completion submodule. They were previously a standalone `_layer_completion` .so
+    # that a POST_BUILD step copied into the source tree; folding them into _ttnn removes that
+    # source-tree write and the separate target/install entirely.
 
     if(TT_INSTALL)
         install(TARGETS ttnn EXPORT TT-NN LIBRARY COMPONENT ttnn-runtime)
