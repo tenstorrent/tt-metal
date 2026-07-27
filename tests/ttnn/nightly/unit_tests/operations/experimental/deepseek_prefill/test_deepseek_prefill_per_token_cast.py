@@ -16,6 +16,7 @@ import ttnn
 from loguru import logger
 
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from tests.ttnn.utils_for_testing import comp_pcc, assert_equal
 
 pytestmark = pytest.mark.use_module_device
@@ -310,10 +311,17 @@ def test_round_trip_random(device, dtype, shape, input_layout):
 
 
 TOKEN_COUNT_AWARE_CASES = [
+    # dense - each expert has tokens
     ("dense", [130, 74, 200, 96, 41]),
+    # zeros_middle, zeros_leading, zeros_trailing - some expert have no tokens
+    # we test if those tokens are skipped correctly and if the operator
+    # correctly handles the case where some experts have no tokens
     ("zeros_middle", [130, 0, 0, 74, 200]),
     ("zeros_leading", [0, 0, 130, 74, 200]),
     ("zeros_trailing", [130, 74, 200, 0, 0]),
+    # overflow - the packed regions run past the flat buffer; the op must clamp to capacity, drop the
+    # out-of-bounds tokens, and never hang.
+    ("overflow", [9000, 9000, 9000, 9000, 9000]),
 ]
 
 
@@ -334,7 +342,8 @@ def create_u32_tensor(device, values):
 MAX_DISPATCH_BUFFER_TOKENS = 5 * 1024 * 8
 
 # Metadata scale path: the dispatch metadata row is [METADATA_HEADER routing ints][H/128 fp32-bit scales].
-METADATA_HEADER = 5
+METADATA_HEADER = 3  # This may change in the future, but the actual number is not important for the test
+# The number is just used to set the starting offset when reading the scales from the metadata row
 
 
 def _pack_scale_metadata(input_scale):
@@ -351,7 +360,7 @@ def _pack_scale_metadata(input_scale):
 @pytest.mark.parametrize("label, counts", TOKEN_COUNT_AWARE_CASES, ids=[c[0] for c in TOKEN_COUNT_AWARE_CASES])
 def test_token_count_aware_cast_back(device, label, counts, scales_from_metadata, output_dtype):
     torch.manual_seed(0)
-    H = 1024
+    H = KimiK26Config.EMB_SIZE
 
     experts_per_chip = len(counts)
     # This chip owns non-contiguous global ids (odd slots) out of a wider routed-expert space.
@@ -367,8 +376,9 @@ def test_token_count_aware_cast_back(device, label, counts, scales_from_metadata
         expert_region_offsets[global_id] = running_offset
         expert_token_counts[global_id] = token_count
         running_offset += _ceil_tile(token_count)
-    total_valid_rows = running_offset
     capacity = MAX_DISPATCH_BUFFER_TOKENS  # fixed flat buffer; [total_valid_rows, capacity) is untouched tail
+    # The op clamps its swept region to the buffer capacity, so rows past it are dropped (overflow case).
+    total_valid_rows = min(running_offset, capacity)
 
     input_e4m3 = (torch.randn(capacity, H) * 3.0).clamp(-E4M3_MAX, E4M3_MAX).to(torch.float8_e4m3fn)
     input_scale = torch.rand(capacity, H // BLOCK_W) * 4.0 - 2.0

@@ -65,7 +65,6 @@ void kernel_main() {
     uint32_t num_blocks = cb_loop_count.read_tile_value(0, 0);
     cb_loop_count.pop_front(1);
 #else
-    (void)cb_loop_count_id;
     uint32_t num_blocks = get_arg_val<uint32_t>(0);  // tile_h x 128 blocks for this core
 #endif
 
