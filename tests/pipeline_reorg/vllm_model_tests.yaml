@@ -130,10 +130,10 @@
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
-# KNOWN ERROR — [WH-T3K] Gemma4-31B: device hang (fast-dispatch timeout) during
-# decode on WH-T3K only; the same serving config passes on [BH-QB-2] Gemma4-31B.
-# Not a serving/KV-config issue — a tt-metal dispatch-layer hang. Kept enabled to
-# track. https://github.com/tenstorrent/tt-metal/issues/49494
+# [WH-T3K] Gemma4-31B: serve max_model_len=32768. GEMMA4_MAX_TOKENS_ALL_USERS
+# must match that (see Run server step) — a 256k all-user pool OOMs DRAM
+# on Wormhole during KV init (run 30270375854). Prior decode hang tracked
+# in https://github.com/tenstorrent/tt-metal/issues/49494
 - name: "Gemma4-31B"
   model: google/gemma-4-31B-it
   server-timeout: 45
