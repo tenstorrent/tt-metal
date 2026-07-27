@@ -131,23 +131,24 @@ Source: `experiments/sweep_isl_batch_complete_20260724/`.
 | ms/token | 51.3 | 52.5 | 53.4 | 53.9 | 55.0 | 57.2 | 61.6 | 70.6 | 87.9 |
 | tok/s | 19.49 | 19.05 | 18.73 | 18.55 | 18.18 | 17.48 | 16.23 | 14.16 | 11.38 |
 
-### Aggregate TPS (total tokens/sec across all sequences)
+### Aggregate TPS at ISL=128 (total tokens/sec across all sequences)
 
-| ISL \ batch | 1 | 4 | 8 | 16 | 32 | 64 | 128 |
+| batch | 1 | 4 | 8 | 16 | 32 | 64 | 128 |
 |---|---|---|---|---|---|---|---|
-| 128 | 19.5 | 73.3 | 139.9 | 256.8 | 449.4 | 529.8 | 591.5 |
-| 512 | 19.0 | 71.2 | 134.0 | 247.7 | 430.7 | 503.5 | OOM |
-| 1024 | 18.7 | 69.2 | 131.6 | 238.8 | 407.6 | OOM | OOM |
-| 2048 | 18.6 | 68.0 | 126.4 | 225.4 | OOM | OOM | OOM |
-| 4096 | 18.2 | 65.5 | 118.3 | OOM | OOM | OOM | OOM |
-| 8192 | 17.5 | 61.3 | OOM | OOM | OOM | OOM | OOM |
-| 16384+ | batch=1 only | | | | | | |
+| tok/s | 19.5 | 73.3 | 139.9 | 256.8 | 449.4 | 529.8 | 591.5 |
 
-**Current capacity wall:** the OOM cells above fail in the DRAM bank allocator
-(`tt_metal/impl/allocator/bank_manager.cpp:439`) during KV-cache allocation, i.e.
-`batch x ISL` KV footprint, not a compute limit. Reducing `--min-cache-tokens` or
-using `--kv-cache-dtype bf8` extends the reachable region (bf8 KV has known
-accuracy degradation — see the dtype table).
+Scaling is near-linear to batch=32 (23.1x on 32x the sequences), then flattens as
+the decode step goes compute-bound: 71.2 ms at bs=32 vs 216.4 ms at bs=128.
+
+**Current capacity wall:** longer contexts do not reach the full batch range. The
+unreachable cells fail in the DRAM bank allocator
+(`tt_metal/impl/allocator/bank_manager.cpp:439`) during KV-cache allocation — a
+`batch x ISL` KV footprint limit, not a compute limit. The reachable maximum batch
+is 64 at ISL=512, 32 at ISL=1024, 16 at ISL=2048, 8 at ISL=4096, 4 at ISL=8192, and
+1 at ISL>=16384. Reducing `--min-cache-tokens` or using `--kv-cache-dtype bf8`
+extends the reachable region (bf8 KV has known accuracy degradation — see the dtype
+table). Full per-cell data, including aggregate TPS at every reachable ISL and the
+per-cell failure detail, is in `experiments/sweep_isl_batch_complete_20260724/`.
 
 ### Optimization history (batch=1 decode)
 
