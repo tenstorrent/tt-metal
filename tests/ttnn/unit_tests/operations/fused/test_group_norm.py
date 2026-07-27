@@ -1509,6 +1509,101 @@ def test_group_norm_rejects_non_tile_aligned_spatial(device, expect_error):
         )
 
 
+def test_group_norm_rejects_per_sample_non_tile_aligned_spatial(device, expect_error):
+    # Scope boundary for the tt-metal #50682 correction, which only engages for TILE inputs where
+    # logical_shape[2] < padded_shape[2]. A ROW_MAJOR input keeps the row dim unpadded, so the
+    # correction never applies -- and the N*H*W check above does not catch a PER-SAMPLE H*W that is
+    # not a whole number of tiles: N=2, H*W=80 gives N*H*W=160, a multiple of 32. The device op's
+    # own H*W check is what rejects it, so such shapes fail loudly instead of reducing each sample
+    # over a partial tile.
+    N, C, HW, num_groups = 2, 320, 80, 32
+    assert (N * HW) % 32 == 0, "N*H*W must look aligned, so only the per-sample check can reject"
+    assert HW % 32 != 0, "per-sample H*W must not be tile-aligned"
+
+    torch_input_tensor = torch.rand((N, 1, HW, C), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    shard_spec = ttnn.ShardSpec(shard_grid, (N * HW, C), ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    input_tensor = ttnn.to_memory_config(input_tensor, memory_config=sharded_mem_config)
+
+    with expect_error(RuntimeError, "must be a multiple of the tile height"):
+        ttnn.group_norm(
+            input_tensor,
+            num_groups=num_groups,
+            memory_config=sharded_mem_config,
+            core_grid=ttnn.CoreGrid(y=1, x=1),
+        )
+
+
+def test_group_norm_rejects_tile_input_with_negative_mask(device, expect_error):
+    # Scope boundary for tt-metal #50682: negative_mask requires a ROW_MAJOR input, and a ROW_MAJOR
+    # tensor has padded_shape[2] == logical_shape[2], so negative_mask and the tile-padding
+    # correction can never be active at the same time. Pins that mutual exclusion.
+    C, HW, num_groups, grid_y = 320, 128, 32, 1
+    torch_input_tensor = torch.rand((1, 1, HW, C), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    shard_spec = ttnn.ShardSpec(shard_grid, (HW, C), ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    input_tensor = ttnn.to_memory_config(input_tensor, memory_config=sharded_mem_config)
+    negative_mask = ttnn.to_device(
+        ttnn.create_group_norm_input_negative_mask(C, num_groups, grid_y, ttnn.DataType.BFLOAT16), device
+    )
+    # input_mask must be supplied alongside negative_mask: get_mask_tensor only synthesises a mask
+    # when NEITHER is given, so negative_mask alone leaves it default-constructed.
+    input_mask = ttnn.to_device(
+        ttnn.create_group_norm_input_mask(C, num_groups, grid_y, ttnn.DataType.BFLOAT16), device
+    )
+
+    with expect_error(RuntimeError, "must be in ROW_MAJOR layout"):
+        ttnn.group_norm(
+            input_tensor,
+            num_groups=num_groups,
+            input_mask=input_mask,
+            memory_config=sharded_mem_config,
+            core_grid=ttnn.CoreGrid(y=grid_y, x=1),
+            inplace=False,  # inplace defaults to True and is rejected for TILE before this check
+            negative_mask=negative_mask,
+        )
+
+
+def test_group_norm_rejects_tile_input_with_inplace(device, expect_error):
+    # Scope boundary for tt-metal #50682, same argument as negative_mask above: inplace is only
+    # allowed for ROW_MAJOR inputs, and a ROW_MAJOR tensor has padded_shape[2] == logical_shape[2],
+    # so inplace and the tile-padding correction can never be active at the same time. Note the
+    # binding defaults inplace to True, which is why every TILE-input test passes inplace=False.
+    C, HW, num_groups = 320, 128, 32
+    input_tensor = ttnn.from_torch(
+        torch.rand((1, 1, HW, C), dtype=torch.bfloat16),
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    with expect_error(RuntimeError, "Tile layout requires non-inplace tensors"):
+        ttnn.group_norm(input_tensor, num_groups=num_groups, inplace=True)
+
+
 def test_group_norm_rejects_host_input_mask(device, expect_error):
     # TILE layout: a ROW_MAJOR interleaved input is rejected earlier (it is unsupported
     # on the non-sharded path), which would pre-empt the host-input-mask check this test
