@@ -434,7 +434,7 @@ def run_training(
         model_cfg.vocab_size = tokenizer.vocab_size
 
     # from_flags rejects enable_sp without enable_tp (sequence parallelism rides the tp axis).
-    tp_strategy = TPStrategy.from_flags(device_cfg.enable_tp, device_cfg.enable_sp)
+    tp_strategy = TPStrategy.from_flags(device_cfg.enable_tp, enable_sp=device_cfg.enable_sp)
 
     # Lazy alloc only helps when sharding, so default it on under FSDP (--no-lazy to disable).
     lazy_init = device_cfg.enable_fsdp and not args.no_lazy

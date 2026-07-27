@@ -127,7 +127,7 @@ def llama_config_from_yaml(yaml_config: dict, vocab_size: int, use_tp: bool = Fa
         runner_type=runner_type,
         weight_tying=weight_tying,
         rope_scaling=rope_scaling,
-        tp_strategy=TPStrategy.from_flags(use_tp, False),
+        tp_strategy=TPStrategy.from_flags(use_tp),
     )
 
 
@@ -295,7 +295,7 @@ def main():
             vocab_size=vocab_size,
             max_position_embeddings=256,
             rope_theta=500000.0,
-            tp_strategy=TPStrategy.from_flags(use_tp, False),
+            tp_strategy=TPStrategy.from_flags(use_tp),
         )
 
     seq_len = llama_cfg.max_position_embeddings

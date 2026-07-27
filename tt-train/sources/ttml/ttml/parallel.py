@@ -25,7 +25,7 @@ class TPStrategy(Enum):
     TENSOR_SEQUENCE = "tensor_sequence"
 
     @classmethod
-    def from_flags(cls, enable_tp: bool, enable_sp: bool) -> "TPStrategy":
+    def from_flags(cls, enable_tp: bool, *, enable_sp: bool = False) -> "TPStrategy":
         """Map the ``(enable_tp, enable_sp)`` device-config flags to a strategy.
 
         Sequence parallelism shards the tensor-parallel residual stream, so it requires
