@@ -26,7 +26,7 @@ using namespace ttsl;
 struct IntImgDeviceOperation {
     using operation_attributes_t = IntImgParams;
     using tensor_args_t = Tensor;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     using invocation_result_t = std::tuple<operation_attributes_t, tensor_args_t>;

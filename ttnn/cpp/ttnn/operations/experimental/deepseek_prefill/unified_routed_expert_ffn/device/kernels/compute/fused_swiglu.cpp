@@ -61,9 +61,15 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
 #include "api/dataflow/circular_buffer.h"
-#include "tools/profiler/kernel_profiler.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_fused_activation.hpp"
+
+#ifdef FUSE_BIAS
+// Row-broadcast bias add (gpt-oss). Bias is a (1, N) tensor tiled to one
+// tile-row; add_tiles_bcast_rows adds its row 0 to every row of the output
+// tile. Same primitive the canonical matmul FUSE_BIAS path uses.
+#include "api/compute/bcast.h"
+#endif
 
 #ifdef SWIGLU_OAI
 // SwiGLU-OAI (gpt-oss / MiniMax-M3) activation: reuse the proven binary SFPU op.
@@ -91,8 +97,17 @@ template <
     uint32_t out_subblock_w,
     uint32_t out_subblock_num_tiles,
     uint32_t out_block_num_tiles,
-    bool apply_silu_on_final>
-FORCE_INLINE void matmul_phase(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t partials_cb_id, uint32_t final_cb_id) {
+    bool apply_silu_on_final,
+    uint32_t d_per_core_N = 0,
+    // K-tiles to reduce in the LAST block. Defaults to the full width (no-op);
+    // the down phase passes the real count so it skips tail padding tiles.
+    uint32_t last_block_w = in0_block_w>
+FORCE_INLINE void matmul_phase(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    uint32_t partials_cb_id,
+    uint32_t final_cb_id,
+    uint32_t down_bias_cb_id = 0) {
     // Reconfig packer for partials format (previous phase's final_cb format
     // would otherwise leak). pack_reconfig_data_format (the reconfig variant)
     // does NOT reset L1_ACC — we do that explicitly below.
@@ -128,6 +143,12 @@ FORCE_INLINE void matmul_phase(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t 
         in0_cb.wait_front(in0_block_num_tiles);
         in1_cb.wait_front(in1_block_num_tiles);
 
+        // Reduce over only the real K-tiles in the last block (skips tail
+        // padding whose activated is zero); full width otherwise. kt_dim passed
+        // to matmul_block stays in0_block_w — it is the in0 row stride (the
+        // block is still physically in0_block_w wide), not the step count.
+        const uint32_t k_steps = (block + 1 == num_blocks) ? last_block_w : in0_block_w;
+
         int in0_index_subblock_offset = 0;
         for (uint32_t sb_m = 0; sb_m < in0_num_subblocks; ++sb_m) {
             int in1_index_subblock_offset = 0;
@@ -137,7 +158,7 @@ FORCE_INLINE void matmul_phase(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t 
                 uint32_t dst_index = 0;
                 uint32_t in0_index = in0_index_subblock_offset;
                 uint32_t in1_index = in1_index_subblock_offset;
-                for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
+                for (uint32_t inner_dim = 0; inner_dim < k_steps; ++inner_dim) {
                     matmul_block(
                         in0_cb_id,
                         in1_cb_id,
@@ -196,15 +217,35 @@ FORCE_INLINE void matmul_phase(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t 
     // pack lands in final_cb (different format) — reconfigure both packer
     // data format and SrcA before the copy/pack loop.
     pack_reconfig_data_format(final_cb_id);
+#ifdef FUSE_BIAS
+    // Down bias (gpt-oss): add the (1, emb) bias (broadcast across rows) to the
+    // down-matmul output as it is drained from partials -> final. down_bias_cb
+    // holds this core's per_core_N_d columns (read once by the reader). d out
+    // subblock height is 1, so the flat tile index gives col = flat % d_per_core_N.
+    (void)in1_cb_id;
+    CircularBuffer down_bias_cb(down_bias_cb_id);
+    down_bias_cb.wait_front(d_per_core_N);
+    // Down matmul left SrcA on down weights (bf4), SrcB on activated (bf8).
+    // Reconfig SrcA=partials (Float16_b), SrcB=down_bias before the bcast init.
+    reconfig_data_format(partials_cb_id, down_bias_cb_id);
+    add_bcast_rows_init_short(partials_cb_id, down_bias_cb_id);
+#else
+    (void)down_bias_cb_id;
     // matmul puts in1 → SrcA, in0 → SrcB. Reconfigure SrcA from in1 to
     // partials so copy_tile reads partials.
     copy_tile_to_dst_init_short_with_dt(in1_cb_id, partials_cb_id);
+#endif
 
     for (uint32_t sb = 0; sb < (out_block_num_tiles / out_subblock_num_tiles); ++sb) {
         tile_regs_acquire();
         partials_cb.wait_front(out_subblock_num_tiles);
         for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+#ifdef FUSE_BIAS
+            const uint32_t flat = sb * out_subblock_num_tiles + i;
+            add_tiles_bcast_rows(partials_cb_id, down_bias_cb_id, i, flat % d_per_core_N, i);
+#else
             copy_tile(partials_cb_id, i, i);
+#endif
         }
         partials_cb.pop_front(out_subblock_num_tiles);
 
@@ -285,22 +326,21 @@ FORCE_INLINE void matmul_phase_fused_gu(
 
     for (uint32_t block = 0; block < num_blocks; ++block) {
         if constexpr (tilize_x) {
-            DeviceZoneScopedN("TILIZE");  // TEMP profiling: in-kernel row-major tilize cost
-            // Row-major x: tilize this K-block's cb_x_rm strips (bf16) -> x_cb
-            // (cb_in0_x, bf8_b) before the matmul consumes it. L1_ACC is turned
-            // off so the tilize packs OVERWRITE x_cb rather than accumulate; the
-            // shared tilize helper (same one conv_bmm_tilize.cpp uses) then
-            // reconfigures unpack SrcA + pack format, drives the per-strip
-            // wait/reserve/tilize/push/pop over the in0_block_num_tiles /
-            // in0_block_w tile-rows, and restores init on exit. The helper left
-            // SrcA pointing at the bf16 row-major input, so restore it to the
-            // gate/up weight format before resuming the matmul (SrcB still holds
-            // x_cb_id — the BH tilize path never touches it); then restore the
-            // partials packer + L1_ACC state for this block.
-            constexpr uint32_t n_strips = in0_block_num_tiles / in0_block_w;
+            //  Row-major x: tilize this K-block's cb_x_rm strips (bf16) -> x_cb
+            //  (cb_in0_x, bf8_b) before the matmul consumes it. L1_ACC is turned
+            //  off so the tilize packs OVERWRITE x_cb rather than accumulate; the
+            //  shared tilize helper (same one conv_bmm_tilize.cpp uses) then
+            //  reconfigures unpack SrcA + pack format, drives the per-strip
+            //  wait/reserve/tilize/push/pop over the in0_block_num_tiles /
+            //  in0_block_w tile-rows, and restores init on exit. The helper left
+            //  SrcA pointing at the bf16 row-major input, so restore it to the
+            //  gate/up weight format before resuming the matmul (SrcB still holds
+            //  x_cb_id — the BH tilize path never touches it); then restore the
+            //  partials packer + L1_ACC state for this block.
 #ifdef PACKER_L1_ACC
             PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
+            constexpr uint32_t n_strips = in0_block_num_tiles / in0_block_w;
             compute_kernel_lib::tilize<
                 in0_block_w,
                 x_rm_cb_id,
@@ -477,9 +517,14 @@ FORCE_INLINE void matmul_phase_fused_gu(
 // chunks of <=4 output tiles (<=8 dst). The activated CB is drained count-based by
 // the reader (cb_activated_obj.wait_front(d_in0_block_num_tiles)), so the push
 // granularity here is free and need not match out_subblock_num_tiles.
-template <uint32_t out_block_num_tiles>
+template <uint32_t out_block_num_tiles, uint32_t per_core_N_gu = 0>
 FORCE_INLINE void swiglu_oai_activation_phase(
-    uint32_t prev_srcA_cb_id, uint32_t gate_partials_cb_id, uint32_t up_partials_cb_id, uint32_t activated_cb_id) {
+    uint32_t prev_srcA_cb_id,
+    uint32_t gate_partials_cb_id,
+    uint32_t up_partials_cb_id,
+    uint32_t activated_cb_id,
+    uint32_t gate_bias_cb_id = 0,
+    uint32_t up_bias_cb_id = 0) {
     // Dst budget derived from the host ComputeConfig (via -DFP32_DEST_ACC_EN) so
     // it and the SFPU op's fp32-dest template below stay in sync with the
     // program factory's DST_CAPACITY / fp32_dest_acc_en (no silent drift). The
@@ -502,16 +547,41 @@ FORCE_INLINE void swiglu_oai_activation_phase(
     // accumulator with the right format. Both partials CBs are Float16_b, so this
     // single init covers reads from gate AND up partials. (Passing a Float16_b CB
     // as the "old" operand would no-op the reconfig and leave SrcA on bf4.)
+#ifdef FUSE_BIAS
+    // gpt-oss: add gate/up bias (broadcast across rows) before the clamp. The
+    // bias CBs were read once by the reader (per_core_N_gu tiles each) and are
+    // NOT popped here (reused across chunks). add_bcast_rows sets SrcA=partials,
+    // SrcB=bias — same format for gate and up, so one init covers both.
+    (void)prev_srcA_cb_id;
+    CircularBuffer gate_bias_cb(gate_bias_cb_id);
+    CircularBuffer up_bias_cb(up_bias_cb_id);
+    gate_bias_cb.wait_front(per_core_N_gu);
+    up_bias_cb.wait_front(per_core_N_gu);
+    // The gate/up matmul left SrcA on the up weights (bf4) and SrcB on x (bf8).
+    // The bcast add reads SrcA=partials (Float16_b), SrcB=bias — reconfig both
+    // before the init (add_bcast uses both operands, unlike the copy path).
+    reconfig_data_format(gate_partials_cb_id, gate_bias_cb_id);
+    add_bcast_rows_init_short(gate_partials_cb_id, gate_bias_cb_id);
+#else
+    (void)gate_bias_cb_id;
+    (void)up_bias_cb_id;
     copy_tile_to_dst_init_short_with_dt(prev_srcA_cb_id, gate_partials_cb_id);
+#endif
 
     for (uint32_t base = 0; base < out_block_num_tiles; base += kActChunk) {
         const uint32_t remaining = out_block_num_tiles - base;
         const uint32_t c = remaining < kActChunk ? remaining : kActChunk;
         tile_regs_acquire();
-        // gate -> dst[0..c), up -> dst[c..2c)
+        // gate -> dst[0..c), up -> dst[c..2c) (with gpt-oss bias when FUSE_BIAS)
         for (uint32_t j = 0; j < c; ++j) {
+#ifdef FUSE_BIAS
+            const uint32_t ncol = (base + j) % per_core_N_gu;
+            add_tiles_bcast_rows(gate_partials_cb_id, gate_bias_cb_id, base + j, ncol, j);
+            add_tiles_bcast_rows(up_partials_cb_id, up_bias_cb_id, base + j, ncol, c + j);
+#else
             copy_tile(gate_partials_cb_id, base + j, j);
             copy_tile(up_partials_cb_id, base + j, c + j);
+#endif
         }
         // Fused clamp + alpha-sigmoid + (up+1) multiply; result written in place to
         // dst[j] (out == gate slot, mirroring moe_gpt's swiglu(0,1,0)).
@@ -621,6 +691,16 @@ void kernel_main() {
     // x_is_row_major: tilize cb_x_rm -> cb_in0_x before the gate/up matmul.
     // 0 => x already TILE in cb_in0_x.
     constexpr uint32_t x_is_row_major = get_compile_time_arg_val(33);
+    // Real (unpadded) down-K tiles. Valid K-tiles in the LAST down block =
+    // real_K minus the full leading blocks. When down-K is padded
+    // (K_down_tiles_padded > real), the tail tiles are all-zero activated, so
+    // the down matmul can skip them. Falls back to the full block width when
+    // the padding isn't confined to a single tail block, keeping correctness
+    // for any dims (the reader still zero-fills those tiles).
+    constexpr uint32_t d_K_down_tiles = get_compile_time_arg_val(34);
+    constexpr uint32_t d_last_block_w = (d_K_down_tiles > (d_num_blocks - 1) * d_in0_block_w)
+                                            ? d_K_down_tiles - (d_num_blocks - 1) * d_in0_block_w
+                                            : d_in0_block_w;
 
     // CBs
     constexpr uint32_t cb_in0_x = get_named_compile_time_arg_val("cb_in0_x");
@@ -640,6 +720,15 @@ void kernel_main() {
     // Row-major bf16 x staging (x_is_row_major only); tilize input CB. Unused
     // when x is TILE.
     constexpr uint32_t cb_x_rm = get_named_compile_time_arg_val("cb_x_rm");
+#ifdef FUSE_BIAS
+    constexpr uint32_t cb_gate_bias = get_named_compile_time_arg_val("cb_gate_bias");
+    constexpr uint32_t cb_up_bias = get_named_compile_time_arg_val("cb_up_bias");
+    constexpr uint32_t cb_down_bias = get_named_compile_time_arg_val("cb_down_bias");
+#else
+    constexpr uint32_t cb_gate_bias = 0;
+    constexpr uint32_t cb_up_bias = 0;
+    constexpr uint32_t cb_down_bias = 0;
+#endif
 
     CircularBuffer counts_scratch_cb(cb_counts_scratch);
     CircularBuffer idx_scratch_cb(cb_idx_scratch);
@@ -730,7 +819,8 @@ void kernel_main() {
         // gate-silu pass (skipped above) and the plain multiply_phase. cb_in1_up is
         // the unpacker's last SrcA operand (up matmul in1), passed so the partials
         // reconfig (weights df -> Float16_b) actually fires.
-        swiglu_oai_activation_phase<gu_out_block_num_tiles>(cb_in1_up, cb_partials_gu, cb_partials_up, cb_activated);
+        swiglu_oai_activation_phase<gu_out_block_num_tiles, g_in1_per_core_w>(
+            cb_in1_up, cb_partials_gu, cb_partials_up, cb_activated, cb_gate_bias, cb_up_bias);
         (void)cb_gate_intermed;
         (void)cb_up_intermed;
 #else
@@ -769,6 +859,8 @@ void kernel_main() {
             d_out_subblock_w,
             d_out_subblock_num_tiles,
             d_out_block_num_tiles,
-            /*apply_silu_on_final=*/false>(cb_in0_down_full, cb_in1_down, cb_partials_d, cb_out);
+            /*apply_silu_on_final=*/false,
+            /*d_per_core_N=*/d_in1_per_core_w,
+            /*last_block_w=*/d_last_block_w>(cb_in0_down_full, cb_in1_down, cb_partials_d, cb_out, cb_down_bias);
     }  // end chunk loop
 }

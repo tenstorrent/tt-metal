@@ -22,7 +22,7 @@ struct InboundSocketServiceSyncOperation {
     using operation_attributes_t = InboundSocketServiceSyncParams;
     using tensor_args_t = InboundSocketServiceSyncInputs;
     // tokens (always) + metadata (only when metadata_size_bytes > 0).
-    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
     using program_factory_t = std::variant<InboundSocketServiceSyncProgramFactory>;
 
@@ -34,8 +34,12 @@ struct InboundSocketServiceSyncOperation {
 
 }  // namespace ttnn::experimental::prim
 
-namespace tt::tt_metal {
+namespace ttnn {
 class D2DStreamServiceReceiver;
+}  // namespace ttnn
+
+namespace tt::tt_metal {
+using D2DStreamServiceReceiver = ttnn::D2DStreamServiceReceiver;
 }  // namespace tt::tt_metal
 
 namespace ttnn::prim {
@@ -50,6 +54,6 @@ std::vector<ttnn::Tensor> inbound_socket_service_sync(
 // prefill device->device path). The receiver exposes the same getters as
 // H2DStreamService, so it runs the identical device operation.
 std::vector<ttnn::Tensor> inbound_socket_service_sync(
-    const tt::tt_metal::D2DStreamServiceReceiver& service, uint32_t metadata_size_bytes);
+    const ttnn::D2DStreamServiceReceiver& service, uint32_t metadata_size_bytes);
 
 }  // namespace ttnn::prim

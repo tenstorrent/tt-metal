@@ -375,7 +375,7 @@ IndexerScoreDeviceOperation::spec_return_value_t IndexerScoreDeviceOperation::co
     // plane per GQA group (M3). T_out = T, or T/block_size when block-max-pooling.
     const uint32_t T_out = attrs.block_size ? k_shape[2] / attrs.block_size : k_shape[2];
     ttnn::Shape out_shape({q_shape[0], attrs.num_groups, q_shape[2], T_out});
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         out_shape,
         tt::tt_metal::TensorLayout(
             DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), tensor_args.q.memory_config()));

@@ -14,7 +14,7 @@ namespace ttnn::prim {
 struct SplitDeviceOperation {
     using operation_attributes_t = SplitParams;
     using tensor_args_t = SplitInputs;
-    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
     using program_factory_t = std::variant<SplitProgramFactory>;
 

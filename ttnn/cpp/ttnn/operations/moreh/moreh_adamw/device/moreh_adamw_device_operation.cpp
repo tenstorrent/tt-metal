@@ -63,8 +63,8 @@ MorehAdamWDeviceOperation::spec_return_value_t MorehAdamWDeviceOperation::comput
     auto dtype = tensor_args.param_in.dtype();
     auto memory_config = operation_attributes.memory_config;
 
-    std::vector<std::optional<TensorSpec>> result;
-    TensorSpec outSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config));
+    std::vector<std::optional<tt::tt_metal::TensorSpec>> result;
+    tt::tt_metal::TensorSpec outSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config));
 
     if (tensor_args.param_out.has_value()) {
         result.push_back(tensor_args.param_out->tensor_spec());

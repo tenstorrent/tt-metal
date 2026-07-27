@@ -713,6 +713,11 @@ def test_ds_moe(
     request,
     padded_percent,
 ):
+    if device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_2D and tuple(mesh_device.shape) == (4, 2):
+        pytest.skip(
+            "fabric2d mesh-4x2 all-gather hang. Revert this skip when "
+            "https://github.com/tenstorrent/tt-metal/issues/50559 is closed."
+        )
     run_model(
         variant,
         config_only,

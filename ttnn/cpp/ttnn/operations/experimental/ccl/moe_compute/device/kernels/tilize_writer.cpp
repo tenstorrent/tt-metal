@@ -270,7 +270,8 @@ void kernel_main() {
     uint32_t tokens_this_core = core_token_end - core_token_start;
     uint32_t brisc_token_start_runtime = core_token_start + tokens_this_core / 2;
     uint32_t brisc_token_end_runtime = core_token_end;
-    uint32_t brisc_tokens_capacity = tokens_this_core / 2;
+    // ceil(tokens_this_core/2): BRISC's token count; must match tilize_reader.
+    uint32_t brisc_tokens_capacity = tokens_this_core - tokens_this_core / 2;
 
     // Wait for NCRISC to finish reading the mapping tensor
     cb_mapping_tensor.wait_front(num_devices);

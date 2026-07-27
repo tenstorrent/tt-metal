@@ -19,7 +19,7 @@
 namespace ttnn::operations::unary {
 
 struct UnaryDeviceOperation {
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct operation_attributes_t {

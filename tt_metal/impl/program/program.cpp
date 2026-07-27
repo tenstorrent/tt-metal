@@ -45,6 +45,7 @@
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
 #include "impl/context/metal_context.hpp"
+#include "context/metal_env_accessor.hpp"
 #include "impl/context/context_types.hpp"
 #include "hal_types.hpp"
 #include "impl/device/device_impl.hpp"
@@ -110,7 +111,7 @@ size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable
     return MetalContext::instance().hal().get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 }
 
-void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel> kernel, tt::ChipId device_id) {
+void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel> kernel, tt::ChipId physical_chip_id) {
     // Placement rules:
     //  Fast dispatch (tensix):
     //      - tensix kernels cannot be on dispatch cores
@@ -119,7 +120,8 @@ void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel>
     bool slow_dispatch = !(MetalContext::instance().rtoptions().get_fast_dispatch());
 
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    tt::CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
+    tt::CoreType dispatch_core_type =
+        resolve_dispatch_core_type(MetalEnvAccessor(MetalContext::instance().get_env()).impl(), physical_chip_id, dispatch_core_config);
 
     // Kernels used to implement fast dispatch can be placed on dispatch cores
     if (not slow_dispatch and not force_slow_dispatch) {
@@ -129,12 +131,12 @@ void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel>
         bool on_dispatch_core = std::any_of(
             dispatch_cores.begin(),
             dispatch_cores.end(),
-            [&kernel, &dispatch_core_type, &service_claims, device_id](const CoreCoord& dispatch_core) {
+            [&kernel, &dispatch_core_type, &service_claims, physical_chip_id](const CoreCoord& dispatch_core) {
                 if (kernel->get_kernel_core_type() != dispatch_core_type) {
                     return false;
                 }
                 // Claimed service cores are permitted to run user kernels in FD mode.
-                if (service_claims.is_service_core(device_id, dispatch_core)) {
+                if (service_claims.is_service_core(physical_chip_id, dispatch_core)) {
                     return false;
                 }
                 return kernel->is_on_logical_core(dispatch_core);
@@ -486,6 +488,15 @@ std::bitset<MAX_PROCESSOR_TYPES_COUNT> get_kernel_processor_set(const Kernel& ke
 KernelHandle detail::ProgramImpl::add_kernel(
     const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType& programmable_core_type) {
     TT_FATAL(this->compiled_.empty(), "Cannot add kernel to an already compiled program {}", this->id);
+
+    // Metal 2.0 kernels (with named bindings, e.g. dfb::/tensor::/args::) are only legal on Metal 2.0 Programs
+    if (kernel->is_metal2_kernel()) {
+        TT_FATAL(
+            this->created_from_spec_,
+            "Internal error: Metal 2.0 named bindings (dfb::/sem::/tensor::/args::) are only valid in a "
+            "Metal 2.0 Program (created from a ProgramSpec).");
+    }
+
     // Id is unique across all kernels on all core types
     KernelHandle id = this->num_kernels();
     uint32_t index = MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
@@ -711,18 +722,12 @@ void ProgramImpl::reserve_runtime_arg_buffers() {
 }
 
 void ProgramImpl::register_tensor_parameter(
-    const std::string& name,
-    const TensorSpec& spec,
-    bool dynamic_tensor_shape,
-    bool match_padded_shape_only,
-    bool enqueue_invariant) {
+    const std::string& name, const TensorSpec& spec, bool dynamic_tensor_shape, bool match_padded_shape_only) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
     auto [it, inserted] = metal2_registry_->tensor_parameter_layouts.try_emplace(
-        name,
-        Metal2NameRegistry::RegisteredTensorParameter{
-            spec, dynamic_tensor_shape, match_padded_shape_only, enqueue_invariant});
+        name, Metal2NameRegistry::RegisteredTensorParameter{spec, dynamic_tensor_shape, match_padded_shape_only});
     TT_FATAL(inserted, "Duplicate tensor parameter name: {}", name);
 }
 
@@ -757,17 +762,6 @@ bool ProgramImpl::get_tensor_parameter_match_padded_shape_only(const std::string
         return false;
     }
     return it->second.match_padded_shape_only;
-}
-
-bool ProgramImpl::get_tensor_parameter_enqueue_invariant(const std::string& name) const {
-    if (!metal2_registry_) {
-        return false;
-    }
-    auto it = metal2_registry_->tensor_parameter_layouts.find(name);
-    if (it == metal2_registry_->tensor_parameter_layouts.end()) {
-        return false;
-    }
-    return it->second.enqueue_invariant;
 }
 
 std::vector<std::string> ProgramImpl::get_registered_tensor_parameter_names() const {
@@ -1212,6 +1206,12 @@ void detail::ProgramImpl::CircularBufferAllocator::mark_address(
 }
 
 CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<CircularBufferImpl>& circular_buffer) {
+    // Metal 2.0 programs use DataflowBuffers, never legacy circular buffers.
+    TT_FATAL(
+        !this->created_from_spec_,
+        "Cannot add a legacy circular buffer to a Metal 2.0 Program; "
+        "Metal 2.0 Programs use DataflowBuffers, and cannot be modified after construction.");
+
     // Globally allocated circular buffer do not invalidate allocation because their addresses are tracked by memory
     // allocator
     if (not circular_buffer->globally_allocated()) {
@@ -2340,6 +2340,15 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         return;
     }
 
+    // Emule never links a real RISC-V kernel binary -- DispatchCompiledProgramToDevice already skips
+    // this function for Emule, JIT-compiling to x86 in execute_program_emulated instead. Eager callers
+    // (MakeProgramFromSpec/MakeMeshWorkloadFromSpecs) reach compile() directly, so skip here too.
+    if (cluster.get_target_device_type() == tt::TargetDevice::Emule) {
+        compiled_.insert(build_env.build_key());
+        Inspector::program_compile_finished(this, device, build_env.build_key());
+        return;
+    }
+
     TT_FATAL(
         device->is_initialized(),
         "Device needs to be initialized before program {} compilation! Generating headers for banking information is "
@@ -2406,7 +2415,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
-                validate_kernel_placement(force_slow_dispatch, kernel, device->id());
+                validate_kernel_placement(force_slow_dispatch, kernel, device->build_id());
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
                 // Skip the remote round-trip when the ELF is already validly cached locally.
                 if (!remote_kernel_cached(device, kernel)) {
@@ -2442,7 +2451,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         // Local path: parallel build via thread pool.
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
-                validate_kernel_placement(force_slow_dispatch, kernel, device->id());
+                validate_kernel_placement(force_slow_dispatch, kernel, device->build_id());
                 launch_build_step(
                     [&, kernel] {
                         auto [build_options, kernel_hash] = prep_kernel(kernel);
