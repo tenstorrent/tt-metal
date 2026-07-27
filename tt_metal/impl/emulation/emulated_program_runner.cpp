@@ -2631,7 +2631,13 @@ extern "C" void __emule_fabric_teleport(const void* packet_header, const void* p
 // ---------------------------------------------------------------------------
 // setup_core_state: Configure CBs and semaphores per core, build CoreSetup list.
 // ---------------------------------------------------------------------------
-// Initialize CB-sync state on a core from the program's circular buffer list.
+// Initialize CB-sync state on a core: a core is configured for a cb_id iff a
+// circular buffer whose core_ranges() contains it owns that index locally. This
+// mirrors silicon's CircularBufferCommandGenerator::construct_commands (a CB's
+// config is written only to cores in its core_range_set) and blaze's per-grid
+// _cb_descriptors. blaze legitimately shares one cb_id across multiple CBs on
+// DISJOINT grids, so at most one such CB contains a given core — the binding is
+// unambiguous.
 static void init_core_cb_sync(
     tt_emule::Core* core,
     detail::ProgramImpl& impl,
@@ -2639,9 +2645,9 @@ static void init_core_cb_sync(
     std::vector<uint64_t>& persistent_cb_ranges) {
     core->reset_cb_sync();
     // Record this core's globally-allocated (persistent) CB extents so Object-Intent
-    // exempts the kernel's writes anywhere in them (see §12). Its own pass — not folded
-    // into the configure lambda below, which also walks remote pass-2 CBs — to keep the
-    // exempt set exactly the local ones.
+    // exempts the kernel's writes anywhere in them (see §12). Its own pass — kept
+    // separate from the configure lambda below — to keep the exempt set exactly the
+    // local ones.
     for (auto& cb_impl : impl.circular_buffers_on_core(logical_core)) {
         if (cb_impl->globally_allocated()) {
             uint32_t start = cb_impl->address();
@@ -2667,16 +2673,14 @@ static void init_core_cb_sync(
                 lc.x, lc.y, idx, cb_addr, page_size, num_pages, (void*)base);
         }
     };
-    // Pass 1: CBs allocated on this core take precedence (own addresses).
+    // Configure only the CBs whose core_ranges() contain this core (own their
+    // local indices here). A cross-core NOC writer reaches a remote CB via an
+    // explicit noc_async_write address + semaphore, not via a local cb_id, and
+    // blaze declares any CB it get_write_ptr()s on every core that does so — so
+    // that CB's grid already contains this core and is configured here. Binding a
+    // CB whose grid EXCLUDES this core would install the wrong (addr, num_pages)
+    // for a shared cb_id (issue #153).
     for (auto& cb_impl : impl.circular_buffers_on_core(logical_core)) {
-        configure(cb_impl, logical_core);
-    }
-    // Pass 2: register the remaining program CBs at their global L1 address so a
-    // kernel can get_write_ptr() a CB allocated only on a remote core (silicon CB
-    // addresses are program-global). Needed for multi-core topk, where local cores
-    // NOC-write into the final core's final_*_cb. Used only as cross-core NOC
-    // targets here; the masked L1 offset is what __emule_resolve_noc_addr routes.
-    for (auto& cb_impl : impl.circular_buffers()) {
         configure(cb_impl, logical_core);
     }
 }
