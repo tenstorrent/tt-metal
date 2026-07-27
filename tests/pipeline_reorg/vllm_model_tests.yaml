@@ -130,10 +130,12 @@
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
-# [WH-T3K] Gemma4-31B: serve max_model_len=32768. GEMMA4_MAX_TOKENS_ALL_USERS
-# must match that (see Run server step) — a 256k all-user pool OOMs DRAM
-# on Wormhole during KV init (run 30270375854). Prior decode hang tracked
-# in https://github.com/tenstorrent/tt-metal/issues/49494
+# [WH-T3K] Gemma4-31B: Wormhole T3K (LoudBox/QuietBox) has 12 GB GDDR6
+# per ASIC vs BH P150 32 GB — do not mirror BH QB2/LB 256k serve.
+# max_model_len=32768 + full-ISL chunk OOMs prefill scratch after KV
+# fill (run 30291376571); 256k pool OOMs at KV init (30270375854).
+# Serve 16k with chunked prefill=2048; GEMMA4_MAX_TOKENS_ALL_USERS
+# must match max_model_len (Run server step). Decode hang #49494.
 - name: "Gemma4-31B"
   model: google/gemma-4-31B-it
   server-timeout: 45
@@ -141,7 +143,7 @@
   mesh-device: T3K
   arch: arch-wormhole_b0
   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D"}'
-  additional-server-args: "--max_model_len 32768 --max_num_seqs 1 --async-scheduling"
+  additional-server-args: "--max_model_len 16384 --max_num_seqs 1 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --async-scheduling"
   multimodal: false
   skus:
     wh_llmbox:

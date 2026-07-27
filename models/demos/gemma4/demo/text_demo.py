@@ -1386,7 +1386,8 @@ _DEMO_PREFILL_LENGTHS = [128, 4096]
 #       E2B/E4B/12B: unbounded through 256k
 #       26B-A4B/31B: unbounded through 64k; bounded @ 128k+ (chunk=2048);
 #         unbounded 128k multi-chunk collapses to "lapped…"
-#     P150 (≤12B): chunked through 256k; auto-bound above ~32k–64k
+#     P150 (≤12B): E2B/E4B unbounded through 256k; 12B bounded+chunked @ ≥64k
+#         through full HF 256k
 #   Override: GEMMA4_BOUNDED_SLIDING, GEMMA4_GEN_PREFILL_CHUNK,
 #   GEMMA4_DEMO_SINGLE_CHUNK (avoid for quality).
 #   Not gated by --max-prefill (unit-test bucket cap only).

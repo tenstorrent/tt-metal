@@ -57,7 +57,7 @@ Legend: 🟢 fully supported · 🟡 supported with known issues / limitations �
 [^gemma4-lc]: Long-context via `models/demos/gemma4/demo/text_demo_v2.py` (`-k long-context-{4k,32k,64k,128k,256k}`) — reports **TTFT and decode tok/s** (long-context `text_demo.py` only logs TTFT). Same `GEMMA4_LONG_CONTEXT_POLICY` in both demos. **Coherence target on QB2 + LoudBox for 12B and 31B: 4k–128k** (256k may allocate; 31B/26B quality not a target). QB2 — E2B/E4B unbounded through 256k; 12B/26B-A4B unbounded through 128k, bounded(+chunked) at 256k; 31B bounded from 64k (chunk=2048 at ≥128k). LoudBox / P150x8 — E2B/E4B/12B unbounded through 256k; **31B/26B-A4B auto-bounded at 128k** with chunk=2048. Defaults: `GEMMA4_HOST_SAMPLE=1`; do not set `GEMMA4_DEMO_SINGLE_CHUNK=1`.
 [^galaxy]: Galaxy (4×8) is not wired for Gemma4 yet; BH Galaxy e2e is disabled pending fabric / ethernet bring-up.
 
-The 26B-A4B and 31B variants are too large for single-device N150/P150 or N300. Prefer Blackhole QB2 (TP=4) or LoudBox (TP=8) for those; Wormhole T3K (TP=8) remains the supported WH multi-chip path (vLLM on WH-T3K serves 31B at `max_model_len=32768`). On single **P150**, run E2B / E4B / 12B through 256k (12B uses bounded+chunked automatically).
+The 26B-A4B and 31B variants are too large for single-device N150/P150 or N300. Prefer Blackhole QB2 (TP=4, 128 GB GDDR) or LoudBox (TP=8, 256 GB GDDR) for long-context serve; Wormhole T3K (TP=8, ~12 GB/ASIC) remains the supported WH multi-chip path (vLLM on WH-T3K serves 31B at `max_model_len=16384` with chunked prefill=2048 — do not mirror BH 256k). On single **P150**, run E2B / E4B / 12B through 256k (12B uses bounded+chunked automatically).
 
 ## Prerequisites
 

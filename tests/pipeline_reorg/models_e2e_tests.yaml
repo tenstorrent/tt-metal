@@ -598,6 +598,9 @@
     # wh_n300:
     #   timeout: 15
     #   tier: 3
+    bh_p150:
+      timeout: 8
+      tier: 3
     bh_p300:
       timeout: 5
       tier: 3
@@ -687,6 +690,11 @@
   model: gemma-4-12b
   model_family: Gemma
   skus:
+    # Single Blackhole P150: short demo + unit PCC. Full ISL through 256k is
+    # supported via bounded sliding + chunked prefill (see README / policy).
+    bh_p150:
+      timeout: 20
+      tier: 2
     bh_quietbox_2:
       timeout: 22
       tier: 1
