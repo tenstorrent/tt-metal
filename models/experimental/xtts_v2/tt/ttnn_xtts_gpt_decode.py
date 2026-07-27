@@ -216,6 +216,43 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
         x = self._layer_norm(x, self.params["ln_f"])
         return self._layer_norm(x, self.params["final_norm"])
 
+    def prefill(self, prefix_emb):
+        """Fill the KV-cache for prompt positions 0..P-1 in ONE batched pass over the P prompt tokens
+        (ttnn.fill_cache), instead of P single-token decode steps -- each layer's K/V weights are read
+        once, not P times. Latents are discarded (only the caches seed decode). Eager (not traced); run
+        after reset_caches() and BEFORE capture() (allocating buffers under a live trace corrupts it).
+        prefix_emb: torch [1, P, 1024]."""
+        cfg = self.config
+        E, nh, dh = cfg.n_embd, cfg.n_head, cfg.head_dim
+        P = prefix_emb.shape[1]
+        x = ttnn.from_torch(
+            prefix_emb.contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            mesh_mapper=self.mesh_mapper,
+        )
+        for li in range(cfg.n_layer):
+            b = self.params["blocks"][li]
+            # multi-token pass -> interleaved LayerNorm (the width-sharded decode path is single-token only)
+            h = b["ln_1"](x, sharded=False, compute_kernel_config=self.compute_kernel_config)
+            qkv = self._linear(h, b["c_attn"])  # [1, P, 3*E]
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                ttnn.reshape(qkv, (1, 1, P, 3 * E)),
+                num_heads=nh,
+                num_kv_heads=nh,
+                transpose_k_heads=False,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )  # each [1, nh, P, dh]
+            ttnn.fill_cache(self.k_cache[li], k, 0)  # write positions 0..P-1 in one shot
+            ttnn.fill_cache(self.v_cache[li], v, 0)
+            attn = ttnn.transformer.scaled_dot_product_attention(
+                q, k, v, is_causal=True, scale=self.scale, compute_kernel_config=self.compute_kernel_config
+            )
+            attn = ttnn.reshape(ttnn.experimental.nlp_concat_heads(attn), (1, P, E))  # fused head-merge
+            x = ttnn.add(x, self._linear(attn, b["attn_proj"]))
+            x = ttnn.add(x, self._mlp(b["ln_2"](x, sharded=False, compute_kernel_config=self.compute_kernel_config), b))
+
     def reset_caches(self):
         for c in self.k_cache + self.v_cache:
             ttnn.copy(ttnn.zeros_like(c, memory_config=ttnn.DRAM_MEMORY_CONFIG), c)
@@ -227,15 +264,17 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
         ttnn.copy_host_to_device_tensor(ttnn.from_torch(torch.tensor([pos], dtype=torch.int32)), self._pos)
 
     def capture(self):
-        """Compile (warmup) then capture the decode step into a trace. Resets caches after."""
-        self.set_pos(0)
+        """Compile (warmup) then capture the decode step into a trace. Warms at a scratch slot
+        (max_seq-1, never a real decode position) and does NOT zero the cache, so capture() can run
+        AFTER prefill() without clobbering the prompt's K/V. Allocating buffers under a live trace
+        corrupts it, so prefill() must run before capture(). Teacher-forced callers reset themselves."""
+        self.set_pos(self.max_seq - 1)
         self._step_ops(self._in)  # warmup compile (trace cannot compile new programs)
         ttnn.synchronize_device(self.device)
         self.trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
         self._out = self._step_ops(self._in)
         ttnn.end_trace_capture(self.device, self.trace_id, cq_id=0)
         ttnn.synchronize_device(self.device)
-        self.reset_caches()
 
     def step_device(self, emb_dev, pos):
         """Device-in -> device-out decode primitive: copy the (device) embedding into the stable
