@@ -132,7 +132,7 @@ CoreCoord get_output_compute_grid_size(
             conv_config.core_grid.has_value(),
             "When override_output_sharding_config is set to true, core_grid must have a value.");
         TT_FATAL(
-            input_parallel_config.shard_scheme == ttnn::TensorMemoryLayout::BLOCK_SHARDED,
+            input_parallel_config.shard_scheme == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
             "Output sharding config override is only supported for BLOCK_SHARDED layout.");
         auto override_compute_grid_size = conv_config.core_grid.value().bounding_box().grid_size();
         TT_FATAL(
@@ -245,13 +245,13 @@ ParallelConfig determine_output_parallel_config(
     ParallelConfig output_parallel_config = input_parallel_config;
     if (!is_mm_conv) {
         const uint32_t out_channels_ntiles = tt::div_up(out_channels, tt::constants::TILE_WIDTH);
-        if (input_parallel_config.shard_scheme == ttnn::TensorMemoryLayout::WIDTH_SHARDED) {
+        if (input_parallel_config.shard_scheme == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
             uint32_t max_num_cores = compute_grid_size.x * compute_grid_size.y;
             output_parallel_config.grid = tt::tt_metal::num_cores_to_corerangeset(
                 find_closest_largest_divisor_with_num_padding(out_channels_ntiles, max_num_cores),
                 compute_grid_size,
                 true);
-        } else if (input_parallel_config.shard_scheme == ttnn::TensorMemoryLayout::BLOCK_SHARDED) {
+        } else if (input_parallel_config.shard_scheme == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
             const uint32_t start_divisor_c =
                 block_shard_orientation == ShardOrientation::COL_MAJOR ? compute_grid_size.y : compute_grid_size.x;
             uint32_t num_cores_c = find_closest_largest_divisor_with_num_padding(out_channels_ntiles, start_divisor_c);
@@ -661,7 +661,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
     uint32_t out_channels,
     bool is_mm_conv) {
     const ttnn::Tensor& input_tensor = input_tensor_;  // tensor to return
-    bool input_tensor_on_device = tt::tt_metal::is_device_tensor(input_tensor_);
+    bool input_tensor_on_device = ttnn::is_device_tensor(input_tensor_);
     bool needs_shard_or_reshard = false;
     if (conv_config.override_sharding_config && conv_config.reshard_if_not_optimal) {
         TT_ASSERT(
@@ -817,7 +817,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
     bool is_mm_conv,
     bool auto_shard) {
     ttnn::Tensor input_tensor = input_tensor_;  // tensor to return
-    bool input_tensor_on_device = tt::tt_metal::is_device_tensor(input_tensor_);
+    bool input_tensor_on_device = ttnn::is_device_tensor(input_tensor_);
     auto compute_grid_size = device->compute_with_storage_grid_size();
 
     auto [input_padded_shape, input_tensor_sharded_memory_config, needs_shard_or_reshard] =
@@ -870,8 +870,8 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                         tt::tt_metal::ShardSpec(shard_spec.grid, shard_spec.shape, shard_spec.orientation));
                     alignment = tt::tt_metal::Alignment{shard_spec.shape[0], shard_spec.shape[1]};
                 }
-                Tensor resharded_input_tensor = tt::tt_metal::create_device_tensor(
-                    TensorSpec(
+                Tensor resharded_input_tensor = ttnn::create_device_tensor(
+                    tt::tt_metal::TensorSpec(
                         input_tensor.logical_shape(),
                         tt::tt_metal::TensorLayout(
                             input_tensor.dtype(),
@@ -892,9 +892,8 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                 if (input_padded_shape[-2] != tensor_height || input_padded_shape[-1] != tensor_width) {
                     input_tensor = ttnn::pad(
                         input_tensor,
-                        tt::tt_metal::Array4D(
-                            {input_shape[0], input_shape[1], input_padded_shape[-2], input_padded_shape[-1]}),
-                        tt::tt_metal::Array4D({0, 0, 0, 0}),
+                        ttnn::Array4D({input_shape[0], input_shape[1], input_padded_shape[-2], input_padded_shape[-1]}),
+                        ttnn::Array4D({0, 0, 0, 0}),
                         0);
                 }
             };
@@ -919,8 +918,8 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                     tt::tt_metal::ShardSpec(shard_spec.grid, shard_spec.shape, shard_spec.orientation));
                 alignment = tt::tt_metal::Alignment{shard_spec.shape[0], shard_spec.shape[1]};
 
-                Tensor resharded_input_tensor = tt::tt_metal::create_device_tensor(
-                    TensorSpec(
+                Tensor resharded_input_tensor = ttnn::create_device_tensor(
+                    tt::tt_metal::TensorSpec(
                         input_tensor.logical_shape(),
                         tt::tt_metal::TensorLayout(
                             input_tensor.dtype(),
@@ -1483,7 +1482,7 @@ ttnn::Tensor fold_tensor(
 
     // Move to device if needed
     ttnn::Tensor tensor_on_device = tensor;
-    if (!tt::tt_metal::is_device_tensor(tensor_on_device)) {
+    if (!ttnn::is_device_tensor(tensor_on_device)) {
         tensor_on_device = ttnn::to_device(tensor_on_device, device, ttnn::DRAM_MEMORY_CONFIG);
     }
 

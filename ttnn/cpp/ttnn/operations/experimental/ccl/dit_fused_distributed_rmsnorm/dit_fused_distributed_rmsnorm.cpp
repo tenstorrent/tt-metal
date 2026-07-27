@@ -109,7 +109,7 @@ std::optional<ttnn::Tensor> dit_fused_distributed_norm_create_stats_buffer_impl(
     }
     // Same spec compute_output_specs allocates, so the pre-allocated buffer matches the op exactly.
     const auto spec = ttnn::experimental::prim::make_stats_tensor_spec(sizing);
-    return tt::tt_metal::create_device_tensor(spec, &const_cast<MeshDevice&>(mesh_device));
+    return ttnn::create_device_tensor(spec, &const_cast<MeshDevice&>(mesh_device));
 }
 
 }  // namespace

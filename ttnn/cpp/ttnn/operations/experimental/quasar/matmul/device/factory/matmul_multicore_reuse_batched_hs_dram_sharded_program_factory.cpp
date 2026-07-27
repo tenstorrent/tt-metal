@@ -607,7 +607,7 @@ ProgramDescriptor MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create
 
     const auto& a = input_tensors.at(0).mesh_tensor();
     const auto& b = input_tensors.at(1).mesh_tensor();
-    auto bias = tt::tt_metal::as_optional_mesh_tensor(optional_input_tensors.at(0));
+    auto bias = ttnn::as_optional_mesh_tensor(optional_input_tensors.at(0));
     const auto& output = output_tensors.at(0).mesh_tensor();
     const auto& ashape = a.padded_shape();
     const auto& bshape = b.padded_shape();

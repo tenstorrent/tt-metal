@@ -70,6 +70,48 @@ std::vector<std::string> tokenize_flags(const std::string& flags) {
     return tokens;
 }
 
+std::vector<std::string> build_gpp_argv(
+    const std::string& gpp,
+    const std::string& opt_level,
+    const std::string& cflags,
+    const std::string& includes,
+    const std::vector<std::string>& defines,
+    const std::string& src,
+    GppAction action,
+    const std::string& out_path,
+    const std::string& dep_path) {
+    std::vector<std::string> args = tokenize_flags(gpp);
+    args.push_back("-" + opt_level);
+    auto append = [&args](const std::string& flags) {
+        auto toks = tokenize_flags(flags);
+        args.insert(args.end(), std::make_move_iterator(toks.begin()), std::make_move_iterator(toks.end()));
+    };
+    append(cflags);
+    append(includes);
+    // Each define is one argv element, passed verbatim (no shell) — this is what makes
+    // map-valued defines like -DKERNEL_COMPILE_TIME_ARG_MAP={"cb_in0",1},... survive.
+    args.insert(args.end(), defines.begin(), defines.end());
+    switch (action) {
+        case GppAction::Compile:
+            args.push_back("-c");
+            args.push_back("-o");
+            args.push_back(out_path);
+            args.push_back(src);
+            args.push_back("-MF");
+            args.push_back(dep_path);
+            break;
+        case GppAction::Preprocess:
+            // Keep line markers: the .ii is later compiled with -fpreprocessed, which uses them to
+            // keep -Werror suppressed inside system headers and fatal only on kernel code.
+            args.push_back("-E");
+            args.push_back("-o");
+            args.push_back(out_path);
+            args.push_back(src);
+            break;
+    }
+    return args;
+}
+
 bool exec_command(const std::vector<std::string>& args, const std::string& working_dir, const std::string& log_file) {
     if (args.empty()) {
         return false;

@@ -39,7 +39,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     PROMPT_1K_PATH,
     PROMPT_25K_PATH,
@@ -509,8 +509,6 @@ def test_prefill_block_loop(
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=True)
     rope_tensors = rope_setup.get_rope_tensors(isl_total)
     position_ids = torch.arange(isl_total, dtype=torch.long).unsqueeze(0)
-    kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
-
     # Shard initial input to device
     h_tt = ttnn.from_torch(
         h0.unsqueeze(0),  # [1, 1, 1024, 7168]
@@ -563,8 +561,9 @@ def test_prefill_block_loop(
 
     for iteration in range(1, num_iters + 1):
         # Fresh KV cache each iteration (prefill writes full seq range)
-        tt_kvpe_cache = init_kvpe_cache(
-            kvpe_cache_head_dim=kvpe_cache_head_dim,
+        tt_kvpe_cache = init_mla_kv_cache(
+            cache_format=MlaKvCacheFormat.BFP8_TILE,
+            hf_config=config,
             mesh_device=mesh_device,
             seq_len=isl_total,
             mesh_shape=mesh_shape,
@@ -592,7 +591,7 @@ def test_prefill_block_loop(
         if skip_reference:
             logger.info(f"  Iter {iteration:>3d}/{num_iters}  TT forward done (perf-only, no PCC)")
             h_tt = h_tt_next
-            ttnn.deallocate(tt_kvpe_cache)
+            ttnn.deallocate(tt_kvpe_cache.storage)
             continue
 
         # --- PCC ---
@@ -643,7 +642,7 @@ def test_prefill_block_loop(
         h_tt = h_tt_next
 
         # --- Cleanup KV cache ---
-        ttnn.deallocate(tt_kvpe_cache)
+        ttnn.deallocate(tt_kvpe_cache.storage)
 
     if skip_reference:
         logger.info("skip_reference=True: perf-only run complete (no PCC/plot/summary)")

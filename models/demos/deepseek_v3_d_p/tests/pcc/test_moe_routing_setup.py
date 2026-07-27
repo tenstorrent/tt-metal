@@ -114,6 +114,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 @pytest.mark.parametrize("padded_percent", [0, 50], ids=lambda p: f"pad{p}")
 def test_prep_dispatch_combine(
     mesh_device,
+    device_params,
     seq_len_per_chip,
     emb_dim,
     num_routed_experts,
@@ -149,6 +150,11 @@ def test_prep_dispatch_combine(
             dispatch_group_size dimension). Equals global_expert_offsets minus the
             per-source-device local offset.
     """
+    if device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_2D and tuple(mesh_device.shape) == (4, 2):
+        pytest.skip(
+            "fabric2d mesh-4x2 all-gather hang. Revert this skip when "
+            "https://github.com/tenstorrent/tt-metal/issues/50559 is closed."
+        )
     torch.manual_seed(42)
     num_devices = mesh_device.get_num_devices()
 

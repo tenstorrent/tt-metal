@@ -51,7 +51,16 @@ class GateComputeMode(Enum):
 class TtMoEGateConfig:
     # gate_params
 
-    ccl_config: dict = field(default_factory=lambda: {"DISPATCH_AXIS": 0, "TP_AXIS": 1, "NUM_LINKS": 2})
+    ccl_config: dict = field(
+        default_factory=lambda: {
+            "DISPATCH_AXIS": 0,
+            "TP_AXIS": 1,
+            "NUM_LINKS": 2,
+            # CCL topology for the TP-axis gate all-reduce. Ring requires the TP axis to be physically
+            # wrapped (FABRIC_2D_TORUS_X / _XY); set from TtMoe's col_topology. Defaults to Linear.
+            "TOPOLOGY": ttnn.Topology.Linear,
+        }
+    )
     mm_configs: dict = field(
         default_factory=lambda: {
             # Keyed by (sp_dim, per_device_emb_dim, n_routed_experts); forward() looks up the tuple.
@@ -549,7 +558,7 @@ class TtMoEGatePrefill(LightweightModule):
                 num_links=self.config.ccl_config["NUM_LINKS"],
                 math_op=ttnn.ReduceType.Sum,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-                topology=ttnn.Topology.Linear,
+                topology=self.config.ccl_config.get("TOPOLOGY", ttnn.Topology.Linear),
             )
         return logits
 

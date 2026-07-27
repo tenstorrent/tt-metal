@@ -16,7 +16,7 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 
 using namespace ttnn::operations::normalization;
 
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_shape_dims(const tt::tt_metal::Tensor& x) {
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_shape_dims(const ttnn::Tensor& x) {
     const auto& shape = x.padded_shape();
     const auto& tile = x.tensor_spec().tile();
     return {shape[-4], shape[-3], shape[-2] / tile.get_height(), shape[-1] / tile.get_width()};
@@ -26,7 +26,7 @@ void populate_runtime_arguments(
     tt::tt_metal::KernelDescriptor& reader_desc,
     tt::tt_metal::KernelDescriptor& writer_desc,
     tt::tt_metal::KernelDescriptor& compute_desc,
-    CoreCoord compute_with_storage_grid_size,
+    tt::tt_metal::CoreCoord compute_with_storage_grid_size,
     bool any_float32,
     const BatchNormOperation::operation_attributes_t& operation_attributes,
     const BatchNormOperation::tensor_args_t& tensor_args,

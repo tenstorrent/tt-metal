@@ -99,19 +99,19 @@ RotateDeviceOperation::spec_return_value_t RotateDeviceOperation::compute_output
                 operation_attributes.memory_config.memory_layout(),
                 operation_attributes.memory_config.buffer_type(),
                 shard_spec);
-            return TensorSpec(
+            return tt::tt_metal::TensorSpec(
                 output_shape,
                 tt::tt_metal::TensorLayout(input.dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), mem_config));
         }
         if (operation_attributes.memory_config.nd_shard_spec().has_value()) {
-            return TensorSpec(
+            return tt::tt_metal::TensorSpec(
                 output_shape,
                 tt::tt_metal::TensorLayout(
                     input.dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), operation_attributes.memory_config));
         }
     }
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout::fromPaddedShape(
             input.dtype(),

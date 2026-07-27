@@ -220,24 +220,6 @@
   team: models
 
 # Wormhole models with extended timeouts / special commands
-- name: stable_diffusion_xl_base nightly WH
-  cmd: |
-    export TT_MM_THROTTLE_PERF=5
-    unset HF_HUB_OFFLINE
-    exit_code=0
-    $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/lora || exit_code=$?
-    $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/refiner || exit_code=$?
-    $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/vae || exit_code=$?
-    $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base --ignore=tests/nightly/single_card/stable_diffusion_xl_base/lora --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/vae || exit_code=$?
-    exit $exit_code
-  model: stable_diffusion_xl_base
-  skus:
-    wh_n150:
-      timeout: 120
-    wh_n300:
-      timeout: 120
-  owner_id: U08E1JCMAJF # Marko Bezulj (CODEOWNERS @mbezuljTT)
-  team: models
 - name: stable_diffusion nightly
   cmd: |
     export TT_MM_THROTTLE_PERF=5
@@ -262,21 +244,4 @@
     wh_n300_civ2:
       timeout: 30
   owner_id: U088413NP0Q # Ashai Reddy Ginuga
-  team: models
-
-# Blackhole frequent model tests
-- name: stable_diffusion_xl_base nightly BH
-  cmd: |
-    export TT_MM_THROTTLE_PERF=5
-    exit_code=0
-    $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/lora || exit_code=$?
-    $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/refiner || exit_code=$?
-    $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/vae || exit_code=$?
-    $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base --ignore=tests/nightly/single_card/stable_diffusion_xl_base/lora --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/vae || exit_code=$?
-    exit $exit_code
-  model: stable_diffusion_xl_base
-  skus:
-    bh_p150b_civ2:
-      timeout: 120
-  owner_id: U08E1JCMAJF # Marko Bezulj (CODEOWNERS @mbezuljTT)
   team: models

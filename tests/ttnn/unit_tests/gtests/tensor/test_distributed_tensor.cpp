@@ -22,8 +22,8 @@ using ::testing::ElementsAre;
 using ::testing::FloatEq;
 using ::testing::Pointwise;
 
-TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype) {
-    return TensorSpec(shape, TensorLayout(dtype, Layout::ROW_MAJOR, MemoryConfig{}));
+tt::tt_metal::TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype) {
+    return tt::tt_metal::TensorSpec(shape, TensorLayout(dtype, Layout::ROW_MAJOR, MemoryConfig{}));
 }
 
 // Returns the number of unique buffers in host-side multi-device tensor.
@@ -44,8 +44,8 @@ TEST_F(TensorDistributionTest, DistributeToDevice) {
     auto mapper = replicate_tensor_to_mesh_mapper(*mesh_device_);
 
     // If no device is provided, the tensor is kept on host.
-    EXPECT_TRUE(distribute_tensor(input_tensor, *mapper).storage_type() == StorageType::HOST);
-    EXPECT_TRUE(distribute_tensor(input_tensor, *mapper, *mesh_device_).storage_type() != StorageType::HOST);
+    EXPECT_TRUE(distribute_tensor(input_tensor, *mapper).storage_type() == ttnn::StorageType::HOST);
+    EXPECT_TRUE(distribute_tensor(input_tensor, *mapper, *mesh_device_).storage_type() != ttnn::StorageType::HOST);
 
     // Tensor topology is a single device
     const auto& tensor_topology = input_tensor.tensor_topology();

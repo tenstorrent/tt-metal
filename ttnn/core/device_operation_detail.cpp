@@ -34,7 +34,7 @@ using MeshCoordinateRangeSet = tt::tt_metal::distributed::MeshCoordinateRangeSet
 // The only reason it was templated was to call visit_object_of_type<Tensor> on tensor_args.
 // Callers now extract tensors first and pass them as a vector.
 
-static bool is_fully_replicated(const tt::tt_metal::Tensor& tensor) {
+static bool is_fully_replicated(const ttnn::Tensor& tensor) {
     for (const auto& placement : tensor.tensor_topology().placements()) {
         if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placement)) {
             return false;
@@ -46,9 +46,8 @@ static bool is_fully_replicated(const tt::tt_metal::Tensor& tensor) {
 std::pair<
     ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
     tt::tt_metal::distributed::MeshShape>
-compute_output_placements_and_shape(
-    const std::vector<std::reference_wrapper<const tt::tt_metal::Tensor>>& tensors) {
-    using Tensor = tt::tt_metal::Tensor;
+compute_output_placements_and_shape(const std::vector<std::reference_wrapper<const ttnn::Tensor>>& tensors) {
+    using Tensor = ttnn::Tensor;
     using Placement = tt::tt_metal::distributed::MeshMapperConfig::Placement;
     using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
     using Replicate = tt::tt_metal::distributed::MeshMapperConfig::Replicate;
@@ -178,9 +177,9 @@ static bool is_subset_of(const std::vector<MeshCoordinate>& a, const std::vector
 }
 
 std::vector<MeshCoordinate> extract_tensor_coordinates_impl(
-    const std::vector<std::reference_wrapper<const tt::tt_metal::Tensor>>& tensors,
+    const std::vector<std::reference_wrapper<const ttnn::Tensor>>& tensors,
     tt::tt_metal::distributed::MeshDevice* mesh_device) {
-    using Tensor = tt::tt_metal::Tensor;
+    using Tensor = ttnn::Tensor;
 
     // If no tensor is found, return zero coordinate
     if (tensors.empty()) {
