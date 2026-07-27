@@ -22,7 +22,7 @@
   skus:
     wh_llmbox:
       timeout: 10
-  owner_id: U013121KDH9 # Austin Ho
+  owner_id: U087S3K319A # Austin Ho
   team: scaleout
 
 - name: t3k_fabric_unit_tests

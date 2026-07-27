@@ -27,3 +27,10 @@ teams:
   umd:      @aleksamarkovicTT  # U09769N29BN, Aleksa Marković
   ttsim:    @mcraigheadTT      # U08PR765YJ1, Matt Craighead
   triage:   @onenezicTT        # U09UX6JLA3U, Ognjen Nenezic
+
+# Metal-infra blacklist: test owners whose tests must be reassigned to the team
+# lead regardless of Slack activity. The escalation workflow removes these IDs from the active set so their
+# tests get flagged. Each entry is a Slack user ID with a "# Name" comment.
+blacklist:
+  - U07J3K6KS1K # Bryan Lozano
+  - U0883RN6CRE # William Ly
