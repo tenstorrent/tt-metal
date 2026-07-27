@@ -388,6 +388,10 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     std::unordered_set<SubDeviceId> sub_device_ids = mesh_workload.impl().determine_sub_device_ids(mesh_device_);
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
     SubDeviceId sub_device_id = *(sub_device_ids.begin());
+    auto dispatch_core_config = MetalContext::instance(this->device()->impl().get_context_id())
+                                    .get_dispatch_core_manager()
+                                    .get_dispatch_core_config();
+    CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
     auto mesh_device_id = mesh_device_->id();
     auto& sysmem_manager = this->reference_sysmem_manager();
     if (!sysmem_manager.get_bypass_mode()) {
@@ -510,7 +514,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_unicast_wptr(),
             expected_num_workers_completed,
             this->virtual_program_dispatch_core(),
-            this->dispatch_core_type_,
+            dispatch_core_type,
             sub_device_id,
             dispatch_metadata,
             mesh_workload.impl().get_program_binary_status(mesh_device_id),
@@ -1184,15 +1188,14 @@ void FDMeshCommandQueue::write_program_cmds_to_subgrid(
     bool stall_first,
     bool stall_before_program,
     std::unordered_set<uint32_t>& chip_ids_in_workload) {
+    auto dispatch_core_config = MetalContext::instance(mesh_device_->impl().get_context_id())
+                                    .get_dispatch_core_manager()
+                                    .get_dispatch_core_config();
+    CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
     for_each_local(mesh_device_, sub_grid, [&](const auto& coord) {
         auto device = mesh_device_->impl().get_device(coord);
         program_dispatch::write_program_command_sequence(
-            program_cmd_seq,
-            device->sysmem_manager(),
-            id_,
-            this->dispatch_core_type_,
-            stall_first,
-            stall_before_program);
+            program_cmd_seq, device->sysmem_manager(), id_, dispatch_core_type, stall_first, stall_before_program);
         chip_ids_in_workload.insert(device->id());
     });
 }
