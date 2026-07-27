@@ -481,6 +481,7 @@
     export PREFILL_CHUNKED=1
     export PREFILL_CHUNK_SIZE=5120
     export PREFILL_TPS_ITERS=1
+    export PREFILL_STANDALONE_CHUNKED_PCC=0.99
     mpirun --pernode --tag-output bash -lc '
       python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
     '
