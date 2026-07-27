@@ -76,8 +76,8 @@ constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 50;
 
 // Small (sub-~20us) host-latency benchmarks show meaningful run-to-run variance (allocator/TLB
 // state, background load). To keep the golden non-flaky, those are run with multiple repetitions
-// and the compare uses the median aggregate. Iteration count is reduced for repeated benchmarks so
-// total runtime stays comparable. The compare script strips the "_median" suffix automatically.
+// and the compare uses the min aggregate. Iteration count is reduced for repeated benchmarks so
+// total runtime stays comparable. The compare script strips the "_min" suffix automatically.
 constexpr uint32_t REPETITIONS = 7;
 constexpr uint32_t REP_ITERATIONS = 300;
 
@@ -269,7 +269,7 @@ distributed::MeshWorkload make_configured_workload(
 //////////////////////////////////////////////////////////////////////////////////////////
 // #5 Host program building: time ProgramSpec descriptor assembly (pure host, no compile).
 //////////////////////////////////////////////////////////////////////////////////////////
-void BM_program_spec_build(benchmark::State& state, ProgramShape shape) {
+void BM_program_spec_build(benchmark::State& state, const ProgramShape& shape) {
     // Device is opened only so HAL (arch name / worker grid) is initialized; the spec build
     // itself is pure host work and does not touch the device.
     auto device = open_device();
@@ -280,7 +280,7 @@ void BM_program_spec_build(benchmark::State& state, ProgramShape shape) {
 //////////////////////////////////////////////////////////////////////////////////////////
 // #6 Enqueue program: time the host command construction of EnqueueMeshWorkload.
 //////////////////////////////////////////////////////////////////////////////////////////
-void BM_enqueue_program(benchmark::State& state, ProgramShape shape) {
+void BM_enqueue_program(benchmark::State& state, const ProgramShape& shape) {
     auto device = open_device();
     auto& cq = device->mesh_command_queue();
     distributed::MeshWorkload workload = make_configured_workload(*device, shape, build_spec(shape));
@@ -297,7 +297,7 @@ void BM_enqueue_program(benchmark::State& state, ProgramShape shape) {
 //////////////////////////////////////////////////////////////////////////////////////////
 // #7 Mutable updates: time UpdateProgramRunArgs (RTA + common RTA refresh) on a built Program.
 //////////////////////////////////////////////////////////////////////////////////////////
-void BM_run_args_update(benchmark::State& state, ProgramShape shape) {
+void BM_run_args_update(benchmark::State& state, const ProgramShape& shape) {
     auto device = open_device();
     const SpecBundle bundle = build_spec(shape);
     distributed::MeshWorkload workload = make_configured_workload(*device, shape, bundle);
@@ -317,7 +317,7 @@ void BM_run_args_update(benchmark::State& state, ProgramShape shape) {
 //////////////////////////////////////////////////////////////////////////////////////////
 // #7 Mutable updates: time UpdateProgramRunArgs DFB size overrides (entry_size / num_entries).
 //////////////////////////////////////////////////////////////////////////////////////////
-void BM_dfb_override(benchmark::State& state, ProgramShape shape) {
+void BM_dfb_override(benchmark::State& state, const ProgramShape& shape) {
     auto device = open_device();
     const SpecBundle bundle = build_spec(shape);
     distributed::MeshWorkload workload = make_configured_workload(*device, shape, bundle);
@@ -390,7 +390,7 @@ void BM_enqueue_read_buffer(benchmark::State& state, BufferType buffer_type) {
 //////////////////////////////////////////////////////////////////////////////////////////
 // #6 Trace: time trace capture command construction (BeginTraceCapture -> enqueue -> end).
 //////////////////////////////////////////////////////////////////////////////////////////
-void BM_trace_capture(benchmark::State& state, ProgramShape shape) {
+void BM_trace_capture(benchmark::State& state, const ProgramShape& shape) {
     auto device = open_device();
     constexpr std::size_t cq_id = 0;
     auto& cq = device->mesh_command_queue(cq_id);
@@ -423,7 +423,7 @@ void BM_trace_capture(benchmark::State& state, ProgramShape shape) {
 //////////////////////////////////////////////////////////////////////////////////////////
 // #6 Trace: time replay_mesh_trace host cost for a captured workload.
 //////////////////////////////////////////////////////////////////////////////////////////
-void BM_trace_replay(benchmark::State& state, ProgramShape shape) {
+void BM_trace_replay(benchmark::State& state, const ProgramShape& shape) {
     auto device = open_device();
     constexpr std::size_t cq_id = 0;
     auto& cq = device->mesh_command_queue(cq_id);
@@ -661,7 +661,7 @@ BENCHMARK_CAPTURE(BM_enqueue_read_buffer, l1, BufferType::L1)
     ->Iterations(DEFAULT_ITERATIONS)
     ->UseManualTime();
 
-// --- #6 trace capture (allocates device buffers each iter; single run) + replay (repeated + median) ---
+// --- #6 trace capture (allocates device buffers each iter; single run) + replay (repeated + min) ---
 BENCHMARK_CAPTURE(BM_trace_capture, common, COMMON_SHAPE)->Iterations(TRACE_ITERATIONS)->UseManualTime();
 BENCHMARK_CAPTURE(BM_trace_capture, worst, WORST_SHAPE)->Iterations(TRACE_ITERATIONS)->UseManualTime();
 BENCHMARK_CAPTURE(BM_trace_replay, common, COMMON_SHAPE)->Apply(RepeatedConfig);

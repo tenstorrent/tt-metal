@@ -20,7 +20,7 @@ import os
 import pathlib
 import sys
 
-# Host-latency microbenchmarks are us-scale and jitter run-to-run even with median aggregation,
+# Host-latency microbenchmarks are us-scale and jitter run-to-run even with min aggregation,
 # so a generous tolerance is used: real regressions (e.g. an algorithmic change in the command
 # construction path) are far larger than this, while normal noise stays well under it.
 DEFAULT_TOLERANCE_PCT = 20
