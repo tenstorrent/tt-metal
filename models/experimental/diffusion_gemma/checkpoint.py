@@ -19,7 +19,12 @@ from typing import NamedTuple
 import torch
 from safetensors.torch import safe_open
 
-from models.experimental.diffusion_gemma.weight_mapping import DG_DECODER_PREFIX
+from models.experimental.diffusion_gemma.weight_mapping import (
+    DG_DECODER_PREFIX,
+    check_encoder_layer_scalar_tie,
+    decoder_layer_scalar_key,
+    encoder_layer_scalar_key,
+)
 
 TEXT_GENERATION_PREFIXES = (DG_DECODER_PREFIX,)
 STATE_SNAPSHOT_ALLOW_PATTERNS = ("model.safetensors", "model.safetensors.index.json", "*.safetensors")
@@ -125,6 +130,7 @@ def load_text_generation_state_dict(
     """
 
     checkpoint_dir = resolve_checkpoint_dir(checkpoint_dir, local_files_only=local_files_only)
+    validate_encoder_layer_scalar_tie(checkpoint_dir, device=device, local_files_only=local_files_only)
     prefixes = _as_prefix_tuple(prefixes)
     index_path = checkpoint_dir / "model.safetensors.index.json"
     state_dict = {}
@@ -157,6 +163,72 @@ def load_text_generation_state_dict(
     if not state_dict:
         raise ValueError(f"checkpoint has no weights matching prefixes {prefixes}")
     return state_dict
+
+
+def validate_encoder_layer_scalar_tie(
+    checkpoint_dir: str | Path,
+    *,
+    device: str = "cpu",
+    local_files_only: bool | None = None,
+) -> int:
+    """Fail loud when the encoder and decoder ``layer_scalar`` copies diverge.
+
+    The loader drops the whole ``model.encoder.*`` tree, which is only sound
+    because the conversion script clones ``layer_scalar`` rather than training a
+    separate encoder copy. ``layer_scalar`` multiplies the entire layer output, so
+    a divergent checkpoint would put a compounding per-layer error into every
+    prefill and commit KV write while the decoder-only denoise pass stayed
+    correct — a failure mode a precision sweep cannot move. Returns the number of
+    layers checked (0 when the checkpoint carries no encoder copy at all).
+    """
+
+    checkpoint_dir = resolve_checkpoint_dir(checkpoint_dir, local_files_only=local_files_only)
+    index_path = checkpoint_dir / "model.safetensors.index.json"
+    if index_path.exists():
+        with index_path.open("r", encoding="utf-8") as f:
+            weight_map = json.load(f)["weight_map"]
+    else:
+        safetensors_path = checkpoint_dir / "model.safetensors"
+        if not safetensors_path.exists():
+            raise FileNotFoundError(f"no safetensors checkpoint found in {checkpoint_dir}")
+        with safe_open(safetensors_path, framework="pt", device=device) as f:
+            weight_map = {key: "model.safetensors" for key in f.keys()}
+
+    layers = sorted(
+        layer
+        for layer in range(len(weight_map))
+        if encoder_layer_scalar_key(layer) in weight_map and decoder_layer_scalar_key(layer) in weight_map
+    )
+    if not layers:
+        return 0
+
+    handles: dict[str, object] = {}
+    try:
+
+        def get_tensor(key: str):
+            filename = weight_map.get(key)
+            if filename is None:
+                return None
+            if filename not in handles:
+                handles[filename] = safe_open(checkpoint_dir / filename, framework="pt", device=device)
+            return handles[filename].get_tensor(key)
+
+        divergent = check_encoder_layer_scalar_tie(get_tensor, layers)
+    finally:
+        for handle in handles.values():
+            close = getattr(handle, "__exit__", None)
+            if close is not None:
+                close(None, None, None)
+
+    if divergent:
+        detail = ", ".join(f"layer {layer}: max|diff|={diff:g}" for layer, diff in divergent[:8])
+        raise ValueError(
+            f"{len(divergent)} of {len(layers)} DiffusionGemma layers have an encoder layer_scalar that "
+            f"differs from the decoder copy ({detail}). This loader drops model.encoder.* and applies the "
+            "decoder scalar on the prefill and commit passes, which would be wrong for this checkpoint. "
+            "Load and apply the encoder scalar on the causal passes before using it."
+        )
+    return len(layers)
 
 
 def load_tokenizer(checkpoint_dir: str | Path, **tokenizer_kwargs):

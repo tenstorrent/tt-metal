@@ -21,8 +21,16 @@ gemma4 backbone (``models/demos/gemma4/``). The only differences are:
        — the self-conditioning gated MLP (this module's :class:`SelfConditioning`
        reference; ``post_norm`` is scaleless so it has no checkpoint weight).
      - ``model.encoder.language_model.layers.{i}.layer_scalar`` — the encoder's
-       own per-layer scalar (tied otherwise). Encoder/vision/multimodal — NOT on
-       the text-first causal path; collected under ``ignored`` here.
+       own per-layer scalar. This one **is** on the text path (the encoder pass is
+       prefill/commit), so it is collected under ``ignored`` only because the
+       conversion script *clones* it from the decoder copy and the two are equal.
+       ``check_encoder_layer_scalar_tie`` below re-establishes that on load: a
+       checkpoint whose copies diverge would need a separate encoder scalar
+       applied in prefill and commit, and silently reusing the decoder copy would
+       be a compounding per-layer error into the prompt KV. Measured on
+       ``diffusiongemma-26B-A4B-it`` 2026-07-27: max |encoder - decoder| = 0.0
+       across all 30 layers, and ``model.encoder.*`` holds nothing else on the
+       text path (its other 356 keys are vision tower / embed_vision).
 
 This module is pure key/tensor bookkeeping — no ttnn / device / gemma4 import — so
 it validates against just the checkpoint (or its index json) on any host.
@@ -53,6 +61,43 @@ _IGNORED_PREFIXES = (
 # Tied lm_head materialized at runtime by newer transformers (tie_word_embeddings=
 # True). Not on disk; numerically identical to decoder.embed_tokens. Ignored.
 _TIED_LM_HEAD_KEYS = frozenset({"lm_head.weight"})
+
+# The two copies of the per-layer scalar. The encoder copy is a clone of the
+# decoder copy in the shipped checkpoint; see the module docstring.
+ENCODER_LAYER_SCALAR_TEMPLATE = "model.encoder.language_model.layers.{layer}.layer_scalar"
+DECODER_LAYER_SCALAR_TEMPLATE = "model.decoder.layers.{layer}.layer_scalar"
+
+
+def encoder_layer_scalar_key(layer: int) -> str:
+    return ENCODER_LAYER_SCALAR_TEMPLATE.format(layer=int(layer))
+
+
+def decoder_layer_scalar_key(layer: int) -> str:
+    return DECODER_LAYER_SCALAR_TEMPLATE.format(layer=int(layer))
+
+
+def check_encoder_layer_scalar_tie(get_tensor, layers) -> List[Tuple[int, float]]:
+    """Return ``[(layer, max_abs_diff)]`` for each layer whose two scalars differ.
+
+    ``get_tensor(key)`` returns the checkpoint tensor for ``key`` or ``None`` when
+    the key is absent. A layer with no encoder copy is skipped (nothing to
+    diverge from); a layer with no *decoder* copy is a malformed checkpoint and is
+    left to the caller's normal missing-key handling. An empty result means the
+    encoder scalar is tied and can keep being ignored by the loader.
+    """
+
+    divergent: List[Tuple[int, float]] = []
+    for layer in layers:
+        encoder = get_tensor(encoder_layer_scalar_key(layer))
+        if encoder is None:
+            continue
+        decoder = get_tensor(decoder_layer_scalar_key(layer))
+        if decoder is None:
+            continue
+        diff = (encoder.detach().float() - decoder.detach().float()).abs().max().item()
+        if diff != 0.0:
+            divergent.append((int(layer), float(diff)))
+    return divergent
 
 
 def gemma4_key_for(dg_key: str) -> Optional[str]:
