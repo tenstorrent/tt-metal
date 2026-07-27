@@ -142,6 +142,8 @@ void kernel_main() {
     const bool use_send_ring = (sr_base != 0);
     uint32_t sr_prod = 0;
     uint32_t n_write_imm = 0;  // Phase 1.5: WRITE_IMM frames that raised an imm completion
+    // Phase 1.6 access-control drop counters (each = an unauthorized WRITE provably NOT landed).
+    uint32_t n_rkey_miss = 0, n_rkey_access = 0, n_rkey_bounds = 0;
     // Phase 1.3: READ target. When read_enable, a READ_REQ (0x20, header-only on the wire; the length
     // field is the request size) triggers: MR lookup (REMOTE_READ + bounds) -> noc_async_read the bytes
     // from the read source (rd_src_x,y,base + remote_offset) into a TX scratch buffer -> build a
@@ -255,55 +257,59 @@ void kernel_main() {
             } else if (op == TT_OP_WRITE || op == TT_OP_WRITE_IMM) {
                 ++n_write;
                 const uint32_t slot = rkey >> 24;  // rkey = (slot<<24)|(rand16<<8)|gen
-                if (slot < TT_RDMA_MR_SLOTS) {
-                    volatile tt_l1_ptr uint32_t* mr =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mr_table + slot * 32u);
-                    const uint32_t mr_base = mr[0];    // base_noc_addr low (Stage 1/2a: local L1 byte addr)
-                    const uint32_t mr_len = mr[2];     // length low
-                    const uint32_t mr_rkey = mr[4];    // rkey
-                    const uint32_t mr_access = mr[5];  // access_flags
-                    if (mr_rkey == rkey && (mr_access & TT_MR_REMOTE_WRITE) && (roff + len) <= mr_len) {
-                        const uint32_t src_off = (read_pos + TT_RDMA_HDR_BYTES) % rx_buf_size;
-                        if (use_noc) {
-                            // NoC engine moves the payload off-core; RISC issues the descriptor only
-                            // (no per-byte copy). Straddle-split at the ring wrap boundary.
-                            if (src_off + len <= rx_buf_size) {
-                                noc_async_write(rx_buf + src_off, get_noc_addr(noc_x, noc_y, noc_base + roff), len);
-                            } else {
-                                const uint32_t first = rx_buf_size - src_off;
-                                noc_async_write(rx_buf + src_off, get_noc_addr(noc_x, noc_y, noc_base + roff), first);
-                                noc_async_write(
-                                    rx_buf, get_noc_addr(noc_x, noc_y, noc_base + roff + first), len - first);
-                            }
+                // Access-control enforcement (security-critical, Phase 1.6): resolve rkey -> MR, then check
+                // access + bounds. Drop + count each failure class separately; NEVER land an unauthorized
+                // WRITE. mr[4]=rkey (incl. generation byte), mr[5]=access_flags, mr[2]=length, mr[0]=base.
+                volatile tt_l1_ptr uint32_t* mr =
+                    (slot < TT_RDMA_MR_SLOTS) ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mr_table + slot * 32u)
+                                              : nullptr;
+                if (mr == nullptr || mr[4] != rkey) {
+                    ++n_rkey_miss;  // slot out of range, or no MR / rkey (incl. generation) mismatch
+                } else if (!(mr[5] & TT_MR_REMOTE_WRITE)) {
+                    ++n_rkey_access;  // MR exists but is not remotely writable
+                } else if ((roff + len) > mr[2]) {
+                    ++n_rkey_bounds;  // write would exceed the region
+                } else {
+                    const uint32_t mr_base = mr[0];
+                    const uint32_t src_off = (read_pos + TT_RDMA_HDR_BYTES) % rx_buf_size;
+                    if (use_noc) {
+                        // NoC engine moves the payload off-core; RISC issues the descriptor only
+                        // (no per-byte copy). Straddle-split at the ring wrap boundary.
+                        if (src_off + len <= rx_buf_size) {
+                            noc_async_write(rx_buf + src_off, get_noc_addr(noc_x, noc_y, noc_base + roff), len);
                         } else {
-                            ring_copy(mr_base + roff, rx_buf, src_off, rx_buf_size, len);
+                            const uint32_t first = rx_buf_size - src_off;
+                            noc_async_write(rx_buf + src_off, get_noc_addr(noc_x, noc_y, noc_base + roff), first);
+                            noc_async_write(rx_buf, get_noc_addr(noc_x, noc_y, noc_base + roff + first), len - first);
                         }
-                        ++n_write_ok;
-                        // Phase 1.5: WRITE_IMM (0x11) additionally raises a receiver completion carrying
-                        // imm_data. The payload already landed at the MR; the completion is a length-0
-                        // RxWqeRing slot with mr_table_idx = the target MR slot (host-sdk §3).
-                        if (op == TT_OP_WRITE_IMM && use_send_ring) {
-                            if (use_noc) {
-                                noc_async_write_barrier();  // ensure the off-core WRITE landed before the completion
-                            }
-                            rxwqe_publish(
-                                sr_x,
-                                sr_y,
-                                sr_base,
-                                sr_slots,
-                                sr_prodidx,
-                                &sr_prod,
-                                /*peer_seq=*/hw[2],
-                                /*length=*/0u,
-                                /*opcode=*/op,
-                                /*imm=*/hw[6],
-                                /*cookie=*/(hw[0] >> 16) & 0xFFFFu,
-                                /*mr_idx=*/slot,
-                                rx_buf,
-                                0u,
-                                rx_buf_size);
-                            ++n_write_imm;
+                    } else {
+                        ring_copy(mr_base + roff, rx_buf, src_off, rx_buf_size, len);
+                    }
+                    ++n_write_ok;
+                    // Phase 1.5: WRITE_IMM (0x11) additionally raises a receiver completion carrying
+                    // imm_data. The payload already landed at the MR; the completion is a length-0
+                    // RxWqeRing slot with mr_table_idx = the target MR slot (host-sdk §3).
+                    if (op == TT_OP_WRITE_IMM && use_send_ring) {
+                        if (use_noc) {
+                            noc_async_write_barrier();  // ensure the off-core WRITE landed before the completion
                         }
+                        rxwqe_publish(
+                            sr_x,
+                            sr_y,
+                            sr_base,
+                            sr_slots,
+                            sr_prodidx,
+                            &sr_prod,
+                            /*peer_seq=*/hw[2],
+                            /*length=*/0u,
+                            /*opcode=*/op,
+                            /*imm=*/hw[6],
+                            /*cookie=*/(hw[0] >> 16) & 0xFFFFu,
+                            /*mr_idx=*/slot,
+                            rx_buf,
+                            0u,
+                            rx_buf_size);
+                        ++n_write_imm;
                     }
                 }
             } else if (op == TT_OP_READ_REQ) {
@@ -373,6 +379,9 @@ void kernel_main() {
         stats[11] = n_ack;
         stats[12] = ack_watermark;
         stats[13] = n_write_imm;
+        stats[14] = n_rkey_miss;
+        stats[15] = n_rkey_access;
+        stats[16] = n_rkey_bounds;
 
         if (stop != nullptr && *stop != 0) {
             break;

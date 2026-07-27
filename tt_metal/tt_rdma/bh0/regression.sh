@@ -143,6 +143,23 @@ if wait_up "$OUT"; then
     || fail "WRITE_IMM completion (wimm=${wimm:-0}, ${n:-0}/${m:-0})"
 else fail "RX kernel did not come up (T9)"; kill $DPID 2>/dev/null; fi
 
+echo "== T10: RX MR access-control -- rkey_miss / rkey_access / rkey_bounds each dropped + counted =="
+OUT=$D/rx8.txt
+timeout 115 "$BIN/bh1_rx_dispatch" 1 ext 12 1 1 2 1 >"$OUT" 2>&1 &   # WRITE -> tensix (would land if authorized)
+DPID=$!
+if wait_up "$OUT"; then
+  sudo -n "$ALLOW" $P0 15 $DMAC 0x1af6 0x10 256 0x00CAFE99 0 >/dev/null 2>&1; sleep 1    # miss: gen mismatch
+  sudo -n "$ALLOW" $P0 15 $DMAC 0x1af6 0x10 256 0x01ABCD01 0 >/dev/null 2>&1; sleep 1    # access: READ-only MR[1]
+  sudo -n "$ALLOW" $P0 15 $DMAC 0x1af6 0x10 256 0x00CAFE42 8192 >/dev/null 2>&1; sleep 1 # bounds: roff > mr_len
+  wait $DPID
+  line=$(grep "rkey_miss=" "$OUT" | grep -v info | tail -1)
+  gv(){ echo "$line" | grep -oE "$1=[0-9]+" | cut -d= -f2; }
+  miss=$(gv rkey_miss); acc=$(gv rkey_access); bnd=$(gv rkey_bounds); wok=$(gv write_ok)
+  [ "${wok:-1}" = 0 ] && [ "${miss:-0}" -ge 10 ] && [ "${acc:-0}" -ge 10 ] && [ "${bnd:-0}" -ge 10 ] \
+    && pass "MR access-control (miss=$miss access=$acc bounds=$bnd, write_ok=0)" \
+    || fail "MR access-control (miss=${miss:-0} access=${acc:-0} bounds=${bnd:-0} write_ok=${wok:-?})"
+else fail "RX kernel did not come up (T10)"; kill $DPID 2>/dev/null; fi
+
 echo "======================================================"
 echo "REGRESSION: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ] && { echo "== ALL GREEN =="; exit 0; } || { echo "== FAILURES =="; exit 1; }
