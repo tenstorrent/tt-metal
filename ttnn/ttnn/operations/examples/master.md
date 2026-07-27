@@ -325,6 +325,27 @@ on WH) and `tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerfo
 (host-dispatch overlap, E). API surface: `tt_metal/hw/inc/api/dataflow/dataflow_api.h`.
 
 ## A. Core / grid placement — the biggest single lever
+
+**A0. Active-core count is a per-regime correctness check, not a one-time choice.** Before the
+placement levers below, the *number* of active cores must be right for **every shape regime the op
+accepts** — a single distribution scheme can be optimal in one regime and pathological in another.
+The criterion:
+- **interleaved** → `active_cores == min(grid, total_tiles)` (enough cores to expose parallelism up to
+  the movement knee — see `dram_saturation` — never fewer, never more than there is work for);
+- **sharded input** → `active_cores == the shard's own cores` (lever A2), not a re-spread 2D grid.
+
+A **fixed split axis** — row-only, column-only, **or square-block** — is a latent bug: it fills the
+grid for one aspect ratio and strands the other. Do **not** switch schemes wholesale to fix one
+regime; keep the conventional split as default and divert to the specialized one **only behind a
+utilization predicate** — the `distribution_gate` pattern (proven no-regression: gated is
+byte-identical to the default on shapes the default already saturated).
+
+Discriminating regimes every distribution scheme must be checked against (these are where fixed/square
+splits break): **tall-narrow** (`Wt ≪ nt_h`), **wide-short** (`Wt ≫ nt_h`), **square**, **tiny**
+(`total_tiles < grid`), and **sharded-in**. Assert the active-core count above for each.
+**→ examples: `distribution_gate`** (gate, don't switch), **`width_split`** (the wide-short calc:
+per-core tile-column range capped by `WT_CHUNK`).
+
 - **A1. Spread worker cores across the DRAM-facing axis, not down one axis** — banks sit in a few
   columns; a line stacked on one axis piles traffic onto shared NoC links. `row_wise` in
   `split_work_to_cores` (`tt_metal/api/tt-metalium/work_split.hpp:46`) picks the line.
