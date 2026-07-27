@@ -1269,33 +1269,45 @@ from worker L1, host-verified at `prof_l1=0xb50`), relay-hart boot (boot verifie
 fine. The clincher: dumping channel-0 sysmem showed the relay's markers + `bytes_sent=0xb880` sitting at
 chan0 offset `0x3f000000`, i.e. written correctly but to the wrong buffer.
 
-**★ (3) The D2H FIFO size — not drain capacity — is what sets the 0-stall knee.** At the stock 4 MiB/socket,
-bh-06 did **not** reproduce bh-11's 830 knee: 3210 stalls, and the chain was host-bound (relay `hostfull`
-415k/427k → reader `spsc-wait` 155M/161M → producers stall; X280 wall 1921M cyc, reader copy 0.8% = spinning).
-Sweeping proddelay did **not** clear it — 830→3210, 1200→891, 1800→696, 2500→1112 — a **stall floor ~700–1100**
-that slower producers can't drain away. *A floor that ignores production rate is a buffering limit, not a
-throughput limit.* Raising ONLY the FIFO to **12 MiB/socket (`--hring 3145728`)** reproduces the knee exactly:
+**★ (3) The D2H FIFO size fixes the *pipeline*; it does NOT reliably deliver a 0-stall knee on this box.**
+At the stock 4 MiB/socket, bh-06 did not reproduce bh-11's 830 knee: 3210 stalls, chain host-bound (relay
+`hostfull` 415k/427k → reader `spsc-wait` 155M/161M → producers stall; X280 wall 1921M cyc, reader copy 0.8%
+= spinning). Sweeping proddelay did not clear it — 830→3210, 1200→891, 1800→696, 2500→1112 — a floor slower
+producers can't drain away. Raising ONLY the FIFO to **12 MiB/socket (`--hring 3145728`)** transforms the
+pipeline's internal state:
 
 | @ proddelay 830, 1 node, 2 readers + 2 relays + 2 sockets | 4 MiB (default) | **12 MiB** |
 |---|---|---|
-| X280-STALL | 3210 | **0** |
-| markers | lossless | **3300000 / 3300000 exact** |
 | relay hostfull | 415k / 427k | **0** |
 | reader spsc-wait | 155M / 161M | **0** |
 | reader cyc/word — copy% | 4.3 — 0.8% (spinning) | 4.5 — **52%** (working) |
 | X280 wall | 1921M cyc | **30M cyc** (64× faster) |
-| D2H FIFO high-water | 100% (pinned) | 59% / 87% |
+| D2H FIFO high-water | 100% (pinned) | 26–87% (never pinned) |
+| X280-STALL | 3210 | **0 … 9473 (see below)** |
+
+Those first five rows are structural and reproducible — 12 MiB genuinely un-pins the FIFO and unblocks the
+relay/reader chain, and it is the right default on this box.
+
+**⚠ CORRECTION — X280-STALL is NOT a reliable metric on bh-06.** An earlier revision of this section claimed
+"12 MiB → X280-STALL 0". That was a **single lucky sample**. Re-running the *identical* command five times
+gave **0, 1216, 8413, 9020, 9473** — the count swings across the whole range run-to-run, while the FIFO
+high-water wanders 26–87% and the *device* chain stays provably unblocked (relay hostfull 0, reader
+spsc-wait 0). The residual stalls are therefore **host-drain jitter**, not a device or buffer limit: this
+container has only **6 CPU cores**, the drain is host-bound (§24), and OS scheduling noise against our own
+builds/threads moves the result more than any tuning knob does. **Do not tune against a single X280-STALL
+number here** — use the structural signals (relay `hostfull`, reader `spsc-wait`, FIFO high-water, X280 wall,
+copy%) which are stable, or average many runs. This also retro-weakens the bh-11 "830 = 0 stalls" datum: it
+was likewise a small number of samples on a quieter box.
 
 `--mqcap` is **irrelevant** here: with `--mqcap 268435456` the MPMC peaked at **2 batches** (push-blocks 0).
-The single load-bearing variable is the D2H FIFO. Why bh-06 needs 12 MiB where bh-11 sufficed at 4: the host
-drain is slower/burstier — this container has only **6 CPU cores** — so the FIFO needs more slack to absorb
-it. Consistent with §24 (the D2H FIFO is the back-pressure source; 8 flushers were needed to relieve it).
+Why bh-06 wants 12 MiB where bh-11 sufficed at 4: the host drain is slower/burstier (6 cores), so the FIFO
+needs more slack. Consistent with §24 (the D2H FIFO is the back-pressure source; 8 flushers relieved it).
 
 **CEILING = 12 MiB/socket.** `NOC_2M_WINDOW_COUNT=224` and `SOCKET_WIN_BASE=208` leave **16** TLB windows, and
 the FW maps `nwin = ceil((in_off + fifo_bytes + 64) / 2 MiB)` consecutive windows per socket → 2 sockets ×
 nwin ≤ 16. Note the old note "4 MiB ≈ 850 == the drain floor" was really *4 MiB's* floor, not the hardware's.
 
-Canonical bh-06 knee run (0 stalls, lossless):
+Canonical bh-06 run (lossless; stall count varies run-to-run — see the correction above):
 
 ```
 TT_METAL_DEVICE_PROFILER=1 TT_METAL_NO_RT_PROFILER=1 timeout 300 \
@@ -1318,6 +1330,11 @@ still used the 4 MiB default, so their stall counts are inflated by it.
 - **A stall FLOOR that doesn't fall as you slow the producer = a BUFFER limit, not a drain-rate limit.**
   Sweeping `--proddelay` to chase a knee is wasted effort in that regime; size the D2H FIFO (`--hring`)
   instead. Cost a full proddelay sweep before the buffer was suspected (§25).
+- **★ ALWAYS repeat a X280-STALL measurement before concluding anything from it — on a host-bound box it is
+  NOISE-DOMINATED.** Identical command, 5 runs on bh-06: 0 / 1216 / 8413 / 9020 / 9473. A single sample led
+  to a wrong "12 MiB → 0 stalls" claim that had to be retracted (§25). Prefer the structural signals (relay
+  `hostfull`, reader `spsc-wait`, FIFO high-water, X280 wall, copy%) — those were stable across all 5 runs.
+  Corollary: never A/B two branches with one run each; the branch difference was smaller than the noise.
 - **`tt-smi -r` does NOT clear LIM SRAM** → a re-run of the same FW sees the prior
   run's `DONE_MAGIC` and reads results prematurely. Host must zero the result/done
   region before releasing the FW.
