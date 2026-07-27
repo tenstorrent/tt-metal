@@ -590,7 +590,17 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     read_len = ((real_len + tokens_per_block - 1) // tokens_per_block) * tokens_per_block  # round up to a block
 
     min_pcc = 1.0
+    checked = 0
     for layer in range(NUM_LAYERS):
+        # A merged multi-rank table spans every host's layers, but this producer's device map holds only
+        # its co-located host's chips, so a layer owned by another rank resolves to no local unique_id.
+        # Skip it: each rank validates exactly the layers physically resident on its own machine.
+        loc0 = table.lookup(layer, 0, slot_id)
+        try:
+            _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
+        except KeyError:
+            continue
+
         # Read this layer's KV block by block over UMD, decode its physical cache format, and concat.
         decoded_rows = []
         for pos in range(0, read_len, tokens_per_block):
@@ -610,9 +620,13 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         _, pcc_pe = comp_pcc(golden_pe, device_kv[:, KV_LORA:])
 
         min_pcc = min(min_pcc, pcc_nope, pcc_pe)
+        checked += 1
         logger.info(f"[producer] slot {slot_id} layer {layer:>2} KV PCC: nope={pcc_nope:.5f} pe={pcc_pe:.5f}")
 
-    logger.info(f"[producer] slot {slot_id} KV PCC over [0,{real_len}) across {NUM_LAYERS} layers -> {min_pcc:.6f}")
+    logger.info(
+        f"[producer] slot {slot_id} KV PCC over [0,{real_len}) across {checked}/{NUM_LAYERS} local layers -> "
+        f"{min_pcc:.6f}"
+    )
 
     # config 1: index cache (sparse/DSA only). Validated the SAME way as config 0 — read block-by-block
     # via the table, decode, and PCC vs the golden indexer key. Config 1 holds all layers on GLM-5.1 and
@@ -701,7 +715,130 @@ def _load_token_pool(trace_dir, num_tokens: int) -> list:
     return pool[:num_tokens]
 
 
+# ---------------------------------------------------------------------------
+# Multi-rank coordination (device-less; NFS files, no MPI)
+#
+# One producer runs per host, mirroring the pipeline runner's ranks. The master (rank 0, co-located
+# with the runner's first rank) is the only one that feeds tokens over H2D and owns the aggregated
+# LayerAck channel; every rank reads its OWN host's KV back and PCCs only the layers resident on its
+# machine (the merged table + a host-local device map filter to the local layers automatically).
+# Coordination is two NFS sentinels: the master publishes GO (with the resident-slot map) once every
+# layer of every chunk has acked, and each validator writes DONE when its read-back finishes. The
+# master waits for all DONEs BEFORE sending the runner's shutdown sentinel, so the mesh/DRAM stays
+# alive while validators are still reading.
+# ---------------------------------------------------------------------------
+
+
+def _mr_config():
+    """(role, rank, world_size, sync_dir). Single-rank default: master / 0 / 1 / "" (no coordination)."""
+    return (
+        os.environ.get("PREFILL_PRODUCER_ROLE", "master"),
+        int(os.environ.get("PREFILL_PRODUCER_RANK", "0")),
+        int(os.environ.get("PREFILL_PRODUCER_WORLD_SIZE", "1")),
+        os.environ.get("PREFILL_PRODUCER_SYNC_DIR", ""),
+    )
+
+
+def _clear_sync(sync_dir: str, world_size: int) -> None:
+    """Master clears stale GO/DONE sentinels from a prior run so a validator can't read the last run's."""
+    for name in ["go.json"] + [f"done_rank{r}.json" for r in range(world_size)]:
+        p = os.path.join(sync_dir, name)
+        if os.path.exists(p):
+            os.remove(p)
+
+
+def _write_go(sync_dir: str, resident: dict) -> None:
+    import json
+
+    payload = {str(slot): [chunks, isl] for slot, (chunks, isl) in resident.items()}
+    tmp = os.path.join(sync_dir, "go.json.tmp")
+    with open(tmp, "w") as f:
+        json.dump(payload, f)
+    os.replace(tmp, os.path.join(sync_dir, "go.json"))  # atomic: a validator never sees partial JSON
+    logger.info(f"[producer] GO published ({len(payload)} resident slots) -> {sync_dir}/go.json")
+
+
+def _wait_go(sync_dir: str, timeout_s: float) -> dict:
+    import json
+
+    path = os.path.join(sync_dir, "go.json")
+    deadline = time.perf_counter() + timeout_s
+    while not os.path.exists(path):
+        if time.perf_counter() > deadline:
+            raise TimeoutError(f"[producer] GO sentinel {path} not seen after {timeout_s}s")
+        time.sleep(0.2)
+    with open(path) as f:
+        raw = json.load(f)
+    return {int(slot): tuple(v) for slot, v in raw.items()}
+
+
+def _write_done(sync_dir: str, rank: int, ok: bool) -> None:
+    import json
+
+    tmp = os.path.join(sync_dir, f"done_rank{rank}.json.tmp")
+    with open(tmp, "w") as f:
+        json.dump({"ok": ok}, f)
+    os.replace(tmp, os.path.join(sync_dir, f"done_rank{rank}.json"))
+
+
+def _wait_all_done(sync_dir: str, ranks: list, timeout_s: float) -> dict:
+    import json
+
+    deadline = time.perf_counter() + timeout_s
+    verdicts: dict = {}
+    while len(verdicts) < len(ranks):
+        for r in ranks:
+            if r in verdicts:
+                continue
+            p = os.path.join(sync_dir, f"done_rank{r}.json")
+            if os.path.exists(p):
+                with open(p) as f:
+                    verdicts[r] = json.load(f)
+        if len(verdicts) < len(ranks) and time.perf_counter() > deadline:
+            raise TimeoutError(f"[producer] only {len(verdicts)}/{len(ranks)} validators reported after {timeout_s}s")
+        if len(verdicts) < len(ranks):
+            time.sleep(0.3)
+    return verdicts
+
+
+def _run_validator(rank: int, world_size: int, sync_dir: str) -> None:
+    """Non-master path: no H2D feed. Read the merged table (shared/NFS), wait for the master's GO, PCC
+    this host's local layers, then write DONE. Exits non-zero on PCC failure."""
+    cfg = _config_from_env()
+    timeout_s = int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60"))
+    go_timeout = float(os.environ.get("PREFILL_PRODUCER_GO_TIMEOUT_S", "1800"))
+    logger.info(f"[producer] validator rank={rank}/{world_size}: read-back only (no H2D feed)")
+
+    kv_table = _read_kv_chunk_table(timeout_s)
+    resident = _wait_go(sync_dir, go_timeout)
+    logger.info(f"[producer] validator rank={rank}: GO received, {len(resident)} resident slots")
+
+    stats = RunStats(resident=resident, total_pushes=0, push_ms=[], completed=0, wall_s=0.0)
+    ok = True
+    if kv_table is None:
+        logger.error("[producer] validator: no KV table available; cannot validate.")
+        ok = False
+    else:
+        try:
+            ok = _verify_resident_slots(kv_table, stats, cfg.pcc_threshold)
+        except Exception as e:
+            logger.error(f"[producer] validator KV read/PCC failed: {type(e).__name__}: {e}")
+            ok = False
+
+    _write_done(sync_dir, rank, ok)
+    logger.info(f"[producer] validator rank={rank}: DONE ok={ok}")
+    if not ok:
+        sys.exit(1)
+
+
 def main() -> None:
+    role, mr_rank, world_size, sync_dir = _mr_config()
+    if role == "validator":
+        _run_validator(mr_rank, world_size, sync_dir)
+        return
+    if world_size > 1:
+        _clear_sync(sync_dir, world_size)
+
     cfg = _config_from_env()
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
     timeout_s = int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60"))
@@ -754,8 +891,16 @@ def main() -> None:
         f"p99={_percentile(sorted_ms, 0.99):.1f}"
     )
 
-    # Wait for the runner's per-layer LayerAcks: NUM_LAYERS per chunk, for every chunk pushed.
+    # Wait for the runner's per-layer LayerAcks: NUM_LAYERS per chunk, for every chunk pushed. With a
+    # pipeline runner (num_ranks>1) the branch's LayerCompletionRouter funnels every rank's completions
+    # into this master channel, so this waits for ALL ranks' layers, not just the first stage's.
     _drain_layer_acks(ack_channel, NUM_LAYERS * stats.total_pushes)
+
+    # Multi-rank: all layers of all chunks are now written across every stage's DRAM. Release the
+    # validators (they PCC their own host's layers). Publish BEFORE the master's own read-back so the
+    # reads overlap across hosts.
+    if world_size > 1:
+        _write_go(sync_dir, stats.resident)
 
     # Opt-in: read the generated KV back per resident slot and PCC-check vs the golden trace.
     verify_ok = True
@@ -768,6 +913,15 @@ def main() -> None:
     elif cfg.verify:
         logger.error("[producer] PREFILL_PRODUCER_CHECK_PCC=1 but no KV chunk table available; skipping PCC.")
         verify_ok = False
+
+    # Multi-rank: wait for every validator's read-back to finish BEFORE the shutdown sentinel below tears
+    # the mesh/DRAM down (a validator still reading a torn-down device would fail). Fold their verdicts in.
+    if world_size > 1:
+        go_timeout = float(os.environ.get("PREFILL_PRODUCER_GO_TIMEOUT_S", "1800"))
+        verdicts = _wait_all_done(sync_dir, list(range(1, world_size)), go_timeout)
+        for r, v in sorted(verdicts.items()):
+            logger.info(f"[producer] validator rank={r}: ok={v.get('ok')}")
+            verify_ok = verify_ok and bool(v.get("ok"))
 
     # Optional graceful shutdown (PR #48718): close the stream with an all -1 PrefillMetadata sentinel so
     # the runner breaks its request loop and tears down cleanly instead of blocking to SIGKILL. Sent LAST,
