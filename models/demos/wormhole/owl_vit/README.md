@@ -30,7 +30,7 @@ HuggingFace Model: [google/owlvit-base-patch32](https://huggingface.co/google/ow
 
 3. **Python Dependencies**
    ```bash
-   pip install transformers pillow requests
+   pip install transformers==5.14.1 pillow requests
    ```
 
 ## Model Architecture

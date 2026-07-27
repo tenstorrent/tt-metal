@@ -1,5 +1,5 @@
 datasets
-transformers
+transformers==5.14.1
 tqdm
 numpy
 loguru

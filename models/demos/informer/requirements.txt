@@ -16,10 +16,10 @@ pandas>=1.3.0
 gluonts>=0.16.0
 
 # HF evaluation (optional)
-transformers>=4.30.0
-datasets>=2.0.0
-huggingface_hub>=0.20.0
-safetensors>=0.4.0
+transformers==5.14.1
+datasets>=2.15.0
+huggingface_hub>=1.5.0,<2.0
+safetensors>=0.8.0
 
 # Note: ttnn is provided by the tt-metal environment
 # and should not be installed separately

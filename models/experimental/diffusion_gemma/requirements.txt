@@ -15,8 +15,8 @@
 
 # --- HF transformers stack ---
 # transformers>=5.12 is REQUIRED: the `diffusion_gemma` model type ships since 5.12
-# (absent in 5.10.x). 5.12.1 is the pinned, verified version.
-transformers==5.12.1
+# (absent in 5.10.x).
+transformers==5.14.1
 tokenizers==0.22.2
 safetensors==0.8.0
 huggingface_hub==1.20.1

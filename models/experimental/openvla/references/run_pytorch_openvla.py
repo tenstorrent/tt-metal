@@ -9,7 +9,7 @@ Run this in a separate environment with compatible versions:
     # Create venv
     python3 -m venv /tmp/openvla_pt_env
     source /tmp/openvla_pt_env/bin/activate
-    pip install torch transformers==4.40.0 timm==0.9.16 accelerate safetensors pillow numpy
+    pip install torch transformers==5.14.1 timm==0.9.16 accelerate safetensors pillow numpy
 
     # Run this script
     python run_pytorch_openvla.py --output /tmp/pytorch_openvla_outputs.pt
@@ -24,9 +24,8 @@ import torch
 from PIL import Image
 
 # NOTE(transformers-5.x): `AutoModelForVision2Seq` was removed in transformers 5.x.
-# When this path is bumped off the pinned 4.40.x, rename it to `AutoModelForImageTextToText`
-# (the merged replacement, available since 4.46). Left as-is for now: OpenVLA is not run on
-# CI and pins an older transformers, so it hasn't been validated under 5.x.
+# When this path is validated under the repo-pinned transformers==5.14.1, rename it to
+# `AutoModelForImageTextToText` (the merged replacement, available since 4.46).
 from transformers import AutoModelForVision2Seq, AutoProcessor
 
 

@@ -535,7 +535,7 @@ jobs:
               uv pip install --no-deps -e vllm/plugins/vllm-tt-plugin
             fi
             # Per-model Python deps when the model directory pins versions that
-            # differ from the docker image (Gemma4 needs transformers==5.5.0).
+            # differ from the docker image (repo pins transformers==5.14.1 in requirements-dev.txt).
             case "${{ matrix.test-group.model }}" in
               google/gemma-4-*) uv pip install -r models/demos/gemma4/requirements.txt ;;
             esac

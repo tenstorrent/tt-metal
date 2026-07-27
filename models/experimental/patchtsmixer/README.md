@@ -70,9 +70,16 @@ cd tsfm
 python -m pip install .
 ```
 
-> **Note:** `tsfm` v0.2.x requires `transformers<4.48`. If a newer version is already installed, pin it:
+> **Note:** The repo pins `transformers==5.14.1`. However, IBM `tsfm` (granite-tsfm)
+> requires `transformers<5`, `torch<2.11`, `einops>=0.7`, and `Python>=3.11` — all of
+> which conflict with the repo's dev environment. PatchTSMixer reference scripts that
+> use `tsfm_public` must be run in a **separate venv** with an older transformers
+> (e.g. `transformers==4.47.0`). The TT model itself does not depend on tsfm.
+>
 > ```bash
-> pip install "transformers==4.47.0"
+> # In a separate venv for PatchTSMixer reference training only:
+> pip install "transformers==4.47.0" torch einops>=0.7
+> git clone https://github.com/IBM/tsfm.git && cd tsfm && python -m pip install .
 > ```
 
 Verify the installation:
