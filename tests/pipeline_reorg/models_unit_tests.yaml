@@ -547,7 +547,6 @@
 # Deploy mesh is SP=8 x TP=4 -> (8, 4) on BH Galaxy
 - name: MiniMax-M3 unit tests (1-card)
   cmd: |
-    export HF_MODEL=/mnt/models/MiniMaxAI/MiniMax-M3-ref/
     pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "1x1"
   model: minimax-m3
   skus:
