@@ -139,7 +139,11 @@ class SharedMLP:
 
         gu_n = 2 * padded_per_device
         down_k = padded_per_device
-        dram_shard = _DRAM_SHARD_MLP and tp > 1
+        # MoE (26B-A4B): DRAM-width-sharded decode matmuls drop full-layer decode
+        # PCC to ~0.93 vs HF (threshold 0.99) on BH 1x4. Keep interleaved path
+        # for MoE; dense 12B/31B retain the sharded opt.
+        is_moe = bool(getattr(hf_config, "enable_moe_block", False))
+        dram_shard = _DRAM_SHARD_MLP and tp > 1 and not is_moe
 
         if dram_shard and can_dram_shard(self.hidden_size, gu_n, dtype=dtype):
             self.gate_up_proj = DramShardedLinear(
