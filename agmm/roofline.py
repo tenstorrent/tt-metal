@@ -1,7 +1,7 @@
 import json, csv, os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from roofline_lib import compute_roofline, FREQ, EFF_FLOP, EFF_DRAM, EFF_FABRIC
+from roofline_lib import compute_roofline, FREQ, EFF_FLOP, EFF_DRAM, EFF_FABRIC, DRAM_PEAK, LINK_PEAK
 
 d = json.load(open("agmm/agmm_instances.json"))
 rows = []
@@ -82,8 +82,8 @@ for x in rows:
     )
 print("-" * 120)
 print(
-    f"Peak: compute {108*2048*FREQ/1e12:.1f} TFLOP/s (HiFi2,108c@1.35GHz) | DRAM 512 GB/s | "
-    f"fabric 50 GB/s per unidir link (ring={d[0]['ring_size']}, links={d[0]['num_links']}/dir)"
+    f"Peak: compute {108*2048*FREQ/1e12:.1f} TFLOP/s (HiFi2,108c@1.35GHz) | DRAM {DRAM_PEAK/1e9:.0f} GB/s | "
+    f"fabric {LINK_PEAK/1e9:.0f} GB/s per unidir link (ring={d[0]['ring_size']}, links={d[0]['num_links']}/dir)"
 )
 print(f"Achievable ceilings: {EFF_FLOP:.0%} FLOP util, {EFF_DRAM:.0%} DRAM BW, {EFF_FABRIC:.0%} fabric BW")
 tot_meas = sum(x["time_us"] for x in rows)
