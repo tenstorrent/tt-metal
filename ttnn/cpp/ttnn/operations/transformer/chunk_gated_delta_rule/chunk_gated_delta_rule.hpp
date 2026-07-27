@@ -80,7 +80,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     const std::optional<ttnn::Tensor>& masks = std::nullopt,
     const std::optional<ttnn::Tensor>& rms_gate = std::nullopt,
     const std::optional<ttnn::Tensor>& rms_weight = std::nullopt,
-    float rms_epsilon = 1e-5f);
+    float rms_epsilon = 1e-5f,
+    uint32_t summary_group_chunks = 8);
 
 /** Fused per-head RMSNorm and sigmoid gate for tile-aligned KDA prefill. */
 ttnn::Tensor kda_gated_rms_norm(

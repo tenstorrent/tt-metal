@@ -79,6 +79,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         q/k must be L2-normalized. Shapes: q/k/g [B,T,H,K], v [B,T,H,V],
         with rank-3 flat [B,T,H*D] q/k/v/g accepted for tile-aligned sequences;
         beta [B,T,H], initial_state [B,H,K,V]. chunk_size is currently 32.
+        summary_group_chunks counts 32-token chunks in each local affine-summary group.
         Returns token-major output [B,T,H,V], or TILE [B*H,T,V] when output_head_major=True,
         and an optional final state.
         )doc",
@@ -102,7 +103,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("masks") = nb::none(),
         nb::arg("rms_gate") = nb::none(),
         nb::arg("rms_weight") = nb::none(),
-        nb::arg("rms_epsilon") = 1e-5f);
+        nb::arg("rms_epsilon") = 1e-5f,
+        nb::arg("summary_group_chunks") = 8);
 
     ttnn::bind_function<"kda_gated_rms_norm", "ttnn.transformer.">(
         mod,

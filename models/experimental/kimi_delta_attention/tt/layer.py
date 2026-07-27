@@ -40,8 +40,12 @@ class KimiDeltaAttention:
         state_dict: Mapping[str, torch.Tensor],
         tensor_cache_path: Path | None = None,
         tt_ccl: TT_CCL | None = None,
+        summary_group_chunks: int = 8,
     ) -> None:
+        if summary_group_chunks <= 0:
+            raise ValueError(f"summary_group_chunks must be positive, got {summary_group_chunks}")
         self.device = mesh_device
+        self.summary_group_chunks = summary_group_chunks
         self.weights: KDAWeights = load_kda_weights(
             mesh_device,
             config,
@@ -400,6 +404,7 @@ class KimiDeltaAttention:
                 rms_gate=output_gate_rank if fuse_scan_rms else None,
                 rms_weight=weights.norm if fuse_scan_rms else None,
                 rms_epsilon=config.norm_eps,
+                summary_group_chunks=self.summary_group_chunks,
             )
         if new_recurrent_state.dtype != config.recurrent_state_dtype:
             new_recurrent_state = ttnn.typecast(new_recurrent_state, config.recurrent_state_dtype)

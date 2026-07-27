@@ -470,7 +470,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
     const std::optional<ttnn::Tensor>& masks,
     const std::optional<ttnn::Tensor>& rms_gate,
     const std::optional<ttnn::Tensor>& rms_weight,
-    float rms_epsilon) {
+    float rms_epsilon,
+    uint32_t summary_group_chunks) {
     const auto& qs = q_in.logical_shape();
     const auto& vs = v_in.logical_shape();
     const auto& gs = g_in.logical_shape();
@@ -609,24 +610,36 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_kda(
         true,
         prep_bf16_mask);
     std::optional<std::vector<ttnn::Tensor>> grouped_scan;
-    // Experimental affine-summary construction: eight contiguous chunks become one
+    // Configurable affine-summary construction: contiguous chunks become one
     // independent pseudo-head. Running the proven recurrence from zero gives B; running
     // from I gives A+B. State-only mode drains token outputs without materializing them.
-    constexpr uint32_t group_chunks = 8;
     const bool use_persistent_group_prefix = NC >= 160 && std::getenv("QWEN_KDA_SERIAL_SCAN") == nullptr;
     const bool build_group_summaries = std::getenv("QWEN_KDA_GROUP_SUMMARY") != nullptr ||
                                        std::getenv("QWEN_KDA_GROUP_PREFIX") != nullptr || use_persistent_group_prefix;
-    if (build_group_summaries && NC % group_chunks == 0 && K == V) {
-        const uint32_t groups_per_head = NC / group_chunks;
+    if (build_group_summaries) {
+        TT_FATAL(summary_group_chunks > 0, "summary_group_chunks must be positive");
+        TT_FATAL(
+            NC % summary_group_chunks == 0,
+            "local chunk count {} must be divisible by summary_group_chunks {}",
+            NC,
+            summary_group_chunks);
+        TT_FATAL(K == V, "grouped KDA affine prefix currently requires K == V, got K={} and V={}", K, V);
+        const uint32_t groups_per_head = NC / summary_group_chunks;
         const uint32_t group_heads = BH * groups_per_head;
+        const auto worker_grid = dev->compute_with_storage_grid_size();
+        TT_FATAL(
+            group_heads <= worker_grid.x * worker_grid.y,
+            "grouped KDA needs {} summary owners (B*local_heads*local_groups), but only {} worker cores are available",
+            group_heads,
+            worker_grid.x * worker_grid.y);
         auto grouped = prep;
-        grouped[0] = ttnn::reshape(grouped[0], ttnn::Shape({group_heads, group_chunks, C, V}));
-        grouped[1] = ttnn::reshape(grouped[1], ttnn::Shape({group_heads, group_chunks, C, K}));
-        grouped[2] = ttnn::reshape(grouped[2], ttnn::Shape({group_heads, group_chunks, C, K}));
-        grouped[3] = ttnn::reshape(grouped[3], ttnn::Shape({group_heads, group_chunks, C, C}));
-        grouped[4] = ttnn::reshape(grouped[4], ttnn::Shape({group_heads, group_chunks, K, C}));
-        grouped[5] = ttnn::reshape(grouped[5], ttnn::Shape({group_heads, group_chunks, K, 1}));
-        grouped[6] = ttnn::reshape(grouped[6], ttnn::Shape({group_heads, group_chunks, C, C}));
+        grouped[0] = ttnn::reshape(grouped[0], ttnn::Shape({group_heads, summary_group_chunks, C, V}));
+        grouped[1] = ttnn::reshape(grouped[1], ttnn::Shape({group_heads, summary_group_chunks, C, K}));
+        grouped[2] = ttnn::reshape(grouped[2], ttnn::Shape({group_heads, summary_group_chunks, C, K}));
+        grouped[3] = ttnn::reshape(grouped[3], ttnn::Shape({group_heads, summary_group_chunks, C, C}));
+        grouped[4] = ttnn::reshape(grouped[4], ttnn::Shape({group_heads, summary_group_chunks, K, C}));
+        grouped[5] = ttnn::reshape(grouped[5], ttnn::Shape({group_heads, summary_group_chunks, K, 1}));
+        grouped[6] = ttnn::reshape(grouped[6], ttnn::Shape({group_heads, summary_group_chunks, C, C}));
         auto summary_mem = prep_mem;
         if (std::getenv("QWEN_KDA_SUMMARY_INTERLEAVED") == nullptr) {
             const auto summary_cores =

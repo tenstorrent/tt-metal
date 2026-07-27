@@ -33,15 +33,17 @@ def _assert_pcc(name: str, golden: torch.Tensor, actual: torch.Tensor, threshold
 
 
 @pytest.mark.parametrize(
-    "sequence,heads,key_dim,value_dim,flat_v,flat_qk,flat_g,math_fidelity",
+    "sequence,heads,key_dim,value_dim,flat_v,flat_qk,flat_g,math_fidelity,summary_group_chunks",
     [
-        (32, 2, 32, 32, False, False, False, None),
-        (32, 2, 32, 32, True, True, True, None),
-        (64, 32, 128, 128, False, False, False, None),
-        (64, 32, 128, 128, True, False, True, None),
-        (64, 32, 128, 128, True, True, True, "HiFi2"),
-        (256, 4, 128, 128, True, True, True, None),
-        (512, 4, 128, 128, True, True, True, None),
+        (32, 2, 32, 32, False, False, False, None, None),
+        (32, 2, 32, 32, True, True, True, None, None),
+        (64, 32, 128, 128, False, False, False, None, None),
+        (64, 32, 128, 128, True, False, True, None, None),
+        (64, 32, 128, 128, True, True, True, "HiFi2", None),
+        (256, 4, 128, 128, True, True, True, None, None),
+        (512, 4, 128, 128, True, True, True, None, None),
+        (256, 2, 32, 32, True, True, True, None, 8),
+        (320, 2, 32, 32, True, True, True, None, 10),
     ],
 )
 def test_chunk_kda_pcc(
@@ -54,6 +56,8 @@ def test_chunk_kda_pcc(
     flat_qk: bool,
     flat_g: bool,
     math_fidelity: str | None,
+    summary_group_chunks: int | None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     generator = torch.Generator().manual_seed(401 + sequence + heads)
     shape = (1, sequence, heads)
@@ -82,6 +86,8 @@ def test_chunk_kda_pcc(
         if math_fidelity is not None
         else None
     )
+    if summary_group_chunks is not None:
+        monkeypatch.setenv("QWEN_KDA_GROUP_PREFIX", "1")
     with ttnn.manage_config("throw_exception_on_fallback", True):
         output_tt, final_state_tt = ttnn.transformer.chunk_kda(
             q_tt,
@@ -95,12 +101,13 @@ def test_chunk_kda_pcc(
             chunk_size=32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=compute_kernel_config,
+            summary_group_chunks=summary_group_chunks or 8,
         )
 
     actual_output = ttnn.to_torch(output_tt)
     if flat_qk:
         actual_output = actual_output.reshape(1, heads, sequence, value_dim).permute(0, 2, 1, 3)
     actual_state = ttnn.to_torch(final_state_tt)
-    label = f"H={heads},K={key_dim},V={value_dim},T={sequence},flat_v={flat_v},flat_qk={flat_qk},flat_g={flat_g},math_fidelity={math_fidelity}"
+    label = f"H={heads},K={key_dim},V={value_dim},T={sequence},flat_v={flat_v},flat_qk={flat_qk},flat_g={flat_g},math_fidelity={math_fidelity},summary_group_chunks={summary_group_chunks}"
     _assert_pcc(f"{label} output", golden_output, actual_output)
     _assert_pcc(f"{label} state", golden_state, actual_state)
