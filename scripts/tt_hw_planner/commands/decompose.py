@@ -113,23 +113,39 @@ def cmd_decompose(args) -> int:
 
     if install_cpu_compat is not None:
         install_cpu_compat()
-    try:
-        hf_model = transformers.AutoModel.from_pretrained(
-            model_id, trust_remote_code=True, torch_dtype="bfloat16", low_cpu_mem_usage=True
-        )
-    except ImportError:
-        if install_cpu_compat is None or not install_cpu_compat():
-            print("error: HF load failed: mamba-ssm shim unavailable", file=sys.stderr)
-            return 2
+    hf_model = None
+    _load_err = None
+    for _attempt in range(2):
         try:
             hf_model = transformers.AutoModel.from_pretrained(
                 model_id, trust_remote_code=True, torch_dtype="bfloat16", low_cpu_mem_usage=True
             )
+            break
+        except ImportError as e:
+            _load_err = e
+            if install_cpu_compat is None or not install_cpu_compat():
+                break
+            continue
         except Exception as e:
-            print(f"error: HF load failed: {e}", file=sys.stderr)
-            return 2
-    except Exception as e:
-        print(f"error: HF load failed: {e}", file=sys.stderr)
+            _load_err = e
+            break
+    if hf_model is None:
+        # Non-transformers checkpoint (e.g. coqui/XTTS-v2, whose config.json has
+        # no `model_type`): fall back to the SAME shared reference loader the
+        # per-component PCC tests use, so decompose can resolve the module tree.
+        try:
+            import importlib.util as _ilu
+
+            _rl = demo_dir / "tests" / "pcc" / "_reference_loader.py"
+            if _rl.is_file():
+                _spec = _ilu.spec_from_file_location("_reference_loader", str(_rl))
+                _rlmod = _ilu.module_from_spec(_spec)
+                _spec.loader.exec_module(_rlmod)
+                hf_model = _rlmod.load_reference_model(model_id)
+        except Exception as e:
+            _load_err = e
+    if hf_model is None:
+        print(f"error: HF load failed: {_load_err}", file=sys.stderr)
         return 2
 
     try:
