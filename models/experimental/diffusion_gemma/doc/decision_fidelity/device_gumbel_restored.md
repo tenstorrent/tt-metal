@@ -810,6 +810,46 @@ results deleted, and they are re-run by the same resumable script. The rule that
 source the running experiment imports — the arm's later stages now wait on an explicit sentinel file
 so source edits happen with the device idle.
 
+## 18. GATE RESULT: hiding the prefill pad keys fixes all seven block-0 collapses
+
+`gate/block0_padfix_arm.sh` ran both arms of `DG_DENOISE_HIDE_PREFILL_PADS` on the seven questions
+that collapse on block 0, with everything else at the shipped configuration and the same seed. The
+prediction was written into the script before the run: the guard should stop firing on all seven.
+
+| question | pads attended (today) | | | pads hidden | | | |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| | step-1 H | steps | halted | step-1 H | steps | halted | guard |
+| q106 | 5.1022 | 48 | no | **4.0866** | **15** | yes | **none** |
+| q096 | 5.1080 | 48 | no | **4.0478** | **17** | yes | **none** |
+| q090 | 4.8282 | 48 | no | **4.4389** | **36** | yes | **none** |
+| q122 | 4.5197 | 48 | no | **4.0363** | **24** | yes | **none** |
+| q095 | 4.1141 | 36 | yes | **3.7101** | **19** | yes | **none** |
+| q064 | 4.1127 | 48 | no | **3.9742** | **21** | yes | **none** |
+| q007 | 3.6367 | 48 | no | **3.3900** | **16** | yes | **none** |
+
+**Seven of seven.** Block 0 halts in every case, where six of seven previously ran the full 48 steps
+and committed an unsettled canvas.
+
+The q106 numbers match the pre-registered quantitative prediction of section 15 — "removing the
+geometry error alone should drop step-1 entropy by 0.6-1.5 nats and bring the block back under the
+convergence threshold" — at **-1.02 nats** and 15 of 48 steps. And the control arm reproduced the
+original measurement exactly: 5.102173 against the 5.1022 recorded in section 9.
+
+### q007 is the interesting one
+
+Its step-1 entropy was already 3.6367, in the reference's range, and hiding the pads moved it only
+-0.25. Yet block 0 went from 48 steps without halting to 16 with. So the fix works where the MEAN
+barely moves, which is section 12 restated by experiment: what the pads destroy is the low-entropy
+tail -- the handful of confident template-prefix positions that are the entire accept budget -- and
+the mean is a poor proxy for it. A fix chosen by watching mean entropy would have looked useless here.
+
+### Not flipping this default yet, on purpose
+
+`DG_DENOISE_SLIDING_WINDOW` was flipped hours ago and its clean-question REGRESSION arm has not run.
+Flipping the pad default now would put two changed defaults into that arm at once, and a regression
+would not be attributable to either. It stays gated until the window's regression lands and the pad
+fix gets a regression arm of its own.
+
 ## 6. Reproduce
 
 ```bash
