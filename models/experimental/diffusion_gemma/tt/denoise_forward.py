@@ -672,6 +672,18 @@ def _denoise_moe_forward(moe, router_input, expert_input):
     # True-sparse token-gather MoE is the DEFAULT (see _sparse_moe_enabled). DG_SPARSE_MOE=0
     # selects the ~5x-slower reference dense-128 path, which fails loud unless
     # DG_ALLOW_DENSE_MOE=1 is set (A/B / PCC baseline only). See tt/sparse_moe.py.
+    # Concat-experts (DG_MOE_CONCAT, default off) replaces the token-gather dispatch entirely:
+    # at the shipped capacity=256 the gather/combine matmuls add ~89% MACs on top of an expert MAC
+    # count already equal to computing every expert. See tt/concat_moe.py for the arithmetic and
+    # the ~7.7 GiB weight-duplication cost this trades against.
+    from models.experimental.diffusion_gemma.tt.concat_moe import concat_experts_forward, concat_moe_enabled
+
+    if concat_moe_enabled():
+        dense_routing = _denoise_router_forward(moe.router, router_input)
+        out = concat_experts_forward(moe.experts, expert_input, dense_routing)
+        dense_routing.deallocate(True)
+        return out
+
     if _sparse_moe_enabled():
         from models.experimental.diffusion_gemma.tt.sparse_moe import (
             compact_ragged_denoise_enabled,
@@ -708,14 +720,47 @@ def _denoise_shared_mlp_forward(mlp, hidden_states):
     return shared_mlp_forward(mlp, hidden_states)
 
 
+# ---------------------------------------------------------------------------------------------
+# DG_SKIP — in-graph component zeroing, for pricing a component's TRACED cost (measurement only).
+#
+# A serial per-op profile does not price a traced step: under trace the host dispatch is overlapped,
+# so an op's standalone time can be almost entirely hidden. The only way to learn what a component
+# actually contributes to the traced step is to remove it and re-measure. ``DG_SKIP`` replaces a
+# component with a shape-preserving ``ttnn.mul(x, 0.0)`` at its seam, so the op graph keeps the same
+# shapes and the rest of the step is untouched.
+#
+# ``DG_SKIP="attn,shared,moe"`` — comma-separated. Default empty (nothing skipped).
+#   attn    the whole denoise attention (QKV, RoPE, SDPA, o_proj, all-reduce)
+#   shared  the shared MLP
+#   moe     the router + expert path (see also DG_MOE_DISPATCH_ABLATE, which zeroes only the
+#           dispatch/combine chain and keeps the experts)
+#
+# The output of a skipped run is garbage BY CONSTRUCTION — never feed a DG_SKIP run into a
+# committed_sha256 comparison or a quality gate. Note also that zeroing the MoE feeds an all-zero
+# hidden into later routers, so a downstream component's cost under DG_SKIP is only meaningful if
+# that cost is value-independent.
+# ---------------------------------------------------------------------------------------------
+
+
+def _skip_components() -> frozenset:
+    raw = os.environ.get("DG_SKIP", "")
+    return frozenset(part.strip().lower() for part in raw.split(",") if part.strip())
+
+
+def _zeros_like_via_mul(tensor):
+    """Shape/layout/memory-config-preserving zero, without a ``ttnn.full`` (trace-safe)."""
+    return ttnn.mul(tensor, 0.0)
+
+
 def _denoise_layer_forward(
     tt_model, layer_idx, hidden_states, prompt_source, attn_mask, q_rope_offset, canvas_rope_provider=None
 ):
     layer = tt_model.layers[layer_idx]
+    skip = _skip_components()
     residual = hidden_states
     normed = _chunked_norm_forward(layer.input_layernorm, hidden_states)
     prefix_kv = prompt_source if isinstance(prompt_source, (tuple, list, CanvasTailWorkspace)) else None
-    kv_hidden = None if prefix_kv is not None else ttnn.concat([prompt_source, normed], dim=2)
+    kv_hidden = None if prefix_kv is not None or "attn" in skip else ttnn.concat([prompt_source, normed], dim=2)
     # Cross-block-trace-reusable RoPE: when a canvas_rope_provider is supplied it returns a
     # CONSTANT-SHAPE [1,1,C,head_dim] buffer already holding cos/sin for the absolute canvas
     # positions [start_pos:start_pos+C] (updated per block OUTSIDE the trace); applying it at
@@ -732,15 +777,18 @@ def _denoise_layer_forward(
     else:
         rope_mats = tt_model._get_rope_mats(layer_idx, seq_len=q_rope_offset + hidden_states.shape[-2])
         rope_offset = q_rope_offset
-    attn_output = denoise_attention(
-        layer.self_attn,
-        normed,
-        rope_mats=rope_mats,
-        attn_mask=attn_mask,
-        kv_hidden_states=kv_hidden,
-        prefix_kv=prefix_kv,
-        q_rope_offset=rope_offset,
-    )
+    if "attn" in skip:
+        attn_output = _zeros_like_via_mul(normed)  # DG_SKIP: price attention's traced contribution
+    else:
+        attn_output = denoise_attention(
+            layer.self_attn,
+            normed,
+            rope_mats=rope_mats,
+            attn_mask=attn_mask,
+            kv_hidden_states=kv_hidden,
+            prefix_kv=prefix_kv,
+            q_rope_offset=rope_offset,
+        )
     if kv_hidden is not None:
         kv_hidden.deallocate(True)
 
@@ -751,14 +799,20 @@ def _denoise_layer_forward(
 
     residual = hidden_states
     normed = _chunked_norm_forward(layer.pre_feedforward_layernorm, hidden_states)
-    mlp_output = _denoise_shared_mlp_forward(layer.shared_mlp, normed)
+    if "shared" in skip:
+        mlp_output = _zeros_like_via_mul(normed)  # DG_SKIP: price the shared MLP
+    else:
+        mlp_output = _denoise_shared_mlp_forward(layer.shared_mlp, normed)
     normed.deallocate(True)
 
     if layer.enable_moe_block:
         mlp_normed = _chunked_norm_forward(layer.post_feedforward_layernorm_1, mlp_output)
         mlp_output.deallocate(True)
         expert_input = _chunked_norm_forward(layer.pre_feedforward_layernorm_2, residual)
-        expert_output = _denoise_moe_forward(layer.moe, residual, expert_input)
+        if "moe" in skip:
+            expert_output = _zeros_like_via_mul(expert_input)  # DG_SKIP: price router + experts
+        else:
+            expert_output = _denoise_moe_forward(layer.moe, residual, expert_input)
         expert_input.deallocate(True)
         expert_normed = _chunked_norm_forward(layer.post_feedforward_layernorm_2, expert_output)
         expert_output.deallocate(True)
