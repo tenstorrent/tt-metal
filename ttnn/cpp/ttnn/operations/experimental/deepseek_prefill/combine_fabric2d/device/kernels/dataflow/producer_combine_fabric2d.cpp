@@ -185,7 +185,10 @@ void kernel_main() {
             // With BATCH_CREDITS the packet is held back until a batch has accumulated — unless we have
             // no payload to send anyway (either done sending, or blocked on our own credits), in which
             // case sending it now is free and is what keeps the ring live.
-            const bool have_credits = returnable > credits_sent;
+            // NO_FLOW_CONTROL also suppresses the credit packets themselves: with nobody gated on
+            // credits, forwarding them would only steal link bandwidth from the payload, and the point
+            // of that diagnostic is the payload-only ceiling.
+            const bool have_credits = !NO_FLOW_CONTROL && returnable > credits_sent;
             const bool send_credits_now = !BATCH_CREDITS
                                               ? have_credits
                                               : have_credits && ((returnable - credits_sent) >= credit_batch ||
@@ -266,6 +269,15 @@ void kernel_main() {
                         // No flush: this slot's header is not touched again until the ring wraps, and
                         // the source payload is never written by us at all. Letting the NoC queue hold
                         // the writes is what allows token N+1 to be issued while N is still draining.
+                        //
+                        // CAVEAT: the production idiom (moe_utils.hpp) flush-blocks here, which also
+                        // orders our payload write ahead of the EDM slot-credit write that
+                        // post_send_payload_increment_pointers issues on the sync cmd buf. Dropping the
+                        // flush leans on the NoC keeping those in order to the same destination. It has
+                        // not misbehaved over 128 producers x 10k tokens (every token acked, no hang),
+                        // but this harness never checks payload CONTENT, so a torn packet would be
+                        // invisible here. Validate content (Phase 3's DRAM drain) before relying on it
+                        // in a real op.
                         sender.send_payload_flush_non_blocking_from_address((uint32_t)hdr, sizeof(PACKET_HEADER_TYPE));
                     } else {
                         // Blocking flush: the header is reused next iteration, so the send must have

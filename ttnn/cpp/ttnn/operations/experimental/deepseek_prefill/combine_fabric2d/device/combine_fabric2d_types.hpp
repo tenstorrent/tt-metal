@@ -45,7 +45,9 @@ struct CombineFabric2dParams {
     //   bit4 (16) SINGLE_SRC      producer sends the same source chunk every token instead of rotating
     //                             through num_slots of them. The payload is garbage either way, and it
     //                             frees the L1 that a deep receiver ring needs.
-    uint32_t variant = 0;
+    // Default = BATCH_CREDITS | SLOT_HEADERS: the two changes that are not harness-specific, worth
+    // +62% together (13.2 -> 21.3 GB/s per direction). 0 restores the original loop for A/B runs.
+    uint32_t variant = 3;
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Mesh;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
