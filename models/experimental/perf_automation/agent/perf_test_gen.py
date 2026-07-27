@@ -354,7 +354,7 @@ def _run_perf_node(node_abs: str, extra_env: dict, timeout_s: int = 2400):
             return rc, (log.read_text(errors="ignore") if log.exists() else "")
         except _pr.TracyHangError as exc:
             out = log.read_text(errors="ignore") if log.exists() else ""
-            ok = _pr._device_reset()
+            ok = _pr._device_reset(error_text=out)
             return 124, out + "\n[perf_test_gen] WEDGE: %s; killed process group + tt-smi -r (reset_ok=%s)\n" % (
                 exc,
                 ok,
@@ -385,7 +385,7 @@ def _run_perf_node(node_abs: str, extra_env: dict, timeout_s: int = 2400):
         if disruptions < max_disrupt and _is_device_disruption(rc, out):
             from . import probes as _pr
 
-            ok = _pr._device_reset()
+            ok = _pr._device_reset(error_text=out)
             try:
                 _pr._await_cool()
             except Exception:  # noqa: BLE001

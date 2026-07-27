@@ -104,7 +104,29 @@ _FULLPIPE_TARGET_MS = float(os.environ.get("PERF_MCP_TARGET_MS", "0") or "0")
 import shutil as _shutil  # noqa: E402
 import subprocess as _sp  # noqa: E402
 
-_CONSEC_CRASH = {"n": 0}
+
+def _dr():
+    """The shared device-recovery primitive (agent/device_recovery.py). Imported lazily and by path
+    so this server keeps working when it is launched with a bare sys.path, as the MCP client does."""
+    global _DR_MOD
+    try:
+        return _DR_MOD
+    except NameError:
+        pass
+    try:
+        from agent import device_recovery as _m
+    except Exception:  # noqa: BLE001
+        import importlib.util as _ilu
+
+        _p = Path(__file__).resolve().parents[1] / "agent" / "device_recovery.py"
+        _spec = _ilu.spec_from_file_location("tt_device_recovery", str(_p))
+        _m = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_m)
+    globals()["_DR_MOD"] = _m
+    return _m
+
+
+_CONSEC_CRASH = _dr().CONSEC_CRASH
 _TT_SMI = _shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
 
 
@@ -130,18 +152,25 @@ def _run_module():
     return _RUN_MOD or None
 
 
-def _board_reset(where: str, note: str) -> None:
-    """Recover the device via run.py's board-aware _reset_devices (whole board(s) of PERF_MCP_DEVICES —
-    a single-chip `-r 0` half-resets a p300c and breaks its enumeration, and does not reset a Galaxy at
-    all). If that module is unavailable, fall back to agent.probes._reset_arg_sets — the SAME
-    galaxy/board-aware invocations (glx_reset on a Galaxy, full enumerated `-r` elsewhere) — and never a
-    bare single-chip `-r 0`."""
+def _board_reset(where: str, note: str, target: str = "") -> bool:
+    """Reset ``target`` (default: the configured devices) and REPORT WHETHER THE RESET RAN.
+
+    ``target`` is the chip/board spec to reset. It used to be absent: callers computed which chip had
+    died and passed it only inside ``note``, i.e. into the log line, while this function always reset
+    ``PERF_MCP_DEVICES``. The evidence was printed and discarded — the message read ``target=3`` while
+    board 0 was reset. A target that does not reach the reset command is not a target.
+
+    Recover via run.py's board-aware _reset_devices (whole board(s) — a single-chip `-r 0`
+    half-resets a p300c and breaks its enumeration, and does not reset a Galaxy at all). If that module
+    is unavailable, fall back to agent.probes._reset_arg_sets — the SAME galaxy/board-aware invocations
+    (glx_reset on a Galaxy, full enumerated `-r` elsewhere) — and never a bare single-chip `-r 0`."""
+    spec = (target or "").strip() or (os.environ.get("PERF_MCP_DEVICES", "").strip() or "all")
     _mod = _run_module()
     if _mod is not None:
         try:
-            status = _mod._reset_devices(os.environ.get("PERF_MCP_DEVICES", "").strip() or "all")
+            status = _mod._reset_devices(spec)
             sys.stderr.write(f"[perf-mcp] {note}: {status} at {where}\n")
-            return
+            return True
         except Exception as exc:  # noqa: BLE001
             sys.stderr.write(f"[perf-mcp] board-aware reset unavailable ({exc}) at {where}; probes fallback\n")
     try:
@@ -155,38 +184,31 @@ def _board_reset(where: str, note: str) -> None:
             r = _sp.run([_TT_SMI, *args], capture_output=True, text=True, timeout=300)
             if r.returncode == 0:
                 sys.stderr.write(f"[perf-mcp] {note} via tt-smi {' '.join(args)} (fallback) at {where}\n")
-                return
+                return True
         except Exception:  # noqa: BLE001
             continue
     sys.stderr.write(f"[perf-mcp] tt-smi reset failed at {where}\n")
+    return False
 
 
-def _device_recover(where: str) -> None:
-    """Best-effort reset after a likely wedge (2+ consecutive device crashes), reusing run.py's
-    board-aware per-board reset."""
-    _board_reset(where, "device recovered")
+def _device_recover(where: str) -> bool:
+    """Reset after a likely wedge, through the VERIFIED path.
+
+    Kept as a named entry point, but it no longer calls _board_reset directly: an unverified reset
+    helper sitting next to a verified one is a trap, since the next caller cannot tell them apart.
+    """
+    return _recover_device(where, "")
 
 
 def _note_device_crash(where: str, error_text: str = "") -> None:
-    """Record a device crash and recover when the evidence justifies it.
-
-    A DEAD-BOARD signature recovers IMMEDIATELY: it is unambiguous, and the old two-strike counter
-    could never reach two anyway -- it lived in this process, which the MCP client kills whenever a
-    call runs long, including the 7-minute tt-smi hang the reset itself caused. Eleven hours of
-    crashes produced no completed reset.
-
-    Ambiguous crashes keep the counter, because a single odd failure is not evidence of a wedge. The
-    counter is only cleared on a VERIFIED-healthy device, so a failed reset no longer looks like a
-    successful one.
-    """
-    if _is_dead_board(error_text):
-        if _recover_device(where, error_text):
-            _CONSEC_CRASH["n"] = 0
-        return
-    _CONSEC_CRASH["n"] += 1
-    if _CONSEC_CRASH["n"] >= 2:  # repeated crash -> likely a wedged core -> recover
-        if _recover_device(where, error_text):
-            _CONSEC_CRASH["n"] = 0
+    """Record a device crash and recover when the evidence justifies it (shared policy)."""
+    _dr().note_crash(
+        where,
+        lambda tgt: _board_reset(where, "recover (target=%s)" % tgt, target=tgt),
+        error_text=error_text,
+        config_target=os.environ.get("PERF_MCP_DEVICES", "") or "",
+        log=lambda m: sys.stderr.write("[perf-mcp] %s\n" % m),
+    )
 
 
 def _note_device_ok() -> None:
@@ -216,95 +238,55 @@ def _is_l1_overflow(msg) -> bool:
 
 # --- device recovery: decide from EVIDENCE, fall back to the config guess -----------------------
 
-_DEAD_BOARD_SIGS = ("0xffffffff", "board should be reset", "pcie link", "device hang", "hang detected")
-_RESET_FAIL_LIMIT = int(os.environ.get("PERF_MCP_RESET_FAIL_LIMIT", "3") or "3")
-_RESET_FAILS = {"n": 0}
+_RESET_FAIL_LIMIT = _dr().RESET_FAIL_LIMIT
+_RESET_FAILS = _dr().RESET_FAILS
 
 
 def _is_dead_board(text) -> bool:
-    """Is this error the UNAMBIGUOUS 'the card stopped answering' signature?
-
-    A PCIe read of 0xffffffff is all-ones: the bus reporting that nobody replied. There is nothing to
-    disambiguate, so waiting for a second occurrence before acting only guarantees being down twice.
-    Counters belong on flaky symptoms, not definitive ones.
-    """
-    s = (str(text) or "").lower()
-    return any(sig in s for sig in _DEAD_BOARD_SIGS)
+    return _dr().is_dead_board(text)
 
 
 def _dead_chip_from_error(text):
-    """The chip id the runtime named in the failure, or None.
-
-    THE EVIDENCE. tt-metal reports "Read 0xffffffff over PCIe ID 3" -- it says which chip died. The
-    recovery path previously inferred the target from `--devices single`, which maps to chip 0; but
-    that flag expresses INTENT (use one chip), not PLACEMENT, and _visible_devices deliberately leaves
-    every chip visible, so the runtime had put the mesh on chip 3. Eleven hours of resets hit the
-    healthy board while the dead one was never touched. Read the id rather than infer it.
-    """
-    m = _re.search(r"pcie\s*(?:id|device)?\s*[:#]?\s*(\d+)", str(text or ""), _re.I)
-    if m:
-        try:
-            return int(m.group(1))
-        except (TypeError, ValueError):
-            return None
-    return None
+    return _dr().dead_chip_from_error(text)
 
 
 def _recover_device(where: str, error_text: str = "") -> bool:
-    """Reset the board and REPORT WHETHER IT WORKED. True only on a verified-healthy device.
+    """Reset the board and REPORT WHETHER IT WORKED, via the shared primitive.
 
-    Target precedence -- evidence first, the config guess retained as the fallback it always should
-    have been:
-        1. the chip id named in the error   (observed)
-        2. the --devices-derived board      (inferred; kept, but no longer the only source)
-        3. every board                      (last resort)
-
-    The outcome is returned rather than written to a stderr nobody captures: a failed reset used to be
-    indistinguishable from a successful one, so the loop retried forever against a card that was never
-    coming back.
+    Only the ISSUING of the reset is local (run.py's board-aware _reset_devices); which board, how
+    many tries, whether it came back and when to give up are decided in one place for every caller.
     """
-    chip = _dead_chip_from_error(error_text)
-    targets = []
-    if chip is not None:
-        targets.append(str(chip))
-    cfg = (os.environ.get("PERF_MCP_DEVICES", "") or "").strip()
-    if cfg and cfg not in targets:
-        targets.append(cfg)
-    targets.append("all")
-
-    for tgt in targets:
-        _board_reset(where, "recover (target=%s%s)" % (tgt, ", from error" if tgt == str(chip) else ""))
-        if _device_is_healthy():
-            _RESET_FAILS["n"] = 0
-            sys.stderr.write("[perf-mcp] device recovered at %s via target=%s\n" % (where, tgt))
-            return True
-    _RESET_FAILS["n"] += 1
-    sys.stderr.write(
-        "[perf-mcp] RESET FAILED at %s (attempt %d/%d); targets tried: %s\n"
-        % (where, _RESET_FAILS["n"], _RESET_FAIL_LIMIT, ", ".join(targets))
+    return _dr().recover(
+        where,
+        lambda tgt: _board_reset(where, "recover (target=%s)" % tgt, target=tgt),
+        error_text=error_text,
+        config_target=os.environ.get("PERF_MCP_DEVICES", "") or "",
+        log=lambda m: sys.stderr.write("[perf-mcp] %s\n" % m),
     )
-    return False
 
 
 def _device_is_healthy() -> bool:
-    """Does the device answer at all? Bounded, because tt-smi HANGS on a dead card -- the previous
-    420 s subprocess timeout let the MCP client kill this process mid-reset, which is what erased the
-    crash counter and stopped recovery ever firing."""
-    try:
-        r = _sp.run([_TT_SMI, "-s"], capture_output=True, text=True, timeout=45)
-        return r.returncode == 0 and "board_type" in (r.stdout or "")
-    except Exception:  # noqa: BLE001
-        return False
+    return _dr().device_is_healthy()
 
 
 def _recovery_exhausted() -> bool:
     """Have resets failed enough times that the run should stop rather than poll a dead board?"""
-    return _RESET_FAILS["n"] >= _RESET_FAIL_LIMIT
+    return _dr().recovery_exhausted()
 
 
-def _reclaim_mesh(where: str) -> None:
-    _board_reset(where, "full-mesh reset (L1 overflow)")
-    _CONSEC_CRASH["n"] = 0
+def _reclaim_mesh(where: str) -> bool:
+    """Reclaim the mesh after an L1 overflow, VERIFY it came back, and report the outcome.
+
+    This path is reached from profile_model / measure_candidate — the hot loop. It used to reset
+    blindly and then clear the crash counter unconditionally, so a reclaim that failed was recorded as
+    a success and erased the very history that would have escalated. Route it through _recover_device
+    so it gets the same verification and the same escalation budget as every other reset; there is no
+    chip id in an L1 overflow, so the target falls to the config guess and then to every board.
+    """
+    ok = _recover_device(where, "")
+    if ok:
+        _CONSEC_CRASH["n"] = 0
+    return ok
 
 
 _L1_OVERFLOW_MSG = (

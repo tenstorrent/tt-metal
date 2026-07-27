@@ -82,9 +82,15 @@ def test_board_reset_fallback_bare_r_when_probes_unavailable(monkeypatch):
     assert seen and seen[0][1:] == ["-r"]
 
 
-def test_device_recover_and_reclaim_use_board_reset(monkeypatch):
-    calls = []
-    monkeypatch.setattr(perf_mcp, "_board_reset", lambda where, note: calls.append(note))
+def test_device_recover_and_reclaim_go_through_the_verified_path(monkeypatch):
+    """Both recovery entry points must run the VERIFIED reset, not call _board_reset directly.
+
+    This test previously asserted the opposite -- that each issued a bare _board_reset labelled with
+    its own note -- which is exactly the shape that let a failed reset be reported as a success. An
+    unverified reset helper sitting beside a verified one is a trap for the next caller.
+    """
+    seen = []
+    monkeypatch.setattr(perf_mcp, "_recover_device", lambda where, err="": seen.append(where) or True)
     perf_mcp._device_recover("w")
     perf_mcp._reclaim_mesh("w")
-    assert calls == ["device recovered", "full-mesh reset (L1 overflow)"]
+    assert seen == ["w", "w"]

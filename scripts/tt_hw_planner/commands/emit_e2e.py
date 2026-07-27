@@ -59,8 +59,20 @@ def _pipeline_self_opens_device(demo_dir: Path):
 
 
 _SCOPE_ITER_EVIDENCE = (
-    "logits", "argmax", "_select_next", "step_logits", "gen_ids", "next_token",
-    "stubs[", "_fwd(", ".forward(", "scheduler", "denoise", "unet", "hidden_states", "timestep",
+    "logits",
+    "argmax",
+    "_select_next",
+    "step_logits",
+    "gen_ids",
+    "next_token",
+    "stubs[",
+    "_fwd(",
+    ".forward(",
+    "scheduler",
+    "denoise",
+    "unet",
+    "hidden_states",
+    "timestep",
 )
 _SCOPE_CONFIG_DERIVED = re.compile(
     r"ar_horizon|\beff\b|\.nonzero\(|==\s*stop|\.timesteps|generation_config|max_new_tokens|max_length|"
@@ -191,7 +203,32 @@ def _scope_grounding_gate(demo_dir: Path, reference_config=_SCOPE_SENTINEL):
 
 
 def _reset_device() -> str:
+    """Reset the device, widening the requested chips to WHOLE BOARDS.
+
+    TT_HW_PLANNER_RESET_CHIPS lets an operator name chips directly, and naming one chip of a p300c
+    (`-r 3`) half-resets the board: the untouched ASIC's clock arbiter is left inconsistent and the
+    next device-open wedges. Widen through the shared recovery primitive, falling back to every chip
+    rather than narrowing when the topology is unknown."""
     chips = os.environ.get("TT_HW_PLANNER_RESET_CHIPS", "0,1,2,3")
+    try:
+        import importlib.util as _ilu
+
+        _p = (
+            Path(__file__).resolve().parents[3]
+            / "models"
+            / "experimental"
+            / "perf_automation"
+            / "agent"
+            / "device_recovery.py"
+        )
+        _spec = _ilu.spec_from_file_location("tt_device_recovery", str(_p))
+        _dr = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_dr)
+        widened = _dr.expand_spec(chips)
+        if widened and widened != "all":
+            chips = widened
+    except Exception:  # noqa: BLE001
+        pass
     tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
     if not Path(tt_smi).exists():
         return "device reset SKIPPED (tt-smi not found)"

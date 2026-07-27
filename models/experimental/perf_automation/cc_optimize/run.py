@@ -1112,29 +1112,8 @@ _BOARD_MAP_FILE = Path(tempfile.gettempdir()) / "perf_mcp_board_topology.json"
 
 
 def _read_board_topology() -> dict | None:
-    """Live-read chip-index -> its board's PCI-resettable chips from tt-smi -s. Chips sharing a board_id
-    are one board; a WHOLE board is reset by resetting every chip on it that has its own PCI bus_id. An
-    n300's remote chip has no bus_id, so its board is {local}; a p300c's two ASICs are each PCIe
-    endpoints, so its board is BOTH (resetting only one half-resets the board and breaks enumeration).
-    Returns {str(chip): [board's resettable chips]} or None. Static per host (board_ids / BDFs fixed)."""
-    try:
-        tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
-        r = subprocess.run([tt_smi, "-s"], capture_output=True, text=True, timeout=120)
-        di = (json.loads(r.stdout) or {}).get("device_info") or []
-    except Exception:  # noqa: BLE001
-        return None
-    board_of: dict[int, str] = {}
-    resettable_of_board: dict[str, list] = {}
-    for i, dev in enumerate(di):
-        bi = dev.get("board_info") or {}
-        bid = bi.get("board_id")
-        board_of[i] = bid
-        bus = bi.get("bus_id")
-        if bid is not None and bus and bus != "N/A":
-            resettable_of_board.setdefault(bid, []).append(i)
-    m = {str(i): sorted(resettable_of_board.get(board_of.get(i), [])) for i in board_of}
-    m = {k: v for k, v in m.items() if v}
-    return m or None
+    """Delegates to the shared primitive so the reset map has exactly one implementation."""
+    return _dr().read_board_topology()
 
 
 def _capture_board_topology() -> None:
@@ -1150,27 +1129,9 @@ def _capture_board_topology() -> None:
 
 
 def _board_reset_targets(chip_ids: list[int]) -> str | None:
-    """Map logical chip ids -> the PCI-resettable LOCAL chip of each board they live on, using the map
-    captured at healthy startup (live-read fallback). Ensures a reset hits whole n300 boards -- never
-    half a board, never a non-PCIe remote chip (the half-reset fabric that caused the ETH wedge).
-    Returns a sorted comma list, or None if no topology is available. RESET PATH ONLY."""
-    m = None
-    try:
-        m = json.loads(_BOARD_MAP_FILE.read_text())
-    except Exception:  # noqa: BLE001
-        m = None
-    if not m:
-        m = _read_board_topology()
-    if not m:
-        return None
-    targets: set = set()
-    for c in chip_ids:
-        v = m.get(str(c))
-        if isinstance(v, list):
-            targets.update(int(x) for x in v)
-        elif v is not None:
-            targets.add(int(v))
-    return ",".join(str(x) for x in sorted(targets)) if targets else None
+    """Map logical chip ids -> the PCI-resettable chips of each board they live on. Delegates to the
+    shared primitive; kept as a name because the reset paths and their tests refer to it."""
+    return _dr().expand_to_boards(chip_ids)
 
 
 def _reset_chip_list(devices: str) -> str:
@@ -1230,13 +1191,41 @@ def _reset_devices(devices: str) -> str:
     return "device reset (%s)" % last
 
 
-def _reclaim_device(devices: str) -> str:
+def _dr():
+    """The shared device-recovery primitive (agent/device_recovery.py), imported lazily and by path
+    because run.py is itself loaded by path from perf_mcp/optimize with a bare sys.path."""
+    global _DR_MOD
+    try:
+        return _DR_MOD
+    except NameError:
+        pass
+    try:
+        from agent import device_recovery as _m
+    except Exception:  # noqa: BLE001
+        import importlib.util as _ilu
+
+        _p = Path(__file__).resolve().parents[1] / "agent" / "device_recovery.py"
+        _spec = _ilu.spec_from_file_location("tt_device_recovery", str(_p))
+        _m = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_m)
+    globals()["_DR_MOD"] = _m
+    return _m
+
+
+def _reclaim_device(devices: str, error_text: str = "") -> str:
     """UNIVERSAL device reclaim used at EVERY recovery point: kill every process holding
     /dev/tenstorrent (except this process + its ancestors, so the supervisor/self is never killed),
     then tt-smi -r the chips. A wedge is cleared no matter WHO holds the device -- a stray child, a
     hung profiler, a busy pytest, or a leaked resident mesh. The one holder this cannot kill is the
     caller's own tree; an orchestrator self-hold is handled by exiting to the supervisor, which then
-    reclaims from outside."""
+    reclaims from outside.
+
+    ``error_text`` is the failure output, and it is the TARGET EVIDENCE: the runtime names the chip
+    that died ("Read 0xffffffff over PCIe ID 3"). This used to reset whatever ``devices`` implied --
+    `single` -> chip 0 -> board 0,1 -- which is INTENT, not PLACEMENT, so a mesh placed on chip 3
+    was never reset while the healthy board was reset repeatedly for eleven hours. The reset is now
+    routed through the shared primitive, so it picks the target from evidence, VERIFIES the device
+    came back, and spends the same escalation budget as every other reset in the tool."""
     import glob as _glob
 
     protected = set()
@@ -1263,7 +1252,24 @@ def _reclaim_device(devices: str) -> str:
             killed.append(_pid)
         except Exception:  # noqa: BLE001
             pass
-    return "reclaimed device (killed holders %s) + %s" % (killed or "none", _reset_devices(devices))
+    _dr_mod = _dr()
+    _status = {"last": ""}
+
+    def _issue(target):
+        _status["last"] = _reset_devices(target)
+        return True
+
+    ok = _dr_mod.recover(
+        "reclaim",
+        _issue,
+        error_text=error_text,
+        config_target=devices,
+    )
+    return "reclaimed device (killed holders %s) + %s%s" % (
+        killed or "none",
+        _status["last"] or "no reset issued",
+        "" if ok else " [DEVICE STILL UNHEALTHY]",
+    )
 
 
 def _pg_cpu_jiffies(pgid: int) -> int:
@@ -1419,7 +1425,7 @@ def _run_device_proc(
             proc.communicate(timeout=30)
         except Exception:  # noqa: BLE001
             pass
-        tail = _reclaim_device(devices) if reset_on_timeout else "process group killed"
+        tail = _reclaim_device(devices, error_text=out) if reset_on_timeout else "process group killed"
         _lim = int(getattr(_te, "timeout", None) or timeout_s)
         _why = "no-progress stall" if _lim < timeout_s else "hard limit"
         print(
@@ -1949,7 +1955,7 @@ def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_lo
         proc.wait(timeout=30)
     except Exception:  # noqa: BLE001
         pass
-    rst = _reclaim_device(devices)
+    rst = _reclaim_device(devices, error_text=_tail_lines(agent_log, 40))
     print(
         "  [optimize/cc] WATCHDOG: round %s — killed the round + %s; next round starts a FRESH mcp "
         "server on the reset mesh." % (wedge_reason, rst)
@@ -2369,7 +2375,11 @@ def optimize_pipeline(
                     "(no restart; process healthy, chips reset); ladder state is preserved." % wedge_strikes,
                     flush=True,
                 )
-                print("  [optimize/cc] " + _reclaim_device(devices), flush=True)
+                print(
+                    "  [optimize/cc] "
+                    + _reclaim_device(devices, error_text=_tail_lines(str(kernel_log) + ".agent.log", 40)),
+                    flush=True,
+                )
                 wedge_strikes = 0
         else:
             wedge_strikes = 0

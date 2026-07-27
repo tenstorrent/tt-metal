@@ -661,16 +661,29 @@ def _reset_arg_sets() -> list[list[str]]:
     return [["-r"]]
 
 
-def _device_reset() -> bool:
-    tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
-    for args in _reset_arg_sets():
-        try:
-            proc = subprocess.run([tt_smi, *args], capture_output=True, text=True, timeout=300)
-            if proc.returncode == 0:
-                return True
-        except Exception:
-            continue
-    return False
+def _device_reset(error_text: str = "", config_target: str = "") -> bool:
+    """Reset the device and report whether it CAME BACK -- not merely whether tt-smi exited 0.
+
+    Routed through the shared recovery primitive so the profiler layer picks its target from the
+    same evidence, verifies the same way, and spends the same escalation budget as the orchestrator
+    and the MCP server. This used to return the exit code of a reset aimed at whatever
+    _reset_arg_sets() decided, with nothing checking the device afterwards.
+    """
+    from . import device_recovery as _dr
+
+    def _issue(target):
+        tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
+        arg_sets = [["-r", target]] if target and target != "all" else _reset_arg_sets()
+        for args in arg_sets:
+            try:
+                proc = subprocess.run([tt_smi, *args], capture_output=True, text=True, timeout=300)
+                if proc.returncode == 0:
+                    return True
+            except Exception:  # noqa: BLE001
+                continue
+        return False
+
+    return _dr.recover("probes", _issue, error_text=error_text, config_target=config_target)
 
 
 _DEVICE_OVERHEAT_RE = re.compile(r"Waiting for AICLK value to settle failed|possible overheating|AICLK clamped")
@@ -1200,8 +1213,15 @@ def cli_lead_review_gate(
     from .agent_bin import resolve_claude_bin
 
     r = subprocess.run(
-        [resolve_claude_bin(), "-p", prompt, "--output-format", "text",
-         "--system-prompt", "You make go/no-go calls for an automated perf-optimization harness."],
+        [
+            resolve_claude_bin(),
+            "-p",
+            prompt,
+            "--output-format",
+            "text",
+            "--system-prompt",
+            "You make go/no-go calls for an automated perf-optimization harness.",
+        ],
         capture_output=True,
         text=True,
         timeout=600,

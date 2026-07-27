@@ -28,18 +28,19 @@ class _R:
 
 
 def test_read_topology_p300c_whole_board(monkeypatch):
-    monkeypatch.setattr(run.subprocess, "run", lambda *a, **k: _R(_stdout(_P300C)))
+    monkeypatch.setattr(run._dr().subprocess, "run", lambda *a, **k: _R(_stdout(_P300C)))
     assert run._read_board_topology() == {"0": [0, 1], "1": [0, 1], "2": [2, 3], "3": [2, 3]}
 
 
 def test_read_topology_n300_local_only(monkeypatch):
-    monkeypatch.setattr(run.subprocess, "run", lambda *a, **k: _R(_stdout(_N300)))
+    monkeypatch.setattr(run._dr().subprocess, "run", lambda *a, **k: _R(_stdout(_N300)))
     assert run._read_board_topology() == {"0": [0], "1": [0]}
 
 
 def test_board_reset_targets_union_whole_boards(tmp_path, monkeypatch):
-    monkeypatch.setattr(run, "_BOARD_MAP_FILE", tmp_path / "absent.json")
-    monkeypatch.setattr(run, "_read_board_topology", lambda: {"0": [0, 1], "1": [0, 1], "2": [2, 3], "3": [2, 3]})
+    dr = run._dr()
+    monkeypatch.setattr(dr, "BOARD_MAP_FILE", tmp_path / "absent.json")
+    monkeypatch.setattr(dr, "read_board_topology", lambda: {"0": [0, 1], "1": [0, 1], "2": [2, 3], "3": [2, 3]})
     assert run._board_reset_targets([0]) == "0,1"
     assert run._board_reset_targets([2]) == "2,3"
     assert run._board_reset_targets([0, 2]) == "0,1,2,3"
@@ -48,7 +49,7 @@ def test_board_reset_targets_union_whole_boards(tmp_path, monkeypatch):
 def test_board_reset_targets_legacy_int_cache(tmp_path, monkeypatch):
     f = tmp_path / "m.json"
     f.write_text('{"0": 0, "1": 0}')
-    monkeypatch.setattr(run, "_BOARD_MAP_FILE", f)
+    monkeypatch.setattr(run._dr(), "BOARD_MAP_FILE", f)
     assert run._board_reset_targets([0, 1]) == "0"
 
 

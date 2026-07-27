@@ -4730,7 +4730,7 @@ def _run_focused_pytest(
         print("  This usually means a previously killed orphan left stale IOMMU/sysmem")
         print("  mappings. Running `tt-smi -r` and retrying the same pytest ONCE.")
         print("=" * 78)
-        if not _run_tt_smi_reset(context="pytest:post-fail-recovery"):
+        if not _run_tt_smi_reset(context="pytest:post-fail-recovery", error_text=tail_text):
             print("  device reset did not succeed; leaving rc as is", file=sys.stderr)
             return None
         return _run_focused_pytest(
@@ -7422,12 +7422,39 @@ _DEVICE_RESET_COUNT: int = 0
 _DEVICE_RESET_MAX_PER_PROCESS: int = 3
 
 
+def _device_recovery():
+    """The shared device-recovery primitive, imported by path so the planner does not depend on
+    perf_automation being on sys.path."""
+    global _DR_MOD
+    try:
+        return _DR_MOD
+    except NameError:
+        pass
+    import importlib.util as _ilu
+
+    _p = (
+        Path(__file__).resolve().parents[2]
+        / "models"
+        / "experimental"
+        / "perf_automation"
+        / "agent"
+        / "device_recovery.py"
+    )
+    _spec = _ilu.spec_from_file_location("tt_device_recovery", str(_p))
+    _m = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_m)
+    globals()["_DR_MOD"] = _m
+    return _m
+
+
 def _run_tt_smi_reset(
     *,
     devices: str = "0,1,2,3",
     timeout_s: int = 120,
     force: bool = False,
     context: str = "",
+    reason: str = "",
+    error_text: str = "",
 ) -> bool:
     """Execute `tt-smi -r <devices>` to clear stale IOMMU / sysmem / NOC
     mappings on the TT cards.
@@ -7439,8 +7466,16 @@ def _run_tt_smi_reset(
       * `force=True` overrides the per-process cap (still subject to the
         env-var override).
 
-    Returns True iff `tt-smi -r` exited cleanly.
+    Returns True iff the device is VERIFIED HEALTHY afterwards. It used to return the exit code of
+    tt-smi, which says the command ran, not that the card came back -- so a reset that left the
+    board dead was indistinguishable from one that fixed it. When `error_text` names the chip that
+    died, that chip's board is reset before falling back to `devices`.
+
+    `reason` is accepted as an alias for `context`: agentic/actions.py has always called this with
+    reason=..., which raised TypeError on a keyword-only signature, so the agentic reset action
+    could never actually reset anything.
     """
+    context = context or reason
     global _DEVICE_RESET_COUNT
     if os.environ.get("TT_PLANNER_NO_DEVICE_RESET", "").lower() in {"1", "true", "yes", "on"}:
         print("  TT_PLANNER_NO_DEVICE_RESET set in env; skipping `tt-smi -r`", file=sys.stderr)
@@ -7460,6 +7495,10 @@ def _run_tt_smi_reset(
         return False
     import subprocess as _sp
 
+    _dr = _device_recovery()
+    _dead = _dr.dead_chip_from_error(error_text)
+    if _dead is not None:
+        devices = _dr.expand_to_boards([_dead]) or devices
     label = f" [{context}]" if context else ""
     print()
     print("=" * 78)
@@ -7485,6 +7524,9 @@ def _run_tt_smi_reset(
         print(tail[-1200:])
     if proc.returncode != 0:
         print(f"  tt-smi -r exited rc={proc.returncode}", file=sys.stderr)
+        return False
+    if not _device_recovery().device_is_healthy():
+        print("  tt-smi -r exited 0 but the device is NOT answering; treating as a failed reset", file=sys.stderr)
         return False
     print(f"  tt-smi -r completed cleanly (reset #{_DEVICE_RESET_COUNT}/{_DEVICE_RESET_MAX_PER_PROCESS})")
     return True
