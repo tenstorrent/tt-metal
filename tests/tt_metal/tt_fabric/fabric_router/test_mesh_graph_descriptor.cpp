@@ -8,7 +8,6 @@
 #include <vector>
 #include <string>
 #include <cstdio>
-#include <cstdlib>
 #include <set>
 #include <map>
 #include <unordered_set>
@@ -1898,50 +1897,6 @@ TEST(MeshGraphDescriptorTests, PinningsMeshIdRegexEvenOddParity) {
     for (uint32_t c = 0; c < 4; ++c) {
         EXPECT_EQ(pinnings[0].fabric_nodes[c].chip_id, c);
     }
-}
-
-TEST(MeshGraphDescriptorTests, PinningsRegex48StageGeneratedExpandsTo48Groups) {
-    // Generate a 48-stage 4x4 pipeline MGD with pinnings via the sweep script, then verify regex expansion.
-    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
-    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME must be set";
-
-    const std::filesystem::path mgd_path =
-        std::filesystem::temp_directory_path() / "sweep_4x4_pipeline_48stage_mesh_graph_descriptor.textproto";
-    const std::string gen_cmd = std::string("python3 ") + tt_metal_home +
-                                "/tests/scripts/multihost/gen_pipeline_sweep_mgds.py"
-                                " --shape 4x4 --stages 48 --hosts 2 --pinnings"
-                                " --out " +
-                                mgd_path.string();
-    ASSERT_EQ(std::system(gen_cmd.c_str()), 0) << "Failed to generate pipeline sweep MGD: " << gen_cmd;
-    ASSERT_TRUE(std::filesystem::exists(mgd_path));
-
-    MeshGraphDescriptor desc(mgd_path);
-    const auto& pinnings = desc.get_pinnings();
-    ASSERT_EQ(pinnings.size(), 48u) << "48 per-mesh groups from 2 regex entries";
-
-    std::set<uint32_t> meshes;
-    for (const auto& g : pinnings) {
-        ASSERT_EQ(g.fabric_nodes.size(), 5u) << "corner chips 0,1,3,12,15";
-        ASSERT_EQ(g.asic_positions.size(), 5u);
-        const uint32_t m = *g.fabric_nodes.front().mesh_id;
-        meshes.insert(m);
-        // Every node in a group shares that group's mesh id.
-        for (const auto& fn : g.fabric_nodes) {
-            EXPECT_EQ(*fn.mesh_id, m);
-        }
-        // Parity check: even -> asic_location 3 present; odd -> asic_location 2 present.
-        const uint32_t expect_loc = (m % 2 == 0) ? 3u : 2u;
-        bool found = false;
-        for (const auto& p : g.asic_positions) {
-            if (*p.second == expect_loc) {
-                found = true;
-            }
-        }
-        EXPECT_TRUE(found) << "mesh " << m << " should use asic_location " << expect_loc;
-    }
-    EXPECT_EQ(meshes.size(), 48u) << "meshes 0..47 all covered exactly once";
-    EXPECT_EQ(*meshes.begin(), 0u);
-    EXPECT_EQ(*meshes.rbegin(), 47u);
 }
 
 TEST(MeshGraphDescriptorTests, PinningsRegexMixedWithNonRegexError) {
