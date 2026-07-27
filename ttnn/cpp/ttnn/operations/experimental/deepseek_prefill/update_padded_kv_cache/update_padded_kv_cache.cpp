@@ -14,9 +14,10 @@ ttnn::Tensor update_padded_kv_cache(
     uint32_t layer_idx,
     uint32_t num_layers,
     uint32_t kv_actual_global,
-    uint32_t cluster_axis) {
+    uint32_t cluster_axis,
+    std::optional<uint32_t> tp_axis) {
     return ttnn::prim::update_padded_kv_cache(
-        cache, input, slot_idx, layer_idx, num_layers, kv_actual_global, cluster_axis);
+        cache, input, slot_idx, layer_idx, num_layers, kv_actual_global, cluster_axis, tp_axis);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache

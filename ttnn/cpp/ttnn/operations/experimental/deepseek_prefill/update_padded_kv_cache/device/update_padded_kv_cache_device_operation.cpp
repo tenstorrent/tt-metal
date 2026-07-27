@@ -45,6 +45,15 @@ void validate_runtime_args(
     const UpdatePaddedKvCacheDeviceOperation::operation_attributes_t& args,
     const UpdatePaddedKvCacheDeviceOperation::tensor_args_t& tensor_args) {
     TT_FATAL(args.cluster_axis == 0 || args.cluster_axis == 1, "cluster_axis ({}) must be 0 or 1", args.cluster_axis);
+    if (args.tp_axis.has_value()) {
+        const uint32_t tp_axis = args.tp_axis.value();
+        TT_FATAL(tp_axis == 0 || tp_axis == 1, "tp_axis ({}) must be 0 or 1", tp_axis);
+        TT_FATAL(
+            tp_axis != args.cluster_axis,
+            "tp_axis ({}) must differ from cluster_axis ({})",
+            tp_axis,
+            args.cluster_axis);
+    }
     // The writer divides kv_actual_global by TILE_HEIGHT to get its tile offset, so it must be aligned.
     TT_FATAL(
         args.kv_actual_global % TILE_HEIGHT == 0,
@@ -61,8 +70,26 @@ void validate_runtime_args(
     const auto& mesh_view = cache.device()->get_view();
     TT_FATAL(mesh_view.is_mesh_2d(), "update_padded_kv_cache requires a 2D mesh");
     const uint32_t sp_factor = (args.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-    const uint32_t chunk_global_tokens = sp_factor * tensor_args.input.padded_shape()[-2];
-    const uint32_t global_cache_capacity = sp_factor * cache.padded_shape()[-2];
+    const uint32_t tp_factor =
+        args.tp_axis.has_value() ? ((args.tp_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols()) : 1;
+
+    const uint32_t input_seq = tensor_args.input.padded_shape()[-2];
+    if (tp_factor > 1) {
+        // The input is TP-replicated; each chip persists only its own contiguous 1/tp window of the
+        // input rows. That window offset is contiguous in the flattened (head, seq) page space only
+        // for a single head, which is what both GLM KV caches (KVPE width 576, index width 128) use.
+        TT_FATAL(
+            tensor_args.input.padded_shape()[1] == 1,
+            "TP-sharding (tp_axis set) requires a single head dim (got {})",
+            tensor_args.input.padded_shape()[1]);
+        TT_FATAL(
+            input_seq % tp_factor == 0, "input seq ({}) must be divisible by tp_factor ({})", input_seq, tp_factor);
+    }
+
+    // chunk_global uses PHYSICAL sp: TP chips share the same input rows (they are replicated), they do
+    // not add tokens. But the cache is sharded across sp*tp, so its global capacity multiplies both.
+    const uint32_t chunk_global_tokens = sp_factor * input_seq;
+    const uint32_t global_cache_capacity = sp_factor * tp_factor * cache.padded_shape()[-2];
     TT_FATAL(
         args.kv_actual_global + chunk_global_tokens <= global_cache_capacity,
         "kv_actual_global ({}) + chunk_global ({}) would overflow global cache capacity ({})",
@@ -115,7 +142,25 @@ void UpdatePaddedKvCacheDeviceOperation::validate_on_program_cache_miss(
     // row, so input/cache seq must be 32-aligned regardless of layout.
     TT_FATAL(input_seq % TILE_HEIGHT == 0, "input seq dim ({}) must be tile-aligned", input_seq);
     TT_FATAL(cache_seq % TILE_HEIGHT == 0, "cache seq dim ({}) must be tile-aligned", cache_seq);
-    TT_FATAL(cache_seq % input_seq == 0, "cache seq ({}) must be a multiple of input seq ({})", cache_seq, input_seq);
+    // With TP-sharding the input is TP-replicated: only input_seq/tp rows are actually WRITTEN per chip
+    // (each chip persists its own 1/tp window), so the block-cyclic invariant is on the written chunk.
+    // tp_factor==1 (no tp_axis) reduces this to the original cache_seq % input_seq == 0.
+    const auto& mesh_view = cache.device()->get_view();
+    const uint32_t tp_factor =
+        args.tp_axis.has_value() ? ((args.tp_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols()) : 1;
+    const uint32_t written_seq = input_seq / tp_factor;
+    TT_FATAL(
+        (input_seq / TILE_HEIGHT) % tp_factor == 0,
+        "input seq in tiles ({}) must be divisible by tp_factor ({}) so each chip writes whole tiles",
+        input_seq / TILE_HEIGHT,
+        tp_factor);
+    TT_FATAL(
+        cache_seq % written_seq == 0,
+        "cache seq ({}) must be a multiple of the per-chip written chunk ({} = input_seq {} / tp {})",
+        cache_seq,
+        written_seq,
+        input_seq,
+        tp_factor);
 
     TT_FATAL(args.num_layers > 0, "num_layers must be positive");
     TT_FATAL(
@@ -161,8 +206,8 @@ ttsl::hash::hash_t UpdatePaddedKvCacheDeviceOperation::compute_program_hash(
     // cache hits, so they are intentionally NOT hashed and successive users/chunks reuse the cached
     // program. layer_idx IS hashed: it takes only num_layers distinct values, so one program per layer
     // is reused across users/chunks, and a hashed scalar stays correct on the fast cache-hit path.
-    // num_layers and cluster_axis stay IN: both are structural — they govern the cache slot
-    // linearization and which mesh dim is sp — not per-call data.
+    // num_layers, cluster_axis and tp_axis stay IN: all structural — they govern the cache slot
+    // linearization and which mesh dims are sp/tp — not per-call data.
     const auto& cache = tensor_args.cache;
     const auto& input = tensor_args.input;
     // Hash the full padded shapes, not just their volumes: the descriptor derives Wt, input_Ht,
@@ -172,6 +217,8 @@ ttsl::hash::hash_t UpdatePaddedKvCacheDeviceOperation::compute_program_hash(
         args.layer_idx,
         args.num_layers,
         args.cluster_axis,
+        args.tp_axis.has_value(),
+        args.tp_axis.value_or(0),
         input.dtype(),
         input.layout(),  // TILE vs ROW_MAJOR drives the page-unit math; must not collide
         input.memory_config(),
@@ -231,10 +278,26 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     // sp_factor is the mesh extent along the cluster axis (validated 2D in validate_runtime_args).
     const auto& mesh_view = device->get_view();
     const uint32_t sp_factor = (args.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-    const uint32_t my_sp_coord = ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.cluster_axis);
+    const uint32_t sp_coord = ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.cluster_axis);
 
-    // Work split: one tile per "block". num_blocks_of_work = input_C * input_Ht (= num_heads * seq_tiles).
-    const uint32_t num_blocks_of_work = input_shape[1] * input_Ht;
+    // TP-sharding (GLM-5.2 KV dedup): linearize the sp and tp axes into ONE block-cyclic axis of size
+    // sp*tp, ordered linear = sp_coord*tp + tp_coord. The input is TP-replicated, so each chip persists
+    // only its own contiguous 1/tp window of the input's seq rows. Feeding the writer the linearized
+    // triple (linear_factor = sp*tp, chunk_local_t = input_Ht/tp, linear_coord) makes ALL of its
+    // per-chip offset math correct with no kernel change. tp_axis==nullopt => tp_factor=1, which
+    // collapses every quantity below to the pure SP-only values (bit-identical to before).
+    const uint32_t tp_factor =
+        args.tp_axis.has_value() ? ((args.tp_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols()) : 1;
+    const uint32_t tp_coord = args.tp_axis.has_value() ? ::ttnn::ccl::get_linearized_index_from_physical_coord(
+                                                             cache, coord, args.tp_axis.value())
+                                                       : 0;
+    const uint32_t linear_factor = sp_factor * tp_factor;           // effective block-cyclic chip count
+    const uint32_t linear_coord = sp_coord * tp_factor + tp_coord;  // this chip's position in that order
+    const uint32_t chunk_local_t = input_Ht / tp_factor;            // tile-rows THIS chip actually writes
+
+    // Work split: one tile per "block". num_blocks_of_work = input_C * chunk_local_t (= num_heads *
+    // written seq_tiles). At tp_factor=1, chunk_local_t == input_Ht (unchanged).
+    const uint32_t num_blocks_of_work = input_shape[1] * chunk_local_t;
 
     const auto compute_grid = device->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_g1, num_blocks_per_core_g2] =
@@ -282,9 +345,9 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     // patched on cache hits by override_runtime_arguments. The kernel composes
     // batch_idx = slot_idx*num_layers + layer_idx.
     writer_kernel.emplace_common_runtime_args({
-        my_sp_coord,
-        sp_factor,
-        input_Ht,
+        linear_coord,
+        linear_factor,
+        chunk_local_t,
         args.layer_idx,
         args.num_layers,
         Wt,
@@ -306,13 +369,19 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     reader_kernel.runtime_args.reserve(num_cores);
     writer_kernel.runtime_args.reserve(num_cores);
 
+    // TP-sharded reads start at this chip's 1/tp window of the (single-head, TP-replicated) input:
+    // seq-tiles [tp_coord*chunk_local_t, +chunk_local_t). Contiguous in page space because C==1 is
+    // enforced for tp_factor>1. Zero when tp_factor==1, so the read range is unchanged for SP-only.
+    const uint32_t input_read_base_blocks = tp_coord * chunk_local_t;
+
     uint32_t num_blocks_written = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord& core = cores.at(i);
         const uint32_t num_blocks_per_core = (i < g1_numcores) ? num_blocks_per_core_g1 : num_blocks_per_core_g2;
 
-        // Reader: (src_addr, num_tiles, src_start_tile_id)
-        reader_kernel.emplace_runtime_args(core, {src_buffer, num_blocks_per_core * Wt, num_blocks_written * Wt});
+        // Reader: (src_addr, num_tiles, src_start_tile_id) -- offset into this chip's TP window.
+        reader_kernel.emplace_runtime_args(
+            core, {src_buffer, num_blocks_per_core * Wt, (input_read_base_blocks + num_blocks_written) * Wt});
 
         // Writer: (dst_addr, num_pages, core_blocks_written) — kernel derives update_idxt + head
         // offset from the slot_idx/kv_actual_global common args.
@@ -368,7 +437,8 @@ ttnn::Tensor update_padded_kv_cache(
     uint32_t layer_idx,
     uint32_t num_layers,
     uint32_t kv_actual_global,
-    uint32_t cluster_axis) {
+    uint32_t cluster_axis,
+    std::optional<uint32_t> tp_axis) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::UpdatePaddedKvCacheDeviceOperation;
     auto attrs = OperationType::operation_attributes_t{
@@ -377,6 +447,7 @@ ttnn::Tensor update_padded_kv_cache(
         .layer_idx = layer_idx,
         .num_layers = num_layers,
         .cluster_axis = cluster_axis,
+        .tp_axis = tp_axis,
     };
     auto tensor_args = OperationType::tensor_args_t{.cache = cache, .input = input};
     return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
