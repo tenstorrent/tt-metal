@@ -27,12 +27,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
-    const std::uint32_t TEST_FACE_C_DIM = params.TEST_FACE_C_DIM;
-    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
-    const std::uint32_t num_faces       = params.num_faces;
-    const Operand& buffer_A             = params.buffer_A;
-    const Operand& buffer_B             = params.buffer_B;
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const Operand& buffer_A         = params.buffer_A;
+    const Operand& buffer_B         = params.buffer_B;
 #endif
     tdma_descriptor_t td_val;
     const std::uint32_t buf_desc_id = 0;
@@ -72,13 +69,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if (tensor_shape.face_r_dim <= ckernel::unpack::UNPACR_STRIDE_MAX_ROWS)
         {
-            td_val = ckernel::trisc::construct_tdma_desc<L1AccessMode::Strided>(
-                tensor_shape, l1_addr_16B, formats.unpack_A_src, buf_desc_id, formats.unpack_A_dst);
+            td_val =
+                ckernel::trisc::construct_tdma_desc<L1AccessMode::Strided>(tensor_shape, l1_addr_16B, formats.unpack_A_src, buf_desc_id, formats.unpack_A_dst);
         }
         else
         {
-            td_val =
-                ckernel::trisc::construct_tdma_desc(tensor_shape, l1_addr_16B, formats.unpack_A_src, buf_desc_id, formats.unpack_A_dst);
+            td_val = ckernel::trisc::construct_tdma_desc(tensor_shape, l1_addr_16B, formats.unpack_A_src, buf_desc_id, formats.unpack_A_dst);
         }
 
         _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
@@ -107,7 +103,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        const auto tensor_shape          = tensor_shape_from_params(params);
+        const auto tensor_shape         = tensor_shape_from_params(params);
         std::uint32_t y_stride_external = FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
 
         // Quasar fused tilize emits one SrcA dvalid per tile: BLOCK_CT_DIM dvalids per
@@ -272,12 +268,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT        = params.TILE_CNT;
-    const std::uint32_t TEST_FACE_C_DIM = params.TEST_FACE_C_DIM;
-    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
-    const std::uint32_t num_faces       = params.num_faces;
-    const Operand& buffer_Res           = params.buffer_Res;
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const Operand& buffer_Res       = params.buffer_Res;
 #endif
     std::uint32_t const buf_desc_id        = 8;
     const std::uint32_t num_tiles_per_pack = TILE_CNT;
