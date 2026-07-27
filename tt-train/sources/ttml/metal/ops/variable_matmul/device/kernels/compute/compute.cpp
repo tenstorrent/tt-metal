@@ -189,6 +189,25 @@ void kernel_main() {
     constexpr uint32_t transpose_b = get_compile_time_arg_val(6);
     constexpr bool transpose_a = static_cast<bool>(get_compile_time_arg_val(7));
 
+    // Circular-buffer indices (compile-time). Declared up-front so the one-time HW startup below
+    // runs before ANY circular-buffer or Compute API activity, per the compute_kernel_hw_startup
+    // contract (its MMIO config writes require idle execution units).
+    constexpr uint32_t in0_cb = tt::CBIndex::c_0;
+    constexpr uint32_t in1_cb = tt::CBIndex::c_1;
+    constexpr uint32_t out_cb = tt::CBIndex::c_2;
+    constexpr uint32_t intermediate_cb = tt::CBIndex::c_3;
+
+    // When transpose_a is set, the dataflow writes the raw [K, M]-stored block into in0_cb,
+    // and the compute kernel transposes each tile into in0_transposed_cb (c_7), which is
+    // what the matmul actually consumes. `in0_cb_for_matmul` selects the right one.
+    constexpr uint32_t in0_transposed_cb = tt::CBIndex::c_7;
+    constexpr uint32_t in0_cb_for_matmul = transpose_a ? in0_transposed_cb : in0_cb;
+
+    // One-time HW startup, before any other Compute API or circular-buffer operation. Matmul maps
+    // in0 -> SrcB and in1 -> SrcA, hence SrcOrder::Reverse. Per-block matmul init is done via
+    // matmul_block_init below.
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_for_matmul, in1_cb, intermediate_cb);
+
     uint32_t argidx = 0;
     // OFFSET_ROW_MODE overrides M_start/M_end/M_blocks_per_core via cb_ctrl below.
     uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
@@ -219,25 +238,10 @@ void kernel_main() {
     const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
     const uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
 
-    constexpr uint32_t in0_cb = tt::CBIndex::c_0;
-    constexpr uint32_t in1_cb = tt::CBIndex::c_1;
-    constexpr uint32_t out_cb = tt::CBIndex::c_2;
-    constexpr uint32_t intermediate_cb = tt::CBIndex::c_3;
-
-    // When transpose_a is set, the dataflow writes the raw [K, M]-stored block into in0_cb,
-    // and the compute kernel transposes each tile into in0_transposed_cb (c_7), which is
-    // what the matmul actually consumes. `in0_cb_for_matmul` selects the right one.
-    constexpr uint32_t in0_transposed_cb = tt::CBIndex::c_7;
-    constexpr uint32_t in0_cb_for_matmul = transpose_a ? in0_transposed_cb : in0_cb;
-
     CircularBuffer cb_in0_mm(in0_cb_for_matmul);
     CircularBuffer cb_in1(in1_cb);
     CircularBuffer cb_out(out_cb);
     CircularBuffer cb_interm(intermediate_cb);
-
-    // One-time HW startup. Matmul maps in0 -> SrcB and in1 -> SrcA, hence SrcOrder::Reverse.
-    // Per-block matmul init is done via matmul_block_init below.
-    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_for_matmul, in1_cb, intermediate_cb);
 
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
