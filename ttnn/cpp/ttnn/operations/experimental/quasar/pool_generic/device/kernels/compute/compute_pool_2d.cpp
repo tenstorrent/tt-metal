@@ -311,6 +311,16 @@ void kernel_main() {
                 // for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
                 //     reduce_tile_math<REDUCE_OP, REDUCE_DIM>(math_tile_idx, num_faces_in_input_tile);
                 // }
+                // [#48552 DIAGNOSTIC] TEN-4746: a bare wait_front->pop_front on the unpacker TRAPS on Quasar
+                // (needs a TDMA in between). Stripping the unpack+reduce left this pair bare, so drop in a
+                // dummy copy_tile -- an unpack TDMA into DEST, NO pack -- purely to keep the pair non-bare.
+                // It does NOT re-introduce the pool-reduce MATH<->PACK dest-sync being bisected (no
+                // packer_wait_for_math / pack), so the compute-vs-dataflow signal stays valid.
+                copy_tile_to_dst_init_short(curr_in_cb_id);
+                tile_regs_acquire();
+                copy_tile(curr_in_cb_id, 0, 0);
+                tile_regs_commit();
+                tile_regs_release();
                 curr_in_cb.pop_front(1);
             }
             // [#48552 DIAG] tile_regs_commit();
