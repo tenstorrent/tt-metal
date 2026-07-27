@@ -221,8 +221,25 @@ padding to 49152 with `-inf` for the index while taking the value from `ttnn.max
 We do not hit that width today: the terminal uses `ttnn.argmax` on a ROW_MAJOR input, and the only
 `ttnn.topk` on the denoise path is the router's over the 128-expert axis. But V=262144 over **tp=8**
 is exactly 32768 — a Galaxy 4×8 bring-up lands on it, and a wrong argmax index is committed with no
-temperature cushion. `tests/test_device_topk_width_cliff.py` pins the widths we serve as exact and
-records the others.
+temperature cushion.
+
+**Measured on QB2, and it reproduces exactly** (`tests/test_device_topk_width_cliff.py`, 7 passed):
+
+| shard width | `ttnn.topk(k=1)` index agreement vs torch | |
+|---|---|---|
+| 16384 | 0.129 | |
+| 32768 | 0.129 | ← V/tp at tp=8 |
+| 49152 | 1.000 | |
+| 65536 | 1.000 | ← V/tp at tp=4, what we serve |
+
+`ttnn.max` stayed finite and correct at every width, which is why winter's workaround (pad to 49152
+with `-inf` for the *index*, take the *value* from `max`) is the right shape if a tp=8 mesh ever
+needs it. `argmax_last_dim` — the op our terminal actually uses — is exact at 65536.
+
+One note on the test itself: the router arm initially failed at 0.9961 set overlap on a plain random
+input. That was tie-breaking, not an op error — the 8th and 9th routing values land within a bf16
+ulp on a few rows. The test now separates the winners by a wide margin so it measures the op instead
+of the tie rule, and passes at 1.0000.
 
 ## 8. Trace region — 8 GiB/chip of reserved-but-unusable DRAM (measured; the 1.44 GiB figure is wrong too)
 
