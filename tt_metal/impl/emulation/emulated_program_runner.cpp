@@ -2837,7 +2837,8 @@ extern "C" void __emule_fabric_teleport(const void* packet_header, const void* p
 // ---------------------------------------------------------------------------
 // setup_core_state: Configure CBs and semaphores per core, build CoreSetup list.
 // ---------------------------------------------------------------------------
-// Initialize CB-sync state on a core from the program's circular buffer list.
+// Initialize a core's CB-sync state: configure each cb_id from the CB that owns
+// it locally (a CB whose core_ranges() contain this core).
 static void init_core_cb_sync(
     tt_emule::Core* core,
     detail::ProgramImpl& impl,
@@ -2845,9 +2846,8 @@ static void init_core_cb_sync(
     std::vector<uint64_t>& persistent_cb_ranges) {
     core->reset_cb_sync();
     // Record this core's globally-allocated (persistent) CB extents so Object-Intent
-    // exempts the kernel's writes anywhere in them (see §12). Its own pass — not folded
-    // into the configure lambda below, which also walks remote pass-2 CBs — to keep the
-    // exempt set exactly the local ones.
+    // exempts kernel writes anywhere in them (§12). Separate pass so the exempt set
+    // stays exactly the local CBs.
     for (auto& cb_impl : impl.circular_buffers_on_core(logical_core)) {
         if (cb_impl->globally_allocated()) {
             uint32_t start = cb_impl->address();
@@ -2873,16 +2873,10 @@ static void init_core_cb_sync(
                 lc.x, lc.y, idx, cb_addr, page_size, num_pages, (void*)base);
         }
     };
-    // Pass 1: CBs allocated on this core take precedence (own addresses).
+    // core_ranges-scoped, no global fill: blaze shares one cb_id across CBs on disjoint
+    // grids, so binding a CB whose grid excludes this core would install the wrong
+    // (addr, num_pages) for that shared cb_id.
     for (auto& cb_impl : impl.circular_buffers_on_core(logical_core)) {
-        configure(cb_impl, logical_core);
-    }
-    // Pass 2: register the remaining program CBs at their global L1 address so a
-    // kernel can get_write_ptr() a CB allocated only on a remote core (silicon CB
-    // addresses are program-global). Needed for multi-core topk, where local cores
-    // NOC-write into the final core's final_*_cb. Used only as cross-core NOC
-    // targets here; the masked L1 offset is what __emule_resolve_noc_addr routes.
-    for (auto& cb_impl : impl.circular_buffers()) {
         configure(cb_impl, logical_core);
     }
 }
