@@ -31,6 +31,7 @@ unreportable the moment you restart.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -39,6 +40,7 @@ import tempfile
 from pathlib import Path
 
 _SCHEMA = 1
+_MAX_KEY_LEN = 180
 
 KIND_EAGER = "eager_per_op"
 KIND_TRACE_PASS = "trace_pass"
@@ -61,6 +63,12 @@ def ledger_path(model: str = "", task: str = "") -> Path:
     )
     task = task or os.environ.get("PERF_MCP_TASK", "main")
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", "%s_%s" % (model, task)).strip("_") or "model_main"
+    if len(safe) > _MAX_KEY_LEN:
+        # A long HF id (org/very-long-name) produced a filename over the 255-byte limit, so EVERY
+        # write failed -- silently, since record() swallows OSError. Truncate but keep a digest so
+        # two long ids that share a prefix still get different ledgers.
+        digest = hashlib.sha1(safe.encode()).hexdigest()[:12]
+        safe = "%s_%s" % (safe[: _MAX_KEY_LEN - 13], digest)
     return Path(tempfile.gettempdir()) / ("perf_measurements_%s.jsonl" % safe)
 
 
