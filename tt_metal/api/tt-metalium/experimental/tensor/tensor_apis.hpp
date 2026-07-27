@@ -58,6 +58,13 @@ HostTensor to_row_major_layout(const HostTensor& tensor);
 HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype);
 
 // ======================================================================================
+//                                  .to_tensor_spec()
+// ======================================================================================
+
+template <typename T>
+HostTensor to_tensor_spec(const HostTensor& tensor, const TensorSpec& dest_spec);
+
+// ======================================================================================
 //                                  Utility functions
 // ======================================================================================
 

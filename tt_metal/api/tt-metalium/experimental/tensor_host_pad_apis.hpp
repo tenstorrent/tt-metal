@@ -13,7 +13,8 @@ namespace tt::tt_metal {
 //                         Host pad / unpad
 // ======================================================================================
 //
-// Host-side pad/unpad outside layout/dtype transforms with limited supports.
+// Outside the Runtime Tensor graduation surface. Host-side pad/unpad outside
+// layout/dtype transforms with limited supports.
 
 /**
  * Pad **tensor** into a host tensor with padded shape **output_padded_shape**.

@@ -16,7 +16,7 @@
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
-#include <internal/tensor/host_to_tensor_spec_apis.hpp>
+#include <tt-metalium/experimental/tensor_apis_with_pad_values.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
@@ -160,7 +160,7 @@ TEST(HostTensorToTensorSpec, PerCoreOnlyMismatchFullRewrite) {
 
     auto src_spec = TensorSpec(
         shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config, Alignment({32, 32})));
-    auto source = HostTensor::from_vector<float>(data, src_spec, /*pad_value=*/99.f);
+    auto source = host_tensor_from_vector_with_pad_value<float>(data, src_spec, /*pad_value=*/99.f);
     EXPECT_FALSE(experimental::per_core_allocation::is_per_core_allocation(source.tensor_spec().memory_config()));
 
     auto dest_memory = memory_config;
@@ -172,7 +172,7 @@ TEST(HostTensorToTensorSpec, PerCoreOnlyMismatchFullRewrite) {
     EXPECT_TRUE(source.tensor_spec() == dest_spec);
     EXPECT_FALSE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(source.tensor_spec(), dest_spec));
 
-    auto result = to_tensor_spec<float>(source, dest_spec, /*pad_value=*/77.f);
+    auto result = host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, /*pad_value=*/77.f);
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), dest_spec));
     EXPECT_TRUE(experimental::per_core_allocation::is_per_core_allocation(result.tensor_spec().memory_config()));
     EXPECT_THAT(result.to_vector<float>(), Pointwise(Eq(), data));
@@ -192,7 +192,7 @@ TEST(HostTensorToTensorSpec, LogicalRoundTripRmTileRm) {
     auto tile_spec = CMAKE_UNIQUE_NAMESPACE::make_tile_spec(shape, DataType::FLOAT32, tile, memory_config);
 
     auto source = HostTensor::from_vector<float>(data, rm_spec);
-    auto tiled = to_tensor_spec<float>(source, tile_spec, /*pad_value=*/0.f);
+    auto tiled = host_tensor_to_tensor_spec_with_pad_value<float>(source, tile_spec, /*pad_value=*/0.f);
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(tiled.tensor_spec(), tile_spec));
     EXPECT_EQ(tiled.layout(), Layout::TILE);
     EXPECT_EQ(tiled.tensor_spec().tile(), tile);
@@ -316,7 +316,7 @@ TEST(HostTensorToTensorSpec, Float32TileToBfp8ValueCheck) {
         TensorSpec(shape, TensorLayout(DataType::BFLOAT8_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
     auto source = CMAKE_UNIQUE_NAMESPACE::make_host_tensor(floats, src_spec);
 
-    auto result = to_tensor_spec<float>(source, dest_spec, /*pad_value=*/0.f);
+    auto result = host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, /*pad_value=*/0.f);
 
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), dest_spec));
     EXPECT_EQ(result.dtype(), DataType::BFLOAT8_B);
@@ -339,7 +339,7 @@ TEST(HostTensorToTensorSpec, Float32TileToBfp4ValueCheck) {
         TensorSpec(shape, TensorLayout(DataType::BFLOAT4_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
     auto source = CMAKE_UNIQUE_NAMESPACE::make_host_tensor(floats, src_spec);
 
-    auto result = to_tensor_spec<float>(source, dest_spec, /*pad_value=*/0.f);
+    auto result = host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, /*pad_value=*/0.f);
 
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), dest_spec));
     EXPECT_EQ(result.dtype(), DataType::BFLOAT4_B);
@@ -411,7 +411,7 @@ TEST(HostTensorToTensorSpec, RowMajorToBfp8ChangesLayoutAndPreservesTile) {
         TensorSpec(shape, TensorLayout(DataType::BFLOAT8_B, PageConfig(Layout::TILE, tile), memory_config, alignment));
     auto source = HostTensor::from_vector<float>(data, src_spec);
 
-    auto result = to_tensor_spec<float>(source, dest_spec, /*pad_value=*/0.f);
+    auto result = host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, /*pad_value=*/0.f);
 
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), dest_spec));
     EXPECT_EQ(result.layout(), Layout::TILE);
@@ -438,8 +438,8 @@ TEST(HostTensorToTensorSpec, BfpStagingRequiresFloatPad) {
     auto dest_spec = CMAKE_UNIQUE_NAMESPACE::make_tile_spec(shape, DataType::BFLOAT8_B, Tile({16, 16}));
 
     auto source = HostTensor::from_vector<float>(data, src_spec);
-    EXPECT_ANY_THROW(to_tensor_spec<bfloat16>(source, dest_spec, bfloat16(0.f)));
-    EXPECT_NO_THROW(to_tensor_spec<float>(source, dest_spec, 0.f));
+    EXPECT_ANY_THROW(host_tensor_to_tensor_spec_with_pad_value<bfloat16>(source, dest_spec, bfloat16(0.f)));
+    EXPECT_NO_THROW(host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, 0.f));
 }
 
 TEST(HostTensorToTensorSpec, Fp8SrcOrDestFatal) {
@@ -490,13 +490,13 @@ TEST(HostTensorToTensorSpec, TypedPadUint8AndWrongTFatal) {
     auto dest_spec = CMAKE_UNIQUE_NAMESPACE::make_tile_spec(shape, DataType::UINT8, Tile({16, 16}));
 
     auto source = HostTensor::from_vector<uint8_t>(data, src_spec);
-    auto result = to_tensor_spec<uint8_t>(source, dest_spec, /*pad_value=*/uint8_t{7});
+    auto result = host_tensor_to_tensor_spec_with_pad_value<uint8_t>(source, dest_spec, /*pad_value=*/uint8_t{7});
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), dest_spec));
     EXPECT_THAT(result.to_vector<uint8_t>(), Pointwise(Eq(), data));
     EXPECT_EQ(host_buffer::get_as<uint8_t>(result).back(), 7);
 
     // Wrong T vs working encode dtype (source UINT8).
-    EXPECT_ANY_THROW(to_tensor_spec<float>(source, dest_spec, 0.f));
+    EXPECT_ANY_THROW(host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, 0.f));
 }
 
 TEST(HostTensorToTensorSpec, FloatPadToIntegralDestRejectsNanInfOor) {
@@ -506,12 +506,14 @@ TEST(HostTensorToTensorSpec, FloatPadToIntegralDestRejectsNanInfOor) {
     auto dest_spec = CMAKE_UNIQUE_NAMESPACE::make_tile_spec(shape, DataType::UINT8, Tile({16, 16}));
     auto source = HostTensor::from_vector<float>(data, src_spec);
 
-    EXPECT_ANY_THROW(to_tensor_spec<float>(source, dest_spec, std::numeric_limits<float>::quiet_NaN()));
-    EXPECT_ANY_THROW(to_tensor_spec<float>(source, dest_spec, std::numeric_limits<float>::infinity()));
-    EXPECT_ANY_THROW(to_tensor_spec<float>(source, dest_spec, -1.f));
-    EXPECT_ANY_THROW(to_tensor_spec<float>(source, dest_spec, 256.f));
+    EXPECT_ANY_THROW(
+        host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, std::numeric_limits<float>::quiet_NaN()));
+    EXPECT_ANY_THROW(
+        host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, std::numeric_limits<float>::infinity()));
+    EXPECT_ANY_THROW(host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, -1.f));
+    EXPECT_ANY_THROW(host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, 256.f));
 
-    auto ok = to_tensor_spec<float>(source, dest_spec, 7.f);
+    auto ok = host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, 7.f);
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(ok.tensor_spec(), dest_spec));
     EXPECT_EQ(ok.dtype(), DataType::UINT8);
     EXPECT_EQ(ok.layout(), Layout::TILE);
@@ -542,14 +544,14 @@ TEST(HostTensorToTensorSpec, EqualPaddedDifferentPackingRoundTrip) {
     EXPECT_TRUE(rm_spec.logical_2d_shape() != rm_spec.physical_shape());
     EXPECT_TRUE(tile_spec.logical_2d_shape() != tile_spec.physical_shape());
 
-    auto source = HostTensor::from_vector<float>(data, rm_spec, /*pad_value=*/3.f);
-    auto tiled = to_tensor_spec<float>(source, tile_spec, /*pad_value=*/5.f);
+    auto source = host_tensor_from_vector_with_pad_value<float>(data, rm_spec, /*pad_value=*/3.f);
+    auto tiled = host_tensor_to_tensor_spec_with_pad_value<float>(source, tile_spec, /*pad_value=*/5.f);
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(tiled.tensor_spec(), tile_spec));
     EXPECT_THAT(tiled.to_vector<float>(), Pointwise(Eq(), data));
     EXPECT_EQ(host_buffer::get_as<float>(tiled).back(), 5.f);
     CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(tiled);
 
-    auto back = to_tensor_spec<float>(tiled, rm_spec, /*pad_value=*/9.f);
+    auto back = host_tensor_to_tensor_spec_with_pad_value<float>(tiled, rm_spec, /*pad_value=*/9.f);
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(back.tensor_spec(), rm_spec));
     EXPECT_THAT(back.to_vector<float>(), Pointwise(Eq(), data));
     // RM layout, shape 20x20, physical 32x32. Index (31, 31) is 31 * 32 + 31.
@@ -565,13 +567,13 @@ TEST(HostTensorToTensorSpec, TypedIntegralPadBoundaries) {
     auto source = HostTensor::from_vector<uint32_t>(data, src_spec);
 
     auto min_pad = std::numeric_limits<uint32_t>::lowest();
-    auto result_min = to_tensor_spec<uint32_t>(source, dest_spec, min_pad);
+    auto result_min = host_tensor_to_tensor_spec_with_pad_value<uint32_t>(source, dest_spec, min_pad);
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result_min.tensor_spec(), dest_spec));
     EXPECT_EQ(host_buffer::get_as<uint32_t>(result_min).back(), min_pad);
     EXPECT_THAT(result_min.to_vector<uint32_t>(), Pointwise(Eq(), data));
 
     auto max_pad = std::numeric_limits<uint32_t>::max();
-    auto result_max = to_tensor_spec<uint32_t>(source, dest_spec, max_pad);
+    auto result_max = host_tensor_to_tensor_spec_with_pad_value<uint32_t>(source, dest_spec, max_pad);
     EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result_max.tensor_spec(), dest_spec));
     EXPECT_EQ(host_buffer::get_as<uint32_t>(result_max).back(), max_pad);
     EXPECT_THAT(result_max.to_vector<uint32_t>(), Pointwise(Eq(), data));
@@ -608,7 +610,7 @@ TEST(HostTensorToTensorSpec, ExactMatchBfpWrongTFatal) {
     auto source = HostTensor::from_vector<float>(data, spec);
 
     // Exact match but wrong T (not float) should still fatal.
-    EXPECT_ANY_THROW(to_tensor_spec<bfloat16>(source, spec, bfloat16(0.f)));
+    EXPECT_ANY_THROW(host_tensor_to_tensor_spec_with_pad_value<bfloat16>(source, spec, bfloat16(0.f)));
 }
 
 TEST(HostTensorToTensorSpec, OversizedBufferThrows) {

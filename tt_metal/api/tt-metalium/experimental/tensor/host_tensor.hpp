@@ -107,7 +107,7 @@ public:
      * The data in the buffer is copied into a tensor with host storage.
      */
     template <typename T>
-    static HostTensor from_span(std::span<const T> buffer, const TensorSpec& spec, T pad_value = 0);
+    static HostTensor from_span(std::span<const T> buffer, const TensorSpec& spec);
 
     /**
      * Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
@@ -120,7 +120,7 @@ public:
         std::span<T> buffer, const Shape& shape, MemoryPin pin, const std::optional<Tile>& tile = std::nullopt);
 
     template <typename T>
-    static HostTensor from_vector(const std::vector<T>& buffer, const TensorSpec& spec, T pad_value = 0);
+    static HostTensor from_vector(const std::vector<T>& buffer, const TensorSpec& spec);
 
     /**
      * From original Tensor:
@@ -128,7 +128,7 @@ public:
      * physical shape matches logical shape, and no type conversion is needed.
      */
     template <typename T>
-    static HostTensor from_vector(std::vector<T>&& buffer, const TensorSpec& spec, T pad_value = 0);
+    static HostTensor from_vector(std::vector<T>&& buffer, const TensorSpec& spec);
 
     // Getters:
 

@@ -25,7 +25,6 @@ using tt::tt_metal::MeshDevice1x2Fixture;
 using tt::tt_metal::MeshTensor;
 using tt::tt_metal::TensorLayout;
 using tt::tt_metal::TensorSpec;
-using tt::tt_metal::TensorTopology;
 using ttnn::DeviceStorage;
 using ttnn::Tensor;
 

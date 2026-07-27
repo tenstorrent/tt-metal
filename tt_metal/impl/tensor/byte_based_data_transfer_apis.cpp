@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <internal/tensor/byte_based_data_transfer_apis.hpp>
+#include <tt-metalium/experimental/byte_based_tensor_transfers.hpp>
 
 #include "mesh_tensor_impl.hpp"
 

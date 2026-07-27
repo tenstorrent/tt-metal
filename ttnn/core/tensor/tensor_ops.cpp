@@ -23,8 +23,8 @@
 
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
-#include <internal/tensor/host_pad_apis.hpp>
-#include <internal/tensor/byte_based_data_transfer_apis.hpp>
+#include <tt-metalium/experimental/tensor_host_pad_apis.hpp>
+#include <tt-metalium/experimental/byte_based_tensor_transfers.hpp>
 
 using tt::tt_metal::BufferRegion;
 using tt::tt_metal::DataType;

@@ -6,13 +6,13 @@
 #include <limits>
 #include <type_traits>
 
-#include <internal/tensor/host_to_tensor_spec_apis.hpp>
+#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+#include <tt-metalium/experimental/tensor_apis_with_pad_values.hpp>
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
-#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include <tt-metalium/host_buffer.hpp>
 
@@ -88,7 +88,8 @@ void assert_packed_shard_sizes(const DistributedHostBuffer& buffer, const Tensor
 }  // namespace
 
 template <typename T>
-HostTensor to_tensor_spec(const HostTensor& tensor, const TensorSpec& dest_spec, T pad_value) {
+HostTensor host_tensor_to_tensor_spec_with_pad_value(
+    const HostTensor& tensor, const TensorSpec& dest_spec, T pad_value) {
     TT_FATAL(
         tensor.logical_shape().rank() > 0,
         "to_tensor_spec: rank-0 tensors are unsupported (got rank {})",
@@ -165,11 +166,23 @@ HostTensor to_tensor_spec(const HostTensor& tensor, const TensorSpec& dest_spec,
     return result;
 }
 
-template HostTensor to_tensor_spec<float>(const HostTensor&, const TensorSpec&, float);
-template HostTensor to_tensor_spec<bfloat16>(const HostTensor&, const TensorSpec&, bfloat16);
-template HostTensor to_tensor_spec<int32_t>(const HostTensor&, const TensorSpec&, int32_t);
-template HostTensor to_tensor_spec<uint32_t>(const HostTensor&, const TensorSpec&, uint32_t);
-template HostTensor to_tensor_spec<uint16_t>(const HostTensor&, const TensorSpec&, uint16_t);
-template HostTensor to_tensor_spec<uint8_t>(const HostTensor&, const TensorSpec&, uint8_t);
+template <typename T>
+HostTensor to_tensor_spec(const HostTensor& tensor, const TensorSpec& dest_spec) {
+    return host_tensor_to_tensor_spec_with_pad_value(tensor, dest_spec, T{0});
+}
+
+template HostTensor host_tensor_to_tensor_spec_with_pad_value<float>(const HostTensor&, const TensorSpec&, float);
+template HostTensor host_tensor_to_tensor_spec_with_pad_value<bfloat16>(const HostTensor&, const TensorSpec&, bfloat16);
+template HostTensor host_tensor_to_tensor_spec_with_pad_value<int32_t>(const HostTensor&, const TensorSpec&, int32_t);
+template HostTensor host_tensor_to_tensor_spec_with_pad_value<uint32_t>(const HostTensor&, const TensorSpec&, uint32_t);
+template HostTensor host_tensor_to_tensor_spec_with_pad_value<uint16_t>(const HostTensor&, const TensorSpec&, uint16_t);
+template HostTensor host_tensor_to_tensor_spec_with_pad_value<uint8_t>(const HostTensor&, const TensorSpec&, uint8_t);
+
+template HostTensor to_tensor_spec<float>(const HostTensor&, const TensorSpec&);
+template HostTensor to_tensor_spec<bfloat16>(const HostTensor&, const TensorSpec&);
+template HostTensor to_tensor_spec<int32_t>(const HostTensor&, const TensorSpec&);
+template HostTensor to_tensor_spec<uint32_t>(const HostTensor&, const TensorSpec&);
+template HostTensor to_tensor_spec<uint16_t>(const HostTensor&, const TensorSpec&);
+template HostTensor to_tensor_spec<uint8_t>(const HostTensor&, const TensorSpec&);
 
 }  // namespace tt::tt_metal

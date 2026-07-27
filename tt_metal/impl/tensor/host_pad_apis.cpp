@@ -6,7 +6,7 @@
 #include <cstring>
 #include <vector>
 
-#include <internal/tensor/host_pad_apis.hpp>
+#include <tt-metalium/experimental/tensor_host_pad_apis.hpp>
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>

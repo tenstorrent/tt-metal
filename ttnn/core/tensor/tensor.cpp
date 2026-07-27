@@ -17,6 +17,7 @@
 #include <tt-metalium/float8.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/experimental/tensor_apis_with_pad_values.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
@@ -166,7 +167,7 @@ Tensor Tensor::from_span(
     tt::tt_metal::distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     T pad_value) {
-    auto host_tensor = HostTensor::from_span(buffer, spec, pad_value);
+    auto host_tensor = tt::tt_metal::host_tensor_from_span_with_pad_value(buffer, spec, pad_value);
     auto res = Tensor(std::move(host_tensor));
     if (device) {
         res = res.to_device(device, spec.memory_config(), cq_id);
@@ -191,7 +192,7 @@ Tensor Tensor::from_vector(
     tt::tt_metal::distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     T pad_value) {
-    auto host_tensor = HostTensor::from_vector(std::move(buffer), spec, pad_value);
+    auto host_tensor = tt::tt_metal::host_tensor_from_vector_with_pad_value(std::move(buffer), spec, pad_value);
     auto res = Tensor(std::move(host_tensor));
     res = ttnn::to_dtype(res, spec.data_type());
     if (device) {

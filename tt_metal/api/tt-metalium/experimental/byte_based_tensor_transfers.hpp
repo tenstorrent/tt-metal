@@ -17,6 +17,7 @@ namespace tt::tt_metal {
 //                    Byte-based data transfer APIs
 // ======================================================================================
 //
+// Outside the Runtime Tensor graduation surface (HostTensor <-> MeshTensor).
 // Explicitly provided for unit mesh (single device) ttnn::Tensor H<->D access.
 // Exposed via ttnn/async_runtime.hpp (write_buffer / read_buffer) and have
 // external dependencies.
