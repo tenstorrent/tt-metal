@@ -73,18 +73,27 @@ GATE_CHUNK_TILES = 64  # output tiles per gate-chain invocation (phase C block f
 # costs nothing where it does not pay, which is what lets the dispatch policy
 # below fall back to it.
 #
-# "auto" (the default) is the DISPATCH POLICY the refinement asks for: pay the
-# exchange only with cores that would otherwise be idle.  It takes the largest
-# legal power of two that fits in the SPARE grid capacity
-# (`total_cores // num_token_blocks`), capped by MAX_RETILE_GROUP_CORES.  So a
-# core-saturated shape (B=8/T=640: 160 blocks > 110 cores) gets `group_cores=1`
-# and is bit- and byte-identical to Refinement 1b, while B=1/T=32 (1 block) gets
-# the full cap.  An int pins the group size for measurement / regression tests.
+# "auto" (the default) is the DISPATCH POLICY the refinement asks for — see
+# `_retile_group_cores()` for the objective it minimises and the measurements
+# behind it.  An int pins the group size for measurement / regression tests.
 RETILE_GROUP_CORES = "auto"
 
-# Ceiling on the "auto" group size.  MEASURED (Blackhole p150, median of 5
-# trial-major interleaved trials) — see changelog.md Refinement 2 for the sweep.
-MAX_RETILE_GROUP_CORES = 8
+# Ceiling on the "auto" group size.  MEASURED (Blackhole p150, 11x10 grid, median
+# of 5 trial-major interleaved trials, `test_onorm_retile_group.py::test_group_trial`,
+# spread <= 4.4 %).  Speedup vs `group_cores = 1`:
+#
+#   shape        cores at best g   g=2     g=4     g=8     g=16    g=32
+#   B=1,T=32     1 -> 32          1.93x   3.58x   6.32x  10.62x  16.12x
+#   B=1,T=128    4 -> 64          1.89x   3.35x   5.55x   8.59x   7.67x
+#   B=1,T=640   20 -> 80          1.68x   2.57x   2.62x   2.53x   2.72x
+#   B=8,T=640  110 -> 110         1.22x   1.26x   1.05x   0.94x   0.87x
+#
+# The curve is monotone up to the point where the grid runs out of groups, and 32
+# is where the last cell that still gains (B=1/T=32, 1 token per core) peaks — so
+# 32 is the cap, and the `_work` objective is what keeps the shapes that would
+# LOSE at 32 (B=8/T=640: 0.87x) away from it.  Lower this to bound the exchange's
+# message count if a future arch has a costlier NoC handshake.
+MAX_RETILE_GROUP_CORES = 32
 
 # Depth of `cb_rm_local` in normalize-chunk units (`group_cores > 1` only).  The
 # staging buffer between compute's untilize (producer) and the writer's scatter
@@ -355,12 +364,37 @@ def _retile_group_cores(device, num_token_blocks: int, tokens_per_block: int, fl
         )
         return group_cores
 
-    spare = total_cores // max(num_token_blocks, 1)
-    ceiling = min(spare, MAX_RETILE_GROUP_CORES)
-    group_cores = 1
-    while group_cores * 2 <= ceiling and _legal(group_cores * 2):
-        group_cores *= 2
-    return group_cores
+    # The objective is the CRITICAL-PATH work per core, in whole-block units:
+    #
+    #     work(g) = ceil(num_token_blocks / num_groups(g)) / g
+    #
+    # — the slowest group's serial block count, divided by the fraction of a block
+    # each of its members actually does.  Minimising it captures both effects the
+    # measurements show, in one number:
+    #   * OCCUPANCY at a small block count (T=32: 1 block, so work(g) = 1/g falls
+    #     all the way to the cap — measured 16.1x at g=32);
+    #   * LOAD BALANCE at a large one, which the naive "spend only spare cores"
+    #     policy misses entirely.  B=8/T=640 has 160 blocks on 110 cores, so at
+    #     g=1 fifty cores carry TWO blocks and sixty carry one: work(1) = 2.
+    #     g=2 gives 55 groups x 3 blocks at half a block each = 1.5, i.e. a 1.33x
+    #     shorter critical path on a shape a spare-capacity rule calls "saturated".
+    #     Measured 1.22x.
+    # Ties go to the SMALLER group: same critical-path work, but fewer exchange
+    # messages per unit of it (the message COUNT per core per block is fixed at
+    # TOKENS_PER_BLOCK, so per unit of work it grows with g) and a shallower serial
+    # block loop, hence fewer per-block exchange barriers.  Measured: at B=1/T=128
+    # g=16 and g=32 tie on work and g=16 is 1.12x faster.
+    def _work(g: int) -> float:
+        num_groups = min(num_token_blocks, total_cores // g)
+        return _div_up(num_token_blocks, num_groups) / g
+
+    best = 1
+    candidate = 2
+    while candidate <= MAX_RETILE_GROUP_CORES:
+        if _legal(candidate) and _work(candidate) < _work(best):
+            best = candidate
+        candidate *= 2
+    return best
 
 
 def _grid_assignment(device, num_token_blocks, group_cores):
@@ -559,14 +593,31 @@ def create_program_descriptor(
         # into the stripe it later tilizes (one CB, no copy, no exchange).
         cb_pages[CB_RM_LOCAL] = v_tiles * norm_chunk_tokens * RM_LOCAL_DEPTH
 
-    # The reader/writer transfer whole DM_BLOCK_TILES groups out of one
-    # get_write_ptr / get_read_ptr, so a group must never straddle the ring wrap.
-    for cb_index in (CB_O_TILES, CB_GATE_TILES, CB_OUT_TILES):
-        assert cb_pages[cb_index] % DM_BLOCK_TILES == 0, (
-            f"onorm: CB {cb_index} has {cb_pages[cb_index]} pages, not a multiple of "
-            f"DM_BLOCK_TILES={DM_BLOCK_TILES}. Either pick a DM_BLOCK_TILES that divides "
-            f"it (a power of two always does), or raise O_DEPTH / NORM_CHUNK_TOKENS so "
-            f"cb_o_tiles ({cb_pages[CB_O_TILES]} pages) becomes a multiple of it."
+    # The reader/writer transfer whole DM groups out of one get_write_ptr /
+    # get_read_ptr, so a group must never straddle the CB's ring wrap.
+    #
+    # DM_BLOCK_TILES is a REQUEST, clamped per stream to that stream's own
+    # granularity — a transfer group can never usefully exceed the amount the
+    # consumer takes in one bite, and the cross-core split shrinks both bites:
+    #   * `o`             — one normalize chunk (`v_tiles * norm_chunk_tokens`);
+    #   * `gate` / `out`  — this core's column slice of one tile-row (`cols_per_core`).
+    # Clamping (rather than asserting against the raw knob) is what keeps
+    # DM_BLOCK_TILES and RETILE_GROUP_CORES independent: a large group size makes
+    # each stream shorter, and that must not turn a legal DM_BLOCK_TILES into a
+    # host assert.  At group size 1 both clamps are inactive at every shipped
+    # setting, so this is byte-identical there.
+    o_dm_block_tiles = min(DM_BLOCK_TILES, v_tiles * norm_chunk_tokens)
+    flat_dm_block_tiles = min(DM_BLOCK_TILES, cols_per_core)
+    for cb_index, group in (
+        (CB_O_TILES, o_dm_block_tiles),
+        (CB_GATE_TILES, flat_dm_block_tiles),
+        (CB_OUT_TILES, flat_dm_block_tiles),
+    ):
+        assert cb_pages[cb_index] % group == 0, (
+            f"onorm: CB {cb_index} has {cb_pages[cb_index]} pages, not a multiple of its "
+            f"{group}-tile DM transfer group (DM_BLOCK_TILES={DM_BLOCK_TILES} clamped to the "
+            f"stream's granularity). Pick a DM_BLOCK_TILES that divides it (a power of two "
+            f"always does), or raise O_DEPTH / NORM_CHUNK_TOKENS / DM_DEPTH."
         )
 
     # A gate-phase DEST window stages GATE_DEST_TILES tiles at once, so every CB
@@ -622,7 +673,8 @@ def create_program_descriptor(
         blocks_per_batch,
         tokens,
         token_tile_rows,
-        DM_BLOCK_TILES,
+        o_dm_block_tiles,  # per-stream clamped DM group, not the raw knob
+        flat_dm_block_tiles,
         _f32_bits(1.0 / head_dim),  # the reduce scaler: explicit, host-supplied 1/V
         tile_bytes,
     ]
@@ -638,7 +690,7 @@ def create_program_descriptor(
         tile_rows_per_block,
         blocks_per_batch,
         token_tile_rows,
-        DM_BLOCK_TILES,
+        flat_dm_block_tiles,  # per-stream clamped DM group, not the raw knob
         tile_bytes,
         group_cores,
         tokens_per_core,

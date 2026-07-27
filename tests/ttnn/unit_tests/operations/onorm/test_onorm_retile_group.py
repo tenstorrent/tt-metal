@@ -136,34 +136,70 @@ def test_group_size_is_bit_identical_to_single_core(device, restore_knobs, group
 # ---------------------------------------------------------------------------
 
 
+def _expected_auto(total_cores, num_token_blocks, tokens_per_block, flat_tiles, cap):
+    """Independent restatement of the `auto` objective (see `_retile_group_cores`).
+
+    Minimise the slowest group's critical-path work in whole-block units,
+    ``ceil(blocks / num_groups(g)) / g``; ties go to the smaller group.
+    """
+
+    def work(g):
+        num_groups = min(num_token_blocks, total_cores // g)
+        return -(-num_token_blocks // num_groups) / g
+
+    best, g = 1, 2
+    while g <= cap:
+        if tokens_per_block % g == 0 and flat_tiles % g == 0 and g <= total_cores and work(g) < work(best):
+            best = g
+        g *= 2
+    return best
+
+
 @pytest.mark.parametrize(
     "shape, num_token_blocks",
     [((1, 32), 1), ((1, 128), 4), ((1, 640), 20), ((8, 640), 160)],
     ids=lambda v: str(v),
 )
-def test_auto_policy_matches_spare_capacity(device, restore_knobs, shape, num_token_blocks):
-    """`auto` spends only cores that a per-block split would leave idle.
+def test_auto_policy_minimises_critical_path_work(device, restore_knobs, shape, num_token_blocks):
+    """`auto` picks the group size that minimises per-core critical-path work.
 
-    The policy is: largest legal power of two <= (total_cores // token_blocks),
-    capped by MAX_RETILE_GROUP_CORES.  A core-saturated shape must therefore land
-    on group 1 — the byte-identical, exchange-free path.
+    Two effects in one objective: OCCUPANCY when there are fewer blocks than
+    cores, and LOAD BALANCE when there are more (160 blocks on 110 cores makes
+    fifty cores carry two blocks at group 1, which a group of 2 rebalances).
     """
     grid = device.compute_with_storage_grid_size()
     total = grid.x * grid.y
     pd.RETILE_GROUP_CORES = "auto"
     got = pd._retile_group_cores(device, num_token_blocks, pd.TOKENS_PER_BLOCK, FLAT // 32)
-
-    expected = 1
-    ceiling = min(total // num_token_blocks, pd.MAX_RETILE_GROUP_CORES)
-    while expected * 2 <= ceiling and pd.TOKENS_PER_BLOCK % (expected * 2) == 0:
-        expected *= 2
-    assert got == expected
-    if num_token_blocks >= total:
-        assert got == 1, "a core-saturated shape must not pay for an exchange"
+    assert got == _expected_auto(total, num_token_blocks, pd.TOKENS_PER_BLOCK, FLAT // 32, pd.MAX_RETILE_GROUP_CORES)
+    # The policy may never make things worse than the un-split path: its objective
+    # is minimised, so the chosen group's work can only be <= group 1's.
+    assert got == 1 or _expected_auto(total, num_token_blocks, pd.TOKENS_PER_BLOCK, FLAT // 32, 1) == 1
 
     # ...and it must still be correct at whatever the policy picked.
     out, ref = _run(device, *shape)
     assert_with_pcc(ref, out, PCC)
+
+
+def test_auto_policy_never_regresses_the_objective(device, restore_knobs):
+    """Sweep block counts across the grid boundary; `auto` must never lose.
+
+    A dispatch policy that pays for the exchange where it does not help is the
+    specific failure mode the refinement warns about, so this asserts the
+    objective directly over a range that straddles 1x, 1-2x and 2x+ the grid.
+    """
+    grid = device.compute_with_storage_grid_size()
+    total = grid.x * grid.y
+    flat_tiles = FLAT // 32
+    pd.RETILE_GROUP_CORES = "auto"
+    for blocks in [1, 2, 3, 4, 7, 20, total // 2, total - 1, total, total + 1, 160, 2 * total, 3 * total]:
+        g = pd._retile_group_cores(device, blocks, pd.TOKENS_PER_BLOCK, flat_tiles)
+
+        def work(cores_per_group):
+            num_groups = min(blocks, total // cores_per_group)
+            return -(-blocks // num_groups) / cores_per_group
+
+        assert work(g) <= work(1), f"blocks={blocks}: auto picked g={g}, worse than g=1"
 
 
 def test_illegal_group_size_is_rejected_with_guidance(device, restore_knobs):

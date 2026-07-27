@@ -68,11 +68,13 @@ EXCLUSIONS: list = []
 
 PROPERTIES = {
     # verified: the program descriptor's core-range set comes from
-    # ttnn.split_work_to_cores over B * ceil(T / TOKENS_PER_BLOCK) work units.
+    # ttnn.split_work_to_cores over B * ceil(T / TOKENS_PER_BLOCK) token-blocks,
+    # times RETILE_GROUP_CORES cores per block (Refinement 2's cross-core re-tile,
+    # which is what lets a 1-block shape occupy 32 cores instead of 1).
     "multi_core": {"value": True, "source": "verified"},
     # declared: every CB page count derives from a block-factor knob
-    # (NORM_CHUNK_TOKENS / TOKENS_PER_BLOCK / GATE_CHUNK_TILES / DM_BLOCK_TILES)
-    # and never from B or T — see op_design.md §6.2.
+    # (NORM_CHUNK_TOKENS / TOKENS_PER_BLOCK / GATE_CHUNK_TILES / DM_BLOCK_TILES /
+    # RETILE_GROUP_CORES) and never from B or T — see op_design.md §6.2.
     "bounded_cb": {"value": True, "source": "declared"},
     "math_fidelity": {"value": ["HiFi4"], "source": "declared"},
 }

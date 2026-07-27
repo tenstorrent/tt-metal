@@ -49,6 +49,14 @@ KNOB_SETTINGS = [
     # --- streaming depths ---
     ("DM_DEPTH", 4),
     ("O_DEPTH", 3),
+    # --- cross-core re-tile group size (Refinement 2): 1 (no exchange) and the
+    #     whole legal power-of-two range up to one token / 4 columns per core ---
+    ("RETILE_GROUP_CORES", 1),
+    ("RETILE_GROUP_CORES", 2),
+    ("RETILE_GROUP_CORES", 8),
+    ("RETILE_GROUP_CORES", 32),
+    ("MAX_RETILE_GROUP_CORES", 4),  # caps the "auto" policy
+    ("RM_LOCAL_DEPTH", 3),
 ]
 
 # Multi-knob settings. TOKENS_PER_BLOCK is the design's headline knob-turn, but at
@@ -56,22 +64,40 @@ KNOB_SETTINGS = [
 # once NORM_CHUNK_TOKENS comes down — exactly the trade the budget assert's
 # message prescribes. This proves the knob is genuinely reachable, not decorative.
 COMBOS = [
-    # TOKENS_PER_BLOCK=64 doubles both re-tile buffers to 256 pages each, so it only
-    # fits once NORM_CHUNK_TOKENS and GATE_CHUNK_TILES come down — exactly the trade
-    # the budget assert's message prescribes.
-    {"TOKENS_PER_BLOCK": 64, "NORM_CHUNK_TOKENS": 4, "GATE_CHUNK_TILES": 32},
+    # TOKENS_PER_BLOCK=64 doubles both re-tile buffers to 256 pages each, so at
+    # RETILE_GROUP_CORES=1 it only fits once NORM_CHUNK_TOKENS and GATE_CHUNK_TILES
+    # come down — exactly the trade the budget assert's message prescribes.
+    {"RETILE_GROUP_CORES": 1, "TOKENS_PER_BLOCK": 64, "NORM_CHUNK_TOKENS": 4, "GATE_CHUNK_TILES": 32},
     # Same unlock, paying for it on the DM side instead (narrower streaming CBs).
-    {"TOKENS_PER_BLOCK": 64, "NORM_CHUNK_TOKENS": 8, "GATE_CHUNK_TILES": 32, "DM_BLOCK_TILES": 4, "DM_DEPTH": 2},
+    {
+        "RETILE_GROUP_CORES": 1,
+        "TOKENS_PER_BLOCK": 64,
+        "NORM_CHUNK_TOKENS": 8,
+        "GATE_CHUNK_TILES": 32,
+        "DM_BLOCK_TILES": 4,
+        "DM_DEPTH": 2,
+    },
     # Coarsest normalize pass + whole-row gate chain, funded by narrower DM buffers.
-    {"NORM_CHUNK_TOKENS": 16, "GATE_CHUNK_TILES": 128, "DM_BLOCK_TILES": 4, "DM_DEPTH": 2},
+    {"RETILE_GROUP_CORES": 1, "NORM_CHUNK_TOKENS": 16, "GATE_CHUNK_TILES": 128, "DM_BLOCK_TILES": 4, "DM_DEPTH": 2},
+    # ...and the third way to fund a coarse TOKENS_PER_BLOCK, which Refinement 2
+    # added: splitting the block across cores divides BOTH re-tile buffers by the
+    # group size, so the same setting that needs two knobs lowered at group 1 fits
+    # untouched at group 4.
+    {"RETILE_GROUP_CORES": 4, "TOKENS_PER_BLOCK": 64, "NORM_CHUNK_TOKENS": 16, "GATE_CHUNK_TILES": 32},
 ]
 
 # Knob settings that legitimately do NOT fit L1. The host budget assert must
 # reject them with its actionable message rather than letting the runtime throw a
 # bare "beyond max L1 size".
+#
+# These pin RETILE_GROUP_CORES=1 because that is where the L1 frontier IS: the
+# two re-tile buffers are the dominant term and the cross-core split divides them
+# by the group size, so an "over budget" setting at group 1 is comfortably inside
+# the budget at group 4. Refinement 2 therefore MOVED this frontier rather than
+# invalidating it, and the assert has to be tested where it still binds.
 OVER_BUDGET = [
-    {"NORM_CHUNK_TOKENS": 32},
-    {"TOKENS_PER_BLOCK": 64, "NORM_CHUNK_TOKENS": 16},
+    {"RETILE_GROUP_CORES": 1, "NORM_CHUNK_TOKENS": 32},
+    {"RETILE_GROUP_CORES": 1, "TOKENS_PER_BLOCK": 64, "NORM_CHUNK_TOKENS": 16},
 ]
 
 
@@ -79,7 +105,17 @@ OVER_BUDGET = [
 def restore_knobs():
     saved = {
         k: getattr(pd, k)
-        for k in ("TOKENS_PER_BLOCK", "NORM_CHUNK_TOKENS", "GATE_CHUNK_TILES", "DM_BLOCK_TILES", "DM_DEPTH", "O_DEPTH")
+        for k in (
+            "TOKENS_PER_BLOCK",
+            "NORM_CHUNK_TOKENS",
+            "GATE_CHUNK_TILES",
+            "DM_BLOCK_TILES",
+            "DM_DEPTH",
+            "O_DEPTH",
+            "RETILE_GROUP_CORES",
+            "MAX_RETILE_GROUP_CORES",
+            "RM_LOCAL_DEPTH",
+        )
     }
     yield
     for k, v in saved.items():

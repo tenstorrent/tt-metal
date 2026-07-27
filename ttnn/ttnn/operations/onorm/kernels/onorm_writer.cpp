@@ -86,7 +86,9 @@ void kernel_main() {
     constexpr uint32_t tile_rows_per_block = get_compile_time_arg_val(2);  // TOKENS_PER_BLOCK / TILE_H
     constexpr uint32_t blocks_per_batch = get_compile_time_arg_val(3);     // ceil(T / TOKENS_PER_BLOCK)
     constexpr uint32_t token_tile_rows = get_compile_time_arg_val(4);      // Tt = ceil(T / TILE_H)
-    constexpr uint32_t dm_block_tiles = get_compile_time_arg_val(5);       // DM_BLOCK_TILES
+    // DM transfer group for the gate/out column stream: DM_BLOCK_TILES clamped
+    // host-side to `cols_per_core` (see onorm_program_descriptor.py).
+    constexpr uint32_t flat_dm_block_tiles = get_compile_time_arg_val(5);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(6);
     constexpr uint32_t group_cores = get_compile_time_arg_val(7);        // RETILE_GROUP_CORES
     constexpr uint32_t tokens_per_core = get_compile_time_arg_val(8);    // TOKENS_PER_BLOCK / group_cores
@@ -216,7 +218,7 @@ void kernel_main() {
             uint32_t done = 0;
             while (done < cols_per_core) {
                 const uint32_t remaining = cols_per_core - done;
-                const uint32_t n = remaining < dm_block_tiles ? remaining : dm_block_tiles;
+                const uint32_t n = remaining < flat_dm_block_tiles ? remaining : flat_dm_block_tiles;
                 cb_wait_front(cb_out_tiles, n);
                 const uint32_t l1_read_addr = get_read_ptr(cb_out_tiles);
                 for (uint32_t i = 0; i < n; ++i) {

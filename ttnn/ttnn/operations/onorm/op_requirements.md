@@ -309,7 +309,7 @@ Evidence in `changelog.md`.
 
 ---
 
-### [ ] Refinement 2 — Cross-core re-tile: stop leaving 108 of 110 cores idle at small `T`
+### [x] Refinement 2 — Cross-core re-tile: stop leaving 108 of 110 cores idle at small `T`
 
 **Type**: perf
 
@@ -366,6 +366,56 @@ config-spanning guard set; the golden suite and `test_onorm_knobs.py` are both g
 suite is what proves the block factors survived the restructure); and
 `test_onorm_precision_baseline.py` still passes — a cross-core exchange must not perturb the
 numerics at all, so the recorded PCC/rel-RMS should be bit-comparable, and any drift is a bug.
+
+**OUTCOME (full)** — the cross-core re-tile is built, is the shipping default via a measured
+dispatch policy, and is worth **16.09× / 13.32× / 8.48× on the three under-filled shapes** and
+**2.72× / 1.22× on the two that were already core-saturated**. Every cell of the
+config-spanning guard set improves; none regresses. Evidence in `changelog.md`.
+
+- **The split is TWO-axis, not one, and that is what made it several-fold rather than
+  ~1.5×.** The refinement's own sketch (each core normalizes a token subset and NoC-writes
+  its row-major rows into *the owning core's* `cb_rm_flat_rows`) parallelizes only P1–P6 —
+  which after R1b is ~64 µs of a ~196 µs kernel, so its ceiling is **1.48×**, well under the
+  "several-fold" bar. The shipped scheme splits the **gate half too**, on the flat *column*
+  axis, and both halves fall out of ONE exchange: a token's untilized row is contiguous in
+  flat-feature order, so column-owner `d`'s share of row `t` is exactly one contiguous
+  `chunk_bytes` slice of it. So `o` is split by token, `gate`/`out` by column, **nothing is
+  re-read or re-written**, and each core ends up holding a narrower
+  `[TOKENS_PER_BLOCK, cols_per_core*32]` stripe — the same row-major contract, at `1/G` the
+  width. `cb_rm_flat_rows` and `cb_flat_tiles` therefore *shrink* by `G`: the L1 footprint
+  goes 533 → 107 pages (1066 → 214 KB) from `G=1` to `G=32`, so the exchange is L1-positive.
+- **The dispatch policy is the load-balance metric, not "spend spare cores".** The obvious
+  policy (`G ≤ total_cores // num_token_blocks`) calls B=8/T=640 saturated and leaves it at
+  `G=1` — but 160 blocks on 110 cores means fifty cores carry TWO blocks, and a group of 2
+  rebalances that to 55 groups × 3 blocks at half a block each. Measured **1.22×** on the
+  shape a spare-capacity rule would not have touched. So `auto` minimises
+  `ceil(blocks / num_groups(g)) / g` (the slowest group's critical-path work in whole-block
+  units), ties to the smaller group. That one objective covers both regimes and is what keeps
+  the shapes that would LOSE at `G=32` (B=8/T=640: 0.87×) away from it.
+- **`mcast_pipe` genuinely cannot express this exchange** — three independent reasons, all in
+  the helper's own stated contract: it multicasts ONE block to a rectangle at ONE `dst_l1`
+  (here every destination gets different bytes), its precondition is "single sender per
+  receiver" (this is an all-to-all: `G` writers per data-ready cell), and the payload rows are
+  strided on both sides. The substitution is declared at the head of `onorm_writer.cpp`; what
+  *is* used is the layer mcast_pipe is built on (`Noc` + `Semaphore<>` object APIs), not raw
+  `noc_semaphore_set/wait/inc`, with two **monotone** counters so a member racing into the
+  next block cannot clobber an unobserved increment.
+- **Numerically inert, proved by exact equality.** `test_group_size_is_bit_identical_to_single_core`
+  asserts `torch.equal` against the `G=1` output at every group size on every shape — 15 cells,
+  all exact. The precision baseline is unchanged to every recorded digit.
+- **Two knob interactions found and fixed, both of which would have been silent:**
+  `DM_BLOCK_TILES` is now clamped per stream to that stream's consumption granularity (the
+  cross-core split shortens the streams, and an unclamped group could straddle a CB ring
+  wrap), and the L1-budget frontier `test_onorm_knobs.py` guards **moved** (the re-tile buffers
+  divide by `G`), so those cases are now pinned at `RETILE_GROUP_CORES=1` where the assert
+  still binds.
+- **Left for Refinement 3**: `MAX_RETILE_GROUP_CORES = 32` and the whole per-core block
+  surface is now much smaller (`norm_chunk_tokens` clamps to 1 at `G=32`, `gate_chunk_tiles`
+  to 4), so R3's re-sweep has a genuinely different structure to tune against — in particular
+  `GATE_DEST_TILES = 4` now *equals* the whole gate chunk at `G=32`, and `TOKENS_PER_BLOCK`
+  interacts with `RETILE_GROUP_CORES` rather than with the core count directly. B=1/T=640 also
+  still shows ~6 % between the policy's pick (`G=32`, 2.72×) and the flat 4→32 plateau, i.e.
+  the tie-break is worth revisiting once R3's block factors move.
 
 ---
 

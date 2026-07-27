@@ -21,11 +21,12 @@
 // below is unchanged; at `group_cores == 1` both collapse to the whole block and
 // this file behaves exactly as it did before.
 //
-// Both per-block streams are `dm_block_tiles`-granular groups with ONE
-// noc_async_read_barrier per group: `dm_block_tiles` reads are in flight at once
-// so the transfers pipeline instead of paying a full DRAM round trip per tile.
-// The group size is the DM_BLOCK_TILES knob (a compile-time arg), never a
-// literal.
+// Both per-block streams move in transfer groups with ONE
+// noc_async_read_barrier per group, so a group's worth of reads is in flight at
+// once and the transfers pipeline instead of paying a full DRAM round trip per
+// tile.  The group size is the DM_BLOCK_TILES knob (a compile-time arg, never a
+// literal), clamped host-side per stream to that stream's own consumption
+// granularity — see `o_dm_block_tiles` / `flat_dm_block_tiles` below.
 //
 // HELPER USAGE: the only kernel_lib helper that applies to a dataflow kernel
 // here is dataflow_kernel_lib::prepare_reduce_scaler (used, in its
@@ -84,11 +85,17 @@ void kernel_main() {
     constexpr uint32_t blocks_per_batch = get_compile_time_arg_val(6);     // ceil(T / TOKENS_PER_BLOCK)
     constexpr uint32_t tokens_total = get_compile_time_arg_val(7);         // T
     constexpr uint32_t token_tile_rows = get_compile_time_arg_val(8);      // Tt = ceil(T / TILE_H)
-    constexpr uint32_t dm_block_tiles = get_compile_time_arg_val(9);       // DM_BLOCK_TILES
-    constexpr uint32_t inv_v_bits = get_compile_time_arg_val(10);          // fp32 bits of 1/V
-    constexpr uint32_t page_bytes = get_compile_time_arg_val(11);
+    // DM transfer group per stream: DM_BLOCK_TILES clamped host-side to that
+    // stream's own granularity (one normalize chunk for `o`, one column slice for
+    // `gate`), so a group can never straddle its CB's ring wrap however far the
+    // cross-core split shrinks the stream.  Equal to DM_BLOCK_TILES at every
+    // shipped single-core-per-block setting.
+    constexpr uint32_t o_dm_block_tiles = get_compile_time_arg_val(9);
+    constexpr uint32_t flat_dm_block_tiles = get_compile_time_arg_val(10);
+    constexpr uint32_t inv_v_bits = get_compile_time_arg_val(11);  // fp32 bits of 1/V
+    constexpr uint32_t page_bytes = get_compile_time_arg_val(12);
 
-    constexpr auto o_args = TensorAccessorArgs<12>();
+    constexpr auto o_args = TensorAccessorArgs<13>();
     constexpr auto gate_args = TensorAccessorArgs<o_args.next_compile_time_args_offset()>();
     constexpr auto weight_args = TensorAccessorArgs<gate_args.next_compile_time_args_offset()>();
 
@@ -150,7 +157,7 @@ void kernel_main() {
         const uint32_t o_first_tile = (b * tokens_total + r * tokens_per_block + slice * tokens_per_core) * v_tiles;
         {
             MaybeDeviceZoneScope("onorm_read_o");
-            stream_tiles<cb_o_tiles, dm_block_tiles, page_bytes>(o_acc, o_first_tile, o_tiles_per_core);
+            stream_tiles<cb_o_tiles, o_dm_block_tiles, page_bytes>(o_acc, o_first_tile, o_tiles_per_core);
         }
 
         // `gate` is tiled over (T, FLAT), so its token axis IS tile-padded (Tt).
@@ -161,7 +168,7 @@ void kernel_main() {
         {
             MaybeDeviceZoneScope("onorm_read_gate");
             for (uint32_t tr = 0; tr < tile_rows_per_block; ++tr) {
-                stream_tiles<cb_gate_tiles, dm_block_tiles, page_bytes>(
+                stream_tiles<cb_gate_tiles, flat_dm_block_tiles, page_bytes>(
                     gate_acc, gate_row0_tile + tr * flat_tiles + slice * cols_per_core, cols_per_core);
             }
         }
