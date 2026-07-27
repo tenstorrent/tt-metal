@@ -232,3 +232,218 @@ structure around it.
 - **Follow-up filed**: `### [ ] Refinement 1b — Cash the 16-bit DEST`, ordered immediately
   after this one and before Refinement 2, naming the exact next lever with its measured
   prize (1.208×) and its measured precision cost.
+
+---
+
+## Refinement 1b — Cash the 16-bit DEST: 1.208×, with P1's fp32 sum-of-squares preserved
+
+- **Date**: 2026-07-27
+- **Arch**: Blackhole p150 (`ARCH_NAME=blackhole`), 11×10 = 110-core compute grid
+- **Outcome**: `[x]` full. The 16-bit DEST is landed as the default and is worth
+  **1.18–1.28× on every cell of the config-spanning guard set**. Route 1
+  (preserve P1's fp32 accumulation by another mechanism) was investigated and is
+  **not available on this hardware**; **route 2** — the explicit documented
+  deviation the refinement provides for — was taken, with the deviation written
+  into `default_compute_kernel_config()`'s docstring naming the contract line.
+  The named free rider (`GATE_DEST_TILES` 4 → 8) was re-swept and **does not
+  pay**; 4 remains the measured optimum.
+
+### Why route 1 is closed (this is the substance of the refinement, not the flag flip)
+
+`fp32_dest_acc_en` is a **whole-kernel compile-time** config, so "fp32 for P1
+only" necessarily means moving the sum-of-squares accumulation *off* DEST. All
+three candidates the refinement named were run down:
+
+1. **Packer L1 accumulator (`PackTileL1Accumulation`)** — the only fp32
+   accumulation datapath in a Tensix that bypasses DEST, and therefore the only
+   candidate that could have worked. It is **fp32-DEST-only hardware**. This is
+   not inferred: the catalog's on-device example
+   `ttnn/ttnn/operations/examples/row_reduce_accumulate` measured it and pins it
+   in three places — "L1-accumulate is **fp32-DEST-only** hardware" (README
+   method table), "the packer L1-accumulate datapath is fp32-DEST-only (**a bf16
+   DEST corrupts the accumulate**), so `l1_accum` ALWAYS uses fp32 DEST"
+   (program descriptor), and its accuracy row is best "only because the packer
+   forces fp32 DEST". Enabling it under a 16-bit DEST does not buy fp32
+   accumulation — it buys a corrupt one.
+2. **A `Float32` `cb_sumsq` with the accumulation moved out of DEST** — there is
+   nowhere else to move it to. Every path from the FPU or SFPU into L1
+   traverses DEST, so with a 16-bit DEST each `o²` term is already rounded to
+   bf16 before it can reach an fp32 CB. A wider intermediate CB below a
+   narrower DEST buys nothing: the pack is exact and the next unpack rounds
+   straight back down.
+3. **`dest_accum_pairs`** — a *tree* rather than *sequential* accumulation. Real,
+   but it is bf16-accumulation-error reduction, not fp32 preservation, and the
+   catalog measures its benefit at W=32 tiles. P1's cross-tile depth here is
+   `V_TILES = 4`, where the difference is negligible. Not worth a restructure of
+   a passing phase for an effect below the measurement floor.
+
+Structurally there is a fourth blocker even had (1) worked: the chain's
+`OutputLifecycle::L1Accumulation` owns **one** accumulator for the whole chain
+(`OneUpfront` / `OneAtEnd`), while P1 needs one per token (`nb` per chunk) —
+which is why it pairs with `DestAccumulation`'s `PerOuter` today. Getting
+per-token L1 accumulation would have meant caller-managed CB scaffolding wrapped
+around the helper, i.e. a helper substitution, for a mechanism that is
+hardware-invalid at the target DEST width anyway.
+
+**Conclusion**: at a 16-bit DEST there is no fp32 accumulator in the machine.
+Route 1 is not a cost/benefit call, it is unavailable. Route 2 taken.
+
+### The documented deviation (route 2)
+
+`eval/prompts/onorm.txt` → `## Rules` → `Precision`:
+
+> "When reducing for RMSNorm: accumulate the sum-of-squares in fp32 in DST
+> (`fp32_dest_acc_en=True`) even though the I/O dtype is bf16 — the reduction is
+> the precision-sensitive step."
+
+`default_compute_kernel_config()` now returns `fp32_dest_acc_en=False`. The
+deviation is written out in full in that factory's docstring (prize, why route 1
+is unavailable, measured precision cost, and the fact that the field itself is
+still honoured). **The contract's mechanism is not removed** — it is a public
+`compute_kernel_config` field, and a caller who passes
+`ttnn.WormholeComputeKernelConfig(fp32_dest_acc_en=True)` still gets the 32-bit
+DEST and the fp32 sum-of-squares accumulation, bit-for-bit as R1 shipped it.
+Only the `None` default moved. That path is now a guard-set cell in its own
+right (`fp32on` below) so it cannot silently rot.
+
+### What was done
+
+1. **`default_compute_kernel_config()` → `fp32_dest_acc_en=False`** with the
+   deviation block in its docstring. Also corrected two stale claims in the same
+   docstring: "the op is DRAM-bound" (Phase 0's verification disproved it) and
+   the implication that `math_approx_mode` relaxes the sigmoid (R1 proved the
+   LLK ignores `APPROXIMATION_MODE` for sigmoid).
+2. **`_DEST_TILE_LIMIT` (a hardcoded `4`) → `_dest_tile_limit(fp32_dest_acc_en)`**
+   over `_DEST_TILE_LIMIT_FP32 = 4` / `_DEST_TILE_LIMIT_16B = 8`. `DEST_AUTO_LIMIT`
+   is a function of the DEST width, and the DEST width is a *caller* input — so a
+   hardcoded ceiling was simply wrong under the new default (it would have
+   rejected a legal 8). This was a required correctness fix, not a knob turn.
+3. **`GATE_DEST_TILES` became a clamped REQUEST.** The descriptor derives
+   `gate_dest_tiles = min(GATE_DEST_TILES, _dest_tile_limit(cfg))` and everything
+   downstream (the CB-capacity assert, the divisibility assert, the compute CT
+   arg) reads the *effective* value. This is what lets one module-level knob
+   serve both DEST widths: a caller asking for fp32 DEST gets a legal 4-tile
+   window from the op's own 8-capable default instead of an assert. **No kernel
+   change was needed** — `gate_dest_tiles` already travelled as a CT arg.
+
+### Measurements
+
+All medians of 5 **trial-major interleaved** repetitions inside one process
+(`test_onorm_sigmoid_engine.py`), `DEVICE KERNEL DURATION [ns]`.
+
+**Config-spanning guard set — paired inside one process, R1's shipped pair
+(32-bit DEST, `GATE_DEST_TILES=4`) vs R1b's (16-bit DEST, `GATE_DEST_TILES=4`):**
+
+| cell | cores | R1 shipped | R1b shipped | speedup | max spread |
+|---|---|---|---|---|---|
+| B=1,T=32 default | 1 | 238,002 | 195,749 | **1.2159×** | 0.07 % |
+| B=1,T=128 default | 4 | 238,346 | 196,079 | **1.2156×** | 0.07 % |
+| B=1,T=640 default | 20 | 243,207 | 200,692 | **1.2118×** | 0.48 % |
+| B=8,T=640 default | 110 | 535,686 | 453,649 | **1.1808×** | 3.59 % |
+| B=1,T=640 `math_approx_mode=True` | 20 | 243,337 | 192,920 | **1.2613×** | 0.79 % |
+| B=1,T=640 `MathFidelity::LoFi` | 20 | 243,308 | 189,979 | **1.2807×** | 0.28 % |
+| B=1,T=640 **`fp32_dest_acc_en=True`** | 20 | 243,170 | 243,183 | 0.9999× | 0.34 % |
+
+Every cell improves; none regresses. The last row is the caller-override path
+and is unchanged to within 0.01 % — the clamp makes R1b invisible to a caller
+who asks for the 32-bit DEST, which is exactly the required behaviour.
+
+**The win is the SFPU's, confirmed by ablation at BOTH DEST widths** (the R1
+`ablate` engine removes the sigmoid payload and keeps every CB wait/push, DEST
+window and NoC transfer):
+
+| B=1/T=640 | whole kernel | ablated (no sigmoid) | sigmoid payload |
+|---|---|---|---|
+| 32-bit DEST | 243,103 | 91,620 | **151,483** |
+| 16-bit DEST | 200,667 | 92,426 | **108,241 (1.399×)** |
+
+| B=8/T=640 | whole kernel | ablated | sigmoid payload |
+|---|---|---|---|
+| 32-bit DEST | 534,816 | 305,888 | **228,928** |
+| 16-bit DEST | 452,478 | 305,279 | **147,199 (1.555×)** |
+
+The ablated (non-sigmoid) remainder is **flat across the two DEST widths** —
+91.6 vs 92.4 µs, and 305.9 vs 305.3 µs — so the entire saving is the SFPU
+payload, not the scaffolding around it. This reproduces R1's prediction (1.208×
+whole-kernel, 1.39× on the payload) essentially exactly, from an independent
+measurement.
+
+**Free rider — `GATE_DEST_TILES` re-swept against the doubled `DEST_AUTO_LIMIT`**
+(all at the shipping 16-bit DEST; `vs d1`):
+
+| shape | d1 | d2 | d4 | d8 | max spread |
+|---|---|---|---|---|---|
+| B=1,T=128 | 1.0000 | 1.0054 | **1.0078** | 1.0046 | 0.26 % |
+| B=1,T=640 | 1.0000 | 1.0031 | **1.0046** | 1.0044 | 0.56 % |
+| B=8,T=640 | 1.0000 | 0.9891 | **1.0009** | 0.9960 | 5.2 % |
+
+The curve **turns over at 4**: R1's monotonic 1 → 2 → 4 continues, but 4 → 8 is
+a tie at best and a small loss at worst, on all three shapes. So the free rider
+was measured and **not** taken — `GATE_DEST_TILES` stays at its measured optimum
+of 4. The *knob* keeps the headroom it gained (the ceiling is now derived, so 8
+is reachable and legal); only the shipped *value* stayed put. Refinement 3
+inherits a live knob with a doubled ceiling and this curve as its starting point.
+
+The `pack` engine was re-measured at the new DEST width and is still a
+consistent loss (0.985–0.988× across the three shapes), unchanged from R1's
+finding — it remains a correct, live, non-default knob.
+
+- **Accuracy achieved**: PCC = **0.999988**, rel-RMS = **0.0056**,
+  max_abs 0.0390–0.0487, mean_abs 0.0018, got/true ratio median = **1.0026**
+  (p5 0.9947 / p95 1.0110, std 0.0049) across B×T = 1×32 / 1×128 / 1×640 /
+  4×256. `test_onorm_precision_baseline.py` passes 4/4.
+
+  | | PCC | rel-RMS | got/true median |
+  |---|---|---|---|
+  | R1 shipped (fp32 DEST) | 0.999993 | 0.0037 | 0.9997 |
+  | **R1b shipped (16-bit DEST)** | **0.999988** | **0.0056** | **1.0026** |
+
+  This lands exactly on the numbers R1 predicted from `probe_005`. It is 3.5×
+  inside the refinement's own bar (PCC ≥ 0.9995, rel-RMS < 0.02) and ~7× inside
+  the golden bf16 bar (PCC ≥ 0.995, RMS 0.04). The ratio stays a broad spread
+  centred on 1.0 (std 0.0049 against a 0.0026 median offset), i.e. rounding, not
+  a scale bug — the baseline's own scale-bug guard (0.98 ≤ median ≤ 1.02) passes
+  with ~7× margin.
+
+- **Golden test progress**: **11 / 11 passing** (5 / 5 registry cells + 6
+  numerics regression tests), unchanged. No SUPPORTED / EXCLUSIONS change — this
+  is a perf refinement.
+
+- **Issues encountered**:
+  1. `_DEST_TILE_LIMIT` was a hardcoded `4`, which silently encoded the *old*
+     default's DEST width. Flipping the default without fixing it would have
+     made a legal `GATE_DEST_TILES=8` unreachable while the assert claimed it was
+     a hardware limit. Fixed by deriving the ceiling from the caller's config.
+  2. The R1 test file's `_FP32_ON = default_compute_kernel_config()` bound a
+     *name* to a *default* that this refinement moves. It now pins the fp32
+     config explicitly and `_FP32_OFF` is the factory, with an import-time assert
+     that the factory really does ship the 16-bit DEST — so the next default move
+     fails loudly here instead of silently retitling a measurement column.
+  3. Not an issue, recorded: the got/true median moves from 0.9997 to 1.0026, a
+     +0.26 % systematic offset (the 16-bit DEST slightly under-estimates the
+     positive sum of squares, so `rsqrt` comes out slightly large). It is well
+     inside the scale-bug guard and an order of magnitude below the golden bar,
+     but it is a *bias* rather than pure noise and is recorded here so a future
+     precision refinement has the signature.
+
+- **Tests added / changed** (all in `test_onorm_sigmoid_engine.py`, extending
+  R1's harness rather than forking a new file):
+  - `test_gate_dest_tiles_clamped_for_fp32_dest` (**new**, 4 cases) — the guard on
+    the new clamp: every `GATE_DEST_TILES` in {1,2,4,8}, including the op's own
+    default, must produce a correct answer under `fp32_dest_acc_en=True`.
+  - `test_gate_dest_tiles_over_limit_rejected` — retargeted from 8 (now legal) to
+    16 (above the widest DEST budget), so it still proves the host assert fires.
+  - `DEST_TILES` extended to include 8; `CANDIDATES` extended with `math/d8` and
+    `ablate/d8` so the block-factor curve reaches the new ceiling.
+  - `test_dest_acc_trial` — rebuilt around a `DEST_ACC_VARIANTS` table covering
+    both shapes and both DEST widths, with an `ablate` cell **at each width** so
+    the payload can be priced separately at 16 and 32 bits.
+  - `test_guard_set_trial` — the "new" arm now reads `GATE_DEST_TILES` from the
+    module instead of restating it, so the guard always measures what actually
+    ships; added the `fp32on` cell that keeps the public override on the guard set.
+  - Full op suite: **368 / 368**; golden suite **11 / 11**; `--dev` clean (no
+    watcher asserts, no races).
+
+- **Left for Refinement 3**: `GATE_DEST_TILES`' ceiling is now 8 and derived, and
+  the 4-vs-8 curve above is measured at the *current* structure — R3 should
+  re-sweep it against the post-R2 structure, not assume this result carries.

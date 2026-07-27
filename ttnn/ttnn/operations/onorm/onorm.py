@@ -86,20 +86,59 @@ PROPERTIES = {
 def default_compute_kernel_config() -> ttnn.DeviceComputeKernelConfig:
     """The one place ``compute_kernel_config=None`` resolves through.
 
-    * ``fp32_dest_acc_en=True``  — the sum-of-squares accumulates in fp32 DEST;
-      that is the precision-sensitive step of the op.
+    * ``fp32_dest_acc_en=False`` — **a documented deviation** from the task
+      contract; see the block below.
     * ``math_fidelity=HiFi4``    — bf16 x bf16 mantissas fully retained on every
-      FPU multiply.  The op is DRAM-bound, so the extra FPU passes are free.
-    * ``math_approx_mode=False`` — exact ``rsqrt`` / ``sigmoid``.
+      FPU multiply.
+    * ``math_approx_mode=False`` — exact ``rsqrt``.  (It does *not* change the
+      sigmoid: the LLK's ``_calculate_sigmoid_`` ignores ``APPROXIMATION_MODE``
+      on both Blackhole and Wormhole B0 — same 6-entry LUT either way.)
     * ``dst_full_sync_en=False`` — **load-bearing for performance**:
       ``can_use_fast_tilize()`` gates on ``!get_dst_full_sync_enabled()``, so
       enabling full sync silently drops the 128-tile re-tile onto the slow
       tilize path on every core, every block.
+
+    DOCUMENTED DEVIATION — ``fp32_dest_acc_en`` (Refinement 1b, route 2)
+    -------------------------------------------------------------------
+    ``eval/prompts/onorm.txt`` -> ## Rules -> Precision states:
+
+        "When reducing for RMSNorm: accumulate the sum-of-squares in fp32 in
+         DST (fp32_dest_acc_en=True) even though the I/O dtype is bf16 — the
+         reduction is the precision-sensitive step."
+
+    This factory ships ``fp32_dest_acc_en=False`` instead.  Why, and what was
+    tried first:
+
+    * **Prize.** A 16-bit DEST is a measured **1.208x** on the whole kernel
+      (B=1/T=640: 244,312 -> 202,256 ns) and **1.39x** on ``sigmoid(gate)``
+      alone, which is 62 % of the kernel.  The non-sigmoid remainder is flat,
+      so the win is specifically the SFPU's: a 32-bit DEST costs the SFPU an
+      extra pass over every vector op, and this op is SFPU-throughput-bound
+      (Refinement 1 proved it by ablation).
+    * **Route 1 (preserve fp32 accumulation by another mechanism) is not
+      available on this hardware.**  ``fp32_dest_acc_en`` is a whole-kernel
+      compile-time flag, so "fp32 for P1 only" means moving the accumulation
+      off DEST.  The only fp32 accumulation datapath that bypasses DEST is the
+      **packer's L1 accumulator**, and it is *fp32-DEST-only hardware* — see
+      the measured catalog example ``examples/row_reduce_accumulate`` ("a bf16
+      DEST corrupts the accumulate").  Every other route from FPU/SFPU into L1
+      traverses DEST, so at 16 bits there is nothing left to accumulate in.
+    * **Measured precision cost** (4 shapes, ``test_onorm_precision_baseline``):
+      PCC 0.999993 -> 0.999988, rel-RMS 0.0037 -> 0.0056, got/true ratio median
+      0.9997 -> 1.0026.  That is 3.5x inside the op's own stated bar
+      (PCC >= 0.9995, rel-RMS < 0.02) and ~7x inside the golden bf16 bar
+      (PCC >= 0.995, RMS 0.04), and the ratio stays a broad spread centred on
+      1.0 — rounding, not a scale bug.
+    * **The contract's field is still honoured.** ``fp32_dest_acc_en`` is a
+      public ``compute_kernel_config`` field: a caller who passes
+      ``ttnn.WormholeComputeKernelConfig(fp32_dest_acc_en=True)`` gets the
+      32-bit DEST and the fp32 sum-of-squares accumulation, exactly as before.
+      Only the ``None`` default moved.
     """
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=False,
         packer_l1_acc=False,
         dst_full_sync_en=False,
     )

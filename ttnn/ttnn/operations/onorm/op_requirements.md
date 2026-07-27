@@ -204,7 +204,7 @@ premise behind them turned out to be unavailable in hardware. Evidence in `chang
 
 ---
 
-### [ ] Refinement 1b — Cash the 16-bit DEST: 1.208×, with P1's fp32 sum-of-squares preserved
+### [x] Refinement 1b — Cash the 16-bit DEST: 1.208×, with P1's fp32 sum-of-squares preserved
 
 **Type**: perf
 
@@ -267,6 +267,45 @@ numbers recorded in `changelog.md` and inside PCC ≥ 0.9995 / rel-RMS < 0.02; t
 config-spanning guard set; and the golden suite plus `test_onorm_knobs.py` are green. If
 route 2 is taken, the deviation must be written into `changelog.md` and
 `default_compute_kernel_config()`'s docstring, naming the contract line it departs from.
+
+**OUTCOME (full)** — the 16-bit DEST is the default and is worth **1.18–1.28× on every
+cell of the config-spanning guard set**. Route 1 was run down and is unavailable on this
+hardware; **route 2** was taken with the documented deviation the phase provides for.
+Evidence in `changelog.md`.
+
+- **Route 1 is not a cost/benefit call — there is no fp32 accumulator in the machine at a
+  16-bit DEST.** `fp32_dest_acc_en` is whole-kernel, so "fp32 for P1 only" means moving
+  the accumulation off DEST, and the only such datapath is the **packer's L1 accumulator**
+  — which is **fp32-DEST-only hardware**, measured and pinned three times over by the
+  catalog example `examples/row_reduce_accumulate` ("a bf16 DEST corrupts the
+  accumulate"). The `Float32 cb_sumsq` candidate buys nothing (a wider CB under a
+  narrower DEST: the pack is exact, the next unpack rounds straight back down), and
+  `dest_accum_pairs` is bf16-error *reduction*, not fp32 preservation, worth nothing at
+  P1's cross-tile depth of `V_TILES = 4`. Independently, the chain's
+  `OutputLifecycle::L1Accumulation` owns one accumulator per chain while P1 needs one per
+  token, so even a working (1) would have required caller-managed scaffolding around the
+  helper.
+- **Route 2, done to the letter of the "Done when".** The deviation is written into
+  `default_compute_kernel_config()`'s docstring quoting the contract line it departs from,
+  with the prize, the route-1 evidence and the precision cost. The contract's *mechanism*
+  survives: `fp32_dest_acc_en` is a public field, and a caller who passes `True` still
+  gets the 32-bit DEST bit-for-bit as R1 shipped it — measured at **0.9999×** as its own
+  guard-set cell (`fp32on`), so the override path cannot silently rot.
+- **The win is the SFPU's, proved by ablating at BOTH widths.** The non-sigmoid remainder
+  is flat across the two DEST widths (91.6 → 92.4 µs at B=1/T=640; 305.9 → 305.3 µs at
+  B=8/T=640) while the sigmoid payload drops **151.5 → 108.2 µs (1.399×)** and
+  **228.9 → 147.2 µs (1.555×)**. This reproduces R1's predicted 1.208× / 1.39× from an
+  independent measurement.
+- **`_DEST_TILE_LIMIT` was a latent bug, now fixed.** It hardcoded `4`, i.e. the *old*
+  default's DEST width, for a quantity that is a function of a **caller** input. It is now
+  `_dest_tile_limit(fp32_dest_acc_en)` (4 / 8) and `GATE_DEST_TILES` is a request the
+  descriptor clamps — which is what lets one module-level knob serve both DEST widths
+  instead of asserting at a caller who asks for fp32. No kernel change was needed.
+- **Free rider measured and NOT taken.** `GATE_DEST_TILES` 4 → 8 (newly legal): the curve
+  **turns over at 4** — `1.0078 / 1.0046 / 1.0009` at d4 vs `1.0046 / 1.0044 / 0.9960` at
+  d8 across B=1/T=128, B=1/T=640, B=8/T=640. A tie at best, a small loss at worst. The
+  shipped value stays 4; the *knob* keeps its doubled, now-derived ceiling for Refinement 3.
+  R3 should re-sweep it against the post-R2 structure rather than assume this curve carries.
 
 ---
 
@@ -348,8 +387,10 @@ P7a 3.6 — becomes the critical path, and it is spread over **25 helper invocat
    *specifically* to make this a legal one-line-per-helper knob-turn (`op_design.md` §1.5, risk 11).
 2. **Co-tune the block factors.** `NORM_CHUNK_TOKENS` (8), `GATE_CHUNK_TILES` (64),
    `TOKENS_PER_BLOCK` (32), `O_DEPTH` (2), `DM_BLOCK_TILES` (8), `DM_DEPTH` (4), and
-   `GATE_DEST_TILES` (4, added and perf-selected by R1 — its ceiling is `_DEST_TILE_LIMIT`,
-   which rises from 4 to 8 if R1b lands the 16-bit DEST, so re-sweep it then). Only the two DM
+   `GATE_DEST_TILES` (4, added and perf-selected by R1; R1b landed the 16-bit DEST, so the
+   ceiling is now the *derived* `_dest_tile_limit(cfg)` and 8 is legal. R1b swept 4-vs-8 once
+   against the PRE-R2 structure and found the curve turns over at 4 — re-sweep against the
+   final structure, do not assume that result carries). Only the two DM
    knobs and `GATE_DEST_TILES` have ever been *perf*-selected; the compute-side factors were chosen from an L1-budget
    argument that assumed the op was DRAM-bound. Same `compute_block_size` mechanism: coarser blocks
    amortize the per-invocation fixed cost, whole tiles are the granularity floor, and the curve has

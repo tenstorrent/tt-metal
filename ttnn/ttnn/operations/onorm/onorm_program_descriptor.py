@@ -88,9 +88,11 @@ SIGMOID_ENGINE = "math"
 # together; they are paired 1:1 by design, so blocking one alone would just move
 # the per-window cost to the other half.
 #
-# Ceiling is the DEST budget: `DEST_AUTO_LIMIT` is 4 tiles under the default
-# `fp32_dest_acc_en=True` + half sync.  The chain clamps a larger request down at
-# runtime, but the assert below rejects it loudly instead.
+# Ceiling is the DEST budget: `DEST_AUTO_LIMIT` is 4 tiles under a 32-bit DEST
+# (`fp32_dest_acc_en=True`) and 8 under the 16-bit DEST that Refinement 1b made
+# the default.  That ceiling is therefore a function of the CALLER's compute
+# config, not a constant — `_dest_tile_limit()` below is its one source of truth
+# and the descriptor clamps this request down to it (see `gate_dest_tiles`).
 #
 # MEASURED (Blackhole p150, median of 5 trial-major interleaved trials,
 # tests/.../test_onorm_sigmoid_engine.py): 1 -> 2 -> 4 is monotonic at
@@ -99,7 +101,26 @@ SIGMOID_ENGINE = "math"
 # above the <=0.1% trial spread.  It is SMALL because the phase is dominated by
 # the SFPU payload itself, not by per-window overhead: with the sigmoid ablated
 # away the same knob is worth 1.016x (B1/T128), which is the per-window cost this
-# lever actually removes.  Free in L1 (no CB changes), so 4 is the default.
+# lever actually removes.  Free in L1 (no CB changes), so 4 was the R1 default.
+#
+# REFINEMENT 1b re-swept it against the 16-bit DEST that is now the default. The
+# 16-bit DEST doubles `DEST_AUTO_LIMIT` to 8, so 8 became reachable for the first
+# time — R1b's named "free rider".  MEASURED (median of 5 trial-major interleaved
+# trials, at the shipping compute config): the curve TURNS OVER at 4.
+#
+#   vs d1        d1       d2        d4          d8
+#   B=1,T=128  1.0000   1.0054   1.0078*    1.0046      (spread <=0.26%)
+#   B=1,T=640  1.0000   1.0031   1.0046*    1.0044      (spread <=0.56%)
+#   B=8,T=640  1.0000   0.9891   1.0009*    0.9960      (spread <=5.2%, noisy)
+#
+# So the free rider does NOT pay: 8 is best-case a tie and worst-case a small
+# loss, and 4 stays the measured optimum.  The KNOB keeps its now-doubled
+# headroom (the ceiling is derived, not hardcoded) for Refinement 3 to re-sweep
+# against the final structure; the shipped VALUE is the measured optimum.
+#
+# This is the REQUESTED value — `_dest_tile_limit()` clamps it per compute
+# config, so a caller who asks for `fp32_dest_acc_en=True` still gets a legal
+# window from the same knob.
 GATE_DEST_TILES = 4
 
 # Wire codes for SIGMOID_ENGINE.  The kernel branches on the integer; this dict
@@ -116,9 +137,18 @@ ALLOW_SIGMOID_ABLATION = False
 # --- hardware tile geometry (not a knob) ---
 TILE_H = 32
 TILE_W = 32
-# DEST_AUTO_LIMIT for this op's compute config (fp32_dest_acc_en=True + half sync)
-# — dest_helpers.hpp:95-99.  The ceiling on any per-DEST-window tile count.
-_DEST_TILE_LIMIT = 4
+# DEST_AUTO_LIMIT under half sync (dst_full_sync_en=False), by DEST width —
+# dest_helpers.hpp:95-99.  The ceiling on any per-DEST-window tile count.  A
+# 32-bit DEST halves the tile budget, so this is a function of the caller's
+# `fp32_dest_acc_en`, not a constant.  ONE source of truth for both values.
+_DEST_TILE_LIMIT_FP32 = 4  # fp32_dest_acc_en=True  -> 32-bit DEST
+_DEST_TILE_LIMIT_16B = 8  # fp32_dest_acc_en=False -> 16-bit DEST (the default)
+
+
+def _dest_tile_limit(fp32_dest_acc_en: bool) -> int:
+    """Tiles that fit one DEST window for this compute config."""
+    return _DEST_TILE_LIMIT_FP32 if fp32_dest_acc_en else _DEST_TILE_LIMIT_16B
+
 
 # L1 headroom held back from the CB budget.  `get_max_worker_l1_unreserved_size()`
 # reports the unreserved L1 span, but the statically-allocated CB region starts
@@ -293,13 +323,22 @@ def create_program_descriptor(
         "WRONG output. It exists only for /perf-measure ablation profiling. Set "
         "onorm_program_descriptor.ALLOW_SIGMOID_ABLATION = True to opt in."
     )
-    assert 1 <= GATE_DEST_TILES <= _DEST_TILE_LIMIT, (
-        f"onorm: GATE_DEST_TILES={GATE_DEST_TILES} must be 1..{_DEST_TILE_LIMIT} "
-        f"(DEST_AUTO_LIMIT under fp32_dest_acc_en + half sync)."
+    # The DEST window ceiling follows the CALLER's DEST width, so GATE_DEST_TILES
+    # is a REQUEST that is clamped down to what this config can actually stage.
+    # Clamping (rather than asserting against the active limit) is what keeps the
+    # public `fp32_dest_acc_en=True` path working from the same module-level knob:
+    # the knob's range now reaches 8, which a caller-supplied 32-bit DEST cannot
+    # hold, and such a caller must get a legal window rather than an assert.
+    dest_tile_limit = _dest_tile_limit(bool(compute_kernel_config.fp32_dest_acc_en))
+    assert 1 <= GATE_DEST_TILES <= _DEST_TILE_LIMIT_16B, (
+        f"onorm: GATE_DEST_TILES={GATE_DEST_TILES} must be 1..{_DEST_TILE_LIMIT_16B} "
+        f"(DEST_AUTO_LIMIT under half sync, 16-bit DEST — the widest this op ever gets)."
     )
-    assert GATE_CHUNK_TILES % GATE_DEST_TILES == 0, (
-        f"onorm: GATE_DEST_TILES={GATE_DEST_TILES} must divide "
-        f"GATE_CHUNK_TILES={GATE_CHUNK_TILES}; lower GATE_DEST_TILES to a power of two."
+    gate_dest_tiles = min(GATE_DEST_TILES, dest_tile_limit)
+    assert GATE_CHUNK_TILES % gate_dest_tiles == 0, (
+        f"onorm: the effective GATE_DEST_TILES={gate_dest_tiles} (requested "
+        f"{GATE_DEST_TILES}, clamped to this config's DEST limit {dest_tile_limit}) "
+        f"must divide GATE_CHUNK_TILES={GATE_CHUNK_TILES}; use a power of two."
     )
     assert DM_DEPTH >= 2 and O_DEPTH >= 2, "streaming depths must be >= 2 to overlap read with compute"
     # `o`'s token axis is un-padded (tiled dims are (HV, V)) while gate/out's IS
@@ -358,8 +397,8 @@ def create_program_descriptor(
     # those two phases wait on / reserve must hold at least that many pages.
     # cb_gate_tiles (DM_BLOCK_TILES * DM_DEPTH) and cb_out_tiles are the tightest.
     for cb_index in (CB_GATE_TILES, CB_GATE_SIG, CB_FLAT_TILES, CB_OUT_TILES):
-        assert cb_pages[cb_index] >= GATE_DEST_TILES, (
-            f"onorm: GATE_DEST_TILES={GATE_DEST_TILES} exceeds CB {cb_index}'s "
+        assert cb_pages[cb_index] >= gate_dest_tiles, (
+            f"onorm: GATE_DEST_TILES={gate_dest_tiles} exceeds CB {cb_index}'s "
             f"{cb_pages[cb_index]} pages — a DEST window would wait on more tiles than "
             f"the CB can hold and deadlock. Raise DM_BLOCK_TILES / DM_DEPTH, or lower "
             f"GATE_DEST_TILES."
@@ -432,7 +471,7 @@ def create_program_descriptor(
         GATE_CHUNK_TILES,
         gate_chunks_per_block,
         _SIGMOID_ENGINE_CODES[SIGMOID_ENGINE],
-        GATE_DEST_TILES,
+        gate_dest_tiles,  # the config-clamped effective window, not the raw request
     ]
 
     o_addr = o.buffer_address()
