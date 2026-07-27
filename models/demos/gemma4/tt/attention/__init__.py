@@ -29,6 +29,8 @@ class Gemma4AttentionConfig:
         self.hidden_size = hf_config.hidden_size
         self.num_attention_heads = hf_config.num_attention_heads
         self.rms_norm_eps = hf_config.rms_norm_eps
+        # Propagated for weight-load policy (e.g. skip DRAM-shard on MoE for PCC).
+        self.enable_moe_block = bool(getattr(hf_config, "enable_moe_block", False))
 
         self.is_sliding = self.layer_type == "sliding_attention"
         self.use_kv_tying = getattr(hf_config, "attention_k_eq_v", False) and not self.is_sliding
