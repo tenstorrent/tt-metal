@@ -75,7 +75,6 @@ static void watcher_sanitize_host_noc(
     const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_pcie_cores,
     const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dram_cores,
     const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dram_hw_cores,
-    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dispatch_cores,
     const tt::tt_metal::CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
@@ -114,13 +113,6 @@ static void watcher_sanitize_host_noc(
             print_stack_trace();
             TT_THROW("Host watcher: bad {} eth address {}", what, noc_address(core, addr, lbytes));
         }
-    } else if (
-        coord_found_p(soc_d.get_cores(CoreType::DISPATCH, CoordSystem::NOC0), core) ||
-        coord_found_p(virtual_dispatch_cores, core)) {
-        if (!DEBUG_VALID_WORKER_ADDR(addr, lbytes)) {
-            print_stack_trace();
-            TT_THROW("Host watcher: bad {} dispatch address {}", what, noc_address(core, addr, lbytes));
-        }
     } else if (coord_found_p(virtual_worker_cores, core)) {
         if (!DEBUG_VALID_WORKER_ADDR(addr, lbytes)) {
             print_stack_trace();
@@ -140,7 +132,6 @@ inline void watcher_sanitize_host_noc_read(
     const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_pcie_cores,
     const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dram_cores,
     const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dram_hw_cores,
-    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dispatch_cores,
     const tt::tt_metal::CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
@@ -152,7 +143,6 @@ inline void watcher_sanitize_host_noc_read(
         virtual_pcie_cores,
         virtual_dram_cores,
         virtual_dram_hw_cores,
-        virtual_dispatch_cores,
         core,
         addr,
         lbytes);
@@ -165,7 +155,6 @@ inline void watcher_sanitize_host_noc_write(
     const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_pcie_cores,
     const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dram_cores,
     const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dram_hw_cores,
-    const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_dispatch_cores,
     const tt::tt_metal::CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
@@ -177,7 +166,6 @@ inline void watcher_sanitize_host_noc_write(
         virtual_pcie_cores,
         virtual_dram_cores,
         virtual_dram_hw_cores,
-        virtual_dispatch_cores,
         core,
         addr,
         lbytes);
