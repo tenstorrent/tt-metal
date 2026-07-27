@@ -10,6 +10,7 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/pool/upsample/upsample.hpp"
 
 namespace ttnn {
 
@@ -18,6 +19,36 @@ namespace ttnn {
 // the last dim is handled by transposing it to the second-to-last position and recursing.
 ttnn::Tensor repeat_interleave(
     const ttnn::Tensor& input_a, uint32_t repeat, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
+    // Sharded memory configs.
+    if (input_a.memory_config().is_sharded() && repeat > 1) {
+        const uint32_t rank = input_a.logical_shape().rank();
+        const uint32_t nd = input_a.logical_shape().get_normalized_index(dim);
+
+        // Native fast-path: for a ROW_MAJOR 4D (interpreted as [N, H, W, C]) tensor, repeat_interleave
+        // along H (dim 1) or W (dim 2) is exactly ttnn::upsample(..., "nearest") with an integer scale,
+        // which has a native sharded kernel. This keeps the tensor sharded end-to-end (no interleaved
+        // round-trip). Verified correct for HEIGHT/WIDTH sharding on device. TILE layout, dims 0/C, and
+        // non-4D tensors are not covered by upsample and fall through to the round-trip below.
+        if (input_a.layout() == Layout::ROW_MAJOR && rank == 4 && (nd == 1 || nd == 2)) {
+            const std::array<int, 2> scale = (nd == 1) ? std::array<int, 2>{static_cast<int>(repeat), 1}
+                                                       : std::array<int, 2>{1, static_cast<int>(repeat)};
+            return ttnn::upsample(input_a, scale, "nearest", output_mem_config);
+        }
+
+        // Fallback: run the op in interleaved and restore the requested sharded config on the output
+        // (mirroring ttnn::sort). A fully-native path for the general case is not viable here: this op
+        // concats on `normalized_dim + 1`, an *interior* dim of the unsqueezed tensor, which ttnn::concat
+        // does not support sharded (it only handles rank-1 width / rank-2 height concats), so concat would
+        // auto-unshard to interleaved internally anyway. The output shape differs from the input (the
+        // repeated dim grows by `repeat`), so the input's shard spec cannot be reused; a sharded input with
+        // no explicit output_mem_config defaults to an interleaved DRAM output.
+        const MemoryConfig interleaved = ttnn::DRAM_MEMORY_CONFIG;
+        ttnn::Tensor interleaved_input = ttnn::to_memory_config(input_a, interleaved);
+        ttnn::Tensor interleaved_result = ttnn::repeat_interleave(interleaved_input, repeat, dim, interleaved);
+        const MemoryConfig requested = output_mem_config.value_or(interleaved);
+        return requested.is_sharded() ? ttnn::to_memory_config(interleaved_result, requested) : interleaved_result;
+    }
+
     std::vector<Tensor> combined_tensors;
     combined_tensors.reserve(repeat);
     MemoryConfig mem_config = output_mem_config.value_or(input_a.memory_config());
