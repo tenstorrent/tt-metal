@@ -167,11 +167,26 @@ def _device_recover(where: str) -> None:
     _board_reset(where, "device recovered")
 
 
-def _note_device_crash(where: str) -> None:
+def _note_device_crash(where: str, error_text: str = "") -> None:
+    """Record a device crash and recover when the evidence justifies it.
+
+    A DEAD-BOARD signature recovers IMMEDIATELY: it is unambiguous, and the old two-strike counter
+    could never reach two anyway -- it lived in this process, which the MCP client kills whenever a
+    call runs long, including the 7-minute tt-smi hang the reset itself caused. Eleven hours of
+    crashes produced no completed reset.
+
+    Ambiguous crashes keep the counter, because a single odd failure is not evidence of a wedge. The
+    counter is only cleared on a VERIFIED-healthy device, so a failed reset no longer looks like a
+    successful one.
+    """
+    if _is_dead_board(error_text):
+        if _recover_device(where, error_text):
+            _CONSEC_CRASH["n"] = 0
+        return
     _CONSEC_CRASH["n"] += 1
     if _CONSEC_CRASH["n"] >= 2:  # repeated crash -> likely a wedged core -> recover
-        _device_recover(where)
-        _CONSEC_CRASH["n"] = 0
+        if _recover_device(where, error_text):
+            _CONSEC_CRASH["n"] = 0
 
 
 def _note_device_ok() -> None:
@@ -197,6 +212,94 @@ def _is_l1_overflow(msg) -> bool:
         except Exception:  # noqa: BLE001
             pass
     return False
+
+
+# --- device recovery: decide from EVIDENCE, fall back to the config guess -----------------------
+
+_DEAD_BOARD_SIGS = ("0xffffffff", "board should be reset", "pcie link", "device hang", "hang detected")
+_RESET_FAIL_LIMIT = int(os.environ.get("PERF_MCP_RESET_FAIL_LIMIT", "3") or "3")
+_RESET_FAILS = {"n": 0}
+
+
+def _is_dead_board(text) -> bool:
+    """Is this error the UNAMBIGUOUS 'the card stopped answering' signature?
+
+    A PCIe read of 0xffffffff is all-ones: the bus reporting that nobody replied. There is nothing to
+    disambiguate, so waiting for a second occurrence before acting only guarantees being down twice.
+    Counters belong on flaky symptoms, not definitive ones.
+    """
+    s = (str(text) or "").lower()
+    return any(sig in s for sig in _DEAD_BOARD_SIGS)
+
+
+def _dead_chip_from_error(text):
+    """The chip id the runtime named in the failure, or None.
+
+    THE EVIDENCE. tt-metal reports "Read 0xffffffff over PCIe ID 3" -- it says which chip died. The
+    recovery path previously inferred the target from `--devices single`, which maps to chip 0; but
+    that flag expresses INTENT (use one chip), not PLACEMENT, and _visible_devices deliberately leaves
+    every chip visible, so the runtime had put the mesh on chip 3. Eleven hours of resets hit the
+    healthy board while the dead one was never touched. Read the id rather than infer it.
+    """
+    m = _re.search(r"pcie\s*(?:id|device)?\s*[:#]?\s*(\d+)", str(text or ""), _re.I)
+    if m:
+        try:
+            return int(m.group(1))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _recover_device(where: str, error_text: str = "") -> bool:
+    """Reset the board and REPORT WHETHER IT WORKED. True only on a verified-healthy device.
+
+    Target precedence -- evidence first, the config guess retained as the fallback it always should
+    have been:
+        1. the chip id named in the error   (observed)
+        2. the --devices-derived board      (inferred; kept, but no longer the only source)
+        3. every board                      (last resort)
+
+    The outcome is returned rather than written to a stderr nobody captures: a failed reset used to be
+    indistinguishable from a successful one, so the loop retried forever against a card that was never
+    coming back.
+    """
+    chip = _dead_chip_from_error(error_text)
+    targets = []
+    if chip is not None:
+        targets.append(str(chip))
+    cfg = (os.environ.get("PERF_MCP_DEVICES", "") or "").strip()
+    if cfg and cfg not in targets:
+        targets.append(cfg)
+    targets.append("all")
+
+    for tgt in targets:
+        _board_reset(where, "recover (target=%s%s)" % (tgt, ", from error" if tgt == str(chip) else ""))
+        if _device_is_healthy():
+            _RESET_FAILS["n"] = 0
+            sys.stderr.write("[perf-mcp] device recovered at %s via target=%s\n" % (where, tgt))
+            return True
+    _RESET_FAILS["n"] += 1
+    sys.stderr.write(
+        "[perf-mcp] RESET FAILED at %s (attempt %d/%d); targets tried: %s\n"
+        % (where, _RESET_FAILS["n"], _RESET_FAIL_LIMIT, ", ".join(targets))
+    )
+    return False
+
+
+def _device_is_healthy() -> bool:
+    """Does the device answer at all? Bounded, because tt-smi HANGS on a dead card -- the previous
+    420 s subprocess timeout let the MCP client kill this process mid-reset, which is what erased the
+    crash counter and stopped recovery ever firing."""
+    try:
+        r = _sp.run([_TT_SMI, "-s"], capture_output=True, text=True, timeout=45)
+        return r.returncode == 0 and "board_type" in (r.stdout or "")
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _recovery_exhausted() -> bool:
+    """Have resets failed enough times that the run should stop rather than poll a dead board?"""
+    return _RESET_FAILS["n"] >= _RESET_FAIL_LIMIT
 
 
 def _reclaim_mesh(where: str) -> None:
@@ -1454,7 +1557,7 @@ def measure_candidate() -> dict:
             # host-side extraction failure: NOT a device wedge. Do not mark a device crash
             # (2 in a row triggers a board reset), do not record a wedge, do not burn the lever.
             return _measurement_failed_result(_msg)
-        _note_device_crash("measure_candidate")  # may tt-smi reset if this is a repeat (wedge)
+        _note_device_crash("measure_candidate", _msg)  # evidence-driven: resets the chip the error names
         _autorecord_wedge(_trace_compat_feedback(f"wedged/crashed when tried: {_msg[-300:]}"))
         return {"verdict": "REJECTED", "reason": _trace_compat_feedback(f"profiler crashed: {_msg[-600:]}")}
     _note_device_ok()
@@ -1529,10 +1632,10 @@ def check_pcc() -> dict:
             out = _measurement_failed_result(_msg)
             out["status"] = "measurement_failed"
             return out
-        _note_device_crash("check_pcc")
+        _note_device_crash("check_pcc", _msg)
         return {"status": "crash", "error": _msg}
     if res.get("status") == "crash":
-        _note_device_crash("check_pcc")
+        _note_device_crash("check_pcc", str(res.get("error") or ""))
     else:
         _note_device_ok()
     return res
@@ -2976,7 +3079,17 @@ def termination_check() -> dict:
     try:
         prof = _profile_with_zero_row_retry(cq=1)
     except Exception as exc:  # noqa: BLE001
-        _note_device_crash("termination_check")
+        _note_device_crash("termination_check", str(exc))
+        if _recovery_exhausted():
+            # STOP POLLING A DEAD BOARD. can_stop=False means "work remains"; a device that cannot be
+            # recovered is not work remaining, and the agent is instructed never to stop while it is
+            # False -- which is how a dead card produced hours of 6-minute no-op gate calls.
+            return {
+                "can_stop": True,
+                "halt": "device_unrecoverable",
+                "error": "device could not be recovered after %d reset attempts: %s"
+                % (_RESET_FAIL_LIMIT, str(exc)[-300:]),
+            }
         return {"can_stop": False, "error": f"profiler crashed: {str(exc)[-500:]}"}
     _note_device_ok()
     dev = round(float(prof.get("device_ms", 0.0)), 4)
