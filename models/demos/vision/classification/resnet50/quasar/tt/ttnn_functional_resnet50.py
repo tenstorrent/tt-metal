@@ -1159,15 +1159,13 @@ class resnet50:
             layer_module="layer2_module4",
         )
 
-        # Quasar: block-shard layer3 like WH does. height_shard is already False here (block config, via
-        # is_blackhole()==False), but the WH block-input reshard below is gated on is_wormhole_b0() and
-        # skips Quasar, leaving the input height-sharded -> the 512->1024 conv keeps the full 1024-ch
-        # weight matrix per core (1 MB) and overflows the uint16_t DFB ring. Enable reshard_if_not_optimal
-        # so the op reshards the height-sharded input to the optimal block layout (grid-agnostic; the
-        # reshard_if_not_optimal path is the one BH uses here). Splitting output channels across the grid
-        # keeps the per-core weights DFB well under 1 MB.
+        # [#48552] Quasar: layer3 conv2 uses the HEIGHT-sharded split (Program A tilize + Program B matmul) --
+        # the same path layer1/2 pass on -- instead of the numerically-broken fused block conv. The old reason
+        # to block-shard here was the ~512-tile uint16 DFB ring overflowing on the full per-core weights; the
+        # 16-bit ring widen (f6b15a: compute-DFB ring_size -> uint32) removes that, so the full weights fit
+        # resident. WH/BH keep their block-shard path; reshard reshards the input to the optimal height layout.
         reshard = is_blackhole() or is_quasar()
-        height_shard = is_blackhole()
+        height_shard = is_blackhole() or is_quasar()
         if is_wormhole_b0():
             x = ttnn.experimental.quasar.to_memory_config(
                 x, ttnn.create_sharded_memory_config(x.shape, ttnn.CoreGrid(x=8, y=8), ttnn.ShardStrategy.BLOCK)
@@ -1192,6 +1190,7 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
+            height_sharding=height_shard,  # [#48552] match module1 -> height-sharded split
             layer_module="layer3_module2",
         )
 
@@ -1202,6 +1201,7 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
+            height_sharding=height_shard,  # [#48552] match module1 -> height-sharded split
             layer_module="layer3_module3",
         )
 
@@ -1212,6 +1212,7 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
+            height_sharding=height_shard,  # [#48552] match module1 -> height-sharded split
             layer_module="layer3_module4",
         )
 
@@ -1222,6 +1223,7 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
+            height_sharding=height_shard,  # [#48552] match module1 -> height-sharded split
             layer_module="layer3_module5",
         )
 
@@ -1232,15 +1234,14 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
+            height_sharding=height_shard,  # [#48552] match module1 -> height-sharded split
             layer_module="layer3_module6",
         )
 
-        # Quasar: same block-shard gap as layer3 (the WH/BH block-input reshards below skip Quasar).
-        # height_shard is already False (block config); enable reshard_if_not_optimal so the op reshards
-        # the input to the optimal block layout, keeping the 1024->2048 conv's per-core weights DFB
-        # under the uint16_t ring limit.
+        # [#48552] Quasar: layer4 conv2 uses the HEIGHT-sharded split too (see the layer3 note; f6b15a's
+        # 16-bit ring widen lets the full per-core weights fit resident). WH/BH keep block-sharding below.
         reshard = is_quasar()
-        height_shard = False
+        height_shard = is_quasar()
 
         if is_wormhole_b0():
             block_mem_config = ttnn.create_sharded_memory_config(
@@ -1280,6 +1281,7 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
+            height_sharding=height_shard,  # [#48552] match module1 -> height-sharded split
             layer_module="layer4_module2",
         )
 
@@ -1290,6 +1292,7 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
+            height_sharding=height_shard,  # [#48552] match module1 -> height-sharded split
             layer_module="layer4_module3",
         )
 
