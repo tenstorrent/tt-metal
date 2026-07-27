@@ -1288,16 +1288,26 @@ pipeline's internal state:
 Those first five rows are structural and reproducible — 12 MiB genuinely un-pins the FIFO and unblocks the
 relay/reader chain, and it is the right default on this box.
 
-**⚠ CORRECTION — X280-STALL is NOT a reliable metric on bh-06.** An earlier revision of this section claimed
-"12 MiB → X280-STALL 0". That was a **single lucky sample**. Re-running the *identical* command five times
-gave **0, 1216, 8413, 9020, 9473** — the count swings across the whole range run-to-run, while the FIFO
-high-water wanders 26–87% and the *device* chain stays provably unblocked (relay hostfull 0, reader
-spsc-wait 0). The residual stalls are therefore **host-drain jitter**, not a device or buffer limit: this
-container has only **6 CPU cores**, the drain is host-bound (§24), and OS scheduling noise against our own
-builds/threads moves the result more than any tuning knob does. **Do not tune against a single X280-STALL
-number here** — use the structural signals (relay `hostfull`, reader `spsc-wait`, FIFO high-water, X280 wall,
-copy%) which are stable, or average many runs. This also retro-weakens the bh-11 "830 = 0 stalls" datum: it
-was likewise a small number of samples on a quieter box.
+**⚠ CORRECTION — the unstaggered X280-STALL count is BIMODAL (a lockstep-phase artifact), not a knee.**
+An earlier revision claimed "12 MiB → X280-STALL 0" from a single sample. Repeating the *identical* command
+does not reproduce it reliably: 11 runs gave **0, 0, 1216, 6297, 8413, 9020, 9244, 9260, 9302, 9328, 9341,
+9449, 9492, 9513** — note the shape. It is **not a continuous spread; it is two discrete regimes**, ~0 or
+~9300, with almost nothing between.
+
+The cause is **§23's synchronized-burst lockstep**, not host jitter (an intermediate revision of this note
+wrongly blamed host-drain/CPU noise — corrected here):
+- The reader behaves *identically* in both regimes — `bulk` 1227–1243 cores, 4.6–4.9 cyc/word, avg-run
+  1216–1392 — so it is **not** a drain-rate difference.
+- The 0-stall runs show *higher* FIFO occupancy (64/83%, 79/76%) than the stalling ones (46/71%, 47/49%):
+  data flowing through = healthy; low FIFO **and** stalls = the worker rings are overflowing upstream of a
+  drain that isn't the constraint.
+- **`--stagger 30000` makes it deterministic: 0 stalls, 3/3 runs, wall 49–50M cyc.** Desyncing the per-core
+  fills removes the burst entirely — exactly the §23 result, now reproduced on P300.
+
+The uniform benchmark fills all 550 lanes in phase, and whether dispatch lands them in-phase is a discrete
+outcome per run → bimodal. **Measure the knee with `--stagger`** (deterministic) and treat any unstaggered
+X280-STALL number as one draw from a two-valued distribution. This also retro-weakens the bh-11 "830 = 0
+stalls" datum: same benchmark, same lockstep, few samples.
 
 `--mqcap` is **irrelevant** here: with `--mqcap 268435456` the MPMC peaked at **2 batches** (push-blocks 0).
 Why bh-06 wants 12 MiB where bh-11 sufficed at 4: the host drain is slower/burstier (6 cores), so the FIFO
@@ -1330,11 +1340,13 @@ still used the 4 MiB default, so their stall counts are inflated by it.
 - **A stall FLOOR that doesn't fall as you slow the producer = a BUFFER limit, not a drain-rate limit.**
   Sweeping `--proddelay` to chase a knee is wasted effort in that regime; size the D2H FIFO (`--hring`)
   instead. Cost a full proddelay sweep before the buffer was suspected (§25).
-- **★ ALWAYS repeat a X280-STALL measurement before concluding anything from it — on a host-bound box it is
-  NOISE-DOMINATED.** Identical command, 5 runs on bh-06: 0 / 1216 / 8413 / 9020 / 9473. A single sample led
-  to a wrong "12 MiB → 0 stalls" claim that had to be retracted (§25). Prefer the structural signals (relay
-  `hostfull`, reader `spsc-wait`, FIFO high-water, X280 wall, copy%) — those were stable across all 5 runs.
-  Corollary: never A/B two branches with one run each; the branch difference was smaller than the noise.
+- **★ The unstaggered X280-STALL count is BIMODAL — always use `--stagger`, or repeat the run.** Identical
+  command, 14 runs on bh-06: two clusters at ~0 and ~9300, nothing between. A single sample produced a wrong
+  "12 MiB → 0 stalls" claim that had to be retracted (§25). It is the §23 lockstep artifact, NOT host noise
+  and NOT drain rate — the reader's bulk/cyc-per-word/avg-run are identical in both regimes, and
+  `--stagger 30000` pins it to 0 deterministically (3/3). Corollary: **never A/B two branches with one run
+  each** — the branch difference was far smaller than the mode gap, and I briefly mis-called a rebase a
+  regression on exactly that mistake.
 - **`tt-smi -r` does NOT clear LIM SRAM** → a re-run of the same FW sees the prior
   run's `DONE_MAGIC` and reads results prematurely. Host must zero the result/done
   region before releasing the FW.
