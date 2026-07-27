@@ -1191,34 +1191,29 @@ TEST(MultiHost, SC16BlitzSuperpodIntermeshPortAssignment) {
     check_intermesh_port_assignment_against_golden("SC16BlitzSuperpod_intermesh");
 }
 
-// Subtorus 4x4 pipeline rings (8/32/40-stage): every MGD 1:1 pin must land on the exact
-// (tray_id, asic_location) listed in the descriptor. Expected pins are hardcoded below — the test
-// does not read or parse the MGD at runtime. RevC vs RevAB pin tables differ by trays 2/3;
-// the correct table is selected via psd.is_bh_galaxy_rev_c(). Driven by tt-run --mesh-graph-descriptor
-// for each subtorus_*_4x4_pipeline_* MGD in run_fabric_cpu_only_unit_tests.sh (bh-subtorus* groups).
+// Subtorus 4x4 pipeline rings (8/32/40-stage): every pinned chip must land on the exact
+// (tray_id, asic_location) from the hardcoded even/odd full-mesh profiles below. Uses the
+// MetalContext control plane (same instance as ControlPlaneFixture tests in the tt-run filter).
+// RevC vs RevAB pin tables differ by trays 2/3 via psd.is_bh_galaxy_rev_c().
 TEST(MultiHost, TestSubtorus4x4PipelineMgdPinningsExact) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
         tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
         GTEST_SKIP() << "Subtorus 4x4 pipeline pinning check requires a Blackhole Galaxy mock cluster";
     }
 
-    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    std::filesystem::path mesh_graph_desc_path = std::filesystem::path(rtoptions.get_root_dir()) /
-                                                 "tests/tt_metal/tt_fabric/custom_mesh_descriptors/subtorus/"
-                                                 "subtorus_4x4_pipeline_32stage_mesh_graph_descriptor.textproto";
-    if (rtoptions.is_custom_fabric_mesh_graph_desc_path_specified()) {
-        mesh_graph_desc_path = rtoptions.get_custom_fabric_mesh_graph_desc_path();
-    }
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
-    auto control_plane = make_control_plane(
-        mesh_graph_desc_path.string(),
-        tt::tt_fabric::FabricConfig::FABRIC_2D,
-        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
-    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
-    // Hardcoded from subtorus_*_4x4_pipeline_* MGD pinnings (chip_id -> tray_id, asic_location).
-    // Two alternate full-mesh pin profiles: even-mesh or odd-mesh. Each pipeline stage mesh must
-    // satisfy one profile exactly (8-stage alternates by mesh id; 32/40/72-stage applies both).
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
+    const bool log_on_rank0 = *distributed_context.rank() == 0;
+
+    // Hardcoded full-mesh pin profiles (chip_id -> tray_id, asic_location). Each 4x4 mesh must
+    // match the even or odd profile exactly — all 16 chips are checked per mesh.
     struct ExpectedPin {
         std::uint32_t chip_id;
         std::uint32_t tray_id;
@@ -1297,12 +1292,63 @@ TEST(MultiHost, TestSubtorus4x4PipelineMgdPinningsExact) {
         {15, 3, 2},
     }};
 
-    const auto& mesh_graph = control_plane->get_mesh_graph();
-    const auto& psd = control_plane->get_physical_system_descriptor();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& psd = control_plane.get_physical_system_descriptor();
     const auto& even_mesh_pins = psd.is_bh_galaxy_rev_c() ? even_mesh_pins_rev_c : even_mesh_pins_rev_ab;
     const auto& odd_mesh_pins = psd.is_bh_galaxy_rev_c() ? odd_mesh_pins_rev_c : odd_mesh_pins_rev_ab;
+    const char* rev_label = psd.is_bh_galaxy_rev_c() ? "revC" : "revAB";
     auto mesh_ids = mesh_graph.get_mesh_ids();
     std::sort(mesh_ids.begin(), mesh_ids.end());
+
+    if (log_on_rank0) {
+        const std::string mgd_path = rtoptions.is_custom_fabric_mesh_graph_desc_path_specified()
+                                         ? rtoptions.get_custom_fabric_mesh_graph_desc_path()
+                                         : "<default>";
+        log_info(
+            tt::LogTest,
+            "TestSubtorus4x4PipelineMgdPinningsExact: MetalContext control plane, MGD={}, {}, checking all {} pins "
+            "per matched profile across {} 4x4 meshes",
+            mgd_path,
+            rev_label,
+            even_mesh_pins.size(),
+            mesh_ids.size());
+    }
+
+    std::size_t total_pin_checks = 0;
+
+    auto verify_all_pins = [&](MeshId mesh_id, const auto& pins, std::string_view profile_name) {
+        if (log_on_rank0) {
+            log_info(
+                tt::LogTest,
+                "Mesh {}: verifying all {} {} pins (chips 0-15)",
+                mesh_id.get(),
+                pins.size(),
+                profile_name);
+        }
+        for (const auto& pin : pins) {
+            const FabricNodeId fabric_node_id(mesh_id, pin.chip_id);
+            const auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
+            const auto actual_tray = *psd.get_tray_id(asic_id);
+            const auto actual_loc = *psd.get_asic_location(asic_id);
+            if (log_on_rank0) {
+                log_info(
+                    tt::LogTest,
+                    "  pin check {} M{} chip {} -> tray {} loc {} (expected tray {} loc {})",
+                    profile_name,
+                    mesh_id.get(),
+                    pin.chip_id,
+                    actual_tray,
+                    actual_loc,
+                    pin.tray_id,
+                    pin.asic_location);
+            }
+            EXPECT_EQ(actual_tray, pin.tray_id)
+                << fabric_node_id << " tray_id (" << profile_name << " pin tray " << pin.tray_id << ")";
+            EXPECT_EQ(actual_loc, pin.asic_location)
+                << fabric_node_id << " asic_location (" << profile_name << " pin loc " << pin.asic_location << ")";
+            ++total_pin_checks;
+        }
+    };
 
     for (const MeshId mesh_id : mesh_ids) {
         ASSERT_EQ(mesh_graph.get_mesh_shape(mesh_id).mesh_size(), 16u)
@@ -1311,7 +1357,7 @@ TEST(MultiHost, TestSubtorus4x4PipelineMgdPinningsExact) {
         bool even_profile_matches = true;
         for (const auto& pin : even_mesh_pins) {
             const FabricNodeId fabric_node_id(mesh_id, pin.chip_id);
-            const auto asic_id = control_plane->get_asic_id_from_fabric_node_id(fabric_node_id);
+            const auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
             if (*psd.get_tray_id(asic_id) != pin.tray_id || *psd.get_asic_location(asic_id) != pin.asic_location) {
                 even_profile_matches = false;
                 break;
@@ -1321,7 +1367,7 @@ TEST(MultiHost, TestSubtorus4x4PipelineMgdPinningsExact) {
         bool odd_profile_matches = true;
         for (const auto& pin : odd_mesh_pins) {
             const FabricNodeId fabric_node_id(mesh_id, pin.chip_id);
-            const auto asic_id = control_plane->get_asic_id_from_fabric_node_id(fabric_node_id);
+            const auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
             if (*psd.get_tray_id(asic_id) != pin.tray_id || *psd.get_asic_location(asic_id) != pin.asic_location) {
                 odd_profile_matches = false;
                 break;
@@ -1330,48 +1376,21 @@ TEST(MultiHost, TestSubtorus4x4PipelineMgdPinningsExact) {
 
         const bool matches_either_profile = even_profile_matches || odd_profile_matches;
         EXPECT_TRUE(matches_either_profile)
-            << "mesh " << mesh_id.get() << " must match the MGD even-mesh or odd-mesh pin profile";
+            << "mesh " << mesh_id.get() << " must match the even-mesh or odd-mesh pin profile";
 
-        // Re-check with EXPECT_EQ so mismatches print fabric node and expected tray/loc.
-        if (matches_either_profile) {
-            if (even_profile_matches) {
-                for (const auto& pin : even_mesh_pins) {
-                    const FabricNodeId fabric_node_id(mesh_id, pin.chip_id);
-                    const auto asic_id = control_plane->get_asic_id_from_fabric_node_id(fabric_node_id);
-                    EXPECT_EQ(*psd.get_tray_id(asic_id), pin.tray_id)
-                        << fabric_node_id << " tray_id (MGD even-mesh pin tray " << pin.tray_id << ")";
-                    EXPECT_EQ(*psd.get_asic_location(asic_id), pin.asic_location)
-                        << fabric_node_id << " asic_location (MGD even-mesh pin loc " << pin.asic_location << ")";
-                }
-            }
-            if (odd_profile_matches) {
-                for (const auto& pin : odd_mesh_pins) {
-                    const FabricNodeId fabric_node_id(mesh_id, pin.chip_id);
-                    const auto asic_id = control_plane->get_asic_id_from_fabric_node_id(fabric_node_id);
-                    EXPECT_EQ(*psd.get_tray_id(asic_id), pin.tray_id)
-                        << fabric_node_id << " tray_id (MGD odd-mesh pin tray " << pin.tray_id << ")";
-                    EXPECT_EQ(*psd.get_asic_location(asic_id), pin.asic_location)
-                        << fabric_node_id << " asic_location (MGD odd-mesh pin loc " << pin.asic_location << ")";
-                }
-            }
-        } else {
-            for (const auto& pin : even_mesh_pins) {
-                const FabricNodeId fabric_node_id(mesh_id, pin.chip_id);
-                const auto asic_id = control_plane->get_asic_id_from_fabric_node_id(fabric_node_id);
-                EXPECT_EQ(*psd.get_tray_id(asic_id), pin.tray_id)
-                    << fabric_node_id << " tray_id (MGD even-mesh pin tray " << pin.tray_id << ")";
-                EXPECT_EQ(*psd.get_asic_location(asic_id), pin.asic_location)
-                    << fabric_node_id << " asic_location (MGD even-mesh pin loc " << pin.asic_location << ")";
-            }
-            for (const auto& pin : odd_mesh_pins) {
-                const FabricNodeId fabric_node_id(mesh_id, pin.chip_id);
-                const auto asic_id = control_plane->get_asic_id_from_fabric_node_id(fabric_node_id);
-                EXPECT_EQ(*psd.get_tray_id(asic_id), pin.tray_id)
-                    << fabric_node_id << " tray_id (MGD odd-mesh pin tray " << pin.tray_id << ")";
-                EXPECT_EQ(*psd.get_asic_location(asic_id), pin.asic_location)
-                    << fabric_node_id << " asic_location (MGD odd-mesh pin loc " << pin.asic_location << ")";
-            }
+        if (even_profile_matches) {
+            verify_all_pins(mesh_id, even_mesh_pins, "even-mesh");
+        } else if (odd_profile_matches) {
+            verify_all_pins(mesh_id, odd_mesh_pins, "odd-mesh");
         }
+    }
+
+    if (log_on_rank0) {
+        log_info(
+            tt::LogTest,
+            "TestSubtorus4x4PipelineMgdPinningsExact: completed {} pin checks ({} pins per matched profile)",
+            total_pin_checks,
+            even_mesh_pins.size());
     }
 }
 
