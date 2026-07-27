@@ -225,27 +225,21 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
 
     const auto& cluster = MetalContext::instance().get_cluster();
 
-    // MockChip has no TLB manager (get_tlb_manager() == nullptr), so skip TLB window
-    // setup entirely: pcie_writer_ stays unset. Safe under Mock because the runtime I/O
-    // paths that use pcie_writer_ -- read()/write() and notify_sender() -- never execute
-    // for mock devices (mock only exercises socket construction / JIT).
-    //
-    // TODO(emule): this over-skips for Emule. SWEmuleChip also lacks a TLB manager but has
-    // real memory-backed I/O, so it should skip only the TLB-window path and still install
-    // the cluster.write_core() fallback for pcie_writer_. As written, pcie_writer_ is left
-    // null, so enabling D2H socket runtime I/O under emule would null-deref in
-    // notify_sender().
-    if (cluster.is_mock_or_emulated()) {
-        return;
-    }
+    // Mock/emulated chips have no TLB manager (get_tlb_manager() == nullptr), so they skip the
+    // static-TLB fetch below (guarded by !is_mock_or_emulated()) and fall through to the
+    // cluster.write_core() dynamic writer. SWEmuleChip backs that with real memory-backed I/O;
+    // MockChip never invokes pcie_writer_ at runtime (only socket construction / JIT), so the
+    // installed writer is harmless there.
 
     if (mesh_device) {
         sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
         sender_virtual_core = mesh_device->worker_core_from_logical_core(sender_core_.core_coord);
-        sender_core_tlb_ = cluster.get_driver()
-                               ->get_chip(sender_device_id)
-                               ->get_tlb_manager()
-                               ->get_tlb_window(tt_xy_pair(sender_virtual_core.x, sender_virtual_core.y));
+        if (!cluster.is_mock_or_emulated()) {
+            sender_core_tlb_ = cluster.get_driver()
+                                   ->get_chip(sender_device_id)
+                                   ->get_tlb_manager()
+                                   ->get_tlb_window(tt_xy_pair(sender_virtual_core.x, sender_virtual_core.y));
+        }
     } else {
         sender_device_id = device_id.value();
         sender_virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
@@ -253,7 +247,7 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
     }
 
     auto arch = MetalContext::instance().hal().get_arch();
-    if (arch == tt::ARCH::BLACKHOLE && mesh_device) {
+    if (arch == tt::ARCH::BLACKHOLE && mesh_device && !cluster.is_mock_or_emulated()) {
         // This process owns a mesh_device and hence has statically initialized TLBs.
         // Entire device address space for Blackhole is statically mapped.
         // Safe to use static TLBs without requiring the driver to do a reconfig.
